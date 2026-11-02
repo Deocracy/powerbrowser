@@ -659,7 +659,8 @@ reached chrome-side: the extension tracker gate is opened only by a patch
 (Phase 28 sign-off, 2026-10-21). `scripts/verify-ext-tab-host-patch-guards.mjs`
 derives this set from `patches/` and compares it with the bullets here.
 
-- `050-extension-tab-host.patch` — opens the extension tracker gate for the tab host window and carries its guards.
+- `050-extension-tab-host.patch` — opens the extension tracker gate for the tab host window and carries its guards, including the `windows.remove` and `windows.update` refusals on the shell window (UF-31.1-01).
+- `060-extension-network-wall.patch` — keeps a browser marked `extensionnetworkhidden` (the Theia frame) out of webRequest, declarativeNetRequest and proxy.onRequest, and hides the cookies the `extensions.cookies.hidden` pref lists from `browser.cookies` (UF-31.1-02). `scripts/verify-ext-network-wall.mjs` guards it.
 
 ## Endpoints and the one carve-out (D-83–D-88)
 

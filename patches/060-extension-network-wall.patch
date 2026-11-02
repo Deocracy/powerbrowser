@@ -1,0 +1,125 @@
+diff --git a/toolkit/components/extensions/ProxyChannelFilter.sys.mjs b/toolkit/components/extensions/ProxyChannelFilter.sys.mjs
+index 66a3aec563..5aae5cebbe 100644
+--- a/toolkit/components/extensions/ProxyChannelFilter.sys.mjs
++++ b/toolkit/components/extensions/ProxyChannelFilter.sys.mjs
+@@ -6,6 +6,14 @@ import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
+ 
+ import { ExtensionUtils } from "resource://gre/modules/ExtensionUtils.sys.mjs";
+ 
++// An embedder marks a top-level browser that must stay invisible to extension
++// network observers (its own UI frame) with the extensionnetworkhidden
++// attribute. No webRequest listener, declarativeNetRequest rule or proxy
++// filter sees a channel of that browser or of any frame inside it.
++function isHiddenChannel(wrapper) {
++  return !!wrapper.browserElement?.hasAttribute("extensionnetworkhidden");
++}
++
+ const lazy = XPCOMUtils.declareLazy({
+   ExtensionDocumentId: "resource://gre/modules/ExtensionDocumentId.sys.mjs",
+   ExtensionParent: "resource://gre/modules/ExtensionParent.sys.mjs",
+@@ -380,6 +388,10 @@ export class ProxyChannelFilter {
+     let proxyInfo;
+     try {
+       let wrapper = ChannelWrapper.get(channel);
++      // Such a channel takes the default proxy (the finally block below).
++      if (isHiddenChannel(wrapper)) {
++        return;
++      }
+ 
+       let browserData = { tabId: -1, windowId: -1 };
+       if (XULElement.isInstance(wrapper.browserElement)) {
+diff --git a/toolkit/components/extensions/parent/ext-cookies.js b/toolkit/components/extensions/parent/ext-cookies.js
+index c812810cec..48c2c0c10e 100644
+--- a/toolkit/components/extensions/parent/ext-cookies.js
++++ b/toolkit/components/extensions/parent/ext-cookies.js
+@@ -156,6 +156,15 @@ const convertCookie = ({ cookie, isPrivate }) => {
+   return result;
+ };
+ 
++// An embedder lists the cookies no extension may read, write or be told about
++// (its own UI credential) in this pref, as comma-separated name@host entries.
++function isHiddenCookie(name, host) {
++  return Services.prefs
++    .getStringPref("extensions.cookies.hidden", "")
++    .split(",")
++    .includes(`${name}@${host}`);
++}
++
+ // Checks that the given extension has permission to set the given cookie for
+ // the given URI.
+ const checkSetCookiePermissions = (extension, uri, cookie) => {
+@@ -494,7 +503,10 @@ const query = function* (detailsIn, props, context, allowPattern) {
+     }
+ 
+     // Check that the extension has permissions for this host.
+-    if (!context.extension.allowedOrigins.matchesCookie(cookie)) {
++    if (
++      !context.extension.allowedOrigins.matchesCookie(cookie) ||
++      isHiddenCookie(cookie.name, cookie.rawHost)
++    ) {
+       return false;
+     }
+ 
+@@ -549,7 +561,10 @@ this.cookies = class extends ExtensionAPIPersistent {
+         let notify = (removed, cookie, cause) => {
+           cookie.QueryInterface(Ci.nsICookie);
+ 
+-          if (this.extension.allowedOrigins.matchesCookie(cookie)) {
++          if (
++            this.extension.allowedOrigins.matchesCookie(cookie) &&
++            !isHiddenCookie(cookie.name, cookie.rawHost)
++          ) {
+             fire.async({
+               removed,
+               cookie: convertCookie({
+@@ -690,7 +705,10 @@ this.cookies = class extends ExtensionAPIPersistent {
+             path: path,
+             isSecure: secure,
+           };
+-          if (!checkSetCookiePermissions(extension, uri, cookieAttrs)) {
++          if (
++            isHiddenCookie(name, (details.domain ?? uri.host).replace(/^\./, "")) ||
++            !checkSetCookiePermissions(extension, uri, cookieAttrs)
++          ) {
+             return Promise.reject({
+               message: `Permission denied to set cookie ${JSON.stringify(
+                 details
+diff --git a/toolkit/components/extensions/webrequest/WebRequest.sys.mjs b/toolkit/components/extensions/webrequest/WebRequest.sys.mjs
+index 8fada7e66c..87b667f6fe 100644
+--- a/toolkit/components/extensions/webrequest/WebRequest.sys.mjs
++++ b/toolkit/components/extensions/webrequest/WebRequest.sys.mjs
+@@ -100,6 +100,14 @@ function isThenable(value) {
+   return value && typeof value === "object" && typeof value.then === "function";
+ }
+ 
++// An embedder marks a top-level browser that must stay invisible to extension
++// network observers (its own UI frame) with the extensionnetworkhidden
++// attribute. No webRequest listener, declarativeNetRequest rule or proxy
++// filter sees a channel of that browser or of any frame inside it.
++function isHiddenChannel(wrapper) {
++  return !!wrapper.browserElement?.hasAttribute("extensionnetworkhidden");
++}
++
+ // Verify a requested redirect and throw a more explicit error.
+ function verifyRedirect(channel, redirectUri, finalUrl, addonId) {
+   const { isServiceWorkerScript } = channel;
+@@ -860,6 +868,9 @@ HttpObserverManager = {
+   },
+ 
+   runChannelListener(channel, kind, extraData = null) {
++    if (isHiddenChannel(channel)) {
++      return;
++    }
+     let handlerResults = [];
+     let requestHeaders;
+     let responseHeaders;
+@@ -1150,6 +1161,9 @@ HttpObserverManager = {
+   },
+ 
+   shouldHookListener(listener, channel, extraData) {
++    if (isHiddenChannel(channel)) {
++      return false;
++    }
+     if (listener.size == 0) {
+       return false;
+     }

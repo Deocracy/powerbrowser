@@ -43,3 +43,11 @@ pref("powerbrowser.sidecar.recoveryProbeIntervalMs", 15000);
 // written with the chrome global dump() -- needs this pref on to reach
 // stdout.
 pref("browser.dom.window.dump.enabled", true);
+
+// UF-31.1-02 (plan 38-06): patch 060 hides the cookies listed here from every
+// extension's browser.cookies calls and onChanged events. The entry is the
+// Theia token cookie TheiaService sets (name@host); the Theia frame's own
+// requests are hidden from extension network observers by the frame's
+// attribute in powerbrowser.xhtml. scripts/verify-ext-network-wall.mjs derives
+// this value from TheiaService and PowerBrowserAPI.
+pref("extensions.cookies.hidden", "POWERBROWSER_TOKEN@127.0.0.1");

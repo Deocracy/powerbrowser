@@ -276,6 +276,44 @@ index f342748d4b..a437c5d6a0 100644
  
              let options = {
                flags: updateProperties.loadReplace
+diff --git a/browser/components/extensions/parent/ext-windows.js b/browser/components/extensions/parent/ext-windows.js
+index 5a87b49fdf..b697f5953d 100644
+--- a/browser/components/extensions/parent/ext-windows.js
++++ b/browser/components/extensions/parent/ext-windows.js
+@@ -519,6 +519,19 @@ this.windows = class extends ExtensionAPIPersistent {
+           if (!win) {
+             throw new ExtensionError(`Invalid window ID: ${windowId}`);
+           }
++          // A tab host window is the embedder's own session: an extension may
++          // focus it, but not change its state, geometry or title.
++          if (
++            windowTracker.isTabHostWindow(win.window) &&
++            (updateInfo.state !== null ||
++              updateInfo.left !== null ||
++              updateInfo.top !== null ||
++              updateInfo.width !== null ||
++              updateInfo.height !== null ||
++              updateInfo.titlePreface !== null)
++          ) {
++            throw new ExtensionError("This window cannot be changed by an extension.");
++          }
+           if (updateInfo.focused) {
+             win.window.focus();
+           }
+@@ -552,6 +565,13 @@ this.windows = class extends ExtensionAPIPersistent {
+               message: `Invalid window ID: ${windowId}`,
+             });
+           }
++          // Closing a tab host window would end the embedder's session past its
++          // own quit path and unsaved-work prompt.
++          if (windowTracker.isTabHostWindow(window)) {
++            return Promise.reject({
++              message: "This window cannot be closed by an extension.",
++            });
++          }
+           window.close();
+ 
+           return new Promise(resolve => {
 diff --git a/remote/shared/TabManager.sys.mjs b/remote/shared/TabManager.sys.mjs
 index b3b7693c45..f00125a0cb 100644
 --- a/remote/shared/TabManager.sys.mjs
