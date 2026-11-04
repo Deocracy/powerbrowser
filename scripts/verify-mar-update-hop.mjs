@@ -548,7 +548,7 @@ export function realDeps(root, { gh = process.env.GH_BIN ?? 'gh', signer = proce
     };
 }
 
-function runChecks(root, deps = realDeps(root)) {
+export function runChecks(root, deps = realDeps(root)) {
     const r = makeReporter();
     const evDir = root === REPO_ROOT ? EVIDENCE_DIR : join(root, '.mozbuild', 'mar-hop');
 
