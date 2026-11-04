@@ -5202,7 +5202,8 @@ run_own_checks() {
     # an API key shipped in the binary) mounted; every build-linux step after the key gate carries its
     # output as if:; sign-publish takes its commit from inputs.sha, re-gates, derives the key and
     # builds signmar from the pinned source (the pin's tag equals configuration.toml); one concurrency
-    # group; the first step refuses any ref but main.
+    # group; the first step refuses any ref but main; and (G-49a, mar-emit) a build-linux upload of
+    # *.complete.mar needs the packaging script it runs to invoke make_full_update.sh.
     # release-shape-self-test plants one fault per rule in memory over the real release.yml text and
     # three bad mar_origin values through a scratch copy of configuration.toml; each goes red naming
     # the file, the rule and the fault.

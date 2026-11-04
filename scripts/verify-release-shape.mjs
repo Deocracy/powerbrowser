@@ -38,6 +38,9 @@
 //                wait_timer (.github/settings/environment-descriptor.json) plus two days of approval
 //                and re-run slack, and may carry no tarball and no MAR, so only small data lives longer.
 //  8. no-cache   No actions/cache step and no `cache` input anywhere in the file.
+//  9. mar-emit   When build-linux uploads *.complete.mar, a packaging script that build-linux runs
+//                (a powerbrowser/packaging/*.sh named in its run steps) invokes
+//                tools/update-packaging/make_full_update.sh on a non-comment line (G-49a).
 //
 // Instrument: js-yaml from theia/ through createRequire, the same loader as the
 // workflows row. A missing js-yaml, an unreadable file and a parse error are FAILs.
@@ -64,6 +67,7 @@ const LEGION_LABEL = 'powerbrowser-release';
 const BUILD_JOB = 'build-linux';
 const SIGN_JOB = 'sign-publish';
 const PIN_REL = 'powerbrowser/packaging/signmar/SOURCES.sha256';
+const PKG_LINUX_REL = 'powerbrowser/packaging/package-linux.sh';
 const DESCRIPTOR_ENV = 'descriptor';
 const DESCRIPTOR_ENV_REL = `.github/settings/environment-${DESCRIPTOR_ENV}.json`;
 const RUN_NAME = 'Release ${{ inputs.sha }}';
@@ -368,6 +372,20 @@ function runChecks(root, overrides = {}) {
         fail('(workflow)', 'retention', `carries no upload-artifact step, so the retention rule would hold over nothing. Next step: upload the tarball, the MAR and the manifest with retention-days: 1.`);
     }
 
+    // 9. mar-emit (G-49a): a build-linux upload of *.complete.mar needs the packaging script build-linux runs to
+    // make one with make_full_update.sh, or the upload fails at if-no-files-found: error on the first release.
+    const buildSteps = stepsOf(wf.jobs[BUILD_JOB]);
+    if (buildSteps.some(s => UPLOAD.test(String(s.uses ?? '')) && /\*\.complete\.mar\b/.test(String(s.with?.path ?? '')))) {
+        const scripts = [...new Set(buildSteps.flatMap(s => [...String(s.run ?? '').matchAll(/\bpowerbrowser\/packaging\/[A-Za-z0-9_-]+\.sh\b/g)].map(m => m[0])))];
+        const read = overrides.read ?? (rel => readText(root, rel));
+        // Comment lines are dropped first, so a script that only mentions the tool does not count.
+        const invokes = rel => (read(rel) ?? '').split('\n').some(l => !/^\s*#/.test(l) && /\btools\/update-packaging\/make_full_update\.sh\b/.test(l));
+        const emits = scripts.filter(invokes);
+        if (emits.length === 0) {
+            fail(BUILD_JOB, 'mar-emit', `uploads *.complete.mar, but no packaging script it runs (${scripts.join(', ') || 'none'}) invokes make_full_update.sh, so the upload fails with if-no-files-found: error. Next step: make the complete MAR in the packaging script, as docs/BUILD.md describes.`);
+        }
+    }
+
     const key = f => [f.file, f.job, f.rule, f.msg];
     failures.sort((a, b) => {
         const ka = key(a), kb = key(b);
@@ -465,6 +483,8 @@ function selfTest() {
         ['sign-publish holding GH_TOKEN at job level', editLast('    env:\n      RELEASE_SHA: ${{ inputs.sha }}\n', '    env:\n      GH_TOKEN: ${{ github.token }}\n      RELEASE_SHA: ${{ inputs.sha }}\n'), 'sign-trust', 'job-level env'],
         ['signing secret named outside sign_mar', edit('      - name: Verify the signed MAR', '      - name: Probe\n        env:\n          P: ${{ secrets.MAR_SIGNING_P12_B64 }}\n        run: "true"\n\n      - name: Verify the signed MAR'), 'sign-trust', 'signing or bot secret'],
         ['descriptor environment with no wait_timer', { read: rel => (rel === DESCRIPTOR_ENV_REL ? '{}' : readText(REPO_ROOT, rel)) }, 'retention', 'carries no integer wait_timer'],
+        ['package-linux.sh no longer makes the complete MAR', { read: rel => (rel === PKG_LINUX_REL ? readText(REPO_ROOT, rel).split('\n').filter(l => !l.includes('make_full_update.sh')).join('\n') : readText(REPO_ROOT, rel)) }, 'mar-emit', PKG_LINUX_REL],
+        ['package-linux.sh names make_full_update.sh only in a comment', { read: rel => (rel === PKG_LINUX_REL ? readText(REPO_ROOT, rel).replace(/^(.*tools\/update-packaging\/make_full_update\.sh.*)$/m, '# $1') : readText(REPO_ROOT, rel)) }, 'mar-emit', 'invokes make_full_update.sh'],
         ['signmar pin for another ESR tag', { read: rel => (rel === PIN_REL ? readText(REPO_ROOT, PIN_REL).replace(/^# tag .*$/m, '# tag wrong-tag') : readText(REPO_ROOT, rel)) }, 'sign-pin', 'wrong-tag'],
     ];
 
