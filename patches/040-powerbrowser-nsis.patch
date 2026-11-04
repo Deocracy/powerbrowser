@@ -117,10 +117,54 @@ index 785e5ccfba..7d4c028f4c 100755
  
    StrCpy $PageName "Components"
 diff --git a/browser/installer/windows/nsis/uninstaller.nsi b/browser/installer/windows/nsis/uninstaller.nsi
-index becbb0f70c..c056c4fab3 100755
+index becbb0f70c..17bbb05e16 100755
 --- a/browser/installer/windows/nsis/uninstaller.nsi
 +++ b/browser/installer/windows/nsis/uninstaller.nsi
-@@ -328,6 +328,7 @@ Function un.OpenRefreshHelpURL
+@@ -45,7 +45,6 @@ ManifestDPIAware true
+ 
+ Var TmpVal
+ Var MaintCertKey
+-Var ShouldOpenSurvey
+ Var ShouldSendPing
+ Var InstalledVersion
+ Var InstalledBuildID
+@@ -150,8 +149,6 @@ OutFile "helper.exe"
+ !endif
+ ShowUnInstDetails nevershow
+ 
+-!define URLUninstallSurvey "https://qsurvey.mozilla.com/s3/FF-Desktop-Post-Uninstall?channel=${UpdateChannel}&version=${AppVersion}&osversion="
+-
+ ; Support for the profile refresh feature
+ !define URLProfileRefreshHelp "https://support.mozilla.org/kb/refresh-firefox-reset-add-ons-and-settings"
+ 
+@@ -199,10 +196,6 @@ UninstPage custom un.preConfirm
+ !insertmacro MUI_UNPAGE_INSTFILES
+ 
+ ; Finish Page
+-!define MUI_FINISHPAGE_SHOWREADME
+-!define MUI_FINISHPAGE_SHOWREADME_NOTCHECKED
+-!define MUI_FINISHPAGE_SHOWREADME_TEXT $(UN_SURVEY_CHECKBOX_LABEL)
+-!define MUI_FINISHPAGE_SHOWREADME_FUNCTION un.Survey
+ !define MUI_PAGE_CUSTOMFUNCTION_PRE un.preFinish
+ !define MUI_PAGE_CUSTOMFUNCTION_SHOW un.showFinish
+ !insertmacro MUI_UNPAGE_FINISH
+@@ -213,15 +206,6 @@ ChangeUI IDD_VERIFY "${NSISDIR}\Contrib\UIs\default.exe"
+ ################################################################################
+ # Helper Functions
+ 
+-Function un.Survey
+-  ; We can't actually call ExecInExplorer here because it's going to have to
+-  ; make some marshalled COM calls and those are not allowed from within a
+-  ; synchronous message handler (where we currently are); we'll be thrown
+-  ; RPC_E_CANTCALLOUT_ININPUTSYNCCALL if we try. So all we can do is record
+-  ; that we need to make the call later, which we'll do from un.onGUIEnd.
+-  StrCpy $ShouldOpenSurvey "1"
+-FunctionEnd
+-
+ ; This function is used to uninstall the maintenance service if the
+ ; application currently being uninstalled is the last application to use the
+ ; maintenance service.
+@@ -328,6 +312,7 @@ Function un.OpenRefreshHelpURL
  FunctionEnd
  
  Function un.SendUninstallPing
@@ -128,7 +172,7 @@ index becbb0f70c..c056c4fab3 100755
    ; Notably, we only check the non-private AUMID here. There's no good reason
    ; to send the uninstall ping twice.
    ${If} $AppUserModelID == ""
-@@ -445,21 +446,21 @@ Section "Uninstall"
+@@ -445,21 +430,21 @@ Section "Uninstall"
      ClearErrors
    ${EndIf}
  
@@ -154,7 +198,7 @@ index becbb0f70c..c056c4fab3 100755
    ${un.RegCleanUninstall}
    ${un.DeleteShortcuts}
  
-@@ -484,15 +485,15 @@ Section "Uninstall"
+@@ -484,15 +469,15 @@ Section "Uninstall"
    DeleteRegValue HKLM "Software\Mozilla\${AppName}\TaskBarIDs" "$INSTDIR"
  
    ClearErrors
@@ -174,7 +218,7 @@ index becbb0f70c..c056c4fab3 100755
      ${un.RegCleanUninstall}
      ${un.DeleteShortcuts}
      ${un.SetAppLSPCategories}
-@@ -520,10 +521,10 @@ Section "Uninstall"
+@@ -520,10 +505,10 @@ Section "Uninstall"
    ${un.RegCleanFileHandler}  ".pdf"   "FirefoxPDF-$AppUserModelID"
  
    SetShellVarContext all  ; Set SHCTX to HKLM
@@ -187,7 +231,7 @@ index becbb0f70c..c056c4fab3 100755
    ${EndIf}
  
    DeleteRegKey HKLM "Software\Clients\StartMenuInternet\${AppRegName}-$AppUserModelID"
-@@ -735,7 +736,7 @@ Section "Uninstall"
+@@ -735,7 +720,7 @@ Section "Uninstall"
    ; subsequently deleted after checking. If the value is found during startup
    ; the browser will offer to Reset Firefox. We use the UpdateChannel to match
    ; uninstalls of Firefox-release with reinstalls of Firefox-release, for example.
@@ -196,3 +240,41 @@ index becbb0f70c..c056c4fab3 100755
  
  !ifdef MOZ_MAINTENANCE_SERVICE
    ; Get the path the allowed cert is at and remove it
+@@ -1060,7 +1045,6 @@ Function un.onInit
+   System::Call 'kernel32::SetDllDirectoryW(w "")'
+ 
+   StrCpy $LANGUAGE 0
+-  StrCpy $ShouldOpenSurvey "0"
+ 
+   ${un.UninstallUnOnInitCommon}
+ 
+@@ -1114,29 +1098,6 @@ FunctionEnd
+ Function un.onGUIEnd
+   ${un.OnEndCommon}
+ 
+-  ${If} $ShouldOpenSurvey == "1"
+-    ; Though these values are sometimes incorrect due to bug 444664 it happens
+-    ; so rarely it isn't worth working around it by reading the registry values.
+-    ${WinVerGetMajor} $0
+-    ${WinVerGetMinor} $1
+-    ${WinVerGetBuild} $2
+-    ${WinVerGetServicePackLevel} $3
+-    StrCpy $R1 "${URLUninstallSurvey}$0.$1.$2.$3"
+-
+-    ; We can't just open the URL normally because we are most likely running
+-    ; elevated without an unelevated process to redirect through, and we're
+-    ; not going to go around starting elevated web browsers. But to start an
+-    ; unelevated process directly from here we need a pretty nasty hack; see
+-    ; the ExecInExplorer plugin code itself for the details.
+-    ; If we were the default browser and we've now been uninstalled, we need
+-    ; to take steps to make sure the user doesn't see an "open with" dialog;
+-    ; they're helping us out by answering this survey, they don't need more
+-    ; friction.
+-    ; Windows 10 always seems to just clear the default browser, so for it
+-    ; we'll manually invoke Edge using Edge's custom URI scheme.
+-    ExecInExplorer::Exec "microsoft-edge:$R1"
+-  ${EndIf}
+-
+   ; Finally send the ping, there's no GUI to freeze in case it is slow.
+   ${If} $ShouldSendPing == "1"
+     Call un.SendUninstallPing

@@ -61,6 +61,10 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
   `Software\Mozilla\NativeMessagingHosts`: third-party native hosts register there and the installer never writes it.
   Moving the residue needs the owner to add those compiled paths to `ALLOWED_COMPILED_PATHS` (an amendment of D-72/D-73,
   as Phase 57 B1 did) and a tier-3 build; that is an owner question, not done here.
+- **Survey removed by gap plan 54-08 (R3, 2026-11-03):** patch 040 deletes `URLUninstallSurvey`, the finish-page
+  survey checkbox (`MUI_FINISHPAGE_SHOWREADME*`), `un.Survey`, `$ShouldOpenSurvey` and the `un.onGUIEnd` branch that
+  opened the survey host. The finish-page layout functions already handle a page without the checkbox. Not changed:
+  the installer's `CustomAbort` survey (`AbortSurveyURL`), which runs only for a `Funnelcake` `distribution.ini`.
 
 ## 3. Installer wizard artwork (plan 54-02 Task 1, PKG-12)
 
@@ -195,8 +199,8 @@ Plan 54-02 landed only the uninstall-ping `Return` in patch 040, the Windows sta
 gate. These must_haves stay open until items 2 to 5 above are resolved by the owner; nothing is weakened to
 close them:
 
-- the fork registry namespace in patch 040 (`Software\PowerBrowser`), item 2;
+- ~~the fork registry namespace in patch 040 (`Software\PowerBrowser`), item 2;~~ Landed by 54-07 (040 and 045), with the compiled-reader residue listed in item 2;
 - the fork installer artwork, item 3;
 - the LEG-01 trademark-surface extension compared as set equality in both directions, item 4;
 - the widened `installer-schema` and `installer-build-proof` rows, item 5;
-- the uninstall survey URL (`uninstaller.nsi` `URLUninstallSurvey`) still opens an upstream host, item 2.
+- ~~the uninstall survey URL (`uninstaller.nsi` `URLUninstallSurvey`) still opens an upstream host, item 2.~~ Removed by 54-08.
