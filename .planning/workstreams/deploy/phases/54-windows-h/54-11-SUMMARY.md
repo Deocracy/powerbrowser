@@ -91,6 +91,8 @@ commits: [2e2e1852, d550a972]
   `scripts/lib/channel-identity.mjs`) still points `InstallerUrl` at `github.com/.../releases/download/<key>/` and names
   the installer `<app>-<version>.windows-x86_64.exe`. Under A2 it must point at
   `downloads.powerbrowser.org/<tag>/<app>-<version>.windows-x86_64.installer.exe`.
+  The `verify-assets` winget leg of `.github/workflows/channel-manifests.yml` also downloads, attests and sums the
+  installer from the Release. Recorded as Phase 56 BLOCKED.md item 17 and in HANDOFF.md (54-11 review).
 - `website-staging/download.html` still says no Windows build is published. That is true until the first run. After
   that run, the page must link the MAR-origin files and the Windows `SHA256SUMS`.
 - The daily sweep runs `channel-live` with the Release manifest only, which is Linux. The Windows channel is checked

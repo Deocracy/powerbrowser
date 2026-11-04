@@ -157,3 +157,17 @@ is not executed by this run and is listed at the end.
 
 - **Not executed:** plan 56-05 is the owner checkpoint. It lists every live action above in order and collects the pasted
   evidence. This run stopped after plan 56-04 by instruction.
+
+## 17. winget leg vs owner answer A2 (open, recorded 2026-11-04 by the 54-11 review)
+
+- **Blocked:** the winget leg still assumes the Windows installer is a GitHub Release asset, which owner answer A2
+  rules out (the Release stays Linux-only; Windows goes to `<mar_origin>/<tag>/`). Three places break:
+  `winget/DeBIOSFoundation.PowerBrowser.installer.yaml` points `InstallerUrl` at `github.com/.../releases/download/@RELEASE_KEY@/`;
+  `scripts/verify-winget-manifest.mjs` asserts that URL; and the `verify-assets` winget leg of
+  `.github/workflows/channel-manifests.yml` runs `gh release download`, `gh attestation verify` and the Release `SHA256SUMS`
+  check on the installer. None can pass for Windows. The fix is a follow-up plan: `InstallerUrl` becomes
+  `<mar_origin>/<tag>/<app>-<version>.windows-x86_64.installer.exe`, and `verify-assets` fetches that file and the Windows
+  `SHA256SUMS` from the MAR origin. The MAR-origin bytes carry no build attestation, so the attestation step for the
+  installer is dropped or replaced; that is a design choice the plan must record. The winget leg is not run before then.
+- **Next-plan step:** a Phase 56 gap plan moves `InstallerUrl`, `verify-winget-manifest.mjs` and the `verify-assets` winget leg
+  to the MAR origin. No owner input is needed beyond A2.

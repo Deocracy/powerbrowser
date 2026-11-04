@@ -145,6 +145,15 @@ confirm, libvirt in one `/etc/nixos` pass, drill account, MAR primary copies, an
   its self-test guard it.
 - The untracked `.planning/workstreams/deploy/config.json` and `.planning/research/.cache/*` were
   present at session start and were left untouched.
+- OPEN (54-11 review, 2026-11-04): the winget leg still assumes the Windows installer is a GitHub Release asset, which owner answer A2
+  rules out (the Release stays Linux-only; Windows goes to `<mar_origin>/<tag>/`). Three places break:
+  `winget/DeBIOSFoundation.PowerBrowser.installer.yaml` points `InstallerUrl` at `github.com/.../releases/download/@RELEASE_KEY@/`;
+  `scripts/verify-winget-manifest.mjs` asserts that URL; and the `verify-assets` winget leg of
+  `.github/workflows/channel-manifests.yml` runs `gh release download`, `gh attestation verify` and the Release `SHA256SUMS`
+  check on the installer. None can pass for Windows. The fix is a follow-up plan: `InstallerUrl` becomes
+  `<mar_origin>/<tag>/<app>-<version>.windows-x86_64.installer.exe`, and `verify-assets` fetches that file and the Windows
+  `SHA256SUMS` from the MAR origin. The MAR-origin bytes carry no build attestation, so the attestation step for the
+  installer is dropped or replaced; that is a design choice the plan must record. The winget leg is not run before then.
 
 ## Repo rules the next agent must keep
 
