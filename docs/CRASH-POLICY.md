@@ -38,12 +38,14 @@ These must hold, each backed by a gate, before a reporter-enabled build ships:
   implemented).
 - **The stock dialog is the only send path.** A minidump is submitted only after
   the user chooses to send the report in the stock per-crash dialog. The stock
-  client has other send paths that must be closed first, and none is locked in
-  the tree today: the `MOZ_CRASHREPORTER_AUTO_SUBMIT` environment variable
-  (`config.rs`, honoured in `logic.rs` and `main.rs`, skips the dialog), and the
-  `browser.crashReports.unsubmittedCheck.autoSubmit2` preference with the
-  backlog notification (`firefox.js`). Both are recorded as TEL-13
-  prerequisites in `BLOCKED.md` (item B6).
+  client has two other send paths that must be closed first. The
+  `browser.crashReports.unsubmittedCheck.autoSubmit2` preference, which the
+  backlog notification and the settings checkbox can set, is locked false in
+  the shipped `powerbrowser/distribution/policies.json` (gate
+  `crash-autosubmit-lock`). The `MOZ_CRASHREPORTER_AUTO_SUBMIT` environment
+  variable (`config.rs`, honoured in `logic.rs` and `main.rs`, skips the
+  dialog) is not cleared yet; it is a TEL-13 prerequisite in `BLOCKED.md`
+  (item B6).
 - **One receiver URL.** The submit target is the origin of `[urls].crash_report`
   in `configuration.toml`, and the about:crashes view link uses the same key.
   The generator refuses a configuration that would enable the reporter without
