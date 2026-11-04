@@ -402,15 +402,17 @@ function runChecks(root) {
 
     // --- 5. the vendor split -------------------------------------------------
     //
-    // Two distinct values by design. Collapsing them either puts a space in the
-    // Firefox profile path (the display form is lowercased into it with no
-    // space stripping) or ships a vendor string that is not the foundation's
-    // name. The preflight asserts BOTH the distinctness and each side's site.
-    if (exp.vendor_display === exp.vendor_machine) {
+    // Two settings by design, because the machine-side value is lowercased
+    // into the Firefox profile path with no space stripping. What that rule
+    // actually requires is a path-safe machine value, not two different
+    // strings: a vendor whose display form is already path-safe (R7)
+    // may carry the same value on both sides. The preflight
+    // asserts that the machine side is path-safe and each side's site.
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(String(exp.vendor_machine ?? ''))) {
         r.fail(
-            'the inventory declares the display-side and machine-side vendor as the SAME string. D-09 as amended splits them ' +
-            'precisely because the machine-side value is lowercased into the profile path with no space stripping; a single ' +
-            'value is either a space in a path or a wrong vendor name.',
+            `the inventory declares the machine-side vendor as ${JSON.stringify(exp.vendor_machine)}, which is not path-safe. ` +
+            'MOZ_APP_VENDOR is lowercased into the profile path with no space stripping, so it may carry only letters, digits, ' +
+            'dots, underscores and hyphens; a space or slash there puts a space or a separator in a path.',
         );
     }
     const patch = readText(root, 'patches/010-powerbrowser-identity.patch');
@@ -1419,6 +1421,27 @@ function selfTest() {
             console.log(`${NAME}: --self-test -- stripped the include hook from ${hookPatchRel} and it was REJECTED by name: ${hookMsg}`);
         }
         writeFileSync(hookPatchPath, hookPatchOriginal);
+
+        // Plant (R7): a spaced machine-side vendor in the inventory. Section 5
+        // must go red naming the value and the path-safety rule; equal display
+        // and machine values are legitimate, a space in the machine value is not.
+        const vendorInvRel = 'inventory/brand-tokens.json';
+        const vendorInvPath = join(dir, vendorInvRel);
+        const vendorInvOriginal = readFileSync(vendorInvPath, 'utf8');
+        const vendorInvPlant = JSON.parse(vendorInvOriginal);
+        const spacedVendor = `${vendorInvPlant.brand_display_expectations.vendor_machine} Planted`;
+        vendorInvPlant.brand_display_expectations.vendor_machine = spacedVendor;
+        writeFileSync(vendorInvPath, JSON.stringify(vendorInvPlant));
+        const vendorPlanted = runChecks(dir);
+        const vendorMsg = vendorPlanted.failures.find((f) => f.includes(JSON.stringify(spacedVendor)) && f.includes('not path-safe'));
+        if (!vendorMsg) {
+            console.error(`${NAME}: --self-test FAIL -- a spaced machine-side vendor (${JSON.stringify(spacedVendor)}) in ${vendorInvRel} was NOT rejected as not path-safe`);
+            for (const f of vendorPlanted.failures) console.error(`  - ${f}`);
+            ok = false;
+        } else {
+            console.log(`${NAME}: --self-test -- planted a spaced machine-side vendor in ${vendorInvRel} and it was REJECTED by name: ${vendorMsg}`);
+        }
+        writeFileSync(vendorInvPath, vendorInvOriginal);
 
         // Eighth plant (04-01): the pre-tracer render -- the welcome heading
         // back as a JSX literal, the exact line the runtime read replaced.

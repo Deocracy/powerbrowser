@@ -97,9 +97,9 @@ Three facts from the tree that decide what a rebrand can and cannot move:
 
 - The vendor is **two** settings, never one. `product.vendor_machine` is
   lowercased into the profile directory path with no space stripping, so
-  the display form would put a space in that path. Keep them distinct:
-  collapsing them either breaks the profile path or ships a vendor string
-  that is not your foundation's name.
+  a display form with a space would put a space in that path. The machine
+  value must be path-safe; it may equal the display value only when the
+  display value has no space.
 - `identity.display_name` sits under `[identity]`, not `[product]`,
   because it must be required (see step 4).
 - These identifiers are fixed forever and no manifest value changes them:

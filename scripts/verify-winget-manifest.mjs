@@ -5,8 +5,11 @@
 // value is a quoted token the DIST-12 leg renders. The row renders the tokens from the tree and derives
 // each expected value at check time:
 //
-//  1. the identifier               PackageIdentifier = <publisher with its spaces removed>.<display name>
-//                                  from configuration.toml, in all three files;
+//  1. the identifier               PackageIdentifier = the tracked file-name stem (winget-pkgs requires the
+//                                  file name to equal the identifier), in all three files; the stem ends in
+//                                  .<display name> from configuration.toml. The publisher half is NOT derived
+//                                  from the vendor: R7 (2026-11-03) moved the vendor and froze the
+//                                  winget identifier until the v1.7 channel decision;
 //  2. the version                  PackageVersion renders the release key minus its leading v, in all three files;
 //  3. the installer URL            the Release-page download URL of the Windows asset, under the release key;
 //  4. the installer hash           InstallerSha256 renders the SHA-256 of the fixture installer bytes this row
@@ -107,7 +110,11 @@ export function runChecks(root, overrides = {}) {
         return { failures: cfgFailures.map(f => `${f} Next step: fix configuration.toml, then re-run this check.`) };
     }
     const { config } = resolveConfig(join(root, 'configuration.toml'));
-    const identifier = `${config.product.vendor_display.replace(/\s+/g, '')}.${config.identity.display_name.replace(/\s+/g, '')}`;
+    const identifier = VERSION_REL.replace(/^winget\//, '').replace(/\.yaml$/, '');
+    const displaySuffix = `.${config.identity.display_name.replace(/\s+/g, '')}`;
+    if (!identifier.endsWith(displaySuffix)) {
+        fail(VERSION_REL, `is named for the identifier ${identifier}, which does not end in ${displaySuffix} from configuration.toml`, `rename the three winget files to <publisher>${displaySuffix}.`);
+    }
     const values = channelTokenValues(facts);
     const fixtureAsset = values['@WINDOWS_INSTALLER_ASSET@'];
     const pending = windowsPending(read(DOCS_REL));
@@ -136,7 +143,7 @@ export function runChecks(root, overrides = {}) {
         const rendered = render(text, values);
         const renderedDoc = loadYaml().load(rendered);
         if (renderedDoc.PackageIdentifier !== identifier) {
-            fail(rel, `renders PackageIdentifier ${JSON.stringify(renderedDoc.PackageIdentifier)} but configuration.toml derives ${identifier}`, `set PackageIdentifier to "${identifier}".`);
+            fail(rel, `renders PackageIdentifier ${JSON.stringify(renderedDoc.PackageIdentifier)} but the file name declares ${identifier}`, `set PackageIdentifier to "${identifier}".`);
         }
         if (renderedDoc.PackageVersion !== facts.version) {
             fail(rel, `renders PackageVersion ${JSON.stringify(renderedDoc.PackageVersion)} but the release key ${facts.releaseKey} derives ${facts.version}`, `set PackageVersion to ${TOKENS[0]}.`);
@@ -293,6 +300,10 @@ function selfTest() {
         {
             name: 'WINGET_TOKEN row back in the release environment (WR-06)', expect: 'winget environment',
             overrides: withText(RENEWALS_REL, t => t.replace(/(\| WINGET_TOKEN[^|]*?)winget environment/, '$1release environment').replace(/(WINGET_TOKEN[^\n]*)winget environment secret/, '$1release environment secret')),
+        },
+        {
+            name: 'PackageIdentifier drifted from the file name', expect: 'renders PackageIdentifier',
+            overrides: withText(LOCALE_REL, t => t.replace(/PackageIdentifier: "[^"]*"/, 'PackageIdentifier: "Planted.PowerBrowser"')),
         },
         {
             name: 'control: unmodified tree stays green', expect: null,

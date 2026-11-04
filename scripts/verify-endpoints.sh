@@ -327,7 +327,7 @@ run_layer2_impl() {
   # confirmed by a real back-to-back pair of runs on this host, one
   # observing it and the very next observing zero. $HOME itself, by
   # contrast, is touched hundreds of times every run (the real profile at
-  # ~/.config/debios/powerbrowser) and is what genuinely proves strace
+  # ~/.config/deocracy/powerbrowser) and is what genuinely proves strace
   # captured live filesystem activity rather than an empty/broken log.
   local home_count exact_count
   home_count="$(grep -cF "$home_for_run" "$log" || true)"

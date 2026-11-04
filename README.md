@@ -95,5 +95,4 @@ PolyForm Noncommercial 1.0.0. See [LICENSE](LICENSE).
 
 ---
 
-A project of the [DeBIOS Foundation](https://github.com/DeBIOS-Foundation), a
-501(c)(3) nonprofit.
+A project of [Deocracy](https://github.com/Deocracy).

@@ -131,33 +131,21 @@ const EXCLUDED_LINES = [
 // ---------------------------------------------------------------------------
 
 const ALLOWLIST = [
-  { slot: 'product.vendor_display', file: 'README.md', reason: 'readme footer attributing the project to the foundation' },
   { slot: 'variant-display:dev', file: 'docs/BUILD.md', reason: 'build-guide prose quoting the dev display composition' },
   { slot: 'variant-display:dev', file: 'powerbrowser/branding/dev/configure.sh', reason: 'hand-written dev display name; byte-identity comparand owned by the manifest' },
   { slot: 'variant-display:dev', file: 'powerbrowser/branding/dev/locales/en-US/brand.ftl', reason: 'hand-written dev full-name term; byte-identity comparand owned by the manifest' },
-  { slot: 'product.vendor_display', file: 'powerbrowser/branding/dev/locales/en-US/brand.ftl', reason: 'hand-written vendor short-name term owned by the manifest' },
   { slot: 'variant-display:dev', file: 'powerbrowser/branding/dev/locales/en-US/brand.properties', reason: 'hand-written dev full-name key; byte-identity comparand owned by the manifest' },
   { slot: 'variant-display:dev', file: 'powerbrowser/powerbrowser.desktop', reason: 'hand-written dev desktop entry name owned by the manifest' },
-  { slot: 'product.vendor_display', file: 'scripts/check-patch-surface.sh', reason: 'comment on longest-first ordering against the vendor prefix' },
   { slot: 'variant-display:dev', file: 'scripts/generate.mjs', reason: 'generator self-test fixture carrying the derived dev form' },
   { slot: 'variant-display:dev', file: 'scripts/rename-brand.mjs', reason: 'rename header documenting the token-boundary trap with the dev composition' },
   { slot: 'variant-display:dev', file: 'scripts/verify-branding-preflight.mjs', reason: 'preflight comments and plants quoting the dev derivation chain' },
   { slot: 'variant-display:dev', file: 'scripts/verify-manifest-literals.mjs', reason: 'contract comment quoting the dev composition the single-token rule exists to protect' },
   { slot: 'variant-display:dev', file: 'scripts/verify-platform.sh', reason: 'registry self-test fixtures writing dev brandFullName values' },
   { slot: 'variant-display:dev', file: 'theia/applications/browser/package.json', reason: 'mozilla non-association sentence carrying the dev composition; copy-over target owned by the manifest' },
-  { slot: 'product.vendor_display', file: 'theia/applications/browser/package.json', reason: 'own-trademark notice naming the holder; fallback owned by the generator derivation' },
   { slot: 'legal.trademark_notice', file: 'theia/applications/browser/package.json', reason: 'own-trademark notice fallback owned by the generator derivation' },
   { slot: 'variant-display:dev', file: 'theia/extensions/branding/src/browser/powerbrowser-about-dialog.tsx', reason: 'mozilla non-association fallback sentence carrying the dev composition' },
-  { slot: 'product.vendor_display', file: 'theia/extensions/branding/src/browser/powerbrowser-about-dialog.tsx', reason: 'own-trademark notice naming the holder; fallback owned by the generator derivation' },
   { slot: 'legal.trademark_notice', file: 'theia/extensions/branding/src/browser/powerbrowser-about-dialog.tsx', reason: 'own-trademark notice fallback owned by the generator derivation' },
-  { slot: 'product.vendor_display', file: 'theia/extensions/branding/src/browser/powerbrowser-welcome-widget.tsx', reason: 'comment recording why the inherited org URL was replaced' },
-  { slot: 'product.vendor_display', file: 'powerbrowser/branding/release/locales/en-US/brand.ftl', reason: 'hand-written vendor short-name term owned by the manifest' },
-  { slot: 'product.vendor_display', file: 'website-staging/index.html', reason: 'public home page footer: the non-association sentence, verbatim copy the manifest owns' },
-  { slot: 'product.vendor_display', file: 'website-staging/download.html', reason: 'public download page footer: the non-association sentence, verbatim copy the manifest owns' },
-  { slot: 'product.vendor_display', file: 'website-staging/privacy.html', reason: 'public privacy page footer: the non-association sentence, verbatim copy the manifest owns' },
-  { slot: 'product.vendor_display', file: 'website-staging/legal.html', reason: 'public legal page: the copyright holder line and the non-association footer, verbatim copy the manifest owns' },
   { slot: 'legal.trademark_notice', file: 'website-staging/legal.html', reason: 'public legal page trademark line, verbatim copy of the manifest legal value' },
-  { slot: 'product.vendor_display', file: 'ledger/history/log.jsonl', reason: 'append-only delivery-kit ledger log; record-fail stores failing check output verbatim, and branding checks print the configured values' },
 ];
 
 const args = process.argv.slice(2);

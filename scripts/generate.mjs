@@ -1427,7 +1427,7 @@ function emitBrandFtl(config, variant) {
         '# naming is the same rationale D-78 already applied to the User-Agent.',
         '-brand-product-name = Firefox',
         '# The DISPLAY-side vendor (D-09 as amended). The machine-side vendor is the',
-        '# space-free `DeBIOS` in patches/010, because MOZ_APP_VENDOR is lowercased into',
+        '# space-free `Deocracy` in patches/010, because MOZ_APP_VENDOR is lowercased into',
         '# the profile path with no space stripping.',
         `-vendor-short-name = ${vendor}`,
         'trademarkInfo = { " " }',

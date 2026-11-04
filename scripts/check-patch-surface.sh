@@ -154,8 +154,8 @@ scan_brand_values() {
     }
     const esc = (s) => s.replace(/[.*+?^\${}()|[\]\\\\]/g, \"\\\\$&\");
     const BOUND = \"[^A-Za-z0-9_./-]\";
-    // Longest first: \"DeBIOS Foundation\" must name itself, not its
-    // \"DeBIOS\" prefix, on a line carrying the display string.
+    // Longest first: a longer value (the trademark notice) must name itself,
+    // not a shorter value it contains (the vendor), on a line carrying it.
     const ordered = [...values].sort((a, b) => b.length - a.length);
     let offenses = 0;
     for (const name of files) {

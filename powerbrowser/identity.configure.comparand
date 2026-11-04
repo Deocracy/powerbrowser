@@ -7,7 +7,7 @@
 # A disagreement reddens: scripts/verify-platform.sh --only generated-byte-identity
 # and: scripts/verify-branding-preflight.mjs (check 5).
 
-imply_option("MOZ_APP_VENDOR", "DeBIOS")
+imply_option("MOZ_APP_VENDOR", "Deocracy")
 imply_option("MOZ_APP_UA_NAME", "Firefox")
 imply_option("MOZ_SERVICES_HEALTHREPORT", False)
 imply_option("MOZ_NORMANDY", False)

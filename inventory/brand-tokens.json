@@ -94,9 +94,9 @@
         "desktop_entry": "powerbrowser/powerbrowser-release.desktop"
       }
     },
-    "vendor_display": "DeBIOS Foundation",
-    "vendor_machine": "DeBIOS",
-    "vendor_split_reason": "D-09 as amended 2026-08-30. MOZ_APP_VENDOR is lowercased and concatenated into the Firefox profile path with no space stripping (upstream/toolkit/xre/nsXREDirProvider.cpp:1621-1637), so the display-side `DeBIOS Foundation` would yield `~/.config/debios foundation/powerbrowser/` -- a space in a path, against this repo's hard no-spaces rule. The two values MUST be distinct and the preflight asserts that they are: collapsing them either puts a space in the profile path or ships a vendor string that is not the foundation's name.",
+    "vendor_display": "Deocracy",
+    "vendor_machine": "Deocracy",
+    "vendor_split_reason": "D-09 as amended 2026-08-30, re-scoped by R7 2026-11-03. MOZ_APP_VENDOR is lowercased and concatenated into the Firefox profile path with no space stripping (upstream/toolkit/xre/nsXREDirProvider.cpp:1621-1637), so a display form with a space (the earlier `DeBIOS Foundation`) would yield a profile directory containing a space, against this repo's hard no-spaces rule. The vendor therefore stays two settings, and the preflight asserts that the machine-side value is path-safe. R7 (owner ruling 2026-11-03, .planning/workstreams/deploy/FINISH-PLAN.md): the vendor, copyright holder and trademark holder of PowerBrowser is Deocracy. `Deocracy` has no space, so both settings carry the same value; equality is legitimate when the display form is itself path-safe.",
     "app_basename": "powerbrowser",
     "distribution_id": "org.debios",
     "domain": "powerbrowser.org",
@@ -137,7 +137,7 @@
       "token": "{\"name\":\"Sourcerer\",\"vendor\":\"Deocracy\"",
       "case_form": "literal",
       "class": "identity",
-      "target": "{\"name\":\"powerbrowser\",\"vendor\":\"DeBIOS\"",
+      "target": "{\"name\":\"powerbrowser\",\"vendor\":\"Deocracy\"",
       "expected_count": 1,
       "expected_files": [
         "scripts/verify-branding-identity.mjs"
@@ -533,36 +533,36 @@
     {
       "token": "Deocracy",
       "case_form": "title",
-      "class": "brand-display",
-      "target": "DeBIOS Foundation",
-      "expected_count": 1,
+      "class": "coincidental",
+      "target": "Deocracy",
+      "expected_count": 2,
       "expected_files": [
         "powerbrowser/branding/dev/locales/en-US/brand.ftl"
       ],
       "only_in": [
         "powerbrowser/branding/dev/locales/en-US/brand.ftl"
       ],
-      "reason": "sourcerer/branding/dev/locales/en-US/brand.ftl:15 -- `-vendor-short-name` is the DISPLAY-side vendor string, so its target is `DeBIOS Foundation` (D-09 as amended 2026-08-30), NOT the path-forming `DeBIOS` that MOZ_APP_VENDOR takes. The residual scan and verify-branding-identity.mjs must treat these as two distinct expected values -- that is the whole point of the amendment, since \"DeBIOS Foundation\" lowercased into a profile path would put a space in a path."
+      "reason": "COUNT MOVED 1 -> 2 (R7): the -vendor-short-name value plus the machine-side vendor comment above it, which now names the same value. CLASS MOVED brand-display -> coincidental, target `DeBIOS Foundation` -> `Deocracy` (R7). R7 (owner ruling 2026-11-03, .planning/workstreams/deploy/FINISH-PLAN.md): the vendor, copyright holder and trademark holder of PowerBrowser is Deocracy. The originating vendor token is therefore the vendor itself at this site and is no longer renamed; the row is scoped to this one file and reconciles by count, so a further occurrence here still fails. Earlier reason: sourcerer/branding/dev/locales/en-US/brand.ftl:15 -- `-vendor-short-name` is the DISPLAY-side vendor string, so its target is `DeBIOS Foundation` (D-09 as amended 2026-08-30), NOT the path-forming `DeBIOS` that MOZ_APP_VENDOR takes. The residual scan and verify-branding-identity.mjs must treat these as two distinct expected values -- that is the whole point of the amendment, since \"DeBIOS Foundation\" lowercased into a profile path would put a space in a path."
     },
     {
       "token": "Deocracy",
       "case_form": "title",
-      "class": "brand-display",
-      "target": "DeBIOS Foundation",
-      "expected_count": 1,
+      "class": "coincidental",
+      "target": "Deocracy",
+      "expected_count": 2,
       "expected_files": [
         "powerbrowser/branding/release/locales/en-US/brand.ftl"
       ],
       "only_in": [
         "powerbrowser/branding/release/locales/en-US/brand.ftl"
       ],
-      "reason": "sourcerer/branding/release/locales/en-US/brand.ftl:15 -- the release variant's display-side vendor string. Same split as the dev variant."
+      "reason": "COUNT MOVED 1 -> 2 (R7): the -vendor-short-name value plus the machine-side vendor comment above it, which now names the same value. CLASS MOVED brand-display -> coincidental, target `DeBIOS Foundation` -> `Deocracy` (R7). R7 (owner ruling 2026-11-03, .planning/workstreams/deploy/FINISH-PLAN.md): the vendor, copyright holder and trademark holder of PowerBrowser is Deocracy. The originating vendor token is therefore the vendor itself at this site and is no longer renamed; the row is scoped to this one file and reconciles by count, so a further occurrence here still fails. Earlier reason: sourcerer/branding/release/locales/en-US/brand.ftl:15 -- the release variant's display-side vendor string. Same split as the dev variant."
     },
     {
       "token": "Deocracy",
       "case_form": "title",
-      "class": "brand-display",
-      "target": "DeBIOS Foundation",
+      "class": "coincidental",
+      "target": "Deocracy",
       "expected_count": 1,
       "expected_files": [
         "LICENSE"
@@ -570,7 +570,43 @@
       "only_in": [
         "LICENSE"
       ],
-      "reason": "LICENSE:133 -- the vendor half of the same MPL Required Notice line. Hand-written with the rest of the line in plan 01-03."
+      "reason": "CLASS MOVED brand-display -> coincidental, target `DeBIOS Foundation` -> `Deocracy` (R7). R7 (owner ruling 2026-11-03, .planning/workstreams/deploy/FINISH-PLAN.md): the vendor, copyright holder and trademark holder of PowerBrowser is Deocracy. The originating vendor token is therefore the vendor itself at this site and is no longer renamed; the row is scoped to this one file and reconciles by count, so a further occurrence here still fails. Earlier reason: LICENSE:133 -- the vendor half of the same MPL Required Notice line. Hand-written with the rest of the line in plan 01-03."
+    },
+    {
+      "token": "Deocracy",
+      "case_form": "title",
+      "class": "coincidental",
+      "target": "Deocracy",
+      "expected_count": 20,
+      "expected_files": [
+        "LICENSING.md",
+        "README.md",
+        "configuration.toml",
+        "powerbrowser/identity.configure.comparand",
+        "scripts/generate.mjs",
+        "scripts/verify-branding-identity.mjs",
+        "theia/applications/browser/package.json",
+        "theia/extensions/branding/src/browser/powerbrowser-about-dialog.tsx",
+        "website-staging/download.html",
+        "website-staging/index.html",
+        "website-staging/legal.html",
+        "website-staging/privacy.html"
+      ],
+      "only_in": [
+        "LICENSING.md",
+        "README.md",
+        "configuration.toml",
+        "powerbrowser/identity.configure.comparand",
+        "scripts/generate.mjs",
+        "scripts/verify-branding-identity.mjs",
+        "theia/applications/browser/package.json",
+        "theia/extensions/branding/src/browser/powerbrowser-about-dialog.tsx",
+        "website-staging/download.html",
+        "website-staging/index.html",
+        "website-staging/legal.html",
+        "website-staging/privacy.html"
+      ],
+      "reason": "R7 (owner ruling 2026-11-03, .planning/workstreams/deploy/FINISH-PLAN.md): the vendor, copyright holder and trademark holder of PowerBrowser is Deocracy. These are the sites that name the legal vendor: configuration.toml [product] vendor_machine/vendor_display and [legal] copyright_holder/trademark_notice, the generated LICENSING.md, the MOZ_APP_VENDOR identity comparand, the brand.ftl comment literal in scripts/generate.mjs, the application.ini comment in scripts/verify-branding-identity.mjs, the Theia trademark strings, the README attribution and the website-staging footer and legal lines. The originating product used the same vendor token, so it is classified coincidental here and scoped to these files; the count is exact, and any occurrence outside these files falls through to the broad renameable row and fails."
     },
     {
       "token": "sourcerer.dev",
@@ -724,7 +760,7 @@
       "token": "Deocracy",
       "case_form": "title",
       "class": "brand-identifier",
-      "target": "DeBIOS",
+      "target": "Deocracy",
       "expected_count": 4,
       "expected_files": [
         "patches/010-powerbrowser-identity.patch",
@@ -736,7 +772,7 @@
         "patches/010-powerbrowser-identity.patch",
         "scripts/verify-branding-identity.mjs"
       ],
-      "reason": "The PATH-FORMING vendor value: MOZ_APP_VENDOR in patches/010 and the expectation that reads it back in verify-branding-identity.mjs. D-09 as amended splits the vendor in two -- `DeBIOS` compiled (it is lowercased into ~/.config/<vendor>/<basename>, and a space there breaks the no-spaces repo rule this project builds under) and `DeBIOS Foundation` on display. The rename pass carried the endpoint-allowlist.json and welcome-widget URLs to github.com/DeBIOS/PowerBrowser, an org the foundation has never established; plan 01-03 retargeted both at https://powerbrowser.org/, the one host D-12 actually fixes, so no shipped link points at a namespace a third party could claim."
+      "reason": "TARGET MOVED `DeBIOS` -> `Deocracy` (R7). R7 (owner ruling 2026-11-03, .planning/workstreams/deploy/FINISH-PLAN.md): the vendor, copyright holder and trademark holder of PowerBrowser is Deocracy. The legitimate vendor sites are claimed by the scoped coincidental rows for this token, which outrank this broad row; this row stays renameable so the TitleCase token anywhere else is still residue. Earlier reason: The PATH-FORMING vendor value: MOZ_APP_VENDOR in patches/010 and the expectation that reads it back in verify-branding-identity.mjs. D-09 as amended splits the vendor in two -- `DeBIOS` compiled (it is lowercased into ~/.config/<vendor>/<basename>, and a space there breaks the no-spaces repo rule this project builds under) and `DeBIOS Foundation` on display. The rename pass carried the endpoint-allowlist.json and welcome-widget URLs to github.com/DeBIOS/PowerBrowser, an org the foundation has never established; plan 01-03 retargeted both at https://powerbrowser.org/, the one host D-12 actually fixes, so no shipped link points at a namespace a third party could claim."
     },
     {
       "token": "deocracy",
@@ -748,7 +784,27 @@
         ".mozconfig",
         "scripts/verify-endpoints.sh"
       ],
-      "reason": "The lowercase vendor form: `--with-distribution-id=org.deocracy` becomes `org.debios`, and the `~/.config/deocracy/sourcerer` profile-path comment in verify-endpoints.sh becomes `~/.config/debios/powerbrowser`. Seeded explicitly because Pitfall 8 is that the vendor token is invisible to a scan for three case forms of \"sourcerer\" -- it is a token SET, not a search for one string."
+      "reason": "Unchanged by R7 for the distribution id: `org.debios` stays until the v1.7 channel decisions, so `org.deocracy` is still residue. The lowercased profile-path segment is claimed by the scoped coincidental row for this token. Earlier reason: The lowercase vendor form: `--with-distribution-id=org.deocracy` becomes `org.debios`, and the `~/.config/deocracy/sourcerer` profile-path comment in verify-endpoints.sh becomes `~/.config/debios/powerbrowser`. Seeded explicitly because Pitfall 8 is that the vendor token is invisible to a scan for three case forms of \"sourcerer\" -- it is a token SET, not a search for one string."
+    },
+    {
+      "token": "deocracy",
+      "case_form": "lower",
+      "class": "coincidental",
+      "target": "deocracy",
+      "expected_count": 4,
+      "expected_files": [
+        "docs/cache-flathub-checkpoint.md",
+        "flatpak/org.debios.PowerBrowser.json",
+        "scripts/verify-endpoints.sh",
+        "scripts/verify-flathub-manifest.mjs"
+      ],
+      "only_in": [
+        "docs/cache-flathub-checkpoint.md",
+        "flatpak/org.debios.PowerBrowser.json",
+        "scripts/verify-endpoints.sh",
+        "scripts/verify-flathub-manifest.mjs"
+      ],
+      "reason": "R7 (owner ruling 2026-11-03, .planning/workstreams/deploy/FINISH-PLAN.md): the vendor, copyright holder and trademark holder of PowerBrowser is Deocracy. These files name the per-user data directory, which is MOZ_APP_VENDOR lowercased: scripts/verify-endpoints.sh names the live profile directory `~/.config/deocracy/powerbrowser`, and the Flatpak manifest, its verifier comment and docs/cache-flathub-checkpoint.md carry `--persist=.deocracy`, which scripts/verify-flathub-manifest.mjs derives from product.vendor_machine. The Flatpak app id `org.debios.PowerBrowser` is unchanged (R7 defers it to v1.7). Scoped to these files and counted exactly; `org.deocracy` and every other lowercase occurrence still fall through to the broad renameable row."
     },
     {
       "token": "{7539c85c-f1f6-43a3-9a45-48fd27140596}",
@@ -907,7 +963,7 @@
         "website-staging/download.html",
         "website-staging/legal.html"
       ],
-      "reason": "COUNT MOVED 35 -> 36 (plan 49-02, WR-02): +1 in docs/RELEASING.md, the runner acceptance drill workflow that sets the release repository in job-level env. COUNT MOVED 34 -> 35 (plan 49-02, SEC-08): +1 in docs/RELEASING.md, the one-time registration-token command in the non-ephemeral runner section. COUNT MOVED 30 -> 34 (plan 49-02, SEC-10): +4 in scripts/legion-pre-job-hook.sh, the pre-job hook's release triple (the GITHUB_REPOSITORY and GITHUB_WORKFLOW_REF tests and their refusal messages). The owner ruling below covers the slug wherever the release home is named, so the hook is listed by name. COUNT MOVED 27 -> 30 (plan 53-01, TEL-05): +1 in the Report-a-Bug contribution, which builds the issues URL of the release home, and +2 in its bug-report-affordance verifier, whose self-test plant names that same URL twice on one line. The owner ruling below covers the slug wherever the release home is named, so the new files are listed by name rather than left as residue. Owner ruling 2026-10-29: the release home (GitHub repository, Releases, Discussions, security policy and attestation subject) is hosted at github.com/Deocracy/powerbrowser, which already meets SEC-06 (org 2FA required, three owners). Class coincidental, not frozen: it contains the residue probe, and coincidental rows are excluded from the --extra-root claim set, so it cannot swallow a real brand token elsewhere. This is the hosting slug only, set by configuration.toml [urls] release_notes and the docs and pages that name the repository; it is not a product brand. The vendor, copyright holder and trademark stay DeBIOS Foundation (same ruling). Any other occurrence of the vendor token stays a failure."
+      "reason": "COUNT MOVED 35 -> 36 (plan 49-02, WR-02): +1 in docs/RELEASING.md, the runner acceptance drill workflow that sets the release repository in job-level env. COUNT MOVED 34 -> 35 (plan 49-02, SEC-08): +1 in docs/RELEASING.md, the one-time registration-token command in the non-ephemeral runner section. COUNT MOVED 30 -> 34 (plan 49-02, SEC-10): +4 in scripts/legion-pre-job-hook.sh, the pre-job hook's release triple (the GITHUB_REPOSITORY and GITHUB_WORKFLOW_REF tests and their refusal messages). The owner ruling below covers the slug wherever the release home is named, so the hook is listed by name. COUNT MOVED 27 -> 30 (plan 53-01, TEL-05): +1 in the Report-a-Bug contribution, which builds the issues URL of the release home, and +2 in its bug-report-affordance verifier, whose self-test plant names that same URL twice on one line. The owner ruling below covers the slug wherever the release home is named, so the new files are listed by name rather than left as residue. Owner ruling 2026-10-29: the release home (GitHub repository, Releases, Discussions, security policy and attestation subject) is hosted at github.com/Deocracy/powerbrowser, which already meets SEC-06 (org 2FA required, three owners). Class coincidental, not frozen: it contains the residue probe, and coincidental rows are excluded from the --extra-root claim set, so it cannot swallow a real brand token elsewhere. This is the hosting slug only, set by configuration.toml [urls] release_notes and the docs and pages that name the repository; it is not a product brand. The vendor, copyright holder and trademark holder became Deocracy under R7 (2026-11-03); those sites are claimed by their own scoped coincidental rows, not by this slug row. Any other occurrence of the vendor token stays a failure."
     }
   ]
 }

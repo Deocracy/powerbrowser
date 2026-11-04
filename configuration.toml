@@ -23,14 +23,14 @@
 #
 #  2. The vendor is TWO settings, never one. vendor_machine is lowercased and
 #     concatenated into the profile directory path with no space stripping, so
-#     the display form would produce a path containing a space -- against this
-#     repo's hard rule that its path carries no space. Collapsing the two either
-#     puts a space in the profile path or ships a vendor string that is not the
-#     foundation's name. Keep them distinct.
+#     it must be path-safe: a display form with a space would produce a path
+#     containing a space -- against this repo's hard rule that its path
+#     carries no space. The two may hold the same value only when the display
+#     form is itself path-safe, as "Deocracy" is (R7).
 
 [product]
-vendor_machine = "DeBIOS"
-vendor_display = "DeBIOS Foundation"
+vendor_machine = "Deocracy"
+vendor_display = "Deocracy"
 description = "A rebrandable browser platform: a Gecko shell hosting an Eclipse Theia sidecar as its default GUI."
 homepage = "https://powerbrowser.org"
 # The release key is v<ESR>-<revision> (REL-01). Reset to 1 when the ESR pin
@@ -46,8 +46,8 @@ distribution_id = "org.debios"
 
 [legal]
 license = "PolyForm Noncommercial 1.0.0"
-copyright_holder = "DeBIOS Foundation"
-trademark_notice = "PowerBrowser is a trademark of DeBIOS Foundation."
+copyright_holder = "Deocracy"
+trademark_notice = "PowerBrowser is a trademark of Deocracy."
 
 [theia]
 default_theme = "dark"

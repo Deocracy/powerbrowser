@@ -12,7 +12,7 @@
 //                            BaseApp, org.mozilla.firefox.BaseApp, as `base` on the same branch. The BaseApp is a
 //                            base application, never the runtime (CR-04; Flathub's org.mozilla.firefox.BaseApp
 //                            manifest builds on org.freedesktop.Platform at the branch it is published for);
-//  4. persist and sandbox    --persist=.<vendor_machine, lowercased> in finish-args (.debios), and finish-args equal the
+//  4. persist and sandbox    --persist=.<vendor_machine, lowercased> in finish-args (.deocracy), and finish-args equal the
 //                            least-privilege allow-list as a set (WR-10): fallback-x11 beside wayland, never plain x11,
 //                            and no filesystem or bus-name grant. The allow-list is a policy, so it is kept by hand here;
 //  5. Flatpak-only disable   the build commands merge DisableAppUpdate into the staged policies copy;

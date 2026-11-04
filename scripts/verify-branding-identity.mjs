@@ -28,7 +28,7 @@
 //                       surface could only ever read a stock, unbranded
 //                       Firefox page. This is a real live process launch,
 //                       not a constant -- confirmed live this session:
-//                       {"name":"powerbrowser","vendor":"DeBIOS","version":"153.1.0esr"}.
+//                       {"name":"powerbrowser","vendor":"Deocracy","version":"153.1.0esr"}.
 //                       When a chrome-context driver exists (none does in
 //                       this repo -- WINDOWS.md #7, chrome-side Marionette
 //                       automation is blocked on Linux), this surface also

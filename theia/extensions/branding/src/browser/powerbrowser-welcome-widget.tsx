@@ -13,8 +13,8 @@ import { readBrandingConfig } from './powerbrowser-branding-config';
 // `powerbrowser-frontend-module.ts`, so its `view:` address is `view:welcome`
 // verbatim (D-43).
 // D-12 fixes the domain `powerbrowser.org` and nothing else. The inherited
-// value was a github.com org URL that does not exist -- the DeBIOS Foundation
-// has no GitHub org yet -- so this points at the one host the project owns.
+// value was a github.com org URL that did not exist at the time --
+// so this points at the one host the project owns.
 // GEN-05 (04-04): the boot fallback for the repo link, and the ONLY link
 // literal this file carries. The link itself resolves at runtime through the
 // frontend application config (see repoUrl below), which the generator owns
