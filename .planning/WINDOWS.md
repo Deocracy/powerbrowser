@@ -329,7 +329,7 @@ last_updated: 2026-11-04T01:20:23.733Z
     "reason": "",
     "recorded_at": "2026-11-01T05:21:09.443Z",
     "resolved_at": null,
-    "milestone": "v1.7"
+    "milestone": "v1.6"
   }
 ]
 ````

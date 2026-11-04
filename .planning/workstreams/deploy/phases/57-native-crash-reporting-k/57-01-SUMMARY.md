@@ -7,7 +7,7 @@ status: partial
 requirements: [TEL-09]
 requires: []
 provides:
-  - "patches/055-powerbrowser-crash-ping-consent.patch: the Glean crash-ping consent read fails closed"
+  - "patches/050-powerbrowser-crash-ping-consent.patch: the Glean crash-ping consent read fails closed"
   - "scripts/verify-crash-ping-consent.mjs: static consent gate with --self-test"
 affects: [57-04]
 tech-stack:
@@ -15,7 +15,7 @@ tech-stack:
   patterns: ["exact-path compiled-file exception in check-patch-surface.sh (ALLOWED_COMPILED_PATHS)"]
 key-files:
   created:
-    - patches/055-powerbrowser-crash-ping-consent.patch
+    - patches/050-powerbrowser-crash-ping-consent.patch
     - scripts/verify-crash-ping-consent.mjs
   modified:
     - scripts/check-patch-surface.sh
@@ -41,7 +41,9 @@ completed: 2026-10-31
 
 # Phase 57 Plan 01: Glean crash-ping consent gate Summary
 
-**The native crash reporter's `determine_telemetry_enabled` now returns false on all four absent or unreadable consent inputs, through a regenerated patch 055 under an exact-path exception to the compiled-file guard. A static gate with seven self-test plants checks it. Task 2, the live layer-3 proof, is still an owner step.**
+**The native crash reporter's `determine_telemetry_enabled` now returns false on all four absent or unreadable consent inputs, through a regenerated patch 050 under an exact-path exception to the compiled-file guard. A static gate with seven self-test plants checks it. Task 2, the live layer-3 proof, is still an owner step.**
+
+Note (2026-11-04): this record is dated 2026-10-31 and keeps the patch number it was committed under. Patch 050 was renamed `patches/055-powerbrowser-crash-ping-consent.patch` in 7e0f1a48 because 050 was already the extension tab-host patch.
 
 ## Status
 
@@ -55,7 +57,7 @@ completed: 2026-10-31
 | Commit | Change |
 | ------ | ------ |
 | 1d378bef | `fix(check-patch-surface)`: `ALLOWED_COMPILED_PATHS` holds exactly `toolkit/crashreporter/client/app/src/glean.rs` and `send_ping.rs`. The `--self-test` plants are: each allowed path green; `.../src/other/glean.rs`, `crashping/src/lib.rs` and `.../src/glean.cpp` each red and named. The D-72/D-73 amendment is recorded in `docs/BUILD.md` (The compiled-file boundary) and in the deploy `STATE.md` decisions. |
-| f02ada50 | `feat(57-01)`: patch 055, `scripts/verify-crash-ping-consent.mjs`, the rows `crash-ping-consent` and `crash-ping-consent-self-test` (quick array, beside the patch-surface rows), and patch 050 added to the `docs/RELEASING.md` drift list. |
+| f02ada50 | `feat(57-01)`: patch 050, `scripts/verify-crash-ping-consent.mjs`, the rows `crash-ping-consent` and `crash-ping-consent-self-test` (quick array, beside the patch-surface rows), and patch 050 added to the `docs/RELEASING.md` drift list. |
 
 ### The patch
 
@@ -69,7 +71,7 @@ completed: 2026-10-31
 `scripts/verify-crash-ping-consent.mjs` runs these checks:
 
 - It derives the host from `TELEMETRY_SERVER` in `upstream/toolkit/crashreporter/crashping/src/lib.rs`. The current value is `incoming.telemetry.mozilla.org`.
-- It runs patch 055 alone through `regenerate-patches.sh --check`.
+- It runs patch 050 alone through `regenerate-patches.sh --check`.
 - It requires that the applied `determine_telemetry_enabled` has no `true` literal outside comments, and that `from_config` still takes `upload_enabled` from it.
 - It derives the branding variants from `powerbrowser/branding/*/` and requires each to pin `uploadEnabled` false exactly once.
 - It requires the allowlist to carry the derived host once, with disposition `deny`.
@@ -106,5 +108,5 @@ Not executed, and not run in the agent shell. Once a reporter-enabled build exis
 
 ## Self-Check: PASSED
 
-- FOUND: patches/055-powerbrowser-crash-ping-consent.patch, scripts/verify-crash-ping-consent.mjs
+- FOUND: patches/050-powerbrowser-crash-ping-consent.patch, scripts/verify-crash-ping-consent.mjs
 - FOUND: 1d378bef, f02ada50 (ancestors of HEAD)
