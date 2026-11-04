@@ -1,11 +1,18 @@
 ---
 id: SEED-261103-o1g
-status: dormant
+status: scheduled
+target_milestone: v1.7 Orca integration
+scheduled: 2026-11-03 by Chris
 planted: 2026-11-03
 planted_during: v1.5 Chrome Bar Firefox Parity, phase 38
 trigger_when: milestone v1.5 is complete and the next milestone is being chosen
 scope: Large, a full milestone
 ---
+
+> **Scheduled (Chris, 2026-11-03):** this seed is milestone **v1.7 Orca integration**. v1.6 is the
+> deploy workstream. Feasibility is settled by spike 003 (VALIDATED); build knowledge is in
+> `Skill("spike-findings-Power-Browser")` → `references/orca-client-hosting.md`. Start with
+> `/gsd-new-milestone` and carry the open items from that reference into the discuss step.
 
 # SEED-261103-o1g: Orca mode milestone: host the Orca client inside Power Browser
 
