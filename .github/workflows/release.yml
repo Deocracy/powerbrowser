@@ -1062,6 +1062,35 @@ jobs:
           set -euo pipefail
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
 
+  # INF-04 (G-49c): the per-release artifact cap is retention-days 1 plus deletion after the publish. Once the
+  # Release holds the bytes, the tarball-and-MAR artifact of this run is deleted. The small data artifacts the
+  # descriptor and channel-live jobs read stay until their own retention ends. A separate job, so sign-publish,
+  # which holds the signing secrets, never holds actions: write. The release-shape row derives PURGE from the
+  # build-linux uploads that carry a tarball or a MAR.
+  purge-artifacts:
+    needs: sign-publish
+    if: needs.sign-publish.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    steps:
+      - name: Delete the tarball-and-MAR artifact of this run (the Release holds the bytes now)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PURGE: release-linux
+        run: |
+          set -euo pipefail
+          API="repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100"
+          for NAME in $PURGE; do
+            for ID in $(gh api -H 'X-GitHub-Api-Version: 2022-11-28' "$API" --jq ".artifacts[] | select(.name == \"$NAME\") | .id"); do
+              gh api -H 'X-GitHub-Api-Version: 2022-11-28' -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$ID"
+              echo "deleted artifact $NAME ($ID)"
+            done
+            LEFT="$(gh api -H 'X-GitHub-Api-Version: 2022-11-28' "$API" --jq "[.artifacts[] | select(.name == \"$NAME\")] | length")"
+            [ "$LEFT" = "0" ] || { echo "::error::artifact $NAME is still stored after the delete ($LEFT left), so the per-release artifact cap does not hold. Next step: re-run this job" >&2; exit 1; }
+          done
+
   # DIST-09. The descriptor environment carries the owner reviewer plus the 1440-minute wait timer
   # (.github/settings/environment-descriptor.json), so this job starts only after the 24-hour canary
   # and the owner's approval. The owner may bypass the wait (can_admins_bypass) once the own N-1 to N
