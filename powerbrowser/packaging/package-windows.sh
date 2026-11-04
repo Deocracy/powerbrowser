@@ -115,7 +115,7 @@ test -n "$MAR_CHANNEL" || fail "$STAGE/update-settings.ini carries no ACCEPTED_M
 rm -rf "$OUT"; mkdir -p "$OUT"
 ( cd "$ROOT/upstream" && MOZCONFIG="$MOZCONFIG_WIN" ./mach repackage installer \
     --package "$ZIP" --package-name "$(basename "$STAGE")" \
-    --tag browser/installer/windows/app.tag --setupexe "$SETUPEXE" \
+    --tag "$ROOT/generated/installer/release/app.tag" --setupexe "$SETUPEXE" \
     --sfx-stub other-licenses/7zstub/firefox/7zSD.Win32.sfx \
     --output "$OUT/$BASE.installer.exe" )
 ( cd "$ROOT/upstream" && MOZCONFIG="$MOZCONFIG_WIN" ./mach repackage mar \

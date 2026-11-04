@@ -24,8 +24,11 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
   1. That the release container can run the bootstrap (network for the taskcluster index, disk) and carries
      `makensis`, `7zz`, `xz` and `bzip2`, which `mach package` (installer stage) and `make_full_update.sh` use. The
      host `mar` tool is expected at `objdir-windows-x86_64/dist/host/bin/mar`; the script fails naming the path if not.
-  2. `upstream/browser/installer/windows/app.tag` carries the stock `Title="Mozilla Firefox"`, shown by the 7z
-     self-extractor. Patch 040 does not touch it; the owner decides it together with items 2 and 3.
+  2. ~~`upstream/browser/installer/windows/app.tag` carries the stock `Title="Mozilla Firefox"`.~~ Resolved by gap
+     plan 54-09 (R3): the generator emits `generated/installer/<variant>/app.tag` with `Title` from
+     `identity.display_name`, and `package-windows.sh` and the `sign-windows` repackage step pass
+     `--tag generated/installer/release/app.tag`. Upstream's file is no longer read. `installer-schema` compares the
+     emitted file with upstream's lines at check time. The live half is the title shown by the first self-extractor run.
   3. The Windows SDK/MSVC bootstrap is fetched by hash-pinned payloads, but the `vs.tar.zst` task artifact comes
      from the taskcluster index; the owner decides whether that is acceptable for a release build.
 - **Owner steps:**
@@ -73,6 +76,15 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
   not exist in the tree, and `brand/HUMAN-REVIEW.md` requires a signed human review for any new file.
 - **Owner steps:** supply the installer artwork, add it under `brand/`, and re-sign the review in
   `brand/HUMAN-REVIEW.md`. Then regenerate patch 040 with the artwork hunks.
+- **Placeholder (R3, 2026-11-03):** the files the owner supplies, with the upstream stand-in each replaces
+  (`upstream/browser/branding/unofficial/`, staged by `installer-build-proof`). None of these files exists yet; nothing
+  in the tree references them until they land:
+  - `brand/installer/wizHeader.bmp` (150x57, 24-bit BMP) replaces `wizHeader.bmp`;
+  - `brand/installer/wizHeaderRTL.bmp` (150x57, 24-bit BMP) replaces `wizHeaderRTL.bmp`;
+  - `brand/installer/wizWatermark.bmp` (164x314, 24-bit BMP) replaces `wizWatermark.bmp`;
+  - `brand/installer/firefox64.ico` (16, 32, 48 and 64 px, as the stand-in) replaces `firefox64.ico`.
+  After they land with a signed `brand/HUMAN-REVIEW.md` entry, the follow-up wires them through the branding emitter
+  (the branding directory is generated, so no patch hunk is needed) and `installer-build-proof` drops the stand-in label.
 
 ## 4. LEG-01 trademark extension (plan 54-02 Task 2)
 

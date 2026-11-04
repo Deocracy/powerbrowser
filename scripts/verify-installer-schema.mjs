@@ -54,7 +54,7 @@ import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-import { TARGETS } from './generate.mjs';
+import { TARGETS, resolveConfig } from './generate.mjs';
 import { parse } from './lib/toml.cjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -96,8 +96,9 @@ function readBytes(root, rel) {
     return readFileSync(p);
 }
 
-/** The four installer-fragment shapes, one per emitter, per variant. */
+/** The five installer-fragment shapes, one per emitter, per variant. */
 const FRAGMENT_SHAPES = Object.freeze([
+    /^installer\/[^/]+\/app\.tag$/,
     /^branding\/[^/]+\/branding\.nsi$/,
     /^branding\/[^/]+\/firefox\.VisualElementsManifest\.xml$/,
     /^installer\/[^/]+\/AppxManifest-fields\.xml$/,
@@ -216,6 +217,47 @@ function checkNsi(r, root, rel) {
                 + `(expected a line '!define ${name} "..."' carrying a non-empty value). `
                 + 'Next step: run: node scripts/generate.mjs',
             );
+        }
+    }
+}
+
+/**
+ * One 7z self-extractor config (54-09, owner ruling R3): exactly upstream's
+ * app.tag lines, with Title carrying the variant's display name. Both sides are
+ * derived at check time: the name through the generator's own resolveConfig,
+ * the other lines from the pinned upstream/browser/installer/windows/app.tag.
+ */
+function checkAppTag(r, root, rel) {
+    const bytes = readBytes(root, rel);
+    if (bytes === null) {
+        r.fail(`${rel} is absent on disk. Next step: run: node scripts/generate.mjs`);
+        return;
+    }
+    const upstreamRel = 'upstream/browser/installer/windows/app.tag';
+    const upstream = readBytes(REPO_ROOT, upstreamRel);
+    if (upstream === null) {
+        r.fail(`${upstreamRel} is absent, so ${rel} has nothing to be compared with. Next step: run: bash scripts/fetch-upstream.sh`);
+        return;
+    }
+    const resolved = resolveConfig(join(root, 'configuration.toml'), undefined);
+    const variantId = rel.split('/')[2];
+    const variant = resolved.failures.length === 0 ? resolved.config.variants.find(v => v.id === variantId) : undefined;
+    if (!variant) {
+        r.fail(`${rel}: configuration.toml does not resolve a '${variantId}' variant, so the expected Title is unknown. Next step: fix the manifest, then run: node scripts/generate.mjs`);
+        return;
+    }
+    const expected = upstream.toString('utf8').replace(/\n$/, '').split('\n');
+    if (expected.filter(l => l.startsWith('Title=')).length !== 1) {
+        r.fail(`${upstreamRel} no longer carries exactly one Title= line, so the emitter's template is stale. Next step: update emitAppTag in scripts/generate.mjs to the new upstream layout`);
+        return;
+    }
+    const title = `Title="${resolved.config.identity.display_name}${variant.name_suffix}"`;
+    const want = expected.map(l => (l.startsWith('Title=') ? title : l));
+    const got = bytes.toString('utf8').replace(/\n$/, '').split('\n');
+    for (let i = 0; i < Math.max(want.length, got.length); i++) {
+        if (want[i] !== got[i]) {
+            r.fail(`${rel}: line ${i + 1} is ${JSON.stringify(got[i] ?? '(missing)')}, expected ${JSON.stringify(want[i] ?? '(none)')} (${upstreamRel} with the Title from configuration.toml). Next step: run: node scripts/generate.mjs`);
+            return;
         }
     }
 }
@@ -356,6 +398,7 @@ function runChecks(root) {
         if (rel.endsWith('/branding.nsi')) checkNsi(r, root, show);
         else if (rel.endsWith('/AppxManifest-fields.xml')) checkAppx(r, root, show);
         else if (rel.endsWith('/Info-plist-fields.xml')) checkInfoPlist(r, root, show);
+        else if (rel.endsWith('/app.tag')) checkAppTag(r, root, show);
         else if (rel.endsWith('/firefox.VisualElementsManifest.xml')) checkTile(r, root, show, tileColor);
     }
 
@@ -440,6 +483,28 @@ function selfTest() {
         }
         mirror();
 
+        // Plants 2b and 2c (54-09): the stock upstream title, and a dropped
+        // RunProgram line, in the dev self-extractor config. Each must go red
+        // naming the file and the line.
+        const tagRel = 'generated/installer/dev/app.tag';
+        const tagPath = join(dir, tagRel);
+        for (const [label, mutate, needle] of [
+            ['the stock Mozilla Firefox title', t => t.replace(/^Title=.*$/m, 'Title="Mozilla Firefox"'), 'Title='],
+            ['a dropped RunProgram line', t => t.replace(/^RunProgram=.*\n/m, ''), 'RunProgram'],
+        ]) {
+            writeFileSync(tagPath, mutate(readFileSync(tagPath, 'utf8')));
+            const res = runChecks(dir);
+            const msg = res.failures.find(f => f.includes(tagRel) && f.includes(needle));
+            if (!msg) {
+                console.error(`${NAME}: --self-test FAIL -- ${label} in ${tagRel} was NOT rejected naming the file and ${needle}`);
+                for (const f of res.failures) console.error(`  - ${f}`);
+                ok = false;
+            } else {
+                console.log(`${NAME}: --self-test -- planted ${label} in ${tagRel} and it was REJECTED naming the file: ${msg}`);
+            }
+            mirror();
+        }
+
         // Plant 3: tile-color state mismatch -- the presence assertion must
         // track the manifest, not the file. The plant takes the OPPOSITE of
         // whatever configuration.toml states, so it stays a mismatch however
@@ -518,7 +583,7 @@ function selfTest() {
         console.error(`${NAME}: --self-test FAIL`);
         process.exit(1);
     }
-    console.log(`${NAME}: --self-test PASS -- control green first, then 4 planted faults all behaved as pinned`);
+    console.log(`${NAME}: --self-test PASS -- control green first, then 6 planted faults all behaved as pinned`);
     process.exit(0);
 }
 

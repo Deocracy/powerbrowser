@@ -776,7 +776,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/out"
           (cd upstream && ./mach repackage installer \
             --package "$RUNNER_TEMP/signed/$BASE.zip" --package-name "$TOP" \
-            --tag browser/installer/windows/app.tag --setupexe "$GITHUB_WORKSPACE/windows/setup.exe" \
+            --tag "$GITHUB_WORKSPACE/generated/installer/release/app.tag" --setupexe "$GITHUB_WORKSPACE/windows/setup.exe" \
             --sfx-stub other-licenses/7zstub/firefox/7zSD.Win32.sfx \
             --output "$RUNNER_TEMP/out/$BASE.installer.exe")
           test -s "$RUNNER_TEMP/out/$BASE.installer.exe"

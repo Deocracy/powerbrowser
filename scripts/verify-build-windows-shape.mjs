@@ -489,7 +489,7 @@ function selfTest() {
     for (const [label, from, value] of [
         ['installer without --sfx-stub', '    --sfx-stub other-licenses/7zstub/firefox/7zSD.Win32.sfx \\\n', '--sfx-stub'],
         ['installer without --setupexe', ' --setupexe "$SETUPEXE" \\\n', '--setupexe'],
-        ['installer without --tag', '    --tag browser/installer/windows/app.tag', '--tag'],
+        ['installer without --tag', '    --tag "$ROOT/generated/installer/release/app.tag"', '--tag'],
         ['mar without --arch', ' --arch x86_64', '--arch'],
         ['mar without --mar', ' --mar "$MARBIN"', '--mar'],
     ]) {
