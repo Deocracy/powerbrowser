@@ -27,7 +27,8 @@ PB spawns a headless orcad and shows Orca's stock web client in a web tab. Seed:
    - Args: the orcad entry, then `--bind 127.0.0.1 --web-client-root <…/app.asar.unpacked/out/mobile-web>`.
    - Env: `ORCA_USER_DATA`, `ORCA_VERSION`.
 
-   **This step was not run in spike 003.** Prove it before relying on it.
+   This was read from source, not run in spike 003. In the build, the check is one assertion:
+   `boundEndpoint` in orcad's ready JSON starts with `ws://127.0.0.1:`.
 3. **Read the pairing URL from orcad's ready JSON.** In the
    `{"type":"orca_server_ready", …}` object, the field is `pairing.webClientUrl`:
    `http://127.0.0.1:<port>/web-index.html#pairing=<urlencoded orca://pair?code=…>`.
