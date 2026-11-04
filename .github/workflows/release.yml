@@ -182,6 +182,19 @@ jobs:
           set -euo pipefail
           podman run --rm -v "$PWD:/src:rw" -w /src pb-gecko-build bash powerbrowser/packaging/package-linux.sh
 
+      # G-49b (ROADMAP Phase 49 criterion 2): the packaged rows and the install matrix judge the built package
+      # before anything is uploaded. Each label is one registry row (the release-shape row checks they are
+      # registered); the stock browser for the alongside cell comes from the flake's pinned nixpkgs.
+      - name: Run the packaged rows and the install matrix over the built package (before any upload)
+        if: steps.key_gate.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          PB_STOCK_FIREFOX="$(nix build --no-link --print-out-paths --inputs-from . nixpkgs#firefox)/bin/firefox"
+          export PB_STOCK_FIREFOX
+          for LABEL in ng063-packaged-launch portable-elf sidecar-no-symlinks package-target-natives packaged-identity install-matrix; do
+            nix develop .#theia --command scripts/verify-platform.sh --only "$LABEL"
+          done
+
       # Data only: the signer is built on a hosted runner from the pinned source, never taken from here.
       - name: Upload the tarball, the complete MAR and the release manifest
         if: steps.key_gate.outputs.build == 'true'

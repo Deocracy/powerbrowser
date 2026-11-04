@@ -41,6 +41,9 @@
 //  9. mar-emit   When build-linux uploads *.complete.mar, a packaging script that build-linux runs
 //                (a powerbrowser/packaging/*.sh named in its run steps) invokes
 //                tools/update-packaging/make_full_update.sh on a non-comment line (G-49a).
+// 10. packaged-rows  build-linux runs scripts/verify-platform.sh --only for the packaged rows and
+//                install-matrix, between the packaging step and the first upload; every label it runs is a
+//                registry label (read from scripts/verify-platform.sh at check time) (G-49b).
 //
 // Instrument: js-yaml from theia/ through createRequire, the same loader as the
 // workflows row. A missing js-yaml, an unreadable file and a parse error are FAILs.
@@ -68,6 +71,10 @@ const BUILD_JOB = 'build-linux';
 const SIGN_JOB = 'sign-publish';
 const PIN_REL = 'powerbrowser/packaging/signmar/SOURCES.sha256';
 const PKG_LINUX_REL = 'powerbrowser/packaging/package-linux.sh';
+const REGISTRY_REL = 'scripts/verify-platform.sh';
+// The contract, not a copy of the tree: ROADMAP Phase 49 criterion 2 (packaged-launch and install-matrix) and the
+// Phase 45 packaging gates BLOCKED.md item 7 names. Labels the step adds beyond these only need to be registered.
+const PACKAGED_ROWS = ['ng063-packaged-launch', 'portable-elf', 'sidecar-no-symlinks', 'package-target-natives', 'packaged-identity', 'install-matrix'];
 const DESCRIPTOR_ENV = 'descriptor';
 const DESCRIPTOR_ENV_REL = `.github/settings/environment-${DESCRIPTOR_ENV}.json`;
 const RUN_NAME = 'Release ${{ inputs.sha }}';
@@ -386,6 +393,34 @@ function runChecks(root, overrides = {}) {
         }
     }
 
+    // 10. packaged-rows (G-49b): build-linux runs the packaged rows and install-matrix through the registry, after
+    // the packaging step and before the first upload. Labels are read from the step (a `for X in ...` list or a
+    // literal --only) and must each be a registry label; the PACKAGED_ROWS contract must be among them.
+    const packAt = buildSteps.findIndex(s => /\bpowerbrowser\/packaging\/[A-Za-z0-9_-]+\.sh\b/.test(String(s.run ?? '')));
+    const uploadAt = buildSteps.findIndex(s => UPLOAD.test(String(s.uses ?? '')));
+    const rowSteps = buildSteps.map((s, i) => [s, i]).filter(([s]) => /scripts\/verify-platform\.sh\s+--only\b/.test(String(s.run ?? '')));
+    const ran = new Set();
+    for (const [s] of rowSteps) {
+        const run = String(s.run);
+        for (const m of run.matchAll(/--only\s+([a-z0-9][a-z0-9-]*)\b/g)) ran.add(m[1]);
+        for (const m of run.matchAll(/\bfor\s+(\w+)\s+in\s+([^;\n]+);\s*do\b([\s\S]*?)\bdone\b/g)) {
+            if (new RegExp(`--only\\s+"?\\$\\{?${m[1]}\\b`).test(m[3])) m[2].trim().split(/\s+/).forEach(l => ran.add(l));
+        }
+    }
+    if (rowSteps.length === 0) {
+        fail(BUILD_JOB, 'packaged-rows', `runs no scripts/verify-platform.sh --only step, so the packaged rows and the install matrix never judge the package. Next step: run ${PACKAGED_ROWS.join(', ')} after the packaging step.`);
+    } else {
+        for (const [s, i] of rowSteps) {
+            if (!(packAt >= 0 && i > packAt && (uploadAt < 0 || i < uploadAt))) {
+                fail(BUILD_JOB, 'packaged-rows', `step '${s.name}' does not sit between the packaging step and the first upload, so it judges no package or judges it after the upload. Next step: move it directly after the packaging step.`);
+            }
+        }
+        const registry = (overrides.read ?? (rel => readText(root, rel)))(REGISTRY_REL) ?? '';
+        const labels = new Set([...registry.matchAll(/^\s*"([a-z0-9][a-z0-9-]*)\|/gm)].map(m => m[1]));
+        for (const l of ran) if (!labels.has(l)) fail(BUILD_JOB, 'packaged-rows', `runs --only ${l}, which is not a label in ${REGISTRY_REL}, so the step fails or checks nothing. Next step: register the row or correct the label.`);
+        for (const l of PACKAGED_ROWS) if (!ran.has(l)) fail(BUILD_JOB, 'packaged-rows', `does not run ${l} over the built package. Next step: add it to the packaged-rows step.`);
+    }
+
     const key = f => [f.file, f.job, f.rule, f.msg];
     failures.sort((a, b) => {
         const ka = key(a), kb = key(b);
@@ -485,6 +520,11 @@ function selfTest() {
         ['descriptor environment with no wait_timer', { read: rel => (rel === DESCRIPTOR_ENV_REL ? '{}' : readText(REPO_ROOT, rel)) }, 'retention', 'carries no integer wait_timer'],
         ['package-linux.sh no longer makes the complete MAR', { read: rel => (rel === PKG_LINUX_REL ? readText(REPO_ROOT, rel).split('\n').filter(l => !l.includes('make_full_update.sh')).join('\n') : readText(REPO_ROOT, rel)) }, 'mar-emit', PKG_LINUX_REL],
         ['package-linux.sh names make_full_update.sh only in a comment', { read: rel => (rel === PKG_LINUX_REL ? readText(REPO_ROOT, rel).replace(/^(.*tools\/update-packaging\/make_full_update\.sh.*)$/m, '# $1') : readText(REPO_ROOT, rel)) }, 'mar-emit', 'invokes make_full_update.sh'],
+        ['packaged-rows step drops install-matrix', edit('for LABEL in ng063-packaged-launch portable-elf sidecar-no-symlinks package-target-natives packaged-identity install-matrix; do', 'for LABEL in ng063-packaged-launch portable-elf sidecar-no-symlinks package-target-natives packaged-identity; do'), 'packaged-rows', 'does not run install-matrix'],
+        ['packaged-rows step runs an unregistered label', edit('for LABEL in ng063-packaged-launch portable-elf sidecar-no-symlinks package-target-natives packaged-identity install-matrix; do', 'for LABEL in ng063-packaged-launch portable-elf sidecar-no-symlinks package-target-natives packaged-identity install-matrix install-matrx; do'), 'packaged-rows', 'install-matrx'],
+        ['packaged-rows step removed', edit('nix develop .#theia --command scripts/verify-platform.sh --only "$LABEL"', 'true "$LABEL"'), 'packaged-rows', 'runs no scripts/verify-platform.sh --only step'],
+        ['packaged-rows step after the first upload', edit('      # G-49b (ROADMAP Phase 49 criterion 2)', "      - name: Probe\n        if: steps.key_gate.outputs.build == 'true'\n        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # probe\n        with:\n          name: probe\n          path: probe\n          retention-days: 1\n\n      # G-49b (ROADMAP Phase 49 criterion 2)"), 'packaged-rows', 'does not sit between'],
+        ['install-matrix unregistered', { read: rel => (rel === REGISTRY_REL ? readText(REPO_ROOT, rel).replace(/^\s*"install-matrix\|.*$/m, '') : readText(REPO_ROOT, rel)) }, 'packaged-rows', 'not a label'],
         ['signmar pin for another ESR tag', { read: rel => (rel === PIN_REL ? readText(REPO_ROOT, PIN_REL).replace(/^# tag .*$/m, '# tag wrong-tag') : readText(REPO_ROOT, rel)) }, 'sign-pin', 'wrong-tag'],
     ];
 
