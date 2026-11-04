@@ -74,9 +74,17 @@ build-linux); the `win-sign-chain` row now reds any Linux-publish-path job that 
 
 ## Next autonomous step
 
-**None.** Nothing automatic remains in v1.6. What is left is the owner pass below, then
-`--gate`, `/gsd-verify-work <phase> --ws deploy` per checkpoint plan, a fix round, and
-`/gsd-audit-milestone` → `/gsd-complete-milestone v1.6` → `/gsd-cleanup`.
+Superseded 2026-11-03: `FINISH-PLAN.md` in this directory is the authoritative plan (owner rulings R1-R17,
+section 2 defaults, Stages A-H). The earlier "None, nothing automatic remains" no longer holds: Stage D wrote
+and executed the gap plans listed there. Stages A-D are done. The next step is Stage E, the owner live pass,
+with the exact commands in `OWNER-PASS.md`. Then Stage F (builds and `--gate`), Stage G (verify, audit,
+`/gsd-complete-milestone v1.6 --ws deploy`) and Stage H (tag, owner-approved push). Every GSD command carries
+`--ws deploy`. Evidence for each step is in `FINISH-SURVEY.md`.
+
+Still Claude-side: plan 57-08 (clear `MOZ_CRASHREPORTER_AUTO_SUBMIT`) waits for the other session to commit
+`powerbrowser/shell/PowerBrowserAPI.sys.mjs`; gap plan 54-11 (Windows publish path) waits for the owner's
+choice in `phases/54-windows-h/BLOCKED.md` item 10; the `/etc/nixos` blocks for the Codeberg timer and the
+Safe Browsing key directory (tmpfiles rule) are not written yet.
 
 ## Blocked on the owner
 
