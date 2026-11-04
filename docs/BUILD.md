@@ -847,19 +847,35 @@ policy file.
 
 The recorded hop evidence predates 153.5: it is the N = 153.1.0 to
 N-plus-1 = 153.1.1 hop in `.mozbuild/mar-hop/hop.json`, and it was not re-run
-at 153.5. A `mar-update-hop` PASS re-verifies that recorded evidence and is not
-a 153.5 proof. A re-run needs an N-plus-1 above the current N, and
-`powerbrowser/packaging/version-nplus1/` still carries 153.1.1 (backlog 999.2).
+at 153.5. It also carries no `served` key and no UI transcript, so the
+`mar-update-hop` row has been red on it since UPD-16 and UPD-24 (Phases 50 and
+46); a re-run with the driver below replaces it.
 
-Prerequisites: the task-1 rebuilt tree is version N (at the recorded 08-04
-hop, `objdir/dist/bin/application.ini` read `Version=153.1.0`; the current
-tree reads `Version=153.5.0`, so `version-nplus1/` must be bumped above it
-first, backlog 999.2); the N-plus-1
-sources are `powerbrowser/packaging/version-nplus1/` (test-only fork
-version `153.1.1` / `153.1.1esr` — NOT an upstream ESR tag; the file
-shapes match `upstream/browser/config/version*.txt` byte for byte except
-the version string). All commands below run inside `nix develop
+Prerequisites: the rebuilt dev tree is version N (`objdir/dist/bin/application.ini`
+reads the pinned `Version=153.5.1`); the N-plus-1 sources are
+`powerbrowser/packaging/version-nplus1/` (test-only fork version `153.5.2` /
+`153.5.2esr`, bumped in 46-06 — NOT an upstream ESR tag; the file shapes match
+`upstream/browser/config/version*.txt` byte for byte except the version
+string). If the pin moves (the release train's bump, for example to 153.7)
+before the hop runs, bump `version-nplus1/` again so it stays above N; the
+driver refuses a pair where N+1 does not compare above N. All commands below run inside `nix develop
 .#firefox` with cwd `upstream/` unless stated.
+
+Stage F order (v1.6 finish plan, section 4; after the last code commit, and only
+when no other `./mach build` runs in this checkout, `pgrep -af 'mach build'`):
+
+- a. Rebuild the dev objdir (N): `./mach build` with the tracked `.mozconfig`,
+  then `./mach package` (step 2).
+- b. Build N-plus-1 in `objdir-nplus1/` (step 1), then package it (step 2).
+- c. Emit and sign the MAR (step 3) and write it to
+  `.mozbuild/mar-hop/nplus1.mar`, replacing the 153.1.1 MAR there. The
+  `build-update-xml` full row reads that path.
+- d. Run the driver (step 5): `node scripts/drive-mar-update-hop.mjs --n
+  objdir/dist/powerbrowser --nplus1 objdir-nplus1/dist/powerbrowser`. It moves
+  the 153.1 evidence to `.mozbuild/mar-hop.prev-<stamp>/` and writes new evidence.
+- e. `scripts/verify-platform.sh --only mar-update-hop` and `--only
+  build-update-xml` must both pass; then re-run `node
+  scripts/verify-nimbus-exposure.mjs` on the rebuilt objdir (46 H3).
 
 1. Build N-plus-1 in a SEPARATE objdir (never reuse N's — the proof needs
    two distinct builds). The version bump rides the supported
@@ -875,7 +891,7 @@ the version string). All commands below run inside `nix develop
 
    `objdir-nplus1/` is `.gitignore`'d spill (D-01). Confirm the payload
    version: `objdir-nplus1/dist/bin/application.ini` must read
-   `Version=153.1.1` with a build ID distinct from N's (build IDs derive
+   `Version=153.5.2` with a build ID distinct from N's (build IDs derive
    from build time, so two builds always differ).
 
 2. Package each build and stamp the precomplete file (upstream docs flow;
@@ -898,7 +914,7 @@ the version string). All commands below run inside `nix develop
    the script through `bash` explicitly (its shebang is `/bin/bash`):
 
    ```
-   MAR="<objdir-nplus1>/dist/host/bin/mar" MOZ_PRODUCT_VERSION=153.1.1 MAR_CHANNEL_ID=powerbrowser-default \
+   MAR="<objdir-nplus1>/dist/host/bin/mar" MOZ_PRODUCT_VERSION=153.5.2 MAR_CHANNEL_ID=powerbrowser-default \
      bash tools/update-packaging/make_full_update.sh <out>/nplus1.unsigned.mar "<objdir-nplus1>/dist/powerbrowser"
    ```
 
