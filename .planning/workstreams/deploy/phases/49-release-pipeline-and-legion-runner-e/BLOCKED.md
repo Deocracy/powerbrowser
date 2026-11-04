@@ -32,11 +32,15 @@ needed before a real `release.yml` dispatch can complete.
    no step produces it: `package-linux.sh` packages the tarball and the manifest only. The
    Phase 45 MAR emit (`make_full_update.sh` against the release objdir) must be added as a
    build step. Until then the upload step fails with `if-no-files-found: error`.
+   **Resolved in code by plan 49-06 (2026-11-03):** `package-linux.sh` runs `make_full_update.sh` on the
+   staged dir; `release-shape` rule `mar-emit` guards it. First real run: Phase 50.
 7. **packaged-launch and install-matrix rows.** Plan 49-01 says `build-linux` runs the
    packaged rows. The registry labels `ng063-packaged-launch`, `portable-elf`,
    `sidecar-no-symlinks`, `package-target-natives` and `packaged-identity` exist, but
    `install-matrix` is not registered, and the packaged rows need the built tree. None is
    invoked yet.
+   **Resolved in code by plan 49-07 (2026-11-03):** `install-matrix` and its self-test are registered;
+   build-linux runs the six labels between packaging and upload; `release-shape` rule `packaged-rows`.
 8. **signmar source, output format and runtime (review BL-01, resolved by design, owner to confirm).**
    `sign-publish` no longer runs a legion-built `signmar`. `scripts/build-signmar.sh` builds it on the
    hosted runner from the pinned Firefox source: the pin is
@@ -55,6 +59,9 @@ needed before a real `release.yml` dispatch can complete.
    until the pin's tag line equals `configuration.toml`).
 9. **Post-publish artifact deletion.** The artifact cap mitigation (`retention-days: 1`
    plus deletion after publish) is only the retention half. Deletion is not wired.
+   **Resolved in code by plan 49-08 (2026-11-03):** job `purge-artifacts` (actions: write only) deletes
+   `release-linux` after sign-publish succeeds; `release-shape` rule `purge`. The measured size against the
+   500 MB cap stays with 49-05 Task 3.
 
 10. **build-linux now fetches upstream, applies patches and builds Theia (review WR-07).**
     The three steps (`fetch-upstream.sh` plus `apply-patches.sh`, then `yarn install --ignore-scripts
