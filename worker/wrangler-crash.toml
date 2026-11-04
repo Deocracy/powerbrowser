@@ -25,9 +25,11 @@
 #      crash-submit.mjs), so this rule is the only rate limit. Threshold 60 requests per one-minute period
 #      per IP (owner ruling 2026-11-03; retune after the first release). Record the threshold and the period
 #      verbatim at the checkpoint. workers_dev and preview_urls are off below: a workers.dev URL would bypass the rule.
-#   6. Set the hostname:              replace REPLACE-WITH-CRASH-HOSTNAME in the routes block below with the
-#      crash hostname. custom_domain = true makes the deploy create the proxied DNS record and certificate for
-#      it, so no separate DNS step remains; confirm the record exists in the dashboard after step 7.
+#   6. Check the hostname:            the routes block below names crash.powerbrowser.org (owner default,
+#      2026-11-03). It must equal the host of [urls].crash_report and the host the step 5 rule matches; if
+#      either differs, change all of them to one hostname before step 7. custom_domain = true makes the deploy
+#      create the proxied DNS record and certificate for it, so no separate DNS step remains; confirm the
+#      record exists in the dashboard after step 7.
 #   7. Deploy:                        nix run nixpkgs#wrangler -- deploy --config worker/wrangler-crash.toml
 #   8. Probe, well-formed:            a Gecko-shaped multipart POST with a minidump part named
 #      upload_file_minidump answers 200 and "CrashID=<uuid>"; the record <uuid>.json holds the allowlisted
@@ -50,8 +52,8 @@ workers_dev = false
 preview_urls = false
 
 # The crash hostname. custom_domain = true attaches it as a Worker custom domain (wrangler creates the proxied
-# DNS record), so the zone rule of runbook step 5 applies to it. The placeholder makes an unedited deploy fail.
-routes = [{ pattern = "REPLACE-WITH-CRASH-HOSTNAME", custom_domain = true }]
+# DNS record), so the zone rule of runbook step 5 applies to it.
+routes = [{ pattern = "crash.powerbrowser.org", custom_domain = true }]
 
 [[r2_buckets]]
 binding = "CRASH_STORE"

@@ -91,6 +91,12 @@ Nothing was deployed, and no network write was made from this session. The owner
    multipart submit (200 `CrashID=<uuid>`), an over-cap body (413 `Discarded=oversized_body`), and a burst past the
    rate limit (blocked).
 
+**Updated 2026-11-04 (plan 57-07).** The routes block of `worker/wrangler-crash.toml` now names
+`crash.powerbrowser.org` (FINISH-PLAN section 2 default), so its runbook step 6 is a check, not an edit. Follow the
+runbook's order, not the list above: the rate-limit rule (runbook step 5) comes BEFORE the deploy (step 7), and the
+`crash-submit` gate enforces that order. `[urls].crash_report = "https://crash.powerbrowser.org/submit"` is still
+unset here; state it with the allowlist row below after the deploy record.
+
 **Crash host allowlist row (owner, when the key is stated).** `[urls].crash_report` is unset in this tree, so no
 crash host exists in `powerbrowser/endpoint-allowlist.json`. When the owner states the key, the
 `theia-endpoints` gate names the missing host. Add one row: disposition `allow`, `manifest: "urls.crash_report"`,
