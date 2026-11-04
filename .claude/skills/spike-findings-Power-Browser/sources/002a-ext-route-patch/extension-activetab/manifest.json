@@ -1,0 +1,9 @@
+{
+  "manifest_version": 2,
+  "name": "PB spike 002a activeTab-only probe",
+  "version": "1.0",
+  "browser_specific_settings": { "gecko": { "id": "spike002a-activetab@powerbrowser.test" } },
+  "permissions": ["activeTab"],
+  "background": { "scripts": ["config.js", "background.js"], "persistent": true },
+  "browser_action": { "default_title": "spike002a-activetab", "default_area": "navbar" }
+}

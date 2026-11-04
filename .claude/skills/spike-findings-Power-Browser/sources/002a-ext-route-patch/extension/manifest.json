@@ -1,0 +1,12 @@
+{
+  "manifest_version": 2,
+  "name": "PB spike 002a tab visibility probe",
+  "version": "1.0",
+  "browser_specific_settings": { "gecko": { "id": "spike002a-tab-visibility@powerbrowser.test" } },
+  "permissions": ["tabs", "webNavigation", "webRequest", "<all_urls>"],
+  "background": { "scripts": ["config.js", "background.js"], "persistent": true },
+  "content_scripts": [
+    { "matches": ["<all_urls>"], "js": ["config.js", "content.js"], "run_at": "document_idle", "all_frames": false }
+  ],
+  "browser_action": { "default_title": "spike002a", "default_area": "navbar" }
+}

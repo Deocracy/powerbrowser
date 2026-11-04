@@ -1,0 +1,11 @@
+{
+  "manifest_version": 2,
+  "name": "PB spike 002a per-window furniture probe",
+  "version": "1.0",
+  "browser_specific_settings": { "gecko": { "id": "spike002a-furniture@powerbrowser.test" } },
+  "permissions": ["tabs", "menus", "sessions", "<all_urls>"],
+  "background": { "scripts": ["config.js", "background.js"], "persistent": true },
+  "browser_action": { "default_title": "spike002a-furniture", "default_area": "navbar" },
+  "page_action": { "default_title": "spike002a-page", "show_matches": ["<all_urls>"] },
+  "sidebar_action": { "default_panel": "sidebar.html", "default_title": "spike002a-sidebar" }
+}

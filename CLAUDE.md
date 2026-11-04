@@ -11,6 +11,7 @@ Read `.planning/PROJECT.md` for the product, `.planning/ROADMAP.md` for where th
 hold regardless of which phase you are in.
 
 - **Sketch findings for Power Browser** (design decisions, CSS patterns, visual direction) → `Skill("sketch-findings-Power-Browser")`
+- **Spike findings for Power Browser** (implementation patterns, constraints, gotchas) → `Skill("spike-findings-Power-Browser")`
 
 ---
 
