@@ -4,16 +4,16 @@ milestone: v1.6
 current_phase_name: Release pipeline and legion runner (E)
 current_plan: 5
 status: executing
-stopped_at: "Stage D Phase 49 gaps: 49-06 (G-49a MAR emit), 49-07 (G-49b packaged rows + install-matrix), 49-08 (G-49c artifact purge), 49-09 (G-sign skip) executed; 49-02/49-05 owner checkpoints untouched"
-last_updated: "2026-11-04T03:57:52.000Z"
+stopped_at: "Stage D Phase 50 gap: 50-05 (G-50 withdraw.yml + immutable-release probe) executed; 50-03 T3 probe and 50-04 owner checkpoints untouched (BLOCKED.md item 6)"
+last_updated: "2026-11-04T04:30:42.178Z"
 last_activity: 2026-10-31
 last_activity_desc: 49-04 built, reviewed and fixed; six open items settled by the autonomous run
-state_head: 6a8c46001495b09f4fc2640f0f7f9d1f140eb256
+state_head: b0b9e14841547d77bbce2007a7a780e14187694a
 progress:
   total_phases: 19
   completed_phases: 4
-  total_plans: 98
-  completed_plans: 92
+  total_plans: 99
+  completed_plans: 93
 milestone_name: Deployment setup
 current_phase: 49
 ---
@@ -136,9 +136,9 @@ Owner decisions 1–22 of 2026-10-20 are recorded in `.planning/workstreams/depl
 
 ## Session Continuity
 
-**Last session:** 2026-11-04T03:57:51.832Z
+**Last session:** 2026-11-04T04:30:41.967Z
 
-**Stopped At:** Stage D Phase 49 gaps: 49-06 (G-49a MAR emit), 49-07 (G-49b packaged rows + install-matrix), 49-08 (G-49c artifact purge), 49-09 (G-sign skip) executed; 49-02/49-05 owner checkpoints untouched
+**Stopped At:** Stage D Phase 50 gap: 50-05 (G-50 withdraw.yml + immutable-release probe) executed; 50-03 T3 probe and 50-04 owner checkpoints untouched (BLOCKED.md item 6)
 **Resume File:** None
 
 ## Milestone Context
