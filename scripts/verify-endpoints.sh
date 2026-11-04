@@ -55,6 +55,7 @@ BIN_DIR="$REPO_ROOT/objdir/dist/bin"
 BIN_PATH="$BIN_DIR/powerbrowser"
 ALLOWLIST="$REPO_ROOT/powerbrowser/endpoint-allowlist.json"
 BRANDING_PREF_FILE="$BIN_DIR/browser/defaults/preferences/firefox-branding.js"
+POLICIES_FILE="$BIN_DIR/distribution/policies.json"
 # TEL-09 (57-06): the crash-ping host is derived from this file at check time, never kept here.
 CRASHPING_LIB="$REPO_ROOT/upstream/toolkit/crashreporter/crashping/src/lib.rs"
 
@@ -468,6 +469,18 @@ PREFEOF
     # prefs.js; the control states it true, the assertion leaves the profile empty.
     if [ "$control" -eq 1 ]; then
       printf 'user_pref("datareporting.healthreport.uploadEnabled", true);\n' > "$profile_dir/prefs.js"
+      # The shipped DisableTelemetry policy setAndLockPref()s uploadEnabled false
+      # (Policies.sys.mjs), and a locked pref beats the user_pref above, so the control
+      # drops that policy for this run. The branding-pref slot is unused on this path, so
+      # the one track_pref_backup slot carries the restore under cleanup()'s trap.
+      if [ -f "$POLICIES_FILE" ]; then
+        track_pref_backup "$POLICIES_FILE"
+        if ! node -e 'const fs=require("fs"),f=process.argv[1],j=JSON.parse(fs.readFileSync(f,"utf8"));delete j.policies.DisableTelemetry;fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n")' "$POLICIES_FILE"; then
+          restore_pref_backup
+          echo "verify-endpoints: layer 3 crash-ping positive control FAIL -- could not remove DisableTelemetry from $POLICIES_FILE" >&2
+          return 1
+        fi
+      fi
     fi
     # MOZ_AUTOMATION and MOZ_DISABLE_NONLOCAL_CONNECTIONS=1 clear the Glean uploader (crashping
     # lib.rs init_with_no_lock), which would make the control vacuous; the other two disable the

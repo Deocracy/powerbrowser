@@ -19,7 +19,9 @@ commits: [fd2cb7c4, 1eab45a9]
   - Sends SIGSEGV to one `-contentproc` child 10 s into the 35 s window and requires a minidump under the profile.
   - Fails if the crash-ping host resolves. The host is derived from `TELEMETRY_SERVER`.
   - The control writes `uploadEnabled` true into the fresh profile's `prefs.js` and passes only when the verdict
-    names that host.
+    names that host. Because the shipped `DisableTelemetry` policy locks that pref false, the control also removes
+    `DisableTelemetry` from `objdir/dist/bin/distribution/policies.json` for the run, with a trap-covered restore
+    (D57 review fix).
 - `endpoint-dispositions-self-test` (`--quick`) adds three plants: the derived host unattended against the real
   allowlist (red, naming `incoming.telemetry.mozilla.org`), the derivation following a moved host, and the
   derivation failing when the constant is removed.

@@ -74,6 +74,14 @@ Limit: MOZ_LOG records Gecko's resolver only. A main-process crash pings from th
 client, whose DNS is outside this capture, so that path is covered only by the patch-055 static gate
 (`crash-ping-consent`).
 
+Consent lock (D57 review): the shipped `distribution/policies.json` sets `DisableTelemetry`, which locks
+`datareporting.healthreport.uploadEnabled` to false, and a locked pref overrides the profile's `user_pref`. The
+`--positive-control` run therefore removes `DisableTelemetry` from `objdir/dist/bin/distribution/policies.json` for
+the duration of the run and restores the original bytes on every exit path, including INT/TERM. Without that step the
+control could never surface the host. The assertion run leaves the policy in place, so it tests the shipped
+configuration. After the control, `grep DisableTelemetry objdir/dist/bin/distribution/policies.json` confirms the
+restore.
+
 ## B3. 57-02 owner checkpoint: receiver deploy and probes (NOT EXECUTED, owner only)
 
 Nothing was deployed, and no network write was made from this session. The owner runs, in order (the full runbook is
