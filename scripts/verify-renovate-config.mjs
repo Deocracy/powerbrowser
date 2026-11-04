@@ -61,9 +61,9 @@
 //  [rule-order]             packageRules are simulated in order: every non-@theia name, and an unlisted probe,
 //                           ends with enabled false, so a later catch-all cannot re-enable a dependency.
 //
-// Not checked here: the admission of renovatebot/github-action. No workflow uses it in this change,
-// so there is nothing to admit. The workflows row's admission-used and uses-admitted rules cover
-// it when a job lands.
+// Not checked here: the renovate-theia job in release-train.yml (plan 51-05). The workflows row covers
+// its admission (admission-used, uses-admitted) and its hook allow-list (renovate-job), which it compares
+// with postUpgradeTasks.commands in this file.
 //
 // Usage: node scripts/verify-renovate-config.mjs              the tree (quick)
 //        node scripts/verify-renovate-config.mjs --self-test  one planted fault per rule, in memory

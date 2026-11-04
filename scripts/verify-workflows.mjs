@@ -109,6 +109,11 @@
 //                 so permission-dependabot-alerts (the real name is permission-vulnerability-alerts) would mint
 //                 a token that silently lacks the permission. A pin with no record entry that requests a
 //                 permission is red too: re-fetch the list when the pin moves.
+//  renovate-job   In release-train.yml (Phase 51, AUTO-02), every renovatebot/github-action step carries
+//                 RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS in its env (step or job level), a JSON array whose
+//                 entries equal, as a set, the postUpgradeTasks.commands of .github/renovate.json5, each
+//                 regex-escaped and anchored ^...$, derived at check time. Renovate skips a hook command that
+//                 is off the list with a warning only, so a dropped or stale list is otherwise silent.
 //  fixer-spend    The fix job (release-train.yml) carries timeout-minutes: 90 and the
 //                 claude-fixer concurrency group, so one attempt is time-bounded and the
 //                 attempts for every release key are serialized (FIX-05). The Console
@@ -163,6 +168,8 @@ const SELECTED_REL = '.github/settings/actions-selected.json';
 const PERMS_REL = '.github/settings/workflow-permissions.json';
 const DEPENDABOT_REL = '.github/dependabot.yml';
 const APP_INPUTS_REL = '.github/app-token-inputs.json';
+const RENOVATE_REL = '.github/renovate.json5';
+const RENOVATE_ACTION = 'renovatebot/github-action';
 
 const args = process.argv.slice(2);
 for (const a of args) {
@@ -181,7 +188,7 @@ try {
     process.exit(1);
 }
 
-const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'fixer-pin', 'fixer-debug', 'fixer-tools', 'fixer-prompt', 'dry-run-gate', 'bot-job-gate', 'uptake-lane', 'dependabot', 'call-event-gate', 'app-token-inputs', 'fixer-spend', 'fixer-auth', 'fixer-gate'];
+const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'fixer-pin', 'fixer-debug', 'fixer-tools', 'fixer-prompt', 'dry-run-gate', 'bot-job-gate', 'uptake-lane', 'dependabot', 'call-event-gate', 'app-token-inputs', 'renovate-job', 'fixer-spend', 'fixer-auth', 'fixer-gate'];
 // The fixer (Phase 52): its jobs live only in release-train.yml. FIX_PIN is the
 // v1.0.254 commit of claude-code-action; its tag object is a different hash and is refused.
 const FIXER_FILE = 'release-train.yml';
@@ -904,6 +911,35 @@ function runChecks(root, overrides = {}) {
         }
     }
 
+    // renovate-job (AUTO-02, BLOCKED.md item 6): the job's hook allow-list equals the config's hook commands.
+    {
+        const failR = (job, msg) => fail(`${WF_DIR}/${DRY_RUN_FILE}`, job, 'renovate-job', msg);
+        let cfg = overrides.renovateConfig;
+        if (cfg === undefined) {
+            try { cfg = readFileSync(join(root, RENOVATE_REL), 'utf8'); } catch { cfg = null; }
+        }
+        // shortcut: the commands array is read by a pattern, not a JSON5 parser; the renovate-config row owns the full parse.
+        let commands = null;
+        const m = typeof cfg === 'string' ? cfg.match(/"commands"\s*:\s*(\[[^\]]*\])/) : null;
+        try { commands = m ? JSON.parse(m[1]) : null; } catch { commands = null; }
+        const expected = Array.isArray(commands) ? commands.map(c => `^${String(c).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`).sort() : null;
+        for (const [jobId, job] of Object.entries(docs[DRY_RUN_FILE]?.jobs ?? {})) {
+            for (const [i, st] of (job?.steps ?? []).entries()) {
+                if (String(st?.uses ?? '').split('@')[0] !== RENOVATE_ACTION) continue;
+                if (expected === null) { failR(jobId, `step ${i} runs Renovate, but no postUpgradeTasks.commands array could be read from ${RENOVATE_REL}, so its allow-list cannot be compared. Next step: restore the file.`); continue; }
+                const raw = st.env?.RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS ?? job.env?.RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS;
+                if (raw === undefined) { failR(jobId, `step ${i} runs Renovate with no RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS, so Renovate skips the licensing hook with a warning and the PR opens with stale notices. Next step: set it to ${JSON.stringify(expected)}.`); continue; }
+                let list;
+                try { list = JSON.parse(String(raw)); } catch { list = null; }
+                if (!Array.isArray(list)) { failR(jobId, `step ${i} sets RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS to ${JSON.stringify(String(raw))}, which is not a JSON array. Next step: set it to ${JSON.stringify(expected)}.`); continue; }
+                const got = list.map(String).sort();
+                const missing = expected.filter(e => !got.includes(e));
+                const extra = got.filter(g => !expected.includes(g));
+                if (missing.length > 0 || extra.length > 0) failR(jobId, `step ${i} RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS drifts from postUpgradeTasks.commands in ${RENOVATE_REL}: missing ${JSON.stringify(missing)}, extra ${JSON.stringify(extra)}. Next step: set it to ${JSON.stringify(expected)}.`);
+            }
+        }
+    }
+
     // dependabot.yml (AUTO-03): read as data, never parsed by the workflow rules above.
     {
         const fail1 = msg => fail(DEPENDABOT_REL, WF_LEVEL, 'dependabot', msg);
@@ -1110,6 +1146,8 @@ function selfTest() {
     const plain = (perms) => ['name: Plain', 'on: workflow_dispatch', ...(perms ? [`permissions: ${perms}`] : []), 'jobs:', '  plain:', '    runs-on: ubuntu-latest', '    steps:', '      - run: echo plain', ''].join('\n');
     const issuesJob = (name, jobId) => [`name: ${name}`, 'on: workflow_dispatch', 'jobs:', `  ${jobId}:`, '    runs-on: ubuntu-latest', '    permissions:', '      issues: write', '    steps:', '      - run: echo report', ''].join('\n');
     const withClaude = { ...selected, patterns_allowed: [...selected.patterns_allowed, 'anthropics/claude-code-action@*'] };
+    // A control that replaces release-train.yml with a fixture drops the renovate-theia job, so its admission is set aside too.
+    const noRenovate = sel => ({ ...sel, patterns_allowed: sel.patterns_allowed.filter(p => p !== `${RENOVATE_ACTION}@*`) });
     // The real triage.yml admits the claude-code-action star. A control that replaces triage.yml sets that admission aside, or admission-used reds on an entry nothing uses.
     const withoutClaude = { ...selected, patterns_allowed: selected.patterns_allowed.filter(p => !p.startsWith('anthropics/claude-code-action@')) };
     const V_PERMS = '    permissions:\n      contents: read\n';
@@ -1510,6 +1548,22 @@ function selfTest() {
         ['a permission input on a pin with no record entry', { appTokenInputs: { pins: {} } }, rel('release-train.yml'), 'maintenance-probe', 'app-token-inputs', 'has no entry for that commit'],
     );
 
+    // renovate-job (AUTO-02): each plant edits the real release-train.yml or renovate.json5 text in memory.
+    const ALLOW_LINE = TRAIN_TEXT.split('\n').find(l => l.includes('RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS:'));
+    if (ALLOW_LINE === undefined) throw new Error(`self-test anchor RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS is absent from ${WF_DIR}/release-train.yml`);
+    const allowAs = value => trainEdit(ALLOW_LINE, `          RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS: '${value}'`);
+    const RJ = [rel('release-train.yml'), 'renovate-theia', 'renovate-job'];
+    const RENOVATE_TEXT = readFileSync(join(REPO_ROOT, RENOVATE_REL), 'utf8');
+    plants.push(
+        ['renovate-job: the allow-list dropped', trainEdit(`${ALLOW_LINE}\n`, ''), ...RJ, 'no RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS'],
+        ['renovate-job: the generate check dropped from the allow-list', allowAs('["^node scripts/generate-licensing\\\\.mjs$"]'), ...RJ, 'missing ["^node scripts/generate\\\\.mjs --check$"]'],
+        ['renovate-job: an extra catch-all entry', allowAs('["^node scripts/generate-licensing\\\\.mjs$", "^node scripts/generate\\\\.mjs --check$", ".*"]'), ...RJ, 'extra [".*"]'],
+        ['renovate-job: an unanchored entry', allowAs('["node scripts/generate-licensing\\\\.mjs", "^node scripts/generate\\\\.mjs --check$"]'), ...RJ, 'extra ["node scripts/generate-licensing\\\\.mjs"]'],
+        ['renovate-job: a value that is not JSON', allowAs('node scripts/generate-licensing.mjs'), ...RJ, 'not a JSON array'],
+        ['renovate-job: a third hook command in the config only', { renovateConfig: RENOVATE_TEXT.replace('"node scripts/generate.mjs --check"]', '"node scripts/generate.mjs --check", "node scripts/x.mjs"]') }, ...RJ, 'missing ["^node scripts/x\\\\.mjs$"]'],
+        ['renovate-job: no commands array in the config', { renovateConfig: '{}' }, ...RJ, 'no postUpgradeTasks.commands'],
+    );
+
     // dependabot.yml (AUTO-03, BL-02, WR-04, WR-05, WR-06): each plant edits the real file text in memory.
     const DEP = readFileSync(join(REPO_ROOT, DEPENDABOT_REL), 'utf8');
     const depEdit = (from, to, all = false) => {
@@ -1539,7 +1593,7 @@ function selfTest() {
     // claude-code-action, and read-all over a write repository default.
     const controls = [
         ['good release.yml: build-linux on legion, sign-publish with the write trio', { files: base }],
-        ['issues write on release-train.yml job report', with_({ 'release-train.yml': issuesJob('Release train', 'report') })],
+        ['issues write on release-train.yml job report', { ...with_({ 'release-train.yml': issuesJob('Release train', 'report') }), selected: noRenovate(selected) }],
         ['issues write on triage.yml job apply', { ...with_({ 'triage.yml': issuesJob('Triage', 'apply') }), selected: withClaude }],
         ['guarded workflow_run', with_({ 'after.yml': wfRun('After verify', 'Verify static layers', true) })],
         ['claude-code-action hosted with contents read', { files: { ...base, 'assist.yml': assist('read') }, selected: withClaude }],
@@ -1548,7 +1602,7 @@ function selfTest() {
         ['a negated == false gate on a git commit', withRt(d => d.jobs['bump-pr'].steps.push({ if: `\${{ ${DRY_RUN_GATE} == false }}`, run: 'git commit -m "x"' }))],
         ['a read gh api GET stays ungated', withRt(d => d.jobs.report.steps.push({ run: 'gh api repos/o/r/branches/x --jq .commit.sha' }))],
         ['the unmodified release-train.yml under the new rule', { files }],
-        ['good fixer triple: fix, fix-gate and fix-pr', { files: { ...base, [T]: GOOD_TRAIN }, selected: withClaude }],
+        ['good fixer triple: fix, fix-gate and fix-pr', { files: { ...base, [T]: GOOD_TRAIN }, selected: noRenovate(withClaude) }],
     ];
 
     let failed = 0;
