@@ -336,6 +336,9 @@ The 2046 cell is the only non-ISO cell today. `unknown` and blank cells are trea
 
 ## 15. docs/RELEASING.md ESR-calendar pointer: placed on a reachable location, owner to confirm (owner)
 
+**Resolved 2026-11-03 (owner ruling, FINISH-PLAN section 2): the pointer stays on the ESR rows of `docs/RENEWALS.md`.** No
+calendar table is added to `docs/RELEASING.md`; the sentence below stands.
+
 **Finding:** the DIST-05 sentence "The ESR calendar in External Gates is authoritative for dates." named a heading that exists
 only in the workstream `REQUIREMENTS.md`, a planning file the operator manual cannot reach. The 51-04 review fix removed the
 unreachable pointer. The Cadence section now ends its first two paragraphs with this text, which points at a file that ships in
