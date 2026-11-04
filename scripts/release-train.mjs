@@ -106,6 +106,7 @@
 //                                       (replay-result: the uptake-replay job result; detect-result: the detect job result;
 //                                        each is success|failure|cancelled|skipped)
 //   node scripts/release-train.mjs --sweep-due <epoch-seconds> [<last-sweep-epoch-seconds>]
+//   node scripts/release-train.mjs --theia-due <epoch-seconds> [<last-sweep-epoch-seconds>]   (the Theia inflow tick, AUTO-02)
 //   node scripts/release-train.mjs --maintenance <facts.json> <body-out>
 //   node scripts/release-train.mjs --maintenance-plan <found.json> <rendered-body> <comment-out> <stored-state> <state-out>
 //   node scripts/release-train.mjs --state-select <runs.json> <artifacts.json> <repo> <repo-id> <branch> <verified-shas.txt>
@@ -1751,6 +1752,28 @@ export function sweepDue(nowMs, lastSweepMs = null) {
     return Math.floor(lastSweepMs / DAY_MS) !== Math.floor(nowMs / DAY_MS);
 }
 
+/** UTC day index of the last Thursday of the given month (month may be -1, Date.UTC normalises it). Pure. */
+function lastThursdayDay(year, month) {
+    const end = new Date(Date.UTC(year, month + 1, 0));
+    return Math.floor(end.getTime() / DAY_MS) - ((end.getUTCDay() - 4 + 7) % 7);
+}
+
+/**
+ * The Theia inflow (AUTO-02) runs on the first accepted sweep after the most recent last Thursday of a
+ * month (Theia releases on the last Thursday). That Thursday is the latest one strictly before today, so
+ * the Thursday's own sweep, at 06:00 UTC, comes before the release. Due when the previous sweep fell on or
+ * before that Thursday. An unknown last sweep leaves it due, the sweepDue fail-safe: a repeated Renovate
+ * run is idempotent, a skipped one waits a month. The caller gates this on sweepDue. Pure.
+ */
+export function theiaDue(nowMs, lastSweepMs = null) {
+    const today = Math.floor(nowMs / DAY_MS);
+    const now = new Date(nowMs);
+    let thursday = lastThursdayDay(now.getUTCFullYear(), now.getUTCMonth());
+    if (thursday >= today) thursday = lastThursdayDay(now.getUTCFullYear(), now.getUTCMonth() - 1);
+    if (typeof lastSweepMs !== 'number' || !Number.isFinite(lastSweepMs)) return true;
+    return Math.floor(lastSweepMs / DAY_MS) <= thursday;
+}
+
 /** The comment text for a transition into red: one comment naming every newly red row. Pure. */
 function transitionComment(newlyRed, ownerLogin) {
     const lines = newlyRed.map(r => `- ${r.name}: ${r.evidence}`);
@@ -1874,6 +1897,17 @@ function sweepDueCli([nowSeconds, lastSeconds]) {
     // An absent, empty or unreadable last-sweep time leaves the sweep due (never a skipped sweep).
     const last = lastSeconds === undefined || lastSeconds === '' ? null : Number(lastSeconds) * 1000;
     console.log(`due=${sweepDue(seconds * 1000, last)}`);
+    return 0;
+}
+
+function theiaDueCli([nowSeconds, lastSeconds]) {
+    const seconds = Number(nowSeconds);
+    if (!Number.isFinite(seconds)) {
+        console.error(`${NAME}: FAIL -- the sweep clock ${JSON.stringify(nowSeconds)} is not epoch seconds. Next step: pass date -u +%s.`);
+        return 2;
+    }
+    const last = lastSeconds === undefined || lastSeconds === '' ? null : Number(lastSeconds) * 1000;
+    console.log(`theia-due=${theiaDue(seconds * 1000, last)}`);
     return 0;
 }
 
@@ -2270,6 +2304,22 @@ function maintenanceSelfTest() {
             return sameDay === 'due=false' && none === 'due=true' && noArg === 'due=true' ? [] : [`the CLI sweep clock gave ${sameDay}, ${none}, ${noArg}`];
         } },
         { name: 'control: the sweep is due at 06:00 UTC and not at 05:59', run: () => (sweepDue(Date.UTC(2026, 10, 1, 6, 0)) && !sweepDue(Date.UTC(2026, 10, 1, 5, 59)) ? [] : ['the 06:00 UTC gate is wrong']) },
+        { name: 'control: the Theia inflow is due on the first sweep after the last Thursday only', run: () => {
+            // October 2026: the last Thursday is the 29th. November 2026: the 26th.
+            const d = (m, day) => Date.UTC(2026, m, day, 6, 5);
+            const failures = [];
+            if (theiaDue(d(9, 29), d(9, 28))) failures.push('the Thursday sweep itself is due');
+            if (!theiaDue(d(9, 30), d(9, 29))) failures.push('the Friday after the last Thursday is not due');
+            if (theiaDue(d(9, 31), d(9, 30))) failures.push('a second sweep after the same Thursday is due');
+            if (!theiaDue(d(10, 3), d(9, 29))) failures.push('a first sweep after a missed Friday is not due');
+            if (theiaDue(d(10, 25), d(10, 24))) failures.push('a sweep before November\'s last Thursday is due');
+            if (!theiaDue(d(10, 27), d(10, 26))) failures.push('the Friday after November\'s last Thursday is not due');
+            if (!theiaDue(d(10, 27), null)) failures.push('an unknown last sweep is not due');
+            const cliDue = cli(['--theia-due', String(d(9, 30) / 1000), String(d(9, 29) / 1000)]).out.trim();
+            const cliNot = cli(['--theia-due', String(d(9, 31) / 1000), String(d(9, 30) / 1000)]).out.trim();
+            if (cliDue !== 'theia-due=true' || cliNot !== 'theia-due=false') failures.push(`the CLI gave ${cliDue}, ${cliNot}`);
+            return failures;
+        } },
     ];
     const plants = [
         { name: 'a newer 153 tag five days old with no Release', run: () => reds(stateOf(facts({ tagDates: { [NEWER_153]: NOW - 5 * DAY_MS }, releases: [] }))), expect: 'with no published Release' },
@@ -3280,6 +3330,7 @@ if (isEntry) {
     if (args[0] === '--uptake-would-write' && args.length === 6) process.exit(uptakeWouldWriteCli(args.slice(1)));
     if (args[0] === '--publish-plan' && args.length === 6) process.exit(publishPlanCli(args.slice(1)));
     if (args[0] === '--sweep-due' && (args.length === 2 || args.length === 3)) process.exit(sweepDueCli(args.slice(1)));
+    if (args[0] === '--theia-due' && (args.length === 2 || args.length === 3)) process.exit(theiaDueCli(args.slice(1)));
     if (args[0] === '--maintenance' && args.length === 3) process.exit(maintenanceCli(args.slice(1)));
     if (args[0] === '--maintenance-plan' && args.length === 6) process.exit(maintenancePlanCli(args.slice(1)));
     if (args[0] === '--state-select' && args.length === 7) process.exit(stateSelectCli(args.slice(1)));

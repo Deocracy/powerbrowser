@@ -39,6 +39,10 @@
 # report prints its would-write view. A conflict is one issue; the conflict and uptake
 # issues are still printed, not written.
 #
+# The Theia inflow (Phase 51, AUTO-02). sweep-clock also decides the Theia inflow tick (the first sweep after
+# a month's last Thursday), and renovate-theia runs self-hosted Renovate on that tick or on owner dispatch with
+# renovate-theia=true, in the bot environment, never in a dry run.
+#
 # Live facts (plan 43-06). derive collects them with read-only GETs (the bump PRs and their
 # verify check, the pin's merge SHA, its release.yml run, pending deployments and jobs, the
 # Release at the pin's key and its expected assets), and report writes exactly one tracking
@@ -55,7 +59,7 @@ name: Release train
 
 run-name: ${{ inputs.reason == 'fix' && (inputs.dry-run && format('fix dry-run {0} {1} attempt {2}', inputs.release-key, inputs.class, inputs.attempt) || format('fix {0} {1} attempt {2} {3}', inputs.release-key, inputs.class, inputs.attempt, inputs.fingerprint)) || format('release train {0}', inputs.reason) }}
 
-# shortcut: the dispatch takes reason and dry-run only, since the tag and release inputs were validated and then ignored, so an owner-forced bump is not possible from dispatch, upgrade when an owner-forced bump or a release-key lookup is approved and wired into detect.
+# shortcut: besides the fixer inputs, the dispatch takes reason, dry-run and renovate-theia only, since the tag and release inputs were validated and then ignored, so an owner-forced bump is not possible from dispatch, upgrade when an owner-forced bump or a release-key lookup is approved and wired into detect.
 on:
   workflow_dispatch:
     inputs:
@@ -65,6 +69,11 @@ on:
         type: string
       dry-run:
         description: "Validate, decide and render; commit, open, comment and dispatch nothing"
+        required: false
+        type: boolean
+        default: false
+      renovate-theia:
+        description: "Run Renovate for the Theia group now (AUTO-02). The sweep also runs it on its first sweep after a month's last Thursday"
         required: false
         type: boolean
         default: false
@@ -145,10 +154,15 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           REASON: ${{ inputs.reason }}
+          RENOVATE_THEIA: ${{ inputs.renovate-theia }}
         run: |
           set -eu
           # A workflow_run wake carries no dispatched reason; it is a self wake.
           if [ "$EVENT" = "workflow_run" ]; then REASON=self; fi
+          case "${RENOVATE_THEIA:-false}" in
+            true|false) ;;
+            *) echo "release-train: FAIL -- renovate-theia must be true or false, got '$RENOVATE_THEIA'. Next step: dispatch with -f renovate-theia=true or leave it out." >&2; exit 1 ;;
+          esac
           # A case pattern matches the whole value, not a line of it.
           case "$REASON" in
             tick|owner|self|fix) ;;
@@ -627,6 +641,7 @@ jobs:
       actions: read
     outputs:
       due: ${{ steps.due.outputs.due }}
+      theia-due: ${{ steps.theia.outputs.theia-due }}
       prev-run-id: ${{ steps.prev.outputs.run-id }}
     steps:
       - name: Check out repo
@@ -679,7 +694,76 @@ jobs:
           cat "$RUNNER_TEMP/due.txt"
           grep -E '^due=(true|false)$' "$RUNNER_TEMP/due.txt" >> "$GITHUB_OUTPUT"
 
-  # The only job that enters the bot environment in the sweep. It enters only on a live sweep tick
+      # The Theia inflow tick (AUTO-02): on the day's sweep, due when it is the first sweep after the most recent
+      # last Thursday of a month, the Theia release day. A decision only; renovate-theia acts on it.
+      - name: Decide whether this sweep is the Theia inflow tick
+        id: theia
+        if: ${{ steps.due.outputs.due == 'true' }}
+        env:
+          DRY_RUN: ${{ inputs.dry-run }}
+          PREV_CREATED: ${{ steps.prev.outputs.created-at }}
+        run: |
+          set -eu
+          LAST=""
+          if [ "$DRY_RUN" != "true" ] && [ -n "$PREV_CREATED" ]; then LAST=$(date -u -d "$PREV_CREATED" +%s 2>/dev/null || true); fi
+          node scripts/release-train.mjs --theia-due "$(date -u +%s)" "$LAST" > "$RUNNER_TEMP/theia.txt"
+          cat "$RUNNER_TEMP/theia.txt"
+          grep -E '^theia-due=(true|false)$' "$RUNNER_TEMP/theia.txt" >> "$GITHUB_OUTPUT"
+
+  # The Theia inflow (Phase 51, AUTO-02). Self-hosted Renovate opens or updates the grouped @theia/** pull
+  # request (branch prefix chore/theia-, @theia/monaco-editor-core on its own branch) from .github/renovate.json5,
+  # which Renovate reads from the default branch. It runs on owner dispatch (renovate-theia=true) and on the
+  # sweep's Theia inflow tick, never in a dry run, so it enters the bot environment only to write. Automerge is
+  # off in the config; the owner merges. The action runs Renovate in its own container on its own clone, so
+  # nothing prepared in this job's workspace reaches the post-upgrade hook (BLOCKED.md item 18).
+  renovate-theia:
+    needs: [derive, sweep-clock]
+    if: ${{ !inputs.dry-run && inputs.reason != 'fix' && (inputs.renovate-theia || needs.sweep-clock.outputs.theia-due == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: bot
+    permissions: {}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # The config Renovate will read, proven before any credential exists.
+      - name: Prove the Renovate config
+        run: node scripts/verify-renovate-config.mjs
+
+      - name: Mint the bot App token
+        id: app
+        if: ${{ !inputs.dry-run }}
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: powerbrowser
+          permission-contents: write
+          permission-pull-requests: write
+
+      # The allow-list is a self-hosted option a repository file cannot carry; without it Renovate skips the
+      # licensing hook with a warning (BLOCKED.md item 6). The workflows row, rule renovate-job, compares it with
+      # postUpgradeTasks.commands in .github/renovate.json5. renovate-version is the version the config was
+      # validated with; onboarding off and a required config keep Renovate from opening an onboarding PR.
+      - name: Run Renovate for the Theia group
+        if: ${{ !inputs.dry-run }}
+        uses: renovatebot/github-action@1c0cf989c02653fba0efe7ca5772338860ca71dc # v46.3.12
+        with:
+          token: ${{ steps.app.outputs.token }}
+          renovate-version: 44.198.3
+        env:
+          RENOVATE_PLATFORM: github
+          RENOVATE_REPOSITORIES: ${{ github.repository }}
+          RENOVATE_ONBOARDING: "false"
+          RENOVATE_REQUIRE_CONFIG: required
+          RENOVATE_GIT_AUTHOR: release-train <${{ env.BOT_EMAIL }}>
+          RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS: '["^node scripts/generate-licensing\\.mjs$", "^node scripts/generate\\.mjs --check$"]'
+
+  # The only maintenance-sweep job that enters the bot environment (renovate-theia, above, is the Theia inflow). It enters only on a live sweep tick
   # (bot-job-gate), so a dry run and a tick that is not the day's sweep never wait on an approval. Its two
   # reads are the start of the last successful scheduled watchdog run in powerbrowser-updates (App token,
   # actions read on that one repository) and one synthetic POST to the events Worker, marked synthetic and

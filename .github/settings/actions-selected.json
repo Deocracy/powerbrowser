@@ -4,6 +4,7 @@
   "patterns_allowed": [
     "cachix/install-nix-action@*",
     "anthropics/claude-code-action@*",
-    "Azure/login@*"
+    "Azure/login@*",
+    "renovatebot/github-action@*"
   ]
 }
