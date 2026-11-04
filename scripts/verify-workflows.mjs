@@ -132,7 +132,8 @@
 //                 path runs only as bash "$GITHUB_WORKSPACE/scripts/<name>" (the branch tree is never executed), HEAD_SHA from the generate job's head output,
 //                 the moved-branch refusal, a detached worktree at "$HEAD_SHA", git with no system or global config, the
 //                 refusal of a diff outside the two notice files, one git add of exactly those two, and publishes with
-//                 "$GITHUB_WORKSPACE/scripts/publish-bump-branch.sh" "$BRANCH" "$BASE" "$HEAD_SHA".
+//                 "$GITHUB_WORKSPACE/scripts/publish-bump-branch.sh" "$BRANCH" "$BASE" "$HEAD_SHA", with BASE derived in the
+//                 publish job by git merge-base, never read from the generate job's outputs.
 //  fixer-spend    The fix job (release-train.yml) carries timeout-minutes: 90 and the
 //                 claude-fixer concurrency group, so one attempt is time-bounded and the
 //                 attempts for every release key are serialized (FIX-05). The Console
@@ -1039,11 +1040,13 @@ function runChecks(root, overrides = {}) {
             const badCmd = l => /\$\{?GITHUB_WORKSPACE\}?\/target\b/.test(l) || [...l.matchAll(CMD)].some(([, w, a]) => INTERP.test(w) ? !(/^(?:bash|sh)$/.test(w) && TRUSTED.test(a ?? '')) : w.includes('/') && !TRUSTED.test(w));
             const branchRuns = ptext.split('\n').filter(badCmd);
             if (branchRuns.length > 0) failR(pId, `runs a script path that is not under "$GITHUB_WORKSPACE/" (${branchRuns.map(l => l.trim()).join('; ')}), so it may execute the branch tree with the App token. Next step: invoke the trusted copy as bash "$GITHUB_WORKSPACE/scripts/<name>".`);
+            if (JSON.stringify(p).includes(`needs.${kId}.outputs.base`)) failR(pId, `reads needs.${kId}.outputs.base, so code in the credential-free generate job sets the compare range the bot-only commit check inspects. Next step: derive BASE with git merge-base in the publish job.`);
             if (p.env?.HEAD_SHA !== `\${{ needs.${kId}.outputs.head }}`) failR(pId, `job env HEAD_SHA is ${JSON.stringify(p.env?.HEAD_SHA)}, not \${{ needs.${kId}.outputs.head }}, so the branch head is not pinned to the one the notices were generated from. Next step: set it.`);
             for (const [need, why] of [
                 ['!= "$HEAD_SHA" ]', 'refuse a branch that moved since the notices were generated (head-SHA pin)'],
                 ['worktree add --detach target "$HEAD_SHA"', 'check the branch out at exactly the pinned head'],
                 ['publish-bump-branch.sh" "$BRANCH" "$BASE" "$HEAD_SHA"', 'publish through the trusted publish-bump-branch.sh pinned to the head SHA'],
+                ['BASE=$(T merge-base refs/remotes/origin/main "$HEAD_SHA")', 'derive the bot-only compare base itself rather than trust the generate job'],
                 ['GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null', 'run git with no system or global config'],
                 ["':(exclude)THIRD-PARTY-NOTICES.txt' ':(exclude)LICENSING.md'", 'refuse a diff outside the two notice files'],
             ]) {
@@ -1719,6 +1722,8 @@ function selfTest() {
         ['renovate-job: the publish job runs a script from target/', trainEdit('          T worktree add --detach target "$HEAD_SHA"\n', '          T worktree add --detach target "$HEAD_SHA"\n          node target/scripts/generate-licensing.mjs\n'), ...RP, 'not under "$GITHUB_WORKSPACE/"'],
         ['renovate-job: the publish call drops the head-SHA pin', trainEdit('publish-bump-branch.sh" "$BRANCH" "$BASE" "$HEAD_SHA")', 'publish-bump-branch.sh" "$BRANCH" "$BASE")'), ...RP, 'pinned to the head SHA'],
         ['renovate-job: the moved-branch refusal dropped', trainEdit(`          if [ "$(T rev-parse "refs/remotes/origin/\${BRANCH}^{commit}")" != "$HEAD_SHA" ]; then\n`, `          if false; then\n`), ...RP, 'head-SHA pin'],
+        ['renovate-job: the publish job takes BASE from the generate job', trainEdit('      HEAD_SHA: ${{ needs.renovate-licensing.outputs.head }}\n    steps:', '      HEAD_SHA: ${{ needs.renovate-licensing.outputs.head }}\n      BASE: ${{ needs.renovate-licensing.outputs.base }}\n    steps:'), ...RP, 'reads needs.renovate-licensing.outputs.base'],
+        ['renovate-job: the publish job drops the merge-base derivation', trainEdit('          BASE=$(T merge-base refs/remotes/origin/main "$HEAD_SHA")\n', ''), ...RP, 'derive the bot-only compare base'],
         ['renovate-job: HEAD_SHA not taken from the generate job', trainEdit('      HEAD_SHA: ${{ needs.renovate-licensing.outputs.head }}\n', '      HEAD_SHA: ${{ github.sha }}\n'), ...RP, 'not ${{ needs.renovate-licensing.outputs.head }}'],
         ['renovate-job: the publish job stages every change', trainEdit('          T -C target add -- THIRD-PARTY-NOTICES.txt LICENSING.md\n', '          T -C target add -A\n'), ...RP, 'not exactly -- THIRD-PARTY-NOTICES.txt LICENSING.md'],
         ['renovate-job: the publish job stages a third file', trainEdit('          T -C target add -- THIRD-PARTY-NOTICES.txt LICENSING.md\n', '          T -C target add -- THIRD-PARTY-NOTICES.txt LICENSING.md theia/yarn.lock\n'), ...RP, 'not exactly -- THIRD-PARTY-NOTICES.txt LICENSING.md'],

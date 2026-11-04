@@ -794,7 +794,6 @@ jobs:
       BRANCH: chore/theia-theia
     outputs:
       head: ${{ steps.regen.outputs.head }}
-      base: ${{ steps.regen.outputs.base }}
     steps:
       # The run's own ref (main), full history, so the base of Renovate's branch can be found locally.
       - name: Check out the trusted ref without persisting a token (skipped in dry-run)
@@ -853,7 +852,7 @@ jobs:
           if same THIRD-PARTY-NOTICES.txt && same LICENSING.md; then echo "release-train: NOTE -- the notices on ${BRANCH} are current; nothing to publish"; exit 0; fi
           mkdir -p "$RUNNER_TEMP/notices"
           cp THIRD-PARTY-NOTICES.txt LICENSING.md "$RUNNER_TEMP/notices/"
-          { echo "head=${HEAD_SHA}"; echo "base=${BASE}"; } >> "$GITHUB_OUTPUT"
+          echo "head=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Upload the regenerated notices (skipped in dry-run)
         if: ${{ !inputs.dry-run && steps.regen.outputs.head != '' }}
@@ -886,7 +885,6 @@ jobs:
     env:
       BRANCH: chore/theia-theia
       HEAD_SHA: ${{ needs.renovate-licensing.outputs.head }}
-      BASE: ${{ needs.renovate-licensing.outputs.base }}
     steps:
       - name: Check out the trusted ref without persisting a token (skipped in dry-run)
         if: ${{ !inputs.dry-run }}
@@ -921,6 +919,9 @@ jobs:
             echo "release-train: NOTE -- ${BRANCH} moved since the notices were generated from ${HEAD_SHA}; not publishing. The next sweep regenerates them."
             exit 0
           fi
+          # The compare range for the bot-only commit check is derived here, never taken from the generate job's outputs.
+          BASE=$(T merge-base refs/remotes/origin/main "$HEAD_SHA")
+          echo "BASE=${BASE}" >> "$GITHUB_ENV"
           T worktree add --detach target "$HEAD_SHA"
           cp --remove-destination "$RUNNER_TEMP/notices/THIRD-PARTY-NOTICES.txt" "$RUNNER_TEMP/notices/LICENSING.md" target/
           T -C target add -- THIRD-PARTY-NOTICES.txt LICENSING.md

@@ -103,3 +103,7 @@ Two verified review findings, both fixed; none rejected.
 - Verification: `verify-workflows.mjs` PASS, `--self-test` PASS (255 plants, 11 controls); rows `zizmor` and
   `workflows-self-test` PASS; `node scripts/generate.mjs`; `scripts/verify-platform.sh --quick` with only
   `fixer-isolate-self-test` red (known).
+
+## Second review fix (2026-11-04, BASE)
+
+The publish job took BASE, the start of the compare range that publishPlan inspects for bot-only commits, from the credential-free generate job's outputs. Code that ran in the generate job could have narrowed that range. The publish job now derives BASE itself with `git merge-base refs/remotes/origin/main "$HEAD_SHA"` from its trusted checkout, and the generate job no longer exports a base output. The renovate-job rule in scripts/verify-workflows.mjs goes red if the publish job reads `needs.renovate-licensing.outputs.base` or drops the merge-base derivation (two new planted faults; self-test 257 red, 11 controls green).
