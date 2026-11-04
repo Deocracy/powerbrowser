@@ -30,6 +30,13 @@
 //                builds signmar from the pinned source (the pin's tag equals configuration.toml),
 //                downloads only the release-linux artifact, exports no LD_LIBRARY_PATH, holds no
 //                token or secret at job level, and names the signing secrets only in sign_mar.
+//  5b. publish-windows  The same: dispatch-main refusal first, inputs.sha for env and checkout, the
+//                build-linux SHA gate body before any download, only release-windows downloaded, signmar
+//                from scripts/build-signmar.sh with no env, no job-level secret, the MAR key only in
+//                win_sign_mar (owner answer A2).
+//  5c. descriptor-windows  Dispatch-main refusal first, inputs.sha checkout, verify-channel-live.mjs
+//                --form-only before the updates_token mint, and the commit step's not-newer buildID
+//                refusal exits 1; the bot key only in updates_token.
 //  6. concurrency  One group, release, never cancelling a run.
 //  7. retention  Every actions/upload-artifact step sets retention-days to 1, and the
 //                file carries at least one upload step, so the rule is not vacuous. One exception,
@@ -64,7 +71,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { resolveConfig } from './generate.mjs';
-import { failOpenFaults, loadYaml, stepsOf } from './lib/release-workflow.mjs';
+import { failOpenFaults, ifBody, loadYaml, stepsOf } from './lib/release-workflow.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'release-shape';
@@ -73,6 +80,8 @@ const RELEASE_REL = '.github/workflows/release.yml';
 const LEGION_LABEL = 'powerbrowser-release';
 const BUILD_JOB = 'build-linux';
 const SIGN_JOB = 'sign-publish';
+const WIN_JOB = 'publish-windows';
+const WIN_DESCRIPTOR_JOB = 'descriptor-windows';
 const PIN_REL = 'powerbrowser/packaging/signmar/SOURCES.sha256';
 const PKG_LINUX_REL = 'powerbrowser/packaging/package-linux.sh';
 const REGISTRY_REL = 'scripts/verify-platform.sh';
@@ -330,6 +339,78 @@ function runChecks(root, overrides = {}) {
         }
     }
 
+    // 5b. publish-windows: the same trust rules as sign-publish, for the job that holds the MAR key and the R2 token.
+    const wj = wf.jobs[WIN_JOB];
+    const wSteps = stepsOf(wj);
+    if (wj === undefined) {
+        fail(WIN_JOB, 'win-trust', `is absent. Next step: restore the publish-windows job (owner answer A2).`);
+    } else {
+        const wText = JSON.stringify(wj);
+        if (!refGuard(String(wSteps[0]?.run ?? ''))) {
+            fail(WIN_JOB, 'win-trust', `does not start with the main-dispatch refusal. Next step: restore the first step.`);
+        }
+        if (wj.env?.RELEASE_SHA !== '${{ inputs.sha }}' || wSteps.find(x => String(x.uses ?? '').startsWith('actions/checkout@'))?.with?.ref !== '${{ inputs.sha }}') {
+            fail(WIN_JOB, 'win-trust', `does not take its commit and its checkout from the dispatch input \${{ inputs.sha }}. Next step: use inputs.sha for both.`);
+        }
+        const wg = wSteps.findIndex(x => x.id === 'sha_gate');
+        if (wg < 0 || String(wSteps[wg].run ?? '') !== shaRun || shaRun === '') {
+            fail(WIN_JOB, 'win-trust', `does not re-run the SHA gate with the same body as ${BUILD_JOB}'s sha_gate. Next step: copy the gate into publish-windows.`);
+        } else if (wSteps.findIndex(x => String(x.uses ?? '').startsWith('actions/download-artifact@')) < wg) {
+            fail(WIN_JOB, 'win-trust', `downloads the Windows build before the SHA gate has run. Next step: gate first.`);
+        }
+        for (const x of wSteps) {
+            if (String(x.uses ?? '').startsWith('actions/download-artifact@') && x.with?.name !== 'release-windows') {
+                fail(WIN_JOB, 'win-trust', `downloads artifact ${JSON.stringify(x.with?.name ?? null)}; only release-windows (data) may be downloaded. Next step: remove it.`);
+            }
+        }
+        if (/LD_LIBRARY_PATH|signing-tools|chmod \+x/.test(wText)) {
+            fail(WIN_JOB, 'win-trust', `references LD_LIBRARY_PATH, signing-tools or chmod +x, which is how runner-built code reaches this job. Next step: use the signmar built from the pinned source.`);
+        }
+        const wsm = wSteps.find(x => x.id === 'win_signmar');
+        if (!/bash scripts\/build-signmar\.sh/.test(String(wsm?.run ?? '')) || wsm?.env !== undefined) {
+            fail(WIN_JOB, 'win-trust', `has no win_signmar step that runs scripts/build-signmar.sh with an empty environment. Next step: build signmar from the pinned source.`);
+        }
+        if (Object.keys(wj.env ?? {}).some(k => /TOKEN|SECRET|P12/i.test(k)) || /secrets\.|github\.token/.test(JSON.stringify(wj.env ?? {}))) {
+            fail(WIN_JOB, 'win-trust', `holds a token or secret in job-level env, which every step then sees. Next step: move it to the step that needs it.`);
+        }
+        wSteps.forEach(x => {
+            if (x.id !== 'win_sign_mar' && /MAR_SIGNING_P12|BOT_APP_PRIVATE_KEY/.test(JSON.stringify(x))) {
+                fail(WIN_JOB, 'win-trust', `step '${x.name}' names a signing or bot secret; only win_sign_mar may name the MAR key. Next step: remove it.`);
+            }
+        });
+    }
+
+    // 5c. descriptor-windows: the form gate and the downgrade refusal run before the token that can commit.
+    const dj = wf.jobs[WIN_DESCRIPTOR_JOB];
+    const dSteps = stepsOf(dj);
+    if (dj === undefined) {
+        fail(WIN_DESCRIPTOR_JOB, 'win-descriptor', `is absent. Next step: restore the descriptor-windows job (owner answer A2).`);
+    } else {
+        if (!refGuard(String(dSteps[0]?.run ?? ''))) {
+            fail(WIN_DESCRIPTOR_JOB, 'win-descriptor', `does not start with the main-dispatch refusal. Next step: restore the first step.`);
+        }
+        if (dSteps.find(x => String(x.uses ?? '').startsWith('actions/checkout@'))?.with?.ref !== '${{ inputs.sha }}') {
+            fail(WIN_DESCRIPTOR_JOB, 'win-descriptor', `does not check out the dispatch input \${{ inputs.sha }}. Next step: check out inputs.sha.`);
+        }
+        const tokenAt = dSteps.findIndex(x => x.id === 'updates_token');
+        const formAt = dSteps.findIndex(x => /node scripts\/verify-channel-live\.mjs --form-only /.test(String(x.run ?? '')));
+        if (formAt < 0 || tokenAt < 0 || formAt > tokenAt || failOpenFaults(dSteps[formAt]).length > 0) {
+            fail(WIN_DESCRIPTOR_JOB, 'win-descriptor', `does not run verify-channel-live.mjs --form-only, failing closed, before the updates_token mint, so a descriptor naming a URL off the MAR origin could be committed. Next step: restore the form gate before the token step.`);
+        }
+        const commit = tokenAt < 0 ? undefined : dSteps.slice(tokenAt + 1).find(x => /repos\/\$REPO\/contents\/\$REL/.test(String(x.run ?? '')));
+        const downgrade = ifBody(String(commit?.run ?? ''), /if \[ -n "\$CUR_ID" \] && ! \[\[ "\$NEW_ID" > "\$CUR_ID" \]\]/);
+        // Not failOpenFaults: the step's HTTP-status capture carries a deliberate `|| true`.
+        const commitOpen = commit !== undefined && (Object.hasOwn(commit, 'continue-on-error') || commit.if !== undefined || !/^\s*set -euo pipefail\s*$/m.test(String(commit.run)));
+        if (commit === undefined || downgrade === null || !/\bexit 1\b/.test(downgrade) || commitOpen) {
+            fail(WIN_DESCRIPTOR_JOB, 'win-descriptor', `commit step does not refuse, with an exit 1, a buildID that is not newer than the committed Windows descriptor, so a downgrade could be offered. Next step: restore the buildID comparison.`);
+        }
+        dSteps.forEach(x => {
+            if (x.id !== 'updates_token' && /BOT_APP_PRIVATE_KEY|MAR_SIGNING_P12/.test(JSON.stringify(x))) {
+                fail(WIN_DESCRIPTOR_JOB, 'win-descriptor', `step '${x.name}' names a signing or bot secret; only updates_token may. Next step: remove it.`);
+            }
+        });
+    }
+
     // 6. concurrency
     if (wf.concurrency?.group !== 'release' || wf.concurrency?.['cancel-in-progress'] !== false) {
         fail('(workflow)', 'concurrency', `has concurrency ${JSON.stringify(wf.concurrency ?? null)}, not group release with cancel-in-progress: false; two dispatches could race on the runner workspace and the tag. Next step: restore the group.`);
@@ -474,7 +555,7 @@ function main() {
         failures.forEach(f => console.error(`  ${fmt(f)}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- ${RELEASE_REL} dispatches on workflow_dispatch only with a required sha input; build-linux runs on ${LEGION_LABEL} with no environment and no secret; the SHA-ancestor and key>tag gates precede the build and every later step is gated on the key; legion permissions are exactly contents: read with no secrets reference; sign-publish takes its commit from inputs.sha, re-gates, derives the key and builds signmar from the pinned source; ${uploads} upload-artifact step(s) keep retention-days 1, except the data-only artifacts the jobs behind the ${DESCRIPTOR_ENV} wait read, which outlive it; no cache step or cache input.`);
+    console.log(`${NAME}: PASS -- ${RELEASE_REL} dispatches on workflow_dispatch only with a required sha input; build-linux runs on ${LEGION_LABEL} with no environment and no secret; the SHA-ancestor and key>tag gates precede the build and every later step is gated on the key; legion permissions are exactly contents: read with no secrets reference; sign-publish takes its commit from inputs.sha, re-gates, derives the key and builds signmar from the pinned source; publish-windows and descriptor-windows carry the same dispatch, SHA and secret-scope gates, and the Windows form gate and downgrade refusal run before the token mint; ${uploads} upload-artifact step(s) keep retention-days 1, except the data-only artifacts the jobs behind the ${DESCRIPTOR_ENV} wait read, which outlive it; no cache step or cache input.`);
     return 0;
 }
 
@@ -498,15 +579,16 @@ function selfTest() {
         if (!real.includes(from)) throw new Error(`self-test anchor '${from.trim()}' is absent from ${RELEASE_REL}`);
         return real.replace(from, to);
     };
-    // The first occurrence inside the sign-publish job's text: later jobs (publish-windows) repeat its gates.
-    const editLast = (from, to) => {
-        const start = real.indexOf(`\n  ${SIGN_JOB}:\n`);
+    // The first occurrence inside one job's text: later jobs (publish-windows) repeat sign-publish's gates.
+    const editIn = (job, from, to) => {
+        const start = real.indexOf(`\n  ${job}:\n`);
         const next = start < 0 ? -1 : real.slice(start + 1).search(/\n  [a-z][a-z0-9-]*:\n/);
         const end = next < 0 ? real.length : start + 1 + next;
         const at = start < 0 ? -1 : real.indexOf(from, start);
-        if (at < 0 || at >= end) throw new Error(`self-test anchor '${from.trim()}' is absent from ${SIGN_JOB} in ${RELEASE_REL}`);
+        if (at < 0 || at >= end) throw new Error(`self-test anchor '${from.trim()}' is absent from ${job} in ${RELEASE_REL}`);
         return real.slice(0, at) + to + real.slice(at + from.length);
     };
+    const editLast = (from, to) => editIn(SIGN_JOB, from, to);
     const RUNS_ON = '    runs-on: [self-hosted, powerbrowser-release]\n';
     const GATED = "        if: steps.key_gate.outputs.build == 'true'\n";
     const CHECKOUT_RUN = '      - name: Generate the derived build surfaces\n';
@@ -569,7 +651,18 @@ function selfTest() {
         ['purge deletes the descriptor manifest', edit('          PURGE: release-linux\n', '          PURGE: release-linux release-linux-manifest\n'), 'purge', 'behind the descriptor wait'],
         ['purge misses the tarball artifact', edit('          PURGE: release-linux\n', '          PURGE: release-windows\n'), 'purge', 'not deleted: ["release-linux"]'],
         ['purge remaining-count check removed', edit('[ "$LEFT" = "0" ] ||', 'true ||'), 'purge', 'still stored'],
-        ['signmar pin for another ESR tag', { read: rel => (rel === PIN_REL ? readText(REPO_ROOT, PIN_REL).replace(/^# tag .*$/m, '# tag wrong-tag') : readText(REPO_ROOT, rel)) }, 'sign-pin', 'wrong-tag'],
+        ['publish-windows ref refusal removed', editIn(WIN_JOB, '[ "$GITHUB_REF" = "refs/heads/main" ]', 'true'), 'win-trust', 'main-dispatch refusal'],
+        ['publish-windows sha from a build output', editIn(WIN_JOB, 'RELEASE_SHA: ${{ inputs.sha }}', 'RELEASE_SHA: ${{ needs.build-windows.outputs.sha }}'), 'win-trust', 'dispatch input'],
+        ['publish-windows SHA gate removed', editIn(WIN_JOB, '        id: sha_gate\n', '        id: sha_gate_x\n'), 'win-trust', 'SHA gate'],
+        ['publish-windows SHA gate HEAD equality removed', editIn(WIN_JOB, '[ "$SHA" = "$RELEASE_SHA" ] ||', ': ||'), 'win-trust', 'SHA gate'],
+        ['publish-windows downloading another artifact', editIn(WIN_JOB, '          name: release-windows\n', '          name: signing-tools\n'), 'win-trust', 'only release-windows'],
+        ['publish-windows signmar handed an env', editIn(WIN_JOB, '        id: win_signmar\n', '        id: win_signmar\n        env:\n          X: y\n'), 'win-trust', 'win_signmar'],
+        ['MAR key named outside win_sign_mar', editIn(WIN_JOB, '        id: win_verify_mar\n        env:\n', '        id: win_verify_mar\n        env:\n          P: ${{ secrets.MAR_SIGNING_P12_B64 }}\n'), 'win-trust', 'signing or bot secret'],
+        ['descriptor-windows ref refusal removed', editIn(WIN_DESCRIPTOR_JOB, '[ "$GITHUB_REF" = "refs/heads/main" ]', 'true'), 'win-descriptor', 'main-dispatch refusal'],
+        ['descriptor-windows form gate removed', editIn(WIN_DESCRIPTOR_JOB, 'node scripts/verify-channel-live.mjs --form-only ', 'true '), 'win-descriptor', '--form-only'],
+        ['descriptor-windows buildID comparison removed', editIn(WIN_DESCRIPTOR_JOB, '! [[ "$NEW_ID" > "$CUR_ID" ]]', 'false'), 'win-descriptor', 'not newer'],
+        ['descriptor-windows downgrade refusal no longer exits', editIn(WIN_DESCRIPTOR_JOB, 'is newer than $CUR_ID" >&2\n              exit 1\n', 'is newer than $CUR_ID" >&2\n'), 'win-descriptor', 'not newer'],
+        ['signmar pin for another ESR tag',{ read: rel => (rel === PIN_REL ? readText(REPO_ROOT, PIN_REL).replace(/^# tag .*$/m, '# tag wrong-tag') : readText(REPO_ROOT, rel)) }, 'sign-pin', 'wrong-tag'],
     ];
 
     let failed = 0;

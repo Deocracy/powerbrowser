@@ -5234,6 +5234,9 @@ run_own_checks() {
     # (G-49b, packaged-rows) build-linux runs the packaged rows and install-matrix between packaging and
     # the first upload, each a registry label; (G-49c, purge) one hosted actions: write job after sign-publish
     # deletes the tarball-and-MAR artifacts derived from the build-linux uploads and keeps the descriptor data.
+    # (54-11 review, win-trust and win-descriptor) publish-windows carries the same dispatch refusal, inputs.sha,
+    # SHA gate, release-windows-only download, pinned signmar and MAR-key scoping as sign-publish; descriptor-windows
+    # runs the --form-only gate before its token mint and refuses a not-newer buildID with exit 1.
     # release-shape-self-test plants one fault per rule in memory over the real release.yml text and
     # three bad mar_origin values through a scratch copy of configuration.toml; each goes red naming
     # the file, the rule and the fault.
@@ -5278,12 +5281,14 @@ run_own_checks() {
     # before signmar -v, and the verification uses the tracked DER. The comparands derive from
     # generate.mjs updateChannel(). Honestly --quick: file reads and YAML parsing only.
     "mar-channel-gate|node $REPO_ROOT/scripts/verify-mar-channel-gate.mjs"
-    # mar-channel-gate-self-test plants twelve faults in memory over the real release.yml text: a
+    # mar-channel-gate-self-test plants twenty-one faults in memory over the real release.yml text: a
     # foreign-channel MAR accepted, the gate comparing the MAR id with --channel, a verification
     # against a non-tracked DER, a dropped independent node:crypto check, a mismatch branch or
     # cross-check without its exit 1, continue-on-error, `|| true` after signmar -v, an if: on the
-    # sign step, a runner-supplied signer, and a sign-before-verify swap. Each goes red naming the
-    # file and the fault. It writes nothing.
+    # sign step, a runner-supplied signer, and a sign-before-verify swap; and (54-11 review) the same
+    # over publish-windows: gate, mismatch exit, verify step or either verifier removed, the unsigned MAR
+    # assembled, sign before gate, a runner signer, and mozconfig-windows-x86_64 losing the MAR id.
+    # Each goes red naming the file and the fault. It writes nothing.
     "mar-channel-gate-self-test|node $REPO_ROOT/scripts/verify-mar-channel-gate.mjs --self-test"
     # NEW (Phase 49, DIST-07): the draft asset set equals the manifest-derived set (versioned and
     # stable tarball and MAR, SHA256SUMS, release-manifest.json, the notices and the source tarball)
