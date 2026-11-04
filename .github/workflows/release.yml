@@ -237,13 +237,128 @@ jobs:
           retention-days: 7
           overwrite: true
 
+  # Phase 54 (PKG-13, G-54a): the Windows sidecar, built on a GitHub-hosted windows-latest runner so that every
+  # native in it is a Windows native by construction; legion never builds it. It stages the layout package-linux.sh
+  # stages (TheiaService.sys.mjs loads <GreD>/theia/lib/backend/main.js), writes BUILD_ROOT (its workspace root, for
+  # the checkout-path purge) and a SHA256SUMS over every other file, and admits its own output with the gates
+  # build-windows applies. The SHA-256 of SHA256SUMS leaves the job as the output sums_sha256, outside the artifact,
+  # which is what check-win-sidecar.sh requires: whoever can alter the artifact cannot alter that output. It holds
+  # no secret and no write token, and only build-windows needs it, so a failure here never reaches a Linux job.
+  windows-sidecar:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      sums_sha256: ${{ steps.sums.outputs.sha256 }}
+    env:
+      RELEASE_SHA: ${{ inputs.sha }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Refuse any ref but main and any event but a dispatch
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF" = "refs/heads/main" ] \
+            || { echo "::error::the release runs only from a workflow_dispatch on refs/heads/main (event $GITHUB_EVENT_NAME, ref $GITHUB_REF)" >&2; exit 1; }
+
+      - name: Require a full 40-hex commit SHA
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a full 40-character lowercase commit SHA" >&2; exit 1; }
+
+      - name: Check out the requested commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+
+      # The sidecar runs on the Node that package-windows.sh stages, so its natives match that ABI.
+      - name: Read the win32-x64 Node version from node-runtime.json
+        id: node_pin
+        run: |
+          set -euo pipefail
+          V="$(node -p 'require("./powerbrowser/packaging/node-runtime.json")["win32-x64"].version')"
+          [[ "$V" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::the win32-x64 version in node-runtime.json is not v<major>.<minor>.<patch> ('$V'); nothing is built" >&2; exit 1; }
+          echo "version=${V#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up the pinned Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ steps.node_pin.outputs.version }}
+          package-manager-cache: false
+
+      # Nothing is installed outside a lockfile: the image's yarn classic is used, and only at the release the
+      # Linux dev shell runs (the last 1.x release). Another version stops the job here.
+      - name: Require the runner image's yarn classic at 1.22.22
+        run: |
+          set -euo pipefail
+          Y="$(yarn --version)"
+          [ "$Y" = "1.22.22" ] || { echo "::error::the windows-latest image carries yarn $Y, not 1.22.22; nothing is built. Next step: pin the yarn release in a committed lockfile, as .github/r2/wrangler pins wrangler" >&2; exit 1; }
+
+      # The commands build-linux runs, without the nix shell. node-gyp is the copy the lockfile pins.
+      - name: Build the Theia sidecar (frozen lockfile, package scripts off, drivelist compiled here)
+        run: |
+          set -euo pipefail
+          cd theia
+          yarn install --ignore-scripts --frozen-lockfile
+          (cd node_modules/drivelist && ../.bin/node-gyp rebuild)
+          yarn build
+
+      - name: Stage the sidecar in the package-linux.sh layout, then write BUILD_ROOT and SHA256SUMS
+        run: |
+          set -euo pipefail
+          APP=theia/applications/browser
+          OUT=sidecar-out
+          rm -rf "$OUT"
+          mkdir -p "$OUT/node_modules/better-sqlite3/lib" "$OUT/node_modules/better-sqlite3/prebuilds"
+          test -f "$APP/lib/backend/main.js" || { echo "::error::$APP/lib/backend/main.js is absent after yarn build; nothing is staged" >&2; exit 1; }
+          cp -a "$APP/lib" "$OUT/lib"
+          find "$OUT/lib" -name '*.map' -delete
+          cp "$APP/package.json" "$OUT/package.json"
+          if [ -d "$APP/plugins" ]; then cp -a "$APP/plugins" "$OUT/plugins"; fi
+          cp -a theia/node_modules/better-sqlite3/lib/. "$OUT/node_modules/better-sqlite3/lib/"
+          cp theia/node_modules/better-sqlite3/package.json "$OUT/node_modules/better-sqlite3/package.json"
+          cp theia/node_modules/better-sqlite3/prebuilds/win32-x64.node "$OUT/node_modules/better-sqlite3/prebuilds/win32-x64.node"
+          perl -pi -e 's{//\s*node-file:\S+}{// node-file:<buildhost>}; s{"node-file:[^"]+"}{"node-file:<buildhost>"}g' \
+            "$OUT/lib/backend/main.js" "$OUT/lib/backend/parcel-watcher.js"
+          printf '%s\n' "$GITHUB_WORKSPACE" > "$OUT/BUILD_ROOT"
+          (cd "$OUT" && find . -type f ! -path ./SHA256SUMS -print | sed 's|^\./||' | LC_ALL=C sort | xargs -d '\n' sha256sum > SHA256SUMS)
+
+      - name: Admit the staged sidecar with the gates build-windows applies, then record the digest outside the artifact
+        id: sums
+        run: |
+          set -euo pipefail
+          OUT=sidecar-out
+          SUMS="$(sha256sum "$OUT/SHA256SUMS" | cut -d' ' -f1)"
+          bash powerbrowser/packaging/check-win-sidecar.sh check "$OUT" "$SUMS"
+          TARGETS=("$OUT/lib" "$OUT/node_modules" "$OUT/package.json")
+          if [ -d "$OUT/plugins" ]; then TARGETS+=("$OUT/plugins"); fi
+          bash powerbrowser/packaging/check-win-sidecar.sh purge "$OUT" "${TARGETS[@]}"
+          echo "sha256=$SUMS" >> "$GITHUB_OUTPUT"
+          echo "windows-sidecar SHA256SUMS sha256 $SUMS"
+
+      - name: Upload the Windows sidecar (data for build-windows, admitted there by the digest output)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-sidecar
+          path: sidecar-out/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
   # Phase 54 (PKG-10): the Windows cross build on the same legion runner. Its gates are copied
   # byte for byte from build-linux (the build-windows-shape row compares them), in the same order:
   # ref and event refusal, full SHA, checkout, SHA gate, key gate, then every step after the key gate
   # carries its if:. The job holds no secret, and its only credential-shaped input is the Safe
   # Browsing key directory (PB_KEYDIR at /keys:ro). Its output is data: sign-publish downloads only
   # release-linux, and sign-windows signs and repacks the release-windows bytes but executes none of them.
+  # Its one needs edge is the hosted windows-sidecar job (G-54a): the sidecar artifact and the digest of its
+  # SHA256SUMS come from there, never from a legion output or a repository variable.
   build-windows:
+    needs: windows-sidecar
     runs-on: [self-hosted, powerbrowser-release]
     timeout-minutes: 300
     permissions:
@@ -351,15 +466,22 @@ jobs:
           podman run --rm -v "$PWD:/src:rw" -v "${PB_KEYDIR:?the Safe Browsing key directory is set on the runner unit}:/keys:ro" -w /src/upstream \
             pb-gecko-build bash -c 'set -euo pipefail; MOZCONFIG=/src/generated/packaging/mozconfig-windows-x86_64 ./mach build'
 
+      - name: Download the hosted Windows sidecar into windows-sidecar/ (data, admitted by its digest before staging)
+        if: steps.key_gate.outputs.build == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-sidecar
+          path: windows-sidecar
+
       # package-windows.sh stages the hosted sidecar and the pinned Node runtime into the app dir, rewrites the
       # package zip from it, and runs `mach repackage installer` and `mach repackage mar` with the arguments the
-      # pinned tree defines. It fails closed: the sidecar directory (the windows-latest artifact, fetched by the
-      # hosted sidecar job that Phase 50 adds, BLOCKED.md item 8) must exist and its SHA256SUMS must hash to the
-      # digest that job recorded outside the artifact. Without them this job stops here and uploads nothing.
+      # pinned tree defines. It fails closed: the sidecar directory (the windows-sidecar artifact) must exist and its
+      # SHA256SUMS must hash to the digest the windows-sidecar job recorded outside the artifact, as its job output.
+      # Without them this job stops here and uploads nothing.
       - name: Stage the sidecar and the Node runtime, then repackage the installer and the complete MAR in the container
         if: steps.key_gate.outputs.build == 'true'
         env:
-          PB_WIN_SIDECAR_SUMS_SHA256: ${{ vars.PB_WIN_SIDECAR_SUMS_SHA256 }}
+          PB_WIN_SIDECAR_SUMS_SHA256: ${{ needs.windows-sidecar.outputs.sums_sha256 }}
         run: |
           set -euo pipefail
           podman run --rm -v "$PWD:/src:rw" -w /src -e PB_WIN_SIDECAR_DIR=/src/windows-sidecar -e PB_WIN_SIDECAR_SUMS_SHA256 \

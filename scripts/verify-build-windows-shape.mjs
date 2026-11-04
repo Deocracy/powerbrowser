@@ -27,7 +27,13 @@
 //  9. retention  every upload-artifact step sets retention-days 1 and fails on no files; the file
 //                carries at least one, so the rule is not vacuous.
 // 10. no-cache   no actions/cache step, no cache input.
-// 11. independent build-windows has no needs: key, so it cannot start from a runner output.
+// 11. independent build-windows needs exactly the hosted windows-sidecar job (G-54a) and reads only its
+//                sums_sha256 output, as PB_WIN_SIDECAR_SUMS_SHA256 (never vars.); it downloads the windows-sidecar
+//                artifact into windows-sidecar/ before package-windows.sh. The producer runs on exactly
+//                windows-latest with exactly contents: read, no environment, secret or needs, SHA-pinned actions/
+//                uses, refuses any ref but main first, writes BUILD_ROOT, hashes SHA256SUMS in its sums step after
+//                the check-win-sidecar.sh check and purge on its own output, and uploads one windows-sidecar
+//                artifact with retention-days 1 and if-no-files-found error.
 // 12. node pin    the `run:` text of the Node-pin step is EXECUTED (with a nix shim, in a temp directory)
 //                against the real node-runtime.json, which it must accept, and against fixtures with a wrong
 //                version, a missing win32-x64 key and a bad digest, which it must each refuse.
@@ -62,6 +68,12 @@ const PACKAGE_REL = 'powerbrowser/packaging/package-windows.sh';
 const MACH_REL = 'upstream/python/mozbuild/mozbuild/mach_commands.py';
 const PIN_REL = 'powerbrowser/packaging/node-runtime.json';
 const PIN_KEY = 'win32-x64';
+const PRODUCER = 'windows-sidecar';
+const PRODUCER_LABEL = 'windows-latest';
+const DOWNLOAD = /^actions\/download-artifact@/;
+const DIGEST_ENV = 'PB_WIN_SIDECAR_SUMS_SHA256';
+const DIGEST_REF = '${{ needs.windows-sidecar.outputs.sums_sha256 }}';
+const PRODUCER_OUTPUT = '${{ steps.sums.outputs.sha256 }}';
 
 const args = process.argv.slice(2);
 for (const a of args) {
@@ -136,6 +148,53 @@ function runPinStep(runText, pinText) {
     }
 }
 
+// Rule 11, producer half (G-54a): the hosted windows-sidecar job and the one value build-windows reads from it.
+function sidecarChecks(wf, job, text, fail) {
+    const where = `(${PRODUCER})`;
+    const steps = stepsOf(job);
+    const runOf = st => String(st.run ?? '');
+    const env = steps.find(st => /package-windows\.sh/.test(runOf(st)))?.env?.[DIGEST_ENV];
+    if (env !== DIGEST_REF) fail('(job)', 'sidecar', `the staging step reads ${DIGEST_ENV} from ${JSON.stringify(env ?? null)}, not ${DIGEST_REF}. The digest must be the producer's job output, recorded outside the artifact. Next step: set it from that output.`);
+    if (/vars\.PB_WIN_SIDECAR_SUMS_SHA256/.test(text)) fail('(workflow)', 'sidecar', `reads vars.${DIGEST_ENV}; a repository variable cannot carry the per-run digest. Next step: read ${DIGEST_REF}.`);
+    const other = [...JSON.stringify(job).matchAll(/needs\.[A-Za-z0-9_.-]+/g)].map(m => m[0]).filter(r => `\${{ ${r} }}` !== DIGEST_REF);
+    if (other.length > 0) fail('(job)', 'sidecar', `reads ${other[0]}; the only needs value build-windows may read is ${DIGEST_REF}. Next step: remove it.`);
+    const packAt = steps.findIndex(st => /powerbrowser\/packaging\/package-windows\.sh/.test(runOf(st)));
+    const dlAt = steps.findIndex(st => DOWNLOAD.test(String(st.uses ?? '')) && st.with?.name === PRODUCER);
+    if (dlAt < 0) fail('(job)', 'sidecar', `has no download-artifact step for ${PRODUCER}, so package-windows.sh finds no sidecar. Next step: download it before the staging step.`);
+    else if (steps[dlAt].with?.path !== PRODUCER || !(packAt < 0 || dlAt < packAt)) fail('(job)', 'sidecar', `downloads ${PRODUCER} to path ${JSON.stringify(steps[dlAt].with?.path ?? null)} or after the staging step; it must land in path windows-sidecar before it. Next step: fix the step.`);
+
+    const p = wf.jobs[PRODUCER];
+    if (p === undefined || p === null || typeof p !== 'object') {
+        fail(where, 'sidecar', `the ${PRODUCER} job is absent, so no sidecar artifact and no digest exist. Next step: restore it.`);
+        return;
+    }
+    const ps = stepsOf(p);
+    if (JSON.stringify(labelsOf(p)) !== JSON.stringify([PRODUCER_LABEL])) fail(where, 'sidecar', `runs-on ${JSON.stringify(labelsOf(p))}, not exactly [${PRODUCER_LABEL}]; the sidecar is built on a GitHub-hosted Windows runner, never on legion. Next step: set runs-on: ${PRODUCER_LABEL}.`);
+    if (!(p.permissions && Object.keys(p.permissions).length === 1 && p.permissions.contents === 'read')) fail(where, 'sidecar', `permissions are ${JSON.stringify(p.permissions ?? null)}, not exactly {contents: read}. Next step: set permissions: contents: read.`);
+    if (Object.hasOwn(p, 'environment')) fail(where, 'sidecar', `has an environment key; the producer holds no environment. Next step: remove it.`);
+    if (/\bsecrets\b/.test(JSON.stringify(p))) fail(where, 'sidecar', `reaches a secrets reference; the producer holds no secret. Next step: remove it.`);
+    if (Object.hasOwn(p, 'needs')) fail(where, 'sidecar', `declares needs ${JSON.stringify(p.needs)}; the producer starts from inputs.sha alone. Next step: remove needs.`);
+    if (p.outputs?.sums_sha256 !== PRODUCER_OUTPUT) fail(where, 'sidecar', `declares output sums_sha256 as ${JSON.stringify(p.outputs?.sums_sha256 ?? null)}, not ${PRODUCER_OUTPUT}. Next step: restore it.`);
+    const sums = ps.find(st => st.id === 'sums');
+    if (!sums || !/sha256sum "\$OUT\/SHA256SUMS"/.test(runOf(sums)) || !/check-win-sidecar\.sh check\b/.test(runOf(sums)) || !/check-win-sidecar\.sh purge\b/.test(runOf(sums)) || !/sha256=\$SUMS"? >> "\$GITHUB_OUTPUT"/.test(runOf(sums))) {
+        fail(where, 'sidecar', `the sums step does not hash SHA256SUMS, run the check-win-sidecar.sh check and purge on its own output, and write sha256= to GITHUB_OUTPUT. Next step: restore it.`);
+    }
+    if (!ps.some(st => /> "\$OUT\/BUILD_ROOT"/.test(runOf(st)))) fail(where, 'sidecar', `writes no BUILD_ROOT, so the checkout-path purge has no root to look for. Next step: write $GITHUB_WORKSPACE to BUILD_ROOT.`);
+    if (!refGuardOf(String(ps[0]?.run ?? ''))) fail(where, 'sidecar', `the first step does not refuse any ref but refs/heads/main and any event but workflow_dispatch. Next step: restore it.`);
+    const ups = ps.filter(st => UPLOAD.test(String(st.uses ?? '')));
+    if (ups.length !== 1 || ups[0].with?.name !== PRODUCER || Number(ups[0].with?.['retention-days']) !== 1 || ups[0].with?.['if-no-files-found'] !== 'error') {
+        fail(where, 'sidecar', `must upload exactly one artifact named ${PRODUCER} with retention-days 1 and if-no-files-found error (got ${JSON.stringify(ups.map(u => u.with ?? null))}). Next step: restore the upload step.`);
+    }
+    for (const st of ps) {
+        const uses = typeof st.uses === 'string' ? st.uses : null;
+        if (uses !== null && !(PINNED.test(uses) && uses.startsWith('actions/'))) fail(where, 'sidecar', `uses ${uses}, which is not a SHA-pinned GitHub-owned action. Next step: pin it.`);
+        if (CACHE.test(uses ?? '')) fail(where, 'sidecar', `carries a cache step. Next step: remove it.`);
+        for (const f of failOpenFaults(st, undefined)) fail(where, 'sidecar', `step '${st.name ?? st.uses}' ${f}. Next step: remove it.`);
+    }
+}
+
+const refGuardOf = r => r.includes('[ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]') && r.includes('[ "$GITHUB_REF" = "refs/heads/main" ]') && /\|\| \{[^}]*exit 1/.test(r);
+
 function runChecks(root, overrides = {}) {
     const failures = [];
     const fail = (step, rule, msg) => failures.push({ file: RELEASE_REL, job: JOB, step, rule, msg });
@@ -187,9 +246,12 @@ function runChecks(root, overrides = {}) {
     if (/\bsecrets\b/.test(JSON.stringify(job))) {
         fail('(job)', 'secrets', `reaches a secrets reference. build-windows holds no secret. Next step: remove it.`);
     }
-    if (Object.hasOwn(job, 'needs')) {
-        fail('(job)', 'independent', `declares needs (${JSON.stringify(job.needs)}). build-windows must not wait on a runner output. Next step: remove needs.`);
+    // 11. the one needs edge: the hosted sidecar producer, and only its digest output is read
+    const needs = [].concat(job.needs ?? []).map(String);
+    if (JSON.stringify(needs) !== JSON.stringify([PRODUCER])) {
+        fail('(job)', 'independent', `declares needs ${JSON.stringify(needs)}, not exactly [${PRODUCER}]. build-windows may wait only on the hosted sidecar producer, never on a legion output. Next step: set needs: ${PRODUCER}.`);
     }
+    sidecarChecks(wf, job, text, fail);
 
     // 4. uses are SHA-pinned GitHub-owned actions
     for (const st of steps) {
@@ -368,6 +430,17 @@ function selfTest() {
         if (!slice.includes(from)) throw new Error(`self-test anchor '${from.trim().split('\n')[0]}' is absent from the ${JOB} job`);
         return real.slice(0, h) + slice.replace(from, to) + real.slice(t);
     };
+    // Producer plants edit the windows-sidecar job only: the slice between its header and build-windows' header.
+    const ph = real.indexOf(`\n  ${PRODUCER}:\n`);
+    if (ph < 0 || ph > h) {
+        console.error(`${NAME}: --self-test FAIL -- the ${PRODUCER} job does not precede ${JOB} in ${RELEASE_REL}; the producer plants cannot be placed.`);
+        return 1;
+    }
+    const prodSlice = real.slice(ph, h);
+    const prodEdit = (from, to) => {
+        if (!prodSlice.includes(from)) throw new Error(`self-test anchor '${from.trim().split('\n')[0]}' is absent from the ${PRODUCER} job`);
+        return real.slice(0, ph) + prodSlice.replace(from, to) + real.slice(h);
+    };
     const plants = [
         ['runner moved to a hosted label', sliceEdit('    runs-on: [self-hosted, powerbrowser-release]', '    runs-on: ubuntu-latest'), 'runner', 'runs-on'],
         ['secrets reference added', sliceEdit('    env:\n      RELEASE_SHA: ${{ inputs.sha }}\n', '    env:\n      RELEASE_SHA: ${{ inputs.sha }}\n      PROBE: ${{ secrets.PROBE }}\n'), 'secrets', 'secrets'],
@@ -387,6 +460,23 @@ function selfTest() {
         ['pipefail removed from the cross-build step', sliceEdit('          set -euo pipefail\n          podman run --rm', '          podman run --rm'), 'gates', 'pipefail'],
         ['upload retention raised', sliceEdit('          retention-days: 1\n          overwrite: true', '          retention-days: 5\n          overwrite: true'), 'retention', 'retention-days 5'],
         ['image build without --no-cache', sliceEdit('--pull=always --no-cache -t pb-gecko-build', '--pull=always -t pb-gecko-build'), 'image', '--no-cache'],
+        // rule 11 (G-54a): the one needs edge and its hosted producer
+        ['a second needs edge', sliceEdit(`    needs: ${PRODUCER}\n`, `    needs: [${PRODUCER}, build-linux]\n`), 'independent', `not exactly [${PRODUCER}]`],
+        ['needs removed', sliceEdit(`    needs: ${PRODUCER}\n`, ''), 'independent', `not exactly [${PRODUCER}]`],
+        ['digest read from a repository variable', sliceEdit(DIGEST_REF, '${{ vars.PB_WIN_SIDECAR_SUMS_SHA256 }}'), 'sidecar', DIGEST_ENV],
+        ['another needs value read', sliceEdit('      RELEASE_SHA: ${{ inputs.sha }}\n', '      RELEASE_SHA: ${{ inputs.sha }}\n      OTHER: ${{ needs.windows-sidecar.outputs.other }}\n'), 'sidecar', 'needs.windows-sidecar.outputs.other'],
+        ['sidecar download removed', sliceEdit("      - name: Download the hosted Windows sidecar into windows-sidecar/ (data, admitted by its digest before staging)\n        if: steps.key_gate.outputs.build == 'true'\n        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n          name: windows-sidecar\n          path: windows-sidecar\n", ''), 'sidecar', 'no download-artifact step'],
+        ['sidecar downloaded elsewhere', sliceEdit('          name: windows-sidecar\n          path: windows-sidecar\n', '          name: windows-sidecar\n          path: elsewhere\n'), 'sidecar', '"elsewhere"'],
+        ['producer moved to legion', prodEdit('    runs-on: windows-latest\n', '    runs-on: [self-hosted, powerbrowser-release]\n'), 'sidecar', PRODUCER_LABEL],
+        ['producer holds a secret', prodEdit('    env:\n      RELEASE_SHA: ${{ inputs.sha }}\n', '    env:\n      RELEASE_SHA: ${{ inputs.sha }}\n      PROBE: ${{ secrets.PROBE }}\n'), 'sidecar', 'secrets'],
+        ['producer granted contents write', prodEdit('    permissions:\n      contents: read\n', '    permissions:\n      contents: write\n'), 'sidecar', '{contents: read}'],
+        ['producer waits on a legion job', prodEdit('    runs-on: windows-latest\n', '    needs: build-linux\n    runs-on: windows-latest\n'), 'sidecar', 'declares needs'],
+        ['producer digest output removed', prodEdit('      sums_sha256: ${{ steps.sums.outputs.sha256 }}\n', '      other: ${{ steps.sums.outputs.sha256 }}\n'), 'sidecar', 'sums_sha256'],
+        ['producer skips its own admission check', prodEdit('bash powerbrowser/packaging/check-win-sidecar.sh check', 'echo skipped'), 'sidecar', 'check and purge'],
+        ['producer writes no BUILD_ROOT', prodEdit(`printf '%s\\n' "$GITHUB_WORKSPACE" > "$OUT/BUILD_ROOT"`, 'echo none'), 'sidecar', 'BUILD_ROOT'],
+        ['producer upload retention raised', prodEdit('          retention-days: 1\n', '          retention-days: 5\n'), 'sidecar', 'retention-days 1'],
+        ['producer action unpinned', prodEdit('actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1', 'actions/setup-node@v7'), 'sidecar', 'actions/setup-node@v7'],
+        ['producer job removed', real.slice(0, ph) + real.slice(h), 'sidecar', 'is absent'],
     ];
 
     // Plants on package-windows.sh's text: each required `mach repackage` argument, removed in turn.
@@ -439,7 +529,7 @@ function main() {
         failures.forEach(f => console.error(`  ${fmt(f)}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- ${RELEASE_REL} ${JOB} runs on [${LEGION_LABELS.join(', ')}] with exactly contents: read and no secret or environment; no schedule anywhere; every uses: is a SHA-pinned GitHub-owned action; the ref and event refusal, full-SHA step, sha_gate and key_gate (identical to ${REF_JOB}) precede the build and every later step is gated on the key; no step fails open; the job builds, then runs package-windows.sh, which passes every required mach repackage argument derived from the pinned tree; the upload paths match its outputs; the Node-pin step's own text was executed against the real pin and three bad fixtures; uploads keep retention-days 1 (${steps} step(s) checked).`);
+    console.log(`${NAME}: PASS -- ${RELEASE_REL} ${JOB} runs on [${LEGION_LABELS.join(', ')}] with exactly contents: read and no secret or environment; no schedule anywhere; every uses: is a SHA-pinned GitHub-owned action; the ref and event refusal, full-SHA step, sha_gate and key_gate (identical to ${REF_JOB}) precede the build and every later step is gated on the key; no step fails open; the job builds, then runs package-windows.sh, which passes every required mach repackage argument derived from the pinned tree; the upload paths match its outputs; the Node-pin step's own text was executed against the real pin and three bad fixtures; the one needs edge is the hosted windows-sidecar producer, whose digest output is the only value read from it; uploads keep retention-days 1 (${steps} step(s) checked).`);
     return 0;
 }
 

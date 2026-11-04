@@ -5427,14 +5427,18 @@ run_own_checks() {
     "node-runtime-targets-self-test|node $REPO_ROOT/scripts/verify-node-runtime-targets.mjs --self-test"
     # NEW (Phase 54, PKG-10 static half): the build-windows job of release.yml. Legion label set only,
     # contents: read, no secret, environment or schedule, SHA-pinned uses, gates identical to build-linux,
-    # no fail-open step, repackage calls present, retention 1. Honestly --quick: YAML parse and text reads;
+    # no fail-open step, repackage calls present, retention 1; its one needs edge is the hosted windows-sidecar
+    # producer (G-54a), checked here too. Honestly --quick: YAML parse and text reads;
     # the live cross-build on legion is the owner's at the 54-04 checkpoint, never a quick path.
     "build-windows-shape|node $REPO_ROOT/scripts/verify-build-windows-shape.mjs"
     # build-windows-shape-self-test plants a moved runner, a secret, a write grant, a schedule, an unpinned
     # uses, a missing package-windows.sh call or mach build, a reintroduced get_vs.py or WINSYSROOT, each removed
     # required repackage argument, upload globs that match nothing, a broken or all-accepting Node-pin filter, a
     # removed key gate, a drifted sha gate, a dropped pipefail, a raised retention and an image build missing
-    # --no-cache; each must go red naming job and cause.
+    # --no-cache; G-54a adds a second or a missing needs edge, a repository-variable digest, another needs value,
+    # a missing or misplaced sidecar download, and a producer on legion, with a secret, a write grant, a needs
+    # edge, no digest output, no admission check, no BUILD_ROOT, a raised retention, an unpinned action or
+    # removed outright; each must go red naming job and cause.
     "build-windows-shape-self-test|node $REPO_ROOT/scripts/verify-build-windows-shape.mjs --self-test"
     # NEW (Phase 54 review fix, PKG-13): the admission and purge gates for the hosted Windows sidecar artifact.
     # Honestly --quick: mktemp fixtures only, no network. It plants an unlisted file, an absent listed file, a

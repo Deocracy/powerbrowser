@@ -149,10 +149,14 @@ Azure Artifact Signing subscription. What the user sees:
   unsigned would be worse than shipping without it.
 - No `CERTIFICATE_NAME` or `CERTIFICATE_ISSUER` NSIS defines exist anywhere on the
   installer surface.
-- The `build-windows` job stages the sidecar from a `windows-latest` artifact in `windows-sidecar/` and the
-  digest of that artifact's `SHA256SUMS`, recorded by the producing job outside the artifact, in the
-  `PB_WIN_SIDECAR_SUMS_SHA256` repository variable (the hosted sidecar job is Phase 50 work, `BLOCKED.md`
-  item 8). `powerbrowser/packaging/package-windows.sh` fails closed when either is missing, and
+- The `build-windows` job stages the sidecar from the `windows-sidecar` artifact, which the hosted
+  `windows-sidecar` job builds on `windows-latest` in the same run, downloaded into `windows-sidecar/`. The
+  digest of that artifact's `SHA256SUMS` is the producing job's output `sums_sha256`, recorded outside the
+  artifact, and reaches `package-windows.sh` as `PB_WIN_SIDECAR_SUMS_SHA256`. No repository variable is set
+  for it: a variable cannot carry a per-run digest inside the run that produces it.
+  `build-windows-shape` checks the one `needs` edge and the producer job. `build-windows` is the only job that
+  needs `windows-sidecar`, so its failure stops the Windows build and nothing else.
+  `powerbrowser/packaging/package-windows.sh` fails closed when either is missing, and
   `powerbrowser/packaging/check-win-sidecar.sh` refuses unlisted files, symlinks and unsafe manifest paths.
 - MSIX is out of scope: `upstream/python/mozbuild/mozbuild/repackaging/msix.py`
   raises without `makeappx.exe` and `signtool.exe` from a real Windows SDK, and the

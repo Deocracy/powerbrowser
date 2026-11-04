@@ -28,7 +28,8 @@ SIDECAR_DIR="${PB_WIN_SIDECAR_DIR:-}"
 fail() { echo "package-windows: FAIL -- $*" >&2; exit 1; }
 
 test -n "$SIDECAR_DIR" || fail "PB_WIN_SIDECAR_DIR is unset; point it at the windows-latest sidecar artifact (never a legion build)"
-test -f "$SIDECAR_DIR/backend/main.js" || fail "$SIDECAR_DIR/backend/main.js is absent from the windows-latest sidecar artifact"
+# The artifact carries the package-linux.sh layout: TheiaService.sys.mjs loads <GreD>/theia/lib/backend/main.js.
+test -f "$SIDECAR_DIR/lib/backend/main.js" || fail "$SIDECAR_DIR/lib/backend/main.js is absent from the windows-latest sidecar artifact"
 bash "$ROOT/powerbrowser/packaging/check-win-sidecar.sh" check "$SIDECAR_DIR" "${PB_WIN_SIDECAR_SUMS_SHA256:-}" || fail "the sidecar artifact was not admitted; nothing is staged"
 
 # The pinned win32-x64 Node release (PKG-13): url and sha256 from node-runtime.json, never typed here.

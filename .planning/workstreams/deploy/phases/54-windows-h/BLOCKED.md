@@ -117,6 +117,16 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
   output or an attestation). Then wire the artifact into `build-windows` as `windows-sidecar/` and the digest into
   `PB_WIN_SIDECAR_SUMS_SHA256` (today a repository variable placeholder in `release.yml`). `build-windows` stops
   at the staging step, failing closed, until both exist.
+- **Resolved statically by gap plan 54-05 (G-54a, 2026-11-03):** `release.yml` has the hosted `windows-sidecar` job
+  (`windows-latest`, contents read, no secret). It builds the sidecar from `inputs.sha`, stages the `package-linux.sh`
+  layout, writes `BUILD_ROOT` and `SHA256SUMS`, admits its own output with `check-win-sidecar.sh check` and `purge`,
+  and exposes the `SHA256SUMS` digest as the job output `sums_sha256`. `build-windows` needs it, downloads the
+  artifact into `windows-sidecar/` and reads `PB_WIN_SIDECAR_SUMS_SHA256` from that output. **No repository variable
+  is created**, because a variable cannot carry a per-run digest inside the run that produces it.
+  `package-windows.sh` now admits the artifact by `lib/backend/main.js`, the path `TheiaService.sys.mjs` loads.
+  `build-windows-shape` checks the edge and the producer (40 plants). **Live half (owner, 54-04 Task 3 step 5):**
+  the first `release.yml` dispatch runs this job for the first time. Record the `windows-sidecar` run link and the
+  printed `SHA256SUMS sha256` line in `54-04-SUMMARY.md`.
 
 ## 9. Windows leftover sidecar reap (review fix CR-03, UPD-30 follow-up)
 
