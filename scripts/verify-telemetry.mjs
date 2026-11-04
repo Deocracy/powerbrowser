@@ -25,7 +25,8 @@
 //     four buckets, and the configured version and buildID.
 //  4. The preference description in telemetry-preferences.ts contains the TEL-06 text byte for
 //     byte.
-//  5. At level off the emitted toolkit.telemetry.server is blank.
+//  5. The emitted toolkit.telemetry.server is blank at the manifest's level and at every level
+//     the sender implements (IN-04).
 //  6. The sender compiles (tsc -b, skipped with a message where the theia
 //     install is absent) and its plain-node unit suite passes: off sends
 //     nothing, batches flush on size and interval, failures retry then
@@ -236,13 +237,24 @@ async function runSourceChecks(root) {
         failures.push(`${PREFS_REL} does not carry the TEL-06 preference description byte for byte. Next step: restore the description to the TEL-06 text in REQUIREMENTS.md, then re-run this check.`);
     }
 
-    // --- 5. level off leaves the Gecko server pref blank -------------------
+    // --- 5. the Gecko server pref is blank at every level (IN-04) ----------
+    // The manifest's own level, then the same config at each telemetry level: the endpoint takes
+    // product event batches only, so no level may point Gecko pings at it.
     const { failures: resolveFailures, config } = resolveConfig(join(root, MANIFEST_REL), undefined);
+    let levels = [];
+    try {
+        ({ TELEMETRY_LEVELS: levels } = await loadModule(root, SENDER_REL));
+    } catch (e) {
+        failures.push(`${SENDER_REL} could not be loaded for its TELEMETRY_LEVELS: ${e?.message ?? e}`);
+    }
     if (resolveFailures.length === 0) {
-        const level = config.telemetry?.level ?? 'off';
-        const server = mozillaEndpointPrefs(config).find(p => p.name === 'toolkit.telemetry.server')?.value;
-        if (level === 'off' && server !== '') {
-            failures.push(`${MANIFEST_REL} is level off but toolkit.telemetry.server derives ${JSON.stringify(server)}, not the blank value. Next step: blank the server at level off in scripts/generate.mjs mozillaEndpointPrefs, then re-run this check.`);
+        for (const level of [config.telemetry?.level ?? 'off', ...levels]) {
+            const atLevel = { ...config, telemetry: { ...config.telemetry, level } };
+            const server = mozillaEndpointPrefs(atLevel).find(p => p.name === 'toolkit.telemetry.server')?.value;
+            if (server !== '') {
+                failures.push(`${MANIFEST_REL} at level ${level} derives toolkit.telemetry.server ${JSON.stringify(server)}, not the blank value. Next step: keep the server blank at every level in scripts/generate.mjs mozillaEndpointPrefs, then re-run this check.`);
+                break;
+            }
         }
     }
 
