@@ -484,13 +484,23 @@ jobs:
           AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
         run: |
           set -euo pipefail
+          # R14: Azure signing is out of scope, so an absent account is a skip, not a failure. Every later step
+          # is gated on signing == 'true'; nothing is signed or handed off, and Linux never waits on this job.
+          if [ -z "$AZURE_CLIENT_ID" ]; then
+            echo "signing=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Windows signing skipped: the release environment holds no Azure signing account (out of scope). Nothing is signed or handed off."
+            echo "Windows signing: skipped (no Azure signing account in the release environment; out of scope). Nothing was signed or handed off." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           for V in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_SIGNING_PROFILE; do
             [ -n "${!V}" ] || { echo "::error::the release environment holds no $V, so the Windows build cannot be signed and nothing is handed off. Next step: finish the Azure setup in docs/RELEASING.md, section 'Windows signing (SEC-12)', then start a fresh dispatch" >&2; exit 1; }
           done
           [[ "$AZURE_SIGNING_ENDPOINT" =~ ^[a-z0-9]+\.codesigning\.azure\.net$ ]] || { echo "::error::the signing endpoint in the release environment is not a <region>.codesigning.azure.net host; nothing is signed. Next step: correct it as docs/RELEASING.md describes" >&2; exit 1; }
           [[ "$AZURE_SIGNING_ACCOUNT/$AZURE_SIGNING_PROFILE" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9-]+$ ]] || { echo "::error::the signing account or certificate profile name in the release environment is not a plain name; nothing is signed. Next step: correct it as docs/RELEASING.md describes" >&2; exit 1; }
+          echo "signing=true" >> "$GITHUB_OUTPUT"
 
       - name: Download the Windows build (untrusted data, signed and repacked, never executed)
+        if: steps.azure_config.outputs.signing == 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-windows
@@ -501,6 +511,7 @@ jobs:
       # names reaches GITHUB_OUTPUT. Zip entries are refused unless every name matches ^[A-Za-z0-9._/-]+$ with no
       # .. segment and no leading slash, when they are symlinks, or when the top directory is not the derived one.
       - name: Admit the staged zip and the setup stub against the tree-derived names, and unpack the zip
+        if: steps.azure_config.outputs.signing == 'true'
         id: inputs
         run: |
           set -euo pipefail
@@ -533,6 +544,7 @@ jobs:
           { echo "base=$WANT_BASE"; echo "top=$WANT_TOP"; echo "pkg=$PKG"; } >> "$GITHUB_OUTPUT"
 
       - name: Install the NSS tools, the signmar build dependencies, the Java runtime for jsign and 7-Zip for the installer
+        if: steps.azure_config.outputs.signing == 'true'
         run: |
           set -euo pipefail
           sudo apt-get update -y
@@ -541,6 +553,7 @@ jobs:
 
       # Pinned source, hash-checked file by file; no secret and no write token is in this step's environment.
       - name: Build signmar from the pinned Firefox source (never from the legion output)
+        if: steps.azure_config.outputs.signing == 'true'
         id: win_signmar
         run: |
           set -euo pipefail
@@ -549,6 +562,7 @@ jobs:
 
       # jsign 7.6, the jsign-7.6.jar asset of the ebourg/jsign Release 7.6, refused unless it hashes to the pin.
       - name: Fetch jsign 7.6 and check it against the pinned sha256
+        if: steps.azure_config.outputs.signing == 'true'
         id: jsign
         env:
           GH_TOKEN: ${{ github.token }}
@@ -561,6 +575,7 @@ jobs:
 
       # `mach repackage` runs from the pinned source at the configuration.toml tag, with the patch stack applied.
       - name: Fetch the pinned Firefox source and apply the patch stack (for mach repackage)
+        if: steps.azure_config.outputs.signing == 'true'
         run: |
           set -euo pipefail
           node scripts/generate.mjs
@@ -571,6 +586,7 @@ jobs:
       # comparison: an extra PE file or a missing unconditional one stops the job naming it); never a find over
       # whatever legion produced. The list stays in a file; nothing from it reaches GITHUB_OUTPUT.
       - name: Derive the inner PE files to sign from the pinned package manifest and compare them with the staged tree
+        if: steps.azure_config.outputs.signing == 'true'
         id: sign_list
         env:
           PKG: ${{ steps.inputs.outputs.pkg }}
@@ -582,6 +598,7 @@ jobs:
 
       # Directly before the first signature, after every gate above has passed.
       - name: Sign in to Azure over OIDC (no stored secret)
+        if: steps.azure_config.outputs.signing == 'true'
         id: azure_login
         uses: Azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
@@ -592,6 +609,7 @@ jobs:
       # The inner PE files: the derived list (sign_list), plus the setup.exe stub the installer wraps. The access
       # token lives in this step's shell only.
       - name: Sign the inner PE files with jsign (Azure Artifact Signing), then rezip the staged tree
+        if: steps.azure_config.outputs.signing == 'true'
         id: inner_sign
         env:
           JSIGN: ${{ steps.jsign.outputs.jar }}
@@ -626,6 +644,7 @@ jobs:
           echo "signed ${#INNER[@]} inner PE file(s) and the setup.exe stub"
 
       - name: Repackage the installer from the signed tree (mach repackage installer)
+        if: steps.azure_config.outputs.signing == 'true'
         id: repackage_installer
         env:
           BASE: ${{ steps.inputs.outputs.base }}
@@ -641,6 +660,7 @@ jobs:
           test -s "$RUNNER_TEMP/out/$BASE.installer.exe"
 
       - name: Sign the installer with jsign (Azure Artifact Signing)
+        if: steps.azure_config.outputs.signing == 'true'
         id: setup_sign
         env:
           JSIGN: ${{ steps.jsign.outputs.jar }}
@@ -658,6 +678,7 @@ jobs:
 
       # The MAR channel comes from the tracked Windows mozconfig (generated-byte-identity keeps it equal to the generator).
       - name: Produce the complete MAR from the signed tree (mach repackage mar)
+        if: steps.azure_config.outputs.signing == 'true'
         id: repackage_mar
         env:
           SIGNMAR: ${{ steps.win_signmar.outputs.path }}
@@ -672,6 +693,7 @@ jobs:
           test -s "$RUNNER_TEMP/out/$BASE.complete.mar"
 
       - name: MAR channel gate (refuse a foreign MAR channel before the MAR is signed)
+        if: steps.azure_config.outputs.signing == 'true'
         id: win_mar_channel_gate
         env:
           SIGNMAR: ${{ steps.win_signmar.outputs.path }}
@@ -687,6 +709,7 @@ jobs:
           echo "Windows MAR channel $WIN_CHANNEL accepted"
 
       - name: Sign the complete MAR (the key material is read only here, from the release environment)
+        if: steps.azure_config.outputs.signing == 'true'
         id: win_sign_mar
         env:
           SIGNMAR: ${{ steps.win_signmar.outputs.path }}
@@ -705,6 +728,7 @@ jobs:
           "$SIGNMAR" -d "$DB" -n powerbrowser-mar -s "$RUNNER_TEMP/out/$BASE.complete.mar" "$RUNNER_TEMP/handoff/$BASE.complete.mar"
 
       - name: Check the signed MAR with signmar -v and with node:crypto against the tracked DER
+        if: steps.azure_config.outputs.signing == 'true'
         id: win_verify_mar
         env:
           SIGNMAR: ${{ steps.win_signmar.outputs.path }}
@@ -725,6 +749,7 @@ jobs:
         run: rm -rf "$RUNNER_TEMP/mar-sign" "$RUNNER_TEMP/mar-verify"
 
       - name: Hand off the signed installer and the signed complete MAR with SHA256SUMS
+        if: steps.azure_config.outputs.signing == 'true'
         env:
           BASE: ${{ steps.inputs.outputs.base }}
         run: |
@@ -734,6 +759,7 @@ jobs:
           cat "$RUNNER_TEMP/handoff/SHA256SUMS"
 
       - name: Upload the signed Windows files (data for the publish step)
+        if: steps.azure_config.outputs.signing == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-windows-signed

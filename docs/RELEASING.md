@@ -909,8 +909,12 @@ equivalent to compromising the Windows signing identity, so `legion` is inside t
 Azure is reached over OIDC only: `Azure/login` v3.1.0 (commit
 `a641126d1b8aa4d1fa005f4f92df94a3a4c4c906`, admitted in `.github/settings/actions-selected.json`)
 signs in with three ids, and jsign reads a short-lived access token from the job shell. No Azure
-secret exists. The job fails closed, before the sign-in, when any of these `release` environment
-variables is empty:
+secret exists. Azure signing is out of scope (owner ruling 2026-11-01), so when `AZURE_CLIENT_ID` is
+empty the configuration gate reports Windows signing as skipped (a notice and a job-summary line),
+every later step of the job is skipped, nothing is signed or handed off, and the run does not fail; no
+Linux job waits on it (`win-sign-chain`, rules `skip` and `independence`). When `AZURE_CLIENT_ID` is
+set, the job fails closed, before the sign-in, when any of these `release` environment variables is
+empty:
 
 | Variable | Holds |
 |---|---|
