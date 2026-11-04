@@ -121,6 +121,11 @@ covers them. Close both before 57-04 and before `docs/CRASH-POLICY.md` may claim
 - `MOZ_CRASHREPORTER_AUTO_SUBMIT` (`upstream/toolkit/crashreporter/client/app/src/config.rs:177`): when set, the
   client skips the dialog (`logic.rs:115,531`, `main.rs:125,227`). Needs the launcher/startup environment to clear it
   (or a patch-free equivalent) and a gate that fails if it is not cleared.
+  **PLANNED, NOT EXECUTED (plan 57-08, 2026-11-04).** There is no launcher wrapper, and Gecko starts the client with
+  the live environment at crash time, so the clear is in-process: a new `PowerBrowserAPI` method that sets the
+  variable empty (`env_bool` reads empty as false), called first in `PowerBrowserSingleInstanceHandler.handle()`.
+  That edits `powerbrowser/shell/PowerBrowserAPI.sys.mjs`, which another session's uncommitted work holds, so 57-08
+  waits for that work to be committed. Run it with `/gsd-execute-phase 57 --gaps-only --ws deploy` after that.
 - `browser.crashReports.unsubmittedCheck.autoSubmit2` (`upstream/browser/app/profile/firefox.js:2823`, default false)
   and the unsubmitted-reports backlog notification. Needs the pref locked false in the generated prefs/policies and
   a gate over `generate --check`.
