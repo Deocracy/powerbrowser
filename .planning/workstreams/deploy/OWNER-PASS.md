@@ -397,8 +397,8 @@ artwork]. Source: 54 BLOCKED.md items 3, 6, 8, 9, 10; 54-04-PLAN.md:204-212 (ste
    by hand (54 BLOCKED.md:160-170).
 4. No `PB_WIN_SIDECAR_SUMS_SHA256` variable is needed: plan 54-05 made the digest a job output.
 5. Dispatch `build-windows` (it runs inside `release.yml`); the first `windows-sidecar` run needs its run link recorded in 54-04-SUMMARY.md.
-6. Owner decision needed first: 54 BLOCKED.md item 10 (how Windows assets publish under immutable releases). Claude writes plan 54-11 after the
-   answer. Descriptor approval for Windows follows your own N-1 to N Windows hop.
+6. Answered 2026-11-04 (A2, option a): Windows publishes to the MAR origin after the Linux publish; plan 54-11 built `publish-windows`,
+   `descriptor-windows` and `channel-live-windows`. Descriptor approval for Windows follows your own N-1 to N Windows hop.
 
 ## 12. TEL-13 (57-01 T2, 57-04)
 
@@ -448,6 +448,5 @@ per `docs/BUILD.md` (plan 46-05/06), then `scripts/verify-platform.sh --build` a
 9. Cloudflare payment method (R2); Workers Paid only if the JWT p95 exceeds 10 ms.
 10. Windows rulings: leftover `node.exe` reap (recommend: accept one orphan with a follow-up) and the taskcluster `vs.tar.zst` toolchain
     (recommend: accept the hash-pinned toolchain).
-11. 54 BLOCKED.md item 10: how Windows assets publish under immutable releases (recommend option a, Windows on the MAR origin after the
-    Linux publish).
+11. Answered 2026-11-04 (A2): 54 BLOCKED.md item 10, option a (Windows on the MAR origin after the Linux publish); built by plan 54-11.
 12. Whether `.planning/PROJECT.md:41` ("501(c)(3)-owned") still holds for Deocracy.

@@ -43,7 +43,7 @@ reader, the correction wins.
 | # | Topic | Ruling |
 |---|---|---|
 | R1 | Close type | **Linux-path close.** Finish phases 40–54 live (Linux first, then Windows). Record the rest as dated deferrals and close with `override_closeout`. |
-| R2 | Windows (54) | **Stays in v1.6, ships unsigned.** Claude writes the `windows-latest` sidecar job and an unsigned publish path (Windows assets joined to the Release, descriptor and channel-live; never a dependency of the Linux path). Owner supplies a Windows 11 ISO and licence for the `pkg-win11` libvirt VM on legion. TEL-13 crash-reporter flip follows the Windows release and stays in v1.6. |
+| R2 | Windows (54) | **Stays in v1.6, ships unsigned.** Claude writes the `windows-latest` sidecar job and an unsigned publish path (descriptor and channel-live; never a dependency of the Linux path). **Amended 2026-11-04 (owner answer A2):** the Windows files publish after the Linux publish of the same run to the MAR origin `downloads.powerbrowser.org/<tag>/`, not to the GitHub Release, which stays immutable and Linux-only (plan 54-11). Owner supplies a Windows 11 ISO and licence for the `pkg-win11` libvirt VM on legion. TEL-13 crash-reporter flip follows the Windows release and stays in v1.6. |
 | R3 | Windows installer (54-02) | **Full rebrand.** New patch in the stack moves `Software\Mozilla` keys (installer and app readers) to `Software\PowerBrowser`; remove the Mozilla uninstall survey (`uninstaller.nsi:153`); owner supplies wizard bitmaps and an `.ico` under `brand/` with a signed review in `brand/HUMAN-REVIEW.md`; replace `Title="Mozilla Firefox"`. Patches are regenerated, never hand-edited. |
 | R4 | macOS (55) | **Deferred to v1.7.** Reword its goal from "signed, notarized" to "ad-hoc signed" so the deferral is accurate. WINDOWS.md entries 22 (Team ID) and 23 (DMG placeholders) move with it. |
 | R5 | ESR 175 (58) | **Dated deferral.** Built code stays. 58-03 T2–T4 (dual-build measurement, rebase, ship) are due between 2027-05-27 and 2027-09-07; record that in the audit. |
@@ -211,7 +211,7 @@ Insert with `/gsd-phase --insert` or `/gsd-plan-phase N --gaps --ws deploy`, the
 | G-51 | 51 | 51-05 `renovate-theia` job (premise met by 48-03). |
 | G-52 | 52 | `OWNER_LOGIN` switch (R11); F1 amendment text. |
 | G-54a | 54 | `windows-latest` sidecar job + `PB_WIN_SIDECAR_SUMS_SHA256` variable (BLOCKED item 8). |
-| G-54b | 54 | Unsigned Windows publish path: Windows assets into the Release, descriptor and channel-live; never a dependency of `sign-publish`/`descriptor`/`channel-live` for Linux (`win-sign-chain` row must stay green). |
+| G-54b | 54 | Unsigned Windows publish path: Windows files to the MAR origin after the Linux publish (A2, plan 54-11; the Release stays Linux-only), descriptor and channel-live; never a dependency of `sign-publish`/`descriptor`/`channel-live` for Linux (`win-sign-chain` row must stay green). |
 | G-54c | 54 | Registry move patch `Software\Mozilla`→`Software\PowerBrowser` (installer + app readers), survey removal, installer title (R3). Regenerate the patch from a patched tree. |
 | G-54d | 54 | libvirt access Nix block for `pb-runner` (exact block does not exist in any file yet). |
 | G-57 | 57 | B6 auto-submit env and pref lock; 57-01 Task 2 layer-3 assertion. |

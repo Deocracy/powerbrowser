@@ -223,6 +223,13 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
 
 ## 10. Unsigned Windows publish path: R2 conflicts with immutable releases (G-54b, written 2026-11-03 by gap plan 54-06)
 
+- **Resolved 2026-11-04 (owner answer A2, option (a)); built by plan 54-11.** `publish-windows`, `descriptor-windows` and
+  `channel-live-windows` are in `release.yml`. The Release stays immutable and Linux-only; R2's "Windows assets joined to
+  the Release" is replaced by the MAR origin. Two differences from option (a) as written below: the Windows files are
+  published under their versioned names only (keys under `<tag>/` are per release, so a stable name there adds nothing),
+  and `release-shape` needed no change (the Cloudflare-scope rule lives in `release-asset-set`). The live run is part of
+  the 54-04 checkpoint.
+
 - **What:** R2 asks for Windows assets joined to the Release, the descriptor commit and channel-live, and for the
   Windows path never to be a dependency of `sign-publish`, `descriptor` or `channel-live` for Linux.
 - **Why blocked:** the `Immutable releases consequence` section of `docs/RELEASING.md` says that once immutable

@@ -68,8 +68,9 @@ clock-only (B); 50 dispatch token = `GITHUB_TOKEN` as recorded; 44-03 WR-03 exem
 57 B1 = option (a); manifest published as a Release asset. Model tiering from this date: Opus for
 security-sensitive code and reviews, Sonnet for ordinary plan execution, Haiku for bookkeeping.
 
-Owner ruling 2026-11-01: a failed Windows sign never blocks the Linux release; Linux ships alone and
-Windows joins the Release in its own run. The tree already behaved this way (sign-publish needs only
+Owner ruling 2026-11-01: a failed Windows sign never blocks the Linux release; Linux ships alone. Owner answer
+A2 (2026-11-04) replaced "Windows joins the Release": Windows publishes to the MAR origin after the Linux publish
+(plan 54-11), and the Release stays Linux-only. The tree already behaved this way (sign-publish needs only
 build-linux); the `win-sign-chain` row now reds any Linux-publish-path job that waits on sign-windows.
 
 ## Next autonomous step
@@ -82,8 +83,8 @@ with the exact commands in `OWNER-PASS.md`. Then Stage F (builds and `--gate`), 
 `--ws deploy`. Evidence for each step is in `FINISH-SURVEY.md`.
 
 Still Claude-side: plan 57-08 (clear `MOZ_CRASHREPORTER_AUTO_SUBMIT`) waits for the other session to commit
-`powerbrowser/shell/PowerBrowserAPI.sys.mjs`; gap plan 54-11 (Windows publish path) waits for the owner's
-choice in `phases/54-windows-h/BLOCKED.md` item 10; the `/etc/nixos` blocks for the Codeberg timer and the
+`powerbrowser/shell/PowerBrowserAPI.sys.mjs`; gap plan 54-11 (Windows publish path) is built (owner answer
+A2, `phases/54-windows-h/54-11-SUMMARY.md`); the `/etc/nixos` blocks for the Codeberg timer and the
 Safe Browsing key directory (tmpfiles rule) are not written yet.
 
 ## Blocked on the owner
