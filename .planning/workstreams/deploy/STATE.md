@@ -4,16 +4,16 @@ milestone: v1.6
 current_phase_name: Release pipeline and legion runner (E)
 current_plan: 5
 status: executing
-stopped_at: Completed 43-06, 43-07, 43-08 gap plans (Stage D G-43, G-cmd scheduler half)
-last_updated: "2026-11-04T02:30:03.310Z"
+stopped_at: Completed 46-05, 46-06 gap plans (Stage D G-46)
+last_updated: "2026-11-04T02:59:18.161Z"
 last_activity: 2026-10-31
 last_activity_desc: 49-04 built, reviewed and fixed; six open items settled by the autonomous run
-state_head: a96b9095acc8b930ca0aa59bad175d3b31360128
+state_head: 0d6e62db9466668a4212ae0ae7c4b5d5ad507ccc
 progress:
   total_phases: 19
   completed_phases: 4
-  total_plans: 90
-  completed_plans: 84
+  total_plans: 92
+  completed_plans: 86
 milestone_name: Deployment setup
 current_phase: 49
 ---
@@ -123,6 +123,7 @@ Owner decisions 1–22 of 2026-10-20 are recorded in `.planning/workstreams/depl
 - [Phase 57]: D-72/D-73 amended 2026-10-31 (owner ruling on 57 BLOCKED B1, option (a)): check-patch-surface.sh accepts a compiled target only at the exact paths toolkit/crashreporter/client/app/src/glean.rs and send_ping.rs (ALLOWED_COMPILED_PATHS); every other compiled path, any other .rs included, stays an offense
 - [Phase 41]: 41-05 (R10): the apps control counts an undeclared org App only when it reaches powerbrowser, powerbrowser-updates or homebrew-tap (selection all, or a repository list touching the set derived from app-*.json); an unreadable list stays red; narrows the 41-02 rule
 - [Phase 43]: Gap plans 43-06 (live facts in derive, exactly-one tracking writer), 43-07 (GH-15 known-issues issue), 43-08 (scheduler wrangler.toml) built — FINISH-PLAN.md Stage D G-43 and G-cmd scheduler half; facts source approved by the owner 2026-11-03
+- [Phase 46]: 46-05/46-06 (G-46): WebDriver hop driver scripts/drive-mar-update-hop.mjs records the UPD-24 transcript from observation (row mar-hop-driver-self-test); version-nplus1 bumped to 153.5.2; live hop and N+1 rebuild run in Stage F per docs/BUILD.md
 
 ### Pending Todos
 
@@ -135,9 +136,9 @@ Owner decisions 1–22 of 2026-10-20 are recorded in `.planning/workstreams/depl
 
 ## Session Continuity
 
-**Last session:** 2026-11-04T02:29:57.432Z
+**Last session:** 2026-11-04T02:59:18.008Z
 
-**Stopped At:** Completed 43-06, 43-07, 43-08 gap plans (Stage D G-43, G-cmd scheduler half)
+**Stopped At:** Completed 46-05, 46-06 gap plans (Stage D G-46)
 **Resume File:** None
 
 ## Milestone Context
