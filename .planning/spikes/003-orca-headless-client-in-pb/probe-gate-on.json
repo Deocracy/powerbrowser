@@ -1,0 +1,52 @@
+{
+  "url": "http://127.0.0.1:6770/web-index.html",
+  "gateDisabled": false,
+  "sidecarPort": 43269,
+  "webTab": {
+    "tabId": "wt-oxhlu8-1",
+    "href": "http://127.0.0.1:6770/web-index.html",
+    "hash": "",
+    "title": "Orca Web",
+    "text": "Orca\nSearch\nOnboarding checklist\nTasks\nAutomations\nOrca Mobile\nNew\nProjects\n0\nrepo\nDone\nmaster\nprimary\nmaster\nPrint working directory and PATH - ``` /tmp/orca-spike/repo /nix/store/82ypqqk3v9fnc7kh3gpz9dnb77k3w8r5-procps-4.0.6/bin:/nix/store/dzs7xypkvccds4rkhyzwikcw4w08dqqn-ripgrep-15.1.0/bin:/nix/store/f2bsh1n6snqdldnjdshdy1lw3hnlfxwi-bubblewrap-0.12.0/bin:/nix/store/hxx0gfiic3k39459fv2z7aaszq7r2x35-socat-1.8.1.3/bin:/tmp/orca-spike/data/cli/bin:/home/chris/.local/bin:/run/wrappers/bin:/usr/bin:/usr/sbin:/tmp/orca-spike/data/cli/bin:/home/chris/.local/bin:/run/wrappers/bin:/usr/bin:/usr/sbin:/home/chris/.config/orca/linux-orca-cli-shim:/nix/store/13czpvp88x852739v5xi04s871pn35b5-bash-interactive-5.3p9/bin:/nix/store/3cxvp1557n7hyz4imh2rhkyl64zl7vlw-binutils-2.46/bin:/nix/store/kwc34h21my8mf7xbqm9gxs1xfx07xb4i-coreutils-9.11/bin:/nix/store/xj3xxr99c1zx418k604q0gi0jhpx0dhy-gawk-5.4.1/bin:/nix/store/kiz7bimap01h3m7bw6an7y7fl2n00q0f-libarchive-3.8.9/bin:/nix/store/r705mg5pnv91n837xbvad8692cwjip6b-pv-1.10.5/bin:/nix/store/kn07byys7ygl6qd3dz6p80x1q6js266f-squashfs-4.7.5/bin:/home/chris/.local/share/flatpak/exports/bin:/var/lib/flatpak/exports/bin:/home/chris/.nix-profile/bin:/nix/profile/bin:/home/chris/.local/state/nix/profile/bin:/etc/profiles/per-user/chris/bin:/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin:/home/chris/.volta/bin:/home/chris/.asdf/shims:/home/chris/.fnm/aliases/default/bin:/home/chris/.local/share/mise/shims:/home/chris/.local/share/pnpm:/home/chr",
+    "storage": [
+      "orca.web.settings.v1",
+      "orca.setupGuideTelemetryCompletedSteps.v1",
+      "orca.web.runtimeEnvironment.v1",
+      "orca.web.onboarding.v1",
+      "orca.web.ui.v1",
+      "orca.web.workspaceSession.v1.runtime:web-6f6f41fc-eac9-4471-8dcd-c803abb0f3fc",
+      "orca.orchestration.enabled",
+      "orca.web.workspaceSession.v1",
+      "orca.web.githubCache.v1"
+    ],
+    "pairPrompt": true,
+    "terminal": {
+      "clicked": true,
+      "xterms": 1,
+      "sawPwd": true,
+      "rowsTail": "/chris/.grok/bin:/home/chris/.claude/plugins/cache/context-mode/context-mode/1.0.169/bin\n  Skipped: nothing, ran both commands as asked. Risk: none; PATH output is long and includes duplicate entries.\n✻ Cogitated for 16s · done 5:11 PM\n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯  \n────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  Sonnet 5.5 │ ░░░░░░░░░░ 7% │  master │ Session:0% │ Weekly:4% │ repo\n  ⏵⏵ bypass permissions on (shift+tab to cycle)"
+    },
+    "typed": {
+      "marker": "pb-web-tab-1793754825674",
+      "echoed": true
+    }
+  },
+  "stock": {
+    "href": "http://127.0.0.1:6770/web-index.html",
+    "hash": "",
+    "title": "Orca Web",
+    "text": "Orca\nSearch\nOnboarding checklist\nTasks\nAutomations\nOrca Mobile\nNew\nProjects\n0\nrepo\nDone\nUnread:\nmaster\nprimary\nmaster\nPrint working directory and PATH - pb-web-tab-1793754825674 Skipped: nothing. Risk: none.\nnow\nORCA\n\nSelect a workspace from the sidebar to begin.\n\nAdd project\nCreate worktree\nCreate worktree\nCtrl\n+\nN\nMove up workspace\nCtrl\n+\n⇧\n+\n↑\nMove down workspace\nCtrl\n+\n⇧\n+\n↓\nSelect a workspace to browse files\nUsed\n4% 5d\nRefresh failed\n—\n·\n0\n1 host",
+    "storage": [
+      "orca.web.settings.v1",
+      "orca.setupGuideTelemetryCompletedSteps.v1",
+      "orca.web.runtimeEnvironment.v1",
+      "orca.web.onboarding.v1",
+      "orca.web.ui.v1",
+      "orca.web.workspaceSession.v1.runtime:web-6f6f41fc-eac9-4471-8dcd-c803abb0f3fc",
+      "orca.orchestration.enabled",
+      "orca.web.workspaceSession.v1",
+      "orca.web.githubCache.v1"
+    ],
+    "pairPrompt": false
+  }
+}

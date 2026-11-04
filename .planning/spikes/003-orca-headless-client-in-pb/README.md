@@ -4,7 +4,7 @@ idea: orca-client-in-pb
 name: orca-headless-client-in-pb
 type: standard
 validates: "Given `orca serve` running with no Orca desktop app, when its web client is loaded in a PowerBrowser web tab with the pairing offer injected, then a workspace and an agent terminal render and the agent can run a command"
-verdict: PENDING
+verdict: VALIDATED
 related: [SEED-261103-o1g, GUI-02, phase-38-07-webview-token-gate]
 tags: [orca, orcad, sidecar, token-gate, pairing, web-tab, live-probe]
 ---
@@ -82,11 +82,24 @@ orca serve --json --data-root /tmp/orca-spike/data --project-root /tmp/orca-spik
 
 ## Results
 
-Fill in `results.md` next to this file: one row per sub-check with PASS / FAIL and the
+**VALIDATED** (2026-11-03). All four sub-checks pass; see `results.md`. Build signal: spawn orcad
+directly with `--bind 127.0.0.1` and a PB-owned `ORCA_USER_DATA_PATH`, not through `orca serve`; treat
+`webClientUrl` as a reusable bearer credential.
+
+Original instruction: fill in `results.md` next to this file: one row per sub-check with PASS / FAIL and the
 observed value. Set `verdict` in the frontmatter to VALIDATED only when all four pass, PARTIAL
 when the daemon and pairing pass but the gate or the agent environment fails, INVALIDATED
 when the daemon cannot run headless or cannot pair automatically.
 
 ## Investigation Trail
 
-- 2026-11-03: spike defined from the /gsd-explore session. Not yet run.
+- 2026-11-03: spike defined from the /gsd-explore session.
+- 2026-11-03 run 1: `orca serve --data-root …` refused (`runtime_serve_already_running`): `--data-root` does not
+  scope `serve`. Switched to `ORCA_USER_DATA_PATH=/tmp/orca-spike/data` with every other `ORCA_*` variable removed;
+  serve selected orcad and printed `pairing.webClientUrl`.
+- Run 2: `probe.mjs` opened the URL in a PB web tab with the gate on: paired with no prompt. The stock-window
+  control timed out only because the client strips the `#pairing` fragment and the harness matched the exact URL.
+- Agent: `orca repo add` + `orca agent launch --agent claude --surface terminal`; Claude ran `pwd`, printed the PATH.
+- Run 3: probe matches the control by origin, opens the workspace terminal in the web tab, and types a prompt into
+  it; the agent ran `echo <marker>`. Traced the 0.0.0.0 bind to `shared/orcad-serve-argv.js`.
+- Verdict VALIDATED; details and the deviation from How to Run are in `results.md`.
