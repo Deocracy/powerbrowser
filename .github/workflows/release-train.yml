@@ -720,7 +720,7 @@ jobs:
   # which Renovate reads from the default branch. It runs on owner dispatch (renovate-theia=true) and on the
   # sweep's Theia inflow tick, never in a dry run, so it enters the bot environment only to write. Automerge is
   # off in the config; the owner merges. The action runs Renovate in its own container on its own clone, so
-  # nothing prepared in this job's workspace reaches the post-upgrade hook (BLOCKED.md item 18).
+  # the config carries no post-upgrade hook: renovate-licensing, below, regenerates the notices (BLOCKED.md item 18).
   renovate-theia:
     needs: [derive, sweep-clock]
     if: ${{ !inputs.dry-run && inputs.reason != 'fix' && (inputs.renovate-theia || needs.sweep-clock.outputs.theia-due == 'true') }}
@@ -753,10 +753,10 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
-      # The allow-list is a self-hosted option a repository file cannot carry; without it Renovate skips the
-      # licensing hook with a warning (BLOCKED.md item 6). The workflows row, rule renovate-job, compares it with
-      # postUpgradeTasks.commands in .github/renovate.json5. renovate-version is the version the config was
-      # validated with; onboarding off and a required config keep Renovate from opening an onboarding PR.
+      # No RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS: the config runs no hook, and the workflows row (rule renovate-job)
+      # keeps the allow-list out. renovate-version is the version the config was validated with; onboarding off and
+      # a required config keep Renovate from opening an onboarding PR. The git author is the bot address, so
+      # publish-bump-branch.sh in renovate-licensing treats Renovate's commits as bot commits it may extend.
       - name: Run Renovate for the Theia group
         if: ${{ !inputs.dry-run }}
         uses: renovatebot/github-action@1c0cf989c02653fba0efe7ca5772338860ca71dc # v46.3.12
@@ -769,7 +769,92 @@ jobs:
           RENOVATE_ONBOARDING: "false"
           RENOVATE_REQUIRE_CONFIG: required
           RENOVATE_GIT_AUTHOR: release-train <${{ env.BOT_EMAIL }}>
-          RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS: '["^node scripts/generate-licensing\\.mjs$", "^node scripts/generate\\.mjs --check$"]'
+
+  # The licensing regeneration for the Theia PR (owner answer A4, BLOCKED.md item 18 option a). Renovate's clone has
+  # no applied upstream/, so the notices are regenerated here, on the runner, on the branch Renovate just wrote:
+  # fetch and apply upstream/, install theia/ from the branch's lockfile, run the generator, and publish one bot
+  # commit with publish-bump-branch.sh, which refuses a branch that carries an owner commit. BRANCH is the
+  # branchPrefix plus the theia groupSlug of .github/renovate.json5; the workflows row (renovate-job) derives it.
+  # The monaco branch is not regenerated here. continue-on-error for the same reason as renovate-theia: sweep-clock
+  # reads successful runs only. renovate-theia also continues on error, so this job can start after a Renovate
+  # failure; an absent branch or current notices end it with a NOTE.
+  renovate-licensing:
+    needs: [derive, renovate-theia]
+    if: ${{ !inputs.dry-run && needs.renovate-theia.result == 'success' }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: bot
+    permissions: {}
+    env:
+      BRANCH: chore/theia-theia
+    steps:
+      - name: Mint the bot App token
+        id: app
+        if: ${{ !inputs.dry-run }}
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: powerbrowser
+          permission-contents: write
+
+      # Full history, so the base of Renovate's branch can be found locally.
+      - name: Check out the repo without persisting the token (skipped in dry-run)
+        if: ${{ !inputs.dry-run }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install Nix (skipped in dry-run)
+        if: ${{ !inputs.dry-run }}
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+
+      - name: Regenerate the licensing notices on the Theia branch (skipped in dry-run)
+        id: regen
+        if: ${{ !inputs.dry-run }}
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "1"
+        run: |
+          set -euo pipefail
+          if ! git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null; then
+            echo "release-train: NOTE -- ${BRANCH} does not exist, so there is no Theia PR to regenerate the notices for"
+            exit 0
+          fi
+          git fetch --no-tags origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" "+refs/heads/main:refs/remotes/origin/main"
+          git switch -C "$BRANCH" "origin/${BRANCH}"
+          git config user.name "release-train"
+          git config user.email "$BOT_EMAIL"
+          nix develop .#theia --command bash -c 'bash scripts/fetch-upstream.sh && bash scripts/apply-patches.sh'
+          nix develop .#theia --command bash -c 'cd theia && yarn install --ignore-scripts --frozen-lockfile'
+          nix develop .#theia --command node scripts/generate-licensing.mjs
+          # Only the two generator outputs are committed. Any other change is a defect, not part of the regeneration.
+          git add -- THIRD-PARTY-NOTICES.txt LICENSING.md
+          UNEXPECTED=$(git status --porcelain --untracked-files=all -- . ':(exclude)THIRD-PARTY-NOTICES.txt' ':(exclude)LICENSING.md')
+          if [ -n "$UNEXPECTED" ]; then
+            echo "release-train: FAIL -- the licensing regeneration changed paths outside the notices:" >&2
+            printf '%s\n' "$UNEXPECTED" >&2
+            echo "Next step: regenerate the notices on ${BRANCH} by hand and find the step that wrote elsewhere." >&2
+            exit 1
+          fi
+          if git diff --cached --quiet; then echo "release-train: NOTE -- the notices on ${BRANCH} are current; nothing to publish"; exit 0; fi
+          git commit -m "chore(theia): regenerate the licensing notices" -m "node scripts/generate-licensing.mjs on ${BRANCH}, run by the release train's renovate-licensing job."
+          echo "base=$(git merge-base origin/main "origin/${BRANCH}")" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the regenerated notices to the Theia branch (skipped in dry-run)
+        if: ${{ !inputs.dry-run && steps.regen.outputs.base != '' }}
+        env:
+          BASE: ${{ steps.regen.outputs.base }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -euo pipefail
+          bash scripts/publish-bump-branch.sh "$BRANCH" "$BASE" > "$RUNNER_TEMP/publish.txt"
+          cat "$RUNNER_TEMP/publish.txt"
+          if [ "$(sed -n 's/^publish=//p' "$RUNNER_TEMP/publish.txt")" = "refuse" ]; then
+            echo "release-train: NOTE -- ${BRANCH} carries a commit the bot did not author; regenerate the notices on it by hand"
+          fi
 
   # The only maintenance-sweep job that enters the bot environment (renovate-theia, above, is the Theia inflow). It enters only on a live sweep tick
   # (bot-job-gate), so a dry run and a tick that is not the day's sweep never wait on an approval. Its two

@@ -111,11 +111,14 @@
 //                 so permission-dependabot-alerts (the real name is permission-vulnerability-alerts) would mint
 //                 a token that silently lacks the permission. A pin with no record entry that requests a
 //                 permission is red too: re-fetch the list when the pin moves.
-//  renovate-job   In release-train.yml (Phase 51, AUTO-02), every renovatebot/github-action step carries
-//                 RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS in its env (step or job level), a JSON array whose
-//                 entries equal, as a set, the postUpgradeTasks.commands of .github/renovate.json5, each
-//                 regex-escaped and anchored ^...$, derived at check time. Renovate skips a hook command that
-//                 is off the list with a warning only, so a dropped or stale list is otherwise silent.
+//  renovate-job   In release-train.yml (Phase 51, AUTO-02, owner answer A4), no renovatebot/github-action step
+//                 sets RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS (step or job level): the config runs no hook, and an
+//                 allow-list would re-admit one. Each Renovate job is followed by exactly one job that needs it and
+//                 runs the line nix develop .#theia --command node scripts/generate-licensing.mjs, and that job: carries continue-on-error: true (sweep-clock
+//                 reads successful runs only), permissions: {}, an App token whose only permission input is
+//                 permission-contents: write, job env BRANCH equal to the branchPrefix plus the theia groupSlug read
+//                 from .github/renovate.json5 at check time, and run steps that fetch and apply upstream/, install
+//                 theia/ with --ignore-scripts --frozen-lockfile, and publish with publish-bump-branch.sh "$BRANCH".
 //  fixer-spend    The fix job (release-train.yml) carries timeout-minutes: 90 and the
 //                 claude-fixer concurrency group, so one attempt is time-bounded and the
 //                 attempts for every release key are serialized (FIX-05). The Console
@@ -925,31 +928,47 @@ function runChecks(root, overrides = {}) {
         }
     }
 
-    // renovate-job (AUTO-02, BLOCKED.md item 6): the job's hook allow-list equals the config's hook commands.
+    // renovate-job (AUTO-02, owner answer A4): no hook allow-list; one licensing job regenerates the notices on the Theia branch.
     {
         const failR = (job, msg) => fail(`${WF_DIR}/${DRY_RUN_FILE}`, job, 'renovate-job', msg);
         let cfg = overrides.renovateConfig;
         if (cfg === undefined) {
             try { cfg = readFileSync(join(root, RENOVATE_REL), 'utf8'); } catch { cfg = null; }
         }
-        // shortcut: the commands array is read by a pattern, not a JSON5 parser; the renovate-config row owns the full parse.
-        let commands = null;
-        const m = typeof cfg === 'string' ? cfg.match(/"commands"\s*:\s*(\[[^\]]*\])/) : null;
-        try { commands = m ? JSON.parse(m[1]) : null; } catch { commands = null; }
-        const expected = Array.isArray(commands) ? commands.map(c => `^${String(c).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`).sort() : null;
-        for (const [jobId, job] of Object.entries(docs[DRY_RUN_FILE]?.jobs ?? {})) {
-            for (const [i, st] of (job?.steps ?? []).entries()) {
-                if (String(st?.uses ?? '').split('@')[0] !== RENOVATE_ACTION) continue;
-                if (expected === null) { failR(jobId, `step ${i} runs Renovate, but no postUpgradeTasks.commands array could be read from ${RENOVATE_REL}, so its allow-list cannot be compared. Next step: restore the file.`); continue; }
-                const raw = st.env?.RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS ?? job.env?.RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS;
-                if (raw === undefined) { failR(jobId, `step ${i} runs Renovate with no RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS, so Renovate skips the licensing hook with a warning and the PR opens with stale notices. Next step: set it to ${JSON.stringify(expected)}.`); continue; }
-                let list;
-                try { list = JSON.parse(String(raw)); } catch { list = null; }
-                if (!Array.isArray(list)) { failR(jobId, `step ${i} sets RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS to ${JSON.stringify(String(raw))}, which is not a JSON array. Next step: set it to ${JSON.stringify(expected)}.`); continue; }
-                const got = list.map(String).sort();
-                const missing = expected.filter(e => !got.includes(e));
-                const extra = got.filter(g => !expected.includes(g));
-                if (missing.length > 0 || extra.length > 0) failR(jobId, `step ${i} RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS drifts from postUpgradeTasks.commands in ${RENOVATE_REL}: missing ${JSON.stringify(missing)}, extra ${JSON.stringify(extra)}. Next step: set it to ${JSON.stringify(expected)}.`);
+        // shortcut: branchPrefix and the theia groupSlug are read by pattern, not a JSON5 parser; the renovate-config row owns the full parse.
+        const prefix = typeof cfg === 'string' ? cfg.match(/"branchPrefix"\s*:\s*"([^"]+)"/)?.[1] : undefined;
+        const slug = typeof cfg === 'string' ? cfg.match(/"groupName"\s*:\s*"theia"\s*,\s*"groupSlug"\s*:\s*"([^"]+)"/)?.[1] : undefined;
+        const branch = prefix && slug ? `${prefix}${slug}` : null;
+        const jobs = docs[DRY_RUN_FILE]?.jobs ?? {};
+        const runText = job => (job?.steps ?? []).map(st => String(st?.run ?? '')).join('\n');
+        const needsOf = job => [job?.needs ?? []].flat().map(String);
+        for (const [jobId, job] of Object.entries(jobs)) {
+            const steps = (job?.steps ?? []).map((st, i) => [i, st]).filter(([, st]) => String(st?.uses ?? '').split('@')[0] === RENOVATE_ACTION);
+            if (steps.length === 0) continue;
+            for (const [i, st] of steps) {
+                if ((st.env ?? {}).RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS !== undefined || (job.env ?? {}).RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS !== undefined) {
+                    failR(jobId, `step ${i} sets RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS, which re-admits a post-upgrade hook that cannot run in Renovate's container clone (BLOCKED.md item 18). Next step: remove it; the licensing job regenerates the notices.`);
+                }
+            }
+            // The generator as a command line of its own, in the theia shell (python3 for the Gecko preprocessor); a mention in a message does not count.
+            const lic = Object.entries(jobs).filter(([, k]) => needsOf(k).includes(jobId) && /^\s*nix develop \.#theia --command node scripts\/generate-licensing\.mjs\s*$/m.test(runText(k)));
+            if (lic.length !== 1) { failR(jobId, `runs Renovate, and ${lic.length} jobs that need it run nix develop .#theia --command node scripts/generate-licensing.mjs, not exactly one, so the Theia PR's notices are ${lic.length === 0 ? 'never regenerated' : 'regenerated twice'}. Next step: keep one licensing job after ${jobId}.`); continue; }
+            const [kId, k] = lic[0];
+            if (k['continue-on-error'] !== true) failR(kId, `does not set continue-on-error: true, so a failed regeneration fails the run and sweep-clock, which reads successful runs only, loses the previous sweep. Next step: set it.`);
+            if (!(k.permissions && typeof k.permissions === 'object' && Object.keys(k.permissions).length === 0)) failR(kId, `has permissions ${JSON.stringify(k.permissions)}, not {}; the App token is its only credential. Next step: set permissions: {}.`);
+            if (branch === null) failR(kId, `its branch cannot be derived: no branchPrefix or theia groupSlug could be read from ${RENOVATE_REL}. Next step: restore the file.`);
+            else if (k.env?.BRANCH !== branch) failR(kId, `job env BRANCH is ${JSON.stringify(k.env?.BRANCH)}, not ${JSON.stringify(branch)} (branchPrefix plus the theia groupSlug in ${RENOVATE_REL}), so it regenerates a branch Renovate does not write. Next step: set BRANCH: ${branch}.`);
+            const tokens = (k.steps ?? []).filter(st => String(st?.uses ?? '').split('@')[0] === APP_TOKEN.replace(/@$/, ''));
+            const perms = tokens.flatMap(st => Object.entries(st.with ?? {}).filter(([n]) => n.startsWith('permission-')).map(([n, v]) => `${n}: ${v}`));
+            if (tokens.length !== 1 || perms.length !== 1 || perms[0] !== 'permission-contents: write') failR(kId, `mints ${tokens.length} App token(s) with [${perms.join(', ')}], not one with permission-contents: write only; the PR already exists, so no other permission is needed. Next step: request contents write only.`);
+            const text = runText(k);
+            for (const [need, why] of [
+                ['scripts/fetch-upstream.sh', 'fetch upstream/'],
+                ['scripts/apply-patches.sh', 'apply the patch stack to upstream/'],
+                ['yarn install --ignore-scripts --frozen-lockfile', 'install theia/ from the branch lockfile without lifecycle scripts'],
+                ['publish-bump-branch.sh "$BRANCH"', 'publish through publish-bump-branch.sh, which refuses a branch with an owner commit'],
+            ]) {
+                if (!text.includes(need)) failR(kId, `no run step contains ${JSON.stringify(need)}, so it does not ${why}. Next step: restore that step.`);
             }
         }
     }
@@ -1567,20 +1586,25 @@ function selfTest() {
         ['a permission input on a pin with no record entry', { appTokenInputs: { pins: {} } }, rel('release-train.yml'), 'maintenance-probe', 'app-token-inputs', 'has no entry for that commit'],
     );
 
-    // renovate-job (AUTO-02): each plant edits the real release-train.yml or renovate.json5 text in memory.
-    const ALLOW_LINE = TRAIN_TEXT.split('\n').find(l => l.includes('RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS:'));
-    if (ALLOW_LINE === undefined) throw new Error(`self-test anchor RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS is absent from ${WF_DIR}/release-train.yml`);
-    const allowAs = value => trainEdit(ALLOW_LINE, `          RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS: '${value}'`);
+    // renovate-job (AUTO-02, owner answer A4): each plant edits the real release-train.yml or renovate.json5 text in memory.
     const RJ = [rel('release-train.yml'), 'renovate-theia', 'renovate-job'];
+    const RL = [rel('release-train.yml'), 'renovate-licensing', 'renovate-job'];
     const RENOVATE_TEXT = readFileSync(join(REPO_ROOT, RENOVATE_REL), 'utf8');
+    const AUTHOR_LINE = '          RENOVATE_GIT_AUTHOR: release-train <${{ env.BOT_EMAIL }}>\n';
+    const LIC_HEAD = '  renovate-licensing:\n    needs: [derive, renovate-theia]\n';
     plants.push(
-        ['renovate-job: the allow-list dropped', trainEdit(`${ALLOW_LINE}\n`, ''), ...RJ, 'no RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS'],
-        ['renovate-job: the generate check dropped from the allow-list', allowAs('["^node scripts/generate-licensing\\\\.mjs$"]'), ...RJ, 'missing ["^node scripts/generate\\\\.mjs --check$"]'],
-        ['renovate-job: an extra catch-all entry', allowAs('["^node scripts/generate-licensing\\\\.mjs$", "^node scripts/generate\\\\.mjs --check$", ".*"]'), ...RJ, 'extra [".*"]'],
-        ['renovate-job: an unanchored entry', allowAs('["node scripts/generate-licensing\\\\.mjs", "^node scripts/generate\\\\.mjs --check$"]'), ...RJ, 'extra ["node scripts/generate-licensing\\\\.mjs"]'],
-        ['renovate-job: a value that is not JSON', allowAs('node scripts/generate-licensing.mjs'), ...RJ, 'not a JSON array'],
-        ['renovate-job: a third hook command in the config only', { renovateConfig: RENOVATE_TEXT.replace('"node scripts/generate.mjs --check"]', '"node scripts/generate.mjs --check", "node scripts/x.mjs"]') }, ...RJ, 'missing ["^node scripts/x\\\\.mjs$"]'],
-        ['renovate-job: no commands array in the config', { renovateConfig: '{}' }, ...RJ, 'no postUpgradeTasks.commands'],
+        ['renovate-job: the hook allow-list restored', trainEdit(AUTHOR_LINE, `${AUTHOR_LINE}          RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS: '["^node scripts/generate-licensing\\\\.mjs$"]'\n`), ...RJ, 'sets RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS'],
+        ['renovate-job: the licensing job no longer needs renovate-theia', trainEdit(LIC_HEAD, '  renovate-licensing:\n    needs: [derive]\n'), ...RJ, '0 jobs that need it'],
+        ['renovate-job: the generator step dropped', trainEdit('          nix develop .#theia --command node scripts/generate-licensing.mjs\n', ''), ...RJ, '0 jobs that need it'],
+        ['renovate-job: continue-on-error dropped', trainEdit(`${LIC_HEAD}    if: \${{ !inputs.dry-run && needs.renovate-theia.result == 'success' }}\n    continue-on-error: true\n`, `${LIC_HEAD}    if: \${{ !inputs.dry-run && needs.renovate-theia.result == 'success' }}\n`), ...RL, 'continue-on-error'],
+        ['renovate-job: GITHUB_TOKEN contents write', trainEdit('    permissions: {}\n    env:\n      BRANCH: chore/theia-theia\n', '    permissions:\n      contents: write\n    env:\n      BRANCH: chore/theia-theia\n'), ...RL, 'not {}'],
+        ['renovate-job: the monaco branch instead of the theia branch', trainEdit('      BRANCH: chore/theia-theia\n', '      BRANCH: chore/theia-theia-monaco-editor-core\n'), ...RL, 'not "chore/theia-theia"'],
+        ['renovate-job: the config branchPrefix moved', { renovateConfig: RENOVATE_TEXT.replace('"branchPrefix": "chore/theia-"', '"branchPrefix": "chore/deps-"') }, ...RL, 'not "chore/deps-theia"'],
+        ['renovate-job: no branchPrefix in the config', { renovateConfig: '{}' }, ...RL, 'cannot be derived'],
+        ['renovate-job: App token gains pull-requests write', trainEdit('          permission-contents: write\n\n      # Full history', '          permission-contents: write\n          permission-pull-requests: write\n\n      # Full history'), ...RL, 'contents write only'],
+        ['renovate-job: upstream/ not applied', trainEdit(" && bash scripts/apply-patches.sh'\n          nix develop .#theia --command bash -c 'cd theia && yarn install --ignore-scripts", "'\n          nix develop .#theia --command bash -c 'cd theia && yarn install --ignore-scripts"), ...RL, 'scripts/apply-patches.sh'],
+        ['renovate-job: yarn install runs lifecycle scripts', trainEdit("cd theia && yarn install --ignore-scripts --frozen-lockfile'", "cd theia && yarn install --frozen-lockfile'"), ...RL, '--ignore-scripts --frozen-lockfile'],
+        ['renovate-job: a bare git push instead of publish-bump-branch.sh', trainEdit('          bash scripts/publish-bump-branch.sh "$BRANCH" "$BASE" > "$RUNNER_TEMP/publish.txt"\n          cat "$RUNNER_TEMP/publish.txt"\n          if [ "$(sed -n \'s/^publish=//p\' "$RUNNER_TEMP/publish.txt")" = "refuse" ]; then\n            echo "release-train: NOTE -- ${BRANCH} carries', '          git push origin "HEAD:refs/heads/$BRANCH" > "$RUNNER_TEMP/publish.txt"\n          cat "$RUNNER_TEMP/publish.txt"\n          if [ "$(sed -n \'s/^publish=//p\' "$RUNNER_TEMP/publish.txt")" = "refuse" ]; then\n            echo "release-train: NOTE -- ${BRANCH} carries'), ...RL, 'publish-bump-branch.sh'],
     );
 
     // dependabot.yml (AUTO-03, BL-02, WR-04, WR-05, WR-06): each plant edits the real file text in memory.
