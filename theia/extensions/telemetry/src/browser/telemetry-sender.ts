@@ -145,11 +145,13 @@ export class PowerBrowserTelemetrySender {
         }
     }
 
-    /** Usage path: admitted only at level `all`. Never throws. */
+    /** Usage path: admitted only at level `all`, filtered like the error path (IN-03). Never throws. */
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     sendEventData(eventName: string, data?: Record<string, any>): void {
         try {
-            this.enqueue('usage', eventName, data);
+            const admitted = admittedErrorData(data);
+            if (admitted === null) return;
+            this.enqueue('usage', EVENT_NAME.test(eventName) ? eventName : 'unknown', admitted);
         } catch {
             // Never a throw out of a telemetry path.
         }
