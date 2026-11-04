@@ -58,6 +58,22 @@ show the crash-ping host before consent, so the assertion would be red by design
 **Owner step, once B1 lands and a reporter-enabled build exists (tier 3, owner machine):** record the exact
 `verify-endpoints.sh --layer 3` invocation and the extracted host set verbatim in `57-01-SUMMARY.md`.
 
+**Assertion committed 2026-11-04 by plan 57-06.** `scripts/verify-endpoints.sh` has a `--crash-ping` mode for
+layer 3. It requires `objdir/dist/bin/crashreporter` (a reporter-enabled build), a fresh profile, a content-process
+crash by SIGSEGV 10 s into the 35 s window, and a minidump under the profile afterwards. It then fails if the
+crash-ping host, derived from `TELEMETRY_SERVER` in `crashping/src/lib.rs`, resolves. The fixture plants run in
+`endpoint-dispositions-self-test` (`--quick`). It was not run live from the agent shell. Owner commands, on the
+reporter-enabled build:
+
+```sh
+bash scripts/verify-endpoints.sh --layer 3 --crash-ping                      # must print "crash-ping PASS"
+bash scripts/verify-endpoints.sh --layer 3 --crash-ping --positive-control   # must print "positive control PASS -- consent true surfaced incoming.telemetry.mozilla.org"
+```
+
+Limit: MOZ_LOG records Gecko's resolver only. A main-process crash pings from the separate `crashreporter`
+client, whose DNS is outside this capture, so that path is covered only by the patch-055 static gate
+(`crash-ping-consent`).
+
 ## B3. 57-02 owner checkpoint: receiver deploy and probes (NOT EXECUTED, owner only)
 
 Nothing was deployed, and no network write was made from this session. The owner runs, in order (the full runbook is
