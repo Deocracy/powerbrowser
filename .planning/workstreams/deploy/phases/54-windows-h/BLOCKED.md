@@ -107,6 +107,53 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
 - **What:** the pkg-win11 matrix has never run. The harness files are in `scripts/matrix/`.
 - **Why blocked:** defining a libvirt domain, taking a snapshot, and running a Windows guest need the host,
   the Windows licence, and the owner's approval (54-04).
+- **libvirt access for `pb-runner` (54-04 Task 3 step 2; gap plan 54-10, G-54d, 2026-11-03).** Every option below
+  was checked against the nixos MCP (channels unstable and stable) on 2026-11-03. `virtualisation.libvirtd.qemu.ovmf`
+  no longer exists in either channel: UEFI firmware ships with the QEMU package, and swtpm provides the TPM 2.0 that
+  Windows 11 requires. Claude could not read `/etc/nixos` from its session, so merge this by hand:
+  - Add to `/etc/nixos/configuration.nix` (skip any line that already exists):
+
+    ```nix
+    # Power Browser Windows matrix (54-04): libvirt on legion for the pb-runner user.
+    virtualisation.libvirtd = {
+      enable = true;
+      qemu.swtpm.enable = true;   # TPM 2.0 for the Windows 11 guest
+    };
+    ```
+
+  - Inside the existing `users.users.pb-runner = { ... };` block from the 49-02 runner change, add the line below.
+    Do not write it as a separate `users.users.pb-runner.extraGroups = ...` line next to that block: Nix rejects
+    an attribute that is already defined.
+
+    ```nix
+      extraGroups = [ "libvirtd" ];
+    ```
+
+  - Inside the existing `services.github-runners.powerbrowser-release.extraEnvironment` set, add the line below.
+    `win-matrix-run.sh` calls `virsh` without `-c`, and for a user other than root that connects to
+    `qemu:///session`, where the domain does not exist.
+
+    ```nix
+      LIBVIRT_DEFAULT_URI = "qemu:///system";
+    ```
+
+  - Check, rebuild, commit and push:
+
+    ```sh
+    pkexec bash -c 'export PATH=/run/current-system/sw/bin:/run/wrappers/bin:$PATH; nixos-rebuild dry-build'
+    pkexec bash -c 'export PATH=/run/current-system/sw/bin:/run/wrappers/bin:$PATH; nrs "pb-runner: libvirtd group and swtpm for the Windows matrix (54-04)"'
+    sudo -u pb-runner env LIBVIRT_DEFAULT_URI=qemu:///system virsh list --all   # must list domains, not fail on the socket
+    ```
+
+    Record the `nrs` date in `docs/RELEASING.md` (54-04 Task 3 step 2).
+  - Not verified until the first job: the runner unit's systemd sandboxing may block the libvirt socket
+    (`/run/libvirt/libvirt-sock`). If `virsh` fails only inside a job, set
+    `services.github-runners.powerbrowser-release.serviceOverrides` (for example `ProtectSystem`, `ReadWritePaths`) and
+    record which setting was needed.
+  - The firmware paths in `scripts/matrix/pkg-win11-domain.xml` (`/usr/share/OVMF/...`) do not exist on NixOS. Find
+    the Secure Boot code and variables files with
+    `ls "$(dirname "$(readlink -f "$(command -v qemu-system-x86_64)")")/../share/qemu/" | grep -i edk2`
+    and put those paths in the XML before `virsh define`.
 - **Owner steps:**
   1. Define the domain from `scripts/matrix/pkg-win11-domain.xml` (`virsh define`). The XML's disk and NVRAM
      paths and the OVMF template paths are placeholders for the host.
