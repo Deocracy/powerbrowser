@@ -38,7 +38,7 @@ platform. If a rebrand ever requires editing a second file, that is a bug.
   Theia sidecar (`@sourcerer/*` extensions, never forking Theia core).
 - The stream model was decided 2026-08-22 in sourcerer's
   `docs/PRODUCT-REQUIREMENTS.md`: Power Browser is the platform
-  (`DeBIOS-Foundation/powerbrowser`, public, 501(c)(3)-owned); Sourcerer stays
+  (`Deocracy/powerbrowser`, public, 501(c)(3)-owned); Sourcerer stays
   a downstream at `Deocracy/Sourcerer`. Platform names take the platform's
   name: `@powerbrowser/*`, `PowerBrowserAPI.sys.mjs`. This project executes
   that migration.
