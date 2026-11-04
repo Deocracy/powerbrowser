@@ -4,7 +4,7 @@
 #   - stages the Theia sidecar, the pinned official Node release (R13) and
 #     distribution/policies.json into the packaged app dir;
 #   - refreshes precomplete, because full MARs are made from this dir;
-#   - rewrites the tarball mach wrote.
+#   - rewrites the tarball mach wrote, then makes the complete MAR from the same dir.
 # It packages the RELEASE objdir: the one the release mozconfig builds into
 # (MOZ_OBJDIR default, read by scripts/lib/release-objdir.mjs), and it passes the
 # release mozconfig to mach, so `mach package` cannot reach the dev objdir/.
@@ -139,5 +139,18 @@ test ${#TARBALLS[@]} -eq 1 || fail "expected exactly one $OBJ/dist/*-$VERSION.en
 TARBALL="${TARBALLS[0]}"
 tar --sort=name -C "$OBJ/dist" -cJf "$TARBALL.tmp" "$(basename "$STAGE")"
 mv "$TARBALL.tmp" "$TARBALL"
-trap - ERR
 echo "package-linux: wrote $TARBALL"
+
+# G-49a: the complete MAR build-linux uploads, made from the same staged dir (precomplete refreshed
+# above) the way docs/BUILD.md and package-macos.sh make it. The channel is the generator's value,
+# which mozconfig.release bakes into ACCEPTED_MAR_CHANNEL_IDS; sign-publish's channel gate compares them.
+MARFILE="${TARBALL%.tar.xz}.complete.mar"
+MARBIN="$OBJ/dist/host/bin/mar"
+test -x "$MARBIN" || fail "$MARBIN is absent; the host mar tool was not built"
+rm -f "$OBJ/dist"/*.complete.mar
+( cd "$ROOT/upstream" && MAR="$MARBIN" MOZ_PRODUCT_VERSION="$VERSION" MAR_CHANNEL_ID="$MAR_CHANNEL" \
+    bash tools/update-packaging/make_full_update.sh "$MARFILE" "$STAGE" ) \
+    || { rm -f "$MARFILE"; fail "make_full_update.sh failed on $STAGE (its output is above)"; }
+test -s "$MARFILE" || { rm -f "$MARFILE"; fail "make_full_update.sh wrote no MAR at $MARFILE"; }
+trap - ERR
+echo "package-linux: wrote $MARFILE (MAR channel $MAR_CHANNEL)"
