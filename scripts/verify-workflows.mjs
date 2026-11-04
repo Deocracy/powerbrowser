@@ -119,13 +119,17 @@
 //                 continue-on-error: true (sweep-clock reads successful runs only), permissions: {}, job env BRANCH equal to the
 //                 branchPrefix plus the theia groupSlug read from .github/renovate.json5 at check time, no App token step, no
 //                 environment and no secrets., github.token or GITHUB_TOKEN reference, checkouts with persist-credentials: false,
-//                 run steps that fetch and apply upstream/, take only theia/package.json, theia/yarn.lock and configuration.toml
-//                 from the head with git checkout "$HEAD_SHA" -- <paths>, never switch or check out a ref, and install theia/ with
+//                 run steps that fetch and apply upstream/, take only every theia/**/package.json, theia/yarn.lock and
+//                 configuration.toml from the head with git checkout "$HEAD_SHA" -- <paths>, refuse a package.json change other
+//                 than an @theia/* version string, no checkout input ref or repository, never move HEAD (switch, ref checkout,
+//                 reset, read-tree, pull, merge, rebase, worktree...), and install theia/ with
 //                 --ignore-scripts --frozen-lockfile, one upload of exactly LICENSING.md and THIRD-PARTY-NOTICES.txt, and a head
 //                 output (plan 51-09). Exactly one job that needs it mints an App token (the publish job), and it carries
 //                 continue-on-error: true, permissions: {}, the same BRANCH, one App token with permission-contents: write only,
-//                 checkouts with persist-credentials: false, unset NODE_OPTIONS in every run step, no interpreter call on a path
-//                 outside "$GITHUB_WORKSPACE/" (the branch tree is never executed), HEAD_SHA from the generate job's head output,
+//                 checkouts with persist-credentials: false and no ref or repository input, unset NODE_OPTIONS in every run step,
+//                 no HEAD, index or workspace move other than the one pinned worktree add, no $GITHUB_WORKSPACE/target path, and
+//                 every command word scanned: an interpreter or build tool (., source, yarn, npm, npx, make, env, node...) or a
+//                 path runs only as bash "$GITHUB_WORKSPACE/scripts/<name>" (the branch tree is never executed), HEAD_SHA from the generate job's head output,
 //                 the moved-branch refusal, a detached worktree at "$HEAD_SHA", git with no system or global config, the
 //                 refusal of a diff outside the two notice files, one git add of exactly those two, and publishes with
 //                 "$GITHUB_WORKSPACE/scripts/publish-bump-branch.sh" "$BRANCH" "$BASE" "$HEAD_SHA".
@@ -988,12 +992,20 @@ function runChecks(root, overrides = {}) {
                 ['scripts/fetch-upstream.sh', 'fetch upstream/'],
                 ['scripts/apply-patches.sh', 'apply the patch stack to upstream/'],
                 ['yarn install --ignore-scripts --frozen-lockfile', 'install theia/ from the branch lockfile without lifecycle scripts'],
-                ['git checkout "$HEAD_SHA" -- theia/package.json theia/yarn.lock configuration.toml', 'take only the data files from the branch head'],
+                ['git checkout "$HEAD_SHA" -- \':(glob)theia/**/package.json\' theia/yarn.lock configuration.toml', 'take only the data files from the branch head, every workspace manifest Renovate bumps included'],
+                ['grep -vE \'^[-+] *"@theia/[a-z0-9-]+": "[0-9A-Za-z.+-]+",?$\'', 'refuse a package.json change other than an @theia/* version string'],
             ]) {
                 if (!text.includes(need)) failR(kId, `no run step contains ${JSON.stringify(need)}, so it does not ${why}. Next step: restore that step.`);
             }
-            // A ref checkout (no " -- " pathspec) or a switch would put the branch's scripts in the workspace.
-            const refMoves = text.split('\n').filter(l => /\bgit\s+(switch|checkout)\b/.test(l) && !/\s--\s/.test(l));
+            // A checkout input naming another ref or repository, a ref checkout (no " -- " pathspec), or any other HEAD move
+            // would put the branch's scripts in the workspace. Both jobs must stay on the run's own ref.
+            const refInputs = (jobId2, job2) => {
+                const bad = (job2.steps ?? []).filter(st => String(st?.uses ?? '').split('@')[0] === 'actions/checkout' && (st.with?.ref !== undefined || st.with?.repository !== undefined));
+                if (bad.length > 0) failR(jobId2, `has an actions/checkout step that sets ref or repository, so the workspace is not the run's trusted ref. Next step: drop the input; take branch data with git checkout "$HEAD_SHA" -- <paths>.`);
+            };
+            const MOVE = /\b(?:git|T)\b[^;&|]*?\s(switch|reset|read-tree|pull|merge|rebase|cherry-pick|stash|worktree|checkout|restore)(?![\w-])/;
+            refInputs(kId, k);
+            const refMoves = text.split('\n').filter(l => { const m = l.match(MOVE); return m && !((m[1] === 'checkout') && /\s--\s/.test(l)); });
             if (refMoves.length > 0) failR(kId, `moves the workspace to a branch ref (${refMoves.map(l => l.trim()).join('; ')}), so the scripts it then runs come from the branch. Next step: check out only the data files with git checkout "$HEAD_SHA" -- <paths>.`);
             const uploads = (k.steps ?? []).filter(st => String(st?.uses ?? '').split('@')[0] === 'actions/upload-artifact');
             const upPaths = uploads.flatMap(st => String(st.with?.path ?? '').split('\n').map(x => x.trim()).filter(Boolean).map(x => x.split('/').pop())).sort();
@@ -1011,11 +1023,21 @@ function runChecks(root, overrides = {}) {
             const perms = ptokens.flatMap(st => Object.entries(st.with ?? {}).filter(([n]) => n.startsWith('permission-')).map(([n, v]) => `${n}: ${v}`));
             if (ptokens.length !== 1 || perms.length !== 1 || perms[0] !== 'permission-contents: write') failR(pId, `mints ${ptokens.length} App token(s) with [${perms.join(', ')}], not one with permission-contents: write only; the PR already exists, so no other permission is needed. Next step: request contents write only.`);
             if ((p.steps ?? []).filter(st => String(st?.uses ?? '').split('@')[0] === 'actions/checkout').some(st => st.with?.['persist-credentials'] !== false)) failR(pId, `checks out with credentials persisted. Next step: set persist-credentials: false.`);
+            refInputs(pId, p);
             const ptext = runText(p);
+            // Only the pinned worktree may be added; any other HEAD or index move (even a pathspec checkout) could replace a trusted script with the branch's.
+            const pMoves = ptext.split('\n').filter(l => MOVE.test(l) && !/^\s*T worktree add --detach target "\$HEAD_SHA"\s*$/.test(l));
+            if (pMoves.length > 0) failR(pId, `moves HEAD, the index or the workspace (${pMoves.map(l => l.trim()).join('; ')}), so a branch file may stand where a trusted one was. Next step: keep only T worktree add --detach target "$HEAD_SHA".`);
             const runSteps = (p.steps ?? []).filter(st => typeof st?.run === 'string');
             if (runSteps.some(st => !/^\s*unset NODE_OPTIONS\s*$/m.test(st.run))) failR(pId, `has a run step that does not unset NODE_OPTIONS, so a preload set for the runner reaches node in the step that holds the token. Next step: add unset NODE_OPTIONS to every run step.`);
-            // Every interpreter invocation names the trusted checkout explicitly; ./x or a relative scripts/ path could resolve into target/.
-            const branchRuns = ptext.split('\n').filter(l => /\b(bash|sh|node|python3?|source)\s+(?!-c\b)(?!"\$GITHUB_WORKSPACE\/)\S/.test(l) || /(^|[\s;&|(])\.\/\S/.test(l));
+            // Every command word is scanned: an interpreter or build tool (., source, yarn, npx, make, env...) runs only as
+            // bash "$GITHUB_WORKSPACE/scripts/<name>", and a command word that is a path must be that same trusted form, so
+            // nothing under target/ (or a relative path that resolves into it) executes with the App token.
+            const CMD = /(?:^|[;&|(!`]|\{\s|\$\(|\b(?:then|do|else|if|while|until)\s)\s*(?:\w+=(?:"[^"]*"|'[^']*'|\S*)\s+)*("[^"]*"|'[^']*'|[^\s;&|()]+)(?:\s+("[^"]*"|'[^']*'|[^\s;&|()]+))?/g;
+            const TRUSTED = /^"\$GITHUB_WORKSPACE\/scripts\/[\w.-]+"$/;
+            const INTERP = /^(?:bash|sh|dash|zsh|ksh|node|python3?|perl|ruby|source|\.|yarn|npm|npx|pnpm|corepack|make|env|exec|eval|xargs|nix|command|builtin)$/;
+            const badCmd = l => /\$\{?GITHUB_WORKSPACE\}?\/target\b/.test(l) || [...l.matchAll(CMD)].some(([, w, a]) => INTERP.test(w) ? !(/^(?:bash|sh)$/.test(w) && TRUSTED.test(a ?? '')) : w.includes('/') && !TRUSTED.test(w));
+            const branchRuns = ptext.split('\n').filter(badCmd);
             if (branchRuns.length > 0) failR(pId, `runs a script path that is not under "$GITHUB_WORKSPACE/" (${branchRuns.map(l => l.trim()).join('; ')}), so it may execute the branch tree with the App token. Next step: invoke the trusted copy as bash "$GITHUB_WORKSPACE/scripts/<name>".`);
             if (p.env?.HEAD_SHA !== `\${{ needs.${kId}.outputs.head }}`) failR(pId, `job env HEAD_SHA is ${JSON.stringify(p.env?.HEAD_SHA)}, not \${{ needs.${kId}.outputs.head }}, so the branch head is not pinned to the one the notices were generated from. Next step: set it.`);
             for (const [need, why] of [
@@ -1653,6 +1675,9 @@ function selfTest() {
     const LIC_HEAD = '  renovate-licensing:\n    needs: [derive, renovate-theia]\n';
     const RP = [rel('release-train.yml'), 'renovate-licensing-publish', 'renovate-job'];
     const PUB_LINE = '          (cd target && bash "$GITHUB_WORKSPACE/scripts/publish-bump-branch.sh" "$BRANCH" "$BASE" "$HEAD_SHA") > "$RUNNER_TEMP/publish.txt"\n';
+    const GEN_CO = '          git checkout "$HEAD_SHA" -- \':(glob)theia/**/package.json\' theia/yarn.lock configuration.toml\n';
+    const GEN_CHECKOUT = '      - name: Check out the trusted ref without persisting a token (skipped in dry-run)\n        if: ${{ !inputs.dry-run }}\n        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n        with:\n          persist-credentials: false\n          fetch-depth: 0\n\n      - name: Install Nix';
+    const PUB_CHECKOUT = '          persist-credentials: false\n          fetch-depth: 0\n\n      # This run\'s artifact only';
     const GEN_NIX = '      - name: Install Nix (skipped in dry-run)\n        if: ${{ !inputs.dry-run }}\n        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1\n\n      # Every script here';
     plants.push(
         ['renovate-job: the hook allow-list restored', trainEdit(AUTHOR_LINE, `${AUTHOR_LINE}          RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS: '["^node scripts/generate-licensing\\\\.mjs$"]'\n`), ...RJ, 'sets RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS'],
@@ -1674,7 +1699,21 @@ function selfTest() {
         ['renovate-job: the generate job receives a secret', trainEdit('          PUPPETEER_SKIP_DOWNLOAD: "1"\n', '          PUPPETEER_SKIP_DOWNLOAD: "1"\n          GH_TOKEN: ${{ secrets.BOT_APP_PRIVATE_KEY }}\n'), ...RL, 'mints or receives a token or secret'],
         ['renovate-job: the generate job receives github.token', trainEdit('          PUPPETEER_SKIP_DOWNLOAD: "1"\n', '          PUPPETEER_SKIP_DOWNLOAD: "1"\n          GH_TOKEN: ${{ github.token }}\n'), ...RL, 'mints or receives a token or secret'],
         ['renovate-job: the generate job enters the bot environment', trainEdit(`${LIC_HEAD}    if: \${{ !inputs.dry-run && needs.renovate-theia.result == 'success' }}\n`, `${LIC_HEAD}    if: \${{ !inputs.dry-run && needs.renovate-theia.result == 'success' }}\n    environment: bot\n`), ...RL, 'mints or receives a token or secret'],
-        ['renovate-job: the generate job switches to the branch', trainEdit('          git checkout "$HEAD_SHA" -- theia/package.json theia/yarn.lock configuration.toml\n', '          git switch -C "$BRANCH" "$HEAD_SHA"\n'), ...RL, 'moves the workspace to a branch ref'],
+        ['renovate-job: the generate job switches to the branch', trainEdit(GEN_CO, '          git switch -C "$BRANCH" "$HEAD_SHA"\n'), ...RL, 'moves the workspace to a branch ref'],
+        ['renovate-job: the generate job resets onto the branch', trainEdit(GEN_CO, `${GEN_CO}          git reset --hard "$HEAD_SHA"\n`), ...RL, 'moves the workspace to a branch ref'],
+        ['renovate-job: the generate checkout names the branch ref', trainEdit(GEN_CHECKOUT, GEN_CHECKOUT.replace('fetch-depth: 0\n', 'fetch-depth: 0\n          ref: chore/theia-theia\n')), ...RL, 'sets ref or repository'],
+        ['renovate-job: the generate job takes theia/package.json only', trainEdit(GEN_CO, '          git checkout "$HEAD_SHA" -- theia/package.json theia/yarn.lock configuration.toml\n'), ...RL, 'every workspace manifest'],
+        ['renovate-job: the package.json line filter dropped', trainEdit(`| grep -vE '^[-+] *"@theia/[a-z0-9-]+": "[0-9A-Za-z.+-]+",?$' || true)`, '|| true)'), ...RL, 'other than an @theia/* version string'],
+        ['renovate-job: (a) the publish checkout names the branch ref', trainEdit(PUB_CHECKOUT, PUB_CHECKOUT.replace('fetch-depth: 0\n', 'fetch-depth: 0\n          ref: chore/theia-theia\n')), ...RP, 'sets ref or repository'],
+        ['renovate-job: (b) the publish job resets onto the fetched branch', trainEdit(PUB_LINE, `          git fetch origin chore/theia-theia && git reset --hard FETCH_HEAD\n${PUB_LINE}`), ...RP, 'moves HEAD, the index or the workspace'],
+        ['renovate-job: (b) the publish job checks a script out of the branch', trainEdit(PUB_LINE, `          git checkout "$HEAD_SHA" -- scripts/publish-bump-branch.sh\n${PUB_LINE}`), ...RP, 'moves HEAD, the index or the workspace'],
+        ['renovate-job: (c) the publish script taken from $GITHUB_WORKSPACE/target', trainEdit(PUB_LINE, PUB_LINE.replace('"$GITHUB_WORKSPACE/scripts/', '"$GITHUB_WORKSPACE/target/scripts/')), ...RP, 'not under "$GITHUB_WORKSPACE/"'],
+        ['renovate-job: (d) the publish job dot-sources a branch script', trainEdit(PUB_LINE, `          (cd target && . scripts/x.sh)\n${PUB_LINE}`), ...RP, 'not under "$GITHUB_WORKSPACE/"'],
+        ['renovate-job: (d) the publish job runs yarn in target/', trainEdit(PUB_LINE, `          (cd target && yarn install)\n${PUB_LINE}`), ...RP, 'not under "$GITHUB_WORKSPACE/"'],
+        ['renovate-job: (d) the publish job runs npx in target/', trainEdit(PUB_LINE, `          (cd target && npx some-tool)\n${PUB_LINE}`), ...RP, 'not under "$GITHUB_WORKSPACE/"'],
+        ['renovate-job: (d) the publish job runs make in target/', trainEdit(PUB_LINE, `          make -C target\n${PUB_LINE}`), ...RP, 'not under "$GITHUB_WORKSPACE/"'],
+        ['renovate-job: (d) the publish job executes a relative path', trainEdit(PUB_LINE, `          (cd target && scripts/x.sh)\n${PUB_LINE}`), ...RP, 'not under "$GITHUB_WORKSPACE/"'],
+        ['renovate-job: (d) the publish job runs through env', trainEdit(PUB_LINE, `          env -i bash "$GITHUB_WORKSPACE/scripts/publish-bump-branch.sh"\n${PUB_LINE}`), ...RP, 'not under "$GITHUB_WORKSPACE/"'],
         ['renovate-job: the artifact carries a third file', trainEdit('            ${{ runner.temp }}/notices/LICENSING.md\n', '            ${{ runner.temp }}/notices/LICENSING.md\n            ${{ runner.temp }}/notices/package.json\n'), ...RL, 'not exactly LICENSING.md and THIRD-PARTY-NOTICES.txt'],
         ['renovate-job: the publish job runs the branch copy of publish-bump-branch.sh', trainEdit('(cd target && bash "$GITHUB_WORKSPACE/scripts/publish-bump-branch.sh"', '(cd target && bash scripts/publish-bump-branch.sh'), ...RP, 'not under "$GITHUB_WORKSPACE/"'],
         ['renovate-job: the publish job runs a script from target/', trainEdit('          T worktree add --detach target "$HEAD_SHA"\n', '          T worktree add --detach target "$HEAD_SHA"\n          node target/scripts/generate-licensing.mjs\n'), ...RP, 'not under "$GITHUB_WORKSPACE/"'],

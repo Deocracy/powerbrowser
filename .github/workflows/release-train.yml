@@ -808,7 +808,8 @@ jobs:
         if: ${{ !inputs.dry-run }}
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
 
-      # Every script here is the trusted checkout's; the branch contributes three data files and nothing it could execute.
+      # Every script here is the trusted checkout's; the branch contributes data files only (its theia/**/package.json, yarn.lock
+      # and configuration.toml) and nothing it could execute.
       - name: Regenerate the licensing notices from the Theia branch's dependency files (skipped in dry-run)
         id: regen
         if: ${{ !inputs.dry-run }}
@@ -823,21 +824,25 @@ jobs:
           git fetch --no-tags origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" "+refs/heads/main:refs/remotes/origin/main"
           HEAD_SHA=$(git rev-parse "refs/remotes/origin/${BRANCH}^{commit}")
           BASE=$(git merge-base origin/main "$HEAD_SHA")
-          # The branch may change only the data files and the notices; configuration.toml only on its theia_release line.
-          OTHER=$(git diff --name-only "$BASE" "$HEAD_SHA" -- . ':(exclude)theia/package.json' ':(exclude)theia/yarn.lock' ':(exclude)configuration.toml' ':(exclude)THIRD-PARTY-NOTICES.txt' ':(exclude)LICENSING.md')
+          # The branch may change only the data files and the notices: every theia/**/package.json (Renovate's npm manager
+          # bumps the @theia/* pins in each workspace manifest), theia/yarn.lock, and configuration.toml. A package.json
+          # change may touch only an "@theia/..." version string, and configuration.toml only its theia_release line, so a
+          # new manifest, a workspaces glob or a scripts entry is refused here.
+          OTHER=$(git diff --name-only "$BASE" "$HEAD_SHA" -- . ':(exclude,glob)theia/**/package.json' ':(exclude)theia/yarn.lock' ':(exclude)configuration.toml' ':(exclude)THIRD-PARTY-NOTICES.txt' ':(exclude)LICENSING.md')
           CONF=$(git diff -U0 "$BASE" "$HEAD_SHA" -- configuration.toml | grep -E '^[-+]' | grep -vE '^(\+\+\+|---) ' | grep -vE '^[-+]theia_release = "[^"]*"$' || true)
-          if [ -n "$OTHER$CONF" ]; then
+          PKG=$(git diff -U0 "$BASE" "$HEAD_SHA" -- ':(glob)theia/**/package.json' | grep -E '^[-+]' | grep -vE '^(\+\+\+|---) ' | grep -vE '^[-+] *"@theia/[a-z0-9-]+": "[0-9A-Za-z.+-]+",?$' || true)
+          if [ -n "$OTHER$CONF$PKG" ]; then
             echo "release-train: NOTE -- ${BRANCH} at ${HEAD_SHA} changes more than the Theia dependency files, so the notices are not regenerated from it:"
-            printf '%s\n' "$OTHER" "$CONF"
+            printf '%s\n' "$OTHER" "$CONF" "$PKG"
             echo "Next step: regenerate the notices on ${BRANCH} by hand."
             exit 0
           fi
           nix develop .#theia --command bash -c 'bash scripts/fetch-upstream.sh && bash scripts/apply-patches.sh'
-          git checkout "$HEAD_SHA" -- theia/package.json theia/yarn.lock configuration.toml
+          git checkout "$HEAD_SHA" -- ':(glob)theia/**/package.json' theia/yarn.lock configuration.toml
           nix develop .#theia --command bash -c 'cd theia && yarn install --ignore-scripts --frozen-lockfile'
           nix develop .#theia --command node scripts/generate-licensing.mjs
-          # Only the three data files and the two generator outputs may differ. Any other change is a defect.
-          UNEXPECTED=$(git status --porcelain --untracked-files=all -- . ':(exclude)THIRD-PARTY-NOTICES.txt' ':(exclude)LICENSING.md' ':(exclude)theia/package.json' ':(exclude)theia/yarn.lock' ':(exclude)configuration.toml')
+          # Only the data files and the two generator outputs may differ. Any other change is a defect.
+          UNEXPECTED=$(git status --porcelain --untracked-files=all -- . ':(exclude)THIRD-PARTY-NOTICES.txt' ':(exclude)LICENSING.md' ':(exclude,glob)theia/**/package.json' ':(exclude)theia/yarn.lock' ':(exclude)configuration.toml')
           if [ -n "$UNEXPECTED" ]; then
             echo "release-train: FAIL -- the licensing regeneration changed paths outside the notices:" >&2
             printf '%s\n' "$UNEXPECTED" >&2
