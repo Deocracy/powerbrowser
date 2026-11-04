@@ -17,7 +17,11 @@
 //       sets:       every array compares as a set, and named entities
 //                   (rulesets, bypass actors) compare by set equality, so an
 //                   addition and a removal are both red.
-//  4. Fail closed. A non-2xx response, a missing or unauthenticated gh, or
+//  4. App scope (R10). An org App no app-*.json declares counts only when it
+//     can reach a repository the declared Apps are installed on (selection all,
+//     or a repository list touching that derived set); an App kept off those
+//     repositories is ignored, and an unreadable repository list is red.
+//  5. Fail closed. A non-2xx response, a missing or unauthenticated gh, or
 //     unparseable JSON is a FAIL naming the endpoint and the next step, never
 //     a SKIP and never a PASS.
 //
@@ -432,13 +436,26 @@ function compareApps(c, declared, live, ctx) {
     const list = live?.installations;
     if (!Array.isArray(list)) return [`${c.id}: the live installation list is ${show(live)}, not { installations: [...] }. Next step: check the endpoint in ${SELF_REL}.`];
     const f = [];
-    // Over every installation in the org, declared or not.
-    for (const i of list.filter(x => isObj(x.permissions) && Object.hasOwn(x.permissions, 'workflows'))) {
+    const apps = c.files.map(file => ({ file, ...declared[file] }));
+    // R10: an App the tree does not declare only matters if it can reach a repository a declared App
+    // is installed on. The protected set is derived from those bodies; an unreadable list fails closed.
+    const protectedRepos = new Set(apps.flatMap(a => a.repositories));
+    const inScope = [];
+    for (const i of list) {
+        if (apps.some(a => a.slug === i.app_slug) || i.repository_selection === 'all') { inScope.push(i); continue; }
+        const path = APP_REPOS_PATH.replace('{id}', i.id);
+        const r = ctx.get(path);
+        if (!r.ok || !Array.isArray(r.body?.repositories)) {
+            f.push(`${c.id}: App ${i.app_slug} is undeclared and its repository list (GET ${path}) could not be read, so it cannot be shown to stay off ${[...protectedRepos].join(', ')} (GH-10, R10). Next step: plan 41-04 Task 2 step 9 probes whether the owner token can read installation repository lists.`);
+            continue;
+        }
+        if (r.body.repositories.some(x => protectedRepos.has(x.name))) inScope.push(i);
+    }
+    for (const i of inScope.filter(x => isObj(x.permissions) && Object.hasOwn(x.permissions, 'workflows'))) {
         f.push(`${c.id}: App ${i.app_slug} holds the Workflows permission (${show(i.permissions.workflows)}), so it could rewrite .github/workflows/ (GH-10). Next step: remove the Workflows permission in the App's settings.`);
     }
-    const apps = c.files.map(file => ({ file, ...declared[file] }));
-    for (const s of setDiff(apps.map(a => a.slug), list.map(i => i.app_slug)).extra) {
-        f.push(`${c.id}: App ${s} is installed on the org but undeclared: no ${SETTINGS_REL}/app-*.json declares it (GH-10). Next step: uninstall it in the org settings, or declare it in a reviewed commit.`);
+    for (const s of setDiff(apps.map(a => a.slug), inScope.map(i => i.app_slug)).extra) {
+        f.push(`${c.id}: App ${s} is installed on the org but undeclared: no ${SETTINGS_REL}/app-*.json declares it, and it can reach ${[...protectedRepos].join(', ')} (GH-10). Next step: set it to "Only select repositories" excluding those, uninstall it, or declare it in a reviewed commit.`);
     }
     for (const a of apps) {
         const w = `${c.id} (${SETTINGS_REL}/${a.file})`;
@@ -1128,10 +1145,12 @@ function selfTest() {
     });
     const instMut = (slug, mutate) => mutated((s, p) => mutate(s[p(INSTALLATIONS_PATH)].installations.find(i => i.app_slug === slug)));
     const reposMut = (i, mutate) => mutated((s) => mutate(s[APP_REPOS_PATH.replace('{id}', FAKE_INSTALLATION_ID + i)]));
-    const withInstallation = (extra) => mutated((s, p) => {
+    // repos: the planted installation's repository list; null leaves it unreadable.
+    const withInstallation = (extra, repos = ['powerbrowser']) => mutated((s, p) => {
         const l = s[p(INSTALLATIONS_PATH)];
         l.installations.push({ id: 899999, app_id: 999999, repository_selection: 'selected', ...extra });
         l.total_count = l.installations.length;
+        if (repos !== null) s[APP_REPOS_PATH.replace('{id}', 899999)] = { total_count: repos.length, repository_selection: 'selected', repositories: repos.map((name, j) => ({ id: 6000 + j, name })) };
     });
     const plants = [
         ['bot environment with a null branch policy', envMut('bot', (e) => { e.deployment_branch_policy = null; }), ['environment bot', 'null deployment branch policy']],
@@ -1153,6 +1172,10 @@ function selfTest() {
         ['workflows write on the bot installation', instMut('powerbrowser-bot', (i) => { i.permissions.workflows = 'write'; }), ['powerbrowser-bot', 'Workflows']],
         ['an undeclared installation other-app', withInstallation({ app_slug: 'other-app', permissions: { metadata: 'read' } }), ['other-app', 'undeclared']],
         ['an undeclared other-app holding workflows', withInstallation({ app_slug: 'other-app', permissions: { metadata: 'read', workflows: 'write' } }), ['other-app', 'Workflows']],
+        ['an undeclared App selected on homebrew-tap', withInstallation({ app_slug: 'slack', permissions: { metadata: 'read' } }, ['website', 'homebrew-tap']), ['slack', 'undeclared']],
+        ['an undeclared App with repository_selection all', withInstallation({ app_slug: 'slack', repository_selection: 'all', permissions: { metadata: 'read' } }, []), ['slack', 'undeclared']],
+        ['an undeclared selected App with an unreadable repository list', withInstallation({ app_slug: 'claude', permissions: { metadata: 'read' } }, null), ['claude', 'could not be read']],
+        ['an undeclared App holding workflows selected on powerbrowser-updates', withInstallation({ app_slug: 'claude', permissions: { metadata: 'read', workflows: 'write' } }, ['powerbrowser-updates']), ['claude', 'Workflows']],
         ['a neighbouring slug powerbrowser-bot-dev', withInstallation({ app_slug: 'powerbrowser-bot-dev', permissions: { metadata: 'read' } }), ['powerbrowser-bot-dev', 'undeclared']],
         ['the clock installation removed', mutated((s, p) => {
             const l = s[p(INSTALLATIONS_PATH)];
@@ -1237,6 +1260,8 @@ function selfTest() {
             l.description = 're-described by a planted drift';
         })],
         ['an OrganizationAdmin actor returned with actor_id 1', ruleMut('main-review', (r) => { r.bypass_actors[0].actor_id = 1; })],
+        ['an undeclared App holding workflows selected only on other repositories (R10)', withInstallation({ app_slug: 'claude', permissions: { metadata: 'read', workflows: 'write' } }, ['website', 'other'])],
+        ['an undeclared App selected on no repository', withInstallation({ app_slug: 'slack', permissions: { metadata: 'read' } }, [])],
         ['the bot repository list and permission keys in reversed order', mutated((s, p) => {
             s[APP_REPOS_PATH.replace('{id}', FAKE_INSTALLATION_ID)].repositories.reverse();
             const i = s[p(INSTALLATIONS_PATH)].installations[0];
