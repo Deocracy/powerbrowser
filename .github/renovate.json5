@@ -41,9 +41,9 @@
 //    entry names .github/workflows, so a change there is never committed by this flow.
 //  - No postUpgradeTasks. Renovate runs the hook in its own container clone, which has no applied
 //    upstream/, so the licensing generator cannot run there (phase 51 BLOCKED.md item 18). The
-//    release-train job renovate-licensing regenerates the notices on chore/theia-theia on the
-//    runner after renovate-theia, and publishes the commit with scripts/publish-bump-branch.sh
-//    (owner answer A4, 2026-11-04). The renovate-config row (rule no-post-upgrade) keeps the key out.
+//    release-train job renovate-licensing regenerates the notices for chore/theia-theia on the
+//    runner after renovate-theia, and renovate-licensing-publish commits them with main's
+//    scripts/publish-bump-branch.sh (owner answer A4, 2026-11-04; plan 51-09). The renovate-config row (rule no-post-upgrade) keeps the key out.
 //  - No flake.lock writer is added. The Phase 52 fixer is denied flake.lock (.github/fix-gate-deny.json);
 //    the nixpkgs update path stays with the owner.
 //

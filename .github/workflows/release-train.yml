@@ -756,7 +756,7 @@ jobs:
       # No RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS: the config runs no hook, and the workflows row (rule renovate-job)
       # keeps the allow-list out. renovate-version is the version the config was validated with; onboarding off and
       # a required config keep Renovate from opening an onboarding PR. The git author is the bot address, so
-      # publish-bump-branch.sh in renovate-licensing treats Renovate's commits as bot commits it may extend.
+      # publish-bump-branch.sh in renovate-licensing-publish treats Renovate's commits as bot commits it may extend.
       # Platform commits off: under an App token Renovate's default (auto) commits through the API as the App's own
       # identity and ignores the git author, so publish-bump-branch.sh would refuse every Theia branch.
       - name: Run Renovate for the Theia group
@@ -773,38 +773,31 @@ jobs:
           RENOVATE_GIT_AUTHOR: release-train <${{ env.BOT_EMAIL }}>
           RENOVATE_PLATFORM_COMMIT: disabled
 
-  # The licensing regeneration for the Theia PR (owner answer A4, BLOCKED.md item 18 option a). Renovate's clone has
-  # no applied upstream/, so the notices are regenerated here, on the runner, on the branch Renovate just wrote:
-  # fetch and apply upstream/, install theia/ from the branch's lockfile, run the generator, and publish one bot
-  # commit with publish-bump-branch.sh, which refuses a branch that carries an owner commit. BRANCH is the
-  # branchPrefix plus the theia groupSlug of .github/renovate.json5; the workflows row (renovate-job) derives it.
-  # The monaco branch is not regenerated here. continue-on-error for the same reason as renovate-theia: sweep-clock
-  # reads successful runs only. renovate-theia also continues on error, so this job can start after a Renovate
-  # failure; an absent branch or current notices end it with a NOTE.
+  # The licensing regeneration for the Theia PR (owner answer A4, BLOCKED.md item 18 option a), split in two jobs so no code
+  # from the Renovate branch ever runs where the App token exists (plan 51-09). Renovate's clone has no applied upstream/, so
+  # the notices are regenerated here on the runner. renovate-licensing holds no token and no secret: it checks out the run's
+  # own trusted ref, takes only the data files from the branch head (theia/package.json, theia/yarn.lock, configuration.toml:
+  # the inputs generate-licensing.mjs reads that Renovate writes), runs this checkout's fetch-upstream, apply-patches, yarn
+  # install without lifecycle scripts and generator, and uploads the two notice files with the head SHA it used as an output.
+  # renovate-licensing-publish, below, publishes them. BRANCH is the branchPrefix plus the theia groupSlug of
+  # .github/renovate.json5; the workflows row (renovate-job) derives it. The monaco branch is not regenerated here.
+  # continue-on-error for the same reason as renovate-theia: sweep-clock reads successful runs only. renovate-theia also
+  # continues on error, so this job can start after a Renovate failure; an absent branch or current notices end it with a NOTE.
   renovate-licensing:
     needs: [derive, renovate-theia]
     if: ${{ !inputs.dry-run && needs.renovate-theia.result == 'success' }}
     continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    environment: bot
     permissions: {}
     env:
       BRANCH: chore/theia-theia
+    outputs:
+      head: ${{ steps.regen.outputs.head }}
+      base: ${{ steps.regen.outputs.base }}
     steps:
-      - name: Mint the bot App token
-        id: app
-        if: ${{ !inputs.dry-run }}
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
-        with:
-          app-id: ${{ vars.BOT_APP_ID }}
-          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: powerbrowser
-          permission-contents: write
-
-      # Full history, so the base of Renovate's branch can be found locally.
-      - name: Check out the repo without persisting the token (skipped in dry-run)
+      # The run's own ref (main), full history, so the base of Renovate's branch can be found locally.
+      - name: Check out the trusted ref without persisting a token (skipped in dry-run)
         if: ${{ !inputs.dry-run }}
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -815,7 +808,8 @@ jobs:
         if: ${{ !inputs.dry-run }}
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
 
-      - name: Regenerate the licensing notices on the Theia branch (skipped in dry-run)
+      # Every script here is the trusted checkout's; the branch contributes three data files and nothing it could execute.
+      - name: Regenerate the licensing notices from the Theia branch's dependency files (skipped in dry-run)
         id: regen
         if: ${{ !inputs.dry-run }}
         env:
@@ -827,39 +821,142 @@ jobs:
             exit 0
           fi
           git fetch --no-tags origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" "+refs/heads/main:refs/remotes/origin/main"
-          git switch -C "$BRANCH" "origin/${BRANCH}"
-          git config user.name "release-train"
-          git config user.email "$BOT_EMAIL"
+          HEAD_SHA=$(git rev-parse "refs/remotes/origin/${BRANCH}^{commit}")
+          BASE=$(git merge-base origin/main "$HEAD_SHA")
+          # The branch may change only the data files and the notices; configuration.toml only on its theia_release line.
+          OTHER=$(git diff --name-only "$BASE" "$HEAD_SHA" -- . ':(exclude)theia/package.json' ':(exclude)theia/yarn.lock' ':(exclude)configuration.toml' ':(exclude)THIRD-PARTY-NOTICES.txt' ':(exclude)LICENSING.md')
+          CONF=$(git diff -U0 "$BASE" "$HEAD_SHA" -- configuration.toml | grep -E '^[-+]' | grep -vE '^(\+\+\+|---) ' | grep -vE '^[-+]theia_release = "[^"]*"$' || true)
+          if [ -n "$OTHER$CONF" ]; then
+            echo "release-train: NOTE -- ${BRANCH} at ${HEAD_SHA} changes more than the Theia dependency files, so the notices are not regenerated from it:"
+            printf '%s\n' "$OTHER" "$CONF"
+            echo "Next step: regenerate the notices on ${BRANCH} by hand."
+            exit 0
+          fi
           nix develop .#theia --command bash -c 'bash scripts/fetch-upstream.sh && bash scripts/apply-patches.sh'
+          git checkout "$HEAD_SHA" -- theia/package.json theia/yarn.lock configuration.toml
           nix develop .#theia --command bash -c 'cd theia && yarn install --ignore-scripts --frozen-lockfile'
           nix develop .#theia --command node scripts/generate-licensing.mjs
-          # Only the two generator outputs are committed. Any other change is a defect, not part of the regeneration.
-          git add -- THIRD-PARTY-NOTICES.txt LICENSING.md
-          UNEXPECTED=$(git status --porcelain --untracked-files=all -- . ':(exclude)THIRD-PARTY-NOTICES.txt' ':(exclude)LICENSING.md')
+          # Only the three data files and the two generator outputs may differ. Any other change is a defect.
+          UNEXPECTED=$(git status --porcelain --untracked-files=all -- . ':(exclude)THIRD-PARTY-NOTICES.txt' ':(exclude)LICENSING.md' ':(exclude)theia/package.json' ':(exclude)theia/yarn.lock' ':(exclude)configuration.toml')
           if [ -n "$UNEXPECTED" ]; then
             echo "release-train: FAIL -- the licensing regeneration changed paths outside the notices:" >&2
             printf '%s\n' "$UNEXPECTED" >&2
             echo "Next step: regenerate the notices on ${BRANCH} by hand and find the step that wrote elsewhere." >&2
             exit 1
           fi
-          if git diff --cached --quiet; then echo "release-train: NOTE -- the notices on ${BRANCH} are current; nothing to publish"; exit 0; fi
-          git commit -m "chore(theia): regenerate the licensing notices" -m "node scripts/generate-licensing.mjs on ${BRANCH}, run by the release train's renovate-licensing job."
-          echo "base=$(git merge-base origin/main "origin/${BRANCH}")" >> "$GITHUB_OUTPUT"
+          same() { git show "${HEAD_SHA}:$1" 2> /dev/null | cmp -s - "$1"; }
+          if same THIRD-PARTY-NOTICES.txt && same LICENSING.md; then echo "release-train: NOTE -- the notices on ${BRANCH} are current; nothing to publish"; exit 0; fi
+          mkdir -p "$RUNNER_TEMP/notices"
+          cp THIRD-PARTY-NOTICES.txt LICENSING.md "$RUNNER_TEMP/notices/"
+          { echo "head=${HEAD_SHA}"; echo "base=${BASE}"; } >> "$GITHUB_OUTPUT"
 
+      - name: Upload the regenerated notices (skipped in dry-run)
+        if: ${{ !inputs.dry-run && steps.regen.outputs.head != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: renovate-licensing-notices
+          path: |
+            ${{ runner.temp }}/notices/THIRD-PARTY-NOTICES.txt
+            ${{ runner.temp }}/notices/LICENSING.md
+          retention-days: 1
+          if-no-files-found: error
+          # A re-run attempt of the same run would otherwise answer 409 on the first attempt's artifact.
+          overwrite: true
+
+  # Publishes the notices renovate-licensing generated as one bot commit on the branch head that job used (plan 51-09). A
+  # separate job, so nothing renovate-licensing wrote (workspace, git config, GITHUB_ENV, GITHUB_PATH) reaches this one;
+  # NODE_OPTIONS is unset in every run step all the same. The branch is checked out in target/ at exactly HEAD_SHA, with git's
+  # system and global config, hooks, fsmonitor and attributes file off, and nothing from target/ is executed: the publish
+  # script and its plan run from this job's trusted checkout. A moved branch, an artifact other than the two notice files, or
+  # any other diff ends the job before the token exists. publish-bump-branch.sh refuses a branch that carries a commit the
+  # bot did not author or commit, and a remote tip other than HEAD_SHA.
+  renovate-licensing-publish:
+    needs: [derive, renovate-licensing]
+    if: ${{ !inputs.dry-run && needs.renovate-licensing.outputs.head != '' }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: bot
+    permissions: {}
+    env:
+      BRANCH: chore/theia-theia
+      HEAD_SHA: ${{ needs.renovate-licensing.outputs.head }}
+      BASE: ${{ needs.renovate-licensing.outputs.base }}
+    steps:
+      - name: Check out the trusted ref without persisting a token (skipped in dry-run)
+        if: ${{ !inputs.dry-run }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      # This run's artifact only: no run-id and no token input, so no other run's artifact can be named.
+      - name: Download the regenerated notices (skipped in dry-run)
+        if: ${{ !inputs.dry-run }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: renovate-licensing-notices
+          path: ${{ runner.temp }}/notices
+
+      # No token here. The two files replace the destination rather than write through it, so a symlink the branch planted
+      # at a notice path cannot redirect the copy.
+      - name: Commit the notices on the pinned branch head in target/ (skipped in dry-run)
+        id: commit
+        if: ${{ !inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          unset NODE_OPTIONS
+          T() { GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -c core.attributesFile=/dev/null -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"; }
+          if [ "$(cd "$RUNNER_TEMP/notices" && ls -A | sort | tr '\n' ' ')" != "LICENSING.md THIRD-PARTY-NOTICES.txt " ]; then
+            echo "release-train: FAIL -- the notices artifact holds more or other than LICENSING.md and THIRD-PARTY-NOTICES.txt. Next step: do not publish; re-run the sweep." >&2
+            exit 1
+          fi
+          T fetch --no-tags origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
+          if [ "$(T rev-parse "refs/remotes/origin/${BRANCH}^{commit}")" != "$HEAD_SHA" ]; then
+            echo "release-train: NOTE -- ${BRANCH} moved since the notices were generated from ${HEAD_SHA}; not publishing. The next sweep regenerates them."
+            exit 0
+          fi
+          T worktree add --detach target "$HEAD_SHA"
+          cp --remove-destination "$RUNNER_TEMP/notices/THIRD-PARTY-NOTICES.txt" "$RUNNER_TEMP/notices/LICENSING.md" target/
+          T -C target add -- THIRD-PARTY-NOTICES.txt LICENSING.md
+          UNEXPECTED=$(T -C target status --porcelain --untracked-files=all -- . ':(exclude)THIRD-PARTY-NOTICES.txt' ':(exclude)LICENSING.md')
+          if [ -n "$UNEXPECTED" ]; then
+            echo "release-train: FAIL -- target/ differs from ${HEAD_SHA} outside the notices:" >&2
+            printf '%s\n' "$UNEXPECTED" >&2
+            echo "Next step: do not publish; regenerate the notices on ${BRANCH} by hand." >&2
+            exit 1
+          fi
+          if T -C target diff --cached --quiet; then echo "release-train: NOTE -- the notices on ${BRANCH} are current; nothing to publish"; exit 0; fi
+          T -C target -c user.name=release-train -c user.email="$BOT_EMAIL" commit -m "chore(theia): regenerate the licensing notices" -m "generate-licensing.mjs from main over ${BRANCH} at ${HEAD_SHA}, run by the release train's renovate-licensing job."
+          echo "committed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Mint the bot App token
+        id: app
+        if: ${{ !inputs.dry-run && steps.commit.outputs.committed == 'true' }}
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: powerbrowser
+          permission-contents: write
+
+      # The one step that holds the token. The publish script runs from the trusted root with target/ as its working
+      # directory, so it pushes that tree and finds the publish plan next to itself; HEAD_SHA pins the remote tip it may replace.
       - name: Publish the regenerated notices to the Theia branch (skipped in dry-run)
-        if: ${{ !inputs.dry-run && steps.regen.outputs.base != '' }}
+        if: ${{ !inputs.dry-run && steps.commit.outputs.committed == 'true' }}
         env:
-          BASE: ${{ steps.regen.outputs.base }}
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           set -euo pipefail
-          bash scripts/publish-bump-branch.sh "$BRANCH" "$BASE" > "$RUNNER_TEMP/publish.txt"
+          unset NODE_OPTIONS
+          (cd target && bash "$GITHUB_WORKSPACE/scripts/publish-bump-branch.sh" "$BRANCH" "$BASE" "$HEAD_SHA") > "$RUNNER_TEMP/publish.txt"
           cat "$RUNNER_TEMP/publish.txt"
           if [ "$(sed -n 's/^publish=//p' "$RUNNER_TEMP/publish.txt")" = "refuse" ]; then
-            echo "release-train: NOTE -- ${BRANCH} carries a commit the bot did not author; regenerate the notices on it by hand"
+            echo "release-train: NOTE -- ${BRANCH} moved or carries a commit the bot did not make; regenerate the notices on it by hand"
           fi
 
-  # The only maintenance-sweep job that enters the bot environment (renovate-theia, above, is the Theia inflow). It enters only on a live sweep tick
+  # The only maintenance-sweep job that enters the bot environment (renovate-theia and renovate-licensing-publish, above, are the Theia inflow). It enters only on a live sweep tick
   # (bot-job-gate), so a dry run and a tick that is not the day's sweep never wait on an approval. Its two
   # reads are the start of the last successful scheduled watchdog run in powerbrowser-updates (App token,
   # actions read on that one repository) and one synthetic POST to the events Worker, marked synthetic and

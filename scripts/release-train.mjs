@@ -1200,19 +1200,27 @@ function trackingPlanCli([collectorPath, foundPath, pinTag, tag, openPrNumber, s
  *   skip              the remote already carries this tree: nothing to push (the PR step still runs).
  *   force-with-lease  the remote holds only bot-authored commits and a different tree: replace them,
  *                     pinned to the tip that was read, so a concurrent change makes the push fail.
- *   refuse            the remote holds a commit the bot App did not author, or its history cannot be
- *                     listed in full: never overwrite it; the owner is working on the branch.
- * remote: { tip, tree, compare: { total, emails } } or null when the branch is absent. Pure.
+ *   refuse            the remote holds a commit the bot App did not author or commit, its history cannot be
+ *                     listed in full, or its tip is not the expected one: never overwrite it.
+ * remote: { tip, tree, compare: { total, emails, committers } } or null when the branch is absent.
+ * expectTip: when non-empty, the only remote tip that may be replaced (renovate-licensing-publish pins the
+ * branch head its notices were generated from). Pure.
+ * shortcut: an address is a claim, not a proof; anyone with push access can set both. GitHub's verified flag
+ * cannot be required while the bot and Renovate commit unsigned (BLOCKED.md item 18 residual).
  */
-export function publishPlan({ localTree, remote, botEmail }) {
+export function publishPlan({ localTree, remote, botEmail, expectTip = '' }) {
+    if (expectTip !== '' && remote?.tip !== expectTip) {
+        return { action: 'refuse', expect: null, reason: `the remote branch tip is ${remote?.tip ?? 'absent'}, not the expected ${expectTip}, so it moved since the commit was prepared. Next step: re-run; the next sweep prepares it again.` };
+    }
     if (remote === null) return { action: 'create', expect: null, reason: null };
     if (remote.tree === localTree) return { action: 'skip', expect: null, reason: `the remote branch already carries tree ${localTree}` };
-    if (remote.compare === null || remote.compare.total > remote.compare.emails.length) {
+    const c = remote.compare;
+    if (c === null || !Array.isArray(c.emails) || !Array.isArray(c.committers) || c.total > c.emails.length || c.committers.length !== c.emails.length) {
         return { action: 'refuse', expect: null, reason: 'the remote branch history cannot be listed in full, so no commit can be proven bot-authored. Next step: inspect the branch by hand.' };
     }
-    const foreign = remote.compare.emails.filter(e => e !== botEmail);
+    const foreign = [...c.emails, ...c.committers].filter(e => e !== botEmail);
     if (foreign.length > 0) {
-        return { action: 'refuse', expect: null, reason: `${foreign.length} commit(s) on the remote branch are not authored by the bot App, so someone is working on it; not pushing. Next step: merge or close that work, or delete the branch.` };
+        return { action: 'refuse', expect: null, reason: `${foreign.length} author or committer address(es) on the remote branch are not the bot App's: commits there are not authored by the bot App, so someone is working on it; not pushing. Next step: merge or close that work, or delete the branch.` };
     }
     return { action: 'force-with-lease', expect: remote.tip, reason: null };
 }
@@ -1223,7 +1231,7 @@ function remoteFromArgs(tip, tree, compareJson) {
     return { tip, tree, compare: compareJson === '' ? null : JSON.parse(compareJson) };
 }
 
-function publishPlanCli([localTree, tip, tree, compareJson, botEmail]) {
+function publishPlanCli([localTree, tip, tree, compareJson, botEmail, expectTip = '']) {
     if (localTree === '' || botEmail === '') {
         console.error(`${NAME}: FAIL -- the publish plan needs the local tree and the bot author email. Next step: pass both.`);
         return 2;
@@ -1235,7 +1243,7 @@ function publishPlanCli([localTree, tip, tree, compareJson, botEmail]) {
         console.error(`${NAME}: FAIL -- the remote compare is not JSON (${e.message}). Next step: re-read the branch; the publish script passes the API output.`);
         return 1;
     }
-    const plan = publishPlan({ localTree, remote, botEmail });
+    const plan = publishPlan({ localTree, remote, botEmail, expectTip });
     if (plan.reason !== null) console.error(`${NAME}: NOTE -- ${plan.reason}`);
     console.log(`publish=${plan.action}`);
     console.log(`expect=${plan.expect ?? ''}`);
@@ -2604,7 +2612,7 @@ function selfTest(mode = 'all') {
         {
             name: 'a remote bump branch carrying a commit the bot App did not author',
             run: () => {
-                const plan = publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R-TIP', tree: 'T-REMOTE', compare: { total: 2, emails: [OWNER_EMAIL, BOT_EMAIL_FIXTURE] } }, botEmail: BOT_EMAIL_FIXTURE });
+                const plan = publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R-TIP', tree: 'T-REMOTE', compare: { total: 2, emails: [OWNER_EMAIL, BOT_EMAIL_FIXTURE], committers: [OWNER_EMAIL, BOT_EMAIL_FIXTURE] } }, botEmail: BOT_EMAIL_FIXTURE });
                 return plan.action === 'refuse' ? [plan.reason] : [`owner-authored remote branch planned as ${plan.action}`];
             },
             expect: 'not authored by the bot App',
@@ -2612,10 +2620,34 @@ function selfTest(mode = 'all') {
         {
             name: 'a remote compare too long to list in full',
             run: () => {
-                const plan = publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R-TIP', tree: 'T-REMOTE', compare: { total: 300, emails: Array(250).fill(BOT_EMAIL_FIXTURE) } }, botEmail: BOT_EMAIL_FIXTURE });
+                const plan = publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R-TIP', tree: 'T-REMOTE', compare: { total: 300, emails: Array(250).fill(BOT_EMAIL_FIXTURE), committers: Array(250).fill(BOT_EMAIL_FIXTURE) } }, botEmail: BOT_EMAIL_FIXTURE });
                 return plan.action === 'refuse' ? [plan.reason] : [`an unlisted history planned as ${plan.action}`];
             },
             expect: 'cannot be listed in full',
+        },
+        {
+            name: 'a bot-authored commit on the remote bump branch committed by someone else',
+            run: () => {
+                const plan = publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R-TIP', tree: 'T-REMOTE', compare: { total: 1, emails: [BOT_EMAIL_FIXTURE], committers: [OWNER_EMAIL] } }, botEmail: BOT_EMAIL_FIXTURE });
+                return plan.action === 'refuse' ? [plan.reason] : [`owner-committed remote branch planned as ${plan.action}`];
+            },
+            expect: 'not the bot App',
+        },
+        {
+            name: 'a remote compare with no committer listing',
+            run: () => {
+                const plan = publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R-TIP', tree: 'T-REMOTE', compare: { total: 1, emails: [BOT_EMAIL_FIXTURE] } }, botEmail: BOT_EMAIL_FIXTURE });
+                return plan.action === 'refuse' ? [plan.reason] : [`a compare without committers planned as ${plan.action}`];
+            },
+            expect: 'cannot be listed in full',
+        },
+        {
+            name: 'a remote bump branch that moved past the pinned tip',
+            run: () => {
+                const plan = publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R-NEWER', tree: 'T-REMOTE', compare: { total: 1, emails: [BOT_EMAIL_FIXTURE], committers: [BOT_EMAIL_FIXTURE] } }, botEmail: BOT_EMAIL_FIXTURE, expectTip: 'R-TIP' });
+                return plan.action === 'refuse' ? [plan.reason] : [`a moved branch planned as ${plan.action}`];
+            },
+            expect: 'not the expected R-TIP',
         },
     ];
 
@@ -2638,12 +2670,12 @@ function selfTest(mode = 'all') {
         },
         {
             name: 'control: a remote branch already carrying the tree is skipped, even with owner commits',
-            run: () => (publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R', tree: 'T-LOCAL', compare: { total: 1, emails: [OWNER_EMAIL] } }, botEmail: BOT_EMAIL_FIXTURE }).action === 'skip' ? [] : ['same-tree remote not skipped']),
+            run: () => (publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R', tree: 'T-LOCAL', compare: { total: 1, emails: [OWNER_EMAIL], committers: [OWNER_EMAIL] } }, botEmail: BOT_EMAIL_FIXTURE }).action === 'skip' ? [] : ['same-tree remote not skipped']),
         },
         {
             name: 'control: bot-only divergent history is replaced, pinned to the observed tip',
             run: () => {
-                const plan = publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R-TIP', tree: 'T-REMOTE', compare: { total: 1, emails: [BOT_EMAIL_FIXTURE] } }, botEmail: BOT_EMAIL_FIXTURE });
+                const plan = publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R-TIP', tree: 'T-REMOTE', compare: { total: 1, emails: [BOT_EMAIL_FIXTURE], committers: [BOT_EMAIL_FIXTURE] } }, botEmail: BOT_EMAIL_FIXTURE, expectTip: 'R-TIP' });
                 return plan.action === 'force-with-lease' && plan.expect === 'R-TIP' ? [] : [`bot-only branch planned as ${plan.action} expect ${plan.expect}`];
             },
         },
@@ -3356,13 +3388,13 @@ if (isEntry) {
     if (args[0] === '--fix-guard' && args.length === 2) process.exit(fixerGuardCli(args.slice(1)));
     if (args[0] === '--run-titles' && args.length >= 5) process.exit(runTitlesCli(args.slice(1)));
     if (args[0] === '--uptake-would-write' && args.length === 6) process.exit(uptakeWouldWriteCli(args.slice(1)));
-    if (args[0] === '--publish-plan' && args.length === 6) process.exit(publishPlanCli(args.slice(1)));
+    if (args[0] === '--publish-plan' && (args.length === 6 || args.length === 7)) process.exit(publishPlanCli(args.slice(1)));
     if (args[0] === '--sweep-due' && (args.length === 2 || args.length === 3)) process.exit(sweepDueCli(args.slice(1)));
     if (args[0] === '--theia-due' && (args.length === 2 || args.length === 3)) process.exit(theiaDueCli(args.slice(1)));
     if (args[0] === '--maintenance' && args.length === 3) process.exit(maintenanceCli(args.slice(1)));
     if (args[0] === '--maintenance-plan' && args.length === 6) process.exit(maintenancePlanCli(args.slice(1)));
     if (args[0] === '--state-select' && args.length === 7) process.exit(stateSelectCli(args.slice(1)));
     console.error(`${NAME}: FAIL -- unknown argument list '${args.join(' ')}'`);
-    console.error(`  Next step: run: node ${SELF_REL} [derive|next|render] --self-test, node ${SELF_REL} --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>, node ${SELF_REL} --publish-plan <local-tree> <remote-tip|''> <remote-tree|''> <compare-json|''> <bot-email>, node ${SELF_REL} --sweep-due <epoch-seconds> [<last-sweep-epoch-seconds>], node ${SELF_REL} --maintenance <facts.json> <body-out>, or node ${SELF_REL} --maintenance-plan <found.json> <rendered-body> <comment-out> <stored-state|''> <state-out>, node ${SELF_REL} --state-select <runs.json> <artifacts.json> <repo> <repo-id> <branch> <verified-shas.txt>, or node ${SELF_REL} --fixer-inputs <release-key> <class> <branch> <target-tag> <check@sha> <attempt> <latest-tag|''>.`);
+    console.error(`  Next step: run: node ${SELF_REL} [derive|next|render] --self-test, node ${SELF_REL} --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>, node ${SELF_REL} --publish-plan <local-tree> <remote-tip|''> <remote-tree|''> <compare-json|''> <bot-email> [<expected-tip>], node ${SELF_REL} --sweep-due <epoch-seconds> [<last-sweep-epoch-seconds>], node ${SELF_REL} --maintenance <facts.json> <body-out>, or node ${SELF_REL} --maintenance-plan <found.json> <rendered-body> <comment-out> <stored-state|''> <state-out>, node ${SELF_REL} --state-select <runs.json> <artifacts.json> <repo> <repo-id> <branch> <verified-shas.txt>, or node ${SELF_REL} --fixer-inputs <release-key> <class> <branch> <target-tag> <check@sha> <attempt> <latest-tag|''>.`);
     process.exit(2);
 }

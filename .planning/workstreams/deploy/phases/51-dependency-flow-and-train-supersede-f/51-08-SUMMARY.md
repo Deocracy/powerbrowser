@@ -32,6 +32,10 @@ metrics:
 
 # 51-08 summary: Theia licensing regeneration on the runner
 
+**Superseded in part by 51-09 (2026-11-04):** the single job below ran the branch's own scripts next to the App
+token. 51-09 splits it into a credential-free generate job and a publish job that runs only main's code; see
+51-09-SUMMARY.md and BLOCKED.md item 18.
+
 ## What changed
 
 - `.github/renovate.json5`: `postUpgradeTasks` removed; the header says why and names the replacement job.
