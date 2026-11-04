@@ -2776,8 +2776,8 @@ const FIREFOX_BRANDING_BASE_LINES = Object.freeze([
     '// = False, D-84), but these prefs are set anyway so a reader of this file',
     '// sees the intent stated even if a future rebuild ever restored the flag.',
     '// The two endpoint prefs that follow the anchor below are manifest-driven',
-    '// (TEL-03): toolkit.telemetry.server is blanked when [telemetry] level is',
-    '// off and repointed to the manifest endpoint when a level is set, and',
+    '// (TEL-03): toolkit.telemetry.server is blank at every [telemetry] level',
+    '// (the manifest endpoint accepts product events, never Gecko pings), and',
     '// breakpad.reportURL is blanked without [urls].crash_report and repointed',
     '// to it when stated. The compiled-out flags around them stay exactly as',
     '// defence-in-depth -- code that is not compiled cannot be re-enabled at',
@@ -2941,12 +2941,13 @@ const DYNAMIC_PREF_ANCHOR = 'pref("toolkit.telemetry.unified", false);';
  * The two Mozilla endpoint prefs TEL-03 drives from the manifest (04-04).
  *
  * toolkit.telemetry.server (stock https://incoming.telemetry.mozilla.org,
- * upstream/modules/libpref/init/all.js:534) is blanked when [telemetry]
- * level is off or unset and repointed to the manifest endpoint VERBATIM
- * when a level is set -- no origin-trimming, no path-stripping (CFG-03:
- * rejection only, never mangling). The [telemetry] level selects
- * repoint-vs-blank; the compiled-out flags around it stay as
- * defence-in-depth and are never flipped here.
+ * upstream/modules/libpref/init/all.js:534) is blank at EVERY [telemetry]
+ * level (48-07, IN-04 owner ruling 2026-11-03). The [telemetry] endpoint is
+ * the events Worker, which accepts the sidecar's event batches only; a Gecko
+ * ping sent there would be non-error data at the error endpoint. Blank, not
+ * omitted: this branding file loads last, so only a stated value overrides
+ * the stock Mozilla host. The compiled-out unified-telemetry flags around it
+ * stay as defence-in-depth and are never flipped here.
  *
  * breakpad.reportURL (stock https://crash-stats.mozilla.org/report/index/,
  * upstream/browser/app/profile/firefox.js:1551, read by
@@ -2978,8 +2979,7 @@ export function mozillaEndpointPrefs(config) {
             + `Write it as one of ${TELEMETRY_LEVELS.map(l => JSON.stringify(l)).join(', ')} in ${MANIFEST_NAME}, then run: ${RERUN}`,
         ]);
     }
-    const rawEndpoint = config.telemetry?.endpoint;
-    const server = (level === 'off' || isUnset(rawEndpoint)) ? '' : assertEmittable('telemetry.endpoint', rawEndpoint);
+    const server = '';
     const rawCrash = config.urls?.crash_report;
     const reportURL = isUnset(rawCrash) ? '' : assertEmittable('urls.crash_report', rawCrash);
     return [
@@ -5892,7 +5892,8 @@ function selfTest() {
     // TEL-03's green control, computed once: a fixture with a telemetry
     // endpoint, a crash-report URL and a support URL resolves to exactly
     // those three hosts sorted plus the inherited urls.update host, with
-    // the endpoint prefs repointed to the stated URLs -- and a fixture
+    // breakpad.reportURL repointed to the stated URL and
+    // toolkit.telemetry.server still blank at level all (IN-04) -- and a fixture
     // with none of them resolves to the lone inherited support host plus
     // the inherited urls.update host, with both prefs blanked. The
     // update host is inherited from this project's own manifest (an
@@ -5944,7 +5945,7 @@ function selfTest() {
                 ...checkOne(
                     `${FIXTURE_BASE}\n${FIXTURE_VARIANT}\n[telemetry]\nlevel = "all"\nendpoint = "https://collector.example.org/v1/events"\n[urls]\ncrash_report = "https://crash.example.org/report"\nupdate = "https://updates.example.org/update.xml"\nmar_origin = "https://downloads.example.org"\nrelease_notes = "https://notes.example.org/releases"\nhomepage = "https://example.org"\n[installer]\nsupport_url = "https://example.org/support"\n[[search_engines]]\nname = "Acme Search"\nurl = "https://search.example.org/?q={searchTerms}"\nsuggest_url = "https://suggest.example.org/?q={searchTerms}"\n`,
                     ['collector.example.org', 'crash.example.org', 'downloads.example.org', 'example.org', 'notes.example.org', 'search.example.org', 'suggest.example.org', 'updates.example.org'],
-                    'https://collector.example.org/v1/events',
+                    '',
                     'https://crash.example.org/report',
                 ),
                 // BAR-03: a downstream that states no [[search_engines]] inherits the platform's
@@ -6625,15 +6626,16 @@ function selfTest() {
         {
             // TEL-03's control: the stated endpoint, crash-report and
             // update URLs derive to exactly their hosts plus the support
-            // host, with both endpoint prefs repointed -- and a fixture
+            // host, with breakpad.reportURL repointed and
+            // toolkit.telemetry.server blank at level all (IN-04) -- and a fixture
             // stating only an update URL derives the lone inherited
             // support host plus the stated update host with both prefs
             // blanked. Without this, a red result from the coverage
             // gate could be the derivation broken on a clean manifest
             // rather than on a drift.
-            name: 'manifest endpoint hosts derive the stated hosts and repoint the prefs',
+            name: 'manifest endpoint hosts derive the stated hosts and the endpoint prefs',
             probe: () => endpointHostsControl,
-            holds: 'the stated hosts sorted, the prefs repointed, and blanks when unstated',
+            holds: 'the stated hosts sorted, the crash-report pref repointed, the telemetry server blank, and blanks when unstated',
             resolved: () => endpointHostsControl.length === 0,
         },
         {

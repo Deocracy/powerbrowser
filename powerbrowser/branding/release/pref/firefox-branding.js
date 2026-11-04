@@ -53,8 +53,8 @@ pref("extensions.systemAddon.update.url", "");
 // = False, D-84), but these prefs are set anyway so a reader of this file
 // sees the intent stated even if a future rebuild ever restored the flag.
 // The two endpoint prefs that follow the anchor below are manifest-driven
-// (TEL-03): toolkit.telemetry.server is blanked when [telemetry] level is
-// off and repointed to the manifest endpoint when a level is set, and
+// (TEL-03): toolkit.telemetry.server is blank at every [telemetry] level
+// (the manifest endpoint accepts product events, never Gecko pings), and
 // breakpad.reportURL is blanked without [urls].crash_report and repointed
 // to it when stated. The compiled-out flags around them stay exactly as
 // defence-in-depth -- code that is not compiled cannot be re-enabled at
