@@ -4,16 +4,16 @@ milestone: v1.6
 current_phase_name: Release pipeline and legion runner (E)
 current_plan: 5
 status: executing
-stopped_at: "Stage D Phase 54 gaps: 54-07 (G-54c registry root, new patch 045), 54-08 (survey removed), 54-09 (SFX title from generator), 54-10 (G-54d libvirt block in BLOCKED.md) executed; residue keys with compiled readers and installer artwork returned to the owner; 54-04 owner checkpoint untouched"
-last_updated: "2026-11-04T07:17:33.422Z"
+stopped_at: "Stage D Phase 57 gaps: 57-05 (autoSubmit2 locked in policies.json, gate crash-autosubmit-lock), 57-06 (layer-3 --crash-ping assertion and control, owner run pending), 57-07 (routes crash.powerbrowser.org) executed; 57-08 (AUTO_SUBMIT env clear) planned, blocked on PowerBrowserAPI.sys.mjs held by another session; 57-04 owner checkpoint untouched"
+last_updated: "2026-11-04T07:48:09.462Z"
 last_activity: 2026-10-31
 last_activity_desc: 49-04 built, reviewed and fixed; six open items settled by the autonomous run
-state_head: 4c2aa1ca621fd75c136667847460bb385950ad39
+state_head: b502675b03ed256708c9adefc0a566aa667587c1
 progress:
   total_phases: 19
   completed_phases: 4
-  total_plans: 113
-  completed_plans: 107
+  total_plans: 117
+  completed_plans: 110
 milestone_name: Deployment setup
 current_phase: 49
 ---
@@ -136,10 +136,10 @@ Owner decisions 1–22 of 2026-10-20 are recorded in `.planning/workstreams/depl
 
 ## Session Continuity
 
-**Last session:** 2026-11-04T07:17:33.258Z
+**Last session:** 2026-11-04T07:48:09.294Z
 
-**Stopped At:** Stage D Phase 54 gaps: 54-07 (G-54c registry root, new patch 045), 54-08 (survey removed), 54-09 (SFX title from generator), 54-10 (G-54d libvirt block in BLOCKED.md) executed; residue keys with compiled readers and installer artwork returned to the owner; 54-04 owner checkpoint untouched
-**Resume File:** .planning/workstreams/deploy/phases/54-windows-h/BLOCKED.md
+**Stopped At:** Stage D Phase 57 gaps: 57-05 (autoSubmit2 locked in policies.json, gate crash-autosubmit-lock), 57-06 (layer-3 --crash-ping assertion and control, owner run pending), 57-07 (routes crash.powerbrowser.org) executed; 57-08 (AUTO_SUBMIT env clear) planned, blocked on PowerBrowserAPI.sys.mjs held by another session; 57-04 owner checkpoint untouched
+**Resume File:** .planning/workstreams/deploy/phases/57-native-crash-reporting-k/BLOCKED.md
 
 ## Milestone Context
 
