@@ -21,6 +21,9 @@
 //     labels: [ ... ] array of quoted names. runs-on is never read, so a runner
 //     name can never satisfy the agreement. A label held in a variable is not
 //     read here and is not checked.
+//     The release train's labels (scripts/release-train.mjs LABELS over
+//     ALL_STATES: release-train, train:blocked, state/<STATE>) are imported
+//     from the module, because its tracking-issue writer computes them.
 //  4. Agreement. Every referenced label equals a declared name exactly, case
 //     sensitive. A declared label that no form or workflow names is a triage
 //     label applied by hand and is not a fault.
@@ -41,6 +44,7 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { ALL_STATES, LABELS as TRAIN_LABELS } from './release-train.mjs';
 import { repoSlug } from './verify-repo-controls.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -49,6 +53,7 @@ const SELF_REL = 'scripts/verify-labels.mjs';
 const LABELS_REL = '.github/settings/labels.json';
 const FORMS_DIR = '.github/ISSUE_TEMPLATE';
 const WORKFLOWS_DIR = '.github/workflows';
+const TRAIN_REL = 'scripts/release-train.mjs';
 // Frozen by the GH-01 contract in the Phase 42 CONTEXT (.planning/workstreams/deploy/phases/42-community-surface-and-release-documentation-a/42-CONTEXT.md),
 // so the form files, the required labels and the BUG_IDS are not derived from the tree: TEL-05 (Phase 53) prefills those ids by name.
 const FORM_FILES = Object.freeze(['bug.yml', 'feature.yml', 'config.yml']);
@@ -313,6 +318,8 @@ export function runChecks(root, overrides = {}) {
         const doc = parseFile(t, rel, fail);
         if (doc !== undefined) workflowWriters(rel, doc, addRef);
     }
+    // The release train computes its labels, so they are read from its own constants, not from workflow text.
+    for (const label of [TRAIN_LABELS.track, TRAIN_LABELS.blocked, ...Object.keys(ALL_STATES).map(TRAIN_LABELS.state)]) addRef(TRAIN_REL, label);
 
     if (declared !== null) {
         for (const r of refs) {
@@ -386,6 +393,7 @@ function selfTest() {
         ['a github-script labels array', stepPlant('planted-array.yml', { uses: SCRIPT, with: { script: 'await github.rest.issues.create({ owner, repo, title: "x", labels: ["planted-undeclared"] });' } }), ['planted-array.yml', 'planted-undeclared']],
         ['an expression as a workflow label', workflowPlant('planted-labels.yml', 'ubuntu-latest', 'gh issue edit 1 --add-label "${{ inputs.label }}"'), ['planted-labels.yml', 'expression']],
         ['a malformed labels.json', { extra: { [LABELS_REL]: '{ "labels": [ ' } }, [LABELS_REL, 'JSON']],
+        ['a train state label removed from labels.json', labelsPlant(b => { b.labels = b.labels.filter(l => l.name !== 'state/SUPERSEDED'); }), [TRAIN_REL, 'state/SUPERSEDED']],
         ['a case-variant duplicate in labels.json', labelsPlant(b => { b.labels.push({ name: 'TYPE/BUG', color: 'd73a4a', description: 'planted' }); }), ['"TYPE/BUG"', 'one label']],
         ['zero issue forms', { hidden: [FORMS_DIR] }, [FORMS_DIR, 'no form']],
         ['an extra issue form', { extra: { [`${FORMS_DIR}/extra.yml`]: 'name: Extra\ndescription: planted\nbody: []\n' } }, ['extra.yml', 'not one of the forms']],

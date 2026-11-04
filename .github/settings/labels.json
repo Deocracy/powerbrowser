@@ -28,6 +28,25 @@
     { "name": "gsd:approved", "color": "ededed", "description": "Pull request passed automated review. A maintainer still merges it" },
     { "name": "gsd:rework", "color": "ededed", "description": "Pull request needs changes. The automated build workflow revises it" },
     { "name": "gsd:blocked", "color": "ededed", "description": "Automated work is paused. The linked issue or pull request says why" },
-    { "name": "gsd:escalated", "color": "ededed", "description": "Automated work stopped and needs a maintainer decision" }
+    { "name": "gsd:escalated", "color": "ededed", "description": "Automated work stopped and needs a maintainer decision" },
+    { "name": "state/DETECTED", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" },
+    { "name": "state/BUMPING", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" },
+    { "name": "state/CONFLICT", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" },
+    { "name": "state/BUMP_RED", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" },
+    { "name": "state/BUMP_PR_GREEN", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" },
+    { "name": "state/NEEDS_OWNER", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" },
+    { "name": "state/BUILDING", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" },
+    { "name": "state/AWAITING_APPROVAL", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" },
+    { "name": "state/PUBLISHED", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" },
+    { "name": "state/DESCRIPTOR_WAIT", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" },
+    { "name": "state/DESCRIPTOR_LIVE", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" },
+    { "name": "state/LIVE_RED", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" },
+    { "name": "state/WITHDRAWN", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" },
+    { "name": "state/DONE", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" },
+    { "name": "state/SUPERSEDED", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" },
+    { "name": "state/UPTAKE_DETECTED", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" },
+    { "name": "state/UPTAKE_CONFLICT", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" },
+    { "name": "state/UPTAKE_RED", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" },
+    { "name": "state/UPTAKE_REPLAYED", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" }
   ]
 }

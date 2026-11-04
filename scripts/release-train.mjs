@@ -76,10 +76,11 @@
 // verified supersede mark above. The snapshot comment in the body is debugging output only; no run
 // reads it back.
 //
-// Labels. release-train is declared in .github/settings/labels.json (Phase 42).
-// state/<STATE> is not declared there yet, so the workflow applies only the
-// declared label until Phase 42 declares the state labels. The constants below
-// move with any rename.
+// Labels. Every label render() writes (release-train, train:blocked and
+// state/<STATE> for each ALL_STATES key) is declared in
+// .github/settings/labels.json; the labels row imports LABELS and ALL_STATES
+// from here and goes red on any one that is not. The constants below move with
+// any rename.
 //
 // This module never writes under the patch directory: the conflict path opens an
 // issue, and regenerate-patches.sh is the only patch writer. The self-test asserts
@@ -119,7 +120,7 @@ import { expiryStartMs, runChecks as renewalsStructureChecks } from './verify-re
 const NAME = 'release-train-logic';
 const SELF_REL = 'scripts/release-train.mjs';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const LABELS = Object.freeze({ track: 'release-train', blocked: 'train:blocked', state: (s) => `state/${s}` });
+export const LABELS = Object.freeze({ track: 'release-train', blocked: 'train:blocked', state: (s) => `state/${s}` });
 const PATCH_DIR = 'patches';
 const APPLY_FAIL = /FAIL -- (apply-patches\.sh|\S+\.patch did not apply)/;
 const ANY_FAIL = /FAIL --/;
