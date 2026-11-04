@@ -724,6 +724,9 @@ jobs:
   renovate-theia:
     needs: [derive, sweep-clock]
     if: ${{ !inputs.dry-run && inputs.reason != 'fix' && (inputs.renovate-theia || needs.sweep-clock.outputs.theia-due == 'true') }}
+    # sweep-clock finds the previous sweep among successful runs only, so a failed Renovate run (no bot App yet,
+    # Renovate exiting non-zero) must not fail the sweep run: the job still shows red, the run concludes success.
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: bot
