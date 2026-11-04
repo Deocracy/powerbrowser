@@ -1818,6 +1818,55 @@ export default {
 The mail carries the failing step and status only. It never carries a token, the JWT or
 the key, and it fires only on a failed dispatch.
 
+**Scheduler `wrangler.toml` reference.** The deploy descriptor for the same repository, at
+its root beside `src/index.ts`. Like the scaffold it is copied out of this tree and has not
+been deployed. It states no secret: the App key is the Worker secret `CLOCK_PRIVATE_KEY`.
+Replace each `REPLACE-WITH-…` value before the first deploy. The mail leg is wired here and
+proven at the 47-04 checkpoint, after Email Routing exists on `powerbrowser.org`: a
+`send_email` binding can only send to a verified Email Routing destination address, and
+`ALERT_FROM` must be an address on that zone.
+
+```toml
+# powerbrowser-scheduler, wrangler.toml (own repository). Clock only: one cron, one mail binding.
+name = "powerbrowser-scheduler"
+main = "src/index.ts"
+# Fixed past date, the same floor as worker/wrangler.toml: the Worker uses fetch, crypto.subtle
+# and the send_email binding only, none of which changes with the compatibility date.
+compatibility_date = "2025-01-01"
+
+# The Phase 43 clock runs on workers.dev, before the DNS move. It has no fetch handler, so the
+# workers.dev URL answers nothing useful; the cron below is its only entry point.
+workers_dev = true
+preview_urls = false
+
+# Hourly, UTC, at minute 17 (off the top of the hour). D-77: this is the train's only schedule.
+[triggers]
+crons = ["17 * * * *"]
+
+# env.MAIL in src/index.ts. destination_address limits the binding to the owner mailbox.
+[[send_email]]
+name = "MAIL"
+destination_address = "REPLACE-WITH-OWNER-MAILBOX"
+
+[vars]
+CLOCK_APP_ID = "REPLACE-WITH-CLOCK-APP-ID"   # the numeric App ID of powerbrowser-clock; not a secret
+REPO_OWNER = "REPLACE-WITH-ORG"           # the owner in configuration.toml [urls] release_notes
+REPO_NAME = "powerbrowser"
+ALERT_FROM = "REPLACE-WITH-SENDER-ON-POWERBROWSER-ORG"
+ALERT_TO = "REPLACE-WITH-OWNER-MAILBOX"       # the same address as destination_address
+```
+
+Owner commands, from the scheduler repository root (43-05 Task 2 steps 4 and 5; Claude runs
+none of them):
+
+```sh
+npm install universal-github-app-jwt@2.2.2
+nix run nixpkgs#wrangler -- --version
+nix run nixpkgs#wrangler -- secret put CLOCK_PRIVATE_KEY < clock-pkcs8.pem
+shred -u clock-pkcs8.pem REPLACE-WITH-DOWNLOADED-KEY.pem
+nix run nixpkgs#wrangler -- deploy
+```
+
 #### JWT-mint CPU measurement (INF-03)
 
 The Workers Free plan limits CPU time to **10 ms** per invocation, and the one
