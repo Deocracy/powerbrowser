@@ -2076,8 +2076,9 @@ red.
    replay FAIL is `UPTAKE_RED`, with the action wait-owner. A replay job that ends with any
    result other than success is red in the report, whatever stage line it printed.
 5. Patches are changed only by `regenerate-patches.sh`, never by hand. Routing a fixable
-   conflict to fixer F1 or F2 on a `chore/esr-175*` branch is a ship step (plan 58-03), and
-   no such branch exists until the owner approves the 175 conflict writer.
+   red bump PR to fixer F2 on a `chore/esr-175*` branch is a ship step (plan 58-03), and
+   no such branch exists until the owner approves the 175 conflict writer. A patch conflict
+   (F1) is owner-resolved and never routed to the fixer (owner ruling 2026-11-03).
 
 The uptake lane has no commit, push, PR, dispatch, environment or App token. The
 `uptake-lane` rule in `scripts/verify-workflows.mjs` holds the job to read-only scope and
@@ -2158,7 +2159,8 @@ the patch's `+` lines.
   regeneration. Stop. Do not edit the patch. Record one conflict issue (until the writer is approved, only the would-write view prints it and nothing is written),
   `ESR <tag>: patch <NNN> did not apply`, with the patch name, the tags, the files, the
   verbatim apply log, the pre-image and replayed blob hashes, the moved-file list and the
-  surface result. Route fixable classes (F1 patch-replay conflict, F2 red bump PR) to the
+  surface result. The patch-replay conflict (F1) itself is owner-resolved (owner ruling
+  2026-11-03). Route a red bump PR (F2) to the
   fixer on a `chore/esr-175*` branch (A-58-3, Phase 52). A branch like that does not exist
   until the owner approves the 175 conflict writer (`BLOCKED.md` item 1).
 

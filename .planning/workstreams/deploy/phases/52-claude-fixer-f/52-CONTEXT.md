@@ -60,3 +60,20 @@ Start from `.planning/research/v1.6-deploy/ARCHITECTURE.md` §5 (fixer three-job
 
 None — discuss skipped.
 </deferred>
+
+<amendments>
+## Owner ruling 2026-11-03: F1 scope reduction (gap G-52, plan 52-07)
+
+- F1, a patch-replay conflict on `chore/esr-*`, is owner-resolved. The train labels the tracking
+  issue `train:blocked` and assigns the owner; it does not start the fixer.
+- F2 (a red bump PR on `chore/esr-*`, `chore/node-*` or the Renovate Theia branch) and F3 (red
+  `main`) are the two automated classes.
+- Reason: the model's only patch tool is `scripts/regenerate-patches.sh`, which needs an applied
+  `upstream/`; a patch stack in conflict does not apply, so an F1 run would spend budget and end
+  with no diff (review finding WR-08).
+- Enforced in code: `fixerInputsCheck` in `scripts/release-train.mjs` refuses class F1 with guard
+  `class-f1` before the fix job runs.
+- Amended text: FIX-01, TRAIN-06 (REQUIREMENTS.md) and ROADMAP.md Phase 52 success criterion 1
+  (commit aef3a1b5); the 52-05 reply field 5 and the Phase 58 uptake text in docs/RELEASING.md
+  (plan 52-07).
+</amendments>
