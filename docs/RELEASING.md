@@ -638,8 +638,7 @@ others are in-tree and asserted by the `workflows` row (`fixer-spend`, `fixer-to
   (`release-train.mjs --run-titles`). The release key must be the current key of the target tag (its ESR
   groups are the tag's), so a dispatcher cannot reset the budget by inventing a greater key. The
   `NEEDS_OWNER` train state that a spent budget implies is part of the train's pure state
-  table only: no job writes the tracking issue yet (see Fixer routing), so the refusal is
-  the red derive job and its log, and the owner decides.
+  table; the refusal is the red derive job and its log, and the owner decides.
 - The `claude-fixer` concurrency group serializes every fix run, so two attempts
   never spend the budget at once.
 
@@ -692,12 +691,11 @@ What is live and what is a contract that nothing runs yet:
   publish plan refuses (a commit the bot did not author is on the `claude-fix/` branch)
   `fix-pr` ends red; if the gated diff changes nothing, it ends with a warning and a job
   summary and opens nothing.
-- Not wired. A red stage labelling its tracking issue `train:blocked`, assigning the owner
-  and linking the failing log is the pure `render` contract in `scripts/release-train.mjs`.
-  The `report` job prints the would-write view only, because the tracking-issue writer and
-  the live facts source wait for approval (BLOCKED.md item 3 of Phase 43). No issue is
-  opened or labelled by the train today, and nothing watches `release.yml`: after a red
-  run, the owner reads the run itself.
+- Live (plan 43-06). A red stage labels its tracking issue `train:blocked`, assigns the owner
+  and links the failing log (the failing `verify` check, or the train run for a replay
+  failure), as `render` in `scripts/release-train.mjs` says; the `report` job writes it. A
+  `release.yml` run is read through its jobs: a failed `channel-live` job renders `LIVE_RED`.
+  The fixer still starts only by the owner's dispatch.
 
 ### The MAR key ceremony and custody
 
@@ -1297,8 +1295,24 @@ owner action; see the exit-test section for why that run is recorded.
 **Tracking issue.** One issue per release key, titled `release-train: v<ESR>-<revision>`,
 a view re-rendered from facts each run and never an input. Its pure protocol
 (`findExactlyOne`, `render`, `renderConflict`) is in `scripts/release-train.mjs`. The live
-writer is not wired (phase BLOCKED.md item 3): `report` prints the would-write view and
-does not create or edit the issue until the owner approves the live facts source.
+writer is wired (plan 43-06, owner approval 2026-11-03): `derive` collects the facts with
+read-only GETs, `release-train.mjs --tracking-plan` decides the writes, and one `report` step
+behind `!inputs.dry-run` creates, labels, assigns and locks the issue, PATCHes its body only
+when the bytes differ, mentions the owner once on entering an owner state, and closes or
+reopens it. Two issues by the owner or the bot for one key make `report` red naming both, and
+nothing is written in that run. The conflict issue and the uptake-lane issue are still printed,
+not written.
+
+**The pinned known-issues issue (GH-15).** Once the pin's train has a published Release that is
+not withdrawn, `report` copies `docs/KNOWN-ISSUES.md`, read at the merge SHA, into one issue
+titled `PowerBrowser known issues`: a two-line header (release key, the Release's publish day,
+the source path, where to report) and the file bytes verbatim. It is created once, PATCHed only
+when the bytes differ, and two issues with that title are red. The header carries no SHA and no
+run link. Pinning has no REST endpoint, so `report` calls the GraphQL `pinIssue` mutation with the
+job token; it uses 1 of the 3 pins a repository allows. If the token is refused, the job prints a
+NOTE and the owner pins the issue once by hand (the issue page, Pin issue). Owner-click record:
+not pinned yet (no Release exists, 2026-11-03); replace this line with the date and who when it
+happens.
 
 ### Node provenance (AUTO-04)
 
@@ -1917,8 +1931,8 @@ add a second table for either.
 ### ESR 175 uptake (UPS-01, TRAIN-05)
 
 The train tracks two ESR majors at the same time. The pinned major (153) keeps the bump
-path: a newer 153.x tag opens `chore/esr-<tag>`. Its tracking issue is not written yet: the report
-job prints the would-write view until the writer is approved (`BLOCKED.md` item 1). The
+path: a newer 153.x tag opens `chore/esr-<tag>`, and the report job writes its tracking issue
+(plan 43-06). The
 uptake major (175, `UPTAKE_MAJOR` in `scripts/detect-upstreams.mjs`) is replay-only: the
 newest 175 `*esr_RELEASE` tag is replayed and nothing is published from it. The lane keys on
 those release tags, which are cut on the ESR release day (2027-06-29), so as built the lane

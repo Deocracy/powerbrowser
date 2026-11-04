@@ -101,6 +101,7 @@
 //   node scripts/release-train.mjs --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>
 //   node scripts/release-train.mjs --tracking-plan <collector.json> <found.json> <pin> <tag|''> <open-pr-number|''> <stage|''> <run-url|''> <out-dir>
 //                                       (the report job's tracking-issue plan; writes out-dir/ops.json and the bodies; OWNER_LOGIN from env)
+//   node scripts/release-train.mjs --known-issues-plan <collector.json> <known-issues-at-merge-sha.md> <found.json> <out-dir>   (GH-15)
 //   node scripts/release-train.mjs --uptake-would-write <tag|''> <stage|''> <replayed true|false> <replay-result> <detect-result>
 //                                       (replay-result: the uptake-replay job result; detect-result: the detect job result;
 //                                        each is success|failure|cancelled|skipped)
@@ -1066,6 +1067,81 @@ export function trackingPlan({ collector, found, pinTag, tag, openPrNumber, stag
 export function trackingMention(op) {
     if (op.mention === null) return null;
     return `@${op.mention} ${op.title} is now ${op.state}: ${ALL_STATES[op.state].desc}. Next step: act on the step this issue names.\n`;
+}
+
+// ---- GH-15: the pinned known-issues issue (plan 43-07; the agent half of 50-04 Task 1) ----------------
+export const KNOWN_ISSUES_TITLE = 'PowerBrowser known issues';
+export const KNOWN_ISSUES_SOURCE = 'docs/KNOWN-ISSUES.md';
+// A 7-or-more hex run or a run URL in the header is an internal identifier (a SHA or a run link); the body is user-facing.
+const INTERNAL_ID = /\b[0-9a-f]{7,}\b|\/actions\/runs\//;
+
+/**
+ * The known-issues write for one run (GH-15). Once the pin's train has a published Release (classifyRelease: not
+ * draft, not prerelease) that is not withdrawn, the issue carries a header (release key, the Release's publish day,
+ * the source path, where to report) plus two newlines plus the file bytes read at the merge SHA, verbatim. One title,
+ * one issue: zero creates and pins, one is PATCHed only on a byte diff (and pinned if it is not), two or more fail
+ * naming the numbers. The publish day comes from the Release, never from the clock, so a later tick renders the
+ * same bytes and writes nothing. Pure.
+ */
+export function knownIssuesPlan({ collector, fileBytes, found, ownerLogin = null }) {
+    const c = collector ?? {};
+    const key = c.releaseKey;
+    if (typeof c.mergeSHA !== 'string' || c.mergeSHA === '' || !c.release) return { action: 'skip', reason: 'no Release exists for the pin\'s train yet, so the known issues are not copied' };
+    const cls = classifyRelease({ ...c.release, tag: key });
+    if (!cls.published) return { action: 'skip', reason: cls.reason };
+    if (String(c.release.body ?? '').includes(WITHDRAWAL_MARK)) return { action: 'skip', reason: `Release ${key} is withdrawn, so its known issues are not copied` };
+    const day = String(c.release.published_at ?? '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return { action: 'fail', reason: `Release ${key} carries no publish date (${JSON.stringify(c.release.published_at ?? null)}), so the header cannot be dated. Next step: re-run once the Release reads as published.` };
+    const header = [
+        `These are the known problems in PowerBrowser ${key}, published ${day}. This issue is updated by the release train from ${KNOWN_ISSUES_SOURCE}.`,
+        'To report a problem that is not listed here, open a new issue from the Issues tab.',
+    ].join('\n');
+    if (INTERNAL_ID.test(header)) return { action: 'fail', reason: `the known-issues header carries an internal identifier (${header.match(INTERNAL_ID)[0]}). Next step: keep SHAs and run links in the tracking issue.` };
+    if (typeof fileBytes !== 'string') return { action: 'fail', reason: `${KNOWN_ISSUES_SOURCE} was not read at the merge SHA. Next step: re-run the report job.` };
+    const body = `${header}\n\n${fileBytes}`;
+    const mine = selectTracked(found, KNOWN_ISSUES_TITLE, [ownerLogin, ...TRACKING_BOTS]);
+    const decision = findExactlyOne(mine.map(i => ({ ...i, body: normBody(i.body) })), { title: KNOWN_ISSUES_TITLE, body: normBody(body) });
+    if (decision.action === 'fail') return { action: 'fail', reason: decision.reason.replace('tracking issues', `"${KNOWN_ISSUES_TITLE}" issues`) };
+    const issue = mine[0] ?? null;
+    return {
+        action: decision.action,
+        number: issue === null ? null : issue.number,
+        body,
+        patch: decision.patch,
+        pin: issue === null || issue.isPinned !== true,
+        reopen: issue !== null && String(issue.state).toLowerCase() === 'closed',
+    };
+}
+
+function knownIssuesPlanCli([collectorPath, filePath, foundPath, outDir]) {
+    let collector;
+    let found;
+    try {
+        collector = readFacts(collectorPath);
+        found = readFacts(foundPath);
+    } catch (e) {
+        console.error(`${NAME}: FAIL -- the collected facts or the found issues did not load (${e.message}). Next step: re-run the derive and report jobs.`);
+        return 1;
+    }
+    let fileBytes = null;
+    try { fileBytes = readFileSync(filePath, 'utf8'); } catch { /* absent before a release: the plan skips or names it */ }
+    const raw = process.env.OWNER_LOGIN ?? '';
+    const plan = knownIssuesPlan({ collector, fileBytes, found, ownerLogin: OWNER_RE.test(raw) ? raw : null });
+    if (plan.action === 'fail') {
+        console.error(`${NAME}: FAIL -- known issues: ${plan.reason}`);
+        return 1;
+    }
+    if (plan.action === 'skip') {
+        console.log(`release-train: known issues: skip -- ${plan.reason}`);
+        writeFileSync(join(outDir, 'ops.json'), JSON.stringify({ action: 'skip' }));
+        return 0;
+    }
+    writeFileSync(join(outDir, 'body.md'), plan.body);
+    const { body: _b, ...rest } = plan;
+    const writes = plan.action === 'create' ? 'create,pin' : [plan.patch && 'patch', plan.pin && 'pin', plan.reopen && 'reopen'].filter(Boolean).join(',') || 'none';
+    console.log(`release-train: known issues: action=${plan.action} issue=${plan.number === null ? 'new' : `#${plan.number}`} writes=${writes}`);
+    writeFileSync(join(outDir, 'ops.json'), JSON.stringify({ ...rest, title: KNOWN_ISSUES_TITLE, bodyFile: join(outDir, 'body.md') }));
+    return 0;
 }
 
 function trackingPlanCli([collectorPath, foundPath, pinTag, tag, openPrNumber, stage, runUrl, outDir]) {
@@ -3112,14 +3188,41 @@ function selfTest(mode = 'all') {
             },
         },
     ];
+    // Plan 43-07 (GH-15): the known-issues issue over the same collector file.
+    const KI_FILE = '# Known issues\n\nOne problem.\n';
+    const kiCollector = (over = {}) => tCollector({ mergeSHA: MERGE_SHA, release: { ...liveRelease(), published_at: '2026-11-10T12:00:00Z' }, ...over });
+    const kiIssue = (number, over = {}) => tIssue(number, KNOWN_ISSUES_TITLE, { isPinned: true, ...over });
+    const ki = (over = {}) => knownIssuesPlan({ collector: kiCollector(over.collector), fileBytes: over.file ?? KI_FILE, found: over.found ?? [], ownerLogin: OWNER });
+    const kiOut = p => [`action=${p.action}`, p.reason ?? ''];
+    const knownPlants = [
+        { name: 'two known-issues issues', run: () => kiOut(ki({ found: [kiIssue(9), kiIssue(5)] })), expect: '(#5, #9)' },
+        { name: 'a draft Release for the known-issues copy', run: () => kiOut(ki({ collector: { release: { ...liveRelease({ draft: true }), published_at: '2026-11-10T12:00:00Z' } } })), expect: `draft Release ${RELEASE_KEY} is not published` },
+        { name: 'a withdrawn Release for the known-issues copy', run: () => kiOut(ki({ collector: { release: { ...liveRelease({ body: `notes ${WITHDRAWAL_MARK}` }), published_at: '2026-11-10T12:00:00Z' } } })), expect: 'is withdrawn' },
+        { name: 'a SHA reaching the known-issues header', run: () => kiOut(ki({ collector: { releaseKey: `v153.${MERGE_SHA.slice(0, 8)}.0-1` } })), expect: 'internal identifier' },
+    ];
+    const knownGreens = [
+        {
+            name: 'control: GH-15 creates and pins once, then identical bytes write nothing and differing bytes PATCH',
+            run: () => {
+                const first = ki();
+                const same = ki({ found: [kiIssue(5, { body: first.body })] });
+                const diff = ki({ found: [kiIssue(5, { body: 'old copy', isPinned: false })] });
+                const ok = first.action === 'create' && first.pin === true && first.body.endsWith(`\n\n${KI_FILE}`) && first.body.includes('2026-11-10') && !first.body.includes(MERGE_SHA)
+                    && same.action === 'update' && same.patch === false && same.pin === false
+                    && diff.patch === true && diff.pin === true && diff.number === 5;
+                return ok ? [] : [`first=${first.action}/${first.pin} same=${same.patch}/${same.pin} diff=${diff.patch}/${diff.pin}`];
+            },
+        },
+        { name: 'control: GH-15 skips before any Release exists', run: () => (ki({ collector: { mergeSHA: '', release: null } }).action === 'skip' ? [] : ['did not skip']) },
+    ];
     const want = (section) => mode === 'all' || mode === section;
     const plants = [
-        ...(want('derive') ? [...trainPlants, ...conflictPlants, ...viewPlants, ...publishPlants, ...dispatchPlants, ...uptakePlants, ...trackingPlants] : []),
+        ...(want('derive') ? [...trainPlants, ...conflictPlants, ...viewPlants, ...publishPlants, ...dispatchPlants, ...uptakePlants, ...trackingPlants, ...knownPlants] : []),
         ...(want('next') ? attemptPlants : []),
         ...(want('render') ? renderPlants : []),
     ];
     const allGreens = [
-        ...(want('derive') ? [...greens, ...dispatchGreens, ...uptakeGreens, ...trackingGreens] : []),
+        ...(want('derive') ? [...greens, ...dispatchGreens, ...uptakeGreens, ...trackingGreens, ...knownGreens] : []),
         ...(want('next') ? attemptGreens : []),
         ...(want('render') ? renderGreens : []),
     ];
@@ -3170,6 +3273,7 @@ if (isEntry) {
     if (args.length === 2 && ['derive', 'next', 'render'].includes(args[0]) && args[1] === '--self-test') process.exit(selfTest(args[0]));
     if (args[0] === '--would-write' && args.length === 5) process.exit(wouldWriteCli(args.slice(1)));
     if (args[0] === '--tracking-plan' && args.length === 9) process.exit(trackingPlanCli(args.slice(1)));
+    if (args[0] === '--known-issues-plan' && args.length === 5) process.exit(knownIssuesPlanCli(args.slice(1)));
     if (args[0] === '--fixer-inputs' && args.length === 8) process.exit(fixerInputsCli(args.slice(1)));
     if (args[0] === '--fix-guard' && args.length === 2) process.exit(fixerGuardCli(args.slice(1)));
     if (args[0] === '--run-titles' && args.length >= 5) process.exit(runTitlesCli(args.slice(1)));

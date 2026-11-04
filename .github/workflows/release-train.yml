@@ -1240,6 +1240,63 @@ jobs:
             echo "release-train: wrote tracking issue #$N ($(jq -r '.title + " state=" + .state' <<<"$OP"))"
           done < <(jq -c '.[]' "$RUNNER_TEMP/track/ops.json")
 
+      # GH-15 (plan 43-07): once the pin's train has a published, unwithdrawn Release, docs/KNOWN-ISSUES.md as it was at the
+      # merge SHA becomes the body of one issue. Reads first; the plan prints its decision in a dry run too.
+      - name: Read the known issues at the merge SHA and plan the known-issues issue (read)
+        id: known-plan
+        if: ${{ always() && needs.derive.result == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FACTS_B64: ${{ needs.derive.outputs.facts-b64 }}
+          OWNER_LOGIN: ${{ vars.OWNER_LOGIN }}
+        run: |
+          set -euo pipefail
+          K="$RUNNER_TEMP/known"
+          mkdir -p "$K"
+          printf '%s' "$FACTS_B64" | base64 -d > "$K/collector.json"
+          SHA="$(jq -r '.mergeSHA' "$K/collector.json")"
+          if [ -n "$SHA" ] && [ "$(jq -r '.release != null' "$K/collector.json")" = true ]; then
+            [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "release-train: FAIL -- the merge SHA is not 40 hex. Next step: re-run derive." >&2; exit 1; }
+            gh api -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$GITHUB_REPOSITORY/contents/docs/KNOWN-ISSUES.md?ref=$SHA" --jq '.content' | base64 -d > "$K/KNOWN-ISSUES.md"
+          fi
+          gh issue list --repo "$GITHUB_REPOSITORY" --state all --limit 20 --label release-train --search 'in:title "PowerBrowser known issues"' --json number,title,body,author,labels,state,isPinned > "$K/found.json"
+          node scripts/release-train.mjs --known-issues-plan "$K/collector.json" "$K/KNOWN-ISSUES.md" "$K/found.json" "$K"
+
+      - name: Print the known-issues write this run would make (dry-run)
+        if: ${{ inputs.dry-run && steps.known-plan.outcome == 'success' }}
+        run: |
+          echo "dry-run: known issues $(jq -c '{action, number, patch, pin, reopen}' "$RUNNER_TEMP/known/ops.json"); nothing is written"
+
+      # Live only. Pinning has no REST endpoint: the GraphQL pinIssue mutation runs with the job token, and when it is
+      # refused the owner pins the issue once by hand (docs/RELEASING.md, "The pinned known-issues issue").
+      - name: Write and pin the known-issues issue (live only)
+        if: ${{ !inputs.dry-run && steps.known-plan.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          OPS="$RUNNER_TEMP/known/ops.json"
+          ACTION="$(jq -r '.action' "$OPS")"
+          [ "$ACTION" != skip ] || exit 0
+          N="$(jq -r '.number // empty' "$OPS")"
+          BODY="$(jq -r '.bodyFile' "$OPS")"
+          if [ "$ACTION" = create ]; then
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$(jq -r '.title' "$OPS")" --body-file "$BODY" --label release-train > "$RUNNER_TEMP/known/url.txt"
+            URL="$(cat "$RUNNER_TEMP/known/url.txt")"
+            N="${URL##*/}"
+            [[ "$N" =~ ^[0-9]+$ ]] || { echo "release-train: FAIL -- the created issue URL '$URL' names no number. Next step: read the issue list and re-run." >&2; exit 1; }
+          else
+            [ "$(jq -r '.reopen' "$OPS")" != true ] || gh issue reopen "$N" --repo "$GITHUB_REPOSITORY"
+            [ "$(jq -r '.patch' "$OPS")" != true ] || gh issue edit "$N" --repo "$GITHUB_REPOSITORY" --body-file "$BODY"
+          fi
+          if [ "$(jq -r '.pin' "$OPS")" = true ]; then
+            NODE="$(gh api -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$GITHUB_REPOSITORY/issues/$N" --jq '.node_id')"
+            if ! gh api graphql -f query='mutation($id: ID!) { pinIssue(input: {issueId: $id}) { issue { number } } }' -f id="$NODE" > /dev/null; then
+              echo "release-train: NOTE -- the job token could not pin issue #$N. Next step for the owner: open the issue and choose Pin issue once, then record the date and who in docs/RELEASING.md."
+            fi
+          fi
+          echo "release-train: known issues written to #$N (${ACTION})"
+
       # The uptake lane's view (TRAIN-05). Only a success is a green replay (replayed=true). The job
       # result is passed too: any other result is red, whatever stage line the job printed, and the
       # view names its patch when the stage is a conflict. The detect result is passed so a failed
