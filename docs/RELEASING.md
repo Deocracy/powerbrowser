@@ -1117,6 +1117,101 @@ rule holds for the Gecko toolchain: `scripts/toolchain-baseline.sh` regenerates
 
 ---
 
+### Withdrawing a release (REL-02, `withdraw.yml`)
+
+Withdraw is no-update only. A bad release stops being offered as an update, its Release and
+tag stay published as the record, and the fix is a new revision with a new tag
+(`[product].revision` + 1, regenerate, new bump PR). Nothing is deleted: not the Release,
+not the tag, not a descriptor. Immutable releases burn a deleted tag name for good.
+
+**Placement.** The workflow is `docs/withdraw.yml` in this tree, landed by the owner as
+`.github/workflows/withdraw.yml` in `powerbrowser-updates` (the `docs/watchdog.yml`
+precedent). It never enters the product repository. The descriptor write is a contents write
+on the updates repository, so the job lives there: the product `release.yml` trust map stays
+untouched and the token stays narrow. The file derives the product repository from its own
+name (`<product>-updates`), so it holds no owner or repo literal.
+
+**Trigger and shape.** `workflow_dispatch` only, with two required inputs: `tag` (the release
+key `v<ESR>-<revision>`) and `reason` (one line, at most 200 characters). There is no mode
+input. Hosted `ubuntu-latest`, `timeout-minutes: 15`, `permissions: contents: read` at the
+workflow and the job, 40-hex pinned `uses:`, no cache, no `pull_request` trigger. The inputs
+reach the shell only through `env`, never as `${{ }}` text inside `run:` (the GH-12 event-text
+rule, stated here because the Phase 41 `workflows` row covers the product repository only).
+
+**Token.** The job mints the `powerbrowser-bot` App token with
+`actions/create-github-app-token` immediately before the writes: `client-id` from the
+`BOT_APP_CLIENT_ID` variable and `private-key` from the `BOT_APP_PRIVATE_KEY` secret, both set
+in `powerbrowser-updates` by the owner; `owner` the repository owner; `repositories` the
+updates and the product repositories; `permission-contents: write` and nothing else. One mint
+suffices (the job takes minutes; the token expires after one hour and is revoked at job end).
+The same token PATCHes the product Release, which works because the App is installed on both
+repositories (GH-10).
+
+**Bytes.** The target set is the `build_target` of the withdrawn Release's
+`release-manifest.json` asset, never a hand-kept list. For each target the job writes the
+two-line no-update document to `<channel>/<BUILD_TARGET>/update.xml` on `main` through the
+Contents API with the commit message `Withdraw <tag>: no-update descriptors (<reason>)`. An
+unchanged file is a no-op. It then re-reads every path and compares the set of blob ids
+with the no-update blob, so a missing or different target fails the job.
+
+**Marking.** The job appends one block to the Release notes, once: the line
+`<!-- release-withdrawn -->` (the mark `scripts/release-train.mjs` derives WITHDRAWN from),
+then `Withdrawn: <reason>.` and the new-revision sentence. When the probe verdict below is
+`flag` it also sets `prerelease: true` in the same PATCH; on `notes-only` or `pending` it
+marks by the notes alone, which is always allowed. Assets, tag and `draft` are never
+touched. The verdict is read from `docs/RELEASING.md` at the withdrawn tag; zero verdict
+lines, two, or another value stop the job before any write.
+
+**Liveness.** Last, from the product checkout at the tag, the job runs
+`node scripts/verify-channel-live.mjs --withdrawn "$TAG"` with the same ten attempts 60 s
+apart as `release.yml`, because the updates host deploys from the push. The next section
+gives its expected output.
+
+**Owner steps.** Land the file (once), then for a withdrawal:
+
+```
+U="$(gh repo view --json nameWithOwner --jq .nameWithOwner)-updates"   # run in the product checkout
+gh workflow run withdraw.yml --repo "$U" -f tag=<v<ESR>-<revision>> -f reason="<one line>"
+gh run watch --repo "$U"
+```
+
+### The immutable-release probe (REL-02, `release-probe.yml`)
+
+The probe answers one question before the first public release: does an immutable,
+published Release still accept the pre-release flag from the bot App token? It is
+`docs/release-probe.yml`, landed by the owner as `.github/workflows/release-probe.yml` in
+`powerbrowser-updates` and dispatched once, after immutable releases are enabled on the product
+repository (the repo-controls apply) and before the first release tag.
+
+The probe Release is on the tag `probe-1`. That name is outside the `release-tags` ruleset
+pattern (`v[0-9]*.[0-9]*-[0-9]*`), so the bot App may create it, and no release tool reads it
+as a release (`verify-descriptor-monotonic` ignores tags that are not release keys). The job
+creates it as a draft, publishes it with `make_latest: false` (immutability applies only to a
+published Release), tries `PATCH prerelease=true`, appends the withdrawal block with
+`Withdrawn: probe.`, re-reads both and prints:
+
+```
+release-probe: <date>, tag probe-1, Release id <id>, immutable <true|absent>
+release-probe: pre-release flag stuck: <yes|no>
+release-probe: refusal: <none | the first line of the 422 or 403 answer>
+release-probe: notes append kept: yes
+release-probe: verdict <flag|notes-only>
+```
+
+It fails only when the notes append does not stick, or when the Release reads
+`immutable: false`. The probe Release and its tag are never deleted; a re-run reuses them.
+
+```
+U="$(gh repo view --json nameWithOwner --jq .nameWithOwner)-updates"   # run in the product checkout
+gh workflow run release-probe.yml --repo "$U"
+gh run watch --repo "$U"
+```
+
+Record the result below: replace `pending` with the printed verdict and add the date, the
+tag and the refusal line. `withdraw.yml` reads this one line as its configuration.
+
+Immutable-release probe verdict: `pending` (not yet run; the withdraw marks by the notes alone until it is recorded)
+
 ### The liveness row after a withdrawal (`--withdrawn`)
 
 Withdraw is no-update only: it commits the two-line no-update document for every

@@ -1,0 +1,207 @@
+# docs/withdraw.yml
+#
+# The withdraw workflow (Phase 50, REL-02, plan 50-05). The owner lands this file in powerbrowser-updates as
+# .github/workflows/withdraw.yml. It is NEVER added to the product repository: the descriptor write is a contents
+# write on the updates repository, so the job lives there, the product release.yml trust map stays untouched, and
+# the token stays narrow. docs/RELEASING.md "Withdrawing a release" is the runbook.
+#
+# Withdraw is no-update only. There is no mode input: a withdrawn MAR stops being offered from every origin, and
+# no descriptor is ever repointed at another release or host. Nothing is deleted: not the Release, not its tag,
+# not a descriptor. The fix is always a new revision with a new tag.
+#
+# Order: validate the inputs, read the target set from the withdrawn Release's release-manifest.json asset and the
+# marking branch from the probe verdict in docs/RELEASING.md at the tag, mint the bot App token, commit the
+# no-update document for every target, mark the Release, then rerun the liveness row in withdrawn mode.
+#
+# The inputs reach the shell only through env, never as ${{ }} text inside run:. scripts/verify-withdraw.mjs runs
+# these run: bodies under bash with a stub gh and checks the shape of this file.
+name: Withdraw a release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release key of the Release to withdraw (v<ESR>-<revision>)
+        required: true
+        type: string
+      reason:
+        description: One line, recorded in the commit message and the Release notes
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: withdraw
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  withdraw:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Validate the inputs and derive the product repository from this repository's name
+        id: inputs
+        env:
+          TAG: ${{ inputs.tag }}
+          REASON: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+(\.[0-9]+)*-[0-9]+$ ]] || { echo "::error::the tag '$TAG' is not a release key v<ESR>-<revision>; nothing is changed" >&2; exit 1; }
+          [[ "$REASON" =~ ^[[:print:]]{1,200}$ ]] || { echo "::error::the reason must be one printable line of 1 to 200 characters; nothing is changed" >&2; exit 1; }
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+-updates$ ]] || { echo "::error::this workflow runs only in a <product>-updates repository, not $GITHUB_REPOSITORY; nothing is changed" >&2; exit 1; }
+          PRODUCT="${GITHUB_REPOSITORY%-updates}"
+          { echo "product=$PRODUCT"; echo "product_name=${PRODUCT#*/}"; echo "updates_name=${GITHUB_REPOSITORY#*/}"; } >> "$GITHUB_OUTPUT"
+
+      - name: Check out the product repository at the withdrawn tag (the liveness row, the configuration and the probe verdict)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ steps.inputs.outputs.product }}
+          ref: refs/tags/${{ inputs.tag }}
+          path: product
+          persist-credentials: false
+
+      - name: Read the target set from the Release's manifest asset and the marking branch from the probe verdict
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          PRODUCT: ${{ steps.inputs.outputs.product }}
+        run: |
+          set -euo pipefail
+          API=(-H 'X-GitHub-Api-Version: 2022-11-28')
+          gh api "${API[@]}" "repos/$PRODUCT/releases/tags/$TAG" > "$RUNNER_TEMP/release.json"
+          [ "$(jq -r .draft "$RUNNER_TEMP/release.json")" = false ] || { echo "::error::$TAG is not a published Release of $PRODUCT; nothing is changed" >&2; exit 1; }
+          ASSET="$(jq -r '[.assets[] | select(.name == "release-manifest.json") | .id] | if length == 1 then .[0] else "" end' "$RUNNER_TEMP/release.json")"
+          [[ "$ASSET" =~ ^[0-9]+$ ]] || { echo "::error::the Release $TAG carries no single release-manifest.json asset, so its targets cannot be derived; nothing is changed" >&2; exit 1; }
+          gh api "${API[@]}" -H 'Accept: application/octet-stream' "repos/$PRODUCT/releases/assets/$ASSET" > "$RUNNER_TEMP/release-manifest.json"
+          [ "$(jq -r .release_key "$RUNNER_TEMP/release-manifest.json")" = "$TAG" ] || { echo "::error::the manifest of $TAG names another release key; nothing is changed" >&2; exit 1; }
+          CHANNEL="$(jq -r .update_channel "$RUNNER_TEMP/release-manifest.json")"
+          [[ "$CHANNEL" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "::error::the manifest update_channel '$CHANNEL' is not a path token; nothing is changed" >&2; exit 1; }
+          jq -r '.build_target | tostring | [splits("[\\s,]+")] | map(select(. != "")) | .[]' "$RUNNER_TEMP/release-manifest.json" | sort -u > "$RUNNER_TEMP/targets.txt"
+          [ -s "$RUNNER_TEMP/targets.txt" ] || { echo "::error::the manifest of $TAG names no BUILD_TARGET; nothing is changed" >&2; exit 1; }
+          : > "$RUNNER_TEMP/descriptor-paths.txt"
+          while read -r TARGET; do
+            [[ "$TARGET" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "::error::the BUILD_TARGET '$TARGET' is not a path token; nothing is changed" >&2; exit 1; }
+            echo "$CHANNEL/$TARGET/update.xml" >> "$RUNNER_TEMP/descriptor-paths.txt"
+          done < "$RUNNER_TEMP/targets.txt"
+          # The checked-in probe verdict is configuration: flag adds the pre-release flag, notes-only and pending mark
+          # by the notes alone (always allowed). Zero or several verdict lines, or another value, stop here.
+          MARKING="$(sed -n 's/^Immutable-release probe verdict: `\([a-z-]*\)`.*$/\1/p' product/docs/RELEASING.md)"
+          case "$MARKING" in
+            flag|notes-only|pending) ;;
+            *) echo "::error::docs/RELEASING.md at $TAG does not hold exactly one probe verdict of flag, notes-only or pending (read '$MARKING'); nothing is changed" >&2; exit 1 ;;
+          esac
+          echo "marking=$MARKING" >> "$GITHUB_OUTPUT"
+          echo "withdraw: $TAG, $(wc -l < "$RUNNER_TEMP/descriptor-paths.txt") target(s), marking $MARKING"
+
+      - name: Mint the bot App token for the updates and product repositories, immediately before the writes (revoked at job end)
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ steps.inputs.outputs.updates_name }},${{ steps.inputs.outputs.product_name }}
+          permission-contents: write
+
+      - name: Commit the no-update document to every target's descriptor (an unchanged one is a no-op), then re-read and set-compare
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          TAG: ${{ inputs.tag }}
+          REASON: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          API=(-H 'X-GitHub-Api-Version: 2022-11-28')
+          printf '%s\n%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<updates></updates>' > "$RUNNER_TEMP/no-update.xml"
+          WANT="$(git hash-object "$RUNNER_TEMP/no-update.xml")"
+          while read -r REL; do
+            SHA=""
+            if gh api "${API[@]}" "repos/$GITHUB_REPOSITORY/contents/$REL?ref=main" > "$RUNNER_TEMP/current.json" 2> "$RUNNER_TEMP/current.err"; then
+              SHA="$(jq -r .sha "$RUNNER_TEMP/current.json")"
+              if [ "$SHA" = "$WANT" ]; then echo "$REL already carries the no-update document"; continue; fi
+            elif ! grep -q 'HTTP 404' "$RUNNER_TEMP/current.err"; then
+              echo "::error::$REL could not be read ($(head -n 1 "$RUNNER_TEMP/current.err")); nothing more is committed" >&2
+              exit 1
+            fi
+            PUT=(-X PUT "${API[@]}" "repos/$GITHUB_REPOSITORY/contents/$REL" -f "message=Withdraw $TAG: no-update descriptors ($REASON)" -f "content=$(base64 -w0 "$RUNNER_TEMP/no-update.xml")" -f branch=main)
+            [ -z "$SHA" ] || PUT+=(-f "sha=$SHA")
+            if ! gh api "${PUT[@]}" > "$RUNNER_TEMP/put.json" 2> "$RUNNER_TEMP/put.err"; then
+              echo "::error::$REL could not be written ($(head -n 1 "$RUNNER_TEMP/put.err")); nothing more is committed. Next step: re-run this workflow; a 409 means the file moved since it was read" >&2
+              exit 1
+            fi
+            [ "$(jq -r '.content.sha // empty' "$RUNNER_TEMP/put.json")" = "$WANT" ] || { echo "::error::the stored blob of $REL is not the no-update document; it is not proven withdrawn" >&2; exit 1; }
+            echo "committed the no-update document to $REL"
+          done < "$RUNNER_TEMP/descriptor-paths.txt"
+          # Re-read main and compare as a set: every target path holds exactly the no-update blob.
+          sed "s|\$| $WANT|" "$RUNNER_TEMP/descriptor-paths.txt" | sort > "$RUNNER_TEMP/want.txt"
+          while read -r REL; do
+            gh api "${API[@]}" "repos/$GITHUB_REPOSITORY/contents/$REL?ref=main" > "$RUNNER_TEMP/reread.json"
+            echo "$(jq -r .path "$RUNNER_TEMP/reread.json") $(jq -r .sha "$RUNNER_TEMP/reread.json")"
+          done < "$RUNNER_TEMP/descriptor-paths.txt" | sort > "$RUNNER_TEMP/got.txt"
+          diff "$RUNNER_TEMP/want.txt" "$RUNNER_TEMP/got.txt" || { echo "::error::the re-read descriptors differ from the no-update set above; $TAG is not proven withdrawn" >&2; exit 1; }
+
+      - name: Mark the product Release as withdrawn (notes always, the pre-release flag only on the flag verdict); never delete
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          TAG: ${{ inputs.tag }}
+          REASON: ${{ inputs.reason }}
+          PRODUCT: ${{ steps.inputs.outputs.product }}
+          MARKING: ${{ steps.plan.outputs.marking }}
+        run: |
+          set -euo pipefail
+          API=(-H 'X-GitHub-Api-Version: 2022-11-28')
+          MARK='<!-- release-withdrawn -->'
+          gh api "${API[@]}" "repos/$PRODUCT/releases/tags/$TAG" > "$RUNNER_TEMP/mark-before.json"
+          ID="$(jq -r .id "$RUNNER_TEMP/mark-before.json")"
+          [[ "$ID" =~ ^[0-9]+$ ]] || { echo "::error::the Release $TAG has no id; it is not marked" >&2; exit 1; }
+          BEFORE="$(jq -r '.body // ""' "$RUNNER_TEMP/mark-before.json")"
+          FIELDS=()
+          if [[ "$BEFORE" == *"$MARK"* ]]; then
+            echo "the notes of $TAG already carry the withdrawal block"
+          else
+            printf -v BODY '%s\n\n%s\nWithdrawn: %s. This release is no longer offered as an update. The fix ships as a new release with a new version; this release and its tag are kept.\n' "$BEFORE" "$MARK" "$REASON"
+            FIELDS+=(-f "body=$BODY")
+          fi
+          if [ "$MARKING" = flag ]; then
+            FIELDS+=(-F prerelease=true)
+          else
+            echo "::notice::the probe verdict is $MARKING, so $TAG is marked in its notes only"
+          fi
+          if [ "${#FIELDS[@]}" -gt 0 ]; then
+            gh api -X PATCH "${API[@]}" "repos/$PRODUCT/releases/$ID" "${FIELDS[@]}" > /dev/null
+          fi
+          gh api "${API[@]}" "repos/$PRODUCT/releases/tags/$TAG" > "$RUNNER_TEMP/mark-after.json"
+          AFTER="$(jq -r '.body // ""' "$RUNNER_TEMP/mark-after.json")"
+          [ "$(grep -cF -- "$MARK" <<< "$AFTER" || true)" -eq 1 ] || { echo "::error::the notes of $TAG do not carry the withdrawal block exactly once after the edit" >&2; exit 1; }
+          if [ "$MARKING" = flag ] && [ "$(jq -r .prerelease "$RUNNER_TEMP/mark-after.json")" != true ]; then
+            echo "::error::the pre-release flag did not stick on $TAG although the probe verdict is flag. Next step: record the refusal in docs/RELEASING.md and set the verdict to notes-only" >&2
+            exit 1
+          fi
+          echo "marked $TAG as withdrawn ($MARKING)"
+
+      - name: Prove the public channel serves the no-update document for every target (channel-live --withdrawn)
+        working-directory: product
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          ATTEMPTS=10
+          for ATTEMPT in $(seq 1 "$ATTEMPTS"); do
+            RC=0
+            node scripts/verify-channel-live.mjs --withdrawn "$TAG" || RC=$?
+            [ "$RC" -eq 1 ] || exit "$RC"
+            [ "$ATTEMPT" -eq "$ATTEMPTS" ] && break
+            echo "channel-live --withdrawn attempt $ATTEMPT of $ATTEMPTS is red; the updates host may still be deploying, so it is read again in 60 s"
+            sleep 60
+          done
+          echo "::error::the public channel is not proven withdrawn after $ATTEMPTS attempts; the descriptors are committed and the Release is marked. Next step: read the failures of the last attempt above, then re-run this workflow" >&2
+          exit 1

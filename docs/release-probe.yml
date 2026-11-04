@@ -1,0 +1,122 @@
+# docs/release-probe.yml
+#
+# The immutable-release probe (Phase 50, REL-02, plan 50-05). The owner lands this file in powerbrowser-updates as
+# .github/workflows/release-probe.yml and dispatches it once, after immutable releases are enabled on the product
+# repository and before the first public release. It answers one question for docs/withdraw.yml: does an immutable,
+# published Release still accept the pre-release flag from the bot App token?
+#
+# The probe Release is on the tag probe-1, which is outside the release-tags ruleset pattern (v<ESR>-<revision>), so
+# the bot App may create it, and no release tool reads it as a release. It is created as a draft and then published
+# with make_latest false, because immutability applies only to a published Release. It is never deleted and its tag
+# is never reused: immutable releases burn a deleted tag name for good. A re-run finds the same Release and
+# repeats the reads, so the verdict can be read again without a second Release.
+#
+# The job prints one verdict line, release-probe: verdict flag or notes-only, which the owner copies into the
+# docs/RELEASING.md verdict line. It fails only when the notes append does not stick, since withdraw would then
+# have no marking branch at all. scripts/verify-withdraw.mjs runs these run: bodies under bash with a stub gh.
+name: Immutable-release probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-probe
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Derive the product repository from this repository's name
+        id: repo
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+-updates$ ]] || { echo "::error::this workflow runs only in a <product>-updates repository, not $GITHUB_REPOSITORY" >&2; exit 1; }
+          PRODUCT="${GITHUB_REPOSITORY%-updates}"
+          { echo "product=$PRODUCT"; echo "product_name=${PRODUCT#*/}"; } >> "$GITHUB_OUTPUT"
+
+      - name: Mint the bot App token for the product repository only (revoked at job end)
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ steps.repo.outputs.product_name }}
+          permission-contents: write
+
+      - name: Find or create the probe Release on probe-1, published and never latest; then try the flag and the notes
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PRODUCT: ${{ steps.repo.outputs.product }}
+        run: |
+          set -euo pipefail
+          API=(-H 'X-GitHub-Api-Version: 2022-11-28')
+          PROBE_TAG=probe-1
+          MARK='<!-- release-withdrawn -->'
+          # The list holds drafts too; releases/tags/<tag> does not, and a draft left by an interrupted run must be found.
+          gh api "${API[@]}" "repos/$PRODUCT/releases?per_page=100" > "$RUNNER_TEMP/list.json"
+          COUNT="$(jq --arg t "$PROBE_TAG" '[.[] | select(.tag_name == $t)] | length' "$RUNNER_TEMP/list.json")"
+          if [ "$COUNT" -eq 0 ]; then
+            gh api -X POST "${API[@]}" "repos/$PRODUCT/releases" -f "tag_name=$PROBE_TAG" -f target_commitish=main \
+              -f "name=$PROBE_TAG (immutable-release probe, not a release)" \
+              -f "body=Probe of the withdraw marking on an immutable Release. It is not a release and carries no download." \
+              -F draft=true -F prerelease=false > "$RUNNER_TEMP/release.json"
+            echo "created the draft probe Release on $PROBE_TAG"
+          elif [ "$COUNT" -eq 1 ]; then
+            jq --arg t "$PROBE_TAG" '[.[] | select(.tag_name == $t)][0]' "$RUNNER_TEMP/list.json" > "$RUNNER_TEMP/release.json"
+            echo "found the probe Release on $PROBE_TAG from an earlier run"
+          else
+            echo "::error::$COUNT Releases carry the tag $PROBE_TAG; read them by hand, nothing is changed" >&2
+            exit 1
+          fi
+          ID="$(jq -r .id "$RUNNER_TEMP/release.json")"
+          [[ "$ID" =~ ^[0-9]+$ ]] || { echo "::error::the probe Release has no id" >&2; exit 1; }
+          if [ "$(jq -r .draft "$RUNNER_TEMP/release.json")" = true ]; then
+            gh api -X PATCH "${API[@]}" "repos/$PRODUCT/releases/$ID" -F draft=false -f make_latest=false > /dev/null
+            echo "published the probe Release (make_latest false)"
+          fi
+          gh api "${API[@]}" "repos/$PRODUCT/releases/$ID" > "$RUNNER_TEMP/published.json"
+          [ "$(jq -r .draft "$RUNNER_TEMP/published.json")" = false ] || { echo "::error::the probe Release did not publish, so immutability was not exercised" >&2; exit 1; }
+          IMMUTABLE="$(jq -r '.immutable // "absent"' "$RUNNER_TEMP/published.json")"
+          [ "$IMMUTABLE" != false ] || { echo "::error::the probe Release is not immutable. Next step: enable immutable releases on $PRODUCT, then dispatch this workflow again (the probe Release stays and is reused)" >&2; exit 1; }
+
+          REFUSAL=none
+          if [ "$(jq -r .prerelease "$RUNNER_TEMP/published.json")" != true ]; then
+            if ! gh api -X PATCH "${API[@]}" "repos/$PRODUCT/releases/$ID" -F prerelease=true > /dev/null 2> "$RUNNER_TEMP/flag.err"; then
+              REFUSAL="$(head -n 1 "$RUNNER_TEMP/flag.err")"
+            fi
+          fi
+          gh api "${API[@]}" "repos/$PRODUCT/releases/$ID" > "$RUNNER_TEMP/flagged.json"
+          FLAG=no
+          [ "$(jq -r .prerelease "$RUNNER_TEMP/flagged.json")" != true ] || FLAG=yes
+
+          BEFORE="$(jq -r '.body // ""' "$RUNNER_TEMP/flagged.json")"
+          if [[ "$BEFORE" != *"$MARK"* ]]; then
+            printf -v BODY '%s\n\n%s\nWithdrawn: probe.\n' "$BEFORE" "$MARK"
+            gh api -X PATCH "${API[@]}" "repos/$PRODUCT/releases/$ID" -f "body=$BODY" > /dev/null || true
+          fi
+          gh api "${API[@]}" "repos/$PRODUCT/releases/$ID" > "$RUNNER_TEMP/noted.json"
+          NOTES=no
+          [[ "$(jq -r '.body // ""' "$RUNNER_TEMP/noted.json")" != *"$MARK"* ]] || NOTES=yes
+
+          VERDICT=notes-only
+          [ "$FLAG" = no ] || VERDICT=flag
+          {
+            echo "release-probe: $(date -u +%Y-%m-%d), tag $PROBE_TAG, Release id $ID, immutable $IMMUTABLE"
+            echo "release-probe: pre-release flag stuck: $FLAG"
+            echo "release-probe: refusal: $REFUSAL"
+            echo "release-probe: notes append kept: $NOTES"
+            echo "release-probe: verdict $VERDICT"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$NOTES" = yes ] || { echo "::error::the notes append did not stick, so withdraw has no marking branch. Next step: read the probe Release by hand and record the error in docs/RELEASING.md" >&2; exit 1; }
