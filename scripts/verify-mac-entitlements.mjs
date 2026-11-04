@@ -254,7 +254,7 @@ function runChecks(root, overrides = {}) {
     }
 
     // --- 4. known-open exclusions ------------------------------------------
-    const open = status() === 'open';
+    const open = ['open', 'waived'].includes(status()); // waived (R14): the hits stay excluded, nothing signs them
     const expected = new Set(open ? KNOWN_OPEN_HITS : []);
     const seen = new Set();
     const excluded = [];

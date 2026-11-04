@@ -6,7 +6,7 @@ Plan 57-04 (the TEL-13 flip) was not executed, by instruction.
 ## B1. 57-01 Task 1: the TEL-09 consent patch conflicts with the compiled-file guard (DECIDED, LANDED)
 
 **Decided 2026-10-31: (a), implemented in 1d378bef (the `check-patch-surface.sh` exact-path exception, D-72/D-73
-amended) and f02ada50 (patch 050, `scripts/verify-crash-ping-consent.mjs`, rows `crash-ping-consent` and
+amended) and f02ada50 (patch 055, `scripts/verify-crash-ping-consent.mjs`, rows `crash-ping-consent` and
 `crash-ping-consent-self-test`).** Only `glean.rs` is patched; `send_ping.rs` did not need a change (its
 `--send-ping` path runs only behind CrashManager's in-process pref check). The record below is the original
 blocker, kept as written.
@@ -17,7 +17,7 @@ self-test plant that any other `.rs` path stays red. Settled by the autonomous r
 owner's instruction to decide items not needing owner input. The safety note below still binds until that
 work lands.
 
-**What the plan asks.** A hook-only patch, `patches/050-powerbrowser-crash-ping-consent.patch`, that fails the
+**What the plan asks.** A hook-only patch, `patches/055-powerbrowser-crash-ping-consent.patch`, that fails the
 Glean crash-ping consent read closed, plus a static gate, with `check-patch-surface` green on the new patch.
 
 **What the tree shows.**
@@ -89,7 +89,7 @@ with a reason that states TEL-07. The gate's stale-marked check forbids adding t
 
 ## B5. Plan 57-04 (TEL-13 flip) and its gates (NOT RUN, by instruction)
 
-Stays gated behind B1 and B3 and the first Windows release (Phase 54). The flip is a `checkpoint:human-action`.
+Stays gated behind B1 and B3 and the first Windows release (Phase 54). The flip is a `checkpoint:human-action`. The flip itself is one edit: the `CRASH_REPORTER_ENABLED` constant in `scripts/generate.mjs` (WR-09, ee4e6087), not removal of a literal.
 
 ## B6. TEL-13 prerequisites: the other send paths of the stock reporter (OPEN, found by the 57 review, WR-05)
 

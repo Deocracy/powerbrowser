@@ -35,7 +35,9 @@ Plans 53-01, 53-02 and 53-03 are built and committed on `dsh/phase-53`. Everythi
   3. Confirm the live GET of `https://status.powerbrowser.org` returns the status page.
   4. Confirm the live row: `node scripts/verify-upptime.mjs --live --slug=<owner>/<repo>`.
 
-## 4. The `/events` target waits for the telemetry endpoint (MON-02)
+## 4. The `/events` target waits for the telemetry endpoint (MON-02) -- RESOLVED (2026-11-03)
+
+- **Resolved:** `configuration.toml` now declares `[telemetry] endpoint = "https://events.powerbrowser.org/events"` (line 114) and `.github/upptime-targets.json` carries the `events` target (line 14, derived from `[telemetry] endpoint`). Evidence: `node scripts/verify-upptime.mjs`. The text below is the historical record.
 
 - **What:** the manifest has `[telemetry] level = "off"` and no `endpoint`. The `/events` target cannot be derived, so the Upptime target set is `updates` and `website` only. The row names the events target as a deferral; it does not guess a host.
 - **Owner steps, when the telemetry Worker route exists:**

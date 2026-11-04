@@ -140,7 +140,7 @@ docs/CRASH-POLICY.md (rewritten reviewable source)
 ### Recommended file layout (new or changed)
 
 ```
-patches/050-powerbrowser-crash-ping-consent.patch  # NEW: next free number; glean.rs defaults true→false
+patches/055-powerbrowser-crash-ping-consent.patch  # NEW: next free number; glean.rs defaults true→false
 scripts/generate.mjs                               # MOD: crashReporterOrigin() + conditional --with-crashreporter-url
 scripts/lib/config-schema.json                     # UNCHANGED (urls.crash_report row exists)
 configuration.toml                                 # MOD (docs comment only until TEL-13; no value stated yet)

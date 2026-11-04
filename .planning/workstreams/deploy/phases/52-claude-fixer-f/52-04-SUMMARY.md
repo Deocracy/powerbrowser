@@ -66,7 +66,7 @@ requirements-completed: [FIX-03, FIX-04, FIX-06, TRAIN-06, FIX-09]
 
 duration: one session
 completed: 2026-10-31
-status: complete-with-open-defect
+status: complete-defect-resolved
 ---
 
 # Phase 52 Plan 04: Fixer workflow jobs, PR opener, drill, routing docs
@@ -109,7 +109,9 @@ No staged branch was created. The drill ran `verify-fix-gate.mjs` on two diffs m
 - **Control diff** (a one-line change to `docs/CUSTOMIZE.md`): stages 1 to 6 passed, and the run stopped at stage 7 with `[diff-theia-core] ... yarn check --integrity reported a mismatch`. Exit 1. This is the open defect below, not a fault in the diff.
 - **Rendered PR body** from the control diff, with no network: the failing check, `1 file(s), 2 insertion(s), 0 deletion(s)`, the path `docs/CUSTOMIZE.md`, `Attempt 1 of 2`, the gate log link, and the labels `["claude-fix","release:v153.5.1-1"]`.
 
-## Open defect (blocks the live proof)
+## Open defect (blocks the live proof) -- RESOLVED by 25ef9364 (2026-11-03)
+
+Resolved by commit 25ef9364 (`fix(52): CR-05 bring every git-ignored gate input into the gate worktree`): the gate worktree now copies every git-ignored path from the trusted checkout (minus Gecko build outputs) and recreates the module folders in `theia/node_modules/.yarn-integrity`, so `yarn check --integrity` passes at stage 7. Its message records a real gate run on a docs-only control: all 8 stages pass, with and without `--tag`. The text below is the historical record.
 
 `diff-theia-core.sh --quick` passes on unmodified HEAD in the clone. In the gate's patched worktree, which holds a copy of `theia/node_modules`, `yarn check --integrity` reports a mismatch, so every diff is refused at stage 7. The gate fails closed, so no fix can land until this is fixed. It is recorded in `BLOCKED.md` item 5 with the evidence and a reproduction path. The copy has no absolute symlinks (58 relative), and a copy of only `package.json` and `yarn.lock` is not a valid reproduction because it lacks the workspace packages. The cause is not yet found.
 

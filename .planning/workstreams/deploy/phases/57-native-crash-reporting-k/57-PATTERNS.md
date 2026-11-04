@@ -8,7 +8,7 @@
 
 | New/Modified File | Role | Data Flow | Closest Analog | Match Quality |
 |---|---|---|---|---|
-| `patches/050-powerbrowser-crash-ping-consent.patch` (NEW) | patch (hook-only) | regenerate-only, never hand-edit | `patches/030-powerbrowser-mar-certificates.patch` (regenerated) + `patches/010` identity hook | exact |
+| `patches/055-powerbrowser-crash-ping-consent.patch` (NEW) | patch (hook-only) | regenerate-only, never hand-edit | `patches/030-powerbrowser-mar-certificates.patch` (regenerated) + `patches/010` identity hook | exact |
 | `scripts/regenerate-patches.sh` (USE, unchanged) | utility | `git -C upstream diff HEAD --abbrev=10` regeneration | itself (Phase 40 AUTO-10) | exact |
 | `scripts/generate.mjs` (MOD: `crashReporterOrigin()` + conditional `--with-crashreporter-url`) | generator | transform | `emitIdentityConfigure` (`MOZ_APPUPDATE_HOST` host derivation from `urls.update`, lines 1586-1609) | exact |
 | `powerbrowser/endpoint-allowlist.json` (MOD: crash-host row + `breakpad.reportURL` expect) | config | derive-and-compare target | `github.com` marked entry (`:90-92`, `manifest: "urls.issues"` shape) | exact |
@@ -27,11 +27,11 @@ Note: no `scripts/verify-ng-NNN-*.mjs` file is created or edited (owner-locked).
 
 ## Pattern Assignments
 
-### `patches/050-*` — copy the regeneration discipline, not the content
+### `patches/055-*` — copy the regeneration discipline, not the content
 
 - Preamble + regeneration via `scripts/regenerate-patches.sh` (Phase 40 AUTO-10): the patch is produced from a patched `upstream/` worktree with `git -C upstream diff HEAD --abbrev=10 -- <+++ b/ paths>`, byte-compared by `--check`. A hand-edited hunk body must go red naming the patch (`patches-regenerated` row + self-test).
 - Hook-only surface (`scripts/check-patch-surface.sh`): the patch touches non-compiled hook paths only, following the `010` identity-hook template (generated fragment carries values; the patch carries only the hook). If the consent gate functionally requires a `.rs` touch, the planner follows the 010 indirection instead — values/switches flow through `generated/` + build config, never as compiled literals in the patch. The executor proves `check-patch-surface.sh` green in the task verify.
-- Next free number after `040` (040 exists; 050 chosen with a gap for Phase 44/46 hook patches, same spacing idiom as 010/020/030/040).
+- Next free number after `040` (040 exists; committed as 050 and renamed 055 in 7e0f1a48 because 050 was already the extension tab-host patch).
 
 ### `scripts/generate.mjs` — copy `emitIdentityConfigure` + `assertEmittable` discipline
 
