@@ -18,8 +18,9 @@
 #      limit that holds across Worker instances; the Worker keeps no counter of its own, and
 #      /download-counts has no other guess limit, so the rule must cover it. It applies only to
 #      the zone hostname, which is why workers_dev and preview_urls are off below: a workers.dev
-#      URL would bypass it. Record the threshold and the period verbatim at the plan 48-05
-#      checkpoint. With workers_dev off and no route in this file, the Worker is unreachable until
+#      URL would bypass it. Threshold 60 requests per one-minute period per IP (owner ruling
+#      2026-11-03; retune from Worker analytics after the first release). Record the threshold
+#      and the period verbatim at the plan 48-05 checkpoint. With workers_dev off and no route in this file, the Worker is unreachable until
 #      the Phase 47 hostname is attached; wrangler may warn about that on deploy.
 #   7. Synthetic POST verify:         curl -sS -X POST https://events.powerbrowser.org/events -H 'content-type: application/json' -H "authorization: Bearer $DOWNLOAD_COUNT_SECRET" --data '{"events":[{"kind":"error","name":"synthetic.probe","data":{"type":"SyntheticProbe"},"synthetic":true,"at":0}]}'
 #      Expect 200 and "ok: stored 1 synthetic 1" (the acknowledgement appears only when the secret was

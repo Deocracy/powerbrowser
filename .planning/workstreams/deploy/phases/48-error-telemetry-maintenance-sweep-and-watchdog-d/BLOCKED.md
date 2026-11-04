@@ -78,3 +78,26 @@ live; the plans built and gated every piece locally.
   `synthetic events POST` row. Until the Worker with the acknowledgement is deployed (plan 48-05), the row is red by
   design. A red probe can leave one non-synthetic `MaintenanceProbe` row in the maintainer view per sweep; it is removed
   by the 30-day retention.
+
+## Owner rulings applied 2026-11-03 (FINISH-PLAN.md section 2, Phase 48)
+
+Settled by the owner; none needs a further answer at the 48-05 checkpoint.
+
+- **IN-03:** the usage path at level `all` goes through the admitted-key and event-name filter of the error
+  path. Gap plan 48-06. The TEL-06 preference text is unchanged.
+- **IN-04:** `toolkit.telemetry.server` stays blank at every telemetry level; the events Worker receives
+  sidecar event batches only. Gap plan 48-07.
+- **CR-03 residual:** accepted. A downstream at level `off` that omits `[telemetry] endpoint` keeps the
+  platform endpoint in its fragment; `docs/REBRANDING.md` (Downstream obligations, "Own telemetry endpoint")
+  tells every downstream to state its own. The generator still refuses the non-off case.
+- **Rate limit:** one zone rule per route, 60 requests per one-minute period per IP, for the events route
+  (`/events`, `/download-counts`, `worker/wrangler.toml` step 6) and the crash route (`/submit`,
+  `worker/wrangler-crash.toml` step 5). Retune from Worker analytics after the first release.
+- **Synthetic probe (48-05 A7):** one synthetic event, the pack form. The plan's two-admitted-plus-one-synthetic
+  variant is not run.
+- **MON-01:** the watchdog limit stays 26 h against the daily 06:17 UTC schedule, and the drill is the real
+  26-hour stop of the scheduler cron (48-05 D14). The record notes the clock slack: a train run delayed more
+  than about two hours turns the sweep's watchdog-age row red.
+- **Item 6 / RENEWALS:** both `DOWNLOAD_COUNT_SECRET` rows stay separate from the combined 2026-10-29 row; the
+  holder is the owner (Christopher Colantuono), filled in `docs/RENEWALS.md`. The rotation date is still
+  recorded at 48-05 E15.

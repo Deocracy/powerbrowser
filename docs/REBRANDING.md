@@ -300,7 +300,7 @@ with the OpenCode adapter. A manifest that still carries it now fails with
 | Setting | Required? | If omitted | Reaches |
 |---|---|---|---|
 | `telemetry.level` | Optional | Resolves to `off` with the standard default echo; nothing ever leaves the application | `generated/theia-telemetry.json` level (one of off, crash, error, all); an enabled level with no endpoint fails naming `telemetry.endpoint` |
-| `telemetry.endpoint` | Optional | Null — nowhere to send, and with level off nothing sends | `generated/theia-telemetry.json` endpoint plus endpoint hosts when stated (must be your own https URL) |
+| `telemetry.endpoint` | Optional | Inherits the platform's events endpoint. At a level other than off, a downstream under its own name that inherits it is refused naming `telemetry.endpoint`; at level off the inherited value stays in the fragment (see Downstream obligations) | `generated/theia-telemetry.json` endpoint plus endpoint hosts when stated (must be your own https URL, or `""` for none) |
 
 ### `[upstreams]` — upstream pins (both required, never inherited)
 
@@ -380,6 +380,12 @@ restating it.
 - **Eclipse Theia attribution.** The About dialog attributes Eclipse Theia
   as a trademark of Eclipse Foundation AISBL and identifies your product's
   home from your support URL. Keep that sentence intact.
+- **Own telemetry endpoint.** State `[telemetry] endpoint` yourself, even at
+  level `off`: your own https URL, or `""` for none. Generate refuses an
+  inherited platform endpoint only when the level is not `off`. At level
+  `off` an omitted endpoint stays the platform's value in
+  `generated/theia-telemetry.json`, so a user who raises the telemetry
+  preference in your build would send reports to Power Browser's host.
 - **Artwork review.** Open `brand/mark.svg`, confirm it carries no
   third-party mark, and sign name and date into `brand/HUMAN-REVIEW.md`.
   The mechanical trademark gate covers everything except this human look.

@@ -108,14 +108,14 @@ cd /home/chris/gsd-workspaces/deploy/Power-Browser/worker
   Paste the last lines of the output.
 - **A4.** `nix run nixpkgs#wrangler -- secret put DOWNLOAD_COUNT_SECRET --config wrangler.deploy.toml`. Type the shared secret at the prompt. Paste only the success line.
 - **A5.** `nix run nixpkgs#wrangler -- deploy --config wrangler.deploy.toml`. Paste the deployed URL line and the version id. Then `rm wrangler.deploy.toml` and confirm `git -C /home/chris/gsd-workspaces/deploy/Power-Browser status --short worker/` is empty.
-- **A6.** Dashboard, zone `powerbrowser.org`, Security, WAF, Rate limiting rules: create ONE rule. Expression: hostname equals `events.powerbrowser.org` and URI path in `/events` `/download-counts`. Counting by IP. Action block. Choose a per-IP threshold and a one-minute period. Paste threshold plus period verbatim as the dashboard shows them.
+- **A6.** Dashboard, zone `powerbrowser.org`, Security, WAF, Rate limiting rules: create ONE rule. Expression: hostname equals `events.powerbrowser.org` and URI path in `/events` `/download-counts`. Counting by IP. Action block. Threshold 60 requests per one-minute period per IP (owner ruling 2026-11-03; retune from Worker analytics after the first release). Paste threshold plus period verbatim as the dashboard shows them.
 - **A7. Probes**, from a machine outside the Cloudflare account, in this order (the burst last, so it cannot block the first two):
   1. Synthetic POST, expecting HTTP 200 and body `ok: stored 1 synthetic 1`:
      ```sh
      read -rs DOWNLOAD_COUNT_SECRET
      curl -sS -i -X POST https://events.powerbrowser.org/events -H 'content-type: application/json' -H "authorization: Bearer $DOWNLOAD_COUNT_SECRET" --data '{"events":[{"kind":"error","name":"synthetic.probe","data":{"type":"SyntheticProbe"},"synthetic":true,"at":0}]}'
      ```
-     Paste the status line and the body only (not the request). This is the runbook's exact form in `worker/wrangler.toml`. The plan text asks for two admitted events plus one synthetic; that variant would leave real-looking rows in the maintainer view until 30-day retention, so the pack uses the one-synthetic form. If you want the plan's variant, say so and record it.
+     Paste the status line and the body only (not the request). This is the runbook's exact form in `worker/wrangler.toml`. The plan text asks for two admitted events plus one synthetic; that variant would leave real-looking rows in the maintainer view until 30-day retention, so the pack uses the one-synthetic form (owner ruling 2026-11-03: one synthetic event).
   2. D1 row count, expecting exactly one synthetic row on a fresh database:
      ```sh
      nix run nixpkgs#wrangler -- d1 execute powerbrowser-events --remote --command 'SELECT synthetic, COUNT(*) AS n FROM events GROUP BY synthetic'

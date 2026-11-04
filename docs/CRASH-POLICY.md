@@ -155,8 +155,9 @@ budget. Only accepted submits count toward the cap.
 `throttled_per_minute_cap`. A counter inside a Worker is per isolate, so it is
 not a rate limit, and a shared one would let one client make every other
 client's report be discarded. The rate limit is one Cloudflare zone rule, per
-IP, on the `/submit` path, recorded at the deploy checkpoint with its threshold
-and period. The Worker is not reachable on a workers.dev URL, which the zone
+IP, on the `/submit` path: 60 requests per one-minute period (owner ruling
+2026-11-03, the same threshold as the events route; retuned after the first
+release), recorded at the deploy checkpoint with its threshold and period. The Worker is not reachable on a workers.dev URL, which the zone
 rule does not cover.
 
 ## Rejection vocabulary

@@ -22,8 +22,9 @@
 #   5. Rate-limit rule (dashboard):   ONE zone rule, per IP, action block, whose expression matches the
 #      crash hostname (the host of [urls].crash_report) with the path equal to "/submit". The zone must be on
 #      the account. A rule may be created before the hostname serves traffic. The Worker keeps no counter (see
-#      crash-submit.mjs), so this rule is the only rate limit. Record the threshold and the period verbatim at
-#      the checkpoint. workers_dev and preview_urls are off below: a workers.dev URL would bypass the rule.
+#      crash-submit.mjs), so this rule is the only rate limit. Threshold 60 requests per one-minute period
+#      per IP (owner ruling 2026-11-03; retune after the first release). Record the threshold and the period
+#      verbatim at the checkpoint. workers_dev and preview_urls are off below: a workers.dev URL would bypass the rule.
 #   6. Set the hostname:              replace REPLACE-WITH-CRASH-HOSTNAME in the routes block below with the
 #      crash hostname. custom_domain = true makes the deploy create the proxied DNS record and certificate for
 #      it, so no separate DNS step remains; confirm the record exists in the dashboard after step 7.
