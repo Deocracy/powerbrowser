@@ -757,6 +757,8 @@ jobs:
       # keeps the allow-list out. renovate-version is the version the config was validated with; onboarding off and
       # a required config keep Renovate from opening an onboarding PR. The git author is the bot address, so
       # publish-bump-branch.sh in renovate-licensing treats Renovate's commits as bot commits it may extend.
+      # Platform commits off: under an App token Renovate's default (auto) commits through the API as the App's own
+      # identity and ignores the git author, so publish-bump-branch.sh would refuse every Theia branch.
       - name: Run Renovate for the Theia group
         if: ${{ !inputs.dry-run }}
         uses: renovatebot/github-action@1c0cf989c02653fba0efe7ca5772338860ca71dc # v46.3.12
@@ -769,6 +771,7 @@ jobs:
           RENOVATE_ONBOARDING: "false"
           RENOVATE_REQUIRE_CONFIG: required
           RENOVATE_GIT_AUTHOR: release-train <${{ env.BOT_EMAIL }}>
+          RENOVATE_PLATFORM_COMMIT: disabled
 
   # The licensing regeneration for the Theia PR (owner answer A4, BLOCKED.md item 18 option a). Renovate's clone has
   # no applied upstream/, so the notices are regenerated here, on the runner, on the branch Renovate just wrote:

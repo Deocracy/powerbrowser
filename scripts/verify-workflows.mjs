@@ -113,7 +113,8 @@
 //                 permission is red too: re-fetch the list when the pin moves.
 //  renovate-job   In release-train.yml (Phase 51, AUTO-02, owner answer A4), no renovatebot/github-action step
 //                 sets RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS (step or job level): the config runs no hook, and an
-//                 allow-list would re-admit one. Each Renovate job is followed by exactly one job that needs it and
+//                 allow-list would re-admit one. Each Renovate step sets RENOVATE_PLATFORM_COMMIT: disabled and the config
+//                 sets no other platformCommit, so Renovate commits as the bot address. Each Renovate job is followed by exactly one job that needs it and
 //                 runs the line nix develop .#theia --command node scripts/generate-licensing.mjs, and that job: carries continue-on-error: true (sweep-clock
 //                 reads successful runs only), permissions: {}, an App token whose only permission input is
 //                 permission-contents: write, job env BRANCH equal to the branchPrefix plus the theia groupSlug read
@@ -949,6 +950,13 @@ function runChecks(root, overrides = {}) {
                 if ((st.env ?? {}).RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS !== undefined || (job.env ?? {}).RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS !== undefined) {
                     failR(jobId, `step ${i} sets RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS, which re-admits a post-upgrade hook that cannot run in Renovate's container clone (BLOCKED.md item 18). Next step: remove it; the licensing job regenerates the notices.`);
                 }
+                // Platform commits (Renovate's auto default under an App token) are authored by the App and ignore the git author.
+                if ((st.env ?? {}).RENOVATE_PLATFORM_COMMIT !== 'disabled') {
+                    failR(jobId, `step ${i} sets RENOVATE_PLATFORM_COMMIT to ${JSON.stringify((st.env ?? {}).RENOVATE_PLATFORM_COMMIT)}, not disabled, so Renovate commits as the App, not the bot address, and publish-bump-branch.sh refuses the Theia branch. Next step: set RENOVATE_PLATFORM_COMMIT: disabled.`);
+                }
+                if (typeof cfg === 'string' && /"platformCommit"\s*:\s*"(?!disabled")/.test(cfg)) {
+                    failR(jobId, `${RENOVATE_REL} sets platformCommit to a value other than disabled, which overrides the step env, so Renovate commits as the App. Next step: remove the key or set it to disabled.`);
+                }
             }
             // The generator as a command line of its own, in the theia shell (python3 for the Gecko preprocessor); a mention in a message does not count.
             const lic = Object.entries(jobs).filter(([, k]) => needsOf(k).includes(jobId) && /^\s*nix develop \.#theia --command node scripts\/generate-licensing\.mjs\s*$/m.test(runText(k)));
@@ -1594,6 +1602,8 @@ function selfTest() {
     const LIC_HEAD = '  renovate-licensing:\n    needs: [derive, renovate-theia]\n';
     plants.push(
         ['renovate-job: the hook allow-list restored', trainEdit(AUTHOR_LINE, `${AUTHOR_LINE}          RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS: '["^node scripts/generate-licensing\\\\.mjs$"]'\n`), ...RJ, 'sets RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS'],
+        ['renovate-job: platform commits left on auto', trainEdit('          RENOVATE_PLATFORM_COMMIT: disabled\n', ''), ...RJ, 'not disabled'],
+        ['renovate-job: the config turns platform commits on', { renovateConfig: RENOVATE_TEXT.replace('"automerge": false,', '"automerge": false,\n  "platformCommit": "enabled",') }, ...RJ, 'other than disabled'],
         ['renovate-job: the licensing job no longer needs renovate-theia', trainEdit(LIC_HEAD, '  renovate-licensing:\n    needs: [derive]\n'), ...RJ, '0 jobs that need it'],
         ['renovate-job: the generator step dropped', trainEdit('          nix develop .#theia --command node scripts/generate-licensing.mjs\n', ''), ...RJ, '0 jobs that need it'],
         ['renovate-job: continue-on-error dropped', trainEdit(`${LIC_HEAD}    if: \${{ !inputs.dry-run && needs.renovate-theia.result == 'success' }}\n    continue-on-error: true\n`, `${LIC_HEAD}    if: \${{ !inputs.dry-run && needs.renovate-theia.result == 'success' }}\n`), ...RL, 'continue-on-error'],
