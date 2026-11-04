@@ -1,21 +1,21 @@
 ---
 gsd_state_version: "1.0"
 milestone: v1.6
-current_phase: 49
 current_phase_name: Release pipeline and legion runner (E)
 current_plan: 5
 status: executing
 stopped_at: 49-04 built, reviewed and fixed; 2026-10-31 settlements recorded
-last_updated: "2026-11-01T05:25:00.000Z"
+last_updated: "2026-11-04T01:56:43.832Z"
 last_activity: 2026-10-31
 last_activity_desc: 49-04 built, reviewed and fixed; six open items settled by the autonomous run
-state_head: 723372eaf17f3ab9b9f2599c30a94ad50da6793b
+state_head: 7654d53132dd1da1964d4c308991592aa7315757
 progress:
   total_phases: 19
   completed_phases: 4
-  total_plans: 84
-  completed_plans: 66
+  total_plans: 87
+  completed_plans: 81
 milestone_name: Deployment setup
+current_phase: 49
 ---
 
 # Project State
@@ -88,6 +88,9 @@ Progress: [████████░░] 79% (66 of 84 plans)
 | Phase 41 P01 | 17min | 3 tasks | 13 files |
 | Phase 41 P02 | 16min | 3 tasks | 12 files |
 | Phase 41 P03 | 9min | 3 tasks | 5 files |
+| Phase 41 P05 | 10min | 2 tasks | 3 files |
+| Phase 41 P06 | 10min | 2 tasks | 3 files |
+| Phase 41 P07 | 10min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -118,6 +121,7 @@ Owner decisions 1–22 of 2026-10-20 are recorded in `.planning/workstreams/depl
 - [Phase 41]: 41-02: environment branch-policy POST is planned only when the environment is absent or lacks main/branch, so a re-apply never duplicates it
 - [Phase 41]: 41-02: App permission maps compare exactly; any Workflows key on any org installation is red; owner UI steps print from the bodies and --yes never acts on them
 - [Phase 57]: D-72/D-73 amended 2026-10-31 (owner ruling on 57 BLOCKED B1, option (a)): check-patch-surface.sh accepts a compiled target only at the exact paths toolkit/crashreporter/client/app/src/glean.rs and send_ping.rs (ALLOWED_COMPILED_PATHS); every other compiled path, any other .rs included, stays an offense
+- [Phase 41]: 41-05 (R10): the apps control counts an undeclared org App only when it reaches powerbrowser, powerbrowser-updates or homebrew-tap (selection all, or a repository list touching the set derived from app-*.json); an unreadable list stays red; narrows the 41-02 rule
 
 ### Pending Todos
 
