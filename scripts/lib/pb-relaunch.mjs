@@ -274,7 +274,7 @@ export async function makeProfile(extraPrefs = {}) {
  * `fn` returns. withFirefoxPage stops a browser that is still running and
  * leaves the profile in place.
  */
-export async function withShell(profile, fn) {
+export async function withShell(profile, fn, { capabilities } = {}) {
     return withFirefoxPage('', async ({ evaluate, evaluateIn, send, waitFor, exitCode }) => {
         await waitFor('window.theia && window.theia.container ? true : false', { timeoutMs: 120000 });
         await waitFor(`(() => { try { ${GET_BY_NAME}
@@ -323,7 +323,7 @@ export async function withShell(profile, fn) {
             },
         };
         return fn(app);
-    }, { profileDir: profile.profileDir });
+    }, { profileDir: profile.profileDir, capabilities });
 }
 
 /**

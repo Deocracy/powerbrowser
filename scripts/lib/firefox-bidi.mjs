@@ -312,7 +312,7 @@ export async function captureScreenshot(url, outputPath, { windowSize = '800,600
  * settle past any debounce) before capturing -- the only way to actually
  * see the rendered app.
  */
-export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, stdoutPath, profileDir: keptProfileDir } = {}) {
+export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, stdoutPath, profileDir: keptProfileDir, capabilities = {} } = {}) {
     if (!existsSync(binPath)) {
         throw new Error(
             `firefox-bidi: ${binPath} does not exist. Run the Phase 1 Firefox build first ` +
@@ -423,7 +423,7 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
         });
 
         client = new BiDiClient(ws);
-        await client.send('session.new', { capabilities: {} });
+        await client.send('session.new', { capabilities });
 
         // GUI-01 (01-05): the top-level browsing contexts this session can
         // see, url and context id only. A caller asserting that a SECOND

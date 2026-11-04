@@ -38,6 +38,7 @@ export const keyRoute = { last: '' };
  * installed; runs `fn(app)` and disposes the profile. `opts.extraPrefs`
  * appends `user_pref` lines to the profile before launch (Phase 31: the TLS
  * fixture's `network.dns.localDomains` must be in place at startup).
+ * `opts.capabilities` goes to the BiDi session.new.
  */
 export async function withProbeShell(fn, opts = {}) {
     const profile = await makeProfile(opts.extraPrefs ?? {});
@@ -53,7 +54,7 @@ export async function withProbeShell(fn, opts = {}) {
                 await trustFixtureCA(app);
             }
             return fn(app);
-        });
+        }, { capabilities: opts.capabilities });
     } finally {
         await profile.dispose();
     }

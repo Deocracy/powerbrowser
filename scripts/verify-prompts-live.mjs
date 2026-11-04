@@ -174,6 +174,8 @@ let writeVerdict = false;
 
 /** A geolocation provider that answers from a data: URL, so a granted request resolves without the network. */
 const PREFS = {
+    // The Remote Agent's recommended prefs unblock popups unless the profile already sets this one.
+    'dom.disable_open_during_load': true,
     'geo.provider.network.url': 'data:application/json,{"location":{"lat":51.5,"lng":-0.1},"accuracy":10}',
     'geo.provider.use_gpsd': false,
     'geo.provider.use_geoclue': false,
@@ -318,7 +320,7 @@ async function anchorInBar(app) {
         const f = document.getElementById('powerbrowser-content');
         if (!a || !f) return null;
         const r = a.getBoundingClientRect(); const fr = f.getBoundingClientRect();
-        return { left: r.left - fr.left, top: r.top - fr.top, right: r.right - fr.left, bottom: r.bottom - fr.top };`);
+        return JSON.stringify({ left: r.left - fr.left, top: r.top - fr.top, right: r.right - fr.left, bottom: r.bottom - fr.top });`).then(JSON.parse);
     const bar = await app.evaluate(`JSON.stringify((() => { const b = document.querySelector('.pb-chrome-bar'); if (!b) return null; const r = b.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }; })())`).then(JSON.parse);
     if (!anchor || !bar) {
         return `the anchor (${JSON.stringify(anchor)}) or the chrome bar (${JSON.stringify(bar)}) has no rect`;
@@ -656,7 +658,7 @@ function dialogState(app) {
         if (!w) return null;
         const d = w.document;
         const shown = id => { const e = d.getElementById(id); return !!e && !e.closest('[hidden]'); };
-        return { body: (d.getElementById('infoBody')?.textContent ?? '').trim().slice(0, 200), login: shown('loginContainer'), password: shown('password1Container'), checkbox: shown('checkboxContainer') };`);
+        return JSON.stringify({ body: (d.getElementById('infoBody')?.textContent ?? '').trim().slice(0, 200), login: shown('loginContainer'), password: shown('password1Container'), checkbox: shown('checkboxContainer') });`).then(JSON.parse);
 }
 
 async function waitDialog(app, timeoutMs = 10000) {
@@ -697,12 +699,12 @@ async function tabBranchFacts(app) {
     const tabs = await probe(app, `return get('ApplicationShell').getWidgets('main').filter(w => typeof w.tabId === 'string').map(w => ({ tabId: w.tabId, adopted: !!w.adopted }));`);
     return inChrome(app, `const g = window.gBrowser;
         const tabs = ${JSON.stringify(tabs ?? [])}.map(t => ({ ...t, tabbed: !!(g && overlayOf(t.tabId) && g.getTabForBrowser(overlayOf(t.tabId))) }));
-        return {
+        return JSON.stringify({
             tabs,
             selectedBrowser: !!g && 'selectedBrowser' in g,
             authSpoof: Services.prefs.getBoolPref('privacy.authPromptSpoofingProtection', false),
             authMembers: !!g && typeof g.setTabLabelForAuthPrompts === 'function' && typeof window.gURLBar?.setURI === 'function',
-        };`);
+        });`).then(JSON.parse);
 }
 
 /** WR-05: the relay verdict from those facts. Every term can be false; `why` names each that is. */
@@ -1357,10 +1359,13 @@ const PLANTS = [
     { plant: 'protocol-stock-path-unhooked', target: 'protocol-handler', expect: 'stock protocol bar path reached: getNotificationBox TypeError' },
 ];
 
+// WebDriver's default unhandledPromptBehavior dismisses every dialog; the scenarios need Firefox's own to stay open.
+const KEEP_PROMPTS = { alwaysMatch: { unhandledPromptBehavior: { default: 'ignore' } } };
+
 async function runSession(name, plant) {
     const fx = await serveNavPages(PAGES);
     try {
-        return await withProbeShell(app => SCENARIOS[name](app, fx, plant), { extraPrefs: PREFS });
+        return await withProbeShell(app => SCENARIOS[name](app, fx, plant), { extraPrefs: PREFS, capabilities: KEEP_PROMPTS });
     } finally {
         await fx.close();
     }

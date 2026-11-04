@@ -1,13 +1,32 @@
 {
-  "outcome": "stock-keeps-ide-usable",
-  "provisional": true,
-  "source": "owner default pending live probe 1 (end-of-milestone pass); no built binary in the Phase 37 lane, so verify-prompts-live.mjs --scenario dialog-probe has not run",
-  "relayFeasible": null,
+  "outcome": "stock-blocks-ide",
+  "provisional": false,
+  "source": "live probe 1 (verify-prompts-live.mjs --scenario dialog-probe)",
+  "relayFeasible": false,
   "evidence": {
-    "screenshots": [],
-    "pushLog": null,
-    "ideEditOk": null
+    "relayWhy": [
+      "cross-domain auth needs gURLBar.setURI and setTabLabelForAuthPrompts (a Pitfall-2 widening)"
+    ],
+    "screenshots": [
+      ".planning/probes/prompt-probe/dialog-alert.png",
+      ".planning/probes/prompt-probe/dialog-confirm.png",
+      ".planning/probes/prompt-probe/dialog-prompt.png",
+      ".planning/probes/prompt-probe/dialog-leave.png",
+      ".planning/probes/prompt-probe/dialog-auth.png"
+    ],
+    "pushLog": ".planning/probes/prompt-probe/push-log.json",
+    "ideEditOk": false,
+    "blocked": [
+      "alert (edit did not land, shell input disabled, pushes stalled)",
+      "confirm (edit did not land, shell input disabled, pushes stalled)",
+      "prompt (edit did not land, shell input disabled, pushes stalled)",
+      "leave (edit did not land, shell input disabled, pushes stalled)",
+      "auth (edit did not land, shell input disabled, pushes stalled)"
+    ]
   },
-  "date": "2026-10-31",
-  "build": null
+  "date": "2026-11-03",
+  "build": {
+    "theiaBundleSha256": "460526419dfe7a917293c943b28a0c44b8c4fca840f9a36fd4aaabc8563b71e3",
+    "binaryMtime": "2026-11-03T22:45:52.089Z"
+  }
 }
