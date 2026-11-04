@@ -735,6 +735,10 @@ export function priorRunTitles(queries, { runId, repo, path }) {
  */
 export function fixerGuard(g) {
     const d = g.dispatched ?? {};
+    // R11: the owner login is vars.OWNER_LOGIN. Unset, it is '' and would let an empty base-commit author match it.
+    if (!OWNER_RE.test(String(g.ownerLogin ?? ''))) {
+        return [{ guard: 'owner-login', msg: `the owner login ${JSON.stringify(g.ownerLogin ?? '')} is unset or not a GitHub login; set the repository variable OWNER_LOGIN to the owner's user login` }];
+    }
     const [checkLabel = '', baseSha = ''] = String(d.fingerprint ?? '').split('@');
     const state = Object.keys(FIXER_CLASS_OF).find(k => FIXER_CLASS_OF[k] === d.class);
     const spent = fixAttempts((g.runs ?? []).map(name => ({ name })), d['release-key'], d.class, d.fingerprint);
@@ -2992,6 +2996,9 @@ function selfTest(mode = 'all') {
         { name: 'a third dispatch after two spent fix runs', run: () => guardMsgs({ runs: [prior(1), prior(2)] }, { attempt: '3' }), expect: 'budget' },
         { name: 'a bot actor dispatching through the live guard', run: () => guardMsgs({ actor: 'powerbrowser-bot[bot]' }), expect: 'bot-actor' },
         { name: 'an external author of the base commit', run: () => guardMsgs({ author: 'outside-contributor' }), expect: 'external-author' },
+        // R11: OWNER_LOGIN unset gives '', which must not match an empty base-commit author.
+        { name: 'an unset owner login with an empty base-commit author', run: () => guardMsgs({ ownerLogin: '', author: '' }), expect: 'owner-login' },
+        { name: 'an owner login that is not a GitHub login', run: () => guardMsgs({ ownerLogin: 'two words' }), expect: 'owner-login' },
         { name: 'a target branch that lives in a fork', run: () => guardMsgs({ headRepository: 'fixture-fork/powerbrowser' }), expect: 'fork' },
         { name: 'a release-check fingerprint', run: () => guardMsgs({}, { fingerprint: `release@${FIX_SHA}` }), expect: 'release.yml' },
         { name: 'a release key equal to the latest Release through the live guard', run: () => guardMsgs({ latestTag: FIX_KEY }), expect: 'key-not-greater' },

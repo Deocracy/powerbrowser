@@ -242,7 +242,7 @@ jobs:
           FINGERPRINT: ${{ inputs.fingerprint }}
           ATTEMPT: ${{ inputs.attempt }}
           ACTOR: ${{ github.triggering_actor }}
-          OWNER: ${{ github.repository_owner }}
+          OWNER: ${{ vars.OWNER_LOGIN }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -1858,7 +1858,7 @@ jobs:
           ATTEMPT: ${{ inputs.attempt }}
           TARGET: ${{ inputs.target-branch }}
           FINGERPRINT: ${{ inputs.fingerprint }}
-          OWNER: ${{ github.repository_owner }}
+          OWNER: ${{ vars.OWNER_LOGIN }}
           BASE_SHA: ${{ needs.fix.outputs.base-sha }}
           GATE_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
