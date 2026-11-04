@@ -387,10 +387,11 @@ Source: 56 BLOCKED.md items 1, 2, 6, 7, 13-16. After the first Release has a tar
 
 ## 11. Windows (54-04 T3; unsigned, R2/R3)
 
-Values needed: Windows 11 ISO and licence, and confirmation of legion disk use [value: Windows media]; installer artwork [value: installer
-artwork]. Source: 54 BLOCKED.md items 3, 6, 8, 9, 10; 54-04-PLAN.md:204-212 (steps 1 and Azure are void under R14).
+Values needed: Windows 11 ISO and licence, and confirmation of legion disk use [value: Windows media]. (Installer artwork is no longer
+needed: deferred to v1.7, A7.) Source: 54 BLOCKED.md items 3, 6, 8, 9, 10; 54-04-PLAN.md:204-212 (steps 1 and Azure are void under R14).
 
-1. Put wizard bitmaps and an `.ico` under `brand/installer/` and sign `brand/HUMAN-REVIEW.md` (54 BLOCKED.md item 3).
+1. ~~Put wizard bitmaps and an `.ico` under `brand/installer/` and sign `brand/HUMAN-REVIEW.md` (54 BLOCKED.md item 3).~~
+   Deferred to v1.7 (owner answer A7, 2026-11-04): v1.6 ships the labelled upstream stand-ins; nothing to supply now.
 2. libvirt access: done in step 5.2. Fill the OVMF paths in `scripts/matrix/pkg-win11-domain.xml` with the command in 54 BLOCKED.md:150-155.
 3. Define the domain (`virsh define scripts/matrix/pkg-win11-domain.xml`), install Windows 11, the QEMU guest agent and stock Firefox, take the
    `clean-baseline` snapshot. Build the `PBMATRIX` inputs ISO and run `PB_MATRIX_ISO=<iso> scripts/matrix/win-matrix-run.sh`; add the `background` cell
@@ -437,16 +438,22 @@ per `docs/BUILD.md` (plan 46-05/06), then `scripts/verify-platform.sh --build` a
 
 ## Open values and decisions
 
-1. Exact legal name for the Deocracy strings; B1 used "Deocracy" (R7).
-2. Postal address for `/privacy`.
-3. Destination mailbox for Email Routing, and a different sending account.
-4. Two Anthropic Console monthly spend caps (fixer, triage).
-5. Second owner account for the drills: HarmonySprings or stasadance.
-6. Windows 11 ISO and licence; leave of legion's disk for `pkg-win11`.
-7. Installer artwork files (R3).
-8. Whether the two primary MAR `.p12` copies already exist.
-9. Cloudflare payment method (R2); Workers Paid only if the JWT p95 exceeds 10 ms.
-10. Windows rulings: leftover `node.exe` reap (recommend: accept one orphan with a follow-up) and the taskcluster `vs.tar.zst` toolchain
-    (recommend: accept the hash-pinned toolchain).
-11. Answered 2026-11-04 (A2): 54 BLOCKED.md item 10, option a (Windows on the MAR origin after the Linux publish); built by plan 54-11.
-12. Whether `.planning/PROJECT.md:41` ("501(c)(3)-owned") still holds for Deocracy.
+Answered 2026-11-04 (settled, do not re-ask): legal name is "Deocracy Institute", `vendor_machine` stays "Deocracy" (A1);
+"501(c)(3)-owned" in PROJECT.md holds and the README nonprofit clause is restored (A9); Windows publish path is option (a), the
+MAR origin after the Linux publish (A2, plan 54-11); `probe-1` is published as built, never `latest`, never deleted (A3);
+Renovate Theia licensing: drop `postUpgradeTasks`, add a release-train job (A4); crash auto-submit by boundary `clearEnv` (A5,
+plan 57-08, see below); the Windows registry residue stays and is a known identifier for LEG-01 (A6); installer artwork deferred
+to v1.7 (A7); Windows: accept one orphan `node.exe` until reboot and the hash-pinned `vs.tar.zst` toolchain (A8).
+
+Still open for the owner:
+
+1. Confirm the fixer package pin `@anthropic-ai/claude-code@2.1.314` (step 7.4; 52 BLOCKED.md item 3).
+2. libvirt (and the runner, Safe Browsing key directory and Codeberg timer) in one `/etc/nixos` pass (step 5 and 54 BLOCKED.md item 6).
+3. Second owner account for the drills: HarmonySprings or stasadance.
+4. Whether the two primary MAR `.p12` copies already exist (step 4.1).
+5. FINISH-PLAN.md section 3 values: postal address for `/privacy`; destination mailbox for Email Routing and a different sending
+   account; two Anthropic Console monthly spend caps (fixer, triage); Windows 11 ISO and licence and leave of legion's disk for
+   `pkg-win11`; Cloudflare payment method (R2), Workers Paid only if the JWT p95 exceeds 10 ms.
+
+Open Claude item (not the owner's): plan 57-08 (boundary `clearEnv` for `MOZ_CRASHREPORTER_AUTO_SUBMIT`) waits for the other session
+to commit `powerbrowser/shell/PowerBrowserAPI.sys.mjs`; it is not part of the current finishing run.

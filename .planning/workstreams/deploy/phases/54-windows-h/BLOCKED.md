@@ -31,6 +31,9 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
      emitted file with upstream's lines at check time. The live half is the title shown by the first self-extractor run.
   3. The Windows SDK/MSVC bootstrap is fetched by hash-pinned payloads, but the `vs.tar.zst` task artifact comes
      from the taskcluster index; the owner decides whether that is acceptable for a release build.
+     **Accepted 2026-11-04 (owner answer A8).** The hash-pinned taskcluster `vs.tar.zst` toolchain is acceptable for a
+     release build. It is Mozilla's own cross-build path and the payloads inside are hash-pinned; a mirror is not
+     required and not planned.
 - **Owner steps:**
   1. Complete item 8 (the hosted sidecar job), then dispatch the release workflow at the chosen SHA only after
      54-04's approval gates. The job stops at the staging step until then (it fails closed).
@@ -67,6 +70,13 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
   `Software\Mozilla\NativeMessagingHosts`: third-party native hosts register there and the installer never writes it.
   Moving the residue needs the owner to add those compiled paths to `ALLOWED_COMPILED_PATHS` (an amendment of D-72/D-73,
   as Phase 57 B1 did) and a tier-3 build; that is an owner question, not done here.
+  **Decided 2026-11-04 (owner answer A6): keep the residue.** `TaskBarIDs`, the `MOZ_LAUNCHER_SUBKEY` launcher subkey
+  and `MaintenanceService` stay under `Software\Mozilla\<app name>` (and `Software\Mozilla\MaintenanceService`).
+  Reason: each is read by compiled Gecko code (`WinTaskbar.cpp`, `commonupdatedir.cpp`, `winlauncher`,
+  `updatehelper.h`, `pathhash.cpp`), so moving one needs an amendment of D-72/D-73 and a tier-3 build for an
+  identifier no user sees. They are recorded as known identifiers for LEG-01 (item 4): the extension names them as
+  the allowed `Software\Mozilla` keys, only under the product's own subkey, and any other `Software\Mozilla` key
+  stays red. `win-matrix-record` already encodes the same allowance (item 6, step 6).
 - **Survey removed by gap plan 54-08 (R3, 2026-11-03):** patch 040 deletes `URLUninstallSurvey`, the finish-page
   survey checkbox (`MUI_FINISHPAGE_SHOWREADME*`), `un.Survey`, `$ShouldOpenSurvey` and the `un.onGUIEnd` branch that
   opened the survey host. The finish-page layout functions already handle a page without the checkbox. Not changed:
@@ -79,6 +89,12 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
   not exist in the tree, and `brand/HUMAN-REVIEW.md` requires a signed human review for any new file.
 - **Owner steps:** supply the installer artwork, add it under `brand/`, and re-sign the review in
   `brand/HUMAN-REVIEW.md`. Then regenerate patch 040 with the artwork hunks.
+- **Deferred 2026-11-04 (owner answer A7; target v1.7).** Owner-made installer artwork is deferred to v1.7. v1.6
+  uses the art already in the tree: `brand/` holds only `mark.svg`, and the branding emitter already derives
+  `firefox.ico` and the PNG set from it. The emitter has no BMP writer and no 4-size (16, 32, 48, 64) `.ico` for
+  `firefox64.ico`; adding either is a generator change plus a layout design (wizard header and watermark), which is
+  new artwork in effect and would need a signed `brand/HUMAN-REVIEW.md` entry, so nothing was wired. The four
+  upstream stand-ins below stay, labelled as such by `installer-build-proof`. Re-open in v1.7 with the files below.
 - **Placeholder (R3, 2026-11-03):** the files the owner supplies, with the upstream stand-in each replaces
   (`upstream/browser/branding/unofficial/`, staged by `installer-build-proof`). None of these files exists yet; nothing
   in the tree references them until they land:
@@ -97,6 +113,10 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
   name the `Software\Mozilla` keys in `uninstaller.nsi` and `installer.nsi`, and the survey host. A green
   extension needs items 2 and 3 settled first. Weakening the comparison to pass would defeat the row.
 - **Owner steps:** settle items 2 and 3, then the extension can land with one plant per surface.
+- **Known identifiers (owner answer A6, 2026-11-04):** the extension must accept exactly these `Software\Mozilla`
+  keys and no others: `TaskBarIDs` and the `MOZ_LAUNCHER_SUBKEY` launcher subkey under `Software\Mozilla\<app name>`,
+  and `Software\Mozilla\MaintenanceService`. Why they stay is in item 2. Artwork (item 3) no longer blocks the
+  extension: it is deferred to v1.7 (A7) and the stand-in files carry no mark the surface check reads.
 
 ## 5. Installer rows widening (plan 54-02 Task 1)
 
@@ -220,6 +240,8 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
   on the Subprocess handle. A bare-pid reap on Windows needs a verified process-identity check (creation time via
   `kernel32`), behind `PowerBrowserAPI.sys.mjs` and catalogued; it is a new feature, not a fix.
 - **Owner decision:** build it, or accept that a Windows crash can leave one orphan `node.exe` until reboot.
+  **Decided 2026-11-04 (owner answer A8): accept one orphan `node.exe` until reboot.** Recorded as a follow-up
+  (FINISH-PLAN.md section 5 already lists it); the first live Windows run may change the design.
 
 ## 10. Unsigned Windows publish path: R2 conflicts with immutable releases (G-54b, written 2026-11-03 by gap plan 54-06)
 

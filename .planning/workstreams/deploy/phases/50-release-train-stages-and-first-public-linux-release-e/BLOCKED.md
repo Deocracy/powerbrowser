@@ -99,3 +99,7 @@ product repository, and before the first release tag):
    `scripts/verify-platform.sh --quick`, and closes 50-03 Task 3.
 
 Never delete the `probe-1` Release or its tag. A re-run reuses it.
+
+**Resolved 2026-11-04 (owner answer A3):** the immutable-release probe question is closed. `probe-1` is published as
+built: never `latest`, never deleted. The probe itself still runs at the owner pass (steps above); only the open
+question "may `probe-1` be published" is answered.
