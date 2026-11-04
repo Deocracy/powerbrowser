@@ -5196,6 +5196,20 @@ run_own_checks() {
     # missing-run branch, OPEN turned off, a reversed age, an inverted open gate, a wrong runs path, an
     # unlabeled issue, a label never created); each must go red naming its drift, with the control green first.
     "watchdog-self-test|node $REPO_ROOT/scripts/verify-watchdog.mjs --self-test"
+    # NEW (Phase 50, REL-02, plan 50-05): the withdraw and probe workflows staged for powerbrowser-updates
+    # (docs/withdraw.yml, docs/release-probe.yml), which the workflows row does not see. Their run: bodies run under
+    # bash with a stub gh: no-update per manifest target with re-read, the withdrawal mark once, the pre-release flag
+    # only on the flag verdict of docs/RELEASING.md, channel-live --withdrawn last, no write on a bad input or
+    # verdict, no delete; the probe creates probe-1 as a draft and publishes it never as latest. Source checks:
+    # dispatch only, contents read, pinned actions/* uses, no ${{ }} in run:, one narrow App token. probe-1 sits
+    # outside the release-tags ruleset pattern, derived from the ruleset. Honestly --quick: no network.
+    "withdraw|node $REPO_ROOT/scripts/verify-withdraw.mjs"
+    # withdraw-self-test plants 28 faults (a mode input, unpinned uses, input text in run:, a delete, the flag on
+    # every verdict or never, the mark respelled or doubled, an unknown verdict accepted, a dropped target, the
+    # re-read removed, the default-mode rerun, the probe tag inside the ruleset, the probe as latest or created
+    # published, a second probe Release, an ignored notes refusal or immutable read, two verdict lines); each must
+    # go red naming its drift, with the control green first.
+    "withdraw-self-test|node $REPO_ROOT/scripts/verify-withdraw.mjs --self-test"
     # NEW (Phase 49, DIST-02): the release.yml shape the workflows row does not cover. Dispatch
     # only with a required sha input; build-linux on the release runner label with no environment
     # and no secret; the SHA-ancestor and key>tag gates before the first build step; retention-days
