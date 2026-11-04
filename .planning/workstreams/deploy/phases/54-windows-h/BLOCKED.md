@@ -53,7 +53,10 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
   branding) and the new patch `045-powerbrowser-registry-root.patch` moves every key whose readers are NSIS or chrome JS:
   the root (`RegCleanMain`, the HKLM write test, `GetSecondInstallPath`), the `${BrandFullNameInternal}` install keys,
   `${AppName}\Installer`, `${AppName}\32to64DidMigrate` (reader `UpdateService.sys.mjs`) and `Uninstalled-<channel>`
-  (reader `BrowserGlue.sys.mjs`; upstream's literal `Firefox` subkey became `${AppName}`). Both patches were regenerated
+  (reader `BrowserGlue.sys.mjs`; upstream's literal `Firefox` subkey became `${AppName}`). D54cd review (2026-11-04): the
+  writer of `${AppName}\Installer\<install hash>`, `InstallerPrefs.sys.mjs`, built its path from `Services.appinfo.vendor`
+  (`Deocracy`), so the key it wrote was not the one `RegCleanPrefs` deletes; 045 now builds it, and the xpcshell
+  `test/unit/head.js` cleanup, from `AppConstants.MOZ_APP_DISPLAYNAME_DO_NOT_USE`, the same root as the NSIS side. Both patches were regenerated
   with `regenerate-patches.sh`; a sparse scratch replay with `apply-patches.sh --upstream` matched `upstream/`'s index.
   makensis compiles `installer.nsi` (`installer-build-proof`) and `uninstaller.nsi` from the edited tree.
 - **Residue that stays under `Software\Mozilla\${AppName}` (compiled readers; `check-patch-surface.sh` refuses

@@ -22,6 +22,39 @@ index 97dee13c12..639ac74ea0 100644
            `Uninstalled-${updateChannel}`
          );
          if (removalSuccessful && uninstalledValue == "True") {
+diff --git a/browser/components/installerprefs/InstallerPrefs.sys.mjs b/browser/components/installerprefs/InstallerPrefs.sys.mjs
+index dd76d44f35..d0f1758b30 100644
+--- a/browser/components/installerprefs/InstallerPrefs.sys.mjs
++++ b/browser/components/installerprefs/InstallerPrefs.sys.mjs
+@@ -41,10 +41,12 @@ export function InstallerPrefs(prefsList) {
+ 
+   // Each pref to be reflected will get a value created under this key, in HKCU.
+   // The path will look something like:
+-  // "Software\Mozilla\Firefox\Installer\71AE18FE3142402B\".
++  // "Software\<display name>\<app name>\Installer\71AE18FE3142402B\".
++  // The uninstaller cleans ${AppRegRoot}\${AppName}\Installer, where AppRegRoot
++  // is Software\${BrandShortName} (@MOZ_APP_DISPLAYNAME@).
+   ChromeUtils.defineLazyGetter(this, "_registryKeyPath", function () {
+     const app = AppConstants.MOZ_APP_NAME;
+-    const vendor = Services.appinfo.vendor || "Mozilla";
++    const vendor = AppConstants.MOZ_APP_DISPLAYNAME_DO_NOT_USE;
+     const xreDirProvider = Cc[
+       "@mozilla.org/xre/directory-provider;1"
+     ].getService(Ci.nsIXREDirProvider);
+diff --git a/browser/components/installerprefs/test/unit/head.js b/browser/components/installerprefs/test/unit/head.js
+index cbf77968d1..80c8bb7c90 100644
+--- a/browser/components/installerprefs/test/unit/head.js
++++ b/browser/components/installerprefs/test/unit/head.js
+@@ -87,7 +87,8 @@ function cleanupReflectedPrefs(prefsList) {
+   // Get the registry key path without the path hash at the end,
+   // then delete the subkey with the path hash.
+   const app = AppConstants.MOZ_APP_NAME;
+-  const vendor = Services.appinfo.vendor || "Mozilla";
++  // InstallerPrefs.sys.mjs writes under the installer's AppRegRoot.
++  const vendor = AppConstants.MOZ_APP_DISPLAYNAME_DO_NOT_USE;
+   const xreDirProvider = Cc["@mozilla.org/xre/directory-provider;1"].getService(
+     Ci.nsIXREDirProvider
+   );
 diff --git a/browser/installer/windows/nsis/installer_helpers.nsh b/browser/installer/windows/nsis/installer_helpers.nsh
 index 0113d25fa3..5091375e40 100644
 --- a/browser/installer/windows/nsis/installer_helpers.nsh
