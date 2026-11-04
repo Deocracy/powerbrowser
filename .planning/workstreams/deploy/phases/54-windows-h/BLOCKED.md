@@ -45,6 +45,22 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
   in the plan's list.
 - **Owner decision:** (a) move the installer and the app readers together in a new patch in the stack, or
   (b) keep `Software\Mozilla` and record it as a known identifier. Then remove or keep the survey URL.
+- **Decided (R3, option a) and landed by gap plan 54-07 (G-54c, 2026-11-03):** patch 040 defines
+  `AppRegRoot` as `Software\${BrandShortName}` (`@MOZ_APP_DISPLAYNAME@`, so `Software\PowerBrowser` in the release
+  branding) and the new patch `045-powerbrowser-registry-root.patch` moves every key whose readers are NSIS or chrome JS:
+  the root (`RegCleanMain`, the HKLM write test, `GetSecondInstallPath`), the `${BrandFullNameInternal}` install keys,
+  `${AppName}\Installer`, `${AppName}\32to64DidMigrate` (reader `UpdateService.sys.mjs`) and `Uninstalled-<channel>`
+  (reader `BrowserGlue.sys.mjs`; upstream's literal `Firefox` subkey became `${AppName}`). Both patches were regenerated
+  with `regenerate-patches.sh`; a sparse scratch replay with `apply-patches.sh --upstream` matched `upstream/`'s index.
+  makensis compiles `installer.nsi` (`installer-build-proof`) and `uninstaller.nsi` from the edited tree.
+- **Residue that stays under `Software\Mozilla\${AppName}` (compiled readers; `check-patch-surface.sh` refuses
+  compiled paths, D-72/D-73):** `TaskBarIDs` (`widget/windows/WinTaskbar.cpp`,
+  `toolkit/mozapps/update/common/commonupdatedir.cpp`, and its JS reader `WindowsInstallsInfo.sys.mjs`), the
+  `MOZ_LAUNCHER_SUBKEY` (`browser/app/winlauncher`), and `Software\Mozilla\MaintenanceService`
+  (`toolkit/mozapps/update/common/updatehelper.h`, `pathhash.cpp`). `NativeManifests.sys.mjs` keeps
+  `Software\Mozilla\NativeMessagingHosts`: third-party native hosts register there and the installer never writes it.
+  Moving the residue needs the owner to add those compiled paths to `ALLOWED_COMPILED_PATHS` (an amendment of D-72/D-73,
+  as Phase 57 B1 did) and a tier-3 build; that is an owner question, not done here.
 
 ## 3. Installer wizard artwork (plan 54-02 Task 1, PKG-12)
 
@@ -93,8 +109,9 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
   5. `win-matrix-guest.ps1` could not be linted or run here (no PowerShell on the build host). Its first run is the
      owner's; expect to fix PowerShell mistakes in the live guest, and the install directory name
      (`%ProgramFiles%\PowerBrowser`) and executable name are assumptions to confirm.
-  6. While item 2 is open the installer writes `Software\Mozilla`; the `win-matrix-record` row derives the expected
-     registry root from patch 040 and expects `Software\Mozilla` until the patch writes `Software\PowerBrowser`.
+  6. Patch 040 now defines `AppRegRoot` (54-07), so `win-matrix-record` expects `Software\PowerBrowser` in the
+     registry diff and allows `Software\Mozilla` only under the product's own `Software\Mozilla\powerbrowser\`
+     subkey (`TaskBarIDs`, the launcher subkey). Any other `Software\Mozilla` key in the diff is red.
 
 ## 7. Background update task (plan 54-03 Task 2, UPD-31)
 
