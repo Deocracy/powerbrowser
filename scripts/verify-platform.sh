@@ -6297,6 +6297,8 @@ run_own_checks() {
       # sign, signmar verify as ordered equality, plus OIDC-only Azure behind every gate, no stored Azure secret, no
       # schedule key, no secret or environment on a legion job, and the Windows status line against the posture
       # line in docs/RELEASING.md. Never called by a quick path.
+      # R14 (G-sign, rule skip): with AZURE_CLIENT_ID empty the configuration gate reports Windows signing as
+      # skipped and exits 0, and every later sign-windows step is gated on its signing output.
       "win-sign-chain|node $REPO_ROOT/scripts/verify-win-sign-chain.mjs"
       # win-sign-chain-self-test plants every fault in memory over the real workflow, docs and page (two green
       # controls, then an out-of-order step, a stored secret, a schedule key, a legion secret and a stale unsigned

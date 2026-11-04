@@ -21,6 +21,10 @@
 //               vars. reference; it runs after the SHA gate, the stale-approval guard and the configuration gate,
 //               and before the first signature; the configuration gate names every vars.AZURE_* the job reads
 //               and exits non-zero on a missing one (fail closed, nothing minted first).
+//   skip        R14: with AZURE_CLIENT_ID empty the configuration gate writes signing=false to GITHUB_OUTPUT and
+//               exits 0 before its fail-closed loop (a reported skip, not a failure); signing=true is written after
+//               the loop; every later step carries if: steps.azure_config.outputs.signing == 'true', except an
+//               always() step that only runs rm -rf (the scratch cleanup).
 //   secret      no secrets. reference whose name looks like an Azure credential anywhere in the file, and in
 //               sign-windows no secrets. reference outside the MAR-signing step.
 //   permissions sign-windows holds id-token write and contents read, never contents write; the workflow level
@@ -106,6 +110,7 @@ const labelsOf = job => {
     return r === undefined ? [] : [String(r)];
 };
 const stepName = s => s.id ?? s.name ?? '(unnamed step)';
+const SKIP_IF = "steps.azure_config.outputs.signing == 'true'";
 const windowsLine = page => /<li><strong>Windows:<\/strong>([\s\S]*?)<\/li>/.exec(page ?? '')?.[1]?.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() ?? null;
 
 /**
@@ -203,6 +208,17 @@ export function runChecks({ wf, releasing, page, live, liveUrl = 'the published 
         const checked = new Set(Object.keys(cfg.env ?? {}).filter(k => String(cfg.env[k]).includes(`vars.${k}`)));
         for (const v of used) if (!checked.has(v)) fail('azure_config', 'oidc', `does not check ${v}, which a later step reads, so a missing value would fail open or late. Next step: add it to the configuration gate.`);
         if (!/exit 1/.test(String(cfg.run ?? '')) || cfg['continue-on-error']) fail('azure_config', 'oidc', `does not fail closed on a missing value. Next step: exit 1 naming the missing variable.`);
+
+        // skip (R14): no Azure account is a reported skip, not a failure; a partial account still fails closed.
+        const run = String(cfg.run ?? '');
+        const skipAt = run.search(/if \[ -z "\$AZURE_CLIENT_ID" \]; then\n(?:(?!\n\s*fi\b)[\s\S])*?signing=false"? >> "\$GITHUB_OUTPUT"(?:(?!\n\s*fi\b)[\s\S])*?\bexit 0\s*\n\s*fi\b/);
+        const loopAt = run.search(/\bfor V in AZURE_CLIENT_ID\b/);
+        if (skipAt < 0 || loopAt < 0 || skipAt > loopAt) fail('azure_config', 'skip', `does not report Windows signing as skipped (signing=false to GITHUB_OUTPUT, then exit 0) when AZURE_CLIENT_ID is empty, before the fail-closed loop, so an absent account fails every release. Next step: restore the skip branch.`);
+        if (!(loopAt >= 0 && run.lastIndexOf('signing=true') > loopAt)) fail('azure_config', 'skip', `does not write signing=true after the fail-closed loop, so a configured account would sign nothing, or an unchecked one would sign. Next step: write it as the last line of the gate.`);
+        for (const s of steps.slice(steps.indexOf(cfg) + 1)) {
+            const cleanup = s.if === 'always()' && s.uses === undefined && /^\s*rm -rf [^\n;&|]*\s*$/.test(String(s.run ?? ''));
+            if (s.if !== SKIP_IF && !cleanup) fail(stepName(s), 'skip', `carries if: ${JSON.stringify(s.if ?? null)}, not ${SKIP_IF}, so it runs when Windows signing was skipped. Next step: gate it on the configuration gate's output.`);
+        }
     }
 
     // secrets in the sign job only where the MAR is signed
@@ -342,6 +358,11 @@ function selfTest(yaml) {
         ['stored credential input on Azure/login', edit((c, st) => { st.find(s => LOGIN.test(String(s.uses ?? ''))).with.creds = '${{ vars.AZURE_CREDENTIALS }}'; }), 'azure_login', 'secret', 'creds'],
         ['Azure sign-in before the configuration gate', edit((c, st) => { move(st, st.findIndex(s => s.id === 'azure_login'), st.findIndex(s => s.id === 'azure_config')); c.jobs[JOB].steps = st; }), JOB, 'oidc', 'azure_config'],
         ['configuration gate missing a variable the signer reads', edit((c, st) => { delete st.find(s => s.id === 'azure_config').env.AZURE_SIGNING_PROFILE; }), 'azure_config', 'oidc', 'AZURE_SIGNING_PROFILE'],
+        ['Azure sign-in not gated on the skip', edit((c, st) => { delete st.find(s => s.id === 'azure_login').if; }), 'azure_login', 'skip', 'not steps.azure_config.outputs.signing'],
+        ['skip branch removed', edit((c, st) => { const g = st.find(s => s.id === 'azure_config'); g.run = g.run.replace(/if \[ -z "\$AZURE_CLIENT_ID" \]; then\n[\s\S]*?\n\s*fi\n/, ''); }), 'azure_config', 'skip', 'does not report Windows signing as skipped'],
+        ['skip branch fails instead', edit((c, st) => { const g = st.find(s => s.id === 'azure_config'); g.run = g.run.replace(/exit 0\n/, 'exit 1\n'); }), 'azure_config', 'skip', 'does not report Windows signing as skipped'],
+        ['signing=true written before the fail-closed loop', edit((c, st) => { const g = st.find(s => s.id === 'azure_config'); g.run = g.run.replace(/\n\s*echo "signing=true" >> "\$GITHUB_OUTPUT"\s*$/, '\n').replace('for V in AZURE_CLIENT_ID', 'echo "signing=true" >> "$GITHUB_OUTPUT"\nfor V in AZURE_CLIENT_ID'); }), 'azure_config', 'skip', 'signing=true after the fail-closed loop'],
+        ['cleanup step widened beyond rm -rf', edit((c, st) => { const g = st.find(s => s.if === 'always()'); g.run = `${g.run.trim()} && ls`; }), 'Remove the signing scratch databases', 'skip', 'runs when Windows signing was skipped'],
         ['schedule key', edit(c => { c.on.schedule = [{ cron: '0 3 * * 1' }]; }), RELEASE_REL, 'schedule', 'schedule'],
         ['legion job carrying secrets', edit(c => { c.jobs['build-windows'].env.PROBE = '${{ secrets.PROBE }}'; }), 'build-windows', 'legion', 'secrets'],
         ['legion job carrying an environment', edit(c => { c.jobs['build-windows'].environment = 'release'; }), 'build-windows', 'legion', 'environment'],
