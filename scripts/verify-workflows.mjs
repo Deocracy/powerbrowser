@@ -18,7 +18,9 @@
 //  uses-admitted  actions/* and github/* are admitted through
 //                 .github/settings/actions-selected.json github_owned_allowed;
 //                 any other owner/repo needs a patterns_allowed entry
-//                 owner/repo@*.
+//                 owner/repo@* or owner/repo@<40-hex commit>; a commit
+//                 entry admits that commit only. claude-code-action is
+//                 admitted exactly at FIX_PIN, never by star (IN-02).
 //  admission-used The owner/repo set in patterns_allowed equals the set of
 //                 non-GitHub-owned owner/repo actually used, so an admission
 //                 nobody uses is red too.
@@ -232,7 +234,7 @@ const GUARD = 'github.event.workflow_run.head_repository.full_name == github.rep
 const EVENT_TEXT = /\$\{\{[^}]*\bgithub\.event\.(issue|comment|pull_request|head_commit|review)/;
 const TRIO = ['contents', 'id-token', 'attestations'];
 const PIN = /^([^/@]+)\/([^@/]+)(\/[^@]*)?@([0-9a-f]{40})$/;
-const PATTERN = /^([^/@]+\/[^/@]+)@\*$/;
+const PATTERN = /^([^/@]+\/[^/@]+)@(\*|[0-9a-f]{40})$/;
 const WF_LEVEL = '(workflow)';
 const DRY_RUN_FILE = 'release-train.yml';
 const DRY_RUN_GATE = 'inputs.dry-run';
@@ -412,11 +414,20 @@ function runChecks(root, overrides = {}) {
 
     // Admission table.
     const githubOwned = selected.github_owned_allowed === true;
-    const admitted = new Set();
+    // owner/repo -> admitted refs: '*' or 40-hex commits.
+    const admitted = new Map();
     for (const p of selected.patterns_allowed ?? []) {
         const m = typeof p === 'string' ? p.match(PATTERN) : null;
-        if (m) admitted.add(m[1]);
-        else fail(SELECTED_REL, WF_LEVEL, 'uses-admitted', `patterns_allowed entry ${JSON.stringify(p)} is not of the form owner/repo@*. Next step: admit actions by owner/repo@*; sha_pinning_required already forces SHAs.`);
+        if (m) admitted.set(m[1], (admitted.get(m[1]) ?? new Set()).add(m[2]));
+        else fail(SELECTED_REL, WF_LEVEL, 'uses-admitted', `patterns_allowed entry ${JSON.stringify(p)} is not of the form owner/repo@* or owner/repo@<40-hex commit>. Next step: admit the action by owner/repo@* or by its full commit SHA.`);
+    }
+    // IN-02 (Phase 53 ruling): claude-code-action is admitted at the fixer pin only, never by star.
+    {
+        const [repo, sha] = FIX_PIN.split('@');
+        const refs = admitted.get(repo);
+        if (refs && (refs.size !== 1 || !refs.has(sha))) {
+            fail(SELECTED_REL, WF_LEVEL, 'uses-admitted', `admits ${[...refs].map(r => `'${repo}@${r}'`).join(', ')}, but the claude-code-action admission is exactly '${FIX_PIN}'. Next step: replace the entry with '${FIX_PIN}' and re-apply.`);
+        }
     }
     const used = new Set();
 
@@ -461,8 +472,11 @@ function runChecks(root, overrides = {}) {
                 const repo = `${m[1]}/${m[2]}`;
                 if (githubOwned && (owner === 'actions' || owner === 'github')) continue;
                 used.add(repo);
-                if (!admitted.has(repo)) {
+                const refs = admitted.get(repo);
+                if (!refs) {
                     fail(rel, jobId, 'uses-admitted', `${where} uses '${v}', and ${SELECTED_REL} admits no '${repo}@*'. Next step: add '${repo}@*' to patterns_allowed and re-apply, or drop the action.`);
+                } else if (!refs.has('*') && !refs.has(m[4])) {
+                    fail(rel, jobId, 'uses-admitted', `${where} uses '${v}', and ${SELECTED_REL} admits ${repo} only at ${[...refs].join(', ')}. Next step: pin the step to the admitted commit, or admit this commit in the same commit and re-apply.`);
                 }
             }
         }
@@ -880,7 +894,7 @@ function runChecks(root, overrides = {}) {
         }
     }
 
-    for (const repo of [...admitted].sort()) {
+    for (const repo of [...admitted.keys()].sort()) {
         if (!used.has(repo)) fail(SELECTED_REL, WF_LEVEL, 'admission-used', `patterns_allowed admits '${repo}@*', which no workflow uses. Next step: remove it from ${SELECTED_REL} and re-apply.`);
     }
 
@@ -1145,7 +1159,7 @@ function selfTest() {
     ].join('\n');
     const plain = (perms) => ['name: Plain', 'on: workflow_dispatch', ...(perms ? [`permissions: ${perms}`] : []), 'jobs:', '  plain:', '    runs-on: ubuntu-latest', '    steps:', '      - run: echo plain', ''].join('\n');
     const issuesJob = (name, jobId) => [`name: ${name}`, 'on: workflow_dispatch', 'jobs:', `  ${jobId}:`, '    runs-on: ubuntu-latest', '    permissions:', '      issues: write', '    steps:', '      - run: echo report', ''].join('\n');
-    const withClaude = { ...selected, patterns_allowed: [...selected.patterns_allowed, 'anthropics/claude-code-action@*'] };
+    const withClaude = { ...selected, patterns_allowed: [...selected.patterns_allowed, FIX_PIN] };
     // A control that replaces release-train.yml with a fixture drops the renovate-theia job, so its admission is set aside too.
     const noRenovate = sel => ({ ...sel, patterns_allowed: sel.patterns_allowed.filter(p => p !== `${RENOVATE_ACTION}@*`) });
     // The real triage.yml admits the claude-code-action star. A control that replaces triage.yml sets that admission aside, or admission-used reds on an entry nothing uses.
@@ -1307,6 +1321,11 @@ function selfTest() {
         ['unadmitted foo/bar@<sha>', edit(V, NIX, `foo/bar@${H40}`), rel(V), 'verify', 'uses-admitted', 'foo/bar'],
         ['unused admission unused/action@*', { selected: { ...selected, patterns_allowed: [...selected.patterns_allowed, 'unused/action@*'] } }, SELECTED_REL, WF_LEVEL, 'admission-used', 'unused/action'],
         ['patterns_allowed empty', { selected: { ...selected, patterns_allowed: [] } }, rel(V), 'verify', 'uses-admitted', 'cachix/install-nix-action'],
+        // IN-02: commit-form admissions. The claude entry is FIX_PIN; a star or another commit is red, and a commit entry admits no other commit.
+        ['claude-code-action admitted by star', { selected: { ...selected, patterns_allowed: selected.patterns_allowed.map(p => p.startsWith('anthropics/claude-code-action@') ? 'anthropics/claude-code-action@*' : p) } }, SELECTED_REL, WF_LEVEL, 'uses-admitted', "'anthropics/claude-code-action@*'"],
+        ['claude-code-action admitted by star beside the pin', { selected: { ...selected, patterns_allowed: [...selected.patterns_allowed, 'anthropics/claude-code-action@*'] } }, SELECTED_REL, WF_LEVEL, 'uses-admitted', 'exactly'],
+        ['cachix admitted at a commit verify.yml does not use', { selected: { ...selected, patterns_allowed: selected.patterns_allowed.map(p => p === 'cachix/install-nix-action@*' ? `cachix/install-nix-action@${'0'.repeat(40)}` : p) } }, rel(V), 'verify', 'uses-admitted', 'only at'],
+        ['patterns_allowed entry with a tag ref', { selected: { ...selected, patterns_allowed: [...selected.patterns_allowed, 'foo/bar@v1'] } }, SELECTED_REL, WF_LEVEL, 'uses-admitted', 'foo/bar@v1'],
         ['a duplicate on: key', edit(V, '\njobs:', '\non:\n  schedule:\n    - cron: "0 0 * * *"\n\njobs:'), rel(V), WF_LEVEL, 'parse', 'duplicated mapping key'],
         ['zero workflow files', { files: {} }, `${WF_DIR}/`, WF_LEVEL, 'discovery', 'no workflow files'],
         // GH-12
