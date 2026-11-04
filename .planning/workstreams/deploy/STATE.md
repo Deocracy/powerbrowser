@@ -4,16 +4,16 @@ milestone: v1.6
 current_phase_name: Release pipeline and legion runner (E)
 current_plan: 5
 status: executing
-stopped_at: "Stage D Phase 48 gaps: 48-06 (IN-03) and 48-07 (IN-04) executed; rulings recorded in BLOCKED.md; 48-05 owner checkpoint untouched"
-last_updated: "2026-11-04T03:13:17.972Z"
+stopped_at: "Stage D Phase 49 gaps: 49-06 (G-49a MAR emit), 49-07 (G-49b packaged rows + install-matrix), 49-08 (G-49c artifact purge), 49-09 (G-sign skip) executed; 49-02/49-05 owner checkpoints untouched"
+last_updated: "2026-11-04T03:57:52.000Z"
 last_activity: 2026-10-31
 last_activity_desc: 49-04 built, reviewed and fixed; six open items settled by the autonomous run
-state_head: bda388346e67d22b96609bc6bfe18befe3736201
+state_head: 6a8c46001495b09f4fc2640f0f7f9d1f140eb256
 progress:
   total_phases: 19
   completed_phases: 4
-  total_plans: 94
-  completed_plans: 88
+  total_plans: 98
+  completed_plans: 92
 milestone_name: Deployment setup
 current_phase: 49
 ---
@@ -136,9 +136,9 @@ Owner decisions 1–22 of 2026-10-20 are recorded in `.planning/workstreams/depl
 
 ## Session Continuity
 
-**Last session:** 2026-11-04T03:13:17.811Z
+**Last session:** 2026-11-04T03:57:51.832Z
 
-**Stopped At:** Stage D Phase 48 gaps: 48-06 (IN-03) and 48-07 (IN-04) executed; rulings recorded in BLOCKED.md; 48-05 owner checkpoint untouched
+**Stopped At:** Stage D Phase 49 gaps: 49-06 (G-49a MAR emit), 49-07 (G-49b packaged rows + install-matrix), 49-08 (G-49c artifact purge), 49-09 (G-sign skip) executed; 49-02/49-05 owner checkpoints untouched
 **Resume File:** None
 
 ## Milestone Context
