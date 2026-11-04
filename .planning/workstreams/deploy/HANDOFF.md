@@ -94,8 +94,8 @@ publish (plan 54-11); A3 `probe-1` published as built, never `latest`, never del
 release-train job (`postUpgradeTasks` dropped); A5 crash auto-submit via boundary `clearEnv` (plan 57-08, still a Claude item
 waiting on the other session's commit of `PowerBrowserAPI.sys.mjs`); A6 Windows registry residue kept and recorded as known
 identifiers for LEG-01; A7 installer artwork deferred to v1.7, v1.6 uses the labelled stand-ins; A8 one orphan `node.exe` until
-reboot and the hash-pinned `vs.tar.zst` toolchain accepted; A9 "501(c)(3)-owned" holds. Still open for the owner: fixer pin
-confirm, libvirt in one `/etc/nixos` pass, drill account, MAR primary copies, and the remaining FINISH-PLAN.md section 3 values (postal address, mailbox and sending account,
+reboot and the hash-pinned `vs.tar.zst` toolchain accepted; A9 "501(c)(3)-owned" holds. A10-A14 (2026-11-04): fixer pin confirmed; one
+`/etc/nixos` change; drills from HarmonySprings; MAR primary copies made at step 4.1; monaco branch decided after the first live run. Still open for the owner: the remaining FINISH-PLAN.md section 3 values (postal address, mailbox and sending account,
 spend caps, Windows media and disk, Cloudflare payment).
 
 ## Blocked on the owner
