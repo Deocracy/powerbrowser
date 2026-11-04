@@ -163,27 +163,27 @@ jobs:
           ID="$(jq -r .id "$RUNNER_TEMP/mark-before.json")"
           [[ "$ID" =~ ^[0-9]+$ ]] || { echo "::error::the Release $TAG has no id; it is not marked" >&2; exit 1; }
           BEFORE="$(jq -r '.body // ""' "$RUNNER_TEMP/mark-before.json")"
-          FIELDS=()
           if [[ "$BEFORE" == *"$MARK"* ]]; then
             echo "the notes of $TAG already carry the withdrawal block"
           else
             printf -v BODY '%s\n\n%s\nWithdrawn: %s. This release is no longer offered as an update. The fix ships as a new release with a new version; this release and its tag are kept.\n' "$BEFORE" "$MARK" "$REASON"
-            FIELDS+=(-f "body=$BODY")
-          fi
-          if [ "$MARKING" = flag ]; then
-            FIELDS+=(-F prerelease=true)
-          else
-            echo "::notice::the probe verdict is $MARKING, so $TAG is marked in its notes only"
-          fi
-          if [ "${#FIELDS[@]}" -gt 0 ]; then
-            gh api -X PATCH "${API[@]}" "repos/$PRODUCT/releases/$ID" "${FIELDS[@]}" > /dev/null
+            gh api -X PATCH "${API[@]}" "repos/$PRODUCT/releases/$ID" -f "body=$BODY" > /dev/null
           fi
           gh api "${API[@]}" "repos/$PRODUCT/releases/tags/$TAG" > "$RUNNER_TEMP/mark-after.json"
           AFTER="$(jq -r '.body // ""' "$RUNNER_TEMP/mark-after.json")"
           [ "$(grep -cF -- "$MARK" <<< "$AFTER" || true)" -eq 1 ] || { echo "::error::the notes of $TAG do not carry the withdrawal block exactly once after the edit" >&2; exit 1; }
-          if [ "$MARKING" = flag ] && [ "$(jq -r .prerelease "$RUNNER_TEMP/mark-after.json")" != true ]; then
-            echo "::error::the pre-release flag did not stick on $TAG although the probe verdict is flag. Next step: record the refusal in docs/RELEASING.md and set the verdict to notes-only" >&2
-            exit 1
+          # The flag goes in its own PATCH after the notes: a refusal must not cost the mark, and the verdict is read at
+          # the immutable tag, so failing here would fail every re-run the same way. A refusal falls back to notes-only.
+          if [ "$MARKING" = flag ]; then
+            if [ "$(jq -r .prerelease "$RUNNER_TEMP/mark-after.json")" = true ]; then
+              echo "the pre-release flag is already set on $TAG"
+            elif ! gh api -X PATCH "${API[@]}" "repos/$PRODUCT/releases/$ID" -F prerelease=true > /dev/null 2> "$RUNNER_TEMP/flag.err" \
+              || [ "$(gh api "${API[@]}" "repos/$PRODUCT/releases/tags/$TAG" | jq -r .prerelease)" != true ]; then
+              echo "::warning::the pre-release flag was refused or did not stick on $TAG ($(head -n 1 "$RUNNER_TEMP/flag.err")), so it is marked in its notes only. Next step: record the refusal in docs/RELEASING.md and set the verdict to notes-only for later releases"
+              MARKING=notes-only
+            fi
+          else
+            echo "::notice::the probe verdict is $MARKING, so $TAG is marked in its notes only"
           fi
           echo "marked $TAG as withdrawn ($MARKING)"
 

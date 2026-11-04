@@ -12,7 +12,7 @@
 //     App token step yields a stub token. Withdraw scenarios: the flag, notes-only and pending verdicts; an unknown
 //     verdict and two verdict lines (no write); an already marked Release (no second block); two targets (two
 //     writes); an already withdrawn target (no write); a bad tag and a two-line reason (no call); a refused flag on
-//     the flag verdict (the job fails); a write the re-read disproves (the job fails). Probe scenarios: a fresh
+//     the flag verdict (the notes mark stays once, a warning, channel-live still runs); a write the re-read disproves (the job fails). Probe scenarios: a fresh
 //     probe with the flag allowed and refused, a re-run (no second Release), a refused notes append and a
 //     non-immutable Release (both fail). No scenario may issue a DELETE.
 //  2. The source text, parsed with the repo's js-yaml (theia/): workflow_dispatch only; the input set (tag and
@@ -418,7 +418,10 @@ export function withdrawDecisionFailures(text, docs, only = null) {
 
         if (on('refused')) {
             const r = run('flag', base({ refuseFlag: true }));
-            if (!r.failed) failures.push('a refused pre-release flag on the flag verdict did not fail the job. Next step: re-read the Release and fail when the flag did not stick.');
+            if (r.failed) failures.push(`a refused pre-release flag on the flag verdict failed the job: ${unclean(r)}. Next step: send the notes first in their own PATCH and fall back to notes-only on a refused flag.`);
+            if (count(rel(r).body, WITHDRAWAL_MARK) !== 1) failures.push(`a refused pre-release flag left ${count(rel(r).body, WITHDRAWAL_MARK)} withdrawal blocks, not one. Next step: send the notes first in their own PATCH.`);
+            if (!r.nodeCalls.some(c => c.args.includes('--withdrawn'))) failures.push('a refused pre-release flag skipped channel-live --withdrawn. Next step: a refused flag is a warning, not a stop.');
+            if (!r.stdout.includes('::warning::') && !r.steps.some(s => s.stderr.includes('::warning::'))) failures.push('a refused pre-release flag printed no ::warning. Next step: warn and fall back to notes-only.');
         }
 
         if (on('reread')) {
@@ -539,8 +542,10 @@ function selfTest() {
         { name: 'a push trigger', scope: 'ws', texts: W('on:\n  workflow_dispatch:\n', 'on:\n  push:\n  workflow_dispatch:\n'), expect: 'not workflow_dispatch alone' },
         { name: 'a contents write at the job', scope: 'ws', texts: W('    timeout-minutes: 15\n    permissions:\n      contents: read', '    timeout-minutes: 15\n    permissions:\n      contents: write'), expect: 'not contents read alone' },
         { name: 'a widened App token', scope: 'ws', texts: W('          permission-contents: write\n\n      - name: Commit', '          permission-contents: write\n          permission-workflows: write\n\n      - name: Commit'), expect: 'permission-contents write alone' },
-        { name: 'the flag sent on every verdict', scope: 'wr', only: ['notes'], texts: W('if [ "$MARKING" = flag ]; then\n            FIELDS+=', 'if true; then\n            FIELDS+='), expect: 'verdict set the pre-release flag' },
-        { name: 'the flag never sent', scope: 'wr', only: ['flag'], texts: W('FIELDS+=(-F prerelease=true)', ':'), expect: 'did not set the pre-release flag' },
+        { name: 'the flag sent on every verdict', scope: 'wr', only: ['notes'], texts: W('if [ "$MARKING" = flag ]; then\n            if [ "$(jq', 'if true; then\n            if [ "$(jq'), expect: 'verdict set the pre-release flag' },
+        { name: 'the flag never sent', scope: 'wr', only: ['flag'], texts: W('"repos/$PRODUCT/releases/$ID" -F prerelease=true', '"repos/$PRODUCT/releases/$ID" -f prerelease=false'), expect: 'did not set the pre-release flag' },
+        { name: 'the flag sent with the notes in one PATCH', scope: 'wr', only: ['refused'], texts: W('-f "body=$BODY" > /dev/null', '-f "body=$BODY" $([ "$MARKING" = flag ] && echo -F prerelease=true) > /dev/null'), expect: 'withdrawal blocks, not one' },
+        { name: 'a refused flag failing the job', scope: 'wr', only: ['refused'], texts: W('              MARKING=notes-only\n', '              exit 1\n'), expect: 'failed the job' },
         { name: 'the mark respelled', scope: 'ws', texts: W("MARK='<!-- release-withdrawn -->'", "MARK='<!-- withdrawn -->'"), expect: 'withdrawal mark' },
         { name: 'the mark appended on every run', scope: 'wr', only: ['marked'], texts: W('if [[ "$BEFORE" == *"$MARK"* ]]; then', 'if false; then'), expect: 'already-marked scenario' },
         { name: 'an unknown verdict accepted', scope: 'wr', only: ['verdict'], texts: W('flag|notes-only|pending) ;;', 'flag|notes-only|pending|maybe) ;;'), expect: 'an unknown verdict' },

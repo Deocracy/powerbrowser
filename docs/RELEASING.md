@@ -1164,8 +1164,12 @@ with the no-update blob, so a missing or different target fails the job.
 **Marking.** The job appends one block to the Release notes, once: the line
 `<!-- release-withdrawn -->` (the mark `scripts/release-train.mjs` derives WITHDRAWN from),
 then `Withdrawn: <reason>.` and the new-revision sentence. When the probe verdict below is
-`flag` it also sets `prerelease: true` in the same PATCH; on `notes-only` or `pending` it
-marks by the notes alone, which is always allowed. Assets, tag and `draft` are never
+`flag` it then sets `prerelease: true` in a second PATCH, after the notes PATCH and the
+re-read that proves the mark; on `notes-only` or `pending` it marks by the notes alone, which
+is always allowed. A refused flag, or one that does not stick, is a warning: the Release
+keeps the notes mark, the job falls back to notes-only and still runs the liveness step. The
+job does not fail there because the verdict is read at the immutable tag, so every re-run
+would read `flag` again. Assets, tag and `draft` are never
 touched. The verdict is read from `docs/RELEASING.md` at the withdrawn tag; zero verdict
 lines, two, or another value stop the job before any write.
 

@@ -5211,8 +5211,8 @@ run_own_checks() {
     # dispatch only, contents read, pinned actions/* uses, no ${{ }} in run:, one narrow App token. probe-1 sits
     # outside the release-tags ruleset pattern, derived from the ruleset. Honestly --quick: no network.
     "withdraw|node $REPO_ROOT/scripts/verify-withdraw.mjs"
-    # withdraw-self-test plants 28 faults (a mode input, unpinned uses, input text in run:, a delete, the flag on
-    # every verdict or never, the mark respelled or doubled, an unknown verdict accepted, a dropped target, the
+    # withdraw-self-test plants 30 faults (a mode input, unpinned uses, input text in run:, a delete, the flag on
+    # every verdict or never or in the notes PATCH, a refused flag failing the job, the mark respelled or doubled, an unknown verdict accepted, a dropped target, the
     # re-read removed, the default-mode rerun, the probe tag inside the ruleset, the probe as latest or created
     # published, a second probe Release, an ignored notes refusal or immutable read, two verdict lines); each must
     # go red naming its drift, with the control green first.
