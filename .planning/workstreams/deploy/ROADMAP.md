@@ -332,9 +332,9 @@ Plans:
 **Requirements**: AUTO-02, AUTO-03, DIST-05, UPS-02, TRAIN-04, TRAIN-11
 **Success Criteria** (what must be TRUE):
 
-  1. On the first tick after a last-Thursday Theia release, self-hosted Renovate opens one grouped `@theia/**` PR (with `@theia/monaco-editor-core` separate), pinned, rewriting `theia_release` in `configuration.toml` and updating `flake.lock`, with automerge off.
+  1. On the first tick after a last-Thursday Theia release, self-hosted Renovate opens one grouped `@theia/**` PR (with `@theia/monaco-editor-core` separate), pinned, rewriting `theia_release` in `configuration.toml`, not moving `flake.lock` (owner ruling 2026-11-03), with automerge off.
   2. Dependabot opens one weekly grouped github-actions PR that keeps SHA pins with plain version comments and applies npm security-only updates to `theia/yarn.lock`; CodeQL default setup covers `theia/extensions` and `scripts/`.
-  3. A newer ESR detected while a train is open moves the old train to SUPERSEDED, cancels its pending `release` deployment and starts the new train; a chemspill revision takes priority; the sign job exits when a newer Release exists; supersede fixtures are in `release-train-logic-self-test`.
+  3. A newer ESR detected while a train is open moves the old train to SUPERSEDED, cancels its pending `release` deployment and starts the new train; a chemspill revision takes priority; the sign job fails closed when a newer Release exists; supersede fixtures are in `release-train-logic-self-test`.
   4. The maintenance issue carries the renewals-due, repo-controls, Dependabot PR count, Dependabot and CodeQL alert counts, CodeQL push age and Codeberg-versus-GitHub `main` rows; `docs/RELEASING.md` states the release cadence and the npm-advisory response time; `docs/RENEWALS.md` carries the Node 24 Maintenance-end row (2028-04-30).
 
 **External gate**: Theia release calendar (last Thursday of each month). The Codeberg row has no mirror to compare until Phase 53.

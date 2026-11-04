@@ -1722,6 +1722,15 @@ fixer-pin and triage pin rules, so the owner moves it by hand together with `scr
 workflows, which no pull-request check exercises, so a merged actions bump is exercised by the next release, not by its own pull
 request. The `workflows` row (rule `dependabot`) and the `zizmor` row keep this shape.
 
+### Theia inflow (Renovate)
+
+The release train's `renovate-theia` job runs self-hosted Renovate from `.github/renovate.json5` on the first maintenance
+sweep after a month's last Thursday (the Theia release day), and on owner dispatch:
+`gh workflow run release-train.yml --ref main -f reason=owner -f renovate-theia=true`. It opens or updates one grouped
+`@theia/**` pull request on `chore/theia-theia`, with `@theia/monaco-editor-core` on its own branch, and never touches
+`flake.lock`. Automerge is off. Merge it after `verify.yml` is green with `gh pr merge <PR> --merge`. The licensing hook cannot
+run inside Renovate's container clone yet (phase 51 BLOCKED.md item 18), so check the `licensing` row on the pull request.
+
 ### Schedule posture
 
 D-77 is kept. No workflow carries a `schedule` key. The update-channel liveness

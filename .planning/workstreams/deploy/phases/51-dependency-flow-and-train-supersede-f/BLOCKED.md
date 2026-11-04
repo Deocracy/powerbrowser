@@ -6,6 +6,11 @@ Nothing was pushed, dispatched, or applied to a live repository.
 
 ## 1. Renovate dispatch job is not applied: missing premise (sweep tick)
 
+**Resolved in code 2026-11-03 by gap plan 51-05** (cc9a2721, c83d885b): the premise is met (48-03 has a SUMMARY), the
+`renovate-theia` job and the `renovatebot/github-action@*` admission landed in one commit, pinned to
+`1c0cf989c02653fba0efe7ca5772338860ca71dc` (v46.3.12, resolved read-only, a lightweight tag on a commit). Step 4 (apply the
+admission, read it back) stays the owner's, after 41-04.
+
 **Blocked piece:** the `renovate-theia` job in `.github/workflows/release-train.yml`, and the
 `renovatebot/github-action@*` entry in `.github/settings/actions-selected.json`.
 
@@ -54,7 +59,8 @@ After item 1 is applied:
    `configuration.toml`, the `theia/package.json` resolutions, `theia/yarn.lock`, and the
    regenerated `THIRD-PARTY-NOTICES.txt`. Whether it also carries `flake.lock` is unverified (see
    the summary).
-4. Merge only after `verify.yml` is green, with `gh pr merge <PR> --squash`. Never with automerge.
+4. Merge only after `verify.yml` is green, with `gh pr merge <PR> --merge` (owner ruling 2026-11-03: Renovate PRs merge
+   with `--merge`, like the Dependabot PRs in item 11). Never with automerge.
 
 ## 4. Not performed by the executor
 
@@ -63,6 +69,9 @@ measurements in the summary used local tooling only, plus network reads for the 
 scratch copy.
 
 ## 5. Owner decision: flake.lock is not moved by the Theia PR (AUTO-02 partial)
+
+**Resolved 2026-11-03, option (b) (owner ruling, FINISH-PLAN section 2).** AUTO-02 and ROADMAP Phase 51 criterion 1 now
+read that the Theia PR does not move `flake.lock` (plan 51-07). The nix manager stays off.
 
 **Blocked piece:** AUTO-02's clause "`flake.lock` updates through the nix manager"
 (`.planning/workstreams/deploy/REQUIREMENTS.md`, AUTO-02 line).
@@ -86,6 +95,10 @@ reasoning holds, but it does not meet the requirement text.
 updated.
 
 ## 6. Dispatch-job requirements for the post-upgrade hook (WR-05)
+
+**Status 2026-11-03 (plan 51-05):** requirement 1 is met and guarded: the job sets the allow-list and the `workflows` row,
+rule `renovate-job`, compares it with `postUpgradeTasks.commands` as a set. Requirements 2 to 5 cannot be met from the job's
+workspace: see item 18.
 
 The Theia PR runs `postUpgradeTasks` (executionMode `branch`) on its branch. That hook runs
 `node scripts/generate-licensing.mjs` and `node scripts/generate.mjs --check`, and it commits back only the
@@ -124,6 +137,9 @@ done. Nothing was dispatched, cancelled, merged, pushed or applied.
 
 ## 7. Sign-publish stale-approval exit: keep fail-closed, or change to exit 0 with a note (owner)
 
+**Resolved 2026-11-03, option (a) (owner ruling, FINISH-PLAN section 2): keep fail-closed.** The two existing guards stand;
+nothing is changed in `release.yml`. TRAIN-04 and ROADMAP criterion 3 now say the sign job fails closed (plan 51-07).
+
 **Blocked piece:** the plan's first step of `sign-publish` that exits 0 with a note when a newer
 Release exists, with every later step gated on its output.
 
@@ -150,6 +166,11 @@ is a policy choice (red pages a run, green hides a stale approval), so it goes t
   behaviour, so option (b) must keep the `>=` refusal.
 
 ## 8. Pending-release cancel on SUPERSEDED: executor unwired (owner, and the Phase 43 live collector)
+
+**Ruling 2026-11-03 (FINISH-PLAN section 2): TRAIN-04's live supersede closes on fixtures; the live half is a dated
+deferral.** v1.6 closes TRAIN-04 on the `release-train-logic-self-test` supersede fixtures. The live cancel executor (this
+item) and the supersede facts collector (item 10) are deferred, dated 2026-11-03, and are listed as an open live half in the
+milestone audit. The owner steps below stand for when the work is picked up.
 
 **Blocked piece:** the executor of `cancel-pending-and-link` (`next(SUPERSEDED)`). `release-train.mjs` maps the
 state to the action name and, for a train waiting on the `release` approval, names the target: `supersedeTarget(facts)`
@@ -192,6 +213,8 @@ fork-head guards in the YAML stay in place for when the owner re-adds the trigge
 items 1 and 3), wire these helpers and add their plants in the same change.
 
 ## 10. Supersede facts collector: not built
+
+**Deferred 2026-11-03 with item 8** (TRAIN-04 live half, owner ruling).
 
 `derive()` reads these supersede facts. No collector in `release-train.yml` sets them, because the facts source is the
 Phase 43 live collector (Phase 43 BLOCKED item 3). Until it exists, a live supersede cannot fire; the self-test covers the
@@ -246,6 +269,10 @@ two writes need the direct commands below until that is cleared.
 5. First grouped PR (Monday 04:00 UTC after the file reaches `main`): `gh pr view <n>` then `gh pr merge --merge <n>`. Never automerge.
 
 ## 12. Dependabot security updates switch and the guard on dependabot.yml (owner decision)
+
+**Resolved in code 2026-11-03 by gap plan 51-06 (owner ruling: add the control).** The live read
+`GET repos/Deocracy/powerbrowser/automated-security-fixes` answered `{"enabled":true,"paused":false}`;
+`.github/settings/automated-security-fixes.json` and the `automated-security-fixes` CONTROLS entry now read the switch back.
 
 npm "security-only" in `dependabot.yml` is `open-pull-requests-limit: 0` (version updates off; the schema describes the
 key as the limit for version updates). Security updates still need the repository's Dependabot security updates switch,
@@ -340,3 +367,32 @@ exists; the compare is full 40-hex SHAs only, and a lagged pair goes red and com
   the Phase B ceremony is still the owner's step.
 - `dependabot-alerts` at a limit of 0 can stay red on alerts with no available patch (review IN-04); the number is the owner's, and
   the steady state is not yet known. Revisit the limit after the first live tick.
+
+## 18. The Renovate container clone lacks what the licensing hook needs (owner decision)
+
+Found by gap plan 51-05, 2026-11-03. `renovatebot/github-action` at `1c0cf989` runs Renovate in the
+`ghcr.io/renovatebot/renovate` container, and Renovate clones the repository itself inside that container. The
+post-upgrade hook runs in that clone. `node scripts/generate-licensing.mjs` needs, in the clone:
+
+1. an applied Gecko `upstream/` checkout (it preprocesses `upstream/toolkit/content/license.html` with Mozilla's
+   preprocessor: `scripts/generate-licensing.mjs`, `preprocessGecko`);
+2. `python3` for that preprocessor;
+3. `theia/node_modules` (Renovate's own yarn run may or may not leave it; unverified, item 6);
+4. the Node archive at `.mozbuild/node-dist`, downloaded once if absent.
+
+Item 1 is never present in Renovate's clone, so the hook fails on the first live run. A failed post-upgrade command does not stop
+Renovate from opening the PR. The PR then carries `theia/yarn.lock`, the pins and `theia_release`, and the notices are stale. The
+`licensing` row in `verify.yml` goes red on it, so the gap shows on the PR. Steps run in the job's own workspace (a `yarn
+install` in `nix develop .#theia`, as item 6 asked) do not reach the container clone, so 51-05 does not run them.
+
+**Options (owner picks one):**
+
+- (a) Recommended: drop `postUpgradeTasks` from `.github/renovate.json5` and add a release-train job that runs after
+  `renovate-theia` on the `chore/theia-theia` branch, on the runner: fetch and apply `upstream/`, `yarn install
+  --ignore-scripts --frozen-lockfile` in `nix develop .#theia`, run the licensing generator, and publish the commit with
+  `scripts/publish-bump-branch.sh`. The `renovate-config` and `workflows` rules change with it.
+- (b) Keep the hook, and mount a prepared workspace into the container (`docker-volumes`, `RENOVATE_BASE_DIR`). Whether
+  Renovate reuses a clone it did not make is unverified.
+- (c) Keep as is: the owner regenerates the notices on the PR branch by hand before the merge
+  (`node scripts/generate-licensing.mjs`, commit, push).
+
