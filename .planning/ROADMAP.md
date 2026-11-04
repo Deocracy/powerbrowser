@@ -638,3 +638,24 @@ the checks" for NG-074 and NG-084 (ledger/history/log.jsonl lines 364 and
 Plans:
 
 - [ ] TBD (promote with /gsd-review-backlog when ready)
+
+### Phase 999.3: Tab dialog host (PROMPT-03) (BACKLOG)
+
+Deferred here from Phase 37 by Chris 2026-11-03. The live dialog-probe
+(`.planning/probes/prompt-probe-verdict.json`) found every stock page dialog
+(alert, confirm, prompt, leave-page, HTTP auth) locks the IDE, and no relay is
+feasible without widening: cross-domain HTTP auth with spoof protection calls
+`gURLBar.setURI` and `setTabLabelForAuthPrompts`, which the shell lacks.
+
+**Goal:** Page dialogs and HTTP auth that do not lock the IDE (PROMPT-03)
+**Requirements:** PROMPT-03
+**Plans:** 0 plans
+
+Scope: a shell-side TabDialogBox host for web tabs, plus `setURI` and
+`setTabLabelForAuthPrompts` routed to the Theia bar and tab strip, all through
+`PowerBrowserAPI.sys.mjs`. `verify-permission-prompts.mjs` rule (p) stays green
+on the stock-blocks-ide verdict only while REQUIREMENTS.md records this deferral.
+
+Plans:
+
+- [ ] TBD (promote with /gsd-review-backlog when ready)

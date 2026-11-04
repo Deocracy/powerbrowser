@@ -57,7 +57,8 @@
  *       member retargets every content dialog onto the tab-dialog path.
  *       stock-blocks-ide with relayFeasible true requires the member;
  *       relayFeasible false is red (PROMPT-03 cannot be met as written; route
- *       to Chris). relayFeasible is measured live (verify-prompts-live.mjs
+ *       to Chris) unless REQUIREMENTS.md records PROMPT-03 as deferred, in its
+ *       requirement line and its traceability row, to the same phase. relayFeasible is measured live (verify-prompts-live.mjs
  *       relayFeasibleFrom: every web tab, host and adopted, has a
  *       getTabForBrowser node, and the cross-domain auth branch needs no
  *       widening), so it can be false. A provisional verdict (the owner
@@ -153,6 +154,7 @@ const UPSTREAM_MOZBUILD = 'upstream/toolkit/modules/moz.build';
 const UPSTREAM_REGISTRAR_CONF = 'upstream/browser/components/protocolhandler/components.conf';
 const UPSTREAM_PROMPTER = 'upstream/toolkit/components/passwordmgr/LoginManagerPrompter.sys.mjs';
 const VERDICT = '.planning/probes/prompt-probe-verdict.json';
+const REQUIREMENTS = '.planning/REQUIREMENTS.md';
 const OUTCOMES = ['stock-keeps-ide-usable', 'stock-blocks-ide'];
 /** A getTabDialogBox member, method, property or assignment on the stand-in. */
 const TAB_DIALOG_MEMBER = /\bgetTabDialogBox\s*(?:\(|:|=(?!=))/;
@@ -274,7 +276,7 @@ function moduleUrl(mozbuild) {
 }
 
 function readSources() {
-    const files = new Set([API, SHELL, XHTML, WEB_TAB, UPSTREAM_PANEL, UPSTREAM_MOZBUILD, UPSTREAM_PROMPTER, UPSTREAM_REGISTRAR_CONF]);
+    const files = new Set([REQUIREMENTS, API, SHELL, XHTML, WEB_TAB, UPSTREAM_PANEL, UPSTREAM_MOZBUILD, UPSTREAM_PROMPTER, UPSTREAM_REGISTRAR_CONF]);
     for (const name of readdirSync(join(REPO_ROOT, SHELL_DIR))) {
         if (/\.m?js$/.test(name)) {
             files.add(`${SHELL_DIR}/${name}`);
@@ -290,6 +292,13 @@ function readSources() {
     const sources = Object.fromEntries([...files].map(file => [file, readFileSync(join(REPO_ROOT, file), 'utf8')]));
     sources[VERDICT] = existsSync(join(REPO_ROOT, VERDICT)) ? readFileSync(join(REPO_ROOT, VERDICT), 'utf8') : null;
     return sources;
+}
+
+// The phase PROMPT-03 is deferred to, when its requirement line and traceability row agree; else null.
+function prompt03DeferredTo(requirements = '') {
+    const line = /^- \[ \] \*\*PROMPT-03\*\*:.*\(deferred to Phase (\S+?),/m.exec(requirements);
+    const row = /^\| PROMPT-03 \| Phase (\S+) \| Deferred \|$/m.exec(requirements);
+    return line && row && line[1] === row[1] ? line[1] : null;
 }
 
 /**
@@ -330,7 +339,7 @@ function checkDialogOutcome(raw, exists = file => existsSync(join(REPO_ROOT, fil
     if (outcome === 'stock-blocks-ide' && typeof relayFeasible !== 'boolean') {
         failures.push(`dialog outcome: stock-blocks-ide needs relayFeasible true or false, got ${JSON.stringify(relayFeasible)}`);
     }
-    if (outcome === 'stock-blocks-ide' && relayFeasible === false) {
+    if (outcome === 'stock-blocks-ide' && relayFeasible === false && !prompt03DeferredTo(raw[REQUIREMENTS])) {
         failures.push(`dialog outcome: PROMPT-03 cannot be met as written (stock-blocks-ide, relayFeasible false) -- route to Chris`);
     }
     const member = TAB_DIALOG_MEMBER.test(stripComments(raw[SHELL]));
@@ -340,7 +349,11 @@ function checkDialogOutcome(raw, exists = file => existsSync(join(REPO_ROOT, fil
     if (outcome === 'stock-blocks-ide' && relayFeasible === true && !member) {
         failures.push(`dialog outcome drift: the verdict says stock-blocks-ide with a feasible relay but ${SHELL} has no getTabDialogBox member -- build the audited relay branch (37-03 Task 3)`);
     }
-    return { failures, outcome: outcome ?? null, provisional: provisional === true };
+    const deferredTo = outcome === 'stock-blocks-ide' && relayFeasible === false ? prompt03DeferredTo(raw[REQUIREMENTS]) : null;
+    if (deferredTo && member) {
+        failures.push(`dialog outcome drift: PROMPT-03 is deferred to Phase ${deferredTo} but ${SHELL} defines getTabDialogBox -- PromptParent would retarget every content dialog onto a tab-dialog path no relay serves (Pitfall 2)`);
+    }
+    return { failures, outcome: outcome ?? null, provisional: provisional === true, deferredTo };
 }
 
 /**
@@ -1103,7 +1116,7 @@ function selfTest() {
         },
         {
             name: 'getTabDialogBox added under the stock verdict',
-            sources: { ...clean, [SHELL]: clean[SHELL].replace('window.gBrowser = {', 'window.gBrowser = {\n      getTabDialogBox(browser) { return null; },') },
+            sources: { ...clean, [VERDICT]: verdictWith({ outcome: 'stock-keeps-ide-usable' }), [SHELL]: clean[SHELL].replace('window.gBrowser = {', 'window.gBrowser = {\n      getTabDialogBox(browser) { return null; },') },
             expect: 'dialog outcome drift: the verdict says stock-keeps-ide-usable',
         },
         {
@@ -1112,8 +1125,23 @@ function selfTest() {
             expect: 'has no getTabDialogBox member',
         },
         {
-            name: 'stock blocks the IDE and no relay is feasible',
-            sources: { ...clean, [VERDICT]: verdictWith({ outcome: 'stock-blocks-ide', relayFeasible: false }) },
+            name: 'getTabDialogBox added while PROMPT-03 is deferred',
+            sources: { ...clean, [SHELL]: clean[SHELL].replace('window.gBrowser = {', 'window.gBrowser = {\n      getTabDialogBox(browser) { return null; },') },
+            expect: 'but powerbrowser/shell/powerbrowser.js defines getTabDialogBox -- PromptParent would retarget every content dialog onto a tab-dialog path no relay serves',
+        },
+        {
+            name: 'no feasible relay and PROMPT-03 not deferred',
+            sources: { ...clean, [VERDICT]: verdictWith({ outcome: 'stock-blocks-ide', relayFeasible: false }), [REQUIREMENTS]: clean[REQUIREMENTS].replace(/ \(deferred to Phase [^\n]*/, '') },
+            expect: 'PROMPT-03 cannot be met as written',
+        },
+        {
+            name: 'no feasible relay and the traceability row still pending',
+            sources: { ...clean, [VERDICT]: verdictWith({ outcome: 'stock-blocks-ide', relayFeasible: false }), [REQUIREMENTS]: clean[REQUIREMENTS].replace(/^\| PROMPT-03 \| Phase (\S+) \| Deferred \|$/m, '| PROMPT-03 | Phase $1 | Pending |') },
+            expect: 'PROMPT-03 cannot be met as written',
+        },
+        {
+            name: 'no feasible relay and the two deferral phases disagree',
+            sources: { ...clean, [VERDICT]: verdictWith({ outcome: 'stock-blocks-ide', relayFeasible: false }), [REQUIREMENTS]: clean[REQUIREMENTS].replace(/^\| PROMPT-03 \| Phase (\S+) \| Deferred \|$/m, '| PROMPT-03 | Phase 37 | Deferred |') },
             expect: 'PROMPT-03 cannot be met as written',
         },
         {
@@ -1123,7 +1151,7 @@ function selfTest() {
         },
         {
             name: 'live verdict without evidence',
-            sources: { ...clean, [VERDICT]: verdictWith({ provisional: false }) },
+            sources: { ...clean, [VERDICT]: verdictWith({ provisional: false, evidence: {} }) },
             expect: 'the live verdict lacks live evidence',
         },
         {
@@ -1193,7 +1221,7 @@ function main() {
         console.error(`${NAME}: FAIL -- ${dialog.failures.join('; ')}`);
         return 1;
     }
-    console.log(`${NAME}: dialog outcome ${dialog.outcome}${dialog.provisional ? ' (PROVISIONAL: the owner default pending live probe 1; the live dialog-probe run overwrites it with evidence)' : ' (live probe-1 verdict)'}; getTabDialogBox ${dialog.outcome === 'stock-keeps-ide-usable' ? 'absent, the stock window-modal fallback' : 'present, the audited relay member'}`);
+    console.log(`${NAME}: dialog outcome ${dialog.outcome}${dialog.provisional ? ' (PROVISIONAL: the owner default pending live probe 1; the live dialog-probe run overwrites it with evidence)' : ' (live probe-1 verdict)'}; getTabDialogBox ${dialog.outcome === 'stock-keeps-ide-usable' ? 'absent, the stock window-modal fallback' : dialog.deferredTo ? `absent, PROMPT-03 deferred to Phase ${dialog.deferredTo}` : 'present, the audited relay member'}`);
     console.log(`${NAME}: PASS -- one PopupNotifications construction inside ${INSTALLER}, own principal only, no allow/grant/permit/doorhanger/prompt kind, the facade is audited, no request kind, the doorhanger subscriber is display-only, the stock PermissionUI write is the only prompt-path permission writer, no remember field exists, the sharing indicator follows chrome-observed webrtcUI state only, the stock prompter alone owns the credential fields, no credential reaches a push, a Theia message or a log, the notification bars sit outside the blocking layer and shrink the page rect, each bar answer resolves a chrome-held record of the sender's own tab, the bar action enum matches between sender and arm, the blocked-popup Allow is the stock unblockPopup replay, and no stock notification box is reached (the furniture rows (a), (j), (k), (q), (r) are verify-shell-furniture.mjs rule 13)`);
     return 0;
 }
