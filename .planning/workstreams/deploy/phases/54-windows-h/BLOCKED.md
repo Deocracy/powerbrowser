@@ -230,7 +230,7 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
   Windows would wait up to the Windows build time (300-minute job timeout, plus the 60-minute sidecar job).
 - **Landed regardless (54-06):** `win-sign-chain` `independence` now covers every Windows job, derived from artifact
   names. A future Windows publish job may need `sign-publish` and `build-windows`, but no Linux job may need it.
-- **Owner decision**, then Claude writes the follow-up gap plan (54-07) for the chosen option:
+- **Owner decision**, then Claude writes the follow-up gap plan (next free number, 54-11 or later; 54-07 to 54-10 are G-54c and G-54d) for the chosen option:
   - **(a) Recommended: Windows publishes after the Linux publish, on the MAR origin, not on the GitHub Release.**
     The jobs are `publish-windows`, `descriptor-windows` and `channel-live-windows`. `publish-windows` needs
     `build-windows` and `sign-publish` (environment `release`). It runs the MAR channel gate, signs and verifies the
