@@ -6320,7 +6320,10 @@ run_own_checks() {
       "win-sign-chain|node $REPO_ROOT/scripts/verify-win-sign-chain.mjs"
       # win-sign-chain-self-test plants every fault in memory over the real workflow, docs and page (two green
       # controls, then an out-of-order step, a stored secret, a schedule key, a legion secret and a stale unsigned
-      # status among others), each red naming its step or key. Hermetic; writes nothing.
+      # status among others), each red naming its step or key. G-54b widens independence to every Windows job
+      # (derived from artifact names): plants for descriptor, channel-live, build-linux and sign-publish (through an
+      # artifact-less bridge job) waiting on a Windows job, plus a green control for a Windows publish job that needs
+      # sign-publish. Hermetic; writes nothing.
       "win-sign-chain-self-test|node $REPO_ROOT/scripts/verify-win-sign-chain.mjs --self-test"
       # win-sign-list-self-test: the list of inner PE files sign-windows signs, derived from the pinned package manifest
       # (upstream/browser/installer/package-manifest.in) and compared with a staged tree; the zip name derived from

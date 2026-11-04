@@ -138,6 +138,40 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
   `kernel32`), behind `PowerBrowserAPI.sys.mjs` and catalogued; it is a new feature, not a fix.
 - **Owner decision:** build it, or accept that a Windows crash can leave one orphan `node.exe` until reboot.
 
+## 10. Unsigned Windows publish path: R2 conflicts with immutable releases (G-54b, written 2026-11-03 by gap plan 54-06)
+
+- **What:** R2 asks for Windows assets joined to the Release, the descriptor commit and channel-live, and for the
+  Windows path never to be a dependency of `sign-publish`, `descriptor` or `channel-live` for Linux.
+- **Why blocked:** the `Immutable releases consequence` section of `docs/RELEASING.md` says that once immutable
+  releases are enabled, an asset cannot be added after publication. `sign-publish` creates the draft with every asset
+  in one call and publishes it once. A Windows job that does not gate that publish therefore reaches an
+  already-published Release, and the upload is refused. Both halves of R2 cannot hold together while immutable
+  releases are on. Also, `build-windows` and `build-linux` share the one legion runner, so a publish that waited for
+  Windows would wait up to the Windows build time (300-minute job timeout, plus the 60-minute sidecar job).
+- **Landed regardless (54-06):** `win-sign-chain` `independence` now covers every Windows job, derived from artifact
+  names. A future Windows publish job may need `sign-publish` and `build-windows`, but no Linux job may need it.
+- **Owner decision**, then Claude writes the follow-up gap plan (54-07) for the chosen option:
+  - **(a) Recommended: Windows publishes after the Linux publish, on the MAR origin, not on the GitHub Release.**
+    The jobs are `publish-windows`, `descriptor-windows` and `channel-live-windows`. `publish-windows` needs
+    `build-windows` and `sign-publish` (environment `release`). It runs the MAR channel gate, signs and verifies the
+    Windows complete MAR with the MAR key, and copies the unsigned installer, the signed MAR and a Windows
+    `SHA256SUMS` write-once to `downloads.powerbrowser.org/<tag>/`. `descriptor-windows` (environment `descriptor`)
+    commits the `WINNT_x86_64-msvc` `update.xml`. `channel-live-windows` checks the Windows descriptor. The rows widened
+    are `release-asset-set` (a `windows-x86_64` row in the asset table), `release-shape` (the R2 credential in one more
+    step) and `channel-live`. The Release stays immutable and Linux-only. The download page links the Windows files
+    on the MAR origin, and the SEC-03 copy "Check the download against SHA256SUMS" points at the Windows
+    `SHA256SUMS` there.
+  - **(b) Keep "joined to the Release": the single publish waits for the Windows outcome.** The `--draft=false` step
+    moves to a final job that needs `sign-publish` and `publish-windows` with `if: always() &&
+    needs.sign-publish.result == 'success'`. A Windows failure does not stop Linux, but every Linux release waits
+    up to about six hours for the Windows build. This contradicts "Linux ships alone" (ruling 2026-11-01) in timing.
+  - **(c) Disable immutable releases** on the repository, so `publish-windows` can `gh release upload` after the Linux
+    publish. This drops the REL-02 immutability guarantee and the `immutable-releases.json` repo control.
+- **Proposed Windows asset names (all options):** `powerbrowser-<version>.windows-x86_64.installer.exe`,
+  `powerbrowser-windows-x86_64.installer.exe`, `powerbrowser-<version>.windows-x86_64.complete.mar` and
+  `powerbrowser-windows-x86_64.complete.mar`, following the generation rule in `docs/RELEASING.md` "Release asset
+  names".
+
 ## 54-02 must_haves that are NOT met (review WR-09; the gate for plan 54-04)
 
 Plan 54-02 landed only the uninstall-ping `Return` in patch 040, the Windows stage script and the PE32+ natives
