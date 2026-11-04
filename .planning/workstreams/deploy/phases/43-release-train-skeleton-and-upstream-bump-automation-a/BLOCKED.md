@@ -69,6 +69,12 @@ the train with `dry-run: true` and read the printed would-write lines before a l
 
 ## 3. Live tracking-issue writer is not wired (skipped piece)
 
+**Resolved 2026-11-03 by plan 43-06.** The owner approved the read-only facts source and the
+exactly-one writer (FINISH-PLAN.md section 2, "Release train facts source"). derive collects the
+live facts with GETs only; report writes one tracking issue per release key behind
+`!inputs.dry-run`. Still print-only: the conflict issue (AUTO-07) and the uptake-lane issue. The
+supersede facts stay uncollected (item 10). The text below is the original record.
+
 **Plan:** 43-02 Task 1 described the `report` job's find, render, PATCH and comment steps; 43-03
 delivered the pure protocol (`findExactlyOne`, `render`, `renderConflict`) with its self-test.
 

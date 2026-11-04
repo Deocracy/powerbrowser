@@ -99,6 +99,8 @@
 //   node scripts/release-train.mjs --fix-guard <facts.json>      (the derive job's live FIX-01 and FIX-05 guard)
 //   node scripts/release-train.mjs --run-titles <run-id> <repo> <workflow-path> <runs.json>...   (the earlier dispatch runs' titles; refuses a cut-off list)
 //   node scripts/release-train.mjs --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>
+//   node scripts/release-train.mjs --tracking-plan <collector.json> <found.json> <pin> <tag|''> <open-pr-number|''> <stage|''> <run-url|''> <out-dir>
+//                                       (the report job's tracking-issue plan; writes out-dir/ops.json and the bodies; OWNER_LOGIN from env)
 //   node scripts/release-train.mjs --uptake-would-write <tag|''> <stage|''> <replayed true|false> <replay-result> <detect-result>
 //                                       (replay-result: the uptake-replay job result; detect-result: the detect job result;
 //                                        each is success|failure|cancelled|skipped)
@@ -507,8 +509,8 @@ export function render(state, facts) {
  * The exactly-one rule over the issues a label-and-title find returned. Zero
  * creates, one updates (PATCH only when the stored bytes differ from the rendered
  * bytes), two or more fail naming every number and never PATCH. Pure.
- * Wired to the maintenance writer only (nextMaintenance, called by the report job). The
- * release-train tracking writer stays UNWIRED until BLOCKED.md item 3 is approved.
+ * Wired to the maintenance writer (nextMaintenance) and the release-train tracking writer
+ * (trackingPlan, plan 43-06), both called by the report job.
  */
 export function findExactlyOne(found, rendered) {
     if (found.length === 0) return { action: 'create', numbers: [], patch: false };
@@ -772,7 +774,7 @@ export function admitWakeRun(run, repository) {
 
 /**
  * A release is published only when it is neither a draft nor a prerelease. Pure.
- * UNWIRED: needs the live Release list (Phase 50); no plant covers it.
+ * Wired to the collected Release of the pin's train (trackingPlan, plan 43-06); the draft-Release plant covers it.
  */
 export function classifyRelease(release) {
     if (release.draft === true) return { published: false, reason: `draft Release ${release.tag} is not published, so it never moves the train` };
@@ -932,6 +934,172 @@ function wouldWriteCli([pinTag, tag, openPrNumber, stage]) {
         view.failures.forEach(f => console.error(`${NAME}: FAIL -- ${f}`));
         return 1;
     }
+    return 0;
+}
+
+// ---- The live tracking writer (plan 43-06; BLOCKED.md item 3, approved 2026-11-03) ----------------
+// The derive job collects the facts with read-only gh GETs and writes the collector file:
+//   { repository, releaseKey, mergeSHA, openPrs: [{ number, headRefName, checks: [{ name, status, conclusion, detailsUrl }] }],
+//     mergedHeads: [headRefName], runs, pending, jobs, release: { draft, prerelease, assets, body, published_at } | null,
+//     expectedAssets: [name] }
+// runs, pending and jobs are the release.yml run responses for `Release <mergeSHA>`, in releaseFactsFromLive's shape.
+// trackingPlan turns that file, the detect outputs and the found issues into the writes; the report job's one live
+// step executes them. Nothing here reads the network.
+
+/** The logins a tracking issue may carry as author besides the owner: the job token's bot, as gh and the REST API spell it. */
+export const TRACKING_BOTS = Object.freeze(['app/github-actions', 'github-actions', 'github-actions[bot]']);
+const CHECK_FAILED = new Set(['failure', 'cancelled', 'timed_out', 'action_required', 'startup_failure']);
+
+/** The last check named verify in a PR's rollup: success, failure, pending (running, or a neutral result) or null (none yet). Pure. */
+export function verifyCheckOf(checks) {
+    const last = (Array.isArray(checks) ? checks : []).filter(c => c && c.name === 'verify').at(-1);
+    if (last === undefined) return null;
+    if (String(last.status ?? '').toLowerCase() !== 'completed') return 'pending';
+    const c = String(last.conclusion ?? '').toLowerCase();
+    if (c === 'success') return 'success';
+    return CHECK_FAILED.has(c) ? 'failure' : 'pending';
+}
+
+/**
+ * The release facts of the pin's train from the collector file and its tracking issue's state. Pure.
+ * shortcut: the descriptor leg is read from the release run's channel-live job (completed success = served bytes
+ * equal and channel green; completed otherwise = red), not from the updates host, so drift after that job ran is
+ * seen by the daily maintenance channel row, not here; upgrade when a per-tick descriptor read is cheap enough
+ * (verify-channel-live.mjs downloads the MAR).
+ */
+export function releaseTrainFacts(c, issueState) {
+    const rel = releaseFactsFromLive({
+        key: c.releaseKey, mergeSHA: c.mergeSHA, repository: c.repository, expectedAssets: c.expectedAssets ?? [],
+        runs: c.runs ?? [], pending: c.pending ?? [], jobs: c.jobs ?? [], release: c.release ?? null,
+        contents: null, servedBytes: null, noUpdateBytes: null, channelLive: null, issue: issueState === null ? null : { state: issueState },
+    });
+    const cl = (c.jobs ?? []).find(j => j.name === 'channel-live' && j.status === 'completed') ?? null;
+    return {
+        ...rel,
+        channelLive: cl === null ? null : { green: cl.conclusion === 'success', subcheck: null },
+        descriptor: { present: cl !== null, matchesServed: cl !== null && cl.conclusion === 'success', noUpdate: false },
+    };
+}
+
+const labelNames = issue => (issue?.labels ?? []).map(l => (typeof l === 'string' ? l : l?.name)).filter(n => typeof n === 'string');
+
+/**
+ * The tracking-issue writes for one run: at most one issue per release key, for the bump train (the candidate or
+ * its open PR) and for the pin's release train (once a merged bump PR names its merge SHA). Each key: select the
+ * owner- or bot-authored issues titled for it (selectTracked), derive over the facts (the release train reads the
+ * issue's open or closed state, a GitHub fact), render, and apply findExactlyOne: zero creates, one updates with a
+ * PATCH only on a byte diff, two or more fail naming every number. Labels are synced to the rendered set, the owner
+ * is mentioned once on entering an owner state (the state label not yet on the issue), a created issue is locked,
+ * and the issue is closed or reopened as render says. Any failure writes nothing in this run. Pure.
+ */
+export function trackingPlan({ collector, found, pinTag, tag, openPrNumber, stage, runUrl = null, ownerLogin = null }) {
+    const c = collector ?? {};
+    const lines = [];
+    const failures = [];
+    const authors = [ownerLogin, ...TRACKING_BOTS];
+    const candidateTag = tag === '' ? null : tag;
+    const trains = [];
+    if (openPrNumber !== '' && candidateTag === null) {
+        failures.push(`an open PR (#${openPrNumber}) names no candidate tag, so its bump branch cannot be named. Next step: pass the tag the PR was opened for.`);
+    } else if (candidateTag !== null) {
+        const pr = openPrNumber === '' ? null
+            : (c.openPrs ?? []).find(p => p.number === Number(openPrNumber)) ?? { number: Number(openPrNumber), headRefName: `chore/esr-${candidateTag}`, checks: [] };
+        const verifyCheck = pr === null ? null : verifyCheckOf(pr.checks);
+        const failedCheck = pr === null ? null : (pr.checks ?? []).filter(x => x.name === 'verify').at(-1) ?? null;
+        // A merged chore/esr-<candidate> PR while the candidate is still newer than the pin left the pin unchanged.
+        const merged = (c.mergedHeads ?? []).includes(`chore/esr-${candidateTag}`);
+        const stageLine = stage === '' ? null : stage;
+        const logUrl = verifyCheck === 'failure' ? failedCheck?.detailsUrl ?? runUrl : (stageLine !== null ? runUrl : null);
+        trains.push({
+            title: `release-train: ${releaseKey({ candidateTag, pinTag, revision: 1 })}`,
+            facts: issue => ({ pinTag, candidateTag, revision: 1, openPr: pr === null ? null : { head: pr.headRefName, number: pr.number }, stage: stageLine,
+                verifyCheck, merged, pinUnchanged: merged, logUrl, ownerLogin, issueState: issue === null ? null : String(issue.state).toLowerCase() }),
+        });
+    }
+    if (typeof c.mergeSHA === 'string' && /^[0-9a-f]{40}$/.test(c.mergeSHA) && typeof c.releaseKey === 'string' && KEY_RE.test(c.releaseKey)) {
+        if (c.release) {
+            const r = classifyRelease({ ...c.release, tag: c.releaseKey });
+            if (!r.published) lines.push(`release-train: ${c.releaseKey}: ${r.reason}`);
+        }
+        trains.push({
+            title: `release-train: ${c.releaseKey}`,
+            facts: issue => ({ pinTag, candidateTag: null, revision: 1, openPr: null, stage: null, verifyCheck: null, merged: false, pinUnchanged: false,
+                ownerLogin, release: releaseTrainFacts(c, issue === null ? null : String(issue.state).toLowerCase()) }),
+        });
+    }
+    const ops = [];
+    for (const t of trains) {
+        const mine = selectTracked(found, t.title, authors);
+        const issue = mine.length === 1 ? mine[0] : null;
+        const facts = t.facts(issue);
+        const state = derive(facts);
+        if (state === null) { lines.push(`${t.title}: idle; nothing is written`); continue; }
+        const rendered = render(state, facts);
+        const decision = findExactlyOne(mine.map(i => ({ ...i, body: normBody(i.body) })), { ...rendered, body: normBody(rendered.body) });
+        if (decision.action === 'fail') { failures.push(`${t.title}: ${decision.reason}`); continue; }
+        const have = labelNames(issue);
+        const closed = issue !== null && String(issue.state).toLowerCase() === 'closed';
+        const op = {
+            number: issue === null ? null : issue.number,
+            title: rendered.title,
+            state,
+            body: rendered.body,
+            create: decision.action === 'create',
+            patch: decision.patch,
+            addLabels: rendered.labels.filter(l => !have.includes(l)),
+            removeLabels: have.filter(l => (l.startsWith('state/') || l === LABELS.blocked) && !rendered.labels.includes(l)),
+            assign: rendered.assign.filter(a => !(issue?.assignees ?? []).some(x => sameLogin(x?.login, a))),
+            mention: rendered.mention !== null && !have.includes(LABELS.state(state)) ? rendered.mention : null,
+            lock: decision.action === 'create',
+            close: rendered.close && !closed,
+            reopen: closed && !rendered.close && state !== 'DONE',
+        };
+        const acts = op.create ? ['create'] : [op.patch && 'patch', op.addLabels.length + op.removeLabels.length > 0 && 'labels', op.assign.length > 0 && 'assign',
+            op.mention && 'mention', op.close && 'close', op.reopen && 'reopen'].filter(Boolean);
+        lines.push(`${t.title}: state=${state} action=${next(state)} issue=${op.number === null ? 'new' : `#${op.number}`} writes=${acts.join(',') || 'none'}`);
+        if (acts.length > 0) ops.push(op);
+    }
+    return { lines, failures, ops };
+}
+
+/** The mention comment for an op, or null. Plain text; the owner's login is the only name in it. Pure. */
+export function trackingMention(op) {
+    if (op.mention === null) return null;
+    return `@${op.mention} ${op.title} is now ${op.state}: ${ALL_STATES[op.state].desc}. Next step: act on the step this issue names.\n`;
+}
+
+function trackingPlanCli([collectorPath, foundPath, pinTag, tag, openPrNumber, stage, runUrl, outDir]) {
+    if (tagToVersion(pinTag) === null) {
+        console.error(`${NAME}: FAIL -- the pin ${JSON.stringify(pinTag)} is not an *esr_RELEASE tag. Next step: check the pin in configuration.toml.`);
+        return 2;
+    }
+    let collector;
+    let found;
+    try {
+        collector = readFacts(collectorPath);
+        found = readFacts(foundPath);
+    } catch (e) {
+        console.error(`${NAME}: FAIL -- the collected facts or the found issues did not load (${e.message}). Next step: re-run the derive and report jobs.`);
+        return 1;
+    }
+    const raw = process.env.OWNER_LOGIN ?? '';
+    const ownerLogin = OWNER_RE.test(raw) ? raw : null;
+    if (ownerLogin === null) console.log('release-train: OWNER_LOGIN is unset or not a login; owner-authored issues are not selected and nobody is assigned or mentioned');
+    const plan = trackingPlan({ collector, found, pinTag, tag, openPrNumber, stage, runUrl: runUrl === '' ? null : runUrl, ownerLogin });
+    plan.lines.forEach(l => console.log(l));
+    if (plan.failures.length > 0) {
+        plan.failures.forEach(f => console.error(`${NAME}: FAIL -- ${f}`));
+        return 1;
+    }
+    const files = plan.ops.map((op, i) => {
+        writeFileSync(join(outDir, `body-${i}.md`), op.body);
+        const mention = trackingMention(op);
+        if (mention !== null) writeFileSync(join(outDir, `mention-${i}.md`), mention);
+        const { body: _body, mention: _m, ...rest } = op;
+        return { ...rest, bodyFile: join(outDir, `body-${i}.md`), mentionFile: mention === null ? '' : join(outDir, `mention-${i}.md`) };
+    });
+    writeFileSync(join(outDir, 'ops.json'), JSON.stringify(files));
+    plan.ops.forEach(op => console.log(op.body));
     return 0;
 }
 
@@ -2857,14 +3025,101 @@ function selfTest(mode = 'all') {
             },
         },
     ];
+    // Plan 43-06: the live tracking writer over a collector file (the derive job's facts) and the found issues.
+    const T_BOT = TRACKING_BOTS[0];
+    const T_TITLE = `release-train: v${tagToVersion(NEWER).esrVersion}-1`;
+    const tIssue = (number, title, over = {}) => ({ number, title, body: '', author: { login: T_BOT }, labels: [{ name: LABELS.track }], state: 'OPEN', assignees: [], ...over });
+    const tCollector = (over = {}) => ({ repository: REPO_FIXTURE, releaseKey: RELEASE_KEY, mergeSHA: '', openPrs: [], mergedHeads: [], runs: [], pending: [], jobs: [], release: null, expectedAssets: [...EXPECTED_ASSETS], ...over });
+    const tPlan = (over = {}) => trackingPlan({ collector: tCollector(over.collector), found: over.found ?? [], pinTag: BASE_PIN, tag: over.tag ?? NEWER, openPrNumber: over.pr ?? '', stage: over.stage ?? '', runUrl: runUrl(1), ownerLogin: OWNER });
+    const tRelease = (over = {}) => tPlan({ tag: '', ...over, collector: { mergeSHA: MERGE_SHA, runs: LIVE_DONE_RUN, release: liveRelease(), ...over.collector } });
+    const tOut = p => [...p.failures, ...p.lines];
+    const prWith = (conclusion, status = 'completed') => ({ openPrs: [{ number: 43, headRefName: `chore/esr-${NEWER}`, checks: [{ name: 'verify', status, conclusion, detailsUrl: runUrl(9) }] }] });
+    const trackingPlants = [
+        {
+            // Un-DROPPED (43-REVIEW-FIX WR-07): the exactly-one rule is wired to the live writer now.
+            name: 'a duplicate tracking issue for one release key',
+            run: () => { const p = tPlan({ found: [tIssue(9, T_TITLE), tIssue(5, T_TITLE)] }); return p.ops.length === 0 ? tOut(p) : [`a duplicate planned ${p.ops.length} write(s)`, ...tOut(p)]; },
+            expect: '(#5, #9) match one release key',
+        },
+        {
+            // Un-DROPPED (43-REVIEW-FIX WR-07): classifyRelease reads the collected Release.
+            name: 'a draft Release with the full asset set',
+            run: () => { const p = tRelease({ collector: { release: liveRelease({ draft: true }) } }); return p.lines.some(l => l.includes('state=PUBLISHED')) ? ['a draft Release derived PUBLISHED'] : tOut(p); },
+            expect: `draft Release ${RELEASE_KEY} is not published`,
+        },
+        {
+            name: 'a failing verify check on the open bump PR',
+            run: () => { const p = tPlan({ pr: '43', collector: prWith('FAILURE') }); return p.ops[0]?.body.includes(`Failing log: ${runUrl(9)}`) ? tOut(p) : ['no failing-log link', ...tOut(p)]; },
+            expect: 'state=BUMP_RED',
+        },
+        {
+            name: 'a merged bump PR for the candidate that left the pin unchanged',
+            run: () => tOut(tPlan({ collector: { mergedHeads: [`chore/esr-${NEWER}`] } })),
+            expect: 'state=BUMP_RED',
+        },
+        {
+            name: 'a release run whose channel-live job failed',
+            run: () => tOut(tRelease({ collector: { jobs: [{ name: 'descriptor', status: 'completed', conclusion: 'success' }, { name: 'channel-live', status: 'completed', conclusion: 'failure' }] } })),
+            expect: 'state=LIVE_RED',
+        },
+    ];
+    const trackingGreens = [
+        {
+            name: 'control: no issue yet creates one, labelled and locked',
+            run: () => {
+                const op = tPlan().ops[0];
+                return op?.create === true && op.lock === true && op.addLabels.includes(LABELS.state('DETECTED')) && op.number === null ? [] : [`create op was ${JSON.stringify(op)}`];
+            },
+        },
+        {
+            name: 'control: one issue with identical bytes and labels plans no write; a different body plans one PATCH',
+            run: () => {
+                const body = tPlan().ops[0].body;
+                const same = tPlan({ found: [tIssue(5, T_TITLE, { body: body.replace(/\n/g, '\r\n'), labels: [{ name: LABELS.track }, { name: LABELS.state('DETECTED') }] })] });
+                const diff = tPlan({ found: [tIssue(5, T_TITLE, { body: 'stale', labels: [{ name: LABELS.track }, { name: LABELS.state('BUMPING') }] })] }).ops[0];
+                const ok = same.ops.length === 0 && same.lines.some(l => l.includes('writes=none'))
+                    && diff?.patch === true && diff.number === 5 && diff.removeLabels.includes(LABELS.state('BUMPING')) && diff.addLabels.includes(LABELS.state('DETECTED'));
+                return ok ? [] : [`same=${JSON.stringify(same.lines)} diff=${JSON.stringify(diff)}`];
+            },
+        },
+        {
+            name: "control: a stranger's same-title issue is not selected, so it causes neither a duplicate nor an update",
+            run: () => { const op = tPlan({ found: [tIssue(7, T_TITLE, { author: { login: 'stranger-login-fixture' } })] }).ops[0]; return op?.create === true ? [] : [`op was ${JSON.stringify(op)}`]; },
+        },
+        {
+            name: 'control: a green verify check mentions the owner once, on entering BUMP_PR_GREEN',
+            run: () => {
+                const first = tPlan({ pr: '43', collector: prWith('SUCCESS') }).ops[0];
+                const again = tPlan({ pr: '43', collector: prWith('SUCCESS'), found: [tIssue(5, T_TITLE, { body: first.body, labels: [{ name: LABELS.track }, { name: LABELS.state('BUMP_PR_GREEN') }], assignees: [{ login: OWNER }] })] });
+                return first.state === 'BUMP_PR_GREEN' && first.mention === OWNER && trackingMention(first).startsWith(`@${OWNER} `) && again.ops.length === 0 ? [] : [`first=${JSON.stringify(first)} again=${JSON.stringify(again.lines)}`];
+            },
+        },
+        {
+            name: 'control: a running verify check stays BUMPING',
+            run: () => { const p = tPlan({ pr: '43', collector: prWith(null, 'IN_PROGRESS') }); return p.lines.some(l => l.includes('state=BUMPING')) ? [] : tOut(p); },
+        },
+        {
+            name: 'control: the pin release train derives PUBLISHED, DESCRIPTOR_WAIT, DESCRIPTOR_LIVE (closing) and DONE (no reopen) from collected facts',
+            run: () => {
+                const okJobs = [{ name: 'descriptor', status: 'completed', conclusion: 'success' }, { name: 'channel-live', status: 'completed', conclusion: 'success' }];
+                const pub = tRelease();
+                const wait = tRelease({ collector: { pending: [{ environment: { id: 8, name: 'descriptor' } }], jobs: [{ name: 'descriptor', status: 'waiting', conclusion: null }] } });
+                const live = tRelease({ collector: { jobs: okJobs } }).ops[0];
+                const done = tRelease({ collector: { jobs: okJobs }, found: [tIssue(6, `release-train: ${RELEASE_KEY}`, { state: 'CLOSED' })] }).ops[0];
+                const ok = pub.lines.some(l => l.includes('state=PUBLISHED')) && wait.lines.some(l => l.includes('state=DESCRIPTOR_WAIT'))
+                    && live?.state === 'DESCRIPTOR_LIVE' && live.close === true && done?.state === 'DONE' && done.reopen === false && done.close === false;
+                return ok ? [] : [`pub=${pub.lines} wait=${wait.lines} live=${JSON.stringify(live)} done=${JSON.stringify(done)}`];
+            },
+        },
+    ];
     const want = (section) => mode === 'all' || mode === section;
     const plants = [
-        ...(want('derive') ? [...trainPlants, ...conflictPlants, ...viewPlants, ...publishPlants, ...dispatchPlants, ...uptakePlants] : []),
+        ...(want('derive') ? [...trainPlants, ...conflictPlants, ...viewPlants, ...publishPlants, ...dispatchPlants, ...uptakePlants, ...trackingPlants] : []),
         ...(want('next') ? attemptPlants : []),
         ...(want('render') ? renderPlants : []),
     ];
     const allGreens = [
-        ...(want('derive') ? [...greens, ...dispatchGreens, ...uptakeGreens] : []),
+        ...(want('derive') ? [...greens, ...dispatchGreens, ...uptakeGreens, ...trackingGreens] : []),
         ...(want('next') ? attemptGreens : []),
         ...(want('render') ? renderGreens : []),
     ];
@@ -2914,6 +3169,7 @@ if (isEntry) {
     if (args.length === 1 && args[0] === '--self-test') process.exit(selfTest('all'));
     if (args.length === 2 && ['derive', 'next', 'render'].includes(args[0]) && args[1] === '--self-test') process.exit(selfTest(args[0]));
     if (args[0] === '--would-write' && args.length === 5) process.exit(wouldWriteCli(args.slice(1)));
+    if (args[0] === '--tracking-plan' && args.length === 9) process.exit(trackingPlanCli(args.slice(1)));
     if (args[0] === '--fixer-inputs' && args.length === 8) process.exit(fixerInputsCli(args.slice(1)));
     if (args[0] === '--fix-guard' && args.length === 2) process.exit(fixerGuardCli(args.slice(1)));
     if (args[0] === '--run-titles' && args.length >= 5) process.exit(runTitlesCli(args.slice(1)));

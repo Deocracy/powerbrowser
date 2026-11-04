@@ -36,13 +36,13 @@
 # from detect-upstreams.mjs --uptake-major) and names the newest one. uptake-replay
 # replays that tag through the same rebase-upstream.yml, read-only, and is never a
 # bump: no bump job, no branch, no PR, no App token, no environment, no dispatch.
-# report prints its would-write view. A conflict is one issue, written by the report
-# writer once that writer is approved (BLOCKED.md item 3 of Phase 43).
+# report prints its would-write view. A conflict is one issue; the conflict and uptake
+# issues are still printed, not written.
 #
-# Not here yet: the live GitHub facts behind derive (check runs, the Release list) are
-# fixture-backed, and the release-stage states of release-train.mjs have no live collector
-# until the facts source and the tracking-issue writer are approved (BLOCKED.md item 3).
-# dispatch-release prints the run link to the job summary in the meantime.
+# Live facts (plan 43-06). derive collects them with read-only GETs (the bump PRs and their
+# verify check, the pin's merge SHA, its release.yml run, pending deployments and jobs, the
+# Release at the pin's key and its expected assets), and report writes exactly one tracking
+# issue per release key from them. The supersede facts have no collector yet (BLOCKED.md item 10).
 #
 # Dry-run. Every step that commits, opens, comments or dispatches carries a negated
 # inputs.dry-run in its if:. A dry run still validates, decides and replays, because
@@ -128,9 +128,12 @@ jobs:
     permissions:
       contents: read
       actions: read
+      # Read only: the bump PRs and their verify check, for the live facts (plan 43-06).
+      pull-requests: read
     outputs:
       reason: ${{ steps.validate.outputs.reason }}
       latest-tag: ${{ steps.fixer-inputs.outputs.latest-tag }}
+      facts-b64: ${{ steps.facts.outputs.facts-b64 }}
     steps:
       - name: Check out repo
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -158,6 +161,56 @@ jobs:
 
       - name: Prove the detector on fixtures before acting
         run: node scripts/detect-upstreams.mjs --self-test
+
+      # The live facts (plan 43-06, approved 2026-11-03): read-only GETs, so it runs in a dry run too. The bump PRs
+      # with their verify check; the merge SHA of the pin's bump PR; the release.yml run titled `Release <sha>` (the
+      # same filter dispatch-release uses), its pending deployments and jobs; the Release at the pin's release key
+      # (404 is none) and the expected asset set from its release-manifest.json asset. report derives and renders.
+      - name: Collect the live release-train facts (read)
+        id: facts
+        if: ${{ inputs.reason != 'fix' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          H='X-GitHub-Api-Version: 2022-11-28'
+          D="$RUNNER_TEMP/facts"
+          mkdir -p "$D"
+          PIN="$(node scripts/detect-upstreams.mjs --pin)"
+          KEY="$(node --input-type=module -e "import { resolveConfig, releaseIdentity } from './scripts/generate.mjs'; console.log(releaseIdentity(resolveConfig('./configuration.toml').config).releaseKey);" | tail -n 1)"
+          [[ "$KEY" =~ ^v[0-9]+(\.[0-9]+)*-[0-9]+$ ]] || { echo "release-train: FAIL -- the derived release key '$KEY' is not v<esr>-<revision>. Next step: check configuration.toml." >&2; exit 1; }
+          gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json number,headRefName,isCrossRepository,statusCheckRollup \
+            --jq '[.[] | select(.isCrossRepository == false and (.headRefName | startswith("chore/esr-"))) | {number, headRefName, checks: [.statusCheckRollup[]? | select(.name == "verify") | {name, status, conclusion, detailsUrl}]}]' > "$D/open.json"
+          gh pr list --repo "$GITHUB_REPOSITORY" --state merged --base main --limit 100 --json number,headRefName,isCrossRepository,mergeCommit \
+            --jq '[.[] | select(.isCrossRepository == false and (.headRefName | startswith("chore/esr-")))] | sort_by(.number) | reverse' > "$D/merged.json"
+          SHA="$(jq -r --arg h "chore/esr-${PIN}" '[.[] | select(.headRefName == $h)][0].mergeCommit.oid // empty' "$D/merged.json")"
+          [ -z "$SHA" ] || [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "release-train: FAIL -- the merged bump PR names a merge SHA that is not 40 hex. Next step: check the PR." >&2; exit 1; }
+          export SHA
+          echo '[]' > "$D/runs.json"; echo '[]' > "$D/pending.json"; echo '[]' > "$D/jobs.json"; echo 'null' > "$D/release.json"; echo '[]' > "$D/expected.json"
+          if [ -n "$SHA" ]; then
+            gh api -H "$H" "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100" \
+              --jq '[.workflow_runs[] | select(.event == "workflow_dispatch" and .display_title == "Release " + env.SHA and ((.path // "") | split("@")[0]) == ".github/workflows/release.yml" and .head_repository.full_name == env.GITHUB_REPOSITORY) | {id, display_title, path, head_repository: {full_name: .head_repository.full_name}, event, status, conclusion, created_at, html_url}]' > "$D/runs.json"
+            RUN_ID="$(jq -r 'sort_by(.created_at) | reverse | .[0].id // empty' "$D/runs.json")"
+            if [ -n "$RUN_ID" ]; then
+              gh api -H "$H" "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/pending_deployments" --jq '[.[] | {environment: {id: .environment.id, name: .environment.name}}]' > "$D/pending.json"
+              gh api -H "$H" "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?per_page=100" --jq '[.jobs[] | {name, status, conclusion}]' > "$D/jobs.json"
+            fi
+            if gh api -H "$H" "repos/$GITHUB_REPOSITORY/releases/tags/$KEY" --jq '{draft, prerelease, assets: [.assets[] | {name}], body: (.body // ""), published_at}' > "$D/release.json" 2> "$D/release.err"; then
+              if jq -e '.assets | any(.name == "release-manifest.json")' "$D/release.json" > /dev/null; then
+                gh release download "$KEY" --repo "$GITHUB_REPOSITORY" --pattern release-manifest.json --dir "$D/manifest"
+                node scripts/verify-release-asset-set.mjs --expected --manifest "$D/manifest/release-manifest.json" | cut -f2 | jq -R . | jq -s . > "$D/expected.json"
+              fi
+            else
+              grep -q 'HTTP 404' "$D/release.err" || { cat "$D/release.err" >&2; exit 1; }
+              echo 'null' > "$D/release.json"
+            fi
+          fi
+          jq -n --arg repo "$GITHUB_REPOSITORY" --arg key "$KEY" --arg sha "$SHA" \
+            --slurpfile open "$D/open.json" --slurpfile merged "$D/merged.json" --slurpfile runs "$D/runs.json" --slurpfile pending "$D/pending.json" \
+            --slurpfile jobs "$D/jobs.json" --slurpfile release "$D/release.json" --slurpfile expected "$D/expected.json" \
+            '{repository: $repo, releaseKey: $key, mergeSHA: $sha, openPrs: $open[0], mergedHeads: [$merged[0][].headRefName], runs: $runs[0], pending: $pending[0], jobs: $jobs[0], release: $release[0], expectedAssets: $expected[0]}' > "$D/collector.json"
+          jq -c '{releaseKey, mergeSHA, openPrs: (.openPrs | length), runs: (.runs | length), release: (.release != null), expectedAssets: (.expectedAssets | length)}' "$D/collector.json"
+          echo "facts-b64=$(base64 -w0 "$D/collector.json")" >> "$GITHUB_OUTPUT"
 
       # A fixer dispatch is checked before the fix job starts: the input shapes, then the live FIX-01 and FIX-05 guard
       # (CR-04). The guard counts the fix runs this workflow already ran in this repository, by display title and by an
@@ -1117,13 +1170,18 @@ jobs:
           if [ -n "$CANDIDATE" ]; then echo "dry-run: would open or update chore/esr-${CANDIDATE} (replay result: ${BUMP})"; else echo "dry-run: no ESR bump to open"; fi
           if [ -n "$NODE_VERSION" ]; then echo "dry-run: would open or update chore/node-v24.x at ${NODE_VERSION}"; else echo "dry-run: no Node bump to open"; fi
 
-      - name: Print the tracking issue this run would write (dry-run)
-        if: ${{ inputs.dry-run }}
+      # The tracking issues (plan 43-06, BLOCKED.md item 3 approved 2026-11-03). Found read only, open and closed, by
+      # label and title on the server; trackingPlan keeps only owner- or bot-authored ones (selectTracked) and applies
+      # the exactly-one rule per release key. The plan runs in a dry run too and prints every write it would make.
+      - name: Find the release-train tracking issues (read)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "dry-run: would find or create the release-train tracking issue and render it from facts; nothing is written"
+          set -euo pipefail
+          gh issue list --repo "$GITHUB_REPOSITORY" --state all --limit 100 --label release-train --search 'in:title "release-train: v"' --json number,title,body,author,labels,state,assignees > "$RUNNER_TEMP/track-found.json"
 
-      # shortcut: the tracking issue is not written, so this step prints the would-write view (state, action and the rendered body) from this run's job outputs and exits 0, since a red run every tick is worse than an explicit, printed hold, upgrade when the live facts source and the exactly-one writer are approved (BLOCKED.md item 3).
-      - name: Print the would-write view of the tracking issue (writer not wired)
+      - name: Plan the tracking-issue writes from the live facts (read)
+        id: track-plan
         env:
           PIN: ${{ needs.detect.outputs.pin }}
           CANDIDATE: ${{ needs.detect.outputs.candidate }}
@@ -1131,13 +1189,56 @@ jobs:
           PR_NUMBER: ${{ needs.detect.outputs.pr-open-number }}
           BUMP: ${{ needs.bump.result }}
           STAGE_OUT: ${{ needs.bump.outputs.stage }}
+          FACTS_B64: ${{ needs.derive.outputs.facts-b64 }}
+          OWNER_LOGIN: ${{ vars.OWNER_LOGIN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -eu
           STAGE="$STAGE_OUT"
           if [ "$BUMP" = "failure" ] && [ -z "$STAGE" ]; then STAGE="FAIL -- the replay job ended failure with no stage line"; fi
-          # A candidate whose PR is already open is the PR-open tag; the view reads it as BUMPING.
+          # A candidate whose PR is already open is the PR-open tag; the plan reads it as BUMPING.
           TAG="${CANDIDATE:-$PR_TAG}"
-          node scripts/release-train.mjs --would-write "$PIN" "$TAG" "$PR_NUMBER" "$STAGE"
+          printf '%s' "$FACTS_B64" | base64 -d > "$RUNNER_TEMP/track-collector.json"
+          mkdir -p "$RUNNER_TEMP/track"
+          node scripts/release-train.mjs --tracking-plan "$RUNNER_TEMP/track-collector.json" "$RUNNER_TEMP/track-found.json" "$PIN" "$TAG" "$PR_NUMBER" "$STAGE" "$RUN_URL" "$RUNNER_TEMP/track"
+
+      - name: Print the tracking-issue writes this run would make (dry-run)
+        if: ${{ inputs.dry-run }}
+        run: |
+          echo "dry-run: the tracking-issue plan above lists $(jq length "$RUNNER_TEMP/track/ops.json") issue write(s); nothing is written"
+
+      # Live only: executes the plan. A created issue is labelled, assigned and locked; an existing one is PATCHed only
+      # when its bytes differ, its state labels are synced, and the owner is mentioned once on entering an owner state.
+      - name: Write the tracking issues (live only)
+        if: ${{ !inputs.dry-run && steps.track-plan.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r OP; do
+            N="$(jq -r '.number // empty' <<<"$OP")"
+            BODY="$(jq -r '.bodyFile' <<<"$OP")"
+            MENTION="$(jq -r '.mentionFile' <<<"$OP")"
+            ADD=(); while IFS= read -r L; do ADD+=(--add-label "$L"); done < <(jq -r '.addLabels[]' <<<"$OP")
+            if [ "$(jq -r '.create' <<<"$OP")" = true ]; then
+              ARGS=(); while IFS= read -r L; do ARGS+=(--label "$L"); done < <(jq -r '.addLabels[]' <<<"$OP")
+              while IFS= read -r A; do ARGS+=(--assignee "$A"); done < <(jq -r '.assign[]' <<<"$OP")
+              URL="$(gh issue create --repo "$GITHUB_REPOSITORY" --title "$(jq -r '.title' <<<"$OP")" --body-file "$BODY" "${ARGS[@]}")"
+              N="${URL##*/}"
+              [[ "$N" =~ ^[0-9]+$ ]] || { echo "release-train: FAIL -- the created issue URL '$URL' names no number. Next step: read the issue list and re-run." >&2; exit 1; }
+              gh api -X PUT -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$GITHUB_REPOSITORY/issues/$N/lock"
+            else
+              [ "$(jq -r '.reopen' <<<"$OP")" != true ] || gh issue reopen "$N" --repo "$GITHUB_REPOSITORY"
+              [ "$(jq -r '.patch' <<<"$OP")" != true ] || gh issue edit "$N" --repo "$GITHUB_REPOSITORY" --body-file "$BODY"
+              ARGS=("${ADD[@]}")
+              while IFS= read -r L; do ARGS+=(--remove-label "$L"); done < <(jq -r '.removeLabels[]' <<<"$OP")
+              while IFS= read -r A; do ARGS+=(--add-assignee "$A"); done < <(jq -r '.assign[]' <<<"$OP")
+              [ "${#ARGS[@]}" -eq 0 ] || gh issue edit "$N" --repo "$GITHUB_REPOSITORY" "${ARGS[@]}"
+            fi
+            [ -z "$MENTION" ] || gh issue comment "$N" --repo "$GITHUB_REPOSITORY" --body-file "$MENTION"
+            [ "$(jq -r '.close' <<<"$OP")" != true ] || gh issue close "$N" --repo "$GITHUB_REPOSITORY"
+            echo "release-train: wrote tracking issue #$N ($(jq -r '.title + " state=" + .state' <<<"$OP"))"
+          done < <(jq -c '.[]' "$RUNNER_TEMP/track/ops.json")
 
       # The uptake lane's view (TRAIN-05). Only a success is a green replay (replayed=true). The job
       # result is passed too: any other result is red, whatever stage line the job printed, and the
