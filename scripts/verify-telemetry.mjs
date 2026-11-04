@@ -39,7 +39,7 @@
 //   node scripts/verify-telemetry.mjs
 //   node scripts/verify-telemetry.mjs --self-test
 //
-// The self-test plants eight faults and requires each to go red, each with the unmutated control
+// The self-test plants ten faults and requires each to go red, each with the unmutated control
 // green first, so a red is plant-caused: the suite run against the always-send stub (the off
 // assertion must fail), a drifted tracked block, a drifted fragment, an extra key in the
 // enrichment, a stack field the sender forwards (the admitted-set filter removed), and a one-word
@@ -49,6 +49,9 @@
 // listener, and a repeated error is sent once. Two further plants remove the value-shape check on
 // the admitted keys, and weaken it to drop only the key: a path or message in type, source, os,
 // version or buildID, or a negative or fractional line, must keep the whole report off the wire.
+// The usage path at level all is driven the same way (IN-03): only admitted keys, an
+// identifier-shaped name or 'unknown', and no content in an admitted key. Two plants forward its
+// data and then its name unfiltered; each must go red naming 'usage path'.
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, copyFileSync } from 'node:fs';
@@ -417,6 +420,35 @@ async function driveErrorReport(root) {
     return { problems };
 }
 
+// IN-03: the usage path at level all goes through the same name and admitted-key filter as the error
+// path. A control event proves the sender delivers; the hostile ones must arrive trimmed, renamed or
+// not at all. Loads from `root`, so a planted sender copy is exercised as written.
+async function driveUsage(root) {
+    const { PowerBrowserTelemetrySender } = await loadModule(root, SENDER_REL);
+    const bodies = [];
+    const sender = new PowerBrowserTelemetrySender({
+        endpoint: 'https://self-test.invalid/collect',
+        getLevel: () => 'all',
+        fetchFn: (url, init) => { bodies.push(init.body); return Promise.resolve({ ok: true }); },
+        flushIntervalMs: 0,
+    });
+    sender.sendEventData('usage.control', { type: 'Control' });
+    sender.sendEventData('usage.extra-keys', { type: 'T', path: '/home/alice/x', user: 'alice' });
+    sender.sendEventData('opened /home/alice/x');
+    sender.sendEventData('usage.content', { type: 'T', source: 'file:///home/alice/a.ts' });
+    await sender.flush();
+    sender.dispose();
+    const events = bodies.flatMap(b => JSON.parse(b).events);
+    const problems = [];
+    const byName = name => events.find(e => e.name === name);
+    if (JSON.stringify(byName('usage.control')?.data) !== JSON.stringify({ type: 'Control' })) problems.push(`usage path: the control event did not arrive as { type: "Control" }: ${JSON.stringify(events)}`);
+    if (JSON.stringify(byName('usage.extra-keys')?.data) !== JSON.stringify({ type: 'T' })) problems.push(`usage path: keys outside the admitted set reached the wire: ${JSON.stringify(byName('usage.extra-keys'))}`);
+    if (events.some(e => e.name.includes('/'))) problems.push(`usage path: a path-shaped event name reached the wire: ${JSON.stringify(events.map(e => e.name))}`);
+    if (byName('unknown') === undefined) problems.push(`usage path: a path-shaped event name was not sent as 'unknown'`);
+    if (byName('usage.content') !== undefined) problems.push(`usage path: content in an admitted key reached the wire: ${JSON.stringify(byName('usage.content'))}`);
+    return { problems };
+}
+
 // Copies the four producer-side files the checks read, so a plant can mutate one and leave the rest as written.
 function stageControlTree(dir) {
     for (const rel of [MANIFEST_REL, FRAGMENT_REL, APP_PKG_REL, ENRICH_REL, PREFS_REL]) copyInto(dir, rel);
@@ -449,6 +481,12 @@ async function selfTest() {
         complain('error report', `is already red, so the producer plants below would mean nothing: ${errorControl.problems.join(' | ')}`);
     } else {
         console.log(`  ok  error report -> no message, stack or path; hostile events contained; a repeat sent once; admitted keys only`);
+    }
+    const usageControl = await driveUsage(REPO_ROOT);
+    if (usageControl.problems.length > 0) {
+        complain('usage path', `is already red, so the usage plants below would mean nothing: ${usageControl.problems.join(' | ')}`);
+    } else {
+        console.log(`  ok  usage path -> admitted keys only, path-shaped name sent as unknown, content in an admitted key dropped`);
     }
 
     // Plant 1: the suite against the always-send stub must go red ON THE
@@ -558,8 +596,35 @@ async function selfTest() {
         }
     }
 
+    // Plants 9 and 10 (IN-03): the usage path forwards its data unfiltered, then its name unfiltered.
+    for (const plant of [
+        { name: 'usage data unfiltered', find: ", admitted);", replace: ', data);' },
+        { name: 'usage name unfiltered', find: "EVENT_NAME.test(eventName) ? eventName : 'unknown'", replace: 'eventName' },
+    ]) {
+        const dir = mkdtempSync(join(tmpdir(), 'telemetry-selftest-'));
+        try {
+            for (const rel of [ENRICH_REL, REPORT_REL, SENDER_REL]) copyInto(dir, rel);
+            const target = join(dir, SENDER_REL);
+            const before = readFileSync(target, 'utf8');
+            const drifted = before.replace(plant.find, plant.replace);
+            if (drifted === before) {
+                complain(plant.name, 'planted no fault at all: the drift did not land');
+                continue;
+            }
+            writeFileSync(target, drifted, 'utf8');
+            const { problems } = await driveUsage(dir);
+            if (!problems.some(p => p.includes('usage path'))) {
+                complain(plant.name, `did not go red naming 'usage path'; got: ${problems.join(' | ') || '(no problems at all)'}`);
+            } else {
+                console.log(`  ok  ${plant.name} -> red, naming 'usage path'`);
+            }
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    }
+
     if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- 8 planted faults and the error-report case all behaved as pinned`);
+    console.log(`${NAME}: --self-test PASS -- 10 planted faults, the error-report case and the usage-path case all behaved as pinned`);
     return 0;
 }
 
