@@ -3788,6 +3788,13 @@ run_own_checks() {
     # fail-open default, patch missing, hand-edited hunk, branding default true, allowlist
     # widened), each red naming the drifted file.
     "crash-ping-consent-self-test|node $REPO_ROOT/scripts/verify-crash-ping-consent.mjs --self-test"
+    # NEW (Phase 57, 57-05, WR-05): the stock backlog auto-submit pref is locked false in the shipped
+    # policies.json. The pref name is derived from UnsubmittedCrashHandler's autoSubmit getter in
+    # upstream's ContentCrashHandlers.sys.mjs; Policies.sys.mjs must allow its prefix. Text reads only.
+    "crash-autosubmit-lock|node $REPO_ROOT/scripts/verify-crash-autosubmit-lock.mjs"
+    # Green first, then six plants (lock removed, not locked, value true, reader renamed, reader
+    # removed, engine prefix dropped), each red naming the drifted file.
+    "crash-autosubmit-lock-self-test|node $REPO_ROOT/scripts/verify-crash-autosubmit-lock.mjs --self-test"
     "fetch-upstream-self-test|bash $REPO_ROOT/scripts/fetch-upstream.sh --self-test"
     # NEW (05-02): the ESR pin-agreement gate -- configuration.toml's
     # [upstreams] tag equals the generated shell fragment, the workflow
