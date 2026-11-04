@@ -1029,6 +1029,9 @@ or `user/`, in apply order.
 | `release-tags` ruleset | `ruleset-release-tags.json` | as above, blocked until `powerbrowser-bot` is installed | as above |
 | Immutable releases | `immutable-releases.json` | `PUT immutable-releases` (no body), only while zero Releases exist | `immutable-releases` |
 | Private vulnerability reporting | `private-vulnerability-reporting.json` | `PUT private-vulnerability-reporting` (no body) | `private-vulnerability-reporting` |
+| Dependabot alerts | `dependabot-alerts.json` | `PUT vulnerability-alerts` (no body) | `vulnerability-alerts` (204 is on) |
+| Dependabot security updates | `automated-security-fixes.json` | `PUT automated-security-fixes` (no body), after the alerts | `automated-security-fixes` |
+| CodeQL default setup | `code-scanning-default-setup.json` | `PATCH code-scanning/default-setup` | `code-scanning/default-setup` |
 | Discussions and auto-merge | `repo.json` | `PATCH` the repository | the repository |
 | Repository Actions secrets: zero | (none) | none | `actions/secrets` |
 | Org 2FA requirement and the owner set | `org.json` | owner UI step | `orgs/{org}`, `orgs/{org}/members?role=admin` |

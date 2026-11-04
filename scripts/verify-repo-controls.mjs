@@ -777,6 +777,16 @@ export const CONTROLS = Object.freeze([
         liveFrom: alertsFromStatus,
         compare: projection,
     },
+    // Dependabot security updates (AUTO-03, BLOCKED.md item 12). After dependabot-alerts: GitHub refuses the
+    // switch while alerts are off. Live shape read 2026-11-03: {"enabled":true,"paused":false}.
+    {
+        id: 'automated-security-fixes',
+        file: 'automated-security-fixes.json',
+        write: { method: 'PUT', path: 'repos/{owner}/{repo}/automated-security-fixes' },
+        bodiless: true,
+        read: 'repos/{owner}/{repo}/automated-security-fixes',
+        compare: projection, // enabled only; paused is GitHub's
+    },
     {
         id: 'code-scanning-default-setup',
         file: 'code-scanning-default-setup.json',
@@ -988,6 +998,7 @@ function fakeState(ctx) {
         [p('repos/{owner}/{repo}/immutable-releases')]: { ...b['immutable-releases.json'], enforced_by_owner: false },
         [p('repos/{owner}/{repo}/private-vulnerability-reporting')]: { ...b['private-vulnerability-reporting.json'] },
         [p('repos/{owner}/{repo}/vulnerability-alerts')]: NO_CONTENT,
+        [p('repos/{owner}/{repo}/automated-security-fixes')]: { ...b['automated-security-fixes.json'], paused: false },
         [p('repos/{owner}/{repo}/code-scanning/default-setup')]: {
             ...b['code-scanning-default-setup.json'],
             languages: [...b['code-scanning-default-setup.json'].languages, 'python'],
@@ -1206,6 +1217,8 @@ function selfTest() {
         ['private vulnerability reporting disabled', set('repos/{owner}/{repo}/private-vulnerability-reporting', 'enabled', false), ['private-vulnerability-reporting', 'enabled']],
         ['dependabot alerts off (404)', mutated((s, p) => { delete s[p('repos/{owner}/{repo}/vulnerability-alerts')]; }), ['dependabot-alerts', 'enabled is false live', '.github/settings/dependabot-alerts.json']],
         ['a dependabot alerts read that fails with a 500', { get: (path) => (path.endsWith('/vulnerability-alerts') ? { ok: false, status: null, why: `GET ${path} could not be read (planted: HTTP 500). ${NEXT_AUTH}` } : getterOf(base)(path)) }, ['dependabot-alerts', 'planted: HTTP 500']],
+        ['dependabot security updates disabled', set('repos/{owner}/{repo}/automated-security-fixes', 'enabled', false), ['automated-security-fixes', 'enabled']],
+        ['an unreadable dependabot security updates endpoint', mutated((s, p) => { delete s[p('repos/{owner}/{repo}/automated-security-fixes')]; }), ['automated-security-fixes', 'could not be read']],
         ['a 204 answer on a control that did not opt in', mutated((s, p) => { s[p('repos/{owner}/{repo}/private-vulnerability-reporting')] = NO_CONTENT; }), ['private-vulnerability-reporting', 'could not be read']],
         ['code scanning default setup not configured', set('repos/{owner}/{repo}/code-scanning/default-setup', 'state', 'not-configured'), ['code-scanning-default-setup', 'state is "not-configured" live', '.github/settings/code-scanning-default-setup.json']],
         ['a declared code scanning body with an empty languages array', { readBody: (f) => { const b = readBody(f); if (f === 'code-scanning-default-setup.json') b.languages = []; return b; } }, ['code-scanning-default-setup', 'lists no languages']],
