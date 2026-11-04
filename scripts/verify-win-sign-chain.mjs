@@ -41,9 +41,10 @@
 //   attest      sign-windows attests nothing and holds no attestations permission: its bytes were built on
 //               legion, and a hosted provenance attestation would misname their builder.
 //   independence no job on the Linux publish path waits on any Windows job, directly or transitively (G-54b, owner
-//               ruling R2). Windows jobs: every job that uploads or downloads an artifact whose name contains
-//               'windows'. Linux path: every other job that moves a 'linux' artifact, plus sign-publish and every
-//               job after it. A Windows job may itself need sign-publish (it joins after the Linux publish).
+//               ruling R2). The Linux path is classified first: sign-publish, descriptor and channel-live (named by
+//               R2), every job that moves a 'linux' artifact, and every job after sign-publish that moves no
+//               'windows' artifact. Windows jobs: the jobs off that path that upload or download a 'windows'
+//               artifact. A Windows job may itself need sign-publish (it joins after the Linux publish).
 //   schedule    no schedule event in the file.
 //   legion      a job on the release runner label carries no environment and no secrets reference.
 //   status      docs/RELEASING.md's "Azure Artifact Signing identity validation:" line decides the signing
@@ -72,6 +73,8 @@ const SELF_REL = 'scripts/verify-win-sign-chain.mjs';
 const RELEASE_REL = '.github/workflows/release.yml';
 const JOB = 'sign-windows';
 const LINUX_PUBLISH = 'sign-publish';
+// Owner ruling R2 names these as jobs Windows must never be a dependency of, whatever artifacts they move.
+const R2_LINUX = [LINUX_PUBLISH, 'descriptor', 'channel-live'];
 const DER_REL = 'powerbrowser/packaging/mar/mar-primary.der';
 const LEGION_LABELS = ['legion', 'powerbrowser-release'];
 const CHAIN = ['inner-sign', 'repackage-installer', 'setup-sign', 'repackage-mar', 'signmar-sign', 'signmar-verify'];
@@ -159,15 +162,20 @@ export function runChecks({ wf, releasing, page, live, liveUrl = 'the published 
     // G-54b (owner ruling R2): every Windows job, not only the sign job. Both sets are derived from the artifact
     // names each job uploads or downloads, so a new Windows job is covered without editing this file.
     const artifactsOf = id => stepsOf(jobs[id]).filter(s => /^actions\/(upload|download)-artifact@/.test(String(s.uses ?? ''))).map(s => String(s.with?.name ?? ''));
-    const windowsJobs = new Set(Object.keys(jobs).filter(id => artifactsOf(id).some(n => /windows/.test(n))));
-    if (!Object.hasOwn(jobs, LINUX_PUBLISH)) {
-        fail(LINUX_PUBLISH, 'independence', `is absent, so the Linux publish path cannot be proven independent of ${JOB}. Next step: restore the ${LINUX_PUBLISH} job.`);
-    } else if (!windowsJobs.has(JOB)) {
-        fail(JOB, 'independence', `is not found among the jobs that move a Windows artifact (${[...windowsJobs].join(', ') || 'none'}), so the Windows job set is not derivable. Next step: restore its release-windows download.`);
+    const moves = (id, re) => artifactsOf(id).some(n => re.test(n));
+    const windowsMovers = new Set(Object.keys(jobs).filter(id => moves(id, /windows/)));
+    const absent = R2_LINUX.filter(id => !Object.hasOwn(jobs, id));
+    if (absent.length > 0) {
+        fail(absent[0], 'independence', `is absent, so the Linux publish path cannot be proven independent of ${JOB}. Next step: restore the ${absent.join(', ')} job(s).`);
+    } else if (!windowsMovers.has(JOB)) {
+        fail(JOB, 'independence', `is not found among the jobs that move a Windows artifact (${[...windowsMovers].join(', ') || 'none'}), so the Windows job set is not derivable. Next step: restore its release-windows download.`);
     } else {
-        // The Linux path: jobs that move a Linux artifact, plus sign-publish and every job after it, minus Windows jobs.
-        const linuxJobs = Object.keys(jobs).filter(id => !windowsJobs.has(id)
-            && (id === LINUX_PUBLISH || ancestors(id).has(LINUX_PUBLISH) || artifactsOf(id).some(n => /linux/.test(n))));
+        // The Linux path is classified first, so moving a Windows artifact never exempts a Linux job: the jobs R2 names,
+        // every job that moves a Linux artifact, and every job after sign-publish that moves no Windows artifact.
+        // Only a Windows mover off that path (a Windows publish job after sign-publish, say) counts as a Windows job.
+        const isLinux = id => R2_LINUX.includes(id) || moves(id, /linux/) || (ancestors(id).has(LINUX_PUBLISH) && !moves(id, /windows/));
+        const linuxJobs = Object.keys(jobs).filter(isLinux);
+        const windowsJobs = new Set([...windowsMovers].filter(id => !isLinux(id)));
         for (const id of linuxJobs) {
             const win = [...ancestors(id)].filter(a => windowsJobs.has(a)).sort();
             if (win.length > 0) fail(id, 'independence', `is on the Linux publish path and waits on the Windows job(s) ${win.join(', ')}, so a Windows build or signing failure would stop the Linux release. Next step: remove them from its needs; Windows joins the Release on its own path.`);
@@ -409,6 +417,9 @@ function selfTest(yaml) {
         ['build-linux waits on the Windows sidecar job', edit(c => { c.jobs['build-linux'].needs = 'windows-sidecar'; }), 'build-linux', 'independence', 'windows-sidecar'],
         ['Linux publish waits on the Windows build through a job that moves no artifact', edit(c => { c.jobs.bridge = { needs: 'build-windows', 'runs-on': 'ubuntu-latest', steps: [{ run: 'echo bridge' }] }; c.jobs[LINUX_PUBLISH].needs = [c.jobs[LINUX_PUBLISH].needs, 'bridge'].flat(); }), LINUX_PUBLISH, 'independence', 'build-windows'],
         ['descriptor waits on a new Windows publish job', edit(c => { c.jobs['publish-windows'] = winPublish(); c.jobs.descriptor.needs = [c.jobs.descriptor.needs, 'publish-windows'].flat(); }), 'descriptor', 'independence', 'publish-windows'],
+        ['channel-live needs build-windows and downloads release-windows', edit(c => { c.jobs['channel-live'].needs = [c.jobs['channel-live'].needs, 'build-windows'].flat(); c.jobs['channel-live'].steps.push({ uses: 'actions/download-artifact@' + '0'.repeat(40), with: { name: 'release-windows', path: 'w' } }); }), 'channel-live', 'independence', 'build-windows'],
+        ['purge-artifacts waits on the Windows build', edit(c => { c.jobs['purge-artifacts'].needs = [c.jobs['purge-artifacts'].needs, 'build-windows'].flat(); }), 'purge-artifacts', 'independence', 'build-windows'],
+        ['descriptor removed', edit(c => { delete c.jobs.descriptor; }), 'descriptor', 'independence', 'absent'],
         ['the sign job no longer moves a Windows artifact', edit(c => { for (const s of stepsOf(c.jobs[JOB])) if (s.with?.name) s.with.name = String(s.with.name).replace('windows', 'w'); }), JOB, 'independence', 'not found among'],
         ['sign job removed (zero steps)', edit(c => { delete c.jobs[JOB]; }), JOB, 'vacuity', 'absent'],
         ['unreadable workflow', { wf: null }, RELEASE_REL, 'vacuity', 'unreadable'],

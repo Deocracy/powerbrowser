@@ -66,13 +66,11 @@ cp "$ROOT/powerbrowser/distribution/policies.json" "$STAGE/distribution/policies
 
 # Checkout-path purge, as package-linux.sh does for its backend bundles: no staged text file may name a
 # builder's checkout. The sidecar was built on windows-latest, so it carries the hosted workspace root the job
-# recorded in BUILD_ROOT (checked in every slash form); the container's own checkout is checked as well.
+# recorded in BUILD_ROOT (checked in every slash form). The container's checkout is not searched: nothing in
+# theia/ or node/ is produced in the container, and in release.yml it is mounted at /src, a string every esbuild
+# module key (node_modules/.../src/...) contains, so that search refused every correctly built sidecar.
 # Native binaries are checked by the natives gate below, not here.
 bash "$ROOT/powerbrowser/packaging/check-win-sidecar.sh" purge "$SIDECAR_DIR" "$STAGE/theia" "$STAGE/node" || fail "the staged sidecar names the hosted build root"
-rc=0
-hit="$(grep -rlI -F -e "$ROOT/" "$STAGE/theia" "$STAGE/node")" || rc=$?
-[ "$rc" -le 1 ] || fail "grep could not read the stage while looking for the container checkout path (exit $rc)"
-[ -z "$hit" ] || fail "the staged sidecar still carries a checkout path: $(head -n1 <<<"$hit")"
 
 # PKG-13 native gate, before precomplete is refreshed: every .node, rg and node binary in the
 # Windows stage must be PE32+ x86-64. A Linux or Mach-O native here stops the stage naming the file.
