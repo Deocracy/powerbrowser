@@ -61,10 +61,10 @@ Plans 53-01, 53-02 and 53-03 are built and committed on `dsh/phase-53`. Everythi
 
 - **What:** `.github/upptime-targets.json` declares the updates and website targets. The `upptime-sweep-live` row needs the status repository.
 - **Owner steps:**
-  1. Create the status repository from the `upptime/upptime` template (the owner account, not the product repository). Record `owner/repo`.
+  1. Create the status repository `Deocracy/powerbrowser-status` from the `upptime/upptime` template (a separate repository, not the product repository): `gh api repos/upptime/upptime/generate -f owner=Deocracy -f name=powerbrowser-status --jq .html_url`. Its `.upptimerc.yml` `owner:` is `Deocracy` and `repo:` is `powerbrowser-status`.
   2. Enable GitHub Pages on it and add the CNAME `status.powerbrowser.org` in Cloudflare (owner action).
   3. Confirm the live GET of `https://status.powerbrowser.org` returns the status page.
-  4. Confirm the live row: `node scripts/verify-upptime.mjs --live --slug=<owner>/<repo>`.
+  4. Confirm the live row: `node scripts/verify-upptime.mjs --live --slug=Deocracy/powerbrowser-status`, or `UPPTIME_STATUS_REPO=Deocracy/powerbrowser-status scripts/verify-platform.sh --only upptime-sweep-live` (the registry row reads the slug from that variable; an organisation literal in a script is a brand-residue fault).
 
 ## 4. The `/events` target waits for the telemetry endpoint (MON-02) -- RESOLVED (2026-11-03)
 
