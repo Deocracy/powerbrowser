@@ -127,21 +127,20 @@ descriptor exemption stays; DSH out of scope; `workspace/pba` stays separate.
 
 Ask each in a box at the step that needs it; none blocks the earlier stages.
 
-- Exact legal name for the Deocracy copyright/trademark strings (R7), e.g. "Deocracy" or a
-  registered entity name.
+- ~~Exact legal name for the Deocracy copyright/trademark strings (R7)~~ — answered 2026-11-04
+  (A1): "Deocracy Institute".
 - Postal address for `/privacy` (`website-staging/privacy.html:87`).
 - Destination mailbox for Email Routing, and a sending account different from it.
 - Two Anthropic Console monthly spend caps (fixer, triage).
 - Which second owner account (HarmonySprings or stasadance) runs the notification and triage
   drills (GitHub does not notify an account of its own actions).
 - Windows 11 ISO/evaluation media and licence for `pkg-win11`; confirmation it may use legion's disk.
-- Installer artwork files (R3).
+- ~~Installer artwork files (R3)~~ — answered 2026-11-04 (A7): deferred to v1.7; v1.6 uses the art in the tree.
 - Whether the two primary MAR key offline copies already exist (dates) or must be made now.
 - Payment method on the Cloudflare account (R2); Workers Paid only if the JWT-mint p95 exceeds 10 ms.
-- Remaining Windows rulings not covered above: leftover `node.exe` reap on Windows (build a
-  process-identity check vs accept one orphan until reboot) and whether the taskcluster-index
-  `vs.tar.zst` toolchain artifact is acceptable for a release build. Recommend: accept the orphan
-  with a recorded follow-up; accept the hash-pinned toolchain.
+- ~~Remaining Windows rulings (`node.exe` reap, taskcluster-index `vs.tar.zst` toolchain)~~ —
+  answered 2026-11-04 (A8): one orphan `node.exe` until reboot accepted with a recorded follow-up;
+  the hash-pinned toolchain accepted.
 
 ## 4. Stages, in order
 
