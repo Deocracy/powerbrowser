@@ -43,7 +43,7 @@ const INPUTS = {
 // App token scope per leg: the repository list and exactly these permission-* keys.
 const APP_TOKEN = {
     'flake-hash-pr': { repositories: 'powerbrowser', permissions: { 'permission-contents': 'write', 'permission-pull-requests': 'write' } },
-    'tap-commit': { repositories: 'homebrew-powerbrowser', permissions: { 'permission-contents': 'write' } },
+    'tap-commit': { repositories: 'homebrew-tap', permissions: { 'permission-contents': 'write' } },
 };
 
 const stepsOf = job => (Array.isArray(job?.steps) ? job.steps : []);
@@ -261,7 +261,7 @@ export function workflowFaults(wf, { admitted }) {
         if (push < 0) fail(where, 'never pushes the cask to the tap', 'push the rendered cask to the tap.');
         if (render >= 0 && release >= 0 && push >= 0 && !(render < release && release < push)) fail(where, 'runs the release check out of order; render, then verify-homebrew-cask.mjs --release --rendered, and only then the push', 'order: render, --release --rendered, push.');
         const blob = JSON.stringify(tap);
-        for (const [needle, what] of [['homebrew-powerbrowser', 'the tap repository checkout'], ['Casks/powerbrowser.rb', 'the cask path in the tap'], ['needs.verify-assets.outputs.dmg', 'the recomputed, attested disk-image digest'], ['inputs.dmg_asset', 'the macOS asset name input']]) {
+        for (const [needle, what] of [['homebrew-tap', 'the tap repository checkout'], ['Casks/powerbrowser.rb', 'the cask path in the tap'], ['needs.verify-assets.outputs.dmg', 'the recomputed, attested disk-image digest'], ['inputs.dmg_asset', 'the macOS asset name input']]) {
             if (!blob.includes(needle)) fail(where, `lacks ${what} (${needle})`, `add ${needle}.`);
         }
         if (/wingetcreate/.test(blob)) fail(where, 'runs wingetcreate, which belongs to the winget leg', 'move it to winget-submit.');

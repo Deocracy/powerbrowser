@@ -94,8 +94,8 @@ is not executed by this run and is listed at the end.
 
 ## 10. Homebrew tap repository and the cask audit (DIST-11, Phase 41)
 
-- **Blocked:** the tap repository `homebrew-powerbrowser` does not exist, and the bot App is not installed on it (Phase 41).
-- **Owner steps:** create the tap repository, install the bot App with contents write on it, then run
+- **Blocked:** the tap repository is `Deocracy/homebrew-tap` (it exists; owner ruling 2026-11-03), and the bot App is not installed on it yet (Phase 41). The cask itself is deferred to v1.7 (R6).
+- **Owner steps:** install the bot App with contents write on it, then run
   `brew audit --new --cask` on the rendered cask once the tap exists (render with the dry run in
   `docs/winget-tap-checkpoint.md`). The cask makes no notarization claim; its deferral marker stays until item 12.
 
@@ -135,7 +135,7 @@ is not executed by this run and is listed at the end.
   (declared in `.github/settings/environment-winget.json` with the owner as required reviewer and admin bypass off, as `release`; each winget-submit run therefore waits for an owner approval; run `node scripts/apply-repo-controls.mjs` to create it).
   The tap repository needs the bot App installed on it.
 - **Owner steps:** confirm the bot environment already holds the App key (Phase 43), add `WINGET_TOKEN` to the `winget`
-  environment (item 11), and confirm the App installation covers `homebrew-powerbrowser`.
+  environment (item 11), and confirm the App installation covers `homebrew-tap`.
 
 ## 14. Train wiring: assumption A6 (DIST-12, Phases 43 and 49)
 

@@ -2318,7 +2318,7 @@ The repositories named below sit under the GitHub organisation that `configurati
 5. **winget credential holder** (`WINGET_HOLDER`; the dedicated bot account, name only): AWAITING-OWNER
 6. **winget token stored** (`WINGET_TOKEN_STORED`; yes or no and the date, in the `winget` environment, never the value): AWAITING-OWNER
 7. **winget pull request** (`WINGET_PR`; needs the Phase 54 Windows asset, otherwise DEFERRED-A2): AWAITING-OWNER
-8. **Tap repository and tap commit** (`TAP_REPO`; expected `homebrew-powerbrowser` under that organisation, then the bot App's commit SHA; the cask stays DEFERRED-A3 until Phase 55): AWAITING-OWNER
+8. **Tap repository and tap commit** (`TAP_REPO`; `homebrew-tap` under that organisation (it exists), then the bot App's commit SHA; the cask itself is deferred to v1.7 (R6)): AWAITING-OWNER
 9. **DNS TXT value** (`TXT_SET`; record `_flathub.debios.org`, the digest only, shown by the Flathub Developer Portal after the submission is accepted): AWAITING-OWNER
 10. **Clean-machine substitute log** (`SUBSTITUTE_LOG`; the `nix build .#powerbrowser` lines proving no rebuild, pasted verbatim): AWAITING-OWNER
 11. **/download rows** (`DOWNLOAD_URLS`; the live URLs of the Nix and Flatpak rows on the Phase 47 site, otherwise DEFERRED-A4): AWAITING-OWNER

@@ -283,7 +283,7 @@ jobs:
           app-id: ${{ vars.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: homebrew-powerbrowser
+          repositories: homebrew-tap
           permission-contents: write
 
       - name: Check out the release repository without persisting the token
@@ -294,7 +294,7 @@ jobs:
       - name: Check out the tap repository with the bot token
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          repository: ${{ github.repository_owner }}/homebrew-powerbrowser
+          repository: ${{ github.repository_owner }}/homebrew-tap
           token: ${{ steps.app.outputs.token }}
           path: tap
           persist-credentials: false
