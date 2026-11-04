@@ -973,9 +973,32 @@ the version string). All commands below run inside `nix develop
    the `updater` RUNPATH names a nonexistent `outputs/out/lib` and
    carries no app-dir entry, so without it the loader fails on
    `libnspr4.so` (observed live); `nsUpdateDriver` `execv()`s the
-   updater, which inherits this environ. The 08-04 run is scripted as
+   updater, which inherits this environ. The 08-04 run was scripted as
    `.mozbuild/mar-hop/drive-hop.py` (untracked proof tooling, like
-   `nplus1.mozconfig`).
+   `nplus1.mozconfig`); it recorded no UI transcript.
+
+   The tracked driver (46-05, UPD-24) performs steps 4 and 5 and records
+   the transcript below from observation:
+
+   ```
+   node scripts/drive-mar-update-hop.mjs \
+     --n objdir/dist/powerbrowser --nplus1 objdir-nplus1/dist/powerbrowser \
+     --mar .mozbuild/mar-hop/nplus1.mar
+   ```
+
+   It serves the descriptor and MAR on a free loopback port, stages a copy
+   of N with the policy above, and drives the shell over WebDriver BiDi
+   with the profile prefs above plus `app.update.timerMinimumDelay=5`.
+   Launch 1 opens a marker web tab, waits for the notification carrying
+   the Restart now button, records its text and clicks it, then polls the
+   staged `application.ini` for N+1. The relaunched process is found by its
+   `--profile` argument and stopped with SIGTERM. Launch 2 on the same
+   profile reads `Services.appinfo` and checks the marker tab and side
+   views came back. A third launch on a read-only copy of N records the
+   notification carrying Open download page. It writes every file the gate
+   reads, moves an older `.mozbuild/mar-hop/` holding a `hop.json` to
+   `.mozbuild/mar-hop.prev-<stamp>/`, and runs the gate's checks. It
+   refuses to start when N+1 does not compare above N.
 
    What a cycle looks like: the due timer fires, the client fetches the
    descriptor and the MAR from loopback (hash/size verified), the

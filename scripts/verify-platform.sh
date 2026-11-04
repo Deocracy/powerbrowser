@@ -4747,6 +4747,13 @@ run_own_checks() {
     # mkdtemp. No build, no browser, no display, no network. The full row
     # is emphatically not --quick.
     "mar-update-hop-self-test|node $REPO_ROOT/scripts/verify-mar-update-hop.mjs --self-test"
+    # NEW (46-05, UPD-24 G2): the hop driver's self-test. Fixture observations go
+    # through the driver's own composeHop/writeEvidence and the verifier's runChecks
+    # judges them: control green, then red for a ready text naming N, no click, a
+    # relaunch still on N, a lost marker tab, no application.ini flip and a
+    # read-only ready string; plus the N+1-not-above-N guard. Honestly --quick:
+    # mkdtemp text files, no build, browser, display or network.
+    "mar-hop-driver-self-test|node $REPO_ROOT/scripts/drive-mar-update-hop.mjs --self-test"
     # NEW (Phase 46, UPD-27): the exposure self-test twin. Fixture doubles
     # only (silent/throwing/recording) plus the comparand-missing plant;
     # each red naming its signal. Honestly --quick: node only, no build,
