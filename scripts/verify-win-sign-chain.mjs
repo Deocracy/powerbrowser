@@ -345,6 +345,12 @@ function selfTest(yaml) {
         console.error(`${NAME}: --self-test FAIL -- the green control is already red: ${control.failures.map(fmt).join(' | ')}`);
         return 1;
     }
+    // The Windows publish path (A2) must be in the real workflow for the plants below to test it.
+    const winPath = ['publish-windows', 'descriptor-windows', 'channel-live-windows'].filter(id => !Object.hasOwn(wf.jobs ?? {}, id));
+    if (winPath.length > 0) {
+        console.error(`${NAME}: --self-test FAIL -- the real workflow lacks ${winPath.join(', ')}, so the Windows publish path is untested`);
+        return 1;
+    }
     if (JSON.stringify(runChecks(base)) !== JSON.stringify(control)) {
         console.error(`${NAME}: --self-test FAIL -- two runs over the same tree gave different verdicts or evidence`);
         return 1;
@@ -421,6 +427,12 @@ function selfTest(yaml) {
         ['purge-artifacts waits on the Windows build', edit(c => { c.jobs['purge-artifacts'].needs = [c.jobs['purge-artifacts'].needs, 'build-windows'].flat(); }), 'purge-artifacts', 'independence', 'build-windows'],
         ['descriptor removed', edit(c => { delete c.jobs.descriptor; }), 'descriptor', 'independence', 'absent'],
         ['the sign job no longer moves a Windows artifact', edit(c => { for (const s of stepsOf(c.jobs[JOB])) if (s.with?.name) s.with.name = String(s.with.name).replace('windows', 'w'); }), JOB, 'independence', 'not found among'],
+        // A2 (54-11): the three real Windows publish jobs. Each Linux job waiting on one is red, and a Windows job that
+        // stops moving a windows-named artifact is judged as Linux, so its wait on publish-windows goes red too.
+        ['sign-publish waits on the real publish-windows', edit(c => { c.jobs[LINUX_PUBLISH].needs = [c.jobs[LINUX_PUBLISH].needs, 'publish-windows'].flat(); }), LINUX_PUBLISH, 'independence', 'publish-windows'],
+        ['descriptor waits on the real descriptor-windows', edit(c => { c.jobs.descriptor.needs = [c.jobs.descriptor.needs, 'descriptor-windows'].flat(); }), 'descriptor', 'independence', 'descriptor-windows'],
+        ['channel-live waits on the real channel-live-windows', edit(c => { c.jobs['channel-live'].needs = [c.jobs['channel-live'].needs, 'channel-live-windows'].flat(); }), 'channel-live', 'independence', 'channel-live-windows'],
+        ['descriptor-windows moving no windows artifact', edit(c => { for (const st of stepsOf(c.jobs['descriptor-windows'])) if (st.with?.name) st.with.name = String(st.with.name).replace('windows', 'w'); }), 'descriptor-windows', 'independence', 'publish-windows'],
         ['sign job removed (zero steps)', edit(c => { delete c.jobs[JOB]; }), JOB, 'vacuity', 'absent'],
         ['unreadable workflow', { wf: null }, RELEASE_REL, 'vacuity', 'unreadable'],
     ];

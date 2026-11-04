@@ -5291,13 +5291,18 @@ run_own_checks() {
     # before the single publish, the bot App token is minted immediately before the publish, and no
     # --generate-notes appears. Honestly --quick: file reads and YAML parsing;
     # the live draft list is compared by the release job, never here.
+    # 54-11 (owner answer A2): the windows-x86_64 asset-table row must equal WINDOWS_TOKEN; publish-windows needs
+    # build-windows and sign-publish, assembles by --expected-windows and copies write-once like sign-publish's
+    # r2_copy; no *-windows job calls gh release create, upload, edit or delete (the Release stays Linux-only).
     "release-asset-set|node $REPO_ROOT/scripts/verify-release-asset-set.mjs"
     # release-asset-set-self-test plants a dropped asset (a notice and the manifest), an extra asset,
     # a stable-name drift, a versioned-name drift, an assemble step missing the manifest or notice arm, a publish-before-equality order, a fail-open publish chain, an R2
     # copy that is missing, after the publish, failing open, local (no --remote), without its read-back or
     # its overwrite refusal (DIST-08, plan 49-05), a Cloudflare credential in another step or another
     # workflow, a manifest-chosen tag and three hostile release keys, each red naming the asset or the
-    # step. It writes nothing.
+    # step; 54-11 adds the Windows plants (publish-windows removed, off sign-publish, a gh release call,
+    # its write-once copy weakened or keyed by a runner value, a Cloudflare token in descriptor-windows,
+    # a drifted Windows Target key). It writes nothing.
     "release-asset-set-self-test|node $REPO_ROOT/scripts/verify-release-asset-set.mjs --self-test"
     # NEW (Phase 49, UPD-17): channel-live-self-test, the quick half of the full-tier channel-live row. A
     # mkdtemp manifest (mar_origin from configuration.toml) and descriptor tree served by one loopback
@@ -6330,7 +6335,9 @@ run_own_checks() {
       # status among others), each red naming its step or key. G-54b widens independence to every Windows job
       # (derived from artifact names): plants for descriptor, channel-live, build-linux and sign-publish (through an
       # artifact-less bridge job) waiting on a Windows job, plus a green control for a Windows publish job that needs
-      # sign-publish. Hermetic; writes nothing.
+      # sign-publish. 54-11: the real publish-windows, descriptor-windows and channel-live-windows must exist, a
+      # Linux job waiting on each is red, and descriptor-windows moving no windows artifact is judged Linux and red.
+      # Hermetic; writes nothing.
       "win-sign-chain-self-test|node $REPO_ROOT/scripts/verify-win-sign-chain.mjs --self-test"
       # win-sign-list-self-test: the list of inner PE files sign-windows signs, derived from the pinned package manifest
       # (upstream/browser/installer/package-manifest.in) and compared with a staged tree; the zip name derived from

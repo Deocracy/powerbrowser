@@ -28,10 +28,21 @@
 //  - the assemble step (the one that reads --expected) copies every expected kind but sums, which
 //    the step writes itself over every file of assets/ (so the manifest is hashed too).
 //
+// What the row checks for Windows (owner answer A2, 2026-11-04: Windows publishes after the Linux publish
+// to the MAR origin; the Release stays immutable and Linux-only):
+//  - the Windows target token is the `windows-` Target key of the asset table, and it equals WINDOWS_TOKEN
+//    (scripts/lib/channel-identity.mjs), the token the descriptor emitter writes into the patch URL;
+//  - publish-windows needs build-windows and sign-publish, assembles by --expected-windows, and its
+//    r2_copy step meets the same write-once rules as sign-publish's; the Cloudflare credential reaches
+//    those two r2_copy steps and nothing else;
+//  - no job named *-windows runs gh release create, upload, edit or delete.
+//
 // Modes:
 //  (no argument)                       the row: the workflow order and the derived expectation.
 //  --expected --manifest <json>        prints one TAB-separated kind and name per expected asset;
 //                                      the release job copies the assets with these names.
+//  --expected-windows                  the same for the Windows files publish-windows copies to the
+//                                      MAR origin; the release key comes from this tree.
 //  --manifest <json> --draft <json>    the live comparison: the draft asset names from gh against
 //                                      the manifest-derived set. Exit 1 names each delta.
 //  --self-test                         plants faults in memory; writes nothing.
@@ -44,7 +55,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { releaseIdentity, resolveConfig } from './generate.mjs';
-import { MANIFEST_ASSET } from './lib/channel-identity.mjs';
+import { MANIFEST_ASSET, WINDOWS_TOKEN } from './lib/channel-identity.mjs';
 import { failOpenFaults, loadYaml, stepsOf } from './lib/release-workflow.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -58,9 +69,10 @@ const args = process.argv.slice(2);
 const flag = name => args.indexOf(name);
 const SELF = args.includes('--self-test');
 const EXPECTED = args.includes('--expected');
+const EXPECTED_WINDOWS = args.includes('--expected-windows');
 const MANIFEST_AT = flag('--manifest');
 const DRAFT_AT = flag('--draft');
-const known = new Set(['--self-test', '--expected', '--manifest', '--draft']);
+const known = new Set(['--self-test', '--expected', '--expected-windows', '--manifest', '--draft']);
 for (let i = 0; i < args.length; i += 1) {
     const a = args[i];
     if (!known.has(a)) {
@@ -75,7 +87,7 @@ for (let i = 0; i < args.length; i += 1) {
     }
     if (a === '--manifest' || a === '--draft') i += 1;
 }
-if ((DRAFT_AT >= 0) !== (MANIFEST_AT >= 0) && !EXPECTED && !SELF) {
+if ((DRAFT_AT >= 0) !== (MANIFEST_AT >= 0) && !EXPECTED && !EXPECTED_WINDOWS && !SELF) {
     console.error(`${NAME}: FAIL -- --draft is compared against --manifest; pass both`);
     console.error(`  ${usage}`);
     process.exit(2);
@@ -114,6 +126,11 @@ export function targetToken(docs) {
     return m ? m[1] : null;
 }
 
+// The Windows target token: the backticked Target key of the asset table that starts with windows-.
+export function windowsToken(docs) {
+    return assetSection(docs)?.match(/^\| `(windows-[a-z0-9_]+)` \|/m)?.[1] ?? null;
+}
+
 // The assets attached once per Release: the backticked names of the paragraph that lists them.
 export function noTokenAssets(docs) {
     const m = assetSection(docs)?.match(/Assets that carry no target token[^:]*:([\s\S]*?)the source tarball\./);
@@ -148,6 +165,42 @@ export function expectedAssets({ app, releaseKey, token, noToken }) {
         if (!SAFE_NAME.test(name) || name.includes('..')) throw new Error(`asset name ${JSON.stringify(name)} is outside [A-Za-z0-9._-]`);
     }
     return set;
+}
+
+// The Windows files publish-windows copies write-once to <mar_origin>/<tag>/, never to the Release (A2).
+export function expectedWindowsAssets({ app, releaseKey, token }) {
+    if (typeof releaseKey !== 'string' || !RELEASE_KEY.test(releaseKey)) throw new Error(`release key ${JSON.stringify(releaseKey)} is not v<esr>-<revision>`);
+    if (typeof token !== 'string') throw new Error('the Windows target token is not derivable from docs/RELEASING.md');
+    const version = releaseKey.replace(/^v/, '');
+    const set = [
+        ['versioned-installer', `${app}-${version}.${token}.installer.exe`],
+        ['versioned-mar', `${app}-${version}.${token}.complete.mar`],
+        ['sums', 'SHA256SUMS'],
+    ];
+    for (const [, name] of set) {
+        if (!SAFE_NAME.test(name) || name.includes('..')) throw new Error(`asset name ${JSON.stringify(name)} is outside [A-Za-z0-9._-]`);
+    }
+    return set;
+}
+
+// The write-once copy rules of one r2_copy step (sign-publish's and publish-windows's). Pure.
+function r2CopyProblems(jobId, step) {
+    const out = [];
+    const run = String(step.run ?? '');
+    for (const f of failOpenFaults(step)) out.push(['fail-open', `${jobId} r2_copy step ${f}, so a Release could publish with the origin unfilled. Next step: remove it.`]);
+    for (const l of run.split('\n').filter(x => /\bwrangler r2 object (get|put)\b/.test(x) && !/\s--remote(\s|$)/.test(x))) {
+        out.push(['r2-copy', `${jobId} r2_copy runs '${l.trim()}' without --remote, so wrangler uses local storage and the origin is never read or written. Next step: add --remote.`]);
+    }
+    const putAt = run.indexOf('wrangler r2 object put');
+    const getAt = run.indexOf('wrangler r2 object get');
+    const backAt = putAt < 0 ? -1 : run.indexOf('wrangler r2 object get', putAt);
+    if (putAt < 0 || getAt < 0 || getAt > putAt || !/refusing to overwrite/.test(run) || backAt < 0 || !/sha512sum/.test(run.slice(backAt))) {
+        out.push(['r2-copy', `${jobId} r2_copy does not read each key before the put, refuse to overwrite other bytes, and read the object back and compare sha512 after the put, so the write-once origin is not proven. Next step: restore the write-once copy.`]);
+    }
+    if (step.env?.TAG !== '${{ steps.derive_key.outputs.tag }}') {
+        out.push(['order', `${jobId} r2_copy step takes its tag from ${JSON.stringify(step.env?.TAG ?? null)}, not steps.derive_key.outputs.tag, so a runner-written value could choose the origin key. Next step: use the tree-derived tag.`]);
+    }
+    return out;
 }
 
 // Set equality: a missing asset and an extra asset are both failures, each naming the asset.
@@ -190,6 +243,10 @@ function runChecks(root, overrides = {}) {
     } catch (e) {
         fail(DOCS_REL, 'derive', `${e.message}. Next step: fix the key, the table row or the notice names.`);
         return { failures, expected: [] };
+    }
+    const winToken = windowsToken(docs);
+    if (winToken !== WINDOWS_TOKEN) {
+        fail(DOCS_REL, 'derive', `names the Windows Target key ${JSON.stringify(winToken)} in the Release asset names table, not ${JSON.stringify(WINDOWS_TOKEN)} (scripts/lib/channel-identity.mjs WINDOWS_TOKEN, the token the descriptor patch URL carries), so the published Windows MAR and its descriptor would disagree. Next step: make the row and the constant agree.`);
     }
     for (const [kind, name] of expected) {
         if (kind === 'notice' && read(name) === null) {
@@ -289,17 +346,30 @@ function runChecks(root, overrides = {}) {
     if (r2At < 0 || r2At < equalAt || r2At > botAt) {
         fail(RELEASE_REL, 'order', `sign-publish has no r2_copy step between the equality check and the bot token mint, so a Release could publish before the primary MAR origin holds its bytes (DIST-08). Next step: restore the R2 copy step before the token mint.`);
     } else {
-        const r2 = steps[r2At];
-        const run = String(r2.run ?? '');
-        for (const f of failOpenFaults(r2)) fail(RELEASE_REL, 'fail-open', `r2_copy step ${f}, so a Release could publish with the origin unfilled. Next step: remove it.`);
-        for (const l of run.split('\n').filter(x => /\bwrangler r2 object (get|put)\b/.test(x) && !/\s--remote(\s|$)/.test(x))) {
-            fail(RELEASE_REL, 'r2-copy', `r2_copy runs '${l.trim()}' without --remote, so wrangler uses local storage and the origin is never read or written. Next step: add --remote.`);
+        for (const [rule, msg] of r2CopyProblems('sign-publish', steps[r2At])) fail(RELEASE_REL, rule, msg);
+    }
+    // A2: Windows publishes to the MAR origin after the Linux publish, never to the immutable Release.
+    const win = wf?.jobs?.['publish-windows'];
+    const winSteps = stepsOf(win);
+    const winR2 = winSteps.find(s => s.id === 'r2_copy');
+    if (win === undefined) {
+        fail(RELEASE_REL, 'windows', `has no publish-windows job, so the Windows row of ${DOCS_REL} is never published. Next step: restore it (owner answer A2).`);
+    } else {
+        const needs = [win.needs ?? []].flat().map(String);
+        for (const n of ['build-windows', 'sign-publish']) {
+            if (!needs.includes(n)) fail(RELEASE_REL, 'windows', `publish-windows does not need ${n}, so it could copy Windows files before ${n === 'sign-publish' ? 'the Linux Release is published' : 'the Windows build exists'}. Next step: add ${n} to its needs.`);
         }
-        const putAt = run.indexOf('wrangler r2 object put');
-        const getAt = run.indexOf('wrangler r2 object get');
-        const backAt = putAt < 0 ? -1 : run.indexOf('wrangler r2 object get', putAt);
-        if (putAt < 0 || getAt < 0 || getAt > putAt || !/refusing to overwrite/.test(run) || backAt < 0 || !/sha512sum/.test(run.slice(backAt))) {
-            fail(RELEASE_REL, 'r2-copy', `r2_copy does not read each key before the put, refuse to overwrite other bytes, and read the object back and compare sha512 after the put, so the write-once origin is not proven. Next step: restore the write-once copy.`);
+        if (!winSteps.some(s => /verify-release-asset-set\.mjs --expected-windows\b/.test(String(s.run ?? '')))) {
+            fail(RELEASE_REL, 'assemble', `publish-windows has no step that names the Windows files by the --expected-windows list. Next step: restore the assemble step.`);
+        }
+        if (winR2 === undefined) fail(RELEASE_REL, 'order', `publish-windows has no r2_copy step, so the Windows files never reach the MAR origin. Next step: restore it.`);
+        else for (const [rule, msg] of r2CopyProblems('publish-windows', winR2)) fail(RELEASE_REL, rule, msg);
+    }
+    for (const [jobId, job] of Object.entries(wf?.jobs ?? {})) {
+        if (!/-windows$/.test(jobId)) continue;
+        for (const s of stepsOf(job)) {
+            const m = /\bgh release (create|upload|edit|delete)\b/.exec(String(s.run ?? ''));
+            if (m) fail(RELEASE_REL, 'windows', `${jobId} step '${s.name ?? s.id}' runs gh release ${m[1]}, but the Release is immutable and Linux-only (owner answer A2), so the call is refused or rewrites a published Release. Next step: publish the Windows files to the MAR origin only.`);
         }
     }
     // A Cloudflare credential reaches the R2 copy step and nothing else, in this workflow or any other.
@@ -310,20 +380,20 @@ function runChecks(root, overrides = {}) {
         const { steps: jobSteps, ...rest } = job ?? {};
         scopes.push([jobId, rest]);
         stepsOf(job).forEach((s, i) => {
-            if (!(jobId === 'sign-publish' && s.id === 'r2_copy')) scopes.push([`${jobId} step '${s.name ?? s.id ?? i}'`, s]);
+            if (!((jobId === 'sign-publish' || jobId === 'publish-windows') && s.id === 'r2_copy')) scopes.push([`${jobId} step '${s.name ?? s.id ?? i}'`, s]);
         });
     }
     for (const [where, v] of scopes) {
-        if (cf.test(JSON.stringify(v ?? {}))) fail(RELEASE_REL, 'cloudflare-scope', `${where} names a Cloudflare credential; only the r2_copy step may. Next step: remove it.`);
+        if (cf.test(JSON.stringify(v ?? {}))) fail(RELEASE_REL, 'cloudflare-scope', `${where} names a Cloudflare credential; only the r2_copy steps of sign-publish and publish-windows may. Next step: remove it.`);
     }
     const others = overrides.otherWorkflows ?? Object.fromEntries(readdirSync(join(root, '.github/workflows'))
         .filter(n => /\.ya?ml$/.test(n) && `.github/workflows/${n}` !== RELEASE_REL)
         .map(n => [`.github/workflows/${n}`, read(`.github/workflows/${n}`) ?? '']));
     for (const [rel, t] of Object.entries(others)) {
-        if (cf.test(t)) fail(rel, 'cloudflare-scope', `names a Cloudflare credential; only release.yml's r2_copy step may hold one, and the sweep writes download counts through the telemetry Worker. Next step: remove it.`);
+        if (cf.test(t)) fail(rel, 'cloudflare-scope', `names a Cloudflare credential; only release.yml's two r2_copy steps may hold one, and the sweep writes download counts through the telemetry Worker. Next step: remove it.`);
     }
     // The tag and the manifest-free names: every gh call uses the tree-derived tag.
-    for (const [id, i] of [['draft_release', draftAt], ['asset_set', equalAt], ['publish', publishAt], ['newer_guard', guardAt], ['newer_guard_final', finalAt], ['r2_copy', r2At]]) {
+    for (const [id, i] of [['draft_release', draftAt], ['asset_set', equalAt], ['publish', publishAt], ['newer_guard', guardAt], ['newer_guard_final', finalAt]]) {
         if (i >= 0 && steps[i].env?.TAG !== '${{ steps.derive_key.outputs.tag }}') {
             fail(RELEASE_REL, 'order', `${id} step takes its tag from ${JSON.stringify(steps[i].env?.TAG ?? null)}, not steps.derive_key.outputs.tag, so the runner-written manifest could choose the public tag. Next step: use the tree-derived tag.`);
         }
@@ -346,6 +416,18 @@ function readJson(path) {
 
 function main() {
     if (SELF) return selfTest();
+    if (EXPECTED_WINDOWS) {
+        const { config } = resolveConfig(join(REPO_ROOT, 'configuration.toml'));
+        let expected;
+        try {
+            expected = expectedWindowsAssets({ app: config.identity.app_basename, releaseKey: releaseIdentity(config).releaseKey, token: windowsToken(readText(REPO_ROOT, DOCS_REL)) });
+        } catch (e) {
+            console.error(`${NAME}: FAIL -- ${e.message}. Next step: nothing is copied; check configuration.toml and docs/RELEASING.md.`);
+            return 1;
+        }
+        for (const [kind, name] of expected) console.log(`${kind}\t${name}`);
+        return 0;
+    }
     if (EXPECTED) {
         if (MANIFEST_AT < 0) {
             console.error(`${NAME}: FAIL -- --expected needs --manifest <release-manifest.json>`);
@@ -439,6 +521,16 @@ function selfTest() {
         const [[f1, f2], [s1, s2]] = a1 < b1 ? [[a1, a2], [b1, b2]] : [[b1, b2], [a1, a2]];
         return [...lines.slice(0, f1), ...lines.slice(s1, s2), ...lines.slice(f2, s1), ...lines.slice(f1, f2), ...lines.slice(s2)].join('\n');
     };
+    // The first occurrence inside one job's text, so a plant reaches publish-windows and not sign-publish.
+    const editIn = (job, from, to) => {
+        const start = real.indexOf(`\n  ${job}:\n`);
+        const next = start < 0 ? -1 : real.slice(start + 1).search(/\n  [a-z][a-z0-9-]*:\n/);
+        const end = next < 0 ? real.length : start + 1 + next;
+        const at = start < 0 ? -1 : real.indexOf(from, start);
+        if (at < 0 || at >= end) throw new Error(`self-test anchor '${from.trim()}' is absent from ${job} in ${RELEASE_REL}`);
+        return real.slice(0, at) + to + real.slice(at + from.length);
+    };
+    const docsWith = (from, to) => rel => (rel === DOCS_REL ? docs.replace(from, to) : readText(REPO_ROOT, rel));
     const stableTar = expected.find(([k]) => k === 'stable-tarball')[1];
     const versionedTar = expected.find(([k]) => k === 'versioned-tarball')[1];
     const plants = [
@@ -466,6 +558,16 @@ function selfTest() {
         ['stale-approval guard removed from before the signing steps', { text: edit('        id: newer_guard\n', '        id: newer_guard_x\n') }, 'the stale-approval guard (newer_guard) is missing or runs after'],
         ['stale-approval guard moved after the signing step', { text: swapStepBlocks('newer_guard', 'sign_mar') }, 'runs after the MAR channel gate or the signing step'],
         ['continue-on-error on the stale-approval guard', { text: edit('        id: newer_guard\n', '        id: newer_guard\n        continue-on-error: true\n') }, 'newer_guard step'],
+        ['publish-windows removed', { text: real.replace('\n  publish-windows:\n', '\n  publish-windows-x:\n') }, 'has no publish-windows job'],
+        ['publish-windows not waiting on sign-publish', { text: editIn('publish-windows', '    needs: [build-windows, sign-publish]\n', '    needs: [build-windows]\n') }, 'publish-windows does not need sign-publish'],
+        ['publish-windows uploading to the Release', { text: editIn('publish-windows', '          cat assets/SHA256SUMS\n', '          cat assets/SHA256SUMS\n          gh release upload "$TAG" assets/*\n') }, 'runs gh release upload'],
+        ['descriptor-windows editing the Release', { text: editIn('descriptor-windows', '          echo "mar=published/$NAME" >> "$GITHUB_OUTPUT"\n', '          gh release edit "$TAG" --notes x\n          echo "mar=published/$NAME" >> "$GITHUB_OUTPUT"\n') }, 'descriptor-windows step'],
+        ['publish-windows assembling without --expected-windows', { text: editIn('publish-windows', 'verify-release-asset-set.mjs --expected-windows >', 'verify-release-asset-set.mjs --listed >') }, 'publish-windows has no step that names the Windows files'],
+        ['publish-windows R2 put without --remote', { text: editIn('publish-windows', 'wrangler r2 object put "$R2_MAR_BUCKET/$KEY" --remote ', 'wrangler r2 object put "$R2_MAR_BUCKET/$KEY" ') }, 'publish-windows r2_copy runs'],
+        ['publish-windows R2 read-back removed', { text: editIn('publish-windows', '            wrangler r2 object get "$R2_MAR_BUCKET/$KEY" --remote --file readback.bin\n', '') }, 'publish-windows r2_copy does not read each key'],
+        ['publish-windows R2 copy keyed by a runner value', { text: editIn('publish-windows', '        id: r2_copy\n        env:\n          TAG: ${{ steps.derive_key.outputs.tag }}', '        id: r2_copy\n        env:\n          TAG: ${{ needs.build-windows.outputs.build }}') }, 'publish-windows r2_copy step takes its tag'],
+        ['Cloudflare token in descriptor-windows', { text: editIn('descriptor-windows', '          TAG: ${{ steps.derive_key.outputs.tag }}\n', '          TAG: ${{ steps.derive_key.outputs.tag }}\n          CF: ${{ secrets.R2_MAR_WRITE_TOKEN }}\n') }, "descriptor-windows step 'Download the signed Windows MAR"],
+        ['Windows Target key drifted from WINDOWS_TOKEN', { read: docsWith('| `windows-x86_64` |', '| `windows-x64` |') }, '"windows-x64"'],
         ['release key with a path separator', { releaseKey: 'v153.5.1-1/../../x' }, 'is not v<esr>-<revision>'],
         ['release key with a newline', { releaseKey: 'v153.5.1-1\nsource\tx' }, 'is not v<esr>-<revision>'],
         ['release key with a pre-release suffix', { releaseKey: 'v153.5.1-rc1' }, 'is not v<esr>-<revision>'],

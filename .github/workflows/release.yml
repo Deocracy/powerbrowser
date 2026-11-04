@@ -505,6 +505,20 @@ jobs:
           retention-days: 1
           overwrite: true
 
+      # Data only, for descriptor-windows behind the descriptor wait: the emitter reads the built target from
+      # config.status and the build identity from application.ini, as for Linux (release-linux-identity).
+      - name: Upload the Windows build identity files the descriptor emitter reads (config.status and application.ini)
+        if: steps.key_gate.outputs.build == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-windows-identity
+          path: |
+            objdir-windows-x86_64/config.status
+            objdir-windows-x86_64/dist/bin/application.ini
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
   # Phase 54 (SEC-12, DIST-10): the per-OS sign job for Windows. Hosted, under environment release, and the only job
   # that reaches Azure. It authenticates with Azure/login over OIDC: id-token write is on this job only, and no Azure
   # secret is stored anywhere (the client, tenant and subscription ids and the Artifact Signing endpoint, account and
@@ -1442,4 +1456,439 @@ jobs:
             sleep 60
           done
           echo "::error::the public update channel is not proven equal to the Release after $ATTEMPTS attempts over about $((ATTEMPTS - 1)) minutes; nothing was changed. Next step: read the failures of the last attempt above, fix the named descriptor or MAR, then re-run this job" >&2
+          exit 1
+
+  # Phase 54 (DIST-10, SEC-03; owner answer A2, 2026-11-04): Windows publishes after the Linux publish of the same
+  # run, to the MAR origin and never to the GitHub Release, which is immutable and stays Linux-only. The installer
+  # ships unsigned (SEC-12 is out of scope for v1.6, R14); the complete MAR is MAR-signed here with the key
+  # sign-publish uses, and the legion artifact is data that is signed and copied, never executed. Only this job and
+  # the two below it need a Windows job, and no Linux job needs any of the three (win-sign-chain, independence).
+  # Every artifact these jobs move is named release-windows*, which is how that row classifies them as Windows jobs.
+  publish-windows:
+    needs: [build-windows, sign-publish]
+    if: needs.build-windows.outputs.build == 'true' && needs.sign-publish.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: read # checkout and read-only gh api; the Windows files go to the MAR origin, never to the Release
+    env:
+      RELEASE_SHA: ${{ inputs.sha }}
+    steps:
+      - name: Refuse any ref but main and any event but a dispatch
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF" = "refs/heads/main" ] \
+            || { echo "::error::the release runs only from a workflow_dispatch on refs/heads/main (event $GITHUB_EVENT_NAME, ref $GITHUB_REF)" >&2; exit 1; }
+
+      - name: Require a full 40-hex commit SHA
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a full 40-character lowercase commit SHA" >&2; exit 1; }
+
+      # The dispatch input, never a runner output: legion cannot choose the commit this job runs.
+      - name: Check out the dispatched commit (the tracked DER, the Windows mozconfig, the signmar pin and every script run here)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate the release SHA (main tip, or a configuration.toml ancestor with main's workflows)
+        id: sha_gate
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          TIP="$(git rev-parse refs/remotes/origin/main)"
+          # Gate the commit actually checked out, and require it to be the one requested.
+          SHA="$(git rev-parse HEAD)"
+          [ "$SHA" = "$RELEASE_SHA" ] || { echo "::error::checked-out $SHA is not the requested $RELEASE_SHA. Next step: dispatch the SHA the run checks out; nothing is built" >&2; exit 1; }
+          if [ "$SHA" != "$TIP" ]; then
+            git merge-base --is-ancestor "$SHA" "$TIP" || { echo "::error::$SHA is not on main (tip $TIP). Next step: dispatch the merge SHA of a merged bump PR, or the tip of main" >&2; exit 1; }
+            git show --name-only --format= "$SHA" | grep -x 'configuration.toml' >/dev/null \
+              || { echo "::error::$SHA does not change configuration.toml and is not the tip of main ($TIP). Next step: dispatch a SHA whose own commit changes configuration.toml" >&2; exit 1; }
+            git diff --quiet "$SHA" "$TIP" -- .github/workflows/ \
+              || { echo "::error::.github/workflows/ at $SHA differs from main (tip $TIP); the bot App cannot create a Release for that target. Next step: rebase the bump onto the tip of main" >&2; exit 1; }
+          fi
+          echo "validated $SHA"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      # The tag comes from the tree, never from anything legion wrote.
+      - name: Read the release key from this tree
+        id: derive_key
+        run: |
+          set -euo pipefail
+          DERIVED="$(node --input-type=module -e "import { resolveConfig, releaseIdentity } from './scripts/generate.mjs'; const { config } = resolveConfig('./configuration.toml'); console.log(releaseIdentity(config).releaseKey);" | tail -n 1)"
+          [[ "$DERIVED" =~ ^v[0-9]+(\.[0-9]+)*-[0-9]+$ ]] || { echo "::error::derived release key '$DERIVED' is not v<esr>-<revision>; nothing is published" >&2; exit 1; }
+          echo "tag=$DERIVED" >> "$GITHUB_OUTPUT"
+
+      # The Windows files join the Release this run just published, and no other: a newer Release means this run is stale.
+      - name: Require the latest published Release to be this run's tag (the Linux publish of this run)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.derive_key.outputs.tag }}
+        run: |
+          set -euo pipefail
+          LATEST="$(gh api -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$GITHUB_REPOSITORY/releases?per_page=30" --jq '[.[] | select(.draft == false)][0].tag_name // "none"')"
+          [ "$LATEST" = "$TAG" ] || { echo "::error::the latest published Release is $LATEST, not $TAG, so the Windows files of $TAG would follow a Release that is not the current one; nothing is published. Next step: start a fresh dispatch for the current release key" >&2; exit 1; }
+
+      - name: Download the Windows build (untrusted data, signed and copied, never executed)
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-windows
+          path: windows
+
+      # The local base name is DERIVED from this tree (scripts/win-sign-list.mjs --expected-base) and the artifact must
+      # hold exactly that installer and MAR; nothing the artifact names reaches GITHUB_OUTPUT.
+      - name: Admit the unsigned installer and the complete MAR against the tree-derived base name
+        id: inputs
+        run: |
+          set -euo pipefail
+          IFS=$'\t' read -r WANT_BASE _ < <(node scripts/win-sign-list.mjs --expected-base)
+          [[ "$WANT_BASE" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::the tree did not yield a plain package name; nothing is published" >&2; exit 1; }
+          for F in "windows/$WANT_BASE.installer.exe" "windows/$WANT_BASE.complete.mar"; do
+            [ -s "$F" ] && [ ! -L "$F" ] || { echo "::error::the Windows artifact holds no regular file $(basename "$F"), which this tree expects; nothing is published. Next step: re-dispatch from the commit whose build-windows produced this artifact" >&2; exit 1; }
+          done
+          echo "base=$WANT_BASE" >> "$GITHUB_OUTPUT"
+
+      - name: Install the NSS tools and the signmar build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends libnss3-tools libnss3-dev libnspr4-dev pkg-config g++
+
+      # Pinned source, hash-checked file by file; no secret and no write token is in this step's environment.
+      - name: Build signmar from the pinned Firefox source (never from the legion output)
+        id: win_signmar
+        run: |
+          set -euo pipefail
+          bash scripts/build-signmar.sh "$RUNNER_TEMP/signmar-bin"
+          echo "path=$RUNNER_TEMP/signmar-bin/signmar" >> "$GITHUB_OUTPUT"
+
+      - name: MAR channel gate (refuse a foreign MAR channel before the MAR is signed)
+        id: win_mar_channel_gate
+        env:
+          SIGNMAR: ${{ steps.win_signmar.outputs.path }}
+          BASE: ${{ steps.inputs.outputs.base }}
+        run: |
+          set -euo pipefail
+          ACCEPTED="$(sed -n 's/^ac_add_options ACCEPTED_MAR_CHANNEL_IDS=//p' powerbrowser/packaging/mozconfig-windows-x86_64 | tr -d '[:space:]')"
+          WIN_CHANNEL="$("$SIGNMAR" -T "windows/$BASE.complete.mar" | sed -n 's/.*[Cc]hannel[^:]*: *//p' | awk 'NR==1{print}' | tr -d '[:space:]')"
+          if [ -z "$ACCEPTED" ] || [ "$WIN_CHANNEL" != "$ACCEPTED" ]; then
+            echo "::error::the Windows MAR carries the product-info channel '$WIN_CHANNEL', not the accepted '$ACCEPTED' of the Windows mozconfig (MAR_CHANNEL_MISMATCH_ERROR); the MAR is not signed" >&2
+            exit 1
+          fi
+          echo "Windows MAR channel $WIN_CHANNEL accepted"
+
+      - name: Sign the complete MAR (the key material is read only here, from the release environment)
+        id: win_sign_mar
+        env:
+          SIGNMAR: ${{ steps.win_signmar.outputs.path }}
+          BASE: ${{ steps.inputs.outputs.base }}
+          MAR_SIGNING_P12_B64: ${{ secrets.MAR_SIGNING_P12_B64 }}
+          MAR_SIGNING_P12_PASSWORD: ${{ secrets.MAR_SIGNING_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/mar-sign"
+          mkdir -p "$WORK/db" "$RUNNER_TEMP/signed"
+          printf '%s' "$MAR_SIGNING_P12_B64" | base64 -d > "$WORK/mar.p12"
+          printf '%s' "$MAR_SIGNING_P12_PASSWORD" > "$WORK/pw"
+          certutil -N -d "sql:$WORK/db" --empty-password
+          pk12util -i "$WORK/mar.p12" -d "sql:$WORK/db" -k "$WORK/pw" -w "$WORK/pw"
+          "$SIGNMAR" -d "$WORK/db" -n powerbrowser-mar -s "windows/$BASE.complete.mar" "$RUNNER_TEMP/signed/$BASE.complete.mar"
+
+      - name: Check the signed MAR with signmar -v and with node:crypto against the tracked DER, before any copy
+        id: win_verify_mar
+        env:
+          SIGNMAR: ${{ steps.win_signmar.outputs.path }}
+          BASE: ${{ steps.inputs.outputs.base }}
+        run: |
+          set -euo pipefail
+          SIGNED_MAR="$RUNNER_TEMP/signed/$BASE.complete.mar"
+          V="$RUNNER_TEMP/mar-verify"
+          mkdir -p "$V"
+          certutil -N -d "sql:$V" --empty-password
+          certutil -A -d "sql:$V" -n powerbrowser-mar -t ",," -i powerbrowser/packaging/mar/mar-primary.der
+          "$SIGNMAR" -d "$V" -n powerbrowser-mar -v "$SIGNED_MAR"
+          node scripts/verify-mar-signature.mjs "$SIGNED_MAR" powerbrowser/packaging/mar/mar-primary.der
+
+      - name: Remove the signing scratch databases
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/mar-sign" "$RUNNER_TEMP/mar-verify"
+
+      # The published names come from the docs/RELEASING.md asset table (the windows-x86_64 row) and this tree's key.
+      - name: Assemble the Windows files under their tree-derived names, with a Windows SHA256SUMS
+        env:
+          BASE: ${{ steps.inputs.outputs.base }}
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          node scripts/verify-release-asset-set.mjs --expected-windows > "$RUNNER_TEMP/expected-windows.tsv"
+          while IFS=$'\t' read -r KIND NAME; do
+            case "$KIND" in
+              versioned-installer) cp "windows/$BASE.installer.exe" "assets/$NAME" ;;
+              versioned-mar) cp "$RUNNER_TEMP/signed/$BASE.complete.mar" "assets/$NAME" ;;
+              sums) ;;
+              *) echo "::error::unknown Windows asset kind $KIND; nothing is published" >&2; exit 1 ;;
+            esac
+          done < "$RUNNER_TEMP/expected-windows.tsv"
+          (cd assets && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | sort | xargs sha256sum > SHA256SUMS)
+          cat assets/SHA256SUMS
+
+      - name: Set up Node 24 for the pinned wrangler (it requires Node 22 or later)
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Install the pinned wrangler from the committed lockfile (scripts off, no credential in this step)
+        id: wrangler
+        run: |
+          set -euo pipefail
+          W="$RUNNER_TEMP/wrangler"
+          mkdir -p "$W"
+          cp .github/r2/wrangler/package.json .github/r2/wrangler/package-lock.json "$W/"
+          (cd "$W" && npm ci --ignore-scripts --no-audit --no-fund)
+          "$W/node_modules/.bin/wrangler" --version
+          echo "dir=$W" >> "$GITHUB_OUTPUT"
+
+      # The same write-once rules as sign-publish's r2_copy: an existing key holding the same sha512 is a no-op, one
+      # holding other bytes is refused and never overwritten, and every put is read back and compared.
+      - name: Copy the Windows files to the MAR origin at <tag>/<asset> (write-once, read back)
+        id: r2_copy
+        env:
+          TAG: ${{ steps.derive_key.outputs.tag }}
+          WRANGLER_DIR: ${{ steps.wrangler.outputs.dir }}
+          R2_MAR_BUCKET: ${{ vars.R2_MAR_BUCKET }}
+          WRANGLER_SEND_METRICS: "false"
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.R2_MAR_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$R2_MAR_BUCKET" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ] || [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::the release environment holds no R2 bucket, account or token, so the Windows files cannot reach the MAR origin and nothing is published. Next step: finish the owner setup in docs/RELEASING.md, section 'R2 primary MAR origin', then re-run this job" >&2
+            exit 1
+          fi
+          [[ "$R2_MAR_BUCKET" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]] || { echo "::error::the R2 bucket name in the release environment is not a valid bucket name; nothing is copied. Next step: correct it as docs/RELEASING.md describes, then re-run this job" >&2; exit 1; }
+          export PATH="$WRANGLER_DIR/node_modules/.bin:$PATH"
+          ASSETS="$GITHUB_WORKSPACE/assets"
+          mkdir -p "$RUNNER_TEMP/r2"
+          cd "$RUNNER_TEMP/r2"
+          COPIED=0
+          while IFS=$'\t' read -r KIND NAME; do
+            KEY="$TAG/$NAME"
+            TYPE=application/octet-stream
+            [ "$KIND" = "sums" ] && TYPE="text/plain; charset=utf-8"
+            WANT="$(sha512sum "$ASSETS/$NAME" | cut -d' ' -f1)"
+            rm -f existing.bin readback.bin
+            RC=0
+            wrangler r2 object get "$R2_MAR_BUCKET/$KEY" --remote --file existing.bin > get.log 2>&1 || RC=$?
+            if [ "$RC" -eq 0 ]; then
+              if [ "$(sha512sum existing.bin | cut -d' ' -f1)" = "$WANT" ]; then
+                echo "$KEY already holds these bytes; nothing to copy"
+                COPIED=$((COPIED + 1))
+                continue
+              fi
+              echo "::error::refusing to overwrite $KEY: the MAR origin already holds other bytes at that key, and its keys are write-once. Next step: release a new revision, which gets a new tag and so a new key" >&2
+              exit 1
+            fi
+            grep -q 'The specified key does not exist' get.log \
+              || { cat get.log >&2; echo "::error::could not read $KEY from the MAR origin, so the copy cannot prove the key is free; nothing more is copied. Next step: check the R2 setup in docs/RELEASING.md, then re-run this job" >&2; exit 1; }
+            wrangler r2 object put "$R2_MAR_BUCKET/$KEY" --remote --file "$ASSETS/$NAME" --content-type "$TYPE"
+            wrangler r2 object get "$R2_MAR_BUCKET/$KEY" --remote --file readback.bin
+            GOT="$(sha512sum readback.bin | cut -d' ' -f1)"
+            [ "$GOT" = "$WANT" ] \
+              || { echo "::error::$KEY read back from the MAR origin with other bytes than this job wrote (sha512 $GOT, expected $WANT). Next step: check the bucket, then release a new revision" >&2; exit 1; }
+            echo "copied $KEY (sha512 $WANT)"
+            COPIED=$((COPIED + 1))
+          done < "$RUNNER_TEMP/expected-windows.tsv"
+          [ "$COPIED" -eq "$(wc -l < "$RUNNER_TEMP/expected-windows.tsv")" ] || { echo "::error::only $COPIED of the expected Windows files reached the MAR origin. Next step: re-run this job" >&2; exit 1; }
+
+  # DIST-10, behind the same descriptor environment (owner reviewer plus the 1440-minute wait) as the Linux
+  # descriptor. It emits the WINNT descriptor from the Windows build identity and the MAR the origin serves, and
+  # writes the Windows manifest channel-live-windows reads. The Releases carry only the Linux manifest, so
+  # descriptor-monotonic cannot order a Windows build; the commit step instead refuses a buildID that is not
+  # newer than the Windows descriptor already committed.
+  descriptor-windows:
+    needs: publish-windows
+    if: needs.publish-windows.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: descriptor
+    permissions:
+      contents: read
+    steps:
+      - name: Refuse any ref but main and any event but a dispatch
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF" = "refs/heads/main" ] \
+            || { echo "::error::the release runs only from a workflow_dispatch on refs/heads/main (event $GITHUB_EVENT_NAME, ref $GITHUB_REF)" >&2; exit 1; }
+
+      - name: Check out the dispatched commit (the emitter, the gates and the configuration)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+
+      - name: Download the Windows build identity files (data, never executed)
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-windows-identity
+          path: identity
+
+      - name: Read the release key from this tree
+        id: derive_key
+        run: |
+          set -euo pipefail
+          DERIVED="$(node --input-type=module -e "import { resolveConfig, releaseIdentity } from './scripts/generate.mjs'; const { config } = resolveConfig('./configuration.toml'); console.log(releaseIdentity(config).releaseKey);" | tail -n 1)"
+          [[ "$DERIVED" =~ ^v[0-9]+(\.[0-9]+)*-[0-9]+$ ]] || { echo "::error::derived release key '$DERIVED' is not v<esr>-<revision>; no descriptor is written" >&2; exit 1; }
+          echo "tag=$DERIVED" >> "$GITHUB_OUTPUT"
+
+      # The descriptor pins the signed bytes the MAR origin serves, the bytes publish-windows wrote write-once.
+      - name: Download the signed Windows MAR from the MAR origin
+        id: published_mar
+        env:
+          TAG: ${{ steps.derive_key.outputs.tag }}
+        run: |
+          set -euo pipefail
+          NAME="$(node scripts/verify-release-asset-set.mjs --expected-windows | awk -F'\t' '$1 == "versioned-mar" { print $2 }')"
+          ORIGIN="$(node --input-type=module -e "import { resolveConfig, marOrigin } from './scripts/generate.mjs'; console.log(marOrigin(resolveConfig('./configuration.toml').config) ?? '');")"
+          [ -n "$NAME" ] && [[ "$ORIGIN" =~ ^https:// ]] || { echo "::error::the Windows MAR name or the MAR origin could not be derived from the tree; no descriptor is written" >&2; exit 1; }
+          mkdir -p published
+          curl -fsS --proto '=https' -o "published/$NAME" "$ORIGIN/$TAG/$NAME"
+          echo "mar=published/$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Emit the Windows update.xml and the Windows manifest, then re-emit and require byte-identical output
+        env:
+          MAR: ${{ steps.published_mar.outputs.mar }}
+        run: |
+          set -euo pipefail
+          INPUTS=(--config-status identity/config.status --application-ini identity/dist/bin/application.ini --mar "$MAR")
+          node scripts/build-update-xml.mjs --emit --outdir "$RUNNER_TEMP/descriptors" --manifest-out "$RUNNER_TEMP/windows-manifest/release-manifest.json" "${INPUTS[@]}"
+          node scripts/build-update-xml.mjs --check --outdir "$RUNNER_TEMP/descriptors" "${INPUTS[@]}"
+
+      - name: Refuse any patch URL that is not the MAR origin at /<tag>/<asset> (the pre-commit form gate)
+        run: node scripts/verify-channel-live.mjs --form-only --manifest "$RUNNER_TEMP/windows-manifest/release-manifest.json" --descriptors "$RUNNER_TEMP/descriptors"
+
+      # Data only, for channel-live-windows: the build values of the Windows descriptor, no installer and no MAR.
+      - name: Upload the Windows manifest channel-live-windows reads
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-windows-manifest
+          path: ${{ runner.temp }}/windows-manifest/release-manifest.json
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
+      - name: Derive the updates repo from this repository, once
+        id: updates_repo
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]] || { echo "::error::the repository name $GITHUB_REPOSITORY is not owner/repo; no updates repo is derived and nothing is committed" >&2; exit 1; }
+          UPDATES_REPO="$GITHUB_REPOSITORY-updates"
+          { echo "full=$UPDATES_REPO"; echo "owner=${UPDATES_REPO%%/*}"; echo "name=${UPDATES_REPO#*/}"; } >> "$GITHUB_OUTPUT"
+
+      - name: Mint the bot App token for the updates repo only, immediately before the commit (revoked at job end)
+        id: updates_token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          owner: ${{ steps.updates_repo.outputs.owner }}
+          repositories: ${{ steps.updates_repo.outputs.name }}
+
+      - name: Commit the Windows descriptor to the updates repo when it offers a newer build (an unchanged one is a no-op)
+        env:
+          GH_TOKEN: ${{ steps.updates_token.outputs.token }}
+          TAG: ${{ steps.derive_key.outputs.tag }}
+          REPO: ${{ steps.updates_repo.outputs.full }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/descriptors"
+          mapfile -t LIST < <(find . -type f -name update.xml | sed 's|^\./||' | sort)
+          [ "${#LIST[@]}" -eq 1 ] && [[ "${LIST[0]}" =~ ^[A-Za-z0-9._-]+/WINNT_[A-Za-z0-9_-]+/update\.xml$ ]] \
+            || { echo "::error::the emitter wrote ${#LIST[@]} descriptor(s) (${LIST[*]:-none}), not the one WINNT descriptor; nothing is committed" >&2; exit 1; }
+          REL="${LIST[0]}"
+          if ! SEEN="$(gh api -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$REPO" --jq .full_name 2> "$RUNNER_TEMP/repo.err")" || [ "${SEEN,,}" != "${REPO,,}" ]; then
+            STATUS="$(grep -o 'HTTP [0-9]\{3\}' "$RUNNER_TEMP/repo.err" | head -n 1 || true)"
+            echo "::error::the descriptor commit step cannot read $REPO with the minted token (${STATUS:-no HTTP status}); nothing is committed. Next step: install the bot App on $REPO with contents write" >&2
+            exit 1
+          fi
+          buildid() { sed -n 's/.* buildID="\([0-9]\{14\}\)".*/\1/p' "$1" | head -n 1; }
+          NEW_ID="$(buildid "$REL")"
+          [ -n "$NEW_ID" ] || { echo "::error::$REL carries no fourteen-digit buildID; nothing is committed" >&2; exit 1; }
+          SHA=""
+          if gh api -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$REPO/contents/$REL?ref=main" > "$RUNNER_TEMP/current.json" 2> "$RUNNER_TEMP/current.err"; then
+            SHA="$(jq -r .sha "$RUNNER_TEMP/current.json")"
+            jq -r .content "$RUNNER_TEMP/current.json" | base64 -d > "$RUNNER_TEMP/current.xml"
+            if cmp -s "$RUNNER_TEMP/current.xml" "$REL"; then
+              echo "$REL is unchanged in $REPO; nothing is committed"
+              exit 0
+            fi
+            # The no-update document of a withdraw carries no buildID, and any build may follow it.
+            CUR_ID="$(buildid "$RUNNER_TEMP/current.xml")"
+            if [ -n "$CUR_ID" ] && ! [[ "$NEW_ID" > "$CUR_ID" ]]; then
+              echo "::error::$REL in $REPO already offers buildID $CUR_ID, and this build's $NEW_ID is not newer, so committing it would offer a downgrade; nothing is committed. Next step: rebuild, so the Windows BuildID is newer than $CUR_ID" >&2
+              exit 1
+            fi
+          elif ! grep -q 'HTTP 404' "$RUNNER_TEMP/current.err"; then
+            echo "::error::$REL in $REPO could not be read ($(head -n 1 "$RUNNER_TEMP/current.err")); nothing is committed" >&2
+            exit 1
+          fi
+          PUT=(-X PUT -H 'X-GitHub-Api-Version: 2022-11-28' "repos/$REPO/contents/$REL" -f "message=descriptor $REL for $TAG" -f "content=$(base64 -w0 "$REL")" -f branch=main)
+          [ -z "$SHA" ] || PUT+=(-f "sha=$SHA")
+          if ! gh api "${PUT[@]}" > "$RUNNER_TEMP/put.json" 2> "$RUNNER_TEMP/put.err"; then
+            STATUS="$(grep -o 'HTTP [0-9]\{3\}' "$RUNNER_TEMP/put.err" | head -n 1 || true)"
+            echo "::error::the descriptor commit step could not write $REL to $REPO (${STATUS:-no HTTP status}: $(head -n 1 "$RUNNER_TEMP/put.err")); nothing is committed. Next step: re-run the descriptor-windows job; a 409 means the file moved since it was read" >&2
+            exit 1
+          fi
+          COMMIT="$(jq -r '.commit.sha // empty' "$RUNNER_TEMP/put.json")"
+          BLOB="$(jq -r '.content.sha // empty' "$RUNNER_TEMP/put.json")"
+          if ! [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || [ "$BLOB" != "$(git hash-object "$REL")" ]; then
+            echo "::error::the descriptor commit step got no commit SHA, or a stored blob other than the emitted bytes, for $REL in $REPO; it is not proven committed. Next step: read $REL in $REPO, then re-run the descriptor-windows job" >&2
+            exit 1
+          fi
+          echo "committed $REL to $REPO at $COMMIT"
+
+  # UPD-17 for Windows: read-only, no environment, no secret, no App token. It proves the public WINNT descriptor
+  # equals the updates repo copy, names the MAR origin at /<tag>/<asset>, and pins the bytes the origin serves.
+  channel-live-windows:
+    needs: descriptor-windows
+    if: needs.descriptor-windows.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the dispatched commit (the liveness row and the configuration)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+
+      - name: Download the Windows manifest (data, never executed)
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-windows-manifest
+          path: release
+
+      - name: Require the Windows manifest's MAR origin, update channel and update URL to equal this tree's
+        run: node scripts/verify-channel-live.mjs --manifest-agrees --manifest release/release-manifest.json
+
+      - name: Prove the public Windows channel equals the MAR origin (byte-equal descriptor, MAR-origin form, HEAD size, GET sha512, latest version)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ATTEMPTS=10
+          for ATTEMPT in $(seq 1 "$ATTEMPTS"); do
+            RC=0
+            node scripts/verify-channel-live.mjs --manifest release/release-manifest.json || RC=$?
+            [ "$RC" -eq 1 ] || exit "$RC"
+            [ "$ATTEMPT" -eq "$ATTEMPTS" ] && break
+            echo "channel-live-windows attempt $ATTEMPT of $ATTEMPTS is red; the updates host may still be deploying, so it is read again in 60 s"
+            sleep 60
+          done
+          echo "::error::the public Windows update channel is not proven equal to the MAR origin after $ATTEMPTS attempts over about $((ATTEMPTS - 1)) minutes; nothing was changed. Next step: read the failures of the last attempt above, fix the named descriptor or MAR, then re-run this job" >&2
           exit 1

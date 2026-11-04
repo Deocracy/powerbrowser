@@ -1647,8 +1647,15 @@ token or is renamed without it is recorded by stage
 | Target key | Versioned | Stable |
 |---|---|---|
 | `linux-x86_64` | pending stage `linux-release-pipeline-and-update-channel` | pending stage `linux-release-pipeline-and-update-channel` |
-| Windows x86_64 | pending stage `windows-unsigned` | pending stage `windows-unsigned` |
+| `windows-x86_64` | `<app_basename>-<version>.windows-x86_64.installer.exe` and `<app_basename>-<version>.windows-x86_64.complete.mar`, plus a Windows `SHA256SUMS`, on the MAR origin at `<tag>/` (never on the Release) | none: the MAR origin keys are write-once per tag |
 | macOS universal | pending stage `macos-adhoc-signed` | pending stage `macos-adhoc-signed` |
+
+The Windows row is published by `publish-windows` after the Linux publish of the same run (owner answer
+A2, 2026-11-04): the unsigned installer, the MAR-signed complete MAR and a Windows `SHA256SUMS` over
+those two go write-once to `https://downloads.powerbrowser.org/<tag>/`. The Release is immutable, so
+nothing is added to it after the single publish, and it stays Linux-only. `descriptor-windows` commits
+the `WINNT_x86_64-msvc` descriptor and `channel-live-windows` checks it. No Linux job needs any of the
+three (`win-sign-chain`, rule independence).
 
 Assets that carry no target token and are attached once per Release: `SHA256SUMS`,
 `release-manifest.json`, `LICENSING.md`, `THIRD-PARTY-NOTICES.txt`, and the source tarball.

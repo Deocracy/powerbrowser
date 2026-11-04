@@ -25,7 +25,10 @@
 //                (required=True); the upload paths sit under the directory it writes to and end in the
 //                suffixes of the files it names.
 //  9. retention  every upload-artifact step sets retention-days 1 and fails on no files; the file
-//                carries at least one, so the rule is not vacuous.
+//                carries at least one, so the rule is not vacuous. The one exception (54-11) is the identity
+//                upload: exactly <objdir>/config.status and <objdir>/dist/bin/application.ini, the files
+//                scripts/build-update-xml.mjs reads, which descriptor-windows reads behind the descriptor wait;
+//                release-shape judges its retention against that wait and refuses a MAR in it.
 // 10. no-cache   no actions/cache step, no cache input.
 // 11. independent build-windows needs exactly the hosted windows-sidecar job (G-54a) and reads only its
 //                sums_sha256 output, as PB_WIN_SIDECAR_SUMS_SHA256 (never vars.); it downloads the windows-sidecar
@@ -62,6 +65,14 @@ const REF_JOB = 'build-linux';
 const LEGION_LABELS = ['self-hosted', 'powerbrowser-release'];
 const KEY_IF = "steps.key_gate.outputs.build == 'true'";
 const UPLOAD = /^actions\/upload-artifact@/;
+// The build identity the descriptor emitter reads, relative to the objdir (scripts/build-update-xml.mjs APP_INI_REL,
+// CONFIG_STATUS_REL; not imported, because that script runs its CLI on import).
+const IDENTITY_FILES = Object.freeze(['config.status', 'dist/bin/application.ini']);
+const pathsOf = st => String(st.with?.path ?? '').split('\n').map(x => x.trim()).filter(Boolean);
+const isIdentityUpload = (st, objdir) => {
+    const paths = pathsOf(st);
+    return objdir !== undefined && paths.length === IDENTITY_FILES.length && IDENTITY_FILES.every(f => paths.includes(`${objdir}/${f}`));
+};
 const CACHE = /^actions\/cache@/;
 const PINNED = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+@[0-9a-f]{40}$/;
 const PACKAGE_REL = 'powerbrowser/packaging/package-windows.sh';
@@ -343,7 +354,7 @@ function runChecks(root, overrides = {}) {
         const outDir = /^OBJ="\$ROOT\/([^"]+)"/m.exec(script)?.[1];
         const outSub = /^OUT="\$OBJ\/([^"]+)"/m.exec(script)?.[1];
         const suffixes = [...script.matchAll(/--output "\$OUT\/\$BASE(\.[A-Za-z.]+)"/g)].map(m => m[1]);
-        const uploads = steps.filter(st => UPLOAD.test(String(st.uses ?? ''))).flatMap(st => String(st.with?.path ?? '').split('\n').map(x => x.trim()).filter(Boolean));
+        const uploads = steps.filter(st => UPLOAD.test(String(st.uses ?? '')) && !isIdentityUpload(st, outDir)).flatMap(pathsOf);
         if (!outDir || !outSub || suffixes.length < 2) fail(PACKAGE_REL, 'repackage', 'does not name its output directory (OBJ=, OUT=) and the two output suffixes the row compares the upload with. Next step: restore them.');
         else {
             const dir = `${outDir}/${outSub}`;
@@ -378,12 +389,13 @@ function runChecks(root, overrides = {}) {
     }
 
     // 9. retention, 10. no cache, over the job
+    const objdir = script === null ? undefined : /^OBJ="\$ROOT\/([^"]+)"/m.exec(script)?.[1];
     let uploads = 0;
     for (const st of steps) {
         const uses = typeof st.uses === 'string' ? st.uses : '';
         if (UPLOAD.test(uses)) {
             uploads += 1;
-            if (Number(st.with?.['retention-days']) !== 1) {
+            if (!isIdentityUpload(st, objdir) && Number(st.with?.['retention-days']) !== 1) {
                 fail(st.name ?? uses, 'retention', `upload-artifact step sets retention-days ${JSON.stringify(st.with?.['retention-days'])}, not 1. Next step: set retention-days: 1.`);
             }
             if (st.with?.['if-no-files-found'] !== 'error') {
@@ -458,6 +470,7 @@ function selfTest() {
         ['key gate if removed from the Firefox fetch', sliceEdit("      - name: Fetch the pinned Firefox source and apply the patch stack\n        if: steps.key_gate.outputs.build == 'true'\n", '      - name: Fetch the pinned Firefox source and apply the patch stack\n'), 'gates', 'Fetch the pinned Firefox'],
         ['sha gate body drifts from build-linux', sliceEdit('echo "validated $SHA"', 'echo "validated $SHA again"'), 'gates', 'sha_gate'],
         ['pipefail removed from the cross-build step', sliceEdit('          set -euo pipefail\n          podman run --rm', '          podman run --rm'), 'gates', 'pipefail'],
+        ['identity upload carrying the MAR', sliceEdit('            objdir-windows-x86_64/dist/bin/application.ini\n', '            objdir-windows-x86_64/dist/bin/application.ini\n            objdir-windows-x86_64/dist/release-windows/*.complete.mar\n'), 'retention', 'retention-days 7'],
         ['upload retention raised', sliceEdit('          retention-days: 1\n          overwrite: true', '          retention-days: 5\n          overwrite: true'), 'retention', 'retention-days 5'],
         ['image build without --no-cache', sliceEdit('--pull=always --no-cache -t pb-gecko-build', '--pull=always -t pb-gecko-build'), 'image', '--no-cache'],
         // rule 11 (G-54a): the one needs edge and its hosted producer

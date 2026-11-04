@@ -498,9 +498,13 @@ function selfTest() {
         if (!real.includes(from)) throw new Error(`self-test anchor '${from.trim()}' is absent from ${RELEASE_REL}`);
         return real.replace(from, to);
     };
+    // The first occurrence inside the sign-publish job's text: later jobs (publish-windows) repeat its gates.
     const editLast = (from, to) => {
-        const at = real.lastIndexOf(from);
-        if (at < 0) throw new Error(`self-test anchor '${from.trim()}' is absent from ${RELEASE_REL}`);
+        const start = real.indexOf(`\n  ${SIGN_JOB}:\n`);
+        const next = start < 0 ? -1 : real.slice(start + 1).search(/\n  [a-z][a-z0-9-]*:\n/);
+        const end = next < 0 ? real.length : start + 1 + next;
+        const at = start < 0 ? -1 : real.indexOf(from, start);
+        if (at < 0 || at >= end) throw new Error(`self-test anchor '${from.trim()}' is absent from ${SIGN_JOB} in ${RELEASE_REL}`);
         return real.slice(0, at) + to + real.slice(at + from.length);
     };
     const RUNS_ON = '    runs-on: [self-hosted, powerbrowser-release]\n';

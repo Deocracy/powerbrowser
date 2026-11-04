@@ -30,7 +30,8 @@
 //     (github.com is user-initiated), a release-assets signed URL (it expires about one hour after
 //     issue), any other host, any other scheme and any other path are red, naming target and value.
 //     The asset is <app_basename>-<tag minus v>.<target token>.complete.mar, the name
-//     scripts/build-update-xml.mjs writes into the descriptor.
+//     scripts/build-update-xml.mjs writes into the descriptor: the docs table token for Linux, WINDOWS_TOKEN for a
+//     WINNT target (release.yml channel-live-windows passes the Windows manifest descriptor-windows wrote).
 //
 // --manifest-agrees --manifest <path> runs only the manifest-versus-tree comparison of check 1, with no
 // network: release.yml calls it in the descriptor and channel-live jobs, so this script is the one copy.
@@ -73,7 +74,7 @@ import { fileURLToPath } from 'node:url';
 import { buildUpdateXml, marDigest, parseUpdateXml } from './verify-mar-update-hop.mjs';
 import { API_VERSION_HEADER, repoSlug } from './verify-repo-controls.mjs';
 import { marOrigin, releaseIdentity, resolveConfig, updateChannel } from './generate.mjs';
-import { DOCS_REL, MANIFEST_ASSET, RELEASE_KEY_RE, targetTokenOf } from './lib/channel-identity.mjs';
+import { DOCS_REL, MANIFEST_ASSET, RELEASE_KEY_RE, WINDOWS_TOKEN, targetTokenOf } from './lib/channel-identity.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'channel-live';
@@ -169,8 +170,8 @@ export function manifestProblems(doc, keys = Object.keys(FIELDS)) {
     return keys.filter(k => !FIELDS[k](doc[k])).map(k => `the manifest field ${k} is ${show(doc[k])}, which is missing or malformed${k === 'build_target' ? ' (each BUILD_TARGET token must match [A-Za-z0-9_-]+, because it becomes a path segment)' : ''}${k === 'mar_origin' ? ' (a null mar_origin means configuration.toml [urls] mar_origin was unset at build time)' : ''}. Next step: rebuild with powerbrowser/packaging/package-linux.sh, which writes it`);
 }
 
-/** The published MAR asset name, derived from the tree exactly as build-update-xml.mjs derives it. */
-export function marAssetName(root, releaseKey) {
+/** The published MAR asset name of one BUILD_TARGET, derived from the tree exactly as build-update-xml.mjs derives it. */
+export function marAssetName(root, releaseKey, target = '') {
     let config;
     try {
         config = resolveConfig(join(root, 'configuration.toml')).config;
@@ -181,12 +182,11 @@ export function marAssetName(root, releaseKey) {
     try {
         docs = readFileSync(join(root, DOCS_REL), 'utf8');
     } catch { /* reported below */ }
-    const token = targetTokenOf(docs);
+    const token = String(target).startsWith('WINNT_') ? WINDOWS_TOKEN : targetTokenOf(docs);
     const app = config?.identity?.app_basename;
     if (typeof app !== 'string' || token === null) {
         return { why: `the MAR asset name cannot be derived: configuration.toml [identity] app_basename is ${show(app)} and ${DOCS_REL} names target token ${show(token)}. Next step: restore both` };
     }
-    // shortcut: one MAR asset name for every BUILD_TARGET, as the emitter writes today (one Linux target); upgrade with its per-target MAR map.
     return { asset: `${app}-${releaseKey.slice(1)}.${token}.complete.mar` };
 }
 
@@ -293,8 +293,6 @@ export function manifestAgrees(root, manifestDoc, keys = ['mar_origin', 'update_
 export function formOnly(root, manifestDoc, dir) {
     const { tree: manifest, problems: drift } = manifestAgrees(root, manifestDoc, ['release_key', 'mar_origin', 'update_channel']);
     if (drift.length > 0) return drift;
-    const { asset, why } = marAssetName(root, manifest.release_key);
-    if (why) return [why];
     let files;
     try {
         files = statSync(dir).isDirectory() ? listDescriptors(dir) : [];
@@ -302,7 +300,11 @@ export function formOnly(root, manifestDoc, dir) {
         files = [];
     }
     if (files.length === 0) return [`${dir} holds no update.xml, so nothing was emitted to judge. Next step: run node scripts/build-update-xml.mjs --emit --outdir ${dir} first`];
-    return files.flatMap(f => descriptorFormProblems(relative(dir, f), readFileSync(f, 'utf8'), manifest, asset));
+    return files.flatMap(f => {
+        // The target is the <BUILD_TARGET> directory the descriptor sits in.
+        const { asset, why } = marAssetName(root, manifest.release_key, f.split(/[\\/]/).at(-2));
+        return why ? [why] : descriptorFormProblems(relative(dir, f), readFileSync(f, 'utf8'), manifest, asset);
+    });
 }
 
 /** The baked [AppUpdate] URL template with one target's values; the other segments are probe values. */
@@ -373,14 +375,13 @@ export async function runChecks(root, overrides = {}) {
     if (latestTag !== null && latestTag !== manifest.release_key) {
         fail(`the manifest offers ${manifest.release_key} but the latest published Release is ${show(latestTag)}. Next step: run the descriptor job for the latest Release`);
     }
-    const { asset, why } = marAssetName(root, manifest.release_key);
-    if (why) {
-        fail(why);
-        return { failures, targets: 0 };
-    }
-
     const targets = targetsOf(manifest.build_target);
     for (const target of targets) {
+        const { asset, why } = marAssetName(root, manifest.release_key, target);
+        if (why) {
+            fail(why);
+            continue;
+        }
         const rel = `${manifest.update_channel}/${target}/update.xml`;
         const publicUrl = bakedUrl(manifest, target);
         const pub = await httpRead(transport(publicUrl), 'GET');
@@ -598,6 +599,24 @@ async function selfTest() {
             return 1;
         }
         console.log(`  ok  baseline -> green (${base.targets} target, descriptor through the baked path, HEAD and GET of ${goodUrl} through the loopback)`);
+
+        // A2: a WINNT descriptor names the Windows asset (WINDOWS_TOKEN), and the Linux asset name is red for it.
+        const winTarget = 'WINNT_x86_64-msvc';
+        const winAsset = marAssetName(REPO_ROOT, tag, winTarget).asset;
+        const winDir = join(dir, 'win-tree');
+        const winForm = xml => {
+            rmSync(winDir, { recursive: true, force: true });
+            mkdirSync(join(winDir, manifest.update_channel, winTarget), { recursive: true });
+            writeFileSync(join(winDir, manifest.update_channel, winTarget, 'update.xml'), xml);
+            return formOnly(REPO_ROOT, { ...manifest, build_target: winTarget }, winDir);
+        };
+        const winGreen = winForm(emit(`${origin}/${tag}/${winAsset}`));
+        const winRed = winForm(emit(goodUrl));
+        if (!winAsset?.includes(`.${WINDOWS_TOKEN}.`) || winGreen.length > 0 || !winRed.some(f => f.includes(winTarget) && f.includes(winAsset))) {
+            console.error(`${NAME}: --self-test FAIL -- the Windows form control is wrong: asset ${show(winAsset)}, green ${winGreen.join(' | ') || '(none)'}, red ${winRed.join(' | ') || '(none)'}`);
+            return 1;
+        }
+        console.log(`  ok  Windows control: ${winTarget} names ${winAsset} -> green; the Linux asset name on it -> red`);
 
         const digest = marDigest(Buffer.from('planted other bytes')).hashValue;
         const wrongHash = emit().replace(/hashValue="[0-9a-f]+"/, `hashValue="${digest}"`);
