@@ -5185,7 +5185,7 @@ async function handleWebTabAction(data, actorRef) {
         return { ok: false, reason: "validation", message: "handleWebTabAction: refusing malformed tabId" };
       }
       setActiveTabOfFrame(actorRef.browsingContext.top.embedderElement, data.tabId);
-      linkStatusClearers.get(actorRef.browsingContext.top.embedderElement.ownerGlobal)?.(); // WR-04 (35-REVIEW)
+      linkStatusClearers.get(actorRef.browsingContext.top.embedderElement.ownerDocument.defaultView)?.(); // WR-04 (35-REVIEW)
       // A null (the IDE has focus) changes no selection: D-04, the last web tab stays active.
       if (data.tabId !== null) {
         tabHostSelectById(actorRef.browsingContext.top.embedderElement, data.tabId);
@@ -7460,7 +7460,7 @@ function adoptFallback(pcKey, pending) {
   pendingContent.delete(pcKey);
   const live = pending.browser.currentURI?.spec ?? "";
   const url = /^https?:\/\//i.test(live) ? live : pending.url;
-  const win = pending.theiaBrowser.ownerGlobal;
+  const win = pending.theiaBrowser.ownerDocument.defaultView;
   // Records kept while it was pending (37-REVIEW WR-01) go with it; none was ever pushed.
   for (const [token, record] of promptRecords) {
     if (record.browser === pending.browser) {
@@ -7504,9 +7504,9 @@ function adoptPendingOverlay(kind, tabId, pcKey, actorRef) {
   // 38-REVIEW CR-03: an extension activated it after the adoptTab push went; webTabOpen shows it once the widget attaches.
   entry.activateOnAttach = Boolean(pending.activateOnAck);
   // 37-REVIEW CR-01: an adopted tab is a tab-host node like any other, so prompts, bars, favicon, F12 and extensions see it.
-  tabHostAddTab(theiaBrowser.ownerGlobal, tabId, pending.browser, pending.opener);
+  tabHostAddTab(theiaBrowser.ownerDocument.defaultView, tabId, pending.browser, pending.opener);
   // 37-REVIEW WR-01: what arrived while the overlay was pending gets its tab id now and is pushed.
-  adoptPendingPushes(pending.browser, tabId, theiaBrowser.ownerGlobal);
+  adoptPendingPushes(pending.browser, tabId, theiaBrowser.ownerDocument.defaultView);
   // 36-REVIEW WR-03: a page-opened context may close itself; BrowserElementParent re-dispatches that window.close()
   // on the overlay (BrowserElementParent.sys.mjs:12-30), and the frontend closes the tab as a user's close would.
   pending.browser.addEventListener("DOMWindowClose", () => sendWebTabPush(theiaBrowser, { kind: "closeAdoptedTab", tabId }));
@@ -7729,7 +7729,7 @@ export function updateWebTabSharing(browser, sharingState) {
   const merged = Object.assign(sharingStateOf.get(browser) ?? {}, sharingState);
   sharingStateOf.set(browser, merged);
   const tabId = tabIdOfBrowser(browser);
-  const host = tabId === null ? null : tabHosts.get(browser.ownerGlobal);
+  const host = tabId === null ? null : tabHosts.get(browser.ownerDocument.defaultView);
   if (!host || !("webRTC" in sharingState)) {
     return;
   }
@@ -7753,7 +7753,7 @@ function resendWebTabSharing(tabId) {
   const entry = webTabs.get(tabId);
   const webRTC = entry ? sharingStateOf.get(entry.browser)?.webRTC : undefined;
   const state = entry ? sharingSent.get(entry.browser)?.state ?? (webRTC && { camera: Boolean(webRTC.camera), microphone: Boolean(webRTC.microphone), screen: Boolean(webRTC.screen) }) : undefined;
-  const host = state ? tabHosts.get(entry.browser.ownerGlobal) : null;
+  const host = state ? tabHosts.get(entry.browser.ownerDocument.defaultView) : null;
   if (host) {
     pushWebTabSharing(entry.browser, tabId, host, state, true);
   }
@@ -7842,7 +7842,7 @@ function installNotificationBars(window, host) {
 function setBar(browser, barKind, displayFields, stored) {
   const tabId = tabIdOfBrowser(browser);
   // A pending overlay's bar is kept with no tab id and pushed at the ack (37-REVIEW WR-01).
-  const host = tabId === null && !isPendingOverlay(browser) ? null : tabHosts.get(browser.ownerGlobal);
+  const host = tabId === null && !isPendingOverlay(browser) ? null : tabHosts.get(browser.ownerDocument.defaultView);
   const bars = barsOfBrowser.get(browser) ?? new Map();
   const previous = bars.get(barKind);
   if (previous) {
@@ -7967,7 +7967,7 @@ const BAR_ANSWERS = {
   "wait-longer"(record) {
     const { browser } = record;
     const { report } = record.stored;
-    const win = browser.ownerGlobal;
+    const win = browser.ownerDocument.defaultView;
     setBar(browser, record.barKind, null, null);
     const timer = win.setTimeout(() => {
       if (pausedHangs.get(report)?.timer === timer) {
@@ -8641,7 +8641,7 @@ async function handlePageMenuAction(data, actorRef) {
   if (!Number.isSafeInteger(data.menuId) || (data.itemId !== null && typeof data.itemId !== "string")) {
     return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a malformed page menu pick" };
   }
-  const state = pageMenuState(actorRef.browsingContext.top.embedderElement.ownerGlobal);
+  const state = pageMenuState(actorRef.browsingContext.top.embedderElement.ownerDocument.defaultView);
   // CR-01 (35-REVIEW): a save's path reply answers the save slot its pick filled, which neither
   // the menu's minute nor a newer right-click ends, so the dialog may stay open as long as the user needs.
   const save = state.saves.get(data.menuId);
@@ -8740,7 +8740,7 @@ async function runPageMenuRow(id, pending, state, itemId) {
       actor.mediaCommand(context.targetIdentifier, "playbackRate", PAGE_MENU_RATES[id.slice(-4)]);
       return { where: "done" };
     case "context-video-fullscreen": // browser-context.js:112-113; the pick is the user's click on the row, carried as user input so the page's requestFullscreen is allowed
-      furnitureLazy.E10SUtils.wrapHandlingUserInput(data.browser.ownerGlobal, true, () => actor.mediaCommand(context.targetIdentifier, "fullscreen"));
+      furnitureLazy.E10SUtils.wrapHandlingUserInput(data.browser.ownerDocument.defaultView, true, () => actor.mediaCommand(context.targetIdentifier, "fullscreen"));
       return { where: "done" };
     case "context-viewvideo":
     case "context-viewimage": // viewMedia (:1744-1778)
@@ -8933,7 +8933,7 @@ function pageEditFacts(data) {
     onMisspelling: !!spellInfo?.overMisspelling,
     spellSuggestions: spellInfo?.overMisspelling && Array.isArray(spellInfo.spellSuggestions) ? spellInfo.spellSuggestions : [],
     spellEnabled: !!spellInfo?.enableRealTimeSpell,
-    spellUndo: !!pageMenus.get(data.browser.ownerGlobal)?.spell?.canUndo(),
+    spellUndo: !!pageMenus.get(data.browser.ownerDocument.defaultView)?.spell?.canUndo(),
   };
 }
 
@@ -9117,7 +9117,7 @@ function pageMenuExtensionItems(popup, pending, groups = { n: 0 }) {
 // on the stub's popuphidden (ext-menus.js:560-572 checks only the target and
 // type), then the actor hears the menu is gone.
 function pageMenuClose(data) {
-  const window = data.browser.ownerGlobal;
+  const window = data.browser.ownerDocument.defaultView;
   window.document.getElementById("contentAreaContextMenu").dispatchEvent(new window.Event("popuphidden"));
   data.actor.hiding();
 }
@@ -9415,7 +9415,7 @@ function installFullscreen(window) {
       Services.obs.notifyObservers(null, "pointer-lock-entered");
       // PointerlockFsWarning.showPointerLock (:39-46): none while fullscreen, whose warning already covers the page.
       if (!document.fullscreen) {
-        const browser = [...webTabs.values()].find(entry => entry.browser.ownerGlobal === window && entry.browser.style.visibility === "visible")?.browser;
+        const browser = [...webTabs.values()].find(entry => entry.browser.ownerDocument.defaultView === window && entry.browser.style.visibility === "visible")?.browser;
         showWarning(originNoSuffix, "pointerlock-warning", Services.prefs.getIntPref("pointer-lock-api.warning.timeout"), 0, false, browser);
       }
     },

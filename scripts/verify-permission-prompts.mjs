@@ -372,7 +372,7 @@ function checkSharingBehaviour(api) {
     }
     const failures = [];
     const win = {};
-    const browser = { ownerGlobal: win };
+    const browser = { ownerDocument: { defaultView: win } };
     fns.tabHosts.set(win, { theiaBrowser: { browsingContext: { currentWindowGlobal: {} } } });
     ids.set(browser, 'wt-a');
     const run = (label, step) => {
@@ -400,7 +400,7 @@ function checkSharingBehaviour(api) {
         failures.push('sharing-behaviour: navigate-resets-sharing -- a navigation after a camera report pushes no all-off state, so the mark outlives the page (37-REVIEW WR-02)');
     }
     // WR-01: a camera report while the overlay is pending (no tab id) is pushed when the adoption resends.
-    const pendingBrowser = { ownerGlobal: win };
+    const pendingBrowser = { ownerDocument: { defaultView: win } };
     const beforePending = pushes.length;
     run('pending camera report', () => fns.updateWebTabSharing(pendingBrowser, { webRTC: { camera: 1, sharing: 'camera' } }));
     if (pushes.length !== beforePending) {
@@ -958,7 +958,7 @@ function selfTest() {
         {
             // 37-REVIEW CR-01 reverted: adopted tabs never join the tab host.
             name: 'adopted tab without a host node',
-            sources: { ...clean, [API]: clean[API].replace('  tabHostAddTab(theiaBrowser.ownerGlobal, tabId, pending.browser, pending.opener);\n', '') },
+            sources: { ...clean, [API]: clean[API].replace('  tabHostAddTab(theiaBrowser.ownerDocument.defaultView, tabId, pending.browser, pending.opener);\n', '') },
             expect: 'adoptPendingOverlay adds no tab-host node',
         },
         {
@@ -993,7 +993,7 @@ function selfTest() {
         {
             // 37-REVIEW WR-01 reverted: the adoption ack pushes nothing kept for the pending overlay.
             name: 'adoption pushes nothing kept while pending',
-            sources: { ...clean, [API]: clean[API].replace('  adoptPendingPushes(pending.browser, tabId, theiaBrowser.ownerGlobal);\n', '') },
+            sources: { ...clean, [API]: clean[API].replace('  adoptPendingPushes(pending.browser, tabId, theiaBrowser.ownerDocument.defaultView);\n', '') },
             expect: 'adoptPendingOverlay does not call adoptPendingPushes',
         },
         {

@@ -886,8 +886,8 @@ function selfTest() {
     }
   }
   {
-    const from = 'tabHostAddTab(theiaBrowser.ownerGlobal, tabId, pending.browser, pending.opener);';
-    const text = apiRaw.includes(from) ? apiRaw.replace(from, 'tabHostAddTab(theiaBrowser.ownerGlobal, tabId, theiaBrowser, pending.opener);') : apiRaw;
+    const from = 'tabHostAddTab(theiaBrowser.ownerDocument.defaultView, tabId, pending.browser, pending.opener);';
+    const text = apiRaw.includes(from) ? apiRaw.replace(from, 'tabHostAddTab(theiaBrowser.ownerDocument.defaultView, tabId, theiaBrowser, pending.opener);') : apiRaw;
     if (landed('adopt call passes the Theia frame', text !== apiRaw)) {
       const res = checkAll({ texts: new Map([[API_REL, text]]) });
       expect('adopt call passes the Theia frame', has(res, f => f.family === 'theia-exclusion' && f.id === 'tabHostAddTab' && f.kind === 'THIRD ARGUMENT'), 1, 'THIRD ARGUMENT naming tabHostAddTab');
