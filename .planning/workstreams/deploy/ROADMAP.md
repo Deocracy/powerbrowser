@@ -4,11 +4,11 @@
 
 Milestone v1.6 "Deployment setup" (workstream `deploy`, branch `workspace/deploy`) turns a browser that already builds into one that ships and maintains itself with no server. The end state: one installer per OS on GitHub Releases, self-update through Gecko's MAR updater from a static descriptor host, Firefox ESR, Theia and Node tracked by one release-and-maintenance orchestrator (`release-train.yml`), a Claude fixer that proposes fixes as PRs, support on GitHub, opt-in error telemetry, and powerbrowser.org. The owner's steady-state work is one PR merge, one `release` approval and one `descriptor` approval per release, one grouped Dependabot merge per week, and one Theia PR review per month.
 
-Phases follow SEED-002 A to L (letter in each phase name), with the corrections in `.planning/research/v1.6-deploy/SUMMARY.md`. A, C, D, E and F are split into several phases to keep each one executable. Phases 40 to 50 produce the first public Linux release; 51 to 53 complete the automation and support loop; 54 to 58 add Windows, macOS, package channels, native crashes and the ESR 175 move. Phase numbering starts at 40 because main's v1.5 uses 26 to 38.
+Phases follow SEED-002 A to L (letter in each phase name), with the corrections in `.planning/research/v1.6-deploy/SUMMARY.md`. A, C, D, E and F are split into several phases to keep each one executable. Phases 40 to 50 produce the first public Linux release; 51 to 53 complete the automation and support loop; 54 to 58 add Windows (unsigned), macOS (deferred to v1.7), the Nix package channel, native crashes and the ESR 175 move (deferred with dates). Owner rulings of 2026-11-03 (FINISH-PLAN.md R4, R5, R6, R14) set this scope. Phase numbering starts at 40 because main's v1.5 uses 26 to 38.
 
 **Supersedes backlog Phase 999.2.** Backlog Phase 999.2 "Release and distribution" in main's `.planning/ROADMAP.md` (NG-075..NG-082: Windows MSIX, macOS DMG, install matrix and per-OS MAR hop, release pipeline, update host, crash-ingest host) is superseded by this milestone. Main's file is not edited from this workstream; the backlog entry is retired when this workstream merges.
 
-**Owner steps now (no phase, no cost):** request the D-U-N-S number (it gates Apple enrolment, Phase 55) and create the Cloudflare account with 2FA (the Phase 43 Worker runs on workers.dev before the DNS move).
+**Owner steps now (no phase, no cost):** create the Cloudflare account with 2FA (the Phase 43 Worker runs on workers.dev before the DNS move).
 
 ## Milestones
 
@@ -48,11 +48,11 @@ The imported platform allows exactly three Mozilla hosts, all one feature, Remot
 - [ ] **Phase 51: Dependency flow and train supersede (F)** - Renovate Theia group, Dependabot and CodeQL, supersede and chemspill rules, extended sweep
 - [ ] **Phase 52: Claude fixer (F)** - fix, fix-gate, fix-pr chain with deny list, spend limits and a live proof
 - [ ] **Phase 53: Support operations (G)** - Report a Bug command, Claude triage, security routing, Codeberg mirror, status page
-- [ ] **Phase 54: Windows (H)** - Cross-built NSIS installer and MAR, VM matrix, unsigned first release, then Authenticode
-- [ ] **Phase 55: macOS (I)** - Universal DMG and MAR, entitlements row, inside-out signing and notarization
-- [ ] **Phase 56: Package channels (J)** - Nix flake with binary cache, Flathub, winget, Homebrew tap, per-release manifest PRs
+- [ ] **Phase 54: Windows (H)** - Cross-built NSIS installer and MAR, VM matrix, unsigned release (no Azure or Authenticode signing)
+- [ ] **Phase 55: macOS (I)** - DEFERRED to v1.7 (2026-11-03). Ad-hoc signed universal DMG and MAR, entitlements row; no Apple signing or notarization
+- [ ] **Phase 56: Package channels (J)** - Nix flake with binary cache (x86_64-linux) and its per-release flake-hash PR; Flathub, winget and the Homebrew cask deferred to v1.7
 - [ ] **Phase 57: Native crash reporting (K)** - Consent-gated crash ping, minidump store, symbols, crash reporter enabled
-- [ ] **Phase 58: ESR 175 (L)** - Early 175 replay, parallel 175 train, 175.x shipped before 153.27
+- [ ] **Phase 58: ESR 175 (L)** - Early 175 replay, parallel 175 train, 175.x shipped before 153.27. Built code stays; 58-03 tasks T2-T4 are a dated deferral due 2027-05-27 to 2027-09-07
 
 ## Phase Details
 
@@ -155,7 +155,7 @@ Plans:
 
 **External gate**: None.
 **Research flag**: None (SUMMARY: A7 is a standard pattern).
-**Plans**: 4 plans
+**Plans**: 4/4 plans executed
 
 Plans:
 **Wave 1**
@@ -189,7 +189,7 @@ Plans:
 
 **External gate**: Cloudflare account (owner step now); clock App key stored as a Worker secret; ESR 153 calendar for the exit test (the first point release after the train lands: 153.7 on 2026-11-10, else 153.8 on 2026-11-24, and so on).
 **Research flag**: Partial. SUMMARY marks the A5 report protocol and A6 as standard; open item: whether the RS256 JWT mint fits the Workers Free 10 ms CPU limit (INF-03 measures it).
-**Plans**: TBD
+**Plans**: 5/5 plans executed
 
 ### Phase 44: Trust path (B)
 
@@ -205,7 +205,7 @@ Plans:
 
 **External gate**: Secondary MAR key ceremony (owner, offline).
 **Research flag**: None (SUMMARY: B is a standard pattern).
-**Plans**: TBD
+**Plans**: 3/4 plans executed
 
 ### Phase 45: Portable Linux release build (C)
 
@@ -222,7 +222,7 @@ Plans:
 
 **External gate**: Google Safe Browsing API key, keyfile stored on legion.
 **Research flag**: Yes (C, PKG-17): the first container bootstrap build; whether the jessie-built `signmar` runs on `ubuntu-latest`; what `toolchain-baseline.txt` means under a container build.
-**Plans**: TBD
+**Plans**: 4/4 plans executed
 
 ### Phase 46: In-app update experience and egress pass (C)
 
@@ -239,7 +239,7 @@ Plans:
 
 **External gate**: None.
 **Research flag**: None in SUMMARY. Carried open items: sidecar egress against verify-endpoints layer 3; Mozilla partner search codes under `org.debios`.
-**Plans**: TBD
+**Plans**: 4/4 plans executed
 **UI hint**: yes
 
 ### Phase 47: Hosting, website and mail (D)
@@ -255,9 +255,9 @@ Plans:
   4. A live probe of a real 11-segment update URL against updates.powerbrowser.org returns the descriptor, and the full-tier row `updates-repo-static` is green with its self-test red on a planted `functions/` and `_worker.js`.
   5. Every Cloudflare credential has one named holder and a `docs/RENEWALS.md` row, and the maintenance sweep holds no Cloudflare token.
 
-**External gate**: Namecheap nameserver change (up to 24 hours to propagate, DNSSEC off during the move); Cloudflare account with 2FA; R2 enablement for the R2 token (a payment method may be required). This phase's live site unblocks the Apple fee-waiver application (D-U-N-S/Apple gate, Phase 55).
+**External gate**: Namecheap nameserver change (up to 24 hours to propagate, DNSSEC off during the move); Cloudflare account with 2FA; R2 enablement for the R2 token (a payment method may be required).
 **Research flag**: None (SUMMARY: the D site and Email Routing are standard). Open: one live `_redirects` probe on the 11-segment path; zone-level security.txt avoids the Pages `.well-known` question.
-**Plans**: 4/4 plans
+**Plans**: 3/4 plans executed
 
 Plans:
 **Wave 1**
@@ -289,7 +289,7 @@ Plans:
 
 **External gate**: None beyond Phase 47's Cloudflare setup. The runner-online, channel-liveness and download-count rows have nothing to observe until Phases 49 and 50; their live values are Phase 50 criterion 5.
 **Research flag**: Open item (SUMMARY): whether bot commits count as activity for GitHub's 60-day scheduled-workflow rule, which matters to the watchdog repo.
-**Plans**: TBD
+**Plans**: 5/5 plans executed
 
 ### Phase 49: Release pipeline and legion runner (E)
 
@@ -306,7 +306,7 @@ Plans:
 
 **External gate**: legion NixOS changes (runner user, `ACTIONS_RUNNER_HOOK_JOB_STARTED` hook) finished with `nrs`; runner registration after SEC-11, SEC-10 and GH-07; Cloudflare R2 enabled.
 **Research flag**: Yes (E): the Actions artifact storage cap; the environment approval timeout; the github-runner 30-day update rule against nixpkgs lag.
-**Plans**: TBD
+**Plans**: 5/5 plans executed
 
 ### Phase 50: Release train stages and first public Linux release (E)
 
@@ -323,7 +323,7 @@ Plans:
 
 **External gate**: Per-release owner approvals (`release`; `descriptor` after the owner's own N-1 to N hop); the ESR 153 calendar decides which point release becomes the first public release.
 **Research flag**: Shares Phase 49's E flags.
-**Plans**: TBD
+**Plans**: 3/4 plans executed
 
 ### Phase 51: Dependency flow and train supersede (F)
 
@@ -339,7 +339,7 @@ Plans:
 
 **External gate**: Theia release calendar (last Thursday of each month). The Codeberg row has no mirror to compare until Phase 53.
 **Research flag**: Yes (F): whether a Theia `yarn.lock` regeneration fits the self-hosted Renovate run.
-**Plans**: TBD
+**Plans**: 4/4 plans executed
 
 ### Phase 52: Claude fixer (F)
 
@@ -348,7 +348,7 @@ Plans:
 **Requirements**: FIX-01, FIX-02, FIX-03, FIX-04, FIX-05, FIX-06, FIX-07, FIX-08, FIX-09, FIX-10, FIX-11, FIX-12, TRAIN-06
 **Success Criteria** (what must be TRUE):
 
-  1. A red stage labels its tracking issue `train:blocked`, assigns the owner and links the failing log; for the three fixable classes the train dispatches the fixer, and a `release.yml` failure opens an issue only.
+  1. A red stage labels its tracking issue `train:blocked`, assigns the owner and links the failing log; for the two automated classes (F2 a red bump PR, F3 red `main`) the train dispatches the fixer; a patch-replay conflict (F1) is owner-resolved and the train does not dispatch the fixer for it (owner ruling 2026-11-03); a `release.yml` failure opens an issue only.
   2. The fixer runs as `fix`, `fix-gate` and `fix-pr` on GitHub-hosted runners; only `fix-pr` mints an App token; its PR is labelled `claude-fix` and `release:<key>`, carries the templated body and is assigned to the owner; the `workflows` row asserts the pinned action commit, the pinned Claude Code version, `show_full_output` and `display_report` off and no bare `Bash`.
   3. The quick row `fix-gate-self-test`, after a green control, rejects one planted diff per entry of `.github/fix-gate-deny.json` plus a hand-edited patch hunk, each naming the path.
   4. A third failure for the same (release key, class) moves the release to NEEDS_OWNER, attempts rejected by `fix-gate` are counted, the spend limits are in place, and the authentication outcome (OIDC federation or `fixer`-only API key) is recorded in `docs/RELEASING.md`.
@@ -356,7 +356,7 @@ Plans:
 
 **External gate**: Anthropic Console fixer workspace with a monthly limit; OIDC federation or the `fixer` environment key; FIX-10 deadline 2027-05-27 (ESR 175 nightly).
 **Research flag**: Yes (F): whether passing `github_token` suppresses the action's own OIDC App-token exchange, which decides OIDC versus `ANTHROPIC_API_KEY`.
-**Plans**: 5 plans
+**Plans**: 4/5 plans executed
 
 Plans:
 **Wave 1**
@@ -394,56 +394,57 @@ Plans:
 
 **External gate**: Anthropic triage workspace; Codeberg account, mirror repo and deploy token on legion; legion NixOS timer finished with `nrs`; Upptime repo and `status` CNAME.
 **Research flag**: None (SUMMARY: G is standard). Carried unresearched: the private vulnerability reporting route.
-**Plans**: TBD
+**Plans**: 4/4 plans executed
 **UI hint**: yes
 
 ### Phase 54: Windows (H)
 
-**Goal**: Windows users install PowerBrowser from a `setup.exe` on GitHub Releases and it updates itself, first unsigned with a stated warning, then Authenticode-signed.
+**Goal**: Windows users install PowerBrowser from a `setup.exe` on GitHub Releases and it updates itself. The release ships unsigned with a stated warning; Azure and Authenticode signing are out of scope for v1.6 (owner ruling 2026-11-03).
 **Depends on**: Phase 50 (release pipeline and train)
-**Requirements**: PKG-10, PKG-11, PKG-12, PKG-13, LEG-01, MTX-01, UPD-30, UPD-31, SEC-03, SEC-12, DIST-10
+**Requirements**: PKG-10, PKG-11, PKG-12, PKG-13, LEG-01, MTX-01, UPD-30, UPD-31, SEC-03, DIST-10 (SEC-12 moved to Out of Scope, R14)
 **Success Criteria** (what must be TRUE):
 
   1. A `release.yml` `build-windows` job cross-builds Gecko on legion in the release container and `mach repackage installer` produces the NSIS `setup.exe` and a complete MAR; the generated Windows mozconfig disables the maintenance service; `package-target-natives` passes on the Windows package with a sidecar built on `windows-latest`.
   2. The installer carries PowerBrowser artwork, its own registry namespace and no install or uninstall ping, and the `verify-trademark-surface.mjs` self-test goes red on a Mozilla mark planted in each NSIS, application.ini, Info.plist and `MOZ_LAUNCHER_SUBKEY` surface.
   3. The Windows 11 libvirt matrix installs, launches, updates and uninstalls with a clean registry no-residue diff, the update applies with the sidecar reaped before the rename, and the background-task path is verified or deferred with the reason recorded.
   4. The first Windows release ships unsigned with the maintenance service disabled, per-target descriptors and the stated /download warning text.
-  5. After Azure validation, jsign signs the inner PE files, then the installer, then the MAR is produced, and /download shows the updated signing status.
+  5. No Azure account or Authenticode signing is used: the tracked `sign-windows` job reports skipped while `AZURE_CLIENT_ID` is unset, and /download keeps the unsigned-status wording (SEC-03).
 
-**External gate**: Azure Artifact Signing identity validation (1 to 20 business days; create the account 3 to 4 weeks before the matrix is ready; billed from creation); legion NixOS libvirt access for the runner user, finished with `nrs`; Windows VM licence.
+**External gate**: legion NixOS libvirt access for the runner user, finished with `nrs`; Windows VM licence.
 **Research flag**: Yes (H): the Windows updater rename with a live `node.exe`; the background-task path; the MTX-01 libvirt design.
-**Plans**: TBD
+**Plans**: 4/4 plans executed
 
 ### Phase 55: macOS (I)
 
-**Goal**: macOS users install a signed, notarized universal DMG that updates itself.
-**Depends on**: Phase 47 (live site for the fee waiver), Phase 50 (release pipeline)
-**Requirements**: SEC-13, PKG-24, PKG-14, PKG-15, PKG-16, SEC-04
+**Status**: DEFERRED to v1.7 on 2026-11-03 (owner ruling R4): no macOS build has run and none can without Mac hardware. WINDOWS.md entries 22 and 23 move with it.
+**Goal**: macOS users install an ad-hoc signed universal DMG that updates itself. There is no Developer ID signing and no notarization.
+**Depends on**: Phase 50 (release pipeline)
+**Requirements**: PKG-24, PKG-14, PKG-15, PKG-16 (deferred to v1.7; SEC-13 and SEC-04 moved to Out of Scope, R14)
 **Success Criteria** (what must be TRUE):
 
-  1. Before any macOS build, the Apple SDK licence position for cross builds, rcodesign's maintenance status and the Developer ID CA expiry date are checked and recorded.
+  1. (Out of scope, R14: the Apple SDK licence, rcodesign and Developer ID CA record, SEC-13.)
   2. A `release.yml` `build-macos` job produces a universal DMG and complete MAR through `unify.sh` (cross-built on legion, with the hosted `macos-26` fallback recorded), the sidecar natives, `rg` and `node` are `lipo`-merged, and `package-target-natives` passes on the DMG.
   3. The quick row `mac-entitlements` is green, and its self-test goes red on a planted `43AQ936H96`, `org.mozilla` and restricted entitlement key.
-  4. The bundle is signed inside-out with a Developer ID and notarized, the hosted macOS matrix row passes on the draft DMG, and one real Mac session records the Gatekeeper copy.
+  4. The bundle is ad-hoc signed (no Developer ID, no notarization), the hosted macOS matrix row passes on the draft DMG, and one real Mac session records the Gatekeeper copy.
 
-**External gate**: D-U-N-S number, then Apple Developer Program enrolment with the nonprofit fee-waiver application (after the Phase 47 site is live); App Store Connect API key as a `release` secret.
-**Research flag**: Yes (I): the Apple SDK licence; whether rcodesign is still viable; the Developer ID CA date.
-**Plans**: TBD
+**External gate**: Mac hardware for the one real Gatekeeper session. No Apple account, D-U-N-S number or App Store Connect key is needed.
+**Research flag**: None for v1.6 (deferred).
+**Plans**: 4/4 plans executed
 
 ### Phase 56: Package channels (J)
 
-**Goal**: Users install and update PowerBrowser through Nix, Flathub, winget and Homebrew, and each channel's manifest follows every release without an owner edit.
-**Depends on**: Phase 50 (Linux release), Phase 54 (Windows release for winget), Phase 55 (notarized DMG for the cask and aarch64-darwin)
-**Requirements**: PKG-19, INF-05, PKG-20, DIST-04, DIST-11, DIST-12
+**Goal**: Users install and update PowerBrowser through the Nix flake and its binary cache (x86_64-linux), and the flake hash follows every release without an owner edit. Flathub (PKG-20), winget (DIST-04) and the Homebrew cask (DIST-11, DIST-12 tap and winget legs) are deferred to v1.7 (owner ruling 2026-11-03).
+**Depends on**: Phase 50 (Linux release)
+**Requirements**: PKG-19, INF-05, DIST-12 (flake-hash leg only); PKG-20, DIST-04, DIST-11 deferred to v1.7
 **Success Criteria** (what must be TRUE):
 
   1. The flake package repacks the Release tarball with `fetchurl` and autoPatchelf, uses `pkgs.nodejs_24` and exports an overlay; a row asserts the release tarball's `policies.json` has no `DisableAppUpdate`; a clean machine's `nix build` substitutes from the binary cache.
-  2. PowerBrowser is listed on Flathub (DNS TXT verified, with the build-from-source exception in writing or a from-source manifest), on winget, and in the own Homebrew tap with a cask after notarization; /download gains Nix and Flatpak rows when those channels are live.
-  3. For each release the train opens a bot PR with the flake hash, the bot App commits the tap update, `wingetcreate` submits the winget PR, and Flathub's external-data-checker opens its own PR.
+  2. /download gains a Nix row when the channel is live. (Flathub, winget and the Homebrew cask are deferred to v1.7.)
+  3. For each release the train opens a bot PR with the flake hash.
 
-**External gate**: Tap repo exists (created in Phase 41); winget submission credential decision (likely a PAT on a fork-owning account, against the Apps-only rule; record holder and RENEWALS row); Flathub account and build-from-source exception request; Cachix open-source licence (R2 S3 cache fallback); Apple notarization for the cask and aarch64-darwin.
+**External gate**: Cachix open-source licence (R2 S3 cache fallback); the Nix binary-cache keys. The tap repo exists (`Deocracy/homebrew-tap`, created in Phase 41) and stays unused until v1.7.
 **Research flag**: None in SUMMARY (the J flake follows the floorp-bin template). Open: Cachix eligibility under PolyForm Noncommercial.
-**Plans**: 0/5 plans planned
+**Plans**: 5/5 plans executed
 
 Plans:
 **Wave 1**
@@ -480,7 +481,7 @@ Plans:
 
 **External gate**: Cloudflare R2 enabled; the first Windows release (Phase 54) shipped (owner decision 9).
 **Research flag**: None in SUMMARY.
-**Plans**: TBD
+**Plans**: 3/4 plans executed
 
 Plans:
 **Wave 1**
@@ -511,33 +512,34 @@ Plans:
   3. The hook-only patches are rebased onto 175, the toolchain baseline is updated, and PowerBrowser ships on 175.x before 153.27 (2027-09-07).
   4. The dual-build window fits legion's disk (two objdirs of about 14 GB each), the measured disk use is recorded, and the hosted fallback build is available.
 
+**Status**: DATED DEFERRAL (owner ruling R5, 2026-11-03). The built code stays. Plan 58-03 tasks T2 to T4 (dual-build measurement, rebase onto 175, ship) are due between 2027-05-27 and 2027-09-07, because no 175 tree exists before the nightly.
 **External gate**: ESR 175 calendar: nightly 2027-05-27, beta 2027-06-10, release 2027-06-29; ESR 153 ends with 153.27 on 2027-09-07.
 **Research flag**: Yes (L): 175 patch drift; whether product-details adds a `FIREFOX_ESR153` key after the flip.
-**Plans**: TBD
+**Plans**: 3/3 plans executed
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order. Phase 42 depends only on 41. Phases 44 and 45 can run alongside 41 to 43; 46 follows 45; 47 can start after 41, so the live site starts the Apple clock early, but its /download MAR-size line waits for 45. Observations that need a real GitHub Release (UPD-15's asset hosts, the sweep's runner, channel and download rows) are Phase 50 criterion 5.
+Phases execute in numeric order. Phase 42 depends only on 41. Phases 44 and 45 can run alongside 41 to 43; 46 follows 45; 47 can start after 41, but its /download MAR-size line waits for 45. Observations that need a real GitHub Release (UPD-15's asset hosts, the sweep's runner, channel and download rows) are Phase 50 criterion 5.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 40. Release identity, ESR pin and patch regeneration (A) | 8/8 | Complete    | 2026-10-22 |
+| 40. Release identity, ESR pin and patch regeneration (A) | 8/8 | Complete | 2026-10-22 |
 | 41. Repository controls and GitHub Apps (A) | 3/4 | In Progress | - |
-| 42. Community surface and release documentation (A) | 0/TBD | Not started | - |
-| 43. Release train skeleton and upstream bump automation (A) | 0/TBD | Not started | - |
-| 44. Trust path (B) | 0/TBD | Not started | - |
-| 45. Portable Linux release build (C) | 0/TBD | Not started | - |
-| 46. In-app update experience and egress pass (C) | 0/TBD | Not started | - |
-| 47. Hosting, website and mail (D) | 0/TBD | Not started | - |
-| 48. Error telemetry, maintenance sweep and watchdog (D) | 0/TBD | Not started | - |
-| 49. Release pipeline and legion runner (E) | 0/TBD | Not started | - |
-| 50. Release train stages and first public Linux release (E) | 0/TBD | Not started | - |
-| 51. Dependency flow and train supersede (F) | 0/TBD | Not started | - |
-| 52. Claude fixer (F) | 0/TBD | Not started | - |
-| 53. Support operations (G) | 0/TBD | Not started | - |
-| 54. Windows (H) | 0/TBD | Not started | - |
-| 55. macOS (I) | 0/TBD | Not started | - |
-| 56. Package channels (J) | 0/TBD | Not started | - |
-| 57. Native crash reporting (K) | 0/TBD | Not started | - |
-| 58. ESR 175 (L) | 0/TBD | Not started | - |
+| 42. Community surface and release documentation (A) | 4/4 | Plans executed | - |
+| 43. Release train skeleton and upstream bump automation (A) | 5/5 | Plans executed | - |
+| 44. Trust path (B) | 3/4 | In Progress | - |
+| 45. Portable Linux release build (C) | 4/4 | Plans executed | - |
+| 46. In-app update experience and egress pass (C) | 4/4 | Plans executed | - |
+| 47. Hosting, website and mail (D) | 3/4 | In Progress | - |
+| 48. Error telemetry, maintenance sweep and watchdog (D) | 5/5 | Plans executed | - |
+| 49. Release pipeline and legion runner (E) | 5/5 | Plans executed | - |
+| 50. Release train stages and first public Linux release (E) | 3/4 | In Progress | - |
+| 51. Dependency flow and train supersede (F) | 4/4 | Plans executed | - |
+| 52. Claude fixer (F) | 4/5 | In Progress | - |
+| 53. Support operations (G) | 4/4 | Plans executed | - |
+| 54. Windows (H) | 4/4 | Plans executed | - |
+| 55. macOS (I) | 4/4 | Deferred to v1.7 | - |
+| 56. Package channels (J) | 5/5 | Plans executed | - |
+| 57. Native crash reporting (K) | 3/4 | In Progress | - |
+| 58. ESR 175 (L) | 3/3 | Dated deferral | - |
