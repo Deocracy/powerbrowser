@@ -137,8 +137,11 @@ jobs:
     permissions:
       contents: read
       actions: read
-      # Read only: the bump PRs and their verify check, for the live facts (plan 43-06).
+      # Read only: the bump PRs and their verify check, for the live facts (plan 43-06). statusCheckRollup reads
+      # check runs and commit statuses, which need checks and statuses read on the job token.
       pull-requests: read
+      checks: read
+      statuses: read
     outputs:
       reason: ${{ steps.validate.outputs.reason }}
       latest-tag: ${{ steps.fixer-inputs.outputs.latest-tag }}
@@ -179,7 +182,7 @@ jobs:
       # The live facts (plan 43-06, approved 2026-11-03): read-only GETs, so it runs in a dry run too. The bump PRs
       # with their verify check; the merge SHA of the pin's bump PR; the release.yml run titled `Release <sha>` (the
       # same filter dispatch-release uses), its pending deployments and jobs; the Release at the pin's release key
-      # (404 is none) and the expected asset set from its release-manifest.json asset. report derives and renders.
+      # (listed by tag_name, so a draft is seen; absent is none) and the expected asset set from its release-manifest.json asset. report derives and renders.
       - name: Collect the live release-train facts (read)
         id: facts
         if: ${{ inputs.reason != 'fix' }}
@@ -197,7 +200,9 @@ jobs:
             --jq '[.[] | select(.isCrossRepository == false and (.headRefName | startswith("chore/esr-"))) | {number, headRefName, checks: [.statusCheckRollup[]? | select(.name == "verify") | {name, status, conclusion, detailsUrl}]}]' > "$D/open.json"
           gh pr list --repo "$GITHUB_REPOSITORY" --state merged --base main --limit 100 --json number,headRefName,isCrossRepository,mergeCommit \
             --jq '[.[] | select(.isCrossRepository == false and (.headRefName | startswith("chore/esr-")))] | sort_by(.number) | reverse' > "$D/merged.json"
-          SHA="$(jq -r --arg h "chore/esr-${PIN}" '[.[] | select(.headRefName == $h)][0].mergeCommit.oid // empty' "$D/merged.json")"
+          # The pin's merge SHA by --head, the same query dispatch-release uses; merged.json above is only the candidate's
+          # mergedHeads, so a pin PR older than the last 100 merges still resolves here.
+          SHA="$(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --base main --head "chore/esr-${PIN}" --limit 5 --json number,mergeCommit,isCrossRepository --jq '[.[] | select(.isCrossRepository == false)] | sort_by(.number) | reverse | .[0].mergeCommit.oid // empty')"
           [ -z "$SHA" ] || [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "release-train: FAIL -- the merged bump PR names a merge SHA that is not 40 hex. Next step: check the PR." >&2; exit 1; }
           export SHA
           echo '[]' > "$D/runs.json"; echo '[]' > "$D/pending.json"; echo '[]' > "$D/jobs.json"; echo 'null' > "$D/release.json"; echo '[]' > "$D/expected.json"
@@ -209,14 +214,14 @@ jobs:
               gh api -H "$H" "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/pending_deployments" --jq '[.[] | {environment: {id: .environment.id, name: .environment.name}}]' > "$D/pending.json"
               gh api -H "$H" "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?per_page=100" --jq '[.jobs[] | {name, status, conclusion}]' > "$D/jobs.json"
             fi
-            if gh api -H "$H" "repos/$GITHUB_REPOSITORY/releases/tags/$KEY" --jq '{draft, prerelease, assets: [.assets[] | {name}], body: (.body // ""), published_at}' > "$D/release.json" 2> "$D/release.err"; then
-              if jq -e '.assets | any(.name == "release-manifest.json")' "$D/release.json" > /dev/null; then
-                gh release download "$KEY" --repo "$GITHUB_REPOSITORY" --pattern release-manifest.json --dir "$D/manifest"
-                node scripts/verify-release-asset-set.mjs --expected --manifest "$D/manifest/release-manifest.json" | cut -f2 | jq -R . | jq -s . > "$D/expected.json"
-              fi
-            else
-              grep -q 'HTTP 404' "$D/release.err" || { cat "$D/release.err" >&2; exit 1; }
-              echo 'null' > "$D/release.json"
+            # The list, not releases/tags/<key>: the tag endpoint returns only published Releases, so a draft would read
+            # as none. shortcut: the 100 newest Releases only, upgrade to paging if older keys must resolve.
+            export KEY
+            gh api -H "$H" "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '[.[] | select(.tag_name == env.KEY)] | if length == 0 then null else .[0] | {draft, prerelease, assets: [.assets[] | {name}], body: (.body // ""), published_at} end' > "$D/release.json"
+            if jq -e '. != null and .draft == false and (.assets | any(.name == "release-manifest.json"))' "$D/release.json" > /dev/null; then
+              gh release download "$KEY" --repo "$GITHUB_REPOSITORY" --pattern release-manifest.json --dir "$D/manifest"
+              node scripts/verify-release-asset-set.mjs --expected --manifest "$D/manifest/release-manifest.json" | cut -f2 | jq -R . | jq -s . > "$D/expected.json"
             fi
           fi
           jq -n --arg repo "$GITHUB_REPOSITORY" --arg key "$KEY" --arg sha "$SHA" \

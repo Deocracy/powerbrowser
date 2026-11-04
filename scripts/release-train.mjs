@@ -780,7 +780,9 @@ export function admitWakeRun(run, repository) {
 
 /**
  * A release is published only when it is neither a draft nor a prerelease. Pure.
- * Wired to the collected Release of the pin's train (trackingPlan, plan 43-06); the draft-Release plant covers it.
+ * Wired to the collected Release of the pin's train (trackingPlan, plan 43-06). derive lists Releases rather than reading
+ * releases/tags/<key>, which returns only published ones, so a draft reaches here if the job token can list drafts;
+ * the owner's dry-run dispatch confirms that.
  */
 export function classifyRelease(release) {
     if (release.draft === true) return { published: false, reason: `draft Release ${release.tag} is not published, so it never moves the train` };
@@ -1040,6 +1042,14 @@ export function trackingPlan({ collector, found, pinTag, tag, openPrNumber, stag
         const facts = t.facts(issue);
         const state = derive(facts);
         if (state === null) { lines.push(`${t.title}: idle; nothing is written`); continue; }
+        // The conflict issue is printed, not written; an unnumbered conflict line writes nothing (as wouldWrite did).
+        if (state === 'CONFLICT') {
+            const reason = conflictStageReason(facts.stage);
+            if (reason !== null) { lines.push(`${t.title}: refused -- ${reason}`); continue; }
+            const conflict = renderConflict(facts.candidateTag, conflictPatchNumber(facts.stage), facts.stage, '');
+            lines.push(`would-write: conflict issue "${conflict.title}", assigned to the owner; no patch is written`);
+            failures.push(...conflictWriteFailures(conflict));
+        }
         const rendered = render(state, facts);
         const decision = findExactlyOne(mine.map(i => ({ ...i, body: normBody(i.body) })), { ...rendered, body: normBody(rendered.body) });
         if (decision.action === 'fail') { failures.push(`${t.title}: ${decision.reason}`); continue; }
@@ -3179,6 +3189,17 @@ function selfTest(mode = 'all') {
             name: 'a draft Release with the full asset set',
             run: () => { const p = tRelease({ collector: { release: liveRelease({ draft: true }) } }); return p.lines.some(l => l.includes('state=PUBLISHED')) ? ['a draft Release derived PUBLISHED'] : tOut(p); },
             expect: `draft Release ${RELEASE_KEY} is not published`,
+        },
+        {
+            // Review D43: the report job calls trackingPlan, so the conflict refusal must hold there, not only in wouldWrite.
+            name: 'a conflict stage line with no patch number through the tracking writer',
+            run: () => { const p = tPlan({ stage: 'apply-patches: FAIL -- apply-patches.sh stopped' }); return p.ops.length === 0 ? tOut(p) : [`an unnumbered conflict planned ${p.ops.length} write(s)`, ...tOut(p)]; },
+            expect: 'names no patch number',
+        },
+        {
+            name: 'a numbered conflict stage line through the tracking writer prints the conflict issue',
+            run: () => tOut(tPlan({ stage: 'apply-patches: FAIL -- 020-powerbrowser-shell.patch did not apply' })),
+            expect: `conflict issue "ESR ${NEWER}: patch 020 did not apply"`,
         },
         {
             name: 'a failing verify check on the open bump PR',
