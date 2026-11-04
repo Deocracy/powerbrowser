@@ -44,6 +44,10 @@
 // 10. packaged-rows  build-linux runs scripts/verify-platform.sh --only for the packaged rows and
 //                install-matrix, between the packaging step and the first upload; every label it runs is a
 //                registry label (read from scripts/verify-platform.sh at check time) (G-49b).
+// 11. purge      One hosted job after sign-publish succeeds, permissions exactly {actions: write}, deletes
+//                every artifact whose build-linux upload carries a tarball or a MAR (derived from the upload
+//                steps, set equality with its PURGE list), none a descriptor-wait job reads, and exits 1 when
+//                one is still stored (G-49c, INF-04).
 //
 // Instrument: js-yaml from theia/ through createRequire, the same loader as the
 // workflows row. A missing js-yaml, an unreadable file and a parse error are FAILs.
@@ -421,6 +425,36 @@ function runChecks(root, overrides = {}) {
         for (const l of PACKAGED_ROWS) if (!ran.has(l)) fail(BUILD_JOB, 'packaged-rows', `does not run ${l} over the built package. Next step: add it to the packaged-rows step.`);
     }
 
+    // 11. purge (G-49c, INF-04): after sign-publish succeeds, one least-privilege hosted job deletes every artifact
+    // whose build-linux upload carries a tarball or a MAR (derived from the upload steps, compared as set equality),
+    // never one a job behind the descriptor wait reads, and fails when one is still stored.
+    const bulky = new Set(buildSteps.filter(s => UPLOAD.test(String(s.uses ?? '')) && /\.tar\.xz|\.mar\b/.test(String(s.with?.path ?? ''))).map(s => s.with?.name));
+    const purgeJobs = Object.entries(wf.jobs).filter(([, j]) => stepsOf(j).some(s => /-X DELETE\b[^\n]*\/actions\/artifacts\//.test(String(s.run ?? ''))));
+    if (purgeJobs.length !== 1) {
+        fail('(workflow)', 'purge', `has ${purgeJobs.length} job(s) deleting artifacts through actions/artifacts/, not one, so the per-release artifact cap rests on retention alone. Next step: restore the purge-artifacts job after ${SIGN_JOB}.`);
+    } else {
+        const [pid, pj] = purgeJobs[0];
+        const steps = stepsOf(pj).filter(s => /-X DELETE\b/.test(String(s.run ?? '')));
+        const names = new Set(String(steps[0]?.env?.PURGE ?? '').trim().split(/\s+/).filter(Boolean));
+        if (![].concat(pj.needs ?? []).includes(SIGN_JOB) || pj.if !== `needs.${SIGN_JOB}.result == 'success'`) {
+            fail(pid, 'purge', `does not run only after ${SIGN_JOB} succeeds (needs ${JSON.stringify(pj.needs ?? null)}, if ${JSON.stringify(pj.if ?? null)}), so it could delete the bytes before the Release holds them. Next step: needs: ${SIGN_JOB} with if: needs.${SIGN_JOB}.result == 'success'.`);
+        }
+        if (labelsOf(pj).includes(LEGION_LABEL) || Object.hasOwn(pj, 'environment') || JSON.stringify(pj.permissions ?? null) !== JSON.stringify({ actions: 'write' }) || /\bsecrets\s*[.[]|toJSON\(\s*secrets\s*\)/.test(JSON.stringify(pj))) {
+            fail(pid, 'purge', `is not a hosted job with permissions exactly {actions: write}, no environment and no secret (permissions ${JSON.stringify(pj.permissions ?? null)}). Next step: restore the least-privilege shape.`);
+        }
+        const missing = [...bulky].filter(n => !names.has(n));
+        const extra = [...names].filter(n => !bulky.has(n));
+        if (missing.length || extra.length) {
+            fail(pid, 'purge', `PURGE ${JSON.stringify([...names])} differs from the ${BUILD_JOB} artifacts that carry a tarball or a MAR ${JSON.stringify([...bulky])} (not deleted: ${JSON.stringify(missing)}; not bulky: ${JSON.stringify(extra)}). Next step: list exactly those artifacts.`);
+        }
+        for (const n of names) if (lateArtifacts.has(n)) fail(pid, 'purge', `deletes ${n}, which a job behind the ${DESCRIPTOR_ENV} wait reads. Next step: keep it.`);
+        const run = String(steps[0]?.run ?? '');
+        if (!/\blength\b[\s\S]*\[\s*"\$LEFT"\s*=\s*"0"\s*\]\s*\|\|[^\n]*exit 1/.test(run)) {
+            fail(pid, 'purge', `does not fail when an artifact is still stored after the delete, so a failed delete passes silently. Next step: restore the remaining-count check that exits 1.`);
+        }
+        for (const f of steps[0] ? failOpenFaults(steps[0]) : []) fail(pid, 'purge', `delete step ${f}. Next step: remove it.`);
+    }
+
     const key = f => [f.file, f.job, f.rule, f.msg];
     failures.sort((a, b) => {
         const ka = key(a), kb = key(b);
@@ -525,6 +559,12 @@ function selfTest() {
         ['packaged-rows step removed', edit('nix develop .#theia --command scripts/verify-platform.sh --only "$LABEL"', 'true "$LABEL"'), 'packaged-rows', 'runs no scripts/verify-platform.sh --only step'],
         ['packaged-rows step after the first upload', edit('      # G-49b (ROADMAP Phase 49 criterion 2)', "      - name: Probe\n        if: steps.key_gate.outputs.build == 'true'\n        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # probe\n        with:\n          name: probe\n          path: probe\n          retention-days: 1\n\n      # G-49b (ROADMAP Phase 49 criterion 2)"), 'packaged-rows', 'does not sit between'],
         ['install-matrix unregistered', { read: rel => (rel === REGISTRY_REL ? readText(REPO_ROOT, rel).replace(/^\s*"install-matrix\|.*$/m, '') : readText(REPO_ROOT, rel)) }, 'packaged-rows', 'not a label'],
+        ['purge-artifacts job removed', edit('              gh api -H \'X-GitHub-Api-Version: 2022-11-28\' -X DELETE', '              gh api -H \'X-GitHub-Api-Version: 2022-11-28\' -X GET'), 'purge', 'not one'],
+        ['purge job granted contents: write', edit('    permissions:\n      actions: write\n', '    permissions:\n      actions: write\n      contents: write\n'), 'purge', 'exactly {actions: write}'],
+        ['purge job runs whatever sign-publish did', edit("    needs: sign-publish\n    if: needs.sign-publish.result == 'success'\n    runs-on: ubuntu-latest\n    timeout-minutes: 10\n", '    needs: sign-publish\n    if: always()\n    runs-on: ubuntu-latest\n    timeout-minutes: 10\n'), 'purge', 'only after sign-publish succeeds'],
+        ['purge deletes the descriptor manifest', edit('          PURGE: release-linux\n', '          PURGE: release-linux release-linux-manifest\n'), 'purge', 'behind the descriptor wait'],
+        ['purge misses the tarball artifact', edit('          PURGE: release-linux\n', '          PURGE: release-windows\n'), 'purge', 'not deleted: ["release-linux"]'],
+        ['purge remaining-count check removed', edit('[ "$LEFT" = "0" ] ||', 'true ||'), 'purge', 'still stored'],
         ['signmar pin for another ESR tag', { read: rel => (rel === PIN_REL ? readText(REPO_ROOT, PIN_REL).replace(/^# tag .*$/m, '# tag wrong-tag') : readText(REPO_ROOT, rel)) }, 'sign-pin', 'wrong-tag'],
     ];
 

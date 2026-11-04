@@ -5210,6 +5210,9 @@ run_own_checks() {
     # builds signmar from the pinned source (the pin's tag equals configuration.toml); one concurrency
     # group; the first step refuses any ref but main; and (G-49a, mar-emit) a build-linux upload of
     # *.complete.mar needs the packaging script it runs to invoke make_full_update.sh.
+    # (G-49b, packaged-rows) build-linux runs the packaged rows and install-matrix between packaging and
+    # the first upload, each a registry label; (G-49c, purge) one hosted actions: write job after sign-publish
+    # deletes the tarball-and-MAR artifacts derived from the build-linux uploads and keeps the descriptor data.
     # release-shape-self-test plants one fault per rule in memory over the real release.yml text and
     # three bad mar_origin values through a scratch copy of configuration.toml; each goes red naming
     # the file, the rule and the fault.
