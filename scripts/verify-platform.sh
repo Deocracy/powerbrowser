@@ -4865,6 +4865,12 @@ run_own_checks() {
     "sidecar-no-symlinks-self-test|node $REPO_ROOT/scripts/verify-sidecar-no-symlinks.mjs --self-test"
     "package-target-natives-self-test|node $REPO_ROOT/scripts/verify-package-target-natives.mjs --self-test"
     "packaged-identity-self-test|node $REPO_ROOT/scripts/verify-packaged-identity.mjs --self-test"
+    # NEW (Phase 49, G-49b): the install-matrix self-test twin. The same driver as the full row runs over
+    # fixture tarballs and fixture browsers (shell scripts) in the OS temp directory: a green control, then
+    # one planted fault per cell (two top dirs, absent binary, early exit, no screenshot, a failing stock
+    # browser, the fork dying during the stock run, three residue paths, an unimplemented and a removed
+    # BUILD.md cell), each red naming its cell. No build, browser, display or network; about 7 seconds.
+    "install-matrix-self-test|node $REPO_ROOT/scripts/verify-install-matrix.mjs --self-test"
     # NEW (Phase 45, CR-05): the drift comparator behind the container baseline.
     # Planted mismatched sysroot and UNMEASURED lines must go red; no host state read.
     "toolchain-baseline-self-test|bash $REPO_ROOT/scripts/toolchain-baseline.sh --self-test"
@@ -5827,6 +5833,12 @@ run_own_checks() {
       # against the staged package; FAILs naming the container-build procedure
       # when the tarball is absent, like its three neighbours above.
       "packaged-identity|node $REPO_ROOT/scripts/verify-packaged-identity.mjs"
+      # NEW (Phase 49, G-49b): the Linux install matrix over the release tarball (promotes the untracked 08-05
+      # driver). Cells derived from the docs/BUILD.md Linux row: install, launch, alongside stock Firefox
+      # (PB_STOCK_FIREFOX or firefox on PATH), uninstall + no-residue; the hop cell is mar-update-hop. Fresh
+      # HOME per browser; FAILs naming the next step when the tarball or the stock browser is absent.
+      # build-linux runs it with the packaged rows above, before any upload.
+      "install-matrix|node $REPO_ROOT/scripts/verify-install-matrix.mjs"
       "ng064-update-url-from-manifest|node $REPO_ROOT/scripts/verify-ng-064-update-url.mjs"
       "ng065-mar-signature-enforced|node $REPO_ROOT/scripts/verify-ng-065-mar-signature.mjs"
       "ng066-nsis-branding-no-ping|node $REPO_ROOT/scripts/verify-ng-066-nsis-branding.mjs"
