@@ -122,6 +122,8 @@ import { join } from 'node:path';
 import { EXTENSION_FIXTURES, fixtureId } from './lib/pb-extension-fixtures.mjs';
 
 const NAME = 'verify-extension-actions-live';
+// The two fixtures runSession installs for popup-action, buttons, manage and tabs-bridge; EXTENSION_FIXTURES also holds content and surfaces.
+const BRIDGE_FIXTURES = ['action', 'popup'];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const verdict = (ok, detail, fail) => (ok ? { ok: true, detail, fail: null } : { ok: false, detail: null, fail });
 const pathOf = u => {
@@ -141,10 +143,10 @@ async function scenarioPopupAction({ app, plant }) {
   const B = await openTab(app, '/b');
   await live.makeCurrent(app, A);
   await waitForSelected(app, A, '/a');
-  await setPinned(app, Object.keys(EXTENSION_FIXTURES).map(fixtureId));
+  await setPinned(app, BRIDGE_FIXTURES.map(fixtureId));
   const from = (await live.pushes(app)).length;
   await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
-  const ids = Object.keys(EXTENSION_FIXTURES).map(fixtureId);
+  const ids = BRIDGE_FIXTURES.map(fixtureId);
   const pushAt = await live.waitForPush(app, p => p.kind === 'extensionAction' && ids.every(id => p.actions.some(r => r.extensionId === id)), { from });
   if (pushAt < 0) {
     return verdict(false, null, 'no extensionAction push carried both fixtures after the subscribe');
@@ -234,7 +236,7 @@ async function scenarioButtons({ app, plant }) {
   await setPinned(app, [fixtureId('action')]);
   const from = (await live.pushes(app)).length;
   await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
-  const ids = Object.keys(EXTENSION_FIXTURES).map(fixtureId);
+  const ids = BRIDGE_FIXTURES.map(fixtureId);
   const pushAt = await live.waitForPush(app, p => p.kind === 'extensionAction' && ids.every(id => p.actions.some(r => r.extensionId === id)) && p.actions.some(r => r.pinned), { from });
   if (pushAt < 0) {
     return verdict(false, null, 'no extensionAction push carried both fixtures with the action fixture pinned');
@@ -252,8 +254,9 @@ async function scenarioButtons({ app, plant }) {
   }
   await clickInFrame(app, '.pb-ext-puzzle');
   if (plant?.name === 'buttons-stale') {
-    // The frame stops hearing extensionAction pushes; the recorder, installed first, still records them.
-    await app.evaluate(`(() => { window.addEventListener(${JSON.stringify(live.WEB_TAB_STATE_EVENT)}, e => { if (e.detail && e.detail.kind === 'extensionAction') e.stopImmediatePropagation(); }, true); return true; })()`);
+    // The frame stops hearing extensionAction pushes. A capture listener at the target runs before every bubble
+    // listener, the recorder's included, so the plant records each push itself before it stops it.
+    await app.evaluate(`(() => { window.addEventListener(${JSON.stringify(live.WEB_TAB_STATE_EVENT)}, e => { if (e.detail && e.detail.kind === 'extensionAction') { window.__pbPushes.push(JSON.parse(JSON.stringify(e.detail))); e.stopImmediatePropagation(); } }, true); return true; })()`);
   }
   const logFrom = session.logs.length;
   const pushFrom = (await live.pushes(app)).length;
@@ -292,8 +295,10 @@ async function scenarioManage({ app, plant }) {
   if (plant?.name === 'pin-lost') {
     await setPinned(app, []);
   }
+  // The reload is asynchronous: until the old document goes, its buttons would answer for the reloaded frontend.
+  await app.evaluate('(() => { window.__pbBeforeReload = true; return true; })()');
   await app.evaluateIn(app.chrome, "(() => { document.getElementById('powerbrowser-content').reload(); return true; })()");
-  const kept = await pollUntil(() => barButtons(app).catch(() => []), b => b.some(x => x.id === fixtureId('action')), 45000);
+  const kept = await pollUntil(() => app.evaluate('window.__pbBeforeReload === true').then(old => (old ? [] : barButtons(app))).catch(() => []), b => b.some(x => x.id === fixtureId('action')), 45000);
   if (!kept) {
     return verdict(false, null, 'the pin did not persist across the frontend reload: no action fixture button after it');
   }
@@ -305,6 +310,7 @@ async function scenarioManage({ app, plant }) {
   for (const name of ['popup', 'action']) {
     await clickInFrame(app, '.pb-ext-puzzle');
     await puzzleRowMenu(app, name, 'Remove Extension');
+    await pollUntil(() => app.evaluate("!!document.querySelector('.pb-ext-menu .pb-ext-confirm-remove')"), v => v === true, 5000);
     await clickInFrame(app, '.pb-ext-menu .pb-ext-confirm-remove');
     const gone = await pollUntil(() => addonGone(app, fixtureId(name)), g => g, 15000);
     if (!gone) {
@@ -339,7 +345,8 @@ async function scenarioTabsBridge({ app, plant, command }) {
   if (!B) {
     return verdict(false, null, 'the created tab /b was never adopted: an orphan overlay no frontend tab owns');
   }
-  const order = await live.probe(app, "return { ids: get('ApplicationShell').getWidgets('main').map(w => w.tabId), current: get('ApplicationShell').currentWidget?.tabId ?? null };");
+  // The main panel's selected tab, not shell.currentWidget: that follows Lumino's FocusTracker, which an unfocused (headless) window never feeds.
+  const order = await live.probe(app, "return { ids: get('ApplicationShell').getWidgets('main').map(w => w.tabId), current: get('ApplicationShell').mainPanel.currentTitle?.owner?.tabId ?? null };");
   if (!B.selected || order.current !== B.tabId || order.ids.indexOf(B.tabId) !== order.ids.indexOf(A) + 1) {
     return verdict(false, null, `the created tab /b is adopted but not the selected tab next to /a: ${JSON.stringify({ selected: B.selected, order })}`);
   }
@@ -352,7 +359,7 @@ async function scenarioTabsBridge({ app, plant, command }) {
   if (!act.ok) {
     return verdict(false, null, `tabs.update({active}) on /c was rejected: ${act.error}`);
   }
-  const shown = await pollUntil(async () => ({ chrome: await overlayOfExtTab(app, bg.result.id), current: (await live.probe(app, "return { id: get('ApplicationShell').currentWidget?.tabId ?? null };")).id }), v => v.chrome.selected && v.current === C.tabId, 10000);
+  const shown = await pollUntil(async () => ({ chrome: await overlayOfExtTab(app, bg.result.id), current: (await live.probe(app, "return { id: get('ApplicationShell').mainPanel.currentTitle?.owner?.tabId ?? null };")).id }), v => v.chrome.selected && v.current === C.tabId, 10000);
   if (!shown) {
     return verdict(false, null, 'tabs.update({active}) on /c did not select it in chrome and show it in the frontend');
   }
@@ -364,7 +371,7 @@ async function scenarioTabsBridge({ app, plant, command }) {
   }
   // 38-REVIEW CR-03: activated before its ack, /d must end shown in the frontend AND selected in chrome, never in chrome alone.
   const ca = await command('create-activate', { props: { url: `${ORIGIN}/d` } });
-  const D = ca.ok ? await pollUntil(async () => ({ chrome: await overlayOfExtTab(app, ca.result.id), current: (await live.probe(app, "return { id: get('ApplicationShell').currentWidget?.tabId ?? null };")).id }), v => v.chrome.tabId !== null && v.chrome.selected && v.current === v.chrome.tabId, 10000) : null;
+  const D = ca.ok ? await pollUntil(async () => ({ chrome: await overlayOfExtTab(app, ca.result.id), current: (await live.probe(app, "return { id: get('ApplicationShell').mainPanel.currentTitle?.owner?.tabId ?? null };")).id }), v => v.chrome.tabId !== null && v.chrome.selected && v.current === v.chrome.tabId, 10000) : null;
   if (!D) {
     return verdict(false, null, `tabs.update({active}) on /d before its adoption ack did not leave it shown in the frontend and selected in chrome: ${JSON.stringify(ca.ok ? { chrome: await overlayOfExtTab(app, ca.result.id) } : ca.error)}`);
   }
@@ -572,7 +579,8 @@ async function scenarioTabPages({ app, plant, command }) {
   if (!sameSet(after, before)) {
     return verdict(false, null, `a tab page changed the shell's overlay set: ${JSON.stringify({ before, after })}`);
   }
-  const nav = await command('overlay-nav', { url: `${ORIGIN}/a` });
+  // tabs.query's url is a match pattern, and a pattern's host keeps any port it is given (MatchPattern.cpp), so it is passed without one.
+  const nav = await command('overlay-nav', { url: `${ORIGIN.replace(/:\d+$/, '')}/a` });
   if (nav.ok || !/Illegal URL/.test(String(nav.error))) {
     return verdict(false, null, `tabs.update of the web tab /a to an extension page was not refused: ${JSON.stringify(nav)}`);
   }
@@ -867,7 +875,12 @@ async function popupState(app) {
 
 // Opens a puzzle row's gear menu and activates the row labelled `label` the way a pointer does (move, then mouse-up).
 async function puzzleRowMenu(app, name, label) {
-  await clickInFrame(app, `.pb-ext-menu .pb-ext-row[data-extension-id=${JSON.stringify(fixtureId(name))}] .pb-ext-row-menu`);
+  // A pointer press on the gear moves chrome focus into the Theia frame, so the gear menu taking focus closes the puzzle
+  // menu as it does for a user; el.click() alone moves no focus. The puzzle menu renders a frame after its button's click.
+  await live.focusTheiaFrame(app);
+  const gear = `.pb-ext-menu .pb-ext-row[data-extension-id=${JSON.stringify(fixtureId(name))}] .pb-ext-row-menu`;
+  await pollUntil(() => app.evaluate(`!!document.querySelector(${JSON.stringify(gear)})`), v => v === true, 5000);
+  await clickInFrame(app, gear);
   const done = await pollUntil(() => app.evaluate(`(() => {
     const item = [...document.querySelectorAll('.lm-Menu .lm-Menu-item')].find(i => i.querySelector('.lm-Menu-itemLabel')?.textContent.trim() === ${JSON.stringify(label)});
     if (!item) return false;

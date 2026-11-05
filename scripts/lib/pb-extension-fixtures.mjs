@@ -76,6 +76,9 @@ browser.browserAction.onClicked.addListener(tab => post({ kind: 'popup-clicked',
 // overlay's image request. `forget-tabs` (the sender-tab-null plant) makes it record every later hello's tab as -1.
 const CONTENT_BACKGROUND = `${POST}
 post({ kind: 'content-started', id: browser.runtime.id });
+// An event page with persisted listeners is only primed at app startup, not started (ext-backgroundPage.js); a
+// runtime.onStartup listener is what starts it then, so the relaunch scenarios see it start with zero overlays.
+browser.runtime.onStartup.addListener(() => {});
 let forgetTabs = false;
 browser.runtime.onMessage.addListener((msg, sender) => {
   if (msg.kind === 'hello') post({ kind: 'hello', path: msg.path, senderTabId: !forgetTabs && sender.tab ? sender.tab.id : -1 });
