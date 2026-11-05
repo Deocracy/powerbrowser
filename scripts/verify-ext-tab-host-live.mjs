@@ -82,7 +82,10 @@ const PAGE = '<!doctype html><title>PB probe extension page</title><body>extensi
 // Every record goes to the harness's /log endpoint. Commands arrive on /cmd.
 const BACKGROUND = `
 const ORIGIN = __ORIGIN__;
-const post = rec => { fetch(ORIGIN + '/log', { method: 'POST', body: JSON.stringify(rec) }).catch(() => {}); };
+// A record of the probe's own channel is never posted: every post is a /log fetch, so recording one feeds back, and the
+// two webRequest recorders below double the traffic on every hop until the browser stops answering.
+const ownChannel = u => String(u).startsWith(ORIGIN + '/log') || String(u).startsWith(ORIGIN + '/cmd');
+const post = rec => { if (!ownChannel(rec.url)) fetch(ORIGIN + '/log', { method: 'POST', body: JSON.stringify(rec) }).catch(() => {}); };
 const brief = t => t && { id: t.id, url: t.url, windowId: t.windowId, active: t.active, title: t.title, favIconUrl: t.favIconUrl, status: t.status, mutedInfo: t.mutedInfo };
 post({ kind: 'started' });
 browser.tabs.onZoomChange.addListener(z => post({ kind: 'zoom', tabId: z && z.tabId, oldZoomFactor: z && z.oldZoomFactor, newZoomFactor: z && z.newZoomFactor, zoomSettings: z && z.zoomSettings }));
@@ -95,7 +98,7 @@ browser.webRequest.onBeforeRequest.addListener(d => post({ kind: 'request', tabI
 browser.webRequest.onBeforeRequest.addListener(d => (d.url.endsWith('/redirect-me') ? { redirectUrl: browser.runtime.getURL('page.html') } : {}), { urls: ['<all_urls>'], types: ['main_frame'] }, ['blocking']);
 browser.webNavigation.onCommitted.addListener(d => post({ kind: 'committed', tabId: d.tabId, url: d.url, frameId: d.frameId }));
 // UF-31.1-02: whether a Cookie header carried the token is recorded as a boolean; the value is never posted.
-browser.webRequest.onBeforeSendHeaders.addListener(d => post({ kind: 'headers', tabId: d.tabId, url: d.url, token: (d.requestHeaders || []).some(h => /^cookie$/i.test(h.name) && /(^|;\s*)POWERBROWSER_TOKEN=/.test(h.value || '')) }), { urls: ['<all_urls>'] }, ['requestHeaders']);
+browser.webRequest.onBeforeSendHeaders.addListener(d => post({ kind: 'headers', tabId: d.tabId, url: d.url, token: (d.requestHeaders || []).some(h => /^cookie$/i.test(h.name) && /(^|;\\s*)POWERBROWSER_TOKEN=/.test(h.value || '')) }), { urls: ['<all_urls>'] }, ['requestHeaders']);
 browser.cookies.onChanged.addListener(c => post({ kind: 'cookie-changed', name: c.cookie.name, domain: c.cookie.domain, removed: c.removed }));
 browser.runtime.onMessage.addListener((msg, sender) => {
   if (msg && msg.kind === 'hello') {
@@ -1624,7 +1627,9 @@ async function scenarioWebviewRender({ app, theia, plant }) {
   await installUrlWitness(app, swUrl);
   const html = `<!doctype html><body><p id="m">${WEBVIEW_TEXT}</p><script>acquireVsCodeApi().postMessage({ text: document.getElementById('m').textContent, origin: location.origin });</script></body>`;
   const r = await probe(app, `
-    const widget = await get('WidgetManager').getOrCreateWidget('plugin-webview', { id: ${JSON.stringify(id)}, viewId: 'pb.webview-probe' });
+    // No viewId: Theia puts hashValue(viewId) in the origin in place of the id (webview-widget-factory.js), and the
+    // service-worker witness above needs the origin before the widget exists.
+    const widget = await get('WidgetManager').getOrCreateWidget('plugin-webview', { id: ${JSON.stringify(id)} });
     let message = null;
     widget.onMessage(m => { message = m; });
     widget.setContentOptions({ allowScripts: true });
