@@ -178,9 +178,9 @@ Filled by the roadmap.
 |-------------|-------|--------|
 
 **Coverage:**
-- v1 requirements: 37 total
+- v1 requirements: 39 total
 - Mapped to phases: 0
-- Unmapped: 37 ⚠️
+- Unmapped: 39 ⚠️
 
 ---
 *Requirements defined: 2026-11-04*
