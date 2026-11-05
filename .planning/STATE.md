@@ -489,6 +489,7 @@ Recent decisions affecting current work:
 
 ### Roadmap Evolution
 
+- Phase 39 added (2026-11-05): v1.5 Close-out — Chris ruled fix all 16 open v1.5 defects (C22-C24, C11, backlog 999.4-999.16) inside v1.5, Claude runs every automatable UAT item, owner calls per phase in the box, every residual deferral documented for a later version
 - Phase 14.1 inserted after Phase 14: In-Theia Web Tabs (GUI-02) — Chris reversed the 2026-08-30 deferral on 2026-09-06; + opens a web tab inside the shell (URGENT)
 - Phase 14.1.1 inserted after Phase 14.1: GUI Conformance Sweep — living GUI defect list, automated fix pass, then one-at-a-time confirmation with Chris (URGENT)
 - v1.4 roadmap created 2026-10-16: Phases 17–25, non-GUI (17–20) then GUI one step at a time (21–25); Phase 16 moved into the v1.3 record as retired (code removed in Phase 17, RM-01)

@@ -132,6 +132,7 @@ forces a decision). Coverage: 87/87 v1.5 requirements, each in exactly one phase
 - [ ] **Phase 36: New-Window Links as Web Tabs** - `target=_blank` and `window.open` open web tabs next to the opener; GUI-01 kept (alone, because it is the one phase that can break GUI-01)
 - [ ] **Phase 37: Permission Prompts and Dialogs** - Permission doorhangers, sharing indicator, page dialogs, password save, notification bars
 - [ ] **Phase 38: WebExtensions** - Extensions see web tabs; toolbar buttons and puzzle menu; AMO install; popular extensions checked live
+- [ ] **Phase 39: v1.5 Close-out** - Fix C22-C24, C11 and backlog 999.4-999.16; run every automatable UAT item; owner calls settled; WINDOWS.md and REQUIREMENTS.md closed out
 
 ## Phase Details
 
@@ -580,6 +581,27 @@ check requires every allow-dispositioned Mozilla host to be documented in this
 project's own planning record rather than only inside the allowlist file — an
 allow entry nobody had to write down is one nobody has to defend. Repointing
 them per a downstream's manifest is Phase 4's TEL-03.
+
+### Phase 39: v1.5 Close-out
+
+**Goal:** Fix every open v1.5 defect and finish the end-of-milestone pass, so v1.5 Chrome Bar Firefox Parity closes with no green-by-exclusion rows (Chris, 2026-11-05: "fix all three", "fix all 13", "every deferral well documented").
+**Requirements**: PROMPT-04, PROMPT-06, PROMPT-08 (C22-C24 live), EXT-01..EXT-10 (999.15/999.16), plus the live halves of every v1.5 requirement whose UAT row is still pending
+**Depends on:** Phase 38
+**Plans:** 0 plans
+
+**Scope:**
+1. Product fixes: C22 the `title=` page tooltip never opens; C23 the saved-login autocomplete popup never opens; C24 Copy Image leaves no image flavour on the clipboard; C11 page-menu dismissal `focusPage()` race (999.10).
+2. Every backlog row 999.4-999.16 fixed, none deferred: 999.4 bookmarks-toolbar order-dependent instrument failure; 999.5 nav-keys Back leg with no interaction; 999.6 mode-tokens `*x` flake; 999.11 opener-null plant anchor; 999.12 KDE portal chooser for screen sharing; 999.13 four prompts self-test plants re-sited; 999.14 kwinShot raises the shell before spectacle; 999.15 event-page wake and 999.16 enterprise policies with no stock window — one root cause (`browser-delayed-startup-finished` / `sessionstore-windows-restored` are sent only by a stock window), landing as a regenerated patch 050 plus a Gecko rebuild.
+3. `scripts/verify-platform.sh` and `--gate` green with `page-furniture-live` and its self-test included.
+4. Every automatable pending UAT item in phases 27, 31.1, 32, 33, 34, 35, 36, 37, 38 run by Claude (live harnesses, gsd-browser, KWin raise + spectacle) and recorded in the UAT file; 32-UAT.md gets the page-tools PASS from the 2026-11-04 sweep; 34-UAT.md is rewritten to the UAT template so `uat.complete-session` parses it.
+5. The ~20 owner-decision UAT rows (32 T11; 36 T18; 37 T34-T41; 38 T31-T40) each get a one-line recommendation and are put to Chris per phase through the AskUserQuestion box.
+6. Bookkeeping: REQUIREMENTS.md rows v1.5 delivered ticked, ROADMAP boxes for phases 27-38 ticked, WINDOWS.md updated.
+7. Anything still unresolved at the end is documented as a backlog row plus a WINDOWS.md entry carrying repro, cause-so-far and the source UAT test, so a later version can pick it up without rediscovery. Human-only checks (human eye, portal click) are collected into one checklist for Chris.
+
+Runs autonomously on main (`/gsd-autonomous`); it stops only for the owner-call batches, the human-only checklist and the push.
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 39 to break down)
 
 ---
 
