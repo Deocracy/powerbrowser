@@ -44,6 +44,43 @@ const REPO_ROOT = join(__dirname, '..', '..');
 export const FIREFOX_BIN = process.env.PB_FIREFOX_BIN || join(REPO_ROOT, 'objdir', 'dist', 'bin', 'powerbrowser');
 
 /**
+ * A BiDi RemoteValue as the plain value the evaluated expression returned. Primitives arrive as their value already;
+ * an object arrives as [key, RemoteValue] pairs and an array as a RemoteValue list, so a caller reading `.field` off
+ * a raw object result reads undefined (found live in the v1.5 end-of-milestone pass). Nodes, windows and other
+ * handle types have no plain form and stay as the RemoteValue.
+ */
+export function fromRemoteValue(rv) {
+    if (!rv || typeof rv !== 'object' || !('type' in rv)) {
+        return rv;
+    }
+    switch (rv.type) {
+        case 'undefined':
+            return undefined;
+        case 'null':
+            return null;
+        case 'number':
+            return typeof rv.value === 'number' ? rv.value : Number(rv.value);
+        case 'bigint':
+            return BigInt(rv.value);
+        case 'string':
+        case 'boolean':
+            return rv.value;
+        case 'array':
+        case 'set':
+            return (rv.value || []).map(fromRemoteValue);
+        case 'object':
+        case 'map':
+            return Object.fromEntries((rv.value || []).map(([k, v]) => [typeof k === 'string' ? k : fromRemoteValue(k), fromRemoteValue(v)]));
+        case 'date':
+            return new Date(rv.value);
+        case 'regexp':
+            return new RegExp(rv.value.pattern, rv.value.flags);
+        default:
+            return rv;
+    }
+}
+
+/**
  * The libpulse directory the build linked against, read from the objdir's config.status next to the
  * binary. Gecko dlopens libpulse by bare name and libxul's RUNPATH does not list it, so a binary run
  * outside a Nix wrapper logs "libpulse not found" in the audio server, and every media element dies
@@ -464,7 +501,7 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
                 target: { context },
                 awaitPromise: true,
             });
-            return result.result.result.value;
+            return fromRemoteValue(result.result.result);
         };
 
         // GUI-02 (14.1-03): the same evaluation against a caller-chosen
@@ -479,7 +516,7 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
                 target: { context: targetContext },
                 awaitPromise: true,
             });
-            return result.result.result.value;
+            return fromRemoteValue(result.result.result);
         };
 
         const screenshot = async () => {

@@ -3681,6 +3681,12 @@ run_own_checks() {
     # text read, no build, no browser, no network.
     "dual-build-table|node $REPO_ROOT/scripts/verify-dual-build-table.mjs"
     "dual-build-table-self-test|node $REPO_ROOT/scripts/verify-dual-build-table.mjs --self-test"
+    # NEW (v1.5 live pass): every live harness reads script.evaluate results through firefox-bidi's
+    # fromRemoteValue; an undecoded object reached the harness as RemoteValue pairs and every field
+    # read was undefined. The self-test requires the pre-fix reader and an identity decoder to go red.
+    # Honestly --quick: pure computation, no build, no browser.
+    "bidi-remote-value|node $REPO_ROOT/scripts/verify-bidi-remote-value.mjs"
+    "bidi-remote-value-self-test|node $REPO_ROOT/scripts/verify-bidi-remote-value.mjs --self-test"
     "branding-preflight|node $REPO_ROOT/scripts/verify-branding-preflight.mjs"
     "branding-preflight-self-test|node $REPO_ROOT/scripts/verify-branding-preflight.mjs --self-test"
     # NEW (06-01): VER-01's static layer -- the manifest's own display
