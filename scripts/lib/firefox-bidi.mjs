@@ -395,8 +395,10 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
         ? { ...process.env, LD_LIBRARY_PATH: [pulse, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':') }
         : process.env;
     // `ulimit -c 0; exec` keeps the pid (kill still reaches the browser) and stops crash scenarios writing systemd coredumps.
+    // PB_LIVE_HEADED=1 (39-01): a real window for the KWin capture and the real-input gate
+    // (scripts/lib/pb-kwin.mjs); a headless session has no compositor window and a text-only clipboard.
     const child = spawn('bash', ['-c', 'ulimit -c 0; exec "$@"', 'bash', binPath,
-        '--headless',
+        ...(process.env.PB_LIVE_HEADED === '1' ? [] : ['--headless']),
         '--profile', profileDir,
         `--remote-debugging-port=${port}`,
         '--remote-allow-hosts', '127.0.0.1',

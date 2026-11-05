@@ -6189,6 +6189,12 @@ run_own_checks() {
       # add-ons site, so never --quick. The plant run boots a clean control per target scenario, then each plant.
       "extension-amo-live|node $REPO_ROOT/scripts/verify-extension-amo-live.mjs"
       "extension-amo-live-self-test|node $REPO_ROOT/scripts/verify-extension-amo-live.mjs --self-test --live"
+      # NEW (Phase 39 plan 01, assumption A1): the real-input gate in scripts/lib/pb-kwin.mjs. A headed shell
+      # (PB_LIVE_HEADED=1) is raised through a KWin script, the active window is read back (KWin print() + the user
+      # journal), and one ydotool Shift and one spectacle capture go to it (clean control); then plants class-mismatch
+      # and readback-empty must each refuse both osKeys and captureShell. Needs the owner's KDE Wayland session, the
+      # ydotoold socket and the built binary, so never --quick.
+      "real-input-gate-self-test|node $REPO_ROOT/scripts/lib/pb-kwin.mjs --self-test"
 
       # NEW (31-01/31-02/31-03, SITE-01..08): the site-identity live gate. identity-tls
       # and identity-local (31-01), site-panel (31-02: certificate, six tri-state
