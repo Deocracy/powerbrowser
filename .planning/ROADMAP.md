@@ -587,7 +587,7 @@ them per a downstream's manifest is Phase 4's TEL-03.
 **Goal:** Fix every open v1.5 defect and finish the end-of-milestone pass, so v1.5 Chrome Bar Firefox Parity closes with no green-by-exclusion rows (Chris, 2026-11-05: "fix all three", "fix all 13", "every deferral well documented").
 **Requirements**: PROMPT-04, PROMPT-06, PROMPT-08 (C22-C24 live), EXT-01..EXT-10 (999.15/999.16), plus the live halves of every v1.5 requirement whose UAT row is still pending
 **Depends on:** Phase 38
-**Plans:** 0 plans
+**Plans:** 20 plans
 
 **Scope:**
 1. Product fixes: C22 the `title=` page tooltip never opens; C23 the saved-login autocomplete popup never opens; C24 Copy Image leaves no image flavour on the clipboard; C11 page-menu dismissal `focusPage()` race (999.10).
@@ -601,7 +601,26 @@ them per a downstream's manifest is Phase 4's TEL-03.
 Runs autonomously on main (`/gsd-autonomous`); it stops only for the owner-call batches, the human-only checklist and the push.
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 39 to break down)
+- [ ] 39-01-PLAN.md (wave 1) — Baseline: 34-UAT rewritten, real-input gate (pb-kwin), C24 bisect, symlink check, full registry red list in 39-BASELINE.md
+- [ ] 39-02-PLAN.md (wave 2) — Tracer: C11 page-menu dismissal race fixed end to end (guard, plant, workaround removed, 999.10 ticked)
+- [ ] 39-03-PLAN.md (wave 2) — Owner batch A: OQ1 plus phases 32, 33, 36, 37, 38 in the box; rulings recorded
+- [ ] 39-04-PLAN.md (wave 3) — 999.15/999.16: patch 050 sections, guard rows G14/G15, no-compile go-live, live scenarios
+- [ ] 39-05-PLAN.md (wave 4) — C24 Copy Image and C22 title tooltip, diagnose then fix
+- [ ] 39-06-PLAN.md (wave 5) — C23 saved-login popup, diagnose then fix; 35 T16-T18 scenarios
+- [ ] 39-07-PLAN.md (wave 6) — 35 T19-T20 scenarios; page-furniture rows through the registry; 35-UAT recorded
+- [ ] 39-08-PLAN.md (wave 7) — Harness fixes 999.4, 999.6, 999.5
+- [ ] 39-09-PLAN.md (wave 8) — Prompts harness 999.14, 999.13, 999.12 (X11 sharing route)
+- [ ] 39-10-PLAN.md (wave 9) — OQ1 ruling implemented, probe 1 live, 37 T18-T21 scenarios
+- [ ] 39-11-PLAN.md (wave 10) — 37 T22-T25 scenarios; prompts rows through the registry; 37-UAT recorded
+- [ ] 39-12-PLAN.md (wave 11) — 999.11 and 36 T12-T16 scenarios; 36-UAT recorded
+- [ ] 39-13-PLAN.md (wave 12) — 38 T22, T24-T30 scenarios; extension rows through the registry; 38-UAT recorded
+- [ ] 39-14-PLAN.md (wave 13) — EXT-10 fill on a local Vaultwarden (38 T31, option b)
+- [ ] 39-15-PLAN.md (wave 14) — Real OS input rows: 27 T1-T4, 34 T1/T6/T13, 36 T5, 38 T23
+- [ ] 39-16-PLAN.md (wave 15) — 33 T6 edit-greying; 32 and 34 remaining rows; page-tools and tab-strip rows recorded
+- [ ] 39-17-PLAN.md (wave 16) — Owner batch B: phases 27, 31.1, 34, 35 with live evidence; rulings recorded
+- [ ] 39-18-PLAN.md (wave 17) — Ruled changes: 31.1 T3 error-page allow-list, 34 T1 drag-handle carve-out
+- [ ] 39-19-PLAN.md (wave 18) — Full registry and --gate; residuals and follow-ups to backlog rows and WINDOWS.md
+- [ ] 39-20-PLAN.md (wave 19) — REQUIREMENTS/ROADMAP close-out, the human-only checklist, one human-verify stop
 
 ---
 
