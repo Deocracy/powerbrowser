@@ -74,6 +74,9 @@ live run stopped at `harness: … objdir/dist/bin/powerbrowser does not exist` a
 `purgecaches:` line, and no `freeze-frame timing:` line exists. The 50 ms deadline is enforced in
 code (`PAGE_STILL_DEADLINE_MS`, a late capture is never pushed); the 200 ms p95 budget, the on-time
 fraction and the still-arrival p50/p95 wait for the end-of-milestone live pass.
+**v1.5 end-of-milestone live pass (2026-11-04, main, fixed tree):** verdict **within budget**.
+`freeze-frame timing: menu p50 7 p95 9, still 20/20 within 50 ms`; the context-menu scenario's own
+opens gave `context-menu timing: p50 98 p95 106 n=7`. Both p95 values are under 200 ms.
 
 ---
 
