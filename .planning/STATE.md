@@ -2,20 +2,20 @@
 gsd_state_version: "1.0"
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
-current_phase_name: WebExtensions
+current_phase: 39
+current_phase_name: v1.5 Close-out
 status: verifying
-stopped_at: "Phase 39 discuss done (39-CONTEXT.md d6330306); planning blocked twice (2026-11-04, 2026-11-05) by the context-mode plugin PreToolUse Agent hook, which rewrites subagent prompts so auto mode refuses every spawn. 2026-11-05: context-mode set to false in ~/.claude/settings.json; a session restart is required for the hook to unload, then re-run /gsd-autonomous"
-last_updated: "2026-11-05T03:57:24.001Z"
+stopped_at: Phase 39 UI-SPEC approved
+last_updated: "2026-11-05T18:06:22.410Z"
 last_activity: 2026-11-01
 last_activity_desc: Phase 38 merged in full with verification deferred; end-of-milestone live pass pending (owner)
-state_head: d633030687de712ad231e5839b41e7f6b6e22726
+state_head: 164e7f27ebf46e6faa7017571a4039bc3db0b495
 progress:
   total_phases: 14
   completed_phases: 1
-  total_plans: 73
+  total_plans: 93
   completed_plans: 73
   percent: 7
-current_phase: 38
 ---
 
 # Project State
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 
 ## Current Position
 
-Phase: all v1.5 phases executed; end-of-milestone live pass pending (owner)
+Phase: 39 (v1.5 Close-out) — READY TO EXECUTE
 Plan: —
 Status: Phases 32-38 closed with verification deferred to the end-of-milestone pass (.planning/v1.5-LIVE-PASS.md)
 Last activity: 2026-11-01 — Phase 38 merged in full (50b664d3; verification human_needed, live checks deferred)
@@ -585,9 +585,9 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-05T03:57:22.930Z
-Stopped at: Phase 39 discuss done (39-CONTEXT.md d6330306); planning blocked: context-mode plugin PreToolUse hook rewrites Agent calls so auto mode refuses subagent spawns. Chris 2026-11-04: disable context-mode, restart, re-run /gsd-autonomous
-Resume file: .planning/phases/39-v1-5-close-out/39-CONTEXT.md
+Last session: 2026-11-05T16:56:45.783Z
+Stopped at: Phase 39 UI-SPEC approved
+Resume file: .planning/phases/39-v1-5-close-out/39-UI-SPEC.md
 
 ## Operator Next Steps
 
