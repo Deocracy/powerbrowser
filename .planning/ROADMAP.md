@@ -659,3 +659,107 @@ on the stock-blocks-ide verdict only while REQUIREMENTS.md records this deferral
 Plans:
 
 - [ ] TBD (promote with /gsd-review-backlog when ready)
+
+### Phase 999.4: Follow-up — Phase 33 deferred UAT follow-up: Test 3 (BACKLOG)
+
+**Goal:** Resolve the UAT checkpoint deferred during Phase 33 verification
+**Source phase:** 33
+**Deferred at:** 2026-11-04 during /gsd-verify-work 33 session completion
+**Follow-ups:**
+- [ ] Test 3: bookmarks-toolbar stops in every full address-bar run (3 of 3) on 'broken instrument: the session tab page could not be focused' and passes alone; find the earlier scenario that leaves page focus unreachable (deferred 2026-11-04)
+
+### Phase 999.5: Follow-up — Phase 33 deferred UAT follow-up: Test 2 (BACKLOG)
+
+**Goal:** Resolve the UAT checkpoint deferred during Phase 33 verification
+**Source phase:** 33
+**Deferred at:** 2026-11-04 during /gsd-verify-work 33 session completion
+**Follow-ups:**
+- [ ] Test 2: verify-nav-keys-live drives Back only after a real click in the page (interactWith), so it cannot see an AB-4 style regression; add a navigate leg with no interaction (deferred 2026-11-04)
+
+### Phase 999.6: Follow-up — Phase 33 deferred UAT follow-up: Test none (BACKLOG)
+
+**Goal:** Resolve the UAT checkpoint deferred during Phase 33 verification
+**Source phase:** 33
+**Deferred at:** 2026-11-04 during /gsd-verify-work 33 session completion
+**Follow-ups:**
+- [ ] Test none: AB-9: the mode-tokens *x step failed once in four address-bar runs (flaky, minor) (deferred 2026-11-04)
+
+### Phase 999.7: Follow-up — Phase 35 deferred UAT follow-up: Test 9 (BACKLOG)
+
+**Goal:** Resolve the UAT checkpoint deferred during Phase 35 verification
+**Source phase:** 35
+**Deferred at:** 2026-11-04 during /gsd-verify-work 35 session completion
+**Follow-ups:**
+- [ ] Test 9: C22: the title= page tooltip never opens in tooltip-status; the product showTooltip matches upstream browser.js:2016-2038; theia-hover-silent and its plant theia-tooltip-leak wait on it (deferred 2026-11-04)
+
+### Phase 999.8: Follow-up — Phase 35 deferred UAT follow-up: Test 8 (BACKLOG)
+
+**Goal:** Resolve the UAT checkpoint deferred during Phase 35 verification
+**Source phase:** 35
+**Deferred at:** 2026-11-04 during /gsd-verify-work 35 session completion
+**Follow-ups:**
+- [ ] Test 8: C23: saved-login shows no autocomplete popup on the username field; cause unknown (deferred 2026-11-04)
+
+### Phase 999.9: Follow-up — Phase 35 deferred UAT follow-up: Test 6 (BACKLOG)
+
+**Goal:** Resolve the UAT checkpoint deferred during Phase 35 verification
+**Source phase:** 35
+**Deferred at:** 2026-11-04 during /gsd-verify-work 35 session completion
+**Follow-ups:**
+- [ ] Test 6: C24: Copy Image leaves only text/html on the clipboard, no image flavour; environment (Wayland image targets) or product not separated (deferred 2026-11-04)
+
+### Phase 999.10: Follow-up — Phase 35 deferred UAT follow-up: Test 6 (BACKLOG)
+
+**Goal:** Resolve the UAT checkpoint deferred during Phase 35 verification
+**Source phase:** 35
+**Deferred at:** 2026-11-04 during /gsd-verify-work 35 session completion
+**Follow-ups:**
+- [ ] Test 6: C11: a page menu dismissal sends widget.focusPage() a round trip later; when it lands after the next menu opened, chrome focus ends on <body>. The harness now focuses the Theia frame first; the product race itself is unfixed (deferred 2026-11-04)
+
+### Phase 999.11: Follow-up — Phase 36 deferred UAT follow-up: Test 9 (BACKLOG)
+
+**Goal:** Resolve the UAT checkpoint deferred during Phase 36 verification
+**Source phase:** 36
+**Deferred at:** 2026-11-04 during /gsd-verify-work 36 session completion
+**Follow-ups:**
+- [ ] Test 9: the opener-null plant expect string 'opener' can match incidental failure text; anchor it to the failure the plant causes (deferred 2026-11-04)
+
+### Phase 999.12: Follow-up — Phase 37 deferred UAT follow-up: Test 6 (BACKLOG)
+
+**Goal:** Resolve the UAT checkpoint deferred during Phase 37 verification
+**Source phase:** 37
+**Deferred at:** 2026-11-04 during /gsd-verify-work 37 session completion
+**Follow-ups:**
+- [ ] Test 6: screen sharing needs the KDE portal chooser answered by hand; run sharing with a person at the machine (deferred 2026-11-04)
+
+### Phase 999.13: Follow-up — Phase 37 deferred UAT follow-up: Test 17 (BACKLOG)
+
+**Goal:** Resolve the UAT checkpoint deferred during Phase 37 verification
+**Source phase:** 37
+**Deferred at:** 2026-11-04 during /gsd-verify-work 37 session completion
+**Follow-ups:**
+- [ ] Test 17: four prompts self-test plants misbehave once the self-test gets past sharing: queue-shown-early and activation-wrong-tab stay green, camera-template-missing goes red on an empty device menulist, allow-loads-frame-url goes red on popup not adopted next to its opener; re-site each so it reaches its own failure (deferred 2026-11-04)
+
+### Phase 999.14: Follow-up — Phase 37 deferred UAT follow-up: Test 33 (BACKLOG)
+
+**Goal:** Resolve the UAT checkpoint deferred during Phase 37 verification
+**Source phase:** 37
+**Deferred at:** 2026-11-04 during /gsd-verify-work 37 session completion
+**Follow-ups:**
+- [ ] Test 33: kwinShot does not raise the shell before spectacle, so the dialog probe PNGs are full-desktop captures; raise the shell with the KWin script first (deferred 2026-11-04)
+
+### Phase 999.15: Follow-up — Phase 38 deferred UAT follow-up: Test 5 (BACKLOG)
+
+**Goal:** Resolve the UAT checkpoint deferred during Phase 38 verification
+**Source phase:** 38
+**Deferred at:** 2026-11-04 during /gsd-verify-work 38 session completion
+**Follow-ups:**
+- [ ] Test 5: ext-event-page-wake: browserPaintedPromise resolves only on browser-delayed-startup-finished, which only a stock window sends, so an event page woken by an event never runs with no stock window open. The candidate fix edits upstream ExtensionParent.sys.mjs and must land as a regenerated patch 050 (deferred 2026-11-04)
+
+### Phase 999.16: Follow-up — Phase 38 deferred UAT follow-up: Test none (BACKLOG)
+
+**Goal:** Resolve the UAT checkpoint deferred during Phase 38 verification
+**Source phase:** 38
+**Deferred at:** 2026-11-04 during /gsd-verify-work 38 session completion
+**Follow-ups:**
+- [ ] Test none: enterprise policies (for example SearchEngines Default) are applied only when the first stock window fires sessionstore-windows-restored (EnterprisePoliciesParent.sys.mjs:368-369); a shell-only session never applies them. Same root cause as the event-page wake (deferred 2026-11-04)
