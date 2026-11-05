@@ -1,9 +1,9 @@
 ---
-status: testing
+status: partial
 phase: 38-webextensions
 source: [38-VERIFICATION.md, 38-REVIEW.md, 38-01-SUMMARY.md, 38-02-SUMMARY.md, 38-03-SUMMARY.md, 38-04-SUMMARY.md, 38-05-SUMMARY.md, 38-CONTEXT.md, 38-VALIDATION.md]
 started: 2026-11-01T00:00:00Z
-updated: 2026-11-01T00:00:00Z
+updated: 2026-11-05T01:52:10.339Z
 ---
 
 Deferred to the one end-of-milestone pass covering Phases 32-38 (Chris, 2026-10-31). Nothing in this file has been run: the Phase 38 worktree has no objdir, and live runs are forbidden there.
@@ -24,98 +24,111 @@ Items 1-13 are the live scenarios and the live self-tests. Items 14-17 are the n
 
 ## Current Test
 
-number: 1
-name: Scenario buttons
-expected: |
-  The pushed extension set equals the installed set in both directions, the button shows the extension's current badge, and the puzzle menu lists the rest.
-awaiting: user response
+[testing complete]
 
 ## Tests
 
 ### 1. Scenario `buttons`
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-extension-actions-live.mjs --scenario buttons`
 expected: With the `action` and `popup` fixtures installed, the pinned ones render as 28x28 buttons in the chrome-bar row and the rest in the puzzle menu; the set equals the installed set in both directions; `setBadgeText` and `setIcon` reach the button through the amended 050 signal (`TabHostActionUpdate`). Plant `buttons-stale` goes red naming the stale badge
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: buttons PASS"
 
 ### 2. Scenario `popup-action`
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-extension-actions-live.mjs --scenario popup-action`
 expected: A real click on a button with a popup opens it in chrome's native panel at the button; a click on an action-only button runs it on the host's selected web tab, never on the stock tab; the badge `ok` is pushed; the four closes (Esc, second click, focus into the page, tab switch) each close the panel and leave focus where the scenario expects (pill for Esc and second click; not the pill for page focus and tab switch, 38-REVIEW WR-02). This is the first run of the click path on a real build (CR-01). Plants `wrong-page` and `popup-native-blocked` go red. Watch: whether `pressKey` Escape reaches the popup browser, and whether the outside-click rollup consumes the second click
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: popup-action PASS"
 
 ### 3. Scenario `manage`
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-extension-actions-live.mjs --scenario manage`
 expected: Pin to Toolbar moves a row to the button row and the pref `powerbrowser.extensions.pinned` holds it across a relaunch; Manage Extension opens the Add-ons Manager by enum; Remove Extension asks first and uninstalls only after the confirm row; the confirm copy reads that the extension and its data are removed. Plant `pin-lost` goes red naming the lost pin. Watch: whether Lumino's mouseup activation works for the gear-menu rows
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: manage PASS"
 
 ### 4. Scenario `tabs-bridge`
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-extension-actions-live.mjs --scenario tabs-bridge`
 expected: `tabs.create` mints an overlay that Theia adopts (no orphan overlay); `tabs.update(id, {active: true})` selects a tab through the amended 050; `tabs.remove` resolves only after the node and overlay are gone (WR-03); the `/d` step (`create-activate`) ends with `/d` both current in the frontend and `host.selected` (CR-03); non-http(s) targets are refused; the extension-page step opens a new stock window. Plant `create-unadopted` goes red naming the orphan overlay
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: tabs-bridge PASS (gBrowser documentGlobal product fix in 1642f2d7)"
 
 ### 5. Scenario `content`
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-extension-actions-live.mjs --scenario content`
 expected: The content fixture installs as an unsigned XPI (profile scope) and survives a relaunch; the hello from `/a` carries a real `sender.tab` id; `tabs.sendMessage(tabId)` reaches the page; a zero-overlay startup throws no `tab is null`. Plant `sender-tab-null` and `pageaction-zero-tab` go red. Watch: whether `getInstallForFile` is refused for signing, and whether the console reports an async startup rejection with the `tab is null` text
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: content PASS with the startup product fix (1642f2d7: extensions-late-startup resolves browserStartupPromise) and the onStartup fixture (4bdc5751). An event page woken by an event still waits for a stock window (deferred below)"
 
 ### 6. Scenario `page-action`
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-extension-actions-live.mjs --scenario page-action`
 expected: A page action with `show_matches` shows on the matching 127.0.0.1 page only, is hidden on other pages and on the first-tab case, its icon appears in the address pill, and a click runs the action on that tab. Plant `pageaction-pill-stale` goes red naming the stale icon
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: page-action PASS"
 
 ### 7. Scenario `sidebar`
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-extension-actions-live.mjs --scenario sidebar`
 expected: Show Sidebar in the gear menu opens the extension's sidebar page as a view in Theia's right side panel; the chrome panel browser follows the view's rect; Hide Sidebar closes it; `_execute_sidebar_action` toggles it while a page has focus; nothing opens in the shell window itself. Plants `sidebar-in-shell` and `sidebar-as-tab` go red. Watch: whether the `load` capture listener fires for the webext-panels document, and whether `contentTitle` reports the page title
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: sidebar PASS"
 
 ### 8. Scenario `tab-pages`
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-extension-actions-live.mjs --scenario tab-pages`
 expected: `runtime.openOptionsPage` (`open_in_tab`) and `tabs.create` of the dashboard page open in the stock browser window; a second `openOptionsPage` switches to the open tab instead of adding one (WR-06); a web tab given the same `moz-extension://` URL refuses it. Plant `tabpage-in-overlay` goes red
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: tab-pages PASS"
 
 ### 9. Scenario `commands`
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-extension-actions-live.mjs --scenario commands`
 expected: The `pb-probe` command (Alt+Shift+U) and `_execute_sidebar_action` (Alt+Shift+I) fire with web page `/a` focused and do not fire with the IDE focused, where the Theia-frame keydown recorder proves the key reached Theia. Plants `commands-always-fire` and `commands-never-fire` go red. Watch: whether GlobalKeyListener honours `disabled` toggled on an `ExtensionShortcuts` keyset, and whether the capture `command` listener runs before the key's own listener
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: commands PASS"
 
 ### 10. `node scripts/verify-extension-actions-live.mjs --self-test --live`
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-extension-actions-live.mjs --self-test --live`
 expected: A clean control session per scenario is green, then all 13 plants each go red naming their drift (`wrong-page`, `popup-native-blocked`, `create-unadopted`, `buttons-stale`, `pin-lost`, `sender-tab-null`, `pageaction-zero-tab`, `pageaction-pill-stale`, `sidebar-in-shell`, `sidebar-as-tab`, `tabpage-in-overlay`, `commands-always-fire`, `commands-never-fire`). The static half already passes (`--static` and the default `--self-test`)
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: verify-extension-actions-live --self-test --live PASS: every control green and all 13 plants red naming their drift, buttons-stale included after its plant fix (4bdc5751)"
 
 ### 11. Scenario `amo-install`
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-extension-amo-live.mjs --scenario amo-install`
 expected: With web tab `/a` on screen and no extension installed, the puzzle menu's install footer opens the add-ons site in the stock browser window, never in a web tab. The smallest D-07 listing installs through `AddonManager.installAddonFromWebpage`; the stock `addon-webext-permissions` prompt opens in the stock window naming the add-on, the scenario presses its Add button, the add-on installs signed and active, its row reaches the puzzle menu under its installed name and its popup opens on `/a`. Plant `prompt-bypassed` goes red naming the prompt. Watch: whether the site serves its bot challenge page to the harness
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: amo-install PASS"
 
 ### 12. Scenario `fixtures`
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-extension-amo-live.mjs --scenario fixtures`
 expected: Before any install the baselines hold (tracker image on `/ad` loads, `/login` form empty, `/plain` light). After the signed installs: uBlock Origin makes the image fail and its pushed badge reads above zero; Bitwarden's popup opens on `/login` (the fill is not scored, see item 31); Dark Reader drops `/plain`'s painted luminance below 0.3. Plant `fixtures-no-op` goes red naming each missing effect. Watch: the blocker may need more than the 60 s retry window to compile its lists on a cold profile, and Dark Reader may skip 127.0.0.1 pages
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: fixtures PASS"
 
 ### 13. `node scripts/verify-extension-amo-live.mjs --self-test --live`
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-extension-amo-live.mjs --self-test --live`
 expected: A clean control per scenario is green, then `prompt-bypassed` and `fixtures-no-op` each go red naming their drift. The static half already passes (`--static`)
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: verify-extension-amo-live --self-test --live PASS"
 
 ### 14. Neighbour suite: navigation keys
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-nav-keys-live.mjs && node scripts/verify-nav-keys-live.mjs --self-test`
 expected: Green; the Phase 38 shortcut keyset (item 9) did not take over the Phase 27 page-focus keys
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: verify-nav-keys-live PASS, re-run after the narrowed AB-4 fix (1642f2d7)"
 
 ### 15. Neighbour suite: web tab
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-web-tab-live.mjs && node scripts/verify-web-tab-live.mjs --self-test`
 expected: Green; the sidebar panel browser, the popup panel and the bridge changes did not alter web-tab geometry or the blocking-layer rules
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: verify-web-tab-live and its --self-test PASS (12 plants red), after the AB-4 product fix stopped marking the overlay initial about:blank (1642f2d7)"
 
 ### 16. Menus proof for EXT-08 (cited from 35-05)
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-page-furniture-live.mjs --scenario extension-entry`
 expected: A test extension's context-menu entry arrives as an `extension-entry` row after the stock rows; picking it makes its `menus.onClicked` fire with the web tab, and nothing runs in the IDE
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: page-furniture extension-entry PASS"
 
 ### 17. SC1 regression: the 31.1 tab host with the amended patch 050
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-ext-tab-host-live.mjs --scenario query,events,active-tab,sender,adversarial-starts,gui01,refused-write`
 expected: All green on the amended 050. `refused-write` now checks the highlighted refusal where it used to check `active`. Then run `node scripts/verify-ext-tab-host-live.mjs` (all scenarios) and `node scripts/verify-ext-tab-host-live.mjs --self-test` for the full 31.1 set
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: verify-ext-tab-host-live (all scenarios, refused-write included) and its --self-test PASS (ea7bcec7)"
 
 ### 18. Visual: buttons, badge, puzzle menu, popup arrow (KDE Wayland)
 command: `cd /home/chris/coding/Power-Browser && objdir/dist/bin/powerbrowser -purgecaches` with an extension that has a popup and a badge installed; raise it with the KWin script via qdbus, then `spectacle`, sandbox off
@@ -235,47 +248,65 @@ result: [pending]
 ### 41. Scenario `network-wall` (UF-31.1-02, plan 38-06)
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-ext-tab-host-live.mjs --scenario network-wall`
 expected: After the probe (webRequest, webRequestBlocking, cookies, `<all_urls>`) is installed, the Theia frame reloads and chrome scope sees it open at least one channel; the probe records no onBeforeRequest or onBeforeSendHeaders event naming the Theia origin and no Cookie header carrying the token; web tab /a reaches both listeners with its tab id in the same session (positive control); `cookies.getAll({ domain: '127.0.0.1' })` lists the probe's own `pbprobe` cookie and not POWERBROWSER_TOKEN; `cookies.set` of the token on the Theia origin is refused and the stored token is unchanged; `cookies.onChanged` reports `pbprobe` and not the token
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: network-wall PASS"
 
 ### 42. Scenario `theia-never` without the known-gap exemption (UF-31.1-02, plan 38-06)
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-ext-tab-host-live.mjs --scenario theia-never`
 expected: The reloaded Theia frame opens channels seen in chrome scope (the new positive control, replacing the webRequest record that used to be the control), and no record of any kind names the Theia origin across four web tabs, activation, a navigation and a close; the old allowance for the frame's own tabId -1 webRequest records is gone
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: theia-never PASS"
 
 ### 43. Scenario `windows-refusal` (UF-31.1-01, plan 38-06)
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-ext-tab-host-live.mjs --scenario windows-refusal`
 expected: On the shell window id from `windows.getCurrent`, `windows.update` with `state: 'minimized'` and with `width` both reject "This window cannot be changed by an extension.", and `windows.remove` rejects "This window cannot be closed by an extension."; the window stays open with its width and state unchanged and WebDriver still reaches the Theia frame; `windows.update({ focused: true })`, `windows.getCurrent` and `tabs.get` still work
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: windows-refusal PASS"
 
 ### 44. Plants for items 41-43 and 45
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-ext-tab-host-live.mjs --scenario network-wall,windows-refusal,theia-never,worker-wall --self-test`
 expected: Each control is green first; `network-wall-off` (the frame loses `extensionnetworkhidden`) goes red naming "Theia frame visible to network observers"; `windows-guard-off` (the tracker stops treating the shell as a tab host window) goes red naming "not the tab host refusal"; `theia-in-tabs-late` still goes red naming "Theia frame visible to extensions"; `worker-wall-off` (the shell's hidden-origins pref emptied) goes red naming "Theia worker visible to network observers"
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: ext-tab-host --self-test: network-wall-off, windows-guard-off and worker-wall-off each went red naming their drift"
 
 ### 45. Scenario `worker-wall` (UF-31.1-02 worker branch, plan 38-06)
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-ext-tab-host-live.mjs --scenario worker-wall`
 expected: A harness page `/sw` registers `/pb-probe-sw.js`, and the probe records that script load with tab id -1 (positive control: a browserless load reaches the recorder). The Theia frame then registers the same path on the sidecar origin; chrome scope sees that load, and the probe records nothing naming the Theia origin. Theia's own webview service worker would sit on `{{uuid}}.webview.127.0.0.1:<port>`, which does not resolve on this host, so the scenario uses a worker on the sidecar origin, which takes the same browserless branch. If the positive control reports a tab id other than -1, the scenario does not exercise the worker branch; record that as a finding
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: worker-wall PASS"
 
 ### 46. Scenario `webview-render` (webview origins on localhost, plan 38-07)
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-ext-tab-host-live.mjs --scenario webview-render`
 expected: A plugin-webview widget opened from the Theia frame has its endpoint on `http://<uuid>.webview.localhost:<port>/webview` (the sidecar's port), and its script posts back the text "PB webview probe rendered" with that origin within 30 s, so the frame and the content load past the token gate. Chrome scope sees the webview's `/webview/service-worker.js` load at least once without a browsing context (positive control), and the probe records no request naming the webview origin. Since 38-07 Theia's own webview worker resolves, so item 45's note that it does not is superseded. The Theia frame reaching 'ready' at all is the evidence that its own WebSocket upgrade still carries the token cookie past the new WebSocket validator. The unauthenticated side is the backend checks `scripts/verify-platform.sh --only side02-index-gated` (the webview host gets `/webview/index.html` with no Set-Cookie and nothing else) and `--only side02-ws-token` (an RPC handshake without the token cookie is refused); both passed on 2026-11-01
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: webview-render PASS (eth-2 harness fix ea7bcec7)"
 
 ### 47. Plant for item 46
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-ext-tab-host-live.mjs --scenario webview-render --self-test`
 expected: The control is green first; `webview-wall-off` (the shell's hidden-origins pref loses its `*.webview.localhost` entry) goes red naming "Theia webview visible to network observers"
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: webview-wall-off went red naming 'Theia webview visible to network observers'"
 
 ## Summary
 
 total: 47
-passed: 0
+passed: 24
 issues: 0
-pending: 47
+pending: 23
 skipped: 0
 blocked: 0
 
 ## Gaps
 
 [none yet]
+
+## Deferred Follow-Ups
+
+```yaml
+- test: 5
+  idea: "ext-event-page-wake: browserPaintedPromise resolves only on browser-delayed-startup-finished, which only a stock window sends, so an event page woken by an event never runs with no stock window open. The candidate fix edits upstream ExtensionParent.sys.mjs and must land as a regenerated patch 050"
+  deferred_at: 2026-11-04
+- test: none
+  idea: "enterprise policies (for example SearchEngines Default) are applied only when the first stock window fires sessionstore-windows-restored (EnterprisePoliciesParent.sys.mjs:368-369); a shell-only session never applies them. Same root cause as the event-page wake"
+  deferred_at: 2026-11-04
+```
