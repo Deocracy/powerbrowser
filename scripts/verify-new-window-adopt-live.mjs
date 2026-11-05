@@ -51,7 +51,9 @@
  *                      sleep), and no web tab or overlay keeps it.
  *   adopt-scheme       The adopt path answers refused-scheme for a javascript:
  *                      URL; a javascript: _blank link in A gives no adoptTab
- *                      push, no web tab, no stock window, and A stays on its page.
+ *                      push, no web tab and no overlay from the receiver (its
+ *                      null hands the page to Gecko's own window), and A stays
+ *                      on its page.
  *   adopt-unknown-key  An ack for pc-999999 replies unknown-tab, chrome pushes
  *                      dropAdoptedTab for the widget, and the widget is disposed.
  *
@@ -225,8 +227,10 @@ const chromeSelectedTabId = async app =>
  * the scheme leg cannot say what Gecko asked.
  */
 async function installReceiverRecorder(app) {
+    // window.browserDOMWindow reads back as an XPConnect wrapper with read-only native members; wrappedJSObject is the
+    // receiver object installNewWindowReceivers assigned, whose members Gecko looks up on every call.
     const state = await inChrome(app, `
-        const r = window.browserDOMWindow;
+        const r = window.browserDOMWindow?.wrappedJSObject;
         if (!r || typeof r.createContentWindowInFrame !== 'function') return 'no receiver on the shell window';
         if (!window.__pbInFrame) {
             window.__pbInFrame = [];
@@ -246,7 +250,7 @@ async function installReceiverRecorder(app) {
                 r[member] = wrapped;
             }
         }
-        return window.browserDOMWindow.createContentWindowInFrame.__pbRecorder === true ? 'ok' : 'the receiver did not take the recorder';`);
+        return r.createContentWindowInFrame.__pbRecorder === true ? 'ok' : 'the receiver did not take the recorder';`);
     if (state !== 'ok') {
         throw new Error(`the receiver recorder could not be installed: ${state}`);
     }
@@ -339,8 +343,10 @@ async function adoptOrder({ app, pages, plant, fail, note }) {
         return fail(`${BROKEN} expected one shell window before any adopt, saw ${shellsBefore}`);
     }
     if (plant === 'adopt-append-at-end') {
+        // Not an unknown opener: Theia's addWidget with no ref lands after the current tab, which is A at the click.
+        // B is the strip's last tab, so naming it as the opener puts the adopted tab at the end.
         await probe(app, `const h = get('WebTabOpenHandler'); const original = h.adopt;
-            h.adopt = function (d) { window.__pbPlantRan = true; return original.call(h, { ...d, openerTabId: 'wt-planted-unknown' }); };
+            h.adopt = function (d) { window.__pbPlantRan = true; return original.call(h, { ...d, openerTabId: ${J(b)} }); };
             return true;`);
     }
     for (const [selector, path] of [['#blank', '/target?leg=blank'], ['#open', '/target?leg=open']]) {
@@ -578,7 +584,6 @@ async function adoptFallback({ app, pages, plant, fail, note }) {
 async function adoptScheme({ app, pages, plant, fail, note }) {
     const a = await openerTab(app, pages, 'scheme');
     await installReceiverRecorder(app);
-    const stocksBefore = await stockWindows(app);
     const jsUrl = 'javascript:void(0)';
     if (plant === 'adopt-javascript') {
         // The wall's fault: a javascript: URL handed on as if it were a page.
@@ -607,7 +612,12 @@ async function adoptScheme({ app, pages, plant, fail, note }) {
     } catch {
         // Gecko may never ask the receiver for a javascript: link; the reads below judge the outcome.
     }
-    note(`receiver calls for the javascript: link: ${J((await receiverCalls(app)).slice(callsBefore))}`);
+    const calls = (await receiverCalls(app)).slice(callsBefore);
+    note(`receiver calls for the javascript: link: ${J(calls)}`);
+    // The InFrame wall answers null, so Gecko's own new window takes the page (36-01): a stock window is the design.
+    if (calls.some(c => c.returned !== 'null')) {
+        return fail(`a javascript: link was not refused: the receiver returned an overlay for ${J(calls.map(c => c.spec))}`);
+    }
     const adopts = await adoptsSince(app, mark);
     if (adopts.length) {
         return fail(`a javascript: link was not refused: it gave adoptTab push(es) for ${J(adopts.map(p => p.url))}`);
@@ -615,10 +625,6 @@ async function adoptScheme({ app, pages, plant, fail, note }) {
     const jsTabs = await probe(app, `return webTabs().filter(w => /^javascript:/i.test(w.url)).map(w => w.tabId);`);
     if (jsTabs.length) {
         return fail(`a javascript: link was not refused: web tab(s) ${J(jsTabs)}`);
-    }
-    const stocks = await stockWindows(app);
-    if (stocks.some(id => !stocksBefore.includes(id))) {
-        return fail('a javascript: link was not refused: a stock window opened');
     }
     const stillOn = await app.evaluateIn(a.ctx, 'location.href');
     if (stillOn !== a.url) {
