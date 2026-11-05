@@ -4,7 +4,7 @@ milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase_name: WebExtensions
 status: verifying
-stopped_at: "Phase 39 discuss done (39-CONTEXT.md d6330306); planning blocked: context-mode plugin PreToolUse hook rewrites Agent calls so auto mode refuses subagent spawns. Chris 2026-11-04: disable context-mode, restart, re-run /gsd-autonomous"
+stopped_at: "Phase 39 discuss done (39-CONTEXT.md d6330306); planning blocked twice (2026-11-04, 2026-11-05) by the context-mode plugin PreToolUse Agent hook, which rewrites subagent prompts so auto mode refuses every spawn. 2026-11-05: context-mode set to false in ~/.claude/settings.json; a session restart is required for the hook to unload, then re-run /gsd-autonomous"
 last_updated: "2026-11-05T03:57:24.001Z"
 last_activity: 2026-11-01
 last_activity_desc: Phase 38 merged in full with verification deferred; end-of-milestone live pass pending (owner)
