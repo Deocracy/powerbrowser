@@ -267,20 +267,32 @@ async function contextOf(app, url) {
     return found.context;
 }
 
-/** Trusted pointer move to (x, y) in `context`'s viewport. */
-async function pointerTo(app, context, x, y) {
-    await app.send('input.performActions', { context, actions: [{ type: 'pointer', id: 'pb-furniture-mouse', parameters: { pointerType: 'mouse' }, actions: [{ type: 'pointerMove', x: Math.round(x), y: Math.round(y), duration: 0 }] }] });
-    await app.send('input.releaseActions', { context });
-}
-
-/** Moves the pointer to the centre of `selector` in `context`. */
-async function pointerOnto(app, context, selector) {
+/**
+ * Moves the pointer to the centre of `selector` in `context`, whose <browser> in the shell is the chrome
+ * expression `frame`. The move is synthesised at the shell window, as real input arrives: chrome sees the
+ * mouseover on that <browser> (what setOverLink reads), then the page does. BiDi input on `context` is
+ * synthesised in the content process, so chrome never sees it (27-RESEARCH Pitfall P11), and BiDi refuses
+ * pointer input on the chrome context.
+ */
+async function pointerOnto(app, context, selector, frame) {
     const box = JSON.parse(await app.evaluateIn(context, `JSON.stringify((() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })())`));
     if (!box) {
         throw new Error(`${BROKEN} no ${selector} in the page`);
     }
-    await pointerTo(app, context, box.x, box.y);
+    const moved = await inChrome(app, `const b = ${frame}; if (!b) return 'no shell <browser>';
+        try {
+            const r = b.getBoundingClientRect();
+            window.synthesizeMouseEvent('mousemove', r.left + ${box.x}, r.top + ${box.y});
+            return true;
+        } catch (e) {
+            return String(e);
+        }`);
+    if (moved !== true) {
+        throw new Error(`${BROKEN} the pointer could not be moved onto ${selector}: ${moved}`);
+    }
 }
+const overlayFrame = tabId => `overlayOf(${JSON.stringify(tabId)})`;
+const THEIA_FRAME = `document.getElementById('powerbrowser-content')`;
 
 async function toMode(app, mode) {
     return probe(app, `await get('CommandRegistry').executeCommand(${JSON.stringify(MODES_ACTIVATE_COMMAND_ID)}, ${JSON.stringify(mode)});
@@ -368,7 +380,7 @@ async function tooltipStatus({ app, pages, plant, fail, note }) {
             }
             const context = await contextOf(app, url);
             let mark = (await pushes(app)).length;
-            await pointerOnto(app, context, '#link');
+            await pointerOnto(app, context, '#link', overlayFrame(tabId));
             if (await waitForPush(app, overLinkFor(tabId, u => u.endsWith('/target')), { from: mark, timeoutMs: 5000 }) < 0) {
                 return fail(`${mode}: no overLink push for ${tabId} ending /target after the pointer moved onto the link`);
             }
@@ -383,7 +395,7 @@ async function tooltipStatus({ app, pages, plant, fail, note }) {
                 return fail(`${mode}: status line intersects the page: status ${JSON.stringify(shown.box)}, page ${JSON.stringify(shown.page)}`);
             }
             mark = (await pushes(app)).length;
-            await pointerOnto(app, context, '#plain');
+            await pointerOnto(app, context, '#plain', overlayFrame(tabId));
             if (await waitForPush(app, overLinkFor(tabId, u => u === ''), { from: mark, timeoutMs: 5000 }) < 0) {
                 return fail(`${mode}: no clearing overLink push after the pointer left the link`);
             }
@@ -398,12 +410,12 @@ async function tooltipStatus({ app, pages, plant, fail, note }) {
         }
         await makeCurrent(app, tabId);
         const context = await contextOf(app, url);
-        await pointerOnto(app, context, '#tip');
+        await pointerOnto(app, context, '#tip', overlayFrame(tabId));
         const tip = await settle(() => tooltipState(app), t => !!t && t.state === 'open' && t.label === TOOLTIP_TEXT, 3000);
         if (!tip || tip.state !== 'open' || tip.label !== TOOLTIP_TEXT) {
             return fail(`page tooltip did not open with ${JSON.stringify(TOOLTIP_TEXT)} within 3 s; saw ${JSON.stringify(tip)}`);
         }
-        await pointerOnto(app, context, '#plain');
+        await pointerOnto(app, context, '#plain', overlayFrame(tabId));
     } finally {
         await toMode(app, 'coding');
     }
@@ -456,7 +468,7 @@ async function theiaHoverSilent({ app, pages, plant, results, fail, note }) {
         }
         for (const selector of ['#pb-ide-hover', '#pb-ide-link']) {
             const mark = (await pushes(app)).length;
-            await pointerOnto(app, theia, selector);
+            await pointerOnto(app, theia, selector, THEIA_FRAME);
             const deadline = Date.now() + 1500;
             while (Date.now() < deadline) {
                 const t = await tooltipState(app);
@@ -625,11 +637,11 @@ function expectedIds(rows, names) {
 const flatIds = items => (Array.isArray(items) ? items.flatMap(item => [item.id, ...flatIds(item.children)]) : []);
 const isMenuPush = tabId => p => p && p.kind === 'pageContextMenu' && (tabId === undefined || p.tabId === tabId);
 
-/** The open root .lm-Menu's rows in the Theia frame, or null when no menu is open. */
+/** The open root .lm-Menu's rows in the Theia frame, separators left out (Lumino renders one before the first group), or null when no menu is open. */
 const menuRows = (app, level = 0) => app.evaluate(`JSON.stringify((() => {
     const menu = document.querySelectorAll('.lm-Menu')[${level}];
     if (!menu) return null;
-    return [...menu.querySelectorAll('.lm-Menu-item')].map(item => {
+    return [...menu.querySelectorAll('.lm-Menu-item:not([data-type="separator"])')].map(item => {
         const r = item.getBoundingClientRect();
         return { label: item.querySelector('.lm-Menu-itemLabel')?.textContent ?? '', type: item.getAttribute('data-type'), disabled: item.classList.contains('lm-mod-disabled'), x: r.left + r.width / 2, y: r.top + r.height / 2 };
     });
@@ -646,7 +658,8 @@ async function clickAt(app, context, x, y, button = 0) {
 }
 
 async function centreOf(app, context, selector) {
-    const box = JSON.parse(await app.evaluateIn(context, `JSON.stringify((() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.left + Math.min(r.width / 2, 20), y: r.top + r.height / 2 }; })())`));
+    // Scrolled into view first: Coding's main area (the mode tooltip-status ends in) is shorter than the /menu and /tools pages.
+    const box = JSON.parse(await app.evaluateIn(context, `JSON.stringify((() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) return null; e.scrollIntoView({ block: 'center' }); const r = e.getBoundingClientRect(); return { x: r.left + Math.min(r.width / 2, 20), y: r.top + r.height / 2 }; })())`));
     if (!box) {
         throw new Error(`${BROKEN} no ${selector} in the page`);
     }
@@ -655,9 +668,14 @@ async function centreOf(app, context, selector) {
 
 const ESCAPE = { key: 'Escape', code: 'Escape', keyCode: 27 };
 
-/** Closes whatever .lm-Menu is open and waits until none is. */
+/**
+ * Closes whatever .lm-Menu is open and waits until none is. The Theia frame is focused first: the last menu's
+ * dismissal hands focus to the page (widget.focusPage) a round trip later, and when that lands after the next
+ * menu opened, chrome's focus is on <body> and the Escape never reaches the menu.
+ */
 async function closeMenu(app) {
     if (await menuRows(app)) {
+        await focusTheiaFrame(app);
         await pressKey(app, ESCAPE);
         await settle(() => menuRows(app), rows => rows === null, 3000);
     }
@@ -686,7 +704,8 @@ const clipboardText = app => inChrome(app, `try {
 }`);
 
 const mainTabIds = app => probe(app, `return get('ApplicationShell').getWidgets('main').map(w => w.tabId ?? null);`);
-const currentTabId = app => probe(app, `return get('ApplicationShell').currentWidget?.tabId ?? null;`);
+// The main area's current tab, as makeCurrent waits for it; the shell's currentWidget is null while the page has focus.
+const currentTabId = app => probe(app, `return get('ApplicationShell').mainPanel.currentTitle?.owner?.tabId ?? null;`);
 
 const MENU_ENGINE = 'Furniture Engine';
 
@@ -747,7 +766,9 @@ async function applyMenuPlants(app, plant, note) {
     }
     if (plant === 'ide-menu-leak') {
         // The IDE frame reaches the actor again, and a shim that keeps any browser turns its capture into a page menu push.
+        // The pref lets ContextMenuChild past Theia's own preventDefault on the right-click (ContextMenuChild.sys.mjs:556-569).
         const read = await inChrome(app, `const frame = document.getElementById('powerbrowser-content');
+            Services.prefs.setBoolPref('dom.event.contextmenu.enabled', false);
             frame.removeAttribute('disablecontextmenu');
             const shim = window.nsContextMenu;
             const desc = Object.getOwnPropertyDescriptor(shim, 'contentData');
@@ -774,6 +795,8 @@ async function applyMenuPlants(app, plant, note) {
 
 /** Right-clicks (x, y) in `context` and waits for this tab's menu push and a visible .lm-Menu; returns { push, ms }. */
 async function openMenuAt(app, context, tabId, point) {
+    // The shim keeps only a shown overlay's menu, and chrome shows the page again a frame or more after the last menu closed.
+    await settle(() => overlayVisibility(app, tabId), v => v === 'visible');
     const mark = (await pushes(app)).length;
     const started = Date.now();
     await clickAt(app, context, point.x, point.y, 2);
@@ -818,6 +841,11 @@ async function contextMenu({ app, pages, plant, fail, note }) {
     const appName = await app.evaluate(appNameExpr);
     // 35-04: Inspect shows on every target (default prefs); the page rows on a blank area and in the frame.
     const inspect = await inChrome(app, `return Services.prefs.getBoolPref('devtools.inspector.enabled', true) && !Services.prefs.getBoolPref('devtools.policy.disabled', false);`) === true ? ['inspect'] : [];
+    // Inspect Accessibility Properties: upstream's showInspectA11Y (nsContextMenu.sys.mjs:846-854), read in the same session.
+    if (inspect.length && await inChrome(app, `return Services.prefs.getBoolPref('devtools.accessibility.enabled', false) && Services.prefs.getBoolPref('devtools.enabled', true)
+        && (Services.prefs.getBoolPref('devtools.everOpened', false) || ChromeUtils.importESModule('chrome://devtools-startup/content/DevToolsShim.sys.mjs').DevToolsShim.isDevToolsUser());`) === true) {
+        inspect.push('inspectA11y');
+    }
     const pageNames = ['navigation', 'reload', 'bookmarkPage', 'savePage', 'selectAll', 'viewSource', ...inspect];
     const linkNames = ['openLink', 'copyLink', ...(strip ? ['stripOnShare'] : []), 'search', ...inspect];
     const targets = [
@@ -981,6 +1009,10 @@ async function menuNotInIde({ app, results, fail }) {
         return 'not-scored';
     }
     await closeMenu(app);
+    // Coding shows the main area's own tab bar; Browsing hides it for the tab strip (Phase 36).
+    if (await toMode(app, 'coding') !== true) {
+        return fail(`${BROKEN} Coding could not be reached for the IDE tab bar`);
+    }
     const theia = await contextOf(app, await app.evaluate('location.href'));
     const tab = JSON.parse(await app.evaluate(`JSON.stringify((() => { const t = document.querySelector('#theia-main-content-panel .lm-TabBar-tab'); if (!t) return null; const r = t.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })())`));
     if (!tab) {
@@ -1101,22 +1133,24 @@ function chromeBarCopy(key) {
 
 async function applyPageToolPlants(app, plant, note) {
     if (plant === 'inspect-no-select') {
-        if (await inChrome(app, `const { DevToolsShim } = ChromeUtils.importESModule('chrome://devtools-startup/content/DevToolsShim.sys.mjs');
-            const noop = () => Promise.resolve();
+        // The inspector's node selection is a no-op: the toolbox opens on the inspector, no node is selected.
+        if (await inChrome(app, `const { require } = ChromeUtils.importESModule('resource://devtools/shared/loader/Loader.sys.mjs');
+            const Selection = require('devtools/client/framework/selection');
+            const noop = function () {};
             noop.__pbPlanted = true;
-            DevToolsShim.inspectNode = noop;
-            return DevToolsShim.inspectNode.__pbPlanted === true;`) === true) {
+            Selection.prototype.setNodeFront = noop;
+            return Selection.prototype.setNodeFront.__pbPlanted === true;`) === true) {
             note('PLANT inspect-no-select applied');
         }
     }
     if (plant === 'copy-row-unwired') {
-        // The Copy row's frontend handler is a no-op: the pick reaches chrome, nothing reaches the clipboard.
+        // The Copy row's pick never reaches chrome (runs: "chrome", so settle is too late to drop it): the frontend sends a dismiss.
         if (await probe(app, `const menu = get('PageContextMenuContribution');
-            const settle = menu.settle;
-            const planted = function (widget, tabId, menuId, itemId, reply) { return itemId === 'context-copy' ? Promise.resolve() : settle.apply(this, arguments); };
+            const send = menu.send;
+            const planted = function (tabId, menuId, itemId, path) { return send.call(this, tabId, menuId, itemId === 'context-copy' ? null : itemId, path); };
             planted.__pbPlanted = true;
-            menu.settle = planted;
-            return menu.settle.__pbPlanted === true;`) === true) {
+            menu.send = planted;
+            return menu.send.__pbPlanted === true;`) === true) {
             note('PLANT copy-row-unwired applied');
         }
     }
@@ -1176,12 +1210,18 @@ async function menuPageTools({ app, pages, plant, fail, note }) {
     const selected = await settle(() => inChrome(app, `const o = overlayOf(${JSON.stringify(tools.tabId)});
         const tab = o && window.gBrowser.getTabForBrowser(o);
         const { DevToolsShim } = ChromeUtils.importESModule('chrome://devtools-startup/content/DevToolsShim.sys.mjs');
-        const toolbox = tab && DevToolsShim.isInitialized() ? DevToolsShim.getToolboxForTab(tab) : null;
+        // By browserId, as webTabCloseToolbox matches it: getToolboxForTab reads descriptorFront.localTab, never set for a host <hbox>.
+        const toolbox = tab && DevToolsShim.isInitialized() ? DevToolsShim.getToolboxes().find(t => t.commands?.descriptorFront?.browserId === o.browserId) : null;
         const node = toolbox?.getPanel('inspector')?.selection?.nodeFront;
         return node ? node.getAttribute('id') : null;`), v => v === INSPECT_ID, 10000);
     if (selected !== INSPECT_ID) {
         return fail(`the inspector did not select the clicked node (selected id ${JSON.stringify(selected)})`);
     }
+    // The toolbox is a window of its own and keeps the OS focus, which later scenarios need on the shell (the inline spell checker).
+    await inChrome(app, `const o = overlayOf(${JSON.stringify(tools.tabId)});
+        const { DevToolsShim } = ChromeUtils.importESModule('chrome://devtools-startup/content/DevToolsShim.sys.mjs');
+        const toolbox = DevToolsShim.getToolboxes().find(t => t.commands?.descriptorFront?.browserId === o?.browserId);
+        return (toolbox ? toolbox.destroy() : Promise.resolve()).then(() => { window.focus(); return true; });`);
 
     // View Frame Source: the frame document's source in the tab.
     if (!await pickFromMenu(app, tools, '#frame', ftlLabel('main-context-menu-frame-view-source'), ftlLabel('main-context-menu-frame'))) {
@@ -1210,7 +1250,8 @@ async function menuEdit({ app, pages, plant, fail, note }) {
     if (typeof tools === 'string') {
         return fail(tools);
     }
-    await app.evaluateIn(tools.page, `const f = document.getElementById('field'); f.focus(); f.setSelectionRange(6, 10); true`);
+    // "alpha": centreOf's point (20 px in) lies inside it, and a right-click outside a field's selection collapses it to the caret.
+    await app.evaluateIn(tools.page, `const f = document.getElementById('field'); f.focus(); f.setSelectionRange(0, 5); true`);
     const opened = await openMenuAt(app, tools.page, tools.tabId, await centreOf(app, tools.page, '#field'));
     if (!opened.push) {
         return fail('no pageContextMenu push for the text field');
@@ -1220,12 +1261,12 @@ async function menuEdit({ app, pages, plant, fail, note }) {
     if (missing.length) {
         return fail(`the text field menu lacks ${missing.join(', ')}; rows ${JSON.stringify(labels)}`);
     }
-    // A sentinel first: the system clipboard outlives the session, so an earlier "beta" cannot pass for this copy.
+    // A sentinel first: the system clipboard outlives the session, so an earlier "alpha" cannot pass for this copy.
     await inChrome(app, `Cc['@mozilla.org/widget/clipboardhelper;1'].getService(Ci.nsIClipboardHelper).copyString('pb-sentinel'); return true;`);
     if (!await pickRow(app, tools.theia, ftlLabel('text-action-copy'))) {
         return fail('the text field menu has no Copy row to pick');
     }
-    if (await settle(() => clipboardText(app), t => t === 'beta', 3000) !== 'beta') {
+    if (await settle(() => clipboardText(app), t => t === 'alpha', 3000) !== 'alpha') {
         return fail('copy did not reach the clipboard');
     }
     await app.evaluateIn(tools.page, `document.getElementById('field2').focus(); true`);
@@ -1233,7 +1274,7 @@ async function menuEdit({ app, pages, plant, fail, note }) {
         return fail('the second field has no Paste row to pick');
     }
     const fieldValue = () => app.evaluateIn(tools.page, `document.getElementById('field2').value`);
-    if (await settle(fieldValue, v => v === 'beta', 3000) !== 'beta') {
+    if (await settle(fieldValue, v => v === 'alpha', 3000) !== 'alpha') {
         return fail('Paste did not set the second field');
     }
     await app.evaluateIn(tools.page, `document.getElementById('field2').focus(); true`);
@@ -1253,13 +1294,26 @@ async function menuEdit({ app, pages, plant, fail, note }) {
     }
 }
 
-/** The pushed menu's spelling suggestion labels (dynamic spell-suggestion rows) after a right-click on `selector`. */
-async function suggestionsAt(app, tools, selector) {
+/**
+ * The pushed menu's spelling suggestion labels (dynamic spell-suggestion rows) after a right-click on `selector`.
+ * `misspelt` re-opens the menu for up to 5 s until suggestions arrive: the inline checker reports none until the
+ * textarea's editor has run its first check after focus (enableRealTimeSpell false in the spellInfo).
+ */
+async function suggestionsAt(app, tools, selector, misspelt = true) {
     await app.evaluateIn(tools.page, `document.querySelector(${JSON.stringify(selector)}).focus(); true`);
     await sleep(500); // the inline checker runs after focus
-    const opened = await openMenuAt(app, tools.page, tools.tabId, await centreOf(app, tools.page, selector));
-    const items = opened.push ? opened.push.items : [];
-    return { opened, words: items.filter(item => /^spell-suggestion-\d+$/.test(item.id)).map(item => item.label), ids: flatIds(items) };
+    // On the word: the textarea's first line, not centreOf's vertical middle (its empty second row).
+    const box = JSON.parse(await app.evaluateIn(tools.page, `JSON.stringify((e => { e.scrollIntoView({ block: 'center' }); return e.getBoundingClientRect().toJSON(); })(document.querySelector(${JSON.stringify(selector)})))`));
+    let read = null;
+    await settle(async () => {
+        if (read) {
+            await closeMenu(app);
+        }
+        const opened = await openMenuAt(app, tools.page, tools.tabId, { x: box.left + 10, y: box.top + 10 });
+        const items = opened.push ? opened.push.items : [];
+        return (read = { opened, words: items.filter(item => /^spell-suggestion-\d+$/.test(item.id)).map(item => item.label), ids: flatIds(items) });
+    }, r => !misspelt || r.words.length > 0, 5000);
+    return read;
 }
 
 async function menuSpelling({ app, pages, plant, fail, note }) {
@@ -1291,7 +1345,7 @@ async function menuSpelling({ app, pages, plant, fail, note }) {
     if (!await pickRow(app, tools.theia, ftlLabel('text-action-spell-add-to-dictionary'))) {
         return fail('the misspelling menu has no Add to Dictionary row to pick');
     }
-    const added = await suggestionsAt(app, tools, '#spell2');
+    const added = await suggestionsAt(app, tools, '#spell2', false);
     if (added.words.length || added.ids.includes('spell-add-to-dictionary')) {
         await closeMenu(app);
         return fail('Add to Dictionary left "wrod" misspelt in the next menu');
@@ -1307,7 +1361,8 @@ async function menuSpelling({ app, pages, plant, fail, note }) {
 }
 
 /** Accepts the open save dialog with `dir`/`name`: the location text input, the file name field, then Save. */
-const acceptSaveDialog = (app, dir, name) => probe(app, `const dialog = document.querySelector('.theia-SaveFileDialog');
+// theia-SaveFileDialog is on the dialog's file tree (file-dialog.js:289); the location input, name field and buttons are in its dialogBlock.
+const acceptSaveDialog = (app, dir, name) => probe(app, `const dialog = document.querySelector('.theia-SaveFileDialog')?.closest('.dialogBlock');
     if (!dialog) { return 'no save dialog'; }
     const fire = (node, type) => node.dispatchEvent(new Event(type, { bubbles: true }));
     const setValue = (input, value) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, value); fire(input, 'input'); fire(input, 'change'); };
@@ -1411,17 +1466,12 @@ async function applyExtensionPlants(app, plant, note) {
 
 async function extensionEntry({ app, pages, plant, fail, note }) {
     await applyExtensionPlants(app, plant, note);
-    const url = pages.url('/furniture');
-    const tabId = await openWebTab(app, url);
-    if (await waitForPush(app, loadedAt(tabId, '/furniture')) < 0) {
-        return fail('no loaded state push arrived for /furniture');
+    // openPage takes this tab's own context: tooltip-status's /furniture tab, earlier in the session, has the same URL.
+    const opened0 = await openPage(app, pages, '/furniture');
+    if (typeof opened0 === 'string') {
+        return fail(opened0);
     }
-    await makeCurrent(app, tabId);
-    if (await settle(() => overlayVisibility(app, tabId), v => v === 'visible') !== 'visible') {
-        return fail(`${BROKEN} the page is not shown`);
-    }
-    const page = await contextOf(app, url);
-    const theia = await contextOf(app, await app.evaluate('location.href'));
+    const { tabId, page, theia, url } = opened0;
     const dir = await mkdtemp(join(tmpdir(), 'pb-35-05-ext-'));
     let extension = null;
     try {
@@ -1643,8 +1693,9 @@ async function applyFormPlants(app, plant, note, tabId) {
         'autocomplete-element-removed': `document.getElementById('PopupAutoComplete')?.remove(); return document.getElementById('PopupAutoComplete') === null;`,
         'autocomplete-attr-removed': `const o = overlayOf(${JSON.stringify(tabId)}); if (!o) return false; o.removeAttribute('autocompletepopup'); return !o.hasAttribute('autocompletepopup') && o.autoCompletePopup === null;`,
         'validation-template-removed': `document.getElementById('invalidFormTemplate')?.remove(); return document.getElementById('invalidFormTemplate') === null && document.getElementById('invalid-form-popup') === null;`,
-        // removeResourceIds returns how many resource ids remain: the shell links only textActions.ftl.
-        'paste-l10n-removed': `return !!document.l10n && document.l10n.removeResourceIds(['toolkit/global/textActions.ftl']) === 0;`,
+        // removeResourceIds returns how many resource ids remain: one fewer than the shell head links.
+        'paste-l10n-removed': `const linked = document.querySelectorAll('link[rel="localization"]').length;
+            return !!document.l10n && document.l10n.removeResourceIds(['toolkit/global/textActions.ftl']) === linked - 1;`,
     };
     if (plants[plant] && await inChrome(app, plants[plant]) === true) {
         note(`PLANT ${plant} applied`);
@@ -1665,7 +1716,8 @@ async function autocomplete({ app, pages, plant, fail, note }) {
     await applyFormPlants(app, plant, note, tab.tabId);
     await focusOverlay(app, tab.tabId);
     const typeStart = async () => {
-        await app.evaluateIn(tab.page, `const f = document.getElementById('q'); f.value = ''; f.focus(); true`);
+        // A block: a top-level const persists in the page's global between evaluates, so the second would throw.
+        await app.evaluateIn(tab.page, `{ const f = document.getElementById('q'); f.value = ''; f.focus(); } true`);
         await keysIn(app, tab.page, [...AC_SEED.slice(0, 3)]);
         return settle(() => autocompleteState(app, tab.tabId), st => st.open && st.rows > 0, 5000);
     };
@@ -1691,7 +1743,7 @@ async function autocomplete({ app, pages, plant, fail, note }) {
     if (closed?.open) {
         return fail('Escape did not dismiss the autocomplete popup');
     }
-    const kept = await app.evaluateIn(tab.page, `const f = document.getElementById('q'); f.value === window.__pbBefore && document.activeElement === f && document.hasFocus()`);
+    const kept = await app.evaluateIn(tab.page, `(f => f.value === window.__pbBefore && document.activeElement === f && document.hasFocus())(document.getElementById('q'))`);
     if (kept !== true) {
         return fail('Escape changed the field value or took focus out of the page');
     }
@@ -1758,6 +1810,10 @@ async function pastePopup({ app, pages, plant, fail, note }) {
     }
     await applyFormPlants(app, plant, note, tab.tabId);
     const read = await centreOf(app, tab.page, '#read');
+    // As a real click does: an unfocused document's readText() rejects with NotAllowedError before any popup.
+    if (!await focusOverlay(app, tab.tabId)) {
+        return fail(`${BROKEN} the page could not be focused before the button click`);
+    }
     await clickAt(app, tab.page, read.x, read.y);
     const state = () => inChrome(app, `const p = document.getElementById('clipboardReadPasteMenuPopup');
         const i = document.getElementById('clipboardReadPasteMenuItem');
@@ -1777,7 +1833,8 @@ async function pastePopup({ app, pages, plant, fail, note }) {
     if (!enabled?.open || enabled.disabled) {
         return fail(`the Paste item did not enable within security.dialog_enable_delay (${delay} ms) plus 3 s`);
     }
-    await inChrome(app, `document.getElementById('clipboardReadPasteMenuItem').doCommand(); return true;`);
+    // activateItem, as a click does: ClipboardContextMenu answers the page on popuphiding (:37-53), which doCommand never causes.
+    await inChrome(app, `document.getElementById('clipboardReadPasteMenuPopup').activateItem(document.getElementById('clipboardReadPasteMenuItem')); return true;`);
     const want15 = String(PASTE_TEXT.length);
     const title = await settle(() => app.evaluateIn(tab.page, 'document.title'), t => t === want15, 5000);
     if (title !== want15) {
@@ -1882,8 +1939,12 @@ async function elementFullscreen({ app, pages, plant, fail, note }) {
         return null;
     };
 
-    // 1. A button click with BiDi input (a real user activation).
+    // 1. A button click with BiDi input (a real user activation). BiDi input reaches only the page, so chrome
+    // focus is moved to the overlay first, as a real click does; an unfocused tab's request is denied.
     const go = await centreOf(app, tab.page, '#go');
+    if (!await focusOverlay(app, tab.tabId)) {
+        return fail(`${BROKEN} the page could not be focused before the button click`);
+    }
     await clickAt(app, tab.page, go.x, go.y);
     const entered = await enter('the page button');
     if (entered) {
@@ -1919,8 +1980,9 @@ async function elementFullscreen({ app, pages, plant, fail, note }) {
     await applyFullscreenPlants(app, plant, note, ['tab-switch-stays-fullscreen'], tab.tabId);
     await focusOverlay(app, tab.tabId);
     await pressKey(app, CTRL_TAB);
-    if (await settle(() => currentTabId(app), id => id === other.tabId, 5000) !== other.tabId) {
-        return fail(`${BROKEN} Ctrl+Tab from the fullscreen page did not switch to the other tab`);
+    // Ctrl+Tab takes the strip's next tab, which wraps from this last-opened one (verify-nav-keys-live), so any other tab.
+    if (await settle(() => currentTabId(app), id => id !== tab.tabId, 5000) === tab.tabId) {
+        return fail(`${BROKEN} Ctrl+Tab from the fullscreen page did not switch away from it`);
     }
     // Off, then off on every 100 ms read for one second: a re-entry inside that window is caught.
     let stuck = null;
@@ -2064,6 +2126,8 @@ async function runSession(names, plant = '') {
                 } catch (error) {
                     result.failures.push(`harness: ${error.message}`);
                 }
+                // A scenario that failed with its menu open would hide every later page (BLOCKING_LAYER_SELECTOR).
+                await closeMenu(app).catch(() => {});
                 results.push(result);
             }
             return results;
