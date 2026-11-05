@@ -8,8 +8,10 @@ rebrand survey, **this file wins**.
 
 **D-01 — Orca's tabs become real PB tabs.** Every Orca tab is a Lumino tab in PB's dock: it
 moves between modes and is organisable like Theia and browser tabs.
-- Terminals and agent sessions become Theia terminal tabs attached to orcad's PTY sessions
-  ("same terminals").
+- Terminals are **Theia terminals only** (Chris, 2026-11-04, second session). Orca uses them:
+  orcad gets a Theia-backed `IPtyProvider` (a fifth implementation beside Local, DaemonPtyAdapter,
+  DaemonPtyRouter and Degraded) that forwards spawn, write, resize, kill and data to Theia's
+  backend. Orca's terminal daemon is not used. Agent hook env vars pass through at spawn.
 - Files and diffs open in Theia's editor, with Orca worktrees opened as Theia workspace
   folders. Orca's own editor is not used.
 - Browser panes become PB web tabs (see `NOTE-orca-tab-parity-direction.md`).
@@ -47,13 +49,14 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
 3. Orca agents can be used in the extension. Rated very hard while the agent is running.
    **Research live sharing** in a spike, with no promise made. Resuming a stopped session
    (`--resume`) is the realistic floor.
-4. Same terminals. Rated medium to hard: Theia terminal tabs attach to orcad PTYs over Orca's
-   runtime RPC (see D-01).
+4. Same terminals. Now easy: all terminals are Theia terminals (D-01), so the extension and
+   Orca already share them.
 
 ## Runtime behaviour
 
-- **D-07 — Quit:** agents and the terminal daemon **keep running** after PB quits. PB
-  re-adopts them on the next launch. Per-OS reaping and re-adopt are needed.
+- **D-07 — Quit (revised 2026-11-04): agents end when PB quits.** Theia's backend owns the
+  PTYs and dies with PB; Orca's detached daemon is not used. Supersedes the earlier "keep running
+  and re-adopt" rule, which existed only because Orca's daemon made it possible.
 - **D-08 — Telemetry off:** set `ORCA_TELEMETRY_DISABLED=1` and `DO_NOT_TRACK=1`. The Orca
   cloud hosts (`*.onorca.dev`: push, login, relay, share, feedback) go on the egress allowlist
   so those features keep working.
@@ -79,6 +82,25 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
 - In scope: the Add-project UI and the credential-storage check.
 - Deferred: palette, About-dialog credit, renames.
 
+## Second-session decisions (2026-11-04, after the difficulty review)
+
+- **D-14 — Node:** orcad runs **slot-less on Theia's Node 24.19.0**. The exact-24.22.1 check in
+  `orcad-bundled-runtime.ts:19-33,63-76` fires only when the slot's runtime marker files exist;
+  without them orcad needs Node 24 or newer. No second runtime is shipped. Supersedes the
+  "Node 24.22.1 pinned by version and hash" line in D-04. Phase 59's spike proves the start.
+- **D-15 — Tab layout ownership: spike first.** orcad owns the tab/pane layout (240 files under
+  `src/main/runtime`; the client sends layout commands and applies frames). Read that protocol
+  and size "PB dock as orcad layout client" against "PB owns the layout" before choosing.
+- **D-16 — Bounded overlay.** The Orca overlay may touch only leaf files and a documented list
+  of seams; anything deeper needs an owner decision. Goal: rebases per Orca release stay mostly
+  automatic.
+- **D-17 — Origin check:** the Theia token gate also rejects sidecar requests whose Origin is
+  not PB's own pages. Closes the shared-loopback-cookie hole for every local page.
+- **D-18 — Add project:** keep Orca's own Add-project flow and sidebar remove unchanged. PB adds
+  no separate Add-project button. (Replaces the "Add-project UI in scope" line above.)
+- **D-19 — Agent mark:** when an Orca agent drives a PB web tab, PB's Theia chrome bar shows an
+  "agent is controlling this tab" mark with a Stop button. Stock browser windows unchanged.
+
 ## Spikes this direction needs
 
 1. Browser parity: what an Orca browser tab can do, and how PB chrome provides it
@@ -87,4 +109,4 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
    It now works under D-04, so the question is how, not whether.
 3. Claude extension: whether it runs on Theia 1.76, the pane registration for D-06 item 2, and
    live sharing (D-06 item 3).
-4. Same terminals: whether a Theia terminal can attach to an orcad PTY over the runtime RPC.
+4. Theia-backed PTY provider for orcad (D-01), and the layout-ownership spike (D-15).
