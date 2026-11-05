@@ -1214,6 +1214,8 @@ body[data-pb-mode="browsing"] .pb-tab-strip {
 
 #theia-top-panel > [id="powerbrowser.chrome-bar"] {
     flex: 0 0 100%;
+    /* BMK-04: a flex item's auto min-width is its content's; an overflowing toolbar would widen the whole bar. */
+    min-width: 0;
     height: calc(40px + var(--pb-bookmarks-toolbar-height, 0px));
     overflow: visible;
 }
@@ -1309,9 +1311,11 @@ body[data-pb-mode="browsing"] .pb-tab-strip {
    specificity, so min-width and padding would not move from inside the layer. */
 .pb-tab.is-pinned {
     justify-content: center;
-    width: 32px;
-    min-width: 32px;
-    max-width: 32px;
+    /* Content box: .pb-tab's 1px side borders make the painted tab 32px. Not border-box, which would also take the
+       1px top border out of the 28px height and drop the pinned tab's top edge below its neighbours'. */
+    width: 30px;
+    min-width: 30px;
+    max-width: 30px;
     padding: 0;
     gap: 0;
 }

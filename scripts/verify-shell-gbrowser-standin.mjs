@@ -332,6 +332,10 @@ const DATA_MEMBERS = new Map([
     { reason: 'extensions read gBrowser.tabs as data (tabs.query, the tab events) and WebDriver reads it through remote/shared/TabManager.sys.mjs; no gBrowser-receiver call site can name it', patchLine: null },
   ],
   [
+    'documentGlobal',
+    { reason: 'ext-tabs.js (tabs.create :618 and :727, tabs.move :1132) passes gBrowser to PrivateBrowsingUtils.isBrowserPrivate, which reads documentGlobal (toolkit/modules/PrivateBrowsingUtils.sys.mjs:36) outside the derivation scope; without it tabs.create of an extension or about: page on the shell window throws a TypeError', patchLine: null },
+  ],
+  [
     'webDriverTabs',
     {
       reason: 'WebDriver reaches the Theia frame and every overlay through gBrowser.webDriverTabs, read by the 050 TabManager hunk (remote/shared/TabManager.sys.mjs); the hunk must stay in the patch',

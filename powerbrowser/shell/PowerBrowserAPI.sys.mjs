@@ -4119,6 +4119,14 @@ export const PowerBrowserAPI = Object.freeze({
     }
     // WR-05: any navigation supersedes a first load still waiting in firstWebTabLoad.
     entry.firstLoad = null;
+    // A load from browser UI counts as interaction with the page it leaves, as a URL-bar load does in
+    // Firefox (nsDocShell::LoadURI marks it for a system principal); else Back skips that page. The overlay's
+    // initial about:blank is a session-history entry here, unlike Firefox's, so it stays unmarked.
+    const sh = entry.browser.browsingContext?.sessionHistory;
+    const leaving = !replace && sh && sh.index >= 0 ? sh.getEntryAtIndex(sh.index) : null;
+    if (leaving && leaving.URI?.spec !== "about:blank") {
+      leaving.hasUserInteraction = true;
+    }
     const triggeringPrincipal = Services.scriptSecurityManager.createNullPrincipal({});
     const loadFlags = replace ? Ci.nsIWebNavigation.LOAD_FLAGS_REPLACE_HISTORY : Ci.nsIWebNavigation.LOAD_FLAGS_NONE;
     // PROMPT-04 (D-06): a consumed open grant's principal, policy container and referrer replace the null principal.
@@ -7530,8 +7538,8 @@ function adoptPendingOverlay(kind, tabId, pcKey, actorRef) {
 // installShellFurniture entry, never from a bootstrap line of its own.
 // ---------------------------------------------------------------------------
 
-// The shell element the panel opens against (powerbrowser.xhtml). With iconBox null, the stock module finds an anchor
-// only through the browser's popupnotificationanchor attribute, so every overlay that asks names this id.
+// The xul:box the panel opens against (powerbrowser.xhtml), set as each asking overlay's popupnotificationanchor PROPERTY:
+// iconBox is null, and getAnchorFromBrowser throws on the attribute (getClassName of a string) and takes only a XULElement.
 const PROMPT_ANCHOR_ID = "powerbrowser-notification-anchor";
 // D-04: background requests waiting for their tab, per tab, oldest first. A fourth from the same tab evicts that tab's oldest.
 const PROMPT_QUEUE_CAP = 3;
@@ -7582,7 +7590,7 @@ function installPermissionPromptFurniture(window) {
     if ((tabId === null && !isPendingOverlay(browser)) || !options || options.dismissed) {
       return stockShow.apply(this, arguments);
     }
-    browser.setAttribute("popupnotificationanchor", PROMPT_ANCHOR_ID);
+    browser.popupnotificationanchor = window.document.getElementById(PROMPT_ANCHOR_ID);
     const record = {
       token: `prompt-${++promptTokenCounter}`,
       window,
@@ -7635,6 +7643,10 @@ function installPermissionPromptFurniture(window) {
   window.customElements.setElementCreationCallback("webrtc-preview", () => window.ChromeUtils.importESModule("chrome://browser/content/webrtc/webrtc-preview.mjs", { global: "current" }));
   // browser.js:631-634: the password template's username field upgrades on first use; LoginManagerPrompter fills and reads it.
   window.customElements.setElementCreationCallback("login-doorhanger-username-field", () => window.ChromeUtils.importESModule("chrome://browser/content/passwordmgr/login-doorhanger-username-field.mjs", { global: "current" }));
+  // LoginManagerPrompter's Save and Update run FillHelpers.showConfirmation (:34-44) before persistData (:485-490). It reads
+  // #identity-icon-box (powerbrowser.xhtml) and this window's ConfirmationHint (browser.js, not loaded here) and throws
+  // without them, so no login was stored. shortcut: the stock "saved" hint is not shown; render it in Theia if the copy asks.
+  window.ConfirmationHint = { show() {} };
   window.PopupNotifications = notifications;
   installNotificationBars(window, host);
 }
@@ -8739,9 +8751,21 @@ async function runPageMenuRow(id, pending, state, itemId) {
     case "context-media-playbackrate-200x":
       actor.mediaCommand(context.targetIdentifier, "playbackRate", PAGE_MENU_RATES[id.slice(-4)]);
       return { where: "done" };
-    case "context-video-fullscreen": // browser-context.js:112-113; the pick is the user's click on the row, carried as user input so the page's requestFullscreen is allowed
-      furnitureLazy.E10SUtils.wrapHandlingUserInput(data.browser.ownerDocument.defaultView, true, () => actor.mediaCommand(context.targetIdentifier, "fullscreen"));
+    case "context-video-fullscreen": { // browser-context.js:112-113; the pick is the user's click on the row, carried as user input so the page's requestFullscreen is allowed
+      // The Theia menu holds chrome focus and the overlay stays hidden until the frontend's next geometry push, and a
+      // request from outside the focused tab is denied: so the overlay is focused once shown (a hidden one cannot be).
+      const win = data.browser.ownerDocument.defaultView;
+      const run = frames => {
+        if (data.browser.style.visibility !== "visible" && frames > 0) {
+          win.requestAnimationFrame(() => run(frames - 1));
+          return;
+        }
+        data.browser.focus();
+        furnitureLazy.E10SUtils.wrapHandlingUserInput(win, true, () => actor.mediaCommand(context.targetIdentifier, "fullscreen"));
+      };
+      run(60);
       return { where: "done" };
+    }
     case "context-viewvideo":
     case "context-viewimage": // viewMedia (:1744-1778)
       return openGrant(state, data.principal, facts.mediaURL, pageMenuLoad(data, data.referrerInfo), "browser.tabs.loadInBackground");
@@ -8928,7 +8952,7 @@ function pageEditFacts(data) {
     contentSelected: data.selectionInfo ? !data.selectionInfo.docSelectionIsCollapsed : false,
     commands: Object.fromEntries(WEB_TAB_EDIT_CMDS.map(cmd => [cmd, controller?.isCommandEnabled(cmd) === true])),
     viewableTop: /^(https?|file):/i.test(data.browser.currentURI?.spec ?? ""),
-    frameSource: /^(https?|file):/i.test(data.docLocation ?? "") && pageToolsLazy.BrowserUtils.mimeTypeIsTextBased(data.contentType ?? ""),
+    frameSource: /^(https?|file):/i.test(data.docLocation ?? "") && pageToolsLazy.BrowserUtils.mimeTypeIsTextBased(data.context.target?.ownerDocument?.contentType ?? ""),
     canSpell,
     onMisspelling: !!spellInfo?.overMisspelling,
     spellSuggestions: spellInfo?.overMisspelling && Array.isArray(spellInfo.spellSuggestions) ? spellInfo.spellSuggestions : [],
@@ -9023,7 +9047,16 @@ async function pageMenuInspect(id, pending) {
   const DevToolsShim = webTabDevToolsShim();
   const tab = tabHostNodeOf(pending.data.browser);
   const target = pending.data.context.targetIdentifier;
-  (id === "context-inspect" ? DevToolsShim.inspectNode(tab, target) : DevToolsShim.inspectA11Y(tab, target)).catch(err => {
+  // gDevTools.inspectNode finds an open toolbox through descriptorFront.localTab, which root.js:250-257 sets only for a
+  // <tab> element, never this host's <hbox>; so the node is selected on the toolbox opened above, as its open-toolbox branch does.
+  const inspectNode = async () => {
+    const inspector = await toolbox.selectTool("inspector");
+    const nodeFront = await inspector.inspectorFront.getNodeActorFromContentDomReference(target);
+    if (nodeFront) {
+      await inspector.selection.setNodeFront(nodeFront, { reason: "browser-context-menu" });
+    }
+  };
+  (id === "context-inspect" ? inspectNode() : DevToolsShim.inspectA11Y(tab, target)).catch(err => {
     PowerBrowserAPI.log("error", `[web-tab] inspect failed (${err && err.name ? err.name : "error"})`);
   });
   return { where: "done" };
@@ -10823,3 +10856,12 @@ async function extensionInstallSite() {
   }
   return { ok: true, kind: "extensionInstallSite", where: await PowerBrowserAPI.openStockTab(url) };
 }
+
+// v1.5 live pass: ExtensionParent starts an installed extension's background at app startup on browserStartupPromise,
+// which resolves on sessionstore-windows-restored (only a stock window's SessionStore sends it) or on
+// extensions-late-startup, the topic upstream's own non-stock UI sends for this (browser/fxr/content/fxrui.js:144). The
+// shell window is not a stock window, so the shell sends it once that window has started.
+Services.obs.addObserver(function extensionLateStartup(win) {
+  Services.obs.removeObserver(extensionLateStartup, "browser-idle-startup-tasks-finished");
+  Services.obs.notifyObservers(win, "extensions-late-startup");
+}, "browser-idle-startup-tasks-finished");
