@@ -4,12 +4,12 @@ milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase: 39
 current_phase_name: v1.5 Close-out
-status: verifying
+status: executing
 stopped_at: Phase 39 UI-SPEC approved
-last_updated: "2026-11-05T18:06:22.410Z"
-last_activity: 2026-11-01
-last_activity_desc: Phase 38 merged in full with verification deferred; end-of-milestone live pass pending (owner)
-state_head: 164e7f27ebf46e6faa7017571a4039bc3db0b495
+last_updated: "2026-11-05T18:07:53.017Z"
+last_activity: 2026-11-05
+last_activity_desc: Phase 39 execution started
+state_head: e32a090f4152846aba0f2ddf8917c5ae7ec1079b
 progress:
   total_phases: 14
   completed_phases: 1
@@ -25,14 +25,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-20)
 
 **Core value:** A stranger can clone Power Browser, edit `configuration.toml`, drop in a logo, and build their own branded, working web browser without touching any other file — then reshape its GUI through Theia extensions without forking the platform.
-**Current focus:** all v1.5 phases executed; end-of-milestone live pass pending (owner)
+**Current focus:** Phase 39 — v1.5 Close-out
 
 ## Current Position
 
-Phase: 39 (v1.5 Close-out) — READY TO EXECUTE
-Plan: —
-Status: Phases 32-38 closed with verification deferred to the end-of-milestone pass (.planning/v1.5-LIVE-PASS.md)
-Last activity: 2026-11-01 — Phase 38 merged in full (50b664d3; verification human_needed, live checks deferred)
+Phase: 39 (v1.5 Close-out) — EXECUTING
+Plan: 1 of 20
+Status: Executing Phase 39
+Last activity: 2026-11-05 — Phase 39 execution started
 
 **v1.5 parallel-lane run:** lanes p33..p37 were cut from 23c08bb5 and merged into main in order 36 (aa8989d9), 34 (8143fedd), 37 (14319419), 35 (68a38581), 33 (d6f9fcbb). Each was reviewed and fixed on main. All live checks are deferred to one end-of-milestone pass.
 
