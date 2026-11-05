@@ -42,7 +42,8 @@ evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: paste-popup PASS (C
 ### 6. SC1: page context menu for every target, and each item works
 expected: Right-click a link, image, video, audio, a selection, an editable field, a frame and a blank area. The rows and order match the stock window's menu (open link in new tab, copy link, save image, search for selection, view source, Inspect and the rest). Each row does what it says, including Open in new tab, Copy Link, Save Page As, Bookmark This Page and the extension entry (scenarios context-menu, menu-page-tools, menu-edit, menu-spelling, menu-save, extension-entry). The search row (WR-02) loads the engine results page
 result: skipped
-reason: "Deferred follow-up: context-menu, menu-page-tools, menu-spelling, menu-save and extension-entry PASS, with the C09 (View Frame Source) and C14 (Inspect selects the node) product fixes in 1642f2d7. menu-edit fails only on Copy Image (C24, cause not separated: Wayland image targets or the product)"
+reason: "Deferred follow-up: context-menu, menu-page-tools, menu-spelling, menu-save and extension-entry PASS, with the C09 (View Frame Source) and C14 (Inspect selects the node) product fixes in 1642f2d7. The one remaining blocker is Copy Image (C24, backlog 999.9): menu-edit fails only on it"
+live: "39-02 2026-11-05, main a72d906b: C11 fixed in page-context-menu.ts (focusPageIfLatest) and PowerBrowserAPI.webTabFocus (no page focus while a page menu is pending); context-menu PASS with the delayed-dismissal leg; stale-dismiss-focus and stale-focus-unguarded red; closeMenu pre-focus removed"
 
 ### 7. SC1: the IDE keeps Theia's own menu
 expected: Right-click in an editor, the explorer and the terminal: Theia's menu opens, not the page menu. Right-click while a web tab is open in the background never opens a page menu for the hidden tab (menu-not-in-ide, background-menu)

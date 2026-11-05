@@ -792,7 +792,7 @@ Plans:
 **Source phase:** 35
 **Deferred at:** 2026-11-04 during /gsd-verify-work 35 session completion
 **Follow-ups:**
-- [ ] Test 6: C11: a page menu dismissal sends widget.focusPage() a round trip later; when it lands after the next menu opened, chrome focus ends on <body>. The harness now focuses the Theia frame first; the product race itself is unfixed (deferred 2026-11-04)
+- [x] Test 6: C11: a page menu dismissal sends widget.focusPage() a round trip later; when it lands after the next menu opened, chrome focus ends on <body>. The harness now focuses the Theia frame first; the product race itself is unfixed (deferred 2026-11-04) — fixed in 39-02 (a72d906b)
 
 ### Phase 999.11: Follow-up — Phase 36 deferred UAT follow-up: Test 9 (BACKLOG)
 
