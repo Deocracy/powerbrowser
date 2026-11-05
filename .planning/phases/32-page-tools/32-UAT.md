@@ -1,23 +1,16 @@
 ---
-status: testing
+status: partial
 phase: 32-page-tools
 source: [32-VERIFICATION.md, 32-REVIEW.md]
 started: 2026-11-01T00:00:00Z
-updated: 2026-11-01T00:00:00Z
+updated: 2026-11-05T01:52:09.504Z
 ---
 
 Deferred to the one end-of-milestone pass (Chris, 2026-10-31). Run on `objdir/dist/bin/powerbrowser` with `-purgecaches` after any shell-module change.
 
 ## Current Test
 
-number: 1
-name: Crashed tab — crash UI look, Reload tab, and WR-08 navigate-after-restore
-expected: |
-  The contracted copy "This tab crashed. Reload to try again." and the Reload tab button sit where the page was,
-  never a blank page or the stock about:tabcrashed copy. Reload tab brings the page back with its history.
-  Crash it again, then navigate from the pill: the new URL loads in that tab with the kept history behind it;
-  Back and Forward are disabled while the tab is crashed.
-awaiting: user response
+[testing complete]
 
 ## Tests
 
