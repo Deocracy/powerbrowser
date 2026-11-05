@@ -176,12 +176,51 @@ Filled by the roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
+| RUN-01 | Phase 59 | Pending |
+| RUN-02 | Phase 59 | Pending |
+| RUN-03 | Phase 61 | Pending |
+| RUN-04 | Phase 61 | Pending |
+| RUN-05 | Phase 61 | Pending |
+| RUN-06 | Phase 66 | Pending |
+| RUN-07 | Phase 66 | Pending |
+| RUN-08 | Phase 66 | Pending |
+| RUN-09 | Phase 66 | Pending |
+| OVL-01 | Phase 61 | Pending |
+| OVL-02 | Phase 67 | Pending |
+| OVL-03 | Phase 67 | Pending |
+| OVL-04 | Phase 59 | Pending |
+| OVL-05 | Phase 61 | Pending |
+| OVL-06 | Phase 67 | Pending |
+| TERM-01 | Phase 62 | Pending |
+| TERM-02 | Phase 62 | Pending |
+| TERM-03 | Phase 62 | Pending |
+| TERM-04 | Phase 62 | Pending |
+| TAB-01 | Phase 63 | Pending |
+| TAB-02 | Phase 63 | Pending |
+| TAB-03 | Phase 60 | Pending |
+| TAB-04 | Phase 63 | Pending |
+| TAB-05 | Phase 64 | Pending |
+| TAB-06 | Phase 63 | Pending |
+| TAB-07 | Phase 64 | Pending |
+| TAB-08 | Phase 64 | Pending |
+| TAB-09 | Phase 64 | Pending |
+| BRW-01 | Phase 60 | Pending |
+| BRW-02 | Phase 65 | Pending |
+| BRW-03 | Phase 65 | Pending |
+| BRW-04 | Phase 65 | Pending |
+| BRW-05 | Phase 65 | Pending |
+| EXT-01 | Phase 59 | Pending |
+| EXT-02 | Phase 62 | Pending |
+| EXT-03 | Phase 60 | Pending |
+| INJ-01 | Phase 66 | Pending |
+| PLAT-01 | Phase 67 | Pending |
+| PLAT-02 | Phase 67 | Pending |
 
 **Coverage:**
 - v1 requirements: 39 total
-- Mapped to phases: 0
-- Unmapped: 39 ⚠️
+- Mapped to phases: 39
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-11-04*
-*Last updated: 2026-11-04 after owner decisions D-01..D-29 and the adversarial ownership review*
+*Last updated: 2026-11-04 after owner decisions D-01..D-29, the adversarial ownership review and roadmap creation (phases 59-67)*
