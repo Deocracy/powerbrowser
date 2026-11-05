@@ -40,6 +40,14 @@
  *                       with the selection on a served engine. Prints
  *                       `context-menu timing: p50 <ms> p95 <ms> n=<n>` and, per
  *                       target, the context flags the shim captured (probe 35-1).
+ *                       Stale dismissal (C11, 39-02): menu A's dismissal reply is held
+ *                       800 ms, menu B opens inside it; 600 ms after A's reply lands
+ *                       B is still open and keyboard focused, and when Escape closes
+ *                       B (no pre-focus) the page takes focus only from B's own
+ *                       dismissal, never earlier from A's. Then menu C's dismissal
+ *                       is held until menu D's push and D renders 400 ms later: D
+ *                       still opens keyboard focused (chrome drops a page focus
+ *                       request while a page menu is pending).
  *   menu-not-in-ide     A right-click on the IDE's main-area tab opens Theia's own
  *                       .lm-Menu and pushes no pageContextMenu within 1500 ms.
  *                       Scored only when context-menu passed (CONTROL_OF).
@@ -140,6 +148,7 @@ import { join } from 'node:path';
 import {
     BROKEN,
     WEB_TAB_STATE_EVENT,
+    chromeActiveTabId,
     firedRows,
     focusOverlay,
     focusTheiaFrame,
@@ -669,13 +678,11 @@ async function centreOf(app, context, selector) {
 const ESCAPE = { key: 'Escape', code: 'Escape', keyCode: 27 };
 
 /**
- * Closes whatever .lm-Menu is open and waits until none is. The Theia frame is focused first: the last menu's
- * dismissal hands focus to the page (widget.focusPage) a round trip later, and when that lands after the next
- * menu opened, chrome's focus is on <body> and the Escape never reaches the menu.
+ * Closes whatever .lm-Menu is open and waits until none is. No pre-focus: the product ignores a stale dismissal
+ * (C11, 39-02), so the open menu keeps keyboard focus and the Escape reaches it directly.
  */
 async function closeMenu(app) {
     if (await menuRows(app)) {
-        await focusTheiaFrame(app);
         await pressKey(app, ESCAPE);
         await settle(() => menuRows(app), rows => rows === null, 3000);
     }
@@ -786,6 +793,34 @@ async function applyMenuPlants(app, plant, note) {
             note('PLANT ide-menu-leak applied');
         }
     }
+    if (plant === 'stale-dismiss-focus') {
+        // C11 (39-02): the latest-menu guard is gone, so every dismissal hands the page focus however late it lands.
+        if (await probe(app, `const menu = get('PageContextMenuContribution');
+            const planted = function (widget) { widget.focusPage(); };
+            planted.__pbPlanted = true;
+            menu.focusPageIfLatest = planted;
+            return menu.focusPageIfLatest.__pbPlanted === true;`) === true) {
+            note('PLANT stale-dismiss-focus applied');
+        }
+    }
+    if (plant === 'stale-focus-unguarded') {
+        // C11 (39-02): chrome focuses the page on every webTabFocus, even one sent before the newest menu rendered.
+        if (await inChrome(app, `const P = ChromeUtils.importESModule('chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs').PowerBrowserGroupParent;
+            const receive = P.prototype.receiveMessage;
+            const planted = function (message) {
+                const o = message && message.name === 'PowerBrowserGroupMutation' && message.data && message.data.kind === 'webTabFocus' ? overlayOf(message.data.tabId) : null;
+                if (o) {
+                    o.focus();
+                    return Promise.resolve({ ok: true, kind: 'webTabFocus', where: 'done' });
+                }
+                return receive.call(this, message);
+            };
+            planted.__pbPlanted = true;
+            P.prototype.receiveMessage = planted;
+            return P.prototype.receiveMessage.__pbPlanted === true;`) === true) {
+            note('PLANT stale-focus-unguarded applied');
+        }
+    }
     if (plant === 'referrer-dropped') {
         if (await inChrome(app, `Services.prefs.setIntPref('network.http.sendRefererHeader', 0); return Services.prefs.getIntPref('network.http.sendRefererHeader') === 0;`) === true) {
             note('PLANT referrer-dropped applied');
@@ -812,6 +847,164 @@ const percentile = (values, p) => {
     const sorted = [...values].sort((a, b) => a - b);
     return sorted[Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1)];
 };
+
+const STALE_DISMISSAL = 'a stale dismissal moved focus off the open menu';
+
+/** True when chrome's focus is on the Theia frame and the Theia frame's focus is inside the open .lm-Menu. */
+const menuFocused = async app => await inChrome(app, `return document.activeElement === ${THEIA_FRAME};`) === true
+    && await app.evaluate(`!!document.activeElement && !!document.activeElement.closest('.lm-Menu')`) === true;
+
+/**
+ * Holds the dismissal reply of menu `menuId` for `ms` on the PageContextMenuContribution singleton; the request
+ * itself leaves at once, so chrome closes the menu on time and only the frontend's reaction is late. Harness only:
+ * restored by releaseDismissal.
+ */
+const holdDismissal = (app, menuId, ms) => probe(app, `const menu = get('PageContextMenuContribution');
+    const send = window.__pbHeldSend ?? menu.send;
+    window.__pbHeldSend = send;
+    window.__pbHeldLanded = false;
+    const held = function (tabId, id, itemId, path) {
+        const sent = send.call(this, tabId, id, itemId, path);
+        if (itemId !== null || id !== ${Number(menuId)}) {
+            return sent;
+        }
+        const land = () => { window.__pbHeldLanded = true; };
+        return sent.then(reply => sleep(${Number(ms)}).then(() => { land(); return reply; }), error => sleep(${Number(ms)}).then(() => { land(); throw error; }));
+    };
+    held.__pbHeld = true;
+    menu.send = held;
+    return menu.send.__pbHeld === true;`);
+
+/**
+ * Holds the dismissal reply of menu `menuId` until the next menu's push arrives, and renders that menu `ms` later:
+ * the stale reply lands after chrome focused the Theia frame for the new menu but before the frontend shows it.
+ */
+const holdUntilNextMenu = (app, menuId, ms) => probe(app, `const menu = get('PageContextMenuContribution');
+    const send = window.__pbHeldSend ?? menu.send;
+    window.__pbHeldSend = send;
+    window.__pbHeldLanded = false;
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const held = function (tabId, id, itemId, path) {
+        const sent = send.call(this, tabId, id, itemId, path);
+        if (itemId !== null || id !== ${Number(menuId)}) {
+            return sent;
+        }
+        const land = () => { window.__pbHeldLanded = true; };
+        return sent.then(reply => gate.then(() => { land(); return reply; }), error => gate.then(() => { land(); throw error; }));
+    };
+    held.__pbHeld = true;
+    menu.send = held;
+    const late = function (detail) {
+        delete menu.open;
+        release();
+        setTimeout(() => menu.open(detail), ${Number(ms)});
+    };
+    late.__pbHeld = true;
+    menu.open = late;
+    return menu.send.__pbHeld === true && menu.open.__pbHeld === true;`);
+
+const releaseDismissal = app => probe(app, `const menu = get('PageContextMenuContribution');
+    if (window.__pbHeldSend) { menu.send = window.__pbHeldSend; }
+    delete window.__pbHeldSend;
+    if (menu.open.__pbHeld) { delete menu.open; }
+    return menu.send.__pbHeld !== true && menu.open.__pbHeld !== true;`);
+
+const heldLanded = app => probe(app, 'return window.__pbHeldLanded === true;');
+
+/**
+ * C11 (39-02): menu B opened inside menu A's dismissal round trip keeps keyboard focus, and the page takes focus
+ * when B closes only from B's own dismissal. Returns a failure reason, or null.
+ */
+async function staleDismissal(app, page, tabId) {
+    const point = await centreOf(app, page, '#blank');
+    const a = await openMenuAt(app, page, tabId, point);
+    if (!a.push) {
+        return `no pageContextMenu push for ${tabId} after a right-click on the blank area`;
+    }
+    if (!a.ms) {
+        return 'the blank area\'s pageContextMenu push showed no .lm-Menu in the Theia frame';
+    }
+    try {
+        if (await holdDismissal(app, a.push.menuId, 800) !== true) {
+            return `${BROKEN} the dismissal hold could not be installed on PageContextMenuContribution`;
+        }
+        await pressKey(app, ESCAPE);
+        if (await settle(() => menuRows(app), rows => rows === null, 3000) !== null) {
+            return `${BROKEN} Escape did not close menu A`;
+        }
+        const b = await openMenuAt(app, page, tabId, point);
+        if (!b.push || !b.ms) {
+            return `${BROKEN} menu B for the stale-dismissal leg did not open`;
+        }
+        if (await heldLanded(app)) {
+            return `${BROKEN} menu A's dismissal landed before menu B opened, so the race was not reproduced`;
+        }
+        if (await settle(() => heldLanded(app), v => v === true, 3000) !== true) {
+            return `${BROKEN} menu A's held dismissal never landed`;
+        }
+        await sleep(600);
+        if (await menuRows(app) === null || !await menuFocused(app)) {
+            return `${STALE_DISMISSAL} (menu B is closed or unfocused 600 ms after menu A's dismissal landed)`;
+        }
+        // The widget holds a page focus until the menu hides; a stale one would fire when B closes, before B's own dismissal.
+        if (await probe(app, `return get('WebTabChannel').widgetOf(${JSON.stringify(tabId)})?.focusWanted === true;`) === true) {
+            return `${STALE_DISMISSAL} (menu A's dismissal queued a page focus while menu B is open)`;
+        }
+        // B's own dismissal is held too: the page may take focus only when it lands, never as A's leftover.
+        if (await holdDismissal(app, b.push.menuId, 1500) !== true) {
+            return `${BROKEN} the dismissal hold could not be re-armed for menu B`;
+        }
+        await pressKey(app, ESCAPE);
+        if (await settle(() => menuRows(app), rows => rows === null, 3000) !== null) {
+            return `${STALE_DISMISSAL} (Escape with no pre-focus did not reach menu B)`;
+        }
+        await sleep(500);
+        if (await heldLanded(app) !== true && await chromeActiveTabId(app) === tabId) {
+            return `${STALE_DISMISSAL} (the page took focus when menu B closed, before menu B's own dismissal landed)`;
+        }
+        if (await settle(() => heldLanded(app), v => v === true, 3000) !== true) {
+            return `${BROKEN} menu B's held dismissal never landed`;
+        }
+        if (await settle(() => chromeActiveTabId(app), id => id === tabId, 3000) !== tabId) {
+            return 'menu B closed with no row run and the page did not get focus back';
+        }
+    } finally {
+        await releaseDismissal(app);
+    }
+    // Menu C's dismissal lands after chrome focused the Theia frame for menu D and before D renders: chrome drops it.
+    const c = await openMenuAt(app, page, tabId, point);
+    if (!c.push || !c.ms) {
+        return `${BROKEN} menu C for the stale-dismissal leg did not open`;
+    }
+    try {
+        if (await holdUntilNextMenu(app, c.push.menuId, 400) !== true) {
+            return `${BROKEN} the pre-render hold could not be installed on PageContextMenuContribution`;
+        }
+        await pressKey(app, ESCAPE);
+        if (await settle(() => menuRows(app), rows => rows === null, 3000) !== null) {
+            return `${BROKEN} Escape did not close menu C`;
+        }
+        const d = await openMenuAt(app, page, tabId, point);
+        if (!d.push || !d.ms) {
+            return `${BROKEN} menu D for the stale-dismissal leg did not open`;
+        }
+        if (await settle(() => heldLanded(app), v => v === true, 3000) !== true) {
+            return `${BROKEN} menu C's held dismissal never landed`;
+        }
+        await sleep(600);
+        if (await menuRows(app) === null || !await menuFocused(app)) {
+            return `${STALE_DISMISSAL} (menu D is closed or unfocused after menu C's dismissal landed before D rendered)`;
+        }
+        await pressKey(app, ESCAPE);
+        if (await settle(() => menuRows(app), rows => rows === null, 3000) !== null) {
+            return `${STALE_DISMISSAL} (Escape with no pre-focus did not reach menu D)`;
+        }
+        return null;
+    } finally {
+        await releaseDismissal(app);
+    }
+}
 
 async function contextMenu({ app, pages, plant, fail, note }) {
     await applyMenuPlants(app, plant, note);
@@ -857,6 +1050,11 @@ async function contextMenu({ app, pages, plant, fail, note }) {
         { name: 'frame', selector: '#frame', when: [...pageNames, 'inFrame', 'frameTarget', 'frameSource'] },
         { name: 'blank', selector: '#blank', when: pageNames },
     ];
+    // First, so a stale-dismissal plant goes red here and not by chance in the target loop's own menu changes.
+    const stale = await staleDismissal(app, page, tabId);
+    if (stale) {
+        return fail(stale);
+    }
     const times = [];
     for (const target of targets) {
         if (target.select) {
@@ -2185,6 +2383,9 @@ const PLANTS = [
     { plant: 'background-check-off', target: 'background-menu', run: ['context-menu', 'background-menu'], expect: 'a hidden tab opened a menu' },
     { plant: 'ide-menu-leak', target: 'menu-not-in-ide', run: ['context-menu', 'menu-not-in-ide'], expect: 'the IDE right-click pushed a page menu' },
     { plant: 'referrer-dropped', target: 'context-menu', run: ['context-menu'], expect: 'new tab request carried no Referer' },
+    // 39-02 (C11, PROMPT-04).
+    { plant: 'stale-dismiss-focus', target: 'context-menu', run: ['context-menu'], expect: 'a stale dismissal moved focus off the open menu' },
+    { plant: 'stale-focus-unguarded', target: 'context-menu', run: ['context-menu'], expect: 'a stale dismissal moved focus off the open menu' },
     // 35-04 (PROMPT-04).
     { plant: 'inspect-no-select', target: 'menu-page-tools', run: ['menu-page-tools'], expect: 'inspector did not select the clicked node' },
     { plant: 'copy-row-unwired', target: 'menu-edit', run: ['menu-edit'], expect: 'copy did not reach the clipboard' },
@@ -2206,10 +2407,32 @@ const PLANTS = [
     { plant: 'tab-switch-stays-fullscreen', target: 'element-fullscreen', run: ['element-fullscreen'], expect: 'tab switch left fullscreen on' },
 ];
 
-async function selfTest() {
+/** --self-test --scenario a,b: only the plants targeting a or b, and a clean control over the scenarios they run. */
+function selectedPlants(args) {
+    if (!args.includes('--scenario')) {
+        return { plants: PLANTS, control: Object.keys(SCENARIOS) };
+    }
+    const only = selectedScenarios(args);
+    const plants = PLANTS.filter(c => only.includes(c.target));
+    if (!plants.length) {
+        throw new Error(`no plant targets ${only.join(', ')}`);
+    }
+    const run = new Set(plants.flatMap(c => c.run));
+    return { plants, control: Object.keys(SCENARIOS).filter(n => run.has(n)) };
+}
+
+async function selfTest(args) {
     let failed = 0;
+    let plants;
+    let control;
     try {
-        const clean = await runSession(Object.keys(SCENARIOS));
+        ({ plants, control } = selectedPlants(args));
+    } catch (error) {
+        console.error(`${NAME} --self-test: ${error.message}`);
+        return 1;
+    }
+    try {
+        const clean = await runSession(control);
         const red = clean.filter(r => r.failures.length || r.notScored);
         if (red.length) {
             failed++;
@@ -2221,7 +2444,7 @@ async function selfTest() {
         console.error(`${NAME} --self-test: FAIL -- harness: the clean control could not be driven: ${error.message}`);
         return 1;
     }
-    for (const c of PLANTS) {
+    for (const c of plants) {
         let results;
         try {
             results = await runSession(c.run, c.plant);
@@ -2250,7 +2473,8 @@ async function selfTest() {
         console.error(`${NAME} --self-test: FAIL -- ${failed} case(s) did not behave as required`);
         return 1;
     }
-    console.log(`${NAME} --self-test: PASS -- the clean control is green and all ${PLANTS.length} planted faults went red: ${PLANTS.map(c => c.plant).join(', ')}`);
+    const limited = plants.length < PLANTS.length ? ` (limited by --scenario; ${PLANTS.length - plants.length} plant(s) not run)` : '';
+    console.log(`${NAME} --self-test: PASS -- the clean control is green and all ${plants.length} planted faults went red: ${plants.map(c => c.plant).join(', ')}${limited}`);
     return 0;
 }
 
@@ -2265,7 +2489,7 @@ async function main(args) {
 
 const args = process.argv.slice(2);
 if (args.includes('--help')) {
-    console.log(`Usage: node scripts/${NAME}.mjs [--scenario ${Object.keys(SCENARIOS).join(',')}] | --self-test`);
+    console.log(`Usage: node scripts/${NAME}.mjs [--scenario ${Object.keys(SCENARIOS).join(',')}] | --self-test [--scenario a,b]`);
     process.exit(0);
 }
-process.exit(args.includes('--self-test') ? await selfTest() : await main(args));
+process.exit(args.includes('--self-test') ? await selfTest(args) : await main(args));

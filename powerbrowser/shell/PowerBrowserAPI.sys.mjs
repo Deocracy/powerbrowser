@@ -4266,12 +4266,12 @@ export const PowerBrowserAPI = Object.freeze({
     return "done";
   },
 
-  /** GUI-02 (14.1-01): keyboard entry into the page (UI-SPEC A14): focuses the overlay's docshell. */
+  /** GUI-02 (14.1-01): keyboard entry into the page (UI-SPEC A14). C11 (39-02): a request reaching chrome while a page menu is pending predates it. */
   webTabFocus(tabId) {
     const entry = webTabs.get(tabId);
-    if (!entry) {
-      return "unknown-tab";
-    }
+    if (!entry) { return "unknown-tab"; }
+    const menu = pageMenus.get(entry.browser.ownerDocument.defaultView)?.pending;
+    if (menu && Date.now() - menu.at <= PAGE_MENU_TTL_MS) { return "menu-pending"; }
     entry.browser.focus();
     return "done";
   },
