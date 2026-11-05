@@ -25,9 +25,12 @@ widgets, as long as Orca's features and orcad keep working and new Orca releases
 taken.
 
 **D-04 — Orca is built from source at a pinned tag**, using Orca's own `build:web` and
-`build:orcad` (pnpm). Changes go in as a **build-time overlay first** (whole files swapped by
-PB build config) and **small regenerated patches only where a file cannot be swapped**. An
-automated rebase job runs for each Orca release, the same idea as `rebase-upstream`.
+`build:orcad` (pnpm). Changes go in as an **additive overlay** (revised 2026-11-04 after
+`ADVERSARIAL-orca-ownership.md`): **new PB files first**, then **one-to-few-line regenerated
+patches at declared seams**. **Whole-file swaps of upstream paths are forbidden**: a swapped
+file changed in 19 of 20 release steps and silently drops upstream fixes. An automated rebase
+job runs **weekly** against the newest tag (D-26); Orca ships about 5 releases a week, and the
+first pin 1.4.248 was already one behind (1.4.249) on the day it was chosen.
 - PB does not rely on Orca accepting upstream changes. Generic changes may be offered upstream
   later, to shrink the stack.
 - This replaces seed decision 1 ("consumed by version, never patched or vendored") and the
@@ -88,12 +91,19 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
   `orcad-bundled-runtime.ts:19-33,63-76` fires only when the slot's runtime marker files exist;
   without them orcad needs Node 24 or newer. No second runtime is shipped. Supersedes the
   "Node 24.22.1 pinned by version and hash" line in D-04. Phase 59's spike proves the start.
-- **D-15 — Tab layout ownership: spike first.** orcad owns the tab/pane layout (240 files under
-  `src/main/runtime`; the client sends layout commands and applies frames). Read that protocol
-  and size "PB dock as orcad layout client" against "PB owns the layout" before choosing.
-- **D-16 — Bounded overlay.** The Orca overlay may touch only leaf files and a documented list
-  of seams; anything deeper needs an owner decision. Goal: rebases per Orca release stay mostly
-  automatic.
+- **D-15 — Tab layout: PB's dock owns the arrangement (corrected 2026-11-04).** The earlier
+  premise was wrong: in shipped and web builds the **renderer** owns the layout; orcad ownership
+  is the dark `ORCA_LAYOUT_OWNER=main` build switch (`src/shared/layout-owner-switch.ts`), off
+  and unshippable. Decision: **one Orca pane = one Lumino tab**; Orca's in-tab splits and tab
+  groups are **flattened** into Lumino splits (Chris accepted the trade-off). Spike question now:
+  how PB's dock observes the client's layout state, and how to mount Orca's pane components in
+  Lumino widgets (both use React 19.2.8).
+- **D-16 — Bounded overlay (revised 2026-11-04).** "Leaf files" means **files PB adds**. Seam
+  patches are capped (about ten) and named: PTY provider registration
+  (`ipc/pty/provider/registry.ts` and/or `daemon/daemon-provider-state.ts`), browser provider kind
+  (`orcad/orcad-browser-provider.ts`), web build entry (`vite.web.config.ts`), and possibly the
+  orcad entry. Six such one-line patches applied cleanly in 19 of 21 releases. Anything deeper
+  needs an owner decision.
 - **D-17 — Origin check:** the Theia token gate also rejects sidecar requests whose Origin is
   not PB's own pages. Closes the shared-loopback-cookie hole for every local page.
 - **D-18 — Add project:** keep Orca's own Add-project flow and sidebar remove unchanged. PB adds
@@ -122,6 +132,20 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
 
 - **D-25 — Run mode: interactive per phase.** Chris answers each phase's discuss step; execution
   runs between. Not `/gsd-autonomous` for this milestone.
+
+- **D-26 — Re-pin weekly, automated.** The rebase job runs weekly against the newest Orca tag;
+  a green run re-pins by itself, a conflict stops for a human.
+- **D-27 — Offer the generic seams upstream.** Terminal provider, browser provider and extra web
+  entry go to Orca as pull requests once each works in PB. PB never depends on acceptance.
+- **D-28 — Terminal seam size.** The Theia-backed `IPtyProvider` implements the 21 required
+  members (serialize/revive, buffer snapshots, foreground-process queries, listProcesses, and the
+  rest), not five operations; the contract changed in 9 of 21 releases, and orcad still probes
+  node-pty at startup. Amends D-01.
+- **D-29 — D-03 restated.** Orca's tab-group and tab-bar are not rendered in PB's entry; Orca's
+  pane components are hosted in Lumino widgets. The mobile fork (D-21/22) is held to the same
+  additive rule. D-23 holds because no protocol file is touched; protocol skew between a newer
+  stock mobile app and the pinned orcad is a recorded risk (unverified whether newer apps refuse
+  an older orcad).
 
 ## Spikes this direction needs
 
