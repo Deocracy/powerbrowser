@@ -101,6 +101,28 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
 - **D-19 — Agent mark:** when an Orca agent drives a PB web tab, PB's Theia chrome bar shows an
   "agent is controlling this tab" mark with a Stop button. Stock browser windows unchanged.
 
+- **D-20 — Remote hosts stay in.** orcad routes only the `local` host through the swappable PTY
+  provider (`ipc/pty/provider/registry.ts:73-78`); SSH and paired-server (`runtime:`) hosts have
+  their own paths that never touch the local daemon, so the Theia-only terminal rule costs them
+  nothing. Remote may be PB-to-PB only if that is what works.
+- **D-21 — Orca mobile is forked too.** Its source is in the Orca repo (`mobile/`, Expo, iOS and
+  Android, ~2,200 source files) and is overlaid under D-04/D-16 like the client. Mobile is a remote
+  control over orcad's runtime (sessions, terminals, files, browser, automations), not a layout
+  mirror; PB-specific views are added to it.
+- **D-22 — Mobile distribution: Android now, iOS later.** v1.7 builds and releases the Android
+  APK on GitHub Releases. iOS waits for a signing decision; the 2026-11-01 no-store rule is
+  unchanged for now.
+
+- **D-23 — Mobile fork is its own milestone after v1.7.** v1.7 keeps orcad's mobile-facing
+  protocol (pairing relay, runtime RPC) unmodified so the stock Orca mobile app pairs with PB's
+  orcad meanwhile. Capture the fork as a seed for the next milestone.
+
+- **D-24 — Live checks pass on Linux only.** All three OSes are built; macOS and Windows get a
+  smoke test when a machine is available, as in v1.6.
+
+- **D-25 — Run mode: interactive per phase.** Chris answers each phase's discuss step; execution
+  runs between. Not `/gsd-autonomous` for this milestone.
+
 ## Spikes this direction needs
 
 1. Browser parity: what an Orca browser tab can do, and how PB chrome provides it
