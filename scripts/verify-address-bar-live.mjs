@@ -519,6 +519,12 @@ async function installEngine(app, pages) {
                     url: ${JSON.stringify(`${pages.origin}/two/search?q={searchTerms}`)},
                     suggestUrl: ${JSON.stringify(`${pages.origin}/two/suggest?q={searchTerms}`)},
                 });
+            // The shipped SearchEngines policy sets its Default once, when the first stock window
+            // restores (token-cookie opens one); recording that Default as applied keeps One the default.
+            const policyDefault = Services.policies.getActivePolicies()?.SearchEngines?.Default;
+            if (policyDefault) {
+                Services.prefs.setStringPref('browser.policies.runOncePerModification.setDefaultSearchEngine', String(policyDefault));
+            }
             await SearchService.setDefault(engine, SearchService.CHANGE_REASON.USER);
             return (await SearchService.getDefault()).name;
         } catch (e) {
@@ -4658,7 +4664,9 @@ const unbookmark = (app, url) => inChrome(app, `return (async () => {
     }
 })();`);
 
-const clickStar = app => app.evaluate(`(() => { const s = document.querySelector('.pb-address-star'); if (!s || s.disabled) return false; s.click(); return true; })()`);
+// A pointer click focuses the Theia frame first, so a key pressed at the parent afterwards reaches the editor.
+const clickStar = async app => await focusTheiaFrame(app) === true
+    && app.evaluate(`(() => { const s = document.querySelector('.pb-address-star'); if (!s || s.disabled) return false; s.click(); return true; })()`);
 
 /** Navigates the session tab to `path`, clears its bookmarks chrome-side, and waits for the outline star. */
 async function bookmarkPageOf(ctx, tabId, path) {
@@ -4680,7 +4688,8 @@ async function bookmarkPageOf(ctx, tabId, path) {
 
 /** Waits for the editor; Esc closes it and the star must take focus back. Returns the editor seen. */
 async function expectEditorThenEsc(app, fail, label) {
-    const seen = await settle(() => readStar(app), v => !!v.editor);
+    // The editor focuses its Name field in a mount effect, a frame after it first draws.
+    const seen = await settle(() => readStar(app), v => !!v.editor?.nameFocused);
     if (!seen.editor) {
         fail(`${label} opened no bookmark editor; star ${JSON.stringify(seen)}`);
         return null;
@@ -4832,7 +4841,7 @@ async function bookmarkEditor(ctx) {
             return fail(`${BROKEN} the seeded bookmark is not in Other Bookmarks: ${JSON.stringify(seed)}`);
         }
         await clickStar(app);
-        let view = await settle(() => readStar(app), v => !!v.editor);
+        let view = await settle(() => readStar(app), v => !!v.editor?.nameSelected);
         if (!view.editor || view.editor.heading !== EDIT_BOOKMARK_HEADING || view.editor.name !== 'Editor Seed' || !view.editor.nameSelected
             || view.editor.folders.length !== 3) {
             return fail(`the star on a bookmarked page must open the editor headed ${JSON.stringify(EDIT_BOOKMARK_HEADING)} with Name "Editor Seed" selected and three folders; saw ${JSON.stringify(view.editor)}`);
@@ -5062,10 +5071,11 @@ const readOpenMenus = app => app.evaluate(`JSON.stringify([...document.querySele
         disabled: i.classList.contains('lm-mod-disabled'),
     }))))`).then(JSON.parse);
 
-/** Points at the row `label` of visible menu `index` as a pointer does (move, then mouse-up unless `hover`); `mods` such as { ctrlKey: true }. */
-const pointMenuRow = (app, index, label, { hover = false, mods = {} } = {}) => app.evaluate(`(() => {
+/** Points at the row `label` of visible menu `index` as a pointer does (move, then mouse-up unless `hover`); `mods` such as { ctrlKey: true }; `last` takes the last row so labelled. */
+const pointMenuRow = (app, index, label, { hover = false, mods = {}, last = false } = {}) => app.evaluate(`(() => {
     const menu = [...document.querySelectorAll('.lm-Menu')].filter(m => m.getClientRects().length > 0)[${index}];
-    const item = menu && [...menu.querySelectorAll('.lm-Menu-item')].find(i => ((i.querySelector('.lm-Menu-itemLabel') || {}).textContent || '') === ${JSON.stringify(label)});
+    const items = menu ? [...menu.querySelectorAll('.lm-Menu-item')].filter(i => ((i.querySelector('.lm-Menu-itemLabel') || {}).textContent || '') === ${JSON.stringify(label)}) : [];
+    const item = items[${last} ? items.length - 1 : 0];
     if (!item) return false;
     const r = item.getBoundingClientRect();
     const at = { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, ...${JSON.stringify(mods)} };
@@ -5455,7 +5465,8 @@ async function historyMenu(ctx) {
         }
         tabs = await webTabsNow(app);
         let mark = (await pushes(app)).length;
-        await pointMenuRow(app, 1, target);
+        // The closed tabs section above can hold a row with the same title: the recent row is the last one.
+        await pointMenuRow(app, 1, target, { last: true });
         if (await waitForPush(app, loadedAt(tabId, `/hm-c${last - 1}`), { from: mark }) < 0 || (await webTabsNow(app)).length !== tabs.length) {
             fail(`a recent page must load in the current tab: no load of /hm-c${last - 1} in the session tab, or a tab was opened (${(await webTabsNow(app)).length} tabs, ${tabs.length} before)`);
         }
@@ -5463,7 +5474,7 @@ async function historyMenu(ctx) {
         const other = (recentSection ?? []).slice(1).find(i => i.label !== target && !i.disabled);
         if (other) {
             tabs = await webTabsNow(app);
-            await pointMenuRow(app, 1, other.label, { mods: { ctrlKey: true } });
+            await pointMenuRow(app, 1, other.label, { mods: { ctrlKey: true }, last: true });
             const background = await newWebTab(app, tabs);
             const current = await probe(app, `return get('ApplicationShell').mainPanel.currentTitle?.owner?.tabId ?? null;`);
             if (!background || current !== tabId) {
@@ -5560,12 +5571,14 @@ const readPicker = app => app.evaluate(`JSON.stringify((() => {
     };
 })())`).then(JSON.parse);
 /** Focuses and clicks the range radio labelled `label`; true when it is then checked. */
-const choosePickerRange = (app, label) => app.evaluate(`(() => {
+const choosePickerRange = (app, label) => app.evaluate(`(async () => {
     const row = [...document.querySelectorAll('.pb-clear-history-range')].find(r => r.textContent.trim() === ${JSON.stringify(label)});
     const input = row && row.querySelector('input');
     if (!input) return false;
     input.focus();
     input.click();
+    // The widget re-renders on a later frame; until then React holds the controlled radio at the old range.
+    for (let i = 0; i < 30 && !input.checked; i++) await new Promise(r => requestAnimationFrame(r));
     return input.checked;
 })()`);
 const clickPickerButton = (app, label) => app.evaluate(`(() => {
@@ -6078,6 +6091,12 @@ async function appMenu(ctx) {
                 fail(`New Window must open the stock window through ${STOCK_WINDOW_COMMAND_ID} (D-12); it ran ${JSON.stringify(ran)}`);
             }
             await closeOpenMenus(app);
+            if (menuId === 'downloads') {
+                // The panel closes only on Esc or a second toggle; left open, a later scenario's dropdown read would find it first.
+                await app.evaluate(`(() => { const p = document.getElementById('pb-chrome-bar-downloads');
+                    if (p) p.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
+                    return true; })()`);
+            }
             await makeCurrent(app, tabId);
         }
 
@@ -6139,12 +6158,19 @@ async function appMenu(ctx) {
         if (help[0]?.label !== copyPlain('getHelpRow') || !/^About /.test(aboutLabel)) {
             fail(`the Help submenu must list ${JSON.stringify(copyPlain('getHelpRow'))} then "About {App}"; saw ${JSON.stringify(help)}`);
         } else {
+            await inChrome(app, `for (const w of Services.wm.getEnumerator('navigator:browser')) w.__pbKept = true; return true;`);
             await pointMenuRow(app, 1, aboutLabel);
             const about = await settle(() => inChrome(app, `return !!Services.wm.getMostRecentWindow('Browser:About');`), v => v === true, 15000);
             if (about !== true) {
                 fail('About {App} did not open the stock About dialog');
             }
-            await inChrome(app, `const w = Services.wm.getMostRecentWindow('Browser:About'); if (w) w.close(); return true;`);
+            // With no stock window open, the row opens one to host the dialog; left open and active, the shell gets no
+            // focus events, so Theia's focus tracking and the page-key rows stop working for every later scenario.
+            await inChrome(app, `const w = Services.wm.getMostRecentWindow('Browser:About'); if (w) w.close();
+                for (const s of Services.wm.getEnumerator('navigator:browser')) if (!s.__pbKept) s.close();
+                window.focus();
+                return true;`);
+            await settle(() => app.evaluate('document.hasFocus()'), v => v === true, 5000);
         }
     } finally {
         await closeOpenMenus(app).catch(() => null);
@@ -6168,8 +6194,8 @@ const boundCategoryLabels = app => probe(app, `const registry = get('CommandRegi
     return registry.commands.filter(c => c.category === ${JSON.stringify(COMMAND_CATEGORY)} && c.label && registry.isVisible(c.id) && registry.isEnabled(c.id)
         && keys.getKeybindingsForCommand(c.id).length > 0).map(c => c.label);`);
 
-/** Runs the Actions row titled `title`: Actions mode, the title typed, the row highlighted, Enter. Returns whether it was highlighted. */
-async function runActionRow(app, title) {
+/** Runs the Actions row titled `title`: Actions mode, the title typed, the row highlighted, `beforeEnter`, Enter. Returns whether it was highlighted. */
+async function runActionRow(app, title, beforeEnter = async () => undefined) {
     await restoreDefaultMode(app);
     await pickLocalMode(app, 'actions');
     await typeInPill(app, title);
@@ -6177,6 +6203,7 @@ async function runActionRow(app, title) {
     if (!view.rows.some(r => r.title === title && r.selected)) {
         return false;
     }
+    await beforeEnter();
     await pressKey(app, ENTER);
     return true;
 }
@@ -6234,9 +6261,12 @@ async function actionsList(ctx) {
         await makeCurrent(app, tabId);
 
         const zoomLabel = sourceMatch(MENU_COMMANDS_REL, /CHROME_BAR_ZOOM_IN: Command = \{[^}]*label: '([^']+)'/);
-        mark = (await storeKinds(app)).length;
-        const commandMark = (await commandsRun(app)).length;
-        if (!(await runActionRow(app, zoomLabel))) {
+        // Marked just before Enter: focusing the pill re-reads chrome's engines (listSearchEngines), which is not the row's doing.
+        let commandMark = 0;
+        if (!(await runActionRow(app, zoomLabel, async () => {
+            mark = (await storeKinds(app)).length;
+            commandMark = (await commandsRun(app)).length;
+        }))) {
             return fail(`${BROKEN} the ${zoomLabel} Actions row could not be highlighted`);
         }
         const ran = (await settle(() => commandsRun(app), v => v.slice(commandMark).includes(ZOOM_IN_ID), 5000)).slice(commandMark);
