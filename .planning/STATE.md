@@ -1,20 +1,20 @@
 ---
-gsd_state_version: "1.0"
+gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase: 39
 current_phase_name: v1.5 Close-out
 status: executing
-stopped_at: Completed 39-01-PLAN.md
-last_updated: "2026-11-05T23:08:25.026Z"
+stopped_at: Completed 39-02-PLAN.md
+last_updated: "2026-11-05T23:50:37.458Z"
 last_activity: 2026-11-05
 last_activity_desc: Phase 39 execution started
-state_head: d76de5013c636748d32fb4c4709690e9c2f93f59
+state_head: 00f0f34ac3ec247779623cb852aea0cf59235d1d
 progress:
   total_phases: 14
   completed_phases: 1
   total_plans: 93
-  completed_plans: 74
+  completed_plans: 75
   percent: 7
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 ## Current Position
 
 Phase: 39 (v1.5 Close-out) — EXECUTING
-Plan: 2 of 20
+Plan: 3 of 20
 Status: Ready to execute
 Last activity: 2026-11-05 — Phase 39 execution started
 
@@ -178,6 +178,7 @@ Progress: [█░░░░░░░░░] 7%
 | Phase 32 P05 | not measured | 2 tasks | 12 files |
 | Phase 32 P06 | not measured | 3 tasks | 10 files |
 | Phase 39 P01 | 293 min | 3 tasks | 7 files |
+| Phase 39 P02 | 34 min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -471,6 +472,8 @@ Recent decisions affecting current work:
 - [Phase 39]: 39-01: C24 verdict product-writes-image is inferred (HeadlessClipboard keeps text only); 39-05 must confirm headed
 - [Phase 39]: 39-01: a headed session never shows the web-tab overlay; blocks headed confirmation for 39-05 and 39-15
 - [Phase 39]: 39-01: baseline 04938fcd = 448 PASS / 40 FAIL in 11550 s; classes listed 5, prompt-03 1, stale 1, environment 23, new 10
+- [Phase 39]: C11 needs two guards: frontend focusPageIfLatest plus chrome webTabFocus dropping a page focus while a page menu is pending (39-02)
+- [Phase 39]: stale-dismiss-focus plant detected through widget.focusWanted, since the chrome guard hides the frontend guard's absence (39-02)
 
 ### Pending Todos
 
@@ -591,8 +594,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-05T23:08:23.964Z
-Stopped at: Completed 39-01-PLAN.md
+Last session: 2026-11-05T23:50:37.150Z
+Stopped at: Completed 39-02-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
