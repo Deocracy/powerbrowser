@@ -5,16 +5,16 @@ milestone_name: Chrome Bar Firefox Parity
 current_phase: 39
 current_phase_name: v1.5 Close-out
 status: executing
-stopped_at: Phase 39 UI-SPEC approved
-last_updated: "2026-11-05T18:07:53.017Z"
+stopped_at: Completed 39-01-PLAN.md
+last_updated: "2026-11-05T23:08:25.026Z"
 last_activity: 2026-11-05
 last_activity_desc: Phase 39 execution started
-state_head: e32a090f4152846aba0f2ddf8917c5ae7ec1079b
+state_head: d76de5013c636748d32fb4c4709690e9c2f93f59
 progress:
   total_phases: 14
   completed_phases: 1
   total_plans: 93
-  completed_plans: 73
+  completed_plans: 74
   percent: 7
 ---
 
@@ -30,8 +30,8 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 ## Current Position
 
 Phase: 39 (v1.5 Close-out) — EXECUTING
-Plan: 1 of 20
-Status: Executing Phase 39
+Plan: 2 of 20
+Status: Ready to execute
 Last activity: 2026-11-05 — Phase 39 execution started
 
 **v1.5 parallel-lane run:** lanes p33..p37 were cut from 23c08bb5 and merged into main in order 36 (aa8989d9), 34 (8143fedd), 37 (14319419), 35 (68a38581), 33 (d6f9fcbb). Each was reviewed and fixed on main. All live checks are deferred to one end-of-milestone pass.
@@ -177,6 +177,7 @@ Progress: [█░░░░░░░░░] 7%
 | Phase 32 P02 | not measured | 2 tasks | 11 files |
 | Phase 32 P05 | not measured | 2 tasks | 12 files |
 | Phase 32 P06 | not measured | 3 tasks | 10 files |
+| Phase 39 P01 | 293 min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -465,6 +466,11 @@ Recent decisions affecting current work:
 - [Phase 35]: PROMPT-04/06/08 and PAGE-07 executed in 35-01..07 (workspace/p35): installShellFurniture wires the furniture block (remoteBrowserTooltip, contentAreaContextMenu stub with the page menu rendered in Theia, PopupAutoComplete, invalid-form template, stock fullscreen warning) and the XULBrowserWindow, nsContextMenu, FullScreen and PointerlockFsWarning shims behind the boundary; merged after 32, 36, 34 and 37; Phase 37's prompt furniture folds into installShellFurniture and 36's browserDOMWindow IDL_SHIMS entry lands in the follow-up commit; BOOKMARK_PAGE_COMMAND_ID and FULL_SCREEN_COMMAND_ID stay local until Phase 33 merges; live checks deferred
 - [Phase 33]: All 5 plans executed statically (verification human_needed, live pass deferred to end of milestone); PAGE-09 Edit submenu and live greying folded into 33-05 by coordinator ruling, greyed via a PowerBrowserEditState actor pair
 - [Phase 33]: Code review 1 critical, 8 warnings, 6 info; CR-01 (clear history re-imported stock closed tabs from SessionStore) and WR-01..08 fixed; reopenClosedTab now claims its row and is classed store-write
+- [Phase 39]: 39-01: A1 holds - KWin print() read back from the user journal; real-input gate pb-kwin.mjs built, self-test registered
+- [Phase 39]: 39-01: harness sessions are --headless; PB_LIVE_HEADED=1 drops the flag for KWin-gated runs
+- [Phase 39]: 39-01: C24 verdict product-writes-image is inferred (HeadlessClipboard keeps text only); 39-05 must confirm headed
+- [Phase 39]: 39-01: a headed session never shows the web-tab overlay; blocks headed confirmation for 39-05 and 39-15
+- [Phase 39]: 39-01: baseline 04938fcd = 448 PASS / 40 FAIL in 11550 s; classes listed 5, prompt-03 1, stale 1, environment 23, new 10
 
 ### Pending Todos
 
@@ -585,9 +591,9 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-05T16:56:45.783Z
-Stopped at: Phase 39 UI-SPEC approved
-Resume file: .planning/phases/39-v1-5-close-out/39-UI-SPEC.md
+Last session: 2026-11-05T23:08:23.964Z
+Stopped at: Completed 39-01-PLAN.md
+Resume file: None
 
 ## Operator Next Steps
 
