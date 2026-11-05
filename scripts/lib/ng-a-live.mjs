@@ -311,7 +311,8 @@ async function launchShell(profileDir, fn, { url, stdoutPath }) {
                     const out = await (async () => { ${body} })();
                     return JSON.stringify({ out: out === undefined ? null : out });
                 } catch (error) {
-                    return JSON.stringify({ error: String((error && error.stack) || error) });
+                    // Gecko's Error.stack carries the frames only, never the message.
+                    return JSON.stringify({ error: error && error.stack ? String(error) + '\\n' + error.stack : String(error) });
                 }
             })()`);
             const parsed = JSON.parse(text);

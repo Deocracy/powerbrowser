@@ -144,7 +144,8 @@ const PROBES = `
     const settle = async (test, n) => { for (let i = 0; i < (n || 40) && !test(); i++) await A.sleep(125); return !!test(); };
     const tabNode = w => Array.from(document.querySelectorAll('.pb-tab-strip .pb-tab:not(.pb-tab-stack)')).find(e => e.getAttribute('title') === labelOf(w));
     const menuNode = () => document.querySelector('.lm-Menu.pb-tab-menu');
-    const menuRows = () => Array.from((menuNode() || document.createElement('div')).querySelectorAll('.lm-Menu-item')).map(e => ({
+    // Lumino draws each group separator as an .lm-Menu-item too (data-type separator): not a row.
+    const menuRows = () => Array.from((menuNode() || document.createElement('div')).querySelectorAll('.lm-Menu-item:not([data-type="separator"])')).map(e => ({
         label: (e.querySelector('.lm-Menu-itemLabel') || e).textContent.trim(),
         enabled: !e.classList.contains('lm-mod-disabled'),
         node: e,
@@ -628,11 +629,12 @@ async function overflow({ app, pages, expect, plant }) {
         strip.node.style.maxWidth = '';
         await until(() => row().scrollWidth <= row().clientWidth, 5000);
         await until(() => !chevron(), 3000);
-        return { overflowing: row().scrollWidth > row().clientWidth, chevron: !!chevron(), strip: stripIds(), bar: barIds() };
+        return { overflowing: row().scrollWidth > row().clientWidth, chevron: !!chevron(), strip: stripIds(), bar: barIds(), ours: ['a', 'b', 'c'].every(n => stripIds().includes(S[n])) };
     `);
     expect(!control.overflowing, 'overflow: NOT SCORED -- the full-width strip still overflows, so the chevron-absent control proves nothing');
     expect(!control.chevron, 'overflow: the full-width strip still shows the List All Tabs chevron without overflow');
-    expect(control.strip.length === 3 && control.strip.every(id => control.bar.includes(id)), `overflow: the control session read no strip order (${JSON.stringify(control)})`);
+    // The fresh profile's welcome tab shares the strip, so the count is not 3: /a, /b and /c must all read.
+    expect(control.ours && control.strip.every(id => control.bar.includes(id)), `overflow: the control session read no strip order (${JSON.stringify(control)})`);
 }
 
 /**
@@ -757,7 +759,8 @@ async function multi({ run, pages, expect, plant }) {
         click(S.b, { ctrlKey: true });
         await settle(() => selected().length === 1);
         click(S.c);
-        await settle(() => current() === S.c);
+        // The is-selected class repaints a frame after the strip's state; current() turns true at once.
+        await settle(() => current() === S.c && selected().length === 0);
         return { toggled, stillCurrent, ranged, escaped, plainCleared: selected().length === 0, plainActivated: current() === S.c };
     `);
     expect(setup.toggled.join(',') === 'b,d', `multi: Ctrl-click /b and /d selected [${setup.toggled}], want b,d`);
@@ -785,14 +788,13 @@ async function multi({ run, pages, expect, plant }) {
         document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
         if (menuNode()) menuNode().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
         await settle(() => !menuNode());
-        // Esc cleared the selection along with the menu; select again for each bulk row.
+        // Esc cleared the selection along with the menu; select again for each bulk row. Always: the painted
+        // is-selected class lags the strip's state by a frame, so it can still read b,d once Esc has cleared it.
         const reselect = async () => {
-            if (selected().join(',') !== 'b,d') {
-                strip().clearSelection();
-                click(S.b, { ctrlKey: true });
-                click(S.d, { ctrlKey: true });
-                await settle(() => selected().join(',') === 'b,d');
-            }
+            strip().clearSelection();
+            click(S.b, { ctrlKey: true });
+            click(S.d, { ctrlKey: true });
+            await settle(() => selected().join(',') === 'b,d');
         };
         const act = async label => {
             await reselect();
@@ -830,7 +832,9 @@ async function multi({ run, pages, expect, plant }) {
         expect(['b', 'd'].every(n => hits.some(entry => entry.tab === n)), `multi: ${label} did not reach both /b and /d (${hits.map(entry => entry.tab).join(', ')})`);
     };
     only('Move 2 Tabs to Start', bulk.moved.ran, 'id', 'powerbrowser.chrome-bar.tab-move-start');
-    expect(bulk.order.join(',') === 'b,d,a,c', `multi: after Move 2 Tabs to Start the strip reads [${bulk.order}], want b,d,a,c`);
+    // The fresh profile's welcome tab shares the strip: /b, /d lead it, and /a, /c keep their order after them.
+    expect(bulk.order.slice(0, 2).join(',') === 'b,d' && bulk.order.filter(n => n === 'a' || n === 'c').join(',') === 'a,c',
+        `multi: after Move 2 Tabs to Start the strip reads [${bulk.order}], want b,d first and then a,c`);
     only('Mute 2 Tabs', bulk.muted.ran, 'id', 'powerbrowser.chrome-bar.tab-mute');
     only('Mute 2 Tabs (webTabMute)', bulk.muted.sent, 'kind', 'webTabMute');
     if (!bulk.bookmark.skipped) {
@@ -967,7 +971,8 @@ async function attention({ app, pages, expect, plant }) {
     const cleared = await step(app, 'attention: activate /a, then /b again', `${marks}
         shell.activateWidget(S.a);
         await until(() => current() && current().id === S.a, 5000);
-        const hidden = !dotOf(S.a);
+        // The strip repaints a frame after the activation that current() already reads.
+        const hidden = await until(() => !dotOf(S.a), 3000);
         const flagCleared = await until(() => byId(S.a).titleChanged === false, 5000);
         shell.activateWidget(S.b);
         await until(() => current() && current().id === S.b, 5000);
