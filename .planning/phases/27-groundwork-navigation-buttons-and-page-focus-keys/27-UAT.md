@@ -1,20 +1,16 @@
 ---
-status: testing
+status: partial
 phase: 27-groundwork-navigation-buttons-and-page-focus-keys
 source: [27-VERIFICATION.md]
 started: 2026-10-21T07:05:00Z
-updated: 2026-10-21T07:05:00Z
+updated: 2026-11-05T01:52:09.187Z
 ---
 
 # Phase 27 UAT — human checks (deferred to Chris, end of milestone)
 
 ## Current Test
 
-number: 1
-name: Real keyboard with a web page focused
-expected: |
-  Each key does what Firefox does; F6/Shift+F6 in the pill return focus to the page
-awaiting: user response
+[testing complete]
 
 ## Tests
 
