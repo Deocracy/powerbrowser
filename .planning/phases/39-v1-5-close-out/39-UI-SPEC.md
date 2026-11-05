@@ -1,7 +1,8 @@
 ---
 phase: "39"
 slug: v1-5-close-out
-status: draft
+status: approved
+reviewed_at: 2026-11-05
 shadcn_initialized: false
 preset: none
 created: "2026-11-05"
@@ -136,15 +137,32 @@ backlog rows are internal documents, not user-facing text, and may name identifi
 
 ## UI Considerations
 
-Applicable state considerations resolved: 3 covered, 0 backstop, 0 unresolved.
+Probe run 2026-11-05 over four surfaces (E1 page tooltip, E2 saved-login autocomplete popup, E3 Copy Image row, E4 page-menu dismissal). 22 applicable considerations: 18 resolved explicit, 4 resolved backstop, 0 unresolved, 0 unclassified. Every surface is a stock Firefox widget whose rendering Phase 39 does not change; the phase changes only whether the widget opens (C22, C23), the clipboard flavour (C24) and focus return (C11). Empty- and error-state copy lives in `## Copywriting Contract` and is referenced, not restated.
 
-| Category | Element(s) | Status | Resolution / Reason |
-|----------|-----------|--------|---------------------|
-| empty | tooltip (element with empty or no `title`) | ✅ covered | No tooltip opens; stock `remoteBrowserTooltip` behaviour (35-UI-SPEC.md) |
-| error | tooltip, autocomplete or Copy Image fails to produce its result | ✅ covered | No new error copy; a failure keeps the page usable and any user-facing text follows 01-UI-SPEC.md; identifiers go to the diagnostics layer |
-| zero-one-many | autocomplete entries (no saved login / one / many) | ✅ covered | No saved login means no panel opens; one or many render in the stock panel with stock keyboard behaviour |
-
-No other state category applies: no list, form, loading state or long-text element is added.
+| Element | Category | Status | Resolution |
+|---------|----------|--------|------------|
+| E1 tooltip | overflow | ✅ resolved (backstop) | { statement: "Gecko's stock tooltip clamps to its max width and wraps; unchanged by Phase 39", verification: backstop — visual row in the end-of-milestone checklist } |
+| E1 tooltip | long-text | ✅ resolved (backstop) | { statement: "A long `title=` wraps inside the stock tooltip; no truncation is added", verification: backstop — same visual row } |
+| E2 autocomplete | empty | ✅ resolved | Zero saved logins: no panel opens (stock PopupAutoComplete, 35-UI-SPEC.md PROMPT-06) |
+| E2 autocomplete | loading | ✅ resolved | No loading state: the login list is read synchronously from the stock login manager before the panel opens |
+| E2 autocomplete | error | ✅ resolved | A failed lookup opens no panel and the field stays editable; any message follows `## Copywriting Contract` |
+| E2 autocomplete | populated | ✅ resolved | Stock panel rows (username, masked password) at stock row height; 35-UI-SPEC.md PROMPT-06 |
+| E2 autocomplete | partial | ✅ resolved | A login with no username renders the stock "No username" row; nothing new |
+| E2 autocomplete | overflow | ✅ resolved (backstop) | { statement: "Many logins scroll inside the stock panel at its stock max height", verification: backstop — visual row } |
+| E2 autocomplete | zero-one-many | ✅ resolved | Zero: no panel. One or many: stock list with stock keyboard navigation (Down, Enter, Escape) |
+| E2 autocomplete | long-text | ✅ resolved (backstop) | { statement: "Long usernames truncate with the stock ellipsis", verification: backstop — visual row } |
+| E3 Copy Image | empty | ✅ resolved | On a non-image target the row is absent, as stock nsContextMenu decides (35-UI-SPEC.md PROMPT-04) |
+| E3 Copy Image | loading | ✅ resolved | No loading state: the copy is synchronous; the menu closes on activation |
+| E3 Copy Image | error | ✅ resolved | A copy failure leaves the clipboard unchanged and the page usable; no new copy |
+| E3 Copy Image | populated | ✅ resolved | Existing row label and position unchanged; the clipboard carries an image flavour plus the stock text/URL flavours |
+| E3 Copy Image | partial | ✅ resolved | A still-loading image copies what Gecko has decoded, as stock Firefox does |
+| E3 Copy Image | overflow | ✅ resolved | Not applicable to a menu row; the menu's overflow is 35-UI-SPEC.md's |
+| E3 Copy Image | zero-one-many | ✅ resolved | One row per image target; multiselect is not a page-menu concept |
+| E3 Copy Image | long-text | ✅ resolved | Fixed label; no long-text state |
+| E4 menu dismissal | loading | ✅ resolved | No loading state; dismissal is synchronous |
+| E4 menu dismissal | error | ✅ resolved | If focus cannot return to the page (tab closed), focus stays in the shell per the Phase 27 focus rule; no message |
+| E4 menu dismissal | overflow | ✅ resolved | Not applicable to a focus transition |
+| E4 menu dismissal | long-text | ✅ resolved | Not applicable to a focus transition |
 
 ---
 
@@ -160,12 +178,12 @@ No third-party blocks. No new npm package. Vetting gate not applicable.
 
 ## Checker Sign-Off
 
-- [ ] Dimension 1 Copywriting: PASS
-- [ ] Dimension 2 Visuals: PASS
-- [ ] Dimension 3 Color: PASS
-- [ ] Dimension 4 Typography: PASS
-- [ ] Dimension 5 Spacing: PASS
-- [ ] Dimension 6 Registry Safety: PASS
-- [ ] Dimension 7 Inventory Provenance: PASS (`Tool: none`, inventory omitted per template)
+- [x] Dimension 1 Copywriting: PASS
+- [x] Dimension 2 Visuals: PASS
+- [x] Dimension 3 Color: PASS
+- [x] Dimension 4 Typography: PASS
+- [x] Dimension 5 Spacing: PASS
+- [x] Dimension 6 Registry Safety: PASS
+- [x] Dimension 7 Inventory Provenance: PASS (`Tool: none`, inventory omitted per template)
 
-**Approval:** pending
+**Approval:** approved by gsd-ui-checker 2026-11-05 (7/7 PASS); UI-consideration probe 22/22 resolved
