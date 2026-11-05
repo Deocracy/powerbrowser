@@ -76,6 +76,8 @@ None yet.
 
 ### Blockers/Concerns
 
+- **Paused 2026-11-05 (Chris): v1.7 waits until v1.5 and v1.6 land on main.** Phase 59 context is committed and planning has not started. To resume, merge main into this branch, re-run `scripts/fetch-upstream.sh` if the ESR pin moved, and run `/gsd-autonomous --ws orca --interactive`. On 2026-11-05, main was 112 commits ahead and had changed `configuration.toml`, `inventory/brand-tokens.json` and `scripts/verify-platform.sh`, all files Phase 59 edits.
+- In this worktree `--quick` passes except `fixer-isolate-self-test`, which fails the same way on main (pre-existing; "PATH changed inside the isolation"). Run it inside `nix develop .#theia` after the audited Theia install in `docs/BUILD.md` (`--ignore-scripts`). A plain `yarn install` breaks `diff-theia-core`.
 - The EXT-01 outcome (Phase 59) may reshape EXT-02 (Phase 62) before that phase is planned.
 - Phase 60's spike results may split or descope Phases 63 and 65. The roadmap must name each chosen route before those phases are planned.
 - The macOS half of PLAT-01 (Phase 67) needs a macOS PowerBrowser build, which v1.6 deferred (workstream `deploy`, Phase 55).
