@@ -108,8 +108,10 @@
  * --self-test --static runs only the offline half: every plant targets a real
  * scenario and names a failure text the scenario actually emits, every scenario
  * has a plant, and the stock console line and delay pref are upstream's own.
+ * --self-test --scenario a,b limits the live half to the plants targeting those
+ * scenarios, so a control red under a recorded deferral does not stop the rest.
  *
- * Usage: verify-prompts-live.mjs [--scenario a,b] [--self-test [--static]] [--help]
+ * Usage: verify-prompts-live.mjs [--scenario a,b] [--self-test [--static] [--scenario a,b]] [--help]
  */
 
 import { execFileSync } from 'node:child_process';
@@ -129,6 +131,8 @@ const UPSTREAM_PN = 'upstream/toolkit/modules/PopupNotifications.sys.mjs';
 const DELAY_LINE = 'Button click happened before the security delay';
 const DELAY_PREF = 'security.notification_enable_delay';
 const GEO_ID = 'geolocation';
+/** The geolocation SitePermissions id (PermissionUI's permissionKey), which is not the notification id. */
+const GEO_PERM = 'geo';
 /** The stock WebRTC doorhanger's notification id (WebRTCParent.sys.mjs), the template's id without -notification. */
 const WEBRTC_ID = 'webRTC-shareDevices';
 const UPSTREAM_SP = 'upstream/browser/modules/SitePermissions.sys.mjs';
@@ -185,6 +189,9 @@ const PREFS = {
     // cancel-on-evict asks four distinct stock prompts from one tab: notifications without a gesture, a fake camera.
     'dom.webnotifications.requireuserinteraction': false,
     'media.navigator.streams.fake': true,
+    // 37-02 sharing: a fake camera or microphone counts as captured, so webrtcUI sees the stream, only with this
+    // (MediaManager.cpp DeviceListener::CapturingSource), as upstream's own webrtc tests set it.
+    'media.navigator.permission.fake': true,
     'media.navigator.permission.disabled': false,
     // 37-03: a page's beforeunload shows the leave dialog without a prior user gesture, so the leave kind is reproducible.
     [BEFOREUNLOAD_PREF]: false,
@@ -197,6 +204,10 @@ const PREFS = {
     [HANG_PREF]: 3,
     'dom.max_script_run_time.require_critical_input': false,
     [WAIT_PREF]: 3000,
+    // The Remote Agent's recommended prefs turn hang reports and the dialog-abuse window off unless the profile sets them:
+    // hung-script needs the report, and stop-repeat needs upstream's default window for the stock stop checkbox.
+    'dom.ipc.reportProcessHangs': true,
+    'dom.successive_dialog_time_limit': 3,
 };
 
 /** Page-side requests: each lands on window.__pbOut[kind] ('pending', 'granted', 'denied'); `id` is its stock notification id. */
@@ -246,13 +257,17 @@ async function openPage(app, fx, path) {
 /** Starts one REQUESTS kind in the page. */
 function startRequest(app, page, kind) {
     const key = JSON.stringify(kind);
-    return app.evaluateIn(page.ctx, `(() => {
+    const expression = `(() => {
         window.__pbOut = window.__pbOut || {};
         window.__pbOut[${key}] = 'pending';
         const done = v => { window.__pbOut[${key}] = v; };
         ${REQUESTS[kind].start};
         return true;
-    })()`);
+    })()`;
+    // getDisplayMedia rejects without transient activation (MediaDevices.cpp GetDisplayMedia); BiDi grants it per evaluate.
+    return kind === 'screen'
+        ? app.send('script.evaluate', { expression, target: { context: page.ctx }, awaitPromise: true, userActivation: true })
+        : app.evaluateIn(page.ctx, expression);
 }
 
 /** The page's outcome for `kind` after up to `timeoutMs`: the first non-pending value, else 'pending'. */
@@ -484,7 +499,7 @@ function rememberedGrant(app, tabId) {
     return inChrome(app, `
         const { SitePermissions } = ChromeUtils.importESModule('resource:///modules/SitePermissions.sys.mjs');
         const o = overlayOf(${JSON.stringify(tabId)});
-        const p = o ? SitePermissions.getAllForBrowser(o).find(x => x.id === ${JSON.stringify(GEO_ID)}) : null;
+        const p = o ? SitePermissions.getAllForBrowser(o).find(x => x.id === ${JSON.stringify(GEO_PERM)}) : null;
         if (!p) return 'no geolocation entry';
         return p.state === SitePermissions.ALLOW && p.scope === SitePermissions.SCOPE_PERSISTENT ? 'persistent allow' : 'state ' + p.state + ', scope ' + p.scope;`);
 }
@@ -494,7 +509,7 @@ function forgetGrant(app, tabId) {
     return inChrome(app, `
         const { SitePermissions } = ChromeUtils.importESModule('resource:///modules/SitePermissions.sys.mjs');
         const o = overlayOf(${JSON.stringify(tabId)});
-        if (o) SitePermissions.removeFromPrincipal(o.contentPrincipal, ${JSON.stringify(GEO_ID)});
+        if (o) SitePermissions.removeFromPrincipal(o.contentPrincipal, ${JSON.stringify(GEO_PERM)});
         return true;`).catch(() => false);
 }
 
@@ -563,7 +578,7 @@ function pickFirstScreen(app) {
         if (!m) return false;
         for (let i = 0; i < m.itemCount; i++) {
             const item = m.getItemAtIndex(i);
-            if (item.value !== '-1' && !item.disabled) { item.doCommand(); return true; }
+            if (item.localName === 'menuitem' && item.value !== '-1' && !item.disabled) { item.doCommand(); return true; }
         }
         return false;`);
 }
@@ -997,6 +1012,8 @@ async function scenarioBeforeunloadScope(app, fx, plant) {
         return 'a web-tab leave-page never reached the stock dialog path';
     }
     await answerDialog(app, { accept: false });
+    // The page stayed with the control's handler, and the recorder control below navigates it, which would prompt again.
+    await app.evaluateIn(page.ctx, '(window.onbeforeunload = null, true)');
     const theiaCtx = await openIdeEditor(app, fx);
     if (theiaCtx.startsWith(BROKEN)) {
         return theiaCtx;
@@ -1179,7 +1196,7 @@ async function scenarioPopupBlock(app, fx, plant) {
         const o = overlayOf(${JSON.stringify(opener.tabId)});
         return { ids: SitePermissions.getAllForBrowser(o).map(p => p.id), popup: Services.perms.testPermissionFromPrincipal(o.contentPrincipal, 'popup') === Services.perms.ALLOW_ACTION };`;
     const before = await inChrome(app, reader);
-    if (!before.ids.includes(GEO_ID)) {
+    if (!before.ids.includes(GEO_PERM)) {
         return `${BROKEN} the permission reader does not see a stock location grant, so an empty popup entry would prove nothing`;
     }
     if (plant === 'allow-loads-frame-url') {
@@ -1406,6 +1423,9 @@ function staticAudit() {
             failures.push(`${UPSTREAM_SP} no longer has ${name.replace('(', '')}; the remember read-back or teardown reads a name upstream lacks`);
         }
     }
+    if (!sp.includes(`\n    ${GEO_PERM}: {`)) {
+        failures.push(`${UPSTREAM_SP} has no ${GEO_PERM} permission; the remember and popup-block readers look for an id upstream does not use`);
+    }
     const markup = readFileSync(join(REPO_ROOT, XHTML), 'utf8');
     for (const id of [`${WEBRTC_ID}-notification`, 'webRTC-selectCamera-menulist', 'webRTC-selectWindow-menulist']) {
         if (!markup.includes(`id="${id}"`)) {
@@ -1460,7 +1480,7 @@ function staticAudit() {
         failures.push(`${UPSTREAM_ALL_JS} no longer defaults ${CAPTURE_PREF}; the scripted login submit relies on turning it off`);
     }
     const prefList = readFileSync(join(REPO_ROOT, UPSTREAM_PREFS), 'utf8');
-    for (const name of [HANG_PREF, 'dom.max_script_run_time.require_critical_input', 'dom.disable_open_during_load']) {
+    for (const name of [HANG_PREF, 'dom.max_script_run_time.require_critical_input', 'dom.disable_open_during_load', 'dom.ipc.reportProcessHangs']) {
         if (!prefList.includes(`- name: ${name}\n`)) {
             failures.push(`${UPSTREAM_PREFS} has no ${name}; a bar scenario sets a pref upstream does not read`);
         }
@@ -1516,12 +1536,20 @@ async function selfTest() {
         console.log(`${NAME} --self-test --static: PASS -- the live control and plant sessions were not run (--static)`);
         return 0;
     }
+    const flag = process.argv.indexOf('--scenario');
+    const only = flag === -1 ? null : (process.argv[flag + 1] ?? '').split(',');
+    const unknown = (only ?? []).filter(name => !(name in SCENARIOS));
+    if (unknown.length || (only && !only.length)) {
+        console.error(`${NAME} --self-test: unknown scenario(s): ${unknown.join(', ') || '(none given)'}`);
+        return 1;
+    }
+    const plants = only ? PLANTS.filter(p => only.includes(p.target)) : PLANTS;
     const reason = preflight();
     if (reason) {
         console.error(`${NAME} --self-test: ${reason}`);
         return 1;
     }
-    for (const target of new Set(PLANTS.map(p => p.target))) {
+    for (const target of new Set(plants.map(p => p.target))) {
         const control = await runSession(target, null);
         if (control !== null) {
             console.error(`${NAME} --self-test: FAIL -- the clean control for ${target} is red: ${control}`);
@@ -1530,7 +1558,7 @@ async function selfTest() {
         console.log(`  ok  clean control for ${target} -> green`);
     }
     let failed = 0;
-    for (const p of PLANTS) {
+    for (const p of plants) {
         const got = await runSession(p.target, p.plant);
         if (!got || !got.includes(p.expect)) {
             console.error(`${NAME} --self-test: FAIL -- '${p.plant}' did not go red naming '${p.expect}'; got: ${got ?? '(green)'}`);
@@ -1542,7 +1570,7 @@ async function selfTest() {
     if (failed) {
         return 1;
     }
-    console.log(`${NAME} --self-test: PASS -- clean controls green, ${PLANTS.length} planted faults went red`);
+    console.log(`${NAME} --self-test: PASS -- clean controls green, ${plants.length} planted faults went red${only ? ` (live half limited to ${only.join(',')}; ${PLANTS.length - plants.length} plant(s) not run)` : ''}`);
     return 0;
 }
 
