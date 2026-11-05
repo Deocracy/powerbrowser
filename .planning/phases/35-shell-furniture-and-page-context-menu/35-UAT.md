@@ -1,69 +1,73 @@
 ---
-status: testing
+status: partial
 phase: 35-shell-furniture-and-page-context-menu
-source: [35-VERIFICATION.md, 35-REVIEW.md, 35-VALIDATION.md, 35-0[1-7]-SUMMARY.md]
+source: [35-VERIFICATION.md, 35-REVIEW.md, 35-VALIDATION.md, "35-0[1-7]-SUMMARY.md"]
 started: 2026-11-01T00:00:00Z
-updated: 2026-11-01T00:00:00Z
+updated: 2026-11-05T01:52:09.825Z
 ---
 
 Deferred to the one end-of-milestone pass (Chris, 2026-10-31). Run on `objdir/dist/bin/powerbrowser` with `-purgecaches` after any shell-module change. No live run of Phase 35 has happened: the lane had no objdir.
 
 ## Current Test
 
-number: 1
-name: Full live suite and its self-test
-expected: |
-  `node scripts/verify-page-furniture-live.mjs` passes all 19 scenarios (tooltip-status, theia-hover-silent, pip-close,
-  context-menu, menu-not-in-ide, background-menu, menu-page-tools, menu-edit, menu-spelling, menu-save, extension-entry,
-  freeze-frame, autocomplete, saved-login, form-validation, paste-popup, element-fullscreen, fullscreen-key, f11-keeps-debug),
-  and `--self-test` turns every plant red naming its drift.
-awaiting: user response
+[testing complete]
 
 ## Tests
 
 ### 1. Full live suite and its self-test
 expected: All 19 scenarios PASS and `--self-test` plants all go red. Covers the live half of SC1 to SC4. Any failure is a gap against the named criterion
-result: [pending]
+result: skipped
+reason: "Deferred follow-up: 16 of 19 scenarios PASS. tooltip-status (C22: the title= tooltip never opens), saved-login (C23: no autocomplete popup on the username field) and menu-edit Copy Image (C24: no image/png flavour on the clipboard) fail with no isolated cause; theia-hover-silent is not scored without tooltip-status, so its plant theia-tooltip-leak cannot apply, and the self-test clean control is red on the same three. Sent to the backlog by Chris"
 
 ### 2. Full driver
 expected: `scripts/verify-platform.sh` (and `--gate`) is green with the live rows `page-furniture-live` and `page-furniture-live-self-test` included
-result: [pending]
+result: skipped
+reason: "Deferred follow-up: not run as a whole: its page-furniture-live and page-furniture-live-self-test rows are red on C22-C24 (item 1)"
 
 ### 3. ROADMAP research probe 3, right-click in an overlay (fallback taken)
 expected: The `context-menu timing:` line is printed and shows the Theia-rendered menu opens within the 200 ms p95 budget over 20 opens. If it is over budget, record the measured value and decide whether the budget or the path changes
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: context-menu timing: p50 98 p95 106 n=7, under the 200 ms p95 budget. The harness times the context-menu scenario own 7 opens; the 20-open sample is the freeze-frame scenario (item 4)"
 
 ### 4. ROADMAP research probe 8, G4b freeze-frame latency (fallback taken)
 expected: `freeze-frame timing: menu p50 <ms> p95 <ms>, still <k>/20 within 50 ms` is printed; p95 at most 200 ms and the still arrives within 50 ms on most opens. Record the verdict in 35-VALIDATION.md (currently "deferred"). Also look at the still with a Phase 37 notification bar showing (35-REVIEW IN-05: it covers the bar and is stretched)
 result: [pending]
+live: "v1.5 end-of-milestone live pass 2026-11-04, main: freeze-frame timing: menu p50 7 p95 9, still 20/20 within 50 ms, recorded in 35-VALIDATION.md. Still open for a human: the still under a Phase 37 notification bar (35-REVIEW IN-05)"
 
 ### 5. ROADMAP research probe 12, clipboard paste popup (fallback taken)
 expected: A page calling `navigator.clipboard.readText()` opens the paste popup labelled "Paste" (from `textActions.ftl`), the popup appears under the pointer, and `readText()` resolves after the click (scenario `paste-popup`)
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: paste-popup PASS (C06, C07 harness fixes 30645c4f)"
 
 ### 6. SC1: page context menu for every target, and each item works
 expected: Right-click a link, image, video, audio, a selection, an editable field, a frame and a blank area. The rows and order match the stock window's menu (open link in new tab, copy link, save image, search for selection, view source, Inspect and the rest). Each row does what it says, including Open in new tab, Copy Link, Save Page As, Bookmark This Page and the extension entry (scenarios context-menu, menu-page-tools, menu-edit, menu-spelling, menu-save, extension-entry). The search row (WR-02) loads the engine results page
-result: [pending]
+result: skipped
+reason: "Deferred follow-up: context-menu, menu-page-tools, menu-spelling, menu-save and extension-entry PASS, with the C09 (View Frame Source) and C14 (Inspect selects the node) product fixes in 1642f2d7. menu-edit fails only on Copy Image (C24, cause not separated: Wayland image targets or the product)"
 
 ### 7. SC1: the IDE keeps Theia's own menu
 expected: Right-click in an editor, the explorer and the terminal: Theia's menu opens, not the page menu. Right-click while a web tab is open in the background never opens a page menu for the hidden tab (menu-not-in-ide, background-menu)
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: menu-not-in-ide and background-menu PASS (C12 harness fix 30645c4f)"
 
 ### 8. SC2: form autocomplete, saved login and validation bubble
 expected: Typing in a text field with form history shows the stock autocomplete popup under the field and picking an entry fills it. A saved login fills a login form from the popup. Submitting an invalid form shows the validation bubble (autocomplete, saved-login, form-validation)
-result: [pending]
+result: skipped
+reason: "Deferred follow-up: autocomplete and form-validation PASS; saved-login fails (C23): the popup element is present, field and document are focused, LoginManager is in the browsers group and the console shows no error, yet no popup opens"
 
 ### 9. SC3: tooltips and link status
 expected: Hovering an element with `title=` shows the tooltip after the stock delay and nothing shows over the IDE. Hovering a link shows its URL in the bar status line and clears when the pointer leaves, and a picture-in-picture close button works (tooltip-status, theia-hover-silent, pip-close)
-result: [pending]
+result: skipped
+reason: "Deferred follow-up: the link status line shows and clears clear of the page in Coding, Browsing and Organising, and pip-close PASS with the C05 product fix (1642f2d7); the title= tooltip never opens (C22: showTooltip matches upstream, cause unknown), so theia-hover-silent is not scored"
 
 ### 10. SC4: F11 on a page and in the IDE
 expected: F11 with a web page focused makes the window full screen and F11 again leaves it. F11 with an editor focused keeps its debug binding. The Full Screen and Bookmark This Page rows work now that Phase 33 is merged (fullscreen-key, f11-keeps-debug)
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: fullscreen-key and f11-keeps-debug PASS (Full Screen row product fix C21 in 1642f2d7)"
 
 ### 11. SC4: element fullscreen warning and Esc
 expected: A page video entering fullscreen shows Firefox's fullscreen warning with the page origin; Esc leaves fullscreen and the warning closes; switching tabs during element fullscreen leaves it; no page menu opens during element fullscreen (element-fullscreen, D-19)
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: element-fullscreen PASS (C06, C20 harness fixes 30645c4f)"
 
 ### 12. Visual: menu look and order against the stock window
 expected: The page menu matches the stock window's page menu in order, separators and labels, side by side (KWin raise plus spectacle)
@@ -112,12 +116,29 @@ result: [pending]
 ## Summary
 
 total: 22
-passed: 0
+passed: 5
 issues: 0
-pending: 22
-skipped: 0
+pending: 12
+skipped: 5
 blocked: 0
 
 ## Gaps
 
 [none yet]
+
+## Deferred Follow-Ups
+
+```yaml
+- test: 9
+  idea: "C22: the title= page tooltip never opens in tooltip-status; the product showTooltip matches upstream browser.js:2016-2038; theia-hover-silent and its plant theia-tooltip-leak wait on it"
+  deferred_at: 2026-11-04
+- test: 8
+  idea: "C23: saved-login shows no autocomplete popup on the username field; cause unknown"
+  deferred_at: 2026-11-04
+- test: 6
+  idea: "C24: Copy Image leaves only text/html on the clipboard, no image flavour; environment (Wayland image targets) or product not separated"
+  deferred_at: 2026-11-04
+- test: 6
+  idea: "C11: a page menu dismissal sends widget.focusPage() a round trip later; when it lands after the next menu opened, chrome focus ends on <body>. The harness now focuses the Theia frame first; the product race itself is unfixed"
+  deferred_at: 2026-11-04
+```
