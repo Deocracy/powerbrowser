@@ -1,9 +1,9 @@
 ---
-status: testing
+status: partial
 phase: 37-permission-prompts-and-dialogs
 source: [37-VERIFICATION.md, 37-REVIEW.md, 37-03-SUMMARY.md, 37-CONTEXT.md]
 started: 2026-11-01T00:00:00Z
-updated: 2026-11-01T00:00:00Z
+updated: 2026-11-05T01:52:10.160Z
 ---
 
 Deferred to the one end-of-milestone pass (Chris, 2026-10-31). Run on `objdir/dist/bin/powerbrowser` with `-purgecaches` after any shell-module change. Spectacle and the KWin raise script need the session DBus, so run with the sandbox off. The live scenarios are `node scripts/verify-prompts-live.mjs --scenario <name>`.
@@ -12,82 +12,94 @@ Items 1-17 are the live scenarios and the live self-test. Items 18-27 are the te
 
 ## Current Test
 
-number: 1
-name: Scenario permission
-expected: |
-  A request from the active tab shows the stock doorhanger with its anchor inside the chrome bar.
-  Allow after the stock delay grants it and the page's callback fires; Block in a second tab denies.
-awaiting: user response
+[testing complete]
 
 ## Tests
 
 ### 1. Scenario `permission`
 expected: Active tab's request shows the stock doorhanger anchored under the chrome bar; Allow after the delay resolves the page callback; Block in a second tab denies
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: permission PASS (notification anchor product fix in 1642f2d7)"
 
 ### 2. Scenario `answer-delay`
 expected: An Allow click inside the stock security delay is ignored (the stock console line proves the branch ran) and the page keeps waiting; Allow after the delay grants (positive control)
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: answer-delay PASS"
 
 ### 3. Scenario `background-queue`
 expected: A background tab's request shows no panel and keeps its pending push; it does not show on another tab's activation; it shows and grants once its own tab is active
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: background-queue PASS"
 
 ### 4. Scenario `cancel-on-evict`
 expected: One background tab asks three distinct prompts; a fourth from the same tab evicts that tab's oldest (its page sees a denial, its stock notification is gone); another background tab's prompt survives; the remaining prompts grant
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: cancel-on-evict PASS"
 
 ### 5. Scenario `remember`
 expected: Allow without Remember leaves a fresh tab on the same origin prompting again; Allow with the stock Remember checkbox leaves a fresh tab granted with no panel, getAllForBrowser reports a persistent allow, and the grant shows in the Phase 31 site panel
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: remember PASS (geolocation permission id harness fix 54af4fc8)"
 
 ### 6. Scenario `sharing`
 expected: Live camera, microphone and screen tracks bring a sharingChanged push and the chrome bar marks; stopping them clears both; a forged frame message carrying sharing: true shows nothing
-result: [pending]
+result: skipped
+reason: "Deferred follow-up: camera, microphone, clear and forged-flag parts PASS (54af4fc8); the screen part needs the KDE screen-share portal chooser answered by hand, so on this host it reports 'screen share was not granted through the stock Allow'"
 
 ### 7. Scenario `camera-doorhanger`
 expected: A camera request shows the stock webRTC-shareDevices doorhanger with its device menulist populated; the stock Allow resolves the page promise
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: camera-doorhanger PASS"
 
 ### 8. Scenario `dialog-probe` (probe 1)
 expected: alert, confirm, prompt, leave-page and HTTP-auth each shown by the stock window-modal commonDialog. While each is open: an IDE edit is typed and read back, the shell window's input-enabled state is read, a traffic tab navigates and the push sequence advances, and a KWin screenshot is taken. A live run writes `.planning/probes/prompt-probe-verdict.json` (replacing the provisional one) and `.planning/probes/prompt-probe/`; then `git add` them by explicit path and run `node scripts/verify-permission-prompts.mjs`. Red when the stock dialog blocks the IDE. Watch: whether BiDi auto-closes content prompts (needs unhandledPromptBehavior: ignore), whether the 127.0.0.1 cross-port 401 shows the auth dialog
-result: [pending]
+result: skipped
+reason: "Deferred follow-up: PROMPT-03 (backlog 999.3): the verdict stays stock-blocks-ide; for all five kinds the IDE edit did not land, shell input was disabled and pushes stalled"
 
 ### 9. Scenario `dialog`
 expected: Each of the five kinds resolves the page on answer; an IDE edit lands and the shell's input stays enabled while it is open; the push sequence advances on the same recorder; screenshots logged for review
-result: [pending]
+result: skipped
+reason: "Deferred follow-up: PROMPT-03 (backlog 999.3): IDE push traffic stops while a stock dialog is open"
 
 ### 10. Scenario `stop-repeat`
 expected: A 20-alert loop is stopped with the stock checkbox on the second alert: the loop finishes with no further dialog, this tab does not prompt again, a new tab (new browsing-context group) still prompts
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: stop-repeat PASS (Remote Agent prefs harness fix 54af4fc8)"
 
 ### 11. Scenario `beforeunload-scope`
 expected: A web tab's leave-page reaches the stock dialog (control); a dirty Theia editor plus a frame reload shows the stock leave dialog, answered "stay"; no `dialogRequest` push is recorded. Watch: whether the Theia frame's location.reload() with a dirty untitled editor prompts at all
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: beforeunload-scope PASS (leftover handler harness fix 54af4fc8)"
 
 ### 12. Scenario `password-save`
 expected: A login form submit shows the stock save doorhanger with fields filled by the prompter (read chrome-side); the stock Save stores the login (read back through Services.logins); no credential reaches a log or a push
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: password-save PASS (identity-icon-box product fix in 1642f2d7; FillHelpers.showConfirmation threw before the login was stored)"
 
 ### 13. Scenario `password-update`
 expected: A changed password shows the stock doorhanger and its stock Update replaces the stored password
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: password-update PASS (same product fix, 1642f2d7)"
 
 ### 14. Scenario `popup-block`
 expected: A gesture-less window.open is blocked; the tab's blocked-popup bar shows inside the web tab widget with the page rect shrunk below it; Allow opens the stored popup as a web tab right after its opener with browsingContext.opener intact; no popup permission is written (read back through the same reader that sees a stock location grant)
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: popup-block PASS"
 
 ### 15. Scenario `hung-script`
 expected: A page loop past dom.max_script_run_time shows the hung-script bar; Keep waiting hides it and it returns after the wait period; Stop script ends the loop
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: hung-script PASS"
 
 ### 16. Scenario `protocol-handler`
 expected: registerProtocolHandler shows the protocol-handler bar; Add stores the handler (read back through the handler service); Don't allow on a second scheme stores nothing
-result: [pending]
+result: pass
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: protocol-handler PASS"
 
 ### 17. `node scripts/verify-prompts-live.mjs --self-test` (live half)
 expected: Clean control session per target scenario green, then all 21 plants each go red naming their drift (the static half already passes)
-result: [pending]
+result: skipped
+reason: "Deferred follow-up: static half PASS (21 plants). Live half run with --self-test --scenario over the 13 scenarios whose clean controls are green: all 13 controls green, 13 of 17 plants red as named. queue-shown-early and activation-wrong-tab stay green; camera-template-missing goes red on an empty device menulist instead of its own failure; allow-loads-frame-url goes red on popup not adopted next to its opener instead of its own failure. The 4 plants on sharing (2), dialog-probe and dialog were not run: the screen-share portal check and PROMPT-03 (999.3)"
 
 ### 18. Review fix CR-01a: an adopted tab's prompt shows only while that tab is current
 expected: Open an adopted tab (a target=_blank link, or a blocked-popup Allow). Its geolocation prompt shows while the adopted tab is current and does not show while a host tab is current; switching host tab to adopted tab to IDE shows and hides it each time and never shows another tab's prompt over the adopted page (`b33f8953`, no live row)
@@ -128,6 +140,7 @@ result: [pending]
 ### 27. Review fix WR-07: the live plants
 expected: The reworded popup-block plants (`allow-loads-frame-url`, `adopt-next-to-opener-failed`) and the plants that only simulate a symptom (`cross-tab-leak`, `theia-beforeunload-relayed`) go red in a live session. Decide whether the adopted-prompt, adopted-bar-navigate and camera-then-geo scenarios are worth writing (WR-07's fix list), since items 18-21 are held only by hand
 result: [pending]
+live: "v1.5 end-of-milestone live pass 2026-11-04, main: adopt-next-to-opener-failed, cross-tab-leak and theia-beforeunload-relayed go red naming their drift; allow-loads-frame-url goes red on popup not adopted next to its opener instead (deferred under item 17). Still open for the owner: whether the adopted-prompt, adopted-bar-navigate and camera-then-geo scenarios are worth writing"
 
 ### 28. Doorhanger placement and keyboard (KDE Wayland)
 expected: The native panel opens over the page's top-left corner just under the chrome bar, above the Theia frame, with its stock Allow, Block and Remember controls; Tab and Enter operate it; Esc dismisses it; it follows a window resize and a move; nothing overlays it
@@ -151,7 +164,8 @@ result: [pending]
 
 ### 33. Probe screenshots
 expected: Review `.planning/probes/prompt-probe/` for the five dialog kinds: does the IDE look and behave interactive while each is open (a screenshot cannot show input state, so cross-check `inputEnabled` in the verdict)
-result: [pending]
+result: skipped
+reason: "Deferred follow-up: the five dialog PNGs are full-desktop captures: kwinShot (verify-prompts-live.mjs) does not raise the shell before spectacle, so they show other windows, not PowerBrowser, and cannot be reviewed. The copies committed in 6eef7dbc are on origin/main (owner decision)"
 
 ### 34. Owner decision: the 37-03 gate (probe 1)
 expected: |
@@ -196,12 +210,29 @@ result: [pending]
 ## Summary
 
 total: 41
-passed: 0
+passed: 13
 issues: 0
-pending: 41
-skipped: 0
+pending: 23
+skipped: 5
 blocked: 0
 
 ## Gaps
 
 [none yet]
+
+## Deferred Follow-Ups
+
+```yaml
+- test: 6
+  idea: "screen sharing needs the KDE portal chooser answered by hand; run sharing with a person at the machine"
+  deferred_at: 2026-11-04
+- test: 8
+  idea: "PROMPT-03 stock dialogs block the IDE (backlog 999.3); dialog-probe and dialog stay red until it lands"
+  deferred_at: 2026-11-04
+- test: 17
+  idea: "four prompts self-test plants misbehave once the self-test gets past sharing: queue-shown-early and activation-wrong-tab stay green, camera-template-missing goes red on an empty device menulist, allow-loads-frame-url goes red on popup not adopted next to its opener; re-site each so it reaches its own failure"
+  deferred_at: 2026-11-04
+- test: 33
+  idea: "kwinShot does not raise the shell before spectacle, so the dialog probe PNGs are full-desktop captures; raise the shell with the KWin script first"
+  deferred_at: 2026-11-04
+```
