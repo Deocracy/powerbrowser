@@ -768,7 +768,7 @@ Plans:
 **Source phase:** 35
 **Deferred at:** 2026-11-04 during /gsd-verify-work 35 session completion
 **Follow-ups:**
-- [ ] Test 9: C22: the title= page tooltip never opens in tooltip-status; the product showTooltip matches upstream browser.js:2016-2038; theia-hover-silent and its plant theia-tooltip-leak wait on it (deferred 2026-11-04)
+- [x] Test 9: C22: the title= page tooltip never opens in tooltip-status; the product showTooltip matches upstream browser.js:2016-2038; theia-hover-silent and its plant theia-tooltip-leak wait on it (deferred 2026-11-04) — fixed in 39-05 (22317895)
 
 ### Phase 999.8: Follow-up — Phase 35 deferred UAT follow-up: Test 8 (BACKLOG)
 
@@ -784,7 +784,7 @@ Plans:
 **Source phase:** 35
 **Deferred at:** 2026-11-04 during /gsd-verify-work 35 session completion
 **Follow-ups:**
-- [ ] Test 6: C24: Copy Image leaves only text/html on the clipboard, no image flavour; environment (Wayland image targets) or product not separated (deferred 2026-11-04)
+- [x] Test 6: C24: Copy Image leaves only text/html on the clipboard, no image flavour; environment (Wayland image targets) or product not separated (deferred 2026-11-04) — fixed in 39-05 (6f6c39da)
 
 ### Phase 999.10: Follow-up — Phase 35 deferred UAT follow-up: Test 6 (BACKLOG)
 
