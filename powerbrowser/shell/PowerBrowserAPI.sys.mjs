@@ -8260,7 +8260,13 @@ function installTooltipsAndLinkStatus(window) {
       }
     },
     showTooltip(x, y, text, direction, browser) {
-      if (Cc["@mozilla.org/widget/dragservice;1"].getService(Ci.nsIDragService).getCurrentSession()) {
+      // C22 (39-05): a headless shell has no drag service (widget/gtk nsDragService::GetInstance returns null),
+      // so upstream's getService throws there and no tooltip opens; no drag service means no drag session.
+      let dragging = false;
+      try {
+        dragging = !!Cc["@mozilla.org/widget/dragservice;1"].getService(Ci.nsIDragService).getCurrentSession();
+      } catch {}
+      if (dragging) {
         return;
       }
       if (!document.hasFocus() || tabIdOfBrowser(browser) === null) {
