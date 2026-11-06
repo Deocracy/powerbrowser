@@ -123,7 +123,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { captureShell } from './lib/pb-kwin.mjs';
 import { REPO_ROOT } from './lib/pb-relaunch.mjs';
@@ -205,6 +205,29 @@ const readRequirements = () => readFileSync(join(REPO_ROOT, REQUIREMENTS), 'utf8
 
 /** Test-only Basic credentials for the harness's own 401 server; never a real account. */
 const AUTH = { user: 'pb-probe', pass: 'pb-probe-pass' };
+/**
+ * PB_CAPTURE_DIR=<dir> (39-11, 37 T28-T32): the session runs headed and captureShell writes 37-T28-doorhanger.png
+ * (permission, the location doorhanger open), 37-T29-strip-mark.png (background-queue, a waiting prompt's mark),
+ * 37-T30-sharing-indicator.png (camera-then-geo, the camera mark after the location grant),
+ * 37-T31-device-and-password-doorhangers.png (password-save: the password doorhanger and a camera request in one
+ * panel) and 37-T32-notification-bars.png (pending-window-reports: the three bar kinds stacked on one tab). Unset,
+ * nothing is captured and nothing is scored differently. Needs the Bash sandbox off.
+ */
+const CAPTURE_DIR = process.env.PB_CAPTURE_DIR ? resolve(process.env.PB_CAPTURE_DIR) : '';
+if (CAPTURE_DIR) {
+    process.env.PB_LIVE_HEADED = '1';
+}
+
+/** PB_CAPTURE_DIR set: the PowerBrowser window (captureShell refuses any other active window) to <dir>/<file>. Unset: nothing. */
+async function capture(file) {
+    if (!CAPTURE_DIR) {
+        return;
+    }
+    mkdirSync(CAPTURE_DIR, { recursive: true });
+    const shot = await captureShell(join(CAPTURE_DIR, file));
+    console.log(`  capture ${file}: ${shot.resourceClass} ${shot.width}x${shot.height}`);
+}
+
 /** Set by main() for a live `--scenario dialog-probe` run only; self-test sessions never write the verdict. */
 let writeVerdict = false;
 
@@ -277,6 +300,8 @@ const PAGES = {
         navigator.registerProtocolHandler('web+pbpend', location.origin + '/handler?u=%s');
         setTimeout(() => { const end = Date.now() + 60000; while (Date.now() < end) { /* hung */ } }, 300);
     </script>` },
+    // 39-11 popup-allow-opener: a sign-in style popup that reports back through window.opener.
+    '/signin': { title: 'Sign in', body: "<p>signin</p><script>if (window.opener) window.opener.postMessage('pb-signed-in', '*');</script>" },
     '/icon': { title: 'Icon', body: `<link rel="icon" href="data:image/png;base64,${ICON_PNG}"><p>icon page</p>` },
 };
 
@@ -408,6 +433,7 @@ async function scenarioPermission(app, fx, plant) {
     if (geometry) {
         return geometry;
     }
+    await capture('37-T28-doorhanger.png');
     await answerStock(app, page.tabId, { skip: plant === 'answer-dropped' });
     if (await geoOutcome(app, page) !== 'granted') {
         return 'stock Allow dispatched but page promise unresolved';
@@ -472,6 +498,10 @@ async function scenarioBackgroundQueue(app, fx, plant) {
     let state = await promptState(app, back.tabId);
     if (!state.has) {
         return 'the backgrounded request has no stock notification (it was dropped, not queued)';
+    }
+    if (CAPTURE_DIR) {
+        await pollFor(async () => (await app.evaluate("document.querySelectorAll('.pb-tab-prompt-pending').length")) > 0 || null, 5000, 'the pending mark').catch(() => null);
+        await capture('37-T29-strip-mark.png');
     }
     if (state.inPanel) {
         return 'panel shown for a backgrounded tab';
@@ -1190,6 +1220,12 @@ async function scenarioPasswordSave(app, fx, plant) {
         if (!filled.user || !filled.pass || !filled.editable) {
             return `the stock template fields are not prefilled and editable (${JSON.stringify(filled)})`;
         }
+        if (CAPTURE_DIR) {
+            // Both stock doorhangers in one panel: the submit's page asks for the camera while the password offer shows.
+            await startRequest(app, page, 'camera');
+            await waitInPanel(app, page.tabId, WEBRTC_ID, 8000);
+            await capture('37-T31-device-and-password-doorhangers.png');
+        }
         if (plant === 'credential-leak') {
             // The plant: a username reaching the chrome log, as a leaking log call would.
             await inChrome(app, `Services.console.logStringMessage('[pw] saved ' + ${JSON.stringify(LOGIN.user)}); return true;`);
@@ -1669,6 +1705,7 @@ async function scenarioCameraThenGeo(app, fx, plant) {
     await new Promise(resolve => setTimeout(resolve, 1500));
     const off = (await pushes(app)).slice(from).find(p => isSharing(page.tabId, { camera: false })(p));
     const kinds = await indicatorKinds(app);
+    await capture('37-T30-sharing-indicator.png');
     await stopTracks(app, page);
     return off || !kinds.includes('camera') ? `${CAMERA_CLEARED} (${off ? 'an all-off push' : `marks ${kinds.join(',') || 'none'}`})` : null;
 }
@@ -1731,6 +1768,7 @@ async function scenarioPendingWindowReports(app, fx, plant) {
         if (!lost.length && !await pollFor(async () => ((await indicatorKinds(app)).includes('camera') ? true : null), 5000, 'the camera mark').catch(() => false)) {
             lost.push('camera mark');
         }
+        await capture('37-T32-notification-bars.png');
         // Teardown: the hung page's own Stop, so the shared content process answers the rest of the session.
         await clickBar(app, id, 'hung-script', 'stop-script').catch(() => null);
         return lost.length ? `${PENDING_LOST} (${lost.join(', ')})` : null;
@@ -1779,6 +1817,127 @@ async function scenarioNavResetsSharing(app, fx, plant) {
     return reset && !kinds.length ? null : `${NAV_LEFT_ON} (all-off push ${reset}, marks ${kinds.join(',') || 'none'})`;
 }
 
+const DISMISSED_MARK = 'a dismissed prompt left a pending mark';
+const DISMISSED_COUNTED = 'a dismissed prompt counted toward the cap';
+/** Test card numbers with a three-digit password: upstream shows that login capture dismissed (LoginManagerChild :2485-2495). */
+const CARD_USERS = ['4111111111111111', '5555555555554444'];
+const CARD_PASS = '123';
+
+/** Whether stock notification `id` of tab `tabId` exists and is shown dismissed. */
+function dismissedNotification(app, tabId, id) {
+    return inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)}); const n = o && window.PopupNotifications.getNotification(${JSON.stringify(id)}, o); return !!n && n.dismissed === true;`);
+}
+
+/** Submits the card-shaped login on a /login tab and waits until upstream shows its capture dismissed; the page navigates. */
+async function dismissedCapture(app, page, user) {
+    const from = (await pushes(app)).length;
+    await app.evaluateIn(page.ctx, `(() => { document.getElementById('u').value = ${JSON.stringify(user)}; document.getElementById('p').value = ${JSON.stringify(CARD_PASS)}; document.getElementById('f').requestSubmit(); return true; })()`);
+    const shown = await pollFor(async () => (await dismissedNotification(app, page.tabId, PASSWORD_ID) ? true : null), 8000, 'the dismissed capture').catch(() => false);
+    return shown && await waitForPush(app, p => isState(page.tabId, false)(p) && String(p.url).includes('/a?'), { from }) >= 0;
+}
+
+/**
+ * WR-03: a prompt upstream shows dismissed makes no record: no pending push, no strip mark, nothing counted toward the
+ * cap of 3. The dismissed show driven is the password capture LoginManagerChild dismisses (a card-number login). The
+ * notification post-prompt is not driven: in the shell it throws before its show (PermissionUI.sys.mjs:664 reads the
+ * anchor icon the shell does not have), and an unchanged login shows no stock notification at all.
+ */
+async function scenarioDismissedNoMark(app, fx, plant) {
+    const front = await openPage(app, fx, '/a');
+    const quiet = await openPage(app, fx, '/login');
+    // Its own URL, so openPage finds this tab's BiDi context and not the first login tab's.
+    const capped = await openPage(app, fx, '/login?tab=2');
+    await makeCurrent(app, front.tabId);
+    if (plant === 'dismissed-recorded') {
+        // WR-03 as reviewed: the show wrapper takes a dismissed show for a waiting prompt (its first read of
+        // options.dismissed sees false); the stock module still shows it dismissed.
+        const applied = await inChrome(app, `const pn = window.PopupNotifications, prod = pn.show;
+            pn.show = function (b, id, m, a, main, sec, options) {
+                if (options && options.dismissed) { let reads = 0; Object.defineProperty(options, 'dismissed', { configurable: true, enumerable: true, get: () => reads++ > 0, set() {} }); }
+                return prod.apply(this, arguments);
+            };
+            return pn.show !== prod;`);
+        if (!applied) {
+            return `${BROKEN} the dismissed-recorded plant did not take`;
+        }
+    }
+    const from = (await pushes(app)).length;
+    if (!await dismissedCapture(app, quiet, CARD_USERS[0])) {
+        return `${BROKEN} upstream showed no dismissed password capture, so no mark proves nothing`;
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    const pushed = (await pushes(app)).slice(from).filter(isDoorhanger(quiet.tabId, true));
+    const marks = await app.evaluate("document.querySelectorAll('.pb-tab-prompt-pending').length");
+    if (pushed.length || marks) {
+        return `${DISMISSED_MARK} (${pushed.length} pending push(es), ${marks} strip mark(s))`;
+    }
+    // The cap: a dismissed capture, then three real waiting prompts on the same tab. Counted, it would be the oldest
+    // record and the third real prompt would evict it.
+    if (!await dismissedCapture(app, capped, CARD_USERS[1])) {
+        return `${BROKEN} upstream showed no dismissed password capture on the second tab`;
+    }
+    for (const kind of ['geo', 'storage', 'camera']) {
+        const at = (await pushes(app)).length;
+        await startRequest(app, capped, kind);
+        if (await waitForPush(app, p => isDoorhanger(capped.tabId, true)(p) && p.permission === REQUESTS[kind].id, { from: at }) < 0) {
+            return `${BROKEN} no pending push for the queued ${kind} request`;
+        }
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    if (!await dismissedNotification(app, capped.tabId, PASSWORD_ID) || !(await promptState(app, capped.tabId, GEO_ID)).has) {
+        return DISMISSED_COUNTED;
+    }
+    return null;
+}
+
+const OPENER_LOST = 'Allow lost window.opener';
+const BLANK_NOT_OFFERED = 'a blank blocked popup was not offered';
+
+/** WR-04: a blocked sign-in popup reports back through window.opener after Allow; a blocked window.open() is offered and opens. */
+async function scenarioPopupAllowOpener(app, fx, plant) {
+    const opener = await openPage(app, fx, '/opener');
+    await app.evaluateIn(opener.ctx, "(window.__pbMsgs = [], window.addEventListener('message', e => window.__pbMsgs.push(e.data)), true)");
+    let from = (await pushes(app)).length;
+    await app.evaluateIn(opener.ctx, `(() => { window.open(${JSON.stringify(fx.url('/signin'))}); window.open(); return true; })()`);
+    const offered = await waitForPush(app, p => isBar(opener.tabId, 'blocked-popup', true)(p) && p.displayFields?.popupCount === 2, { from });
+    if (offered < 0) {
+        return `${BLANK_NOT_OFFERED} (the bar does not offer both blocked popups)`;
+    }
+    if (plant === 'allow-drops-opener') {
+        // WR-04 as reviewed: the Allow loads the stored spec into a fresh tab instead of replaying the page's own window.open.
+        const applied = await inChrome(app, `const o = overlayOf(${JSON.stringify(opener.tabId)});
+            o.popupAndRedirectBlocker.unblockPopup = () => window.openLinkIn(${JSON.stringify(fx.url('/signin'))}, 'tab', { openerBrowser: o, triggeringPrincipal: Services.scriptSecurityManager.createNullPrincipal({}) });
+            return o.popupAndRedirectBlocker.unblockPopup.length === 0;`);
+        if (!applied) {
+            return `${BROKEN} the allow-drops-opener plant did not take`;
+        }
+    }
+    const before = new Set((await mainOrder(app)).map(w => w.tabId));
+    from = (await pushes(app)).length;
+    if (await clickBar(app, opener.tabId, 'blocked-popup', 'allow-popup') !== 'clicked') {
+        return 'no Allow button on the blocked-popup bar';
+    }
+    if (!await pollFor(async () => ((await mainOrder(app)).some(w => String(w.url).endsWith('/signin')) ? true : null), 8000, 'the sign-in popup').catch(() => false)) {
+        return 'the bar Allow opened no tab for the sign-in popup';
+    }
+    const reported = await pollFor(async () => ((await app.evaluateIn(opener.ctx, "window.__pbMsgs.includes('pb-signed-in')")) ? true : null), 5000, 'the opener message').catch(() => false);
+    if (!reported) {
+        return OPENER_LOST;
+    }
+    // The popup left the list once its replay was sent: the bar now offers exactly the blank one.
+    if (await waitForPush(app, p => isBar(opener.tabId, 'blocked-popup', true)(p) && p.displayFields?.popupCount === 1, { from, timeoutMs: 5000 }) < 0) {
+        return `${BLANK_NOT_OFFERED} (after the first Allow the bar does not offer one popup)`;
+    }
+    for (const w of await mainOrder(app)) {
+        before.add(w.tabId);
+    }
+    if (await clickBar(app, opener.tabId, 'blocked-popup', 'allow-popup') !== 'clicked') {
+        return `${BLANK_NOT_OFFERED} (no Allow button for it)`;
+    }
+    const blank = await pollFor(async () => (await mainOrder(app)).find(w => !before.has(w.tabId)) ?? null, 8000, 'the blank popup').catch(() => null);
+    return blank ? null : 'the blank blocked popup did not open';
+}
+
 const SCENARIOS = {
     permission: scenarioPermission,
     'answer-delay': scenarioAnswerDelay,
@@ -1796,12 +1955,14 @@ const SCENARIOS = {
     'password-save': scenarioPasswordSave,
     'password-update': scenarioPasswordUpdate,
     'popup-block': scenarioPopupBlock,
+    'popup-allow-opener': scenarioPopupAllowOpener,
     'adopted-prompt': scenarioAdoptedPrompt,
     'adopted-bar-navigate': scenarioAdoptedBarNavigate,
     'adopted-parity': scenarioAdoptedParity,
     'hung-script': scenarioHungScript,
     'pending-window-reports': scenarioPendingWindowReports,
     'protocol-handler': scenarioProtocolHandler,
+    'dismissed-no-mark': scenarioDismissedNoMark,
 };
 
 /** Each plant runs its target scenario with one thing wrong and must go red naming `expect`. */
@@ -1831,6 +1992,8 @@ const PLANTS = [
     { plant: 'geo-report-clears-camera', target: 'camera-then-geo', expect: 'the location grant cleared the camera mark' },
     { plant: 'pending-report-dropped', target: 'pending-window-reports', expect: 'a report made before the adoption ack was lost' },
     { plant: 'nav-reset-dropped', target: 'nav-resets-sharing', expect: 'navigation left a sharing mark on' },
+    { plant: 'dismissed-recorded', target: 'dismissed-no-mark', expect: 'a dismissed prompt left a pending mark' },
+    { plant: 'allow-drops-opener', target: 'popup-allow-opener', expect: 'Allow lost window.opener' },
     { plant: 'hung-stop-ignored', target: 'hung-script', expect: 'Stop script did not terminate the loop' },
     { plant: 'protocol-stock-path-unhooked', target: 'protocol-handler', expect: 'stock protocol bar path reached: getNotificationBox TypeError' },
 ];
