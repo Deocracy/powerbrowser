@@ -531,7 +531,7 @@ async function selfTest() {
         hits.all += 1;
         const path = decodeURIComponent(req.url.split('?')[0]);
         const seg = path.split('/').filter(Boolean);
-        // The _redirects rule: /update/6/<10 placeholders>/update.xml -> /<channel>/<target>/update.xml.
+        // The _redirects rule: /update/6/<6 placeholders>/* -> /<channel>/<target>/update.xml (ten placeholders never match on Pages).
         const file = seg[0] === 'update' && seg.length === 13 ? join(dir, 'tree', seg[7], seg[5], 'update.xml') : join(dir, 'origin', ...seg);
         if (file.startsWith(join(dir, 'origin'))) hits.mar += 1;
         let bytes;

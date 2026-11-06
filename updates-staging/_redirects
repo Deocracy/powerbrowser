@@ -1,1 +1,1 @@
-/update/6/:product/:version/:buildid/:target/:locale/:channel/:osversion/:syscaps/:dist/:distversion/update.xml  /:channel/:target/update.xml  200
+/update/6/:product/:version/:buildid/:target/:locale/:channel/*  /:channel/:target/update.xml  200

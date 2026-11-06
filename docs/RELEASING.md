@@ -810,10 +810,10 @@ an empty build command and output `/`. Its tree is
 The placeholder is not decoration: git cannot commit an empty directory, and an empty
 `updates` element is exactly what an update origin returns when it has nothing to
 offer. One `_redirects` rule maps the baked eleven-segment path onto that tree, with
-ten placeholders and a 200 proxy:
+six placeholders, a splat for the last five segments, and a 200 proxy:
 
 ```
-/update/6/:product/:version/:buildid/:target/:locale/:channel/:osversion/:syscaps/:dist/:distversion/update.xml  /:channel/:target/update.xml  200
+/update/6/:product/:version/:buildid/:target/:locale/:channel/*  /:channel/:target/update.xml  200
 ```
 
 That rule must be **probed live** with the segment shapes a real client sends,
@@ -822,7 +822,14 @@ parentheses and a `SYSTEM_CAPABILITIES` segment carrying `%3A` and `%2C`. If a
 placeholder does not match an escaped segment, the fallback is a minimal `_worker.js`
 on the same project that splits the path and serves `<channel>/<target>/update.xml`.
 Whichever mechanism ships is recorded here by the stage. Do not proceed on an
-unprobed rule. An unknown BUILD_TARGET must return 404, not another target's
+unprobed rule.
+
+Measured 2026-11-06 on a throwaway classic Pages project: a rule with ten placeholders
+parses ("Parsed 1 valid redirect rule") but never matches, even with plain segments and a
+fixed destination; seven and eight placeholders match. Six placeholders plus a splat match
+the real client shape (`%20`, literal parentheses, `%3A`, `%2C`) with 200 and the descriptor
+bytes, and an unknown BUILD_TARGET returns 404. The splat rule shipped; `_worker.js` was not
+needed. An unknown BUILD_TARGET must return 404, not another target's
 descriptor.
 
 MAR bytes never go on Pages: Pages caps assets at 25 MiB and a MAR is far larger.
