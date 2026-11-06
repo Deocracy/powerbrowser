@@ -70,6 +70,21 @@
  *                      holding the overlay the tab attaches and the page stays;
  *                      with the ack held past chrome's fallback the widget is
  *                      dropped and the page is in the stock window once.
+ *   gui01-adopted      (36 T12, GUI-01) With an adopted tab open, the palette
+ *                      command and a popup-features window each reach a stock
+ *                      window, the adopted tab stays intact, and closing the
+ *                      stock windows leaves the application running.
+ *   stock-command-reprobe (36 T16, WR-07) A first channel probe made to fail;
+ *                      Open Browser Window re-probes and opens the stock
+ *                      window. With the channel held dead the thrown copy is
+ *                      checked against verify-shell-error-copy.mjs's shape
+ *                      rule (read from that file) plus the command id, host,
+ *                      port and raw error shapes, names PowerBrowser and ends
+ *                      with a step naming the palette command.
+ *
+ * PB_CAPTURE_DIR=<dir> (36 T17): the session runs headed and captureShell
+ * writes 36-T17-adopted-tab.png in adopt-order (the adopted tab current beside
+ * the strip-opened tabs).
  *
  * What each red line names (the --self-test expectations are these words):
  *   adopt-order: FAIL -- the adopted tab is not directly after its opener ...
@@ -83,6 +98,9 @@
  *   adopt-close: FAIL -- window.close() left the adopted tab open ...
  *   adopt-blank-write: FAIL -- a written blank window lost the opener's identity ...
  *   adopt-late-ack: FAIL -- a late ack lost or duplicated the page ...
+ *   gui01-adopted: FAIL -- GUI-01 broke with an adopted tab open ...
+ *   stock-command-reprobe: FAIL -- the command did not re-probe ...
+ *   stock-command-reprobe: FAIL -- the error copy leaked an internal identifier ...
  * The self-test refuses, before any session, a plant table in which two plants
  * on one target have expects that contain one another (999.11).
  *
@@ -101,6 +119,9 @@
  * Node built-ins plus scripts/lib only.
  */
 
+import { mkdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { captureShell } from './lib/pb-kwin.mjs';
 import {
     BROKEN,
     chromeActiveTabId,
@@ -132,6 +153,27 @@ const UNKNOWN_PC_KEY = 'pc-999999';
 const WEB_TAB_ACK_TIMEOUT_MS = Number(sourceMatch('theia/extensions/tab-uris/src/browser/web-tab.ts', /export const WEB_TAB_ACK_TIMEOUT_MS = (\d+);/));
 const GROUP_RESPONSE_EVENT = sourceConst('theia/extensions/tab-uris/src/browser/web-tab.ts', 'GROUP_RESPONSE_EVENT');
 const WRITTEN_TEXT = 'written by the opener';
+// GUI-01's command, its palette label and its dead-channel copy, from the file that registers them.
+const BWC = 'theia/extensions/tab-uris/src/browser/browser-window-command.ts';
+const OPEN_BROWSER_WINDOW_COMMAND_ID = sourceConst(BWC, 'OPEN_BROWSER_WINDOW_COMMAND_ID');
+const OPEN_BROWSER_WINDOW_LABEL = sourceMatch(BWC, /id: OPEN_BROWSER_WINDOW_COMMAND_ID,\s*label: '([^']+)'/);
+const OPEN_BROWSER_WINDOW_NO_ANSWER_COPY = sourceConst(BWC, 'OPEN_BROWSER_WINDOW_NO_ANSWER_COPY');
+
+// 39-12 (36 T17): PB_CAPTURE_DIR=<dir> runs the session headed and captures the shell at named states.
+const CAPTURE_DIR = process.env.PB_CAPTURE_DIR ? resolve(process.env.PB_CAPTURE_DIR) : '';
+if (CAPTURE_DIR) {
+    process.env.PB_LIVE_HEADED = '1';
+}
+
+/** PB_CAPTURE_DIR set: the PowerBrowser window (captureShell refuses any other active window) to <dir>/<file>. Unset: nothing. */
+async function capture(note, file) {
+    if (!CAPTURE_DIR) {
+        return;
+    }
+    mkdirSync(CAPTURE_DIR, { recursive: true });
+    const shot = await captureShell(join(CAPTURE_DIR, file));
+    note(`capture ${file}: ${shot.resourceClass} ${shot.width}x${shot.height}`);
+}
 
 const BLOCK = 'position:absolute;left:10px;width:200px;height:30px;display:block';
 const PAGES = {
@@ -393,6 +435,12 @@ async function adoptOrder({ app, pages, plant, fail, note }) {
             return fail(`the ${selector} adopt also opened a stock window`);
         }
         note(`${selector}: adopted ${adopted.tabId} directly after ${a.tabId}; shell windows 1; no stock window`);
+        if (selector === '#blank') {
+            // 36 T17 (VB-01): the adopted tab current beside the strip-opened tabs A and B.
+            await makeCurrent(app, adopted.tabId);
+            await pollFor(async () => await overlayVisibility(app, adopted.tabId) === 'visible', 5000, 'the adopted page to be shown');
+            await capture(note, '36-T17-adopted-tab.png');
+        }
         if (selector === '#open') {
             // The reselect leg: A was current when this tab activated, so closing it must go back to A.
             if (await waitCurrent(app, adopted.tabId) !== adopted.tabId) {
@@ -926,6 +974,176 @@ async function adoptLateAck({ app, pages, plant, fail, note }) {
     note(`fallback: ${pathB} in stock window ${found.window} once; the late widget was dropped`);
 }
 
+/** The stock windows that hold `url` now, each a chrome context id. */
+const stockWindowsHolding = async (app, url) => {
+    const out = [];
+    for (const id of await stockWindows(app)) {
+        if (await app.evaluateIn(id, `gBrowser.browsers.some(b => b.currentURI.spec === ${J(url)})`).catch(() => false) === true) {
+            out.push(id);
+        }
+    }
+    return out;
+};
+
+async function gui01Adopted({ app, pages, plant, fail, note }) {
+    const broke = 'GUI-01 broke with an adopted tab open';
+    const a = await openerTab(app, pages, 'gui01');
+    const adopted = await adoptFrom(app, pages, a, '#open', '/target?leg=gui01-adopted');
+    if (adopted.error) {
+        return fail(adopted.error);
+    }
+    // The adopted tab as it stands before either stock window opens; re-read after each leg and after the close.
+    const intact = async when => {
+        const seen = await strip(app, adopted.tabId);
+        const order = seen ? seen.order : [];
+        const ok = order.indexOf(adopted.tabId) === order.indexOf(a.tabId) + 1
+            && await attachedTabOn(app, adopted.url, 1000) === adopted.tabId
+            && (await app.contexts()).filter(e => e.url === adopted.url).length === 1
+            && await inChrome(app, `return !!overlayOf(${J(adopted.tabId)});`) === true
+            && await shellWindows(app) === 1;
+        return ok ? '' : `${broke}: ${when} the adopted tab ${adopted.tabId} is not intact (strip ${J(order)})`;
+    };
+    if (plant === 'stock-command-dead') {
+        // The palette route sends nothing to chrome: the command resolves and no stock window opens.
+        await probe(app, `get('BrowserWindowCommandContribution').requestStockTab = function () { window.__pbPlantRan = true; return false; };
+            return true;`);
+    }
+    const cmdPath = '/target?leg=gui01-command';
+    const cmdUrl = pages.url(cmdPath);
+    const ran = await probe(app, `try { await get('CommandRegistry').executeCommand(${J(OPEN_BROWSER_WINDOW_COMMAND_ID)}, ${J(cmdUrl)}); return 'ran'; }
+        catch (e) { return 'threw: ' + e.message; }`);
+    if (plant === 'stock-command-dead' && await plantRan(app, 'page')) {
+        note('PLANT stock-command-dead applied');
+    }
+    const byCommand = await stockWindowOn(app, cmdUrl, 30000);
+    if (!byCommand) {
+        return fail(`${broke}: the palette command reached no stock window for ${cmdPath} (${ran})`);
+    }
+    let drift = await intact('after the palette command');
+    if (drift) {
+        return fail(drift);
+    }
+    const popPath = '/target?leg=gui01-popup';
+    const popUrl = pages.url(popPath);
+    await aimAt(app, a, popPath);
+    await clickIn(app, a, '#popup');
+    const byPopup = await stockWindowOn(app, popUrl, 15000);
+    if (!byPopup) {
+        return fail(`${broke}: window.open with popup features reached no stock window for ${popPath}`);
+    }
+    if ((drift = await intact('after the popup'))) {
+        return fail(drift);
+    }
+    note(`palette command -> stock window ${byCommand.window}; popup -> stock window ${byPopup.window}; ${adopted.tabId} intact`);
+    // Close every stock window holding either page; the application must keep running with the adopted tab.
+    const windows = [...new Set([...await stockWindowsHolding(app, cmdUrl), ...await stockWindowsHolding(app, popUrl)])];
+    for (const id of windows) {
+        await app.evaluateIn(id, 'setTimeout(() => window.close(), 0); true').catch(() => undefined);
+    }
+    try {
+        await pollFor(async () => !(await stockWindows(app)).some(id => windows.includes(id)), 15000, 'the stock windows to close');
+    } catch {
+        return fail(`${BROKEN} the stock window(s) ${J(windows)} did not close`);
+    }
+    if ((drift = await intact('after the stock windows closed'))) {
+        return fail(drift);
+    }
+    if (await probe(app, "return get('FrontendApplicationStateService').state;") !== 'ready') {
+        return fail(`${broke}: the frontend is not ready after the stock windows closed`);
+    }
+    note(`closed ${windows.length} stock window(s): one shell window, frontend ready, ${adopted.tabId} intact`);
+}
+
+/** The no-internals shape rule of verify-shell-error-copy.mjs, read from that file, plus the command id, a host or port, and raw error text. */
+const COPY_RULE_SOURCE = 'scripts/verify-shell-error-copy.mjs';
+const COPY_LEAK_SHAPES = [
+    ['all-caps underscored token', new RegExp(sourceMatch(COPY_RULE_SOURCE, /const ALL_CAPS_TOKEN = \/(.+)\/g;/), 'g')],
+    ['dotted multi-segment key', new RegExp(sourceMatch(COPY_RULE_SOURCE, /const DOTTED_KEY = \/(.+)\/g;/), 'g')],
+    ['command id', new RegExp(OPEN_BROWSER_WINDOW_COMMAND_ID.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')],
+    ['kebab-case identifier', /\b[a-z]+(?:-[a-z]+)+\b/g],
+    ['host or port', /\b\d{1,3}(?:\.\d{1,3}){3}\b|:\d{2,5}\b|\blocalhost\b/g],
+    ['raw error text', /\b[A-Za-z]*Error\b|\bat \S+:\d+/g],
+];
+
+/** Every leak `copy` carries, by shape; the empty list when it is clean. */
+const copyLeaks = copy => COPY_LEAK_SHAPES.flatMap(([shape, re]) => (copy.match(re) ?? []).map(hit => `${shape} ${J(hit)}`));
+
+async function stockCommandReprobe({ app, pages, plant, fail, note }) {
+    // One instrument: a capture listener that swallows probe replies while the channel is held dead, and counts the
+    // ones that reach the command. The first probe is made to fail here, the way a sidecar swap at startup would.
+    const first = await probe(app, `const c = get('BrowserWindowCommandContribution');
+        const s = window.__pbProbeCh = { dead: true, swallowed: 0, answered: 0 };
+        addEventListener(${J(GROUP_RESPONSE_EVENT)}, e => {
+            const id = e.detail && e.detail.requestId;
+            if (typeof id !== 'string' || !id.startsWith('probe-channel-')) return;
+            if (s.dead) { s.swallowed += 1; e.stopImmediatePropagation(); } else { s.answered += 1; }
+        }, true);
+        await c.probeChannel();
+        s.dead = false;
+        return { alive: c.channelAlive, swallowed: s.swallowed };`);
+    if (first?.alive !== false || first?.swallowed !== 1) {
+        return fail(`${BROKEN} the first channel probe could not be made to fail (${J(first)})`);
+    }
+    if (plant === 'reprobe-off') {
+        // The WR-07 defect: one startup probe, never retried.
+        await probe(app, `get('BrowserWindowCommandContribution').probeChannel = async function () { window.__pbPlantRan = true; };
+            return true;`);
+    }
+    if (plant === 'reprobe-copy-leak') {
+        // The pre-fix copy shape: the command id and the raw cause in the thrown text.
+        await probe(app, `const c = get('BrowserWindowCommandContribution'); const original = c.openBrowserWindow;
+            c.openBrowserWindow = async function (url) {
+                try { return await original.call(c, url); } catch (e) {
+                    window.__pbPlantRan = true;
+                    throw new Error(${J(OPEN_BROWSER_WINDOW_COMMAND_ID)} + ': ' + e.message + ' (no-answer on 127.0.0.1:9000)');
+                }
+            };
+            return true;`);
+    }
+    const path = '/target?leg=reprobe';
+    const url = pages.url(path);
+    const run = await probe(app, `const s = window.__pbProbeCh; const before = s.answered;
+        try { await get('CommandRegistry').executeCommand(${J(OPEN_BROWSER_WINDOW_COMMAND_ID)}, ${J(url)}); return { threw: false, reprobed: s.answered - before }; }
+        catch (e) { return { threw: true, reprobed: s.answered - before, message: String(e && e.message) }; }`);
+    if (plant === 'reprobe-off' && await plantRan(app, 'page')) {
+        note('PLANT reprobe-off applied');
+    }
+    if (run?.threw || !(run?.reprobed >= 1)) {
+        return fail(`the command did not re-probe after a failed first probe (${J(run)})`);
+    }
+    if (!await stockWindowOn(app, url, 30000)) {
+        return fail(`the command did not re-probe into a stock window: none holds ${path}`);
+    }
+    note(`after a failed first probe the command re-probed (${run.reprobed}) and opened ${path} in a stock window`);
+    // The channel held dead: the command's own re-probe is swallowed too, and the thrown copy is what the user sees.
+    const dead = await probe(app, `const c = get('BrowserWindowCommandContribution'); const s = window.__pbProbeCh;
+        s.dead = true;
+        try {
+            await c.probeChannel();
+            await get('CommandRegistry').executeCommand(${J(OPEN_BROWSER_WINDOW_COMMAND_ID)}, ${J(pages.url('/target?leg=reprobe-dead'))});
+            return { threw: false };
+        } catch (e) { return { threw: true, message: String(e && e.message) }; } finally { s.dead = false; }`);
+    if (plant === 'reprobe-copy-leak' && await plantRan(app, 'page')) {
+        note('PLANT reprobe-copy-leak applied');
+    }
+    if (!dead?.threw) {
+        return fail(`with the channel dead the command threw nothing, so the user sees no copy (${J(dead)})`);
+    }
+    const copy = dead.message;
+    const leaks = copyLeaks(copy);
+    if (leaks.length) {
+        return fail(`the error copy leaked an internal identifier: ${leaks.join(', ')} in ${J(copy)}`);
+    }
+    const sentences = copy.split(/(?<=\.)\s+/);
+    if (!/^PowerBrowser\b/.test(copy) || !sentences[sentences.length - 1].includes(OPEN_BROWSER_WINDOW_LABEL)) {
+        return fail(`the dead-channel copy ${J(copy)} must name PowerBrowser and end with a next step naming ${J(OPEN_BROWSER_WINDOW_LABEL)}`);
+    }
+    if (copy !== OPEN_BROWSER_WINDOW_NO_ANSWER_COPY) {
+        return fail(`the dead-channel copy ${J(copy)} is not the command's no-answer copy in the tree`);
+    }
+    note(`dead channel: threw ${J(copy)}`);
+}
+
 // ---------------------------------------------------------------------------
 // Runner
 // ---------------------------------------------------------------------------
@@ -941,6 +1159,8 @@ const SCENARIOS = {
     'adopt-close': adoptClose,
     'adopt-blank-write': adoptBlankWrite,
     'adopt-late-ack': adoptLateAck,
+    'gui01-adopted': gui01Adopted,
+    'stock-command-reprobe': stockCommandReprobe,
 };
 
 /** The positive control each absence-asserting scenario needs green earlier in the same session. */
@@ -1026,6 +1246,9 @@ const PLANTS = [
     { plant: 'close-ignored', target: 'adopt-close', run: ['adopt-close'], expect: 'window.close() left the adopted tab open' },
     { plant: 'blank-hidden', target: 'adopt-blank-write', run: ['adopt-blank-write'], expect: "a written blank window lost the opener's identity" },
     { plant: 'late-ack-closes', target: 'adopt-late-ack', run: ['adopt-late-ack'], expect: 'a late ack lost or duplicated the page' },
+    { plant: 'stock-command-dead', target: 'gui01-adopted', run: ['gui01-adopted'], expect: 'GUI-01 broke with an adopted tab open' },
+    { plant: 'reprobe-off', target: 'stock-command-reprobe', run: ['stock-command-reprobe'], expect: 'the command did not re-probe' },
+    { plant: 'reprobe-copy-leak', target: 'stock-command-reprobe', run: ['stock-command-reprobe'], expect: 'the error copy leaked an internal identifier' },
 ];
 
 /**
