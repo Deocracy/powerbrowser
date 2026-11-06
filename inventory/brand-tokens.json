@@ -577,7 +577,7 @@
       "case_form": "title",
       "class": "coincidental",
       "target": "Deocracy",
-      "expected_count": 21,
+      "expected_count": 22,
       "expected_files": [
         "LICENSING.md",
         "README.md",
@@ -606,7 +606,7 @@
         "website-staging/legal.html",
         "website-staging/privacy.html"
       ],
-      "reason": "R7 (owner ruling 2026-11-03, .planning/workstreams/deploy/FINISH-PLAN.md), corrected by the owner 2026-11-04: the vendor, copyright holder and trademark holder of PowerBrowser is Deocracy Institute; the machine-side vendor is `Deocracy`. The scan matches the `Deocracy` token inside `Deocracy Institute`, so the holder name is reconciled by these rows. COUNT MOVED 20 -> 21 (owner 2026-11-04): +1 in configuration.toml, whose vendor-split comment now names both the display form `Deocracy Institute` and the machine form `Deocracy`. These are the sites that name the legal vendor: configuration.toml [product] vendor_machine/vendor_display and [legal] copyright_holder/trademark_notice, the generated LICENSING.md, the MOZ_APP_VENDOR identity comparand, the brand.ftl comment literal in scripts/generate.mjs, the application.ini comment in scripts/verify-branding-identity.mjs, the Theia trademark strings, the README attribution and the website-staging footer and legal lines. The originating product used the same vendor token, so it is classified coincidental here and scoped to these files; the count is exact, and any occurrence outside these files falls through to the broad renameable row and fails."
+      "reason": "COUNT MOVED 21 -> 22: website-staging/privacy.html now states the postal address as Deocracy Institute (owner 2026-11-06, plan 47-04 step 7). R7 (owner ruling 2026-11-03, .planning/workstreams/deploy/FINISH-PLAN.md), corrected by the owner 2026-11-04: the vendor, copyright holder and trademark holder of PowerBrowser is Deocracy Institute; the machine-side vendor is `Deocracy`. The scan matches the `Deocracy` token inside `Deocracy Institute`, so the holder name is reconciled by these rows. COUNT MOVED 20 -> 21 (owner 2026-11-04): +1 in configuration.toml, whose vendor-split comment now names both the display form `Deocracy Institute` and the machine form `Deocracy`. These are the sites that name the legal vendor: configuration.toml [product] vendor_machine/vendor_display and [legal] copyright_holder/trademark_notice, the generated LICENSING.md, the MOZ_APP_VENDOR identity comparand, the brand.ftl comment literal in scripts/generate.mjs, the application.ini comment in scripts/verify-branding-identity.mjs, the Theia trademark strings, the README attribution and the website-staging footer and legal lines. The originating product used the same vendor token, so it is classified coincidental here and scoped to these files; the count is exact, and any occurrence outside these files falls through to the broad renameable row and fails."
     },
     {
       "token": "sourcerer.dev",
