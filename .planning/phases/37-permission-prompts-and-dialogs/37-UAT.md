@@ -3,7 +3,7 @@ status: partial
 phase: 37-permission-prompts-and-dialogs
 source: [37-VERIFICATION.md, 37-REVIEW.md, 37-03-SUMMARY.md, 37-CONTEXT.md]
 started: 2026-11-01T00:00:00Z
-updated: 2026-11-06T14:54:18.000Z
+updated: 2026-11-06T22:00:02.000Z
 ---
 
 Deferred to the one end-of-milestone pass (Chris, 2026-10-31). Run on `objdir/dist/bin/powerbrowser` with `-purgecaches` after any shell-module change. Spectacle and the KWin raise script need the session DBus, so run with the sandbox off. The live scenarios are `node scripts/verify-prompts-live.mjs --scenario <name>`.
@@ -43,8 +43,9 @@ evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: remember PASS (geol
 
 ### 6. Scenario `sharing`
 expected: Live camera, microphone and screen tracks bring a sharingChanged push and the chrome bar marks; stopping them clears both; a forged frame message carrying sharing: true shows nothing
-result: skipped
-reason: "Deferred follow-up: camera, microphone, clear and forged-flag parts PASS (54af4fc8); the screen part needs the KDE screen-share portal chooser answered by hand, so on this host it reports 'screen share was not granted through the stock Allow'"
+result: pass
+evidence: "39-09 2026-11-06, main d891dbe7: sharing PASS on the X11 capture route, a harness route only: the session runs with media.webrtc.capture.allow-pipewire=false and MOZ_ENABLE_WAYLAND=0, GDK_BACKEND=x11, XDG_SESSION_TYPE=x11, so getDisplayMedia takes libwebrtc's X11 screen capturer and the stock doorhanger lists the screen with no KDE portal chooser. The pref alone gave NotFoundError: the X11 capturer is built only when IsRunningUnderWayland() is false. Camera, microphone and screen pushes and marks, the clear push and the forged-flag leg all pass; --self-test --scenario sharing: control green, sharing-stuck-on and frame-flag-accepted red"
+human: "37 T6 portal click: on the default Wayland session (no route), share a screen from a page and pick it in the KDE portal chooser; the chrome bar shows the screen mark and stopping the share clears it"
 
 ### 7. Scenario `camera-doorhanger`
 expected: A camera request shows the stock webRTC-shareDevices doorhanger with its device menulist populated; the stock Allow resolves the page promise
@@ -166,8 +167,8 @@ result: [pending]
 
 ### 33. Probe screenshots
 expected: Review `.planning/probes/prompt-probe/` for the five dialog kinds: does the IDE look and behave interactive while each is open (a screenshot cannot show input state, so cross-check `inputEnabled` in the verdict)
-result: skipped
-reason: "Deferred follow-up: the five dialog PNGs are full-desktop captures: kwinShot (verify-prompts-live.mjs) does not raise the shell before spectacle, so they show other windows, not PowerBrowser, and cannot be reviewed. The copies committed in 6eef7dbc are on origin/main (owner decision)"
+result: pass
+evidence: "39-09 2026-11-06, main fae88df5: the five dialog PNGs are window captures. kwinShot now goes through pb-kwin captureShell (raise, active-window gate on the powerbrowser class, spectacle -a -S) and keeps a PNG only when its size equals the active window's frame times its output scale; each is 1600x1000, the 1280x800 shell frame at scale 1.25, and each was opened and shows only the PowerBrowser window. Headed run (PB_LIVE_HEADED=1, sandbox off); verdict unchanged (stock-blocks-ide, inputEnabled false for every kind). The stock dialog is its own window and is not in the shell capture. The full-desktop copies from 6eef7dbc remain in history on origin/main (owner decision)"
 
 ### 34. Owner decision: the 37-03 gate (probe 1)
 expected: |
@@ -228,10 +229,10 @@ owner: "Chris 2026-11-06 via AskUserQuestion: box 37, Accept all (Recommended). 
 ## Summary
 
 total: 41
-passed: 21
+passed: 23
 issues: 0
 pending: 15
-skipped: 5
+skipped: 3
 blocked: 0
 
 ## Gaps

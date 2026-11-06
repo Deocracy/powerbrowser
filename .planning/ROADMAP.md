@@ -587,7 +587,7 @@ them per a downstream's manifest is Phase 4's TEL-03.
 **Goal:** Fix every open v1.5 defect and finish the end-of-milestone pass, so v1.5 Chrome Bar Firefox Parity closes with no green-by-exclusion rows (Chris, 2026-11-05: "fix all three", "fix all 13", "every deferral well documented").
 **Requirements**: PROMPT-04, PROMPT-06, PROMPT-08 (C22-C24 live), EXT-01..EXT-10 (999.15/999.16), plus the live halves of every v1.5 requirement whose UAT row is still pending
 **Depends on:** Phase 38
-**Plans:** 8/20 plans executed
+**Plans:** 9/20 plans executed
 
 **Scope:**
 1. Product fixes: C22 the `title=` page tooltip never opens; C23 the saved-login autocomplete popup never opens; C24 Copy Image leaves no image flavour on the clipboard; C11 page-menu dismissal `focusPage()` race (999.10).
@@ -624,7 +624,7 @@ Plans:
 - [x] 39-08-PLAN.md (wave 7) — Harness fixes 999.4, 999.6, 999.5
 
 **Wave 8** *(blocked on Wave 7 completion)*
-- [ ] 39-09-PLAN.md (wave 8) — Prompts harness 999.14, 999.13, 999.12 (X11 sharing route)
+- [x] 39-09-PLAN.md (wave 8) — Prompts harness 999.14, 999.13, 999.12 (X11 sharing route)
 
 **Wave 9** *(blocked on Wave 8 completion)*
 - [ ] 39-10-PLAN.md (wave 9) — OQ1 ruling implemented, probe 1 live, 37 T18-T21 scenarios
@@ -808,7 +808,7 @@ Plans:
 **Source phase:** 37
 **Deferred at:** 2026-11-04 during /gsd-verify-work 37 session completion
 **Follow-ups:**
-- [ ] Test 6: screen sharing needs the KDE portal chooser answered by hand; run sharing with a person at the machine (deferred 2026-11-04)
+- [x] Test 6: screen sharing needs the KDE portal chooser answered by hand; run sharing with a person at the machine (deferred 2026-11-04) — fixed in 39-09 (d891dbe7)
 
 ### Phase 999.13: Follow-up — Phase 37 deferred UAT follow-up: Test 17 (BACKLOG)
 

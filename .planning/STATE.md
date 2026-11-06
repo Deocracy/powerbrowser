@@ -5,16 +5,16 @@ milestone_name: Chrome Bar Firefox Parity
 current_phase: 39
 current_phase_name: v1.5 Close-out
 status: executing
-stopped_at: Completed 39-08-PLAN.md
-last_updated: "2026-11-06T21:10:03.679Z"
+stopped_at: Completed 39-09-PLAN.md
+last_updated: "2026-11-06T22:07:53.538Z"
 last_activity: 2026-11-05
 last_activity_desc: Phase 39 execution started
-state_head: 715e334eb45915d32d106962ea4a8b3c2b843cd5
+state_head: d891dbe79a651d44e192500b6393c2d5310613d7
 progress:
   total_phases: 14
   completed_phases: 1
   total_plans: 93
-  completed_plans: 81
+  completed_plans: 82
   percent: 7
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 ## Current Position
 
 Phase: 39 (v1.5 Close-out) — EXECUTING
-Plan: 9 of 20
+Plan: 10 of 20
 Status: Ready to execute
 Last activity: 2026-11-05 — Phase 39 execution started
 
@@ -185,6 +185,7 @@ Progress: [█░░░░░░░░░] 7%
 | Phase 39 P06 | 35 min | 2 tasks | 5 files |
 | Phase 39 P07 | 75 min | 2 tasks | 6 files |
 | Phase 39 P08 | 175 min | 3 tasks | 4 files |
+| Phase 39 P09 | 50 min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -492,6 +493,8 @@ Recent decisions affecting current work:
 - [Phase 39]: 39-07: the 39-05 menu-spelling flake was the instrument (no overlay focus before the spell check); fixed in 0c6b3a85
 - [Phase 39]: 39-08: 999.4 was a Theia tab preview card left open by a resting pointer after segment clicks in mode-lifetime and mode-defaults; fixed in the shared switchUiMode with parkOnSegment
 - [Phase 39]: 39-08: 999.6 was mode-defaults' teardown clicking a toggle that moved when the custom mode row appeared, landing on Organising and swallowing the error; clickSegment now waits for a settled toggle and teardowns report
+- [Phase 39]: 39-09: the X11 capture route needs XDG_SESSION_TYPE=x11 as well as allow-pipewire=false; libwebrtc builds ScreenCapturerX11 only when IsRunningUnderWayland() is false
+- [Phase 39]: 39-09: kwinShot is a no-op unless PB_LIVE_HEADED=1; a capture is kept only when the PNG equals frame x output scale (spectacle -a -S)
 
 ### Pending Todos
 
@@ -612,8 +615,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-06T21:10:03.378Z
-Stopped at: Completed 39-08-PLAN.md
+Last session: 2026-11-06T22:07:52.429Z
+Stopped at: Completed 39-09-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
