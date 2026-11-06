@@ -90,15 +90,18 @@ result: [pending]
 
 ### 16. 35-REVIEW CR-01: Save As answered after 60 seconds
 expected: Right-click a link or image, choose Save Link As or Save Image As, wait over 60 seconds in Theia's save dialog, then pick a path: the file is saved and a download row appears. Repeat with a second right-click opened before answering the dialog: the first save still lands. A save that cannot land shows the "menu had already closed" message and is never silent
-result: [pending]
+result: pass
+evidence: "39-06 2026-11-06, main e7a851e0 (scenario) + c77e2bd0 (fix): save-as-late PASS. Save Link As answered 61 s after the pick landed the served bytes and a downloads row; a second page menu opened while the dialog waited (the dialog layer stepped aside for that right-click) did not drop the first save; neither landed save showed a failure message. The same menu's save answered again (slot spent) wrote nothing and showed the saveTargetExpired sentence; before c77e2bd0 it showed the generic 'couldn't save' sentence, because a path with no slot was a validation refusal. Plant save-reply-ttl (chrome's pre-fix stale answer after the minute) red: 'a late Save As did not land'"
 
 ### 17. 35-REVIEW CR-02: edit rows inside a cross-origin iframe
 expected: Right-click an input and a selection inside a cross-origin iframe: Undo, Cut, Copy, Paste, Delete and Select All reflect and act on the iframe's content, not the outer page, and Copy Image copies the iframe image
-result: [pending]
+result: pass
+evidence: "39-06 2026-11-06, main e7a851e0: iframe-edit-rows PASS on a localhost iframe in another content process inside a 127.0.0.1 page. With a selection in the frame's field Cut, Copy, Paste, Delete and Select All are enabled; Copy copied the frame's selection; Paste and Undo acted on the frame's second field; Select All selected the frame field's text; Copy Image on the frame's image left an image flavour (clipboard cache, headless). Plant edit-rows-top-document (every Controllers read and command sent to the top document) red: 'edit rows followed the outer page, not the iframe'"
 
 ### 18. 35-REVIEW WR-03: pointer-lock warning
 expected: A page requesting pointer lock (not in fullscreen) shows "<domain> has control of your pointer. Press Esc" and the warning closes on exit. In fullscreen only the fullscreen warning shows
-result: [pending]
+result: pass
+evidence: "39-06 2026-11-06, main e7a851e0: pointer-lock-warning PASS. A button's requestPointerLock opened #pointerlock-warning reading upstream's en-US pointerlock-warning-domain with the page's host ('127.0.0.1:<port> has control of your pointer. Press Esc to take back control.'; an IP host keeps its port, as formatURIForDisplay does upstream); exitPointerLock closed it; locked from fullscreen, only the fullscreen warning showed over 1 s of reads. Plant pointerlock-standin-missing (window.PointerLock deleted) red: 'no pointer-lock warning'"
 
 ### 19. 35-REVIEW WR-04: link status clearing
 expected: With the pointer resting on a link, switch tabs from the keyboard: the status line clears. Click the link and navigate: the line clears on the new location
@@ -119,9 +122,9 @@ result: [pending]
 ## Summary
 
 total: 22
-passed: 5
+passed: 8
 issues: 0
-pending: 12
+pending: 9
 skipped: 5
 blocked: 0
 
