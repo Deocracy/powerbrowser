@@ -2988,12 +2988,25 @@ async function modeChip(ctx) {
 /** The AddressBar's active mode and its default for the current PowerBrowser mode, read now. */
 const modeState = app => probe(app, `const bar = get('AddressBar'); return { mode: bar.mode, default: bar.defaultMode() };`);
 
-/** The viewport centre of the mode-toggle segment `name`, or null. */
+/**
+ * The viewport centre of the mode-toggle segment `name`, or null; `hit` is true when the segment is what lies
+ * under that point and the toggle agrees with the body's mode (a custom mode's row is appended only when the
+ * perspective change reaches the bar, and the stock segments move left by its width when it is).
+ */
 const segmentCentre = (app, name) => app.evaluate(`JSON.stringify((() => {
-    const seg = [...document.querySelectorAll('.pb-chrome-bar-toggle .pb-chrome-bar-segment')].find(b => b.textContent === ${JSON.stringify(name)});
+    const segs = [...document.querySelectorAll('.pb-chrome-bar-toggle .pb-chrome-bar-segment')];
+    const seg = segs.find(b => b.textContent === ${JSON.stringify(name)});
     if (!seg) return null;
     const r = seg.getBoundingClientRect();
-    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    const x = r.left + r.width / 2;
+    const y = r.top + r.height / 2;
+    const body = document.body.dataset.pbMode;
+    const active = segs.find(b => b.classList.contains('is-active'));
+    const stock = segs.filter(b => !b.classList.contains('pb-modes-custom-row'));
+    const agrees = !!active && (active.classList.contains('pb-modes-custom-row')
+        ? !stock.some(b => b.textContent.toLowerCase() === body)
+        : active.textContent.toLowerCase() === body);
+    return { x, y, hit: agrees && seg.contains(document.elementFromPoint(x, y)) };
 })())`).then(JSON.parse);
 
 /**
@@ -3015,11 +3028,21 @@ async function parkOnSegment(app, name) {
     }
 }
 
-/** A trusted click on the mode-toggle segment named `name`. */
+/**
+ * A trusted click on the mode-toggle segment named `name`, once its centre has held still for one poll and the
+ * segment is under it (999.6: a click at a centre read just before a custom mode's row appeared landed on the
+ * neighbouring segment).
+ */
 async function clickSegment(app, name) {
-    const at = await segmentCentre(app, name);
+    let last = null;
+    const at = await settle(async () => {
+        const now = await segmentCentre(app, name);
+        const still = !!now && now.hit && !!last && now.x === last.x && now.y === last.y;
+        last = now;
+        return still ? now : null;
+    }, v => v !== null);
     if (!at) {
-        throw new Error(`${BROKEN} no mode-toggle segment named ${name}`);
+        throw new Error(`${BROKEN} the mode-toggle segment ${name} never held still under its own centre (${JSON.stringify(last)})`);
     }
     await theiaPointer(app, click(at.x, at.y));
 }
@@ -3092,7 +3115,7 @@ async function modeLifetime(ctx) {
     } finally {
         await restoreDefaultMode(app);
         if (await bodyMode(app) !== 'browsing') {
-            await clickSegment(app, 'Browsing').catch(() => undefined);
+            await clickSegment(app, 'Browsing').catch(error => fail(`the teardown could not return to Browsing: ${error.message}`));
             await settle(() => bodyMode(app), v => v === 'browsing');
         }
         await parkOnSegment(app, 'Browsing');
@@ -4137,7 +4160,8 @@ async function modeDefaults(ctx) {
     } finally {
         await probe(app, `delete get('AddressBar').defaultMode; return true;`);
         if (await bodyMode(app) !== 'browsing') {
-            await switchUiMode(app, 'browsing').catch(() => undefined);
+            // Reported, never swallowed: a session left in another mode changes every later scenario's default (999.6).
+            await switchUiMode(app, 'browsing').catch(error => fail(`the teardown could not return to Browsing: ${error.message}`));
         }
         await restoreDefaultMode(app);
         await showTab(app, tabId, '/start').catch(() => undefined);
@@ -4190,9 +4214,15 @@ async function modeTokens(ctx) {
     if (plant === 'token-kept' && await probe(app, `get('AddressBar').applyToken = () => false; return true;`) === true) {
         note('PLANT token-kept applied');
     }
+    // Settled before typing: an empty pill (bar and input alike) in the default mode, so the typed text meets no late re-render.
     const fromEmpty = async () => {
         await probe(app, `const bar = get('AddressBar'); bar.inputValue = ''; return true;`);
         await restoreDefaultMode(app);
+        const empty = await settle(() => probe(app, `const bar = get('AddressBar'); const input = document.querySelector('.pb-chrome-bar-input');
+            return bar.inputValue === '' && !!input && input.value === '' && bar.mode === bar.defaultMode();`), v => v === true);
+        if (empty !== true) {
+            throw new Error(`${BROKEN} the pill did not settle empty in its default mode before typing`);
+        }
     };
     try {
         const defaultEngine = await probe(app, `return get('AddressBar').effectiveEngine() ?? null;`);
@@ -4203,8 +4233,10 @@ async function modeTokens(ctx) {
             const token = step.text.split(' ')[0];
             try {
                 await typeInPill(app, step.text, { value: step.left });
-            } catch {
-                // The text was kept as typed: the mode check below names the step.
+            } catch (error) {
+                // A lost keystroke must never read as a token kept as typed.
+                fail(`${BROKEN} typing ${JSON.stringify(step.text)} did not reach the pill: ${error.message}`);
+                continue;
             }
             const state = await settle(() => modeState(app), v => v?.mode === want);
             const view = await readMode(app);
