@@ -1380,6 +1380,167 @@ async function scenarioProtocolHandler(app, fx, plant) {
     }
 }
 
+// ---- 37-REVIEW CR-01: adopted tabs (Phase 36's page-opened tabs) are tab-host nodes like any other ----
+
+const ADOPTED_HIDDEN = 'adopted tab prompt hidden while it is current';
+const ADOPTED_SHOWN = 'adopted tab prompt shown while another tab is current';
+const OTHER_OVER_ADOPTED = "another tab's prompt shown over the adopted tab";
+const BAR_SURVIVED = 'adopted tab bar survived navigation';
+const CLOSE_MARK = 'closing the adopted tab left a pending mark';
+
+/** The page's own window.open under a user gesture (BiDi userActivation), adopted next to its opener: { tabId, ctx } or null. */
+async function openAdopted(app, fx, opener, path) {
+    const url = fx.url(path);
+    const before = new Set((await mainOrder(app)).map(w => w.tabId));
+    await app.send('script.evaluate', { expression: `(window.open(${JSON.stringify(url)}), true)`, target: { context: opener.ctx }, awaitPromise: false, userActivation: true });
+    const tab = await pollFor(async () => (await mainOrder(app)).find(w => !before.has(w.tabId) && String(w.url).endsWith(path)) ?? null, 10000, 'the adopted tab').catch(() => null);
+    if (!tab || await waitForPush(app, loadedAt(tab.tabId, path)) < 0) {
+        return null;
+    }
+    if (!await probe(app, `return !!get('WebTabChannel').widgetOf(${JSON.stringify(tab.tabId)})?.adopted;`)) {
+        return null;
+    }
+    const ctx = await pollFor(async () => (await app.contexts()).find(c => c.url === url)?.context, 15000, `a BiDi context for ${path}`).catch(() => null);
+    return ctx ? { tabId: tab.tabId, ctx } : null;
+}
+
+/** True once tab `tabId`'s notification `id` is no longer in the open panel (the stock hide is asynchronous). */
+async function leavesPanel(app, tabId, id = GEO_ID, timeoutMs = 3000) {
+    try {
+        return await pollFor(async () => (!(await promptState(app, tabId, id)).inPanel ? true : null), timeoutMs, 'the panel to leave');
+    } catch {
+        return false;
+    }
+}
+
+/** Makes an IDE widget (a main-area widget that is not a web tab) current; true when it is. */
+function makeIdeCurrent(app) {
+    return probe(app, `const shell = get('ApplicationShell');
+        let w = shell.getWidgets('main').find(x => typeof x.tabId !== 'string');
+        if (!w) { await get('CommandRegistry').executeCommand('workbench.action.files.newUntitledFile'); w = get('EditorManager').currentEditor; }
+        if (!w) return false;
+        await shell.activateWidget(w.id);
+        return await until(() => shell.mainPanel.currentTitle?.owner === w, 5000);`);
+}
+
+/** The user's close of web tab `tabId` through its widget. */
+function closeTab(app, tabId) {
+    return probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}); if (!w) return false; w.close(); return true;`);
+}
+
+/** CR-01a: an adopted tab's prompt follows the current tab, between host tabs and the IDE, and no other tab's shows over it. */
+async function scenarioAdoptedPrompt(app, fx, plant) {
+    const host = await openPage(app, fx, '/opener');
+    const adopted = await openAdopted(app, fx, host, '/b');
+    if (!adopted) {
+        return `${BROKEN} the page's own window.open produced no adopted tab`;
+    }
+    await makeCurrent(app, adopted.tabId);
+    if (plant === 'adopted-selection-stale') {
+        // CR-01 as reviewed: the prompt facade's selection stays on the host tab while the adopted tab is current.
+        const applied = await inChrome(app, `const f = window.PopupNotifications.tabbrowser;
+            const real = Object.getOwnPropertyDescriptor(f, 'selectedBrowser').get;
+            const a = overlayOf(${JSON.stringify(adopted.tabId)}), h = overlayOf(${JSON.stringify(host.tabId)});
+            Object.defineProperty(f, 'selectedBrowser', { configurable: true, get() { const b = real.call(f); return b === a ? h : b; } });
+            return f.selectedBrowser === h;`);
+        if (!applied) {
+            return `${BROKEN} the adopted-selection-stale plant did not take`;
+        }
+    }
+    await startGeo(app, adopted);
+    if (!await waitInPanel(app, adopted.tabId, GEO_ID, 8000)) {
+        return ADOPTED_HIDDEN;
+    }
+    await makeCurrent(app, host.tabId);
+    if (!await leavesPanel(app, adopted.tabId)) {
+        return `${ADOPTED_SHOWN} (a host tab)`;
+    }
+    await startGeo(app, host);
+    if (!await waitInPanel(app, host.tabId, GEO_ID, 8000)) {
+        return 'the host tab prompt did not show while it is current (the control is red)';
+    }
+    await makeCurrent(app, adopted.tabId);
+    if (!await waitInPanel(app, adopted.tabId, GEO_ID, 8000)) {
+        return `${ADOPTED_HIDDEN} (back from a host tab)`;
+    }
+    if ((await promptState(app, host.tabId)).inPanel) {
+        return OTHER_OVER_ADOPTED;
+    }
+    if (!await makeIdeCurrent(app)) {
+        return `${BROKEN} no IDE widget could be made current`;
+    }
+    if (!await leavesPanel(app, adopted.tabId)) {
+        return `${ADOPTED_SHOWN} (the IDE)`;
+    }
+    await makeCurrent(app, adopted.tabId);
+    if (!await waitInPanel(app, adopted.tabId, GEO_ID, 8000)) {
+        return `${ADOPTED_HIDDEN} (back from the IDE)`;
+    }
+    await answerStock(app, adopted.tabId);
+    return await geoOutcome(app, adopted) === 'granted' ? null : 'stock Allow on the adopted tab did not grant (the positive control is red)';
+}
+
+/** CR-01b: an adopted tab's bar clears on navigation; closing it drops its prompts (pending:false) and leaves no mark. */
+async function scenarioAdoptedBarNavigate(app, fx, plant) {
+    const host = await openPage(app, fx, '/opener');
+    const adopted = await openAdopted(app, fx, host, '/b');
+    if (!adopted) {
+        return `${BROKEN} the page's own window.open produced no adopted tab`;
+    }
+    await makeCurrent(app, adopted.tabId);
+    const blockPopup = () => app.evaluateIn(adopted.ctx, `(() => { window.open(${JSON.stringify(fx.url('/c'))}); return true; })()`);
+    let from = (await pushes(app)).length;
+    await blockPopup();
+    if (await waitForPush(app, isBar(adopted.tabId, 'blocked-popup', true), { from }) < 0) {
+        return 'no blocked-popup bar on the adopted tab';
+    }
+    from = (await pushes(app)).length;
+    await app.send('browsingContext.navigate', { context: adopted.ctx, url: fx.url('/d'), wait: 'none' });
+    if (await waitForPush(app, loadedAt(adopted.tabId, '/d'), { from }) < 0) {
+        return `${BROKEN} the adopted tab never loaded /d`;
+    }
+    const cleared = await waitForPush(app, isBar(adopted.tabId, 'blocked-popup', false), { from, timeoutMs: 3000 }) >= 0;
+    const left = (await barView(app, adopted.tabId)) ?? [];
+    if (!cleared || left.length) {
+        return `${BAR_SURVIVED} (${JSON.stringify(left)})`;
+    }
+    // The close half: a waiting prompt and a bar on the adopted tab, then the user's close.
+    from = (await pushes(app)).length;
+    await blockPopup();
+    if (await waitForPush(app, isBar(adopted.tabId, 'blocked-popup', true), { from }) < 0) {
+        return `${BROKEN} no second blocked-popup bar on the adopted tab`;
+    }
+    await makeCurrent(app, host.tabId);
+    await startGeo(app, adopted);
+    if (await waitForPush(app, isDoorhanger(adopted.tabId, true), { from }) < 0) {
+        return `${BROKEN} the backgrounded adopted tab's prompt sent no pending push`;
+    }
+    const marked = await pollFor(async () => (await app.evaluate("document.querySelectorAll('.pb-tab-prompt-pending').length")) > 0 || null, 5000, 'the pending mark').catch(() => false);
+    if (!marked) {
+        return `${BROKEN} the strip shows no pending mark for the waiting prompt, so its absence after the close proves nothing`;
+    }
+    await inChrome(app, `window.__pbClosedOverlay = overlayOf(${JSON.stringify(adopted.tabId)}); return true;`);
+    if (plant === 'adopted-close-cleanup-skipped') {
+        // CR-01 as reviewed: no TabClose reaches the strip's listeners for the adopted tab, so its close is never cleaned up.
+        const applied = await inChrome(app, `const a = window.__pbClosedOverlay;
+            window.__pbStopClose = e => { if (e.target && e.target.linkedBrowser === a) e.stopImmediatePropagation(); };
+            window.addEventListener('TabClose', window.__pbStopClose, true);
+            return !!a && typeof window.__pbStopClose === 'function';`);
+        if (!applied) {
+            return `${BROKEN} the adopted-close-cleanup-skipped plant did not take`;
+        }
+    }
+    from = (await pushes(app)).length;
+    if (!await closeTab(app, adopted.tabId)) {
+        return `${BROKEN} the adopted tab has no widget to close`;
+    }
+    // The stock TabClose handler fires each notification's removed callback (and so the pending:false push); it leaves the
+    // list on the closed browser, which goes with it, so the push and the strip are what is read.
+    const dropped = await waitForPush(app, isDoorhanger(adopted.tabId, false), { from, timeoutMs: 5000 }) >= 0;
+    const marks = await app.evaluate("document.querySelectorAll('.pb-tab-prompt-pending').length");
+    return dropped && marks === 0 ? null : `${CLOSE_MARK} (pending:false pushed ${dropped}, strip marks ${marks})`;
+}
+
 const SCENARIOS = {
     permission: scenarioPermission,
     'answer-delay': scenarioAnswerDelay,
@@ -1395,6 +1556,8 @@ const SCENARIOS = {
     'password-save': scenarioPasswordSave,
     'password-update': scenarioPasswordUpdate,
     'popup-block': scenarioPopupBlock,
+    'adopted-prompt': scenarioAdoptedPrompt,
+    'adopted-bar-navigate': scenarioAdoptedBarNavigate,
     'hung-script': scenarioHungScript,
     'protocol-handler': scenarioProtocolHandler,
 };
@@ -1420,6 +1583,8 @@ const PLANTS = [
     { plant: 'allow-loads-frame-url', target: 'popup-block', expect: 'Allow opened a frame-supplied URL' },
     { plant: 'bar-covers-page', target: 'popup-block', expect: 'bar covers page content' },
     { plant: 'adopt-next-to-opener-failed', target: 'popup-block', expect: 'popup not adopted next to its opener' },
+    { plant: 'adopted-selection-stale', target: 'adopted-prompt', expect: 'adopted tab prompt hidden while it is current' },
+    { plant: 'adopted-close-cleanup-skipped', target: 'adopted-bar-navigate', expect: 'closing the adopted tab left a pending mark' },
     { plant: 'hung-stop-ignored', target: 'hung-script', expect: 'Stop script did not terminate the loop' },
     { plant: 'protocol-stock-path-unhooked', target: 'protocol-handler', expect: 'stock protocol bar path reached: getNotificationBox TypeError' },
 ];
