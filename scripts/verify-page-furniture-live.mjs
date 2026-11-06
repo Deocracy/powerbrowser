@@ -106,7 +106,8 @@
  *                       password) for the served 127.0.0.1 origin in the disposable
  *                       profile; focusing the username field opens the popup with that
  *                       login's row; ArrowDown and Enter fill both fields (checked
- *                       page-side, never printed).
+ *                       page-side, never printed). It turns signon.rememberSignons back on:
+ *                       the BiDi remote agent sets it false (39-06, C23).
  *   form-validation     (35-06, D-14) Submitting a form whose required field is empty
  *                       opens #invalid-form-popup with a non-empty message (needs
  *                       31.1's getTabForBrowser: FormValidationParent shows only for the
@@ -2014,7 +2015,10 @@ async function savedLogin({ app, pages, plant, fail, note }) {
     const origin = new URL(pages.url('/')).origin;
     // The password is generated in chrome scope and never leaves it; the profile is disposed with the session.
     // Autofill off and no insecure-field row, so the popup on focus lists exactly the saved login first.
-    const saved = await inChrome(app, `Services.prefs.setBoolPref('signon.autofillForms', false);
+    // 39-06 (C23): the BiDi remote agent's recommended prefs set signon.rememberSignons=false
+    // (remote/shared/RecommendedPreferences.sys.mjs), which stops LoginManagerChild processing any form.
+    const saved = await inChrome(app, `Services.prefs.setBoolPref('signon.rememberSignons', true);
+        Services.prefs.setBoolPref('signon.autofillForms', false);
         Services.prefs.setBoolPref('security.insecure_field_warning.contextual.enabled', false);
         const info = Cc['@mozilla.org/login-manager/loginInfo;1'].createInstance(Ci.nsILoginInfo);
         info.init(${JSON.stringify(origin)}, ${JSON.stringify(origin)}, null, ${JSON.stringify(PROBE_USER)}, Services.uuid.generateUUID().toString(), 'username', 'password');
