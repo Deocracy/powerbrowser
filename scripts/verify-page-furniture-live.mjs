@@ -70,6 +70,11 @@
  *                       Copy fills the clipboard, Paste into a second field sets it,
  *                       Undo removes the paste; on an image, Copy Image leaves an
  *                       image/png flavour on the clipboard.
+ *   iframe-edit-rows    (39-06, 35 T17 CR-02) In a field inside a cross-origin iframe with a
+ *                       selection: Cut, Copy, Paste, Delete and Select All are enabled; Copy
+ *                       copies the frame's selection, Paste and Undo act on the frame's second
+ *                       field, Select All selects the frame field's text, and Copy Image on the
+ *                       frame's image leaves an image flavour on the clipboard.
  *   menu-spelling       (35-04) A spellcheck textarea holding "teh": the menu offers a
  *                       "the" suggestion row and picking it fixes the word; on "wrod",
  *                       Add to Dictionary drops it from the next menu's suggestions and
@@ -78,6 +83,11 @@
  *                       dialog takes a path in a fresh temp directory; the file lands
  *                       with the served bytes, its GET carried the page's origin as
  *                       Referer, and a downloadsChanged row names it (Phase 32's panel).
+ *   save-as-late        (39-06, 35 T16 CR-01) Save Link As answered 61 s after the pick lands the
+ *                       file and a downloads row; a save whose dialog waits while a second page
+ *                       menu opens (the dialog layer stepped aside for that right-click) still
+ *                       lands; the same menu's save answered again (its one slot spent) writes
+ *                       nothing and shows CHROME_BAR_COPY.saveTargetExpired.
  *   extension-entry     (35-05, D-16) A test extension written to a fresh temp
  *                       directory at run time (no fixture in the tree) and installed
  *                       with BiDi webExtension.install creates "Furniture test entry"
@@ -131,6 +141,10 @@
  *                       enters it; a right-click during fullscreen pushes no
  *                       pageContextMenu within 1500 ms (control: the row's own menu push
  *                       in this session); the warning's exit button leaves.
+ *   pointer-lock-warning (39-06, 35 T18 WR-03) A page button's requestPointerLock opens
+ *                       #pointerlock-warning reading upstream's en-US pointerlock-warning-domain
+ *                       with the page's host; exitPointerLock closes it. Locked from fullscreen,
+ *                       only #fullscreen-warning shows (1 s of reads; the first leg is the control).
  *   fullscreen-key      (35-07, D-07) With the overlay focused, F11 (chrome-scope key
  *                       synthesis) fires the fullscreen row and window.fullScreen becomes
  *                       true; F11 again restores it. Runs Phase 33's full-screen command.
@@ -253,6 +267,19 @@ const PAGES = {
             + 'setInterval(() => { g.fillStyle = "hsl(" + (n++ % 360) + ",80%,50%)"; g.fillRect(0, 0, 320, 180); }, 33);'
             + 'const v = document.getElementById("v"); v.srcObject = c.captureStream(30); v.play();'
             + 'document.getElementById("go").addEventListener("click", () => v.requestFullscreen());</script>',
+    },
+    // 39-06 (35 T18 WR-03): pointer lock from a click, outside fullscreen and inside it.
+    '/pointer': {
+        title: 'Pointer',
+        body: '<style>body { font: 20px sans-serif; margin: 24px; }</style><p><button id="lock" type="button">Lock</button> <button id="fs" type="button">Full screen and lock</button></p>'
+            + '<script>document.getElementById("lock").addEventListener("click", () => document.body.requestPointerLock());'
+            + 'document.getElementById("fs").addEventListener("click", () => document.documentElement.requestFullscreen().then(() => document.body.requestPointerLock()));</script>',
+    },
+    // 39-06 (35 T17 CR-02): an iframe from the asset server named as localhost: another site, so Fission puts it in another process.
+    '/xframe': {
+        title: 'Cross-origin frame',
+        body: '<style>body { font: 20px sans-serif; margin: 24px; }</style><p id="outer">outer page</p>',
+        extra: () => (assets ? `<iframe id="xf" src="${FRAME_EDIT_URL()}" width="420" height="220"></iframe>` : ''),
     },
     '/pip': {
         title: 'Picture in Picture',
@@ -587,6 +614,10 @@ let assets = null;
 /** 35-04: the bytes Save Link As must land (the asset server serves them at /file.bin). */
 const FILE_BYTES = Buffer.from('page menu save check\n');
 
+const FRAME_EDIT_URL = () => assets.url('/frame-edit').replace('//127.0.0.1:', '//localhost:');
+const FRAME_EDIT_HTML = '<!doctype html><title>Frame edit</title><body style="font: 20px sans-serif; margin: 8px">'
+    + '<p><input id="f" value="gamma delta"> <input id="f2" value=""></p><p><img id="fimg" src="/pixel.png" width="64" height="64" alt="pixel"></p></body>';
+
 async function serveAssets() {
     const requests = [];
     const server = createServer((request, response) => {
@@ -600,6 +631,11 @@ async function serveAssets() {
         if (request.url === '/file.bin') {
             response.writeHead(200, { 'content-type': 'application/octet-stream' });
             response.end(FILE_BYTES);
+            return;
+        }
+        if (request.url === '/frame-edit') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end(FRAME_EDIT_HTML);
             return;
         }
         if (request.url === '/pixel.png') {
@@ -638,16 +674,17 @@ function searchLabel(engine, terms) {
     return template.replace('%1$S', engine).replace('%2$S', terms);
 }
 
-/** The refusal row's text from CHROME_BAR_COPY.pageMenuRefusedLink, with appSubject()'s subject (the name, else noAppName). */
-function refusalLabel(appName) {
+/** A CHROME_BAR_COPY `key: (subject: string) => ...` string with appSubject()'s subject (the name, else noAppName). */
+function subjectCopy(key, appName) {
     const copy = readTree('theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts');
-    const template = /pageMenuRefusedLink: \(subject: string\) => `\$\{subject\}([^`]*)`/.exec(copy)?.[1];
+    const template = new RegExp(`${key}: \\(subject: string\\) => \`\\$\\{subject\\}([^\`]*)\``).exec(copy)?.[1];
     const noAppName = /noAppName: '([^']+)'/.exec(copy)?.[1];
     if (!template || !noAppName) {
-        throw new Error(`${BROKEN} no pageMenuRefusedLink or noAppName in chrome-bar-copy.ts`);
+        throw new Error(`${BROKEN} no ${key} or noAppName in chrome-bar-copy.ts`);
     }
     return `${appName || noAppName}${template}`;
 }
+const refusalLabel = appName => subjectCopy('pageMenuRefusedLink', appName);
 
 /**
  * The page menu rows the boundary declares, in order: `{ id, when, child }`. Their ids, strings and
@@ -1554,6 +1591,89 @@ async function menuEdit({ app, pages, plant, fail, note }) {
 }
 const IMAGE_FLAVOURS = ['application/x-moz-nativeimage', 'image/png', 'image/jpeg', 'image/gif'];
 
+// 39-06 (35 T17, CR-02): the edit rows and Copy Image inside a cross-origin iframe.
+async function applyIframeEditPlants(app, plant, note) {
+    if (plant === 'edit-rows-top-document') {
+        // CR-02's defect: every Controllers read and command goes to the top document, never the right-clicked frame.
+        if (await inChrome(app, `const { ControllersParent } = ChromeUtils.importESModule('resource://gre/actors/ControllersParent.sys.mjs');
+            const proto = ControllersParent.prototype;
+            const topOf = actor => actor.browsingContext.top === actor.browsingContext ? actor : actor.browsingContext.top.currentWindowGlobal.getActor('Controllers');
+            for (const name of ['isCommandEnabled', 'doCommand']) {
+                const real = proto[name];
+                const planted = function (cmd) { return real.call(topOf(this), cmd); };
+                planted.__pbPlanted = true;
+                proto[name] = planted;
+            }
+            return proto.isCommandEnabled.__pbPlanted === true && proto.doCommand.__pbPlanted === true;`) === true) {
+            note('PLANT edit-rows-top-document applied');
+        }
+    }
+}
+
+async function iframeEditRows({ app, pages, plant, fail, note }) {
+    await applyIframeEditPlants(app, plant, note);
+    const tab = await openPage(app, pages, '/xframe');
+    if (typeof tab === 'string') {
+        return fail(tab);
+    }
+    const frame = await settle(async () => (await app.send('browsingContext.getTree', { root: tab.page })).contexts[0]?.children?.find(c => c.url === FRAME_EDIT_URL())?.context ?? null, v => !!v, 10000);
+    if (!frame || await settle(() => app.evaluateIn(frame, `document.readyState === 'complete' && document.getElementById('fimg').complete`), v => v === true, 5000) !== true) {
+        return fail(`${BROKEN} the cross-origin frame did not load`);
+    }
+    const pids = await inChrome(app, `const bc = overlayOf(${JSON.stringify(tab.tabId)}).browsingContext; return JSON.stringify([bc.currentWindowGlobal.osPid, bc.children[0]?.currentWindowGlobal?.osPid]);`).then(JSON.parse);
+    note(`frame origin ${await app.evaluateIn(frame, 'location.origin')} in page origin ${new URL(tab.url).origin}; frame in ${pids[0] === pids[1] ? 'the same' : 'another'} process`);
+    // The right-click goes to the frame's own context in frame coordinates: input synthesized in the page's
+    // process stops at an out-of-process frame's <iframe> element. 20 px in, inside "gamma".
+    const inFrame = selector => centreOf(app, frame, selector);
+    const pickIn = async (selector, row) => {
+        await settle(() => overlayVisibility(app, tab.tabId), v => v === 'visible');
+        const opened = await openMenuAt(app, frame, tab.tabId, await inFrame(selector));
+        return opened.push ? pickRow(app, tab.theia, row) : false;
+    };
+    const fieldValue = id => app.evaluateIn(frame, `document.getElementById(${JSON.stringify(id)}).value`);
+
+    await app.evaluateIn(frame, `const f = document.getElementById('f'); f.focus(); f.setSelectionRange(0, 5); true`);
+    const opened = await openMenuAt(app, frame, tab.tabId, await inFrame('#f'));
+    if (!opened.push) {
+        return fail('no pageContextMenu push for the field inside the frame');
+    }
+    const want = ['text-action-cut', 'text-action-copy', 'text-action-paste', 'text-action-delete', 'text-action-select-all'].map(ftlLabel);
+    const off = want.filter(l => !(opened.rows ?? []).some(r => r.label === l && !r.disabled));
+    if (off.length) {
+        await closeMenu(app);
+        return fail(`edit rows followed the outer page, not the iframe: ${off.join(', ')} not enabled for a selection in the frame's field; rows ${JSON.stringify((opened.rows ?? []).map(r => `${r.label}${r.disabled ? ' (off)' : ''}`))}`);
+    }
+    await inChrome(app, `Cc['@mozilla.org/widget/clipboardhelper;1'].getService(Ci.nsIClipboardHelper).copyString('pb-sentinel'); return true;`);
+    if (!await pickRow(app, tab.theia, ftlLabel('text-action-copy'))) {
+        return fail('the frame field menu has no Copy row to pick');
+    }
+    if (await settle(() => clipboardText(app), t => t === 'gamma', 3000) !== 'gamma') {
+        return fail('edit rows followed the outer page, not the iframe: Copy did not copy the frame\'s selection');
+    }
+    await app.evaluateIn(frame, `document.getElementById('f2').focus(); true`);
+    if (!await pickIn('#f2', ftlLabel('text-action-paste')) || await settle(() => fieldValue('f2'), v => v === 'gamma', 3000) !== 'gamma') {
+        return fail('edit rows followed the outer page, not the iframe: Paste did not set the frame\'s second field');
+    }
+    await app.evaluateIn(frame, `document.getElementById('f2').focus(); true`);
+    if (!await pickIn('#f2', ftlLabel('text-action-undo')) || await settle(() => fieldValue('f2'), v => v === '', 3000) !== '') {
+        return fail('edit rows followed the outer page, not the iframe: Undo did not restore the frame\'s second field');
+    }
+    await app.evaluateIn(frame, `const f = document.getElementById('f'); f.focus(); f.setSelectionRange(1, 1); true`);
+    const allSelected = () => app.evaluateIn(frame, `(f => f.selectionStart === 0 && f.selectionEnd === f.value.length)(document.getElementById('f'))`);
+    if (!await pickIn('#f', ftlLabel('text-action-select-all')) || await settle(allSelected, v => v === true, 3000) !== true) {
+        return fail('edit rows followed the outer page, not the iframe: Select All did not select the frame field\'s text');
+    }
+    await inChrome(app, `Cc['@mozilla.org/widget/clipboardhelper;1'].getService(Ci.nsIClipboardHelper).copyString('pb-sentinel'); return true;`);
+    if (!await pickIn('#fimg', ftlLabel('main-context-menu-image-copy'))) {
+        return fail('the frame image menu has no Copy Image row to pick');
+    }
+    // As menu-edit (C24, 39-05): the headless widget keeps only text, so the read uses the clipboard cache.
+    await inChrome(app, `Services.prefs.setBoolPref('widget.clipboard.use-cached-data.enabled', true); return true;`);
+    if (await settle(() => inChrome(app, `return Services.clipboard.hasDataMatchingFlavors(${JSON.stringify(IMAGE_FLAVOURS)}, Services.clipboard.kGlobalClipboard);`), v => v === true, 3000) !== true) {
+        return fail('Copy Image ignored the iframe image: no image flavour on the clipboard');
+    }
+}
+
 /**
  * The pushed menu's spelling suggestion labels (dynamic spell-suggestion rows) after a right-click on `selector`.
  * `misspelt` re-opens the menu for up to 5 s until suggestions arrive: the inline checker reports none until the
@@ -1682,6 +1802,133 @@ async function menuSave({ app, pages, plant, fail, note }) {
         }
         if (await waitForPush(app, p => p && p.kind === 'downloadsChanged' && (p.rows ?? []).some(r => r.filename === name), { from: mark, timeoutMs: 10000 }) < 0) {
             return fail('the downloads panel lists no row for the saved file');
+        }
+    } finally {
+        await rm(dir, { recursive: true, force: true });
+    }
+}
+
+// 39-06 (35 T16, CR-01): a save answered late, a save with a second menu opened before its answer, and one that cannot land.
+const SAVE_LATE_MS = 61000;
+const notificationTexts = app => app.evaluate(`JSON.stringify([...document.querySelectorAll('.theia-notification-list-item .theia-notification-message')].map(m => m.textContent.trim()))`).then(JSON.parse);
+
+async function applySavePlants(app, plant, note) {
+    if (plant === 'save-reply-ttl') {
+        // CR-01's defect: chrome measured the path reply against the right-click's minute and answered `stale`.
+        // The minute lives in the boundary's private state, so the plant gives that answer at the frontend's send.
+        if (await probe(app, `const menu = get('PageContextMenuContribution');
+            const send = menu.send;
+            const picks = new Map();
+            const planted = async function (tabId, menuId, itemId, path) {
+                if (path !== undefined && Date.now() - (picks.get(menuId) ?? Date.now()) > 60000) {
+                    return { ok: true, kind: 'webTabPageMenuAction', where: 'stale' };
+                }
+                const reply = await send.call(this, tabId, menuId, itemId, path);
+                if (reply && reply.where === 'save-pick') { picks.set(menuId, Date.now()); }
+                return reply;
+            };
+            planted.__pbPlanted = true;
+            menu.send = planted;
+            return menu.send.__pbPlanted === true;`) === true) {
+            note('PLANT save-reply-ttl applied');
+        }
+    }
+}
+
+async function saveAsLate({ app, pages, plant, fail, note }) {
+    await applySavePlants(app, plant, note);
+    const tools = await openTools(app, pages);
+    if (typeof tools === 'string') {
+        return fail(tools);
+    }
+    const subscribed = await probe(app, `return (await get('WebTabChannel').request({ kind: 'webTabDownloadsSubscribe', tabId: ${JSON.stringify(tools.tabId)} })).ok === true;`);
+    if (subscribed !== true) {
+        return fail(`${BROKEN} the downloads view could not be subscribed, so the panel row would prove nothing`);
+    }
+    const title = chromeBarCopy('saveLinkTitle');
+    const label = ftlLabel('main-context-menu-save-link');
+    const dir = await mkdtemp(join(tmpdir(), 'pb-39-06-save-'));
+    const lands = async name => (await settle(async () => (await stat(join(dir, name)).then(info => info.isFile(), () => false)) && (await readFile(join(dir, name))).equals(FILE_BYTES), v => v === true, 10000)) === true;
+    const listed = (name, mark) => waitForPush(app, p => p && p.kind === 'downloadsChanged' && (p.rows ?? []).some(r => r.filename === name), { from: mark, timeoutMs: 10000 }).then(at => at >= 0);
+    // Opens Save Link As on the file link; returns the menu id of that menu, or a failure string.
+    const pickSave = async () => {
+        const mark = (await pushes(app)).length;
+        if (!await pickFromMenu(app, tools, '#filelink', label)) {
+            return 'the link menu has no Save Link As row to pick';
+        }
+        const menuId = (await pushes(app)).slice(mark).find(isMenuPush(tools.tabId))?.menuId;
+        if (await settle(() => dialogOpen(app, title), v => v === true) !== true || !Number.isSafeInteger(menuId)) {
+            return `${BROKEN} no "${title}" dialog opened for the save pick`;
+        }
+        return menuId;
+    };
+    const failedCopy = subjectCopy('saveTargetFailed', await app.evaluate(appNameExpr));
+    const failedShown = async () => (await notificationTexts(app)).filter(t => t === failedCopy).length;
+    const accept = async name => {
+        const accepted = await acceptSaveDialog(app, dir, name);
+        return accepted === 'accepted' ? null : `${BROKEN} the "${title}" dialog could not be driven (${accepted})`;
+    };
+    try {
+        // 1. Answered after more than a minute.
+        const late = await pickSave();
+        if (typeof late === 'string') {
+            return fail(late);
+        }
+        await sleep(SAVE_LATE_MS);
+        let mark = (await pushes(app)).length;
+        const lateAccepted = await accept('late.bin');
+        if (lateAccepted) {
+            return fail(lateAccepted);
+        }
+        if (!await lands('late.bin') || !await listed('late.bin', mark)) {
+            return fail(`a late Save As did not land: answered ${SAVE_LATE_MS / 1000} s after the pick, no file or no downloads row (notifications ${JSON.stringify(await notificationTexts(app))})`);
+        }
+        if (await failedShown()) {
+            return fail(`a late Save As landed but also said it failed (notifications ${JSON.stringify(await notificationTexts(app))})`);
+        }
+        // 2. A second menu opened while the first save's dialog waits. The dialog layer hides the page, so it is
+        // stepped aside for the right-click, as a page reachable beside the dialog would be.
+        const first = await pickSave();
+        if (typeof first === 'string') {
+            return fail(first);
+        }
+        await app.evaluate(`(document.querySelector('.lm-Widget.dialogOverlay').style.display = 'none', true)`);
+        const second = await openMenuAt(app, tools.page, tools.tabId, await centreOf(app, tools.page, '#blank'));
+        await closeMenu(app);
+        await app.evaluate(`(document.querySelector('.lm-Widget.dialogOverlay').style.display = '', true)`);
+        if (!second.push || second.push.menuId === first) {
+            return fail(`${BROKEN} no second page menu opened while the save dialog waited`);
+        }
+        mark = (await pushes(app)).length;
+        const firstAccepted = await accept('first.bin');
+        if (firstAccepted) {
+            return fail(firstAccepted);
+        }
+        if (!await lands('first.bin') || !await listed('first.bin', mark)) {
+            return fail(`a second menu dropped the pending save (notifications ${JSON.stringify(await notificationTexts(app))})`);
+        }
+        if (await failedShown()) {
+            return fail(`the save beside a second menu landed but also said it failed (notifications ${JSON.stringify(await notificationTexts(app))})`);
+        }
+        // 3. The same menu's save answered again: its one save slot is spent, so this save cannot land and must say so.
+        const expired = subjectCopy('saveTargetExpired', await app.evaluate(appNameExpr));
+        const before = (await notificationTexts(app)).filter(t => t === expired).length;
+        await probe(app, `const menu = get('PageContextMenuContribution');
+            menu.saveTarget(get('WebTabChannel').widgetOf(${JSON.stringify(tools.tabId)}), ${JSON.stringify(tools.tabId)}, ${first}, 'context-savelink', 'again.bin');
+            return true;`);
+        if (await settle(() => dialogOpen(app, title), v => v === true) !== true) {
+            return fail(`${BROKEN} no "${title}" dialog opened for the spent save`);
+        }
+        const againAccepted = await accept('again.bin');
+        if (againAccepted) {
+            return fail(againAccepted);
+        }
+        const shown = await settle(() => notificationTexts(app), texts => texts.filter(t => t === expired).length > before, 5000);
+        if (await stat(join(dir, 'again.bin')).then(() => true, () => false)) {
+            return fail('a save whose menu had closed still wrote a file');
+        }
+        if ((shown ?? []).filter(t => t === expired).length <= before) {
+            return fail(`an unlandable save was silent or did not say its menu had closed; notifications ${JSON.stringify(shown)}`);
         }
     } finally {
         await rm(dir, { recursive: true, force: true });
@@ -2296,6 +2543,79 @@ async function elementFullscreen({ app, pages, plant, fail, note }) {
     }
 }
 
+// 39-06 (35 T18, WR-03): the pointer-lock warning.
+const pointerState = app => inChrome(app, `const p = document.getElementById('pointerlock-warning');
+    const f = document.getElementById('fullscreen-warning');
+    const t = p ? p.querySelector('.pointerlockfswarning-domain-text') : null;
+    return JSON.stringify({
+        pointer: !!p && p.matches(':popover-open'),
+        fullscreen: !!f && f.matches(':popover-open'),
+        text: t && !t.hidden ? t.textContent.replace(/[\\u2068\\u2069]/g, '') : '',
+    });`).then(JSON.parse);
+const pageLocked = (app, page) => app.evaluateIn(page, `document.pointerLockElement === document.body`);
+
+async function pointerLockWarning({ app, pages, plant, fail, note }) {
+    const tab = await openPage(app, pages, '/pointer');
+    if (typeof tab === 'string') {
+        return fail(tab);
+    }
+    if (plant === 'pointerlock-standin-missing' && await inChrome(app, `delete window.PointerLock; return window.PointerLock === undefined;`) === true) {
+        note('PLANT pointerlock-standin-missing applied');
+    }
+    // Upstream's en-US sentence with the page's host where its domain placeable is. An IP host has no base
+    // domain, so formatURIForDisplay keeps the port (BrowserUtils.sys.mjs), as upstream's warning does.
+    const host = new URL(tab.url).host;
+    const want = browserFtlValue('pointerlock-warning-domain').replace(/<span data-l10n-name="domain">\{ \$domain \}<\/span>/, host);
+    if (want === browserFtlValue('pointerlock-warning-domain')) {
+        return fail(`${BROKEN} no domain placeable in upstream's pointerlock-warning-domain`);
+    }
+    const click = async selector => {
+        const at = await centreOf(app, tab.page, selector);
+        if (!await focusOverlay(app, tab.tabId)) {
+            return false;
+        }
+        await clickAt(app, tab.page, at.x, at.y);
+        return true;
+    };
+    if (!await click('#lock') || await settle(() => pageLocked(app, tab.page), v => v === true, 5000) !== true) {
+        return fail(`${BROKEN} the page never got pointer lock from its button`);
+    }
+    const shown = await settle(() => pointerState(app), st => st.pointer && st.text === want, 3000);
+    if (!shown?.pointer) {
+        return fail(`no pointer-lock warning while the page holds the pointer: ${JSON.stringify(shown)}`);
+    }
+    if (shown.text !== want) {
+        return fail(`the pointer-lock warning reads ${JSON.stringify(shown.text)}, not upstream's ${JSON.stringify(want)}`);
+    }
+    note(`warning: ${JSON.stringify(shown.text)}`);
+    await app.evaluateIn(tab.page, `document.exitPointerLock(); true`);
+    const gone = await settle(() => pointerState(app), st => !st.pointer, 3000);
+    if (gone?.pointer || await pageLocked(app, tab.page)) {
+        return fail(`pointer-lock warning stayed after exit: ${JSON.stringify(gone)}`);
+    }
+    // In fullscreen only the fullscreen warning: the pointer-lock one is the positive control above.
+    if (!await click('#fs') || await settle(() => pageLocked(app, tab.page), v => v === true, 5000) !== true) {
+        return fail(`${BROKEN} the page never got pointer lock in fullscreen`);
+    }
+    const full = await settle(() => pointerState(app), st => st.fullscreen, 3000);
+    if (!full?.fullscreen) {
+        return fail(`${BROKEN} no fullscreen warning in fullscreen, so the pointer-lock absence would prove nothing: ${JSON.stringify(full)}`);
+    }
+    for (let i = 0; i < 10; i++) {
+        const st = await pointerState(app);
+        if (st.pointer) {
+            return fail(`both warnings in fullscreen: ${JSON.stringify(st)}`);
+        }
+        await sleep(100);
+    }
+    await focusOverlay(app, tab.tabId);
+    await pressKey(app, ESCAPE);
+    const out = await settle(() => app.evaluateIn(tab.page, `!document.fullscreenElement && !document.pointerLockElement`), v => v === true, 5000);
+    if (out !== true) {
+        await inChrome(app, `document.getElementById('fullscreen-exit-button')?.click(); return true;`);
+    }
+}
+
 async function fullscreenKey({ app, pages, fail }) {
     const tab = await openPage(app, pages, '/target');
     if (typeof tab === 'string') {
@@ -2355,8 +2675,10 @@ const SCENARIOS = {
     'background-menu': backgroundMenu,
     'menu-page-tools': menuPageTools,
     'menu-edit': menuEdit,
+    'iframe-edit-rows': iframeEditRows,
     'menu-spelling': menuSpelling,
     'menu-save': menuSave,
+    'save-as-late': saveAsLate,
     'extension-entry': extensionEntry,
     'freeze-frame': freezeFrame,
     'autocomplete': autocomplete,
@@ -2364,6 +2686,7 @@ const SCENARIOS = {
     'form-validation': formValidation,
     'paste-popup': pastePopup,
     'element-fullscreen': elementFullscreen,
+    'pointer-lock-warning': pointerLockWarning,
     'fullscreen-key': fullscreenKey,
     'f11-keeps-debug': f11KeepsDebug,
 };
@@ -2477,6 +2800,10 @@ const PLANTS = [
     { plant: 'warning-removed', target: 'element-fullscreen', run: ['element-fullscreen'], expect: 'no fullscreen warning' },
     { plant: 'fullscreen-standin-missing', target: 'element-fullscreen', run: ['element-fullscreen'], expect: 'page never entered fullscreen' },
     { plant: 'f11-row-enabled-under-theia', target: 'f11-keeps-debug', run: ['fullscreen-key', 'f11-keeps-debug'], expect: 'F11 fired a page key with the IDE focused' },
+    // 39-06 (35 T16 CR-01, T17 CR-02, T18 WR-03).
+    { plant: 'save-reply-ttl', target: 'save-as-late', run: ['save-as-late'], expect: 'a late Save As did not land' },
+    { plant: 'edit-rows-top-document', target: 'iframe-edit-rows', run: ['iframe-edit-rows'], expect: 'edit rows followed the outer page, not the iframe' },
+    { plant: 'pointerlock-standin-missing', target: 'pointer-lock-warning', run: ['pointer-lock-warning'], expect: 'no pointer-lock warning' },
     { plant: 'tab-switch-stays-fullscreen', target: 'element-fullscreen', run: ['element-fullscreen'], expect: 'tab switch left fullscreen on' },
 ];
 
