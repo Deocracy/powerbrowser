@@ -149,6 +149,9 @@ const UPSTREAM_OUTER_WINDOW = 'upstream/dom/base/nsGlobalWindowOuter.cpp';
 const COMMON_DIALOG_URL = 'chrome://global/content/commonDialog.xhtml';
 const DIALOG_IDS = ['commonDialog', 'infoBody', 'loginContainer', 'loginTextbox', 'password1Container', 'password1Textbox', 'checkboxContainer', 'checkbox'];
 const BEFOREUNLOAD_PREF = 'dom.require_user_interaction_for_beforeunload';
+/** 999.12: off, desktop capture takes the X11 capturer instead of the PipeWire portal (GTK only; staticAudit derives it). */
+const PIPEWIRE_PREF = 'media.webrtc.capture.allow-pipewire';
+const UPSTREAM_DESKTOP_CAPTURER = 'upstream/third_party/libwebrtc/modules/desktop_capture/desktop_capturer.cc';
 const VERDICT = '.planning/probes/prompt-probe-verdict.json';
 const EVIDENCE_DIR = '.planning/probes/prompt-probe';
 const DIALOG_KINDS = ['alert', 'confirm', 'prompt', 'leave', 'auth'];
@@ -1400,12 +1403,32 @@ const PLANTS = [
 // WebDriver's default unhandledPromptBehavior dismisses every dialog; the scenarios need Firefox's own to stay open.
 const KEEP_PROMPTS = { alwaysMatch: { unhandledPromptBehavior: { default: 'ignore' } } };
 
+/**
+ * 999.12, a harness route only: the sharing session runs as an X11 client of XWayland with PipeWire capture off, so
+ * getDisplayMedia uses the X11 capturer, the stock doorhanger lists the X11 screen, and no KDE portal chooser opens. The
+ * pref alone is not enough: libwebrtc creates the X11 screen capturer only when DesktopCapturer::IsRunningUnderWayland()
+ * is false, which reads XDG_SESSION_TYPE (screen_capturer_linux.cc, desktop_capturer.cc). The product's PipeWire portal
+ * path is checked by hand (human checklist row "37 T6 portal click").
+ */
+const X11_CAPTURE = { prefs: { [PIPEWIRE_PREF]: false }, env: { MOZ_ENABLE_WAYLAND: '0', GDK_BACKEND: 'x11', XDG_SESSION_TYPE: 'x11' } };
+
 async function runSession(name, plant) {
+    const route = name === 'sharing' ? X11_CAPTURE : { prefs: {}, env: {} };
+    // firefox-bidi spawns the browser with process.env, so the route's env is set for this session and restored after.
+    const saved = Object.fromEntries(Object.keys(route.env).map(k => [k, process.env[k]]));
+    Object.assign(process.env, route.env);
     const fx = await serveNavPages(PAGES);
     try {
-        return await withProbeShell(app => SCENARIOS[name](app, fx, plant), { extraPrefs: PREFS, capabilities: KEEP_PROMPTS });
+        return await withProbeShell(app => SCENARIOS[name](app, fx, plant), { extraPrefs: { ...PREFS, ...route.prefs }, capabilities: KEEP_PROMPTS });
     } finally {
         await fx.close();
+        for (const [k, v] of Object.entries(saved)) {
+            if (v === undefined) {
+                delete process.env[k];
+            } else {
+                process.env[k] = v;
+            }
+        }
     }
 }
 
@@ -1505,6 +1528,12 @@ function staticAudit() {
         if (!prefList.includes(`- name: ${name}\n`)) {
             failures.push(`${UPSTREAM_PREFS} has no ${name}; a bar scenario sets a pref upstream does not read`);
         }
+    }
+    if (!prefList.includes(`- name: ${PIPEWIRE_PREF}\n`)) {
+        failures.push(`${UPSTREAM_PREFS} has no ${PIPEWIRE_PREF}; the sharing session's X11 capture route turns off a pref upstream does not read`);
+    }
+    if (!readFileSync(join(REPO_ROOT, UPSTREAM_DESKTOP_CAPTURER), 'utf8').includes(`getenv("XDG_SESSION_TYPE")`) || X11_CAPTURE.env.XDG_SESSION_TYPE !== 'x11') {
+        failures.push(`${UPSTREAM_DESKTOP_CAPTURER} no longer decides Wayland from XDG_SESSION_TYPE, or the X11 route does not set it to x11; the sharing session would reach the portal chooser`);
     }
     if (!readFileSync(join(REPO_ROOT, UPSTREAM_HANG_MONITOR), 'utf8').includes(`"${WAIT_PREF}"`)) {
         failures.push(`${UPSTREAM_HANG_MONITOR} no longer reads ${WAIT_PREF}; the Keep waiting re-arm timing is not the stock one`);
