@@ -102,6 +102,18 @@
 //                   bridge. Plant commands-always-fire enables the extension keys while the IDE has
 //                   focus and must go red naming the IDE focus. Plant commands-never-fire disables
 //                   them while the page has focus and must go red naming the page.
+//   event-page-wake -- (39-04, 999.15) the wake fixture (an event page with a persisted webRequest listener and
+//                   no runtime.onStartup listener) installs as an XPI; on the relaunched shell, with zero stock
+//                   windows and extensions-late-startup seen, it has not started; a web tab loading /wake starts
+//                   it and its listener records the request within 15 s. Plant startup-promises-rearmed calls the
+//                   file's test-only ExtensionParent._resetStartupPromises() first and must go red naming the wake.
+//   policies-shell-only -- (39-04, 999.16) a first launch leaves another engine as the user's default and no
+//                   record of the policy Default; on the relaunch, with zero stock windows, the default engine
+//                   becomes the SearchEngines Default read from powerbrowser/distribution/policies.json at check
+//                   time and the policy records it. With the record cleared and the user's engine back, a GUI-01
+//                   stock window re-runs no policy callback (the default stays, no policy error). Plant
+//                   policy-default-prerecorded seeds the AB-1 runOncePerModification pref before the first launch
+//                   and must go red naming the unapplied Default.
 //
 // Modes:
 //   node scripts/verify-extension-actions-live.mjs [--scenario a,b]   live sessions
@@ -639,6 +651,80 @@ async function scenarioCommands({ app, plant }) {
   return verdict(true, `Alt+Shift+U fired pb-probe on /a (title ${fired.title}); with the IDE focused it reached the Theia frame and fired nothing; Alt+Shift+I opened the sidebar view`, null);
 }
 
+// 39-04 (999.15): the wake fixture's event page, primed at app startup with no runtime.onStartup listener, starts on
+// its persisted webRequest event in a relaunched session with zero stock windows. Upstream started it only once
+// ExtensionParent.browserPaintedPromise resolved, on a topic only a stock window sends; patch 050 also resolves it on
+// extensions-late-startup, which the shell sends.
+async function scenarioEventPageWake({ app, plant }) {
+  if ((await stockWindowCount(app)) !== 0) throw new Error('BROKEN INSTRUMENT: the relaunch opened a stock window');
+  if (!(await lateStartupSeen(app))) throw new Error('BROKEN INSTRUMENT: extensions-late-startup never arrived, so the listeners were never fully primed');
+  if (session.logs.some(r => r.kind === 'wake-started')) throw new Error('BROKEN INSTRUMENT: the event page started at startup, so no wake is tested');
+  if (plant?.name === 'startup-promises-rearmed') {
+    // The file's own test-only reset: both startup promises wait again for topics that do not fire twice.
+    await live.inChrome(app, `const { ExtensionParent } = ChromeUtils.importESModule('resource://gre/modules/ExtensionParent.sys.mjs');
+      ExtensionParent._resetStartupPromises(); return true;`);
+  }
+  const from = session.logs.length;
+  await openTab(app, '/wake');
+  const woke = await waitSince(from, r => r.kind === 'woke', 15000);
+  if (!woke) {
+    return verdict(false, null, `the event page never woke with no stock window (${await stockWindowCount(app)} stock window(s); records since the load: ${JSON.stringify(session.logs.slice(from).map(r => r.kind))})`);
+  }
+  return verdict(true, `the event page, with no runtime.onStartup listener, woke on ${pathOf(woke.url)} with ${await stockWindowCount(app)} stock window(s)`, null);
+}
+
+// 39-04 (999.16): the shipped SearchEngines Default (read from the tracked policies.json at check time) is applied
+// with zero stock windows. A first launch leaves another engine as the user's default and no record of the policy
+// Default (the profile a newly deployed policy meets: with no app-provided engine the policy's own first engine is
+// already the fallback default, so a fresh profile alone cannot show the gap). On the relaunch, with zero stock
+// windows, the Default must be applied and recorded. Then, with the record cleared and the user's engine back, a
+// GUI-01 stock window (sessionstore-windows-restored) must re-run no policy callback. The scenario launches itself:
+// the plant seeds the profile before its first launch.
+async function scenarioPoliciesShellOnly({ plant }) {
+  const policies = JSON.parse(await readFile(join(live.REPO_ROOT, 'powerbrowser/distribution/policies.json'), 'utf8'));
+  const expected = policies.policies?.SearchEngines?.Default;
+  if (!expected) throw new Error('BROKEN INSTRUMENT: powerbrowser/distribution/policies.json names no SearchEngines Default');
+  // The AB-1 pref (verify-address-bar-live.mjs): the policy Default recorded as applied before the first launch.
+  const extraPrefs = plant?.name === 'policy-default-prerecorded' ? { ...SESSION_PREFS, [RUN_ONCE_DEFAULT_PREF]: expected } : SESSION_PREFS;
+  const profile = await live.makeProfile(extraPrefs);
+  process.env.MOZ_PURGE_CACHES = '1';
+  try {
+    const other = await live.withShell(profile, async app => {
+      if (!(await lateStartupSeen(app))) throw new Error('BROKEN INSTRUMENT: extensions-late-startup never arrived in the first launch');
+      await sleep(3000);
+      const name = await userDefaultOtherThan(app, expected);
+      if (!name || name.startsWith('error:')) throw new Error(`BROKEN INSTRUMENT: no engine other than the policy Default to leave as the user's default (${name})`);
+      if ((await app.quit()) !== 'exited') throw new Error('BROKEN INSTRUMENT: the shell did not quit after the first launch');
+      return name;
+    });
+    return await live.withShell(profile, async app => {
+      if ((await stockWindowCount(app)) !== 0) throw new Error('BROKEN INSTRUMENT: the relaunch opened a stock window');
+      if (!(await lateStartupSeen(app))) throw new Error('BROKEN INSTRUMENT: extensions-late-startup never arrived');
+      const applied = await pollUntil(async () => ({ engine: await defaultEngine(app), record: await runOnceRecord(app) }), r => r.engine === expected && r.record === expected, 15000);
+      if (!applied) {
+        return verdict(false, null, `the policy Default engine was not applied with no stock window: the default is ${JSON.stringify(await defaultEngine(app))} and the policy record is ${JSON.stringify(await runOnceRecord(app))}, policies.json names ${JSON.stringify(expected)}`);
+      }
+      // A second run of the onAllWindowsRestored callbacks would find no record and apply the Default again.
+      if ((await userDefaultOtherThan(app, expected)) !== other) throw new Error(`BROKEN INSTRUMENT: ${other} could not be made the default again`);
+      const errorsBefore = await policyErrors(app);
+      await live.inChrome(app, `window.__pbRestored = 0; Services.obs.addObserver(() => { window.__pbRestored++; }, 'sessionstore-windows-restored'); return true;`);
+      const stockUrl = `${STOCK_ORIGIN}/c`;
+      await live.probe(app, `await get('CommandRegistry').executeCommand('powerbrowser.open-browser-window', ${JSON.stringify(stockUrl)}); return true;`);
+      await live.stockTabOn(app, stockUrl, 30000);
+      await sleep(3000);
+      const restored = await live.inChrome(app, 'return window.__pbRestored;');
+      const after = await defaultEngine(app);
+      const errorsAfter = await policyErrors(app);
+      if (after !== other || errorsAfter.length !== errorsBefore.length) {
+        return verdict(false, null, `a stock window re-ran the policy callbacks: the default is ${JSON.stringify(after)} (was ${JSON.stringify(other)}); new policy errors: ${JSON.stringify(errorsAfter.slice(errorsBefore.length))}`);
+      }
+      return verdict(true, `with zero stock windows the policy Default ${JSON.stringify(expected)} replaced the user's ${JSON.stringify(other)} and was recorded; a GUI-01 stock window (sessionstore-windows-restored seen ${restored} time(s)) re-ran nothing: ${JSON.stringify(other)} stayed the default, no policy error`, null);
+    });
+  } finally {
+    await profile.dispose();
+  }
+}
+
 const SCENARIOS_TABLE = {
   'popup-action': scenarioPopupAction,
   buttons: scenarioButtons,
@@ -649,9 +735,13 @@ const SCENARIOS_TABLE = {
   sidebar: scenarioSidebar,
   'tab-pages': scenarioTabPages,
   commands: scenarioCommands,
+  'event-page-wake': scenarioEventPageWake,
+  'policies-shell-only': scenarioPoliciesShellOnly,
 };
 // Scenarios that run on a relaunched shell after the content fixture's XPI install (no temporary fixture).
-const RELAUNCH_SCENARIOS = new Set(['content', 'page-action']);
+const RELAUNCH_SCENARIOS = new Set(['content', 'page-action', 'event-page-wake']);
+// 39-04: scenarios that launch their own session (the plant seeds the profile before the first launch).
+const SELF_LAUNCH_SCENARIOS = new Set(['policies-shell-only']);
 // 38-04 (B5): scenarios that install the surfaces fixture alone, so its background is the only reader of /cmd.
 const B5_SCENARIOS = new Set(['sidebar', 'tab-pages', 'commands']);
 
@@ -671,6 +761,8 @@ const PLANTS_TABLE = {
   'tabpage-in-overlay': { scenario: 'tab-pages', expect: 'tabs.create of the dashboard page did not open it in the stock window' },
   'commands-always-fire': { scenario: 'commands', expect: 'the extension command fired with the IDE focused' },
   'commands-never-fire': { scenario: 'commands', expect: 'the shortcut did not fire with the page /a focused' },
+  'startup-promises-rearmed': { scenario: 'event-page-wake', expect: 'the event page never woke with no stock window' },
+  'policy-default-prerecorded': { scenario: 'policies-shell-only', expect: 'the policy Default engine was not applied with no stock window' },
 };
 const SCENARIOS = SCENARIOS_TABLE;
 const PLANTS = PLANTS_TABLE;
@@ -759,7 +851,7 @@ async function startHarness() {
       session.queue = [];
       return;
     }
-    if (/^\/[a-z]$/.test(path)) {
+    if (/^\/([a-z]|wake)$/.test(path)) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       res.end(`<!doctype html><title>page ${path}</title><body>live page ${path}<img src="/img${path}.png" alt=""></body>`);
       return;
@@ -987,7 +1079,7 @@ function zipRoundTrip(files) {
 }
 
 // The content fixture survives a relaunch, so it installs as an XPI; the others install as temporary add-ons.
-const XPI_FIXTURES = new Set(['content']);
+const XPI_FIXTURES = new Set(['content', 'wake']);
 
 // Writes a fixture into a fresh directory and installs it.
 async function installFixture(app, name) {
@@ -1056,6 +1148,62 @@ async function pageActionThrow(app, body) {
     return null;`);
 }
 
+// The number of stock browser windows (chrome contexts on browser.xhtml) beside the shell.
+async function stockWindowCount(app) {
+  return (await app.contexts('chrome')).filter(entry => entry.url.startsWith('chrome://browser/content/browser.xhtml')).length;
+}
+
+// True once ExtensionParent.browserStartupPromise has resolved (it races extensions-late-startup, which the shell
+// sends after its idle startup tasks), waiting up to 60 s.
+async function lateStartupSeen(app) {
+  return live.inChrome(app, `const { ExtensionParent } = ChromeUtils.importESModule('resource://gre/modules/ExtensionParent.sys.mjs');
+    return Promise.race([ExtensionParent.browserStartupPromise.then(() => true), new Promise(r => setTimeout(() => r(false), 60000))]);`);
+}
+
+// The default search engine's name, or 'error: ...'.
+async function defaultEngine(app) {
+  return live.inChrome(app, `return (async () => {
+    try {
+      const { SearchService } = ChromeUtils.importESModule('moz-src:///toolkit/components/search/SearchService.sys.mjs');
+      await SearchService.init();
+      return (await SearchService.getDefault()).name;
+    } catch (e) {
+      return 'error: ' + e;
+    }
+  })();`);
+}
+
+// The value the SearchEngines policy recorded for its Default, or null when it has not run.
+async function runOnceRecord(app) {
+  return live.inChrome(app, `return Services.prefs.getStringPref(${JSON.stringify(RUN_ONCE_DEFAULT_PREF)}, '') || null;`);
+}
+
+// Makes the first visible engine not named `name` the user's default and clears the policy's record of its Default,
+// so a run of the policy callback is visible as a change; returns that engine's name, or 'error: ...'.
+async function userDefaultOtherThan(app, name) {
+  return live.inChrome(app, `return (async () => {
+    try {
+      const { SearchService } = ChromeUtils.importESModule('moz-src:///toolkit/components/search/SearchService.sys.mjs');
+      await SearchService.init();
+      const engine = (await SearchService.getVisibleEngines()).find(e => e.name !== ${JSON.stringify(name)});
+      if (!engine) return null;
+      await SearchService.setDefault(engine, SearchService.CHANGE_REASON.USER);
+      Services.prefs.clearUserPref(${JSON.stringify(RUN_ONCE_DEFAULT_PREF)});
+      return (await SearchService.getDefault()).name;
+    } catch (e) {
+      return 'error: ' + e;
+    }
+  })();`);
+}
+
+// Every console message so far from the policy engine's error paths (its logger and its callback-failure reports).
+async function policyErrors(app) {
+  return JSON.parse(await live.inChrome(app, `const texts = Services.console.getMessageArray().map(m => String(m.errorMessage || m.message || ''));
+    const api = Cc['@mozilla.org/consoleAPI-storage;1'].getService(Ci.nsIConsoleAPIStorage).getEvents()
+      .filter(e => e.level === 'error').map(e => String(e.prefix || '') + ' ' + (e.arguments || []).map(String).join(' '));
+    return JSON.stringify(texts.concat(api).filter(t => /Enterprise ?Policies|Error running \\w+ callback/i.test(t)));`));
+}
+
 async function stampCheck() {
   const digest = createHash('sha256').update(await readFile(join(live.REPO_ROOT, 'patches/050-extension-tab-host.patch'))).digest('hex');
   const stamp = (await readFile(join(live.REPO_ROOT, 'objdir/.pb-050-build.sha256'), 'utf8')).trim().split(/\s+/)[0];
@@ -1069,22 +1217,29 @@ const SESSION_PREFS = {
   // The content fixture is MV3: its background must not be suspended between the harness's commands.
   'extensions.background.idle.timeout': 3600000,
 };
+// The runOncePerModification record of the SearchEngines policy's Default (Policies.sys.mjs).
+const RUN_ONCE_DEFAULT_PREF = 'browser.policies.runOncePerModification.setDefaultSearchEngine';
+// 39-04: the relaunch fixture and its started record per relaunch scenario, and whether the scenario waits for that
+// record again after the relaunch (an event page must not start until its event).
+const RELAUNCH_FIXTURE = { 'event-page-wake': { name: 'wake', install: app => installFixture(app, 'wake'), started: 'wake-started', restarts: false } };
+const CONTENT_RELAUNCH = { name: 'content', install: app => installFixture(app, 'content'), started: 'content-started', restarts: true };
 
 // A relaunch scenario: the content XPI installs with zero overlays, the shell quits, and the scenario runs on the
 // relaunched shell (same profile) once the fixture's background has started again.
 async function runRelaunchSession(scenarioName, plant) {
+  const fixture = RELAUNCH_FIXTURE[scenarioName] ?? CONTENT_RELAUNCH;
   const profile = await live.makeProfile(SESSION_PREFS);
   process.env.MOZ_PURGE_CACHES = '1';
   try {
     await live.withShell(profile, async app => {
-      await installFixture(app, 'content');
-      if (!(await waitSince(0, r => r.kind === 'content-started'))) throw new Error('BROKEN INSTRUMENT: the content fixture never started');
+      await fixture.install(app);
+      if (!(await waitSince(0, r => r.kind === fixture.started))) throw new Error(`BROKEN INSTRUMENT: the ${fixture.name} fixture never started`);
       if ((await app.quit()) !== 'exited') throw new Error('BROKEN INSTRUMENT: the shell did not quit after the install');
     });
     session = { logs: [], queue: [] };
     return await live.withShell(profile, async app => {
       await live.installPushRecorder(app);
-      if (!(await waitSince(0, r => r.kind === 'content-started', 30000))) throw new Error('BROKEN INSTRUMENT: the content fixture did not start again after the relaunch');
+      if (fixture.restarts && !(await waitSince(0, r => r.kind === fixture.started, 30000))) throw new Error(`BROKEN INSTRUMENT: the ${fixture.name} fixture did not start again after the relaunch`);
       return await SCENARIOS[scenarioName]({ app, plant, command });
     });
   } finally {
@@ -1098,6 +1253,9 @@ async function runSession(scenarioName, plantName = null) {
   try {
     if (RELAUNCH_SCENARIOS.has(scenarioName)) {
       return await runRelaunchSession(scenarioName, plantName ? { name: plantName, ...PLANTS[plantName] } : null);
+    }
+    if (SELF_LAUNCH_SCENARIOS.has(scenarioName)) {
+      return await SCENARIOS[scenarioName]({ plant: plantName ? { name: plantName, ...PLANTS[plantName] } : null, command });
     }
     if (B5_SCENARIOS.has(scenarioName)) {
       return await live.withProbeShell(

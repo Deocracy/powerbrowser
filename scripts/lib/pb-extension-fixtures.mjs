@@ -173,10 +173,19 @@ setInterval(() => {
 }, 250);
 `;
 
+// 39-04 (999.15): the event-page probe. A non-persistent background whose persisted webRequest listener is its only
+// listener, deliberately with no runtime.onStartup listener (the content fixture's workaround): at app startup it is
+// only primed, so a request to the served /wake path is what must start it, and its first record says so.
+const EVENT_PAGE_BACKGROUND = `${POST}
+post({ kind: 'wake-started', id: browser.runtime.id });
+browser.webRequest.onBeforeRequest.addListener(d => post({ kind: 'woke', url: d.url }), { urls: ['http://127.0.0.1/wake*'] });
+`;
+
 const ACTION_ID = 'pb-ext-action-probe@powerbrowser.test';
 const POPUP_ID = 'pb-ext-popup-probe@powerbrowser.test';
 const CONTENT_ID = 'pb-ext-content-probe@powerbrowser.test';
 const SURFACES_ID = 'pb-ext-surfaces-probe@powerbrowser.test';
+const WAKE_ID = 'pb-ext-wake-probe@powerbrowser.test';
 
 export const EXTENSION_FIXTURES = Object.freeze({
   action: {
@@ -241,6 +250,17 @@ export const EXTENSION_FIXTURES = Object.freeze({
       'options.html': '<!doctype html><title>pb-options</title><body>options</body>',
       'dashboard.html': '<!doctype html><title>pb-dashboard</title><body>dashboard</body>',
     },
+  },
+  wake: {
+    manifest: {
+      manifest_version: 2,
+      name: 'PB event page probe',
+      version: '1.0',
+      browser_specific_settings: { gecko: { id: WAKE_ID } },
+      permissions: ['webRequest', 'http://127.0.0.1/*'],
+      background: { scripts: ['background.js'], persistent: false },
+    },
+    files: { 'background.js': EVENT_PAGE_BACKGROUND },
   },
 });
 
