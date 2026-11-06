@@ -83,12 +83,16 @@ print("__MARKER__ " + hit);
     return readMarker(marker, since) === 'true';
 }
 
-/** `{ resourceClass, caption, x, y, width, height }` of KWin's active window (frameGeometry), or null. */
+/**
+ * `{ resourceClass, caption, x, y, width, height, scale }` of KWin's active window: frameGeometry in logical pixels and
+ * its output's devicePixelRatio (a capture is frame size times scale in device pixels), or null.
+ */
 export function activeWindow() {
     const since = Math.floor(Date.now() / 1000) - 1;
     const marker = runKwinScript(`const w = workspace.activeWindow;
 print("__MARKER__ " + JSON.stringify(w ? { resourceClass: String(w.resourceClass), caption: String(w.caption),
-    x: w.frameGeometry.x, y: w.frameGeometry.y, width: w.frameGeometry.width, height: w.frameGeometry.height } : null));
+    x: w.frameGeometry.x, y: w.frameGeometry.y, width: w.frameGeometry.width, height: w.frameGeometry.height,
+    scale: w.output ? w.output.devicePixelRatio : 1 } : null));
 `);
     const text = readMarker(marker, since);
     return text ? JSON.parse(text) : null;
@@ -109,7 +113,7 @@ function gate({ expectClass = SHELL_CLASS, readActive = activeWindow } = {}) {
 
 /**
  * Raises the shell, waits up to 5 s for it to be the active window, then captures the active window with
- * spectacle into `out`. Returns `{ path, ...geometry }`; throws "refused: active window ..." if the shell never
+ * spectacle into `out`, without the drop shadow so the PNG is the window frame alone. Returns `{ path, ...geometry }`; throws "refused: active window ..." if the shell never
  * became active. `opts` exists for the self-test plants.
  */
 export async function captureShell(out, opts = {}) {
@@ -128,7 +132,7 @@ export async function captureShell(out, opts = {}) {
         await sleep(100);
     }
     // spectacle -b returns after about 25 s on this host (measured 2026-11-05), with the file written.
-    execFileSync('spectacle', ['-b', '-n', '-a', '-o', out], { timeout: 60000 });
+    execFileSync('spectacle', ['-b', '-n', '-a', '-S', '-o', out], { timeout: 60000 });
     if (!existsSync(out)) {
         throw new Error(`spectacle wrote no file at ${out}`);
     }

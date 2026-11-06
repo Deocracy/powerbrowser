@@ -114,13 +114,13 @@
  * Usage: verify-prompts-live.mjs [--scenario a,b] [--self-test [--static] [--scenario a,b]] [--help]
  */
 
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { captureShell } from './lib/pb-kwin.mjs';
 import { REPO_ROOT } from './lib/pb-relaunch.mjs';
 import { BROKEN, WEB_TAB_STATE_EVENT, inChrome, loadedAt, makeCurrent, openWebTab, pollFor, probe, pushes, serveNavPages, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
 
@@ -394,14 +394,19 @@ async function scenarioAnswerDelay(app, fx, plant) {
     return await geoOutcome(app, page) === 'granted' ? null : 'Allow after the delay did not grant (the positive control is red)';
 }
 
-/** The plant shows the queued notification of `tabId` the way a broken queue would, while it is not the active tab. */
-function showQueuedNow(app, tabId) {
-    return inChrome(app, `
+/**
+ * The plant shows the queued notification of `tabId` the way a broken queue would, while it is not the active tab.
+ * The stock panel opens asynchronously (_showPanel waits on _hidePanel), so the plant reads inPanel back: true only once
+ * the queued record is really in the open panel (999.13).
+ */
+async function showQueuedNow(app, tabId) {
+    await inChrome(app, `
         const o = overlayOf(${JSON.stringify(tabId)});
         const pn = window.PopupNotifications;
         const list = pn.getNotificationsForBrowser(o);
         pn._update(list, new Set(list.map(n => n.anchorElement)));
         return true;`);
+    return waitInPanel(app, tabId, GEO_ID, 5000);
 }
 
 async function scenarioBackgroundQueue(app, fx, plant) {
@@ -412,8 +417,8 @@ async function scenarioBackgroundQueue(app, fx, plant) {
     if (await waitForPush(app, isDoorhanger(back.tabId, true)) < 0) {
         return 'no doorhanger push with pending true for the backgrounded tab';
     }
-    if (plant === 'queue-shown-early') {
-        await showQueuedNow(app, back.tabId);
+    if (plant === 'queue-shown-early' && !await showQueuedNow(app, back.tabId)) {
+        return `${BROKEN} the queue-shown-early plant never got the queued record into the open panel`;
     }
     let state = await promptState(app, back.tabId);
     if (!state.has) {
@@ -424,8 +429,8 @@ async function scenarioBackgroundQueue(app, fx, plant) {
     }
     const third = await openPage(app, fx, '/c');
     await makeCurrent(app, third.tabId);
-    if (plant === 'activation-wrong-tab') {
-        await showQueuedNow(app, back.tabId);
+    if (plant === 'activation-wrong-tab' && !await showQueuedNow(app, back.tabId)) {
+        return `${BROKEN} the activation-wrong-tab plant never got the queued record into the open panel`;
     }
     state = await promptState(app, back.tabId);
     if (state.inPanel) {
@@ -651,7 +656,12 @@ async function scenarioCameraDoorhanger(app, fx, plant) {
         await inChrome(app, `const t = document.getElementById(${JSON.stringify(`${WEBRTC_ID}-notification`)}); if (t) t.remove(); return true;`);
     }
     await startRequest(app, page, 'camera');
-    if (!await waitInPanel(app, page.tabId, WEBRTC_ID, 10000)) {
+    // Without the stock template PopupNotifications shows an ad-hoc popupnotification under the same id, so the panel
+    // opening is not enough: the panel's element must carry the template's own markup (its device menulist, empty or
+    // not), checked before the menulist's items are read (999.13).
+    const templated = () => inChrome(app, `const t = document.getElementById(${JSON.stringify(`${WEBRTC_ID}-notification`)});
+        return !!t && t.parentNode === document.getElementById('notification-popup') && !!t.querySelector('#webRTC-selectCamera-menulist');`);
+    if (!await waitInPanel(app, page.tabId, WEBRTC_ID, 10000) || !await templated()) {
         return 'camera template missing: request never resolved';
     }
     const devices = await inChrome(app, `const m = document.getElementById('webRTC-selectCamera-menulist'); return m ? m.itemCount : -1;`);
@@ -768,19 +778,30 @@ async function ideEdit(app, theiaCtx, marker) {
     return typeof text === 'string' && text.includes(marker);
 }
 
-/** Raises the shell with a KWin script and captures the screen with spectacle; the path, or null when either step fails. */
-function kwinShot(out) {
-    try {
-        const dir = mkdtempSync(join(tmpdir(), 'pb-kwin-'));
-        const script = join(dir, 'raise.js');
-        writeFileSync(script, "for (const w of workspace.windowList()) { if (String(w.resourceClass).toLowerCase().includes('powerbrowser')) workspace.activeWindow = w; }\n");
-        const id = execFileSync('qdbus', ['org.kde.KWin', '/Scripting', 'org.kde.kwin.Scripting.loadScript', script], { encoding: 'utf8', timeout: 10000 }).trim();
-        execFileSync('qdbus', ['org.kde.KWin', `/Scripting/Script${id}`, 'org.kde.kwin.Script.run'], { timeout: 10000 });
-        execFileSync('spectacle', ['-b', '-n', '-f', '-o', out], { timeout: 20000 });
-        return existsSync(out) ? out : null;
-    } catch {
-        return null;
+/**
+ * 999.14: captures the PowerBrowser window through pb-kwin's captureShell (raise, active-window gate, spectacle -a);
+ * the path, or null when the capture is refused or the PNG is not the active window's frame size times its output
+ * scale (2 px), in which case
+ * the file is deleted so a capture of anything else never reaches the evidence directory.
+ */
+async function kwinShot(out) {
+    if (process.env.PB_LIVE_HEADED !== '1') {
+        return null; // a headless session has no window, and the raise must not pick up a PowerBrowser the owner has open
     }
+    let shot;
+    try {
+        shot = await captureShell(out);
+    } catch {
+        return null; // refused (the shell never became active) or spectacle failed; the BROKEN lines report the null
+    }
+    // PNG IHDR: width and height are the big-endian words at bytes 16 and 20.
+    const png = readFileSync(out);
+    const scale = shot.scale || 1;
+    if (Math.abs(png.readUInt32BE(16) - shot.width * scale) <= 2 && Math.abs(png.readUInt32BE(20) - shot.height * scale) <= 2) {
+        return out;
+    }
+    rmSync(out, { force: true });
+    return null;
 }
 
 /** A 401 Basic challenge until the request carries AUTH; then a page titled "authed". */
@@ -862,7 +883,7 @@ async function driveDialogs(app, fx, plant, shotDir) {
             const next = `/d?n=${i}`;
             await app.send('browsingContext.navigate', { context: traffic.ctx, url: fx.url(next), wait: 'none' });
             const at = await waitForPush(app, loadedAt(traffic.tabId, next), { from, timeoutMs: 8000 });
-            const shot = kwinShot(join(shotDir, `dialog-${kind}.png`));
+            const shot = await kwinShot(join(shotDir, `dialog-${kind}.png`));
             const answered = await answerDialog(app, DIALOG_ANSWER[kind]);
             const resolved = answered === 'answered' && await dialogResolved(app, page, kind);
             rows.push({ kind, body: shown.body, landed, inputEnabled, pushFrom: from, pushAt: at, advanced: at >= from, shot, resolved });
@@ -896,7 +917,7 @@ async function scenarioDialogProbe(app, fx, plant) {
     }
     const missingShots = run.rows.filter(r => !r.shot).map(r => r.kind);
     if (missingShots.length) {
-        return `${BROKEN} no KWin screenshot for ${missingShots.join(', ')} (run with the sandbox off: spectacle needs the session DBus); no verdict written`;
+        return `${BROKEN} no KWin screenshot for ${missingShots.join(', ')} (run headed (PB_LIVE_HEADED=1) with the sandbox off: captureShell needs the session DBus and a shell window); no verdict written`;
     }
     const blocked = blockedKinds(run.rows);
     let relay = null;
@@ -952,7 +973,7 @@ async function scenarioDialog(app, fx, plant) {
             return `${STOCK_BLOCKS}: ${blockedKinds([r]).join('; ')}`;
         }
         if (!r.shot) {
-            return `${BROKEN} no KWin screenshot for ${r.kind} (spectacle needs the session DBus; run with the sandbox off)`;
+            return `${BROKEN} no KWin screenshot for ${r.kind} (run headed, PB_LIVE_HEADED=1, with the sandbox off: captureShell needs the session DBus and a shell window)`;
         }
     }
     console.log(`dialog: screenshots for review (the IDE must look interactive): ${run.rows.map(r => r.shot).join(', ')}`);
