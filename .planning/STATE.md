@@ -5,16 +5,16 @@ milestone_name: Chrome Bar Firefox Parity
 current_phase: 39
 current_phase_name: v1.5 Close-out
 status: executing
-stopped_at: Completed 39-02-PLAN.md
-last_updated: "2026-11-05T23:50:37.458Z"
+stopped_at: Completed 39-03-PLAN.md
+last_updated: "2026-11-06T15:04:04.390Z"
 last_activity: 2026-11-05
 last_activity_desc: Phase 39 execution started
-state_head: 00f0f34ac3ec247779623cb852aea0cf59235d1d
+state_head: ab61e2a9c30124d3e96ede5b714cb5c2706125f5
 progress:
   total_phases: 14
   completed_phases: 1
   total_plans: 93
-  completed_plans: 75
+  completed_plans: 76
   percent: 7
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 ## Current Position
 
 Phase: 39 (v1.5 Close-out) — EXECUTING
-Plan: 3 of 20
+Plan: 4 of 20
 Status: Ready to execute
 Last activity: 2026-11-05 — Phase 39 execution started
 
@@ -179,6 +179,7 @@ Progress: [█░░░░░░░░░] 7%
 | Phase 32 P06 | not measured | 3 tasks | 10 files |
 | Phase 39 P01 | 293 min | 3 tasks | 7 files |
 | Phase 39 P02 | 34 min | 2 tasks | 5 files |
+| Phase 39 P03 | 10 min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -474,6 +475,9 @@ Recent decisions affecting current work:
 - [Phase 39]: 39-01: baseline 04938fcd = 448 PASS / 40 FAIL in 11550 s; classes listed 5, prompt-03 1, stale 1, environment 23, new 10
 - [Phase 39]: C11 needs two guards: frontend focusPageIfLatest plus chrome webTabFocus dropping a page focus while a page menu is pending (39-02)
 - [Phase 39]: stale-dismiss-focus plant detected through widget.focusWanted, since the chrome guard hides the frontend guard's absence (39-02)
+- [Phase 39]: OQ1 (Chris 2026-11-05): prompts-live dialog and dialog-probe use a derived scenario skip SKIPPED (PROMPT-03 deferred, 999.3) plus a WINDOWS.md ledger row; 39-10 implements
+- [Phase 39]: Batch A owner rulings 2026-11-05/06: all recommendations accepted; CLAUDE.md rule 5 route span replaced per 36 T18
+- [Phase 39]: 38 T31 stays pending with its owner line; 39-14 records the EXT-10 fill result
 
 ### Pending Todos
 
@@ -594,8 +598,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-05T23:50:37.150Z
-Stopped at: Completed 39-02-PLAN.md
+Last session: 2026-11-06T15:04:04.059Z
+Stopped at: Completed 39-03-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
