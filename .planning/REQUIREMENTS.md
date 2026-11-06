@@ -107,7 +107,7 @@ returning null.
 - [ ] **BMK-01**: User can bookmark the page with the star or Ctrl+D and sees the star filled for bookmarked pages
 - [ ] **BMK-02**: User can edit a bookmark's name and folder, or remove it, from a popover on the star
 - [ ] **BMK-03**: User can reopen the last closed tab with Ctrl+Shift+T, with its history
-- [ ] **BMK-04**: User can show a bookmarks toolbar (Ctrl+Shift+B) that updates live when bookmarks change
+- [x] **BMK-04**: User can show a bookmarks toolbar (Ctrl+Shift+B) that updates live when bookmarks change
 - [ ] **BMK-05**: User can clear recent history (Ctrl+Shift+Del) over a chosen time range, which also clears PowerBrowser's own stores (closed tabs, thumbnails, saved pages, web-tab history)
 - [ ] **BMK-06**: User can open a history menu with recently closed tabs and recent pages
 - [ ] **BMK-07**: User can bookmark one tab or all tabs from the tab menu
@@ -261,7 +261,7 @@ Filled by the roadmap (2026-10-20). Phase 26 is reserved for NG-089 and holds no
 | BMK-01 | Phase 33 | Pending |
 | BMK-02 | Phase 33 | Pending |
 | BMK-03 | Phase 33 | Pending |
-| BMK-04 | Phase 33 | Pending |
+| BMK-04 | Phase 33 | Complete |
 | BMK-05 | Phase 33 | Pending |
 | BMK-06 | Phase 33 | Pending |
 | BMK-07 | Phase 34 | Pending |
