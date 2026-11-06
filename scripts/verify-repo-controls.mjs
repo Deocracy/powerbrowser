@@ -491,8 +491,11 @@ function compareApps(c, declared, live, ctx) {
 const fmtPermissions = (p) => Object.entries(p).map(([k, v]) => `${k} ${v}`).join(', ');
 
 function appOwnerSteps(c, declared) {
+    // A third-party App (third_party: true) is authorised from its vendor's flow, not created here.
     return c.files.map(f => declared[f]).flatMap(a => [
-        `Create GitHub App ${a.slug} under the org with exactly these permissions: ${fmtPermissions(a.permissions)}; webhook inactive; installable only on this account; do not generate a private key`,
+        a.third_party
+            ? `Authorise the third-party GitHub App ${a.slug} from its vendor's dashboard; accept exactly these permissions: ${fmtPermissions(a.permissions)}`
+            : `Create GitHub App ${a.slug} under the org with exactly these permissions: ${fmtPermissions(a.permissions)}; webhook inactive; installable only on this account; do not generate a private key`,
         `Install ${a.slug} on: ${a.repositories.join(', ')}`,
     ]);
 }
@@ -818,7 +821,7 @@ export const CONTROLS = Object.freeze([
     },
     {
         id: 'apps',
-        files: ['app-powerbrowser-bot.json', 'app-powerbrowser-clock.json'],
+        files: ['app-powerbrowser-bot.json', 'app-powerbrowser-clock.json', 'app-cloudflare-workers-and-pages.json'],
         write: null,
         ownerSteps: appOwnerSteps,
         read: INSTALLATIONS_PATH,
@@ -1370,7 +1373,7 @@ function selfTest() {
         // Owner UI steps come from the bodies: create and install each App, 2FA, the owner set.
         const { ownerSteps, writes } = plan(base);
         const apps = CONTROLS.find(c => c.compare === compareApps).files.map(f => ctx.bodies[f]);
-        const ok = apps.every(a => ownerSteps.some(s => s.startsWith(`Create GitHub App ${a.slug} `) && !s.includes('workflows'))
+        const ok = apps.every(a => ownerSteps.some(s => s.startsWith(a.third_party ? `Authorise the third-party GitHub App ${a.slug} ` : `Create GitHub App ${a.slug} `) && !s.includes('workflows'))
                 && ownerSteps.some(s => s.startsWith(`Install ${a.slug} on: ${a.repositories.join(', ')}`)))
             && ownerSteps.includes('Require two-factor authentication for the org')
             && ownerSteps.some(s => s.startsWith('Org owners must be exactly: '))
