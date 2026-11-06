@@ -40,10 +40,11 @@
 import { createServer } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { withProbeShell, openWebTab, makeCurrent, focusOverlay, focusTheiaFrame, installPushRecorder, pushes, waitForPush } from './lib/pb-live-probe.mjs';
-import { REPO_ROOT, probe, stockTabOn } from './lib/pb-relaunch.mjs';
+import { GET_BY_NAME, REPO_ROOT, probe, stockTabOn } from './lib/pb-relaunch.mjs';
 
 const NAME = 'verify-ext-tab-host-live';
 const EXT_ID = 'pb-ext-tab-host-probe@powerbrowser.test';
@@ -73,6 +74,8 @@ const MANIFEST = {
   content_scripts: [{ matches: ['<all_urls>'], js: ['content.js'], run_at: 'document_idle' }],
   browser_action: { default_title: 'PB tab host probe' },
   web_accessible_resources: ['page.html'],
+  // 39-13 (38 T30): an options page that opens in a tab, for runtime.openOptionsPage.
+  options_ui: { page: 'options.html', open_in_tab: true },
   page_action: { default_title: 'PB tab host probe page', show_matches: ['<all_urls>'] },
   commands: { 'pb-probe-command': { suggested_key: { default: 'Ctrl+Shift+Y' }, description: 'PB tab host probe' } },
 };
@@ -116,6 +119,9 @@ async function run(cmd) {
     else if (cmd.op === 'update') result = brief(await browser.tabs.update(cmd.tabId, cmd.props));
     else if (cmd.op === 'updateExtPage') result = brief(await browser.tabs.update(cmd.tabId, { url: browser.runtime.getURL('page.html') }));
     else if (cmd.op === 'updateExtPagePinned') result = brief(await browser.tabs.update(cmd.tabId, { url: browser.runtime.getURL('page.html'), pinned: true }));
+    else if (cmd.op === 'create') result = brief(await browser.tabs.create(cmd.props));
+    else if (cmd.op === 'openOptions') { await browser.runtime.openOptionsPage(); result = true; }
+    else if (cmd.op === 'ownUrl') result = browser.runtime.getURL(cmd.path);
     else if (cmd.op === 'pageShown') result = await browser.pageAction.isShown({ tabId: cmd.tabId });
     else if (cmd.op === 'getZoom') result = await browser.tabs.getZoom(cmd.tabId);
     else if (cmd.op === 'getZoomSettings') result = await browser.tabs.getZoomSettings(cmd.tabId);
@@ -224,7 +230,8 @@ const url = path => `${ORIGIN}${path}`;
 
 const fixture = (id, name, manifest, extra) => ({ id, name, files: { 'manifest.json': JSON.stringify(manifest), ...extra } });
 const withOrigin = source => source.replace('__ORIGIN__', JSON.stringify(ORIGIN));
-const PROBE = fixture(EXT_ID, 'probe', MANIFEST, { 'background.js': withOrigin(BACKGROUND), 'content.js': CONTENT, 'page.html': PAGE });
+const PROBE = fixture(EXT_ID, 'probe', MANIFEST, { 'background.js': withOrigin(BACKGROUND), 'content.js': CONTENT, 'page.html': PAGE,
+  'options.html': '<!doctype html><title>PB probe options</title><body>options</body>' });
 
 const AT_ID = 'pb-ext-tab-host-activetab@powerbrowser.test';
 const AT_MANIFEST = {
@@ -1657,6 +1664,292 @@ async function scenarioWebviewRender({ app, theia, plant }) {
   return verdict(true, `the webview rendered '${WEBVIEW_TEXT}' from ${webviewOrigin}; its service worker loaded ${seen.n} time(s) in chrome scope (${seen.browserless} without a browsing context) and the probe recorded none of the webview origin's requests`, null);
 }
 
+// ---------------------------------------------------------------------------
+// 39-13 (38-REVIEW CR-02, CR-03, WR-01, WR-06): the tabs bridge's refusals and stock-window routes. Every refusal copy
+// is read from PowerBrowserAPI.sys.mjs at check time.
+// ---------------------------------------------------------------------------
+
+const API_SOURCE = readFileSync(join(REPO_ROOT, 'powerbrowser/shell/PowerBrowserAPI.sys.mjs'), 'utf8');
+const refusalCopy = fragment => {
+  const m = new RegExp(`"(PowerBrowser [^"]*${fragment}[^"]*)"`).exec(API_SOURCE);
+  if (!m) throw new Error(`BROKEN INSTRUMENT: PowerBrowserAPI.sys.mjs no longer carries a refusal naming '${fragment}'`);
+  return m[1];
+};
+const J = JSON.stringify;
+const W_IMPORT = `const W = ChromeUtils.importESModule(${J(API_URL)}).PowerBrowserWebTabs;`;
+
+async function contextsOn(app, spec) {
+  return (await app.contexts()).filter(entry => entry.url === spec).length;
+}
+
+async function scenarioContainerRefused({ app, plant }) {
+  const refused = refusalCopy('container tabs are not supported');
+  await openAndCommit(app, '/a');
+  await chromeJson(app, `Services.prefs.setBoolPref('privacy.userContext.enabled', true); return { landed: true };`);
+  if (plant && plant.late) {
+    const applied = await chromeJson(app, plant.late());
+    if (!applied.landed) throw new Error('BROKEN INSTRUMENT: plant container-dropped did not land');
+  }
+  let refusal = null;
+  try {
+    await command('create', { props: { url: url('/c'), cookieStoreId: 'firefox-container-1' } });
+  } catch (e) {
+    refusal = e.message;
+  }
+  // Positive control, after the container call: the same call with the default store opens its tab.
+  await command('create', { props: { url: url('/d'), cookieStoreId: 'firefox-default' } });
+  await waitFor(r => r.kind === 'committed' && String(r.url).endsWith('/d'), 'committed /d', 30000);
+  const all = (await command('query', { info: {} })).map(t => t.url);
+  const onC = await contextsOn(app, url('/c'));
+  if (refusal === null || onC || all.some(u => String(u).endsWith('/c'))) {
+    return verdict(false, null, `a container tab was opened: tabs.create with firefox-container-1 ${refusal === null ? 'resolved' : `rejected (${refusal})`}; pages on /c ${onC}; tabs ${J(all)}`);
+  }
+  if (!refusal.includes(refused)) {
+    return verdict(false, null, `not the container refusal: '${refusal}', want '${refused}'`);
+  }
+  if (!all.some(u => String(u).endsWith('/d'))) {
+    return verdict(false, null, `positive control: firefox-default opened no tab (tabs ${J(all)})`);
+  }
+  return verdict(true, `firefox-container-1 refused with '${refused}' and nothing opened on /c; firefox-default opened /d (tabs ${J(all)})`, null);
+}
+
+// Whether the frontend shows `tabId` (attached and visible), read synchronously in the Theia frame.
+const shownExpr = tabId => `(() => { ${GET_BY_NAME}
+  const w = __getByName(window.theia.container, 'WebTabChannel').widgetOf(${J(tabId)});
+  return !!(w && w.isAttached && w.isVisible); })()`;
+
+async function scenarioActivateAfterAck({ app, plant }) {
+  const A = await openAndCommit(app, '/a');
+  // The CR-03 window, made deterministic: the frontend holds its webTabAdopt ack 2 s (a busy frontend), so the
+  // extension's activation lands after the adoptTab push has gone and before the attach.
+  await probe(app, `const ch = get('WebTabChannel'); const request = ch.request;
+    ch.request = async function (msg) { if (msg.kind === 'webTabAdopt') await sleep(2000); return request.call(ch, msg); };
+    return true;`);
+  const pageApplied = plant && plant.page ? await probe(app, plant.page) : null;
+  if (plant && plant.page && !pageApplied?.landed) throw new Error('BROKEN INSTRUMENT: plant activated-before-shown did not land');
+  // The invariant, sampled for the whole create-then-activate: chrome's selection is read first, then the frontend, so
+  // a selected tab the frontend does not show after the read was not shown before it either.
+  const violations = [];
+  let samples = 0;
+  let done = false;
+  const monitor = (async () => {
+    while (!done) {
+      const sel = await chromeJson(app, `${W_IMPORT} return { id: W.tabIdOfBrowser(window.gBrowser.selectedBrowser) };`);
+      samples++;
+      if (sel.id && sel.id !== A.webTabId && await app.evaluate(shownExpr(sel.id)) !== true) {
+        violations.push(sel.id);
+      }
+      await sleep(40);
+    }
+  })();
+  const mark = (await pushes(app)).length;
+  let res;
+  try {
+    const created = await command('create', { props: { url: url('/d'), active: false } });
+    if (await waitForPush(app, p => p && p.kind === 'adoptTab' && String(p.url).endsWith('/d'), { from: mark, timeoutMs: 10000 }) < 0) {
+      throw new Error('BROKEN INSTRUMENT: no adoptTab push for /d, so the activation cannot land after it');
+    }
+    res = await command('update', { tabId: created.id, props: { active: true } });
+  } finally {
+    // Ends the monitor once /d is current in Theia (or 15 s pass), plus a short tail.
+    await probe(app, `const shell = get('ApplicationShell');
+      return await until(() => { const w = shell.mainPanel.currentTitle?.owner; return !!(w && String(w.url).endsWith('/d') && w.isAttached); }, 15000);`).catch(() => false);
+    await sleep(600);
+    done = true;
+    await monitor;
+  }
+  const dId = (await pushes(app)).slice(mark).find(p => p && p.kind === 'selectTab')?.tabId ?? null;
+  const current = await probe(app, `return get('ApplicationShell').mainPanel.currentTitle?.owner?.url ?? null;`);
+  const selected = await chromeJson(app, `${W_IMPORT} return { id: W.tabIdOfBrowser(window.gBrowser.selectedBrowser) };`);
+  if (violations.length) {
+    return verdict(false, null, `the host selected a tab the frontend had not shown: chrome selected ${J([...new Set(violations)])} while the frontend did not show it (${samples} samples)`);
+  }
+  if (res.active !== false) {
+    return verdict(false, null, `the host selected a tab the frontend had not shown: tabs.update answered active ${J(res.active)} before the attach`);
+  }
+  if (!dId || !String(current).endsWith('/d') || selected.id !== dId) {
+    return verdict(false, null, `the activated tab was not shown: selectTab push ${J(dId)}, Theia current ${J(current)}, chrome selection ${J(selected.id)}`);
+  }
+  const active = await command('query', { info: { active: true, currentWindow: true } });
+  if (active.length !== 1 || !String(active[0].url).endsWith('/d')) {
+    return verdict(false, null, `the activated tab was not shown to extensions: active tabs ${J(active)}`);
+  }
+  return verdict(true, `tabs.update answered active false; selectTab pushed for ${dId}; /d current in Theia and in chrome; the selection never led the frontend over ${samples} samples`, null);
+}
+
+// The stock windows open now (chrome contexts on browser.xhtml).
+async function stockContexts(app) {
+  return (await app.contexts('chrome')).filter(entry => entry.url.startsWith('chrome://browser/content/browser.xhtml')).map(e => e.context);
+}
+
+// In a stock window: the tab index and principals of the one tab on `spec`, or null.
+// Read through gBrowser.browsers, which the options-no-reuse plant leaves alone.
+const STOCK_TAB_ON = spec => `const all = [...gBrowser.browsers];
+  const i = all.findIndex(b => b.currentURI.spec === ${J(spec)});
+  if (i < 0) return null;
+  const p = all[i].contentPrincipal;
+  return { index: i, count: all.filter(b => b.currentURI.spec === ${J(spec)}).length, system: p.isSystemPrincipal, origin: p.origin };`;
+
+async function stockTabRead(app, spec, timeoutMs = 30000) {
+  const end = Date.now() + timeoutMs;
+  for (;;) {
+    for (const ctx of await stockContexts(app)) {
+      const r = await chromeJsonIn(app, ctx, STOCK_TAB_ON(spec)).catch(() => null);
+      if (r) return { ctx, ...r };
+    }
+    if (Date.now() > end) return null;
+    await sleep(250);
+  }
+}
+
+// Records, in a stock window, what its addTab receives for a moz-extension URL (instrument, not a plant).
+const ADD_TAB_RECORDER = `if (!window.__pbAddTabs) {
+    window.__pbAddTabs = [];
+    const add = gBrowser.addTab.bind(gBrowser);
+    gBrowser.addTab = (u, o) => {
+      const p = o && o.triggeringPrincipal;
+      if (String(u).startsWith('moz-extension:')) window.__pbAddTabs.push({ url: String(u), system: !p || p.isSystemPrincipal, origin: p ? p.origin : null });
+      return add(u, o);
+    };
+  }
+  return { landed: true };`;
+
+async function scenarioForeignPageRefused({ app, plant }) {
+  const noOwner = refusalCopy('no extension owns it');
+  const A = await openAndCommit(app, '/a');
+  const shellWindowId = (await command('get', { tabId: A.extId })).windowId;
+  await installFixture(app, FURNITURE);
+  const furnUrl = await chromeJson(app, `return { u: WebExtensionPolicy.getByID(${J(FURN_ID)}).getURL('sidebar.html') };`);
+  const ownUrl = await command('ownUrl', { path: 'page.html' });
+  // Node's URL gives a non-special scheme the origin 'null'; the extension origin is scheme and host.
+  const ownOrigin = ownUrl.split('/').slice(0, 3).join('/');
+  if ((await stockContexts(app)).length) throw new Error('BROKEN INSTRUMENT: a stock window was open before the no-window leg');
+  // Leg 1: a moz-extension URL no extension owns is refused and opens nothing.
+  const unowned = `moz-extension://${randomUUID()}/page.html`;
+  let refusal = null;
+  try {
+    await command('create', { props: { url: unowned } });
+  } catch (e) {
+    refusal = e.message;
+  }
+  if (refusal === null || !refusal.includes(noOwner)) {
+    return verdict(false, null, `a foreign page opened or used the wrong principal: tabs.create of an unowned extension URL ${refusal === null ? 'resolved' : `rejected with '${refusal}'`}, want '${noOwner}'`);
+  }
+  // Leg 2: no stock window. An empty window opens, then the page is added to it (never loaded as its window argument).
+  try {
+    await command('create', { props: { url: ownUrl } });
+  } catch {
+    // the shortcut answer: the page opened in a new browser window
+  }
+  const noWin = await stockTabRead(app, ownUrl);
+  if (!noWin || noWin.index < 1 || noWin.system || noWin.origin !== ownOrigin) {
+    return verdict(false, null, `a foreign page opened or used the wrong principal: with no stock window the page read ${J(noWin)}, want an added tab (index >= 1) with the extension's principal ${ownOrigin}`);
+  }
+  // Leg 3: a started stock window gets addTab with the caller's principal, for another extension's page too.
+  await chromeJsonIn(app, noWin.ctx, ADD_TAB_RECORDER);
+  if (plant && plant.stock) {
+    const applied = await chromeJsonIn(app, noWin.ctx, plant.stock);
+    if (!applied.landed) throw new Error('BROKEN INSTRUMENT: plant foreign-system-principal did not land');
+  }
+  await command('create', { props: { url: furnUrl.u } });
+  const foreign = await stockTabRead(app, furnUrl.u);
+  const recorded = await chromeJsonIn(app, noWin.ctx, 'return window.__pbAddTabs;');
+  const call = recorded.find(r => r.url === furnUrl.u);
+  if (!foreign || !call || call.system || foreign.system) {
+    return verdict(false, null, `a foreign page opened or used the wrong principal: another extension's page read ${J(foreign)}, addTab got ${J(call)}`);
+  }
+  // The stock tabs are listed too; an extension page must be in none of the shell window's tabs.
+  const inShell = (await command('query', { info: { windowId: shellWindowId } })).map(t => t.url);
+  if (!inShell.some(u => String(u).endsWith('/a')) || inShell.some(u => String(u).startsWith('moz-extension:'))) {
+    return verdict(false, null, `a foreign page opened or used the wrong principal: the shell window's tabs are ${J(inShell)}`);
+  }
+  return verdict(true, `unowned URL refused ('${noOwner}'); with no stock window the page was added as tab ${noWin.index} under ${noWin.origin}; another extension's page went to the started window through addTab with principal ${call.origin}; no extension page in a web tab`, null);
+}
+
+async function scenarioOptionsPageSwitch({ app, plant }) {
+  await openAndCommit(app, '/a');
+  const optionsUrl = await command('ownUrl', { path: 'options.html' });
+  if ((await stockContexts(app)).length) throw new Error('BROKEN INSTRUMENT: a stock window was open before the starting-window leg');
+  // Leg 1: the first call starts a stock window; the second comes once that window exists and has not finished
+  // starting (the state WR-06 waits on). One window, one tab.
+  await command('openOptions');
+  let startingWin = null;
+  const end = Date.now() + 20000;
+  while (!startingWin && Date.now() < end) {
+    startingWin = (await stockContexts(app))[0] ?? null;
+    if (!startingWin) await sleep(20);
+  }
+  if (!startingWin) throw new Error('BROKEN INSTRUMENT: the first openOptionsPage started no stock window');
+  const wasStarting = await app.evaluateIn(startingWin, '!(window.gBrowserInit && window.gBrowserInit.delayedStartupFinished)').catch(() => null);
+  await command('openOptions');
+  const first = await stockTabRead(app, optionsUrl);
+  await sleep(2000);
+  const windows = await stockContexts(app);
+  const settled = first && await chromeJsonIn(app, first.ctx, STOCK_TAB_ON(optionsUrl));
+  if (!first || windows.length !== 1) {
+    return verdict(false, null, `openOptionsPage opened a second window while the stock window was starting: ${windows.length} stock window(s)`);
+  }
+  // Judged after leg 2 runs, so one session reports both legs.
+  const startingFail = settled.count !== 1
+    ? `openOptionsPage opened a second tab while the stock window was starting: ${settled.count} options tabs in the one stock window (window still starting at the second call: ${wasStarting})`
+    : null;
+  // Leg 2: the window has started. Move off the options tab, call again: it switches back and adds none.
+  if (plant && plant.stock) {
+    const applied = await chromeJsonIn(app, first.ctx, plant.stock(optionsUrl));
+    if (!applied.landed) throw new Error('BROKEN INSTRUMENT: plant options-no-reuse did not land');
+  }
+  await chromeJsonIn(app, first.ctx, `gBrowser.selectedTab = gBrowser.tabs.find(t => t.linkedBrowser.currentURI.spec !== ${J(optionsUrl)}) || gBrowser.selectedTab; return { landed: true };`);
+  await command('openOptions');
+  await sleep(1500);
+  const after = await chromeJsonIn(app, first.ctx, `const r = (() => { ${STOCK_TAB_ON(optionsUrl)} })();
+    return { ...r, selected: gBrowser.selectedBrowser.currentURI.spec };`);
+  // Pages are counted on the BiDi tree, which reads the documents, not chrome's view of the browsers.
+  const onUrl = await contextsOn(app, optionsUrl);
+  if (onUrl !== settled.count || (await stockContexts(app)).length !== 1) {
+    return verdict(false, null, `openOptionsPage opened a second tab in the started window: ${settled.count} -> ${onUrl} page(s) on the options page`);
+  }
+  if (after.count !== settled.count || after.selected !== optionsUrl) {
+    return verdict(false, null, `openOptionsPage did not switch to the open options tab (selected ${after.selected})`);
+  }
+  if (startingFail) {
+    return verdict(false, null, `${startingFail}; the started-window leg passed (a third call switched to the options tab and added none)`);
+  }
+  return verdict(true, `a second call while the stock window was starting (still starting at the call: ${wasStarting}) gave one stock window and one options tab; a third call switched to it and added none`, null);
+}
+
+// CR-02's defect: the container is dropped on the way to the host, so the page loads in the default cookie jar.
+const PLANT_CONTAINER_DROPPED = `
+  const add = window.gBrowser.addTab;
+  window.gBrowser.addTab = (u, o) => add.call(window.gBrowser, u, { ...o, userContextId: 0 });
+  return { landed: true };`;
+
+// CR-03's defect: the frontend's own activation reaches chrome at ack time, while the widget's attach waits 2.5 s.
+const PLANT_ACTIVATED_BEFORE_SHOWN = `const ch = get('WebTabChannel'); const request = ch.request;
+  ch.request = async function (msg) {
+    const reply = await request.call(ch, msg);
+    if (msg.kind === 'webTabAdopt' && reply.ok === true && !window.__pbPlantRan) {
+      window.__pbPlantRan = true;
+      ch.send({ kind: 'webTabActivated', tabId: msg.tabId });
+      await sleep(2500);
+    }
+    return reply;
+  };
+  return { landed: true };`;
+
+// WR-01's defect class: an extension page added to the stock window with the system principal.
+const PLANT_FOREIGN_SYSTEM_PRINCIPAL = `
+  const add = gBrowser.addTab;
+  gBrowser.addTab = (u, o) => add.call(gBrowser, u, { ...o, triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal() });
+  return { landed: true };`;
+
+// WR-06's defect: the switch-to lookup misses the tab already showing the page, so the call adds another. The open
+// tab's browser reports about:blank to chrome; the BiDi page count still sees it.
+const PLANT_OPTIONS_NO_REUSE = spec => `
+  const b = [...gBrowser.browsers].find(x => x.currentURI.spec === ${J(spec)});
+  if (!b) return { landed: false };
+  Object.defineProperty(b, 'currentURI', { configurable: true, get: () => Services.io.newURI('about:blank') });
+  return { landed: b.currentURI.spec === 'about:blank' };`;
+
 const SCENARIOS = {
   query: scenarioQuery,
   sender: scenarioSender,
@@ -1683,6 +1976,10 @@ const SCENARIOS = {
   'windows-refusal': scenarioWindowsRefusal,
   'worker-wall': scenarioWorkerWall,
   'webview-render': scenarioWebviewRender,
+  'container-refused': scenarioContainerRefused,
+  'activate-after-ack': scenarioActivateAfterAck,
+  'foreign-page-refused': scenarioForeignPageRefused,
+  'options-page-switch': scenarioOptionsPageSwitch,
 };
 
 // Each plant names its scenario, the expected red text, and the chrome-scope mutation.
@@ -1754,6 +2051,10 @@ const PLANTS = {
   'windows-guard-off': { scenario: 'windows-refusal', expect: 'not the tab host refusal', late: () => PLANT_WINDOWS_GUARD_OFF },
   'worker-wall-off': { scenario: 'worker-wall', expect: 'Theia worker visible to network observers', late: () => PLANT_WORKER_WALL_OFF },
   'webview-wall-off': { scenario: 'webview-render', expect: 'Theia webview visible to network observers', late: () => PLANT_WEBVIEW_WALL_OFF },
+  'container-dropped': { scenario: 'container-refused', expect: 'a container tab was opened', late: () => PLANT_CONTAINER_DROPPED },
+  'activated-before-shown': { scenario: 'activate-after-ack', expect: 'the host selected a tab the frontend had not shown', page: PLANT_ACTIVATED_BEFORE_SHOWN },
+  'foreign-system-principal': { scenario: 'foreign-page-refused', expect: 'a foreign page opened or used the wrong principal', stock: PLANT_FOREIGN_SYSTEM_PRINCIPAL },
+  'options-no-reuse': { scenario: 'options-page-switch', expect: 'openOptionsPage opened a second tab', stock: spec => PLANT_OPTIONS_NO_REUSE(spec) },
 };
 
 // ---------------------------------------------------------------------------
