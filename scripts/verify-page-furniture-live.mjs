@@ -18,6 +18,11 @@
  *                       a title= span opens #remoteBrowserTooltip with its text,
  *                       compared exactly (a non-ASCII character included), and
  *                       a title="" span opens nothing over 1500 ms (39-05).
+ *   link-status-clear   (39-07, 35 T19 WR-04) With the pointer resting on a link (the
+ *                       status line shows it), Ctrl+Tab from the page to the next tab
+ *                       clears the line though the pointer never moved; back on the
+ *                       first tab, clicking the link and navigating clears it on the
+ *                       new location, and it stays clear for 500 ms.
  *   theia-hover-silent  An element with a title and a link in the IDE, hovered
  *                       with trusted input, push no overLink and open no page
  *                       tooltip over 1500 ms. Scored only when tooltip-status
@@ -65,6 +70,13 @@
  *                       Inspect opens the tab's toolbox and the inspector selects that
  *                       element within 10 s. In the frame: This Frame > View Frame
  *                       Source loads view-source:<frame document>.
+ *   inspect-policy      (39-07, 35 T20 WR-06) With devtools.policy.disabled (the pref the
+ *                       DisableDeveloperTools policy locks) set and read back, the element
+ *                       menu has no Inspect row (control: the same menu offers it with
+ *                       DevTools allowed). A menu that offered Inspect, picked after the
+ *                       policy came on, is refused by chrome and shows
+ *                       CHROME_BAR_COPY.pageMenuRowRefused, read from the tree. The pref
+ *                       is restored at the end.
  *   menu-edit           (35-04) In a text field with a selected word: Undo, Cut, Copy,
  *                       Paste, Delete and Select All show with textActions.ftl labels;
  *                       Copy fills the clipboard, Paste into a second field sets it,
@@ -156,13 +168,20 @@
  * A self-test plant is a runtime mutation in its own session (a chrome-scope
  * or Theia-frame evaluate), never a file edit, and notes `PLANT <name>
  * applied` only after reading the mutation back.
+ *
+ * PB_CAPTURE_DIR=<dir> (39-07, 35 T12-T15): the session runs headed and
+ * captureShell (scripts/lib/pb-kwin.mjs) writes 35-T12-menu.png (context-menu,
+ * the link menu open), 35-T13-tooltip-edge.png and 35-T15-status-truncation.png
+ * (tooltip-status: a title= element at the page's bottom-right corner, a long
+ * link), and 35-T14-fullscreen-warning.png (element-fullscreen). Unset, nothing
+ * is captured and nothing is scored differently. Needs the Bash sandbox off.
  */
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
     BROKEN,
     WEB_TAB_STATE_EVENT,
@@ -184,6 +203,7 @@ import {
     withProbeShell,
 } from './lib/pb-live-probe.mjs';
 import { REPO_ROOT, pollFor, probe, sourceConst } from './lib/pb-relaunch.mjs';
+import { captureShell } from './lib/pb-kwin.mjs';
 
 const MODES_ACTIVATE_COMMAND_ID = sourceConst('theia/extensions/modes/src/browser/modes-commands.ts', 'MODES_ACTIVATE_COMMAND_ID');
 
@@ -191,6 +211,22 @@ const NAME = 'verify-page-furniture-live';
 // 39-05 (PROMPT-08 encoding): a non-ASCII character, compared exactly with the tooltip's label.
 const TOOLTIP_TEXT = 'Furniture tooltip \u2014 caf\u00e9';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+// 39-07 (35 T12-T15): captures for the visual rows. A headless session has no window, so capturing runs headed.
+const CAPTURE_DIR = process.env.PB_CAPTURE_DIR ? resolve(process.env.PB_CAPTURE_DIR) : '';
+if (CAPTURE_DIR) {
+    process.env.PB_LIVE_HEADED = '1';
+}
+
+/** PB_CAPTURE_DIR set: the PowerBrowser window (captureShell refuses any other active window) to <dir>/<file>. Unset: nothing. */
+async function capture(note, file) {
+    if (!CAPTURE_DIR) {
+        return;
+    }
+    mkdirSync(CAPTURE_DIR, { recursive: true });
+    const shot = await captureShell(join(CAPTURE_DIR, file));
+    note(`capture ${file}: ${shot.resourceClass} ${shot.width}x${shot.height}`);
+}
 
 /** 35-03: the Referer header of each /target and /search GET, recorded by this script's own pages. */
 const referers = [];
@@ -208,7 +244,10 @@ const PAGES = {
             + '<p><a id="link" href="/target">Target link</a></p>'
             + '<p id="plain">Plain text</p>'
             + `<p><span id="tip" title="${TOOLTIP_TEXT}">Has a tooltip</span></p>`
-            + '<p><span id="tip-empty" title="">Empty title</span></p>',
+            + '<p><span id="tip-empty" title="">Empty title</span></p>'
+            // 39-07 captures (35 T13, T15): a long link for the status line, and a title= element in the page's bottom-right corner.
+            + `<p><a id="longlink" href="/target?${'long-path-segment-'.repeat(24)}end">Long link</a></p>`
+            + '<span id="tip-edge" title="Edge tooltip near the window corner" style="position: fixed; right: 2px; bottom: 2px">edge</span>',
     },
     '/target': { title: 'Target', body: '<p>target</p>', extra: recordReferer('/target') },
     '/menu': {
@@ -489,9 +528,116 @@ async function tooltipStatus({ app, pages, plant, fail, note }) {
             await sleep(100);
         }
         await pointerOnto(app, context, '#plain', overlayFrame(tabId));
+        if (CAPTURE_DIR) {
+            // 35 T15, then T13, in Browsing, where the page takes the main area.
+            await toMode(app, 'browsing');
+            await makeCurrent(app, tabId);
+            await settle(() => overlayVisibility(app, tabId), v => v === 'visible');
+            await app.evaluateIn(context, `document.getElementById('longlink').scrollIntoView({ block: 'center' }); true`);
+            await pointerOnto(app, context, '#longlink', overlayFrame(tabId));
+            await settle(() => statusGeometry(app, tabId), g => !!g.status?.text, 3000);
+            await capture(note, '35-T15-status-truncation.png');
+            await pointerOnto(app, context, '#tip-edge', overlayFrame(tabId));
+            await settle(() => tooltipState(app), t => t?.state === 'open', 3000);
+            note(`tip-edge: the page's corner is ${await inChrome(app, `const r = overlayOf(${JSON.stringify(tabId)}).getBoundingClientRect(); return JSON.stringify({ right: Math.round(window.innerWidth - r.right), bottom: Math.round(window.innerHeight - r.bottom) });`)} px from the window's edges`);
+            await capture(note, '35-T13-tooltip-edge.png');
+            await app.evaluateIn(context, 'scrollTo(0, 0); true');
+            await pointerOnto(app, context, '#plain', overlayFrame(tabId));
+        }
     } finally {
         await toMode(app, 'coding');
     }
+}
+
+async function applyLinkStatusPlants(app, plant, note) {
+    if (plant === 'status-clear-pointer-only') {
+        // WR-04's defect: chrome cleared the line only when the pointer left a link (setOverLink('') or a mouseover off
+        // every overlay). The tab-switch and location-change clears live in the boundary's private state, so the plant
+        // drops, at the push, every overLink clear that no pointer event caused.
+        const read = await inChrome(app, `const P = ChromeUtils.importESModule('chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs').PowerBrowserGroupParent;
+            const X = window.XULBrowserWindow;
+            let pointerClear = false;
+            const setOverLink = X.setOverLink;
+            X.setOverLink = function (url) { if (!url) { pointerClear = true; } return setOverLink.apply(this, arguments); };
+            document.addEventListener('mouseover', event => { if (W.tabIdOfBrowser(event.target) === null) { pointerClear = true; } }, true);
+            const send = P.prototype.sendAsyncMessage;
+            const planted = function (name, data) {
+                if (name === 'PowerBrowserWebTabState' && data && data.kind === 'overLink') {
+                    const caused = pointerClear;
+                    pointerClear = false;
+                    if (data.url === '' && !caused) {
+                        return undefined;
+                    }
+                }
+                return send.apply(this, arguments);
+            };
+            planted.__pbPlanted = true;
+            P.prototype.sendAsyncMessage = planted;
+            return P.prototype.sendAsyncMessage.__pbPlanted === true;`);
+        if (read === true) {
+            note('PLANT status-clear-pointer-only applied');
+        }
+    }
+}
+
+const statusText = async (app, tabId) => (await statusGeometry(app, tabId)).status?.text ?? '';
+
+async function linkStatusClear({ app, pages, plant, fail, note }) {
+    await applyLinkStatusPlants(app, plant, note);
+    // The page first, then the next tab after it in the strip, so Ctrl+Tab from the page lands on the plain page.
+    const tab = await openPage(app, pages, '/furniture');
+    if (typeof tab === 'string') {
+        return fail(tab);
+    }
+    const next = await openPage(app, pages, '/frame');
+    if (typeof next === 'string') {
+        return fail(next);
+    }
+    const hoverLink = async () => {
+        await makeCurrent(app, tab.tabId);
+        await settle(() => overlayVisibility(app, tab.tabId), v => v === 'visible');
+        await pointerOnto(app, tab.page, '#plain', overlayFrame(tab.tabId));
+        await settle(() => statusText(app, tab.tabId), t => !t, 3000);
+        await pointerOnto(app, tab.page, '#link', overlayFrame(tab.tabId));
+        return settle(() => statusText(app, tab.tabId), t => t.endsWith('/target'));
+    };
+
+    // 1. A keyboard tab switch with the pointer resting on the link.
+    const shown = await hoverLink();
+    if (!shown.endsWith('/target')) {
+        return fail(`${BROKEN} the status line never showed the link (${JSON.stringify(shown)}), so its clearing would prove nothing`);
+    }
+    if (!await focusOverlay(app, tab.tabId)) {
+        return fail(`${BROKEN} the page could not be focused for the keyboard tab switch`);
+    }
+    await pressKey(app, CTRL_TAB);
+    if (await settle(() => currentTabId(app), id => id === next.tabId, 5000) !== next.tabId) {
+        return fail(`${BROKEN} Ctrl+Tab from the page did not switch to the next tab`);
+    }
+    const afterSwitch = await settle(() => statusText(app, tab.tabId), t => !t, 3000);
+    if (afterSwitch) {
+        return fail(`status line kept a link after a tab switch: it still reads ${JSON.stringify(afterSwitch)} over another tab`);
+    }
+
+    // 2. Back on the page, the pointer on the link again, a click navigates.
+    if (!(await hoverLink()).endsWith('/target')) {
+        return fail(`${BROKEN} the status line did not show the link again on the first tab`);
+    }
+    const mark = (await pushes(app)).length;
+    const link = await centreOf(app, tab.page, '#link');
+    await clickAt(app, tab.page, link.x, link.y);
+    if (await waitForPush(app, loadedAt(tab.tabId, '/target'), { from: mark, timeoutMs: 10000 }) < 0) {
+        return fail(`${BROKEN} clicking the link did not load /target`);
+    }
+    let afterNav = await settle(() => statusText(app, tab.tabId), t => !t, 3000);
+    if (!afterNav) {
+        await sleep(500);
+        afterNav = await statusText(app, tab.tabId);
+    }
+    if (afterNav) {
+        return fail(`status line kept a link after navigation: it reads ${JSON.stringify(afterNav)} on the new location`);
+    }
+    note('cleared on the keyboard tab switch and on the link\'s navigation');
 }
 
 async function theiaHoverSilent({ app, pages, plant, results, fail, note }) {
@@ -1160,6 +1306,9 @@ async function contextMenu({ app, pages, plant, fail, note }) {
             const seen = JSON.parse(await inChrome(app, 'return JSON.stringify(window.__pbMenuContexts || []);'));
             note(`probe 35-1 ${target.name}: ${seen[seen.length - 1] ?? '(no capture)'}`);
         }
+        if (target.name === 'blank') {
+            await capture(note, '35-T12-menu.png');
+        }
         await closeMenu(app);
         if (target.select) {
             await app.evaluateIn(page, `getSelection().removeAllRanges(); true`);
@@ -1524,6 +1673,94 @@ async function menuPageTools({ app, pages, plant, fail, note }) {
     }
     if (await settle(() => overlayUri(app, tools.tabId), v => v === `view-source:${tools.url}`) !== `view-source:${tools.url}`) {
         return fail('View Page Source did not load view-source: plus the page URL');
+    }
+}
+
+async function applyInspectPolicyPlants(app, plant, note) {
+    if (plant === 'inspect-offered-unchecked') {
+        // WR-06's defect: the menu offered Inspect where the action (webTabDevtoolsReply) refuses it. The facts are the
+        // boundary's private state, so the plant gives the menu that defect pushed: the Inspect row a menu pushed earlier
+        // in this session is put back into any menu that lacks it.
+        if (await probe(app, `const menu = get('PageContextMenuContribution');
+            const open = menu.open;
+            let inspect = null;
+            const planted = function (detail) {
+                const items = Array.isArray(detail && detail.items) ? detail.items : [];
+                const found = items.find(item => item && item.id === 'context-inspect');
+                if (found) {
+                    inspect = found;
+                } else if (inspect) {
+                    detail = { ...detail, items: [...items, inspect] };
+                }
+                return open.call(this, detail);
+            };
+            planted.__pbPlanted = true;
+            menu.open = planted;
+            return menu.open.__pbPlanted === true;`) === true) {
+            note('PLANT inspect-offered-unchecked applied');
+        }
+    }
+}
+
+const DEVTOOLS_POLICY_PREF = 'devtools.policy.disabled';
+
+async function inspectPolicy({ app, pages, plant, fail, note }) {
+    await applyInspectPolicyPlants(app, plant, note);
+    const tools = await openTools(app, pages);
+    if (typeof tools === 'string') {
+        return fail(tools);
+    }
+    const inspect = ftlLabel('main-context-menu-inspect');
+    const setPolicy = on => inChrome(app, `Services.prefs.setBoolPref(${JSON.stringify(DEVTOOLS_POLICY_PREF)}, ${on}); return Services.prefs.getBoolPref(${JSON.stringify(DEVTOOLS_POLICY_PREF)}) === ${on};`);
+    const elementMenu = async () => {
+        await settle(() => overlayVisibility(app, tools.tabId), v => v === 'visible');
+        const opened = await openMenuAt(app, tools.page, tools.tabId, await centreOf(app, tools.page, `#${INSPECT_ID}`));
+        return opened.push && opened.ms ? (await menuRows(app)) ?? [] : null;
+    };
+    const offers = rows => !!rows && rows.some(r => r.label === inspect);
+    try {
+        // Control: with DevTools allowed the same menu offers Inspect, so its absence below is the policy's doing.
+        if (!offers(await elementMenu())) {
+            return fail(`${BROKEN} the element menu offers no Inspect row with DevTools allowed`);
+        }
+        await closeMenu(app);
+
+        // 1. The policy on: no Inspect row.
+        if (await setPolicy(true) !== true) {
+            return fail(`${BROKEN} ${DEVTOOLS_POLICY_PREF} did not read back true`);
+        }
+        const underPolicy = await elementMenu();
+        if (!underPolicy) {
+            return fail(`${BROKEN} no page menu opened on the element under the policy`);
+        }
+        if (offers(underPolicy)) {
+            return fail(`Inspect row shown under the DevTools policy; rows ${JSON.stringify(underPolicy.map(r => r.label))}`);
+        }
+        await closeMenu(app);
+
+        // 2. A row the menu offered, refused by chrome at the pick: the policy comes on while the menu is open.
+        if (await setPolicy(false) !== true) {
+            return fail(`${BROKEN} ${DEVTOOLS_POLICY_PREF} did not read back false`);
+        }
+        const refused = subjectCopy('pageMenuRowRefused', await app.evaluate(appNameExpr));
+        const before = (await notificationTexts(app)).filter(t => t === refused).length;
+        if (!offers(await elementMenu())) {
+            return fail(`${BROKEN} the element menu offers no Inspect row once the policy is off again`);
+        }
+        if (await setPolicy(true) !== true) {
+            return fail(`${BROKEN} ${DEVTOOLS_POLICY_PREF} did not read back true with the menu open`);
+        }
+        if (!await pickRow(app, tools.theia, inspect)) {
+            return fail(`${BROKEN} the offered Inspect row could not be picked`);
+        }
+        const shown = await settle(() => notificationTexts(app), texts => texts.filter(t => t === refused).length > before, 5000);
+        if (!shown || shown.filter(t => t === refused).length <= before) {
+            return fail(`a refused row was silent: no ${JSON.stringify(refused)}; notifications ${JSON.stringify(shown)}`);
+        }
+        note('no Inspect row under the policy; the refused Inspect pick said so');
+    } finally {
+        await closeMenu(app).catch(() => {});
+        await setPolicy(false);
     }
 }
 
@@ -2473,6 +2710,7 @@ async function elementFullscreen({ app, pages, plant, fail, note }) {
         return fail(`the fullscreen warning names ${JSON.stringify(warned.domain)} with a button reading ${JSON.stringify(warned.button)}; expected the host ${host} and upstream's ${JSON.stringify(exitLabel)}`);
     }
     note(`warning: ${JSON.stringify(warned.domain.replace(/[\u2068\u2069]/g, ''))}, button ${JSON.stringify(warned.button)}`);
+    await capture(note, '35-T14-fullscreen-warning.png');
 
     // 2. Esc leaves, and the overlay goes back to its placeholder.
     await focusOverlay(app, tab.tabId);
@@ -2668,12 +2906,14 @@ async function f11KeepsDebug({ app, plant, results, fail, note }) {
 
 const SCENARIOS = {
     'tooltip-status': tooltipStatus,
+    'link-status-clear': linkStatusClear,
     'theia-hover-silent': theiaHoverSilent,
     'pip-close': pipClose,
     'context-menu': contextMenu,
     'menu-not-in-ide': menuNotInIde,
     'background-menu': backgroundMenu,
     'menu-page-tools': menuPageTools,
+    'inspect-policy': inspectPolicy,
     'menu-edit': menuEdit,
     'iframe-edit-rows': iframeEditRows,
     'menu-spelling': menuSpelling,
@@ -2805,6 +3045,9 @@ const PLANTS = [
     { plant: 'edit-rows-top-document', target: 'iframe-edit-rows', run: ['iframe-edit-rows'], expect: 'edit rows followed the outer page, not the iframe' },
     { plant: 'pointerlock-standin-missing', target: 'pointer-lock-warning', run: ['pointer-lock-warning'], expect: 'no pointer-lock warning' },
     { plant: 'tab-switch-stays-fullscreen', target: 'element-fullscreen', run: ['element-fullscreen'], expect: 'tab switch left fullscreen on' },
+    // 39-07 (35 T19 WR-04, T20 WR-06).
+    { plant: 'status-clear-pointer-only', target: 'link-status-clear', run: ['link-status-clear'], expect: 'status line kept a link after a tab switch' },
+    { plant: 'inspect-offered-unchecked', target: 'inspect-policy', run: ['inspect-policy'], expect: 'Inspect row shown under the DevTools policy' },
 ];
 
 /** --self-test --scenario a,b: only the plants targeting a or b, and a clean control over the scenarios they run. */
