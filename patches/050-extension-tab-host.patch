@@ -331,6 +331,44 @@ index b3b7693c45..f00125a0cb 100644
      // For web-platform reftests a faked tabbrowser is used,
      // which does not actually have tabs.
      if (tabBrowser && tabBrowser.tabs) {
+diff --git a/toolkit/components/enterprisepolicies/EnterprisePoliciesParent.sys.mjs b/toolkit/components/enterprisepolicies/EnterprisePoliciesParent.sys.mjs
+index 23e8a75b5b..e442409a23 100644
+--- a/toolkit/components/enterprisepolicies/EnterprisePoliciesParent.sys.mjs
++++ b/toolkit/components/enterprisepolicies/EnterprisePoliciesParent.sys.mjs
+@@ -83,6 +83,7 @@ export function EnterprisePoliciesManager() {
+   Services.obs.addObserver(this, "profile-after-change", true);
+   Services.obs.addObserver(this, "final-ui-startup", true);
+   Services.obs.addObserver(this, "sessionstore-windows-restored", true);
++  Services.obs.addObserver(this, "extensions-late-startup", true);
+   Services.obs.addObserver(this, "EnterprisePolicies:Restart", true);
+   Services.obs.addObserver(this, "distribution-customization-complete", true);
+ }
+@@ -365,6 +366,7 @@ EnterprisePoliciesManager.prototype = {
+         this._runPoliciesCallbacks("onBeforeUIStartup");
+         break;
+ 
++      case "extensions-late-startup":
+       case "sessionstore-windows-restored":
+         this._runPoliciesCallbacks("onAllWindowsRestored");
+         break;
+diff --git a/toolkit/components/extensions/ExtensionParent.sys.mjs b/toolkit/components/extensions/ExtensionParent.sys.mjs
+index 7a5e3d08fd..866eaae962 100644
+--- a/toolkit/components/extensions/ExtensionParent.sys.mjs
++++ b/toolkit/components/extensions/ExtensionParent.sys.mjs
+@@ -2512,9 +2512,10 @@ export var ExtensionParent = {
+ // doesn't support SessionStore.
+ // _resetStartupPromises should only be called from outside this file in tests.
+ ExtensionParent._resetStartupPromises = () => {
+-  ExtensionParent.browserPaintedPromise = promiseObserved(
+-    "browser-delayed-startup-finished"
+-  ).then(() => {});
++  ExtensionParent.browserPaintedPromise = Promise.race([
++    promiseObserved("browser-delayed-startup-finished"),
++    promiseObserved("extensions-late-startup"),
++  ]).then(() => {});
+   ExtensionParent.browserStartupPromise = Promise.race([
+     promiseObserved("sessionstore-windows-restored"),
+     promiseObserved("extensions-late-startup"),
 diff --git a/toolkit/components/extensions/ExtensionShortcuts.sys.mjs b/toolkit/components/extensions/ExtensionShortcuts.sys.mjs
 index c000b1276a..a2ac1c3315 100644
 --- a/toolkit/components/extensions/ExtensionShortcuts.sys.mjs

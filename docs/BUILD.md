@@ -660,7 +660,7 @@ reached chrome-side: the extension tracker gate is opened only by a patch
 derives this set from `patches/` and compares it with the bullets here.
 
 - `045-powerbrowser-registry-root.patch` — moves the installer's registry keys from `Software\Mozilla` to `${AppRegRoot}` (`Software\${BrandShortName}`, defined in patch 040), together with the two chrome JS readers of those keys, `BrowserGlue.sys.mjs` and `UpdateService.sys.mjs` (owner ruling R3). Keys a compiled file reads stay under `Software\Mozilla\${AppName}`: `TaskBarIDs`, the launcher subkey and `MaintenanceService`. `scripts/verify-win-matrix-record.mjs` derives the expected root from 040.
-- `050-extension-tab-host.patch` — opens the extension tracker gate for the tab host window and carries its guards, including the `windows.remove` and `windows.update` refusals on the shell window (UF-31.1-01).
+- `050-extension-tab-host.patch` — opens the extension tracker gate for the tab host window and carries its guards, including the `windows.remove` and `windows.update` refusals on the shell window (UF-31.1-01), and starts event pages and applies enterprise policies on `extensions-late-startup` when no stock window sends `browser-delayed-startup-finished` or `sessionstore-windows-restored` (999.15, 999.16).
 - `060-extension-network-wall.patch` — keeps a browser marked `extensionnetworkhidden` (the Theia frame) out of webRequest, declarativeNetRequest and proxy.onRequest, and hides the cookies the `extensions.cookies.hidden` pref lists from `browser.cookies` (UF-31.1-02). `scripts/verify-ext-network-wall.mjs` guards it.
 
 ## Endpoints and the one carve-out (D-83–D-88)
