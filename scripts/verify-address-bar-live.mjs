@@ -5249,7 +5249,8 @@ async function bookmarksToolbar(ctx) {
         if (await seedToolbar(app, many) !== 'ok') {
             return fail(`${BROKEN} the overflow bookmarks could not be seeded chrome-side`);
         }
-        view = await settle(() => readToolbar(app), v => !!v.chevron && v.items.some(i => i.hidden));
+        // Every seeded item must be in the row before the hidden set is read: the chevron lists the row's tail as it is when clicked.
+        view = await settle(() => readToolbar(app), v => !!v.chevron && v.items.some(i => i.hidden) && many.every(([, title]) => v.items.some(i => i.label === title)));
         const hidden = view.items.filter(i => i.hidden).map(i => i.label);
         if (!view.chevron || !hidden.length || view.chevron.label !== TOOLBAR_MORE) {
             fail(`an overflowing toolbar must show the chevron labelled ${JSON.stringify(TOOLBAR_MORE)} with items hidden behind it; saw ${JSON.stringify({ chevron: view.chevron, hidden: hidden.length })}`);
