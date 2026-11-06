@@ -4234,9 +4234,12 @@ async function modeTokens(ctx) {
             try {
                 await typeInPill(app, step.text, { value: step.left });
             } catch (error) {
-                // A lost keystroke must never read as a token kept as typed.
-                fail(`${BROKEN} typing ${JSON.stringify(step.text)} did not reach the pill: ${error.message}`);
-                continue;
+                // A token left unconsumed keeps the typed text, which the mode check below names; any other text is a
+                // lost keystroke, which must never read as a token kept as typed.
+                if ((await readPill(app))?.value !== step.text) {
+                    fail(`${BROKEN} typing ${JSON.stringify(step.text)} did not reach the pill: ${error.message}`);
+                    continue;
+                }
             }
             const state = await settle(() => modeState(app), v => v?.mode === want);
             const view = await readMode(app);
