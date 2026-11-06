@@ -15,7 +15,9 @@
  *                       it as .pb-page-status, clear of the page rect in
  *                       Coding, Browsing and Organising; pointer over plain
  *                       text pushes the clear and the line goes; pointer over
- *                       a title= span opens #remoteBrowserTooltip with its text.
+ *                       a title= span opens #remoteBrowserTooltip with its text,
+ *                       compared exactly (a non-ASCII character included), and
+ *                       a title="" span opens nothing over 1500 ms (39-05).
  *   theia-hover-silent  An element with a title and a link in the IDE, hovered
  *                       with trusted input, push no overLink and open no page
  *                       tooltip over 1500 ms. Scored only when tooltip-status
@@ -170,7 +172,8 @@ import { REPO_ROOT, pollFor, probe, sourceConst } from './lib/pb-relaunch.mjs';
 const MODES_ACTIVATE_COMMAND_ID = sourceConst('theia/extensions/modes/src/browser/modes-commands.ts', 'MODES_ACTIVATE_COMMAND_ID');
 
 const NAME = 'verify-page-furniture-live';
-const TOOLTIP_TEXT = 'Furniture tooltip';
+// 39-05 (PROMPT-08 encoding): a non-ASCII character, compared exactly with the tooltip's label.
+const TOOLTIP_TEXT = 'Furniture tooltip \u2014 caf\u00e9';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /** 35-03: the Referer header of each /target and /search GET, recorded by this script's own pages. */
@@ -188,7 +191,8 @@ const PAGES = {
         body: '<style>body { font: 24px sans-serif; margin: 40px; } p { margin: 48px 0; }</style>'
             + '<p><a id="link" href="/target">Target link</a></p>'
             + '<p id="plain">Plain text</p>'
-            + `<p><span id="tip" title="${TOOLTIP_TEXT}">Has a tooltip</span></p>`,
+            + `<p><span id="tip" title="${TOOLTIP_TEXT}">Has a tooltip</span></p>`
+            + '<p><span id="tip-empty" title="">Empty title</span></p>',
     },
     '/target': { title: 'Target', body: '<p>target</p>', extra: recordReferer('/target') },
     '/menu': {
@@ -332,6 +336,21 @@ const tooltipState = app => inChrome(app, `const t = document.getElementById('re
 const overLinkFor = (tabId, test) => p => p && p.kind === 'overLink' && p.tabId === tabId && test(String(p.url));
 
 async function applyTooltipStatusPlants(app, plant, note) {
+    if (plant === 'tooltip-drag-lookup-throws') {
+        // C22 (39-05): restores upstream's unguarded drag-service lookup, which throws in a headless shell (no drag service).
+        const read = await inChrome(app, `const X = window.XULBrowserWindow;
+            const fixed = X.showTooltip;
+            const planted = function () {
+                Cc['@mozilla.org/widget/dragservice;1'].getService(Ci.nsIDragService).getCurrentSession();
+                return fixed.apply(this, arguments);
+            };
+            planted.__pbPlanted = true;
+            X.showTooltip = planted;
+            return X.showTooltip.__pbPlanted === true;`);
+        if (read === true) {
+            note('PLANT tooltip-drag-lookup-throws applied');
+        }
+    }
     if (plant === 'tooltip-element-removed') {
         if (await inChrome(app, `document.getElementById('remoteBrowserTooltip')?.remove(); return document.getElementById('remoteBrowserTooltip') === null;`) === true) {
             note('PLANT tooltip-element-removed applied');
@@ -420,9 +439,25 @@ async function tooltipStatus({ app, pages, plant, fail, note }) {
         await makeCurrent(app, tabId);
         const context = await contextOf(app, url);
         await pointerOnto(app, context, '#tip', overlayFrame(tabId));
-        const tip = await settle(() => tooltipState(app), t => !!t && t.state === 'open' && t.label === TOOLTIP_TEXT, 3000);
-        if (!tip || tip.state !== 'open' || tip.label !== TOOLTIP_TEXT) {
+        const tip = await settle(() => tooltipState(app), t => !!t && t.state === 'open', 3000);
+        if (!tip || tip.state !== 'open') {
             return fail(`page tooltip did not open with ${JSON.stringify(TOOLTIP_TEXT)} within 3 s; saw ${JSON.stringify(tip)}`);
+        }
+        if (tip.label !== TOOLTIP_TEXT) {
+            return fail(`tooltip text differs from the page title: ${JSON.stringify(tip.label)}, want ${JSON.stringify(TOOLTIP_TEXT)}`);
+        }
+        await pointerOnto(app, context, '#plain', overlayFrame(tabId));
+        if ((await settle(() => tooltipState(app), t => !!t && t.state === 'closed', 3000))?.state !== 'closed') {
+            return fail(`${BROKEN} the page tooltip did not close off the title, so the empty-title leg would prove nothing`);
+        }
+        // PROMPT-08 empty: title="" opens nothing. The #tip leg above is this leg's positive control; 1500 ms covers ui.tooltip.delay_ms.
+        await pointerOnto(app, context, '#tip-empty', overlayFrame(tabId));
+        const deadline = Date.now() + 1500;
+        while (Date.now() < deadline) {
+            if ((await tooltipState(app))?.state === 'open') {
+                return fail('an empty title opened the page tooltip');
+            }
+            await sleep(100);
         }
         await pointerOnto(app, context, '#plain', overlayFrame(tabId));
     } finally {
@@ -2374,6 +2409,7 @@ function selectedScenarios(args) {
 
 const PLANTS = [
     { plant: 'tooltip-element-removed', target: 'tooltip-status', run: ['tooltip-status'], expect: 'page tooltip did not open' },
+    { plant: 'tooltip-drag-lookup-throws', target: 'tooltip-status', run: ['tooltip-status'], expect: 'page tooltip did not open' },
     { plant: 'overlink-unregistered', target: 'tooltip-status', run: ['tooltip-status'], expect: 'no overLink push' },
     { plant: 'theia-tooltip-leak', target: 'theia-hover-silent', run: ['tooltip-status', 'theia-hover-silent'], expect: 'the IDE hover opened the page tooltip' },
     { plant: 'status-over-page', target: 'tooltip-status', run: ['tooltip-status'], expect: 'status line intersects the page' },
