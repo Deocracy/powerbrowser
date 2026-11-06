@@ -70,9 +70,10 @@ All sentences live in `CHROME_BAR_COPY`; `{App}` = `appSubject()` (configured ap
 | Dialog relay title | `{App} dialog from this tab` (only if relay built; stock dialog keeps stock strings) |
 | Stop-repeating checkbox/row | `Stop this page from showing more dialogs` |
 | Password save | Stock `LoginManagerPrompter` strings (not authored) |
-| Notification bar: blocked popup | `{App} blocked a popup from this page.` + actions `Allow` / `Don't show again for this site` |
+| Notification bar: blocked popup | `{App} blocked a popup from this page.` (more than one: `{App} blocked {count} popups from this page.`) + actions `Allow` / `Dismiss` (owner ruling 2026-11-06, 37-UAT test 38: shipped copy accepted; a per-site "don't show again" would be a permission or pref write) |
+| Notification bar: blocked redirect | `{App} stopped this page from sending you to another page.` + action `Dismiss` (owner ruling 2026-11-06, 37-UAT test 38: shipped copy accepted) |
 | Notification bar: hung script | `A script on this page is taking too long.` + actions `Stop script` / `Keep waiting` |
-| Notification bar: protocol handler | `This page wants to open another app.` + actions `Open` / `Don't allow` |
+| Notification bar: protocol handler | `Allow {host} to open {scheme} links?` + actions `Add` / `Don't allow` (owner ruling 2026-11-06, 37-UAT test 38: shipped copy accepted) |
 | Empty state | n/a (bars/doorhangers appear only on event) |
 | Error state | `{App} couldn't show the prompt for this tab. Reload the tab and try again.` |
 | Destructive confirmation | Stop script: `Stop the slow script? The page may not work.` |

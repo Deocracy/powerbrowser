@@ -3,7 +3,7 @@ status: partial
 phase: 38-webextensions
 source: [38-VERIFICATION.md, 38-REVIEW.md, 38-01-SUMMARY.md, 38-02-SUMMARY.md, 38-03-SUMMARY.md, 38-04-SUMMARY.md, 38-05-SUMMARY.md, 38-CONTEXT.md, 38-VALIDATION.md]
 started: 2026-11-01T00:00:00Z
-updated: 2026-11-05T01:52:10.339Z
+updated: 2026-11-06T14:54:18.000Z
 ---
 
 Deferred to the one end-of-milestone pass covering Phases 32-38 (Chris, 2026-10-31). Nothing in this file has been run: the Phase 38 worktree has no objdir, and live runs are forbidden there.
@@ -208,42 +208,61 @@ expected: |
   Until a decision is made EXT-10 stays incomplete as written.
   Decided 2026-11-01 (Chris): option (b). The fill is tested against a local Vaultwarden server on 127.0.0.1 with a test vault, driven by the Bitwarden extension. D-09's no-vault-account rule stays satisfied: no external account and no committed secret. The `fixtures` scenario needs a Vaultwarden mode added before the live run (.planning/v1.5-LIVE-PASS.md, Phase 38).
 result: [pending]
+owner: "Chris 2026-11-06 via AskUserQuestion: box 38, Accept all (Recommended). T31: already decided (b), build the Vaultwarden mode (plan 39-14)."
 
 ### 32. Owner decision: page-action icon placement
 expected: The icon sits in the pill's leading slot and shifts the address-bar text. Keep the shift (recommended by 38-03), move the icon to the trailing slot beside the star as Firefox does, or overlay it. Also decide whether a signed fixture is required now that the AMO route exists
-result: [pending]
+result: pass
+evidence: "owner decision 2026-11-06; trailing-slot move listed under Deferred Follow-Ups"
+owner: "Chris 2026-11-06 via AskUserQuestion: box 38, Accept all (Recommended). T32: keep the leading slot with pill-text shift; log the trailing-slot move as a backlog row."
 
 ### 33. Owner decision: AMO install from a web tab does not prompt
 expected: A user who navigates a web tab to the add-ons site and presses its install button gets no prompt (the prompt code throws on the missing `gUnifiedExtensions` and the install waits). The stock window route (the footer) is supported. Decide whether the stock add-on prompt host (`gUnifiedExtensions.getPopupAnchorID`, the `addon-webext-permissions-notification` element, its popupnotification) joins the shell furniture. 38-05 recommends deferring to the bridge milestone
-result: [pending]
+result: pass
+evidence: "owner decision 2026-11-06; deferral listed under Deferred Follow-Ups"
+owner: "Chris 2026-11-06 via AskUserQuestion: box 38, Accept all (Recommended). T33: defer to the bridge milestone (38-05)."
 
 ### 34. Owner decision: `tabs.create` of an extension page with no stock window
 expected: It opens a stock window on the page, then rejects with "PowerBrowser opened that page in a new browser window." (38-REVIEW WR-06 remainder). Returning a tab needs a wait on the new window's delayed startup before `tabs.create` resolves. An install-time welcome page usually ignores the result, but an EXT-10 fixture that awaits its welcome tab will see the rejection. Decide whether it must return a tab
-result: [pending]
+result: pass
+evidence: "owner decision 2026-11-06"
+owner: "Chris 2026-11-06 via AskUserQuestion: box 38, Accept all (Recommended). T34: accept the rejection."
 
 ### 35. Owner decision: extension-initiated `sidebarAction.open/close/toggle` and `openPopup()`
 expected: Only the B5 surfaces (the gear row and the shortcuts) are routed. Extension code calling `sidebarAction.open()`, `close()`, `toggle()`, or `browserAction.openPopup()` / `pageAction.openPopup()` still reaches upstream and does nothing in the shell. Routing them needs a patch 050 hand-off. Also: `sidebarAction.setPanel()` while open does not reload the open panel. Decide whether to route them
-result: [pending]
+result: pass
+evidence: "owner decision 2026-11-06"
+owner: "Chris 2026-11-06 via AskUserQuestion: box 38, Accept all (Recommended). T35: accept."
 
 ### 36. Owner decision: container tabs are refused rather than honoured (CR-02)
 expected: `tabs.create` with a non-default `cookieStoreId` is refused with a clear error. Neither the overlay path nor the stock-window tab page can carry a container, so honouring it is not a small change. Accept the refusal, or schedule container support
-result: [pending]
+result: pass
+evidence: "owner decision 2026-11-06"
+owner: "Chris 2026-11-06 via AskUserQuestion: box 38, Accept all (Recommended). T36: accept the refusal."
 
 ### 37. Owner decision: `getTabSharingState` on the tab host still reports no sharing
 expected: Carried from Phase 37 (37-UAT 36). Phase 38 did not change `getTabSharingState` (PowerBrowserAPI.sys.mjs:6681 still returns camera, microphone and screen `undefined`), so an extension reading tab sharing state sees none even while a track is live. Phase 38's roadmap criteria do not name it. Decide whether a follow-up owns it
-result: [pending]
+result: pass
+evidence: "owner decision 2026-11-06; one follow-up with 37-UAT test 36"
+owner: "Chris 2026-11-06 via AskUserQuestion: box 37, Accept all (Recommended). T36 and 38 T37: one ruling for both, accept as follow-up."
 
 ### 38. Owner decision: 38-REVIEW info findings left unfixed
 expected: IN-01 icon cache never evicts, IN-02 `tabs.create` ignores `pinned`, `discarded`, `title` and `index`, IN-03 `extensionShortcutOf` dereferences a stopped extension, IN-04 a sidebar page's `window.close()` throws and the sidebar stays open, IN-05 an install-site failure shows the "restart" copy and the https check accepts any host, IN-06 the listing page's assets were never probed (item 24), IN-07 a popup created before any subscribe leaks its panel, IN-08 the pinned-ids pref is never pruned. Accept all eight as follow-ups or schedule any
-result: [pending]
+result: pass
+evidence: "owner decision 2026-11-06; IN-01..IN-08 listed under Deferred Follow-Ups"
+owner: "Chris 2026-11-06 via AskUserQuestion: box 37, Accept all (Recommended). T41 and 38 T38: accept all info findings as follow-ups."
 
 ### 39. Owner decision: principal mismatch for private-window-allowed extensions (38-04 follow-up)
 expected: For a `moz-extension:` page, upstream builds the triggering principal with the shell window's `privateBrowsingId`, so `extensionOpenTabPage` may add that tab to a stock window whose private state differs. It can occur only for an extension allowed in private windows and is a load-correctness question, not an access leak. Accept, or rebuild the principal for the chosen window
-result: [pending]
+result: pass
+evidence: "owner decision 2026-11-06"
+owner: "Chris 2026-11-06 via AskUserQuestion: box 38, Accept all (Recommended). T39: accept."
 
 ### 40. Owner decision: the install footer exists only in the empty state
 expected: Once any extension is installed the route to the add-ons site is Manage Extension, then the Add-ons Manager's "Find more add-ons". SC4 is met through the footer only on a profile with no extensions. Accept this, or add a persistent route to the site
-result: [pending]
+result: pass
+evidence: "owner decision 2026-11-06"
+owner: "Chris 2026-11-06 via AskUserQuestion: box 38, Accept all (Recommended). T40: accept."
 
 ### 41. Scenario `network-wall` (UF-31.1-02, plan 38-06)
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-ext-tab-host-live.mjs --scenario network-wall`
@@ -290,9 +309,9 @@ evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: webview-wall-off we
 ## Summary
 
 total: 47
-passed: 24
+passed: 33
 issues: 0
-pending: 23
+pending: 14
 skipped: 0
 blocked: 0
 
@@ -309,4 +328,19 @@ blocked: 0
 - test: none
   idea: "enterprise policies (for example SearchEngines Default) are applied only when the first stock window fires sessionstore-windows-restored (EnterprisePoliciesParent.sys.mjs:368-369); a shell-only session never applies them. Same root cause as the event-page wake"
   deferred_at: 2026-11-04
+- test: 32
+  idea: "move the page-action icon to the trailing slot beside the star as Firefox does; owner kept the leading slot with the pill-text shift on 2026-11-06 and asked for a backlog row (source: 38-UAT test 32)"
+  deferred_at: 2026-11-06
+- test: 32
+  idea: "row 32's second question, whether a signed fixture is required now that the AMO route exists, was not in the 2026-11-06 box; it still needs an owner answer (source: 38-UAT test 32)"
+  deferred_at: 2026-11-06
+- test: 33
+  idea: "AMO install from a web tab gives no prompt (the stock add-on prompt host is not shell furniture); deferred to the bridge milestone, owner 2026-11-06 (source: 38-UAT test 33)"
+  deferred_at: 2026-11-06
+- test: 37
+  idea: "getTabSharingState reports no sharing; same follow-up as 37-UAT test 36, one backlog row for both (source: 38-UAT test 37)"
+  deferred_at: 2026-11-06
+- test: 38
+  idea: "38-REVIEW info findings IN-01..IN-08 (icon cache never evicts; tabs.create ignores pinned, discarded, title, index; extensionShortcutOf dereferences a stopped extension; sidebar window.close() throws; install-site failure copy and https host check; listing assets never probed; popup created before subscribe leaks its panel; pinned-ids pref never pruned); accepted as follow-ups 2026-11-06 (source: 38-UAT test 38)"
+  deferred_at: 2026-11-06
 ```

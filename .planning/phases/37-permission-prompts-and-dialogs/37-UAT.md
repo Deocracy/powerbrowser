@@ -3,7 +3,7 @@ status: partial
 phase: 37-permission-prompts-and-dialogs
 source: [37-VERIFICATION.md, 37-REVIEW.md, 37-03-SUMMARY.md, 37-CONTEXT.md]
 started: 2026-11-01T00:00:00Z
-updated: 2026-11-05T01:52:10.160Z
+updated: 2026-11-06T14:54:18.000Z
 ---
 
 Deferred to the one end-of-milestone pass (Chris, 2026-10-31). Run on `objdir/dist/bin/powerbrowser` with `-purgecaches` after any shell-module change. Spectacle and the KWin raise script need the session DBus, so run with the sandbox off. The live scenarios are `node scripts/verify-prompts-live.mjs --scenario <name>`.
@@ -55,11 +55,13 @@ evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: camera-doorhanger P
 expected: alert, confirm, prompt, leave-page and HTTP-auth each shown by the stock window-modal commonDialog. While each is open: an IDE edit is typed and read back, the shell window's input-enabled state is read, a traffic tab navigates and the push sequence advances, and a KWin screenshot is taken. A live run writes `.planning/probes/prompt-probe-verdict.json` (replacing the provisional one) and `.planning/probes/prompt-probe/`; then `git add` them by explicit path and run `node scripts/verify-permission-prompts.mjs`. Red when the stock dialog blocks the IDE. Watch: whether BiDi auto-closes content prompts (needs unhandledPromptBehavior: ignore), whether the 127.0.0.1 cross-port 401 shows the auth dialog
 result: skipped
 reason: "Deferred follow-up: PROMPT-03 (backlog 999.3): the verdict stays stock-blocks-ide; for all five kinds the IDE edit did not land, shell input was disabled and pushes stalled"
+owner: "Chris 2026-11-05 via AskUserQuestion: OQ1: Derived scenario skip (Recommended). A scenario-level skip printed as `SKIPPED (PROMPT-03 deferred, 999.3)`, derived from the REQUIREMENTS.md deferral record so it stops applying the moment the deferral is removed, plus a WINDOWS.md ledger row; --gate goes green by a recorded exclusion. Plan 39-10 implements it; this row's result is recorded there"
 
 ### 9. Scenario `dialog`
 expected: Each of the five kinds resolves the page on answer; an IDE edit lands and the shell's input stays enabled while it is open; the push sequence advances on the same recorder; screenshots logged for review
 result: skipped
 reason: "Deferred follow-up: PROMPT-03 (backlog 999.3): IDE push traffic stops while a stock dialog is open"
+owner: "Chris 2026-11-05 via AskUserQuestion: OQ1: Derived scenario skip (Recommended). A scenario-level skip printed as `SKIPPED (PROMPT-03 deferred, 999.3)`, derived from the REQUIREMENTS.md deferral record so it stops applying the moment the deferral is removed, plus a WINDOWS.md ledger row; --gate goes green by a recorded exclusion. Plan 39-10 implements it; this row's result is recorded there"
 
 ### 10. Scenario `stop-repeat`
 expected: A 20-alert loop is stopped with the stock checkbox on the second alert: the loop finishes with no further dialog, this tab does not prompt again, a new tab (new browsing-context group) still prompts
@@ -175,44 +177,60 @@ expected: |
   - stock-blocks-ide with relayFeasible true: the relay is built (a `getTabDialogBox` stand-in with the Pitfall 2 call-site audit and the `setTabLabelForAuthPrompts` audit, `webTabDialogAnswer`, a `dialogRequest` push and subscriber, the stop-repeat enum and copy row). Rule (p) in verify-permission-prompts.mjs goes red until the member exists. That is a replan of 37-03, then a live pass again.
   - stock-blocks-ide with relayFeasible false: PROMPT-03 cannot be met as written and goes to the owner (ROADMAP "Needs Chris"). Rule (p) goes red with "route to Chris".
   `relayFeasible` is false when an adopted or host tab has no getTabForBrowser node, when selectedBrowser is missing, or when cross-domain auth needs gURLBar.setURI and setTabLabelForAuthPrompts (a stand-in widening). After the CR-01 fix the first term is expected true.
-result: [pending]
+result: pass
+evidence: "resolved 2026-11-03 (PROMPT-03 deferred to backlog 999.3); owner decision 2026-11-06"
+owner: "Chris 2026-11-06 via AskUserQuestion: box 37, Accept all (Recommended). T34: mark resolved, decided 2026-11-03 (defer PROMPT-03 to 999.3)."
 
 ### 35. Owner decision: the sharing indicator does not open the site panel
 expected: 37-UI-SPEC wants a click on the sharing indicator to open the Phase 31 site panel. 37-02 did not build it; clicking does nothing. Accept as a follow-up, or schedule it. PROMPT-02's roadmap wording (a sharing indicator shows) does not require it
-result: [pending]
+result: pass
+evidence: "owner decision 2026-11-06; follow-up listed under Deferred Follow-Ups"
+owner: "Chris 2026-11-06 via AskUserQuestion: box 37, Accept all (Recommended). T35: accept as follow-up."
 
 ### 36. Owner decision: getTabSharingState reports no sharing to extensions
 expected: The tab host's getTabSharingState (PowerBrowserAPI.sys.mjs:6663) returns camera, microphone and screen undefined even while a track is live, so an extension reading tab sharing state sees none. 37-02 left it as outside its plan. Phase 38's roadmap criteria do not name it. Decide whether Phase 38 or a follow-up owns it
-result: [pending]
+result: pass
+evidence: "owner decision 2026-11-06; follow-up listed under Deferred Follow-Ups"
+owner: "Chris 2026-11-06 via AskUserQuestion: box 37, Accept all (Recommended). T36 and 38 T37: one ruling for both, accept as follow-up."
 
 ### 37. Owner decision: CONTEXT D-12 open points
 expected: |
   The three open points from D-12. CONTEXT's "Chris's confirmations (2026-10-25)" section records points 1 and 3 as answered (bars are not permission prompts and keep their Theia buttons; per-popup Allow is enough, no site-wide toggle). Point 2 was covered only by the words "link-handler request": protocol-handler Add writes a persistent handler (`hs.store`, WebProtocolHandlerRegistrar.sys.mjs:483-504) from a Theia bar button, and the Don't allow refusal holds for the document. Confirm that the persistent write from a bar is intended, or ask for a stock route (which would need getNotificationBox reinstated and N2 reversed).
-result: [pending]
+result: pass
+evidence: "owner decision 2026-11-06: the persistent protocol-handler write from the bar button is intended"
+owner: "Chris 2026-11-06 via AskUserQuestion: box 37, Accept all (Recommended). T37: confirm intended."
 
 ### 38. Owner decision: two bar copy rows differ from 37-UI-SPEC
 expected: |
   The blocked-popup bar's second action is "Dismiss", not "Don't show again for this site" (the latter would be a permission or pref write). The protocol bar reads "Allow {host} to open {scheme} links?" with Add and Don't allow, in place of "This page wants to open another app." with Open and Don't allow. A redirect-only message row was added. Accept the plan's version or restore the spec's wording.
-result: [pending]
+result: pass
+evidence: "owner decision 2026-11-06; 37-UI-SPEC copy rows amended to the shipped copy in the same commit"
+owner: "Chris 2026-11-06 via AskUserQuestion: box 37, Accept all (Recommended). T38: accept the shipped copy; amend 37-UI-SPEC."
 
 ### 39. Judgment-tier and backstop prohibitions (37-VERIFICATION Prohibitions table)
 expected: Confirm or reject each flagged non-authoritative verdict, including the two backstops (no BiDi DOM assertion on #notification-popup; bars never cover page content) that only a held-out test or a live run proves
-result: [pending]
+result: pass
+evidence: "owner decision 2026-11-06. The two backstops (no BiDi DOM assertion on #notification-popup; bars never cover page content) stay on the human checklist (plan 39-19)"
+owner: "Chris 2026-11-06 via AskUserQuestion: box 37, Accept all (Recommended). T39: accept; keep the two backstops on the human checklist."
 
 ### 40. Owner ruling check: the Phase 31 site-panel writer
 expected: The ruling is "prompts are answered only through Firefox's own buttons". No allow, grant or permit kind exists. One persistent-write path remains from the Theia frame: `webTabSetPermission` (Phase 31) writes `SitePermissions.setForPrincipal` for camera, microphone, geo, notifications, autoplay and popup from the site panel, behind a tab id, a known id and state, and an origin echo equal to the tab's own contentPrincipal. It cannot answer a pending prompt (the prompt record is never consulted), but it can pre-set a value that the next request would honour. Confirm that the site panel's own edit satisfies the ruling
-result: [pending]
+result: pass
+evidence: "owner decision 2026-11-06"
+owner: "Chris 2026-11-06 via AskUserQuestion: box 37, Accept all (Recommended). T40: satisfies the rule (cannot answer a pending prompt; origin echo checked)."
 
 ### 41. Owner decision: 37-REVIEW info findings left unfixed
 expected: IN-01 (`displayHost` on the doorhanger push is unread and is the top-level host), IN-02 (a reloaded frontend loses the pending-prompt marks), IN-03 (the pending mark's copy says "permission" for a password offer and stays on the current tab), IN-04 (the cap counts only never-shown records; blocked-popup reads can resolve out of order). Accept all four as follow-ups or schedule any
-result: [pending]
+result: pass
+evidence: "owner decision 2026-11-06; IN-01..IN-04 listed under Deferred Follow-Ups"
+owner: "Chris 2026-11-06 via AskUserQuestion: box 37, Accept all (Recommended). T41 and 38 T38: accept all info findings as follow-ups."
 
 ## Summary
 
 total: 41
-passed: 13
+passed: 21
 issues: 0
-pending: 23
+pending: 15
 skipped: 5
 blocked: 0
 
@@ -235,4 +253,13 @@ blocked: 0
 - test: 33
   idea: "kwinShot does not raise the shell before spectacle, so the dialog probe PNGs are full-desktop captures; raise the shell with the KWin script first"
   deferred_at: 2026-11-04
+- test: 35
+  idea: "a click on the sharing indicator should open the Phase 31 site panel as 37-UI-SPEC asks; 37-02 did not build it; accepted as a follow-up 2026-11-06 (source: 37-UAT test 35)"
+  deferred_at: 2026-11-06
+- test: 36
+  idea: "getTabSharingState on the tab host returns camera, microphone and screen undefined while a track is live, so extensions see no sharing; one follow-up for 37-UAT test 36 and 38-UAT test 37, accepted 2026-11-06"
+  deferred_at: 2026-11-06
+- test: 41
+  idea: "37-REVIEW info findings IN-01 (displayHost unread, top-level host), IN-02 (reloaded frontend loses pending-prompt marks), IN-03 (pending mark copy says permission for a password offer), IN-04 (cap counts only never-shown records; blocked-popup reads can resolve out of order); accepted as follow-ups 2026-11-06 (source: 37-UAT test 41)"
+  deferred_at: 2026-11-06
 ```

@@ -191,12 +191,14 @@ the same thing run the same command id (D-13).
 | Toolbar toggle, menu row | **Show Bookmarks Toolbar** with a check mark when on |
 | Toolbar empty | The toolbar shows **no items** and no placeholder text; an empty toolbar is still 28px (bookmarks can be added to it from the editor's folder picker) |
 | Toolbar item tooltip | The bookmark's title, or its address when it has no title |
+| Toolbar read failure (owner ruling 2026-11-05, 33-UAT test 7: shipped values accepted) | **{App} couldn't load your bookmarks toolbar. Press Ctrl+Shift+B twice to try again.** and no items |
 | History submenu, reopen row | **Reopen Closed Tab** + shortcut hint |
 | History submenu, closed-tabs header | **Recently closed tabs** |
 | History submenu, recent-pages header | **Recent pages** |
 | History submenu, closed tab row | The page title, or its address; caption: none (one line, like the NAV-03 session rows) |
 | History submenu, empty closed tabs | **No recently closed tabs.** (a disabled row, not a heading) |
 | History submenu, clear row | **Clear Recent History…** + shortcut hint |
+| History submenu, read failure (owner ruling 2026-11-05, 33-UAT test 7: shipped values accepted) | **{App} couldn't read your history. Open this menu again to try again.** |
 | Clear-history heading | **Clear Recent History** |
 | Clear-history ranges | **Last hour**, **Last 2 hours**, **Last 4 hours**, **Today**, **Everything** (default: **Last hour**) |
 | Clear-history footnote | **This also clears {App}'s closed tabs, thumbnails, saved pages and web-tab history. Your open tabs stay open.** |
@@ -210,7 +212,7 @@ the same thing run the same command id (D-13).
 | More Tools submenu | **Page Source** (Ctrl+U), **Reader View** (F9), **Page Developer Tools** (F12). A row whose Phase 32 command does not exist is absent, never disabled (D-13: Actions ships with whatever exists). |
 | Help submenu | **Get Help** (opens the configured help URL), separator, **About {App}** (opens the stock About dialog) |
 | Menu disabled reason | Rows that need a web tab (Print, Save Page As, Find, Zoom, Full Screen, Page Source, Reader View) are dimmed-not-removed without one, with tooltips retained (13-UI-SPEC buttons contract) |
-| Actions, new rows | **Bookmark This Page**, **Reopen Closed Tab**, **Show Bookmarks Toolbar**, **Clear Recent History…**, plus every Phase 32 `Browser` command that exists at enumeration time; each row shows its keybinding badges (inherited Actions anatomy) |
+| Actions, new rows | **Bookmark This Page**, **Reopen Closed Tab**, **Show Bookmarks Toolbar**, **Clear Recent History…**, **Settings** (ROADMAP criterion 5 names settings among the Actions entries; it and the Settings menu row run the same stock-page handler), plus every Phase 32 `Browser` command that exists at enumeration time; the Zoom submenu's **Reset** reads **Reset Zoom** as its Actions and palette label; each row shows its keybinding badges (inherited Actions anatomy). Settings and Reset Zoom: owner ruling 2026-11-05, 33-UAT test 7: shipped values accepted |
 | Actions, Command-centre guarantee | No new send: Command centre still sends nothing to any engine (MODE_SENDS `command-centre` row is all-false; this phase adds no exception) |
 | Destructive confirmations | None beyond the panels themselves. The editor panel **is** the Remove confirmation (Remove runs at once, like Firefox); the picker panel **is** the Clear confirmation. No second dialog. |
 
@@ -352,11 +354,11 @@ never from `KeybindingRegistry`.
   Report Broken Site, Sync/account rows — per REQUIREMENTS Out of Scope and the gap list.
   No Library window (`about:places`), no import-from-browser, no warn-on-close (deferred
   ideas, no v1.5 requirement).
-- **Submenu behaviour (Decided, autonomous, recommended).** Submenus open on hover after a
-  200ms delay and on Right-arrow / Enter when the parent row is highlighted; Esc steps back
-  one level; Left-arrow on a submenu's first item returns to the parent. Reason: 200ms is
-  long enough to cross a submenu en route to the item below without opening it, and short
-  enough that deliberate entry feels instant — the same intent as the 500ms history hold
+- **Submenu behaviour (Decided; amended by owner ruling 2026-11-05, 33-UAT test 7).** Submenus
+  open on hover after stock Lumino's 300ms delay and on Right-arrow / Enter when the parent row
+  is highlighted; Esc steps back one level; Left-arrow on a submenu's first item returns to the
+  parent. The original 200ms target would need an edit to `@lumino/widgets`, which hard rule 1
+  forbids, so the shipped 300ms stands. It serves the same intent as the 500ms history hold
   (avoid accidental opens) at menu-traversal speed. All menu layers are blocking layers, so
   the page hides while any menu is open (inherited rule a).
 - **Enablement.** Every row that needs a web tab is dimmed-not-removed without one, tooltips
@@ -430,7 +432,7 @@ Elements probed:
 | populated | E4 | ✅ covered | Five radio ranges, fan-out footnote, Clear/Cancel footer |
 | error | E4 | ✅ covered | A failed clear shows the contracted failure row in the picker; nothing claims to be cleared |
 | populated | E5 | ✅ covered | MENU-03 entries in Firefox order around the Phase 31 rows; omitted Firefox rows absent (private, containers, Sync, Suggest, report) |
-| zero-one-many | E5 | ✅ covered | One submenu behaviour for all submenus (200ms hover, arrows, Esc-steps-back); More Tools lists only existing commands |
+| zero-one-many | E5 | ✅ covered | One submenu behaviour for all submenus (300ms stock Lumino hover, arrows, Esc-steps-back); More Tools lists only existing commands |
 | long-text | E5 | ✅ covered | Long bookmark/page titles in submenus ellipsize on one line; tooltips carry the full text |
 | populated | E6 | ✅ covered | Actions lists every existing Browser command including the four new ones, each with keybinding badges |
 | populated | E6 privacy | 🧪 backstop | Gate derived from the mode table with a `--self-test` plant: while the mode is Command centre, no suggestion kind is sent for any typed text, and the new privileged kinds never run as queries |
@@ -496,5 +498,5 @@ gate is that no new packages are added.
 | Browser-category listing path, pill menu / history-menu anchor and `onHide` focus restore, `.lm-Menu` per-request pattern | `chrome-bar-widget.tsx` (NAV-03), `address-bar.tsx` (BAR-10), `address-bar-modes.ts` (Actions mode) |
 | `browser.showBookmarksToolbar` key family and User-scope rule | `chrome-bar-preferences.ts` + 27-UI-SPEC `browser.` rule |
 | `--color-danger` token and danger-scoped confirmation precedent | `modes.css` + `setups-service.ts` (G-14.1.1-22) |
-| Decided (autonomous, recommended) | 24px star mirroring the mode button; bookmarked = filled glyph in text ink (no new accent use); 320px editor/picker panels right-anchored; 28px toolbar row with chevron overflow (no wrap/scroll); 200ms submenu hover delay; one-level folder picker; panels-are-confirmations (no second dialog); Ctrl+D keeps Monaco's meaning in editors |
+| Decided (autonomous, recommended) | 24px star mirroring the mode button; bookmarked = filled glyph in text ink (no new accent use); 320px editor/picker panels right-anchored; 28px toolbar row with chevron overflow (no wrap/scroll); 300ms submenu hover delay (stock Lumino, owner ruling 2026-11-05); one-level folder picker; panels-are-confirmations (no second dialog); Ctrl+D keeps Monaco's meaning in editors |
 | Deferred (named, not specified) | BMK-07 tab-menu bookmarking (Phase 34); Library window; import-from-browser; warn-on-close; per-site forget; Bookmarks/History side views; nested bookmark folders; screenshot/translate/PiP/page-info |

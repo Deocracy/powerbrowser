@@ -3,7 +3,7 @@ status: partial
 phase: 33-bookmarks-history-and-the-full-menu
 source: [33-VERIFICATION.md]
 started: 2026-11-01T00:00:00Z
-updated: 2026-11-05T01:52:09.664Z
+updated: 2026-11-06T14:54:18.000Z
 ---
 
 Deferred to the one end-of-milestone pass (Chris, 2026-10-31). Run on `objdir/dist/bin/powerbrowser` with `-purgecaches` after any shell-module change, with the last Theia app build. Live scenarios are in `node scripts/verify-address-bar-live.mjs`; also run its `--self-test`.
@@ -46,6 +46,7 @@ result: [pending]
 ### 7. Visual and copy pass against 33-UI-SPEC (KDE Wayland, KWin raise + spectacle)
 expected: Star 3px inset and editor anchor; 28px toolbar row; 32px History rows; 320px clear panel with danger ink on Clear only; 280px hamburger geometry. Owner judges copy: toolbar failure "Press Ctrl+Shift+B twice to try again.", history read failure "Open this menu again to try again.", the 300 ms Lumino submenu delay vs the spec's 200 ms, Edit placed after Zoom, "Reset Zoom" as the Actions label, the added Settings command
 result: [pending]
+owner: "Chris 2026-11-05 via AskUserQuestion: box 33, Accept shipped values (Recommended): accept the shipped values (300 ms submenu delay, Edit placement, Settings command, copy strings) and amend 33-UI-SPEC to match."
 
 ## Summary
 
