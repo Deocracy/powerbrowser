@@ -816,7 +816,7 @@ Plans:
 **Source phase:** 37
 **Deferred at:** 2026-11-04 during /gsd-verify-work 37 session completion
 **Follow-ups:**
-- [ ] Test 17: four prompts self-test plants misbehave once the self-test gets past sharing: queue-shown-early and activation-wrong-tab stay green, camera-template-missing goes red on an empty device menulist, allow-loads-frame-url goes red on popup not adopted next to its opener; re-site each so it reaches its own failure (deferred 2026-11-04)
+- [x] Test 17: four prompts self-test plants misbehave once the self-test gets past sharing: queue-shown-early and activation-wrong-tab stay green, camera-template-missing goes red on an empty device menulist, allow-loads-frame-url goes red on popup not adopted next to its opener; re-site each so it reaches its own failure (deferred 2026-11-04) — fixed in 39-09 (fae88df5)
 
 ### Phase 999.14: Follow-up — Phase 37 deferred UAT follow-up: Test 33 (BACKLOG)
 
@@ -824,7 +824,7 @@ Plans:
 **Source phase:** 37
 **Deferred at:** 2026-11-04 during /gsd-verify-work 37 session completion
 **Follow-ups:**
-- [ ] Test 33: kwinShot does not raise the shell before spectacle, so the dialog probe PNGs are full-desktop captures; raise the shell with the KWin script first (deferred 2026-11-04)
+- [x] Test 33: kwinShot does not raise the shell before spectacle, so the dialog probe PNGs are full-desktop captures; raise the shell with the KWin script first (deferred 2026-11-04) — fixed in 39-09 (fae88df5)
 
 ### Phase 999.15: Follow-up — Phase 38 deferred UAT follow-up: Test 5 (BACKLOG)
 
