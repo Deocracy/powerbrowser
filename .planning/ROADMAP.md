@@ -832,7 +832,7 @@ Plans:
 **Source phase:** 38
 **Deferred at:** 2026-11-04 during /gsd-verify-work 38 session completion
 **Follow-ups:**
-- [ ] Test 5: ext-event-page-wake: browserPaintedPromise resolves only on browser-delayed-startup-finished, which only a stock window sends, so an event page woken by an event never runs with no stock window open. The candidate fix edits upstream ExtensionParent.sys.mjs and must land as a regenerated patch 050 (deferred 2026-11-04)
+- [x] Test 5: ext-event-page-wake: browserPaintedPromise resolves only on browser-delayed-startup-finished, which only a stock window sends, so an event page woken by an event never runs with no stock window open. The candidate fix edits upstream ExtensionParent.sys.mjs and must land as a regenerated patch 050 (deferred 2026-11-04) — fixed in 39-04 (735dc25b)
 
 ### Phase 999.16: Follow-up — Phase 38 deferred UAT follow-up: Test none (BACKLOG)
 
@@ -840,4 +840,4 @@ Plans:
 **Source phase:** 38
 **Deferred at:** 2026-11-04 during /gsd-verify-work 38 session completion
 **Follow-ups:**
-- [ ] Test none: enterprise policies (for example SearchEngines Default) are applied only when the first stock window fires sessionstore-windows-restored (EnterprisePoliciesParent.sys.mjs:368-369); a shell-only session never applies them. Same root cause as the event-page wake (deferred 2026-11-04)
+- [x] Test none: enterprise policies (for example SearchEngines Default) are applied only when the first stock window fires sessionstore-windows-restored (EnterprisePoliciesParent.sys.mjs:368-369); a shell-only session never applies them. Same root cause as the event-page wake (deferred 2026-11-04) — fixed in 39-04 (735dc25b)

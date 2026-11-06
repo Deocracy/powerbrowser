@@ -57,6 +57,7 @@ command: `cd /home/chris/coding/Power-Browser && node scripts/verify-extension-a
 expected: The content fixture installs as an unsigned XPI (profile scope) and survives a relaunch; the hello from `/a` carries a real `sender.tab` id; `tabs.sendMessage(tabId)` reaches the page; a zero-overlay startup throws no `tab is null`. Plant `sender-tab-null` and `pageaction-zero-tab` go red. Watch: whether `getInstallForFile` is refused for signing, and whether the console reports an async startup rejection with the `tab is null` text
 result: pass
 evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: content PASS with the startup product fix (1642f2d7: extensions-late-startup resolves browserStartupPromise) and the onStartup fixture (4bdc5751). An event page woken by an event still waits for a stock window (deferred below)"
+live: "39-04 2026-11-06, main 735dc25b: event-page-wake PASS with no runtime.onStartup listener and zero stock windows; policies-shell-only PASS; plants startup-promises-rearmed and policy-default-prerecorded red"
 
 ### 6. Scenario `page-action`
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-extension-actions-live.mjs --scenario page-action`
