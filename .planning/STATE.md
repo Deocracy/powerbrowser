@@ -5,16 +5,16 @@ milestone_name: Chrome Bar Firefox Parity
 current_phase: 39
 current_phase_name: v1.5 Close-out
 status: executing
-stopped_at: Completed 39-03-PLAN.md
-last_updated: "2026-11-06T15:04:04.390Z"
+stopped_at: Completed 39-04-PLAN.md
+last_updated: "2026-11-06T15:36:31.527Z"
 last_activity: 2026-11-05
 last_activity_desc: Phase 39 execution started
-state_head: ab61e2a9c30124d3e96ede5b714cb5c2706125f5
+state_head: 5e4086db80ef368bf6491bf67f66df351b3ff9fc
 progress:
   total_phases: 14
   completed_phases: 1
   total_plans: 93
-  completed_plans: 76
+  completed_plans: 77
   percent: 7
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 ## Current Position
 
 Phase: 39 (v1.5 Close-out) — EXECUTING
-Plan: 4 of 20
+Plan: 5 of 20
 Status: Ready to execute
 Last activity: 2026-11-05 — Phase 39 execution started
 
@@ -180,6 +180,7 @@ Progress: [█░░░░░░░░░] 7%
 | Phase 39 P01 | 293 min | 3 tasks | 7 files |
 | Phase 39 P02 | 34 min | 2 tasks | 5 files |
 | Phase 39 P03 | 10 min | 3 tasks | 8 files |
+| Phase 39 P04 | 35 min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -478,6 +479,7 @@ Recent decisions affecting current work:
 - [Phase 39]: OQ1 (Chris 2026-11-05): prompts-live dialog and dialog-probe use a derived scenario skip SKIPPED (PROMPT-03 deferred, 999.3) plus a WINDOWS.md ledger row; 39-10 implements
 - [Phase 39]: Batch A owner rulings 2026-11-05/06: all recommendations accepted; CLAUDE.md rule 5 route span replaced per 36 T18
 - [Phase 39]: 38 T31 stays pending with its owner line; 39-14 records the EXT-10 fill result
+- [Phase 39]: 39-04: policies-shell-only is a two-launch scenario; a fresh profile already defaults to the policy engine, so the run-once record plus a user-chosen engine make the 999.16 gap observable
 
 ### Pending Todos
 
@@ -598,8 +600,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-06T15:04:04.059Z
-Stopped at: Completed 39-03-PLAN.md
+Last session: 2026-11-06T15:36:31.151Z
+Stopped at: Completed 39-04-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
