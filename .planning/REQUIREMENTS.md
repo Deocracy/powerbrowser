@@ -139,11 +139,11 @@ returning null.
 - [ ] **PROMPT-01**: User is asked before a page uses the camera, microphone, location or notifications, and the choice is remembered per site
 - [ ] **PROMPT-02**: User sees a sharing indicator while a page uses the camera, microphone or screen
 - [ ] **PROMPT-03**: User gets working alert, confirm, prompt, leave-page and HTTP-auth dialogs that do not lock the IDE, and can stop a page from repeating them (deferred to Phase 999.3, Chris 2026-11-03: stock dialogs lock the IDE and no relay is feasible)
-- [ ] **PROMPT-04**: User can right-click inside a web page for Firefox's context menu (open link in new tab, copy link, save image, inspect and the rest)
+- [x] **PROMPT-04**: User can right-click inside a web page for Firefox's context menu (open link in new tab, copy link, save image, inspect and the rest)
 - [ ] **PROMPT-05**: User clicking a `target=_blank` link or a page calling `window.open` gets a new web tab next to the opener, while the stock browser window stays reachable (GUI-01)
 - [ ] **PROMPT-06**: User sees the form-history and saved-login autocomplete popup in page forms
 - [ ] **PROMPT-07**: User is offered to save or update a password after logging in
-- [ ] **PROMPT-08**: User sees page tooltips (`title=`) and the link-hover status text
+- [x] **PROMPT-08**: User sees page tooltips (`title=`) and the link-hover status text
 - [ ] **PROMPT-09**: User sees per-tab notification bars (popup blocked, hung script, protocol handler) with their actions
 
 ## Future Requirements
@@ -284,11 +284,11 @@ Filled by the roadmap (2026-10-20). Phase 26 is reserved for NG-089 and holds no
 | PROMPT-01 | Phase 37 | Pending |
 | PROMPT-02 | Phase 37 | Pending |
 | PROMPT-03 | Phase 999.3 | Deferred |
-| PROMPT-04 | Phase 35 | Pending |
+| PROMPT-04 | Phase 35 | Complete |
 | PROMPT-05 | Phase 36 | Pending |
 | PROMPT-06 | Phase 35 | Pending |
 | PROMPT-07 | Phase 37 | Pending |
-| PROMPT-08 | Phase 35 | Pending |
+| PROMPT-08 | Phase 35 | Complete |
 | PROMPT-09 | Phase 37 | Pending |
 
 **Coverage:**

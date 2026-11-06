@@ -1,20 +1,20 @@
 ---
-gsd_state_version: 1.0
+gsd_state_version: "1.0"
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase: 39
 current_phase_name: v1.5 Close-out
 status: executing
-stopped_at: Completed 39-04-PLAN.md
-last_updated: "2026-11-06T15:36:31.527Z"
+stopped_at: Completed 39-05-PLAN.md
+last_updated: "2026-11-06T16:08:45.961Z"
 last_activity: 2026-11-05
 last_activity_desc: Phase 39 execution started
-state_head: 5e4086db80ef368bf6491bf67f66df351b3ff9fc
+state_head: 34ad4ff362c5c6d65a5acf3430590f8bad290c5f
 progress:
   total_phases: 14
   completed_phases: 1
   total_plans: 93
-  completed_plans: 77
+  completed_plans: 78
   percent: 7
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 ## Current Position
 
 Phase: 39 (v1.5 Close-out) — EXECUTING
-Plan: 5 of 20
+Plan: 6 of 20
 Status: Ready to execute
 Last activity: 2026-11-05 — Phase 39 execution started
 
@@ -181,6 +181,7 @@ Progress: [█░░░░░░░░░] 7%
 | Phase 39 P02 | 34 min | 2 tasks | 5 files |
 | Phase 39 P03 | 10 min | 3 tasks | 8 files |
 | Phase 39 P04 | 35 min | 3 tasks | 7 files |
+| Phase 39 P05 | 40 min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -480,6 +481,8 @@ Recent decisions affecting current work:
 - [Phase 39]: Batch A owner rulings 2026-11-05/06: all recommendations accepted; CLAUDE.md rule 5 route span replaced per 36 T18
 - [Phase 39]: 38 T31 stays pending with its owner line; 39-14 records the EXT-10 fill result
 - [Phase 39]: 39-04: policies-shell-only is a two-launch scenario; a fresh profile already defaults to the policy engine, so the run-once record plus a user-chosen engine make the 999.16 gap observable
+- [Phase 39]: C22 cause was the headless drag service: showTooltip's getService throws in a headless shell; a missing drag service now counts as no drag session (39-05)
+- [Phase 39]: C24 was the instrument: Copy Image writes an image flavour; menu-edit reads it through widget.clipboard.use-cached-data.enabled headless and wl-paste headed (39-05)
 
 ### Pending Todos
 
@@ -600,8 +603,8 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-06T15:36:31.151Z
-Stopped at: Completed 39-04-PLAN.md
+Last session: 2026-11-06T16:08:44.660Z
+Stopped at: Completed 39-05-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
