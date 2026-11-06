@@ -56,6 +56,20 @@
  *                      on its page.
  *   adopt-unknown-key  An ack for pc-999999 replies unknown-tab, chrome pushes
  *                      dropAdoptedTab for the widget, and the widget is disposed.
+ *   adopt-close        (36 T13, WR-03) The adopted page calls window.close():
+ *                      the tab and its overlay go, the opener is reselected
+ *                      and reads w.closed === true.
+ *   adopt-blank-write  (36 T14, WR-04) A blank window.open filled by DOM calls
+ *                      is shown on about:blank, labelled and captioned
+ *                      about:blank, with the opener's host, state none and
+ *                      the opener's documentPrincipal; a document.write one is
+ *                      shown once under the opener's principal (document.open
+ *                      gives it the opener's URL, the HTML spec rule).
+ *   adopt-late-ack     (36 T15, WR-02) The webTabAdopt reply is swallowed so
+ *                      the frontend's own deadline times out: with chrome
+ *                      holding the overlay the tab attaches and the page stays;
+ *                      with the ack held past chrome's fallback the widget is
+ *                      dropped and the page is in the stock window once.
  *
  * What each red line names (the --self-test expectations are these words):
  *   adopt-order: FAIL -- the adopted tab is not directly after its opener ...
@@ -66,6 +80,11 @@
  *   adopt-fallback: FAIL -- with the ack dropped no stock window took ... (the navigation was swallowed)
  *   adopt-scheme: FAIL -- the adopt path did not answer refused-scheme ...
  *   adopt-unknown-key: FAIL -- the orphan widget ... was not dropped ...
+ *   adopt-close: FAIL -- window.close() left the adopted tab open ...
+ *   adopt-blank-write: FAIL -- a written blank window lost the opener's identity ...
+ *   adopt-late-ack: FAIL -- a late ack lost or duplicated the page ...
+ * The self-test refuses, before any session, a plant table in which two plants
+ * on one target have expects that contain one another (999.11).
  *
  * Usage:
  *   node scripts/verify-new-window-adopt-live.mjs [--scenario a,b]
@@ -96,7 +115,7 @@ import {
     waitForPush,
     withProbeShell,
 } from './lib/pb-live-probe.mjs';
-import { pollFor, probe, SHELL_DOCUMENT_URL, sourceMatch } from './lib/pb-relaunch.mjs';
+import { pollFor, probe, SHELL_DOCUMENT_URL, sourceConst, sourceMatch } from './lib/pb-relaunch.mjs';
 
 const NAME = 'verify-new-window-adopt-live';
 const J = JSON.stringify;
@@ -108,6 +127,11 @@ const FALLBACK_MARGIN_MS = 10000;
 // How long an absence leg lets a wrong outcome arrive before it reads. Below the 5 s timer on purpose.
 const QUIET_MS = 3000;
 const UNKNOWN_PC_KEY = 'pc-999999';
+// The frontend's own request deadline and the reply event both come from the tree: the late-ack leg swallows one reply
+// so that deadline, not a harness timer, produces the timeout the WR-02 path answers.
+const WEB_TAB_ACK_TIMEOUT_MS = Number(sourceMatch('theia/extensions/tab-uris/src/browser/web-tab.ts', /export const WEB_TAB_ACK_TIMEOUT_MS = (\d+);/));
+const GROUP_RESPONSE_EVENT = sourceConst('theia/extensions/tab-uris/src/browser/web-tab.ts', 'GROUP_RESPONSE_EVENT');
+const WRITTEN_TEXT = 'written by the opener';
 
 const BLOCK = 'position:absolute;left:10px;width:200px;height:30px;display:block';
 const PAGES = {
@@ -115,9 +139,14 @@ const PAGES = {
     '/opener': {
         title: 'Adopt Opener',
         body: `<a id="blank" target="_blank" href="/target" style="${BLOCK};top:10px">blank link</a>`
-            + `<button id="open" style="${BLOCK};top:60px" onclick="window.__pbOpened = !!window.open(window.__pbNext || '/target')">open</button>`
+            + `<button id="open" style="${BLOCK};top:60px" onclick="window.__pbW = window.open(window.__pbNext || '/target'); window.__pbOpened = !!window.__pbW">open</button>`
             + `<button id="popup" style="${BLOCK};top:110px" onclick="window.__pbOpened = !!window.open(window.__pbNext || '/target', 'pbpopup', 'width=400,height=300')">popup</button>`
             + `<a id="js" target="_blank" href="javascript:void(0)" style="${BLOCK};top:160px">js link</a>`
+            // 36 T14 (WR-04): a blank window.open whose content the opener writes, the report or print window shape.
+            + `<button id="blankw" style="${BLOCK};top:210px" onclick="const w = window.open(); window.__pbOpened = !!w;`
+            + ` if (w) { w.document.write('<p id=pbw>${WRITTEN_TEXT}</p>'); w.document.close(); }">blank write</button>`
+            + `<button id="blankd" style="${BLOCK};top:260px" onclick="const w = window.open(); window.__pbOpened = !!w;`
+            + ` if (w) { const p = w.document.createElement('p'); p.id = 'pbd'; p.textContent = '${WRITTEN_TEXT}'; w.document.body.appendChild(p); }">blank dom</button>`
             + '<script>addEventListener("message", e => { if (typeof e.data === "string" && e.data.startsWith("ping:")) {'
             + ' window.__pbPinged = e.data; e.source.postMessage("pong:" + e.data.slice(5), "*"); } });</script>',
     },
@@ -221,9 +250,7 @@ const chromeSelectedTabId = async app =>
 
 /**
  * Wraps the receiver's two InFrame members in the shell window with a
- * recorder (member, URI, where, element-or-null), once per session. A plant
- * flag (window.__pbPlantInFrame) strips the opener's window info on the way
- * in. Throws when the receiver is missing or the wrap did not take: without it
+ * recorder (member, URI, where, element-or-null), once per session. Throws when the receiver is missing or the wrap did not take: without it
  * the scheme leg cannot say what Gecko asked.
  */
 async function installReceiverRecorder(app) {
@@ -237,12 +264,7 @@ async function installReceiverRecorder(app) {
             for (const member of ['createContentWindowInFrame', 'openURIInFrame']) {
                 const original = r[member];
                 const wrapped = function (aURI, params, aWhere, aFlags, aName) {
-                    let p = params;
-                    if (window.__pbPlantInFrame === 'opener-null') {
-                        window.__pbPlantRan = true;
-                        p = { openerBrowser: params.openerBrowser, openWindowInfo: null };
-                    }
-                    const out = original.call(this, aURI, p, aWhere, aFlags, aName);
+                    const out = original.call(this, aURI, params, aWhere, aFlags, aName);
                     window.__pbInFrame.push({ member, spec: aURI ? aURI.spec : null, where: aWhere, returned: out ? 'element' : 'null' });
                     return out;
                 };
@@ -405,11 +427,16 @@ async function adoptOrder({ app, pages, plant, fail, note }) {
 async function adoptOpener({ app, pages, plant, fail, note }) {
     const a = await openerTab(app, pages, 'opener');
     if (plant === 'opener-null') {
-        await installReceiverRecorder(app);
-        await inChrome(app, "window.__pbPlantInFrame = 'opener-null'; return true;");
+        // 999.11: the adopt must still land with no opener link, so the red is this scenario's own opener read. A
+        // chrome-side openWindowInfo strip broke the adopt itself (no web tab attached), which the old 'opener' expect
+        // scored by accident. Gecko's own noopener open severs the link and still goes through the receiver; the page
+        // gets a stand-in object back so the window-object read before the opener read stays green.
+        await app.evaluateIn(a.ctx, `(() => { const open = window.open.bind(window);
+            window.open = url => { window.__pbPlantRan = true; open(url, '_blank', 'noopener'); return {}; };
+            return true; })()`);
     }
     const adopted = await adoptFrom(app, pages, a, '#open', '/target?leg=opener');
-    if (plant === 'opener-null' && await plantRan(app, 'chrome')) {
+    if (plant === 'opener-null' && await app.evaluateIn(a.ctx, 'window.__pbPlantRan === true') === true) {
         note('PLANT opener-null applied');
     }
     if (adopted.error) {
@@ -669,6 +696,236 @@ async function adoptUnknownKey({ app, pages, plant, fail, note }) {
     }
 }
 
+async function adoptClose({ app, pages, plant, fail, note }) {
+    const a = await openerTab(app, pages, 'close');
+    if (plant === 'close-ignored') {
+        // The WR-03 defect: chrome's closeAdoptedTab push reaches a frontend that does nothing with it.
+        await probe(app, `get('WebTabOpenHandler').closeAdopted = function () { window.__pbPlantRan = true; };
+            return true;`);
+    }
+    const adopted = await adoptFrom(app, pages, a, '#open', '/target?leg=close');
+    if (adopted.error) {
+        return fail(adopted.error);
+    }
+    if (await app.evaluateIn(a.ctx, 'window.__pbW && window.__pbW.closed === false') !== true) {
+        return fail(`${BROKEN} the opener holds no open window object for ${adopted.tabId}`);
+    }
+    if (await waitCurrent(app, adopted.tabId) !== adopted.tabId) {
+        return fail(`${BROKEN} the adopted tab ${adopted.tabId} never became current, so the reselect leg has no start`);
+    }
+    const ctx = await contextOn(app, adopted.url);
+    // Deferred so the evaluate returns before its own context closes.
+    await app.evaluateIn(ctx, 'setTimeout(() => window.close(), 0); true');
+    const gone = await probe(app, `return await until(() => !get('WebTabChannel').widgetOf(${J(adopted.tabId)}), 5000);`);
+    if (plant === 'close-ignored' && await plantRan(app, 'page')) {
+        note('PLANT close-ignored applied');
+    }
+    if (gone !== true) {
+        return fail(`window.close() left the adopted tab open (${adopted.tabId} is still in the strip)`);
+    }
+    try {
+        await pollFor(async () => await inChrome(app, `return !overlayOf(${J(adopted.tabId)});`) === true, 5000, 'the overlay to be released');
+    } catch {
+        return fail(`window.close() left the adopted tab open: chrome still holds the overlay of ${adopted.tabId}`);
+    }
+    const current = await waitCurrent(app, a.tabId);
+    if (current !== a.tabId) {
+        return fail(`after the adopted page closed itself the current tab is ${J(current)}, not its opener ${a.tabId}`);
+    }
+    if (await app.evaluateIn(a.ctx, 'window.__pbW.closed === true') !== true) {
+        return fail('after the adopted page closed itself the opener does not read w.closed === true');
+    }
+    note(`${adopted.tabId} closed itself: tab and overlay gone, ${a.tabId} reselected, w.closed true`);
+}
+
+/** The last state push for `tabId` that satisfies `pred`, waited for; null when none arrives. */
+async function lastStatePush(app, tabId, pred = () => true, timeoutMs = 5000) {
+    const pick = async () => (await pushes(app)).filter(p => p && p.kind === 'state' && p.tabId === tabId && pred(p)).pop();
+    try {
+        return await pollFor(pick, timeoutMs, `a state push for ${tabId}`);
+    } catch {
+        return null;
+    }
+}
+
+/** The one attached web tab not in `before` (tab ids), waited for; null when none attaches. */
+const newAttachedTab = (app, before, timeoutMs = 10000) => probe(app, `
+    const fresh = () => webTabs().filter(w => w.isAttached && !${J(before)}.includes(w.tabId));
+    return await until(() => fresh().length === 1, ${timeoutMs}) ? fresh()[0].tabId : null;`);
+
+/**
+ * 36 T14 (WR-04), two legs. `#blankd` fills the blank window through DOM calls, so it stays on about:blank: the leg
+ * the WR-04 fix exists for (shown, titled about:blank, the opener's host with state none, the opener's principal).
+ * `#blankw` is the row's literal document.write: document.open sets the written document's URL to the entry
+ * document's (the opener's) URL, the HTML spec rule Gecko follows, so that leg asserts the content is shown in one
+ * page under the opener's principal and host rather than an about:blank label it cannot have.
+ */
+async function adoptBlankWrite({ app, pages, plant, fail, note }) {
+    const a = await openerTab(app, pages, 'blank');
+    const lost = "a written blank window lost the opener's identity";
+    const host = new URL(a.url).hostname;
+    const origin = new URL(a.url).origin;
+    if (plant === 'blank-hidden') {
+        // The WR-04 defect: an adopted about:blank is treated as the empty New Tab state (hidden, titled New Tab).
+        await probe(app, `const h = get('WebTabOpenHandler'); const original = h.createWidget;
+            h.createWidget = async function (...args) {
+                const w = await original.apply(h, args);
+                w.markAdopted = function () { window.__pbPlantRan = true; };
+                return w;
+            };
+            return true;`);
+    }
+    const openerPush = await lastStatePush(app, a.tabId, p => !!p.displaySpec);
+    if (!openerPush || openerPush.displaySpec !== host) {
+        return fail(`${BROKEN} the opener pushed displaySpec ${J(openerPush?.displaySpec)}, not its host ${host}`);
+    }
+    for (const selector of ['#blankd', '#blankw']) {
+        const before = await probe(app, 'return webTabs().map(w => w.tabId);');
+        const mark = (await pushes(app)).length;
+        await clickIn(app, a, selector);
+        if (!await awaitAdopt(app, 'about:blank', mark)) {
+            return fail(`the ${selector} blank window.open gave no adoptTab push for about:blank`);
+        }
+        if (await app.evaluateIn(a.ctx, 'window.__pbOpened === true') !== true) {
+            return fail(`${BROKEN} the opener's ${selector} window.open returned no window object`);
+        }
+        const tabId = await newAttachedTab(app, before);
+        if (!tabId) {
+            return fail(`the ${selector} blank window.open was pushed but no web tab attached`);
+        }
+        if (plant === 'blank-hidden' && await plantRan(app, 'page')) {
+            note('PLANT blank-hidden applied');
+        }
+        await makeCurrent(app, tabId);
+        let shown = null;
+        try {
+            await pollFor(async () => (shown = await overlayVisibility(app, tabId)) === 'visible', 5000, 'the written page to be shown');
+        } catch {
+            return fail(`${lost}: the ${selector} page is not shown (overlay ${J(shown)})`);
+        }
+        const written = [];
+        for (const entry of await app.contexts()) {
+            const id = selector === '#blankd' ? 'pbd' : 'pbw';
+            if (await app.evaluateIn(entry.context, `document.getElementById(${J(id)})?.textContent ?? null`).catch(() => null) === WRITTEN_TEXT) {
+                written.push(entry.url);
+            }
+        }
+        const principal = await inChrome(app, `const p = overlayOf(${J(tabId)})?.browsingContext?.currentWindowGlobal?.documentPrincipal;
+            return p ? p.origin : null;`);
+        if (principal !== origin) {
+            return fail(`${lost}: the ${selector} page's documentPrincipal is ${J(principal)}, not the opener's ${origin}`);
+        }
+        if (selector === '#blankd') {
+            if (written.length !== 1 || written[0] !== 'about:blank') {
+                return fail(`${lost}: the written content is not in one about:blank page (pages ${J(written)})`);
+            }
+            const title = await probe(app, `const t = get('WebTabChannel').widgetOf(${J(tabId)}).title; return { label: t.label, caption: t.caption };`);
+            if (title?.label !== 'about:blank' || title?.caption !== 'about:blank') {
+                return fail(`${lost}: the tab is labelled ${J(title?.label)} with caption ${J(title?.caption)}, not about:blank`);
+            }
+            const pushed = await lastStatePush(app, tabId, p => p.url === 'about:blank');
+            if (!pushed || pushed.displaySpec !== host || pushed.securityState !== 'none') {
+                return fail(`${lost}: the identity box reads ${J(pushed?.displaySpec)} with security state ${J(pushed?.securityState)}, want ${J(host)} and "none"`);
+            }
+            note(`#blankd ${tabId}: shown, written content on about:blank, label and caption about:blank, identity ${host} state none, principal ${principal}`);
+        } else {
+            // document.open moved the written page to the opener's URL; the identity is that URL's own host.
+            if (written.length !== 1 || written[0] !== a.url) {
+                return fail(`${lost}: the document.write content is not in one page on the opener's URL (pages ${J(written)})`);
+            }
+            const pushed = await lastStatePush(app, tabId, p => p.url === a.url);
+            if (!pushed || pushed.displaySpec !== host) {
+                return fail(`${lost}: after document.write the identity box reads ${J(pushed?.displaySpec)}, want ${J(host)}`);
+            }
+            note(`#blankw ${tabId}: shown, document.open moved it to ${a.url}, identity ${host} state ${pushed.securityState}, principal ${principal}`);
+        }
+    }
+}
+
+async function adoptLateAck({ app, pages, plant, fail, note }) {
+    const a = await openerTab(app, pages, 'lateack');
+    const lost = 'a late ack lost or duplicated the page';
+    // One instrument for both legs: a capture listener that swallows armed webTabAdopt replies (the frontend's own
+    // WEB_TAB_ACK_TIMEOUT_MS deadline then answers 'timeout'), a request recorder that can hold an ack until released,
+    // and a record of the widgets adopt() minted.
+    await probe(app, `const ch = get('WebTabChannel'); const h = get('WebTabOpenHandler');
+        const s = window.__pbLateAck = { armed: 0, swallowed: 0, kinds: [], hold: false, release: false, widgets: [] };
+        addEventListener(${J(GROUP_RESPONSE_EVENT)}, e => {
+            const id = e.detail && e.detail.requestId;
+            if (s.armed > 0 && typeof id === 'string' && id.startsWith('web-tab-webTabAdopt-')) {
+                s.armed -= 1; s.swallowed += 1; e.stopImmediatePropagation();
+            }
+        }, true);
+        const request = ch.request;
+        ch.request = async function (msg) {
+            s.kinds.push(msg.kind);
+            if (msg.kind === 'webTabAdopt' && s.hold) { await until(() => s.release, 60000); }
+            ${plant === 'late-ack-closes'
+        ? "if (msg.kind === 'webTabHistory' && s.swallowed) { window.__pbPlantRan = true; return { ok: false, reason: 'timeout' }; }"
+        : ''}
+            return request.call(ch, msg);
+        };
+        const createWidget = h.createWidget;
+        h.createWidget = async function (...args) { const w = await createWidget.apply(h, args); s.widgets.push(w); return w; };
+        return true;`);
+    // Leg A: chrome adopts at once, the reply is lost, the frontend times out and must keep the tab.
+    const pathA = '/target?leg=late-held';
+    const urlA = pages.url(pathA);
+    await probe(app, 'window.__pbLateAck.armed = 1; return true;');
+    await aimAt(app, a, pathA);
+    let mark = (await pushes(app)).length;
+    await clickIn(app, a, '#open');
+    if (!await awaitAdopt(app, urlA, mark)) {
+        return fail(`the #open control gave no adoptTab push for ${pathA}`);
+    }
+    const held = await attachedTabOn(app, urlA, WEB_TAB_ACK_TIMEOUT_MS + 10000);
+    if (plant === 'late-ack-closes' && await plantRan(app, 'page')) {
+        note('PLANT late-ack-closes applied');
+    }
+    const seen = await probe(app, 'const s = window.__pbLateAck; return { swallowed: s.swallowed, kinds: s.kinds };');
+    if (seen.swallowed !== 1) {
+        return fail(`${BROKEN} the webTabAdopt reply was not swallowed (${seen.swallowed}), so no timeout was produced`);
+    }
+    if (!held) {
+        return fail(`${lost}: no web tab attached on ${pathA} after the timed-out ack (requests ${J(seen.kinds)})`);
+    }
+    if (!seen.kinds.includes('webTabHistory')) {
+        return fail(`${BROKEN} the frontend never took the timeout path (requests ${J(seen.kinds)})`);
+    }
+    if ((await app.contexts()).filter(e => e.url === urlA).length !== 1 || await stockWindowOn(app, urlA, 1000)) {
+        return fail(`${lost}: ${pathA} is not in exactly one page, in the web tab ${held}`);
+    }
+    if (await inChrome(app, `return !!overlayOf(${J(held)});`) !== true) {
+        return fail(`${lost}: chrome holds no overlay for the kept tab ${held}`);
+    }
+    note(`held: the reply was swallowed, the frontend timed out, read the history and kept ${held}`);
+    // Leg B: the ack is held until chrome's fallback put the page in the stock window; the widget must go, the page stay once.
+    const pathB = '/target?leg=late-fallback';
+    const urlB = pages.url(pathB);
+    await probe(app, 'const s = window.__pbLateAck; s.armed = 1; s.hold = true; s.release = false; s.widgets = []; return true;');
+    await aimAt(app, a, pathB);
+    mark = (await pushes(app)).length;
+    await clickIn(app, a, '#open');
+    if (!await awaitAdopt(app, urlB, mark)) {
+        return fail(`the #open control gave no adoptTab push for ${pathB}`);
+    }
+    const found = await stockWindowOn(app, urlB, ADOPT_ACK_TIMEOUT_MS + FALLBACK_MARGIN_MS);
+    if (!found) {
+        return fail(`${lost}: with the ack held chrome's fallback put ${pathB} in no stock window`);
+    }
+    const dropped = await probe(app, `const s = window.__pbLateAck; s.release = true;
+        return await until(() => s.widgets.length === 1 && s.widgets[0].isDisposed, ${WEB_TAB_ACK_TIMEOUT_MS + 5000});`);
+    if (dropped !== true) {
+        return fail(`${lost}: the widget for ${pathB} was kept after chrome's fallback took the page`);
+    }
+    const onB = (await app.contexts()).filter(e => e.url === urlB).length;
+    const tabsB = await webTabsOn(app, urlB);
+    if (onB !== 1 || tabsB.length) {
+        return fail(`${lost}: ${pathB} is in ${onB} page(s) and web tab(s) ${J(tabsB)}, want the stock window once`);
+    }
+    note(`fallback: ${pathB} in stock window ${found.window} once; the late widget was dropped`);
+}
+
 // ---------------------------------------------------------------------------
 // Runner
 // ---------------------------------------------------------------------------
@@ -681,6 +938,9 @@ const SCENARIOS = {
     'adopt-fallback': adoptFallback,
     'adopt-scheme': adoptScheme,
     'adopt-unknown-key': adoptUnknownKey,
+    'adopt-close': adoptClose,
+    'adopt-blank-write': adoptBlankWrite,
+    'adopt-late-ack': adoptLateAck,
 };
 
 /** The positive control each absence-asserting scenario needs green earlier in the same session. */
@@ -757,16 +1017,40 @@ function selectedScenarios(args) {
 const PLANTS = [
     { plant: 'adopt-append-at-end', target: 'adopt-order', run: ['adopt-order'], expect: 'directly after' },
     { plant: 'reselect-opener-off', target: 'adopt-order', run: ['adopt-order'], expect: 'opener' },
-    { plant: 'opener-null', target: 'adopt-opener', run: ['adopt-opener'], expect: 'opener' },
+    { plant: 'opener-null', target: 'adopt-opener', run: ['adopt-opener'], expect: 'window.opener is null' },
     { plant: 'popup-becomes-tab', target: 'adopt-popup', run: ['adopt-order', 'adopt-popup'], expect: 'stock window' },
     { plant: 'background-activates', target: 'adopt-focus', run: ['adopt-focus'], expect: 'opener keeps focus' },
     { plant: 'fallback-off', target: 'adopt-fallback', run: ['adopt-order', 'adopt-fallback'], expect: 'stock window' },
     { plant: 'adopt-javascript', target: 'adopt-scheme', run: ['adopt-order', 'adopt-scheme'], expect: 'refused' },
     { plant: 'unknown-key-keeps-widget', target: 'adopt-unknown-key', run: ['adopt-unknown-key'], expect: 'dropped' },
+    { plant: 'close-ignored', target: 'adopt-close', run: ['adopt-close'], expect: 'window.close() left the adopted tab open' },
+    { plant: 'blank-hidden', target: 'adopt-blank-write', run: ['adopt-blank-write'], expect: "a written blank window lost the opener's identity" },
+    { plant: 'late-ack-closes', target: 'adopt-late-ack', run: ['adopt-late-ack'], expect: 'a late ack lost or duplicated the page' },
 ];
+
+/**
+ * 999.11: a plant is scored on its target's failures by substring, so two plants on one target whose expects contain
+ * one another would let either plant's red score the other. Derived from the table at run time.
+ */
+function plantExpectOverlaps(plants) {
+    return plants.flatMap(a => plants
+        .filter(b => b !== a && b.target === a.target && b.expect.includes(a.expect))
+        .map(b => `plant expects overlap: '${a.expect}' (${a.plant}) within '${b.expect}' (${b.plant}) on ${a.target}`));
+}
 
 async function selfTest() {
     let failed = 0;
+    const overlaps = plantExpectOverlaps(PLANTS);
+    if (overlaps.length) {
+        console.error(`${NAME} --self-test: FAIL -- ${overlaps.join('; ')}`);
+        return 1;
+    }
+    // The preflight's own plant: a second 'opener' expect on adopt-opener must be refused.
+    if (!plantExpectOverlaps([...PLANTS, { plant: 'overlap-probe', target: 'adopt-opener', expect: 'opener' }]).length) {
+        console.error(`${NAME} --self-test: FAIL -- the expect-overlap preflight accepted a planted overlap on adopt-opener`);
+        return 1;
+    }
+    console.log('  ok  plant expects: no overlap on any target, and a planted overlap is refused');
     try {
         const clean = await runSession(Object.keys(SCENARIOS));
         const red = clean.filter(r => r.failures.length || r.notScored);
