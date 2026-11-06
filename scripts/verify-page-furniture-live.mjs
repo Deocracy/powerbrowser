@@ -1953,6 +1953,8 @@ async function applyFormPlants(app, plant, note, tabId) {
         'autocomplete-attr-removed': `const o = overlayOf(${JSON.stringify(tabId)}); if (!o) return false; o.removeAttribute('autocompletepopup'); return !o.hasAttribute('autocompletepopup') && o.autoCompletePopup === null;`,
         'validation-template-removed': `document.getElementById('invalidFormTemplate')?.remove(); return document.getElementById('invalidFormTemplate') === null && document.getElementById('invalid-form-popup') === null;`,
         // removeResourceIds returns how many resource ids remain: one fewer than the shell head links.
+        // 39-06 (C23): the root cause, the remote agent's signon.rememberSignons=false, re-applied after savedLogin's setup.
+        'login-manager-disabled': `Services.prefs.setBoolPref('signon.rememberSignons', false); return Services.prefs.getBoolPref('signon.rememberSignons') === false;`,
         'paste-l10n-removed': `const linked = document.querySelectorAll('link[rel="localization"]').length;
             return !!document.l10n && document.l10n.removeResourceIds(['toolkit/global/textActions.ftl']) === linked - 1;`,
     };
@@ -2008,7 +2010,7 @@ async function autocomplete({ app, pages, plant, fail, note }) {
     }
 }
 
-async function savedLogin({ app, pages, fail }) {
+async function savedLogin({ app, pages, plant, fail, note }) {
     const origin = new URL(pages.url('/')).origin;
     // The password is generated in chrome scope and never leaves it; the profile is disposed with the session.
     // Autofill off and no insecure-field row, so the popup on focus lists exactly the saved login first.
@@ -2022,6 +2024,8 @@ async function savedLogin({ app, pages, fail }) {
     if (saved !== true) {
         return fail(`${BROKEN} the synthetic login could not be saved for the served origin`);
     }
+    // Before the page loads: LoginManagerChild reads the pref when the form is processed.
+    await applyFormPlants(app, plant, note);
     const tab = await openPage(app, pages, '/login');
     if (typeof tab === 'string') {
         return fail(tab);
@@ -2461,6 +2465,8 @@ const PLANTS = [
     // 35-06 (PROMPT-06, D-03, D-14, D-15).
     { plant: 'autocomplete-element-removed', target: 'autocomplete', run: ['autocomplete'], expect: 'no autocomplete popup' },
     { plant: 'autocomplete-attr-removed', target: 'autocomplete', run: ['autocomplete'], expect: 'no autocomplete popup' },
+    // 39-06 (C23, PROMPT-06).
+    { plant: 'login-manager-disabled', target: 'saved-login', run: ['saved-login'], expect: 'no autocomplete popup opened on the username field' },
     { plant: 'validation-template-removed', target: 'form-validation', run: ['form-validation'], expect: 'no validation bubble' },
     { plant: 'paste-l10n-removed', target: 'paste-popup', run: ['paste-popup'], expect: 'paste label not translated' },
     // 35-07 (PAGE-07, D-05, D-07).
