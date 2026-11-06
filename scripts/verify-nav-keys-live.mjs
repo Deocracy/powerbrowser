@@ -38,6 +38,10 @@
  *                    does not navigate; Escape closes it and focuses Back.
  *   history-error    With the tab's history read stubbed to fail, the menu holds
  *                    one disabled item naming the configured application name.
+ *   back-no-interaction  A tab on /n1 navigates to /n2 through webTabNavigate (the
+ *                    pill's path) with nobody touching the page: Back is enabled
+ *                    and returns to /n1 (AB-4, 1642f2d7: the navigation marks the
+ *                    entry it leaves as user-interacted).
  *   hard-reload-click  Shift+click on Reload sends no-cache; a plain click does not.
  *   stop-guard       A Reload click as soon as the bar renders Reload after the
  *                    loaded push (required to have hit, inside the guard) is
@@ -177,6 +181,8 @@ const PAGES = {
     '/h1': { title: 'History One', body: '<p>one</p>' },
     '/h2': { title: 'History Two', body: '<p>two</p>' },
     '/h3': { title: 'History Three', body: '<p>three</p>' },
+    '/n1': { title: 'No Touch One', body: '<p>n1</p>' },
+    '/n2': { title: 'No Touch Two', body: '<p>n2</p>' },
     '/act-a': { title: 'Activation A', body: '<p>a</p>' },
     '/act-b': { title: 'Activation B', body: '<p>b</p>' },
     '/act-c': { title: 'Activation C', body: '<p>c</p>' },
@@ -715,6 +721,50 @@ async function longPress({ app, pages, fail }) {
     const moved = (await pushes(app)).slice(mark).filter(p => p && p.kind === 'state' && p.tabId === tabId && !String(p.url).endsWith('/h2'));
     if (moved.length) {
         return fail(`the release after the hold, or Escape, navigated the tab to ${JSON.stringify(moved[0].url)}`);
+    }
+}
+
+const NO_TOUCH_BACK = 'Back did not return after a navigation with no page interaction';
+
+/**
+ * 999.5: threeStepTab presses a key in the page before each navigation, so its
+ * Back can never see an entry left unmarked. This leg never touches the page:
+ * browser.navigation.requireUserInteraction makes Back skip /n1 unless
+ * webTabNavigate marked it on the way out.
+ */
+async function backNoInteraction({ app, pages, plant, fail, note }) {
+    const tabId = await openWebTab(app, pages.url('/n1'));
+    if (await waitForPush(app, loadedAt(tabId, '/n1')) < 0) {
+        return fail(`${BROKEN} no loaded state push for /n1 arrived`);
+    }
+    // The plant undoes the marking right after webTabNavigate sets it: the overlay's load call runs next, synchronously.
+    const unmark = `const o = overlayOf(${JSON.stringify(tabId)}); if (!o) return false;
+        o.fixupAndLoadURIString = function (...a) { const sh = this.browsingContext.sessionHistory; sh.getEntryAtIndex(sh.index).hasUserInteraction = false; return Object.getPrototypeOf(this).fixupAndLoadURIString.apply(this, a); };
+        return true;`;
+    const planted = plant === 'history-entry-unmarked' && await inChrome(app, unmark) === true;
+    try {
+        const mark = (await pushes(app)).length;
+        await widgetCall(app, tabId, 'navigate', pages.url('/n2'));
+        if (await waitForPush(app, loadedAt(tabId, '/n2'), { from: mark }) < 0) {
+            return fail(`${BROKEN} navigating to /n2 produced no loaded state push`);
+        }
+        if (planted && await inChrome(app, `const sh = overlayOf(${JSON.stringify(tabId)}).browsingContext.sessionHistory;
+            return sh.getEntryAtIndex(sh.index - 1).hasUserInteraction === false;`) === true) {
+            note('PLANT history-entry-unmarked applied');
+        }
+        const enabled = await settle(() => app.evaluate(`!(${navButtonExpr('Back')})?.disabled`), v => v === true);
+        if (enabled !== true) {
+            return fail(`${NO_TOUCH_BACK}: Back stayed disabled on /n2`);
+        }
+        const back = (await pushes(app)).length;
+        if (await clickOn(app, 'Back') !== true) {
+            return fail(`${BROKEN} the Back button could not be clicked`);
+        }
+        if (await waitForPush(app, loadedAt(tabId, '/n1'), { from: back }) < 0) {
+            return fail(`${NO_TOUCH_BACK}: no loaded state push for /n1 after Back`);
+        }
+    } finally {
+        await inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)}); if (o) delete o.fixupAndLoadURIString; return true;`);
     }
 }
 
@@ -1938,6 +1988,7 @@ const SCENARIOS = {
     history: historyMenu,
     'long-press': longPress,
     'history-error': historyError,
+    'back-no-interaction': backNoInteraction,
     'middle-click': middleClick,
     drop: dropOnNewTab,
     home,
@@ -2038,6 +2089,7 @@ const PLANTS = [
     { plant: 'close-fallback-removed', target: 'close-split', run: ['close-split'], expect: "the other pane's tab current" },
     { plant: 'pill-scope-removed', target: 'focus-keys-debug', run: ['focus-keys-debug'], expect: "the debugger's F6 took it" },
     { plant: 'hover-below', target: 'tooltips-all', run: ['tooltips-all'], expect: 'intersects' },
+    { plant: 'history-entry-unmarked', target: 'back-no-interaction', run: ['back-no-interaction'], expect: NO_TOUCH_BACK },
 ];
 
 async function selfTest() {
