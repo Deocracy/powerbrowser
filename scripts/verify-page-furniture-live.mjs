@@ -142,6 +142,7 @@
  * or Theia-frame evaluate), never a file edit, and notes `PLANT <name>
  * applied` only after reading the mutation back.
  */
+import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
@@ -1387,6 +1388,17 @@ async function applyPageToolPlants(app, plant, note) {
             note('PLANT copy-row-unwired applied');
         }
     }
+    if (plant === 'copy-image-html-only') {
+        // C24 (39-05): every Controllers actor sends Copy Image as Copy Image Link, so the pick writes text and no image.
+        if (await inChrome(app, `const { ControllersParent } = ChromeUtils.importESModule('resource://gre/actors/ControllersParent.sys.mjs');
+            const doCommand = ControllersParent.prototype.doCommand;
+            const planted = function (cmd) { return doCommand.call(this, cmd === 'cmd_copyImage' ? 'cmd_copyImageLocation' : cmd); };
+            planted.__pbPlanted = true;
+            ControllersParent.prototype.doCommand = planted;
+            return ControllersParent.prototype.doCommand.__pbPlanted === true;`) === true) {
+            note('PLANT copy-image-html-only applied');
+        }
+    }
     if (plant === 'spellcheck-off') {
         if (await inChrome(app, `Services.prefs.setIntPref('layout.spellcheckDefault', 0); return Services.prefs.getIntPref('layout.spellcheckDefault') === 0;`) === true) {
             note('PLANT spellcheck-off applied');
@@ -1521,11 +1533,25 @@ async function menuEdit({ app, pages, plant, fail, note }) {
     if (!await pickFromMenu(app, tools, '#img', ftlLabel('main-context-menu-image-copy'))) {
         return fail('the image menu has no Copy Image row to pick');
     }
-    const png = await settle(() => inChrome(app, `return Services.clipboard.hasDataMatchingFlavors(['image/png'], Services.clipboard.kGlobalClipboard);`), v => v === true, 3000);
-    if (png !== true) {
-        return fail('Copy Image left no image/png flavour on the clipboard');
+    // C24 (39-05): ask for every image flavour Gecko writes. A headless widget keeps only text/plain and text/html
+    // (widget/headless/HeadlessClipboard.cpp), so the read uses the clipboard cache: the transferable Copy Image handed over.
+    await inChrome(app, `Services.prefs.setBoolPref('widget.clipboard.use-cached-data.enabled', true); return true;`);
+    const image = await settle(() => inChrome(app, `return Services.clipboard.hasDataMatchingFlavors(${JSON.stringify(IMAGE_FLAVOURS)}, Services.clipboard.kGlobalClipboard);`), v => v === true, 3000);
+    if (image !== true) {
+        return fail('Copy Image left no image flavour on the clipboard');
+    }
+    note(`image flavours after Copy Image: ${await inChrome(app, `return ${JSON.stringify(IMAGE_FLAVOURS)}.filter(f => Services.clipboard.hasDataMatchingFlavors([f], Services.clipboard.kGlobalClipboard)).join(' ');`)}`);
+    // Headed, the desktop clipboard itself must offer an image type.
+    if (process.env.PB_LIVE_HEADED === '1' && process.env.WAYLAND_DISPLAY) {
+        const listTypes = () => { try { return execFileSync('wl-paste', ['--list-types'], { encoding: 'utf8', timeout: 2000 }); } catch (error) { return `wl-paste: ${error.message}`; } };
+        const types = await settle(async () => listTypes(), t => t.split('\n').some(type => type.startsWith('image/')), 3000);
+        if (!types.split('\n').some(type => type.startsWith('image/'))) {
+            return fail(`Copy Image left no image flavour on the clipboard (desktop types: ${types.trim().split('\n').join(' ')})`);
+        }
+        note(`desktop clipboard types after Copy Image: ${types.trim().split('\n').join(' ')}`);
     }
 }
+const IMAGE_FLAVOURS = ['application/x-moz-nativeimage', 'image/png', 'image/jpeg', 'image/gif'];
 
 /**
  * The pushed menu's spelling suggestion labels (dynamic spell-suggestion rows) after a right-click on `selector`.
@@ -2425,6 +2451,7 @@ const PLANTS = [
     // 35-04 (PROMPT-04).
     { plant: 'inspect-no-select', target: 'menu-page-tools', run: ['menu-page-tools'], expect: 'inspector did not select the clicked node' },
     { plant: 'copy-row-unwired', target: 'menu-edit', run: ['menu-edit'], expect: 'copy did not reach the clipboard' },
+    { plant: 'copy-image-html-only', target: 'menu-edit', run: ['menu-edit'], expect: 'Copy Image left no image flavour on the clipboard' },
     { plant: 'spellcheck-off', target: 'menu-spelling', run: ['menu-spelling'], expect: 'no suggestion row' },
     { plant: 'save-dialog-cancelled', target: 'menu-save', run: ['menu-save'], expect: 'no file at the chosen path' },
     // 35-05 (PROMPT-04, D-16, D-08).
