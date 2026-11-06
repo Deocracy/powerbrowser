@@ -2988,14 +2988,36 @@ async function modeChip(ctx) {
 /** The AddressBar's active mode and its default for the current PowerBrowser mode, read now. */
 const modeState = app => probe(app, `const bar = get('AddressBar'); return { mode: bar.mode, default: bar.defaultMode() };`);
 
+/** The viewport centre of the mode-toggle segment `name`, or null. */
+const segmentCentre = (app, name) => app.evaluate(`JSON.stringify((() => {
+    const seg = [...document.querySelectorAll('.pb-chrome-bar-toggle .pb-chrome-bar-segment')].find(b => b.textContent === ${JSON.stringify(name)});
+    if (!seg) return null;
+    const r = seg.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+})())`).then(JSON.parse);
+
+/**
+ * 999.4: after a mode switch the new layout moves under the resting pointer. Left where the clicked segment was
+ * (Organising puts the bar at the window's top edge, where Browsing has its tab strip), it rests on a tab and opens
+ * that tab's preview card, a blocking layer that hides every page until the pointer leaves. Moves it back onto the
+ * segment and waits until the segment is hovered and no card is open.
+ */
+async function parkOnSegment(app, name) {
+    const parked = await settle(async () => {
+        const at = await segmentCentre(app, name);
+        if (at) {
+            await theiaPointer(app, [{ type: 'pointerMove', x: Math.round(at.x), y: Math.round(at.y) }]);
+        }
+        return app.evaluate(`!!document.querySelector('.pb-chrome-bar-toggle .pb-chrome-bar-segment:hover') && !document.querySelector('.pb-tab-preview')`);
+    }, v => v === true);
+    if (parked !== true) {
+        throw new Error(`${BROKEN} the pointer could not be put back on the ${name} segment after the mode switch`);
+    }
+}
+
 /** A trusted click on the mode-toggle segment named `name`. */
 async function clickSegment(app, name) {
-    const at = await app.evaluate(`JSON.stringify((() => {
-        const seg = [...document.querySelectorAll('.pb-chrome-bar-toggle .pb-chrome-bar-segment')].find(b => b.textContent === ${JSON.stringify(name)});
-        if (!seg) return null;
-        const r = seg.getBoundingClientRect();
-        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-    })())`).then(JSON.parse);
+    const at = await segmentCentre(app, name);
     if (!at) {
         throw new Error(`${BROKEN} no mode-toggle segment named ${name}`);
     }
@@ -3071,7 +3093,9 @@ async function modeLifetime(ctx) {
         await restoreDefaultMode(app);
         if (await bodyMode(app) !== 'browsing') {
             await clickSegment(app, 'Browsing').catch(() => undefined);
+            await settle(() => bodyMode(app), v => v === 'browsing');
         }
+        await parkOnSegment(app, 'Browsing');
     }
 }
 
@@ -3958,6 +3982,7 @@ async function switchUiMode(app, id) {
     if (await settle(() => bodyMode(app), v => v === id, 10000) !== id) {
         throw new Error(`${BROKEN} the ${label} segment did not switch the PowerBrowser mode`);
     }
+    await parkOnSegment(app, label);
     return label;
 }
 
