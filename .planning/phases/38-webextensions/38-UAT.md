@@ -129,22 +129,25 @@ evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: page-furniture exte
 command: `cd /home/chris/coding/Power-Browser && node scripts/verify-ext-tab-host-live.mjs --scenario query,events,active-tab,sender,adversarial-starts,gui01,refused-write`
 expected: All green on the amended 050. `refused-write` now checks the highlighted refusal where it used to check `active`. Then run `node scripts/verify-ext-tab-host-live.mjs` (all scenarios) and `node scripts/verify-ext-tab-host-live.mjs --self-test` for the full 31.1 set
 result: pass
-evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: verify-ext-tab-host-live (all scenarios, refused-write included) and its --self-test PASS (ea7bcec7)"
+evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: verify-ext-tab-host-live (all scenarios, refused-write included) and its --self-test PASS (ea7bcec7); 39-13 lane-b 2026-11-06, objdir/dist/bin/powerbrowser (050 and 060 stamps matched): verify-platform.sh --only ext-tab-host-live PASS, all 29 scenarios including query, events, active-tab, sender, adversarial-starts, gui01 and refused-write; --only ext-tab-host-live-self-test PASS (every control green, all 30 plants red naming their drift)"
 
 ### 18. Visual: buttons, badge, puzzle menu, popup arrow (KDE Wayland)
 command: `cd /home/chris/coding/Power-Browser && objdir/dist/bin/powerbrowser -purgecaches` with an extension that has a popup and a badge installed; raise it with the KWin script via qdbus, then `spectacle`, sandbox off
 expected: 28x28 buttons, the badge at the button's corner capped at four characters, the 300px puzzle menu with icon, name, Pin to Toolbar, Manage Extension and Remove Extension rows, and the native panel's arrow under the clicked button; legible in both themes
 result: [pending]
+capture: ".planning/phases/39-v1-5-close-out/captures/38-T18-buttons-badge-puzzle-popup.png (39-13 headed run under the capture lock, KDE Wayland, spectacle -a -S): the action button with its ok badge and the puzzle menu open (Pinned and Extensions rows, gear buttons); no popup is open in this frame, so the popup arrow is not in it"
 
 ### 19. Visual: page-action icon and pill text
 command: as item 18, with the `content` fixture installed and a matching page open
 expected: The 28x28 page-action icon sits in the pill's leading slot; record whether the pill's text shifts (the owner decision in item 32); the panel arrow sits under the icon
 result: [pending]
+capture: ".planning/phases/39-v1-5-close-out/captures/38-T19-page-action-pill.png (39-13 headed run under the capture lock, KDE Wayland, spectacle -a -S): the content fixture page action icon in the pill leading slot on /a; the pill text starts after the icon"
 
 ### 20. Visual: sidebar view placement
 command: as item 18, with the `surfaces` fixture, after Show Sidebar
 expected: The sidebar page sits exactly over the right side-panel view, hides under an open Theia menu, and follows a splitter drag
 result: [pending]
+capture: ".planning/phases/39-v1-5-close-out/captures/38-T20-sidebar-view.png (39-13 headed run under the capture lock, KDE Wayland, spectacle -a -S): the surfaces sidebar page painted over the right side-panel view"
 
 ### 21. Manual: a real install click-through
 command: `cd /home/chris/coding/Power-Browser && objdir/dist/bin/powerbrowser -purgecaches`, open the puzzle menu's install footer, press the site's own Add to Firefox button in the stock window
@@ -159,6 +162,7 @@ command: |
   4. Without autostart, open a private stock window last, then trigger the options page.
 expected: Step 2: no puzzle row, no button, no Show Sidebar row; Alt+Shift+I with a page focused does nothing; the options page is refused with "PowerBrowser refused to open that page: this extension is not allowed in private windows." Step 3: the row, the sidebar and the options tab return. Step 4: the options page opens in a non-private stock window, or a new one if none is open
 result: [pending]
+live: "39-13 lane-b 2026-11-06, objdir/dist/bin/powerbrowser (050 and 060 stamps matched): scenario private-access FAIL, two product defects deferred to main (39-13-SUMMARY). (1) With browser.privatebrowsing.autostart the shell IDE never loads: the frame shows the sidecar Forbidden page, because setSessionCookie adds the token cookie with empty origin attributes only. (2) With a private stock window open, the denied extension options page lands in the private window: stock openOptionsPage uses windowTracker.topWindow and that window own switchToTabHavingURI, not the shell receiver. Plant shell-not-private is in the table; the control is red, so it is unscored. Harness 728b962c"
 
 ### 23. Manual: a real keyboard and pointer on the popup
 command: as item 18, click a popup button with the mouse, then operate its controls with Tab and Enter, then Esc
@@ -168,37 +172,44 @@ result: [pending]
 ### 24. IN-06: the add-ons listing page's own hosts
 command: `cd /home/chris/coding/Power-Browser && bash scripts/verify-endpoints.sh` after one live visit to the add-ons listing page and one install (read the script's header for the MOZ_LOG layer it needs)
 expected: Every host contacted is in `powerbrowser/endpoint-allowlist.json`. A new static-asset or CDN host means a fourth row, which `verify-webextensions` and `allowlist-doc-consistency` must then be extended to name in the same change
-result: [pending]
+result: skipped
+reason: "not run in 39-13: the add-ons listing visit and install need network to addons.mozilla.org, which the 39-13 lane orchestrator put out of scope for this lane (2026-11-06). verify-endpoints.sh was not run against an add-ons listing session; no host list recorded, allowlist unchanged"
 
 ### 25. Review fix CR-02: container tabs are refused
 command: Install a fixture with the `cookies` permission and containers enabled (`privacy.userContext.enabled`), then in its background call `browser.tabs.create({url: "http://127.0.0.1:<port>/a", cookieStoreId: "firefox-container-1"})` and `firefox-default`
 expected: The container call rejects with "PowerBrowser refused to open that page: container tabs are not supported in this window." and opens nothing; `firefox-default` still opens a tab (`defbc088`; no live row exists)
-result: [pending]
+result: pass
+evidence: "39-13 lane-b 2026-11-06, objdir/dist/bin/powerbrowser (050 and 060 stamps matched): scenario container-refused PASS: firefox-container-1 rejected with the tree copy, nothing opened on /c, firefox-default opened /d; plant container-dropped red naming 'a container tab was opened'; harness e8186bee; registry ext-tab-host-live PASS"
 
 ### 26. Review fix CR-03: activation waits for the adoption ack
 command: Scenario `tabs-bridge` item 4's `/d` step, then by hand: an extension creates a tab in the background and activates it at once
 expected: The host selection never lands on a tab the frontend has not shown; `tabs.update` returns the tab with `active: false` until the attach, then `selectTab` is pushed and `/d` becomes current (`4bc15671`)
-result: [pending]
+result: pass
+evidence: "39-13 lane-b 2026-11-06, objdir/dist/bin/powerbrowser (050 and 060 stamps matched): scenario activate-after-ack PASS: with the ack held 2 s, tabs.update answered active false, the host selection never led the frontend (sampled about 70 times), selectTab was pushed and /d became current in Theia and chrome; plant activated-before-shown red naming 'the host selected a tab the frontend had not shown'; harness e8186bee"
 
 ### 27. Review fix WR-01: no foreign extension page, no system principal
 command: From one extension call `tabs.create({url: <another extension's moz-extension page>})`; then with no stock window open call `tabs.create` of the extension's own page
 expected: The foreign page is refused (a URL no extension owns is refused; a started stock window gets `addTab` with the caller's principal); the no-window case opens an empty window, waits for it, then adds the tab with the caller's principal (`d573e26a`)
-result: [pending]
+result: pass
+evidence: "39-13 lane-b 2026-11-06, objdir/dist/bin/powerbrowser (050 and 060 stamps matched): scenario foreign-page-refused PASS: an unowned moz-extension URL refused (no extension owns it); with no stock window an empty window opened and the page was added as tab 1 with the extension principal; another extension page went to the started window through addTab with a non-system principal; no extension page in the shell tabs; plant foreign-system-principal red; harness e8186bee"
 
 ### 28. Review fix WR-04: Remove copy
 command: Open the puzzle menu, choose Remove Extension on an extension, read the confirm row, confirm, then reinstall it
 expected: The confirm reads "The extension and its data are removed from this profile."; after the reinstall its storage is empty, as the copy says (`02887332`)
-result: [pending]
+result: pass
+evidence: "39-13 lane-b 2026-11-06, objdir/dist/bin/powerbrowser (050 and 060 stamps matched): scenario remove-copy PASS: the confirm row equals chrome-bar-copy.ts removeExtensionBody; storage.local was empty after Remove and reinstall; one action button after re-pin; plant remove-keeps-storage red naming 'reinstall kept old storage'; harness 728b962c; registry extension-actions-live: remove-copy PASS"
 
 ### 29. Review fix WR-05: a reloaded frontend takes its popup and sidebar down
 command: With an extension popup open and a sidebar view shown, reload the Theia frontend (Ctrl+R in the IDE)
 expected: The popup panel closes and the chrome sidebar browser hides; after the frontend re-subscribes, the sidebar view returns with its page, and a frontend that has already re-subscribed is left alone (`ac325805`; no live row, "reload behaviour needs a built binary")
 result: [pending]
+live: "39-13 lane-b 2026-11-06, objdir/dist/bin/powerbrowser (050 and 060 stamps matched): scenario frontend-reload FAIL on the return leg, product fix deferred to main (39-13-SUMMARY). The reload half holds: chrome saw popuphidden and the sidebar browser hidden. After the reloaded frontend re-subscribed, the view was re-added to the right area but stayed attached and not visible at width 0 for 60 s, so chrome kept the panel browser hidden. 4 of 4 runs. Plant frontend-gone-ignored is in the table; the control is red. Harness 728b962c"
 
 ### 30. Review fix WR-06: `openOptionsPage` switches to the open tab
 command: Call `browser.runtime.openOptionsPage()` twice from the `surfaces` fixture, once with a started stock window and once with the stock window still starting
 expected: The second call switches to the stock tab already showing the page and adds none; while the stock window is starting it waits for that window instead of opening a second one; no error is reported for a page that opened (`541ae2ea`)
 result: [pending]
+live: "39-13 lane-b 2026-11-06, objdir/dist/bin/powerbrowser (050 and 060 stamps matched): scenario options-page-switch PASS in 4 of 5 runs, including the registry row: a second call made while the stock window was still starting waited for that window, and a third call switched to the open tab and added none; plant options-no-reuse red. In 1 run a second call made while the window was starting added a second options tab in the one window, an intermittent race (fix deferred to main, 39-13-SUMMARY). Left pending for that race. Harness e8186bee"
 
 ### 31. Owner decision: EXT-10 password-manager fill under D-09
 expected: |
@@ -310,10 +321,10 @@ evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: webview-wall-off we
 ## Summary
 
 total: 47
-passed: 33
+passed: 37
 issues: 0
-pending: 14
-skipped: 0
+pending: 9
+skipped: 1
 blocked: 0
 
 ## Gaps
