@@ -8680,6 +8680,11 @@ async function handlePageMenuAction(data, actorRef) {
     }
   }
   if (data.path !== undefined) {
+    // CR-01 (39-06): a path for an earlier menu of this window whose save slot is gone (answered, or the
+    // oldest dropped at the ninth) lost its save; `stale` makes the frontend say the menu had closed.
+    if (data.menuId > 0 && data.menuId <= state.nextMenuId && state.pending?.menuId !== data.menuId) {
+      return { ok: true, kind, where: "stale" };
+    }
     return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a save path this menu did not ask for" };
   }
   const pending = state.pending;
