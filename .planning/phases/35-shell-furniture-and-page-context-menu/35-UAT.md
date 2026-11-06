@@ -54,6 +54,7 @@ evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: menu-not-in-ide and
 expected: Typing in a text field with form history shows the stock autocomplete popup under the field and picking an entry fills it. A saved login fills a login form from the popup. Submitting an invalid form shows the validation bubble (autocomplete, saved-login, form-validation)
 result: skipped
 reason: "Deferred follow-up: autocomplete and form-validation PASS; saved-login fails (C23): the popup element is present, field and document are focused, LoginManager is in the browsers group and the console shows no error, yet no popup opens"
+live: "39-06 2026-11-06, main f39f6e25: C23 was the instrument, not the product. The WebDriver BiDi remote agent applies its recommended prefs (upstream remote/shared/RecommendedPreferences.sys.mjs), which set signon.rememberSignons=false, so LoginManagerChild never processed the login form: no PasswordManager message reached the parent and the search asked only FormHistory. A stock window in the same session failed the same way. saved-login now sets the pref true before the page loads; autocomplete and saved-login PASS (popup lists probe-user, Down+Enter fills both fields); plant login-manager-disabled red"
 
 ### 9. SC3: tooltips and link status
 expected: Hovering an element with `title=` shows the tooltip after the stock delay and nothing shows over the IDE. Hovering a link shows its URL in the bar status line and clears when the pointer leaves, and a picture-in-picture close button works (tooltip-status, theia-hover-silent, pip-close)

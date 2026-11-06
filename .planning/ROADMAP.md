@@ -776,7 +776,7 @@ Plans:
 **Source phase:** 35
 **Deferred at:** 2026-11-04 during /gsd-verify-work 35 session completion
 **Follow-ups:**
-- [ ] Test 8: C23: saved-login shows no autocomplete popup on the username field; cause unknown (deferred 2026-11-04)
+- [x] Test 8: C23: saved-login shows no autocomplete popup on the username field; cause unknown (deferred 2026-11-04) — fixed in 39-06 (f39f6e25)
 
 ### Phase 999.9: Follow-up — Phase 35 deferred UAT follow-up: Test 6 (BACKLOG)
 
