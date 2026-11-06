@@ -3,7 +3,7 @@ status: partial
 phase: 37-permission-prompts-and-dialogs
 source: [37-VERIFICATION.md, 37-REVIEW.md, 37-03-SUMMARY.md, 37-CONTEXT.md]
 started: 2026-11-01T00:00:00Z
-updated: 2026-11-06T22:00:02.000Z
+updated: 2026-11-06T23:06:34.000Z
 ---
 
 Deferred to the one end-of-milestone pass (Chris, 2026-10-31). Run on `objdir/dist/bin/powerbrowser` with `-purgecaches` after any shell-module change. Spectacle and the KWin raise script need the session DBus, so run with the sandbox off. The live scenarios are `node scripts/verify-prompts-live.mjs --scenario <name>`.
@@ -54,14 +54,14 @@ evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: camera-doorhanger P
 
 ### 8. Scenario `dialog-probe` (probe 1)
 expected: alert, confirm, prompt, leave-page and HTTP-auth each shown by the stock window-modal commonDialog. While each is open: an IDE edit is typed and read back, the shell window's input-enabled state is read, a traffic tab navigates and the push sequence advances, and a KWin screenshot is taken. A live run writes `.planning/probes/prompt-probe-verdict.json` (replacing the provisional one) and `.planning/probes/prompt-probe/`; then `git add` them by explicit path and run `node scripts/verify-permission-prompts.mjs`. Red when the stock dialog blocks the IDE. Watch: whether BiDi auto-closes content prompts (needs unhandledPromptBehavior: ignore), whether the 127.0.0.1 cross-port 401 shows the auth dialog
-result: skipped
-reason: "Deferred follow-up: PROMPT-03 (backlog 999.3): the verdict stays stock-blocks-ide; for all five kinds the IDE edit did not land, shell input was disabled and pushes stalled"
+result: pass
+evidence: "39-10 2026-11-06, workspace/lane-a 0077dd5d: a headed live probe 1 (PB_LIVE_HEADED=1 node scripts/verify-prompts-live.mjs --scenario dialog-probe, under the headed lock, sandbox off) wrote .planning/probes/prompt-probe-verdict.json with source 'live probe 1 (verify-prompts-live.mjs --scenario dialog-probe)', provisional false: outcome stock-blocks-ide for all five kinds (edit did not land, shell input disabled, pushes stalled), relayFeasible false (cross-domain auth needs the Pitfall-2 widening). The five PNGs were re-captured at 1600x1000 and each was opened: only the PowerBrowser window. The run prints FAIL stock dialog blocks the IDE, which is the measured verdict while PROMPT-03 is deferred (999.3); a default prompts-live run skips it by derivation (row 9)"
 owner: "Chris 2026-11-05 via AskUserQuestion: OQ1: Derived scenario skip (Recommended). A scenario-level skip printed as `SKIPPED (PROMPT-03 deferred, 999.3)`, derived from the REQUIREMENTS.md deferral record so it stops applying the moment the deferral is removed, plus a WINDOWS.md ledger row; --gate goes green by a recorded exclusion. Plan 39-10 implements it; this row's result is recorded there"
 
 ### 9. Scenario `dialog`
 expected: Each of the five kinds resolves the page on answer; an IDE edit lands and the shell's input stays enabled while it is open; the push sequence advances on the same recorder; screenshots logged for review
 result: skipped
-reason: "Deferred follow-up: PROMPT-03 (backlog 999.3): IDE push traffic stops while a stock dialog is open"
+reason: "PROMPT-03 deferred to 999.3 (OQ1 ruling 2026-11-05, WINDOWS.md ledger 26). 39-10 (0077dd5d): a default prompts-live run and a full self-test print `dialog: SKIPPED (PROMPT-03 deferred, 999.3)` and `dialog-probe: SKIPPED (PROMPT-03 deferred, 999.3)`, derived from the REQUIREMENTS.md requirement line and traceability row; the static plants deferral-record-removed and deferral-row-removed prove the skip stops when either goes. --scenario dialog still runs it"
 owner: "Chris 2026-11-05 via AskUserQuestion: OQ1: Derived scenario skip (Recommended). A scenario-level skip printed as `SKIPPED (PROMPT-03 deferred, 999.3)`, derived from the REQUIREMENTS.md deferral record so it stops applying the moment the deferral is removed, plus a WINDOWS.md ledger row; --gate goes green by a recorded exclusion. Plan 39-10 implements it; this row's result is recorded there"
 
 ### 10. Scenario `stop-repeat`
@@ -106,19 +106,23 @@ reason: "Deferred follow-up: static half PASS (21 plants). Live half run with --
 
 ### 18. Review fix CR-01a: an adopted tab's prompt shows only while that tab is current
 expected: Open an adopted tab (a target=_blank link, or a blocked-popup Allow). Its geolocation prompt shows while the adopted tab is current and does not show while a host tab is current; switching host tab to adopted tab to IDE shows and hides it each time and never shows another tab's prompt over the adopted page (`b33f8953`, no live row)
-result: [pending]
+result: pass
+evidence: "39-10 2026-11-06, workspace/lane-a 022badb6: node scripts/verify-prompts-live.mjs --scenario adopted-prompt PASS (headless): an adopted tab (the page's own window.open under a gesture) asks for location; the stock doorhanger shows while it is current, leaves the panel for a host tab and for the IDE, shows again each time it is current, a host tab's waiting prompt never shows over it, and the stock Allow grants. --self-test --scenario adopted-prompt: control green, plant adopted-selection-stale red naming 'adopted tab prompt hidden while it is current'"
 
 ### 19. Review fix CR-01b: adopted-tab cleanup on navigation and close
 expected: A bar on an adopted tab clears when that tab navigates to another document. Closing the adopted tab drops its prompts and bars, sends pending:false, and leaves no stale mark in the strip
-result: [pending]
+result: pass
+evidence: "39-10 2026-11-06, workspace/lane-a 022badb6: --scenario adopted-bar-navigate PASS (headless): the adopted tab's blocked-popup bar sends visible:false and leaves the widget when it navigates; with a waiting location prompt and a bar on it (strip mark present, the positive control), closing it pushes pending:false and the strip shows no mark. --self-test: control green, plant adopted-close-cleanup-skipped red naming 'closing the adopted tab left a pending mark'"
 
 ### 20. Review fix CR-01c: adopted-tab parity with host tabs
 expected: An adopted tab has a tab-host node: its favicon shows, F12 opens DevTools for it, WebDriver and an extension's tabs.query see it, and its opener tab is cleared when the opener closes
-result: [pending]
+result: pass
+evidence: "39-10 2026-11-06, workspace/lane-a b8d5554d: --scenario adopted-parity PASS (headless): the adopted tab's node is in the tab host strip and ExtensionParent's tabTracker resolves it (the extensions half; WebDriver was not separately read), its favicon arrives as a state push, F12 from the focused page sends devtoolsOpen and DevToolsShim lists one toolbox for its overlay, and closing the opener clears its openerTab. --self-test: control green, plant opener-kept-on-close red naming 'opener not cleared on close'"
 
 ### 21. Review fix CR-02: camera, then a location grant
 expected: A page holds a live camera track, then asks for location and the user grants it in the stock panel. The camera mark stays lit (`9aee3790`, proven so far only against stub maps)
-result: [pending]
+result: pass
+evidence: "39-10 2026-11-06, workspace/lane-a b8d5554d: --scenario camera-then-geo PASS (headless): a live fake camera track shares through the stock Allow (camera mark lit), then a location request is granted through the stock panel's own Allow; no all-off sharingChanged push follows and the camera mark stays. --self-test: control green, plant geo-report-clears-camera red naming 'the location grant cleared the camera mark'"
 
 ### 22. Review fix WR-01: reports that arrive before the adoption ack
 expected: A camera report, a blocked-popup bar, a protocol-handler registration and a hung-script report that happen while an overlay is pending (pc-N) are all shown at the ack: the camera mark lights, the bar appears, the registration is not lost (`badf1036`). Also check the remaining pending-window gap the review listed: a hung script and a prompt raised before the ack
@@ -138,7 +142,8 @@ result: [pending]
 
 ### 26. Review fix WR-05: probe 1 replacing the verdict
 expected: A live dialog-probe run replaces the provisional verdict with evidence; `relayFeasible` and `relayWhy` come from the measured preconditions (host and adopted tab nodes, selectedBrowser, auth members) and `prompt-probe-verdict-live` goes green under `--gate`
-result: [pending]
+result: pass
+evidence: "39-10 2026-11-06, workspace/lane-a 0077dd5d: the verdict is the live probe-1 run (row 8), relayFeasible and relayWhy measured (false: cross-domain auth needs gURLBar.setURI and setTabLabelForAuthPrompts); scripts/verify-platform.sh --only prompt-probe-verdict-live: PASS"
 
 ### 27. Review fix WR-07: the live plants
 expected: The reworded popup-block plants (`allow-loads-frame-url`, `adopt-next-to-opener-failed`) and the plants that only simulate a symptom (`cross-tab-leak`, `theia-beforeunload-relayed`) go red in a live session. Decide whether the adopted-prompt, adopted-bar-navigate and camera-then-geo scenarios are worth writing (WR-07's fix list), since items 18-21 are held only by hand
@@ -229,10 +234,10 @@ owner: "Chris 2026-11-06 via AskUserQuestion: box 37, Accept all (Recommended). 
 ## Summary
 
 total: 41
-passed: 23
+passed: 29
 issues: 0
-pending: 15
-skipped: 3
+pending: 10
+skipped: 2
 blocked: 0
 
 ## Gaps
