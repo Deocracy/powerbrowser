@@ -1917,6 +1917,11 @@ async function iframeEditRows({ app, pages, plant, fail, note }) {
  * textarea's editor has run its first check after focus (enableRealTimeSpell false in the spellInfo).
  */
 async function suggestionsAt(app, tools, selector, misspelt = true) {
+    // 39-07: chrome focus on the overlay first. After menu-page-tools it rests on the Theia frame, and a focus() in a
+    // document without focus fires no focus event, so the inline spell checker never starts (the 39-05 flake).
+    if (!await focusOverlay(app, tools.tabId)) {
+        throw new Error(`${BROKEN} the /tools page could not be focused for the spell check`);
+    }
     await app.evaluateIn(tools.page, `document.querySelector(${JSON.stringify(selector)}).focus(); true`);
     await sleep(500); // the inline checker runs after focus
     // On the word: the textarea's first line, not centreOf's vertical middle (its empty second row).
