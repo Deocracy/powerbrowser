@@ -3,7 +3,7 @@ status: partial
 phase: 36-new-window-links-as-web-tabs
 source: [36-VERIFICATION.md, 36-REVIEW.md, 36-03-SUMMARY.md]
 started: 2026-11-01T00:00:00Z
-updated: 2026-11-05T01:52:09.986Z
+updated: 2026-11-06T14:54:18.000Z
 ---
 
 Deferred to the one end-of-milestone pass (Chris, 2026-10-31). Run on `objdir/dist/bin/powerbrowser` with `-purgecaches` after any shell-module change, after `nix develop .#theia --command bash -c 'cd theia && yarn build'`. `verify-new-window-adopt-live.mjs` has not been touched since `d9861749`, so it predates the 36-REVIEW fixes and Phase 37's tab-host change; expect that the first run may need harness edits as well as product fixes.
@@ -95,14 +95,16 @@ result: [pending]
 
 ### 18. CLAUDE.md hard rule 5 wording (owner decision)
 expected: Owner accepts or rewrites the replacement in 36-02-SUMMARY Deferred item 1 for the span "It opens via `window.open(url, '_blank')` ... so `BROWSER_CHROME_URL` is stock upstream chrome." The sentence "The shell window carries no `nsIBrowserDOMWindow`" is false since 36-01 installed the receiver, and the command's route is now `openStockTab`. An agent does not edit CLAUDE.md
-result: [pending]
+result: pass
+evidence: "owner decision 2026-11-05; CLAUDE.md hard rule 5 route span replaced with the 36-02-SUMMARY Deferred item 1 text in the same commit"
+owner: "Chris 2026-11-05 via AskUserQuestion: box 36, Accept replacement text (Recommended): replace CLAUDE.md hard rule 5 with the text in 36-02-SUMMARY.md Deferred item 1, verbatim."
 
 ## Summary
 
 total: 18
-passed: 10
+passed: 11
 issues: 0
-pending: 8
+pending: 7
 skipped: 0
 blocked: 0
 
