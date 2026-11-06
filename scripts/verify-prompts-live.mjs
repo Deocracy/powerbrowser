@@ -174,6 +174,30 @@ const NOT_NEXT = 'popup not adopted next to its opener';
 const STOP_IGNORED = 'Stop script did not terminate the loop';
 const STOCK_PROTOCOL = 'stock protocol bar path reached: getNotificationBox TypeError';
 
+/**
+ * OQ1 ruling (Chris 2026-11-05, 37-UAT rows 8 and 9): a default run and a full self-test leave out the scenarios
+ * PROMPT-03 owns, printing "<name>: SKIPPED (PROMPT-03 deferred, 999.3)", only while REQUIREMENTS.md records the
+ * deferral in both its requirement line and its traceability row (the same reader as verify-permission-prompts.mjs
+ * rule (p)); WINDOWS.md carries the open ledger row. An explicit --scenario still runs them.
+ */
+const REQUIREMENTS = '.planning/REQUIREMENTS.md';
+const PROMPT03_SCENARIOS = ['dialog-probe', 'dialog'];
+
+/** The phase PROMPT-03 is deferred to, when its requirement line and traceability row agree; else null. */
+function prompt03DeferredTo(requirements = '') {
+    const line = /^- \[ \] \*\*PROMPT-03\*\*:.*\(deferred to Phase (\S+?),/m.exec(requirements);
+    const row = /^\| PROMPT-03 \| Phase (\S+) \| Deferred \|$/m.exec(requirements);
+    return line && row && line[1] === row[1] ? line[1] : null;
+}
+
+/** name -> the SKIPPED reason for each PROMPT-03 scenario a run without --scenario leaves out; empty without a recorded deferral. */
+function deferredSkips(requirements) {
+    const to = prompt03DeferredTo(requirements);
+    return to ? new Map(PROMPT03_SCENARIOS.map(name => [name, `SKIPPED (PROMPT-03 deferred, ${to})`])) : new Map();
+}
+
+const readRequirements = () => readFileSync(join(REPO_ROOT, REQUIREMENTS), 'utf8');
+
 /** Test-only Basic credentials for the harness's own 401 server; never a real account. */
 const AUTH = { user: 'pb-probe', pass: 'pb-probe-pass' };
 /** Set by main() for a live `--scenario dialog-probe` run only; self-test sessions never write the verdict. */
@@ -1572,6 +1596,22 @@ function staticAudit() {
     if (!/relayFeasible: relay \? relay\.feasible : null/.test(own)) {
         failures.push('probe 1 does not write relayFeasible from relayFeasibleFrom; the route-to-Chris branch of rule (p) is unreachable');
     }
+    // OQ1: the PROMPT-03 skip is derived from the deferral record, so it must stop the moment either half of it goes.
+    const requirements = readRequirements();
+    if (prompt03DeferredTo(requirements) && deferredSkips(requirements).size !== PROMPT03_SCENARIOS.length) {
+        failures.push(`${REQUIREMENTS} records the PROMPT-03 deferral but the skip did not apply (broken instrument)`);
+    }
+    const deferralPlants = [
+        ['deferral-record-removed', requirements.replace(/ \(deferred to Phase [^\n]*/, '')],
+        ['deferral-row-removed', requirements.replace(/^\| PROMPT-03 \| Phase (\S+) \| Deferred \|$/m, '| PROMPT-03 | Phase $1 | Pending |')],
+    ];
+    for (const [plant, text] of deferralPlants) {
+        if (prompt03DeferredTo(requirements) && text === requirements) {
+            failures.push(`static plant ${plant} changed nothing in ${REQUIREMENTS} (broken instrument)`);
+        } else if (deferredSkips(text).size) {
+            failures.push(`static plant ${plant}: skip applied without a recorded deferral`);
+        }
+    }
     return failures;
 }
 
@@ -1582,6 +1622,7 @@ async function selfTest() {
         return 1;
     }
     console.log(`  ok  static: ${PLANTS.length} plants each target a scenario, name an emitted failure and are applied; every scenario has a plant; the delay line and pref are upstream's`);
+    console.log('  ok  static: deferral-record-removed and deferral-row-removed -> the PROMPT-03 skip no longer applies');
     if (process.argv.includes('--static')) {
         console.log(`${NAME} --self-test --static: PASS -- the live control and plant sessions were not run (--static)`);
         return 0;
@@ -1593,7 +1634,10 @@ async function selfTest() {
         console.error(`${NAME} --self-test: unknown scenario(s): ${unknown.join(', ') || '(none given)'}`);
         return 1;
     }
-    const plants = only ? PLANTS.filter(p => only.includes(p.target)) : PLANTS;
+    // OQ1: a full self-test drops the plants of the deferred PROMPT-03 scenarios; an explicit --scenario keeps them.
+    const skips = only ? new Map() : deferredSkips(readRequirements());
+    skips.forEach((why, name) => console.log(`${name}: ${why}`));
+    const plants = (only ? PLANTS.filter(p => only.includes(p.target)) : PLANTS).filter(p => !skips.has(p.target));
     const reason = preflight();
     if (reason) {
         console.error(`${NAME} --self-test: ${reason}`);
@@ -1620,7 +1664,7 @@ async function selfTest() {
     if (failed) {
         return 1;
     }
-    console.log(`${NAME} --self-test: PASS -- clean controls green, ${plants.length} planted faults went red${only ? ` (live half limited to ${only.join(',')}; ${PLANTS.length - plants.length} plant(s) not run)` : ''}`);
+    console.log(`${NAME} --self-test: PASS -- clean controls green, ${plants.length} planted faults went red${only ? ` (live half limited to ${only.join(',')}; ${PLANTS.length - plants.length} plant(s) not run)` : skips.size ? ` (${PLANTS.length - plants.length} plant(s) of ${[...skips.keys()].join(', ')} not run: PROMPT-03 deferred)` : ''}`);
     return 0;
 }
 
@@ -1638,7 +1682,10 @@ async function main() {
         return 1;
     }
     const flag = process.argv.indexOf('--scenario');
-    const selected = flag === -1 ? Object.keys(SCENARIOS) : process.argv[flag + 1].split(',');
+    // OQ1: a default run leaves out the deferred PROMPT-03 scenarios while the deferral is recorded.
+    const skips = flag === -1 ? deferredSkips(readRequirements()) : new Map();
+    skips.forEach((why, name) => console.log(`${name}: ${why}`));
+    const selected = flag === -1 ? Object.keys(SCENARIOS).filter(name => !skips.has(name)) : process.argv[flag + 1].split(',');
     const unknown = selected.filter(name => !(name in SCENARIOS));
     if (unknown.length) {
         console.error(`${NAME}: unknown scenario(s): ${unknown.join(', ')}`);
