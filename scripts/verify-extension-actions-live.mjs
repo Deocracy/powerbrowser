@@ -130,7 +130,8 @@ import { createHash } from 'node:crypto';
 import { crc32 } from 'node:zlib';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { mkdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { EXTENSION_FIXTURES, fixtureId } from './lib/pb-extension-fixtures.mjs';
 
 const NAME = 'verify-extension-actions-live';
@@ -138,6 +139,19 @@ const NAME = 'verify-extension-actions-live';
 const BRIDGE_FIXTURES = ['action', 'popup'];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const verdict = (ok, detail, fail) => (ok ? { ok: true, detail, fail: null } : { ok: false, detail: null, fail });
+// 39-13 (38 T18-T20): PB_CAPTURE_DIR=<dir> runs the sessions headed and captures the shell at named states.
+const CAPTURE_DIR = process.env.PB_CAPTURE_DIR ? resolve(process.env.PB_CAPTURE_DIR) : '';
+if (CAPTURE_DIR) {
+  process.env.PB_LIVE_HEADED = '1';
+}
+// PB_CAPTURE_DIR set: the PowerBrowser window (captureShell refuses any other active window) to <dir>/<file>. Unset: nothing.
+async function capture(file) {
+  if (!CAPTURE_DIR) return;
+  mkdirSync(CAPTURE_DIR, { recursive: true });
+  const { captureShell } = await import('./lib/pb-kwin.mjs');
+  const shot = await captureShell(join(CAPTURE_DIR, file));
+  console.log(`  capture ${file}: ${shot.resourceClass} ${shot.width}x${shot.height}`);
+}
 const pathOf = u => {
   try {
     return new URL(String(u)).pathname;
@@ -285,6 +299,13 @@ async function scenarioButtons({ app, plant }) {
   if (!drawn) {
     const shown = (await barButtons(app)).find(x => x.id === fixtureId('action'));
     return verdict(false, null, `the button shows a stale badge ${JSON.stringify(shown ? shown.badge : null)} where the push carried 'ok'`);
+  }
+  if (CAPTURE_DIR) {
+    // 38 T18: the buttons with the badge, and the puzzle menu open over them.
+    await clickInFrame(app, '.pb-ext-puzzle');
+    await pollUntil(() => puzzleRows(app), r => r.length === 2, 5000);
+    await capture('38-T18-buttons-badge-puzzle-popup.png');
+    await clickInFrame(app, '.pb-ext-puzzle');
   }
   return verdict(true, `the bar showed buttons ${JSON.stringify(wantButtons)} and puzzle rows ${JSON.stringify(menuRows.map(m => m.name))} equal to the push; the action button's click ran in /a and its pushed badge 'ok' was drawn`, null);
 }
@@ -488,6 +509,7 @@ async function scenarioPageAction({ app, plant, command }) {
   if (!shown || shown.find(i => i.id === id).title !== row.title) {
     return verdict(false, null, `the pill does not show the page action pushed for /a (${JSON.stringify(row.title)}): ${JSON.stringify(shown ?? await pillIcons())}`);
   }
+  await capture('38-T19-page-action-pill.png');
   // The icon reader has now seen an icon, so the boot reading taken before it is scored.
   if (bootRows.some(isPage) || bootIcons.length) {
     return verdict(false, null, `the zero-overlay boot showed a page action: push ${JSON.stringify(bootRows.filter(isPage))}, pill ${JSON.stringify(bootIcons)}`);
@@ -553,6 +575,7 @@ async function scenarioSidebar({ app, plant, command }) {
       ? `the Theia sidebar view opened but chrome's panel browser does not show the panel page over it: ${JSON.stringify(now)}`
       : `no Theia side-panel view opened: the sidebar went to the shell window or a web tab, neither of which shows it (${JSON.stringify(now)})`);
   }
+  await capture('38-T20-sidebar-view.png');
   await clickInFrame(app, '.pb-ext-puzzle');
   await puzzleRowMenu(app, 'surfaces', 'Hide Sidebar');
   const closed = await pollUntil(async () => ({ view: await sidebarView(app), frame: await sidebarFrame(app) }), s => !s.view.attached && !s.frame.present, 10000);
@@ -725,6 +748,260 @@ async function scenarioPoliciesShellOnly({ plant }) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 39-13 (38 T28 WR-04, T29 WR-05, T22): Remove's copy and storage, a reloaded frontend's popup and sidebar, and the
+// private-browsing access rule. Copy strings are read from the tree at check time.
+// ---------------------------------------------------------------------------
+
+/** A literal from a tracked source, read at check time: the first capture of `regex`. */
+async function treeLiteral(rel, regex) {
+  const m = regex.exec(await readFile(join(live.REPO_ROOT, rel), 'utf8'));
+  if (!m) throw new Error(`BROKEN INSTRUMENT: ${rel} no longer matches ${regex}`);
+  return m[1];
+}
+
+async function scenarioRemoveCopy({ app, plant, command }) {
+  const removeBody = await treeLiteral('theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts', /removeExtensionBody: '([^']+)'/);
+  const A = await openTab(app, '/a');
+  await live.makeCurrent(app, A);
+  await waitForSelected(app, A, '/a');
+  await setPinned(app, [fixtureId('action')]);
+  await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
+  const set = await command('storageSet', { items: { pbKept: 'before-remove' } });
+  const before = await command('storageGet');
+  if (!set.ok || before.result?.pbKept !== 'before-remove') {
+    return verdict(false, null, `BROKEN INSTRUMENT: the action fixture's storage.local did not take the planted value: ${JSON.stringify(before)}`);
+  }
+  if (plant?.name === 'remove-keeps-storage') {
+    // Gecko's own switches for keeping an uninstalled extension's id and data: the copy then promises what Remove does not do.
+    await live.inChrome(app, `Services.prefs.setBoolPref('extensions.webextensions.keepStorageOnUninstall', true);
+      Services.prefs.setBoolPref('extensions.webextensions.keepUuidOnUninstall', true); return true;`);
+  }
+  await clickInFrame(app, '.pb-ext-puzzle');
+  await puzzleRowMenu(app, 'action', 'Remove Extension');
+  const shown = await pollUntil(() => app.evaluate("document.querySelector('.pb-ext-menu .pb-ext-menu-body')?.textContent ?? null"), t => typeof t === 'string', 5000);
+  if (shown !== removeBody) {
+    return verdict(false, null, `Remove copy differs: the confirm row reads ${JSON.stringify(shown)}, the copy table ${JSON.stringify(removeBody)}`);
+  }
+  await clickInFrame(app, '.pb-ext-menu .pb-ext-confirm-remove');
+  if (!(await pollUntil(() => addonGone(app, fixtureId('action')), g => g, 15000))) {
+    return verdict(false, null, "BROKEN INSTRUMENT: the confirm row's Remove did not uninstall the action fixture");
+  }
+  const from = session.logs.length;
+  await installFixture(app, 'action');
+  if (!(await waitSince(from, r => r.kind === 'started', 20000))) {
+    throw new Error('BROKEN INSTRUMENT: the reinstalled action fixture never started');
+  }
+  const after = await command('storageGet');
+  if (!after.ok || Object.keys(after.result ?? {}).length) {
+    return verdict(false, null, `reinstall kept old storage: storage.local after Remove and reinstall is ${JSON.stringify(after.result ?? after.error)}`);
+  }
+  // Remove unpins (the row left the pinned set); pinning it again must give one button, not a stale second one.
+  await setPinned(app, [fixtureId('action')]);
+  await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
+  const buttons = await pollUntil(() => barButtons(app), b => b.filter(x => x.id === fixtureId('action')).length === 1, 10000, 3);
+  if (!buttons) {
+    return verdict(false, null, `after the reinstall the bar does not show exactly one action button: ${JSON.stringify(await barButtons(app))}`);
+  }
+  return verdict(true, `the confirm row read ${JSON.stringify(removeBody)}; after Remove and reinstall storage.local was empty and one action button showed`, null);
+}
+
+// Chrome-side recorder of the sidebar panel browser's visibility writes and the extension panel's popuphidden events.
+const FRONTEND_GONE_RECORDER = `const f = [...document.querySelectorAll('browser')].find(b => b.getAttribute('src') === 'chrome://browser/content/webext-panels.xhtml');
+  const p = document.querySelector('panel.browser-extension-panel');
+  if (!f || !p) return JSON.stringify({ landed: false, frame: !!f, panel: !!p });
+  window.__pbGone = { visibility: [], hidden: 0 };
+  new MutationObserver(() => window.__pbGone.visibility.push(f.style.visibility)).observe(f, { attributes: true, attributeFilter: ['style'] });
+  p.addEventListener('popuphidden', () => { window.__pbGone.hidden++; });
+  return JSON.stringify({ landed: true });`;
+
+async function scenarioFrontendReload({ app, plant }) {
+  await installFixture(app, 'surfaces');
+  if (!(await waitSince(0, r => r.kind === 'surfaces-started'))) throw new Error('BROKEN INSTRUMENT: the surfaces fixture background page never started');
+  const up = "a reloaded frontend left the popup or sidebar up";
+  const A = await openTab(app, '/a');
+  await live.makeCurrent(app, A);
+  await waitForSelected(app, A, '/a');
+  await setPinned(app, [fixtureId('popup')]);
+  await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
+  await clickInFrame(app, '.pb-ext-puzzle');
+  await puzzleRowMenu(app, 'surfaces', 'Show Sidebar');
+  const viewUp = s => s.view.attached && s.view.visible && s.frame.present && s.frame.visibility === 'visible';
+  const both = async () => ({ view: await sidebarView(app), frame: await sidebarFrame(app) });
+  if (!(await pollUntil(both, viewUp, 20000))) {
+    throw new Error(`BROKEN INSTRUMENT: the sidebar view did not open before the reload: ${JSON.stringify(await both())}`);
+  }
+  await pollUntil(() => barButtons(app), b => b.some(x => x.id === fixtureId('popup')), 10000);
+  await clickInFrame(app, actionButton('popup'));
+  if (!(await pollUntil(() => popupState(app), p => p.panel === 'open', 10000))) {
+    throw new Error(`BROKEN INSTRUMENT: the popup did not open before the reload: ${JSON.stringify(await popupState(app))}`);
+  }
+  const rec = JSON.parse(await live.inChrome(app, FRONTEND_GONE_RECORDER));
+  if (!rec.landed) throw new Error(`BROKEN INSTRUMENT: the frontend-gone recorder found no sidebar browser or panel: ${JSON.stringify(rec)}`);
+  if (plant?.name === 'frontend-gone-ignored') {
+    // WR-05's defect: nothing takes the popup and the sidebar browser down when the frontend dies.
+    await live.inChrome(app, `const f = [...document.querySelectorAll('browser')].find(b => b.getAttribute('src') === 'chrome://browser/content/webext-panels.xhtml');
+      const s = f.style; Object.defineProperty(s, 'visibility', { configurable: true, get: () => 'visible', set: () => {} });
+      const p = document.querySelector('panel.browser-extension-panel'); p.hidePopup = () => {};
+      return true;`);
+  }
+  await app.evaluate('(() => { window.__pbBeforeReload = true; return true; })()');
+  await app.evaluateIn(app.chrome, "(() => { document.getElementById('powerbrowser-content').reload(); return true; })()");
+  const downSeen = await pollUntil(() => live.inChrome(app, 'return JSON.stringify(window.__pbGone);').then(JSON.parse),
+    g => g.hidden >= 1 && g.visibility.includes('hidden'), 20000);
+  if (!downSeen) {
+    return verdict(false, null, `${up}: the recorder saw ${JSON.stringify(JSON.parse(await live.inChrome(app, 'return JSON.stringify(window.__pbGone);')))} (want a popuphidden and a hidden sidebar browser)`);
+  }
+  // The reloaded frontend re-subscribes on its own; the view and the panel browser come back.
+  const back = await pollUntil(async () => (await app.evaluate('window.__pbBeforeReload === true').catch(() => true)) ? { view: {}, frame: {} } : both(), viewUp, 60000);
+  if (!back) {
+    return verdict(false, null, `after the reload the sidebar view did not come back with its page: ${JSON.stringify(await both())}`);
+  }
+  // A frontend that has already re-subscribed is left alone: a second subscribe does not hide it.
+  const mark = JSON.parse(await live.inChrome(app, 'return JSON.stringify(window.__pbGone);')).visibility.length;
+  await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
+  await sleep(2000);
+  const later = JSON.parse(await live.inChrome(app, 'return JSON.stringify(window.__pbGone);')).visibility.slice(mark);
+  const still = await both();
+  if (later.includes('hidden') || !viewUp(still)) {
+    return verdict(false, null, `a re-subscribed frontend was not left alone: visibility writes ${JSON.stringify(later)}, now ${JSON.stringify(still)}`);
+  }
+  return verdict(true, `the reload closed the popup (popuphidden) and hid the sidebar browser; after the re-subscribe the view returned with its page, and a second subscribe left it shown`, null);
+}
+
+/** One private-access session: the denied and allowed fixtures, the allowed one granted private-window access. */
+async function privateSession(prefs, fn) {
+  session = { logs: [], queue: [], queues: {} };
+  return live.withProbeShell(async app => {
+    await installFixture(app, 'private-denied');
+    await installFixture(app, 'private-allowed');
+    for (const kind of ['private-denied-started', 'private-allowed-started']) {
+      if (!(await waitSince(0, r => r.kind === kind, 20000))) throw new Error(`BROKEN INSTRUMENT: no ${kind} record`);
+    }
+    return fn(app);
+  }, { extraPrefs: { ...SESSION_PREFS, ...prefs } });
+}
+
+// Grants an installed fixture private-window access and reloads it, as about:addons' Run in Private Windows does.
+async function grantPrivate(app, name) {
+  const from = session.logs.length;
+  const out = await app.evaluateIn(app.chrome, `(async () => {
+    const { ExtensionPermissions } = ChromeUtils.importESModule('resource://gre/modules/ExtensionPermissions.sys.mjs');
+    const { AddonManager } = ChromeUtils.importESModule('resource://gre/modules/AddonManager.sys.mjs');
+    await ExtensionPermissions.add(${JSON.stringify(fixtureId(name))}, { permissions: ['internal:privateBrowsingAllowed'], origins: [] });
+    await (await AddonManager.getAddonByID(${JSON.stringify(fixtureId(name))})).reload();
+    return WebExtensionPolicy.getByID(${JSON.stringify(fixtureId(name))})?.privateBrowsingAllowed === true;
+  })()`);
+  if (out !== true || !(await waitSince(from, r => r.kind === `${name}-started`, 20000))) {
+    throw new Error(`BROKEN INSTRUMENT: ${name} was not granted private-window access (${out})`);
+  }
+}
+
+// Stock windows: context id and whether each is private.
+async function stockWindowsPrivacy(app) {
+  const out = [];
+  for (const c of (await app.contexts('chrome')).filter(e => e.url.startsWith('chrome://browser/content/browser.xhtml'))) {
+    out.push({ ctx: c.context, private: await app.evaluateIn(c.context, "ChromeUtils.importESModule('resource://gre/modules/PrivateBrowsingUtils.sys.mjs').PrivateBrowsingUtils.isWindowPrivate(window)") });
+  }
+  return out;
+}
+
+// The stock windows holding a tab on `spec`, with their privacy.
+async function windowsHolding(app, spec) {
+  const out = [];
+  for (const w of await stockWindowsPrivacy(app)) {
+    if (await app.evaluateIn(w.ctx, `gBrowser.tabs.some(t => t.linkedBrowser.currentURI.spec === ${JSON.stringify(spec)})`).catch(() => false) === true) out.push(w);
+  }
+  return out;
+}
+
+async function scenarioPrivateAccess({ plant }) {
+  const rule = 'private access rule not applied';
+  const denied = fixtureId('private-denied');
+  const allowed = fixtureId('private-allowed');
+  const refusal = await treeLiteral('powerbrowser/shell/PowerBrowserAPI.sys.mjs', /"(PowerBrowser refused to open that page: this extension is not allowed in private windows\.)"/);
+  // Session 1: permanent private browsing, so the shell window is private. The plant leaves it off.
+  const autostart = plant?.name === 'shell-not-private' ? {} : { 'browser.privatebrowsing.autostart': true };
+  // A shell whose IDE never loads under permanent private browsing is this rule's failure too: nothing can be read.
+  const first = await privateSession(autostart, async app => {
+    await grantPrivate(app, 'private-allowed');
+    const shellPrivate = await app.evaluateIn(app.chrome, "ChromeUtils.importESModule('resource://gre/modules/PrivateBrowsingUtils.sys.mjs').PrivateBrowsingUtils.isWindowPrivate(window)");
+    const A = await openTab(app, '/a');
+    await live.makeCurrent(app, A);
+    await waitForSelected(app, A, '/a');
+    await setPinned(app, [denied, allowed]);
+    await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
+    // The allowed fixture is the positive control for every absence of the denied one.
+    const buttons = await pollUntil(() => barButtons(app), b => b.some(x => x.id === allowed), 10000);
+    if (!buttons) throw new Error(`BROKEN INSTRUMENT: the allowed fixture's button never showed: ${JSON.stringify(await barButtons(app))}`);
+    await clickInFrame(app, '.pb-ext-puzzle');
+    const rows = await pollUntil(() => puzzleRows(app), r => r.some(x => x.id === allowed), 10000);
+    await clickInFrame(app, '.pb-ext-puzzle');
+    if (!rows) throw new Error('BROKEN INSTRUMENT: the allowed fixture has no puzzle row');
+    if (buttons.some(x => x.id === denied) || rows.some(x => x.id === denied)) {
+      return verdict(false, null, `${rule}: with the shell private (${shellPrivate}) the denied extension shows a button (${buttons.some(x => x.id === denied)}) or a puzzle row (${rows.some(x => x.id === denied)})`);
+    }
+    // Keys, with the page focused: the denied sidebar key does nothing, the allowed one opens its view.
+    if (!(await live.focusOverlay(app, A))) throw new Error('BROKEN INSTRUMENT: page /a could not be focused');
+    await live.pressKey(app, { key: 'I', code: 'KeyI', keyCode: 73, modifiers: ['alt', 'shift'] });
+    await sleep(2000);
+    const afterDenied = await sidebarView(app);
+    if (afterDenied.attached) {
+      return verdict(false, null, `${rule}: the denied extension's Alt+Shift+I opened a sidebar view (${afterDenied.label})`);
+    }
+    if (!(await live.focusOverlay(app, A))) throw new Error('BROKEN INSTRUMENT: page /a could not be focused again');
+    await live.pressKey(app, { key: 'O', code: 'KeyO', keyCode: 79, modifiers: ['alt', 'shift'] });
+    if (!(await pollUntil(() => sidebarView(app), v => v.attached && v.label === 'PB private allowed', 10000))) {
+      throw new Error(`BROKEN INSTRUMENT: the allowed extension's Alt+Shift+O did not open its sidebar (${JSON.stringify(await sidebarView(app))}), so the denied key's silence means nothing`);
+    }
+    // Options pages: the denied one is refused with the copy from the tree, the allowed one opens stock-side.
+    const deniedOptions = await command('options', {}, 'private-denied');
+    if (deniedOptions.ok || !String(deniedOptions.error).includes(refusal)) {
+      return verdict(false, null, `${rule}: the denied extension's openOptionsPage ${deniedOptions.ok ? 'opened' : `was refused with '${deniedOptions.error}'`}, want '${refusal}'`);
+    }
+    const allowedUrl = (await command('url', { path: 'options.html' }, 'private-allowed')).result;
+    await command('options', {}, 'private-allowed');
+    if (!(await pollUntil(() => windowsHolding(app, allowedUrl), w => w.length === 1, 30000))) {
+      return verdict(false, null, `${rule}: the allowed extension's options page did not open in a stock window`);
+    }
+    return { ok: true, detail: `shell private ${shellPrivate}: denied has no button, puzzle row or sidebar key, its options page refused ('${refusal}'); allowed shows all and its options page opened` };
+  }).catch(error => {
+    if (String(error?.message).startsWith('BROKEN INSTRUMENT')) throw error;
+    return verdict(false, null, `${rule}: with browser.privatebrowsing.autostart the shell's IDE never loaded, so no private-window rule could be read (${error?.message ?? error})`);
+  });
+  // Session 2: no autostart. The denied extension's options page goes to a non-private window, or a new one.
+  const second = await privateSession({}, async app => {
+    const deniedUrl = (await command('url', { path: 'options.html' }, 'private-denied')).result;
+    await live.probe(app, `await get('CommandRegistry').executeCommand('powerbrowser.open-browser-window', ${JSON.stringify(`${STOCK_ORIGIN}/s`)}); return true;`);
+    const normal = await pollUntil(() => stockWindowsPrivacy(app), w => w.length === 1 && w[0].private === false, 30000);
+    if (!normal) throw new Error('BROKEN INSTRUMENT: no non-private stock window opened');
+    await app.evaluateIn(normal[0].ctx, '(() => { window.OpenBrowserWindow({ private: true }); return true; })()');
+    const both = await pollUntil(() => stockWindowsPrivacy(app), w => w.length === 2 && w.some(x => x.private), 30000);
+    if (!both) throw new Error('BROKEN INSTRUMENT: no private stock window opened');
+    await sleep(1500);
+    await command('options', {}, 'private-denied');
+    const holders = await pollUntil(() => windowsHolding(app, deniedUrl), w => w.length >= 1, 30000);
+    if (!holders || holders.length !== 1 || holders[0].private || holders[0].ctx !== normal[0].ctx) {
+      return verdict(false, null, `${rule}: with a private stock window open last the denied options page is in ${JSON.stringify(holders)}, want the one non-private window`);
+    }
+    // Close the non-private window: only the private one is left, so the page must take a new non-private window.
+    await app.evaluateIn(normal[0].ctx, '(() => { setTimeout(() => window.close(), 0); return true; })()');
+    const onlyPrivate = await pollUntil(() => stockWindowsPrivacy(app), w => w.length === 1 && w[0].private, 15000);
+    if (!onlyPrivate) throw new Error('BROKEN INSTRUMENT: the non-private stock window did not close');
+    await command('options', {}, 'private-denied');
+    const fresh = await pollUntil(() => windowsHolding(app, deniedUrl), w => w.length === 1, 30000);
+    if (!fresh || fresh[0].private) {
+      return verdict(false, null, `${rule}: with only a private stock window open the denied options page is in ${JSON.stringify(fresh)}, want a new non-private window`);
+    }
+    return { ok: true, detail: 'with a private window open last the denied options page opened in the non-private window; with only a private window it opened a new non-private one' };
+  });
+  // Both sessions always run, so one run reports the permanent-private leg and the stock-window leg.
+  if (!first.ok || !second.ok) {
+    return verdict(false, null, [first, second].filter(r => !r.ok).map(r => r.fail).join('; ') + (second.ok ? `; the stock-window leg passed (${second.detail})` : ''));
+  }
+  return verdict(true, `${first.detail}; ${second.detail}`, null);
+}
+
 const SCENARIOS_TABLE = {
   'popup-action': scenarioPopupAction,
   buttons: scenarioButtons,
@@ -737,11 +1014,14 @@ const SCENARIOS_TABLE = {
   commands: scenarioCommands,
   'event-page-wake': scenarioEventPageWake,
   'policies-shell-only': scenarioPoliciesShellOnly,
+  'remove-copy': scenarioRemoveCopy,
+  'frontend-reload': scenarioFrontendReload,
+  'private-access': scenarioPrivateAccess,
 };
 // Scenarios that run on a relaunched shell after the content fixture's XPI install (no temporary fixture).
 const RELAUNCH_SCENARIOS = new Set(['content', 'page-action', 'event-page-wake']);
 // 39-04: scenarios that launch their own session (the plant seeds the profile before the first launch).
-const SELF_LAUNCH_SCENARIOS = new Set(['policies-shell-only']);
+const SELF_LAUNCH_SCENARIOS = new Set(['policies-shell-only', 'private-access']);
 // 38-04 (B5): scenarios that install the surfaces fixture alone, so its background is the only reader of /cmd.
 const B5_SCENARIOS = new Set(['sidebar', 'tab-pages', 'commands']);
 
@@ -763,6 +1043,9 @@ const PLANTS_TABLE = {
   'commands-never-fire': { scenario: 'commands', expect: 'the shortcut did not fire with the page /a focused' },
   'startup-promises-rearmed': { scenario: 'event-page-wake', expect: 'the event page never woke with no stock window' },
   'policy-default-prerecorded': { scenario: 'policies-shell-only', expect: 'the policy Default engine was not applied with no stock window' },
+  'remove-keeps-storage': { scenario: 'remove-copy', expect: 'reinstall kept old storage' },
+  'frontend-gone-ignored': { scenario: 'frontend-reload', expect: 'a reloaded frontend left the popup or sidebar up' },
+  'shell-not-private': { scenario: 'private-access', expect: 'private access rule not applied' },
 };
 const SCENARIOS = SCENARIOS_TABLE;
 const PLANTS = PLANTS_TABLE;
@@ -851,6 +1134,14 @@ async function startHarness() {
       session.queue = [];
       return;
     }
+    // 39-13: a fixture with its own channel polls /cmd-<channel>.
+    if (path.startsWith('/cmd-')) {
+      const channel = path.slice('/cmd-'.length);
+      res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
+      res.end(JSON.stringify(session.queues?.[channel] ?? []));
+      if (session.queues) session.queues[channel] = [];
+      return;
+    }
     if (/^\/([a-z]|wake)$/.test(path)) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       res.end(`<!doctype html><title>page ${path}</title><body>live page ${path}<img src="/img${path}.png" alt=""></body>`);
@@ -875,9 +1166,14 @@ async function waitSince(from, pred, timeoutMs = 15000) {
 }
 
 // One command for the action fixture's background page: queued on /cmd, answered on /log.
-async function command(op, args = {}) {
+async function command(op, args = {}, channel = '') {
   const opId = `op${++opSeq}`;
-  session.queue.push({ op, opId, ...args });
+  if (channel) {
+    session.queues = session.queues ?? {};
+    (session.queues[channel] = session.queues[channel] ?? []).push({ op, opId, ...args });
+  } else {
+    session.queue.push({ op, opId, ...args });
+  }
   const rec = await waitSince(0, r => r.kind === 'result' && r.opId === opId, 20000);
   if (!rec) throw new Error(`timed out waiting for the ${op} answer`);
   return rec;
