@@ -267,6 +267,16 @@ const PAGES = {
     '/proto': { title: 'Protocol', body: '<p>protocol page</p>' },
     '/handler': { title: 'Handler', body: '<p>handler</p>' },
     // 39-10 adopted-parity: a page with its own icon, so LinkHandlerParent hands the tab host's setIcon an icon.
+    // 39-11 pending-window-reports: at load, before its adoption ack, the page asks for location, starts a camera track (the
+    // session skips the camera prompt), opens a gesture-less popup, registers a handler, then runs past the hang limit.
+    '/pending': { title: 'Pending', body: `<p>pending page</p><script>
+        window.__pbOut = {};
+        navigator.geolocation.getCurrentPosition(() => {}, () => {});
+        navigator.mediaDevices.getUserMedia({ video: true }).then(s => { window.__pbStreams = [s]; window.__pbOut.cam = 'granted'; }, e => { window.__pbOut.cam = e.name; });
+        window.open(location.origin + '/c');
+        navigator.registerProtocolHandler('web+pbpend', location.origin + '/handler?u=%s');
+        setTimeout(() => { const end = Date.now() + 60000; while (Date.now() < end) { /* hung */ } }, 300);
+    </script>` },
     '/icon': { title: 'Icon', body: `<link rel="icon" href="data:image/png;base64,${ICON_PNG}"><p>icon page</p>` },
 };
 
@@ -1663,6 +1673,112 @@ async function scenarioCameraThenGeo(app, fx, plant) {
     return off || !kinds.includes('camera') ? `${CAMERA_CLEARED} (${off ? 'an all-off push' : `marks ${kinds.join(',') || 'none'}`})` : null;
 }
 
+const PENDING_LOST = 'a report made before the adoption ack was lost';
+/** How long the harness holds the frontend's webTabAdopt ack: inside chrome's 5 s fallback (ADOPT_ACK_TIMEOUT_MS). */
+const ACK_HOLD_MS = 3500;
+
+/**
+ * WR-01: everything the page reports while its overlay waits for the adoption ack (pc-N) is shown at the ack: a location
+ * prompt's pending push, the camera mark, the blocked-popup, protocol-handler and hung-script bars. The harness holds the
+ * frontend's ack; the session's hang limit is one second, so the report lands inside the hold, and its camera starts with
+ * no prompt (media.navigator.permission.disabled), as a site with a remembered grant would.
+ */
+async function scenarioPendingWindowReports(app, fx, plant) {
+    const schemes = ['web+pbpend'];
+    // Another site than every other tab (localhost, not 127.0.0.1), so the page has a content process of its own: a hang
+    // report names a process, and the stock match (IsReportForBrowserOrChildren) takes the first tab in it.
+    const pendingOrigin = fx.origin.replace('127.0.0.1', 'localhost');
+    try {
+        const opener = await openPage(app, fx, '/opener');
+        const held = await probe(app, `const c = get('WebTabChannel'); const real = c.request.bind(c);
+            c.request = async m => { if (m && m.kind === 'webTabAdopt') { await new Promise(r => setTimeout(r, ${ACK_HOLD_MS})); } return real(m); };
+            c.request.held = true;
+            return c.request.held === true;`);
+        if (!held) {
+            return `${BROKEN} the adoption ack could not be held`;
+        }
+        if (plant === 'pending-report-dropped') {
+            // WR-01 as reviewed: a sharing report for an overlay with no tab id yet is dropped before anything is stored.
+            const applied = await inChrome(app, `const g = window.gBrowser, real = g.updateBrowserSharing;
+                g.updateBrowserSharing = (b, st) => (W.tabIdOfBrowser(b) === null ? undefined : real.call(g, b, st));
+                g.updateBrowserSharing.planted = true;
+                return g.updateBrowserSharing.planted === true;`);
+            if (!applied) {
+                return `${BROKEN} the pending-report-dropped plant did not take`;
+            }
+        }
+        const before = new Set((await mainOrder(app)).map(w => w.tabId));
+        const from = (await pushes(app)).length;
+        await app.send('script.evaluate', { expression: `(window.open(${JSON.stringify(`${pendingOrigin}/pending`)}), true)`, target: { context: opener.ctx }, awaitPromise: false, userActivation: true });
+        const tab = await pollFor(async () => (await mainOrder(app)).find(w => !before.has(w.tabId)) ?? null, 15000, 'the adopted tab').catch(() => null);
+        if (!tab) {
+            return `${BROKEN} the held adoption produced no tab (chrome's fallback may have taken it)`;
+        }
+        const id = tab.tabId;
+        const seen = async pred => (await waitForPush(app, pred, { from, timeoutMs: 8000 })) >= 0;
+        const lost = [];
+        if (!await seen(isSharing(id, { camera: true }))) {
+            lost.push('camera');
+        }
+        if (!await seen(isDoorhanger(id, true))) {
+            lost.push('location prompt');
+        }
+        for (const barKind of ['blocked-popup', 'protocol-handler', 'hung-script']) {
+            if (!await seen(isBar(id, barKind, true))) {
+                lost.push(`${barKind} bar`);
+            }
+        }
+        if (!lost.length && !await pollFor(async () => ((await indicatorKinds(app)).includes('camera') ? true : null), 5000, 'the camera mark').catch(() => false)) {
+            lost.push('camera mark');
+        }
+        // Teardown: the hung page's own Stop, so the shared content process answers the rest of the session.
+        await clickBar(app, id, 'hung-script', 'stop-script').catch(() => null);
+        return lost.length ? `${PENDING_LOST} (${lost.join(', ')})` : null;
+    } finally {
+        await forgetHandlers(app, schemes);
+    }
+}
+
+const NAV_LEFT_ON = 'navigation left a sharing mark on';
+
+/** WR-02: share the camera, navigate the tab; a sharingChanged push with all false arrives and every mark goes off. */
+async function scenarioNavResetsSharing(app, fx, plant) {
+    const page = await openPage(app, fx, '/a');
+    await startRequest(app, page, 'camlive');
+    if (!await waitInPanel(app, page.tabId, WEBRTC_ID)) {
+        return 'no stock webRTC-shareDevices doorhanger for the camera';
+    }
+    await answerStock(app, page.tabId, { id: WEBRTC_ID });
+    if (await outcome(app, page, 'camlive') !== 'granted' || await waitForPush(app, isSharing(page.tabId, { camera: true })) < 0) {
+        return 'the camera was not shared through the stock Allow';
+    }
+    if (!await pollFor(async () => ((await indicatorKinds(app)).includes('camera') ? true : null), 5000, 'the camera mark').catch(() => false)) {
+        return `${BROKEN} the chrome bar shows no camera mark while the track is live, so its absence after the navigation proves nothing`;
+    }
+    if (plant === 'nav-reset-dropped') {
+        // WR-02 as reviewed: the navigation's reset never reaches Theia. The all-off sharingChanged for this tab is dropped
+        // at chrome's one push call (the frame's group actor).
+        const applied = await inChrome(app, `const a = document.getElementById('powerbrowser-content').browsingContext.currentWindowGlobal.getActor('PowerBrowserGroup');
+            const real = a.sendAsyncMessage;
+            a.sendAsyncMessage = function (name, p) {
+                if (p && p.kind === 'sharingChanged' && p.tabId === ${JSON.stringify(page.tabId)} && !p.camera && !p.microphone && !p.screen) return undefined;
+                return real.apply(this, arguments);
+            };
+            return a.sendAsyncMessage !== real;`);
+        if (!applied) {
+            return `${BROKEN} the nav-reset-dropped plant did not take`;
+        }
+    }
+    const from = (await pushes(app)).length;
+    await app.send('browsingContext.navigate', { context: page.ctx, url: fx.url('/b'), wait: 'none' });
+    if (await waitForPush(app, loadedAt(page.tabId, '/b'), { from }) < 0) {
+        return `${BROKEN} the tab never loaded /b`;
+    }
+    const reset = await waitForPush(app, isSharing(page.tabId, { camera: false, microphone: false, screen: false }), { from, timeoutMs: 5000 }) >= 0;
+    const kinds = await indicatorKinds(app);
+    return reset && !kinds.length ? null : `${NAV_LEFT_ON} (all-off push ${reset}, marks ${kinds.join(',') || 'none'})`;
+}
+
 const SCENARIOS = {
     permission: scenarioPermission,
     'answer-delay': scenarioAnswerDelay,
@@ -1672,6 +1788,7 @@ const SCENARIOS = {
     sharing: scenarioSharing,
     'camera-doorhanger': scenarioCameraDoorhanger,
     'camera-then-geo': scenarioCameraThenGeo,
+    'nav-resets-sharing': scenarioNavResetsSharing,
     'dialog-probe': scenarioDialogProbe,
     dialog: scenarioDialog,
     'stop-repeat': scenarioStopRepeat,
@@ -1683,6 +1800,7 @@ const SCENARIOS = {
     'adopted-bar-navigate': scenarioAdoptedBarNavigate,
     'adopted-parity': scenarioAdoptedParity,
     'hung-script': scenarioHungScript,
+    'pending-window-reports': scenarioPendingWindowReports,
     'protocol-handler': scenarioProtocolHandler,
 };
 
@@ -1711,6 +1829,8 @@ const PLANTS = [
     { plant: 'adopted-close-cleanup-skipped', target: 'adopted-bar-navigate', expect: 'closing the adopted tab left a pending mark' },
     { plant: 'opener-kept-on-close', target: 'adopted-parity', expect: 'opener not cleared on close' },
     { plant: 'geo-report-clears-camera', target: 'camera-then-geo', expect: 'the location grant cleared the camera mark' },
+    { plant: 'pending-report-dropped', target: 'pending-window-reports', expect: 'a report made before the adoption ack was lost' },
+    { plant: 'nav-reset-dropped', target: 'nav-resets-sharing', expect: 'navigation left a sharing mark on' },
     { plant: 'hung-stop-ignored', target: 'hung-script', expect: 'Stop script did not terminate the loop' },
     { plant: 'protocol-stock-path-unhooked', target: 'protocol-handler', expect: 'stock protocol bar path reached: getNotificationBox TypeError' },
 ];
@@ -1727,8 +1847,14 @@ const KEEP_PROMPTS = { alwaysMatch: { unhandledPromptBehavior: { default: 'ignor
  */
 const X11_CAPTURE = { prefs: { [PIPEWIRE_PREF]: false }, env: { MOZ_ENABLE_WAYLAND: '0', GDK_BACKEND: 'x11', XDG_SESSION_TYPE: 'x11' } };
 
+/** 39-11: pending-window-reports needs a one-second hang limit and a camera that starts at load with no prompt. */
+const ROUTES = {
+    sharing: X11_CAPTURE,
+    'pending-window-reports': { prefs: { [HANG_PREF]: 1, 'media.navigator.permission.disabled': true }, env: {} },
+};
+
 async function runSession(name, plant) {
-    const route = name === 'sharing' ? X11_CAPTURE : { prefs: {}, env: {} };
+    const route = ROUTES[name] ?? { prefs: {}, env: {} };
     // firefox-bidi spawns the browser with process.env, so the route's env is set for this session and restored after.
     const saved = Object.fromEntries(Object.keys(route.env).map(k => [k, process.env[k]]));
     Object.assign(process.env, route.env);
