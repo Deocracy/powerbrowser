@@ -94,14 +94,19 @@
  *                       through the handler service); Don't allow on a second
  *                       scheme stores nothing.
  *
- * 37-REVIEW fixes held statically (verify-permission-prompts rules (ab), (ac),
- * (ae)) and not yet a scenario here; the end-of-milestone live pass checks
- * them by hand on a built binary: an adopted tab's geolocation prompt shows
- * while that tab is current and not while a host tab is (CR-01); a bar on an
- * adopted tab clears when it navigates, and closing it drops its prompts and
- * bars (CR-01); camera live, then a location grant, and the camera mark stays
- * (CR-02); a camera report before the adoption ack lights the mark at the ack
- * (WR-01); share the camera, navigate, and every mark goes off (WR-02).
+ *   adopted-prompt   -- (39-10, 37-REVIEW CR-01) an adopted tab's location prompt
+ *                       shows while it is current, hides for a host tab and the
+ *                       IDE, and no host tab's prompt shows over it;
+ *   adopted-bar-navigate -- (39-10, CR-01) an adopted tab's bar clears when it
+ *                       navigates; closing it sends pending:false and leaves no mark;
+ *   adopted-parity   -- (39-10, CR-01) an adopted tab is a tab-host node: the
+ *                       extension tab tracker resolves it, its favicon is pushed,
+ *                       F12 opens its toolbox, its opener is cleared on close;
+ *   camera-then-geo  -- (39-10, CR-02) a location grant while a camera track is
+ *                       live leaves the camera mark lit.
+ *
+ * The default run and a full self-test skip dialog-probe and dialog while
+ * REQUIREMENTS.md records PROMPT-03 deferred (OQ1 ruling; see deferredSkips).
  *
  * --self-test runs a clean control session per target scenario, then one
  * session per planted fault, each required to go red naming its drift.
@@ -122,7 +127,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { captureShell } from './lib/pb-kwin.mjs';
 import { REPO_ROOT } from './lib/pb-relaunch.mjs';
-import { BROKEN, WEB_TAB_STATE_EVENT, inChrome, loadedAt, makeCurrent, openWebTab, pollFor, probe, pushes, serveNavPages, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
+import { BROKEN, WEB_TAB_STATE_EVENT, focusOverlay, inChrome, isState, loadedAt, makeCurrent, openWebTab, pollFor, pressKey, probe, pushes, serveNavPages, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
 
 const NAME = 'prompts-live';
 const SELF = fileURLToPath(import.meta.url);
@@ -245,8 +250,13 @@ const REQUESTS = {
     camera: { id: 'webRTC-shareDevices', start: "navigator.mediaDevices.getUserMedia({ video: true }).then(() => done('granted'), e => done(e.name === 'NotAllowedError' ? 'denied' : 'granted'))" },
     // 37-02 sharing: the streams are kept on the page so the scenario can stop their tracks.
     av: { id: WEBRTC_ID, start: "navigator.mediaDevices.getUserMedia({ audio: true, video: true }).then(s => { (window.__pbStreams = window.__pbStreams || []).push(s); done('granted'); }, e => done(e.name === 'NotAllowedError' ? 'denied' : 'failed: ' + e.name))" },
+    // 39-10 camera-then-geo: a camera track kept live on the page.
+    camlive: { id: WEBRTC_ID, start: "navigator.mediaDevices.getUserMedia({ video: true }).then(s => { (window.__pbStreams = window.__pbStreams || []).push(s); done('granted'); }, e => done(e.name === 'NotAllowedError' ? 'denied' : 'failed: ' + e.name))" },
     screen: { id: WEBRTC_ID, start: "navigator.mediaDevices.getDisplayMedia({ video: true }).then(s => { (window.__pbStreams = window.__pbStreams || []).push(s); done('granted'); }, e => done(e.name === 'NotAllowedError' ? 'denied' : 'failed: ' + e.name))" },
 };
+
+/** A 1x1 PNG, the /icon page's favicon. */
+const ICON_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
 const PAGES = {
     ...Object.fromEntries(['a', 'b', 'c', 'd', 'e'].map(p => [`/${p}`, { title: `Prompt ${p}`, body: `<p>prompt page ${p}</p>` }])),
@@ -256,6 +266,8 @@ const PAGES = {
     '/hang': { title: 'Hang', body: '<p>hang page</p>' },
     '/proto': { title: 'Protocol', body: '<p>protocol page</p>' },
     '/handler': { title: 'Handler', body: '<p>handler</p>' },
+    // 39-10 adopted-parity: a page with its own icon, so LinkHandlerParent hands the tab host's setIcon an icon.
+    '/icon': { title: 'Icon', body: `<link rel="icon" href="data:image/png;base64,${ICON_PNG}"><p>icon page</p>` },
 };
 
 /** BROKEN INSTRUMENT when there is no built binary carrying the current patch 050; null when there is. */
@@ -1541,6 +1553,116 @@ async function scenarioAdoptedBarNavigate(app, fx, plant) {
     return dropped && marks === 0 ? null : `${CLOSE_MARK} (pending:false pushed ${dropped}, strip marks ${marks})`;
 }
 
+const NO_NODE = 'adopted tab has no tab-host node';
+const NO_TOOLBOX = 'F12 opened no toolbox for the adopted tab';
+const OPENER_KEPT = 'opener not cleared on close';
+
+/** CR-01c: an adopted tab is a tab-host node: its favicon, F12, the extension tab tracker, and its opener cleared on close. */
+async function scenarioAdoptedParity(app, fx, plant) {
+    const host = await openPage(app, fx, '/opener');
+    const adopted = await openAdopted(app, fx, host, '/icon');
+    if (!adopted) {
+        return `${BROKEN} the page's own window.open produced no adopted tab`;
+    }
+    const a = JSON.stringify(adopted.tabId);
+    const node = await inChrome(app, `const g = window.gBrowser, o = overlayOf(${a}), h = overlayOf(${JSON.stringify(host.tabId)});
+        const n = o && g.getTabForBrowser(o);
+        if (!n) return null;
+        const { ExtensionParent } = ChromeUtils.importESModule('resource://gre/modules/ExtensionParent.sys.mjs');
+        const tracker = ExtensionParent.apiManager.global.tabTracker;
+        const id = tracker.getId(n);
+        return { inStrip: [...g.tabs].includes(n), tracked: tracker.getTab(id, null) === n, opener: !!h && n.openerTab === g.getTabForBrowser(h) };`);
+    if (!node || !node.inStrip) {
+        return `${NO_NODE} (${JSON.stringify(node)})`;
+    }
+    if (!node.tracked) {
+        return `${NO_NODE}: the extension tab tracker does not resolve it`;
+    }
+    if (!node.opener) {
+        return `${BROKEN} the adopted tab's openerTab does not name its opener's node, so clearing it on close proves nothing`;
+    }
+    if (await waitForPush(app, p => isState(adopted.tabId, false)(p) && String(p.favicon ?? '').startsWith('data:image/'), { timeoutMs: 10000 }) < 0) {
+        return 'the adopted tab got no favicon push';
+    }
+    // F12 from the focused adopted page: the shortcut push, then chrome's own toolbox list (DevToolsShim) for its overlay.
+    await makeCurrent(app, adopted.tabId);
+    if (!await focusOverlay(app, adopted.tabId)) {
+        return `${BROKEN} the adopted page could not be focused to press F12`;
+    }
+    const from = (await pushes(app)).length;
+    await pressKey(app, { key: 'F12', code: 'F12', keyCode: 123 });
+    if (await waitForPush(app, p => p && p.kind === 'shortcut' && p.id === 'devtoolsOpen' && p.tabId === adopted.tabId, { from, timeoutMs: 5000 }) < 0) {
+        return `${NO_TOOLBOX}: F12 sent no devtoolsOpen shortcut push`;
+    }
+    const toolboxes = () => inChrome(app, `const { DevToolsShim } = ChromeUtils.importESModule('chrome://devtools-startup/content/DevToolsShim.sys.mjs');
+        const o = overlayOf(${a});
+        return o ? DevToolsShim.getToolboxes().filter(t => t.commands?.descriptorFront?.browserId === o.browserId).length : -1;`);
+    if (!await pollFor(async () => (await toolboxes() === 1 ? true : null), 15000, 'the toolbox').catch(() => false)) {
+        return `${NO_TOOLBOX} (${await toolboxes()} toolboxes for its overlay)`;
+    }
+    if (plant === 'opener-kept-on-close') {
+        // What a missing close cleanup leaves: the adopted node's openerTab ignores the write that clears it.
+        const applied = await inChrome(app, `const n = window.gBrowser.getTabForBrowser(overlayOf(${a})); const kept = n.openerTab;
+            Object.defineProperty(n, 'openerTab', { configurable: true, get: () => kept, set() {} });
+            n.openerTab = null;
+            return n.openerTab === kept && kept !== null;`);
+        if (!applied) {
+            return `${BROKEN} the opener-kept-on-close plant did not take`;
+        }
+    }
+    if (!await closeTab(app, host.tabId)) {
+        return `${BROKEN} the opener tab has no widget to close`;
+    }
+    const cleared = await pollFor(async () => (await inChrome(app, `const n = window.gBrowser.getTabForBrowser(overlayOf(${a})); return !!n && n.openerTab === null;`) ? true : null), 5000, 'the opener to clear').catch(() => false);
+    return cleared ? null : OPENER_KEPT;
+}
+
+const CAMERA_CLEARED = 'the location grant cleared the camera mark';
+
+/** CR-02: a page with a live camera track is granted location through the stock panel; the camera mark stays lit. */
+async function scenarioCameraThenGeo(app, fx, plant) {
+    const page = await openPage(app, fx, '/a');
+    await startRequest(app, page, 'camlive');
+    if (!await waitInPanel(app, page.tabId, WEBRTC_ID)) {
+        return 'no stock webRTC-shareDevices doorhanger for the camera';
+    }
+    await answerStock(app, page.tabId, { id: WEBRTC_ID });
+    if (await outcome(app, page, 'camlive') !== 'granted') {
+        return 'the camera was not granted through the stock Allow';
+    }
+    if (await waitForPush(app, isSharing(page.tabId, { camera: true })) < 0) {
+        return 'no sharingChanged push with the camera live';
+    }
+    if (!await pollFor(async () => ((await indicatorKinds(app)).includes('camera') ? true : null), 5000, 'the camera mark').catch(() => false)) {
+        return 'the chrome bar shows no camera mark while the track is live';
+    }
+    if (plant === 'geo-report-clears-camera') {
+        // CR-02 as reviewed: a report with no webRTC part ({ geo }, from PermissionUI) is read as nothing shared.
+        const applied = await inChrome(app, `const g = window.gBrowser, real = g.updateBrowserSharing;
+            g.updateBrowserSharing = (b, s) => real.call(g, b, s && !('webRTC' in s) ? { ...s, webRTC: {} } : s);
+            g.updateBrowserSharing.planted = true;
+            return g.updateBrowserSharing.planted === true;`);
+        if (!applied) {
+            return `${BROKEN} the geo-report-clears-camera plant did not take`;
+        }
+    }
+    const from = (await pushes(app)).length;
+    await startGeo(app, page);
+    if (!await waitInPanel(app, page.tabId)) {
+        return 'no stock location doorhanger while the camera is live';
+    }
+    await answerStock(app, page.tabId);
+    if (await geoOutcome(app, page) !== 'granted') {
+        return 'stock Allow did not grant the location (the positive control is red)';
+    }
+    // PermissionUI reports { geo } through updateBrowserSharing on the grant; give its push time to land.
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    const off = (await pushes(app)).slice(from).find(p => isSharing(page.tabId, { camera: false })(p));
+    const kinds = await indicatorKinds(app);
+    await stopTracks(app, page);
+    return off || !kinds.includes('camera') ? `${CAMERA_CLEARED} (${off ? 'an all-off push' : `marks ${kinds.join(',') || 'none'}`})` : null;
+}
+
 const SCENARIOS = {
     permission: scenarioPermission,
     'answer-delay': scenarioAnswerDelay,
@@ -1549,6 +1671,7 @@ const SCENARIOS = {
     remember: scenarioRemember,
     sharing: scenarioSharing,
     'camera-doorhanger': scenarioCameraDoorhanger,
+    'camera-then-geo': scenarioCameraThenGeo,
     'dialog-probe': scenarioDialogProbe,
     dialog: scenarioDialog,
     'stop-repeat': scenarioStopRepeat,
@@ -1558,6 +1681,7 @@ const SCENARIOS = {
     'popup-block': scenarioPopupBlock,
     'adopted-prompt': scenarioAdoptedPrompt,
     'adopted-bar-navigate': scenarioAdoptedBarNavigate,
+    'adopted-parity': scenarioAdoptedParity,
     'hung-script': scenarioHungScript,
     'protocol-handler': scenarioProtocolHandler,
 };
@@ -1585,6 +1709,8 @@ const PLANTS = [
     { plant: 'adopt-next-to-opener-failed', target: 'popup-block', expect: 'popup not adopted next to its opener' },
     { plant: 'adopted-selection-stale', target: 'adopted-prompt', expect: 'adopted tab prompt hidden while it is current' },
     { plant: 'adopted-close-cleanup-skipped', target: 'adopted-bar-navigate', expect: 'closing the adopted tab left a pending mark' },
+    { plant: 'opener-kept-on-close', target: 'adopted-parity', expect: 'opener not cleared on close' },
+    { plant: 'geo-report-clears-camera', target: 'camera-then-geo', expect: 'the location grant cleared the camera mark' },
     { plant: 'hung-stop-ignored', target: 'hung-script', expect: 'Stop script did not terminate the loop' },
     { plant: 'protocol-stock-path-unhooked', target: 'protocol-handler', expect: 'stock protocol bar path reached: getNotificationBox TypeError' },
 ];
