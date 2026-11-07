@@ -390,7 +390,7 @@
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -416,7 +416,7 @@ import {
     WEB_TAB_STATE_EVENT,
     withProbeShell,
 } from './lib/pb-live-probe.mjs';
-import { GET_BY_NAME, pollFor, probe, sourceConst, sourceMatch } from './lib/pb-relaunch.mjs';
+import { GET_BY_NAME, REPO_ROOT, pollFor, probe, sourceConst, sourceMatch } from './lib/pb-relaunch.mjs';
 
 const NAME = 'verify-address-bar-live';
 const ENTER = { key: 'Enter', code: 'Enter', keyCode: 13 };
@@ -6023,7 +6023,12 @@ const APP_MENU_BUILDER = await import(new URL('../theia/extensions/chrome-bar/sr
 const MENU_WIDGET_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx';
 const MENU_COMMANDS_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts';
 const STOCK_WINDOW_COMMAND_ID = sourceConst('theia/extensions/tab-uris/src/browser/browser-window-command.ts', 'OPEN_BROWSER_WINDOW_COMMAND_ID');
-const ROADMAP_MENU = sourceMatch('.planning/ROADMAP.md', /### Phase 33:[\s\S]*?The app menu reaches (.+?); Actions mode runs/).split(/,\s*|\s+and\s+/).map(x => x.trim()).filter(Boolean);
+// The Phase 33 criterion moves to .planning/milestones/vX.Y-ROADMAP.md when its milestone closes; ROADMAP.md is read first.
+const ROADMAP_MENU_RE = /### Phase 33:[\s\S]*?The app menu reaches (.+?); Actions mode runs/;
+const ROADMAP_MENU_REL = ['.planning/ROADMAP.md', ...(existsSync(join(REPO_ROOT, '.planning/milestones'))
+    ? readdirSync(join(REPO_ROOT, '.planning/milestones')).filter(f => f.endsWith('-ROADMAP.md')).sort().reverse().map(f => `.planning/milestones/${f}`)
+    : [])].find(rel => existsSync(join(REPO_ROOT, rel)) && ROADMAP_MENU_RE.test(readFileSync(join(REPO_ROOT, rel), 'utf8'))) ?? '.planning/ROADMAP.md';
+const ROADMAP_MENU = sourceMatch(ROADMAP_MENU_REL, ROADMAP_MENU_RE).split(/,\s*|\s+and\s+/).map(x => x.trim()).filter(Boolean);
 
 /** A hamburger row's label as drawn: CHROME_BAR_COPY through the widget's switch; a template's fixed prefix (`Quit `) as a RegExp. */
 function menuRowLabel(menuId) {

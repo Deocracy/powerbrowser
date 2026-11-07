@@ -145,82 +145,13 @@ project's own planning record rather than only inside the allowlist file — an
 allow entry nobody had to write down is one nobody has to defend. Repointing
 them per a downstream's manifest is Phase 4's TEL-03.
 
-### Phase 39: v1.5 Close-out
-
-**Goal:** Fix every open v1.5 defect and finish the end-of-milestone pass, so v1.5 Chrome Bar Firefox Parity closes with no green-by-exclusion rows (Chris, 2026-11-05: "fix all three", "fix all 13", "every deferral well documented").
-**Requirements**: PROMPT-04, PROMPT-06, PROMPT-08 (C22-C24 live), EXT-01..EXT-10 (999.15/999.16), plus the live halves of every v1.5 requirement whose UAT row is still pending
-**Depends on:** Phase 38
-**Plans:** 20/20 plans executed
-
-**Scope:**
-1. Product fixes: C22 the `title=` page tooltip never opens; C23 the saved-login autocomplete popup never opens; C24 Copy Image leaves no image flavour on the clipboard; C11 page-menu dismissal `focusPage()` race (999.10).
-2. Every backlog row 999.4-999.16 fixed, none deferred: 999.4 bookmarks-toolbar order-dependent instrument failure; 999.5 nav-keys Back leg with no interaction; 999.6 mode-tokens `*x` flake; 999.11 opener-null plant anchor; 999.12 KDE portal chooser for screen sharing; 999.13 four prompts self-test plants re-sited; 999.14 kwinShot raises the shell before spectacle; 999.15 event-page wake and 999.16 enterprise policies with no stock window — one root cause (`browser-delayed-startup-finished` / `sessionstore-windows-restored` are sent only by a stock window), landing as a regenerated patch 050 plus a Gecko rebuild.
-3. `scripts/verify-platform.sh` and `--gate` green with `page-furniture-live` and its self-test included.
-4. Every automatable pending UAT item in phases 27, 31.1, 32, 33, 34, 35, 36, 37, 38 run by Claude (live harnesses, gsd-browser, KWin raise + spectacle) and recorded in the UAT file; 32-UAT.md gets the page-tools PASS from the 2026-11-04 sweep; 34-UAT.md is rewritten to the UAT template so `uat.complete-session` parses it.
-5. The ~20 owner-decision UAT rows (32 T11; 36 T18; 37 T34-T41; 38 T31-T40) each get a one-line recommendation and are put to Chris per phase through the AskUserQuestion box.
-6. Bookkeeping: REQUIREMENTS.md rows v1.5 delivered ticked, ROADMAP boxes for phases 27-38 ticked, WINDOWS.md updated.
-7. Anything still unresolved at the end is documented as a backlog row plus a WINDOWS.md entry carrying repro, cause-so-far and the source UAT test, so a later version can pick it up without rediscovery. Human-only checks (human eye, portal click) are collected into one checklist for Chris.
-
-Runs autonomously on main (`/gsd-autonomous`); it stops only for the owner-call batches, the human-only checklist and the push.
-
-Plans:
-**Wave 1**
-- [x] 39-01-PLAN.md (wave 1) — Baseline: 34-UAT rewritten, real-input gate (pb-kwin), C24 bisect, symlink check, full registry red list in 39-BASELINE.md
-
-**Wave 2** *(blocked on Wave 1 completion)*
-- [x] 39-02-PLAN.md (wave 2) — Tracer: C11 page-menu dismissal race fixed end to end (guard, plant, workaround removed, 999.10 ticked)
-- [x] 39-03-PLAN.md (wave 2) — Owner batch A: OQ1 plus phases 32, 33, 36, 37, 38 in the box; rulings recorded
-
-**Wave 3** *(blocked on Wave 2 completion)*
-- [x] 39-04-PLAN.md (wave 3) — 999.15/999.16: patch 050 sections, guard rows G14/G15, no-compile go-live, live scenarios
-
-**Wave 4** *(blocked on Wave 3 completion)*
-- [x] 39-05-PLAN.md (wave 4) — C24 Copy Image and C22 title tooltip, diagnose then fix
-
-**Wave 5** *(blocked on Wave 4 completion)*
-- [x] 39-06-PLAN.md (wave 5) — C23 saved-login popup, diagnose then fix; 35 T16-T18 scenarios
-
-**Wave 6** *(blocked on Wave 5 completion)*
-- [x] 39-07-PLAN.md (wave 6) — 35 T19-T20 scenarios; page-furniture rows through the registry; 35-UAT recorded
-
-**Wave 7** *(blocked on Wave 6 completion)*
-- [x] 39-08-PLAN.md (wave 7) — Harness fixes 999.4, 999.6, 999.5
-
-**Wave 8** *(blocked on Wave 7 completion)*
-- [x] 39-09-PLAN.md (wave 8) — Prompts harness 999.14, 999.13, 999.12 (X11 sharing route)
-
-**Wave 9** *(blocked on Wave 8 completion)*
-- [x] 39-10-PLAN.md (wave 9) — OQ1 ruling implemented, probe 1 live, 37 T18-T21 scenarios
-
-**Wave 10** *(blocked on Wave 9 completion)*
-- [x] 39-11-PLAN.md (wave 10) — 37 T22-T25 scenarios; prompts rows through the registry; 37-UAT recorded
-
-**Wave 11** *(blocked on Wave 10 completion)*
-- [x] 39-12-PLAN.md (wave 11) — 999.11 and 36 T12-T16 scenarios; 36-UAT recorded
-
-**Wave 12** *(blocked on Wave 11 completion)*
-- [x] 39-13-PLAN.md (wave 12) — 38 T22, T24-T30 scenarios; extension rows through the registry; 38-UAT recorded
-
-**Wave 13** *(blocked on Wave 12 completion)*
-- [x] 39-14-PLAN.md (wave 13) — EXT-10 fill on a local Vaultwarden (38 T31, option b)
-
-**Wave 14** *(blocked on Wave 13 completion)*
-- [x] 39-15-PLAN.md (wave 14) — Real OS input rows: 27 T1-T4, 34 T1/T6/T13, 36 T5, 38 T23
-
-**Wave 15** *(blocked on Wave 14 completion)*
-- [x] 39-16-PLAN.md (wave 15) — 33 T6 edit-greying; 32 and 34 remaining rows; page-tools and tab-strip rows recorded
-
-**Wave 16** *(blocked on Wave 15 completion)*
-- [x] 39-17-PLAN.md (wave 16) — Owner batch B: phases 27, 31.1, 34, 35 with live evidence; rulings recorded
-
-**Wave 17** *(blocked on Wave 16 completion)*
-- [x] 39-18-PLAN.md (wave 17) — Ruled changes: 31.1 T3 error-page allow-list, 34 T1 drag-handle carve-out
-
-**Wave 18** *(blocked on Wave 17 completion)*
-- [x] 39-19-PLAN.md (wave 18) — Full registry and --gate; residuals and follow-ups to backlog rows and WINDOWS.md
-
-**Wave 19** *(blocked on Wave 18 completion)*
-- [x] 39-20-PLAN.md (wave 19) — REQUIREMENTS/ROADMAP close-out, the human-only checklist, one human-verify stop
+**Added in v1.5 (EXT-09, Phase 38 plan 05, deliberately):** three add-ons site
+hosts — **addons.mozilla.org** (the site the puzzle menu's install footer opens
+in the stock browser window, which also serves the signed XPIs), and
+**versioncheck.addons.mozilla.org** and **versioncheck-bg.addons.mozilla.org**
+(the user-requested and periodic update checks of add-ons installed from it).
+They are contacted only after the user opens the site or installs from it.
+Named here for the same `allowlist-doc-consistency` reason as the three above.
 
 ---
 

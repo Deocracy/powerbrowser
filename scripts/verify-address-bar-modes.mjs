@@ -112,7 +112,7 @@
  *   node scripts/verify-address-bar-modes.mjs --self-test
  */
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -522,7 +522,17 @@ async function runAt(tablePath, srcs) {
 
 const read = rel => readFileSync(join(REPO_ROOT, rel), 'utf8');
 const SOURCES = [TABLE_REL, WIDGET_REL, COPY_REL, ADDRESS_BAR_REL, MODES_REL, CENTRE_REL, CMD_REL, MENU_TABLE_REL, APP_MENU_REL, ROADMAP_REL];
-const readSources = () => Object.fromEntries(SOURCES.map(rel => [rel, read(rel)]));
+/** ROADMAP.md first, then the archived milestone roadmaps: the Phase 33 criterion moves to `.planning/milestones/vX.Y-ROADMAP.md` when its milestone closes. */
+const MILESTONES_REL = '.planning/milestones';
+function readRoadmapWithCriterion() {
+    const archived = existsSync(join(REPO_ROOT, MILESTONES_REL))
+        ? readdirSync(join(REPO_ROOT, MILESTONES_REL)).filter(f => f.endsWith('-ROADMAP.md')).sort().reverse().map(f => `${MILESTONES_REL}/${f}`)
+        : [];
+    return [ROADMAP_REL, ...archived]
+        .map(rel => (existsSync(join(REPO_ROOT, rel)) ? readFileSync(join(REPO_ROOT, rel), 'utf8') : ''))
+        .find(text => deriveRoadmapMenu(text)) ?? read(ROADMAP_REL);
+}
+const readSources = () => Object.fromEntries(SOURCES.map(rel => [rel, rel === ROADMAP_REL ? readRoadmapWithCriterion() : read(rel)]));
 
 async function main() {
     const { oks, failures } = await runAt(join(REPO_ROOT, TABLE_REL), readSources());
