@@ -321,9 +321,13 @@ const pointerOrigins = new Map();
  * is the shell's KWin frame geometry plus the document's mozInnerScreenX/Y, scaled by devicePixelRatio over the
  * output scale; it is calibrated by a hover read-back: the pointer moves to the mapped point, the document's last
  * trusted mousemove reports where it landed, and the origin is corrected until the read-back is within 2 px (at
- * most five attempts). Throws "calibration failed" with the measured error otherwise. `spec` is osPointer's.
+ * most five attempts). Throws "calibration failed" with the measured error otherwise. `spec` is osPointer's, plus
+ * `calibrateAt` (a client point to calibrate on when the target itself cannot be read back).
  */
-export async function osClientPointer(app, context, { x, y, ...spec }) {
+export async function osClientPointer(app, context, { x: tx, y: ty, calibrateAt, ...spec }) {
+    // `calibrateAt`: calibrate on that client point of the same document, then act at (tx, ty) through the same
+    // mapping -- for a target that raises no mousemove in the document (a native window-drag handle over it).
+    const { x, y } = calibrateAt ?? { x: tx, y: ty };
     await shellActiveOnce(app);
     const doc = JSON.parse(await app.evaluateIn(context, `(() => {
         if (!window.__pbHoverInstalled) {
@@ -367,7 +371,9 @@ export async function osClientPointer(app, context, { x, y, ...spec }) {
             pointerOrigins.set(key, origin);
             pointerRoute.last = 'os';
             pointerRoute.calibration = { attempts: attempt + 1, error: [ex, ey], ratio, tries };
-            return spec.action === 'move' ? { x: sx, y: sy } : osPointer({ x: sx, y: sy, ...spec });
+            const ax = Math.round(origin.x + tx * ratio);
+            const ay = Math.round(origin.y + ty * ratio);
+            return spec.action === 'move' && !calibrateAt ? { x: sx, y: sy } : osPointer({ x: ax, y: ay, ...spec });
         }
         origin = { x: origin.x - ex * ratio, y: origin.y - ey * ratio };
     }

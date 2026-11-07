@@ -143,6 +143,7 @@ import { newProfile, runCheck, withShell, withShellQuit } from './lib/ng-a-live.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { REPO_ROOT } from './lib/ng-a-live.mjs';
+import { activeWindow } from './lib/pb-kwin.mjs';
 import { appNameExpr, focusTheiaFrame, keyRoute, osClientPointer, overlayVisibility, pointerRoute, pressKey, probe, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
 
 const NAME = 'tab-strip-live';
@@ -318,6 +319,7 @@ async function pointer(app, context, actions, { release = true } = {}) {
 }
 
 const moveTo = (x, y) => ({ type: 'pointerMove', x: Math.round(x), y: Math.round(y) });
+const pointerAt = (...args) => pointer(...args);
 
 /** keyboard-menu: WR-04's keyboard origin for the tab menu, Enter/Space activation, and a right-click at the pointer. */
 async function keyboardMenu({ app, pages, expect, plant }) {
@@ -511,7 +513,12 @@ async function middle({ app, pages, expect, plant }) {
         const ed = document.createElement('div');
         ed.id = 'pb-paste-frame';
         ed.contentEditable = 'true';
-        Object.assign(ed.style, { position: 'fixed', left: '40%', top: '60%', width: '200px', height: '40px', zIndex: '99999', background: '#fff' });
+        // Real input (39-15): the page overlay covers the main area and the strip's gaps are chrome drag handles, so the
+        // Theia-frame editable sits over /b's strip tab, Theia DOM a real pointer reaches.
+        const bTab = rect(tabEl(S.b));
+        Object.assign(ed.style, ${JSON.stringify(process.env.PB_REAL_INPUT === '1')}
+            ? { position: 'fixed', left: bTab.left + 'px', top: bTab.top + 'px', width: (bTab.right - bTab.left) + 'px', height: (bTab.bottom - bTab.top) + 'px', zIndex: '99999', background: '#fff' }
+            : { position: 'fixed', left: '40%', top: '60%', width: '200px', height: '40px', zIndex: '99999', background: '#fff' });
         document.body.appendChild(ed);
         S.framePaste = [];
         for (const type of ['input', 'paste']) ed.addEventListener(type, () => S.framePaste.push(type));
@@ -537,6 +544,11 @@ async function middle({ app, pages, expect, plant }) {
     })()`));
     const pagePaste = async () => JSON.parse(await app.evaluateIn(overlay, 'JSON.stringify(window.__pbPaste || [])'));
     const theia = await theiaContext(app);
+    const real = process.env.PB_REAL_INPUT === '1';
+    // 39-15: with PB_REAL_INPUT=1 every middle-click is a real OS button press, calibrated in the document it lands in.
+    const pointer = real
+        ? (app, context, actions) => osClientPointer(app, context, { x: actions[0].x, y: actions[0].y, button: 'middle', action: 'click' }).then(() => new Promise(r => setTimeout(r, 300)))
+        : pointerAt;
 
     // Positive controls: a real middle-click paste into each seeded editable is caught.
     const sentinel = `pb-strip-sentinel-${Date.now()}`;
@@ -552,6 +564,9 @@ async function middle({ app, pages, expect, plant }) {
     // The claim: middle-click on /a's strip tab closes /a and pastes nowhere.
     await setSelection(app, sentinel);
     await app.evaluateIn(overlay, 'window.__pbPaste = []; true');
+    // 34 T6 (real input): text selected in the page behind, and the page's text read before and after the tab middle-click.
+    const pageText = () => app.evaluateIn(overlay, 'document.body.textContent');
+    const textBefore = real ? await app.evaluateIn(overlay, 'getSelection().selectAllChildren(document.body.firstElementChild || document.body); document.body.textContent') : null;
     await step(app, 'middle: reset', "S.framePaste = []; document.getElementById('pb-paste-frame').focus(); return true;");
     await pointer(app, theia, middleClick(setup.a.x, setup.a.y));
     const closed = await step(app, 'middle: after the tab middle-click', `
@@ -569,6 +584,11 @@ async function middle({ app, pages, expect, plant }) {
         expect(pageAfter.length === 0, `middle: the tab middle-click pasted into the page (${pageAfter.join(', ')})`);
     }
     expect(closed.current, 'middle: closing /a by middle-click changed the current tab away from /b');
+    if (real) {
+        const textAfter = await pageText();
+        expect(textAfter === textBefore, `middle: with text selected in the page, the tab middle-click changed the page text (${JSON.stringify(textBefore)} -> ${JSON.stringify(textAfter)})`);
+        console.log(`  middle: pointer ${pointerRoute.last} ${JSON.stringify(pointerRoute.calibration?.error)} after ${pointerRoute.calibration?.attempts} attempt(s); controls frame ${controls.frame.length} page ${pageControl.length}; page text unchanged ${textAfter === textBefore}`);
+    }
 }
 
 /** double: TAB-03 double-click on the empty strip. */
@@ -580,13 +600,25 @@ async function double({ app, pages, expect, plant }) {
         const ids = stripIds();
         const last = rect(tabEl(ids[ids.length - 1]));
         const r = rect(row());
-        return { painted, x: Math.min(last.right + 40, r.right - 12), y: r.y, tooltip: row().getAttribute('title'), count: webTabs().length };
+        return { painted, x: Math.min(last.right + 40, r.right - 12), y: r.y, tab: rect(tabEl(S.a)), tooltip: row().getAttribute('title'), count: webTabs().length };
     `);
     expect(setup.painted, 'double: setup: /a is not painted in the strip');
     expect(setup.tooltip === copyRow('emptyStripTooltip'), `double: the empty strip's tooltip is ${JSON.stringify(setup.tooltip)}`);
     const theia = await theiaContext(app);
-    await pointer(app, theia, [moveTo(setup.x, setup.y), { type: 'pointerDown', button: 0 }, { type: 'pointerUp', button: 0 },
-        { type: 'pointerDown', button: 0 }, { type: 'pointerUp', button: 0 }]);
+    const real = process.env.PB_REAL_INPUT === '1';
+    let frameBefore;
+    if (real) {
+        // 34 T1: a native double-click on the strip row, which publishDragRegions sends as a window-drag handle.
+        // The strip's gaps are chrome-side drag handles over the Theia frame, so no mousemove reaches it there:
+        // calibrate on /a's tab (Theia DOM) and act on the gap through the same mapping.
+        const calibrateAt = { x: Math.round(setup.tab.x), y: Math.round(setup.tab.y) };
+        await osClientPointer(app, theia, { x: Math.round(setup.x), y: Math.round(setup.y), calibrateAt, action: 'move' });
+        frameBefore = activeWindow();
+        await osClientPointer(app, theia, { x: Math.round(setup.x), y: Math.round(setup.y), calibrateAt, button: 'left', action: 'double' });
+    } else {
+        await pointer(app, theia, [moveTo(setup.x, setup.y), { type: 'pointerDown', button: 0 }, { type: 'pointerUp', button: 0 },
+            { type: 'pointerDown', button: 0 }, { type: 'pointerUp', button: 0 }]);
+    }
     const opened = await step(app, 'double: after the double-click', `
         const grew = await until(() => webTabs().length === ${setup.count} + 1, 5000);
         await until(() => document.activeElement && document.activeElement.classList.contains('pb-chrome-bar-input'), 3000);
@@ -599,6 +631,14 @@ async function double({ app, pages, expect, plant }) {
     `);
     expect(opened.grew && opened.emptyPage, `double: a double-click on the empty strip opened no new tab on the empty page (${JSON.stringify(opened)})`);
     expect(opened.pillFocused, 'double: the new tab from the empty strip did not focus the pill');
+    if (real) {
+        await new Promise(r => setTimeout(r, 1000));
+        const frameAfter = activeWindow();
+        const geometry = w => w && `${w.x},${w.y} ${w.width}x${w.height}`;
+        expect(geometry(frameAfter) === geometry(frameBefore),
+            `double: the native double-click on the strip moved or resized the window (maximize toggle): ${geometry(frameBefore)} -> ${geometry(frameAfter)}`);
+        console.log(`  double: pointer ${pointerRoute.last} ${JSON.stringify(pointerRoute.calibration?.error)} after ${pointerRoute.calibration?.attempts} attempt(s); window ${geometry(frameBefore)} -> ${geometry(frameAfter)}`);
+    }
 }
 
 /** drop: TAB-08 link, text and refused drops on the strip. */
