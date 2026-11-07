@@ -869,13 +869,17 @@ async function scenarioFrontendReload({ app, plant }) {
   return verdict(true, `the reload closed the popup (popuphidden) and hid the sidebar browser; after the re-subscribe the view returned with its page, and a second subscribe left it shown`, null);
 }
 
-/** One private-access session: the denied and allowed fixtures, the allowed one granted private-window access. */
-async function privateSession(prefs, fn) {
+/**
+ * One private-access session: the denied and allowed fixtures, the allowed one granted private-window access.
+ * `started`: the background pages to wait for. Under permanent private browsing upstream starts none for an extension not
+ * allowed in private windows (ext-backgroundPage.js onManifestEntry), so neither fixture starts before grantPrivate.
+ */
+async function privateSession(prefs, fn, started = ['private-denied-started', 'private-allowed-started']) {
   session = { logs: [], queue: [], queues: {} };
   return live.withProbeShell(async app => {
     await installFixture(app, 'private-denied');
     await installFixture(app, 'private-allowed');
-    for (const kind of ['private-denied-started', 'private-allowed-started']) {
+    for (const kind of started) {
       if (!(await waitSince(0, r => r.kind === kind, 20000))) throw new Error(`BROKEN INSTRUMENT: no ${kind} record`);
     }
     return fn(app);
@@ -954,8 +958,17 @@ async function scenarioPrivateAccess({ plant }) {
     if (!(await pollUntil(() => sidebarView(app), v => v.attached && v.label === 'PB private allowed', 10000))) {
       throw new Error(`BROKEN INSTRUMENT: the allowed extension's Alt+Shift+O did not open its sidebar (${JSON.stringify(await sidebarView(app))}), so the denied key's silence means nothing`);
     }
-    // Options pages: the denied one is refused with the copy from the tree, the allowed one opens stock-side.
-    const deniedOptions = await command('options', {}, 'private-denied');
+    // Options pages: the denied one is refused with the copy from the tree, the allowed one opens stock-side. The denied
+    // background never runs here, so its openOptionsPage is sent as stock ext-browser.js sends it: the top window's
+    // switchToTabHavingURI with the extension's options URL and principal.
+    const deniedOptions = JSON.parse(await app.evaluateIn(app.chrome, `(() => {
+      const policy = WebExtensionPolicy.getByID(${JSON.stringify(denied)});
+      const url = policy.getURL('options.html');
+      try {
+        window.switchToTabHavingURI(url, true, { triggeringPrincipal: Services.scriptSecurityManager.createContentPrincipal(Services.io.newURI(url), {}) });
+        return JSON.stringify({ ok: true });
+      } catch (e) { return JSON.stringify({ ok: false, error: String((e && e.message) || e) }); }
+    })()`));
     if (deniedOptions.ok || !String(deniedOptions.error).includes(refusal)) {
       return verdict(false, null, `${rule}: the denied extension's openOptionsPage ${deniedOptions.ok ? 'opened' : `was refused with '${deniedOptions.error}'`}, want '${refusal}'`);
     }
@@ -965,7 +978,7 @@ async function scenarioPrivateAccess({ plant }) {
       return verdict(false, null, `${rule}: the allowed extension's options page did not open in a stock window`);
     }
     return { ok: true, detail: `shell private ${shellPrivate}: denied has no button, puzzle row or sidebar key, its options page refused ('${refusal}'); allowed shows all and its options page opened` };
-  }).catch(error => {
+  }, []).catch(error => {
     if (String(error?.message).startsWith('BROKEN INSTRUMENT')) throw error;
     return verdict(false, null, `${rule}: with browser.privatebrowsing.autostart the shell's IDE never loaded, so no private-window rule could be read (${error?.message ?? error})`);
   });
@@ -997,7 +1010,7 @@ async function scenarioPrivateAccess({ plant }) {
   });
   // Both sessions always run, so one run reports the permanent-private leg and the stock-window leg.
   if (!first.ok || !second.ok) {
-    return verdict(false, null, [first, second].filter(r => !r.ok).map(r => r.fail).join('; ') + (second.ok ? `; the stock-window leg passed (${second.detail})` : ''));
+    return verdict(false, null, [first, second].filter(r => !r.ok).map(r => r.fail).join('; ') + (first.ok ? `; the permanent-private leg passed (${first.detail})` : '') + (second.ok ? `; the stock-window leg passed (${second.detail})` : ''));
   }
   return verdict(true, `${first.detail}; ${second.detail}`, null);
 }

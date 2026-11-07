@@ -540,28 +540,34 @@ export const PowerBrowserAPI = Object.freeze({
     // sent. Every in-tree caller passes a future stamp regardless of the
     // session flag; aIsSession=true is still what ends it at session end.
     const expiry = Date.now() + 24 * 60 * 60 * 1000;
-    const validation = Services.cookies.add(
-      host,
-      path,
-      name,
-      value,
-      /* aIsSecure */ false,
-      /* aIsHttpOnly */ true,
-      /* aIsSession */ true,
-      /* aExpiry */ expiry,
-      /* aOriginAttributes */ {},
-      Ci.nsICookie.SAMESITE_LAX,
-      Ci.nsICookie.SCHEME_HTTP,
-      /* aIsPartitioned */ false
-    );
-    // add() reports a rejected cookie by returning a validation object rather
-    // than throwing. Discarding it turns "the token gate is unreachable" into a
-    // silent 403 at the far end of the swap, which is exactly how the expired
-    // aExpiry above went unnoticed. Fail loudly instead.
-    if (validation && validation.result !== Ci.nsICookieValidation.eOK) {
-      throw new Error(
-        `setSessionCookie: ${name} for ${host}${path} was rejected (${validation.result}): ${validation.errorString}`
+    // Under browser.privatebrowsing.autostart the shell window is private, so
+    // its Theia frame reads the private cookie jar (privateBrowsingId 1); with
+    // the default jar alone the sidecar answers 403 and Theia never loads.
+    const jars = lazy.PrivateBrowsingUtils.permanentPrivateBrowsing ? [{}, { privateBrowsingId: 1 }] : [{}];
+    for (const originAttributes of jars) {
+      const validation = Services.cookies.add(
+        host,
+        path,
+        name,
+        value,
+        /* aIsSecure */ false,
+        /* aIsHttpOnly */ true,
+        /* aIsSession */ true,
+        /* aExpiry */ expiry,
+        /* aOriginAttributes */ originAttributes,
+        Ci.nsICookie.SAMESITE_LAX,
+        Ci.nsICookie.SCHEME_HTTP,
+        /* aIsPartitioned */ false
       );
+      // add() reports a rejected cookie by returning a validation object rather
+      // than throwing. Discarding it turns "the token gate is unreachable" into a
+      // silent 403 at the far end of the swap, which is exactly how the expired
+      // aExpiry above went unnoticed. Fail loudly instead.
+      if (validation && validation.result !== Ci.nsICookieValidation.eOK) {
+        throw new Error(
+          `setSessionCookie: ${name} for ${host}${path} was rejected (${validation.result}): ${validation.errorString}`
+        );
+      }
     }
   },
 
