@@ -3,7 +3,7 @@ status: partial
 phase: 38-webextensions
 source: [38-VERIFICATION.md, 38-REVIEW.md, 38-01-SUMMARY.md, 38-02-SUMMARY.md, 38-03-SUMMARY.md, 38-04-SUMMARY.md, 38-05-SUMMARY.md, 38-CONTEXT.md, 38-VALIDATION.md]
 started: 2026-11-01T00:00:00Z
-updated: 2026-11-06T14:54:18.000Z
+updated: 2026-11-07T01:07:53.000Z
 ---
 
 Deferred to the one end-of-milestone pass covering Phases 32-38 (Chris, 2026-10-31). Nothing in this file has been run: the Phase 38 worktree has no objdir, and live runs are forbidden there.
@@ -162,6 +162,8 @@ command: |
   4. Without autostart, open a private stock window last, then trigger the options page.
 expected: Step 2: no puzzle row, no button, no Show Sidebar row; Alt+Shift+I with a page focused does nothing; the options page is refused with "PowerBrowser refused to open that page: this extension is not allowed in private windows." Step 3: the row, the sidebar and the options tab return. Step 4: the options page opens in a non-private stock window, or a new one if none is open
 result: [pending]
+partial: "Steps 1-3 pass live (session 1). Step 4 stays pending on 39-13 deferred item 3, a patch 050 owner call: stock openOptionsPage uses windowTracker.topWindow, so the denied extension's options page lands in the private stock window opened last"
+evidence: "39-13-fixups 2026-11-06, objdir/dist/bin/powerbrowser, commit 2942d39b (token cookie also in the private jar under browser.privatebrowsing.autostart): scenario private-access session 1 PASS -- 'the permanent-private leg passed (shell private true: denied has no button, puzzle row or sidebar key, its options page refused ('PowerBrowser refused to open that page: this extension is not allowed in private windows.'); allowed shows all and its options page opened)'. Control with the cookie fix reverted: session 1 red, 'the shell's IDE never loaded'. Session 2 still red: 'with a private stock window open last the denied options page is in [{\"private\":true}], want the one non-private window'"
 live: "39-13 lane-b 2026-11-06, objdir/dist/bin/powerbrowser (050 and 060 stamps matched): scenario private-access FAIL, two product defects deferred to main (39-13-SUMMARY). (1) With browser.privatebrowsing.autostart the shell IDE never loads: the frame shows the sidecar Forbidden page, because setSessionCookie adds the token cookie with empty origin attributes only. (2) With a private stock window open, the denied extension options page lands in the private window: stock openOptionsPage uses windowTracker.topWindow and that window own switchToTabHavingURI, not the shell receiver. Plant shell-not-private is in the table; the control is red, so it is unscored. Harness 728b962c"
 
 ### 23. Manual: a real keyboard and pointer on the popup
@@ -202,13 +204,15 @@ evidence: "39-13 lane-b 2026-11-06, objdir/dist/bin/powerbrowser (050 and 060 st
 ### 29. Review fix WR-05: a reloaded frontend takes its popup and sidebar down
 command: With an extension popup open and a sidebar view shown, reload the Theia frontend (Ctrl+R in the IDE)
 expected: The popup panel closes and the chrome sidebar browser hides; after the frontend re-subscribes, the sidebar view returns with its page, and a frontend that has already re-subscribed is left alone (`ac325805`; no live row, "reload behaviour needs a built binary")
-result: [pending]
+result: pass
+evidence: "39-13-fixups 2026-11-06, objdir/dist/bin/powerbrowser with the sidecar frontend rebuilt, commit fad221db (syncSidebar places the view once the frontend is ready): scenario frontend-reload PASS in 2 of 2 runs -- 'the reload closed the popup (popuphidden) and hid the sidebar browser; after the re-subscribe the view returned with its page, and a second subscribe left it shown'. Plant frontend-gone-ignored is in the table (harness 728b962c)"
 live: "39-13 lane-b 2026-11-06, objdir/dist/bin/powerbrowser (050 and 060 stamps matched): scenario frontend-reload FAIL on the return leg, product fix deferred to main (39-13-SUMMARY). The reload half holds: chrome saw popuphidden and the sidebar browser hidden. After the reloaded frontend re-subscribed, the view was re-added to the right area but stayed attached and not visible at width 0 for 60 s, so chrome kept the panel browser hidden. 4 of 4 runs. Plant frontend-gone-ignored is in the table; the control is red. Harness 728b962c"
 
 ### 30. Review fix WR-06: `openOptionsPage` switches to the open tab
 command: Call `browser.runtime.openOptionsPage()` twice from the `surfaces` fixture, once with a started stock window and once with the stock window still starting
 expected: The second call switches to the stock tab already showing the page and adds none; while the stock window is starting it waits for that window instead of opening a second one; no error is reported for a page that opened (`541ae2ea`)
-result: [pending]
+result: pass
+evidence: "39-13-fixups 2026-11-06, objdir/dist/bin/powerbrowser, commit 7dc0e61c (the started stock window's own switchToTabHavingURI reuses the shell's uncommitted options tab): scenario options-page-switch PASS in 5 of 5 runs -- 'a second call while the stock window was starting (still starting at the call: true) gave one stock window and one options tab; a third call switched to it and added none'. Before the fix, instrumented: the second call reached the stock window's own switchToTabHavingURI with the shell's options tab still on about:blank, 5 of 5 red. Plant options-no-reuse is in the table (harness e8186bee)"
 live: "39-13 lane-b 2026-11-06, objdir/dist/bin/powerbrowser (050 and 060 stamps matched): scenario options-page-switch PASS in 4 of 5 runs, including the registry row: a second call made while the stock window was still starting waited for that window, and a third call switched to the open tab and added none; plant options-no-reuse red. In 1 run a second call made while the window was starting added a second options tab in the one window, an intermittent race (fix deferred to main, 39-13-SUMMARY). Left pending for that race. Harness e8186bee"
 
 ### 31. Owner decision: EXT-10 password-manager fill under D-09
@@ -321,9 +325,9 @@ evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: webview-wall-off we
 ## Summary
 
 total: 47
-passed: 37
+passed: 39
 issues: 0
-pending: 9
+pending: 7
 skipped: 1
 blocked: 0
 
