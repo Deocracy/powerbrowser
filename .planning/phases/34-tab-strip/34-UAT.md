@@ -37,9 +37,8 @@ why: "Menu had never been opened"
 
 ### 4. Bookmark Tab and Bookmark All Tabs (BMK-07)
 expected: Scenario `bookmark-all`, then by hand: Bookmark Tab on one page, Bookmark All Tabs with three http(s) tabs, repeat on an already-bookmarked page, force a failure. Each tab reads back through readBookmarkByUrl with its own title and URL; the failure shows the bookmarkTabFailed sentence naming the application; no second bookmark appears for a repeated URL (IN-02: no pre-read exists today; judge whether Phase 33's idempotent queue covers it). Open: the by-hand Bookmark Tab steps and IN-02
-result: [pending]
-live: "v1.5 end-of-milestone pass, 2026-11-04, main: bookmark-all PASS; the by-hand steps and IN-02 remain"
-why: "Never ran; IN-02 is open"
+result: pass
+evidence: "39-16 (2026-11-06), main, 331ed734: `scripts/verify-platform.sh --only tab-strip-live` PASS, all 13 scenarios. bookmark-all now covers the by-hand steps. Bookmark Tab on /c bookmarks /c alone, with its title and URL, and leaves /a unbookmarked. Bookmark All Tabs over /a, /b (localhost) and /c bookmarks each with its own title and URL; /c is a repeat. Bookmark Tab on /a is then repeated. Places counts afterwards: /a 1 and /c 1. That answers IN-02: Phase 33's queued, idempotent bookmarkPage makes no second entry. A refused bookmarkPage shows the bookmarkTabFailed sentence, and that sentence contains the configured application name. `--only tab-strip-live-self-test` PASS: plant bookmark-all-drops-tab is red with 'was not bookmarked'; bookmark-repeat-duplicates (a second Places entry for /a) is red with 'a repeated bookmark created a second entry: /a has 2 Places bookmarks for its URL'; bookmark-failure-silent (the strip's callback swallows the rejection) is red with 'a failed bookmark was silent'"
 
 ### 5. Drag reorder and the pinned boundary (TAB-02, WR-02)
 expected: Scenario `reorder`: drag a tab within the strip; drag an unpinned tab over the pinned block and a pinned tab into the unpinned run; drag while the row is scrolled and the left edge-zone scrolls. The 2px indicator appears only for a move that will happen; the order sticks and matches the home TabBar order; a cross-boundary drop clamps to the dragged tab's block
@@ -59,12 +58,12 @@ expected: Scenario `drop`: drag a link out of a web page onto the strip, then a 
 result: [pending]
 live: "v1.5 end-of-milestone pass, 2026-11-04, main: drop PASS; drops from outside the browser and of a file remain by hand"
 why: "A drag from a Gecko overlay into the Theia frame crosses two documents"
+human: "drops from outside the browser and of a file (cross-application drag). 39-16: no harness can start a drag in another application, so this stays on Chris's checklist"
 
 ### 8. Overflow and List All Tabs (TAB-04)
 expected: Scenario `overflow`: open enough tabs to overflow; scroll the row; open the chevron menu and pick an off-screen tab. The chevron shows only while the row overflows; the picked tab becomes current and scrolls into view; scrolling does not leave the window-drag handles stale. Open: the sidecar DOM measure
-result: [pending]
-live: "v1.5 end-of-milestone pass, 2026-11-04, main: overflow PASS (Welcome tab counted, harness fix e3a8f5f1); the sidecar DOM measure remains"
-why: "Geometry needs a layout engine"
+result: pass
+evidence: "39-16 (2026-11-06), main, 331ed734: overflow PASS inside `scripts/verify-platform.sh --only tab-strip-live`. The DOM was measured in the built shell's Theia frame (Gecko layout) over BiDi; see the deviation in 39-16-SUMMARY. Strip narrowed to 300px: row scrollWidth 590, clientWidth 268, so it overflows. The List All Tabs chevron is at {left 272, right 296, top 4, bottom 28} and is absent at full width (the same session's control). The off-screen tab picked in List All Tabs becomes current and is drawn at {left 126, right 268} inside the row {left 0, right 268}. After a scroll to scrollLeft 322, chrome holds 13 .powerbrowser-drag handles: [[260,0,12,33],[296,0,984,33],[0,33,8,40],[40,33,8,40],[80,33,8,40],[120,33,8,40],[768,33,8,40],[808,33,8,40],[848,33,8,40],[888,33,8,40],[928,33,8,40],[968,33,8,40],[1272,33,8,40]]. None overlaps a visible tab, and they equal a fresh publishDragRegions() byte for byte, so the scroll left no stale handles"
 
 ### 9. Pin, icon-only, and restart persistence (TAB-05)
 expected: Scenario `pin-restore`: pin two tabs (one playing sound), quit, relaunch. The pins lead the strip as icon-only tabs in stored order; the previously current tab stays current; unpinning returns the tab after the block; the pinned tab's audio mark shows as a corner badge that fits the 32px tab (WR-06)
@@ -101,6 +100,7 @@ why: "openTabMenu (tab-strip-widget.tsx:1022-1024) decides keyboard origin with 
 expected: Pin a tab that plays sound; select several tabs including the active one; hover selected tabs. The 10px audio badge sits inside the 32px tab and stays clickable; the active tab inside a selection remains distinguishable; selected tabs show hover feedback (IN-01 is open, so it may not)
 result: [pending]
 why: "Visual"
+capture: "39-16 headed (331ed734, `PB_CAPTURE_DIR=... node scripts/verify-tab-strip-live.mjs --scenario badge-capture`): .planning/phases/39-v1-5-close-out/captures/34-T14-badge-and-selection.png. /a is pinned, and its widget is marked soundPlaying by the harness because the fixture pages are silent. /b is current and /c and /d are selected (DOM is-selected on c and d), with a real BiDi pointer resting on /c, so /c's preview card is open in the capture. The badge fit, the active-in-selection styling and the hover feedback (IN-01) are for Chris"
 
 ### 15. Judgment-tier prohibitions and open info findings
 expected: Review the Prohibitions table in 34-VERIFICATION.md (the judgment-tier rows) and 34-REVIEW IN-01..IN-12, still open. Owner confirms or rejects each non-authoritative verdict and decides whether any IN item (IN-12 lone-tab Close rows disabled rather than hidden; IN-06 colon text refused; IN-08 gate does not follow the command execute) must close before Phase 34 requirements turn complete
@@ -110,19 +110,19 @@ why: "unverified-prohibition, human review recommended"
 ## Summary
 
 total: 15
-passed: 8
+passed: 10
 issues: 0
-pending: 7
+pending: 5
 skipped: 0
 blocked: 0
 
 ## Gaps
 
-None recorded. Rows 1-2 wait on owner calls; rows 4, 6, 7 and 8 have a live pass and a by-hand remainder; rows 13-15 have not run.
+None recorded. Rows 1-2 wait on owner calls. Row 7 keeps a human-only remainder (drops from outside the browser). Row 14 has a capture waiting on Chris's verdict. Row 15 waits on the owner (39-16).
 
 ## Deferred Follow-Ups
 
-- Row 4: IN-02 (no pre-read before a repeated Bookmark Tab) is open.
+- Row 4: IN-02 is answered by 39-16. A repeated Bookmark Tab and a Bookmark All Tabs over an already-bookmarked page each leave one Places bookmark per URL (bookmark-all, 331ed734).
 - Row 9: IN-03 (pin restore may re-activate a stale current tab) and IN-11 (pins on id-keyed widgets) are open.
 - Row 14: IN-01 (selected tabs show no hover feedback) is open.
 - Row 15: 34-REVIEW IN-01..IN-12 await the owner's verdict.
