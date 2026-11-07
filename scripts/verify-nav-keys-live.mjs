@@ -167,6 +167,7 @@ import {
     waitForPush,
     withProbeShell,
 } from './lib/pb-live-probe.mjs';
+import { releaseButton } from './lib/pb-kwin.mjs';
 import { pollFor, probe, sourceConst } from './lib/pb-relaunch.mjs';
 import { buttonShortcuts, formatTooltip } from './verify-shortcut-relay.mjs';
 
@@ -761,7 +762,11 @@ async function realLongPress({ app, tabId, fail, note }) {
         // Off the button before the release: osClientPointer moves only (the hover read-back is the Theia frame's).
         await osClientPointer(app, theia, { ...pill, action: 'move' });
     } finally {
-        await osClientPointer(app, theia, { ...pill, button: 'left', action: 'up' }).catch(e => note(`release: ${e.message}`));
+        // WR-02: the gated release decides where it lands; when it throws, the raw release still lifts the button.
+        await osClientPointer(app, theia, { ...pill, button: 'left', action: 'up' }).catch(e => {
+            note(`release: ${e.message}; released without the gate`);
+            releaseButton('left');
+        });
     }
     note(`pointer ${pointerRoute.last}, calibration ${JSON.stringify(pointerRoute.calibration?.error)} after ${pointerRoute.calibration?.attempts} attempt(s)`);
     const focusAfter = await app.evaluate("(document.activeElement && (document.activeElement.className || document.activeElement.localName)) || 'none'");

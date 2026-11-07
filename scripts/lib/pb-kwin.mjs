@@ -320,6 +320,17 @@ export async function osPointer({ x, y, button = 'left', action = 'click', holdM
     return { x, y, button, action, window };
 }
 
+/**
+ * WR-02: releases `button` with no gate, for a `finally` after a gated press. The release goes to the surface that took
+ * the press (the pointer's implicit grab), so a refused gate must never leave the button held on the owner's desktop.
+ */
+export function releaseButton(button = 'left') {
+    if (!(button in BUTTON_CODES)) {
+        throw new Error(`releaseButton: unknown button ${JSON.stringify(button)}`);
+    }
+    ydotool(['click', `0x${(0x80 | BUTTON_CODES[button]).toString(16)}`]);
+}
+
 // Each plant must refuse all four sends with a "refused: active window" error naming `expect`.
 const PLANTS = [
     { name: 'class-mismatch', opts: { expectClass: 'pb-gate-plant-absent' }, expect: 'does not contain' },
