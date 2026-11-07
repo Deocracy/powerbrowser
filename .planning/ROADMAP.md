@@ -438,7 +438,7 @@ Plans:
 **Deferred at:** 2026-11-06, owner accepted 34-UAT test 15 with IN-01..IN-12 as follow-ups (IN-02 answered by 39-16, 331ed734); recorded as a backlog row in plan 39-19
 **Follow-ups:**
 - [ ] Test 15: 34-REVIEW IN-03 (pin restore activates every reopened tab, then may re-activate a stale current tab), IN-04 (`sessionRestored` rejection unhandled), IN-05 (multiselect anchor edge cases), IN-06 (plain text with a colon is refused instead of searched), IN-07 (`widget.id` can reach user-facing surfaces), IN-08 (gate check 6 does not follow callees of the three method bodies), IN-09 (`ChromeBarWidget` doc comment documents `TabBookmarkStore`), IN-10 (failure notice can be off-screen and never clears), IN-11 (pins on widgets without a URI are keyed by widget id), IN-12 (lone-tab Close family disabled rather than hidden). Decision text and repro per finding: `.planning/phases/34-tab-strip/34-REVIEW.md`. Source: 34-UAT test 15; IN-03 and IN-11 also source: 34-UAT test 9.
-- [ ] Test 14: IN-01, selected tabs show no hover feedback and lose the active tab's background. Repro: Ctrl-click two tabs, hover one (capture `.planning/phases/39-v1-5-close-out/captures/34-T14-badge-and-selection.png`). Source: 34-UAT test 14 and test 15.
+- [ ] Test 14: IN-01, selected tabs show no hover feedback and lose the active tab's background. Repro: Ctrl-click two tabs, hover one (capture `.planning/milestones/v1.5-phases/39-v1-5-close-out/captures/34-T14-badge-and-selection.png`). Source: 34-UAT test 14 and test 15.
 
 ### Phase 999.21: Follow-up — Phase 35 deferred UAT follow-up: Test 21 (BACKLOG)
 

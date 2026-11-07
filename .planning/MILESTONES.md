@@ -61,7 +61,7 @@
 
 ### Known Gaps
 - 46 v1.5 requirement rows unticked, each waiting on a human or owner item: SMODE-07, NAV-03..06, SITE-01..08, MENU-01..04, PAGE-01/04/05/06/07/10/11, BMK-01/02/04/05/06, TAB-05/06/08, EXT-06..10, PROMPT-01..09. 12 re-tick when the checklist passes (`39-20-DECISIONS.md`); PAGE-05 waits on backlog 999.19; PROMPT-03 is deferred to 999.3 (ledger 26).
-- `.planning/phases/39-v1-5-close-out/39-HUMAN-CHECKLIST.md`: 41 human-only items (28 pending UAT rows in phases 27, 32-38; 3 portal and cross-application steps; 9 backstop truths; 1 headed sharing finding). Resume with `/gsd-verify-work <phase>`.
+- `.planning/milestones/v1.5-phases/39-v1-5-close-out/39-HUMAN-CHECKLIST.md`: 41 human-only items (28 pending UAT rows in phases 27, 32-38; 3 portal and cross-application steps; 9 backstop truths; 1 headed sharing finding). Resume with `/gsd-verify-work <phase>`.
 - Phases 29, 30 and 31 are outside the Phase 39 live pass: `/gsd-verify-work 29`, `30`, `31`.
 - 8 defects found by the full registry run carried to v1.6 (ledger 34, 36-41; backlog 999.30/999.31).
 - Known verification overrides: 13 phases newly recorded (stale/human_needed), 0 carried forward.

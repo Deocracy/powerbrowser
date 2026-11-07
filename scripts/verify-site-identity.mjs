@@ -133,9 +133,9 @@ const SITE_PANEL_REL = 'theia/extensions/chrome-bar/src/browser/site-identity/si
 const UPSTREAM_PERMS_REL = 'upstream/browser/modules/SitePermissions.sys.mjs';
 const UPSTREAM_IDL_REL = 'upstream/uriloader/base/nsIWebProgressListener.idl';
 const UPSTREAM_CERT_VALIDITY_REL = 'upstream/security/manager/ssl/nsIX509CertValidity.idl';
-const UI_SPEC_REL = '.planning/phases/31-site-identity-permissions-and-app-menu/31-UI-SPEC.md';
+const UI_SPEC_REL = '.planning/milestones/v1.5-phases/31-site-identity-permissions-and-app-menu/31-UI-SPEC.md';
 /** Phase 33 plan 05 (MENU-03): the full hamburger's design contract -- its new-rows cell and its numbered order. */
-const UI_SPEC_33_REL = '.planning/phases/33-bookmarks-history-and-the-full-menu/33-UI-SPEC.md';
+const UI_SPEC_33_REL = '.planning/milestones/v1.5-phases/33-bookmarks-history-and-the-full-menu/33-UI-SPEC.md';
 const INTERNAL_APIS_REL = 'powerbrowser/INTERNAL-APIS.md';
 const CODICON_REL = 'theia/node_modules/@vscode/codicons/dist/codicon.css';
 const TOKEN_GATE_REL = 'theia/extensions/token-gate/src/node/token-gate-backend-contribution.ts';
