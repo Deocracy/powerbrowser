@@ -100,6 +100,13 @@
 //     bookmark carrying its own title and URL (a positive per-tab read, never
 //     a log line), /c stays current; then with bookmarkPage refusing, the row
 //     shows the strip's bookmark failure sentence.
+//     39-16 (34 T4): Bookmark Tab first bookmarks /c alone; Bookmark All Tabs
+//     then repeats /c, and Bookmark Tab repeats /a: each URL holds exactly one
+//     Places bookmark (IN-02, counted in chrome through PlacesUtils). The
+//     forced failure's sentence must name the application. Plants:
+//     bookmark-all-drops-tab, bookmark-repeat-duplicates (a second Places
+//     entry for /a), bookmark-failure-silent (the strip's bookmark callback
+//     swallows the rejection).
 //
 //   modes (D-02, 34-05): /a, /b on localhost and /c open in Browsing. Through
 //     Coding, Organising and back to Browsing the strip stays the one
@@ -122,6 +129,19 @@
 //     MaybeDispatchContextMenuEvent), so the driver raises the keyboard-
 //     shaped contextmenu (button 0, at 0,0) on the focused tab itself.
 //
+//   overflow, 39-16 (34 T8): the numbers are printed (row scroll and client
+//     width, chevron rect, the picked tab's rect inside the row) and chrome's
+//     .powerbrowser-drag handles are read after a scroll: none overlaps a
+//     visible tab, and they equal the frontend's fresh publish.
+//
+//   badge-capture (34 T14, capture only, run when named with PB_CAPTURE_DIR):
+//     /a pinned with its widget marked as playing sound, /b current with /c
+//     and /d selected, the real pointer resting on /c; the shell is captured
+//     to 34-T14-badge-and-selection.png for the owner's visual verdict.
+//
+// PB_CAPTURE_DIR=<dir>: the sessions run headed and captureShell (pb-kwin's
+// gate) writes named PNGs there.
+//
 // The 34-02 scenarios run on pb-live-probe.mjs's withProbeShell (purged
 // startup cache, the push recorder, chrome scope for the clipboard); `menu`
 // keeps the ng-a-live shell it was written on.
@@ -143,10 +163,28 @@ import { newProfile, runCheck, withShell, withShellQuit } from './lib/ng-a-live.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { REPO_ROOT } from './lib/ng-a-live.mjs';
-import { activeWindow } from './lib/pb-kwin.mjs';
+import { mkdirSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { activeWindow, captureShell } from './lib/pb-kwin.mjs';
 import { appNameExpr, focusTheiaFrame, keyRoute, osClientPointer, overlayVisibility, pointerRoute, pressKey, probe, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
 
 const NAME = 'tab-strip-live';
+
+// 39-16: PB_CAPTURE_DIR=<dir> runs the sessions headed and captures the shell at named states.
+const CAPTURE_DIR = process.env.PB_CAPTURE_DIR ? resolve(process.env.PB_CAPTURE_DIR) : '';
+if (CAPTURE_DIR) {
+    process.env.PB_LIVE_HEADED = '1';
+}
+
+/** PB_CAPTURE_DIR set: the PowerBrowser window (captureShell refuses any other active window) to <dir>/<file>. */
+async function capture(file) {
+    if (!CAPTURE_DIR) {
+        return;
+    }
+    mkdirSync(CAPTURE_DIR, { recursive: true });
+    const shot = await captureShell(join(CAPTURE_DIR, file));
+    console.log(`${NAME}: capture ${file}: ${shot.resourceClass} ${shot.width}x${shot.height}`);
+}
 
 // Shared page helpers. No backticks inside.
 const PROBES = `
@@ -731,8 +769,10 @@ async function overflow({ app, pages, expect, plant }) {
         row().scrollLeft = 0;
         await sleep(100);
         const hidden = stripIds().find(id => !inRow(id));
-        return { painted, overflowing, shown, tooltip: shown ? chevron().getAttribute('title') : null, hidden: hidden || null };
+        return { painted, overflowing, shown, tooltip: shown ? chevron().getAttribute('title') : null, hidden: hidden || null,
+            scrollWidth: row().scrollWidth, clientWidth: row().clientWidth, chevronRect: shown ? rect(chevron()) : null };
     `);
+    console.log(`${NAME}: overflow: row scrollWidth ${forced.scrollWidth} clientWidth ${forced.clientWidth}; chevron ${JSON.stringify(forced.chevronRect)}`);
     expect(forced.painted, 'overflow: setup: /a, /b and /c are not all painted in the strip');
     expect(forced.overflowing, 'overflow: NOT SCORED -- the narrowed strip row never overflowed');
     expect(forced.shown, 'overflow: the overflowing strip shows no List All Tabs chevron');
@@ -752,12 +792,42 @@ async function overflow({ app, pages, expect, plant }) {
                 target.node.dispatchEvent(new MouseEvent('mouseup', at));
             }
             await until(() => current() && current().id === ${JSON.stringify(forced.hidden)} && inRow(${JSON.stringify(forced.hidden)}), 5000);
-            return { rows, order, found: !!target, activated: !!current() && current().id === ${JSON.stringify(forced.hidden)}, inView: inRow(${JSON.stringify(forced.hidden)}) };
+            return { rows, order, found: !!target, activated: !!current() && current().id === ${JSON.stringify(forced.hidden)}, inView: inRow(${JSON.stringify(forced.hidden)}),
+                tab: rect(tabEl(${JSON.stringify(forced.hidden)})), row: rect(row()) };
         `);
         expect(picked.rows.length > 0 && picked.rows.join(' | ') === picked.order.join(' | '),
             `overflow: List All Tabs lists [${picked.rows.join(' | ')}], not the strip order [${picked.order.join(' | ')}]`);
         expect(picked.found && picked.activated, `overflow: picking the scrolled-out tab in List All Tabs did not activate it (${JSON.stringify(picked)})`);
         expect(picked.inView, 'overflow: the picked tab was not scrolled into view in the row');
+        console.log(`${NAME}: overflow: picked tab ${JSON.stringify(picked.tab)} inside row ${JSON.stringify(picked.row)}`);
+        // 34 T8: chrome's drag handles after a scroll overlap no visible tab and equal the frontend's fresh publish.
+        const handles = async () => JSON.parse(await app.evaluateIn(app.chrome,
+            "JSON.stringify([...document.querySelectorAll('.powerbrowser-drag')].map(h => [h.style.left, h.style.top, h.style.width, h.style.height].map(parseFloat)))"));
+        const scrolled = await step(app, 'overflow: scroll the row', `${listed}
+            row().scrollLeft = 0;
+            await sleep(300);
+            row().scrollLeft = row().scrollWidth;
+            await sleep(600);
+            const r = rect(row());
+            const tabs = stripIds().map(id => rect(tabEl(id))).filter(Boolean)
+                .map(t => ({ left: Math.max(t.left, r.left), right: Math.min(t.right, r.right), top: t.top, bottom: t.bottom })).filter(t => t.right - t.left > 1);
+            return { scrollLeft: row().scrollLeft, tabs };
+        `);
+        const natural = await handles();
+        await step(app, 'overflow: fresh drag-region publish', `
+            const bar = get('ChromeBarContribution');
+            if (!bar || typeof bar.publishDragRegions !== 'function') return { error: 'no ChromeBarContribution.publishDragRegions to compare against' };
+            bar.lastDragRegions = '';
+            bar.publishDragRegions();
+            await sleep(400);
+            return true;
+        `);
+        const fresh = await handles();
+        const overlapping = natural.filter(([x, y, w, h]) => scrolled.tabs.some(t => x < t.right - 1 && x + w > t.left + 1 && y < t.bottom - 1 && y + h > t.top + 1));
+        console.log(`${NAME}: overflow: after scrollLeft ${scrolled.scrollLeft}, ${natural.length} drag handle(s) ${JSON.stringify(natural)}; fresh publish ${JSON.stringify(fresh)}`);
+        expect(natural.length > 0, 'overflow: NOT SCORED -- chrome holds no window-drag handles, so their staleness cannot be read');
+        expect(overlapping.length === 0, `overflow: a window-drag handle overlaps a visible tab after the row scrolled: ${JSON.stringify(overlapping)}`);
+        expect(JSON.stringify(natural) === JSON.stringify(fresh), `overflow: the window-drag handles after a scroll ${JSON.stringify(natural)} are stale against a fresh publish ${JSON.stringify(fresh)}`);
     }
     // Control, same session and recorders: no overflow, no chevron, and the order still reads.
     const control = await step(app, 'overflow: restore the width', `${listed}
@@ -1180,6 +1250,10 @@ async function bookmarkAll({ app, pages, expect, plant }) {
             const original = strip.bookmarkTabs;
             strip.bookmarkTabs = tabs => original(tabs.slice(0, -1));
         }
+        if (${JSON.stringify(plant)} === 'bookmark-failure-silent' && typeof strip.bookmarkTabs === 'function') {
+            const original = strip.bookmarkTabs;
+            strip.bookmarkTabs = async tabs => { try { await original(tabs); } catch (e) { /* the planted fault: swallowed */ } };
+        }
         const tabs = {};
         for (const n of ${JSON.stringify(names)}) {
             const w = byId(S[n]);
@@ -1202,6 +1276,19 @@ async function bookmarkAll({ app, pages, expect, plant }) {
     const stale = names.filter(n => setup.tabs[n].before !== null);
     expect(stale.length === 0, `bookmark-all: NOT SCORED -- ${stale.map(n => '/' + n).join(', ')} already bookmarked on a fresh profile, so a read-back proves nothing`);
 
+    // 34 T4: Bookmark Tab bookmarks /c alone, so Bookmark All Tabs below repeats /c.
+    const tabLabel = copyRow('bookmark');
+    const single = await step(app, 'bookmark-all: Bookmark Tab on /c', `${MENU_PROBES}
+        await openMenu(S.c);
+        await choose(${JSON.stringify(tabLabel)});
+        const store = get('ChromeStoreClient');
+        await until(async () => !!(await store.readBookmarkByUrl(byId(S.c).url)), 10000);
+        return { c: await store.readBookmarkByUrl(byId(S.c).url), a: await store.readBookmarkByUrl(byId(S.a).url) };
+    `);
+    expect(!!single.c && single.c.url === setup.tabs.c.url && single.c.title === setup.tabs.c.label,
+        `bookmark-all: "${tabLabel}" on /c did not bookmark it with its title and URL (${JSON.stringify(single.c)})`);
+    expect(single.a === null, `bookmark-all: "${tabLabel}" on /c also bookmarked /a (${JSON.stringify(single.a)})`);
+
     const done = await step(app, 'bookmark-all: choose the row', `${MENU_PROBES}
         await openMenu(S.a);
         await choose(${JSON.stringify(allLabel)});
@@ -1222,8 +1309,36 @@ async function bookmarkAll({ app, pages, expect, plant }) {
     expect(done.notice === '', `bookmark-all: a successful "${allLabel}" showed the strip notice ${JSON.stringify(done.notice)}`);
     expect(done.current, `bookmark-all: "${allLabel}" changed the current tab away from /c`);
 
-    // Failure copy: bookmarkPage refusing must show the strip's bookmark failure sentence.
+    // IN-02: a repeat leaves exactly one Places bookmark per URL (/c through Bookmark All Tabs, /a through Bookmark Tab).
+    const placesCount = url => app.evaluateIn(app.chrome, `(async () => {
+        const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+        let n = 0;
+        await PlacesUtils.bookmarks.fetch({ url: ${JSON.stringify(url)} }, () => { n += 1; });
+        return n;
+    })()`);
+    await step(app, 'bookmark-all: Bookmark Tab on /a again', `${MENU_PROBES}
+        await openMenu(S.a);
+        await choose(${JSON.stringify(tabLabel)});
+        await sleep(1500);
+        return true;
+    `);
+    if (plant === 'bookmark-repeat-duplicates') {
+        await app.evaluateIn(app.chrome, `(async () => {
+            const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+            await PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid, url: ${JSON.stringify(setup.tabs.a.url)}, title: 'planted' });
+            return true;
+        })()`);
+    }
+    const counts = { a: await placesCount(setup.tabs.a.url), c: await placesCount(setup.tabs.c.url) };
+    console.log(`${NAME}: bookmark-all: Places bookmarks after the repeats: /a ${counts.a}, /c ${counts.c}`);
+    for (const n of ['a', 'c']) {
+        expect(counts[n] === 1, `bookmark-all: a repeated bookmark created a second entry: /${n} has ${counts[n]} Places bookmarks for its URL`);
+    }
+
+    // Failure copy: bookmarkPage refusing must show the strip's bookmark failure sentence, naming the application.
+    const appName = await app.evaluate(appNameExpr);
     const sentence = copyRow('bookmarkTabFailed', await subjectOf(app));
+    expect(!!appName && sentence.includes(appName), `bookmark-all: the failure sentence ${JSON.stringify(sentence)} does not name the application (${JSON.stringify(appName)})`);
     const refused = await step(app, 'bookmark-all: a refused bookmarkPage', `${MENU_PROBES}
         const store = get('ChromeStoreClient');
         const original = store.bookmarkPage;
@@ -1237,7 +1352,9 @@ async function bookmarkAll({ app, pages, expect, plant }) {
         }
         return { notice: notice() };
     `);
-    expect(refused.notice === sentence, `bookmark-all: a refused bookmarkPage was not reported with the failure sentence (notice ${JSON.stringify(refused.notice)}, want ${JSON.stringify(sentence)})`);
+    expect(refused.notice !== '', 'bookmark-all: a failed bookmark was silent: a refused bookmarkPage showed no strip notice');
+    expect(refused.notice === '' || refused.notice === sentence,
+        `bookmark-all: a refused bookmarkPage was not reported with the failure sentence (notice ${JSON.stringify(refused.notice)}, want ${JSON.stringify(sentence)})`);
 }
 
 /**
@@ -1318,6 +1435,42 @@ async function modes({ app, pages, expect, plant }) {
     }
 }
 
+/**
+ * badge-capture (34 T14, capture only): a pinned /a marked as playing sound, /b current, /c and /d selected, the pointer
+ * resting on /c, captured for the owner. soundPlaying is set on the widget by the harness (the fixture pages are silent).
+ */
+async function badgeCapture({ app, pages, expect }) {
+    expect(!!CAPTURE_DIR, 'badge-capture: run it with PB_CAPTURE_DIR set (capture only)');
+    if (!CAPTURE_DIR) {
+        return;
+    }
+    const urls = { a: pages.url('/a'), b: otherSite(pages, '/b'), c: pages.url('/c'), d: otherSite(pages, '/d') };
+    const set = await step(app, 'badge-capture: setup', `${MENU_PROBES}
+        await get('ModeService').activateMode('browsing');
+        const painted = await openTabs(${JSON.stringify(urls)});
+        shell.activateWidget(S.b);
+        await until(() => current() && current().id === S.b, 5000);
+        await openMenu(S.a);
+        await choose('Pin Tab');
+        await until(() => strip.isPinned(byId(S.a)), 5000);
+        byId(S.a).soundPlaying = true;
+        byId(S.a).update();
+        strip.update();
+        const click = (id, mods) => { const n = tabEl(id), r = n.getBoundingClientRect();
+            n.dispatchEvent(new MouseEvent('click', Object.assign({ bubbles: true, cancelable: true, button: 0, clientX: r.left + 8, clientY: r.top + 8 }, mods))); };
+        click(S.c, { ctrlKey: true });
+        click(S.d, { ctrlKey: true });
+        await sleep(500);
+        return { painted, pinned: strip.isPinned(byId(S.a)), selected: ['b', 'c', 'd'].filter(n => tabEl(S[n]).classList.contains('is-selected')), c: rect(tabEl(S.c)) };
+    `);
+    console.log(`${NAME}: badge-capture: ${JSON.stringify(set)}`);
+    expect(set.painted && set.pinned, `badge-capture: setup failed (${JSON.stringify(set)})`);
+    const theia = await theiaContext(app);
+    await pointer(app, theia, [moveTo(set.c.x, set.c.y)], { release: false });
+    await new Promise(r => setTimeout(r, 400));
+    await capture('34-T14-badge-and-selection.png');
+}
+
 /** Each scenario and the page fault its --self-test plants, with the text its red line must carry. `probe` scenarios run on withProbeShell. */
 const SCENARIOS = {
     menu: { run: menu, plant: 'menu-acts-on-current', expect: 'reloaded the current tab' },
@@ -1331,8 +1484,13 @@ const SCENARIOS = {
     multi: { run: multi, plant: 'multi-touches-unselected', expect: 'touched an unselected tab' },
     preview: { run: preview, probe: true, plant: 'preview-never-opens', expect: 'opened no preview card' },
     attention: { run: attention, probe: true, plant: 'attention-flag-dropped', expect: 'showed no attention dot' },
-    'bookmark-all': { run: bookmarkAll, probe: true, plant: 'bookmark-all-drops-tab', expect: 'was not bookmarked' },
+    'bookmark-all': { run: bookmarkAll, probe: true, plants: [
+        { plant: 'bookmark-all-drops-tab', expect: 'was not bookmarked' },
+        { plant: 'bookmark-repeat-duplicates', expect: 'a repeated bookmark created a second entry' },
+        { plant: 'bookmark-failure-silent', expect: 'a failed bookmark was silent' },
+    ] },
     modes: { run: modes, probe: true, plant: 'modes-order-lost', expect: 'did not survive the switch' },
+    'badge-capture': { run: badgeCapture, probe: true, captureOnly: true },
 };
 
 /** One fresh shell for one scenario run: withProbeShell (and its prefs) for a `probe` scenario, else ng-a-live's. */
@@ -1348,7 +1506,7 @@ function launch(scenario, profileName, context) {
 const args = process.argv.slice(2);
 const selfTest = args.includes('--self-test');
 const at = args.indexOf('--scenario');
-const chosen = at >= 0 ? (args[at + 1] ?? '').split(',').filter(Boolean) : Object.keys(SCENARIOS);
+const chosen = at >= 0 ? (args[at + 1] ?? '').split(',').filter(Boolean) : Object.keys(SCENARIOS).filter(name => !SCENARIOS[name].captureOnly);
 const unknown = chosen.filter(name => !SCENARIOS[name]);
 if (unknown.length || chosen.length === 0) {
     console.error(`verify-${NAME}: unknown scenario(s) ${unknown.join(', ') || '(none given)'}; known: ${Object.keys(SCENARIOS).join(', ')}`);
@@ -1359,20 +1517,22 @@ await runCheck(`verify-${NAME}${selfTest ? ' --self-test' : ''}`, async ({ pages
     for (const name of chosen) {
         const scenario = SCENARIOS[name];
         await launch(scenario, name, { pages, expect });
-        if (!selfTest || failures.length) {
+        if (!selfTest || failures.length || scenario.captureOnly) {
             if (!failures.length) {
                 console.log(`${NAME}: ${name}: PASS`);
             }
             continue;
         }
-        // The unplanted run above is the positive control; the planted run must go red naming the fault.
-        const planted = [];
-        const plantedExpect = (ok, message) => { if (!ok) planted.push(message); };
-        await launch(scenario, `${name}-plant`, { pages, expect: plantedExpect, plant: scenario.plant });
-        expect(planted.some(line => line.includes(scenario.expect)),
-            `${name}: plant ${scenario.plant} did not go red naming "${scenario.expect}" (got ${planted.length ? planted.join(' | ') : 'green'})`);
-        if (!failures.length) {
-            console.log(`${NAME}: ${name}: plant ${scenario.plant} went red: ${planted.find(line => line.includes(scenario.expect))}`);
+        // The unplanted run above is the positive control; each planted run must go red naming its fault.
+        for (const { plant, expect: want } of scenario.plants ?? [{ plant: scenario.plant, expect: scenario.expect }]) {
+            const planted = [];
+            const plantedExpect = (ok, message) => { if (!ok) planted.push(message); };
+            await launch(scenario, `${name}-${plant}`, { pages, expect: plantedExpect, plant });
+            expect(planted.some(line => line.includes(want)),
+                `${name}: plant ${plant} did not go red naming "${want}" (got ${planted.length ? planted.join(' | ') : 'green'})`);
+            if (!failures.length) {
+                console.log(`${NAME}: ${name}: plant ${plant} went red: ${planted.find(line => line.includes(want))}`);
+            }
         }
     }
 });
