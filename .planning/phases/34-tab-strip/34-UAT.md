@@ -92,7 +92,8 @@ why: "Live-pass risk. The chrome-side minter (PowerBrowserAPI.sys.mjs:5241-5249)
 
 ### 13. Keyboard context-menu detection (WR-04)
 expected: Tab to the strip; use Left/Right to move between tabs; press Shift+F10 and the context-menu key on a focused tab; press Enter and Space. The menu opens anchored at the focused tab's bottom-left, not at the window origin; Enter/Space activate the tab; focus-visible shows; a real right-click is still anchored at the pointer
-result: [pending]
+result: pass
+evidence: "39-15 2026-11-06, objdir/dist/bin/powerbrowser headed on the owner KDE Wayland desktop, PB_REAL_INPUT=1 behind the pb-kwin gate (active window read back before every move and button, pointer read back on target, calibrated by a trusted-mousemove read-back within 2 px). Harness 2f42a1ed: verify-tab-strip-live keyboard-menu PASS in two real runs, keys os and pointer os: ArrowRight moved keyboard focus between tabs; real Shift+F10 and the real context-menu key (raised by GTK nsGtkKeyUtils MaybeDispatchContextMenuEvent, button 0) opened the tab menu 0 px from the focused tab's bottom-left; real Enter and Space activated the focused tab; a real right-click opened the menu 0-1 px from the pointer. focus-visible was not inspected (a look). Plant keyboard-menu-pointer-origin went red"
 live: "39-15 2026-11-06, harness 2f42a1ed: PB_REAL_INPUT=1 verify-tab-strip-live keyboard-menu PASS, keys os: ArrowRight moved keyboard focus /a -> /b; real Shift+F10 and the real context-menu key (GTK MaybeDispatchContextMenuEvent) each opened the tab menu 0px from /b's bottom-left; Enter and Space activated the focused tab. Pointer half: Task 3 of 39-15"
 why: "openTabMenu (tab-strip-widget.tsx:1022-1024) decides keyboard origin with event.button !== 2 || (clientX === 0 && clientY === 0). Different Linux/Gecko builds report a keyboard-raised contextmenu differently (button value, coordinates), so the heuristic can misfire in either direction"
 
@@ -109,9 +110,9 @@ why: "unverified-prohibition, human review recommended"
 ## Summary
 
 total: 15
-passed: 6
+passed: 8
 issues: 0
-pending: 9
+pending: 7
 skipped: 0
 blocked: 0
 

@@ -36,7 +36,8 @@ evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: adopt-popup PASS"
 
 ### 5. adopt-focus: background versus foreground
 expected: A background open (`openLinkIn(url, 'tab', { openerBrowser, inBackground: true })`) leaves the opener current and focused; a foreground open shows and focuses the new tab. A real middle-click cannot be driven (ClickHandler is not registered in the shell, 36-01 deferred 5), so also check a middle-click by hand and note what happens
-result: [pending]
+result: pass
+evidence: "39-15 2026-11-06, objdir/dist/bin/powerbrowser headed on the owner KDE Wayland desktop, PB_REAL_INPUT=1 behind the pb-kwin gate (active window read back before every move and button, pointer read back on target, calibrated by a trusted-mousemove read-back within 2 px). Harness b9f4c375: verify-new-window-adopt-live adopt-focus PASS, pointer os (calibration 0,0): a REAL middle-click on the opener page's link gave an adoptTab push with background true, the web tab attached, no stock window opened and the opener stayed current; then the background openLinkIn adopt left the opener current and chrome-focused, and the foreground window.open made the new tab current. The 36-01 note that a real middle-click cannot be driven no longer holds: it opens a background web tab, as Firefox does"
 live: "v1.5 end-of-milestone live pass 2026-11-04, main: adopt-focus PASS. Still open for a human: a real middle-click"
 
 ### 6. adopt-fallback: no frontend ack in 5 s opens the stock window
@@ -108,9 +109,9 @@ owner: "Chris 2026-11-05 via AskUserQuestion: box 36, Accept replacement text (R
 ## Summary
 
 total: 18
-passed: 16
+passed: 17
 issues: 0
-pending: 2
+pending: 1
 skipped: 0
 blocked: 0
 

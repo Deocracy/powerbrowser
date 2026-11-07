@@ -169,7 +169,8 @@ live: "39-13 lane-b 2026-11-06, objdir/dist/bin/powerbrowser (050 and 060 stamps
 ### 23. Manual: a real keyboard and pointer on the popup
 command: as item 18, click a popup button with the mouse, then operate its controls with Tab and Enter, then Esc
 expected: The popup takes focus and keys, Esc closes it and returns focus to the address pill, a click on the page closes it and leaves focus in the page
-result: [pending]
+result: pass
+evidence: "39-15 2026-11-06, objdir/dist/bin/powerbrowser headed on the owner KDE Wayland desktop, PB_REAL_INPUT=1 behind the pb-kwin gate (active window read back before every move and button, pointer read back on target, calibrated by a trusted-mousemove read-back within 2 px). Harness 2f42a1ed (scenario) with product fix cba92e2a: verify-extension-actions-live popup-keyboard PASS in two real runs, keys os and clicks os: a real click on the popup button opened the native panel and the panel browser took chrome focus (before cba92e2a it took none: stock Extension:GrabFocus left focus on no element), real Tab then Enter pressed the popup's own button, real Esc closed it with focus in the pill, and a real click on page /a closed it with focus in the page. Default route also PASS; plant popup-esc-swallowed went red"
 live: "39-15 2026-11-06, harness 2f42a1ed with product fix cba92e2a (the popup took no focus before it): PB_REAL_INPUT=1 verify-extension-actions-live popup-keyboard, keys os: the panel browser took chrome focus, real Tab and Enter reached the popup's button, real Esc closed it with focus in the pill. Click half: Task 3 of 39-15"
 
 ### 24. IN-06: the add-ons listing page's own hosts
@@ -327,9 +328,9 @@ evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: webview-wall-off we
 ## Summary
 
 total: 47
-passed: 40
+passed: 41
 issues: 0
-pending: 6
+pending: 5
 skipped: 1
 blocked: 0
 
