@@ -103,6 +103,12 @@ platform. If a rebrand ever requires editing a second file, that is a bug.
 | v1.4 closed as override with UAT-01 deferred (NG-089 → phase 26) | Chris: "I want to do the GUI checks when everthing is done on my own time" | ⚠️ Revisit — audit `gaps_found`; MODE-01 live half failed (A18) |
 | Update channel `default`; MAR channel id `<app_basename>-default` (`powerbrowser-default`); one exported generator constant (UPD-11, Phase 40) | The built tree, NG-065 and the 08-04 hop drill use it; `release` would need a tier-3 rebuild and re-proof and buys nothing | Adopted 2026-10-20 |
 | Release scope is en-US only (PKG-09, Phase 40) | The branding, copy and verification cover one locale; language-pack updates are off (`app.update.langpack.enabled=false`, UPD-25); the /download page (Phase 47) and release notes (Phases 49 and 50) repeat the statement when those surfaces exist | Adopted 2026-10-20 |
+| 2026-11-05 | Phase 39 fixes every open v1.5 defect in-milestone; every deferral is a backlog row plus a WINDOWS.md entry | Chris: "fix all", "every deferral well documented" | ✓ Good |
+| 2026-11-06 | Private-window options page follows stock Firefox (no patch-050 hunk, no rebuild) | matches upstream; ledger 29, backlog 999.17 | — Pending |
+| 2026-11-06 | Gate exclusions bound to open ledger ids; a closed entry turns the row red again | no silent green-by-exclusion | ✓ Good |
+| 2026-11-07 | Requirements ticked only when no UAT row naming them is pending, issue or an open owner call | honest ledger; 46 rows wait on the human pass | ✓ Good |
+| 2026-11-07 | Human checklist deferred to Chris's own time; milestone closed as override | Chris via AskUserQuestion | — Pending |
+| 2026-11-07 | Real OS input gate requires the browser pid this run launched, not only the window class | review CR-01/CR-02 | ✓ Good |
 
 ## configuration.toml planned sections
 
@@ -212,6 +218,19 @@ branches, `PowerBrowserAPI`) are fixed and never configurable.
       all four changes (Chris, 2026-10-17) — SK-01 — v1.4
 - ✓ CI green on pushed `main` (run 39340825244); NG-074 done — CI-01 — v1.4
 
+### Validated (v1.5 — shipped 2026-11-07, override closeout, human checklist deferred)
+
+- ✓ Address bar modes dropdown (engines, Bookmarks, Tabs, History, Actions, Theia command centre as the Coding default) — v1.5 (phase 30; live half: 39-HUMAN-CHECKLIST.md / verify-work 30)
+- ✓ Address bar and search: fallback, fixup, switch-to-tab, suggestions, autofill, engines, paste & go — v1.5 (phase 29, BAR-01..14 Complete)
+- ✓ Navigation buttons and page-focus keys: Stop, hard reload, history menus, Home; Firefox keys with the page focused, proven on real OS input — v1.5 (phase 27; NAV-03..06 await 27 T5/T6)
+- ✓ Site identity, permissions and the app menu — v1.5 (phases 31, 33; SITE/MENU rows await verify-work 31 and 33 T7)
+- ✓ Page tools and bookmarks: find, zoom, print, save, edit, favicons, mute, downloads, reader, devtools; star, reopen closed tab, bookmarks toolbar, clear history — v1.5 (phases 32, 33)
+- ✓ Tab strip: tab menu, drag reorder, middle-click, overflow, pin, multiselect, preview card, attention mark; double-click opens a tab on real input — v1.5 (phase 34)
+- ✓ Shell furniture and page context menu, form autocomplete, tooltips, link status, element fullscreen — v1.5 (phase 35)
+- ✓ New-window links as web tabs next to the opener, GUI-01 kept — v1.5 (phase 36)
+- ✓ Permission doorhangers, sharing indicator, password save, notification bars (page dialogs PROMPT-03 deferred to 999.3) — v1.5 (phase 37)
+- ✓ WebExtensions see web tabs; toolbar buttons, puzzle menu, page actions, sidebar; add-ons-site install; Bitwarden fill against a local Vaultwarden — v1.5 (phases 28, 31.1, 38)
+
 ### Active
 
 **Carried from v1.4 (unmet, deferred by Chris to phase 26):**
@@ -227,27 +246,12 @@ branches, `PowerBrowserAPI`) are fixed and never configurable.
       card close, last group kept. Implemented and statically verified (14/14);
       the live rows are 15-UAT pending rows under NG-089
 
-**v1.5 Chrome Bar Firefox Parity** (scope: `.planning/research/chrome-bar-firefox-gap.md`):
+**v1.5 follow-ups (open at close, 2026-11-07):**
 
-- [ ] Address bar modes dropdown: search engines, Bookmarks, Tabs, History,
-      Actions, and a Theia command-centre mode (files, `>` commands, `@`
-      symbols) that is the default in Coding
-- [ ] Address bar and search: search fallback, localhost/host:port fixup,
-      real switch-to-tab, engine suggestions, inline autofill, engine picker,
-      one-off engines, paste & go, Alt+Enter, Shift+Del row removal
-- [ ] Navigation buttons and keys: Stop, hard reload, back/forward history
-      menu, Home; Ctrl+T/W/R, Alt+Left/Right, F6, Alt+1-9, working with the
-      page focused
-- [ ] Site identity and app menu: real security state with "Not Secure",
-      site information and permissions panel, clear cookies, tracking shield;
-      hamburger menu with Settings, Passwords, Add-ons
-- [ ] Page tools and bookmarks: find in page, zoom, print, favicons, mute,
-      downloads, fullscreen; bookmark star, reopen closed tab, bookmarks
-      toolbar, clear history
-- [ ] Extensions: WebExtension toolbar buttons and the extensions (puzzle) menu
-- [ ] Page prompts: permission requests, alert/confirm/auth dialogs, page
-      context menu, window.open/target=_blank as web tabs, password and form
-      autofill
+- [ ] 39-HUMAN-CHECKLIST.md: 41 human-only items; 12 requirement rows re-tick when it passes (39-20-DECISIONS.md)
+- [ ] Phases 29, 30, 31 live halves (/gsd-verify-work 29, 30, 31)
+- [ ] Backlog 999.17-999.33: private-window options page (stock behaviour), PAGE-05 libpulse packaging, 8 full-run defects carried to v1.6 (ledger 34, 36-41), scenario-scoped gate exclusions
+- [ ] PROMPT-03 page dialogs (999.3, ledger 26)
 
 **Deferred from the earlier v1.5 plan (Chris, 2026-10-20: "we want to work on
 the chrome bar for this milestone, that's it"):** sketch 005 items 1-2 (one
@@ -354,7 +358,26 @@ requirements still staged (human/tier-3 halves).
 
 </details>
 
-## Current Milestone: v1.5 Chrome Bar Firefox Parity
+## Current State (v1.5 shipped 2026-11-07)
+
+v1.5 Chrome Bar Firefox Parity is archived as an override closeout chosen by
+Chris: `.planning/milestones/v1.5-ROADMAP.md`,
+`.planning/milestones/v1.5-REQUIREMENTS.md`,
+`.planning/milestones/v1.5-MILESTONE-AUDIT.md` (status `tech_debt`). Phases
+27–39 plus inserted 31.1 (93 plans, 1557 commits, 2026-10-20 → 2026-11-07)
+delivered the chrome bar at Firefox-toolbar parity against the 2026-10-20 gap
+list: address bar search and modes, site identity and the app menu, page
+tools, bookmarks and history, the tab strip, shell furniture and the page
+context menu, new-window links as web tabs, permission prompts, and full
+WebExtension support through the extension tab host and a regenerated patch
+050. Phase 39 fixed C11, C22, C23, C24 and backlog 999.4–999.16, added real OS
+input behind a pid-gated KWin check, and ran every automatable UAT row. The
+final `--gate` passes with 32 documented exclusions (ledger 25, 28–43). Not
+achieved: the human-only checklist (41 items, deferred by Chris), the live
+halves of phases 29–31, and 8 defects found by the full run (carried to v1.6).
+Requirements: 41/87 ticked by the evidence rule; 46 partial.
+
+## Retired Milestone Section (v1.5 active scope, superseded by Current State above)
 
 **Goal:** The chrome bar does what Firefox's toolbar does, measured against
 the 2026-10-20 gap list (`.planning/research/chrome-bar-firefox-gap.md`).
@@ -442,4 +465,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-10-20 after starting v1.5 Chrome Bar Firefox Parity*
+*Last updated: 2026-11-07 after v1.5 Chrome Bar Firefox Parity milestone*
