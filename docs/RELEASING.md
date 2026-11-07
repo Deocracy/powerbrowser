@@ -1925,7 +1925,7 @@ the live APIs at deploy time.
 
 ```ts
 // powerbrowser-scheduler, src/index.ts (own repository). Clock only: no detection.
-import { githubAppJwt } from 'universal-github-app-jwt'; // 2.2.2, WebCrypto
+import githubAppJwt from 'universal-github-app-jwt'; // 2.2.2, WebCrypto; a default export
 import { EmailMessage } from 'cloudflare:email';
 
 interface Env {
