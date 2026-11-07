@@ -38,6 +38,7 @@ findings:
   info: 8
   total: 19
 status: issues_found
+fix_report: 39-REVIEW-FIX.md
 ---
 
 # Phase 39: Code Review Report
@@ -76,6 +77,7 @@ Secondary problems:
 ### CR-01: The real-input gate accepts any PowerBrowser window, including the owner's own instance
 
 **File:** `scripts/lib/pb-kwin.mjs:113-120` (gate), `:82-92` (raiseShell), `:166-179` (osKeys); `scripts/lib/pb-live-probe.mjs` `shellActiveOnce`, `osClientPointer`
+**Fix status:** fixed in dc44dd11 (gate, raiseShell and pb-live-probe require a launched pid; plant pid-mismatch).
 **Issue:** `gate()` passes when `resourceClass.toLowerCase().includes('powerbrowser')`. Every window of every PowerBrowser process has that class:
 - the probe's stock browser windows;
 - its DevTools and print dialogs (`captureActive`'s docstring relies on exactly this);
@@ -101,6 +103,7 @@ Also filter `raiseShell` on `w.pid === expectPid`. Pass the child pid through `a
 ### CR-02: osPointer checks the active window, but the click lands on whatever window is under the pointer
 
 **File:** `scripts/lib/pb-kwin.mjs:240-272`
+**Fix status:** fixed in 8be70f62 (frameGeometry check before the button event; plant pointer-outside-frame); the stackingOrder read is not done, see 39-REVIEW-FIX.md.
 **Issue:** Before the button event, `osPointer` checks two things: that the *active* window's class matches, and that the pointer reads back at `(x, y)`. It never checks that `(x, y)` lies inside the gated window's `frameGeometry`, or that the topmost window at `(x, y)` is that window. A real button event goes to the surface under the cursor, not to the focused window. The coordinates come from `osClientPointer`'s calibration, which uses cached `pointerOrigins` and, for `calibrateAt`, a different point. Any of the following then receives the click while the shell is still active and the gate passes:
 - a notification popup or OSD;
 - a stock PowerBrowser window (see CR-01);
@@ -124,6 +127,7 @@ Refuse the button event unless `underId === activeId`. Add a plant in which the 
 ### WR-01: The gate check and the input it guards are separate steps, but the comments say "in the same step"
 
 **File:** `scripts/lib/pb-kwin.mjs:5-8`, `:166-179`, `:127-148`
+**Fix status:** fixed in f2652bc2 (captures gated again after spectacle, PNG deleted on refusal; plant after-grab-refused; comments corrected).
 **Issue:** The header says "no ydotool key and no capture is sent unless KWin reports, in the same step, that the active window...". The osKeys docstring repeats that claim. In fact:
 - `gate()` loads a KWin script and then polls the journal for up to 3 s.
 - `ydotool key` runs afterwards as a separate process, so focus can move in between.
@@ -135,6 +139,7 @@ Refuse the button event unless `underId === activeId`. Add a plant in which the 
 ### WR-02: The real long-press can leave the mouse button held on the owner's desktop
 
 **File:** `scripts/verify-nav-keys-live.mjs:749-765`; `scripts/lib/pb-kwin.mjs:261-264`
+**Fix status:** fixed in 9f714896 (ungated releaseButton in realLongPress's finally when the gated up throws).
 **Issue:** `realLongPress` presses with `osClientPointer({ action: 'down' })` and releases in a `finally` with another `osClientPointer({ action: 'up' })`. The release goes back through `shellActiveOnce`, `waitPointerIdle` (up to 60 s), calibration moves, and two gates. Any of these can throw: the history menu or another window takes activation, "pointer busy", "calibration failed", or "refused". The `.catch` only records a note, and no raw release is ever sent, so the left button stays logically pressed on the shared desktop. Because the calibration moves also run with the button down, the owner's desktop sees drag gestures. `osPointer`'s own `hold` action does release in a `finally`, but the separate `down` and `up` actions have no such guard.
 **Fix:** Sending a release is always safe, so do not gate it. Track buttons that are held down in pb-kwin and release them without a gate:
 ```js
@@ -148,6 +153,7 @@ In `realLongPress`, call `releaseAll()` in the `finally` if the gated `up` throw
 ### WR-03: The Vaultwarden child has no `error` listener and no signal cleanup
 
 **File:** `scripts/verify-extension-amo-live.mjs:527-565`
+**Fix status:** fixed in 0345f32e (error listener, exit/SIGINT/SIGTERM reap, 10 min nix build timeout).
 **Issue:**
 - If `spawn` fails (ENOENT or EACCES on `bin/vaultwarden`, for example after a garbage-collected store path), the ChildProcess emits `error`. With no listener that is an uncaught exception, and the process dies before the `finally` in `scenarioExt10Fill` or the shell session cleanup can run.
 - The harness installs no `SIGINT`/`SIGTERM` handler. If it is killed (Ctrl-C, a registry timeout, the owner stopping a run), the server keeps running with `SIGNUPS_ALLOWED=true` on `127.0.0.1`, and the `pb-vaultwarden-*` data folder (holding the registered account and vault) stays in `/tmp`. "Stops on every exit path" is true only for exit paths inside the process.
@@ -165,6 +171,7 @@ Remove the handlers in `stopVaultwarden`, and give `execFileSync('nix', ...)` a 
 ### WR-04: A failed `openPageMenu` leaves `state.pending` set, so C11's guard refuses page focus for up to 60 s
 
 **File:** `powerbrowser/shell/PowerBrowserAPI.sys.mjs:8613-8616`, `:8624-8629`, `:4276-4282`
+**Fix status:** fixed in 0d36abaf (catch clears state.pending; catalogue remapped +4 from line 8615); the page-context-menu.ts dismiss and reload paths are not changed.
 **Issue:**
 - `openPageMenu` sets `state.pending` synchronously and then awaits `pageMenuFacts` and `pageMenuFormatLabels`.
 - If either rejects, the caller's `.catch` logs and calls `pageMenuClose(data)` but never clears `state.pending`.
@@ -189,12 +196,14 @@ In `page-context-menu.ts` `open()`, also send the dismiss (`this.send(tabId, men
 ### WR-05: The `extensions-late-startup` catalogue row is now wrong about its observers and capability
 
 **File:** `powerbrowser/INTERNAL-APIS.md:401`; `patches/050-extension-tab-host.patch` (EnterprisePoliciesParent hunks, guards G15/G16)
+**Fix status:** fixed in d9108dc1 (row names both observers and the policy-callback capability).
 **Issue:** The `extensionLateStartup` row's safety column says "ExtensionParent is the topic's only non-test observer upstream ... grants no capability." Patch 050 now registers `EnterprisePoliciesManager` for this topic and maps it to `_runPoliciesCallbacks("onAllWindowsRestored")`. So the shell's `notifyObservers(win, "extensions-late-startup")` now also applies every enterprise policy's `onAllWindowsRestored` callback, with no stock window. That is a capability, and its rationale (999.16, and draining with `shift` so callbacks do not run twice) belongs in the catalogue. CLAUDE.md requires every touchpoint to be catalogued, and a safety column that is now false makes the catalogue wrong rather than merely incomplete.
 **Fix:** Rewrite the row's last two cells. Name both observers in the patched tree (ExtensionParent's `browserStartupPromise` and `browserPaintedPromise`, and EnterprisePoliciesManager's `onAllWindowsRestored`). State that the policy callbacks run once, at the first of `extensions-late-startup` or `sessionstore-windows-restored`, and cite plan 39-04.
 
 ### WR-06: `--gate` exclusions cover whole labels for single-scenario reds in the suites this phase extended
 
 **File:** `scripts/verify-platform.sh:6499-6539`, `:6585-6606`
+**Fix status:** accepted, not redesigned: each exclusion is bound to an open ledger id and goes red (FAIL, exclusion no longer applies) once that entry closes; scenario-scoped exclusions recorded as backlog 999.33 (6ba9a12b).
 **Issue:** Exclusions match on the label only (`[ "$label" = "$excl_label" ]`). The new rows excuse these labels in full:
 - `extension-actions-live` and `extension-actions-live-self-test` (ledger 29, one leg of `private-access`);
 - `page-tools-live` (28, `crash-navigate` flake);
@@ -209,18 +218,21 @@ These are the suites Phase 39 grew by hundreds of lines. While those ledger entr
 ### WR-07: The private-access plant passes on any failure, and harness errors are reported as product failures
 
 **File:** `scripts/verify-extension-actions-live.mjs:1052-1055`, `:1134`
+**Fix status:** fixed in 225494ab (catch applies only before the IDE loads; plant expects the assertion text).
 **Issue:** The `.catch` on session 1 turns every error that is not `BROKEN INSTRUMENT` into `private access rule not applied: with browser.privatebrowsing.autostart the shell's IDE never loaded ...`. That includes `timed out waiting for the url answer` from `command()`, BiDi failures, and `JSON.parse` errors. Plant `shell-not-private` expects only the prefix `private access rule not applied`, which every failing verdict in this scenario starts with, including the catch-all. So the plant goes red for any reason, among them a harness timeout, and does not prove the denied-extension assertion. This is the plant-specificity problem 999.11 fixed in `verify-new-window-adopt-live.mjs`.
 **Fix:** Limit the catch to the IDE-load step (the `privateSession` launch and its first `openTab`) and rethrow everything else. Point the plant's `expect` at the text it should actually produce, for example `the denied extension shows a button`.
 
 ### WR-08: Leg 1 of options-page-switch can pass without testing the "window still starting" state
 
 **File:** `scripts/verify-ext-tab-host-live.mjs:1883-1898`
+**Fix status:** fixed in 29715e3c (leg 1 retried up to 3 times for the starting state, else reported SKIPPED).
 **Issue:** `wasStarting` is measured and printed but never required. If the stock window has finished delayed startup before the second `openOptions` call, leg 1 checks only the started-window route. That route is the one leg 2 tests, so the `startingFail` check passes without testing what it names: the WR-06 state where the window exists and has not finished starting.
 **Fix:** When `wasStarting !== true`, return a `NOT SCORED`/`BROKEN INSTRUMENT` verdict, or make the state deterministic, for example by holding `gBrowserInit` delayed startup in the plant-free instrument, as `activate-after-ack` holds the ack.
 
 ### WR-09: The site-identity catalogue plant is pinned to a boundary line number
 
 **File:** `scripts/verify-site-identity.mjs:1353-1357`
+**Fix status:** fixed in d09fb233 (anchor derived from the first webTabClearSiteData row with a line of its own).
 **Issue:** The plant's `from` and `treePlant` are the literal `PowerBrowserAPI.sys.mjs:759`. That is the `quitApplication` row, which has nothing to do with site identity, and its line number shifts with every boundary edit above it. It moved from 753 to 759 this phase because of the cookie-jar hunk. The self-test fails loudly when the anchor drifts, so this cannot give a false green. It is still a hand-kept expectation that needs a manual edit for unrelated boundary changes, which goes against the CLAUDE.md rule "derive from the tree and compare". The same line-count pressure produced the compressed one-line `if` blocks in `webTabFocus` (see IN-02).
 **Fix:** Derive the anchor when the check runs. Read INTERNAL-APIS.md, find a named row (for example the first row whose Function cell is `` `webTabIdentity` ``), and take its File:Line cell as `from`/`treePlant`.
 
