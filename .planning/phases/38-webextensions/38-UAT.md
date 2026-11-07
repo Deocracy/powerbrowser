@@ -3,7 +3,7 @@ status: partial
 phase: 38-webextensions
 source: [38-VERIFICATION.md, 38-REVIEW.md, 38-01-SUMMARY.md, 38-02-SUMMARY.md, 38-03-SUMMARY.md, 38-04-SUMMARY.md, 38-05-SUMMARY.md, 38-CONTEXT.md, 38-VALIDATION.md]
 started: 2026-11-01T00:00:00Z
-updated: 2026-11-07T01:07:53.000Z
+updated: 2026-11-07T02:30:00.000Z
 ---
 
 Deferred to the one end-of-milestone pass covering Phases 32-38 (Chris, 2026-10-31). Nothing in this file has been run: the Phase 38 worktree has no objdir, and live runs are forbidden there.
@@ -223,7 +223,8 @@ expected: |
   - (c) Accept the offer-only proof and leave the fill to the manual backstop.
   Until a decision is made EXT-10 stays incomplete as written.
   Decided 2026-11-01 (Chris): option (b). The fill is tested against a local Vaultwarden server on 127.0.0.1 with a test vault, driven by the Bitwarden extension. D-09's no-vault-account rule stays satisfied: no external account and no committed secret. The `fixtures` scenario needs a Vaultwarden mode added before the live run (.planning/v1.5-LIVE-PASS.md, Phase 38).
-result: [pending]
+result: pass
+evidence: "39-14 2026-11-06, objdir/dist/bin/powerbrowser (050 stamp matched), harness commit f6237e4d: option (b), no external account and no committed secret. Scenario ext10-fill PASS in 3 of 3 runs (alone, with fixtures, and as the self-test control) -- a local Vaultwarden 1.37.5 (nixpkgs store path resolved at check time) on 127.0.0.1 only, ss-checked, throwaway data folder removed after, outbound requests blocked; Bitwarden 2026.10.2 installed signed from the add-ons site; its own UI accepted the self-hosted server, registered a run-time account and unlocked; on web tab /login Ctrl+Shift+L (read from its manifest) left the form empty with an empty vault, then filled both fields with the saved login (compared in memory, never printed). Plant vault-uri-mismatch (the login saved for another port of 127.0.0.1) red: 'the password manager did not fill the login page (username filled: false, password filled: false)'. The extension's server form accepts https only, so the server serves the TLS fixture leaf as pb-fixture.test"
 owner: "Chris 2026-11-06 via AskUserQuestion: box 38, Accept all (Recommended). T31: already decided (b), build the Vaultwarden mode (plan 39-14)."
 
 ### 32. Owner decision: page-action icon placement
@@ -325,9 +326,9 @@ evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: webview-wall-off we
 ## Summary
 
 total: 47
-passed: 39
+passed: 40
 issues: 0
-pending: 7
+pending: 6
 skipped: 1
 blocked: 0
 
