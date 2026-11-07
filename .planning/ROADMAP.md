@@ -986,3 +986,11 @@ Plans:
 - [ ] macos-package-payload, macos-install-matrix: deferred to v1.7 (R4). Source: no UAT test. WINDOWS.md entry 32.
 - [ ] tel06-error-delivery-live refuses the dirty tree (the owner's `.claude/settings.json`, `.planning/state.json`); run it on a clean checkout. Source: no UAT test. WINDOWS.md entry 33.
 - [ ] ng089-uat-sheets: 49 pending results plus no React 19 runtime test in the v1.2 and v1.3 UAT sheets; the NG-084 live pass was deferred by the owner. Repro: `node scripts/verify-ng-089-uat-sheets.mjs`. Source: those sheets. WINDOWS.md entry 35.
+
+### Phase 999.33: Scenario-scoped gate exclusions (BACKLOG)
+
+**Goal:** A `--gate` known-open exclusion excuses only the failing scenario or plant it names, not every red in its label
+**Source phase:** 39 (39-REVIEW WR-06)
+**Deferred at:** 2026-11-07, accepted in 39-REVIEW-FIX; the gate is not redesigned in the v1.5 close-out
+**Follow-ups:**
+- [ ] `GATE_KNOWN_OPEN_EXCLUSIONS` in `scripts/verify-platform.sh` match on the whole label, so while ledger 25, 28, 29, 39, 40 or 43 stays open a new red in another scenario of `extension-actions-live`, `page-tools-live`, `site-identity-live`, `prompts-live-self-test`, `page-furniture-live-self-test` or `address-bar-live-self-test` prints `EXCLUDED (known-open)`. Repro: read the exclusion match in `scripts/verify-platform.sh` (`[ "$label" = "$excl_label" ]`). Fix direction: key each exclusion on label plus scenario or plant and match the check's own `FAIL -- <scenario>` lines, or register the known-red scenario as its own row and exclude only that row. Source: 39-REVIEW WR-06.
