@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 5
+open_count: 6
 waived_count: 2
 fixed_count: 19
-total_count: 26
-last_updated: 2026-11-06T22:32:05.803Z
+total_count: 27
+last_updated: 2026-11-07T02:53:12.909Z
 ---
 
 # Broken Windows Ledger
@@ -41,6 +41,7 @@ last_updated: 2026-11-06T22:32:05.803Z
 | 24 | 44 | unrun-verify | scripts/build-update-xml.mjs |  | 44-02 full-tier row build-update-xml not run green: it FAILs by design because .mozbuild/mar-hop/nplus1.mar is absent. Build the N-plus-1 MAR per docs/BUILD.md, then run scripts/verify-platform.sh --only build-update-xml. UPD-14 stays open until it passes. | open |  | 2026-11-01T05:21:09.443Z |  |
 | 25 | 39 | deviation | scripts/verify-address-bar-live.mjs | 5000 | address-bar-live-self-test: plant ctrl-d-everywhere stays green on bookmark-keys (3 of 3 sessions with the 39-08 harness and 3 of 3 with the pre-39-08 harness at 5d0dfa95); pre-existing, the plant no longer bites in the README editor; first lead: the bookmark command may be disabled with an editor current, so Theia skips the planted binding | open |  | 2026-11-06T21:08:45.534Z |  |
 | 26 | 39 | skipped-test | scripts/verify-prompts-live.mjs |  | prompts-live dialog and dialog-probe are skipped by derivation while REQUIREMENTS.md records PROMPT-03 deferred to 999.3 (OQ1 ruling 2026-11-05); repro: node scripts/verify-prompts-live.mjs --scenario dialog; cause: stock page dialogs lock the IDE; source: 37-UAT tests 8 and 9 | open |  | 2026-11-06T22:32:05.803Z |  |
+| 27 | 39 | deviation | theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx | 976 | long-press Back: with a real pointer, holding Back 600 ms then releasing on the pill leaves keyboard focus in the pill, so a real Escape is the pill's and the history menu stays open (39-15 verify-nav-keys-live long-press under PB_REAL_INPUT=1, 3 of 3 runs); the T4 claim itself (Enter on Back goes back after the hold) passes | open |  | 2026-11-07T02:53:12.909Z |  |
 
 ````json
 [
@@ -355,6 +356,19 @@ last_updated: 2026-11-06T22:32:05.803Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-11-06T22:32:05.803Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 27,
+    "kind": "deviation",
+    "phase": "39",
+    "file": "theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx",
+    "line": 976,
+    "description": "long-press Back: with a real pointer, holding Back 600 ms then releasing on the pill leaves keyboard focus in the pill, so a real Escape is the pill's and the history menu stays open (39-15 verify-nav-keys-live long-press under PB_REAL_INPUT=1, 3 of 3 runs); the T4 claim itself (Enter on Back goes back after the hold) passes",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-07T02:53:12.909Z",
     "resolved_at": null,
     "milestone": "v1.5"
   }
