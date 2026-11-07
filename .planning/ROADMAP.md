@@ -737,6 +737,7 @@ on the stock-blocks-ide verdict only while REQUIREMENTS.md records this deferral
 Plans:
 
 - [ ] TBD (promote with /gsd-review-backlog when ready)
+- [ ] prompts-live dialog and dialog-probe are skipped by derivation until this lands. Repro: `node scripts/verify-prompts-live.mjs --scenario dialog`. Cause so far: stock page dialogs lock the IDE. Source: 37-UAT tests 8 and 9. WINDOWS.md entry 26.
 
 ### Phase 999.4: Follow-up — Phase 33 deferred UAT follow-up: Test 3 (BACKLOG)
 
@@ -850,3 +851,136 @@ Plans:
 **Deferred at:** 2026-11-06 by owner ruling in plan 39-17 (Chris, AskUserQuestion: "Defer to backlog (Recommended)")
 **Follow-ups:**
 - [ ] Test 22 step 4: with a private stock window opened last, the options page of an extension that is not allowed in private windows opens in that private window, because stock `openOptionsPage` uses `windowTracker.topWindow`; the fix is a patch 050 hunk plus a Gecko rebuild. Matches stock behaviour, so deferred. Repro: 38-UAT test 22 step 4 (scenario `private-access`, session 2). WINDOWS.md entry 29.
+
+### Phase 999.18: Follow-up — Phase 32 deferred UAT follow-up: Test 3 (BACKLOG)
+
+**Goal:** Resolve the UAT follow-up deferred during Phase 39 close-out of Phase 32
+**Source phase:** 32
+**Deferred at:** 2026-11-05, owner kept the dock tab bar scope (32-UAT test 3); recorded as a backlog row in plan 39-19 on 2026-11-06
+**Follow-ups:**
+- [ ] Test 3: the dock tab bar in non-Browsing modes shows `codicon-globe` with no favicon, audio mark or mute control (`web-tab.ts:617`, `web-tab.ts:1208`). Repro: open a web tab, switch to Coding or Organising, look at its dock tab. Decision text: owner kept this scope on 2026-11-05. Source: 32-UAT test 3.
+
+### Phase 999.19: Follow-up — Phase 32 deferred UAT follow-up: Test 8 (BACKLOG)
+
+**Goal:** Resolve the UAT follow-up deferred during Phase 39 close-out of Phase 32
+**Source phase:** 32
+**Deferred at:** 2026-11-05, owner ruling on 32-UAT test 8; recorded as a backlog row in plan 39-19 on 2026-11-06
+**Follow-ups:**
+- [ ] Test 8: release packaging must make libpulse load for a hand-started `objdir/dist/bin/powerbrowser`; today only the harness `LD_LIBRARY_PATH` finds it. PAGE-05 stands with this packaging follow-up open (owner 2026-11-05). Repro: start the binary by hand with no harness environment and play audio in a web tab. Source: 32-UAT test 8 (32-REVIEW WR-10).
+
+### Phase 999.20: Follow-up — Phase 34 deferred UAT follow-up: Test 15 (BACKLOG)
+
+**Goal:** Resolve the 34-REVIEW info findings the owner left open
+**Source phase:** 34
+**Deferred at:** 2026-11-06, owner accepted 34-UAT test 15 with IN-01..IN-12 as follow-ups (IN-02 answered by 39-16, 331ed734); recorded as a backlog row in plan 39-19
+**Follow-ups:**
+- [ ] Test 15: 34-REVIEW IN-03 (pin restore activates every reopened tab, then may re-activate a stale current tab), IN-04 (`sessionRestored` rejection unhandled), IN-05 (multiselect anchor edge cases), IN-06 (plain text with a colon is refused instead of searched), IN-07 (`widget.id` can reach user-facing surfaces), IN-08 (gate check 6 does not follow callees of the three method bodies), IN-09 (`ChromeBarWidget` doc comment documents `TabBookmarkStore`), IN-10 (failure notice can be off-screen and never clears), IN-11 (pins on widgets without a URI are keyed by widget id), IN-12 (lone-tab Close family disabled rather than hidden). Decision text and repro per finding: `.planning/phases/34-tab-strip/34-REVIEW.md`. Source: 34-UAT test 15; IN-03 and IN-11 also source: 34-UAT test 9.
+- [ ] Test 14: IN-01, selected tabs show no hover feedback and lose the active tab's background. Repro: Ctrl-click two tabs, hover one (capture `.planning/phases/39-v1-5-close-out/captures/34-T14-badge-and-selection.png`). Source: 34-UAT test 14 and test 15.
+
+### Phase 999.21: Follow-up — Phase 35 deferred UAT follow-up: Test 21 (BACKLOG)
+
+**Goal:** Resolve the UAT follow-up deferred during Phase 39 close-out of Phase 35
+**Source phase:** 35
+**Deferred at:** 2026-11-06, owner accepted the limitation on 35-UAT test 21; recorded as a backlog row in plan 39-19
+**Follow-ups:**
+- [ ] Test 21: while the hamburger holds focus, the Edit submenu falls back to the top document (`webTabEditContext` returns the top browsing context), so Cut, Copy, Paste and Undo from it do not reach a focused iframe input. Repro: focus an input inside an iframe, open the hamburger, Edit, Paste. Decision text: owner accepted the limitation 2026-11-06. Source: 35-UAT test 21.
+
+### Phase 999.22: Follow-up — Phase 37 deferred UAT follow-up: Test 35 (BACKLOG)
+
+**Goal:** Resolve the UAT follow-up deferred during Phase 39 close-out of Phase 37
+**Source phase:** 37
+**Deferred at:** 2026-11-06, owner accepted as a follow-up on 37-UAT test 35; recorded as a backlog row in plan 39-19
+**Follow-ups:**
+- [ ] Test 35: a click on the sharing indicator should open the Phase 31 site panel, as 37-UI-SPEC asks; 37-02 did not build it. Repro: share the camera from a web tab, click the sharing indicator in the bar. Source: 37-UAT test 35.
+
+### Phase 999.23: Follow-up — Phase 37 deferred UAT follow-up: Test 36 (BACKLOG)
+
+**Goal:** Extensions see a web tab's camera, microphone and screen sharing state
+**Source phase:** 37, 38
+**Deferred at:** 2026-11-06, owner accepted one follow-up for both tests; recorded as a backlog row in plan 39-19
+**Follow-ups:**
+- [ ] Test 36: `getTabSharingState` on the tab host returns camera, microphone and screen `undefined` while a track is live, so extensions see no sharing. Repro: share the camera in a web tab, read `browser.tabs.query` sharingState from an extension. Source: 37-UAT test 36; also Phase 38 deferred UAT follow-up: Test 37 (source: 38-UAT test 37).
+
+### Phase 999.24: Follow-up — Phase 37 deferred UAT follow-up: Test 41 (BACKLOG)
+
+**Goal:** Resolve the 37-REVIEW and 38-REVIEW info findings the owner left open
+**Source phase:** 37, 38
+**Deferred at:** 2026-11-06, owner accepted both review sets as follow-ups; recorded as one backlog row in plan 39-19
+**Follow-ups:**
+- [ ] Test 41: 37-REVIEW IN-01 (`displayHost` unread, top-level host), IN-02 (a reloaded frontend loses pending-prompt marks), IN-03 (the pending mark copy says permission for a password offer), IN-04 (the cap counts only never-shown records; blocked-popup reads can resolve out of order). Repro per finding: `.planning/phases/37-permission-prompts-and-dialogs/37-REVIEW.md`. Source: 37-UAT test 41.
+- [ ] Phase 38 deferred UAT follow-up: Test 38: 38-REVIEW IN-01..IN-08 (icon cache never evicts; `tabs.create` ignores pinned, discarded, title, index; `extensionShortcutOf` dereferences a stopped extension; sidebar `window.close()` throws; install-site failure copy and https host check; listing assets never probed; a popup created before subscribe leaks its panel; the pinned-ids pref is never pruned). Repro per finding: `.planning/phases/38-webextensions/38-REVIEW.md`. Source: 38-UAT test 38.
+
+### Phase 999.25: Follow-up — Phase 38 deferred UAT follow-up: Test 32 (BACKLOG)
+
+**Goal:** Resolve the UAT follow-up deferred during Phase 39 close-out of Phase 38
+**Source phase:** 38
+**Deferred at:** 2026-11-06, owner kept the leading slot and asked for a backlog row (38-UAT test 32); recorded in plan 39-19
+**Follow-ups:**
+- [ ] Test 32: move the page-action icon to the trailing slot beside the star, as Firefox does. Decision text: owner kept the leading slot with the pill-text shift on 2026-11-06. Source: 38-UAT test 32.
+
+### Phase 999.26: Follow-up — Phase 38 deferred UAT follow-up: Test 33 (BACKLOG)
+
+**Goal:** Resolve the UAT follow-up deferred during Phase 39 close-out of Phase 38
+**Source phase:** 38
+**Deferred at:** 2026-11-06, owner deferred to the bridge milestone (38-UAT test 33); recorded in plan 39-19
+**Follow-ups:**
+- [ ] Test 33: an add-ons site install from a web tab gives no prompt, because the stock add-on prompt host is not shell furniture. Repro: open addons.mozilla.org in a web tab, press Add to PowerBrowser. Decision text: deferred to the bridge milestone (`@powerbrowser/browser-bridge`), owner 2026-11-06. Source: 38-UAT test 33.
+
+### Phase 999.27: Residual — WINDOWS.md 25: address-bar ctrl-d-everywhere plant stays green (BACKLOG)
+
+**Goal:** The address-bar self-test plant ctrl-d-everywhere goes red on bookmark-keys again
+**Source phase:** 33 (found in 39-08)
+**Deferred at:** 2026-11-07, v1.5 close-out residual and gate exclusion (plan 39-19)
+**Follow-ups:**
+- [ ] address-bar-live-self-test: plant `ctrl-d-everywhere` stays green on bookmark-keys (39-08: 3 of 3 sessions; 39-19 full run). Repro: `node scripts/verify-address-bar-live.mjs --self-test`. Cause so far: the bookmark command may be disabled while the README editor is current, so Theia skips the planted binding and Monaco keeps Ctrl+D (first lead, not verified). Source: 33-UAT test 1. WINDOWS.md entry 25.
+
+### Phase 999.28: Residual — WINDOWS.md 27: long-press Back leaves focus in the pill (BACKLOG)
+
+**Goal:** A real Escape closes the Back history menu after a hold released off the button
+**Source phase:** 27 (found in 39-15)
+**Deferred at:** 2026-11-07, v1.5 close-out residual (plan 39-19); product defect, the fix window closed at 39-18
+**Follow-ups:**
+- [ ] long-press Back: holding Back 600 ms and releasing on the pill leaves keyboard focus in the pill, so a real Escape is the pill's and the history menu stays open (3 of 3 headed real-input runs). Repro: `PB_REAL_INPUT=1 PB_LIVE_HEADED=1 node scripts/verify-nav-keys-live.mjs --scenario long-press`. Cause so far: the release on the pill moves focus there. Source: 27-UAT test 4. WINDOWS.md entry 27.
+
+### Phase 999.29: Residual — WINDOWS.md 28: page-tools crash-navigate flake (BACKLOG)
+
+**Goal:** crash-navigate passes in every registry run
+**Source phase:** 32 (found in 39-16)
+**Deferred at:** 2026-11-07, v1.5 close-out residual and gate exclusion (plan 39-19)
+**Follow-ups:**
+- [ ] page-tools-live crash-navigate: 'a URL sent to a crashed tab did not load it (no loaded push with crashed false)', 1 of 3 registry runs on 2026-11-06; passed in the 39-19 full run. Repro: `node scripts/verify-page-tools-live.mjs --scenario crash-navigate`. Cause so far: not isolated. Source: 32-UAT test 1. WINDOWS.md entry 28.
+
+### Phase 999.30: Residual — v1.5 close-out full run: harness reliability (BACKLOG)
+
+**Goal:** The three registry rows that went red for timing reasons in the 39-19 full run are deterministic
+**Source phase:** 39 (plan 39-19 full run at 6ac27ac2)
+**Deferred at:** 2026-11-07, gate exclusions keyed to the entries below
+**Follow-ups:**
+- [ ] prompts-live-self-test: plant `allow-loads-frame-url` goes red on 'popup not adopted next to its opener' instead of its own failure, 2 of 3 runs. Repro: `scripts/verify-platform.sh --only prompts-live-self-test`. Cause so far: the 39-09 re-site (999.13) does not reach the plant's failure reliably. Source: 37-UAT test 17. WINDOWS.md entry 39.
+- [ ] ng067-frontend-errors-reach-telemetry: 'no frontend.uncaught-error event was sent', red 1 of 3. Repro: `scripts/verify-platform.sh --only ng067-frontend-errors-reach-telemetry`. Cause so far: not isolated. Source: no UAT test (NG-067). WINDOWS.md entry 42.
+- [ ] page-furniture-live-self-test: clean control 'Copy Image Link did not put the image URL on the clipboard', red 1 of 3. Repro: `scripts/verify-platform.sh --only page-furniture-live-self-test`. Cause so far: headless clipboard read-back timing. Source: 35-UAT test 6. WINDOWS.md entry 43.
+
+### Phase 999.31: Residual — v1.5 close-out full run: defects red at every run (BACKLOG)
+
+**Goal:** Fix the six rows red in 39-BASELINE and again in the 39-19 full run and its rerun
+**Source phase:** 39 (39-BASELINE "new" rows; owned by no fix plan)
+**Deferred at:** 2026-11-07, v1.5 close-out residuals; the phase's fix window closed at 39-18
+**Follow-ups:**
+- [ ] verify-customize-inert: 'state 1 vs state 3 pixels identical, the CSS layer had no effect'. Repro: `scripts/verify-platform.sh --only verify-customize-inert`. Cause so far: the script writes `$XDG_CONFIG_HOME/powerbrowser/customize.css`; the supervised frontend may read another config dir. Source: no UAT test (CUST-01). WINDOWS.md entry 34.
+- [ ] start-failure-shows-error (MIG-04): the planted settings-folder failure is reported as 'waiting for the backend's readiness announcement'. Repro: `scripts/verify-platform.sh --only start-failure-shows-error`. Cause so far: the 3000 ms readiness backstop fires first. Source: no UAT test (MIG-04). WINDOWS.md entry 36.
+- [ ] pan04-undo-close-group-live (g): after the commit, focus is on a `.pb-org-new` element the probe does not resolve. Repro: `scripts/verify-platform.sh --only pan04-undo-close-group-live`. Cause so far: a second Organising widget instance or a stale probe handle. Source: no v1.5 UAT test (PAN-04). WINDOWS.md entry 37.
+- [ ] ng-023-suggestions-history-bookmarks: an open tab ranks below a bookmark match. Repro: `scripts/verify-platform.sh --only ng-023-suggestions-history-bookmarks`. Cause so far: provider order puts bookmarks first; not traced. Source: no UAT test (NG-023). WINDOWS.md entry 38.
+- [ ] site-identity-live app-menu: Organising rows 5-8 disabled, and Help opens no about:support stock window (the self-test's clean control fails the same way). Repro: `node scripts/verify-site-identity-live.mjs --scenario app-menu`. Cause so far: harness expectation or product not separated. Source: 31-04-LIVE-HANDOFF.md (phase 31 has no UAT sheet). WINDOWS.md entry 40.
+- [ ] first-boot-surface-fresh: `TypeError: can't access property "offsetHeight", additionalViewsMenu is null`. Repro: `scripts/verify-platform.sh --only first-boot-surface-fresh`. Cause so far: `@theia/core` SideTabBar overflow (tab-bars.js:1179) expects `.theia-additional-views-menu` beside the tab bar, and the top side-panel tabs (e9569e81) remove it; fix in the PB extension, never in Theia core. Source: no UAT test. WINDOWS.md entry 41.
+
+### Phase 999.32: Residual — v1.5 close-out full run: owner and environment rows (BACKLOG)
+
+**Goal:** The rows that need an owner step or a clean checkout run green
+**Source phase:** 39 (39-BASELINE "environment" rows; v1.6 deploy workstream and v1.7 macOS)
+**Deferred at:** 2026-11-07, gate exclusions keyed to the entries below
+**Follow-ups:**
+- [ ] Ten release-artifact rows (ng063, portable-elf, sidecar-no-symlinks, package-target-natives, packaged-identity, install-matrix, ng065, ng072, search-engines-packaged, mar-update-hop). Repro: `scripts/verify-platform.sh --only portable-elf`. Cause so far: no container-built tarball and no N-plus-1 MAR hop; owner steps in `.planning/workstreams/deploy/OWNER-PASS.md`. Source: no UAT test. WINDOWS.md entry 30.
+- [ ] Seven live-state rows (ng074-ci-green-on-main, repo-controls, channel-live, codeberg-mirror-live, upptime-sweep-live, win-matrix-record, win-download-copy). Repro: `scripts/verify-platform.sh --only channel-live`. Cause so far: main not pushed, no Release, undeclared apps and slugs, no Windows matrix record. Source: no UAT test. WINDOWS.md entry 31.
+- [ ] macos-package-payload, macos-install-matrix: deferred to v1.7 (R4). Source: no UAT test. WINDOWS.md entry 32.
+- [ ] tel06-error-delivery-live refuses the dirty tree (the owner's `.claude/settings.json`, `.planning/state.json`); run it on a clean checkout. Source: no UAT test. WINDOWS.md entry 33.
+- [ ] ng089-uat-sheets: 49 pending results plus no React 19 runtime test in the v1.2 and v1.3 UAT sheets; the NG-084 live pass was deferred by the owner. Repro: `node scripts/verify-ng-089-uat-sheets.mjs`. Source: those sheets. WINDOWS.md entry 35.
