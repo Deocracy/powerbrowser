@@ -26,11 +26,13 @@ evidence: "39-15 2026-11-06, objdir/dist/bin/powerbrowser headed on the owner KD
 
 ### 3. Physical mouse back/forward buttons
 expected: over a web page they go back/forward in that page; over the Theia frame nothing browser-side happens
-result: [pending]
+result: pass
+evidence: "39-15 2026-11-06, objdir/dist/bin/powerbrowser headed on the owner KDE Wayland desktop, harness commit 6fc1161a: PB_REAL_INPUT=1, pointer os -- real uinput buttons through ydotool behind the pb-kwin gate (the active window read back before the move and again before the button, the pointer read back on target, the owner's mouse idle 750 ms first); the screen point calibrated by a trusted-mousemove read-back in the target document, within 2 px. verify-nav-keys-live mouse-buttons PASS: a real side (back) button over page /m2 landed on /m1, a real extra (forward) button landed on /m2 (calibration within 1 px, two runs); a real back button over the Theia frame (the Reload button) changed nothing within 1500 ms"
 
 ### 4. Press-and-hold cleanup (WR-01, IN-25)
 expected: after holding Back, releasing off the button (or a cancelled touch/pen press), pressing Enter on Back still goes back one page
-result: [pending]
+result: pass
+evidence: "39-15 2026-11-06, objdir/dist/bin/powerbrowser headed on the owner KDE Wayland desktop, harness commit 6fc1161a: PB_REAL_INPUT=1, pointer os -- real uinput buttons through ydotool behind the pb-kwin gate (the active window read back before the move and again before the button, the pointer read back on target, the owner's mouse idle 750 ms first); the screen point calibrated by a trusted-mousemove read-back in the target document, within 2 px. verify-nav-keys-live long-press PASS: a real 600 ms hold on Back opened the two-entry history menu, the pointer moved off Back onto the pill and released there, the release navigated nothing, then Enter on the focused Back (key os) went back one page to /h1. Finding (not this row's claim): after that release focus is in the pill, so a real Escape is the pill's and leaves the history menu open; the check closed it through the menu node. Product fix deferred (39-15 SUMMARY)"
 
 ### 5. Look and timing
 expected: one-line tooltips above the bar in Coding and Browsing, on the toolbar row in Organising, never over the page; a ~500 ms hold on Back opens the history menu like Firefox; narrowing the window with Home shown shrinks the address pill to 120px before any button wraps or clips

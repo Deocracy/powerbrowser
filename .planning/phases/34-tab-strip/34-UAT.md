@@ -17,6 +17,7 @@ Deferred to the one end-of-milestone pass (Chris, 2026-10-31). Exact live comman
 ### 1. Double-click on empty strip space against the window-drag handles (TAB-03)
 expected: In Browsing mode, on a build with the window drag regions active, double-click empty space on the tab strip (right of the last tab): a new tab opens (the pill takes focus) and the window does not maximize or restore. Live scenario `double` covers the DOM event only; the native drag-region double-click is the open part
 result: [pending]
+real-input: "39-15 2026-11-06, objdir/dist/bin/powerbrowser headed on the owner KDE Wayland desktop, harness commit 6fc1161a: PB_REAL_INPUT=1, pointer os -- real uinput buttons through ydotool behind the pb-kwin gate (the active window read back before the move and again before the button, the pointer read back on target, the owner's mouse idle 750 ms first); the screen point calibrated by a trusted-mousemove read-back in the target document, within 2 px. verify-tab-strip-live double, run three times with the same result: a real double-click on the empty strip right of /a (calibrated on /a's tab: the gap is a chrome drag handle and raises no mousemove in the Theia frame) MAXIMIZED the window (KWin frame 384,226 1280x800 -> 0,0 2048x1252) and opened NO new tab. The native drag region consumes the double-click, so TAB-03's second clause fails on a real pointer; the DOM-event scenario stays green. Owner batch B decides"
 live: "v1.5 end-of-milestone pass, 2026-11-04, main: double PASS (the DOM event only; the native drag-region double-click is still the owner check)"
 owner: "Decide: keep both (if the native double-click works), carve the empty strip out of the drag handles, or drop the double-click clause of TAB-03"
 why: "onStripDoubleClick (tab-strip-widget.tsx:1102) runs the New Tab command, but publishDragRegions (chrome-bar-widget.tsx:2210-2260) lists the strip row as a window-drag row and sends every gap between tabs as a handle. If Gecko consumes the double-click in the drag region (native maximize toggle), TAB-03's second clause fails"
@@ -48,7 +49,8 @@ why: "Pointer gesture; clampDrop was proven by plant only"
 
 ### 6. Middle-click close (TAB-03)
 expected: Scenario `middle`: middle-click a tab; it closes through its close row and nothing is pasted into the page. Open: on Linux, with text selected in the page behind, the primary-selection middle-click by hand
-result: [pending]
+result: pass
+evidence: "39-15 2026-11-06, objdir/dist/bin/powerbrowser headed on the owner KDE Wayland desktop, harness commit 6fc1161a: PB_REAL_INPUT=1, pointer os -- real uinput buttons through ydotool behind the pb-kwin gate (the active window read back before the move and again before the button, the pointer read back on target, the owner's mouse idle 750 ms first); the screen point calibrated by a trusted-mousemove read-back in the target document, within 2 px. verify-tab-strip-live middle PASS with every middle-click real: the positive controls caught real primary-selection pastes into a Theia-frame editable and a page editable (2 events each); then with text selected in page /b and the selection clipboard set, a real middle-click on /a's strip tab closed /a, pasted nowhere, and the page text was unchanged"
 live: "v1.5 end-of-milestone pass, 2026-11-04, main: middle PASS; the Linux primary-selection middle-click remains by hand"
 why: "The Gecko paste fall-through is observable only live"
 
