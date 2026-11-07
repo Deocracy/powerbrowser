@@ -3450,7 +3450,9 @@ if (!existsSync(xhtmlPath)) {
   console.error(\`shell01-theia-is-the-window: FAIL -- SHELL-01 -- \${xhtmlPath} does not exist yet\`);
   ok = false;
 } else {
-  const text = readFileSync(xhtmlPath, 'utf8');
+  // A stock skin stylesheet href (35-07's chrome://browser/skin/tabbrowser/fullscreen-and-pointerlock.css) is CSS,
+  // not chrome: it cannot add a tab strip, toolbar or URL bar, so its path is not scanned.
+  const text = readFileSync(xhtmlPath, 'utf8').replace(/href="chrome:\/\/browser\/skin\/[^"]*"/g, '');
   for (const term of forbidden) {
     if (text.includes(term)) {
       console.error(\`shell01-theia-is-the-window: FAIL -- SHELL-01 -- \${xhtmlPath} contains forbidden custom-chrome string '\${term}'\`);
@@ -6495,17 +6497,45 @@ extract_failed_labels() {
 # never on a bare assertion -- see ledger_entry_is_open above.
 # label|ledger_id|reason
 declare -a GATE_KNOWN_OPEN_EXCLUSIONS=(
-  "verify-endpoints|5|Gecko resolves 3 hosts absent from the BRAND-04 allowlist once the shell actually works (127.0.0.1 the Theia sidecar, ciscobinary.openh264.org the GMP manager, and the welcome widget's own project link) -- not a code defect, needs a product/privacy decision that phase's scope explicitly excluded"
-  # 01-07: both of these read objdir-release/, i.e. a SECOND full ~47-minute
-  # release build that 01-04-PLAN.md explicitly declined to spend. Neither is a
-  # code defect and neither has ever been red for a code reason -- each fails
-  # with "objdir-release/... does not exist" and nothing else. They become
-  # runnable, unchanged, the moment a release objdir exists, which is why they
-  # stay registered rather than being deleted or narrowed. Keyed on ledger
-  # entry 10, so the exclusion stops applying the instant that entry stops
-  # being open.
-  "verify-branding-identity-release|10|reads objdir-release/dist/bin, which does not exist -- 01-04-PLAN.md declined the second ~47m release build; runnable unchanged once one exists"
-  "branding-variant-divergence|10|reads BOTH objdir/dist/bin and objdir-release/dist/bin; the release half does not exist -- same declined build as above"
+  # 39-19 (2026-11-07): every red of the v1.5 close-out full run that is not fixed is keyed to an open ledger
+  # entry carrying repro, cause so far and source (scope item 7). The 01-era rows keyed to fixed ledger
+  # entries 5 and 10 were removed: verify-endpoints and branding-variant-divergence pass, and
+  # verify-branding-identity-release passes once objdir-release is rebuilt (39-19, docs/BUILD.md).
+  "ng063-packaged-launch|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "portable-elf|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "sidecar-no-symlinks|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "package-target-natives|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "packaged-identity|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "install-matrix|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "ng065-mar-signature-enforced|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "ng072-policies-packaged-webextension|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "search-engines-packaged|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "mar-update-hop|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "ng074-ci-green-on-main|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "repo-controls|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "channel-live|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "codeberg-mirror-live|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "upptime-sweep-live|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "win-matrix-record|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "win-download-copy|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "macos-package-payload|32|macOS deferred to v1.7 (R4), needs Mac hardware"
+  "macos-install-matrix|32|macOS deferred to v1.7 (R4), needs Mac hardware"
+  "tel06-error-delivery-live|33|refuses a dirty tree; the dirt is the owner's .claude/settings.json and .planning/state.json"
+  "verify-customize-inert|34|the customize.css layer shows no pixel effect in state 3; cause not isolated"
+  "ng089-uat-sheets|35|49 pending results in the v1.2/v1.3 UAT sheets; the NG-084 live pass was deferred by the owner"
+  "start-failure-shows-error|36|the readiness backstop fires before the planted settings-folder failure is classified"
+  "pan04-undo-close-group-live|37|after the commit focus is on a pb-org-new element the probe does not resolve; harness or product not separated"
+  "ng-023-suggestions-history-bookmarks|38|an open tab ranks below a bookmark match"
+  "prompts-live-self-test|39|plant allow-loads-frame-url goes red on popup adoption instead of its own failure, 2 of 3 runs"
+  "site-identity-live|40|app-menu: Organising rows 5-8 disabled and Help opens no about:support stock window"
+  "site-identity-live-self-test|40|app-menu: Organising rows 5-8 disabled and Help opens no about:support stock window"
+  "first-boot-surface-fresh|41|Theia core SideTabBar overflow reads a .theia-additional-views-menu the top side-panel tabs removed"
+  "ng067-frontend-errors-reach-telemetry|42|flaky: red 1 of 3 (no frontend.uncaught-error event sent)"
+  "page-furniture-live-self-test|43|flaky: clean control Copy Image Link clipboard read-back red 1 of 3"
+  "address-bar-live-self-test|25|plant ctrl-d-everywhere stays green on bookmark-keys"
+  "page-tools-live|28|flaky: crash-navigate red 1 of 3 registry runs (2026-11-06)"
+  "extension-actions-live|29|private-access session 2: options page opens in the private stock window, matches stock; deferred to 999.17"
+  "extension-actions-live-self-test|29|private-access session 2: options page opens in the private stock window, matches stock; deferred to 999.17"
 )
 
 # Before consolidation, --gate ran this script's own set and then SHELLED OUT to

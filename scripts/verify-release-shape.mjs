@@ -501,7 +501,8 @@ function runChecks(root, overrides = {}) {
             }
         }
         const registry = (overrides.read ?? (rel => readText(root, rel)))(REGISTRY_REL) ?? '';
-        const labels = new Set([...registry.matchAll(/^\s*"([a-z0-9][a-z0-9-]*)\|/gm)].map(m => m[1]));
+        // A GATE_KNOWN_OPEN_EXCLUSIONS entry ("label|<ledger id>|reason") names a label but registers nothing.
+        const labels = new Set([...registry.matchAll(/^\s*"([a-z0-9][a-z0-9-]*)\|(?!\d+\|)/gm)].map(m => m[1]));
         for (const l of ran) if (!labels.has(l)) fail(BUILD_JOB, 'packaged-rows', `runs --only ${l}, which is not a label in ${REGISTRY_REL}, so the step fails or checks nothing. Next step: register the row or correct the label.`);
         for (const l of PACKAGED_ROWS) if (!ran.has(l)) fail(BUILD_JOB, 'packaged-rows', `does not run ${l} over the built package. Next step: add it to the packaged-rows step.`);
     }
