@@ -3,7 +3,7 @@ status: partial
 phase: 34-tab-strip
 source: [34-VERIFICATION.md]
 started: 2026-11-01T00:00:00Z
-updated: 2026-11-05T18:14:14.000Z
+updated: 2026-11-06T23:30:00.000Z
 ---
 
 Deferred to the one end-of-milestone pass (Chris, 2026-10-31). Exact live commands are in 34-VERIFICATION.md under "Deferred Live Items" and in 34-05-SUMMARY.md. A scenario name below is a scenario of `node scripts/verify-tab-strip-live.mjs`. Start from a clean working tree with a current Gecko build (the harness stops at assertCleanTree otherwise).
@@ -17,16 +17,17 @@ Deferred to the one end-of-milestone pass (Chris, 2026-10-31). Exact live comman
 ### 1. Double-click on empty strip space against the window-drag handles (TAB-03)
 expected: In Browsing mode, on a build with the window drag regions active, double-click empty space on the tab strip (right of the last tab): a new tab opens (the pill takes focus) and the window does not maximize or restore. Live scenario `double` covers the DOM event only; the native drag-region double-click is the open part
 result: [pending]
+owner: "Chris 2026-11-06 via AskUserQuestion: Box 34, T1 (a real double-click maximizes the window, 3/3), T2 (strip hidden in Coding and Organising) and T15 (IN-01..IN-12): Carve-out + accept T2, T15 (Recommended). T1 stays [pending]: plan 39-18 removes the strip from the window-drag handles (shell JS, with a plant) and records the result."
 real-input: "39-15 2026-11-06, objdir/dist/bin/powerbrowser headed on the owner KDE Wayland desktop, harness commit 6fc1161a: PB_REAL_INPUT=1, pointer os -- real uinput buttons through ydotool behind the pb-kwin gate (the active window read back before the move and again before the button, the pointer read back on target, the owner's mouse idle 750 ms first); the screen point calibrated by a trusted-mousemove read-back in the target document, within 2 px. verify-tab-strip-live double, run three times with the same result: a real double-click on the empty strip right of /a (calibrated on /a's tab: the gap is a chrome drag handle and raises no mousemove in the Theia frame) MAXIMIZED the window (KWin frame 384,226 1280x800 -> 0,0 2048x1252) and opened NO new tab. The native drag region consumes the double-click, so TAB-03's second clause fails on a real pointer; the DOM-event scenario stays green. Owner batch B decides"
 live: "v1.5 end-of-milestone pass, 2026-11-04, main: double PASS (the DOM event only; the native drag-region double-click is still the owner check)"
-owner: "Decide: keep both (if the native double-click works), carve the empty strip out of the drag handles, or drop the double-click clause of TAB-03"
 why: "onStripDoubleClick (tab-strip-widget.tsx:1102) runs the New Tab command, but publishDragRegions (chrome-bar-widget.tsx:2210-2260) lists the strip row as a window-drag row and sends every gap between tabs as a handle. If Gecko consumes the double-click in the drag region (native maximize toggle), TAB-03's second clause fails"
 
 ### 2. Strip visibility outside Browsing against the 34-05 plan text (D-02)
 expected: Switch Browsing, Coding, Organising and back; the owner states which behaviour is intended. Today setHidden(modeId !== 'browsing') (chrome-bar-widget.tsx:2055) hides the strip in Coding and Organising, where the Theia tab bar and the canvas cards serve as tabs; 34-CONTEXT D-02 says visibility follows the mode-service contract; the 34-05 plan truth said the strip renders in all three modes. Live scenario `modes`
-result: [pending]
+result: pass
+evidence: "owner decision 2026-11-06"
+owner: "Chris 2026-11-06 via AskUserQuestion: Box 34, T1/T2/T15: Carve-out + accept T2, T15 (Recommended). T2 passes: the strip stays hidden in Coding and Organising."
 live: "v1.5 end-of-milestone pass, 2026-11-04, main: modes PASS against the source-derived expectation (strip hidden outside Browsing); the intended behaviour is still the owner decision"
-owner: "State whether the strip should paint in Coding and Organising; if it should, that is a behaviour change for a new plan"
 why: "Product decision. The modes scenario derives its expectation from the source and follows it"
 
 ### 3. Tab menu rows (TAB-01, SC1)
@@ -104,25 +105,28 @@ capture: "39-16 headed (331ed734, `PB_CAPTURE_DIR=... node scripts/verify-tab-st
 
 ### 15. Judgment-tier prohibitions and open info findings
 expected: Review the Prohibitions table in 34-VERIFICATION.md (the judgment-tier rows) and 34-REVIEW IN-01..IN-12, still open. Owner confirms or rejects each non-authoritative verdict and decides whether any IN item (IN-12 lone-tab Close rows disabled rather than hidden; IN-06 colon text refused; IN-08 gate does not follow the command execute) must close before Phase 34 requirements turn complete
-result: [pending]
+result: pass
+evidence: "owner decision 2026-11-06"
+owner: "Chris 2026-11-06 via AskUserQuestion: Box 34, T1/T2/T15: Carve-out + accept T2, T15 (Recommended). T15 passes; IN-01..IN-12 are logged as follow-ups below."
 why: "unverified-prohibition, human review recommended"
 
 ## Summary
 
 total: 15
-passed: 10
+passed: 12
 issues: 0
-pending: 5
+pending: 3
 skipped: 0
 blocked: 0
 
 ## Gaps
 
-None recorded. Rows 1-2 wait on owner calls. Row 7 keeps a human-only remainder (drops from outside the browser). Row 14 has a capture waiting on Chris's verdict. Row 15 waits on the owner (39-16).
+None recorded. Row 1 is ruled (carve the empty strip out of the window-drag handles) and waits on plan 39-18 to apply it and record the result. Row 7 keeps a human-only remainder (drops from outside the browser). Row 14 has a capture waiting on Chris's verdict.
 
 ## Deferred Follow-Ups
 
 - Row 4: IN-02 is answered by 39-16. A repeated Bookmark Tab and a Bookmark All Tabs over an already-bookmarked page each leave one Places bookmark per URL (bookmark-all, 331ed734).
 - Row 9: IN-03 (pin restore may re-activate a stale current tab) and IN-11 (pins on id-keyed widgets) are open.
 - Row 14: IN-01 (selected tabs show no hover feedback) is open.
-- Row 15: 34-REVIEW IN-01..IN-12 await the owner's verdict.
+- Row 1: owner ruled the carve-out 2026-11-06; plan 39-18 removes the strip from the window-drag handles (shell JS, with a plant).
+- Row 15: owner accepted 2026-11-06; 34-REVIEW IN-01..IN-12 stay open as follow-ups (IN-12 lone-tab Close rows disabled rather than hidden; IN-06 colon text refused; IN-08 gate does not follow the command execute; IN-01 selected tabs show no hover feedback).

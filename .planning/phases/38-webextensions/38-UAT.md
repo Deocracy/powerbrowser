@@ -163,6 +163,7 @@ command: |
 expected: Step 2: no puzzle row, no button, no Show Sidebar row; Alt+Shift+I with a page focused does nothing; the options page is refused with "PowerBrowser refused to open that page: this extension is not allowed in private windows." Step 3: the row, the sidebar and the options tab return. Step 4: the options page opens in a non-private stock window, or a new one if none is open
 result: [pending]
 partial: "Steps 1-3 pass live (session 1). Step 4 stays pending on 39-13 deferred item 3, a patch 050 owner call: stock openOptionsPage uses windowTracker.topWindow, so the denied extension's options page lands in the private stock window opened last"
+owner: "Chris 2026-11-06 via AskUserQuestion: Extra 1 (38 T22 step 4, options page of a not-allowed extension opens in a private stock window; needs a patch-050 hunk and a Gecko rebuild): Defer to backlog (Recommended). Stays pending; backlog row ROADMAP 999.17 and WINDOWS.md entry 29 carry it; matches stock behaviour."
 evidence: "39-13-fixups 2026-11-06, objdir/dist/bin/powerbrowser, commit 2942d39b (token cookie also in the private jar under browser.privatebrowsing.autostart): scenario private-access session 1 PASS -- 'the permanent-private leg passed (shell private true: denied has no button, puzzle row or sidebar key, its options page refused ('PowerBrowser refused to open that page: this extension is not allowed in private windows.'); allowed shows all and its options page opened)'. Control with the cookie fix reverted: session 1 red, 'the shell's IDE never loaded'. Session 2 still red: 'with a private stock window open last the denied options page is in [{\"private\":true}], want the one non-private window'"
 live: "39-13 lane-b 2026-11-06, objdir/dist/bin/powerbrowser (050 and 060 stamps matched): scenario private-access FAIL, two product defects deferred to main (39-13-SUMMARY). (1) With browser.privatebrowsing.autostart the shell IDE never loads: the frame shows the sidecar Forbidden page, because setSessionCookie adds the token cookie with empty origin attributes only. (2) With a private stock window open, the denied extension options page lands in the private window: stock openOptionsPage uses windowTracker.topWindow and that window own switchToTabHavingURI, not the shell receiver. Plant shell-not-private is in the table; the control is red, so it is unscored. Harness 728b962c"
 
@@ -215,6 +216,7 @@ command: Call `browser.runtime.openOptionsPage()` twice from the `surfaces` fixt
 expected: The second call switches to the stock tab already showing the page and adds none; while the stock window is starting it waits for that window instead of opening a second one; no error is reported for a page that opened (`541ae2ea`)
 result: pass
 evidence: "39-13-fixups 2026-11-06, objdir/dist/bin/powerbrowser, commit 7dc0e61c (the started stock window's own switchToTabHavingURI reuses the shell's uncommitted options tab): scenario options-page-switch PASS in 5 of 5 runs -- 'a second call while the stock window was starting (still starting at the call: true) gave one stock window and one options tab; a third call switched to it and added none'. Before the fix, instrumented: the second call reached the stock window's own switchToTabHavingURI with the shell's options tab still on about:blank, 5 of 5 red. Plant options-no-reuse is in the table (harness e8186bee)"
+owner: "Chris 2026-11-06 via AskUserQuestion: Extra 2 (the one-entry STOCK_WINDOW_WRAPPERS exemption in scripts/verify-shell-gbrowser-standin.mjs from 7dc0e61c): Ratify (Recommended)."
 live: "39-13 lane-b 2026-11-06, objdir/dist/bin/powerbrowser (050 and 060 stamps matched): scenario options-page-switch PASS in 4 of 5 runs, including the registry row: a second call made while the stock window was still starting waited for that window, and a third call switched to the open tab and added none; plant options-no-reuse red. In 1 run a second call made while the window was starting added a second options tab in the one window, an intermittent race (fix deferred to main, 39-13-SUMMARY). Left pending for that race. Harness e8186bee"
 
 ### 31. Owner decision: EXT-10 password-manager fill under D-09
@@ -233,7 +235,7 @@ owner: "Chris 2026-11-06 via AskUserQuestion: box 38, Accept all (Recommended). 
 expected: The icon sits in the pill's leading slot and shifts the address-bar text. Keep the shift (recommended by 38-03), move the icon to the trailing slot beside the star as Firefox does, or overlay it. Also decide whether a signed fixture is required now that the AMO route exists
 result: pass
 evidence: "owner decision 2026-11-06; trailing-slot move listed under Deferred Follow-Ups"
-owner: "Chris 2026-11-06 via AskUserQuestion: box 38, Accept all (Recommended). T32: keep the leading slot with pill-text shift; log the trailing-slot move as a backlog row."
+owner: "Chris 2026-11-06 via AskUserQuestion: box 38, Accept all (Recommended). T32: keep the leading slot with pill-text shift; log the trailing-slot move as a backlog row. Extra 3 (T32 second question, is a signed fixture of our own still required now the AMO route works): Not required (Recommended)."
 
 ### 33. Owner decision: AMO install from a web tab does not prompt
 expected: A user who navigates a web tab to the add-ons site and presses its install button gets no prompt (the prompt code throws on the missing `gUnifiedExtensions` and the install waits). The stock window route (the footer) is supported. Decide whether the stock add-on prompt host (`gUnifiedExtensions.getPopupAnchorID`, the `addon-webext-permissions-notification` element, its popupnotification) joins the shell furniture. 38-05 recommends deferring to the bridge milestone
@@ -347,11 +349,11 @@ blocked: 0
 - test: none
   idea: "enterprise policies (for example SearchEngines Default) are applied only when the first stock window fires sessionstore-windows-restored (EnterprisePoliciesParent.sys.mjs:368-369); a shell-only session never applies them. Same root cause as the event-page wake"
   deferred_at: 2026-11-04
-- test: 32
-  idea: "move the page-action icon to the trailing slot beside the star as Firefox does; owner kept the leading slot with the pill-text shift on 2026-11-06 and asked for a backlog row (source: 38-UAT test 32)"
+- test: 22
+  idea: "step 4: the options page of a not-allowed extension opens in the private stock window opened last, because stock openOptionsPage uses windowTracker.topWindow and that window's own switchToTabHavingURI is not the shell receiver; fix needs a patch 050 hunk and a Gecko rebuild; owner deferred 2026-11-06 to backlog 999.17, WINDOWS.md 29; matches stock behaviour (source: 38-UAT test 22)"
   deferred_at: 2026-11-06
 - test: 32
-  idea: "row 32's second question, whether a signed fixture is required now that the AMO route exists, was not in the 2026-11-06 box; it still needs an owner answer (source: 38-UAT test 32)"
+  idea: "move the page-action icon to the trailing slot beside the star as Firefox does; owner kept the leading slot with the pill-text shift on 2026-11-06 and asked for a backlog row (source: 38-UAT test 32)"
   deferred_at: 2026-11-06
 - test: 33
   idea: "AMO install from a web tab gives no prompt (the stock add-on prompt host is not shell furniture); deferred to the bridge milestone, owner 2026-11-06 (source: 38-UAT test 33)"

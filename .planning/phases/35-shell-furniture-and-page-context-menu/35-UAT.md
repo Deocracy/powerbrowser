@@ -3,7 +3,7 @@ status: partial
 phase: 35-shell-furniture-and-page-context-menu
 source: [35-VERIFICATION.md, 35-REVIEW.md, 35-VALIDATION.md, "35-0[1-7]-SUMMARY.md"]
 started: 2026-11-01T00:00:00Z
-updated: 2026-11-06T18:20:00.000Z
+updated: 2026-11-06T23:30:00.000Z
 ---
 
 Deferred to the one end-of-milestone pass (Chris, 2026-10-31). Run on `objdir/dist/bin/powerbrowser` with `-purgecaches` after any shell-module change. No live run of Phase 35 has happened: the lane had no objdir.
@@ -123,18 +123,22 @@ evidence: "39-07 2026-11-06, main 0c6b3a85: inspect-policy PASS (scenario 513036
 
 ### 21. Open point: Edit submenu while the hamburger is open
 expected: Decide the behavior. Today the Edit submenu falls back to the top document when no content frame is focused (the hamburger holds focus, `webTabEditContext` returns the top browsing context). Check that Cut, Copy, Paste and Undo from the hamburger Edit submenu still act on the right target in a page with a focused iframe input, or record the limitation
-result: [pending]
+result: pass
+evidence: "owner decision 2026-11-06"
+owner: "Chris 2026-11-06 via AskUserQuestion: Box 35, T21 (Edit submenu falls back to the top document while the hamburger holds focus) and T22 (first stale pick gives no message): Accept both (Recommended). T21 passes with the limitation recorded under Deferred Follow-Ups."
 
 ### 22. Open point: a stale first pick gives no message
 expected: Open a page menu, wait over 60 seconds, then pick a row: nothing runs and the page only regains focus (the `stale` reply, 35-REVIEW WR-06). Decide whether the first stale pick must also show a message, as the second step of a save now does
-result: [pending]
+result: pass
+evidence: "owner decision 2026-11-06"
+owner: "Chris 2026-11-06 via AskUserQuestion: Box 35, T21/T22: Accept both (Recommended). T22 passes: the first stale pick shows no message."
 
 ## Summary
 
 total: 22
-passed: 14
+passed: 16
 issues: 0
-pending: 8
+pending: 6
 skipped: 0
 blocked: 0
 
@@ -157,4 +161,7 @@ blocked: 0
 - test: 6
   idea: "C11: a page menu dismissal sends widget.focusPage() a round trip later; when it lands after the next menu opened, chrome focus ends on <body>. The harness now focuses the Theia frame first; the product race itself is unfixed"
   deferred_at: 2026-11-04
+- test: 21
+  idea: "limitation: while the hamburger holds focus the Edit submenu falls back to the top document (webTabEditContext returns the top browsing context), so Cut, Copy, Paste and Undo from it do not reach a focused iframe input; owner accepted 2026-11-06"
+  deferred_at: 2026-11-06
 ```

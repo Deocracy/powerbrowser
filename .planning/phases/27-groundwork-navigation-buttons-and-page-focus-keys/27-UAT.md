@@ -3,7 +3,7 @@ status: partial
 phase: 27-groundwork-navigation-buttons-and-page-focus-keys
 source: [27-VERIFICATION.md]
 started: 2026-10-21T07:05:00Z
-updated: 2026-11-05T01:52:09.187Z
+updated: 2026-11-06T23:30:00.000Z
 ---
 
 # Phase 27 UAT — human checks (deferred to Chris, end of milestone)
@@ -48,14 +48,16 @@ result: resolved (autonomous, recommended) — assigned to Phase 32 via .plannin
 
 ### 8. Judgment-tier prohibitions (14)
 expected: confirm or reject each LLM verdict listed in 27-VERIFICATION.md
-result: [pending]
+result: pass
+evidence: "owner decision 2026-11-06"
+owner: "Chris 2026-11-06 via AskUserQuestion: Box 27, T8 (confirm the 14 judgment-tier prohibition verdicts): Accept all (Recommended)"
 
 ## Summary
 
 total: 8
-passed: 4
+passed: 5
 issues: 0
-pending: 3
+pending: 2
 skipped: 0
 
 ## Gaps

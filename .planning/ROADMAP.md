@@ -841,3 +841,12 @@ Plans:
 **Deferred at:** 2026-11-04 during /gsd-verify-work 38 session completion
 **Follow-ups:**
 - [x] Test none: enterprise policies (for example SearchEngines Default) are applied only when the first stock window fires sessionstore-windows-restored (EnterprisePoliciesParent.sys.mjs:368-369); a shell-only session never applies them. Same root cause as the event-page wake (deferred 2026-11-04) — fixed in 39-04 (735dc25b)
+
+
+### Phase 999.17: Follow-up — Phase 38 deferred UAT follow-up: Test 22 (BACKLOG)
+
+**Goal:** Resolve the UAT checkpoint deferred during Phase 38 verification
+**Source phase:** 38
+**Deferred at:** 2026-11-06 by owner ruling in plan 39-17 (Chris, AskUserQuestion: "Defer to backlog (Recommended)")
+**Follow-ups:**
+- [ ] Test 22 step 4: with a private stock window opened last, the options page of an extension that is not allowed in private windows opens in that private window, because stock `openOptionsPage` uses `windowTracker.topWindow`; the fix is a patch 050 hunk plus a Gecko rebuild. Matches stock behaviour, so deferred. Repro: 38-UAT test 22 step 4 (scenario `private-access`, session 2). WINDOWS.md entry 29.

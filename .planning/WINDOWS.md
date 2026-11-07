@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 7
+open_count: 8
 waived_count: 2
 fixed_count: 19
-total_count: 28
-last_updated: 2026-11-07T04:37:55.475Z
+total_count: 29
+last_updated: 2026-11-07T04:50:37.188Z
 ---
 
 # Broken Windows Ledger
@@ -43,6 +43,7 @@ last_updated: 2026-11-07T04:37:55.475Z
 | 26 | 39 | skipped-test | scripts/verify-prompts-live.mjs |  | prompts-live dialog and dialog-probe are skipped by derivation while REQUIREMENTS.md records PROMPT-03 deferred to 999.3 (OQ1 ruling 2026-11-05); repro: node scripts/verify-prompts-live.mjs --scenario dialog; cause: stock page dialogs lock the IDE; source: 37-UAT tests 8 and 9 | open |  | 2026-11-06T22:32:05.803Z |  |
 | 27 | 39 | deviation | theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx | 976 | long-press Back: with a real pointer, holding Back 600 ms then releasing on the pill leaves keyboard focus in the pill, so a real Escape is the pill's and the history menu stays open (39-15 verify-nav-keys-live long-press under PB_REAL_INPUT=1, 3 of 3 runs); the T4 claim itself (Enter on Back goes back after the hold) passes | open |  | 2026-11-07T02:53:12.909Z |  |
 | 28 | 39 | deviation | scripts/verify-page-tools-live.mjs |  | page-tools-live crash-navigate flaked once in three registry runs on 2026-11-06 (4ce04c24): 'a URL sent to a crashed tab did not load it (no loaded push with crashed false)'; the scenario passed alone 2 of 2 right after, and in the 116ac682 run; the code was not changed by 39-16; for the 39-18 flake work | open |  | 2026-11-07T04:37:55.475Z |  |
+| 29 | 39 | deviation | patches/050-extension-tab-host.patch |  | 38 T22 step 4: the options page of an extension not allowed in private windows opens in the private stock window opened last (stock openOptionsPage uses windowTracker.topWindow); fix needs a patch 050 hunk and a Gecko rebuild; owner deferred to backlog 999.17 on 2026-11-06 (39-17), matches stock behaviour; repro: 38-UAT test 22 step 4, scenario private-access session 2; source: 38-UAT test 22 | open |  | 2026-11-07T04:50:37.188Z |  |
 
 ````json
 [
@@ -383,6 +384,18 @@ last_updated: 2026-11-07T04:37:55.475Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-11-07T04:37:55.475Z",
+    "resolved_at": null
+  },
+  {
+    "id": 29,
+    "kind": "deviation",
+    "phase": "39",
+    "file": "patches/050-extension-tab-host.patch",
+    "line": null,
+    "description": "38 T22 step 4: the options page of an extension not allowed in private windows opens in the private stock window opened last (stock openOptionsPage uses windowTracker.topWindow); fix needs a patch 050 hunk and a Gecko rebuild; owner deferred to backlog 999.17 on 2026-11-06 (39-17), matches stock behaviour; repro: 38-UAT test 22 step 4, scenario private-access session 2; source: 38-UAT test 22",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-07T04:50:37.188Z",
     "resolved_at": null,
     "milestone": "v1.5"
   }
