@@ -1357,7 +1357,11 @@ async function scenarioEditGreying(app, origin, plant = false) {
         if (rows[EDIT_ROW[key]] !== true) {
             return `the ${EDIT_ROW[key]} row was dimmed when it was chosen (${what}); rows ${JSON.stringify(rows)}`;
         }
-        if (await waitForPush(app, editTitle(tabId, re), { from: mark, timeoutMs: 6000 }) >= 0) {
+        // Copy changes nothing on the page, so its row is read as the current title after a settle (the paste after it proves it).
+        const changed = key === 'copy'
+            ? (await new Promise(resolve => setTimeout(resolve, 500)), re.test(await lastEditGreyTitle(app, tabId)))
+            : await waitForPush(app, editTitle(tabId, re), { from: mark, timeoutMs: 6000 }) >= 0;
+        if (changed) {
             return null;
         }
         const sent = (await requestKinds(app)).length > sentBefore;
