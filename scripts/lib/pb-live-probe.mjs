@@ -26,7 +26,7 @@ import { createServer as createHttpsServer } from 'node:https';
 import { readFileSync } from 'node:fs';
 import { GET_BY_NAME, makeProfile, pollFor, probe, sourceConst, withShell, REPO_ROOT } from './pb-relaunch.mjs';
 import { join } from 'node:path';
-import { activeWindow, osKeys, osPointer, raiseShell } from './pb-kwin.mjs';
+import { activeWindow, isRunWindow, osKeys, osPointer, raiseShell } from './pb-kwin.mjs';
 
 export const WEB_TAB_STATE_EVENT = sourceConst('theia/extensions/tab-uris/src/browser/web-tab.ts', 'WEB_TAB_STATE_EVENT');
 const API_URL = 'chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs';
@@ -306,7 +306,7 @@ async function shellActiveOnce(app) {
         return;
     }
     raiseShell();
-    for (let i = 0; i < 50 && !String(activeWindow()?.resourceClass ?? '').toLowerCase().includes('powerbrowser'); i++) {
+    for (let i = 0; i < 50 && !isRunWindow(activeWindow()); i++) {
         await new Promise(r => setTimeout(r, 100));
     }
     raisedApps.add(app);
@@ -337,8 +337,8 @@ export async function osClientPointer(app, context, { x: tx, y: ty, calibrateAt,
         return JSON.stringify({ ix: mozInnerScreenX, iy: mozInnerScreenY, dpr: devicePixelRatio });
     })()`));
     const w = activeWindow();
-    if (!w || !String(w.resourceClass).toLowerCase().includes('powerbrowser')) {
-        throw new Error(`refused: active window class ${JSON.stringify(w?.resourceClass ?? '')} does not contain "powerbrowser"`);
+    if (!isRunWindow(w)) {
+        throw new Error(`refused: active window ${JSON.stringify({ resourceClass: w?.resourceClass ?? '', pid: w?.pid ?? null })} is not a PowerBrowser window of a browser this run launched`);
     }
     const ratio = doc.dpr / (w.scale || 1);
     const key = `${context}@${w.x},${w.y}`;

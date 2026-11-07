@@ -3,8 +3,10 @@
 // Phase 39 (39-01): the two KWin needs of the close-out on the owner's KDE
 // Wayland desktop -- a capture of the PowerBrowser shell window (999.14) and
 // real OS input for the real-input rows -- behind one gate: no ydotool key
-// and no capture is sent unless KWin reports, in the same step, that the
-// active window's resourceClass contains 'powerbrowser' (39-RESEARCH
+// and no capture is sent unless KWin reports that the active window's
+// resourceClass contains 'powerbrowser' AND its pid is a browser this run
+// launched (firefox-bidi.mjs launchedBrowserPids; 39-REVIEW CR-01: a
+// PowerBrowser the owner has open has the same class) (39-RESEARCH
 // Pitfall 5: ydotool types into whatever has focus).
 //
 // Read-back mechanism (assumption A1, measured 2026-11-05 on KWin 6.6.6): a
@@ -15,15 +17,17 @@
 // A session for these calls must be HEADED: launch with PB_LIVE_HEADED=1
 // (scripts/lib/firefox-bidi.mjs); a --headless session has no window.
 //
-// Node built-ins only at module scope; the self-test imports
-// ./pb-live-probe.mjs dynamically so a static import of this module from
-// pb-live-probe creates no cycle.
+// Node built-ins and firefox-bidi.mjs (which imports neither this module nor
+// pb-live-probe) at module scope; the self-test imports ./pb-live-probe.mjs
+// dynamically so a static import of this module from pb-live-probe creates
+// no cycle.
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { launchedBrowserPids } from './firefox-bidi.mjs';
 
 const SHELL_CLASS = 'powerbrowser';
 // The shell window's caption; a stock browser window reads "<page> — PowerBrowser".
@@ -78,13 +82,17 @@ function readMarker(marker, sinceEpochS) {
     }
 }
 
-/** Activates the PowerBrowser shell window (not a stock browser window or a dialog); true when one was found. */
+/**
+ * Activates the PowerBrowser shell window of a browser this run launched (not a stock browser window, a dialog, or
+ * another PowerBrowser process's window); true when one was found.
+ */
 export function raiseShell() {
     const since = Math.floor(Date.now() / 1000) - 1;
     const marker = runKwinScript(`let hit = false;
+const pids = ${JSON.stringify(launchedBrowserPids())};
 for (const w of workspace.windowList()) {
     if (String(w.resourceClass).toLowerCase().includes(${JSON.stringify(SHELL_CLASS)}) && w.normalWindow && !w.transient
-        && String(w.caption) === ${JSON.stringify(SHELL_CAPTION)}) { workspace.activeWindow = w; hit = true; }
+        && String(w.caption) === ${JSON.stringify(SHELL_CAPTION)} && pids.includes(w.pid)) { workspace.activeWindow = w; hit = true; }
 }
 print("__MARKER__ " + hit);
 `);
@@ -92,13 +100,13 @@ print("__MARKER__ " + hit);
 }
 
 /**
- * `{ resourceClass, caption, x, y, width, height, scale }` of KWin's active window: frameGeometry in logical pixels and
- * its output's devicePixelRatio (a capture is frame size times scale in device pixels), or null.
+ * `{ resourceClass, caption, pid, x, y, width, height, scale }` of KWin's active window: frameGeometry in logical
+ * pixels and its output's devicePixelRatio (a capture is frame size times scale in device pixels), or null.
  */
 export function activeWindow() {
     const since = Math.floor(Date.now() / 1000) - 1;
     const marker = runKwinScript(`const w = workspace.activeWindow;
-print("__MARKER__ " + JSON.stringify(w ? { resourceClass: String(w.resourceClass), caption: String(w.caption),
+print("__MARKER__ " + JSON.stringify(w ? { resourceClass: String(w.resourceClass), caption: String(w.caption), pid: w.pid,
     x: w.frameGeometry.x, y: w.frameGeometry.y, width: w.frameGeometry.width, height: w.frameGeometry.height,
     scale: w.output ? w.output.devicePixelRatio : 1 } : null));
 `);
@@ -107,16 +115,31 @@ print("__MARKER__ " + JSON.stringify(w ? { resourceClass: String(w.resourceClass
 }
 
 /**
- * The gate: reads the active window through `readActive` and returns it when its class contains
- * `expectClass`; otherwise throws "refused: active window ...". An empty read-back refuses.
+ * The gate: reads the active window through `readActive` and returns it when its class contains `expectClass` and
+ * its pid is one of `expectPids` (the browsers this run launched); otherwise throws "refused: active window ...".
+ * An empty read-back, or no launched browser, refuses.
  */
-function gate({ expectClass = SHELL_CLASS, readActive = activeWindow } = {}) {
+function gate({ expectClass = SHELL_CLASS, expectPids = launchedBrowserPids(), readActive = activeWindow } = {}) {
     const w = readActive();
     const cls = w && typeof w === 'object' ? String(w.resourceClass ?? '') : String(w ?? '');
     if (!expectClass || !cls.toLowerCase().includes(expectClass.toLowerCase())) {
         throw new Error(`refused: active window class ${JSON.stringify(cls)} does not contain ${JSON.stringify(expectClass)}`);
     }
+    const pid = w && typeof w === 'object' ? w.pid : undefined;
+    if (!expectPids.includes(pid)) {
+        throw new Error(`refused: active window pid ${JSON.stringify(pid ?? null)} is not a browser this run launched (${JSON.stringify(expectPids)})`);
+    }
     return w;
+}
+
+/** True when `w`, an activeWindow() read, passes the gate: a PowerBrowser-class window of a browser this run launched. */
+export function isRunWindow(w) {
+    try {
+        gate({ readActive: () => w });
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 /**
@@ -271,9 +294,12 @@ export async function osPointer({ x, y, button = 'left', action = 'click', holdM
     return { x, y, button, action, window };
 }
 
+// Each plant must refuse all four sends with a "refused: active window" error naming `expect`.
 const PLANTS = [
-    { name: 'class-mismatch', opts: { expectClass: 'pb-gate-plant-absent' } },
-    { name: 'readback-empty', opts: { readActive: () => '' } },
+    { name: 'class-mismatch', opts: { expectClass: 'pb-gate-plant-absent' }, expect: 'does not contain' },
+    { name: 'readback-empty', opts: { readActive: () => '' }, expect: 'does not contain' },
+    // CR-01: the right class, another process's pid (this node process launched no window of its own).
+    { name: 'pid-mismatch', opts: { readActive: () => ({ ...activeWindow(), resourceClass: SHELL_CLASS, pid: process.pid }) }, expect: 'is not a browser this run launched' },
 ];
 
 async function selfTest() {
@@ -285,7 +311,7 @@ async function selfTest() {
         await withProbeShell(async () => {
             const raised = raiseShell();
             let active = null;
-            for (let i = 0; i < 50 && !String(active?.resourceClass ?? '').toLowerCase().includes(SHELL_CLASS); i++) {
+            for (let i = 0; i < 50 && !isRunWindow(active); i++) {
                 await sleep(100);
                 active = activeWindow();
             }
@@ -322,10 +348,11 @@ async function selfTest() {
             }
             for (const plant of PLANTS) {
                 const verdicts = [];
-                try { osKeys(['shift'], plant.opts); verdicts.push('osKeys sent'); } catch (e) { if (!e.message.startsWith('refused: active window')) verdicts.push(`osKeys ${e.message}`); }
-                try { await osPointer({ x: 0, y: 0, action: 'move' }, plant.opts); verdicts.push('osPointer moved'); } catch (e) { if (!e.message.startsWith('refused: active window')) verdicts.push(`osPointer ${e.message}`); }
-                try { await captureShell(join(dir, `${plant.name}.png`), plant.opts); verdicts.push('captureShell captured'); } catch (e) { if (!e.message.startsWith('refused: active window')) verdicts.push(`captureShell ${e.message}`); }
-                try { captureActive(join(dir, `${plant.name}-active.png`), plant.opts); verdicts.push('captureActive captured'); } catch (e) { if (!e.message.startsWith('refused: active window')) verdicts.push(`captureActive ${e.message}`); }
+                const refused = e => e.message.startsWith('refused: active window') && e.message.includes(plant.expect);
+                try { osKeys(['shift'], plant.opts); verdicts.push('osKeys sent'); } catch (e) { if (!refused(e)) verdicts.push(`osKeys ${e.message}`); }
+                try { await osPointer({ x: 0, y: 0, action: 'move' }, plant.opts); verdicts.push('osPointer moved'); } catch (e) { if (!refused(e)) verdicts.push(`osPointer ${e.message}`); }
+                try { await captureShell(join(dir, `${plant.name}.png`), plant.opts); verdicts.push('captureShell captured'); } catch (e) { if (!refused(e)) verdicts.push(`captureShell ${e.message}`); }
+                try { captureActive(join(dir, `${plant.name}-active.png`), plant.opts); verdicts.push('captureActive captured'); } catch (e) { if (!refused(e)) verdicts.push(`captureActive ${e.message}`); }
                 if (verdicts.length) {
                     failed++;
                     console.log(`FAIL ${plant.name} -> ${verdicts.join('; ')}`);

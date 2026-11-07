@@ -43,6 +43,14 @@ const REPO_ROOT = join(__dirname, '..', '..');
 // checkout, because objdir/dist/bin symlinks into it.
 export const FIREFOX_BIN = process.env.PB_FIREFOX_BIN || join(REPO_ROOT, 'objdir', 'dist', 'bin', 'powerbrowser');
 
+// 39-REVIEW CR-01: the pids of the browsers withFirefoxPage launched that are still running. pb-kwin's real-input
+// gate accepts only a window one of them owns, so a PowerBrowser the owner has open never receives a send.
+const launchedPids = new Set();
+/** The pids of the browsers this process launched through withFirefoxPage that have not exited. */
+export function launchedBrowserPids() {
+    return [...launchedPids];
+}
+
 /**
  * A BiDi RemoteValue as the plain value the evaluated expression returned. Primitives arrive as their value already;
  * an object arrives as [key, RemoteValue] pairs and an array as a RemoteValue list, so a caller reading `.field` off
@@ -405,6 +413,10 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
         '--remote-allow-system-access',
         ...(url ? [url] : []),
     ], { env, stdio: ['ignore', stdoutSink ? 'pipe' : 'ignore', 'pipe'] });
+    if (child.pid) {
+        launchedPids.add(child.pid);
+        child.once('exit', () => launchedPids.delete(child.pid));
+    }
     if (stdoutSink) {
         child.stdout.pipe(stdoutSink);
     }
