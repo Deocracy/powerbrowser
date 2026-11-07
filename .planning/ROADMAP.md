@@ -132,7 +132,7 @@ forces a decision). Coverage: 87/87 v1.5 requirements, each in exactly one phase
 - [x] **Phase 36: New-Window Links as Web Tabs** - `target=_blank` and `window.open` open web tabs next to the opener; GUI-01 kept (alone, because it is the one phase that can break GUI-01)
 - [x] **Phase 37: Permission Prompts and Dialogs** - Permission doorhangers, sharing indicator, page dialogs, password save, notification bars
 - [x] **Phase 38: WebExtensions** - Extensions see web tabs; toolbar buttons and puzzle menu; AMO install; popular extensions checked live
-- [ ] **Phase 39: v1.5 Close-out** - Fix C22-C24, C11 and backlog 999.4-999.16; run every automatable UAT item; owner calls settled; WINDOWS.md and REQUIREMENTS.md closed out
+- [x] **Phase 39: v1.5 Close-out** - Fix C22-C24, C11 and backlog 999.4-999.16; run every automatable UAT item; owner calls settled; WINDOWS.md and REQUIREMENTS.md closed out
 
 ## Phase Details
 
@@ -543,7 +543,7 @@ Plans:
 
 ## Progress
 
-**Execution Order:** 27 → 28 → 29 → 30 → 31 → 32 → 33 → 34 → 35 → 36 → 37 → 38 (strictly serial; Phase 26 is outside v1.5)
+**Execution Order:** 27 → 28 → 29 → 30 → 31 → 32 → 33 → 34 → 35 → 36 → 37 → 38 → 39 (strictly serial; Phase 26 is outside v1.5)
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -559,6 +559,7 @@ Plans:
 | 36. New-Window Links as Web Tabs | 3/3 | Executed, verification deferred (39-HUMAN-CHECKLIST.md) | - |
 | 37. Permission Prompts and Dialogs | 4/4 | Executed, verification deferred (39-HUMAN-CHECKLIST.md) | - |
 | 38. WebExtensions | 7/7 | Executed, verification deferred (39-HUMAN-CHECKLIST.md) | - |
+| 39. v1.5 Close-out | 20/20 | Executed, verification deferred (human_needed: 39-HUMAN-CHECKLIST.md deferred by Chris 2026-11-07; gate PASS-WITH-EXCLUSIONS at 77e5d037) | 2026-11-07 |
 
 ## Hard constraints (every phase)
 

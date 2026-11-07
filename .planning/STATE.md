@@ -4,18 +4,18 @@ milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
 current_phase: 39
 current_phase_name: v1.5 Close-out
-status: executing
-stopped_at: Completed 39-20-PLAN.md (phase 39 execution done; verification next)
-last_updated: "2026-11-06T22:07:53.538Z"
-last_activity: 2026-11-05
-last_activity_desc: Phase 39 execution started
+status: phase_complete_verification_deferred
+stopped_at: Phase 39 complete (20/20 plans, verification human_needed, deferred); milestone lifecycle next
+last_updated: "2026-11-07T18:05:00.000Z"
+last_activity: 2026-11-07
+last_activity_desc: Phase 39 verified (human_needed, deferred); review findings fixed
 state_head: d891dbe79a651d44e192500b6393c2d5310613d7
 progress:
   total_phases: 14
-  completed_phases: 1
+  completed_phases: 13
   total_plans: 93
   completed_plans: 93
-  percent: 7
+  percent: 93
 ---
 
 # Project State
@@ -29,14 +29,14 @@ See: .planning/PROJECT.md (updated 2026-10-20)
 
 ## Current Position
 
-Phase: 39 (v1.5 Close-out) — EXECUTING
-Plan: 10 of 20
-Status: Ready to execute
-Last activity: 2026-11-05 — Phase 39 execution started
+Phase: 39 (v1.5 Close-out) — COMPLETE (verification human_needed, deferred to 39-HUMAN-CHECKLIST.md)
+Plan: 20 of 20
+Status: Milestone lifecycle (audit → complete → cleanup)
+Last activity: 2026-11-07 — Phase 39 verified, review findings fixed
 
 **v1.5 parallel-lane run:** lanes p33..p37 were cut from 23c08bb5 and merged into main in order 36 (aa8989d9), 34 (8143fedd), 37 (14319419), 35 (68a38581), 33 (d6f9fcbb). Each was reviewed and fixed on main. All live checks are deferred to one end-of-milestone pass.
 
-Progress: [█░░░░░░░░░] 7%
+Progress: [█████████░] 93%
 
 ## Performance Metrics
 
