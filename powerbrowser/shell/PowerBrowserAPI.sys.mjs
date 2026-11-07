@@ -7647,6 +7647,8 @@ function installPermissionPromptFurniture(window) {
   // #identity-icon-box (powerbrowser.xhtml) and this window's ConfirmationHint (browser.js, not loaded here) and throws
   // without them, so no login was stored. shortcut: the stock "saved" hint is not shown; render it in Theia if the copy asks.
   window.ConfirmationHint = { show() {} };
+  // PermissionUI.postPrompt (:664) animates #web-notifications-notification-icon unless gReduceMotion; the shell has no such icon.
+  window.gReduceMotion = true;
   window.PopupNotifications = notifications;
   installNotificationBars(window, host);
 }
