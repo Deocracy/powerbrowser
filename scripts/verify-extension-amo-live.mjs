@@ -525,7 +525,12 @@ const UI_HELPERS = `const byText = t => [...document.querySelectorAll('button, a
 // A local Vaultwarden: 127.0.0.1 only (checked with ss), a fresh data folder, https on the TLS fixture leaf, no icon
 // downloads, no push relay, every outbound request it would make blocked. The caller stops it in a finally.
 async function startVaultwarden() {
-  const bin = execFileSync('nix', ['build', '--print-out-paths', '--no-link', 'nixpkgs#vaultwarden'], { encoding: 'utf8' }).trim();
+  let bin;
+  try {
+    bin = execFileSync('nix', ['build', '--print-out-paths', '--no-link', 'nixpkgs#vaultwarden'], { encoding: 'utf8', timeout: 600000 }).trim();
+  } catch (error) {
+    throw new Error(`BROKEN INSTRUMENT: nix build nixpkgs#vaultwarden ${error.signal ? 'did not finish within 10 minutes' : `failed: ${String(error.stderr || error.message).trim().split('\n').pop()}`}`);
+  }
   const port = await new Promise(resolve => { const s = createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
   const tls = join(live.REPO_ROOT, 'scripts/fixtures/tls');
   const data = mkdtempSync(join(tmpdir(), 'pb-vaultwarden-'));
@@ -536,7 +541,18 @@ async function startVaultwarden() {
     DATA_FOLDER: data, DOMAIN: `https://${VAULT_HOST}:${port}`, WEB_VAULT_ENABLED: 'false', SIGNUPS_ALLOWED: 'true',
     DISABLE_ICON_DOWNLOAD: 'true', PUSH_ENABLED: 'false', HTTP_REQUEST_BLOCK_REGEX: '.*',
   } });
-  const vault = { proc, data, origin: `https://${VAULT_HOST}:${port}`, exited: new Promise(resolve => proc.once('exit', resolve)) };
+  const vault = { proc, data, origin: `https://${VAULT_HOST}:${port}`, spawnError: null,
+    exited: new Promise(resolve => { proc.once('exit', resolve); proc.once('error', resolve); }) };
+  // WR-03: a failed spawn (a collected store path) is an 'error' event, fatal with no listener.
+  proc.once('error', error => { vault.spawnError = error; });
+  // WR-03: a killed harness still stops the server (signups open) and removes its data folder. SIGINT leaves the exit
+  // to withFirefoxPage's own handler when one is installed, so its browser cleanup runs.
+  vault.reap = () => { try { proc.kill('SIGKILL'); } catch { /* already gone */ } rmSync(data, { recursive: true, force: true }); };
+  vault.onSigint = () => { vault.reap(); process.exitCode = 130; if (process.listenerCount('SIGINT') === 0) process.exit(130); };
+  vault.onSigterm = () => { vault.reap(); process.exit(143); };
+  process.once('exit', vault.reap);
+  process.once('SIGINT', vault.onSigint);
+  process.once('SIGTERM', vault.onSigterm);
   try {
     const ca = readFileSync(join(tls, 'test-ca.pem'));
     const alive = () => new Promise(resolve => {
@@ -544,7 +560,9 @@ async function startVaultwarden() {
       req.on('error', () => resolve(false));
       req.end();
     });
-    if (!(await pollUntil(alive, ok => ok === true, 30000))) throw new Error(`BROKEN INSTRUMENT: the local vault server never answered /alive (exit code ${proc.exitCode})`);
+    if (!(await pollUntil(alive, ok => ok === true || vault.spawnError !== null, 30000)) || vault.spawnError) {
+      throw new Error(vault.spawnError ? `BROKEN INSTRUMENT: vaultwarden did not start: ${vault.spawnError.code || vault.spawnError.message}` : `BROKEN INSTRUMENT: the local vault server never answered /alive (exit code ${proc.exitCode})`);
+    }
     const fault = vaultListenFault(execFileSync('ss', ['-Hltnp'], { encoding: 'utf8' }), proc.pid, port);
     if (fault) throw new Error(`BROKEN INSTRUMENT: ${fault}; refusing to continue`);
     return vault;
@@ -555,7 +573,10 @@ async function startVaultwarden() {
 }
 
 async function stopVaultwarden(vault) {
-  if (vault.proc.exitCode === null && vault.proc.signalCode === null) {
+  process.off('exit', vault.reap);
+  process.off('SIGINT', vault.onSigint);
+  process.off('SIGTERM', vault.onSigterm);
+  if (vault.proc.exitCode === null && vault.proc.signalCode === null && !vault.spawnError) {
     vault.proc.kill('SIGTERM');
     if ((await Promise.race([vault.exited.then(() => 'exited'), sleep(10000)])) !== 'exited') vault.proc.kill('SIGKILL');
   }
