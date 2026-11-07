@@ -40,11 +40,21 @@
 //                  image fail AND sets a numeric badge above zero on /ad (the push);
 //                  the password manager's toolbar action opens its own popup in the
 //                  native panel on /login; the dark-mode extension turns /plain's
-//                  painted background dark. The password manager FILL is not scored:
-//                  D-09 allows no vault account and no vault server, and the manager
-//                  holds no login without one (owner decision, 38-05-SUMMARY). Plant
+//                  painted background dark. The password manager FILL is scored by
+//                  ext10-fill, on a local vault server (38 T31 option b). Plant
 //                  fixtures-no-op disables the three after install and must go red
 //                  naming each missing effect.
+//   ext10-fill  -- EXT-10's fill, 38 T31 option (b): a local Vaultwarden (nixpkgs store paths resolved
+//                  at check time, no repo dependency) on 127.0.0.1 only, a throwaway data folder, icon
+//                  download off and every outbound request blocked, stopped after the scenario. The
+//                  manager installs signed from the add-ons site; in a stock-window tab on its own popup
+//                  page its own UI points it at the local server (https: the form refuses http, so the
+//                  server serves the TLS fixture leaf), registers a run-time account and lands unlocked.
+//                  On a web tab /login the fill key does nothing while the vault is empty; then a login
+//                  saved through the same UI for /login's origin (Host match: host and port) fills both
+//                  fields on the next press. The credentials live in memory only and are compared, never
+//                  printed. Plant vault-uri-mismatch saves the login for another port of 127.0.0.1 and
+//                  must go red naming the missing fill.
 //
 // Modes:
 //   node scripts/verify-extension-amo-live.mjs [--scenario a,b]   live sessions (needs the network)
@@ -53,12 +63,15 @@
 //                                                                   they emit, no id literal; no browser
 //   node scripts/verify-extension-amo-live.mjs --static            the same static audit
 //
-// Node built-ins plus ./lib/pb-relaunch.mjs and ./lib/pb-live-probe.mjs only.
+// Node built-ins plus ./lib/pb-relaunch.mjs and ./lib/pb-live-probe.mjs only (ext10-fill also runs nix and ss).
 
 import { createServer } from 'node:http';
-import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { request as httpsRequest } from 'node:https';
+import { spawn, execFileSync } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
+import { readFileSync, mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { readFile as readFileAsync } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -70,6 +83,10 @@ const verdict = (ok, detail, fail) => (ok ? { ok: true, detail, fail: null } : {
 const AMO_FIXTURES = { blocker: 'ublock-origin', manager: 'bitwarden-password-manager', dark: 'darkreader' };
 // A tracker host the ad blocker's bundled lists block outright; resolved to this server for the session only.
 const TRACKER_HOST = 'ad.doubleclick.net';
+// ext10-fill: the vault server's name, the TLS fixture leaf's (scripts/fixtures/tls), resolved to 127.0.0.1.
+const VAULT_HOST = 'pb-fixture.test';
+// The manager checks passwords against this breach service; resolved to 127.0.0.1 (nothing listens) so the run sends nothing out.
+const BREACH_HOST = 'api.pwnedpasswords.com';
 // A 1x1 PNG, so the baseline image has a natural width.
 const PIXEL = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
 
@@ -183,12 +200,96 @@ async function scenarioFixtures({ app, plant }) {
   if (dark === null) missing.push(`the dark-mode extension did not restyle /plain (luminance ${await paintedLuminance(app, '/plain')}, was ${plainBase.toFixed(2)})`);
   if (missing.length) return verdict(false, null, `missing effect: ${missing.join('; ')}`);
   const route = role => `${got[role].name} ${got[role].version} from ${got[role].fileUrl}`;
-  return verdict(true, `signed installs: ${Object.keys(got).map(route).join('; ')}. The tracker image that loaded before failed on /ad with badge ${blocked.badge}; the password manager's popup opened on /login over the empty form (fill not scored, D-09); /plain went from luminance ${plainBase.toFixed(2)} to ${dark.toFixed(2)}`, null);
+  return verdict(true, `signed installs: ${Object.keys(got).map(route).join('; ')}. The tracker image that loaded before failed on /ad with badge ${blocked.badge}; the password manager's popup opened on /login over the empty form (the fill is ext10-fill's); /plain went from luminance ${plainBase.toFixed(2)} to ${dark.toFixed(2)}`, null);
+}
+
+// EXT-10 fill (38 T31 option b). Registration, unlock and the saved login go through the manager's own UI only;
+// no vault cryptography is done here.
+async function scenarioExt10Fill({ app, plant }) {
+  const vault = await startVaultwarden();
+  try {
+    await live.trustFixtureCA(app);
+    const listing = await amoListing(await siteUrl(app), AMO_FIXTURES.manager);
+    const manager = { ...listing, ...(await installSigned(app, listing.fileUrl)) };
+    if (!manager.active || !manager.signed) throw new Error(`BROKEN INSTRUMENT: ${listing.slug} did not install signed and active: ${JSON.stringify(manager)}`);
+    const ui = await extensionPageInStockTab(app, manager.id, 'popup/index.html?uilocation=tab');
+    // Run-time throwaways, held in memory only. \x40 keeps an address literal out of the id-literal backstop.
+    const email = `pb-${randomBytes(6).toString('hex')}\x40example.test`;
+    const master = randomBytes(18).toString('base64url');
+    const login = { user: `pb-user-${randomBytes(4).toString('hex')}`, pass: randomBytes(15).toString('base64url') };
+    const a5 = JSON.parse(await app.evaluateIn(ui, `(async () => { ${UI_HELPERS}
+      const r = { serverAccepted: false, registered: false, unlocked: false, at: '' };
+      await wait(() => byText('Skip') || byText('Create account'));
+      if (byText('Skip')) byText('Skip').click();
+      (await wait(() => byText('Create account'))).click();
+      (await wait(() => document.querySelector('ng-select .ng-select-container'))).dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      (await wait(() => [...document.querySelectorAll('.ng-option')].find(o => o.innerText.trim() === 'self-hosted'))).click();
+      setIn(await wait(() => document.getElementById('self_hosted_env_settings_form_input_base_url')), ${JSON.stringify(vault.origin)});
+      submit('Save');
+      r.serverAccepted = !!(await wait(() => !document.getElementById('self_hosted_env_settings_form_input_base_url')));
+      if (!r.serverAccepted) return JSON.stringify({ ...r, at: location.hash.split('?')[0] });
+      setIn(document.getElementById('register-start_form_input_email'), ${JSON.stringify(email)});
+      setIn(document.getElementById('register-start_form_input_name'), 'PB check');
+      submit('Continue');
+      const pw = await wait(() => document.getElementById('input-password-form_new-password'));
+      if (!pw) return JSON.stringify({ ...r, at: location.hash.split('?')[0] });
+      // The breach check would send a hash prefix of the master password out.
+      const breach = document.getElementById('input-password-form_check-for-breaches');
+      if (breach && breach.checked) breach.click();
+      setIn(pw, ${JSON.stringify(master)});
+      setIn(document.getElementById('input-password-form_new-password-confirm'), ${JSON.stringify(master)});
+      submit('Create account');
+      r.registered = !!(await wait(() => !location.hash.startsWith('#/finish-signup'), 30000));
+      r.unlocked = !!(await wait(() => location.hash.startsWith('#/tabs/vault') && byText('New login'), 30000));
+      return JSON.stringify({ ...r, at: location.hash.split('?')[0] });
+    })()`));
+    if (!a5.serverAccepted || !a5.registered || !a5.unlocked) throw new Error(`BROKEN INSTRUMENT: the manager's own UI did not reach an unlocked vault on the local server (A5): ${JSON.stringify(a5)}`);
+    const shortcut = await fillShortcut(app, manager.id);
+    const L = await openTab(app, '/login');
+    const press = async () => {
+      await app.evaluateIn(app.chrome, 'window.focus(); true');
+      await live.makeCurrent(app, L);
+      if (!(await pollUntil(() => live.focusOverlay(app, L), f => f === true, 10000))) throw new Error('BROKEN INSTRUMENT: the web tab /login could not be focused');
+      await live.pressKey(app, shortcut);
+    };
+    const base = await pollUntil(() => loginValues(app), v => v !== null, 15000);
+    if (!base || base.user !== '' || base.pass !== '') throw new Error('BROKEN INSTRUMENT: the login form is not empty before the fill');
+    await press();
+    await sleep(4000);
+    const empty = await loginValues(app);
+    if (!empty || empty.user !== '' || empty.pass !== '') return verdict(false, null, 'with an empty vault the fill key changed the login form');
+    // The saved login's website: /login's own origin, or (the plant) the same host on another port.
+    const saved = new URL(`${ORIGIN}/login`);
+    if (plant?.name === 'vault-uri-mismatch') saved.port = String(Number(saved.port) + 1);
+    const added = await app.evaluateIn(ui, `(async () => { ${UI_HELPERS}
+      byText('New login').click();
+      const fc = n => document.querySelector('[formcontrolname=' + n + ']');
+      await wait(() => fc('uri'));
+      setIn(fc('name'), 'PB login'); setIn(fc('username'), ${JSON.stringify(login.user)}); setIn(fc('password'), ${JSON.stringify(login.pass)}); setIn(fc('uri'), ${JSON.stringify(saved.href)});
+      // Host match (host and port): the default, base domain, ignores the port.
+      document.querySelector('[aria-label="Show match detection"]').click();
+      (await wait(() => document.querySelector('bit-select[formcontrolname=matchDetection] .ng-select-container'))).dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      (await wait(() => [...document.querySelectorAll('.ng-option')].find(o => o.innerText.trim() === 'Host'))).click();
+      submit('Save');
+      return !!(await wait(() => location.hash.startsWith('#/view-cipher')));
+    })()`);
+    if (added !== true) throw new Error('BROKEN INSTRUMENT: the manager\'s own UI did not save the login');
+    await press();
+    const got = await pollUntil(() => loginValues(app), v => v && v.user === login.user && v.pass === login.pass, 10000);
+    if (!got) {
+      const v = (await loginValues(app)) ?? {};
+      return verdict(false, null, `the password manager did not fill the login page (username filled: ${v.user === login.user}, password filled: ${v.pass === login.pass})`);
+    }
+    return verdict(true, `${manager.name} ${manager.version} from ${manager.fileUrl}; its own UI accepted the local server ${vault.origin}, registered a run-time account and unlocked (A5: ${JSON.stringify(a5)}); on web tab /login the fill key (${shortcut.label}) left the form empty with an empty vault, then filled both fields with the login saved for ${saved.origin} (compared in memory, not printed)`, null);
+  } finally {
+    await stopVaultwarden(vault);
+  }
 }
 
 const SCENARIOS_TABLE = {
   'amo-install': scenarioAmoInstall,
   fixtures: scenarioFixtures,
+  'ext10-fill': scenarioExt10Fill,
 };
 
 // Each plant names its scenario and the red text that scenario must print. A plant is a different driver, not a
@@ -196,6 +297,7 @@ const SCENARIOS_TABLE = {
 const PLANTS_TABLE = {
   'prompt-bypassed': { scenario: 'amo-install', expect: 'the stock install prompt never appeared' },
   'fixtures-no-op': { scenario: 'fixtures', expect: 'the ad blocker blocked nothing' },
+  'vault-uri-mismatch': { scenario: 'ext10-fill', expect: 'the password manager did not fill the login page' },
 };
 
 // ---------------------------------------------------------------------------
@@ -234,6 +336,21 @@ const AUDIT_PLANTS = [
   { name: 'unemitted expect', plants: { ...PLANTS_TABLE, 'prompt-bypassed': { ...PLANTS_TABLE['prompt-bypassed'], expect: 'zz never printed' } }, expect: "emits no text starting 'zz never printed'" },
   { name: 'scenario without a plant', plants: {}, expect: 'has no plant' },
   { name: 'hand-kept id', plants: PLANTS_TABLE, source: `const pin = '${'planted' + '@' + 'example.org'}';`, expect: 'a hand-kept add-on id literal' },
+];
+
+// The vault server's listeners, from `ss -Hltnp`: a fault unless every socket of `pid` is 127.0.0.1:`port`.
+function vaultListenFault(ssOut, pid, port) {
+  const mine = ssOut.split('\n').filter(line => line.includes(`pid=${pid},`)).map(line => line.trim().split(/\s+/)[3]);
+  if (!mine.length) return `the vault server (pid ${pid}) listens nowhere`;
+  const wide = mine.filter(addr => addr !== `127.0.0.1:${port}`);
+  return wide.length ? `the vault server listens beyond 127.0.0.1:${port}: ${wide.join(', ')}` : null;
+}
+
+// Its own plants: each ss listing must make vaultListenFault name the drift.
+const LISTEN_PLANTS = [
+  { name: 'all-address bind', ss: 'LISTEN 0 128 0.0.0.0:4100 0.0.0.0:* users:(("vaultwarden",pid=77,fd=22))', expect: 'listens beyond 127.0.0.1:4100: 0.0.0.0:4100' },
+  { name: 'extra socket', ss: 'LISTEN 0 128 127.0.0.1:4100 0.0.0.0:* users:(("vaultwarden",pid=77,fd=22))\nLISTEN 0 128 [::]:3012 [::]:* users:(("vaultwarden",pid=77,fd=23))', expect: 'listens beyond 127.0.0.1:4100: [::]:3012' },
+  { name: 'no listener', ss: 'LISTEN 0 128 127.0.0.1:4100 0.0.0.0:* users:(("other",pid=78,fd=3))', expect: 'listens nowhere' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -399,6 +516,80 @@ async function extensionPopupOn(app, tabId, addon) {
   return { ok: true };
 }
 
+// The manager's UI is driven in its own page: find by visible text or label, set an Angular input, submit a form, wait.
+const UI_HELPERS = `const byText = t => [...document.querySelectorAll('button, a, [role=button], [role=menuitem]')].find(e => e.innerText.trim() === t || e.getAttribute('aria-label') === t) || null;
+  const setIn = (el, v) => { el.focus(); el.value = v; for (const k of ['input', 'change', 'blur']) el.dispatchEvent(new Event(k, { bubbles: true })); };
+  const submit = t => [...document.querySelectorAll('button[type=submit]')].find(b => b.innerText.trim() === t).click();
+  const wait = async (f, ms = 15000) => { const end = Date.now() + ms; for (;;) { const v = f(); if (v) return v; if (Date.now() > end) return null; await new Promise(r => setTimeout(r, 200)); } };`;
+
+// A local Vaultwarden: 127.0.0.1 only (checked with ss), a fresh data folder, https on the TLS fixture leaf, no icon
+// downloads, no push relay, every outbound request it would make blocked. The caller stops it in a finally.
+async function startVaultwarden() {
+  const bin = execFileSync('nix', ['build', '--print-out-paths', '--no-link', 'nixpkgs#vaultwarden'], { encoding: 'utf8' }).trim();
+  const port = await new Promise(resolve => { const s = createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
+  const tls = join(live.REPO_ROOT, 'scripts/fixtures/tls');
+  const data = mkdtempSync(join(tmpdir(), 'pb-vaultwarden-'));
+  // stdio ignored: the server logs access tokens.
+  const proc = spawn(join(bin, 'bin/vaultwarden'), [], { stdio: 'ignore', env: {
+    PATH: process.env.PATH, ROCKET_ADDRESS: '127.0.0.1', ROCKET_PORT: String(port),
+    ROCKET_TLS: `{certs="${join(tls, 'pb-fixture.pem')}",key="${join(tls, 'pb-fixture.key')}"}`,
+    DATA_FOLDER: data, DOMAIN: `https://${VAULT_HOST}:${port}`, WEB_VAULT_ENABLED: 'false', SIGNUPS_ALLOWED: 'true',
+    DISABLE_ICON_DOWNLOAD: 'true', PUSH_ENABLED: 'false', HTTP_REQUEST_BLOCK_REGEX: '.*',
+  } });
+  const vault = { proc, data, origin: `https://${VAULT_HOST}:${port}`, exited: new Promise(resolve => proc.once('exit', resolve)) };
+  try {
+    const ca = readFileSync(join(tls, 'test-ca.pem'));
+    const alive = () => new Promise(resolve => {
+      const req = httpsRequest({ host: '127.0.0.1', port, path: '/alive', servername: VAULT_HOST, ca }, res => { res.resume(); resolve(res.statusCode === 200); });
+      req.on('error', () => resolve(false));
+      req.end();
+    });
+    if (!(await pollUntil(alive, ok => ok === true, 30000))) throw new Error(`BROKEN INSTRUMENT: the local vault server never answered /alive (exit code ${proc.exitCode})`);
+    const fault = vaultListenFault(execFileSync('ss', ['-Hltnp'], { encoding: 'utf8' }), proc.pid, port);
+    if (fault) throw new Error(`BROKEN INSTRUMENT: ${fault}; refusing to continue`);
+    return vault;
+  } catch (error) {
+    await stopVaultwarden(vault);
+    throw error;
+  }
+}
+
+async function stopVaultwarden(vault) {
+  if (vault.proc.exitCode === null && vault.proc.signalCode === null) {
+    vault.proc.kill('SIGTERM');
+    if ((await Promise.race([vault.exited.then(() => 'exited'), sleep(10000)])) !== 'exited') vault.proc.kill('SIGKILL');
+  }
+  rmSync(vault.data, { recursive: true, force: true });
+  if (existsSync(vault.data)) throw new Error(`BROKEN INSTRUMENT: the vault data folder ${vault.data} survived the run`);
+}
+
+// An extension page in a stock-window tab (a web tab refuses extension pages): its BiDi content context.
+async function extensionPageInStockTab(app, id, path) {
+  await app.evaluateIn(app.chrome, `ChromeUtils.importESModule('chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs').PowerBrowserAPI.openStockTab(${JSON.stringify(`${ORIGIN}/a`)})`);
+  const win = await pollUntil(async () => {
+    for (const w of (await app.contexts('chrome')).filter(entry => entry.url.startsWith('chrome://browser/content/browser.xhtml'))) {
+      if ((await app.evaluateIn(w.context, `typeof gBrowser === 'object' && gBrowser.browsers.some(b => b.currentURI.spec === ${JSON.stringify(`${ORIGIN}/a`)})`)) === true) return w.context;
+    }
+    return null;
+  }, c => c !== null, 30000);
+  if (!win) throw new Error(`BROKEN INSTRUMENT: no stock window opened for the extension page (content contexts ${JSON.stringify((await app.contexts()).map(c => c.url))})`);
+  const url = await app.evaluateIn(app.chrome, `WebExtensionPolicy.getByID(${JSON.stringify(id)}).getURL(${JSON.stringify(path)})`);
+  await app.evaluateIn(win, `(async () => { await delayedStartupPromise; gBrowser.selectedTab = gBrowser.addTab(${JSON.stringify(url)}, { triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal() }); return true; })()`);
+  const page = await pollUntil(async () => (await app.contexts()).find(entry => entry.url.startsWith(url.split('?')[0])) ?? null, c => c !== null, 30000);
+  if (!page) throw new Error(`BROKEN INSTRUMENT: the extension page ${path} did not load in the stock tab`);
+  return page.context;
+}
+
+// The manager's fill command's key, read from its installed manifest (Ctrl+Shift+L style) into pressKey's shape.
+async function fillShortcut(app, id) {
+  const text = await app.evaluateIn(app.chrome, `WebExtensionPolicy.getByID(${JSON.stringify(id)}).extension.manifest.commands?.autofill_login?.suggested_key?.default ?? null`);
+  if (typeof text !== 'string') throw new Error('BROKEN INSTRUMENT: the manager declares no autofill_login key');
+  const parts = text.split('+');
+  const key = parts.pop().toUpperCase();
+  const mods = { Ctrl: 'control', Alt: 'alt', Shift: 'shift', Command: 'meta', MacCtrl: 'control' };
+  return { key, code: `Key${key}`, keyCode: key.charCodeAt(0), modifiers: parts.map(p => mods[p]), label: text };
+}
+
 async function stampCheck() {
   const digest = createHash('sha256').update(await readFileAsync(join(live.REPO_ROOT, 'patches/050-extension-tab-host.patch'))).digest('hex');
   const stamp = (await readFileAsync(join(live.REPO_ROOT, 'objdir/.pb-050-build.sha256'), 'utf8')).trim().split(/\s+/)[0];
@@ -410,7 +601,7 @@ async function stampCheck() {
 const SESSION_PREFS = {
   // The signed path: no unsigned add-on may install in these sessions.
   'xpinstall.signatures.required': true,
-  'network.dns.localDomains': TRACKER_HOST,
+  'network.dns.localDomains': [TRACKER_HOST, VAULT_HOST, BREACH_HOST].join(','),
 };
 
 async function runSession(scenarioName, plantName = null) {
@@ -435,6 +626,13 @@ async function main() {
         if (hit) console.log(`  ok  audit plant ${plant.name} -> red: ${hit}`);
         else failures.push(`audit plant ${plant.name} did not go red naming '${plant.expect}'`);
       }
+      for (const plant of LISTEN_PLANTS) {
+        const hit = vaultListenFault(plant.ss, 77, 4100);
+        if (hit && hit.includes(plant.expect)) console.log(`  ok  listen plant ${plant.name} -> red: ${hit}`);
+        else failures.push(`listen plant ${plant.name} did not go red naming '${plant.expect}': ${hit}`);
+      }
+      const clean = vaultListenFault('LISTEN 0 128 127.0.0.1:4100 0.0.0.0:* users:(("vaultwarden",pid=77,fd=22))', 77, 4100);
+      if (clean) failures.push(`listen control: a 127.0.0.1-only listener was faulted: ${clean}`);
     }
     failures.forEach(f => console.log(`FAIL -- ${f}`));
     if (failures.length) process.exit(1);
