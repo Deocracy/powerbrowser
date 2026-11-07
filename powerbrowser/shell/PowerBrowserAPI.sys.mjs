@@ -8612,6 +8612,10 @@ function installPageContextMenu(window) {
       }
       openPageMenu(window, theiaBrowser, state, data).catch(err => {
         PowerBrowserAPI.log("error", `[web-tab] pageContextMenu failed: ${err && err.message ? err.message : err}`);
+        // 39-REVIEW WR-04: a pending menu left behind makes webTabFocus answer menu-pending for its whole TTL.
+        if (state.pending?.data === data) {
+          state.pending = null;
+        }
         pageMenuClose(data);
       });
     },
