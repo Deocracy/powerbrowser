@@ -31,9 +31,11 @@
 //   double (TAB-03): a trusted double-click on the strip's empty space opens
 //     a new tab on the empty page and focuses the pill; the row carries the
 //     empty-strip tooltip. BiDi input is dispatched inside the frame, so it
-//     cannot see chrome's window-drag handles laid over that space
-//     (powerbrowser.js custom title bar); a real double-click there is the
-//     desktop's title-bar action, which the end-of-milestone pass checks.
+//     cannot see chrome's window-drag handles (powerbrowser.js custom title
+//     bar); 39-18 (34 T1) therefore reads chrome's .powerbrowser-drag handles
+//     and requires none to cover the strip's empty space (plant
+//     strip-drag-handle). PB_REAL_INPUT=1 double-clicks there with a real
+//     pointer and requires the window geometry unchanged.
 //
 //   drop (TAB-08): an http(s) link dropped on /a's right half opens /d as a
 //     background tab right after /a; text drops reach the pill's drop path
@@ -551,8 +553,8 @@ async function middle({ app, pages, expect, plant }) {
         const ed = document.createElement('div');
         ed.id = 'pb-paste-frame';
         ed.contentEditable = 'true';
-        // Real input (39-15): the page overlay covers the main area and the strip's gaps are chrome drag handles, so the
-        // Theia-frame editable sits over /b's strip tab, Theia DOM a real pointer reaches.
+        // Real input (39-15): the page overlay covers the main area and (before 39-18) the strip's gaps were chrome drag
+        // handles, so the Theia-frame editable sits over /b's strip tab, Theia DOM a real pointer reaches.
         const bTab = rect(tabEl(S.b));
         Object.assign(ed.style, ${JSON.stringify(process.env.PB_REAL_INPUT === '1')}
             ? { position: 'fixed', left: bTab.left + 'px', top: bTab.top + 'px', width: (bTab.right - bTab.left) + 'px', height: (bTab.bottom - bTab.top) + 'px', zIndex: '99999', background: '#fff' }
@@ -638,16 +640,35 @@ async function double({ app, pages, expect, plant }) {
         const ids = stripIds();
         const last = rect(tabEl(ids[ids.length - 1]));
         const r = rect(row());
-        return { painted, x: Math.min(last.right + 40, r.right - 12), y: r.y, tab: rect(tabEl(S.a)), tooltip: row().getAttribute('title'), count: webTabs().length };
+        // 34 T1 plant: the pre-39-18 publish, the strip's empty tail sent to chrome as a window-drag handle again.
+        const bar = get('ChromeBarContribution');
+        if (${JSON.stringify(plant)} === 'strip-drag-handle') {
+            const send = bar.webTabs.send.bind(bar.webTabs);
+            bar.webTabs.send = msg => send(msg.kind !== 'windowDragRegions' ? msg
+                : { ...msg, rects: [...msg.rects, { x: last.right, y: r.top, w: r.right - last.right, h: r.bottom - r.top }] });
+        }
+        bar.lastDragRegions = '';
+        bar.publishDragRegions();
+        await sleep(400);
+        return { painted, x: Math.min(last.right + 40, r.right - 12), y: r.y, tab: rect(tabEl(S.a)), tooltip: row().getAttribute('title'), count: webTabs().length,
+            empty: { left: last.right, right: r.right, top: r.top, bottom: r.bottom } };
     `);
     expect(setup.painted, 'double: setup: /a is not painted in the strip');
+    // 34 T1 (39-18): chrome's handles, read back in chrome, cover none of the strip's empty space the double-click targets.
+    const handles = JSON.parse(await app.evaluateIn(app.chrome,
+        "JSON.stringify([...document.querySelectorAll('.powerbrowser-drag')].map(h => [h.style.left, h.style.top, h.style.width, h.style.height].map(parseFloat)))"));
+    const e = setup.empty;
+    const covering = handles.filter(([x, y, w, h]) => x < e.right - 1 && x + w > e.left + 1 && y < e.bottom - 1 && y + h > e.top + 1);
+    console.log(`  double: empty strip ${JSON.stringify(e)}; ${handles.length} drag handle(s) ${JSON.stringify(handles)}`);
+    expect(handles.length > 0, 'double: NOT SCORED -- chrome holds no window-drag handles, so their absence over the strip proves nothing');
+    expect(covering.length === 0, `double: a window-drag handle covers the empty strip: ${JSON.stringify(covering)}`);
     expect(setup.tooltip === copyRow('emptyStripTooltip'), `double: the empty strip's tooltip is ${JSON.stringify(setup.tooltip)}`);
     const theia = await theiaContext(app);
     const real = process.env.PB_REAL_INPUT === '1';
     let frameBefore;
     if (real) {
-        // 34 T1: a native double-click on the strip row, which publishDragRegions sends as a window-drag handle.
-        // The strip's gaps are chrome-side drag handles over the Theia frame, so no mousemove reaches it there:
+        // 34 T1: a native double-click on the strip's empty space, which publishDragRegions sent as a window-drag
+        // handle before 39-18 (no mousemove reached the Theia frame there, and the planted run restores that):
         // calibrate on /a's tab (Theia DOM) and act on the gap through the same mapping.
         const calibrateAt = { x: Math.round(setup.tab.x), y: Math.round(setup.tab.y) };
         await osClientPointer(app, theia, { x: Math.round(setup.x), y: Math.round(setup.y), calibrateAt, action: 'move' });
@@ -1477,7 +1498,10 @@ const SCENARIOS = {
     'keyboard-menu': { run: keyboardMenu, probe: true, plant: 'keyboard-menu-pointer-origin', expect: 'keyboard tab menu opened away from the focused tab' },
     reorder: { run: reorder, probe: true, plant: 'reorder-noop', expect: 'did not land after /b' },
     middle: { run: middle, probe: true, prefs: { 'middlemouse.paste': true }, plant: 'middle-not-closing', expect: 'did not close /a' },
-    double: { run: double, probe: true, plant: 'double-noop', expect: 'opened no new tab' },
+    double: { run: double, probe: true, plants: [
+        { plant: 'double-noop', expect: 'opened no new tab' },
+        { plant: 'strip-drag-handle', expect: 'a window-drag handle covers the empty strip' },
+    ] },
     drop: { run: drop, probe: true, plant: 'drop-link-noop', expect: 'did not open /d' },
     overflow: { run: overflow, probe: true, plant: 'overflow-unmeasured', expect: 'shows no List All Tabs chevron' },
     'pin-restore': { run: pinRestore, own: true, plant: 'pin-not-stored', expect: 'was not pinned after the relaunch' },
