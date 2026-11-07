@@ -258,7 +258,8 @@ export async function waitPointerIdle(timeoutMs = 60000) {
 /**
  * Real pointer input at logical screen (x, y): `action` is move, click, double, down, up or hold (down, `holdMs`,
  * up); `button` is left, middle, right, back or forward. The gate runs before the move and again before the button
- * event, which is sent only while KWin still reads the pointer on the target (someone moving the mouse refuses it).
+ * event, which is sent only while KWin still reads the pointer on the target (someone moving the mouse refuses it)
+ * and the target lies inside the gated window's frame.
  */
 export async function osPointer({ x, y, button = 'left', action = 'click', holdMs = 600 }, opts = {}) {
     if (!(button in BUTTON_CODES)) {
@@ -274,6 +275,13 @@ export async function osPointer({ x, y, button = 'left', action = 'click', holdM
     const at = cursorPos();
     if (!at || Math.round(at.x) !== Math.round(x) || Math.round(at.y) !== Math.round(y)) {
         throw new Error(`refused: the pointer left ${x},${y} before the ${button} ${action} (KWin reads ${JSON.stringify(at)})`);
+    }
+    // CR-02: a button event goes to the window under the pointer, not the active one, so the point must be inside
+    // the gated window's frame. shortcut: a window stacked over the shell inside its frame is not seen; upgrade to a
+    // stackingOrder read if a real-input row ever clicks under a popup or notification.
+    const f = window;
+    if (!(x >= f.x && x < f.x + f.width && y >= f.y && y < f.y + f.height)) {
+        throw new Error(`refused: active window frame ${JSON.stringify({ x: f.x, y: f.y, width: f.width, height: f.height })} does not hold the pointer at ${x},${y} for the ${button} ${action}`);
     }
     const b = BUTTON_CODES[button];
     const hex = n => `0x${n.toString(16)}`;
@@ -358,6 +366,21 @@ async function selfTest() {
                     console.log(`FAIL ${plant.name} -> ${verdicts.join('; ')}`);
                 } else {
                     console.log(`ok  ${plant.name} -> refused`);
+                }
+            }
+            // CR-02: the gated window's frame moved off the point, so the button event must be refused. The action is a
+            // release at the shell's centre, the one event that is harmless if the check is missing.
+            try {
+                const opts = { readActive: () => { const w = activeWindow(); return w && { ...w, x: w.x + w.width + 10 }; } };
+                await osPointer({ x: Math.round(active.x + active.width / 2), y: Math.round(active.y + active.height / 2), action: 'up' }, opts);
+                failed++;
+                console.log('FAIL pointer-outside-frame -> osPointer sent the release');
+            } catch (e) {
+                if (e.message.startsWith('refused: active window frame')) {
+                    console.log('ok  pointer-outside-frame -> refused');
+                } else {
+                    failed++;
+                    console.log(`FAIL pointer-outside-frame -> ${e.message}`);
                 }
             }
         });
