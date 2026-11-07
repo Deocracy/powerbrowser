@@ -151,6 +151,9 @@ type ButtonEvent = React.MouseEvent<HTMLButtonElement>;
 /** Phase 33 (BMK-04, D-04): the body attribute the mode-independent top-panel rule keys on; 'shown' adds the 28px row. */
 const BOOKMARKS_TOOLBAR_ATTRIBUTE = 'data-pb-bookmarks-toolbar';
 
+/** PAGE-01 (39-16): the body attribute the top-panel rules key on; 'open' adds the 32px find strip, so the page moves down. */
+const FIND_STRIP_ATTRIBUTE = 'data-pb-find-strip';
+
 /** Phase 33 (BMK-04): the toolbar's per-request menus (overflow chevron, item right-click). Built on each open, never registered. */
 const BOOKMARKS_TOOLBAR_MENU_PATH: MenuPath = ['powerbrowser-chrome-bar-bookmarks-toolbar'];
 
@@ -1337,7 +1340,7 @@ export class ChromeBarWidget extends ReactWidget {
         this.stateSubscription?.dispose();
         this.stateSubscription = undefined;
         // The find bar belongs to the tab it was opened on; the query stays in that tab.
-        this.findOpen = false;
+        this.setFindOpen(false);
         if (widget instanceof WebTabWidget) {
             let wasLoading = widget.loading;
             this.stateSubscription = widget.onDidChangeState(state => {
@@ -1470,12 +1473,25 @@ export class ChromeBarWidget extends ReactWidget {
         this.update();
     }
 
+    /**
+     * PAGE-01 (39-16): the strip is docked under the bar inside the top panel, whose height the shell takes from the
+     * panel's CSS min-height. The body attribute adds the strip's 32px there and the shell re-measures, so the page
+     * rect shrinks by the strip rather than the strip covering the page's top 32px.
+     */
+    protected setFindOpen(open: boolean): void {
+        this.findOpen = open;
+        if ((document.body.getAttribute(FIND_STRIP_ATTRIBUTE) === 'open') !== open) {
+            document.body.setAttribute(FIND_STRIP_ATTRIBUTE, open ? 'open' : 'closed');
+            this.shell.fit();
+        }
+    }
+
     /** PAGE-01: opens the find bar for `tab` (the page relay's find key) and focuses its field; F3 opens it without focus. */
     protected openFind(tab: WebTabWidget, focus = true): void {
         if (currentWebTab() !== tab) {
             return;
         }
-        this.findOpen = true;
+        this.setFindOpen(true);
         this.update();
         if (!focus) {
             return;
@@ -1490,7 +1506,7 @@ export class ChromeBarWidget extends ReactWidget {
     /** PAGE-01: closes the bar and clears the page selection; Esc and the close button return focus to the page. */
     protected closeFind(restoreFocus: boolean): void {
         const tab = currentWebTab();
-        this.findOpen = false;
+        this.setFindOpen(false);
         this.update();
         void tab?.findClose();
         if (restoreFocus) {
