@@ -42,7 +42,9 @@
  *                      adopted -> opener, then opener -> adopted.
  *   adopt-popup        window.open with width/height opens a NEW stock popup
  *                      window holding the URL and no adoptTab push or web tab.
- *   adopt-focus        A background adopt (the openLinkIn path stock
+ *   adopt-focus        (39-15: PB_REAL_INPUT=1 first sends a real middle-click
+ *                      on a link and requires any adopt to be a background
+ *                      one.) A background adopt (the openLinkIn path stock
  *                      middle-click takes) leaves A current and chrome-focused;
  *                      a foreground window.open makes the new tab current.
  *   adopt-fallback     With the frontend's ack dropped for one push, the page
@@ -130,7 +132,9 @@ import {
     loadedAt,
     makeCurrent,
     openWebTab,
+    osClientPointer,
     overlayVisibility,
+    pointerRoute,
     pushes,
     serveNavPages,
     waitForPush,
@@ -558,6 +562,28 @@ async function adoptFocus({ app, pages, plant, fail, note }) {
         await probe(app, `const h = get('WebTabOpenHandler'); const original = h.adopt;
             h.adopt = function (d) { if (d && d.background === true) window.__pbPlantRan = true; return original.call(h, { ...d, background: false }); };
             return true;`);
+    }
+    if (process.env.PB_REAL_INPUT === '1') {
+        // 39-15 (36 T5): a real middle-click on a link in the opener, observed for 3 s: an adopt (which must be a background
+        // one, the opener staying current), a stock window, or nothing. ClickHandler is not registered in the shell (36-01).
+        const midPath = '/target?leg=mid';
+        const midUrl = pages.url(midPath);
+        await aimAt(app, a, midPath);
+        const stockBefore = (await stockWindows(app)).length;
+        const m0 = (await pushes(app)).length;
+        const at = JSON.parse(await app.evaluateIn(a.ctx, "JSON.stringify((() => { const r = document.getElementById('blank').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })())"));
+        await osClientPointer(app, a.ctx, { ...at, button: 'middle', action: 'click' });
+        const midPush = await awaitAdopt(app, midUrl, m0, 3000);
+        const stockAfter = (await stockWindows(app)).length;
+        const midTabs = midPush ? await attachedTabOn(app, midUrl, 5000) : await webTabsOn(app, midUrl);
+        const midCurrent = await currentTabId(app);
+        note(`real middle-click (pointer ${pointerRoute.last}, calibration ${J(pointerRoute.calibration?.error)} after ${pointerRoute.calibration?.attempts} attempt(s)) on the opener's link: ${midPush ? `adoptTab push, background ${J(midPush.background)}` : 'no adoptTab push'}; attached web tab ${J(midTabs)}; stock windows ${stockBefore} -> ${stockAfter}; current ${midCurrent === a.tabId ? 'the opener' : J(midCurrent)}`);
+        if (midPush && (midPush.background !== true || midCurrent !== a.tabId)) {
+            return fail(`a real middle-click on a link must open in the background (opener keeps focus); pushed background ${J(midPush.background)}, current ${J(midCurrent)}`);
+        }
+        if (await focusOverlay(app, a.tabId) !== true) {
+            return fail(`${BROKEN} the opener's overlay could not be refocused after the real middle-click`);
+        }
     }
     // Background: the openLinkIn path stock middle-click takes (ClickHandlerParent -> openLinkIn(url, 'tab', { inBackground })).
     const bgPath = '/target?leg=bg';
