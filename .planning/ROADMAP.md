@@ -587,7 +587,7 @@ them per a downstream's manifest is Phase 4's TEL-03.
 **Goal:** Fix every open v1.5 defect and finish the end-of-milestone pass, so v1.5 Chrome Bar Firefox Parity closes with no green-by-exclusion rows (Chris, 2026-11-05: "fix all three", "fix all 13", "every deferral well documented").
 **Requirements**: PROMPT-04, PROMPT-06, PROMPT-08 (C22-C24 live), EXT-01..EXT-10 (999.15/999.16), plus the live halves of every v1.5 requirement whose UAT row is still pending
 **Depends on:** Phase 38
-**Plans:** 9/20 plans executed
+**Plans:** 13/20 plans executed
 
 **Scope:**
 1. Product fixes: C22 the `title=` page tooltip never opens; C23 the saved-login autocomplete popup never opens; C24 Copy Image leaves no image flavour on the clipboard; C11 page-menu dismissal `focusPage()` race (999.10).
@@ -627,16 +627,16 @@ Plans:
 - [x] 39-09-PLAN.md (wave 8) — Prompts harness 999.14, 999.13, 999.12 (X11 sharing route)
 
 **Wave 9** *(blocked on Wave 8 completion)*
-- [ ] 39-10-PLAN.md (wave 9) — OQ1 ruling implemented, probe 1 live, 37 T18-T21 scenarios
+- [x] 39-10-PLAN.md (wave 9) — OQ1 ruling implemented, probe 1 live, 37 T18-T21 scenarios
 
 **Wave 10** *(blocked on Wave 9 completion)*
-- [ ] 39-11-PLAN.md (wave 10) — 37 T22-T25 scenarios; prompts rows through the registry; 37-UAT recorded
+- [x] 39-11-PLAN.md (wave 10) — 37 T22-T25 scenarios; prompts rows through the registry; 37-UAT recorded
 
 **Wave 11** *(blocked on Wave 10 completion)*
-- [ ] 39-12-PLAN.md (wave 11) — 999.11 and 36 T12-T16 scenarios; 36-UAT recorded
+- [x] 39-12-PLAN.md (wave 11) — 999.11 and 36 T12-T16 scenarios; 36-UAT recorded
 
 **Wave 12** *(blocked on Wave 11 completion)*
-- [ ] 39-13-PLAN.md (wave 12) — 38 T22, T24-T30 scenarios; extension rows through the registry; 38-UAT recorded
+- [x] 39-13-PLAN.md (wave 12) — 38 T22, T24-T30 scenarios; extension rows through the registry; 38-UAT recorded
 
 **Wave 13** *(blocked on Wave 12 completion)*
 - [ ] 39-14-PLAN.md (wave 13) — EXT-10 fill on a local Vaultwarden (38 T31, option b)
