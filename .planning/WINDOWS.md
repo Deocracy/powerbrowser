@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 6
+open_count: 7
 waived_count: 2
 fixed_count: 19
-total_count: 27
-last_updated: 2026-11-07T02:53:12.909Z
+total_count: 28
+last_updated: 2026-11-07T04:37:55.475Z
 ---
 
 # Broken Windows Ledger
@@ -42,6 +42,7 @@ last_updated: 2026-11-07T02:53:12.909Z
 | 25 | 39 | deviation | scripts/verify-address-bar-live.mjs | 5000 | address-bar-live-self-test: plant ctrl-d-everywhere stays green on bookmark-keys (3 of 3 sessions with the 39-08 harness and 3 of 3 with the pre-39-08 harness at 5d0dfa95); pre-existing, the plant no longer bites in the README editor; first lead: the bookmark command may be disabled with an editor current, so Theia skips the planted binding | open |  | 2026-11-06T21:08:45.534Z |  |
 | 26 | 39 | skipped-test | scripts/verify-prompts-live.mjs |  | prompts-live dialog and dialog-probe are skipped by derivation while REQUIREMENTS.md records PROMPT-03 deferred to 999.3 (OQ1 ruling 2026-11-05); repro: node scripts/verify-prompts-live.mjs --scenario dialog; cause: stock page dialogs lock the IDE; source: 37-UAT tests 8 and 9 | open |  | 2026-11-06T22:32:05.803Z |  |
 | 27 | 39 | deviation | theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx | 976 | long-press Back: with a real pointer, holding Back 600 ms then releasing on the pill leaves keyboard focus in the pill, so a real Escape is the pill's and the history menu stays open (39-15 verify-nav-keys-live long-press under PB_REAL_INPUT=1, 3 of 3 runs); the T4 claim itself (Enter on Back goes back after the hold) passes | open |  | 2026-11-07T02:53:12.909Z |  |
+| 28 | 39 | deviation | scripts/verify-page-tools-live.mjs |  | page-tools-live crash-navigate flaked once in three registry runs on 2026-11-06 (4ce04c24): 'a URL sent to a crashed tab did not load it (no loaded push with crashed false)'; the scenario passed alone 2 of 2 right after, and in the 116ac682 run; the code was not changed by 39-16; for the 39-18 flake work | open |  | 2026-11-07T04:37:55.475Z |  |
 
 ````json
 [
@@ -369,6 +370,19 @@ last_updated: 2026-11-07T02:53:12.909Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-11-07T02:53:12.909Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 28,
+    "kind": "deviation",
+    "phase": "39",
+    "file": "scripts/verify-page-tools-live.mjs",
+    "line": null,
+    "description": "page-tools-live crash-navigate flaked once in three registry runs on 2026-11-06 (4ce04c24): 'a URL sent to a crashed tab did not load it (no loaded push with crashed false)'; the scenario passed alone 2 of 2 right after, and in the 116ac682 run; the code was not changed by 39-16; for the 39-18 flake work",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-07T04:37:55.475Z",
     "resolved_at": null,
     "milestone": "v1.5"
   }
