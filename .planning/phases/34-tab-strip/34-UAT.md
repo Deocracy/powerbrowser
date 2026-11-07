@@ -3,7 +3,7 @@ status: partial
 phase: 34-tab-strip
 source: [34-VERIFICATION.md]
 started: 2026-11-01T00:00:00Z
-updated: 2026-11-06T23:30:00.000Z
+updated: 2026-11-07T05:12:00.000Z
 ---
 
 Deferred to the one end-of-milestone pass (Chris, 2026-10-31). Exact live commands are in 34-VERIFICATION.md under "Deferred Live Items" and in 34-05-SUMMARY.md. A scenario name below is a scenario of `node scripts/verify-tab-strip-live.mjs`. Start from a clean working tree with a current Gecko build (the harness stops at assertCleanTree otherwise).
@@ -16,7 +16,8 @@ Deferred to the one end-of-milestone pass (Chris, 2026-10-31). Exact live comman
 
 ### 1. Double-click on empty strip space against the window-drag handles (TAB-03)
 expected: In Browsing mode, on a build with the window drag regions active, double-click empty space on the tab strip (right of the last tab): a new tab opens (the pill takes focus) and the window does not maximize or restore. Live scenario `double` covers the DOM event only; the native drag-region double-click is the open part
-result: [pending]
+result: pass
+evidence: "39-18 2026-11-06, main, f45bb359: the carve-out is in the frontend publish, not shell JS (publishDragRegions sends the strip node as one item, so none of the strip is a window-drag handle; powerbrowser.js and PowerBrowserAPI.sys.mjs unchanged). PB_REAL_INPUT=1 PB_LIVE_HEADED=1 verify-tab-strip-live --scenario double, three headed runs on the owner KDE Wayland desktop, all PASS: a real double-click on the empty strip right of /a (empty strip 293..1226 x 0..32, pointer calibrated on /a, error [0,0], 1 attempt) opened a new tab on the empty page with the pill focused, and the KWin frame stayed 384,226 1280x800 -> 384,226 1280x800. Chrome held 11 .powerbrowser-drag handles, all on the URL row (y 33), none over the strip. Headless double PASS; its --self-test PASS with plants double-noop and strip-drag-handle (the pre-39-18 tail handle [294,0,986,32] re-sent: red 'a window-drag handle covers the empty strip')"
 owner: "Chris 2026-11-06 via AskUserQuestion: Box 34, T1 (a real double-click maximizes the window, 3/3), T2 (strip hidden in Coding and Organising) and T15 (IN-01..IN-12): Carve-out + accept T2, T15 (Recommended). T1 stays [pending]: plan 39-18 removes the strip from the window-drag handles (shell JS, with a plant) and records the result."
 real-input: "39-15 2026-11-06, objdir/dist/bin/powerbrowser headed on the owner KDE Wayland desktop, harness commit 6fc1161a: PB_REAL_INPUT=1, pointer os -- real uinput buttons through ydotool behind the pb-kwin gate (the active window read back before the move and again before the button, the pointer read back on target, the owner's mouse idle 750 ms first); the screen point calibrated by a trusted-mousemove read-back in the target document, within 2 px. verify-tab-strip-live double, run three times with the same result: a real double-click on the empty strip right of /a (calibrated on /a's tab: the gap is a chrome drag handle and raises no mousemove in the Theia frame) MAXIMIZED the window (KWin frame 384,226 1280x800 -> 0,0 2048x1252) and opened NO new tab. The native drag region consumes the double-click, so TAB-03's second clause fails on a real pointer; the DOM-event scenario stays green. Owner batch B decides"
 live: "v1.5 end-of-milestone pass, 2026-11-04, main: double PASS (the DOM event only; the native drag-region double-click is still the owner check)"
@@ -113,20 +114,20 @@ why: "unverified-prohibition, human review recommended"
 ## Summary
 
 total: 15
-passed: 12
+passed: 13
 issues: 0
-pending: 3
+pending: 2
 skipped: 0
 blocked: 0
 
 ## Gaps
 
-None recorded. Row 1 is ruled (carve the empty strip out of the window-drag handles) and waits on plan 39-18 to apply it and record the result. Row 7 keeps a human-only remainder (drops from outside the browser). Row 14 has a capture waiting on Chris's verdict.
+None recorded. Row 1 passed in 39-18 (the strip is no longer a window-drag handle). Row 7 keeps a human-only remainder (drops from outside the browser). Row 14 has a capture waiting on Chris's verdict.
 
 ## Deferred Follow-Ups
 
 - Row 4: IN-02 is answered by 39-16. A repeated Bookmark Tab and a Bookmark All Tabs over an already-bookmarked page each leave one Places bookmark per URL (bookmark-all, 331ed734).
 - Row 9: IN-03 (pin restore may re-activate a stale current tab) and IN-11 (pins on id-keyed widgets) are open.
 - Row 14: IN-01 (selected tabs show no hover feedback) is open.
-- Row 1: owner ruled the carve-out 2026-11-06; plan 39-18 removes the strip from the window-drag handles (shell JS, with a plant).
+- Row 1: owner ruled the carve-out 2026-11-06; 39-18 (f45bb359) applied it in publishDragRegions. In Browsing the window now moves only by the URL row's empty parts.
 - Row 15: owner accepted 2026-11-06; 34-REVIEW IN-01..IN-12 stay open as follow-ups (IN-12 lone-tab Close rows disabled rather than hidden; IN-06 colon text refused; IN-08 gate does not follow the command execute; IN-01 selected tabs show no hover feedback).
