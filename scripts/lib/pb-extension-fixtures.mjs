@@ -262,7 +262,12 @@ export const EXTENSION_FIXTURES = Object.freeze({
     },
     files: {
       'background.js': POPUP_BACKGROUND,
-      'popup.html': '<!doctype html><title>pb-ext-popup</title><body>popup</body>',
+      // 39-15 (38 T23): a control for Tab and Enter, and a key recorder, so popup-keyboard can see keys reach the popup.
+      'popup.html': '<!doctype html><title>pb-ext-popup</title><body>popup <button id="go">Go</button><script src="popup.js"></script></body>',
+      'popup.js': `${POST}
+addEventListener('keydown', e => post({ kind: 'popup-key', key: e.key }), true);
+document.getElementById('go').addEventListener('click', () => post({ kind: 'popup-button' }));
+`,
     },
   },
   content: {

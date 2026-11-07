@@ -32,6 +32,10 @@
 //                   panel's popupshowing (the product's panel never shows) and must go red
 //                   at the scenario's own assertion that the button opened its page in the panel.
 //                   (The Theia-DOM popup is covered by static rule 8, which forbids it in source.)
+//   popup-keyboard -- (39-15, 38 T23) the popup fixture's panel takes chrome focus; Tab and Enter reach its button;
+//                   Esc closes it with focus in the pill; reopened, a click on page /a closes it with focus in the
+//                   page. PB_REAL_INPUT=1 sends the keys and the click as real OS input. Plant popup-esc-swallowed
+//                   swallows Escape at the shell window while the panel is open and must go red naming the rules.
 //   buttons      -- (38-02) with the action fixture pinned, the chrome bar shows one
 //                   button per pinned row of the push (at most three) and the puzzle
 //                   menu one row per pushed extension, named by its pushed title (set
@@ -252,6 +256,73 @@ async function scenarioPopupAction({ app, plant }) {
     }
   }
   return verdict(true, `the subscribe pushed both fixtures (popup flag, enabled, data: icon); the action button's click ran in the overlay on screen /a (retitled to ${overlayTitle}) and its badge 'ok' was pushed; the popup button opened its page in the native panel and it closed by ${closed.join(', ')}, focus back in the pill only for Esc and the second click`, null);
+}
+
+// 39-15 (38 T23, EXT-07): the popup takes focus and keys (Tab to its button, Enter presses it), Esc closes it with focus
+// back in the pill, and a click on the page closes it with focus left in the page. PB_REAL_INPUT=1: the keys, the
+// button click and the page click are real OS input (pressKey's os route; osClientPointer calibrated in the Theia frame
+// and on page /a). Unset: TIP keys, el.click() on the button, and the page click stands in as chrome focus moved onto
+// /a's overlay (a BiDi click in the page is synthesised in the content process and moves no chrome focus, measured
+// 2026-11-06), so only the real route proves the click itself.
+async function scenarioPopupKeyboard({ app, plant }) {
+  const real = process.env.PB_REAL_INPUT === '1';
+  const A = await openTab(app, '/a');
+  await live.makeCurrent(app, A);
+  await waitForSelected(app, A, '/a');
+  await setPinned(app, BRIDGE_FIXTURES.map(fixtureId));
+  await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
+  await pollUntil(() => barButtons(app), b => b.length === 2, 10000);
+  if (plant?.name === 'popup-esc-swallowed') {
+    // The fault: Escape never reaches the panel's own close while it is open.
+    await live.inChrome(app, "const swallow = e => { if (e.key === 'Escape' && document.querySelector('panel.browser-extension-panel')?.state === 'open') { e.stopImmediatePropagation(); e.preventDefault(); } }; for (const t of ['keydown', 'keypress', 'keyup']) window.addEventListener(t, swallow, true); return true;");
+  }
+  const theiaHref = await app.evaluate('location.href');
+  const theiaCtx = (await app.contexts()).find(c => c.url === theiaHref)?.context;
+  const open = async when => {
+    if (real) {
+      // The UAT's "click a popup button with the mouse": a real click on the button, calibrated in the Theia frame.
+      const at = JSON.parse(await app.evaluate(`JSON.stringify((() => { const r = document.querySelector(${JSON.stringify(actionButton('popup'))}).getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; })())`));
+      await live.osClientPointer(app, theiaCtx, { ...at, button: 'left', action: 'click' });
+    } else {
+      await clickInFrame(app, actionButton('popup'));
+    }
+    const shown = await pollUntil(() => popupState(app), p => p.panel === 'open' && p.pressed, 10000);
+    if (!shown) throw new Error(`BROKEN INSTRUMENT: the popup button did not open the native panel ${when}: ${JSON.stringify(await popupState(app))}`);
+    // The panel's browser takes chrome focus once the panel is shown.
+    return pollUntil(() => live.inChrome(app, "const p = document.querySelector('panel.browser-extension-panel'); return !!p && !!document.activeElement && p.contains(document.activeElement);"), f => f === true, 5000);
+  };
+  const keys = { tab: { key: 'Tab', code: 'Tab', keyCode: 9 }, enter: { key: 'Enter', code: 'Enter', keyCode: 13 }, esc: { key: 'Escape', code: 'Escape', keyCode: 27 } };
+  const problems = [];
+  const focused = await open('for the keys');
+  if (!focused) problems.push('the opened popup did not take chrome focus');
+  const from = session.logs.length;
+  await live.pressKey(app, keys.tab);
+  await live.pressKey(app, keys.enter);
+  const keyed = await waitSince(from, r => r.kind === 'popup-key' && r.key === 'Tab', 5000);
+  const pressed = await waitSince(from, r => r.kind === 'popup-button', 5000);
+  if (!keyed || !pressed) problems.push(`keys did not reach the popup (Tab seen ${!!keyed}, Enter on its button ${!!pressed})`);
+  await live.pressKey(app, keys.esc);
+  const afterEsc = await pollUntil(() => popupState(app), p => p.panel !== 'open' && !p.pressed && p.pillFocused, 5000);
+  if (!afterEsc) problems.push(`Esc left ${JSON.stringify(await popupState(app))}, not the panel closed with focus in the pill`);
+  if (afterEsc) {
+    await open('for the page click');
+    const pageCtx = (await app.contexts()).find(c => pathOf(c.url) === '/a' && String(c.url).startsWith(ORIGIN))?.context;
+    if (!pageCtx) throw new Error('BROKEN INSTRUMENT: no BiDi context carries page /a');
+    const point = JSON.parse(await app.evaluateIn(pageCtx, 'JSON.stringify({ x: Math.round(innerWidth / 2), y: Math.round(innerHeight / 2) })'));
+    if (real) {
+      await live.osClientPointer(app, pageCtx, { ...point, button: 'left', action: 'click' });
+    } else {
+      await live.focusOverlay(app, A);
+    }
+    const inPage = () => live.inChrome(app, `return W.tabIdOfBrowser(document.activeElement) === ${JSON.stringify(A)};`);
+    const afterClick = await pollUntil(async () => ({ ...(await popupState(app)), page: await inPage() }), p => p.panel !== 'open' && !p.pressed && p.page && !p.pillFocused, 5000);
+    if (!afterClick) problems.push(`a click on page /a left ${JSON.stringify({ ...(await popupState(app)), page: await inPage() })}, not the panel closed with focus in the page`);
+  }
+  const route = `keys ${live.keyRoute.last}, clicks ${real ? `${live.pointerRoute.last} ${JSON.stringify(live.pointerRoute.calibration?.error)} after ${live.pointerRoute.calibration?.attempts} attempt(s)` : 'el.click() and a chrome focus move onto /a'}`;
+  if (problems.length) {
+    return verdict(false, null, `popup focus did not follow the keyboard rules (${route}): ${problems.join('; ')}`);
+  }
+  return verdict(true, `${route}: the popup took focus, Tab and Enter reached its button, Esc closed it with focus in the pill, and a click on page /a closed it with focus in the page`, null);
 }
 
 // 38-02 (EXT-06): the buttons and puzzle rows equal the set the push carries, and a pushed badge reaches the button.
@@ -1017,6 +1088,7 @@ async function scenarioPrivateAccess({ plant }) {
 
 const SCENARIOS_TABLE = {
   'popup-action': scenarioPopupAction,
+  'popup-keyboard': scenarioPopupKeyboard,
   buttons: scenarioButtons,
   manage: scenarioManage,
   'tabs-bridge': scenarioTabsBridge,
@@ -1043,6 +1115,7 @@ const B5_SCENARIOS = new Set(['sidebar', 'tab-pages', 'commands']);
 const PLANTS_TABLE = {
   'wrong-page': { scenario: 'popup-action', expect: 'the action ran in the stock tab' },
   'popup-native-blocked': { scenario: 'popup-action', expect: 'did not open its page in the native panel' },
+  'popup-esc-swallowed': { scenario: 'popup-keyboard', expect: 'popup focus did not follow the keyboard rules' },
   'create-unadopted': { scenario: 'tabs-bridge', expect: 'never adopted: an orphan overlay' },
   'buttons-stale': { scenario: 'buttons', expect: 'the button shows a stale badge' },
   'pin-lost': { scenario: 'manage', expect: 'the pin did not persist' },

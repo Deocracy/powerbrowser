@@ -110,6 +110,18 @@
 //     the order read before the first switch; where it is shown the painted
 //     strip reads that order too.
 //
+//   keyboard-menu (34 T13, WR-04, 39-15): browsing, /a /b /c open, /c current.
+//     /a's tab focused, ArrowRight moves keyboard focus to /b; Shift+F10 and
+//     then the context-menu key on the focused tab each open the tab menu
+//     with its top-left within 4 px of that tab's bottom-left; Enter on /a's
+//     focused tab and Space on /b's activate them; a right-click on /c's tab
+//     opens the menu with its top-left within 4 px of the pointer. With
+//     PB_REAL_INPUT=1 every key and the right-click are real OS input
+//     (ydotool behind pb-kwin's gate); unset, keys go through TIP, which
+//     never reaches GTK's context-menu-key path (nsGtkKeyUtils
+//     MaybeDispatchContextMenuEvent), so the driver raises the keyboard-
+//     shaped contextmenu (button 0, at 0,0) on the focused tab itself.
+//
 // The 34-02 scenarios run on pb-live-probe.mjs's withProbeShell (purged
 // startup cache, the push recorder, chrome scope for the clipboard); `menu`
 // keeps the ng-a-live shell it was written on.
@@ -123,7 +135,7 @@
 // after an unplanted run of the same scenario went green.
 //
 // Usage:
-//   node scripts/verify-tab-strip-live.mjs [--scenario menu,reorder,middle,double,drop,overflow,pin-restore,multi,preview,attention,bookmark-all,modes[,..]] [--self-test]
+//   node scripts/verify-tab-strip-live.mjs [--scenario menu,keyboard-menu,reorder,middle,double,drop,overflow,pin-restore,multi,preview,attention,bookmark-all,modes[,..]] [--self-test]
 //
 // Full tier only: the built binary, a fresh Theia build, a headless browser.
 
@@ -131,7 +143,7 @@ import { newProfile, runCheck, withShell, withShellQuit } from './lib/ng-a-live.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { REPO_ROOT } from './lib/ng-a-live.mjs';
-import { appNameExpr, overlayVisibility, probe, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
+import { appNameExpr, focusTheiaFrame, keyRoute, osClientPointer, overlayVisibility, pointerRoute, pressKey, probe, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
 
 const NAME = 'tab-strip-live';
 
@@ -306,6 +318,89 @@ async function pointer(app, context, actions, { release = true } = {}) {
 }
 
 const moveTo = (x, y) => ({ type: 'pointerMove', x: Math.round(x), y: Math.round(y) });
+
+/** keyboard-menu: WR-04's keyboard origin for the tab menu, Enter/Space activation, and a right-click at the pointer. */
+async function keyboardMenu({ app, pages, expect, plant }) {
+    const real = process.env.PB_REAL_INPUT === '1';
+    const setup = await step(app, 'keyboard-menu: setup', `
+        await get('ModeService').activateMode('browsing');
+        const painted = await openTabs(${JSON.stringify({ a: pages.url('/a'), b: pages.url('/b'), c: pages.url('/c') })});
+        shell.activateWidget(S.c);
+        await until(() => current() && current().id === S.c, 5000);
+        if (${JSON.stringify(plant)} === 'keyboard-menu-pointer-origin') {
+            // The fault: the keyboard-origin test inverted, so a keyboard-raised contextmenu is read as a pointer one.
+            const open = strip.openTabMenu.bind(strip);
+            strip.openTabMenu = (w, e) => open(w, new Proxy(e, { get: (t, k) => k === 'button' ? 2 : k === 'clientX' ? t.clientX + 300 : k === 'clientY' ? t.clientY + 200 : typeof t[k] === 'function' ? t[k].bind(t) : t[k] }));
+        }
+        return { painted };
+    `);
+    expect(setup.painted, 'keyboard-menu: setup: /a, /b and /c are not all painted in the strip');
+    const theia = await theiaContext(app);
+    const ESC = { key: 'Escape', code: 'Escape', keyCode: 27 };
+    const focusTab = async name => {
+        expect(await focusTheiaFrame(app) === true, 'keyboard-menu: NOT SCORED -- chrome focus could not be put on the Theia frame');
+        return step(app, `keyboard-menu: focus ${name}`, `
+            const el = tabEl(S.${name});
+            strip.tabStop = byId(S.${name});
+            strip.update();
+            el.focus();
+            return document.activeElement === el;
+        `);
+    };
+    const closeMenu = async () => {
+        await pressKey(app, ESC);
+        return step(app, 'keyboard-menu: close', "return until(() => !document.querySelector('.lm-Menu.pb-tab-menu'), 3000);");
+    };
+    const menuAt = () => step(app, 'keyboard-menu: menu read', `
+        await until(() => document.querySelector('.lm-Menu.pb-tab-menu'), 3000);
+        const m = document.querySelector('.lm-Menu.pb-tab-menu');
+        return m ? { left: m.getBoundingClientRect().left, top: m.getBoundingClientRect().top } : null;
+    `);
+    // Keyboard focus, then the two context-menu keys on the focused tab.
+    expect(await focusTab('a'), 'keyboard-menu: NOT SCORED -- /a\'s strip tab did not take focus');
+    await pressKey(app, { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 });
+    const roved = await step(app, 'keyboard-menu: rove', 'return document.activeElement === tabEl(S.b);');
+    expect(roved, 'keyboard-menu: ArrowRight on /a\'s focused tab did not move keyboard focus to /b');
+    const legs = [];
+    for (const [name, spec] of [['Shift+F10', { key: 'F10', code: 'F10', keyCode: 121, modifiers: ['shift'] }], ['the context-menu key', { key: 'ContextMenu', code: 'ContextMenu', keyCode: 93 }]]) {
+        expect(await focusTab('b'), `keyboard-menu: NOT SCORED -- /b's strip tab did not take focus before ${name}`);
+        await pressKey(app, spec);
+        if (!real) {
+            await step(app, 'keyboard-menu: keyboard-shaped contextmenu', "document.activeElement.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 0, clientX: 0, clientY: 0 })); return true;");
+        }
+        const tab = await step(app, 'keyboard-menu: tab rect', 'return rect(tabEl(S.b));');
+        const menu = await menuAt();
+        const off = menu ? Math.max(Math.abs(menu.left - tab.left), Math.abs(menu.top - tab.bottom)) : null;
+        expect(menu !== null && off <= 4,
+            `keyboard-menu: keyboard tab menu opened away from the focused tab: ${name} on /b put the menu at ${JSON.stringify(menu)}, /b's bottom-left is ${Math.round(tab.left)},${Math.round(tab.bottom)}`);
+        legs.push(`${name} ${off === null ? 'none' : `${Math.round(off * 10) / 10}px`}`);
+        if (menu) {
+            expect(await closeMenu(), `keyboard-menu: Escape did not close the menu ${name} opened`);
+        }
+    }
+    // Enter and Space activate the focused tab.
+    for (const [name, key] of [['a', { key: 'Enter', code: 'Enter', keyCode: 13 }], ['b', { key: ' ', code: 'Space', keyCode: 32 }]]) {
+        expect(await focusTab(name), `keyboard-menu: NOT SCORED -- /${name}'s strip tab did not take focus`);
+        await pressKey(app, key);
+        const now = await step(app, `keyboard-menu: ${key.code}`, `return until(() => current() && current().id === S.${name}, 3000);`);
+        expect(now, `keyboard-menu: ${key.code} on /${name}'s focused tab did not make /${name} current`);
+    }
+    // A right-click opens the menu at the pointer.
+    const c = await step(app, 'keyboard-menu: /c rect', 'return rect(tabEl(S.c));');
+    const at = { x: Math.round(c.left + 20), y: Math.round(c.y) };
+    if (real) {
+        await osClientPointer(app, theia, { ...at, button: 'right', action: 'click' });
+    } else {
+        await pointer(app, theia, [moveTo(at.x, at.y), { type: 'pointerDown', button: 2 }, { type: 'pointerUp', button: 2 }]);
+    }
+    const menu = await menuAt();
+    const off = menu ? Math.max(Math.abs(menu.left - at.x), Math.abs(menu.top - at.y)) : null;
+    expect(menu !== null && off <= 4, `keyboard-menu: a right-click at ${at.x},${at.y} on /c's tab put the menu at ${JSON.stringify(menu)}, not at the pointer`);
+    if (menu) {
+        expect(await closeMenu(), 'keyboard-menu: Escape did not close the right-click menu');
+    }
+    console.log(`  keyboard-menu: keys ${keyRoute.last}, pointer ${real ? `${pointerRoute.last} ${JSON.stringify(pointerRoute.calibration?.error)} after ${pointerRoute.calibration?.attempts} attempt(s)` : 'bidi'}; menu offsets ${legs.join(', ')}, right-click ${off === null ? 'none' : `${Math.round(off * 10) / 10}px`}`);
+}
 
 /** reorder: TAB-02 by a trusted drag in the strip. `plant` names a page fault for --self-test. */
 async function reorder({ app, pages, expect, plant }) {
@@ -1186,6 +1281,7 @@ async function modes({ app, pages, expect, plant }) {
 /** Each scenario and the page fault its --self-test plants, with the text its red line must carry. `probe` scenarios run on withProbeShell. */
 const SCENARIOS = {
     menu: { run: menu, plant: 'menu-acts-on-current', expect: 'reloaded the current tab' },
+    'keyboard-menu': { run: keyboardMenu, probe: true, plant: 'keyboard-menu-pointer-origin', expect: 'keyboard tab menu opened away from the focused tab' },
     reorder: { run: reorder, probe: true, plant: 'reorder-noop', expect: 'did not land after /b' },
     middle: { run: middle, probe: true, prefs: { 'middlemouse.paste': true }, plant: 'middle-not-closing', expect: 'did not close /a' },
     double: { run: double, probe: true, plant: 'double-noop', expect: 'opened no new tab' },

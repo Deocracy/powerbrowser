@@ -31,9 +31,17 @@ const SHELL_CAPTION = 'PowerBrowser';
 const YDOTOOL_SOCKET = '/run/ydotoold/socket';
 // Linux input-event codes (linux/input-event-codes.h) for the short sequences the real-input rows send.
 const KEY_CODES = {
-    esc: 1, tab: 15, enter: 28, ctrl: 29, shift: 42, alt: 56, space: 57,
-    f10: 68, up: 103, left: 105, right: 106, down: 108, menu: 127,
+    esc: 1, backspace: 14, tab: 15, enter: 28, ctrl: 29, shift: 42, alt: 56, space: 57,
+    f1: 59, f2: 60, f3: 61, f4: 62, f5: 63, f6: 64, f7: 65, f8: 66, f9: 67, f10: 68, f11: 87, f12: 88,
+    home: 102, up: 103, pageup: 104, left: 105, right: 106, end: 107, down: 108, pagedown: 109, delete: 111,
+    meta: 125, menu: 127, back: 158, forward: 159,
+    ...Object.fromEntries([...'1234567890'].map((d, i) => [d, 2 + i])),
+    ...Object.fromEntries([...'qwertyuiop'].map((c, i) => [c, 16 + i])),
+    ...Object.fromEntries([...'asdfghjkl'].map((c, i) => [c, 30 + i])),
+    ...Object.fromEntries([...'zxcvbnm'].map((c, i) => [c, 44 + i])),
 };
+// ydotool click codes: the button in the low bits, 0x40 down, 0x80 up (ydotool 1.0.4 `click --help`).
+const BUTTON_CODES = { left: 0x00, right: 0x01, middle: 0x02, back: 0x03, forward: 0x04 };
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const qdbus = (...args) => execFileSync('qdbus', ['org.kde.KWin', ...args], { encoding: 'utf8', timeout: 10000 }).trim();
@@ -156,6 +164,98 @@ export function osKeys(keys, opts = {}) {
     return { sent: keys, window };
 }
 
+/** KWin's pointer position in logical screen pixels, `{ x, y }`, or null when the read-back is empty. */
+export function cursorPos() {
+    const since = Math.floor(Date.now() / 1000) - 1;
+    const marker = runKwinScript('print("__MARKER__ " + JSON.stringify({ x: workspace.cursorPos.x, y: workspace.cursorPos.y }));');
+    const text = readMarker(marker, since);
+    return text ? JSON.parse(text) : null;
+}
+
+const ydotool = args => execFileSync('ydotool', args.map(String), { env: { ...process.env, YDOTOOL_SOCKET }, timeout: 10000 });
+
+/**
+ * Moves the real pointer to logical screen (x, y) by relative ydotool moves, each read back through KWin: pointer
+ * acceleration applies to the virtual device, so an absolute move does not land (measured 2026-11-06: `mousemove
+ * --absolute 500 400` ended at 2,0). Large errors are halved so the accelerated step cannot overshoot far.
+ */
+function movePointer(x, y) {
+    let at = cursorPos();
+    const trace = [];
+    for (let i = 0; i < 30 && at; i++) {
+        const dx = Math.round(x - at.x);
+        const dy = Math.round(y - at.y);
+        if (dx === 0 && dy === 0) {
+            return at;
+        }
+        // Gain is above 1 on large moves and below 1 on 1-3 px ones (measured: 31 -> 44, 3 -> 1 or 2).
+        const step = d => (Math.abs(d) > 6 ? Math.round(d / 2) : d);
+        ydotool(['mousemove', '--', step(dx), step(dy)]);
+        at = cursorPos();
+        trace.push(`${step(dx)},${step(dy)}->${at?.x},${at?.y}`);
+    }
+    throw new Error(`osPointer: the pointer did not settle on ${x},${y} (KWin reads ${JSON.stringify(at)}; moves ${trace.slice(-6).join(' ')})`);
+}
+
+/**
+ * Waits until nobody else is moving the pointer: KWin reads the same position for 750 ms. The pointer is shared with
+ * the owner's live desktop (measured 2026-11-06: a 2 px move read back 12 px off while the mouse was in use), so a
+ * real-input step never races a hand on the mouse. Throws "pointer busy" after `timeoutMs`.
+ */
+export async function waitPointerIdle(timeoutMs = 60000) {
+    const deadline = Date.now() + timeoutMs;
+    let last = cursorPos();
+    let still = 0;
+    while (still < 3) {
+        if (Date.now() > deadline) {
+            throw new Error(`pointer busy: KWin read the pointer moving for ${timeoutMs / 1000} s (someone is using the mouse)`);
+        }
+        await sleep(250);
+        const now = cursorPos();
+        still = now && last && now.x === last.x && now.y === last.y ? still + 1 : 0;
+        last = now;
+    }
+}
+
+/**
+ * Real pointer input at logical screen (x, y): `action` is move, click, double, down, up or hold (down, `holdMs`,
+ * up); `button` is left, middle, right, back or forward. The gate runs before the move and again before the button
+ * event, which is sent only while KWin still reads the pointer on the target (someone moving the mouse refuses it).
+ */
+export async function osPointer({ x, y, button = 'left', action = 'click', holdMs = 600 }, opts = {}) {
+    if (!(button in BUTTON_CODES)) {
+        throw new Error(`osPointer: unknown button ${JSON.stringify(button)}; known: ${Object.keys(BUTTON_CODES).join(', ')}`);
+    }
+    gate(opts);
+    await waitPointerIdle();
+    movePointer(x, y);
+    if (action === 'move') {
+        return { x, y, action };
+    }
+    const window = gate(opts);
+    const at = cursorPos();
+    if (!at || Math.round(at.x) !== Math.round(x) || Math.round(at.y) !== Math.round(y)) {
+        throw new Error(`refused: the pointer left ${x},${y} before the ${button} ${action} (KWin reads ${JSON.stringify(at)})`);
+    }
+    const b = BUTTON_CODES[button];
+    const hex = n => `0x${n.toString(16)}`;
+    if (action === 'click') {
+        ydotool(['click', hex(0xc0 | b)]);
+    } else if (action === 'double') {
+        ydotool(['click', '-D', 40, hex(0xc0 | b), hex(0xc0 | b)]);
+    } else if (action === 'down') {
+        ydotool(['click', hex(0x40 | b)]);
+    } else if (action === 'up') {
+        ydotool(['click', hex(0x80 | b)]);
+    } else if (action === 'hold') {
+        ydotool(['click', hex(0x40 | b)]);
+        try { await sleep(holdMs); } finally { ydotool(['click', hex(0x80 | b)]); }
+    } else {
+        throw new Error(`osPointer: unknown action ${JSON.stringify(action)}`);
+    }
+    return { x, y, button, action, window };
+}
+
 const PLANTS = [
     { name: 'class-mismatch', opts: { expectClass: 'pb-gate-plant-absent' } },
     { name: 'readback-empty', opts: { readActive: () => '' } },
@@ -183,6 +283,15 @@ async function selfTest() {
                 console.log(`FAIL clean-control -> ${e.message}`);
             }
             try {
+                const r = await osPointer({ x: Math.round(active.x + active.width / 2), y: Math.round(active.y + active.height / 2), action: 'move' });
+                const at = cursorPos();
+                if (!at || Math.round(at.x) !== r.x || Math.round(at.y) !== r.y) throw new Error(`KWin reads the pointer at ${JSON.stringify(at)}, not ${r.x},${r.y}`);
+                console.log(`ok  clean-pointer -> moved to ${r.x},${r.y}`);
+            } catch (e) {
+                failed++;
+                console.log(`FAIL clean-pointer -> ${e.message}`);
+            }
+            try {
                 const shot = await captureShell(join(dir, 'clean.png'));
                 console.log(`ok  clean-capture -> ${shot.resourceClass} ${shot.width}x${shot.height}`);
             } catch (e) {
@@ -192,6 +301,7 @@ async function selfTest() {
             for (const plant of PLANTS) {
                 const verdicts = [];
                 try { osKeys(['shift'], plant.opts); verdicts.push('osKeys sent'); } catch (e) { if (!e.message.startsWith('refused: active window')) verdicts.push(`osKeys ${e.message}`); }
+                try { await osPointer({ x: 0, y: 0, action: 'move' }, plant.opts); verdicts.push('osPointer moved'); } catch (e) { if (!e.message.startsWith('refused: active window')) verdicts.push(`osPointer ${e.message}`); }
                 try { await captureShell(join(dir, `${plant.name}.png`), plant.opts); verdicts.push('captureShell captured'); } catch (e) { if (!e.message.startsWith('refused: active window')) verdicts.push(`captureShell ${e.message}`); }
                 if (verdicts.length) {
                     failed++;
