@@ -955,6 +955,7 @@ Plans:
 **Goal:** The three registry rows that went red for timing reasons in the 39-19 full run are deterministic
 **Source phase:** 39 (plan 39-19 full run at 6ac27ac2)
 **Deferred at:** 2026-11-07, gate exclusions keyed to the entries below
+**Target:** v1.6 (Chris 2026-11-07)
 **Follow-ups:**
 - [ ] prompts-live-self-test: plant `allow-loads-frame-url` goes red on 'popup not adopted next to its opener' instead of its own failure, 2 of 3 runs. Repro: `scripts/verify-platform.sh --only prompts-live-self-test`. Cause so far: the 39-09 re-site (999.13) does not reach the plant's failure reliably. Source: 37-UAT test 17. WINDOWS.md entry 39.
 - [ ] ng067-frontend-errors-reach-telemetry: 'no frontend.uncaught-error event was sent', red 1 of 3. Repro: `scripts/verify-platform.sh --only ng067-frontend-errors-reach-telemetry`. Cause so far: not isolated. Source: no UAT test (NG-067). WINDOWS.md entry 42.
@@ -965,6 +966,7 @@ Plans:
 **Goal:** Fix the six rows red in 39-BASELINE and again in the 39-19 full run and its rerun
 **Source phase:** 39 (39-BASELINE "new" rows; owned by no fix plan)
 **Deferred at:** 2026-11-07, v1.5 close-out residuals; the phase's fix window closed at 39-18
+**Target:** v1.6 (Chris 2026-11-07)
 **Follow-ups:**
 - [ ] verify-customize-inert: 'state 1 vs state 3 pixels identical, the CSS layer had no effect'. Repro: `scripts/verify-platform.sh --only verify-customize-inert`. Cause so far: the script writes `$XDG_CONFIG_HOME/powerbrowser/customize.css`; the supervised frontend may read another config dir. Source: no UAT test (CUST-01). WINDOWS.md entry 34.
 - [ ] start-failure-shows-error (MIG-04): the planted settings-folder failure is reported as 'waiting for the backend's readiness announcement'. Repro: `scripts/verify-platform.sh --only start-failure-shows-error`. Cause so far: the 3000 ms readiness backstop fires first. Source: no UAT test (MIG-04). WINDOWS.md entry 36.

@@ -101,3 +101,24 @@ item it lists and no ledger entry is named. A row with a ledger entry stays unti
 - `roadmap update-plan-progress` was run for 27, 29, 30, 31 and 32. It changed only row 31 (0/TBD to 5/5) and the phase 31 `**Plans**:` line, and it removed one blank line before 999.17, which was restored.
 - Progress rows 27 and 29-38 were set by hand. None is `Complete`, because every phase in the pass still has [pending] checklist rows. 27 and 32-38 read `Executed, verification deferred (39-HUMAN-CHECKLIST.md)`. 29, 30 and 31 read `Executed, verification deferred (outside the 39 live pass; /gsd-verify-work N)`. Row 38's count was 5/5 and is now 7/7 (38-06 and 38-07 summarised).
 - Phase 31.1 has no progress row and no phase checkbox in the v1.5 list, so none was added. Its four plan checkboxes are still `[ ]`; they were not touched.
+
+## Task 3 rulings (Chris, 2026-11-07, via AskUserQuestion)
+
+1. Checklist: "Defer: record all as pending, continue". Every item in 39-HUMAN-CHECKLIST.md stays open and the 28 pending UAT
+   rows stay `[pending]`. Requirements blocked only by checklist items stay unticked.
+2. PAGE-05: "Keep unticked until 999.19 (Recommended)". Recorded as the `owner:` line of 32-UAT row 8. This supersedes the
+   2026-11-05 ruling ("keep PAGE-05 standing and log the packaging follow-up", box 32, Accept all) quoted in the PAGE-05
+   row above: PAGE-05 stays unticked until backlog 999.19 (libpulse load for a hand-started binary) is resolved.
+3. The eight new defects from 39-19 (ledger 34 and 36-41; backlog 999.30 and 999.31): "Carry to v1.6 (Recommended)".
+
+## Re-tick after the checklist
+
+The checklist is deferred, so these twelve rows stay unticked (`[ ]`, traceability Pending). Each goes back to `[x]` /
+`Complete` once Chris passes every checklist item named in the table above and no ledger entry blocks it:
+
+- NAV-03, NAV-04, NAV-05, NAV-06 (27 T5, 27 T6; NAV-03 also needs ledger 27 fixed)
+- PAGE-01 (32 T6), PAGE-04 (32 T3), PAGE-10 (32 T2, T4), PAGE-11 (32 T1)
+- BMK-04 (33 T7)
+- PROMPT-04 (35 T12, T4), PROMPT-06 (E2 backstops), PROMPT-08 (35 T13, T15, E1 backstops)
+
+PAGE-05 is not in this list: it re-ticks when backlog 999.19 is fixed, not on a checklist pass.

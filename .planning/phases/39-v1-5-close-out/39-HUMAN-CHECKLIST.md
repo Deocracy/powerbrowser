@@ -1,5 +1,7 @@
 # Phase 39 human-only checklist (v1.5 close-out)
 
+Status: deferred by Chris 2026-11-07 via AskUserQuestion ("Defer: record all as pending, continue"); work through with /gsd-verify-work <phase>
+
 Internal document for Chris; identifiers allowed. Written 2026-11-07 by plan 39-20 Task 2.
 
 Source: every `[pending]` row in the `## Tests` sections of the nine UAT files (27, 31.1, 32-38). The plan-39-20 verify

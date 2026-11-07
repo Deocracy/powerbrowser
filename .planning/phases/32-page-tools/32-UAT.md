@@ -61,7 +61,7 @@ capture: ".planning/phases/39-v1-5-close-out/captures/32-T7-print-dialog.png is 
 expected: Start objdir/dist/bin/powerbrowser by hand and play audio in a web tab: sound plays and the strip shows the audio mark and mute. Today libpulse does not load outside the harness's LD_LIBRARY_PATH on this host — decide whether PAGE-05 stands with the packaging follow-up open
 result: issue
 evidence: "39-16 (2026-11-06): objdir/dist/bin/powerbrowser hand-started with `env -u LD_LIBRARY_PATH`, a throwaway profile with autoplay allowed, and a looping 440 Hz tone page from a loopback server (opened as a command-line URL, which lands in a stock window of the same process). After 25 s pw-dump showed no Stream/Output/Audio node for the process, and stderr (MOZ_LOG=cubeb:4) read: '[Parent <pid>: AudioIPC Server RPC]: E/cubeb context.rs:55: libpulse not found'. Control, same run, with LD_LIBRARY_PATH set to the objdir's MOZ_PULSEAUDIO_LIBS dir: two nodes {name PowerBrowser, binary powerbrowser, media 'tone', state running}. pactl is not installed on this host (PipeWire), so pw-dump was the read. Both browsers were quit and confirmed gone. PAGE-05 stands with the packaging follow-up open (owner 2026-11-05)"
-owner: "Chris 2026-11-05 via AskUserQuestion: box 32, Accept all (Recommended). T8: keep PAGE-05 standing and log the packaging follow-up."
+owner: "Chris 2026-11-07 via AskUserQuestion: Keep unticked until 999.19 (Recommended)"
 
 ### 9. Judgment-tier prohibitions (32-VERIFICATION Prohibitions table)
 expected: Confirm or reject each flagged, non-gate-proven verdict, including the 32-09 backstop (no commit of the regenerated 050 before its rebuild)
