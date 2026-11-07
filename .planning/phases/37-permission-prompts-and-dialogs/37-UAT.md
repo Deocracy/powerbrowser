@@ -3,7 +3,7 @@ status: partial
 phase: 37-permission-prompts-and-dialogs
 source: [37-VERIFICATION.md, 37-REVIEW.md, 37-03-SUMMARY.md, 37-CONTEXT.md]
 started: 2026-11-01T00:00:00Z
-updated: 2026-11-06T23:06:34.000Z
+updated: 2026-11-07T00:02:23.000Z
 ---
 
 Deferred to the one end-of-milestone pass (Chris, 2026-10-31). Run on `objdir/dist/bin/powerbrowser` with `-purgecaches` after any shell-module change. Spectacle and the KWin raise script need the session DBus, so run with the sandbox off. The live scenarios are `node scripts/verify-prompts-live.mjs --scenario <name>`.
@@ -101,8 +101,8 @@ evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: protocol-handler PA
 
 ### 17. `node scripts/verify-prompts-live.mjs --self-test` (live half)
 expected: Clean control session per target scenario green, then all 21 plants each go red naming their drift (the static half already passes)
-result: skipped
-reason: "Deferred follow-up: static half PASS (21 plants). Live half run with --self-test --scenario over the 13 scenarios whose clean controls are green: all 13 controls green, 13 of 17 plants red as named. queue-shown-early and activation-wrong-tab stay green; camera-template-missing goes red on an empty device menulist instead of its own failure; allow-loads-frame-url goes red on popup not adopted next to its opener instead of its own failure. The 4 plants on sharing (2), dialog-probe and dialog were not run: the screen-share portal check and PROMPT-03 (999.3)"
+result: pass
+evidence: "39-11 2026-11-06, workspace/lane-a 9e45d61f: scripts/verify-platform.sh --only prompts-live-self-test PASS (headless; log ${TMPDIR}/pb-39-11/prompts-live-self-test.log): static half 29 plants plus deferral-record-removed and deferral-row-removed; dialog-probe and dialog SKIPPED (PROMPT-03 deferred, 999.3); all 22 clean controls green; all 27 live plants red naming their drift, including the four 999.13 re-sited plants queue-shown-early, activation-wrong-tab, camera-template-missing and allow-loads-frame-url, the two sharing plants on the X11 route, and the eight new plants of 39-10 and 39-11. The two dialog plants are not run while PROMPT-03 is deferred (OQ1, ledger 26)"
 
 ### 18. Review fix CR-01a: an adopted tab's prompt shows only while that tab is current
 expected: Open an adopted tab (a target=_blank link, or a blocked-popup Allow). Its geolocation prompt shows while the adopted tab is current and does not show while a host tab is current; switching host tab to adopted tab to IDE shows and hides it each time and never shows another tab's prompt over the adopted page (`b33f8953`, no live row)
@@ -126,19 +126,23 @@ evidence: "39-10 2026-11-06, workspace/lane-a b8d5554d: --scenario camera-then-g
 
 ### 22. Review fix WR-01: reports that arrive before the adoption ack
 expected: A camera report, a blocked-popup bar, a protocol-handler registration and a hung-script report that happen while an overlay is pending (pc-N) are all shown at the ack: the camera mark lights, the bar appears, the registration is not lost (`badf1036`). Also check the remaining pending-window gap the review listed: a hung script and a prompt raised before the ack
-result: [pending]
+result: pass
+evidence: "39-11 2026-11-06, workspace/lane-a c2a11c29: --scenario pending-window-reports PASS (headless; also PASS headed in the capture run): the harness holds the frontend's webTabAdopt ack 3.5 s while the adopted page (served from localhost, a content process of its own) asks for location, starts a camera track, opens a gesture-less popup, registers a protocol handler and hangs past a one-second limit; at the ack the location prompt's pending push, the camera push and mark, and the blocked-popup, protocol-handler and hung-script bars all arrive (the review's remaining gap, a hung script and a prompt raised before the ack, included). --self-test: control green, plant pending-report-dropped red naming 'a report made before the adoption ack was lost'. Found on the way: a hang report names a content process, and the stock match (IsReportForBrowserOrChildren) gives the bar to the first tab in that process, so two same-site tabs share one hung-script bar target, as upstream does"
 
 ### 23. Review fix WR-02: navigation resets the sharing marks
 expected: Share the camera, then navigate the tab to another page. A sharingChanged push with all false arrives and every mark goes off (`5ffef72e`)
-result: [pending]
+result: pass
+evidence: "39-11 2026-11-06, workspace/lane-a c2a11c29: --scenario nav-resets-sharing PASS (headless): a live camera shared through the stock Allow (mark lit), then a navigation brings a sharingChanged push with camera, microphone and screen false and no mark stays. --self-test: control green, plant nav-reset-dropped (the all-off push dropped at the frame's group actor) red naming 'navigation left a sharing mark on'"
 
 ### 24. Review fix WR-03: dismissed prompts leave no false mark
 expected: A notification request made without a user gesture (the post-prompt shown dismissed), and a password capture in a private window or an unchanged login, show no "Open the tab to answer it" mark, count nothing toward the cap of 3, and push no pending:true (`657f0a4b`)
-result: [pending]
+result: pass
+evidence: "39-11 2026-11-06, workspace/lane-a ad800eab: --scenario dismissed-no-mark PASS (headless): a password capture upstream shows dismissed (a card-number username with a three-digit password, LoginManagerChild :2485-2495; the stock dismissed notification is read as the positive control) pushes no pending:true and leaves no strip mark; on a second tab it is not counted toward the cap (three real waiting prompts leave it and the oldest real one in place). --self-test: control green, plant dismissed-recorded red naming 'a dismissed prompt left a pending mark'. Not driven: the notification post-prompt, which in the shell throws before it shows (PermissionUI.sys.mjs:664, the anchor icon is missing; see 39-11-SUMMARY product finding), and an unchanged login, for which upstream shows no notification at all"
 
 ### 25. Review fix WR-04: blocked-popup Allow keeps window.opener
 expected: A sign-in or payment style popup that reports back with window.opener.postMessage works after Allow; a blocked window.open() with no URL (about:blank) is still offered and opens; the popup leaves the list only after the replay is sent (`22d02c9c`)
-result: [pending]
+result: pass
+evidence: "39-11 2026-11-06, workspace/lane-a ad800eab: --scenario popup-allow-opener PASS (headless): a blocked sign-in popup and a blocked window.open() with no URL give one bar offering both; the first Allow opens the sign-in page as a tab whose window.opener.postMessage reaches the opener; the bar then offers exactly one popup, and its Allow opens the blank one as a tab. --self-test: control green, plant allow-drops-opener red naming 'Allow lost window.opener'"
 
 ### 26. Review fix WR-05: probe 1 replacing the verdict
 expected: A live dialog-probe run replaces the provisional verdict with evidence; `relayFeasible` and `relayWhy` come from the measured preconditions (host and adopted tab nodes, selectedBrowser, auth members) and `prompt-probe-verdict-live` goes green under `--gate`
@@ -147,28 +151,34 @@ evidence: "39-10 2026-11-06, workspace/lane-a 0077dd5d: the verdict is the live 
 
 ### 27. Review fix WR-07: the live plants
 expected: The reworded popup-block plants (`allow-loads-frame-url`, `adopt-next-to-opener-failed`) and the plants that only simulate a symptom (`cross-tab-leak`, `theia-beforeunload-relayed`) go red in a live session. Decide whether the adopted-prompt, adopted-bar-navigate and camera-then-geo scenarios are worth writing (WR-07's fix list), since items 18-21 are held only by hand
-result: [pending]
+result: pass
+evidence: "39-11 2026-11-06, workspace/lane-a 9e45d61f, from the registry self-test run (row 17): 'allow-loads-frame-url -> red, naming Allow opened a frame-supplied URL', 'adopt-next-to-opener-failed -> red, naming popup not adopted next to its opener', 'cross-tab-leak -> red, naming suppression leaked across tabs', 'theia-beforeunload-relayed -> red, naming Theia-frame beforeunload relayed'. The open question is answered by their existence: 39-10 wrote adopted-prompt, adopted-bar-navigate, adopted-parity and camera-then-geo (rows 18-21), each with a plant that re-creates the reviewed defect"
 live: "v1.5 end-of-milestone live pass 2026-11-04, main: adopt-next-to-opener-failed, cross-tab-leak and theia-beforeunload-relayed go red naming their drift; allow-loads-frame-url goes red on popup not adopted next to its opener instead (deferred under item 17). Still open for the owner: whether the adopted-prompt, adopted-bar-navigate and camera-then-geo scenarios are worth writing"
 
 ### 28. Doorhanger placement and keyboard (KDE Wayland)
 expected: The native panel opens over the page's top-left corner just under the chrome bar, above the Theia frame, with its stock Allow, Block and Remember controls; Tab and Enter operate it; Esc dismisses it; it follows a window resize and a move; nothing overlays it
 result: [pending]
+capture: "39-11 2026-11-06: captures/37-T28-doorhanger.png (headed, permission scenario with the location doorhanger open per chrome's panel state). The stock panel is not in the window capture: the PNG shows the tab's bell mark and the page only. Also see 37-T32 and 37-T30: on an adopted tab whose prompt arrived before the ack, the location prompt's text renders unstyled at the window's top-left over the tab strip (no panel frame or background). Needs a live look"
 
 ### 29. Pending-prompt mark in the tab strip
 expected: A background tab with a waiting prompt shows the bell mark and its tooltip in both themes; the mark clears when the prompt is answered or the page navigates. Note IN-03: the copy says "permission" even for a password offer and stays on the current tab
 result: [pending]
+capture: "39-11 2026-11-06: captures/37-T29-strip-mark.png (headed, background-queue): the backgrounded tab 'Prompt a' carries the bell mark while 'Prompt b' is current. Dark theme only"
 
 ### 30. Sharing indicator in the chrome bar
 expected: One mark per shared kind (camera, microphone, screen), legible in light and dark, with the tooltip "{App} is sharing your camera with this tab." and its siblings; no mark for a tab that shares nothing
 result: [pending]
+capture: "39-11 2026-11-06: captures/37-T30-sharing-indicator.png (headed, pending-window-reports after its bars were answered): the chrome bar's camera mark for a live track. The blocked-popup bar and the unstyled location prompt text (see row 28) are also in frame. Camera only, dark theme only"
 
 ### 31. WebRTC device doorhanger and password doorhanger
 expected: The device menulists and the camera preview lay out correctly in the native panel; the password doorhanger shows both fields, the username field upgraded, and the autocomplete panel opens
 result: [pending]
+capture: "39-11 2026-11-06: captures/37-T31-device-and-password-doorhangers.png (headed, password-save with a camera request on the same tab, both stock notifications open per chrome's panel state). As in 37-T28, the stock panel is not in the window capture: only the bell mark shows. Needs a live look"
 
 ### 32. Notification bars
 expected: Blocked-popup, hung-script and protocol-handler bars sit inside the web tab widget, shrink the page rect (never cover content), read correctly in both themes, and a stacked state (popup and hung script on one tab) does not overlap. Copy: "Stop script" reads as destructive
 result: [pending]
+capture: "39-11 2026-11-06: captures/37-T32-notification-bars.png (headed, pending-window-reports): the protocol-handler, blocked-popup and hung-script bars stacked on one tab inside the web tab widget, page rect below them, no overlap. The unstyled location prompt text noted in row 28 overlays the tab strip and the bar row. Dark theme only"
 
 ### 33. Probe screenshots
 expected: Review `.planning/probes/prompt-probe/` for the five dialog kinds: does the IDE look and behave interactive while each is open (a screenshot cannot show input state, so cross-check `inputEnabled` in the verdict)
@@ -234,10 +244,10 @@ owner: "Chris 2026-11-06 via AskUserQuestion: box 37, Accept all (Recommended). 
 ## Summary
 
 total: 41
-passed: 29
+passed: 35
 issues: 0
-pending: 10
-skipped: 2
+pending: 5
+skipped: 1
 blocked: 0
 
 ## Gaps
