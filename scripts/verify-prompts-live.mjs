@@ -94,14 +94,19 @@
  *                       through the handler service); Don't allow on a second
  *                       scheme stores nothing.
  *
- * 37-REVIEW fixes held statically (verify-permission-prompts rules (ab), (ac),
- * (ae)) and not yet a scenario here; the end-of-milestone live pass checks
- * them by hand on a built binary: an adopted tab's geolocation prompt shows
- * while that tab is current and not while a host tab is (CR-01); a bar on an
- * adopted tab clears when it navigates, and closing it drops its prompts and
- * bars (CR-01); camera live, then a location grant, and the camera mark stays
- * (CR-02); a camera report before the adoption ack lights the mark at the ack
- * (WR-01); share the camera, navigate, and every mark goes off (WR-02).
+ *   adopted-prompt   -- (39-10, 37-REVIEW CR-01) an adopted tab's location prompt
+ *                       shows while it is current, hides for a host tab and the
+ *                       IDE, and no host tab's prompt shows over it;
+ *   adopted-bar-navigate -- (39-10, CR-01) an adopted tab's bar clears when it
+ *                       navigates; closing it sends pending:false and leaves no mark;
+ *   adopted-parity   -- (39-10, CR-01) an adopted tab is a tab-host node: the
+ *                       extension tab tracker resolves it, its favicon is pushed,
+ *                       F12 opens its toolbox, its opener is cleared on close;
+ *   camera-then-geo  -- (39-10, CR-02) a location grant while a camera track is
+ *                       live leaves the camera mark lit.
+ *
+ * The default run and a full self-test skip dialog-probe and dialog while
+ * REQUIREMENTS.md records PROMPT-03 deferred (OQ1 ruling; see deferredSkips).
  *
  * --self-test runs a clean control session per target scenario, then one
  * session per planted fault, each required to go red naming its drift.
@@ -118,11 +123,11 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { captureShell } from './lib/pb-kwin.mjs';
+import { captureShell, raiseShell } from './lib/pb-kwin.mjs';
 import { REPO_ROOT } from './lib/pb-relaunch.mjs';
-import { BROKEN, WEB_TAB_STATE_EVENT, inChrome, loadedAt, makeCurrent, openWebTab, pollFor, probe, pushes, serveNavPages, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
+import { BROKEN, WEB_TAB_STATE_EVENT, focusOverlay, inChrome, isState, loadedAt, makeCurrent, openWebTab, pollFor, pressKey, probe, pushes, serveNavPages, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
 
 const NAME = 'prompts-live';
 const SELF = fileURLToPath(import.meta.url);
@@ -174,8 +179,82 @@ const NOT_NEXT = 'popup not adopted next to its opener';
 const STOP_IGNORED = 'Stop script did not terminate the loop';
 const STOCK_PROTOCOL = 'stock protocol bar path reached: getNotificationBox TypeError';
 
+/**
+ * OQ1 ruling (Chris 2026-11-05, 37-UAT rows 8 and 9): a default run and a full self-test leave out the scenarios
+ * PROMPT-03 owns, printing "<name>: SKIPPED (PROMPT-03 deferred, 999.3)", only while REQUIREMENTS.md records the
+ * deferral in both its requirement line and its traceability row (the same reader as verify-permission-prompts.mjs
+ * rule (p)); WINDOWS.md carries the open ledger row. An explicit --scenario still runs them.
+ */
+const REQUIREMENTS = '.planning/REQUIREMENTS.md';
+const PROMPT03_SCENARIOS = ['dialog-probe', 'dialog'];
+
+/** The phase PROMPT-03 is deferred to, when its requirement line and traceability row agree; else null. */
+function prompt03DeferredTo(requirements = '') {
+    const line = /^- \[ \] \*\*PROMPT-03\*\*:.*\(deferred to Phase (\S+?),/m.exec(requirements);
+    const row = /^\| PROMPT-03 \| Phase (\S+) \| Deferred \|$/m.exec(requirements);
+    return line && row && line[1] === row[1] ? line[1] : null;
+}
+
+/** name -> the SKIPPED reason for each PROMPT-03 scenario a run without --scenario leaves out; empty without a recorded deferral. */
+function deferredSkips(requirements) {
+    const to = prompt03DeferredTo(requirements);
+    return to ? new Map(PROMPT03_SCENARIOS.map(name => [name, `SKIPPED (PROMPT-03 deferred, ${to})`])) : new Map();
+}
+
+const readRequirements = () => readFileSync(join(REPO_ROOT, REQUIREMENTS), 'utf8');
+
 /** Test-only Basic credentials for the harness's own 401 server; never a real account. */
 const AUTH = { user: 'pb-probe', pass: 'pb-probe-pass' };
+/**
+ * PB_CAPTURE_DIR=<dir> (39-11, 37 T28-T32): the session runs headed and captureShell writes 37-T28-doorhanger.png
+ * (permission, the location doorhanger open), 37-T29-strip-mark.png (background-queue, a waiting prompt's mark),
+ * 37-T30-sharing-indicator.png (pending-window-reports once its bars are answered: the camera mark of a live track),
+ * 37-T31-device-and-password-doorhangers.png (password-save: the password doorhanger and a camera request in one
+ * panel) and 37-T32-notification-bars.png (pending-window-reports: the three bar kinds stacked on one tab). Unset,
+ * nothing is captured and nothing is scored differently. Needs the Bash sandbox off. A capture run's stock answers are
+ * not dependable (the shell competes for activation on the owner's desktop), so it is never the scored run.
+ */
+const CAPTURE_DIR = process.env.PB_CAPTURE_DIR ? resolve(process.env.PB_CAPTURE_DIR) : '';
+if (CAPTURE_DIR) {
+    process.env.PB_LIVE_HEADED = '1';
+}
+
+/** PB_CAPTURE_DIR set: the PowerBrowser window (captureShell refuses any other active window) to <dir>/<file>. Unset: nothing. */
+async function capture(file) {
+    if (!CAPTURE_DIR) {
+        return;
+    }
+    mkdirSync(CAPTURE_DIR, { recursive: true });
+    const shot = await captureShell(join(CAPTURE_DIR, file));
+    console.log(`  capture ${file}: ${shot.resourceClass} ${shot.width}x${shot.height}`);
+}
+
+/**
+ * A capture run is headed on the owner's desktop, where the shell is often not the active window. The stock buttons
+ * refuse a click then (PopupNotifications _onButtonEvent: "before the window was focused / active"), and the panel is
+ * re-shown on activation, so the shell is raised and read back as chrome's active window first. Headless: nothing.
+ */
+async function activateShell(app) {
+    if (!CAPTURE_DIR) {
+        return;
+    }
+    try {
+        raiseShell();
+    } catch { /* the read-back below decides */ }
+    await pollFor(async () => ((await inChrome(app, 'return Services.focus.activeWindow === window;')) ? true : null), 5000, 'the shell to be active').catch(() => null);
+}
+
+/** A doorhanger capture: the shell active, tab `tabId`'s notification `id` back in the open panel, then the capture. */
+async function captureDoorhanger(app, tabId, id, file) {
+    if (!CAPTURE_DIR) {
+        return;
+    }
+    await activateShell(app);
+    await waitInPanel(app, tabId, id, 5000);
+    await new Promise(resolve => setTimeout(resolve, 800));
+    await capture(file);
+}
+
 /** Set by main() for a live `--scenario dialog-probe` run only; self-test sessions never write the verdict. */
 let writeVerdict = false;
 
@@ -221,8 +300,13 @@ const REQUESTS = {
     camera: { id: 'webRTC-shareDevices', start: "navigator.mediaDevices.getUserMedia({ video: true }).then(() => done('granted'), e => done(e.name === 'NotAllowedError' ? 'denied' : 'granted'))" },
     // 37-02 sharing: the streams are kept on the page so the scenario can stop their tracks.
     av: { id: WEBRTC_ID, start: "navigator.mediaDevices.getUserMedia({ audio: true, video: true }).then(s => { (window.__pbStreams = window.__pbStreams || []).push(s); done('granted'); }, e => done(e.name === 'NotAllowedError' ? 'denied' : 'failed: ' + e.name))" },
+    // 39-10 camera-then-geo: a camera track kept live on the page.
+    camlive: { id: WEBRTC_ID, start: "navigator.mediaDevices.getUserMedia({ video: true }).then(s => { (window.__pbStreams = window.__pbStreams || []).push(s); done('granted'); }, e => done(e.name === 'NotAllowedError' ? 'denied' : 'failed: ' + e.name))" },
     screen: { id: WEBRTC_ID, start: "navigator.mediaDevices.getDisplayMedia({ video: true }).then(s => { (window.__pbStreams = window.__pbStreams || []).push(s); done('granted'); }, e => done(e.name === 'NotAllowedError' ? 'denied' : 'failed: ' + e.name))" },
 };
+
+/** A 1x1 PNG, the /icon page's favicon. */
+const ICON_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
 const PAGES = {
     ...Object.fromEntries(['a', 'b', 'c', 'd', 'e'].map(p => [`/${p}`, { title: `Prompt ${p}`, body: `<p>prompt page ${p}</p>` }])),
@@ -232,6 +316,20 @@ const PAGES = {
     '/hang': { title: 'Hang', body: '<p>hang page</p>' },
     '/proto': { title: 'Protocol', body: '<p>protocol page</p>' },
     '/handler': { title: 'Handler', body: '<p>handler</p>' },
+    // 39-10 adopted-parity: a page with its own icon, so LinkHandlerParent hands the tab host's setIcon an icon.
+    // 39-11 pending-window-reports: at load, before its adoption ack, the page asks for location, starts a camera track (the
+    // session skips the camera prompt), opens a gesture-less popup, registers a handler, then runs past the hang limit.
+    '/pending': { title: 'Pending', body: `<p>pending page</p><script>
+        window.__pbOut = {};
+        navigator.geolocation.getCurrentPosition(() => {}, () => {});
+        navigator.mediaDevices.getUserMedia({ video: true }).then(s => { window.__pbStreams = [s]; window.__pbOut.cam = 'granted'; }, e => { window.__pbOut.cam = e.name; });
+        window.open(location.origin + '/c');
+        navigator.registerProtocolHandler('web+pbpend', location.origin + '/handler?u=%s');
+        setTimeout(() => { const end = Date.now() + 60000; while (Date.now() < end) { /* hung */ } }, 300);
+    </script>` },
+    // 39-11 popup-allow-opener: a sign-in style popup that reports back through window.opener.
+    '/signin': { title: 'Sign in', body: "<p>signin</p><script>if (window.opener) window.opener.postMessage('pb-signed-in', '*');</script>" },
+    '/icon': { title: 'Icon', body: `<link rel="icon" href="data:image/png;base64,${ICON_PNG}"><p>icon page</p>` },
 };
 
 /** BROKEN INSTRUMENT when there is no built binary carrying the current patch 050; null when there is. */
@@ -310,7 +408,8 @@ async function waitInPanel(app, tabId, id = GEO_ID, timeoutMs = 15000) {
  * passed since timeShown (which a rejected click moves); `early` clicks at once; `bypass` is the delay-bypassed plant;
  * `skip` is the answer-dropped plant. Block carries disableSecurityDelay upstream, so it never waits.
  */
-function answerStock(app, tabId, { id = GEO_ID, which = 'allow', remember = false, early = false, bypass = false, skip = false } = {}) {
+async function answerStock(app, tabId, { id = GEO_ID, which = 'allow', remember = false, early = false, bypass = false, skip = false } = {}) {
+    await activateShell(app);
     return inChrome(app, `
         const o = overlayOf(${JSON.stringify(tabId)});
         const n = o ? window.PopupNotifications.getNotification(${JSON.stringify(id)}, o) : null;
@@ -362,6 +461,7 @@ async function scenarioPermission(app, fx, plant) {
     if (geometry) {
         return geometry;
     }
+    await captureDoorhanger(app, page.tabId, GEO_ID, '37-T28-doorhanger.png');
     await answerStock(app, page.tabId, { skip: plant === 'answer-dropped' });
     if (await geoOutcome(app, page) !== 'granted') {
         return 'stock Allow dispatched but page promise unresolved';
@@ -426,6 +526,10 @@ async function scenarioBackgroundQueue(app, fx, plant) {
     let state = await promptState(app, back.tabId);
     if (!state.has) {
         return 'the backgrounded request has no stock notification (it was dropped, not queued)';
+    }
+    if (CAPTURE_DIR) {
+        await pollFor(async () => (await app.evaluate("document.querySelectorAll('.pb-tab-prompt-pending').length")) > 0 || null, 5000, 'the pending mark').catch(() => null);
+        await capture('37-T29-strip-mark.png');
     }
     if (state.inPanel) {
         return 'panel shown for a backgrounded tab';
@@ -1144,6 +1248,12 @@ async function scenarioPasswordSave(app, fx, plant) {
         if (!filled.user || !filled.pass || !filled.editable) {
             return `the stock template fields are not prefilled and editable (${JSON.stringify(filled)})`;
         }
+        if (CAPTURE_DIR) {
+            // Both stock doorhangers in one panel: the submit's page asks for the camera while the password offer shows.
+            await startRequest(app, page, 'camera');
+            await waitInPanel(app, page.tabId, WEBRTC_ID, 8000);
+            await captureDoorhanger(app, page.tabId, PASSWORD_ID, '37-T31-device-and-password-doorhangers.png');
+        }
         if (plant === 'credential-leak') {
             // The plant: a username reaching the chrome log, as a leaking log call would.
             await inChrome(app, `Services.console.logStringMessage('[pw] saved ' + ${JSON.stringify(LOGIN.user)}); return true;`);
@@ -1356,6 +1466,512 @@ async function scenarioProtocolHandler(app, fx, plant) {
     }
 }
 
+// ---- 37-REVIEW CR-01: adopted tabs (Phase 36's page-opened tabs) are tab-host nodes like any other ----
+
+const ADOPTED_HIDDEN = 'adopted tab prompt hidden while it is current';
+const ADOPTED_SHOWN = 'adopted tab prompt shown while another tab is current';
+const OTHER_OVER_ADOPTED = "another tab's prompt shown over the adopted tab";
+const BAR_SURVIVED = 'adopted tab bar survived navigation';
+const CLOSE_MARK = 'closing the adopted tab left a pending mark';
+
+/** The page's own window.open under a user gesture (BiDi userActivation), adopted next to its opener: { tabId, ctx } or null. */
+async function openAdopted(app, fx, opener, path) {
+    const url = fx.url(path);
+    const before = new Set((await mainOrder(app)).map(w => w.tabId));
+    await app.send('script.evaluate', { expression: `(window.open(${JSON.stringify(url)}), true)`, target: { context: opener.ctx }, awaitPromise: false, userActivation: true });
+    const tab = await pollFor(async () => (await mainOrder(app)).find(w => !before.has(w.tabId) && String(w.url).endsWith(path)) ?? null, 10000, 'the adopted tab').catch(() => null);
+    if (!tab || await waitForPush(app, loadedAt(tab.tabId, path)) < 0) {
+        return null;
+    }
+    if (!await probe(app, `return !!get('WebTabChannel').widgetOf(${JSON.stringify(tab.tabId)})?.adopted;`)) {
+        return null;
+    }
+    const ctx = await pollFor(async () => (await app.contexts()).find(c => c.url === url)?.context, 15000, `a BiDi context for ${path}`).catch(() => null);
+    return ctx ? { tabId: tab.tabId, ctx } : null;
+}
+
+/** True once tab `tabId`'s notification `id` is no longer in the open panel (the stock hide is asynchronous). */
+async function leavesPanel(app, tabId, id = GEO_ID, timeoutMs = 3000) {
+    try {
+        return await pollFor(async () => (!(await promptState(app, tabId, id)).inPanel ? true : null), timeoutMs, 'the panel to leave');
+    } catch {
+        return false;
+    }
+}
+
+/** Makes an IDE widget (a main-area widget that is not a web tab) current; true when it is. */
+function makeIdeCurrent(app) {
+    return probe(app, `const shell = get('ApplicationShell');
+        let w = shell.getWidgets('main').find(x => typeof x.tabId !== 'string');
+        if (!w) { await get('CommandRegistry').executeCommand('workbench.action.files.newUntitledFile'); w = get('EditorManager').currentEditor; }
+        if (!w) return false;
+        await shell.activateWidget(w.id);
+        return await until(() => shell.mainPanel.currentTitle?.owner === w, 5000);`);
+}
+
+/** The user's close of web tab `tabId` through its widget. */
+function closeTab(app, tabId) {
+    return probe(app, `const w = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}); if (!w) return false; w.close(); return true;`);
+}
+
+/** CR-01a: an adopted tab's prompt follows the current tab, between host tabs and the IDE, and no other tab's shows over it. */
+async function scenarioAdoptedPrompt(app, fx, plant) {
+    const host = await openPage(app, fx, '/opener');
+    const adopted = await openAdopted(app, fx, host, '/b');
+    if (!adopted) {
+        return `${BROKEN} the page's own window.open produced no adopted tab`;
+    }
+    await makeCurrent(app, adopted.tabId);
+    if (plant === 'adopted-selection-stale') {
+        // CR-01 as reviewed: the prompt facade's selection stays on the host tab while the adopted tab is current.
+        const applied = await inChrome(app, `const f = window.PopupNotifications.tabbrowser;
+            const real = Object.getOwnPropertyDescriptor(f, 'selectedBrowser').get;
+            const a = overlayOf(${JSON.stringify(adopted.tabId)}), h = overlayOf(${JSON.stringify(host.tabId)});
+            Object.defineProperty(f, 'selectedBrowser', { configurable: true, get() { const b = real.call(f); return b === a ? h : b; } });
+            return f.selectedBrowser === h;`);
+        if (!applied) {
+            return `${BROKEN} the adopted-selection-stale plant did not take`;
+        }
+    }
+    await startGeo(app, adopted);
+    if (!await waitInPanel(app, adopted.tabId, GEO_ID, 8000)) {
+        return ADOPTED_HIDDEN;
+    }
+    await makeCurrent(app, host.tabId);
+    if (!await leavesPanel(app, adopted.tabId)) {
+        return `${ADOPTED_SHOWN} (a host tab)`;
+    }
+    await startGeo(app, host);
+    if (!await waitInPanel(app, host.tabId, GEO_ID, 8000)) {
+        return 'the host tab prompt did not show while it is current (the control is red)';
+    }
+    await makeCurrent(app, adopted.tabId);
+    if (!await waitInPanel(app, adopted.tabId, GEO_ID, 8000)) {
+        return `${ADOPTED_HIDDEN} (back from a host tab)`;
+    }
+    if ((await promptState(app, host.tabId)).inPanel) {
+        return OTHER_OVER_ADOPTED;
+    }
+    if (!await makeIdeCurrent(app)) {
+        return `${BROKEN} no IDE widget could be made current`;
+    }
+    if (!await leavesPanel(app, adopted.tabId)) {
+        return `${ADOPTED_SHOWN} (the IDE)`;
+    }
+    await makeCurrent(app, adopted.tabId);
+    if (!await waitInPanel(app, adopted.tabId, GEO_ID, 8000)) {
+        return `${ADOPTED_HIDDEN} (back from the IDE)`;
+    }
+    await answerStock(app, adopted.tabId);
+    return await geoOutcome(app, adopted) === 'granted' ? null : 'stock Allow on the adopted tab did not grant (the positive control is red)';
+}
+
+/** CR-01b: an adopted tab's bar clears on navigation; closing it drops its prompts (pending:false) and leaves no mark. */
+async function scenarioAdoptedBarNavigate(app, fx, plant) {
+    const host = await openPage(app, fx, '/opener');
+    const adopted = await openAdopted(app, fx, host, '/b');
+    if (!adopted) {
+        return `${BROKEN} the page's own window.open produced no adopted tab`;
+    }
+    await makeCurrent(app, adopted.tabId);
+    const blockPopup = () => app.evaluateIn(adopted.ctx, `(() => { window.open(${JSON.stringify(fx.url('/c'))}); return true; })()`);
+    let from = (await pushes(app)).length;
+    await blockPopup();
+    if (await waitForPush(app, isBar(adopted.tabId, 'blocked-popup', true), { from }) < 0) {
+        return 'no blocked-popup bar on the adopted tab';
+    }
+    from = (await pushes(app)).length;
+    await app.send('browsingContext.navigate', { context: adopted.ctx, url: fx.url('/d'), wait: 'none' });
+    if (await waitForPush(app, loadedAt(adopted.tabId, '/d'), { from }) < 0) {
+        return `${BROKEN} the adopted tab never loaded /d`;
+    }
+    const cleared = await waitForPush(app, isBar(adopted.tabId, 'blocked-popup', false), { from, timeoutMs: 3000 }) >= 0;
+    const left = (await barView(app, adopted.tabId)) ?? [];
+    if (!cleared || left.length) {
+        return `${BAR_SURVIVED} (${JSON.stringify(left)})`;
+    }
+    // The close half: a waiting prompt and a bar on the adopted tab, then the user's close.
+    from = (await pushes(app)).length;
+    await blockPopup();
+    if (await waitForPush(app, isBar(adopted.tabId, 'blocked-popup', true), { from }) < 0) {
+        return `${BROKEN} no second blocked-popup bar on the adopted tab`;
+    }
+    await makeCurrent(app, host.tabId);
+    await startGeo(app, adopted);
+    if (await waitForPush(app, isDoorhanger(adopted.tabId, true), { from }) < 0) {
+        return `${BROKEN} the backgrounded adopted tab's prompt sent no pending push`;
+    }
+    const marked = await pollFor(async () => (await app.evaluate("document.querySelectorAll('.pb-tab-prompt-pending').length")) > 0 || null, 5000, 'the pending mark').catch(() => false);
+    if (!marked) {
+        return `${BROKEN} the strip shows no pending mark for the waiting prompt, so its absence after the close proves nothing`;
+    }
+    await inChrome(app, `window.__pbClosedOverlay = overlayOf(${JSON.stringify(adopted.tabId)}); return true;`);
+    if (plant === 'adopted-close-cleanup-skipped') {
+        // CR-01 as reviewed: no TabClose reaches the strip's listeners for the adopted tab, so its close is never cleaned up.
+        const applied = await inChrome(app, `const a = window.__pbClosedOverlay;
+            window.__pbStopClose = e => { if (e.target && e.target.linkedBrowser === a) e.stopImmediatePropagation(); };
+            window.addEventListener('TabClose', window.__pbStopClose, true);
+            return !!a && typeof window.__pbStopClose === 'function';`);
+        if (!applied) {
+            return `${BROKEN} the adopted-close-cleanup-skipped plant did not take`;
+        }
+    }
+    from = (await pushes(app)).length;
+    if (!await closeTab(app, adopted.tabId)) {
+        return `${BROKEN} the adopted tab has no widget to close`;
+    }
+    // The stock TabClose handler fires each notification's removed callback (and so the pending:false push); it leaves the
+    // list on the closed browser, which goes with it, so the push and the strip are what is read.
+    const dropped = await waitForPush(app, isDoorhanger(adopted.tabId, false), { from, timeoutMs: 5000 }) >= 0;
+    const marks = await app.evaluate("document.querySelectorAll('.pb-tab-prompt-pending').length");
+    return dropped && marks === 0 ? null : `${CLOSE_MARK} (pending:false pushed ${dropped}, strip marks ${marks})`;
+}
+
+const NO_NODE = 'adopted tab has no tab-host node';
+const NO_TOOLBOX = 'F12 opened no toolbox for the adopted tab';
+const OPENER_KEPT = 'opener not cleared on close';
+
+/** CR-01c: an adopted tab is a tab-host node: its favicon, F12, the extension tab tracker, and its opener cleared on close. */
+async function scenarioAdoptedParity(app, fx, plant) {
+    const host = await openPage(app, fx, '/opener');
+    const adopted = await openAdopted(app, fx, host, '/icon');
+    if (!adopted) {
+        return `${BROKEN} the page's own window.open produced no adopted tab`;
+    }
+    const a = JSON.stringify(adopted.tabId);
+    const node = await inChrome(app, `const g = window.gBrowser, o = overlayOf(${a}), h = overlayOf(${JSON.stringify(host.tabId)});
+        const n = o && g.getTabForBrowser(o);
+        if (!n) return null;
+        const { ExtensionParent } = ChromeUtils.importESModule('resource://gre/modules/ExtensionParent.sys.mjs');
+        const tracker = ExtensionParent.apiManager.global.tabTracker;
+        const id = tracker.getId(n);
+        return { inStrip: [...g.tabs].includes(n), tracked: tracker.getTab(id, null) === n, opener: !!h && n.openerTab === g.getTabForBrowser(h) };`);
+    if (!node || !node.inStrip) {
+        return `${NO_NODE} (${JSON.stringify(node)})`;
+    }
+    if (!node.tracked) {
+        return `${NO_NODE}: the extension tab tracker does not resolve it`;
+    }
+    if (!node.opener) {
+        return `${BROKEN} the adopted tab's openerTab does not name its opener's node, so clearing it on close proves nothing`;
+    }
+    if (await waitForPush(app, p => isState(adopted.tabId, false)(p) && String(p.favicon ?? '').startsWith('data:image/'), { timeoutMs: 10000 }) < 0) {
+        return 'the adopted tab got no favicon push';
+    }
+    // F12 from the focused adopted page: the shortcut push, then chrome's own toolbox list (DevToolsShim) for its overlay.
+    await makeCurrent(app, adopted.tabId);
+    if (!await focusOverlay(app, adopted.tabId)) {
+        return `${BROKEN} the adopted page could not be focused to press F12`;
+    }
+    const from = (await pushes(app)).length;
+    await pressKey(app, { key: 'F12', code: 'F12', keyCode: 123 });
+    if (await waitForPush(app, p => p && p.kind === 'shortcut' && p.id === 'devtoolsOpen' && p.tabId === adopted.tabId, { from, timeoutMs: 5000 }) < 0) {
+        return `${NO_TOOLBOX}: F12 sent no devtoolsOpen shortcut push`;
+    }
+    const toolboxes = () => inChrome(app, `const { DevToolsShim } = ChromeUtils.importESModule('chrome://devtools-startup/content/DevToolsShim.sys.mjs');
+        const o = overlayOf(${a});
+        return o ? DevToolsShim.getToolboxes().filter(t => t.commands?.descriptorFront?.browserId === o.browserId).length : -1;`);
+    if (!await pollFor(async () => (await toolboxes() === 1 ? true : null), 15000, 'the toolbox').catch(() => false)) {
+        return `${NO_TOOLBOX} (${await toolboxes()} toolboxes for its overlay)`;
+    }
+    if (plant === 'opener-kept-on-close') {
+        // What a missing close cleanup leaves: the adopted node's openerTab ignores the write that clears it.
+        const applied = await inChrome(app, `const n = window.gBrowser.getTabForBrowser(overlayOf(${a})); const kept = n.openerTab;
+            Object.defineProperty(n, 'openerTab', { configurable: true, get: () => kept, set() {} });
+            n.openerTab = null;
+            return n.openerTab === kept && kept !== null;`);
+        if (!applied) {
+            return `${BROKEN} the opener-kept-on-close plant did not take`;
+        }
+    }
+    if (!await closeTab(app, host.tabId)) {
+        return `${BROKEN} the opener tab has no widget to close`;
+    }
+    const cleared = await pollFor(async () => (await inChrome(app, `const n = window.gBrowser.getTabForBrowser(overlayOf(${a})); return !!n && n.openerTab === null;`) ? true : null), 5000, 'the opener to clear').catch(() => false);
+    return cleared ? null : OPENER_KEPT;
+}
+
+const CAMERA_CLEARED = 'the location grant cleared the camera mark';
+
+/** CR-02: a page with a live camera track is granted location through the stock panel; the camera mark stays lit. */
+async function scenarioCameraThenGeo(app, fx, plant) {
+    const page = await openPage(app, fx, '/a');
+    await startRequest(app, page, 'camlive');
+    if (!await waitInPanel(app, page.tabId, WEBRTC_ID)) {
+        return 'no stock webRTC-shareDevices doorhanger for the camera';
+    }
+    await answerStock(app, page.tabId, { id: WEBRTC_ID });
+    if (await outcome(app, page, 'camlive') !== 'granted') {
+        return 'the camera was not granted through the stock Allow';
+    }
+    if (await waitForPush(app, isSharing(page.tabId, { camera: true })) < 0) {
+        return 'no sharingChanged push with the camera live';
+    }
+    if (!await pollFor(async () => ((await indicatorKinds(app)).includes('camera') ? true : null), 5000, 'the camera mark').catch(() => false)) {
+        return 'the chrome bar shows no camera mark while the track is live';
+    }
+    if (plant === 'geo-report-clears-camera') {
+        // CR-02 as reviewed: a report with no webRTC part ({ geo }, from PermissionUI) is read as nothing shared.
+        const applied = await inChrome(app, `const g = window.gBrowser, real = g.updateBrowserSharing;
+            g.updateBrowserSharing = (b, s) => real.call(g, b, s && !('webRTC' in s) ? { ...s, webRTC: {} } : s);
+            g.updateBrowserSharing.planted = true;
+            return g.updateBrowserSharing.planted === true;`);
+        if (!applied) {
+            return `${BROKEN} the geo-report-clears-camera plant did not take`;
+        }
+    }
+    const from = (await pushes(app)).length;
+    await startGeo(app, page);
+    if (!await waitInPanel(app, page.tabId)) {
+        return 'no stock location doorhanger while the camera is live';
+    }
+    await answerStock(app, page.tabId);
+    if (await geoOutcome(app, page) !== 'granted') {
+        return 'stock Allow did not grant the location (the positive control is red)';
+    }
+    // PermissionUI reports { geo } through updateBrowserSharing on the grant; give its push time to land.
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    const off = (await pushes(app)).slice(from).find(p => isSharing(page.tabId, { camera: false })(p));
+    const kinds = await indicatorKinds(app);
+    await stopTracks(app, page);
+    return off || !kinds.includes('camera') ? `${CAMERA_CLEARED} (${off ? 'an all-off push' : `marks ${kinds.join(',') || 'none'}`})` : null;
+}
+
+const PENDING_LOST = 'a report made before the adoption ack was lost';
+/** How long the harness holds the frontend's webTabAdopt ack: inside chrome's 5 s fallback (ADOPT_ACK_TIMEOUT_MS). */
+const ACK_HOLD_MS = 3500;
+
+/**
+ * WR-01: everything the page reports while its overlay waits for the adoption ack (pc-N) is shown at the ack: a location
+ * prompt's pending push, the camera mark, the blocked-popup, protocol-handler and hung-script bars. The harness holds the
+ * frontend's ack; the session's hang limit is one second, so the report lands inside the hold, and its camera starts with
+ * no prompt (media.navigator.permission.disabled), as a site with a remembered grant would.
+ */
+async function scenarioPendingWindowReports(app, fx, plant) {
+    const schemes = ['web+pbpend'];
+    // Another site than every other tab (localhost, not 127.0.0.1), so the page has a content process of its own: a hang
+    // report names a process, and the stock match (IsReportForBrowserOrChildren) takes the first tab in it.
+    const pendingOrigin = fx.origin.replace('127.0.0.1', 'localhost');
+    try {
+        const opener = await openPage(app, fx, '/opener');
+        const held = await probe(app, `const c = get('WebTabChannel'); const real = c.request.bind(c);
+            c.request = async m => { if (m && m.kind === 'webTabAdopt') { await new Promise(r => setTimeout(r, ${ACK_HOLD_MS})); } return real(m); };
+            c.request.held = true;
+            return c.request.held === true;`);
+        if (!held) {
+            return `${BROKEN} the adoption ack could not be held`;
+        }
+        if (plant === 'pending-report-dropped') {
+            // WR-01 as reviewed: a sharing report for an overlay with no tab id yet is dropped before anything is stored.
+            const applied = await inChrome(app, `const g = window.gBrowser, real = g.updateBrowserSharing;
+                g.updateBrowserSharing = (b, st) => (W.tabIdOfBrowser(b) === null ? undefined : real.call(g, b, st));
+                g.updateBrowserSharing.planted = true;
+                return g.updateBrowserSharing.planted === true;`);
+            if (!applied) {
+                return `${BROKEN} the pending-report-dropped plant did not take`;
+            }
+        }
+        const before = new Set((await mainOrder(app)).map(w => w.tabId));
+        const from = (await pushes(app)).length;
+        await app.send('script.evaluate', { expression: `(window.open(${JSON.stringify(`${pendingOrigin}/pending`)}), true)`, target: { context: opener.ctx }, awaitPromise: false, userActivation: true });
+        const tab = await pollFor(async () => (await mainOrder(app)).find(w => !before.has(w.tabId)) ?? null, 15000, 'the adopted tab').catch(() => null);
+        if (!tab) {
+            return `${BROKEN} the held adoption produced no tab (chrome's fallback may have taken it)`;
+        }
+        const id = tab.tabId;
+        const seen = async pred => (await waitForPush(app, pred, { from, timeoutMs: 8000 })) >= 0;
+        const lost = [];
+        if (!await seen(isSharing(id, { camera: true }))) {
+            lost.push('camera');
+        }
+        if (!await seen(isDoorhanger(id, true))) {
+            lost.push('location prompt');
+        }
+        for (const barKind of ['blocked-popup', 'protocol-handler', 'hung-script']) {
+            if (!await seen(isBar(id, barKind, true))) {
+                lost.push(`${barKind} bar`);
+            }
+        }
+        if (!lost.length && !await pollFor(async () => ((await indicatorKinds(app)).includes('camera') ? true : null), 5000, 'the camera mark').catch(() => false)) {
+            lost.push('camera mark');
+        }
+        await capture('37-T32-notification-bars.png');
+        // Teardown: the hung page's own Stop, so its content process answers the rest of the session.
+        await clickBar(app, id, 'hung-script', 'stop-script').catch(() => null);
+        if (CAPTURE_DIR) {
+            // The sharing indicator alone: the other two bars answered, the camera still live (no stock Allow is needed here).
+            await clickBar(app, id, 'blocked-popup', 'dismiss').catch(() => null);
+            await clickBar(app, id, 'protocol-handler', 'deny-handler').catch(() => null);
+            await new Promise(resolve => setTimeout(resolve, 800));
+            await capture('37-T30-sharing-indicator.png');
+        }
+        return lost.length ? `${PENDING_LOST} (${lost.join(', ')})` : null;
+    } finally {
+        await forgetHandlers(app, schemes);
+    }
+}
+
+const NAV_LEFT_ON = 'navigation left a sharing mark on';
+
+/** WR-02: share the camera, navigate the tab; a sharingChanged push with all false arrives and every mark goes off. */
+async function scenarioNavResetsSharing(app, fx, plant) {
+    const page = await openPage(app, fx, '/a');
+    await startRequest(app, page, 'camlive');
+    if (!await waitInPanel(app, page.tabId, WEBRTC_ID)) {
+        return 'no stock webRTC-shareDevices doorhanger for the camera';
+    }
+    await answerStock(app, page.tabId, { id: WEBRTC_ID });
+    if (await outcome(app, page, 'camlive') !== 'granted' || await waitForPush(app, isSharing(page.tabId, { camera: true })) < 0) {
+        return 'the camera was not shared through the stock Allow';
+    }
+    if (!await pollFor(async () => ((await indicatorKinds(app)).includes('camera') ? true : null), 5000, 'the camera mark').catch(() => false)) {
+        return `${BROKEN} the chrome bar shows no camera mark while the track is live, so its absence after the navigation proves nothing`;
+    }
+    if (plant === 'nav-reset-dropped') {
+        // WR-02 as reviewed: the navigation's reset never reaches Theia. The all-off sharingChanged for this tab is dropped
+        // at chrome's one push call (the frame's group actor).
+        const applied = await inChrome(app, `const a = document.getElementById('powerbrowser-content').browsingContext.currentWindowGlobal.getActor('PowerBrowserGroup');
+            const real = a.sendAsyncMessage;
+            a.sendAsyncMessage = function (name, p) {
+                if (p && p.kind === 'sharingChanged' && p.tabId === ${JSON.stringify(page.tabId)} && !p.camera && !p.microphone && !p.screen) return undefined;
+                return real.apply(this, arguments);
+            };
+            return a.sendAsyncMessage !== real;`);
+        if (!applied) {
+            return `${BROKEN} the nav-reset-dropped plant did not take`;
+        }
+    }
+    const from = (await pushes(app)).length;
+    await app.send('browsingContext.navigate', { context: page.ctx, url: fx.url('/b'), wait: 'none' });
+    if (await waitForPush(app, loadedAt(page.tabId, '/b'), { from }) < 0) {
+        return `${BROKEN} the tab never loaded /b`;
+    }
+    const reset = await waitForPush(app, isSharing(page.tabId, { camera: false, microphone: false, screen: false }), { from, timeoutMs: 5000 }) >= 0;
+    const kinds = await indicatorKinds(app);
+    return reset && !kinds.length ? null : `${NAV_LEFT_ON} (all-off push ${reset}, marks ${kinds.join(',') || 'none'})`;
+}
+
+const DISMISSED_MARK = 'a dismissed prompt left a pending mark';
+const DISMISSED_COUNTED = 'a dismissed prompt counted toward the cap';
+/** Test card numbers with a three-digit password: upstream shows that login capture dismissed (LoginManagerChild :2485-2495). */
+const CARD_USERS = ['4111111111111111', '5555555555554444'];
+const CARD_PASS = '123';
+
+/** Whether stock notification `id` of tab `tabId` exists and is shown dismissed. */
+function dismissedNotification(app, tabId, id) {
+    return inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)}); const n = o && window.PopupNotifications.getNotification(${JSON.stringify(id)}, o); return !!n && n.dismissed === true;`);
+}
+
+/** Submits the card-shaped login on a /login tab and waits until upstream shows its capture dismissed; the page navigates. */
+async function dismissedCapture(app, page, user) {
+    const from = (await pushes(app)).length;
+    await app.evaluateIn(page.ctx, `(() => { document.getElementById('u').value = ${JSON.stringify(user)}; document.getElementById('p').value = ${JSON.stringify(CARD_PASS)}; document.getElementById('f').requestSubmit(); return true; })()`);
+    const shown = await pollFor(async () => (await dismissedNotification(app, page.tabId, PASSWORD_ID) ? true : null), 8000, 'the dismissed capture').catch(() => false);
+    return shown && await waitForPush(app, p => isState(page.tabId, false)(p) && String(p.url).includes('/a?'), { from }) >= 0;
+}
+
+/**
+ * WR-03: a prompt upstream shows dismissed makes no record: no pending push, no strip mark, nothing counted toward the
+ * cap of 3. The dismissed show driven is the password capture LoginManagerChild dismisses (a card-number login). The
+ * notification post-prompt is not driven: in the shell it throws before its show (PermissionUI.sys.mjs:664 reads the
+ * anchor icon the shell does not have), and an unchanged login shows no stock notification at all.
+ */
+async function scenarioDismissedNoMark(app, fx, plant) {
+    const front = await openPage(app, fx, '/a');
+    const quiet = await openPage(app, fx, '/login');
+    // Its own URL, so openPage finds this tab's BiDi context and not the first login tab's.
+    const capped = await openPage(app, fx, '/login?tab=2');
+    await makeCurrent(app, front.tabId);
+    if (plant === 'dismissed-recorded') {
+        // WR-03 as reviewed: the show wrapper takes a dismissed show for a waiting prompt (its first read of
+        // options.dismissed sees false); the stock module still shows it dismissed.
+        const applied = await inChrome(app, `const pn = window.PopupNotifications, prod = pn.show;
+            pn.show = function (b, id, m, a, main, sec, options) {
+                if (options && options.dismissed) { let reads = 0; Object.defineProperty(options, 'dismissed', { configurable: true, enumerable: true, get: () => reads++ > 0, set() {} }); }
+                return prod.apply(this, arguments);
+            };
+            return pn.show !== prod;`);
+        if (!applied) {
+            return `${BROKEN} the dismissed-recorded plant did not take`;
+        }
+    }
+    const from = (await pushes(app)).length;
+    if (!await dismissedCapture(app, quiet, CARD_USERS[0])) {
+        return `${BROKEN} upstream showed no dismissed password capture, so no mark proves nothing`;
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    const pushed = (await pushes(app)).slice(from).filter(isDoorhanger(quiet.tabId, true));
+    const marks = await app.evaluate("document.querySelectorAll('.pb-tab-prompt-pending').length");
+    if (pushed.length || marks) {
+        return `${DISMISSED_MARK} (${pushed.length} pending push(es), ${marks} strip mark(s))`;
+    }
+    // The cap: a dismissed capture, then three real waiting prompts on the same tab. Counted, it would be the oldest
+    // record and the third real prompt would evict it.
+    if (!await dismissedCapture(app, capped, CARD_USERS[1])) {
+        return `${BROKEN} upstream showed no dismissed password capture on the second tab`;
+    }
+    for (const kind of ['geo', 'storage', 'camera']) {
+        const at = (await pushes(app)).length;
+        await startRequest(app, capped, kind);
+        if (await waitForPush(app, p => isDoorhanger(capped.tabId, true)(p) && p.permission === REQUESTS[kind].id, { from: at }) < 0) {
+            return `${BROKEN} no pending push for the queued ${kind} request`;
+        }
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    if (!await dismissedNotification(app, capped.tabId, PASSWORD_ID) || !(await promptState(app, capped.tabId, GEO_ID)).has) {
+        return DISMISSED_COUNTED;
+    }
+    return null;
+}
+
+const OPENER_LOST = 'Allow lost window.opener';
+const BLANK_NOT_OFFERED = 'a blank blocked popup was not offered';
+
+/** WR-04: a blocked sign-in popup reports back through window.opener after Allow; a blocked window.open() is offered and opens. */
+async function scenarioPopupAllowOpener(app, fx, plant) {
+    const opener = await openPage(app, fx, '/opener');
+    await app.evaluateIn(opener.ctx, "(window.__pbMsgs = [], window.addEventListener('message', e => window.__pbMsgs.push(e.data)), true)");
+    let from = (await pushes(app)).length;
+    await app.evaluateIn(opener.ctx, `(() => { window.open(${JSON.stringify(fx.url('/signin'))}); window.open(); return true; })()`);
+    const offered = await waitForPush(app, p => isBar(opener.tabId, 'blocked-popup', true)(p) && p.displayFields?.popupCount === 2, { from });
+    if (offered < 0) {
+        return `${BLANK_NOT_OFFERED} (the bar does not offer both blocked popups)`;
+    }
+    if (plant === 'allow-drops-opener') {
+        // WR-04 as reviewed: the Allow loads the stored spec into a fresh tab instead of replaying the page's own window.open.
+        const applied = await inChrome(app, `const o = overlayOf(${JSON.stringify(opener.tabId)});
+            o.popupAndRedirectBlocker.unblockPopup = () => window.openLinkIn(${JSON.stringify(fx.url('/signin'))}, 'tab', { openerBrowser: o, triggeringPrincipal: Services.scriptSecurityManager.createNullPrincipal({}) });
+            return o.popupAndRedirectBlocker.unblockPopup.length === 0;`);
+        if (!applied) {
+            return `${BROKEN} the allow-drops-opener plant did not take`;
+        }
+    }
+    const before = new Set((await mainOrder(app)).map(w => w.tabId));
+    from = (await pushes(app)).length;
+    if (await clickBar(app, opener.tabId, 'blocked-popup', 'allow-popup') !== 'clicked') {
+        return 'no Allow button on the blocked-popup bar';
+    }
+    if (!await pollFor(async () => ((await mainOrder(app)).some(w => String(w.url).endsWith('/signin')) ? true : null), 8000, 'the sign-in popup').catch(() => false)) {
+        return 'the bar Allow opened no tab for the sign-in popup';
+    }
+    const reported = await pollFor(async () => ((await app.evaluateIn(opener.ctx, "window.__pbMsgs.includes('pb-signed-in')")) ? true : null), 5000, 'the opener message').catch(() => false);
+    if (!reported) {
+        return OPENER_LOST;
+    }
+    // The popup left the list once its replay was sent: the bar now offers exactly the blank one.
+    if (await waitForPush(app, p => isBar(opener.tabId, 'blocked-popup', true)(p) && p.displayFields?.popupCount === 1, { from, timeoutMs: 5000 }) < 0) {
+        return `${BLANK_NOT_OFFERED} (after the first Allow the bar does not offer one popup)`;
+    }
+    for (const w of await mainOrder(app)) {
+        before.add(w.tabId);
+    }
+    if (await clickBar(app, opener.tabId, 'blocked-popup', 'allow-popup') !== 'clicked') {
+        return `${BLANK_NOT_OFFERED} (no Allow button for it)`;
+    }
+    const blank = await pollFor(async () => (await mainOrder(app)).find(w => !before.has(w.tabId)) ?? null, 8000, 'the blank popup').catch(() => null);
+    return blank ? null : 'the blank blocked popup did not open';
+}
+
 const SCENARIOS = {
     permission: scenarioPermission,
     'answer-delay': scenarioAnswerDelay,
@@ -1364,6 +1980,8 @@ const SCENARIOS = {
     remember: scenarioRemember,
     sharing: scenarioSharing,
     'camera-doorhanger': scenarioCameraDoorhanger,
+    'camera-then-geo': scenarioCameraThenGeo,
+    'nav-resets-sharing': scenarioNavResetsSharing,
     'dialog-probe': scenarioDialogProbe,
     dialog: scenarioDialog,
     'stop-repeat': scenarioStopRepeat,
@@ -1371,8 +1989,14 @@ const SCENARIOS = {
     'password-save': scenarioPasswordSave,
     'password-update': scenarioPasswordUpdate,
     'popup-block': scenarioPopupBlock,
+    'popup-allow-opener': scenarioPopupAllowOpener,
+    'adopted-prompt': scenarioAdoptedPrompt,
+    'adopted-bar-navigate': scenarioAdoptedBarNavigate,
+    'adopted-parity': scenarioAdoptedParity,
     'hung-script': scenarioHungScript,
+    'pending-window-reports': scenarioPendingWindowReports,
     'protocol-handler': scenarioProtocolHandler,
+    'dismissed-no-mark': scenarioDismissedNoMark,
 };
 
 /** Each plant runs its target scenario with one thing wrong and must go red naming `expect`. */
@@ -1396,6 +2020,14 @@ const PLANTS = [
     { plant: 'allow-loads-frame-url', target: 'popup-block', expect: 'Allow opened a frame-supplied URL' },
     { plant: 'bar-covers-page', target: 'popup-block', expect: 'bar covers page content' },
     { plant: 'adopt-next-to-opener-failed', target: 'popup-block', expect: 'popup not adopted next to its opener' },
+    { plant: 'adopted-selection-stale', target: 'adopted-prompt', expect: 'adopted tab prompt hidden while it is current' },
+    { plant: 'adopted-close-cleanup-skipped', target: 'adopted-bar-navigate', expect: 'closing the adopted tab left a pending mark' },
+    { plant: 'opener-kept-on-close', target: 'adopted-parity', expect: 'opener not cleared on close' },
+    { plant: 'geo-report-clears-camera', target: 'camera-then-geo', expect: 'the location grant cleared the camera mark' },
+    { plant: 'pending-report-dropped', target: 'pending-window-reports', expect: 'a report made before the adoption ack was lost' },
+    { plant: 'nav-reset-dropped', target: 'nav-resets-sharing', expect: 'navigation left a sharing mark on' },
+    { plant: 'dismissed-recorded', target: 'dismissed-no-mark', expect: 'a dismissed prompt left a pending mark' },
+    { plant: 'allow-drops-opener', target: 'popup-allow-opener', expect: 'Allow lost window.opener' },
     { plant: 'hung-stop-ignored', target: 'hung-script', expect: 'Stop script did not terminate the loop' },
     { plant: 'protocol-stock-path-unhooked', target: 'protocol-handler', expect: 'stock protocol bar path reached: getNotificationBox TypeError' },
 ];
@@ -1412,8 +2044,14 @@ const KEEP_PROMPTS = { alwaysMatch: { unhandledPromptBehavior: { default: 'ignor
  */
 const X11_CAPTURE = { prefs: { [PIPEWIRE_PREF]: false }, env: { MOZ_ENABLE_WAYLAND: '0', GDK_BACKEND: 'x11', XDG_SESSION_TYPE: 'x11' } };
 
+/** 39-11: pending-window-reports needs a one-second hang limit and a camera that starts at load with no prompt. */
+const ROUTES = {
+    sharing: X11_CAPTURE,
+    'pending-window-reports': { prefs: { [HANG_PREF]: 1, 'media.navigator.permission.disabled': true }, env: {} },
+};
+
 async function runSession(name, plant) {
-    const route = name === 'sharing' ? X11_CAPTURE : { prefs: {}, env: {} };
+    const route = ROUTES[name] ?? { prefs: {}, env: {} };
     // firefox-bidi spawns the browser with process.env, so the route's env is set for this session and restored after.
     const saved = Object.fromEntries(Object.keys(route.env).map(k => [k, process.env[k]]));
     Object.assign(process.env, route.env);
@@ -1572,6 +2210,22 @@ function staticAudit() {
     if (!/relayFeasible: relay \? relay\.feasible : null/.test(own)) {
         failures.push('probe 1 does not write relayFeasible from relayFeasibleFrom; the route-to-Chris branch of rule (p) is unreachable');
     }
+    // OQ1: the PROMPT-03 skip is derived from the deferral record, so it must stop the moment either half of it goes.
+    const requirements = readRequirements();
+    if (prompt03DeferredTo(requirements) && deferredSkips(requirements).size !== PROMPT03_SCENARIOS.length) {
+        failures.push(`${REQUIREMENTS} records the PROMPT-03 deferral but the skip did not apply (broken instrument)`);
+    }
+    const deferralPlants = [
+        ['deferral-record-removed', requirements.replace(/ \(deferred to Phase [^\n]*/, '')],
+        ['deferral-row-removed', requirements.replace(/^\| PROMPT-03 \| Phase (\S+) \| Deferred \|$/m, '| PROMPT-03 | Phase $1 | Pending |')],
+    ];
+    for (const [plant, text] of deferralPlants) {
+        if (prompt03DeferredTo(requirements) && text === requirements) {
+            failures.push(`static plant ${plant} changed nothing in ${REQUIREMENTS} (broken instrument)`);
+        } else if (deferredSkips(text).size) {
+            failures.push(`static plant ${plant}: skip applied without a recorded deferral`);
+        }
+    }
     return failures;
 }
 
@@ -1582,6 +2236,7 @@ async function selfTest() {
         return 1;
     }
     console.log(`  ok  static: ${PLANTS.length} plants each target a scenario, name an emitted failure and are applied; every scenario has a plant; the delay line and pref are upstream's`);
+    console.log('  ok  static: deferral-record-removed and deferral-row-removed -> the PROMPT-03 skip no longer applies');
     if (process.argv.includes('--static')) {
         console.log(`${NAME} --self-test --static: PASS -- the live control and plant sessions were not run (--static)`);
         return 0;
@@ -1593,7 +2248,10 @@ async function selfTest() {
         console.error(`${NAME} --self-test: unknown scenario(s): ${unknown.join(', ') || '(none given)'}`);
         return 1;
     }
-    const plants = only ? PLANTS.filter(p => only.includes(p.target)) : PLANTS;
+    // OQ1: a full self-test drops the plants of the deferred PROMPT-03 scenarios; an explicit --scenario keeps them.
+    const skips = only ? new Map() : deferredSkips(readRequirements());
+    skips.forEach((why, name) => console.log(`${name}: ${why}`));
+    const plants = (only ? PLANTS.filter(p => only.includes(p.target)) : PLANTS).filter(p => !skips.has(p.target));
     const reason = preflight();
     if (reason) {
         console.error(`${NAME} --self-test: ${reason}`);
@@ -1620,7 +2278,7 @@ async function selfTest() {
     if (failed) {
         return 1;
     }
-    console.log(`${NAME} --self-test: PASS -- clean controls green, ${plants.length} planted faults went red${only ? ` (live half limited to ${only.join(',')}; ${PLANTS.length - plants.length} plant(s) not run)` : ''}`);
+    console.log(`${NAME} --self-test: PASS -- clean controls green, ${plants.length} planted faults went red${only ? ` (live half limited to ${only.join(',')}; ${PLANTS.length - plants.length} plant(s) not run)` : skips.size ? ` (${PLANTS.length - plants.length} plant(s) of ${[...skips.keys()].join(', ')} not run: PROMPT-03 deferred)` : ''}`);
     return 0;
 }
 
@@ -1638,7 +2296,10 @@ async function main() {
         return 1;
     }
     const flag = process.argv.indexOf('--scenario');
-    const selected = flag === -1 ? Object.keys(SCENARIOS) : process.argv[flag + 1].split(',');
+    // OQ1: a default run leaves out the deferred PROMPT-03 scenarios while the deferral is recorded.
+    const skips = flag === -1 ? deferredSkips(readRequirements()) : new Map();
+    skips.forEach((why, name) => console.log(`${name}: ${why}`));
+    const selected = flag === -1 ? Object.keys(SCENARIOS).filter(name => !skips.has(name)) : process.argv[flag + 1].split(',');
     const unknown = selected.filter(name => !(name in SCENARIOS));
     if (unknown.length) {
         console.error(`${NAME}: unknown scenario(s): ${unknown.join(', ')}`);

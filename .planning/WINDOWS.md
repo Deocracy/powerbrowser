@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 4
+open_count: 5
 waived_count: 2
 fixed_count: 19
-total_count: 25
-last_updated: 2026-11-06T21:08:45.534Z
+total_count: 26
+last_updated: 2026-11-06T22:32:05.803Z
 ---
 
 # Broken Windows Ledger
@@ -40,6 +40,7 @@ last_updated: 2026-11-06T21:08:45.534Z
 | 23 | 55 | stub | scripts/generate.mjs |  | Phase 55 DMG branding placeholders, both variants: Assets.car and dsstore are empty files, background.png is the 128-pixel application raster. Finder and Dock icons degrade until a real asset catalog is built with actool and observed on a Mac (plan 55-04; see .planning/workstreams/deploy/phases/55-macos-i/BLOCKED.md item 6). | waived | R4 (2026-11-03): Phase 55 macOS, including the DMG branding placeholders, is deferred to v1.7; needs Mac hardware | 2026-10-31T19:05:00.000Z | 2026-11-04T01:20:23.733Z |
 | 24 | 44 | unrun-verify | scripts/build-update-xml.mjs |  | 44-02 full-tier row build-update-xml not run green: it FAILs by design because .mozbuild/mar-hop/nplus1.mar is absent. Build the N-plus-1 MAR per docs/BUILD.md, then run scripts/verify-platform.sh --only build-update-xml. UPD-14 stays open until it passes. | open |  | 2026-11-01T05:21:09.443Z |  |
 | 25 | 39 | deviation | scripts/verify-address-bar-live.mjs | 5000 | address-bar-live-self-test: plant ctrl-d-everywhere stays green on bookmark-keys (3 of 3 sessions with the 39-08 harness and 3 of 3 with the pre-39-08 harness at 5d0dfa95); pre-existing, the plant no longer bites in the README editor; first lead: the bookmark command may be disabled with an editor current, so Theia skips the planted binding | open |  | 2026-11-06T21:08:45.534Z |  |
+| 26 | 39 | skipped-test | scripts/verify-prompts-live.mjs |  | prompts-live dialog and dialog-probe are skipped by derivation while REQUIREMENTS.md records PROMPT-03 deferred to 999.3 (OQ1 ruling 2026-11-05); repro: node scripts/verify-prompts-live.mjs --scenario dialog; cause: stock page dialogs lock the IDE; source: 37-UAT tests 8 and 9 | open |  | 2026-11-06T22:32:05.803Z |  |
 
 ````json
 [
@@ -343,6 +344,19 @@ last_updated: 2026-11-06T21:08:45.534Z
     "reason": "",
     "recorded_at": "2026-11-06T21:08:45.534Z",
     "resolved_at": null
+  },
+  {
+    "id": 26,
+    "kind": "skipped-test",
+    "phase": "39",
+    "file": "scripts/verify-prompts-live.mjs",
+    "line": null,
+    "description": "prompts-live dialog and dialog-probe are skipped by derivation while REQUIREMENTS.md records PROMPT-03 deferred to 999.3 (OQ1 ruling 2026-11-05); repro: node scripts/verify-prompts-live.mjs --scenario dialog; cause: stock page dialogs lock the IDE; source: 37-UAT tests 8 and 9",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-06T22:32:05.803Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
   }
 ]
 ````
