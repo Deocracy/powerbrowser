@@ -51,6 +51,11 @@ async function run(cmd) {
       result = { id: t.id, active: t.active };
     } else if (cmd.op === 'query') {
       result = (await browser.tabs.query({})).map(t => ({ id: t.id, url: t.url, active: t.active, openerTabId: t.openerTabId }));
+    } else if (cmd.op === 'storageSet') {
+      await browser.storage.local.set(cmd.items);
+      result = true;
+    } else if (cmd.op === 'storageGet') {
+      result = await browser.storage.local.get(null);
     } else {
       throw new Error('unknown op ' + cmd.op);
     }
@@ -181,11 +186,56 @@ post({ kind: 'wake-started', id: browser.runtime.id });
 browser.webRequest.onBeforeRequest.addListener(d => post({ kind: 'woke', url: d.url }), { urls: ['http://127.0.0.1/wake*'] });
 `;
 
+// 39-13 (38 T22): the private-access probes. Each polls its own /cmd-<channel> path, so two can run in one session
+// without taking each other's commands. private-denied declares incognito not_allowed; private-allowed is granted
+// private-window access by the harness, as about:addons' Run in Private Windows does.
+const PRIVATE_BACKGROUND = channel => `${POST}
+post({ kind: '${channel}-started', id: browser.runtime.id });
+async function run(cmd) {
+  try {
+    let result;
+    if (cmd.op === 'options') {
+      await browser.runtime.openOptionsPage();
+      result = true;
+    } else if (cmd.op === 'url') {
+      result = browser.runtime.getURL(cmd.path);
+    } else {
+      throw new Error('unknown op ' + cmd.op);
+    }
+    post({ kind: 'result', opId: cmd.opId, ok: true, result });
+  } catch (e) {
+    post({ kind: 'result', opId: cmd.opId, ok: false, error: String((e && e.message) || e) });
+  }
+}
+setInterval(() => {
+  fetch(ORIGIN + '/cmd-${channel}').then(r => r.json()).then(cmds => cmds.forEach(run)).catch(() => {});
+}, 250);
+`;
+const privateManifest = (id, name, key, incognito) => ({
+  manifest_version: 2,
+  name,
+  version: '1.0',
+  browser_specific_settings: { gecko: { id } },
+  ...(incognito ? { incognito } : {}),
+  background: { scripts: ['background.js'] },
+  browser_action: { default_title: name },
+  sidebar_action: { default_panel: 'panel.html', default_title: name },
+  options_ui: { page: 'options.html', open_in_tab: true },
+  commands: { _execute_sidebar_action: { suggested_key: { default: key } } },
+});
+const privateFiles = channel => ({
+  'background.js': PRIVATE_BACKGROUND(channel),
+  'panel.html': `<!doctype html><title>pb-${channel}-panel</title><body>sidebar</body>`,
+  'options.html': `<!doctype html><title>pb-${channel}-options</title><body>options</body>`,
+});
+
 const ACTION_ID = 'pb-ext-action-probe@powerbrowser.test';
 const POPUP_ID = 'pb-ext-popup-probe@powerbrowser.test';
 const CONTENT_ID = 'pb-ext-content-probe@powerbrowser.test';
 const SURFACES_ID = 'pb-ext-surfaces-probe@powerbrowser.test';
 const WAKE_ID = 'pb-ext-wake-probe@powerbrowser.test';
+const PRIVATE_DENIED_ID = 'pb-ext-private-denied@powerbrowser.test';
+const PRIVATE_ALLOWED_ID = 'pb-ext-private-allowed@powerbrowser.test';
 
 export const EXTENSION_FIXTURES = Object.freeze({
   action: {
@@ -194,7 +244,7 @@ export const EXTENSION_FIXTURES = Object.freeze({
       name: 'PB action probe',
       version: '1.0',
       browser_specific_settings: { gecko: { id: ACTION_ID } },
-      permissions: ['activeTab', 'tabs'],
+      permissions: ['activeTab', 'tabs', 'storage'],
       background: { scripts: ['background.js'] },
       browser_action: { default_title: 'PB action probe' },
     },
@@ -261,6 +311,14 @@ export const EXTENSION_FIXTURES = Object.freeze({
       background: { scripts: ['background.js'], persistent: false },
     },
     files: { 'background.js': EVENT_PAGE_BACKGROUND },
+  },
+  'private-denied': {
+    manifest: privateManifest(PRIVATE_DENIED_ID, 'PB private denied', 'Alt+Shift+I', 'not_allowed'),
+    files: privateFiles('private-denied'),
+  },
+  'private-allowed': {
+    manifest: privateManifest(PRIVATE_ALLOWED_ID, 'PB private allowed', 'Alt+Shift+O', null),
+    files: privateFiles('private-allowed'),
   },
 });
 

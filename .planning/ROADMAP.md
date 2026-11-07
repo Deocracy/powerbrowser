@@ -800,7 +800,7 @@ Plans:
 **Source phase:** 36
 **Deferred at:** 2026-11-04 during /gsd-verify-work 36 session completion
 **Follow-ups:**
-- [ ] Test 9: the opener-null plant expect string 'opener' can match incidental failure text; anchor it to the failure the plant causes (deferred 2026-11-04)
+- [x] Test 9: the opener-null plant expect string 'opener' can match incidental failure text; anchor it to the failure the plant causes (deferred 2026-11-04) — fixed in 39-12 (7fcde822)
 
 ### Phase 999.12: Follow-up — Phase 37 deferred UAT follow-up: Test 6 (BACKLOG)
 
