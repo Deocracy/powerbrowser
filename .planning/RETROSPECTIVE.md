@@ -160,6 +160,47 @@ Canonical PowerBrowser rename with re-pinned gates; self-hosted MAR updates with
 
 ---
 
+## Milestone: v1.5 — Chrome Bar Firefox Parity
+
+**Shipped:** 2026-11-07 (override closeout)
+**Phases:** 14 (27–39, inserted 31.1) | **Plans:** 93 | **Commits:** 1557 (2026-10-20 → 2026-11-07)
+
+### What Was Built
+- The chrome bar at Firefox-toolbar parity: address bar search and modes, site identity and app menu, page tools, bookmarks and history, tab strip, shell furniture and page context menu, new-window links as web tabs, permission prompts, WebExtensions through the extension tab host (patch 050 regenerated, guards G1–G16)
+- Phase 39 close-out: C11, C22, C23, C24 and backlog 999.4–999.16 fixed; four more lane-reported defects and ten review findings fixed on main; real OS input (ydotool behind a pid-gated KWin check) and KWin captures for the human rows; EXT-10 fill against a local Vaultwarden
+- Verification: full registry 456 PASS; --gate PASS-WITH-EXCLUSIONS (32 reds keyed to open ledger entries); 41/87 requirements ticked by the evidence rule; 39-HUMAN-CHECKLIST.md (41 items) deferred
+
+### What Worked
+- Running Phase 39 as two headless lanes in worktrees sharing one built binary (39-10/11 and 39-12/13) halved the wall time; lanes were forbidden product edits and reported fixes for main, which kept the binary stable under test
+- Owner-call batches answered in one AskUserQuestion box per phase, with a one-line recommendation and the live evidence gathered first (batch B after the A4 probe), produced rulings that changed two recommendations
+- Gate exclusions bound to open ledger ids: a red is excused only while the entry is open, so the exclusion list cannot go stale silently
+- Deriving the human checklist from the pending UAT rows and checking set equality found nothing dropped; the same rule unticked 13 requirements that had been flipped early
+
+### What Was Inefficient
+- The full registry run is 3.7 h and ran twice (full and --gate); the plan intended one gate run before and after triage and was cut to one
+- Tool churn: roadmap.update-plan-progress blank lines, windows append dropping the milestone field (four entries restored by hand), phase.complete refusing root writes in workstream mode, the evaluation-scope resolver returning 4 of 42 changed files, a stale verification digest after a 4-line review fix
+- Verification of phases 27–38 was already stale by the time the milestone closed, because Phase 39 edited their covered files; the override closeout was inevitable once the human checklist was deferred
+- An untracked wrangler temp directory from another session turned four quick-gate checks red with EISDIR
+
+### Patterns Established
+- Lane worktrees on btrfs: symlink objdir and upstream, reflink-copy Theia build outputs, generate.mjs, info/exclude; headed runs serialized through one flock
+- Every real-input or capture step gated on window class AND launched pid, re-checked after the grab, with a plant per refusal path
+- Owner batches: evidence task first, then one box per phase, then a recording task; rulings quoted verbatim with the date
+- Close-out tick rule: a requirement is ticked only when no UAT row naming it is pending, issue or an open owner call
+
+### Key Lessons
+1. A human checklist at the end of a milestone is deferred unless the human session is scheduled (third milestone in a row: v1.0, v1.2, v1.4, now v1.5). Schedule it inside the milestone or plan for an override close.
+2. A capture gate and the grab are two steps; another window taking focus during a 25 s spectacle produced a PNG of the owner's other app once. Re-check after the grab and delete on mismatch.
+3. Harness bugs masquerade as product bugs (C23 was a BiDi pref, C24 a headless clipboard limit) and the reverse (C22 was a real throw). Diagnose with a control before fixing.
+4. Whole-label gate exclusions excuse regressions in extended suites; scenario-scoped exclusions are backlog 999.33.
+
+### Cost Observations
+- Model mix: Opus executors for product and harness code, Sonnet for bookkeeping, verifier, security and Nyquist audits, Opus for code review and fixes
+- Sessions: one autonomous run 2026-11-05 → 2026-11-07 for Phase 39 (20 plans, 2 lanes), plus the earlier phase runs since 2026-10-20
+- Notable: two 3.7 h registry runs and a 24 min release objdir rebuild in 39-19; about 40 headed runs on the owner's desktop across 39-09..39-18
+
+---
+
 ## Cross-Milestone Trends
 
 ### Process Evolution
@@ -170,6 +211,7 @@ Canonical PowerBrowser rename with re-pinned gates; self-hosted MAR updates with
 | v1.1 | 1 continuous autonomous | 2 | nonstop defaults + falsification-branch planning for host work |
 | v1.2 | 1 continuous autonomous (single day) | 3 | closeout discipline: re-run-beats-re-cite sweep + design-before-code store |
 | v1.4 | autonomous runs over 4 days + one human live UAT session | 9 | pre-move FAIL baselines per upstream move; scripted headless passes as defect finders; UAT deferred by Chris |
+| v1.5 | autonomous runs 2026-10-20 → 2026-11-07, two headless lanes in Phase 39 | 14 | pid-gated real OS input and KWin captures for human rows; ledger-bound gate exclusions; evidence-rule requirement ticks |
 
 ### Cumulative Quality
 
@@ -177,9 +219,10 @@ Canonical PowerBrowser rename with re-pinned gates; self-hosted MAR updates with
 |-----------|-------|----------|-------------------|
 | v1.0 | --quick 95 rows + per-gate self-tests | static green; human/tier-3 staged | vendored TOML parser, pure-Node ICO/ICNS writers |
 | v1.4 | --quick 0 FAIL, empty baseline; full run 237 PASS / 2 FAIL at 22-07 (one owned red, NG-074, closed in Phase 25) | static and live rows green; 44 UAT rows deferred, 12 defects open | none (dependency moves only: Node 24, React 19.2.8, Theia 1.76.0) |
+| v1.5 | --quick 328 rows PASS; full run 456 PASS / 32 FAIL all excluded (ledger 25, 28–43) at 77e5d037 | static green; 41/87 requirements ticked, 46 await the 41-item human checklist | ydotool + KWin DBus real-input route, local Vaultwarden fixture via nix store paths |
 
 ### Top Lessons (Verified Across Milestones)
 
 1. (seed) Derive expectations from the tree; compare as set equality.
 2. Doc-sync bookkeeping (summary frontmatter, box flips) drifts unless it is written in the plan-complete commit (v1.2, v1.4).
-3. Human verification deferred to the end of a milestone stays unfinished (v1.0, v1.2, v1.4).
+3. Human verification deferred to the end of a milestone stays unfinished (v1.0, v1.2, v1.4, v1.5).

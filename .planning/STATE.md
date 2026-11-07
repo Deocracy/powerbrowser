@@ -2,41 +2,37 @@
 gsd_state_version: "1.0"
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
-current_phase: 39
-current_phase_name: v1.5 Close-out
-status: phase_complete_verification_deferred
+status: Awaiting next milestone
 stopped_at: Phase 39 complete (20/20 plans, verification human_needed, deferred); milestone lifecycle next
-last_updated: "2026-11-07T18:05:00.000Z"
+last_updated: "2026-11-07T17:40:13.784Z"
 last_activity: 2026-11-07
-last_activity_desc: Phase 39 verified (human_needed, deferred); review findings fixed
-state_head: d891dbe79a651d44e192500b6393c2d5310613d7
+last_activity_desc: Milestone v1.5 completed and archived
+state_head: 90f9791ee2a89605226cc4e1c12f4031429fa0a9
 progress:
   total_phases: 14
   completed_phases: 13
   total_plans: 93
   completed_plans: 93
   percent: 93
+current_phase: 39
+current_phase_name: v1.5 Close-out
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-10-20)
+See: .planning/PROJECT.md (updated 2026-11-07)
 
 **Core value:** A stranger can clone Power Browser, edit `configuration.toml`, drop in a logo, and build their own branded, working web browser without touching any other file — then reshape its GUI through Theia extensions without forking the platform.
-**Current focus:** Phase 39 — v1.5 Close-out
+**Current focus:** v1.5 shipped (override closeout); human checklist and verify-work 29-31 pending; next milestone via /gsd-new-milestone (deploy workstream continues separately)
 
 ## Current Position
 
-Phase: 39 (v1.5 Close-out) — COMPLETE (verification human_needed, deferred to 39-HUMAN-CHECKLIST.md)
-Plan: 20 of 20
-Status: Milestone lifecycle (audit → complete → cleanup)
-Last activity: 2026-11-07 — Phase 39 verified, review findings fixed
-
-**v1.5 parallel-lane run:** lanes p33..p37 were cut from 23c08bb5 and merged into main in order 36 (aa8989d9), 34 (8143fedd), 37 (14319419), 35 (68a38581), 33 (d6f9fcbb). Each was reviewed and fixed on main. All live checks are deferred to one end-of-milestone pass.
-
-Progress: [█████████░] 93%
+Phase: Milestone v1.5 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-11-07 — Milestone v1.5 completed and archived
 
 ## Performance Metrics
 
@@ -622,7 +618,7 @@ Resume file: None
 
 ## Operator Next Steps
 
-- Plan Phase 27 with /gsd-plan-phase 27 once Chris approves the v1.5 roadmap
+- Start the next milestone with /gsd-new-milestone
 
 ## Quick Tasks Completed
 
