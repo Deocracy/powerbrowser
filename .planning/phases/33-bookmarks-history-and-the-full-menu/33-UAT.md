@@ -50,6 +50,7 @@ evidence: "39-16 (2026-11-06), main, 116ac682: `node scripts/verify-page-tools-l
 expected: Star 3px inset and editor anchor; 28px toolbar row; 32px History rows; 320px clear panel with danger ink on Clear only; 280px hamburger geometry. Owner judges copy: toolbar failure "Press Ctrl+Shift+B twice to try again.", history read failure "Open this menu again to try again.", the 300 ms Lumino submenu delay vs the spec's 200 ms, Edit placed after Zoom, "Reset Zoom" as the Actions label, the added Settings command
 result: [pending]
 owner: "Chris 2026-11-05 via AskUserQuestion: box 33, Accept shipped values (Recommended): accept the shipped values (300 ms submenu delay, Edit placement, Settings command, copy strings) and amend 33-UI-SPEC to match."
+capture: "39-16 headed (f984b2fd, `--scenario menu-captures`): .planning/phases/39-v1-5-close-out/captures/33-T7-hamburger.png (the menu, 17 rows, at the hamburger), 33-T7-history-rows.png (History submenu: Reopen Closed Tab, Recently closed tabs, Recent pages, Clear Recent History...), 33-T7-star-editor.png (the 'Bookmark this page' editor under the star), 33-T7-bookmarks-toolbar.png (the toolbar row under the bar) and 33-T7-clear-panel.png (the Clear Recent History panel; only Clear carries the danger ink). Notes for Chris: in the star editor the 'Remove bookmark' label wraps onto two lines and overflows its button, and History > Recent pages lists 'http://127.0.0.1:<port>/find - PowerBrowser' as well as 'Find fixture' for the same page"
 
 ## Summary
 
