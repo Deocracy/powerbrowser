@@ -43,7 +43,8 @@ evidence: "v1.5 end-of-milestone live pass 2026-11-04, main: app-menu, actions-l
 
 ### 6. PAGE-09 Edit menu greying (manual, no scenario exists)
 expected: In a page textarea select text, collapse the selection, then open hamburger > Edit. Cut and Copy dimmed; Paste and Select All enabled; with text selected all enabled; Undo dimmed with nothing undoable; each row performs its edit on the page. Confirms the PowerBrowserEditState child is created for a web-tab overlay and docShell.isCommandEnabled answers after focus moved to the Theia menu. Add a row beside 32-06's `edit` scenario in verify-page-tools-live.mjs
-result: [pending]
+result: pass
+evidence: "39-16 (2026-11-06), main, 116ac682: `node scripts/verify-page-tools-live.mjs --scenario edit-greying` PASS, and it passed again inside `scripts/verify-platform.sh --only page-tools-live` (20 scenarios PASS). The textarea is focused in the page, then chrome focus moves to the Theia frame and the hamburger's Edit submenu is read. With the caret collapsed and nothing to undo, Undo, Cut and Copy are dimmed and Paste and Select All are enabled. After a Paste, Undo is enabled. With the whole value selected, Cut, Copy, Paste and Select All are enabled. Paste, Undo, Select All, Copy, Paste, Select All, Cut and Paste are each chosen from the submenu, and each one's effect is read back from the textarea's value and caret. `--self-test` (page-tools-live-self-test, 22 plants) PASS: plant edit-state-stale replays the first open's edit-state replies and goes red with 'Edit row state did not follow the page selection'"
 
 ### 7. Visual and copy pass against 33-UI-SPEC (KDE Wayland, KWin raise + spectacle)
 expected: Star 3px inset and editor anchor; 28px toolbar row; 32px History rows; 320px clear panel with danger ink on Clear only; 280px hamburger geometry. Owner judges copy: toolbar failure "Press Ctrl+Shift+B twice to try again.", history read failure "Open this menu again to try again.", the 300 ms Lumino submenu delay vs the spec's 200 ms, Edit placed after Zoom, "Reset Zoom" as the Actions label, the added Settings command
@@ -53,9 +54,9 @@ owner: "Chris 2026-11-05 via AskUserQuestion: box 33, Accept shipped values (Rec
 ## Summary
 
 total: 7
-passed: 5
+passed: 6
 issues: 0
-pending: 2
+pending: 1
 skipped: 0
 blocked: 0
 

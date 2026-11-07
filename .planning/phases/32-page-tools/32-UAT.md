@@ -17,6 +17,8 @@ Deferred to the one end-of-milestone pass (Chris, 2026-10-31). Run on `objdir/di
 ### 1. Crashed tab — crash UI look, Reload tab, and WR-08 navigate-after-restore
 expected: Crash copy and Reload tab in place of the page; Reload restores page and history; after a second crash, navigating from the pill loads the new URL with the kept history behind it (32-REVIEW WR-08, `0cbb77b6`)
 result: [pending]
+suite: "39-16 (2026-11-06), main, 116ac682: `scripts/verify-platform.sh --only page-tools-live` PASS, with all 20 default scenarios PASS (find, zoom, audio, keys-theia, favicon, reader, source, crash, crash-reader, crash-switching, crash-navigate, devtools, downloads, downloads-today, print, save, edit, edit-greying, edit-today, print-today). `--only page-tools-live-self-test` PASS: every clean control is green and all 22 planted faults go red. Logs are in /tmp/pb-39-16/. This run replaces the earlier unsourced claim of a page-tools pass on 2026-11-04"
+live: "39-16, 116ac682: crash, crash-reader, crash-switching and crash-navigate PASS. The contracted crash copy and the Reload tab button show and the overlay hides. Reload tab brings the page back with its history, including the reader entry and a crash that happens mid process switch. After a crash, Back and Forward are disabled, and a URL sent to the tab loads with the kept history behind it (WR-08). The look is still for Chris"
 
 ### 2. Reader view toggle in the light theme and in the dark theme
 expected: Enabled only on article pages (or in reader view); enters and leaves reader view in the same tab; legible in both themes
@@ -30,6 +32,7 @@ owner: "Chris 2026-11-05 via AskUserQuestion: box 32, Accept all (Recommended). 
 ### 4. DevTools toolbox window (F12)
 expected: F12 on a focused page opens one stock DevTools toolbox window for that page; a second F12 keeps one; closing the tab closes it
 result: [pending]
+live: "39-16, 116ac682: devtools PASS. F12 relays from the page and opens one toolbox, a second open keeps one, closing the tab closes its toolbox window, and a quit with a toolbox open exits (in 752 ms). Plant devtools-open-dropped is red. The toolbox window's look is still for Chris"
 
 ### 5. Downloads button and panel on screen; Open and Show in folder
 expected: Start a page download, open the Downloads button. Open launches the file with the OS handler; Show in folder opens the file manager on it; arrow keys move between rows; Esc closes the panel and returns focus to the page; the badge clears for finished rows once the panel opens (PAGE-06 stays Pending until this passes)
@@ -38,6 +41,7 @@ result: [pending]
 ### 6. Find strip layout, toggles, and F3 on a closed bar
 expected: Ctrl+F shows the 32px strip under the bar and the page moves down by its height (nothing covers the page); Match case and Whole words change the count; with the bar closed, F3 opens it (focus stays on the page) and steps to the next match (`59f61fd1`)
 result: [pending]
+live: "39-16, 116ac682: find PASS. A find reports three matches with a current index, and FindNext moves it. With the bar closed, F3 from the page opens the bar and steps. Ctrl+F opens the bar. Highlight-all goes on and then off. A step after a navigation still finds, and FindClose resets the counts. Plants find-kind-dropped, find-step-noop and find-f3-bar-closed are red. The 32px layout and the toggles' effect on screen are still for Chris"
 
 ### 7. Ctrl+P system print dialog
 expected: Ctrl+P on a focused page opens the OS print dialog for that page; cancel does nothing else. window.print() from page content has no shell path in this phase (D-09a)
