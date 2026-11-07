@@ -148,6 +148,21 @@ export async function captureShell(out, opts = {}) {
 }
 
 /**
+ * Captures KWin's active window into `out` without raising anything: for a PowerBrowser-class window other than the
+ * shell (the GTK print dialog, a DevTools toolbox window). The same gate refuses unless the active window's class
+ * contains 'powerbrowser'. Returns `{ path, ...geometry }`. shortcut: the gate is read before the grab, not with it;
+ * every PNG is opened before it is committed.
+ */
+export function captureActive(out, opts = {}) {
+    const w = gate(opts);
+    execFileSync('spectacle', ['-b', '-n', '-a', '-S', '-o', out], { timeout: 60000 });
+    if (!existsSync(out)) {
+        throw new Error(`spectacle wrote no file at ${out}`);
+    }
+    return { path: out, ...w };
+}
+
+/**
  * Sends one short chord through ydotool: every key down in order, then up in reverse (no text typing).
  * The active window is read back in the same step and the send is refused unless it is the shell.
  */
@@ -298,11 +313,19 @@ async function selfTest() {
                 failed++;
                 console.log(`FAIL clean-capture -> ${e.message}`);
             }
+            try {
+                const shot = captureActive(join(dir, 'clean-active.png'));
+                console.log(`ok  clean-capture-active -> ${shot.resourceClass} ${shot.width}x${shot.height}`);
+            } catch (e) {
+                failed++;
+                console.log(`FAIL clean-capture-active -> ${e.message}`);
+            }
             for (const plant of PLANTS) {
                 const verdicts = [];
                 try { osKeys(['shift'], plant.opts); verdicts.push('osKeys sent'); } catch (e) { if (!e.message.startsWith('refused: active window')) verdicts.push(`osKeys ${e.message}`); }
                 try { await osPointer({ x: 0, y: 0, action: 'move' }, plant.opts); verdicts.push('osPointer moved'); } catch (e) { if (!e.message.startsWith('refused: active window')) verdicts.push(`osPointer ${e.message}`); }
                 try { await captureShell(join(dir, `${plant.name}.png`), plant.opts); verdicts.push('captureShell captured'); } catch (e) { if (!e.message.startsWith('refused: active window')) verdicts.push(`captureShell ${e.message}`); }
+                try { captureActive(join(dir, `${plant.name}-active.png`), plant.opts); verdicts.push('captureActive captured'); } catch (e) { if (!e.message.startsWith('refused: active window')) verdicts.push(`captureActive ${e.message}`); }
                 if (verdicts.length) {
                     failed++;
                     console.log(`FAIL ${plant.name} -> ${verdicts.join('; ')}`);
