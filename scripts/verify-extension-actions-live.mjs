@@ -998,7 +998,10 @@ async function scenarioPrivateAccess({ plant }) {
   // Session 1: permanent private browsing, so the shell window is private. The plant leaves it off.
   const autostart = plant?.name === 'shell-not-private' ? {} : { 'browser.privatebrowsing.autostart': true };
   // A shell whose IDE never loads under permanent private browsing is this rule's failure too: nothing can be read.
+  // 39-REVIEW WR-07: only that; once the session is up, an error is the harness's own and keeps its message.
+  let ideLoaded = false;
   const first = await privateSession(autostart, async app => {
+    ideLoaded = true;
     await grantPrivate(app, 'private-allowed');
     const shellPrivate = await app.evaluateIn(app.chrome, "ChromeUtils.importESModule('resource://gre/modules/PrivateBrowsingUtils.sys.mjs').PrivateBrowsingUtils.isWindowPrivate(window)");
     const A = await openTab(app, '/a');
@@ -1050,7 +1053,7 @@ async function scenarioPrivateAccess({ plant }) {
     }
     return { ok: true, detail: `shell private ${shellPrivate}: denied has no button, puzzle row or sidebar key, its options page refused ('${refusal}'); allowed shows all and its options page opened` };
   }, []).catch(error => {
-    if (String(error?.message).startsWith('BROKEN INSTRUMENT')) throw error;
+    if (ideLoaded || String(error?.message).startsWith('BROKEN INSTRUMENT')) throw error;
     return verdict(false, null, `${rule}: with browser.privatebrowsing.autostart the shell's IDE never loaded, so no private-window rule could be read (${error?.message ?? error})`);
   });
   // Session 2: no autostart. The denied extension's options page goes to a non-private window, or a new one.
@@ -1131,7 +1134,7 @@ const PLANTS_TABLE = {
   'policy-default-prerecorded': { scenario: 'policies-shell-only', expect: 'the policy Default engine was not applied with no stock window' },
   'remove-keeps-storage': { scenario: 'remove-copy', expect: 'reinstall kept old storage' },
   'frontend-gone-ignored': { scenario: 'frontend-reload', expect: 'a reloaded frontend left the popup or sidebar up' },
-  'shell-not-private': { scenario: 'private-access', expect: 'private access rule not applied' },
+  'shell-not-private': { scenario: 'private-access', expect: 'the denied extension shows a button' },
 };
 const SCENARIOS = SCENARIOS_TABLE;
 const PLANTS = PLANTS_TABLE;
