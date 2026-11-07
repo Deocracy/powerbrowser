@@ -1200,6 +1200,17 @@ async function main() {
     return 0;
 }
 
+// 39-REVIEW WR-09: the catalogue plant's anchor is read from the tree, not hand-kept: the File:Line cell of the first
+// `webTabClearSiteData` row whose line no other row cites (a shared line would stay covered when the plant drops it).
+function catalogueAnchor() {
+    const rows = readFileSync(join(REPO_ROOT, INTERNAL_APIS_REL), 'utf8').split('\n').map(line => line.split(' | '));
+    const lineOf = row => (row[1] ?? '').match(/^`(PowerBrowserAPI\.sys\.mjs:\d+)`$/)?.[1] ?? null;
+    const cited = rows.map(lineOf).filter(Boolean);
+    const hit = rows.find(row => row[2] === '`webTabClearSiteData`' && lineOf(row) && cited.filter(c => c === lineOf(row)).length === 1);
+    return hit ? lineOf(hit) : 'no webTabClearSiteData row with a line of its own';
+}
+const CATALOGUE_ANCHOR = catalogueAnchor();
+
 const PLANTS = [
     {
         name: 'a SECURITY_STATE dropped',
@@ -1351,10 +1362,10 @@ const PLANTS = [
     {
         name: 'an INTERNAL-APIS row dropped (real instruments, planted tree)',
         rel: INTERNAL_APIS_REL,
-        from: '`PowerBrowserAPI.sys.mjs:759`',
+        from: `\`${CATALOGUE_ANCHOR}\``,
         to: '`PowerBrowserAPI.sys.mjs:99999`',
         expect: 'every new boundary internal keeps its catalogue row',
-        treePlant: 'PowerBrowserAPI.sys.mjs:759',
+        treePlant: CATALOGUE_ANCHOR,
     },
     {
         name: 'invented-id: a PERMISSION_IDS entry renamed to location',
