@@ -53,6 +53,11 @@
  *           event; Delete and Undo go through the frozen kind; Cut greys on a collapsed selection; typing in
  *           the page sends no Theia request, checked after the kind is seen on the wire (positive control).
  *           Plant: the Copy item sends a check-only request, so no copy event arrives.
+ *   edit-greying  PAGE-09 (33 T6, 39-16): the hamburger Edit submenu rows grey from the page's live state, read with
+ *           focus moved to the Theia frame: a collapsed selection dims Undo, Cut and Copy and leaves Paste and Select All
+ *           enabled; a selection enables Cut and Copy; Undo enables after an edit. Each row run from the submenu
+ *           performs its edit, read back from the textarea's value and selection in the page title.
+ *           Plant: every edit-state reply is the one recorded at the first open (the collapsed selection), replayed.
  *   edit-today  PROBE (record only, 32-06 Task 0): per frozen edit command, whether the chrome
  *           route (the Controllers actor, the route a Theia-initiated Edit item takes) reaches the
  *           page editor and performs the command, and whether the page's own key does the same with
@@ -172,6 +177,21 @@ setInterval(() => {
 }, 50);
 </script></body></html>`;
 
+/**
+ * The edit-greying page (39-16): the events are not cancelled, so each Edit row changes the textarea. The title carries
+ * `eg s<selStart> e<selEnd> |<value>| a<active element tag>`; the caret starts collapsed after "alpha".
+ */
+const EDIT_GREY_PAGE = `<!doctype html><html><head><title>Edit greying fixture</title></head><body><textarea id="t">alpha beta gamma</textarea><script>
+const t = document.getElementById('t');
+let last = '';
+window.addEventListener('focus', () => t.focus());
+t.focus(); t.setSelectionRange(5, 5);
+setInterval(() => {
+  const s = 'eg s' + t.selectionStart + ' e' + t.selectionEnd + ' |' + t.value + '| a' + document.activeElement.tagName;
+  if (s !== last) { last = s; document.title = s; }
+}, 50);
+</script></body></html>`;
+
 /** A 1x1 PNG, carried as the /icon page's data: icon link. */
 const ICON_DATA = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 
@@ -203,6 +223,9 @@ async function serveFixtures(downloadBody) {
             // edit-today: the page reports its selection, length and the copy/cut/paste events through its title.
             response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
             response.end(EDIT_PAGE);
+        } else if (path === '/edit-greying') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end(EDIT_GREY_PAGE);
         } else if (path === '/icon') {
             // favicon: the page's own icon as a data: URL, so no icon is fetched over the network. The link is added from a
             // timer after load (32-REVIEW WR-03), so the icon lands after the load's last state push and must push itself.
@@ -1126,6 +1149,157 @@ async function scenarioEdit(app, origin, plant = false) {
     return null;
 }
 
+/** The hamburger's Edit row and its submenu labels, read from the copy module. */
+const EDIT_MENU = copyOf(CHROME_BAR_COPY_REL, 'menuEdit');
+const EDIT_ROW = {
+    undo: copyOf(CHROME_BAR_COPY_REL, 'editUndoRow'),
+    cut: copyOf(CHROME_BAR_COPY_REL, 'editCutRow'),
+    copy: copyOf(CHROME_BAR_COPY_REL, 'editCopyRow'),
+    paste: copyOf(CHROME_BAR_COPY_REL, 'editPasteRow'),
+    selectAll: copyOf(CHROME_BAR_COPY_REL, 'editSelectAllRow'),
+};
+const APP_MENU_BUTTON = copyOf(CHROME_BAR_COPY_REL, 'appMenu');
+
+/**
+ * Opens hamburger > Edit as a pointer does and returns the submenu's rows as { label: enabled }. With `choose`, the
+ * row labelled `choose` is activated (move, then mouse-up); otherwise both menus are closed with Escape.
+ */
+async function editSubmenu(app, tabId, choose = null) {
+    // A user reopens the menu once the page is back on screen: wait for chrome to show the overlay again.
+    if (await settleValue(() => overlayVisibility(app, tabId), v => v === 'visible') !== 'visible') {
+        throw new Error(`${BROKEN} the page overlay was not shown again after the menu closed`);
+    }
+    // A user clicks in the page, then on the hamburger: the page's editor holds focus, then chrome focus moves to Theia.
+    if (await focusOverlay(app, tabId) !== true || !/ aTEXTAREA$/.test(await settleValue(() => lastEditGreyTitle(app, tabId), t => / aTEXTAREA$/.test(t)))
+        || await focusTheiaFrame(app) !== true) {
+        throw new Error(`${BROKEN} focus could not be put in the page's textarea and then moved to the Theia frame`);
+    }
+    const out = await probe(app, `
+        const visible = () => [...document.querySelectorAll('.lm-Menu')].filter(m => m.getClientRects().length > 0);
+        const text = i => (i.querySelector('.lm-Menu-itemLabel')?.textContent ?? '').trim();
+        const itemIn = (menu, label) => [...menu.querySelectorAll('.lm-Menu-item')].find(i => text(i) === label);
+        const at = (item, type) => {
+            const r = item.getBoundingClientRect();
+            item.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }));
+        };
+        const button = document.querySelector('.pb-chrome-bar button[aria-label=${JSON.stringify(APP_MENU_BUTTON)}]');
+        if (!button) return { error: 'no application menu button in the chrome bar' };
+        await until(() => visible().length === 0, 3000);
+        button.click();
+        let root = null;
+        await until(() => (root = visible().find(m => m.classList.contains('pb-app-menu'))), 6000);
+        if (!root) return { error: 'the application menu did not open' };
+        const edit = itemIn(root, ${JSON.stringify(EDIT_MENU)});
+        if (!edit) return { error: 'the application menu has no ${EDIT_MENU} row' };
+        at(edit, 'mousemove');
+        let sub = null;
+        await until(() => (sub = visible().find(m => m !== root && itemIn(m, ${JSON.stringify(EDIT_ROW.cut)}))), 4000);
+        if (!sub) return { error: 'the ${EDIT_MENU} submenu did not open' };
+        const rows = Object.fromEntries([...sub.querySelectorAll('.lm-Menu-item')].filter(i => text(i)).map(i => [text(i), !i.classList.contains('lm-mod-disabled')]));
+        const choose = ${JSON.stringify(choose)};
+        if (choose) {
+            const item = itemIn(sub, choose);
+            if (!item) return { error: 'the ${EDIT_MENU} submenu has no ' + choose + ' row' };
+            at(item, 'mousemove');
+            at(item, 'mouseup');
+        } else {
+            for (const menu of [sub, root]) {
+                if (menu.getClientRects().length > 0) menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
+            }
+        }
+        const closed = await until(() => visible().length === 0, 3000);
+        return { rows, closed };
+    `);
+    if (out && out.error) {
+        throw new Error(`${BROKEN} ${out.error}`);
+    }
+    return out;
+}
+
+/** The edit-greying page's latest title push for `tabId`, or ''. */
+const lastEditGreyTitle = async (app, tabId) => String((await pushes(app)).filter(p => p && p.kind === 'state' && p.tabId === tabId && /^eg /.test(String(p.title))).pop()?.title ?? '');
+
+/** Chrome scope: puts `text` on the global clipboard (the Paste row's source); true when set. */
+const setClipboard = (app, text) => inChrome(app, `Cc['@mozilla.org/widget/clipboardhelper;1'].getService(Ci.nsIClipboardHelper)
+    .copyStringToClipboard(${JSON.stringify(text)}, Ci.nsIClipboard.kGlobalClipboard); return true;`);
+
+/**
+ * edit-greying (PAGE-09, 33 T6): the hamburger Edit rows grey from the page's live state with focus in the Theia frame,
+ * and each row performs its edit. `plant` replays the edit-state replies of the first open (the collapsed selection).
+ */
+async function scenarioEditGreying(app, origin, plant = false) {
+    await installRequestRecorder(app);
+    const { tabId, from } = await openLoaded(app, `${origin}/edit-greying`, '/edit-greying');
+    const title = re => waitForPush(app, editTitle(tabId, re), { from, timeoutMs: 15000 });
+    if (await title(/^eg s5 e5 \|alpha beta gamma\|/) < 0) {
+        return 'the edit-greying page never reported its collapsed caret in its title';
+    }
+    if (await setClipboard(app, 'PB') !== true) {
+        throw new Error(`${BROKEN} the clipboard could not be set for the Paste row`);
+    }
+    if (plant) {
+        const applied = await probe(app, `const channel = get('WebTabChannel');
+            const original = channel.request.bind(channel);
+            const first = {};
+            channel.request = async message => {
+                const reply = await original(message);
+                if (message && message.kind === 'webTabEdit' && message.checkOnly === true) {
+                    if (!(message.cmd in first)) first[message.cmd] = reply;
+                    return first[message.cmd];
+                }
+                return reply;
+            };
+            return true;`);
+        if (applied !== true) {
+            throw new Error(`${BROKEN} the stale edit-state plant did not install`);
+        }
+    }
+    const stateFails = (where, rows, want) => {
+        const wrong = Object.entries(want).filter(([key, on]) => rows[EDIT_ROW[key]] !== on);
+        return wrong.length
+            ? `Edit row state did not follow the page selection (${where}): ${wrong.map(([key, on]) => `${EDIT_ROW[key]} ${on ? 'dimmed' : 'enabled'}`).join(', ')}; rows ${JSON.stringify(rows)}`
+            : null;
+    };
+    const lastTitle = async () => [...new Set((await pushes(app)).filter(editTitle(tabId, /^eg /)).map(p => p.title))].slice(-4).join(' / ');
+    const run = async (key, re, what) => {
+        const mark = (await pushes(app)).length;
+        const sentBefore = (await requestKinds(app)).length;
+        const { rows, closed } = await editSubmenu(app, tabId, EDIT_ROW[key]);
+        if (rows[EDIT_ROW[key]] !== true) {
+            return `the ${EDIT_ROW[key]} row was dimmed when it was chosen (${what}); rows ${JSON.stringify(rows)}`;
+        }
+        if (await waitForPush(app, editTitle(tabId, re), { from: mark, timeoutMs: 6000 }) >= 0) {
+            return null;
+        }
+        const sent = (await requestKinds(app)).length > sentBefore;
+        return `the ${EDIT_ROW[key]} row did not perform its edit on the page (${what}); the page reads ${JSON.stringify(await lastTitle())}`
+            + (sent ? '' : ' and the row sent no Theia request') + (closed ? '' : '; the menu stayed open after the row was chosen');
+    };
+    const collapsed = await editSubmenu(app, tabId);
+    const steps = [
+        () => stateFails('collapsed caret, nothing to undo', collapsed.rows, { undo: false, cut: false, copy: false, paste: true, selectAll: true }),
+        () => run('paste', /^eg s7 e7 \|alphaPB beta gamma\|/, 'clipboard "PB" at the caret'),
+        async () => stateFails('after a paste', (await editSubmenu(app, tabId)).rows, { undo: true, cut: false, copy: false }),
+        () => run('undo', /^eg s\d+ e\d+ \|alpha beta gamma\|/, 'the paste undone'),
+        () => run('selectAll', /^eg s0 e16 \|alpha beta gamma\|/, 'the whole value selected'),
+        async () => stateFails('text selected', (await editSubmenu(app, tabId)).rows, { cut: true, copy: true, paste: true, selectAll: true }),
+        () => run('copy', /^eg s0 e16 \|alpha beta gamma\|/, 'the selection copied'),
+        // The copy replaced "PB" on the clipboard: pasting over the selection keeps the value and collapses the caret at its end.
+        () => run('paste', /^eg s16 e16 \|alpha beta gamma\|/, 'the copied text pasted over the selection'),
+        () => run('selectAll', /^eg s0 e16 \|/, 'the whole value selected again'),
+        () => run('cut', /^eg s0 e0 \|\|/, 'the selection cut'),
+        () => run('paste', /^eg s16 e16 \|alpha beta gamma\|/, 'the cut text pasted back'),
+    ];
+    for (const next of steps) {
+        const failure = await next();
+        if (failure) {
+            return failure;
+        }
+    }
+    console.log('  edit-greying: collapsed Undo/Cut/Copy dimmed, Paste/Select All enabled; selected Cut/Copy enabled; Paste, Undo, Select All, Copy, Cut each changed the page');
+    return null;
+}
+
 /** The frozen edit command set (32-06): the boundary accepts exactly these, and the probe asks about each. */
 const EDIT_CMDS = ['cmd_undo', 'cmd_redo', 'cmd_cut', 'cmd_copy', 'cmd_paste', 'cmd_pasteNoFormatting', 'cmd_selectAll', 'cmd_delete'];
 
@@ -1765,6 +1939,7 @@ const SCENARIOS = {
     print: (app, fx) => scenarioPrint(app, fx.origin),
     save: (app, fx) => scenarioSave(app, fx.origin),
     edit: (app, fx) => scenarioEdit(app, fx.origin),
+    'edit-greying': (app, fx) => scenarioEditGreying(app, fx.origin),
     'edit-today': async (app, fx) => {
         const verdict = await probeEditToday(app, fx.origin);
         await recordVerdict('edit-today', verdict);
@@ -1830,6 +2005,12 @@ const PLANTS = [
         target: 'edit',
         run: (app, fx) => scenarioEdit(app, fx.origin, true),
         expect: 'no copy event',
+    },
+    {
+        plant: 'edit-state-stale',
+        target: 'edit-greying',
+        run: (app, fx) => scenarioEditGreying(app, fx.origin, true),
+        expect: 'Edit row state did not follow the page selection',
     },
     {
         plant: 'save-export-skipped',
