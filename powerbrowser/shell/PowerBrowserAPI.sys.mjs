@@ -10393,6 +10393,8 @@ function extensionOpenPopup(win, named, popupUrl, anchorRect) {
   // As stock (ext-pageAction.js): the panel opens once the popup has painted its size.
   popup.contentReady.then(() => {
     if (!popup.destroyed) {
+      // 39-15 (38 T23): stock Extension:GrabFocus leaves the shell's focus on no element, so the popup takes it here.
+      popup.panel.addEventListener("popupshown", () => popup.browser?.focus(), { once: true });
       popup.panel.openPopupAtScreenRect("bottomright topright", at.x, at.y, at.width, at.height, false, false);
     }
   });
