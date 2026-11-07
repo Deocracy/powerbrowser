@@ -3,11 +3,14 @@
 // Phase 39 (39-01): the two KWin needs of the close-out on the owner's KDE
 // Wayland desktop -- a capture of the PowerBrowser shell window (999.14) and
 // real OS input for the real-input rows -- behind one gate: no ydotool key
-// and no capture is sent unless KWin reports that the active window's
-// resourceClass contains 'powerbrowser' AND its pid is a browser this run
-// launched (firefox-bidi.mjs launchedBrowserPids; 39-REVIEW CR-01: a
-// PowerBrowser the owner has open has the same class) (39-RESEARCH
-// Pitfall 5: ydotool types into whatever has focus).
+// and no capture is sent unless KWin reports, immediately before it, that
+// the active window's resourceClass contains 'powerbrowser' AND its pid is
+// a browser this run launched (firefox-bidi.mjs launchedBrowserPids;
+// 39-REVIEW CR-01: a PowerBrowser the owner has open has the same class)
+// (39-RESEARCH Pitfall 5: ydotool types into whatever has focus). The read
+// and the send are separate processes, so focus can move between them; a
+// capture is gated again once spectacle returns and its PNG is deleted when
+// that second read refuses (39-REVIEW WR-01).
 //
 // Read-back mechanism (assumption A1, measured 2026-11-05 on KWin 6.6.6): a
 // KWin script print()s a unique marker line and the caller reads it from
@@ -144,8 +147,9 @@ export function isRunWindow(w) {
 
 /**
  * Raises the shell, waits up to 5 s for it to be the active window, then captures the active window with
- * spectacle into `out`, without the drop shadow so the PNG is the window frame alone. Returns `{ path, ...geometry }`; throws "refused: active window ..." if the shell never
- * became active. `opts` exists for the self-test plants.
+ * spectacle into `out`, without the drop shadow so the PNG is the window frame alone. Returns `{ path, ...geometry }`;
+ * throws "refused: active window ..." if the shell never became active, or if the gate refuses once the grab returns
+ * (the PNG is then deleted). `opts` exists for the self-test plants.
  */
 export async function captureShell(out, opts = {}) {
     try { raiseShell(); } catch { /* the poll below decides */ }
@@ -167,14 +171,26 @@ export async function captureShell(out, opts = {}) {
     if (!existsSync(out)) {
         throw new Error(`spectacle wrote no file at ${out}`);
     }
+    gateAfterGrab(out, opts);
     return { path: out, ...w };
+}
+
+/** WR-01: the gate read again once spectacle returns; a refusal deletes the PNG, which may hold another window. */
+function gateAfterGrab(out, opts) {
+    try {
+        gate(opts);
+    } catch (e) {
+        rmSync(out, { force: true });
+        throw new Error(`${e.message} once the grab returned; ${out} deleted`);
+    }
 }
 
 /**
  * Captures KWin's active window into `out` without raising anything: for a PowerBrowser-class window other than the
  * shell (the GTK print dialog, a DevTools toolbox window). The same gate refuses unless the active window's class
- * contains 'powerbrowser'. Returns `{ path, ...geometry }`. shortcut: the gate is read before the grab, not with it;
- * every PNG is opened before it is committed.
+ * contains 'powerbrowser' and its pid is a browser this run launched, before the grab and again once it returns.
+ * Returns `{ path, ...geometry }`. shortcut: the gate is read before and after the grab, not with it, so a window
+ * that takes focus and gives it back during the grab is not seen; every PNG is opened before it is committed.
  */
 export function captureActive(out, opts = {}) {
     const w = gate(opts);
@@ -182,12 +198,14 @@ export function captureActive(out, opts = {}) {
     if (!existsSync(out)) {
         throw new Error(`spectacle wrote no file at ${out}`);
     }
+    gateAfterGrab(out, opts);
     return { path: out, ...w };
 }
 
 /**
  * Sends one short chord through ydotool: every key down in order, then up in reverse (no text typing).
- * The active window is read back in the same step and the send is refused unless it is the shell.
+ * The active window is read back immediately before the send, as a separate step (focus can move in between), and
+ * the send is refused unless it is a PowerBrowser window of a browser this run launched.
  */
 export function osKeys(keys, opts = {}) {
     const codes = keys.map(k => {
@@ -366,6 +384,22 @@ async function selfTest() {
                     console.log(`FAIL ${plant.name} -> ${verdicts.join('; ')}`);
                 } else {
                     console.log(`ok  ${plant.name} -> refused`);
+                }
+            }
+            // WR-01: the window passes the gate before the grab and is foreign once it returns: refused, PNG deleted.
+            let reads = 0;
+            const afterGrab = { readActive: () => (reads++ === 0 ? activeWindow() : { ...activeWindow(), pid: process.pid }) };
+            const afterGrabOut = join(dir, 'after-grab.png');
+            try {
+                captureActive(afterGrabOut, afterGrab);
+                failed++;
+                console.log('FAIL after-grab-refused -> captureActive kept the capture');
+            } catch (e) {
+                if (e.message.startsWith('refused: active window pid') && e.message.includes('once the grab returned') && !existsSync(afterGrabOut)) {
+                    console.log('ok  after-grab-refused -> refused, PNG deleted');
+                } else {
+                    failed++;
+                    console.log(`FAIL after-grab-refused -> ${e.message} (PNG left: ${existsSync(afterGrabOut)})`);
                 }
             }
             // CR-02: the gated window's frame moved off the point, so the button event must be refused. The action is a
