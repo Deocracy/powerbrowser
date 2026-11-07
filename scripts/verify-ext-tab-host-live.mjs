@@ -1871,24 +1871,40 @@ async function scenarioOptionsPageSwitch({ app, plant }) {
   const optionsUrl = await command('ownUrl', { path: 'options.html' });
   if ((await stockContexts(app)).length) throw new Error('BROKEN INSTRUMENT: a stock window was open before the starting-window leg');
   // Leg 1: the first call starts a stock window; the second comes once that window exists and has not finished
-  // starting (the state WR-06 waits on). One window, one tab.
-  await command('openOptions');
-  let startingWin = null;
-  const end = Date.now() + 20000;
-  while (!startingWin && Date.now() < end) {
-    startingWin = (await stockContexts(app))[0] ?? null;
-    if (!startingWin) await sleep(20);
+  // starting (the state WR-06 waits on). One window, one tab. 39-REVIEW WR-08: the state is timing, so the leg is
+  // retried (the window closed) up to three times until the second call meets a starting window, else it is SKIPPED.
+  let wasStarting = null;
+  let first = null;
+  let settled = null;
+  const attempts = [];
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await command('openOptions');
+    let startingWin = null;
+    const end = Date.now() + 20000;
+    while (!startingWin && Date.now() < end) {
+      startingWin = (await stockContexts(app))[0] ?? null;
+      if (!startingWin) await sleep(20);
+    }
+    if (!startingWin) throw new Error('BROKEN INSTRUMENT: the first openOptionsPage started no stock window');
+    wasStarting = await app.evaluateIn(startingWin, '!(window.gBrowserInit && window.gBrowserInit.delayedStartupFinished)').catch(() => null);
+    attempts.push(wasStarting);
+    await command('openOptions');
+    first = await stockTabRead(app, optionsUrl);
+    await sleep(2000);
+    const windows = await stockContexts(app);
+    settled = first && await chromeJsonIn(app, first.ctx, STOCK_TAB_ON(optionsUrl));
+    if (!first || windows.length !== 1) {
+      return verdict(false, null, `openOptionsPage opened a second window while the stock window was starting: ${windows.length} stock window(s)`);
+    }
+    if (wasStarting === true || settled.count !== 1 || attempt === 3) break;
+    await app.evaluateIn(windows[0], '(() => { window.close(); return true; })()').catch(() => null);
+    const gone = Date.now() + 10000;
+    while ((await stockContexts(app)).length && Date.now() < gone) await sleep(100);
+    if ((await stockContexts(app)).length) throw new Error('BROKEN INSTRUMENT: the stock window did not close for the starting-window retry');
   }
-  if (!startingWin) throw new Error('BROKEN INSTRUMENT: the first openOptionsPage started no stock window');
-  const wasStarting = await app.evaluateIn(startingWin, '!(window.gBrowserInit && window.gBrowserInit.delayedStartupFinished)').catch(() => null);
-  await command('openOptions');
-  const first = await stockTabRead(app, optionsUrl);
-  await sleep(2000);
-  const windows = await stockContexts(app);
-  const settled = first && await chromeJsonIn(app, first.ctx, STOCK_TAB_ON(optionsUrl));
-  if (!first || windows.length !== 1) {
-    return verdict(false, null, `openOptionsPage opened a second window while the stock window was starting: ${windows.length} stock window(s)`);
-  }
+  const leg1 = wasStarting === true
+    ? `a second call while the stock window was starting (attempt ${attempts.length}) gave one stock window and one options tab`
+    : `leg 1 SKIPPED: the stock window had finished starting at the second call in ${attempts.length} attempt(s) (${J(attempts)}), so the starting-window state was not reached`;
   // Judged after leg 2 runs, so one session reports both legs.
   const startingFail = settled.count !== 1
     ? `openOptionsPage opened a second tab while the stock window was starting: ${settled.count} options tabs in the one stock window (window still starting at the second call: ${wasStarting})`
@@ -1914,7 +1930,7 @@ async function scenarioOptionsPageSwitch({ app, plant }) {
   if (startingFail) {
     return verdict(false, null, `${startingFail}; the started-window leg passed (a third call switched to the options tab and added none)`);
   }
-  return verdict(true, `a second call while the stock window was starting (still starting at the call: ${wasStarting}) gave one stock window and one options tab; a third call switched to it and added none`, null);
+  return verdict(true, `${leg1}; a third call switched to it and added none`, null);
 }
 
 // CR-02's defect: the container is dropped on the way to the host, so the page loads in the default cookie jar.
