@@ -587,7 +587,7 @@ them per a downstream's manifest is Phase 4's TEL-03.
 **Goal:** Fix every open v1.5 defect and finish the end-of-milestone pass, so v1.5 Chrome Bar Firefox Parity closes with no green-by-exclusion rows (Chris, 2026-11-05: "fix all three", "fix all 13", "every deferral well documented").
 **Requirements**: PROMPT-04, PROMPT-06, PROMPT-08 (C22-C24 live), EXT-01..EXT-10 (999.15/999.16), plus the live halves of every v1.5 requirement whose UAT row is still pending
 **Depends on:** Phase 38
-**Plans:** 13/20 plans executed
+**Plans:** 14/20 plans executed
 
 **Scope:**
 1. Product fixes: C22 the `title=` page tooltip never opens; C23 the saved-login autocomplete popup never opens; C24 Copy Image leaves no image flavour on the clipboard; C11 page-menu dismissal `focusPage()` race (999.10).
@@ -639,7 +639,7 @@ Plans:
 - [x] 39-13-PLAN.md (wave 12) — 38 T22, T24-T30 scenarios; extension rows through the registry; 38-UAT recorded
 
 **Wave 13** *(blocked on Wave 12 completion)*
-- [ ] 39-14-PLAN.md (wave 13) — EXT-10 fill on a local Vaultwarden (38 T31, option b)
+- [x] 39-14-PLAN.md (wave 13) — EXT-10 fill on a local Vaultwarden (38 T31, option b)
 
 **Wave 14** *(blocked on Wave 13 completion)*
 - [ ] 39-15-PLAN.md (wave 14) — Real OS input rows: 27 T1-T4, 34 T1/T6/T13, 36 T5, 38 T23
