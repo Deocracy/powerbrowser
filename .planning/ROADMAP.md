@@ -120,18 +120,18 @@ UI spec before planning: Phase 30 (`/gsd-ui-phase 30` with mockups). Waiting on 
 28 (route sign-off), 30 (Browsing and Organising default modes), 37 (only if the dialog probe
 forces a decision). Coverage: 87/87 v1.5 requirements, each in exactly one phase.
 
-- [ ] **Phase 27: Groundwork, Navigation Buttons and Page-Focus Keys** - Stop, hard reload, history menus and Home; Firefox keys from inside a page; the shared push, action kinds and live-probe harness
+- [x] **Phase 27: Groundwork, Navigation Buttons and Page-Focus Keys** - Stop, hard reload, history menus and Home; Firefox keys from inside a page; the shared push, action kinds and live-probe harness
 - [x] **Phase 28: WebExtension Tab Route Spike** - How web tabs become tabs WebExtensions can see, recorded and signed off by Chris before Phase 38 is planned
-- [ ] **Phase 29: Address Bar Search and Fixup** - Search fallback, localhost and host:port, suggestions, engines, switch-to-tab, autofill, pill editing, configured app name in copy
-- [ ] **Phase 30: Address-Bar Modes and Command Centre** - Modes dropdown, mode chip and tokens; Theia's command centre in the pill as the Coding default
-- [ ] **Phase 31: Site Identity, Permissions and App Menu** - Real lock and "Not Secure", site panel with permissions and clear site data, tracking shield, hamburger menu, Quit
-- [ ] **Phase 32: Page Tools** - Find, zoom, print, save, edit commands, favicons, audio and mute, downloads, source, reader view, devtools, crashed tab
-- [ ] **Phase 33: Bookmarks, History and the Full Menu** - Star and editor, reopen closed tab, bookmarks toolbar, history menu, clear history; every app-menu and Actions entry
-- [ ] **Phase 34: Tab Strip** - Tab menu, drag reorder, middle-click, overflow, pin, multiselect, preview card, attention mark
-- [ ] **Phase 35: Shell Furniture and Page Context Menu** - Page context menu, form autocomplete, tooltips and link status, page fullscreen with its warning
-- [ ] **Phase 36: New-Window Links as Web Tabs** - `target=_blank` and `window.open` open web tabs next to the opener; GUI-01 kept (alone, because it is the one phase that can break GUI-01)
-- [ ] **Phase 37: Permission Prompts and Dialogs** - Permission doorhangers, sharing indicator, page dialogs, password save, notification bars
-- [ ] **Phase 38: WebExtensions** - Extensions see web tabs; toolbar buttons and puzzle menu; AMO install; popular extensions checked live
+- [x] **Phase 29: Address Bar Search and Fixup** - Search fallback, localhost and host:port, suggestions, engines, switch-to-tab, autofill, pill editing, configured app name in copy
+- [x] **Phase 30: Address-Bar Modes and Command Centre** - Modes dropdown, mode chip and tokens; Theia's command centre in the pill as the Coding default
+- [x] **Phase 31: Site Identity, Permissions and App Menu** - Real lock and "Not Secure", site panel with permissions and clear site data, tracking shield, hamburger menu, Quit
+- [x] **Phase 32: Page Tools** - Find, zoom, print, save, edit commands, favicons, audio and mute, downloads, source, reader view, devtools, crashed tab
+- [x] **Phase 33: Bookmarks, History and the Full Menu** - Star and editor, reopen closed tab, bookmarks toolbar, history menu, clear history; every app-menu and Actions entry
+- [x] **Phase 34: Tab Strip** - Tab menu, drag reorder, middle-click, overflow, pin, multiselect, preview card, attention mark
+- [x] **Phase 35: Shell Furniture and Page Context Menu** - Page context menu, form autocomplete, tooltips and link status, page fullscreen with its warning
+- [x] **Phase 36: New-Window Links as Web Tabs** - `target=_blank` and `window.open` open web tabs next to the opener; GUI-01 kept (alone, because it is the one phase that can break GUI-01)
+- [x] **Phase 37: Permission Prompts and Dialogs** - Permission doorhangers, sharing indicator, page dialogs, password save, notification bars
+- [x] **Phase 38: WebExtensions** - Extensions see web tabs; toolbar buttons and puzzle menu; AMO install; popular extensions checked live
 - [ ] **Phase 39: v1.5 Close-out** - Fix C22-C24, C11 and backlog 999.4-999.16; run every automatable UAT item; owner calls settled; WINDOWS.md and REQUIREMENTS.md closed out
 
 ## Phase Details
@@ -321,7 +321,7 @@ Plans:
   4. Clear cookies and site data removes the current site's data and the IDE stays signed in, including after clearing on a `localhost` tab; the tracking-protection shield shows what was blocked and turns protection off for the site
   5. The hamburger menu opens from the chrome bar in Coding, Browsing and Organising, in Firefox's order, and opens Settings, Passwords and Add-ons; Ctrl+Q and the menu's Quit item quit the application
 
-**Plans**: 5 plans (strictly sequential waves; DSH codes, Claude checks)
+**Plans**: 5/5 plans executed (strictly sequential waves; DSH codes, Claude checks)
 
 Plans:
 - [x] 31-01-PLAN.md (wave 1) — Lead the phase with one end-to-end tracer: chrome computes the real connection state and the pill renders it.
@@ -547,18 +547,18 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 27. Groundwork, Navigation Buttons and Page-Focus Keys | 8/8 | In Progress|  |
+| 27. Groundwork, Navigation Buttons and Page-Focus Keys | 8/8 | Executed, verification deferred (39-HUMAN-CHECKLIST.md) | - |
 | 28. WebExtension Tab Route Spike | 0/0 | Complete    | 2026-10-21 |
-| 29. Address Bar Search and Fixup | 10/10 | In Progress|  |
-| 30. Address-Bar Modes and Command Centre | 6/6 | In Progress|  |
-| 31. Site Identity, Permissions and App Menu | 0/TBD | Not started | - |
-| 32. Page Tools | 9/9 | In Progress | - |
-| 33. Bookmarks, History and the Full Menu | 5/5 | Executed, verification deferred | - |
-| 34. Tab Strip | 5/5 | Executed, verification deferred | - |
-| 35. Shell Furniture and Page Context Menu | 7/7 | Executed, verification deferred | - |
-| 36. New-Window Links as Web Tabs | 3/3 | Executed, verification deferred | - |
-| 37. Permission Prompts and Dialogs | 4/4 | Executed, verification deferred | - |
-| 38. WebExtensions | 5/5 | Executed, verification deferred | - |
+| 29. Address Bar Search and Fixup | 10/10 | Executed, verification deferred (outside the 39 live pass; /gsd-verify-work 29) | - |
+| 30. Address-Bar Modes and Command Centre | 6/6 | Executed, verification deferred (outside the 39 live pass; /gsd-verify-work 30) | - |
+| 31. Site Identity, Permissions and App Menu | 5/5 | Executed, verification deferred (outside the 39 live pass; /gsd-verify-work 31) | - |
+| 32. Page Tools | 9/9 | Executed, verification deferred (39-HUMAN-CHECKLIST.md) | - |
+| 33. Bookmarks, History and the Full Menu | 5/5 | Executed, verification deferred (39-HUMAN-CHECKLIST.md) | - |
+| 34. Tab Strip | 5/5 | Executed, verification deferred (39-HUMAN-CHECKLIST.md) | - |
+| 35. Shell Furniture and Page Context Menu | 7/7 | Executed, verification deferred (39-HUMAN-CHECKLIST.md) | - |
+| 36. New-Window Links as Web Tabs | 3/3 | Executed, verification deferred (39-HUMAN-CHECKLIST.md) | - |
+| 37. Permission Prompts and Dialogs | 4/4 | Executed, verification deferred (39-HUMAN-CHECKLIST.md) | - |
+| 38. WebExtensions | 7/7 | Executed, verification deferred (39-HUMAN-CHECKLIST.md) | - |
 
 ## Hard constraints (every phase)
 
