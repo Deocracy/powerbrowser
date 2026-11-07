@@ -125,7 +125,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { captureShell } from './lib/pb-kwin.mjs';
+import { captureShell, raiseShell } from './lib/pb-kwin.mjs';
 import { REPO_ROOT } from './lib/pb-relaunch.mjs';
 import { BROKEN, WEB_TAB_STATE_EVENT, focusOverlay, inChrome, isState, loadedAt, makeCurrent, openWebTab, pollFor, pressKey, probe, pushes, serveNavPages, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
 
@@ -208,10 +208,11 @@ const AUTH = { user: 'pb-probe', pass: 'pb-probe-pass' };
 /**
  * PB_CAPTURE_DIR=<dir> (39-11, 37 T28-T32): the session runs headed and captureShell writes 37-T28-doorhanger.png
  * (permission, the location doorhanger open), 37-T29-strip-mark.png (background-queue, a waiting prompt's mark),
- * 37-T30-sharing-indicator.png (camera-then-geo, the camera mark after the location grant),
+ * 37-T30-sharing-indicator.png (pending-window-reports once its bars are answered: the camera mark of a live track),
  * 37-T31-device-and-password-doorhangers.png (password-save: the password doorhanger and a camera request in one
  * panel) and 37-T32-notification-bars.png (pending-window-reports: the three bar kinds stacked on one tab). Unset,
- * nothing is captured and nothing is scored differently. Needs the Bash sandbox off.
+ * nothing is captured and nothing is scored differently. Needs the Bash sandbox off. A capture run's stock answers are
+ * not dependable (the shell competes for activation on the owner's desktop), so it is never the scored run.
  */
 const CAPTURE_DIR = process.env.PB_CAPTURE_DIR ? resolve(process.env.PB_CAPTURE_DIR) : '';
 if (CAPTURE_DIR) {
@@ -226,6 +227,32 @@ async function capture(file) {
     mkdirSync(CAPTURE_DIR, { recursive: true });
     const shot = await captureShell(join(CAPTURE_DIR, file));
     console.log(`  capture ${file}: ${shot.resourceClass} ${shot.width}x${shot.height}`);
+}
+
+/**
+ * A capture run is headed on the owner's desktop, where the shell is often not the active window. The stock buttons
+ * refuse a click then (PopupNotifications _onButtonEvent: "before the window was focused / active"), and the panel is
+ * re-shown on activation, so the shell is raised and read back as chrome's active window first. Headless: nothing.
+ */
+async function activateShell(app) {
+    if (!CAPTURE_DIR) {
+        return;
+    }
+    try {
+        raiseShell();
+    } catch { /* the read-back below decides */ }
+    await pollFor(async () => ((await inChrome(app, 'return Services.focus.activeWindow === window;')) ? true : null), 5000, 'the shell to be active').catch(() => null);
+}
+
+/** A doorhanger capture: the shell active, tab `tabId`'s notification `id` back in the open panel, then the capture. */
+async function captureDoorhanger(app, tabId, id, file) {
+    if (!CAPTURE_DIR) {
+        return;
+    }
+    await activateShell(app);
+    await waitInPanel(app, tabId, id, 5000);
+    await new Promise(resolve => setTimeout(resolve, 800));
+    await capture(file);
 }
 
 /** Set by main() for a live `--scenario dialog-probe` run only; self-test sessions never write the verdict. */
@@ -381,7 +408,8 @@ async function waitInPanel(app, tabId, id = GEO_ID, timeoutMs = 15000) {
  * passed since timeShown (which a rejected click moves); `early` clicks at once; `bypass` is the delay-bypassed plant;
  * `skip` is the answer-dropped plant. Block carries disableSecurityDelay upstream, so it never waits.
  */
-function answerStock(app, tabId, { id = GEO_ID, which = 'allow', remember = false, early = false, bypass = false, skip = false } = {}) {
+async function answerStock(app, tabId, { id = GEO_ID, which = 'allow', remember = false, early = false, bypass = false, skip = false } = {}) {
+    await activateShell(app);
     return inChrome(app, `
         const o = overlayOf(${JSON.stringify(tabId)});
         const n = o ? window.PopupNotifications.getNotification(${JSON.stringify(id)}, o) : null;
@@ -433,7 +461,7 @@ async function scenarioPermission(app, fx, plant) {
     if (geometry) {
         return geometry;
     }
-    await capture('37-T28-doorhanger.png');
+    await captureDoorhanger(app, page.tabId, GEO_ID, '37-T28-doorhanger.png');
     await answerStock(app, page.tabId, { skip: plant === 'answer-dropped' });
     if (await geoOutcome(app, page) !== 'granted') {
         return 'stock Allow dispatched but page promise unresolved';
@@ -1224,7 +1252,7 @@ async function scenarioPasswordSave(app, fx, plant) {
             // Both stock doorhangers in one panel: the submit's page asks for the camera while the password offer shows.
             await startRequest(app, page, 'camera');
             await waitInPanel(app, page.tabId, WEBRTC_ID, 8000);
-            await capture('37-T31-device-and-password-doorhangers.png');
+            await captureDoorhanger(app, page.tabId, PASSWORD_ID, '37-T31-device-and-password-doorhangers.png');
         }
         if (plant === 'credential-leak') {
             // The plant: a username reaching the chrome log, as a leaking log call would.
@@ -1705,7 +1733,6 @@ async function scenarioCameraThenGeo(app, fx, plant) {
     await new Promise(resolve => setTimeout(resolve, 1500));
     const off = (await pushes(app)).slice(from).find(p => isSharing(page.tabId, { camera: false })(p));
     const kinds = await indicatorKinds(app);
-    await capture('37-T30-sharing-indicator.png');
     await stopTracks(app, page);
     return off || !kinds.includes('camera') ? `${CAMERA_CLEARED} (${off ? 'an all-off push' : `marks ${kinds.join(',') || 'none'}`})` : null;
 }
@@ -1769,8 +1796,15 @@ async function scenarioPendingWindowReports(app, fx, plant) {
             lost.push('camera mark');
         }
         await capture('37-T32-notification-bars.png');
-        // Teardown: the hung page's own Stop, so the shared content process answers the rest of the session.
+        // Teardown: the hung page's own Stop, so its content process answers the rest of the session.
         await clickBar(app, id, 'hung-script', 'stop-script').catch(() => null);
+        if (CAPTURE_DIR) {
+            // The sharing indicator alone: the other two bars answered, the camera still live (no stock Allow is needed here).
+            await clickBar(app, id, 'blocked-popup', 'dismiss').catch(() => null);
+            await clickBar(app, id, 'protocol-handler', 'deny-handler').catch(() => null);
+            await new Promise(resolve => setTimeout(resolve, 800));
+            await capture('37-T30-sharing-indicator.png');
+        }
         return lost.length ? `${PENDING_LOST} (${lost.join(', ')})` : null;
     } finally {
         await forgetHandlers(app, schemes);
