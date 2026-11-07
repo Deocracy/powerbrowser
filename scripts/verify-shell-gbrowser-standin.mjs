@@ -674,12 +674,27 @@ function deriveCalledOrAssigned(name, files) {
   return members;
 }
 
+// Stock-window wrappers, not shell shims: `<name>` -> the one boundary function whose body wraps a started stock
+// window's own definition. Its assignment is left out of the count; one anywhere else still counts (plant m2).
+// 39-13 fix 4 (38 T30): extensionSelectTabPage wraps the stock window's switchToTabHavingURI so a second
+// openOptionsPage sees the options tab it added before that tab's load commits.
+const STOCK_WINDOW_WRAPPERS = new Map([['switchToTabHavingURI', 'extensionSelectTabPage']]);
+
+// `code` without the top-level `function <fn>(` ... `}` block, or unchanged when there is none.
+function withoutTopLevelFunction(code, fn) {
+  const start = code.search(new RegExp(`^function ${fn}\\(`, 'm'));
+  if (start < 0) return code;
+  const end = code.indexOf('\n}\n', start);
+  return end < 0 ? code : code.slice(0, start) + code.slice(end + 3);
+}
+
 // The `window.<name> = ` (or `win.<name> = `) definition in the boundary file: { count, members }. members is the
 // literal's top-level names, an empty set for a non-literal value, null for an unbalanced literal.
 function deriveShimDefinition(boundaryFile, name) {
   const src = readSource(boundaryFile);
   if (src === null) return { count: 0, members: null, unreadable: true };
-  const code = stripCommentLines(src);
+  const wrapper = STOCK_WINDOW_WRAPPERS.get(name);
+  const code = wrapper ? withoutTopLevelFunction(stripCommentLines(src), wrapper) : stripCommentLines(src);
   const defs = [...code.matchAll(new RegExp(`\\b(?:win|window)\\.${name}\\s*=(?!=)`, 'g'))];
   if (defs.length !== 1) return { count: defs.length, members: null };
   const rest = code.slice(defs[0].index + defs[0][0].length).trimStart();
@@ -1564,6 +1579,16 @@ function selfTest() {
       if (r.ok || r.reason !== 'phase27-shim-broken' || !String(r.detail).includes('PointerlockFsWarning')) {
         fail(`two PointerlockFsWarning definitions did not fail as a broken instrument naming it; got: ${JSON.stringify({ reason: r.reason, detail: r.detail })}`);
       } else ok(`two staged PointerlockFsWarning definitions -> broken instrument naming PointerlockFsWarning`);
+    }
+
+    // (m2) the stock-window wrapper exemption is scoped to its one function: a second switchToTabHavingURI
+    // definition outside extensionSelectTabPage is still a second boundary.
+    {
+      const path = boundaryWith('boundary-switch-twice.mjs', 'function zzzPlantedReceiver(win) {\n  win.switchToTabHavingURI = () => true;\n}');
+      const r = runScan({ ...real, boundaryFile: path });
+      if (r.ok || r.reason !== 'phase27-shim-broken' || !String(r.detail).includes('switchToTabHavingURI 2 times')) {
+        fail(`a second switchToTabHavingURI definition outside the stock-window wrapper did not fail as a broken instrument naming it; got: ${JSON.stringify({ reason: r.reason, detail: r.detail })}`);
+      } else ok(`a staged second switchToTabHavingURI definition outside extensionSelectTabPage -> broken instrument naming it`);
     }
 
     // (n) the boundary file's XULBrowserWindow with its QueryInterface line removed.

@@ -10733,10 +10733,31 @@ function extensionOpenTabPage(url, principal, reuse = false) {
 
 // `reuse` (runtime.openOptionsPage): switch to the tab already showing the page, else add one, as switchToTabHavingURI does.
 function extensionSelectTabPage(win, url, principal, reuse) {
-  const tab = (reuse && win.gBrowser.tabs.find(t => t.linkedBrowser?.currentURI?.spec === url)) || win.gBrowser.addTab(url, { triggeringPrincipal: principal });
+  const tab = (reuse && win.gBrowser.tabs.find(t => t.linkedBrowser?.currentURI?.spec === url)) || (reuse && uncommittedStockTab(win, url)) || win.gBrowser.addTab(url, { triggeringPrincipal: principal });
   win.gBrowser.selectedTab = tab;
   PowerBrowserAPI.focusWindow(win);
+  if (reuse && !reuseSwitchWrapped.has(win)) {
+    // 39-13 fix 4 (38 T30, WR-06): once this window has started, ext-browser.js openOptionsPage sends the next call to
+    // the window's own switchToTabHavingURI (it is the top window now). That one matches committed URLs only
+    // (URILoadingHelper switchIfURIInWindow) and added a second tab beside the one just added here.
+    reuseSwitchWrapped.add(win);
+    const stockSwitch = win.switchToTabHavingURI;
+    win.switchToTabHavingURI = function (uri, ...rest) {
+      const pending = uncommittedStockTab(win, uri instanceof Ci.nsIURI ? uri.spec : String(uri));
+      if (pending) {
+        win.gBrowser.selectedTab = pending;
+        return true;
+      }
+      return stockSwitch.call(this, uri, ...rest);
+    };
+  }
   return tab;
+}
+const reuseSwitchWrapped = new WeakSet();
+
+// A tab added for `url` whose load has not committed: tabbrowser addTab keeps the URL in userTypedValue until then.
+function uncommittedStockTab(win, url) {
+  return win.gBrowser.tabs.find(t => t.linkedBrowser?.currentURI?.spec === "about:blank" && t.linkedBrowser.userTypedValue === url);
 }
 
 // The shell window's extension receivers, installed with the tab host. ext-browser.js openOptionsPage calls the top
