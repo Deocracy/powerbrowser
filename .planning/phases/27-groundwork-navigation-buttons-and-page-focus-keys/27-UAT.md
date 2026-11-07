@@ -16,11 +16,13 @@ updated: 2026-11-05T01:52:09.187Z
 
 ### 1. Real keyboard with a web page focused
 expected: Ctrl+T, Ctrl+W, Ctrl+R, F5, Ctrl+Shift+R, Ctrl+F5, Alt+Left, Alt+Right, Alt+Home (Home on), Alt+D, Ctrl+L, F6, Shift+F6, Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+PageUp, Ctrl+PageDown, Alt+1..Alt+9 and Esc on a loading page each do what Firefox does
-result: [pending]
+result: pass
+evidence: "39-15 2026-11-06, objdir/dist/bin/powerbrowser headed on the owner KDE Wayland desktop, harness commit 2f42a1ed: PB_REAL_INPUT=1, keyRoute os -- every key a real uinput key through ydotool, sent only after KWin read back the PowerBrowser shell as the active window in the same step (pb-kwin gate; pb-kwin --self-test PASS, its two refusal plants refused). verify-nav-keys-live page-keys PASS (Ctrl+R, F5, Ctrl+Shift+R, Ctrl+F5, Alt+Left, Alt+Right, Alt+Home, Alt+D, Ctrl+L, Ctrl+T, Ctrl+W), tab-keys PASS (Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+PageDown, Ctrl+PageUp, Alt+1, Alt+9, Alt+5 no-op), focus-keys PASS (F6, Shift+F6), esc-stop PASS (Esc on a loading page), all keys: os. Alt+2..Alt+8 were not each pressed: tab-keys proves the first, the last and an out-of-range digit"
 
 ### 2. Real keyboard in an editor and a terminal
 expected: F5, F6, F11, Ctrl+P, Ctrl+K, Ctrl+Tab, Alt+Left, Ctrl+R, Ctrl+L, Ctrl+W keep Theia's meaning (Ctrl+P Quick Open, F11 full screen, Ctrl+R reaches the shell in a terminal); no browser action runs
-result: [pending]
+result: pass
+evidence: "39-15 2026-11-06, objdir/dist/bin/powerbrowser headed on the owner KDE Wayland desktop, harness commit 2f42a1ed: PB_REAL_INPUT=1, keyRoute os -- every key a real uinput key through ydotool, sent only after KWin read back the PowerBrowser shell as the active window in the same step (pb-kwin gate; pb-kwin --self-test PASS, its two refusal plants refused). verify-nav-keys-live theia-keeps-keys PASS in the same session as page-keys: in an untitled editor F5, F6, F11, Ctrl+P, Ctrl+K, Ctrl+Tab, Alt+Left, Ctrl+R, Ctrl+L, and in a terminal Ctrl+R and Ctrl+W, reached the Theia frame with no page-key row firing its chrome command; theia-keeps-esc PASS"
 
 ### 3. Physical mouse back/forward buttons
 expected: over a web page they go back/forward in that page; over the Theia frame nothing browser-side happens

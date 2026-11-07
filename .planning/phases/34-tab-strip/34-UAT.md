@@ -91,6 +91,7 @@ why: "Live-pass risk. The chrome-side minter (PowerBrowserAPI.sys.mjs:5241-5249)
 ### 13. Keyboard context-menu detection (WR-04)
 expected: Tab to the strip; use Left/Right to move between tabs; press Shift+F10 and the context-menu key on a focused tab; press Enter and Space. The menu opens anchored at the focused tab's bottom-left, not at the window origin; Enter/Space activate the tab; focus-visible shows; a real right-click is still anchored at the pointer
 result: [pending]
+live: "39-15 2026-11-06, harness 2f42a1ed: PB_REAL_INPUT=1 verify-tab-strip-live keyboard-menu PASS, keys os: ArrowRight moved keyboard focus /a -> /b; real Shift+F10 and the real context-menu key (GTK MaybeDispatchContextMenuEvent) each opened the tab menu 0px from /b's bottom-left; Enter and Space activated the focused tab. Pointer half: Task 3 of 39-15"
 why: "openTabMenu (tab-strip-widget.tsx:1022-1024) decides keyboard origin with event.button !== 2 || (clientX === 0 && clientY === 0). Different Linux/Gecko builds report a keyboard-raised contextmenu differently (button value, coordinates), so the heuristic can misfire in either direction"
 
 ### 14. Pinned-tab corner badge fit and selected-tab styling (WR-06, IN-01)

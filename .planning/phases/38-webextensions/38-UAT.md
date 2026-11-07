@@ -170,6 +170,7 @@ live: "39-13 lane-b 2026-11-06, objdir/dist/bin/powerbrowser (050 and 060 stamps
 command: as item 18, click a popup button with the mouse, then operate its controls with Tab and Enter, then Esc
 expected: The popup takes focus and keys, Esc closes it and returns focus to the address pill, a click on the page closes it and leaves focus in the page
 result: [pending]
+live: "39-15 2026-11-06, harness 2f42a1ed with product fix cba92e2a (the popup took no focus before it): PB_REAL_INPUT=1 verify-extension-actions-live popup-keyboard, keys os: the panel browser took chrome focus, real Tab and Enter reached the popup's button, real Esc closed it with focus in the pill. Click half: Task 3 of 39-15"
 
 ### 24. IN-06: the add-ons listing page's own hosts
 command: `cd /home/chris/coding/Power-Browser && bash scripts/verify-endpoints.sh` after one live visit to the add-ons listing page and one install (read the script's header for the MOZ_LOG layer it needs)
