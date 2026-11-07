@@ -116,3 +116,70 @@ New finding (for 39-05 and 39-15): in a headed session the web-tab overlay never
 flaky: ng-018-scheduled-integrity-check
 
 Class counts: listed 5, prompt-03-deferred 1, gate-exclusion-stale 1, environment 23, new 10.
+
+## Final run
+
+Plan 39-19, after every fix plan (39-02 to 39-18). Logs under `${TMPDIR:-/tmp}/pb-39-19/` (`pb-39-final` links to it), not committed.
+
+- **Full run:** commit `6ac27ac2b2e8abec1d009b8e95429564735f3398`, started 2026-11-07T05:30:12Z, `flock <pb-headed.lock> PB_NG_ALLOW_DIRTY=1 nix develop .#theia --command scripts/verify-platform.sh` (sandbox off; tracked dirt only `.claude/settings.json` and `.planning/state.json`). Runtime 13372 s (3 h 43 min). Exit 1: **452 PASS, 36 FAIL**.
+- **Reruns:** each red without a fixed known cause once with `--only` (10 labels); the three that went green ran a third time. Flaky by the two-of-three rule: `ng067-frontend-errors-reach-telemetry` (red 1 of 3), `page-furniture-live-self-test` (red 1 of 3). `prompts-live-self-test` was red 2 of 3 (3 of 4 counting the gate), so it is a defect, not a flake.
+- **Path 2:** `objdir-release/` predated the vendor rename and the 153.5.1 pin (Version=153.5.0, Vendor=DeBIOS). Rebuilt with `POWERBROWSER_OBJDIR=objdir-release POWERBROWSER_BRANDING=powerbrowser/branding-generated/release MOZCONFIG=../.mozconfig ./mach clobber && ./mach build` in `nix develop .#firefox`: 1429 s (23 min 49 s), application.ini now `Vendor=Deocracy Name=powerbrowser Version=153.5.1 BuildID=20261107024043`. The incremental attempt stopped at once on the "Merge day clobber 2026-09-24" CLOBBER notice. `verify-branding-identity-release` then PASSED alone.
+- **Path 1 (harness):** `shell01-theia-is-the-window` read 35-07's stock stylesheet href `chrome://browser/skin/tabbrowser/fullscreen-and-pointerlock.css` as custom chrome; the static scan now skips `chrome://browser/skin/` hrefs (02570bcd) and the row PASSED alone.
+- **Path 3:** every other red is keyed in `GATE_KNOWN_OPEN_EXCLUSIONS` to an open WINDOWS.md entry with repro, cause so far and source (entries 25, 28, 29 and the new 30-43), and has a ROADMAP backlog row (999.17, 999.27-999.32). The rows keyed to fixed entries 5 and 10 were removed.
+- **--gate:** commit `77e5d0372b447272e8a0317e1fabf7b53e75ef32`, started 2026-11-07T10:41:54Z, same command with `--gate`. Runtime 13410 s. 456 PASS, 32 FAIL, all 32 excluded. Verdict line:
+
+```
+verify-platform: --gate PASS-WITH-EXCLUSIONS -- commit 77e5d0372b447272e8a0317e1fabf7b53e75ef32 -- 32 named known-open exclusion(s)
+```
+
+- `page-furniture-live` PASSED in both runs. `page-furniture-live-self-test` PASSED in the gate run and in 2 of 3 runs before it (red in the full run, ledger 43).
+- EXT-01 (`extension-pins`, `extension-pins-self-test`), EXT-02 (`verify-downstream-fixtures`, its self-test) and EXT-03 (`webextensions`, its self-test, `ng073-declared-extension-loads`) PASSED in both runs.
+
+| label | baseline | final | path |
+|-------|----------|-------|------|
+| page-furniture-live | FAIL | PASS | fixed (39-05, 39-06) |
+| page-furniture-live-self-test | FAIL | FAIL, rerun PASS PASS, gate PASS | flaky, ledger 43 |
+| address-bar-live | FAIL | PASS | fixed (39-08) |
+| address-bar-live-self-test | FAIL | FAIL | expected, ledger 25 (ctrl-d-everywhere), 999.27 |
+| prompts-live | FAIL | PASS | sharing fixed (39-09); dialog rows skipped by derivation, ledger 26, 999.3 |
+| prompts-live-self-test | FAIL | FAIL, rerun PASS FAIL, gate FAIL | defect (allow-loads-frame-url plant), ledger 39, 999.30 |
+| site-identity-live | FAIL | FAIL, rerun FAIL | defect (app-menu), ledger 40, 999.31 |
+| site-identity-live-self-test | FAIL | FAIL | same cause (clean control app-menu), ledger 40 |
+| tel06-error-delivery-live | FAIL | FAIL | environment (foreign dirty tree), ledger 33, 999.32 |
+| verify-customize-inert | FAIL | FAIL, rerun FAIL | defect, ledger 34, 999.31 |
+| verify-branding-identity-release | FAIL | FAIL, after rebuild PASS, gate PASS | path 2, objdir-release rebuilt (1429 s) |
+| mar-update-hop | FAIL | FAIL | owner step, ledger 30, 999.32 |
+| ng063-packaged-launch | FAIL | FAIL | owner step (container tarball), ledger 30 |
+| portable-elf | FAIL | FAIL | ledger 30 |
+| sidecar-no-symlinks | FAIL | FAIL | ledger 30 |
+| package-target-natives | FAIL | FAIL | ledger 30 |
+| packaged-identity | FAIL | FAIL | ledger 30 |
+| install-matrix | FAIL | FAIL | ledger 30 |
+| ng065-mar-signature-enforced | FAIL | FAIL | ledger 30 |
+| ng072-policies-packaged-webextension | FAIL | FAIL | ledger 30 |
+| search-engines-packaged | FAIL | FAIL | ledger 30 |
+| ng074-ci-green-on-main | FAIL | FAIL | owner push, ledger 31, 999.32 |
+| ng089-uat-sheets | FAIL | FAIL | owner-deferred NG-084 UAT pass, ledger 35, 999.32 |
+| shell01-theia-is-the-window | FAIL | FAIL, after fix PASS, gate PASS | path 1, harness fix 02570bcd |
+| start-failure-shows-error | FAIL | FAIL, rerun FAIL | defect, ledger 36, 999.31 |
+| pan04-undo-close-group-live | FAIL | FAIL, rerun FAIL | defect (harness or product), ledger 37, 999.31 |
+| ng-018-scheduled-integrity-check | FAIL (flaky) | PASS | baseline flake; PASS in both final runs |
+| ng-023-suggestions-history-bookmarks | FAIL | FAIL, rerun FAIL | defect, ledger 38, 999.31 |
+| first-boot-surface-fresh | FAIL | FAIL, rerun FAIL | defect, ledger 41, 999.31 |
+| macos-package-payload | FAIL | FAIL | macOS deferred to v1.7 (R4), ledger 32 |
+| macos-install-matrix | FAIL | FAIL | ledger 32 |
+| repo-controls | FAIL (78 problems) | FAIL (5 problems) | owner state, ledger 31 |
+| channel-live | FAIL | FAIL | no published Release, ledger 31 |
+| updates-repo-static | FAIL | PASS | environment changed (updates repo no longer empty) |
+| website-publish-ready | FAIL | PASS | environment changed (placeholders filled) |
+| codeberg-mirror-live | FAIL | FAIL | slug undeclared, ledger 31 |
+| upptime-sweep-live | FAIL | FAIL | slug undeclared, ledger 31 |
+| win-matrix-record | FAIL | FAIL | record absent, ledger 31 |
+| win-download-copy | FAIL (fetch failed) | FAIL (record absent) | ledger 31 |
+| win-sign-chain | FAIL | PASS | environment changed (site reachable) |
+| ng067-frontend-errors-reach-telemetry | PASS | FAIL, rerun PASS PASS, gate PASS | flaky, ledger 42, 999.30 |
+| extension-actions-live | PASS (session 2 added later in 39-13) | FAIL | expected, private-access session 2, ledger 29, 999.17 |
+| extension-actions-live-self-test | PASS | FAIL | same control, ledger 29 |
+| page-tools-live | PASS | PASS | no red; pre-emptive exclusion for the crash-navigate flake, ledger 28, 999.29 |
+
+Class counts for the 36 reds of the final full run: fixed in 39-19 2 (path 1, path 2), expected-documented 3 (ledger 25, 29), flaky with rerun evidence 2, defect with ledger entry and backlog row 8, owner or environment step 21. Baseline reds green in the final run: 7 (3 fixed by fix plans, 3 environment changes, the ng-018 flake).
