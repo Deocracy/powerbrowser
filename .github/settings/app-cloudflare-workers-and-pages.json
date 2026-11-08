@@ -1,0 +1,17 @@
+{
+  "slug": "cloudflare-workers-and-pages",
+  "third_party": true,
+  "permissions": {
+    "administration": "write",
+    "checks": "write",
+    "contents": "write",
+    "deployments": "write",
+    "metadata": "read",
+    "pull_requests": "write"
+  },
+  "repository_selection": "selected",
+  "repositories": [
+    "powerbrowser-updates",
+    "powerbrowser-website"
+  ]
+}

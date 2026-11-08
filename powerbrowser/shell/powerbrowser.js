@@ -104,6 +104,9 @@ document.addEventListener(
       get currentURI() {
         return host.currentURI();
       },
+      // tabs.create of an extension or about: page passes gBrowser to PrivateBrowsingUtils.isBrowserPrivate, which reads
+      // its documentGlobal (ext-tabs.js:618, :727); upstream's tabbrowser carries it (tabbrowser.js:345).
+      documentGlobal: window,
       pinnedTabCount: 0,
       tabGroups: [],
       getTabForBrowser(browser) {

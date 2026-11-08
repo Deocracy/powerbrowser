@@ -4,7 +4,7 @@
 // The renovate-config row (Phase 51, AUTO-02). The workflows row reads workflow YAML only, so it
 // cannot assert the semantics of the Renovate config: the Theia packageRule grouping, the monaco
 // exception, the regex customManager that reads theia_release, automerge, nix, the branch prefix,
-// the post-upgrade hook and the absence of any clock key. This row checks .github/renovate.json5
+// the absence of the post-upgrade hook and of any clock key. This row checks .github/renovate.json5
 // read as text. It does not replace zizmor or the workflows row, which audit any workflow a later
 // job adds.
 //
@@ -15,8 +15,8 @@
 //  - The monaco packageRule must select exactly @theia/monaco-editor-core.
 //  - The regex customManager's matchStrings must capture the live theia_release read from
 //    configuration.toml. A pattern that captures nothing, or another value, is red.
-//  - The post-upgrade commands and fileFilters are the licensing contract. Each named input must
-//    exist in the tree.
+//  - The licensing generator and its two outputs must exist in the tree: the renovate-licensing job
+//    in release-train.yml runs it on the Theia branch (owner answer A4).
 //  - No clock key (schedule, timezone) exists at any depth of the config.
 //
 // Rules (the name in brackets is the rule a red line names):
@@ -44,13 +44,13 @@
 //  [scope]                  every non-@theia/* dependency (devDependencies, dependencies, engines, and
 //                           the flake root inputs) is disabled by a packageRule, and no @theia/*
 //                           resolution is. Without it Renovate opens chore/theia- branches for them.
-//  [licensing-hook]         postUpgradeTasks commands are the two licensing commands, fileFilters
-//                           are the four inputs, and executionMode is branch.
-//  [licensing-inputs]       each fileFilters entry and each licensing generator exists in the tree.
+//  [no-post-upgrade]        postUpgradeTasks is absent. Renovate runs the hook in its own container clone,
+//                           which has no applied upstream/, so the generator fails there (BLOCKED.md item 18).
+//  [licensing-inputs]       the licensing generator and its two outputs exist in the tree.
 //  [allowed-post-upgrade]   allowedPostUpgradeCommands is absent from the repository config: it is
 //                           a self-hosted option, and Renovate ignores a repository value.
-//  [allow-list]             WR-03: every key at the top level, in a packageRule, a customManager, the post-upgrade
-//                           hook and vulnerabilityAlerts is in the explicit set AUTO-02 needs (TOP_KEYS etc.).
+//  [allow-list]             WR-03: every key at the top level, in a packageRule, a customManager
+//                           and vulnerabilityAlerts is in the explicit set AUTO-02 needs (TOP_KEYS etc.).
 //  [required-key]           each AUTO-02 key (REQUIRED_TOP) is present.
 //  [extends]                no preset: extends pulls in defaults that AUTO-02 does not want.
 //  [lock-file-maintenance]  the lockfile-maintenance key is absent.
@@ -61,9 +61,9 @@
 //  [rule-order]             packageRules are simulated in order: every non-@theia name, and an unlisted probe,
 //                           ends with enabled false, so a later catch-all cannot re-enable a dependency.
 //
-// Not checked here: the admission of renovatebot/github-action. No workflow uses it in this change,
-// so there is nothing to admit. The workflows row's admission-used and uses-admitted rules cover
-// it when a job lands.
+// Not checked here: the renovate-theia and renovate-licensing jobs in release-train.yml (plans 51-05, 51-08).
+// The workflows row covers their admission (admission-used, uses-admitted) and their shape (renovate-job): no
+// post-upgrade allow-list, and the licensing job on the branch this file's branchPrefix and theia groupSlug name.
 //
 // Usage: node scripts/verify-renovate-config.mjs              the tree (quick)
 //        node scripts/verify-renovate-config.mjs --self-test  one planted fault per rule, in memory
@@ -83,18 +83,15 @@ const MONACO = '@theia/monaco-editor-core';
 const THEIA_GROUP = 'theia';
 const MONACO_GROUP = 'theia-monaco-editor-core';
 const BRANCH_PREFIX = 'chore/theia-';
-const LICENSING_COMMANDS = ['node scripts/generate-licensing.mjs', 'node scripts/generate.mjs --check'];
-const LICENSING_SCRIPTS = ['scripts/generate-licensing.mjs', 'scripts/generate.mjs'];
-const FILE_FILTERS = ['THIRD-PARTY-NOTICES.txt', 'LICENSING.md', 'theia/yarn.lock', 'configuration.toml'];
+const LICENSING_INPUTS = ['scripts/generate-licensing.mjs', 'THIRD-PARTY-NOTICES.txt', 'LICENSING.md'];
 const CLOCK_KEYS = ['schedule', 'timezone'];
 const TOML_LINE = /^theia_release\s*=\s*"([^"]+)"/m;
 // WR-03 allow-list: exactly the keys AUTO-02 needs. Any other key, at any of these levels, is refused.
-const TOP_KEYS = ['$schema', 'automerge', 'platformAutomerge', 'rangeStrategy', 'branchPrefix', 'ignorePaths', 'packageRules', 'customManagers', 'postUpgradeTasks', 'vulnerabilityAlerts', 'osvVulnerabilityAlerts'];
-const REQUIRED_TOP = ['automerge', 'platformAutomerge', 'rangeStrategy', 'branchPrefix', 'ignorePaths', 'packageRules', 'customManagers', 'postUpgradeTasks', 'vulnerabilityAlerts', 'osvVulnerabilityAlerts'];
+const TOP_KEYS = ['$schema', 'automerge', 'platformAutomerge', 'rangeStrategy', 'branchPrefix', 'ignorePaths', 'packageRules', 'customManagers', 'vulnerabilityAlerts', 'osvVulnerabilityAlerts'];
+const REQUIRED_TOP = ['automerge', 'platformAutomerge', 'rangeStrategy', 'branchPrefix', 'ignorePaths', 'packageRules', 'customManagers', 'vulnerabilityAlerts', 'osvVulnerabilityAlerts'];
 const RULE_KEYS = ['matchPackageNames', 'enabled', 'groupName', 'groupSlug', 'rangeStrategy'];
 const GROUP_KEYS = ['matchPackageNames', 'groupName', 'groupSlug', 'rangeStrategy'];
 const MANAGER_KEYS = ['customType', 'managerFilePatterns', 'matchStrings', 'datasourceTemplate', 'depNameTemplate'];
-const HOOK_KEYS = ['commands', 'fileFilters', 'executionMode'];
 const ALERT_KEYS = ['enabled'];
 
 const args = process.argv.slice(2);
@@ -271,7 +268,6 @@ function runChecks(root = REPO_ROOT, overrides = {}) {
     };
     toList(cfg.packageRules).forEach((r, i) => { if (isObj(r)) allowLevel(`$.packageRules[${i}]`, r, RULE_KEYS); });
     toList(cfg.customManagers).forEach((m, i) => { if (isObj(m)) allowLevel(`$.customManagers[${i}]`, m, MANAGER_KEYS); });
-    if (isObj(cfg.postUpgradeTasks)) allowLevel('$.postUpgradeTasks', cfg.postUpgradeTasks, HOOK_KEYS);
     if (isObj(cfg.vulnerabilityAlerts)) allowLevel('$.vulnerabilityAlerts', cfg.vulnerabilityAlerts, ALERT_KEYS);
 
     // Named refusals, one rule each, for the settings a presence check alone would let through.
@@ -460,30 +456,21 @@ function runChecks(root = REPO_ROOT, overrides = {}) {
         }
     }
 
-    // The licensing hook.
-    const pu = cfg.postUpgradeTasks ?? {};
-    const commands = toList(pu.commands);
-    const fileFilters = toList(pu.fileFilters);
-    if (!sameSet(commands, LICENSING_COMMANDS)) {
-        fail('licensing-hook', `commands [${commands.join(', ')}]`, `the post-upgrade commands must be exactly: ${LICENSING_COMMANDS.join('; ')}`);
-    }
-    if (!sameSet(fileFilters, FILE_FILTERS)) {
-        fail('licensing-hook', `fileFilters [${fileFilters.join(', ')}]`, `extra [${diff(fileFilters, FILE_FILTERS).join(', ')}], missing [${diff(FILE_FILTERS, fileFilters).join(', ')}]; the inputs are exactly the four notice and pin files`);
-    }
-    if (pu.executionMode !== 'branch') {
-        fail('licensing-hook', `executionMode = ${JSON.stringify(pu.executionMode)}`, 'executionMode must be branch: update runs the generator once per package, not once per branch');
+    // The licensing regeneration runs in the renovate-licensing job, never as a Renovate hook (owner answer A4).
+    if ('postUpgradeTasks' in cfg) {
+        fail('no-post-upgrade', 'postUpgradeTasks', 'Renovate runs the hook in its own container clone, which has no applied upstream/, so the licensing generator fails there (BLOCKED.md item 18). Remove it; the renovate-licensing job in release-train.yml regenerates the notices');
     }
     // absent (an override) names inputs to treat as missing, so a plant needs no scratch copy on disk.
     const absent = overrides.absent ?? [];
-    for (const f of [...FILE_FILTERS, ...LICENSING_SCRIPTS]) {
+    for (const f of LICENSING_INPUTS) {
         if (absent.includes(f) || !existsSync(join(root, f))) {
-            fail('licensing-inputs', f, `${f} is named by the licensing hook but is not in the tree`);
+            fail('licensing-inputs', f, `${f} is run or written by the renovate-licensing job but is not in the tree`);
         }
     }
 
     // A repository config cannot allow post-upgrade commands; the job environment does.
     if ('allowedPostUpgradeCommands' in cfg) {
-        fail('allowed-post-upgrade', 'allowedPostUpgradeCommands', 'a self-hosted option that Renovate ignores in the repository config; set RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS in the job environment instead');
+        fail('allowed-post-upgrade', 'allowedPostUpgradeCommands', 'a self-hosted option that Renovate ignores in the repository config; and this config runs no post-upgrade command');
     }
 
     const facts = {
@@ -507,7 +494,7 @@ function run() {
         console.error(`${NAME}: FAIL -- ${failures.length} rule(s) red in ${CONFIG_REL}. Next step: fix the rule named above in ${CONFIG_REL}, or the file it names.`);
         return 1;
     }
-    console.log(`${NAME}: PASS -- ${CONFIG_REL}: the theia group selects ${facts.theiaMembers} @theia/* pins with ${MONACO} in its own pinned group; theia_release ${facts.release} is captured by one regex manager; automerge and platformAutomerge off; nix manager off (flake.lock not moved, BLOCKED.md item 5); branchPrefix ${BRANCH_PREFIX}; no clock key; every non-Theia dependency disabled (${facts.nonTheia}); ${LICENSING_COMMANDS.length} post-upgrade commands and ${FILE_FILTERS.length} file filters`);
+    console.log(`${NAME}: PASS -- ${CONFIG_REL}: the theia group selects ${facts.theiaMembers} @theia/* pins with ${MONACO} in its own pinned group; theia_release ${facts.release} is captured by one regex manager; automerge and platformAutomerge off; nix manager off (flake.lock not moved, BLOCKED.md item 5); branchPrefix ${BRANCH_PREFIX}; no clock key; every non-Theia dependency disabled (${facts.nonTheia}); no post-upgrade hook (the renovate-licensing job regenerates the notices)`);
     return 0;
 }
 
@@ -542,12 +529,11 @@ function selfTest() {
             datasourceTemplate: 'npm',
             depNameTemplate: '@theia/core',
         }],
-        postUpgradeTasks: { commands: LICENSING_COMMANDS, fileFilters: FILE_FILTERS, executionMode: 'branch' },
     };
     const fixtureNames = { '@theia/core': '1.76.0', '@theia/ai-core': '1.76.0', [MONACO]: '1.108.201' };
     const clean = runChecks(REPO_ROOT, { configText: JSON.stringify(minimal), resolutions: fixtureNames, theiaRelease: '1.76.0' });
     if (clean.failures.length === 0) {
-        console.log('  ok  minimal clean fixture (two groups pinned, manager, automerge off, hook) -> green');
+        console.log('  ok  minimal clean fixture (two groups pinned, manager, automerge off, no hook) -> green');
     } else {
         console.error(`${NAME}: --self-test FAIL -- the clean fixture went red: ${clean.failures.map(f => `[${f.rule}] ${f.value}`).join('; ')}`);
         failed += 1;
@@ -599,20 +585,17 @@ function selfTest() {
         { label: 'enabledManagers set beside the allow-list', rule: 'allow-list', mutate: c => { c.enabledManagers = ['npm']; } },
         { label: 'unknown key inside a packageRule', rule: 'allow-list', mutate: c => { c.packageRules[0].prConcurrentLimit = 0; } },
         { label: 'theia_release manager matches every configuration.toml', rule: 'manager-file-patterns', mutate: c => { manager(c).managerFilePatterns = ['/configuration\\.toml$/']; } },
-        { label: 'post-upgrade hook gains a curl pipe', rule: 'licensing-hook', mutate: c => { c.postUpgradeTasks.commands.push('curl x|sh'); } },
+        { label: 'post-upgrade hook restored', rule: 'no-post-upgrade', mutate: c => { c.postUpgradeTasks = { commands: ['node scripts/generate-licensing.mjs'], fileFilters: ['THIRD-PARTY-NOTICES.txt'], executionMode: 'branch' }; } },
         { label: 'required rangeStrategy removed', rule: 'required-key', mutate: c => { delete c.rangeStrategy; } },
         { label: 'config is a bare array, not an object', rule: 'config-parse', overrides: { configText: '[]' } },
         { label: 'schedule key at top level', rule: 'no-clock', mutate: c => { c.schedule = ['before 5am']; } },
         { label: 'timezone key inside a packageRule', rule: 'no-clock', mutate: c => { c.packageRules[0].timezone = 'UTC'; } },
         { label: 'branchPrefix renovate/', rule: 'branch-prefix', mutate: c => { c.branchPrefix = 'renovate/'; } },
-        { label: 'licensing generator dropped from the hook', rule: 'licensing-hook', mutate: c => { c.postUpgradeTasks.commands = [LICENSING_COMMANDS[1]]; } },
-        { label: 'flake.lock added to fileFilters', rule: 'licensing-hook', mutate: c => { c.postUpgradeTasks.fileFilters.push('flake.lock'); } },
-        { label: 'workflow path added to fileFilters', rule: 'licensing-hook', mutate: c => { c.postUpgradeTasks.fileFilters.push('.github/workflows/verify.yml'); } },
-        { label: 'hook executionMode update', rule: 'licensing-hook', mutate: c => { c.postUpgradeTasks.executionMode = 'update'; } },
+        { label: 'an empty post-upgrade hook', rule: 'no-post-upgrade', mutate: c => { c.postUpgradeTasks = {}; } },
         { label: 'allowedPostUpgradeCommands set in the repository config', rule: 'allowed-post-upgrade', mutate: c => { c.allowedPostUpgradeCommands = ['^node scripts/generate\\.mjs --check$']; } },
         { label: 'licensing notices file missing from the tree', rule: 'licensing-inputs', overrides: { absent: ['THIRD-PARTY-NOTICES.txt'] } },
         { label: 'licensing generator missing from the tree', rule: 'licensing-inputs', overrides: { absent: ['scripts/generate-licensing.mjs'] } },
-        { label: 'generate check missing from the tree', rule: 'licensing-inputs', overrides: { absent: ['scripts/generate.mjs'] } },
+        { label: 'licensing summary missing from the tree', rule: 'licensing-inputs', overrides: { absent: ['LICENSING.md'] } },
         { label: 'config file missing', rule: 'config-file', overrides: { configText: null } },
         { label: 'config file unparsable', rule: 'config-parse', overrides: { configText: '{"automerge": false' } },
     ];

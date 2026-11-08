@@ -13,6 +13,7 @@ import * as React from '@theia/core/shared/react';
 import { createPortal } from '@theia/core/shared/react-dom';
 import { inject, injectable } from '@theia/core/shared/inversify';
 import { ApplicationShell, ContextMenuRenderer, ReactWidget } from '@theia/core/lib/browser';
+import { FrontendApplicationStateService } from '@theia/core/lib/browser/frontend-application-state';
 import { CommandMenu, CompoundMenuNode, MenuPath } from '@theia/core/lib/common';
 import { ChromeStoreClient } from '@powerbrowser/tab-uris/lib/browser/chrome-store-client';
 import { ExtensionActionRow, WebTabChannel } from '@powerbrowser/tab-uris/lib/browser/web-tab';
@@ -169,6 +170,9 @@ export class ExtensionActionsWidget {
     @inject(ApplicationShell)
     protected readonly shell: ApplicationShell;
 
+    @inject(FrontendApplicationStateService)
+    protected readonly stateService: FrontendApplicationStateService;
+
     /** The bar widget this renders into; its update() repaints the buttons. */
     protected host: ReactWidget | undefined;
     protected rows: ExtensionActionRow[] = [];
@@ -181,6 +185,8 @@ export class ExtensionActionsWidget {
     protected puzzle: HTMLButtonElement | null = null;
     /** Phase 38 plan 04 (B5): the side-panel view the open extension sidebar shows in, made on first use. */
     protected sidebar: ExtensionSidebarView | undefined;
+    /** The extension whose sidebar the view was last shown for; a push opening another one reveals the view again. */
+    protected sidebarRevealed = '';
     /** Stable, so React calls it only on mount and unmount. */
     protected puzzleRef = (el: HTMLButtonElement | null): void => {
         this.puzzle = el;
@@ -245,6 +251,7 @@ export class ExtensionActionsWidget {
     protected syncSidebar(): void {
         const open = this.rows.find(row => row.sidebarOpen && row.sidebarTitle !== null);
         if (!open) {
+            this.sidebarRevealed = '';
             this.sidebar?.dismiss();
             return;
         }
@@ -257,9 +264,24 @@ export class ExtensionActionsWidget {
             );
         }
         this.sidebar.showSidebar(open.extensionId, open.sidebarTitle ?? '');
-        if (!this.sidebar.isAttached) {
-            void this.shell.addWidget(this.sidebar, { area: 'right' }).then(() => this.shell.revealWidget(ExtensionSidebarView.ID));
-        }
+        const view = this.sidebar;
+        const reveal = this.sidebarRevealed !== open.extensionId;
+        this.sidebarRevealed = open.extensionId;
+        // 38 T29 (WR-05): after a frontend reload the first push arrives while the shell restores its layout, and that
+        // restore collapsed the right panel the view had just been revealed in. Place it once the shell is ready.
+        void this.stateService.reachedState('ready').then(async () => {
+            if (view !== this.sidebar || view.isDisposed) {
+                return;
+            }
+            const add = !view.isAttached;
+            if (add) {
+                await this.shell.addWidget(view, { area: 'right' });
+            }
+            // A newly opened sidebar is shown even when the view is already attached but hidden.
+            if (add || (reveal && !view.isVisible)) {
+                await this.shell.revealWidget(ExtensionSidebarView.ID);
+            }
+        });
     }
 
     /** Phase 38 plan 04 (B5): Show Sidebar / Hide Sidebar; chrome opens or closes the page and the push moves the view. */

@@ -26,11 +26,12 @@
 #     it must be path-safe: a display form with a space would produce a path
 #     containing a space -- against this repo's hard rule that its path
 #     carries no space. The two may hold the same value only when the display
-#     form is itself path-safe, as "Deocracy" is (R7).
+#     form is itself path-safe. Here they differ: the display form "Deocracy
+#     Institute" carries a space, so the machine form is "Deocracy" (R7).
 
 [product]
 vendor_machine = "Deocracy"
-vendor_display = "Deocracy"
+vendor_display = "Deocracy Institute"
 description = "A rebrandable browser platform: a Gecko shell hosting an Eclipse Theia sidecar as its default GUI."
 homepage = "https://powerbrowser.org"
 # The release key is v<ESR>-<revision> (REL-01). Reset to 1 when the ESR pin
@@ -46,8 +47,8 @@ distribution_id = "org.debios"
 
 [legal]
 license = "PolyForm Noncommercial 1.0.0"
-copyright_holder = "Deocracy"
-trademark_notice = "PowerBrowser is a trademark of Deocracy."
+copyright_holder = "Deocracy Institute"
+trademark_notice = "PowerBrowser is a trademark of Deocracy Institute."
 
 [theia]
 default_theme = "dark"

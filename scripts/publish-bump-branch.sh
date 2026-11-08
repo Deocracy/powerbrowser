@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# scripts/publish-bump-branch.sh <branch> <base-sha>
+# scripts/publish-bump-branch.sh <branch> <base-sha> [<expected-remote-tip>]
 #
 # Publishes HEAD to refs/heads/<branch> on origin for the release train (Phase 43, CR-01).
 # It reads the remote branch through the GitHub API (GET requests only), asks the pure
 # publishPlan in scripts/release-train.mjs what may happen, and pushes only when that plan
 # allows it. A remote branch that carries a commit the bot App did not author is never
-# overwritten, and a branch that already carries this tree is not pushed again.
+# overwritten, and a branch that already carries this tree is not pushed again. With a third
+# argument the remote tip must be exactly that commit, or the plan refuses (renovate-licensing-publish
+# pins the branch head its notices were generated from).
 #
 # Needs in the environment: GH_TOKEN (the App installation token, used for the API reads and
 # the push), GITHUB_REPOSITORY, and BOT_EMAIL (the author address the bot commits with).
@@ -22,6 +24,7 @@ GIT_SAFE=(-c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributes
 
 BRANCH="${1:?usage: publish-bump-branch.sh <branch> <base-sha>}"
 BASE="${2:?usage: publish-bump-branch.sh <branch> <base-sha>}"
+EXPECT_TIP="${3:-}"
 : "${GH_TOKEN:?GH_TOKEN is required}"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 : "${BOT_EMAIL:?BOT_EMAIL is required}"
@@ -35,9 +38,9 @@ TREE=""
 CMP=""
 if TIP=$(gh api "repos/${GITHUB_REPOSITORY}/branches/${BRANCH}" --jq '.commit.sha' 2>"$ERR"); then
   TREE=$(gh api "repos/${GITHUB_REPOSITORY}/git/commits/${TIP}" --jq '.tree.sha')
-  # The commits on the remote branch that the base does not have, with their author addresses.
+  # The commits on the remote branch that the base does not have, with their author and committer addresses.
   # release-train.mjs refuses when the listing is shorter than the total.
-  CMP=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BASE}...${TIP}" --jq '{total: .total_commits, emails: [.commits[].commit.author.email]}')
+  CMP=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BASE}...${TIP}" --jq '{total: .total_commits, emails: [.commits[].commit.author.email], committers: [.commits[].commit.committer.email]}')
 else
   if ! grep -q 'HTTP 404' "$ERR"; then
     cat "$ERR" >&2
@@ -50,7 +53,7 @@ LOCAL_TREE=$(git "${GIT_SAFE[@]}" rev-parse 'HEAD^{tree}')
 # The plan is read from the script's own checkout, so the caller can run this with another repository as the working
 # directory (the fix-pr job publishes target/ while the trusted scripts come from main) without running that tree's code.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PLAN=$(node "$HERE/release-train.mjs" --publish-plan "$LOCAL_TREE" "$TIP" "$TREE" "$CMP" "$BOT_EMAIL")
+PLAN=$(node "$HERE/release-train.mjs" --publish-plan "$LOCAL_TREE" "$TIP" "$TREE" "$CMP" "$BOT_EMAIL" "$EXPECT_TIP")
 ACTION=$(sed -n 's/^publish=//p' <<<"$PLAN")
 EXPECT=$(sed -n 's/^expect=//p' <<<"$PLAN")
 

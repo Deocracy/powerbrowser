@@ -23,6 +23,11 @@
 //  der         verify_mar verifies with signmar -v and then with scripts/verify-mar-signature.mjs
 //              (node:crypto, independent of signmar) against powerbrowser/packaging/mar/mar-primary.der,
 //              the tracked certificate, and that file exists in the tree.
+//  windows     the same over publish-windows (owner answer A2): win_mar_channel_gate reads
+//              ACCEPTED_MAR_CHANNEL_IDS from mozconfig-windows-x86_64 (which must carry the derived id)
+//              and exits 1 on a mismatch; then win_sign_mar (signmar -s), then win_verify_mar (signmar -v
+//              and node:crypto against the DER), all fail-closed on the pinned signmar; the assemble step
+//              copies the versioned MAR from the signed path and runs after the verify and before r2_copy.
 //
 // Honestly --quick: reads the tree (release.yml, mozconfig.release, configuration.toml, the DER)
 // and parses YAML (js-yaml from theia/). Its self-test plants each fault in memory and writes
@@ -42,6 +47,8 @@ const SELF_REL = 'scripts/verify-mar-channel-gate.mjs';
 const RELEASE_REL = '.github/workflows/release.yml';
 const MOZCONFIG_REL = 'powerbrowser/packaging/mozconfig.release';
 const DER_REL = 'powerbrowser/packaging/mar/mar-primary.der';
+const WIN_MOZCONFIG_REL = 'powerbrowser/packaging/mozconfig-windows-x86_64';
+const WIN_SIGNED = '"$RUNNER_TEMP/signed/$BASE.complete.mar"';
 
 const args = process.argv.slice(2);
 for (const a of args) {
@@ -75,9 +82,54 @@ function signPublishSteps(wf) {
     return stepsOf(wf?.jobs?.['sign-publish']);
 }
 
+// publish-windows: the same gate, sign and verify order, and the published MAR is the signed one.
+function windowsChecks(wf, read, marChannelId, fail) {
+    const wfail = (msg, file = RELEASE_REL) => fail('windows', msg, file, 'publish-windows');
+    const moz = read(WIN_MOZCONFIG_REL);
+    if (moz === null || !new RegExp(`^ac_add_options ACCEPTED_MAR_CHANNEL_IDS=${escapeRe(marChannelId)}$`, 'm').test(moz)) {
+        wfail(`${WIN_MOZCONFIG_REL} does not carry ACCEPTED_MAR_CHANNEL_IDS=${marChannelId}, the MAR channel id the derivation names. Next step: run node scripts/generate.mjs.`, WIN_MOZCONFIG_REL);
+    }
+    const steps = stepsOf(wf?.jobs?.['publish-windows']);
+    const at = id => steps.findIndex(s => s.id === id);
+    const ids = ['win_mar_channel_gate', 'win_sign_mar', 'win_verify_mar'];
+    const [gateAt, signAt, verifyAt] = ids.map(at);
+    ids.forEach((id, k) => { if ([gateAt, signAt, verifyAt][k] < 0) wfail(`publish-windows has no step with id ${id}. Next step: restore the step, so the Windows MAR is channel-gated, signed and verified.`); });
+    if (gateAt < 0 || signAt < 0 || verifyAt < 0) return;
+    const [gate, sign, verify] = [gateAt, signAt, verifyAt].map(i => String(steps[i].run ?? ''));
+
+    const mismatch = ifBody(gate, /if \[ -z "\$ACCEPTED" \] \|\| \[ "\$WIN_CHANNEL" != "\$ACCEPTED" \]/);
+    if (!/ACCEPTED_MAR_CHANNEL_IDS/.test(gate) || !gate.includes(WIN_MOZCONFIG_REL) || mismatch === null || !/\bexit 1\b/.test(mismatch)) {
+        wfail(`win_mar_channel_gate does not read ACCEPTED_MAR_CHANNEL_IDS from ${WIN_MOZCONFIG_REL} and exit 1 inside the mismatch branch, so a foreign-channel Windows MAR would be signed. Next step: restore the comparison and its exit 1.`);
+    }
+    [gateAt, signAt, verifyAt].forEach((i, k) => {
+        for (const f of failOpenFaults(steps[i])) wfail(`${ids[k]} step ${f}, so it can pass without doing its work. Next step: remove it.`);
+        if (steps[i].env?.SIGNMAR !== '${{ steps.win_signmar.outputs.path }}' || /signing-tools|LD_LIBRARY_PATH/.test(String(steps[i].run ?? ''))) {
+            wfail(`${ids[k]} does not run the signmar built by the win_signmar step (env SIGNMAR from steps.win_signmar.outputs.path), or references signing-tools or LD_LIBRARY_PATH. Next step: use the signmar built from the pinned source.`);
+        }
+    });
+    if (!(gateAt < signAt && signAt < verifyAt)) {
+        wfail(`publish-windows does not run win_mar_channel_gate, then win_sign_mar, then win_verify_mar in that order. Next step: restore the order.`);
+    }
+    if (!/SIGNMAR/.test(sign) || !/\s-s\s/.test(sign) || !sign.includes(WIN_SIGNED)) {
+        wfail(`win_sign_mar does not sign with signmar -s into ${WIN_SIGNED}. Next step: restore the signing step.`);
+    }
+    if (!/SIGNMAR/.test(verify) || !/\s-v\s/.test(verify) || !verify.includes(`SIGNED_MAR=${WIN_SIGNED}`)
+        || !new RegExp(`certutil -A [^\\n]*-i ${escapeRe(DER_REL)}`).test(verify)
+        || !new RegExp(`node scripts/verify-mar-signature\\.mjs "\\$SIGNED_MAR" ${escapeRe(DER_REL)}`).test(verify)) {
+        wfail(`win_verify_mar does not check ${WIN_SIGNED} with signmar -v and with scripts/verify-mar-signature.mjs (node:crypto), both against ${DER_REL}. Next step: restore both verifiers.`);
+    }
+    const asmAt = steps.findIndex(s => /verify-release-asset-set\.mjs --expected-windows/.test(String(s.run ?? '')));
+    const r2At = at('r2_copy');
+    if (asmAt < 0 || !new RegExp(`versioned-mar\\) cp ${escapeRe(WIN_SIGNED)} `).test(String(steps[asmAt].run ?? ''))) {
+        wfail(`the Windows assemble step does not copy the versioned MAR from the signed path ${WIN_SIGNED}, so an unsigned MAR could reach the MAR origin. Next step: copy from the signed path.`);
+    } else if (!(verifyAt < asmAt && (r2At < 0 || asmAt < r2At))) {
+        wfail(`the Windows assemble step does not run after win_verify_mar and before r2_copy, so a MAR could be copied before it is verified. Next step: restore the order.`);
+    }
+}
+
 function runChecks(root, overrides = {}) {
     const failures = [];
-    const fail = (rule, msg, file = RELEASE_REL) => failures.push({ file, job: 'sign-publish', rule, msg });
+    const fail = (rule, msg, file = RELEASE_REL, job = 'sign-publish') => failures.push({ file, job, rule, msg });
     const read = overrides.read ?? (rel => readText(root, rel));
 
     // 1. The derivation, and the emitted comparands it must match.
@@ -112,6 +164,7 @@ function runChecks(root, overrides = {}) {
         fail('parse', `does not parse as YAML 1.2 (${e.message.split('\n')[0]}). Next step: fix the file.`);
         return { failures };
     }
+    windowsChecks(wf, read, marChannelId, fail);
     const steps = signPublishSteps(wf);
     const at = id => steps.findIndex(s => s.id === id);
     const gateAt = at('mar_channel_gate');
@@ -193,16 +246,17 @@ function main() {
         failures.forEach(f => console.error(`  ${fmt(f)}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- sign-publish refuses a MAR whose product-info channel is not ACCEPTED_MAR_CHANNEL_IDS '${marChannelId}' (update channel '${channel}') before signmar -s; signmar -v verifies against ${DER_REL} before any upload.`);
+    console.log(`${NAME}: PASS -- sign-publish refuses a MAR whose product-info channel is not ACCEPTED_MAR_CHANNEL_IDS '${marChannelId}' (update channel '${channel}') before signmar -s; signmar -v verifies against ${DER_REL} before any upload; publish-windows gates, signs and verifies its MAR the same way and copies only the signed bytes.`);
     return 0;
 }
 
 // Swaps two steps of the workflow text by line range: a step runs from its `      - ` line to the
 // next step or the next job-level key, so the job below sign-publish is never moved.
-function swapSteps(text, idA, idB) {
+function swapSteps(text, idA, idB, job = 'sign-publish') {
     const lines = text.split('\n');
+    const jobAt = lines.indexOf(`  ${job}:`);
     const blockOf = id => {
-        const at = lines.findIndex(l => l === `        id: ${id}`);
+        const at = lines.findIndex((l, i) => i > jobAt && l === `        id: ${id}`);
         if (at < 0) throw new Error(`self-test anchor ${id} is absent from ${RELEASE_REL}`);
         let start = at;
         while (start > 0 && !/^ {6}- /.test(lines[start])) start -= 1;
@@ -234,6 +288,13 @@ function selfTest() {
         if (!real.includes(from)) throw new Error(`self-test anchor '${from}' is absent from ${RELEASE_REL}`);
         return real.replace(from, to);
     };
+    // The first occurrence inside publish-windows: sign-windows carries the same step ids.
+    const winEdit = (from, to) => {
+        const start = real.indexOf('\n  publish-windows:\n');
+        const at = start < 0 ? -1 : real.indexOf(from, start);
+        if (at < 0) throw new Error(`self-test anchor '${from.trim()}' is absent from publish-windows in ${RELEASE_REL}`);
+        return real.slice(0, at) + to + real.slice(at + from.length);
+    };
     const plants = [
         // A foreign-channel MAR is accepted: the mismatch refusal is removed.
         ['foreign-channel MAR accepted (mismatch refusal removed)', edit('[ "$MAR_CHANNEL" != "$ACCEPTED" ]', 'false'), 'ACCEPTED_MAR_CHANNEL_IDS'],
@@ -252,16 +313,27 @@ function selfTest() {
         ['signer taken from the runner artifact', edit('SIGNMAR: ${{ steps.signmar.outputs.path }}', 'SIGNMAR: signing-tools/signmar'), 'pinned source'],
         // Signing and verification swapped: the MAR is verified before it is signed.
         ['sign-before-verify swap', swapSteps(real, 'sign_mar', 'verify_mar'), 'verify_mar runs before sign_mar'],
+        // publish-windows (owner answer A2).
+        ['Windows channel gate removed', winEdit('        id: win_mar_channel_gate\n', '        id: win_mar_channel_gate_x\n'), 'win_mar_channel_gate'],
+        ['Windows channel mismatch accepted', winEdit('[ "$WIN_CHANNEL" != "$ACCEPTED" ]', 'false'), 'mismatch branch'],
+        ['Windows channel gate continue-on-error', winEdit('        id: win_mar_channel_gate\n', '        id: win_mar_channel_gate\n        continue-on-error: true\n'), 'continue-on-error'],
+        ['Windows signmar -v removed', winEdit('"$SIGNMAR" -d "$V" -n powerbrowser-mar -v "$SIGNED_MAR"\n', ''), 'win_verify_mar does not check'],
+        ['Windows node:crypto verify removed', winEdit('node scripts/verify-mar-signature.mjs "$SIGNED_MAR" ' + DER_REL, 'true'), 'win_verify_mar does not check'],
+        ['Windows verify step removed', winEdit('        id: win_verify_mar\n', '        id: win_verify_mar_x\n'), 'win_verify_mar'],
+        ['Windows unsigned MAR assembled', winEdit('versioned-mar) cp "$RUNNER_TEMP/signed/$BASE.complete.mar" ', 'versioned-mar) cp "windows/$BASE.complete.mar" '), 'unsigned MAR could reach'],
+        ['Windows sign before gate', swapSteps(real, 'win_mar_channel_gate', 'win_sign_mar', 'publish-windows'), 'in that order'],
+        ['Windows signer from the runner artifact', winEdit('SIGNMAR: ${{ steps.win_signmar.outputs.path }}', 'SIGNMAR: signing-tools/signmar'), 'win_signmar step'],
+        ['Windows mozconfig loses the MAR id', { read: rel => (rel === WIN_MOZCONFIG_REL ? readText(REPO_ROOT, rel).replace(/^ac_add_options ACCEPTED_MAR_CHANNEL_IDS.*$/m, '') : readText(REPO_ROOT, rel)) }, 'ACCEPTED_MAR_CHANNEL_IDS', WIN_MOZCONFIG_REL],
     ];
 
     let failed = 0;
-    for (const [name, text, value] of plants) {
-        const { failures } = runChecks(REPO_ROOT, { text });
-        const hit = failures.some(f => f.file === RELEASE_REL && f.msg.includes(value));
+    for (const [name, plant, value, file = RELEASE_REL] of plants) {
+        const { failures } = runChecks(REPO_ROOT, typeof plant === 'string' ? { text: plant } : { text: real, ...plant });
+        const hit = failures.some(f => f.file === file && f.msg.includes(value));
         if (hit) {
-            console.log(`  ok  ${name} -> red, naming ${RELEASE_REL} and '${value}'`);
+            console.log(`  ok  ${name} -> red, naming ${file} and '${value}'`);
         } else {
-            console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming ${RELEASE_REL} and '${value}'; got: ${failures.map(fmt).join(' | ') || '(no failures at all)'}`);
+            console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming ${file} and '${value}'; got: ${failures.map(fmt).join(' | ') || '(no failures at all)'}`);
             failed += 1;
         }
     }

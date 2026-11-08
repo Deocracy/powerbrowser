@@ -130,9 +130,10 @@ self_test() {
 
     # purge: a clean stage, then each slash form of the hosted root
     local stage="$t/stage"
-    mkdir -p "$stage"; echo 'clean' > "$stage/a.js"
+    # The clean stage carries an esbuild module key: '/src/' in a module path names no builder checkout.
+    mkdir -p "$stage"; echo '// node_modules/@theia/core/node_modules/debug/src/debug.js' > "$stage/a.js"
     ( purge "$good" "$stage" ) || { echo "check-win-sidecar: --self-test FAIL -- a clean stage was refused" >&2; failed=1; }
-    echo "  ok  clean stage -> admitted by purge"
+    echo "  ok  clean stage with a .../debug/src/... module key -> admitted by purge"
     local form
     for form in 'D:\a\work\work' 'D:/a/work/work' 'D:\\a\\work\\work'; do
         printf 'var p = "%s/x";\n' "$form" > "$stage/leak.js"

@@ -43,6 +43,51 @@ const REPO_ROOT = join(__dirname, '..', '..');
 // checkout, because objdir/dist/bin symlinks into it.
 export const FIREFOX_BIN = process.env.PB_FIREFOX_BIN || join(REPO_ROOT, 'objdir', 'dist', 'bin', 'powerbrowser');
 
+// 39-REVIEW CR-01: the pids of the browsers withFirefoxPage launched that are still running. pb-kwin's real-input
+// gate accepts only a window one of them owns, so a PowerBrowser the owner has open never receives a send.
+const launchedPids = new Set();
+/** The pids of the browsers this process launched through withFirefoxPage that have not exited. */
+export function launchedBrowserPids() {
+    return [...launchedPids];
+}
+
+/**
+ * A BiDi RemoteValue as the plain value the evaluated expression returned. Primitives arrive as their value already;
+ * an object arrives as [key, RemoteValue] pairs and an array as a RemoteValue list, so a caller reading `.field` off
+ * a raw object result reads undefined (found live in the v1.5 end-of-milestone pass). Nodes, windows and other
+ * handle types have no plain form and stay as the RemoteValue.
+ */
+export function fromRemoteValue(rv) {
+    if (!rv || typeof rv !== 'object' || !('type' in rv)) {
+        return rv;
+    }
+    switch (rv.type) {
+        case 'undefined':
+            return undefined;
+        case 'null':
+            return null;
+        case 'number':
+            return typeof rv.value === 'number' ? rv.value : Number(rv.value);
+        case 'bigint':
+            return BigInt(rv.value);
+        case 'string':
+        case 'boolean':
+            return rv.value;
+        case 'array':
+        case 'set':
+            return (rv.value || []).map(fromRemoteValue);
+        case 'object':
+        case 'map':
+            return Object.fromEntries((rv.value || []).map(([k, v]) => [typeof k === 'string' ? k : fromRemoteValue(k), fromRemoteValue(v)]));
+        case 'date':
+            return new Date(rv.value);
+        case 'regexp':
+            return new RegExp(rv.value.pattern, rv.value.flags);
+        default:
+            return rv;
+    }
+}
+
 /**
  * The libpulse directory the build linked against, read from the objdir's config.status next to the
  * binary. Gecko dlopens libpulse by bare name and libxul's RUNPATH does not list it, so a binary run
@@ -358,14 +403,20 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
         ? { ...process.env, LD_LIBRARY_PATH: [pulse, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':') }
         : process.env;
     // `ulimit -c 0; exec` keeps the pid (kill still reaches the browser) and stops crash scenarios writing systemd coredumps.
+    // PB_LIVE_HEADED=1 (39-01): a real window for the KWin capture and the real-input gate
+    // (scripts/lib/pb-kwin.mjs); a headless session has no compositor window and a text-only clipboard.
     const child = spawn('bash', ['-c', 'ulimit -c 0; exec "$@"', 'bash', binPath,
-        '--headless',
+        ...(process.env.PB_LIVE_HEADED === '1' ? [] : ['--headless']),
         '--profile', profileDir,
         `--remote-debugging-port=${port}`,
         '--remote-allow-hosts', '127.0.0.1',
         '--remote-allow-system-access',
         ...(url ? [url] : []),
     ], { env, stdio: ['ignore', stdoutSink ? 'pipe' : 'ignore', 'pipe'] });
+    if (child.pid) {
+        launchedPids.add(child.pid);
+        child.once('exit', () => launchedPids.delete(child.pid));
+    }
     if (stdoutSink) {
         child.stdout.pipe(stdoutSink);
     }
@@ -464,7 +515,7 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
                 target: { context },
                 awaitPromise: true,
             });
-            return result.result.result.value;
+            return fromRemoteValue(result.result.result);
         };
 
         // GUI-02 (14.1-03): the same evaluation against a caller-chosen
@@ -479,7 +530,7 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
                 target: { context: targetContext },
                 awaitPromise: true,
             });
-            return result.result.result.value;
+            return fromRemoteValue(result.result.result);
         };
 
         const screenshot = async () => {

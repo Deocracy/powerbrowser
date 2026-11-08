@@ -57,10 +57,10 @@ returning null.
 
 - [x] **NAV-01**: User sees Reload turn into Stop while a page loads, and can stop it with the button or Esc
 - [x] **NAV-02**: User can bypass the cache with Shift+click Reload, Ctrl+Shift+R or Ctrl+F5
-- [x] **NAV-03**: User can right-click or long-press Back/Forward for a session-history menu and jump to any entry
-- [x] **NAV-04**: User can show a Home button and go home with it or Alt+Home; the home page is a setting
-- [x] **NAV-05**: User sees each button's keyboard shortcut in its tooltip
-- [x] **NAV-06**: User can middle-click Back, Forward or Reload to open the result in a new tab, and drop a link on New Tab to open it
+- [ ] **NAV-03**: User can right-click or long-press Back/Forward for a session-history menu and jump to any entry
+- [ ] **NAV-04**: User can show a Home button and go home with it or Alt+Home; the home page is a setting
+- [ ] **NAV-05**: User sees each button's keyboard shortcut in its tooltip
+- [ ] **NAV-06**: User can middle-click Back, Forward or Reload to open the result in a new tab, and drop a link on New Tab to open it
 
 ### Keyboard shortcuts with the page focused (KEY)
 
@@ -90,44 +90,44 @@ returning null.
 
 ### Page tools (PAGE)
 
-- [x] **PAGE-01**: User can find in page with Ctrl+F and F3: highlight all, match case, whole words, match count, without hiding the page
+- [ ] **PAGE-01**: User can find in page with Ctrl+F and F3: highlight all, match case, whole words, match count, without hiding the page
 - [x] **PAGE-02**: User can zoom a page with Ctrl+plus, Ctrl+minus and Ctrl+0, and sees and resets the zoom level from a chip in the pill
 - [x] **PAGE-03**: User can print the page with the system print dialog (Ctrl+P on a web page)
-- [x] **PAGE-04**: User sees site favicons on tabs, the strip and the pill
-- [x] **PAGE-05**: User sees which tabs play audio and can mute or unmute a tab, including with Ctrl+M
+- [ ] **PAGE-04**: User sees site favicons on tabs, the strip and the pill
+- [ ] **PAGE-05**: User sees which tabs play audio and can mute or unmute a tab, including with Ctrl+M
 - [ ] **PAGE-06**: User can see downloads in a downloads button and panel, open them, show them in the folder, and cancel or retry them
 - [ ] **PAGE-07**: User can make the window full screen with F11 on a web page, and a page can enter its own fullscreen (video) with Firefox's warning
 - [x] **PAGE-08**: User can save the page with Ctrl+S and choose where it goes
 - [x] **PAGE-09**: User can cut, copy, paste and undo inside a focused web page from the Edit menu and the usual keys
-- [x] **PAGE-10**: User can open reader view for article pages, view page source (Ctrl+U) and open page developer tools (F12 on a web page)
-- [x] **PAGE-11**: User sees a crashed tab with a reload button instead of a blank page
+- [ ] **PAGE-10**: User can open reader view for article pages, view page source (Ctrl+U) and open page developer tools (F12 on a web page)
+- [ ] **PAGE-11**: User sees a crashed tab with a reload button instead of a blank page
 
 ### Bookmarks and history (BMK)
 
 - [ ] **BMK-01**: User can bookmark the page with the star or Ctrl+D and sees the star filled for bookmarked pages
 - [ ] **BMK-02**: User can edit a bookmark's name and folder, or remove it, from a popover on the star
-- [ ] **BMK-03**: User can reopen the last closed tab with Ctrl+Shift+T, with its history
+- [x] **BMK-03**: User can reopen the last closed tab with Ctrl+Shift+T, with its history
 - [ ] **BMK-04**: User can show a bookmarks toolbar (Ctrl+Shift+B) that updates live when bookmarks change
 - [ ] **BMK-05**: User can clear recent history (Ctrl+Shift+Del) over a chosen time range, which also clears PowerBrowser's own stores (closed tabs, thumbnails, saved pages, web-tab history)
 - [ ] **BMK-06**: User can open a history menu with recently closed tabs and recent pages
-- [ ] **BMK-07**: User can bookmark one tab or all tabs from the tab menu
+- [x] **BMK-07**: User can bookmark one tab or all tabs from the tab menu
 
 ### Tab strip (TAB)
 
-- [ ] **TAB-01**: User can right-click a tab for Reload, Duplicate, Pin, Mute, Bookmark, Move, and Close Others/Left/Right/Duplicates
-- [ ] **TAB-02**: User can drag tabs to reorder them within the strip
-- [ ] **TAB-03**: User can close a tab with middle-click and open a new tab by double-clicking the empty strip
-- [ ] **TAB-04**: User can scroll an overflowing strip and pick any tab from a List All Tabs menu
+- [x] **TAB-01**: User can right-click a tab for Reload, Duplicate, Pin, Mute, Bookmark, Move, and Close Others/Left/Right/Duplicates
+- [x] **TAB-02**: User can drag tabs to reorder them within the strip
+- [x] **TAB-03**: User can close a tab with middle-click and open a new tab by double-clicking the empty strip
+- [x] **TAB-04**: User can scroll an overflowing strip and pick any tab from a List All Tabs menu
 - [ ] **TAB-05**: User can pin a tab, which shrinks it to its icon and keeps it across restarts
 - [ ] **TAB-06**: User can select several tabs and act on them together
-- [ ] **TAB-07**: User sees a preview card when hovering a tab
+- [x] **TAB-07**: User sees a preview card when hovering a tab
 - [ ] **TAB-08**: User can drop a link onto the strip to open it as a tab
-- [ ] **TAB-09**: User sees an attention mark on a background tab whose title changed
+- [x] **TAB-09**: User sees an attention mark on a background tab whose title changed
 
 ### WebExtensions (EXT, continuing from EXT-03)
 
 - [x] **EXT-04**: A spike records how web tabs become tabs that WebExtensions can see (patch, bridge or chrome-side tab model), with Chris's sign-off before EXT-05..10 are planned
-- [ ] **EXT-05**: An installed Firefox extension sees web tabs in its tabs API (query, events, active tab) as it would in Firefox
+- [x] **EXT-05**: An installed Firefox extension sees web tabs in its tabs API (query, events, active tab) as it would in Firefox
 - [ ] **EXT-06**: User sees extension toolbar buttons and an extensions (puzzle) menu with icon, badge, Pin to Toolbar, Manage and Remove
 - [ ] **EXT-07**: User clicking an extension button opens its popup or runs its action against the active web tab
 - [ ] **EXT-08**: Extension content scripts, page actions and context-menu entries work in web tabs
@@ -226,10 +226,10 @@ Filled by the roadmap (2026-10-20). Phase 26 is reserved for NG-089 and holds no
 | BAR-14 | Phase 29 | Complete |
 | NAV-01 | Phase 27 | Complete |
 | NAV-02 | Phase 27 | Complete |
-| NAV-03 | Phase 27 | Complete |
-| NAV-04 | Phase 27 | Complete |
-| NAV-05 | Phase 27 | Complete |
-| NAV-06 | Phase 27 | Complete |
+| NAV-03 | Phase 27 | Pending |
+| NAV-04 | Phase 27 | Pending |
+| NAV-05 | Phase 27 | Pending |
+| NAV-06 | Phase 27 | Pending |
 | KEY-01 | Phase 27 | Complete |
 | KEY-02 | Phase 27 | Complete |
 | KEY-03 | Phase 27 | Complete |
@@ -247,35 +247,35 @@ Filled by the roadmap (2026-10-20). Phase 26 is reserved for NG-089 and holds no
 | MENU-02 | Phase 31 | Pending |
 | MENU-03 | Phase 33 | Pending |
 | MENU-04 | Phase 31 | Pending |
-| PAGE-01 | Phase 32 | Complete |
+| PAGE-01 | Phase 32 | Pending |
 | PAGE-02 | Phase 32 | Complete |
 | PAGE-03 | Phase 32 | Complete |
-| PAGE-04 | Phase 32 | Complete |
-| PAGE-05 | Phase 32 | Complete |
+| PAGE-04 | Phase 32 | Pending |
+| PAGE-05 | Phase 32 | Pending |
 | PAGE-06 | Phase 32 | Pending |
 | PAGE-07 | Phase 35 | Pending |
 | PAGE-08 | Phase 32 | Complete |
 | PAGE-09 | Phase 32, 33 (Edit menu, greying) | Complete |
-| PAGE-10 | Phase 32 | Complete |
-| PAGE-11 | Phase 32 | Complete |
+| PAGE-10 | Phase 32 | Pending |
+| PAGE-11 | Phase 32 | Pending |
 | BMK-01 | Phase 33 | Pending |
 | BMK-02 | Phase 33 | Pending |
-| BMK-03 | Phase 33 | Pending |
+| BMK-03 | Phase 33 | Complete |
 | BMK-04 | Phase 33 | Pending |
 | BMK-05 | Phase 33 | Pending |
 | BMK-06 | Phase 33 | Pending |
-| BMK-07 | Phase 34 | Pending |
-| TAB-01 | Phase 34 | Pending |
-| TAB-02 | Phase 34 | Pending |
-| TAB-03 | Phase 34 | Pending |
-| TAB-04 | Phase 34 | Pending |
+| BMK-07 | Phase 34 | Complete |
+| TAB-01 | Phase 34 | Complete |
+| TAB-02 | Phase 34 | Complete |
+| TAB-03 | Phase 34 | Complete |
+| TAB-04 | Phase 34 | Complete |
 | TAB-05 | Phase 34 | Pending |
 | TAB-06 | Phase 34 | Pending |
-| TAB-07 | Phase 34 | Pending |
+| TAB-07 | Phase 34 | Complete |
 | TAB-08 | Phase 34 | Pending |
-| TAB-09 | Phase 34 | Pending |
+| TAB-09 | Phase 34 | Complete |
 | EXT-04 | Phase 28 | Complete |
-| EXT-05 | Phase 31.1 | Pending |
+| EXT-05 | Phase 31.1 | Complete |
 | EXT-06 | Phase 38 | Pending |
 | EXT-07 | Phase 38 | Pending |
 | EXT-08 | Phase 38 | Pending |
@@ -299,4 +299,4 @@ Filled by the roadmap (2026-10-20). Phase 26 is reserved for NG-089 and holds no
 
 ---
 *Requirements defined: 2026-10-20*
-*Last updated: 2026-10-20 after v1.5 roadmap (Phases 27–38)*
+*Last updated: 2026-11-07 by plan 39-20: rows ticked by the close-out rule (39-20-DECISIONS.md)*

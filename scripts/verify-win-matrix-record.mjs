@@ -15,8 +15,10 @@
 //  3. registry      the no-residue cell carries the keys the installed product wrote (registry_diff, from the
 //                   guest's registry export, never empty) and the keys that survived the uninstall
 //                   (registry_residue, must be empty). The expected namespace root is DERIVED from the patch
-//                   stack: Software\PowerBrowser once patch 040 writes it, else Software\Mozilla (BLOCKED.md
-//                   item 2 is open), and the other root must not appear in the diff.
+//                   stack: Software\PowerBrowser once patch 040 defines AppRegRoot, else Software\Mozilla, and
+//                   the other root must not appear in the diff. Once moved, Software\Mozilla may appear only under
+//                   the product's own Software\Mozilla\<binary_name>\ subkey (TaskBarIDs and the launcher subkey,
+//                   which compiled readers open), binary_name read from configuration.toml at check time.
 //  4. smartscreen   the launch cell's smartscreen field, which the guest filled from a UI Automation probe of
 //                   the OS (printed only when the dialog was found), equals the SEC-03 block text. The guest
 //                   script must not print that text itself: a line that both names it and prints is red.
@@ -53,6 +55,10 @@ const GUEST_REL = 'scripts/matrix/win-matrix-guest.ps1';
 const PATCH_REL = 'patches/040-powerbrowser-nsis.patch';
 const FORK_ROOT = 'Software\\PowerBrowser';
 const UPSTREAM_ROOT = 'Software\\Mozilla';
+// The product's own subkey under the upstream root, kept for compiled readers (patch 045, BLOCKED.md item 2).
+// null when configuration.toml cannot be read, so the rule then fails closed on every Software\Mozilla line.
+const BINARY_NAME = /^binary_name\s*=\s*"([^"]+)"/m.exec(readFileSync(join(REPO_ROOT, 'configuration.toml'), 'utf8'))?.[1] ?? null;
+const KEPT_PREFIX = BINARY_NAME ? `${UPSTREAM_ROOT}\\${BINARY_NAME}\\` : null;
 const SMARTSCREEN = 'Windows protected your PC';
 const REASONS = ['APPBASEDIR_NOT_WRITABLE', 'SERVICE_REGISTRY_KEY_MISSING', 'NO_APP_UPDATE_BACKGROUND_ENABLED'];
 
@@ -78,8 +84,8 @@ const sameSet = (a, b) => a.length === b.length && a.every(x => b.includes(x));
 
 // The registry namespace the product is expected to write, derived from the patch stack (BLOCKED.md item 2).
 function expectedRoot(patchText) {
-    const moved = patchText !== null && /^\+.*Software\\PowerBrowser/m.test(patchText);
-    return moved ? { expected: FORK_ROOT, other: UPSTREAM_ROOT, moved } : { expected: UPSTREAM_ROOT, other: FORK_ROOT, moved };
+    const moved = patchText !== null && /^\+!define AppRegRoot\s+"Software\\\$\{BrandShortName\}"$/m.test(patchText);
+    return moved ? { expected: FORK_ROOT, other: UPSTREAM_ROOT, moved, kept: KEPT_PREFIX } : { expected: UPSTREAM_ROOT, other: FORK_ROOT, moved, kept: null };
 }
 
 function runChecks(recordText, { label = RECORD_REL, schema, patchText = null, guestText = null } = {}) {
@@ -142,7 +148,8 @@ function runChecks(recordText, { label = RECORD_REL, schema, patchText = null, g
     if (diff.trim() === '') fail('no-residue', 'registry', 'registry_diff is empty, so the installed product wrote no observed key. Next step: capture the guest registry export.');
     else {
         if (!diff.includes(root.expected)) fail('no-residue', 'registry', `the registry diff does not name ${root.expected}, the root the patch stack writes (${root.moved ? 'patch 040 writes the fork root' : 'BLOCKED.md item 2 is open, so the installer still writes the upstream root'}). Next step: capture both hives.`);
-        if (diff.includes(root.other)) fail('no-residue', 'registry', `the registry diff touches ${root.other}, which must stay untouched for this namespace. Next step: move the write under ${root.expected}.`);
+        const stray = diff.split('\n').filter(l => l.includes(root.other) && !(root.kept && l.toLowerCase().includes(root.kept.toLowerCase())));
+        if (stray.length > 0) fail('no-residue', 'registry', `the registry diff touches ${root.other}${root.kept ? ` outside ${root.kept}` : ''}, which must stay untouched for this namespace: ${stray.slice(0, 2).join('; ')}. Next step: move the write under ${root.expected}.`);
     }
     if (residue === null) fail('no-residue', 'registry', 'registry_residue is missing. Next step: capture the registry after the uninstall.');
     else if (residue.trim() !== '') fail('no-residue', 'registry', `registry keys survive the uninstall: ${residue.split('\n').slice(0, 3).join('; ')}. Next step: remove them in the uninstaller.`);
@@ -200,7 +207,8 @@ function guestOutputs(schema, patchMoved = false) {
         launch: { code: 0, out: [`${m('smartscreen')} ${SMARTSCREEN}`, 'PASS launch: stayed up'].join('\n') },
         update: { code: 0, out: [`${m('versionBefore')} 1.0.0`, `${m('versionAfter')} 1.0.1`, 'PASS update: applied'].join('\n') },
         uninstall: { code: 0, out: 'PASS uninstall: removed' },
-        'no-residue': { code: 0, out: [`${m('regDiff')} [HKEY_LOCAL_MACHINE\\${root}\\Launcher]`, 'PASS no-residue: clean'].join('\n') },
+        'no-residue': { code: 0, out: [`${m('regDiff')} [HKEY_LOCAL_MACHINE\\${root}\\Launcher]`,
+            ...(patchMoved ? [`${m('regDiff')} [HKEY_CURRENT_USER\\${KEPT_PREFIX}TaskBarIDs]`] : []), 'PASS no-residue: clean'].join('\n') },
     };
     return o;
 }
@@ -244,7 +252,7 @@ function selfTest() {
         }
         console.log(`  ok  record built by ${WRITER_REL} from synthetic guest output -> green (${baseline.cells} cell(s))`);
         const mut = fn => { const o = fromGuest(); fn(o); return json(o); };
-        const MOVED_PATCH = `+  WriteRegStr HKLM "${FORK_ROOT}\\PowerBrowser" "x" "y"\n`;
+        const MOVED_PATCH = '+!define AppRegRoot            "Software\\${BrandShortName}"\n';
         const plants = [
             // guest-output level: the writer parses these, so driver and verifier agree on the shape
             ['every cell FAIL', json(fromGuest(o => { for (const c of Object.keys(o)) o[c].code = 1; })), opts(), 'cells', 'not PASS'],
@@ -261,6 +269,9 @@ function selfTest() {
             ['update left the version unchanged', json(fromGuest(o => { o.update.out = o.update.out.replace('1.0.1', '1.0.0'); })), opts(), 'update', 'version_after'],
             // record level
             ['Software\\Mozilla key added when the fork root is expected', mut(o => { o.cells['no-residue'].registry_diff += `\n${UPSTREAM_ROOT}\\Run`; }), opts({ patchText: MOVED_PATCH }), 'registry', UPSTREAM_ROOT],
+            ['stock Firefox subkey written when the fork root is expected', mut(o => { o.cells['no-residue'].registry_diff += `\n${UPSTREAM_ROOT}\\Firefox\\TaskBarIDs`; }), opts({ patchText: MOVED_PATCH }), 'registry', 'Firefox\\TaskBarIDs'],
+            ['maintenance-service key written when the fork root is expected', mut(o => { o.cells['no-residue'].registry_diff += `\n${UPSTREAM_ROOT}\\MaintenanceService`; }), opts({ patchText: MOVED_PATCH }), 'registry', 'MaintenanceService'],
+            ['the old literal-root patch form no longer counts as moved', json(fromGuest(() => {}, true)), opts({ patchText: `+  WriteRegStr HKLM "${FORK_ROOT}\\PowerBrowser" "x" "y"\n` }), 'registry', UPSTREAM_ROOT],
             ['FAIL deferral without owner approval', mut(o => { o.cells.install.verdict = 'FAIL'; o.cells.install.deferral = { reason: 'slow guest' }; }), opts(), 'cells', 'owner-approved deferral'],
             ['unknown key on a cell', mut(o => { o.cells.install.extra = 1; }), opts(), 'shape', 'install'],
             ['top-level key missing', mut(o => { delete o.maintenance_service_enabled; }), opts(), 'shape', 'top-level'],

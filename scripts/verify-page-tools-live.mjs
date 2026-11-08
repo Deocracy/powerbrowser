@@ -16,7 +16,9 @@
  *   find    webTabFind of "needle" on a page that holds three, reports
  *           findTotal 3 with a current index in a state push; FindNext moves
  *           the index; F3 from the page steps it through the relay; Ctrl+F
- *           opens the Theia find bar; FindClose resets the counts to 0.
+ *           opens the Theia find bar, docked: the page rect starts below the
+ *           32px strip (39-16, plant find-strip-overlays); FindClose resets
+ *           the counts to 0.
  *   zoom    ZoomIn raises the pushed zoom above 1; ZoomReset returns it to 1;
  *           Ctrl+= and Ctrl+0 from the page do the same through the relay.
  *   audio   A tone that plays from a served page reports soundPlaying; Mute
@@ -53,6 +55,11 @@
  *           event; Delete and Undo go through the frozen kind; Cut greys on a collapsed selection; typing in
  *           the page sends no Theia request, checked after the kind is seen on the wire (positive control).
  *           Plant: the Copy item sends a check-only request, so no copy event arrives.
+ *   edit-greying  PAGE-09 (33 T6, 39-16): the hamburger Edit submenu rows grey from the page's live state, read with
+ *           focus moved to the Theia frame: a collapsed selection dims Undo, Cut and Copy and leaves Paste and Select All
+ *           enabled; a selection enables Cut and Copy; Undo enables after an edit. Each row run from the submenu
+ *           performs its edit, read back from the textarea's value and selection in the page title.
+ *           Plant: every edit-state reply is the one recorded at the first open (the collapsed selection), replayed.
  *   edit-today  PROBE (record only, 32-06 Task 0): per frozen edit command, whether the chrome
  *           route (the Controllers actor, the route a Theia-initiated Edit item takes) reaches the
  *           page editor and performs the command, and whether the page's own key does the same with
@@ -88,6 +95,15 @@
  *   devtools  PAGE-10 (32-07 gap closure): F12 from a page opens one stock toolbox window for that tab; a second open keeps one;
  *            closing the tab closes it; a quit with a toolbox open exits. Plant: the open never reaches chrome.
  *
+ *   print-dialog  PAGE-03 (32 T7, 39-16, capture only): headed, named with PB_CAPTURE_DIR. Ctrl+P on a focused page
+ *           opens the OS print dialog as the active PowerBrowser-class window; it is captured, cancelled with a real
+ *           Escape (pb-kwin's gate), and the shell is active again with the page unchanged.
+ *   menu-captures  33 T7 (39-16, capture only): the hamburger, its History submenu, the bookmark star editor, the
+ *           bookmarks toolbar row and the clear-history panel, each captured for the owner's visual verdict.
+ *
+ * PB_CAPTURE_DIR=<dir> (39-16): the sessions run headed and captureShell / captureActive (pb-kwin's gate) write the
+ * named 32-T*.png captures from crash, reader, favicon, devtools and find, and the two capture-only scenarios run.
+ *
  * Preflight: the binary must carry the current patch 050. The sha256 of
  * patches/050-extension-tab-host.patch must equal the stamp in
  * objdir/.pb-050-build.sha256; otherwise the run is a broken instrument.
@@ -97,17 +113,48 @@
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { REPO_ROOT, probe, sourceConst } from './lib/pb-relaunch.mjs';
+import { activeWindow, captureActive, captureShell, osKeys, raiseShell } from './lib/pb-kwin.mjs';
 import {
     BROKEN, focusOverlay, focusTheiaFrame, inChrome, loadedAt, makeCurrent, openWebTab, overlayVisibility, pageKeyDisabled, pressKey, pushes,
-    serveNavPages, waitForPush, withProbeShell,
+    serveNavPages, setPref, waitForPush, withProbeShell,
 } from './lib/pb-live-probe.mjs';
 
 const NAME = 'page-tools-live';
+
+// 39-16: PB_CAPTURE_DIR=<dir> runs the sessions headed and captures PowerBrowser windows at named states.
+const CAPTURE_DIR = process.env.PB_CAPTURE_DIR ? resolve(process.env.PB_CAPTURE_DIR) : '';
+if (CAPTURE_DIR) {
+    process.env.PB_LIVE_HEADED = '1';
+}
+const SHELL_CAPTION = 'PowerBrowser';
+
+/** PB_CAPTURE_DIR set: the shell (raised, gated) to <dir>/<file>, or with `active` KWin's active PowerBrowser-class window. */
+async function capture(file, { active = false } = {}) {
+    if (!CAPTURE_DIR) {
+        return;
+    }
+    mkdirSync(CAPTURE_DIR, { recursive: true });
+    const shot = active ? captureActive(join(CAPTURE_DIR, file)) : await captureShell(join(CAPTURE_DIR, file));
+    console.log(`  capture ${file}: ${shot.resourceClass} "${shot.caption}" ${shot.width}x${shot.height}`);
+}
+
+/** Polls KWin's active window every 250 ms for up to `ms` until `pred` holds; returns the last read. */
+async function activeUntil(pred, ms) {
+    let w = null;
+    for (const end = Date.now() + ms; Date.now() < end; await new Promise(r => setTimeout(r, 250))) {
+        w = activeWindow();
+        if (w && pred(w)) {
+            return w;
+        }
+    }
+    return w;
+}
+const isPbClass = w => String(w.resourceClass).toLowerCase().includes('powerbrowser');
 const VERDICTS = join(dirname(fileURLToPath(import.meta.url)), 'lib', 'pb-probe-verdicts.json');
 const WEB_TAB_REL = 'theia/extensions/tab-uris/src/browser/web-tab.ts';
 const CHROME_BAR_COPY_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts';
@@ -172,6 +219,21 @@ setInterval(() => {
 }, 50);
 </script></body></html>`;
 
+/**
+ * The edit-greying page (39-16): the events are not cancelled, so each Edit row changes the textarea. The title carries
+ * `eg s<selStart> e<selEnd> |<value>| a<active element tag>`; the caret starts collapsed after "alpha".
+ */
+const EDIT_GREY_PAGE = `<!doctype html><html><head><title>Edit greying fixture</title></head><body><textarea id="t">alpha beta gamma</textarea><script>
+const t = document.getElementById('t');
+let last = '';
+window.addEventListener('focus', () => t.focus());
+t.focus(); t.setSelectionRange(5, 5);
+setInterval(() => {
+  const s = 'eg s' + t.selectionStart + ' e' + t.selectionEnd + ' |' + t.value + '| a' + document.activeElement.tagName;
+  if (s !== last) { last = s; document.title = s; }
+}, 50);
+</script></body></html>`;
+
 /** A 1x1 PNG, carried as the /icon page's data: icon link. */
 const ICON_DATA = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 
@@ -203,6 +265,9 @@ async function serveFixtures(downloadBody) {
             // edit-today: the page reports its selection, length and the copy/cut/paste events through its title.
             response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
             response.end(EDIT_PAGE);
+        } else if (path === '/edit-greying') {
+            response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            response.end(EDIT_GREY_PAGE);
         } else if (path === '/icon') {
             // favicon: the page's own icon as a data: URL, so no icon is fetched over the network. The link is added from a
             // timer after load (32-REVIEW WR-03), so the icon lands after the load's last state push and must push itself.
@@ -378,6 +443,19 @@ async function scenarioFind(app, origin, kind = 'webTabFind', plant = false) {
     if (bar !== true) {
         return 'Ctrl+F relayed, but the Theia find bar did not open (no #pb-chrome-bar-find-input in the Theia frame)';
     }
+    if (plant === 'strip-overlays') {
+        // The planted fault: the pre-39-16 strip, which never grew the top panel, so it covered the page's top 32px.
+        await probe(app, "document.body.setAttribute('data-pb-find-strip', 'closed'); get('ApplicationShell').fit(); return true;");
+    }
+    // PAGE-01 (39-16): the strip is docked, never overlaid: the page rect (the widget the overlay follows) starts below it.
+    const docked = () => probe(app, `const strip = document.getElementById('pb-chrome-bar-find-input')?.closest('.pb-chrome-bar-find');
+        const page = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)})?.node;
+        if (!strip || !page) return null;
+        return { stripBottom: Math.round(strip.getBoundingClientRect().bottom), pageTop: Math.round(page.getBoundingClientRect().top) };`);
+    const layout = await settleValue(docked, v => v !== null && v.pageTop >= v.stripBottom);
+    if (!layout || layout.pageTop < layout.stripBottom) {
+        return `the find strip covers the page: the page rect starts at ${layout && layout.pageTop}px, above the strip's bottom at ${layout && layout.stripBottom}px`;
+    }
     // 32-REVIEW WR-05: highlight-all on, then off. The page's Finder reports each highlight pass (onHighlightFinished,
     // FinderParent); the off pass must report highlight false, or the highlights stay on the page. A notification without
     // a highlight flag (another find's pass) is recorded as null and counts for neither.
@@ -393,6 +471,14 @@ async function scenarioFind(app, origin, kind = 'webTabFind', plant = false) {
         return 'highlight-all on never reported a highlight pass from the page';
     }
     const onCount = (await highlights()).length;
+    if (CAPTURE_DIR) {
+        const strip = await probe(app, `const i = document.getElementById('pb-chrome-bar-find-input'); const bar = i && i.closest('.pb-chrome-bar-find');
+            const r = n => { if (!n) return null; const b = n.getBoundingClientRect(); return [b.left, b.top, b.width, b.height].map(Math.round); };
+            return { input: r(i), strip: r(bar), cls: bar ? bar.className : null };`);
+        const geometry = await inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)}); return o ? [o.style.top, o.style.height, o.style.visibility].join(' ') : null;`);
+        console.log(`  find strip before the capture: ${JSON.stringify(strip)}; overlay top/height/visibility ${geometry}`);
+        await capture('32-T6-find-strip.png');
+    }
     await channelRequest(app, { kind, tabId, query: 'needle', highlightAll: false });
     const off = await settleValue(highlights, v => v.slice(onCount).includes(false));
     if (!off.slice(onCount).includes(false)) {
@@ -580,6 +666,9 @@ async function scenarioFavicon(app, origin, plant = false) {
         await probe(app, "document.querySelectorAll('.pb-chrome-bar-dropdown img.pb-chrome-bar-row-icon').forEach(img => img.setAttribute('src', 'http://127.0.0.1/planted.png')); return true;");
     }
     const row = await settleValue(pillRow, v => v !== null && v.img === favicon);
+    if (row && row.img === favicon && !plant) {
+        await capture('32-T3-favicons.png');
+    }
     return row && row.img === favicon ? null : `the Tabs-mode pill row for the icon tab does not carry the pushed favicon (img ${JSON.stringify(row && row.img && row.img.slice(0, 40))})`;
 }
 
@@ -639,6 +728,18 @@ async function scenarioReader(app, origin, plant = false) {
     const exitTitle = await settleValue(toggle, v => v !== null && v.title === READER_EXIT);
     if (exitTitle === null || exitTitle.title !== READER_EXIT || exitTitle.disabled !== false) {
         return `the toggle does not offer Exit reader view while in the reader (${JSON.stringify(exitTitle)})`;
+    }
+    if (CAPTURE_DIR && !plant) {
+        // 32 T2: the reader in each Theia theme, switched through the workbench.colorTheme preference.
+        for (const [theme, file] of [['light', '32-T2-reader-light.png'], ['dark', '32-T2-reader-dark.png']]) {
+            const set = await setPref(app, 'workbench.colorTheme', theme);
+            const applied = await settleValue(() => probe(app, 'return document.body.className;'), cls => new RegExp(`\\btheia-${theme}\\b`).test(cls));
+            if (set !== true || !new RegExp(`\\btheia-${theme}\\b`).test(applied)) {
+                throw new Error(`${BROKEN} the ${theme} theme did not apply for the reader capture (body ${JSON.stringify(applied)})`);
+            }
+            await new Promise(r => setTimeout(r, 1500));
+            await capture(file);
+        }
     }
     const leaveMark = (await pushes(app)).length;
     if (await click() !== true) {
@@ -759,6 +860,17 @@ async function scenarioDevtools(app, origin, plant = false) {
     }
     if (await windowOpen() !== true) {
         return 'the toolbox exists but no devtools:toolbox window is open';
+    }
+    if (CAPTURE_DIR && !plant) {
+        // 32 T4: the toolbox window itself, active and PowerBrowser-class (never the shell under it).
+        await new Promise(r => setTimeout(r, 2000));
+        await inChrome(app, "Services.wm.getMostRecentWindow('devtools:toolbox').focus(); return true;");
+        const toolbox = await activeUntil(w => isPbClass(w) && String(w.caption) !== SHELL_CAPTION, 8000);
+        if (toolbox && isPbClass(toolbox) && String(toolbox.caption) !== SHELL_CAPTION) {
+            await capture('32-T4-devtools-toolbox.png', { active: true });
+        } else {
+            console.log(`  capture 32-T4-devtools-toolbox.png skipped: the active window is ${JSON.stringify(toolbox)}`);
+        }
     }
     const again = await channelRequest(app, { kind: 'webTabDevtools', tabId });
     if (again?.ok !== true) {
@@ -1123,6 +1235,161 @@ async function scenarioEdit(app, origin, plant = false) {
     if (after !== before) {
         return `typing in the page sent ${after - before} Theia request(s); key-driven editing must send none`;
     }
+    return null;
+}
+
+/** The hamburger's Edit row and its submenu labels, read from the copy module. */
+const EDIT_MENU = copyOf(CHROME_BAR_COPY_REL, 'menuEdit');
+const EDIT_ROW = {
+    undo: copyOf(CHROME_BAR_COPY_REL, 'editUndoRow'),
+    cut: copyOf(CHROME_BAR_COPY_REL, 'editCutRow'),
+    copy: copyOf(CHROME_BAR_COPY_REL, 'editCopyRow'),
+    paste: copyOf(CHROME_BAR_COPY_REL, 'editPasteRow'),
+    selectAll: copyOf(CHROME_BAR_COPY_REL, 'editSelectAllRow'),
+};
+const APP_MENU_BUTTON = copyOf(CHROME_BAR_COPY_REL, 'appMenu');
+
+/**
+ * Opens hamburger > Edit as a pointer does and returns the submenu's rows as { label: enabled }. With `choose`, the
+ * row labelled `choose` is activated (move, then mouse-up); otherwise both menus are closed with Escape.
+ */
+async function editSubmenu(app, tabId, choose = null) {
+    // A user reopens the menu once the page is back on screen: wait for chrome to show the overlay again.
+    if (await settleValue(() => overlayVisibility(app, tabId), v => v === 'visible') !== 'visible') {
+        throw new Error(`${BROKEN} the page overlay was not shown again after the menu closed`);
+    }
+    // A user clicks in the page, then on the hamburger: the page's editor holds focus, then chrome focus moves to Theia.
+    if (await focusOverlay(app, tabId) !== true || !/ aTEXTAREA$/.test(await settleValue(() => lastEditGreyTitle(app, tabId), t => / aTEXTAREA$/.test(t)))
+        || await focusTheiaFrame(app) !== true) {
+        throw new Error(`${BROKEN} focus could not be put in the page's textarea and then moved to the Theia frame`);
+    }
+    const out = await probe(app, `
+        const visible = () => [...document.querySelectorAll('.lm-Menu')].filter(m => m.getClientRects().length > 0);
+        const text = i => (i.querySelector('.lm-Menu-itemLabel')?.textContent ?? '').trim();
+        const itemIn = (menu, label) => [...menu.querySelectorAll('.lm-Menu-item')].find(i => text(i) === label);
+        const at = (item, type) => {
+            const r = item.getBoundingClientRect();
+            item.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }));
+        };
+        const button = document.querySelector('.pb-chrome-bar button[aria-label=${JSON.stringify(APP_MENU_BUTTON)}]');
+        if (!button) return { error: 'no application menu button in the chrome bar' };
+        await until(() => visible().length === 0, 3000);
+        button.click();
+        let root = null;
+        await until(() => (root = visible().find(m => m.classList.contains('pb-app-menu'))), 6000);
+        if (!root) return { error: 'the application menu did not open' };
+        const edit = itemIn(root, ${JSON.stringify(EDIT_MENU)});
+        if (!edit) return { error: 'the application menu has no ${EDIT_MENU} row' };
+        at(edit, 'mousemove');
+        let sub = null;
+        await until(() => (sub = visible().find(m => m !== root && itemIn(m, ${JSON.stringify(EDIT_ROW.cut)}))), 4000);
+        if (!sub) return { error: 'the ${EDIT_MENU} submenu did not open' };
+        const rows = Object.fromEntries([...sub.querySelectorAll('.lm-Menu-item')].filter(i => text(i)).map(i => [text(i), !i.classList.contains('lm-mod-disabled')]));
+        const choose = ${JSON.stringify(choose)};
+        if (choose) {
+            const item = itemIn(sub, choose);
+            if (!item) return { error: 'the ${EDIT_MENU} submenu has no ' + choose + ' row' };
+            at(item, 'mousemove');
+            at(item, 'mouseup');
+        } else {
+            for (const menu of [sub, root]) {
+                if (menu.getClientRects().length > 0) menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
+            }
+        }
+        const closed = await until(() => visible().length === 0, 3000);
+        return { rows, closed };
+    `);
+    if (out && out.error) {
+        throw new Error(`${BROKEN} ${out.error}`);
+    }
+    return out;
+}
+
+/** The edit-greying page's latest title push for `tabId`, or ''. */
+const lastEditGreyTitle = async (app, tabId) => String((await pushes(app)).filter(p => p && p.kind === 'state' && p.tabId === tabId && /^eg /.test(String(p.title))).pop()?.title ?? '');
+
+/** Chrome scope: puts `text` on the global clipboard (the Paste row's source); true when set. */
+const setClipboard = (app, text) => inChrome(app, `Cc['@mozilla.org/widget/clipboardhelper;1'].getService(Ci.nsIClipboardHelper)
+    .copyStringToClipboard(${JSON.stringify(text)}, Ci.nsIClipboard.kGlobalClipboard); return true;`);
+
+/**
+ * edit-greying (PAGE-09, 33 T6): the hamburger Edit rows grey from the page's live state with focus in the Theia frame,
+ * and each row performs its edit. `plant` replays the edit-state replies of the first open (the collapsed selection).
+ */
+async function scenarioEditGreying(app, origin, plant = false) {
+    await installRequestRecorder(app);
+    const { tabId, from } = await openLoaded(app, `${origin}/edit-greying`, '/edit-greying');
+    const title = re => waitForPush(app, editTitle(tabId, re), { from, timeoutMs: 15000 });
+    if (await title(/^eg s5 e5 \|alpha beta gamma\|/) < 0) {
+        return 'the edit-greying page never reported its collapsed caret in its title';
+    }
+    if (await setClipboard(app, 'PB') !== true) {
+        throw new Error(`${BROKEN} the clipboard could not be set for the Paste row`);
+    }
+    if (plant) {
+        const applied = await probe(app, `const channel = get('WebTabChannel');
+            const original = channel.request.bind(channel);
+            const first = {};
+            channel.request = async message => {
+                const reply = await original(message);
+                if (message && message.kind === 'webTabEdit' && message.checkOnly === true) {
+                    if (!(message.cmd in first)) first[message.cmd] = reply;
+                    return first[message.cmd];
+                }
+                return reply;
+            };
+            return true;`);
+        if (applied !== true) {
+            throw new Error(`${BROKEN} the stale edit-state plant did not install`);
+        }
+    }
+    const stateFails = (where, rows, want) => {
+        const wrong = Object.entries(want).filter(([key, on]) => rows[EDIT_ROW[key]] !== on);
+        return wrong.length
+            ? `Edit row state did not follow the page selection (${where}): ${wrong.map(([key, on]) => `${EDIT_ROW[key]} ${on ? 'dimmed' : 'enabled'}`).join(', ')}; rows ${JSON.stringify(rows)}`
+            : null;
+    };
+    const lastTitle = async () => [...new Set((await pushes(app)).filter(editTitle(tabId, /^eg /)).map(p => p.title))].slice(-4).join(' / ');
+    const run = async (key, re, what) => {
+        const mark = (await pushes(app)).length;
+        const sentBefore = (await requestKinds(app)).length;
+        const { rows, closed } = await editSubmenu(app, tabId, EDIT_ROW[key]);
+        if (rows[EDIT_ROW[key]] !== true) {
+            return `the ${EDIT_ROW[key]} row was dimmed when it was chosen (${what}); rows ${JSON.stringify(rows)}`;
+        }
+        // Copy changes nothing on the page, so its row is read as the current title after a settle (the paste after it proves it).
+        const changed = key === 'copy'
+            ? (await new Promise(resolve => setTimeout(resolve, 500)), re.test(await lastEditGreyTitle(app, tabId)))
+            : await waitForPush(app, editTitle(tabId, re), { from: mark, timeoutMs: 6000 }) >= 0;
+        if (changed) {
+            return null;
+        }
+        const sent = (await requestKinds(app)).length > sentBefore;
+        return `the ${EDIT_ROW[key]} row did not perform its edit on the page (${what}); the page reads ${JSON.stringify(await lastTitle())}`
+            + (sent ? '' : ' and the row sent no Theia request') + (closed ? '' : '; the menu stayed open after the row was chosen');
+    };
+    const collapsed = await editSubmenu(app, tabId);
+    const steps = [
+        () => stateFails('collapsed caret, nothing to undo', collapsed.rows, { undo: false, cut: false, copy: false, paste: true, selectAll: true }),
+        () => run('paste', /^eg s7 e7 \|alphaPB beta gamma\|/, 'clipboard "PB" at the caret'),
+        async () => stateFails('after a paste', (await editSubmenu(app, tabId)).rows, { undo: true, cut: false, copy: false }),
+        () => run('undo', /^eg s\d+ e\d+ \|alpha beta gamma\|/, 'the paste undone'),
+        () => run('selectAll', /^eg s0 e16 \|alpha beta gamma\|/, 'the whole value selected'),
+        async () => stateFails('text selected', (await editSubmenu(app, tabId)).rows, { cut: true, copy: true, paste: true, selectAll: true }),
+        () => run('copy', /^eg s0 e16 \|alpha beta gamma\|/, 'the selection copied'),
+        // The copy replaced "PB" on the clipboard: pasting over the selection keeps the value and collapses the caret at its end.
+        () => run('paste', /^eg s16 e16 \|alpha beta gamma\|/, 'the copied text pasted over the selection'),
+        () => run('selectAll', /^eg s0 e16 \|/, 'the whole value selected again'),
+        () => run('cut', /^eg s0 e0 \|\|/, 'the selection cut'),
+        () => run('paste', /^eg s16 e16 \|alpha beta gamma\|/, 'the cut text pasted back'),
+    ];
+    for (const next of steps) {
+        const failure = await next();
+        if (failure) {
+            return failure;
+        }
+    }
+    console.log('  edit-greying: collapsed Undo/Cut/Copy dimmed, Paste/Select All enabled; selected Cut/Copy enabled; Paste, Undo, Select All, Copy, Cut each changed the page');
     return null;
 }
 
@@ -1612,6 +1879,9 @@ async function scenarioCrash(app, origin, plant = false, variant = null) {
     if (await settleValue(() => overlayVisibility(app, tabId), v => v !== 'visible') === 'visible') {
         return 'the crashed overlay is still visible over the crash UI';
     }
+    if (!plant && !variant) {
+        await capture('32-T1-crash-ui.png');
+    }
     if (plant === 'reader-url') {
         // The CR-01 symptom: the widget holds the reader URL, which webTabOpen refuses, so the reopen can never succeed.
         await probe(app, `get('WebTabChannel').widgetOf(${JSON.stringify(tabId)}).url = ${JSON.stringify(`about:reader?url=${encodeURIComponent(`${origin}/article`)}`)}; return true;`);
@@ -1737,6 +2007,100 @@ async function scenarioActivenessProbe() {
 }
 
 /** Scenarios that open their own sessions, so main runs them without the shared runSession wrapper. */
+/**
+ * print-dialog (PAGE-03, 32 T7, capture only): Ctrl+P on a focused page opens the OS print dialog as the active
+ * PowerBrowser-class window; it is captured and cancelled with a real Escape, the shell is active again and the page
+ * is unchanged (same URL, same history length, no tab-modal box).
+ */
+async function scenarioPrintDialog(app, origin) {
+    if (!CAPTURE_DIR) {
+        return 'print-dialog is capture only: run it named, with PB_CAPTURE_DIR set';
+    }
+    const { tabId } = await openLoaded(app, `${origin}/find`, '/find');
+    await makeCurrent(app, tabId);
+    raiseShell();
+    if (String((await activeUntil(w => isPbClass(w) && String(w.caption) === SHELL_CAPTION, 5000))?.caption) !== SHELL_CAPTION) {
+        throw new Error(`${BROKEN} the shell window never became active, so the dialog cannot be told from it`);
+    }
+    const historyLength = async () => (await channelRequest(app, { kind: 'webTabHistory', tabId }))?.entries?.length ?? -1;
+    const overlayUrl = () => inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)}); return o && o.currentURI ? o.currentURI.spec : '';`);
+    const before = { url: await overlayUrl(), entries: await historyLength() };
+    if (await pressPageKey(app, tabId, 'printOpen', { key: 'p', code: 'KeyP', keyCode: 80, modifiers: ['accel'] }) < 0) {
+        return 'Ctrl+P in a focused page produced no shortcut push: the printOpen row did not relay';
+    }
+    const dialog = await activeUntil(w => isPbClass(w) && String(w.caption) !== SHELL_CAPTION, 15000);
+    if (!dialog || !isPbClass(dialog) || String(dialog.caption) === SHELL_CAPTION) {
+        return `Ctrl+P opened no print dialog: the active window is ${JSON.stringify(dialog)}`;
+    }
+    console.log(`  print-dialog: active dialog ${dialog.resourceClass} "${dialog.caption}" ${dialog.width}x${dialog.height}`);
+    await new Promise(r => setTimeout(r, 1500));
+    await capture('32-T7-print-dialog.png', { active: true });
+    osKeys(['esc']);
+    const back = await activeUntil(w => isPbClass(w) && String(w.caption) === SHELL_CAPTION, 10000);
+    if (String(back?.caption) !== SHELL_CAPTION) {
+        return `Escape did not close the print dialog: the active window is ${JSON.stringify(back)}`;
+    }
+    const after = { url: await overlayUrl(), entries: await historyLength() };
+    const tabModal = await inChrome(app, "return document.querySelectorAll('tabmodalprompt, .dialogbox').length;");
+    console.log(`  print-dialog: cancelled; page before ${JSON.stringify(before)} after ${JSON.stringify(after)}, tab-modal boxes ${tabModal}`);
+    if (after.url !== before.url || after.entries !== before.entries || tabModal !== 0) {
+        return `cancelling the print dialog changed the page (before ${JSON.stringify(before)}, after ${JSON.stringify(after)}, tab-modal ${tabModal})`;
+    }
+    return null;
+}
+
+const BOOKMARK_PAGE_COMMAND = sourceConst('theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts', 'CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID');
+const TOOLBAR_COMMAND = sourceConst('theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts', 'CHROME_BAR_TOGGLE_BOOKMARKS_TOOLBAR_COMMAND_ID');
+const CLEAR_HISTORY_COMMAND = sourceConst('theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts', 'CHROME_BAR_CLEAR_HISTORY_COMMAND_ID');
+const HISTORY_MENU = copyOf(CHROME_BAR_COPY_REL, 'history');
+
+/** menu-captures (33 T7, capture only): the Phase 33 surfaces, each captured with nothing else open. */
+async function scenarioMenuCaptures(app, origin) {
+    if (!CAPTURE_DIR) {
+        return 'menu-captures is capture only: run it named, with PB_CAPTURE_DIR set';
+    }
+    await openLoaded(app, `${origin}/article`, '/article');
+    const { tabId } = await openLoaded(app, `${origin}/find`, '/find');
+    await makeCurrent(app, tabId);
+    const escapeAll = () => probe(app, `for (const m of [...document.querySelectorAll('.lm-Menu')].reverse()) m.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
+        const a = document.activeElement; if (a) a.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
+        await sleep(400); return true;`);
+    const opened = await probe(app, `const visible = () => [...document.querySelectorAll('.lm-Menu')].filter(m => m.getClientRects().length > 0);
+        document.querySelector('.pb-chrome-bar button[aria-label=${JSON.stringify(APP_MENU_BUTTON)}]').click();
+        let root = null;
+        await until(() => (root = visible().find(m => m.classList.contains('pb-app-menu'))), 6000);
+        return !!root;`);
+    if (opened !== true) {
+        throw new Error(`${BROKEN} the application menu did not open`);
+    }
+    await capture('33-T7-hamburger.png');
+    const sub = await probe(app, `const visible = () => [...document.querySelectorAll('.lm-Menu')].filter(m => m.getClientRects().length > 0);
+        const root = visible().find(m => m.classList.contains('pb-app-menu'));
+        const item = [...root.querySelectorAll('.lm-Menu-item')].find(i => (i.querySelector('.lm-Menu-itemLabel')?.textContent ?? '').trim() === ${JSON.stringify(HISTORY_MENU)});
+        if (!item) return false;
+        const r = item.getBoundingClientRect();
+        item.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }));
+        return await until(() => visible().length > 1, 4000);`);
+    if (sub === true) {
+        await capture('33-T7-history-rows.png');
+    } else {
+        console.log('  capture 33-T7-history-rows.png skipped: the History submenu did not open');
+    }
+    await escapeAll();
+    for (const [command, file] of [[BOOKMARK_PAGE_COMMAND, '33-T7-star-editor.png'], [TOOLBAR_COMMAND, '33-T7-bookmarks-toolbar.png'], [CLEAR_HISTORY_COMMAND, '33-T7-clear-panel.png']]) {
+        await probe(app, `await get('CommandRegistry').executeCommand(${JSON.stringify(command)}); await sleep(1200); return true;`);
+        await capture(file);
+        if (command === TOOLBAR_COMMAND) {
+            await probe(app, `await get('CommandRegistry').executeCommand(${JSON.stringify(command)}); await sleep(600); return true;`);
+        } else {
+            await escapeAll();
+        }
+    }
+    return null;
+}
+
+const CAPTURE_ONLY = new Set(['print-dialog', 'menu-captures']);
+
 const SELF_SESSIONED = new Set(['remoteness-repro', 'remoteness-regression', 'remoteness-activeness-probe']);
 
 const SCENARIOS = {
@@ -1765,6 +2129,9 @@ const SCENARIOS = {
     print: (app, fx) => scenarioPrint(app, fx.origin),
     save: (app, fx) => scenarioSave(app, fx.origin),
     edit: (app, fx) => scenarioEdit(app, fx.origin),
+    'print-dialog': (app, fx) => scenarioPrintDialog(app, fx.origin),
+    'menu-captures': (app, fx) => scenarioMenuCaptures(app, fx.origin),
+    'edit-greying': (app, fx) => scenarioEditGreying(app, fx.origin),
     'edit-today': async (app, fx) => {
         const verdict = await probeEditToday(app, fx.origin);
         await recordVerdict('edit-today', verdict);
@@ -1808,6 +2175,12 @@ const PLANTS = [
         expect: 'did not open the find bar',
     },
     {
+        plant: 'find-strip-overlays',
+        target: 'find',
+        run: (app, fx) => scenarioFind(app, fx.origin, 'webTabFind', 'strip-overlays'),
+        expect: 'the find strip covers the page',
+    },
+    {
         plant: 'audio-page-silent',
         target: 'audio',
         run: (app, fx) => scenarioAudio(app, fx.origin, '/find'),
@@ -1830,6 +2203,12 @@ const PLANTS = [
         target: 'edit',
         run: (app, fx) => scenarioEdit(app, fx.origin, true),
         expect: 'no copy event',
+    },
+    {
+        plant: 'edit-state-stale',
+        target: 'edit-greying',
+        run: (app, fx) => scenarioEditGreying(app, fx.origin, true),
+        expect: 'Edit row state did not follow the page selection',
     },
     {
         plant: 'save-export-skipped',
@@ -1976,7 +2355,7 @@ async function main() {
     }
     const flag = process.argv.indexOf('--scenario');
     // The default run excludes the self-sessioned record-only repro: only a named run may write its verdict key.
-    const selected = flag === -1 ? Object.keys(SCENARIOS).filter(name => !SELF_SESSIONED.has(name)) : process.argv[flag + 1].split(',');
+    const selected = flag === -1 ? Object.keys(SCENARIOS).filter(name => !SELF_SESSIONED.has(name) && !CAPTURE_ONLY.has(name)) : process.argv[flag + 1].split(',');
     const unknown = selected.filter(name => !(name in SCENARIOS));
     if (unknown.length) {
         console.error(`${NAME}: unknown scenario(s): ${unknown.join(', ')}`);

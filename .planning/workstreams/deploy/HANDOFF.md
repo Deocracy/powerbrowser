@@ -68,15 +68,35 @@ clock-only (B); 50 dispatch token = `GITHUB_TOKEN` as recorded; 44-03 WR-03 exem
 57 B1 = option (a); manifest published as a Release asset. Model tiering from this date: Opus for
 security-sensitive code and reviews, Sonnet for ordinary plan execution, Haiku for bookkeeping.
 
-Owner ruling 2026-11-01: a failed Windows sign never blocks the Linux release; Linux ships alone and
-Windows joins the Release in its own run. The tree already behaved this way (sign-publish needs only
+Owner ruling 2026-11-01: a failed Windows sign never blocks the Linux release; Linux ships alone. Owner answer
+A2 (2026-11-04) replaced "Windows joins the Release": Windows publishes to the MAR origin after the Linux publish
+(plan 54-11), and the Release stays Linux-only. The tree already behaved this way (sign-publish needs only
 build-linux); the `win-sign-chain` row now reds any Linux-publish-path job that waits on sign-windows.
 
 ## Next autonomous step
 
-**None.** Nothing automatic remains in v1.6. What is left is the owner pass below, then
-`--gate`, `/gsd-verify-work <phase> --ws deploy` per checkpoint plan, a fix round, and
-`/gsd-audit-milestone` → `/gsd-complete-milestone v1.6` → `/gsd-cleanup`.
+Superseded 2026-11-03: `FINISH-PLAN.md` in this directory is the authoritative plan (owner rulings R1-R17,
+section 2 defaults, Stages A-H). The earlier "None, nothing automatic remains" no longer holds: Stage D wrote
+and executed the gap plans listed there. Stages A-D are done. The next step is Stage E, the owner live pass,
+with the exact commands in `OWNER-PASS.md`. Then Stage F (builds and `--gate`), Stage G (verify, audit,
+`/gsd-complete-milestone v1.6 --ws deploy`) and Stage H (tag, owner-approved push). Every GSD command carries
+`--ws deploy`. Evidence for each step is in `FINISH-SURVEY.md`.
+
+Still Claude-side: plan 57-08 (clear `MOZ_CRASHREPORTER_AUTO_SUBMIT`) waits for the other session to commit
+`powerbrowser/shell/PowerBrowserAPI.sys.mjs`; gap plan 54-11 (Windows publish path) is built (owner answer
+A2, `phases/54-windows-h/54-11-SUMMARY.md`); the `/etc/nixos` blocks for the Codeberg timer and the
+Safe Browsing key directory (tmpfiles rule) are not written yet.
+
+## Owner answers 2026-11-04 (settled)
+
+A1 legal name "Deocracy Institute" (`vendor_machine` stays "Deocracy"); A2 Windows publishes to the MAR origin after the Linux
+publish (plan 54-11); A3 `probe-1` published as built, never `latest`, never deleted; A4 Renovate Theia licensing moves to a
+release-train job (`postUpgradeTasks` dropped); A5 crash auto-submit via boundary `clearEnv` (plan 57-08, still a Claude item
+waiting on the other session's commit of `PowerBrowserAPI.sys.mjs`); A6 Windows registry residue kept and recorded as known
+identifiers for LEG-01; A7 installer artwork deferred to v1.7, v1.6 uses the labelled stand-ins; A8 one orphan `node.exe` until
+reboot and the hash-pinned `vs.tar.zst` toolchain accepted; A9 "501(c)(3)-owned" holds. A10-A14 (2026-11-04): fixer pin confirmed; one
+`/etc/nixos` change; drills from HarmonySprings; MAR primary copies made at step 4.1; monaco branch decided after the first live run. Still open for the owner: the remaining FINISH-PLAN.md section 3 values (postal address, mailbox and sending account,
+spend caps, Windows media and disk, Cloudflare payment).
 
 ## Blocked on the owner
 
@@ -126,6 +146,15 @@ build-linux); the `win-sign-chain` row now reds any Linux-publish-path job that 
   its self-test guard it.
 - The untracked `.planning/workstreams/deploy/config.json` and `.planning/research/.cache/*` were
   present at session start and were left untouched.
+- OPEN (54-11 review, 2026-11-04): the winget leg still assumes the Windows installer is a GitHub Release asset, which owner answer A2
+  rules out (the Release stays Linux-only; Windows goes to `<mar_origin>/<tag>/`). Three places break:
+  `winget/DeBIOSFoundation.PowerBrowser.installer.yaml` points `InstallerUrl` at `github.com/.../releases/download/@RELEASE_KEY@/`;
+  `scripts/verify-winget-manifest.mjs` asserts that URL; and the `verify-assets` winget leg of
+  `.github/workflows/channel-manifests.yml` runs `gh release download`, `gh attestation verify` and the Release `SHA256SUMS`
+  check on the installer. None can pass for Windows. The fix is a follow-up plan: `InstallerUrl` becomes
+  `<mar_origin>/<tag>/<app>-<version>.windows-x86_64.installer.exe`, and `verify-assets` fetches that file and the Windows
+  `SHA256SUMS` from the MAR origin. The MAR-origin bytes carry no build attestation, so the attestation step for the
+  installer is dropped or replaced; that is a design choice the plan must record. The winget leg is not run before then.
 
 ## Repo rules the next agent must keep
 

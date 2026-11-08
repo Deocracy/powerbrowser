@@ -170,7 +170,14 @@
         </popupnotificationcontent>
       </popupnotification>
     </xul:popupset>
-    <div id="powerbrowser-notification-anchor"></div>
+    <xul:box id="powerbrowser-notification-anchor"/>
+    <!-- The anchor FillHelpers.showConfirmation reads after a password Save or Update (PowerBrowserAPI.sys.mjs). -->
+    <xul:box id="identity-icon-box"/>
+    <!-- 35-01 (T-35-28): PictureInPicture.sys.mjs setUrlbarPipIconActive/Inactive (:800-827) look these up unguarded
+         in the window the video came from; without them the player window opens but is never set up and cannot close.
+         Inert: hidden, and a key outside any keyset binds nothing. -->
+    <xul:hbox id="picture-in-picture-button" hidden="true"/>
+    <xul:key id="key_togglePictureInPicture"/>
     <!-- shell furniture: begin -->
     <!-- Phase 35 (D-04): stock elements a remote page reaches through this
          window, each one upstream's own element (verify-shell-furniture.mjs). -->

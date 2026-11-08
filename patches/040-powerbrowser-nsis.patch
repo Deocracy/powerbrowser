@@ -1,5 +1,5 @@
 diff --git a/browser/installer/windows/nsis/defines.nsi.in b/browser/installer/windows/nsis/defines.nsi.in
-index a9bf2d67ce..37d13e2090 100644
+index a9bf2d67ce..51e1750221 100644
 --- a/browser/installer/windows/nsis/defines.nsi.in
 +++ b/browser/installer/windows/nsis/defines.nsi.in
 @@ -20,7 +20,7 @@
@@ -11,7 +11,18 @@ index a9bf2d67ce..37d13e2090 100644
  !define AppVersion            "@APP_VERSION@"
  !define GREVersion            @MOZILLA_VERSION@
  !define AB_CD                 "@AB_CD@"
-@@ -53,7 +53,7 @@
+@@ -41,6 +41,10 @@
+ !ifndef BrandFullName
+ !define BrandFullName         "${BrandFullNameInternal}"
+ !endif
++; Registry root for every key the installer writes and only NSIS or chrome JS
++; reads. Keys a compiled reader opens stay under Software\Mozilla\${AppName}:
++; TaskBarIDs, MOZ_LAUNCHER_SUBKEY and the maintenance service.
++!define AppRegRoot            "Software\${BrandShortName}"
+ 
+ ; The C++ defines in `nsNativeAppSupportWin.h` are 1-based.  The Windows
+ ; resource IDs in the registry are 0-based.
+@@ -53,7 +57,7 @@
  ; private_browsing.exe (as opposed to @MOZ_APP_NAME@.exe)
  !define IDI_PBICON_PB_EXE_ZERO_BASED "0"
  
@@ -20,7 +31,7 @@ index a9bf2d67ce..37d13e2090 100644
  !define CERTIFICATE_ISSUER          "DigiCert Trusted G4 Code Signing RSA4096 SHA384 2021 CA1"
  ; Changing the name or issuer requires us to have both the old and the new
  ;  in the registry at the same time, temporarily.
-@@ -147,7 +147,7 @@ VIAddVersionKey "ProductVersion"  "${AppVersion}"
+@@ -147,7 +151,7 @@ VIAddVersionKey "ProductVersion"  "${AppVersion}"
  !define APPROXIMATE_REQUIRED_SPACE_MB "145"
  
  # Constants for parts of the telemetry submission URL
@@ -30,9 +41,42 @@ index a9bf2d67ce..37d13e2090 100644
  !define TELEMETRY_INSTALL_PING_VERSION 1
  !define TELEMETRY_INSTALL_PING_DOCTYPE install
 diff --git a/browser/installer/windows/nsis/installer.nsi b/browser/installer/windows/nsis/installer.nsi
-index 785e5ccfba..5ff2790296 100755
+index 785e5ccfba..7d4c028f4c 100755
 --- a/browser/installer/windows/nsis/installer.nsi
 +++ b/browser/installer/windows/nsis/installer.nsi
+@@ -421,19 +421,19 @@ Section "-Application" APP_IDX
+ 
+   ${LogHeader} "Adding Registry Entries"
+   SetShellVarContext current  ; Set SHCTX to HKCU
+-  ${RegCleanMain} "Software\Mozilla"
++  ${RegCleanMain} "${AppRegRoot}"
+   ${RegCleanUninstall}
+   ${UpdateProtocolHandlers}
+ 
+   ClearErrors
+-  WriteRegStr HKLM "Software\Mozilla" "${BrandShortName}InstallerTest" "Write Test"
++  WriteRegStr HKLM "${AppRegRoot}" "${BrandShortName}InstallerTest" "Write Test"
+   ${If} ${Errors}
+     StrCpy $RegHive "HKCU"
+   ${Else}
+     SetShellVarContext all  ; Set SHCTX to HKLM
+-    DeleteRegValue HKLM "Software\Mozilla" "${BrandShortName}InstallerTest"
++    DeleteRegValue HKLM "${AppRegRoot}" "${BrandShortName}InstallerTest"
+     StrCpy $RegHive "HKLM"
+-    ${RegCleanMain} "Software\Mozilla"
++    ${RegCleanMain} "${AppRegRoot}"
+     ${RegCleanUninstall}
+     ${UpdateProtocolHandlers}
+ 
+@@ -741,7 +741,7 @@ Section "-Application" APP_IDX
+   ${EndIf}
+   ; Remember whether we were told to skip registering the agent, so that updates
+   ; won't try to create a registration when they don't find an existing one.
+-  WriteRegDWORD HKCU "Software\Mozilla\${AppName}\Installer\$AppUserModelID" \
++  WriteRegDWORD HKCU "${AppRegRoot}\${AppName}\Installer\$AppUserModelID" \
+                      "DidRegisterDefaultBrowserAgent" $RegisterDefaultAgent
+ !endif
+ 
 @@ -1014,6 +1014,7 @@ FunctionEnd
  ; since we'd be double-counting the number of installations. The stub installer
  ; is repsonsible for sending the ping in that case.
@@ -41,11 +85,86 @@ index 785e5ccfba..5ff2790296 100755
    ClearErrors
    ${GetParameters} $0
    ${GetOptions} $0 "/LaunchedFromStub" $0
+@@ -1047,12 +1048,12 @@ Function WriteInstallationTelemetryData
+   ; Check for write access to HKLM, if successful then report this user
+   ; as an (elevated) admin.
+   ClearErrors
+-  WriteRegStr HKLM "Software\Mozilla" "${BrandShortName}InstallerTest" \
++  WriteRegStr HKLM "${AppRegRoot}" "${BrandShortName}InstallerTest" \
+                    "Write Test"
+   ${If} ${Errors}
+     StrCpy $1 "false"
+   ${Else}
+-    DeleteRegValue HKLM "Software\Mozilla" "${BrandShortName}InstallerTest"
++    DeleteRegValue HKLM "${AppRegRoot}" "${BrandShortName}InstallerTest"
+     StrCpy $1 "true"
+   ${EndIf}
+   ${JSONSet} "admin_user" /value $1
+@@ -1286,13 +1287,13 @@ Function preComponents
+ 
+   ; Only show the maintenance service page if we have write access to HKLM
+   ClearErrors
+-  WriteRegStr HKLM "Software\Mozilla" \
++  WriteRegStr HKLM "${AppRegRoot}" \
+               "${BrandShortName}InstallerTest" "Write Test"
+   ${If} ${Errors}
+     ClearErrors
+     Abort
+   ${Else}
+-    DeleteRegValue HKLM "Software\Mozilla" "${BrandShortName}InstallerTest"
++    DeleteRegValue HKLM "${AppRegRoot}" "${BrandShortName}InstallerTest"
+   ${EndIf}
+ 
+   StrCpy $PageName "Components"
 diff --git a/browser/installer/windows/nsis/uninstaller.nsi b/browser/installer/windows/nsis/uninstaller.nsi
-index becbb0f70c..a4f9a06f98 100755
+index becbb0f70c..17bbb05e16 100755
 --- a/browser/installer/windows/nsis/uninstaller.nsi
 +++ b/browser/installer/windows/nsis/uninstaller.nsi
-@@ -328,6 +328,7 @@ Function un.OpenRefreshHelpURL
+@@ -45,7 +45,6 @@ ManifestDPIAware true
+ 
+ Var TmpVal
+ Var MaintCertKey
+-Var ShouldOpenSurvey
+ Var ShouldSendPing
+ Var InstalledVersion
+ Var InstalledBuildID
+@@ -150,8 +149,6 @@ OutFile "helper.exe"
+ !endif
+ ShowUnInstDetails nevershow
+ 
+-!define URLUninstallSurvey "https://qsurvey.mozilla.com/s3/FF-Desktop-Post-Uninstall?channel=${UpdateChannel}&version=${AppVersion}&osversion="
+-
+ ; Support for the profile refresh feature
+ !define URLProfileRefreshHelp "https://support.mozilla.org/kb/refresh-firefox-reset-add-ons-and-settings"
+ 
+@@ -199,10 +196,6 @@ UninstPage custom un.preConfirm
+ !insertmacro MUI_UNPAGE_INSTFILES
+ 
+ ; Finish Page
+-!define MUI_FINISHPAGE_SHOWREADME
+-!define MUI_FINISHPAGE_SHOWREADME_NOTCHECKED
+-!define MUI_FINISHPAGE_SHOWREADME_TEXT $(UN_SURVEY_CHECKBOX_LABEL)
+-!define MUI_FINISHPAGE_SHOWREADME_FUNCTION un.Survey
+ !define MUI_PAGE_CUSTOMFUNCTION_PRE un.preFinish
+ !define MUI_PAGE_CUSTOMFUNCTION_SHOW un.showFinish
+ !insertmacro MUI_UNPAGE_FINISH
+@@ -213,15 +206,6 @@ ChangeUI IDD_VERIFY "${NSISDIR}\Contrib\UIs\default.exe"
+ ################################################################################
+ # Helper Functions
+ 
+-Function un.Survey
+-  ; We can't actually call ExecInExplorer here because it's going to have to
+-  ; make some marshalled COM calls and those are not allowed from within a
+-  ; synchronous message handler (where we currently are); we'll be thrown
+-  ; RPC_E_CANTCALLOUT_ININPUTSYNCCALL if we try. So all we can do is record
+-  ; that we need to make the call later, which we'll do from un.onGUIEnd.
+-  StrCpy $ShouldOpenSurvey "1"
+-FunctionEnd
+-
+ ; This function is used to uninstall the maintenance service if the
+ ; application currently being uninstalled is the last application to use the
+ ; maintenance service.
+@@ -328,6 +312,7 @@ Function un.OpenRefreshHelpURL
  FunctionEnd
  
  Function un.SendUninstallPing
@@ -53,3 +172,109 @@ index becbb0f70c..a4f9a06f98 100755
    ; Notably, we only check the non-private AUMID here. There's no good reason
    ; to send the uninstall ping twice.
    ${If} $AppUserModelID == ""
+@@ -445,21 +430,21 @@ Section "Uninstall"
+     ClearErrors
+   ${EndIf}
+ 
+-  ReadRegDWORD $R4 HKCU "Software\Mozilla\${BrandFullNameInternal}" DesktopLauncherAppInstalled
++  ReadRegDWORD $R4 HKCU "${AppRegRoot}\${BrandFullNameInternal}" DesktopLauncherAppInstalled
+   ${IfNot} ${Errors}
+   ${AndIf} $R4 == "1"
+     ; The current user had a desktop launcher at some point, so remove it.
+     SetShellVarContext current
+     Delete "$DESKTOP\${BrandShortName}.exe"
+     ${IfNot} ${Errors}
+-      DeleteRegValue HKCU "Software\Mozilla\${BrandFullNameInternal}" DesktopLauncherAppInstalled
++      DeleteRegValue HKCU "${AppRegRoot}\${BrandFullNameInternal}" DesktopLauncherAppInstalled
+     ${EndIf}
+   ${EndIf}
+   ClearErrors
+ 
+   SetShellVarContext current  ; Set SHCTX to HKCU
+-  ${un.RegCleanMain} "Software\Mozilla"
+-  ${un.RegCleanPrefs} "Software\Mozilla\${AppName}"
++  ${un.RegCleanMain} "${AppRegRoot}"
++  ${un.RegCleanPrefs} "${AppRegRoot}\${AppName}"
+   ${un.RegCleanUninstall}
+   ${un.DeleteShortcuts}
+ 
+@@ -484,15 +469,15 @@ Section "Uninstall"
+   DeleteRegValue HKLM "Software\Mozilla\${AppName}\TaskBarIDs" "$INSTDIR"
+ 
+   ClearErrors
+-  WriteRegStr HKLM "Software\Mozilla" "${BrandShortName}InstallerTest" "Write Test"
++  WriteRegStr HKLM "${AppRegRoot}" "${BrandShortName}InstallerTest" "Write Test"
+   ${If} ${Errors}
+     StrCpy $RegHive "HKCU"
+   ${Else}
+     SetShellVarContext all  ; Set SHCTX to HKLM
+-    DeleteRegValue HKLM "Software\Mozilla" "${BrandShortName}InstallerTest"
++    DeleteRegValue HKLM "${AppRegRoot}" "${BrandShortName}InstallerTest"
+     StrCpy $RegHive "HKLM"
+-    DeleteRegValue HKLM "Software\Mozilla\${BrandFullNameInternal}" "UpdaterDeletedShortcut"
+-    ${un.RegCleanMain} "Software\Mozilla"
++    DeleteRegValue HKLM "${AppRegRoot}\${BrandFullNameInternal}" "UpdaterDeletedShortcut"
++    ${un.RegCleanMain} "${AppRegRoot}"
+     ${un.RegCleanUninstall}
+     ${un.DeleteShortcuts}
+     ${un.SetAppLSPCategories}
+@@ -520,10 +505,10 @@ Section "Uninstall"
+   ${un.RegCleanFileHandler}  ".pdf"   "FirefoxPDF-$AppUserModelID"
+ 
+   SetShellVarContext all  ; Set SHCTX to HKLM
+-  ${un.GetSecondInstallPath} "Software\Mozilla" $R9
++  ${un.GetSecondInstallPath} "${AppRegRoot}" $R9
+   ${If} $R9 == "false"
+     SetShellVarContext current  ; Set SHCTX to HKCU
+-    ${un.GetSecondInstallPath} "Software\Mozilla" $R9
++    ${un.GetSecondInstallPath} "${AppRegRoot}" $R9
+   ${EndIf}
+ 
+   DeleteRegKey HKLM "Software\Clients\StartMenuInternet\${AppRegName}-$AppUserModelID"
+@@ -735,7 +720,7 @@ Section "Uninstall"
+   ; subsequently deleted after checking. If the value is found during startup
+   ; the browser will offer to Reset Firefox. We use the UpdateChannel to match
+   ; uninstalls of Firefox-release with reinstalls of Firefox-release, for example.
+-  WriteRegStr HKCU "Software\Mozilla\Firefox" "Uninstalled-${UpdateChannel}" "True"
++  WriteRegStr HKCU "${AppRegRoot}\${AppName}" "Uninstalled-${UpdateChannel}" "True"
+ 
+ !ifdef MOZ_MAINTENANCE_SERVICE
+   ; Get the path the allowed cert is at and remove it
+@@ -1060,7 +1045,6 @@ Function un.onInit
+   System::Call 'kernel32::SetDllDirectoryW(w "")'
+ 
+   StrCpy $LANGUAGE 0
+-  StrCpy $ShouldOpenSurvey "0"
+ 
+   ${un.UninstallUnOnInitCommon}
+ 
+@@ -1114,29 +1098,6 @@ FunctionEnd
+ Function un.onGUIEnd
+   ${un.OnEndCommon}
+ 
+-  ${If} $ShouldOpenSurvey == "1"
+-    ; Though these values are sometimes incorrect due to bug 444664 it happens
+-    ; so rarely it isn't worth working around it by reading the registry values.
+-    ${WinVerGetMajor} $0
+-    ${WinVerGetMinor} $1
+-    ${WinVerGetBuild} $2
+-    ${WinVerGetServicePackLevel} $3
+-    StrCpy $R1 "${URLUninstallSurvey}$0.$1.$2.$3"
+-
+-    ; We can't just open the URL normally because we are most likely running
+-    ; elevated without an unelevated process to redirect through, and we're
+-    ; not going to go around starting elevated web browsers. But to start an
+-    ; unelevated process directly from here we need a pretty nasty hack; see
+-    ; the ExecInExplorer plugin code itself for the details.
+-    ; If we were the default browser and we've now been uninstalled, we need
+-    ; to take steps to make sure the user doesn't see an "open with" dialog;
+-    ; they're helping us out by answering this survey, they don't need more
+-    ; friction.
+-    ; Windows 10 always seems to just clear the default browser, so for it
+-    ; we'll manually invoke Edge using Edge's custom URI scheme.
+-    ExecInExplorer::Exec "microsoft-edge:$R1"
+-  ${EndIf}
+-
+   ; Finally send the ping, there's no GUI to freeze in case it is slow.
+   ${If} $ShouldSendPing == "1"
+     Call un.SendUninstallPing

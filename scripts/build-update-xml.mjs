@@ -38,6 +38,10 @@
 //
 //  Modes:
 //   --emit --outdir <dir>  write <dir>/<channel>/<BUILD_TARGET>/update.xml
+//   --manifest-out <file>  with --emit, also write the build values channel-live reads (release_key, version,
+//                          build_id, build_target, update_channel, update_url, mar_origin, mar_channel_id),
+//                          the fields package-linux.sh writes for Linux; release.yml descriptor-windows uses it,
+//                          because no Windows manifest rides on the Linux-only Release (owner answer A2)
 //   --check                emit twice and require byte-identical output; parse each
 //                          emission back against the inputs; with --outdir, also
 //                          byte-compare each file already on disk
@@ -53,7 +57,7 @@
 // Upgrade to a per-target MAR map when one job emits both.
 //
 // Usage:
-//   node scripts/build-update-xml.mjs --emit --outdir <dir> [--channel <name>]
+//   node scripts/build-update-xml.mjs --emit --outdir <dir> [--channel <name>] [--manifest-out <file>]
 //   node scripts/build-update-xml.mjs --check [--outdir <dir>]
 //   node scripts/build-update-xml.mjs --self-test
 
@@ -67,6 +71,7 @@ import { fileURLToPath } from 'node:url';
 import { buildUpdateXml, isCleanHttpsUrl, parseUpdateXml } from './verify-mar-update-hop.mjs';
 import { UPDATE_CHANNEL, marOrigin, resolveConfig, updateChannel } from './generate.mjs';
 import { DOCS_REL, WINDOWS_TOKEN, targetTokenOf } from './lib/channel-identity.mjs';
+import { manifestProblems } from './verify-channel-live.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'build-update-xml';
@@ -84,7 +89,7 @@ const TARGETS = Object.freeze([Object.freeze({ os: 'Linux', abi: 'x86_64-gcc3' }
 const PENDING = Object.freeze({ Darwin: 'stage 6' });
 // The published asset token per OS: the docs table for Linux, the shared Windows token for WINNT.
 const assetTokenOf = (os, docsText) => (os === 'WINNT' ? WINDOWS_TOKEN : targetTokenOf(docsText));
-const VALUE_FLAGS = Object.freeze(['--outdir', '--channel', '--details-url', '--config-status', '--application-ini', '--mar']);
+const VALUE_FLAGS = Object.freeze(['--outdir', '--channel', '--details-url', '--config-status', '--application-ini', '--mar', '--manifest-out']);
 const MODE_FLAGS = Object.freeze(['--emit', '--check', '--self-test']);
 const DOTTED = /^\d+(\.\d+)*$/;
 const BUILD_ID = /^\d{14}$/;
@@ -114,6 +119,7 @@ function parseArgs(argv) {
     }
     if (modes.length !== 1) refuse('give exactly one mode: --emit, --check or --self-test');
     if (modes[0] === '--emit' && opts['--outdir'] === undefined) refuse('--emit needs --outdir <dir>');
+    if (modes[0] !== '--emit' && opts['--manifest-out'] !== undefined) refuse('--manifest-out is written by --emit only');
     if (modes[0] === '--self-test' && Object.keys(opts).length > 0) refuse('--self-test takes no other flags');
     return { mode: modes[0], opts };
 }
@@ -301,7 +307,16 @@ function runChecks(root, overrides = {}) {
     };
     // One built tree per run, so one target. The loop shape stays for the per-target map.
     const outputs = [{ rel: join(channel, token, 'update.xml'), args, expect }];
-    return { failures, outputs };
+    // The [AppUpdate] URL template as baked, the value package-linux.sh records as update_url.
+    const updateUrl = /^\[AppUpdate\]\s*\n(?:(?!\[)[^\n]*\n)*?URL=(\S+)\s*$/m.exec(iniText)?.[1] ?? null;
+    const manifest = { version, release_key: tag, update_channel: channel, mar_channel_id: subst.MAR_CHANNEL_ID, mar_origin: origin, build_id: buildID, build_target: token, update_url: updateUrl };
+    return { failures, outputs, manifest };
+}
+
+/** The manifest --manifest-out writes, refused by channel-live's own field rules before it is written. */
+function manifestOrWhy(manifest, iniShown) {
+    const problems = manifestProblems(manifest);
+    return problems.length === 0 ? { manifest } : { why: `the manifest for --manifest-out is not complete (${problems[0].split('. Next step')[0]}; the update URL comes from the [AppUpdate] URL of ${iniShown}). Next step: rebuild the tree` };
 }
 
 /**
@@ -473,6 +488,22 @@ function selfTest() {
         }
         console.log(`  ok  Windows control: one descriptor, ${winRel}, patch URL names the ${WINDOWS_TOKEN} asset, byte-identical on re-run`);
 
+        // --manifest-out: the Windows manifest carries what channel-live reads, and an ini without the baked
+        // [AppUpdate] URL is refused rather than written with a null update_url.
+        const baked = 'https://updates.example.invalid/update/6/%PRODUCT%/%VERSION%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%SYSTEM_CAPABILITIES%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/update.xml';
+        const withUrl = { ...winGreen, [APP_INI_REL]: `${iniFixture()}[AppUpdate]\nURL=${baked}\n` };
+        const wm = manifestOrWhy(runChecks(root, { texts: withUrl }).manifest, APP_INI_REL);
+        if (wm.why || wm.manifest.build_target !== 'WINNT_x86_64-msvc' || wm.manifest.build_id !== FIXTURE_BUILD_ID || wm.manifest.update_url !== baked || wm.manifest.release_key !== 'v153.5.1-1') {
+            console.error(`${NAME}: --self-test FAIL -- the Windows --manifest-out control is wrong: ${wm.why ?? JSON.stringify(wm.manifest)}`);
+            return 1;
+        }
+        const noUrl = manifestOrWhy(win.manifest, APP_INI_REL);
+        if (!noUrl.why?.includes('update_url')) {
+            console.error(`${NAME}: --self-test FAIL -- --manifest-out accepted an application.ini without the [AppUpdate] URL: ${JSON.stringify(noUrl)}`);
+            return 1;
+        }
+        console.log('  ok  --manifest-out: the Windows manifest passes channel-live\'s field rules; a missing [AppUpdate] URL is refused naming update_url');
+
         let failed = 0;
         const noOriginRoot = makeFixture();
         dirs.push(noOriginRoot);
@@ -547,7 +578,7 @@ function main() {
         channel: opts['--channel'],
         detailsURL: opts['--details-url'],
     };
-    const { failures, outputs } = runChecks(REPO_ROOT, overrides);
+    const { failures, outputs, manifest } = runChecks(REPO_ROOT, overrides);
     if (failures.length > 0) {
         printFailures(failures);
         return 1;
@@ -555,6 +586,15 @@ function main() {
     const names = outputs.map(o => o.rel).join(', ');
 
     if (mode === '--emit') {
+        if (opts['--manifest-out'] !== undefined) {
+            const m = manifestOrWhy(manifest, opts['--application-ini'] ?? APP_INI_REL);
+            if (m.why) {
+                printFailures([m.why]);
+                return 1;
+            }
+            mkdirSync(dirname(resolve(opts['--manifest-out'])), { recursive: true });
+            writeFileSync(resolve(opts['--manifest-out']), JSON.stringify(m.manifest, null, 2) + '\n');
+        }
         writeOutputs(outputs, resolve(opts['--outdir']));
         console.log(`${NAME}: PASS -- wrote ${names} under ${resolve(opts['--outdir'])}`);
         return 0;

@@ -26,12 +26,20 @@ import { createServer as createHttpsServer } from 'node:https';
 import { readFileSync } from 'node:fs';
 import { GET_BY_NAME, makeProfile, pollFor, probe, sourceConst, withShell, REPO_ROOT } from './pb-relaunch.mjs';
 import { join } from 'node:path';
+import { activeWindow, isRunWindow, osKeys, osPointer, raiseShell } from './pb-kwin.mjs';
 
 export const WEB_TAB_STATE_EVENT = sourceConst('theia/extensions/tab-uris/src/browser/web-tab.ts', 'WEB_TAB_STATE_EVENT');
 const API_URL = 'chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs';
 
-/** Which route pressKey took on its last call: 'tip' or 'bidi-chrome'. */
+/** Which route pressKey took on its last call: 'tip', 'bidi-chrome' or (PB_REAL_INPUT=1) 'os'. */
 export const keyRoute = { last: '' };
+
+// 39-15: PB_REAL_INPUT=1 sends pressKey and osClientPointer as real OS input (ydotool behind pb-kwin's gate),
+// which needs a compositor window: the session runs headed.
+const REAL_INPUT = process.env.PB_REAL_INPUT === '1';
+if (REAL_INPUT) {
+    process.env.PB_LIVE_HEADED = '1';
+}
 
 /**
  * A fresh profile, a purged startup cache, the shell up and the push recorder
@@ -240,6 +248,14 @@ export async function pressKey(app, { key, code, keyCode, modifiers = [] }) {
         }
         return m;
     });
+    if (REAL_INPUT) {
+        await shellActiveOnce(app);
+        osKeys([...modifiers.map(name => OS_MODIFIERS[name]), osKeyName(code ?? key)]);
+        keyRoute.last = 'os';
+        // A uinput key reaches the page through the compositor, not inside this call: give the dispatch a moment.
+        await new Promise(r => setTimeout(r, 200));
+        return;
+    }
     const tip = await app.evaluateIn(app.chrome, `(() => {
         try {
             const C = typeof Cc !== 'undefined' ? Cc : Components.classes;
@@ -267,6 +283,103 @@ export async function pressKey(app, { key, code, keyCode, modifiers = [] }) {
     const up = down.slice().reverse().map(a => ({ type: 'keyUp', value: a.value }));
     await app.send('input.performActions', { context: app.chrome, actions: [{ type: 'key', id: 'pb-keys', actions: [...down, ...up] }] });
     keyRoute.last = `bidi-chrome (${tip})`;
+}
+
+const OS_MODIFIERS = { shift: 'shift', control: 'ctrl', accel: 'ctrl', alt: 'alt', meta: 'meta' };
+const OS_NAMED = {
+    Escape: 'esc', Enter: 'enter', Space: 'space', ' ': 'space', Tab: 'tab', Backspace: 'backspace', Delete: 'delete',
+    Home: 'home', End: 'end', PageUp: 'pageup', PageDown: 'pagedown', ArrowUp: 'up', ArrowDown: 'down',
+    ArrowLeft: 'left', ArrowRight: 'right', ContextMenu: 'menu', BrowserBack: 'back', BrowserForward: 'forward',
+    ShiftLeft: 'shift', ControlLeft: 'ctrl', AltLeft: 'alt', MetaLeft: 'meta', Shift: 'shift', Control: 'ctrl', Alt: 'alt', Meta: 'meta',
+};
+/** pb-kwin's key name for a DOM `code` (or `key`): KeyR -> r, Digit5 -> 5, F5 -> f5, ArrowLeft -> left. */
+function osKeyName(code) {
+    const c = String(code);
+    return OS_NAMED[c] ?? (/^Key[A-Z]$/.test(c) ? c.slice(3) : /^Digit\d$/.test(c) ? c.slice(5) : c).toLowerCase();
+}
+
+// The sessions raised for real input: each new shell window is raised once, then the gate alone decides every send.
+const raisedApps = new WeakSet();
+/** Raises the shell window once per session and waits up to 5 s for KWin to report it active. */
+async function shellActiveOnce(app) {
+    if (raisedApps.has(app)) {
+        return;
+    }
+    raiseShell();
+    for (let i = 0; i < 50 && !isRunWindow(activeWindow()); i++) {
+        await new Promise(r => setTimeout(r, 100));
+    }
+    raisedApps.add(app);
+}
+
+/** Which route osClientPointer took on its last call, and the calibration it used. */
+export const pointerRoute = { last: '', calibration: null };
+const pointerOrigins = new Map();
+
+/**
+ * Real pointer input (PB_REAL_INPUT=1) at client point (x, y) of the document in BiDi `context`. The screen mapping
+ * is the shell's KWin frame geometry plus the document's mozInnerScreenX/Y, scaled by devicePixelRatio over the
+ * output scale; it is calibrated by a hover read-back: the pointer moves to the mapped point, the document's last
+ * trusted mousemove reports where it landed, and the origin is corrected until the read-back is within 2 px (at
+ * most five attempts). Throws "calibration failed" with the measured error otherwise. `spec` is osPointer's, plus
+ * `calibrateAt` (a client point to calibrate on when the target itself cannot be read back).
+ */
+export async function osClientPointer(app, context, { x: tx, y: ty, calibrateAt, ...spec }) {
+    // `calibrateAt`: calibrate on that client point of the same document, then act at (tx, ty) through the same
+    // mapping -- for a target that raises no mousemove in the document (a native window-drag handle over it).
+    const { x, y } = calibrateAt ?? { x: tx, y: ty };
+    await shellActiveOnce(app);
+    const doc = JSON.parse(await app.evaluateIn(context, `(() => {
+        if (!window.__pbHoverInstalled) {
+            window.__pbHoverInstalled = true;
+            addEventListener('mousemove', e => { if (e.isTrusted) window.__pbHover = { x: e.clientX, y: e.clientY }; }, true);
+        }
+        return JSON.stringify({ ix: mozInnerScreenX, iy: mozInnerScreenY, dpr: devicePixelRatio });
+    })()`));
+    const w = activeWindow();
+    if (!isRunWindow(w)) {
+        throw new Error(`refused: active window ${JSON.stringify({ resourceClass: w?.resourceClass ?? '', pid: w?.pid ?? null })} is not a PowerBrowser window of a browser this run launched`);
+    }
+    const ratio = doc.dpr / (w.scale || 1);
+    const key = `${context}@${w.x},${w.y}`;
+    // mozInnerScreenX/Y count from the surface, which carries the client-side shadow KWin's frame excludes; the shell
+    // document's own value is that inset (measured: 26.4, 23.2 CSS px at scale 1.25).
+    const inset = JSON.parse(await app.evaluateIn(app.chrome, 'JSON.stringify({ x: mozInnerScreenX, y: mozInnerScreenY })'));
+    let origin = pointerOrigins.get(key) ?? { x: w.x + (doc.ix - inset.x) * ratio, y: w.y + (doc.iy - inset.y) * ratio };
+    const tries = [];
+    for (let attempt = 0; attempt < 5; attempt++) {
+        const sx = Math.round(origin.x + x * ratio);
+        const sy = Math.round(origin.y + y * ratio);
+        await app.evaluateIn(context, 'window.__pbHover = null; true');
+        // A nudge first, so the final move is a real motion that raises a mousemove even when already on the point.
+        await osPointer({ x: sx + 3, y: sy + 3, action: 'move' });
+        await osPointer({ x: sx, y: sy, action: 'move' });
+        await new Promise(r => setTimeout(r, 120));
+        const seen = JSON.parse(await app.evaluateIn(context, 'JSON.stringify(window.__pbHover)'));
+        if (!seen) {
+            // No trusted mousemove reached the document: the mapped point is off it, or the move raised none yet.
+            tries.push({ screen: [sx, sy], read: null });
+            if (tries.filter(t => !t.read).length >= 2) {
+                break;
+            }
+            continue;
+        }
+        const ex = seen.x - x;
+        const ey = seen.y - y;
+        tries.push({ screen: [sx, sy], read: [seen.x, seen.y], error: [Math.round(ex * 10) / 10, Math.round(ey * 10) / 10] });
+        if (Math.abs(ex) <= 2 && Math.abs(ey) <= 2) {
+            pointerOrigins.set(key, origin);
+            pointerRoute.last = 'os';
+            pointerRoute.calibration = { attempts: attempt + 1, error: [ex, ey], ratio, tries };
+            const ax = Math.round(origin.x + tx * ratio);
+            const ay = Math.round(origin.y + ty * ratio);
+            return spec.action === 'move' && !calibrateAt ? { x: sx, y: sy } : osPointer({ x: ax, y: ay, ...spec });
+        }
+        origin = { x: origin.x - ex * ratio, y: origin.y - ey * ratio };
+    }
+    pointerRoute.last = 'calibration failed';
+    pointerRoute.calibration = { ratio, tries };
+    throw new Error(`calibration failed: the hover read-back never came within 2 px of (${x}, ${y}): ${JSON.stringify(tries)} (window ${w.x},${w.y} scale ${w.scale}, document at ${doc.ix},${doc.iy} dpr ${doc.dpr})`);
 }
 
 // WebDriver's normalised key code points for the non-printable keys used here.

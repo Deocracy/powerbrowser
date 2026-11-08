@@ -149,10 +149,14 @@ Azure Artifact Signing subscription. What the user sees:
   unsigned would be worse than shipping without it.
 - No `CERTIFICATE_NAME` or `CERTIFICATE_ISSUER` NSIS defines exist anywhere on the
   installer surface.
-- The `build-windows` job stages the sidecar from a `windows-latest` artifact in `windows-sidecar/` and the
-  digest of that artifact's `SHA256SUMS`, recorded by the producing job outside the artifact, in the
-  `PB_WIN_SIDECAR_SUMS_SHA256` repository variable (the hosted sidecar job is Phase 50 work, `BLOCKED.md`
-  item 8). `powerbrowser/packaging/package-windows.sh` fails closed when either is missing, and
+- The `build-windows` job stages the sidecar from the `windows-sidecar` artifact, which the hosted
+  `windows-sidecar` job builds on `windows-latest` in the same run, downloaded into `windows-sidecar/`. The
+  digest of that artifact's `SHA256SUMS` is the producing job's output `sums_sha256`, recorded outside the
+  artifact, and reaches `package-windows.sh` as `PB_WIN_SIDECAR_SUMS_SHA256`. No repository variable is set
+  for it: a variable cannot carry a per-run digest inside the run that produces it.
+  `build-windows-shape` checks the one `needs` edge and the producer job. `build-windows` is the only job that
+  needs `windows-sidecar`, so its failure stops the Windows build and nothing else.
+  `powerbrowser/packaging/package-windows.sh` fails closed when either is missing, and
   `powerbrowser/packaging/check-win-sidecar.sh` refuses unlisted files, symlinks and unsafe manifest paths.
 - MSIX is out of scope: `upstream/python/mozbuild/mozbuild/repackaging/msix.py`
   raises without `makeappx.exe` and `signtool.exe` from a real Windows SDK, and the
@@ -291,7 +295,7 @@ here owns.
 | `reports-bug-error-crash` | Create the events DNS record on `powerbrowser.org` (proxied), the D1 database and its one-table schema, deploy the Worker, add the rate-limiting rule, and record the database id, wrangler version, deployed version id, threshold and period | Cloudflare account |
 | `reports-bug-error-crash` | Copy `website-staging/privacy.html` into the website repository as `/privacy` without rewording and confirm Cloudflare serves it 200 | Site repository |
 | `reports-bug-error-crash` | From outside the Cloudflare account post one synthetic event (200), one over-cap body (413) and one burst past the rate limit (blocked); paste all three responses verbatim | An external vantage point |
-| `crash-reporting-k` (TEL-07) | In this order: enable R2 on the account, create the bucket `powerbrowser-crash-reports`, confirm its r2.dev public URL is disabled and no custom domain is attached, apply the 30-day lifecycle rule over the `crash/` prefix recorded in `worker/crash-r2-lifecycle.json`, add the zone rate-limit rule over `/submit` on the crash hostname (the host of `[urls].crash_report`), put that hostname in the `routes` block of `worker/wrangler-crash.toml`, then deploy with `wrangler deploy --config worker/wrangler-crash.toml` (the custom domain creates the proxied DNS record); record the wrangler version, deployed version id, rule threshold and period, and that the DNS record exists. The runbook is `worker/wrangler-crash.toml` | Cloudflare account |
+| `crash-reporting-k` (TEL-07) | In this order: enable R2 on the account, create the bucket `powerbrowser-crash-reports`, confirm its r2.dev public URL is disabled and no custom domain is attached, apply the 30-day lifecycle rule over the `crash/` prefix recorded in `worker/crash-r2-lifecycle.json`, add the zone rate-limit rule over `/submit` on the crash hostname `crash.powerbrowser.org` (the host of `[urls].crash_report`), confirm the `routes` block of `worker/wrangler-crash.toml` names that hostname, then deploy with `wrangler deploy --config worker/wrangler-crash.toml` (the custom domain creates the proxied DNS record); record the wrangler version, deployed version id, rule threshold and period, and that the DNS record exists. The runbook is `worker/wrangler-crash.toml` | Cloudflare account |
 | `crash-reporting-k` (TEL-07) | From outside the Cloudflare account post one well-formed multipart submit (200 with `CrashID=`), one over-cap body (413 `oversized_body`) and one burst past the rate limit (blocked); paste all three responses verbatim into the operator record. No token or secret is created in this repository | An external vantage point |
 | `reports-bug-error-crash` | Record both TEL-06 deferrals as named rows, and decide the crash-reporter gate in writing as `RETIRED` or `HELD` | Owner decision; under `RETIRED` the milestone owner amends the exclusion row, not this plan set |
 | `listings-and-cadence` | Under an ADMIT verdict, regenerate and rename the four Flathub files, substitute the five `@RELEASE_*@` tokens, optionally validate locally, and open the Flathub submission PR from the owner's account | The submission is made under a person's identity |
@@ -806,10 +810,10 @@ an empty build command and output `/`. Its tree is
 The placeholder is not decoration: git cannot commit an empty directory, and an empty
 `updates` element is exactly what an update origin returns when it has nothing to
 offer. One `_redirects` rule maps the baked eleven-segment path onto that tree, with
-ten placeholders and a 200 proxy:
+six placeholders, a splat for the last five segments, and a 200 proxy:
 
 ```
-/update/6/:product/:version/:buildid/:target/:locale/:channel/:osversion/:syscaps/:dist/:distversion/update.xml  /:channel/:target/update.xml  200
+/update/6/:product/:version/:buildid/:target/:locale/:channel/*  /:channel/:target/update.xml  200
 ```
 
 That rule must be **probed live** with the segment shapes a real client sends,
@@ -818,7 +822,14 @@ parentheses and a `SYSTEM_CAPABILITIES` segment carrying `%3A` and `%2C`. If a
 placeholder does not match an escaped segment, the fallback is a minimal `_worker.js`
 on the same project that splits the path and serves `<channel>/<target>/update.xml`.
 Whichever mechanism ships is recorded here by the stage. Do not proceed on an
-unprobed rule. An unknown BUILD_TARGET must return 404, not another target's
+unprobed rule.
+
+Measured 2026-11-06 on a throwaway classic Pages project: a rule with ten placeholders
+parses ("Parsed 1 valid redirect rule") but never matches, even with plain segments and a
+fixed destination; seven and eight placeholders match. Six placeholders plus a splat match
+the real client shape (`%20`, literal parentheses, `%3A`, `%2C`) with 200 and the descriptor
+bytes, and an unknown BUILD_TARGET returns 404. The splat rule shipped; `_worker.js` was not
+needed. An unknown BUILD_TARGET must return 404, not another target's
 descriptor.
 
 MAR bytes never go on Pages: Pages caps assets at 25 MiB and a MAR is far larger.
@@ -909,8 +920,12 @@ equivalent to compromising the Windows signing identity, so `legion` is inside t
 Azure is reached over OIDC only: `Azure/login` v3.1.0 (commit
 `a641126d1b8aa4d1fa005f4f92df94a3a4c4c906`, admitted in `.github/settings/actions-selected.json`)
 signs in with three ids, and jsign reads a short-lived access token from the job shell. No Azure
-secret exists. The job fails closed, before the sign-in, when any of these `release` environment
-variables is empty:
+secret exists. Azure signing is out of scope (owner ruling 2026-11-01), so when `AZURE_CLIENT_ID` is
+empty the configuration gate reports Windows signing as skipped (a notice and a job-summary line),
+every later step of the job is skipped, nothing is signed or handed off, and the run does not fail; no
+Linux job waits on it (`win-sign-chain`, rules `skip` and `independence`). When `AZURE_CLIENT_ID` is
+set, the job fails closed, before the sign-in, when any of these `release` environment variables is
+empty:
 
 | Variable | Holds |
 |---|---|
@@ -1025,6 +1040,9 @@ or `user/`, in apply order.
 | `release-tags` ruleset | `ruleset-release-tags.json` | as above, blocked until `powerbrowser-bot` is installed | as above |
 | Immutable releases | `immutable-releases.json` | `PUT immutable-releases` (no body), only while zero Releases exist | `immutable-releases` |
 | Private vulnerability reporting | `private-vulnerability-reporting.json` | `PUT private-vulnerability-reporting` (no body) | `private-vulnerability-reporting` |
+| Dependabot alerts | `dependabot-alerts.json` | `PUT vulnerability-alerts` (no body) | `vulnerability-alerts` (204 is on) |
+| Dependabot security updates | `automated-security-fixes.json` | `PUT automated-security-fixes` (no body), after the alerts | `automated-security-fixes` |
+| CodeQL default setup | `code-scanning-default-setup.json` | `PATCH code-scanning/default-setup` | `code-scanning/default-setup` |
 | Discussions and auto-merge | `repo.json` | `PATCH` the repository | the repository |
 | Repository Actions secrets: zero | (none) | none | `actions/secrets` |
 | Org 2FA requirement and the owner set | `org.json` | owner UI step | `orgs/{org}`, `orgs/{org}/members?role=admin` |
@@ -1112,6 +1130,105 @@ rule holds for the Gecko toolchain: `scripts/toolchain-baseline.sh` regenerates
 `toolchain-baseline.txt` and the rebase procedure diffs against it.
 
 ---
+
+### Withdrawing a release (REL-02, `withdraw.yml`)
+
+Withdraw is no-update only. A bad release stops being offered as an update, its Release and
+tag stay published as the record, and the fix is a new revision with a new tag
+(`[product].revision` + 1, regenerate, new bump PR). Nothing is deleted: not the Release,
+not the tag, not a descriptor. Immutable releases burn a deleted tag name for good.
+
+**Placement.** The workflow is `docs/withdraw.yml` in this tree, landed by the owner as
+`.github/workflows/withdraw.yml` in `powerbrowser-updates` (the `docs/watchdog.yml`
+precedent). It never enters the product repository. The descriptor write is a contents write
+on the updates repository, so the job lives there: the product `release.yml` trust map stays
+untouched and the token stays narrow. The file derives the product repository from its own
+name (`<product>-updates`), so it holds no owner or repo literal.
+
+**Trigger and shape.** `workflow_dispatch` only, with two required inputs: `tag` (the release
+key `v<ESR>-<revision>`) and `reason` (one line, at most 200 characters). There is no mode
+input. Hosted `ubuntu-latest`, `timeout-minutes: 15`, `permissions: contents: read` at the
+workflow and the job, 40-hex pinned `uses:`, no cache, no `pull_request` trigger. The inputs
+reach the shell only through `env`, never as `${{ }}` text inside `run:` (the GH-12 event-text
+rule, stated here because the Phase 41 `workflows` row covers the product repository only).
+
+**Token.** The job mints the `powerbrowser-bot` App token with
+`actions/create-github-app-token` immediately before the writes: `client-id` from the
+`BOT_APP_CLIENT_ID` variable and `private-key` from the `BOT_APP_PRIVATE_KEY` secret, both set
+in `powerbrowser-updates` by the owner; `owner` the repository owner; `repositories` the
+updates and the product repositories; `permission-contents: write` and nothing else. One mint
+suffices (the job takes minutes; the token expires after one hour and is revoked at job end).
+The same token PATCHes the product Release, which works because the App is installed on both
+repositories (GH-10).
+
+**Bytes.** The target set is the `build_target` of the withdrawn Release's
+`release-manifest.json` asset, never a hand-kept list. For each target the job writes the
+two-line no-update document to `<channel>/<BUILD_TARGET>/update.xml` on `main` through the
+Contents API with the commit message `Withdraw <tag>: no-update descriptors (<reason>)`. An
+unchanged file is a no-op. It then re-reads every path and compares the set of blob ids
+with the no-update blob, so a missing or different target fails the job.
+
+**Marking.** The job appends one block to the Release notes, once: the line
+`<!-- release-withdrawn -->` (the mark `scripts/release-train.mjs` derives WITHDRAWN from),
+then `Withdrawn: <reason>.` and the new-revision sentence. When the probe verdict below is
+`flag` it then sets `prerelease: true` in a second PATCH, after the notes PATCH and the
+re-read that proves the mark; on `notes-only` or `pending` it marks by the notes alone, which
+is always allowed. A refused flag, or one that does not stick, is a warning: the Release
+keeps the notes mark, the job falls back to notes-only and still runs the liveness step. The
+job does not fail there because the verdict is read at the immutable tag, so every re-run
+would read `flag` again. Assets, tag and `draft` are never
+touched. The verdict is read from `docs/RELEASING.md` at the withdrawn tag; zero verdict
+lines, two, or another value stop the job before any write.
+
+**Liveness.** Last, from the product checkout at the tag, the job runs
+`node scripts/verify-channel-live.mjs --withdrawn "$TAG"` with the same ten attempts 60 s
+apart as `release.yml`, because the updates host deploys from the push. The next section
+gives its expected output.
+
+**Owner steps.** Land the file (once), then for a withdrawal:
+
+```
+U="$(gh repo view --json nameWithOwner --jq .nameWithOwner)-updates"   # run in the product checkout
+gh workflow run withdraw.yml --repo "$U" -f tag=<v<ESR>-<revision>> -f reason="<one line>"
+gh run watch --repo "$U"
+```
+
+### The immutable-release probe (REL-02, `release-probe.yml`)
+
+The probe answers one question before the first public release: does an immutable,
+published Release still accept the pre-release flag from the bot App token? It is
+`docs/release-probe.yml`, landed by the owner as `.github/workflows/release-probe.yml` in
+`powerbrowser-updates` and dispatched once, after immutable releases are enabled on the product
+repository (the repo-controls apply) and before the first release tag.
+
+The probe Release is on the tag `probe-1`. That name is outside the `release-tags` ruleset
+pattern (`v[0-9]*.[0-9]*-[0-9]*`), so the bot App may create it, and no release tool reads it
+as a release (`verify-descriptor-monotonic` ignores tags that are not release keys). The job
+creates it as a draft, publishes it with `make_latest: false` (immutability applies only to a
+published Release), tries `PATCH prerelease=true`, appends the withdrawal block with
+`Withdrawn: probe.`, re-reads both and prints:
+
+```
+release-probe: <date>, tag probe-1, Release id <id>, immutable <true|absent>
+release-probe: pre-release flag stuck: <yes|no>
+release-probe: refusal: <none | the first line of the 422 or 403 answer>
+release-probe: notes append kept: yes
+release-probe: verdict <flag|notes-only>
+```
+
+It fails only when the notes append does not stick, or when the Release reads
+`immutable: false`. The probe Release and its tag are never deleted; a re-run reuses them.
+
+```
+U="$(gh repo view --json nameWithOwner --jq .nameWithOwner)-updates"   # run in the product checkout
+gh workflow run release-probe.yml --repo "$U"
+gh run watch --repo "$U"
+```
+
+Record the result below: replace `pending` with the printed verdict and add the date, the
+tag and the refusal line. `withdraw.yml` reads this one line as its configuration.
+
+Immutable-release probe verdict: `pending` (not yet run; the withdraw marks by the notes alone until it is recorded)
 
 ### The liveness row after a withdrawal (`--withdrawn`)
 
@@ -1537,8 +1654,15 @@ token or is renamed without it is recorded by stage
 | Target key | Versioned | Stable |
 |---|---|---|
 | `linux-x86_64` | pending stage `linux-release-pipeline-and-update-channel` | pending stage `linux-release-pipeline-and-update-channel` |
-| Windows x86_64 | pending stage `windows-unsigned` | pending stage `windows-unsigned` |
+| `windows-x86_64` | `<app_basename>-<version>.windows-x86_64.installer.exe` and `<app_basename>-<version>.windows-x86_64.complete.mar`, plus a Windows `SHA256SUMS`, on the MAR origin at `<tag>/` (never on the Release) | none: the MAR origin keys are write-once per tag |
 | macOS universal | pending stage `macos-adhoc-signed` | pending stage `macos-adhoc-signed` |
+
+The Windows row is published by `publish-windows` after the Linux publish of the same run (owner answer
+A2, 2026-11-04): the unsigned installer, the MAR-signed complete MAR and a Windows `SHA256SUMS` over
+those two go write-once to `https://downloads.powerbrowser.org/<tag>/`. The Release is immutable, so
+nothing is added to it after the single publish, and it stays Linux-only. `descriptor-windows` commits
+the `WINNT_x86_64-msvc` descriptor and `channel-live-windows` checks it. No Linux job needs any of the
+three (`win-sign-chain`, rule independence).
 
 Assets that carry no target token and are attached once per Release: `SHA256SUMS`,
 `release-manifest.json`, `LICENSING.md`, `THIRD-PARTY-NOTICES.txt`, and the source tarball.
@@ -1619,6 +1743,22 @@ fixer-pin and triage pin rules, so the owner moves it by hand together with `scr
 `scripts/verify-triage.mjs` and re-reviews its tool allowlist. Most of the bumped actions run only in the dispatch-only release
 workflows, which no pull-request check exercises, so a merged actions bump is exercised by the next release, not by its own pull
 request. The `workflows` row (rule `dependabot`) and the `zizmor` row keep this shape.
+
+### Theia inflow (Renovate)
+
+The release train's `renovate-theia` job runs self-hosted Renovate from `.github/renovate.json5` on the first maintenance
+sweep after a month's last Thursday (the Theia release day), and on owner dispatch:
+`gh workflow run release-train.yml --ref main -f reason=owner -f renovate-theia=true`. It opens or updates one grouped
+`@theia/**` pull request on `chore/theia-theia`, with `@theia/monaco-editor-core` on its own branch, and never touches
+`flake.lock`. Automerge is off. After Renovate, the `renovate-licensing` job, which holds no token or secret, checks out
+`main`, takes only every `theia/**/package.json`, `theia/yarn.lock` and `configuration.toml` from the head of `chore/theia-theia`,
+fetches and applies `upstream/`, installs `theia/` without lifecycle scripts, runs `node scripts/generate-licensing.mjs`, and
+uploads the two notice files. The `renovate-licensing-publish` job then adds one bot commit with those two files on exactly
+that branch head, through `main`'s `scripts/publish-bump-branch.sh`; no code from the branch runs where the App token exists.
+It refuses a branch that moved, that changes more than the Theia dependency files (a `package.json` change other than an
+`@theia/*` version string counts), or that carries a commit the bot did not
+author or commit; then regenerate the notices on the branch by hand. The monaco branch is not regenerated by the job.
+Merge after `verify.yml` is green, including its `licensing` row, with `gh pr merge <PR> --merge`.
 
 ### Schedule posture
 
@@ -1785,7 +1925,7 @@ the live APIs at deploy time.
 
 ```ts
 // powerbrowser-scheduler, src/index.ts (own repository). Clock only: no detection.
-import { githubAppJwt } from 'universal-github-app-jwt'; // 2.2.2, WebCrypto
+import githubAppJwt from 'universal-github-app-jwt'; // 2.2.2, WebCrypto; a default export
 import { EmailMessage } from 'cloudflare:email';
 
 interface Env {
@@ -1965,8 +2105,9 @@ red.
    replay FAIL is `UPTAKE_RED`, with the action wait-owner. A replay job that ends with any
    result other than success is red in the report, whatever stage line it printed.
 5. Patches are changed only by `regenerate-patches.sh`, never by hand. Routing a fixable
-   conflict to fixer F1 or F2 on a `chore/esr-175*` branch is a ship step (plan 58-03), and
-   no such branch exists until the owner approves the 175 conflict writer.
+   red bump PR to fixer F2 on a `chore/esr-175*` branch is a ship step (plan 58-03), and
+   no such branch exists until the owner approves the 175 conflict writer. A patch conflict
+   (F1) is owner-resolved and never routed to the fixer (owner ruling 2026-11-03).
 
 The uptake lane has no commit, push, PR, dispatch, environment or App token. The
 `uptake-lane` rule in `scripts/verify-workflows.mjs` holds the job to read-only scope and
@@ -2047,7 +2188,8 @@ the patch's `+` lines.
   regeneration. Stop. Do not edit the patch. Record one conflict issue (until the writer is approved, only the would-write view prints it and nothing is written),
   `ESR <tag>: patch <NNN> did not apply`, with the patch name, the tags, the files, the
   verbatim apply log, the pre-image and replayed blob hashes, the moved-file list and the
-  surface result. Route fixable classes (F1 patch-replay conflict, F2 red bump PR) to the
+  surface result. The patch-replay conflict (F1) itself is owner-resolved (owner ruling
+  2026-11-03). Route a red bump PR (F2) to the
   fixer on a `chore/esr-175*` branch (A-58-3, Phase 52). A branch like that does not exist
   until the owner approves the 175 conflict writer (`BLOCKED.md` item 1).
 
@@ -2380,7 +2522,7 @@ The repositories named below sit under the GitHub organisation that `configurati
 4. **Flathub submission pull request** (`FLATHUB_PR`; opened by the owner after an ADMIT and the real release digest): AWAITING-OWNER
 5. **winget credential holder** (`WINGET_HOLDER`; the dedicated bot account, name only): AWAITING-OWNER
 6. **winget token stored** (`WINGET_TOKEN_STORED`; yes or no and the date, in the `winget` environment, never the value): AWAITING-OWNER
-7. **winget pull request** (`WINGET_PR`; needs the Phase 54 Windows asset, otherwise DEFERRED-A2): AWAITING-OWNER
+7. **winget pull request** (`WINGET_PR`; needs the Phase 54 Windows installer, which under owner answer A2 is published to the MAR origin at `<tag>/`, not to the Release; the winget manifest and the `verify-assets` winget leg still point at the Release and must move first (Phase 56 BLOCKED.md item 17); until then DEFERRED-A2): AWAITING-OWNER
 8. **Tap repository and tap commit** (`TAP_REPO`; `homebrew-tap` under that organisation (it exists), then the bot App's commit SHA; the cask itself is deferred to v1.7 (R6)): AWAITING-OWNER
 9. **DNS TXT value** (`TXT_SET`; record `_flathub.debios.org`, the digest only, shown by the Flathub Developer Portal after the submission is accepted): AWAITING-OWNER
 10. **Clean-machine substitute log** (`SUBSTITUTE_LOG`; the `nix build .#powerbrowser` lines proving no rebuild, pasted verbatim): AWAITING-OWNER

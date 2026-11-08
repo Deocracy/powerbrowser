@@ -67,13 +67,15 @@ encode a constraint against a requirement this project has already delivered.
 Power Browser's rule:
 
 - Theia's shell is what opens, and it is the default GUI.
-- A **stock** browser window is reachable — GUI-01, landed in plan 01-05. It opens via
-  `window.open(url, '_blank')` from the Theia frontend
-  (`theia/extensions/tab-uris/src/browser/browser-window-command.ts`). The shell window carries
-  no `nsIBrowserDOMWindow`, so `nsWindowWatcher` cannot divert that call into a tab and falls
-  through to `AppWindow::CreateNewContentWindow`, which opens `BROWSER_CHROME_URL`. Patch `020`
-  no longer overrides that define, so `BROWSER_CHROME_URL` is stock upstream chrome. **No
-  chrome-side command is registered, and that absence is the ratified design, not an omission.**
+- A **stock** browser window is reachable — GUI-01, landed in plan 01-05. It opens from the
+  Theia frontend through the `openStockTab` actor kind
+  (`theia/extensions/tab-uris/src/browser/browser-window-command.ts` →
+  `PowerBrowserAPI.openStockTab`), which puts the page in the stock browser window. A bare
+  `window.open(url, '_blank')` from the Theia frame still falls through to `BROWSER_CHROME_URL`,
+  because the shell's `browserDOMWindow` returns null for a Theia opener, so `nsWindowWatcher`
+  opens a stock window through `AppWindow::CreateNewContentWindow`. Patch `020` no longer
+  overrides that define, so `BROWSER_CHROME_URL` is stock upstream chrome. **No chrome-side
+  command is registered, and that absence is the ratified design, not an omission.**
 - **No custom browser chrome is authored.** No tab strip, no toolbar, no address bar, no menu of
   our own. That remains true and is the Milestone 2 boundary. What changed relative to the
   inherited rule is only that the stock browser window is *reachable* rather than *absent*.

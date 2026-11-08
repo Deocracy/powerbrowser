@@ -95,4 +95,4 @@ PolyForm Noncommercial 1.0.0. See [LICENSE](LICENSE).
 
 ---
 
-A project of [Deocracy](https://github.com/Deocracy).
+A project of [Deocracy Institute](https://github.com/Deocracy), a 501(c)(3) nonprofit.

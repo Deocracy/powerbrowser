@@ -7,7 +7,9 @@
 // live Releases publish for that appVersion and BUILD_TARGET.
 //
 //  1. Published set (full tier). Every non-draft Release of the repository named in
-//     configuration.toml [urls] release_notes must carry a release-manifest.json asset.
+//     configuration.toml [urls] release_notes whose tag is a release key (v<ESR>-<revision>)
+//     must carry a release-manifest.json asset. A Release on any other tag is not a release (the
+//     immutable-release probe's probe-1, REL-02) and is not read.
 //     Its JSON gives { version, build_id, build_target }: the appVersion, the fourteen-digit
 //     Gecko BuildID and the joined BUILD_TARGET. Unknown keys are ignored. Every read goes
 //     through one fail-closed gh api helper with the pinned X-GitHub-Api-Version. A non-2xx,
@@ -263,6 +265,8 @@ export function runChecks(root, overrides = {}) {
         } else {
             for (const release of pages.flat()) {
                 if (release?.draft === true) continue;
+                // Only a release key names a release; the probe-1 Release (REL-02) carries no manifest by design.
+                if (typeof release?.tag_name === 'string' && !RELEASE_KEY_RE.test(release.tag_name)) continue;
                 nonDraft += 1;
                 const tag = typeof release?.tag_name === 'string' ? release.tag_name : `(unnamed Release ${show(release?.id)})`;
                 const asset = (Array.isArray(release?.assets) ? release.assets : []).find(a => a?.name === ASSET_NAME);
@@ -494,6 +498,17 @@ function selfTest() {
         return 1;
     }
     console.log('  ok  control: a draft Release with a newer manifest -> green, not counted');
+
+    // A published Release on a tag that is not a release key (the probe-1 Release, REL-02) has no manifest: not read.
+    const probed = run(world({
+        releases: [release('v153.5.1-1', 101), { tag_name: 'probe-1', draft: false, assets: [] }],
+        manifests: { 101: manifest('153.5.1', PUBLISHED_BUILD) },
+    }), [candidate('153.5.1', '20261021000000')]);
+    if (probed.failures.length > 0 || probed.published.length !== 1 || !probed.notes[0].includes('1 non-draft Release(s)')) {
+        console.error(`${NAME}: --self-test FAIL -- the published probe-1 Release (no manifest, not a release key) was read or counted: ${probed.failures.join(' | ') || probed.notes[0]}`);
+        return 1;
+    }
+    console.log('  ok  control: a published probe-1 Release with no manifest -> green, not counted');
 
     // Another target: an older buildID than the published Linux build, offered for a different target, is green.
     const otherTarget = run(baseWorld(), [candidate('153.5.1', '20260101000000', 'Darwin_aarch64-gcc3')]);

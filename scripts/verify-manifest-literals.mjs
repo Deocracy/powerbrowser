@@ -131,6 +131,13 @@ const EXCLUDED_LINES = [
 // ---------------------------------------------------------------------------
 
 const ALLOWLIST = [
+  { slot: 'product.vendor_display', file: 'README.md', reason: 'readme footer attributing the project to the nonprofit' },
+  { slot: 'product.vendor_display', file: 'powerbrowser/branding/dev/locales/en-US/brand.ftl', reason: 'hand-written vendor short-name term owned by the manifest' },
+  { slot: 'product.vendor_display', file: 'powerbrowser/branding/release/locales/en-US/brand.ftl', reason: 'hand-written vendor short-name term owned by the manifest' },
+  { slot: 'product.vendor_display', file: 'website-staging/index.html', reason: 'public home page footer: the non-association sentence, verbatim copy the manifest owns' },
+  { slot: 'product.vendor_display', file: 'website-staging/download.html', reason: 'public download page footer: the non-association sentence, verbatim copy the manifest owns' },
+  { slot: 'product.vendor_display', file: 'website-staging/privacy.html', reason: 'public privacy page footer: the non-association sentence, verbatim copy the manifest owns' },
+  { slot: 'product.vendor_display', file: 'website-staging/legal.html', reason: 'public legal page: the copyright holder line and the non-association footer, verbatim copy the manifest owns' },
   { slot: 'variant-display:dev', file: 'docs/BUILD.md', reason: 'build-guide prose quoting the dev display composition' },
   { slot: 'variant-display:dev', file: 'powerbrowser/branding/dev/configure.sh', reason: 'hand-written dev display name; byte-identity comparand owned by the manifest' },
   { slot: 'variant-display:dev', file: 'powerbrowser/branding/dev/locales/en-US/brand.ftl', reason: 'hand-written dev full-name term; byte-identity comparand owned by the manifest' },

@@ -2,41 +2,37 @@
 gsd_state_version: "1.0"
 milestone: v1.5
 milestone_name: Chrome Bar Firefox Parity
-current_phase: 38
-current_phase_name: WebExtensions
-status: verifying
-stopped_at: "All v1.5 phases executed; Phases 33-38 merged into main, reviewed, fixed, verified human_needed with 0 gaps; end-of-milestone live pass pending (owner, .planning/v1.5-LIVE-PASS.md)"
-last_updated: "2026-11-01T03:25:55.228Z"
-last_activity: 2026-11-01
-last_activity_desc: Phase 38 merged in full with verification deferred; end-of-milestone live pass pending (owner)
-state_head: 4b332e170e413e5814fbba6551f017ef0f11bae6
+status: Awaiting next milestone
+stopped_at: Phase 39 complete (20/20 plans, verification human_needed, deferred); milestone lifecycle next
+last_updated: "2026-11-07T17:40:13.784Z"
+last_activity: 2026-11-07
+last_activity_desc: Milestone v1.5 completed and archived
+state_head: 90f9791ee2a89605226cc4e1c12f4031429fa0a9
 progress:
-  total_phases: 13
-  completed_phases: 1
-  total_plans: 71
-  completed_plans: 42
-  percent: 8
+  total_phases: 14
+  completed_phases: 13
+  total_plans: 93
+  completed_plans: 93
+  percent: 93
+current_phase: 39
+current_phase_name: v1.5 Close-out
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-10-20)
+See: .planning/PROJECT.md (updated 2026-11-07)
 
 **Core value:** A stranger can clone Power Browser, edit `configuration.toml`, drop in a logo, and build their own branded, working web browser without touching any other file — then reshape its GUI through Theia extensions without forking the platform.
-**Current focus:** all v1.5 phases executed; end-of-milestone live pass pending (owner)
+**Current focus:** v1.5 shipped (override closeout); live tests, checklist and deployments deferred to a v1.7 carry-forward phase (see .planning/CARRY-FORWARD-v1.7.md); v1.6 deploy workstream stays open
 
 ## Current Position
 
-Phase: all v1.5 phases executed; end-of-milestone live pass pending (owner)
+Phase: Milestone v1.5 complete
 Plan: —
-Status: Phases 32-38 closed with verification deferred to the end-of-milestone pass (.planning/v1.5-LIVE-PASS.md)
-Last activity: 2026-11-01 — Phase 38 merged in full (50b664d3; verification human_needed, live checks deferred)
-
-**v1.5 parallel-lane run:** lanes p33..p37 were cut from 23c08bb5 and merged into main in order 36 (aa8989d9), 34 (8143fedd), 37 (14319419), 35 (68a38581), 33 (d6f9fcbb). Each was reviewed and fixed on main. All live checks are deferred to one end-of-milestone pass.
-
-Progress: [█░░░░░░░░░] 8%
+Status: Awaiting next milestone
+Last activity: 2026-11-07 — Milestone v1.5 completed and archived
 
 ## Performance Metrics
 
@@ -177,6 +173,15 @@ Progress: [█░░░░░░░░░] 8%
 | Phase 32 P02 | not measured | 2 tasks | 11 files |
 | Phase 32 P05 | not measured | 2 tasks | 12 files |
 | Phase 32 P06 | not measured | 3 tasks | 10 files |
+| Phase 39 P01 | 293 min | 3 tasks | 7 files |
+| Phase 39 P02 | 34 min | 2 tasks | 5 files |
+| Phase 39 P03 | 10 min | 3 tasks | 8 files |
+| Phase 39 P04 | 35 min | 3 tasks | 7 files |
+| Phase 39 P05 | 40 min | 2 tasks | 5 files |
+| Phase 39 P06 | 35 min | 2 tasks | 5 files |
+| Phase 39 P07 | 75 min | 2 tasks | 6 files |
+| Phase 39 P08 | 175 min | 3 tasks | 4 files |
+| Phase 39 P09 | 50 min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -465,6 +470,27 @@ Recent decisions affecting current work:
 - [Phase 35]: PROMPT-04/06/08 and PAGE-07 executed in 35-01..07 (workspace/p35): installShellFurniture wires the furniture block (remoteBrowserTooltip, contentAreaContextMenu stub with the page menu rendered in Theia, PopupAutoComplete, invalid-form template, stock fullscreen warning) and the XULBrowserWindow, nsContextMenu, FullScreen and PointerlockFsWarning shims behind the boundary; merged after 32, 36, 34 and 37; Phase 37's prompt furniture folds into installShellFurniture and 36's browserDOMWindow IDL_SHIMS entry lands in the follow-up commit; BOOKMARK_PAGE_COMMAND_ID and FULL_SCREEN_COMMAND_ID stay local until Phase 33 merges; live checks deferred
 - [Phase 33]: All 5 plans executed statically (verification human_needed, live pass deferred to end of milestone); PAGE-09 Edit submenu and live greying folded into 33-05 by coordinator ruling, greyed via a PowerBrowserEditState actor pair
 - [Phase 33]: Code review 1 critical, 8 warnings, 6 info; CR-01 (clear history re-imported stock closed tabs from SessionStore) and WR-01..08 fixed; reopenClosedTab now claims its row and is classed store-write
+- [Phase 39]: 39-01: A1 holds - KWin print() read back from the user journal; real-input gate pb-kwin.mjs built, self-test registered
+- [Phase 39]: 39-01: harness sessions are --headless; PB_LIVE_HEADED=1 drops the flag for KWin-gated runs
+- [Phase 39]: 39-01: C24 verdict product-writes-image is inferred (HeadlessClipboard keeps text only); 39-05 must confirm headed
+- [Phase 39]: 39-01: a headed session never shows the web-tab overlay; blocks headed confirmation for 39-05 and 39-15
+- [Phase 39]: 39-01: baseline 04938fcd = 448 PASS / 40 FAIL in 11550 s; classes listed 5, prompt-03 1, stale 1, environment 23, new 10
+- [Phase 39]: C11 needs two guards: frontend focusPageIfLatest plus chrome webTabFocus dropping a page focus while a page menu is pending (39-02)
+- [Phase 39]: stale-dismiss-focus plant detected through widget.focusWanted, since the chrome guard hides the frontend guard's absence (39-02)
+- [Phase 39]: OQ1 (Chris 2026-11-05): prompts-live dialog and dialog-probe use a derived scenario skip SKIPPED (PROMPT-03 deferred, 999.3) plus a WINDOWS.md ledger row; 39-10 implements
+- [Phase 39]: Batch A owner rulings 2026-11-05/06: all recommendations accepted; CLAUDE.md rule 5 route span replaced per 36 T18
+- [Phase 39]: 38 T31 stays pending with its owner line; 39-14 records the EXT-10 fill result
+- [Phase 39]: 39-04: policies-shell-only is a two-launch scenario; a fresh profile already defaults to the policy engine, so the run-once record plus a user-chosen engine make the 999.16 gap observable
+- [Phase 39]: C22 cause was the headless drag service: showTooltip's getService throws in a headless shell; a missing drag service now counts as no drag session (39-05)
+- [Phase 39]: C24 was the instrument: Copy Image writes an image flavour; menu-edit reads it through widget.clipboard.use-cached-data.enabled headless and wl-paste headed (39-05)
+- [Phase 39]: 39-06: C23 was the instrument; WebDriver BiDi recommended prefs set signon.rememberSignons=false, so any login-manager harness must set it true
+- [Phase 39]: 39-06: a save path for a spent save slot answers stale so the CR-01 menu-closed message shows; nothing is saved either way
+- [Phase 39]: 39-07: 35-UAT row 2 stays pending; the full driver and --gate are 39-19's run, so a pass would claim a run that did not happen
+- [Phase 39]: 39-07: the 39-05 menu-spelling flake was the instrument (no overlay focus before the spell check); fixed in 0c6b3a85
+- [Phase 39]: 39-08: 999.4 was a Theia tab preview card left open by a resting pointer after segment clicks in mode-lifetime and mode-defaults; fixed in the shared switchUiMode with parkOnSegment
+- [Phase 39]: 39-08: 999.6 was mode-defaults' teardown clicking a toggle that moved when the custom mode row appeared, landing on Organising and swallowing the error; clickSegment now waits for a settled toggle and teardowns report
+- [Phase 39]: 39-09: the X11 capture route needs XDG_SESSION_TYPE=x11 as well as allow-pipewire=false; libwebrtc builds ScreenCapturerX11 only when IsRunningUnderWayland() is false
+- [Phase 39]: 39-09: kwinShot is a no-op unless PB_LIVE_HEADED=1; a capture is kept only when the PNG equals frame x output scale (spectacle -a -S)
 
 ### Pending Todos
 
@@ -489,6 +515,7 @@ Recent decisions affecting current work:
 
 ### Roadmap Evolution
 
+- Phase 39 added (2026-11-05): v1.5 Close-out — Chris ruled fix all 16 open v1.5 defects (C22-C24, C11, backlog 999.4-999.16) inside v1.5, Claude runs every automatable UAT item, owner calls per phase in the box, every residual deferral documented for a later version
 - Phase 14.1 inserted after Phase 14: In-Theia Web Tabs (GUI-02) — Chris reversed the 2026-08-30 deferral on 2026-09-06; + opens a web tab inside the shell (URGENT)
 - Phase 14.1.1 inserted after Phase 14.1: GUI Conformance Sweep — living GUI defect list, automated fix pass, then one-at-a-time confirmation with Chris (URGENT)
 - v1.4 roadmap created 2026-10-16: Phases 17–25, non-GUI (17–20) then GUI one step at a time (21–25); Phase 16 moved into the v1.3 record as retired (code removed in Phase 17, RM-01)
@@ -545,6 +572,7 @@ with "autonomous interactive".
 | 37 | verification_deferred_human (4/4 plans, 9/18 must-haves verified, 0 gaps, merged 14319419; review fixed on main; 41 UAT items: verify-prompts-live with --scenario dialog-probe first (writes the verdict that unblocks rule (p) and the prompt-probe-verdict-live row), live prompt, WebRTC, 37-03 dialog gate (both outcomes), password save/update, popup-block Allow, hung-script and protocol bars, doorhanger visuals — Chris at end of milestone; 37-UAT.md) | /gsd-verify-work 37 |
 | 38 | verification_deferred_human (5/5 plans, 10/25 must-haves verified, status human_needed, 0 gaps, merged f655d69d (38-01..03) and 50b664d3 (rest); review 3 critical + 9 warnings fixed, two private-browsing fixes; 40 UAT items: verify-extension-actions-live scenarios + live self-test, verify-extension-amo-live amo-install/fixtures (network to addons.mozilla.org) + live self-test, neighbour suites, private-browsing manual check, visuals, EXT-10 fill on a local Vaultwarden (Chris 2026-11-01, option b), owner decisions; patch 050 re-applied before the Gecko build — Chris at end of milestone; 38-UAT.md) | /gsd-verify-work 38 |
 | 38 | verification_deferred_human (5/5 plans, 10/25 must-haves verified, status human_needed, 0 gaps, merged f655d69d (38-01..03) and 50b664d3 (rest); review 3 critical + 9 warnings fixed, two private-browsing fixes; 40 UAT items: verify-extension-actions-live scenarios + live self-test, verify-extension-amo-live amo-install/fixtures (network to addons.mozilla.org) + live self-test, neighbour suites, private-browsing manual check, visuals, EXT-10 fill on a local Vaultwarden (Chris 2026-11-01, option b), owner decisions; patch 050 re-applied before the Gecko build — Chris at end of milestone; 38-UAT.md) | /gsd-verify-work 38 |
+| 39 | verification_deferred_human (20/20 plans executed; gate PASS-WITH-EXCLUSIONS at 77e5d037, 41 requirements ticked; 41 human-checklist items across phases 27, 31.1 and 32-38 deferred by Chris 2026-11-07 via AskUserQuestion, 28 UAT rows stay [pending], 12 requirements re-tick after the checklist, PAGE-05 unticked until 999.19; 39-HUMAN-CHECKLIST.md, 39-20-DECISIONS.md) | /gsd-verify-work 39 |
 | focus-fix | verification_deferred_human (overlay focus race fixed c423f1a, 15/15 loops; on a real keyboard: F6 from the pill with suggestions open then type, Paste & Go then Down scrolls, same-site link then Down scrolls — Chris at end of milestone; record .planning/debug/overlay-focus-intermittent.md) | /gsd-debug overlay-focus-intermittent |
 
 ## Deferred Items
@@ -584,13 +612,13 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-11-01T03:25:54.249Z
-Stopped at: Phases 33-37 closed with verification deferred; Phase 38 not started, ready to execute (Phase 28 route signed off 2026-10-21)
+Last session: 2026-11-06T22:07:52.429Z
+Stopped at: Completed 39-20-PLAN.md (phase 39 execution done; verification next)
 Resume file: None
 
 ## Operator Next Steps
 
-- Plan Phase 27 with /gsd-plan-phase 27 once Chris approves the v1.5 roadmap
+- Start the next milestone with /gsd-new-milestone
 
 ## Quick Tasks Completed
 

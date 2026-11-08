@@ -3450,7 +3450,9 @@ if (!existsSync(xhtmlPath)) {
   console.error(\`shell01-theia-is-the-window: FAIL -- SHELL-01 -- \${xhtmlPath} does not exist yet\`);
   ok = false;
 } else {
-  const text = readFileSync(xhtmlPath, 'utf8');
+  // A stock skin stylesheet href (35-07's chrome://browser/skin/tabbrowser/fullscreen-and-pointerlock.css) is CSS,
+  // not chrome: it cannot add a tab strip, toolbar or URL bar, so its path is not scanned.
+  const text = readFileSync(xhtmlPath, 'utf8').replace(/href="chrome:\/\/browser\/skin\/[^"]*"/g, '');
   for (const term of forbidden) {
     if (text.includes(term)) {
       console.error(\`shell01-theia-is-the-window: FAIL -- SHELL-01 -- \${xhtmlPath} contains forbidden custom-chrome string '\${term}'\`);
@@ -3681,6 +3683,12 @@ run_own_checks() {
     # text read, no build, no browser, no network.
     "dual-build-table|node $REPO_ROOT/scripts/verify-dual-build-table.mjs"
     "dual-build-table-self-test|node $REPO_ROOT/scripts/verify-dual-build-table.mjs --self-test"
+    # NEW (v1.5 live pass): every live harness reads script.evaluate results through firefox-bidi's
+    # fromRemoteValue; an undecoded object reached the harness as RemoteValue pairs and every field
+    # read was undefined. The self-test requires the pre-fix reader and an identity decoder to go red.
+    # Honestly --quick: pure computation, no build, no browser.
+    "bidi-remote-value|node $REPO_ROOT/scripts/verify-bidi-remote-value.mjs"
+    "bidi-remote-value-self-test|node $REPO_ROOT/scripts/verify-bidi-remote-value.mjs --self-test"
     "branding-preflight|node $REPO_ROOT/scripts/verify-branding-preflight.mjs"
     "branding-preflight-self-test|node $REPO_ROOT/scripts/verify-branding-preflight.mjs --self-test"
     # NEW (06-01): VER-01's static layer -- the manifest's own display
@@ -3788,6 +3796,13 @@ run_own_checks() {
     # fail-open default, patch missing, hand-edited hunk, branding default true, allowlist
     # widened), each red naming the drifted file.
     "crash-ping-consent-self-test|node $REPO_ROOT/scripts/verify-crash-ping-consent.mjs --self-test"
+    # NEW (Phase 57, 57-05, WR-05): the stock backlog auto-submit pref is locked false in the shipped
+    # policies.json. The pref name is derived from UnsubmittedCrashHandler's autoSubmit getter in
+    # upstream's ContentCrashHandlers.sys.mjs; Policies.sys.mjs must allow its prefix. Text reads only.
+    "crash-autosubmit-lock|node $REPO_ROOT/scripts/verify-crash-autosubmit-lock.mjs"
+    # Green first, then six plants (lock removed, not locked, value true, reader renamed, reader
+    # removed, engine prefix dropped), each red naming the drifted file.
+    "crash-autosubmit-lock-self-test|node $REPO_ROOT/scripts/verify-crash-autosubmit-lock.mjs --self-test"
     "fetch-upstream-self-test|bash $REPO_ROOT/scripts/fetch-upstream.sh --self-test"
     # NEW (05-02): the ESR pin-agreement gate -- configuration.toml's
     # [upstreams] tag equals the generated shell fragment, the workflow
@@ -5196,6 +5211,20 @@ run_own_checks() {
     # missing-run branch, OPEN turned off, a reversed age, an inverted open gate, a wrong runs path, an
     # unlabeled issue, a label never created); each must go red naming its drift, with the control green first.
     "watchdog-self-test|node $REPO_ROOT/scripts/verify-watchdog.mjs --self-test"
+    # NEW (Phase 50, REL-02, plan 50-05): the withdraw and probe workflows staged for powerbrowser-updates
+    # (docs/withdraw.yml, docs/release-probe.yml), which the workflows row does not see. Their run: bodies run under
+    # bash with a stub gh: no-update per manifest target with re-read, the withdrawal mark once, the pre-release flag
+    # only on the flag verdict of docs/RELEASING.md, channel-live --withdrawn last, no write on a bad input or
+    # verdict, no delete; the probe creates probe-1 as a draft and publishes it never as latest. Source checks:
+    # dispatch only, contents read, pinned actions/* uses, no ${{ }} in run:, one narrow App token. probe-1 sits
+    # outside the release-tags ruleset pattern, derived from the ruleset. Honestly --quick: no network.
+    "withdraw|node $REPO_ROOT/scripts/verify-withdraw.mjs"
+    # withdraw-self-test plants 30 faults (a mode input, unpinned uses, input text in run:, a delete, the flag on
+    # every verdict or never or in the notes PATCH, a refused flag failing the job, the mark respelled or doubled, an unknown verdict accepted, a dropped target, the
+    # re-read removed, the default-mode rerun, the probe tag inside the ruleset, the probe as latest or created
+    # published, a second probe Release, an ignored notes refusal or immutable read, two verdict lines); each must
+    # go red naming its drift, with the control green first.
+    "withdraw-self-test|node $REPO_ROOT/scripts/verify-withdraw.mjs --self-test"
     # NEW (Phase 49, DIST-02): the release.yml shape the workflows row does not cover. Dispatch
     # only with a required sha input; build-linux on the release runner label with no environment
     # and no secret; the SHA-ancestor and key>tag gates before the first build step; retention-days
@@ -5213,6 +5242,9 @@ run_own_checks() {
     # (G-49b, packaged-rows) build-linux runs the packaged rows and install-matrix between packaging and
     # the first upload, each a registry label; (G-49c, purge) one hosted actions: write job after sign-publish
     # deletes the tarball-and-MAR artifacts derived from the build-linux uploads and keeps the descriptor data.
+    # (54-11 review, win-trust and win-descriptor) publish-windows carries the same dispatch refusal, inputs.sha,
+    # SHA gate, release-windows-only download, pinned signmar and MAR-key scoping as sign-publish; descriptor-windows
+    # runs the --form-only gate before its token mint and refuses a not-newer buildID with exit 1.
     # release-shape-self-test plants one fault per rule in memory over the real release.yml text and
     # three bad mar_origin values through a scratch copy of configuration.toml; each goes red naming
     # the file, the rule and the fault.
@@ -5257,12 +5289,14 @@ run_own_checks() {
     # before signmar -v, and the verification uses the tracked DER. The comparands derive from
     # generate.mjs updateChannel(). Honestly --quick: file reads and YAML parsing only.
     "mar-channel-gate|node $REPO_ROOT/scripts/verify-mar-channel-gate.mjs"
-    # mar-channel-gate-self-test plants twelve faults in memory over the real release.yml text: a
+    # mar-channel-gate-self-test plants twenty-one faults in memory over the real release.yml text: a
     # foreign-channel MAR accepted, the gate comparing the MAR id with --channel, a verification
     # against a non-tracked DER, a dropped independent node:crypto check, a mismatch branch or
     # cross-check without its exit 1, continue-on-error, `|| true` after signmar -v, an if: on the
-    # sign step, a runner-supplied signer, and a sign-before-verify swap. Each goes red naming the
-    # file and the fault. It writes nothing.
+    # sign step, a runner-supplied signer, and a sign-before-verify swap; and (54-11 review) the same
+    # over publish-windows: gate, mismatch exit, verify step or either verifier removed, the unsigned MAR
+    # assembled, sign before gate, a runner signer, and mozconfig-windows-x86_64 losing the MAR id.
+    # Each goes red naming the file and the fault. It writes nothing.
     "mar-channel-gate-self-test|node $REPO_ROOT/scripts/verify-mar-channel-gate.mjs --self-test"
     # NEW (Phase 49, DIST-07): the draft asset set equals the manifest-derived set (versioned and
     # stable tarball and MAR, SHA256SUMS, release-manifest.json, the notices and the source tarball)
@@ -5270,13 +5304,18 @@ run_own_checks() {
     # before the single publish, the bot App token is minted immediately before the publish, and no
     # --generate-notes appears. Honestly --quick: file reads and YAML parsing;
     # the live draft list is compared by the release job, never here.
+    # 54-11 (owner answer A2): the windows-x86_64 asset-table row must equal WINDOWS_TOKEN; publish-windows needs
+    # build-windows and sign-publish, assembles by --expected-windows and copies write-once like sign-publish's
+    # r2_copy; no *-windows job calls gh release create, upload, edit or delete (the Release stays Linux-only).
     "release-asset-set|node $REPO_ROOT/scripts/verify-release-asset-set.mjs"
     # release-asset-set-self-test plants a dropped asset (a notice and the manifest), an extra asset,
     # a stable-name drift, a versioned-name drift, an assemble step missing the manifest or notice arm, a publish-before-equality order, a fail-open publish chain, an R2
     # copy that is missing, after the publish, failing open, local (no --remote), without its read-back or
     # its overwrite refusal (DIST-08, plan 49-05), a Cloudflare credential in another step or another
     # workflow, a manifest-chosen tag and three hostile release keys, each red naming the asset or the
-    # step. It writes nothing.
+    # step; 54-11 adds the Windows plants (publish-windows removed, off sign-publish, a gh release call,
+    # its write-once copy weakened or keyed by a runner value, a Cloudflare token in descriptor-windows,
+    # a drifted Windows Target key). It writes nothing.
     "release-asset-set-self-test|node $REPO_ROOT/scripts/verify-release-asset-set.mjs --self-test"
     # NEW (Phase 49, UPD-17): channel-live-self-test, the quick half of the full-tier channel-live row. A
     # mkdtemp manifest (mar_origin from configuration.toml) and descriptor tree served by one loopback
@@ -5413,14 +5452,18 @@ run_own_checks() {
     "node-runtime-targets-self-test|node $REPO_ROOT/scripts/verify-node-runtime-targets.mjs --self-test"
     # NEW (Phase 54, PKG-10 static half): the build-windows job of release.yml. Legion label set only,
     # contents: read, no secret, environment or schedule, SHA-pinned uses, gates identical to build-linux,
-    # no fail-open step, repackage calls present, retention 1. Honestly --quick: YAML parse and text reads;
+    # no fail-open step, repackage calls present, retention 1; its one needs edge is the hosted windows-sidecar
+    # producer (G-54a), checked here too. Honestly --quick: YAML parse and text reads;
     # the live cross-build on legion is the owner's at the 54-04 checkpoint, never a quick path.
     "build-windows-shape|node $REPO_ROOT/scripts/verify-build-windows-shape.mjs"
     # build-windows-shape-self-test plants a moved runner, a secret, a write grant, a schedule, an unpinned
     # uses, a missing package-windows.sh call or mach build, a reintroduced get_vs.py or WINSYSROOT, each removed
     # required repackage argument, upload globs that match nothing, a broken or all-accepting Node-pin filter, a
     # removed key gate, a drifted sha gate, a dropped pipefail, a raised retention and an image build missing
-    # --no-cache; each must go red naming job and cause.
+    # --no-cache; G-54a adds a second or a missing needs edge, a repository-variable digest, another needs value,
+    # a missing or misplaced sidecar download, and a producer on legion, with a secret, a write grant, a needs
+    # edge, no digest output, no admission check, no BUILD_ROOT, a raised retention, an unpinned action or
+    # removed outright; each must go red naming job and cause.
     "build-windows-shape-self-test|node $REPO_ROOT/scripts/verify-build-windows-shape.mjs --self-test"
     # NEW (Phase 54 review fix, PKG-13): the admission and purge gates for the hosted Windows sidecar artifact.
     # Honestly --quick: mktemp fixtures only, no network. It plants an unlisted file, an absent listed file, a
@@ -6148,6 +6191,12 @@ run_own_checks() {
       # add-ons site, so never --quick. The plant run boots a clean control per target scenario, then each plant.
       "extension-amo-live|node $REPO_ROOT/scripts/verify-extension-amo-live.mjs"
       "extension-amo-live-self-test|node $REPO_ROOT/scripts/verify-extension-amo-live.mjs --self-test --live"
+      # NEW (Phase 39 plan 01, assumption A1): the real-input gate in scripts/lib/pb-kwin.mjs. A headed shell
+      # (PB_LIVE_HEADED=1) is raised through a KWin script, the active window is read back (KWin print() + the user
+      # journal), and one ydotool Shift and one spectacle capture go to it (clean control); then plants class-mismatch
+      # and readback-empty must each refuse both osKeys and captureShell. Needs the owner's KDE Wayland session, the
+      # ydotoold socket and the built binary, so never --quick.
+      "real-input-gate-self-test|node $REPO_ROOT/scripts/lib/pb-kwin.mjs --self-test"
 
       # NEW (31-01/31-02/31-03, SITE-01..08): the site-identity live gate. identity-tls
       # and identity-local (31-01), site-panel (31-02: certificate, six tri-state
@@ -6297,10 +6346,17 @@ run_own_checks() {
       # sign, signmar verify as ordered equality, plus OIDC-only Azure behind every gate, no stored Azure secret, no
       # schedule key, no secret or environment on a legion job, and the Windows status line against the posture
       # line in docs/RELEASING.md. Never called by a quick path.
+      # R14 (G-sign, rule skip): with AZURE_CLIENT_ID empty the configuration gate reports Windows signing as
+      # skipped and exits 0, and every later sign-windows step is gated on its signing output.
       "win-sign-chain|node $REPO_ROOT/scripts/verify-win-sign-chain.mjs"
       # win-sign-chain-self-test plants every fault in memory over the real workflow, docs and page (two green
       # controls, then an out-of-order step, a stored secret, a schedule key, a legion secret and a stale unsigned
-      # status among others), each red naming its step or key. Hermetic; writes nothing.
+      # status among others), each red naming its step or key. G-54b widens independence to every Windows job
+      # (derived from artifact names): plants for descriptor, channel-live, build-linux and sign-publish (through an
+      # artifact-less bridge job) waiting on a Windows job, plus a green control for a Windows publish job that needs
+      # sign-publish. 54-11: the real publish-windows, descriptor-windows and channel-live-windows must exist, a
+      # Linux job waiting on each is red, and descriptor-windows moving no windows artifact is judged Linux and red.
+      # Hermetic; writes nothing.
       "win-sign-chain-self-test|node $REPO_ROOT/scripts/verify-win-sign-chain.mjs --self-test"
       # win-sign-list-self-test: the list of inner PE files sign-windows signs, derived from the pinned package manifest
       # (upstream/browser/installer/package-manifest.in) and compared with a staged tree; the zip name derived from
@@ -6441,17 +6497,45 @@ extract_failed_labels() {
 # never on a bare assertion -- see ledger_entry_is_open above.
 # label|ledger_id|reason
 declare -a GATE_KNOWN_OPEN_EXCLUSIONS=(
-  "verify-endpoints|5|Gecko resolves 3 hosts absent from the BRAND-04 allowlist once the shell actually works (127.0.0.1 the Theia sidecar, ciscobinary.openh264.org the GMP manager, and the welcome widget's own project link) -- not a code defect, needs a product/privacy decision that phase's scope explicitly excluded"
-  # 01-07: both of these read objdir-release/, i.e. a SECOND full ~47-minute
-  # release build that 01-04-PLAN.md explicitly declined to spend. Neither is a
-  # code defect and neither has ever been red for a code reason -- each fails
-  # with "objdir-release/... does not exist" and nothing else. They become
-  # runnable, unchanged, the moment a release objdir exists, which is why they
-  # stay registered rather than being deleted or narrowed. Keyed on ledger
-  # entry 10, so the exclusion stops applying the instant that entry stops
-  # being open.
-  "verify-branding-identity-release|10|reads objdir-release/dist/bin, which does not exist -- 01-04-PLAN.md declined the second ~47m release build; runnable unchanged once one exists"
-  "branding-variant-divergence|10|reads BOTH objdir/dist/bin and objdir-release/dist/bin; the release half does not exist -- same declined build as above"
+  # 39-19 (2026-11-07): every red of the v1.5 close-out full run that is not fixed is keyed to an open ledger
+  # entry carrying repro, cause so far and source (scope item 7). The 01-era rows keyed to fixed ledger
+  # entries 5 and 10 were removed: verify-endpoints and branding-variant-divergence pass, and
+  # verify-branding-identity-release passes once objdir-release is rebuilt (39-19, docs/BUILD.md).
+  "ng063-packaged-launch|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "portable-elf|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "sidecar-no-symlinks|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "package-target-natives|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "packaged-identity|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "install-matrix|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "ng065-mar-signature-enforced|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "ng072-policies-packaged-webextension|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "search-engines-packaged|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "mar-update-hop|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "ng074-ci-green-on-main|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "repo-controls|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "channel-live|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "codeberg-mirror-live|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "upptime-sweep-live|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "win-matrix-record|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "win-download-copy|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "macos-package-payload|32|macOS deferred to v1.7 (R4), needs Mac hardware"
+  "macos-install-matrix|32|macOS deferred to v1.7 (R4), needs Mac hardware"
+  "tel06-error-delivery-live|33|refuses a dirty tree; the dirt is the owner's .claude/settings.json and .planning/state.json"
+  "verify-customize-inert|34|the customize.css layer shows no pixel effect in state 3; cause not isolated"
+  "ng089-uat-sheets|35|49 pending results in the v1.2/v1.3 UAT sheets; the NG-084 live pass was deferred by the owner"
+  "start-failure-shows-error|36|the readiness backstop fires before the planted settings-folder failure is classified"
+  "pan04-undo-close-group-live|37|after the commit focus is on a pb-org-new element the probe does not resolve; harness or product not separated"
+  "ng-023-suggestions-history-bookmarks|38|an open tab ranks below a bookmark match"
+  "prompts-live-self-test|39|plant allow-loads-frame-url goes red on popup adoption instead of its own failure, 2 of 3 runs"
+  "site-identity-live|40|app-menu: Organising rows 5-8 disabled and Help opens no about:support stock window"
+  "site-identity-live-self-test|40|app-menu: Organising rows 5-8 disabled and Help opens no about:support stock window"
+  "first-boot-surface-fresh|41|Theia core SideTabBar overflow reads a .theia-additional-views-menu the top side-panel tabs removed"
+  "ng067-frontend-errors-reach-telemetry|42|flaky: red 1 of 3 (no frontend.uncaught-error event sent)"
+  "page-furniture-live-self-test|43|flaky: clean control Copy Image Link clipboard read-back red 1 of 3"
+  "address-bar-live-self-test|25|plant ctrl-d-everywhere stays green on bookmark-keys"
+  "page-tools-live|28|flaky: crash-navigate red 1 of 3 registry runs (2026-11-06)"
+  "extension-actions-live|29|private-access session 2: options page opens in the private stock window, matches stock; deferred to 999.17"
+  "extension-actions-live-self-test|29|private-access session 2: options page opens in the private stock window, matches stock; deferred to 999.17"
 )
 
 # Before consolidation, --gate ran this script's own set and then SHELLED OUT to

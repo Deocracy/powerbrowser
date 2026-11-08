@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 3
+open_count: 22
 waived_count: 2
 fixed_count: 19
-total_count: 24
-last_updated: 2026-11-04T01:20:23.733Z
+total_count: 43
+last_updated: 2026-11-07T10:18:36.853Z
 ---
 
 # Broken Windows Ledger
@@ -39,6 +39,25 @@ last_updated: 2026-11-04T01:20:23.733Z
 | 22 | 55 | unmet-truth | upstream/security/mac/hardenedruntime/production/firefox.browser.xml |  | Upstream production entitlement files (firefox, firefoxdeveloperedition, nightly .browser.xml) carry Mozilla's Team ID 43AQ936H96 and org.mozilla application identifiers, plus the restricted keys com.apple.application-identifier and com.apple.developer.web-browser.public-key-credential. Release signing would bind them to the PowerBrowser bundle. Cure: a hook-only Team-ID patch regenerated with scripts/regenerate-patches.sh (Phase 55 plan 55-03), which needs the owner's Apple Developer Team ID (see .planning/workstreams/deploy/phases/55-macos-i/BLOCKED.md). scripts/verify-mac-entitlements.mjs excludes exactly those ten hits while this entry is open; any other hit is red. Mark this entry fixed when the patch lands, and remove the exclusion in the same commit. | waived | R14 (2026-11-03): no Apple signing or Team ID in scope; the upstream entitlement hits stay excluded, macOS is deferred to v1.7 (R4) | 2026-10-31T18:40:00.000Z | 2026-11-04T01:20:23.627Z |
 | 23 | 55 | stub | scripts/generate.mjs |  | Phase 55 DMG branding placeholders, both variants: Assets.car and dsstore are empty files, background.png is the 128-pixel application raster. Finder and Dock icons degrade until a real asset catalog is built with actool and observed on a Mac (plan 55-04; see .planning/workstreams/deploy/phases/55-macos-i/BLOCKED.md item 6). | waived | R4 (2026-11-03): Phase 55 macOS, including the DMG branding placeholders, is deferred to v1.7; needs Mac hardware | 2026-10-31T19:05:00.000Z | 2026-11-04T01:20:23.733Z |
 | 24 | 44 | unrun-verify | scripts/build-update-xml.mjs |  | 44-02 full-tier row build-update-xml not run green: it FAILs by design because .mozbuild/mar-hop/nplus1.mar is absent. Build the N-plus-1 MAR per docs/BUILD.md, then run scripts/verify-platform.sh --only build-update-xml. UPD-14 stays open until it passes. | open |  | 2026-11-01T05:21:09.443Z |  |
+| 25 | 39 | deviation | scripts/verify-address-bar-live.mjs | 5000 | address-bar-live-self-test: plant ctrl-d-everywhere stays green on bookmark-keys (3 of 3 sessions with the 39-08 harness and 3 of 3 with the pre-39-08 harness at 5d0dfa95); pre-existing, the plant no longer bites in the README editor; first lead: the bookmark command may be disabled with an editor current, so Theia skips the planted binding; repro: node scripts/verify-address-bar-live.mjs --self-test (plant ctrl-d-everywhere on bookmark-keys), red again in the 39-19 full run as "stayed green ... got: (no failures at all)"; source: 33-UAT test 1 | open |  | 2026-11-06T21:08:45.534Z |  |
+| 26 | 39 | skipped-test | scripts/verify-prompts-live.mjs |  | prompts-live dialog and dialog-probe are skipped by derivation while REQUIREMENTS.md records PROMPT-03 deferred to 999.3 (OQ1 ruling 2026-11-05); repro: node scripts/verify-prompts-live.mjs --scenario dialog; cause: stock page dialogs lock the IDE; source: 37-UAT tests 8 and 9 | open |  | 2026-11-06T22:32:05.803Z |  |
+| 27 | 39 | deviation | theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx | 976 | long-press Back: with a real pointer, holding Back 600 ms then releasing on the pill leaves keyboard focus in the pill, so a real Escape is the pill's and the history menu stays open (39-15 verify-nav-keys-live long-press under PB_REAL_INPUT=1, 3 of 3 runs); the T4 claim itself (Enter on Back goes back after the hold) passes; repro: PB_REAL_INPUT=1 PB_LIVE_HEADED=1 node scripts/verify-nav-keys-live.mjs --scenario long-press (headed, real input); cause so far: the release on the pill moves keyboard focus there, so Escape goes to the pill, not the history menu; source: 27-UAT test 4 | open |  | 2026-11-07T02:53:12.909Z |  |
+| 28 | 39 | deviation | scripts/verify-page-tools-live.mjs |  | page-tools-live crash-navigate flaked once in three registry runs on 2026-11-06 (4ce04c24): 'a URL sent to a crashed tab did not load it (no loaded push with crashed false)'; the scenario passed alone 2 of 2 right after, and in the 116ac682 run; the code was not changed by 39-16; for the 39-18 flake work; repro: node scripts/verify-page-tools-live.mjs --scenario crash-navigate; cause so far: not isolated, the loaded push after a crash-restore navigate arrives late or not at all; page-tools-live passed in the 39-19 full run; source: 32-UAT test 1 | open |  | 2026-11-07T04:37:55.475Z |  |
+| 29 | 39 | deviation | patches/050-extension-tab-host.patch |  | 38 T22 step 4: the options page of an extension not allowed in private windows opens in the private stock window opened last (stock openOptionsPage uses windowTracker.topWindow); fix needs a patch 050 hunk and a Gecko rebuild; owner deferred to backlog 999.17 on 2026-11-06 (39-17), matches stock behaviour; repro: 38-UAT test 22 step 4, scenario private-access session 2; source: 38-UAT test 22 | open |  | 2026-11-07T04:50:37.188Z |  |
+| 30 | 39 | unrun-verify | powerbrowser/packaging/package-linux.sh |  | 39-19 full run (6ac27ac2): ng063-packaged-launch, portable-elf, sidecar-no-symlinks, package-target-natives, packaged-identity, install-matrix, ng065-mar-signature-enforced, ng072-policies-packaged-webextension, search-engines-packaged and mar-update-hop are red because no container-built release tarball exists in objdir-release/dist and hop.json has no served key; repro: scripts/verify-platform.sh --only portable-elf; cause so far: the PKG-17 container build with the release keys and the N-plus-1 MAR hop are owner steps in .planning/workstreams/deploy/OWNER-PASS.md, not run; source: no UAT test, 39-BASELINE environment rows | open |  | 2026-11-07T10:18:30.468Z |  |
+| 31 | 39 | unrun-verify | .github/settings/ |  | 39-19 full run (6ac27ac2): ng074-ci-green-on-main, repo-controls, channel-live, codeberg-mirror-live, upptime-sweep-live, win-matrix-record and win-download-copy are red on live owner state: no verify.yml run for the unpushed main head, 5 repo-controls problems (apps slack and claude undeclared), no published Release, Codeberg and Upptime slugs undeclared, scripts/matrix/win-matrix-record.json absent; repro: scripts/verify-platform.sh --only channel-live; cause so far: each needs an owner push, release or checkpoint input (deploy OWNER-PASS.md, 53-04 and 54-04 checkpoints); source: no UAT test, 39-BASELINE environment rows | open |  | 2026-11-07T10:18:30.720Z |  |
+| 32 | 39 | unrun-verify | powerbrowser/packaging/package-macos.sh |  | 39-19 full run (6ac27ac2): macos-package-payload (.mozbuild/macos-package absent) and macos-install-matrix (25 unobserved items) are red; repro: scripts/verify-platform.sh --only macos-package-payload; cause so far: macOS is deferred to v1.7 by R4 (2026-11-03) and needs Mac hardware; ledger 23 is waived, so it cannot key a gate exclusion; source: no UAT test, 39-BASELINE environment rows | open |  | 2026-11-07T10:18:30.941Z |  |
+| 33 | 39 | unrun-verify | scripts/verify-telemetry-live-delivery.mjs |  | tel06-error-delivery-live refuses to run: 'the working tree is dirty (2 tracked change(s), first: M .claude/settings.json)'; repro: scripts/verify-platform.sh --only tel06-error-delivery-live; cause so far: the drill rewrites a tracked file and rebuilds, so it refuses any dirty tree, and the dirt is the owner's local hook removal in .claude/settings.json plus .planning/state.json, which an agent may not commit; runs on a clean checkout; source: no UAT test, 39-BASELINE and 39-19 full run | open |  | 2026-11-07T10:18:31.179Z |  |
+| 34 | 39 | unmet-truth | scripts/verify-customize-inert.mjs |  | verify-customize-inert: 'state 1 (absent) vs state 3 (styled) -- pixels identical, the CSS layer had no effect' (39-BASELINE, 39-19 full run and rerun, 3 of 3); repro: scripts/verify-platform.sh --only verify-customize-inert; cause so far: the script writes $XDG_CONFIG_HOME/powerbrowser/customize.css and captures the shell's supervised frontend, which may read customize.css from another config dir (the customize extension resolves user-storage:/user/customize.css); not isolated; source: no UAT test (CUST-01 registry row) | open |  | 2026-11-07T10:18:31.417Z |  |
+| 35 | 39 | unrun-verify | .planning/milestones/v1.3-phases/15-panorama-organising/15-UAT.md |  | ng089-uat-sheets: 49 pending results plus no recorded React 19 runtime test across the v1.2 10-UAT and v1.3 13, 14, 14.1, 14.1.1 and 15 UAT sheets; repro: node scripts/verify-ng-089-uat-sheets.mjs; cause so far: the NG-084 live UAT pass over those sheets was deferred by the owner ('Defer all the checks') and never run; source: the listed UAT sheets, every pending test | open |  | 2026-11-07T10:18:31.663Z |  |
+| 36 | 39 | unmet-truth | powerbrowser/shell/TheiaService.sys.mjs |  | start-failure-shows-error (MIG-04): 'the failing settings-folder step did not name itself in its diagnostics rows (Failed step = waiting for the backend readiness announcement)' (39-BASELINE, 39-19 full run and rerun); repro: scripts/verify-platform.sh --only start-failure-shows-error; cause so far: the log shows 'Backend did not announce POWERBROWSER_BACKEND_READY within 3000ms' first, so the readiness backstop fires before the planted settings-folder failure is classified; not isolated; source: no UAT test (MIG-04 registry row) | open |  | 2026-11-07T10:18:31.926Z |  |
+| 37 | 39 | unmet-truth | scripts/verify-pan04-undo-close-group-live.mjs | 464 | pan04-undo-close-group-live (g): 'after the commit focus is on pb-org-new theia-button with 0 Undo controls left, want New Group and none' (39-BASELINE, 39-19 full run and rerun); repro: scripts/verify-platform.sh --only pan04-undo-close-group-live; cause so far: focus is on an element with class pb-org-new, but not the one org.node.querySelector('.pb-org-new') returns, so either a second Organising widget instance or a stale org handle in the probe; harness or product not separated; source: no v1.5 UAT test (PAN-04 registry row) | open |  | 2026-11-07T10:18:32.197Z |  |
+| 38 | 39 | unmet-truth | scripts/verify-ng-023-suggestions-places.mjs |  | ng-023-suggestions-history-bookmarks: 'an open tab ranks below a history or bookmark match' (bookmark first, open tab second, history third; 39-BASELINE, 39-19 full run and rerun); repro: scripts/verify-platform.sh --only ng-023-suggestions-history-bookmarks; cause so far: the suggestion ranking puts the bookmark provider ahead of open tabs; not traced to a commit; source: no UAT test (NG-023 registry row) | open |  | 2026-11-07T10:18:32.415Z |  |
+| 39 | 39 | unmet-truth | scripts/verify-prompts-live.mjs |  | prompts-live-self-test: plant allow-loads-frame-url went red for the wrong reason, 'popup not adopted next to its opener (..., about:blank)', in 2 of 3 runs (39-19 full run, run 3; run 2 PASS); repro: scripts/verify-platform.sh --only prompts-live-self-test; cause so far: the 39-09 re-site (999.13, fae88df5) does not reach the plant's own failure reliably, the popup adoption step is timing-dependent; source: 37-UAT test 17 | open |  | 2026-11-07T10:18:32.637Z |  |
+| 40 | 39 | unmet-truth | scripts/verify-site-identity-live.mjs | 1316 | site-identity-live and its self-test clean control: app-menu 'the Organising menu disabled rows are [f,f,f,f,t,t,t,t,f,...], want all false' and 'the Help row did not open its stock page (no stock window shows about:support)' (39-BASELINE, 39-19 full run and rerun); repro: node scripts/verify-site-identity-live.mjs --scenario app-menu; cause so far: rows 5 to 8 are disabled in Organising, likely page-dependent rows with no current web tab, and Help opens no stock about:support window; harness expectation or product not separated; source: no UAT sheet for phase 31; 31-04-LIVE-HANDOFF.md app-menu | open |  | 2026-11-07T10:18:32.870Z |  |
+| 41 | 39 | unmet-truth | theia/extensions/chrome-bar/src/browser/side-panel-top-tabs.ts |  | first-boot-surface-fresh: 'TypeError: can't access property offsetHeight, additionalViewsMenu is null' before the forced error (39-BASELINE, 39-19 full run and rerun); repro: scripts/verify-platform.sh --only first-boot-surface-fresh; cause so far: @theia/core SideTabBar overflow (tab-bars.js:1179) queries .theia-additional-views-menu in the tab bar's parent, and the side panel tabs moved to the top by e9569e81 leave no such element there; fix belongs in the PB extension, never in Theia core; source: no UAT test (first-boot registry row) | open |  | 2026-11-07T10:18:33.080Z |  |
+| 42 | 39 | deviation | scripts/verify-ng-067-frontend-errors.mjs |  | ng067-frontend-errors-reach-telemetry flaked: 'at level error no frontend.uncaught-error event was sent' in the 39-19 full run, then PASS 2 of 2 alone; repro: scripts/verify-platform.sh --only ng067-frontend-errors-reach-telemetry; cause so far: timing in the frontend error delivery or its read-back, not isolated; source: no UAT test (NG-067 registry row) | open |  | 2026-11-07T10:18:35.742Z |  |
+| 43 | 39 | deviation | scripts/verify-page-furniture-live.mjs |  | page-furniture-live-self-test flaked: clean control 'context-menu: Copy Image Link did not put the image URL on the clipboard' in the 39-19 full run, then PASS 2 of 2 alone; the plain page-furniture-live row passed; repro: scripts/verify-platform.sh --only page-furniture-live-self-test; cause so far: the headless clipboard read-back after Copy Image Link is timing-dependent (the menu-edit Paste and iframe-edit-rows flakes share the headless clipboard); source: 35-UAT test 6 | open |  | 2026-11-07T10:18:36.853Z |  |
 
 ````json
 [
@@ -329,7 +348,254 @@ last_updated: 2026-11-04T01:20:23.733Z
     "reason": "",
     "recorded_at": "2026-11-01T05:21:09.443Z",
     "resolved_at": null,
+    "milestone": "v1.6"
+  },
+  {
+    "id": 25,
+    "kind": "deviation",
+    "phase": "39",
+    "file": "scripts/verify-address-bar-live.mjs",
+    "line": 5000,
+    "description": "address-bar-live-self-test: plant ctrl-d-everywhere stays green on bookmark-keys (3 of 3 sessions with the 39-08 harness and 3 of 3 with the pre-39-08 harness at 5d0dfa95); pre-existing, the plant no longer bites in the README editor; first lead: the bookmark command may be disabled with an editor current, so Theia skips the planted binding; repro: node scripts/verify-address-bar-live.mjs --self-test (plant ctrl-d-everywhere on bookmark-keys), red again in the 39-19 full run as \"stayed green ... got: (no failures at all)\"; source: 33-UAT test 1",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-06T21:08:45.534Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 26,
+    "kind": "skipped-test",
+    "phase": "39",
+    "file": "scripts/verify-prompts-live.mjs",
+    "line": null,
+    "description": "prompts-live dialog and dialog-probe are skipped by derivation while REQUIREMENTS.md records PROMPT-03 deferred to 999.3 (OQ1 ruling 2026-11-05); repro: node scripts/verify-prompts-live.mjs --scenario dialog; cause: stock page dialogs lock the IDE; source: 37-UAT tests 8 and 9",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-06T22:32:05.803Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 27,
+    "kind": "deviation",
+    "phase": "39",
+    "file": "theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx",
+    "line": 976,
+    "description": "long-press Back: with a real pointer, holding Back 600 ms then releasing on the pill leaves keyboard focus in the pill, so a real Escape is the pill's and the history menu stays open (39-15 verify-nav-keys-live long-press under PB_REAL_INPUT=1, 3 of 3 runs); the T4 claim itself (Enter on Back goes back after the hold) passes; repro: PB_REAL_INPUT=1 PB_LIVE_HEADED=1 node scripts/verify-nav-keys-live.mjs --scenario long-press (headed, real input); cause so far: the release on the pill moves keyboard focus there, so Escape goes to the pill, not the history menu; source: 27-UAT test 4",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-07T02:53:12.909Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 28,
+    "kind": "deviation",
+    "phase": "39",
+    "file": "scripts/verify-page-tools-live.mjs",
+    "line": null,
+    "description": "page-tools-live crash-navigate flaked once in three registry runs on 2026-11-06 (4ce04c24): 'a URL sent to a crashed tab did not load it (no loaded push with crashed false)'; the scenario passed alone 2 of 2 right after, and in the 116ac682 run; the code was not changed by 39-16; for the 39-18 flake work; repro: node scripts/verify-page-tools-live.mjs --scenario crash-navigate; cause so far: not isolated, the loaded push after a crash-restore navigate arrives late or not at all; page-tools-live passed in the 39-19 full run; source: 32-UAT test 1",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-07T04:37:55.475Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 29,
+    "kind": "deviation",
+    "phase": "39",
+    "file": "patches/050-extension-tab-host.patch",
+    "line": null,
+    "description": "38 T22 step 4: the options page of an extension not allowed in private windows opens in the private stock window opened last (stock openOptionsPage uses windowTracker.topWindow); fix needs a patch 050 hunk and a Gecko rebuild; owner deferred to backlog 999.17 on 2026-11-06 (39-17), matches stock behaviour; repro: 38-UAT test 22 step 4, scenario private-access session 2; source: 38-UAT test 22",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-07T04:50:37.188Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 30,
+    "kind": "unrun-verify",
+    "phase": "39",
+    "file": "powerbrowser/packaging/package-linux.sh",
+    "line": null,
+    "description": "39-19 full run (6ac27ac2): ng063-packaged-launch, portable-elf, sidecar-no-symlinks, package-target-natives, packaged-identity, install-matrix, ng065-mar-signature-enforced, ng072-policies-packaged-webextension, search-engines-packaged and mar-update-hop are red because no container-built release tarball exists in objdir-release/dist and hop.json has no served key; repro: scripts/verify-platform.sh --only portable-elf; cause so far: the PKG-17 container build with the release keys and the N-plus-1 MAR hop are owner steps in .planning/workstreams/deploy/OWNER-PASS.md, not run; source: no UAT test, 39-BASELINE environment rows",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-07T10:18:30.468Z",
+    "resolved_at": null,
+    "milestone": "v1.6"
+  },
+  {
+    "id": 31,
+    "kind": "unrun-verify",
+    "phase": "39",
+    "file": ".github/settings/",
+    "line": null,
+    "description": "39-19 full run (6ac27ac2): ng074-ci-green-on-main, repo-controls, channel-live, codeberg-mirror-live, upptime-sweep-live, win-matrix-record and win-download-copy are red on live owner state: no verify.yml run for the unpushed main head, 5 repo-controls problems (apps slack and claude undeclared), no published Release, Codeberg and Upptime slugs undeclared, scripts/matrix/win-matrix-record.json absent; repro: scripts/verify-platform.sh --only channel-live; cause so far: each needs an owner push, release or checkpoint input (deploy OWNER-PASS.md, 53-04 and 54-04 checkpoints); source: no UAT test, 39-BASELINE environment rows",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-07T10:18:30.720Z",
+    "resolved_at": null,
+    "milestone": "v1.6"
+  },
+  {
+    "id": 32,
+    "kind": "unrun-verify",
+    "phase": "39",
+    "file": "powerbrowser/packaging/package-macos.sh",
+    "line": null,
+    "description": "39-19 full run (6ac27ac2): macos-package-payload (.mozbuild/macos-package absent) and macos-install-matrix (25 unobserved items) are red; repro: scripts/verify-platform.sh --only macos-package-payload; cause so far: macOS is deferred to v1.7 by R4 (2026-11-03) and needs Mac hardware; ledger 23 is waived, so it cannot key a gate exclusion; source: no UAT test, 39-BASELINE environment rows",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-07T10:18:30.941Z",
+    "resolved_at": null,
     "milestone": "v1.7"
+  },
+  {
+    "id": 33,
+    "kind": "unrun-verify",
+    "phase": "39",
+    "file": "scripts/verify-telemetry-live-delivery.mjs",
+    "line": null,
+    "description": "tel06-error-delivery-live refuses to run: 'the working tree is dirty (2 tracked change(s), first: M .claude/settings.json)'; repro: scripts/verify-platform.sh --only tel06-error-delivery-live; cause so far: the drill rewrites a tracked file and rebuilds, so it refuses any dirty tree, and the dirt is the owner's local hook removal in .claude/settings.json plus .planning/state.json, which an agent may not commit; runs on a clean checkout; source: no UAT test, 39-BASELINE and 39-19 full run",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-07T10:18:31.179Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 34,
+    "kind": "unmet-truth",
+    "phase": "39",
+    "file": "scripts/verify-customize-inert.mjs",
+    "line": null,
+    "description": "verify-customize-inert: 'state 1 (absent) vs state 3 (styled) -- pixels identical, the CSS layer had no effect' (39-BASELINE, 39-19 full run and rerun, 3 of 3); repro: scripts/verify-platform.sh --only verify-customize-inert; cause so far: the script writes $XDG_CONFIG_HOME/powerbrowser/customize.css and captures the shell's supervised frontend, which may read customize.css from another config dir (the customize extension resolves user-storage:/user/customize.css); not isolated; source: no UAT test (CUST-01 registry row)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-07T10:18:31.417Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 35,
+    "kind": "unrun-verify",
+    "phase": "39",
+    "file": ".planning/milestones/v1.3-phases/15-panorama-organising/15-UAT.md",
+    "line": null,
+    "description": "ng089-uat-sheets: 49 pending results plus no recorded React 19 runtime test across the v1.2 10-UAT and v1.3 13, 14, 14.1, 14.1.1 and 15 UAT sheets; repro: node scripts/verify-ng-089-uat-sheets.mjs; cause so far: the NG-084 live UAT pass over those sheets was deferred by the owner ('Defer all the checks') and never run; source: the listed UAT sheets, every pending test",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-07T10:18:31.663Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 36,
+    "kind": "unmet-truth",
+    "phase": "39",
+    "file": "powerbrowser/shell/TheiaService.sys.mjs",
+    "line": null,
+    "description": "start-failure-shows-error (MIG-04): 'the failing settings-folder step did not name itself in its diagnostics rows (Failed step = waiting for the backend readiness announcement)' (39-BASELINE, 39-19 full run and rerun); repro: scripts/verify-platform.sh --only start-failure-shows-error; cause so far: the log shows 'Backend did not announce POWERBROWSER_BACKEND_READY within 3000ms' first, so the readiness backstop fires before the planted settings-folder failure is classified; not isolated; source: no UAT test (MIG-04 registry row)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-07T10:18:31.926Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 37,
+    "kind": "unmet-truth",
+    "phase": "39",
+    "file": "scripts/verify-pan04-undo-close-group-live.mjs",
+    "line": 464,
+    "description": "pan04-undo-close-group-live (g): 'after the commit focus is on pb-org-new theia-button with 0 Undo controls left, want New Group and none' (39-BASELINE, 39-19 full run and rerun); repro: scripts/verify-platform.sh --only pan04-undo-close-group-live; cause so far: focus is on an element with class pb-org-new, but not the one org.node.querySelector('.pb-org-new') returns, so either a second Organising widget instance or a stale org handle in the probe; harness or product not separated; source: no v1.5 UAT test (PAN-04 registry row)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-07T10:18:32.197Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 38,
+    "kind": "unmet-truth",
+    "phase": "39",
+    "file": "scripts/verify-ng-023-suggestions-places.mjs",
+    "line": null,
+    "description": "ng-023-suggestions-history-bookmarks: 'an open tab ranks below a history or bookmark match' (bookmark first, open tab second, history third; 39-BASELINE, 39-19 full run and rerun); repro: scripts/verify-platform.sh --only ng-023-suggestions-history-bookmarks; cause so far: the suggestion ranking puts the bookmark provider ahead of open tabs; not traced to a commit; source: no UAT test (NG-023 registry row)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-07T10:18:32.415Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 39,
+    "kind": "unmet-truth",
+    "phase": "39",
+    "file": "scripts/verify-prompts-live.mjs",
+    "line": null,
+    "description": "prompts-live-self-test: plant allow-loads-frame-url went red for the wrong reason, 'popup not adopted next to its opener (..., about:blank)', in 2 of 3 runs (39-19 full run, run 3; run 2 PASS); repro: scripts/verify-platform.sh --only prompts-live-self-test; cause so far: the 39-09 re-site (999.13, fae88df5) does not reach the plant's own failure reliably, the popup adoption step is timing-dependent; source: 37-UAT test 17",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-07T10:18:32.637Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 40,
+    "kind": "unmet-truth",
+    "phase": "39",
+    "file": "scripts/verify-site-identity-live.mjs",
+    "line": 1316,
+    "description": "site-identity-live and its self-test clean control: app-menu 'the Organising menu disabled rows are [f,f,f,f,t,t,t,t,f,...], want all false' and 'the Help row did not open its stock page (no stock window shows about:support)' (39-BASELINE, 39-19 full run and rerun); repro: node scripts/verify-site-identity-live.mjs --scenario app-menu; cause so far: rows 5 to 8 are disabled in Organising, likely page-dependent rows with no current web tab, and Help opens no stock about:support window; harness expectation or product not separated; source: no UAT sheet for phase 31; 31-04-LIVE-HANDOFF.md app-menu",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-07T10:18:32.870Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 41,
+    "kind": "unmet-truth",
+    "phase": "39",
+    "file": "theia/extensions/chrome-bar/src/browser/side-panel-top-tabs.ts",
+    "line": null,
+    "description": "first-boot-surface-fresh: 'TypeError: can't access property offsetHeight, additionalViewsMenu is null' before the forced error (39-BASELINE, 39-19 full run and rerun); repro: scripts/verify-platform.sh --only first-boot-surface-fresh; cause so far: @theia/core SideTabBar overflow (tab-bars.js:1179) queries .theia-additional-views-menu in the tab bar's parent, and the side panel tabs moved to the top by e9569e81 leave no such element there; fix belongs in the PB extension, never in Theia core; source: no UAT test (first-boot registry row)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-07T10:18:33.080Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 42,
+    "kind": "deviation",
+    "phase": "39",
+    "file": "scripts/verify-ng-067-frontend-errors.mjs",
+    "line": null,
+    "description": "ng067-frontend-errors-reach-telemetry flaked: 'at level error no frontend.uncaught-error event was sent' in the 39-19 full run, then PASS 2 of 2 alone; repro: scripts/verify-platform.sh --only ng067-frontend-errors-reach-telemetry; cause so far: timing in the frontend error delivery or its read-back, not isolated; source: no UAT test (NG-067 registry row)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-07T10:18:35.742Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 43,
+    "kind": "deviation",
+    "phase": "39",
+    "file": "scripts/verify-page-furniture-live.mjs",
+    "line": null,
+    "description": "page-furniture-live-self-test flaked: clean control 'context-menu: Copy Image Link did not put the image URL on the clipboard' in the 39-19 full run, then PASS 2 of 2 alone; the plain page-furniture-live row passed; repro: scripts/verify-platform.sh --only page-furniture-live-self-test; cause so far: the headless clipboard read-back after Copy Image Link is timing-dependent (the menu-edit Paste and iframe-edit-rows flakes share the headless clipboard); source: 35-UAT test 6",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-07T10:18:36.853Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
   }
 ]
 ````

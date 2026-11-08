@@ -3865,6 +3865,26 @@ export function emitInfoPlistFields(config, variant) {
 }
 
 /**
+ * The 7z self-extractor config (app.tag) that `mach repackage installer --tag`
+ * reads raw: upstream/browser/installer/windows/app.tag with Title carrying the
+ * display name plus the variant suffix in place of upstream's product name
+ * (owner ruling R3). A patch cannot do this: the file is never preprocessed,
+ * and a brand literal in a patch line fails check-patch-surface. The shell
+ * sink guard refuses a double quote, a backslash (the 7z config escape) and a
+ * line break.
+ */
+export function emitAppTag(config, variant) {
+    const base = assertEmittable('identity.display_name', config.identity.display_name);
+    const suffix = assertEmittable(variantPath(variant, 'name_suffix'), variant.name_suffix);
+    return [
+        ';!@Install@!UTF-8!',
+        `Title="${base}${suffix}"`,
+        'RunProgram="setup.exe"',
+        ';!@InstallEnd@!',
+    ].join('\n') + '\n';
+}
+
+/**
  * The Windows tile manifest, whole: the upstream
  * firefox.VisualElementsManifest.xml layout with the per-downstream value
  * filled in. BackgroundColor carries installer.tile_color when set; when
@@ -4384,6 +4404,9 @@ export const TARGETS = Object.freeze([
         variant: 'release',
         emit: emitInfoPlistFields,
     }),
+    // 54-09 (R3): the self-extractor config; installer-schema owns its shape.
+    Object.freeze({ generated: 'installer/dev/app.tag', variant: 'dev', emit: emitAppTag }),
+    Object.freeze({ generated: 'installer/release/app.tag', variant: 'release', emit: emitAppTag }),
 ]);
 
 function variantById(config, id) {

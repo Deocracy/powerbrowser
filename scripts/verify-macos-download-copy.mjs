@@ -121,7 +121,7 @@ function pageClaims(page) {
     }
     const gatekeeper = segs.filter(s => /Gatekeeper|Open Anyway/.test(s));
     const strings = [...new Set([...(macLine === null ? [] : [plain(macLine)]), ...gatekeeper, ...segs.filter(s => /\(en-US\)|\(([a-z]{2}-[A-Z]{2})\)\s+only/.test(s)), ...(size === null ? [] : segments(size))])];
-    return { claims, macLine, gatekeeper, strings };
+    return { claims, macLine, gatekeeper, strings, hasSize: size !== null };
 }
 
 export function runChecks(recordText, pageText) {
@@ -137,7 +137,8 @@ export function runChecks(recordText, pageText) {
         return { failures, claims: 0 };
     }
     // Set equality over the derived claims, by kind.
-    for (const c of rec.claims) if (!page.claims.has(c)) fail(c.split(':')[0], `unstated: the record observed ${JSON.stringify(c)} but ${PAGE_REL} does not state it. Next step: state it on the page, in plain words.`);
+    // A page with no size section states no size; that is truthful while the record has none (size:pending).
+    for (const c of rec.claims) if (!page.claims.has(c) && !(c === 'size:pending' && !page.hasSize)) fail(c.split(':')[0], `unstated: the record observed ${JSON.stringify(c)} but ${PAGE_REL} does not state it. Next step: state it on the page, in plain words.`);
     for (const c of page.claims) if (!rec.claims.has(c)) fail(c.split(':')[0], `overclaim: ${PAGE_REL} states ${JSON.stringify(c)} but the record does not observe it. Next step: state only what the record observed.`);
     // The Gatekeeper path, by containment.
     if (rec.gatekeeper !== null && !page.gatekeeper.some(s => s.includes(rec.gatekeeper))) fail('gatekeeper', `dropped consequence: the record observed the Gatekeeper path ${JSON.stringify(rec.gatekeeper)} but no sentence on ${PAGE_REL} states it. Next step: tell the user that path on the page.`);
@@ -180,7 +181,8 @@ function selfTest() {
     const macLine = '<li><strong>macOS:</strong> the disk image is signed with a Developer ID, notarized and stapled.</li>';
     const gkLine = `<li>If macOS asks for confirmation: ${gk}</li>`;
     let page = swap(realPage, '<li><strong>macOS:</strong> no build is published yet. The planned build is ad-hoc signed and not notarized.</li>', `${macLine}\n    ${gkLine}`);
-    page = swap(page, /<p class="pending">[\s\S]*?<\/p>/.exec(page)[0], '<p>The complete update file for macOS is 130.6 MB.</p>');
+    const sizeBlock = '\n  <h2>Update file size</h2>\n  <p>The complete update file for macOS is 130.6 MB.</p>\n';
+    page = swap(page, '</main>', `${sizeBlock}</main>`);
     const control = runChecks(rec, page);
     if (control.failures.length > 0) {
         console.error(`${NAME}: --self-test FAIL -- the observed pair is already red, so the plants would mean nothing: ${control.failures.map(fmt).join(' | ')}`);
@@ -202,7 +204,8 @@ function selfTest() {
         ['stale pending size beside an observed size', rec, swap(page, '<p>The complete update file for macOS is 130.6 MB.</p>', '<p>The complete update file for macOS is 130.6 MB.</p><p class="pending">Pending.</p>'), 'size', 'overclaim'],
         ['unobserved Gatekeeper sentence on a draft record', realRecord, swap(realPage, '<li><strong>macOS:</strong>', `${gkLine}\n    <li><strong>macOS:</strong>`), 'gatekeeper', 'unobserved consequence'],
         ['notarization overclaim on the real page', realRecord, swap(realPage, 'ad-hoc signed and not notarized', 'ad-hoc signed and notarized'), 'notarization', 'overclaim'],
-        ['dropped pending size line on the real page', realRecord, swap(realPage, /<p class="pending">[\s\S]*?<\/p>/.exec(realPage)[0], ''), 'size', 'unstated'],
+        ['size section without the pending line on the real page', realRecord, swap(realPage, '</main>', '\n  <h2>Update file size</h2>\n  <p>Measured on the release build.</p>\n</main>'), 'size', 'unstated'],
+        ['size section removed against an observed size', rec, swap(page, sizeBlock, '\n'), 'size', 'unstated'],
         ['product spelled Power Browser', rec, swap(page, '<h1>Download PowerBrowser</h1>', '<h1>Download Power Browser</h1>'), 'name', 'Power Browser'],
         ['macOS signing line missing', rec, swap(page, macLine, ''), 'vacuity', 'macOS:'],
         ['unreadable record', null, page, 'vacuity', 'record'],

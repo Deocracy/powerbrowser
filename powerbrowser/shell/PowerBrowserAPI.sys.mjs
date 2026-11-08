@@ -540,28 +540,34 @@ export const PowerBrowserAPI = Object.freeze({
     // sent. Every in-tree caller passes a future stamp regardless of the
     // session flag; aIsSession=true is still what ends it at session end.
     const expiry = Date.now() + 24 * 60 * 60 * 1000;
-    const validation = Services.cookies.add(
-      host,
-      path,
-      name,
-      value,
-      /* aIsSecure */ false,
-      /* aIsHttpOnly */ true,
-      /* aIsSession */ true,
-      /* aExpiry */ expiry,
-      /* aOriginAttributes */ {},
-      Ci.nsICookie.SAMESITE_LAX,
-      Ci.nsICookie.SCHEME_HTTP,
-      /* aIsPartitioned */ false
-    );
-    // add() reports a rejected cookie by returning a validation object rather
-    // than throwing. Discarding it turns "the token gate is unreachable" into a
-    // silent 403 at the far end of the swap, which is exactly how the expired
-    // aExpiry above went unnoticed. Fail loudly instead.
-    if (validation && validation.result !== Ci.nsICookieValidation.eOK) {
-      throw new Error(
-        `setSessionCookie: ${name} for ${host}${path} was rejected (${validation.result}): ${validation.errorString}`
+    // Under browser.privatebrowsing.autostart the shell window is private, so
+    // its Theia frame reads the private cookie jar (privateBrowsingId 1); with
+    // the default jar alone the sidecar answers 403 and Theia never loads.
+    const jars = lazy.PrivateBrowsingUtils.permanentPrivateBrowsing ? [{}, { privateBrowsingId: 1 }] : [{}];
+    for (const originAttributes of jars) {
+      const validation = Services.cookies.add(
+        host,
+        path,
+        name,
+        value,
+        /* aIsSecure */ false,
+        /* aIsHttpOnly */ true,
+        /* aIsSession */ true,
+        /* aExpiry */ expiry,
+        /* aOriginAttributes */ originAttributes,
+        Ci.nsICookie.SAMESITE_LAX,
+        Ci.nsICookie.SCHEME_HTTP,
+        /* aIsPartitioned */ false
       );
+      // add() reports a rejected cookie by returning a validation object rather
+      // than throwing. Discarding it turns "the token gate is unreachable" into a
+      // silent 403 at the far end of the swap, which is exactly how the expired
+      // aExpiry above went unnoticed. Fail loudly instead.
+      if (validation && validation.result !== Ci.nsICookieValidation.eOK) {
+        throw new Error(
+          `setSessionCookie: ${name} for ${host}${path} was rejected (${validation.result}): ${validation.errorString}`
+        );
+      }
     }
   },
 
@@ -4119,6 +4125,14 @@ export const PowerBrowserAPI = Object.freeze({
     }
     // WR-05: any navigation supersedes a first load still waiting in firstWebTabLoad.
     entry.firstLoad = null;
+    // A load from browser UI counts as interaction with the page it leaves, as a URL-bar load does in
+    // Firefox (nsDocShell::LoadURI marks it for a system principal); else Back skips that page. The overlay's
+    // initial about:blank is a session-history entry here, unlike Firefox's, so it stays unmarked.
+    const sh = entry.browser.browsingContext?.sessionHistory;
+    const leaving = !replace && sh && sh.index >= 0 ? sh.getEntryAtIndex(sh.index) : null;
+    if (leaving && leaving.URI?.spec !== "about:blank") {
+      leaving.hasUserInteraction = true;
+    }
     const triggeringPrincipal = Services.scriptSecurityManager.createNullPrincipal({});
     const loadFlags = replace ? Ci.nsIWebNavigation.LOAD_FLAGS_REPLACE_HISTORY : Ci.nsIWebNavigation.LOAD_FLAGS_NONE;
     // PROMPT-04 (D-06): a consumed open grant's principal, policy container and referrer replace the null principal.
@@ -4258,12 +4272,12 @@ export const PowerBrowserAPI = Object.freeze({
     return "done";
   },
 
-  /** GUI-02 (14.1-01): keyboard entry into the page (UI-SPEC A14): focuses the overlay's docshell. */
+  /** GUI-02 (14.1-01): keyboard entry into the page (UI-SPEC A14). C11 (39-02): a request reaching chrome while a page menu is pending predates it. */
   webTabFocus(tabId) {
     const entry = webTabs.get(tabId);
-    if (!entry) {
-      return "unknown-tab";
-    }
+    if (!entry) { return "unknown-tab"; }
+    const menu = pageMenus.get(entry.browser.ownerDocument.defaultView)?.pending;
+    if (menu && Date.now() - menu.at <= PAGE_MENU_TTL_MS) { return "menu-pending"; }
     entry.browser.focus();
     return "done";
   },
@@ -7530,8 +7544,8 @@ function adoptPendingOverlay(kind, tabId, pcKey, actorRef) {
 // installShellFurniture entry, never from a bootstrap line of its own.
 // ---------------------------------------------------------------------------
 
-// The shell element the panel opens against (powerbrowser.xhtml). With iconBox null, the stock module finds an anchor
-// only through the browser's popupnotificationanchor attribute, so every overlay that asks names this id.
+// The xul:box the panel opens against (powerbrowser.xhtml), set as each asking overlay's popupnotificationanchor PROPERTY:
+// iconBox is null, and getAnchorFromBrowser throws on the attribute (getClassName of a string) and takes only a XULElement.
 const PROMPT_ANCHOR_ID = "powerbrowser-notification-anchor";
 // D-04: background requests waiting for their tab, per tab, oldest first. A fourth from the same tab evicts that tab's oldest.
 const PROMPT_QUEUE_CAP = 3;
@@ -7582,7 +7596,7 @@ function installPermissionPromptFurniture(window) {
     if ((tabId === null && !isPendingOverlay(browser)) || !options || options.dismissed) {
       return stockShow.apply(this, arguments);
     }
-    browser.setAttribute("popupnotificationanchor", PROMPT_ANCHOR_ID);
+    browser.popupnotificationanchor = window.document.getElementById(PROMPT_ANCHOR_ID);
     const record = {
       token: `prompt-${++promptTokenCounter}`,
       window,
@@ -7635,6 +7649,12 @@ function installPermissionPromptFurniture(window) {
   window.customElements.setElementCreationCallback("webrtc-preview", () => window.ChromeUtils.importESModule("chrome://browser/content/webrtc/webrtc-preview.mjs", { global: "current" }));
   // browser.js:631-634: the password template's username field upgrades on first use; LoginManagerPrompter fills and reads it.
   window.customElements.setElementCreationCallback("login-doorhanger-username-field", () => window.ChromeUtils.importESModule("chrome://browser/content/passwordmgr/login-doorhanger-username-field.mjs", { global: "current" }));
+  // LoginManagerPrompter's Save and Update run FillHelpers.showConfirmation (:34-44) before persistData (:485-490). It reads
+  // #identity-icon-box (powerbrowser.xhtml) and this window's ConfirmationHint (browser.js, not loaded here) and throws
+  // without them, so no login was stored. shortcut: the stock "saved" hint is not shown; render it in Theia if the copy asks.
+  window.ConfirmationHint = { show() {} };
+  // PermissionUI.postPrompt (:664) animates #web-notifications-notification-icon unless gReduceMotion; the shell has no such icon.
+  window.gReduceMotion = true;
   window.PopupNotifications = notifications;
   installNotificationBars(window, host);
 }
@@ -8248,7 +8268,13 @@ function installTooltipsAndLinkStatus(window) {
       }
     },
     showTooltip(x, y, text, direction, browser) {
-      if (Cc["@mozilla.org/widget/dragservice;1"].getService(Ci.nsIDragService).getCurrentSession()) {
+      // C22 (39-05): a headless shell has no drag service (widget/gtk nsDragService::GetInstance returns null),
+      // so upstream's getService throws there and no tooltip opens; no drag service means no drag session.
+      let dragging = false;
+      try {
+        dragging = !!Cc["@mozilla.org/widget/dragservice;1"].getService(Ci.nsIDragService).getCurrentSession();
+      } catch {}
+      if (dragging) {
         return;
       }
       if (!document.hasFocus() || tabIdOfBrowser(browser) === null) {
@@ -8586,6 +8612,10 @@ function installPageContextMenu(window) {
       }
       openPageMenu(window, theiaBrowser, state, data).catch(err => {
         PowerBrowserAPI.log("error", `[web-tab] pageContextMenu failed: ${err && err.message ? err.message : err}`);
+        // 39-REVIEW WR-04: a pending menu left behind makes webTabFocus answer menu-pending for its whole TTL.
+        if (state.pending?.data === data) {
+          state.pending = null;
+        }
         pageMenuClose(data);
       });
     },
@@ -8662,6 +8692,11 @@ async function handlePageMenuAction(data, actorRef) {
     }
   }
   if (data.path !== undefined) {
+    // CR-01 (39-06): a path for an earlier menu of this window whose save slot is gone (answered, or the
+    // oldest dropped at the ninth) lost its save; `stale` makes the frontend say the menu had closed.
+    if (data.menuId > 0 && data.menuId <= state.nextMenuId && state.pending?.menuId !== data.menuId) {
+      return { ok: true, kind, where: "stale" };
+    }
     return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a save path this menu did not ask for" };
   }
   const pending = state.pending;
@@ -8739,9 +8774,21 @@ async function runPageMenuRow(id, pending, state, itemId) {
     case "context-media-playbackrate-200x":
       actor.mediaCommand(context.targetIdentifier, "playbackRate", PAGE_MENU_RATES[id.slice(-4)]);
       return { where: "done" };
-    case "context-video-fullscreen": // browser-context.js:112-113; the pick is the user's click on the row, carried as user input so the page's requestFullscreen is allowed
-      furnitureLazy.E10SUtils.wrapHandlingUserInput(data.browser.ownerDocument.defaultView, true, () => actor.mediaCommand(context.targetIdentifier, "fullscreen"));
+    case "context-video-fullscreen": { // browser-context.js:112-113; the pick is the user's click on the row, carried as user input so the page's requestFullscreen is allowed
+      // The Theia menu holds chrome focus and the overlay stays hidden until the frontend's next geometry push, and a
+      // request from outside the focused tab is denied: so the overlay is focused once shown (a hidden one cannot be).
+      const win = data.browser.ownerDocument.defaultView;
+      const run = frames => {
+        if (data.browser.style.visibility !== "visible" && frames > 0) {
+          win.requestAnimationFrame(() => run(frames - 1));
+          return;
+        }
+        data.browser.focus();
+        furnitureLazy.E10SUtils.wrapHandlingUserInput(win, true, () => actor.mediaCommand(context.targetIdentifier, "fullscreen"));
+      };
+      run(60);
       return { where: "done" };
+    }
     case "context-viewvideo":
     case "context-viewimage": // viewMedia (:1744-1778)
       return openGrant(state, data.principal, facts.mediaURL, pageMenuLoad(data, data.referrerInfo), "browser.tabs.loadInBackground");
@@ -8928,7 +8975,7 @@ function pageEditFacts(data) {
     contentSelected: data.selectionInfo ? !data.selectionInfo.docSelectionIsCollapsed : false,
     commands: Object.fromEntries(WEB_TAB_EDIT_CMDS.map(cmd => [cmd, controller?.isCommandEnabled(cmd) === true])),
     viewableTop: /^(https?|file):/i.test(data.browser.currentURI?.spec ?? ""),
-    frameSource: /^(https?|file):/i.test(data.docLocation ?? "") && pageToolsLazy.BrowserUtils.mimeTypeIsTextBased(data.contentType ?? ""),
+    frameSource: /^(https?|file):/i.test(data.docLocation ?? "") && pageToolsLazy.BrowserUtils.mimeTypeIsTextBased(data.context.target?.ownerDocument?.contentType ?? ""),
     canSpell,
     onMisspelling: !!spellInfo?.overMisspelling,
     spellSuggestions: spellInfo?.overMisspelling && Array.isArray(spellInfo.spellSuggestions) ? spellInfo.spellSuggestions : [],
@@ -9023,7 +9070,16 @@ async function pageMenuInspect(id, pending) {
   const DevToolsShim = webTabDevToolsShim();
   const tab = tabHostNodeOf(pending.data.browser);
   const target = pending.data.context.targetIdentifier;
-  (id === "context-inspect" ? DevToolsShim.inspectNode(tab, target) : DevToolsShim.inspectA11Y(tab, target)).catch(err => {
+  // gDevTools.inspectNode finds an open toolbox through descriptorFront.localTab, which root.js:250-257 sets only for a
+  // <tab> element, never this host's <hbox>; so the node is selected on the toolbox opened above, as its open-toolbox branch does.
+  const inspectNode = async () => {
+    const inspector = await toolbox.selectTool("inspector");
+    const nodeFront = await inspector.inspectorFront.getNodeActorFromContentDomReference(target);
+    if (nodeFront) {
+      await inspector.selection.setNodeFront(nodeFront, { reason: "browser-context-menu" });
+    }
+  };
+  (id === "context-inspect" ? inspectNode() : DevToolsShim.inspectA11Y(tab, target)).catch(err => {
     PowerBrowserAPI.log("error", `[web-tab] inspect failed (${err && err.name ? err.name : "error"})`);
   });
   return { where: "done" };
@@ -10341,6 +10397,8 @@ function extensionOpenPopup(win, named, popupUrl, anchorRect) {
   // As stock (ext-pageAction.js): the panel opens once the popup has painted its size.
   popup.contentReady.then(() => {
     if (!popup.destroyed) {
+      // 39-15 (38 T23): stock Extension:GrabFocus leaves the shell's focus on no element, so the popup takes it here.
+      popup.panel.addEventListener("popupshown", () => popup.browser?.focus(), { once: true });
       popup.panel.openPopupAtScreenRect("bottomright topright", at.x, at.y, at.width, at.height, false, false);
     }
   });
@@ -10681,10 +10739,31 @@ function extensionOpenTabPage(url, principal, reuse = false) {
 
 // `reuse` (runtime.openOptionsPage): switch to the tab already showing the page, else add one, as switchToTabHavingURI does.
 function extensionSelectTabPage(win, url, principal, reuse) {
-  const tab = (reuse && win.gBrowser.tabs.find(t => t.linkedBrowser?.currentURI?.spec === url)) || win.gBrowser.addTab(url, { triggeringPrincipal: principal });
+  const tab = (reuse && win.gBrowser.tabs.find(t => t.linkedBrowser?.currentURI?.spec === url)) || (reuse && uncommittedStockTab(win, url)) || win.gBrowser.addTab(url, { triggeringPrincipal: principal });
   win.gBrowser.selectedTab = tab;
   PowerBrowserAPI.focusWindow(win);
+  if (reuse && !reuseSwitchWrapped.has(win)) {
+    // 39-13 fix 4 (38 T30, WR-06): once this window has started, ext-browser.js openOptionsPage sends the next call to
+    // the window's own switchToTabHavingURI (it is the top window now). That one matches committed URLs only
+    // (URILoadingHelper switchIfURIInWindow) and added a second tab beside the one just added here.
+    reuseSwitchWrapped.add(win);
+    const stockSwitch = win.switchToTabHavingURI;
+    win.switchToTabHavingURI = function (uri, ...rest) {
+      const pending = uncommittedStockTab(win, uri instanceof Ci.nsIURI ? uri.spec : String(uri));
+      if (pending) {
+        win.gBrowser.selectedTab = pending;
+        return true;
+      }
+      return stockSwitch.call(this, uri, ...rest);
+    };
+  }
   return tab;
+}
+const reuseSwitchWrapped = new WeakSet();
+
+// A tab added for `url` whose load has not committed: tabbrowser addTab keeps the URL in userTypedValue until then.
+function uncommittedStockTab(win, url) {
+  return win.gBrowser.tabs.find(t => t.linkedBrowser?.currentURI?.spec === "about:blank" && t.linkedBrowser.userTypedValue === url);
 }
 
 // The shell window's extension receivers, installed with the tab host. ext-browser.js openOptionsPage calls the top
@@ -10823,3 +10902,12 @@ async function extensionInstallSite() {
   }
   return { ok: true, kind: "extensionInstallSite", where: await PowerBrowserAPI.openStockTab(url) };
 }
+
+// v1.5 live pass: ExtensionParent starts an installed extension's background at app startup on browserStartupPromise,
+// which resolves on sessionstore-windows-restored (only a stock window's SessionStore sends it) or on
+// extensions-late-startup, the topic upstream's own non-stock UI sends for this (browser/fxr/content/fxrui.js:144). The
+// shell window is not a stock window, so the shell sends it once that window has started.
+Services.obs.addObserver(function extensionLateStartup(win) {
+  Services.obs.removeObserver(extensionLateStartup, "browser-idle-startup-tasks-finished");
+  Services.obs.notifyObservers(win, "extensions-late-startup");
+}, "browser-idle-startup-tasks-finished");

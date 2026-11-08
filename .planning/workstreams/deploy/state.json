@@ -11,98 +11,98 @@
     {
       "number": "41",
       "name": "Repository controls and GitHub Apps (A)",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "42",
       "name": "Community surface and release documentation (A)",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "43",
       "name": "Release train skeleton and upstream bump automation (A)",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "44",
       "name": "Trust path (B)",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "45",
       "name": "Portable Linux release build (C)",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "46",
       "name": "In-app update experience and egress pass (C)",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "47",
       "name": "Hosting, website and mail (D)",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "48",
       "name": "Error telemetry, maintenance sweep and watchdog (D)",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "49",
       "name": "Release pipeline and legion runner (E)",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "50",
       "name": "Release train stages and first public Linux release (E)",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "51",
       "name": "Dependency flow and train supersede (F)",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "52",
       "name": "Claude fixer (F)",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "53",
       "name": "Support operations (G)",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "54",
       "name": "Windows (H)",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "55",
       "name": "macOS (I)",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "56",
       "name": "Package channels (J)",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "57",
       "name": "Native crash reporting (K)",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "58",
       "name": "ESR 175 (L)",
-      "status": "pending"
+      "status": "in_progress"
     }
   ],
   "next": {
     "command": "/gsd-progress --next",
-    "label": "Advance to the next step",
-    "reason": "Phase 2 of 19 · 5% · executing"
+    "label": "Stage E owner live pass",
+    "reason": "110 of 117 plans have a SUMMARY; Stages A-D done; see OWNER-PASS.md"
   },
-  "updated_at": "2026-10-22T16:22:33.973Z"
+  "updated_at": "2026-11-03T23:59:00.000Z"
 }

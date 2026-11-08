@@ -18,5 +18,5 @@
 # The DISPLAY-side vendor (D-09 as amended). The machine-side vendor is the
 # space-free `Deocracy` in patches/010, because MOZ_APP_VENDOR is lowercased into
 # the profile path with no space stripping.
--vendor-short-name = Deocracy
+-vendor-short-name = Deocracy Institute
 trademarkInfo = { " " }

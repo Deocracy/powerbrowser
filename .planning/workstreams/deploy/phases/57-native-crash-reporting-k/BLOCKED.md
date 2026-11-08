@@ -6,8 +6,8 @@ Plan 57-04 (the TEL-13 flip) was not executed, by instruction.
 ## B1. 57-01 Task 1: the TEL-09 consent patch conflicts with the compiled-file guard (DECIDED, LANDED)
 
 **Decided 2026-10-31: (a), implemented in 1d378bef (the `check-patch-surface.sh` exact-path exception, D-72/D-73
-amended) and f02ada50 (patch 055, `scripts/verify-crash-ping-consent.mjs`, rows `crash-ping-consent` and
-`crash-ping-consent-self-test`).** Only `glean.rs` is patched; `send_ping.rs` did not need a change (its
+amended) and f02ada50 (patch 050, `scripts/verify-crash-ping-consent.mjs`, rows `crash-ping-consent` and
+`crash-ping-consent-self-test`). The patch was renamed `055-powerbrowser-crash-ping-consent.patch` in 7e0f1a48 (050 was already the extension tab-host patch).** Only `glean.rs` is patched; `send_ping.rs` did not need a change (its
 `--send-ping` path runs only behind CrashManager's in-process pref check). The record below is the original
 blocker, kept as written.
 
@@ -17,7 +17,7 @@ self-test plant that any other `.rs` path stays red. Settled by the autonomous r
 owner's instruction to decide items not needing owner input. The safety note below still binds until that
 work lands.
 
-**What the plan asks.** A hook-only patch, `patches/055-powerbrowser-crash-ping-consent.patch`, that fails the
+**What the plan asks.** A hook-only patch, `patches/050-powerbrowser-crash-ping-consent.patch`, that fails the
 Glean crash-ping consent read closed, plus a static gate, with `check-patch-surface` green on the new patch.
 
 **What the tree shows.**
@@ -58,6 +58,30 @@ show the crash-ping host before consent, so the assertion would be red by design
 **Owner step, once B1 lands and a reporter-enabled build exists (tier 3, owner machine):** record the exact
 `verify-endpoints.sh --layer 3` invocation and the extracted host set verbatim in `57-01-SUMMARY.md`.
 
+**Assertion committed 2026-11-04 by plan 57-06.** `scripts/verify-endpoints.sh` has a `--crash-ping` mode for
+layer 3. It requires `objdir/dist/bin/crashreporter` (a reporter-enabled build), a fresh profile, a content-process
+crash by SIGSEGV 10 s into the 35 s window, and a minidump under the profile afterwards. It then fails if the
+crash-ping host, derived from `TELEMETRY_SERVER` in `crashping/src/lib.rs`, resolves. The fixture plants run in
+`endpoint-dispositions-self-test` (`--quick`). It was not run live from the agent shell. Owner commands, on the
+reporter-enabled build:
+
+```sh
+bash scripts/verify-endpoints.sh --layer 3 --crash-ping                      # must print "crash-ping PASS"
+bash scripts/verify-endpoints.sh --layer 3 --crash-ping --positive-control   # must print "positive control PASS -- consent true surfaced incoming.telemetry.mozilla.org"
+```
+
+Limit: MOZ_LOG records Gecko's resolver only. A main-process crash pings from the separate `crashreporter`
+client, whose DNS is outside this capture, so that path is covered only by the patch-055 static gate
+(`crash-ping-consent`).
+
+Consent lock (D57 review): the shipped `distribution/policies.json` sets `DisableTelemetry`, which locks
+`datareporting.healthreport.uploadEnabled` to false, and a locked pref overrides the profile's `user_pref`. The
+`--positive-control` run therefore removes `DisableTelemetry` from `objdir/dist/bin/distribution/policies.json` for
+the duration of the run and restores the original bytes on every exit path, including INT/TERM. Without that step the
+control could never surface the host. The assertion run leaves the policy in place, so it tests the shipped
+configuration. After the control, `grep DisableTelemetry objdir/dist/bin/distribution/policies.json` confirms the
+restore.
+
 ## B3. 57-02 owner checkpoint: receiver deploy and probes (NOT EXECUTED, owner only)
 
 Nothing was deployed, and no network write was made from this session. The owner runs, in order (the full runbook is
@@ -74,6 +98,12 @@ Nothing was deployed, and no network write was made from this session. The owner
 7. Probe from outside the account and paste all three responses verbatim into the operator record: a well-formed
    multipart submit (200 `CrashID=<uuid>`), an over-cap body (413 `Discarded=oversized_body`), and a burst past the
    rate limit (blocked).
+
+**Updated 2026-11-04 (plan 57-07).** The routes block of `worker/wrangler-crash.toml` now names
+`crash.powerbrowser.org` (FINISH-PLAN section 2 default), so its runbook step 6 is a check, not an edit. Follow the
+runbook's order, not the list above: the rate-limit rule (runbook step 5) comes BEFORE the deploy (step 7), and the
+`crash-submit` gate enforces that order. `[urls].crash_report = "https://crash.powerbrowser.org/submit"` is still
+unset here; state it with the allowlist row below after the deploy record.
 
 **Crash host allowlist row (owner, when the key is stated).** `[urls].crash_report` is unset in this tree, so no
 crash host exists in `powerbrowser/endpoint-allowlist.json`. When the owner states the key, the
@@ -99,9 +129,19 @@ covers them. Close both before 57-04 and before `docs/CRASH-POLICY.md` may claim
 - `MOZ_CRASHREPORTER_AUTO_SUBMIT` (`upstream/toolkit/crashreporter/client/app/src/config.rs:177`): when set, the
   client skips the dialog (`logic.rs:115,531`, `main.rs:125,227`). Needs the launcher/startup environment to clear it
   (or a patch-free equivalent) and a gate that fails if it is not cleared.
+  **PLANNED, NOT EXECUTED (plan 57-08, 2026-11-04).** There is no launcher wrapper, and Gecko starts the client with
+  the live environment at crash time, so the clear is in-process: a new `PowerBrowserAPI` method that sets the
+  variable empty (`env_bool` reads empty as false), called first in `PowerBrowserSingleInstanceHandler.handle()`.
+  That edits `powerbrowser/shell/PowerBrowserAPI.sys.mjs`, which another session's uncommitted work holds, so 57-08
+  waits for that work to be committed. Run it with `/gsd-execute-phase 57 --gaps-only --ws deploy` after that.
 - `browser.crashReports.unsubmittedCheck.autoSubmit2` (`upstream/browser/app/profile/firefox.js:2823`, default false)
   and the unsubmitted-reports backlog notification. Needs the pref locked false in the generated prefs/policies and
   a gate over `generate --check`.
+  **CLOSED 2026-11-04 by plan 57-05:** locked false as a `Preferences` policy entry in the tracked
+  `powerbrowser/distribution/policies.json` (copied verbatim into every package), not in the branding pref file, so
+  D-84 (branding prefs unlocked) holds and no generated byte moves. Gate `crash-autosubmit-lock` derives the pref name
+  from `UnsubmittedCrashHandler`'s `autoSubmit` getter (`upstream/browser/modules/ContentCrashHandlers.sys.mjs`) and
+  checks the policy engine's allowed prefixes; its self-test plants six faults.
 
 Why not locked now: a locked pref changes the generated branding prefs bytes that the Phase 1 comparands pin, and
 the environment variable is not a pref. Both belong with the TEL-13 flip, where the generated output may change.

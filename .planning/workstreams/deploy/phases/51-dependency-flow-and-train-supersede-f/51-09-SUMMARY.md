@@ -1,0 +1,109 @@
+---
+phase: 51-dependency-flow-and-train-supersede-f
+plan: 09
+subsystem: release-train
+status: complete
+gap_closure: true
+tags: [auto-02, renovate, licensing, security]
+requires:
+  - 51-08
+provides:
+  - renovate-licensing (generate, no credential) and renovate-licensing-publish (App token) in release-train.yml
+  - publishPlan expected-tip pin and committer check
+  - workflows rule renovate-job for the split shape
+key-files:
+  modified:
+    - .github/workflows/release-train.yml
+    - .github/renovate.json5
+    - scripts/publish-bump-branch.sh
+    - scripts/release-train.mjs
+    - scripts/verify-workflows.mjs
+    - docs/RELEASING.md
+    - .planning/workstreams/deploy/phases/51-dependency-flow-and-train-supersede-f/BLOCKED.md
+    - .planning/workstreams/deploy/phases/51-dependency-flow-and-train-supersede-f/51-08-SUMMARY.md
+decisions:
+  - "The data files taken from the branch are the generator's inputs that Renovate writes: every tracked theia/**/package.json (the root resolutions and the exact @theia/* pins in the app and seven extension manifests; corrected by the review fix below, the first version took theia/package.json only), theia/yarn.lock, configuration.toml (theia_release). powerbrowser/packaging/node-runtime.json is a generator input Renovate does not write, so main's copy is used; a branch that changes any other path, or a package.json beyond an @theia/* version string, is not regenerated (NOTE)."
+  - "The head SHA travels as a job output, not inside the artifact: outputs come from the trusted step, the artifact carries only the two notice files and is checked to hold exactly those."
+  - "The moved-branch refusal is in two places: the commit step compares the fetched tip to HEAD_SHA before any token exists, and publish-bump-branch.sh's third argument makes publishPlan refuse unless the API tip is HEAD_SHA, so the force-with-lease is pinned to it too."
+  - "GitHub's verified flag is not required: Renovate (platformCommit disabled) and the bot commit unsigned over git, so the flag is false on every legitimate commit. publishPlan now checks the committer address as well as the author; an address is still a claim anyone with push access can make. Residual recorded in BLOCKED.md item 18."
+  - "The publish job's git helper lists core.attributesFile first so its text differs from fix-pr's helper; the fix-pr plant anchors on that helper's tail."
+metrics:
+  completed: 2026-11-04
+---
+
+# 51-09 summary: renovate-licensing split (no branch code with the App token)
+
+## What changed
+
+- `.github/workflows/release-train.yml`:
+  - `renovate-licensing` (generate): `permissions: {}`, no environment, no App token, no secret. Checks out the run's
+    ref (main) without persisted credentials, fetches `chore/theia-theia`, records its head and the merge base with
+    main, refuses (NOTE) a branch that changes anything but `theia/package.json`, `theia/yarn.lock`,
+    `configuration.toml` (its `theia_release` line only) and the two notices, runs main's `fetch-upstream.sh` and
+    `apply-patches.sh`, then `git checkout "$HEAD_SHA" -- theia/package.json theia/yarn.lock configuration.toml`,
+    `yarn install --ignore-scripts --frozen-lockfile` and main's `generate-licensing.mjs` in `nix develop .#theia`.
+    Current notices end with a NOTE; otherwise it uploads `renovate-licensing-notices` (the two files, retention 1 day)
+    and outputs `head` and `base`.
+  - `renovate-licensing-publish`: needs the generate job, gated on its `head` output, environment bot,
+    `permissions: {}`, `continue-on-error: true`. Trusted checkout without persisted credentials; downloads the
+    artifact and refuses one holding anything but the two files; fetches the branch and ends with a NOTE if its tip
+    is not `HEAD_SHA`; adds a detached worktree `target/` at `HEAD_SHA` with `GIT_CONFIG_NOSYSTEM=1`,
+    `GIT_CONFIG_GLOBAL=/dev/null`, hooks, fsmonitor and the attributes file off; copies the two files with
+    `cp --remove-destination` (a symlink planted at a notice path is replaced, not followed); stages exactly those
+    two; refuses any other diff; commits as `release-train <BOT_EMAIL>`. Only then is the App token minted
+    (contents write), and `(cd target && bash "$GITHUB_WORKSPACE/scripts/publish-bump-branch.sh" "$BRANCH" "$BASE"
+    "$HEAD_SHA")` publishes. Every run step starts with `unset NODE_OPTIONS`; the generate job's `GITHUB_ENV` and
+    `GITHUB_PATH` writes do not cross jobs.
+- `scripts/publish-bump-branch.sh`: optional third argument (expected remote tip); the compare also returns
+  `committers`. The bump-pr, bump-pr-node and fix-pr callers pass two arguments and behave as before (their commits
+  set the bot as committer through `git config user.email`).
+- `scripts/release-train.mjs` `publishPlan`: `expectTip` (refuse when the remote tip differs), committer addresses
+  checked with author addresses, a compare without `committers` refused as unlistable; CLI accepts the optional
+  seventh argument. Three new plants; the existing fixtures carry `committers`.
+- `scripts/verify-workflows.mjs` rule `renovate-job`: rewritten for the two jobs (header comment lists every
+  assertion). 29 renovate-job plants (15 new, 4 re-anchored); 241 plants in total, 11 controls.
+- `docs/RELEASING.md` Theia inflow paragraph and the `.github/renovate.json5` header name both jobs.
+
+## Verification
+
+- `node scripts/verify-workflows.mjs` and `--self-test`: PASS (241 plants, 11 controls).
+- Rows `zizmor`, `zizmor-self-test`, `workflows`, `workflows-self-test`, `renovate-config`,
+  `release-train-logic-self-test`: PASS.
+- `bash -n` over the three new run blocks: clean.
+- The publish job's commit step, extracted from the YAML and run against a scratch bare origin: pinned head commits
+  the two files as the bot (author and committer), a symlinked notice path is replaced and its target not written;
+  a moved tip ends with the NOTE; an extra artifact file fails the step.
+- `node scripts/generate.mjs`; `scripts/verify-platform.sh --quick`: only `fixer-isolate-self-test` red (known).
+
+## Not verified
+
+- No live run (BLOCKED.md item 3). Whether Renovate's git commits carry the bot address as committer, not only as
+  author, is unobserved; if not, publishPlan refuses the branch with a NOTE and the notices are regenerated by hand.
+- That GitHub accepts a cross-job artifact from a `continue-on-error` job and that `needs.renovate-licensing.outputs.head`
+  is readable after it: standard behaviour, not exercised here.
+
+## Review fix (2026-11-04)
+
+Two verified review findings, both fixed; none rejected.
+
+- **Checker gaps (high).** `renovate-job` trusted that `"$GITHUB_WORKSPACE/"` was main without checking the publish job.
+  A `ref:` on its checkout, a `git reset --hard FETCH_HEAD`, `bash "$GITHUB_WORKSPACE/target/scripts/..."`, or
+  `.`/yarn/npx/make inside `target/` all stayed green. The rule now reds on a checkout `ref`/`repository` input in
+  either job, a HEAD/index move in either job (the publish job may only `worktree add` the pinned head; a pathspec
+  checkout is refused there too), any `$GITHUB_WORKSPACE/target` path, and every command word in the publish job that is
+  an interpreter, build tool or path other than `bash "$GITHUB_WORKSPACE/scripts/<name>"`. 14 new plants cover
+  (a)-(d), env, a relative path, and the generate-side ref input and reset.
+- **Data set too narrow (medium).** Renovate has no file filter and the `@theia/*` pins are exact in all nine tracked
+  `theia/**/package.json`, so a real branch would have ended at the NOTE; the generator also reads
+  `theia/applications/browser/package.json` itself. The generate job now checks out
+  `':(glob)theia/**/package.json' theia/yarn.lock configuration.toml` and refuses a package.json diff line other than
+  an `"@theia/<name>": "<version>"` string. A scratch repo with all nine manifests bumped to 1.77.0 passed both
+  filters; an added `workspaces` entry or a new manifest was refused. Recorded as an assumption until a live Renovate
+  run (BLOCKED.md item 18).
+- Verification: `verify-workflows.mjs` PASS, `--self-test` PASS (255 plants, 11 controls); rows `zizmor` and
+  `workflows-self-test` PASS; `node scripts/generate.mjs`; `scripts/verify-platform.sh --quick` with only
+  `fixer-isolate-self-test` red (known).
+
+## Second review fix (2026-11-04, BASE)
+
+The publish job took BASE, the start of the compare range that publishPlan inspects for bot-only commits, from the credential-free generate job's outputs. Code that ran in the generate job could have narrowed that range. The publish job now derives BASE itself with `git merge-base refs/remotes/origin/main "$HEAD_SHA"` from its trusted checkout, and the generate job no longer exports a base output. The renovate-job rule in scripts/verify-workflows.mjs goes red if the publish job reads `needs.renovate-licensing.outputs.base` or drops the merge-base derivation (two new planted faults; self-test 257 red, 11 controls green).

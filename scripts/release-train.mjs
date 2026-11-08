@@ -106,6 +106,7 @@
 //                                       (replay-result: the uptake-replay job result; detect-result: the detect job result;
 //                                        each is success|failure|cancelled|skipped)
 //   node scripts/release-train.mjs --sweep-due <epoch-seconds> [<last-sweep-epoch-seconds>]
+//   node scripts/release-train.mjs --theia-due <epoch-seconds> [<last-sweep-epoch-seconds>]   (the Theia inflow tick, AUTO-02)
 //   node scripts/release-train.mjs --maintenance <facts.json> <body-out>
 //   node scripts/release-train.mjs --maintenance-plan <found.json> <rendered-body> <comment-out> <stored-state> <state-out>
 //   node scripts/release-train.mjs --state-select <runs.json> <artifacts.json> <repo> <repo-id> <branch> <verified-shas.txt>
@@ -734,6 +735,10 @@ export function priorRunTitles(queries, { runId, repo, path }) {
  */
 export function fixerGuard(g) {
     const d = g.dispatched ?? {};
+    // R11: the owner login is vars.OWNER_LOGIN. Unset, it is '' and would let an empty base-commit author match it.
+    if (!OWNER_RE.test(String(g.ownerLogin ?? ''))) {
+        return [{ guard: 'owner-login', msg: `the owner login ${JSON.stringify(g.ownerLogin ?? '')} is unset or not a GitHub login; set the repository variable OWNER_LOGIN to the owner's user login` }];
+    }
     const [checkLabel = '', baseSha = ''] = String(d.fingerprint ?? '').split('@');
     const state = Object.keys(FIXER_CLASS_OF).find(k => FIXER_CLASS_OF[k] === d.class);
     const spent = fixAttempts((g.runs ?? []).map(name => ({ name })), d['release-key'], d.class, d.fingerprint);
@@ -775,7 +780,9 @@ export function admitWakeRun(run, repository) {
 
 /**
  * A release is published only when it is neither a draft nor a prerelease. Pure.
- * Wired to the collected Release of the pin's train (trackingPlan, plan 43-06); the draft-Release plant covers it.
+ * Wired to the collected Release of the pin's train (trackingPlan, plan 43-06). derive lists Releases rather than reading
+ * releases/tags/<key>, which returns only published ones, so a draft reaches here if the job token can list drafts;
+ * the owner's dry-run dispatch confirms that.
  */
 export function classifyRelease(release) {
     if (release.draft === true) return { published: false, reason: `draft Release ${release.tag} is not published, so it never moves the train` };
@@ -1035,6 +1042,14 @@ export function trackingPlan({ collector, found, pinTag, tag, openPrNumber, stag
         const facts = t.facts(issue);
         const state = derive(facts);
         if (state === null) { lines.push(`${t.title}: idle; nothing is written`); continue; }
+        // The conflict issue is printed, not written; an unnumbered conflict line writes nothing (as wouldWrite did).
+        if (state === 'CONFLICT') {
+            const reason = conflictStageReason(facts.stage);
+            if (reason !== null) { lines.push(`${t.title}: refused -- ${reason}`); continue; }
+            const conflict = renderConflict(facts.candidateTag, conflictPatchNumber(facts.stage), facts.stage, '');
+            lines.push(`would-write: conflict issue "${conflict.title}", assigned to the owner; no patch is written`);
+            failures.push(...conflictWriteFailures(conflict));
+        }
         const rendered = render(state, facts);
         const decision = findExactlyOne(mine.map(i => ({ ...i, body: normBody(i.body) })), { ...rendered, body: normBody(rendered.body) });
         if (decision.action === 'fail') { failures.push(`${t.title}: ${decision.reason}`); continue; }
@@ -1185,19 +1200,27 @@ function trackingPlanCli([collectorPath, foundPath, pinTag, tag, openPrNumber, s
  *   skip              the remote already carries this tree: nothing to push (the PR step still runs).
  *   force-with-lease  the remote holds only bot-authored commits and a different tree: replace them,
  *                     pinned to the tip that was read, so a concurrent change makes the push fail.
- *   refuse            the remote holds a commit the bot App did not author, or its history cannot be
- *                     listed in full: never overwrite it; the owner is working on the branch.
- * remote: { tip, tree, compare: { total, emails } } or null when the branch is absent. Pure.
+ *   refuse            the remote holds a commit the bot App did not author or commit, its history cannot be
+ *                     listed in full, or its tip is not the expected one: never overwrite it.
+ * remote: { tip, tree, compare: { total, emails, committers } } or null when the branch is absent.
+ * expectTip: when non-empty, the only remote tip that may be replaced (renovate-licensing-publish pins the
+ * branch head its notices were generated from). Pure.
+ * shortcut: an address is a claim, not a proof; anyone with push access can set both. GitHub's verified flag
+ * cannot be required while the bot and Renovate commit unsigned (BLOCKED.md item 18 residual).
  */
-export function publishPlan({ localTree, remote, botEmail }) {
+export function publishPlan({ localTree, remote, botEmail, expectTip = '' }) {
+    if (expectTip !== '' && remote?.tip !== expectTip) {
+        return { action: 'refuse', expect: null, reason: `the remote branch tip is ${remote?.tip ?? 'absent'}, not the expected ${expectTip}, so it moved since the commit was prepared. Next step: re-run; the next sweep prepares it again.` };
+    }
     if (remote === null) return { action: 'create', expect: null, reason: null };
     if (remote.tree === localTree) return { action: 'skip', expect: null, reason: `the remote branch already carries tree ${localTree}` };
-    if (remote.compare === null || remote.compare.total > remote.compare.emails.length) {
+    const c = remote.compare;
+    if (c === null || !Array.isArray(c.emails) || !Array.isArray(c.committers) || c.total > c.emails.length || c.committers.length !== c.emails.length) {
         return { action: 'refuse', expect: null, reason: 'the remote branch history cannot be listed in full, so no commit can be proven bot-authored. Next step: inspect the branch by hand.' };
     }
-    const foreign = remote.compare.emails.filter(e => e !== botEmail);
+    const foreign = [...c.emails, ...c.committers].filter(e => e !== botEmail);
     if (foreign.length > 0) {
-        return { action: 'refuse', expect: null, reason: `${foreign.length} commit(s) on the remote branch are not authored by the bot App, so someone is working on it; not pushing. Next step: merge or close that work, or delete the branch.` };
+        return { action: 'refuse', expect: null, reason: `${foreign.length} author or committer address(es) on the remote branch are not the bot App's: commits there are not authored by the bot App, so someone is working on it; not pushing. Next step: merge or close that work, or delete the branch.` };
     }
     return { action: 'force-with-lease', expect: remote.tip, reason: null };
 }
@@ -1208,7 +1231,7 @@ function remoteFromArgs(tip, tree, compareJson) {
     return { tip, tree, compare: compareJson === '' ? null : JSON.parse(compareJson) };
 }
 
-function publishPlanCli([localTree, tip, tree, compareJson, botEmail]) {
+function publishPlanCli([localTree, tip, tree, compareJson, botEmail, expectTip = '']) {
     if (localTree === '' || botEmail === '') {
         console.error(`${NAME}: FAIL -- the publish plan needs the local tree and the bot author email. Next step: pass both.`);
         return 2;
@@ -1220,7 +1243,7 @@ function publishPlanCli([localTree, tip, tree, compareJson, botEmail]) {
         console.error(`${NAME}: FAIL -- the remote compare is not JSON (${e.message}). Next step: re-read the branch; the publish script passes the API output.`);
         return 1;
     }
-    const plan = publishPlan({ localTree, remote, botEmail });
+    const plan = publishPlan({ localTree, remote, botEmail, expectTip });
     if (plan.reason !== null) console.error(`${NAME}: NOTE -- ${plan.reason}`);
     console.log(`publish=${plan.action}`);
     console.log(`expect=${plan.expect ?? ''}`);
@@ -1751,6 +1774,28 @@ export function sweepDue(nowMs, lastSweepMs = null) {
     return Math.floor(lastSweepMs / DAY_MS) !== Math.floor(nowMs / DAY_MS);
 }
 
+/** UTC day index of the last Thursday of the given month (month may be -1, Date.UTC normalises it). Pure. */
+function lastThursdayDay(year, month) {
+    const end = new Date(Date.UTC(year, month + 1, 0));
+    return Math.floor(end.getTime() / DAY_MS) - ((end.getUTCDay() - 4 + 7) % 7);
+}
+
+/**
+ * The Theia inflow (AUTO-02) runs on the first accepted sweep after the most recent last Thursday of a
+ * month (Theia releases on the last Thursday). That Thursday is the latest one strictly before today, so
+ * the Thursday's own sweep, at 06:00 UTC, comes before the release. Due when the previous sweep fell on or
+ * before that Thursday. An unknown last sweep leaves it due, the sweepDue fail-safe: a repeated Renovate
+ * run is idempotent, a skipped one waits a month. The caller gates this on sweepDue. Pure.
+ */
+export function theiaDue(nowMs, lastSweepMs = null) {
+    const today = Math.floor(nowMs / DAY_MS);
+    const now = new Date(nowMs);
+    let thursday = lastThursdayDay(now.getUTCFullYear(), now.getUTCMonth());
+    if (thursday >= today) thursday = lastThursdayDay(now.getUTCFullYear(), now.getUTCMonth() - 1);
+    if (typeof lastSweepMs !== 'number' || !Number.isFinite(lastSweepMs)) return true;
+    return Math.floor(lastSweepMs / DAY_MS) <= thursday;
+}
+
 /** The comment text for a transition into red: one comment naming every newly red row. Pure. */
 function transitionComment(newlyRed, ownerLogin) {
     const lines = newlyRed.map(r => `- ${r.name}: ${r.evidence}`);
@@ -1874,6 +1919,17 @@ function sweepDueCli([nowSeconds, lastSeconds]) {
     // An absent, empty or unreadable last-sweep time leaves the sweep due (never a skipped sweep).
     const last = lastSeconds === undefined || lastSeconds === '' ? null : Number(lastSeconds) * 1000;
     console.log(`due=${sweepDue(seconds * 1000, last)}`);
+    return 0;
+}
+
+function theiaDueCli([nowSeconds, lastSeconds]) {
+    const seconds = Number(nowSeconds);
+    if (!Number.isFinite(seconds)) {
+        console.error(`${NAME}: FAIL -- the sweep clock ${JSON.stringify(nowSeconds)} is not epoch seconds. Next step: pass date -u +%s.`);
+        return 2;
+    }
+    const last = lastSeconds === undefined || lastSeconds === '' ? null : Number(lastSeconds) * 1000;
+    console.log(`theia-due=${theiaDue(seconds * 1000, last)}`);
     return 0;
 }
 
@@ -2270,6 +2326,22 @@ function maintenanceSelfTest() {
             return sameDay === 'due=false' && none === 'due=true' && noArg === 'due=true' ? [] : [`the CLI sweep clock gave ${sameDay}, ${none}, ${noArg}`];
         } },
         { name: 'control: the sweep is due at 06:00 UTC and not at 05:59', run: () => (sweepDue(Date.UTC(2026, 10, 1, 6, 0)) && !sweepDue(Date.UTC(2026, 10, 1, 5, 59)) ? [] : ['the 06:00 UTC gate is wrong']) },
+        { name: 'control: the Theia inflow is due on the first sweep after the last Thursday only', run: () => {
+            // October 2026: the last Thursday is the 29th. November 2026: the 26th.
+            const d = (m, day) => Date.UTC(2026, m, day, 6, 5);
+            const failures = [];
+            if (theiaDue(d(9, 29), d(9, 28))) failures.push('the Thursday sweep itself is due');
+            if (!theiaDue(d(9, 30), d(9, 29))) failures.push('the Friday after the last Thursday is not due');
+            if (theiaDue(d(9, 31), d(9, 30))) failures.push('a second sweep after the same Thursday is due');
+            if (!theiaDue(d(10, 3), d(9, 29))) failures.push('a first sweep after a missed Friday is not due');
+            if (theiaDue(d(10, 25), d(10, 24))) failures.push('a sweep before November\'s last Thursday is due');
+            if (!theiaDue(d(10, 27), d(10, 26))) failures.push('the Friday after November\'s last Thursday is not due');
+            if (!theiaDue(d(10, 27), null)) failures.push('an unknown last sweep is not due');
+            const cliDue = cli(['--theia-due', String(d(9, 30) / 1000), String(d(9, 29) / 1000)]).out.trim();
+            const cliNot = cli(['--theia-due', String(d(9, 31) / 1000), String(d(9, 30) / 1000)]).out.trim();
+            if (cliDue !== 'theia-due=true' || cliNot !== 'theia-due=false') failures.push(`the CLI gave ${cliDue}, ${cliNot}`);
+            return failures;
+        } },
     ];
     const plants = [
         { name: 'a newer 153 tag five days old with no Release', run: () => reds(stateOf(facts({ tagDates: { [NEWER_153]: NOW - 5 * DAY_MS }, releases: [] }))), expect: 'with no published Release' },
@@ -2540,7 +2612,7 @@ function selfTest(mode = 'all') {
         {
             name: 'a remote bump branch carrying a commit the bot App did not author',
             run: () => {
-                const plan = publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R-TIP', tree: 'T-REMOTE', compare: { total: 2, emails: [OWNER_EMAIL, BOT_EMAIL_FIXTURE] } }, botEmail: BOT_EMAIL_FIXTURE });
+                const plan = publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R-TIP', tree: 'T-REMOTE', compare: { total: 2, emails: [OWNER_EMAIL, BOT_EMAIL_FIXTURE], committers: [OWNER_EMAIL, BOT_EMAIL_FIXTURE] } }, botEmail: BOT_EMAIL_FIXTURE });
                 return plan.action === 'refuse' ? [plan.reason] : [`owner-authored remote branch planned as ${plan.action}`];
             },
             expect: 'not authored by the bot App',
@@ -2548,10 +2620,34 @@ function selfTest(mode = 'all') {
         {
             name: 'a remote compare too long to list in full',
             run: () => {
-                const plan = publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R-TIP', tree: 'T-REMOTE', compare: { total: 300, emails: Array(250).fill(BOT_EMAIL_FIXTURE) } }, botEmail: BOT_EMAIL_FIXTURE });
+                const plan = publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R-TIP', tree: 'T-REMOTE', compare: { total: 300, emails: Array(250).fill(BOT_EMAIL_FIXTURE), committers: Array(250).fill(BOT_EMAIL_FIXTURE) } }, botEmail: BOT_EMAIL_FIXTURE });
                 return plan.action === 'refuse' ? [plan.reason] : [`an unlisted history planned as ${plan.action}`];
             },
             expect: 'cannot be listed in full',
+        },
+        {
+            name: 'a bot-authored commit on the remote bump branch committed by someone else',
+            run: () => {
+                const plan = publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R-TIP', tree: 'T-REMOTE', compare: { total: 1, emails: [BOT_EMAIL_FIXTURE], committers: [OWNER_EMAIL] } }, botEmail: BOT_EMAIL_FIXTURE });
+                return plan.action === 'refuse' ? [plan.reason] : [`owner-committed remote branch planned as ${plan.action}`];
+            },
+            expect: 'not the bot App',
+        },
+        {
+            name: 'a remote compare with no committer listing',
+            run: () => {
+                const plan = publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R-TIP', tree: 'T-REMOTE', compare: { total: 1, emails: [BOT_EMAIL_FIXTURE] } }, botEmail: BOT_EMAIL_FIXTURE });
+                return plan.action === 'refuse' ? [plan.reason] : [`a compare without committers planned as ${plan.action}`];
+            },
+            expect: 'cannot be listed in full',
+        },
+        {
+            name: 'a remote bump branch that moved past the pinned tip',
+            run: () => {
+                const plan = publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R-NEWER', tree: 'T-REMOTE', compare: { total: 1, emails: [BOT_EMAIL_FIXTURE], committers: [BOT_EMAIL_FIXTURE] } }, botEmail: BOT_EMAIL_FIXTURE, expectTip: 'R-TIP' });
+                return plan.action === 'refuse' ? [plan.reason] : [`a moved branch planned as ${plan.action}`];
+            },
+            expect: 'not the expected R-TIP',
         },
     ];
 
@@ -2574,12 +2670,12 @@ function selfTest(mode = 'all') {
         },
         {
             name: 'control: a remote branch already carrying the tree is skipped, even with owner commits',
-            run: () => (publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R', tree: 'T-LOCAL', compare: { total: 1, emails: [OWNER_EMAIL] } }, botEmail: BOT_EMAIL_FIXTURE }).action === 'skip' ? [] : ['same-tree remote not skipped']),
+            run: () => (publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R', tree: 'T-LOCAL', compare: { total: 1, emails: [OWNER_EMAIL], committers: [OWNER_EMAIL] } }, botEmail: BOT_EMAIL_FIXTURE }).action === 'skip' ? [] : ['same-tree remote not skipped']),
         },
         {
             name: 'control: bot-only divergent history is replaced, pinned to the observed tip',
             run: () => {
-                const plan = publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R-TIP', tree: 'T-REMOTE', compare: { total: 1, emails: [BOT_EMAIL_FIXTURE] } }, botEmail: BOT_EMAIL_FIXTURE });
+                const plan = publishPlan({ localTree: 'T-LOCAL', remote: { tip: 'R-TIP', tree: 'T-REMOTE', compare: { total: 1, emails: [BOT_EMAIL_FIXTURE], committers: [BOT_EMAIL_FIXTURE] } }, botEmail: BOT_EMAIL_FIXTURE, expectTip: 'R-TIP' });
                 return plan.action === 'force-with-lease' && plan.expect === 'R-TIP' ? [] : [`bot-only branch planned as ${plan.action} expect ${plan.expect}`];
             },
         },
@@ -2942,6 +3038,9 @@ function selfTest(mode = 'all') {
         { name: 'a third dispatch after two spent fix runs', run: () => guardMsgs({ runs: [prior(1), prior(2)] }, { attempt: '3' }), expect: 'budget' },
         { name: 'a bot actor dispatching through the live guard', run: () => guardMsgs({ actor: 'powerbrowser-bot[bot]' }), expect: 'bot-actor' },
         { name: 'an external author of the base commit', run: () => guardMsgs({ author: 'outside-contributor' }), expect: 'external-author' },
+        // R11: OWNER_LOGIN unset gives '', which must not match an empty base-commit author.
+        { name: 'an unset owner login with an empty base-commit author', run: () => guardMsgs({ ownerLogin: '', author: '' }), expect: 'owner-login' },
+        { name: 'an owner login that is not a GitHub login', run: () => guardMsgs({ ownerLogin: 'two words' }), expect: 'owner-login' },
         { name: 'a target branch that lives in a fork', run: () => guardMsgs({ headRepository: 'fixture-fork/powerbrowser' }), expect: 'fork' },
         { name: 'a release-check fingerprint', run: () => guardMsgs({}, { fingerprint: `release@${FIX_SHA}` }), expect: 'release.yml' },
         { name: 'a release key equal to the latest Release through the live guard', run: () => guardMsgs({ latestTag: FIX_KEY }), expect: 'key-not-greater' },
@@ -3124,6 +3223,17 @@ function selfTest(mode = 'all') {
             expect: `draft Release ${RELEASE_KEY} is not published`,
         },
         {
+            // Review D43: the report job calls trackingPlan, so the conflict refusal must hold there, not only in wouldWrite.
+            name: 'a conflict stage line with no patch number through the tracking writer',
+            run: () => { const p = tPlan({ stage: 'apply-patches: FAIL -- apply-patches.sh stopped' }); return p.ops.length === 0 ? tOut(p) : [`an unnumbered conflict planned ${p.ops.length} write(s)`, ...tOut(p)]; },
+            expect: 'names no patch number',
+        },
+        {
+            name: 'a numbered conflict stage line through the tracking writer prints the conflict issue',
+            run: () => tOut(tPlan({ stage: 'apply-patches: FAIL -- 020-powerbrowser-shell.patch did not apply' })),
+            expect: `conflict issue "ESR ${NEWER}: patch 020 did not apply"`,
+        },
+        {
             name: 'a failing verify check on the open bump PR',
             run: () => { const p = tPlan({ pr: '43', collector: prWith('FAILURE') }); return p.ops[0]?.body.includes(`Failing log: ${runUrl(9)}`) ? tOut(p) : ['no failing-log link', ...tOut(p)]; },
             expect: 'state=BUMP_RED',
@@ -3278,12 +3388,13 @@ if (isEntry) {
     if (args[0] === '--fix-guard' && args.length === 2) process.exit(fixerGuardCli(args.slice(1)));
     if (args[0] === '--run-titles' && args.length >= 5) process.exit(runTitlesCli(args.slice(1)));
     if (args[0] === '--uptake-would-write' && args.length === 6) process.exit(uptakeWouldWriteCli(args.slice(1)));
-    if (args[0] === '--publish-plan' && args.length === 6) process.exit(publishPlanCli(args.slice(1)));
+    if (args[0] === '--publish-plan' && (args.length === 6 || args.length === 7)) process.exit(publishPlanCli(args.slice(1)));
     if (args[0] === '--sweep-due' && (args.length === 2 || args.length === 3)) process.exit(sweepDueCli(args.slice(1)));
+    if (args[0] === '--theia-due' && (args.length === 2 || args.length === 3)) process.exit(theiaDueCli(args.slice(1)));
     if (args[0] === '--maintenance' && args.length === 3) process.exit(maintenanceCli(args.slice(1)));
     if (args[0] === '--maintenance-plan' && args.length === 6) process.exit(maintenancePlanCli(args.slice(1)));
     if (args[0] === '--state-select' && args.length === 7) process.exit(stateSelectCli(args.slice(1)));
     console.error(`${NAME}: FAIL -- unknown argument list '${args.join(' ')}'`);
-    console.error(`  Next step: run: node ${SELF_REL} [derive|next|render] --self-test, node ${SELF_REL} --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>, node ${SELF_REL} --publish-plan <local-tree> <remote-tip|''> <remote-tree|''> <compare-json|''> <bot-email>, node ${SELF_REL} --sweep-due <epoch-seconds> [<last-sweep-epoch-seconds>], node ${SELF_REL} --maintenance <facts.json> <body-out>, or node ${SELF_REL} --maintenance-plan <found.json> <rendered-body> <comment-out> <stored-state|''> <state-out>, node ${SELF_REL} --state-select <runs.json> <artifacts.json> <repo> <repo-id> <branch> <verified-shas.txt>, or node ${SELF_REL} --fixer-inputs <release-key> <class> <branch> <target-tag> <check@sha> <attempt> <latest-tag|''>.`);
+    console.error(`  Next step: run: node ${SELF_REL} [derive|next|render] --self-test, node ${SELF_REL} --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>, node ${SELF_REL} --publish-plan <local-tree> <remote-tip|''> <remote-tree|''> <compare-json|''> <bot-email> [<expected-tip>], node ${SELF_REL} --sweep-due <epoch-seconds> [<last-sweep-epoch-seconds>], node ${SELF_REL} --maintenance <facts.json> <body-out>, or node ${SELF_REL} --maintenance-plan <found.json> <rendered-body> <comment-out> <stored-state|''> <state-out>, node ${SELF_REL} --state-select <runs.json> <artifacts.json> <repo> <repo-id> <branch> <verified-shas.txt>, or node ${SELF_REL} --fixer-inputs <release-key> <class> <branch> <target-tag> <check@sha> <attempt> <latest-tag|''>.`);
     process.exit(2);
 }

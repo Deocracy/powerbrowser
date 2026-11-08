@@ -19,8 +19,7 @@
 //    anchor is @theia/core, because every @theia/* moves in lockstep per Theia release. One mismatch report from a real run would
 //    disprove that anchor; until then it is an assumption, not a proof.
 //  - The nix manager is off (Renovate's default; this file does not set it). So the Theia PR does not
-//    change flake.lock, and AUTO-02's "flake.lock updates through the nix manager" is NOT met. That is
-//    an owner decision (BLOCKED.md item 5): a separate nixpkgs group, or an amendment to AUTO-02.
+//    change flake.lock, which is what AUTO-02 states (owner ruling 2026-11-03, BLOCKED.md item 5).
 //    The scope rule still disables the nixpkgs input, so re-enabling nix cannot open a chore/theia-*
 //    branch for it.
 //  - automerge and platformAutomerge are false. The Theia PR merges only after owner review and a
@@ -35,16 +34,16 @@
 //    to 1.75.0 and monaco to 1.100.0: 50 upgrades to 1.76.0 on one branch, chore/theia-theia; monaco
 //    to 1.108.201 on its own branch, chore/theia-theia-monaco-editor-core. Non-Theia packages
 //    produced no branch.
-//  - The post-upgrade hook runs the licensing generator and the generate check once per branch
-//    (executionMode branch), after every upgrade in the group, not once per package. Only the
-//    files listed in fileFilters are committed back.
 //
 // Not in this file, on purpose
 //  - No cadence key of any kind. The only clock is the sweep tick plus owner dispatch (D-77).
 //  - No workflow file writes. The bot App holds no Workflows permission, and no fileFilters
 //    entry names .github/workflows, so a change there is never committed by this flow.
-//  - allowedPostUpgradeCommands is a self-hosted option, not a repository option. The dispatch
-//    job must set RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS to the two licensing commands instead.
+//  - No postUpgradeTasks. Renovate runs the hook in its own container clone, which has no applied
+//    upstream/, so the licensing generator cannot run there (phase 51 BLOCKED.md item 18). The
+//    release-train job renovate-licensing regenerates the notices for chore/theia-theia on the
+//    runner after renovate-theia, and renovate-licensing-publish commits them with main's
+//    scripts/publish-bump-branch.sh (owner answer A4, 2026-11-04; plan 51-09). The renovate-config row (rule no-post-upgrade) keeps the key out.
 //  - No flake.lock writer is added. The Phase 52 fixer is denied flake.lock (.github/fix-gate-deny.json);
 //    the nixpkgs update path stays with the owner.
 //
@@ -102,10 +101,5 @@
       "datasourceTemplate": "npm",
       "depNameTemplate": "@theia/core"
     }
-  ],
-  "postUpgradeTasks": {
-    "commands": ["node scripts/generate-licensing.mjs", "node scripts/generate.mjs --check"],
-    "fileFilters": ["THIRD-PARTY-NOTICES.txt", "LICENSING.md", "theia/yarn.lock", "configuration.toml"],
-    "executionMode": "branch"
-  }
+  ]
 }

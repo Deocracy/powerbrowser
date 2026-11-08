@@ -102,6 +102,9 @@ export class PageContextMenuContribution implements FrontendApplicationContribut
     @inject(MessageService)
     protected readonly messages: MessageService;
 
+    /** C11 (39-02): the last menu shown; a dismissal of any older one arrives too late to move focus. */
+    protected latestMenuId = -1;
+
     onStart(): void {
         this.channel.onPush('pageContextMenu', detail => this.open(detail));
     }
@@ -117,6 +120,7 @@ export class PageContextMenuContribution implements FrontendApplicationContribut
             void this.send(tabId, menuId, null);
             return;
         }
+        this.latestMenuId = menuId;
         let sent = false;
         const pick = (itemId: string | null): void => {
             if (!sent) {
@@ -125,7 +129,7 @@ export class PageContextMenuContribution implements FrontendApplicationContribut
                     if (itemId !== null) {
                         this.messages.error(CHROME_BAR_COPY.pageMenuRowRefused(appSubject()));
                     }
-                    widget.focusPage();
+                    this.focusPageIfLatest(widget, menuId);
                 });
             }
         };
@@ -257,6 +261,13 @@ export class PageContextMenuContribution implements FrontendApplicationContribut
                 return;
             }
         }
-        widget.focusPage();
+        this.focusPageIfLatest(widget, menuId);
+    }
+
+    /** The page gets focus back only for the latest menu: a newer menu opened inside this one's round trip keeps it. */
+    protected focusPageIfLatest(widget: WebTabWidget, menuId: number): void {
+        if (menuId === this.latestMenuId) {
+            widget.focusPage();
+        }
     }
 }

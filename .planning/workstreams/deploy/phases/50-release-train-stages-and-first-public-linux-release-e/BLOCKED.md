@@ -1,4 +1,4 @@
-# Phase 50 BLOCKED items (plans 50-01 and 50-02 executed; 50-03 and 50-04 not executed)
+# Phase 50 BLOCKED items (50-01, 50-02 executed; 50-03 Task 2 landed and its Task 1 carried by gap plan 50-05; 50-03 Task 3 and 50-04 wait for the owner)
 
 Items that need the owner. Each names what is blocked, why, the owner steps, and what the
 executor did instead. Plans continue around them where the plan allows.
@@ -68,3 +68,38 @@ the two `endpoint-allowlist.json` reasons carry the same correction. No owner st
 `control/release-assets-patch.xml` fixture stays green on purpose: this row guards the github.com
 half only, and the release drill (`verify-mar-update-hop.mjs`, served release) refuses the
 release-assets host in the resolver log.
+
+## 6. Land withdraw.yml and release-probe.yml, then run the probe (plan 50-05 built them; R13 prerequisite)
+
+**Plans:** 50-05 (gap plan for G-50, executed 2026-11-03); 50-03 Task 3 (owner probe).
+
+**Built:** `docs/withdraw.yml` and `docs/release-probe.yml`, the runbook and the verdict line in
+`docs/RELEASING.md` ("Withdrawing a release", "The immutable-release probe"), and the quick rows
+`withdraw` and `withdraw-self-test`. `verify-descriptor-monotonic` now ignores tags that are not
+release keys, so the published `probe-1` Release cannot block the descriptor job.
+
+**Owner steps, in order** (after the repo-controls apply has enabled immutable releases on the
+product repository, and before the first release tag):
+
+1. In `powerbrowser-updates`, set the repository variable `BOT_APP_CLIENT_ID` and the repository
+   secret `BOT_APP_PRIVATE_KEY` (the PKCS#8 bot App key), and confirm the bot App is installed on
+   both `powerbrowser` and `powerbrowser-updates` with contents write.
+2. Add both files to `powerbrowser-updates` as `.github/workflows/withdraw.yml` and
+   `.github/workflows/release-probe.yml`, byte-identical to the `docs/` copies.
+3. From the product checkout:
+
+   ```
+   U="$(gh repo view --json nameWithOwner --jq .nameWithOwner)-updates"
+   gh workflow run release-probe.yml --repo "$U"
+   gh run watch --repo "$U"
+   ```
+
+4. Reply with the five `release-probe:` lines. Claude then replaces `pending` in the
+   `docs/RELEASING.md` verdict line with the printed verdict, the date and the refusal line, runs
+   `scripts/verify-platform.sh --quick`, and closes 50-03 Task 3.
+
+Never delete the `probe-1` Release or its tag. A re-run reuses it.
+
+**Resolved 2026-11-04 (owner answer A3):** the immutable-release probe question is closed. `probe-1` is published as
+built: never `latest`, never deleted. The probe itself still runs at the owner pass (steps above); only the open
+question "may `probe-1` be published" is answered.

@@ -332,9 +332,9 @@ Plans:
 **Requirements**: AUTO-02, AUTO-03, DIST-05, UPS-02, TRAIN-04, TRAIN-11
 **Success Criteria** (what must be TRUE):
 
-  1. On the first tick after a last-Thursday Theia release, self-hosted Renovate opens one grouped `@theia/**` PR (with `@theia/monaco-editor-core` separate), pinned, rewriting `theia_release` in `configuration.toml` and updating `flake.lock`, with automerge off.
+  1. On the first tick after a last-Thursday Theia release, self-hosted Renovate opens one grouped `@theia/**` PR (with `@theia/monaco-editor-core` separate), pinned, rewriting `theia_release` in `configuration.toml`, not moving `flake.lock` (owner ruling 2026-11-03), with automerge off.
   2. Dependabot opens one weekly grouped github-actions PR that keeps SHA pins with plain version comments and applies npm security-only updates to `theia/yarn.lock`; CodeQL default setup covers `theia/extensions` and `scripts/`.
-  3. A newer ESR detected while a train is open moves the old train to SUPERSEDED, cancels its pending `release` deployment and starts the new train; a chemspill revision takes priority; the sign job exits when a newer Release exists; supersede fixtures are in `release-train-logic-self-test`.
+  3. A newer ESR detected while a train is open moves the old train to SUPERSEDED, cancels its pending `release` deployment and starts the new train; a chemspill revision takes priority; the sign job fails closed when a newer Release exists; supersede fixtures are in `release-train-logic-self-test`.
   4. The maintenance issue carries the renewals-due, repo-controls, Dependabot PR count, Dependabot and CodeQL alert counts, CodeQL push age and Codeberg-versus-GitHub `main` rows; `docs/RELEASING.md` states the release cadence and the npm-advisory response time; `docs/RENEWALS.md` carries the Node 24 Maintenance-end row (2028-04-30).
 
 **External gate**: Theia release calendar (last Thursday of each month). The Codeberg row has no mirror to compare until Phase 53.
@@ -399,7 +399,7 @@ Plans:
 
 ### Phase 54: Windows (H)
 
-**Goal**: Windows users install PowerBrowser from a `setup.exe` on GitHub Releases and it updates itself. The release ships unsigned with a stated warning; Azure and Authenticode signing are out of scope for v1.6 (owner ruling 2026-11-03).
+**Goal**: Windows users install PowerBrowser from a `setup.exe` on the MAR origin (`downloads.powerbrowser.org/<tag>/`, owner answer A2 2026-11-04; the GitHub Release stays immutable and Linux-only) and it updates itself. The release ships unsigned with a stated warning; Azure and Authenticode signing are out of scope for v1.6 (owner ruling 2026-11-03).
 **Depends on**: Phase 50 (release pipeline and train)
 **Requirements**: PKG-10, PKG-11, PKG-12, PKG-13, LEG-01, MTX-01, UPD-30, UPD-31, SEC-03, DIST-10 (SEC-12 moved to Out of Scope, R14)
 **Success Criteria** (what must be TRUE):
@@ -407,7 +407,7 @@ Plans:
   1. A `release.yml` `build-windows` job cross-builds Gecko on legion in the release container and `mach repackage installer` produces the NSIS `setup.exe` and a complete MAR; the generated Windows mozconfig disables the maintenance service; `package-target-natives` passes on the Windows package with a sidecar built on `windows-latest`.
   2. The installer carries PowerBrowser artwork, its own registry namespace and no install or uninstall ping, and the `verify-trademark-surface.mjs` self-test goes red on a Mozilla mark planted in each NSIS, application.ini, Info.plist and `MOZ_LAUNCHER_SUBKEY` surface.
   3. The Windows 11 libvirt matrix installs, launches, updates and uninstalls with a clean registry no-residue diff, the update applies with the sidecar reaped before the rename, and the background-task path is verified or deferred with the reason recorded.
-  4. The first Windows release ships unsigned with the maintenance service disabled, per-target descriptors and the stated /download warning text.
+  4. The first Windows release ships unsigned with the maintenance service disabled, per-target descriptors and the stated /download warning text. `publish-windows` copies the installer, the MAR-signed complete MAR and a Windows `SHA256SUMS` write-once to the MAR origin after the Linux publish of the same run; `descriptor-windows` commits the `WINNT_x86_64-msvc` descriptor and `channel-live-windows` checks it; no Linux job needs any of them.
   5. No Azure account or Authenticode signing is used: the tracked `sign-windows` job reports skipped while `AZURE_CLIENT_ID` is unset, and /download keeps the unsigned-status wording (SEC-03).
 
 **External gate**: legion NixOS libvirt access for the runner user, finished with `nrs`; Windows VM licence.

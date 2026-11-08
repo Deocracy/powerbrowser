@@ -21,6 +21,10 @@
 //               vars. reference; it runs after the SHA gate, the stale-approval guard and the configuration gate,
 //               and before the first signature; the configuration gate names every vars.AZURE_* the job reads
 //               and exits non-zero on a missing one (fail closed, nothing minted first).
+//   skip        R14: with AZURE_CLIENT_ID empty the configuration gate writes signing=false to GITHUB_OUTPUT and
+//               exits 0 before its fail-closed loop (a reported skip, not a failure); signing=true is written after
+//               the loop; every later step carries if: steps.azure_config.outputs.signing == 'true', except an
+//               always() step that only runs rm -rf (the scratch cleanup).
 //   secret      no secrets. reference whose name looks like an Azure credential anywhere in the file, and in
 //               sign-windows no secrets. reference outside the MAR-signing step.
 //   permissions sign-windows holds id-token write and contents read, never contents write; the workflow level
@@ -36,6 +40,11 @@
 //               with the staged tree) in a step before the Azure sign-in; no find over the build output.
 //   attest      sign-windows attests nothing and holds no attestations permission: its bytes were built on
 //               legion, and a hosted provenance attestation would misname their builder.
+//   independence no job on the Linux publish path waits on any Windows job, directly or transitively (G-54b, owner
+//               ruling R2). The Linux path is classified first: sign-publish, descriptor and channel-live (named by
+//               R2), every job that moves a 'linux' artifact, and every job after sign-publish that moves no
+//               'windows' artifact. Windows jobs: the jobs off that path that upload or download a 'windows'
+//               artifact. A Windows job may itself need sign-publish (it joins after the Linux publish).
 //   schedule    no schedule event in the file.
 //   legion      a job on the release runner label carries no environment and no secrets reference.
 //   status      docs/RELEASING.md's "Azure Artifact Signing identity validation:" line decides the signing
@@ -64,6 +73,8 @@ const SELF_REL = 'scripts/verify-win-sign-chain.mjs';
 const RELEASE_REL = '.github/workflows/release.yml';
 const JOB = 'sign-windows';
 const LINUX_PUBLISH = 'sign-publish';
+// Owner ruling R2 names these as jobs Windows must never be a dependency of, whatever artifacts they move.
+const R2_LINUX = [LINUX_PUBLISH, 'descriptor', 'channel-live'];
 const DER_REL = 'powerbrowser/packaging/mar/mar-primary.der';
 const LEGION_LABELS = ['legion', 'powerbrowser-release'];
 const CHAIN = ['inner-sign', 'repackage-installer', 'setup-sign', 'repackage-mar', 'signmar-sign', 'signmar-verify'];
@@ -106,6 +117,7 @@ const labelsOf = job => {
     return r === undefined ? [] : [String(r)];
 };
 const stepName = s => s.id ?? s.name ?? '(unnamed step)';
+const SKIP_IF = "steps.azure_config.outputs.signing == 'true'";
 const windowsLine = page => /<li><strong>Windows:<\/strong>([\s\S]*?)<\/li>/.exec(page ?? '')?.[1]?.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() ?? null;
 
 /**
@@ -147,12 +159,26 @@ export function runChecks({ wf, releasing, page, live, liveUrl = 'the published 
         for (const n of needsOf(id)) if (!seen.has(n)) { seen.add(n); ancestors(n, seen); }
         return seen;
     };
-    if (!Object.hasOwn(jobs, LINUX_PUBLISH)) {
-        fail(LINUX_PUBLISH, 'independence', `is absent, so the Linux publish path cannot be proven independent of ${JOB}. Next step: restore the ${LINUX_PUBLISH} job.`);
+    // G-54b (owner ruling R2): every Windows job, not only the sign job. Both sets are derived from the artifact
+    // names each job uploads or downloads, so a new Windows job is covered without editing this file.
+    const artifactsOf = id => stepsOf(jobs[id]).filter(s => /^actions\/(upload|download)-artifact@/.test(String(s.uses ?? ''))).map(s => String(s.with?.name ?? ''));
+    const moves = (id, re) => artifactsOf(id).some(n => re.test(n));
+    const windowsMovers = new Set(Object.keys(jobs).filter(id => moves(id, /windows/)));
+    const absent = R2_LINUX.filter(id => !Object.hasOwn(jobs, id));
+    if (absent.length > 0) {
+        fail(absent[0], 'independence', `is absent, so the Linux publish path cannot be proven independent of ${JOB}. Next step: restore the ${absent.join(', ')} job(s).`);
+    } else if (!windowsMovers.has(JOB)) {
+        fail(JOB, 'independence', `is not found among the jobs that move a Windows artifact (${[...windowsMovers].join(', ') || 'none'}), so the Windows job set is not derivable. Next step: restore its release-windows download.`);
     } else {
-        for (const id of Object.keys(jobs)) {
-            if (id !== LINUX_PUBLISH && !ancestors(id).has(LINUX_PUBLISH)) continue;
-            if (ancestors(id).has(JOB)) fail(id, 'independence', `is on the Linux publish path and waits on ${JOB}, so a Windows signing failure would stop the Linux release. Next step: remove ${JOB} from its needs; Windows joins the Release in its own run.`);
+        // The Linux path is classified first, so moving a Windows artifact never exempts a Linux job: the jobs R2 names,
+        // every job that moves a Linux artifact, and every job after sign-publish that moves no Windows artifact.
+        // Only a Windows mover off that path (a Windows publish job after sign-publish, say) counts as a Windows job.
+        const isLinux = id => R2_LINUX.includes(id) || moves(id, /linux/) || (ancestors(id).has(LINUX_PUBLISH) && !moves(id, /windows/));
+        const linuxJobs = Object.keys(jobs).filter(isLinux);
+        const windowsJobs = new Set([...windowsMovers].filter(id => !isLinux(id)));
+        for (const id of linuxJobs) {
+            const win = [...ancestors(id)].filter(a => windowsJobs.has(a)).sort();
+            if (win.length > 0) fail(id, 'independence', `is on the Linux publish path and waits on the Windows job(s) ${win.join(', ')}, so a Windows build or signing failure would stop the Linux release. Next step: remove them from its needs; Windows joins the Release on its own path.`);
         }
     }
 
@@ -203,6 +229,17 @@ export function runChecks({ wf, releasing, page, live, liveUrl = 'the published 
         const checked = new Set(Object.keys(cfg.env ?? {}).filter(k => String(cfg.env[k]).includes(`vars.${k}`)));
         for (const v of used) if (!checked.has(v)) fail('azure_config', 'oidc', `does not check ${v}, which a later step reads, so a missing value would fail open or late. Next step: add it to the configuration gate.`);
         if (!/exit 1/.test(String(cfg.run ?? '')) || cfg['continue-on-error']) fail('azure_config', 'oidc', `does not fail closed on a missing value. Next step: exit 1 naming the missing variable.`);
+
+        // skip (R14): no Azure account is a reported skip, not a failure; a partial account still fails closed.
+        const run = String(cfg.run ?? '');
+        const skipAt = run.search(/if \[ -z "\$AZURE_CLIENT_ID" \]; then\n(?:(?!\n\s*fi\b)[\s\S])*?signing=false"? >> "\$GITHUB_OUTPUT"(?:(?!\n\s*fi\b)[\s\S])*?\bexit 0\s*\n\s*fi\b/);
+        const loopAt = run.search(/\bfor V in AZURE_CLIENT_ID\b/);
+        if (skipAt < 0 || loopAt < 0 || skipAt > loopAt) fail('azure_config', 'skip', `does not report Windows signing as skipped (signing=false to GITHUB_OUTPUT, then exit 0) when AZURE_CLIENT_ID is empty, before the fail-closed loop, so an absent account fails every release. Next step: restore the skip branch.`);
+        if (!(loopAt >= 0 && run.lastIndexOf('signing=true') > loopAt)) fail('azure_config', 'skip', `does not write signing=true after the fail-closed loop, so a configured account would sign nothing, or an unchecked one would sign. Next step: write it as the last line of the gate.`);
+        for (const s of steps.slice(steps.indexOf(cfg) + 1)) {
+            const cleanup = s.if === 'always()' && s.uses === undefined && /^\s*rm -rf [^\n;&|]*\s*$/.test(String(s.run ?? ''));
+            if (s.if !== SKIP_IF && !cleanup) fail(stepName(s), 'skip', `carries if: ${JSON.stringify(s.if ?? null)}, not ${SKIP_IF}, so it runs when Windows signing was skipped. Next step: gate it on the configuration gate's output.`);
+        }
     }
 
     // secrets in the sign job only where the MAR is signed
@@ -308,6 +345,12 @@ function selfTest(yaml) {
         console.error(`${NAME}: --self-test FAIL -- the green control is already red: ${control.failures.map(fmt).join(' | ')}`);
         return 1;
     }
+    // The Windows publish path (A2) must be in the real workflow for the plants below to test it.
+    const winPath = ['publish-windows', 'descriptor-windows', 'channel-live-windows'].filter(id => !Object.hasOwn(wf.jobs ?? {}, id));
+    if (winPath.length > 0) {
+        console.error(`${NAME}: --self-test FAIL -- the real workflow lacks ${winPath.join(', ')}, so the Windows publish path is untested`);
+        return 1;
+    }
     if (JSON.stringify(runChecks(base)) !== JSON.stringify(control)) {
         console.error(`${NAME}: --self-test FAIL -- two runs over the same tree gave different verdicts or evidence`);
         return 1;
@@ -332,6 +375,14 @@ function selfTest(yaml) {
         fn(c, stepsOf(c.jobs[JOB]));
         return { wf: c };
     };
+    // A Windows publish job after the Linux publish: the shape the independence rule must keep admitting.
+    const winPublish = () => ({ needs: ['build-windows', LINUX_PUBLISH], 'runs-on': 'ubuntu-latest', steps: [{ uses: 'actions/download-artifact@' + '0'.repeat(40), with: { name: 'release-windows', path: 'w' } }] });
+    const later = runChecks({ ...base, ...edit(c => { c.jobs['publish-windows'] = winPublish(); }) });
+    if (later.failures.length > 0) {
+        console.error(`${NAME}: --self-test FAIL -- a Windows publish job that needs ${LINUX_PUBLISH} and build-windows was refused: ${later.failures.map(fmt).join(' | ')}`);
+        return 1;
+    }
+    console.log(`  ok  Windows-publish control: a job needing build-windows and ${LINUX_PUBLISH} that no Linux job needs -> green`);
     const idx = (steps, stage) => steps.findIndex(s => stageOf(s) === stage);
     const move = (steps, from, to) => steps.splice(to, 0, ...steps.splice(from, 1));
     const plants = [
@@ -342,6 +393,11 @@ function selfTest(yaml) {
         ['stored credential input on Azure/login', edit((c, st) => { st.find(s => LOGIN.test(String(s.uses ?? ''))).with.creds = '${{ vars.AZURE_CREDENTIALS }}'; }), 'azure_login', 'secret', 'creds'],
         ['Azure sign-in before the configuration gate', edit((c, st) => { move(st, st.findIndex(s => s.id === 'azure_login'), st.findIndex(s => s.id === 'azure_config')); c.jobs[JOB].steps = st; }), JOB, 'oidc', 'azure_config'],
         ['configuration gate missing a variable the signer reads', edit((c, st) => { delete st.find(s => s.id === 'azure_config').env.AZURE_SIGNING_PROFILE; }), 'azure_config', 'oidc', 'AZURE_SIGNING_PROFILE'],
+        ['Azure sign-in not gated on the skip', edit((c, st) => { delete st.find(s => s.id === 'azure_login').if; }), 'azure_login', 'skip', 'not steps.azure_config.outputs.signing'],
+        ['skip branch removed', edit((c, st) => { const g = st.find(s => s.id === 'azure_config'); g.run = g.run.replace(/if \[ -z "\$AZURE_CLIENT_ID" \]; then\n[\s\S]*?\n\s*fi\n/, ''); }), 'azure_config', 'skip', 'does not report Windows signing as skipped'],
+        ['skip branch fails instead', edit((c, st) => { const g = st.find(s => s.id === 'azure_config'); g.run = g.run.replace(/exit 0\n/, 'exit 1\n'); }), 'azure_config', 'skip', 'does not report Windows signing as skipped'],
+        ['signing=true written before the fail-closed loop', edit((c, st) => { const g = st.find(s => s.id === 'azure_config'); g.run = g.run.replace(/\n\s*echo "signing=true" >> "\$GITHUB_OUTPUT"\s*$/, '\n').replace('for V in AZURE_CLIENT_ID', 'echo "signing=true" >> "$GITHUB_OUTPUT"\nfor V in AZURE_CLIENT_ID'); }), 'azure_config', 'skip', 'signing=true after the fail-closed loop'],
+        ['cleanup step widened beyond rm -rf', edit((c, st) => { const g = st.find(s => s.if === 'always()'); g.run = `${g.run.trim()} && ls`; }), 'Remove the signing scratch databases', 'skip', 'runs when Windows signing was skipped'],
         ['schedule key', edit(c => { c.on.schedule = [{ cron: '0 3 * * 1' }]; }), RELEASE_REL, 'schedule', 'schedule'],
         ['legion job carrying secrets', edit(c => { c.jobs['build-windows'].env.PROBE = '${{ secrets.PROBE }}'; }), 'build-windows', 'legion', 'secrets'],
         ['legion job carrying an environment', edit(c => { c.jobs['build-windows'].environment = 'release'; }), 'build-windows', 'legion', 'environment'],
@@ -361,6 +417,22 @@ function selfTest(yaml) {
         ['Linux publish waits on Windows signing', edit(c => { c.jobs[LINUX_PUBLISH].needs = [c.jobs[LINUX_PUBLISH].needs, JOB].flat(); }), LINUX_PUBLISH, 'independence', JOB],
         ['a job after the Linux publish waits on Windows signing', edit(c => { c.jobs.descriptor.needs = [c.jobs.descriptor.needs, JOB].flat(); }), 'descriptor', 'independence', JOB],
         ['Linux publish job removed', edit(c => { delete c.jobs[LINUX_PUBLISH]; }), LINUX_PUBLISH, 'independence', 'absent'],
+        // G-54b: every Windows job, derived from its artifact names
+        ['descriptor waits on the Windows build', edit(c => { c.jobs.descriptor.needs = [c.jobs.descriptor.needs, 'build-windows'].flat(); }), 'descriptor', 'independence', 'build-windows'],
+        ['channel-live waits on the Windows sidecar job', edit(c => { c.jobs['channel-live'].needs = [c.jobs['channel-live'].needs, 'windows-sidecar'].flat(); }), 'channel-live', 'independence', 'windows-sidecar'],
+        ['build-linux waits on the Windows sidecar job', edit(c => { c.jobs['build-linux'].needs = 'windows-sidecar'; }), 'build-linux', 'independence', 'windows-sidecar'],
+        ['Linux publish waits on the Windows build through a job that moves no artifact', edit(c => { c.jobs.bridge = { needs: 'build-windows', 'runs-on': 'ubuntu-latest', steps: [{ run: 'echo bridge' }] }; c.jobs[LINUX_PUBLISH].needs = [c.jobs[LINUX_PUBLISH].needs, 'bridge'].flat(); }), LINUX_PUBLISH, 'independence', 'build-windows'],
+        ['descriptor waits on a new Windows publish job', edit(c => { c.jobs['publish-windows'] = winPublish(); c.jobs.descriptor.needs = [c.jobs.descriptor.needs, 'publish-windows'].flat(); }), 'descriptor', 'independence', 'publish-windows'],
+        ['channel-live needs build-windows and downloads release-windows', edit(c => { c.jobs['channel-live'].needs = [c.jobs['channel-live'].needs, 'build-windows'].flat(); c.jobs['channel-live'].steps.push({ uses: 'actions/download-artifact@' + '0'.repeat(40), with: { name: 'release-windows', path: 'w' } }); }), 'channel-live', 'independence', 'build-windows'],
+        ['purge-artifacts waits on the Windows build', edit(c => { c.jobs['purge-artifacts'].needs = [c.jobs['purge-artifacts'].needs, 'build-windows'].flat(); }), 'purge-artifacts', 'independence', 'build-windows'],
+        ['descriptor removed', edit(c => { delete c.jobs.descriptor; }), 'descriptor', 'independence', 'absent'],
+        ['the sign job no longer moves a Windows artifact', edit(c => { for (const s of stepsOf(c.jobs[JOB])) if (s.with?.name) s.with.name = String(s.with.name).replace('windows', 'w'); }), JOB, 'independence', 'not found among'],
+        // A2 (54-11): the three real Windows publish jobs. Each Linux job waiting on one is red, and a Windows job that
+        // stops moving a windows-named artifact is judged as Linux, so its wait on publish-windows goes red too.
+        ['sign-publish waits on the real publish-windows', edit(c => { c.jobs[LINUX_PUBLISH].needs = [c.jobs[LINUX_PUBLISH].needs, 'publish-windows'].flat(); }), LINUX_PUBLISH, 'independence', 'publish-windows'],
+        ['descriptor waits on the real descriptor-windows', edit(c => { c.jobs.descriptor.needs = [c.jobs.descriptor.needs, 'descriptor-windows'].flat(); }), 'descriptor', 'independence', 'descriptor-windows'],
+        ['channel-live waits on the real channel-live-windows', edit(c => { c.jobs['channel-live'].needs = [c.jobs['channel-live'].needs, 'channel-live-windows'].flat(); }), 'channel-live', 'independence', 'channel-live-windows'],
+        ['descriptor-windows moving no windows artifact', edit(c => { for (const st of stepsOf(c.jobs['descriptor-windows'])) if (st.with?.name) st.with.name = String(st.with.name).replace('windows', 'w'); }), 'descriptor-windows', 'independence', 'publish-windows'],
         ['sign job removed (zero steps)', edit(c => { delete c.jobs[JOB]; }), JOB, 'vacuity', 'absent'],
         ['unreadable workflow', { wf: null }, RELEASE_REL, 'vacuity', 'unreadable'],
     ];
@@ -375,7 +447,7 @@ function selfTest(yaml) {
         }
     }
     if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- two controls green and ${plants.length} planted faults went red naming their step or key`);
+    console.log(`${NAME}: --self-test PASS -- three controls green (unsigned, signed, a Windows publish job after the Linux publish) and ${plants.length} planted faults went red naming their step or key`);
     return 0;
 }
 

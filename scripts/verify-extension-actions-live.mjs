@@ -32,6 +32,10 @@
 //                   panel's popupshowing (the product's panel never shows) and must go red
 //                   at the scenario's own assertion that the button opened its page in the panel.
 //                   (The Theia-DOM popup is covered by static rule 8, which forbids it in source.)
+//   popup-keyboard -- (39-15, 38 T23) the popup fixture's panel takes chrome focus; Tab and Enter reach its button;
+//                   Esc closes it with focus in the pill; reopened, a click on page /a closes it with focus in the
+//                   page. PB_REAL_INPUT=1 sends the keys and the click as real OS input. Plant popup-esc-swallowed
+//                   swallows Escape at the shell window while the panel is open and must go red naming the rules.
 //   buttons      -- (38-02) with the action fixture pinned, the chrome bar shows one
 //                   button per pinned row of the push (at most three) and the puzzle
 //                   menu one row per pushed extension, named by its pushed title (set
@@ -102,6 +106,18 @@
 //                   bridge. Plant commands-always-fire enables the extension keys while the IDE has
 //                   focus and must go red naming the IDE focus. Plant commands-never-fire disables
 //                   them while the page has focus and must go red naming the page.
+//   event-page-wake -- (39-04, 999.15) the wake fixture (an event page with a persisted webRequest listener and
+//                   no runtime.onStartup listener) installs as an XPI; on the relaunched shell, with zero stock
+//                   windows and extensions-late-startup seen, it has not started; a web tab loading /wake starts
+//                   it and its listener records the request within 15 s. Plant startup-promises-rearmed calls the
+//                   file's test-only ExtensionParent._resetStartupPromises() first and must go red naming the wake.
+//   policies-shell-only -- (39-04, 999.16) a first launch leaves another engine as the user's default and no
+//                   record of the policy Default; on the relaunch, with zero stock windows, the default engine
+//                   becomes the SearchEngines Default read from powerbrowser/distribution/policies.json at check
+//                   time and the policy records it. With the record cleared and the user's engine back, a GUI-01
+//                   stock window re-runs no policy callback (the default stays, no policy error). Plant
+//                   policy-default-prerecorded seeds the AB-1 runOncePerModification pref before the first launch
+//                   and must go red naming the unapplied Default.
 //
 // Modes:
 //   node scripts/verify-extension-actions-live.mjs [--scenario a,b]   live sessions
@@ -118,12 +134,28 @@ import { createHash } from 'node:crypto';
 import { crc32 } from 'node:zlib';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { mkdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { EXTENSION_FIXTURES, fixtureId } from './lib/pb-extension-fixtures.mjs';
 
 const NAME = 'verify-extension-actions-live';
+// The two fixtures runSession installs for popup-action, buttons, manage and tabs-bridge; EXTENSION_FIXTURES also holds content and surfaces.
+const BRIDGE_FIXTURES = ['action', 'popup'];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const verdict = (ok, detail, fail) => (ok ? { ok: true, detail, fail: null } : { ok: false, detail: null, fail });
+// 39-13 (38 T18-T20): PB_CAPTURE_DIR=<dir> runs the sessions headed and captures the shell at named states.
+const CAPTURE_DIR = process.env.PB_CAPTURE_DIR ? resolve(process.env.PB_CAPTURE_DIR) : '';
+if (CAPTURE_DIR) {
+  process.env.PB_LIVE_HEADED = '1';
+}
+// PB_CAPTURE_DIR set: the PowerBrowser window (captureShell refuses any other active window) to <dir>/<file>. Unset: nothing.
+async function capture(file) {
+  if (!CAPTURE_DIR) return;
+  mkdirSync(CAPTURE_DIR, { recursive: true });
+  const { captureShell } = await import('./lib/pb-kwin.mjs');
+  const shot = await captureShell(join(CAPTURE_DIR, file));
+  console.log(`  capture ${file}: ${shot.resourceClass} ${shot.width}x${shot.height}`);
+}
 const pathOf = u => {
   try {
     return new URL(String(u)).pathname;
@@ -141,10 +173,10 @@ async function scenarioPopupAction({ app, plant }) {
   const B = await openTab(app, '/b');
   await live.makeCurrent(app, A);
   await waitForSelected(app, A, '/a');
-  await setPinned(app, Object.keys(EXTENSION_FIXTURES).map(fixtureId));
+  await setPinned(app, BRIDGE_FIXTURES.map(fixtureId));
   const from = (await live.pushes(app)).length;
   await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
-  const ids = Object.keys(EXTENSION_FIXTURES).map(fixtureId);
+  const ids = BRIDGE_FIXTURES.map(fixtureId);
   const pushAt = await live.waitForPush(app, p => p.kind === 'extensionAction' && ids.every(id => p.actions.some(r => r.extensionId === id)), { from });
   if (pushAt < 0) {
     return verdict(false, null, 'no extensionAction push carried both fixtures after the subscribe');
@@ -226,6 +258,73 @@ async function scenarioPopupAction({ app, plant }) {
   return verdict(true, `the subscribe pushed both fixtures (popup flag, enabled, data: icon); the action button's click ran in the overlay on screen /a (retitled to ${overlayTitle}) and its badge 'ok' was pushed; the popup button opened its page in the native panel and it closed by ${closed.join(', ')}, focus back in the pill only for Esc and the second click`, null);
 }
 
+// 39-15 (38 T23, EXT-07): the popup takes focus and keys (Tab to its button, Enter presses it), Esc closes it with focus
+// back in the pill, and a click on the page closes it with focus left in the page. PB_REAL_INPUT=1: the keys, the
+// button click and the page click are real OS input (pressKey's os route; osClientPointer calibrated in the Theia frame
+// and on page /a). Unset: TIP keys, el.click() on the button, and the page click stands in as chrome focus moved onto
+// /a's overlay (a BiDi click in the page is synthesised in the content process and moves no chrome focus, measured
+// 2026-11-06), so only the real route proves the click itself.
+async function scenarioPopupKeyboard({ app, plant }) {
+  const real = process.env.PB_REAL_INPUT === '1';
+  const A = await openTab(app, '/a');
+  await live.makeCurrent(app, A);
+  await waitForSelected(app, A, '/a');
+  await setPinned(app, BRIDGE_FIXTURES.map(fixtureId));
+  await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
+  await pollUntil(() => barButtons(app), b => b.length === 2, 10000);
+  if (plant?.name === 'popup-esc-swallowed') {
+    // The fault: Escape never reaches the panel's own close while it is open.
+    await live.inChrome(app, "const swallow = e => { if (e.key === 'Escape' && document.querySelector('panel.browser-extension-panel')?.state === 'open') { e.stopImmediatePropagation(); e.preventDefault(); } }; for (const t of ['keydown', 'keypress', 'keyup']) window.addEventListener(t, swallow, true); return true;");
+  }
+  const theiaHref = await app.evaluate('location.href');
+  const theiaCtx = (await app.contexts()).find(c => c.url === theiaHref)?.context;
+  const open = async when => {
+    if (real) {
+      // The UAT's "click a popup button with the mouse": a real click on the button, calibrated in the Theia frame.
+      const at = JSON.parse(await app.evaluate(`JSON.stringify((() => { const r = document.querySelector(${JSON.stringify(actionButton('popup'))}).getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; })())`));
+      await live.osClientPointer(app, theiaCtx, { ...at, button: 'left', action: 'click' });
+    } else {
+      await clickInFrame(app, actionButton('popup'));
+    }
+    const shown = await pollUntil(() => popupState(app), p => p.panel === 'open' && p.pressed, 10000);
+    if (!shown) throw new Error(`BROKEN INSTRUMENT: the popup button did not open the native panel ${when}: ${JSON.stringify(await popupState(app))}`);
+    // The panel's browser takes chrome focus once the panel is shown.
+    return pollUntil(() => live.inChrome(app, "const p = document.querySelector('panel.browser-extension-panel'); return !!p && !!document.activeElement && p.contains(document.activeElement);"), f => f === true, 5000);
+  };
+  const keys = { tab: { key: 'Tab', code: 'Tab', keyCode: 9 }, enter: { key: 'Enter', code: 'Enter', keyCode: 13 }, esc: { key: 'Escape', code: 'Escape', keyCode: 27 } };
+  const problems = [];
+  const focused = await open('for the keys');
+  if (!focused) problems.push('the opened popup did not take chrome focus');
+  const from = session.logs.length;
+  await live.pressKey(app, keys.tab);
+  await live.pressKey(app, keys.enter);
+  const keyed = await waitSince(from, r => r.kind === 'popup-key' && r.key === 'Tab', 5000);
+  const pressed = await waitSince(from, r => r.kind === 'popup-button', 5000);
+  if (!keyed || !pressed) problems.push(`keys did not reach the popup (Tab seen ${!!keyed}, Enter on its button ${!!pressed})`);
+  await live.pressKey(app, keys.esc);
+  const afterEsc = await pollUntil(() => popupState(app), p => p.panel !== 'open' && !p.pressed && p.pillFocused, 5000);
+  if (!afterEsc) problems.push(`Esc left ${JSON.stringify(await popupState(app))}, not the panel closed with focus in the pill`);
+  if (afterEsc) {
+    await open('for the page click');
+    const pageCtx = (await app.contexts()).find(c => pathOf(c.url) === '/a' && String(c.url).startsWith(ORIGIN))?.context;
+    if (!pageCtx) throw new Error('BROKEN INSTRUMENT: no BiDi context carries page /a');
+    const point = JSON.parse(await app.evaluateIn(pageCtx, 'JSON.stringify({ x: Math.round(innerWidth / 2), y: Math.round(innerHeight / 2) })'));
+    if (real) {
+      await live.osClientPointer(app, pageCtx, { ...point, button: 'left', action: 'click' });
+    } else {
+      await live.focusOverlay(app, A);
+    }
+    const inPage = () => live.inChrome(app, `return W.tabIdOfBrowser(document.activeElement) === ${JSON.stringify(A)};`);
+    const afterClick = await pollUntil(async () => ({ ...(await popupState(app)), page: await inPage() }), p => p.panel !== 'open' && !p.pressed && p.page && !p.pillFocused, 5000);
+    if (!afterClick) problems.push(`a click on page /a left ${JSON.stringify({ ...(await popupState(app)), page: await inPage() })}, not the panel closed with focus in the page`);
+  }
+  const route = `keys ${live.keyRoute.last}, clicks ${real ? `${live.pointerRoute.last} ${JSON.stringify(live.pointerRoute.calibration?.error)} after ${live.pointerRoute.calibration?.attempts} attempt(s)` : 'el.click() and a chrome focus move onto /a'}`;
+  if (problems.length) {
+    return verdict(false, null, `popup focus did not follow the keyboard rules (${route}): ${problems.join('; ')}`);
+  }
+  return verdict(true, `${route}: the popup took focus, Tab and Enter reached its button, Esc closed it with focus in the pill, and a click on page /a closed it with focus in the page`, null);
+}
+
 // 38-02 (EXT-06): the buttons and puzzle rows equal the set the push carries, and a pushed badge reaches the button.
 async function scenarioButtons({ app, plant }) {
   const A = await openTab(app, '/a');
@@ -234,7 +333,7 @@ async function scenarioButtons({ app, plant }) {
   await setPinned(app, [fixtureId('action')]);
   const from = (await live.pushes(app)).length;
   await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
-  const ids = Object.keys(EXTENSION_FIXTURES).map(fixtureId);
+  const ids = BRIDGE_FIXTURES.map(fixtureId);
   const pushAt = await live.waitForPush(app, p => p.kind === 'extensionAction' && ids.every(id => p.actions.some(r => r.extensionId === id)) && p.actions.some(r => r.pinned), { from });
   if (pushAt < 0) {
     return verdict(false, null, 'no extensionAction push carried both fixtures with the action fixture pinned');
@@ -252,8 +351,9 @@ async function scenarioButtons({ app, plant }) {
   }
   await clickInFrame(app, '.pb-ext-puzzle');
   if (plant?.name === 'buttons-stale') {
-    // The frame stops hearing extensionAction pushes; the recorder, installed first, still records them.
-    await app.evaluate(`(() => { window.addEventListener(${JSON.stringify(live.WEB_TAB_STATE_EVENT)}, e => { if (e.detail && e.detail.kind === 'extensionAction') e.stopImmediatePropagation(); }, true); return true; })()`);
+    // The frame stops hearing extensionAction pushes. A capture listener at the target runs before every bubble
+    // listener, the recorder's included, so the plant records each push itself before it stops it.
+    await app.evaluate(`(() => { window.addEventListener(${JSON.stringify(live.WEB_TAB_STATE_EVENT)}, e => { if (e.detail && e.detail.kind === 'extensionAction') { window.__pbPushes.push(JSON.parse(JSON.stringify(e.detail))); e.stopImmediatePropagation(); } }, true); return true; })()`);
   }
   const logFrom = session.logs.length;
   const pushFrom = (await live.pushes(app)).length;
@@ -270,6 +370,13 @@ async function scenarioButtons({ app, plant }) {
   if (!drawn) {
     const shown = (await barButtons(app)).find(x => x.id === fixtureId('action'));
     return verdict(false, null, `the button shows a stale badge ${JSON.stringify(shown ? shown.badge : null)} where the push carried 'ok'`);
+  }
+  if (CAPTURE_DIR) {
+    // 38 T18: the buttons with the badge, and the puzzle menu open over them.
+    await clickInFrame(app, '.pb-ext-puzzle');
+    await pollUntil(() => puzzleRows(app), r => r.length === 2, 5000);
+    await capture('38-T18-buttons-badge-puzzle-popup.png');
+    await clickInFrame(app, '.pb-ext-puzzle');
   }
   return verdict(true, `the bar showed buttons ${JSON.stringify(wantButtons)} and puzzle rows ${JSON.stringify(menuRows.map(m => m.name))} equal to the push; the action button's click ran in /a and its pushed badge 'ok' was drawn`, null);
 }
@@ -292,8 +399,10 @@ async function scenarioManage({ app, plant }) {
   if (plant?.name === 'pin-lost') {
     await setPinned(app, []);
   }
+  // The reload is asynchronous: until the old document goes, its buttons would answer for the reloaded frontend.
+  await app.evaluate('(() => { window.__pbBeforeReload = true; return true; })()');
   await app.evaluateIn(app.chrome, "(() => { document.getElementById('powerbrowser-content').reload(); return true; })()");
-  const kept = await pollUntil(() => barButtons(app).catch(() => []), b => b.some(x => x.id === fixtureId('action')), 45000);
+  const kept = await pollUntil(() => app.evaluate('window.__pbBeforeReload === true').then(old => (old ? [] : barButtons(app))).catch(() => []), b => b.some(x => x.id === fixtureId('action')), 45000);
   if (!kept) {
     return verdict(false, null, 'the pin did not persist across the frontend reload: no action fixture button after it');
   }
@@ -305,6 +414,7 @@ async function scenarioManage({ app, plant }) {
   for (const name of ['popup', 'action']) {
     await clickInFrame(app, '.pb-ext-puzzle');
     await puzzleRowMenu(app, name, 'Remove Extension');
+    await pollUntil(() => app.evaluate("!!document.querySelector('.pb-ext-menu .pb-ext-confirm-remove')"), v => v === true, 5000);
     await clickInFrame(app, '.pb-ext-menu .pb-ext-confirm-remove');
     const gone = await pollUntil(() => addonGone(app, fixtureId(name)), g => g, 15000);
     if (!gone) {
@@ -339,7 +449,8 @@ async function scenarioTabsBridge({ app, plant, command }) {
   if (!B) {
     return verdict(false, null, 'the created tab /b was never adopted: an orphan overlay no frontend tab owns');
   }
-  const order = await live.probe(app, "return { ids: get('ApplicationShell').getWidgets('main').map(w => w.tabId), current: get('ApplicationShell').currentWidget?.tabId ?? null };");
+  // The main panel's selected tab, not shell.currentWidget: that follows Lumino's FocusTracker, which an unfocused (headless) window never feeds.
+  const order = await live.probe(app, "return { ids: get('ApplicationShell').getWidgets('main').map(w => w.tabId), current: get('ApplicationShell').mainPanel.currentTitle?.owner?.tabId ?? null };");
   if (!B.selected || order.current !== B.tabId || order.ids.indexOf(B.tabId) !== order.ids.indexOf(A) + 1) {
     return verdict(false, null, `the created tab /b is adopted but not the selected tab next to /a: ${JSON.stringify({ selected: B.selected, order })}`);
   }
@@ -352,7 +463,7 @@ async function scenarioTabsBridge({ app, plant, command }) {
   if (!act.ok) {
     return verdict(false, null, `tabs.update({active}) on /c was rejected: ${act.error}`);
   }
-  const shown = await pollUntil(async () => ({ chrome: await overlayOfExtTab(app, bg.result.id), current: (await live.probe(app, "return { id: get('ApplicationShell').currentWidget?.tabId ?? null };")).id }), v => v.chrome.selected && v.current === C.tabId, 10000);
+  const shown = await pollUntil(async () => ({ chrome: await overlayOfExtTab(app, bg.result.id), current: (await live.probe(app, "return { id: get('ApplicationShell').mainPanel.currentTitle?.owner?.tabId ?? null };")).id }), v => v.chrome.selected && v.current === C.tabId, 10000);
   if (!shown) {
     return verdict(false, null, 'tabs.update({active}) on /c did not select it in chrome and show it in the frontend');
   }
@@ -364,7 +475,7 @@ async function scenarioTabsBridge({ app, plant, command }) {
   }
   // 38-REVIEW CR-03: activated before its ack, /d must end shown in the frontend AND selected in chrome, never in chrome alone.
   const ca = await command('create-activate', { props: { url: `${ORIGIN}/d` } });
-  const D = ca.ok ? await pollUntil(async () => ({ chrome: await overlayOfExtTab(app, ca.result.id), current: (await live.probe(app, "return { id: get('ApplicationShell').currentWidget?.tabId ?? null };")).id }), v => v.chrome.tabId !== null && v.chrome.selected && v.current === v.chrome.tabId, 10000) : null;
+  const D = ca.ok ? await pollUntil(async () => ({ chrome: await overlayOfExtTab(app, ca.result.id), current: (await live.probe(app, "return { id: get('ApplicationShell').mainPanel.currentTitle?.owner?.tabId ?? null };")).id }), v => v.chrome.tabId !== null && v.chrome.selected && v.current === v.chrome.tabId, 10000) : null;
   if (!D) {
     return verdict(false, null, `tabs.update({active}) on /d before its adoption ack did not leave it shown in the frontend and selected in chrome: ${JSON.stringify(ca.ok ? { chrome: await overlayOfExtTab(app, ca.result.id) } : ca.error)}`);
   }
@@ -469,6 +580,7 @@ async function scenarioPageAction({ app, plant, command }) {
   if (!shown || shown.find(i => i.id === id).title !== row.title) {
     return verdict(false, null, `the pill does not show the page action pushed for /a (${JSON.stringify(row.title)}): ${JSON.stringify(shown ?? await pillIcons())}`);
   }
+  await capture('38-T19-page-action-pill.png');
   // The icon reader has now seen an icon, so the boot reading taken before it is scored.
   if (bootRows.some(isPage) || bootIcons.length) {
     return verdict(false, null, `the zero-overlay boot showed a page action: push ${JSON.stringify(bootRows.filter(isPage))}, pill ${JSON.stringify(bootIcons)}`);
@@ -534,6 +646,7 @@ async function scenarioSidebar({ app, plant, command }) {
       ? `the Theia sidebar view opened but chrome's panel browser does not show the panel page over it: ${JSON.stringify(now)}`
       : `no Theia side-panel view opened: the sidebar went to the shell window or a web tab, neither of which shows it (${JSON.stringify(now)})`);
   }
+  await capture('38-T20-sidebar-view.png');
   await clickInFrame(app, '.pb-ext-puzzle');
   await puzzleRowMenu(app, 'surfaces', 'Hide Sidebar');
   const closed = await pollUntil(async () => ({ view: await sidebarView(app), frame: await sidebarFrame(app) }), s => !s.view.attached && !s.frame.present, 10000);
@@ -572,7 +685,8 @@ async function scenarioTabPages({ app, plant, command }) {
   if (!sameSet(after, before)) {
     return verdict(false, null, `a tab page changed the shell's overlay set: ${JSON.stringify({ before, after })}`);
   }
-  const nav = await command('overlay-nav', { url: `${ORIGIN}/a` });
+  // tabs.query's url is a match pattern, and a pattern's host keeps any port it is given (MatchPattern.cpp), so it is passed without one.
+  const nav = await command('overlay-nav', { url: `${ORIGIN.replace(/:\d+$/, '')}/a` });
   if (nav.ok || !/Illegal URL/.test(String(nav.error))) {
     return verdict(false, null, `tabs.update of the web tab /a to an extension page was not refused: ${JSON.stringify(nav)}`);
   }
@@ -631,8 +745,353 @@ async function scenarioCommands({ app, plant }) {
   return verdict(true, `Alt+Shift+U fired pb-probe on /a (title ${fired.title}); with the IDE focused it reached the Theia frame and fired nothing; Alt+Shift+I opened the sidebar view`, null);
 }
 
+// 39-04 (999.15): the wake fixture's event page, primed at app startup with no runtime.onStartup listener, starts on
+// its persisted webRequest event in a relaunched session with zero stock windows. Upstream started it only once
+// ExtensionParent.browserPaintedPromise resolved, on a topic only a stock window sends; patch 050 also resolves it on
+// extensions-late-startup, which the shell sends.
+async function scenarioEventPageWake({ app, plant }) {
+  if ((await stockWindowCount(app)) !== 0) throw new Error('BROKEN INSTRUMENT: the relaunch opened a stock window');
+  if (!(await lateStartupSeen(app))) throw new Error('BROKEN INSTRUMENT: extensions-late-startup never arrived, so the listeners were never fully primed');
+  if (session.logs.some(r => r.kind === 'wake-started')) throw new Error('BROKEN INSTRUMENT: the event page started at startup, so no wake is tested');
+  if (plant?.name === 'startup-promises-rearmed') {
+    // The file's own test-only reset: both startup promises wait again for topics that do not fire twice.
+    await live.inChrome(app, `const { ExtensionParent } = ChromeUtils.importESModule('resource://gre/modules/ExtensionParent.sys.mjs');
+      ExtensionParent._resetStartupPromises(); return true;`);
+  }
+  const from = session.logs.length;
+  await openTab(app, '/wake');
+  const woke = await waitSince(from, r => r.kind === 'woke', 15000);
+  if (!woke) {
+    return verdict(false, null, `the event page never woke with no stock window (${await stockWindowCount(app)} stock window(s); records since the load: ${JSON.stringify(session.logs.slice(from).map(r => r.kind))})`);
+  }
+  return verdict(true, `the event page, with no runtime.onStartup listener, woke on ${pathOf(woke.url)} with ${await stockWindowCount(app)} stock window(s)`, null);
+}
+
+// 39-04 (999.16): the shipped SearchEngines Default (read from the tracked policies.json at check time) is applied
+// with zero stock windows. A first launch leaves another engine as the user's default and no record of the policy
+// Default (the profile a newly deployed policy meets: with no app-provided engine the policy's own first engine is
+// already the fallback default, so a fresh profile alone cannot show the gap). On the relaunch, with zero stock
+// windows, the Default must be applied and recorded. Then, with the record cleared and the user's engine back, a
+// GUI-01 stock window (sessionstore-windows-restored) must re-run no policy callback. The scenario launches itself:
+// the plant seeds the profile before its first launch.
+async function scenarioPoliciesShellOnly({ plant }) {
+  const policies = JSON.parse(await readFile(join(live.REPO_ROOT, 'powerbrowser/distribution/policies.json'), 'utf8'));
+  const expected = policies.policies?.SearchEngines?.Default;
+  if (!expected) throw new Error('BROKEN INSTRUMENT: powerbrowser/distribution/policies.json names no SearchEngines Default');
+  // The AB-1 pref (verify-address-bar-live.mjs): the policy Default recorded as applied before the first launch.
+  const extraPrefs = plant?.name === 'policy-default-prerecorded' ? { ...SESSION_PREFS, [RUN_ONCE_DEFAULT_PREF]: expected } : SESSION_PREFS;
+  const profile = await live.makeProfile(extraPrefs);
+  process.env.MOZ_PURGE_CACHES = '1';
+  try {
+    const other = await live.withShell(profile, async app => {
+      if (!(await lateStartupSeen(app))) throw new Error('BROKEN INSTRUMENT: extensions-late-startup never arrived in the first launch');
+      await sleep(3000);
+      const name = await userDefaultOtherThan(app, expected);
+      if (!name || name.startsWith('error:')) throw new Error(`BROKEN INSTRUMENT: no engine other than the policy Default to leave as the user's default (${name})`);
+      if ((await app.quit()) !== 'exited') throw new Error('BROKEN INSTRUMENT: the shell did not quit after the first launch');
+      return name;
+    });
+    return await live.withShell(profile, async app => {
+      if ((await stockWindowCount(app)) !== 0) throw new Error('BROKEN INSTRUMENT: the relaunch opened a stock window');
+      if (!(await lateStartupSeen(app))) throw new Error('BROKEN INSTRUMENT: extensions-late-startup never arrived');
+      const applied = await pollUntil(async () => ({ engine: await defaultEngine(app), record: await runOnceRecord(app) }), r => r.engine === expected && r.record === expected, 15000);
+      if (!applied) {
+        return verdict(false, null, `the policy Default engine was not applied with no stock window: the default is ${JSON.stringify(await defaultEngine(app))} and the policy record is ${JSON.stringify(await runOnceRecord(app))}, policies.json names ${JSON.stringify(expected)}`);
+      }
+      // A second run of the onAllWindowsRestored callbacks would find no record and apply the Default again.
+      if ((await userDefaultOtherThan(app, expected)) !== other) throw new Error(`BROKEN INSTRUMENT: ${other} could not be made the default again`);
+      const errorsBefore = await policyErrors(app);
+      await live.inChrome(app, `window.__pbRestored = 0; Services.obs.addObserver(() => { window.__pbRestored++; }, 'sessionstore-windows-restored'); return true;`);
+      const stockUrl = `${STOCK_ORIGIN}/c`;
+      await live.probe(app, `await get('CommandRegistry').executeCommand('powerbrowser.open-browser-window', ${JSON.stringify(stockUrl)}); return true;`);
+      await live.stockTabOn(app, stockUrl, 30000);
+      await sleep(3000);
+      const restored = await live.inChrome(app, 'return window.__pbRestored;');
+      const after = await defaultEngine(app);
+      const errorsAfter = await policyErrors(app);
+      if (after !== other || errorsAfter.length !== errorsBefore.length) {
+        return verdict(false, null, `a stock window re-ran the policy callbacks: the default is ${JSON.stringify(after)} (was ${JSON.stringify(other)}); new policy errors: ${JSON.stringify(errorsAfter.slice(errorsBefore.length))}`);
+      }
+      return verdict(true, `with zero stock windows the policy Default ${JSON.stringify(expected)} replaced the user's ${JSON.stringify(other)} and was recorded; a GUI-01 stock window (sessionstore-windows-restored seen ${restored} time(s)) re-ran nothing: ${JSON.stringify(other)} stayed the default, no policy error`, null);
+    });
+  } finally {
+    await profile.dispose();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 39-13 (38 T28 WR-04, T29 WR-05, T22): Remove's copy and storage, a reloaded frontend's popup and sidebar, and the
+// private-browsing access rule. Copy strings are read from the tree at check time.
+// ---------------------------------------------------------------------------
+
+/** A literal from a tracked source, read at check time: the first capture of `regex`. */
+async function treeLiteral(rel, regex) {
+  const m = regex.exec(await readFile(join(live.REPO_ROOT, rel), 'utf8'));
+  if (!m) throw new Error(`BROKEN INSTRUMENT: ${rel} no longer matches ${regex}`);
+  return m[1];
+}
+
+async function scenarioRemoveCopy({ app, plant, command }) {
+  const removeBody = await treeLiteral('theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts', /removeExtensionBody: '([^']+)'/);
+  const A = await openTab(app, '/a');
+  await live.makeCurrent(app, A);
+  await waitForSelected(app, A, '/a');
+  await setPinned(app, [fixtureId('action')]);
+  await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
+  const set = await command('storageSet', { items: { pbKept: 'before-remove' } });
+  const before = await command('storageGet');
+  if (!set.ok || before.result?.pbKept !== 'before-remove') {
+    return verdict(false, null, `BROKEN INSTRUMENT: the action fixture's storage.local did not take the planted value: ${JSON.stringify(before)}`);
+  }
+  if (plant?.name === 'remove-keeps-storage') {
+    // Gecko's own switches for keeping an uninstalled extension's id and data: the copy then promises what Remove does not do.
+    await live.inChrome(app, `Services.prefs.setBoolPref('extensions.webextensions.keepStorageOnUninstall', true);
+      Services.prefs.setBoolPref('extensions.webextensions.keepUuidOnUninstall', true); return true;`);
+  }
+  await clickInFrame(app, '.pb-ext-puzzle');
+  await puzzleRowMenu(app, 'action', 'Remove Extension');
+  const shown = await pollUntil(() => app.evaluate("document.querySelector('.pb-ext-menu .pb-ext-menu-body')?.textContent ?? null"), t => typeof t === 'string', 5000);
+  if (shown !== removeBody) {
+    return verdict(false, null, `Remove copy differs: the confirm row reads ${JSON.stringify(shown)}, the copy table ${JSON.stringify(removeBody)}`);
+  }
+  await clickInFrame(app, '.pb-ext-menu .pb-ext-confirm-remove');
+  if (!(await pollUntil(() => addonGone(app, fixtureId('action')), g => g, 15000))) {
+    return verdict(false, null, "BROKEN INSTRUMENT: the confirm row's Remove did not uninstall the action fixture");
+  }
+  const from = session.logs.length;
+  await installFixture(app, 'action');
+  if (!(await waitSince(from, r => r.kind === 'started', 20000))) {
+    throw new Error('BROKEN INSTRUMENT: the reinstalled action fixture never started');
+  }
+  const after = await command('storageGet');
+  if (!after.ok || Object.keys(after.result ?? {}).length) {
+    return verdict(false, null, `reinstall kept old storage: storage.local after Remove and reinstall is ${JSON.stringify(after.result ?? after.error)}`);
+  }
+  // Remove unpins (the row left the pinned set); pinning it again must give one button, not a stale second one.
+  await setPinned(app, [fixtureId('action')]);
+  await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
+  const buttons = await pollUntil(() => barButtons(app), b => b.filter(x => x.id === fixtureId('action')).length === 1, 10000, 3);
+  if (!buttons) {
+    return verdict(false, null, `after the reinstall the bar does not show exactly one action button: ${JSON.stringify(await barButtons(app))}`);
+  }
+  return verdict(true, `the confirm row read ${JSON.stringify(removeBody)}; after Remove and reinstall storage.local was empty and one action button showed`, null);
+}
+
+// Chrome-side recorder of the sidebar panel browser's visibility writes and the extension panel's popuphidden events.
+const FRONTEND_GONE_RECORDER = `const f = [...document.querySelectorAll('browser')].find(b => b.getAttribute('src') === 'chrome://browser/content/webext-panels.xhtml');
+  const p = document.querySelector('panel.browser-extension-panel');
+  if (!f || !p) return JSON.stringify({ landed: false, frame: !!f, panel: !!p });
+  window.__pbGone = { visibility: [], hidden: 0 };
+  new MutationObserver(() => window.__pbGone.visibility.push(f.style.visibility)).observe(f, { attributes: true, attributeFilter: ['style'] });
+  p.addEventListener('popuphidden', () => { window.__pbGone.hidden++; });
+  return JSON.stringify({ landed: true });`;
+
+async function scenarioFrontendReload({ app, plant }) {
+  await installFixture(app, 'surfaces');
+  if (!(await waitSince(0, r => r.kind === 'surfaces-started'))) throw new Error('BROKEN INSTRUMENT: the surfaces fixture background page never started');
+  const up = "a reloaded frontend left the popup or sidebar up";
+  const A = await openTab(app, '/a');
+  await live.makeCurrent(app, A);
+  await waitForSelected(app, A, '/a');
+  await setPinned(app, [fixtureId('popup')]);
+  await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
+  await clickInFrame(app, '.pb-ext-puzzle');
+  await puzzleRowMenu(app, 'surfaces', 'Show Sidebar');
+  const viewUp = s => s.view.attached && s.view.visible && s.frame.present && s.frame.visibility === 'visible';
+  const both = async () => ({ view: await sidebarView(app), frame: await sidebarFrame(app) });
+  if (!(await pollUntil(both, viewUp, 20000))) {
+    throw new Error(`BROKEN INSTRUMENT: the sidebar view did not open before the reload: ${JSON.stringify(await both())}`);
+  }
+  await pollUntil(() => barButtons(app), b => b.some(x => x.id === fixtureId('popup')), 10000);
+  await clickInFrame(app, actionButton('popup'));
+  if (!(await pollUntil(() => popupState(app), p => p.panel === 'open', 10000))) {
+    throw new Error(`BROKEN INSTRUMENT: the popup did not open before the reload: ${JSON.stringify(await popupState(app))}`);
+  }
+  const rec = JSON.parse(await live.inChrome(app, FRONTEND_GONE_RECORDER));
+  if (!rec.landed) throw new Error(`BROKEN INSTRUMENT: the frontend-gone recorder found no sidebar browser or panel: ${JSON.stringify(rec)}`);
+  if (plant?.name === 'frontend-gone-ignored') {
+    // WR-05's defect: nothing takes the popup and the sidebar browser down when the frontend dies.
+    await live.inChrome(app, `const f = [...document.querySelectorAll('browser')].find(b => b.getAttribute('src') === 'chrome://browser/content/webext-panels.xhtml');
+      const s = f.style; Object.defineProperty(s, 'visibility', { configurable: true, get: () => 'visible', set: () => {} });
+      const p = document.querySelector('panel.browser-extension-panel'); p.hidePopup = () => {};
+      return true;`);
+  }
+  await app.evaluate('(() => { window.__pbBeforeReload = true; return true; })()');
+  await app.evaluateIn(app.chrome, "(() => { document.getElementById('powerbrowser-content').reload(); return true; })()");
+  const downSeen = await pollUntil(() => live.inChrome(app, 'return JSON.stringify(window.__pbGone);').then(JSON.parse),
+    g => g.hidden >= 1 && g.visibility.includes('hidden'), 20000);
+  if (!downSeen) {
+    return verdict(false, null, `${up}: the recorder saw ${JSON.stringify(JSON.parse(await live.inChrome(app, 'return JSON.stringify(window.__pbGone);')))} (want a popuphidden and a hidden sidebar browser)`);
+  }
+  // The reloaded frontend re-subscribes on its own; the view and the panel browser come back.
+  const back = await pollUntil(async () => (await app.evaluate('window.__pbBeforeReload === true').catch(() => true)) ? { view: {}, frame: {} } : both(), viewUp, 60000);
+  if (!back) {
+    return verdict(false, null, `after the reload the sidebar view did not come back with its page: ${JSON.stringify(await both())}`);
+  }
+  // A frontend that has already re-subscribed is left alone: a second subscribe does not hide it.
+  const mark = JSON.parse(await live.inChrome(app, 'return JSON.stringify(window.__pbGone);')).visibility.length;
+  await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
+  await sleep(2000);
+  const later = JSON.parse(await live.inChrome(app, 'return JSON.stringify(window.__pbGone);')).visibility.slice(mark);
+  const still = await both();
+  if (later.includes('hidden') || !viewUp(still)) {
+    return verdict(false, null, `a re-subscribed frontend was not left alone: visibility writes ${JSON.stringify(later)}, now ${JSON.stringify(still)}`);
+  }
+  return verdict(true, `the reload closed the popup (popuphidden) and hid the sidebar browser; after the re-subscribe the view returned with its page, and a second subscribe left it shown`, null);
+}
+
+/**
+ * One private-access session: the denied and allowed fixtures, the allowed one granted private-window access.
+ * `started`: the background pages to wait for. Under permanent private browsing upstream starts none for an extension not
+ * allowed in private windows (ext-backgroundPage.js onManifestEntry), so neither fixture starts before grantPrivate.
+ */
+async function privateSession(prefs, fn, started = ['private-denied-started', 'private-allowed-started']) {
+  session = { logs: [], queue: [], queues: {} };
+  return live.withProbeShell(async app => {
+    await installFixture(app, 'private-denied');
+    await installFixture(app, 'private-allowed');
+    for (const kind of started) {
+      if (!(await waitSince(0, r => r.kind === kind, 20000))) throw new Error(`BROKEN INSTRUMENT: no ${kind} record`);
+    }
+    return fn(app);
+  }, { extraPrefs: { ...SESSION_PREFS, ...prefs } });
+}
+
+// Grants an installed fixture private-window access and reloads it, as about:addons' Run in Private Windows does.
+async function grantPrivate(app, name) {
+  const from = session.logs.length;
+  const out = await app.evaluateIn(app.chrome, `(async () => {
+    const { ExtensionPermissions } = ChromeUtils.importESModule('resource://gre/modules/ExtensionPermissions.sys.mjs');
+    const { AddonManager } = ChromeUtils.importESModule('resource://gre/modules/AddonManager.sys.mjs');
+    await ExtensionPermissions.add(${JSON.stringify(fixtureId(name))}, { permissions: ['internal:privateBrowsingAllowed'], origins: [] });
+    await (await AddonManager.getAddonByID(${JSON.stringify(fixtureId(name))})).reload();
+    return WebExtensionPolicy.getByID(${JSON.stringify(fixtureId(name))})?.privateBrowsingAllowed === true;
+  })()`);
+  if (out !== true || !(await waitSince(from, r => r.kind === `${name}-started`, 20000))) {
+    throw new Error(`BROKEN INSTRUMENT: ${name} was not granted private-window access (${out})`);
+  }
+}
+
+// Stock windows: context id and whether each is private.
+async function stockWindowsPrivacy(app) {
+  const out = [];
+  for (const c of (await app.contexts('chrome')).filter(e => e.url.startsWith('chrome://browser/content/browser.xhtml'))) {
+    out.push({ ctx: c.context, private: await app.evaluateIn(c.context, "ChromeUtils.importESModule('resource://gre/modules/PrivateBrowsingUtils.sys.mjs').PrivateBrowsingUtils.isWindowPrivate(window)") });
+  }
+  return out;
+}
+
+// The stock windows holding a tab on `spec`, with their privacy.
+async function windowsHolding(app, spec) {
+  const out = [];
+  for (const w of await stockWindowsPrivacy(app)) {
+    if (await app.evaluateIn(w.ctx, `gBrowser.tabs.some(t => t.linkedBrowser.currentURI.spec === ${JSON.stringify(spec)})`).catch(() => false) === true) out.push(w);
+  }
+  return out;
+}
+
+async function scenarioPrivateAccess({ plant }) {
+  const rule = 'private access rule not applied';
+  const denied = fixtureId('private-denied');
+  const allowed = fixtureId('private-allowed');
+  const refusal = await treeLiteral('powerbrowser/shell/PowerBrowserAPI.sys.mjs', /"(PowerBrowser refused to open that page: this extension is not allowed in private windows\.)"/);
+  // Session 1: permanent private browsing, so the shell window is private. The plant leaves it off.
+  const autostart = plant?.name === 'shell-not-private' ? {} : { 'browser.privatebrowsing.autostart': true };
+  // A shell whose IDE never loads under permanent private browsing is this rule's failure too: nothing can be read.
+  // 39-REVIEW WR-07: only that; once the session is up, an error is the harness's own and keeps its message.
+  let ideLoaded = false;
+  const first = await privateSession(autostart, async app => {
+    ideLoaded = true;
+    await grantPrivate(app, 'private-allowed');
+    const shellPrivate = await app.evaluateIn(app.chrome, "ChromeUtils.importESModule('resource://gre/modules/PrivateBrowsingUtils.sys.mjs').PrivateBrowsingUtils.isWindowPrivate(window)");
+    const A = await openTab(app, '/a');
+    await live.makeCurrent(app, A);
+    await waitForSelected(app, A, '/a');
+    await setPinned(app, [denied, allowed]);
+    await live.probe(app, "await get('ChromeStoreClient').extensionActionsSubscribe(); return true;");
+    // The allowed fixture is the positive control for every absence of the denied one.
+    const buttons = await pollUntil(() => barButtons(app), b => b.some(x => x.id === allowed), 10000);
+    if (!buttons) throw new Error(`BROKEN INSTRUMENT: the allowed fixture's button never showed: ${JSON.stringify(await barButtons(app))}`);
+    await clickInFrame(app, '.pb-ext-puzzle');
+    const rows = await pollUntil(() => puzzleRows(app), r => r.some(x => x.id === allowed), 10000);
+    await clickInFrame(app, '.pb-ext-puzzle');
+    if (!rows) throw new Error('BROKEN INSTRUMENT: the allowed fixture has no puzzle row');
+    if (buttons.some(x => x.id === denied) || rows.some(x => x.id === denied)) {
+      return verdict(false, null, `${rule}: with the shell private (${shellPrivate}) the denied extension shows a button (${buttons.some(x => x.id === denied)}) or a puzzle row (${rows.some(x => x.id === denied)})`);
+    }
+    // Keys, with the page focused: the denied sidebar key does nothing, the allowed one opens its view.
+    if (!(await live.focusOverlay(app, A))) throw new Error('BROKEN INSTRUMENT: page /a could not be focused');
+    await live.pressKey(app, { key: 'I', code: 'KeyI', keyCode: 73, modifiers: ['alt', 'shift'] });
+    await sleep(2000);
+    const afterDenied = await sidebarView(app);
+    if (afterDenied.attached) {
+      return verdict(false, null, `${rule}: the denied extension's Alt+Shift+I opened a sidebar view (${afterDenied.label})`);
+    }
+    if (!(await live.focusOverlay(app, A))) throw new Error('BROKEN INSTRUMENT: page /a could not be focused again');
+    await live.pressKey(app, { key: 'O', code: 'KeyO', keyCode: 79, modifiers: ['alt', 'shift'] });
+    if (!(await pollUntil(() => sidebarView(app), v => v.attached && v.label === 'PB private allowed', 10000))) {
+      throw new Error(`BROKEN INSTRUMENT: the allowed extension's Alt+Shift+O did not open its sidebar (${JSON.stringify(await sidebarView(app))}), so the denied key's silence means nothing`);
+    }
+    // Options pages: the denied one is refused with the copy from the tree, the allowed one opens stock-side. The denied
+    // background never runs here, so its openOptionsPage is sent as stock ext-browser.js sends it: the top window's
+    // switchToTabHavingURI with the extension's options URL and principal.
+    const deniedOptions = JSON.parse(await app.evaluateIn(app.chrome, `(() => {
+      const policy = WebExtensionPolicy.getByID(${JSON.stringify(denied)});
+      const url = policy.getURL('options.html');
+      try {
+        window.switchToTabHavingURI(url, true, { triggeringPrincipal: Services.scriptSecurityManager.createContentPrincipal(Services.io.newURI(url), {}) });
+        return JSON.stringify({ ok: true });
+      } catch (e) { return JSON.stringify({ ok: false, error: String((e && e.message) || e) }); }
+    })()`));
+    if (deniedOptions.ok || !String(deniedOptions.error).includes(refusal)) {
+      return verdict(false, null, `${rule}: the denied extension's openOptionsPage ${deniedOptions.ok ? 'opened' : `was refused with '${deniedOptions.error}'`}, want '${refusal}'`);
+    }
+    const allowedUrl = (await command('url', { path: 'options.html' }, 'private-allowed')).result;
+    await command('options', {}, 'private-allowed');
+    if (!(await pollUntil(() => windowsHolding(app, allowedUrl), w => w.length === 1, 30000))) {
+      return verdict(false, null, `${rule}: the allowed extension's options page did not open in a stock window`);
+    }
+    return { ok: true, detail: `shell private ${shellPrivate}: denied has no button, puzzle row or sidebar key, its options page refused ('${refusal}'); allowed shows all and its options page opened` };
+  }, []).catch(error => {
+    if (ideLoaded || String(error?.message).startsWith('BROKEN INSTRUMENT')) throw error;
+    return verdict(false, null, `${rule}: with browser.privatebrowsing.autostart the shell's IDE never loaded, so no private-window rule could be read (${error?.message ?? error})`);
+  });
+  // Session 2: no autostart. The denied extension's options page goes to a non-private window, or a new one.
+  const second = await privateSession({}, async app => {
+    const deniedUrl = (await command('url', { path: 'options.html' }, 'private-denied')).result;
+    await live.probe(app, `await get('CommandRegistry').executeCommand('powerbrowser.open-browser-window', ${JSON.stringify(`${STOCK_ORIGIN}/s`)}); return true;`);
+    const normal = await pollUntil(() => stockWindowsPrivacy(app), w => w.length === 1 && w[0].private === false, 30000);
+    if (!normal) throw new Error('BROKEN INSTRUMENT: no non-private stock window opened');
+    await app.evaluateIn(normal[0].ctx, '(() => { window.OpenBrowserWindow({ private: true }); return true; })()');
+    const both = await pollUntil(() => stockWindowsPrivacy(app), w => w.length === 2 && w.some(x => x.private), 30000);
+    if (!both) throw new Error('BROKEN INSTRUMENT: no private stock window opened');
+    await sleep(1500);
+    await command('options', {}, 'private-denied');
+    const holders = await pollUntil(() => windowsHolding(app, deniedUrl), w => w.length >= 1, 30000);
+    if (!holders || holders.length !== 1 || holders[0].private || holders[0].ctx !== normal[0].ctx) {
+      return verdict(false, null, `${rule}: with a private stock window open last the denied options page is in ${JSON.stringify(holders)}, want the one non-private window`);
+    }
+    // Close the non-private window: only the private one is left, so the page must take a new non-private window.
+    await app.evaluateIn(normal[0].ctx, '(() => { setTimeout(() => window.close(), 0); return true; })()');
+    const onlyPrivate = await pollUntil(() => stockWindowsPrivacy(app), w => w.length === 1 && w[0].private, 15000);
+    if (!onlyPrivate) throw new Error('BROKEN INSTRUMENT: the non-private stock window did not close');
+    await command('options', {}, 'private-denied');
+    const fresh = await pollUntil(() => windowsHolding(app, deniedUrl), w => w.length === 1, 30000);
+    if (!fresh || fresh[0].private) {
+      return verdict(false, null, `${rule}: with only a private stock window open the denied options page is in ${JSON.stringify(fresh)}, want a new non-private window`);
+    }
+    return { ok: true, detail: 'with a private window open last the denied options page opened in the non-private window; with only a private window it opened a new non-private one' };
+  });
+  // Both sessions always run, so one run reports the permanent-private leg and the stock-window leg.
+  if (!first.ok || !second.ok) {
+    return verdict(false, null, [first, second].filter(r => !r.ok).map(r => r.fail).join('; ') + (first.ok ? `; the permanent-private leg passed (${first.detail})` : '') + (second.ok ? `; the stock-window leg passed (${second.detail})` : ''));
+  }
+  return verdict(true, `${first.detail}; ${second.detail}`, null);
+}
+
 const SCENARIOS_TABLE = {
   'popup-action': scenarioPopupAction,
+  'popup-keyboard': scenarioPopupKeyboard,
   buttons: scenarioButtons,
   manage: scenarioManage,
   'tabs-bridge': scenarioTabsBridge,
@@ -641,9 +1100,16 @@ const SCENARIOS_TABLE = {
   sidebar: scenarioSidebar,
   'tab-pages': scenarioTabPages,
   commands: scenarioCommands,
+  'event-page-wake': scenarioEventPageWake,
+  'policies-shell-only': scenarioPoliciesShellOnly,
+  'remove-copy': scenarioRemoveCopy,
+  'frontend-reload': scenarioFrontendReload,
+  'private-access': scenarioPrivateAccess,
 };
 // Scenarios that run on a relaunched shell after the content fixture's XPI install (no temporary fixture).
-const RELAUNCH_SCENARIOS = new Set(['content', 'page-action']);
+const RELAUNCH_SCENARIOS = new Set(['content', 'page-action', 'event-page-wake']);
+// 39-04: scenarios that launch their own session (the plant seeds the profile before the first launch).
+const SELF_LAUNCH_SCENARIOS = new Set(['policies-shell-only', 'private-access']);
 // 38-04 (B5): scenarios that install the surfaces fixture alone, so its background is the only reader of /cmd.
 const B5_SCENARIOS = new Set(['sidebar', 'tab-pages', 'commands']);
 
@@ -652,6 +1118,7 @@ const B5_SCENARIOS = new Set(['sidebar', 'tab-pages', 'commands']);
 const PLANTS_TABLE = {
   'wrong-page': { scenario: 'popup-action', expect: 'the action ran in the stock tab' },
   'popup-native-blocked': { scenario: 'popup-action', expect: 'did not open its page in the native panel' },
+  'popup-esc-swallowed': { scenario: 'popup-keyboard', expect: 'popup focus did not follow the keyboard rules' },
   'create-unadopted': { scenario: 'tabs-bridge', expect: 'never adopted: an orphan overlay' },
   'buttons-stale': { scenario: 'buttons', expect: 'the button shows a stale badge' },
   'pin-lost': { scenario: 'manage', expect: 'the pin did not persist' },
@@ -663,6 +1130,11 @@ const PLANTS_TABLE = {
   'tabpage-in-overlay': { scenario: 'tab-pages', expect: 'tabs.create of the dashboard page did not open it in the stock window' },
   'commands-always-fire': { scenario: 'commands', expect: 'the extension command fired with the IDE focused' },
   'commands-never-fire': { scenario: 'commands', expect: 'the shortcut did not fire with the page /a focused' },
+  'startup-promises-rearmed': { scenario: 'event-page-wake', expect: 'the event page never woke with no stock window' },
+  'policy-default-prerecorded': { scenario: 'policies-shell-only', expect: 'the policy Default engine was not applied with no stock window' },
+  'remove-keeps-storage': { scenario: 'remove-copy', expect: 'reinstall kept old storage' },
+  'frontend-gone-ignored': { scenario: 'frontend-reload', expect: 'a reloaded frontend left the popup or sidebar up' },
+  'shell-not-private': { scenario: 'private-access', expect: 'the denied extension shows a button' },
 };
 const SCENARIOS = SCENARIOS_TABLE;
 const PLANTS = PLANTS_TABLE;
@@ -751,7 +1223,15 @@ async function startHarness() {
       session.queue = [];
       return;
     }
-    if (/^\/[a-z]$/.test(path)) {
+    // 39-13: a fixture with its own channel polls /cmd-<channel>.
+    if (path.startsWith('/cmd-')) {
+      const channel = path.slice('/cmd-'.length);
+      res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
+      res.end(JSON.stringify(session.queues?.[channel] ?? []));
+      if (session.queues) session.queues[channel] = [];
+      return;
+    }
+    if (/^\/([a-z]|wake)$/.test(path)) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       res.end(`<!doctype html><title>page ${path}</title><body>live page ${path}<img src="/img${path}.png" alt=""></body>`);
       return;
@@ -775,9 +1255,14 @@ async function waitSince(from, pred, timeoutMs = 15000) {
 }
 
 // One command for the action fixture's background page: queued on /cmd, answered on /log.
-async function command(op, args = {}) {
+async function command(op, args = {}, channel = '') {
   const opId = `op${++opSeq}`;
-  session.queue.push({ op, opId, ...args });
+  if (channel) {
+    session.queues = session.queues ?? {};
+    (session.queues[channel] = session.queues[channel] ?? []).push({ op, opId, ...args });
+  } else {
+    session.queue.push({ op, opId, ...args });
+  }
   const rec = await waitSince(0, r => r.kind === 'result' && r.opId === opId, 20000);
   if (!rec) throw new Error(`timed out waiting for the ${op} answer`);
   return rec;
@@ -867,7 +1352,12 @@ async function popupState(app) {
 
 // Opens a puzzle row's gear menu and activates the row labelled `label` the way a pointer does (move, then mouse-up).
 async function puzzleRowMenu(app, name, label) {
-  await clickInFrame(app, `.pb-ext-menu .pb-ext-row[data-extension-id=${JSON.stringify(fixtureId(name))}] .pb-ext-row-menu`);
+  // A pointer press on the gear moves chrome focus into the Theia frame, so the gear menu taking focus closes the puzzle
+  // menu as it does for a user; el.click() alone moves no focus. The puzzle menu renders a frame after its button's click.
+  await live.focusTheiaFrame(app);
+  const gear = `.pb-ext-menu .pb-ext-row[data-extension-id=${JSON.stringify(fixtureId(name))}] .pb-ext-row-menu`;
+  await pollUntil(() => app.evaluate(`!!document.querySelector(${JSON.stringify(gear)})`), v => v === true, 5000);
+  await clickInFrame(app, gear);
   const done = await pollUntil(() => app.evaluate(`(() => {
     const item = [...document.querySelectorAll('.lm-Menu .lm-Menu-item')].find(i => i.querySelector('.lm-Menu-itemLabel')?.textContent.trim() === ${JSON.stringify(label)});
     if (!item) return false;
@@ -974,7 +1464,7 @@ function zipRoundTrip(files) {
 }
 
 // The content fixture survives a relaunch, so it installs as an XPI; the others install as temporary add-ons.
-const XPI_FIXTURES = new Set(['content']);
+const XPI_FIXTURES = new Set(['content', 'wake']);
 
 // Writes a fixture into a fresh directory and installs it.
 async function installFixture(app, name) {
@@ -1043,6 +1533,62 @@ async function pageActionThrow(app, body) {
     return null;`);
 }
 
+// The number of stock browser windows (chrome contexts on browser.xhtml) beside the shell.
+async function stockWindowCount(app) {
+  return (await app.contexts('chrome')).filter(entry => entry.url.startsWith('chrome://browser/content/browser.xhtml')).length;
+}
+
+// True once ExtensionParent.browserStartupPromise has resolved (it races extensions-late-startup, which the shell
+// sends after its idle startup tasks), waiting up to 60 s.
+async function lateStartupSeen(app) {
+  return live.inChrome(app, `const { ExtensionParent } = ChromeUtils.importESModule('resource://gre/modules/ExtensionParent.sys.mjs');
+    return Promise.race([ExtensionParent.browserStartupPromise.then(() => true), new Promise(r => setTimeout(() => r(false), 60000))]);`);
+}
+
+// The default search engine's name, or 'error: ...'.
+async function defaultEngine(app) {
+  return live.inChrome(app, `return (async () => {
+    try {
+      const { SearchService } = ChromeUtils.importESModule('moz-src:///toolkit/components/search/SearchService.sys.mjs');
+      await SearchService.init();
+      return (await SearchService.getDefault()).name;
+    } catch (e) {
+      return 'error: ' + e;
+    }
+  })();`);
+}
+
+// The value the SearchEngines policy recorded for its Default, or null when it has not run.
+async function runOnceRecord(app) {
+  return live.inChrome(app, `return Services.prefs.getStringPref(${JSON.stringify(RUN_ONCE_DEFAULT_PREF)}, '') || null;`);
+}
+
+// Makes the first visible engine not named `name` the user's default and clears the policy's record of its Default,
+// so a run of the policy callback is visible as a change; returns that engine's name, or 'error: ...'.
+async function userDefaultOtherThan(app, name) {
+  return live.inChrome(app, `return (async () => {
+    try {
+      const { SearchService } = ChromeUtils.importESModule('moz-src:///toolkit/components/search/SearchService.sys.mjs');
+      await SearchService.init();
+      const engine = (await SearchService.getVisibleEngines()).find(e => e.name !== ${JSON.stringify(name)});
+      if (!engine) return null;
+      await SearchService.setDefault(engine, SearchService.CHANGE_REASON.USER);
+      Services.prefs.clearUserPref(${JSON.stringify(RUN_ONCE_DEFAULT_PREF)});
+      return (await SearchService.getDefault()).name;
+    } catch (e) {
+      return 'error: ' + e;
+    }
+  })();`);
+}
+
+// Every console message so far from the policy engine's error paths (its logger and its callback-failure reports).
+async function policyErrors(app) {
+  return JSON.parse(await live.inChrome(app, `const texts = Services.console.getMessageArray().map(m => String(m.errorMessage || m.message || ''));
+    const api = Cc['@mozilla.org/consoleAPI-storage;1'].getService(Ci.nsIConsoleAPIStorage).getEvents()
+      .filter(e => e.level === 'error').map(e => String(e.prefix || '') + ' ' + (e.arguments || []).map(String).join(' '));
+    return JSON.stringify(texts.concat(api).filter(t => /Enterprise ?Policies|Error running \\w+ callback/i.test(t)));`));
+}
+
 async function stampCheck() {
   const digest = createHash('sha256').update(await readFile(join(live.REPO_ROOT, 'patches/050-extension-tab-host.patch'))).digest('hex');
   const stamp = (await readFile(join(live.REPO_ROOT, 'objdir/.pb-050-build.sha256'), 'utf8')).trim().split(/\s+/)[0];
@@ -1056,22 +1602,29 @@ const SESSION_PREFS = {
   // The content fixture is MV3: its background must not be suspended between the harness's commands.
   'extensions.background.idle.timeout': 3600000,
 };
+// The runOncePerModification record of the SearchEngines policy's Default (Policies.sys.mjs).
+const RUN_ONCE_DEFAULT_PREF = 'browser.policies.runOncePerModification.setDefaultSearchEngine';
+// 39-04: the relaunch fixture and its started record per relaunch scenario, and whether the scenario waits for that
+// record again after the relaunch (an event page must not start until its event).
+const RELAUNCH_FIXTURE = { 'event-page-wake': { name: 'wake', install: app => installFixture(app, 'wake'), started: 'wake-started', restarts: false } };
+const CONTENT_RELAUNCH = { name: 'content', install: app => installFixture(app, 'content'), started: 'content-started', restarts: true };
 
 // A relaunch scenario: the content XPI installs with zero overlays, the shell quits, and the scenario runs on the
 // relaunched shell (same profile) once the fixture's background has started again.
 async function runRelaunchSession(scenarioName, plant) {
+  const fixture = RELAUNCH_FIXTURE[scenarioName] ?? CONTENT_RELAUNCH;
   const profile = await live.makeProfile(SESSION_PREFS);
   process.env.MOZ_PURGE_CACHES = '1';
   try {
     await live.withShell(profile, async app => {
-      await installFixture(app, 'content');
-      if (!(await waitSince(0, r => r.kind === 'content-started'))) throw new Error('BROKEN INSTRUMENT: the content fixture never started');
+      await fixture.install(app);
+      if (!(await waitSince(0, r => r.kind === fixture.started))) throw new Error(`BROKEN INSTRUMENT: the ${fixture.name} fixture never started`);
       if ((await app.quit()) !== 'exited') throw new Error('BROKEN INSTRUMENT: the shell did not quit after the install');
     });
     session = { logs: [], queue: [] };
     return await live.withShell(profile, async app => {
       await live.installPushRecorder(app);
-      if (!(await waitSince(0, r => r.kind === 'content-started', 30000))) throw new Error('BROKEN INSTRUMENT: the content fixture did not start again after the relaunch');
+      if (fixture.restarts && !(await waitSince(0, r => r.kind === fixture.started, 30000))) throw new Error(`BROKEN INSTRUMENT: the ${fixture.name} fixture did not start again after the relaunch`);
       return await SCENARIOS[scenarioName]({ app, plant, command });
     });
   } finally {
@@ -1085,6 +1638,9 @@ async function runSession(scenarioName, plantName = null) {
   try {
     if (RELAUNCH_SCENARIOS.has(scenarioName)) {
       return await runRelaunchSession(scenarioName, plantName ? { name: plantName, ...PLANTS[plantName] } : null);
+    }
+    if (SELF_LAUNCH_SCENARIOS.has(scenarioName)) {
+      return await SCENARIOS[scenarioName]({ plant: plantName ? { name: plantName, ...PLANTS[plantName] } : null, command });
     }
     if (B5_SCENARIOS.has(scenarioName)) {
       return await live.withProbeShell(

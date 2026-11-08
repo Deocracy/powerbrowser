@@ -24,7 +24,7 @@ const FALLBACK_DISPLAY_NAME = 'PowerBrowser';
 // quoted occurrence, which scripts/verify-branding-preflight.mjs asserts
 // from the manifest through the emitter.
 const FALLBACK_LEGAL_NOTICES = [
-    'PowerBrowser is a trademark of Deocracy.',
+    'PowerBrowser is a trademark of Deocracy Institute.',
     'PowerBrowser Dev is not officially associated with Mozilla or its products.',
     'This product (powerbrowser.org) includes Eclipse Theia, a trademark of Eclipse Foundation AISBL.',
 ];

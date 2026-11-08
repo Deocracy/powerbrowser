@@ -24,10 +24,16 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
   1. That the release container can run the bootstrap (network for the taskcluster index, disk) and carries
      `makensis`, `7zz`, `xz` and `bzip2`, which `mach package` (installer stage) and `make_full_update.sh` use. The
      host `mar` tool is expected at `objdir-windows-x86_64/dist/host/bin/mar`; the script fails naming the path if not.
-  2. `upstream/browser/installer/windows/app.tag` carries the stock `Title="Mozilla Firefox"`, shown by the 7z
-     self-extractor. Patch 040 does not touch it; the owner decides it together with items 2 and 3.
+  2. ~~`upstream/browser/installer/windows/app.tag` carries the stock `Title="Mozilla Firefox"`.~~ Resolved by gap
+     plan 54-09 (R3): the generator emits `generated/installer/<variant>/app.tag` with `Title` from
+     `identity.display_name`, and `package-windows.sh` and the `sign-windows` repackage step pass
+     `--tag generated/installer/release/app.tag`. Upstream's file is no longer read. `installer-schema` compares the
+     emitted file with upstream's lines at check time. The live half is the title shown by the first self-extractor run.
   3. The Windows SDK/MSVC bootstrap is fetched by hash-pinned payloads, but the `vs.tar.zst` task artifact comes
      from the taskcluster index; the owner decides whether that is acceptable for a release build.
+     **Accepted 2026-11-04 (owner answer A8).** The hash-pinned taskcluster `vs.tar.zst` toolchain is acceptable for a
+     release build. It is Mozilla's own cross-build path and the payloads inside are hash-pinned; a mirror is not
+     required and not planned.
 - **Owner steps:**
   1. Complete item 8 (the hosted sidecar job), then dispatch the release workflow at the chosen SHA only after
      54-04's approval gates. The job stops at the staging step until then (it fails closed).
@@ -45,6 +51,36 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
   in the plan's list.
 - **Owner decision:** (a) move the installer and the app readers together in a new patch in the stack, or
   (b) keep `Software\Mozilla` and record it as a known identifier. Then remove or keep the survey URL.
+- **Decided (R3, option a) and landed by gap plan 54-07 (G-54c, 2026-11-03):** patch 040 defines
+  `AppRegRoot` as `Software\${BrandShortName}` (`@MOZ_APP_DISPLAYNAME@`, so `Software\PowerBrowser` in the release
+  branding) and the new patch `045-powerbrowser-registry-root.patch` moves every key whose readers are NSIS or chrome JS:
+  the root (`RegCleanMain`, the HKLM write test, `GetSecondInstallPath`), the `${BrandFullNameInternal}` install keys,
+  `${AppName}\Installer`, `${AppName}\32to64DidMigrate` (reader `UpdateService.sys.mjs`) and `Uninstalled-<channel>`
+  (reader `BrowserGlue.sys.mjs`; upstream's literal `Firefox` subkey became `${AppName}`). D54cd review (2026-11-04): the
+  writer of `${AppName}\Installer\<install hash>`, `InstallerPrefs.sys.mjs`, built its path from `Services.appinfo.vendor`
+  (`Deocracy`), so the key it wrote was not the one `RegCleanPrefs` deletes; 045 now builds it, and the xpcshell
+  `test/unit/head.js` cleanup, from `AppConstants.MOZ_APP_DISPLAYNAME_DO_NOT_USE`, the same root as the NSIS side. Both patches were regenerated
+  with `regenerate-patches.sh`; a sparse scratch replay with `apply-patches.sh --upstream` matched `upstream/`'s index.
+  makensis compiles `installer.nsi` (`installer-build-proof`) and `uninstaller.nsi` from the edited tree.
+- **Residue that stays under `Software\Mozilla\${AppName}` (compiled readers; `check-patch-surface.sh` refuses
+  compiled paths, D-72/D-73):** `TaskBarIDs` (`widget/windows/WinTaskbar.cpp`,
+  `toolkit/mozapps/update/common/commonupdatedir.cpp`, and its JS reader `WindowsInstallsInfo.sys.mjs`), the
+  `MOZ_LAUNCHER_SUBKEY` (`browser/app/winlauncher`), and `Software\Mozilla\MaintenanceService`
+  (`toolkit/mozapps/update/common/updatehelper.h`, `pathhash.cpp`). `NativeManifests.sys.mjs` keeps
+  `Software\Mozilla\NativeMessagingHosts`: third-party native hosts register there and the installer never writes it.
+  Moving the residue needs the owner to add those compiled paths to `ALLOWED_COMPILED_PATHS` (an amendment of D-72/D-73,
+  as Phase 57 B1 did) and a tier-3 build; that is an owner question, not done here.
+  **Decided 2026-11-04 (owner answer A6): keep the residue.** `TaskBarIDs`, the `MOZ_LAUNCHER_SUBKEY` launcher subkey
+  and `MaintenanceService` stay under `Software\Mozilla\<app name>` (and `Software\Mozilla\MaintenanceService`).
+  Reason: each is read by compiled Gecko code (`WinTaskbar.cpp`, `commonupdatedir.cpp`, `winlauncher`,
+  `updatehelper.h`, `pathhash.cpp`), so moving one needs an amendment of D-72/D-73 and a tier-3 build for an
+  identifier no user sees. They are recorded as known identifiers for LEG-01 (item 4): the extension names them as
+  the allowed `Software\Mozilla` keys, only under the product's own subkey, and any other `Software\Mozilla` key
+  stays red. `win-matrix-record` already encodes the same allowance (item 6, step 6).
+- **Survey removed by gap plan 54-08 (R3, 2026-11-03):** patch 040 deletes `URLUninstallSurvey`, the finish-page
+  survey checkbox (`MUI_FINISHPAGE_SHOWREADME*`), `un.Survey`, `$ShouldOpenSurvey` and the `un.onGUIEnd` branch that
+  opened the survey host. The finish-page layout functions already handle a page without the checkbox. Not changed:
+  the installer's `CustomAbort` survey (`AbortSurveyURL`), which runs only for a `Funnelcake` `distribution.ini`.
 
 ## 3. Installer wizard artwork (plan 54-02 Task 1, PKG-12)
 
@@ -53,6 +89,21 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
   not exist in the tree, and `brand/HUMAN-REVIEW.md` requires a signed human review for any new file.
 - **Owner steps:** supply the installer artwork, add it under `brand/`, and re-sign the review in
   `brand/HUMAN-REVIEW.md`. Then regenerate patch 040 with the artwork hunks.
+- **Deferred 2026-11-04 (owner answer A7; target v1.7).** Owner-made installer artwork is deferred to v1.7. v1.6
+  uses the art already in the tree: `brand/` holds only `mark.svg`, and the branding emitter already derives
+  `firefox.ico` and the PNG set from it. The emitter has no BMP writer and no 4-size (16, 32, 48, 64) `.ico` for
+  `firefox64.ico`; adding either is a generator change plus a layout design (wizard header and watermark), which is
+  new artwork in effect and would need a signed `brand/HUMAN-REVIEW.md` entry, so nothing was wired. The four
+  upstream stand-ins below stay, labelled as such by `installer-build-proof`. Re-open in v1.7 with the files below.
+- **Placeholder (R3, 2026-11-03):** the files the owner supplies, with the upstream stand-in each replaces
+  (`upstream/browser/branding/unofficial/`, staged by `installer-build-proof`). None of these files exists yet; nothing
+  in the tree references them until they land:
+  - `brand/installer/wizHeader.bmp` (150x57, 24-bit BMP) replaces `wizHeader.bmp`;
+  - `brand/installer/wizHeaderRTL.bmp` (150x57, 24-bit BMP) replaces `wizHeaderRTL.bmp`;
+  - `brand/installer/wizWatermark.bmp` (164x314, 24-bit BMP) replaces `wizWatermark.bmp`;
+  - `brand/installer/firefox64.ico` (16, 32, 48 and 64 px, as the stand-in) replaces `firefox64.ico`.
+  After they land with a signed `brand/HUMAN-REVIEW.md` entry, the follow-up wires them through the branding emitter
+  (the branding directory is generated, so no patch hunk is needed) and `installer-build-proof` drops the stand-in label.
 
 ## 4. LEG-01 trademark extension (plan 54-02 Task 2)
 
@@ -62,6 +113,10 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
   name the `Software\Mozilla` keys in `uninstaller.nsi` and `installer.nsi`, and the survey host. A green
   extension needs items 2 and 3 settled first. Weakening the comparison to pass would defeat the row.
 - **Owner steps:** settle items 2 and 3, then the extension can land with one plant per surface.
+- **Known identifiers (owner answer A6, 2026-11-04):** the extension must accept exactly these `Software\Mozilla`
+  keys and no others: `TaskBarIDs` and the `MOZ_LAUNCHER_SUBKEY` launcher subkey under `Software\Mozilla\<app name>`,
+  and `Software\Mozilla\MaintenanceService`. Why they stay is in item 2. Artwork (item 3) no longer blocks the
+  extension: it is deferred to v1.7 (A7) and the stand-in files carry no mark the surface check reads.
 
 ## 5. Installer rows widening (plan 54-02 Task 1)
 
@@ -75,6 +130,53 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
 - **What:** the pkg-win11 matrix has never run. The harness files are in `scripts/matrix/`.
 - **Why blocked:** defining a libvirt domain, taking a snapshot, and running a Windows guest need the host,
   the Windows licence, and the owner's approval (54-04).
+- **libvirt access for `pb-runner` (54-04 Task 3 step 2; gap plan 54-10, G-54d, 2026-11-03).** Every option below
+  was checked against the nixos MCP (channels unstable and stable) on 2026-11-03. `virtualisation.libvirtd.qemu.ovmf`
+  no longer exists in either channel: UEFI firmware ships with the QEMU package, and swtpm provides the TPM 2.0 that
+  Windows 11 requires. Claude could not read `/etc/nixos` from its session, so merge this by hand:
+  - Add to `/etc/nixos/configuration.nix` (skip any line that already exists):
+
+    ```nix
+    # Power Browser Windows matrix (54-04): libvirt on legion for the pb-runner user.
+    virtualisation.libvirtd = {
+      enable = true;
+      qemu.swtpm.enable = true;   # TPM 2.0 for the Windows 11 guest
+    };
+    ```
+
+  - Inside the existing `users.users.pb-runner = { ... };` block from the 49-02 runner change, add the line below.
+    Do not write it as a separate `users.users.pb-runner.extraGroups = ...` line next to that block: Nix rejects
+    an attribute that is already defined.
+
+    ```nix
+      extraGroups = [ "libvirtd" ];
+    ```
+
+  - Inside the existing `services.github-runners.powerbrowser-release.extraEnvironment` set, add the line below.
+    `win-matrix-run.sh` calls `virsh` without `-c`, and for a user other than root that connects to
+    `qemu:///session`, where the domain does not exist.
+
+    ```nix
+      LIBVIRT_DEFAULT_URI = "qemu:///system";
+    ```
+
+  - Check, rebuild, commit and push:
+
+    ```sh
+    pkexec bash -c 'export PATH=/run/current-system/sw/bin:/run/wrappers/bin:$PATH; nixos-rebuild dry-build'
+    pkexec bash -c 'export PATH=/run/current-system/sw/bin:/run/wrappers/bin:$PATH; nrs "pb-runner: libvirtd group and swtpm for the Windows matrix (54-04)"'
+    sudo -u pb-runner env LIBVIRT_DEFAULT_URI=qemu:///system virsh list --all   # must list domains, not fail on the socket
+    ```
+
+    Record the `nrs` date in `docs/RELEASING.md` (54-04 Task 3 step 2).
+  - Not verified until the first job: the runner unit's systemd sandboxing may block the libvirt socket
+    (`/run/libvirt/libvirt-sock`). If `virsh` fails only inside a job, set
+    `services.github-runners.powerbrowser-release.serviceOverrides` (for example `ProtectSystem`, `ReadWritePaths`) and
+    record which setting was needed.
+  - The firmware paths in `scripts/matrix/pkg-win11-domain.xml` (`/usr/share/OVMF/...`) do not exist on NixOS. Find
+    the Secure Boot code and variables files with
+    `ls "$(dirname "$(readlink -f "$(command -v qemu-system-x86_64)")")/../share/qemu/" | grep -i edk2`
+    and put those paths in the XML before `virsh define`.
 - **Owner steps:**
   1. Define the domain from `scripts/matrix/pkg-win11-domain.xml` (`virsh define`). The XML's disk and NVRAM
      paths and the OVMF template paths are placeholders for the host.
@@ -93,8 +195,9 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
   5. `win-matrix-guest.ps1` could not be linted or run here (no PowerShell on the build host). Its first run is the
      owner's; expect to fix PowerShell mistakes in the live guest, and the install directory name
      (`%ProgramFiles%\PowerBrowser`) and executable name are assumptions to confirm.
-  6. While item 2 is open the installer writes `Software\Mozilla`; the `win-matrix-record` row derives the expected
-     registry root from patch 040 and expects `Software\Mozilla` until the patch writes `Software\PowerBrowser`.
+  6. Patch 040 now defines `AppRegRoot` (54-07), so `win-matrix-record` expects `Software\PowerBrowser` in the
+     registry diff and allows `Software\Mozilla` only under the product's own `Software\Mozilla\powerbrowser\`
+     subkey (`TaskBarIDs`, the launcher subkey). Any other `Software\Mozilla` key in the diff is red.
 
 ## 7. Background update task (plan 54-03 Task 2, UPD-31)
 
@@ -117,6 +220,16 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
   output or an attestation). Then wire the artifact into `build-windows` as `windows-sidecar/` and the digest into
   `PB_WIN_SIDECAR_SUMS_SHA256` (today a repository variable placeholder in `release.yml`). `build-windows` stops
   at the staging step, failing closed, until both exist.
+- **Resolved statically by gap plan 54-05 (G-54a, 2026-11-03):** `release.yml` has the hosted `windows-sidecar` job
+  (`windows-latest`, contents read, no secret). It builds the sidecar from `inputs.sha`, stages the `package-linux.sh`
+  layout, writes `BUILD_ROOT` and `SHA256SUMS`, admits its own output with `check-win-sidecar.sh check` and `purge`,
+  and exposes the `SHA256SUMS` digest as the job output `sums_sha256`. `build-windows` needs it, downloads the
+  artifact into `windows-sidecar/` and reads `PB_WIN_SIDECAR_SUMS_SHA256` from that output. **No repository variable
+  is created**, because a variable cannot carry a per-run digest inside the run that produces it.
+  `package-windows.sh` now admits the artifact by `lib/backend/main.js`, the path `TheiaService.sys.mjs` loads.
+  `build-windows-shape` checks the edge and the producer (40 plants). **Live half (owner, 54-04 Task 3 step 5):**
+  the first `release.yml` dispatch runs this job for the first time. Record the `windows-sidecar` run link and the
+  printed `SHA256SUMS sha256` line in `54-04-SUMMARY.md`.
 
 ## 9. Windows leftover sidecar reap (review fix CR-03, UPD-30 follow-up)
 
@@ -127,6 +240,49 @@ agent cannot complete it, and the exact owner steps. Plan 54-04 (the owner check
   on the Subprocess handle. A bare-pid reap on Windows needs a verified process-identity check (creation time via
   `kernel32`), behind `PowerBrowserAPI.sys.mjs` and catalogued; it is a new feature, not a fix.
 - **Owner decision:** build it, or accept that a Windows crash can leave one orphan `node.exe` until reboot.
+  **Decided 2026-11-04 (owner answer A8): accept one orphan `node.exe` until reboot.** Recorded as a follow-up
+  (FINISH-PLAN.md section 5 already lists it); the first live Windows run may change the design.
+
+## 10. Unsigned Windows publish path: R2 conflicts with immutable releases (G-54b, written 2026-11-03 by gap plan 54-06)
+
+- **Resolved 2026-11-04 (owner answer A2, option (a)); built by plan 54-11.** `publish-windows`, `descriptor-windows` and
+  `channel-live-windows` are in `release.yml`. The Release stays immutable and Linux-only; R2's "Windows assets joined to
+  the Release" is replaced by the MAR origin. Two differences from option (a) as written below: the Windows files are
+  published under their versioned names only (keys under `<tag>/` are per release, so a stable name there adds nothing),
+  and `release-shape` needed no change (the Cloudflare-scope rule lives in `release-asset-set`). The live run is part of
+  the 54-04 checkpoint.
+
+- **What:** R2 asks for Windows assets joined to the Release, the descriptor commit and channel-live, and for the
+  Windows path never to be a dependency of `sign-publish`, `descriptor` or `channel-live` for Linux.
+- **Why blocked:** the `Immutable releases consequence` section of `docs/RELEASING.md` says that once immutable
+  releases are enabled, an asset cannot be added after publication. `sign-publish` creates the draft with every asset
+  in one call and publishes it once. A Windows job that does not gate that publish therefore reaches an
+  already-published Release, and the upload is refused. Both halves of R2 cannot hold together while immutable
+  releases are on. Also, `build-windows` and `build-linux` share the one legion runner, so a publish that waited for
+  Windows would wait up to the Windows build time (300-minute job timeout, plus the 60-minute sidecar job).
+- **Landed regardless (54-06):** `win-sign-chain` `independence` now covers every Windows job, derived from artifact
+  names. A future Windows publish job may need `sign-publish` and `build-windows`, but no Linux job may need it.
+- **Owner decision**, then Claude writes the follow-up gap plan (next free number, 54-11 or later; 54-07 to 54-10 are G-54c and G-54d) for the chosen option:
+  - **(a) Recommended: Windows publishes after the Linux publish, on the MAR origin, not on the GitHub Release.**
+    The jobs are `publish-windows`, `descriptor-windows` and `channel-live-windows`. `publish-windows` needs
+    `build-windows` and `sign-publish` (environment `release`). It runs the MAR channel gate, signs and verifies the
+    Windows complete MAR with the MAR key, and copies the unsigned installer, the signed MAR and a Windows
+    `SHA256SUMS` write-once to `downloads.powerbrowser.org/<tag>/`. `descriptor-windows` (environment `descriptor`)
+    commits the `WINNT_x86_64-msvc` `update.xml`. `channel-live-windows` checks the Windows descriptor. The rows widened
+    are `release-asset-set` (a `windows-x86_64` row in the asset table), `release-shape` (the R2 credential in one more
+    step) and `channel-live`. The Release stays immutable and Linux-only. The download page links the Windows files
+    on the MAR origin, and the SEC-03 copy "Check the download against SHA256SUMS" points at the Windows
+    `SHA256SUMS` there.
+  - **(b) Keep "joined to the Release": the single publish waits for the Windows outcome.** The `--draft=false` step
+    moves to a final job that needs `sign-publish` and `publish-windows` with `if: always() &&
+    needs.sign-publish.result == 'success'`. A Windows failure does not stop Linux, but every Linux release waits
+    up to about six hours for the Windows build. This contradicts "Linux ships alone" (ruling 2026-11-01) in timing.
+  - **(c) Disable immutable releases** on the repository, so `publish-windows` can `gh release upload` after the Linux
+    publish. This drops the REL-02 immutability guarantee and the `immutable-releases.json` repo control.
+- **Proposed Windows asset names (all options):** `powerbrowser-<version>.windows-x86_64.installer.exe`,
+  `powerbrowser-windows-x86_64.installer.exe`, `powerbrowser-<version>.windows-x86_64.complete.mar` and
+  `powerbrowser-windows-x86_64.complete.mar`, following the generation rule in `docs/RELEASING.md` "Release asset
+  names".
 
 ## 54-02 must_haves that are NOT met (review WR-09; the gate for plan 54-04)
 
@@ -134,8 +290,8 @@ Plan 54-02 landed only the uninstall-ping `Return` in patch 040, the Windows sta
 gate. These must_haves stay open until items 2 to 5 above are resolved by the owner; nothing is weakened to
 close them:
 
-- the fork registry namespace in patch 040 (`Software\PowerBrowser`), item 2;
+- ~~the fork registry namespace in patch 040 (`Software\PowerBrowser`), item 2;~~ Landed by 54-07 (040 and 045), with the compiled-reader residue listed in item 2;
 - the fork installer artwork, item 3;
 - the LEG-01 trademark-surface extension compared as set equality in both directions, item 4;
 - the widened `installer-schema` and `installer-build-proof` rows, item 5;
-- the uninstall survey URL (`uninstaller.nsi` `URLUninstallSurvey`) still opens an upstream host, item 2.
+- ~~the uninstall survey URL (`uninstaller.nsi` `URLUninstallSurvey`) still opens an upstream host, item 2.~~ Removed by 54-08.

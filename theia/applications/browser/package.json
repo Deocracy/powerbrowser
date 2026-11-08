@@ -29,7 +29,7 @@
           "repoUrl": "https://powerbrowser.org",
           "markSvg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 128 128\"><defs><style>.a{fill:#1a1a1a;}@media (prefers-color-scheme: dark){.a{fill:#fff;}}</style></defs><path class=\"a\" d=\"M89.24 27.96A44 44 0 1 1 38.76 27.96L45.64 37.79A32 32 0 1 0 82.36 37.79Z\"/><rect class=\"a\" x=\"58\" y=\"18\" width=\"12\" height=\"46\" rx=\"6\"/></svg>",
           "legalNotices": [
-            "PowerBrowser is a trademark of Deocracy.",
+            "PowerBrowser is a trademark of Deocracy Institute.",
             "PowerBrowser Dev is not officially associated with Mozilla or its products.",
             "This product (powerbrowser.org) includes Eclipse Theia, a trademark of Eclipse Foundation AISBL."
           ]

@@ -159,7 +159,7 @@ export function workflowFaults(wf, { admitted }) {
         for (const step of [...stepsOf(j), j.uses ? { uses: j.uses } : null].filter(Boolean)) {
             if (step.uses && !SHA_PIN.test(step.uses)) fail(where, `uses ${step.uses} without a 40-hex SHA pin`, 'pin the action to a full commit SHA.');
             const m = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)@/.exec(step.uses ?? '');
-            if (m && !m[1].startsWith('actions/') && !m[1].startsWith('github/') && !admitted.has(`${m[1]}@*`)) {
+            if (m && !m[1].startsWith('actions/') && !m[1].startsWith('github/') && !admitted.has(`${m[1]}@*`) && !admitted.has(`${m[1]}@${step.uses.split('@')[1]}`)) {
                 fail(where, `uses ${m[1]}, which .github/settings/actions-selected.json does not admit`, `admit ${m[1]}@* in patterns_allowed in the same commit.`);
             }
         }

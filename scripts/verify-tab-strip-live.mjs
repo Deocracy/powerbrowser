@@ -31,9 +31,11 @@
 //   double (TAB-03): a trusted double-click on the strip's empty space opens
 //     a new tab on the empty page and focuses the pill; the row carries the
 //     empty-strip tooltip. BiDi input is dispatched inside the frame, so it
-//     cannot see chrome's window-drag handles laid over that space
-//     (powerbrowser.js custom title bar); a real double-click there is the
-//     desktop's title-bar action, which the end-of-milestone pass checks.
+//     cannot see chrome's window-drag handles (powerbrowser.js custom title
+//     bar); 39-18 (34 T1) therefore reads chrome's .powerbrowser-drag handles
+//     and requires none to cover the strip's empty space (plant
+//     strip-drag-handle). PB_REAL_INPUT=1 double-clicks there with a real
+//     pointer and requires the window geometry unchanged.
 //
 //   drop (TAB-08): an http(s) link dropped on /a's right half opens /d as a
 //     background tab right after /a; text drops reach the pill's drop path
@@ -100,6 +102,13 @@
 //     bookmark carrying its own title and URL (a positive per-tab read, never
 //     a log line), /c stays current; then with bookmarkPage refusing, the row
 //     shows the strip's bookmark failure sentence.
+//     39-16 (34 T4): Bookmark Tab first bookmarks /c alone; Bookmark All Tabs
+//     then repeats /c, and Bookmark Tab repeats /a: each URL holds exactly one
+//     Places bookmark (IN-02, counted in chrome through PlacesUtils). The
+//     forced failure's sentence must name the application. Plants:
+//     bookmark-all-drops-tab, bookmark-repeat-duplicates (a second Places
+//     entry for /a), bookmark-failure-silent (the strip's bookmark callback
+//     swallows the rejection).
 //
 //   modes (D-02, 34-05): /a, /b on localhost and /c open in Browsing. Through
 //     Coding, Organising and back to Browsing the strip stays the one
@@ -109,6 +118,31 @@
 //     row or zero height), and its stripTabs reader and the home TabBar keep
 //     the order read before the first switch; where it is shown the painted
 //     strip reads that order too.
+//
+//   keyboard-menu (34 T13, WR-04, 39-15): browsing, /a /b /c open, /c current.
+//     /a's tab focused, ArrowRight moves keyboard focus to /b; Shift+F10 and
+//     then the context-menu key on the focused tab each open the tab menu
+//     with its top-left within 4 px of that tab's bottom-left; Enter on /a's
+//     focused tab and Space on /b's activate them; a right-click on /c's tab
+//     opens the menu with its top-left within 4 px of the pointer. With
+//     PB_REAL_INPUT=1 every key and the right-click are real OS input
+//     (ydotool behind pb-kwin's gate); unset, keys go through TIP, which
+//     never reaches GTK's context-menu-key path (nsGtkKeyUtils
+//     MaybeDispatchContextMenuEvent), so the driver raises the keyboard-
+//     shaped contextmenu (button 0, at 0,0) on the focused tab itself.
+//
+//   overflow, 39-16 (34 T8): the numbers are printed (row scroll and client
+//     width, chevron rect, the picked tab's rect inside the row) and chrome's
+//     .powerbrowser-drag handles are read after a scroll: none overlaps a
+//     visible tab, and they equal the frontend's fresh publish.
+//
+//   badge-capture (34 T14, capture only, run when named with PB_CAPTURE_DIR):
+//     /a pinned with its widget marked as playing sound, /b current with /c
+//     and /d selected, the real pointer resting on /c; the shell is captured
+//     to 34-T14-badge-and-selection.png for the owner's visual verdict.
+//
+// PB_CAPTURE_DIR=<dir>: the sessions run headed and captureShell (pb-kwin's
+// gate) writes named PNGs there.
 //
 // The 34-02 scenarios run on pb-live-probe.mjs's withProbeShell (purged
 // startup cache, the push recorder, chrome scope for the clipboard); `menu`
@@ -123,7 +157,7 @@
 // after an unplanted run of the same scenario went green.
 //
 // Usage:
-//   node scripts/verify-tab-strip-live.mjs [--scenario menu,reorder,middle,double,drop,overflow,pin-restore,multi,preview,attention,bookmark-all,modes[,..]] [--self-test]
+//   node scripts/verify-tab-strip-live.mjs [--scenario menu,keyboard-menu,reorder,middle,double,drop,overflow,pin-restore,multi,preview,attention,bookmark-all,modes[,..]] [--self-test]
 //
 // Full tier only: the built binary, a fresh Theia build, a headless browser.
 
@@ -131,9 +165,28 @@ import { newProfile, runCheck, withShell, withShellQuit } from './lib/ng-a-live.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { REPO_ROOT } from './lib/ng-a-live.mjs';
-import { appNameExpr, overlayVisibility, probe, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
+import { mkdirSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { activeWindow, captureShell } from './lib/pb-kwin.mjs';
+import { appNameExpr, focusTheiaFrame, keyRoute, osClientPointer, overlayVisibility, pointerRoute, pressKey, probe, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
 
 const NAME = 'tab-strip-live';
+
+// 39-16: PB_CAPTURE_DIR=<dir> runs the sessions headed and captures the shell at named states.
+const CAPTURE_DIR = process.env.PB_CAPTURE_DIR ? resolve(process.env.PB_CAPTURE_DIR) : '';
+if (CAPTURE_DIR) {
+    process.env.PB_LIVE_HEADED = '1';
+}
+
+/** PB_CAPTURE_DIR set: the PowerBrowser window (captureShell refuses any other active window) to <dir>/<file>. */
+async function capture(file) {
+    if (!CAPTURE_DIR) {
+        return;
+    }
+    mkdirSync(CAPTURE_DIR, { recursive: true });
+    const shot = await captureShell(join(CAPTURE_DIR, file));
+    console.log(`${NAME}: capture ${file}: ${shot.resourceClass} ${shot.width}x${shot.height}`);
+}
 
 // Shared page helpers. No backticks inside.
 const PROBES = `
@@ -144,7 +197,8 @@ const PROBES = `
     const settle = async (test, n) => { for (let i = 0; i < (n || 40) && !test(); i++) await A.sleep(125); return !!test(); };
     const tabNode = w => Array.from(document.querySelectorAll('.pb-tab-strip .pb-tab:not(.pb-tab-stack)')).find(e => e.getAttribute('title') === labelOf(w));
     const menuNode = () => document.querySelector('.lm-Menu.pb-tab-menu');
-    const menuRows = () => Array.from((menuNode() || document.createElement('div')).querySelectorAll('.lm-Menu-item')).map(e => ({
+    // Lumino draws each group separator as an .lm-Menu-item too (data-type separator): not a row.
+    const menuRows = () => Array.from((menuNode() || document.createElement('div')).querySelectorAll('.lm-Menu-item:not([data-type="separator"])')).map(e => ({
         label: (e.querySelector('.lm-Menu-itemLabel') || e).textContent.trim(),
         enabled: !e.classList.contains('lm-mod-disabled'),
         node: e,
@@ -305,6 +359,90 @@ async function pointer(app, context, actions, { release = true } = {}) {
 }
 
 const moveTo = (x, y) => ({ type: 'pointerMove', x: Math.round(x), y: Math.round(y) });
+const pointerAt = (...args) => pointer(...args);
+
+/** keyboard-menu: WR-04's keyboard origin for the tab menu, Enter/Space activation, and a right-click at the pointer. */
+async function keyboardMenu({ app, pages, expect, plant }) {
+    const real = process.env.PB_REAL_INPUT === '1';
+    const setup = await step(app, 'keyboard-menu: setup', `
+        await get('ModeService').activateMode('browsing');
+        const painted = await openTabs(${JSON.stringify({ a: pages.url('/a'), b: pages.url('/b'), c: pages.url('/c') })});
+        shell.activateWidget(S.c);
+        await until(() => current() && current().id === S.c, 5000);
+        if (${JSON.stringify(plant)} === 'keyboard-menu-pointer-origin') {
+            // The fault: the keyboard-origin test inverted, so a keyboard-raised contextmenu is read as a pointer one.
+            const open = strip.openTabMenu.bind(strip);
+            strip.openTabMenu = (w, e) => open(w, new Proxy(e, { get: (t, k) => k === 'button' ? 2 : k === 'clientX' ? t.clientX + 300 : k === 'clientY' ? t.clientY + 200 : typeof t[k] === 'function' ? t[k].bind(t) : t[k] }));
+        }
+        return { painted };
+    `);
+    expect(setup.painted, 'keyboard-menu: setup: /a, /b and /c are not all painted in the strip');
+    const theia = await theiaContext(app);
+    const ESC = { key: 'Escape', code: 'Escape', keyCode: 27 };
+    const focusTab = async name => {
+        expect(await focusTheiaFrame(app) === true, 'keyboard-menu: NOT SCORED -- chrome focus could not be put on the Theia frame');
+        return step(app, `keyboard-menu: focus ${name}`, `
+            const el = tabEl(S.${name});
+            strip.tabStop = byId(S.${name});
+            strip.update();
+            el.focus();
+            return document.activeElement === el;
+        `);
+    };
+    const closeMenu = async () => {
+        await pressKey(app, ESC);
+        return step(app, 'keyboard-menu: close', "return until(() => !document.querySelector('.lm-Menu.pb-tab-menu'), 3000);");
+    };
+    const menuAt = () => step(app, 'keyboard-menu: menu read', `
+        await until(() => document.querySelector('.lm-Menu.pb-tab-menu'), 3000);
+        const m = document.querySelector('.lm-Menu.pb-tab-menu');
+        return m ? { left: m.getBoundingClientRect().left, top: m.getBoundingClientRect().top } : null;
+    `);
+    // Keyboard focus, then the two context-menu keys on the focused tab.
+    expect(await focusTab('a'), 'keyboard-menu: NOT SCORED -- /a\'s strip tab did not take focus');
+    await pressKey(app, { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 });
+    const roved = await step(app, 'keyboard-menu: rove', 'return document.activeElement === tabEl(S.b);');
+    expect(roved, 'keyboard-menu: ArrowRight on /a\'s focused tab did not move keyboard focus to /b');
+    const legs = [];
+    for (const [name, spec] of [['Shift+F10', { key: 'F10', code: 'F10', keyCode: 121, modifiers: ['shift'] }], ['the context-menu key', { key: 'ContextMenu', code: 'ContextMenu', keyCode: 93 }]]) {
+        expect(await focusTab('b'), `keyboard-menu: NOT SCORED -- /b's strip tab did not take focus before ${name}`);
+        await pressKey(app, spec);
+        if (!real) {
+            await step(app, 'keyboard-menu: keyboard-shaped contextmenu', "document.activeElement.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 0, clientX: 0, clientY: 0 })); return true;");
+        }
+        const tab = await step(app, 'keyboard-menu: tab rect', 'return rect(tabEl(S.b));');
+        const menu = await menuAt();
+        const off = menu ? Math.max(Math.abs(menu.left - tab.left), Math.abs(menu.top - tab.bottom)) : null;
+        expect(menu !== null && off <= 4,
+            `keyboard-menu: keyboard tab menu opened away from the focused tab: ${name} on /b put the menu at ${JSON.stringify(menu)}, /b's bottom-left is ${Math.round(tab.left)},${Math.round(tab.bottom)}`);
+        legs.push(`${name} ${off === null ? 'none' : `${Math.round(off * 10) / 10}px`}`);
+        if (menu) {
+            expect(await closeMenu(), `keyboard-menu: Escape did not close the menu ${name} opened`);
+        }
+    }
+    // Enter and Space activate the focused tab.
+    for (const [name, key] of [['a', { key: 'Enter', code: 'Enter', keyCode: 13 }], ['b', { key: ' ', code: 'Space', keyCode: 32 }]]) {
+        expect(await focusTab(name), `keyboard-menu: NOT SCORED -- /${name}'s strip tab did not take focus`);
+        await pressKey(app, key);
+        const now = await step(app, `keyboard-menu: ${key.code}`, `return until(() => current() && current().id === S.${name}, 3000);`);
+        expect(now, `keyboard-menu: ${key.code} on /${name}'s focused tab did not make /${name} current`);
+    }
+    // A right-click opens the menu at the pointer.
+    const c = await step(app, 'keyboard-menu: /c rect', 'return rect(tabEl(S.c));');
+    const at = { x: Math.round(c.left + 20), y: Math.round(c.y) };
+    if (real) {
+        await osClientPointer(app, theia, { ...at, button: 'right', action: 'click' });
+    } else {
+        await pointer(app, theia, [moveTo(at.x, at.y), { type: 'pointerDown', button: 2 }, { type: 'pointerUp', button: 2 }]);
+    }
+    const menu = await menuAt();
+    const off = menu ? Math.max(Math.abs(menu.left - at.x), Math.abs(menu.top - at.y)) : null;
+    expect(menu !== null && off <= 4, `keyboard-menu: a right-click at ${at.x},${at.y} on /c's tab put the menu at ${JSON.stringify(menu)}, not at the pointer`);
+    if (menu) {
+        expect(await closeMenu(), 'keyboard-menu: Escape did not close the right-click menu');
+    }
+    console.log(`  keyboard-menu: keys ${keyRoute.last}, pointer ${real ? `${pointerRoute.last} ${JSON.stringify(pointerRoute.calibration?.error)} after ${pointerRoute.calibration?.attempts} attempt(s)` : 'bidi'}; menu offsets ${legs.join(', ')}, right-click ${off === null ? 'none' : `${Math.round(off * 10) / 10}px`}`);
+}
 
 /** reorder: TAB-02 by a trusted drag in the strip. `plant` names a page fault for --self-test. */
 async function reorder({ app, pages, expect, plant }) {
@@ -415,7 +553,12 @@ async function middle({ app, pages, expect, plant }) {
         const ed = document.createElement('div');
         ed.id = 'pb-paste-frame';
         ed.contentEditable = 'true';
-        Object.assign(ed.style, { position: 'fixed', left: '40%', top: '60%', width: '200px', height: '40px', zIndex: '99999', background: '#fff' });
+        // Real input (39-15): the page overlay covers the main area and (before 39-18) the strip's gaps were chrome drag
+        // handles, so the Theia-frame editable sits over /b's strip tab, Theia DOM a real pointer reaches.
+        const bTab = rect(tabEl(S.b));
+        Object.assign(ed.style, ${JSON.stringify(process.env.PB_REAL_INPUT === '1')}
+            ? { position: 'fixed', left: bTab.left + 'px', top: bTab.top + 'px', width: (bTab.right - bTab.left) + 'px', height: (bTab.bottom - bTab.top) + 'px', zIndex: '99999', background: '#fff' }
+            : { position: 'fixed', left: '40%', top: '60%', width: '200px', height: '40px', zIndex: '99999', background: '#fff' });
         document.body.appendChild(ed);
         S.framePaste = [];
         for (const type of ['input', 'paste']) ed.addEventListener(type, () => S.framePaste.push(type));
@@ -441,6 +584,11 @@ async function middle({ app, pages, expect, plant }) {
     })()`));
     const pagePaste = async () => JSON.parse(await app.evaluateIn(overlay, 'JSON.stringify(window.__pbPaste || [])'));
     const theia = await theiaContext(app);
+    const real = process.env.PB_REAL_INPUT === '1';
+    // 39-15: with PB_REAL_INPUT=1 every middle-click is a real OS button press, calibrated in the document it lands in.
+    const pointer = real
+        ? (app, context, actions) => osClientPointer(app, context, { x: actions[0].x, y: actions[0].y, button: 'middle', action: 'click' }).then(() => new Promise(r => setTimeout(r, 300)))
+        : pointerAt;
 
     // Positive controls: a real middle-click paste into each seeded editable is caught.
     const sentinel = `pb-strip-sentinel-${Date.now()}`;
@@ -456,6 +604,9 @@ async function middle({ app, pages, expect, plant }) {
     // The claim: middle-click on /a's strip tab closes /a and pastes nowhere.
     await setSelection(app, sentinel);
     await app.evaluateIn(overlay, 'window.__pbPaste = []; true');
+    // 34 T6 (real input): text selected in the page behind, and the page's text read before and after the tab middle-click.
+    const pageText = () => app.evaluateIn(overlay, 'document.body.textContent');
+    const textBefore = real ? await app.evaluateIn(overlay, 'getSelection().selectAllChildren(document.body.firstElementChild || document.body); document.body.textContent') : null;
     await step(app, 'middle: reset', "S.framePaste = []; document.getElementById('pb-paste-frame').focus(); return true;");
     await pointer(app, theia, middleClick(setup.a.x, setup.a.y));
     const closed = await step(app, 'middle: after the tab middle-click', `
@@ -473,6 +624,11 @@ async function middle({ app, pages, expect, plant }) {
         expect(pageAfter.length === 0, `middle: the tab middle-click pasted into the page (${pageAfter.join(', ')})`);
     }
     expect(closed.current, 'middle: closing /a by middle-click changed the current tab away from /b');
+    if (real) {
+        const textAfter = await pageText();
+        expect(textAfter === textBefore, `middle: with text selected in the page, the tab middle-click changed the page text (${JSON.stringify(textBefore)} -> ${JSON.stringify(textAfter)})`);
+        console.log(`  middle: pointer ${pointerRoute.last} ${JSON.stringify(pointerRoute.calibration?.error)} after ${pointerRoute.calibration?.attempts} attempt(s); controls frame ${controls.frame.length} page ${pageControl.length}; page text unchanged ${textAfter === textBefore}`);
+    }
 }
 
 /** double: TAB-03 double-click on the empty strip. */
@@ -484,13 +640,44 @@ async function double({ app, pages, expect, plant }) {
         const ids = stripIds();
         const last = rect(tabEl(ids[ids.length - 1]));
         const r = rect(row());
-        return { painted, x: Math.min(last.right + 40, r.right - 12), y: r.y, tooltip: row().getAttribute('title'), count: webTabs().length };
+        // 34 T1 plant: the pre-39-18 publish, the strip's empty tail sent to chrome as a window-drag handle again.
+        const bar = get('ChromeBarContribution');
+        if (${JSON.stringify(plant)} === 'strip-drag-handle') {
+            const send = bar.webTabs.send.bind(bar.webTabs);
+            bar.webTabs.send = msg => send(msg.kind !== 'windowDragRegions' ? msg
+                : { ...msg, rects: [...msg.rects, { x: last.right, y: r.top, w: r.right - last.right, h: r.bottom - r.top }] });
+        }
+        bar.lastDragRegions = '';
+        bar.publishDragRegions();
+        await sleep(400);
+        return { painted, x: Math.min(last.right + 40, r.right - 12), y: r.y, tab: rect(tabEl(S.a)), tooltip: row().getAttribute('title'), count: webTabs().length,
+            empty: { left: last.right, right: r.right, top: r.top, bottom: r.bottom } };
     `);
     expect(setup.painted, 'double: setup: /a is not painted in the strip');
+    // 34 T1 (39-18): chrome's handles, read back in chrome, cover none of the strip's empty space the double-click targets.
+    const handles = JSON.parse(await app.evaluateIn(app.chrome,
+        "JSON.stringify([...document.querySelectorAll('.powerbrowser-drag')].map(h => [h.style.left, h.style.top, h.style.width, h.style.height].map(parseFloat)))"));
+    const e = setup.empty;
+    const covering = handles.filter(([x, y, w, h]) => x < e.right - 1 && x + w > e.left + 1 && y < e.bottom - 1 && y + h > e.top + 1);
+    console.log(`  double: empty strip ${JSON.stringify(e)}; ${handles.length} drag handle(s) ${JSON.stringify(handles)}`);
+    expect(handles.length > 0, 'double: NOT SCORED -- chrome holds no window-drag handles, so their absence over the strip proves nothing');
+    expect(covering.length === 0, `double: a window-drag handle covers the empty strip: ${JSON.stringify(covering)}`);
     expect(setup.tooltip === copyRow('emptyStripTooltip'), `double: the empty strip's tooltip is ${JSON.stringify(setup.tooltip)}`);
     const theia = await theiaContext(app);
-    await pointer(app, theia, [moveTo(setup.x, setup.y), { type: 'pointerDown', button: 0 }, { type: 'pointerUp', button: 0 },
-        { type: 'pointerDown', button: 0 }, { type: 'pointerUp', button: 0 }]);
+    const real = process.env.PB_REAL_INPUT === '1';
+    let frameBefore;
+    if (real) {
+        // 34 T1: a native double-click on the strip's empty space, which publishDragRegions sent as a window-drag
+        // handle before 39-18 (no mousemove reached the Theia frame there, and the planted run restores that):
+        // calibrate on /a's tab (Theia DOM) and act on the gap through the same mapping.
+        const calibrateAt = { x: Math.round(setup.tab.x), y: Math.round(setup.tab.y) };
+        await osClientPointer(app, theia, { x: Math.round(setup.x), y: Math.round(setup.y), calibrateAt, action: 'move' });
+        frameBefore = activeWindow();
+        await osClientPointer(app, theia, { x: Math.round(setup.x), y: Math.round(setup.y), calibrateAt, button: 'left', action: 'double' });
+    } else {
+        await pointer(app, theia, [moveTo(setup.x, setup.y), { type: 'pointerDown', button: 0 }, { type: 'pointerUp', button: 0 },
+            { type: 'pointerDown', button: 0 }, { type: 'pointerUp', button: 0 }]);
+    }
     const opened = await step(app, 'double: after the double-click', `
         const grew = await until(() => webTabs().length === ${setup.count} + 1, 5000);
         await until(() => document.activeElement && document.activeElement.classList.contains('pb-chrome-bar-input'), 3000);
@@ -503,6 +690,14 @@ async function double({ app, pages, expect, plant }) {
     `);
     expect(opened.grew && opened.emptyPage, `double: a double-click on the empty strip opened no new tab on the empty page (${JSON.stringify(opened)})`);
     expect(opened.pillFocused, 'double: the new tab from the empty strip did not focus the pill');
+    if (real) {
+        await new Promise(r => setTimeout(r, 1000));
+        const frameAfter = activeWindow();
+        const geometry = w => w && `${w.x},${w.y} ${w.width}x${w.height}`;
+        expect(geometry(frameAfter) === geometry(frameBefore),
+            `double: the native double-click on the strip moved or resized the window (maximize toggle): ${geometry(frameBefore)} -> ${geometry(frameAfter)}`);
+        console.log(`  double: pointer ${pointerRoute.last} ${JSON.stringify(pointerRoute.calibration?.error)} after ${pointerRoute.calibration?.attempts} attempt(s); window ${geometry(frameBefore)} -> ${geometry(frameAfter)}`);
+    }
 }
 
 /** drop: TAB-08 link, text and refused drops on the strip. */
@@ -595,8 +790,10 @@ async function overflow({ app, pages, expect, plant }) {
         row().scrollLeft = 0;
         await sleep(100);
         const hidden = stripIds().find(id => !inRow(id));
-        return { painted, overflowing, shown, tooltip: shown ? chevron().getAttribute('title') : null, hidden: hidden || null };
+        return { painted, overflowing, shown, tooltip: shown ? chevron().getAttribute('title') : null, hidden: hidden || null,
+            scrollWidth: row().scrollWidth, clientWidth: row().clientWidth, chevronRect: shown ? rect(chevron()) : null };
     `);
+    console.log(`${NAME}: overflow: row scrollWidth ${forced.scrollWidth} clientWidth ${forced.clientWidth}; chevron ${JSON.stringify(forced.chevronRect)}`);
     expect(forced.painted, 'overflow: setup: /a, /b and /c are not all painted in the strip');
     expect(forced.overflowing, 'overflow: NOT SCORED -- the narrowed strip row never overflowed');
     expect(forced.shown, 'overflow: the overflowing strip shows no List All Tabs chevron');
@@ -616,23 +813,54 @@ async function overflow({ app, pages, expect, plant }) {
                 target.node.dispatchEvent(new MouseEvent('mouseup', at));
             }
             await until(() => current() && current().id === ${JSON.stringify(forced.hidden)} && inRow(${JSON.stringify(forced.hidden)}), 5000);
-            return { rows, order, found: !!target, activated: !!current() && current().id === ${JSON.stringify(forced.hidden)}, inView: inRow(${JSON.stringify(forced.hidden)}) };
+            return { rows, order, found: !!target, activated: !!current() && current().id === ${JSON.stringify(forced.hidden)}, inView: inRow(${JSON.stringify(forced.hidden)}),
+                tab: rect(tabEl(${JSON.stringify(forced.hidden)})), row: rect(row()) };
         `);
         expect(picked.rows.length > 0 && picked.rows.join(' | ') === picked.order.join(' | '),
             `overflow: List All Tabs lists [${picked.rows.join(' | ')}], not the strip order [${picked.order.join(' | ')}]`);
         expect(picked.found && picked.activated, `overflow: picking the scrolled-out tab in List All Tabs did not activate it (${JSON.stringify(picked)})`);
         expect(picked.inView, 'overflow: the picked tab was not scrolled into view in the row');
+        console.log(`${NAME}: overflow: picked tab ${JSON.stringify(picked.tab)} inside row ${JSON.stringify(picked.row)}`);
+        // 34 T8: chrome's drag handles after a scroll overlap no visible tab and equal the frontend's fresh publish.
+        const handles = async () => JSON.parse(await app.evaluateIn(app.chrome,
+            "JSON.stringify([...document.querySelectorAll('.powerbrowser-drag')].map(h => [h.style.left, h.style.top, h.style.width, h.style.height].map(parseFloat)))"));
+        const scrolled = await step(app, 'overflow: scroll the row', `${listed}
+            row().scrollLeft = 0;
+            await sleep(300);
+            row().scrollLeft = row().scrollWidth;
+            await sleep(600);
+            const r = rect(row());
+            const tabs = stripIds().map(id => rect(tabEl(id))).filter(Boolean)
+                .map(t => ({ left: Math.max(t.left, r.left), right: Math.min(t.right, r.right), top: t.top, bottom: t.bottom })).filter(t => t.right - t.left > 1);
+            return { scrollLeft: row().scrollLeft, tabs };
+        `);
+        const natural = await handles();
+        await step(app, 'overflow: fresh drag-region publish', `
+            const bar = get('ChromeBarContribution');
+            if (!bar || typeof bar.publishDragRegions !== 'function') return { error: 'no ChromeBarContribution.publishDragRegions to compare against' };
+            bar.lastDragRegions = '';
+            bar.publishDragRegions();
+            await sleep(400);
+            return true;
+        `);
+        const fresh = await handles();
+        const overlapping = natural.filter(([x, y, w, h]) => scrolled.tabs.some(t => x < t.right - 1 && x + w > t.left + 1 && y < t.bottom - 1 && y + h > t.top + 1));
+        console.log(`${NAME}: overflow: after scrollLeft ${scrolled.scrollLeft}, ${natural.length} drag handle(s) ${JSON.stringify(natural)}; fresh publish ${JSON.stringify(fresh)}`);
+        expect(natural.length > 0, 'overflow: NOT SCORED -- chrome holds no window-drag handles, so their staleness cannot be read');
+        expect(overlapping.length === 0, `overflow: a window-drag handle overlaps a visible tab after the row scrolled: ${JSON.stringify(overlapping)}`);
+        expect(JSON.stringify(natural) === JSON.stringify(fresh), `overflow: the window-drag handles after a scroll ${JSON.stringify(natural)} are stale against a fresh publish ${JSON.stringify(fresh)}`);
     }
     // Control, same session and recorders: no overflow, no chevron, and the order still reads.
     const control = await step(app, 'overflow: restore the width', `${listed}
         strip.node.style.maxWidth = '';
         await until(() => row().scrollWidth <= row().clientWidth, 5000);
         await until(() => !chevron(), 3000);
-        return { overflowing: row().scrollWidth > row().clientWidth, chevron: !!chevron(), strip: stripIds(), bar: barIds() };
+        return { overflowing: row().scrollWidth > row().clientWidth, chevron: !!chevron(), strip: stripIds(), bar: barIds(), ours: ['a', 'b', 'c'].every(n => stripIds().includes(S[n])) };
     `);
     expect(!control.overflowing, 'overflow: NOT SCORED -- the full-width strip still overflows, so the chevron-absent control proves nothing');
     expect(!control.chevron, 'overflow: the full-width strip still shows the List All Tabs chevron without overflow');
-    expect(control.strip.length === 3 && control.strip.every(id => control.bar.includes(id)), `overflow: the control session read no strip order (${JSON.stringify(control)})`);
+    // The fresh profile's welcome tab shares the strip, so the count is not 3: /a, /b and /c must all read.
+    expect(control.ours && control.strip.every(id => control.bar.includes(id)), `overflow: the control session read no strip order (${JSON.stringify(control)})`);
 }
 
 /**
@@ -757,7 +985,8 @@ async function multi({ run, pages, expect, plant }) {
         click(S.b, { ctrlKey: true });
         await settle(() => selected().length === 1);
         click(S.c);
-        await settle(() => current() === S.c);
+        // The is-selected class repaints a frame after the strip's state; current() turns true at once.
+        await settle(() => current() === S.c && selected().length === 0);
         return { toggled, stillCurrent, ranged, escaped, plainCleared: selected().length === 0, plainActivated: current() === S.c };
     `);
     expect(setup.toggled.join(',') === 'b,d', `multi: Ctrl-click /b and /d selected [${setup.toggled}], want b,d`);
@@ -785,14 +1014,13 @@ async function multi({ run, pages, expect, plant }) {
         document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
         if (menuNode()) menuNode().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
         await settle(() => !menuNode());
-        // Esc cleared the selection along with the menu; select again for each bulk row.
+        // Esc cleared the selection along with the menu; select again for each bulk row. Always: the painted
+        // is-selected class lags the strip's state by a frame, so it can still read b,d once Esc has cleared it.
         const reselect = async () => {
-            if (selected().join(',') !== 'b,d') {
-                strip().clearSelection();
-                click(S.b, { ctrlKey: true });
-                click(S.d, { ctrlKey: true });
-                await settle(() => selected().join(',') === 'b,d');
-            }
+            strip().clearSelection();
+            click(S.b, { ctrlKey: true });
+            click(S.d, { ctrlKey: true });
+            await settle(() => selected().join(',') === 'b,d');
         };
         const act = async label => {
             await reselect();
@@ -830,7 +1058,9 @@ async function multi({ run, pages, expect, plant }) {
         expect(['b', 'd'].every(n => hits.some(entry => entry.tab === n)), `multi: ${label} did not reach both /b and /d (${hits.map(entry => entry.tab).join(', ')})`);
     };
     only('Move 2 Tabs to Start', bulk.moved.ran, 'id', 'powerbrowser.chrome-bar.tab-move-start');
-    expect(bulk.order.join(',') === 'b,d,a,c', `multi: after Move 2 Tabs to Start the strip reads [${bulk.order}], want b,d,a,c`);
+    // The fresh profile's welcome tab shares the strip: /b, /d lead it, and /a, /c keep their order after them.
+    expect(bulk.order.slice(0, 2).join(',') === 'b,d' && bulk.order.filter(n => n === 'a' || n === 'c').join(',') === 'a,c',
+        `multi: after Move 2 Tabs to Start the strip reads [${bulk.order}], want b,d first and then a,c`);
     only('Mute 2 Tabs', bulk.muted.ran, 'id', 'powerbrowser.chrome-bar.tab-mute');
     only('Mute 2 Tabs (webTabMute)', bulk.muted.sent, 'kind', 'webTabMute');
     if (!bulk.bookmark.skipped) {
@@ -967,7 +1197,8 @@ async function attention({ app, pages, expect, plant }) {
     const cleared = await step(app, 'attention: activate /a, then /b again', `${marks}
         shell.activateWidget(S.a);
         await until(() => current() && current().id === S.a, 5000);
-        const hidden = !dotOf(S.a);
+        // The strip repaints a frame after the activation that current() already reads.
+        const hidden = await until(() => !dotOf(S.a), 3000);
         const flagCleared = await until(() => byId(S.a).titleChanged === false, 5000);
         shell.activateWidget(S.b);
         await until(() => current() && current().id === S.b, 5000);
@@ -1040,6 +1271,10 @@ async function bookmarkAll({ app, pages, expect, plant }) {
             const original = strip.bookmarkTabs;
             strip.bookmarkTabs = tabs => original(tabs.slice(0, -1));
         }
+        if (${JSON.stringify(plant)} === 'bookmark-failure-silent' && typeof strip.bookmarkTabs === 'function') {
+            const original = strip.bookmarkTabs;
+            strip.bookmarkTabs = async tabs => { try { await original(tabs); } catch (e) { /* the planted fault: swallowed */ } };
+        }
         const tabs = {};
         for (const n of ${JSON.stringify(names)}) {
             const w = byId(S[n]);
@@ -1062,6 +1297,19 @@ async function bookmarkAll({ app, pages, expect, plant }) {
     const stale = names.filter(n => setup.tabs[n].before !== null);
     expect(stale.length === 0, `bookmark-all: NOT SCORED -- ${stale.map(n => '/' + n).join(', ')} already bookmarked on a fresh profile, so a read-back proves nothing`);
 
+    // 34 T4: Bookmark Tab bookmarks /c alone, so Bookmark All Tabs below repeats /c.
+    const tabLabel = copyRow('bookmark');
+    const single = await step(app, 'bookmark-all: Bookmark Tab on /c', `${MENU_PROBES}
+        await openMenu(S.c);
+        await choose(${JSON.stringify(tabLabel)});
+        const store = get('ChromeStoreClient');
+        await until(async () => !!(await store.readBookmarkByUrl(byId(S.c).url)), 10000);
+        return { c: await store.readBookmarkByUrl(byId(S.c).url), a: await store.readBookmarkByUrl(byId(S.a).url) };
+    `);
+    expect(!!single.c && single.c.url === setup.tabs.c.url && single.c.title === setup.tabs.c.label,
+        `bookmark-all: "${tabLabel}" on /c did not bookmark it with its title and URL (${JSON.stringify(single.c)})`);
+    expect(single.a === null, `bookmark-all: "${tabLabel}" on /c also bookmarked /a (${JSON.stringify(single.a)})`);
+
     const done = await step(app, 'bookmark-all: choose the row', `${MENU_PROBES}
         await openMenu(S.a);
         await choose(${JSON.stringify(allLabel)});
@@ -1082,8 +1330,36 @@ async function bookmarkAll({ app, pages, expect, plant }) {
     expect(done.notice === '', `bookmark-all: a successful "${allLabel}" showed the strip notice ${JSON.stringify(done.notice)}`);
     expect(done.current, `bookmark-all: "${allLabel}" changed the current tab away from /c`);
 
-    // Failure copy: bookmarkPage refusing must show the strip's bookmark failure sentence.
+    // IN-02: a repeat leaves exactly one Places bookmark per URL (/c through Bookmark All Tabs, /a through Bookmark Tab).
+    const placesCount = url => app.evaluateIn(app.chrome, `(async () => {
+        const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+        let n = 0;
+        await PlacesUtils.bookmarks.fetch({ url: ${JSON.stringify(url)} }, () => { n += 1; });
+        return n;
+    })()`);
+    await step(app, 'bookmark-all: Bookmark Tab on /a again', `${MENU_PROBES}
+        await openMenu(S.a);
+        await choose(${JSON.stringify(tabLabel)});
+        await sleep(1500);
+        return true;
+    `);
+    if (plant === 'bookmark-repeat-duplicates') {
+        await app.evaluateIn(app.chrome, `(async () => {
+            const { PlacesUtils } = ChromeUtils.importESModule('resource://gre/modules/PlacesUtils.sys.mjs');
+            await PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid, url: ${JSON.stringify(setup.tabs.a.url)}, title: 'planted' });
+            return true;
+        })()`);
+    }
+    const counts = { a: await placesCount(setup.tabs.a.url), c: await placesCount(setup.tabs.c.url) };
+    console.log(`${NAME}: bookmark-all: Places bookmarks after the repeats: /a ${counts.a}, /c ${counts.c}`);
+    for (const n of ['a', 'c']) {
+        expect(counts[n] === 1, `bookmark-all: a repeated bookmark created a second entry: /${n} has ${counts[n]} Places bookmarks for its URL`);
+    }
+
+    // Failure copy: bookmarkPage refusing must show the strip's bookmark failure sentence, naming the application.
+    const appName = await app.evaluate(appNameExpr);
     const sentence = copyRow('bookmarkTabFailed', await subjectOf(app));
+    expect(!!appName && sentence.includes(appName), `bookmark-all: the failure sentence ${JSON.stringify(sentence)} does not name the application (${JSON.stringify(appName)})`);
     const refused = await step(app, 'bookmark-all: a refused bookmarkPage', `${MENU_PROBES}
         const store = get('ChromeStoreClient');
         const original = store.bookmarkPage;
@@ -1097,7 +1373,9 @@ async function bookmarkAll({ app, pages, expect, plant }) {
         }
         return { notice: notice() };
     `);
-    expect(refused.notice === sentence, `bookmark-all: a refused bookmarkPage was not reported with the failure sentence (notice ${JSON.stringify(refused.notice)}, want ${JSON.stringify(sentence)})`);
+    expect(refused.notice !== '', 'bookmark-all: a failed bookmark was silent: a refused bookmarkPage showed no strip notice');
+    expect(refused.notice === '' || refused.notice === sentence,
+        `bookmark-all: a refused bookmarkPage was not reported with the failure sentence (notice ${JSON.stringify(refused.notice)}, want ${JSON.stringify(sentence)})`);
 }
 
 /**
@@ -1178,20 +1456,65 @@ async function modes({ app, pages, expect, plant }) {
     }
 }
 
+/**
+ * badge-capture (34 T14, capture only): a pinned /a marked as playing sound, /b current, /c and /d selected, the pointer
+ * resting on /c, captured for the owner. soundPlaying is set on the widget by the harness (the fixture pages are silent).
+ */
+async function badgeCapture({ app, pages, expect }) {
+    expect(!!CAPTURE_DIR, 'badge-capture: run it with PB_CAPTURE_DIR set (capture only)');
+    if (!CAPTURE_DIR) {
+        return;
+    }
+    const urls = { a: pages.url('/a'), b: otherSite(pages, '/b'), c: pages.url('/c'), d: otherSite(pages, '/d') };
+    const set = await step(app, 'badge-capture: setup', `${MENU_PROBES}
+        await get('ModeService').activateMode('browsing');
+        const painted = await openTabs(${JSON.stringify(urls)});
+        shell.activateWidget(S.b);
+        await until(() => current() && current().id === S.b, 5000);
+        await openMenu(S.a);
+        await choose('Pin Tab');
+        await until(() => strip.isPinned(byId(S.a)), 5000);
+        byId(S.a).soundPlaying = true;
+        byId(S.a).update();
+        strip.update();
+        const click = (id, mods) => { const n = tabEl(id), r = n.getBoundingClientRect();
+            n.dispatchEvent(new MouseEvent('click', Object.assign({ bubbles: true, cancelable: true, button: 0, clientX: r.left + 8, clientY: r.top + 8 }, mods))); };
+        click(S.c, { ctrlKey: true });
+        click(S.d, { ctrlKey: true });
+        await sleep(500);
+        return { painted, pinned: strip.isPinned(byId(S.a)), selected: ['b', 'c', 'd'].filter(n => tabEl(S[n]).classList.contains('is-selected')), c: rect(tabEl(S.c)) };
+    `);
+    console.log(`${NAME}: badge-capture: ${JSON.stringify(set)}`);
+    expect(set.painted && set.pinned, `badge-capture: setup failed (${JSON.stringify(set)})`);
+    const theia = await theiaContext(app);
+    await pointer(app, theia, [moveTo(set.c.x, set.c.y)], { release: false });
+    await new Promise(r => setTimeout(r, 400));
+    await capture('34-T14-badge-and-selection.png');
+}
+
 /** Each scenario and the page fault its --self-test plants, with the text its red line must carry. `probe` scenarios run on withProbeShell. */
 const SCENARIOS = {
     menu: { run: menu, plant: 'menu-acts-on-current', expect: 'reloaded the current tab' },
+    'keyboard-menu': { run: keyboardMenu, probe: true, plant: 'keyboard-menu-pointer-origin', expect: 'keyboard tab menu opened away from the focused tab' },
     reorder: { run: reorder, probe: true, plant: 'reorder-noop', expect: 'did not land after /b' },
     middle: { run: middle, probe: true, prefs: { 'middlemouse.paste': true }, plant: 'middle-not-closing', expect: 'did not close /a' },
-    double: { run: double, probe: true, plant: 'double-noop', expect: 'opened no new tab' },
+    double: { run: double, probe: true, plants: [
+        { plant: 'double-noop', expect: 'opened no new tab' },
+        { plant: 'strip-drag-handle', expect: 'a window-drag handle covers the empty strip' },
+    ] },
     drop: { run: drop, probe: true, plant: 'drop-link-noop', expect: 'did not open /d' },
     overflow: { run: overflow, probe: true, plant: 'overflow-unmeasured', expect: 'shows no List All Tabs chevron' },
     'pin-restore': { run: pinRestore, own: true, plant: 'pin-not-stored', expect: 'was not pinned after the relaunch' },
     multi: { run: multi, plant: 'multi-touches-unselected', expect: 'touched an unselected tab' },
     preview: { run: preview, probe: true, plant: 'preview-never-opens', expect: 'opened no preview card' },
     attention: { run: attention, probe: true, plant: 'attention-flag-dropped', expect: 'showed no attention dot' },
-    'bookmark-all': { run: bookmarkAll, probe: true, plant: 'bookmark-all-drops-tab', expect: 'was not bookmarked' },
+    'bookmark-all': { run: bookmarkAll, probe: true, plants: [
+        { plant: 'bookmark-all-drops-tab', expect: 'was not bookmarked' },
+        { plant: 'bookmark-repeat-duplicates', expect: 'a repeated bookmark created a second entry' },
+        { plant: 'bookmark-failure-silent', expect: 'a failed bookmark was silent' },
+    ] },
     modes: { run: modes, probe: true, plant: 'modes-order-lost', expect: 'did not survive the switch' },
+    'badge-capture': { run: badgeCapture, probe: true, captureOnly: true },
 };
 
 /** One fresh shell for one scenario run: withProbeShell (and its prefs) for a `probe` scenario, else ng-a-live's. */
@@ -1207,7 +1530,7 @@ function launch(scenario, profileName, context) {
 const args = process.argv.slice(2);
 const selfTest = args.includes('--self-test');
 const at = args.indexOf('--scenario');
-const chosen = at >= 0 ? (args[at + 1] ?? '').split(',').filter(Boolean) : Object.keys(SCENARIOS);
+const chosen = at >= 0 ? (args[at + 1] ?? '').split(',').filter(Boolean) : Object.keys(SCENARIOS).filter(name => !SCENARIOS[name].captureOnly);
 const unknown = chosen.filter(name => !SCENARIOS[name]);
 if (unknown.length || chosen.length === 0) {
     console.error(`verify-${NAME}: unknown scenario(s) ${unknown.join(', ') || '(none given)'}; known: ${Object.keys(SCENARIOS).join(', ')}`);
@@ -1218,20 +1541,22 @@ await runCheck(`verify-${NAME}${selfTest ? ' --self-test' : ''}`, async ({ pages
     for (const name of chosen) {
         const scenario = SCENARIOS[name];
         await launch(scenario, name, { pages, expect });
-        if (!selfTest || failures.length) {
+        if (!selfTest || failures.length || scenario.captureOnly) {
             if (!failures.length) {
                 console.log(`${NAME}: ${name}: PASS`);
             }
             continue;
         }
-        // The unplanted run above is the positive control; the planted run must go red naming the fault.
-        const planted = [];
-        const plantedExpect = (ok, message) => { if (!ok) planted.push(message); };
-        await launch(scenario, `${name}-plant`, { pages, expect: plantedExpect, plant: scenario.plant });
-        expect(planted.some(line => line.includes(scenario.expect)),
-            `${name}: plant ${scenario.plant} did not go red naming "${scenario.expect}" (got ${planted.length ? planted.join(' | ') : 'green'})`);
-        if (!failures.length) {
-            console.log(`${NAME}: ${name}: plant ${scenario.plant} went red: ${planted.find(line => line.includes(scenario.expect))}`);
+        // The unplanted run above is the positive control; each planted run must go red naming its fault.
+        for (const { plant, expect: want } of scenario.plants ?? [{ plant: scenario.plant, expect: scenario.expect }]) {
+            const planted = [];
+            const plantedExpect = (ok, message) => { if (!ok) planted.push(message); };
+            await launch(scenario, `${name}-${plant}`, { pages, expect: plantedExpect, plant });
+            expect(planted.some(line => line.includes(want)),
+                `${name}: plant ${plant} did not go red naming "${want}" (got ${planted.length ? planted.join(' | ') : 'green'})`);
+            if (!failures.length) {
+                console.log(`${NAME}: ${name}: plant ${plant} went red: ${planted.find(line => line.includes(want))}`);
+            }
         }
     }
 });

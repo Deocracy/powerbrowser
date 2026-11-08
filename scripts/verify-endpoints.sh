@@ -55,8 +55,12 @@ BIN_DIR="$REPO_ROOT/objdir/dist/bin"
 BIN_PATH="$BIN_DIR/powerbrowser"
 ALLOWLIST="$REPO_ROOT/powerbrowser/endpoint-allowlist.json"
 BRANDING_PREF_FILE="$BIN_DIR/browser/defaults/preferences/firefox-branding.js"
+POLICIES_FILE="$BIN_DIR/distribution/policies.json"
+# TEL-09 (57-06): the crash-ping host is derived from this file at check time, never kept here.
+CRASHPING_LIB="$REPO_ROOT/upstream/toolkit/crashreporter/crashping/src/lib.rs"
 
 HELP="Usage: verify-endpoints.sh [--layer 1|2|3|4] [--positive-control] [--help]
+       verify-endpoints.sh --layer 3 --crash-ping [--positive-control]
        verify-endpoints.sh --interrupt-self-test
        verify-endpoints.sh --disposition-self-test
 
@@ -68,6 +72,12 @@ No flag runs all four layers' real assertions.
   --positive-control     Run the selected layer(s)' positive control instead
                           of their real assertion; exits 0 only if the
                           control(s) correctly went red (layers 1-3)
+  --crash-ping           Layer 3 only, on a reporter-enabled build (TEL-09):
+                          crash one content process inside the window and fail
+                          if the crash-ping host (derived from upstream's
+                          crashping/src/lib.rs) resolves before consent. With
+                          --positive-control the fresh profile states consent
+                          true, and the run must go red naming that host.
   --interrupt-self-test  Sends a real SIGINT into a real running layer-3
                           positive control on purpose, and asserts the
                           installed pref file survives byte-identical.
@@ -84,6 +94,7 @@ LAYER_ARG=""
 DO_CONTROL=0
 INTERRUPT_SELF_TEST=0
 DISPOSITION_SELF_TEST=0
+CRASH_PING=0
 
 args=("$@")
 i=0
@@ -104,6 +115,7 @@ while [ "$i" -lt "${#args[@]}" ]; do
     --positive-control) DO_CONTROL=1 ;;
     --interrupt-self-test) INTERRUPT_SELF_TEST=1 ;;
     --disposition-self-test) DISPOSITION_SELF_TEST=1 ;;
+    --crash-ping) CRASH_PING=1 ;;
     --help)
       echo "$HELP"
       exit 0
@@ -118,6 +130,11 @@ done
 
 if [ "$INTERRUPT_SELF_TEST" -eq 1 ] && { [ -n "$LAYER_ARG" ] || [ "$DO_CONTROL" -eq 1 ]; }; then
   echo "verify-endpoints: FAIL -- --interrupt-self-test is mutually exclusive with --layer/--positive-control" >&2
+  exit 1
+fi
+
+if [ "$CRASH_PING" -eq 1 ] && [ "$LAYER_ARG" != "3" ]; then
+  echo "verify-endpoints: FAIL -- --crash-ping applies to --layer 3 only" >&2
   exit 1
 fi
 
@@ -393,14 +410,36 @@ endpoint_violations() {
   ' "$REPO_ROOT/scripts/lib/endpoint-verdict.mjs" "$1" "$2"
 }
 
+# crash_ping_host LIB_RS -- the host of the literal TELEMETRY_SERVER constant in LIB_RS; exits
+# non-zero with no output when the constant is gone (the same rule as verify-crash-ping-consent.mjs).
+crash_ping_host() {
+  sed -nE 's#^const TELEMETRY_SERVER: &str = "https://([A-Za-z0-9.-]+)/?";#\1#p' "$1" 2>/dev/null | head -n1 | grep .
+}
+
+# run_layer3_impl CONTROL(0|1) [CRASH(0|1)] -- CRASH=1 is the TEL-09 crash-ping run (57-06).
 run_layer3_impl() {
-  local control="$1"
+  local control="$1" crash="${2:-0}"
+  local crash_host="" crash_err=""
+  if [ "$crash" -eq 1 ]; then
+    # Positive precondition: without the client binary this is a --disable-crashreporter build
+    # and a clean result would mean nothing.
+    if [ ! -x "$BIN_DIR/crashreporter" ]; then
+      echo "verify-endpoints: layer 3 crash-ping FAIL -- $BIN_DIR/crashreporter is missing, so this is not a reporter-enabled build and the check cannot run" >&2
+      return 1
+    fi
+    if ! crash_host="$(crash_ping_host "$CRASHPING_LIB")"; then
+      echo "verify-endpoints: layer 3 crash-ping FAIL -- no literal TELEMETRY_SERVER in $CRASHPING_LIB to derive the crash-ping host from" >&2
+      return 1
+    fi
+  fi
 
   # track_pref_backup registers the restore with cleanup()'s trap coverage,
   # so a SIGINT during the 35-second sleep below (previously CR-02: the
   # trap fires cleanup(); exit 130 without ever reaching this function's own
   # restore) now restores the pref file before the process exits.
-  if [ "$control" -eq 1 ]; then
+  # The crash-ping control states consent in the profile instead (below); adding the OpenH264
+  # violation to it would let the control pass without the crash-ping host.
+  if [ "$control" -eq 1 ] && [ "$crash" -eq 0 ]; then
     track_pref_backup "$BRANDING_PREF_FILE"
     # media.gmp-gmpopenh264.enabled=true alone is a vacuous control after the
     # BRAND-04 ledger-entry-5 fix (2026-08-29): the ciscobinary.openh264.org
@@ -424,8 +463,33 @@ PREFEOF
   profile_dir="$(mktemp -d)"
   track_temp "$profile_dir"
 
+  local -a env_prefix=()
+  if [ "$crash" -eq 1 ]; then
+    # The consent the patched reporter and Gecko's in-process crash ping read is the profile's
+    # prefs.js; the control states it true, the assertion leaves the profile empty.
+    if [ "$control" -eq 1 ]; then
+      printf 'user_pref("datareporting.healthreport.uploadEnabled", true);\n' > "$profile_dir/prefs.js"
+      # The shipped DisableTelemetry policy setAndLockPref()s uploadEnabled false
+      # (Policies.sys.mjs), and a locked pref beats the user_pref above, so the control
+      # drops that policy for this run. The branding-pref slot is unused on this path, so
+      # the one track_pref_backup slot carries the restore under cleanup()'s trap.
+      if [ -f "$POLICIES_FILE" ]; then
+        track_pref_backup "$POLICIES_FILE"
+        if ! node -e 'const fs=require("fs"),f=process.argv[1],j=JSON.parse(fs.readFileSync(f,"utf8"));delete j.policies.DisableTelemetry;fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n")' "$POLICIES_FILE"; then
+          restore_pref_backup
+          echo "verify-endpoints: layer 3 crash-ping positive control FAIL -- could not remove DisableTelemetry from $POLICIES_FILE" >&2
+          return 1
+        fi
+      fi
+    fi
+    # MOZ_AUTOMATION and MOZ_DISABLE_NONLOCAL_CONNECTIONS=1 clear the Glean uploader (crashping
+    # lib.rs init_with_no_lock), which would make the control vacuous; the other two disable the
+    # reporter or skip its dialog.
+    env_prefix=(env -u MOZ_CRASHREPORTER_DISABLE -u MOZ_CRASHREPORTER_AUTO_SUBMIT -u MOZ_AUTOMATION -u MOZ_DISABLE_NONLOCAL_CONNECTIONS)
+  fi
+
   MOZ_LOG=nsHostResolver:5 MOZ_LOG_FILE="$log_base" \
-    "$BIN_PATH" --headless --profile "$profile_dir" "https://firefox.settings.services.mozilla.com/" &
+    "${env_prefix[@]}" "$BIN_PATH" --headless --profile "$profile_dir" "https://firefox.settings.services.mozilla.com/" &
   ACTIVE_PID=$!
   # 35s, not 20s (03-03 finding): app.update.timerFirstInterval defaults to
   # 30000ms (toolkit/components/timermanager/UpdateTimerManager.sys.mjs:97-103),
@@ -436,7 +500,23 @@ PREFEOF
   # false-negative), services.addons.mozilla.org, update.googleapis.com and
   # www.google.com, none of which a 20-second capture could ever see. 35s
   # gives >=5s of margin past the 30s minimum for host-load jitter.
-  sleep 35
+  if [ "$crash" -eq 1 ]; then
+    # A content-process crash is handled in the parent (CrashManager), whose crash ping goes
+    # through Gecko's resolver and so into this log. shortcut: a main-process crash pings from the
+    # separate crashreporter client, whose DNS MOZ_LOG never sees; that path stays on the patch-055
+    # static gate (crash-ping-consent) until a client-side capture exists.
+    sleep 10
+    local child
+    child="$(pgrep -P "$ACTIVE_PID" -f -- '-contentproc' | head -n1)"
+    if [ -z "$child" ]; then
+      crash_err="no content process to crash 10 s after launch"
+    elif ! kill -SEGV "$child" 2>/dev/null; then
+      crash_err="could not signal content process $child"
+    fi
+    sleep 25
+  else
+    sleep 35
+  fi
   kill "$ACTIVE_PID" 2>/dev/null || true
   wait "$ACTIVE_PID" 2>/dev/null || true
   ACTIVE_PID=""
@@ -452,6 +532,16 @@ PREFEOF
   # restore_pref_backup is a no-op when nothing was tracked (the non-control
   # path), so this call site needs no `if [ "$control" -eq 1 ]` wrapper.
   restore_pref_backup
+
+  if [ -n "$crash_err" ]; then
+    echo "verify-endpoints: layer 3 crash-ping FAIL -- $crash_err" >&2
+    return 1
+  fi
+  # Positive observation that the crash happened and the reporter caught it.
+  if [ "$crash" -eq 1 ] && ! compgen -G "$profile_dir/minidumps/*.dmp" >/dev/null; then
+    echo "verify-endpoints: layer 3 crash-ping FAIL -- no minidump under the profile after the induced crash, so the reporter did not catch it" >&2
+    return 1
+  fi
 
   if [ -z "$extracted" ]; then
     echo "verify-endpoints: layer 3 FAIL -- empty extracted host set; the check never ran" >&2
@@ -476,6 +566,21 @@ PREFEOF
     return 1
   fi
 
+  if [ "$crash" -eq 1 ]; then
+    if [ "$control" -eq 1 ]; then
+      if grep -qxF "$crash_host" <<< "$violations"; then
+        echo "verify-endpoints: layer 3 crash-ping positive control PASS -- consent true surfaced $crash_host"
+        return 0
+      fi
+      echo "verify-endpoints: layer 3 crash-ping positive control FAIL -- consent true did NOT surface $crash_host" >&2
+      return 1
+    fi
+    if grep -qxF "$crash_host" <<< "$extracted"; then
+      echo "verify-endpoints: layer 3 crash-ping FAIL -- the crash-ping host $crash_host resolved before consent" >&2
+      return 1
+    fi
+  fi
+
   if [ "$control" -eq 1 ]; then
     if [ -n "$violations" ]; then
       echo "verify-endpoints: layer 3 positive control PASS -- re-enabling OpenH264 correctly surfaced a violation"
@@ -490,18 +595,21 @@ PREFEOF
     sed '/^$/d;s/^/  /' <<< "$violations" >&2
     return 1
   fi
+  if [ "$crash" -eq 1 ]; then
+    echo "verify-endpoints: layer 3 crash-ping PASS -- a content crash was caught (minidump written) and $crash_host never resolved without consent"
+  fi
   echo "verify-endpoints: layer 3 PASS -- all resolved hosts are allowlisted"
   return 0
 }
 
 run_layer3() {
   echo "verify-endpoints: layer 3 (network, MOZ_LOG)..."
-  run_layer3_impl 0
+  run_layer3_impl 0 "$CRASH_PING"
 }
 
 run_layer3_control() {
   echo "verify-endpoints: layer 3 positive control..."
-  run_layer3_impl 1
+  run_layer3_impl 1 "$CRASH_PING"
 }
 
 # ---------------------------------------------------------------------------
@@ -664,6 +772,31 @@ JSONEOF
   # request to it (the update download must never reach it) fails against the real allowlist.
   verdict "github-com-unattended-real-allowlist" "$ALLOWLIST" 0 github.com red
   verdict "github-com-after-click-real-allowlist" "$ALLOWLIST" 1 github.com green
+
+  # 57-06 (TEL-09): the --crash-ping host is derived from lib.rs, and an unattended resolution
+  # of it fails against the real allowlist. The derivation follows the source and fails when the
+  # constant is gone, so a hand-kept literal could not pass these two plants.
+  local cp_host
+  if ! cp_host="$(crash_ping_host "$CRASHPING_LIB")"; then
+    echo "verify-endpoints: disposition self-test FAIL -- crash-ping-derivation: no TELEMETRY_SERVER in $CRASHPING_LIB" >&2
+    rc=1
+  else
+    verdict "crash-ping-host-unattended-real-allowlist" "$ALLOWLIST" 0 "$cp_host" red
+    sed "s#https://$cp_host#https://moved.$cp_host#" "$CRASHPING_LIB" > "$tmp/lib-moved.rs"
+    if [ "$(crash_ping_host "$tmp/lib-moved.rs")" = "moved.$cp_host" ]; then
+      echo "verify-endpoints: disposition self-test PASS -- crash-ping-derivation-moved: follows lib.rs to moved.$cp_host"
+    else
+      echo "verify-endpoints: disposition self-test FAIL -- crash-ping-derivation-moved: did not follow lib.rs" >&2
+      rc=1
+    fi
+    grep -v '^const TELEMETRY_SERVER' "$CRASHPING_LIB" > "$tmp/lib-removed.rs"
+    if crash_ping_host "$tmp/lib-removed.rs" >/dev/null; then
+      echo "verify-endpoints: disposition self-test FAIL -- crash-ping-derivation-removed: derived a host with the constant gone" >&2
+      rc=1
+    else
+      echo "verify-endpoints: disposition self-test PASS -- crash-ping-derivation-removed: red, names TELEMETRY_SERVER"
+    fi
+  fi
 
   # Every user-initiated host in the real allowlist, planted unattended, must go red naming it.
   local real_hosts host n=0

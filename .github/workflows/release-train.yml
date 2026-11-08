@@ -39,6 +39,10 @@
 # report prints its would-write view. A conflict is one issue; the conflict and uptake
 # issues are still printed, not written.
 #
+# The Theia inflow (Phase 51, AUTO-02). sweep-clock also decides the Theia inflow tick (the first sweep after
+# a month's last Thursday), and renovate-theia runs self-hosted Renovate on that tick or on owner dispatch with
+# renovate-theia=true, in the bot environment, never in a dry run.
+#
 # Live facts (plan 43-06). derive collects them with read-only GETs (the bump PRs and their
 # verify check, the pin's merge SHA, its release.yml run, pending deployments and jobs, the
 # Release at the pin's key and its expected assets), and report writes exactly one tracking
@@ -55,7 +59,7 @@ name: Release train
 
 run-name: ${{ inputs.reason == 'fix' && (inputs.dry-run && format('fix dry-run {0} {1} attempt {2}', inputs.release-key, inputs.class, inputs.attempt) || format('fix {0} {1} attempt {2} {3}', inputs.release-key, inputs.class, inputs.attempt, inputs.fingerprint)) || format('release train {0}', inputs.reason) }}
 
-# shortcut: the dispatch takes reason and dry-run only, since the tag and release inputs were validated and then ignored, so an owner-forced bump is not possible from dispatch, upgrade when an owner-forced bump or a release-key lookup is approved and wired into detect.
+# shortcut: besides the fixer inputs, the dispatch takes reason, dry-run and renovate-theia only, since the tag and release inputs were validated and then ignored, so an owner-forced bump is not possible from dispatch, upgrade when an owner-forced bump or a release-key lookup is approved and wired into detect.
 on:
   workflow_dispatch:
     inputs:
@@ -65,6 +69,11 @@ on:
         type: string
       dry-run:
         description: "Validate, decide and render; commit, open, comment and dispatch nothing"
+        required: false
+        type: boolean
+        default: false
+      renovate-theia:
+        description: "Run Renovate for the Theia group now (AUTO-02). The sweep also runs it on its first sweep after a month's last Thursday"
         required: false
         type: boolean
         default: false
@@ -128,8 +137,11 @@ jobs:
     permissions:
       contents: read
       actions: read
-      # Read only: the bump PRs and their verify check, for the live facts (plan 43-06).
+      # Read only: the bump PRs and their verify check, for the live facts (plan 43-06). statusCheckRollup reads
+      # check runs and commit statuses, which need checks and statuses read on the job token.
       pull-requests: read
+      checks: read
+      statuses: read
     outputs:
       reason: ${{ steps.validate.outputs.reason }}
       latest-tag: ${{ steps.fixer-inputs.outputs.latest-tag }}
@@ -145,10 +157,15 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           REASON: ${{ inputs.reason }}
+          RENOVATE_THEIA: ${{ inputs.renovate-theia }}
         run: |
           set -eu
           # A workflow_run wake carries no dispatched reason; it is a self wake.
           if [ "$EVENT" = "workflow_run" ]; then REASON=self; fi
+          case "${RENOVATE_THEIA:-false}" in
+            true|false) ;;
+            *) echo "release-train: FAIL -- renovate-theia must be true or false, got '$RENOVATE_THEIA'. Next step: dispatch with -f renovate-theia=true or leave it out." >&2; exit 1 ;;
+          esac
           # A case pattern matches the whole value, not a line of it.
           case "$REASON" in
             tick|owner|self|fix) ;;
@@ -165,7 +182,7 @@ jobs:
       # The live facts (plan 43-06, approved 2026-11-03): read-only GETs, so it runs in a dry run too. The bump PRs
       # with their verify check; the merge SHA of the pin's bump PR; the release.yml run titled `Release <sha>` (the
       # same filter dispatch-release uses), its pending deployments and jobs; the Release at the pin's release key
-      # (404 is none) and the expected asset set from its release-manifest.json asset. report derives and renders.
+      # (listed by tag_name, so a draft is seen; absent is none) and the expected asset set from its release-manifest.json asset. report derives and renders.
       - name: Collect the live release-train facts (read)
         id: facts
         if: ${{ inputs.reason != 'fix' }}
@@ -183,7 +200,9 @@ jobs:
             --jq '[.[] | select(.isCrossRepository == false and (.headRefName | startswith("chore/esr-"))) | {number, headRefName, checks: [.statusCheckRollup[]? | select(.name == "verify") | {name, status, conclusion, detailsUrl}]}]' > "$D/open.json"
           gh pr list --repo "$GITHUB_REPOSITORY" --state merged --base main --limit 100 --json number,headRefName,isCrossRepository,mergeCommit \
             --jq '[.[] | select(.isCrossRepository == false and (.headRefName | startswith("chore/esr-")))] | sort_by(.number) | reverse' > "$D/merged.json"
-          SHA="$(jq -r --arg h "chore/esr-${PIN}" '[.[] | select(.headRefName == $h)][0].mergeCommit.oid // empty' "$D/merged.json")"
+          # The pin's merge SHA by --head, the same query dispatch-release uses; merged.json above is only the candidate's
+          # mergedHeads, so a pin PR older than the last 100 merges still resolves here.
+          SHA="$(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --base main --head "chore/esr-${PIN}" --limit 5 --json number,mergeCommit,isCrossRepository --jq '[.[] | select(.isCrossRepository == false)] | sort_by(.number) | reverse | .[0].mergeCommit.oid // empty')"
           [ -z "$SHA" ] || [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "release-train: FAIL -- the merged bump PR names a merge SHA that is not 40 hex. Next step: check the PR." >&2; exit 1; }
           export SHA
           echo '[]' > "$D/runs.json"; echo '[]' > "$D/pending.json"; echo '[]' > "$D/jobs.json"; echo 'null' > "$D/release.json"; echo '[]' > "$D/expected.json"
@@ -195,14 +214,14 @@ jobs:
               gh api -H "$H" "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/pending_deployments" --jq '[.[] | {environment: {id: .environment.id, name: .environment.name}}]' > "$D/pending.json"
               gh api -H "$H" "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?per_page=100" --jq '[.jobs[] | {name, status, conclusion}]' > "$D/jobs.json"
             fi
-            if gh api -H "$H" "repos/$GITHUB_REPOSITORY/releases/tags/$KEY" --jq '{draft, prerelease, assets: [.assets[] | {name}], body: (.body // ""), published_at}' > "$D/release.json" 2> "$D/release.err"; then
-              if jq -e '.assets | any(.name == "release-manifest.json")' "$D/release.json" > /dev/null; then
-                gh release download "$KEY" --repo "$GITHUB_REPOSITORY" --pattern release-manifest.json --dir "$D/manifest"
-                node scripts/verify-release-asset-set.mjs --expected --manifest "$D/manifest/release-manifest.json" | cut -f2 | jq -R . | jq -s . > "$D/expected.json"
-              fi
-            else
-              grep -q 'HTTP 404' "$D/release.err" || { cat "$D/release.err" >&2; exit 1; }
-              echo 'null' > "$D/release.json"
+            # The list, not releases/tags/<key>: the tag endpoint returns only published Releases, so a draft would read
+            # as none. shortcut: the 100 newest Releases only, upgrade to paging if older keys must resolve.
+            export KEY
+            gh api -H "$H" "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '[.[] | select(.tag_name == env.KEY)] | if length == 0 then null else .[0] | {draft, prerelease, assets: [.assets[] | {name}], body: (.body // ""), published_at} end' > "$D/release.json"
+            if jq -e '. != null and .draft == false and (.assets | any(.name == "release-manifest.json"))' "$D/release.json" > /dev/null; then
+              gh release download "$KEY" --repo "$GITHUB_REPOSITORY" --pattern release-manifest.json --dir "$D/manifest"
+              node scripts/verify-release-asset-set.mjs --expected --manifest "$D/manifest/release-manifest.json" | cut -f2 | jq -R . | jq -s . > "$D/expected.json"
             fi
           fi
           jq -n --arg repo "$GITHUB_REPOSITORY" --arg key "$KEY" --arg sha "$SHA" \
@@ -228,7 +247,7 @@ jobs:
           FINGERPRINT: ${{ inputs.fingerprint }}
           ATTEMPT: ${{ inputs.attempt }}
           ACTOR: ${{ github.triggering_actor }}
-          OWNER: ${{ github.repository_owner }}
+          OWNER: ${{ vars.OWNER_LOGIN }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -627,6 +646,7 @@ jobs:
       actions: read
     outputs:
       due: ${{ steps.due.outputs.due }}
+      theia-due: ${{ steps.theia.outputs.theia-due }}
       prev-run-id: ${{ steps.prev.outputs.run-id }}
     steps:
       - name: Check out repo
@@ -679,7 +699,270 @@ jobs:
           cat "$RUNNER_TEMP/due.txt"
           grep -E '^due=(true|false)$' "$RUNNER_TEMP/due.txt" >> "$GITHUB_OUTPUT"
 
-  # The only job that enters the bot environment in the sweep. It enters only on a live sweep tick
+      # The Theia inflow tick (AUTO-02): on the day's sweep, due when it is the first sweep after the most recent
+      # last Thursday of a month, the Theia release day. A decision only; renovate-theia acts on it.
+      - name: Decide whether this sweep is the Theia inflow tick
+        id: theia
+        if: ${{ steps.due.outputs.due == 'true' }}
+        env:
+          DRY_RUN: ${{ inputs.dry-run }}
+          PREV_CREATED: ${{ steps.prev.outputs.created-at }}
+        run: |
+          set -eu
+          LAST=""
+          if [ "$DRY_RUN" != "true" ] && [ -n "$PREV_CREATED" ]; then LAST=$(date -u -d "$PREV_CREATED" +%s 2>/dev/null || true); fi
+          node scripts/release-train.mjs --theia-due "$(date -u +%s)" "$LAST" > "$RUNNER_TEMP/theia.txt"
+          cat "$RUNNER_TEMP/theia.txt"
+          grep -E '^theia-due=(true|false)$' "$RUNNER_TEMP/theia.txt" >> "$GITHUB_OUTPUT"
+
+  # The Theia inflow (Phase 51, AUTO-02). Self-hosted Renovate opens or updates the grouped @theia/** pull
+  # request (branch prefix chore/theia-, @theia/monaco-editor-core on its own branch) from .github/renovate.json5,
+  # which Renovate reads from the default branch. It runs on owner dispatch (renovate-theia=true) and on the
+  # sweep's Theia inflow tick, never in a dry run, so it enters the bot environment only to write. Automerge is
+  # off in the config; the owner merges. The action runs Renovate in its own container on its own clone, so
+  # the config carries no post-upgrade hook: renovate-licensing, below, regenerates the notices (BLOCKED.md item 18).
+  renovate-theia:
+    needs: [derive, sweep-clock]
+    if: ${{ !inputs.dry-run && inputs.reason != 'fix' && (inputs.renovate-theia || needs.sweep-clock.outputs.theia-due == 'true') }}
+    # sweep-clock finds the previous sweep among successful runs only, so a failed Renovate run (no bot App yet,
+    # Renovate exiting non-zero) must not fail the sweep run: the job still shows red, the run concludes success.
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: bot
+    permissions: {}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # The config Renovate will read, proven before any credential exists.
+      - name: Prove the Renovate config
+        run: node scripts/verify-renovate-config.mjs
+
+      - name: Mint the bot App token
+        id: app
+        if: ${{ !inputs.dry-run }}
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: powerbrowser
+          permission-contents: write
+          permission-pull-requests: write
+
+      # No RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS: the config runs no hook, and the workflows row (rule renovate-job)
+      # keeps the allow-list out. renovate-version is the version the config was validated with; onboarding off and
+      # a required config keep Renovate from opening an onboarding PR. The git author is the bot address, so
+      # publish-bump-branch.sh in renovate-licensing-publish treats Renovate's commits as bot commits it may extend.
+      # Platform commits off: under an App token Renovate's default (auto) commits through the API as the App's own
+      # identity and ignores the git author, so publish-bump-branch.sh would refuse every Theia branch.
+      - name: Run Renovate for the Theia group
+        if: ${{ !inputs.dry-run }}
+        uses: renovatebot/github-action@1c0cf989c02653fba0efe7ca5772338860ca71dc # v46.3.12
+        with:
+          token: ${{ steps.app.outputs.token }}
+          renovate-version: 44.198.3
+        env:
+          RENOVATE_PLATFORM: github
+          RENOVATE_REPOSITORIES: ${{ github.repository }}
+          RENOVATE_ONBOARDING: "false"
+          RENOVATE_REQUIRE_CONFIG: required
+          RENOVATE_GIT_AUTHOR: release-train <${{ env.BOT_EMAIL }}>
+          RENOVATE_PLATFORM_COMMIT: disabled
+
+  # The licensing regeneration for the Theia PR (owner answer A4, BLOCKED.md item 18 option a), split in two jobs so no code
+  # from the Renovate branch ever runs where the App token exists (plan 51-09). Renovate's clone has no applied upstream/, so
+  # the notices are regenerated here on the runner. renovate-licensing holds no token and no secret: it checks out the run's
+  # own trusted ref, takes only the data files from the branch head (theia/package.json, theia/yarn.lock, configuration.toml:
+  # the inputs generate-licensing.mjs reads that Renovate writes), runs this checkout's fetch-upstream, apply-patches, yarn
+  # install without lifecycle scripts and generator, and uploads the two notice files with the head SHA it used as an output.
+  # renovate-licensing-publish, below, publishes them. BRANCH is the branchPrefix plus the theia groupSlug of
+  # .github/renovate.json5; the workflows row (renovate-job) derives it. The monaco branch is not regenerated here.
+  # continue-on-error for the same reason as renovate-theia: sweep-clock reads successful runs only. renovate-theia also
+  # continues on error, so this job can start after a Renovate failure; an absent branch or current notices end it with a NOTE.
+  renovate-licensing:
+    needs: [derive, renovate-theia]
+    if: ${{ !inputs.dry-run && needs.renovate-theia.result == 'success' }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions: {}
+    env:
+      BRANCH: chore/theia-theia
+    outputs:
+      head: ${{ steps.regen.outputs.head }}
+    steps:
+      # The run's own ref (main), full history, so the base of Renovate's branch can be found locally.
+      - name: Check out the trusted ref without persisting a token (skipped in dry-run)
+        if: ${{ !inputs.dry-run }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install Nix (skipped in dry-run)
+        if: ${{ !inputs.dry-run }}
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+
+      # Every script here is the trusted checkout's; the branch contributes data files only (its theia/**/package.json, yarn.lock
+      # and configuration.toml) and nothing it could execute.
+      - name: Regenerate the licensing notices from the Theia branch's dependency files (skipped in dry-run)
+        id: regen
+        if: ${{ !inputs.dry-run }}
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "1"
+        run: |
+          set -euo pipefail
+          if ! git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null; then
+            echo "release-train: NOTE -- ${BRANCH} does not exist, so there is no Theia PR to regenerate the notices for"
+            exit 0
+          fi
+          git fetch --no-tags origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" "+refs/heads/main:refs/remotes/origin/main"
+          HEAD_SHA=$(git rev-parse "refs/remotes/origin/${BRANCH}^{commit}")
+          BASE=$(git merge-base origin/main "$HEAD_SHA")
+          # The branch may change only the data files and the notices: every theia/**/package.json (Renovate's npm manager
+          # bumps the @theia/* pins in each workspace manifest), theia/yarn.lock, and configuration.toml. A package.json
+          # change may touch only an "@theia/..." version string, and configuration.toml only its theia_release line, so a
+          # new manifest, a workspaces glob or a scripts entry is refused here.
+          OTHER=$(git diff --name-only "$BASE" "$HEAD_SHA" -- . ':(exclude,glob)theia/**/package.json' ':(exclude)theia/yarn.lock' ':(exclude)configuration.toml' ':(exclude)THIRD-PARTY-NOTICES.txt' ':(exclude)LICENSING.md')
+          CONF=$(git diff -U0 "$BASE" "$HEAD_SHA" -- configuration.toml | grep -E '^[-+]' | grep -vE '^(\+\+\+|---) ' | grep -vE '^[-+]theia_release = "[^"]*"$' || true)
+          PKG=$(git diff -U0 "$BASE" "$HEAD_SHA" -- ':(glob)theia/**/package.json' | grep -E '^[-+]' | grep -vE '^(\+\+\+|---) ' | grep -vE '^[-+] *"@theia/[a-z0-9-]+": "[0-9A-Za-z.+-]+",?$' || true)
+          if [ -n "$OTHER$CONF$PKG" ]; then
+            echo "release-train: NOTE -- ${BRANCH} at ${HEAD_SHA} changes more than the Theia dependency files, so the notices are not regenerated from it:"
+            printf '%s\n' "$OTHER" "$CONF" "$PKG"
+            echo "Next step: regenerate the notices on ${BRANCH} by hand."
+            exit 0
+          fi
+          nix develop .#theia --command bash -c 'bash scripts/fetch-upstream.sh && bash scripts/apply-patches.sh'
+          git checkout "$HEAD_SHA" -- ':(glob)theia/**/package.json' theia/yarn.lock configuration.toml
+          nix develop .#theia --command bash -c 'cd theia && yarn install --ignore-scripts --frozen-lockfile'
+          nix develop .#theia --command node scripts/generate-licensing.mjs
+          # Only the data files and the two generator outputs may differ. Any other change is a defect.
+          UNEXPECTED=$(git status --porcelain --untracked-files=all -- . ':(exclude)THIRD-PARTY-NOTICES.txt' ':(exclude)LICENSING.md' ':(exclude,glob)theia/**/package.json' ':(exclude)theia/yarn.lock' ':(exclude)configuration.toml')
+          if [ -n "$UNEXPECTED" ]; then
+            echo "release-train: FAIL -- the licensing regeneration changed paths outside the notices:" >&2
+            printf '%s\n' "$UNEXPECTED" >&2
+            echo "Next step: regenerate the notices on ${BRANCH} by hand and find the step that wrote elsewhere." >&2
+            exit 1
+          fi
+          same() { git show "${HEAD_SHA}:$1" 2> /dev/null | cmp -s - "$1"; }
+          if same THIRD-PARTY-NOTICES.txt && same LICENSING.md; then echo "release-train: NOTE -- the notices on ${BRANCH} are current; nothing to publish"; exit 0; fi
+          mkdir -p "$RUNNER_TEMP/notices"
+          cp THIRD-PARTY-NOTICES.txt LICENSING.md "$RUNNER_TEMP/notices/"
+          echo "head=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the regenerated notices (skipped in dry-run)
+        if: ${{ !inputs.dry-run && steps.regen.outputs.head != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: renovate-licensing-notices
+          path: |
+            ${{ runner.temp }}/notices/THIRD-PARTY-NOTICES.txt
+            ${{ runner.temp }}/notices/LICENSING.md
+          retention-days: 1
+          if-no-files-found: error
+          # A re-run attempt of the same run would otherwise answer 409 on the first attempt's artifact.
+          overwrite: true
+
+  # Publishes the notices renovate-licensing generated as one bot commit on the branch head that job used (plan 51-09). A
+  # separate job, so nothing renovate-licensing wrote (workspace, git config, GITHUB_ENV, GITHUB_PATH) reaches this one;
+  # NODE_OPTIONS is unset in every run step all the same. The branch is checked out in target/ at exactly HEAD_SHA, with git's
+  # system and global config, hooks, fsmonitor and attributes file off, and nothing from target/ is executed: the publish
+  # script and its plan run from this job's trusted checkout. A moved branch, an artifact other than the two notice files, or
+  # any other diff ends the job before the token exists. publish-bump-branch.sh refuses a branch that carries a commit the
+  # bot did not author or commit, and a remote tip other than HEAD_SHA.
+  renovate-licensing-publish:
+    needs: [derive, renovate-licensing]
+    if: ${{ !inputs.dry-run && needs.renovate-licensing.outputs.head != '' }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: bot
+    permissions: {}
+    env:
+      BRANCH: chore/theia-theia
+      HEAD_SHA: ${{ needs.renovate-licensing.outputs.head }}
+    steps:
+      - name: Check out the trusted ref without persisting a token (skipped in dry-run)
+        if: ${{ !inputs.dry-run }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      # This run's artifact only: no run-id and no token input, so no other run's artifact can be named.
+      - name: Download the regenerated notices (skipped in dry-run)
+        if: ${{ !inputs.dry-run }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: renovate-licensing-notices
+          path: ${{ runner.temp }}/notices
+
+      # No token here. The two files replace the destination rather than write through it, so a symlink the branch planted
+      # at a notice path cannot redirect the copy.
+      - name: Commit the notices on the pinned branch head in target/ (skipped in dry-run)
+        id: commit
+        if: ${{ !inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          unset NODE_OPTIONS
+          T() { GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -c core.attributesFile=/dev/null -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"; }
+          if [ "$(cd "$RUNNER_TEMP/notices" && ls -A | sort | tr '\n' ' ')" != "LICENSING.md THIRD-PARTY-NOTICES.txt " ]; then
+            echo "release-train: FAIL -- the notices artifact holds more or other than LICENSING.md and THIRD-PARTY-NOTICES.txt. Next step: do not publish; re-run the sweep." >&2
+            exit 1
+          fi
+          T fetch --no-tags origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
+          if [ "$(T rev-parse "refs/remotes/origin/${BRANCH}^{commit}")" != "$HEAD_SHA" ]; then
+            echo "release-train: NOTE -- ${BRANCH} moved since the notices were generated from ${HEAD_SHA}; not publishing. The next sweep regenerates them."
+            exit 0
+          fi
+          # The compare range for the bot-only commit check is derived here, never taken from the generate job's outputs.
+          BASE=$(T merge-base refs/remotes/origin/main "$HEAD_SHA")
+          echo "BASE=${BASE}" >> "$GITHUB_ENV"
+          T worktree add --detach target "$HEAD_SHA"
+          cp --remove-destination "$RUNNER_TEMP/notices/THIRD-PARTY-NOTICES.txt" "$RUNNER_TEMP/notices/LICENSING.md" target/
+          T -C target add -- THIRD-PARTY-NOTICES.txt LICENSING.md
+          UNEXPECTED=$(T -C target status --porcelain --untracked-files=all -- . ':(exclude)THIRD-PARTY-NOTICES.txt' ':(exclude)LICENSING.md')
+          if [ -n "$UNEXPECTED" ]; then
+            echo "release-train: FAIL -- target/ differs from ${HEAD_SHA} outside the notices:" >&2
+            printf '%s\n' "$UNEXPECTED" >&2
+            echo "Next step: do not publish; regenerate the notices on ${BRANCH} by hand." >&2
+            exit 1
+          fi
+          if T -C target diff --cached --quiet; then echo "release-train: NOTE -- the notices on ${BRANCH} are current; nothing to publish"; exit 0; fi
+          T -C target -c user.name=release-train -c user.email="$BOT_EMAIL" commit -m "chore(theia): regenerate the licensing notices" -m "generate-licensing.mjs from main over ${BRANCH} at ${HEAD_SHA}, run by the release train's renovate-licensing job."
+          echo "committed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Mint the bot App token
+        id: app
+        if: ${{ !inputs.dry-run && steps.commit.outputs.committed == 'true' }}
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: powerbrowser
+          permission-contents: write
+
+      # The one step that holds the token. The publish script runs from the trusted root with target/ as its working
+      # directory, so it pushes that tree and finds the publish plan next to itself; HEAD_SHA pins the remote tip it may replace.
+      - name: Publish the regenerated notices to the Theia branch (skipped in dry-run)
+        if: ${{ !inputs.dry-run && steps.commit.outputs.committed == 'true' }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -euo pipefail
+          unset NODE_OPTIONS
+          (cd target && bash "$GITHUB_WORKSPACE/scripts/publish-bump-branch.sh" "$BRANCH" "$BASE" "$HEAD_SHA") > "$RUNNER_TEMP/publish.txt"
+          cat "$RUNNER_TEMP/publish.txt"
+          if [ "$(sed -n 's/^publish=//p' "$RUNNER_TEMP/publish.txt")" = "refuse" ]; then
+            echo "release-train: NOTE -- ${BRANCH} moved or carries a commit the bot did not make; regenerate the notices on it by hand"
+          fi
+
+  # The only maintenance-sweep job that enters the bot environment (renovate-theia and renovate-licensing-publish, above, are the Theia inflow). It enters only on a live sweep tick
   # (bot-job-gate), so a dry run and a tick that is not the day's sweep never wait on an approval. Its two
   # reads are the start of the last successful scheduled watchdog run in powerbrowser-updates (App token,
   # actions read on that one repository) and one synthetic POST to the events Worker, marked synthetic and
@@ -1774,7 +2057,7 @@ jobs:
           ATTEMPT: ${{ inputs.attempt }}
           TARGET: ${{ inputs.target-branch }}
           FINGERPRINT: ${{ inputs.fingerprint }}
-          OWNER: ${{ github.repository_owner }}
+          OWNER: ${{ vars.OWNER_LOGIN }}
           BASE_SHA: ${{ needs.fix.outputs.base-sha }}
           GATE_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |

@@ -1,21 +1,20 @@
 ---
-gsd_state_version: "1.0"
+gsd_state_version: 1.0
 milestone: v1.6
-current_phase_name: Release pipeline and legion runner (E)
-current_plan: 5
+current_phase_name: Owner live pass (Stage E)
+current_plan: none (see Current Position)
 status: executing
-stopped_at: "Stage D Phase 48 gaps: 48-06 (IN-03) and 48-07 (IN-04) executed; rulings recorded in BLOCKED.md; 48-05 owner checkpoint untouched"
-last_updated: "2026-11-04T03:13:17.972Z"
-last_activity: 2026-10-31
-last_activity_desc: 49-04 built, reviewed and fixed; six open items settled by the autonomous run
-state_head: bda388346e67d22b96609bc6bfe18befe3736201
+stopped_at: "Stage D Phase 57 gaps: 57-05 (autoSubmit2 locked in policies.json, gate crash-autosubmit-lock), 57-06 (layer-3 --crash-ping assertion and control, owner run pending), 57-07 (routes crash.powerbrowser.org) executed; 57-08 (AUTO_SUBMIT env clear) planned, blocked on PowerBrowserAPI.sys.mjs held by another session; 57-04 owner checkpoint untouched"
+last_updated: "2026-11-04T18:26:17.072Z"
+last_activity: 2026-11-03
+last_activity_desc: Stage C state reconciliation; authoritative plan is FINISH-PLAN.md (owner rulings R1-R17)
+state_head: d550a972247d3223538289a2b8b93ab741402ea5
 progress:
   total_phases: 19
-  completed_phases: 4
-  total_plans: 94
-  completed_plans: 88
+  completed_phases: 1
+  total_plans: 118
+  completed_plans: 111
 milestone_name: Deployment setup
-current_phase: 49
 ---
 
 # Project State
@@ -25,45 +24,24 @@ current_phase: 49
 See: .planning/PROJECT.md (updated 2026-10-20)
 
 **Core value:** A stranger can clone Power Browser, edit `configuration.toml`, drop in a logo, and build their own branded, working web browser without touching any other file, then reshape its GUI through Theia extensions without forking the platform.
-**Current focus:** pre-checkpoint tasks of the remaining plans (sibling worktrees), then the end-of-milestone owner pass
+**Current focus:** Stage E owner live pass (OWNER-PASS.md), then Stage F builds and gate
 
 ## Current Position
 
-Phase: all 19 phases (40–58) planned; 84 plans, 66 executed (a plan counts as executed when its `*-SUMMARY.md` exists, derived with `ls phases/*/*-SUMMARY.md` on 2026-10-31)
-Current Plan: none in this worktree; last built plan 49-04 (built, reviewed and fixed 2026-10-31, fixes af31517e..4de8a340)
-Total Plans in Phase: 4–8 per phase; see the per-phase list below
-Status: Executing. Remaining automatic work is the pre-checkpoint tasks of the unexecuted plans, now running in sibling worktrees. Everything else is owner-blocked: see HANDOFF.md "Blocked on the owner".
-Last activity: 2026-10-31 — 49-04 built, reviewed and fixed; six open items settled by the autonomous run under the owner's instruction to decide items not needing owner input (org Deocracy; 43 item 1 option B; 50 item 2 confirmed; 44-03 WR-03 exemption stays; 57 B1 option (a); 49-04 item 2 publish release-manifest.json)
+Phase: all 19 phases (40-58) planned; 117 plans, 110 executed (a plan counts as executed when its `*-SUMMARY.md` exists, derived with `ls phases/*/*-PLAN.md | wc -l` and `ls phases/*/*-SUMMARY.md | wc -l` on 2026-11-03)
+Current Plan: none; Stages A-D of FINISH-PLAN.md are done (Stage B and C docs, Stage D gap plans 41-05..07, 43-06..08, 46-05..06, 48-06..07, 49-06..09, 50-05, 51-05..07, 52-06..07, 53-05..07, 54-05..11, 57-05..08)
+Status: Executing. Stage E (owner live pass) is next; the exact commands are in OWNER-PASS.md. Then Stage F (builds and gate), Stage G (verify, audit, complete-milestone), Stage H (tag, owner-approved push).
+Last activity: 2026-11-03 - Stage C state reconciliation; authoritative plan is FINISH-PLAN.md (owner rulings R1-R17)
 
-Executed plans (have a SUMMARY):
+Plans and SUMMARYs per phase (PLAN/SUMMARY): 40 8/8, 41 7/6, 42 4/4, 43 8/8, 44 4/3, 45 4/4, 46 6/6, 47 4/3, 48 7/7, 49 9/9, 50 5/4, 51 7/7, 52 7/6, 53 7/7, 54 11/11, 55 4/4, 56 5/5, 57 8/6, 58 3/3.
 
-- 40: 40-01 .. 40-08 (all 8)
-- 41: 41-01, 41-02, 41-03 — not executed: 41-04
-- 42: 42-01, 42-02, 42-03 — not executed: 42-04
-- 43: 43-01 .. 43-04 — not executed: 43-05
-- 44: 44-02, 44-03 — not executed: 44-01, 44-04
-- 45: 45-01 .. 45-04 (all 4)
-- 46: 46-01 .. 46-04 (all 4)
-- 47: 47-01, 47-02, 47-03 — not executed: 47-04
-- 48: 48-01 .. 48-04 — not executed: 48-05
-- 49: 49-01 .. 49-04 — not executed: 49-05
-- 50: 50-01, 50-02 — not executed: 50-03, 50-04
-- 51: 51-01 .. 51-04 (all 4)
-- 52: 52-01 .. 52-04 — not executed: 52-05
-- 53: 53-01, 53-02, 53-03 — not executed: 53-04
-- 54: 54-01, 54-02, 54-03 — not executed: 54-04
-- 55: 55-01, 55-02 — not executed: 55-03, 55-04
-- 56: 56-01 .. 56-04 — not executed: 56-05
-- 57: 57-01, 57-02, 57-03 — not executed: 57-04
-- 58: 58-01, 58-02 — not executed: 58-03
+Plans without a SUMMARY: 41-04, 44-01, 47-04, 50-04, 52-05, 57-04 and 57-08. These are owner checkpoints, except 57-08, which waits for the other session to commit powerbrowser/shell/PowerBrowserAPI.sys.mjs. A SUMMARY can record a partial plan (49-02 Task 3, 54-06 publish path, 57-01 Task 2 are open inside executed plans).
 
-A SUMMARY can record a partial plan: 49-02 Task 3 (runner registration) and 57-01 Task 1 (B1) are open inside executed plans.
-
-Progress: [████████░░] 79% (66 of 84 plans)
+Progress: [█████████░] 94% (110 of 117 plans)
 
 ## Progress
 
-**Phases Complete:** 4 of 19 have a SUMMARY for every plan (40, 45, 46, 51); none is owner-verified
+**Phases with a SUMMARY for every plan:** 13 of 19 (40, 42, 43, 45, 46, 48, 49, 51, 53, 54, 55, 56, 58); none is owner-verified
 **Current Plan:** none (see Current Position)
 
 ## Performance Metrics
@@ -124,10 +102,11 @@ Owner decisions 1–22 of 2026-10-20 are recorded in `.planning/workstreams/depl
 - [Phase 41]: 41-05 (R10): the apps control counts an undeclared org App only when it reaches powerbrowser, powerbrowser-updates or homebrew-tap (selection all, or a repository list touching the set derived from app-*.json); an unreadable list stays red; narrows the 41-02 rule
 - [Phase 43]: Gap plans 43-06 (live facts in derive, exactly-one tracking writer), 43-07 (GH-15 known-issues issue), 43-08 (scheduler wrangler.toml) built — FINISH-PLAN.md Stage D G-43 and G-cmd scheduler half; facts source approved by the owner 2026-11-03
 - [Phase 46]: 46-05/46-06 (G-46): WebDriver hop driver scripts/drive-mar-update-hop.mjs records the UPD-24 transcript from observation (row mar-hop-driver-self-test); version-nplus1 bumped to 153.5.2; live hop and N+1 rebuild run in Stage F per docs/BUILD.md
+- [Phase 54]: A2 (owner 2026-11-04): Windows publishes to the MAR origin after the Linux publish; the Release stays Linux-only; built by 54-11
 
 ### Pending Todos
 
-- Owner, now: request the D-U-N-S number; create the Cloudflare account with 2FA.
+- Owner, Stage E: create the Cloudflare account with 2FA and payment method (47-04). The D-U-N-S todo is dropped (SEC-12 out of scope, 2026-11-03).
 
 ### Blockers/Concerns
 
@@ -136,10 +115,10 @@ Owner decisions 1–22 of 2026-10-20 are recorded in `.planning/workstreams/depl
 
 ## Session Continuity
 
-**Last session:** 2026-11-04T03:13:17.811Z
+**Last session:** 2026-11-04T07:48:09.294Z
 
-**Stopped At:** Stage D Phase 48 gaps: 48-06 (IN-03) and 48-07 (IN-04) executed; rulings recorded in BLOCKED.md; 48-05 owner checkpoint untouched
-**Resume File:** None
+**Stopped At:** Stage D Phase 57 gaps: 57-05 (autoSubmit2 locked in policies.json, gate crash-autosubmit-lock), 57-06 (layer-3 --crash-ping assertion and control, owner run pending), 57-07 (routes crash.powerbrowser.org) executed; 57-08 (AUTO_SUBMIT env clear) planned, blocked on PowerBrowserAPI.sys.mjs held by another session; 57-04 owner checkpoint untouched
+**Resume File:** .planning/workstreams/deploy/phases/57-native-crash-reporting-k/BLOCKED.md
 
 ## Milestone Context
 

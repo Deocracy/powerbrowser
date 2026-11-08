@@ -390,7 +390,7 @@
  * Needs the built browser and the last Theia app build; not a --quick check.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -416,7 +416,7 @@ import {
     WEB_TAB_STATE_EVENT,
     withProbeShell,
 } from './lib/pb-live-probe.mjs';
-import { GET_BY_NAME, pollFor, probe, sourceConst, sourceMatch } from './lib/pb-relaunch.mjs';
+import { GET_BY_NAME, REPO_ROOT, pollFor, probe, sourceConst, sourceMatch } from './lib/pb-relaunch.mjs';
 
 const NAME = 'verify-address-bar-live';
 const ENTER = { key: 'Enter', code: 'Enter', keyCode: 13 };
@@ -519,6 +519,12 @@ async function installEngine(app, pages) {
                     url: ${JSON.stringify(`${pages.origin}/two/search?q={searchTerms}`)},
                     suggestUrl: ${JSON.stringify(`${pages.origin}/two/suggest?q={searchTerms}`)},
                 });
+            // The shipped SearchEngines policy sets its Default once, when the first stock window
+            // restores (token-cookie opens one); recording that Default as applied keeps One the default.
+            const policyDefault = Services.policies.getActivePolicies()?.SearchEngines?.Default;
+            if (policyDefault) {
+                Services.prefs.setStringPref('browser.policies.runOncePerModification.setDefaultSearchEngine', String(policyDefault));
+            }
             await SearchService.setDefault(engine, SearchService.CHANGE_REASON.USER);
             return (await SearchService.getDefault()).name;
         } catch (e) {
@@ -2982,16 +2988,61 @@ async function modeChip(ctx) {
 /** The AddressBar's active mode and its default for the current PowerBrowser mode, read now. */
 const modeState = app => probe(app, `const bar = get('AddressBar'); return { mode: bar.mode, default: bar.defaultMode() };`);
 
-/** A trusted click on the mode-toggle segment named `name`. */
+/**
+ * The viewport centre of the mode-toggle segment `name`, or null; `hit` is true when the segment is what lies
+ * under that point and the toggle agrees with the body's mode (a custom mode's row is appended only when the
+ * perspective change reaches the bar, and the stock segments move left by its width when it is).
+ */
+const segmentCentre = (app, name) => app.evaluate(`JSON.stringify((() => {
+    const segs = [...document.querySelectorAll('.pb-chrome-bar-toggle .pb-chrome-bar-segment')];
+    const seg = segs.find(b => b.textContent === ${JSON.stringify(name)});
+    if (!seg) return null;
+    const r = seg.getBoundingClientRect();
+    const x = r.left + r.width / 2;
+    const y = r.top + r.height / 2;
+    const body = document.body.dataset.pbMode;
+    const active = segs.find(b => b.classList.contains('is-active'));
+    const stock = segs.filter(b => !b.classList.contains('pb-modes-custom-row'));
+    const agrees = !!active && (active.classList.contains('pb-modes-custom-row')
+        ? !stock.some(b => b.textContent.toLowerCase() === body)
+        : active.textContent.toLowerCase() === body);
+    return { x, y, hit: agrees && seg.contains(document.elementFromPoint(x, y)) };
+})())`).then(JSON.parse);
+
+/**
+ * 999.4: after a mode switch the new layout moves under the resting pointer. Left where the clicked segment was
+ * (Organising puts the bar at the window's top edge, where Browsing has its tab strip), it rests on a tab and opens
+ * that tab's preview card, a blocking layer that hides every page until the pointer leaves. Moves it back onto the
+ * segment and waits until the segment is hovered and no card is open.
+ */
+async function parkOnSegment(app, name) {
+    const parked = await settle(async () => {
+        const at = await segmentCentre(app, name);
+        if (at) {
+            await theiaPointer(app, [{ type: 'pointerMove', x: Math.round(at.x), y: Math.round(at.y) }]);
+        }
+        return app.evaluate(`!!document.querySelector('.pb-chrome-bar-toggle .pb-chrome-bar-segment:hover') && !document.querySelector('.pb-tab-preview')`);
+    }, v => v === true);
+    if (parked !== true) {
+        throw new Error(`${BROKEN} the pointer could not be put back on the ${name} segment after the mode switch`);
+    }
+}
+
+/**
+ * A trusted click on the mode-toggle segment named `name`, once its centre has held still for one poll and the
+ * segment is under it (999.6: a click at a centre read just before a custom mode's row appeared landed on the
+ * neighbouring segment).
+ */
 async function clickSegment(app, name) {
-    const at = await app.evaluate(`JSON.stringify((() => {
-        const seg = [...document.querySelectorAll('.pb-chrome-bar-toggle .pb-chrome-bar-segment')].find(b => b.textContent === ${JSON.stringify(name)});
-        if (!seg) return null;
-        const r = seg.getBoundingClientRect();
-        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-    })())`).then(JSON.parse);
+    let last = null;
+    const at = await settle(async () => {
+        const now = await segmentCentre(app, name);
+        const still = !!now && now.hit && !!last && now.x === last.x && now.y === last.y;
+        last = now;
+        return still ? now : null;
+    }, v => v !== null);
     if (!at) {
-        throw new Error(`${BROKEN} no mode-toggle segment named ${name}`);
+        throw new Error(`${BROKEN} the mode-toggle segment ${name} never held still under its own centre (${JSON.stringify(last)})`);
     }
     await theiaPointer(app, click(at.x, at.y));
 }
@@ -3064,8 +3115,10 @@ async function modeLifetime(ctx) {
     } finally {
         await restoreDefaultMode(app);
         if (await bodyMode(app) !== 'browsing') {
-            await clickSegment(app, 'Browsing').catch(() => undefined);
+            await clickSegment(app, 'Browsing').catch(error => fail(`the teardown could not return to Browsing: ${error.message}`));
+            await settle(() => bodyMode(app), v => v === 'browsing');
         }
+        await parkOnSegment(app, 'Browsing');
     }
 }
 
@@ -3952,6 +4005,7 @@ async function switchUiMode(app, id) {
     if (await settle(() => bodyMode(app), v => v === id, 10000) !== id) {
         throw new Error(`${BROKEN} the ${label} segment did not switch the PowerBrowser mode`);
     }
+    await parkOnSegment(app, label);
     return label;
 }
 
@@ -4106,7 +4160,8 @@ async function modeDefaults(ctx) {
     } finally {
         await probe(app, `delete get('AddressBar').defaultMode; return true;`);
         if (await bodyMode(app) !== 'browsing') {
-            await switchUiMode(app, 'browsing').catch(() => undefined);
+            // Reported, never swallowed: a session left in another mode changes every later scenario's default (999.6).
+            await switchUiMode(app, 'browsing').catch(error => fail(`the teardown could not return to Browsing: ${error.message}`));
         }
         await restoreDefaultMode(app);
         await showTab(app, tabId, '/start').catch(() => undefined);
@@ -4159,9 +4214,15 @@ async function modeTokens(ctx) {
     if (plant === 'token-kept' && await probe(app, `get('AddressBar').applyToken = () => false; return true;`) === true) {
         note('PLANT token-kept applied');
     }
+    // Settled before typing: an empty pill (bar and input alike) in the default mode, so the typed text meets no late re-render.
     const fromEmpty = async () => {
         await probe(app, `const bar = get('AddressBar'); bar.inputValue = ''; return true;`);
         await restoreDefaultMode(app);
+        const empty = await settle(() => probe(app, `const bar = get('AddressBar'); const input = document.querySelector('.pb-chrome-bar-input');
+            return bar.inputValue === '' && !!input && input.value === '' && bar.mode === bar.defaultMode();`), v => v === true);
+        if (empty !== true) {
+            throw new Error(`${BROKEN} the pill did not settle empty in its default mode before typing`);
+        }
     };
     try {
         const defaultEngine = await probe(app, `return get('AddressBar').effectiveEngine() ?? null;`);
@@ -4172,8 +4233,13 @@ async function modeTokens(ctx) {
             const token = step.text.split(' ')[0];
             try {
                 await typeInPill(app, step.text, { value: step.left });
-            } catch {
-                // The text was kept as typed: the mode check below names the step.
+            } catch (error) {
+                // A token left unconsumed keeps the typed text, which the mode check below names; any other text is a
+                // lost keystroke, which must never read as a token kept as typed.
+                if ((await readPill(app))?.value !== step.text) {
+                    fail(`${BROKEN} typing ${JSON.stringify(step.text)} did not reach the pill: ${error.message}`);
+                    continue;
+                }
             }
             const state = await settle(() => modeState(app), v => v?.mode === want);
             const view = await readMode(app);
@@ -4658,7 +4724,9 @@ const unbookmark = (app, url) => inChrome(app, `return (async () => {
     }
 })();`);
 
-const clickStar = app => app.evaluate(`(() => { const s = document.querySelector('.pb-address-star'); if (!s || s.disabled) return false; s.click(); return true; })()`);
+// A pointer click focuses the Theia frame first, so a key pressed at the parent afterwards reaches the editor.
+const clickStar = async app => await focusTheiaFrame(app) === true
+    && app.evaluate(`(() => { const s = document.querySelector('.pb-address-star'); if (!s || s.disabled) return false; s.click(); return true; })()`);
 
 /** Navigates the session tab to `path`, clears its bookmarks chrome-side, and waits for the outline star. */
 async function bookmarkPageOf(ctx, tabId, path) {
@@ -4680,7 +4748,8 @@ async function bookmarkPageOf(ctx, tabId, path) {
 
 /** Waits for the editor; Esc closes it and the star must take focus back. Returns the editor seen. */
 async function expectEditorThenEsc(app, fail, label) {
-    const seen = await settle(() => readStar(app), v => !!v.editor);
+    // The editor focuses its Name field in a mount effect, a frame after it first draws.
+    const seen = await settle(() => readStar(app), v => !!v.editor?.nameFocused);
     if (!seen.editor) {
         fail(`${label} opened no bookmark editor; star ${JSON.stringify(seen)}`);
         return null;
@@ -4832,7 +4901,7 @@ async function bookmarkEditor(ctx) {
             return fail(`${BROKEN} the seeded bookmark is not in Other Bookmarks: ${JSON.stringify(seed)}`);
         }
         await clickStar(app);
-        let view = await settle(() => readStar(app), v => !!v.editor);
+        let view = await settle(() => readStar(app), v => !!v.editor?.nameSelected);
         if (!view.editor || view.editor.heading !== EDIT_BOOKMARK_HEADING || view.editor.name !== 'Editor Seed' || !view.editor.nameSelected
             || view.editor.folders.length !== 3) {
             return fail(`the star on a bookmarked page must open the editor headed ${JSON.stringify(EDIT_BOOKMARK_HEADING)} with Name "Editor Seed" selected and three folders; saw ${JSON.stringify(view.editor)}`);
@@ -5062,10 +5131,11 @@ const readOpenMenus = app => app.evaluate(`JSON.stringify([...document.querySele
         disabled: i.classList.contains('lm-mod-disabled'),
     }))))`).then(JSON.parse);
 
-/** Points at the row `label` of visible menu `index` as a pointer does (move, then mouse-up unless `hover`); `mods` such as { ctrlKey: true }. */
-const pointMenuRow = (app, index, label, { hover = false, mods = {} } = {}) => app.evaluate(`(() => {
+/** Points at the row `label` of visible menu `index` as a pointer does (move, then mouse-up unless `hover`); `mods` such as { ctrlKey: true }; `last` takes the last row so labelled. */
+const pointMenuRow = (app, index, label, { hover = false, mods = {}, last = false } = {}) => app.evaluate(`(() => {
     const menu = [...document.querySelectorAll('.lm-Menu')].filter(m => m.getClientRects().length > 0)[${index}];
-    const item = menu && [...menu.querySelectorAll('.lm-Menu-item')].find(i => ((i.querySelector('.lm-Menu-itemLabel') || {}).textContent || '') === ${JSON.stringify(label)});
+    const items = menu ? [...menu.querySelectorAll('.lm-Menu-item')].filter(i => ((i.querySelector('.lm-Menu-itemLabel') || {}).textContent || '') === ${JSON.stringify(label)}) : [];
+    const item = items[${last} ? items.length - 1 : 0];
     if (!item) return false;
     const r = item.getBoundingClientRect();
     const at = { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, ...${JSON.stringify(mods)} };
@@ -5214,7 +5284,8 @@ async function bookmarksToolbar(ctx) {
         if (await seedToolbar(app, many) !== 'ok') {
             return fail(`${BROKEN} the overflow bookmarks could not be seeded chrome-side`);
         }
-        view = await settle(() => readToolbar(app), v => !!v.chevron && v.items.some(i => i.hidden));
+        // Every seeded item must be in the row before the hidden set is read: the chevron lists the row's tail as it is when clicked.
+        view = await settle(() => readToolbar(app), v => !!v.chevron && v.items.some(i => i.hidden) && many.every(([, title]) => v.items.some(i => i.label === title)));
         const hidden = view.items.filter(i => i.hidden).map(i => i.label);
         if (!view.chevron || !hidden.length || view.chevron.label !== TOOLBAR_MORE) {
             fail(`an overflowing toolbar must show the chevron labelled ${JSON.stringify(TOOLBAR_MORE)} with items hidden behind it; saw ${JSON.stringify({ chevron: view.chevron, hidden: hidden.length })}`);
@@ -5455,7 +5526,8 @@ async function historyMenu(ctx) {
         }
         tabs = await webTabsNow(app);
         let mark = (await pushes(app)).length;
-        await pointMenuRow(app, 1, target);
+        // The closed tabs section above can hold a row with the same title: the recent row is the last one.
+        await pointMenuRow(app, 1, target, { last: true });
         if (await waitForPush(app, loadedAt(tabId, `/hm-c${last - 1}`), { from: mark }) < 0 || (await webTabsNow(app)).length !== tabs.length) {
             fail(`a recent page must load in the current tab: no load of /hm-c${last - 1} in the session tab, or a tab was opened (${(await webTabsNow(app)).length} tabs, ${tabs.length} before)`);
         }
@@ -5463,7 +5535,7 @@ async function historyMenu(ctx) {
         const other = (recentSection ?? []).slice(1).find(i => i.label !== target && !i.disabled);
         if (other) {
             tabs = await webTabsNow(app);
-            await pointMenuRow(app, 1, other.label, { mods: { ctrlKey: true } });
+            await pointMenuRow(app, 1, other.label, { mods: { ctrlKey: true }, last: true });
             const background = await newWebTab(app, tabs);
             const current = await probe(app, `return get('ApplicationShell').mainPanel.currentTitle?.owner?.tabId ?? null;`);
             if (!background || current !== tabId) {
@@ -5560,12 +5632,14 @@ const readPicker = app => app.evaluate(`JSON.stringify((() => {
     };
 })())`).then(JSON.parse);
 /** Focuses and clicks the range radio labelled `label`; true when it is then checked. */
-const choosePickerRange = (app, label) => app.evaluate(`(() => {
+const choosePickerRange = (app, label) => app.evaluate(`(async () => {
     const row = [...document.querySelectorAll('.pb-clear-history-range')].find(r => r.textContent.trim() === ${JSON.stringify(label)});
     const input = row && row.querySelector('input');
     if (!input) return false;
     input.focus();
     input.click();
+    // The widget re-renders on a later frame; until then React holds the controlled radio at the old range.
+    for (let i = 0; i < 30 && !input.checked; i++) await new Promise(r => requestAnimationFrame(r));
     return input.checked;
 })()`);
 const clickPickerButton = (app, label) => app.evaluate(`(() => {
@@ -5949,7 +6023,12 @@ const APP_MENU_BUILDER = await import(new URL('../theia/extensions/chrome-bar/sr
 const MENU_WIDGET_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx';
 const MENU_COMMANDS_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts';
 const STOCK_WINDOW_COMMAND_ID = sourceConst('theia/extensions/tab-uris/src/browser/browser-window-command.ts', 'OPEN_BROWSER_WINDOW_COMMAND_ID');
-const ROADMAP_MENU = sourceMatch('.planning/ROADMAP.md', /### Phase 33:[\s\S]*?The app menu reaches (.+?); Actions mode runs/).split(/,\s*|\s+and\s+/).map(x => x.trim()).filter(Boolean);
+// The Phase 33 criterion moves to .planning/milestones/vX.Y-ROADMAP.md when its milestone closes; ROADMAP.md is read first.
+const ROADMAP_MENU_RE = /### Phase 33:[\s\S]*?The app menu reaches (.+?); Actions mode runs/;
+const ROADMAP_MENU_REL = ['.planning/ROADMAP.md', ...(existsSync(join(REPO_ROOT, '.planning/milestones'))
+    ? readdirSync(join(REPO_ROOT, '.planning/milestones')).filter(f => f.endsWith('-ROADMAP.md')).sort().reverse().map(f => `.planning/milestones/${f}`)
+    : [])].find(rel => existsSync(join(REPO_ROOT, rel)) && ROADMAP_MENU_RE.test(readFileSync(join(REPO_ROOT, rel), 'utf8'))) ?? '.planning/ROADMAP.md';
+const ROADMAP_MENU = sourceMatch(ROADMAP_MENU_REL, ROADMAP_MENU_RE).split(/,\s*|\s+and\s+/).map(x => x.trim()).filter(Boolean);
 
 /** A hamburger row's label as drawn: CHROME_BAR_COPY through the widget's switch; a template's fixed prefix (`Quit `) as a RegExp. */
 function menuRowLabel(menuId) {
@@ -6078,6 +6157,12 @@ async function appMenu(ctx) {
                 fail(`New Window must open the stock window through ${STOCK_WINDOW_COMMAND_ID} (D-12); it ran ${JSON.stringify(ran)}`);
             }
             await closeOpenMenus(app);
+            if (menuId === 'downloads') {
+                // The panel closes only on Esc or a second toggle; left open, a later scenario's dropdown read would find it first.
+                await app.evaluate(`(() => { const p = document.getElementById('pb-chrome-bar-downloads');
+                    if (p) p.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
+                    return true; })()`);
+            }
             await makeCurrent(app, tabId);
         }
 
@@ -6139,12 +6224,19 @@ async function appMenu(ctx) {
         if (help[0]?.label !== copyPlain('getHelpRow') || !/^About /.test(aboutLabel)) {
             fail(`the Help submenu must list ${JSON.stringify(copyPlain('getHelpRow'))} then "About {App}"; saw ${JSON.stringify(help)}`);
         } else {
+            await inChrome(app, `for (const w of Services.wm.getEnumerator('navigator:browser')) w.__pbKept = true; return true;`);
             await pointMenuRow(app, 1, aboutLabel);
             const about = await settle(() => inChrome(app, `return !!Services.wm.getMostRecentWindow('Browser:About');`), v => v === true, 15000);
             if (about !== true) {
                 fail('About {App} did not open the stock About dialog');
             }
-            await inChrome(app, `const w = Services.wm.getMostRecentWindow('Browser:About'); if (w) w.close(); return true;`);
+            // With no stock window open, the row opens one to host the dialog; left open and active, the shell gets no
+            // focus events, so Theia's focus tracking and the page-key rows stop working for every later scenario.
+            await inChrome(app, `const w = Services.wm.getMostRecentWindow('Browser:About'); if (w) w.close();
+                for (const s of Services.wm.getEnumerator('navigator:browser')) if (!s.__pbKept) s.close();
+                window.focus();
+                return true;`);
+            await settle(() => app.evaluate('document.hasFocus()'), v => v === true, 5000);
         }
     } finally {
         await closeOpenMenus(app).catch(() => null);
@@ -6168,8 +6260,8 @@ const boundCategoryLabels = app => probe(app, `const registry = get('CommandRegi
     return registry.commands.filter(c => c.category === ${JSON.stringify(COMMAND_CATEGORY)} && c.label && registry.isVisible(c.id) && registry.isEnabled(c.id)
         && keys.getKeybindingsForCommand(c.id).length > 0).map(c => c.label);`);
 
-/** Runs the Actions row titled `title`: Actions mode, the title typed, the row highlighted, Enter. Returns whether it was highlighted. */
-async function runActionRow(app, title) {
+/** Runs the Actions row titled `title`: Actions mode, the title typed, the row highlighted, `beforeEnter`, Enter. Returns whether it was highlighted. */
+async function runActionRow(app, title, beforeEnter = async () => undefined) {
     await restoreDefaultMode(app);
     await pickLocalMode(app, 'actions');
     await typeInPill(app, title);
@@ -6177,6 +6269,7 @@ async function runActionRow(app, title) {
     if (!view.rows.some(r => r.title === title && r.selected)) {
         return false;
     }
+    await beforeEnter();
     await pressKey(app, ENTER);
     return true;
 }
@@ -6234,9 +6327,12 @@ async function actionsList(ctx) {
         await makeCurrent(app, tabId);
 
         const zoomLabel = sourceMatch(MENU_COMMANDS_REL, /CHROME_BAR_ZOOM_IN: Command = \{[^}]*label: '([^']+)'/);
-        mark = (await storeKinds(app)).length;
-        const commandMark = (await commandsRun(app)).length;
-        if (!(await runActionRow(app, zoomLabel))) {
+        // Marked just before Enter: focusing the pill re-reads chrome's engines (listSearchEngines), which is not the row's doing.
+        let commandMark = 0;
+        if (!(await runActionRow(app, zoomLabel, async () => {
+            mark = (await storeKinds(app)).length;
+            commandMark = (await commandsRun(app)).length;
+        }))) {
             return fail(`${BROKEN} the ${zoomLabel} Actions row could not be highlighted`);
         }
         const ran = (await settle(() => commandsRun(app), v => v.slice(commandMark).includes(ZOOM_IN_ID), 5000)).slice(commandMark);

@@ -1163,7 +1163,7 @@
 
 #theia-top-panel {
     flex-wrap: wrap;
-    min-height: calc(var(--theia-private-menubar-height) + 40px + var(--pb-bookmarks-toolbar-height, 0px));
+    min-height: calc(var(--theia-private-menubar-height) + 40px + var(--pb-bookmarks-toolbar-height, 0px) + var(--pb-find-strip-height, 0px));
 }
 
 /* GUI-07: the top panel is as tall as the mode needs, and no taller.
@@ -1183,16 +1183,16 @@
    carry a strip it did not want just to fill the gap, and hiding a row moved
    the URL row without moving the shell below it. */
 body[data-pb-mode] #theia-top-panel {
-    min-height: calc(40px + var(--pb-bookmarks-toolbar-height, 0px));
+    min-height: calc(40px + var(--pb-bookmarks-toolbar-height, 0px) + var(--pb-find-strip-height, 0px));
 }
 
 body[data-pb-mode="coding"] #theia-top-panel {
-    min-height: calc(var(--theia-private-menubar-height) + 40px + var(--pb-bookmarks-toolbar-height, 0px));
+    min-height: calc(var(--theia-private-menubar-height) + 40px + var(--pb-bookmarks-toolbar-height, 0px) + var(--pb-find-strip-height, 0px));
 }
 
 body[data-pb-mode="browsing"] #theia-top-panel,
 body[data-pb-mode="organising"] #theia-top-panel {
-    min-height: calc(33px + 40px + var(--pb-bookmarks-toolbar-height, 0px));
+    min-height: calc(33px + 40px + var(--pb-bookmarks-toolbar-height, 0px) + var(--pb-find-strip-height, 0px));
 }
 
 /* Phase 33 (BMK-04, D-04): the bookmarks toolbar row, in every mode. One variable, added to
@@ -1200,6 +1200,12 @@ body[data-pb-mode="organising"] #theia-top-panel {
    page rect shrinks by that much (nothing overlays it). Unset, every height is unchanged. */
 body[data-pb-bookmarks-toolbar="shown"] {
     --pb-bookmarks-toolbar-height: 28px;
+}
+
+/* PAGE-01 (39-16): the 32px find strip under the bar, added the same way, so the page moves down by its height
+   instead of being covered by it (the strip sits in the top panel, whose height is this min-height). */
+body[data-pb-find-strip="open"] {
+    --pb-find-strip-height: 32px;
 }
 
 /* Custom title bar: chrome's window buttons overlay the top-right corner of
@@ -1214,7 +1220,9 @@ body[data-pb-mode="browsing"] .pb-tab-strip {
 
 #theia-top-panel > [id="powerbrowser.chrome-bar"] {
     flex: 0 0 100%;
-    height: calc(40px + var(--pb-bookmarks-toolbar-height, 0px));
+    /* BMK-04: a flex item's auto min-width is its content's; an overflowing toolbar would widen the whole bar. */
+    min-width: 0;
+    height: calc(40px + var(--pb-bookmarks-toolbar-height, 0px) + var(--pb-find-strip-height, 0px));
     overflow: visible;
 }
 
@@ -1309,9 +1317,11 @@ body[data-pb-mode="browsing"] .pb-tab-strip {
    specificity, so min-width and padding would not move from inside the layer. */
 .pb-tab.is-pinned {
     justify-content: center;
-    width: 32px;
-    min-width: 32px;
-    max-width: 32px;
+    /* Content box: .pb-tab's 1px side borders make the painted tab 32px. Not border-box, which would also take the
+       1px top border out of the 28px height and drop the pinned tab's top edge below its neighbours'. */
+    width: 30px;
+    min-width: 30px;
+    max-width: 30px;
     padding: 0;
     gap: 0;
 }

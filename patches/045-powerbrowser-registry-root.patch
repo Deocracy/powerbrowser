@@ -1,0 +1,391 @@
+diff --git a/browser/components/BrowserGlue.sys.mjs b/browser/components/BrowserGlue.sys.mjs
+index 97dee13c12..639ac74ea0 100644
+--- a/browser/components/BrowserGlue.sys.mjs
++++ b/browser/components/BrowserGlue.sys.mjs
+@@ -834,14 +834,17 @@ BrowserGlue.prototype = {
+         ).UpdateUtils.UpdateChannel;
+       } catch (ex) {}
+       if (updateChannel) {
++        // The uninstaller writes this under ${AppRegRoot}\${AppName}, where
++        // AppRegRoot is Software\${BrandShortName} (@MOZ_APP_DISPLAYNAME@).
++        let uninstalledKey = `Software\\${AppConstants.MOZ_APP_DISPLAYNAME_DO_NOT_USE}\\${Services.appinfo.name}`;
+         let uninstalledValue = lazy.WindowsRegistry.readRegKey(
+           Ci.nsIWindowsRegKey.ROOT_KEY_CURRENT_USER,
+-          "Software\\Mozilla\\Firefox",
++          uninstalledKey,
+           `Uninstalled-${updateChannel}`
+         );
+         let removalSuccessful = lazy.WindowsRegistry.removeRegKey(
+           Ci.nsIWindowsRegKey.ROOT_KEY_CURRENT_USER,
+-          "Software\\Mozilla\\Firefox",
++          uninstalledKey,
+           `Uninstalled-${updateChannel}`
+         );
+         if (removalSuccessful && uninstalledValue == "True") {
+diff --git a/browser/components/installerprefs/InstallerPrefs.sys.mjs b/browser/components/installerprefs/InstallerPrefs.sys.mjs
+index dd76d44f35..d0f1758b30 100644
+--- a/browser/components/installerprefs/InstallerPrefs.sys.mjs
++++ b/browser/components/installerprefs/InstallerPrefs.sys.mjs
+@@ -41,10 +41,12 @@ export function InstallerPrefs(prefsList) {
+ 
+   // Each pref to be reflected will get a value created under this key, in HKCU.
+   // The path will look something like:
+-  // "Software\Mozilla\Firefox\Installer\71AE18FE3142402B\".
++  // "Software\<display name>\<app name>\Installer\71AE18FE3142402B\".
++  // The uninstaller cleans ${AppRegRoot}\${AppName}\Installer, where AppRegRoot
++  // is Software\${BrandShortName} (@MOZ_APP_DISPLAYNAME@).
+   ChromeUtils.defineLazyGetter(this, "_registryKeyPath", function () {
+     const app = AppConstants.MOZ_APP_NAME;
+-    const vendor = Services.appinfo.vendor || "Mozilla";
++    const vendor = AppConstants.MOZ_APP_DISPLAYNAME_DO_NOT_USE;
+     const xreDirProvider = Cc[
+       "@mozilla.org/xre/directory-provider;1"
+     ].getService(Ci.nsIXREDirProvider);
+diff --git a/browser/components/installerprefs/test/unit/head.js b/browser/components/installerprefs/test/unit/head.js
+index cbf77968d1..80c8bb7c90 100644
+--- a/browser/components/installerprefs/test/unit/head.js
++++ b/browser/components/installerprefs/test/unit/head.js
+@@ -87,7 +87,8 @@ function cleanupReflectedPrefs(prefsList) {
+   // Get the registry key path without the path hash at the end,
+   // then delete the subkey with the path hash.
+   const app = AppConstants.MOZ_APP_NAME;
+-  const vendor = Services.appinfo.vendor || "Mozilla";
++  // InstallerPrefs.sys.mjs writes under the installer's AppRegRoot.
++  const vendor = AppConstants.MOZ_APP_DISPLAYNAME_DO_NOT_USE;
+   const xreDirProvider = Cc["@mozilla.org/xre/directory-provider;1"].getService(
+     Ci.nsIXREDirProvider
+   );
+diff --git a/browser/installer/windows/nsis/installer_helpers.nsh b/browser/installer/windows/nsis/installer_helpers.nsh
+index 0113d25fa3..5091375e40 100644
+--- a/browser/installer/windows/nsis/installer_helpers.nsh
++++ b/browser/installer/windows/nsis/installer_helpers.nsh
+@@ -56,7 +56,7 @@ FunctionEnd
+ 
+ !macro GetExistingInstallPathFromShellVarContext ShellVarContext Result
+   SetShellVarContext ${ShellVarContext}
+-  ${GetFirstInstallPath} "Software\Mozilla\${BrandFullNameInternal}" ${Result}
++  ${GetFirstInstallPath} "${AppRegRoot}\${BrandFullNameInternal}" ${Result}
+   ${If} ${Result} == "false"
+     StrCpy ${Result} ""
+   ${EndIf}
+diff --git a/browser/installer/windows/nsis/shared.nsh b/browser/installer/windows/nsis/shared.nsh
+index b81c7ef59b..555079cb9d 100755
+--- a/browser/installer/windows/nsis/shared.nsh
++++ b/browser/installer/windows/nsis/shared.nsh
+@@ -119,7 +119,7 @@ Function InstallDesktopLauncher
+   ; Copy the launcher into the user's Desktop with an appropriate name
+   CopyFiles /SILENT /FILESONLY "$INSTDIR\desktop-launcher\desktop-launcher.exe" "$DESKTOP\${BrandShortName}.exe"
+   ${If} ${FileExists} "$DESKTOP\${BrandShortName}.exe"
+-    WriteRegDWORD HKCU "Software\Mozilla\${BrandFullNameInternal}" DesktopLauncherAppInstalled 1
++    WriteRegDWORD HKCU "${AppRegRoot}\${BrandFullNameInternal}" DesktopLauncherAppInstalled 1
+   ${EndIf}
+ FunctionEnd
+ 
+@@ -513,31 +513,31 @@ FunctionEnd
+ 
+   ; Running Firefox 64 bit on Windows 64 bit
+   ClearErrors
+-  ReadRegDWORD $2 HKLM "Software\Mozilla\${AppName}\32to64DidMigrate" "$1"
++  ReadRegDWORD $2 HKLM "${AppRegRoot}\${AppName}\32to64DidMigrate" "$1"
+   ; If there were no errors then the system was updated from Firefox 32 bit to
+   ; Firefox 64 bit and if the value is already 1 then the registry value has
+   ; already been updated in the HKLM registry.
+   ${IfNot} ${Errors}
+   ${AndIf} $2 != 1
+     ClearErrors
+-    WriteRegDWORD HKLM "Software\Mozilla\${AppName}\32to64DidMigrate" "$1" 1
++    WriteRegDWORD HKLM "${AppRegRoot}\${AppName}\32to64DidMigrate" "$1" 1
+     ${If} ${Errors}
+       ; There was an error writing to HKLM so just write it to HKCU
+-      WriteRegDWORD HKCU "Software\Mozilla\${AppName}\32to64DidMigrate" "$1" 1
++      WriteRegDWORD HKCU "${AppRegRoot}\${AppName}\32to64DidMigrate" "$1" 1
+     ${Else}
+       ; This will delete the value from HKCU if it exists
+-      DeleteRegValue HKCU "Software\Mozilla\${AppName}\32to64DidMigrate" "$1"
++      DeleteRegValue HKCU "${AppRegRoot}\${AppName}\32to64DidMigrate" "$1"
+     ${EndIf}
+   ${EndIf}
+ 
+   ClearErrors
+-  ReadRegDWORD $2 HKCU "Software\Mozilla\${AppName}\32to64DidMigrate" "$1"
++  ReadRegDWORD $2 HKCU "${AppRegRoot}\${AppName}\32to64DidMigrate" "$1"
+   ; If there were no errors then the system was updated from Firefox 32 bit to
+   ; Firefox 64 bit and if the value is already 1 then the registry value has
+   ; already been updated in the HKCU registry.
+   ${IfNot} ${Errors}
+   ${AndIf} $2 != 1
+-    WriteRegDWORD HKCU "Software\Mozilla\${AppName}\32to64DidMigrate" "$1" 1
++    WriteRegDWORD HKCU "${AppRegRoot}\${AppName}\32to64DidMigrate" "$1" 1
+   ${EndIf}
+ 
+ !else
+@@ -547,14 +547,14 @@ FunctionEnd
+   ${OrIf} ${IsNativeARM64}
+     ; Running Firefox 32 bit on a Windows 64 bit system
+     ClearErrors
+-    ReadRegDWORD $2 HKLM "Software\Mozilla\${AppName}\32to64DidMigrate" "$1"
++    ReadRegDWORD $2 HKLM "${AppRegRoot}\${AppName}\32to64DidMigrate" "$1"
+     ; If there were errors the value doesn't exist yet.
+     ${If} ${Errors}
+       ClearErrors
+-      WriteRegDWORD HKLM "Software\Mozilla\${AppName}\32to64DidMigrate" "$1" 0
++      WriteRegDWORD HKLM "${AppRegRoot}\${AppName}\32to64DidMigrate" "$1" 0
+       ; If there were errors write the value in HKCU.
+       ${If} ${Errors}
+-        WriteRegDWORD HKCU "Software\Mozilla\${AppName}\32to64DidMigrate" "$1" 0
++        WriteRegDWORD HKCU "${AppRegRoot}\${AppName}\32to64DidMigrate" "$1" 0
+       ${EndIf}
+     ${EndIf}
+   ${EndIf}
+@@ -605,14 +605,14 @@ FunctionEnd
+   ${EndIf}
+ 
+   ${GetLongPath} "$INSTDIR" $8
+-  StrCpy $0 "Software\Mozilla\${BrandFullNameInternal}\${AppVersion}$3 (${ARCH} ${AB_CD})\Main"
++  StrCpy $0 "${AppRegRoot}\${BrandFullNameInternal}\${AppVersion}$3 (${ARCH} ${AB_CD})\Main"
+   ${WriteRegStr2} $RegHive "$0" "Install Directory" "$8" 0
+   ${WriteRegStr2} $RegHive "$0" "PathToExe" "$8\${FileMainEXE}" 0
+ 
+-  StrCpy $0 "Software\Mozilla\${BrandFullNameInternal}\${AppVersion}$3 (${ARCH} ${AB_CD})\Uninstall"
++  StrCpy $0 "${AppRegRoot}\${BrandFullNameInternal}\${AppVersion}$3 (${ARCH} ${AB_CD})\Uninstall"
+   ${WriteRegStr2} $RegHive "$0" "Description" "${BrandFullNameInternal} ${AppVersion}$3 (${ARCH} ${AB_CD})" 0
+ 
+-  StrCpy $0 "Software\Mozilla\${BrandFullNameInternal}\${AppVersion}$3 (${ARCH} ${AB_CD})"
++  StrCpy $0 "${AppRegRoot}\${BrandFullNameInternal}\${AppVersion}$3 (${ARCH} ${AB_CD})"
+   ${WriteRegStr2} $RegHive  "$0" "" "${AppVersion}$3 (${ARCH} ${AB_CD})" 0
+   ${If} "$3" == ""
+     DeleteRegValue SHCTX "$0" "ESR"
+@@ -620,14 +620,14 @@ FunctionEnd
+     ${WriteRegDWORD2} $RegHive "$0" "ESR" 1 0
+   ${EndIf}
+ 
+-  StrCpy $0 "Software\Mozilla\${BrandFullNameInternal} ${AppVersion}$3\bin"
++  StrCpy $0 "${AppRegRoot}\${BrandFullNameInternal} ${AppVersion}$3\bin"
+   ${WriteRegStr2} $RegHive "$0" "PathToExe" "$8\${FileMainEXE}" 0
+ 
+-  StrCpy $0 "Software\Mozilla\${BrandFullNameInternal} ${AppVersion}$3\extensions"
++  StrCpy $0 "${AppRegRoot}\${BrandFullNameInternal} ${AppVersion}$3\extensions"
+   ${WriteRegStr2} $RegHive "$0" "Components" "$8\components" 0
+   ${WriteRegStr2} $RegHive "$0" "Plugins" "$8\plugins" 0
+ 
+-  StrCpy $0 "Software\Mozilla\${BrandFullNameInternal} ${AppVersion}$3"
++  StrCpy $0 "${AppRegRoot}\${BrandFullNameInternal} ${AppVersion}$3"
+   ${WriteRegStr2} $RegHive "$0" "GeckoVer" "${GREVersion}" 0
+   ${If} "$3" == ""
+     DeleteRegValue SHCTX "$0" "ESR"
+@@ -635,7 +635,7 @@ FunctionEnd
+     ${WriteRegDWORD2} $RegHive "$0" "ESR" 1 0
+   ${EndIf}
+ 
+-  StrCpy $0 "Software\Mozilla\${BrandFullNameInternal}$3"
++  StrCpy $0 "${AppRegRoot}\${BrandFullNameInternal}$3"
+   ${WriteRegStr2} $RegHive "$0" "" "${GREVersion}" 0
+   ${WriteRegStr2} $RegHive "$0" "CurrentVersion" "${AppVersion}$3 (${ARCH} ${AB_CD})" 0
+ !macroend
+@@ -1084,7 +1084,7 @@ FunctionEnd
+       ClearErrors
+       WriteIniStr "$0" "TASKBAR" "Migrated" "true"
+       WriteRegDWORD HKCU \
+-        "Software\Mozilla\${AppName}\Installer\$AppUserModelID" \
++        "${AppRegRoot}\${AppName}\Installer\$AppUserModelID" \
+         "WasPinnedToTaskbar" 1
+       ${If} "${SHOULD_PIN}" == "1"
+         ${PinToTaskBar}
+diff --git a/browser/installer/windows/nsis/stub.nsh b/browser/installer/windows/nsis/stub.nsh
+index 965e1fff2e..3d54fa3382 100644
+--- a/browser/installer/windows/nsis/stub.nsh
++++ b/browser/installer/windows/nsis/stub.nsh
+@@ -1156,10 +1156,10 @@ Function ShouldPromptForProfileCleanup
+ 
+   ; Okay, there's at least one install, let's see if it's for this channel.
+   SetShellVarContext all
+-  ${GetSingleInstallPath} "Software\Mozilla\${BrandFullNameInternal}" $0
++  ${GetSingleInstallPath} "${AppRegRoot}\${BrandFullNameInternal}" $0
+   ${If} $0 == "false"
+     SetShellVarContext current
+-    ${GetSingleInstallPath} "Software\Mozilla\${BrandFullNameInternal}" $0
++    ${GetSingleInstallPath} "${AppRegRoot}\${BrandFullNameInternal}" $0
+     ${If} $0 == "false"
+       ; Existing installs are not for this channel. Don't show any prompt.
+       GoTo end
+@@ -1419,19 +1419,19 @@ Function CommonOnInit
+   ; path for this install, even if it's not the same architecture.
+   SetRegView 32
+   SetShellVarContext all ; Set SHCTX to HKLM
+-  ${GetSingleInstallPath} "Software\Mozilla\${BrandFullNameInternal}" $R9
++  ${GetSingleInstallPath} "${AppRegRoot}\${BrandFullNameInternal}" $R9
+ 
+   ${If} "$R9" == "false"
+     ${If} ${IsNativeAMD64}
+     ${OrIf} ${IsNativeARM64}
+       SetRegView 64
+-      ${GetSingleInstallPath} "Software\Mozilla\${BrandFullNameInternal}" $R9
++      ${GetSingleInstallPath} "${AppRegRoot}\${BrandFullNameInternal}" $R9
+     ${EndIf}
+   ${EndIf}
+ 
+   ${If} "$R9" == "false"
+     SetShellVarContext current ; Set SHCTX to HKCU
+-    ${GetSingleInstallPath} "Software\Mozilla\${BrandFullNameInternal}" $R9
++    ${GetSingleInstallPath} "${AppRegRoot}\${BrandFullNameInternal}" $R9
+   ${EndIf}
+ 
+   StrCpy $PreviousInstallDir ""
+diff --git a/browser/installer/windows/nsis/telemetry.nsh b/browser/installer/windows/nsis/telemetry.nsh
+index 6866053b86..88238891b4 100644
+--- a/browser/installer/windows/nsis/telemetry.nsh
++++ b/browser/installer/windows/nsis/telemetry.nsh
+@@ -131,12 +131,12 @@ Function PrepareTelemetryPing
+   ${EndIf}
+ 
+   ClearErrors
+-  WriteRegStr HKLM "Software\Mozilla" "${BrandShortName}InstallerTest" \
++  WriteRegStr HKLM "${AppRegRoot}" "${BrandShortName}InstallerTest" \
+                    "Write Test"
+   ${If} ${Errors}
+     nsJSON::Set /tree ping "Data" "admin_user" /value false
+   ${Else}
+-    DeleteRegValue HKLM "Software\Mozilla" "${BrandShortName}InstallerTest"
++    DeleteRegValue HKLM "${AppRegRoot}" "${BrandShortName}InstallerTest"
+     nsJSON::Set /tree ping "Data" "admin_user" /value true
+   ${EndIf}
+ 
+@@ -514,7 +514,7 @@ FunctionEnd
+ !endif
+ 
+ Function WasDesktopLauncherPreviouslyInstalled
+-  ReadRegDWORD $0 HKCU "Software\Mozilla\${BrandFullNameInternal}" \
++  ReadRegDWORD $0 HKCU "${AppRegRoot}\${BrandFullNameInternal}" \
+     "DesktopLauncherAppInstalled"
+   ${If} $0 == 1
+     Push 1
+diff --git a/browser/installer/windows/nsis/uninstaller_helpers.nsh b/browser/installer/windows/nsis/uninstaller_helpers.nsh
+index 587c2e1242..2c6d47902f 100644
+--- a/browser/installer/windows/nsis/uninstaller_helpers.nsh
++++ b/browser/installer/windows/nsis/uninstaller_helpers.nsh
+@@ -271,12 +271,12 @@
+         ; And verify that if we need to, we're going to clean up the registry
+         ; correctly.
+         ${If} "$R4" == "mms"
+-          WriteRegStr HKLM "Software\Mozilla" "${BrandShortName}InstallerTest" "Write Test"
++          WriteRegStr HKLM "${AppRegRoot}" "${BrandShortName}InstallerTest" "Write Test"
+           ${If} ${Errors}
+             ; Nothing initialized so no need to call OnEndCommon
+             Quit
+           ${Endif}
+-          DeleteRegValue HKLM "Software\Mozilla" "${BrandShortName}InstallerTest"
++          DeleteRegValue HKLM "${AppRegRoot}" "${BrandShortName}InstallerTest"
+         ${EndIf}
+       !endif
+ 
+@@ -310,7 +310,7 @@
+   ; install location in the Software\Mozilla key and uninstall registry entries
+   ; that point to our install location for both HKCU and HKLM.
+   SetShellVarContext current  ; Set SHCTX to the current user (e.g. HKCU)
+-  ${RegCleanMain} "Software\Mozilla"
++  ${RegCleanMain} "${AppRegRoot}"
+   ${RegCleanUninstall}
+   ${UpdateProtocolHandlers}
+ 
+@@ -318,14 +318,14 @@
+   ${InitHashAppModelId} "$INSTDIR" "Software\Mozilla\${AppName}\TaskBarIDs"
+ 
+   ClearErrors
+-  WriteRegStr HKLM "Software\Mozilla" "${BrandShortName}InstallerTest" "Write Test"
++  WriteRegStr HKLM "${AppRegRoot}" "${BrandShortName}InstallerTest" "Write Test"
+   ${If} ${Errors}
+     StrCpy $RegHive "HKCU"
+   ${Else}
+     SetShellVarContext all    ; Set SHCTX to all users (e.g. HKLM)
+-    DeleteRegValue HKLM "Software\Mozilla" "${BrandShortName}InstallerTest"
++    DeleteRegValue HKLM "${AppRegRoot}" "${BrandShortName}InstallerTest"
+     StrCpy $RegHive "HKLM"
+-    ${RegCleanMain} "Software\Mozilla"
++    ${RegCleanMain} "${AppRegRoot}"
+     ${RegCleanUninstall}
+     ${UpdateProtocolHandlers}
+     ${FixShellIconHandler} "HKLM"
+@@ -475,7 +475,7 @@
+ !ifdef MOZ_DEFAULT_BROWSER_AGENT
+ ${If} $RegHive == "HKCU"
+   ClearErrors
+-  ReadRegDWORD $0 HKCU "Software\Mozilla\${AppName}\Installer\$AppUserModelID" \
++  ReadRegDWORD $0 HKCU "${AppRegRoot}\${AppName}\Installer\$AppUserModelID" \
+                     "DidRegisterDefaultBrowserAgent"
+   ${If} $0 != 0
+   ${OrIf} ${Errors}
+@@ -545,14 +545,14 @@ Function OnUpdateDesktopLauncher_HKLM
+   Push $1
+   ; Have we deleted the shared shortcut before?
+   StrCpy $0 "0"
+-  ReadRegDWORD $0 HKLM "Software\Mozilla\${BrandFullNameInternal}" "UpdaterDeletedShortcut"
++  ReadRegDWORD $0 HKLM "${AppRegRoot}\${BrandFullNameInternal}" "UpdaterDeletedShortcut"
+   Call IsDesktopShortcutPresent
+   Pop $1
+   ${If} $0 != "1"
+   ${AndIf} $1 != "0"
+     ; shared shortcut exists, and we haven't deleted it before. So let's delete it now.
+     Delete "$DESKTOP\${BrandShortName}.lnk"
+-    WriteRegDWORD HKLM "Software\Mozilla\${BrandFullNameInternal}" "UpdaterDeletedShortcut" "1"
++    WriteRegDWORD HKLM "${AppRegRoot}\${BrandFullNameInternal}" "UpdaterDeletedShortcut" "1"
+   ${EndIf}
+   Pop $1
+   Pop $0
+@@ -590,8 +590,8 @@ Function OnUpdateDesktopLauncher_HKCU
+   Pop $3
+   SetShellVarContext current
+ 
+-  ReadRegDWORD $1 HKLM "Software\Mozilla\${BrandFullNameInternal}" "UpdaterDeletedShortcut"
+-  ReadRegDWORD $2 HKCU "Software\Mozilla\${BrandFullNameInternal}" "DesktopLauncherAppInstalled"
++  ReadRegDWORD $1 HKLM "${AppRegRoot}\${BrandFullNameInternal}" "UpdaterDeletedShortcut"
++  ReadRegDWORD $2 HKCU "${AppRegRoot}\${BrandFullNameInternal}" "DesktopLauncherAppInstalled"
+ 
+   ${If} $2 == "1"
+     ; We previously installed desktop launcher. Don't reinstall
+diff --git a/toolkit/mozapps/installer/windows/nsis/common.nsh b/toolkit/mozapps/installer/windows/nsis/common.nsh
+index 3536bb9bc9..e4824742dc 100755
+--- a/toolkit/mozapps/installer/windows/nsis/common.nsh
++++ b/toolkit/mozapps/installer/windows/nsis/common.nsh
+@@ -5618,20 +5618,20 @@
+       ${If} ${IsNativeAMD64}
+       ${OrIf} ${IsNativeARM64}
+         SetRegView 64
+-        ${GetSingleInstallPath} "Software\Mozilla\${BrandFullNameInternal}" $R9
++        ${GetSingleInstallPath} "${AppRegRoot}\${BrandFullNameInternal}" $R9
+         SetRegView lastused
+       ${EndIf}
+ 
+       StrCmp "$R9" "false" +1 finish_get_install_dir
+ 
+       SetRegView 32
+-      ${GetSingleInstallPath} "Software\Mozilla\${BrandFullNameInternal}" $R9
++      ${GetSingleInstallPath} "${AppRegRoot}\${BrandFullNameInternal}" $R9
+       SetRegView lastused
+ 
+       StrCmp "$R9" "false" +1 finish_get_install_dir
+ 
+       SetShellVarContext current  ; Set SHCTX to HKCU
+-      ${GetSingleInstallPath} "Software\Mozilla\${BrandFullNameInternal}" $R9
++      ${GetSingleInstallPath} "${AppRegRoot}\${BrandFullNameInternal}" $R9
+ 
+       finish_get_install_dir:
+       StrCmp "$R9" "false" +2 +1
+diff --git a/toolkit/mozapps/update/UpdateService.sys.mjs b/toolkit/mozapps/update/UpdateService.sys.mjs
+index fc9d67d1f5..a3ba3ab41e 100644
+--- a/toolkit/mozapps/update/UpdateService.sys.mjs
++++ b/toolkit/mozapps/update/UpdateService.sys.mjs
+@@ -5387,8 +5387,13 @@ export class CheckerService {
+       Ci.nsIWindowsRegKey
+     );
+ 
++    // The installer's AppRegRoot is Software\${BrandShortName} (@MOZ_APP_DISPLAYNAME@).
+     let regPath =
+-      "SOFTWARE\\Mozilla\\" + Services.appinfo.name + "\\32to64DidMigrate";
++      "SOFTWARE\\" +
++      AppConstants.MOZ_APP_DISPLAYNAME_DO_NOT_USE +
++      "\\" +
++      Services.appinfo.name +
++      "\\32to64DidMigrate";
+     let regValHKCU = lazy.WindowsRegistry.readRegKey(
+       wrk.ROOT_KEY_CURRENT_USER,
+       regPath,

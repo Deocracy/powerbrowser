@@ -10,4 +10,4 @@ How a live check uses them:
 2. Trust the CA in that profile only, with `nsIX509CertDB.addCertFromBase64(<test-ca.pem body>, 'C,,')`.
 3. Serve the pages with `node:https`, using the certificate and key.
 
-To reissue the certificate, see `.planning/phases/31-site-identity-permissions-and-app-menu/31-01-LIVE-HANDOFF.md`. It needs the CA key, which is kept outside the repo.
+To reissue the certificate, see `.planning/milestones/v1.5-phases/31-site-identity-permissions-and-app-menu/31-01-LIVE-HANDOFF.md`. It needs the CA key, which is kept outside the repo.

@@ -297,7 +297,7 @@ function selfTest() {
     const plants = [
         ['missing symbols entry', { draft: good.slice(1) }, good[0]],
         ['stale symbols entry', { draft: [...good, `${app}-${RELEASE_KEY_FIXTURE.replace(/^v/, '')}.retired-target${archive.suffix}${archive.ext}`] }, 'retired-target'],
-        ['SHA256SUMS written from named files', { files: { [RELEASE_REL]: text(RELEASE_REL).replace('find . -maxdepth 1 -type f ! -name SHA256SUMS -printf', 'ls -1 *.tar.xz *.mar -printf') } }, 'SHA256SUMS'],
+        ['SHA256SUMS written from named files', { files: { [RELEASE_REL]: text(RELEASE_REL).replaceAll('find . -maxdepth 1 -type f ! -name SHA256SUMS -printf', 'ls -1 *.tar.xz *.mar -printf') } }, 'SHA256SUMS'],
         ['two rows with one token', { files: { [DOCS_REL]: docs.replace(firstRow, `${firstRow}\n${firstRow}`) } }, 'two targets'],
         ['new target row without a draft entry', { files: { [DOCS_REL]: docs.replace(firstRow, `${firstRow}\n| \`windows-x86_64\` | x | y |`) }, draft: good }, 'windows-x86_64'],
         ['prose row not marked pending', { files: { [DOCS_REL]: docs.replace(firstRow, `${firstRow}\n| Haiku riscv | x | y |`) } }, 'Haiku riscv'],

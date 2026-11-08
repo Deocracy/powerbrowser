@@ -3,7 +3,8 @@
   "verified_allowed": false,
   "patterns_allowed": [
     "cachix/install-nix-action@*",
-    "anthropics/claude-code-action@*",
-    "Azure/login@*"
+    "anthropics/claude-code-action@db77d4d3c98f3f6380e7cd45ffba2342a3dbde3c",
+    "Azure/login@*",
+    "renovatebot/github-action@*"
   ]
 }

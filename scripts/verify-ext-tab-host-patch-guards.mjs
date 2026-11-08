@@ -60,6 +60,8 @@ const TABS = PARENT + 'ext-tabs.js';
 const TABS_BASE = 'toolkit/components/extensions/parent/ext-tabs-base.js';
 const SHORTCUTS = 'toolkit/components/extensions/ExtensionShortcuts.sys.mjs';
 const WINDOWS = PARENT + 'ext-windows.js';
+const EXT_PARENT = 'toolkit/components/extensions/ExtensionParent.sys.mjs';
+const POLICIES_PARENT = 'toolkit/components/enterprisepolicies/EnterprisePoliciesParent.sys.mjs';
 
 // mode: 'replace' = the anchor is a `-` line and the guard is its `+` change block;
 //       'after'   = the anchor is a context line and the guard is the `+` block after it;
@@ -138,6 +140,22 @@ const GUARDS = [
       /^\s*message: "This window cannot be closed by an extension\.",\s*$/,
     ],
     why: 'windows.remove refuses a tab host window: closing it ends the session past quitApplication() and the unsaved-work veto (UF-31.1-01, plan 38-06)' },
+  { id: 'G14', file: EXT_PARENT, mode: 'replace',
+    anchor: 'ExtensionParent.browserPaintedPromise = promiseObserved(', site: '_resetStartupPromises',
+    regexes: [
+      /^\s*ExtensionParent\.browserPaintedPromise = Promise\.race\(\[\s*$/,
+      /^\s*promiseObserved\("browser-delayed-startup-finished"\),\s*$/,
+      /^\s*promiseObserved\("extensions-late-startup"\),\s*$/,
+    ],
+    why: 'event pages start in a shell-only session: browserPaintedPromise also resolves on extensions-late-startup (999.15, plan 39-04)' },
+  { id: 'G15', file: POLICIES_PARENT, mode: 'after',
+    anchor: 'Services.obs.addObserver(this, "sessionstore-windows-restored", true);', site: 'EnterprisePoliciesManager',
+    regexes: [/^\s*Services\.obs\.addObserver\(this, "extensions-late-startup", true\);\s*$/],
+    why: 'policies apply with no stock window (999.16, plan 39-04)' },
+  { id: 'G16', file: POLICIES_PARENT, mode: 'before',
+    anchor: 'case "sessionstore-windows-restored":', site: 'observe',
+    regexes: [/^\s*case "extensions-late-startup":\s*$/],
+    why: 'extensions-late-startup runs the onAllWindowsRestored callbacks; they drain with shift, so a later stock window re-runs none (999.16, plan 39-04)' },
 ];
 
 // The weakening plant for each guard: one `+` line changed (or one dropped).
@@ -154,6 +172,10 @@ const WEAKEN = {
   G11: { find: 'currentTab?.linkedBrowser?.frameLoader', replace: 'currentTab.linkedBrowser?.frameLoader' },
   G12: { find: 'updateInfo.width !== null ||', replace: 'updateInfo.width !== null &&' },
   G13: { find: 'if (windowTracker.isTabHostWindow(window)) {', replace: 'if (!windowTracker.isTabHostWindow(window)) {' },
+  G14: { drop: /^\s*promiseObserved\("extensions-late-startup"\),\s*$/ },
+  G15: { find: '"extensions-late-startup"', replace: '"extensions-late-startup-x"' },
+  // G16's block is its one case line, so dropping it is the removal plant; the weakening is the wrong topic.
+  G16: { find: 'case "extensions-late-startup":', replace: 'case "extensions-late-startup-x":' },
 };
 
 // Hunks of 050 that no GUARDS row carries. An entry names one needle found in an added line of one file, and why
@@ -300,6 +322,10 @@ function defName(t) {
   m = /^(?:(?:async|static|get|set)\s+)*\*?\s*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{$/.exec(t);
   if (m) return KEYWORDS.has(m[1]) ? null : m[1];
   m = /^(?:(?:let|const|var)\s+)?([A-Za-z_$][\w$]*)\s*[:=]\s*(?:async\s+)?(?:function\b|class\b|new\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)/.exec(t);
+  if (m) return m[1];
+  // A function assigned to a member (`Outer.inner = () => {`, G14's site) defines its last name. Class-valued members
+  // (`this.pageAction = class ...`) stay out, so G1 and G2 keep their sites.
+  m = /^(?:[A-Za-z_$][\w$]*\.)+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)/.exec(t);
   if (m) return m[1];
   return null;
 }

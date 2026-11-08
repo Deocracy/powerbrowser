@@ -38,6 +38,10 @@
  *                    does not navigate; Escape closes it and focuses Back.
  *   history-error    With the tab's history read stubbed to fail, the menu holds
  *                    one disabled item naming the configured application name.
+ *   back-no-interaction  A tab on /n1 navigates to /n2 through webTabNavigate (the
+ *                    pill's path) with nobody touching the page: Back is enabled
+ *                    and returns to /n1 (AB-4, 1642f2d7: the navigation marks the
+ *                    entry it leaves as user-interacted).
  *   hard-reload-click  Shift+click on Reload sends no-cache; a plain click does not.
  *   stop-guard       A Reload click as soon as the bar renders Reload after the
  *                    loaded push (required to have hit, inside the guard) is
@@ -150,8 +154,10 @@ import {
     loadedAt,
     makeCurrent,
     openWebTab,
+    osClientPointer,
     pageKeyDisabled,
     pillKey,
+    pointerRoute,
     pressKey,
     pushes,
     readPill,
@@ -161,6 +167,7 @@ import {
     waitForPush,
     withProbeShell,
 } from './lib/pb-live-probe.mjs';
+import { releaseButton } from './lib/pb-kwin.mjs';
 import { pollFor, probe, sourceConst } from './lib/pb-relaunch.mjs';
 import { buttonShortcuts, formatTooltip } from './verify-shortcut-relay.mjs';
 
@@ -170,6 +177,18 @@ const MODES_ACTIVATE_COMMAND_ID = sourceConst('theia/extensions/modes/src/browse
 const NAME = 'verify-nav-keys-live';
 const ESCAPE = { key: 'Escape', code: 'Escape', keyCode: 27 };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+// 39-15: PB_REAL_INPUT=1 drives mouse-buttons and long-press with real OS pointer input (pb-live-probe osClientPointer).
+const REAL = process.env.PB_REAL_INPUT === '1';
+
+/** BiDi context ids of the Theia frame and of the top-level page whose URL ends with `path`. */
+async function contextsFor(app, path) {
+    const href = await app.evaluate('location.href');
+    const all = await app.contexts();
+    return { theia: all.find(c => c.url === href)?.context, page: path ? all.find(c => String(c.url).endsWith(path))?.context : undefined };
+}
+
+/** The center of the chrome-bar button `label` in Theia-frame client coordinates. */
+const buttonCenter = async (app, label) => JSON.parse(await app.evaluate(`(() => { const b = ${navButtonExpr(label)}; if (!b) return 'null'; const r = b.getBoundingClientRect(); return JSON.stringify({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }); })()`));
 
 const PAGES = {
     '/slow-esc': { title: 'Slow Esc', body: '<p>still loading</p>', slow: true },
@@ -177,6 +196,8 @@ const PAGES = {
     '/h1': { title: 'History One', body: '<p>one</p>' },
     '/h2': { title: 'History Two', body: '<p>two</p>' },
     '/h3': { title: 'History Three', body: '<p>three</p>' },
+    '/n1': { title: 'No Touch One', body: '<p>n1</p>' },
+    '/n2': { title: 'No Touch Two', body: '<p>n2</p>' },
     '/act-a': { title: 'Activation A', body: '<p>a</p>' },
     '/act-b': { title: 'Activation B', body: '<p>b</p>' },
     '/act-c': { title: 'Activation C', body: '<p>c</p>' },
@@ -671,12 +692,15 @@ const escapeMenu = app => app.evaluate(`(() => {
     return true;
 })()`);
 
-async function longPress({ app, pages, fail }) {
+async function longPress({ app, pages, fail, note }) {
     const setup = await threeStepTab(app, pages, ['/h1', '/h2']);
     if (setup.error) {
         return fail(setup.error);
     }
     const { tabId } = setup;
+    if (REAL) {
+        return realLongPress({ app, tabId, fail, note });
+    }
     const mark = (await pushes(app)).length;
     const pressed = await app.evaluate(`(() => {
         const b = ${navButtonExpr('Back')};
@@ -715,6 +739,106 @@ async function longPress({ app, pages, fail }) {
     const moved = (await pushes(app)).slice(mark).filter(p => p && p.kind === 'state' && p.tabId === tabId && !String(p.url).endsWith('/h2'));
     if (moved.length) {
         return fail(`the release after the hold, or Escape, navigated the tab to ${JSON.stringify(moved[0].url)}`);
+    }
+}
+
+/**
+ * 39-15 (27 T4, WR-01/IN-25) with PB_REAL_INPUT=1: a real 600 ms hold on Back opens the menu, the release lands off
+ * the button (on the pill), Escape closes the menu and the release navigated nothing; then Enter on the focused Back
+ * still goes back one page (the hold left no press state behind).
+ */
+async function realLongPress({ app, tabId, fail, note }) {
+    const { theia } = await contextsFor(app);
+    const back = await buttonCenter(app, 'Back');
+    const pill = JSON.parse(await app.evaluate("(() => { const r = document.querySelector('.pb-chrome-bar-input').getBoundingClientRect(); return JSON.stringify({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }); })()"));
+    const mark = (await pushes(app)).length;
+    await osClientPointer(app, theia, { ...back, button: 'left', action: 'down' });
+    try {
+        await sleep(600);
+        const menus = await readMenus(app);
+        if (menus.length !== 1 || menus[0].length !== 2) {
+            return fail(`a real 600 ms hold on Back must open one history menu with the two entries; saw ${JSON.stringify(menus)}`);
+        }
+        // Off the button before the release: osClientPointer moves only (the hover read-back is the Theia frame's).
+        await osClientPointer(app, theia, { ...pill, action: 'move' });
+    } finally {
+        // WR-02: the gated release decides where it lands; when it throws, the raw release still lifts the button.
+        await osClientPointer(app, theia, { ...pill, button: 'left', action: 'up' }).catch(e => {
+            note(`release: ${e.message}; released without the gate`);
+            releaseButton('left');
+        });
+    }
+    note(`pointer ${pointerRoute.last}, calibration ${JSON.stringify(pointerRoute.calibration?.error)} after ${pointerRoute.calibration?.attempts} attempt(s)`);
+    const focusAfter = await app.evaluate("(document.activeElement && (document.activeElement.className || document.activeElement.localName)) || 'none'");
+    if ((await readMenus(app)).length) {
+        await pressKey(app, ESCAPE);
+        if ((await settle(() => readMenus(app), m => m.length === 0, 1500)).length) {
+            // Observed 2026-11-06: the release on the pill leaves focus there, so a real Escape is the pill's, not the menu's.
+            note(`finding: a real Escape left the history menu open after the release off Back (focus in ${focusAfter}); closed through the menu node`);
+            await escapeMenu(app);
+        }
+    }
+    const left = await settle(() => readMenus(app), m => m.length === 0);
+    if (left.length) {
+        return fail(`Escape did not close the history menu after the real hold: ${JSON.stringify(left)}`);
+    }
+    await sleep(1000);
+    const moved = (await pushes(app)).slice(mark).filter(p => p && p.kind === 'state' && p.tabId === tabId && !String(p.url).endsWith('/h2'));
+    if (moved.length) {
+        return fail(`the real release off Back, or Escape, navigated the tab to ${JSON.stringify(moved[0].url)}`);
+    }
+    if (await focusTheiaFrame(app) !== true || await app.evaluate(`(() => { const b = ${navButtonExpr('Back')}; b.focus(); return document.activeElement === b; })()`) !== true) {
+        return fail(`${BROKEN} Back could not take focus for the Enter leg`);
+    }
+    const before = (await pushes(app)).length;
+    await pressKey(app, { key: 'Enter', code: 'Enter', keyCode: 13 });
+    if (await waitForPush(app, p => isState(tabId, false)(p) && String(p.url).endsWith('/h1'), { from: before, timeoutMs: 5000 }) < 0) {
+        return fail('after the real hold and release off Back, Enter on Back did not go back one page to /h1');
+    }
+    note(`keys ${keyRoute.last}: Enter on Back went back to /h1 after the hold`);
+}
+
+const NO_TOUCH_BACK = 'Back did not return after a navigation with no page interaction';
+
+/**
+ * 999.5: threeStepTab presses a key in the page before each navigation, so its
+ * Back can never see an entry left unmarked. This leg never touches the page:
+ * browser.navigation.requireUserInteraction makes Back skip /n1 unless
+ * webTabNavigate marked it on the way out.
+ */
+async function backNoInteraction({ app, pages, plant, fail, note }) {
+    const tabId = await openWebTab(app, pages.url('/n1'));
+    if (await waitForPush(app, loadedAt(tabId, '/n1')) < 0) {
+        return fail(`${BROKEN} no loaded state push for /n1 arrived`);
+    }
+    // The plant undoes the marking right after webTabNavigate sets it: the overlay's load call runs next, synchronously.
+    const unmark = `const o = overlayOf(${JSON.stringify(tabId)}); if (!o) return false;
+        o.fixupAndLoadURIString = function (...a) { const sh = this.browsingContext.sessionHistory; sh.getEntryAtIndex(sh.index).hasUserInteraction = false; return Object.getPrototypeOf(this).fixupAndLoadURIString.apply(this, a); };
+        return true;`;
+    const planted = plant === 'history-entry-unmarked' && await inChrome(app, unmark) === true;
+    try {
+        const mark = (await pushes(app)).length;
+        await widgetCall(app, tabId, 'navigate', pages.url('/n2'));
+        if (await waitForPush(app, loadedAt(tabId, '/n2'), { from: mark }) < 0) {
+            return fail(`${BROKEN} navigating to /n2 produced no loaded state push`);
+        }
+        if (planted && await inChrome(app, `const sh = overlayOf(${JSON.stringify(tabId)}).browsingContext.sessionHistory;
+            return sh.getEntryAtIndex(sh.index - 1).hasUserInteraction === false;`) === true) {
+            note('PLANT history-entry-unmarked applied');
+        }
+        const enabled = await settle(() => app.evaluate(`!(${navButtonExpr('Back')})?.disabled`), v => v === true);
+        if (enabled !== true) {
+            return fail(`${NO_TOUCH_BACK}: Back stayed disabled on /n2`);
+        }
+        const back = (await pushes(app)).length;
+        if (await clickOn(app, 'Back') !== true) {
+            return fail(`${BROKEN} the Back button could not be clicked`);
+        }
+        if (await waitForPush(app, loadedAt(tabId, '/n1'), { from: back }) < 0) {
+            return fail(`${NO_TOUCH_BACK}: no loaded state push for /n1 after Back`);
+        }
+    } finally {
+        await inChrome(app, `const o = overlayOf(${JSON.stringify(tabId)}); if (o) delete o.fixupAndLoadURIString; return true;`);
     }
 }
 
@@ -1560,6 +1684,7 @@ async function mouseButtons({ app, pages, plant, fail, note }) {
     await sleep(500);
     const a5 = await inChrome(app, `document.removeEventListener('mouseover', window.__pbA5Rec, true); return window.__pbA5;`);
     note(`A5 trusted mouseover on an overlay: ${a5Started === true ? JSON.stringify(a5) : a5Started}`);
+    let pageCtx;
     for (const [command, path, target] of [['Back', '/m1', 'overlay'], ['Forward', '/m2', 'overlay']]) {
         const mark = (await pushes(app)).length;
         // The plant: the pointer moves onto the Theia frame just before the first Back.
@@ -1567,7 +1692,14 @@ async function mouseButtons({ app, pages, plant, fail, note }) {
         if (over !== target) {
             note('PLANT hover-elsewhere applied');
         }
-        if (await appCommand(app, tabId, over, command) !== true) {
+        if (REAL) {
+            // A physical side button over the page: GTK buttons 8/9 become AppCommand Back/Forward in Gecko's widget layer.
+            const ctx = (await contextsFor(app, '/m2')).page ?? pageCtx;
+            pageCtx = ctx;
+            const mid = JSON.parse(await app.evaluateIn(ctx, 'JSON.stringify({ x: Math.round(innerWidth / 2), y: Math.round(innerHeight / 2) })'));
+            await osClientPointer(app, ctx, { ...mid, button: command === 'Back' ? 'back' : 'forward', action: 'click' });
+            note(`pointer ${pointerRoute.last} ${command} over the page, calibration ${JSON.stringify(pointerRoute.calibration?.error)} after ${pointerRoute.calibration?.attempts} attempt(s)`);
+        } else if (await appCommand(app, tabId, over, command) !== true) {
             return fail(`${BROKEN} the overlay of ${tabId} is missing`);
         }
         if (await waitForPush(app, p => isState(tabId, false)(p) && String(p.url).endsWith(path), { from: mark, timeoutMs: 5000 }) < 0) {
@@ -1576,7 +1708,14 @@ async function mouseButtons({ app, pages, plant, fail, note }) {
         await sleep(300);
     }
     const mark = (await pushes(app)).length;
-    await appCommand(app, tabId, 'frame', 'Back');
+    if (REAL) {
+        // Over the Theia frame: the chrome bar's Reload button, outside every page overlay.
+        const { theia } = await contextsFor(app);
+        await osClientPointer(app, theia, { ...(await buttonCenter(app, 'Reload')), button: 'back', action: 'click' });
+        note(`pointer ${pointerRoute.last} Back over the Theia frame, calibration ${JSON.stringify(pointerRoute.calibration?.error)}`);
+    } else {
+        await appCommand(app, tabId, 'frame', 'Back');
+    }
     await sleep(1500);
     const moved = (await pushes(app)).slice(mark).filter(p => p && p.kind === 'state' && p.tabId === tabId && !String(p.url).endsWith('/m2'));
     if (moved.length) {
@@ -1938,6 +2077,7 @@ const SCENARIOS = {
     history: historyMenu,
     'long-press': longPress,
     'history-error': historyError,
+    'back-no-interaction': backNoInteraction,
     'middle-click': middleClick,
     drop: dropOnNewTab,
     home,
@@ -2038,6 +2178,7 @@ const PLANTS = [
     { plant: 'close-fallback-removed', target: 'close-split', run: ['close-split'], expect: "the other pane's tab current" },
     { plant: 'pill-scope-removed', target: 'focus-keys-debug', run: ['focus-keys-debug'], expect: "the debugger's F6 took it" },
     { plant: 'hover-below', target: 'tooltips-all', run: ['tooltips-all'], expect: 'intersects' },
+    { plant: 'history-entry-unmarked', target: 'back-no-interaction', run: ['back-no-interaction'], expect: NO_TOUCH_BACK },
 ];
 
 async function selfTest() {
