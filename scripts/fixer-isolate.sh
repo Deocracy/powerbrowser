@@ -128,6 +128,7 @@ awk "{for (i = 7; i <= NF; i++) if (\$i == \"-\") { print \$5, \$(i + 1); break 
   case "$keep" in *" $mp "*) continue ;; esac
   [ "$fs" = proc ] && continue
   [ -c "$mp" ] && continue   # a socket masked by /dev/null: writes go to the null device
+  [ -e "$mp" ] || continue   # hidden under the scratch /tmp or /var/tmp bind (e.g. the /tmp/.X11-unix tmpfs): no path reaches it
   mount -o remount,bind,ro "$mp" || { echo "fixer-isolate: FAIL -- could not make $mp read-only, so the command could write there" >&2; exit 97; }
 done
 unset FIXER_ISOLATE_RO FIXER_ISOLATE_ROOT

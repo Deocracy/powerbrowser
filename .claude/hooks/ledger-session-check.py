@@ -197,7 +197,9 @@ def main():
     else:
         cmd = [sys.executable, str(script), "--root", str(root), "--complete"]
         if run_check:
-            cmd += ["--run-check", "--check-timeout", "120"]
+            # shortcut: Orca abandons a session whose SessionStart hooks run past 60s, so the
+            # resume check gets 45s; raise it when the quick gate fits in that budget.
+            cmd += ["--run-check", "--check-timeout", "45"]
         proc = subprocess.run(cmd, capture_output=True, text=True)
         checker = [line.strip() for line in
                    (proc.stdout + proc.stderr).splitlines()
