@@ -95,6 +95,8 @@ Parked, waiting on Chris:
 
 ## 3. Shape of the carry-forward phase
 
+**Number assigned 2026-11-07 (Chris): Phase 59 in the orca workstream roadmap** (`.planning/workstreams/orca/ROADMAP.md`); the Orca phases moved to 60-68.
+
 One phase, first in the v1.7 roadmap, with one plan per source row above that needs a human
 (checklist, verify-work 29–31, owner pass sections) and one gap-closure plan per red that needs
 code (999.28–999.31, 57-08). Its exit criterion is the `--gate` run going green with no

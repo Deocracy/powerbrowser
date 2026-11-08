@@ -172,49 +172,51 @@ Deferred; tracked, not in this roadmap.
 
 ## Traceability
 
+Phase 59 (carry-forward from v1.5 and v1.6, Chris 2026-11-07) carries CF-01..CF-19 from `.planning/CARRY-FORWARD-v1.7.md` and maps no v1.7 requirement id.
+
 Filled by the roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| RUN-01 | Phase 59 | Pending |
-| RUN-02 | Phase 59 | Pending |
-| RUN-03 | Phase 61 | Pending |
-| RUN-04 | Phase 61 | Pending |
-| RUN-05 | Phase 61 | Pending |
-| RUN-06 | Phase 66 | Pending |
-| RUN-07 | Phase 66 | Pending |
-| RUN-08 | Phase 66 | Pending |
-| RUN-09 | Phase 66 | Pending |
-| OVL-01 | Phase 61 | Pending |
-| OVL-02 | Phase 67 | Pending |
-| OVL-03 | Phase 67 | Pending |
-| OVL-04 | Phase 59 | Pending |
-| OVL-05 | Phase 61 | Pending |
-| OVL-06 | Phase 67 | Pending |
-| TERM-01 | Phase 62 | Pending |
-| TERM-02 | Phase 62 | Pending |
-| TERM-03 | Phase 62 | Pending |
-| TERM-04 | Phase 62 | Pending |
-| TAB-01 | Phase 63 | Pending |
-| TAB-02 | Phase 63 | Pending |
-| TAB-03 | Phase 60 | Pending |
-| TAB-04 | Phase 63 | Pending |
-| TAB-05 | Phase 64 | Pending |
-| TAB-06 | Phase 63 | Pending |
-| TAB-07 | Phase 64 | Pending |
-| TAB-08 | Phase 64 | Pending |
-| TAB-09 | Phase 64 | Pending |
-| BRW-01 | Phase 60 | Pending |
-| BRW-02 | Phase 65 | Pending |
-| BRW-03 | Phase 65 | Pending |
-| BRW-04 | Phase 65 | Pending |
-| BRW-05 | Phase 65 | Pending |
-| EXT-01 | Phase 59 | Pending |
-| EXT-02 | Phase 62 | Pending |
-| EXT-03 | Phase 60 | Pending |
-| INJ-01 | Phase 66 | Pending |
-| PLAT-01 | Phase 67 | Pending |
-| PLAT-02 | Phase 67 | Pending |
+| RUN-01 | Phase 60 | Pending |
+| RUN-02 | Phase 60 | Pending |
+| RUN-03 | Phase 62 | Pending |
+| RUN-04 | Phase 62 | Pending |
+| RUN-05 | Phase 62 | Pending |
+| RUN-06 | Phase 67 | Pending |
+| RUN-07 | Phase 67 | Pending |
+| RUN-08 | Phase 67 | Pending |
+| RUN-09 | Phase 67 | Pending |
+| OVL-01 | Phase 62 | Pending |
+| OVL-02 | Phase 68 | Pending |
+| OVL-03 | Phase 68 | Pending |
+| OVL-04 | Phase 60 | Pending |
+| OVL-05 | Phase 62 | Pending |
+| OVL-06 | Phase 68 | Pending |
+| TERM-01 | Phase 63 | Pending |
+| TERM-02 | Phase 63 | Pending |
+| TERM-03 | Phase 63 | Pending |
+| TERM-04 | Phase 63 | Pending |
+| TAB-01 | Phase 64 | Pending |
+| TAB-02 | Phase 64 | Pending |
+| TAB-03 | Phase 61 | Pending |
+| TAB-04 | Phase 64 | Pending |
+| TAB-05 | Phase 65 | Pending |
+| TAB-06 | Phase 64 | Pending |
+| TAB-07 | Phase 65 | Pending |
+| TAB-08 | Phase 65 | Pending |
+| TAB-09 | Phase 65 | Pending |
+| BRW-01 | Phase 61 | Pending |
+| BRW-02 | Phase 66 | Pending |
+| BRW-03 | Phase 66 | Pending |
+| BRW-04 | Phase 66 | Pending |
+| BRW-05 | Phase 66 | Pending |
+| EXT-01 | Phase 60 | Pending |
+| EXT-02 | Phase 63 | Pending |
+| EXT-03 | Phase 61 | Pending |
+| INJ-01 | Phase 67 | Pending |
+| PLAT-01 | Phase 68 | Pending |
+| PLAT-02 | Phase 68 | Pending |
 
 **Coverage:**
 - v1 requirements: 39 total
@@ -223,4 +225,4 @@ Filled by the roadmap.
 
 ---
 *Requirements defined: 2026-11-04*
-*Last updated: 2026-11-04 after owner decisions D-01..D-29, the adversarial ownership review and roadmap creation (phases 59-67)*
+*Last updated: 2026-11-04 after owner decisions D-01..D-29, the adversarial ownership review and roadmap creation (phases 59-68)*

@@ -1,10 +1,10 @@
-# Phase 59: Orca from source on Theia's Node - Discussion Log
+# Phase 60: Orca from source on Theia's Node - Discussion Log
 
 > **Audit trail only.** Do not use as input to planning, research, or execution agents.
 > Decisions are captured in CONTEXT.md — this log preserves the alternatives considered.
 
 **Date:** 2026-11-05
-**Phase:** 59-orca-from-source-on-theia-s-node
+**Phase:** 60-orca-from-source-on-theia-s-node
 **Areas discussed:** Pin form and source location, If slot-less start fails on both pins, Claude Code extension check, Build shell and Electron
 
 ---
@@ -91,7 +91,7 @@
 
 | Option | Description | Selected |
 |--------|-------------|----------|
-| Separate script until Phase 67 | No cost to the normal PB build | ✓ |
+| Separate script until Phase 68 | No cost to the normal PB build | ✓ |
 | Join the Theia build now | Earlier integration, slower sidecar builds | |
 
 **User's choice:** New .#orca shell; skip Electron; separate script.

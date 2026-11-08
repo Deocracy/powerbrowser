@@ -1,4 +1,4 @@
-# Phase 59: Orca from source on Theia's Node - Context
+# Phase 60: Orca from source on Theia's Node - Context
 
 **Gathered:** 2026-11-05
 **Status:** Ready for planning
@@ -13,7 +13,7 @@ classified in the brand inventory and Orca's MIT licence is recorded. The Claude
 extension is checked live on Theia 1.76 against an Orca-created worktree.
 
 Requirements: RUN-01, RUN-02, OVL-04, EXT-01. Not in this phase: the overlay and seam gate,
-OrcaService supervision (Phase 61), packaging orcad into PB artifacts (Phase 67).
+OrcaService supervision (Phase 62), packaging orcad into PB artifacts (Phase 68).
 
 Milestone decisions D-01..D-29 in `.planning/workstreams/orca/DECISIONS.md` hold. The decisions
 below are numbered P59-nn so they do not collide with them.
@@ -32,7 +32,7 @@ below are numbered P59-nn so they do not collide with them.
   its `--self-test` plants a mismatched tag and a mismatched commit.
 - **P59-02:** The source is a gitignored `orca/` checkout at the repo root, fetched by a new
   `scripts/fetch-orca.sh` modelled on `scripts/fetch-upstream.sh`: pin read from
-  `generated/upstream-pins.env`, an explicit `TAG=` export may override it (for the Phase 67
+  `generated/upstream-pins.env`, an explicit `TAG=` export may override it (for the Phase 68
   re-pin job), no literal fallback, and safe to re-run (an existing `orca/` is verified against
   the pin, not re-cloned).
 
@@ -49,7 +49,7 @@ below are numbered P59-nn so they do not collide with them.
   pairing URL is a bearer credential: keep it out of logs and probe output.
 - **P59-05:** The start probe is a **permanent full-run `verify-platform.sh` row** (not
   `--quick`). It runs when a built `orca/` exists and prints one named SKIP line otherwise, so the
-  Phase 67 re-pin job re-proves slot-less start on every new tag. The "exactly one Node runtime
+  Phase 68 re-pin job re-proves slot-less start on every new tag. The "exactly one Node runtime
   in the build output" check derives the runtimes from the tree at check time.
 
 ### Claude Code extension check (EXT-01)
@@ -58,7 +58,7 @@ below are numbered P59-nn so they do not collide with them.
   not published on Open VSX, that is the finding; do not sideload a Marketplace VSIX.
 - **P59-07:** Pass bar: the extension's **chat panel** starts a session on the Orca worktree,
   answers a prompt and edits a file. If only the CLI-in-terminal mode works, EXT-01 is recorded
-  as failed-partial and EXT-02 (Phase 62) is reshaped before that phase is planned.
+  as failed-partial and EXT-02 (Phase 63) is reshaped before that phase is planned.
 - **P59-08:** Chris runs the check live with his own Claude login. Execution prepares PB and the
   worktree and hands him a short step list. It is a human checkpoint in the plan, not an
   automated row.
@@ -77,7 +77,7 @@ below are numbered P59-nn so they do not collide with them.
   not run. A check proves no Electron binary exists in the build tree.
 - **P59-12:** The Orca build stays a separate script in this phase, run by hand or by the probe
   row. It does not join the Theia build or `mach build`. Packaging orcad into PB artifacts is
-  PLAT-01 (Phase 67).
+  PLAT-01 (Phase 68).
 
 ### Claude's Discretion
 - Clone depth and fetch mechanics for `fetch-orca.sh`, as long as the commit check holds.
@@ -94,7 +94,7 @@ below are numbered P59-nn so they do not collide with them.
 **Downstream agents MUST read these before planning or implementing.**
 
 ### Milestone scope and decisions
-- `.planning/workstreams/orca/ROADMAP.md` §Phase 59 — goal and the four success criteria
+- `.planning/workstreams/orca/ROADMAP.md` §Phase 60 — goal and the four success criteria
 - `.planning/workstreams/orca/REQUIREMENTS.md` — RUN-01, RUN-02, OVL-04, EXT-01
 - `.planning/workstreams/orca/DECISIONS.md` — D-04 (source build, pin, fallback), D-14 (slot-less on Theia's Node), D-06 (extension goals), D-16 (overlay cap)
 - `.planning/workstreams/orca/ADVERSARIAL-orca-ownership.md` — why the overlay is additive
@@ -154,7 +154,7 @@ below are numbered P59-nn so they do not collide with them.
 - **Does `build:orcad` write slot files into its output?** If its output carries `.runtime-node`, the target file or `.version`, the exact-24.22.1 check turns back on. The probe must start orcad from a directory without them, and this must not require a seam patch.
 - **Which Node binary the probe uses.** The probe must run orcad on the 24.19.0 binary from `node-runtime.json` (what PB ships), not whatever `nodejs_24` version nixpkgs provides in the dev shell. Record both versions.
 - **`orca serve` binds 0.0.0.0.** Spawn orcad directly with `--bind 127.0.0.1` and `--web-client-root <build:web output>` (spike 003 finding).
-- **Hidden Electron side effect.** orcad launches an installed Orca desktop as a hidden browser engine (RUN-04, Phase 61). The probe runs on a host where this cannot occur, or records that it did.
+- **Hidden Electron side effect.** orcad launches an installed Orca desktop as a hidden browser engine (RUN-04, Phase 62). The probe runs on a host where this cannot occur, or records that it did.
 
 </code_context>
 
@@ -162,18 +162,18 @@ below are numbered P59-nn so they do not collide with them.
 ## Specific Ideas
 
 - Run mode is interactive per phase (D-25). EXT-01 is a human checkpoint for Chris; the slot-less double failure is a stop-and-ask.
-- The pin 1.4.248 is already several releases behind on 2026-11-05. That is accepted (D-04); the weekly re-pin is Phase 67.
+- The pin 1.4.248 is already several releases behind on 2026-11-05. That is accepted (D-04); the weekly re-pin is Phase 68.
 
 </specifics>
 
 <deferred>
 ## Deferred Ideas
 
-None — discussion stayed within phase scope. Packaging orcad into PB artifacts and the weekly re-pin remain Phase 67 as already planned.
+None — discussion stayed within phase scope. Packaging orcad into PB artifacts and the weekly re-pin remain Phase 68 as already planned.
 
 </deferred>
 
 ---
 
-*Phase: 59-orca-from-source-on-theia-s-node*
+*Phase: 60-orca-from-source-on-theia-s-node*
 *Context gathered: 2026-11-05*

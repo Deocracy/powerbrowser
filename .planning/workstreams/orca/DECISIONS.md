@@ -90,7 +90,7 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
 - **D-14 — Node:** orcad runs **slot-less on Theia's Node 24.19.0**. The exact-24.22.1 check in
   `orcad-bundled-runtime.ts:19-33,63-76` fires only when the slot's runtime marker files exist;
   without them orcad needs Node 24 or newer. No second runtime is shipped. Supersedes the
-  "Node 24.22.1 pinned by version and hash" line in D-04. Phase 59's spike proves the start.
+  "Node 24.22.1 pinned by version and hash" line in D-04. Phase 60's spike proves the start.
 - **D-15 — Tab layout: PB's dock owns the arrangement (corrected 2026-11-04).** The earlier
   premise was wrong: in shipped and web builds the **renderer** owns the layout; orcad ownership
   is the dark `ORCA_LAYOUT_OWNER=main` build switch (`src/shared/layout-owner-switch.ts`), off
