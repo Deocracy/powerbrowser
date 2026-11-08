@@ -43,6 +43,18 @@ Out of this phase: Windows VM and unsigned Windows build (CF-10, OWNER-PASS §11
 - **D-10:** v1.6 closes inside 59-07, after the owner pass and the gate: `--ws deploy` override closeout per R1/R16, tag `v1.6` locally. — **Reversibility:** one-way — a pushed tag is a published contract; this is why the push is gated.
 - **D-11:** Nothing is pushed during Phase 59. 59-07 asks Chris once for the whole set: `main` (including the v1.5 close-out commits that are still local), tags `v1.5` and `v1.6`, and `ServerDestroyer/v1.7-Orca-integration` (CF-19).
 
+### Conflicts resolved after research (Chris, 2026-11-08)
+- **D-12:** One extra push gate before 59-05. After the wave-1 lanes merge and `--quick` is green, 59-05 opens with a single box asking Chris to push `main` and the v1.7 branch once, so OWNER-PASS §9 (release.yml dispatch on GitHub `main`) and the `ng074-ci-green-on-main` row can run. D-11's end-of-phase gate still covers the `v1.6` tag. Research found `v1.5` is already on origin, so the end set is `main`, `v1.6` and the v1.7 branch. — **Reversibility:** one-way — a push publishes.
+- **D-13:** TEL-13 (CF-11, OWNER-PASS §12): the Windows-release condition in plan 57-04 (owner decision 9) is lifted. 59-02 lands 57-08, then 59-05 runs the switch-on against the Linux release only; Windows gets its own switch-on when CF-10 runs. The receiver on crash.powerbrowser.org is already live.
+
+### Research facts that adjust the plan text (not decisions)
+- The `repo-controls` app-list reads that are red belong to `slack`, `claude`, `powerbrowser-bot`, `powerbrowser-clock` and `cloudflare-workers-and-pages`. DEVICE-FLOW applies to the bot and clock tokens; the three third-party Apps cannot use device flow, so their lists are proven with a per-slug token variable if Chris supplies one at the checkpoint, otherwise re-dated under D-09. DEVICE-FLOW itself is not re-asked.
+- WINDOWS.md has no re-date field. 59-07 adds the mechanism (a coordinator-run script over the existing WINDOWS.md parse/render helpers, dry-run first); `waive` is not it, because a waived entry stops excluding its gate row.
+- Lanes close WINDOWS.md entries by listing the ids in their SUMMARY; the coordinator runs `gsd_run windows fixed <id>` at merge (D-07 forbids lane edits to WINDOWS.md).
+- No lane has an objdir. The coordinator starts one dev `./mach build` at the start of wave 1 in this workspace; lanes prove Theia-side and harness fixes through `PB_FIREFOX_BIN`/`PB_BACKEND_MAIN` (`scripts/lib/firefox-bidi.mjs:40-44`), and chrome-side `.sys.mjs` fixes are verified here after merge.
+- `fixer-isolate-self-test` passes in this worktree on 2026-11-08; the earlier note of a failure is stale. `--quick` takes about 7 minutes here, not seconds.
+- The KWin helper is `scripts/lib/pb-kwin.mjs`; `/gsd-verify-work 29/30/31` use the archived `NN-VERIFICATION.md` human items (no UAT files); `.planning/v1.5-LIVE-PASS.md` holds the run order.
+
 ### Claude's Discretion
 - Exact probe per OWNER-PASS section, SUMMARY wording, lane brief text, the order of fixes inside 59-03, and whether 59-03 opens sub-lanes if its 11 rows prove independent (same disjoint-file rule).
 - Open owner values (postal address for `/privacy`, Email Routing mailbox, two Anthropic spend caps, Cloudflare payment method) are collected at the checkpoint that needs them, not asked up front.
@@ -86,8 +98,8 @@ Out of this phase: Windows VM and unsigned Windows build (CF-10, OWNER-PASS §11
 
 ### Reusable Assets
 - `scripts/verify-platform.sh --only <label>` and `--gate`: every probe a checkpoint needs already exists as a registry row; 59-04/59-05 reuse the deploy live rows (`repo-controls`, `channel-live`, `codeberg-mirror-live`, `upptime-sweep-live`) rather than writing new probes.
-- `scripts/pb-kwin.mjs` (KWin real-input gate) and the gsd-browser MCP: the live-GUI loop for 59-06.
-- `scripts/fixer-isolate.sh --self-test` fails on this host before Phase 59 ("PATH changed inside the isolation", same on main); it is pre-existing and is handled by 59-03 only if its cause is code.
+- `scripts/lib/pb-kwin.mjs` (KWin real-input gate) and the gsd-browser MCP: the live-GUI loop for 59-06.
+- `scripts/fixer-isolate.sh --self-test` passed in this worktree on 2026-11-08 (an earlier failure on 2026-11-05 did not recur).
 
 ### Established Patterns
 - Patches are regenerated, never text-edited; `upstream/` is reset with `git reset --hard` plus `clean -fd` before `apply-patches.sh` (a `checkout -- .` leaves staged hunks in place).
