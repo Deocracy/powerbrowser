@@ -25,7 +25,7 @@ current_phase_name: v1.5 Close-out
 See: .planning/PROJECT.md (updated 2026-11-07)
 
 **Core value:** A stranger can clone Power Browser, edit `configuration.toml`, drop in a logo, and build their own branded, working web browser without touching any other file — then reshape its GUI through Theia extensions without forking the platform.
-**Current focus:** v1.5 shipped (override closeout); human checklist and verify-work 29-31 pending; next milestone via /gsd-new-milestone (deploy workstream continues separately)
+**Current focus:** v1.5 shipped (override closeout); live tests, checklist and deployments deferred to a v1.7 carry-forward phase (see .planning/CARRY-FORWARD-v1.7.md); v1.6 deploy workstream stays open
 
 ## Current Position
 
