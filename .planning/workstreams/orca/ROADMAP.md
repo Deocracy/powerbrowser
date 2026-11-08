@@ -51,7 +51,16 @@ Owner decisions D-01..D-29 (`DECISIONS.md`) and the adopted adversarial review (
   2. Each Claude row (backlog 999.28-999.31, plan 57-08, CF-14, CF-15, CF-16) has one gap-closure plan, is landed, and its gate row is green. The live work already done by 2026-11-07 is recorded in the 41-04, 42-04, 43-05, 47-04 and 48-05 SUMMARYs, not redone.
   3. `scripts/verify-platform.sh --gate` passes with no exclusions, or every remaining `GATE_KNOWN_OPEN_EXCLUSIONS` id is re-dated in WINDOWS.md. An open WINDOWS.md entry closes only with its fix.
   4. v1.6 is closed on workstream `deploy` (R1/R16 override closeout, tag `v1.6`) once the owner pass is done; every push waits on Chris's word (CF-19).
-**Plans**: TBD
+**Plans**: 7 plans
+
+Plans:
+- [ ] 59-01-PLAN.md — lane: record the 2026-11-07 live state in five deploy SUMMARYs (CF-14)
+- [ ] 59-02-PLAN.md — lane: device-flow token input, plan 57-08 clearEnv and gate, the /etc/nixos module (CF-15)
+- [ ] 59-03-PLAN.md — lane: the 11 close-out defects, WINDOWS.md 27-43 (999.28-999.31)
+- [ ] 59-04-PLAN.md — dev build, lane launch and merges, OWNER-PASS sections 1-5 and 13 (CF-01..CF-04, CF-12)
+- [ ] 59-05-PLAN.md — D-12 push, OWNER-PASS sections 6-10 and 12, first Linux release, TEL-13 for Linux (CF-05..CF-09, CF-11)
+- [ ] 59-06-PLAN.md — 41-item v1.5 checklist and verify-work 29/30/31 (CF-17)
+- [ ] 59-07-PLAN.md — Stage F, --gate, D-09 re-dating, CF-13, v1.6 close-out and tag, final push (CF-10, CF-13, CF-16, CF-18, CF-19)
 
 ### Phase 60: Orca from source on Theia's Node
 **Goal**: PowerBrowser builds orcad and Orca's web client from source at the pinned Orca tag, orcad starts slot-less on Theia's Node 24.19.0 with no second runtime, and the Claude Code extension is proven or disproven on Theia 1.76 against an Orca worktree.
