@@ -26,10 +26,9 @@ export class TopTabsSidePanelHandler extends SidePanelHandler {
 
     protected override createSideBar(): SideTabBar {
         const bar = super.createSideBar();
-        // shortcut: the stock overflow menu measures a vertical rail, so in a
-        // row nothing ever counts as overflowing and surplus icons are clipped.
-        // Fine for today's six views; add a horizontal overflow if that grows.
         bar.orientation = 'horizontal';
+        // Stock overflow measures a vertical rail and reads a menu this row lacks (WINDOWS 41); a row never overflows.
+        Object.assign(bar, { hideOverflowingTabs: (): number => -1 });
         return bar;
     }
 
