@@ -16,7 +16,8 @@
 #   5. corepack provides the pnpm version named by orca/package.json
 #   6. pnpm install --frozen-lockfile --ignore-scripts (Orca's postinstall and
 #      its Electron rebuild never run), workspace packages, rebuild:node,
-#      mobile/ install (also --ignore-scripts), build:mobile-web, build:orcad
+#      mobile/ install (also --ignore-scripts), mobile's three generators,
+#      build:mobile-web, build:orcad
 #   7. de-slot: removes the three slot markers and out/runtimes (Node 24.22.1)
 #   8. build:web
 # Orca's source and scripts are never edited (D-16). This build is separate
@@ -90,6 +91,12 @@ run_step rebuild:node pnpm run rebuild:node
 # with its own lockfile; it is installed scripts-off like the root (P60-R3), so
 # mobile's postinstall code generators never run.
 run_step install:mobile pnpm -C mobile install --frozen-lockfile --ignore-scripts --store-dir "$STORE"
+# mobile's own postinstall is the three generators below; with scripts off they
+# are run directly, in its order, so build:mobile-web finds the *.generated
+# modules. No third-party lifecycle script runs (P60-R4).
+run_step gen:terminal-webview-engine node mobile/scripts/build-terminal-webview-engine.mjs
+run_step gen:mermaid-page-engine node mobile/scripts/build-mermaid-page-engine.mjs
+run_step gen:terminal-document-script node mobile/scripts/build-terminal-document-script.mjs
 run_step build:mobile-web pnpm run build:mobile-web
 run_step build:orcad pnpm run build:orcad
 
