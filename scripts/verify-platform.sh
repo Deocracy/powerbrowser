@@ -3667,6 +3667,12 @@ run_own_checks() {
     # and requires this exact un-flagged invocation's decision function to
     # reject it, with a clean control proving the red is plant-caused.
     "scan-brand-residue-self-test|node $REPO_ROOT/scripts/scan-brand-residue.mjs --self-test"
+    # NEW (59-07prep): the D-09 re-date tool's self-test. It copies .planning/WINDOWS.md into a
+    # temp project, proves the dry run writes nothing, that a fixed or unknown id is refused before
+    # anything is written, and that the real run changes only the named entries' reason (status,
+    # counts and every other entry identical) through gsd-core's own WINDOWS.md parser, so gsd-tools
+    # still parses the result. The tool itself runs only in 59-07 with the date Chris names.
+    "redate-windows-self-test|node $REPO_ROOT/scripts/redate-windows.mjs --self-test"
     # NEW (deploy, 2026-10-31): two GitHub organisations each hold a powerbrowser repository,
     # so a hand-typed owner points at the wrong one without failing anything else. Every
     # github.com/<owner>/<repo> reference in tracked code, workflows and generated output must
