@@ -32,6 +32,10 @@
 //                 Anything else is red, a bare self-hosted included: legion
 //                 carries the default self-hosted, linux and x64 labels.
 //                 Jobs with a job-level uses: have no runs-on and are exempt.
+//  job-env-context  A job-level env expression names only the contexts GitHub
+//                 allows there (github, needs, strategy, matrix, vars, secrets,
+//                 inputs). runner, env, steps or job there is a workflow file
+//                 GitHub refuses to run; set the value per step instead.
 //  legion         A legion job carries a legion label: legion or the release
 //                 runner label powerbrowser-release. It is release.yml with a
 //                 job id build-* or matrix-*, with no environment key, no
@@ -208,7 +212,7 @@ try {
     process.exit(1);
 }
 
-const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'fixer-pin', 'fixer-debug', 'fixer-tools', 'fixer-prompt', 'dry-run-gate', 'bot-job-gate', 'uptake-lane', 'dependabot', 'call-event-gate', 'app-token-inputs', 'renovate-job', 'fixer-spend', 'fixer-auth', 'fixer-gate'];
+const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'fixer-pin', 'fixer-debug', 'fixer-tools', 'fixer-prompt', 'dry-run-gate', 'bot-job-gate', 'uptake-lane', 'dependabot', 'call-event-gate', 'app-token-inputs', 'renovate-job', 'fixer-spend', 'fixer-auth', 'fixer-gate', 'job-env-context'];
 // The fixer (Phase 52): its jobs live only in release-train.yml. FIX_PIN is the
 // v1.0.254 commit of claude-code-action; its tag object is a different hash and is refused.
 const FIXER_FILE = 'release-train.yml';
@@ -545,6 +549,12 @@ function runChecks(root, overrides = {}) {
             const eff = effective(job, wf, def);
             const stepUses = steps.map(s => (typeof s.uses === 'string' ? s.uses : ''));
 
+            // job-env-context: GitHub refuses the whole file when a job-level env names a context only a step has.
+            for (const expr of JSON.stringify(job.env ?? null).match(/\$\{\{[^}]*\}\}/g) ?? []) {
+                const bad = expr.match(/(?<![\w.'"-])(runner|env|steps|job)\./);
+                if (bad) fail(rel, jobId, 'job-env-context', `job-level env uses ${expr}, and the ${bad[1]} context is not allowed in a job-level env, so GitHub rejects the workflow file. Next step: set that variable in the env of each step that reads it.`);
+            }
+
             // runner and legion
             let hosted = false;
             if (job.uses === undefined) {
@@ -794,10 +804,10 @@ function runChecks(root, overrides = {}) {
                         if (w.path === undefined && w.ref !== 'main') gf(`its root checkout is ref ${JSON.stringify(w.ref ?? '(default)')}, not main, so scripts from the target branch run with the App token. Next step: check out main at the root and the target under a path.`);
                         if (w.path !== undefined && exprOf(w.ref) !== '${{needs.fix.outputs.base-sha}}') gf(`its target checkout is not at the gated base-sha (needs.fix.outputs.base-sha), so it could publish onto a tree nobody gated. Next step: check out that exact commit.`);
                     }
-                    // WR-06 (re-review): the bytes verified are the bytes applied and published. One job variable names the path; the step that
-                    // hashes it, the step that re-gates it, the step that applies it and the opener all read that variable, and none of them
-                    // may swallow a failure (continue-on-error, || true, set +e), because a swallowed re-gate publishes bytes nobody verified.
-                    if (exprOf(job.env?.FIX_DIFF) !== '${{runner.temp}}/fix-diff/work.diff') gf(`job env FIX_DIFF is ${JSON.stringify(job.env?.FIX_DIFF ?? '(absent)')}, not \${{ runner.temp }}/fix-diff/work.diff, so the steps that hash, re-gate, apply and render the diff have no one path. Next step: set FIX_DIFF on the job.`);
+                    // WR-06 (re-review): the bytes verified are the bytes applied and published. One value names the path: the step that
+                    // hashes it, the step that re-gates it, the step that applies it and the opener each set FIX_DIFF to it in the step env (a job
+                    // env cannot read runner.temp) and read that variable, and none of them may swallow a failure (continue-on-error, || true,
+                    // set +e), because a swallowed re-gate publishes bytes nobody verified.
                     for (const d of uses('actions/download-artifact@')) {
                         if (exprOf(d.with?.path) !== '${{runner.temp}}/fix-diff') gf(`a download-artifact step puts the gated diff at ${JSON.stringify(d.with?.path ?? '(absent)')}, not \${{ runner.temp }}/fix-diff, so FIX_DIFF is not the downloaded file. Next step: download into \${{ runner.temp }}/fix-diff.`);
                     }
@@ -811,6 +821,7 @@ function runChecks(root, overrides = {}) {
                         if (found.length !== 1) gf(`has ${found.length} step(s) that ${what}, not exactly one. Next step: restore the step.`);
                         for (const x of found) {
                             const t = runText(x);
+                            if (exprOf(x.env?.FIX_DIFF) !== '${{runner.temp}}/fix-diff/work.diff') gf(`the step that ${what} has env FIX_DIFF ${JSON.stringify(x.env?.FIX_DIFF ?? '(absent)')}, not \${{ runner.temp }}/fix-diff/work.diff, so the steps that hash, re-gate, apply and render the diff have no one path. Next step: set FIX_DIFF in that step's env.`);
                             if (x['continue-on-error'] !== undefined && x['continue-on-error'] !== false) gf(`the step that ${what} sets continue-on-error: ${JSON.stringify(x['continue-on-error'])}, so a failure there no longer stops the job and bytes nobody verified can be published. Next step: remove it.`);
                             if (swallow.test(t)) gf(`the step that ${what} swallows a failure (\`|| true\`, \`|| :\`, \`|| exit 0\`, \`; true\` or \`set +e\`), so a failed check no longer stops the job. Next step: let the failure fail the step.`);
                             for (const [re, label] of needs2) {
@@ -1369,8 +1380,6 @@ function selfTest() {
         '    runs-on: ubuntu-latest',
         '    environment: bot',
         '    permissions: {}',
-        '    env:',
-        '      FIX_DIFF: ${{ runner.temp }}/fix-diff/work.diff',
         '    steps:',
         `      - uses: ${CHECKOUT}`,
         '        with:',
@@ -1388,11 +1397,14 @@ function selfTest() {
         '          path: ${{ runner.temp }}/fix-diff',
         '      - if: ${{ !inputs.dry-run }}',
         '        env:',
+        '          FIX_DIFF: ${{ runner.temp }}/fix-diff/work.diff',
         '          DIFF_SHA256: ${{ needs.fix.outputs.diff-sha256 }}',
         '        run: |',
         '          sha256sum "$FIX_DIFF"',
         '          node scripts/verify-fix-gate.mjs --static-only --diff="$FIX_DIFF"',
         '      - if: ${{ !inputs.dry-run }}',
+        '        env:',
+        '          FIX_DIFF: ${{ runner.temp }}/fix-diff/work.diff',
         '        run: |',
         '          T() { GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C target -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null "$@"; }',
         '          T apply --index "$FIX_DIFF"',
@@ -1404,6 +1416,7 @@ function selfTest() {
         '          permission-pull-requests: write',
         '      - if: ${{ !inputs.dry-run }}',
         '        env:',
+        '          FIX_DIFF: ${{ runner.temp }}/fix-diff/work.diff',
         '          GH_TOKEN: ${{ steps.app.outputs.token }}',
         '        run: node scripts/fix-open-pr.mjs --open --diff="$FIX_DIFF"',
         '',
@@ -1626,7 +1639,9 @@ function selfTest() {
         ['fix-pr apply step with continue-on-error', gateEdit('      - name: Apply the gated diff in target/ and commit it (skipped in dry-run)\n        id: apply\n', '      - name: Apply the gated diff in target/ and commit it (skipped in dry-run)\n        id: apply\n        continue-on-error: true\n'), rel(T), 'fix-pr', 'fixer-gate', 'continue-on-error'],
         ['fix-pr opener rendering from another file', gateEdit('fix-open-pr.mjs --open --diff="$FIX_DIFF"', 'fix-open-pr.mjs --open --diff="$GITHUB_WORKSPACE/other.diff"'), rel(T), 'fix-pr', 'fixer-gate', '--diff="$FIX_DIFF"'],
         ['fix-pr re-gate reading a literal path', gateEdit('--static-only --diff="$FIX_DIFF"', '--static-only --diff="$RUNNER_TEMP/fix-diff/work.diff"'), rel(T), 'fix-pr', 'fixer-gate', 'work.diff'],
-        ['fix-pr FIX_DIFF pointing at another file', gateEdit('      FIX_DIFF: ${{ runner.temp }}/fix-diff/work.diff', '      FIX_DIFF: ${{ runner.temp }}/other/work.diff'), rel(T), 'fix-pr', 'fixer-gate', 'job env FIX_DIFF'],
+        ['fix-pr FIX_DIFF pointing at another file', gateEdit('          FIX_DIFF: ${{ runner.temp }}/fix-diff/work.diff\n          DIFF_SHA256:', '          FIX_DIFF: ${{ runner.temp }}/other/work.diff\n          DIFF_SHA256:'), rel(T), 'fix-pr', 'fixer-gate', 'env FIX_DIFF'],
+        ['fix-pr opener without FIX_DIFF in its env', gateEdit('          FIX_DIFF: ${{ runner.temp }}/fix-diff/work.diff\n          GH_TOKEN:', '          GH_TOKEN:'), rel(T), 'fix-pr', 'fixer-gate', '(absent)'],
+        ['fix-pr FIX_DIFF back on the job env (runner context, GitHub rejects the file)', gateEdit('      contents: read\n    # The one path of the gated diff', '      contents: read\n    env:\n      FIX_DIFF: ${{ runner.temp }}/fix-diff/work.diff\n    # The one path of the gated diff'), rel(T), 'fix-pr', 'job-env-context', 'runner context'],
         ['fix job diff-sha256 rebound to the log step', gateEdit('diff-sha256: ${{ steps.digest.outputs.diff-sha256 }}', 'diff-sha256: ${{ steps.log.outputs.diff-sha256 }}'), rel(T), 'fix', 'fixer-gate', 'diff-sha256 output is taken from step "log"'],
         ['fix job digest step without sha256sum', gateEdit('echo "diff-sha256=$(sha256sum "$RUNNER_TEMP/work.diff" | cut -d\' \' -f1)" >> "$GITHUB_OUTPUT"', 'echo "diff-sha256=0000" >> "$GITHUB_OUTPUT"'), rel(T), 'fix', 'fixer-gate', 'diff-sha256 output'],
         ['fix job base-sha rebound to the digest step', gateEdit('base-sha: ${{ steps.base.outputs.base-sha }}', 'base-sha: ${{ steps.digest.outputs.base-sha }}'), rel(T), 'fix', 'fixer-gate', 'base-sha output is taken from step "digest"'],
@@ -1650,7 +1665,7 @@ function selfTest() {
         ['Claude step without the federation rule id', fixerEdit('          anthropic_federation_rule_id: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}\n', ''), rel(T), 'fix', 'fixer-auth', 'anthropic_federation_rule_id'],
         ['Claude step without the organization id', fixerEdit('          anthropic_organization_id: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}\n', ''), rel(T), 'fix', 'fixer-auth', 'anthropic_organization_id'],
         ['id-token write on fix-gate', fixerEdit('      contents: read\n    if: "' + GATE_IF + '"', '      contents: read\n      id-token: write\n    if: "' + GATE_IF + '"'), rel(T), 'fix-gate', 'fixer-auth', 'id-token'],
-        ['ANTHROPIC_API_KEY referenced in fix-pr (environment bot)', fixerEdit('      FIX_DIFF: ${{ runner.temp }}/fix-diff/work.diff\n    steps:', '      FIX_DIFF: ${{ runner.temp }}/fix-diff/work.diff\n      FALLBACK_KEY: ${{ secrets.ANTHROPIC_API_KEY }}\n    steps:'), rel(T), 'fix-pr', 'fixer-auth', 'fixer'],
+        ['ANTHROPIC_API_KEY referenced in fix-pr (environment bot)', fixerEdit("    environment: bot\n    permissions: {}\n    steps:", "    environment: bot\n    permissions: {}\n    env:\n      FALLBACK_KEY: ${{ secrets.ANTHROPIC_API_KEY }}\n    steps:"), rel(T), 'fix-pr', 'fixer-auth', 'fixer'],
     );
     plants.push(
         ['fix job timeout-minutes 5', fixerEdit('    timeout-minutes: 90', '    timeout-minutes: 5'), rel(T), 'fix', 'fixer-spend', 'timeout-minutes'],

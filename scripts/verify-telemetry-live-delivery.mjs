@@ -473,19 +473,25 @@ async function fullDrill() {
                     window.__pbDrill.sender.maxBatchSize = 2;
                     return 'ok'; })()`);
                 const setLevel = async (level) => {
-                    await evaluate(`window.__pbDrill.levelSet = false; window.__pbDrill.prefs.set(${JSON.stringify(levelKey)}, ${JSON.stringify(level)}).then(() => { window.__pbDrill.levelSet = true; }); 'ok'`);
-                    await waitFor('window.__pbDrill.levelSet === true', { timeoutMs: 10000 });
+                    // User scope (1): the shell opens with no workspace, and an unscoped set targets Workspace settings, which
+                    // rejects there. A rejected set is reported with its message, not left to time out.
+                    await evaluate(`window.__pbDrill.levelSet = false; window.__pbDrill.prefs.set(${JSON.stringify(levelKey)}, ${JSON.stringify(level)}, 1).then(() => { window.__pbDrill.levelSet = true; }, e => { window.__pbDrill.levelSet = 'rejected: ' + (e && e.message); }); 'ok'`);
+                    await waitFor('window.__pbDrill.levelSet !== false', { timeoutMs: 10000 });
+                    const got = await evaluate('window.__pbDrill.levelSet');
+                    if (got !== true) throw new Error(`setting ${levelKey} to ${level} failed (${got})`);
                 };
                 // Positive half: level error, one uncaught error and one unhandled rejection, flushed by batch size 2.
                 state.level = 'error';
                 await setLevel('error');
-                await evaluate(`setTimeout(() => { throw new Error('pb-drill-uncaught'); }, 0); Promise.reject(new Error('pb-drill-rejected')); 'ok'`);
+                // The uncaught error must be built inside the served bundle: the producer admits a source only from a script URL,
+                // and an Error built in this evaluated code has none. A missing binding makes inversify throw from bundle code.
+                await evaluate(`setTimeout(() => { window.theia.container.get(Symbol('pb-drill-uncaught')); }, 0); Promise.reject(new Error('pb-drill-rejected')); 'ok'`);
                 const delivered = await pollUntil(() => captures.some(c => c.method === 'POST' && c.level === 'error'), 20000);
                 if (!delivered) failures.push('the positive half sent no POST at level error. Next step: check the arming and the batch flush.');
                 // Negative half, same run: level off, the same budget of errors, zero requests.
                 state.level = 'off';
                 await setLevel('off');
-                await evaluate(`setTimeout(() => { throw new Error('pb-drill-off-uncaught'); }, 0); Promise.reject(new Error('pb-drill-off-rejected')); 'ok'`);
+                await evaluate(`setTimeout(() => { window.theia.container.get(Symbol('pb-drill-off-uncaught')); }, 0); Promise.reject(new Error('pb-drill-off-rejected')); 'ok'`);
                 await new Promise(r => setTimeout(r, 5000));
             });
         });
