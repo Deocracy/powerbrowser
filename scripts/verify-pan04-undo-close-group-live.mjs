@@ -457,11 +457,15 @@ await runCheck(`verify-${NAME}`, async ({ pages, expect, failures }) => {
         const g4done = await waitUntil(() => run(`${PROBES} return !m.isClosing(S.g5) && !m.listGroups().some(g => g.id === S.g5);`), Math.max(0, p4.deadline - Date.now()) + 10000, 125);
         const g4d = await run(`
             ${DOM}
-            await settle(() => document.activeElement === org.node.querySelector('.pb-org-new'), 40);
-            return { onNew: document.activeElement === org.node.querySelector('.pb-org-new'), active: document.activeElement ? document.activeElement.className : null, left: org.node.querySelectorAll('.pb-org-undo').length };
+            // WINDOWS 37: New Group is in the toolbar, a shell top-panel row while Organising shows (placeToolbar,
+            // e6a2a279), never inside org.node; re-read from the live widget on every pass.
+            const newGroup = () => (A.shell().getWidgetById('powerbrowser.modes.organising') || org).toolbar.querySelector('.pb-org-new');
+            await settle(() => document.activeElement === newGroup(), 40);
+            return { onNew: document.activeElement === newGroup(), active: document.activeElement ? document.activeElement.className : null, left: org.node.querySelectorAll('.pb-org-undo').length, buttons: document.querySelectorAll('.pb-org-new').length };
         `);
         expect(g4done, '(g) G5 never committed at the end of its window');
         expect(g4d.onNew && g4d.left === 0, `(g) after the commit focus is on ${g4d.active} with ${g4d.left} Undo controls left, want New Group and none`);
+        expect(g4d.buttons === 1, `(g) ${g4d.buttons} New Group buttons are in the document, want the one Organising toolbar's`);
         expect(p4.red, 'probe control undoCloseGroupById stubbed to a no-op did not go red -- the probe cannot see that fault');
         detail(`(g) tree: the Undo control sits at section index ${g2d.at}, focused; Browsing and back: the control is still there (${g3d.view} view); at the deadline with focus on it, the commit left focus on New Group`);
 
