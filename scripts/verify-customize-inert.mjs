@@ -47,9 +47,8 @@
 // and `scripts/lib/firefox-bidi.mjs`.
 
 import { withFirefoxPage } from './lib/firefox-bidi.mjs';
-import { readFile, writeFile, unlink } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 
@@ -60,24 +59,16 @@ import { createHash } from 'node:crypto';
 // Past the CSS layer's ~150ms hot-reload debounce, with margin.
 const SETTLE_MS = 2000;
 
-const CONFIG_DIR = join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'powerbrowser');
-const CSS_PATH = join(CONFIG_DIR, 'customize.css');
-
 const sha256 = buf => createHash('sha256').update(buf).digest('hex');
 
 async function main() {
-    // Preserve the config directory's pre-run state so it can be restored
-    // exactly, including on a forced kill (SIGINT).
-    const preExisted = existsSync(CSS_PATH);
-    const preContent = preExisted ? await readFile(CSS_PATH, 'utf8') : null;
-
-    const restore = async () => {
-        if (preExisted) {
-            await writeFile(CSS_PATH, preContent);
-        } else {
-            await unlink(CSS_PATH).catch(() => { /* already absent */ });
-        }
-    };
+    // WINDOWS 34: the layer reads $THEIA_CONFIG_DIR/customize.css, and with a profile present
+    // TheiaService._resolveConfigDir() sets that to <profile>/powerbrowser-theia, so this check
+    // owns the launch's profile and writes there; no XDG path is ever read on this launch.
+    // A fresh profile also makes state 1 (absent) true by construction, with nothing to restore.
+    const profileDir = await mkdtemp(join(tmpdir(), 'powerbrowser-customize-inert-'));
+    const CSS_PATH = join(profileDir, 'powerbrowser-theia', 'customize.css');
+    await mkdir(join(profileDir, 'powerbrowser-theia'));
 
     // CR-03: this used to register its own `restore().finally(() =>
     // process.exit(130))`, racing withFirefoxPage's own internal SIGINT
@@ -90,19 +81,21 @@ async function main() {
     // the driver's own WebSocket (its SIGINT handler, firefox-bidi.mjs)
     // rejects any in-flight BiDi call, which propagates out of
     // withFirefoxPage() and reaches this function's own `finally` --
-    // where `restore()` already runs -- deterministically, not racing
-    // anything.
+    // where the profile is removed, after the driver has killed the
+    // browser -- deterministically, not racing anything.
     let sigintReceived = false;
     process.on('SIGINT', () => { sigintReceived = true; });
 
     try {
-        await unlink(CSS_PATH).catch(() => { /* already absent */ });
-
         const surfacesRun = [];
 
         // WINDOWS 14: empty URL -- this check reads the shell, never a URL page.
         await withFirefoxPage('', async ({ waitFor, screenshot }) => {
-            await waitFor("document.getElementById('theia-app-shell') ? true : false", { timeoutMs: 20000 });
+            // The shell is attached before the layout initializes and the boot spinner fades; Theia
+            // removes .theia-preload as its last step before 'ready' (FrontendApplication.revealShell).
+            // Found live (WINDOWS 34): a capture 2 s after attach still showed the spinner, so state 1
+            // differed from state 2 with no CSS involved.
+            await waitFor("document.getElementById('theia-app-shell') && !document.querySelector('.theia-preload') ? true : false", { timeoutMs: 20000 });
 
             // State 1: no customize.css.
             await new Promise(r => setTimeout(r, SETTLE_MS));
@@ -141,7 +134,7 @@ async function main() {
             if (!hotReload) {
                 throw new Error('state 1 (absent) vs state 3 (styled) -- pixels identical, the CSS layer had no effect');
             }
-        });
+        }, { profileDir });
 
         const EXPECTED = ['state1-absent', 'state2-empty', 'state3-styled'];
         const missing = EXPECTED.filter(s => !surfacesRun.includes(s));
@@ -155,7 +148,8 @@ async function main() {
         console.error(`verify-customize-inert: FAIL -- ${err.message}`);
         process.exitCode = 1;
     } finally {
-        await restore();
+        // withFirefoxPage leaves a caller-owned profile in place; the browser is already dead here.
+        await rm(profileDir, { recursive: true, force: true });
         // Set last so a SIGINT-triggered failure reports the conventional
         // 130 rather than whatever the catch block above set.
         if (sigintReceived) process.exitCode = 130;
