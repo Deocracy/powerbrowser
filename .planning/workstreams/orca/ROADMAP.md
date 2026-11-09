@@ -85,9 +85,16 @@ Plans:
 **Plans**: 5 plans
 
 Plans:
+**Wave 1**
 - [ ] 60-01-PLAN.md — pin in configuration.toml through the generator, fetch-orca.sh, .#orca shell, orca-pin rows, pnpm legitimacy checkpoint (RUN-01)
+
+**Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 60-02-PLAN.md — first real build (Wave 0), build-orca.sh with de-slot, orca-build-shape rows, docs/BUILD.md Orca half (RUN-01, RUN-02)
+
+**Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 60-03-PLAN.md — slot-less orcad on Node 24.19.0 with web-tab pairing, orca-slotless-start rows, D-04 fallback decision (RUN-02)
+
+**Wave 4** *(blocked on Wave 3 completion)*
 - [ ] 60-04-PLAN.md — licence allow-list row and check, strict orca brand probe on the tracked tree (OVL-04)
 - [ ] 60-05-PLAN.md — Claude Code extension on an Orca worktree in Theia 1.76, Chris's live check and record (EXT-01)
 
