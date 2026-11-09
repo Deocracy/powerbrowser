@@ -38,6 +38,9 @@ objdir-nplus1/
 objdir-macos-aarch64/
 objdir-macos-x86_64/
 .mozbuild/
+# Orca source checkout (scripts/fetch-orca.sh). Anchored: an unanchored orca/ also hides .planning/workstreams/orca/.
+/orca/
+/orca.partial/
 
 # Generator output (GEN-04, D-16)
 # scripts/generate.mjs writes every derived build surface here. Nothing under

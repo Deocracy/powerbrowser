@@ -3093,6 +3093,15 @@ export function emitEndpointHosts(config, variant) {
  * as one KEY=value assignment, sourced by scripts/fetch-upstream.sh as
  * its TAG default.
  *
+ * THE ORCA PAIR (Phase 60, RUN-01). When [upstreams] states both orca_tag
+ * and orca_commit, the fragment also carries UPSTREAM_ORCA_TAG and
+ * UPSTREAM_ORCA_COMMIT, sourced by scripts/fetch-orca.sh as its TAG and
+ * COMMIT default. Both keys are optional (downstream manifests have no use
+ * for an Orca pin), but one without the other is refused naming the missing
+ * key: a tag with no commit cannot be verified. The names carry the
+ * UPSTREAM_ prefix so they never land in Orca's own ORCA_ environment
+ * namespace, which orcad reads at start.
+ *
  * WHY NO GENERATED_BANNER. Same reason as the JSON fragments: there is no
  * tracked file to copy over -- the fragment is read from generated/
  * directly, never copied -- so the banner's copy step would name a
@@ -3111,10 +3120,15 @@ export function emitEndpointHosts(config, variant) {
  */
 const UPSTREAM_PINS_BANNER = Object.freeze([
     '# Generated from configuration.toml by scripts/generate.mjs -- do not edit here.',
-    '# To change it: edit configuration.toml ([upstreams] firefox_esr_tag), run: node scripts/generate.mjs.',
-    '# Sourced by scripts/fetch-upstream.sh as its TAG default.',
+    '# To change it: edit configuration.toml ([upstreams] firefox_esr_tag, orca_tag, orca_commit), run: node scripts/generate.mjs.',
+    '# Sourced by scripts/fetch-upstream.sh (TAG default) and scripts/fetch-orca.sh (TAG and COMMIT default).',
 ]);
 const TAG_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
+// Same classes as the config-schema.json rows; re-checked here because the sink is an unquoted assignment.
+const ORCA_PIN_PATTERNS = Object.freeze({
+    orca_tag: /^v[0-9]+\.[0-9]+\.[0-9]+$/,
+    orca_commit: /^[0-9a-f]{40}$/,
+});
 export function emitUpstreamPins(config, variant) {
     void variant;
     const tag = config.upstreams?.firefox_esr_tag;
@@ -3125,7 +3139,30 @@ export function emitUpstreamPins(config, variant) {
         ]);
     }
     assertEmittable('upstreams.firefox_esr_tag', tag);
-    return [...UPSTREAM_PINS_BANNER, `FIREFOX_ESR_TAG=${tag}`, ''].join('\n');
+    const lines = [...UPSTREAM_PINS_BANNER, `FIREFOX_ESR_TAG=${tag}`];
+    const orcaTag = config.upstreams?.orca_tag;
+    const orcaCommit = config.upstreams?.orca_commit;
+    if ((orcaTag === undefined) !== (orcaCommit === undefined)) {
+        const missing = orcaTag === undefined ? 'orca_tag' : 'orca_commit';
+        const present = orcaTag === undefined ? 'orca_commit' : 'orca_tag';
+        report([
+            `upstreams.${present} is set but upstreams.${missing} is missing; the Orca pin needs both. `
+            + `Add upstreams.${missing} to ${MANIFEST_NAME} (or remove upstreams.${present}), then run: ${RERUN}`,
+        ]);
+    }
+    if (orcaTag !== undefined) {
+        for (const [key, value] of [['orca_tag', orcaTag], ['orca_commit', orcaCommit]]) {
+            if (typeof value !== 'string' || !ORCA_PIN_PATTERNS[key].test(value)) {
+                report([
+                    `upstreams.${key} is ${JSON.stringify(value)}, which does not have the required shape `
+                    + `(${ORCA_PIN_PATTERNS[key].source}). Correct it in ${MANIFEST_NAME}, then run: ${RERUN}`,
+                ]);
+            }
+            assertEmittable(`upstreams.${key}`, value);
+        }
+        lines.push(`UPSTREAM_ORCA_TAG=${orcaTag}`, `UPSTREAM_ORCA_COMMIT=${orcaCommit}`);
+    }
+    return [...lines, ''].join('\n');
 }
 
 /**
