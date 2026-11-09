@@ -19,6 +19,7 @@ is not a completed-plan summary until `status: complete`.
 | 1 | Tracer: dev objdir build running and three lanes live | bf24c3be | done |
 | 2 | OWNER-PASS section 13, ledger amendments (CF-12) | 3c846e78 | superseded by D-14; deferred rows reopened, nothing dropped |
 | 3 | OWNER-PASS section 2 remainder (47-04): postal address, download URL, website push | e79aa086 | done; every probe green, `--quick` PASS |
+| 4 | OWNER-PASS section 3 remainder (CF-01) | (pending) | probes run; waiting for Chris's three owner steps; two code reds under Gap closure |
 
 ## Lanes
 
@@ -101,6 +102,57 @@ there is nothing left to run for this section. R15 and CF-12 are withdrawn.
 
 The ledger files changed by the reopen are in commit 3c846e78; this session made no ledger
 change.
+
+## Task 4: OWNER-PASS §3 remainder (CF-01), probes before the owner steps
+
+Read-only probes run 2026-11-08 before the checkpoint (no owner step done yet):
+
+- Release environment of Deocracy/powerbrowser: secret `BOT_APP_PRIVATE_KEY` only;
+  `R2_MAR_WRITE_TOKEN` absent. Variables `R2_MAR_BUCKET` and `CLOUDFLARE_ACCOUNT_ID` present
+  (2026-11-07).
+- Deocracy/powerbrowser-status: no repository secret (`GH_PAT` absent); GitHub Pages not
+  enabled (pages API 404); https://status.powerbrowser.org/ answers with the `*.github.io`
+  certificate, so the CNAME resolves but Pages serves nothing. Uptime CI runs every few minutes
+  and succeeds; `UPPTIME_STATUS_REPO=Deocracy/powerbrowser-status --only upptime-sweep-live`
+  PASS (8 workflows active, ran within 36 h).
+- Deocracy/powerbrowser-updates: workflow Watchdog `disabled_manually`.
+- Deocracy/powerbrowser-scheduler: no secret; checkout at $HOME/.cache/powerbrowser-59/scheduler
+  (5ca455b, wrangler.toml cron `17 * * * *`, `[[send_email]]` MAIL, `CLOCK_APP_ID` 5633729,
+  `REPO_OWNER` Deocracy). Not deployed: the account lists only the Workers
+  `powerbrowser-crash-submit` and `powerbrowser-events`.
+- Token file ~/.config/cloudflare/pb-token (read from the file, never echoed): verify `active`,
+  expires 2026-12-07; it reads the account's Workers scripts and subdomain, so Claude can run the
+  scheduler `wrangler deploy` after Chris has set `CLOCK_PRIVATE_KEY`. Everything stays on the
+  Free plan (D-15): one cron trigger, Email Routing.
+- `--only events-worker` PASS, `--only watchdog` PASS (static rows).
+- release-train.yml: every push run since at least 2026-11-07 (main and the v1.7 branch) failed
+  in 0 s with "This run likely failed because of a workflow file issue". actionlint 1.7.12:
+  `.github/workflows/release-train.yml:1968:21: context "runner" is not allowed here` (job-level
+  `env: FIX_DIFF: ${{ runner.temp }}/fix-diff/work.diff` in the `fix-pr` job). GitHub rejects the
+  whole file, so the §3a dry-run dispatch cannot run until a fixed workflow is on GitHub `main`.
+  Code red, listed under Gap closure.
+- tel06-error-delivery-live on a clean tree (0 tracked changes, the condition entry 33 asked
+  for): the dirty-tree refusal is gone, but the drill now fails:
+  `the drill did not complete (waitFor timed out after 10000ms waiting for truthy:
+  window.__pbDrill.levelSet === true)` and `no capture at all`. Both frontend builds of the drill
+  finished with 0 errors and the tree was restored to 0 tracked changes (log
+  $HOME/.cache/powerbrowser-59/tel06-t4.log). WINDOWS.md 33 stays open; `windows fixed 33` was not
+  run. Code red, listed under Gap closure.
+
+## Gap closure
+
+Code reds found in this plan, each for a gap-closure plan appended to Phase 59 (D-03):
+
+1. **release-train.yml is invalid on GitHub.** `fix-pr` job `env:` uses `runner.temp`, which is
+   not available at job level. scripts/verify-workflows.mjs:800 asserts that exact form, and its
+   fixture (lines 1373, 1629) plants it, so the static gate stays green over a workflow GitHub
+   refuses. The fix moves `FIX_DIFF` to a context allowed at job level (or sets it per step),
+   updates verify-workflows.mjs and its self-test, and adds a check that would have gone red here.
+   It must land before the D-12 push, because §3a's `release-train.yml` dry run and the scheduler
+   clock both dispatch this workflow on `main`.
+2. **tel06-error-delivery-live times out on `window.__pbDrill.levelSet`** on a clean tree with
+   this objdir: the sidecar sends no request to the loopback endpoint. Entry 33's recorded cause
+   (dirty tree) is no longer the cause.
 
 ## Deviations from Plan
 
