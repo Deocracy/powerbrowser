@@ -1367,8 +1367,14 @@ async function contextMenu({ app, pages, plant, fail, note }) {
     if (!await pickRow(app, theia, ftlLabel('main-context-menu-image-copy-link'))) {
         return fail('the image menu has no Copy Image Link row to pick');
     }
-    if (await settle(() => clipboardText(app), t => t === assets.url('/pixel.png'), 3000) !== assets.url('/pixel.png')) {
-        return fail('Copy Image Link did not put the image URL on the clipboard');
+    // WINDOWS 43: read the clipboard only once the pick has run its command (the menu closes on a run row), so a
+    // click that missed the row is named as that, not as a clipboard failure.
+    if (await settle(() => menuRows(app), rows => rows === null, 3000) !== null) {
+        return fail('the Copy Image Link click left the image menu open (the row command did not run)');
+    }
+    const copied = await settle(() => clipboardText(app), t => t === assets.url('/pixel.png'), 3000);
+    if (copied !== assets.url('/pixel.png')) {
+        return fail(`Copy Image Link did not put the image URL on the clipboard (it holds ${JSON.stringify(String(copied).slice(0, 80))})`);
     }
     mark = (await pushes(app)).length;
     await openMenuAt(app, page, tabId, await centreOf(app, page, '#img'));
