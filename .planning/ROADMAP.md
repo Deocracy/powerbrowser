@@ -478,7 +478,7 @@ Plans:
 - [ ] Ten release-artifact rows (ng063, portable-elf, sidecar-no-symlinks, package-target-natives, packaged-identity, install-matrix, ng065, ng072, search-engines-packaged, mar-update-hop). Repro: `scripts/verify-platform.sh --only portable-elf`. Cause so far: no container-built tarball and no N-plus-1 MAR hop; owner steps in `.planning/workstreams/deploy/OWNER-PASS.md`. Source: no UAT test. WINDOWS.md entry 30.
 - [ ] Seven live-state rows (ng074-ci-green-on-main, repo-controls, channel-live, codeberg-mirror-live, upptime-sweep-live, win-matrix-record, win-download-copy). Repro: `scripts/verify-platform.sh --only channel-live`. Cause so far: main not pushed, no Release, undeclared apps and slugs, no Windows matrix record. Source: no UAT test. WINDOWS.md entry 31.
 - [ ] macos-package-payload, macos-install-matrix: deferred to v1.7 (R4). Source: no UAT test. WINDOWS.md entry 32.
-- [ ] tel06-error-delivery-live refuses the dirty tree (the owner's `.claude/settings.json`, `.planning/state.json`); run it on a clean checkout. Source: no UAT test. WINDOWS.md entry 33.
+- [x] tel06-error-delivery-live refuses the dirty tree (the owner's `.claude/settings.json`, `.planning/state.json`); run it on a clean checkout. Source: no UAT test. WINDOWS.md entry 33. Fixed in Phase 59 (59-08, 4fb2771e, 93af17ee).
 - [ ] ng089-uat-sheets: 49 pending results plus no React 19 runtime test in the v1.2 and v1.3 UAT sheets; the NG-084 live pass was deferred by the owner. Repro: `node scripts/verify-ng-089-uat-sheets.mjs`. Source: those sheets. WINDOWS.md entry 35.
 
 ### Phase 999.33: Scenario-scoped gate exclusions (BACKLOG)

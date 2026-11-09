@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 14
+open_count: 13
 waived_count: 2
-fixed_count: 27
+fixed_count: 28
 total_count: 43
-last_updated: 2026-11-09T06:25:41.438Z
+last_updated: 2026-11-09T07:46:10.114Z
 ---
 
 # Broken Windows Ledger
@@ -47,7 +47,7 @@ last_updated: 2026-11-09T06:25:41.438Z
 | 30 | 39 | unrun-verify | powerbrowser/packaging/package-linux.sh |  | 39-19 full run (6ac27ac2): ng063-packaged-launch, portable-elf, sidecar-no-symlinks, package-target-natives, packaged-identity, install-matrix, ng065-mar-signature-enforced, ng072-policies-packaged-webextension, search-engines-packaged and mar-update-hop are red because no container-built release tarball exists in objdir-release/dist and hop.json has no served key; repro: scripts/verify-platform.sh --only portable-elf; cause so far: the PKG-17 container build with the release keys and the N-plus-1 MAR hop are owner steps in .planning/workstreams/deploy/OWNER-PASS.md, not run; source: no UAT test, 39-BASELINE environment rows | open |  | 2026-11-07T10:18:30.468Z |  |
 | 31 | 39 | unrun-verify | .github/settings/ |  | 39-19 full run (6ac27ac2): ng074-ci-green-on-main, repo-controls, channel-live, codeberg-mirror-live, upptime-sweep-live, win-matrix-record and win-download-copy are red on live owner state: no verify.yml run for the unpushed main head, 5 repo-controls problems (apps slack and claude undeclared), no published Release, Codeberg and Upptime slugs undeclared, scripts/matrix/win-matrix-record.json absent; repro: scripts/verify-platform.sh --only channel-live; cause so far: each needs an owner push, release or checkpoint input (deploy OWNER-PASS.md, 53-04 and 54-04 checkpoints); source: no UAT test, 39-BASELINE environment rows | open |  | 2026-11-07T10:18:30.720Z |  |
 | 32 | 39 | unrun-verify | powerbrowser/packaging/package-macos.sh |  | 39-19 full run (6ac27ac2): macos-package-payload (.mozbuild/macos-package absent) and macos-install-matrix (25 unobserved items) are red; repro: scripts/verify-platform.sh --only macos-package-payload; cause so far: macOS is deferred to v1.7 by R4 (2026-11-03) and needs Mac hardware; ledger 23 is waived, so it cannot key a gate exclusion; source: no UAT test, 39-BASELINE environment rows | open |  | 2026-11-07T10:18:30.941Z |  |
-| 33 | 39 | unrun-verify | scripts/verify-telemetry-live-delivery.mjs |  | tel06-error-delivery-live refuses to run: 'the working tree is dirty (2 tracked change(s), first: M .claude/settings.json)'; repro: scripts/verify-platform.sh --only tel06-error-delivery-live; cause so far: the drill rewrites a tracked file and rebuilds, so it refuses any dirty tree, and the dirt is the owner's local hook removal in .claude/settings.json plus .planning/state.json, which an agent may not commit; runs on a clean checkout; source: no UAT test, 39-BASELINE and 39-19 full run | open |  | 2026-11-07T10:18:31.179Z |  |
+| 33 | 39 | unrun-verify | scripts/verify-telemetry-live-delivery.mjs |  | tel06-error-delivery-live refuses to run: 'the working tree is dirty (2 tracked change(s), first: M .claude/settings.json)'; repro: scripts/verify-platform.sh --only tel06-error-delivery-live; cause so far: the drill rewrites a tracked file and rebuilds, so it refuses any dirty tree, and the dirt is the owner's local hook removal in .claude/settings.json plus .planning/state.json, which an agent may not commit; runs on a clean checkout; source: no UAT test, 39-BASELINE and 39-19 full run | fixed |  | 2026-11-07T10:18:31.179Z | 2026-11-09T07:46:10.114Z |
 | 34 | 39 | unmet-truth | scripts/verify-customize-inert.mjs |  | verify-customize-inert: 'state 1 (absent) vs state 3 (styled) -- pixels identical, the CSS layer had no effect' (39-BASELINE, 39-19 full run and rerun, 3 of 3); repro: scripts/verify-platform.sh --only verify-customize-inert; cause so far: the script writes $XDG_CONFIG_HOME/powerbrowser/customize.css and captures the shell's supervised frontend, which may read customize.css from another config dir (the customize extension resolves user-storage:/user/customize.css); not isolated; source: no UAT test (CUST-01 registry row) | fixed |  | 2026-11-07T10:18:31.417Z | 2026-11-09T05:38:35.008Z |
 | 35 | 39 | unrun-verify | .planning/milestones/v1.3-phases/15-panorama-organising/15-UAT.md |  | ng089-uat-sheets: 49 pending results plus no recorded React 19 runtime test across the v1.2 10-UAT and v1.3 13, 14, 14.1, 14.1.1 and 15 UAT sheets; repro: node scripts/verify-ng-089-uat-sheets.mjs; cause so far: the NG-084 live UAT pass over those sheets was deferred by the owner ('Defer all the checks') and never run; source: the listed UAT sheets, every pending test | open |  | 2026-11-07T10:18:31.663Z |  |
 | 36 | 39 | unmet-truth | powerbrowser/shell/TheiaService.sys.mjs |  | start-failure-shows-error (MIG-04): 'the failing settings-folder step did not name itself in its diagnostics rows (Failed step = waiting for the backend readiness announcement)' (39-BASELINE, 39-19 full run and rerun); repro: scripts/verify-platform.sh --only start-failure-shows-error; cause so far: the log shows 'Backend did not announce POWERBROWSER_BACKEND_READY within 3000ms' first, so the readiness backstop fires before the planted settings-folder failure is classified; not isolated; source: no UAT test (MIG-04 registry row) | fixed |  | 2026-11-07T10:18:31.926Z | 2026-11-09T05:38:48.313Z |
@@ -461,10 +461,10 @@ last_updated: 2026-11-09T06:25:41.438Z
     "file": "scripts/verify-telemetry-live-delivery.mjs",
     "line": null,
     "description": "tel06-error-delivery-live refuses to run: 'the working tree is dirty (2 tracked change(s), first: M .claude/settings.json)'; repro: scripts/verify-platform.sh --only tel06-error-delivery-live; cause so far: the drill rewrites a tracked file and rebuilds, so it refuses any dirty tree, and the dirt is the owner's local hook removal in .claude/settings.json plus .planning/state.json, which an agent may not commit; runs on a clean checkout; source: no UAT test, 39-BASELINE and 39-19 full run",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-07T10:18:31.179Z",
-    "resolved_at": null,
+    "resolved_at": "2026-11-09T07:46:10.114Z",
     "milestone": "v1.5"
   },
   {
