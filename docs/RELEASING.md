@@ -589,6 +589,63 @@ the date, never where.
 - No App private key exists before Phase 43, which is the first consumer. Both Apps
   are created with no key generated.
 
+### App installation read-back
+
+`repo-controls` reads each App installation's repository list from
+`GET user/installations/<id>/repositories`. That endpoint refuses the owner's `gh`
+token (HTTP 403: it needs a token authorized to the App), so plan 41-04 field 10
+chose DEVICE-FLOW: the owner mints a short-lived App user token and passes it to
+the row in one environment variable per App.
+
+- The variable is `REPO_CONTROLS_TOKEN_<SLUG>`: the App slug upper-cased, with `-`
+  turned into `_`. It is read for every installation, declared or undeclared:
+
+  | App | Owner | Variable |
+  |---|---|---|
+  | `powerbrowser-bot` | the org | `REPO_CONTROLS_TOKEN_POWERBROWSER_BOT` |
+  | `powerbrowser-clock` | the org | `REPO_CONTROLS_TOKEN_POWERBROWSER_CLOCK` |
+  | `slack` | third party | `REPO_CONTROLS_TOKEN_SLACK` |
+  | `claude` | third party | `REPO_CONTROLS_TOKEN_CLAUDE` |
+  | `cloudflare-workers-and-pages` | third party | `REPO_CONTROLS_TOKEN_CLOUDFLARE_WORKERS_AND_PAGES` |
+
+- With a variable unset, that list is read with the owner token, as before.
+- The token reaches exactly one `gh` child, as `GH_TOKEN` in that child's
+  environment. The row never prints, logs, caches, returns or writes it, and no
+  other read takes a token; the `--self-test` line naming
+  `REPO_CONTROLS_TOKEN_POWERBROWSER_BOT` proves both.
+- A run without the variables is red on the list reads by design. Each refused
+  read is a FAIL that names its variable and this subsection; it never skips and
+  never passes.
+
+Re-run procedure for the two Apps the org owns, from a terminal at the repository
+root. Repeat steps 1 to 4 for each App whose list read was refused:
+`powerbrowser-bot` with `REPO_CONTROLS_TOKEN_POWERBROWSER_BOT`, and
+`powerbrowser-clock` with `REPO_CONTROLS_TOKEN_POWERBROWSER_CLOCK`.
+
+1. App settings > General: tick "Enable Device Flow" and save. Copy the Client ID.
+   It is not the App ID. Generate no private key and no client secret.
+2. `curl -s -X POST -H 'Accept: application/json' -d client_id=<client id> https://github.com/login/device/code`
+   Note `device_code` and `user_code`.
+3. Open https://github.com/login/device, enter the `user_code`, and authorize.
+4. Only after authorizing, put the token into this shell without echoing it:
+   `export REPO_CONTROLS_TOKEN_POWERBROWSER_BOT="$(curl -s -X POST -H 'Accept: application/json' -d client_id=<client id> -d device_code=<device_code> -d grant_type=urn:ietf:params:oauth:grant-type:device_code https://github.com/login/oauth/access_token | node -pe 'JSON.parse(require("fs").readFileSync(0, "utf8")).access_token')"`
+   Use the clock variable for the clock App. The token expires after 8 hours.
+5. `scripts/verify-platform.sh --only repo-controls`. Expected:
+   `repo-controls: PASS`. If a list read is still refused, repeat steps 2 to 4 for
+   that App and run it again.
+6. `unset REPO_CONTROLS_TOKEN_POWERBROWSER_BOT REPO_CONTROLS_TOKEN_POWERBROWSER_CLOCK`.
+   Then on github.com > Settings > Applications > Authorized GitHub Apps, revoke
+   each App you authorized. This does not uninstall the App.
+
+Never paste a token into a reply, a file or an issue.
+
+The three third-party Apps (`slack`, `claude`, `cloudflare-workers-and-pages`;
+`app-cloudflare-workers-and-pages.json` has `"third_party": true`) cannot use
+device flow: only an App's owner can enable it, and the org does not own them.
+Their lists go green only with a token the owner supplies in the same variable
+form at the Phase 59 plan 59-04 checkpoint. Otherwise each of those list reads is
+re-dated under Phase 59 decision D-09 and stays red until then.
+
 ### Fixer authentication (FIX-12)
 
 Outcome: the fixer authenticates to Anthropic with GitHub OIDC workload identity
