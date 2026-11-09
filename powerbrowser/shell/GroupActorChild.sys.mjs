@@ -151,6 +151,37 @@ export class PowerBrowserEditStateChild extends JSWindowActorChild {
     switch (message.name) {
       case "PowerBrowserEditState:Query":
         return !!this.docShell && this.docShell.isCommandEnabled(String(message.data && message.data.cmd)) === true;
+      case "PowerBrowserEditState:Do": {
+        // WINDOWS 43 (59-09): a page menu edit row on a text field runs on the right-clicked field (the ContextMenu
+        // actor's target, held until chrome's Hiding, which follows this message). The overlay is hidden under the
+        // menu and shown at the pick, and on that show Gecko's focus fix-up can clear the page's focused element
+        // before this arrives, so a docShell command would find no editor. The field's own controllers do not
+        // depend on focus. Anything else (contenteditable) keeps the docShell route, behind the same guard.
+        const cmd = String(message.data && message.data.cmd);
+        const controller = this.manager.getActor("ContextMenu").target?.controllers?.getControllerForCommand(cmd);
+        if (controller) {
+          if (controller.isCommandEnabled(cmd)) {
+            controller.doCommand(cmd);
+          }
+        } else if (this.docShell && this.docShell.isCommandEnabled(cmd)) {
+          this.docShell.doCommand(cmd);
+        }
+        return undefined;
+      }
+      case "PowerBrowserEditState:Target": {
+        // WINDOWS 43 (59-09): the same field's own command state, for the page menu's edit rows; null when the
+        // right-clicked target has no controllers, so chrome keeps its cached state.
+        const controllers = this.manager.getActor("ContextMenu").target?.controllers;
+        if (!controllers) {
+          return null;
+        }
+        const states = {};
+        for (const cmd of (message.data && message.data.cmds) || []) {
+          const controller = controllers.getControllerForCommand(String(cmd));
+          states[cmd] = !!controller && controller.isCommandEnabled(String(cmd)) === true;
+        }
+        return states;
+      }
     }
     return undefined;
   }

@@ -1800,15 +1800,19 @@ async function menuEdit({ app, pages, plant, fail, note }) {
         return fail('the second field has no Paste row to pick');
     }
     const fieldValue = () => app.evaluateIn(tools.page, `document.getElementById('field2').value`);
-    if (await settle(fieldValue, v => v === 'alpha', 3000) !== 'alpha') {
-        return fail('Paste did not set the second field');
+    // WINDOWS 43: read only after a miss, so the state that names the cause costs no time on a green run.
+    const editState = async seen => JSON.stringify({ seen, menu: (await menuRows(app))?.map(r => `${r.label}${r.disabled ? ' (off)' : ''}`) ?? 'closed', focused: await app.evaluateIn(tools.page, `document.activeElement?.id || document.activeElement?.localName || null`) });
+    const pasted = await settle(fieldValue, v => v === 'alpha', 3000);
+    if (pasted !== 'alpha') {
+        return fail(`Paste did not set the second field (${await editState(pasted)})`);
     }
     await app.evaluateIn(tools.page, `document.getElementById('field2').focus(); true`);
     if (!await pickFromMenu(app, tools, '#field2', ftlLabel('text-action-undo'))) {
         return fail('the second field has no Undo row to pick');
     }
-    if (await settle(fieldValue, v => v === '', 3000) !== '') {
-        return fail('Undo did not restore the second field\'s previous value');
+    const undone = await settle(fieldValue, v => v === '', 3000);
+    if (undone !== '') {
+        return fail(`Undo did not restore the second field's previous value (${await editState(undone)})`);
     }
     await inChrome(app, `Cc['@mozilla.org/widget/clipboardhelper;1'].getService(Ci.nsIClipboardHelper).copyString('pb-sentinel'); return true;`);
     if (!await pickFromMenu(app, tools, '#img', ftlLabel('main-context-menu-image-copy'))) {
@@ -1838,16 +1842,23 @@ const IMAGE_FLAVOURS = ['application/x-moz-nativeimage', 'image/png', 'image/jpe
 async function applyIframeEditPlants(app, plant, note) {
     if (plant === 'edit-rows-top-document') {
         // CR-02's defect: every Controllers read and command goes to the top document, never the right-clicked frame.
+        // WINDOWS 43 (59-09): a text field's rows read and run through the edit-state actor, so its messages go to the
+        // top document's actor too; otherwise this plant would no longer reach the rows it is meant to break.
         if (await inChrome(app, `const { ControllersParent } = ChromeUtils.importESModule('resource://gre/actors/ControllersParent.sys.mjs');
-            const proto = ControllersParent.prototype;
-            const topOf = actor => actor.browsingContext.top === actor.browsingContext ? actor : actor.browsingContext.top.currentWindowGlobal.getActor('Controllers');
-            for (const name of ['isCommandEnabled', 'doCommand']) {
-                const real = proto[name];
-                const planted = function (cmd) { return real.call(topOf(this), cmd); };
-                planted.__pbPlanted = true;
-                proto[name] = planted;
+            const { PowerBrowserEditStateParent } = ChromeUtils.importESModule('chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs');
+            const planted = [];
+            for (const [Actor, actorName, names] of [[ControllersParent, 'Controllers', ['isCommandEnabled', 'doCommand']], [PowerBrowserEditStateParent, 'PowerBrowserEditState', ['sendQuery', 'sendAsyncMessage']]]) {
+                const proto = Actor.prototype;
+                const topOf = actor => actor.browsingContext.top === actor.browsingContext ? actor : actor.browsingContext.top.currentWindowGlobal.getActor(actorName);
+                for (const name of names) {
+                    const real = proto[name];
+                    const wrapped = function (...args) { return real.apply(topOf(this), args); };
+                    wrapped.__pbPlanted = true;
+                    proto[name] = wrapped;
+                    planted.push(proto[name].__pbPlanted === true);
+                }
             }
-            return proto.isCommandEnabled.__pbPlanted === true && proto.doCommand.__pbPlanted === true;`) === true) {
+            return planted.length === 4 && planted.every(Boolean);`) === true) {
             note('PLANT edit-rows-top-document applied');
         }
     }
