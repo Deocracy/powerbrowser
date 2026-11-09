@@ -293,3 +293,32 @@ Code reds found in this plan, each for a gap-closure plan appended to Phase 59 (
   keyed to fixed ids is one sweep for a later change.
 - **Before the D-12 push:** the release-train.yml fix (03b5f9b3) must be on GitHub `main` before §3a's
   release-train.yml dry run or the scheduler clock dispatches the workflow; GitHub rejects the pre-fix file.
+
+### 59-09 (Gap closure item 3; WINDOWS 43)
+
+- **Lane commits:** beab4276 (`pageMenuEdit` runs a text-field edit row on the right-clicked field through its own
+  controllers, via `PowerBrowserEditState:Do`), f51a345a (`pageMenuFacts` reads a text field's edit state from that
+  field, via `PowerBrowserEditState:Target`), 8ac2e703 (menu-edit names the menu rows and focus state on a Paste or
+  Undo miss), 80154cb5 (plant `edit-rows-top-document` also reaches the new edit-state route), 3918ad7c (59-09 plan
+  and summary).
+- **Cause (from the lane):** the overlay `<browser>` is `visibility: hidden` while a page menu is open and is shown
+  again at the pick; `PresShell::FixUpFocus` then clears the page's focused element, and the edit rows ran on, and
+  read their state from, that focused element. Product defect, fixed in the product, not by a harness wait.
+- **Merge:** ee692f3d, `git merge --no-ff refs/heads/ServerDestroyer/p59-09`, no conflicts. scan-brand-residue PASS
+  (680 files).
+- **Rows proven on the merged tree (2026-11-09):**
+  - `nix develop .#theia --command bash -c 'cd theia && yarn build'`: exit 0.
+  - `page-furniture-live-self-test` PASS 3 of 3 on a clean tree: each run the clean control green and all 34 plants
+    red for their own reasons. Run under `flock pb-live.lock` with `PB_FIREFOX_BIN` this worktree's objdir (its
+    `powerbrowser/shell` modules resolve to this worktree) and `PB_BACKEND_MAIN` this worktree's backend; the harness
+    purges the startup cache. Logs: $HOME/.cache/powerbrowser-59/merge-59-09/self-test-1..3.log.
+  - `page-furniture-live` PASS (live-1.log, same directory); tracked tree clean after.
+  - `--quick` PASS (330 checks).
+- **WINDOWS 43:** closed with `gsd-tools windows fixed 43 --ws orca` (open_count 13 -> 12); backlog follow-up ticked in
+  ROADMAP 999.30. Commit b4d2ed72. Gap closure item 3 above is closed by this merge.
+- **Gate exclusion left in place:** the `--gate` known-open row `page-furniture-live-self-test|43|...` in
+  scripts/verify-platform.sh still exists; it joins the rows keyed to fixed ids noted under 59-08, for the same later
+  sweep.
+- **Not fixed (lane Remaining):** after any page menu pick the page still loses its focused element, so the caret does
+  not return to the field. Edit rows no longer depend on it. Restoring focus means hiding the overlay without
+  `visibility: hidden`, which touches every blocking layer; left for a planned change.
