@@ -1556,13 +1556,14 @@ check_shell_diagnostics_rows_populated() {
 # classified failure path (shell03-unrecoverable-immediate-error drives it) and
 # exercising it here would prove nothing about escapes. A regular FILE is
 # planted at exactly the path `TheiaService._resolveConfigDir()` derives from
-# the config-home environment variable, so `PowerBrowserAPI.ensureDirectory`
-# (IOUtils.makeDirectory) cannot create a directory there and throws.
+# the launch's profile directory (<profile>/powerbrowser-theia), so
+# `PowerBrowserAPI.ensureDirectory` (IOUtils.makeDirectory) cannot create a
+# directory there and throws.
 #
 # Both planted directories are mktemp -d paths registered with track_temp
 # (T-01-10) -- never a repo file, never a path outside the temp root.
 check_start_failure_shows_error() {
-  local stub_dir poison_home user_js result=0
+  local stub_dir profile user_js result=0
   stub_dir="$(mktemp -d)"; track_temp "$stub_dir"
   # Exists only so the sidecar-resolution step's existence check passes. On the
   # path under test it is never spawned at all -- the settings-folder fault
@@ -1572,9 +1573,11 @@ check_start_failure_shows_error() {
 setInterval(() => {}, 60000);
 EOF
 
-  poison_home="$(mktemp -d)"; track_temp "$poison_home"
-  # THE FAULT: a regular file where the settings folder must be created.
-  printf 'not a directory\n' > "$poison_home/powerbrowser"
+  profile="$(mktemp -d)"; track_temp "$profile"
+  # THE FAULT: a regular file where the settings folder must be created. WINDOWS 36: with a
+  # profile present TheiaService._resolveConfigDir() returns <profile>/powerbrowser-theia and
+  # never reads XDG_CONFIG_HOME, so the plant goes in the launch's own profile, minted here.
+  printf 'not a directory\n' > "$profile/powerbrowser-theia"
 
   user_js="$(mktemp)"; track_temp "$user_js"
   # A recovery-probe interval far beyond this check's own deadline: the error
@@ -1588,11 +1591,9 @@ user_pref("powerbrowser.sidecar.recoveryProbeIntervalMs", 600000);
 EOF
 
   export VERIFY05_USER_JS_PROFILE="$user_js"
-  export VERIFY05_XDG_CONFIG_HOME="$poison_home"
-  start_shell
+  start_shell "$profile"
   local start_rc=$?
   unset VERIFY05_USER_JS_PROFILE
-  unset VERIFY05_XDG_CONFIG_HOME
   if [ "$start_rc" -ne 0 ]; then
     echo "start-failure-shows-error: FAIL -- MIG-04 -- could not launch the built binary" >&2
     return 1

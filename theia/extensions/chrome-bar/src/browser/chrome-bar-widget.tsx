@@ -3,6 +3,7 @@ import { createPortal } from '@theia/core/shared/react-dom';
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import {
     ApplicationShell,
+    ContextMenuAccess,
     ContextMenuRenderer,
     FrontendApplicationContribution,
     HoverService,
@@ -12,6 +13,7 @@ import {
 import { CommandMenu, CommandRegistry, CompoundMenuNode, Disposable, MenuPath } from '@theia/core/lib/common';
 import { PreferenceScope, PreferenceService } from '@theia/core/lib/common/preferences';
 import { KeybindingRegistry } from '@theia/core/lib/browser/keybinding';
+import { BrowserContextMenuAccess } from '@theia/core/lib/browser/menu/browser-context-menu-renderer';
 import { PerspectiveService } from '@theia/core/lib/browser/perspective-service';
 import { FileDialogService } from '@theia/filesystem/lib/browser';
 import { DownloadAction, WebTabChannel, WebTabDownloadRow, WebTabOpenHandler, WebTabSharing, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
@@ -983,14 +985,22 @@ export class ChromeBarWidget extends ReactWidget {
             // after that release's click, wherever it lands, so a later keyboard
             // Enter/Space (a click with no pointerdown) is never eaten. A hold
             // ended by pointercancel delivers no pointerup, so that clears it too.
+            const opened = this.openHistoryMenu(button);
             const done = (): void => {
                 window.removeEventListener('pointerup', done, true);
                 window.removeEventListener('pointercancel', done, true);
-                setTimeout(() => { this.suppressNavClick = false; });
+                setTimeout(() => {
+                    this.suppressNavClick = false;
+                    // WINDOWS 27: a real release off the button (on the pill) takes focus from the open menu, so Escape would miss it.
+                    void opened.then(access => {
+                        if (access instanceof BrowserContextMenuAccess && access.menu.isAttached && !access.menu.node.contains(document.activeElement)) {
+                            access.menu.activate();
+                        }
+                    });
+                });
             };
             window.addEventListener('pointerup', done, true);
             window.addEventListener('pointercancel', done, true);
-            this.openHistoryMenu(button);
         }, HISTORY_HOLD_MS);
     };
 
@@ -1071,10 +1081,10 @@ export class ChromeBarWidget extends ReactWidget {
      * shows the one disabled error item. `.lm-Menu` is in the overlay's
      * blocking-layer selector, so the page hides while it is open.
      */
-    protected async openHistoryMenu(button: HTMLElement): Promise<void> {
+    protected async openHistoryMenu(button: HTMLElement): Promise<ContextMenuAccess | undefined> {
         const tab = currentWebTab();
         if (!tab) {
-            return;
+            return undefined;
         }
         const reply = await tab.history().catch(() => undefined);
         const entries = reply?.ok && reply.where === 'done' ? reply.entries ?? [] : [];
@@ -1107,7 +1117,7 @@ export class ChromeBarWidget extends ReactWidget {
             }];
         const menu: CompoundMenuNode = { id: 'history', sortString: '0', children, isVisible: () => true, isEmpty: () => false };
         const rect = button.getBoundingClientRect();
-        this.menus.render({
+        return this.menus.render({
             menuPath: HISTORY_MENU_PATH,
             menu,
             anchor: { x: rect.left, y: rect.bottom },

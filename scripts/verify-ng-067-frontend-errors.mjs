@@ -32,6 +32,7 @@ function __getByName(container, name) {
     return container.get(found);
 }`;
 const failures = [];
+let loggedAll = '[]';
 if (!LEVEL_KEY) failures.push('broken instrument: TELEMETRY_LEVEL_PREFERENCE not found in telemetry-preferences.ts');
 process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), 'ng067-cfg-'));
 
@@ -64,16 +65,19 @@ if (failures.length === 0) await withFirefoxPage('', async ({ evaluate, waitFor 
     // Level error, set at runtime.
     await evaluate(`window.__ng067.prefs.set(${JSON.stringify(LEVEL_KEY)}, 'error', 1); 'ok'`);
     await waitFor(`window.__ng067.prefs.get(${JSON.stringify(LEVEL_KEY)}) === 'error'`, { timeoutMs: 10000 });
-    await evaluate(`setTimeout(() => { throw new Error('ng067-at-error'); }, 0); Promise.reject(new Error('ng067-rejection')); 'ok'`);
+    // WINDOWS 42: wait on the entries logged after this mark. A session-wide count (>= 2) also counted the at-off
+    // error, so one other frontend error let the wait pass before the at-error throw was logged and queued.
+    await evaluate(`window.__ng067.mark = window.__ng067.logged.length; setTimeout(() => { throw new Error('ng067-at-error'); }, 0); Promise.reject(new Error('ng067-rejection')); 'ok'`);
     try {
-        await waitFor(`window.__ng067.logged.filter(n => n === 'frontend.uncaught-error').length >= 2 && window.__ng067.logged.includes('frontend.unhandled-rejection')`, { timeoutMs: 10000 });
+        await waitFor(`(l => l.includes('frontend.uncaught-error') && l.includes('frontend.unhandled-rejection'))(window.__ng067.logged.slice(window.__ng067.mark))`, { timeoutMs: 10000 });
     } catch {
-        failures.push(`at level error the logger saw only ${await evaluate('JSON.stringify(window.__ng067.logged)')}`);
+        failures.push(`at level error the logger saw only ${await evaluate('JSON.stringify(window.__ng067.logged.slice(window.__ng067.mark))')} after the throw`);
     }
     await flush();
+    loggedAll = await evaluate('JSON.stringify(window.__ng067.logged)');
     const sent = JSON.parse(await evaluate('JSON.stringify(window.__ng067.sent)')).join('\n');
     for (const name of ['frontend.uncaught-error', 'frontend.unhandled-rejection']) {
-        if (!sent.includes(name)) failures.push(`at level error no ${name} event was sent`);
+        if (!sent.includes(name)) failures.push(`at level error no ${name} event was sent (logged ${await evaluate('JSON.stringify(window.__ng067.logged)')})`);
     }
 });
 
@@ -81,4 +85,4 @@ if (failures.length) {
     console.error(`${NAME}: FAIL -- ${failures.length} failure(s):\n  ${failures.join('\n  ')}`);
     process.exit(1);
 }
-console.log(`${NAME}: PASS -- both error kinds reach the logger; off sends nothing; error sends both`);
+console.log(`${NAME}: PASS -- both error kinds reach the logger; off sends nothing; error sends both (logged ${loggedAll})`);

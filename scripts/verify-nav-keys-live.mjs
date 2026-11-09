@@ -773,9 +773,9 @@ async function realLongPress({ app, tabId, fail, note }) {
     if ((await readMenus(app)).length) {
         await pressKey(app, ESCAPE);
         if ((await settle(() => readMenus(app), m => m.length === 0, 1500)).length) {
-            // Observed 2026-11-06: the release on the pill leaves focus there, so a real Escape is the pill's, not the menu's.
-            note(`finding: a real Escape left the history menu open after the release off Back (focus in ${focusAfter}); closed through the menu node`);
+            // WINDOWS 27 (fixed): the release on the pill took focus from the menu, so a real Escape was the pill's.
             await escapeMenu(app);
+            return fail(`a real Escape left the history menu open after the release off Back (focus in ${focusAfter})`);
         }
     }
     const left = await settle(() => readMenus(app), m => m.length === 0);
