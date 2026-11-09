@@ -1800,15 +1800,19 @@ async function menuEdit({ app, pages, plant, fail, note }) {
         return fail('the second field has no Paste row to pick');
     }
     const fieldValue = () => app.evaluateIn(tools.page, `document.getElementById('field2').value`);
-    if (await settle(fieldValue, v => v === 'alpha', 3000) !== 'alpha') {
-        return fail('Paste did not set the second field');
+    // WINDOWS 43: read only after a miss, so the state that names the cause costs no time on a green run.
+    const editState = async seen => JSON.stringify({ seen, menu: (await menuRows(app))?.map(r => `${r.label}${r.disabled ? ' (off)' : ''}`) ?? 'closed', focused: await app.evaluateIn(tools.page, `document.activeElement?.id || document.activeElement?.localName || null`) });
+    const pasted = await settle(fieldValue, v => v === 'alpha', 3000);
+    if (pasted !== 'alpha') {
+        return fail(`Paste did not set the second field (${await editState(pasted)})`);
     }
     await app.evaluateIn(tools.page, `document.getElementById('field2').focus(); true`);
     if (!await pickFromMenu(app, tools, '#field2', ftlLabel('text-action-undo'))) {
         return fail('the second field has no Undo row to pick');
     }
-    if (await settle(fieldValue, v => v === '', 3000) !== '') {
-        return fail('Undo did not restore the second field\'s previous value');
+    const undone = await settle(fieldValue, v => v === '', 3000);
+    if (undone !== '') {
+        return fail(`Undo did not restore the second field's previous value (${await editState(undone)})`);
     }
     await inChrome(app, `Cc['@mozilla.org/widget/clipboardhelper;1'].getService(Ci.nsIClipboardHelper).copyString('pb-sentinel'); return true;`);
     if (!await pickFromMenu(app, tools, '#img', ftlLabel('main-context-menu-image-copy'))) {
