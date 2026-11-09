@@ -168,6 +168,20 @@ export class PowerBrowserEditStateChild extends JSWindowActorChild {
         }
         return undefined;
       }
+      case "PowerBrowserEditState:Target": {
+        // WINDOWS 43 (59-09): the same field's own command state, for the page menu's edit rows; null when the
+        // right-clicked target has no controllers, so chrome keeps its cached state.
+        const controllers = this.manager.getActor("ContextMenu").target?.controllers;
+        if (!controllers) {
+          return null;
+        }
+        const states = {};
+        for (const cmd of (message.data && message.data.cmds) || []) {
+          const controller = controllers.getControllerForCommand(String(cmd));
+          states[cmd] = !!controller && controller.isCommandEnabled(String(cmd)) === true;
+        }
+        return states;
+      }
     }
     return undefined;
   }

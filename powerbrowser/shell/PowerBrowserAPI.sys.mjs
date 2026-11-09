@@ -8526,7 +8526,7 @@ async function pageMenuFacts(data) {
       facts.searchLabel = pageMenuBundle.formatStringFromName("contextMenuSearch", [submission.engineName, shown]);
     }
   }
-  return facts;
+  return context.onTextInput ? { ...facts, commands: await pageEditTargetCommands(data, facts.commands) } : facts; // WINDOWS 43
 }
 
 // Firefox's own strings, formatted once per id: the label attribute, or the
@@ -10918,3 +10918,18 @@ Services.obs.addObserver(function extensionLateStartup(win) {
   Services.obs.removeObserver(extensionLateStartup, "browser-idle-startup-tasks-finished");
   Services.obs.notifyObservers(win, "extensions-late-startup");
 }, "browser-idle-startup-tasks-finished");
+
+// WINDOWS 43 (59-09): a text field's edit rows read the right-clicked field's own command state. The cached state
+// (pageEditFacts) follows the page's focused element, and the overlay's hide and show around a page menu can leave
+// the page with no focused element (Gecko's focus fix-up), so the cache greyed Undo on a field that could undo. The
+// PowerBrowserEditState child answers from the ContextMenu actor's target, the field pageMenuEdit runs the row on;
+// no answer, a target with no controllers, or EDIT_STATE_BUDGET_MS without a reply keeps the cached state.
+async function pageEditTargetCommands(data, cached) {
+  try {
+    const actor = webTabEditContext(data.browser, data.frameBrowsingContext).currentWindowGlobal.getActor(EDIT_STATE_ACTOR_NAME);
+    const query = actor.sendQuery("PowerBrowserEditState:Target", { cmds: WEB_TAB_EDIT_CMDS }).then(states => states ?? cached);
+    return await Promise.race([query, PowerBrowserAPI.sleep(EDIT_STATE_BUDGET_MS).then(() => cached)]);
+  } catch {
+    return cached;
+  }
+}
