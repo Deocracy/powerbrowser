@@ -79,6 +79,10 @@ below are numbered P59-nn so they do not collide with them.
   row. It does not join the Theia build or `mach build`. Packaging orcad into PB artifacts is
   PLAT-01 (Phase 68).
 
+### Decisions added after research (Chris, 2026-11-09)
+- **P60-R1:** Third-party licences get a real allow-list: `inventory/licence-allowlist.json`, one row per tree PowerBrowser builds from (Orca, MIT, at the pinned tag), plus a derived `--quick` row with a `--self-test` that goes red when a vendored tree's LICENSE does not match its row. Criterion 3's "licence allow-list" means this file.
+- **P60-R2:** The brand scan gets a strict `orca` probe: the "Orca" token is classified only in `inventory/brand-tokens.json`, with `coincidental` rows carrying exact counts for the existing substring hits (ErrorCapture, ErrorCalls and the other two files the research names), the same pattern as the Deocracy rows. Any future stray "Orca" in a non-classified file goes red.
+
 ### Claude's Discretion
 - Clone depth and fetch mechanics for `fetch-orca.sh`, as long as the commit check holds.
 - The names of the build script, the new rows and the generated variables.
