@@ -240,8 +240,8 @@ e. Status page and Codeberg mirror (53 BLOCKED.md items 2 and 3, 53-04-PLAN.md:1
    `/var/lib/codeberg-mirror/powerbrowser.git`, remotes `origin` and `codeberg`, credential helper). Then
    `gh variable set CODEBERG_MIRROR --body 'Deocracy/powerbrowser' --repo Deocracy/powerbrowser` and
    `CODEBERG_MIRROR=Deocracy/powerbrowser scripts/verify-platform.sh --only codeberg-mirror-live`.
-   Open item: no file contains the `/etc/nixos` block that turns `systemd/codeberg-mirror.service` and `.timer` into NixOS
-   config (53 BLOCKED.md:49). Claude writes and checks it against the nixos MCP before you reach this step.
+   Delivered (Phase 59 lane 59-02, fb9fbddc): the Codeberg service and timer are in `systemd/legion-pb.nix`, checked
+   against legion's 26.05 channel; install it by its header steps (section 5).
 
 ## 4. Keys (44-01)
 
@@ -288,8 +288,8 @@ Source: 49 BLOCKED.md:100-150; docs/RELEASING.md:405-460. Needs `repo-controls` 
    `LIBVIRT_DEFAULT_URI = "qemu:///system";` in `extraEnvironment`).
 3. Safe Browsing key directory (FINISH-PLAN.md section 2): add a `systemd.tmpfiles.rules` entry creating
    `/var/lib/powerbrowser-release` as group `pb-runner`, mode 0750, with chris in that group; the file is
-   `sb-gapi.data`, mode 0440 (not `sb-gapi.key`, which 45-04-PLAN.md:213 still names). Open item: no file contains this
-   rule yet; Claude writes it and checks it against the nixos MCP first. Then
+   `sb-gapi.data`, mode 0440 (not `sb-gapi.key`, which 45-04-PLAN.md:213 still names). Delivered (Phase 59 lane 59-02,
+   fb9fbddc): the rule is in `systemd/legion-pb.nix`. Then
    `gh variable set PB_KEYDIR --body /var/lib/powerbrowser-release --repo Deocracy/powerbrowser`.
 4. Prove it evaluates, mint the one-time token, apply:
    ```sh
@@ -409,8 +409,8 @@ bash scripts/verify-endpoints.sh --layer 3 --crash-ping                      # m
 bash scripts/verify-endpoints.sh --layer 3 --crash-ping --positive-control   # must print "positive control PASS ..."
 nix develop .#firefox --command ./mach buildsymbols                          # per target, on a reporter-enabled build
 ```
-Plan 57-08 (clear `MOZ_CRASHREPORTER_AUTO_SUBMIT`) must run first; it waits for the other session to commit
-`powerbrowser/shell/PowerBrowserAPI.sys.mjs`. Then the flip is the `CRASH_REPORTER_ENABLED` constant in `scripts/generate.mjs` (WR-09).
+Plan 57-08 (clear `MOZ_CRASHREPORTER_AUTO_SUBMIT`) landed in Phase 59 lane 59-02 (b03b6b53, d1584703); its live dialog
+proof is part of TEL-13 in 59-05. Then the flip is the `CRASH_REPORTER_ENABLED` constant in `scripts/generate.mjs` (WR-09).
 
 ## 13. Ledger (R15)
 
@@ -457,5 +457,5 @@ Still open: FINISH-PLAN.md section 3 values: postal address for `/privacy`; dest
    account; two Anthropic Console monthly spend caps (fixer, triage); Windows 11 ISO and licence and leave of legion's disk for
    `pkg-win11`; Cloudflare payment method (R2), Workers Paid only if the JWT p95 exceeds 10 ms.
 
-Open Claude item (not the owner's): plan 57-08 (boundary `clearEnv` for `MOZ_CRASHREPORTER_AUTO_SUBMIT`) waits for the other session
-to commit `powerbrowser/shell/PowerBrowserAPI.sys.mjs`; it is not part of the current finishing run.
+Closed Claude item: plan 57-08 (boundary `clearEnv` for `MOZ_CRASHREPORTER_AUTO_SUBMIT`) landed in Phase 59 lane 59-02
+(b03b6b53, d1584703); only its live dialog proof remains (TEL-13, 59-05).
