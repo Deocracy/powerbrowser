@@ -19,7 +19,13 @@ is not a completed-plan summary until `status: complete`.
 | 1 | Tracer: dev objdir build running and three lanes live | bf24c3be | done |
 | 2 | OWNER-PASS section 13, ledger amendments (CF-12) | 3c846e78 | superseded by D-14; deferred rows reopened, nothing dropped |
 | 3 | OWNER-PASS section 2 remainder (47-04): postal address, download URL, website push | e79aa086 | done; every probe green, `--quick` PASS |
-| 4 | OWNER-PASS section 3 remainder (CF-01) | (pending) | probes run; waiting for Chris's three owner steps; two code reds under Gap closure |
+| 4 | OWNER-PASS section 3 remainder (CF-01) | ef9a84e5 (probes) | probes done here; owner steps moved to p59-owner (D-16); Claude follow-ups (scheduler deploy, watchdog enable, Upptime dispatch, Pages, RENEWALS rows) run after 59-OWNER-LOG.md reports the secrets set; two code reds under Gap closure (lane p59-08, D-17) |
+| 5 | OWNER-PASS section 1 owner part: notifications, drill, old-repo archive (CF-02) | n/a | moved to p59-owner (D-16) |
+| 6 | Merge lanes 59-01, 59-02; append the 59-02 registry rows | (pending) | |
+| 7 | OWNER-PASS section 1 steps 9 and 14: App-list reads by device flow, 41-04 records | n/a | moved to p59-owner (D-16) |
+| 8 | OWNER-PASS section 4: MAR key ceremony, release secrets, 44-01 Tasks 2-3 (CF-03) | n/a | moved to p59-owner (D-16) |
+| 9 | OWNER-PASS section 5: legion runner, /etc/nixos change, Codeberg mirror (CF-04, CF-01) | n/a | moved to p59-owner (D-16) |
+| 10 | Confirm the dev build, merge lane 59-03, prove the Closes rows, close WINDOWS ids | (pending) | |
 
 ## Lanes
 
