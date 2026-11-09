@@ -1842,16 +1842,23 @@ const IMAGE_FLAVOURS = ['application/x-moz-nativeimage', 'image/png', 'image/jpe
 async function applyIframeEditPlants(app, plant, note) {
     if (plant === 'edit-rows-top-document') {
         // CR-02's defect: every Controllers read and command goes to the top document, never the right-clicked frame.
+        // WINDOWS 43 (59-09): a text field's rows read and run through the edit-state actor, so its messages go to the
+        // top document's actor too; otherwise this plant would no longer reach the rows it is meant to break.
         if (await inChrome(app, `const { ControllersParent } = ChromeUtils.importESModule('resource://gre/actors/ControllersParent.sys.mjs');
-            const proto = ControllersParent.prototype;
-            const topOf = actor => actor.browsingContext.top === actor.browsingContext ? actor : actor.browsingContext.top.currentWindowGlobal.getActor('Controllers');
-            for (const name of ['isCommandEnabled', 'doCommand']) {
-                const real = proto[name];
-                const planted = function (cmd) { return real.call(topOf(this), cmd); };
-                planted.__pbPlanted = true;
-                proto[name] = planted;
+            const { PowerBrowserEditStateParent } = ChromeUtils.importESModule('chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs');
+            const planted = [];
+            for (const [Actor, actorName, names] of [[ControllersParent, 'Controllers', ['isCommandEnabled', 'doCommand']], [PowerBrowserEditStateParent, 'PowerBrowserEditState', ['sendQuery', 'sendAsyncMessage']]]) {
+                const proto = Actor.prototype;
+                const topOf = actor => actor.browsingContext.top === actor.browsingContext ? actor : actor.browsingContext.top.currentWindowGlobal.getActor(actorName);
+                for (const name of names) {
+                    const real = proto[name];
+                    const wrapped = function (...args) { return real.apply(topOf(this), args); };
+                    wrapped.__pbPlanted = true;
+                    proto[name] = wrapped;
+                    planted.push(proto[name].__pbPlanted === true);
+                }
             }
-            return proto.isCommandEnabled.__pbPlanted === true && proto.doCommand.__pbPlanted === true;`) === true) {
+            return planted.length === 4 && planted.every(Boolean);`) === true) {
             note('PLANT edit-rows-top-document applied');
         }
     }
