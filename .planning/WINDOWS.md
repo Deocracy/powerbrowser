@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 13
+open_count: 12
 waived_count: 2
-fixed_count: 28
+fixed_count: 29
 total_count: 43
-last_updated: 2026-11-09T07:46:10.114Z
+last_updated: 2026-11-09T17:03:27.646Z
 ---
 
 # Broken Windows Ledger
@@ -57,7 +57,7 @@ last_updated: 2026-11-09T07:46:10.114Z
 | 40 | 39 | unmet-truth | scripts/verify-site-identity-live.mjs | 1316 | site-identity-live and its self-test clean control: app-menu 'the Organising menu disabled rows are [f,f,f,f,t,t,t,t,f,...], want all false' and 'the Help row did not open its stock page (no stock window shows about:support)' (39-BASELINE, 39-19 full run and rerun); repro: node scripts/verify-site-identity-live.mjs --scenario app-menu; cause so far: rows 5 to 8 are disabled in Organising, likely page-dependent rows with no current web tab, and Help opens no stock about:support window; harness expectation or product not separated; source: no UAT sheet for phase 31; 31-04-LIVE-HANDOFF.md app-menu | fixed |  | 2026-11-07T10:18:32.870Z | 2026-11-09T05:38:48.629Z |
 | 41 | 39 | unmet-truth | theia/extensions/chrome-bar/src/browser/side-panel-top-tabs.ts |  | first-boot-surface-fresh: 'TypeError: can't access property offsetHeight, additionalViewsMenu is null' before the forced error (39-BASELINE, 39-19 full run and rerun); repro: scripts/verify-platform.sh --only first-boot-surface-fresh; cause so far: @theia/core SideTabBar overflow (tab-bars.js:1179) queries .theia-additional-views-menu in the tab bar's parent, and the side panel tabs moved to the top by e9569e81 leave no such element there; fix belongs in the PB extension, never in Theia core; source: no UAT test (first-boot registry row) | fixed |  | 2026-11-07T10:18:33.080Z | 2026-11-09T05:38:48.732Z |
 | 42 | 39 | deviation | scripts/verify-ng-067-frontend-errors.mjs |  | ng067-frontend-errors-reach-telemetry flaked: 'at level error no frontend.uncaught-error event was sent' in the 39-19 full run, then PASS 2 of 2 alone; repro: scripts/verify-platform.sh --only ng067-frontend-errors-reach-telemetry; cause so far: timing in the frontend error delivery or its read-back, not isolated; source: no UAT test (NG-067 registry row) | fixed |  | 2026-11-07T10:18:35.742Z | 2026-11-09T06:25:41.438Z |
-| 43 | 39 | deviation | scripts/verify-page-furniture-live.mjs |  | page-furniture-live-self-test flaked: clean control 'context-menu: Copy Image Link did not put the image URL on the clipboard' in the 39-19 full run, then PASS 2 of 2 alone; the plain page-furniture-live row passed; repro: scripts/verify-platform.sh --only page-furniture-live-self-test; cause so far: the headless clipboard read-back after Copy Image Link is timing-dependent (the menu-edit Paste and iframe-edit-rows flakes share the headless clipboard); source: 35-UAT test 6 | open |  | 2026-11-07T10:18:36.853Z |  |
+| 43 | 39 | deviation | scripts/verify-page-furniture-live.mjs |  | page-furniture-live-self-test flaked: clean control 'context-menu: Copy Image Link did not put the image URL on the clipboard' in the 39-19 full run, then PASS 2 of 2 alone; the plain page-furniture-live row passed; repro: scripts/verify-platform.sh --only page-furniture-live-self-test; cause so far: the headless clipboard read-back after Copy Image Link is timing-dependent (the menu-edit Paste and iframe-edit-rows flakes share the headless clipboard); source: 35-UAT test 6 | fixed |  | 2026-11-07T10:18:36.853Z | 2026-11-09T17:03:27.646Z |
 
 ````json
 [
@@ -591,10 +591,10 @@ last_updated: 2026-11-09T07:46:10.114Z
     "file": "scripts/verify-page-furniture-live.mjs",
     "line": null,
     "description": "page-furniture-live-self-test flaked: clean control 'context-menu: Copy Image Link did not put the image URL on the clipboard' in the 39-19 full run, then PASS 2 of 2 alone; the plain page-furniture-live row passed; repro: scripts/verify-platform.sh --only page-furniture-live-self-test; cause so far: the headless clipboard read-back after Copy Image Link is timing-dependent (the menu-edit Paste and iframe-edit-rows flakes share the headless clipboard); source: 35-UAT test 6",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-07T10:18:36.853Z",
-    "resolved_at": null,
+    "resolved_at": "2026-11-09T17:03:27.646Z",
     "milestone": "v1.5"
   }
 ]

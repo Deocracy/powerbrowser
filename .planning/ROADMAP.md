@@ -453,7 +453,7 @@ Plans:
 **Follow-ups:**
 - [x] prompts-live-self-test: plant `allow-loads-frame-url` goes red on 'popup not adopted next to its opener' instead of its own failure, 2 of 3 runs. Repro: `scripts/verify-platform.sh --only prompts-live-self-test`. Cause so far: the 39-09 re-site (999.13) does not reach the plant's failure reliably. Source: 37-UAT test 17. WINDOWS.md entry 39. Fixed in Phase 59 (59-03, 863edd46).
 - [x] ng067-frontend-errors-reach-telemetry: 'no frontend.uncaught-error event was sent', red 1 of 3. Repro: `scripts/verify-platform.sh --only ng067-frontend-errors-reach-telemetry`. Cause so far: not isolated. Source: no UAT test (NG-067). WINDOWS.md entry 42. Fixed in Phase 59 (59-03, 4773189f).
-- [ ] page-furniture-live-self-test: clean control 'Copy Image Link did not put the image URL on the clipboard', red 1 of 3. Repro: `scripts/verify-platform.sh --only page-furniture-live-self-test`. Cause so far: headless clipboard read-back timing. Source: 35-UAT test 6. WINDOWS.md entry 43.
+- [x] page-furniture-live-self-test: clean control 'Copy Image Link did not put the image URL on the clipboard', red 1 of 3. Repro: `scripts/verify-platform.sh --only page-furniture-live-self-test`. Cause so far: headless clipboard read-back timing. Source: 35-UAT test 6. WINDOWS.md entry 43. Fixed in Phase 59 (59-09, beab4276, f51a345a).
 
 ### Phase 999.31: Residual — v1.5 close-out full run: defects red at every run (BACKLOG)
 
