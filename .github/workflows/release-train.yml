@@ -1962,10 +1962,9 @@ jobs:
     environment: bot
     permissions:
       contents: read
-    env:
-      # The one path of the gated diff: the step that hashes it, the step that re-gates it, the step that applies it and the
-      # opener that renders the PR from it all read this variable, so the bytes verified are the bytes published (WR-06).
-      FIX_DIFF: ${{ runner.temp }}/fix-diff/work.diff
+    # The one path of the gated diff: the step that hashes it, the step that re-gates it, the step that applies it and the
+    # opener that renders the PR from it each set FIX_DIFF to the same value, so the bytes verified are the bytes published
+    # (WR-06). It is set per step because GitHub does not allow the runner context in a job-level env.
     steps:
       - name: Check out the trusted root at main
         if: ${{ !inputs.dry-run }}
@@ -1996,6 +1995,7 @@ jobs:
       - name: Verify the diff digest and re-run the pure gate stages on it
         if: ${{ !inputs.dry-run }}
         env:
+          FIX_DIFF: ${{ runner.temp }}/fix-diff/work.diff
           DIFF_SHA256: ${{ needs.fix.outputs.diff-sha256 }}
         run: |
           set -euo pipefail
@@ -2008,6 +2008,7 @@ jobs:
         id: apply
         if: ${{ !inputs.dry-run }}
         env:
+          FIX_DIFF: ${{ runner.temp }}/fix-diff/work.diff
           BRANCH: claude-fix/${{ inputs.release-key }}-${{ inputs.class }}-${{ inputs.attempt }}
           KEY: ${{ inputs.release-key }}
           CLASS: ${{ inputs.class }}
@@ -2049,6 +2050,7 @@ jobs:
       - name: Publish the claude-fix branch and open the PR (skipped in dry-run)
         if: ${{ !inputs.dry-run && steps.apply.outputs.committed == 'true' }}
         env:
+          FIX_DIFF: ${{ runner.temp }}/fix-diff/work.diff
           GH_TOKEN: ${{ steps.app.outputs.token }}
           GH_REPO: ${{ github.repository }}
           BRANCH: claude-fix/${{ inputs.release-key }}-${{ inputs.class }}-${{ inputs.attempt }}
