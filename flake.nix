@@ -146,6 +146,24 @@
             '';
           };
 
+        # Phase 60 (P59-10): builds Orca from source (orca/, fetched by scripts/fetch-orca.sh) on the
+        # same Node 24 as the sidecar. pnpm 12.14.0 comes from corepack through Orca's packageManager
+        # field, which carries its sha512 (nixpkgs has no pnpm 12). binutils makes objdump certain for
+        # Orca's node-pty glibc floor check. No Electron and no yarn. No shellHook: scripts/build-orca.sh
+        # sets its own environment.
+        orca = pkgs.mkShell {
+          # Same rpath reason as the theia shell: node-gyp links node-pty.
+          NIX_NO_SELF_RPATH = "1";
+          nativeBuildInputs = [
+            nodejs
+            pkgs.corepack_24
+            pkgs.python3
+            pkgs.pkg-config
+            pkgs.gnumake
+            pkgs.binutils
+          ];
+        };
+
         # Plain `nix develop` and .envrc's `use flake` look up devShells.default first and, when it
         # is absent, fall back to packages.default -- the repacked Release tarball, whose fetchurl
         # 404s until a Release is published. The theia shell is the cheap one the generator and the

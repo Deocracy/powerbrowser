@@ -3825,6 +3825,18 @@ run_own_checks() {
     # other self-test row in this array gives.
     "verify-upstream-pins|node $REPO_ROOT/scripts/verify-upstream-pins.mjs"
     "verify-upstream-pins-self-test|node $REPO_ROOT/scripts/verify-upstream-pins.mjs --self-test"
+    # NEW (60-01, RUN-01): the Orca pin-agreement gate -- [upstreams] orca_tag and
+    # orca_commit, derived from configuration.toml at check time, equal the generated
+    # fragment, fetch-orca.sh reads them from it with no literal, no tracked file in
+    # scope carries them, orca/ is untracked and ignored (anchored), a fetched orca/ is
+    # at the commit, and flake.nix has devShells.orca. Quick: git and files only, no
+    # network. Its self-test plants nine faults, each red naming the drift.
+    # fetch-orca-self-test drives the clone-verify-rename logic against a local
+    # fixture remote (wrong commit, tag-object SHA, other tag, non-git target,
+    # leftover partial, TAG without COMMIT, fetch then re-run).
+    "orca-pin|node $REPO_ROOT/scripts/verify-orca-pin.mjs"
+    "orca-pin-self-test|node $REPO_ROOT/scripts/verify-orca-pin.mjs --self-test"
+    "fetch-orca-self-test|bash $REPO_ROOT/scripts/fetch-orca.sh --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"

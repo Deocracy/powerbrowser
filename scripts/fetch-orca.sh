@@ -162,7 +162,7 @@ run_self_test() {
   fi
 
   # 6. TAG without COMMIT is refused naming COMMIT, before any clone.
-  if env -u COMMIT TAG=v9.9.9 bash "$SELF" >/dev/null 2>"$tmp/err"; then
+  if env -u COMMIT TAG=v1.0.0 bash "$SELF" >/dev/null 2>"$tmp/err"; then
     fail tag-without-commit "a TAG export with no COMMIT ran"
   elif grep -q 'COMMIT' "$tmp/err"; then
     pass tag-without-commit "refused naming COMMIT"
