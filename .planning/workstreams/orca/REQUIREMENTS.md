@@ -11,7 +11,7 @@ Owner decisions are in `DECISIONS.md` (D-01..D-25) and win over `research/`. Res
 
 ### Orca runtime (RUN)
 
-- [ ] **RUN-01**: PowerBrowser builds orcad and the Orca web client from source at a pinned Orca
+- [x] **RUN-01**: PowerBrowser builds orcad and the Orca web client from source at a pinned Orca
   tag (first pin 1.4.248, fallback 1.4.245) with Orca's own `build:orcad` and `build:web` from a
   Nix dev shell carrying pnpm 12.14.0; the pin lives in `configuration.toml` and a `--quick`
   check proves it. (D-04)
@@ -178,7 +178,7 @@ Filled by the roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| RUN-01 | Phase 60 | Pending |
+| RUN-01 | Phase 60 | Complete |
 | RUN-02 | Phase 60 | Pending |
 | RUN-03 | Phase 62 | Pending |
 | RUN-04 | Phase 62 | Pending |
