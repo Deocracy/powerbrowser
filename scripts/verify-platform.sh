@@ -6508,6 +6508,11 @@ declare -a GATE_KNOWN_OPEN_EXCLUSIONS=(
   # entry carrying repro, cause so far and source (scope item 7). The 01-era rows keyed to fixed ledger
   # entries 5 and 10 were removed: verify-endpoints and branding-variant-divergence pass, and
   # verify-branding-identity-release passes once objdir-release is rebuilt (39-19, docs/BUILD.md).
+  # 59-07prep (2026-11-09): the rows keyed to entries 33, 34, 36, 37, 38, 39, 40, 41, 42 and 43 were
+  # removed after the Phase 59 gap-closure lanes (59-03, 59-08, 59-09) closed those entries; a row
+  # keyed to a fixed entry is dead weight because ledger_entry_is_open already stops excusing it.
+  # Every remaining row is keyed to an entry still open in .planning/WINDOWS.md; D-09 re-dates them
+  # in 59-07 without touching this list.
   "ng063-packaged-launch|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
   "portable-elf|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
   "sidecar-no-symlinks|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
@@ -6527,18 +6532,7 @@ declare -a GATE_KNOWN_OPEN_EXCLUSIONS=(
   "win-download-copy|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
   "macos-package-payload|32|macOS deferred to v1.7 (R4), needs Mac hardware"
   "macos-install-matrix|32|macOS deferred to v1.7 (R4), needs Mac hardware"
-  "tel06-error-delivery-live|33|refuses a dirty tree; the dirt is the owner's .claude/settings.json and .planning/state.json"
-  "verify-customize-inert|34|the customize.css layer shows no pixel effect in state 3; cause not isolated"
   "ng089-uat-sheets|35|49 pending results in the v1.2/v1.3 UAT sheets; the NG-084 live pass was deferred by the owner"
-  "start-failure-shows-error|36|the readiness backstop fires before the planted settings-folder failure is classified"
-  "pan04-undo-close-group-live|37|after the commit focus is on a pb-org-new element the probe does not resolve; harness or product not separated"
-  "ng-023-suggestions-history-bookmarks|38|an open tab ranks below a bookmark match"
-  "prompts-live-self-test|39|plant allow-loads-frame-url goes red on popup adoption instead of its own failure, 2 of 3 runs"
-  "site-identity-live|40|app-menu: Organising rows 5-8 disabled and Help opens no about:support stock window"
-  "site-identity-live-self-test|40|app-menu: Organising rows 5-8 disabled and Help opens no about:support stock window"
-  "first-boot-surface-fresh|41|Theia core SideTabBar overflow reads a .theia-additional-views-menu the top side-panel tabs removed"
-  "ng067-frontend-errors-reach-telemetry|42|flaky: red 1 of 3 (no frontend.uncaught-error event sent)"
-  "page-furniture-live-self-test|43|flaky: clean control Copy Image Link clipboard read-back red 1 of 3"
   "address-bar-live-self-test|25|plant ctrl-d-everywhere stays green on bookmark-keys"
   "page-tools-live|28|flaky: crash-navigate red 1 of 3 registry runs (2026-11-06)"
   "extension-actions-live|29|private-access session 2: options page opens in the private stock window, matches stock; deferred to 999.17"
