@@ -266,3 +266,30 @@ Code reds found in this plan, each for a gap-closure plan appended to Phase 59 (
   was committed first (29c37e28), then 37 re-ran green. Later close batches should commit before re-running.
 - **Stale items outside the lanes reconciled (64f13d55)** at the 59-02 merge note's request: 57-08-PLAN.md status and
   four OWNER-PASS.md lines.
+
+## Gap closure merges
+
+### 59-08 (Gap closure items 1 and 2; WINDOWS 33)
+
+- **Lane commits:** 03b5f9b3 (release-train.yml FIX_DIFF set per step in fix-pr; verify-workflows rule
+  `job-env-context`), 4fb2771e (tel06 drill arms the telemetry level at User scope), 93af17ee (tel06 drill throws its
+  uncaught error from bundle code), d8f80029 (59-08 plan and summary).
+- **Merge:** d0b78303, `git merge --no-ff refs/heads/ServerDestroyer/p59-08`, no conflicts. scan-brand-residue PASS
+  (680 files).
+- **Rows proven on the merged tree (2026-11-09):**
+  - actionlint `-shellcheck=` .github/workflows/release-train.yml: exit 0.
+  - `workflows` PASS, `workflows-self-test` PASS.
+  - `nix develop .#theia --command bash -c 'cd theia && yarn build'`: exit 0.
+  - `tel06-error-delivery-live` PASS on a clean tree ("1 positive POST(s) carried both corrected events, zero requests
+    at level off, and the marker is absent from the restored bundle"), run under `flock pb-live.lock` with
+    `PB_FIREFOX_BIN` this worktree's objdir and `PB_BACKEND_MAIN` this worktree's backend; tracked tree clean after.
+  - `tel06-error-delivery-live-self-test` PASS.
+  - `--quick` PASS (all checks).
+- **WINDOWS 33:** closed with `gsd-tools windows fixed 33 --ws orca` (open_count 14 -> 13); backlog follow-up ticked in
+  ROADMAP 999.32. Commit ae543f91. Gap closure items 1 and 2 above are closed by this merge.
+- **Gate exclusion left in place:** the `--gate` known-open row `tel06-error-delivery-live|33|...` in
+  scripts/verify-platform.sh still exists, as do the rows for 34 and 36-42 closed at 29c37e28. They are inert for a
+  green check, and a red check keyed to a closed id fails the gate as "exclusion no longer applies". Removing the rows
+  keyed to fixed ids is one sweep for a later change.
+- **Before the D-12 push:** the release-train.yml fix (03b5f9b3) must be on GitHub `main` before §3a's
+  release-train.yml dry run or the scheduler clock dispatches the workflow; GitHub rejects the pre-fix file.
