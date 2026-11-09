@@ -98,3 +98,26 @@ None.
 
 - docs/RELEASING.md modified and committed: FOUND
 - 57a4b351 and bef85682 are ancestors of HEAD: FOUND
+
+## Live state at parking (2026-11-07, recorded by Phase 59 plan 59-01)
+
+Source: `.planning/CARRY-FORWARD-v1.7.md` section 2, "Live state at parking". Chris did this work
+live on 2026-11-06/07. Plan 59-01 copied the record and redid nothing. The organisation is Deocracy
+(`Deocracy/powerbrowser`).
+
+Done live:
+
+- Email Routing: security@, contact@ and privacy@ route to christopher@deocracy.org; three test
+  mails arrived.
+- Policy files are repo-level only: no org defaults in `Deocracy/.github`. This bears on Task 2
+  step 3 (the org community repo).
+- security.txt to 2027-10-06 (its expiry date).
+- Labels applied (Task 2 step 2).
+
+Parked, open:
+
+- The postal address for `/privacy`: an open owner value, collected in Phase 59 plan 59-04.
+
+This record does not change the plan's state. `status: partial` and `requirements-completed: []`
+stand, and the Task 3 criterion (a quoted `repo-controls: PASS` line in RELEASING.md) stays open
+as "Not executed" above states.
