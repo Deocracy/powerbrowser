@@ -121,19 +121,26 @@ with a reason that states TEL-07. The gate's stale-marked check forbids adding t
 
 Stays gated behind B1 and B3 and the first Windows release (Phase 54). The flip is a `checkpoint:human-action`. The flip itself is one edit: the `CRASH_REPORTER_ENABLED` constant in `scripts/generate.mjs` (WR-09, ee4e6087), not removal of a literal.
 
-## B6. TEL-13 prerequisites: the other send paths of the stock reporter (OPEN, found by the 57 review, WR-05)
+## B6. TEL-13 prerequisites: the other send paths of the stock reporter (CLOSED in the tree 2026-11-08; live proof with the TEL-13 reporter build; found by the 57 review, WR-05)
 
-The stock crash reporter has send paths that skip the per-crash dialog. None is locked in the tree, and no gate
-covers them. Close both before 57-04 and before `docs/CRASH-POLICY.md` may claim dialog-only consent.
+At the 57 review the stock crash reporter had send paths that skip the per-crash dialog. None was locked in the tree,
+and no gate covered them. Both had to close before 57-04 and before `docs/CRASH-POLICY.md` could claim dialog-only
+consent; both are closed below.
 
 - `MOZ_CRASHREPORTER_AUTO_SUBMIT` (`upstream/toolkit/crashreporter/client/app/src/config.rs:177`): when set, the
   client skips the dialog (`logic.rs:115,531`, `main.rs:125,227`). Needs the launcher/startup environment to clear it
   (or a patch-free equivalent) and a gate that fails if it is not cleared.
-  **PLANNED, NOT EXECUTED (plan 57-08, 2026-11-04).** There is no launcher wrapper, and Gecko starts the client with
-  the live environment at crash time, so the clear is in-process: a new `PowerBrowserAPI` method that sets the
-  variable empty (`env_bool` reads empty as false), called first in `PowerBrowserSingleInstanceHandler.handle()`.
-  That edits `powerbrowser/shell/PowerBrowserAPI.sys.mjs`, which another session's uncommitted work holds, so 57-08
-  waits for that work to be committed. Run it with `/gsd-execute-phase 57 --gaps-only --ws deploy` after that.
+  **CLOSED 2026-11-08 by plan 57-08 (run in Phase 59 lane 59-02, commit b03b6b53):** there is no launcher wrapper,
+  and Gecko starts the client with the live environment at crash time, so the clear is in-process.
+  `PowerBrowserAPI.clearEnv(name)` sets the variable to the empty string through `Services.env.set` (`env_bool`
+  reads empty as false), catalogued as the `Services.env.set` row of `powerbrowser/INTERNAL-APIS.md`, and
+  `PowerBrowserSingleInstanceHandler.handle()` calls it as the first statement inside its try. Gate
+  `crash-autosubmit-env` (`scripts/verify-crash-autosubmit-env.mjs`, landed with this closure) derives the variable
+  name from `config.rs` and the `ekey!` prefix in `main.rs`, requires `env_bool`'s empty-is-false rule, and its
+  self-test plants six faults; its two registry rows are appended at the 59-02 merge. Limit: a crash before the
+  command-line handler runs still sees the variable (`docs/CRASH-POLICY.md`). Live proof (start the
+  reporter-enabled build with `MOZ_CRASHREPORTER_AUTO_SUBMIT=1`, crash a content process, see the dialog; needs
+  `-purgecaches`) joins the TEL-13 reporter build in Phase 59 plans 59-05 and 59-07.
 - `browser.crashReports.unsubmittedCheck.autoSubmit2` (`upstream/browser/app/profile/firefox.js:2823`, default false)
   and the unsubmitted-reports backlog notification. Needs the pref locked false in the generated prefs/policies and
   a gate over `generate --check`.

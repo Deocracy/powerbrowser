@@ -423,6 +423,11 @@ export const PowerBrowserAPI = Object.freeze({
     return Services.env.get(name);
   },
 
+  /** Sets an environment variable to "", which the crash client's env_bool reads as false (57-08). */
+  clearEnv(name) {
+    Services.env.set(name, "");
+  },
+
   /**
    * D-128 (CR-01 fix, 05-REVIEW.md): the absolute path of this launch's own
    * Firefox profile directory (`ProfD`), read straight off the platform's
@@ -4458,6 +4463,8 @@ export class PowerBrowserSingleInstanceHandler {
 
   handle(cmdLine) {
     try {
+      // 57-08 (TEL-13): first, so every later crash launches the stock client with its dialog, never auto-submitting.
+      PowerBrowserAPI.clearEnv("MOZ_CRASHREPORTER_AUTO_SUBMIT");
       // PKG-07 (Phase 45): route a CLI URL argument into the stock window.
       // The argument is untrusted: cliUrl() admits only the scheme-walled
       // shapes (http/https/about:newtab) and returns null otherwise, so a
