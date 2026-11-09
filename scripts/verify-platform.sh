@@ -3803,6 +3803,12 @@ run_own_checks() {
     # Green first, then six plants (lock removed, not locked, value true, reader renamed, reader
     # removed, engine prefix dropped), each red naming the drifted file.
     "crash-autosubmit-lock-self-test|node $REPO_ROOT/scripts/verify-crash-autosubmit-lock.mjs --self-test"
+    # NEW (Phase 57, 57-08, WR-05; run in Phase 59 lane 59-02): MOZ_CRASHREPORTER_AUTO_SUBMIT is cleared first in
+    # PowerBrowserSingleInstanceHandler.handle via PowerBrowserAPI.clearEnv; name from config.rs + main.rs ekey!. Text reads only.
+    "crash-autosubmit-env|node $REPO_ROOT/scripts/verify-crash-autosubmit-env.mjs"
+    # Green first, then six plants (call removed, call moved after other work, different name, non-empty value,
+    # config.rs key renamed, env_bool reading any set value as true), each red naming the drifted file.
+    "crash-autosubmit-env-self-test|node $REPO_ROOT/scripts/verify-crash-autosubmit-env.mjs --self-test"
     "fetch-upstream-self-test|bash $REPO_ROOT/scripts/fetch-upstream.sh --self-test"
     # NEW (05-02): the ESR pin-agreement gate -- configuration.toml's
     # [upstreams] tag equals the generated shell fragment, the workflow
