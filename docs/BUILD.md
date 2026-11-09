@@ -425,6 +425,67 @@ node scripts/generate.mjs && node scripts/generate.mjs --check
 git status --short
 ```
 
+## Orca half
+
+Orca's orcad and web client are built from source at the pin declared in
+`configuration.toml` (`[upstreams] orca_tag` and `orca_commit`), with Orca's
+own scripts, in a separate step. It does not join the Theia build or
+`./mach build` (P59-12).
+
+```
+bash scripts/fetch-orca.sh                               # clone orca/ at the pin and verify it
+nix develop .#orca --command bash scripts/build-orca.sh  # build, de-slot, keep the log
+```
+
+**Why a separate `.#orca` shell:** Orca names pnpm 12 in its `packageManager`
+field; the shell provides Node 24 and corepack, and `build-orca.sh` has
+corepack install exactly that pnpm version (derived from `orca/package.json`,
+checked before anything runs). It also carries `objdump`, which Orca's
+`build:orcad` uses on the native prebuilds. No Electron is downloaded or built:
+`ELECTRON_SKIP_BINARY_DOWNLOAD=1` and `--ignore-scripts` on both installs, so
+Orca's postinstall (its `@electron/rebuild`) never runs.
+
+**What the script runs, in order:** re-verify `orca/` at the pin; scrub every
+inherited `ORCA_*` variable (this tree is worked on from inside Orca desktop);
+`pnpm install --frozen-lockfile --ignore-scripts`; Orca's
+`build-workspace-packages.mjs` and `rebuild:node`; the `mobile/` workspace
+install, also scripts-off (P60-R3); `mobile/`'s three code generators, run
+directly in its postinstall's order (P60-R4); `build:mobile-web` (which
+`build:orcad` stages unconditionally); `build:orcad`; the de-slot; `build:web`.
+Orca's source and scripts are never edited.
+
+**Why the build de-slots:** `build:orcad` always writes a slot
+(`out/orcad/.server-target`, `.runtime-node`, `.version`) and downloads its own
+Node runtime into `out/runtimes/`. PowerBrowser runs orcad on its own Node
+(D-14), so the script removes all four after `build:orcad` and prints one
+`de-slot removed` line for each; the log shows what was actually written.
+
+**Network at build time:** `github.com` (the clone), `registry.npmjs.org`
+(pnpm and the lockfile closure), `nodejs.org` (Node headers and the runtime
+`build:orcad` fetches before the de-slot removes it).
+
+**Where things go:** everything is under `.mozbuild/`, never in a tracked path:
+logs at `.mozbuild/orca-build/build-<UTC>.log` (full output, kept on success
+and failure), `.mozbuild/corepack`, `.mozbuild/pnpm-store` (2.2 G after the
+first build) and `.mozbuild/orca-node-runtime-cache` (187 M). `orca/` itself is
+gitignored build input.
+
+**Checks:** `orca-build-shape` (full tier) derives the slot marker names from
+`orca/src/shared/orcad-artifacts.ts` and goes red on any marker, any `node`
+executable under `orca/out`, an Electron binary or `node_modules/electron/dist`
+anywhere under `orca/`, or a modified tracked Orca file; it prints one SKIP line
+when no built `orca/` exists. `orca-build-shape-self-test` (quick) proves it
+against nine planted faults.
+
+**Measured on the reference host** (`legion`, Linux 6.18.60 x86_64, glibc 2.42;
+tree `0cc2c129`; `.#orca` shell with Node 24.19.0, corepack 0.35.0, pnpm
+12.14.0): the full script ran in **21 s** wall, warm: the pnpm store, Node
+runtime cache and `orca/node_modules` were left by the earlier attempts in plan
+60-02. The first root install into an empty store took 15.5 s and the first
+`mobile/` install 9.6 s (pnpm's own "Done in" lines). A cold end-to-end run
+from an empty `.mozbuild/` was not measured. Log:
+`.mozbuild/orca-build/build-20261109T234314Z.log`.
+
 ## Firefox half
 
 ```

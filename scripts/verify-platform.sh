@@ -3837,6 +3837,13 @@ run_own_checks() {
     "orca-pin|node $REPO_ROOT/scripts/verify-orca-pin.mjs"
     "orca-pin-self-test|node $REPO_ROOT/scripts/verify-orca-pin.mjs --self-test"
     "fetch-orca-self-test|bash $REPO_ROOT/scripts/fetch-orca.sh --self-test"
+    # NEW (60-02, RUN-01/RUN-02): orca-build-shape's self-test. Quick: a mkdtemp
+    # fixture orca/ whose orcad-artifacts.ts constants carry synthetic marker names,
+    # so green proves the names are derived. Clean control first (with a .bin/electron
+    # shim and a scoped electron/dist that must stay green), then nine plants each red
+    # naming the drift: three markers, out/runtimes, a stray out/orcad/node, an
+    # electron/dist, an ELF electron, a modified tracked file, a removed constant.
+    "orca-build-shape-self-test|node $REPO_ROOT/scripts/verify-orca-build-shape.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6388,6 +6395,12 @@ run_own_checks() {
       # configuration.toml and checked against package-windows.sh's glob. Plants an extra PE file, a missing
       # unconditional one, an unsafe name, an empty tree and an unreadable manifest over mkdtemp fixtures; hermetic.
       "win-sign-list-self-test|node $REPO_ROOT/scripts/win-sign-list.mjs --self-test"
+      # NEW (60-02, RUN-01/RUN-02): orca-build-shape. Full tier: walks the built orca/
+      # including node_modules. Slot marker names derived from orca/src/shared/orcad-artifacts.ts
+      # at check time; red on a marker in out/orcad, out/runtimes, any node/node.exe under
+      # out/, an ELF/PE electron binary or node_modules/electron/dist anywhere under orca/,
+      # or a modified tracked Orca file. Prints one SKIP line when no built orca/ exists.
+      "orca-build-shape|node $REPO_ROOT/scripts/verify-orca-build-shape.mjs"
     )
   fi
 
