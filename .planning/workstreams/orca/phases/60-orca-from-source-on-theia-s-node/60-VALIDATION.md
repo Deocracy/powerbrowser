@@ -39,14 +39,15 @@ created: "2026-11-09"
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 60-W0 | 01 | 0 | RUN-01 | — | N/A | build log | `nix develop .#orca --command bash scripts/build-orca.sh` (first real build; glibc-floor risk, Pitfall 4) | ❌ W0 | ⬜ pending |
 | 60-pin | 01 | 1 | RUN-01 | T-60-01 | pin is the peeled commit, never a tag object | quick row | `scripts/verify-platform.sh --only orca-pin`; `--only orca-pin-self-test`; `--only fetch-orca-self-test` | ❌ W0 | ⬜ pending |
-| 60-shape | 02 | 1 | RUN-02 | T-60-02 | no second Node runtime, no slot marker files, no Electron | full + quick self-test | `--only orca-build-shape` (SKIP line if no built orca/); `--only orca-build-shape-self-test` | ❌ W0 | ⬜ pending |
-| 60-start | 02 | 1 | RUN-02 | T-60-03 | loopback only; pairing URL never in captured output; daemon reaped | full + quick self-test | `--only orca-slotless-start` (Node 24.19.0 from node-runtime.json); `--only orca-slotless-start-self-test` | ❌ W0 | ⬜ pending |
-| 60-brand | 03 | 1 | OVL-04 | — | N/A | quick | `node scripts/scan-brand-residue.mjs` after `git add`; `--only scan-brand-residue-self-test` (plant: unclaimed Orca, wrong expected_count) | ✅ (extend) | ⬜ pending |
-| 60-licence | 03 | 1 | OVL-04 | — | N/A | quick | `--only orca-licence`; `--only orca-licence-self-test` (plants: altered licence text, unknown SPDX id, SEE LICENSE IN) | ❌ W0 | ⬜ pending |
-| 60-docs | 01 | 1 | RUN-01 | — | N/A | quick | existing `verify-rebranding-docs`, `generated-byte-identity`, `generate-check`, `upstream-pins` | ✅ | ⬜ pending |
-| 60-ext | 04 | 2 | EXT-01 | — | proprietary extension installed at runtime from Open VSX, never redistributed | human | checkpoint:human-verify with Chris: open an Orca worktree folder in Theia, start a Claude Code session, answer a prompt, edit a file; record version and panel/terminal mode | n/a | ⬜ pending |
+| 60-docs | 01 | 1 | RUN-01 | T-60-02 | manifest values validated before a sourced fragment | quick | existing `verify-rebranding-docs`, `generated-byte-identity`, `generate-check`, `verify-upstream-pins` | ✅ | ⬜ pending |
+| 60-pnpm | 01 | 1 | RUN-01 | T-60-04 | no corepack download before the human legitimacy check | human | 60-01 Task 3 checkpoint:human-verify (blocking) | n/a | ⬜ pending |
+| 60-W0 | 02 | 2 | RUN-01 | T-60-05, T-60-06 | --ignore-scripts; inherited ORCA_* scrubbed | build log | `nix develop .#orca --command bash scripts/build-orca.sh` (first real build; glibc-floor risk, Pitfall 4; failure goes to the 60-02 Task 2 owner decision) | ❌ W0 | ⬜ pending |
+| 60-shape | 02 | 2 | RUN-02 | T-60-07, T-60-08 | no second Node runtime, no slot marker files, no Electron, no edited Orca file | full + quick self-test | `--only orca-build-shape` (SKIP line if no built orca/); `--only orca-build-shape-self-test` | ❌ W0 | ⬜ pending |
+| 60-start | 03 | 3 | RUN-02 | T-60-10, T-60-11, T-60-12, T-60-13 | loopback only; pairing URL never in captured output; env scrubbed; daemon reaped | full + quick self-test | `--only orca-slotless-start` (Node 24.19.0 from node-runtime.json, web-tab pairing); `--only orca-slotless-start-self-test` | ❌ W0 | ⬜ pending |
+| 60-licence | 04 | 4 | OVL-04 | T-60-17, T-60-18 | SEE LICENSE IN / NONE refused; LICENSE digest per fetched tree | quick | `--only licence-allowlist`; `--only licence-allowlist-self-test` (plants: altered licence text, unlisted SPDX id, SEE LICENSE IN, NONE allowed, fetch script without row, row without fetch script) | ❌ W0 | ⬜ pending |
+| 60-brand | 04 | 4 | OVL-04 | T-60-19, T-60-20 | orca probe on the tracked tree only; rebase extra-root gate stays green | quick | `node scripts/scan-brand-residue.mjs` after `git add`; `--only scan-brand-residue-self-test` (plants: unclaimed Orca, wrong expected_count, extra-root Orca ignored while sourcerer still red); `node scripts/scan-brand-residue.mjs --extra-root upstream` | ✅ (extend) | ⬜ pending |
+| 60-ext | 05 | 4 | EXT-01 | T-60-21, T-60-22, T-60-23 | proprietary extension installed at runtime from Open VSX, never redistributed; no credential recorded | human | 60-05 Task 2 checkpoint:human-verify with Chris: open the Orca worktree folder in Theia, start a Claude Code session, answer a prompt, edit a file; record version and panel/terminal mode in 60-EXT01-RECORD.md | n/a | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -55,7 +56,7 @@ created: "2026-11-09"
 ## Wave 0 Requirements
 
 - [ ] First real build in `.#orca` with the log captured (Pitfall 4: node-pty glibc floor on NixOS glibc 2.42)
-- [ ] `scripts/fetch-orca.sh` (+ `--self-test`), `scripts/build-orca.sh` (de-slot step), `scripts/verify-orca-pin.mjs`, `scripts/verify-orca-build-shape.mjs`, `scripts/lib/orca-run.mjs`, `scripts/verify-orca-slotless-start.mjs`, `scripts/verify-orca-licence.mjs`, each with `--self-test`, registered as rows
+- [ ] `scripts/fetch-orca.sh` (+ `--self-test`), `scripts/build-orca.sh` (de-slot step), `scripts/verify-orca-pin.mjs`, `scripts/verify-orca-build-shape.mjs`, `scripts/lib/orca-run.mjs`, `scripts/verify-orca-slotless-start.mjs`, `scripts/verify-licence-allowlist.mjs`, each with `--self-test`, registered as rows
 - [ ] `flake.nix` `devShells.orca`; `.gitignore` `/orca/` (anchored)
 - [ ] `config-schema.json` optional `upstreams.orca_*` rows; `generate.mjs` emitter (`UPSTREAM_ORCA_TAG`, `UPSTREAM_ORCA_COMMIT`); `docs/REBRANDING.md` rows; `docs/BUILD.md` section
 - [ ] `inventory/brand-tokens.json` `orca` probe plus `coincidental` rows (P60-R2); `inventory/licence-allowlist.json` (P60-R1)

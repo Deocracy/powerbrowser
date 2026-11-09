@@ -82,7 +82,14 @@ Plans:
   3. `node scripts/scan-brand-residue.mjs` exits 0 over the staged tree including every Orca-related file, with the "Orca" token classified only in `inventory/brand-tokens.json`, and Orca's MIT licence has a row in the licence allow-list.
   4. The user opens a folder orcad created as an Orca worktree in PowerBrowser's Theia, and the Claude Code VS Code extension starts a session there, answers a prompt and edits a file. The outcome and the extension version are recorded; a failure reshapes EXT-02 (Phase 63) before that phase is planned.
 
-**Plans**: TBD
+**Plans**: 5 plans
+
+Plans:
+- [ ] 60-01-PLAN.md — pin in configuration.toml through the generator, fetch-orca.sh, .#orca shell, orca-pin rows, pnpm legitimacy checkpoint (RUN-01)
+- [ ] 60-02-PLAN.md — first real build (Wave 0), build-orca.sh with de-slot, orca-build-shape rows, docs/BUILD.md Orca half (RUN-01, RUN-02)
+- [ ] 60-03-PLAN.md — slot-less orcad on Node 24.19.0 with web-tab pairing, orca-slotless-start rows, D-04 fallback decision (RUN-02)
+- [ ] 60-04-PLAN.md — licence allow-list row and check, strict orca brand probe on the tracked tree (OVL-04)
+- [ ] 60-05-PLAN.md — Claude Code extension on an Orca worktree in Theia 1.76, Chris's live check and record (EXT-01)
 
 ### Phase 61: Spikes for pane hosting, browser parity and live sharing
 
