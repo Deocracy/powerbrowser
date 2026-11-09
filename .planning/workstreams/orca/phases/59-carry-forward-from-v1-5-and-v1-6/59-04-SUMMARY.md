@@ -25,7 +25,7 @@ is not a completed-plan summary until `status: complete`.
 | 7 | OWNER-PASS section 1 steps 9 and 14: App-list reads by device flow, 41-04 records | n/a | moved to p59-owner (D-16) |
 | 8 | OWNER-PASS section 4: MAR key ceremony, release secrets, 44-01 Tasks 2-3 (CF-03) | n/a | moved to p59-owner (D-16) |
 | 9 | OWNER-PASS section 5: legion runner, /etc/nixos change, Codeberg mirror (CF-04, CF-01) | n/a | moved to p59-owner (D-16) |
-| 10 | Confirm the dev build, merge lane 59-03, prove the Closes rows, close WINDOWS ids | (pending) | |
+| 10 | Confirm the dev build, merge lane 59-03, prove the Closes rows, close WINDOWS ids | 03652d3e, 29c37e28 | done; 8 ids closed (34, 36-42); 27, 28, 43 open; `--quick` 330 PASS; 43 is gap-closure item 3 |
 
 ## Lanes
 
@@ -67,6 +67,7 @@ no `--retry-launch` was needed.
 |-------|------|--------------|-----------|------------|-----------|
 | 1 | 59-01 (docs only) | e0547f06 | d495291b | PASS, 678 files | PASS, 328 rows, 0 FAIL, 0 SKIP (log $HOME/.cache/powerbrowser-59/quick-t6-m01.log) |
 | 2 | 59-02 (CF-15) | cc4c6724 | 20203e6e | PASS, 680 files (new files tracked by the merge) | PASS, 330 rows after the registry append (log quick-t6-m02.log) |
+| 3 | 59-03 (WINDOWS 27-43) | 03652d3e | 352eb0ab | PASS, 680 files | PASS, 330 rows (log quick-t10.log), after the incremental mach build and `yarn build` |
 
 - Both merges were clean (`git merge --no-ff refs/heads/ServerDestroyer/p59-0N`, no conflict).
 - Registry append 5b7ce54b: the four comment lines and two rows from the 59-02 SUMMARY, verbatim, directly after
@@ -78,6 +79,65 @@ no `--retry-launch` was needed.
   §3e, §5.3 and the two 57-08 "waits for the other session" lines now point at `systemd/legion-pb.nix` and the 59-02
   commits. Neither lane SUMMARY names a stub row. generate.mjs was not re-run (no merged commit touched
   configuration.toml or brand/).
+
+## Task 10: build confirmed, 59-03 merged, Closes rows proven
+
+**Build.** The incremental `nix develop .#firefox --command bash -c 'cd upstream && MOZCONFIG=../.mozconfig ./mach build'`
+after the 59-01/59-02/59-03 merges exited 0 in 19 s with `0 compiler warnings` and no error line (log
+$HOME/.cache/powerbrowser-59/dev-build-noop.log). mach prints "AI agent detected. Terminal output limited to warnings
+and errors." (upstream/python/mozbuild/mozbuild/build_commands.py:199), so its INFO-level "Your build was
+successful!" (controller/building.py:1779) never reaches the log; that is why the first build's log lacked it too.
+Exit 0 is the evidence. The packaged `PowerBrowserAPI.sys.mjs` is a symlink to the merged source (contains the 59-02
+`clearEnv`). Stamps written: objdir/.pb-050-build.sha256 (ebae8968...) and objdir/.pb-060-build.sha256 (3c637bd1...).
+Theia `yarn build` after the merge: exit 0, browser and node 0 errors; the compiled chrome-bar lib and the frontend
+bundle post-date the merged sources.
+
+**Proofs** (each `scripts/verify-platform.sh --only ROW` on the merged tree with this objdir; logs in
+$HOME/.cache/powerbrowser-59/t10/):
+
+| id | row | runs before close | close | post-close run | ROADMAP tick |
+|----|-----|-------------------|-------|----------------|--------------|
+| 34 | verify-customize-inert | PASS 1/1 (16 s) | fixed | PASS | 999.31, dde3d2c6 |
+| 36 | start-failure-shows-error | PASS 1/1 (real launch; painted the classified settings-folder error) | fixed | PASS | 999.31, dde3d2c6 |
+| 37 | pan04-undo-close-group-live | PASS 1/1 (82 s) | fixed | PASS on a clean tree (see note) | 999.31, 6c13d3a9 |
+| 38 | ng-023-suggestions-history-bookmarks | PASS 1/1 | fixed | PASS | 999.31, 17d36026 |
+| 39 | prompts-live-self-test | PASS 3/3 (about 12 min each) | fixed | PASS | 999.30, 863edd46 |
+| 40 | site-identity-live + site-identity-live-self-test | PASS 1/1 each | fixed | PASS both | 999.31, 266a8243 |
+| 41 | first-boot-surface-fresh | PASS 1/1 | fixed | PASS | 999.31, 8a3b6e76 |
+| 42 | ng067-frontend-errors-reach-telemetry | PASS 3/3 | fixed | PASS | 999.30, 4773189f |
+| 43 | page-furniture-live-self-test | PASS, **FAIL**, PASS | stays open | n/a | not ticked |
+| 28 | page-tools-live | PASS 3/3 (about 238 s each) | stays open (not reproduced, no fix; backlog 999.29 stays) | n/a | not ticked |
+| 27 | nav-keys-live headed real-input | not run here | stays open until 59-06's headed proof | n/a | not ticked |
+
+- Note on 37: its first post-close run refused in 0 s with `uncommitted changes ... M .planning/ROADMAP.md,
+  M .planning/WINDOWS.md` (scripts/lib/ng-a-live.mjs assertCleanTree): this session's own uncommitted close edits, not
+  a product red. After commit 29c37e28 the re-run on a clean tree passed.
+- Closed with `gsd-tools windows fixed ID --ws orca`; WINDOWS.md open_count 22 -> 14. Commit 29c37e28 carries
+  WINDOWS.md and the eight ROADMAP ticks.
+- `GATE_KNOWN_OPEN_EXCLUSIONS` rows that no longer exclude (their id is fixed, so `--gate` treats a red on them as a
+  real failure, by design): verify-customize-inert (34), start-failure-shows-error (36), pan04-undo-close-group-live
+  (37), ng-023-suggestions-history-bookmarks (38), prompts-live-self-test (39), site-identity-live and
+  site-identity-live-self-test (40), first-boot-surface-fresh (41), ng067-frontend-errors-reach-telemetry (42). The
+  list itself was not edited (no task says to); those entries are now inert text for 59-07 to prune.
+- Task 10 `<verify>` chain: `--quick` (330 PASS) and `--only start-failure-shows-error`, `verify-customize-inert`,
+  `first-boot-surface-fresh`: exit 0 (log t10/verify.log).
+
+## Owner items for p59-owner (D-16)
+
+- **Ledger re-lock (owner-only command).** Lane 59-03 changed two ledger-locked test files:
+  scripts/verify-ng-023-suggestions-places.mjs (WINDOWS 38, fix 17d36026) and scripts/verify-ng-067-frontend-errors.mjs
+  (WINDOWS 42, fix 4773189f). Both are merged and proven green here. Chris re-locks them with the ledger amend tool's
+  `lock-checks` subcommand after reviewing the two diffs; Claude did not run it.
+- **59-04 Task 4 (section 3 remainder):** R2 write token secret, `CLOCK_PRIVATE_KEY`, Upptime `GH_PAT`, then Claude's
+  follow-ups (scheduler `wrangler deploy`, Watchdog enable, Upptime dispatch, Pages, RENEWALS rows) once
+  59-OWNER-LOG.md reports the secrets set.
+- **59-04 Task 5 (section 1 owner part):** notifications, the drill, the old-repository archive.
+- **59-04 Task 7 (section 1 steps 9 and 14):** device-flow tokens per docs/RELEASING.md "App installation read-back"
+  (`REPO_CONTROLS_TOKEN_<SLUG>`), live `repo-controls`, the 41-04 records; third-party lists by token or D-09 re-date.
+- **59-04 Task 8 (section 4):** MAR key ceremony and release secrets, then 44-01 Tasks 2-3.
+- **59-04 Task 9 (section 5):** install `systemd/legion-pb.nix` by its header steps 1-5, including the
+  `services.github-runners.powerbrowser-release.url` line in configuration.nix and the 53 BLOCKED.md item 2 step 2
+  root commands before the rebuild; runner online; first Codeberg mirror push.
 
 ## Task 3: OWNER-PASS §2 remainder (47-04)
 
@@ -178,6 +238,16 @@ Code reds found in this plan, each for a gap-closure plan appended to Phase 59 (
    this objdir: the sidecar sends no request to the loopback endpoint. Entry 33's recorded cause
    (dirty tree) is no longer the cause.
 
+3. **page-furniture-live-self-test (WINDOWS 43) red 1 of 3 on the merged tree.** Run 2 of 3 (2026-11-09, log
+   $HOME/.cache/powerbrowser-59/t10/43-page-furniture-live-self-test-2.log): plant `copy-image-html-only` "stayed green
+   on menu-edit or went red for another reason; got: Undo did not restore the second field's previous value". This is
+   a different symptom from the entry's recorded one (clean-control Copy Image Link clipboard read-back): the menu-edit
+   Undo leg can fail before the plant's own failure is reached. 59-03's fix 457680cf covers the clipboard read only.
+   Entry 43 stays open; a gap-closure plan isolates the Undo leg and re-proves the row three of three.
+4. **page-tools-live (WINDOWS 28):** green 3 of 3 here and 5 of 5 in the lane; not reproduced. Not a code red now;
+   entry 28 and backlog 999.29 stay open per the 59-03 Remaining table (full-registry runs with the push log written
+   out on failure).
+
 ## Deviations from Plan
 
 - **Task 1 verify probe adjusted (not a failure).** `pgrep -f 'mach build'` also matches the
@@ -187,3 +257,12 @@ Code reds found in this plan, each for a gap-closure plan appended to Phase 59 (
 - **Orca CLI path.** Bare `orca` on this host is the GNOME screen reader outside an Orca
   terminal, so each lane command ran as `"$ORCA_CLI_COMMAND" worktree create ...` with the
   arguments otherwise verbatim.
+- **Task 10 precondition "build log ending in mach's success line" read as exit 0 (not a failure).** This mach
+  limits terminal output to warnings and errors when it detects an agent (build_commands.py:199), so the INFO-level
+  success line is never logged. The incremental build's exit 0 with no error line, and the packaged shell file
+  matching the merged source, were used instead.
+- **[Rule 3 - Blocking] A post-close re-run refused on this session's own dirty tree.** The live harness's
+  clean-tree guard refused the 37 re-run while the WINDOWS.md and ROADMAP.md close edits were uncommitted. The close
+  was committed first (29c37e28), then 37 re-ran green. Later close batches should commit before re-running.
+- **Stale items outside the lanes reconciled (64f13d55)** at the 59-02 merge note's request: 57-08-PLAN.md status and
+  four OWNER-PASS.md lines.
