@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 22
+open_count: 14
 waived_count: 2
-fixed_count: 19
+fixed_count: 27
 total_count: 43
-last_updated: 2026-11-07T10:18:36.853Z
+last_updated: 2026-11-09T06:25:41.438Z
 ---
 
 # Broken Windows Ledger
@@ -48,15 +48,15 @@ last_updated: 2026-11-07T10:18:36.853Z
 | 31 | 39 | unrun-verify | .github/settings/ |  | 39-19 full run (6ac27ac2): ng074-ci-green-on-main, repo-controls, channel-live, codeberg-mirror-live, upptime-sweep-live, win-matrix-record and win-download-copy are red on live owner state: no verify.yml run for the unpushed main head, 5 repo-controls problems (apps slack and claude undeclared), no published Release, Codeberg and Upptime slugs undeclared, scripts/matrix/win-matrix-record.json absent; repro: scripts/verify-platform.sh --only channel-live; cause so far: each needs an owner push, release or checkpoint input (deploy OWNER-PASS.md, 53-04 and 54-04 checkpoints); source: no UAT test, 39-BASELINE environment rows | open |  | 2026-11-07T10:18:30.720Z |  |
 | 32 | 39 | unrun-verify | powerbrowser/packaging/package-macos.sh |  | 39-19 full run (6ac27ac2): macos-package-payload (.mozbuild/macos-package absent) and macos-install-matrix (25 unobserved items) are red; repro: scripts/verify-platform.sh --only macos-package-payload; cause so far: macOS is deferred to v1.7 by R4 (2026-11-03) and needs Mac hardware; ledger 23 is waived, so it cannot key a gate exclusion; source: no UAT test, 39-BASELINE environment rows | open |  | 2026-11-07T10:18:30.941Z |  |
 | 33 | 39 | unrun-verify | scripts/verify-telemetry-live-delivery.mjs |  | tel06-error-delivery-live refuses to run: 'the working tree is dirty (2 tracked change(s), first: M .claude/settings.json)'; repro: scripts/verify-platform.sh --only tel06-error-delivery-live; cause so far: the drill rewrites a tracked file and rebuilds, so it refuses any dirty tree, and the dirt is the owner's local hook removal in .claude/settings.json plus .planning/state.json, which an agent may not commit; runs on a clean checkout; source: no UAT test, 39-BASELINE and 39-19 full run | open |  | 2026-11-07T10:18:31.179Z |  |
-| 34 | 39 | unmet-truth | scripts/verify-customize-inert.mjs |  | verify-customize-inert: 'state 1 (absent) vs state 3 (styled) -- pixels identical, the CSS layer had no effect' (39-BASELINE, 39-19 full run and rerun, 3 of 3); repro: scripts/verify-platform.sh --only verify-customize-inert; cause so far: the script writes $XDG_CONFIG_HOME/powerbrowser/customize.css and captures the shell's supervised frontend, which may read customize.css from another config dir (the customize extension resolves user-storage:/user/customize.css); not isolated; source: no UAT test (CUST-01 registry row) | open |  | 2026-11-07T10:18:31.417Z |  |
+| 34 | 39 | unmet-truth | scripts/verify-customize-inert.mjs |  | verify-customize-inert: 'state 1 (absent) vs state 3 (styled) -- pixels identical, the CSS layer had no effect' (39-BASELINE, 39-19 full run and rerun, 3 of 3); repro: scripts/verify-platform.sh --only verify-customize-inert; cause so far: the script writes $XDG_CONFIG_HOME/powerbrowser/customize.css and captures the shell's supervised frontend, which may read customize.css from another config dir (the customize extension resolves user-storage:/user/customize.css); not isolated; source: no UAT test (CUST-01 registry row) | fixed |  | 2026-11-07T10:18:31.417Z | 2026-11-09T05:38:35.008Z |
 | 35 | 39 | unrun-verify | .planning/milestones/v1.3-phases/15-panorama-organising/15-UAT.md |  | ng089-uat-sheets: 49 pending results plus no recorded React 19 runtime test across the v1.2 10-UAT and v1.3 13, 14, 14.1, 14.1.1 and 15 UAT sheets; repro: node scripts/verify-ng-089-uat-sheets.mjs; cause so far: the NG-084 live UAT pass over those sheets was deferred by the owner ('Defer all the checks') and never run; source: the listed UAT sheets, every pending test | open |  | 2026-11-07T10:18:31.663Z |  |
-| 36 | 39 | unmet-truth | powerbrowser/shell/TheiaService.sys.mjs |  | start-failure-shows-error (MIG-04): 'the failing settings-folder step did not name itself in its diagnostics rows (Failed step = waiting for the backend readiness announcement)' (39-BASELINE, 39-19 full run and rerun); repro: scripts/verify-platform.sh --only start-failure-shows-error; cause so far: the log shows 'Backend did not announce POWERBROWSER_BACKEND_READY within 3000ms' first, so the readiness backstop fires before the planted settings-folder failure is classified; not isolated; source: no UAT test (MIG-04 registry row) | open |  | 2026-11-07T10:18:31.926Z |  |
-| 37 | 39 | unmet-truth | scripts/verify-pan04-undo-close-group-live.mjs | 464 | pan04-undo-close-group-live (g): 'after the commit focus is on pb-org-new theia-button with 0 Undo controls left, want New Group and none' (39-BASELINE, 39-19 full run and rerun); repro: scripts/verify-platform.sh --only pan04-undo-close-group-live; cause so far: focus is on an element with class pb-org-new, but not the one org.node.querySelector('.pb-org-new') returns, so either a second Organising widget instance or a stale org handle in the probe; harness or product not separated; source: no v1.5 UAT test (PAN-04 registry row) | open |  | 2026-11-07T10:18:32.197Z |  |
-| 38 | 39 | unmet-truth | scripts/verify-ng-023-suggestions-places.mjs |  | ng-023-suggestions-history-bookmarks: 'an open tab ranks below a history or bookmark match' (bookmark first, open tab second, history third; 39-BASELINE, 39-19 full run and rerun); repro: scripts/verify-platform.sh --only ng-023-suggestions-history-bookmarks; cause so far: the suggestion ranking puts the bookmark provider ahead of open tabs; not traced to a commit; source: no UAT test (NG-023 registry row) | open |  | 2026-11-07T10:18:32.415Z |  |
-| 39 | 39 | unmet-truth | scripts/verify-prompts-live.mjs |  | prompts-live-self-test: plant allow-loads-frame-url went red for the wrong reason, 'popup not adopted next to its opener (..., about:blank)', in 2 of 3 runs (39-19 full run, run 3; run 2 PASS); repro: scripts/verify-platform.sh --only prompts-live-self-test; cause so far: the 39-09 re-site (999.13, fae88df5) does not reach the plant's own failure reliably, the popup adoption step is timing-dependent; source: 37-UAT test 17 | open |  | 2026-11-07T10:18:32.637Z |  |
-| 40 | 39 | unmet-truth | scripts/verify-site-identity-live.mjs | 1316 | site-identity-live and its self-test clean control: app-menu 'the Organising menu disabled rows are [f,f,f,f,t,t,t,t,f,...], want all false' and 'the Help row did not open its stock page (no stock window shows about:support)' (39-BASELINE, 39-19 full run and rerun); repro: node scripts/verify-site-identity-live.mjs --scenario app-menu; cause so far: rows 5 to 8 are disabled in Organising, likely page-dependent rows with no current web tab, and Help opens no stock about:support window; harness expectation or product not separated; source: no UAT sheet for phase 31; 31-04-LIVE-HANDOFF.md app-menu | open |  | 2026-11-07T10:18:32.870Z |  |
-| 41 | 39 | unmet-truth | theia/extensions/chrome-bar/src/browser/side-panel-top-tabs.ts |  | first-boot-surface-fresh: 'TypeError: can't access property offsetHeight, additionalViewsMenu is null' before the forced error (39-BASELINE, 39-19 full run and rerun); repro: scripts/verify-platform.sh --only first-boot-surface-fresh; cause so far: @theia/core SideTabBar overflow (tab-bars.js:1179) queries .theia-additional-views-menu in the tab bar's parent, and the side panel tabs moved to the top by e9569e81 leave no such element there; fix belongs in the PB extension, never in Theia core; source: no UAT test (first-boot registry row) | open |  | 2026-11-07T10:18:33.080Z |  |
-| 42 | 39 | deviation | scripts/verify-ng-067-frontend-errors.mjs |  | ng067-frontend-errors-reach-telemetry flaked: 'at level error no frontend.uncaught-error event was sent' in the 39-19 full run, then PASS 2 of 2 alone; repro: scripts/verify-platform.sh --only ng067-frontend-errors-reach-telemetry; cause so far: timing in the frontend error delivery or its read-back, not isolated; source: no UAT test (NG-067 registry row) | open |  | 2026-11-07T10:18:35.742Z |  |
+| 36 | 39 | unmet-truth | powerbrowser/shell/TheiaService.sys.mjs |  | start-failure-shows-error (MIG-04): 'the failing settings-folder step did not name itself in its diagnostics rows (Failed step = waiting for the backend readiness announcement)' (39-BASELINE, 39-19 full run and rerun); repro: scripts/verify-platform.sh --only start-failure-shows-error; cause so far: the log shows 'Backend did not announce POWERBROWSER_BACKEND_READY within 3000ms' first, so the readiness backstop fires before the planted settings-folder failure is classified; not isolated; source: no UAT test (MIG-04 registry row) | fixed |  | 2026-11-07T10:18:31.926Z | 2026-11-09T05:38:48.313Z |
+| 37 | 39 | unmet-truth | scripts/verify-pan04-undo-close-group-live.mjs | 464 | pan04-undo-close-group-live (g): 'after the commit focus is on pb-org-new theia-button with 0 Undo controls left, want New Group and none' (39-BASELINE, 39-19 full run and rerun); repro: scripts/verify-platform.sh --only pan04-undo-close-group-live; cause so far: focus is on an element with class pb-org-new, but not the one org.node.querySelector('.pb-org-new') returns, so either a second Organising widget instance or a stale org handle in the probe; harness or product not separated; source: no v1.5 UAT test (PAN-04 registry row) | fixed |  | 2026-11-07T10:18:32.197Z | 2026-11-09T05:38:48.419Z |
+| 38 | 39 | unmet-truth | scripts/verify-ng-023-suggestions-places.mjs |  | ng-023-suggestions-history-bookmarks: 'an open tab ranks below a history or bookmark match' (bookmark first, open tab second, history third; 39-BASELINE, 39-19 full run and rerun); repro: scripts/verify-platform.sh --only ng-023-suggestions-history-bookmarks; cause so far: the suggestion ranking puts the bookmark provider ahead of open tabs; not traced to a commit; source: no UAT test (NG-023 registry row) | fixed |  | 2026-11-07T10:18:32.415Z | 2026-11-09T05:38:48.524Z |
+| 39 | 39 | unmet-truth | scripts/verify-prompts-live.mjs |  | prompts-live-self-test: plant allow-loads-frame-url went red for the wrong reason, 'popup not adopted next to its opener (..., about:blank)', in 2 of 3 runs (39-19 full run, run 3; run 2 PASS); repro: scripts/verify-platform.sh --only prompts-live-self-test; cause so far: the 39-09 re-site (999.13, fae88df5) does not reach the plant's own failure reliably, the popup adoption step is timing-dependent; source: 37-UAT test 17 | fixed |  | 2026-11-07T10:18:32.637Z | 2026-11-09T06:25:41.333Z |
+| 40 | 39 | unmet-truth | scripts/verify-site-identity-live.mjs | 1316 | site-identity-live and its self-test clean control: app-menu 'the Organising menu disabled rows are [f,f,f,f,t,t,t,t,f,...], want all false' and 'the Help row did not open its stock page (no stock window shows about:support)' (39-BASELINE, 39-19 full run and rerun); repro: node scripts/verify-site-identity-live.mjs --scenario app-menu; cause so far: rows 5 to 8 are disabled in Organising, likely page-dependent rows with no current web tab, and Help opens no stock about:support window; harness expectation or product not separated; source: no UAT sheet for phase 31; 31-04-LIVE-HANDOFF.md app-menu | fixed |  | 2026-11-07T10:18:32.870Z | 2026-11-09T05:38:48.629Z |
+| 41 | 39 | unmet-truth | theia/extensions/chrome-bar/src/browser/side-panel-top-tabs.ts |  | first-boot-surface-fresh: 'TypeError: can't access property offsetHeight, additionalViewsMenu is null' before the forced error (39-BASELINE, 39-19 full run and rerun); repro: scripts/verify-platform.sh --only first-boot-surface-fresh; cause so far: @theia/core SideTabBar overflow (tab-bars.js:1179) queries .theia-additional-views-menu in the tab bar's parent, and the side panel tabs moved to the top by e9569e81 leave no such element there; fix belongs in the PB extension, never in Theia core; source: no UAT test (first-boot registry row) | fixed |  | 2026-11-07T10:18:33.080Z | 2026-11-09T05:38:48.732Z |
+| 42 | 39 | deviation | scripts/verify-ng-067-frontend-errors.mjs |  | ng067-frontend-errors-reach-telemetry flaked: 'at level error no frontend.uncaught-error event was sent' in the 39-19 full run, then PASS 2 of 2 alone; repro: scripts/verify-platform.sh --only ng067-frontend-errors-reach-telemetry; cause so far: timing in the frontend error delivery or its read-back, not isolated; source: no UAT test (NG-067 registry row) | fixed |  | 2026-11-07T10:18:35.742Z | 2026-11-09T06:25:41.438Z |
 | 43 | 39 | deviation | scripts/verify-page-furniture-live.mjs |  | page-furniture-live-self-test flaked: clean control 'context-menu: Copy Image Link did not put the image URL on the clipboard' in the 39-19 full run, then PASS 2 of 2 alone; the plain page-furniture-live row passed; repro: scripts/verify-platform.sh --only page-furniture-live-self-test; cause so far: the headless clipboard read-back after Copy Image Link is timing-dependent (the menu-edit Paste and iframe-edit-rows flakes share the headless clipboard); source: 35-UAT test 6 | open |  | 2026-11-07T10:18:36.853Z |  |
 
 ````json
@@ -474,10 +474,10 @@ last_updated: 2026-11-07T10:18:36.853Z
     "file": "scripts/verify-customize-inert.mjs",
     "line": null,
     "description": "verify-customize-inert: 'state 1 (absent) vs state 3 (styled) -- pixels identical, the CSS layer had no effect' (39-BASELINE, 39-19 full run and rerun, 3 of 3); repro: scripts/verify-platform.sh --only verify-customize-inert; cause so far: the script writes $XDG_CONFIG_HOME/powerbrowser/customize.css and captures the shell's supervised frontend, which may read customize.css from another config dir (the customize extension resolves user-storage:/user/customize.css); not isolated; source: no UAT test (CUST-01 registry row)",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-07T10:18:31.417Z",
-    "resolved_at": null,
+    "resolved_at": "2026-11-09T05:38:35.008Z",
     "milestone": "v1.5"
   },
   {
@@ -500,10 +500,10 @@ last_updated: 2026-11-07T10:18:36.853Z
     "file": "powerbrowser/shell/TheiaService.sys.mjs",
     "line": null,
     "description": "start-failure-shows-error (MIG-04): 'the failing settings-folder step did not name itself in its diagnostics rows (Failed step = waiting for the backend readiness announcement)' (39-BASELINE, 39-19 full run and rerun); repro: scripts/verify-platform.sh --only start-failure-shows-error; cause so far: the log shows 'Backend did not announce POWERBROWSER_BACKEND_READY within 3000ms' first, so the readiness backstop fires before the planted settings-folder failure is classified; not isolated; source: no UAT test (MIG-04 registry row)",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-07T10:18:31.926Z",
-    "resolved_at": null,
+    "resolved_at": "2026-11-09T05:38:48.313Z",
     "milestone": "v1.5"
   },
   {
@@ -513,10 +513,10 @@ last_updated: 2026-11-07T10:18:36.853Z
     "file": "scripts/verify-pan04-undo-close-group-live.mjs",
     "line": 464,
     "description": "pan04-undo-close-group-live (g): 'after the commit focus is on pb-org-new theia-button with 0 Undo controls left, want New Group and none' (39-BASELINE, 39-19 full run and rerun); repro: scripts/verify-platform.sh --only pan04-undo-close-group-live; cause so far: focus is on an element with class pb-org-new, but not the one org.node.querySelector('.pb-org-new') returns, so either a second Organising widget instance or a stale org handle in the probe; harness or product not separated; source: no v1.5 UAT test (PAN-04 registry row)",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-07T10:18:32.197Z",
-    "resolved_at": null,
+    "resolved_at": "2026-11-09T05:38:48.419Z",
     "milestone": "v1.5"
   },
   {
@@ -526,10 +526,10 @@ last_updated: 2026-11-07T10:18:36.853Z
     "file": "scripts/verify-ng-023-suggestions-places.mjs",
     "line": null,
     "description": "ng-023-suggestions-history-bookmarks: 'an open tab ranks below a history or bookmark match' (bookmark first, open tab second, history third; 39-BASELINE, 39-19 full run and rerun); repro: scripts/verify-platform.sh --only ng-023-suggestions-history-bookmarks; cause so far: the suggestion ranking puts the bookmark provider ahead of open tabs; not traced to a commit; source: no UAT test (NG-023 registry row)",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-07T10:18:32.415Z",
-    "resolved_at": null,
+    "resolved_at": "2026-11-09T05:38:48.524Z",
     "milestone": "v1.5"
   },
   {
@@ -539,10 +539,10 @@ last_updated: 2026-11-07T10:18:36.853Z
     "file": "scripts/verify-prompts-live.mjs",
     "line": null,
     "description": "prompts-live-self-test: plant allow-loads-frame-url went red for the wrong reason, 'popup not adopted next to its opener (..., about:blank)', in 2 of 3 runs (39-19 full run, run 3; run 2 PASS); repro: scripts/verify-platform.sh --only prompts-live-self-test; cause so far: the 39-09 re-site (999.13, fae88df5) does not reach the plant's own failure reliably, the popup adoption step is timing-dependent; source: 37-UAT test 17",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-07T10:18:32.637Z",
-    "resolved_at": null,
+    "resolved_at": "2026-11-09T06:25:41.333Z",
     "milestone": "v1.5"
   },
   {
@@ -552,10 +552,10 @@ last_updated: 2026-11-07T10:18:36.853Z
     "file": "scripts/verify-site-identity-live.mjs",
     "line": 1316,
     "description": "site-identity-live and its self-test clean control: app-menu 'the Organising menu disabled rows are [f,f,f,f,t,t,t,t,f,...], want all false' and 'the Help row did not open its stock page (no stock window shows about:support)' (39-BASELINE, 39-19 full run and rerun); repro: node scripts/verify-site-identity-live.mjs --scenario app-menu; cause so far: rows 5 to 8 are disabled in Organising, likely page-dependent rows with no current web tab, and Help opens no stock about:support window; harness expectation or product not separated; source: no UAT sheet for phase 31; 31-04-LIVE-HANDOFF.md app-menu",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-07T10:18:32.870Z",
-    "resolved_at": null,
+    "resolved_at": "2026-11-09T05:38:48.629Z",
     "milestone": "v1.5"
   },
   {
@@ -565,10 +565,10 @@ last_updated: 2026-11-07T10:18:36.853Z
     "file": "theia/extensions/chrome-bar/src/browser/side-panel-top-tabs.ts",
     "line": null,
     "description": "first-boot-surface-fresh: 'TypeError: can't access property offsetHeight, additionalViewsMenu is null' before the forced error (39-BASELINE, 39-19 full run and rerun); repro: scripts/verify-platform.sh --only first-boot-surface-fresh; cause so far: @theia/core SideTabBar overflow (tab-bars.js:1179) queries .theia-additional-views-menu in the tab bar's parent, and the side panel tabs moved to the top by e9569e81 leave no such element there; fix belongs in the PB extension, never in Theia core; source: no UAT test (first-boot registry row)",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-07T10:18:33.080Z",
-    "resolved_at": null,
+    "resolved_at": "2026-11-09T05:38:48.732Z",
     "milestone": "v1.5"
   },
   {
@@ -578,10 +578,10 @@ last_updated: 2026-11-07T10:18:36.853Z
     "file": "scripts/verify-ng-067-frontend-errors.mjs",
     "line": null,
     "description": "ng067-frontend-errors-reach-telemetry flaked: 'at level error no frontend.uncaught-error event was sent' in the 39-19 full run, then PASS 2 of 2 alone; repro: scripts/verify-platform.sh --only ng067-frontend-errors-reach-telemetry; cause so far: timing in the frontend error delivery or its read-back, not isolated; source: no UAT test (NG-067 registry row)",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-07T10:18:35.742Z",
-    "resolved_at": null,
+    "resolved_at": "2026-11-09T06:25:41.438Z",
     "milestone": "v1.5"
   },
   {
