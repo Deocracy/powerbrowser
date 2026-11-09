@@ -16,7 +16,7 @@
 #   5. corepack provides the pnpm version named by orca/package.json
 #   6. pnpm install --frozen-lockfile --ignore-scripts (Orca's postinstall and
 #      its Electron rebuild never run), workspace packages, rebuild:node,
-#      build:mobile-web, build:orcad
+#      mobile/ install (also --ignore-scripts), build:mobile-web, build:orcad
 #   7. de-slot: removes the three slot markers and out/runtimes (Node 24.22.1)
 #   8. build:web
 # Orca's source and scripts are never edited (D-16). This build is separate
@@ -80,12 +80,16 @@ got_pnpm="$(pnpm --version)" || fail "step pnpm-version exited $?"
 echo "build-orca: node $(node --version), corepack $(corepack --version), pnpm $got_pnpm"
 
 # 6. Install without lifecycle scripts, then Orca's own build steps.
-run_step install pnpm install --frozen-lockfile --ignore-scripts --store-dir "$REPO_ROOT/.mozbuild/pnpm-store"
+STORE="$REPO_ROOT/.mozbuild/pnpm-store"
+run_step install pnpm install --frozen-lockfile --ignore-scripts --store-dir "$STORE"
 run_step build-workspace-packages node config/scripts/build-workspace-packages.mjs
 run_step rebuild:node pnpm run rebuild:node
 # build:orcad stages out/mobile-web unconditionally (build-orcad.mjs
 # stageOrcadMobileWebBundle); Orca's own build:desktop and build:release run
-# build:mobile-web first, so this does too.
+# build:mobile-web first, so this does too. mobile/ is its own pnpm workspace
+# with its own lockfile; it is installed scripts-off like the root (P60-R3), so
+# mobile's postinstall code generators never run.
+run_step install:mobile pnpm -C mobile install --frozen-lockfile --ignore-scripts --store-dir "$STORE"
 run_step build:mobile-web pnpm run build:mobile-web
 run_step build:orcad pnpm run build:orcad
 
