@@ -473,8 +473,12 @@ async function fullDrill() {
                     window.__pbDrill.sender.maxBatchSize = 2;
                     return 'ok'; })()`);
                 const setLevel = async (level) => {
-                    await evaluate(`window.__pbDrill.levelSet = false; window.__pbDrill.prefs.set(${JSON.stringify(levelKey)}, ${JSON.stringify(level)}).then(() => { window.__pbDrill.levelSet = true; }); 'ok'`);
-                    await waitFor('window.__pbDrill.levelSet === true', { timeoutMs: 10000 });
+                    // User scope (1): the shell opens with no workspace, and an unscoped set targets Workspace settings, which
+                    // rejects there. A rejected set is reported with its message, not left to time out.
+                    await evaluate(`window.__pbDrill.levelSet = false; window.__pbDrill.prefs.set(${JSON.stringify(levelKey)}, ${JSON.stringify(level)}, 1).then(() => { window.__pbDrill.levelSet = true; }, e => { window.__pbDrill.levelSet = 'rejected: ' + (e && e.message); }); 'ok'`);
+                    await waitFor('window.__pbDrill.levelSet !== false', { timeoutMs: 10000 });
+                    const got = await evaluate('window.__pbDrill.levelSet');
+                    if (got !== true) throw new Error(`setting ${levelKey} to ${level} failed (${got})`);
                 };
                 // Positive half: level error, one uncaught error and one unhandled rejection, flushed by batch size 2.
                 state.level = 'error';
