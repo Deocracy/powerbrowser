@@ -322,3 +322,23 @@ Code reds found in this plan, each for a gap-closure plan appended to Phase 59 (
 - **Not fixed (lane Remaining):** after any page menu pick the page still loses its focused element, so the caret does
   not return to the field. Edit rows no longer depend on it. Restoring focus means hiding the overlay without
   `visibility: hidden`, which touches every blocking layer; left for a planned change.
+
+### 59-07prep (Claude-only preparation for 59-07)
+
+- **Lane commits:** e2b767e6 (`GATE_KNOWN_OPEN_EXCLUSIONS` rows keyed to fixed WINDOWS ids 33, 34, 36-43 removed, 11
+  rows; 24 rows remain for the open ids 25, 28, 29, 30, 31, 32, 35), 7944af68 (`scripts/redate-windows.mjs`, the D-09
+  re-date tool with `--dry-run` and `--self-test`, through gsd-core's WINDOWS.md parser, and registry row
+  `redate-windows-self-test` in the `--quick` set), ee7313dc (`59-07-CF18-RECORDS.md`, CF-18 record text for the six
+  unexecuted v1.6 owner plans 41-04, 44-01, 47-04, 50-04, 52-05, 57-04), 4fbd413f (59-07prep summary, status partial).
+- **Merge:** de0ed91a, `git merge --no-ff refs/heads/ServerDestroyer/p59-07prep`, no conflicts. scan-brand-residue PASS
+  (681 files).
+- **Rows proven on the merged tree (2026-11-09):**
+  - `bash -n scripts/verify-platform.sh`: clean.
+  - `redate-windows-self-test` PASS (`--only`).
+  - `node scripts/redate-windows.mjs --dry-run --date 2027-01-01 25 29`: printed the planned reason for both ids
+    (status open, unchanged), "nothing written"; `git status --short .planning/WINDOWS.md` empty after.
+  - `--quick` PASS (331 checks: the 330 before plus `redate-windows-self-test`).
+- **Closes the sweep noted under 59-08 and 59-09:** the gate rows keyed to fixed ids are gone.
+- **Not done here:** the real re-date of `.planning/WINDOWS.md` runs in 59-07 (Task 7) with the date Chris names in
+  Task 6, through `scripts/redate-windows.mjs` (59-07-PLAN.md's `redate-windows.cjs` path is superseded by this one).
+  The deploy SUMMARY edits are 59-07 Task 9, pasted from `59-07-CF18-RECORDS.md`. `--gate` runs in 59-07 Task 5.
