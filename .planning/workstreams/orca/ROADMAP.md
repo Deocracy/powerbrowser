@@ -53,14 +53,16 @@ Owner decisions D-01..D-29 (`DECISIONS.md`) and the adopted adversarial review (
   3. `scripts/verify-platform.sh --gate` passes with no exclusions, or every remaining `GATE_KNOWN_OPEN_EXCLUSIONS` id is re-dated in WINDOWS.md. An open WINDOWS.md entry closes only with its fix.
   4. v1.6 is closed on workstream `deploy` (R1/R16 override closeout, tag `v1.6`) once the owner pass is done; every push waits on Chris's word (CF-19).
 
-**Plans**: 7 plans
+**Plans**: 5/8 plans executed
 
 Plans:
+- [x] 59-08-PLAN.md
+
 **Wave 1**
-- [ ] 59-01-PLAN.md — lane: record the 2026-11-07 live state in five deploy SUMMARYs (CF-14)
-- [ ] 59-02-PLAN.md — lane: device-flow token input, plan 57-08 clearEnv and gate, the /etc/nixos module (CF-15)
-- [ ] 59-03-PLAN.md — lane: the 11 close-out defects, WINDOWS.md 27-43 (999.28-999.31)
-- [ ] 59-04-PLAN.md — dev build, lane launch and merges, OWNER-PASS sections 1-5 and 13 (CF-01..CF-04, CF-12)
+- [x] 59-01-PLAN.md — lane: record the 2026-11-07 live state in five deploy SUMMARYs (CF-14)
+- [x] 59-02-PLAN.md — lane: device-flow token input, plan 57-08 clearEnv and gate, the /etc/nixos module (CF-15)
+- [x] 59-03-PLAN.md — lane: the 11 close-out defects, WINDOWS.md 27-43 (999.28-999.31)
+- [x] 59-04-PLAN.md — dev build, lane launch and merges, OWNER-PASS sections 1-5 and 13 (CF-01..CF-04, CF-12)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 59-05-PLAN.md — D-12 push, OWNER-PASS sections 6-10 and 12, first Linux release, TEL-13 for Linux (CF-05..CF-09, CF-11)
@@ -222,7 +224,7 @@ Phases execute in numeric order: 59 → 60 → 61 → 62 → 63 → 64 → 65 �
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 59. Carry-forward from v1.5 and v1.6 | 0/TBD | Not started | - |
+| 59. Carry-forward from v1.5 and v1.6 | 5/8 | In Progress | - |
 | 60. Orca from source on Theia's Node | 0/TBD | Not started | - |
 | 61. Spikes for pane hosting, browser parity and live sharing | 0/TBD | Not started | - |
 | 62. Overlay gate and PowerBrowser-run orcad | 0/TBD | Not started | - |
