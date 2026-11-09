@@ -9005,11 +9005,11 @@ const PAGE_MENU_EDIT_CMDS = Object.freeze({
 });
 
 function pageMenuEdit(data, cmd) {
-  const controller = webTabEditContext(data.browser, data.frameBrowsingContext)?.currentWindowGlobal?.getActor("Controllers");
-  if (!controller) {
+  const global = webTabEditContext(data.browser, data.frameBrowsingContext)?.currentWindowGlobal;
+  if (!global) {
     return { where: "refused" };
   }
-  controller.doCommand(cmd);
+  data.context.onTextInput ? global.getActor(EDIT_STATE_ACTOR_NAME).sendAsyncMessage("PowerBrowserEditState:Do", { cmd }) : global.getActor("Controllers").doCommand(cmd); // WINDOWS 43: a field's row runs on that field (GroupActorChild)
   return { where: "done" };
 }
 
