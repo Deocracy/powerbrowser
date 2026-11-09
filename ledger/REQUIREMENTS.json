@@ -1,5 +1,5 @@
 {
-  "ledger_version": 406,
+  "ledger_version": 414,
   "frozen_at": "2026-09-27",
   "items": [
     {
@@ -967,7 +967,7 @@
     {
       "id": "NG-075",
       "text": "A Windows MSIX package is built. Evidence: docs/BUILD.md:966-967 staged-unexecuted; PKG-01 box checked (v1.1-REQUIREMENTS.md:31).",
-      "status": "deferred-approved",
+      "status": "open",
       "spec_ref": "docs/non-gui/GAPS.md:105",
       "test_ref": "",
       "code_ref": "",
@@ -975,12 +975,12 @@
       "owner": "chris",
       "phase": "999.2",
       "deferred_at": "2026-09-25",
-      "reason": "D4(a) 2026-09-25: needs hosts, accounts or long builds outside this machine; backlog 999.2 distribution"
+      "reason": "Chris 2026-11-08 D-14 reopened for v1.7, Windows MSIX waits for a later v1.7 phase, R15 drop withdrawn"
     },
     {
       "id": "NG-076",
       "text": "A macOS DMG with .icns is built. Evidence: same as NG-075.",
-      "status": "deferred-approved",
+      "status": "open",
       "spec_ref": "docs/non-gui/GAPS.md:106",
       "test_ref": "",
       "code_ref": "",
@@ -988,12 +988,12 @@
       "owner": "chris",
       "phase": "999.2",
       "deferred_at": "2026-09-25",
-      "reason": "D4(a) 2026-09-25: needs hosts, accounts or long builds outside this machine; backlog 999.2 distribution"
+      "reason": "Chris 2026-11-08 D-14 reopened for v1.7, macOS DMG waits for a later v1.7 phase with Mac hardware"
     },
     {
       "id": "NG-077",
       "text": "The Windows and macOS install matrix and per-OS MAR update hop run. Evidence: docs/BUILD.md:997-998.",
-      "status": "deferred-approved",
+      "status": "open",
       "spec_ref": "docs/non-gui/GAPS.md:107",
       "test_ref": "",
       "code_ref": "",
@@ -1001,51 +1001,51 @@
       "owner": "chris",
       "phase": "999.2",
       "deferred_at": "2026-09-25",
-      "reason": "D4(a) 2026-09-25: needs hosts, accounts or long builds outside this machine; backlog 999.2 distribution"
+      "reason": "Chris 2026-11-08 D-14 reopened for v1.7, the install matrix and MAR hop for Windows and macOS wait for a later v1.7 phase"
     },
     {
       "id": "NG-078",
       "text": "A release pipeline exists, per docs/RELEASING.md and SEED-001. Evidence: RELEASING.md:11-12; SEED-001 dormant; no release.yml.",
-      "status": "deferred-approved",
+      "status": "open",
       "spec_ref": "docs/non-gui/GAPS.md:108",
       "test_ref": "",
       "code_ref": "",
       "evidence": "",
       "owner": "chris",
-      "phase": "999.2",
+      "phase": "59",
       "deferred_at": "2026-09-25",
-      "reason": "D4(a) 2026-09-25: needs hosts, accounts or long builds outside this machine; backlog 999.2 distribution"
+      "reason": "Chris 2026-11-08 D-14 reopened for v1.7, Phase 59 plan 59-05 records the release pipeline as evidence"
     },
     {
       "id": "NG-079",
       "text": "updates.powerbrowser.org serves updates. Evidence: no DNS record.",
-      "status": "deferred-approved",
+      "status": "open",
       "spec_ref": "docs/non-gui/GAPS.md:109",
       "test_ref": "",
       "code_ref": "",
       "evidence": "",
       "owner": "chris",
-      "phase": "999.2",
+      "phase": "59",
       "deferred_at": "2026-09-25",
-      "reason": "D4(a) 2026-09-25: needs hosts, accounts or long builds outside this machine; backlog 999.2 distribution"
+      "reason": "Chris 2026-11-08 D-14 reopened for v1.7, closes in Phase 59 plan 59-05 with the live updates host"
     },
     {
       "id": "NG-080",
       "text": "A production crash-ingest host receives reports. Evidence: collector is loopback only (scripts/crash-collector.mjs:27, 89, 343).",
-      "status": "deferred-approved",
+      "status": "open",
       "spec_ref": "docs/non-gui/GAPS.md:110",
       "test_ref": "",
       "code_ref": "",
       "evidence": "",
       "owner": "chris",
-      "phase": "999.2",
+      "phase": "59",
       "deferred_at": "2026-09-25",
-      "reason": "D4(a) 2026-09-25: needs hosts, accounts or long builds outside this machine; backlog 999.2 distribution"
+      "reason": "Chris 2026-11-08 D-14 reopened for v1.7, closes in Phase 59 plan 59-05 with the live crash receiver and TEL-13"
     },
     {
       "id": "NG-081",
       "text": "Per-fixture Gecko builds (BLD-02) and fixture live builds (VER-03, DOC-02) run. Evidence: v1.0 07-VERIFICATION.md:18, 75 \"NOT RUN\".",
-      "status": "deferred-approved",
+      "status": "open",
       "spec_ref": "docs/non-gui/GAPS.md:111",
       "test_ref": "",
       "code_ref": "",
@@ -1053,7 +1053,7 @@
       "owner": "chris",
       "phase": "999.2",
       "deferred_at": "2026-09-25",
-      "reason": "D4(a) 2026-09-25: needs hosts, accounts or long builds outside this machine; backlog 999.2 distribution"
+      "reason": "Chris 2026-11-08 D-14 reopened for v1.7, per-fixture Gecko builds wait for a later v1.7 phase"
     },
     {
       "id": "NG-082",
@@ -1149,7 +1149,7 @@
     {
       "id": "NG-089",
       "text": "UAT sheets 10, 13, 14, 14.1, 14.1.1 and 15 have no pending result, and each records a React 19 runtime result (UAT-01).",
-      "status": "deferred-approved",
+      "status": "open",
       "spec_ref": ".planning/REQUIREMENTS.md UAT-01",
       "test_ref": "scripts/verify-ng-089-uat-sheets.mjs::ng089-uat-sheets",
       "code_ref": ".planning/milestones UAT sheets 10, 13, 14, 14.1, 14.1.1, 15",
@@ -1157,7 +1157,7 @@
       "owner": "chris",
       "phase": "26",
       "deferred_at": "2026-10-19",
-      "reason": "OK finish up what is left I want to do the GUI checks when everthing is done on my own time I just want a list"
+      "reason": "Chris 2026-11-08 D-14 reopened for v1.7, Phase 59 plan 59-06 records the UAT sheet results"
     }
   ],
   "current_phase": null,
