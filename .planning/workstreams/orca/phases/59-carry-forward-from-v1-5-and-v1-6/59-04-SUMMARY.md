@@ -21,7 +21,7 @@ is not a completed-plan summary until `status: complete`.
 | 3 | OWNER-PASS section 2 remainder (47-04): postal address, download URL, website push | e79aa086 | done; every probe green, `--quick` PASS |
 | 4 | OWNER-PASS section 3 remainder (CF-01) | ef9a84e5 (probes) | probes done here; owner steps moved to p59-owner (D-16); Claude follow-ups (scheduler deploy, watchdog enable, Upptime dispatch, Pages, RENEWALS rows) run after 59-OWNER-LOG.md reports the secrets set; two code reds under Gap closure (lane p59-08, D-17) |
 | 5 | OWNER-PASS section 1 owner part: notifications, drill, old-repo archive (CF-02) | n/a | moved to p59-owner (D-16) |
-| 6 | Merge lanes 59-01, 59-02; append the 59-02 registry rows | (pending) | |
+| 6 | Merge lanes 59-01, 59-02; append the 59-02 registry rows | e0547f06, cc4c6724, 5b7ce54b, 64f13d55 | done; `--quick` 328 then 330 PASS |
 | 7 | OWNER-PASS section 1 steps 9 and 14: App-list reads by device flow, 41-04 records | n/a | moved to p59-owner (D-16) |
 | 8 | OWNER-PASS section 4: MAR key ceremony, release secrets, 44-01 Tasks 2-3 (CF-03) | n/a | moved to p59-owner (D-16) |
 | 9 | OWNER-PASS section 5: legion runner, /etc/nixos change, Codeberg mirror (CF-04, CF-01) | n/a | moved to p59-owner (D-16) |
@@ -60,6 +60,24 @@ no `--retry-launch` was needed.
   with mach's closing resource summary, but it does not carry mach's "Your build was successful"
   line. Task 10's precondition names that line, so Task 10 confirms the build first (for example
   with an incremental `./mach build` no-op) before it relies on the objdir.
+
+## Merges
+
+| Order | Lane | Merge commit | Lane head | Brand scan | `--quick` |
+|-------|------|--------------|-----------|------------|-----------|
+| 1 | 59-01 (docs only) | e0547f06 | d495291b | PASS, 678 files | PASS, 328 rows, 0 FAIL, 0 SKIP (log $HOME/.cache/powerbrowser-59/quick-t6-m01.log) |
+| 2 | 59-02 (CF-15) | cc4c6724 | 20203e6e | PASS, 680 files (new files tracked by the merge) | PASS, 330 rows after the registry append (log quick-t6-m02.log) |
+
+- Both merges were clean (`git merge --no-ff refs/heads/ServerDestroyer/p59-0N`, no conflict).
+- Registry append 5b7ce54b: the four comment lines and two rows from the 59-02 SUMMARY, verbatim, directly after
+  `crash-autosubmit-lock-self-test` (`"crash-autosubmit-env|` at scripts/verify-platform.sh:3808).
+- After the 59-02 merge: `verify-ng-040-internals-catalogue-lines.mjs` PASS without `--fix`;
+  `--only crash-autosubmit-env`, `--only crash-autosubmit-env-self-test`, `--only repo-controls-self-test`,
+  `--only internals-catalogue` all PASS.
+- Stale items named by the 59-02 merge note reconciled in 64f13d55: 57-08-PLAN.md `status: complete`; OWNER-PASS.md
+  §3e, §5.3 and the two 57-08 "waits for the other session" lines now point at `systemd/legion-pb.nix` and the 59-02
+  commits. Neither lane SUMMARY names a stub row. generate.mjs was not re-run (no merged commit touched
+  configuration.toml or brand/).
 
 ## Task 3: OWNER-PASS §2 remainder (47-04)
 
