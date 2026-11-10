@@ -3785,6 +3785,15 @@ run_own_checks() {
     "ext-network-wall-self-test|node $REPO_ROOT/scripts/verify-ext-network-wall.mjs --self-test"
     "token-gate-webview|node $REPO_ROOT/scripts/verify-token-gate-webview.mjs"
     "token-gate-webview-self-test|node $REPO_ROOT/scripts/verify-token-gate-webview.mjs --self-test"
+    # RUN-08 hotfix (67-RESEARCH P67-13/P67-14): the token gate admits only the sidecar's own origin. A
+    # same-site page on another 127.0.0.1 port in a stock window carried the token cookie and got 200 (a
+    # /file-upload wrote where it chose). Derived: origin-policy.ts, loaded from the tree, against every
+    # recorded header class and the rule's edges, with the own origin read from TheiaService's swap URL; gate()
+    # and allowWsUpgrade() refuse before the token is read. Honestly --quick: text reads and a type strip.
+    # The self-test rides alongside: missing Origin check, a Sec-Fetch deny-list, an unknown port failing open,
+    # and five more plants, each red naming its rule.
+    "sidecar-origin-gate|node $REPO_ROOT/scripts/verify-sidecar-origin-gate.mjs"
+    "sidecar-origin-gate-self-test|node $REPO_ROOT/scripts/verify-sidecar-origin-gate.mjs --self-test"
     # NEW (Phase 57, TEL-09): the Glean crash-ping consent read fails closed. The host is
     # derived from TELEMETRY_SERVER in upstream's crashping/src/lib.rs at check time; patch 055
     # equals its regeneration; the applied determine_telemetry_enabled carries no true literal;
@@ -5982,6 +5991,11 @@ run_own_checks() {
       # new-window-adopt in the --quick set. The three GUI-01 rows directly
       # above must stay green beside it, unmodified.
       "new-window-adopt-live|node $REPO_ROOT/scripts/verify-new-window-adopt-live.mjs"
+      # RUN-08 hotfix, live: a page on a second 127.0.0.1 port in a stock window gets 403 from the sidecar for
+      # GET, cors GET, img, top-level navigation and a multipart POST to /file-upload, with the token cookie
+      # still arriving; the Theia frame's own requests get 200 before and after (positive control first). Takes
+      # <git common dir>/pb-live.lock itself. Uploads go to a scratch folder only.
+      "sidecar-origin-gate-live|node $REPO_ROOT/scripts/verify-sidecar-origin-gate-live.mjs"
       "new-window-adopt-live-self-test|node $REPO_ROOT/scripts/verify-new-window-adopt-live.mjs --self-test"
 
       # NEW (12-03): SQL-05's store gates, live halves. All five rows need the

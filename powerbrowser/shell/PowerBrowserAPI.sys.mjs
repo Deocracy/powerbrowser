@@ -6272,15 +6272,15 @@ async function autofillOrigin(text) {
   return { text: `${shown}/`, url: `${String(rows[0].getResultByName("prefix"))}${host}/` };
 }
 
-// The token-cookie strip (BAR-02; REQUIREMENTS technical ruling 2026-10-20).
-// The Theia token cookie is host-only on 127.0.0.1 and cookies are not
-// port-scoped, so a server on any other loopback port (a dev server typed into
-// the bar, opened in an overlay, the stock browser window or a worker) would
-// receive it. Gecko adds cookies to the request before http-on-modify-request
-// fires (nsHttpChannel.cpp), so this observer removes the token from the
-// Cookie header there; the cookie itself stays in the store. The token is
-// kept only on the sidecar's own port, and there only for the Theia frame,
-// chrome or a Theia-origin worker. Nothing here logs a cookie value.
+// The token-cookie strip (BAR-02; REQUIREMENTS technical ruling 2026-10-20). The token cookie is host-only on
+// 127.0.0.1 and cookies are not port-scoped, so every loopback port receives it. Gecko adds cookies before
+// http-on-modify-request fires (nsHttpChannel.cpp), so this observer removes the token from the Cookie header
+// there; the cookie stays in the store. Off the sidecar's port the token is always removed. On it, only a web-tab
+// overlay (and its frames) and a worker triggered by neither chrome nor the sidecar origin lose it; every other
+// context keeps it, a stock browser window included (Theia's window.open windows are stock windows), so a
+// loopback page on another port in a stock window still sends it. The token gate's origin rule
+// (theia/extensions/token-gate/src/common/origin-policy.ts) refuses those requests; this strip is defence in
+// depth. Nothing here logs a cookie value.
 //
 // scripts/verify-token-cookie-strip.mjs pins this name to the token gate's
 // POWERBROWSER_TOKEN_COOKIE_NAME.
