@@ -1,0 +1,24 @@
+- banner
+  - navigation
+    - link "Home" [ref=e3]
+    - link "Docs" [ref=e4]
+- main
+  - heading "Sign in" [level=1, ref=e1]
+  - paragraph
+    - StaticText "Use your account."
+  - form
+    - LabelText
+      - StaticText "Email "
+      - textbox "Email" [ref=e11]
+    - checkbox "Remember me" [checked=false, ref=e5]
+    - combobox "Plan" [expanded=false, ref=e6]: Free
+      - MenuListPopup
+        - option "Free" [selected, ref=e12]
+        - option "Pro" [ref=e13]
+    - button "Log in" [ref=e7]
+    - button "Log in" [ref=e8]
+    - button "Custom" [ref=e9]
+    - generic [ref=e10] clickable [cursor:pointer, onclick]
+      - StaticText "Clickable div"
+- contentinfo
+  - link "Privacy" [ref=e2]
