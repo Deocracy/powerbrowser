@@ -21,8 +21,8 @@
 // protected set of size 0 ("source moved").
 //
 // Import extraction: TypeScript's preProcessFile from orca/node_modules/typescript
-// when that package's JS entry exports it. TypeScript 7.0.2 (Orca's pin at
-// v1.4.248) is the native compiler; its JS entry exports only the version
+// when that package's JS entry exports it. TypeScript 7.0.2 (at Orca's pin
+// when this check was written) is the native compiler; its JS entry exports only the version
 // (research A14), so the check then uses a regex over `import|export ... from
 // '<s>'`, `import '<s>'`, `import('<s>')` and `require('<s>')`. Limit of the
 // regex: it does not parse, so a specifier inside a comment or string that has
