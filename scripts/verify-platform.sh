@@ -3901,8 +3901,10 @@ run_own_checks() {
     "orca-hidden-electron-self-test|node $REPO_ROOT/scripts/verify-orca-hidden-electron.mjs --self-test"
     "orca-service-live-self-test|node $REPO_ROOT/scripts/verify-orca-service-live.mjs --self-test"
     # NEW (68-07, BEXT-01, P68-38): orcad loads the Claude agent SDK only from ORCA_CLAUDE_AGENT_SDK_DIR (seam 070):
-    # the bundled loader runs S1-S5 in child nodes; the variable name carries no PowerBrowser token. SKIP without orca/.
+    # the bundled loader runs S1-S5 in child nodes; the variable name carries no PowerBrowser token; the OrcaEnv table
+    # and TheiaService's config folder. SKIP of the loader without orca/. The self-test is hermetic: eight plants.
     "orca-claude-sdk|node $REPO_ROOT/scripts/verify-orca-claude-sdk.mjs"
+    "orca-claude-sdk-self-test|node $REPO_ROOT/scripts/verify-orca-claude-sdk.mjs --self-test"
     # NEW (63-06, EXT-02, P63-26/P63-35/P63-36): orca-bridge-dir, the chrome half of the bridge folder for linux,
     # darwin and win32 (OrcaEnv's nodePlatform, bridgeDirFor and bridgeFileFor); the orcad-data-root literal joined
     # across OrcaEnv, orca-agents' protocol file and its wrapper, a named SKIP of that join alone while lane p63-03

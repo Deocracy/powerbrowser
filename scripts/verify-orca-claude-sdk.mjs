@@ -44,6 +44,17 @@
 // Limit: the loader runs from a bundle of its own module with its other
 // imports stubbed, not inside a running orcad.
 //
+// --self-test (quick, hermetic: fixtures under mkdtemp, no orca/ needed; SKIP
+// without esbuild). The control bundles the loader taken from the post-image of
+// orca-overlay/patches/070-claude-agent-sdk-dir.patch and must pass S1-S5, the
+// token rule, the OrcaEnv table, a fixture TheiaService derivation and the
+// --built leg over a fixture out/ and SDK. Then each plant must go red naming
+// it: a stock loader (S1), an empty value treated as unset (S2), no
+// inside-the-directory test (S4), a PB name (token rule), the needle in out/
+// (and the same out/ without it green), the needle absent from sdk.mjs
+// (broken instrument), a drifted THEIA_CONFIG_DIR_NAME (derivation), a
+// disabled list that still returns the path (table).
+//
 // Tier: default quick (one SKIP line when orca/ is not fetched, the overlay is
 // not applied, or no esbuild is installed); --built full (SKIP when
 // orca/out/orcad is absent). Exit 0 pass or SKIP, 1 fail, 2 unknown argument.
@@ -51,10 +62,12 @@
 // Usage:
 //   node scripts/verify-orca-claude-sdk.mjs
 //   node scripts/verify-orca-claude-sdk.mjs --built
+//   node scripts/verify-orca-claude-sdk.mjs --self-test
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire, isBuiltin } from 'node:module';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -301,17 +314,134 @@ function builtMode(root) {
     return builtLeg({ outDir: join(orcaDir, 'out'), sdkDir: join(orcaDir, 'node_modules', SDK_PKG), externals });
 }
 
+/**
+ * The loader as seam 070 leaves it, from the patch alone: its added import lines, then every complete
+ * top-level let/function statement in the hunks' post-images (a statement cut by a hunk edge is dropped).
+ */
+export function loaderFromPatch(patch) {
+    const imports = [];
+    const statements = [];
+    for (const hunk of String(patch).split(/^@@.*$/m).slice(1)) {
+        const post = hunk.split('\n').filter((l) => l.startsWith(' ') || l.startsWith('+') || l === '').map((l) => l.slice(1));
+        for (const l of hunk.split('\n')) if (/^\+import /.test(l)) imports.push(l.slice(1));
+        let open = null;
+        let depth = 0;
+        for (const line of post) {
+            if (open === null && !/^(let |const |(export )?(async )?function )/.test(line)) continue;
+            if (open === null) open = [];
+            open.push(line);
+            depth += (line.match(/\{/g) ?? []).length - (line.match(/\}/g) ?? []).length;
+            if (depth === 0) { statements.push(open.join('\n')); open = null; }
+        }
+    }
+    return `${imports.join('\n')}\n\n${statements.join('\n\n')}\n`;
+}
+
+const FIXTURE_THEIA = '  _resolveConfigDir() {\n    const profileDir = PowerBrowserAPI.getProfileDir();\n    if (profileDir) {\n      return `${profileDir}/powerbrowser-theia`;\n    }\n  }\n';
+
+async function runSelfTest() {
+    const eb = resolveEsbuild([join(REPO_ROOT, 'orca'), join(REPO_ROOT, 'theia')]);
+    if (!eb) {
+        console.log(`${NAME} self-test: SKIP -- no esbuild in orca/node_modules or theia/node_modules (build-orca.sh, or yarn install in theia/)`);
+        return 0;
+    }
+    const patch = read(join(REPO_ROOT, 'orca-overlay', 'patches', '070-claude-agent-sdk-dir.patch'));
+    const orcaEnvText = read(join(REPO_ROOT, 'powerbrowser', 'shell', 'OrcaEnv.sys.mjs'));
+    if (patch === null || orcaEnvText === null) {
+        console.error(`${NAME} self-test: FAIL -- orca-overlay/patches/070-claude-agent-sdk-dir.patch or powerbrowser/shell/OrcaEnv.sys.mjs is missing`);
+        return 1;
+    }
+    const tmp = mkdtempSync(join(tmpdir(), `${NAME}-`));
+    try {
+        const loaderText = loaderFromPatch(patch);
+        let n = 0;
+        const importEnv = async (text) => { const f = join(tmp, `OrcaEnv-${n++}.mjs`); writeFileSync(f, text); return import(pathToFileURL(f).href); };
+        const baseEnv = await importEnv(orcaEnvText);
+        // One world per run: fixture loader source, OrcaEnv text, TheiaService text, out/ and SDK fixtures.
+        const runWorld = async (w) => {
+            const dir = join(tmp, `w${n++}`);
+            mkdirSync(dir);
+            const src = join(dir, 'loader.ts');
+            writeFileSync(src, w.loader);
+            const env = w.env === orcaEnvText ? baseEnv : await importEnv(w.env);
+            const name = envNameFrom(w.loader);
+            const fails = [...tokenFails(name)];
+            if (name && name !== env.ORCAD_CLAUDE_AGENT_SDK_DIR_ENV) fails.push(`the loader reads ${name}, OrcaEnv sets ${env.ORCAD_CLAUDE_AGENT_SDK_DIR_ENV}`);
+            if (w.scenarios) fails.push(...(await loaderScenarios(eb.esbuild, src, name ?? baseEnv.ORCAD_CLAUDE_AGENT_SDK_DIR_ENV, join(dir, 'run'))).fails);
+            fails.push(...orcaEnvTable(env), ...theiaDirFails(w.theia, env));
+            const out = join(dir, 'out');
+            const sdk = join(dir, 'sdk');
+            mkdirSync(join(out, 'orcad'), { recursive: true });
+            mkdirSync(sdk);
+            writeFileSync(join(out, 'orcad', 'orcad-server.js'), w.outText);
+            writeFileSync(join(sdk, 'package.json'), JSON.stringify({ name: SDK_PKG, version: '9.9.9' }));
+            writeFileSync(join(sdk, 'sdk.mjs'), w.sdkText);
+            fails.push(...builtLeg({ outDir: out, sdkDir: sdk, externals: [SDK_PKG] }).fails);
+            return fails;
+        };
+        const needle = 'CLAUDE_AGENT_SDK_VERSION="9.9.9"';
+        const base = { loader: loaderText, env: orcaEnvText, theia: FIXTURE_THEIA, outText: 'module.exports = {};\n', sdkText: `var ${needle};\nexport {};\n`, scenarios: true };
+        const control = await runWorld(base);
+        if (control.length) {
+            console.error(`${NAME} self-test: FAIL -- the control is not green: ${control.join(' | ')}`);
+            return 1;
+        }
+        console.log(`  PASS control -> green (S1-S5 on the loader from the 070 post-image, token rule, OrcaEnv table, fixture derivation, --built leg)`);
+
+        const swap = (text, a, b) => { if (!text.includes(a)) throw new Error(`plant target not found: ${a.slice(0, 60)}`); return text.split(a).join(b); };
+        const stock = (text) => {
+            const m = /(export function loadClaudeAgentSdk\(\)[^{]*\{\n)[\s\S]*?(\n {2}return claudeAgentSdk\n\})/.exec(text);
+            if (!m) throw new Error('plant target not found: loadClaudeAgentSdk body');
+            return text.replace(m[0], `${m[1]}  claudeAgentSdk ??= import('${SDK_PKG}')${m[2]}`);
+        };
+        const plants = [
+            { name: 'stock loader, no seam', naming: 'S1', w: { ...base, loader: stock(loaderText) } },
+            { name: 'an empty value treated as unset', naming: 'S2', w: { ...base, loader: swap(loaderText, 'dir === undefined', '!dir') } },
+            { name: 'no inside-the-directory test', naming: 'S4', w: { ...base, loader: swap(loaderText, 'entry.startsWith(realpathSync(dir) + sep)', 'entry') } },
+            { name: 'a PB token in the variable name', naming: 'token rule', w: { ...base, loader: swap(loaderText, 'ORCA_CLAUDE_AGENT_SDK_DIR', 'ORCA_PB_CLAUDE_AGENT_SDK_DIR'), scenarios: false } },
+            { name: 'the needle in out/', naming: 'still bundled', w: { ...base, scenarios: false, outText: `var ${needle};\n` }, then: { ...base, scenarios: false } },
+            { name: 'the needle absent from sdk.mjs', naming: 'broken instrument', w: { ...base, scenarios: false, sdkText: 'export {};\n' } },
+            { name: 'THEIA_CONFIG_DIR_NAME drifted from the TheiaService template', naming: 'derivation', w: { ...base, scenarios: false, env: swap(orcaEnvText, 'THEIA_CONFIG_DIR_NAME = "powerbrowser-theia"', 'THEIA_CONFIG_DIR_NAME = "powerbrowser-theia-2"') } },
+            { name: 'a disabled list that still returns the path', naming: 'table', w: { ...base, scenarios: false, env: swap(orcaEnvText, 'disabled.some(id => unversioned(id) === CLAUDE_AGENT_SDK_EXTENSION_ID)', 'false') } },
+        ];
+        let failures = 0;
+        for (const p of plants) {
+            const fails = await runWorld(p.w);
+            const text = fails.join('\n');
+            if (!fails.length) { console.error(`  FAIL ${p.name} -> stayed green`); failures++; continue; }
+            if (!text.includes(p.naming)) { console.error(`  FAIL ${p.name} -> red, but not naming '${p.naming}': ${text}`); failures++; continue; }
+            if (p.then) {
+                const after = await runWorld(p.then);
+                if (after.length) { console.error(`  FAIL ${p.name} -> the same out/ without the needle is red: ${after.join(' | ')}`); failures++; continue; }
+            }
+            console.log(`  PASS ${p.name} -> red, naming '${p.naming}'${p.then ? '; without it, green' : ''}`);
+        }
+        if (failures) {
+            console.error(`${NAME} self-test: FAIL -- ${failures} of ${plants.length} plant(s) did not go red naming the drift`);
+            return 1;
+        }
+        console.log(`${NAME} self-test: PASS -- control green, ${plants.length} planted faults each went red naming the drift`);
+        return 0;
+    } catch (err) {
+        console.error(`${NAME} self-test: FAIL -- ${err.message}`);
+        return 1;
+    } finally {
+        rmSync(tmp, { recursive: true, force: true });
+    }
+}
+
 const isEntryPoint = (() => {
     try { return realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; }
 })();
 if (isEntryPoint) {
     const args = process.argv.slice(2);
-    const unknown = args.find((a) => a !== '--built');
+    const unknown = args.find((a) => a !== '--built' && a !== '--self-test');
     if (unknown !== undefined || args.length > 1) {
-        console.error(`${NAME}: FAIL -- unknown argument '${unknown ?? args[1]}' (usage: node ${SELF_REL} [--built])`);
-        console.error(`  Next step: run: node ${SELF_REL}, or add --built after build-orca.sh.`);
+        console.error(`${NAME}: FAIL -- unknown argument '${unknown ?? args[1]}' (usage: node ${SELF_REL} [--built | --self-test])`);
+        console.error(`  Next step: run: node ${SELF_REL}, add --built after build-orca.sh, or --self-test to prove the check discriminates.`);
         process.exit(2);
     }
+    if (args[0] === '--self-test') process.exit(await runSelfTest());
     const built = args[0] === '--built';
     const label = built ? `${NAME}-built` : NAME;
     const r = built ? builtMode(REPO_ROOT) : await defaultMode(REPO_ROOT);
