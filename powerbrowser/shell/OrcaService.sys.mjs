@@ -132,7 +132,14 @@ export const OrcaService = {
       return this._fail("finding Node.js", []);
     }
 
-    const orcaRoot = PowerBrowserAPI.getStringPref("powerbrowser.orca.root", "");
+    // As TheiaService does for its backend (NG-063): a packaged install's own copy beside the binary
+    // wins unless the user set a path; the build default names the dev tree, which a packaged
+    // install must never run code from.
+    const stagedRoot = appDir ? `${appDir}/orca` : "";
+    const orcaRoot =
+      !PowerBrowserAPI.prefHasUserValue("powerbrowser.orca.root") && stagedRoot && (await PowerBrowserAPI.pathExists(`${stagedRoot}/out/orcad/orcad.js`))
+        ? stagedRoot
+        : PowerBrowserAPI.getStringPref("powerbrowser.orca.root", "");
     this._orcadMain = `${orcaRoot}/out/orcad/orcad.js`;
     this._webClientRoot = `${orcaRoot}/out/web`;
     for (const path of [this._orcadMain, this._webClientRoot]) {

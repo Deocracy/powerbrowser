@@ -141,6 +141,11 @@
       "reason": "UPD-15, reworded by the owner ruling 2026-10-29: this host is no longer the updater's download host. The descriptor names the R2 MAR origin (the downloads.powerbrowser.org row), because a signed release-assets URL expires about one hour after issue, so a static descriptor cannot name it. This host is reached only when a user clicks a GitHub Release asset link, which redirects here; an unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs). scripts/verify-update-download-host.mjs refuses a descriptor naming this host, and Phase 50 criterion 5 observes the R2 host in a real update's resolver log instead."
     },
     {
+      "host": ".onorca.dev",
+      "disposition": "user-initiated",
+      "reason": "P62-05, P62-15 (D-08, D-23): Orca's cloud hosts (push, login, relay, share, feedback) behind the pairing relay, reached by the orcad PowerBrowser runs. The leading dot matches every subdomain and not the bare onorca.dev. Reachable only for an Orca feature the user starts, so an unattended contact is a failure exactly as for a `deny` entry; orcad runs with telemetry off, and orca-service-live records whether an idle orcad dials out."
+    },
+    {
       "host": "cloudflare-dns.com",
       "disposition": "deny",
       "reason": "TRR open item, resolved 03-03: NOT network.trr.mode (confirmed 0/off by default in modules/libpref/init/StaticPrefList.yaml:15642-15644 -- TRR is not active in this build). The real source is network.connectivity-service.DNS_HTTPS.domain (modules/libpref/init/all.js:3260), read by NetworkConnectivityService.cpp's own unattended-startup DNS-over-HTTPS-record probe. No DRM/security-parity rationale applies (unlike Remote Settings/Safe Browsing), so per D-85 this is turned off at the single master switch, network.connectivity-service.enabled = false, rather than waived. Not named in D-83..D-88; this entry and the two below are the explicit resolution the 03-02-SUMMARY.md open item asked for."

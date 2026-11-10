@@ -206,6 +206,7 @@ export function createOutputSink({ pushLog }) {
   let buffer = "";
   let parsed = null;
   let stderrRest = "";
+  let stderrDropping = false;
   let resolveReady;
   const readyPromise = new Promise(resolve => {
     resolveReady = resolve;
@@ -226,13 +227,27 @@ export function createOutputSink({ pushLog }) {
       }
     },
     onStderr(chunk) {
-      const lines = (stderrRest + String(chunk)).split("\n");
-      stderrRest = lines.pop().slice(-STDERR_LINE_MAX);
-      for (const line of lines) {
-        if (line.trim()) {
-          pushLog(redact(line.slice(0, STDERR_LINE_MAX)));
+      // A line is redacted whole or not logged at all: cutting one could split a pairing value and
+      // leave a fragment the patterns no longer recognise.
+      const parts = String(chunk).split("\n");
+      parts.forEach((part, i) => {
+        if (!stderrDropping) {
+          stderrRest += part;
+          if (stderrRest.length > STDERR_LINE_MAX) {
+            stderrRest = "";
+            stderrDropping = true;
+          }
         }
-      }
+        if (i < parts.length - 1) {
+          if (stderrDropping) {
+            pushLog("[orcad error line too long; not logged]");
+          } else if (stderrRest.trim()) {
+            pushLog(redact(stderrRest));
+          }
+          stderrRest = "";
+          stderrDropping = false;
+        }
+      });
     },
     /** Resolves with the parsed ready fields; never rejects, and never resolves if orcad prints none. */
     ready() {

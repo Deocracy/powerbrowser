@@ -3861,6 +3861,14 @@ run_own_checks() {
     # never redistributes them. The self-test plants six faults in mkdtemp fixtures.
     "licence-allowlist|node $REPO_ROOT/scripts/verify-licence-allowlist.mjs"
     "licence-allowlist-self-test|node $REPO_ROOT/scripts/verify-licence-allowlist.mjs --self-test"
+    # NEW (62-02, RUN-03/RUN-04/RUN-05, P62-01..P62-19): orca-service, the orcad supervisor. Quick. Derived at
+    # check time: the shell's .sys.mjs set against jar.mn, the environment names from OrcaEnv.sys.mjs, the
+    # user-message table and window function names OrcaService must not carry, Orca's own default port and
+    # failure codes from the fetched orca/ (a named SKIP of those clauses when it is absent). The shipped
+    # OrcaService source is driven against a stub boundary through scenarios A to F (start, reap, stop order,
+    # busy port, non-loopback bind, data-root alias). The self-test copies the inputs and plants 19 faults.
+    "orca-service|node $REPO_ROOT/scripts/verify-orca-service.mjs"
+    "orca-service-self-test|node $REPO_ROOT/scripts/verify-orca-service.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
