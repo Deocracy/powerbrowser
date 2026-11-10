@@ -6,8 +6,8 @@
 // edited. Each pane is a separate React root on the host React, mounted the way Orca mounts it.
 //
 // Rules this file keeps (64-RESEARCH A4, D-29): it imports no client-side terminal creation
-// (createNewTerminalTab, createWebRuntimeSessionTerminal, anything reaching
-// session.tabs.createTerminal), nothing under components/tab-bar/ and not TabGroupPanel. A
+// (createNewTerminalTab, createWebRuntimeSessionTerminal, anything that issues the session-tabs
+// terminal create method), nothing under components/tab-bar/ and not TabGroupPanel. A
 // terminal is created only through the host RPC terminal.create.
 import '../assets/main.css'
 
