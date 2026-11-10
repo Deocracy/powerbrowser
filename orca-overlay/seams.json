@@ -9,6 +9,26 @@
         "pr": null
       },
       "upstream_blob": "90b79e505d8db41a8cf61cb45dd41f36658a6966"
+    },
+    {
+      "patch": "patches/070-claude-agent-sdk-dir.patch",
+      "path": "src/main/claude/claude-stream-json-connection.ts",
+      "reason": "BEXT-01, D-30: orcad loads the Claude agent SDK from the directory ORCA_CLAUDE_AGENT_SDK_DIR names, an empty value meaning none; generic, no PowerBrowser token (P68-38)",
+      "upstream": {
+        "class": "pb-only",
+        "pr": null
+      },
+      "upstream_blob": "2d2c395d91a4e5654bbb5521d9403ea3081956f0"
+    },
+    {
+      "patch": "patches/080-orcad-external-claude-agent-sdk.patch",
+      "path": "config/scripts/orcad-entry-build.mjs",
+      "reason": "BEXT-01, D-30: the Claude agent SDK stays out of orcad's bundle; it ships in a removable Theia extension (P68-38)",
+      "upstream": {
+        "class": "pb-only",
+        "pr": null
+      },
+      "upstream_blob": "d73f842d6358d69267e5dc2704ad12b60d6fc074"
     }
   ]
 }

@@ -3940,6 +3940,11 @@ run_own_checks() {
     "orca-macos-merge-self-test|node $REPO_ROOT/scripts/lib/orca-artifacts.mjs --self-test"
     # The packaged-live verdicts over fixtures: a Node from elsewhere, a web root outside GreD, a survivor, no pairing.
     "orca-packaged-live-self-test|node $REPO_ROOT/scripts/verify-orca-packaged-live.mjs --self-test"
+    # NEW (68-07, BEXT-01, P68-38): orcad loads the Claude agent SDK only from ORCA_CLAUDE_AGENT_SDK_DIR (seam 070):
+    # the bundled loader runs S1-S5 in child nodes; the variable name carries no PowerBrowser token; the OrcaEnv table
+    # and TheiaService's config folder. SKIP of the loader without orca/. The self-test is hermetic: eight plants.
+    "orca-claude-sdk|node $REPO_ROOT/scripts/verify-orca-claude-sdk.mjs"
+    "orca-claude-sdk-self-test|node $REPO_ROOT/scripts/verify-orca-claude-sdk.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6563,6 +6568,9 @@ run_own_checks() {
       # orca-packaged-live: the container-built package runs orcad on its own Node from <GreD>/orca, pairs, and a quit
       # ends it. Runs under flock /home/chris/coding/Power-Browser/.git/pb-live.lock in 68-06; FAILs without the tarball.
       "orca-packaged-live|node $REPO_ROOT/scripts/verify-orca-packaged-live.mjs"
+      # NEW (68-07, BEXT-01, P68-38): orca-claude-sdk-built. ORCAD_EXTERNAL_MODULES lists the Claude agent SDK (seam 080)
+      # and no file under orca/out carries its version needle, proven present in the installed sdk.mjs first.
+      "orca-claude-sdk-built|node $REPO_ROOT/scripts/verify-orca-claude-sdk.mjs --built"
     )
   fi
 

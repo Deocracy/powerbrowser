@@ -19,7 +19,9 @@
 //     Values: both data-root names equal, resolving to <profile>/powerbrowser-orca
 //     through the short alias (the profile path is made long on purpose),
 //     telemetry off, the hidden-Electron switch 1, ORCA_VERSION equal to the
-//     pin, HOME equal to PowerBrowser's.
+//     pin, HOME equal to PowerBrowser's, and (Phase 68, P68-38) ORCA_CLAUDE_AGENT_SDK_DIR
+//     equal to OrcaEnv.claudeAgentSdkDir over the profile folder and that
+//     profile's Theia backend-settings.json, read at check time.
 //   - Endpoint: getState().boundEndpoint is ws://127.0.0.1:<the pref port>, and
 //     every listening TCP socket orcad owns (/proc/<pid>/net/tcp and tcp6
 //     joined with the socket inodes under /proc/<pid>/fd) is on loopback.
@@ -89,7 +91,7 @@ const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { retu
  * The environment verdict. pb and orcad are { name: value } from /proc/<pid>/environ; real holds the
  * two resolved data-root paths; aliasPrefixes the allowed alias path prefixes. Returns red reasons.
  */
-export function envVerdict({ pb, orcad, real, aliasPrefixes, orcaVersion }) {
+export function envVerdict({ pb, orcad, real, aliasPrefixes, orcaVersion, sdkDir }) {
     if (!(PLANT in pb)) {
         return [`instrument blind: the planted ${PLANT} is not in PowerBrowser's own environment, so its absence from orcad's would prove nothing`];
     }
@@ -108,6 +110,8 @@ export function envVerdict({ pb, orcad, real, aliasPrefixes, orcaVersion }) {
     }
     if ('ORCA_VERSION' in orcad && orcad.ORCA_VERSION !== orcaVersion) fails.push(`ORCA_VERSION is ${orcad.ORCA_VERSION} in orcad's environment, not the pinned ${orcaVersion}`);
     if (orcad.HOME !== pb.HOME) fails.push("HOME in orcad's environment is not PowerBrowser's HOME; agents need the user's own home");
+    const sdkName = OrcaEnv.ORCAD_CLAUDE_AGENT_SDK_DIR_ENV;
+    if (orcad[sdkName] !== sdkDir) fails.push(`${sdkName} is ${JSON.stringify(orcad[sdkName])} in orcad's environment, not ${JSON.stringify(sdkDir)} (OrcaEnv.claudeAgentSdkDir over the profile's Theia settings)`);
     return fails;
 }
 
@@ -258,8 +262,12 @@ async function live() {
             const orcad = environOf(orcadPid);
             aliasPath = orcad.ORCA_USER_DATA ?? null;
             const aliasPrefixes = [pb.XDG_RUNTIME_DIR && `${pb.XDG_RUNTIME_DIR.replace(/\/+$/, '')}/pb-orca-`, pb.HOME && `${pb.HOME}/.cache/pb-orca-`].filter(Boolean);
+            let backendSettings = null;
+            try { backendSettings = JSON.parse(readFileSync(OrcaEnv.theiaBackendSettingsPath(profileDir), 'utf8')); } catch { /* absent or malformed: null, as readStateFile returns */ }
+            if (!backendSettings || typeof backendSettings !== 'object') backendSettings = null;
             fails.push(...envVerdict({
                 pb, orcad, aliasPrefixes, orcaVersion,
+                sdkDir: OrcaEnv.claudeAgentSdkDir({ profileDir, backendSettings }),
                 real: { orcadDataRoot: aliasPath ? realOrNull(aliasPath) : null, profileDataRoot: realOrNull(profileDataRoot) },
             }));
             notes.names = Object.keys(orcad).length;
@@ -387,8 +395,9 @@ function runSelfTest() {
     const orcad = {
         PATH: '/usr/bin', HOME: '/home/u', XDG_RUNTIME_DIR: '/run/user/1000', LANG: 'C.UTF-8',
         ORCA_USER_DATA: alias, ORCA_USER_DATA_PATH: alias, ORCA_VERSION: '1.2.3', ORCA_TELEMETRY_DISABLED: '1', DO_NOT_TRACK: '1', [SWITCH]: '1',
+        ORCA_CLAUDE_AGENT_SDK_DIR: '/prof/powerbrowser-theia/sdk',
     };
-    const base = { pb, orcad, real: { orcadDataRoot: '/prof/powerbrowser-orca', profileDataRoot: '/prof/powerbrowser-orca' }, aliasPrefixes: ['/run/user/1000/pb-orca-', '/home/u/.cache/pb-orca-'], orcaVersion: '1.2.3' };
+    const base = { pb, orcad, real: { orcadDataRoot: '/prof/powerbrowser-orca', profileDataRoot: '/prof/powerbrowser-orca' }, aliasPrefixes: ['/run/user/1000/pb-orca-', '/home/u/.cache/pb-orca-'], orcaVersion: '1.2.3', sdkDir: '/prof/powerbrowser-theia/sdk' };
     const without = (o, k) => { const c = { ...o }; delete c[k]; return c; };
     const tree = [
         { pid: 10, ticks: '1', what: 'orcad', agent: false },
@@ -413,6 +422,7 @@ function runSelfTest() {
         ['data root resolving outside the profile', "not the profile's", () => envVerdict({ ...base, real: { orcadDataRoot: '/home/u/.config/orca', profileDataRoot: '/prof/powerbrowser-orca' } })],
         ['the switch not 1', `${SWITCH} is not 1`, () => envVerdict({ ...base, orcad: { ...orcad, [SWITCH]: '0' } })],
         ['a scratch HOME given to orcad', 'HOME', () => envVerdict({ ...base, orcad: { ...orcad, HOME: '/tmp/h' } })],
+        ['the SDK path given although Theia has the extension disabled', '"/prof/powerbrowser-theia/sdk" in orcad\'s environment, not ""', () => envVerdict({ ...base, sdkDir: '' })],
         ['quit control', null, () => survivors(tree, new Map())],
         ['a reused pid is not a survivor', null, () => survivors(tree, new Map([[12, '999']]))],
         ['one survivor', 'terminal daemon pid 11 survived', () => survivors(tree, new Map([[11, '2']]))],
