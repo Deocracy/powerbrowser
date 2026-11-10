@@ -78,7 +78,7 @@ Owner decisions are in `DECISIONS.md` (D-01..D-25) and win over `research/`. Res
   (T-1)
 - [ ] **TAB-02**: `pb-orca:` URIs follow `docs/URI-SCHEMES.md`, round-trip in
   `verify-uri-roundtrip.mjs`, and leave `TabUriRegistry`'s exported shape unchanged. (T-4)
-- [ ] **TAB-03**: A spike shows how PowerBrowser's dock observes the client's layout state
+- [x] **TAB-03**: A spike shows how PowerBrowser's dock observes the client's layout state
   (the renderer owns it in shipped builds) and how Orca's pane components mount inside Lumino
   widgets. (D-15)
 - [ ] **TAB-04**: One Orca pane equals one Lumino tab: every Orca pane (terminal, agent
@@ -97,7 +97,7 @@ Owner decisions are in `DECISIONS.md` (D-01..D-25) and win over `research/`. Res
 
 ### Browser replacement (BRW)
 
-- [ ] **BRW-01**: A browser-parity spike reconciles Orca's browser inventory against Gecko,
+- [x] **BRW-01**: A browser-parity spike reconciles Orca's browser inventory against Gecko,
   chooses the seam, and answers `research/FEATURES.md` questions 1-8. (direction note)
 - [ ] **BRW-02**: Each Orca browser page is a PowerBrowser web tab with PowerBrowser chrome; the
   stock screencast pane and its dead entry points are never shown. (T-9, D-1)
@@ -115,7 +115,7 @@ Owner decisions are in `DECISIONS.md` (D-01..D-25) and win over `research/`. Res
   checked in the first build phase. (D-06.1)
 - [ ] **EXT-02**: Extension sessions are visible in Orca: PowerBrowser registers a pane per
   session and passes the `ORCA_AGENT_HOOK_*` variables. (D-06.2)
-- [ ] **EXT-03**: A spike researches live sharing of a running Orca agent inside the extension;
+- [x] **EXT-03**: A spike researches live sharing of a running Orca agent inside the extension;
   resuming a stopped session is the floor. (D-06.3)
 
 ### Injection (INJ)
@@ -213,21 +213,21 @@ Filled by the roadmap.
 | TERM-04 | Phase 63 | Pending |
 | TAB-01 | Phase 64 | Pending |
 | TAB-02 | Phase 64 | Pending |
-| TAB-03 | Phase 61 | Pending |
+| TAB-03 | Phase 61 | Complete |
 | TAB-04 | Phase 64 | Pending |
 | TAB-05 | Phase 65 | Pending |
 | TAB-06 | Phase 64 | Pending |
 | TAB-07 | Phase 65 | Pending |
 | TAB-08 | Phase 65 | Pending |
 | TAB-09 | Phase 65 | Pending |
-| BRW-01 | Phase 61 | Pending |
+| BRW-01 | Phase 61 | Complete |
 | BRW-02 | Phase 66 | Pending |
 | BRW-03 | Phase 66 | Pending |
 | BRW-04 | Phase 66 | Pending |
 | BRW-05 | Phase 66 | Pending |
 | EXT-01 | Phase 60 | Pending |
 | EXT-02 | Phase 63 | Pending |
-| EXT-03 | Phase 61 | Pending |
+| EXT-03 | Phase 61 | Complete |
 | INJ-01 | Phase 67 | Pending |
 | PLAT-01 | Phase 68 | Pending |
 | PLAT-02 | Phase 68 | Pending |

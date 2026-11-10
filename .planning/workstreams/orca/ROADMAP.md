@@ -112,7 +112,12 @@ Plans:
   3. The live-sharing record states, with evidence from a run, whether a running Orca agent can be shared live inside the Claude Code extension. It also shows the floor working: a stopped Orca agent session resumed in the extension with `--resume`.
   4. Before any of Phases 63, 64 and 66 is planned, this roadmap names the route each spike chose for it, or that phase is split or descoped by an owner decision.
 
-**Plans**: TBD
+**Plans**: 4/4 plans executed
+
+- [x] 61-01-PLAN.md — lane: spike 004, pane hosting (Routes A, B, B'), VERDICT YELLOW
+- [x] 61-02-PLAN.md — lane: spike 005, browser parity (S2, parity row), VERDICT YELLOW
+- [x] 61-03-PLAN.md — lane: spike 006, live sharing (the --resume floor), VERDICT YELLOW
+- [x] 61-04-PLAN.md — coordinator: merges, route lines for Phases 63, 64, 66, MANIFEST, skill wrap-up
 
 ### Phase 62: Overlay gate and PowerBrowser-run orcad
 
@@ -278,7 +283,7 @@ Phases execute in numeric order: 59 → 60 → 61 → 62 → 63 → 64 → 65 �
 |-------|----------------|--------|-----------|
 | 59. Carry-forward from v1.5 and v1.6 | 5/8 | In Progress | - |
 | 60. Orca from source on Theia's Node | 4/5 | In Progress | - |
-| 61. Spikes for pane hosting, browser parity and live sharing | 0/TBD | Not started | - |
+| 61. Spikes for pane hosting, browser parity and live sharing | 4/4 | In Progress (verification pending) | - |
 | 62. Overlay gate and PowerBrowser-run orcad | 3/3 | Complete | 2026-11-09 |
 | 63. Theia terminals and agent hooks for Orca | 0/5 | Planned | - |
 | 64. Orca panes as PowerBrowser tabs | 0/TBD | Not started | - |
