@@ -55,6 +55,7 @@ export const OrcaService = {
   _nodePath: null,
   _orcadMain: null,
   _webClientRoot: null,
+  _panesBundle: null,
   _orcaVersion: null,
   _quitObserverOff: null,
   _reapBlockerAdded: false,
@@ -367,7 +368,12 @@ export const OrcaService = {
     }
 
     const stderrTail = [];
+    // Phase 64 (P64-07): this start's pairing offer, held only until _writeHandOff writes it.
+    let offer = null;
     const sink = OrcaEnv.createOutputSink({
+      onOffer: value => {
+        offer = value;
+      },
       pushLog: line => {
         stderrTail.push(line);
         if (stderrTail.length > 40) {
@@ -446,11 +452,45 @@ export const OrcaService = {
         this._pushLog(`Orca data root file not written: ${messageOf(err)}`);
       }
     }
+    await this._writeHandOff(offer);
+    offer = null;
     this._state = "ready";
     this._failureRows = [];
     this._pushLog(`orcad ready on ${OrcaEnv.ORCAD_BIND_HOST}:${this._port}, pid ${this._pid}, terminal daemon pid ${this._daemonPid}.`);
     void this._supervise(proc);
     return { ok: true };
+  },
+
+  /**
+   * Phase 64 (P64-06, P64-07, P64-34): the two bridge-folder files the Theia backend reads, after
+   * ready: this start's pairing offer and the pane bundle folder (only when it exists). Each failure
+   * is one log line, never a start failure; the offer itself is never logged.
+   */
+  async _writeHandOff(offer) {
+    if (!this._bridgeDir) {
+      return;
+    }
+    if (offer) {
+      try {
+        await PowerBrowserProcesses.writePrivateFile(this._bridgeDir, OrcaEnv.ORCA_WEB_PAIRING_FILE, `${offer}\n`);
+      } catch (err) {
+        this._pushLog(`Orca pairing file not written: ${messageOf(err)}`);
+      }
+    } else {
+      this._pushLog("orcad reported no pairing offer; Orca tabs cannot open.");
+    }
+    const panesDir = `${this._webClientRoot}/${OrcaEnv.ORCA_PANES_DIR_REL}`;
+    if (!(await PowerBrowserAPI.pathExists(panesDir))) {
+      this._panesBundle = "not built";
+      this._pushLog("Orca tabs bundle not built; Orca tabs cannot open.");
+      return;
+    }
+    this._panesBundle = panesDir;
+    try {
+      await PowerBrowserProcesses.writePrivateFile(this._bridgeDir, OrcaEnv.ORCA_PANES_DIR_FILE, `${panesDir}\n`);
+    } catch (err) {
+      this._pushLog(`Orca tabs bundle file not written: ${messageOf(err)}`);
+    }
   },
 
   /** An exit nobody asked for: start again on the same port, adopting the surviving daemon. */
@@ -537,6 +577,14 @@ export const OrcaService = {
         // Best-effort; the next ready overwrites it.
       }
     }
+    // Phase 64 (P64-34): the pairing and bundle files go with it.
+    for (const name of this._bridgeDir ? [OrcaEnv.ORCA_WEB_PAIRING_FILE, OrcaEnv.ORCA_PANES_DIR_FILE] : []) {
+      try {
+        await PowerBrowserAPI.removeStateFile(OrcaEnv.bridgeFileFor(this._bridgeDir, name, this._bridgePlatform));
+      } catch {
+        // Best-effort, as above.
+      }
+    }
     this._state = "stopped";
     this._pid = null;
     this._daemonPid = null;
@@ -597,6 +645,7 @@ export const OrcaService = {
       ["Orca data root", this._dataRoot],
       // Null once the start resolved means no folder could be chosen; before that the row is left out.
       ["Orca bridge folder", this._bridgeDir ?? (this._dataRoot ? "not available" : null)],
+      ["Orca tabs bundle", this._panesBundle],
       ...this._failureRows,
     ];
     return rows.filter(([, value]) => value !== null && value !== undefined && value !== "");

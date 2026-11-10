@@ -69,6 +69,15 @@ export const ORCAD_LOCK_FILE_NAME = "orcad.lock";
 /** Phase 63 (P63-26): the one-line file in the bridge folder naming orcad's data root, for the EXT-02 wrapper. */
 export const ORCAD_DATA_ROOT_FILE = "orcad-data-root";
 /**
+ * Phase 64 (P64-07, P64-34): the bridge-folder file holding this orcad start's pairing offer, a
+ * reusable credential. Written 0600 for the Theia backend only and removed on stop.
+ */
+export const ORCA_WEB_PAIRING_FILE = "web-pairing";
+/** Phase 64 (P64-06): the bridge-folder file naming the pane bundle folder, written only when it exists. */
+export const ORCA_PANES_DIR_FILE = "orca-panes-dir";
+/** Phase 64 (P64-06): the pane bundle folder, relative to orcad's web client root. */
+export const ORCA_PANES_DIR_REL = "assets/pb-panes";
+/**
  * Longest data root, in UTF-8 bytes, whose RPC socket path still fits: the 107-byte Linux and
  * 103-byte macOS sun_path limits minus the 19-byte o-<pid>-<x>.sock suffix. The macOS figure is used
  * on every platform.
@@ -199,6 +208,25 @@ export function parseReadyLine(text) {
   };
 }
 
+/**
+ * Phase 64 (P64-07, A6): the ready line's pairing offer (pairing.webClientUrl when
+ * pairing.available), else null. Only createOutputSink's one-shot onOffer callback calls this; the
+ * offer is handed to one writer and kept nowhere else, which is why parseReadyLine never reads it.
+ */
+export function readyLineOffer(text) {
+  const line = String(text)
+    .split("\n")
+    .find(l => l.startsWith("{") && l.includes(READY_MARKER));
+  let record = null;
+  try {
+    record = line ? JSON.parse(line) : null;
+  } catch {
+    return null;
+  }
+  const offer = record?.pairing?.webClientUrl;
+  return record?.pairing?.available === true && typeof offer === "string" && offer ? offer : null;
+}
+
 /** True only for ws://127.0.0.1:<port>, optionally followed by one slash. */
 export function isLoopbackEndpoint(endpoint, port) {
   return endpoint === `ws://127.0.0.1:${port}` || endpoint === `ws://127.0.0.1:${port}/`;
@@ -285,8 +313,11 @@ export function bridgeFileFor(dir, name, platform) {
  * The only path orcad's output takes. stdout is held in memory (at most 64 KiB) until the ready line
  * parses, then dropped for good: it carries the pairing offer, a reusable credential, and is never
  * passed to pushLog. stderr goes to pushLog line by line through redact.
+ *
+ * Phase 64 (P64-07, A6): onOffer, when given, is called once with readyLineOffer of that same buffer
+ * just before it is dropped, so the offer reaches one writer and no other surface.
  */
-export function createOutputSink({ pushLog }) {
+export function createOutputSink({ pushLog, onOffer }) {
   let buffer = "";
   let parsed = null;
   let stderrRest = "";
@@ -306,6 +337,9 @@ export function createOutputSink({ pushLog }) {
       }
       parsed = parseReadyLine(buffer);
       if (parsed) {
+        if (onOffer) {
+          onOffer(readyLineOffer(buffer));
+        }
         buffer = "";
         resolveReady(parsed);
       }
