@@ -6481,6 +6481,12 @@ run_own_checks() {
       # Each prints one named SKIP line when no built orca/ or no built PowerBrowser exists.
       "orca-hidden-electron|node $REPO_ROOT/scripts/verify-orca-hidden-electron.mjs"
       "orca-service-live|node $REPO_ROOT/scripts/verify-orca-service-live.mjs"
+      # NEW (63-03, TERM-02/EXT-02, P63-15/P63-26): orca-agent-hooks. One built orcad with a scratch HOME and data
+      # root (the user's ~/.orca and ~/.claude are never touched). Orca's own managed Claude hook script runs on
+      # synthetic events derived from the pinned source; the wrapper is launched exactly as the Claude Code
+      # extension would launch it, with a stub claude. No model turn. A named SKIP when orca/ or orca-agents is
+      # not built.
+      "orca-agent-hooks|node $REPO_ROOT/scripts/verify-orca-agent-hooks.mjs"
     )
   fi
 
