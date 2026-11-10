@@ -3844,6 +3844,14 @@ run_own_checks() {
     # naming the drift: three markers, out/runtimes, a stray out/orcad/node, an
     # electron/dist, an ELF electron, a modified tracked file, a removed constant.
     "orca-build-shape-self-test|node $REPO_ROOT/scripts/verify-orca-build-shape.mjs --self-test"
+    # NEW (60-03, RUN-02): orca-slotless-start's self-test. Quick and hermetic: fixtures
+    # only, no orcad, no browser, no network. Green control first, then plants each red
+    # naming the drift: a ws://0.0.0.0 bind, Node 24.22.1 reported, two Node runtimes, an
+    # inherited ORCA_PAIRING_CODE in orcad's env, the pairing fragment unconsumed, no
+    # connected-host marker (derived from a fixture with synthetic templates), a terminal
+    # daemon surviving teardown; then the pairing-leak sentinel (seen with redaction off,
+    # absent with it on) and an installed-Orca path that must SKIP.
+    "orca-slotless-start-self-test|node $REPO_ROOT/scripts/verify-orca-slotless-start.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6401,6 +6409,18 @@ run_own_checks() {
       # out/, an ELF/PE electron binary or node_modules/electron/dist anywhere under orca/,
       # or a modified tracked Orca file. Prints one SKIP line when no built orca/ exists.
       "orca-build-shape|node $REPO_ROOT/scripts/verify-orca-build-shape.mjs"
+      # NEW (60-03, RUN-02, P59-04, P59-05): orca-slotless-start, the permanent re-pin proof
+      # (the Phase 68 re-pin job re-runs it on every Orca tag). Full tier: starts the built
+      # orcad on the official Node from powerbrowser/packaging/node-runtime.json (sha256-checked,
+      # extracted to .mozbuild/orca-probe-node), scrubbed env, --bind 127.0.0.1 --port 0.
+      # Derived at check time: Node version from node-runtime.json, ORCA_VERSION from
+      # generated/upstream-pins.env, the runtime set from /proc plus orca/out, the
+      # installed-Orca paths from orcad-browser-provider.ts, the connected-host marker from
+      # the client's ssh-status-segment-copy.ts. Red on a non-loopback bind, a Node other than
+      # the pin, more than one runtime, an unpaired PB web tab, or orcad or its terminal daemon
+      # surviving teardown. The pairing URL is redacted from all output. One named SKIP line
+      # when no built orca/, no built PowerBrowser, or an installed Orca exists.
+      "orca-slotless-start|node $REPO_ROOT/scripts/verify-orca-slotless-start.mjs"
     )
   fi
 
