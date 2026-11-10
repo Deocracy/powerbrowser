@@ -1,0 +1,261 @@
+#!/usr/bin/env node
+// scripts/verify-orca-claude-sdk.mjs
+//
+// BEXT-01, orcad half (Phase 68, plan 68-07; D-30, P68-38): the Claude agent
+// SDK leaves orcad's bundle, and orcad's loadClaudeAgentSdk imports it only
+// from the package directory ORCA_CLAUDE_AGENT_SDK_DIR names. Unset keeps
+// Orca's stock import; an empty value, a directory without the package, or an
+// entry resolved outside the directory rejects with ERR_MODULE_NOT_FOUND,
+// which is Orca's own missing-package path.
+//
+// Default mode (quick). The overlay seam 070 in
+// orca/src/main/claude/claude-stream-json-connection.ts is bundled with
+// esbuild (orca/node_modules/esbuild, else theia/node_modules/esbuild) as ESM
+// for Node, with the SDK external and every other non-built-in import resolved
+// to an empty CommonJS stub, into .mozbuild/orca-claude-sdk/. Five scenarios,
+// each in its own child node process because the loader caches its promise;
+// a stub SDK is a package directory exporting a nonce:
+//   S1  the value is a stub package directory: its nonce comes back.
+//   S2  the value is empty (a stub is reachable by the stock lookup): rejected.
+//   S3  the value is a directory without the package: rejected.
+//   S4  the value is a directory whose parent's node_modules holds a stub:
+//       rejected (no walk-up out of the named directory).
+//   S5  the variable is unset and a stub sits in node_modules beside the
+//       bundle: its nonce comes back (the stock path is unchanged).
+// A rejection must carry code ERR_MODULE_NOT_FOUND and name the package (S3
+// and S4 also the directory). The variable name is read from the patched
+// source and must not carry a PowerBrowser token (/pb/i, /powerbrowser/i).
+//
+// --built (full). ORCAD_EXTERNAL_MODULES, imported from
+// orca/config/scripts/orcad-entry-build.mjs, must list the SDK. The needle
+// CLAUDE_AGENT_SDK_VERSION="<version>" is derived from the installed SDK's
+// package.json and must first be found in that package's sdk.mjs (otherwise
+// the instrument is broken and an absence proves nothing); then no file under
+// orca/out may contain it.
+//
+// Limit: the loader runs from a bundle of its own module with its other
+// imports stubbed, not inside a running orcad.
+//
+// Tier: default quick (one SKIP line when orca/ is not fetched, the overlay is
+// not applied, or no esbuild is installed); --built full (SKIP when
+// orca/out/orcad is absent). Exit 0 pass or SKIP, 1 fail, 2 unknown argument.
+//
+// Usage:
+//   node scripts/verify-orca-claude-sdk.mjs
+//   node scripts/verify-orca-claude-sdk.mjs --built
+
+import { execFileSync, spawnSync } from 'node:child_process';
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire, isBuiltin } from 'node:module';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const NAME = 'orca-claude-sdk';
+const SELF_REL = 'scripts/verify-orca-claude-sdk.mjs';
+const SDK_PKG = '@anthropic-ai/claude-agent-sdk';
+const LOADER_REL = 'src/main/claude/claude-stream-json-connection.ts';
+const ENTRY_BUILD_REL = 'config/scripts/orcad-entry-build.mjs';
+const WORK_REL = '.mozbuild/orca-claude-sdk';
+const MISSING = 'ERR_MODULE_NOT_FOUND';
+
+const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
+
+/** esbuild from the first of `roots` that has it installed, or null. */
+export function resolveEsbuild(roots) {
+    for (const root of roots) {
+        const dir = join(root, 'node_modules', 'esbuild');
+        if (!existsSync(join(dir, 'package.json'))) continue;
+        try { return { esbuild: createRequire(import.meta.url)(dir), from: dir }; } catch { /* next root */ }
+    }
+    return null;
+}
+
+/** Bundles `src` as Node ESM with the SDK external and every other non-built-in import stubbed. */
+export async function bundleLoader(esbuild, src, outfile) {
+    const stubs = {
+        name: 'stub-non-builtins',
+        setup(b) {
+            b.onResolve({ filter: /.*/ }, (args) => {
+                if (args.kind === 'entry-point') return undefined;
+                if (args.path === SDK_PKG || args.path.startsWith('node:') || isBuiltin(args.path)) return { path: args.path, external: true };
+                return { path: args.path, namespace: 'stub' };
+            });
+            b.onLoad({ filter: /.*/, namespace: 'stub' }, () => ({ contents: 'module.exports = {};', loader: 'js' }));
+        },
+    };
+    await esbuild.build({ entryPoints: [src], bundle: true, format: 'esm', platform: 'node', target: 'node20', outfile, write: true, logLevel: 'silent', plugins: [stubs] });
+}
+
+/** A stub SDK package directory at `dir` whose sdk.mjs exports `nonce`. */
+function stubSdk(dir, nonce) {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: SDK_PKG, version: '0.0.0-stub', type: 'module', exports: { '.': './sdk.mjs' } }));
+    writeFileSync(join(dir, 'sdk.mjs'), `export const nonce = ${JSON.stringify(nonce)};\n`);
+}
+
+/** Runs loadClaudeAgentSdk from `loader` in a fresh node with an environment built from scratch. */
+function runLoader(loader, cwd, envName, value) {
+    const script = `import(${JSON.stringify(pathToFileURL(loader).href)}).then((m) => m.loadClaudeAgentSdk()).then(`
+        + '(sdk) => console.log(JSON.stringify({ ok: true, nonce: sdk.nonce ?? null })), '
+        + '(e) => console.log(JSON.stringify({ ok: false, code: e?.code ?? null, message: String(e?.message ?? e) })))';
+    const env = { PATH: process.env.PATH ?? '' };
+    if (value !== undefined) env[envName] = value;
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], { cwd, env, encoding: 'utf8', timeout: 30000 });
+    try { return JSON.parse(r.stdout.trim().split('\n').pop()); } catch { return { ok: false, code: null, message: `child exited ${r.status}: ${(r.stderr || '').trim().slice(-300)}` }; }
+}
+
+/** The environment name the loader reads, from its source: the first process.env.<NAME> in loadClaudeAgentSdk. */
+export function envNameFrom(source) {
+    const at = String(source).indexOf('function loadClaudeAgentSdk');
+    if (at < 0) return null;
+    const body = source.slice(at, source.indexOf('\n}\n', at) + 2);
+    return /process\.env\.([A-Za-z_][A-Za-z0-9_]*)/.exec(body)?.[1] ?? null;
+}
+
+/** Red reasons for a name that could not be offered upstream unchanged. */
+export function tokenFails(name) {
+    if (!name) return ['token rule: no process.env.<NAME> read in loadClaudeAgentSdk, so the loader names no directory variable'];
+    return /pb/i.test(name) || /powerbrowser/i.test(name) ? [`token rule: the variable ${name} carries a PowerBrowser token (pb or powerbrowser); the seam must be offerable upstream unchanged`] : [];
+}
+
+/**
+ * Bundles the loader source `src` into `work` and runs S1-S5 with `envName`. Resolves red reasons and a
+ * one-word result per scenario.
+ */
+export async function loaderScenarios(esbuild, src, envName, work) {
+    rmSync(work, { recursive: true, force: true });
+    mkdirSync(work, { recursive: true });
+    const bundle = join(work, 'loader.mjs');
+    try { await bundleLoader(esbuild, src, bundle); } catch (err) { return { fails: [`the loader source does not bundle: ${String(err.message).split('\n')[0]}`], results: {} }; }
+    const at = (s) => { const d = join(work, s); mkdirSync(d, { recursive: true }); cpSync(bundle, join(d, 'loader.mjs')); return d; };
+    const nonce = (s) => `${s}-${process.pid}-${Date.now()}`;
+    const fails = [];
+    const results = {};
+    const expectNonce = (label, want, r) => {
+        results[label] = r.ok && r.nonce === want ? 'loaded' : 'red';
+        if (!r.ok) fails.push(`${label}: the stub SDK was not loaded (${r.code ?? 'no code'}: ${r.message})`);
+        else if (r.nonce !== want) fails.push(`${label}: a module other than the stub SDK was loaded (nonce ${r.nonce})`);
+    };
+    const expectMissing = (label, r, dir) => {
+        results[label] = !r.ok && r.code === MISSING ? 'rejected' : 'red';
+        if (r.ok) fails.push(`${label}: the loader resolved an SDK (nonce ${r.nonce}) where it must report the package missing`);
+        else if (r.code !== MISSING) fails.push(`${label}: the rejection has code ${r.code}, not ${MISSING} (Orca's missing-package path)`);
+        else if (!r.message.includes(SDK_PKG) || (dir && !r.message.includes(dir))) fails.push(`${label}: the rejection message does not name ${SDK_PKG}${dir ? ` and ${dir}` : ''}: ${r.message}`);
+    };
+
+    const s1 = at('s1');
+    const n1 = nonce('s1');
+    stubSdk(join(s1, 'pkg'), n1);
+    expectNonce('S1 (value names a package directory)', n1, runLoader(join(s1, 'loader.mjs'), s1, envName, join(s1, 'pkg')));
+
+    const s2 = at('s2');
+    stubSdk(join(s2, 'node_modules', SDK_PKG), nonce('s2'));
+    expectMissing('S2 (empty value)', runLoader(join(s2, 'loader.mjs'), s2, envName, ''), null);
+
+    const s3 = at('s3');
+    mkdirSync(join(s3, 'empty'));
+    expectMissing('S3 (directory without the package)', runLoader(join(s3, 'loader.mjs'), s3, envName, join(s3, 'empty')), join(s3, 'empty'));
+
+    const s4 = at('s4');
+    stubSdk(join(s4, 'node_modules', SDK_PKG), nonce('s4'));
+    mkdirSync(join(s4, 'inner'));
+    expectMissing('S4 (no walk-up to a parent node_modules)', runLoader(join(s4, 'loader.mjs'), s4, envName, join(s4, 'inner')), join(s4, 'inner'));
+
+    const s5 = at('s5');
+    const n5 = nonce('s5');
+    stubSdk(join(s5, 'node_modules', SDK_PKG), n5);
+    expectNonce('S5 (unset, stock lookup)', n5, runLoader(join(s5, 'loader.mjs'), s5, envName, undefined));
+    return { fails, results };
+}
+
+/** Every regular file under `dir`, symlinks not followed. */
+function filesUnder(dir) {
+    const out = [];
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, e.name);
+        if (e.isDirectory()) out.push(...filesUnder(p));
+        else if (e.isFile()) out.push(p);
+    }
+    return out;
+}
+
+/**
+ * The --built leg: `externals` must list the SDK; the version needle from `sdkDir` must be found in its
+ * sdk.mjs (else a broken instrument) and in no file under `outDir`.
+ */
+export function builtLeg({ outDir, sdkDir, externals }) {
+    const fails = [];
+    if (!Array.isArray(externals) || !externals.includes(SDK_PKG)) fails.push(`ORCAD_EXTERNAL_MODULES (${JSON.stringify(externals)}) does not list ${SDK_PKG}, so build:orcad bundles it`);
+    let version = null;
+    try { version = JSON.parse(readFileSync(join(sdkDir, 'package.json'), 'utf8')).version; } catch { /* reported below */ }
+    if (typeof version !== 'string' || !version) return { fails: [...fails, `broken instrument: no version in ${join(sdkDir, 'package.json')}`], needle: null, scanned: 0 };
+    const needle = `CLAUDE_AGENT_SDK_VERSION="${version}"`;
+    if (!(read(join(sdkDir, 'sdk.mjs')) ?? '').includes(needle)) {
+        return { fails: [...fails, `broken instrument: the needle ${needle} is not in ${join(sdkDir, 'sdk.mjs')}, so its absence from the build would prove nothing`], needle, scanned: 0 };
+    }
+    const files = filesUnder(outDir);
+    for (const f of files) if (readFileSync(f).includes(needle)) fails.push(`${f} carries ${needle}: the SDK is still bundled`);
+    return { fails, needle, scanned: files.length };
+}
+
+/** ORCAD_EXTERNAL_MODULES, imported by file URL in a child node (the module imports a .ts file). */
+function readExternals(orcaDir) {
+    const url = pathToFileURL(join(orcaDir, ENTRY_BUILD_REL)).href;
+    const out = execFileSync(process.execPath, ['--no-warnings', '--input-type=module', '-e', `const m = await import(${JSON.stringify(url)}); console.log(JSON.stringify(m.ORCAD_EXTERNAL_MODULES));`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    return JSON.parse(out.trim().split('\n').pop());
+}
+
+/** True when orca/<rel> differs from the pin (the overlay is applied to it). */
+function seamApplied(orcaDir, rel) {
+    try { execFileSync('git', ['-C', orcaDir, 'diff', '--quiet', 'HEAD', '--', rel], { stdio: 'ignore' }); return false; } catch { return true; }
+}
+
+async function defaultMode(root) {
+    const orcaDir = join(root, 'orca');
+    const src = join(orcaDir, LOADER_REL);
+    if (!existsSync(join(orcaDir, '.git')) || !existsSync(src)) return { skip: 'orca/ is not fetched (bash scripts/fetch-orca.sh)' };
+    if (!seamApplied(orcaDir, LOADER_REL)) return { skip: `the overlay is not applied to orca/${LOADER_REL} (nix develop .#orca --command bash scripts/build-orca.sh)` };
+    const eb = resolveEsbuild([orcaDir, join(root, 'theia')]);
+    if (!eb) return { skip: 'no esbuild in orca/node_modules or theia/node_modules (build-orca.sh, or yarn install in theia/)' };
+    const name = envNameFrom(read(src));
+    const fails = tokenFails(name);
+    const r = await loaderScenarios(eb.esbuild, src, name ?? 'ORCA_CLAUDE_AGENT_SDK_DIR', join(root, WORK_REL));
+    fails.push(...r.fails);
+    return { fails, name, results: r.results };
+}
+
+function builtMode(root) {
+    const orcaDir = join(root, 'orca');
+    if (!existsSync(join(orcaDir, 'out', 'orcad'))) return { skip: 'orca/out/orcad is absent (nix develop .#orca --command bash scripts/build-orca.sh)' };
+    let externals;
+    try { externals = readExternals(orcaDir); } catch (err) { return { fails: [`ORCAD_EXTERNAL_MODULES could not be imported from orca/${ENTRY_BUILD_REL}: ${String(err.message).split('\n')[0]}`] }; }
+    return builtLeg({ outDir: join(orcaDir, 'out'), sdkDir: join(orcaDir, 'node_modules', SDK_PKG), externals });
+}
+
+const isEntryPoint = (() => {
+    try { return realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; }
+})();
+if (isEntryPoint) {
+    const args = process.argv.slice(2);
+    const unknown = args.find((a) => a !== '--built');
+    if (unknown !== undefined || args.length > 1) {
+        console.error(`${NAME}: FAIL -- unknown argument '${unknown ?? args[1]}' (usage: node ${SELF_REL} [--built])`);
+        console.error(`  Next step: run: node ${SELF_REL}, or add --built after build-orca.sh.`);
+        process.exit(2);
+    }
+    const built = args[0] === '--built';
+    const label = built ? `${NAME}-built` : NAME;
+    const r = built ? builtMode(REPO_ROOT) : await defaultMode(REPO_ROOT);
+    if (r.skip) {
+        console.log(`${label}: SKIP -- ${r.skip}`);
+        process.exit(0);
+    }
+    if (r.fails.length) {
+        for (const f of r.fails) console.error(`${label}: FAIL -- ${f}`);
+        process.exit(1);
+    }
+    if (built) console.log(`${label}: PASS -- ORCAD_EXTERNAL_MODULES lists ${SDK_PKG}; the needle ${r.needle} is in the installed SDK's sdk.mjs and in none of ${r.scanned} files under orca/out`);
+    else console.log(`${label}: PASS -- loadClaudeAgentSdk reads ${r.name} (no PowerBrowser token); ${Object.entries(r.results).map(([k, v]) => `${k.split(' ')[0]} ${v}`).join(', ')}`);
+    process.exit(0);
+}

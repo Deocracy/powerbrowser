@@ -3900,6 +3900,9 @@ run_own_checks() {
     # over fixtures, 25 cases. Both hermetic: no orcad, no browser, no network.
     "orca-hidden-electron-self-test|node $REPO_ROOT/scripts/verify-orca-hidden-electron.mjs --self-test"
     "orca-service-live-self-test|node $REPO_ROOT/scripts/verify-orca-service-live.mjs --self-test"
+    # NEW (68-07, BEXT-01, P68-38): orcad loads the Claude agent SDK only from ORCA_CLAUDE_AGENT_SDK_DIR (seam 070):
+    # the bundled loader runs S1-S5 in child nodes; the variable name carries no PowerBrowser token. SKIP without orca/.
+    "orca-claude-sdk|node $REPO_ROOT/scripts/verify-orca-claude-sdk.mjs"
     # NEW (63-06, EXT-02, P63-26/P63-35/P63-36): orca-bridge-dir, the chrome half of the bridge folder for linux,
     # darwin and win32 (OrcaEnv's nodePlatform, bridgeDirFor and bridgeFileFor); the orcad-data-root literal joined
     # across OrcaEnv, orca-agents' protocol file and its wrapper, a named SKIP of that join alone while lane p63-03
@@ -6512,6 +6515,9 @@ run_own_checks() {
       # Each prints one named SKIP line when no built orca/ or no built PowerBrowser exists.
       "orca-hidden-electron|node $REPO_ROOT/scripts/verify-orca-hidden-electron.mjs"
       "orca-service-live|node $REPO_ROOT/scripts/verify-orca-service-live.mjs"
+      # NEW (68-07, BEXT-01, P68-38): orca-claude-sdk-built. ORCAD_EXTERNAL_MODULES lists the Claude agent SDK (seam 080)
+      # and no file under orca/out carries its version needle, proven present in the installed sdk.mjs first.
+      "orca-claude-sdk-built|node $REPO_ROOT/scripts/verify-orca-claude-sdk.mjs --built"
       # NEW (63-03, TERM-02/EXT-02, P63-15/P63-26): orca-agent-hooks. One built orcad with a scratch HOME and data
       # root (the user's ~/.orca and ~/.claude are never touched). Orca's own managed Claude hook script runs on
       # synthetic events derived from the pinned source; the wrapper is launched exactly as the Claude Code
