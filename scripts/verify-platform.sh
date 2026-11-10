@@ -3893,6 +3893,9 @@ run_own_checks() {
     # and fixture copies of the orca-agents sources (process.env reads, stdout writes, registerOverride, preference
     # setters, settings.json); a child Node imports the real module and must print and start nothing.
     "orca-agent-hooks-self-test|node $REPO_ROOT/scripts/verify-orca-agent-hooks.mjs --self-test"
+    # orca-agent-status-live-self-test: the live row's pure verdicts (status order, waiting, record growth, prompt
+    # cap, agent PTY under Orca's terminal daemon, quit survivors, bridge-folder files) over fixtures.
+    "orca-agent-status-live-self-test|node $REPO_ROOT/scripts/verify-orca-agent-status-live.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6492,6 +6495,11 @@ run_own_checks() {
       # extension would launch it, with a stub claude. No model turn. A named SKIP when orca/ or orca-agents is
       # not built.
       "orca-agent-hooks|node $REPO_ROOT/scripts/verify-orca-agent-hooks.mjs"
+      # orca-agent-status-live: a real claude through agent launch in a launched PowerBrowser; working, waiting and
+      # done, the agent PTY under Orca's terminal daemon, the bridge-folder files, agents ended on quit. One prompt,
+      # at most two model turns, on the owner's login; Claude session records compared before and after, never with
+      # a constant. Run under flock /home/chris/coding/Power-Browser/.git/pb-live.lock. SKIP when not built.
+      "orca-agent-status-live|node $REPO_ROOT/scripts/verify-orca-agent-status-live.mjs"
     )
   fi
 
