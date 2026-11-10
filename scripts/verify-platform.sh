@@ -3924,6 +3924,11 @@ run_own_checks() {
     "orca-terminal-keys|node $REPO_ROOT/scripts/verify-orca-terminal-keys.mjs"
     "orca-terminal-keys-self-test|node $REPO_ROOT/scripts/verify-orca-terminal-keys.mjs --self-test"
     "orca-terminal-keys-live-self-test|node $REPO_ROOT/scripts/verify-orca-terminal-keys-live.mjs --self-test"
+    # orca-tabs-live-self-test (64-04, P64-25/P64-35): orca-tabs-live's pure verdicts, each over a passing fixture and
+    # one fixture per failure (late addWidget, a second widget for one pane, split direction, tab groups, remount,
+    # Organising key, tab chrome in Theia, a blind detector, close, reload, route, offer, OWNER-ITEM), plus a child-Node
+    # import-silence check. Hermetic.
+    "orca-tabs-live-self-test|node $REPO_ROOT/scripts/verify-orca-tabs-live.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6540,6 +6545,12 @@ run_own_checks() {
       # repeated. Coordinator proof on the merged, wired, built tree. Run under
       # flock /home/chris/coding/Power-Browser/.git/pb-live.lock with ORCA_* unset.
       "orca-terminal-keys-live|node $REPO_ROOT/scripts/verify-orca-terminal-keys-live.mjs"
+      # orca-tabs-live (64-04, TAB-01..TAB-06/TERM-01, criteria 2, 3, 6): every creation path gives one hosted tab
+      # within 1 s, echo, per-leaf split placement, chat from PB and from a second paired client, the other Orca-only
+      # views, Orca tab groups as Lumino splits, the A4 freeze guard, Organising rows, no Orca tab chrome after its
+      # detector, close semantics, reload, route and offer containment. Coordinator proof on the merged, wired, built
+      # tree after orca-pane-css-live (P64-15); a named SKIP while lane p64-02 or p64-01 is unmerged. Under the live lock.
+      "orca-tabs-live|node $REPO_ROOT/scripts/verify-orca-tabs-live.mjs"
     )
   fi
 
