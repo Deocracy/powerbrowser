@@ -8,7 +8,9 @@ rebrand survey, **this file wins**.
 
 **D-01 — Orca's tabs become real PB tabs.** Every Orca tab is a Lumino tab in PB's dock: it
 moves between modes and is organisable like Theia and browser tabs.
-- Terminals are **Theia terminals only** (Chris, 2026-11-04, second session). Orca uses them:
+- *(Superseded for Orca terminals by D-31, 2026-11-10: Orca terminals run on Orca's own engine
+  and view, side by side with Theia terminals.)* Terminals are **Theia terminals only** (Chris,
+  2026-11-04, second session). Orca uses them:
   orcad gets a Theia-backed `IPtyProvider` (a fifth implementation beside Local, DaemonPtyAdapter,
   DaemonPtyRouter and Degraded) that forwards spawn, write, resize, kill and data to Theia's
   backend. Orca's terminal daemon is not used. Agent hook env vars pass through at spawn.
@@ -53,13 +55,16 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
    **Research live sharing** in a spike, with no promise made. Resuming a stopped session
    (`--resume`) is the realistic floor.
 4. Same terminals. Now easy: all terminals are Theia terminals (D-01), so the extension and
-   Orca already share them.
+   Orca already share them. *(Superseded by D-31: Orca terminals and Theia terminals are two
+   kinds, side by side; the extension's terminals are Theia's, Orca's are Orca's.)*
 
 ## Runtime behaviour
 
 - **D-07 — Quit (revised 2026-11-04): agents end when PB quits.** Theia's backend owns the
   PTYs and dies with PB; Orca's detached daemon is not used. Supersedes the earlier "keep running
-  and re-adopt" rule, which existed only because Orca's daemon made it possible.
+  and re-adopt" rule, which existed only because Orca's daemon made it possible. *(Mechanism
+  amended by D-31: Orca's terminal daemon is used again; agents still end on quit because
+  `OrcaService` stops orcad, its terminal daemon and the daemon's descendants, RUN-05.)*
 - **D-08 — Telemetry off:** set `ORCA_TELEMETRY_DISABLED=1` and `DO_NOT_TRACK=1`. The Orca
   cloud hosts (`*.onorca.dev`: push, login, relay, share, feedback) go on the egress allowlist
   so those features keep working.
@@ -103,7 +108,7 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
   (`ipc/pty/provider/registry.ts` and/or `daemon/daemon-provider-state.ts`), browser provider kind
   (`orcad/orcad-browser-provider.ts`), web build entry (`vite.web.config.ts`), and possibly the
   orcad entry. Six such one-line patches applied cleanly in 19 of 21 releases. Anything deeper
-  needs an owner decision.
+  needs an owner decision. *(D-31: no PTY-provider seam is built; the overlay holds 010 only.)*
 - **D-17 — Origin check:** the Theia token gate also rejects sidecar requests whose Origin is
   not PB's own pages. Closes the shared-loopback-cookie hole for every local page.
 - **D-18 — Add project:** keep Orca's own Add-project flow and sidebar remove unchanged. PB adds
@@ -114,7 +119,9 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
 - **D-20 — Remote hosts stay in.** orcad routes only the `local` host through the swappable PTY
   provider (`ipc/pty/provider/registry.ts:73-78`); SSH and paired-server (`runtime:`) hosts have
   their own paths that never touch the local daemon, so the Theia-only terminal rule costs them
-  nothing. Remote may be PB-to-PB only if that is what works.
+  nothing. Remote may be PB-to-PB only if that is what works. *(D-31: remote terminals are
+  deferred to a future re-pin; headless orcad at 1.4.248 has no SSH stack and no paired-server
+  relay.)*
 - **D-21 — Orca mobile is forked too.** Its source is in the Orca repo (`mobile/`, Expo, iOS and
   Android, ~2,200 source files) and is overlaid under D-04/D-16 like the client. Mobile is a remote
   control over orcad's runtime (sessions, terminals, files, browser, automations), not a layout
@@ -137,7 +144,9 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
   a green run re-pins by itself, a conflict stops for a human.
 - **D-27 — Offer the generic seams upstream.** Terminal provider, browser provider and extra web
   entry go to Orca as pull requests once each works in PB. PB never depends on acceptance.
-- **D-28 — Terminal seam size.** The Theia-backed `IPtyProvider` implements the 21 required
+  *(D-31: no terminal provider exists to offer.)*
+- **D-28 — Terminal seam size.** *(Superseded by D-31: no Theia-backed provider is built.)* The
+  Theia-backed `IPtyProvider` implements the 21 required
   members (serialize/revive, buffer snapshots, foreground-process queries, listProcesses, and the
   rest), not five operations; the contract changed in 9 of 21 releases, and orcad still probes
   node-pty at startup. Amends D-01.
@@ -172,6 +181,36 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
   - Supersedes options (a)-(d) of open ruling 68-A in `68-CONTEXT.md`. Mechanism: P68-38;
     requirements BEXT-01 and BEXT-02.
 
+## Terminals: Orca's and Theia's, side by side (2026-11-10)
+
+- **D-31 — Orca terminals run on Orca's own engine and view, beside Theia terminals.** Chris,
+  2026-11-10, in three answers: "So use the orca terminal the way orca is made, I wanted to do
+  something different from what you are thinking, I was only thinking at a GUI level"; "Have 2
+  different terminals the orca and the theia"; then, of the layouts offered, "Side by side".
+  - An Orca terminal uses Orca's own engine: orcad's stock local PTY provider and its terminal
+    daemon. PowerBrowser adds no PTY provider and no terminal seam patch.
+  - An Orca terminal is shown with Orca's own terminal view (`TerminalPane`, xterm.js) inside a
+    PowerBrowser tab: a Lumino tab hosting the Orca pane through Phase 64's Route A. Orca
+    terminals are created through orcad's `terminal.create`, never through the Orca client's
+    `createNewTerminalTab` (64-RESEARCH A4).
+  - Theia terminals stay plain Theia terminals, as today. Neither kind replaces the other, and
+    PowerBrowser does not join them.
+  - Phase 63's bridge (Orca running on Theia's terminal engine: seams 020 and 030, the external
+    PTY bridge, `@powerbrowser/orca-terminals`, the `o<n>` identity, `ORCA_EXTERNAL_PTY_ENDPOINT`)
+    is dropped. The overlay keeps one landed seam, 010.
+  - Supersedes, for Orca terminals: D-01's terminal bullet, D-28 (the provider's member count and
+    wording), D-06 item 4 (shared terminals), the PTY-provider example in D-16, the terminal
+    provider offer in D-27, and spike item 4 below. D-07's rule stands with a new mechanism: Orca's
+    terminal daemon is used, and `OrcaService` ends orcad, the daemon and the daemon's descendants
+    on quit (RUN-05; Phase 62's live check ended a 5-process tree including an agent). D-09 (keys)
+    and D-13 (status hooks) apply unchanged to Orca terminal tabs.
+  - **TERM-03 deferred.** Remote (SSH and paired-server) terminals stay unavailable at this Orca
+    version: Phase 64 research measured that headless orcad at 1.4.248 has no SSH stack and no
+    paired-server relay; only Electron main has them (`main/startup/main-process-runtime-launch.ts:122`,
+    64-RESEARCH A1; 63-RESEARCH finding 1). TERM-03 moves to the v2 requirements and is re-examined
+    at a future re-pin whose orcad serves remote terminals. This closes P63-24's open owner item.
+    D-20 is held in abeyance until then.
+
 ## Spikes this direction needs
 
 1. Browser parity: what an Orca browser tab can do, and how PB chrome provides it
@@ -180,4 +219,5 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
    It now works under D-04, so the question is how, not whether.
 3. Claude extension: whether it runs on Theia 1.76, the pane registration for D-06 item 2, and
    live sharing (D-06 item 3).
-4. Theia-backed PTY provider for orcad (D-01), and the layout-ownership spike (D-15).
+4. Theia-backed PTY provider for orcad (D-01; dropped by D-31), and the layout-ownership spike
+   (D-15).

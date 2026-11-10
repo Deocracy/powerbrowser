@@ -3,6 +3,7 @@
 **Gathered:** 2026-11-09
 **Status:** Ready for planning
 **Mode:** Smart discuss, auto mode (Chris 2026-11-09: "Claude takes the recommended answers, keeps going"). Every P68 decision is Claude's recommended pick; Chris may override any of them before the dependent work lands or in the end-of-milestone pass (59-CONTEXT D-18).
+**Amended 2026-11-10 by owner ruling D-31:** see "Amendments after D-31" (P68-40..P68-43); the `terminal-provider` seam class and every Phase 63 seam (020, 030) are gone.
 
 <domain>
 ## Phase Boundary
@@ -275,6 +276,14 @@ Each pick below applies one row of 68-RESEARCH.md "Context amendments" (A1-A13).
   - **Packages with no `license` field:** five, each needing a named exception row: `ssh2`, `cpu-features`, `buildcheck`, `exit`, `khroma`. The first three carry a LICENSE file that begins "Copyright Brian White. All rights reserved." followed by MIT-form text.
   - **Until the owner rules:** lane 68-04 writes the key with the proposed set and marks it pending in the inventory. The check prints one `PENDING RULING` line for the set itself, and the exception rows record the observed licence text. The owner may change the set, and any package that then falls outside it goes red by name.
 
+### Amendments after D-31 (coordinator, 2026-11-10; owner ruling, not an auto-mode pick)
+Source: `DECISIONS.md` D-31 (Orca terminals on Orca's own engine and view, side by side with Theia terminals) and 63-CONTEXT P63-31..P63-40. Picks above keep their text; these win over them.
+
+- **P68-40 (amends P68-18, P68-19, P68-36 and the D-27 note in P68-38): the `terminal-provider` seam class disappears.** Phase 63 lands no seam: 020, 030 and the overlay file `external-pty-bridge.ts` are never merged. `seams.json` `upstream.class` takes `browser-provider`, `web-entry` or `pb-only`; `verify-orca-overlay.mjs --upstream-prs` requires a PR for `browser-provider` and `web-entry` only; P68-19's "Depends on Phases 63, 64 and 66 for the final rows" reads "Phases 64 and 66"; P68-36's token-refusal note about Phase 63's switch is moot (the exporter's generic overlay-import rule stays, with a generic fixture switch name). P64-24's correction (Phase 64 adds no web-entry seam) and P66-31 (Phase 66 adds no seam) are unchanged by D-31 and remain 68-05's to resolve. Plans 68-03, 68-05 and 68-VALIDATION carry the edits.
+- **P68-41 (amends 68-06 merge rule (2b), 68-07 and 68-10): the Phase 63 chrome baseline is lane p63-06.** It adds the bridge-folder builders and `ORCAD_DATA_ROOT_FILE` to `OrcaEnv`, edits `OrcaService._resolve`, its ready handler, `_stopTree`, `getState` and the diagnostics rows, adds `POWERBROWSER_ORCA_BRIDGE_DIR` to `TheiaService._spawnAndGate`, adds `writePrivateFile` and `platform()` with their catalogue rows, and edits `verify-orca-service.mjs`. It adds no fixed environment name and does not touch `OrcaService._spawnAndGate` or `buildOrcadEnv`: lane p68-07's `ORCA_CLAUDE_AGENT_SDK_DIR` follows Phase 62's fixed names and its `claudeAgentSdkDir` option follows `orcaVersion`. The seam baseline when p68-07 launches is 010 alone, so 070 and 080 make three of the ten-seam cap.
+- **P68-42 (amends 68-06's WINDOWS.md list):** no Windows named-pipe or macOS PTY transport entry is written (D-31 dropped the transport). The Phase 63 items left for Phase 68 are the claude-wrapper launcher's Windows twin and the wrapper path in packaged builds.
+- **P68-43 (coordinator note for the running lanes):** the plans of lanes p68-01, p68-02 and p68-04 and their worktree changes name no Phase 63 bridge file, switch or seam (checked 2026-11-10), so nothing changes for them. `rebase-orca.sh` (p68-02) re-applies whatever `seams.json` lists, which after D-31 is 010 and later 070 and 080; 68-01's node-pty prebuild rule still holds, because Orca's own engine spawns through node-pty.
+
 ### Claude's Discretion
 - Script internals, the exact stage-line wording, the tracking-issue title format, fixture layout, how `orca-packaged-tree` maps `--target` to the staged root per OS, and whether the hosted Orca jobs cache the pnpm store (only by lockfile hash, never across trust boundaries).
 
@@ -361,4 +370,4 @@ Each pick below applies one row of 68-RESEARCH.md "Context amendments" (A1-A13).
 ---
 
 *Phase: 68-three-os-artifacts-weekly-re-pin-and-upstream-seams*
-*Context gathered: 2026-11-09 (auto mode); amended after research 2026-11-09 (P68-24..P68-37, open owner rulings 68-A and 68-B)*
+*Context gathered: 2026-11-09 (auto mode); amended after research 2026-11-09 (P68-24..P68-37, open owner rulings 68-A and 68-B); amended by owner ruling D-31 2026-11-10 (P68-40..P68-43)*

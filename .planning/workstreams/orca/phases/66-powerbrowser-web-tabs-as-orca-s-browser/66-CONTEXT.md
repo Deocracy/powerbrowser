@@ -3,6 +3,7 @@
 **Gathered:** 2026-11-10
 **Status:** Ready for planning (after the research gate in P66-04)
 **Mode:** Smart discuss, auto mode (Chris 2026-11-09: "Claude takes the recommended answers, keeps going"). Every P66 decision is Claude's recommended pick; Chris may override any of them before the dependent work lands or in the end-of-milestone pass (59-CONTEXT D-18). This ruling replaces D-25's interactive discuss step for this phase.
+**Amended 2026-11-10 by owner ruling D-31** (Orca terminals on Orca's own engine and view, side by side with Theia terminals): see "Amendments after D-31" (P66-34).
 
 <domain>
 ## Phase Boundary
@@ -103,6 +104,9 @@ Out of scope: grab and annotate into an agent prompt (BRW-06), markup on screens
   The expected conflicts are textual: the lanes' registry blocks and the Theia `package.json`/`yarn.lock` lines. Only the coordinator edits `STATE.md`, `ROADMAP.md`, `REQUIREMENTS.md` tracking, `WINDOWS.md` and `inventory/brand-tokens.json`; nobody edits the ledger. Lanes stage their files and record their brand-scan report for the coordinator (new paths name Orca, so they get brand rows, P62-11). Lanes that build Theia use the audited install from `docs/BUILD.md` (59-CONTEXT D-07). Each lane runs in its own worktree. p66-02 and p66-03 agree on nothing beyond the two kind names, the `agent` field and the push shape fixed in P66-06, P66-12 and P66-20; `orca-browser-abilities` and `orca-browser-tab-scope` prove the agreement on the merged tree. No human checks (D-18).
 - **P66-33 (Claude's pick): user-facing copy is limited to P66-23's rows and the privacy paragraph (P66-27).** Failure of the client to attach is a log line and a diagnostics row; the page for it is Phase 67's (P62-13's rule continues).
 
+### Amendments after D-31 (coordinator, 2026-11-10; owner ruling, not an auto-mode pick)
+- **P66-34 (amends P66-02, P66-03, P66-31 and the Established Patterns line on the `pty-bridge` directory):** every `pty-bridge` directory reference means lane p63-06's bridge folder (`OrcaEnv.bridgeDirFor`, `POWERBROWSER_ORCA_BRIDGE_DIR`, files written by `writePrivateFile` 0600 from creation; 63-CONTEXT P63-35). P66-03's reason reads "agents run in Orca terminals on orcad's own engine whatever the mode" (D-31); the conclusion, attach at frontend start in every mode, is unchanged. P66-31's seam count reads: the overlay keeps 1 landed seam (010 from Phase 62; Phase 63 lands none after D-31; 070 and 080 planned in Phase 68; Phase 64 adds none), 3 of 10 with Phase 68's.
+
 ### Claude's Discretion
 - Internal structure of `@powerbrowser/orca-browser`, the client bundle's module layout inside `orca-overlay/files/`, the exact Orca error codes for refusal and Stop (from Orca's existing set), the title-mark styling, the container's display name, and test fixture layout.
 
@@ -199,4 +203,4 @@ Out of scope: grab and annotate into an agent prompt (BRW-06), markup on screens
 ---
 
 *Phase: 66-powerbrowser-web-tabs-as-orca-s-browser*
-*Context gathered: 2026-11-10 (auto mode)*
+*Context gathered: 2026-11-10 (auto mode); amended by owner ruling D-31 2026-11-10 (P66-34)*

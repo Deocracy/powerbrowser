@@ -1,5 +1,7 @@
 # Phase 63: Theia terminals and agent hooks for Orca - Research
 
+> **D-31 (2026-11-10):** the PTY bridge, `o<n>` tabs, key policy and remote row researched here are dropped; Orca terminals run on Orca's own engine and view (Phase 64). Still current: the agent-hook, EXT-02 wrapper and orcad-data-root findings (lane p63-03), and 67-RESEARCH A-11 for `writePrivateFile`. See 63-CONTEXT "Amendments after D-31".
+
 **Researched:** 2026-11-09
 **Domain:** A third-party Node daemon's (orcad's) PTY layer re-hosted in Eclipse Theia's backend through a node-pty-compatible facade; Theia terminal widgets and key policy; Orca's agent-hook plumbing for an out-of-PTY process (the Claude Code extension).
 **Confidence:** HIGH on every Orca and Theia fact below (read at the pin this session; the required-member count was parsed with a TypeScript parser). MEDIUM on the integrated behaviour (nothing was built or run, per instruction). Five picks are amended, and one (P63-11, TERM-03) needs an owner decision because the pinned orcad cannot serve what the pick assumes.

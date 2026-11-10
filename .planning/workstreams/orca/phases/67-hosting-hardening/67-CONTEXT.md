@@ -3,6 +3,7 @@
 **Gathered:** 2026-11-10
 **Status:** Ready for planning (after the research items in P67-10, P67-14 and P67-29: registry files, header record, pairing-loss induction)
 **Mode:** Smart discuss, auto mode (Chris 2026-11-09: "Claude takes the recommended answers, keeps going"). Every P67 decision is Claude's recommended pick; Chris may override any of them before the dependent work lands or in the end-of-milestone pass (59-CONTEXT D-18). This ruling replaces D-25's interactive discuss step for this phase.
+**Amended 2026-11-10 by owner ruling D-31** (Orca terminals on Orca's own engine and view, side by side with Theia terminals): see "Amendments after D-31" (P67-32..P67-35).
 
 <domain>
 ## Phase Boundary
@@ -201,6 +202,14 @@ Out of scope: packaging, the three-OS artifacts and Windows file ACLs (Phase 68)
 
   The expected conflicts are textual: the lanes' registry blocks. Only the coordinator edits `STATE.md`, `ROADMAP.md`, `REQUIREMENTS.md` tracking, `WINDOWS.md` and `inventory/brand-tokens.json`; nobody edits the ledger. Lanes stage their files and record their brand-scan report for the coordinator (new files naming Orca need rows, the 60-04 rule). Each lane runs in its own worktree. No human checks (D-18).
 
+### Amendments after D-31 (coordinator, 2026-11-10; owner ruling, not an auto-mode pick)
+Source: `DECISIONS.md` D-31, 63-CONTEXT P63-31..P63-40, 64-CONTEXT P64-30..P64-36. Picks above keep their text; these win over them.
+
+- **P67-32 (amends P67-01): Orca terminal tabs get the failure page like every hosted pane.** After D-31 an Orca terminal is a hosted `TerminalPane` in an `OrcaPaneWidget` (P64-30), not a Theia `o<n>` tab with a Theia-owned PTY, so P67-01's exception for local terminals is gone: when orcad dies, its port is taken or pairing is lost, a terminal tab shows the same PowerBrowser page in its pane root and recovers like the others. Its PTY lives in Orca's terminal daemon, which `OrcaService` stops with orcad (D-07).
+- **P67-33 (amends P67-09; 63-CONTEXT P63-36): `writePrivateFile` already has no umask window and re-applies the folder mode when Phase 67 starts.** Lane p63-06 lands 67-RESEARCH A-11's body (folder 0700 re-set on every call, exclusive empty `.tmp`, 0600 before content, overwrite write, move) and `verify-orca-bridge-dir.mjs` checks the call order statically. Phase 67 does not edit `writePrivateFile`; P67-09 keeps the offer file's own hardening (lstat, regular file, own uid, no group or other bits) and the hardened offer reader. 67-RESEARCH's citations of `ServerDestroyer/p63-05 PowerBrowserAPI.sys.mjs:11018-11027` refer to code that is never merged; read the v1.7 branch after the 63-04 merge instead.
+- **P67-34 (renames, P63-35):** every "`pty-bridge` folder" and "bridge folder" reference means lane p63-06's bridge folder (`<XDG_RUNTIME_DIR or HOME/.cache>/pb-orca-<12 hex>-bridge`, `POWERBROWSER_ORCA_BRIDGE_DIR`, `OrcaService.getState().bridgeDir`); `OrcaService` removes `orcad-data-root` on stop (lane p63-06) as the offer-file removal copies.
+- **P67-35 (amends P67-28):** the overlay keeps 1 landed seam (010 from Phase 62; Phase 63 lands none after D-31) and 2 planned (070 and 080, Phase 68): 3 of the 10-seam cap.
+
 ### Claude's Discretion
 - Exact sentence polish within the copywriting contract; the page's layout inside the widget.
 - File layout inside orca-panes, and the name of the repo-local profile folder.
@@ -303,4 +312,4 @@ Out of scope: packaging, the three-OS artifacts and Windows file ACLs (Phase 68)
 ---
 
 *Phase: 67-hosting-hardening*
-*Context gathered: 2026-11-10 (auto mode)*
+*Context gathered: 2026-11-10 (auto mode); amended by owner ruling D-31 2026-11-10 (P67-32..P67-35)*

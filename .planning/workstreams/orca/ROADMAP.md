@@ -2,11 +2,11 @@
 
 ## Overview
 
-Milestone v1.7 "Orca integration" (workstream `orca`) makes Orca's agent workflow run inside PowerBrowser as real PowerBrowser tabs, with PowerBrowser's own engine and chrome as the agents' browser. PowerBrowser builds Orca from source at a pinned tag under an additive overlay (PB-added files plus a capped set of one-to-few-line regenerated seam patches), runs its own headless orcad slot-less on Theia's Node, routes every Orca terminal to a Theia terminal, mounts each Orca pane as one Lumino tab in PowerBrowser's dock, replaces Orca's Chromium browser panes with PowerBrowser web tabs, and re-pins to the newest Orca tag weekly.
+Milestone v1.7 "Orca integration" (workstream `orca`) makes Orca's agent workflow run inside PowerBrowser as real PowerBrowser tabs, with PowerBrowser's own engine and chrome as the agents' browser. PowerBrowser builds Orca from source at a pinned tag under an additive overlay (PB-added files plus a capped set of one-to-few-line regenerated seam patches), runs its own headless orcad slot-less on Theia's Node, shows Orca's terminals on Orca's own engine and terminal view as PowerBrowser tabs beside Theia's own terminals (D-31), mounts each Orca pane as one Lumino tab in PowerBrowser's dock, replaces Orca's Chromium browser panes with PowerBrowser web tabs, and re-pins to the newest Orca tag weekly.
 
 Phase 59 is the carry-forward phase (Chris, 2026-11-07): every live item deferred from v1.5 and v1.6 is listed in `.planning/CARRY-FORWARD-v1.7.md` and runs first. The Orca work follows D-05. The source build and the slot-less start probe (60) and the three spikes (61) come first. The minimum hosting the remake builds on (62) comes next, then the tab remake (63-66). The remaining hosting basics (67) finish after the remake, and cross-OS artifacts and the re-pin job (68) close the milestone. Nothing is reported as done while Orca's client runs in a single tab.
 
-Owner decisions D-01..D-29 (`DECISIONS.md`) and the adopted adversarial review (`ADVERSARIAL-orca-ownership.md`) win over `research/SUMMARY.md`. Its proposed phases 59-66 assumed a release-binary fetch, a second Node runtime, the one-client-tab design and an orcad layout owner, all of which the owner decisions replaced. Phase numbering continues from v1.6 (workstream `deploy`), which ends at Phase 58.
+Owner decisions D-01..D-31 (`DECISIONS.md`) and the adopted adversarial review (`ADVERSARIAL-orca-ownership.md`) win over `research/SUMMARY.md`. Its proposed phases 59-66 assumed a release-binary fetch, a second Node runtime, the one-client-tab design and an orcad layout owner, all of which the owner decisions replaced. Phase numbering continues from v1.6 (workstream `deploy`), which ends at Phase 58.
 
 ## Milestones
 
@@ -17,7 +17,7 @@ Owner decisions D-01..D-29 (`DECISIONS.md`) and the adopted adversarial review (
 - CLAUDE.md hard rules: never fork or patch Theia core; never modify Gecko outside the patch stack, with every Firefox internal reached through `PowerBrowserAPI.sys.mjs` and catalogued in `INTERNAL-APIS.md`; keep the bridge landable (`TabUriRegistry` shape unchanged); repo path has no space; Theia is the default GUI and stock browser chrome stays reachable and unmodified.
 - Additive overlay (D-04, D-16, D-29): PB-added files first, then at most about ten declared one-to-few-line seam patches, regenerated, never text-edited. Whole-file replacement of an upstream Orca path is forbidden. Anything deeper needs an owner decision.
 - orcad's mobile-facing protocol (pairing relay, runtime RPC) is never modified (D-23).
-- One verification driver: every new check is one row in `scripts/verify-platform.sh`, never a sibling driver. Rows derive their expectation from the tree (or the pinned Orca source) and compare as sets. Each carries a `--self-test` that plants each fault and must go red naming it. No check asserts the absence of a log line or marker unless the self-test first proves the detector sees it on the stock path (RUN-04, RUN-07 and the terminal-daemon check are built this way).
+- One verification driver: every new check is one row in `scripts/verify-platform.sh`, never a sibling driver. Rows derive their expectation from the tree (or the pinned Orca source) and compare as sets. Each carries a `--self-test` that plants each fault and must go red naming it. No check asserts the absence of a log line or marker unless the self-test first proves the detector sees it on the stock path (RUN-04 and RUN-07 are built this way).
 - The brand scan is a permanent gate. Stage new files before trusting a green scan; the "Orca" token is classified only in `inventory/brand-tokens.json`.
 - User-facing copy names "PowerBrowser", states the problem plainly and ends with a real on-screen next step. Every omitted identifier appears as a diagnostics row.
 - No `schedule:` key in the product repo (D-77, v1.6): the weekly re-pin is dispatched by the release-train clock.
@@ -33,8 +33,8 @@ Owner decisions D-01..D-29 (`DECISIONS.md`) and the adopted adversarial review (
 - [ ] **Phase 60: Orca from source on Theia's Node** - Pinned-tag source build in a Nix dev shell, slot-less orcad start probe, brand and licence classification, Claude Code extension check
 - [x] **Phase 61: Spikes for pane hosting, browser parity and live sharing** - Measured answers to TAB-03, BRW-01 and EXT-03 before the remake is built
 - [x] **Phase 62: Overlay gate and PowerBrowser-run orcad** - Seam check for the additive overlay; OrcaService spawns, supervises and stops orcad
-- [ ] **Phase 63: Theia terminals and agent hooks for Orca** - Theia-backed IPtyProvider, agent sessions and remote hosts in Theia terminal tabs, key policy, extension sessions visible in Orca
-- [ ] **Phase 64: Orca panes as PowerBrowser tabs** - Orca mode, `pb-orca:` URIs, one Orca pane equals one Lumino tab, Orca-only views as their own tabs
+- [ ] **Phase 63: Agent hooks on Orca's terminal engine** - Orca terminals on Orca's own engine beside Theia terminals (D-31), agent status hooks, extension sessions visible in Orca, agents end on quit; remote terminals (TERM-03) deferred to v2
+- [ ] **Phase 64: Orca panes as PowerBrowser tabs** - Orca mode, `pb-orca:` URIs, one Orca pane equals one Lumino tab, Orca-only views as their own tabs, Orca terminals as hosted `TerminalPane` tabs with the key policy
 - [ ] **Phase 65: Orca workspace in Theia** - Theia editor and workspace folders for worktrees, Orca side panel, Orca's Add-project flow, Setups restore
 - [ ] **Phase 66: PowerBrowser web tabs as Orca's browser** - Browser pages as PB web tabs, chrome-side agent bridge, agent-control mark, Orca browser tools in PB chrome
 - [ ] **Phase 67: Hosting hardening** - Failure page, pairing-offer containment, sidecar Origin check, credential-storage check, landing logo
@@ -141,45 +141,49 @@ Plans:
 **Wave 2** *(blocked on Wave 1 completion)*
 - [x] 62-03-PLAN.md — coordinator: merge 62-01 then 62-02, rebuild Orca and PowerBrowser, live proofs of criteria 1-5, brand rows re-measured, tracking
 
-### Phase 63: Theia terminals and agent hooks for Orca
+### Phase 63: Agent hooks on Orca's terminal engine
 
-**Goal**: Every terminal Orca uses is a Theia terminal tab, and agents started by Orca or by the Claude Code extension report live status in Orca.
-**Depends on**: Phase 62 (supervised orcad, and the overlay gate in place before the first seam lands); Phase 60 (EXT-01 outcome); Phase 61 (live-sharing record)
-**Requirements**: TERM-01, TERM-02, TERM-03, TERM-04, EXT-02
-Route chosen by Phase 61: agent sessions are Theia terminals running the plain `claude` CLI, reopened on demand with `claude --resume <session id>` (the P61-07 fallback), with the session id taken from Claude's side (`claude agents --json` or the session file name; `orca terminal list --json` does not expose it); no live share inside the extension and no `--bg`/`claude attach` launch is built, as 63-CONTEXT P63-16 adopted (spike 006, verdict YELLOW)
+**Goal**: Orca's terminals run on Orca's own engine beside Theia's own terminals, agents started by Orca or by the Claude Code extension report live status in Orca, and agents and Orca's terminal daemon end when PowerBrowser quits.
+**Depends on**: Phase 62 (supervised orcad and its stop path); Phase 60 (EXT-01 outcome); Phase 61 (live-sharing record)
+**Requirements**: TERM-02, EXT-02
+**Rescoped by D-31 (Chris, 2026-11-10)**: Orca terminals use Orca's own engine (orcad's stock PTY provider and terminal daemon) and Orca's own terminal view, side by side with Theia terminals. The Phase 63 bridge that ran Orca on Theia's terminal engine (seams 020 and 030, the external PTY bridge, `@powerbrowser/orca-terminals`, `o<n>` tabs) is dropped. The display of Orca terminals (TERM-01) and their key policy (TERM-04) move to Phase 64. TERM-03 (SSH and paired-server terminals) is deferred to v2: headless orcad at 1.4.248 has no SSH stack and no paired-server relay (Electron main only, 64-RESEARCH A1).
+Route chosen by Phase 61: agent sessions run the plain `claude` CLI in a terminal (an Orca terminal after D-31), reopened on demand with `claude --resume <session id>` (the P61-07 fallback), with the session id taken from Claude's side (`claude agents --json` or the session file name; `orca terminal list --json` does not expose it); no live share inside the extension and no `--bg`/`claude attach` launch is built, as 63-CONTEXT P63-16 adopted (spike 006, verdict YELLOW)
 **Success Criteria** (what must be TRUE):
-  1. A terminal Orca opens on the local host appears as a Theia terminal tab, served by PB's Theia-backed `IPtyProvider`, and orcad's node-pty startup probe passes so orcad does not run degraded.
-     - A check derives the 21 required members from `pty-provider-contract.ts` at the pin and compares them to PB's provider as a set, so a re-pin that adds a required member goes red naming it.
-     - The process tree under orcad, derived at check time, contains no Orca terminal daemon. The self-test runs with PB's provider unregistered and proves the check sees the daemon.
-  2. An agent Orca starts (Claude Code at least) runs in a Theia terminal tab with Orca's `ORCA_*` hook environment. Orca's status for it moves through working, waiting and done as the agent runs.
-  3. A session Orca opens on an SSH host and one on a paired-server host each display in a Theia terminal tab and accept input. SSH to a Linux host is a live check (D-24).
-  4. In an Orca terminal tab, Ctrl+W, Ctrl+T, Ctrl+Tab and Ctrl+PageUp/PageDown reach the terminal program. In any other tab the same keys run PowerBrowser's tab commands.
-  5. A Claude Code extension session on an Orca worktree appears in Orca with live hook status, through a pane PB registers for it and the `ORCA_AGENT_HOOK_*` variables PB passes.
+  1. PowerBrowser's orcad runs Orca's own terminal engine: the overlay carries only seam 010 and no terminal seam (`orca-overlay`, `orca-build-shape`), orcad reports its terminal daemon live, and a terminal created through Orca's CLI runs under that daemon. Theia's own terminals are unchanged.
+  2. An agent Orca starts (Claude Code at least) runs in an Orca terminal with Orca's `ORCA_*` hook environment, whose names a check derives from the pinned source and reads from the PTY's environment, and Orca's status for it moves through working, waiting and done as the agent runs.
+  3. A Claude Code extension session on an Orca worktree appears in Orca with live hook status, through a pane PB's wrapper creates with `terminal.create` and the `ORCA_AGENT_HOOK_*` variables it passes. The wrapper finds orcad's data root through `orcad-data-root`, a file that is 0600 from creation in PowerBrowser's 0700 bridge folder. The extension half runs with EXT-01 in the end-of-milestone pass.
+  4. Quitting PowerBrowser ends every agent, orcad and Orca's terminal daemon: the checks record those processes before the quit and find none of them after (D-07; Phase 62's stop path).
 
-**Plans**: 5 plans
+**Plans**: 3 plans (3 more superseded by D-31)
 
 Plans:
 **Wave 1**
-- [ ] 63-01-PLAN.md — lane p63-01: seams S2/S3 with the external PTY bridge client (generic upstream names, P63-29), contract fixture host, orca-pty-contract and orca-pty-provider-live stage 1 (TERM-01, TERM-02)
-- [ ] 63-02-PLAN.md — lane p63-02: @powerbrowser/orca-terminals (bridge core, platform-neutral listen path P63-30, OrcaTerminalProcess, o<n> tabs, key passthrough), tab-uris identity, orca-pty-bridge / orca-pty-paths / orca-terminal-keys (TERM-01, TERM-04)
-- [ ] 63-05-PLAN.md — lane p63-05 (chrome half split from 63-02): OrcaEnv bridge folder, TheiaService, OrcaService, PowerBrowserProcesses.writePrivateFile and platform(), the Phase 62 checks kept green, orca-bridge-dir, orca-terminal-keys-live with runTabStage (TERM-01, TERM-04, EXT-02)
-- [ ] 63-03-PLAN.md — lane p63-03: @powerbrowser/orca-agents (claude wrapper, launcher, preference default), orca-agent-hooks and orca-agent-status-live (TERM-02, EXT-02)
+- [ ] 63-06-PLAN.md — lane p63-06: the bridge folder rebuilt from p63-05's kept parts (OrcaEnv bridgeDirFor, writePrivateFile with no umask window, platform(), orcad-data-root, TheiaService's POWERBROWSER_ORCA_BRIDGE_DIR), orca-bridge-dir, orca-service clauses (EXT-02)
+- [ ] 63-03-PLAN.md — lane p63-03 (amended by D-31): @powerbrowser/orca-agents (claude wrapper, launcher, preference default), orca-agent-hooks and orca-agent-status-live on Orca's engine with a quit stage (TERM-02, EXT-02)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 63-04-PLAN.md — coordinator: merge 63-01, 63-02, 63-05, 63-03 in order, wire orca-agents, rebuild Theia, Orca and PowerBrowser, live proofs, orca-service-live P63-09, orca-remote-regression (TERM-03, P63-24), brand rows, 22-member text, tracking (TERM-02 complete only on a live PASS)
+- [ ] 63-04-PLAN.md — coordinator (replaced by D-31): merge p63-06 then p63-03, wire orca-agents, rebuild Theia, Orca and PowerBrowser, hook and real-agent live proofs, orca-service-live (D-07), brand rows, superseded stubs, tracking (TERM-02 complete only on a live PASS)
+
+**Superseded by D-31** *(not executed, not merged; lane branches kept as the record)*
+- 63-01-PLAN.md — lane p63-01: seams 020/030 and the external PTY bridge client
+- 63-02-PLAN.md — lane p63-02: @powerbrowser/orca-terminals, o<n> tabs, key passthrough
+- 63-05-PLAN.md — lane p63-05: the chrome half of the PTY bridge (its kept parts are 63-06)
 
 ### Phase 64: Orca panes as PowerBrowser tabs
 
 **Goal**: The Orca mode shows Orca's work as PowerBrowser tabs. Each Orca pane is one Lumino tab that moves between modes and can be organised like any Theia or browser tab.
-**Depends on**: Phase 61 (pane-hosting route); Phase 63 (terminal panes are already Theia terminals)
-**Requirements**: TAB-01, TAB-02, TAB-04, TAB-06
+**Depends on**: Phase 61 (pane-hosting route); Phase 63 (the bridge folder, `writePrivateFile` and orca-agents from the 63-04 merge)
+**Requirements**: TAB-01, TAB-02, TAB-04, TAB-06, TERM-01, TERM-04
+**Terminals after D-31 (Chris, 2026-11-10)**: every Orca terminal is a hosted pane mounting Orca's own `TerminalPane` (xterm.js) on Orca's engine, the route research already mounted for a local terminal; terminals are created only through orcad's `terminal.create`, never the client's `createNewTerminalTab` (64-RESEARCH A4). Theia terminals stay plain Theia terminals beside them. The remote terminal route stays dropped (TERM-03 is v2). Picks: 64-CONTEXT P64-30..P64-36.
 Route chosen by Phase 61: Route A, Orca pane components in a Theia ReactWidget on Theia's own React with Orca's stylesheet scoped to the pane root; observation channel useAppStore.subscribe in the Theia document (read-only, close by the store's closeTerminalTab); seam patches 0 of about ten; fallback Route B' (one PB web tab per pane page), which is also the route for browser panes. (spike 004, verdict YELLOW)
 **Success Criteria** (what must be TRUE):
   1. An "Orca" mode appears beside Coding in `SHIPPED_MODES` and the chrome bar, and selecting it shows Orca's work.
   2. Each Orca pane opened by the user or an agent appears as its own tab in PowerBrowser's dock and appears as an Organising row. It can be split, and dragged to any other mode and back. Orca's in-tab splits and tab groups appear as Lumino splits; Orca's own tab bar and tab groups are not rendered.
   3. Chat, and every other Orca-only view inventoried by the Phase 61 spike, opens as its own PowerBrowser tab.
-  4. A check derives Orca's tab content types from the pinned source and compares them as a set to PB's pane-to-tab mapping (Theia terminal, Theia editor, PB web tab or hosted Orca pane), so a content type added upstream goes red naming it.
+  4. A check derives Orca's tab content types from the pinned source and compares them as a set to PB's pane-to-tab mapping (hosted Orca pane, Theia editor or PB web tab), so a content type added upstream goes red naming it.
   5. `pb-orca:` URIs are documented in `docs/URI-SCHEMES.md` and round-trip in `verify-uri-roundtrip.mjs`, and `verify-registry-shape.mjs` passes with `TabUriRegistry`'s exported shape unchanged.
+  6. Every Orca terminal, whether opened by the user, an agent, Orca's CLI or the EXT-02 wrapper, is a PowerBrowser tab showing Orca's own terminal view (`TerminalPane`, xterm.js) on Orca's engine; it accepts input and shows output, and an Orca in-tab split appears as Lumino splits. Theia's own terminals stay plain Theia terminals beside them (TERM-01).
+  7. In an Orca terminal tab, Ctrl+W, Ctrl+T, Ctrl+Tab and Ctrl+PageUp/PageDown reach the terminal program; in a Theia terminal, a web tab and every other tab the same keys run PowerBrowser's tab commands, each effect equal to a control measured in the same session. A check derives the key set from the chrome's reserved page keys and compares it with the passthrough rows as a set (TERM-04).
 
 **Plans**: TBD
 **UI hint**: yes
@@ -235,7 +239,7 @@ The Phase 61 parity result may split or descope this phase. Any such change is a
 ### Phase 68: Three-OS artifacts, weekly re-pin and upstream seams
 
 **Goal**: The Orca integration ships in Linux, macOS and Windows artifacts and passes live checks on Linux. An automated weekly re-pin keeps it current with Orca releases, and the stock mobile app still pairs.
-**Depends on**: Phases 63, 64 and 66 (each generic seam works before it is offered upstream); all earlier phases for the artifacts
+**Depends on**: Phases 64 and 66 (each generic seam works before it is offered upstream; Phase 63 lands no seam after D-31); all earlier phases for the artifacts
 **Requirements**: OVL-02, OVL-03, OVL-06, PLAT-01, PLAT-02, BEXT-01, BEXT-02
 **Success Criteria** (what must be TRUE):
   1. The release-train clock dispatches the re-pin job weekly (no `schedule:` key, D-77). The job:
@@ -245,7 +249,7 @@ The Phase 61 parity result may split or descope this phase. Any such change is a
 
      A planted conflict and a planted type error each stop it.
   2. A check confirms the overlay touches none of orcad's mobile-facing protocol files (pairing relay, runtime RPC). The stock Orca mobile app pairs with PB's orcad, and the report states the pin lag against the current stock app.
-  3. The terminal provider, browser provider and extra web entry seams each have a pull request open against Orca upstream, linked from the seam table. PB's build does not depend on their acceptance.
+  3. The browser provider and extra web entry seams each have a pull request open against Orca upstream, linked from the seam table (the terminal provider seam was dropped by D-31). PB's build does not depend on their acceptance.
   4. Linux, macOS and Windows artifacts contain orcad and the overlaid client, with the node-pty prebuild built per target on that target's own runner. The Flatpak manifest grants `--filesystem=home`. Each of these checks is one `verify-platform.sh` row.
   5. The live checks pass on Linux. macOS and Windows smoke results are recorded when a host is available (D-24).
 
@@ -286,7 +290,7 @@ Phases execute in numeric order: 59 → 60 → 61 → 62 → 63 → 64 → 65 �
 | 60. Orca from source on Theia's Node | 4/5 | In Progress | - |
 | 61. Spikes for pane hosting, browser parity and live sharing | 4/4 | Complete (human items deferred) | 2026-11-10 |
 | 62. Overlay gate and PowerBrowser-run orcad | 3/3 | Complete | 2026-11-09 |
-| 63. Theia terminals and agent hooks for Orca | 0/5 | Planned | - |
+| 63. Agent hooks on Orca's terminal engine | 0/3 | Planned (rescoped by D-31; 3 plans superseded) | - |
 | 64. Orca panes as PowerBrowser tabs | 0/TBD | Not started | - |
 | 65. Orca workspace in Theia | 0/TBD | Not started | - |
 | 66. PowerBrowser web tabs as Orca's browser | 0/TBD | Not started | - |

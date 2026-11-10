@@ -4,7 +4,7 @@
 **Core Value:** Theia is the default GUI; Orca's agent workflow runs inside PowerBrowser as real
 PowerBrowser tabs, with PowerBrowser's own engine and chrome as the agents' browser.
 
-Owner decisions are in `DECISIONS.md` (D-01..D-25) and win over `research/`. Research feature ids
+Owner decisions are in `DECISIONS.md` (D-01..D-31) and win over `research/`. Research feature ids
 (T-n, D-n in `research/FEATURES.md`) are cited where a requirement comes from them.
 
 ## v1 Requirements
@@ -54,23 +54,27 @@ Owner decisions are in `DECISIONS.md` (D-01..D-25) and win over `research/`. Res
   row in the licence allow-list; the brand scan stays green over the overlay.
 - [x] **OVL-05**: The PowerBrowser pane entry and the PTY and browser providers are new files
   only, compiled by Orca's own `build:web` and `build:orcad`. (D-04)
-- [ ] **OVL-06**: The terminal provider, browser provider and extra web entry seams are offered
-  to Orca upstream as pull requests once each works in PowerBrowser. (D-27)
+- [ ] **OVL-06**: The browser provider and extra web entry seams are offered to Orca upstream as
+  pull requests once each works in PowerBrowser; the terminal provider seam was dropped with the
+  Phase 63 bridge (D-31). (D-27)
 
 ### Terminals (TERM)
 
-- [ ] **TERM-01**: All terminals are Theia terminals. orcad gets a Theia-backed `IPtyProvider`
-  for the local execution host implementing all 21 required members (spawn, write, resize, kill,
-  data, serialize/revive, buffer snapshots, foreground-process queries, listProcesses and the
-  rest) and satisfying orcad's node-pty startup probe; Orca's terminal daemon is not used.
-  (D-01, D-28)
-- [ ] **TERM-02**: Agent sessions Orca starts run in Theia terminal tabs with Orca's
-  `ORCA_*` hook environment passed through, so agent status hooks keep working. (D-06, D-13)
-- [ ] **TERM-03**: Orca's SSH and paired-server execution hosts keep working through orcad and
-  display in Theia terminal tabs. (D-20)
+Orca terminals and Theia terminals are two kinds, side by side (D-31, Chris 2026-11-10).
+
+- [ ] **TERM-01**: Every Orca terminal runs on Orca's own engine (orcad's stock local PTY
+  provider and its terminal daemon, with no PowerBrowser PTY provider and no terminal seam patch)
+  and is shown as a PowerBrowser tab with Orca's own terminal view (`TerminalPane`, xterm.js)
+  hosted through Route A; it accepts input and shows output. Theia terminals stay plain Theia
+  terminals beside them; neither replaces the other. (D-31)
+- [ ] **TERM-02**: Agent sessions Orca starts run in Orca terminals with Orca's `ORCA_*` hook
+  environment, so agent status hooks report working, waiting and done, and every agent and Orca's
+  terminal daemon end when PowerBrowser quits. (D-06, D-07, D-13, D-31)
 - [ ] **TERM-04**: Inside an Orca terminal tab, Ctrl+W, Ctrl+T, Ctrl+Tab and
-  Ctrl+PageUp/PageDown go to the terminal; PowerBrowser's tab shortcuts work everywhere else.
-  (D-09)
+  Ctrl+PageUp/PageDown go to the terminal; PowerBrowser's tab shortcuts work everywhere else,
+  including in Theia terminals. (D-09, D-31)
+
+TERM-03 (remote terminals) moved to v2; see "Terminals (TERM)" under v2 Requirements.
 
 ### Tabs and modes (TAB)
 
@@ -150,6 +154,13 @@ switch off or uninstall (Chris 2026-11-10, D-30).
 
 Deferred; tracked, not in this roadmap.
 
+### Terminals (TERM) — deferred to a future Orca re-pin (D-31)
+
+- **TERM-03**: Orca's SSH and paired-server terminals open as Orca terminal tabs in
+  PowerBrowser. Deferred: headless orcad at the pin (1.4.248) has no SSH stack and no
+  paired-server relay; only Electron main has them (64-RESEARCH A1, 63-RESEARCH finding 1). It is
+  re-examined at the first re-pin whose orcad serves remote terminals. (D-20, D-31)
+
 ### Mobile (MOB) — next milestone (D-21, D-22, D-23)
 
 - **MOB-01**: Orca mobile is forked under the overlay with PowerBrowser-specific views.
@@ -173,7 +184,9 @@ Deferred; tracked, not in this roadmap.
 |---------|--------|
 | Patching Theia core | Hard rule 1; PowerBrowser code is `@powerbrowser/*` extensions |
 | Custom browser chrome in the stock window | Hard rule 5; agent mark lives in the Theia chrome bar only |
-| Orca's terminal daemon and agents surviving quit | D-07 revised: Theia owns the PTYs; the daemon's only purpose was survival |
+| Agents surviving quit | D-07: `OrcaService` ends orcad, its terminal daemon and the daemon's descendants on quit (D-31 keeps the daemon as Orca's terminal engine, not for survival) |
+| A PowerBrowser PTY provider for orcad (Orca terminals on Theia's engine) | D-31: Orca terminals use Orca's own engine and view; Theia terminals stay Theia's |
+| Remote (SSH, paired-server) Orca terminals | D-31: headless orcad at the pin has no SSH stack or relay; TERM-03 is v2 |
 | A second Node runtime for orcad | D-14: slot-less orcad needs only Node 24 |
 | CDP emulation in Gecko | CDP is gone from Gecko; the bridge is native |
 | Stock remote screencast browser pane | Replaced by PowerBrowser web tabs |
@@ -207,10 +220,9 @@ Filled by the roadmap.
 | OVL-04 | Phase 60 | Complete |
 | OVL-05 | Phase 62 | Complete |
 | OVL-06 | Phase 68 | Pending |
-| TERM-01 | Phase 63 | Pending |
+| TERM-01 | Phase 64 | Pending |
 | TERM-02 | Phase 63 | Pending |
-| TERM-03 | Phase 63 | Pending |
-| TERM-04 | Phase 63 | Pending |
+| TERM-04 | Phase 64 | Pending |
 | TAB-01 | Phase 64 | Pending |
 | TAB-02 | Phase 64 | Pending |
 | TAB-03 | Phase 61 | Complete |
@@ -235,10 +247,10 @@ Filled by the roadmap.
 | BEXT-02 | Phase 68 | Pending |
 
 **Coverage:**
-- v1 requirements: 41 total
-- Mapped to phases: 41
+- v1 requirements: 40 total (TERM-03 moved to v2 by D-31)
+- Mapped to phases: 40
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-11-04*
-*Last updated: 2026-11-04 after owner decisions D-01..D-29, the adversarial ownership review and roadmap creation (phases 59-68); BEXT-01/02 added 2026-11-10 (Chris)*
+*Last updated: 2026-11-04 after owner decisions D-01..D-29, the adversarial ownership review and roadmap creation (phases 59-68); BEXT-01/02 added 2026-11-10 (Chris); TERM-01..04 rewritten and re-mapped, TERM-03 moved to v2, OVL-06 narrowed 2026-11-10 (D-31)*

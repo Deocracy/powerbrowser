@@ -150,6 +150,8 @@ Also found: in a paired web client the orcad's worktrees are runtime-owned, so P
 
 Each amendment names the pick, what changes, and the evidence. Picks not listed stand as written.
 
+**D-31 amendment (coordinator, 2026-11-10; owner ruling).** Q5 and CA-08 (re-attaching a restored Phase 63 `o<n>` widget, and the opener and allocator edits in `orca-terminals`) are moot: Orca terminals are hosted `TerminalPane` tabs (64-CONTEXT P64-30) and restore through the `pb-orca:` name map like every hosted pane. Every `pty-bridge` reference means lane p63-06's bridge folder. Picks: 65-CONTEXT P65-29..P65-32.
+
 | # | Pick | Amendment | Evidence |
 |---|------|-----------|----------|
 | CA-01 | P65-01 `conflict-review` row | A conflict-review tab's `filePath` names the worktree root, not a file. The merge target is the file of `conflictReview.selectedFileId` if set, else `conflictReview.entries[0].path`, joined to the worktree path. | `open-file.ts:33` "conflict-review paths name roots, not files"; `ConflictReviewState` at `editor-tab-view-types.ts:63-68` `{ source, snapshotTimestamp, entries: ConflictReviewEntry[], selectedFileId?: string }` [VERIFIED: read] |

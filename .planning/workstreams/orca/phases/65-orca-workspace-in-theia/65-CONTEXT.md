@@ -3,6 +3,7 @@
 **Gathered:** 2026-11-10
 **Status:** Ready for planning (after the research gate in P65-04)
 **Mode:** Smart discuss, auto mode (Chris 2026-11-09: "Claude takes the recommended answers, keeps going"). Every P65 decision is Claude's recommended pick; Chris may override any of them before the dependent work lands or in the end-of-milestone pass (59-CONTEXT D-18). This ruling replaces D-25's interactive discuss step for this phase.
+**Amended 2026-11-10 by owner ruling D-31** (Orca terminals on Orca's own engine and view, side by side with Theia terminals): see "Amendments after D-31" (P65-29..P65-32); every `o<n>`, `orca-terminals` and `pty-bridge` reference below is superseded there.
 
 <domain>
 ## Phase Boundary
@@ -93,6 +94,14 @@ Out of scope: browser panes as PB web tabs, the agent bridge, and Orca's browser
 
   Only the coordinator edits `STATE.md`, `ROADMAP.md`, `REQUIREMENTS.md` tracking, `WINDOWS.md` and `inventory/brand-tokens.json`; nobody edits the ledger. Lanes stage their files and record their brand-scan report for the coordinator (the "Orca" token in new paths and strings is classified only in `brand-tokens.json`). Lanes that build Theia use the audited install from `docs/BUILD.md` (59-CONTEXT D-07). Each lane runs in its own worktree. No human checks (D-18).
 
+### Amendments after D-31 (coordinator, 2026-11-10; owner ruling, not an auto-mode pick)
+Source: `DECISIONS.md` D-31, 63-CONTEXT P63-31..P63-40, 64-CONTEXT P64-30..P64-36. Picks above keep their text; these win over them.
+
+- **P65-29 (supersedes P65-20 and research Q5/CA-08): a restored Orca terminal is a hosted `pb-orca:term<n>` pane, restored like every other hosted pane.** There is no `o<n>` widget, no Phase 63 opener or allocator to change, and no pane-key → `o<n>` map. The `pb-orca:` name map of P65-18 carries terminal names with the other kinds. After a relaunch the agents and PTYs have ended (D-07: `OrcaService` stops orcad, its terminal daemon and the daemon's descendants), so the restored widget mounts `TerminalPane` for Orca's persisted leaf and its transport creates a fresh PTY with `terminal.create` carrying `tabId` and `leafId` (64-RESEARCH A5, P64-31); Orca shows its own restoring state meanwhile. The PTY shows a fresh shell, not the old agent; Orca's own resume offer covers agents (P65-22). PB issues no respawn call of its own.
+- **P65-30 (amends P65-12 and P65-13): Orca's terminal view is mounted again, so Orca's terminal behaviour applies to Orca terminals.** In the Agents view, a terminal target's identity comes from the hosted `TerminalPane`'s tab and leaf through Orca's `useTerminalCrewIdentity`, and `canMention` follows Orca's own rule (`TerminalCrewPortals.tsx:54-80` writes through `TerminalPane`'s transport, which is now mounted). Orca's terminal appearance settings apply to Orca terminals; they do not apply to Theia's own terminals, which stay Theia's (D-31). The "terminal appearance" item leaves the known Settings divergences.
+- **P65-31 (amends P65-25 and the `orca-relaunch-restore-live` row): seams and the relaunch check.** The overlay holds one landed seam (010) and two planned in Phase 68 (070, 080): 3 of 10. The relaunch row opens "an Orca terminal split into two hosted terminal tabs" and requires "each restored terminal tab echoes typed input on a new PTY under its old `pb-orca:` name"; nothing in it reads `o<n>`.
+- **P65-32 (amends the Phase Boundary and lane p65-04): no `orca-terminals` edits.** Phase 65 builds on Phase 64's hosted terminal tabs; the offer file lives in lane p63-06's bridge folder (`POWERBROWSER_ORCA_BRIDGE_DIR`, P63-35). Lane p65-04 drops "the pane-key → `o<n>` map and its hand-off in `theia/extensions/orca-terminals` (frontend and bridge allocator)"; its restore files under `theia/extensions/orca-panes/src/browser/restore/**` cover terminals.
+
 ### Claude's Discretion
 - File layout inside `orca-workspace` and the side-panel and restore directories; the backend service name for `git show`; the fixed workspace file name in P65-06; the storage key names of P65-05, P65-18 and P65-20; the waiting widget's bound before it disposes; the tombstone pruning schedule; view ids inside the containers; the exact name words for the page tabs.
 
@@ -152,7 +161,7 @@ Out of scope: browser panes as PB web tabs, the agent bridge, and Orca's browser
 
 - Remote-host worktrees as workspace folders and their files in Theia's editor (needs a remote file system provider; P63-24 found no remote stack in the pinned orcad).
 - Orca editor features with no Theia equivalent: inline diff comments and "send notes to agent", markdown rich mode and preview, CSV preview, a true multi-file combined diff (Theia 1.76 has no multi-diff editor).
-- Known Settings divergences (P65-13): terminal appearance settings do not apply to Theia terminals; editor settings do not apply to Theia's editor; the telemetry toggle has no effect while `ORCA_TELEMETRY_DISABLED` is set.
+- Known Settings divergences (P65-13; terminal item removed by P65-30 after D-31): editor settings do not apply to Theia's editor; the telemetry toggle has no effect while `ORCA_TELEMETRY_DISABLED` is set.
 - Orca's resume offer if research shows it needs Orca's app shell (P65-22).
 - Phase 66 may add Orca browser tools as views in the containers created here (BRW-05).
 
@@ -184,4 +193,4 @@ Out of scope: browser panes as PB web tabs, the agent bridge, and Orca's browser
 ---
 
 *Phase: 65-orca-workspace-in-theia*
-*Context gathered: 2026-11-10 (auto mode)*
+*Context gathered: 2026-11-10 (auto mode); amended by owner ruling D-31 2026-11-10 (P65-29..P65-32)*

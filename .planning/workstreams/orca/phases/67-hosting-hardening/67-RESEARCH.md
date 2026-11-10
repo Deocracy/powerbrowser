@@ -299,6 +299,9 @@ export function originVerdict(origin: string | undefined, fetchSite: string | un
 In `gate()` and `allowWsUpgrade()`, call it with `req.headers.origin` and `req.headers['sec-fetch-site']`. A string array cannot occur for either header in Node. Any non-`allow` verdict: `res.sendStatus(403)` with no header set, or `return false`. Header values from the record: `Origin` `http://127.0.0.1:41673` (own) and `http://127.0.0.1:42727` (foreign); `Sec-Fetch-Site` values `none`, `same-origin`, `same-site` and `cross-site`.
 
 ### `writePrivateFile` without the umask window (chrome)
+
+*D-31 (2026-11-10): lane p63-06 lands this body in Phase 63 (63-CONTEXT P63-36, 67-CONTEXT P67-33); Phase 67 does not edit the method.*
+
 ```js
 // Replaces the body after the name check, ServerDestroyer/p63-05 PowerBrowserAPI.sys.mjs:11022-11026.
 await IOUtils.makeDirectory(dir, { createAncestors: true, ignoreExisting: true, permissions: 0o700 });

@@ -1,5 +1,7 @@
 # Phase 63: Theia terminals and agent hooks for Orca - Pattern Map
 
+> **D-31 (2026-11-10):** the PTY bridge, `o<n>` tabs, key policy and remote row researched here are dropped; Orca terminals run on Orca's own engine and view (Phase 64). Still current: the agent-hook, EXT-02 wrapper and orcad-data-root findings (lane p63-03), and 67-RESEARCH A-11 for `writePrivateFile`. See 63-CONTEXT "Amendments after D-31".
+
 **Mapped:** 2026-11-09
 **Files analyzed:** 27 new or modified (file list from 63-RESEARCH "Recommended file layout", with Amendments A1-A9 applied)
 **Analogs found:** 24 / 27 (3 partial or none: the node-pty facade, the EXT-02 wrapper, the TERM-04 key-policy frontend)
