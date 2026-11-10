@@ -133,8 +133,10 @@ export const OrcaService = {
     }
 
     // The same Node rule as the Theia sidecar, on the same pref, so the two cannot diverge (D-14).
+    // Linux and macOS stage <appDir>/node/bin/node; Windows stages <appDir>/node/node.exe (package-windows.sh).
     const appDir = PowerBrowserAPI.getAppDir();
-    const stagedNode = appDir ? `${appDir}/node/bin/node` : "";
+    let stagedNode = appDir ? `${appDir}/node/bin/node` : "";
+    if (stagedNode && !(await PowerBrowserAPI.pathExists(stagedNode))) stagedNode = `${appDir}/node/node.exe`;
     const configured = PowerBrowserAPI.getStringPref("powerbrowser.sidecar.nodePath", "");
     const useStagedNode =
       !PowerBrowserAPI.prefHasUserValue("powerbrowser.sidecar.nodePath") && stagedNode && (await PowerBrowserAPI.pathExists(stagedNode));
