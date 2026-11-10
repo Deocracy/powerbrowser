@@ -3900,6 +3900,11 @@ run_own_checks() {
     # over fixtures, 25 cases. Both hermetic: no orcad, no browser, no network.
     "orca-hidden-electron-self-test|node $REPO_ROOT/scripts/verify-orca-hidden-electron.mjs --self-test"
     "orca-service-live-self-test|node $REPO_ROOT/scripts/verify-orca-service-live.mjs --self-test"
+    # NEW (68-09, BEXT-01, P68-38): the pre-installed Claude agent SDK extension. Manifest, lock (sha512 equal to Orca's
+    # pnpm-lock.yaml), quoted licence and README copy; the seed's behaviour table; a self-test planting seven faults.
+    "bundled-extensions|node $REPO_ROOT/scripts/verify-bundled-extensions.mjs"
+    "bundled-extensions-seed|node $REPO_ROOT/scripts/verify-bundled-extensions.mjs --seed"
+    "bundled-extensions-self-test|node $REPO_ROOT/scripts/verify-bundled-extensions.mjs --self-test"
     # NEW (63-06, EXT-02, P63-26/P63-35/P63-36): orca-bridge-dir, the chrome half of the bridge folder for linux,
     # darwin and win32 (OrcaEnv's nodePlatform, bridgeDirFor and bridgeFileFor); the orcad-data-root literal joined
     # across OrcaEnv, orca-agents' protocol file and its wrapper, a named SKIP of that join alone while lane p63-03
@@ -6512,6 +6517,9 @@ run_own_checks() {
       # Each prints one named SKIP line when no built orca/ or no built PowerBrowser exists.
       "orca-hidden-electron|node $REPO_ROOT/scripts/verify-orca-hidden-electron.mjs"
       "orca-service-live|node $REPO_ROOT/scripts/verify-orca-service-live.mjs"
+      # NEW (68-09, BEXT-01, P68-38): bundled-extensions-live. The built backend's list-extensions on a fresh config dir
+      # lists the extension as a user plugin, not a built-in; removing its directory sticks across a restart. No browser.
+      "bundled-extensions-live|node $REPO_ROOT/scripts/verify-bundled-extensions.mjs --live"
       # NEW (63-03, TERM-02/EXT-02, P63-15/P63-26): orca-agent-hooks. One built orcad with a scratch HOME and data
       # root (the user's ~/.orca and ~/.claude are never touched). Orca's own managed Claude hook script runs on
       # synthetic events derived from the pinned source; the wrapper is launched exactly as the Claude Code
