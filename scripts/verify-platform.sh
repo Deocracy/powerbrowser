@@ -3929,6 +3929,17 @@ run_own_checks() {
     # orca-seam-export-self-test (OVL-06, P68-18/P68-36): a seam exported against a file:// fixture main with the
     # template's derived headings, its overlay import's one pb-overlay: literal replaced, and no PB token left.
     "orca-seam-export-self-test|node $REPO_ROOT/scripts/export-orca-seam-pr.mjs --self-test"
+    # NEW (68-01, PLAT-01, P68-06/P68-33): the packaged Orca root <GreD>/orca. Expected set derived from the built
+    # tree (package.json, out/orcad, out/web), slot-marker names from orca/src/shared/orcad-artifacts.ts, the
+    # node-pty slot from Orca's prebuild manifest (one slot, the target's platform and arch, equal sha256 set). The
+    # self-test plants a missing file, an extra file, node.exe, a slot marker, Electron, foreign and merged slots.
+    "orca-packaged-tree-self-test|node $REPO_ROOT/scripts/verify-orca-packaged-tree.mjs --self-test"
+    # build-orca.sh runs on every target's own runner: objdump only on Linux, no find -printf, the one pins path (P68-30).
+    "build-orca-portable-self-test|node $REPO_ROOT/scripts/verify-build-orca-portable.mjs --self-test"
+    # The macOS Orca merge plan from Orca's own tables: unpaired arch-named file, differing file, zero-pair table (P68-31).
+    "orca-macos-merge-self-test|node $REPO_ROOT/scripts/lib/orca-artifacts.mjs --self-test"
+    # The packaged-live verdicts over fixtures: a Node from elsewhere, a web root outside GreD, a survivor, no pairing.
+    "orca-packaged-live-self-test|node $REPO_ROOT/scripts/verify-orca-packaged-live.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6545,6 +6556,13 @@ run_own_checks() {
       # NEW (68-04, PLAT-01, P68-25, P68-38): orca-licence-rulings is red while an owner licence item is open (68-B permissive set; the 68-A terms check for the SDK extension). Needs no built orca/.
       # The coordinator keys its GATE_KNOWN_OPEN_EXCLUSIONS row to the WINDOWS.md entry for those items; release.yml's guard runs the same mode.
       "orca-licence-rulings|node $REPO_ROOT/scripts/verify-licence-allowlist.mjs --rulings"
+      # NEW (68-01, PLAT-01, P68-06): orca-packaged-tree over the container-built Linux tarball's orca/ (target
+      # linux-x64, manifest orca/out/orcad-prebuilds/manifest.json). FAILs naming the container build until 68-06
+      # builds the tarball; release.yml's build-linux runs it among its packaged labels.
+      "orca-packaged-tree|node $REPO_ROOT/scripts/verify-orca-packaged-tree.mjs"
+      # orca-packaged-live: the container-built package runs orcad on its own Node from <GreD>/orca, pairs, and a quit
+      # ends it. Runs under flock /home/chris/coding/Power-Browser/.git/pb-live.lock in 68-06; FAILs without the tarball.
+      "orca-packaged-live|node $REPO_ROOT/scripts/verify-orca-packaged-live.mjs"
     )
   fi
 

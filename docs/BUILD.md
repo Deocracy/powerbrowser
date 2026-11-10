@@ -535,6 +535,51 @@ leaves none. The literal proves the file was compiled in, not that it runs.
 `orca-build-shape` (full), which requires the modified tracked files of `orca/`
 to equal the declared seams.
 
+### Packaged Orca (<GreD>/orca)
+
+Every package carries Orca at `<GreD>/orca` (beside `theia/` and `node/`; on macOS under
+`Contents/Resources/orca`): exactly `package.json`, `out/orcad/**` and `out/web/**` of the built
+`orca/` tree. No root `node_modules`, no `out/orcad-prebuilds`, no `out/runtimes`. orcad runs on
+the package's own staged Node.
+
+node-pty is built on each target's own runner, never cross-built: on legion for Linux (build-linux),
+on hosted runners for the others. Orca's prebuild manifest
+(`orca/out/orcad-prebuilds/manifest.json`) proves it: `orca-packaged-tree --prebuild-manifest`
+requires exactly one slot whose platform and arch equal the target and whose files' sha256 set
+equals the staged `node-pty/build/Release/*`.
+
+Hosted Orca jobs in `.github/workflows/release.yml`, each with the `windows-sidecar` trust shape
+(no secret, no environment, `contents: read`, no persisted token, the full-SHA gate, Node from
+`node-runtime.json`):
+- `macos-orca-arm64` (macos-15) and `macos-orca-x64` (macos-15-intel): two named jobs, never a
+  matrix. Each runs `fetch-orca.sh` and `build-orca.sh`, checks its staged tree with
+  `orca-packaged-tree --target macos-<arch>`, and uploads the hosted artifact layout
+  (`package.json`, `out/orcad`, `out/web`, `orcad-prebuilds-manifest.json`, `BUILD_ROOT`,
+  `SHA256SUMS`). The SHA-256 of `SHA256SUMS` leaves the job as the output `sums_sha256`.
+- `macos-orca-universal` (ubuntu-latest) admits both with `check-win-sidecar.sh check` against
+  those outputs, merges them with `package-macos.sh orca-universal`, purges both build roots, and
+  runs `orca-packaged-tree --target macos` and `package-target-natives --target macos`.
+- `windows-orca` (lane p68-10) builds the win64 tree the same way; `build-windows` admits it with
+  `PB_WIN_ORCA_SUMS_SHA256`, and `package-windows.sh` runs `orca-packaged-tree --target win64`.
+
+No Linux-path job needs any of them, directly or transitively (`release-shape`
+`linux-independence`). `build-orca.sh` runs unchanged on each runner: it requires `objdump` only
+when `node -p process.platform` prints `linux`, and lists the overlay without `find -printf`
+(`build-orca-portable-self-test`).
+
+**Licence guard:** `build-linux` runs `node scripts/verify-licence-allowlist.mjs --rulings` before
+any Orca step, so no release is built while an Orca licence ruling is pending (P68-21);
+`build-windows` carries the same step.
+
+**Flatpak:** the manifest grants `--filesystem=home`, because Orca worktrees, agent CLIs and their
+credentials live under HOME (P68-07). That exposes HOME only, not host binaries under `/usr`, so an
+agent CLI installed system-wide on the host is not reachable from the sandbox.
+
+**Checks:** `orca-packaged-tree-self-test`, `orca-macos-merge-self-test`,
+`build-orca-portable-self-test` and `orca-packaged-live-self-test` (quick); `orca-packaged-tree`
+and `orca-packaged-live` (full, over the container-built tarball; `orca-packaged-live` runs under
+the live lock). `package-target-natives` judges every ELF, PE and Mach-O by magic, not by name.
+
 ## Firefox half
 
 ```
@@ -1373,9 +1418,22 @@ Procedure, in `nix develop .#firefox-macos` with `MOZ_FETCHES_DIR` set as above:
    per Darwin target through `buildUpdateXml`, replaces `.mozbuild/macos-package/`, and runs the
    `macos-package-payload` row.
 
+Orca (P68-31): each per-architecture run stages the admitted `macos-orca-<arch>` artifact
+(`PB_MAC_ORCA_DIR`, admitted against `PB_MAC_ORCA_SUMS_SHA256`) as `Contents/Resources/orca`, and
+judges its files by magic: every Mach-O must be a thin slice of the target, an ELF or a PE is red.
+`universal` lifts both `orca/` trees out before `unify.py` and merges them with `orca-universal`.
+The standalone mode is `bash powerbrowser/packaging/package-macos.sh orca-universal ARM X64 OUT`.
+It runs the merge plan `node scripts/lib/orca-artifacts.mjs macos-merge-plan ARM X64 orca`. That
+plan derives the arch-named pairs from Orca's own `ORCAD_RIPGREP_ARTIFACTS` and
+`orcadAgentBrowserNativeName('darwin', arm64|x64)`, so no name is copied into this tree. Each pair
+becomes one fat file staged under both names, and a same-name thin Mach-O pair is merged in
+place. Every other file must be byte-identical, and the plan is red naming the file otherwise.
+
 Not run on this tree yet: it needs both built objdirs, and the cross configure stops before the
 Gecko compile until the Darwin `rust-std` question is settled (`BLOCKED.md` items 8 and 9). The
-sidecar merge was exercised against synthetic thin Mach-O pairs with `llvm-lipo`.
+sidecar merge was exercised against synthetic thin Mach-O pairs with `llvm-lipo`, and so was
+`orca-universal` (one arch-named pair from the real tables, one same-name native, one identical
+text file).
 
 ### Linux package (NG-063, NG-072)
 
@@ -1407,7 +1465,16 @@ there is no manual pin step.
 The Gecko binaries are built in the Nix shell, so the package runs where those
 store paths exist.
 
-Checks: `ng063-packaged-launch`, `ng072-policies-packaged-webextension`.
+Orca: `package-linux.sh` stages `orca/`'s `package.json`, `out/orcad` and `out/web` as
+`<GreD>/orca`, removes every ELF RUNPATH under `theia/`, `node/` and `orca/` with
+`patchelf --remove-rpath`, and fails when a staged file names the host build root. The host root
+is passed into the container as `PB_HOST_ROOT` (`-e PB_HOST_ROOT="$PWD"` in `release.yml`); the
+script refuses to run without it, because inside the container the checkout is `/src`, a string
+every esbuild module key contains. `bash powerbrowser/packaging/package-linux.sh --orca-stage-only
+DIR` runs only the Orca half (staging into `DIR/orca`, the RUNPATH pass and the host-root grep), so
+a host without the release container can prove it; `release.yml` never uses it.
+
+Checks: `ng063-packaged-launch`, `ng072-policies-packaged-webextension`, `orca-packaged-tree`.
 
 ### Per-OS install matrix with update hops (08-05)
 

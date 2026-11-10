@@ -101,7 +101,7 @@ apply_overlay() {
   # PB-added files, at their in-tree path. .pb-overlay-copied remembers the last copy so a file
   # removed from files/ is removed from orca/ too.
   if [ -d "$OVERLAY_DIR/files" ]; then
-    out="$(cd "$OVERLAY_DIR/files" && find . -type f -printf '%P\n' | LC_ALL=C sort)" || fail "overlay: listing orca-overlay/files failed"
+    out="$(cd "$OVERLAY_DIR/files" && find . -type f | sed 's|^\./||' | LC_ALL=C sort)" || fail "overlay: listing orca-overlay/files failed"
     [ -z "$out" ] || mapfile -t files <<< "$out"
   fi
   for path in "${files[@]}"; do
@@ -129,10 +129,15 @@ apply_overlay() {
 }
 run_step overlay apply_overlay
 
-# 2. Shell entry.
+# 2. Shell entry. objdump is Orca's linuxSlotRecord tool, so it is required on Linux only (P68-30): the
+# hosted macOS and Windows Orca jobs run this script with the runner's toolchain, not nix develop .#orca.
 node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"
-if [ "$node_major" != "24" ] || ! command -v corepack >/dev/null || ! command -v objdump >/dev/null; then
-  fail "shell entry: need node 24, corepack and objdump; run inside nix develop .#orca"
+node_platform="$(node -p 'process.platform' 2>/dev/null || true)"
+if [ "$node_major" != "24" ] || ! command -v corepack >/dev/null; then
+  fail "shell entry: need node 24 and corepack; on Linux run inside nix develop .#orca, elsewhere in the hosted Orca job"
+fi
+if [ "$node_platform" = "linux" ]; then
+  command -v objdump >/dev/null || fail "shell entry: need objdump on Linux; run inside nix develop .#orca"
 fi
 
 # 3. Scrub. ${!ORCA_@} rather than compgen -e: the dev shell's non-interactive
