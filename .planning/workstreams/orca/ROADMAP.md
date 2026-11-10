@@ -196,6 +196,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 64-05-PLAN.md — coordinator: merge p64-01..p64-04, wire orca-panes, rebuild, CSS isolation proven first on the merged tree, live proofs, brand rows, tracking by requirement outcome
+
 **UI hint**: yes
 
 Editor, diff and browser-page panes reach the dock through this phase's mapping. Their targets are delivered by TAB-05 (Phase 65) and BRW-02 (Phase 66).
@@ -277,17 +278,17 @@ The Phase 61 parity result may split or descope this phase. Any such change is a
   4. Linux, macOS and Windows artifacts contain orcad and the overlaid client, with the node-pty prebuild built per target on that target's own runner. The Flatpak manifest grants `--filesystem=home`. Each of these checks is one `verify-platform.sh` row.
   5. The live checks pass on Linux. macOS and Windows smoke results are recorded when a host is available (D-24).
 
-**Plans**: 10 plans
+**Plans**: 7/10 plans executed (68-06 in progress: Task 1 wave-1 merges done; 68-08, 68-05 not launched)
 
 Plans:
 **Wave 1** *(executable now; seven lanes in parallel)*
-- [ ] 68-01-PLAN.md — lane p68-01: Orca in the Linux and macOS artifacts (build-linux Orca step, macos-orca-arm64/x64/universal, package-linux.sh and package-macos.sh <GreD>/orca staging, host-root grep), portable build-orca.sh, orca-packaged-tree, magic natives, Flatpak --filesystem=home, build-linux --rulings guard, release-shape (no Linux job needs a Windows job with this lane alone), packaged-live check written (PLAT-01, PLAT-02)
-- [ ] 68-10-PLAN.md — lane p68-10: Orca in the Windows artifact (windows-orca, build-windows needs, --rulings guard and admission, package-windows.sh staging), win-sign-list and the @ zip filter, win-sign-chain, build-windows-shape over the producer list, staged-Node path in OrcaService and TheiaService, INTERNAL-APIS lines; shares release.yml with 68-01 (other jobs) and OrcaService.sys.mjs with 68-07 (_resolve only) (PLAT-01)
-- [ ] 68-02-PLAN.md — lane p68-02: weekly re-pin: rebase-orca.yml and rebase-orca.sh (--replay-only, fixture self-test), orcaDue, --orca-select, detect-orca, bump-pr-orca with auto-merge, tracking issue, orca-slotless-start --orcad-only (OVL-02)
-- [ ] 68-03-PLAN.md — lane p68-03: orca-mobile-protocol and orca-mobile-skew, seams.json upstream key and --upstream-prs, export-orca-seam-pr.mjs (OVL-03, OVL-06)
-- [ ] 68-04-PLAN.md — lane p68-04: bundle-derived Orca licence notices, per-package rule, agent SDK as ruling 68-A status extension (D-30; red until 68-07 and 68-09 merge) with the owner terms check pending, permissive set pending 68-B, orca-licence-rulings (PLAT-01)
-- [ ] 68-07-PLAN.md — lane p68-07: Claude agent SDK out of orcad (externals seam), loadClaudeAgentSdk reads ORCA_CLAUDE_AGENT_SDK_DIR, OrcaService points it at the extension unless Theia has it disabled, orca-claude-sdk rows; shares OrcaService.sys.mjs with 68-10 (_spawnAndGate only) (BEXT-01)
-- [ ] 68-09-PLAN.md — lane p68-09: the pre-installed, removable Claude Agent SDK Theia extension: bundled-extensions/claude-agent-sdk, download-plugins assembly into plugins/.user, @powerbrowser/bundled-extensions seed participant, bundled-extensions rows (BEXT-01)
+- [x] 68-01-PLAN.md — lane p68-01: Orca in the Linux and macOS artifacts (build-linux Orca step, macos-orca-arm64/x64/universal, package-linux.sh and package-macos.sh <GreD>/orca staging, host-root grep), portable build-orca.sh, orca-packaged-tree, magic natives, Flatpak --filesystem=home, build-linux --rulings guard, release-shape (no Linux job needs a Windows job with this lane alone), packaged-live check written (PLAT-01, PLAT-02)
+- [x] 68-10-PLAN.md — lane p68-10: Orca in the Windows artifact (windows-orca, build-windows needs, --rulings guard and admission, package-windows.sh staging), win-sign-list and the @ zip filter, win-sign-chain, build-windows-shape over the producer list, staged-Node path in OrcaService and TheiaService, INTERNAL-APIS lines; shares release.yml with 68-01 (other jobs) and OrcaService.sys.mjs with 68-07 (_resolve only) (PLAT-01)
+- [x] 68-02-PLAN.md — lane p68-02: weekly re-pin: rebase-orca.yml and rebase-orca.sh (--replay-only, fixture self-test), orcaDue, --orca-select, detect-orca, bump-pr-orca with auto-merge, tracking issue, orca-slotless-start --orcad-only (OVL-02)
+- [x] 68-03-PLAN.md — lane p68-03: orca-mobile-protocol and orca-mobile-skew, seams.json upstream key and --upstream-prs, export-orca-seam-pr.mjs (OVL-03, OVL-06)
+- [x] 68-04-PLAN.md — lane p68-04: bundle-derived Orca licence notices, per-package rule, agent SDK as ruling 68-A status extension (D-30; red until 68-07 and 68-09 merge) with the owner terms check pending, permissive set pending 68-B, orca-licence-rulings (PLAT-01)
+- [x] 68-07-PLAN.md — lane p68-07: Claude agent SDK out of orcad (externals seam), loadClaudeAgentSdk reads ORCA_CLAUDE_AGENT_SDK_DIR, OrcaService points it at the extension unless Theia has it disabled, orca-claude-sdk rows; shares OrcaService.sys.mjs with 68-10 (_spawnAndGate only) (BEXT-01)
+- [x] 68-09-PLAN.md — lane p68-09: the pre-installed, removable Claude Agent SDK Theia extension: bundled-extensions/claude-agent-sdk, download-plugins assembly into plugins/.user, @powerbrowser/bundled-extensions seed participant, bundled-extensions rows (BEXT-01)
 
 **Wave 2** *(coordinator-launched lanes: launched_by: coordinator in each plan's frontmatter; never started by an executor on its own; 68-06 launches each and waits for its SUMMARY)*
 - [ ] 68-08-PLAN.md — lane p68-08, launched by 68-06 Task 1 after the 68-01, 68-10, 68-04 and 68-09 merges (Phase 67 not needed): uBlock Origin pre-installed through distribution/extensions (pinned AMO-signed XPI, staging in the three package scripts), filter-list hosts allowlisted, live install/filter/relaunch/disable/remove proof, Bundled extensions notices and inventory rows (BEXT-02)
@@ -319,4 +320,4 @@ Phases execute in numeric order: 59 → 60 → 61 → 62 → 63 → 64 → 65 �
 | 65. Orca workspace in Theia | 0/TBD | Not started | - |
 | 66. PowerBrowser web tabs as Orca's browser | 0/6 | Planned | - |
 | 67. Hosting hardening | 0/TBD | Not started | - |
-| 68. Three-OS artifacts, weekly re-pin and upstream seams | 0/TBD | Not started | - |
+| 68. Three-OS artifacts, weekly re-pin and upstream seams | 7/10 (68-06 in progress) | In Progress | - |

@@ -5,15 +5,15 @@ current_phase: 59
 current_phase_name: Carry-forward from v1.5 and v1.6
 status: executing
 stopped_at: Phase 59 context gathered
-last_updated: "2026-11-08T23:56:10.288Z"
+last_updated: "2026-11-10T22:31:21.754Z"
 last_activity: 2026-11-08
 last_activity_desc: Phase 59 execution started
-state_head: 576b430bb8c1d16fddf42c87b669e044019971d6
+state_head: 7e31d172a46a15fd3e696ad72000306dacb74c56
 progress:
   total_phases: 10
-  completed_phases: 0
-  total_plans: 7
-  completed_plans: 0
+  completed_phases: 3
+  total_plans: 59
+  completed_plans: 31
 milestone_name: Orca integration
 ---
 
@@ -75,6 +75,11 @@ Owner decisions are in DECISIONS.md. The ones that shape the phase order:
 - P62-19: the exact-environment spawn, the process-tree reader and the named reap blocker (`spawnProcessExact`, `listProcessTree`, `addNamedReapBlocker`) live in `PowerBrowserProcesses` at the end of `PowerBrowserAPI.sys.mjs`, with `//` comments only.
 - D-31 (Chris, 2026-11-10): Orca terminals run on Orca's own engine (stock orcad PTY provider and terminal daemon) and Orca's own terminal view (`TerminalPane`) in PowerBrowser tabs, side by side with plain Theia terminals; supersedes D-01's terminal bullet and D-28 for Orca terminals. Phase 63's bridge is dropped (lanes p63-01, p63-02, p63-05 superseded, never merged); Phase 63 keeps lane p63-03 and adds lane p63-06 (bridge folder `POWERBROWSER_ORCA_BRIDGE_DIR`, `orcad-data-root`, `writePrivateFile` with no umask window); the overlay holds seam 010 only. TERM-01 (display) and TERM-04 (keys) move to Phase 64 as hosted `TerminalPane` tabs created through `terminal.create`; TERM-03 is v2 (headless orcad at 1.4.248 has no SSH stack or paired-server relay). D-07 holds through `OrcaService`'s stop path.
 - Phase 63 outcome under D-31 (63-04, 2026-11-10): two lanes merged (p63-06 then p63-03; p63-01, p63-02, p63-05 superseded and never merged); the overlay holds one seam (010) and Orca's terminals run on Orca's own engine and terminal daemon; PowerBrowser's private bridge folder reaches the Theia backend as `POWERBROWSER_ORCA_BRIDGE_DIR` and holds `orcad-data-root` (written after ready, removed on stop) and the orca-agents `claude-wrapper` launcher; `PowerBrowserProcesses.writePrivateFile` makes the file 0600 before any byte is written (no umask window); a real claude in an Orca terminal read working, waiting and done through Orca's hooks, and D-07 is proven on Orca's engine (the agent, orcad and the terminal daemon end on quit).
+- [Phase 68]: P68-37: Phase 68 wave 1 (lanes p68-03, 04, 01, 10, 07, 09, 02) merged into v1.7 on 2026-11-10 by 68-06 Task 1; p68-08 and p68-05 stay coordinator-launched (08 not yet launched, 05 after Phase 67)
+- [Phase 68]: A-P1: the Orca re-pin replay carries THIRD-PARTY-NOTICES.txt (plan 51-09 pattern); identity re-pin v1.4.248 PASS on the merged tree; Chris may revert
+- [Phase 68]: Release guard: release.yml runs verify-licence-allowlist.mjs --rulings; no release is cut while ruling 68-B or the 68-A terms check is open (WINDOWS.md entry 44, orca-licence-rulings excluded under --gate keyed to 44)
+- [Phase 68]: D-30 / P68-38 / P68-39: the Claude agent SDK ships in a pre-installed, removable Theia extension and is out of orcad's bundle (ORCA_CLAUDE_AGENT_SDK_DIR, seams 070 and 080, pb-only); uBlock Origin ships through distribution/extensions (lane p68-08, not yet merged)
+- [Phase 68]: The re-pin replay's pnpm run passes --config.verify-deps-before-run=false: pnpm 12 otherwise re-installs orca/node_modules without build-orca.sh's store, virtual-store and --ignore-scripts knobs (fix 554c66d7)
 
 ### Pending Todos
 
