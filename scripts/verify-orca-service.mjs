@@ -66,6 +66,14 @@
 //     these clauses only): the port default differs from Orca's own
 //     DEFAULT_WS_PORT, and both failure codes OrcaEnv matches on appear under
 //     orca/src/main.
+// 10. Bridge folder key (Phase 63, D-31, P63-35): the POWERBROWSER_ORCA_* key
+//     TheiaService.sys.mjs sets is derived from it, and TheiaService computes
+//     its value through OrcaEnv.bridgeDirFor and OrcaEnv.dataRootFor. When
+//     theia/extensions/orca-agents exists, the POWERBROWSER_* keys its
+//     src/node/orca-agents-backend-module.ts reads from POWERBROWSER_ENV are
+//     derived and must include that key. While the extension directory is
+//     absent (lane p63-03 not merged) that comparison alone prints a SKIP; the
+//     directory present with the backend module missing is red.
 //
 // Limit: the stub boundary proves OrcaService's decisions (what it spawns,
 // with what, in what order, and what it signals). It does not prove Gecko's
@@ -116,6 +124,8 @@ export function pathsFor(root) {
         jarMn: join(shellDir, 'jar.mn'),
         allowlist: join(root, 'powerbrowser', 'endpoint-allowlist.json'),
         orcaDir: join(root, 'orca'),
+        orcaAgentsDir: join(root, 'theia', 'extensions', 'orca-agents'),
+        orcaAgentsBackend: join(root, 'theia', 'extensions', 'orca-agents', 'src', 'node', 'orca-agents-backend-module.ts'),
     };
 }
 
@@ -579,7 +589,44 @@ function staticClauses(paths, env, notes) {
     return fails;
 }
 
-/** Runs every clause and scenario over `paths`. Resolves { fails, scenarios, notes }. */
+/**
+ * The POWERBROWSER_* keys a backend source reads from POWERBROWSER_ENV: a quoted key, a dotted key, or
+ * an identifier bound to a quoted POWERBROWSER_* string in the same source.
+ */
+export function backendEnvKeys(source) {
+    const consts = new Map([...source.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::\s*[^=]+)?=\s*['"`](POWERBROWSER_[A-Z0-9_]+)['"`]/g)].map((m) => [m[1], m[2]]));
+    const keys = new Set();
+    for (const m of source.matchAll(/POWERBROWSER_ENV\s*(?:\[\s*(?:['"`](POWERBROWSER_[A-Z0-9_]+)['"`]|([A-Za-z_$][\w$]*))\s*\]|\.(POWERBROWSER_[A-Z0-9_]+))/g)) {
+        const key = m[1] ?? m[3] ?? consts.get(m[2]);
+        if (key) keys.add(key);
+    }
+    return [...keys];
+}
+
+/** Clause 10. Returns { fails, comparison } where comparison is 'compared' or a SKIP text. */
+function bridgeKeyClause(paths) {
+    const fails = [];
+    const theia = read(paths.theiaService) ?? '';
+    const set = [...new Set([...theia.matchAll(/\b(POWERBROWSER_ORCA_[A-Z0-9_]+)\s*:/g)].map((m) => m[1]))];
+    if (set.length !== 1) {
+        return { fails: [`TheiaService.sys.mjs sets ${set.length ? set.join(', ') : 'no POWERBROWSER_ORCA_* key'}; it must set exactly one, POWERBROWSER_ORCA_BRIDGE_DIR, the bridge folder`], comparison: 'not derived' };
+    }
+    const key = set[0];
+    for (const fn of ['bridgeDirFor', 'dataRootFor']) {
+        if (!theia.includes(`OrcaEnv.${fn}(`)) fails.push(`TheiaService.sys.mjs does not compute ${key} through OrcaEnv.${fn}, so chrome and the Theia backend can get two folders`);
+    }
+    if (!existsSync(paths.orcaAgentsDir)) return { fails, comparison: 'SKIP (lane p63-03 not merged)' };
+    const backend = read(paths.orcaAgentsBackend);
+    if (backend === null) {
+        fails.push(`theia/extensions/orca-agents exists but src/node/orca-agents-backend-module.ts is missing, so the ${key} the backend reads cannot be compared`);
+    } else {
+        const keysRead = backendEnvKeys(backend);
+        if (!keysRead.includes(key)) fails.push(`orca-agents-backend-module.ts reads ${keysRead.length ? keysRead.join(', ') : 'no POWERBROWSER_* key'} from POWERBROWSER_ENV, not ${key}, the key TheiaService sets`);
+    }
+    return { fails, comparison: 'compared' };
+}
+
+/** Runs every clause and scenario over `paths`. Resolves { fails, scenarios, notes, bridgeKeyComparison }. */
 export async function check(paths) {
     for (const key of ['orcaService', 'orcaEnv']) {
         if (!existsSync(paths[key])) return { fails: [`${paths[key]} is missing`], scenarios: [], notes: [] };
@@ -588,6 +635,9 @@ export async function check(paths) {
     try { env = await freshImport(paths.orcaEnv); } catch (err) { return { fails: [`OrcaEnv.sys.mjs does not import in Node: ${err.message}`], scenarios: [], notes: [] }; }
     const notes = [];
     const fails = staticClauses(paths, env, notes);
+    const bridgeKey = bridgeKeyClause(paths);
+    fails.push(...bridgeKey.fails);
+    if (bridgeKey.comparison.startsWith('SKIP')) notes.push('SKIP of the POWERBROWSER_ORCA_BRIDGE_DIR comparison only -- lane p63-03 not merged (theia/extensions/orca-agents is absent)');
     const scenarios = { A: scenarioA, B: scenarioB, C: scenarioC, D: scenarioD, E: scenarioE, F: scenarioF, H: scenarioH };
     const saved = globalThis.ChromeUtils;
     try {
@@ -597,7 +647,7 @@ export async function check(paths) {
     } finally {
         if (saved === undefined) delete globalThis.ChromeUtils; else globalThis.ChromeUtils = saved;
     }
-    return { fails, scenarios: Object.keys(scenarios), notes };
+    return { fails, scenarios: Object.keys(scenarios), notes, bridgeKeyComparison: bridgeKey.comparison };
 }
 
 // ---------------------------------------------------------------------------
@@ -617,6 +667,9 @@ async function runSelfTest() {
         writeFileSync(join(paths.orcaDir, WS_PORT_REL), 'export const DEFAULT_WS_PORT = 7777\n');
         writeFileSync(fixtureCodes, "export const CODES = ['pinned_port_unavailable', 'orcad_instance_lock_held']\n");
         const git = (...a) => execFileSync('git', ['-C', paths.orcaDir, ...a], { stdio: ['ignore', 'pipe', 'pipe'] });
+        // A fixture orca-agents backend, so the control compares the bridge folder key instead of skipping it.
+        mkdirSync(dirname(paths.orcaAgentsBackend), { recursive: true });
+        writeFileSync(paths.orcaAgentsBackend, "import { POWERBROWSER_ENV } from '@powerbrowser/token-gate/lib/node/powerbrowser-env';\nconst BRIDGE_DIR_KEY = 'POWERBROWSER_ORCA_BRIDGE_DIR';\nexport const bridgeDir = POWERBROWSER_ENV[BRIDGE_DIR_KEY] ?? '';\n");
         git('init', '-q');
         git('add', '.');
         git('-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', 'commit', '-q', '-m', 'fixture');
@@ -657,6 +710,9 @@ async function runSelfTest() {
             { name: 'a null bridge folder fails the start', naming: 'null folder fatal', file: paths.orcaService, edit: swap('    if (!this._bridgeDir) {\n', '    if (!this._bridgeDir) {\n      return this._fail("choosing the Orca bridge folder", []);\n') },
             { name: 'a PTY switch back in the fixed names', naming: 'pty switch', file: paths.orcaEnv, edit: swap('  ORCAD_HIDDEN_ELECTRON_SWITCH,\n]);', '  ORCAD_HIDDEN_ELECTRON_SWITCH,\n  "ORCA_EXTERNAL_PTY_ENDPOINT",\n]);') },
             { name: 'a ptyEndpoint option back in buildOrcadEnv', naming: 'pty switch', file: paths.orcaEnv, edit: swap('export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion } = {}) {', 'export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion, ptyEndpoint } = {}) {') },
+            { name: 'orca-agents backend reads a different key', naming: 'POWERBROWSER_ORCA_BRIDGE_DIR', file: paths.orcaAgentsBackend, edit: swap("'POWERBROWSER_ORCA_BRIDGE_DIR'", "'POWERBROWSER_ORCA_BRIDGE_FOLDER'") },
+            { name: 'orca-agents backend module deleted while the extension exists (red, not SKIP)', naming: 'orca-agents-backend-module.ts is missing', file: paths.orcaAgentsBackend, edit: () => null },
+            { name: 'TheiaService builds the folder without bridgeDirFor', naming: 'OrcaEnv.bridgeDirFor', file: paths.theiaService, edit: swap('return await OrcaEnv.bridgeDirFor(dataRoot, name => PowerBrowserAPI.getEnv(name), OrcaEnv.nodePlatform(PowerBrowserProcesses.platform()));', 'return `${PowerBrowserAPI.getEnv("HOME")}/.cache/pb-orca-bridge`;') },
             { name: 'lock code absent from the fixture source', naming: 'pinned source', file: fixtureCodes, edit: swap('orcad_instance_lock_held', 'orcad_lock_renamed') },
         ];
 
@@ -664,7 +720,8 @@ async function runSelfTest() {
         for (const p of plants) {
             const original = readFileSync(p.file, 'utf8');
             try {
-                writeFileSync(p.file, p.edit(original));
+                const edited = p.edit(original);
+                if (edited === null) rmSync(p.file); else writeFileSync(p.file, edited);
                 const r = await check(paths);
                 const text = r.fails.join('\n');
                 if (!r.fails.length) { console.error(`  FAIL ${p.name} -> stayed green`); failures++; }
@@ -707,6 +764,6 @@ if (isEntryPoint) {
         for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`);
         process.exit(1);
     }
-    console.log(`${NAME}: PASS -- jar.mn ships every shell module; OrcaService spawns only through the exact-environment boundary, spells no environment name and carries no user-facing copy; launch wiring and the .onorca.dev row hold; stub-boundary scenarios ${r.scenarios.join(', ')} (start with orcad-data-root after ready, reap, stop order, busy port, non-loopback, alias, no bridge folder)`);
+    console.log(`${NAME}: PASS -- jar.mn ships every shell module; OrcaService spawns only through the exact-environment boundary, spells no environment name and carries no user-facing copy; launch wiring and the .onorca.dev row hold; POWERBROWSER_ORCA_BRIDGE_DIR comparison ${r.bridgeKeyComparison}; stub-boundary scenarios ${r.scenarios.join(', ')} (start with orcad-data-root after ready, reap, stop order, busy port, non-loopback, alias, no bridge folder)`);
     process.exit(0);
 }
