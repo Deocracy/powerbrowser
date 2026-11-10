@@ -44,7 +44,7 @@ Progress: [░░░░░░░░░░] 0%
 | 60 | Orca from source on Theia's Node | RUN-01, RUN-02, OVL-04, EXT-01 | Executed 4/5 (EXT-01 deferred) |
 | 61 | Spikes for pane hosting, browser parity and live sharing | TAB-03, BRW-01, EXT-03 | Complete (human items deferred) |
 | 62 | Overlay gate and PowerBrowser-run orcad | OVL-01, OVL-05, RUN-03, RUN-04, RUN-05 | Complete |
-| 63 | Agent hooks on Orca's terminal engine (rescoped by D-31) | TERM-02, EXT-02 | Executed 3/3, verify-work pending (TERM-02 live PASS; EXT-02 extension half deferred) |
+| 63 | Agent hooks on Orca's terminal engine (rescoped by D-31) | TERM-02, EXT-02 | Complete (human items deferred) |
 | 64 | Orca panes as PowerBrowser tabs | TAB-01, TAB-02, TAB-04, TAB-06 | Not started |
 | 65 | Orca workspace in Theia | TAB-05, TAB-07, TAB-08, TAB-09 | Not started |
 | 66 | PowerBrowser web tabs as Orca's browser | BRW-02, BRW-03, BRW-04, BRW-05 | Not started |
@@ -112,4 +112,5 @@ Resume file: .planning/workstreams/orca/phases/59-carry-forward-from-v1-5-and-v1
 | 60 | verification_deferred_human (60-05 EXT-01 live session) | end-of-milestone pass (D-18): resume 60-05 Task 2 |
 | 61 | verification_deferred_human, 6/8 (61-VERIFICATION.md): EXT-03 extension half of the floor, with EXT-01; owner override for criterion 4 ordering (Phase 63 planned before the ROADMAP route line, route taken from the spike 006 record; YAML in 61-VERIFICATION.md); YELLOW conditions for Phases 64 and 66 to be copied into their CONTEXT | end-of-milestone pass (D-18): the steps under "Blocked on EXT-01" in .planning/spikes/006-orca-live-sharing/README.md |
 | 62 | verified 5/5 (62-VERIFICATION.md); owner re-lock of scripts/verify-ng-027-reader-callers.mjs pending; browser-request clause of criterion 2 moves to Phase 66 | end-of-milestone pass (D-18): owner lock-checks; Phase 66 proves the browser request |
+| 63 | verification_deferred_human, 6/7 (63-VERIFICATION.md): EXT-02 extension half (wrapper session visible in Orca; claudeProcessWrapper default reaches the extension) with EXT-01 | end-of-milestone pass (D-18) |
 | 63 | executed 3/3, verify-work pending (63-04-SUMMARY.md); TERM-02 complete on a live orca-agent-status-live PASS; EXT-02 extension half deferred | end-of-milestone pass (D-18): the Claude Code extension's claude through PowerBrowser's wrapper with the session live in Orca and spike 006 "Blocked on EXT-01" steps 1-4 (with 60-05 Task 2; research assumptions A3, A5); an owner look at the wrapper's placeholder pane as an Orca terminal tab once Phase 64 hosts terminals; the wrapper path in packaged builds and a Windows twin of the POSIX sh claude-wrapper launcher (Phase 68) |
