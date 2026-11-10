@@ -193,6 +193,10 @@ pages. Observed here only: one orcad served the S2 host (a runtime client on its
 and the Orca CLI at the same time, and the lease is keyed by `browserHostClientId` and bound to
 one connection. A second attach with another host id was not tried.
 
+Run evidence from spike 004 (added by plan 61-04): `.planning/spikes/004-orca-pane-hosting/results-route-b-prime.json`
+field `secondClientSeesTab: true` (with `observeChannel: "second-client"`, `observeLatencyMs: 74`): a second
+paired client on the same orcad saw a tab that another client opened, within the one-second clock.
+
 #### Q8. Re-pin changes that break injection selectors
 
 Out of scope here: INJ-01, Phase 67. The approach to carry over is the one this script uses:

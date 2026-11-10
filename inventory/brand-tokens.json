@@ -974,11 +974,13 @@
       "case_form": "title",
       "class": "coincidental",
       "target": "Orca",
-      "expected_count": 393,
+      "expected_count": 497,
       "expected_files": [
         ".claude/hooks/ledger-session-check.py",
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
+        ".claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
+        ".claude/skills/spike-findings-Power-Browser/references/orca-live-sharing.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-pane-hosting.md",
         ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md",
         ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/probe.mjs",
@@ -986,6 +988,12 @@
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md",
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs",
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/results.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/results.md",
         ".gitignore",
         "configuration.toml",
         "docs/BUILD.md",
@@ -1019,7 +1027,9 @@
       "only_in": [
         ".claude/hooks/ledger-session-check.py",
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
+        ".claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
+        ".claude/skills/spike-findings-Power-Browser/references/orca-live-sharing.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-pane-hosting.md",
         ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md",
         ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/probe.mjs",
@@ -1027,6 +1037,12 @@
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md",
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs",
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/results.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/results.md",
         ".gitignore",
         "configuration.toml",
         "docs/BUILD.md",
@@ -1057,17 +1073,19 @@
         "scripts/verify-platform.sh",
         "scripts/verify-shell-error-contract.mjs"
       ],
-      "reason": "P60-R2 (OVL-04, plan 60-04): the product name of the third-party agent workspace PowerBrowser builds from source (scripts/fetch-orca.sh, scripts/build-orca.sh) and hosts as a mode. Evidence: .claude/hooks/ledger-session-check.py:200, .claude/skills/spike-findings-Power-Browser/SKILL.md:3, .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:1 and 16 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 62 (plan 62-03) re-measured this row on the merged tree after the overlay gate and OrcaService lanes, adding docs/REBRANDING.md, orca-overlay/seams.json, powerbrowser/INTERNAL-APIS.md, powerbrowser/endpoint-allowlist.json, powerbrowser/shell/OrcaEnv.sys.mjs, powerbrowser/shell/OrcaService.sys.mjs, powerbrowser/shell/PowerBrowserAPI.sys.mjs, powerbrowser/shell/jar.mn, powerbrowser/shell/powerbrowser-sidecar.js, powerbrowser/shell/powerbrowser.js, scripts/verify-orca-hidden-electron.mjs, scripts/verify-orca-overlay.mjs, scripts/verify-orca-service-live.mjs, scripts/verify-orca-service.mjs, scripts/verify-shell-error-contract.mjs. COUNT MOVED 313 -> 381 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 004, adding .claude/skills/spike-findings-Power-Browser/references/orca-pane-hosting.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/results.md). COUNT MOVED 93 -> 103 (plan 61-02, BRW-01, P61-15: scripts/orca-browser-parity.mjs and its two verify-platform.sh rows) COUNT MOVED 103 -> 105 (plan 61-02 Task 2, BRW-01, P61-15: component users and tripwires in scripts/orca-browser-parity.mjs and its verify-platform.sh comments) COUNT MOVED 381 -> 393 (plan 61-04, P61-15: re-measured on the merged tree after the p61-02 lane merge, adding scripts/orca-browser-parity.mjs)."
+      "reason": "P60-R2 (OVL-04, plan 60-04): the product name of the third-party agent workspace PowerBrowser builds from source (scripts/fetch-orca.sh, scripts/build-orca.sh) and hosts as a mode. Evidence: .claude/hooks/ledger-session-check.py:200, .claude/skills/spike-findings-Power-Browser/SKILL.md:3, .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:1 and 16 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 62 (plan 62-03) re-measured this row on the merged tree after the overlay gate and OrcaService lanes, adding docs/REBRANDING.md, orca-overlay/seams.json, powerbrowser/INTERNAL-APIS.md, powerbrowser/endpoint-allowlist.json, powerbrowser/shell/OrcaEnv.sys.mjs, powerbrowser/shell/OrcaService.sys.mjs, powerbrowser/shell/PowerBrowserAPI.sys.mjs, powerbrowser/shell/jar.mn, powerbrowser/shell/powerbrowser-sidecar.js, powerbrowser/shell/powerbrowser.js, scripts/verify-orca-hidden-electron.mjs, scripts/verify-orca-overlay.mjs, scripts/verify-orca-service-live.mjs, scripts/verify-orca-service.mjs, scripts/verify-shell-error-contract.mjs. COUNT MOVED 313 -> 381 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 004, adding .claude/skills/spike-findings-Power-Browser/references/orca-pane-hosting.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/results.md). COUNT MOVED 93 -> 103 (plan 61-02, BRW-01, P61-15: scripts/orca-browser-parity.mjs and its two verify-platform.sh rows) COUNT MOVED 103 -> 105 (plan 61-02 Task 2, BRW-01, P61-15: component users and tripwires in scripts/orca-browser-parity.mjs and its verify-platform.sh comments) COUNT MOVED 381 -> 393 (plan 61-04, P61-15: re-measured on the merged tree after the p61-02 lane merge, adding scripts/orca-browser-parity.mjs). COUNT MOVED 393 -> 497 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 005 and 006, adding .claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md, .claude/skills/spike-findings-Power-Browser/references/orca-live-sharing.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/README.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/README.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/results.md)."
     },
     {
       "token": "orca",
       "case_form": "lower",
       "class": "coincidental",
       "target": "orca",
-      "expected_count": 907,
+      "expected_count": 1050,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
+        ".claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
+        ".claude/skills/spike-findings-Power-Browser/references/orca-live-sharing.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-pane-hosting.md",
         ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md",
         ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/probe.mjs",
@@ -1075,6 +1093,12 @@
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md",
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs",
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/results.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/results.md",
         ".gitignore",
         "configuration.toml",
         "docs/BUILD.md",
@@ -1104,7 +1128,9 @@
       ],
       "only_in": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
+        ".claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
+        ".claude/skills/spike-findings-Power-Browser/references/orca-live-sharing.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-pane-hosting.md",
         ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md",
         ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/probe.mjs",
@@ -1112,6 +1138,12 @@
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md",
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs",
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/results.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/results.md",
         ".gitignore",
         "configuration.toml",
         "docs/BUILD.md",
@@ -1139,21 +1171,28 @@
         "scripts/verify-shell-error-contract.mjs",
         "systemd/legion-pb.nix"
       ],
-      "reason": "P60-R2 (OVL-04, plan 60-04): the tree path orca/, the config keys upstreams.orca_tag / orca_commit, the devShell name, script and row names (fetch-orca, orca-pin, orca-run) and the workstream path .planning/workstreams/orca/. Evidence: .claude/skills/spike-findings-Power-Browser/SKILL.md:15, .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:4, .claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md:3 and 17 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 62 (plan 62-03) re-measured this row on the merged tree after the overlay gate and OrcaService lanes, adding powerbrowser/INTERNAL-APIS.md, powerbrowser/endpoint-allowlist.json, powerbrowser/shell/OrcaEnv.sys.mjs, powerbrowser/shell/OrcaService.sys.mjs, powerbrowser/shell/powerbrowser-sidecar.js, scripts/verify-orca-hidden-electron.mjs, scripts/verify-orca-overlay.mjs, scripts/verify-orca-service-live.mjs, scripts/verify-orca-service.mjs, scripts/verify-shell-error-contract.mjs. COUNT MOVED 797 -> 861 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 004, adding .claude/skills/spike-findings-Power-Browser/references/orca-pane-hosting.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/results.md). COUNT MOVED 420 -> 452 (plan 61-02, BRW-01, P61-15: scripts/orca-browser-parity.mjs and its two verify-platform.sh rows) COUNT MOVED 452 -> 466 (plan 61-02 Task 2, BRW-01, P61-15: component users and tripwires in scripts/orca-browser-parity.mjs and its verify-platform.sh comments) COUNT MOVED 861 -> 907 (plan 61-04, P61-15: re-measured on the merged tree after the p61-02 lane merge, adding scripts/orca-browser-parity.mjs)."
+      "reason": "P60-R2 (OVL-04, plan 60-04): the tree path orca/, the config keys upstreams.orca_tag / orca_commit, the devShell name, script and row names (fetch-orca, orca-pin, orca-run) and the workstream path .planning/workstreams/orca/. Evidence: .claude/skills/spike-findings-Power-Browser/SKILL.md:15, .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:4, .claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md:3 and 17 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 62 (plan 62-03) re-measured this row on the merged tree after the overlay gate and OrcaService lanes, adding powerbrowser/INTERNAL-APIS.md, powerbrowser/endpoint-allowlist.json, powerbrowser/shell/OrcaEnv.sys.mjs, powerbrowser/shell/OrcaService.sys.mjs, powerbrowser/shell/powerbrowser-sidecar.js, scripts/verify-orca-hidden-electron.mjs, scripts/verify-orca-overlay.mjs, scripts/verify-orca-service-live.mjs, scripts/verify-orca-service.mjs, scripts/verify-shell-error-contract.mjs. COUNT MOVED 797 -> 861 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 004, adding .claude/skills/spike-findings-Power-Browser/references/orca-pane-hosting.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/results.md). COUNT MOVED 420 -> 452 (plan 61-02, BRW-01, P61-15: scripts/orca-browser-parity.mjs and its two verify-platform.sh rows) COUNT MOVED 452 -> 466 (plan 61-02 Task 2, BRW-01, P61-15: component users and tripwires in scripts/orca-browser-parity.mjs and its verify-platform.sh comments) COUNT MOVED 861 -> 907 (plan 61-04, P61-15: re-measured on the merged tree after the p61-02 lane merge, adding scripts/orca-browser-parity.mjs). COUNT MOVED 907 -> 1050 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 005 and 006, adding .claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md, .claude/skills/spike-findings-Power-Browser/references/orca-live-sharing.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/README.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/README.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/results.md)."
     },
     {
       "token": "ORCA",
       "case_form": "upper",
       "class": "coincidental",
       "target": "ORCA",
-      "expected_count": 165,
+      "expected_count": 189,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
+        ".claude/skills/spike-findings-Power-Browser/references/orca-live-sharing.md",
         ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md",
         ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/results.md",
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md",
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/results.md",
         "docs/BUILD.md",
         "docs/REBRANDING.md",
         "orca-overlay/patches/010-installed-electron-switch.patch",
@@ -1173,10 +1212,17 @@
       "only_in": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
+        ".claude/skills/spike-findings-Power-Browser/references/orca-live-sharing.md",
         ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md",
         ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/results.md",
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md",
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/results.md",
         "docs/BUILD.md",
         "docs/REBRANDING.md",
         "orca-overlay/patches/010-installed-electron-switch.patch",
@@ -1193,17 +1239,19 @@
         "scripts/verify-orca-slotless-start.mjs",
         "scripts/verify-platform.sh"
       ],
-      "reason": "P60-R2 (OVL-04, plan 60-04): Orca's own environment namespace (ORCA_USER_DATA, ORCA_VERSION, ORCA_TELEMETRY_DISABLED, ORCA_PNPM_GLOBAL_VIRTUAL_STORE, ORCA_PAIRING_CODE) and PowerBrowser's ORCA_DIR constants; PowerBrowser mints no ORCA_ name of its own. Evidence: .claude/skills/spike-findings-Power-Browser/SKILL.md:48, .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:19, .claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md:86 and 10 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 62 (plan 62-03) re-measured this row on the merged tree after the overlay gate and OrcaService lanes, adding orca-overlay/patches/010-installed-electron-switch.patch, orca-overlay/seams.json, powerbrowser/shell/OrcaEnv.sys.mjs, scripts/verify-orca-hidden-electron.mjs, scripts/verify-orca-service-live.mjs, scripts/verify-orca-service.mjs. COUNT MOVED 158 -> 165 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 004, adding .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs)."
+      "reason": "P60-R2 (OVL-04, plan 60-04): Orca's own environment namespace (ORCA_USER_DATA, ORCA_VERSION, ORCA_TELEMETRY_DISABLED, ORCA_PNPM_GLOBAL_VIRTUAL_STORE, ORCA_PAIRING_CODE) and PowerBrowser's ORCA_DIR constants; PowerBrowser mints no ORCA_ name of its own. Evidence: .claude/skills/spike-findings-Power-Browser/SKILL.md:48, .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:19, .claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md:86 and 10 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 62 (plan 62-03) re-measured this row on the merged tree after the overlay gate and OrcaService lanes, adding orca-overlay/patches/010-installed-electron-switch.patch, orca-overlay/seams.json, powerbrowser/shell/OrcaEnv.sys.mjs, scripts/verify-orca-hidden-electron.mjs, scripts/verify-orca-service-live.mjs, scripts/verify-orca-service.mjs. COUNT MOVED 158 -> 165 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 004, adding .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs). COUNT MOVED 165 -> 189 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 005 and 006, adding .claude/skills/spike-findings-Power-Browser/references/orca-live-sharing.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/README.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/README.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/results.md)."
     },
     {
       "token": "orcad",
       "case_form": "lower",
       "class": "coincidental",
       "target": "orcad",
-      "expected_count": 591,
+      "expected_count": 684,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
+        ".claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
+        ".claude/skills/spike-findings-Power-Browser/references/orca-live-sharing.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-pane-hosting.md",
         ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md",
         ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/probe.mjs",
@@ -1211,6 +1259,12 @@
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md",
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs",
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/results.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/results.md",
         "docs/BUILD.md",
         "orca-overlay/patches/010-installed-electron-switch.patch",
         "orca-overlay/seams.json",
@@ -1235,7 +1289,9 @@
       ],
       "only_in": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
+        ".claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
+        ".claude/skills/spike-findings-Power-Browser/references/orca-live-sharing.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-pane-hosting.md",
         ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md",
         ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/probe.mjs",
@@ -1243,6 +1299,12 @@
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md",
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs",
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/results.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/results.md",
         "docs/BUILD.md",
         "orca-overlay/patches/010-installed-electron-switch.patch",
         "orca-overlay/seams.json",
@@ -1265,7 +1327,7 @@
         "scripts/verify-orca-slotless-start.mjs",
         "scripts/verify-platform.sh"
       ],
-      "reason": "P60-R2 (OVL-04, plan 60-04): Orca's headless daemon (orcad, orcad.js, out/orcad/) and identifiers built on it (orcadEnv). Evidence: .claude/skills/spike-findings-Power-Browser/SKILL.md:3, .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:3, .claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md:9 and 9 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 62 (plan 62-03) re-measured this row on the merged tree after the overlay gate and OrcaService lanes, adding orca-overlay/patches/010-installed-electron-switch.patch, orca-overlay/seams.json, powerbrowser/INTERNAL-APIS.md, powerbrowser/endpoint-allowlist.json, powerbrowser/shell/OrcaEnv.sys.mjs, powerbrowser/shell/OrcaService.sys.mjs, powerbrowser/shell/PowerBrowserAPI.sys.mjs, powerbrowser/shell/powerbrowser-sidecar.js, powerbrowser/shell/powerbrowser.js, scripts/verify-orca-hidden-electron.mjs, scripts/verify-orca-overlay.mjs, scripts/verify-orca-service-live.mjs, scripts/verify-orca-service.mjs. COUNT MOVED 535 -> 583 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 004, adding .claude/skills/spike-findings-Power-Browser/references/orca-pane-hosting.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/results.md). COUNT MOVED 179 -> 187 (plan 61-02 Task 2, BRW-01, P61-15: component users and tripwires in scripts/orca-browser-parity.mjs and its verify-platform.sh comments) COUNT MOVED 583 -> 591 (plan 61-04, P61-15: re-measured on the merged tree after the p61-02 lane merge, adding scripts/orca-browser-parity.mjs)."
+      "reason": "P60-R2 (OVL-04, plan 60-04): Orca's headless daemon (orcad, orcad.js, out/orcad/) and identifiers built on it (orcadEnv). Evidence: .claude/skills/spike-findings-Power-Browser/SKILL.md:3, .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:3, .claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md:9 and 9 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 62 (plan 62-03) re-measured this row on the merged tree after the overlay gate and OrcaService lanes, adding orca-overlay/patches/010-installed-electron-switch.patch, orca-overlay/seams.json, powerbrowser/INTERNAL-APIS.md, powerbrowser/endpoint-allowlist.json, powerbrowser/shell/OrcaEnv.sys.mjs, powerbrowser/shell/OrcaService.sys.mjs, powerbrowser/shell/PowerBrowserAPI.sys.mjs, powerbrowser/shell/powerbrowser-sidecar.js, powerbrowser/shell/powerbrowser.js, scripts/verify-orca-hidden-electron.mjs, scripts/verify-orca-overlay.mjs, scripts/verify-orca-service-live.mjs, scripts/verify-orca-service.mjs. COUNT MOVED 535 -> 583 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 004, adding .claude/skills/spike-findings-Power-Browser/references/orca-pane-hosting.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/results.md). COUNT MOVED 179 -> 187 (plan 61-02 Task 2, BRW-01, P61-15: component users and tripwires in scripts/orca-browser-parity.mjs and its verify-platform.sh comments) COUNT MOVED 583 -> 591 (plan 61-04, P61-15: re-measured on the merged tree after the p61-02 lane merge, adding scripts/orca-browser-parity.mjs). COUNT MOVED 591 -> 684 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 005 and 006, adding .claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md, .claude/skills/spike-findings-Power-Browser/references/orca-live-sharing.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/README.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/README.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/results.md)."
     },
     {
       "token": "ORCAD",
@@ -1300,10 +1362,13 @@
       "case_form": "literal",
       "class": "coincidental",
       "target": "Orcad",
-      "expected_count": 51,
+      "expected_count": 60,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs",
         "powerbrowser/shell/OrcaEnv.sys.mjs",
         "powerbrowser/shell/OrcaService.sys.mjs",
         "scripts/build-orca.sh",
@@ -1316,6 +1381,9 @@
       "only_in": [
         ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs",
         "powerbrowser/shell/OrcaEnv.sys.mjs",
         "powerbrowser/shell/OrcaService.sys.mjs",
         "scripts/build-orca.sh",
@@ -1325,7 +1393,7 @@
         "scripts/verify-orca-service.mjs",
         "scripts/verify-orca-slotless-start.mjs"
       ],
-      "reason": "P60-R2 (OVL-04, plan 60-04): camelCase joins the boundary matcher rejects (left letter): startOrcad, stopOrcad, probeOrcad, serveWithOrcad, stageOrcadMobileWebBundle. Evidence: .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:25, scripts/build-orca.sh:89, scripts/lib/orca-run.mjs:19 and 1 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 62 (plan 62-03) re-measured this row on the merged tree after the overlay gate and OrcaService lanes, adding powerbrowser/shell/OrcaEnv.sys.mjs, powerbrowser/shell/OrcaService.sys.mjs, scripts/verify-orca-hidden-electron.mjs, scripts/verify-orca-service-live.mjs, scripts/verify-orca-service.mjs. COUNT MOVED 47 -> 51 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 004, adding .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs)."
+      "reason": "P60-R2 (OVL-04, plan 60-04): camelCase joins the boundary matcher rejects (left letter): startOrcad, stopOrcad, probeOrcad, serveWithOrcad, stageOrcadMobileWebBundle. Evidence: .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:25, scripts/build-orca.sh:89, scripts/lib/orca-run.mjs:19 and 1 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 62 (plan 62-03) re-measured this row on the merged tree after the overlay gate and OrcaService lanes, adding powerbrowser/shell/OrcaEnv.sys.mjs, powerbrowser/shell/OrcaService.sys.mjs, scripts/verify-orca-hidden-electron.mjs, scripts/verify-orca-service-live.mjs, scripts/verify-orca-service.mjs. COUNT MOVED 47 -> 51 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 004, adding .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs). COUNT MOVED 51 -> 60 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 005 and 006, adding .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs)."
     },
     {
       "token": "onorca",
@@ -1374,6 +1442,20 @@
         "scripts/verify-orca-slotless-start.mjs"
       ],
       "reason": "P60-R2 (OVL-04, plan 60-04): the camelCase function name installedOrcaPaths, an in-word join the boundary matcher rejects. Evidence: scripts/lib/orca-run.mjs:18, scripts/verify-orca-slotless-start.mjs:67. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 62 (plan 62-03) re-measured this row on the merged tree after the overlay gate and OrcaService lanes, adding scripts/verify-orca-hidden-electron.mjs."
+    },
+    {
+      "token": "onOpenLinkInOrcaTab",
+      "case_form": "literal",
+      "class": "coincidental",
+      "target": "onOpenLinkInOrcaTab",
+      "expected_count": 1,
+      "expected_files": [
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/README.md"
+      ],
+      "only_in": [
+        ".claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/README.md"
+      ],
+      "reason": "P61-15 (BRW-01, plan 61-04): the camelCase name onOpenLinkInOrcaTab of a stub in Orca's web client, an in-word join the boundary matcher rejects, quoted by the spike 005 record copied into the spike-findings skill. Evidence: .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/README.md:182. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the file where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in this file or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
     },
     {
       "token": "\\borca",

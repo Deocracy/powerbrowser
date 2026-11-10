@@ -141,6 +141,7 @@ Plans:
 **Goal**: Every terminal Orca uses is a Theia terminal tab, and agents started by Orca or by the Claude Code extension report live status in Orca.
 **Depends on**: Phase 62 (supervised orcad, and the overlay gate in place before the first seam lands); Phase 60 (EXT-01 outcome); Phase 61 (live-sharing record)
 **Requirements**: TERM-01, TERM-02, TERM-03, TERM-04, EXT-02
+Route chosen by Phase 61: agent sessions are Theia terminals running the plain `claude` CLI, reopened on demand with `claude --resume <session id>` (the P61-07 fallback), with the session id taken from Claude's side (`claude agents --json` or the session file name; `orca terminal list --json` does not expose it); no live share inside the extension and no `--bg`/`claude attach` launch is built, as 63-CONTEXT P63-16 adopted (spike 006, verdict YELLOW)
 **Success Criteria** (what must be TRUE):
   1. A terminal Orca opens on the local host appears as a Theia terminal tab, served by PB's Theia-backed `IPtyProvider`, and orcad's node-pty startup probe passes so orcad does not run degraded.
      - A check derives the 21 required members from `pty-provider-contract.ts` at the pin and compares them to PB's provider as a set, so a re-pin that adds a required member goes red naming it.
@@ -199,6 +200,7 @@ Editor, diff and browser-page panes reach the dock through this phase's mapping.
 **Goal**: Orca's agents and the user browse in PowerBrowser web tabs with PowerBrowser chrome. Agent control reaches only Orca-created tabs, and the user can see it and stop it.
 **Depends on**: Phase 61 (browser-parity route and seam); Phase 64
 **Requirements**: BRW-02, BRW-03, BRW-04, BRW-05
+Route chosen by Phase 61: S2, a PB runtime client that attaches through browser.clientHost.attach with no Orca patch, building the tier-1 set of 50 abilities (25 BiDi, 9 BiDi+, 14 native, 1 actor for snapshot, exec as a documented subset); S1 (a 13-line provider-kind patch) stays the fallback. (spike 005, verdict YELLOW)
 **Success Criteria** (what must be TRUE):
   1. A browser page Orca or an agent opens is a PowerBrowser web tab with PB's chrome bar, address field and history. A check derives Orca's browser-pane entry points from the pinned source and proves each routes to a PB web tab, so the stock screencast pane is never shown.
   2. An Orca agent navigates, clicks, types and takes a screenshot in a PB web tab through the chrome-side bridge, and a request naming a tab Orca did not create is refused. A check lists the shipped build's listening sockets and finds no WebDriver BiDi port; its self-test enables the Remote Agent and goes red.
