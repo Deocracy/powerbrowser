@@ -3852,6 +3852,15 @@ run_own_checks() {
     # daemon surviving teardown; then the pairing-leak sentinel (seen with redaction off,
     # absent with it on) and an installed-Orca path that must SKIP.
     "orca-slotless-start-self-test|node $REPO_ROOT/scripts/verify-orca-slotless-start.mjs --self-test"
+    # NEW (60-04, OVL-04, P60-R1): the third-party licence allow-list. The set of fetched
+    # trees is derived from the tracked scripts/fetch-*.sh names and compared with the rows
+    # of inventory/licence-allowlist.json both ways; each row's SPDX id must be in
+    # allowed_spdx (which refuses empty, NONE, UNLICENSED and SEE LICENSE ...), and each
+    # present tree's LICENSE sha256 must equal its row. An absent tree is a named SKIP of
+    # that row only. Runtime-installed proprietary extensions are not rows: PowerBrowser
+    # never redistributes them. The self-test plants six faults in mkdtemp fixtures.
+    "licence-allowlist|node $REPO_ROOT/scripts/verify-licence-allowlist.mjs"
+    "licence-allowlist-self-test|node $REPO_ROOT/scripts/verify-licence-allowlist.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"

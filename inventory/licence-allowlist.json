@@ -1,0 +1,29 @@
+{
+  "$comment": "P60-R1 (OVL-04, ROADMAP Phase 60 SC3): the third-party licence allow-list. It has exactly one consumer, scripts/verify-licence-allowlist.mjs (registry rows licence-allowlist and licence-allowlist-self-test). RULE: one row per tree PowerBrowser builds from, a tree being a directory that a tracked scripts/fetch-<name>.sh materialises; the check derives that set from git ls-files and compares it with these rows as a set, both ways. FAIL-CLOSED RULE: a fetched tree with no row, a row with no fetch script, a row whose spdx is not in allowed_spdx, an allowed_spdx entry that is empty, NONE, UNLICENSED or SEE LICENSE..., or a tree whose licence file digest differs from its row is a FAILURE; only an absent tree is a SKIP, of that row alone. Runtime-installed proprietary extensions (the Claude Code extension, installed from Open VSX by the user) are deliberately NOT rows: PowerBrowser never redistributes them and no fetch script materialises them. Per-row keys: path, source, fetch_script, pinned_by[] (the configuration.toml keys that fix the tree's revision), spdx, holder, licence_file, licence_file_sha256, reason (mandatory, citing file:line), and optional licence_surface_note. Scope limit: a row covers the tree's own root licence; the per-package SPDX scan of a tree's dependency closure is not done here (Phase 68, where Orca first ships).",
+  "allowed_spdx": ["MIT", "MPL-2.0"],
+  "trees": [
+    {
+      "path": "orca",
+      "source": "https://github.com/stablyai/orca",
+      "fetch_script": "scripts/fetch-orca.sh",
+      "pinned_by": ["upstreams.orca_tag", "upstreams.orca_commit"],
+      "spdx": "MIT",
+      "holder": "Lovecast Inc.",
+      "licence_file": "LICENSE",
+      "licence_file_sha256": "ff1b611f80580d49f4b97e93a97b24eb050b0671b26b8afe16341fab699112f3",
+      "reason": "orca/LICENSE:1 reads `MIT License` and orca/LICENSE:3 `Copyright (c) 2026 Lovecast Inc.`, at the pin v1.4.248 (commit 965978bc78bf03a6a43187c1ed28fcffe0e01bb5). P60-R1: Orca is built from source (D-04), so its licence is inherited by what PowerBrowser builds from it.",
+      "licence_surface_note": "60-02 (P60-R3, P60-R4): scripts/build-orca.sh installs orca/mobile/, a separate pnpm workspace whose lockfile brings the Expo / React Native closure into orca/. build:mobile-web compiles it and build:orcad stages the output into out/mobile-web, so that closure is part of this tree's licence surface. Its per-package SPDX ids, together with the root workspace's (including the Anthropic agent SDK dependency, which declares SEE LICENSE IN README.md), are not checked by this row; that scan and its rulings belong to Phase 68."
+    },
+    {
+      "path": "upstream",
+      "source": "https://github.com/mozilla-firefox/firefox",
+      "fetch_script": "scripts/fetch-upstream.sh",
+      "pinned_by": ["upstreams.firefox_esr_tag"],
+      "spdx": "MPL-2.0",
+      "holder": "Mozilla Foundation and contributors",
+      "licence_file": "LICENSE",
+      "licence_file_sha256": "a799adf18bfb1911f16086dc0e2a6d1cd0e31272f47e7ee6841b465b74d249de",
+      "reason": "upstream/LICENSE:1 points to toolkit/content/license.html for the licence conditions; the Gecko tree is MPL-2.0 with the notice set that file carries. The full Gecko notice set is derived from upstream/ by scripts/generate-licensing.mjs into LICENSING.md and THIRD-PARTY-NOTICES.txt; this row pins only the root pointer file, so a rebase that changes it goes red here."
+    }
+  ]
+}
