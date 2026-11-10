@@ -42,6 +42,7 @@ export const DEFAULT_MODE_BY_UI_MODE: Readonly<Record<string, LocalModeId>> = Ob
     coding: 'command-centre',   // Chris, 2026-10-20
     browsing: 'address',        // D-01, Chris 2026-10-21
     organising: 'tabs',         // D-02, Chris 2026-10-21
+    orca: 'address',            // P64-18: D-17's default for a mode with no decided row, written so every shipped mode has a key
 });
 
 /**
