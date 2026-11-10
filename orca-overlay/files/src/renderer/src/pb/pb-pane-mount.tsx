@@ -263,7 +263,7 @@ function tabTitle(state: State, tab: Tab, generated: boolean): string {
 }
 
 /** One record per pane of every content type in every worktree (C3, P64-13). */
-export function paneRecords(state: State): OrcaPaneRecord[] {
+function paneRecords(state: State): OrcaPaneRecord[] {
   const generated = state.settings?.tabAutoGenerateTitle === true
   const records: OrcaPaneRecord[] = []
   for (const [worktreeId, tabs] of Object.entries(state.unifiedTabsByWorktree ?? {})) {

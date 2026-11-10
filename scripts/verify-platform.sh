@@ -3914,6 +3914,13 @@ run_own_checks() {
     # orca-agent-status-live-self-test: the live row's pure verdicts (status order, waiting, record growth, prompt
     # cap, agent PTY under Orca's terminal daemon, quit survivors, bridge-folder files) over fixtures.
     "orca-agent-status-live-self-test|node $REPO_ROOT/scripts/verify-orca-agent-status-live.mjs --self-test"
+    # NEW (64-01, TAB-04/TAB-06/TERM-01, P64-25/P64-32): orca-pane-entry-self-test and
+    # orca-pane-standalone-live-self-test. Hermetic: mkdtemp fixtures for the pane bundle's build gate (a tracked
+    # edit, a planted React copy, a version skew, an inlined font, a tab-bar import, a missing C3 export); fixture
+    # observations for the standalone row's verdicts (a second xterm in an isolated root, a marker in the other
+    # leaf, a grown handle count, a thrown mount, a blind error capture) and a silent child-Node import.
+    "orca-pane-entry-self-test|node $REPO_ROOT/scripts/verify-orca-pane-entry.mjs --self-test"
+    "orca-pane-standalone-live-self-test|node $REPO_ROOT/scripts/verify-orca-pane-standalone-live.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6523,6 +6530,16 @@ run_own_checks() {
       # at most two model turns, on the owner's login; Claude session records compared before and after, never with
       # a constant. Run under flock /home/chris/coding/Power-Browser/.git/pb-live.lock. SKIP when not built.
       "orca-agent-status-live|node $REPO_ROOT/scripts/verify-orca-agent-status-live.mjs"
+      # NEW (64-01, TAB-04/TAB-06/TERM-01, P64-25/P64-32): orca-pane-entry, the pane bundle's build gate (tracked
+      # status at the pre-build baseline, no React copy after the standalone detector moved, Orca's React major.minor
+      # equal to Theia's when Theia is installed, nothing newly inlined, entry imports and C3 exports). SKIP when
+      # the bundle is not built. orca-pane-standalone-live: the bundle on a standalone page in a PowerBrowser web
+      # tab with a scratch orcad; the isolated per-leaf terminal mount (P64-32) is measured first, then every
+      # hosted type mounts after the planted throwing child registers. Run under
+      # flock /home/chris/coding/Power-Browser/.git/pb-live.lock with every inherited ORCA_* unset; SKIP when not
+      # built. Phase 68's re-pin job runs both rows.
+      "orca-pane-entry|node $REPO_ROOT/scripts/verify-orca-pane-entry.mjs"
+      "orca-pane-standalone-live|node $REPO_ROOT/scripts/verify-orca-pane-standalone-live.mjs"
     )
   fi
 
