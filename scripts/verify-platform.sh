@@ -3921,6 +3921,13 @@ run_own_checks() {
     # leaf, a grown handle count, a thrown mount, a blind error capture) and a silent child-Node import.
     "orca-pane-entry-self-test|node $REPO_ROOT/scripts/verify-orca-pane-entry.mjs --self-test"
     "orca-pane-standalone-live-self-test|node $REPO_ROOT/scripts/verify-orca-pane-standalone-live.mjs --self-test"
+    # orca-pane-css-self-test: the scoping pass (orca/pb-css-scope.mjs, equal to the overlay file) over fixture rules
+    # against expected output, then planted faults (a pseudo-element before the scope, an unprefixed keyframe, a
+    # scoped custom property, a dropped portal variant, an unscoped rule, a keyframe clash, a Theia var() read).
+    # orca-pane-css-live-self-test: the live row's pure verdicts (both directions, both controls, measured:false,
+    # the portal probe, the derived <html> clause and its probe sheet) over fixtures. Both hermetic.
+    "orca-pane-css-self-test|node $REPO_ROOT/scripts/verify-orca-pane-css.mjs --self-test"
+    "orca-pane-css-live-self-test|node $REPO_ROOT/scripts/verify-orca-pane-css-live.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6540,6 +6547,14 @@ run_own_checks() {
       # built. Phase 68's re-pin job runs both rows.
       "orca-pane-entry|node $REPO_ROOT/scripts/verify-orca-pane-entry.mjs"
       "orca-pane-standalone-live|node $REPO_ROOT/scripts/verify-orca-pane-standalone-live.mjs"
+      # orca-pane-css: the built pane sheet against Theia's built frontend CSS (keyframe names disjoint, no root
+      # custom property read by Theia, every other rule scoped). orca-pane-css-live: the scoped sheet in the Theia
+      # document, both directions, controls first, the portal probe and the derived <html> clause; lane-build mode
+      # only while theia/extensions/orca-panes is absent, real-widget mode when it exists. P64-15 makes the
+      # coordinator run orca-pane-css-live first on the merged tree in real-widget mode, before any widget live row
+      # is judged. Live: flock /home/chris/coding/Power-Browser/.git/pb-live.lock, every inherited ORCA_* unset.
+      "orca-pane-css|node $REPO_ROOT/scripts/verify-orca-pane-css.mjs"
+      "orca-pane-css-live|node $REPO_ROOT/scripts/verify-orca-pane-css-live.mjs"
     )
   fi
 

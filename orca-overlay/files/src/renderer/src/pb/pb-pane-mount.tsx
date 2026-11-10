@@ -12,6 +12,7 @@
 import '../assets/main.css'
 
 import * as React from 'react'
+import ReactObject from 'react'
 import * as ReactDOMClient from 'react-dom/client'
 // @ts-expect-error -- virtual module served by vite.pb-panes.config.ts's marker plugin
 import { PB_CONFIG_MARKERS } from 'virtual:pb-panes-markers'
@@ -67,8 +68,9 @@ export const PB_OVERLAY_BUILD: readonly string[] = Object.freeze([
   ...(PB_CONFIG_MARKERS as readonly string[])
 ])
 
-/** The React object this bundle runs on; the orca-panes loader compares it with Theia's. */
-export const reactIdentity = React
+/** The React object this bundle runs on (the default export: the host's React object itself, not a
+ * namespace copy); the orca-panes loader compares it with Theia's. */
+export const reactIdentity = ReactObject
 
 export type NeighbourMode = 'split-right' | 'split-left' | 'split-bottom' | 'split-top' | 'tab-after'
 

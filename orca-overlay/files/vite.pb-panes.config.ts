@@ -10,12 +10,14 @@
 // host (Theia's orca-panes) sets before it imports the entry. Their export names are read here, at
 // build time, from Orca's own React under orca/node_modules (19.2.8, the version Theia ships), so
 // the Orca build needs no Theia install; PB_HOST_REACT_DIR (a node_modules directory) overrides
-// it. PB_PANES_STANDALONE=1 bundles Orca's React instead (the standalone page and the two-copy
+// it. The emitted sheet is scoped to the pane by pb-css-scope.mjs (64-RESEARCH A3).
+// PB_PANES_STANDALONE=1 bundles Orca's React instead (the standalone page and the two-copy
 // control); PB_PANES_OUT then names the output directory.
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import { mergeConfig } from 'vite'
 import base from './vite.web.config'
+import { PB_OVERLAY_MARKER as SCOPE_MARKER, viteScopeCss } from './pb-css-scope.mjs'
 
 const CONFIG_MARKER = 'pb-overlay:vite.pb-panes.config.ts'
 const KEY = 'powerbrowser.orca-panes.react'
@@ -81,7 +83,7 @@ function markers(extra: string[]) {
 
 export default mergeConfig(base, {
   base: './',
-  plugins: [...(standalone ? [] : [hostReact()]), markers([])],
+  plugins: [...(standalone ? [] : [hostReact()]), markers([SCOPE_MARKER]), viteScopeCss()],
   build: {
     emptyOutDir: true,
     outDir: resolve(process.env.PB_PANES_OUT || 'out/web/assets/pb-panes'),
