@@ -82,7 +82,7 @@ Plans:
   3. `node scripts/scan-brand-residue.mjs` exits 0 over the staged tree including every Orca-related file, with the "Orca" token classified only in `inventory/brand-tokens.json`, and Orca's MIT licence has a row in the licence allow-list.
   4. The user opens a folder orcad created as an Orca worktree in PowerBrowser's Theia, and the Claude Code VS Code extension starts a session there, answers a prompt and edits a file. The outcome and the extension version are recorded; a failure reshapes EXT-02 (Phase 63) before that phase is planned.
 
-**Plans**: 3/5 plans executed
+**Plans**: 4/5 plans executed
 
 Plans:
 **Wave 1**
@@ -95,7 +95,7 @@ Plans:
 - [x] 60-03-PLAN.md — slot-less orcad on Node 24.19.0 with web-tab pairing, orca-slotless-start rows, D-04 fallback decision (RUN-02)
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 60-04-PLAN.md — licence allow-list row and check, strict orca brand probe on the tracked tree (OVL-04)
+- [x] 60-04-PLAN.md — licence allow-list row and check, strict orca brand probe on the tracked tree (OVL-04)
 - [ ] 60-05-PLAN.md — Claude Code extension on an Orca worktree in Theia 1.76, Chris's live check and record (EXT-01)
 
 ### Phase 61: Spikes for pane hosting, browser parity and live sharing
@@ -239,7 +239,7 @@ Phases execute in numeric order: 59 → 60 → 61 → 62 → 63 → 64 → 65 �
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 59. Carry-forward from v1.5 and v1.6 | 5/8 | In Progress | - |
-| 60. Orca from source on Theia's Node | 3/5 | In Progress | - |
+| 60. Orca from source on Theia's Node | 4/5 | In Progress | - |
 | 61. Spikes for pane hosting, browser parity and live sharing | 0/TBD | Not started | - |
 | 62. Overlay gate and PowerBrowser-run orcad | 0/TBD | Not started | - |
 | 63. Theia terminals and agent hooks for Orca | 0/TBD | Not started | - |

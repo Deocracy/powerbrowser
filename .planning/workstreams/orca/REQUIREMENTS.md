@@ -50,7 +50,7 @@ Owner decisions are in `DECISIONS.md` (D-01..D-25) and win over `research/`. Res
 - [ ] **OVL-03**: orcad's mobile-facing protocol (pairing relay, runtime RPC) is unmodified, and a
   check proves the stock Orca mobile app pairs with PowerBrowser's orcad and reports the pin lag
   against the current stock app. (D-23)
-- [ ] **OVL-04**: "Orca" is classified only in `inventory/brand-tokens.json`; Orca's licence has a
+- [x] **OVL-04**: "Orca" is classified only in `inventory/brand-tokens.json`; Orca's licence has a
   row in the licence allow-list; the brand scan stays green over the overlay.
 - [ ] **OVL-05**: The PowerBrowser pane entry and the PTY and browser providers are new files
   only, compiled by Orca's own `build:web` and `build:orcad`. (D-04)
@@ -190,7 +190,7 @@ Filled by the roadmap.
 | OVL-01 | Phase 62 | Pending |
 | OVL-02 | Phase 68 | Pending |
 | OVL-03 | Phase 68 | Pending |
-| OVL-04 | Phase 60 | Pending |
+| OVL-04 | Phase 60 | Complete |
 | OVL-05 | Phase 62 | Pending |
 | OVL-06 | Phase 68 | Pending |
 | TERM-01 | Phase 63 | Pending |
