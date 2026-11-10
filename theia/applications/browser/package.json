@@ -44,6 +44,7 @@
     "@powerbrowser/customize": "0.1.0",
     "@powerbrowser/modes": "0.1.0",
     "@powerbrowser/orca-agents": "0.1.0",
+    "@powerbrowser/orca-panes": "0.1.0",
     "@powerbrowser/tab-uris": "0.1.0",
     "@powerbrowser/telemetry": "0.1.0",
     "@powerbrowser/token-gate": "0.1.0",
