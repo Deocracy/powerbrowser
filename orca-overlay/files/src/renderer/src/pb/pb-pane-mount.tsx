@@ -55,6 +55,7 @@ import {
   saveStoredWebRuntimeEnvironment
 } from '../web/web-runtime-environment'
 import { makePaneKey } from '../../../shared/stable-pane-id'
+import { CLIENT_NAVIGATION_PUBLICATION_EPOCH_SUFFIX } from '../../../shared/runtime-session-contracts'
 import { resolveUnifiedTabLabel } from '../../../shared/tab-title-resolution'
 import type { Tab, TabGroupLayoutNode } from '../../../shared/tab-types'
 import type { TerminalPaneLayoutNode } from '../../../shared/terminal-tab-types'
@@ -135,6 +136,33 @@ function Services(): null {
   return null
 }
 
+// 64-MIRROR-FREEZE.md: when this client activates or creates a tab (every TerminalPane attach
+// activates its pane), the pinned host projects the frame it sends back to this client twice, so its
+// epoch ends in ':client-navigation:client-navigation'. Orca's mirror reads that as a new publisher,
+// retires the real '<epoch>:client-navigation' and then drops every later host frame. Each echo is
+// passed on as version 0 of the real epoch instead: Orca's own freshness check ignores its tabs, and
+// its sender scopes and retirement proofs (delta-encoded per stream) are still read.
+const NAVIGATION_ECHO = CLIENT_NAVIGATION_PUBLICATION_EPOCH_SUFFIX.repeat(2)
+
+function staleNavigationEchoes(): void {
+  const environments = window.api.runtimeEnvironments
+  const subscribe = environments.subscribe.bind(environments)
+  environments.subscribe = (args, callbacks) =>
+    subscribe(args, {
+      ...callbacks,
+      onResponse: (response) => {
+        const frame = response.ok ? (response.result as { publicationEpoch?: unknown } | null) : null
+        const epoch = typeof frame?.publicationEpoch === 'string' ? frame.publicationEpoch : ''
+        if (!response.ok || !epoch.endsWith(NAVIGATION_ECHO)) {
+          callbacks.onResponse(response)
+          return
+        }
+        const publicationEpoch = epoch.slice(0, -CLIENT_NAVIGATION_PUBLICATION_EPOCH_SUFFIX.length)
+        callbacks.onResponse({ ...response, result: { ...frame, publicationEpoch, snapshotVersion: 0 } })
+      }
+    })
+}
+
 // Each step names itself on failure; the pairing input never enters a message.
 async function step<T>(name: string, run: () => T | Promise<T>): Promise<T> {
   try {
@@ -164,6 +192,7 @@ export function bootstrap(options: { pairing: string }): Promise<void> {
       saveStoredWebRuntimeEnvironment({ ...environment, sessionOnly: true })
     )
     await step('installWebPreloadApi', () => installWebPreloadApi())
+    staleNavigationEchoes()
     await step('services root', () => {
       const host = document.createElement('div')
       host.hidden = true
