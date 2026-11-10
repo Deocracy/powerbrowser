@@ -39,11 +39,11 @@ created: "2026-11-10"
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 66-01-T1 | 01 | 1 | BRW-03 | T-66-03 | thin host attaches with no private Orca member; offer never printed | full (live, Node) | build-orca.sh log lines; `--only orca-browser-host-bundle` (attach, createPage, result, user close) | ❌ W0 | ⬜ pending |
+| 66-01-T1 | 01 | 1 | BRW-03 | T-66-03 | thin host attaches with no private Orca member; offer never printed | full (live, Node) | build-orca.sh log lines; `build-orca.sh --panes-only` keeps `pb-browser-host.js` in `pb-panes/`; `--only orca-browser-host-bundle` (attach, createPage, result, user close) | ❌ W0 | ⬜ pending |
 | 66-01-T2 | 01 | 1 | BRW-02, BRW-03 | T-66-01, T-66-02, T-66-04 | no WebRuntimeClient reach, no constant write, no private subscribe, no inlined asset, tracked set unchanged; link gives one device and client placement (A3) | quick + full | `--only orca-browser-host-bundle-self-test`, `--only orca-overlay`, `--only orca-overlay-built` | ❌ W0 | ⬜ pending |
 | 66-01-T3 | 01 | 1 | BRW-03 | — | N/A | quick | self-test row; lane scope check | ❌ W0 | ⬜ pending |
 | 66-02-T1 | 02 | 1 | BRW-02, BRW-03 | T-66-05, T-66-08 | createPage opens one background agent tab; unbound ids refused; unserved methods never reach chrome | quick | Theia build; `--only orca-browser-abilities` (trace scenario) | ❌ W0 | ⬜ pending |
-| 66-02-T2 | 02 | 1 | BRW-02, BRW-03 | T-66-06, T-66-07 | 92 rows = derived abilities; three-way set equality (chrome side SKIP until p66-03); no BiDi mechanism; dialogs native | quick | `--only orca-browser-abilities-self-test`, `--only orca-browser-abilities`, `--only orca-pane-routes`, `diff-theia-core.sh`, `verify-registry-shape.mjs` | ❌ W0 | ⬜ pending |
+| 66-02-T2 | 02 | 1 | BRW-02, BRW-03 | T-66-06, T-66-07, T-66-08 | 92 rows = derived abilities; three-way set equality (chrome side SKIP until p66-03); no BiDi mechanism; dialogs native; a bound tab revealed only on a later store activation, never at its own createPage (P66-09 reveal tracker trace) | quick | `--only orca-browser-abilities-self-test`, `--only orca-browser-abilities`, `--only orca-pane-routes`, `diff-theia-core.sh`, `verify-registry-shape.mjs` | ❌ W0 | ⬜ pending |
 | 66-02-T3 | 02 | 1 | BRW-02 | — | entry points derived from the pin route to a PB web tab or are dead; interface, link and prefix compared with p66-01 (SKIP until merged) | quick | `--only orca-browser-entry-points-self-test`, `--only orca-browser-entry-points`; bridge row reports exactly the two cross-lane lines | ❌ W0 | ⬜ pending |
 | 66-03-T1 | 03 | 1 | BRW-03 | T-66-09, T-66-12 | wall before page work; flag only at creation; parking only for agent entries; one visibility predicate | quick | `--only orca-browser-tab-scope`, `--only gui02-web-tab-bridge` (+ self-test), boundary and catalogue rows, `verify-new-window-adopt.mjs` | ❌ W0 | ⬜ pending |
 | 66-03-T2 | 03 | 1 | BRW-03, BRW-04 | T-66-10, T-66-11, T-66-14, T-66-15 | 40 methods behind the wall; container cookies; Stop lasting; idle 20 s; Cc[/Ci. only on catalogued child lines | quick | `--only orca-browser-tab-scope-self-test`, `--only internals-boundary-self-test`, `--only internals-catalogue`, `--only ng-040-internals-catalogue-lines` | ❌ W0 | ⬜ pending |
@@ -53,8 +53,8 @@ created: "2026-11-10"
 | 66-04-T3 | 04 | 2 | BRW-03 | T-66-19 | fixture version equals the pin | quick | `--only orca-browser-snapshot-live-self-test`, `--only orca-snapshot-fixtures` | ❌ W0 | ⬜ pending |
 | 66-05-T1 | 05 | 2 | BRW-04 | T-66-20, T-66-22 | mark drawn from chrome's pushed state only; Stop is the only agentStop caller; copy free of identifiers | quick | Theia build, `--only shell-error-copy-no-internals`, `verify-tab-strip.mjs` | ❌ W0 | ⬜ pending |
 | 66-05-T2 | 05 | 2 | BRW-05 | — | U-01..U-30 set-equal to the PB map; each contribution exists; deferrals name v2 ids | quick | `--only orca-browser-tools-self-test`, `--only orca-browser-tools` | ❌ W0 | ⬜ pending |
-| 66-05-T3 | 05 | 2 | BRW-02, BRW-03, BRW-04 | T-66-21, T-66-23 | criteria 1-3 live; every absence after its detector | quick (self-tests) + full (live) | `--only orca-browser-agent-live-self-test`, `--only orca-agent-mark-live-self-test`; live rows SKIP in lane | ❌ W0 | ⬜ pending |
-| 66-06-T1 | 06 | 3 | all | T-66-24, T-66-25 | merges scope-checked; cross-lane clauses compared, never SKIP | live | `--only orca-browser-agent-live` under the lock; cross-lane rows show no 'not merged' | n/a | ⬜ pending |
+| 66-05-T3 | 05 | 2 | BRW-02, BRW-03, BRW-04 | T-66-21, T-66-23 | criteria 1-3 live; every absence after its detector; activation clause (j) after its store-activation detector; no-pane clause (k) | quick (self-tests) + full (live) | `--only orca-browser-agent-live-self-test`, `--only orca-agent-mark-live-self-test`; live rows SKIP in lane | ❌ W0 | ⬜ pending |
+| 66-06-T1 | 06 | 3 | all | T-66-24, T-66-25 | merges scope-checked; build:extensions builds orca-browser before orca-panes; cross-lane clauses compared, never SKIP | live | `--only orca-browser-agent-live` under the lock; each cross-lane row exits 0 and shows no 'not merged' | n/a | ⬜ pending |
 | 66-06-T3 | 06 | 3 | all | T-66-26 | brand rows measured; --quick vs baseline | quick + live | the five live rows; `scan-brand-residue.mjs` (+ self-test); `--quick` | n/a | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
@@ -65,7 +65,7 @@ created: "2026-11-10"
 
 | Req / criterion | Rows |
 |---|---|
-| BRW-02 / SC1 | `orca-browser-entry-points` (+ self-test); `orca-browser-agent-live` clauses (a), (g); `orca-pane-routes` stays green |
+| BRW-02 / SC1 | `orca-browser-entry-points` (+ self-test); `orca-browser-agent-live` clauses (a), (g), (j) activation, (k) no Orca pane; `orca-pane-routes` stays green |
 | BRW-03 / SC2 | `orca-browser-host-bundle` (+ self-test); `orca-browser-abilities` (+ self-test); `orca-browser-tab-scope` (+ self-test); `orca-browser-agent-live` clauses (b)-(f), (h), (i); `no-remote-agent-port-live` (+ self-test); `orca-browser-snapshot-live` (+ self-test), `orca-snapshot-fixtures`; `internals-boundary`, `internals-catalogue`, `ng-040-internals-catalogue-lines` (extended by A2) |
 | BRW-04 / SC3 | `orca-agent-mark-live` (+ self-test); `gui02-web-tab-bridge` (two kinds classified, Stop sender fenced); `orca-browser-tab-scope` (Stop and idle state) |
 | BRW-05 / SC4 | `orca-browser-tools` (+ self-test) |
@@ -100,7 +100,7 @@ On the lane p66-02 and p66-05 branches, `gui02-web-tab-bridge` runs the pre-66-0
 
 ## Manual-Only Verifications
 
-All phase behaviors have automated verification. The visual and interaction checks (mark and Stop placement and readability, title mark in light and dark, a real agent session browsing while the user works, the privacy wording) and the owner items (spike 005 owner note, P66-08, P66-11, P66-22, P66-24, P66-26, O1, O2, the P66-33 diagnostics row) run in the end-of-milestone pass (59-CONTEXT D-18).
+All phase behaviors have automated verification. The visual and interaction checks (mark and Stop placement and readability, title mark in light and dark, a real agent session browsing while the user works, the privacy wording) and the owner items (spike 005 owner note, P66-08, P66-11, P66-22, P66-24, P66-26, O1, O2; the P66-33 diagnostics-row route is 66-06 Task 2's owner decision) run in the end-of-milestone pass (59-CONTEXT D-18).
 
 ---
 
