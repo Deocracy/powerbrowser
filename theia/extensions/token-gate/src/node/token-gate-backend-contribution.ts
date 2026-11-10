@@ -9,6 +9,7 @@ import { WsRequestValidatorContribution } from '@theia/core/lib/node/ws-request-
 import { ApplicationPackage } from '@theia/core/shared/@theia/application-package';
 import { POWERBROWSER_ENV } from './powerbrowser-env';
 import { isWebviewHost } from '../common/webview-host';
+import { originVerdict } from '../common/origin-policy';
 
 // D-98: replaces the trust root for backend access on plain HTTP -- the
 // stock BrowserConnectionTokenBackendContribution (browser-connection-token.js)
@@ -154,6 +155,11 @@ export class PowerBrowserTokenGateContribution implements BackendApplicationCont
             this.serveWebviewShell(req, res);
             return;
         }
+        // RUN-08: a same-site page on another loopback port carries the token cookie too; only our own origin passes.
+        if (!this.isOwnOrigin(req)) {
+            res.sendStatus(403);
+            return;
+        }
         const token = this.getTokenFromCookie(req);
         if (token !== undefined && this.isTokenValid(token)) {
             next();
@@ -193,6 +199,9 @@ export class PowerBrowserTokenGateContribution implements BackendApplicationCont
         if (this.disabled) {
             return true;
         }
+        if (!this.isOwnOrigin(request)) {
+            return false;
+        }
         const token = this.getTokenFromCookie(request);
         return token !== undefined && this.isTokenValid(token);
     }
@@ -225,5 +234,11 @@ export class PowerBrowserTokenGateContribution implements BackendApplicationCont
             return false;
         }
         return crypto.timingSafeEqual(received, expected);
+    }
+
+    /** RUN-08: the request's Origin and Sec-Fetch-Site admit only the sidecar's own origin (origin-policy.ts). */
+    protected isOwnOrigin(req: { headers: http.IncomingHttpHeaders }): boolean {
+        const fetchSite = req.headers['sec-fetch-site'];
+        return originVerdict(req.headers.origin, Array.isArray(fetchSite) ? fetchSite.join(',') : fetchSite, this.port) === 'allow';
     }
 }
