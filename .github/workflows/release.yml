@@ -683,7 +683,7 @@ jobs:
   # this hosted job as their builder, a claim this job cannot make. Compromising legion is therefore equivalent
   # to compromising the Windows signing identity (docs/RELEASING.md, "Windows signing (SEC-12)").
   sign-windows:
-    needs: build-windows
+    needs: [build-windows, windows-orca]
     if: needs.build-windows.outputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -792,8 +792,9 @@ jobs:
 
       # The zip name and its top directory are DERIVED from this tree (scripts/win-sign-list.mjs --expected-base:
       # configuration.toml's app basename and ESR version) and the artifact must match them; nothing the artifact
-      # names reaches GITHUB_OUTPUT. Zip entries are refused unless every name matches ^[A-Za-z0-9._/-]+$ with no
+      # names reaches GITHUB_OUTPUT. Zip entries are refused unless every name matches ^[A-Za-z0-9@._/-]+$ with no
       # .. segment and no leading slash, when they are symlinks, or when the top directory is not the derived one.
+      # @ is admitted for Orca's scoped packages (node_modules/@parcel/watcher, @linear/sdk; P68-30).
       - name: Admit the staged zip and the setup stub against the tree-derived names, and unpack the zip
         if: steps.azure_config.outputs.signing == 'true'
         id: inputs
@@ -814,12 +815,12 @@ jobs:
           import re, stat, sys, zipfile
           z = zipfile.ZipFile(sys.argv[1])
           want_top = sys.argv[3]
-          ok_name = re.compile(r'^[A-Za-z0-9._/-]+$')
+          ok_name = re.compile(r'^[A-Za-z0-9@._/-]+$')
           ok_top = re.compile(r'^[A-Za-z0-9._-]+$')
           for i in z.infolist():
               n = i.filename
               if not ok_name.match(n) or n.startswith('/') or '..' in n.split('/') or stat.S_ISLNK(i.external_attr >> 16):
-                  sys.exit(f"refused zip entry {n!r}: only [A-Za-z0-9._/-] names, no .. segment, no leading slash and no symlink")
+                  sys.exit(f"refused zip entry {n!r}: only [A-Za-z0-9@._/-] names, no .. segment, no leading slash and no symlink")
               top = n.split('/')[0]
               if not ok_top.match(top) or top != want_top:
                   sys.exit(f"refused zip entry {n!r}: its top directory is not {want_top!r}")
@@ -866,18 +867,31 @@ jobs:
           bash scripts/fetch-upstream.sh
           bash scripts/apply-patches.sh
 
+      # Orca's PE files are named by the windows-orca artifact's SHA256SUMS, admitted here by the digest its hosted
+      # producer recorded outside the artifact, as build-windows admits it (P68-03, P68-30). Data only.
+      - name: Download the hosted Windows Orca tree into windows-orca/ (its SHA256SUMS names the Orca PE files)
+        if: steps.azure_config.outputs.signing == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-orca
+          path: windows-orca
+
       # The files to sign are the PE files of the staged tree that the pinned package manifest names (set
-      # comparison: an extra PE file or a missing unconditional one stops the job naming it); never a find over
-      # whatever legion produced. The list stays in a file; nothing from it reaches GITHUB_OUTPUT.
+      # comparison: an extra PE file or a missing unconditional one stops the job naming it), and under orca/ the
+      # PE files the admitted Orca SHA256SUMS names (set comparison as well); never a find over whatever legion
+      # produced. The list stays in a file; nothing from it reaches GITHUB_OUTPUT.
       - name: Derive the inner PE files to sign from the pinned package manifest and compare them with the staged tree
         if: steps.azure_config.outputs.signing == 'true'
         id: sign_list
         env:
           PKG: ${{ steps.inputs.outputs.pkg }}
           TOP: ${{ steps.inputs.outputs.top }}
+          PB_WIN_ORCA_SUMS_SHA256: ${{ needs.windows-orca.outputs.sums_sha256 }}
         run: |
           set -euo pipefail
-          node scripts/win-sign-list.mjs --list --pkg "$PKG/$TOP" --manifest upstream/browser/installer/package-manifest.in > "$RUNNER_TEMP/sign-list.txt"
+          bash powerbrowser/packaging/check-win-sidecar.sh check windows-orca "$PB_WIN_ORCA_SUMS_SHA256"
+          node scripts/win-sign-list.mjs --list --pkg "$PKG/$TOP" --manifest upstream/browser/installer/package-manifest.in \
+            --orca-sums windows-orca/SHA256SUMS > "$RUNNER_TEMP/sign-list.txt"
           wc -l < "$RUNNER_TEMP/sign-list.txt"
 
       # Directly before the first signature, after every gate above has passed.

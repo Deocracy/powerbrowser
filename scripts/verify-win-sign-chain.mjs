@@ -33,7 +33,9 @@
 //               jar is checked against a 64-hex sha256 before use.
 //   inputs      the artifact is matched against tree-derived names: the admission step derives the zip base name
 //               and top directory with scripts/win-sign-list.mjs --expected-base, compares the zip with it, and
-//               refuses any entry name outside ^[A-Za-z0-9._/-]+$ and any other top directory; from the
+//               refuses any entry name outside ^[A-Za-z0-9@._/-]+$, any .. segment, a leading slash, any
+//               symlink and any other top directory (@ is admitted for Orca's node_modules/@parcel/watcher and
+//               @linear/sdk, P68-30; the traversal and symlink refusals are unchanged by it); from the
 //               artifact download on, a value written to GITHUB_OUTPUT is a tree-derived $WANT_* or a path
 //               under $RUNNER_TEMP or $PKG, never an artifact-derived name.
 //   sign-list   the inner files come from scripts/win-sign-list.mjs --list (the pinned package manifest compared
@@ -265,8 +267,11 @@ export function runChecks({ wf, releasing, page, live, liveUrl = 'the published 
     if (adm === undefined || !/win-sign-list\.mjs --expected-base/.test(admRun) || !admRun.includes('"windows/$WANT_BASE.zip"')) {
         fail('inputs', 'inputs', `does not compare the artifact's zip with the name derived from this tree (win-sign-list.mjs --expected-base), so legion would choose the package name. Next step: derive it and require equality.`);
     }
-    if (adm !== undefined && (!admRun.includes("r'^[A-Za-z0-9._/-]+$'") || !admRun.includes("r'^[A-Za-z0-9._-]+$'") || !admRun.includes('want_top'))) {
-        fail('inputs', 'inputs', `does not refuse zip entry names outside ^[A-Za-z0-9._/-]+$ or a top directory other than the derived one. Next step: restore both checks.`);
+    if (adm !== undefined && (!admRun.includes("r'^[A-Za-z0-9@._/-]+$'") || !admRun.includes("r'^[A-Za-z0-9._-]+$'") || !admRun.includes('want_top'))) {
+        fail('inputs', 'inputs', `does not refuse zip entry names outside ^[A-Za-z0-9@._/-]+$ or a top directory other than the derived one. Next step: restore both checks.`);
+    }
+    if (adm !== undefined && !(admRun.includes("n.startswith('/')") && admRun.includes("'..' in n.split('/')") && admRun.includes('stat.S_ISLNK('))) {
+        fail('inputs', 'inputs', `does not refuse a zip entry with a leading slash, a .. segment or a symlink mode. Next step: restore all three refusals.`);
     }
     const dl = steps.findIndex(s => /^actions\/download-artifact@/.test(String(s.uses ?? '')));
     for (const s of steps.slice(Math.max(dl, 0))) {
@@ -406,7 +411,9 @@ function selfTest(yaml) {
         ['MAR verified against an untracked DER', edit((c, st) => { const v = st[idx(st, 'signmar-verify')]; v.run = String(v.run).split(DER_REL).join('scratch/other.der'); }), 'win_verify_mar', 'trust', DER_REL],
         ['artifact-derived zip name written to GITHUB_OUTPUT', edit((c, st) => { const a = st.find(s => s.id === 'inputs'); a.run = String(a.run).replace('echo "base=$WANT_BASE"', 'echo "base=$(basename "${ZIPS[0]}" .zip)"'); }), 'inputs', 'inputs', 'base='],
         ['zip not compared with the tree-derived name', edit((c, st) => { const a = st.find(s => s.id === 'inputs'); a.run = String(a.run).split('"windows/$WANT_BASE.zip"').join('"${ZIPS[0]}"'); }), 'inputs', 'inputs', 'derived from this tree'],
-        ['zip entry name check removed', edit((c, st) => { const a = st.find(s => s.id === 'inputs'); a.run = String(a.run).replace("r'^[A-Za-z0-9._/-]+$'", "r'^.*$'"); }), 'inputs', 'inputs', 'A-Za-z0-9._/-'],
+        ['zip entry name check removed', edit((c, st) => { const a = st.find(s => s.id === 'inputs'); a.run = String(a.run).replace("r'^[A-Za-z0-9@._/-]+$'", "r'^.*$'"); }), 'inputs', 'inputs', 'A-Za-z0-9@._/-'],
+        ['zip entry name check back to the filter that refuses @', edit((c, st) => { const a = st.find(s => s.id === 'inputs'); a.run = String(a.run).replace("r'^[A-Za-z0-9@._/-]+$'", "r'^[A-Za-z0-9._/-]+$'"); }), 'inputs', 'inputs', 'A-Za-z0-9@._/-'],
+        ['zip entry .. refusal removed', edit((c, st) => { const a = st.find(s => s.id === 'inputs'); a.run = String(a.run).replace(" or '..' in n.split('/')", ''); }), 'inputs', 'inputs', '.. segment'],
         ['inner files chosen by a find over the build output', edit((c, st) => { const v = st[idx(st, 'inner-sign')]; v.run = String(v.run).replace('mapfile -t REL < "$RUNNER_TEMP/sign-list.txt"', 'mapfile -t REL < <(find "$PKG" -iname "*.dll")'); }), 'inner_sign', 'sign-list', 'find'],
         ['derived sign list removed', edit((c, st) => { st.splice(st.findIndex(s => s.id === 'sign_list'), 1); c.jobs[JOB].steps = st; }), JOB, 'sign-list', 'sign_list'],
         ['hosted attestation of legion-built bytes', edit((c, st) => { st.push({ name: 'Attest', uses: 'actions/attest-build-provenance@' + '0'.repeat(40), with: { 'subject-path': 'x' } }); c.jobs[JOB].steps = st; c.jobs[JOB].permissions.attestations = 'write'; }), 'Attest', 'attest', 'legion'],
