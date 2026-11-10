@@ -3979,6 +3979,21 @@ run_own_checks() {
     # The self-test plants 13 faults in mkdtemp copies.
     "orca-pane-routes|node $REPO_ROOT/scripts/verify-orca-pane-routes.mjs"
     "orca-pane-routes-self-test|node $REPO_ROOT/scripts/verify-orca-pane-routes.mjs --self-test"
+    # NEW (64-04, TERM-04, P64-33): orca-terminal-keys, ported by copy from refs/heads/ServerDestroyer/p63-02 (never
+    # merged; the o<n> clauses dropped, D-31). The six keys derived from PAGE_KEYS' reserved rows with typescript and
+    # compared both ways with orca-panes' ORCA_TERMINAL_PASSTHROUGH_KEYS; literal ctrl; the when clause exactly the
+    # scoped key; only passthrough rows; the scoped key only on hosted terminal nodes; no terminalFocus row. The
+    # orca-panes half is a named SKIP only while theia/extensions/orca-panes is absent; present without a constant is
+    # red. The self-test runs on a fixture orca-panes tree in C10's shape (11 plants). orca-terminal-keys-live-self-test
+    # (ported from p63-05): its pure verdicts over fixture observations plus a child-Node import-silence check.
+    "orca-terminal-keys|node $REPO_ROOT/scripts/verify-orca-terminal-keys.mjs"
+    "orca-terminal-keys-self-test|node $REPO_ROOT/scripts/verify-orca-terminal-keys.mjs --self-test"
+    "orca-terminal-keys-live-self-test|node $REPO_ROOT/scripts/verify-orca-terminal-keys-live.mjs --self-test"
+    # orca-tabs-live-self-test (64-04, P64-25/P64-35): orca-tabs-live's pure verdicts, each over a passing fixture and
+    # one fixture per failure (late addWidget, a second widget for one pane, split direction, tab groups, remount,
+    # Organising key, tab chrome in Theia, a blind detector, close, reload, route, offer, OWNER-ITEM), plus a child-Node
+    # import-silence check. Hermetic.
+    "orca-tabs-live-self-test|node $REPO_ROOT/scripts/verify-orca-tabs-live.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6626,6 +6641,19 @@ run_own_checks() {
       # is judged. Live: flock /home/chris/coding/Power-Browser/.git/pb-live.lock, every inherited ORCA_* unset.
       "orca-pane-css|node $REPO_ROOT/scripts/verify-orca-pane-css.mjs"
       "orca-pane-css-live|node $REPO_ROOT/scripts/verify-orca-pane-css-live.mjs"
+      # NEW (64-04, TERM-04, P64-33): orca-terminal-keys-live, ported by copy from refs/heads/ServerDestroyer/p63-05
+      # (never merged; runTabStage, the backend-parent chain and the kind 'orca' restore stage dropped, D-31). One
+      # session: the in-session control in a t<n> terminal and a web tab, the six keys reaching a hosted Orca
+      # terminal's PTY (stage 2, a named SKIP only while theia/extensions/orca-panes is absent), then the control
+      # repeated. Coordinator proof on the merged, wired, built tree. Run under
+      # flock /home/chris/coding/Power-Browser/.git/pb-live.lock with ORCA_* unset.
+      "orca-terminal-keys-live|node $REPO_ROOT/scripts/verify-orca-terminal-keys-live.mjs"
+      # orca-tabs-live (64-04, TAB-01..TAB-06/TERM-01, criteria 2, 3, 6): every creation path gives one hosted tab
+      # within 1 s, echo, per-leaf split placement, chat from PB and from a second paired client, the other Orca-only
+      # views, Orca tab groups as Lumino splits, the A4 freeze guard, Organising rows, no Orca tab chrome after its
+      # detector, close semantics, reload, route and offer containment. Coordinator proof on the merged, wired, built
+      # tree after orca-pane-css-live (P64-15); a named SKIP while lane p64-02 or p64-01 is unmerged. Under the live lock.
+      "orca-tabs-live|node $REPO_ROOT/scripts/verify-orca-tabs-live.mjs"
     )
   fi
 

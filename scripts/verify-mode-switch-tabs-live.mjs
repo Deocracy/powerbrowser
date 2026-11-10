@@ -72,6 +72,19 @@
  *     excluded from both id sets -- the same exclusion chrome-bar's countTabs
  *     makes, for the same reason, and read from the same single definition.
  *
+ * ORCA SEEDS (Phase 64, P64-19, P64-27, P64-35; interface C9). After the
+ * welcome seed, one hosted chat tab and one hosted terminal tab are seeded
+ * through powerbrowser.orca.newChat and powerbrowser.orca.newTerminal, with
+ * scripts/lib/orca-tabs-live.mjs's stub claude on the launched PowerBrowser's
+ * PATH (that relative lib import is the one exception to the rule below, and
+ * it runs only when the seeds do). Both must be main-area tabs before the walk,
+ * so the set-equality and isAttached assertions cover them on every hop,
+ * the Orca mode's included. While theia/extensions/orca-panes is absent the
+ * seeds print "Orca seeds: SKIP -- lane p64-02 not merged"; present but a
+ * command unregistered or no hosted widget within 5000 ms is red. The plant
+ * 'orca-vanish' disposes an Orca seed (the welcome seed stands in while there
+ * is none) after the first hop, and the next hop must name it LOST.
+ *
  * NON-VACUITY. A derivation that yields nothing fails as a broken instrument:
  * zero shipped ids, zero registration sinks, an unreadable seed, and -- the one
  * that matters most -- a seed that produced ZERO main-area widgets. A check
@@ -96,7 +109,7 @@
  * `document`, no shell and no widget to observe in a bare Node tier, and on a
  * tree with no `objdir/` it fails at the binary's existence check rather than
  * degrading into a text scan. Register it in the full set, never the commit
- * gate. One clean run is roughly 30 seconds; `--self-test` boots six sessions
+ * gate. One clean run is roughly 30 seconds; `--self-test` boots seven sessions
  * and takes about three minutes.
  *
  * WHAT IT DOES NOT PROVE. It observes one profile, one boot and one walk. It
@@ -115,7 +128,7 @@
  * only (D-69).
  */
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { withFirefoxPage } from './lib/firefox-bidi.mjs';
@@ -128,6 +141,10 @@ const ORGANISING_REL = 'theia/extensions/modes/src/browser/organising-widget.ts'
 const COMMANDS_REL = 'theia/extensions/modes/src/browser/modes-commands.ts';
 const SEED_REL = 'theia/extensions/branding/src/browser/powerbrowser-welcome-contribution.ts';
 const EXTENSIONS_REL = 'theia/extensions';
+/** Phase 64 (P64-19, P64-35): the Orca seeds exist only once lane p64-02's extension is in the tree. */
+const ORCA_PANES_REL = 'theia/extensions/orca-panes';
+const ORCA_PANE_FACTORY_ID = 'powerbrowser.orca-pane';
+const ORCA_SEED_COMMANDS = ['powerbrowser.orca.newChat', 'powerbrowser.orca.newTerminal'];
 
 /** Stock source, read never written: the 'default' perspective id is upstream's, not ours. */
 const STOCK_PERSPECTIVE_JS_REL = 'theia/node_modules/@theia/core/lib/browser/perspective-service.js';
@@ -353,6 +370,9 @@ function protocolExpression(derived, plant) {
         activateCommandId: derived.activateCommandId,
         seedId: derived.seedId,
         unaccountedId: UNACCOUNTED_PLANT_ID,
+        orcaSeeds: existsSync(join(REPO_ROOT, ORCA_PANES_REL)),
+        orcaFactoryId: ORCA_PANE_FACTORY_ID,
+        orcaSeedCommands: ORCA_SEED_COMMANDS,
         plant,
     });
     return `(async () => { ${GET_BY_NAME}
@@ -464,6 +484,27 @@ function protocolExpression(derived, plant) {
             fail('could not seed a main-area widget from ' + cfg.seedId + ': ' + String(e));
         }
 
+        // --- Orca seeds (Phase 64): one hosted chat, one hosted terminal ----
+        const orcaSeeds = [];
+        if (!cfg.orcaSeeds) {
+            report.notes.push('Orca seeds: SKIP -- lane p64-02 not merged');
+        } else {
+            for (const id of cfg.orcaSeedCommands) {
+                report.steps.push('seed ' + id);
+                if (!commands.getCommand(id)) { fail('Orca seed command ' + id + ' is not registered'); continue; }
+                const known = new Set(widgets.getWidgets(cfg.orcaFactoryId).map(w => w.id));
+                await commands.executeCommand(id);
+                let added;
+                for (const end = Date.now() + 5000; !added && Date.now() < end; await new Promise(r => setTimeout(r, 100))) {
+                    added = widgets.getWidgets(cfg.orcaFactoryId).find(w => !known.has(w.id));
+                }
+                if (!added) { fail('Orca seed ' + id + ' gave no hosted widget within 5000 ms'); continue; }
+                orcaSeeds.push(added);
+            }
+            await settle();
+            report.notes.push('Orca seeds: ' + orcaSeeds.map(w => w.id).join(', '));
+        }
+
         const baselineWidgets = widgetsIn('main');
         const baselineMain = idsIn('main');
         const baselineBottom = idsIn('bottom');
@@ -471,6 +512,9 @@ function protocolExpression(derived, plant) {
         report.baselineBottom = baselineBottom;
         if (baselineMain.length === 0) {
             fail('the seed produced ZERO main-area widgets -- this run had nothing to lose, so a clean result would prove nothing about whether a mode switch destroys tabs');
+        }
+        for (const w of orcaSeeds) {
+            if (!baselineMain.includes(w.id)) fail("the Orca seed '" + w.id + "' is not a main-area tab before the walk");
         }
         if (!baselineMain.includes(cfg.seedId)) {
             fail("the seeded widget '" + cfg.seedId + "' is not in the main area after seeding -- the seed did not take, so the walk below would measure the wrong thing");
@@ -509,8 +553,18 @@ function protocolExpression(derived, plant) {
         }
 
         // --- measured walk: every hop is a SECOND visit --------------------
+        let hops = 0;
         for (const id of [...cfg.shipped, cfg.defaultId]) {
             await activate(id);
+            if (cfg.plant === 'orca-vanish' && ++hops === 1) {
+                // After the first hop, so only a later hop's measurement can see it go.
+                const target = orcaSeeds[0] || baselineWidgets.find(w => w.id === cfg.seedId);
+                if (target) {
+                    target.dispose();
+                    report.notes.push('PLANT orca-vanish: ' + target.id + ' disposed after the first hop' + (orcaSeeds.length ? '' : ' (stand-in: no Orca seed in this tree)'));
+                }
+                continue;
+            }
             for (const [area, baseline] of [['main', baselineMain], ['bottom', baselineBottom]]) {
                 const live = idsIn(area);
                 const lost = baseline.filter(x => !live.includes(x));
@@ -553,6 +607,23 @@ async function runProtocol(derived, plant) {
 }
 
 async function drive(derived, plant) {
+    if (existsSync(join(REPO_ROOT, ORCA_PANES_REL))) {
+        // The Orca seeds may launch an agent: the stub claude goes on the launched PowerBrowser's PATH only.
+        const { writeStubAgentDir } = await import('./lib/orca-tabs-live.mjs');
+        const stub = writeStubAgentDir();
+        const savedPath = process.env.PATH;
+        process.env.PATH = `${stub}:${savedPath ?? ''}`;
+        try {
+            return await driveSession(derived, plant);
+        } finally {
+            process.env.PATH = savedPath;
+            rmSync(stub, { recursive: true, force: true });
+        }
+    }
+    return driveSession(derived, plant);
+}
+
+async function driveSession(derived, plant) {
     // WINDOWS 14: empty URL -- the shell's own supervised frontend is the app
     // under test, and a URL on the command line would open a redundant stock
     // window beside it.
@@ -699,6 +770,12 @@ async function selfTest() {
             name: 'surplus main-area widget',
             plant: 'surplus',
             expect: 'APPEARED',
+        },
+        {
+            // Phase 64: a seeded tab (an Orca seed when the tree has one) vanishing after a hop.
+            name: 'Orca seed vanishes after a hop',
+            plant: 'orca-vanish',
+            expect: 'LOST',
         },
         {
             // Proves the upstream accounting did not widen the surplus
