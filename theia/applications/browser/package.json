@@ -39,6 +39,7 @@
   },
   "dependencies": {
     "@powerbrowser/branding": "0.1.0",
+    "@powerbrowser/bundled-extensions": "0.1.0",
     "@powerbrowser/chrome-bar": "0.1.0",
     "@powerbrowser/customize": "0.1.0",
     "@powerbrowser/modes": "0.1.0",

@@ -1,0 +1,15 @@
+{
+  "name": "claude-agent-sdk",
+  "publisher": "powerbrowser",
+  "displayName": "Claude Agent SDK",
+  "description": "Anthropic's Claude Agent SDK, which Claude chat sessions in Orca use inside PowerBrowser.",
+  "version": "0.3.284",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE.md",
+  "engines": {
+    "vscode": "^1.50.0"
+  },
+  "categories": [
+    "Other"
+  ]
+}

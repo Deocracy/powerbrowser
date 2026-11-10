@@ -16,9 +16,12 @@
 // system plugins and refuses packed files there, while the pin gate needs the packed bytes.
 // Anything else in <pluginsDir> is removed, so the folder Theia loads holds only pinned,
 // declared bytes.
+// Then every bundled-extensions/<folder>/ is assembled into <pluginsDir>/.user/<id>/ (D-30): a
+// built-in plugin cannot be uninstalled, and the dot keeps .user out of Theia's system scan; the
+// @powerbrowser/bundled-extensions seed copies it into the profile as a user plugin instead.
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, join, relative, resolve } from 'node:path';
@@ -79,7 +82,7 @@ for (const d of declared) {
         : `${d.id}: the ${d.entry.source} archive has sha256 ${actual}, the manifest pins ${d.entry.sha256} -- nothing was installed for it`);
 }
 
-const keep = new Set(declared.flatMap(d => [basename(d.slot), d.id]));
+const keep = new Set([...declared.flatMap(d => [basename(d.slot), d.id]), '.user']);
 for (const name of readdirSync(pluginsDir)) {
     if (!keep.has(name)) rmSync(join(pluginsDir, name), { recursive: true, force: true });
 }
@@ -99,6 +102,39 @@ for (const d of declared) {
         die(`${d.id}: unpacking its ${d.entry.source} archive failed -- ${err.message}`);
     }
     console.log(`${NAME}: ${d.id} (${d.entry.source}) installed, bytes match the manifest`);
+}
+
+// Bundled extensions (D-30, P68-38): each folder is built in a temporary sibling and renamed
+// into place, so a failure leaves no half-built plugin for the seed to copy.
+const userDir = join(pluginsDir, '.user');
+const bundledRoot = join(REPO_ROOT, 'bundled-extensions');
+const bundled = existsSync(bundledRoot)
+    ? readdirSync(bundledRoot).filter(n => existsSync(join(bundledRoot, n, 'package.json'))).sort()
+    : [];
+mkdirSync(userDir, { recursive: true });
+const bundledIds = new Set();
+for (const folder of bundled) {
+    const src = join(bundledRoot, folder);
+    const manifest = JSON.parse(readFileSync(join(src, 'package.json'), 'utf8'));
+    const id = `${manifest.publisher}.${manifest.name}`;
+    bundledIds.add(id);
+    const tmp = mkdtempSync(join(userDir, `.${id}-`));
+    try {
+        mkdirSync(join(tmp, 'extension'));
+        copyFileSync(join(src, 'package.json'), join(tmp, 'extension', 'package.json'));
+        // Theia reads <root>/extension/package.json only beside a VSIX manifest
+        // (plugin-vscode-directory-handler.js resolveFromVSIX), so the folder carries one.
+        writeFileSync(join(tmp, 'extension.vsixmanifest'), vsixManifest(manifest));
+        rmSync(join(userDir, id), { recursive: true, force: true });
+        renameSync(tmp, join(userDir, id));
+    } catch (err) {
+        rmSync(tmp, { recursive: true, force: true });
+        die(`bundled-extensions/${folder}: assembling ${id} failed -- ${err.message}`);
+    }
+    console.log(`${NAME}: ${id} (bundled) assembled`);
+}
+for (const name of readdirSync(userDir)) {
+    if (!bundledIds.has(name)) rmSync(join(userDir, name), { recursive: true, force: true });
 }
 
 // I-2: a declared extension's undeclared dependencies would be fetched unpinned from
@@ -131,6 +167,26 @@ function readManifestOf(d) {
     return null;
 }
 const MANIFEST_NAME_HINT = 'configuration.toml';
+
+function vsixManifest(m) {
+    const x = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    return `<?xml version="1.0" encoding="utf-8"?>
+<PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">
+  <Metadata>
+    <Identity Language="en-US" Id="${x(m.name)}" Version="${x(m.version)}" Publisher="${x(m.publisher)}" />
+    <DisplayName>${x(m.displayName)}</DisplayName>
+    <Description xml:space="preserve">${x(m.description)}</Description>
+  </Metadata>
+  <Installation>
+    <InstallationTarget Id="Microsoft.VisualStudio.Code" />
+  </Installation>
+  <Dependencies />
+  <Assets>
+    <Asset Type="Microsoft.VisualStudio.Code.Manifest" Path="extension/package.json" Addressable="true" />
+  </Assets>
+</PackageManifest>
+`;
+}
 
 function sha256Of(path) {
     try {
