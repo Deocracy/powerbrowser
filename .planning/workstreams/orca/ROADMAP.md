@@ -231,7 +231,18 @@ The Phase 61 parity result may split or descope this phase. Any such change is a
   4. Linux, macOS and Windows artifacts contain orcad and the overlaid client, with the node-pty prebuild built per target on that target's own runner. The Flatpak manifest grants `--filesystem=home`. Each of these checks is one `verify-platform.sh` row.
   5. The live checks pass on Linux. macOS and Windows smoke results are recorded when a host is available (D-24).
 
-**Plans**: TBD
+**Plans**: 6 plans
+
+Plans:
+**Wave 1** *(executable now; four lanes in parallel)*
+- [ ] 68-01-PLAN.md — lane p68-01: Orca in the Linux, Windows and macOS artifacts (windows-orca, macos-orca-arm64/x64/universal, <GreD>/orca staging, host-root grep), orca-packaged-tree, magic natives, Flatpak --filesystem=home, Windows staged-Node path, --rulings release guard, packaged-live check written (PLAT-01, PLAT-02)
+- [ ] 68-02-PLAN.md — lane p68-02: weekly re-pin: rebase-orca.yml and rebase-orca.sh (--replay-only, fixture self-test), orcaDue, --orca-select, detect-orca, bump-pr-orca with auto-merge, tracking issue, orca-slotless-start --orcad-only (OVL-02)
+- [ ] 68-03-PLAN.md — lane p68-03: orca-mobile-protocol and orca-mobile-skew, seams.json upstream key and --upstream-prs, export-orca-seam-pr.mjs (OVL-03, OVL-06)
+- [ ] 68-04-PLAN.md — lane p68-04: bundle-derived Orca licence notices, per-package rule, agent SDK as PENDING RULING 68-A, permissive set pending 68-B, orca-licence-rulings (PLAT-01)
+
+**Wave 2** *(after Phase 67; 68-06 Task 1 merges wave 1 early)*
+- [ ] 68-05-PLAN.md — lane p68-05: final seam classes, upstream tests and descriptions, one export per D-27 class, orca-upstream-prs, owner hand-off (OVL-06)
+- [ ] 68-06-PLAN.md — coordinator: merge 03, 04, 01, 02 then 05, identity re-pin, brand rows, container package, orca-packaged-live, PLAT-02 Linux pass, WINDOWS.md entries, tracking
 
 Open items for this phase:
 - The macOS half of PLAT-01 needs a macOS PowerBrowser build. v1.6 deferred macOS packaging (workstream `deploy`, Phase 55).
