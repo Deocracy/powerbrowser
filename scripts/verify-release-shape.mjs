@@ -55,6 +55,11 @@
 //                every artifact whose build-linux upload carries a tarball or a MAR (derived from the upload
 //                steps, set equality with its PURGE list), none a descriptor-wait job reads, and exits 1 when
 //                one is still stored (G-49c, INF-04).
+// 12. orca-steps build-linux builds Orca in exactly one step running scripts/build-orca.sh, after the step that
+//                builds the Theia sidecar (yarn build) and before the packaging step; a step running
+//                verify-licence-allowlist.mjs --rulings precedes it (P68-21: no release while an Orca licence
+//                ruling is pending); the packaging step passes -e PB_HOST_ROOT into the container, so
+//                package-linux.sh's checkout-path grep searches the host build root, never /src (P68-29).
 //
 // Instrument: js-yaml from theia/ through createRequire, the same loader as the
 // workflows row. A missing js-yaml, an unreadable file and a parse error are FAILs.
@@ -87,7 +92,7 @@ const PKG_LINUX_REL = 'powerbrowser/packaging/package-linux.sh';
 const REGISTRY_REL = 'scripts/verify-platform.sh';
 // The contract, not a copy of the tree: ROADMAP Phase 49 criterion 2 (packaged-launch and install-matrix) and the
 // Phase 45 packaging gates BLOCKED.md item 7 names. Labels the step adds beyond these only need to be registered.
-const PACKAGED_ROWS = ['ng063-packaged-launch', 'portable-elf', 'sidecar-no-symlinks', 'package-target-natives', 'packaged-identity', 'install-matrix'];
+const PACKAGED_ROWS = ['ng063-packaged-launch', 'portable-elf', 'sidecar-no-symlinks', 'package-target-natives', 'packaged-identity', 'install-matrix', 'orca-packaged-tree'];
 const DESCRIPTOR_ENV = 'descriptor';
 const DESCRIPTOR_ENV_REL = `.github/settings/environment-${DESCRIPTOR_ENV}.json`;
 const RUN_NAME = 'Release ${{ inputs.sha }}';
@@ -537,6 +542,23 @@ function runChecks(root, overrides = {}) {
         for (const f of steps[0] ? failOpenFaults(steps[0]) : []) fail(pid, 'purge', `delete step ${f}. Next step: remove it.`);
     }
 
+    // 12. orca-steps (P68-02, P68-21, P68-29): the Orca build sits between the Theia sidecar build and the packaging
+    // step, behind the licence-rulings guard, and the packaging step hands the host build root to the container.
+    const at = re => buildSteps.map((s, i) => [s, i]).filter(([s]) => re.test(String(s.run ?? ''))).map(([, i]) => i);
+    const orcaAt = at(/\bscripts\/build-orca\.sh\b/);
+    const theiaAt = at(/\byarn build\b/);
+    const rulingsAt = at(/\bscripts\/verify-licence-allowlist\.mjs --rulings\b/);
+    if (orcaAt.length !== 1) {
+        fail(BUILD_JOB, 'orca-steps', `has ${orcaAt.length} steps running scripts/build-orca.sh, not one, so the package carries no Orca or builds it twice. Next step: one step "Build Orca from source at the pin" after the Theia sidecar build.`);
+    } else {
+        if (theiaAt.length === 0 || orcaAt[0] < theiaAt[0]) fail(BUILD_JOB, 'orca-steps', `builds Orca before the step that builds the Theia sidecar (yarn build). Next step: move the Orca build after it.`);
+        if (packAt < 0 || orcaAt[0] > packAt) fail(BUILD_JOB, 'orca-steps', `builds Orca after the packaging step, so the package is staged without it or from a stale orca/. Next step: move the Orca build before packaging.`);
+        if (rulingsAt.length === 0 || rulingsAt[0] > orcaAt[0]) fail(BUILD_JOB, 'orca-steps', `has no verify-licence-allowlist.mjs --rulings step before the Orca build, so a release could carry Orca's closure while an owner licence ruling is pending (P68-21). Next step: restore the rulings guard before the Orca build.`);
+    }
+    if (packAt >= 0 && !/podman run\b[^\n]*\s-e PB_HOST_ROOT="\$PWD"[^\n]*package-linux\.sh/.test(String(buildSteps[packAt].run ?? ''))) {
+        fail(BUILD_JOB, 'orca-steps', `packaging step does not pass -e PB_HOST_ROOT="$PWD" into the container, so package-linux.sh refuses to run (its checkout-path grep would search for nothing). Next step: add -e PB_HOST_ROOT="$PWD" to the podman run.`);
+    }
+
     const key = f => [f.file, f.job, f.rule, f.msg];
     failures.sort((a, b) => {
         const ka = key(a), kb = key(b);
@@ -641,8 +663,12 @@ function selfTest() {
         ['descriptor environment with no wait_timer', { read: rel => (rel === DESCRIPTOR_ENV_REL ? '{}' : readText(REPO_ROOT, rel)) }, 'retention', 'carries no integer wait_timer'],
         ['package-linux.sh no longer makes the complete MAR', { read: rel => (rel === PKG_LINUX_REL ? readText(REPO_ROOT, rel).split('\n').filter(l => !l.includes('make_full_update.sh')).join('\n') : readText(REPO_ROOT, rel)) }, 'mar-emit', PKG_LINUX_REL],
         ['package-linux.sh names make_full_update.sh only in a comment', { read: rel => (rel === PKG_LINUX_REL ? readText(REPO_ROOT, rel).replace(/^(.*tools\/update-packaging\/make_full_update\.sh.*)$/m, '# $1') : readText(REPO_ROOT, rel)) }, 'mar-emit', 'invokes make_full_update.sh'],
-        ['packaged-rows step drops install-matrix', edit('for LABEL in ng063-packaged-launch portable-elf sidecar-no-symlinks package-target-natives packaged-identity install-matrix; do', 'for LABEL in ng063-packaged-launch portable-elf sidecar-no-symlinks package-target-natives packaged-identity; do'), 'packaged-rows', 'does not run install-matrix'],
-        ['packaged-rows step runs an unregistered label', edit('for LABEL in ng063-packaged-launch portable-elf sidecar-no-symlinks package-target-natives packaged-identity install-matrix; do', 'for LABEL in ng063-packaged-launch portable-elf sidecar-no-symlinks package-target-natives packaged-identity install-matrix install-matrx; do'), 'packaged-rows', 'install-matrx'],
+        ['packaged-rows step drops install-matrix', edit('for LABEL in ng063-packaged-launch portable-elf sidecar-no-symlinks package-target-natives packaged-identity install-matrix orca-packaged-tree; do', 'for LABEL in ng063-packaged-launch portable-elf sidecar-no-symlinks package-target-natives packaged-identity orca-packaged-tree; do'), 'packaged-rows', 'does not run install-matrix'],
+        ['packaged-rows step runs an unregistered label', edit('for LABEL in ng063-packaged-launch portable-elf sidecar-no-symlinks package-target-natives packaged-identity install-matrix orca-packaged-tree; do', 'for LABEL in ng063-packaged-launch portable-elf sidecar-no-symlinks package-target-natives packaged-identity install-matrix orca-packaged-tree install-matrx; do'), 'packaged-rows', 'install-matrx'],
+        ['packaged step drops orca-packaged-tree', edit('for LABEL in ng063-packaged-launch portable-elf sidecar-no-symlinks package-target-natives packaged-identity install-matrix orca-packaged-tree; do', 'for LABEL in ng063-packaged-launch portable-elf sidecar-no-symlinks package-target-natives packaged-identity install-matrix; do'), 'packaged-rows', 'does not run orca-packaged-tree'],
+        ['PB_HOST_ROOT absent from the packaging step', edit(' -e PB_HOST_ROOT="$PWD" -w /src pb-gecko-build bash powerbrowser/packaging/package-linux.sh', ' -w /src pb-gecko-build bash powerbrowser/packaging/package-linux.sh'), 'orca-steps', 'PB_HOST_ROOT'],
+        ['Orca build after packaging', edit('          nix develop .#orca --command bash scripts/build-orca.sh\n', '          true\n').replace('      # G-49b (ROADMAP Phase 49 criterion 2)', "      - name: Probe\n        if: steps.key_gate.outputs.build == 'true'\n        run: nix develop .#orca --command bash scripts/build-orca.sh\n\n      # G-49b (ROADMAP Phase 49 criterion 2)"), 'orca-steps', 'after the packaging step'],
+        ['rulings guard removed', edit('nix develop .#theia --command node scripts/verify-licence-allowlist.mjs --rulings', 'true'), 'orca-steps', '--rulings'],
         ['packaged-rows step removed', edit('nix develop .#theia --command scripts/verify-platform.sh --only "$LABEL"', 'true "$LABEL"'), 'packaged-rows', 'runs no scripts/verify-platform.sh --only step'],
         ['packaged-rows step after the first upload', edit('      # G-49b (ROADMAP Phase 49 criterion 2)', "      - name: Probe\n        if: steps.key_gate.outputs.build == 'true'\n        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # probe\n        with:\n          name: probe\n          path: probe\n          retention-days: 1\n\n      # G-49b (ROADMAP Phase 49 criterion 2)"), 'packaged-rows', 'does not sit between'],
         ['install-matrix unregistered', { read: rel => (rel === REGISTRY_REL ? readText(REPO_ROOT, rel).replace(/^\s*"install-matrix\|.*$/m, '') : readText(REPO_ROOT, rel)) }, 'packaged-rows', 'not a label'],

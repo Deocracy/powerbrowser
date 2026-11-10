@@ -3888,6 +3888,11 @@ run_own_checks() {
     # over fixtures, 25 cases. Both hermetic: no orcad, no browser, no network.
     "orca-hidden-electron-self-test|node $REPO_ROOT/scripts/verify-orca-hidden-electron.mjs --self-test"
     "orca-service-live-self-test|node $REPO_ROOT/scripts/verify-orca-service-live.mjs --self-test"
+    # NEW (68-01, PLAT-01, P68-06/P68-33): the packaged Orca root <GreD>/orca. Expected set derived from the built
+    # tree (package.json, out/orcad, out/web), slot-marker names from orca/src/shared/orcad-artifacts.ts, the
+    # node-pty slot from Orca's prebuild manifest (one slot, the target's platform and arch, equal sha256 set). The
+    # self-test plants a missing file, an extra file, node.exe, a slot marker, Electron, foreign and merged slots.
+    "orca-packaged-tree-self-test|node $REPO_ROOT/scripts/verify-orca-packaged-tree.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6481,6 +6486,10 @@ run_own_checks() {
       # Each prints one named SKIP line when no built orca/ or no built PowerBrowser exists.
       "orca-hidden-electron|node $REPO_ROOT/scripts/verify-orca-hidden-electron.mjs"
       "orca-service-live|node $REPO_ROOT/scripts/verify-orca-service-live.mjs"
+      # NEW (68-01, PLAT-01, P68-06): orca-packaged-tree over the container-built Linux tarball's orca/ (target
+      # linux-x64, manifest orca/out/orcad-prebuilds/manifest.json). FAILs naming the container build until 68-06
+      # builds the tarball; release.yml's build-linux runs it among its packaged labels.
+      "orca-packaged-tree|node $REPO_ROOT/scripts/verify-orca-packaged-tree.mjs"
     )
   fi
 

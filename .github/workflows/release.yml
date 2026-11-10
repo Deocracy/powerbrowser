@@ -144,6 +144,14 @@ jobs:
         if: steps.key_gate.outputs.build == 'true'
         run: nix develop .#theia --command node scripts/generate.mjs
 
+      # P68-21: no Linux release carries Orca's shipped closure (the agent SDK extension included) while an
+      # owner licence ruling is pending. --rulings exits 1 naming each pending package ruling, before any Orca step.
+      - name: Refuse to build while an Orca licence ruling is pending (P68-21)
+        if: steps.key_gate.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          nix develop .#theia --command node scripts/verify-licence-allowlist.mjs --rulings
+
       - name: Fetch the pinned Firefox source and apply the patch stack
         if: steps.key_gate.outputs.build == 'true'
         run: |
@@ -154,6 +162,16 @@ jobs:
       - name: Build the Theia sidecar (package-linux.sh needs theia/applications/browser/lib/backend/main.js)
         if: steps.key_gate.outputs.build == 'true'
         run: nix develop .#theia --command bash -c 'set -euo pipefail; cd theia; yarn install --ignore-scripts --frozen-lockfile; (cd node_modules/drivelist && node-gyp rebuild); yarn build'
+
+      # P68-02: the dev procedure, once: fetch-orca.sh verifies orca/ at the pinned tag and commit, build-orca.sh
+      # applies the overlay, builds orcad and the web client with scripts off and de-slots. package-linux.sh stages
+      # package.json, out/orcad and out/web as <GreD>/orca; node-pty is built here, on the Linux target itself (P68-05).
+      - name: Build Orca from source at the pin (orcad, web client)
+        if: steps.key_gate.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          bash scripts/fetch-orca.sh
+          nix develop .#orca --command bash scripts/build-orca.sh
 
       - name: Build the release container image
         if: steps.key_gate.outputs.build == 'true'
@@ -180,7 +198,7 @@ jobs:
         if: steps.key_gate.outputs.build == 'true'
         run: |
           set -euo pipefail
-          podman run --rm -v "$PWD:/src:rw" -w /src pb-gecko-build bash powerbrowser/packaging/package-linux.sh
+          podman run --rm -v "$PWD:/src:rw" -e PB_HOST_ROOT="$PWD" -w /src pb-gecko-build bash powerbrowser/packaging/package-linux.sh
 
       # G-49b (ROADMAP Phase 49 criterion 2): the packaged rows and the install matrix judge the built package
       # before anything is uploaded. Each label is one registry row (the release-shape row checks they are
@@ -191,7 +209,7 @@ jobs:
           set -euo pipefail
           PB_STOCK_FIREFOX="$(nix build --no-link --print-out-paths --inputs-from . nixpkgs#firefox)/bin/firefox"
           export PB_STOCK_FIREFOX
-          for LABEL in ng063-packaged-launch portable-elf sidecar-no-symlinks package-target-natives packaged-identity install-matrix; do
+          for LABEL in ng063-packaged-launch portable-elf sidecar-no-symlinks package-target-natives packaged-identity install-matrix orca-packaged-tree; do
             nix develop .#theia --command scripts/verify-platform.sh --only "$LABEL"
           done
 
