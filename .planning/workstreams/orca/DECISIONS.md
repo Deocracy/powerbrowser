@@ -147,6 +147,31 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
   stock mobile app and the pinned orcad is a recorded risk (unverified whether newer apps refuse
   an older orcad).
 
+## Bundled third-party parts (2026-11-10)
+
+- **D-30 — Third-party parts with their own terms ship as pre-installed, removable extensions
+  (rules 68-A).** Chris, on the Anthropic Claude agent SDK: "keep it but make an extension ... we
+  ship with it installed and they can select or unselect it [and uninstall it], so the terms are
+  on the extension."
+  - `@anthropic-ai/claude-agent-sdk`, the only proprietary direct production dependency of Orca,
+    leaves orcad's bundle. It ships inside a pre-installed PowerBrowser **Theia extension** (VS
+    Code extension format) that carries Anthropic's terms. The user can disable it or uninstall
+    it.
+  - Host chosen: a Theia extension, not an Orca plugin. Orca's bundled plugins must use Orca's
+    official publisher (`orca/src/main/plugins/plugin-bundled-bootstrap.ts`) and cannot supply a
+    Node module to orcad.
+  - orcad loads the SDK through one generic seam in `loadClaudeAgentSdk` that takes the SDK's
+    directory from an environment variable whose name carries no PowerBrowser token. When the
+    extension is absent or disabled, Orca's existing missing-package path applies, confined to
+    the structured-Claude session. Claude terminal panes and every other agent are unaffected.
+  - The same pattern applies to other third-party parts. Chris named uBlock Origin, pre-installed
+    as a browser (Gecko) WebExtension; that one is BEXT-02 in v1.7. The general rule is
+    `.planning/seeds/SEED-261110-preinstalled-extensions.md`.
+  - Owner responsibility, open: Anthropic's terms must permit redistributing the extension. No
+    release carries it before the owner confirms that.
+  - Supersedes options (a)-(d) of open ruling 68-A in `68-CONTEXT.md`. Mechanism: P68-38;
+    requirements BEXT-01 and BEXT-02.
+
 ## Spikes this direction needs
 
 1. Browser parity: what an Orca browser tab can do, and how PB chrome provides it

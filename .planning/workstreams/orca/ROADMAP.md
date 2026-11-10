@@ -229,7 +229,7 @@ The Phase 61 parity result may split or descope this phase. Any such change is a
 
 **Goal**: The Orca integration ships in Linux, macOS and Windows artifacts and passes live checks on Linux. An automated weekly re-pin keeps it current with Orca releases, and the stock mobile app still pairs.
 **Depends on**: Phases 63, 64 and 66 (each generic seam works before it is offered upstream); all earlier phases for the artifacts
-**Requirements**: OVL-02, OVL-03, OVL-06, PLAT-01, PLAT-02
+**Requirements**: OVL-02, OVL-03, OVL-06, PLAT-01, PLAT-02, BEXT-01, BEXT-02
 **Success Criteria** (what must be TRUE):
   1. The release-train clock dispatches the re-pin job weekly (no `schedule:` key, D-77). The job:
      - moves the pin to the newest Orca tag and re-applies the seam patches;
@@ -242,24 +242,30 @@ The Phase 61 parity result may split or descope this phase. Any such change is a
   4. Linux, macOS and Windows artifacts contain orcad and the overlaid client, with the node-pty prebuild built per target on that target's own runner. The Flatpak manifest grants `--filesystem=home`. Each of these checks is one `verify-platform.sh` row.
   5. The live checks pass on Linux. macOS and Windows smoke results are recorded when a host is available (D-24).
 
-**Plans**: 6 plans
+**Plans**: 9 plans
 
 Plans:
-**Wave 1** *(executable now; four lanes in parallel)*
+**Wave 1** *(executable now; six lanes in parallel)*
 - [ ] 68-01-PLAN.md — lane p68-01: Orca in the Linux, Windows and macOS artifacts (windows-orca, macos-orca-arm64/x64/universal, <GreD>/orca staging, host-root grep), orca-packaged-tree, magic natives, Flatpak --filesystem=home, Windows staged-Node path, --rulings release guard, packaged-live check written (PLAT-01, PLAT-02)
 - [ ] 68-02-PLAN.md — lane p68-02: weekly re-pin: rebase-orca.yml and rebase-orca.sh (--replay-only, fixture self-test), orcaDue, --orca-select, detect-orca, bump-pr-orca with auto-merge, tracking issue, orca-slotless-start --orcad-only (OVL-02)
 - [ ] 68-03-PLAN.md — lane p68-03: orca-mobile-protocol and orca-mobile-skew, seams.json upstream key and --upstream-prs, export-orca-seam-pr.mjs (OVL-03, OVL-06)
-- [ ] 68-04-PLAN.md — lane p68-04: bundle-derived Orca licence notices, per-package rule, agent SDK as PENDING RULING 68-A, permissive set pending 68-B, orca-licence-rulings (PLAT-01)
+- [ ] 68-04-PLAN.md — lane p68-04: bundle-derived Orca licence notices, per-package rule, agent SDK as ruling 68-A status extension (D-30; red until 68-07 and 68-09 merge) with the owner terms check pending, permissive set pending 68-B, orca-licence-rulings (PLAT-01)
+- [ ] 68-07-PLAN.md — lane p68-07: Claude agent SDK out of orcad (externals seam), loadClaudeAgentSdk reads ORCA_CLAUDE_AGENT_SDK_DIR, OrcaService points it at the extension unless Theia has it disabled, orca-claude-sdk rows; shares OrcaService.sys.mjs with 68-01 (_spawnAndGate only) (BEXT-01)
+- [ ] 68-09-PLAN.md — lane p68-09: the pre-installed, removable Claude Agent SDK Theia extension: bundled-extensions/claude-agent-sdk, download-plugins assembly into plugins/.user, @powerbrowser/bundled-extensions seed participant, bundled-extensions rows (BEXT-01)
+
+**Wave 2a** *(after the 68-01, 68-04 and 68-09 merges; Phase 67 not needed; launched by 68-06 Task 1)*
+- [ ] 68-08-PLAN.md — lane p68-08: uBlock Origin pre-installed through distribution/extensions (pinned AMO-signed XPI, staging in the three package scripts), filter-list hosts allowlisted, live install/filter/relaunch/disable/remove proof, Bundled extensions notices and inventory rows (BEXT-02)
 
 **Wave 2** *(after Phase 67; 68-06 Task 1 merges wave 1 early)*
 - [ ] 68-05-PLAN.md — lane p68-05: final seam classes, upstream tests and descriptions, one export per D-27 class, orca-upstream-prs, owner hand-off (OVL-06)
-- [ ] 68-06-PLAN.md — coordinator: merge 03, 04, 01, 02 then 05, identity re-pin, brand rows, container package, orca-packaged-live, PLAT-02 Linux pass, WINDOWS.md entries, tracking
+- [ ] 68-06-PLAN.md — coordinator: merge 03, 04, 01, 07, 09, 02, then launch and merge 08, then 05, identity re-pin, brand rows, container package, orca-packaged-live, PLAT-02 Linux pass, WINDOWS.md entries, tracking
 
 Open items for this phase:
 - The macOS half of PLAT-01 needs a macOS PowerBrowser build. v1.6 deferred macOS packaging (workstream `deploy`, Phase 55).
 - Who opens the upstream pull requests, and under which GitHub org, is an owner question. The org is moving to `deocracy`.
 - Pairing the stock mobile app needs an Android device. Protocol skew between a newer stock app and the pinned orcad is a recorded risk (D-29).
 - Windows signing never blocks Linux.
+- The owner confirms that Anthropic's terms permit redistributing the Claude Agent SDK extension (D-30); until then the release guard stays closed. The owner's reading of GPL-3.0 section 6 for the bundled uBlock Origin XPI is also open (P68-39).
 
 ## Progress
 

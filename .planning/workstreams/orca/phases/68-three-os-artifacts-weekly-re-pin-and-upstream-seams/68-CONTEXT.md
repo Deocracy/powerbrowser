@@ -209,8 +209,56 @@ Each pick below applies one row of 68-RESEARCH.md "Context amendments" (A1-A13).
 
   The coordinator-only file list of P68-22 is unchanged.
 
+### Ruling 68-A and the bundled extensions (2026-11-10)
+- **P68-38 (owner ruling 68-A, Chris 2026-11-10, D-30; supersedes options (a)-(d) below and the SDK clauses of P68-21 and P68-25):** the SDK ships inside a pre-installed, user-removable PowerBrowser Theia extension that carries Anthropic's terms. orcad loads it through one generic seam. When the extension is absent or disabled, Orca's existing missing-package path applies. Claude terminal panes and the other agents are unaffected. Requirement BEXT-01.
+  - **Theia facts (Theia 1.76 as PowerBrowser composes it).**
+    - A built-in plugin (THEIA_DEFAULT_PLUGINS, `PluginType.System`) can be disabled: the Disable command has no built-in guard (`vsx-registry/lib/browser/vsx-extensions-contribution.js:95-99`), and the disabled set persists as `installedPlugins.disabledPlugins` in `<THEIA_CONFIG_DIR>/backend-settings.json` (`plugin-ext/lib/main/node/plugin-uninstallation-manager.js:37,43,52`; `core/lib/node/setting-service.js:72-75`).
+    - A built-in cannot be uninstalled. Uninstall is rendered only for `!builtin` (`vsx-registry/lib/browser/vsx-extension.js:480`), and builtin means `PluginType.System` (`vsx-extensions-model.js:328-347`). The backend uninstall `fs.remove`s the plugin's source location (`plugin-ext/lib/hosted/node/plugin-deployer-handler-impl.js:178-187`), which for a built-in is the read-only app directory.
+    - A user plugin is anything under `<THEIA_CONFIG_DIR>/deployedPlugins/`, which Theia scans as user entries (`plugin-ext-vscode/lib/node/plugin-vscode-deployer-participant.js:28-29`). Uninstall removes that directory.
+    - The uninstalled set is memory-only (`plugin-uninstallation-manager.js:32`, never saved), so a seed needs its own record.
+    - A newer deployed version uninstalls older ones of the same id (`plugin-deployer-handler-impl.js:195-212`).
+    - A dot-prefixed entry in a plugins directory is skipped by the system scan (`plugin-ext/lib/main/node/resolvers/local-directory-plugin-deployer-resolver.js:39-45`).
+    - `THEIA_CONFIG_DIR` is `<ProfD>/powerbrowser-theia` (`powerbrowser/shell/TheiaService.sys.mjs:615-623`).
+  - **Packaging (lane 68-09).**
+    - The tracked folder `bundled-extensions/claude-agent-sdk/` holds a VS Code manifest (id `powerbrowser.claude-agent-sdk`, version = the SDK version), a `package-lock.json` pinning the SDK by version and sha512 integrity, `LICENSE.md` quoting Anthropic's terms, and `README.md`.
+    - `scripts/download-plugins.mjs` assembles it into `theia/applications/browser/plugins/.user/powerbrowser.claude-agent-sdk/extension/` with `npm ci --ignore-scripts --omit=optional --legacy-peer-deps`. Every OS job already runs this script in `yarn build` and stages `$APP/plugins` whole (`package-linux.sh:52`, `package-macos.sh:319`, `release.yml:318`), so no release or package script changes.
+    - Not an `[[extensions]]` entry: that path pins an archive's sha256, and an archive packed with the SDK inside differs per npm version and OS. The npm lockfile integrity is the pin instead, and the `bundled-extensions` row requires it to equal Orca's own `pnpm-lock.yaml` entry.
+    - Only the SDK's root export ships. Its `sdk.mjs` imports only Node built-ins, and its peers are reached only from the `./core` subpath, which Orca never imports. Its eight `@anthropic-ai/claude-agent-sdk-<os>-<arch>` optional packages are not shipped and are not installed in Orca's own tree, because Orca passes the user's `claude` CLI as `pathToClaudeCodeExecutable` (`orca/src/main/claude/claude-stream-json-connection.ts:47`). One extension therefore serves every OS.
+  - **Seed (lane 68-09).**
+    - A new `@powerbrowser/bundled-extensions` Theia backend extension binds a `PluginDeployerParticipant`. Its `onWillStart` runs before resolution (`plugin-deployer-impl.js:68-83`). It copies each `.user/<id>` from the plugins directories the deployer itself reads (THEIA_DEFAULT_PLUGINS and `--plugins`) into `<THEIA_CONFIG_DIR>/deployedPlugins/<id>/`.
+    - The record of what was seeded is a backend-settings key. A user's uninstall sticks, and a newer shipped version replaces a present copy only.
+    - Reinstalling after an uninstall has no affordance in v1.7; that is an open item.
+  - **orcad (lane 68-07).**
+    - Seam 1, `orca/src/main/claude/claude-stream-json-connection.ts` `loadClaudeAgentSdk`, reads `ORCA_CLAUDE_AGENT_SDK_DIR`:
+      - unset: the stock `import('@anthropic-ai/claude-agent-sdk')`;
+      - set: the entry is resolved by package self-reference inside that directory only;
+      - empty, missing or resolved outside: a rejection with code `ERR_MODULE_NOT_FOUND`.
+    - Seam 2 adds `@anthropic-ai/claude-agent-sdk` to `ORCAD_EXTERNAL_MODULES` (`orca/config/scripts/orcad-entry-build.mjs:37`). The seam count rises by two. Both are classed `pb-only` for now; the loader seam names no PowerBrowser token, so it may be offered upstream later, but D-27 names three seams and a fourth is an owner call.
+  - **Chrome side (lane 68-07).**
+    - At each orcad spawn, `OrcaService` reads `<ProfD>/powerbrowser-theia/backend-settings.json` through the existing `PowerBrowserAPI.readStateFile`. It sets `ORCA_CLAUDE_AGENT_SDK_DIR` to `<ProfD>/powerbrowser-theia/deployedPlugins/powerbrowser.claude-agent-sdk/extension/node_modules/@anthropic-ai/claude-agent-sdk`, or to the empty string when the id is disabled.
+    - An uninstalled extension is a missing directory, which the seam reports at first use. The SDK is imported lazily, so the first start works once the seed has run.
+    - A disable or uninstall takes effect at the next orcad start, as a Theia disable needs a reload.
+    - No new `PowerBrowserAPI` method, no IPC, no INTERNAL-APIS row. The name is in `OrcaEnv`'s fixed set, so `expectedEnvNames` follows it.
+  - **Licence (lane 68-04).** The SDK's `package_rulings` row takes status `extension`. That status is red while the SDK is in the derived Orca shipped set, or while the named extension folder is absent, so it is red from the 68-04 merge until the 68-07 and 68-09 merges. Its `terms_check: "pending"` keeps `--rulings` at exit 1, and so keeps release.yml's guard closed, until the owner confirms that Anthropic's terms permit redistribution (D-30).
+  - **Lane files.** 68-07 shares `powerbrowser/shell/OrcaService.sys.mjs` with 68-01. 68-01 edits `_resolve()` and 68-07 edits `_spawnAndGate()`, about 190 lines apart. The coordinator merges 68-07 after 68-01 under merge rule (2b). Merge order: 03, 04, 01, 07, 09, 02, then 08.
+  - **Reversibility:** cheap. Dropping the two seams and the extension restores the stock bundled build. The ruling itself is the owner's.
+- **P68-39 (Claude's pick, BEXT-02, Chris 2026-11-10 scope addition):** uBlock Origin ships as `<GreD>/distribution/extensions/uBlock0@raymondhill.net.xpi`. On macOS the path is `Contents/Resources/distribution/extensions/`.
+  - **How Gecko handles it.**
+    - Gecko installs a distribution XPI into the profile scope on a profile's first start, with no network (`upstream/toolkit/mozapps/extensions/internal/XPIProvider.sys.mjs:3196-3280`, `XPIInstall.sys.mjs:4326-4378`).
+    - It is enabled, because it is not a foreign install: the manifest arrives through `aManifests` (`XPIDatabase.sys.mjs:3298,3373`).
+    - The user can disable or remove it. A removal sticks, because `extensions.installedDistroAddon.<id>` stays set (`XPIInstall.sys.mjs:4353-4360`), and a newer shipped version upgrades a present copy only (`:4338-4344`).
+  - **Rejected alternatives.** Policy `ExtensionSettings` offers only `force_installed` and `normal_installed`, the modes `[[webextensions]]` emits (docs/REBRANDING.md), and neither can be removed by the user. Patch 050 is the extension tab host, not an installer.
+  - **Pin.** `powerbrowser/packaging/bundled-xpi.json` follows the `node-runtime.json` pattern (version, url, sha256, licence, source). The file is the AMO-signed XPI, unmodified. Each package script stages it through one helper; there is no generator change.
+  - **Background after a relaunch.** Upstream starts extension backgrounds only after `ExtensionParent.browserPaintedPromise`, a topic only a stock window sends. Patch 050 also resolves it on `extensions-late-startup`, which the shell sends (`scripts/verify-extension-actions-live.mjs:748-751`, 39-04/999.15). The live row therefore proves filtering after a relaunch with zero stock windows.
+  - **Update hosts.** uBlock fetches updates for its default-on filter lists without user action. Those hosts, derived at check time from the XPI's `assets/assets.json`, get `allow` rows in `powerbrowser/endpoint-allowlist.json`. This is Claude's pick: the alternative, `user-initiated` with updates switched off, leaves stale filters. The owner may override.
+  - **Licence.** The GPL-3.0-or-later notice goes in a "Bundled extensions" section of THIRD-PARTY-NOTICES.txt that also lists the agent SDK.
+  - **Lane order.** Lane 68-08 runs after the 68-01, 68-04 and 68-09 merges (it edits their package scripts and licence files), and needs no Phase 67.
+  - **Open items.**
+    - The owner's reading of GPL-3.0 section 6 for conveying the unmodified XPI. The notice links the upstream source at the pinned tag.
+    - Private-window access stays off by default, as for any extension.
+
 ### Open owner rulings (recorded, not picked by Claude)
-- **OPEN OWNER RULING 68-A: the Anthropic agent SDK ships inside `orca/out/orcad/orcad-server.js` under a proprietary licence.** Facts (68-RESEARCH item 3 and Open Question 1):
+- **RULED 2026-11-10 (D-30, P68-38): OPEN OWNER RULING 68-A, the Anthropic agent SDK ships inside `orca/out/orcad/orcad-server.js` under a proprietary licence.** The text below is kept as the record of the options; the chosen mechanism is P68-38. Facts (68-RESEARCH item 3 and Open Question 1):
   - `@anthropic-ai/claude-agent-sdk@0.3.284` is bundled into the 13 MB `orcad-server.js` (`CLAUDE_AGENT_SDK_VERSION="0.3.284"` is in the bundle). It is not in `ORCAD_EXTERNAL_MODULES` (`orca/config/scripts/orcad-entry-build.mjs:37`).
   - It is loaded lazily through `import('@anthropic-ai/claude-agent-sdk')` (`orca/src/main/claude/claude-stream-json-connection.ts:38`); every other reference is `import type`.
   - Its `package.json` declares `SEE LICENSE IN README.md`. Its `LICENSE.md` reads "© Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements outlined here: https://code.claude.com/docs/en/legal-and-compliance."
@@ -304,7 +352,8 @@ Each pick below applies one row of 68-RESEARCH.md "Context amendments" (A1-A13).
 | macOS smoke test of a build with Orca | A Mac, the Phase 55 blockers cleared | P68-04, criterion 5 |
 | Windows smoke test of a build with Orca | The Windows VM (CF-10) | P68-03, criterion 5 |
 | Owner ruling on any shipped package without an allowed SPDX id (the agent SDK's `SEE LICENSE IN README.md` if it ships) | Owner | P68-21 |
-| Ruling 68-A: the agent SDK inside `orcad-server.js`, options (a)-(d); then the coordinator wires the release-path consequence | Owner | P68-25, ruling 68-A |
+| Ruling 68-A: decided 2026-11-10 (D-30, P68-38). Remaining: the owner confirms that Anthropic's terms permit redistributing the SDK inside the pre-installed extension, then sets `terms_check` to confirmed | Owner | P68-38, D-30 |
+| GPL-3.0 section 6 reading for the bundled uBlock Origin XPI (source offer form) | Owner | P68-39 |
 | Ruling 68-B: the per-package permissive SPDX set and the five no-field exception rows | Owner | P68-24, ruling 68-B |
 
 </deferred>
