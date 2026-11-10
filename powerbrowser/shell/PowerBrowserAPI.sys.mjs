@@ -10939,19 +10939,19 @@ async function pageEditTargetCommands(data, cached) {
 // nothing the browser inherited), a process-tree listing (the terminal daemon and the agents under it are
 // stopped by pid, never by group) and a second, separately named quit blocker.
 export const PowerBrowserProcesses = Object.freeze({
-  /**
-   * Spawns `command` with `environment` as the child's ENTIRE environment. Unlike spawnProcess there is no
-   * append flag, and Subprocess then passes nothing of this process's own environment to the child.
-   */
+  // Line comments only in this section: several checks strip block comments from this file by pattern.
+  // Spawns `command` with `environment` as the child's ENTIRE environment. Unlike spawnProcess there is no
+  // append flag, and Subprocess then passes nothing of this process's own environment to the child.
+  //
   spawnProcessExact({ command, args, environment, workdir }) {
     return lazy.Subprocess.call({ command, arguments: args, environment, workdir, stderr: "pipe" });
   },
 
-  /**
-   * Resolves [{ pid, ppid, startTicks }] for each live pid of `rootPids` and every descendant, read from
-   * /proc/<pid>/stat (ppid and starttime after the last closing parenthesis, as readProcessStartTicks does).
-   * Off Linux there is no /proc: the roots come back with startTicks null. Never throws; [] on any failure.
-   */
+  //
+  // Resolves [{ pid, ppid, startTicks }] for each live pid of `rootPids` and every descendant, read from
+  // /proc/<pid>/stat (ppid and starttime after the last closing parenthesis, as readProcessStartTicks does).
+  // Off Linux there is no /proc: the roots come back with startTicks null. Never throws; [] on any failure.
+  //
   async listProcessTree(rootPids) {
     const roots = [...new Set((Array.isArray(rootPids) ? rootPids : []).filter(pid => Number.isInteger(pid) && pid > 0))];
     try {
@@ -10996,10 +10996,10 @@ export const PowerBrowserProcesses = Object.freeze({
     }
   },
 
-  /**
-   * Registers `fn` as a quit blocker under `name`, awaited by quit and restart alike. The sidecar's own
-   * blocker keeps its name through addSidecarReapBlocker; a caller asking for that name here is refused.
-   */
+  //
+  // Registers `fn` as a quit blocker under `name`, awaited by quit and restart alike. The sidecar's own
+  // blocker keeps its name through addSidecarReapBlocker; a caller asking for that name here is refused.
+  //
   addNamedReapBlocker(name, fn) {
     if (typeof name !== "string" || !name.startsWith("PowerBrowser: reap ") || name.endsWith(" sidecar")) {
       throw new Error("addNamedReapBlocker: the name must be a new 'PowerBrowser: reap <what>' name");
