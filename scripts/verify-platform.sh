@@ -3897,6 +3897,8 @@ run_own_checks() {
     "build-orca-portable-self-test|node $REPO_ROOT/scripts/verify-build-orca-portable.mjs --self-test"
     # The macOS Orca merge plan from Orca's own tables: unpaired arch-named file, differing file, zero-pair table (P68-31).
     "orca-macos-merge-self-test|node $REPO_ROOT/scripts/lib/orca-artifacts.mjs --self-test"
+    # The packaged-live verdicts over fixtures: a Node from elsewhere, a web root outside GreD, a survivor, no pairing.
+    "orca-packaged-live-self-test|node $REPO_ROOT/scripts/verify-orca-packaged-live.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6494,6 +6496,9 @@ run_own_checks() {
       # linux-x64, manifest orca/out/orcad-prebuilds/manifest.json). FAILs naming the container build until 68-06
       # builds the tarball; release.yml's build-linux runs it among its packaged labels.
       "orca-packaged-tree|node $REPO_ROOT/scripts/verify-orca-packaged-tree.mjs"
+      # orca-packaged-live: the container-built package runs orcad on its own Node from <GreD>/orca, pairs, and a quit
+      # ends it. Runs under flock /home/chris/coding/Power-Browser/.git/pb-live.lock in 68-06; FAILs without the tarball.
+      "orca-packaged-live|node $REPO_ROOT/scripts/verify-orca-packaged-live.mjs"
     )
   fi
 

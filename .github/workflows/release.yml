@@ -1968,16 +1968,15 @@ jobs:
           set -euo pipefail
           [ "${BASH_VERSINFO[0]}" -ge 4 ] || { echo "::error::bash on PATH is $BASH_VERSION (BASH_VERSINFO major ${BASH_VERSINFO[0]}); scripts/build-orca.sh needs bash 4 or later for mapfile" >&2; exit 1; }
 
-      # Orca's pnpm comes through corepack. 0.35.0 is the corepack nix develop .#orca pins; it is installed only when
-      # the runner's bundled corepack is older than 0.34.5, and into the job's temp directory only.
+      # Orca's pnpm 12 comes through corepack, which needs 0.34.5 or later. The pinned Node bundles it (v24.19.0 ships
+      # corepack 0.35.0, the version nix develop .#orca pins), so nothing is installed outside a lockfile; an older
+      # corepack stops the job.
       - name: Require corepack 0.34.5 or later
         run: |
           set -euo pipefail
           C="$(corepack --version)"
-          if ! node -e 'const [a, b] = process.argv.slice(1).map(v => v.split(".").map(Number)); process.exit((a[0] - b[0] || a[1] - b[1] || a[2] - b[2]) < 0 ? 1 : 0)' "$C" 0.34.5; then
-            npm install --prefix "$RUNNER_TEMP/corepack" corepack@0.35.0
-            echo "$RUNNER_TEMP/corepack/node_modules/.bin" >> "$GITHUB_PATH"
-          fi
+          node -e 'const [a, b] = process.argv.slice(1).map(v => v.split(".").map(Number)); process.exit((a[0] - b[0] || a[1] - b[1] || a[2] - b[2]) < 0 ? 1 : 0)' "$C" 0.34.5 \
+            || { echo "::error::the pinned Node bundles corepack $C, older than 0.34.5, which pnpm 12 needs; nothing is built. Next step: bump the Node pin in node-runtime.json to a release bundling corepack 0.34.5 or later" >&2; exit 1; }
 
       - name: Write the upstream pins fragment through the generator
         run: |
@@ -2084,16 +2083,15 @@ jobs:
           set -euo pipefail
           [ "${BASH_VERSINFO[0]}" -ge 4 ] || { echo "::error::bash on PATH is $BASH_VERSION (BASH_VERSINFO major ${BASH_VERSINFO[0]}); scripts/build-orca.sh needs bash 4 or later for mapfile" >&2; exit 1; }
 
-      # Orca's pnpm comes through corepack. 0.35.0 is the corepack nix develop .#orca pins; it is installed only when
-      # the runner's bundled corepack is older than 0.34.5, and into the job's temp directory only.
+      # Orca's pnpm 12 comes through corepack, which needs 0.34.5 or later. The pinned Node bundles it (v24.19.0 ships
+      # corepack 0.35.0, the version nix develop .#orca pins), so nothing is installed outside a lockfile; an older
+      # corepack stops the job.
       - name: Require corepack 0.34.5 or later
         run: |
           set -euo pipefail
           C="$(corepack --version)"
-          if ! node -e 'const [a, b] = process.argv.slice(1).map(v => v.split(".").map(Number)); process.exit((a[0] - b[0] || a[1] - b[1] || a[2] - b[2]) < 0 ? 1 : 0)' "$C" 0.34.5; then
-            npm install --prefix "$RUNNER_TEMP/corepack" corepack@0.35.0
-            echo "$RUNNER_TEMP/corepack/node_modules/.bin" >> "$GITHUB_PATH"
-          fi
+          node -e 'const [a, b] = process.argv.slice(1).map(v => v.split(".").map(Number)); process.exit((a[0] - b[0] || a[1] - b[1] || a[2] - b[2]) < 0 ? 1 : 0)' "$C" 0.34.5 \
+            || { echo "::error::the pinned Node bundles corepack $C, older than 0.34.5, which pnpm 12 needs; nothing is built. Next step: bump the Node pin in node-runtime.json to a release bundling corepack 0.34.5 or later" >&2; exit 1; }
 
       - name: Write the upstream pins fragment through the generator
         run: |

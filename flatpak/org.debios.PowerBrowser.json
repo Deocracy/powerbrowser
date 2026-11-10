@@ -13,6 +13,7 @@
     "--socket=pulseaudio",
     "--share=network",
     "--device=dri",
+    "--filesystem=home",
     "--persist=.deocracy"
   ],
   "modules": [
