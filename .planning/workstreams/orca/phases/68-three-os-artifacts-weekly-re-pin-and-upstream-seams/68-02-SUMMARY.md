@@ -190,6 +190,10 @@ have merged.
   `cp --remove-destination`, and the App token is minted after the copy. To reject A-P1:
   make the notices stage a stop when the file changed, drop the path from the bump's
   `git add` line and from verify-workflows.mjs's expected set. RELEASING.md lists the steps.
+- **Notices from an untrusted job** (security review finding, fixed after the Task 3 commit): the notices file comes
+  from the replay job, which ran Orca's build. A bump that carries it states this in the PR body and does not arm
+  auto-merge, so the owner reviews the notices diff. A stronger fix needs the Orca section markers from lane p68-04:
+  compare everything outside the Orca section with the base file, byte for byte, in bump-pr-orca. Left for 68-06.
 - **SKIP exemption** (deviation 2): Chris may prefer to fetch upstream/ in rebase-orca.yml,
   about a 1.1 GB clone, and remove the exemption.
 

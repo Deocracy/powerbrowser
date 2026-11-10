@@ -1617,7 +1617,9 @@ the Orca section of `THIRD-PARTY-NOTICES.txt`. The replay rewrites it
 (`generate-licensing.mjs --write-orca`) and uploads it as the `rebase-orca-notices` artifact,
 holding exactly that file. `bump-pr-orca` downloads this run's artifact only, refuses it
 unless it holds exactly `THIRD-PARTY-NOTICES.txt`, and copies it with
-`cp --remove-destination` before staging. To revert A-P1: make the `notices` stage a stop
+`cp --remove-destination` before staging. The file was written by a job that ran Orca's build, so a
+bump that carries it says so in the PR body and does not arm auto-merge: the owner reads
+the notices diff before merging. To revert A-P1: make the `notices` stage a stop
 when the file changed, and drop `THIRD-PARTY-NOTICES.txt` from the bump's `git add` line
 and from `verify-workflows.mjs`'s expected set.
 

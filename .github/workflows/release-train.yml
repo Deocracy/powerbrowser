@@ -1161,11 +1161,20 @@ jobs:
           fi
           TITLE="chore(orca): move the Orca pin to ${TAG}"
           BODY="Orca re-pin to ${TAG} (${COMMIT}), replayed through rebase-orca.yml: seams re-applied and regenerated, Orca's typecheck:web and typecheck:node, the Orca rows, orcad, notices and the brand scan. verify.yml runs on this PR; auto-merge is armed and the owner's approving review is the gate."
+          # The notices file was written by the replay job, which ran Orca's build, so it is not trusted bytes: a bump
+          # that carries it is labelled in the body and never auto-merged; the owner reads the notices diff.
+          if [ "$NOTICES" = "changed" ]; then
+            BODY="${BODY} THIRD-PARTY-NOTICES.txt in this PR was written by rebase-orca.yml's replay job, which ran Orca's build: review its diff by hand. Auto-merge is not armed for this PR."
+          fi
           EXISTING=$(gh pr list --head "$BRANCH" --state open --json number,isCrossRepository --jq '[.[] | select(.isCrossRepository == false)][0].number // empty')
           if [ -n "$EXISTING" ]; then gh pr edit "$EXISTING" --title "$TITLE" --body "$BODY"; else gh pr create --base main --head "$BRANCH" --title "$TITLE" --body "$BODY"; fi
           PR=$(gh pr list --head "$BRANCH" --state open --json number,isCrossRepository --jq '[.[] | select(.isCrossRepository == false)][0].number // empty')
           [[ "$PR" =~ ^[0-9]+$ ]] || { echo "release-train: FAIL -- no open PR for ${BRANCH} after publishing. Next step: read the PR list and re-run." >&2; exit 1; }
-          gh pr merge "$PR" --auto --merge
+          if [ "$NOTICES" = "changed" ]; then
+            echo "release-train: NOTE -- ${BRANCH} carries replay-written notices; auto-merge is not armed, the owner reviews the notices diff"
+          else
+            gh pr merge "$PR" --auto --merge
+          fi
 
   # The only maintenance-sweep job that enters the bot environment (renovate-theia and renovate-licensing-publish, above, are the Theia inflow). It enters only on a live sweep tick
   # (bot-job-gate), so a dry run and a tick that is not the day's sweep never wait on an approval. Its two
