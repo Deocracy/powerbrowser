@@ -1,0 +1,49 @@
+{
+  "bundle": "esm",
+  "startedAt": "2026-11-10T18:06:13.965Z",
+  "theiaBuild": "/home/chris/orca/workspaces/Power-Browser/p61-01/theia/applications/browser/lib/backend/main.js",
+  "repoStatus": "UU README.md",
+  "load": {
+    "loadMs": 657,
+    "reactCopies": 1,
+    "reactVersion": "19.2.8",
+    "theiaReact": "19.2.8",
+    "esmFilesFetchedAtBoot": 132
+  },
+  "initial": {
+    "activeWorktreeId": null,
+    "visibility": "visible",
+    "tabs": 0
+  },
+  "cli": [],
+  "reloadPair": {
+    "first": {
+      "ready": true,
+      "timeOrigin": 1794333977866,
+      "localStorageOrcaKeys": [
+        "orca.web.settings.v1",
+        "orca.web.workspaceSession.v1.runtime:web-5edc6ed1-3656-4dd9-bab0-0eab6006b0ab",
+        "orca.web.workspaceSession.v1",
+        "orca.web.onboarding.v1",
+        "orca.web.ui.v1"
+      ]
+    },
+    "second": {
+      "ready": true,
+      "worktrees": 1,
+      "timeOrigin": 1794333984745,
+      "localStorageOrcaKeys": [
+        "orca.web.settings.v1",
+        "orca.web.workspaceSession.v1.runtime:web-5edc6ed1-3656-4dd9-bab0-0eab6006b0ab",
+        "orca.web.onboarding.v1",
+        "orca.web.ui.v1",
+        "orca.web.workspaceSession.v1.runtime:web-6109a0cd-2726-44e3-9390-d03d4c062172",
+        "orca.web.workspaceSession.v1"
+      ],
+      "tabsAfterCli": 1
+    }
+  },
+  "orcadSurvivors": 0,
+  "finishedAt": "2026-11-10T18:06:37.890Z",
+  "verdict": "DONE"
+}

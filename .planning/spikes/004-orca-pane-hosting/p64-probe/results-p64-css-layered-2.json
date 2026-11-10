@@ -1,0 +1,276 @@
+{
+  "route": "a",
+  "measure": "css",
+  "command": "PB_FIREFOX_BIN=/home/chris/orca/workspaces/Power-Browser/v1.7-Orca-integration/objdir/dist/bin/powerbrowser flock /home/chris/coding/Power-Browser/.git/pb-live.lock node .planning/spikes/004-orca-pane-hosting/measure.mjs --route a --measure css",
+  "startedAt": "2026-11-10T18:02:44.678Z",
+  "orcaVersion": "1.4.248",
+  "nodeVersion": "24.19.0",
+  "orcadNodeVersion": "24.19.0",
+  "orcadEndpoint": "ws://127.0.0.1:<port>",
+  "theiaBuild": "/home/chris/orca/workspaces/Power-Browser/p61-01/theia/applications/browser/lib/backend/main.js",
+  "theiaOrigin": "http://127.0.0.1:<port>",
+  "cssControl": {
+    "plantedGlobalRules": 1,
+    "counterDelta": 1,
+    "restoredAfterRemoval": true,
+    "theiaDocumentBefore": {
+      "global": 54,
+      "total": 7455,
+      "sheets": 8,
+      "unreadable": 0
+    }
+  },
+  "reactCopies": 1,
+  "reactVersions": {
+    "theia": "19.2.8",
+    "bundle": "19.2.8"
+  },
+  "renderedInTheiaRoot": true,
+  "routeAForm": "runtime ReactWidget subclass in the Theia frame; React from the lane Theia build (window.__pbReact); no scratch extension",
+  "widgetInMainArea": true,
+  "xterms": 1,
+  "paneSize": {
+    "w": 1280,
+    "h": 695
+  },
+  "markerCount": 2,
+  "mounted": true,
+  "ws": "works",
+  "deviceKeySupport": "persistent",
+  "paneDocumentSecureContext": true,
+  "theia": {
+    "secureContext": true,
+    "cspHeader": null,
+    "cspMeta": null
+  },
+  "connectSrcRefusal": "none observed",
+  "observeChannel": "store",
+  "observeTrigger": "the store new-terminal action (createNewTerminalTab) in the hosting client",
+  "observeLatencyMs": 91,
+  "observeToAddWidgetMs": 31,
+  "observeWithinOneSecond": true,
+  "observedPaneMounted": true,
+  "memory": {
+    "method": "ChromeUtils.requestProcInfo() through app.evaluateIn(app.chrome, ...), 5 s after each pane settled; sum of the parent and the children whose windows are on the Theia or orcad origin",
+    "samples": [
+      {
+        "label": "before the first pane",
+        "relevantBytes": 546918400,
+        "totalBytes": 671096832,
+        "processes": 9,
+        "rows": [
+          {
+            "type": "parent",
+            "memory": 163053568,
+            "origins": []
+          },
+          {
+            "type": "web",
+            "memory": 383864832,
+            "origins": [
+              "theia"
+            ]
+          }
+        ]
+      },
+      {
+        "label": "after pane 1",
+        "relevantBytes": 659316736,
+        "totalBytes": 783503360,
+        "processes": 9,
+        "rows": [
+          {
+            "type": "parent",
+            "memory": 157147136,
+            "origins": []
+          },
+          {
+            "type": "web",
+            "memory": 502169600,
+            "origins": [
+              "theia"
+            ]
+          }
+        ]
+      },
+      {
+        "label": "after pane 2",
+        "relevantBytes": 669913088,
+        "totalBytes": 794099712,
+        "processes": 9,
+        "rows": [
+          {
+            "type": "parent",
+            "memory": 157192192,
+            "origins": []
+          },
+          {
+            "type": "web",
+            "memory": 512720896,
+            "origins": [
+              "theia"
+            ]
+          }
+        ]
+      },
+      {
+        "label": "after pane 3",
+        "relevantBytes": 675966976,
+        "totalBytes": 800153600,
+        "processes": 9,
+        "rows": [
+          {
+            "type": "parent",
+            "memory": 157671424,
+            "origins": []
+          },
+          {
+            "type": "web",
+            "memory": 518295552,
+            "origins": [
+              "theia"
+            ]
+          }
+        ]
+      }
+    ],
+    "firstPaneDeltaBytes": 112398336,
+    "totalDeltaBytes": 129048576,
+    "perPaneDeltaBytes": 43016192,
+    "laterPaneDeltaBytes": 8325120,
+    "lastPaneDeltaBytes": 6053888,
+    "totalAllProcessesDeltaBytes": 129056768,
+    "notMeasured": "the Theia backend (Node) and orcad are not Gecko processes and are outside this number"
+  },
+  "memoryPerPaneBytes": 43016192,
+  "cssLeakOut": {
+    "globalRulesAdded": 6335,
+    "rulesAdded": 6335,
+    "theiaDocumentCounterDelta": 78,
+    "unreadableSheetsAdded": 1,
+    "orcaSheet": {
+      "global": 6335,
+      "total": 6335,
+      "sheets": 1,
+      "unreadable": 0,
+      "bytes": 5139885
+    },
+    "computedStyleDiffs": 2,
+    "changed": [
+      {
+        "key": "html|class",
+        "before": "notranslate",
+        "after": "notranslate light"
+      },
+      {
+        "key": "html|style-attribute-length",
+        "before": "31349",
+        "after": "31457"
+      }
+    ]
+  },
+  "cssLeakIn": {
+    "computedStyleDiffs": 17,
+    "changed": [
+      {
+        "key": "root|font-size",
+        "before": "16px",
+        "after": "13px"
+      },
+      {
+        "key": "root|line-height",
+        "before": "24px",
+        "after": "19.5px"
+      },
+      {
+        "key": "root|letter-spacing",
+        "before": "0.16px",
+        "after": "0.13px"
+      },
+      {
+        "key": "pane|font-size",
+        "before": "16px",
+        "after": "13px"
+      },
+      {
+        "key": "pane|line-height",
+        "before": "24px",
+        "after": "19.5px"
+      },
+      {
+        "key": "pane|letter-spacing",
+        "before": "0.16px",
+        "after": "0.13px"
+      },
+      {
+        "key": "xterm|font-size",
+        "before": "16px",
+        "after": "13px"
+      },
+      {
+        "key": "xterm|line-height",
+        "before": "24px",
+        "after": "19.5px"
+      },
+      {
+        "key": "xterm|letter-spacing",
+        "before": "0.16px",
+        "after": "0.13px"
+      },
+      {
+        "key": "viewport|font-size",
+        "before": "16px",
+        "after": "13px"
+      },
+      {
+        "key": "viewport|line-height",
+        "before": "24px",
+        "after": "19.5px"
+      },
+      {
+        "key": "viewport|letter-spacing",
+        "before": "0.16px",
+        "after": "0.13px"
+      },
+      {
+        "key": "helper|font-size",
+        "before": "16px",
+        "after": "13px"
+      },
+      {
+        "key": "helper|letter-spacing",
+        "before": "0.16px",
+        "after": "0.13px"
+      },
+      {
+        "key": "surface|font-size",
+        "before": "16px",
+        "after": "13px"
+      },
+      {
+        "key": "surface|line-height",
+        "before": "24px",
+        "after": "19.5px"
+      },
+      {
+        "key": "surface|letter-spacing",
+        "before": "0.16px",
+        "after": "0.13px"
+      }
+    ],
+    "comparedProperties": 144,
+    "controlDelta": 0,
+    "reference": "the same tab on a standalone pane page in a PB web tab"
+  },
+  "observeLatencyCliMs": null,
+  "cliCreateBecameTab": false,
+  "secondClientSeesTab": true,
+  "closeLuminoOnlyLeavesOrcaTab": true,
+  "closeStaysClosed": true,
+  "closeCall": "store close action closeTerminalTab(tabId) in the Theia document (PbPane.closeTab)",
+  "closeObservedByChannel": true,
+  "orcadSurvivors": 0,
+  "finishedAt": "2026-11-10T18:03:03.671Z",
+  "verdict": "FAIL",
+  "failure": "css-control: a planted host rule on the pane did not register as a leak-in difference"
+}

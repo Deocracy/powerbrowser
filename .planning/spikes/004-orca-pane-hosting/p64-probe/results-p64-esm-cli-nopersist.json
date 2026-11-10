@@ -1,0 +1,54 @@
+{
+  "bundle": "esm",
+  "startedAt": "2026-11-10T17:54:39.653Z",
+  "theiaBuild": "/home/chris/orca/workspaces/Power-Browser/p61-01/theia/applications/browser/lib/backend/main.js",
+  "repoStatus": "UU README.md",
+  "load": {
+    "loadMs": 667,
+    "reactCopies": 1,
+    "reactVersion": "19.2.8",
+    "theiaReact": "19.2.8",
+    "esmFilesFetchedAtBoot": 132
+  },
+  "initial": {
+    "activeWorktreeId": null,
+    "visibility": "visible",
+    "tabs": 0
+  },
+  "cli": [
+    {
+      "label": "T1 no active worktree",
+      "becameTab": true,
+      "ms": 390,
+      "activeWorktreeId": "null",
+      "visibility": "visible",
+      "hostTerminalHandles": 1,
+      "tabsNow": 1,
+      "executionHostIds": [
+        "runtime:web-18779bcb-5282-497c-b176-38e1d1024c00"
+      ]
+    },
+    {
+      "label": "T3 after a store-created terminal, 30 s window",
+      "becameTab": false,
+      "ms": null,
+      "activeWorktreeId": "set",
+      "visibility": "visible",
+      "hostTerminalHandles": 3,
+      "tabsNow": 2,
+      "executionHostIds": [
+        "runtime:web-18779bcb-5282-497c-b176-38e1d1024c00"
+      ]
+    }
+  ],
+  "persistence": false,
+  "afterStoreWrite": {
+    "tabsBefore": 2,
+    "tabsAfter": 3,
+    "ms": null,
+    "terminalsAfter": 2
+  },
+  "orcadSurvivors": 0,
+  "finishedAt": "2026-11-10T17:55:37.627Z",
+  "verdict": "DONE"
+}
