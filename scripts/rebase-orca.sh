@@ -291,8 +291,9 @@ fx_lines() {
 }
 
 # make_remote <dir> <variant>: <dir>/repo with v1.0.1 and v1.0.2; sets FX_C1, FX_C2.
-# Variants change what v1.0.2 carries: control moves src/seam.ts outside the seam's
-# context; conflict changes the seam's own pre-image line.
+# Variants change what v1.0.2 carries: every one moves src/seam.ts outside the seam's
+# context; conflict changes the seam's own pre-image line instead; typeerror plants
+# a type error at src/a.ts:3; licence changes LICENSE.
 make_remote() {
   local dir="$1" variant="$2" repo="$1/repo"
   mkdir -p "$repo/src" "$repo/config"
@@ -332,13 +333,22 @@ EOF
     conflict) fx_lines s 20 10 'export const s10 = 2;' > "$repo/src/seam.ts" ;;
     *) fx_lines s 20 1 'export const s1 = 101;' > "$repo/src/seam.ts" ;;
   esac
+  case "$variant" in
+    typeerror) fx_lines a 30 3 "export const a3: number = 'PLANTED-TYPE-ERROR';" > "$repo/src/a.ts" ;;
+    licence) echo 'MIT fixture licence, changed at v1.0.2' > "$repo/LICENSE" ;;
+  esac
   "${FX_GIT[@]}" -C "$repo" commit -q -am v1.0.2
   "${FX_GIT[@]}" -C "$repo" tag -a v1.0.2 -m v1.0.2
   FX_C1="$(git -C "$repo" rev-parse 'refs/tags/v1.0.1^{commit}')"
   FX_C2="$(git -C "$repo" rev-parse 'refs/tags/v1.0.2^{commit}')"
 }
 
-# make_root <root> <repo> <variant>: a fixture PowerBrowser root pinned at v1.0.1.
+# make_root <root> <repo> <variant>: a fixture PowerBrowser root pinned at v1.0.1. Each
+# stand-in leaves an untracked ran-<stage> file in the root, so a --replay-only run that
+# reached one shows in git status. Variants: uncovered and covered add an overlay file
+# outside and inside the fixture programs; brand plants a token in a tracked file;
+# rowskip makes the orca-overlay row print SKIP; upstreamskip makes licence-allowlist
+# print its out-of-scope upstream/ SKIP; orcadskip makes the probe print SKIP.
 make_root() {
   local root="$1" repo="$2" variant="$3" seed="$1.seed"
   mkdir -p "$root/scripts" "$root/orca-overlay/patches"
@@ -353,6 +363,7 @@ const t = readFileSync('configuration.toml', 'utf8');
 const v = (k) => new RegExp(`^${k} = "([^"]*)"$`, 'm').exec(t)[1];
 mkdirSync('generated', { recursive: true });
 writeFileSync('generated/upstream-pins.env', `UPSTREAM_ORCA_TAG=${v('orca_tag')}\nUPSTREAM_ORCA_COMMIT=${v('orca_commit')}\n`);
+writeFileSync('ran-generate', '');
 console.log('generate: PASS -- fixture');
 EOF
   # The fixture build: a stand-in tsc that lists what the fixture tsconfig includes, and
@@ -369,25 +380,33 @@ const walk = (d) => readdirSync(d).flatMap((n) => statSync(join(d, n)).isDirecto
 for (const inc of JSON.parse(readFileSync(cfg, 'utf8')).include) for (const f of walk(resolve(dirname(cfg), inc.split('*')[0]))) console.log(f);
 TSC
 if [ -d "$root/orca-overlay/files" ]; then cp -r "$root/orca-overlay/files/." "$root/orca/"; fi
+touch "$root/ran-build"
 echo "build-orca: PASS -- fixture"
 EOF
   # The fixture rows: licence-allowlist compares orca/LICENSE with the digest recorded at v1.0.1.
-  sha256sum < "$repo/LICENSE" | cut -d' ' -f1 > "$root/licence.sha256"
+  git -C "$repo" show v1.0.1:LICENSE | sha256sum | cut -d' ' -f1 > "$root/licence.sha256"
   cat > "$root/scripts/verify-platform.sh" <<'EOF'
 root="$(cd "$(dirname "$0")/.." && pwd)"
 label="$2"
+touch "$root/ran-row-$label"
+if [ -f "$root/skip-row" ] && [ "$(cut -d'|' -f1 "$root/skip-row")" = "$label" ]; then cut -d'|' -f2- "$root/skip-row"; exit 0; fi
 if [ "$label" = licence-allowlist ] && [ "$(sha256sum < "$root/orca/LICENSE" | cut -d' ' -f1)" != "$(cat "$root/licence.sha256")" ]; then
   echo "licence-allowlist: FAIL -- orca LICENSE digest changed"; exit 1
 fi
 echo "$label: PASS -- fixture row"
 EOF
-  echo "console.log('orca-slotless-start: PASS -- fixture orcad half only');" > "$root/scripts/verify-orca-slotless-start.mjs"
-  echo "console.log('licensing: wrote the Orca section (0 packages, fixture)');" > "$root/scripts/generate-licensing.mjs"
+  local probe='PASS -- fixture orcad half only'
+  [ "$variant" != orcadskip ] || probe='SKIP -- no built orca/ (fixture)'
+  echo "import { writeFileSync } from 'node:fs'; writeFileSync('$root/ran-orcad', ''); console.log('orca-slotless-start: $probe');" > "$root/scripts/verify-orca-slotless-start.mjs"
+  echo "import { writeFileSync } from 'node:fs'; writeFileSync('$root/ran-notices', ''); console.log('licensing: wrote the Orca section (0 packages, fixture)');" > "$root/scripts/generate-licensing.mjs"
   cat > "$root/scripts/scan-brand-residue.mjs" <<'EOF'
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+const root = fileURLToPath(new URL('..', import.meta.url));
+writeFileSync(`${root}/ran-brand`, '');
 const token = ['FIXTURE', 'BRAND'].join('');
-const hits = execFileSync('git', ['ls-files'], { encoding: 'utf8' }).split('\n').filter((f) => f && readFileSync(f, 'utf8').includes(token));
+const hits = execFileSync('git', ['-C', root, 'ls-files'], { encoding: 'utf8' }).split('\n').filter((f) => f && readFileSync(`${root}/${f}`, 'utf8').includes(token));
 if (hits.length) { console.log(`scan-brand-residue: FAIL -- ${hits.join(', ')}`); process.exit(1); }
 console.log('scan-brand-residue: PASS -- fixture');
 EOF
@@ -399,27 +418,39 @@ EOF
   printf '{\n  "seams": [\n    {\n      "path": "src/seam.ts",\n      "upstream_blob": "%s",\n      "patch": "patches/010-fixture-seam.patch",\n      "reason": "fixture"\n    }\n  ]\n}\n' \
     "$(git -C "$seed" rev-parse HEAD:src/seam.ts)" > "$root/orca-overlay/seams.json"
   rm -rf "$seed"
+  case "$variant" in
+    uncovered) mkdir -p "$root/orca-overlay/files/extra" && echo 'export const x = 1;' > "$root/orca-overlay/files/extra/x.ts" ;;
+    covered) mkdir -p "$root/orca-overlay/files/src" && echo 'export const pbAdded = 1;' > "$root/orca-overlay/files/src/pb-added.ts" ;;
+    brand) printf 'notes: %s%s\n' FIXTURE BRAND > "$root/notes.txt" ;;
+    rowskip) echo 'orca-overlay|orca-overlay: SKIP -- no built thing' > "$root/skip-row" ;;
+    upstreamskip) echo 'licence-allowlist|licence-allowlist: SKIP -- upstream/ absent; its LICENSE digest is unchecked' > "$root/skip-row" ;;
+  esac
   "${FX_GIT[@]}" -C "$root" add -A
   "${FX_GIT[@]}" -C "$root" commit -q -m fixture
 }
 
 fixture_generate() { (cd "$1" && node scripts/generate.mjs); }
-fixture_pnpm_run() { sh -c "$(node -p 'require("./package.json").scripts[process.argv[1]]' "$1")"; }
+fixture_pnpm_run() { touch "../ran-$1"; sh -c "$(node -p 'require("./package.json").scripts[process.argv[1]]' "$1")"; }
 
 run_self_test() {
-  local tmp n=0 misses=0
+  local tmp n=0 misses=0 runs=0
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
   ok() { echo "  ok $1"; }
   miss() { echo "  MISS $1: $2" >&2; misses=$((misses + 1)); }
 
-  # fixture <name> <remote variant> <root variant>: sets FX_ROOT.
+  # fixture <remote variant> <root variant>: a fresh fixture in its own directory; sets FX_ROOT
+  # and FX_LOG.
   fixture() {
-    make_remote "$tmp/$1" "$2" && make_root "$tmp/$1/pb" "$tmp/$1/repo" "$3" && FX_ROOT="$tmp/$1/pb"
+    runs=$((runs + 1))
+    FX_LOG="$tmp/run$runs.log"
+    make_remote "$tmp/run$runs" "$1" && make_root "$tmp/run$runs/pb" "$tmp/run$runs/repo" "$2" && FX_ROOT="$tmp/run$runs/pb"
   }
+  # expect_pass <name> [<remote variant> <root variant>]
   expect_pass() {
-    local name="$1" log="$tmp/$1.log"
-    if ! fixture "$name" control control >"$log" 2>&1; then miss "$name" "fixture: $(tail -1 "$log")"; return; fi
+    local name="$1" log
+    fixture "${2:-control}" "${3:-control}" >"$tmp/fixture.log" 2>&1 || { miss "$name" "fixture: $(tail -1 "$tmp/fixture.log")"; return; }
+    log="$FX_LOG"
     if (run_replay "$FX_ROOT" v1.0.2 "$FX_C2" full fixture_generate fixture_pnpm_run) >"$log" 2>&1 \
       && tail -1 "$log" | grep -q '^rebase-orca: PASS -- v1.0.2'; then
       ok "$name -> green: $(tail -1 "$log" | sed 's/^rebase-orca: PASS -- //')"
@@ -429,8 +460,9 @@ run_self_test() {
   }
   # expect_stop <name> <remote variant> <root variant> <stage string>
   expect_stop() {
-    local name="$1" want="$4" log="$tmp/$1.log" line
-    if ! fixture "$name" "$2" "$3" >"$log" 2>&1; then miss "$name" "fixture: $(tail -1 "$log")"; return; fi
+    local name="$1" want="$4" log line
+    fixture "$2" "$3" >"$tmp/fixture.log" 2>&1 || { miss "$name" "fixture: $(tail -1 "$tmp/fixture.log")"; return; }
+    log="$FX_LOG"
     if (run_replay "$FX_ROOT" v1.0.2 "$FX_C2" full fixture_generate fixture_pnpm_run) >"$log" 2>&1; then
       miss "$name" "the replay passed; it must stop at '$want'"
       return
@@ -448,6 +480,31 @@ run_self_test() {
 
   expect_pass control
   expect_stop "seam conflict" conflict control "seam-apply 010-"
+  expect_stop "type error" typeerror control "typecheck:web src/a.ts:3"
+  expect_stop "overlay file outside both programs" control uncovered "typecheck coverage"
+  expect_pass "overlay file inside a program (coverage is not vacuous)" control covered
+  expect_stop "brand token" control brand "brand scan"
+  expect_stop "changed LICENSE" licence control "row licence-allowlist"
+  expect_stop "row prints SKIP" control rowskip "row orca-overlay skipped"
+  expect_pass "upstream/ SKIP is out of scope" control upstreamskip
+  expect_stop "probe prints SKIP" control orcadskip "orcad-only start skipped"
+
+  # --replay-only on the control fixture changes exactly the bump paths and runs none
+  # of the stand-ins (each would leave an untracked ran-<stage> file).
+  local log got want
+  if ! fixture control control >"$tmp/fixture.log" 2>&1; then
+    miss replay-only "fixture: $(tail -1 "$tmp/fixture.log")"
+  elif log="$FX_LOG"; ! (run_replay "$FX_ROOT" v1.0.2 "$FX_C2" replay-only fixture_generate fixture_pnpm_run) >"$log" 2>&1; then
+    miss replay-only "failed: $(grep -m1 '^rebase-orca: FAIL -- ' "$log" || tail -1 "$log")"
+  else
+    got="$(git -C "$FX_ROOT" status --porcelain --untracked-files=all | cut -c4- | LC_ALL=C sort)"
+    want="$(printf '%s\n' configuration.toml orca-overlay/patches/010-fixture-seam.patch orca-overlay/seams.json)"
+    if [ "$got" = "$want" ]; then
+      ok "replay-only -> changed exactly $(echo $got)"
+    else
+      miss replay-only "changed $(echo $got), not exactly $(echo $want)"
+    fi
+  fi
 
   if [ "$misses" -eq 0 ]; then
     echo "rebase-orca self-test: PASS -- $n planted faults each stopped at its named stage"

@@ -54,14 +54,25 @@
 // both this checkout's and the main checkout's .mozbuild/node-dist). --self-test is
 // quick: fixtures only, no orcad, no browser, no network.
 //
+// --orcad-only (68-02, P68-28): steps 1-7 without step 8. The built-PowerBrowser SKIP
+// clause and the web-tab pairing are not reached, so a runner with a built orca/ and no
+// PowerBrowser (the Orca re-pin replay, scripts/rebase-orca.sh) proves the orcad half and
+// never SKIPs for that reason. The no-built-orca/ and installed-Orca SKIPs stay; the
+// replay turns any SKIP red.
+//
+// pairWebTab and deriveMarker are exported for verify-orca-packaged-live.mjs (lane
+// p68-01); importing this module runs nothing.
+//
 // Usage:
 //   node scripts/verify-orca-slotless-start.mjs
+//   node scripts/verify-orca-slotless-start.mjs --orcad-only
 //   node scripts/verify-orca-slotless-start.mjs --self-test
 
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
     REPO_ROOT, assertEnv, descendants, ensurePbNode, installOutputRedaction, installedOrcaPaths, nodeExesInTree,
@@ -110,12 +121,12 @@ function checkSurvivors(survivors, { orcadPid, daemonPid }) {
         : `orcad ${pid === orcadPid ? '' : 'process '}${pid} survived teardown. Next step: kill ${pid} and check orcad's SIGTERM handling at the pin.`);
 }
 
-/** Absent entry points or an installed Orca make the row SKIP rather than run. */
-function skipReason({ orcaDir, home, pbBin }) {
+/** Absent entry points or an installed Orca make the row SKIP rather than run. --orcad-only needs no PowerBrowser. */
+function skipReason({ orcaDir, home, pbBin, orcadOnly = false }) {
     for (const rel of ['out/orcad/orcad.js', 'out/web/web-index.html']) {
         if (!existsSync(join(orcaDir, rel))) return `no built orca/ (orca/${rel} missing; run: nix develop .#orca --command bash scripts/build-orca.sh)`;
     }
-    if (!existsSync(pbBin)) return `no built PowerBrowser (${pbBin} missing; see docs/BUILD.md "Firefox half")`;
+    if (!orcadOnly && !existsSync(pbBin)) return `no built PowerBrowser (${pbBin} missing; see docs/BUILD.md "Firefox half")`;
     const installed = installedOrcaPaths(orcaDir, home).filter((p) => existsSync(p));
     if (installed.length) return `an installed Orca exists at ${installed.join(', ')}; orcad would start a hidden Electron from it (Pitfall 5)`;
     return null;
@@ -133,7 +144,7 @@ function nodeFilesUnder(dir) {
  * rendered by SshStatusSegment.tsx in the status bar; spike 003 saw "1 host"). {{count}} becomes a
  * positive integer, so "0 hosts" is not connected.
  */
-function deriveMarker(orcaDir) {
+export function deriveMarker(orcaDir) {
     let text = '';
     try { text = readFileSync(join(orcaDir, MARKER_REL), 'utf8'); } catch { /* reported below */ }
     const m = new RegExp(`export function ${MARKER_FN}\\b[\\s\\S]*?translate\\(\\s*'[^']+',\\s*'([^']*\\{\\{count\\}\\}[^']*)',[\\s\\S]*?defaultValue_one:\\s*'([^']*\\{\\{count\\}\\}[^']*)'`).exec(text);
@@ -158,10 +169,10 @@ function checkClient(result, text, secrets) {
 
 // --- live run ----------------------------------------------------------------
 
-async function live() {
+async function live({ orcadOnly = false } = {}) {
     const started = Date.now();
     let skip;
-    try { skip = skipReason({ orcaDir: ORCA_DIR, pbBin: FIREFOX_BIN }); } catch (e) {
+    try { skip = skipReason({ orcaDir: ORCA_DIR, pbBin: FIREFOX_BIN, orcadOnly }); } catch (e) {
         console.error(`${NAME}: FAIL -- ${e.message}. Next step: update installedOrcaPaths in scripts/lib/orca-run.mjs to the new source.`);
         return 1;
     }
@@ -169,7 +180,7 @@ async function live() {
 
     let node, orcaVersion, marker;
     try {
-        marker = deriveMarker(ORCA_DIR);
+        if (!orcadOnly) marker = deriveMarker(ORCA_DIR);
         node = await ensurePbNode();
         orcaVersion = orcaVersionFromPins();
     } catch (e) {
@@ -182,7 +193,7 @@ async function live() {
     const fails = [];
     const run = { child: null, ready: null, port: '?', restore: () => {} };
     try {
-        await probeOrcad(run, { node, env, profileDir, orcaVersion, marker, fails });
+        await probeOrcad(run, { node, env, profileDir, orcaVersion, marker, fails, orcadOnly });
     } finally {
         if (run.child) {
             const daemonPid = run.ready?.daemonPid ?? null;
@@ -194,6 +205,10 @@ async function live() {
     try {
         if (fails.length) return report(fails);
         const secs = ((Date.now() - started) / 1000).toFixed(1);
+        if (orcadOnly) {
+            console.log(`${NAME}: PASS -- orcad half only: orcad ${orcaVersion} ready on ws://127.0.0.1:${run.port}, Node ${node.version} (node-runtime.json), 1 Node runtime, orcad and terminal daemon reaped; web-tab pairing not run (--orcad-only) (${secs}s)`);
+            return 0;
+        }
         console.log(`${NAME}: PASS -- orcad ${orcaVersion} ready on ws://127.0.0.1:${run.port}, Node ${node.version} (node-runtime.json), 1 Node runtime, web tab paired (status bar '${run.shown}', marker from ${marker.where}), orcad and terminal daemon reaped (${secs}s)`);
         return 0;
     } finally {
@@ -202,7 +217,7 @@ async function live() {
 }
 
 // Steps 3-5 while orcad runs; every red reason goes to `fails`, teardown is the caller's.
-async function probeOrcad(run, { node, env, profileDir, orcaVersion, marker, fails }) {
+async function probeOrcad(run, { node, env, profileDir, orcaVersion, marker, fails, orcadOnly }) {
     fails.push(...assertEnv(env, { profileDir, orcaVersion }));
     if (fails.length) return;
     try {
@@ -221,14 +236,19 @@ async function probeOrcad(run, { node, env, profileDir, orcaVersion, marker, fai
         if (exe.size === 1 && [...exe][0] === realpathSync(node.path)) ready.nodeVersion = node.version;
     }
     fails.push(...checkReady(ready, node.version));
-    if (!fails.length) await pairWebTab(run, { marker, fails });
+    if (!fails.length) await webTabHalf(run, { marker, fails, orcadOnly });
 
     const paths = new Set([realpathSync(node.path), ...nodeExesInTree([child.pid, ready.daemonPid]), ...nodeFilesUnder(join(ORCA_DIR, 'out'))]);
     fails.push(...checkRuntimes([...paths].map((p) => ({ path: p, sha256: sha256(p) }))));
 }
 
+// Step 8, unless --orcad-only. `pair` is the self-test's seam.
+async function webTabHalf(run, { marker, fails, orcadOnly, pair = pairWebTab }) {
+    if (!orcadOnly) await pair(run, { marker, fails });
+}
+
 // P59-04: the source-built client opened from webClientUrl in a PB web tab pairs with no input.
-async function pairWebTab(run, { marker, fails }) {
+export async function pairWebTab(run, { marker, fails }) {
     const { ready } = run;
     if (!ready.webClientUrl) {
         fails.push('the ready line carries no pairing.webClientUrl (pairing unavailable). Next step: check orcad --web-client-root orca/out/web and the pairing reason at the pin.');
@@ -287,7 +307,7 @@ function captureReport(fails, secrets) {
     return buf;
 }
 
-function selfTest() {
+async function selfTest() {
     const tmp = mkdtempSync(join(tmpdir(), 'orca-slotless-selftest-'));
     let misses = 0;
     const ok = (label) => console.log(`  ok ${label}`);
@@ -353,6 +373,22 @@ function selfTest() {
         if (!on.toUpperCase().includes(SENTINEL) && on.includes(REDACTED_TOKEN)) ok(`leak, redaction on -> red, naming '${REDACTED_TOKEN}'`);
         else miss('leak, redaction on', 'the sentinel survived redaction');
 
+        // --orcad-only: a missing PowerBrowser is no SKIP, and step 8 is never reached.
+        const noPb = join(tmp, 'no-powerbrowser');
+        if (skipReason({ orcaDir, home, pbBin: noPb, orcadOnly: true }) === null) ok('--orcad-only with PowerBrowser absent -> no SKIP');
+        else miss('SKIP when PowerBrowser is absent in --orcad-only', skipReason({ orcaDir, home, pbBin: noPb, orcadOnly: true }));
+        if ((skipReason({ orcaDir, home, pbBin: noPb }) ?? '').includes('no built PowerBrowser')) ok('full row with PowerBrowser absent -> SKIP (control)');
+        else miss('full row with PowerBrowser absent', 'did not SKIP naming the missing PowerBrowser');
+        const opened = [];
+        const stubPair = async (run) => { run.openTab(); };
+        const stubRun = () => ({ ready: good, openTab: () => opened.push('tab') });
+        await webTabHalf(stubRun(), { marker, fails: [], orcadOnly: false, pair: stubPair });
+        if (opened.length === 1) ok('full row -> web tab opened (control)');
+        else miss('full row', 'the stub open-tab was not called, so the --orcad-only case proves nothing');
+        await webTabHalf(stubRun(), { marker, fails: [], orcadOnly: true, pair: stubPair });
+        if (opened.length === 1) ok('--orcad-only -> web tab never opened');
+        else miss('--orcad-only still opening a browser', 'the stub open-tab was called');
+
         mkdirSync(join(installed, '..'), { recursive: true });
         writeFileSync(installed, '');
         const skip = skipReason({ orcaDir, home, pbBin: join(orcaDir, 'out/web/web-index.html') });
@@ -367,11 +403,15 @@ function selfTest() {
     return misses === 0 ? 0 : 1;
 }
 
-const args = process.argv.slice(2);
-for (const a of args) {
-    if (a !== '--self-test') {
-        console.error(`${NAME}: FAIL -- unknown argument '${a}'. Next step: run: node ${SELF_REL}, or add --self-test.`);
+const isEntryPoint = (() => {
+    try { return realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; }
+})();
+if (isEntryPoint) {
+    const args = process.argv.slice(2);
+    const unknown = args.filter((a) => a !== '--self-test' && a !== '--orcad-only');
+    if (unknown.length || args.length > 1) {
+        console.error(`${NAME}: FAIL -- unknown argument '${unknown[0] ?? args[1]}'. Next step: run: node ${SELF_REL} [--orcad-only | --self-test].`);
         process.exit(2);
     }
+    process.exit(args[0] === '--self-test' ? await selfTest() : await live({ orcadOnly: args[0] === '--orcad-only' }));
 }
-process.exit(args.includes('--self-test') ? selfTest() : await live());

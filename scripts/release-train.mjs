@@ -107,6 +107,7 @@
 //                                        each is success|failure|cancelled|skipped)
 //   node scripts/release-train.mjs --sweep-due <epoch-seconds> [<last-sweep-epoch-seconds>]
 //   node scripts/release-train.mjs --theia-due <epoch-seconds> [<last-sweep-epoch-seconds>]   (the Theia inflow tick, AUTO-02)
+//   node scripts/release-train.mjs --orca-due <epoch-seconds> [<last-sweep-epoch-seconds>]    (the weekly Orca re-pin tick, OVL-02)
 //   node scripts/release-train.mjs --maintenance <facts.json> <body-out>
 //   node scripts/release-train.mjs --maintenance-plan <found.json> <rendered-body> <comment-out> <stored-state> <state-out>
 //   node scripts/release-train.mjs --state-select <runs.json> <artifacts.json> <repo> <repo-id> <branch> <verified-shas.txt>
@@ -1796,6 +1797,27 @@ export function theiaDue(nowMs, lastSweepMs = null) {
     return Math.floor(lastSweepMs / DAY_MS) <= thursday;
 }
 
+/** The ISO 8601 week of a UTC instant as 'YYYY-Www': the week is the one holding that week's Thursday. Pure. */
+function isoWeekKey(ms) {
+    const day = Math.floor(ms / DAY_MS);
+    const thursday = day - ((new Date(day * DAY_MS).getUTCDay() + 6) % 7) + 3;
+    const year = new Date(thursday * DAY_MS).getUTCFullYear();
+    const week = 1 + Math.floor((thursday - Date.UTC(year, 0, 1) / DAY_MS) / 7);
+    return `${year}-W${String(week).padStart(2, '0')}`;
+}
+
+/**
+ * The Orca re-pin (OVL-02, P68-08) runs on the first accepted sweep of each ISO week: due when the previous
+ * sweep fell in another ISO week. Orca ships about five releases a week, so a weekly tick keeps the pin near
+ * the stock mobile app without a PR per release. An unknown last sweep leaves it due (the theiaDue
+ * fail-safe: the replay is idempotent, and an open chore/orca-* PR holds the next selection). The caller
+ * gates this on sweepDue. Pure.
+ */
+export function orcaDue(nowMs, lastSweepMs = null) {
+    if (typeof lastSweepMs !== 'number' || !Number.isFinite(lastSweepMs)) return true;
+    return isoWeekKey(nowMs) !== isoWeekKey(lastSweepMs);
+}
+
 /** The comment text for a transition into red: one comment naming every newly red row. Pure. */
 function transitionComment(newlyRed, ownerLogin) {
     const lines = newlyRed.map(r => `- ${r.name}: ${r.evidence}`);
@@ -1930,6 +1952,17 @@ function theiaDueCli([nowSeconds, lastSeconds]) {
     }
     const last = lastSeconds === undefined || lastSeconds === '' ? null : Number(lastSeconds) * 1000;
     console.log(`theia-due=${theiaDue(seconds * 1000, last)}`);
+    return 0;
+}
+
+function orcaDueCli([nowSeconds, lastSeconds]) {
+    const seconds = Number(nowSeconds);
+    if (!Number.isFinite(seconds)) {
+        console.error(`${NAME}: FAIL -- the sweep clock ${JSON.stringify(nowSeconds)} is not epoch seconds. Next step: pass date -u +%s.`);
+        return 2;
+    }
+    const last = lastSeconds === undefined || lastSeconds === '' ? null : Number(lastSeconds) * 1000;
+    console.log(`orca-due=${orcaDue(seconds * 1000, last)}`);
     return 0;
 }
 
@@ -2340,6 +2373,22 @@ function maintenanceSelfTest() {
             const cliDue = cli(['--theia-due', String(d(9, 30) / 1000), String(d(9, 29) / 1000)]).out.trim();
             const cliNot = cli(['--theia-due', String(d(9, 31) / 1000), String(d(9, 30) / 1000)]).out.trim();
             if (cliDue !== 'theia-due=true' || cliNot !== 'theia-due=false') failures.push(`the CLI gave ${cliDue}, ${cliNot}`);
+            return failures;
+        } },
+        { name: 'control: the Orca re-pin is due on the first sweep of each ISO week only', run: () => {
+            const d = (y, m, day) => Date.UTC(y, m, day, 6, 5);
+            const failures = [];
+            // November 2026: Sunday the 8th, Monday the 9th, Tuesday the 10th.
+            if (!orcaDue(d(2026, 10, 9), d(2026, 10, 8))) failures.push('the Monday first sweep is not due');
+            if (!orcaDue(d(2026, 10, 10), d(2026, 10, 8))) failures.push('the Tuesday after a missed Monday is not due');
+            if (orcaDue(d(2026, 10, 10), d(2026, 10, 9))) failures.push('a second sweep in the same week is due');
+            // 2026 starts on a Thursday, so its week 1 runs from Monday 2025-12-29 to Sunday 2026-01-04.
+            if (orcaDue(d(2026, 0, 1), d(2025, 11, 31))) failures.push('Thursday 2026-01-01 after Wednesday 2025-12-31 (both 2026-W01) is due');
+            if (!orcaDue(d(2025, 11, 29), d(2025, 11, 28))) failures.push('Monday 2025-12-29 (2026-W01) after Sunday 2025-12-28 (2025-W52) is not due');
+            if (!orcaDue(d(2026, 10, 10), null)) failures.push('an unknown last sweep is not due');
+            const cliDue = cli(['--orca-due', String(d(2026, 10, 9) / 1000), String(d(2026, 10, 8) / 1000)]).out.trim();
+            const cliNot = cli(['--orca-due', String(d(2026, 10, 10) / 1000), String(d(2026, 10, 9) / 1000)]).out.trim();
+            if (cliDue !== 'orca-due=true' || cliNot !== 'orca-due=false') failures.push(`the CLI gave ${cliDue}, ${cliNot}`);
             return failures;
         } },
     ];
@@ -3391,10 +3440,11 @@ if (isEntry) {
     if (args[0] === '--publish-plan' && (args.length === 6 || args.length === 7)) process.exit(publishPlanCli(args.slice(1)));
     if (args[0] === '--sweep-due' && (args.length === 2 || args.length === 3)) process.exit(sweepDueCli(args.slice(1)));
     if (args[0] === '--theia-due' && (args.length === 2 || args.length === 3)) process.exit(theiaDueCli(args.slice(1)));
+    if (args[0] === '--orca-due' && (args.length === 2 || args.length === 3)) process.exit(orcaDueCli(args.slice(1)));
     if (args[0] === '--maintenance' && args.length === 3) process.exit(maintenanceCli(args.slice(1)));
     if (args[0] === '--maintenance-plan' && args.length === 6) process.exit(maintenancePlanCli(args.slice(1)));
     if (args[0] === '--state-select' && args.length === 7) process.exit(stateSelectCli(args.slice(1)));
     console.error(`${NAME}: FAIL -- unknown argument list '${args.join(' ')}'`);
-    console.error(`  Next step: run: node ${SELF_REL} [derive|next|render] --self-test, node ${SELF_REL} --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>, node ${SELF_REL} --publish-plan <local-tree> <remote-tip|''> <remote-tree|''> <compare-json|''> <bot-email> [<expected-tip>], node ${SELF_REL} --sweep-due <epoch-seconds> [<last-sweep-epoch-seconds>], node ${SELF_REL} --maintenance <facts.json> <body-out>, or node ${SELF_REL} --maintenance-plan <found.json> <rendered-body> <comment-out> <stored-state|''> <state-out>, node ${SELF_REL} --state-select <runs.json> <artifacts.json> <repo> <repo-id> <branch> <verified-shas.txt>, or node ${SELF_REL} --fixer-inputs <release-key> <class> <branch> <target-tag> <check@sha> <attempt> <latest-tag|''>.`);
+    console.error(`  Next step: run: node ${SELF_REL} [derive|next|render] --self-test, node ${SELF_REL} --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>, node ${SELF_REL} --publish-plan <local-tree> <remote-tip|''> <remote-tree|''> <compare-json|''> <bot-email> [<expected-tip>], node ${SELF_REL} --sweep-due <epoch-seconds> [<last-sweep-epoch-seconds>], node ${SELF_REL} --theia-due|--orca-due <epoch-seconds> [<last-sweep-epoch-seconds>], node ${SELF_REL} --maintenance <facts.json> <body-out>, or node ${SELF_REL} --maintenance-plan <found.json> <rendered-body> <comment-out> <stored-state|''> <state-out>, node ${SELF_REL} --state-select <runs.json> <artifacts.json> <repo> <repo-id> <branch> <verified-shas.txt>, or node ${SELF_REL} --fixer-inputs <release-key> <class> <branch> <target-tag> <check@sha> <attempt> <latest-tag|''>.`);
     process.exit(2);
 }

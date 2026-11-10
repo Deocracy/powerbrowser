@@ -48,6 +48,9 @@
 //   node scripts/detect-upstreams.mjs --listing <tags> [--firefox-esr <value>]
 //   node scripts/detect-upstreams.mjs --node-select <index.json> <node-runtime.json>
 //   node scripts/detect-upstreams.mjs --node-shasum <SHASUMS256.txt> <filename>
+//   node scripts/detect-upstreams.mjs --orca-select <git-ls-remote-tags.txt> <configuration.toml> [--open-prs <file>]
+//       (OVL-02, P68-09: the newest vX.Y.Z Orca tag strictly newer than upstreams.orca_tag, printed as
+//        orca-tag= and orca-commit=; an open chore/orca-* PR holds, nothing newer holds, both with empty values)
 //   node scripts/detect-upstreams.mjs --uptake-major
 
 import { readFileSync } from 'node:fs';
@@ -55,6 +58,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { resolveConfig } from './generate.mjs';
+import { parse as parseToml } from './lib/toml.cjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'detect-upstreams';
@@ -73,6 +77,10 @@ const NODE_PLATFORM = 'linux-x64';
 export const UPTAKE_MAJOR = 175;
 // The bump branches the release train publishes. A branch with an open PR is a PR-open state, not a new candidate.
 export const NODE_BRANCH = 'chore/node-v24.x';
+// The Orca re-pin (OVL-02). Release tags only: -rc.N, -rc.N.perf and mobile-* tags never match.
+const ORCA_TAG = /^v(\d+)\.(\d+)\.(\d+)$/;
+const LS_REMOTE_LINE = /^([0-9a-f]{40})\t(refs\/\S+)$/;
+export const ORCA_BRANCH_PREFIX = 'chore/orca-';
 export const esrBranch = tag => `chore/esr-${tag}`;
 
 const args = process.argv.slice(2);
@@ -102,6 +110,7 @@ export function parseArgs(argv) {
     if (pos.some(p => p === '')) return null;
     if (mode === '--node-select' && pos.length === 2) return { mode: 'node-select', path: pos[0], runtimePath: pos[1], openPrsPath: opts['--open-prs'] };
     if (mode === '--node-shasum' && pos.length === 2 && opts['--firefox-esr'] === undefined && opts['--open-prs'] === undefined) return { mode: 'node-shasum', path: pos[0], filename: pos[1] };
+    if (mode === '--orca-select' && pos.length === 2 && opts['--firefox-esr'] === undefined) return { mode: 'orca-select', path: pos[0], configPath: pos[1], openPrsPath: opts['--open-prs'] };
     if (mode === '--listing' && pos.length === 1) return { mode: 'listing', path: pos[0], firefoxEsr: opts['--firefox-esr'], openPrsPath: opts['--open-prs'] };
     return null;
 }
@@ -237,6 +246,42 @@ export function readOpenPrs(path) {
     return path === undefined ? [] : parseOpenPrs(readFileSync(path, 'utf8'));
 }
 
+/**
+ * The Orca re-pin candidate from a `git ls-remote --tags` listing: the newest tag matching ORCA_TAG that is
+ * strictly newer than pinTag, compared as integer triples, with its commit from the peeled ^{} line when the
+ * tag is annotated, else the bare sha (a lightweight tag). An open chore/orca-* PR (the caller lists only
+ * non-cross-repository heads) holds. Returns { tag, commit, note }; tag and commit are '' on a hold. A
+ * listing line that is not '<40 hex>\t<ref>' or a pin that is not vX.Y.Z throws. Pure.
+ */
+export function selectOrca(listingText, pinTag, openPrs = []) {
+    const pin = ORCA_TAG.exec(String(pinTag ?? ''));
+    if (pin === null) throw new Error(`upstreams.orca_tag ${JSON.stringify(pinTag)} is not vX.Y.Z`);
+    const tags = new Map();
+    for (const line of String(listingText).split('\n')) {
+        if (line.trim() === '') continue;
+        const m = LS_REMOTE_LINE.exec(line);
+        if (m === null) throw new Error(`listing line ${JSON.stringify(line)} is not '<40-hex sha><tab><ref>'`);
+        if (!m[2].startsWith('refs/tags/')) continue;
+        const peeled = m[2].endsWith('^{}');
+        const name = m[2].slice('refs/tags/'.length, peeled ? -3 : undefined);
+        if (!ORCA_TAG.test(name)) continue;
+        const entry = tags.get(name) ?? {};
+        entry[peeled ? 'peeled' : 'bare'] = m[1];
+        tags.set(name, entry);
+    }
+    const triple = (tag) => ORCA_TAG.exec(tag).slice(1, 4).map(Number);
+    const newer = (a, b) => { for (let i = 0; i < 3; i += 1) if (a[i] !== b[i]) return a[i] > b[i]; return false; };
+    let best = null;
+    for (const name of tags.keys()) {
+        if (newer(triple(name), triple(pinTag)) && (best === null || newer(triple(name), triple(best)))) best = name;
+    }
+    if (best === null) return { tag: '', commit: '', note: `no Orca release tag is newer than the pin ${pinTag}; the Orca re-pin holds` };
+    const open = (openPrs ?? []).find(p => p.head.startsWith(ORCA_BRANCH_PREFIX));
+    if (open !== undefined) return { tag: '', commit: '', note: `hold: open PR ${open.head} (#${open.number}); ${best} waits until it merges or closes` };
+    const { peeled, bare } = tags.get(best);
+    return { tag: best, commit: peeled ?? bare, note: null };
+}
+
 /** The sha256 for one exact filename in a SHASUMS256.txt body, or null. */
 export function shasumsEntry(text, filename) {
     for (const line of String(text).split('\n')) {
@@ -366,6 +411,21 @@ function main(parsed) {
             return 1;
         }
         console.log(derived.pin);
+        return 0;
+    }
+    if (parsed.mode === 'orca-select') {
+        let selected;
+        try {
+            const pinTag = parseToml(readFileSync(parsed.configPath, 'utf8'))?.upstreams?.orca_tag;
+            selected = selectOrca(readFileSync(parsed.path, 'utf8'), pinTag, readOpenPrs(parsed.openPrsPath));
+        } catch (e) {
+            console.error(`${NAME}: FAIL -- the Orca tag listing, the pin or the open-PR listing could not be read (${e.code ?? e.message}). Next step: check detect-orca's git ls-remote step and [upstreams] orca_tag in configuration.toml, then re-run.`);
+            return 1;
+        }
+        // A hold is not a failure: the empty values are the answer, and the reason goes to stderr.
+        if (selected.note !== null) console.error(`${NAME}: NOTE -- ${selected.note}`);
+        console.log(`orca-tag=${selected.tag}`);
+        console.log(`orca-commit=${selected.commit}`);
         return 0;
     }
     if (parsed.mode === 'node-select' || parsed.mode === 'node-shasum') {
@@ -647,11 +707,39 @@ function selfTest() {
             failed += 1;
         }
     }
+    // The Orca half (OVL-02, P68-09): listings built at run time, never fetched.
+    const sha = (c) => c.repeat(40);
+    const ls = (rows) => rows.map(([s, ref]) => `${s}\t${ref}`).join('\n') + '\n';
+    const orcaCases = [
+        {
+            name: 'Orca: the newest release tag, commit from its ^{} line; -rc, -rc.perf and mobile tags skipped',
+            listing: ls([[sha('1'), 'refs/tags/v1.4.248'], [sha('2'), 'refs/tags/v1.4.248^{}'], [sha('3'), 'refs/tags/v1.4.250'], [sha('4'), 'refs/tags/v1.4.250^{}'],
+                [sha('5'), 'refs/tags/v1.4.251-rc.1'], [sha('6'), 'refs/tags/v1.4.251-rc.1.perf'], [sha('7'), 'refs/tags/mobile-android-v1.4.252'], [sha('8'), 'refs/tags/v1.4.249']]),
+            pin: 'v1.4.248', want: { tag: 'v1.4.250', commit: sha('4') },
+        },
+        { name: 'Orca: a lightweight tag is chosen with its bare sha', listing: ls([[sha('1'), 'refs/tags/v1.4.248'], [sha('9'), 'refs/tags/v1.4.253']]), pin: 'v1.4.248', want: { tag: 'v1.4.253', commit: sha('9') } },
+        { name: 'Orca: only older tags hold', listing: ls([[sha('1'), 'refs/tags/v1.4.247'], [sha('2'), 'refs/tags/v1.3.999']]), pin: 'v1.4.248', want: { tag: '', commit: '' }, note: 'no Orca release tag is newer' },
+        { name: 'Orca: the pin itself is not newer', listing: ls([[sha('1'), 'refs/tags/v1.4.248'], [sha('2'), 'refs/tags/v1.4.248^{}']]), pin: 'v1.4.248', want: { tag: '', commit: '' }, note: 'no Orca release tag is newer' },
+        { name: 'Orca: rc, rc.perf and mobile tags alone hold', listing: ls([[sha('5'), 'refs/tags/v1.4.251-rc.1'], [sha('6'), 'refs/tags/v1.4.251-rc.1.perf'], [sha('7'), 'refs/tags/mobile-android-v1.4.252']]), pin: 'v1.4.248', want: { tag: '', commit: '' }, note: 'no Orca release tag is newer' },
+        { name: 'Orca: an open chore/orca-* PR holds', listing: ls([[sha('3'), 'refs/tags/v1.4.250']]), pin: 'v1.4.248', openPrs: [{ number: 77, head: 'chore/orca-v1.4.249' }], want: { tag: '', commit: '' }, note: 'hold: open PR chore/orca-v1.4.249' },
+        { name: 'Orca: v1.4.10 is newer than v1.4.9 (integer triples, not strings)', listing: ls([[sha('a'), 'refs/tags/v1.4.9'], [sha('b'), 'refs/tags/v1.4.10']]), pin: 'v1.4.8', want: { tag: 'v1.4.10', commit: sha('b') } },
+    ];
+    for (const c of orcaCases) {
+        const r = selectOrca(c.listing, c.pin, c.openPrs ?? []);
+        const good = r.tag === c.want.tag && r.commit === c.want.commit && (c.note === undefined ? r.note === null : String(r.note).includes(c.note));
+        if (good) console.log(`  ok  ${c.name} -> ${r.tag === '' ? `held (${r.note})` : `${r.tag} ${r.commit.slice(0, 10)}`}`);
+        else { console.error(`${NAME}: --self-test FAIL -- '${c.name}' gave ${JSON.stringify(r)}`); failed += 1; }
+    }
+    let malformed = false;
+    try { selectOrca('not a listing line\n', 'v1.4.248'); } catch { malformed = true; }
+    if (malformed) console.log('  ok  Orca: a malformed listing line -> refused');
+    else { console.error(`${NAME}: --self-test FAIL -- a malformed listing line was accepted`); failed += 1; }
+
     if (failed > 0) {
         console.error(`${NAME}: --self-test FAIL -- ${failed} plant(s) did not go red`);
         return 1;
     }
-    console.log(`${NAME}: --self-test PASS -- the 175.0esr fixture yields ${GOOD} as a bump, ${plants.length + uptakePlants.length} planted faults went red naming their drift, and ${controls.length} controls stayed green (the 153 line and the ${UPTAKE_MAJOR} uptake lane each guard the other)`);
+    console.log(`${NAME}: --self-test PASS -- the 175.0esr fixture yields ${GOOD} as a bump, ${plants.length + uptakePlants.length} planted faults went red naming their drift, ${controls.length} controls stayed green, and ${orcaCases.length + 1} Orca selector cases held (the 153 line and the ${UPTAKE_MAJOR} uptake lane each guard the other)`);
     return 0;
 }
 
@@ -660,7 +748,7 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(
     const parsed = parseArgs(args);
     if (parsed === null) {
         console.error(`${NAME}: FAIL -- unknown argument list '${args.join(' ')}'`);
-        console.error(`  Next step: run: node ${SELF_REL} --self-test, node ${SELF_REL} --pin, or node ${SELF_REL} --listing <file>.`);
+        console.error(`  Next step: run: node ${SELF_REL} --self-test, node ${SELF_REL} --pin, node ${SELF_REL} --listing <file>, or node ${SELF_REL} --orca-select <listing> <configuration.toml> [--open-prs <file>].`);
         process.exit(2);
     }
     process.exit(main(parsed));
