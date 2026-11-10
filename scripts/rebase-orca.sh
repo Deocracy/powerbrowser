@@ -268,9 +268,11 @@ run_replay() {
 # The production generate and package-run functions. Their fixture twins are in the self-test.
 theia_generate() { (cd "$1" && nix develop .#theia --command node scripts/generate.mjs); }
 # build-orca.sh's corepack knobs, so pnpm is the version it installed.
+# verify-deps-before-run=false: pnpm 12's default re-installs before a run, without build-orca.sh's
+# store, virtual-store and --ignore-scripts knobs, relinking orca/node_modules and running lifecycle scripts.
 orca_pnpm_run() {
   COREPACK_HOME="$REPO_ROOT/.mozbuild/corepack" COREPACK_ENABLE_DOWNLOAD_PROMPT=0 DO_NOT_TRACK=1 \
-    PATH="$REPO_ROOT/.mozbuild/corepack/bin:$PATH" corepack pnpm run "$1"
+    PATH="$REPO_ROOT/.mozbuild/corepack/bin:$PATH" corepack pnpm --config.verify-deps-before-run=false run "$1"
 }
 
 # --- self-test ------------------------------------------------------------------
