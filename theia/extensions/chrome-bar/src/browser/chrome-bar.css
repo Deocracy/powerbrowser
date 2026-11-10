@@ -1176,6 +1176,7 @@
      browsing    strip + URL row
      coding      menubar + URL row
      organising  toolbar + URL row
+     orca        menubar + URL row
 
    Before this was per-mode the height was pinned at the two-row value for
    every mode, and that single number caused three separate problems: the
@@ -1186,7 +1187,8 @@ body[data-pb-mode] #theia-top-panel {
     min-height: calc(40px + var(--pb-bookmarks-toolbar-height, 0px) + var(--pb-find-strip-height, 0px));
 }
 
-body[data-pb-mode="coding"] #theia-top-panel {
+body[data-pb-mode="coding"] #theia-top-panel,
+body[data-pb-mode="orca"] #theia-top-panel {
     min-height: calc(var(--theia-private-menubar-height) + 40px + var(--pb-bookmarks-toolbar-height, 0px) + var(--pb-find-strip-height, 0px));
 }
 

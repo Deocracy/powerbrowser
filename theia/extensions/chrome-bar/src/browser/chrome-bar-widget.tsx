@@ -390,8 +390,8 @@ export class ChromeBarWidget extends ReactWidget {
 
     static readonly ID = 'powerbrowser.chrome-bar';
 
-    /** The three shipped mode defaults, in contracted order. */
-    static readonly MODES = ['Coding', 'Browsing', 'Organising'];
+    /** The four shipped mode defaults, in contracted order. */
+    static readonly MODES = ['Coding', 'Browsing', 'Organising', 'Orca'];
 
     @inject(CommandRegistry)
     protected readonly commands: CommandRegistry;
@@ -2080,7 +2080,10 @@ export class ChromeBarContribution implements FrontendApplicationContribution {
         // nothing to take its place leaves 32px of dead space above the
         // canvas. Showing the strip there fills exactly that, and the tabs
         // stay reachable while their cards are being arranged below.
-        const ideDress = modeId === 'coding';
+        //
+        // P64-19: the Orca mode asks for the IDE dress, so every dock tab bar
+        // shows for Orca's splits.
+        const ideDress = modeId === 'coding' || modeId === 'orca';
         // The strip is Browsing's home only. Organising's tabs are the cards
         // on its canvas, so a strip there would be the same tabs twice -- it
         // was carried there briefly only to fill the space the menubar left,
@@ -2256,7 +2259,7 @@ export class ChromeBarContribution implements FrontendApplicationContribution {
             // 34 T1 (39-18): the whole strip is kept clear, so a real double-click on its empty space reaches
             // onStripDoubleClick (New Tab) instead of the desktop's maximize toggle; only space beside it moves the window.
             rows.push({ row: this.tabStrip.node, items: [this.tabStrip.node] });
-        } else if (mode === 'coding' && menubar) {
+        } else if ((mode === 'coding' || mode === 'orca') && menubar) {
             rows.push({
                 row: menubar,
                 items: [...Array.from(menubar.querySelectorAll('.lm-MenuBar-item')), ...Array.from(this.layoutControls.node.children)],

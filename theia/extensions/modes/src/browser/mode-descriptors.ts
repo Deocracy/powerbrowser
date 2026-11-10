@@ -46,8 +46,19 @@ const organising: PerspectiveDescriptor = {
     onDeactivate: () => { closeOrganisingSlot(); },
 };
 
+// P64-18: the Orca mode. No activation hook: a mode switch starts no agent
+// session and no PTY, and the switch path stays free of shell mutations. The
+// main area is shared across modes, so Orca's hosted panes show here as the
+// main-area tabs they are; Phase 65 adds the Orca side panel to the left area.
+const orca: PerspectiveDescriptor = {
+    id: 'orca',
+    label: 'Orca',
+    viewPlacements: new Map<string, ApplicationShell.Area>(),
+    chromeOptions: { collapseAreas: ['left', 'right', 'bottom'] },
+};
+
 /** The shipped defaults in contracted order. Later plans append; never reorder here. */
-export const SHIPPED_MODES: ReadonlyArray<PerspectiveDescriptor> = [coding, browsing, organising];
+export const SHIPPED_MODES: ReadonlyArray<PerspectiveDescriptor> = [coding, browsing, organising, orca];
 
 /**
  * GUI-07 (14-02): the organising main-area slot seam.

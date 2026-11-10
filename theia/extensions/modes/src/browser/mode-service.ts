@@ -113,6 +113,7 @@ export const SHIPPED_MODE_RULES: Readonly<Record<string, ModeRules>> = Object.fr
     coding: { left: 'open', right: 'keep', bottom: 'open', furniture: true, organising: false, views: { left: ['explorer-view-container'], right: [], bottom: [] } },
     browsing: { left: 'closed', right: 'closed', bottom: 'closed', furniture: false, organising: false, views: { left: [], right: [], bottom: [] } },
     organising: { left: 'closed', right: 'closed', bottom: 'closed', furniture: false, organising: true, views: { left: [], right: [], bottom: [] } },
+    orca: { left: 'closed', right: 'closed', bottom: 'closed', furniture: true, organising: false, views: { left: [], right: [], bottom: [] } },
 });
 
 export interface CustomModeSnapshot {
