@@ -3906,6 +3906,9 @@ run_own_checks() {
     # seams.json path or orca-overlay/files path inside it; a printed SKIP when orca/ is not fetched.
     "orca-mobile-protocol|node $REPO_ROOT/scripts/verify-orca-mobile-protocol.mjs"
     "orca-mobile-protocol-self-test|node $REPO_ROOT/scripts/verify-orca-mobile-protocol.mjs --self-test"
+    # orca-mobile-skew-self-test: fixture tag listings and constants with no network, judged by Orca's own
+    # evaluateCompat from the pinned tree; plants desktop-too-old, mobile-too-old, no app tag, constants moved.
+    "orca-mobile-skew-self-test|node $REPO_ROOT/scripts/verify-orca-mobile-protocol.mjs --skew-self-test"
     # NEW (63-06, EXT-02, P63-26/P63-35/P63-36): orca-bridge-dir, the chrome half of the bridge folder for linux,
     # darwin and win32 (OrcaEnv's nodePlatform, bridgeDirFor and bridgeFileFor); the orcad-data-root literal joined
     # across OrcaEnv, orca-agents' protocol file and its wrapper, a named SKIP of that join alone while lane p63-03
@@ -6518,6 +6521,10 @@ run_own_checks() {
       # Each prints one named SKIP line when no built orca/ or no built PowerBrowser exists.
       "orca-hidden-electron|node $REPO_ROOT/scripts/verify-orca-hidden-electron.mjs"
       "orca-service-live|node $REPO_ROOT/scripts/verify-orca-service-live.mjs"
+      # NEW (68-03, OVL-03, P68-16/P68-27): the pin lag against the stock Android app and Orca's own evaluateCompat
+      # verdict (network read): the newest mobile-android-v* tag's constants by a one-blob partial clone against the
+      # pin's; red on a refusing verdict (a re-pin is due). A printed SKIP when orca/ is not fetched.
+      "orca-mobile-skew|node $REPO_ROOT/scripts/verify-orca-mobile-protocol.mjs --skew"
       # NEW (63-03, TERM-02/EXT-02, P63-15/P63-26): orca-agent-hooks. One built orcad with a scratch HOME and data
       # root (the user's ~/.orca and ~/.claude are never touched). Orca's own managed Claude hook script runs on
       # synthetic events derived from the pinned source; the wrapper is launched exactly as the Claude Code

@@ -50,11 +50,14 @@
 //   node scripts/verify-orca-mobile-protocol.mjs --self-test
 //   node scripts/verify-orca-mobile-protocol.mjs --skew-self-test
 
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import { createRequire, registerHooks } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { parse } from './lib/toml.cjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-mobile-protocol';
@@ -272,7 +275,189 @@ function runSelfTest() {
     }
 }
 
-const MODES = new Set(['--self-test']);
+// ---- --skew: the pin against the newest stock Android app (P68-16, P68-27, D-29) ----
+
+const SKEW = 'orca-mobile-skew';
+const APP_CONSTANTS_REL = 'mobile/src/transport/protocol-version.ts';
+const PIN_CONSTANTS_REL = 'src/shared/protocol-version.ts';
+const COMPAT_REL = 'src/shared/protocol-compat.ts';
+const APP_JSON_REL = 'mobile/app.json';
+const APP_TAG = /^refs\/tags\/mobile-android-v(\d+)\.(\d+)\.(\d+)$/;
+const ORCA_TAG = /^refs\/tags\/(v(\d+)\.(\d+)\.(\d+))$/;
+const triple = (s) => s.replace(/^v/, '').split('.').map(Number);
+const cmp = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+
+// The one REMOTE= line of scripts/fetch-orca.sh; a missing line is red, never a default.
+export function readRemote(repoRoot = REPO_ROOT) {
+    const m = readFileSync(join(repoRoot, 'scripts', 'fetch-orca.sh'), 'utf8').match(/^REMOTE="([^"\n]+)"$/m);
+    if (!m) throw new Error('scripts/fetch-orca.sh has no REMOTE="..." line (the Orca remote is read from there)');
+    return m[1];
+}
+
+export function listTags(remote) {
+    return execFileSync('git', ['ls-remote', '--tags', remote], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 })
+        .split('\n').filter(Boolean).map((l) => l.split('\t')[1]).filter((r) => r && !r.endsWith('^{}'));
+}
+
+export function newestAppTag(refs) {
+    const tags = refs.map((r) => r.match(APP_TAG)).filter(Boolean).map((m) => ({ tag: m[0].slice('refs/tags/'.length), v: [+m[1], +m[2], +m[3]] }));
+    if (!tags.length) throw new Error('no mobile-android tag on the remote (git ls-remote --tags listed none named mobile-android-vX.Y.Z)');
+    return tags.sort((a, b) => cmp(b.v, a.v))[0];
+}
+
+// Strict vX.Y.Z tags newer than the pin, and the newest of them (the pin itself when none is newer).
+export function orcaTagLag(refs, pinTag) {
+    const pin = triple(pinTag);
+    const tags = refs.map((r) => r.match(ORCA_TAG)).filter(Boolean).map((m) => m[1]);
+    const newer = tags.filter((t) => cmp(triple(t), pin) > 0).sort((a, b) => cmp(triple(b), triple(a)));
+    return { behind: newer.length, newest: newer[0] ?? pinTag };
+}
+
+// Relative specifiers in Orca's tree are extensionless; resolve them by this script's own rule.
+let hooked = false;
+function hookOrcaResolution() {
+    if (hooked) return;
+    hooked = true;
+    registerHooks({
+        resolve(spec, ctx, next) {
+            if ((spec.startsWith('./') || spec.startsWith('../')) && ctx.parentURL?.startsWith('file:')) {
+                const hit = resolveSpec(fileURLToPath(ctx.parentURL), spec);
+                if (hit) return next(pathToFileURL(hit).href, ctx);
+            }
+            return next(spec, ctx);
+        },
+    });
+    // Orca's package.json names no module type; Node's reparse notice is noise here, every other warning still prints.
+    process.removeAllListeners('warning');
+    process.on('warning', (w) => { if (w.code !== 'MODULE_TYPELESS_PACKAGE_JSON' && w.name !== 'ExperimentalWarning') console.error(`${w.name}: ${w.message}`); });
+}
+
+let imports = 0;
+// The stock app's constants file, imported by Node type stripping; label names it in a red.
+export async function importAppConstants(text, label, scratch) {
+    const file = join(scratch, `app-constants-${imports++}.mts`);
+    writeFileSync(file, text);
+    let m = {};
+    try { m = await import(pathToFileURL(file).href); } catch { /* reported as moved */ }
+    if (!Number.isInteger(m.MOBILE_PROTOCOL_VERSION) || !Number.isInteger(m.MIN_COMPATIBLE_DESKTOP_VERSION)) {
+        throw new Error(`the stock app's constants file moved (${label}: no MOBILE_PROTOCOL_VERSION and MIN_COMPATIBLE_DESKTOP_VERSION exports)`);
+    }
+    return { mobileProtocolVersion: m.MOBILE_PROTOCOL_VERSION, minCompatibleDesktopVersion: m.MIN_COMPATIBLE_DESKTOP_VERSION };
+}
+
+// One-blob partial clone of <remote> at <tag>, then the constants file at HEAD.
+export async function appConstants(remote, tag, scratch) {
+    const dir = mkdtempSync(join(scratch, 'app-'));
+    execFileSync('git', ['-c', 'advice.detachedHead=false', 'clone', '-q', '--filter=blob:none', '--no-checkout', '--depth', '1', '--branch', tag, remote, dir], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let text = '';
+    try { text = execFileSync('git', ['-C', dir, 'show', `HEAD:${APP_CONSTANTS_REL}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); } catch { /* reported as moved */ }
+    return importAppConstants(text, `${APP_CONSTANTS_REL} at ${tag}`, scratch);
+}
+
+export async function pinConstants(orcaDir) {
+    hookOrcaResolution();
+    const m = await import(pathToFileURL(join(orcaDir, PIN_CONSTANTS_REL)).href);
+    if (!Number.isInteger(m.RUNTIME_PROTOCOL_VERSION) || !Number.isInteger(m.MIN_COMPATIBLE_RUNTIME_CLIENT_VERSION)) {
+        throw new Error(`the pin's constants moved (orca/${PIN_CONSTANTS_REL}: no RUNTIME_PROTOCOL_VERSION and MIN_COMPATIBLE_RUNTIME_CLIENT_VERSION exports)`);
+    }
+    return { desktopProtocolVersion: m.RUNTIME_PROTOCOL_VERSION, desktopMinCompatibleMobileVersion: m.MIN_COMPATIBLE_RUNTIME_CLIENT_VERSION };
+}
+
+// Orca's own rule from the pinned tree. The accepting kind is what evaluateCompat returns for equal versions with no floor.
+export async function loadCompat(orcaDir) {
+    hookOrcaResolution();
+    const { evaluateCompat } = await import(pathToFileURL(join(orcaDir, COMPAT_REL)).href);
+    if (typeof evaluateCompat !== 'function') throw new Error(`orca/${COMPAT_REL} no longer exports evaluateCompat (the source moved)`);
+    const acceptKind = evaluateCompat({ mobileProtocolVersion: 1, minCompatibleDesktopVersion: 0, desktopProtocolVersion: 1, desktopMinCompatibleMobileVersion: 0 }).kind;
+    return { evaluateCompat, acceptKind };
+}
+
+export function verdictOf(compat, app, pin) {
+    const v = compat.evaluateCompat({ ...app, ...pin });
+    const kind = v.reason ? `${v.kind} (${v.reason})` : v.kind;
+    return { kind, refuses: v.kind !== compat.acceptKind, detail: v };
+}
+
+async function runSkew({ repoRoot = REPO_ROOT, orcaDir = join(repoRoot, 'orca') } = {}) {
+    if (!existsSync(join(orcaDir, COMPAT_REL))) return { code: 0, lines: [`${SKEW}: SKIP -- orca/ is not fetched, so the pinned evaluateCompat and constants cannot be read (bash scripts/fetch-orca.sh)`] };
+    const scratch = mkdtempSync(join(tmpdir(), `${SKEW}-`));
+    try {
+        const remote = readRemote(repoRoot);
+        const pinTag = parse(readFileSync(join(repoRoot, 'configuration.toml'), 'utf8')).upstreams?.orca_tag;
+        if (typeof pinTag !== 'string' || !/^v\d+\.\d+\.\d+$/.test(pinTag)) throw new Error('configuration.toml [upstreams] orca_tag is absent or not vX.Y.Z');
+        const refs = listTags(remote);
+        const app = newestAppTag(refs);
+        const lag = orcaTagLag(refs, pinTag);
+        const appC = await appConstants(remote, app.tag, scratch);
+        const pin = await pinConstants(orcaDir);
+        const compat = await loadCompat(orcaDir);
+        const v = verdictOf(compat, appC, pin);
+        const pinApp = JSON.parse(readFileSync(join(orcaDir, APP_JSON_REL), 'utf8')).expo?.version;
+        if (typeof pinApp !== 'string' || !/^\d+\.\d+\.\d+$/.test(pinApp)) throw new Error(`orca/${APP_JSON_REL} has no expo.version X.Y.Z (the source moved)`);
+        const d = app.v.map((n, i) => n - triple(pinApp)[i]);
+        const facts = `pin ${pinTag} is ${lag.behind} tag(s) behind ${lag.newest}; stock Android app ${app.v.join('.')} (${app.tag}; pin's app ${pinApp}, difference ${d.join('.')}); app protocol ${appC.mobileProtocolVersion} needs desktop >= ${appC.minCompatibleDesktopVersion}, pin protocol ${pin.desktopProtocolVersion} needs mobile >= ${pin.desktopMinCompatibleMobileVersion}`;
+        if (v.refuses) {
+            return { code: 1, lines: [`${SKEW}: FAIL -- verdict ${v.kind}: evaluateCompat refuses the stock app against the pinned orcad, a re-pin is due; ${facts}`] };
+        }
+        return { code: 0, lines: [`${SKEW}: PASS -- ${facts}; verdict ${v.kind}`] };
+    } catch (err) {
+        return { code: 1, lines: [`${SKEW}: FAIL -- ${err.message.split('\n')[0]}`] };
+    } finally {
+        rmSync(scratch, { recursive: true, force: true });
+    }
+}
+
+// No network: fixture listings and constants text; evaluateCompat and the pin's constants come from the real pinned tree.
+async function runSkewSelfTest({ orcaDir = join(REPO_ROOT, 'orca') } = {}) {
+    if (!existsSync(join(orcaDir, COMPAT_REL))) { console.log(`${SKEW} self-test: SKIP -- orca/ is not fetched, so Orca's own evaluateCompat cannot be imported (bash scripts/fetch-orca.sh)`); return 0; }
+    const scratch = mkdtempSync(join(tmpdir(), `${SKEW}-self-`));
+    const constants = (mobile, minDesktop) => `// fixture\nexport const MOBILE_PROTOCOL_VERSION = ${mobile}\nexport const MIN_COMPATIBLE_DESKTOP_VERSION = ${minDesktop}\n`;
+    const listing = ['refs/tags/v1.0.9', 'refs/tags/v1.0.10', 'refs/tags/v1.0.10-rc.1', 'refs/tags/mobile-android-v0.0.9', 'refs/tags/mobile-android-v0.0.10'];
+    try {
+        const pin = await pinConstants(orcaDir);
+        const compat = await loadCompat(orcaDir);
+        // One fixture case: a listing and a constants text through the same functions the live row calls.
+        const evaluate = async (refs, text) => {
+            const app = newestAppTag(refs);
+            const v = verdictOf(compat, await importAppConstants(text, `${APP_CONSTANTS_REL} at ${app.tag}`, scratch), pin);
+            if (v.refuses) throw new Error(`verdict ${v.kind}`);
+            return { app, v };
+        };
+        const ctl = await evaluate(listing, constants(pin.desktopProtocolVersion, pin.desktopMinCompatibleMobileVersion));
+        const lag = orcaTagLag(listing, 'v1.0.9');
+        if (ctl.app.tag !== 'mobile-android-v0.0.10' || lag.behind !== 1 || lag.newest !== 'v1.0.10') {
+            console.error(`${SKEW} self-test: FAIL -- control picked ${ctl.app.tag}, ${lag.behind} behind ${lag.newest} (want mobile-android-v0.0.10, 1 behind v1.0.10: integer ordering, -rc excluded)`);
+            return 1;
+        }
+        console.log(`${SKEW} self-test: control green -- the pin's constants against an app of the same versions: verdict ${ctl.v.kind}; newest app tag ${ctl.app.tag}; 1 tag behind v1.0.10`);
+        const plants = [
+            { name: 'app-needs-newer-desktop', naming: 'desktop-too-old', run: () => evaluate(listing, constants(pin.desktopProtocolVersion, pin.desktopProtocolVersion + 1)) },
+            { name: 'app-older-than-pin-minimum', naming: 'mobile-too-old', run: () => evaluate(listing, constants(pin.desktopMinCompatibleMobileVersion - 1, 0)) },
+            { name: 'listing-with-no-app-tag', naming: 'no mobile-android tag', run: () => evaluate(listing.filter((r) => !r.includes('mobile-android')), constants(pin.desktopProtocolVersion, 0)) },
+            { name: 'constants-file-moved', naming: 'constants file moved', run: () => evaluate(listing, 'export const SOMETHING_ELSE = 1\n') },
+        ];
+        let failures = 0;
+        for (const p of plants) {
+            let err = null;
+            try { await p.run(); } catch (e) { err = e.message; }
+            if (!err) { console.error(`  FAIL ${p.name} -> stayed green`); failures++; } else if (!err.includes(p.naming)) {
+                console.error(`  FAIL ${p.name} -> red, but not naming '${p.naming}': ${err}`); failures++;
+            } else {
+                console.log(`  ok ${p.name} -> red, naming '${p.naming}' (${err})`);
+            }
+        }
+        if (failures) { console.error(`${SKEW} self-test: FAIL -- ${failures} of ${plants.length} plant(s) did not go red naming the drift`); return 1; }
+        console.log(`${SKEW} self-test: PASS -- ${plants.length} planted faults each went red naming the drift`);
+        return 0;
+    } catch (err) {
+        console.error(`${SKEW} self-test: FAIL -- ${err.message.split('\n')[0]}`);
+        return 1;
+    } finally {
+        rmSync(scratch, { recursive: true, force: true });
+    }
+}
+
+const MODES = new Set(['--self-test', '--skew', '--skew-self-test']);
 const isEntryPoint = (() => {
     try { return realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; }
 })();
@@ -280,12 +465,13 @@ if (isEntryPoint) {
     const args = process.argv.slice(2);
     const bad = args.find((a) => !MODES.has(a)) ?? (args.length > 1 ? args[1] : undefined);
     if (bad !== undefined) {
-        console.error(`${NAME}: unknown argument ${bad} (usage: node ${SELF_REL} [--self-test])`);
+        console.error(`${NAME}: unknown argument ${bad} (usage: node ${SELF_REL} [--self-test | --skew | --skew-self-test])`);
         console.error(`  Next step: run: node ${SELF_REL}, or add --self-test to prove the check discriminates.`);
         process.exit(2);
     }
     if (args[0] === '--self-test') process.exit(runSelfTest());
-    const { code, lines } = render(check());
+    if (args[0] === '--skew-self-test') process.exit(await runSkewSelfTest());
+    const { code, lines } = args[0] === '--skew' ? await runSkew() : render(check());
     for (const l of lines) (code ? console.error : console.log)(l);
     process.exit(code);
 }
