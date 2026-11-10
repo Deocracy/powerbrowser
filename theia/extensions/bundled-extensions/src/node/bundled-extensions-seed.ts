@@ -19,7 +19,7 @@ export const SEED_RECORD_KEY = 'bundledExtensions.seeded';
 export interface SeedAction {
     id: string;
     version: string;
-    action: 'seeded';
+    action: 'seeded' | 'upgraded';
 }
 
 export interface SeedInput {
@@ -43,7 +43,12 @@ export function parseRecord(value: unknown): Record<string, string> {
     return {};
 }
 
-/** The seed rule, free of Theia: returns the record to store and what it did. */
+/**
+ * The seed rule, free of Theia: returns the record to store and what it did.
+ * - no record for an id: copy it and record its version;
+ * - the shipped version recorded: leave everything alone, so a user's uninstall sticks;
+ * - another version recorded: replace the deployed copy only when it is still present.
+ */
 export async function seedBundledExtensions(input: SeedInput): Promise<{ record: Record<string, string>; actions: SeedAction[] }> {
     const fs = input.fs ?? nodeFs.promises;
     const record = parseRecord(input.record);
@@ -61,13 +66,25 @@ export async function seedBundledExtensions(input: SeedInput): Promise<{ record:
             const version = await readVersion(fs, path.join(source, id));
             if (!version) continue;
             seen.add(id);
-            if (record[id] !== undefined) continue;
+            // Recorded at this version: nothing to do, whether or not the user removed it.
+            if (record[id] === version) continue;
+            // Recorded at another version: upgrade a present copy only, so an uninstall sticks.
+            if (record[id] !== undefined && !await exists(fs, path.join(input.deploymentDir, id))) continue;
             await copyInto(fs, path.join(source, id), input.deploymentDir, id);
-            record[id] = version;
-            actions.push({ id, version, action: 'seeded' });
+            actions.push({ id, version, action: record[id] === undefined ? 'seeded' : 'upgraded' });
+            record[id] = version; // only after the copy succeeded
         }
     }
     return { record, actions };
+}
+
+async function exists(fs: typeof nodeFs.promises, p: string): Promise<boolean> {
+    try {
+        await fs.lstat(p);
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 async function readVersion(fs: typeof nodeFs.promises, dir: string): Promise<string | undefined> {
