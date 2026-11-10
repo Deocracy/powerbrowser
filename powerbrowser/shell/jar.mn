@@ -27,3 +27,5 @@ browser.jar:
    content/powerbrowser/PowerBrowserAPI.sys.mjs    (PowerBrowserAPI.sys.mjs)
    content/powerbrowser/GroupActorChild.sys.mjs    (GroupActorChild.sys.mjs)
    content/powerbrowser/TheiaService.sys.mjs    (TheiaService.sys.mjs)
+   content/powerbrowser/OrcaService.sys.mjs     (OrcaService.sys.mjs)
+   content/powerbrowser/OrcaEnv.sys.mjs         (OrcaEnv.sys.mjs)

@@ -10933,3 +10933,78 @@ async function pageEditTargetCommands(data, cached) {
     return cached;
   }
 }
+
+// Phase 62 (P62-19): what OrcaService needs beyond PowerBrowserAPI, kept in an end-of-file export so that no
+// existing line of this file moves. An exact-environment spawn (orcad gets the environment OrcaEnv builds and
+// nothing the browser inherited), a process-tree listing (the terminal daemon and the agents under it are
+// stopped by pid, never by group) and a second, separately named quit blocker.
+export const PowerBrowserProcesses = Object.freeze({
+  /**
+   * Spawns `command` with `environment` as the child's ENTIRE environment. Unlike spawnProcess there is no
+   * append flag, and Subprocess then passes nothing of this process's own environment to the child.
+   */
+  spawnProcessExact({ command, args, environment, workdir }) {
+    return lazy.Subprocess.call({ command, arguments: args, environment, workdir, stderr: "pipe" });
+  },
+
+  /**
+   * Resolves [{ pid, ppid, startTicks }] for each live pid of `rootPids` and every descendant, read from
+   * /proc/<pid>/stat (ppid and starttime after the last closing parenthesis, as readProcessStartTicks does).
+   * Off Linux there is no /proc: the roots come back with startTicks null. Never throws; [] on any failure.
+   */
+  async listProcessTree(rootPids) {
+    const roots = [...new Set((Array.isArray(rootPids) ? rootPids : []).filter(pid => Number.isInteger(pid) && pid > 0))];
+    try {
+      if (lazy.AppConstants.platform !== "linux") {
+        return roots.map(pid => ({ pid, ppid: null, startTicks: null }));
+      }
+      const table = new Map();
+      for (const entry of await IOUtils.getChildren("/proc")) {
+        const pid = Number(entry.slice(entry.lastIndexOf("/") + 1));
+        if (!Number.isInteger(pid) || pid <= 0) {
+          continue;
+        }
+        try {
+          const bytes = await IOUtils.read(`/proc/${pid}/stat`, { maxBytes: 4096 });
+          const text = new TextDecoder().decode(bytes);
+          const fields = text.slice(text.lastIndexOf(")") + 2).split(" ");
+          table.set(pid, { pid, ppid: Number(fields[1]), startTicks: fields[19] ?? null });
+        } catch {
+          // The process exited between the listing and the read.
+        }
+      }
+      const children = new Map();
+      for (const row of table.values()) {
+        if (!children.has(row.ppid)) {
+          children.set(row.ppid, []);
+        }
+        children.get(row.ppid).push(row.pid);
+      }
+      const seen = new Set();
+      const stack = roots.filter(pid => table.has(pid));
+      while (stack.length) {
+        const pid = stack.pop();
+        if (seen.has(pid)) {
+          continue;
+        }
+        seen.add(pid);
+        stack.push(...(children.get(pid) ?? []));
+      }
+      return [...seen].map(pid => table.get(pid));
+    } catch {
+      return [];
+    }
+  },
+
+  /**
+   * Registers `fn` as a quit blocker under `name`, awaited by quit and restart alike. The sidecar's own
+   * blocker keeps its name through addSidecarReapBlocker; a caller asking for that name here is refused.
+   */
+  addNamedReapBlocker(name, fn) {
+    if (typeof name !== "string" || !name.startsWith("PowerBrowser: reap ") || name.endsWith(" sidecar")) {
+      throw new Error("addNamedReapBlocker: the name must be a new 'PowerBrowser: reap <what>' name");
+    }
+    const { AsyncShutdown } = ChromeUtils.importESModule("resource://gre/modules/AsyncShutdown.sys.mjs");
+    AsyncShutdown.quitApplicationGranted.addBlocker(name, fn);
+  },
+});
