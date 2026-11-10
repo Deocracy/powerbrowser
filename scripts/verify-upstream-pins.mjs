@@ -26,6 +26,11 @@
 //     starts with `nix develop .#theia --command`, because generate.mjs
 //     needs the pinned inkscape. Indentation-aware line scan, no YAML
 //     library: scripts/ imports nothing from theia/node_modules.
+//     68-02 (OVL-02): the same rules hold for .github/workflows/rebase-orca.yml,
+//     whose triggers declare tag and commit; neither has a default, neither
+//     workflow carries a schedule: key, rebase-orca.yml carries no Orca tag or
+//     40-hex commit outside its `uses:` action pins, and scripts/rebase-orca.sh
+//     runs inside `nix develop .#orca --command`.
 //  3. scripts/fetch-upstream.sh's effective default equals the manifest
 //     tag, resolved by PARSING, never by executing the clone path: the
 //     script must source the fragment and must carry no tag literal of
@@ -89,8 +94,9 @@
 //   node scripts/verify-upstream-pins.mjs
 //   node scripts/verify-upstream-pins.mjs --self-test
 //
-// The self-test plants eight faults and requires each to go red naming the
-// file -- five on the workflow (a default under the workflow_call tag, a
+// The self-test plants twelve pin faults and requires each to go red naming the
+// file -- four on rebase-orca.yml (a tag default, a literal commit default,
+// a schedule: key, the replay outside nix develop .#orca), five on the workflow (a default under the workflow_call tag, a
 // default under the workflow_dispatch tag, the workflow_call trigger
 // removed, a generator step outside nix develop, a tag literal in a
 // comment), an ESR second literal under scripts/, a patch-bumped @theia pin
@@ -187,9 +193,24 @@ function sweepExcluded(rel) {
 
 // --- workflow structure, by indentation (step 2) ------------------------------
 // Commands that need the pinned toolchain, and the prefix that supplies it.
-const NIX_SCRIPTS = Object.freeze(['scripts/generate.mjs', 'scripts/verify-generated-identity.mjs', 'scripts/rebase-upstream.sh']);
 const NIX_PREFIX = 'nix develop .#theia --command ';
+const NIX_ORCA_PREFIX = 'nix develop .#orca --command ';
+const NIX_SCRIPTS = Object.freeze([
+    ['scripts/generate.mjs', NIX_PREFIX],
+    ['scripts/verify-generated-identity.mjs', NIX_PREFIX],
+    ['scripts/rebase-upstream.sh', NIX_PREFIX],
+    // OVL-02 (68-02): the Orca replay builds and typechecks Orca, which needs the Orca shell.
+    ['scripts/rebase-orca.sh', NIX_ORCA_PREFIX],
+]);
 const WORKFLOW_TRIGGERS = Object.freeze(['workflow_dispatch', 'workflow_call']);
+// The replay workflows and the inputs each trigger must declare with no default (68-02, P68-10/P68-14).
+const ORCA_WORKFLOW_REL = '.github/workflows/rebase-orca.yml';
+const REPLAY_WORKFLOWS = Object.freeze([
+    { rel: WORKFLOW_REL, inputs: ['tag'] },
+    { rel: ORCA_WORKFLOW_REL, inputs: ['tag', 'commit'] },
+]);
+// An Orca tag or a commit written into a replay workflow; action pins (`uses:` lines) are exempt.
+const ORCA_LITERAL = /\bv[0-9]+\.[0-9]+\.[0-9]+\b|\b[0-9a-f]{40}\b/g;
 
 const indentOf = (line) => line.match(/^ */)[0].length;
 const isContent = (line) => line.trim() !== '' && !line.trim().startsWith('#');
@@ -253,47 +274,64 @@ function runCommands(lines) {
     return out;
 }
 
-function workflowFailures(text) {
+function workflowFailures(text, rel = WORKFLOW_REL, inputNames = ['tag']) {
     const failures = [];
     const lines = text.split('\n');
+    const named = inputNames.join(' and ');
 
-    // (a) both triggers, each declaring a tag input.
+    // (a) both triggers, each declaring every required input.
     const on = directChild(lines, -1, 'on');
     if (on === -1) {
-        failures.push(`${WORKFLOW_REL} declares no top-level on: block, so nothing can start it. Next step: restore the workflow_dispatch and workflow_call triggers, each with a tag input.`);
+        failures.push(`${rel} declares no top-level on: block, so nothing can start it. Next step: restore the workflow_dispatch and workflow_call triggers, each with ${named} inputs.`);
     } else {
         for (const trigger of WORKFLOW_TRIGGERS) {
             const t = directChild(lines, on, trigger);
             if (t === -1) {
-                failures.push(`${WORKFLOW_REL} declares no ${trigger} trigger, so ${trigger === 'workflow_call' ? 'the release train cannot call it' : 'the owner cannot dispatch it'}. Next step: restore on.${trigger} with a required tag input of type string and no default.`);
+                failures.push(`${rel} declares no ${trigger} trigger, so ${trigger === 'workflow_call' ? 'the release train cannot call it' : 'the owner cannot dispatch it'}. Next step: restore on.${trigger} with required ${named} inputs of type string and no default.`);
                 continue;
             }
-            const tag = directChild(lines, directChild(lines, t, 'inputs'), 'tag');
-            if (tag === -1) {
-                failures.push(`${WORKFLOW_REL} ${trigger} trigger declares no tag input, so the caller cannot name the tag to replay. Next step: add on.${trigger}.inputs.tag, required, of type string, with no default.`);
+            for (const input of inputNames) {
+                if (directChild(lines, directChild(lines, t, 'inputs'), input) === -1) {
+                    failures.push(`${rel} ${trigger} trigger declares no ${input} input, so the caller cannot name the ${input} to replay. Next step: add on.${trigger}.inputs.${input}, required, of type string, with no default.`);
+                }
             }
+        }
+        // D-77: the release train is the cadence; a schedule here would run red with nobody watching.
+        if (directChild(lines, on, 'schedule') !== -1) {
+            failures.push(`${rel} carries a schedule: key, so it runs on its own clock instead of the release train's (D-77). Next step: delete the schedule trigger; the sweep-clock decides the tick.`);
         }
     }
 
-    // (b) no default under any tag input.
+    // (b) no default under any required input.
     for (let i = 0; i < lines.length; i += 1) {
-        if (!keyRe('tag').test(lines[i]) || !isContent(lines[i])) continue;
+        if (!isContent(lines[i])) continue;
+        const input = inputNames.find(n => keyRe(n).test(lines[i]));
+        if (input === undefined) continue;
         const inputs = parentOf(lines, i);
         if (inputs === -1 || keyName(lines[inputs]) !== 'inputs') continue;
         const trigger = parentOf(lines, inputs);
         const where = trigger === -1 ? 'a' : `the ${keyName(lines[trigger])}`;
         for (const j of childLines(lines, i)) {
             if (keyRe('default').test(lines[j])) {
-                failures.push(`${WORKFLOW_REL}:${j + 1} gives ${where} tag input a default, so a run can replay a tag nobody chose and an ESR bump would have to edit this file. Next step: delete the default line; the pin lives in ${MANIFEST_REL} and the caller passes it.`);
+                failures.push(`${rel}:${j + 1} gives ${where} ${input} input a default, so a run can replay a ${input} nobody chose and a pin bump would have to edit this file. Next step: delete the default line; the pin lives in ${MANIFEST_REL} and the caller passes it.`);
             }
         }
     }
 
-    // (c) every generator, identity and rebase command runs inside the Nix shell.
+    // (c) every generator, identity and rebase command runs inside its Nix shell.
     for (const { line, cmd } of runCommands(lines)) {
-        const script = NIX_SCRIPTS.find(s => cmd.includes(s));
-        if (script !== undefined && !cmd.startsWith(NIX_PREFIX)) {
-            failures.push(`${WORKFLOW_REL}:${line} runs ${script} outside nix develop .#theia, so it gets the runner's tools instead of the pinned ones (generate.mjs has no inkscape there). Next step: start that command with '${NIX_PREFIX.trim()}'.`);
+        const hit = NIX_SCRIPTS.find(([s]) => cmd.includes(s));
+        if (hit !== undefined && !cmd.startsWith(hit[1])) {
+            failures.push(`${rel}:${line} runs ${hit[0]} outside ${hit[1].replace(' --command ', '')}, so it gets the runner's tools instead of the pinned ones (generate.mjs has no inkscape there; the Orca replay needs node 24 and corepack). Next step: start that command with '${hit[1].trim()}'.`);
+        }
+    }
+
+    // (d) no Orca tag or commit literal: the caller passes both (68-02).
+    for (let i = 0; i < lines.length; i += 1) {
+        if (!isContent(lines[i]) || /^\s*(?:-\s+)?uses:/.test(lines[i])) continue;
+        const found = lines[i].match(ORCA_LITERAL);
+        if (found !== null) {
+            failures.push(`${rel}:${i + 1} carries a tag or commit literal ${found.join(', ')}, so a run can replay a pin nobody passed. Next step: remove it; the pin lives in ${MANIFEST_REL} and the caller passes tag and commit.`);
         }
     }
     return failures;
@@ -489,12 +527,12 @@ function runChecks(root, overrides = {}) {
     }
 
     // --- 2. the workflow: both triggers, no tag default, generators in Nix --------
-    {
-        const text = read(WORKFLOW_REL);
+    for (const { rel, inputs } of REPLAY_WORKFLOWS) {
+        const text = read(rel);
         if (text === null) {
-            failures.push(`${WORKFLOW_REL} could not be read, so its triggers and steps prove nothing. Next step: restore it.`);
+            failures.push(`${rel} could not be read, so its triggers and steps prove nothing. Next step: restore it.`);
         } else {
-            failures.push(...workflowFailures(text));
+            failures.push(...workflowFailures(text, rel, inputs));
         }
     }
 
@@ -681,7 +719,7 @@ function main() {
         failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- the manifest ESR pin agrees with the fragment and fetch's default, with no second literal in scope; the rebase workflow is callable and dispatchable with no tag default and runs its generator steps inside nix develop .#theia; the Theia pin ${theia} agrees across resolutions, ${theiaMembers} member files and the lockfile`);
+    console.log(`${NAME}: PASS -- the manifest ESR pin agrees with the fragment and fetch's default, with no second literal in scope; the replay workflows (rebase-upstream.yml, rebase-orca.yml) are callable and dispatchable with no tag or commit default, no schedule and no Orca pin literal, and run their generator and replay steps inside their Nix shells; the Theia pin ${theia} agrees across resolutions, ${theiaMembers} member files and the lockfile`);
     return 0;
 }
 
@@ -761,7 +799,7 @@ function selfTest() {
             return [...lines.slice(0, t), ...lines.slice(last + 1)].join('\n');
         };
         const bareGenerator = () => {
-            const i = lines.findIndex(l => /^\s*(?:-\s+)?run:\s/.test(l) && l.includes(NIX_PREFIX) && NIX_SCRIPTS.some(sc => l.includes(sc)));
+            const i = lines.findIndex(l => /^\s*(?:-\s+)?run:\s/.test(l) && l.includes(NIX_PREFIX) && NIX_SCRIPTS.some(([sc]) => l.includes(sc)));
             if (i === -1) return null;
             const copy = [...lines];
             copy[i] = copy[i].replace(NIX_PREFIX, '');
@@ -786,6 +824,57 @@ function selfTest() {
                 if (!checkNoRoot(name, failures)) failed += 1;
             } else {
                 console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming '${WORKFLOW_REL}'; got: ${failures.join(' | ') || '(no failures at all)'}`);
+                failed += 1;
+            }
+        }
+    }
+
+    // Plants 1f-1i (68-02): four faults on the Orca replay workflow, the same way. The commit
+    // literal is derived from the manifest's own orca_commit line, never kept in this file.
+    {
+        const rel = ORCA_WORKFLOW_REL;
+        const real = readBytes(REPO_ROOT, rel)?.toString('utf8') ?? '';
+        const lines = real.split('\n');
+        const on = directChild(lines, -1, 'on');
+        const commit = /^orca_commit = "([0-9a-f]{40})"$/m.exec(readBytes(REPO_ROOT, MANIFEST_REL)?.toString('utf8') ?? '')?.[1] ?? null;
+        const withDefault = (trigger, input, value) => {
+            const t = directChild(lines, directChild(lines, directChild(lines, on, trigger), 'inputs'), input);
+            if (t === -1 || value === null) return null;
+            const copy = [...lines];
+            copy.splice(t + 1, 0, `${' '.repeat(indentOf(lines[t]) + 2)}default: ${value}`);
+            return copy.join('\n');
+        };
+        const withSchedule = () => {
+            if (on === -1) return null;
+            const copy = [...lines];
+            copy.splice(on + 1, 0, '  schedule:', "    - cron: '0 6 * * 1'");
+            return copy.join('\n');
+        };
+        const bareReplay = () => {
+            const i = lines.findIndex(l => l.includes(`${NIX_ORCA_PREFIX}bash scripts/rebase-orca.sh`));
+            if (i === -1) return null;
+            const copy = [...lines];
+            copy[i] = copy[i].replace(NIX_ORCA_PREFIX, '');
+            return copy.join('\n');
+        };
+        const plants = [
+            ['default under the Orca workflow_call tag', withDefault('workflow_call', 'tag', 'self-test-plant'), 'workflow_call tag input a default'],
+            ['literal commit default under the Orca workflow_dispatch commit', withDefault('workflow_dispatch', 'commit', commit), 'workflow_dispatch commit input a default'],
+            ['schedule: key on the Orca replay', withSchedule(), 'carries a schedule: key'],
+            ['bare Orca replay step', bareReplay(), 'outside nix develop .#orca'],
+        ];
+        for (const [name, planted, marker] of plants) {
+            if (planted === null || planted === real) {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' planted no fault at all: the substitution did not land.`);
+                failed += 1;
+                continue;
+            }
+            const { failures } = runChecks(REPO_ROOT, { read: (r) => (r === rel ? planted : readBytes(REPO_ROOT, r)?.toString('utf8') ?? null) });
+            if (failures.some(f => f.includes(rel) && f.includes(marker))) {
+                console.log(`  ok  ${name} -> red, naming '${rel}'`);
+                if (!checkNoRoot(name, failures)) failed += 1;
+            } else {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming '${rel}'; got: ${failures.join(' | ') || '(no failures at all)'}`);
                 failed += 1;
             }
         }
@@ -947,7 +1036,7 @@ function selfTest() {
     }
 
     if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- 14 planted faults went red naming the drifted file (8 pin plants, 3 uptake-source plants and 3 uptake-link plants)`);
+    console.log(`${NAME}: --self-test PASS -- 18 planted faults went red naming the drifted file (12 pin plants, 3 uptake-source plants and 3 uptake-link plants)`);
     return 0;
 }
 
