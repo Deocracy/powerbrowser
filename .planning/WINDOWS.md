@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 12
+open_count: 13
 waived_count: 2
 fixed_count: 29
-total_count: 43
-last_updated: 2026-11-09T17:03:27.646Z
+total_count: 44
+last_updated: 2026-11-10T22:08:56.684Z
 ---
 
 # Broken Windows Ledger
@@ -58,6 +58,7 @@ last_updated: 2026-11-09T17:03:27.646Z
 | 41 | 39 | unmet-truth | theia/extensions/chrome-bar/src/browser/side-panel-top-tabs.ts |  | first-boot-surface-fresh: 'TypeError: can't access property offsetHeight, additionalViewsMenu is null' before the forced error (39-BASELINE, 39-19 full run and rerun); repro: scripts/verify-platform.sh --only first-boot-surface-fresh; cause so far: @theia/core SideTabBar overflow (tab-bars.js:1179) queries .theia-additional-views-menu in the tab bar's parent, and the side panel tabs moved to the top by e9569e81 leave no such element there; fix belongs in the PB extension, never in Theia core; source: no UAT test (first-boot registry row) | fixed |  | 2026-11-07T10:18:33.080Z | 2026-11-09T05:38:48.732Z |
 | 42 | 39 | deviation | scripts/verify-ng-067-frontend-errors.mjs |  | ng067-frontend-errors-reach-telemetry flaked: 'at level error no frontend.uncaught-error event was sent' in the 39-19 full run, then PASS 2 of 2 alone; repro: scripts/verify-platform.sh --only ng067-frontend-errors-reach-telemetry; cause so far: timing in the frontend error delivery or its read-back, not isolated; source: no UAT test (NG-067 registry row) | fixed |  | 2026-11-07T10:18:35.742Z | 2026-11-09T06:25:41.438Z |
 | 43 | 39 | deviation | scripts/verify-page-furniture-live.mjs |  | page-furniture-live-self-test flaked: clean control 'context-menu: Copy Image Link did not put the image URL on the clipboard' in the 39-19 full run, then PASS 2 of 2 alone; the plain page-furniture-live row passed; repro: scripts/verify-platform.sh --only page-furniture-live-self-test; cause so far: the headless clipboard read-back after Copy Image Link is timing-dependent (the menu-edit Paste and iframe-edit-rows flakes share the headless clipboard); source: 35-UAT test 6 | fixed |  | 2026-11-07T10:18:36.853Z | 2026-11-09T17:03:27.646Z |
+| 44 | 68 | deviation | inventory/licence-allowlist.json |  | open owner licence items: (1) ruling 68-B, the per-package permissive set allowed_package_spdx and its exception rows; (2) ruling 68-A was decided 2026-11-10 (D-30: the Claude agent SDK ships in a pre-installed, removable Theia extension, out of orcad), and the owner still confirms that Anthropic's terms (https://code.claude.com/docs/en/legal-and-compliance) permit redistributing it, then sets terms_check to confirmed; (3) the GPL-3.0 section 6 reading for the bundled uBlock Origin XPI (P68-39); no release is cut while (1) or (2) is open (release.yml --rulings guard); repro: scripts/verify-platform.sh --only orca-licence-rulings; source: 68-CONTEXT P68-38, P68-39 | open |  | 2026-11-10T22:08:56.684Z |  |
 
 ````json
 [
@@ -595,6 +596,19 @@ last_updated: 2026-11-09T17:03:27.646Z
     "reason": "",
     "recorded_at": "2026-11-07T10:18:36.853Z",
     "resolved_at": "2026-11-09T17:03:27.646Z",
+    "milestone": "v1.5"
+  },
+  {
+    "id": 44,
+    "kind": "deviation",
+    "phase": "68",
+    "file": "inventory/licence-allowlist.json",
+    "line": null,
+    "description": "open owner licence items: (1) ruling 68-B, the per-package permissive set allowed_package_spdx and its exception rows; (2) ruling 68-A was decided 2026-11-10 (D-30: the Claude agent SDK ships in a pre-installed, removable Theia extension, out of orcad), and the owner still confirms that Anthropic's terms (https://code.claude.com/docs/en/legal-and-compliance) permit redistributing it, then sets terms_check to confirmed; (3) the GPL-3.0 section 6 reading for the bundled uBlock Origin XPI (P68-39); no release is cut while (1) or (2) is open (release.yml --rulings guard); repro: scripts/verify-platform.sh --only orca-licence-rulings; source: 68-CONTEXT P68-38, P68-39",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-10T22:08:56.684Z",
+    "resolved_at": null,
     "milestone": "v1.5"
   }
 ]

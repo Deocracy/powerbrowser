@@ -6751,6 +6751,10 @@ declare -a GATE_KNOWN_OPEN_EXCLUSIONS=(
   "page-tools-live|28|flaky: crash-navigate red 1 of 3 registry runs (2026-11-06)"
   "extension-actions-live|29|private-access session 2: options page opens in the private stock window, matches stock; deferred to 999.17"
   "extension-actions-live-self-test|29|private-access session 2: options page opens in the private stock window, matches stock; deferred to 999.17"
+  # 68-06 (2026-11-10)
+  "orca-licence-rulings|44|owner items open: ruling 68-B and the 68-A terms check for the SDK extension"
+  "orca-packaged-tree|30|no container-built release tarball yet (68-06 Task 2 builds it)"
+  "orca-packaged-live|30|no container-built release tarball yet (68-06 Task 2 builds it)"
 )
 
 # Before consolidation, --gate ran this script's own set and then SHELLED OUT to

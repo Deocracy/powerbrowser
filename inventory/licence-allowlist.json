@@ -30,7 +30,7 @@
       "licence_first_line": "© Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements outlined here: https://code.claude.com/docs/en/legal-and-compliance.",
       "evidence": "CLAUDE_AGENT_SDK_VERSION=\"0.3.284\" was in orca/out/orcad/orcad-server.js before lane 68-07's externals seam; loaded lazily by loadClaudeAgentSdk (orca/src/main/claude/claude-stream-json-connection.ts:38), used only by Claude's structured session",
       "terms_check": "pending",
-      "windows_id": null,
+      "windows_id": 44,
       "reason": "D-30 (2026-11-10): the SDK leaves orcad's bundle and ships in the pre-installed, user-removable Theia extension bundled-extensions/claude-agent-sdk; the owner still confirms that Anthropic's terms permit redistributing that extension."
     }
   ],
