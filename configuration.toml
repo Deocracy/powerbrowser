@@ -160,3 +160,8 @@ firefox_esr_tag = "FIREFOX_153_5_1esr_RELEASE"
 theia_release = "1.76.0"
 orca_tag = "v1.4.248"
 orca_commit = "965978bc78bf03a6a43187c1ed28fcffe0e01bb5"
+
+# seam_cap is the Orca overlay gate's seam-count cap (D-16, P62-10): the most upstream Orca files
+# orca-overlay/ may patch. Read only by scripts/verify-orca-overlay.mjs; nothing is emitted from it.
+[orca]
+seam_cap = 10

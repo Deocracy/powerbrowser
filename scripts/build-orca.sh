@@ -8,6 +8,10 @@
 #
 # What it does, in order:
 #   1. re-verifies orca/ at the pin (scripts/fetch-orca.sh verify path)
+#   1b. applies the overlay orca-overlay/ (P62-09): refuses an undeclared
+#      modification, resets the declared seam paths to the pin, applies
+#      patches/ through scripts/apply-patches.sh (a silent no-op is a failure),
+#      copies files/ in. Re-runnable over an applied tree.
 #   2. checks the shell (node 24, corepack, objdump)
 #   3. scrubs every inherited ORCA_* variable plus ELECTRON_RUN_AS_NODE,
 #      NODE_OPTIONS and NODE_REPL_EXTERNAL_MODULE (this tree is worked on from
@@ -20,7 +24,8 @@
 #      build:mobile-web, build:orcad
 #   7. de-slot: removes the three slot markers and out/runtimes (Node 24.22.1)
 #   8. build:web
-# Orca's source and scripts are never edited (D-16). This build is separate
+# orca/ is changed only by the declared seams and PB-added files of
+# orca-overlay/ (D-04, D-16, P62-09). This build is separate
 # from the Theia build and mach build (P59-12). Full output is kept in
 # .mozbuild/orca-build/build-<UTC>.log.
 set -euo pipefail
@@ -49,6 +54,80 @@ run_step() {
 
 # 1. orca/ at the pin.
 run_step fetch-verify bash "$REPO_ROOT/scripts/fetch-orca.sh"
+
+# 1b. Overlay (P62-09). run_step calls this under ||, so errexit is off in here:
+# every command that can fail is checked by hand.
+OVERLAY_DIR="$REPO_ROOT/orca-overlay"
+# A plain relative path: letters, digits, dot, underscore, hyphen, slash; no empty, . or .. segment.
+overlay_path_ok() {
+  case "/$1/" in *//*|*/./*|*/../*) return 1 ;; esac
+  [[ "$1" =~ ^[A-Za-z0-9._/-]+$ ]]
+}
+upstream_has() { git -C "$SRC_DIR" cat-file -e "HEAD:$1" 2>/dev/null; }
+apply_overlay() {
+  local seams=() files=() patches=() out path line
+  if [ -f "$OVERLAY_DIR/seams.json" ]; then
+    out="$(node -e 'for (const s of JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).seams) console.log(s.path)' "$OVERLAY_DIR/seams.json")" \
+      || fail "overlay: orca-overlay/seams.json could not be read"
+    [ -z "$out" ] || mapfile -t seams <<< "$out"
+  fi
+  for path in "${seams[@]}"; do
+    overlay_path_ok "$path" || fail "overlay: seams.json path '$path' is not a plain relative path"
+    [ "$(git -C "$SRC_DIR" cat-file -t "HEAD:$path" 2>/dev/null)" = blob ] || fail "overlay: seams.json path $path is not a file at the pin"
+  done
+
+  # An edit nobody declared is never erased.
+  out="$(git -C "$SRC_DIR" status --porcelain --untracked-files=no)" || fail "overlay: git -C orca status failed"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    path="${line##* }"
+    printf '%s\n' "${seams[@]}" | grep -qxF -- "$path" || fail "undeclared modification in orca/: $path"
+  done <<< "$out"
+
+  # Back to the pin (also clears the --3way staging of an earlier run), then apply.
+  if [ "${#seams[@]}" -gt 0 ]; then
+    git -C "$SRC_DIR" reset -q -- "${seams[@]}" || fail "overlay: git reset of the declared seam paths failed"
+    git -C "$SRC_DIR" checkout HEAD -- "${seams[@]}" || fail "overlay: git checkout of the declared seam paths failed"
+  fi
+  shopt -s nullglob
+  patches=("$OVERLAY_DIR"/patches/*.patch)
+  shopt -u nullglob
+  if [ "${#patches[@]}" -gt 0 ]; then
+    bash "$REPO_ROOT/scripts/apply-patches.sh" --upstream "$SRC_DIR" --patches "$OVERLAY_DIR/patches" \
+      || fail "overlay: apply-patches.sh exited $?"
+    for path in "${seams[@]}"; do echo "build-orca: overlay applied $path"; done
+  fi
+
+  # PB-added files, at their in-tree path. .pb-overlay-copied remembers the last copy so a file
+  # removed from files/ is removed from orca/ too.
+  if [ -d "$OVERLAY_DIR/files" ]; then
+    out="$(cd "$OVERLAY_DIR/files" && find . -type f -printf '%P\n' | LC_ALL=C sort)" || fail "overlay: listing orca-overlay/files failed"
+    [ -z "$out" ] || mapfile -t files <<< "$out"
+  fi
+  for path in "${files[@]}"; do
+    overlay_path_ok "$path" || fail "overlay: file path '$path' is not a plain relative path"
+    if upstream_has "$path"; then fail "overlay file shadows upstream path $path"; fi
+  done
+  if [ -f "$SRC_DIR/.pb-overlay-copied" ]; then
+    while IFS= read -r path; do
+      [ -n "$path" ] || continue
+      overlay_path_ok "$path" || fail "overlay: orca/.pb-overlay-copied names '$path', not a plain relative path"
+      if upstream_has "$path"; then fail "overlay: orca/.pb-overlay-copied names the upstream path $path"; fi
+      [ -f "$OVERLAY_DIR/files/$path" ] || rm -f -- "$SRC_DIR/$path" || fail "overlay: could not remove stale $path"
+    done < "$SRC_DIR/.pb-overlay-copied"
+  fi
+  for path in "${files[@]}"; do
+    mkdir -p "$(dirname "$SRC_DIR/$path")" && cp -- "$OVERLAY_DIR/files/$path" "$SRC_DIR/$path" || fail "overlay: could not copy $path"
+    echo "build-orca: overlay copied $path"
+  done
+  if [ "${#files[@]}" -gt 0 ]; then
+    printf '%s\n' "${files[@]}" > "$SRC_DIR/.pb-overlay-copied" || fail "overlay: could not write orca/.pb-overlay-copied"
+  else
+    rm -f -- "$SRC_DIR/.pb-overlay-copied"
+  fi
+  if [ "${#seams[@]}" -eq 0 ] && [ "${#files[@]}" -eq 0 ]; then echo "build-orca: overlay empty"; fi
+}
+run_step overlay apply_overlay
 
 # 2. Shell entry.
 node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"

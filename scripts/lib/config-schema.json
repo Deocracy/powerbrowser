@@ -195,6 +195,12 @@
       "regex_help": "the full 40-character lowercase hex commit the Orca tag peels to, never the annotated tag object",
       "regex_example": "0123456789abcdef0123456789abcdef01234567"
     },
+    "orca.seam_cap": {
+      "type": "integer",
+      "required": false,
+      "minimum": 1,
+      "type_help": "a whole number of at least 1 written without quotes; the most upstream Orca files the overlay may patch"
+    },
     "variants[].id": {
       "type": "string",
       "required": true,

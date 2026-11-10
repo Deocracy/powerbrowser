@@ -1,0 +1,14 @@
+diff --git a/src/main/orcad/orcad-browser-provider.ts b/src/main/orcad/orcad-browser-provider.ts
+index 90b79e505d..ad5f47cbe4 100644
+--- a/src/main/orcad/orcad-browser-provider.ts
++++ b/src/main/orcad/orcad-browser-provider.ts
+@@ -73,6 +73,9 @@ export function installedElectronCandidates(
+   homePath: string,
+   environment: NodeJS.ProcessEnv
+ ): string[] {
++  if (environment.ORCA_DISABLE_INSTALLED_ELECTRON_BROWSER === '1') {
++    return []
++  }
+   const joinPath = platform === 'win32' ? win32.join : posix.join
+   if (platform === 'darwin') {
+     return [

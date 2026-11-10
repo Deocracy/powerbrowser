@@ -3,8 +3,10 @@
 //
 // The orca-build-shape gate (Phase 60, RUN-01/RUN-02, P59-05, P59-11): a built
 // orca/ carries no bundled-Node slot, no second Node runtime and no Electron,
-// and Orca's tracked files are untouched. scripts/build-orca.sh de-slots after
-// build:orcad (D-14); this check proves the result from the tree.
+// and Orca's tracked files differ from the pin in exactly the declared seams
+// of orca-overlay/seams.json (P62-09, P62-10). scripts/build-orca.sh applies
+// the overlay and de-slots after build:orcad (D-14); this check proves the
+// result from the tree.
 //
 // Derived at check time, never hand-kept:
 //  a. the slot marker filenames, read from the three *_FILENAME string
@@ -19,9 +21,13 @@
 //     shell shims and scoped packages such as @x/electron/dist are not Electron
 //     binaries and stay green (60-02 deviation: the plan's bare-name rule
 //     matched the shims).
-//  d. git -C orca status --porcelain --untracked-files=no.
+//  d. the modified tracked paths, from git -C orca status --porcelain
+//     --untracked-files=no (last field of each line), compared as a set with
+//     the declared seam paths read from orca-overlay/seams.json (absent file:
+//     none).
 // Red on: a derived marker in out/orcad, out/runtimes present, any node
-// executable under out/, any Electron payload, any tracked-file modification.
+// executable under out/, any Electron payload, a modified tracked file that is
+// not a declared seam, a declared seam that is not applied.
 //
 // No built orca/ (orca/out/orcad/orcad.js absent): one SKIP line, exit 0.
 // Tier: full (walks orca/node_modules). The self-test is --quick: it runs on a
@@ -96,7 +102,7 @@ function sha256(path) {
     return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
-export function check(orcaRoot) {
+export function check(orcaRoot, seamPaths = []) {
     const outDir = join(orcaRoot, 'out');
     if (!existsSync(join(outDir, 'orcad', 'orcad.js'))) {
         return { skip: 'no built orca/ (run nix develop .#orca --command bash scripts/build-orca.sh)', fails: [] };
@@ -132,11 +138,19 @@ export function check(orcaRoot) {
     let modified = 0;
     try {
         const status = execFileSync('git', ['-C', orcaRoot, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' });
-        for (const line of status.split('\n').filter(Boolean)) { modified++; fails.push(`modified tracked file in orca/: ${line.trim()}`); }
+        const seen = new Set();
+        for (const line of status.split('\n').filter(Boolean)) {
+            const path = line.trim().split(/\s+/).pop();
+            seen.add(path);
+            if (seamPaths.includes(path)) modified++; else fails.push(`modified tracked file in orca/: ${line.trim()}`);
+        }
+        for (const path of seamPaths) {
+            if (!seen.has(path)) fails.push(`seam not applied: ${path} (the build predates the overlay; run nix develop .#orca --command bash scripts/build-orca.sh)`);
+        }
     } catch (err) {
         fails.push(`git -C orca status failed: ${err.message.split('\n')[0]}`);
     }
-    return { fails, counts: { markers, nodes, electrons, modified }, names };
+    return { fails, counts: { markers, nodes, electrons, modified }, names, seamPaths };
 }
 
 function render(r) {
@@ -145,7 +159,7 @@ function render(r) {
     const c = r.counts;
     return {
         code: 0,
-        lines: [`${NAME}: PASS -- ${c.markers} slot markers, ${c.nodes} Node runtimes in out/, ${c.electrons} Electron binaries, ${c.modified} modified tracked files (markers derived from orca/${ARTIFACTS_REL}: ${Object.values(r.names).join(', ')})`],
+        lines: [`${NAME}: PASS -- ${c.markers} slot markers, ${c.nodes} Node runtimes in out/, ${c.electrons} Electron binaries, ${c.modified} modified tracked file(s), equal to the declared seams of orca-overlay/seams.json${r.seamPaths.length ? ` (${r.seamPaths.join(', ')})` : ''} (markers derived from orca/${ARTIFACTS_REL}: ${Object.values(r.names).join(', ')})`],
     };
 }
 
@@ -186,6 +200,16 @@ function runSelfTest() {
         const plantFile = (relPath, body) => () => { put(relPath, body); return () => rmSync(join(root, relPath), { force: true }); };
         const plantTree = (relPath, body, top) => () => { put(relPath, body); return () => rmSync(join(root, top), { recursive: true, force: true }); };
         const editTracked = (relPath, body) => () => { writeFileSync(join(root, relPath), body); return () => git('checkout', '--', relPath); };
+        // Must stay green: a declared seam that is modified is the one difference the pin allows.
+        const undoSeam = editTracked('package.json', '{ "name": "seam" }\n')();
+        const seamed = check(root, ['package.json']);
+        undoSeam();
+        if (seamed.fails.length || seamed.counts.modified !== 1) {
+            console.error(`${NAME} self-test: FAIL -- control declared-seam-modified is not green: ${seamed.fails.join(' | ')}`);
+            return 1;
+        }
+        console.log(`${NAME} self-test: control declared-seam-modified green (package.json declared and modified)`);
+
         const hex = 'a'.repeat(64);
         const plants = [
             { name: 'marker-slot-target', naming: '.fixture-target', apply: plantFile('out/orcad/.fixture-target', 'linux-x64\n') },
@@ -195,7 +219,8 @@ function runSelfTest() {
             { name: 'stray-node-in-orcad', naming: 'out/orcad/node', apply: plantFile('out/orcad/node', elf) },
             { name: 'electron-dist', naming: 'node_modules/electron/dist', apply: plantTree('node_modules/electron/dist/version', '43.0.0\n', 'node_modules/electron') },
             { name: 'electron-elf', naming: 'Electron binary', apply: plantTree('node_modules/.pnpm/electron@0.0.0/node_modules/electron/electron', elf, 'node_modules/.pnpm') },
-            { name: 'modified-tracked-file', naming: 'package.json', apply: editTracked('package.json', '{ "name": "drifted" }\n') },
+            { name: 'modified-tracked-file', naming: 'modified tracked file in orca/: M package.json', apply: editTracked('package.json', '{ "name": "drifted" }\n') },
+            { name: 'seam-not-applied', naming: 'seam not applied: package.json', seams: ['package.json'], apply: () => () => {} },
             { name: 'marker-constant-removed', naming: 'ORCAD_VERSION_FILENAME', apply: editTracked(ARTIFACTS_REL, `${constants.slice(0, 2).join('\n')}\n`) },
         ];
 
@@ -203,7 +228,7 @@ function runSelfTest() {
         for (const p of plants) {
             const undo = p.apply();
             try {
-                const r = check(root);
+                const r = check(root, p.seams ?? []);
                 const text = r.fails.join('\n');
                 if (r.skip || !r.fails.length) {
                     console.error(`  FAIL ${p.name} -> stayed ${r.skip ? 'SKIP' : 'green'}`); failures++;
@@ -241,7 +266,9 @@ if (unknown.length) {
 }
 if (isEntryPoint) {
     if (args.includes('--self-test')) process.exit(runSelfTest());
-    const { code, lines } = render(check(join(REPO_ROOT, 'orca')));
+    const seamsFile = join(REPO_ROOT, 'orca-overlay', 'seams.json');
+    const seamPaths = existsSync(seamsFile) ? JSON.parse(readFileSync(seamsFile, 'utf8')).seams.map((s) => s.path) : [];
+    const { code, lines } = render(check(join(REPO_ROOT, 'orca'), seamPaths));
     for (const l of lines) (code ? console.error : console.log)(l);
     process.exit(code);
 }
