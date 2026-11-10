@@ -98,4 +98,47 @@ Under `flock /home/chris/coding/Power-Browser/.git/pb-live.lock`, ORCA_* unset, 
 - One seam (D-31): `orca-overlay: PASS -- 1 seam(s) (src/main/orcad/orcad-browser-provider.ts +3/-0, blob 90b79e505d), 0 overlay file(s)`;
   `orca-build-shape: PASS -- 0 slot markers, 0 Node runtimes in out/, 0 Electron binaries, 1 modified tracked file(s), equal to the declared seams ...`
 
+## Live and full proofs (Task 2)
+
+Each under `flock /home/chris/coding/Power-Browser/.git/pb-live.lock` with every inherited ORCA_*
+name unset, on the merged, built tree. All exit 0.
+
+    orca-agent-status-live: note -- status sequence: idle -> working -> permission -> working -> idle; session records 0 -> 63
+    orca-agent-status-live: note -- session id (P63-16): the newest session file names 5fdb1530-7069-4118-8c1c-a4f25d27bbb6; resume comes from Claude's side
+    orca-service-live: PASS -- 18 environment names equal the expected set (planted ORCA_PLANT_62 absent), data root through the alias, ws://127.0.0.1:24634, Node 24.19.0 shared with the Theia backend; quit ended a tree of 5 processes including an agent session; orcad pid 3355948 survived the SIGKILL and was replaced by pid 3356985 on port 24634. Recorded: orcad shares PowerBrowser's process group; idle non-loopback peers: none
+    orca-hidden-electron: PASS -- stock orcad launched the decoy (browser-sidecar-profile.json and the provider warning after 0 ms); with ORCA_DISABLE_INSTALLED_ELECTRON_BROWSER=1 neither appeared in 10000 ms and orcad kept running
+    orca-overlay-built: PASS -- 0 overlay file(s): vacuous until the first PB-added file lands (P62-20); the self-test fixtures carry the proof
+    orca-slotless-start: PASS -- orcad 1.4.248 ready on ws://127.0.0.1:45451, Node 24.19.0 (node-runtime.json), 1 Node runtime, web tab paired (status bar '1 host', marker from orca/src/renderer/src/components/status-bar/ssh-status-segment-copy.ts:3), orcad and terminal daemon reaped (11.2s)
+    verify-endpoints: PASS
+    verify-branding-identity-dev: PASS (executable, application-ini Name "powerbrowser" Vendor "Deocracy", runtime-identity 153.5.1esr)
+    sidecar-origin-gate-live: PASS -- the Theia frame is served; a same-site loopback page in a stock window gets 403 for GET, img, navigation and the upload POST
+
+orca-agent-status-live measurements (one prompt, two model turns at most, on the owner's login):
+- Status sequence: idle -> working -> permission (Orca's name for waiting) -> working -> idle (done).
+  Waiting was required (the derivation names the AskUserQuestion event) and observed; the one
+  AskUserQuestion was answered with one Enter through `terminal send`.
+- Claude session records for the scratch repository: 0 -> 63 (growth required and observed).
+- Bridge-directory stage: orcad-data-root is 0600 and equals orcad's data root; the claude-wrapper
+  launcher is 0700.
+- Agent PTY: descends from the terminal daemon OrcaService reports, not from the Theia backend (D-31).
+- Quit stage: the agent process and the terminal daemon ended on quit before any cleanup signal (D-07).
+- Session id note: 5fdb1530-7069-4118-8c1c-a4f25d27bbb6 (the newest session file; P63-16).
+
+orca-service-live measurements: PTY tree of 5 processes including an agent session ended on quit;
+idle non-loopback peers: none; orcad shares PowerBrowser's process group.
+
+sidecar-origin-gate-live (main's hotfix row, run in addition to the plan's list): its script re-execs
+itself under the same lock unless `PB_LIVE_LOCK_HELD=1`, so the first run under the outer flock
+blocked on its own inner flock. The inner flock (this session's own child, recorded pid) was ended and
+the row re-run under the outer lock with `PB_LIVE_LOCK_HELD=1`; that run is the PASS above.
+
+Guard re-runs (`--only`, each exit 0): start-path-recovery, shell-error-contract,
+shell-error-copy-no-internals, sidecar-reap-blocker, internals-boundary, internals-catalogue,
+ng-027-reader-callers, theia-endpoints, generated-byte-identity, diff-theia-core, gui04-registry-shape:
+11/11 PASS.
+
+## TERM-02 outcome
+
+orca-agent-status-live: PASS -- a real claude in an Orca terminal under Orca's terminal daemon read working, waiting and done through Orca's hooks with 1 prompt; session records grew; the bridge folder holds orcad-data-root (0600, orcad's data root) and the claude-wrapper launcher (0700); the agent and the terminal daemon ended on quit
+
 <!-- gsd:write-continue -->
