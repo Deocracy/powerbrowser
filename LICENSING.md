@@ -20,6 +20,10 @@ The about:license text in that section opens with Mozilla's statement that the M
 
 The Eclipse Theia framework and the other npm packages the application ships are listed with their licence texts in the "Theia application dependencies" section of [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt).
 
+## Orca
+
+The npm packages that Orca's orcad server, web client and mobile-web bundle ship are listed with their licence texts in the "Orca (orcad, web client, mobile-web)" section of [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt). The Orca source is the pin named by the `configuration.toml` keys `upstreams.orca_tag` and `upstreams.orca_commit`; Orca's own licence is checked by `inventory/licence-allowlist.json`.
+
 ## Node.js runtime
 
 The bundled Node.js runtime's licence text is in the "Node.js runtime" section of [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt).

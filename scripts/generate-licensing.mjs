@@ -20,13 +20,24 @@
 //  - The Node.js runtime LICENSE, extracted from the archive pinned in
 //    powerbrowser/packaging/node-runtime.json and cached at NODE_ARCHIVE_DIR
 //    (the cache package-linux.sh uses). Its sha256 is checked before use.
+//  - The shipped Orca packages (orcad, web client, mobile-web), derived from the
+//    bundles by scripts/lib/orca-shipped-packages.mjs. With no built orca/ the Orca
+//    section is not re-derived (one SKIP line) and the tracked section is kept.
 //
 // Modes:
 //   node scripts/generate-licensing.mjs              write both files (temp file + rename each);
 //                                                    fetches the pinned Node archive if not cached
 //   node scripts/generate-licensing.mjs --check      re-derive both in memory; fail naming the
 //                                                    file and first differing line on any drift
+//   node scripts/generate-licensing.mjs --check-orca re-derive only the Orca section from the built
+//                                                    orca/ and compare it with the tracked one
+//   node scripts/generate-licensing.mjs --write-orca rewrite only the Orca section of the notices;
+//                                                    every other byte is kept (the re-pin uses this)
 //   node scripts/generate-licensing.mjs --self-test  hermetic fixtures in a temp dir
+//
+// --check and --check-orca compare the Orca package set both ways: a shipped package
+// missing from the notices is red, and an Orca notice for a package that does not ship
+// is red.
 //
 // --check runs python over upstream/ and reads files. It runs no build, no
 // browser, no display and never uses the network: without a cached Node
@@ -36,14 +47,15 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
-    copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync,
-    renameSync, rmSync, statSync, writeFileSync,
+    copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync,
+    renameSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { resolveConfig } from './generate.mjs';
+import { licenceText, licenseField, orcaShippedPackages } from './lib/orca-shipped-packages.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'licensing';
@@ -124,28 +136,8 @@ export function htmlToText(html) {
 
 // --- Theia: the production dependency closure ---------------------------------
 
-const LICENCE_FILE = /^(licen[cs]e|copying|notice)/i;
-
 function readJson(path) {
     return JSON.parse(readFileSync(path, 'utf8'));
-}
-
-function licenseField(pkg) {
-    const l = pkg.license ?? pkg.licenses;
-    if (typeof l === 'string') return l;
-    if (Array.isArray(l)) return l.map((x) => (typeof x === 'string' ? x : x?.type)).filter(Boolean).join(' OR ') || 'no license field';
-    if (typeof l?.type === 'string') return l.type;
-    return 'no license field';
-}
-
-// Licence, copying and notice files in the package root, in code-unit order, concatenated.
-function licenceText(dir) {
-    const texts = readdirSync(dir)
-        .filter((f) => LICENCE_FILE.test(f) && statSync(join(dir, f)).isFile())
-        .sort()
-        .map((f) => readFileSync(join(dir, f), 'utf8').replace(/\r\n?/g, '\n').trimEnd())
-        .filter((t) => t !== '');
-    return texts.length > 0 ? texts.join('\n\n') : null;
 }
 
 /**
@@ -198,8 +190,9 @@ export function theiaClosure(nodeModulesRoot, appPackageJson) {
 }
 
 // Group packages whose licence text is byte-identical; a licence-less package groups
-// by its license field. Names and groups are in code-unit order.
-function theiaGroups(packages) {
+// by its license field. Names and groups are in code-unit order. Used by the Theia and
+// Orca sections alike.
+function licenceGroups(packages) {
     const groups = new Map();
     for (const p of packages) {
         const key = p.text ?? `\0${p.license}`;
@@ -296,11 +289,68 @@ function trackedNodeText(trackedText) {
 
 // --- rendering ----------------------------------------------------------------
 
+export const ORCA_HEADING = '== Orca (orcad, web client, mobile-web) ==';
+
+/** The Orca section from its heading up to (not including) the Node heading. */
+export function renderOrcaSection(packages) {
+    const out = [
+        ORCA_HEADING,
+        '',
+        'Orca source: the pin in configuration.toml [upstreams] orca_tag and orca_commit. Packages are derived from what the orcad, web client and mobile-web bundles contain.',
+        'Packages whose licence text is byte-identical share one block.',
+        '',
+    ];
+    for (const g of licenceGroups(packages)) out.push(RULE, ...g.names, '', g.body, '');
+    out.push(RULE, '', '');
+    return out.join('\n');
+}
+
+/** { start, end, text } of the Orca section in a notices text, or null. */
+export function orcaSectionOf(notices) {
+    const start = notices.indexOf(`\n${ORCA_HEADING}\n`);
+    if (start < 0) return null;
+    const node = NODE_HEADER.exec(notices.slice(start + 1));
+    const end = node ? start + 1 + node.index : notices.length;
+    return { start: start + 1, end, text: notices.slice(start + 1, end) };
+}
+
+/** The name@version entries an Orca section lists: the lines after each rule up to a blank line. */
+export function orcaEntriesOf(sectionText) {
+    const entries = new Set();
+    const lines = sectionText.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+        if (lines[i] !== RULE) continue;
+        for (let j = i + 1; j < lines.length && lines[j] !== ''; j++) {
+            const m = /^(@?[^@\s]+)@(\S+) \(/.exec(lines[j]);
+            if (m) entries.add(`${m[1]}@${m[2]}`);
+        }
+    }
+    return entries;
+}
+
+/** Both-ways set comparison of the derived Orca packages with a tracked Orca section. */
+export function compareOrcaSets(packages, trackedSection) {
+    const derived = new Set(packages.map((p) => `${p.name}@${p.version}`));
+    const tracked = orcaEntriesOf(trackedSection ?? '');
+    const out = [];
+    for (const e of [...derived].sort()) if (!tracked.has(e)) out.push(`shipped but missing from the notices: ${e}. Next step: run: ${RERUN} --write-orca, then commit ${NOTICES_REL}.`);
+    for (const e of [...tracked].sort()) if (!derived.has(e)) out.push(`in the Orca notices but not shipped: ${e}. Next step: run: ${RERUN} --write-orca, then commit ${NOTICES_REL}.`);
+    return out;
+}
+
+/** The notices text with only its Orca section replaced. */
+export function replaceOrcaSection(notices, sectionText) {
+    const s = orcaSectionOf(notices);
+    if (!s) throw new Fail(`${NOTICES_REL} has no "${ORCA_HEADING}" section to rewrite. Next step: run: ${RERUN}, then commit ${NOTICES_REL}.`);
+    return notices.slice(0, s.start) + sectionText + notices.slice(s.end);
+}
+
 /**
- * THIRD-PARTY-NOTICES.txt text, sections Gecko, Theia, Node.
- * gecko: { tag, defines, text }; packages: theiaClosure() output; node: { version, url, member, text }.
+ * THIRD-PARTY-NOTICES.txt text, sections Gecko, Theia, Orca, Node.
+ * gecko: { tag, defines, text }; packages: theiaClosure() output; orca: the Orca section text
+ * (renderOrcaSection) or undefined; node: { version, url, member, text }.
  */
-export function renderNotices({ gecko, packages, node }) {
+export function renderNotices({ gecko, packages, orca, node }) {
     const out = [
         'THIRD-PARTY NOTICES',
         '',
@@ -315,8 +365,10 @@ export function renderNotices({ gecko, packages, node }) {
         `The production dependency closure of ${APP_PACKAGE_REL}. Packages whose licence text is byte-identical share one block.`,
         '',
     ];
-    for (const g of theiaGroups(packages)) out.push(RULE, ...g.names, '', g.body, '');
-    out.push(RULE, '', nodeHeader(node.version), '', `From ${node.member} in ${node.url}.`, '', node.text.replace(/\n*$/, '\n'));
+    for (const g of licenceGroups(packages)) out.push(RULE, ...g.names, '', g.body, '');
+    out.push(RULE, '');
+    if (orca !== undefined) out.push(orca.replace(/\n\n$/, ''), '');
+    out.push(nodeHeader(node.version), '', `From ${node.member} in ${node.url}.`, '', node.text.replace(/\n*$/, '\n'));
     return out.join('\n');
 }
 
@@ -346,6 +398,10 @@ function renderLicensing(config) {
         '',
         `The Eclipse Theia framework and the other npm packages the application ships are listed with their licence texts in the "Theia application dependencies" section of [${NOTICES_REL}](${NOTICES_REL}).`,
         '',
+        '## Orca',
+        '',
+        `The npm packages that Orca's orcad server, web client and mobile-web bundle ship are listed with their licence texts in the "Orca (orcad, web client, mobile-web)" section of [${NOTICES_REL}](${NOTICES_REL}). The Orca source is the pin named by the \`configuration.toml\` keys \`upstreams.orca_tag\` and \`upstreams.orca_commit\`; Orca's own licence is checked by \`inventory/licence-allowlist.json\`.`,
+        '',
         '## Node.js runtime',
         '',
         `The bundled Node.js runtime's licence text is in the "Node.js runtime" section of [${NOTICES_REL}](${NOTICES_REL}).`,
@@ -366,6 +422,45 @@ export function checkAgainst(trackedText, derivedText, rel) {
 
 // --- the run --------------------------------------------------------------------
 
+/**
+ * The Orca section: { text, packages } derived from the bundles, or { text } kept from the
+ * tracked notices after one SKIP line when orca/ is not built. derive is a parameter so the
+ * self-test can pass fixture package sets.
+ */
+async function orcaPart(trackedNotices, derive) {
+    const r = await derive();
+    if (r.skip) {
+        console.log(`${NAME}: SKIP -- Orca section not re-derived: ${r.skip}`);
+        return { text: orcaSectionOf(trackedNotices ?? '')?.text };
+    }
+    return { text: renderOrcaSection(r.packages), packages: r.packages };
+}
+
+const deriveOrca = () => orcaShippedPackages({ repoRoot: REPO_ROOT, log: (l) => console.log(`${NAME}: ${l}`) });
+const orcaSummary = (pk) => `${pk.length} packages in ${licenceGroups(pk).length} licence groups`;
+
+/** --check-orca (write false) and --write-orca (write true): only the Orca section, only orca/. */
+export async function runOrca(write, { noticesText, derive = deriveOrca } = {}) {
+    const tracked = noticesText ?? (existsSync(join(REPO_ROOT, NOTICES_REL)) ? readFileSync(join(REPO_ROOT, NOTICES_REL), 'utf8') : '');
+    const r = await derive();
+    if (r.skip) {
+        console.log(`${NAME}: SKIP -- Orca section not re-derived: ${r.skip}`);
+        return { failures: [] };
+    }
+    const text = renderOrcaSection(r.packages);
+    if (write) {
+        const next = replaceOrcaSection(tracked, text);
+        if (noticesText === undefined && next !== tracked) writeAtomic(NOTICES_REL, next);
+        console.log(`${NAME}: wrote the Orca section (${orcaSummary(r.packages)})`);
+        return { failures: [], text: next };
+    }
+    const section = orcaSectionOf(tracked);
+    if (!section) return { failures: [`${NOTICES_REL} has no "${ORCA_HEADING}" section. Next step: run: ${RERUN}, then commit ${NOTICES_REL}.`] };
+    const failures = [...compareOrcaSets(r.packages, section.text), ...checkAgainst(section.text, text, `${NOTICES_REL} (Orca section)`)];
+    if (failures.length === 0) console.log(`${NAME}: PASS -- the Orca section of ${NOTICES_REL} equals its re-derivation (${orcaSummary(r.packages)})`);
+    return { failures };
+}
+
 async function run(check) {
     const { failures, config } = resolveConfig();
     if (failures.length > 0) throw new Fail(`configuration.toml does not resolve: ${failures.join('; ')}`);
@@ -377,6 +472,8 @@ async function run(check) {
     const noticesAbs = join(REPO_ROOT, NOTICES_REL);
     const trackedNotices = existsSync(noticesAbs) ? readFileSync(noticesAbs, 'utf8') : undefined;
     const out = [];
+    const orca = await orcaPart(trackedNotices, deriveOrca);
+    if (check && orca.packages) out.push(...compareOrcaSets(orca.packages, orcaSectionOf(trackedNotices ?? '')?.text));
 
     let nodeText;
     if (!check) {
@@ -396,9 +493,9 @@ async function run(check) {
 
     const files = [
         [LICENSING_REL, renderLicensing(config)],
-        [NOTICES_REL, renderNotices({ gecko, packages, node: { ...pin, text: nodeText } })],
+        [NOTICES_REL, renderNotices({ gecko, packages, orca: orca.text, node: { ...pin, text: nodeText } })],
     ];
-    const summary = `${packages.length} Theia packages in ${theiaGroups(packages).length} licence groups, Node.js runtime ${pin.version}`;
+    const summary = `${packages.length} Theia packages in ${licenceGroups(packages).length} licence groups, ${orca.packages ? `Orca ${orcaSummary(orca.packages)}` : 'Orca section kept'}, Node.js runtime ${pin.version}`;
     if (!check) {
         for (const [rel, text] of files) writeAtomic(rel, text);
         console.log(`${NAME}: wrote ${files.map(([rel]) => rel).join(' and ')} (${summary})`);
@@ -445,7 +542,7 @@ function writePkg(root, rel, pkg, licence) {
     if (licence !== undefined) writeFileSync(join(dir, 'LICENSE'), licence);
 }
 
-function selfTest() {
+async function selfTest() {
     const tmp = mkdtempSync(join(tmpdir(), 'licensing-self-test-'));
     let misses = 0;
     const report = (ok, label) => {
@@ -530,20 +627,23 @@ function isEntryPoint() {
 
 if (isEntryPoint()) {
     const args = process.argv.slice(2);
+    const MODES = ['--check', '--check-orca', '--write-orca', '--self-test'];
     for (const a of args) {
-        if (a !== '--check' && a !== '--self-test') {
-            console.error(`${NAME}: FAIL -- unknown argument '${a}'. Next step: run: ${RERUN}, or add --check or --self-test.`);
+        if (!MODES.includes(a)) {
+            console.error(`${NAME}: FAIL -- unknown argument '${a}'. Next step: run: ${RERUN}, or add one of ${MODES.join(', ')}.`);
             process.exit(2);
         }
     }
-    if (args.includes('--self-test')) process.exit(selfTest());
+    if (args.includes('--self-test')) process.exit(await selfTest());
     try {
-        const failures = await run(args.includes('--check'));
+        const orcaOnly = args.includes('--check-orca') || args.includes('--write-orca');
+        const failures = orcaOnly ? (await runOrca(args.includes('--write-orca'))).failures : await run(args.includes('--check'));
         for (const f of failures) console.error(`${NAME}: FAIL -- ${f}`);
         process.exit(failures.length > 0 ? 1 : 0);
     } catch (e) {
-        if (!(e instanceof Fail)) throw e;
+        // A derivation failure (orca-shipped-packages throws Error) is a named red, not a crash.
         console.error(`${NAME}: FAIL -- ${e.message}`);
+        if (!(e instanceof Fail) && process.env.LICENSING_DEBUG) console.error(e.stack);
         process.exit(1);
     }
 }
