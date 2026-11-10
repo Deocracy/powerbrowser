@@ -3914,6 +3914,16 @@ run_own_checks() {
     # orca-agent-status-live-self-test: the live row's pure verdicts (status order, waiting, record growth, prompt
     # cap, agent PTY under Orca's terminal daemon, quit survivors, bridge-folder files) over fixtures.
     "orca-agent-status-live-self-test|node $REPO_ROOT/scripts/verify-orca-agent-status-live.mjs --self-test"
+    # NEW (64-02, TAB-02/TAB-04/TAB-06/TERM-01, P64-25/P64-31): orca-pane-routes. Quick. Derived at check time with
+    # theia/node_modules/typescript: Orca's TabContentType members from the fetched orca/ compared as a set with
+    # ORCA_PANE_ROUTES' keys; each target a known kind or pending with a requirement id; the hosted words compared
+    # with docs/URI-SCHEMES.md's pb-orca: section; the bundle API and hand-off key against lane p64-01's entry and
+    # Vite config and the loader's module key and boot event against lane p64-04's orca-tabs-live.mjs (each a named
+    # SKIP of that clause alone while the other lane's file is absent); every table target handled by the observer;
+    # no client-side terminal creation in orca-panes or orca-overlay/files. A named SKIP when orca/ is not fetched.
+    # The self-test plants 13 faults in mkdtemp copies.
+    "orca-pane-routes|node $REPO_ROOT/scripts/verify-orca-pane-routes.mjs"
+    "orca-pane-routes-self-test|node $REPO_ROOT/scripts/verify-orca-pane-routes.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"

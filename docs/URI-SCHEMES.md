@@ -179,6 +179,44 @@ terminal: the Save-As gate first requires the widget to be a
 none — it fails that test before the Navigatable check the URI address
 depends on is ever consulted.
 
+## `pb-orca:`
+
+A hosted Orca pane: one tab per Orca pane, mounting Orca's own view on
+Orca's engine (Phase 64). The form is `pb-orca:<word><n>`, where the word
+names the pane's Orca content type and `<n>` is the lowest index from 1
+not already in use for that word — `chat1`, `chat2`, `term1` — the same
+lowest-free rule as `terminal:`'s `t<n>`.
+
+| Word | Orca content type |
+|------|-------------------|
+| `chat` | `agent-session` (an Orca chat) |
+| `term` | `terminal` (one Orca terminal pane; a split terminal gives one tab per pane) |
+| `sim` | `simulator` |
+| `conflicts` | `conflict-review` |
+| `checks` | `check-details` |
+
+The path is identity only. The Orca tab id, the worktree id and the
+terminal pane key — none of which the user chose — stay in the widget's
+construction options, never in the address. The name is stored in those
+options and replays when Theia restores a layout.
+
+An empty path (`pb-orca:`) focuses the most recently active hosted Orca
+tab, and creates nothing when none exists. A name that no open tab carries
+opens nothing and logs one line; it never creates an Orca pane, because
+Orca panes are created only by Orca (an agent, the Orca CLI, or the
+"New Orca Chat" and "New Orca Terminal" commands).
+
+Every Orca terminal, local or not, is `pb-orca:term<n>` and has no
+`terminal:` address; `terminal:` names only PowerBrowser's own Theia
+terminals. Orca editor, diff and browser panes are not hosted: they take
+their target's address — a Theia editor's in Phase 65, a web tab's page
+URL in Phase 66 — and until then open nothing.
+
+Restore holds within one Orca server lifetime: after a frontend reload a
+`pb-orca:` tab returns under the same name while its Orca pane still
+exists, and closes if the pane is gone. Restore across a PowerBrowser
+relaunch is Phase 65.
+
 ## `output:`
 
 Already registered by `@theia/output`; this phase adds only the missing
