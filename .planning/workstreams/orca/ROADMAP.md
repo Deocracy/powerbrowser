@@ -185,7 +185,17 @@ Route chosen by Phase 61: Route A, Orca pane components in a Theia ReactWidget o
   6. Every Orca terminal, whether opened by the user, an agent, Orca's CLI or the EXT-02 wrapper, is a PowerBrowser tab showing Orca's own terminal view (`TerminalPane`, xterm.js) on Orca's engine; it accepts input and shows output, and an Orca in-tab split appears as Lumino splits. Theia's own terminals stay plain Theia terminals beside them (TERM-01).
   7. In an Orca terminal tab, Ctrl+W, Ctrl+T, Ctrl+Tab and Ctrl+PageUp/PageDown reach the terminal program; in a Theia terminal, a web tab and every other tab the same keys run PowerBrowser's tab commands, each effect equal to a control measured in the same session. A check derives the key set from the chrome's reserved page keys and compares it with the passthrough rows as a set (TERM-04).
 
-**Plans**: TBD
+**Plans**: 5 plans (4 lanes and a coordinator; lanes branch after the 63-04 merge)
+
+Plans:
+**Wave 1**
+- [ ] 64-01-PLAN.md — lane p64-01: the Orca pane bundle (overlay entry, app-mode ES build on Theia's React, build-orca-panes.sh), the isolated per-leaf terminal mount measured first, standalone mounts, CSS scoping with the derived html clause (TAB-04, TAB-06, TERM-01)
+- [ ] 64-02-PLAN.md — lane p64-02: @powerbrowser/orca-panes (gated bundle route and offer RPC, loader, OrcaPaneWidget, route table, observer and placement, Orca's close, pb-orca: opener and reverse lookup, two commands, terminal key rows), URI doc, orca-pane-routes (TAB-02, TAB-04, TAB-06, TERM-01, TERM-04)
+- [ ] 64-03-PLAN.md — lane p64-03: the Orca mode with the IDE dress, the offer and bundle-folder files in the bridge folder (TAB-01, TAB-04)
+- [ ] 64-04-PLAN.md — lane p64-04: hosted-tab live proofs (orca-tabs-live, orca-terminal-keys and -live ported, pb-orca: round trip, Orca seeds in the mode-switch walk) (TAB-02, TAB-04, TAB-06, TERM-01, TERM-04)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 64-05-PLAN.md — coordinator: merge p64-01..p64-04, wire orca-panes, rebuild, CSS isolation proven first on the merged tree, live proofs, brand rows, tracking by requirement outcome
 **UI hint**: yes
 
 Editor, diff and browser-page panes reach the dock through this phase's mapping. Their targets are delivered by TAB-05 (Phase 65) and BRW-02 (Phase 66).
@@ -305,7 +315,7 @@ Phases execute in numeric order: 59 → 60 → 61 → 62 → 63 → 64 → 65 �
 | 61. Spikes for pane hosting, browser parity and live sharing | 4/4 | Complete (human items deferred) | 2026-11-10 |
 | 62. Overlay gate and PowerBrowser-run orcad | 3/3 | Complete | 2026-11-09 |
 | 63. Agent hooks on Orca's terminal engine | 0/3 | Planned (rescoped by D-31; 3 plans superseded) | - |
-| 64. Orca panes as PowerBrowser tabs | 0/TBD | Not started | - |
+| 64. Orca panes as PowerBrowser tabs | 0/5 | Planned (lanes after the 63-04 merge) | - |
 | 65. Orca workspace in Theia | 0/TBD | Not started | - |
 | 66. PowerBrowser web tabs as Orca's browser | 0/6 | Planned | - |
 | 67. Hosting hardening | 0/TBD | Not started | - |
