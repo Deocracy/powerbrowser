@@ -23,7 +23,11 @@
       "sourcerer",
       "deocracy"
     ],
-    "residue_probes_reason": "Used ONLY by reconciliation condition 4, and deliberately NOT by the boundary matcher: a raw case-insensitive substring search with no boundary rule at all. Every probe hit must land inside a span some row below claimed. A bug in the boundary matcher (missing `sourcererPrivilegedJs`, say) therefore leaves an unclaimed probe hit and fails condition 4, even though conditions 1-3 would all agree with themselves. This is the independent source T-01-04 requires -- the rename script never writes it."
+    "residue_probes_reason": "Used ONLY by reconciliation condition 4, and deliberately NOT by the boundary matcher: a raw case-insensitive substring search with no boundary rule at all. Every probe hit must land inside a span some row below claimed. A bug in the boundary matcher (missing `sourcererPrivilegedJs`, say) therefore leaves an unclaimed probe hit and fails condition 4, even though conditions 1-3 would all agree with themselves. This is the independent source T-01-04 requires -- the rename script never writes it.",
+    "tracked_residue_probes": [
+      "orca"
+    ],
+    "tracked_residue_probes_reason": "P60-R2 (OVL-04): probes the TRACKED tree only, by the same condition-4 rule as residue_probes (raw case-insensitive substring, every hit must land in a claimed span). Orca is a third-party product name PowerBrowser hosts as a mode, classified only here: every tracked mention is claimed by a coincidental row below with an exact count, so a stray Orca in any other file, or one more in a listed file, goes red. NOT in residue_probes because the --extra-root pass (scripts/rebase-upstream.sh over upstream/) walks Gecko, which holds 1598 files containing the substring (the GNOME Orca screen reader and in-word joins such as ErrorCallback), and coincidental rows are excluded from that pass, so the permanent rebase gate would go red with nothing to classify. Maintenance P60-R2 accepted: a change that adds or removes Orca text in a scanned file updates the matching expected_count here."
   },
   "ground_truth": {
     "$comment": "D-17 says a non-zero exit is not evidence, because an under-scanning scanner also exits non-zero. This block is the outside number the scan is checked against: 01-RESEARCH.md counted the sourcerer tree independently, with grep, before any of this tooling existed. scan-brand-residue.mjs recounts `raw_forms` the same dumb way -- plain case-sensitive substring over the scanned scope, no rows and no boundary rule -- and asserts that observed + already_renamed + not_imported equals migrating_occurrences + phase_verifier_occurrences EXACTLY. Every line below is a named deviation rather than a fudge factor, which is the difference between reconciling a count and absorbing one.",
@@ -964,6 +968,294 @@
         "website-staging/legal.html"
       ],
       "reason": "COUNT MOVED 35 -> 36 (plan 49-02, WR-02): +1 in docs/RELEASING.md, the runner acceptance drill workflow that sets the release repository in job-level env. COUNT MOVED 34 -> 35 (plan 49-02, SEC-08): +1 in docs/RELEASING.md, the one-time registration-token command in the non-ephemeral runner section. COUNT MOVED 30 -> 34 (plan 49-02, SEC-10): +4 in scripts/legion-pre-job-hook.sh, the pre-job hook's release triple (the GITHUB_REPOSITORY and GITHUB_WORKFLOW_REF tests and their refusal messages). The owner ruling below covers the slug wherever the release home is named, so the hook is listed by name. COUNT MOVED 27 -> 30 (plan 53-01, TEL-05): +1 in the Report-a-Bug contribution, which builds the issues URL of the release home, and +2 in its bug-report-affordance verifier, whose self-test plant names that same URL twice on one line. The owner ruling below covers the slug wherever the release home is named, so the new files are listed by name rather than left as residue. Owner ruling 2026-10-29: the release home (GitHub repository, Releases, Discussions, security policy and attestation subject) is hosted at github.com/Deocracy/powerbrowser, which already meets SEC-06 (org 2FA required, three owners). Class coincidental, not frozen: it contains the residue probe, and coincidental rows are excluded from the --extra-root claim set, so it cannot swallow a real brand token elsewhere. This is the hosting slug only, set by configuration.toml [urls] release_notes and the docs and pages that name the repository; it is not a product brand. The vendor, copyright holder and trademark holder became Deocracy under R7 (2026-11-03); those sites are claimed by their own scoped coincidental rows, not by this slug row. Any other occurrence of the vendor token stays a failure."
+    },
+    {
+      "token": "Orca",
+      "case_form": "title",
+      "class": "coincidental",
+      "target": "Orca",
+      "expected_count": 93,
+      "expected_files": [
+        ".claude/hooks/ledger-session-check.py",
+        ".claude/skills/spike-findings-Power-Browser/SKILL.md",
+        ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/probe.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/results.md",
+        ".gitignore",
+        "configuration.toml",
+        "docs/BUILD.md",
+        "flake.nix",
+        "scripts/build-orca.sh",
+        "scripts/fetch-orca.sh",
+        "scripts/generate.mjs",
+        "scripts/lib/config-schema.json",
+        "scripts/lib/orca-run.mjs",
+        "scripts/verify-orca-build-shape.mjs",
+        "scripts/verify-orca-pin.mjs",
+        "scripts/verify-orca-slotless-start.mjs",
+        "scripts/verify-platform.sh"
+      ],
+      "only_in": [
+        ".claude/hooks/ledger-session-check.py",
+        ".claude/skills/spike-findings-Power-Browser/SKILL.md",
+        ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/probe.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/results.md",
+        ".gitignore",
+        "configuration.toml",
+        "docs/BUILD.md",
+        "flake.nix",
+        "scripts/build-orca.sh",
+        "scripts/fetch-orca.sh",
+        "scripts/generate.mjs",
+        "scripts/lib/config-schema.json",
+        "scripts/lib/orca-run.mjs",
+        "scripts/verify-orca-build-shape.mjs",
+        "scripts/verify-orca-pin.mjs",
+        "scripts/verify-orca-slotless-start.mjs",
+        "scripts/verify-platform.sh"
+      ],
+      "reason": "P60-R2 (OVL-04, plan 60-04): the product name of the third-party agent workspace PowerBrowser builds from source (scripts/fetch-orca.sh, scripts/build-orca.sh) and hosts as a mode. Evidence: .claude/hooks/ledger-session-check.py:200, .claude/skills/spike-findings-Power-Browser/SKILL.md:3, .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:1 and 16 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
+    },
+    {
+      "token": "orca",
+      "case_form": "lower",
+      "class": "coincidental",
+      "target": "orca",
+      "expected_count": 420,
+      "expected_files": [
+        ".claude/skills/spike-findings-Power-Browser/SKILL.md",
+        ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/probe.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/results.md",
+        ".gitignore",
+        "configuration.toml",
+        "docs/BUILD.md",
+        "docs/REBRANDING.md",
+        "flake.nix",
+        "scripts/build-orca.sh",
+        "scripts/fetch-orca.sh",
+        "scripts/generate.mjs",
+        "scripts/lib/config-schema.json",
+        "scripts/lib/orca-run.mjs",
+        "scripts/verify-orca-build-shape.mjs",
+        "scripts/verify-orca-pin.mjs",
+        "scripts/verify-orca-slotless-start.mjs",
+        "scripts/verify-platform.sh",
+        "systemd/legion-pb.nix"
+      ],
+      "only_in": [
+        ".claude/skills/spike-findings-Power-Browser/SKILL.md",
+        ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/probe.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/results.md",
+        ".gitignore",
+        "configuration.toml",
+        "docs/BUILD.md",
+        "docs/REBRANDING.md",
+        "flake.nix",
+        "scripts/build-orca.sh",
+        "scripts/fetch-orca.sh",
+        "scripts/generate.mjs",
+        "scripts/lib/config-schema.json",
+        "scripts/lib/orca-run.mjs",
+        "scripts/verify-orca-build-shape.mjs",
+        "scripts/verify-orca-pin.mjs",
+        "scripts/verify-orca-slotless-start.mjs",
+        "scripts/verify-platform.sh",
+        "systemd/legion-pb.nix"
+      ],
+      "reason": "P60-R2 (OVL-04, plan 60-04): the tree path orca/, the config keys upstreams.orca_tag / orca_commit, the devShell name, script and row names (fetch-orca, orca-pin, orca-run) and the workstream path .planning/workstreams/orca/. Evidence: .claude/skills/spike-findings-Power-Browser/SKILL.md:15, .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:4, .claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md:3 and 17 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
+    },
+    {
+      "token": "ORCA",
+      "case_form": "upper",
+      "class": "coincidental",
+      "target": "ORCA",
+      "expected_count": 100,
+      "expected_files": [
+        ".claude/skills/spike-findings-Power-Browser/SKILL.md",
+        ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/results.md",
+        "docs/BUILD.md",
+        "docs/REBRANDING.md",
+        "scripts/build-orca.sh",
+        "scripts/fetch-orca.sh",
+        "scripts/generate.mjs",
+        "scripts/lib/orca-run.mjs",
+        "scripts/verify-orca-pin.mjs",
+        "scripts/verify-orca-slotless-start.mjs",
+        "scripts/verify-platform.sh"
+      ],
+      "only_in": [
+        ".claude/skills/spike-findings-Power-Browser/SKILL.md",
+        ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/results.md",
+        "docs/BUILD.md",
+        "docs/REBRANDING.md",
+        "scripts/build-orca.sh",
+        "scripts/fetch-orca.sh",
+        "scripts/generate.mjs",
+        "scripts/lib/orca-run.mjs",
+        "scripts/verify-orca-pin.mjs",
+        "scripts/verify-orca-slotless-start.mjs",
+        "scripts/verify-platform.sh"
+      ],
+      "reason": "P60-R2 (OVL-04, plan 60-04): Orca's own environment namespace (ORCA_USER_DATA, ORCA_VERSION, ORCA_TELEMETRY_DISABLED, ORCA_PNPM_GLOBAL_VIRTUAL_STORE, ORCA_PAIRING_CODE) and PowerBrowser's ORCA_DIR constants; PowerBrowser mints no ORCA_ name of its own. Evidence: .claude/skills/spike-findings-Power-Browser/SKILL.md:48, .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:19, .claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md:86 and 10 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
+    },
+    {
+      "token": "orcad",
+      "case_form": "lower",
+      "class": "coincidental",
+      "target": "orcad",
+      "expected_count": 179,
+      "expected_files": [
+        ".claude/skills/spike-findings-Power-Browser/SKILL.md",
+        ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/probe.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/results.md",
+        "docs/BUILD.md",
+        "scripts/build-orca.sh",
+        "scripts/generate.mjs",
+        "scripts/lib/orca-run.mjs",
+        "scripts/verify-orca-build-shape.mjs",
+        "scripts/verify-orca-slotless-start.mjs",
+        "scripts/verify-platform.sh"
+      ],
+      "only_in": [
+        ".claude/skills/spike-findings-Power-Browser/SKILL.md",
+        ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md",
+        ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/probe.mjs",
+        ".claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/results.md",
+        "docs/BUILD.md",
+        "scripts/build-orca.sh",
+        "scripts/generate.mjs",
+        "scripts/lib/orca-run.mjs",
+        "scripts/verify-orca-build-shape.mjs",
+        "scripts/verify-orca-slotless-start.mjs",
+        "scripts/verify-platform.sh"
+      ],
+      "reason": "P60-R2 (OVL-04, plan 60-04): Orca's headless daemon (orcad, orcad.js, out/orcad/) and identifiers built on it (orcadEnv). Evidence: .claude/skills/spike-findings-Power-Browser/SKILL.md:3, .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:3, .claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md:9 and 9 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
+    },
+    {
+      "token": "ORCAD",
+      "case_form": "upper",
+      "class": "coincidental",
+      "target": "ORCAD",
+      "expected_count": 9,
+      "expected_files": [
+        "scripts/lib/orca-run.mjs",
+        "scripts/verify-orca-build-shape.mjs"
+      ],
+      "only_in": [
+        "scripts/lib/orca-run.mjs",
+        "scripts/verify-orca-build-shape.mjs"
+      ],
+      "reason": "P60-R2 (OVL-04, plan 60-04): Orca's ORCAD_*_FILENAME slot-marker constant names (derived from orca/src/shared/orcad-artifacts.ts) and PowerBrowser's ORCAD_ENV_NAMES. Evidence: scripts/lib/orca-run.mjs:77, scripts/verify-orca-build-shape.mjs:47. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
+    },
+    {
+      "token": "Orcad",
+      "case_form": "literal",
+      "class": "coincidental",
+      "target": "Orcad",
+      "expected_count": 11,
+      "expected_files": [
+        ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
+        "scripts/build-orca.sh",
+        "scripts/lib/orca-run.mjs",
+        "scripts/verify-orca-slotless-start.mjs"
+      ],
+      "only_in": [
+        ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
+        "scripts/build-orca.sh",
+        "scripts/lib/orca-run.mjs",
+        "scripts/verify-orca-slotless-start.mjs"
+      ],
+      "reason": "P60-R2 (OVL-04, plan 60-04): camelCase joins the boundary matcher rejects (left letter): startOrcad, stopOrcad, probeOrcad, serveWithOrcad, stageOrcadMobileWebBundle. Evidence: .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:25, scripts/build-orca.sh:89, scripts/lib/orca-run.mjs:19 and 1 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
+    },
+    {
+      "token": "installedOrcaPaths",
+      "case_form": "literal",
+      "class": "coincidental",
+      "target": "installedOrcaPaths",
+      "expected_count": 5,
+      "expected_files": [
+        "scripts/lib/orca-run.mjs",
+        "scripts/verify-orca-slotless-start.mjs"
+      ],
+      "only_in": [
+        "scripts/lib/orca-run.mjs",
+        "scripts/verify-orca-slotless-start.mjs"
+      ],
+      "reason": "P60-R2 (OVL-04, plan 60-04): the camelCase function name installedOrcaPaths, an in-word join the boundary matcher rejects. Evidence: scripts/lib/orca-run.mjs:18, scripts/verify-orca-slotless-start.mjs:67. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
+    },
+    {
+      "token": "\\borca",
+      "case_form": "literal",
+      "class": "coincidental",
+      "target": "\\borca",
+      "expected_count": 1,
+      "expected_files": [
+        "scripts/verify-orca-pin.mjs"
+      ],
+      "only_in": [
+        "scripts/verify-orca-pin.mjs"
+      ],
+      "reason": "P60-R2 (OVL-04, plan 60-04): a regex word boundary written before the devShell name (/\\borca\\s*=/); the left `b` defeats the boundary matcher. Evidence: scripts/verify-orca-pin.mjs:203. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
+    },
+    {
+      "token": "\\norca_",
+      "case_form": "literal",
+      "class": "coincidental",
+      "target": "\\norca_",
+      "expected_count": 2,
+      "expected_files": [
+        "scripts/verify-orca-pin.mjs"
+      ],
+      "only_in": [
+        "scripts/verify-orca-pin.mjs"
+      ],
+      "reason": "P60-R2 (OVL-04, plan 60-04): an escaped newline before the config key in a TOML fixture string (\\norca_tag, \\norca_commit); the left `n` defeats the boundary matcher. Evidence: scripts/verify-orca-pin.mjs:253. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
+    },
+    {
+      "token": "ErrorCapture",
+      "case_form": "literal",
+      "class": "coincidental",
+      "target": "ErrorCapture",
+      "expected_count": 10,
+      "expected_files": [
+        "docs/non-gui/plans/wave-e-PLAN.md",
+        "theia/extensions/telemetry/src/browser/telemetry-error-capture.ts",
+        "theia/extensions/telemetry/src/browser/telemetry-frontend-module.ts"
+      ],
+      "only_in": [
+        "docs/non-gui/plans/wave-e-PLAN.md",
+        "theia/extensions/telemetry/src/browser/telemetry-error-capture.ts",
+        "theia/extensions/telemetry/src/browser/telemetry-frontend-module.ts"
+      ],
+      "reason": "P60-R2 (OVL-04, plan 60-04): NOT Orca: the class name TelemetryErrorCapture, where the raw case-insensitive probe hits Err+orCa+pture. Evidence: docs/non-gui/plans/wave-e-PLAN.md:1740, theia/extensions/telemetry/src/browser/telemetry-error-capture.ts:14, theia/extensions/telemetry/src/browser/telemetry-frontend-module.ts:28. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
+    },
+    {
+      "token": "ErrorCalls",
+      "case_form": "literal",
+      "class": "coincidental",
+      "target": "ErrorCalls",
+      "expected_count": 3,
+      "expected_files": [
+        "scripts/verify-page-tools-reader-crash.mjs"
+      ],
+      "only_in": [
+        "scripts/verify-page-tools-reader-crash.mjs"
+      ],
+      "reason": "P60-R2 (OVL-04, plan 60-04): NOT Orca: the variable displayLoadErrorCalls, where the raw case-insensitive probe hits Err+orCa+lls. Evidence: scripts/verify-page-tools-reader-crash.mjs:205. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
     }
   ]
 }
