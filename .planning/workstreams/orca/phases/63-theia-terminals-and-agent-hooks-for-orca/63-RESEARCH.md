@@ -449,12 +449,16 @@ The placeholder `--command` and the JSON field names of the CLI result (`Runtime
 | A5 | A Theia preference default can override a plugin-contributed property's default at runtime | Open Question 2 | The wrapper path must reach the extension another way |
 | A6 | `paneKey` is present in `terminal create --json` output from a headless orcad | Code Examples | The wrapper cannot set `ORCA_PANE_KEY`; the hermetic row goes red naming it |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **TERM-03 (owner decision, blocks p63-04).** See A5. Recommended option (a).
+   RESOLVED: P63-24 (63-CONTEXT) takes option (a): no new credential holder in Phase 63, remote panes display through Phase 64's hosted client, and the hermetic row `orca-remote-regression` is owned by the coordinator plan 63-04. The owner may still override; 63-04 lists it as an open owner decision.
 2. **How the wrapper path reaches the extension.** The app-level default mechanism exists (`theia.frontend.config.preferences` in `theia/applications/browser/package.json:21-24`) but takes static values, and the wrapper's absolute path differs between the dev tree, packaged builds and profiles. Options: the `orca-agents` frontend registers a default-scope value at runtime from a path its backend reports (needs A5); or a stable per-profile path in the bridge directory. Unverifiable until EXT-01; the hermetic row runs the wrapper directly, so this does not block the phase.
+   RESOLVED: P63-26 (63-CONTEXT) combines both options: the `orca-agents` backend writes a per-profile launcher `<bridge dir>/claude-wrapper`, and the 63-03 frontend registers its path as the default-scope value of `claudeCode.claudeProcessWrapper` through `PreferenceSchemaService.registerOverride`. Whether the extension reads that default (A5) is checked with EXT-01 in the end-of-milestone pass.
 3. **Duplicate query replies.** Decide after the live measurement (Pitfall 3).
+   RESOLVED: 63-04 Task 1 records the DSR reply count from `orca-pty-provider-live` stage 2 in its SUMMARY as a measurement, not an assertion; a count above one becomes an owner decision in 63-04's end-of-milestone deferred list.
 4. **Does the Theia backend start the bridge before or after its ready sentinel?** Settled by the bounded retry; the live row logs the order once.
+   RESOLVED: the bridge contract's lifecycle rule (interfaces blocks of 63-01, 63-02 and 63-05): the orcad client's first connect retries reading `endpoint.json` and connecting for up to 10 s, then fails the spawn and never falls back to node-pty, so the start order does not matter within that bound.
 
 ## Environment Availability
 
