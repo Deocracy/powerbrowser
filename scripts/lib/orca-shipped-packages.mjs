@@ -175,6 +175,95 @@ function stagedNames(dir) {
     return out;
 }
 
+// --- 3: out/web ----------------------------------------------------------------------
+
+// Inherited Orca and Node knobs never reach Orca's toolchain (build-orca.sh step 3).
+function scrubbedEnv(extra = {}) {
+    const env = { ...process.env, ...extra };
+    for (const k of Object.keys(env)) if (k.startsWith('ORCA_')) delete env[k];
+    delete env.ELECTRON_RUN_AS_NODE; delete env.NODE_OPTIONS; delete env.NODE_REPL_EXTERNAL_MODULE;
+    return env;
+}
+
+function mapFiles(dir) {
+    const out = [];
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, e.name);
+        if (e.isDirectory()) out.push(...mapFiles(p));
+        else if (e.name.endsWith('.map')) out.push(p);
+    }
+    return out;
+}
+
+function webInputs(repoRoot, orcaDir, key, collector, log) {
+    const scratch = join(repoRoot, '.mozbuild/orca-shipped', `web-${key}`);
+    rmSync(scratch, { recursive: true, force: true });
+    const cmd = ['config/scripts/run-vite-web-build.mjs', '--sourcemap', '--outDir', scratch, '--emptyOutDir'];
+    log(`building the web client with sourcemaps into .mozbuild/orca-shipped/web-${key} (cache miss)`);
+    const r = spawnSync(process.execPath, cmd, { cwd: orcaDir, env: scrubbedEnv(), encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+    const named = `node ${cmd.join(' ')} (in orca/)`;
+    if (r.error || r.status !== 0) {
+        const last = (r.stderr || r.stdout || String(r.error ?? '')).trim().split('\n').slice(-3).join(' | ');
+        throw new Error(`${named} exited ${r.status ?? r.error?.code}: ${last}`);
+    }
+    const maps = existsSync(scratch) ? mapFiles(scratch) : [];
+    if (maps.length === 0) throw new Error(`${named} wrote no .map file, so the web client's packages cannot be read`);
+    for (const map of maps) {
+        const m = JSON.parse(readFileSync(map, 'utf8'));
+        const base = resolve(dirname(map), m.sourceRoot ?? '');
+        for (const src of m.sources ?? []) {
+            if (typeof src !== 'string' || src.startsWith('\0')) continue;
+            let path = src.startsWith('file://') ? fileURLToPath(src) : resolve(base, src.replace(/^[a-z-]+:(?!\/\/)/i, ''));
+            // Worker chunks carry sources relative to Vite's root, not to the map: when the
+            // map-relative package is absent, read its node_modules part against orca/.
+            const dir = packageDirOf(path);
+            const i = src.indexOf('node_modules/');
+            if (dir && !existsSync(dir) && i >= 0) path = join(orcaDir, src.slice(i));
+            collector.addPath(path, 'web', `${relative(repoRoot, map)} source ${src}`);
+        }
+    }
+    rmSync(scratch, { recursive: true, force: true });
+}
+
+// --- 4: out/mobile-web -------------------------------------------------------------
+
+function mobileInputs(repoRoot, orcaDir, collector) {
+    const pnpm = join(repoRoot, '.mozbuild/corepack/bin/pnpm');
+    if (!existsSync(pnpm)) throw new Error(`.mozbuild/corepack/bin/pnpm is absent, so orca/mobile's production closure cannot be listed. Next step: run: ${BUILD_ORCA}`);
+    const r = spawnSync(pnpm, ['list', '--prod', '--json', '--depth', 'Infinity'], {
+        cwd: join(orcaDir, 'mobile'), encoding: 'utf8', maxBuffer: 512 * 1024 * 1024,
+        env: scrubbedEnv({ COREPACK_HOME: join(repoRoot, '.mozbuild/corepack'), COREPACK_ENABLE_DOWNLOAD_PROMPT: '0' }),
+    });
+    if (r.error || r.status !== 0) throw new Error(`pnpm list --prod --json --depth Infinity in orca/mobile exited ${r.status ?? r.error?.code}: ${(r.stderr ?? '').trim().split('\n').pop()}`);
+    const seen = new Set();
+    const walk = (deps) => {
+        for (const d of Object.values(deps ?? {})) {
+            // An optional package for another platform (fsevents) is listed but not installed, so it cannot ship.
+            if (!d?.path || seen.has(d.path) || !existsSync(d.path)) continue;
+            seen.add(d.path);
+            if (packageDirOf(d.path)) collector.add(d.path, 'mobile-web', `orca/mobile pnpm list entry ${d.from ?? ''}@${d.version ?? ''}`);
+            walk(d.dependencies);
+        }
+    };
+    for (const project of JSON.parse(r.stdout)) { walk(project.dependencies); walk(project.optionalDependencies); }
+    if (seen.size === 0) throw new Error('pnpm list --prod in orca/mobile listed no package');
+}
+
+// --- cache -------------------------------------------------------------------------
+
+/** sha256 of what can change the shipped set: orca/ HEAD, orca-overlay/, the lockfiles, this file. */
+export function cacheKey(repoRoot, orcaDir) {
+    const h = createHash('sha256');
+    h.update(`orca ${execFileSync('git', ['-C', orcaDir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()}\n`);
+    const overlay = execFileSync('git', ['-C', repoRoot, 'ls-files', '-z', '--', 'orca-overlay'], { encoding: 'utf8' }).split('\0').filter(Boolean).sort();
+    for (const f of overlay) h.update(`overlay ${f} ${createHash('sha256').update(readFileSync(join(repoRoot, f))).digest('hex')}\n`);
+    for (const f of ['pnpm-lock.yaml', 'mobile/pnpm-lock.yaml', SELF]) {
+        const abs = resolve(orcaDir, f);
+        h.update(`file ${f === SELF ? 'self' : f} ${existsSync(abs) ? createHash('sha256').update(readFileSync(abs)).digest('hex') : 'absent'}\n`);
+    }
+    return h.digest('hex');
+}
+
 // --- the derivation ----------------------------------------------------------------
 
 /**
@@ -187,11 +276,24 @@ export async function orcaShippedPackages({ repoRoot, orcaDir = join(repoRoot, '
     if (!existsSync(join(orcaDir, 'out/orcad/orcad.js'))) {
         return { skip: `no built orca/ (run ${BUILD_ORCA})` };
     }
+    const key = cacheKey(repoRoot, orcaDir);
+    const cacheFile = join(repoRoot, '.mozbuild/orca-shipped', `${key}.json`);
+    if (existsSync(cacheFile)) {
+        log(`Orca shipped set from the cache (key ${key.slice(0, 12)})`);
+        return { packages: JSON.parse(readFileSync(cacheFile, 'utf8')).packages, key, cacheHit: true };
+    }
+    log(`Orca shipped set not cached (key ${key.slice(0, 12)}); deriving from the bundles`);
     const collector = new Collector(repoRoot);
     await orcadInputs(orcaDir, collector);
+    webInputs(repoRoot, orcaDir, key, collector, log);
+    mobileInputs(repoRoot, orcaDir, collector);
     const packages = collector.packages();
+    for (const b of BUNDLES) if (!packages.some((p) => p.shippedIn.includes(b))) throw new Error(`the derivation found no package in ${b}, which cannot be right`);
     checkKnownPositive(orcaDir, packages);
-    return { packages };
+    mkdirSync(dirname(cacheFile), { recursive: true });
+    writeFileSync(`${cacheFile}.tmp`, `${JSON.stringify({ key, packages }, null, 1)}\n`);
+    renameSync(`${cacheFile}.tmp`, cacheFile);
+    return { packages, key, cacheHit: false };
 }
 
 // The agent SDK writes its version into orcad-server.js; a derivation that finds the

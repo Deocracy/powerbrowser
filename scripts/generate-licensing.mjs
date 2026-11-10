@@ -609,6 +609,25 @@ async function selfTest() {
         report(missing.includes('not-installed'), `an unresolvable declared dependency goes red naming it: ${missing}`);
         const absent = failOf(() => theiaClosure(join(tmp, 'nowhere/node_modules'), baseApp));
         report(absent.includes('yarn install'), `an absent node_modules goes red with the install step: ${absent}`);
+
+        // Orca: fixture package sets stand in for the bundle derivation.
+        const op = (name, version, text = MIT) => ({ name, version, license: 'MIT', text, dir: `orca/node_modules/${name}`, shippedIn: ['orcad'] });
+        const shipped = [op('o-one', '1.0.0'), op('o-two', '2.0.0', 'Other licence\n')];
+        const withOrca = renderNotices({ gecko, packages: theiaClosure(nm, baseApp), orca: renderOrcaSection(shipped), node });
+        const extra = compareOrcaSets([...shipped, op('o-new', '3.0.0')], orcaSectionOf(withOrca).text).join(' ');
+        report(extra.includes('shipped but missing from the notices: o-new@3.0.0'), `plant: a shipped package absent from the Orca notices goes red naming it: ${extra}`);
+        const gone = compareOrcaSets(shipped.slice(1), orcaSectionOf(withOrca).text).join(' ');
+        report(gone.includes('in the Orca notices but not shipped: o-one@1.0.0'), `plant: an Orca notice for a package that does not ship goes red naming it: ${gone}`);
+        const written = (await runOrca(true, { noticesText: withOrca, derive: async () => ({ packages: [...shipped, op('o-new', '3.0.0')] }) })).text;
+        const before = orcaSectionOf(withOrca);
+        const after = orcaSectionOf(written);
+        report(written.slice(0, after.start) === withOrca.slice(0, before.start) && written.slice(after.end) === withOrca.slice(before.end)
+            && after.text.includes('o-new@3.0.0') && compareOrcaSets([...shipped, op('o-new', '3.0.0')], after.text).length === 0,
+        'control: --write-orca on a fixture notices file changes only the Orca section bytes');
+        report(withOrca.slice(0, withOrca.indexOf(ORCA_HEADING)) === baseline.slice(0, baseline.indexOf('== Node.js runtime')),
+            'control: the Gecko and Theia sections render byte-identically through the shared licence grouping, with or without the Orca section');
+        const skipped = await runOrca(false, { noticesText: withOrca, derive: async () => ({ skip: 'fixture' }) });
+        report(skipped.failures.length === 0, 'control: no built orca/ is a SKIP, not a red');
     } finally {
         rmSync(tmp, { recursive: true, force: true });
     }
