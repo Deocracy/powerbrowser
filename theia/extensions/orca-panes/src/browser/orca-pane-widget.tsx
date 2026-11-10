@@ -77,6 +77,15 @@ export class OrcaPaneWidget extends ReactWidget {
         this.mountOnce();
     }
 
+    /** A widget attached where it is already visible (a new split tab bar) gets no after-show message. */
+    protected override onAfterAttach(msg: Message): void {
+        super.onAfterAttach(msg);
+        if (this.isVisible) {
+            this.shown = true;
+            this.mountOnce();
+        }
+    }
+
     protected mountOnce(): void {
         if (!this.shown || !this.host || this.mounting || this.isDisposed) {
             return;
@@ -93,7 +102,9 @@ export class OrcaPaneWidget extends ReactWidget {
 
     protected override onActivateRequest(msg: Message): void {
         super.onActivateRequest(msg);
-        const focusable = this.host?.querySelector<HTMLElement>('textarea, input, [tabindex]:not([tabindex="-1"]), button, [contenteditable="true"]');
+        // Rendered elements only: an isolated terminal leaf's root also holds its tab's other leaves' xterms, hidden.
+        const candidates = this.host?.querySelectorAll<HTMLElement>('textarea, input, [tabindex]:not([tabindex="-1"]), button, [contenteditable="true"]') ?? [];
+        const focusable = Array.from(candidates).find(element => element.getClientRects().length > 0);
         (focusable ?? this.node).focus();
     }
 
