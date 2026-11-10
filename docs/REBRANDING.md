@@ -311,6 +311,12 @@ with the OpenCode adapter. A manifest that still carries it now fails with
 | `upstreams.orca_tag` | Optional | Nothing is emitted, and `scripts/fetch-orca.sh` fails naming `node scripts/generate.mjs`; stating it without `upstreams.orca_commit` is a hard failure | `generated/upstream-pins.env` (`UPSTREAM_ORCA_TAG`), `scripts/fetch-orca.sh` |
 | `upstreams.orca_commit` | Optional | Nothing is emitted, and `scripts/fetch-orca.sh` fails naming `node scripts/generate.mjs`; stating it without `upstreams.orca_tag` is a hard failure; must be the peeled commit, never the tag object | `generated/upstream-pins.env` (`UPSTREAM_ORCA_COMMIT`), `scripts/fetch-orca.sh` |
 
+### `[orca]` — the Orca overlay gate (one optional key)
+
+| Setting | Required? | If omitted | Reaches |
+|---|---|---|---|
+| `orca.seam_cap` | Optional | Inherits this platform's value, 10 | `scripts/verify-orca-overlay.mjs` only: the most upstream Orca files `orca-overlay/` may patch; nothing is emitted from it |
+
 ### `[[variants]]` — build variants (every key required per element)
 
 | Setting | Required? | If omitted | Reaches |

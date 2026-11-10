@@ -3866,6 +3866,7 @@ run_own_checks() {
     # git -C orca rev-parse HEAD:<path>, the patched paths from the patches' diff headers,
     # the changed-line counts from git apply --numstat. Steps that need orca/ SKIP by a line.
     "orca-overlay|node $REPO_ROOT/scripts/verify-orca-overlay.mjs"
+    "orca-overlay-self-test|node $REPO_ROOT/scripts/verify-orca-overlay.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6435,6 +6436,10 @@ run_own_checks() {
       # surviving teardown. The pairing URL is redacted from all output. One named SKIP line
       # when no built orca/, no built PowerBrowser, or an installed Orca exists.
       "orca-slotless-start|node $REPO_ROOT/scripts/verify-orca-slotless-start.mjs"
+      # NEW (62-01, OVL-05, P62-20): orca-overlay-built. Each PB-added file under orca-overlay/files
+      # carries the literal pb-overlay:<its Orca-root path>, which must be in a .js file under
+      # orca/out/web or orca/out/orcad (node_modules never counts). Passes as vacuous at zero files.
+      "orca-overlay-built|node $REPO_ROOT/scripts/verify-orca-overlay.mjs --built"
     )
   fi
 
