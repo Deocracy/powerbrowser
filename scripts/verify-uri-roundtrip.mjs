@@ -452,6 +452,7 @@ async function main() {
         process.exit(0);
     }
 
+    let runPbOrca = false;
     // WINDOWS 14: empty URL -- this check reads the shell, never a URL page.
     await withFirefoxPage('', async ({ evaluate, waitFor }) => {
         await waitFor('window.theia && window.theia.container ? true : false');
@@ -491,16 +492,7 @@ async function main() {
         if (!onlyScheme || onlyScheme === 'pb-orca') {
             const skip = pbOrcaSkip();
             if (skip) results.push({ label: 'pb-orca', skip });
-            else {
-                let outcome;
-                try {
-                    outcome = JSON.parse(await evaluate(buildPbOrcaExpression()));
-                } catch (e) {
-                    outcome = { rows: [{ label: 'pb-orca rows', ok: false, reason: e.message }] };
-                }
-                if (outcome.skip) results.push({ label: 'pb-orca', skip: outcome.skip });
-                else for (const r of outcome.rows) results.push({ carveOut: false, ...r });
-            }
+            else runPbOrca = true; // in their own Orca session after this one
         }
 
         if (!onlyScheme) {
@@ -521,6 +513,29 @@ async function main() {
             }
         }
     });
+
+    // The pb-orca rows need PowerBrowser's own orcad and a booted pane bundle: the shared Orca tabs session
+    // (scripts/lib/orca-tabs-live.mjs). Its worktree is selected through the bundle's setActiveWorktree, as an
+    // activated Orca tab does (P64-23), so New Orca Terminal has a worktree while no hosted tab exists yet.
+    if (runPbOrca) {
+        const lib = await import('./lib/orca-tabs-live.mjs');
+        let outcome;
+        try {
+            outcome = await lib.withOrcaTabsSession({ log: () => {} }, async (ctx) => {
+                const listed = ctx.orca('worktree', 'list');
+                const id = (listed?.result?.worktrees ?? []).find((w) => String(w.id).endsWith(`::${ctx.repo}`))?.id;
+                if (!id) return { rows: [{ label: 'pb-orca rows', ok: false, reason: 'the session worktree is not in the Orca CLI list' }] };
+                await ctx.bundle(`(m.setActiveWorktree(${JSON.stringify(id)}), true)`);
+                // Theia's active widget follows DOM focus; the frame is focused as orca-tabs-live does.
+                await ctx.focusTheiaFrame();
+                return JSON.parse(await ctx.app.evaluate(buildPbOrcaExpression()));
+            });
+        } catch (e) {
+            outcome = { rows: [{ label: 'pb-orca rows', ok: false, reason: e.message }] };
+        }
+        if (outcome.skip) results.push({ label: 'pb-orca', skip: outcome.skip });
+        else for (const r of outcome.rows) results.push({ carveOut: false, ...r });
+    }
 
     let passCount = 0;
     let failCount = 0;
