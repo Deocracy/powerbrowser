@@ -3909,6 +3909,9 @@ run_own_checks() {
     # orca-mobile-skew-self-test: fixture tag listings and constants with no network, judged by Orca's own
     # evaluateCompat from the pinned tree; plants desktop-too-old, mobile-too-old, no app tag, constants moved.
     "orca-mobile-skew-self-test|node $REPO_ROOT/scripts/verify-orca-mobile-protocol.mjs --skew-self-test"
+    # orca-seam-export-self-test (OVL-06, P68-18/P68-36): a seam exported against a file:// fixture main with the
+    # template's derived headings, its overlay import's one pb-overlay: literal replaced, and no PB token left.
+    "orca-seam-export-self-test|node $REPO_ROOT/scripts/export-orca-seam-pr.mjs --self-test"
     # NEW (63-06, EXT-02, P63-26/P63-35/P63-36): orca-bridge-dir, the chrome half of the bridge folder for linux,
     # darwin and win32 (OrcaEnv's nodePlatform, bridgeDirFor and bridgeFileFor); the orcad-data-root literal joined
     # across OrcaEnv, orca-agents' protocol file and its wrapper, a named SKIP of that join alone while lane p63-03

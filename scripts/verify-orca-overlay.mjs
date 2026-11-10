@@ -27,12 +27,25 @@
 // Limit: a marker literal in a bundle proves the file was compiled into it,
 // not that its code runs.
 //
+// Upstream key (Phase 68, OVL-06, P68-19, P68-36, D-27, D-31): every row
+// carries upstream = { class, pr }, class one of UPSTREAM_CLASSES, pr null or
+// https://github.com/<owner>/<repo>/pull/<n> with owner and repo parsed from
+// the REMOTE= line of scripts/fetch-orca.sh (a missing line is red, never a
+// default). orca-overlay/upstream/<seam-id>/ holds upstream-only material (an
+// upstream.json with string keys title, problem, change and testing, and test
+// files at Orca-relative paths); each directory name must equal a seam id, the
+// patch file name without .patch. Nothing under upstream/ reaches a build:
+// build-orca.sh copies files/ and applies patches/ only.
+// --upstream-prs: red until each class in PR_CLASSES has a row with a non-null
+// pr (D-31 removed the terminal-provider class); 68-05 registers that row.
+//
 // Tier: default quick (steps that need orca/ print one SKIP line when it is
 // not fetched); --built full; --self-test quick (hermetic mkdtemp fixtures).
 //
 // Usage:
 //   node scripts/verify-orca-overlay.mjs
 //   node scripts/verify-orca-overlay.mjs --built
+//   node scripts/verify-orca-overlay.mjs --upstream-prs
 //   node scripts/verify-orca-overlay.mjs --self-test
 
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -42,6 +55,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { parse } from './lib/toml.cjs';
+import { readRemote } from './verify-orca-mobile-protocol.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-overlay';
@@ -50,7 +64,11 @@ const APPLY = join(REPO_ROOT, 'scripts', 'apply-patches.sh');
 const REGENERATE = join(REPO_ROOT, 'scripts', 'regenerate-patches.sh');
 // P62-17, D-16: a seam is "one-to-few-line"; added plus deleted lines per upstream path.
 const SEAM_LINE_BOUND = 20;
-const ROW_KEYS = ['patch', 'path', 'reason', 'upstream_blob'];
+const ROW_KEYS = ['patch', 'path', 'reason', 'upstream', 'upstream_blob'];
+// D-27 as amended by D-31: the seam classes, and the ones upstream must receive a PR for.
+const UPSTREAM_CLASSES = ['browser-provider', 'web-entry', 'pb-only'];
+const PR_CLASSES = ['browser-provider', 'web-entry'];
+const UPSTREAM_DOC_KEYS = ['change', 'problem', 'testing', 'title'];
 const MANIFEST_REL = 'configuration.toml';
 const SOURCE_KINDS = new Set(['.ts', '.tsx', '.js', '.mjs', '.cjs']);
 // P62-20: the literal each PB-added source file carries, followed by its path relative to the Orca root.
@@ -111,6 +129,19 @@ function listFiles(root, skip = () => false) {
 
 const markersIn = (text) => new Set([...text.matchAll(MARKER)].map((m) => m[1]));
 const kindOf = (p) => (p.match(/\.[A-Za-z0-9]+$/) ?? [''])[0];
+export const seamId = (row) => row.patch.slice('patches/'.length, -'.patch'.length);
+
+// owner/repo of the Orca remote, from fetch-orca.sh's REMOTE= line (https://github.com/<owner>/<repo>[.git]).
+export function remoteRepo(repoRoot = REPO_ROOT) {
+    const m = readRemote(repoRoot).match(/^https:\/\/github\.com\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?$/);
+    if (!m) throw new Error('the REMOTE= line of scripts/fetch-orca.sh is not https://github.com/<owner>/<repo>[.git]');
+    return { owner: m[1], repo: m[2] };
+}
+
+// --upstream-prs: the PR classes with no row carrying a non-null pr.
+export function missingPrClasses(rows) {
+    return PR_CLASSES.filter((c) => !rows.some((r) => r?.upstream?.class === c && r.upstream.pr !== null && r.upstream.pr !== undefined));
+}
 
 function lastLine(r) {
     return `${r.stdout ?? ''}\n${r.stderr ?? ''}`.split('\n').map((l) => l.trim()).filter(Boolean).find((l) => l.includes('FAIL')) ?? `exit ${r.status}`;
@@ -135,6 +166,8 @@ export function check({ repoRoot = REPO_ROOT, overlayDir = join(repoRoot, 'orca-
             }
         }
     }
+    let repo = null;
+    try { repo = remoteRepo(repoRoot); } catch (err) { fails.push(err.message); }
     const seen = new Set();
     rows = rows.filter((r, n) => {
         const bad = (why) => { fails.push(`seams.json row ${n}: ${why}`); return false; };
@@ -145,8 +178,32 @@ export function check({ repoRoot = REPO_ROOT, overlayDir = join(repoRoot, 'orca-
         if (!/^[0-9a-f]{40}$/.test(r.upstream_blob)) return bad(`upstream_blob of ${r.path} is not a 40-hex blob id`);
         if (!/^patches\/[A-Za-z0-9._-]+\.patch$/.test(r.patch)) return bad(`patch of ${r.path} is not a .patch file directly under patches/`);
         if (typeof r.reason !== 'string' || !r.reason.trim() || r.reason.includes('\n')) return bad(`reason of ${r.path} is not one line`);
+        const u = r.upstream;
+        if (!u || typeof u !== 'object' || Array.isArray(u) || Object.keys(u).sort().join() !== 'class,pr') return bad(`upstream of ${r.path} is not an object with exactly class and pr`);
+        if (!UPSTREAM_CLASSES.includes(u.class)) return bad(`upstream class '${u.class}' of ${r.path} is not one of ${UPSTREAM_CLASSES.join(', ')} (D-27, D-31)`);
+        if (u.pr !== null) {
+            const m = typeof u.pr === 'string' && u.pr.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/[0-9]+$/);
+            if (!m) return bad(`upstream pr of ${r.path} is not null or a pull URL https://github.com/<owner>/<repo>/pull/<n>: ${u.pr}`);
+            if (repo && (m[1] !== repo.owner || m[2] !== repo.repo)) return bad(`upstream pr of ${r.path} is on ${m[1]}/${m[2]}, not on the Orca remote ${repo.owner}/${repo.repo} (scripts/fetch-orca.sh REMOTE)`);
+        }
         return true;
     });
+
+    // Upstream-only material: one directory per seam id, never copied into a build.
+    const upstreamDir = join(overlayDir, 'upstream');
+    if (existsSync(upstreamDir)) {
+        const ids = new Set(rows.map(seamId));
+        for (const e of readdirSync(upstreamDir, { withFileTypes: true })) {
+            if (!e.isDirectory() || !ids.has(e.name)) { fails.push(`upstream material for unknown seam ${e.name} (orca-overlay/upstream/ holds one directory per seam id: ${[...ids].join(', ') || 'none'})`); continue; }
+            const doc = join(upstreamDir, e.name, 'upstream.json');
+            if (!existsSync(doc)) continue;
+            let d;
+            try { d = JSON.parse(readFileSync(doc, 'utf8')); } catch (err) { fails.push(`upstream/${e.name}/upstream.json does not parse: ${err.message}`); continue; }
+            if (!d || typeof d !== 'object' || Object.keys(d).sort().join() !== UPSTREAM_DOC_KEYS.join() || !UPSTREAM_DOC_KEYS.every((k) => typeof d[k] === 'string' && d[k].trim())) {
+                fails.push(`upstream/${e.name}/upstream.json is not an object with exactly the non-empty string keys ${UPSTREAM_DOC_KEYS.join(', ')}`);
+            }
+        }
+    }
 
     // c. patch files against rows, both ways; every patched path is its row's declared path.
     const patchFiles = existsSync(patchesDir) ? readdirSync(patchesDir).filter((f) => f.endsWith('.patch')).sort() : [];
@@ -348,13 +405,17 @@ function runSelfTest() {
         const ADDED = 'src/pb/.fixture-added.ts';
         const OTHER = 'src/pb/.fixture-other.ts';
         const src = (p) => `export const id = 'pb-overlay:${p}'\n`;
-        const rowA = { path: 'src/a.ts', upstream_blob: blob('src/a.ts'), patch: 'patches/010-a.patch', reason: 'fixture seam' };
-        const rowTiny = { path: 'src/tiny.ts', upstream_blob: blob('src/tiny.ts'), patch: 'patches/020-tiny.patch', reason: 'fixture seam' };
+        const up = (cls) => ({ class: cls, pr: null });
+        const rowA = { path: 'src/a.ts', upstream_blob: blob('src/a.ts'), patch: 'patches/010-a.patch', reason: 'fixture seam', upstream: up('browser-provider') };
+        const rowTiny = { path: 'src/tiny.ts', upstream_blob: blob('src/tiny.ts'), patch: 'patches/020-tiny.patch', reason: 'fixture seam', upstream: up('web-entry') };
+        const PR = (n) => `https://github.com/fixture-owner/fixture-repo/pull/${n}`;
+        const DOC = `${JSON.stringify({ title: 't', problem: 'p', change: 'c', testing: 'x' })}\n`;
         const base = () => ({
             cap: 10,
-            seams: [{ ...rowA }],
+            seams: [structuredClone(rowA)],
             patches: { '010-a.patch': P.a3 },
             files: { [ADDED]: src(ADDED) },
+            upstream: { '010-a/upstream.json': DOC, '010-a/src/a.test.ts': 'export {}\n' },
             out: { 'out/web/assets/.fixture-app.js': `const a="pb-overlay:${ADDED}";` },
         });
         const run = (spec, orcaDir = orca) => {
@@ -363,7 +424,9 @@ function runSelfTest() {
             if (spec.seams) put(overlay, 'seams.json', `${JSON.stringify({ seams: spec.seams }, null, 2)}\n`);
             for (const [f, body] of Object.entries(spec.patches)) put(overlay, `patches/${f}`, body);
             for (const [f, body] of Object.entries(spec.files)) put(overlay, `files/${f}`, body);
+            for (const [f, body] of Object.entries(spec.upstream ?? {})) put(overlay, `upstream/${f}`, body);
             for (const [f, body] of Object.entries(spec.out)) put(orca, f, body);
+            put(tmp, 'scripts/fetch-orca.sh', 'REMOTE="https://github.com/fixture-owner/fixture-repo.git"\n');
             put(tmp, MANIFEST_REL, spec.cap === null ? '[other]\nkey = 1\n' : `[orca]\nseam_cap = ${spec.cap}\n`);
             const r = check({ repoRoot: tmp, overlayDir: overlay, orcaDir, cap: readCap(tmp) });
             const b = checkBuilt({ repoRoot: tmp, overlayDir: overlay, orcaDir });
@@ -371,11 +434,11 @@ function runSelfTest() {
         };
 
         const controls = [
-            ['zero seams, zero files', { ...base(), seams: [], patches: {}, files: {}, out: { 'out/web/a.js': '1' } }],
-            ['zero seams, no seams.json', { ...base(), seams: null, patches: {}, files: {} }],
+            ['zero seams, zero files', { ...base(), seams: [], patches: {}, files: {}, upstream: {}, out: { 'out/web/a.js': '1' } }],
+            ['zero seams, no seams.json', { ...base(), seams: null, patches: {}, files: {}, upstream: {} }],
             ['one 3-line seam', { ...base(), files: {} }],
-            ['one overlay file, marker compiled into out/web only', { ...base(), seams: [], patches: {} }],
-            ['one seam and one overlay file (the base of every plant)', base()],
+            ['one overlay file, marker compiled into out/web only', { ...base(), seams: [], patches: {}, upstream: {} }],
+            ['one seam and one overlay file and its upstream/ material (the base of every plant)', base()],
         ];
         for (const [name, spec] of controls) {
             const r = run(spec);
@@ -389,13 +452,13 @@ function runSelfTest() {
         }
         console.log(`${NAME} self-test: control green -- no orca/: tracked rules pass, the orca/ steps and the built row SKIP by a line`);
 
-        const two = (s) => { s.seams.push({ ...rowTiny }); s.patches['020-tiny.patch'] = P.tiny1; };
+        const two = (s) => { s.seams.push(structuredClone(rowTiny)); s.patches['020-tiny.patch'] = P.tiny1; };
         const plants = [
-            { name: 'full-rewrite-of-a-small-file', naming: 'whole-file replacement', apply: (s) => { s.seams = [{ ...rowTiny }]; s.patches = { '020-tiny.patch': P.tinyRewrite }; } },
-            { name: 'deleted-file-patch', naming: 'deleted file mode', apply: (s) => { s.seams = [{ ...rowTiny }]; s.patches = { '020-tiny.patch': P.tinyDelete }; } },
+            { name: 'full-rewrite-of-a-small-file', naming: 'whole-file replacement', apply: (s) => { s.seams = [structuredClone(rowTiny)]; s.patches = { '020-tiny.patch': P.tinyRewrite }; } },
+            { name: 'deleted-file-patch', naming: 'deleted file mode', apply: (s) => { s.seams = [structuredClone(rowTiny)]; s.patches = { '020-tiny.patch': P.tinyDelete }; } },
             { name: 'new-file-patch', naming: 'new file mode', apply: (s) => { s.seams.push({ ...rowTiny, path: 'src/.fixture-new.ts' }); s.patches['020-tiny.patch'] = P.newFile; } },
             { name: 'patch-with-no-row', naming: 'patch with no seams.json row (undeclared seam): patches/020-tiny.patch', apply: (s) => { s.patches['020-tiny.patch'] = P.tiny1; } },
-            { name: 'row-with-no-patch', naming: 'seams.json row whose patch is missing: patches/020-tiny.patch', apply: (s) => { s.seams.push({ ...rowTiny }); } },
+            { name: 'row-with-no-patch', naming: 'seams.json row whose patch is missing: patches/020-tiny.patch', apply: (s) => { s.seams.push(structuredClone(rowTiny)); } },
             { name: 'patch-touches-undeclared-path', naming: 'touches src/tiny.ts', apply: (s) => { s.patches['010-a.patch'] = P.aAndTiny; } },
             { name: 'two-seams-over-cap-1', naming: '2 seams over the cap of 1', apply: (s) => { two(s); s.cap = 1; } },
             { name: 'cap-key-absent', naming: '[orca] seam_cap is absent', apply: (s) => { s.cap = null; } },
@@ -412,6 +475,12 @@ function runSelfTest() {
             { name: 'marker-owned-by-another-file', naming: `marker owned by ${ADDED}`, apply: (s) => { s.files[OTHER] = src(OTHER) + src(ADDED); s.out['out/orcad/.fixture-b.js'] = `const b="pb-overlay:${OTHER}";`; } },
             { name: 'file-of-unclassified-kind', naming: 'unclassified overlay file kind src/pb/.fixture-style.css', apply: (s) => { s.files['src/pb/.fixture-style.css'] = '/* pb-overlay:src/pb/.fixture-style.css */\n'; } },
             { name: 'built-marker-absent', naming: `not compiled by build:web or build:orcad: ${ADDED}`, apply: (s) => { s.out = { 'out/web/assets/.fixture-app.js': 'const a=1;' }; } },
+            { name: 'upstream-key-missing', naming: 'keys are not exactly patch, path, reason, upstream, upstream_blob', apply: (s) => { delete s.seams[0].upstream; } },
+            { name: 'upstream-class-unknown', naming: "upstream class 'terminal-provider'", apply: (s) => { s.seams[0].upstream.class = 'terminal-provider'; } },
+            { name: 'upstream-pr-on-another-repository', naming: 'is on other-owner/fixture-repo, not on the Orca remote fixture-owner/fixture-repo', apply: (s) => { s.seams[0].upstream.pr = 'https://github.com/other-owner/fixture-repo/pull/1'; } },
+            { name: 'upstream-pr-not-a-pull-url', naming: 'is not null or a pull URL', apply: (s) => { s.seams[0].upstream.pr = PR(1).replace('/pull/', '/issues/'); } },
+            { name: 'upstream-dir-for-unknown-seam', naming: 'upstream material for unknown seam 099-gone', apply: (s) => { s.upstream['099-gone/upstream.json'] = DOC; } },
+            { name: 'upstream-json-missing-key', naming: 'upstream/010-a/upstream.json is not an object with exactly', apply: (s) => { s.upstream['010-a/upstream.json'] = '{ "title": "t" }\n'; } },
             { name: 'built-marker-only-in-node_modules', naming: `not compiled by build:web or build:orcad: ${ADDED}`, apply: (s) => { s.out = { 'out/web/node_modules/x/index.js': `const a="pb-overlay:${ADDED}";`, 'out/orcad/orcad.js': '1' }; } },
         ];
         let failures = 0;
@@ -428,15 +497,42 @@ function runSelfTest() {
             const after = run(base());
             if (after.fails.length) { console.error(`${NAME} self-test: FAIL -- plant ${p.name} did not clean up: ${after.fails.join(' | ')}`); return 1; }
         }
-        if (failures) {
-            console.error(`${NAME} self-test: FAIL -- ${failures} of ${plants.length} plant(s) did not go red naming the drift`);
+        // --upstream-prs: control with a PR for each class (and the rows still green), plant with web-entry missing.
+        const both = base();
+        two(both);
+        both.seams[0].upstream.pr = PR(1);
+        both.seams[1].upstream.pr = PR(2);
+        const bothRun = run(both);
+        const bothMissing = missingPrClasses(both.seams);
+        if (bothRun.fails.length || bothMissing.length) {
+            console.error(`${NAME} self-test: FAIL -- --upstream-prs control (a PR for ${PR_CLASSES.join(' and ')}) is not green: ${[...bothRun.fails, ...bothMissing].join(' | ')}`);
             return 1;
         }
-        console.log(`${NAME} self-test: PASS -- ${plants.length} planted faults each went red naming the drift`);
+        console.log(`${NAME} self-test: control green -- --upstream-prs with a PR on ${PR_CLASSES.join(' and ')}`);
+        both.seams[1].upstream.pr = null;
+        const one = missingPrClasses(both.seams);
+        if (one.join() !== 'web-entry') { console.error(`  FAIL upstream-prs-one-class-missing -> named '${one.join(', ')}', want web-entry`); failures++; } else {
+            console.log("  ok upstream-prs-one-class-missing -> red, naming 'web-entry'");
+        }
+        const total = plants.length + 1;
+        if (failures) {
+            console.error(`${NAME} self-test: FAIL -- ${failures} of ${total} plant(s) did not go red naming the drift`);
+            return 1;
+        }
+        console.log(`${NAME} self-test: PASS -- ${total} planted faults each went red naming the drift`);
         return 0;
     } finally {
         rmSync(tmp, { recursive: true, force: true });
     }
+}
+
+function runUpstreamPrs() {
+    const rows = JSON.parse(readFileSync(join(REPO_ROOT, 'orca-overlay', 'seams.json'), 'utf8')).seams;
+    const missing = missingPrClasses(rows);
+    if (!missing.length) { console.log(`${NAME}-upstream-prs: PASS -- ${PR_CLASSES.map((c) => `${c} ${rows.filter((r) => r.upstream?.class === c && r.upstream.pr).map((r) => r.upstream.pr).join(' ')}`).join('; ')}`); return 0; }
+    for (const c of missing) console.error(`${NAME}-upstream-prs: FAIL -- class ${c} has no seams.json row with a non-null upstream pr`);
+    console.error('  Next step: the owner opens the issue and PR (68-05 hand-off list) and records the URL in seams.json');
+    return 1;
 }
 
 // The CLI runs only when this file is the entry point, so check() can be imported.
@@ -445,13 +541,14 @@ const isEntryPoint = (() => {
 })();
 if (isEntryPoint) {
     const args = process.argv.slice(2);
-    const unknown = args.filter((a) => a !== '--self-test' && a !== '--built');
+    const unknown = args.filter((a) => a !== '--self-test' && a !== '--built' && a !== '--upstream-prs');
     if (unknown.length || args.length > 1) {
-        console.error(`${NAME}: unknown argument ${unknown[0] ?? args[1]} (usage: node ${SELF_REL} [--built | --self-test])`);
+        console.error(`${NAME}: unknown argument ${unknown[0] ?? args[1]} (usage: node ${SELF_REL} [--built | --upstream-prs | --self-test])`);
         console.error(`  Next step: run: node ${SELF_REL}, or add --self-test to prove the check discriminates.`);
         process.exit(2);
     }
     if (args[0] === '--self-test') process.exit(runSelfTest());
+    if (args[0] === '--upstream-prs') process.exit(runUpstreamPrs());
     const { code, lines } = args[0] === '--built' ? renderBuilt(checkBuilt()) : render(check({ cap: readCap(REPO_ROOT) }));
     for (const l of lines) (code && l.includes('FAIL') ? console.error : console.log)(l);
     process.exit(code);
