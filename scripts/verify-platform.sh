@@ -3906,6 +3906,14 @@ run_own_checks() {
     # is unmerged; and writePrivateFile's A-11 call order. Quick and hermetic; the self-test plants 10 faults.
     "orca-bridge-dir|node $REPO_ROOT/scripts/verify-orca-bridge-dir.mjs"
     "orca-bridge-dir-self-test|node $REPO_ROOT/scripts/verify-orca-bridge-dir.mjs --self-test"
+    # NEW (63-03, TERM-02/EXT-02, P63-15..P63-26): orca-agent-hooks-self-test. Pure verdicts over fixture
+    # observations (relay order, PTY hook names, wrapper identity, planted ORCA_ name, stdout, exit code, degrade)
+    # and fixture copies of the orca-agents sources (process.env reads, stdout writes, registerOverride, preference
+    # setters, settings.json); a child Node imports the real module and must print and start nothing.
+    "orca-agent-hooks-self-test|node $REPO_ROOT/scripts/verify-orca-agent-hooks.mjs --self-test"
+    # orca-agent-status-live-self-test: the live row's pure verdicts (status order, waiting, record growth, prompt
+    # cap, agent PTY under Orca's terminal daemon, quit survivors, bridge-folder files) over fixtures.
+    "orca-agent-status-live-self-test|node $REPO_ROOT/scripts/verify-orca-agent-status-live.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6504,6 +6512,17 @@ run_own_checks() {
       # Each prints one named SKIP line when no built orca/ or no built PowerBrowser exists.
       "orca-hidden-electron|node $REPO_ROOT/scripts/verify-orca-hidden-electron.mjs"
       "orca-service-live|node $REPO_ROOT/scripts/verify-orca-service-live.mjs"
+      # NEW (63-03, TERM-02/EXT-02, P63-15/P63-26): orca-agent-hooks. One built orcad with a scratch HOME and data
+      # root (the user's ~/.orca and ~/.claude are never touched). Orca's own managed Claude hook script runs on
+      # synthetic events derived from the pinned source; the wrapper is launched exactly as the Claude Code
+      # extension would launch it, with a stub claude. No model turn. A named SKIP when orca/ or orca-agents is
+      # not built.
+      "orca-agent-hooks|node $REPO_ROOT/scripts/verify-orca-agent-hooks.mjs"
+      # orca-agent-status-live: a real claude through agent launch in a launched PowerBrowser; working, waiting and
+      # done, the agent PTY under Orca's terminal daemon, the bridge-folder files, agents ended on quit. One prompt,
+      # at most two model turns, on the owner's login; Claude session records compared before and after, never with
+      # a constant. Run under flock /home/chris/coding/Power-Browser/.git/pb-live.lock. SKIP when not built.
+      "orca-agent-status-live|node $REPO_ROOT/scripts/verify-orca-agent-status-live.mjs"
     )
   fi
 
