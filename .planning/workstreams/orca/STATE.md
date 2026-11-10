@@ -108,3 +108,4 @@ Resume file: .planning/workstreams/orca/phases/59-carry-forward-from-v1-5-and-v1
 |-------|-------|--------|
 | 59 | verification_deferred_human (59-06 checklist, verify-work 29/30/31; owner steps in p59-owner) | end-of-milestone pass (D-18): `/gsd-verify-work 59 --ws orca` |
 | 60 | verification_deferred_human (60-05 EXT-01 live session) | end-of-milestone pass (D-18): resume 60-05 Task 2 |
+| 62 | verified 5/5 (62-VERIFICATION.md); owner re-lock of scripts/verify-ng-027-reader-callers.mjs pending; browser-request clause of criterion 2 moves to Phase 66 | end-of-milestone pass (D-18): owner lock-checks; Phase 66 proves the browser request |
