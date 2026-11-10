@@ -214,7 +214,7 @@ function theiaGroups(packages) {
 
 // --- Node: the pinned runtime's LICENSE ---------------------------------------
 
-function readNodePin(path) {
+export function readNodePin(path) {
     const pin = readJson(path)['linux-x64'];
     const archive = String(pin?.url ?? '').split('/').pop();
     if (!/^v\d+\.\d+\.\d+$/.test(pin?.version ?? '') || !/^[0-9a-f]{64}$/.test(pin?.sha256 ?? '') || archive !== `node-${pin.version}-linux-x64.tar.xz`) {
@@ -227,7 +227,7 @@ function sha256(path) {
     return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
-function verifyArchive(path, pin) {
+export function verifyArchive(path, pin) {
     const got = sha256(path);
     if (got !== pin.sha256) {
         throw new Fail(`${NODE_ARCHIVE_DIR}/${pin.archive} hashes to ${got}, but ${NODE_PIN_REL} pins ${pin.sha256}. Next step: delete that archive and run: ${RERUN}`);
@@ -241,7 +241,7 @@ function mainCheckout() {
 }
 
 // Write mode only: copy or download into <archive>.part, verify the pin, then rename.
-async function fetchArchive(pin, archivePath) {
+export async function fetchArchive(pin, archivePath) {
     mkdirSync(dirname(archivePath), { recursive: true });
     const part = `${archivePath}.part`;
     try {

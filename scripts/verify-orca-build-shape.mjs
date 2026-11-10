@@ -35,7 +35,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
-    closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync, writeFileSync,
+    closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
@@ -45,7 +45,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-build-shape';
 const ARTIFACTS_REL = 'src/shared/orcad-artifacts.ts';
 const MARKER_CONSTANTS = ['ORCAD_SERVER_TARGET_FILENAME', 'ORCAD_NODE_RUNTIME_MARKER_FILENAME', 'ORCAD_VERSION_FILENAME'];
-const NODE_NAMES = new Set(['node', 'node.exe']);
+export const NODE_NAMES = new Set(['node', 'node.exe']);
 const ELECTRON_NAMES = new Set(['electron', 'electron.exe']);
 const ELF = Buffer.from([0x7f, 0x45, 0x4c, 0x46]);
 const PE = Buffer.from('MZ');
@@ -77,7 +77,8 @@ function isNativeBinary(path) {
 }
 
 // Depth-first over real directories; symlinks are neither followed nor reported.
-function walk(root, visit, skipTop = new Set()) {
+// Exported for 60-03's orca-slotless-start, which counts node executables under orca/out the same way.
+export function walk(root, visit, skipTop = new Set()) {
     const stack = [root];
     while (stack.length) {
         const dir = stack.pop();
@@ -228,13 +229,19 @@ function runSelfTest() {
     }
 }
 
-const args = process.argv.slice(2);
+// The CLI below runs only when this file is the entry point, so 60-03's probe can import walk.
+const isEntryPoint = (() => {
+    try { return realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; }
+})();
+const args = isEntryPoint ? process.argv.slice(2) : [];
 const unknown = args.filter((a) => a !== '--self-test');
 if (unknown.length) {
     console.error(`${NAME}: unknown argument ${unknown[0]} (usage: node scripts/verify-orca-build-shape.mjs [--self-test])`);
     process.exit(2);
 }
-if (args.includes('--self-test')) process.exit(runSelfTest());
-const { code, lines } = render(check(join(REPO_ROOT, 'orca')));
-for (const l of lines) (code ? console.error : console.log)(l);
-process.exit(code);
+if (isEntryPoint) {
+    if (args.includes('--self-test')) process.exit(runSelfTest());
+    const { code, lines } = render(check(join(REPO_ROOT, 'orca')));
+    for (const l of lines) (code ? console.error : console.log)(l);
+    process.exit(code);
+}
