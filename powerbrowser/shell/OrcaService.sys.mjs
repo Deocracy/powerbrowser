@@ -50,6 +50,8 @@ export const OrcaService = {
   _dataRoot: null,
   _effectiveRoot: null,
   _stateFilePath: null,
+  _bridgeDir: null,
+  _bridgePlatform: null,
   _nodePath: null,
   _orcadMain: null,
   _webClientRoot: null,
@@ -104,7 +106,7 @@ export const OrcaService = {
       // Never a home-directory fallback: orcad's data must sit under this profile or nowhere.
       return this._fail("resolving the profile folder", []);
     }
-    this._dataRoot = `${profileDir}/${OrcaEnv.ORCAD_DATA_ROOT_NAME}`;
+    this._dataRoot = OrcaEnv.dataRootFor(profileDir);
     this._stateFilePath = `${this._dataRoot}/${OrcaEnv.ORCAD_STATE_FILE_NAME}`;
     try {
       await PowerBrowserAPI.ensureDirectory(this._dataRoot);
@@ -119,6 +121,15 @@ export const OrcaService = {
         return false;
       }
       this._effectiveRoot = alias;
+    }
+
+    // Phase 63 (D-31, P63-35): the private folder chrome and the Theia backend share for hand-off files.
+    // TheiaService builds the same path from the same builders. orcad itself never needs it, so a folder
+    // that cannot be chosen costs the agent wrapper its data root, not the start.
+    this._bridgePlatform = OrcaEnv.nodePlatform(PowerBrowserProcesses.platform());
+    this._bridgeDir = await OrcaEnv.bridgeDirFor(this._dataRoot, name => PowerBrowserAPI.getEnv(name), this._bridgePlatform);
+    if (!this._bridgeDir) {
+      this._pushLog("Orca bridge folder not available; the agent wrapper and Orca tabs cannot find this Orca");
     }
 
     // The same Node rule as the Theia sidecar, on the same pref, so the two cannot diverge (D-14).
@@ -419,6 +430,15 @@ export const OrcaService = {
       // The next launch still finds orcad through its own lock; only the daemon record is lost.
       this._pushLog(`State file not written: ${messageOf(err)}`);
     }
+    // Phase 63 (P63-26): after ready, so the EXT-02 wrapper never finds a data root no orcad serves yet.
+    if (this._bridgeDir) {
+      try {
+        await PowerBrowserProcesses.writePrivateFile(this._bridgeDir, OrcaEnv.ORCAD_DATA_ROOT_FILE, `${this._effectiveRoot}\n`);
+      } catch (err) {
+        // The agent wrapper needs it; orcad itself runs without it.
+        this._pushLog(`Orca data root file not written: ${messageOf(err)}`);
+      }
+    }
     this._state = "ready";
     this._failureRows = [];
     this._pushLog(`orcad ready on ${OrcaEnv.ORCAD_BIND_HOST}:${this._port}, pid ${this._pid}, terminal daemon pid ${this._daemonPid}.`);
@@ -503,6 +523,13 @@ export const OrcaService = {
         // Best-effort; the next launch's reap verifies identity anyway.
       }
     }
+    if (this._bridgeDir) {
+      try {
+        await PowerBrowserAPI.removeStateFile(OrcaEnv.bridgeFileFor(this._bridgeDir, OrcaEnv.ORCAD_DATA_ROOT_FILE, this._bridgePlatform));
+      } catch {
+        // Best-effort; the next ready overwrites it.
+      }
+    }
     this._state = "stopped";
     this._pid = null;
     this._daemonPid = null;
@@ -545,6 +572,7 @@ export const OrcaService = {
       restartCount: this._restartCount,
       dataRoot: this._dataRoot,
       effectiveRoot: this._effectiveRoot,
+      bridgeDir: this._bridgeDir,
     };
   },
 
@@ -560,6 +588,8 @@ export const OrcaService = {
       ["Orca process ID", this._pid],
       ["Orca terminal daemon", this._daemonPid],
       ["Orca data root", this._dataRoot],
+      // Null once the start resolved means no folder could be chosen; before that the row is left out.
+      ["Orca bridge folder", this._bridgeDir ?? (this._dataRoot ? "not available" : null)],
       ...this._failureRows,
     ];
     return rows.filter(([, value]) => value !== null && value !== undefined && value !== "");

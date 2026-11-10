@@ -11007,4 +11007,43 @@ export const PowerBrowserProcesses = Object.freeze({
     const { AsyncShutdown } = ChromeUtils.importESModule("resource://gre/modules/AsyncShutdown.sys.mjs");
     AsyncShutdown.quitApplicationGranted.addBlocker(name, fn);
   },
+
+  //
+  // Phase 63 (P63-26, P63-36): writes `text` to `dir`/`name` for another process of the same user to read
+  // (orcad-data-root, the EXT-02 wrapper's way to find orcad's data root; Phase 64 adds its own hand-off
+  // files). writeStateFile cannot: it writes JSON. IOUtils has no mode option and opens a written file 0666
+  // under the umask, so the temporary sibling is created empty and exclusively, set to 0600 while it holds
+  // no byte, then written in place and moved over the target: no byte is ever readable by another user
+  // (67-RESEARCH A-11). `dir` is created 0700 and set to 0700 again on every call, since an existing folder
+  // keeps its old mode. A stale .tmp is removed first: an exclusive create then never writes through a
+  // planted file. Mode changes are skipped on Windows, where the folder under LOCALAPPDATA carries the
+  // user's own ACL. `name` is one path segment, so the write cannot leave `dir`. Rejects on any failure.
+  //
+  async writePrivateFile(dir, name, text) {
+    if (typeof name !== "string" || !/^[A-Za-z0-9._-]+$/.test(name) || name === "." || name === "..") {
+      throw new Error("writePrivateFile: the name must be one path segment of letters, digits, dot, underscore or hyphen");
+    }
+    await IOUtils.makeDirectory(dir, { createAncestors: true, ignoreExisting: true, permissions: 0o700 });
+    const posix = lazy.AppConstants.platform !== "win";
+    if (posix) {
+      await IOUtils.setPermissions(dir, 0o700, false);
+    }
+    const path = PathUtils.join(dir, name);
+    const tmp = `${path}.tmp`;
+    await IOUtils.remove(tmp, { ignoreAbsent: true });
+    await IOUtils.write(tmp, new Uint8Array(0), { mode: "create" });
+    if (posix) {
+      await IOUtils.setPermissions(tmp, 0o600, false);
+    }
+    await IOUtils.writeUTF8(tmp, String(text), { mode: "overwrite" });
+    await IOUtils.move(tmp, path);
+  },
+
+  //
+  // Phase 63 (P63-35): the build's platform (linux, macosx or win), which chrome needs to build the bridge
+  // folder path; OrcaEnv.nodePlatform maps it to Node's spelling.
+  //
+  platform() {
+    return lazy.AppConstants.platform;
+  },
 });

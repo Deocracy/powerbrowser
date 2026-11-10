@@ -16,7 +16,9 @@
 //  3. OrcaEnv rules, by calling the module: port 0 and out-of-range ports
 //     throw, the bind host is loopback, the socket budget plus the socket
 //     suffix fits the smallest socket path limit, the allowlist holds no
-//     variable that steers Node or relocates orcad's data.
+//     variable that steers Node or relocates orcad's data. After D-31 orcad's
+//     environment is Phase 62's: no fixed name and no buildOrcadEnv option
+//     spells a PTY (the "pty switch" plant).
 //  4. The powerbrowser.orca.port default in powerbrowser-sidecar.js is an
 //     integer inside OrcaEnv's PORT_MIN..PORT_MAX.
 //  5. Scenarios. The shipped OrcaService source is imported into Node against
@@ -44,6 +46,14 @@
 //       F  a profile path too long for orcad's socket: ln -sfnT makes an
 //          alias under the runtime directory with a search-path-only
 //          environment and orcad is given the alias; a short path spawns no ln.
+//       H  (Phase 63) no bridge folder can be chosen (no runtime directory, HOME
+//          under /tmp): state still reaches ready, nothing is written through
+//          writePrivateFile, and the "Orca bridge folder" row reads "not available".
+//     Scenario A also checks (Phase 63, D-31, P63-26, P63-35) that orcad-data-root
+//     is written through PowerBrowserProcesses.writePrivateFile into the bridge
+//     folder OrcaEnv.bridgeDirFor derives, only after the ready line, with the
+//     effective root and a newline, that getState().bridgeDir and the "Orca bridge
+//     folder" row name it, and that stop removes the file.
 //  6. Wiring (powerbrowser.js): the Theia start statement is byte-identical
 //     to its pre-62 text and continues with .finally(() => OrcaService.start()
 //     .catch(...)); the diagnostics rows spread OrcaService.getDiagnosticRows().
@@ -187,7 +197,15 @@ function makeBoundary(world) {
         },
         killProcess: async (proc, graceMs) => { rec('killProcess', proc.pid, graceMs); alive.delete(proc.pid); proc.exit(0); },
         waitForExit: async (proc, graceMs) => { rec('waitForExit', proc.pid, graceMs); return true; },
-        readPipeChunk: (proc, which) => proc.read(which),
+        // Records the moment the whole ready line has been handed to OrcaService, so writes can be ordered after it.
+        readPipeChunk: async (proc, which) => {
+            const chunk = await proc.read(which);
+            if (which === 'stdout' && chunk !== null) {
+                proc.stdoutSeen = (proc.stdoutSeen ?? '') + chunk;
+                if (proc.stdoutSeen.includes('orca_server_ready') && proc.stdoutSeen.includes('\n') && !proc.readySeen) { proc.readySeen = true; rec('readyLineDelivered', proc.pid); }
+            }
+            return chunk;
+        },
         // Short waits collapse to a tick; long ones (timeouts that must lose their race) stay long and unref'd.
         sleep: (ms) => new Promise((r) => { if (ms < 1000) setTimeout(r, 1); else setTimeout(r, 2000).unref(); }),
         onQuitGranted: (fn) => { rec('onQuitGranted', fn); return () => rec('quitObserverOff'); },
@@ -202,6 +220,8 @@ function makeBoundary(world) {
         },
         listProcessTree: async (roots) => { rec('listProcessTree', roots); return (world.tree ?? (() => []))(roots).filter((row) => alive.has(row.pid)); },
         addNamedReapBlocker: (name, fn) => { rec('addNamedReapBlocker', name, fn); },
+        platform: () => world.platform ?? 'linux',
+        writePrivateFile: async (dir, name, text) => { rec('writePrivateFile', dir, name, text); },
     };
     return { api, processes, calls, consoleLines, alive, files };
 }
@@ -277,6 +297,18 @@ async function scenarioA(paths, env) {
     if (args[args.indexOf('--port') + 1] !== '26768' || !args.includes('--port')) fails.push('scenario A: orcad was not started with --port 26768');
     if (!args.includes('--json')) fails.push('scenario A: orcad was not started with --json');
 
+    // Phase 63: the bridge folder, derived through the Node-imported OrcaEnv from the fake host.
+    const bridgeDir = await env.bridgeDirFor(dataRoot, (n) => world.env[n] ?? '', 'linux');
+    if (state.bridgeDir !== bridgeDir) fails.push(`scenario A: getState().bridgeDir is ${state.bridgeDir}, not ${bridgeDir}`);
+    if (!svc.getDiagnosticRows().some(([label, value]) => label === 'Orca bridge folder' && value === bridgeDir)) fails.push('scenario A: no diagnostics row names the Orca bridge folder');
+    const readyAt = indexOfCall(b.calls, 'readyLineDelivered');
+    const rootWrites = b.calls.map((c, i) => ({ c, i })).filter(({ c }) => c.name === 'writePrivateFile' && c.args[1] === env.ORCAD_DATA_ROOT_FILE);
+    if (!rootWrites.length) fails.push(`scenario A: ${env.ORCAD_DATA_ROOT_FILE} was never written through writePrivateFile`);
+    for (const { c, i } of rootWrites) {
+        if (readyAt < 0 || i < readyAt) fails.push(`scenario A: ${env.ORCAD_DATA_ROOT_FILE} was written before ready (call ${i}, ready line at ${readyAt})`);
+        if (c.args[0] !== bridgeDir || c.args[2] !== `${dataRoot}\n`) fails.push(`scenario A: ${env.ORCAD_DATA_ROOT_FILE} was written as ${JSON.stringify(c.args)}, not (${bridgeDir}, the effective root and a newline)`);
+    }
+
     const observerAt = indexOfCall(b.calls, 'onQuitGranted');
     const blockerAt = indexOfCall(b.calls, 'addNamedReapBlocker', (a) => a[0] === env.ORCAD_REAP_BLOCKER_NAME);
     if (observerAt < 0 || observerAt > spawnAt) fails.push('scenario A: the quit observer is not registered before the spawn');
@@ -302,6 +334,7 @@ async function scenarioA(paths, env) {
     if (daemonAt < 0) fails.push('scenario A: stop() never signalled the terminal daemon');
     else if (killAt > daemonAt) fails.push('scenario A: stop() signalled the terminal daemon before ending orcad');
     if (svc.getState().state !== 'stopped') fails.push(`scenario A: state after stop() is '${svc.getState().state}'`);
+    if (indexOfCall(b.calls, 'removeStateFile', (a) => a[0] === env.bridgeFileFor(bridgeDir, env.ORCAD_DATA_ROOT_FILE, 'linux')) < 0) fails.push(`scenario A: ${env.ORCAD_DATA_ROOT_FILE} was not removed on stop()`);
     return fails;
 }
 
@@ -427,6 +460,22 @@ async function scenarioF(paths, env) {
     return fails;
 }
 
+/** H: no bridge folder can be chosen (Phase 63, P63-35): orcad still reaches ready, nothing is written, the row says so. */
+async function scenarioH(paths, env) {
+    const fails = [];
+    const b = makeBoundary(baseWorld({ env: { PATH: '/usr/bin', HOME: '/tmp/u', LANG: 'C.UTF-8' } }));
+    const svc = await loadService(paths, b, env);
+    await svc.start();
+    const state = svc.getState();
+    if (state.state !== 'ready') fails.push(`scenario H: null folder fatal -- with no bridge folder the state is '${state.state}', not ready: ${JSON.stringify(svc.getDiagnosticRows())}`);
+    if (state.bridgeDir !== null) fails.push(`scenario H: getState().bridgeDir is ${state.bridgeDir} with no usable runtime directory or home, not null`);
+    if (b.calls.some((c) => c.name === 'writePrivateFile')) fails.push('scenario H: writePrivateFile was called with no bridge folder');
+    if (!svc.getDiagnosticRows().some(([label, value]) => label === 'Orca bridge folder' && value === 'not available')) fails.push('scenario H: the "Orca bridge folder" row does not read "not available"');
+    await svc.stop();
+    if (svc.getState().state !== 'stopped') fails.push(`scenario H: state after stop() is '${svc.getState().state}'`);
+    return fails;
+}
+
 // ---------------------------------------------------------------------------
 // Static clauses.
 
@@ -468,6 +517,11 @@ function staticClauses(paths, env, notes) {
     if (env.ORCAD_SOCKET_ROOT_BUDGET + SOCKET_SUFFIX_BYTES > SMALLEST_SOCKET_PATH || env.socketPathFits('/'.repeat(env.ORCAD_SOCKET_ROOT_BUDGET + 1))) {
         fails.push(`OrcaEnv's socket path budget (${env.ORCAD_SOCKET_ROOT_BUDGET}) plus the ${SOCKET_SUFFIX_BYTES}-byte socket name exceeds the ${SMALLEST_SOCKET_PATH}-byte socket path limit`);
     }
+    // D-31: Orca's terminals run on Orca's own engine, so orcad's environment stays Phase 62's.
+    for (const name of env.ORCAD_FIXED_ENV_NAMES) {
+        if (/PTY/i.test(name)) fails.push(`OrcaEnv.ORCAD_FIXED_ENV_NAMES carries ${name}: a pty switch reached orcad's environment, which D-31 keeps as Phase 62 left it`);
+    }
+    if (/pty/i.test(String(env.buildOrcadEnv))) fails.push("OrcaEnv.buildOrcadEnv mentions a PTY endpoint: a pty switch reached orcad's environment, which D-31 keeps as Phase 62 left it");
     for (const name of env.ORCAD_ENV_ALLOWLIST) {
         if (STEERING.includes(name) || /^(ORCA|CLAUDE|NODE|ELECTRON)_/.test(name)) fails.push(`OrcaEnv.ORCAD_ENV_ALLOWLIST inherits ${name}, a steering variable`);
     }
@@ -534,7 +588,7 @@ export async function check(paths) {
     try { env = await freshImport(paths.orcaEnv); } catch (err) { return { fails: [`OrcaEnv.sys.mjs does not import in Node: ${err.message}`], scenarios: [], notes: [] }; }
     const notes = [];
     const fails = staticClauses(paths, env, notes);
-    const scenarios = { A: scenarioA, B: scenarioB, C: scenarioC, D: scenarioD, E: scenarioE, F: scenarioF };
+    const scenarios = { A: scenarioA, B: scenarioB, C: scenarioC, D: scenarioD, E: scenarioE, F: scenarioF, H: scenarioH };
     const saved = globalThis.ChromeUtils;
     try {
         for (const [label, run] of Object.entries(scenarios)) {
@@ -598,6 +652,11 @@ async function runSelfTest() {
             { name: 'environment name literal in OrcaService', naming: 'outside OrcaEnv', file: paths.orcaService, edit: (t) => `${t}\nconst HOME_NAME = "HOME";\n` },
             { name: 'NODE_OPTIONS in the allowlist', naming: 'steering variable', file: paths.orcaEnv, edit: swap('  "PATH",\n  "HOME",', '  "PATH",\n  "NODE_OPTIONS",\n  "HOME",') },
             { name: 'switch removed from the fixed names', naming: 'ORCA_DISABLE_INSTALLED_ELECTRON_BROWSER', file: paths.orcaEnv, edit: swap('  ORCAD_HIDDEN_ELECTRON_SWITCH,\n]);', ']);') },
+            { name: 'orcad-data-root written before ready', naming: 'before ready', file: paths.orcaService, edit: swap('    let proc;\n', '    await PowerBrowserProcesses.writePrivateFile(this._bridgeDir, OrcaEnv.ORCAD_DATA_ROOT_FILE, `${this._effectiveRoot}\\n`);\n    let proc;\n') },
+            { name: 'orcad-data-root not removed on stop', naming: 'not removed', file: paths.orcaService, edit: swap('        await PowerBrowserAPI.removeStateFile(OrcaEnv.bridgeFileFor(this._bridgeDir, OrcaEnv.ORCAD_DATA_ROOT_FILE, this._bridgePlatform));\n', '') },
+            { name: 'a null bridge folder fails the start', naming: 'null folder fatal', file: paths.orcaService, edit: swap('    if (!this._bridgeDir) {\n', '    if (!this._bridgeDir) {\n      return this._fail("choosing the Orca bridge folder", []);\n') },
+            { name: 'a PTY switch back in the fixed names', naming: 'pty switch', file: paths.orcaEnv, edit: swap('  ORCAD_HIDDEN_ELECTRON_SWITCH,\n]);', '  ORCAD_HIDDEN_ELECTRON_SWITCH,\n  "ORCA_EXTERNAL_PTY_ENDPOINT",\n]);') },
+            { name: 'a ptyEndpoint option back in buildOrcadEnv', naming: 'pty switch', file: paths.orcaEnv, edit: swap('export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion } = {}) {', 'export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion, ptyEndpoint } = {}) {') },
             { name: 'lock code absent from the fixture source', naming: 'pinned source', file: fixtureCodes, edit: swap('orcad_instance_lock_held', 'orcad_lock_renamed') },
         ];
 
@@ -648,6 +707,6 @@ if (isEntryPoint) {
         for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`);
         process.exit(1);
     }
-    console.log(`${NAME}: PASS -- jar.mn ships every shell module; OrcaService spawns only through the exact-environment boundary, spells no environment name and carries no user-facing copy; launch wiring and the .onorca.dev row hold; stub-boundary scenarios ${r.scenarios.join(', ')} (start, reap, stop order, busy port, non-loopback, alias)`);
+    console.log(`${NAME}: PASS -- jar.mn ships every shell module; OrcaService spawns only through the exact-environment boundary, spells no environment name and carries no user-facing copy; launch wiring and the .onorca.dev row hold; stub-boundary scenarios ${r.scenarios.join(', ')} (start with orcad-data-root after ready, reap, stop order, busy port, non-loopback, alias, no bridge folder)`);
     process.exit(0);
 }
