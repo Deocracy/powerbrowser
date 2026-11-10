@@ -1297,6 +1297,9 @@ bitmaps (`wizHeader.bmp`, `wizHeaderRTL.bmp`, `wizWatermark.bmp`),
 artwork yet; and `defines.nsi` now takes `AppName` from the build's `MOZ_APP_NAME` and `CERTIFICATE_NAME` from the generated `CompanyName`, and the installer sends no telemetry ping (`patches/040-powerbrowser-nsis.patch`, NG-066, row `ng066-nsis-branding-no-ping`). `CERTIFICATE_ISSUER` stays upstream's until a fork Windows signing certificate exists (deferred with the Windows packaging row). The row's PASS line says the compile
 only.
 
+`package-windows.sh` stages the pinned add-on XPIs into `distribution/extensions/` with
+`stage-bundled-xpi.sh`, as the Linux package does (see "Linux package" for the pin and the cache).
+
 ### Packaging hosts (08-05): capability record
 
 One row per host. Every later task cites its host by name; no artifact work
@@ -1435,6 +1438,10 @@ sidecar merge was exercised against synthetic thin Mach-O pairs with `llvm-lipo`
 `orca-universal` (one arch-named pair from the real tables, one same-name native, one identical
 text file).
 
+Pre-installed add-ons: each per-architecture run stages the pinned XPIs into
+`Contents/Resources/distribution/extensions/` with `stage-bundled-xpi.sh`, as the Linux package does
+(see "Linux package" below for the pin, the cache and why there is no policy entry).
+
 ### Linux package (NG-063, NG-072)
 
 `nix develop .#firefox --command bash powerbrowser/packaging/package-linux.sh`
@@ -1475,6 +1482,24 @@ DIR` runs only the Orca half (staging into `DIR/orca`, the RUNPATH pass and the 
 a host without the release container can prove it; `release.yml` never uses it.
 
 Checks: `ng063-packaged-launch`, `ng072-policies-packaged-webextension`, `orca-packaged-tree`.
+
+Pre-installed add-ons (BEXT-02): right after the `policies.json` copy, `package-linux.sh` calls
+`bash powerbrowser/packaging/stage-bundled-xpi.sh "$STAGE/distribution"`, which stages every add-on
+pinned in `powerbrowser/packaging/bundled-xpi.json` (today uBlock Origin) as
+`distribution/extensions/<id>.xpi`. The file is the AMO-signed XPI byte for byte, downloaded once
+into `.mozbuild/bundled-xpi/<id>-<version>.xpi` and checked against the pin's sha256 on every
+staging; a mismatch fails naming the id and both digests. Gecko installs it into the profile on the
+profile's first start, with no network and enabled, and records
+`extensions.installedDistroAddon.<id>`, so an add-on the user removed is never reinstalled, across
+relaunches and app upgrades alike. There is deliberately no `ExtensionSettings` entry in
+`policies.json`: its `force_installed` and `normal_installed` modes stop the user removing the
+add-on. To bump a pin, change `version`, `url` and `sha256` together (the sha256 of the file the url
+serves), then run `node scripts/verify-bundled-xpi.mjs`: it re-derives the filter-list hosts from the
+new XPI's `assets/assets.json` against `powerbrowser/endpoint-allowlist.json`. There is no automatic
+update of the add-on itself (`extensions.update.autoUpdateDefault` is false), so a pin bump is the
+update path. Checks: `bundled-xpi`, `bundled-xpi-self-test`, `bundled-xpi-packaged`, `bundled-xpi-live`
+(run under `flock /home/chris/coding/Power-Browser/.git/pb-live.lock`; `--live --dev` places the
+cached XPI in the dev `objdir/dist/bin/distribution/extensions/` for the run and removes it after).
 
 ### Per-OS install matrix with update hops (08-05)
 
