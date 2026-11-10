@@ -445,14 +445,16 @@ checked before anything runs). It also carries `objdump`, which Orca's
 `ELECTRON_SKIP_BINARY_DOWNLOAD=1` and `--ignore-scripts` on both installs, so
 Orca's postinstall (its `@electron/rebuild`) never runs.
 
-**What the script runs, in order:** re-verify `orca/` at the pin; scrub every
+**What the script runs, in order:** re-verify `orca/` at the pin; apply the overlay
+(step 1b, see "Overlay" below); scrub every
 inherited `ORCA_*` variable (this tree is worked on from inside Orca desktop);
 `pnpm install --frozen-lockfile --ignore-scripts`; Orca's
 `build-workspace-packages.mjs` and `rebuild:node`; the `mobile/` workspace
 install, also scripts-off (P60-R3); `mobile/`'s three code generators, run
 directly in its postinstall's order (P60-R4); `build:mobile-web` (which
 `build:orcad` stages unconditionally); `build:orcad`; the de-slot; `build:web`.
-Orca's source and scripts are never edited.
+`orca/` is changed only by the declared seams and PB-added files of
+`orca-overlay/`.
 
 **Why the build de-slots:** `build:orcad` always writes a slot
 (`out/orcad/.server-target`, `.runtime-node`, `.version`) and downloads its own
@@ -485,6 +487,53 @@ runtime cache and `orca/node_modules` were left by the earlier attempts in plan
 `mobile/` install 9.6 s (pnpm's own "Done in" lines). A cold end-to-end run
 from an empty `.mozbuild/` was not measured. Log:
 `.mozbuild/orca-build/build-20261109T234314Z.log`.
+
+### Overlay (orca-overlay/)
+
+`orca-overlay/` is the only place PowerBrowser changes Orca (D-04, D-16,
+P62-09). It holds `seams.json` (each declared seam: `path`, `upstream_blob`,
+`patch`, `reason`), `patches/` (one regenerated patch per seam) and, from the
+first PB-added file on, `files/` (each file at its path inside the Orca tree).
+`orca/` itself is never committed.
+
+**What `build-orca.sh` step 1b does, in order:** reads the declared seam paths
+and refuses one that is not a plain relative path or not a file at the pin;
+fails with `undeclared modification in orca/: <path>` if any other tracked file
+of `orca/` is modified (an edit is never erased); resets the declared paths to
+the pin; applies `patches/` through `scripts/apply-patches.sh --upstream orca
+--patches orca-overlay/patches`, whose before/after blob-hash check makes a
+silent no-op a failure; refuses a `files/` entry that shadows an upstream path,
+removes files a previous run copied that `files/` no longer holds
+(`orca/.pb-overlay-copied`), and copies `files/` in. It prints
+`build-orca: overlay applied <path>` or `overlay copied <path>` per item, and
+it is re-runnable over an applied tree.
+
+**Adding a seam:**
+
+```
+$EDITOR orca/<path>                                    # the few-line edit, in the fetched tree
+echo 'diff --git a/<path> b/<path>' > orca-overlay/patches/NNN-<name>.patch   # seed header only
+bash scripts/regenerate-patches.sh --upstream orca --patches orca-overlay/patches
+git -C orca rev-parse HEAD:<path>                      # the upstream_blob for the seams.json row
+nix develop .#orca --command bash scripts/build-orca.sh
+```
+
+Add the `seams.json` row before the rebuild. A patch is regenerated, never
+typed or text-edited. A seam is at most 20 changed lines of one existing
+upstream file (`SEAM_LINE_BOUND` in the gate), and the number of seams is
+capped by `configuration.toml` `[orca] seam_cap`.
+
+**Adding a PB-added file:** put it under `orca-overlay/files/` at its in-tree
+path (a path upstream does not have, in any letter case), as `.ts`, `.tsx`,
+`.js`, `.mjs` or `.cjs`, and have it carry the literal `pb-overlay:<path>` in
+code that is reachable when the file is used (a provider id, a registration
+name). The built check finds that literal in the bundle; a file nothing imports
+leaves none. The literal proves the file was compiled in, not that it runs.
+
+**Checks:** `orca-overlay` and `orca-overlay-self-test` (quick),
+`orca-overlay-built` (full, vacuous until the first PB-added file), and
+`orca-build-shape` (full), which requires the modified tracked files of `orca/`
+to equal the declared seams.
 
 ## Firefox half
 
