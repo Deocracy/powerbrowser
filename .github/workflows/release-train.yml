@@ -43,6 +43,12 @@
 # a month's last Thursday), and renovate-theia runs self-hosted Renovate on that tick or on owner dispatch with
 # renovate-theia=true, in the bot environment, never in a dry run.
 #
+# The Orca re-pin (Phase 68, OVL-02). sweep-clock also decides the weekly Orca tick (the first sweep of each ISO
+# week); detect-orca selects the newest Orca release tag on that tick or on owner dispatch with repin-orca=true;
+# rebase-orca calls rebase-orca.yml, the one Orca replay definition, read-only; bump-pr-orca publishes chore/orca-<tag>
+# with auto-merge armed only after a replayed stage, minting its token after the staging; a FAIL stage becomes one
+# "release-train: orca <tag> stopped" issue from report. docs/RELEASING.md "Orca re-pin (OVL-02)" has the stage table.
+#
 # Live facts (plan 43-06). derive collects them with read-only GETs (the bump PRs and their
 # verify check, the pin's merge SHA, its release.yml run, pending deployments and jobs, the
 # Release at the pin's key and its expected assets), and report writes exactly one tracking
@@ -53,13 +59,14 @@
 # the replay writes nothing outside the runner.
 #
 # Trust. Every job carries the same-repository guard for a workflow_run wake, only
-# bump-pr and bump-pr-node hold a secret, and the dispatched reason is validated first.
+# the bot-environment jobs (bump-pr, bump-pr-node, bump-pr-orca, the renovate and maintenance
+# probe jobs, fix-pr) hold a secret, and the dispatched reason is validated first.
 
 name: Release train
 
 run-name: ${{ inputs.reason == 'fix' && (inputs.dry-run && format('fix dry-run {0} {1} attempt {2}', inputs.release-key, inputs.class, inputs.attempt) || format('fix {0} {1} attempt {2} {3}', inputs.release-key, inputs.class, inputs.attempt, inputs.fingerprint)) || format('release train {0}', inputs.reason) }}
 
-# shortcut: besides the fixer inputs, the dispatch takes reason, dry-run and renovate-theia only, since the tag and release inputs were validated and then ignored, so an owner-forced bump is not possible from dispatch, upgrade when an owner-forced bump or a release-key lookup is approved and wired into detect.
+# shortcut: besides the fixer inputs, the dispatch takes reason, dry-run, renovate-theia and repin-orca only, since the tag and release inputs were validated and then ignored, so an owner-forced bump is not possible from dispatch, upgrade when an owner-forced bump or a release-key lookup is approved and wired into detect.
 on:
   workflow_dispatch:
     inputs:
@@ -74,6 +81,11 @@ on:
         default: false
       renovate-theia:
         description: "Run Renovate for the Theia group now (AUTO-02). The sweep also runs it on its first sweep after a month's last Thursday"
+        required: false
+        type: boolean
+        default: false
+      repin-orca:
+        description: "Run the Orca re-pin now (OVL-02). The sweep also runs it on the first sweep of each ISO week"
         required: false
         type: boolean
         default: false
@@ -158,6 +170,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           REASON: ${{ inputs.reason }}
           RENOVATE_THEIA: ${{ inputs.renovate-theia }}
+          REPIN_ORCA: ${{ inputs.repin-orca }}
         run: |
           set -eu
           # A workflow_run wake carries no dispatched reason; it is a self wake.
@@ -165,6 +178,10 @@ jobs:
           case "${RENOVATE_THEIA:-false}" in
             true|false) ;;
             *) echo "release-train: FAIL -- renovate-theia must be true or false, got '$RENOVATE_THEIA'. Next step: dispatch with -f renovate-theia=true or leave it out." >&2; exit 1 ;;
+          esac
+          case "${REPIN_ORCA:-false}" in
+            true|false) ;;
+            *) echo "release-train: FAIL -- repin-orca must be true or false, got '$REPIN_ORCA'. Next step: dispatch with -f repin-orca=true or leave it out." >&2; exit 1 ;;
           esac
           # A case pattern matches the whole value, not a line of it.
           case "$REASON" in
@@ -647,6 +664,7 @@ jobs:
     outputs:
       due: ${{ steps.due.outputs.due }}
       theia-due: ${{ steps.theia.outputs.theia-due }}
+      orca-due: ${{ steps.orca.outputs.orca-due }}
       prev-run-id: ${{ steps.prev.outputs.run-id }}
     steps:
       - name: Check out repo
@@ -714,6 +732,22 @@ jobs:
           node scripts/release-train.mjs --theia-due "$(date -u +%s)" "$LAST" > "$RUNNER_TEMP/theia.txt"
           cat "$RUNNER_TEMP/theia.txt"
           grep -E '^theia-due=(true|false)$' "$RUNNER_TEMP/theia.txt" >> "$GITHUB_OUTPUT"
+
+      # The weekly Orca re-pin tick (OVL-02, P68-08): on the day's sweep, due when it is the first sweep of an ISO week.
+      # A decision only; detect-orca acts on it.
+      - name: Decide whether this sweep is the Orca re-pin tick
+        id: orca
+        if: ${{ steps.due.outputs.due == 'true' }}
+        env:
+          DRY_RUN: ${{ inputs.dry-run }}
+          PREV_CREATED: ${{ steps.prev.outputs.created-at }}
+        run: |
+          set -eu
+          LAST=""
+          if [ "$DRY_RUN" != "true" ] && [ -n "$PREV_CREATED" ]; then LAST=$(date -u -d "$PREV_CREATED" +%s 2>/dev/null || true); fi
+          node scripts/release-train.mjs --orca-due "$(date -u +%s)" "$LAST" > "$RUNNER_TEMP/orca.txt"
+          cat "$RUNNER_TEMP/orca.txt"
+          grep -E '^orca-due=(true|false)$' "$RUNNER_TEMP/orca.txt" >> "$GITHUB_OUTPUT"
 
   # The Theia inflow (Phase 51, AUTO-02). Self-hosted Renovate opens or updates the grouped @theia/** pull
   # request (branch prefix chore/theia-, @theia/monaco-editor-core on its own branch) from .github/renovate.json5,
@@ -961,6 +995,177 @@ jobs:
           if [ "$(sed -n 's/^publish=//p' "$RUNNER_TEMP/publish.txt")" = "refuse" ]; then
             echo "release-train: NOTE -- ${BRANCH} moved or carries a commit the bot did not make; regenerate the notices on it by hand"
           fi
+
+  # The Orca re-pin (Phase 68, OVL-02). detect-orca runs on the sweep's weekly Orca tick (the first sweep of each ISO
+  # week, sweep-clock's orca-due) or on owner dispatch with repin-orca=true. It lists the tags of the Orca remote named
+  # by scripts/fetch-orca.sh's one REMOTE= line and selects the newest vX.Y.Z strictly newer than the pin
+  # (detect-upstreams.mjs --orca-select); an open chore/orca-* PR, or nothing newer, holds with empty outputs. Reads only,
+  # so it runs in a dry run too.
+  detect-orca:
+    needs: [derive, sweep-clock]
+    if: ${{ inputs.reason != 'fix' && (inputs.repin-orca || needs.sweep-clock.outputs.orca-due == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      orca-tag: ${{ steps.select.outputs.orca-tag }}
+      orca-commit: ${{ steps.select.outputs.orca-commit }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: List the open PR heads (read)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,headRefName,isCrossRepository --jq '.[] | select(.isCrossRepository == false) | "\(.number) \(.headRefName)"' > "$RUNNER_TEMP/open-prs.txt"
+
+      # The remote is fetch-orca.sh's, read from its one REMOTE= line, so the tag listed here is the tag the replay clones.
+      - name: List the Orca tags (read)
+        run: |
+          set -euo pipefail
+          REMOTE=$(grep -m1 '^REMOTE=' scripts/fetch-orca.sh | cut -d= -f2- | tr -d '"')
+          [ -n "$REMOTE" ] || { echo "release-train: FAIL -- scripts/fetch-orca.sh carries no REMOTE= line. Next step: restore it." >&2; exit 1; }
+          git ls-remote --tags "$REMOTE" > "$RUNNER_TEMP/orca-tags.txt"
+
+      - name: Select the newest Orca release tag
+        id: select
+        run: |
+          set -euo pipefail
+          node scripts/detect-upstreams.mjs --orca-select "$RUNNER_TEMP/orca-tags.txt" configuration.toml --open-prs "$RUNNER_TEMP/open-prs.txt" > "$RUNNER_TEMP/orca-select.txt"
+          cat "$RUNNER_TEMP/orca-select.txt"
+          grep -E '^orca-(tag|commit)=' "$RUNNER_TEMP/orca-select.txt" >> "$GITHUB_OUTPUT"
+
+  # The replay, in rebase-orca.yml's read-only job: the only place Orca's code (install, build, typecheck, orcad) runs.
+  # Its stage output is replayed or the first FAIL line; its notices output says whether the Orca notices changed.
+  rebase-orca:
+    needs: [derive, detect-orca]
+    if: ${{ !inputs.dry-run && needs.detect-orca.outputs.orca-tag != '' }}
+    uses: ./.github/workflows/rebase-orca.yml
+    with:
+      tag: ${{ needs.detect-orca.outputs.orca-tag }}
+      commit: ${{ needs.detect-orca.outputs.orca-commit }}
+    permissions:
+      contents: read
+
+  # The Orca bump PR (P68-11, P68-12, P68-35). It never runs Orca code, and it mints the App token last: it re-checks the
+  # tag and commit, replays only the pin move and the seams (rebase-orca.sh --replay-only: git and node over tracked
+  # data), carries the notices file rebase-orca uploaded (A-P1), stages exactly the four bump paths, commits, and only
+  # then mints. Auto-merge is armed; main-review's required check and the owner's approving review stay the gate.
+  bump-pr-orca:
+    needs: [derive, detect-orca, rebase-orca]
+    if: ${{ !inputs.dry-run && needs.rebase-orca.outputs.stage == 'replayed' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: bot
+    permissions: {}
+    env:
+      TAG: ${{ needs.detect-orca.outputs.orca-tag }}
+      COMMIT: ${{ needs.detect-orca.outputs.orca-commit }}
+      NOTICES: ${{ needs.rebase-orca.outputs.notices }}
+      BASE: ${{ github.sha }}
+    steps:
+      - name: Check out the repo without persisting a token
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Re-check the Orca tag and commit
+        run: |
+          set -eu
+          TAG_RE='^v[0-9]+\.[0-9]+\.[0-9]+$'
+          COMMIT_RE='^[0-9a-f]{40}$'
+          [[ $TAG =~ $TAG_RE ]] || { echo "release-train: FAIL -- Orca tag '$TAG' is not vX.Y.Z. Next step: do not bump." >&2; exit 1; }
+          [[ $COMMIT =~ $COMMIT_RE ]] || { echo "release-train: FAIL -- Orca commit '$COMMIT' is not 40 hex. Next step: do not bump." >&2; exit 1; }
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+
+      # From the base commit, so the branch carries exactly the tree rebase-orca gated. --replay-only clones the tag but
+      # runs none of its code: no build-orca.sh, pnpm, corepack, tsc, row or probe.
+      - name: Replay the pin move and the seams (no Orca code runs)
+        run: |
+          set -euo pipefail
+          unset NODE_OPTIONS
+          git config user.name "release-train"
+          git config user.email "$BOT_EMAIL"
+          git switch -C "chore/orca-${TAG}" "$BASE"
+          nix develop .#orca --command bash scripts/rebase-orca.sh --replay-only --tag "$TAG" --commit "$COMMIT"
+
+      # This run's artifact only: no run-id and no token input, so no other run's artifact can be named.
+      - name: Download the rewritten Orca notices (skipped in dry-run)
+        if: ${{ !inputs.dry-run && needs.rebase-orca.outputs.notices == 'changed' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rebase-orca-notices
+          path: ${{ runner.temp }}/notices
+
+      # No token here. The notices file replaces the destination rather than write through it.
+      - name: Stage the bump by explicit path and commit (skipped in dry-run)
+        id: commit
+        if: ${{ !inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          if [ "$NOTICES" = "changed" ]; then
+            if [ "$(cd "$RUNNER_TEMP/notices" && ls -A | sort | tr '\n' ' ')" != "THIRD-PARTY-NOTICES.txt " ]; then
+              echo "release-train: FAIL -- the Orca notices artifact holds more or other than THIRD-PARTY-NOTICES.txt. Next step: do not publish; re-run the re-pin." >&2
+              exit 1
+            fi
+            cp --remove-destination "$RUNNER_TEMP/notices/THIRD-PARTY-NOTICES.txt" THIRD-PARTY-NOTICES.txt
+          fi
+          git add -A -- configuration.toml orca-overlay/patches orca-overlay/seams.json THIRD-PARTY-NOTICES.txt
+          # Any change outside those paths is a replay defect, not part of the bump. Ignored paths (orca/) are not listed.
+          UNEXPECTED=$(git status --porcelain --untracked-files=all -- . ':(exclude)configuration.toml' ':(exclude)orca-overlay/patches' ':(exclude)orca-overlay/seams.json' ':(exclude)THIRD-PARTY-NOTICES.txt')
+          if [ -n "$UNEXPECTED" ]; then
+            echo "release-train: FAIL -- the Orca replay changed paths outside the bump surfaces:" >&2
+            printf '%s\n' "$UNEXPECTED" >&2
+            echo "Next step: do not bump; find the step that wrote outside configuration.toml, orca-overlay/patches, orca-overlay/seams.json and THIRD-PARTY-NOTICES.txt." >&2
+            exit 1
+          fi
+          if git diff --cached --quiet; then echo "release-train: NOTE -- the Orca re-pin to ${TAG} changed nothing to commit; no PR"; exit 0; fi
+          git commit -m "chore(orca): move the Orca pin to ${TAG}" -m "Replayed through rebase-orca.yml (seams re-applied and regenerated, typecheck:web and typecheck:node, the Orca rows, orcad, notices and the brand scan); the pin moved in configuration.toml."
+          echo "committed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Mint the bot App token
+        id: app
+        if: ${{ !inputs.dry-run && steps.commit.outputs.committed == 'true' }}
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: powerbrowser
+          permission-contents: write
+          permission-pull-requests: write
+
+      # Only this step holds the token. Auto-merge is armed, never a direct merge: the PR still waits on main-review.
+      - name: Publish chore/orca-<tag>, open or update its PR, arm auto-merge (skipped in dry-run)
+        if: ${{ !inputs.dry-run && steps.commit.outputs.committed == 'true' }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -euo pipefail
+          unset NODE_OPTIONS
+          BRANCH="chore/orca-${TAG}"
+          bash scripts/publish-bump-branch.sh "$BRANCH" "$BASE" > "$RUNNER_TEMP/publish.txt"
+          cat "$RUNNER_TEMP/publish.txt"
+          if [ "$(sed -n 's/^publish=//p' "$RUNNER_TEMP/publish.txt")" = "refuse" ]; then
+            echo "release-train: NOTE -- ${BRANCH} is held by the refusal above; its PR is not edited this tick"
+            exit 0
+          fi
+          TITLE="chore(orca): move the Orca pin to ${TAG}"
+          BODY="Orca re-pin to ${TAG} (${COMMIT}), replayed through rebase-orca.yml: seams re-applied and regenerated, Orca's typecheck:web and typecheck:node, the Orca rows, orcad, notices and the brand scan. verify.yml runs on this PR; auto-merge is armed and the owner's approving review is the gate."
+          EXISTING=$(gh pr list --head "$BRANCH" --state open --json number,isCrossRepository --jq '[.[] | select(.isCrossRepository == false)][0].number // empty')
+          if [ -n "$EXISTING" ]; then gh pr edit "$EXISTING" --title "$TITLE" --body "$BODY"; else gh pr create --base main --head "$BRANCH" --title "$TITLE" --body "$BODY"; fi
+          PR=$(gh pr list --head "$BRANCH" --state open --json number,isCrossRepository --jq '[.[] | select(.isCrossRepository == false)][0].number // empty')
+          [[ "$PR" =~ ^[0-9]+$ ]] || { echo "release-train: FAIL -- no open PR for ${BRANCH} after publishing. Next step: read the PR list and re-run." >&2; exit 1; }
+          gh pr merge "$PR" --auto --merge
 
   # The only maintenance-sweep job that enters the bot environment (renovate-theia and renovate-licensing-publish, above, are the Theia inflow). It enters only on a live sweep tick
   # (bot-job-gate), so a dry run and a tick that is not the day's sweep never wait on an approval. Its two
@@ -1411,7 +1616,7 @@ jobs:
           fi
 
   report:
-    needs: [derive, detect, detect-node, bump, uptake-replay, bump-pr, bump-pr-node, dispatch-release, sweep-clock, maintenance-probe, maintenance]
+    needs: [derive, detect, detect-node, bump, uptake-replay, bump-pr, bump-pr-node, dispatch-release, sweep-clock, maintenance-probe, maintenance, detect-orca, rebase-orca, bump-pr-orca]
     if: ${{ always() && ((github.event_name == 'workflow_dispatch' && inputs.reason != 'fix') || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1439,8 +1644,11 @@ jobs:
           RELEASE_SHA: ${{ needs.dispatch-release.outputs.merge-sha }}
           RELEASE_RUN: ${{ needs.dispatch-release.outputs.run-url }}
           DISPATCH: ${{ needs.dispatch-release.result }}
+          ORCA_TAG: ${{ needs.detect-orca.outputs.orca-tag }}
+          ORCA_STAGE: ${{ needs.rebase-orca.outputs.stage }}
+          BUMP_PR_ORCA: ${{ needs.bump-pr-orca.result }}
         run: |
-          echo "release-train: reason=${REASON} candidate=${CANDIDATE:-none} node=${NODE_VERSION:-none} bump=${BUMP} bump-pr=${BUMP_PR} bump-pr-node=${BUMP_PR_NODE} uptake=${UPTAKE_TAG:-none} uptake-replay=${UPTAKE_REPLAY} dispatch-release=${DISPATCH} release-sha=${RELEASE_SHA:-none} release-run=${RELEASE_RUN:-none}"
+          echo "release-train: reason=${REASON} candidate=${CANDIDATE:-none} node=${NODE_VERSION:-none} bump=${BUMP} bump-pr=${BUMP_PR} bump-pr-node=${BUMP_PR_NODE} uptake=${UPTAKE_TAG:-none} uptake-replay=${UPTAKE_REPLAY} dispatch-release=${DISPATCH} release-sha=${RELEASE_SHA:-none} release-run=${RELEASE_RUN:-none} orca=${ORCA_TAG:-none} orca-stage=${ORCA_STAGE:-none} bump-pr-orca=${BUMP_PR_ORCA}"
 
       # A dry run prints the branches a live run would publish, with the values this run decided.
       - name: Print the branches this run would open (dry-run)
@@ -1452,6 +1660,43 @@ jobs:
         run: |
           if [ -n "$CANDIDATE" ]; then echo "dry-run: would open or update chore/esr-${CANDIDATE} (replay result: ${BUMP})"; else echo "dry-run: no ESR bump to open"; fi
           if [ -n "$NODE_VERSION" ]; then echo "dry-run: would open or update chore/node-v24.x at ${NODE_VERSION}"; else echo "dry-run: no Node bump to open"; fi
+
+      # The Orca re-pin stop (P68-13): a FAIL stage from rebase-orca is one issue per candidate tag, created, edited or
+      # reopened, carrying the stage line and the run URL. No branch or PR is published and the pin stays. Only issues
+      # the job token or the owner wrote are matched. A dry run never replays, so it prints what a live run would write.
+      - name: Print the Orca re-pin this run would make (dry-run)
+        if: ${{ always() && inputs.dry-run && needs.detect-orca.outputs.orca-tag != '' }}
+        env:
+          TAG: ${{ needs.detect-orca.outputs.orca-tag }}
+        run: |
+          echo "dry-run: would replay orca ${TAG} through rebase-orca.yml; green opens or updates chore/orca-${TAG} with auto-merge armed, red writes 'release-train: orca ${TAG} stopped'"
+
+      - name: Write the Orca re-pin stop issue (live only)
+        if: ${{ always() && !inputs.dry-run && needs.detect-orca.outputs.orca-tag != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.detect-orca.outputs.orca-tag }}
+          REPLAY: ${{ needs.rebase-orca.result }}
+          STAGE_OUT: ${{ needs.rebase-orca.outputs.stage }}
+          OWNER_LOGIN: ${{ vars.OWNER_LOGIN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          TAG_RE='^v[0-9]+\.[0-9]+\.[0-9]+$'
+          [[ $TAG =~ $TAG_RE ]] || { echo "release-train: FAIL -- Orca tag '$TAG' is not vX.Y.Z. Next step: check detect-orca." >&2; exit 1; }
+          TITLE="release-train: orca ${TAG} stopped"
+          STAGE="$STAGE_OUT"
+          if [ "$REPLAY" = "failure" ] && [ -z "$STAGE" ]; then STAGE="FAIL -- the Orca replay job ended failure with no stage line"; fi
+          case "$STAGE" in *"FAIL -- "*) ;; *) echo "release-train: orca ${TAG} stage '${STAGE:-none}'; no stop issue"; exit 0 ;; esac
+          printf 'The weekly Orca re-pin to %s stopped. No branch or PR was published and the pin stays.\n\nStage: `%s`\n\nRun: %s\n\nNext step: read the stage in docs/RELEASING.md "Orca re-pin (OVL-02)", fix it, then dispatch the release train with repin-orca=true.\n' "$TAG" "$STAGE" "$RUN_URL" > "$RUNNER_TEMP/orca-stop.md"
+          N=$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --limit 20 --label release-train --search "in:title \"${TITLE}\"" --json number,title,author --jq "[.[] | select(.title == \"${TITLE}\" and (.author.login == \"app/github-actions\" or .author.login == \"github-actions\" or .author.login == \"${OWNER_LOGIN}\"))][0].number // empty")
+          if [ -z "$N" ]; then
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --label release-train --body-file "$RUNNER_TEMP/orca-stop.md"
+          else
+            gh issue reopen "$N" --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+            gh issue edit "$N" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/orca-stop.md"
+          fi
+          echo "release-train: wrote '${TITLE}'"
 
       # The tracking issues (plan 43-06, BLOCKED.md item 3 approved 2026-11-03). Found read only, open and closed, by
       # label and title on the server; trackingPlan keeps only owner- or bot-authored ones (selectTracked) and applies

@@ -713,15 +713,15 @@ function selfTest() {
     const orcaCases = [
         {
             name: 'Orca: the newest release tag, commit from its ^{} line; -rc, -rc.perf and mobile tags skipped',
-            listing: ls([[sha('1'), 'refs/tags/v1.4.248'], [sha('2'), 'refs/tags/v1.4.248^{}'], [sha('3'), 'refs/tags/v1.4.250'], [sha('4'), 'refs/tags/v1.4.250^{}'],
-                [sha('5'), 'refs/tags/v1.4.251-rc.1'], [sha('6'), 'refs/tags/v1.4.251-rc.1.perf'], [sha('7'), 'refs/tags/mobile-android-v1.4.252'], [sha('8'), 'refs/tags/v1.4.249']]),
-            pin: 'v1.4.248', want: { tag: 'v1.4.250', commit: sha('4') },
+            listing: ls([[sha('1'), 'refs/tags/v2.7.48'], [sha('2'), 'refs/tags/v2.7.48^{}'], [sha('3'), 'refs/tags/v2.7.50'], [sha('4'), 'refs/tags/v2.7.50^{}'],
+                [sha('5'), 'refs/tags/v2.7.51-rc.1'], [sha('6'), 'refs/tags/v2.7.51-rc.1.perf'], [sha('7'), 'refs/tags/mobile-android-v2.7.52'], [sha('8'), 'refs/tags/v2.7.49']]),
+            pin: 'v2.7.48', want: { tag: 'v2.7.50', commit: sha('4') },
         },
-        { name: 'Orca: a lightweight tag is chosen with its bare sha', listing: ls([[sha('1'), 'refs/tags/v1.4.248'], [sha('9'), 'refs/tags/v1.4.253']]), pin: 'v1.4.248', want: { tag: 'v1.4.253', commit: sha('9') } },
-        { name: 'Orca: only older tags hold', listing: ls([[sha('1'), 'refs/tags/v1.4.247'], [sha('2'), 'refs/tags/v1.3.999']]), pin: 'v1.4.248', want: { tag: '', commit: '' }, note: 'no Orca release tag is newer' },
-        { name: 'Orca: the pin itself is not newer', listing: ls([[sha('1'), 'refs/tags/v1.4.248'], [sha('2'), 'refs/tags/v1.4.248^{}']]), pin: 'v1.4.248', want: { tag: '', commit: '' }, note: 'no Orca release tag is newer' },
-        { name: 'Orca: rc, rc.perf and mobile tags alone hold', listing: ls([[sha('5'), 'refs/tags/v1.4.251-rc.1'], [sha('6'), 'refs/tags/v1.4.251-rc.1.perf'], [sha('7'), 'refs/tags/mobile-android-v1.4.252']]), pin: 'v1.4.248', want: { tag: '', commit: '' }, note: 'no Orca release tag is newer' },
-        { name: 'Orca: an open chore/orca-* PR holds', listing: ls([[sha('3'), 'refs/tags/v1.4.250']]), pin: 'v1.4.248', openPrs: [{ number: 77, head: 'chore/orca-v1.4.249' }], want: { tag: '', commit: '' }, note: 'hold: open PR chore/orca-v1.4.249' },
+        { name: 'Orca: a lightweight tag is chosen with its bare sha', listing: ls([[sha('1'), 'refs/tags/v2.7.48'], [sha('9'), 'refs/tags/v2.7.53']]), pin: 'v2.7.48', want: { tag: 'v2.7.53', commit: sha('9') } },
+        { name: 'Orca: only older tags hold', listing: ls([[sha('1'), 'refs/tags/v2.7.47'], [sha('2'), 'refs/tags/v1.3.999']]), pin: 'v2.7.48', want: { tag: '', commit: '' }, note: 'no Orca release tag is newer' },
+        { name: 'Orca: the pin itself is not newer', listing: ls([[sha('1'), 'refs/tags/v2.7.48'], [sha('2'), 'refs/tags/v2.7.48^{}']]), pin: 'v2.7.48', want: { tag: '', commit: '' }, note: 'no Orca release tag is newer' },
+        { name: 'Orca: rc, rc.perf and mobile tags alone hold', listing: ls([[sha('5'), 'refs/tags/v2.7.51-rc.1'], [sha('6'), 'refs/tags/v2.7.51-rc.1.perf'], [sha('7'), 'refs/tags/mobile-android-v2.7.52']]), pin: 'v2.7.48', want: { tag: '', commit: '' }, note: 'no Orca release tag is newer' },
+        { name: 'Orca: an open chore/orca-* PR holds', listing: ls([[sha('3'), 'refs/tags/v2.7.50']]), pin: 'v2.7.48', openPrs: [{ number: 77, head: 'chore/orca-v2.7.49' }], want: { tag: '', commit: '' }, note: 'hold: open PR chore/orca-v2.7.49' },
         { name: 'Orca: v1.4.10 is newer than v1.4.9 (integer triples, not strings)', listing: ls([[sha('a'), 'refs/tags/v1.4.9'], [sha('b'), 'refs/tags/v1.4.10']]), pin: 'v1.4.8', want: { tag: 'v1.4.10', commit: sha('b') } },
     ];
     for (const c of orcaCases) {
@@ -731,7 +731,7 @@ function selfTest() {
         else { console.error(`${NAME}: --self-test FAIL -- '${c.name}' gave ${JSON.stringify(r)}`); failed += 1; }
     }
     let malformed = false;
-    try { selectOrca('not a listing line\n', 'v1.4.248'); } catch { malformed = true; }
+    try { selectOrca('not a listing line\n', 'v2.7.48'); } catch { malformed = true; }
     if (malformed) console.log('  ok  Orca: a malformed listing line -> refused');
     else { console.error(`${NAME}: --self-test FAIL -- a malformed listing line was accepted`); failed += 1; }
 
