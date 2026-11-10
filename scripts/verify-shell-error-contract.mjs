@@ -449,6 +449,10 @@ async function loadShippedSources(supervisorPath, shellPath, tag, overrides = {}
       if (url.includes("TheiaService.sys.mjs")) {
         return { TheiaService };
       }
+      if (url.includes("OrcaService.sys.mjs")) {
+        // The contract under test is Theia's; OrcaService has its own row, orca-service.
+        return { OrcaService: { start: async () => {}, reportUnexpectedFailure() {}, getDiagnosticRows: () => [] } };
+      }
       throw new Error(`the chrome bootstrap imported an unexpected module URL: ${url}`);
     },
   };

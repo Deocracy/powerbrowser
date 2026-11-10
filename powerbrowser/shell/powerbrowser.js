@@ -310,6 +310,7 @@ document.addEventListener(
         ["Vendor", identity.vendor],
         ["Version", identity.version],
         ...TheiaService.getFailureDetails(),
+        ...OrcaService.getDiagnosticRows(),
       ];
       for (const [label, value] of rows) {
         const row = document.createElement("div");
@@ -363,6 +364,7 @@ document.addEventListener(
     // above is already written -- nothing in this spawn path may run
     // before it.
     const { TheiaService } = ChromeUtils.importESModule("chrome://powerbrowser/content/TheiaService.sys.mjs");
+    const { OrcaService } = ChromeUtils.importESModule("chrome://powerbrowser/content/OrcaService.sys.mjs");
     // Announce shell readiness the way Firefox's own chrome does, so WebDriver
     // will create a session against the shell window.
     PowerBrowserAPI.notifyStartupFinished(window);
@@ -377,7 +379,9 @@ document.addEventListener(
     // sentence lives in TheiaService's USER_MESSAGE table, which is the file
     // shell-error-copy-no-internals derives its check surface from; copy
     // authored in this bootstrap would ship outside every check that exists.
-    TheiaService.start(browserElement).catch(err => TheiaService.reportUnexpectedFailure(err));
+    // P62-02: orcad starts once Theia's start has settled, whatever its outcome.
+    // Its failures stay in its own log and diagnostics rows and never reach Theia's error layer.
+    TheiaService.start(browserElement).catch(err => TheiaService.reportUnexpectedFailure(err)).finally(() => OrcaService.start().catch(err => OrcaService.reportUnexpectedFailure(err)));
 
     // D-118: the diagnostics layer's reserved global chord, immune to a
     // focused content <browser> swallowing it -- the XUL <keyset>/<key

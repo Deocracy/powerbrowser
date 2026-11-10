@@ -3867,6 +3867,20 @@ run_own_checks() {
     # the changed-line counts from git apply --numstat. Steps that need orca/ SKIP by a line.
     "orca-overlay|node $REPO_ROOT/scripts/verify-orca-overlay.mjs"
     "orca-overlay-self-test|node $REPO_ROOT/scripts/verify-orca-overlay.mjs --self-test"
+    # NEW (62-02, RUN-03/RUN-04/RUN-05, P62-01..P62-19): orca-service, the orcad supervisor. Quick. Derived at
+    # check time: the shell's .sys.mjs set against jar.mn, the environment names from OrcaEnv.sys.mjs, the
+    # user-message table and window function names OrcaService must not carry, Orca's own default port and
+    # failure codes from the fetched orca/ (a named SKIP of those clauses when it is absent). The shipped
+    # OrcaService source is driven against a stub boundary through scenarios A to F (start, reap, stop order,
+    # busy port, non-loopback bind, data-root alias). The self-test copies the inputs and plants 19 faults.
+    "orca-service|node $REPO_ROOT/scripts/verify-orca-service.mjs"
+    "orca-service-self-test|node $REPO_ROOT/scripts/verify-orca-service.mjs --self-test"
+    # orca-hidden-electron-self-test: a fixture Orca tree whose orcad is a stand-in Node script; control green
+    # (stock run trips both detectors, switched run trips neither), then five faults each red naming it.
+    # orca-service-live-self-test: the live row's pure verdicts (environment set, quit survivors, reap, TCP rows)
+    # over fixtures, 25 cases. Both hermetic: no orcad, no browser, no network.
+    "orca-hidden-electron-self-test|node $REPO_ROOT/scripts/verify-orca-hidden-electron.mjs --self-test"
+    "orca-service-live-self-test|node $REPO_ROOT/scripts/verify-orca-service-live.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6440,6 +6454,16 @@ run_own_checks() {
       # carries the literal pb-overlay:<its Orca-root path>, which must be in a .js file under
       # orca/out/web or orca/out/orcad (node_modules never counts). Passes as vacuous at zero files.
       "orca-overlay-built|node $REPO_ROOT/scripts/verify-orca-overlay.mjs --built"
+      # NEW (62-02, RUN-03/RUN-04/RUN-05, P62-14/P62-18): the two live proofs of OrcaService. Full tier.
+      # orca-hidden-electron runs one built orcad twice against an ELF decoy at ~/.local/bin/orca-ide in a scratch
+      # HOME: stock first (both orcad-emitted detectors must fire, else "detector blind"), then with OrcaEnv's switch
+      # (both must stay absent). orca-service-live launches PowerBrowser three times on one profile: orcad's
+      # /proc environ names equal the expected set after a planted ORCA_PLANT_62 is proven to reach PowerBrowser;
+      # a quit ends orcad, the terminal daemon and a real agent session; a SIGKILLed PowerBrowser's orcad is reaped
+      # by the next launch on the same port. Run under flock /home/chris/coding/Power-Browser/.git/pb-live.lock.
+      # Each prints one named SKIP line when no built orca/ or no built PowerBrowser exists.
+      "orca-hidden-electron|node $REPO_ROOT/scripts/verify-orca-hidden-electron.mjs"
+      "orca-service-live|node $REPO_ROOT/scripts/verify-orca-service-live.mjs"
     )
   fi
 
