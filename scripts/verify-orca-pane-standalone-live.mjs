@@ -21,6 +21,9 @@
 // throwaway repo) and check-details (openPane). Each must render, record no React or window error
 // and leave mountErrors empty; a thrown mount is red naming the kind and the message.
 //
+// Late CLI terminal (the mirror-freeze guard, 64-MIRROR-FREEZE.md): after stage 1's mounts, a
+// terminal created by the Orca CLI must become a pane record within 1000 ms of the CLI's exit.
+//
 // Every judgment is an exported pure verdict; --self-test feeds fixture observations to them and
 // checks that importing this module prints and starts nothing.
 //
@@ -88,14 +91,23 @@ export function mountsVerdict(obs) {
     return null;
 }
 
-/** The output lines and exit code for both stages (null stage = not reached). */
-export function render({ isolated, isolatedDetail, mounts, kinds, chatSource, harness }) {
+export const LATE_LIMIT_MS = 1000;
+
+/** The late CLI clause: null when the record came within LATE_LIMIT_MS, else the reason. */
+export function lateVerdict(ms) {
+    if (ms === null) return 'a CLI terminal created after TerminalPane mounts was no tab in this client within 15 s (the mirror freeze, 64-MIRROR-FREEZE.md)';
+    return ms <= LATE_LIMIT_MS ? null : `a CLI terminal created after TerminalPane mounts became a tab after ${ms} ms, over ${LATE_LIMIT_MS} ms`;
+}
+
+/** The output lines and exit code for both stages and the late clause (undefined = not reached). */
+export function render({ isolated, isolatedDetail, mounts, kinds, chatSource, harness, late, lateMs }) {
     const lines = [];
     if (isolated !== undefined) lines.push(isolated === null ? `${NAME}: isolated per-leaf mount PASS -- ${isolatedDetail}` : `${NAME}: isolated per-leaf mount FAIL -- ${isolated}`);
     if (mounts !== undefined) lines.push(mounts === null ? `${NAME}: mounts PASS -- ${kinds.join(', ')} (agent-session from ${chatSource})` : `${NAME}: mounts FAIL -- ${mounts}`);
-    const ok = isolated === null && mounts === null && !harness;
+    if (late !== undefined) lines.push(late === null ? `${NAME}: late CLI terminal PASS -- a tab in ${lateMs} ms (limit ${LATE_LIMIT_MS} ms)` : `${NAME}: late CLI terminal FAIL -- ${late}`);
+    const ok = isolated === null && mounts === null && late === null && !harness;
     if (harness) lines.push(`${NAME}: FAIL -- harness: ${harness}`);
-    else lines.push(ok ? `${NAME}: PASS -- isolated per-leaf mount and ${kinds.length} hosted type(s) mounted` : `${NAME}: FAIL -- ${isolated !== null ? 'isolated per-leaf mount' : 'mounts'}`);
+    else lines.push(ok ? `${NAME}: PASS -- isolated per-leaf mount, ${kinds.length} hosted type(s) mounted, late CLI terminal in ${lateMs} ms` : `${NAME}: FAIL -- ${isolated !== null ? 'isolated per-leaf mount' : mounts !== null ? 'mounts' : 'late CLI terminal'}`);
     return { code: ok ? 0 : 1, lines };
 }
 
@@ -169,9 +181,9 @@ async function stage0(s, ctxId, worktreeIdOut) {
 }
 
 /**
- * Before any pane mounts: a terminal through the bundle's createTerminal (terminal.create). Measured
- * (2026-11-10): once a TerminalPane has mounted in a client, later host terminals (CLI or
- * terminal.create) stop becoming tabs in that client for at least 30 s, so this tab is made first.
+ * Before any pane mounts: a terminal through the bundle's createTerminal (terminal.create). The
+ * mirror freeze that once forced this order is fixed in the entry (64-MIRROR-FREEZE.md) and judged
+ * by the late CLI clause; the order is harmless and kept.
  */
 async function preCreateTerminal(s, ctxId) {
     const ev = expr => s.evalIn(ctxId, expr);
@@ -190,12 +202,13 @@ async function preCreateTerminal(s, ctxId) {
     }
 }
 
-/** Informational: does a CLI terminal created now (after mounts) become a tab within 15 s? */
+/** The late CLI clause's measurement: ms from the CLI's exit until the new tab is a record, null after 15 s. */
 async function lateCliTerminal(s, ctxId) {
     const records = async () => JSON.parse(await s.evalIn(ctxId, 'JSON.stringify(window.__pbPanes || [])'));
     const known = new Set((await records()).map(r => r.tabId));
     s.orca('terminal', 'create', '--worktree', `path:${s.repoDir}`);
-    try { await s.lib.pollFor(async () => (await records()).some(r => r.kind === 'terminal' && !known.has(r.tabId)), 15000, 'late'); return 'yes'; } catch { return 'no (15 s)'; }
+    const t0 = Date.now();
+    try { await s.lib.pollFor(async () => (await records()).some(r => r.kind === 'terminal' && !known.has(r.tabId)), 15000, 'late'); return Date.now() - t0; } catch { return null; }
 }
 
 async function mountOne(s, ctxId, pick, slot, settleMs = 7000) {
@@ -280,7 +293,8 @@ async function live() {
             console.log(render({ isolated: result.isolated, isolatedDetail: result.isolatedDetail }).lines[0]);
             const m = await stage1(s, ctxId, wt.id, pre);
             result.conflictText = (m.mounts ?? []).find(x => x.kind === 'conflict-review')?.text ?? '';
-            result.late = await lateCliTerminal(s, ctxId);
+            result.lateMs = await lateCliTerminal(s, ctxId);
+            result.late = lateVerdict(result.lateMs);
             result.mounts = mountsVerdict(m);
             result.kinds = (m.mounts ?? []).map(x => x.kind);
             result.chatSource = m.chatSource ?? 'not reached';
@@ -290,7 +304,6 @@ async function live() {
         result.harness = String(error?.message ?? error).slice(0, 500);
     }
     const out = render(result);
-    if (result.late) console.log(`${NAME}: note -- a CLI terminal created after TerminalPane mounts became a tab in this client: ${result.late}`);
     if (result.conflictText) console.log(`${NAME}: note -- hosted conflict review reads: ${result.conflictText.slice(0, 120)}`);
     for (const line of out.lines.slice(result.isolated !== undefined ? 1 : 0)) console.log(line);
     return out.code;
@@ -320,8 +333,15 @@ function selfTest() {
     ok('an unmounted kind is red', mountsVerdict(mo({ mounts: HOSTED_KINDS.filter(k => k !== 'agent-session').map(k => mount(k)) })) === 'agent-session: not mounted');
     ok('a ResizeObserver delivery notice alone stays green', mountsVerdict(mo({ mounts: HOSTED_KINDS.map(k => mount(k, k === 'terminal' ? { windowErrors: ['ResizeObserver loop completed with undelivered notifications.'] } : {})) })) === null);
     ok('a window error is red', /^terminal: window error x/.test(mountsVerdict(mo({ mounts: HOSTED_KINDS.map(k => mount(k, k === 'terminal' ? { windowErrors: ['x'] } : {})) })) ?? ''));
-    const r = render({ isolated: null, isolatedDetail: 'd', mounts: 'simulator: x', kinds: HOSTED_KINDS, chatSource: 'createChat' });
-    ok('render: isolated line precedes mounts line, last line FAIL', r.code === 1 && /isolated per-leaf mount PASS/.test(r.lines[0]) && /mounts FAIL/.test(r.lines[1]) && /: FAIL -- mounts$/.test(r.lines[2]));
+    ok('late CLI terminal within the limit is green', lateVerdict(172) === null && lateVerdict(LATE_LIMIT_MS) === null);
+    ok('late CLI terminal over the limit is red naming the time', /after 1200 ms, over 1000 ms/.test(lateVerdict(1200) ?? ''));
+    ok('late CLI terminal never recorded is red naming the freeze', /within 15 s \(the mirror freeze/.test(lateVerdict(null) ?? ''));
+    const r = render({ isolated: null, isolatedDetail: 'd', mounts: 'simulator: x', kinds: HOSTED_KINDS, chatSource: 'createChat', late: null, lateMs: 172 });
+    ok('render: isolated line precedes mounts line, last line FAIL', r.code === 1 && /isolated per-leaf mount PASS/.test(r.lines[0]) && /mounts FAIL/.test(r.lines[1]) && /: FAIL -- mounts$/.test(r.lines[3]));
+    const g = render({ isolated: null, isolatedDetail: 'd', mounts: null, kinds: HOSTED_KINDS, chatSource: 'createChat', late: null, lateMs: 172 });
+    ok('render: all clauses green gives PASS naming the late time', g.code === 0 && /late CLI terminal in 172 ms$/.test(g.lines.at(-1)));
+    const f = render({ isolated: null, isolatedDetail: 'd', mounts: null, kinds: HOSTED_KINDS, chatSource: 'createChat', late: lateVerdict(null), lateMs: null });
+    ok('render: a late CLI terminal miss alone is red', f.code === 1 && /late CLI terminal FAIL/.test(f.lines[2]) && /: FAIL -- late CLI terminal$/.test(f.lines[3]));
     const child = spawnSync(process.execPath, ['--input-type=module', '-e', `await import(${J(SELF)})`], { encoding: 'utf8', timeout: 30000 });
     ok('importing the module prints and starts nothing', child.status === 0 && child.stdout === '' && child.stderr === '');
     console.log(failed ? `${NAME} self-test: FAIL -- ${failed} case(s)` : `${NAME} self-test: PASS -- every planted fault went red naming it`);
