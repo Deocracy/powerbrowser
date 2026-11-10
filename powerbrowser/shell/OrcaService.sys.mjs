@@ -547,6 +547,15 @@ export const OrcaService = {
   },
 
   async _stopTree() {
+    // Phase 64 (P64-34): the pairing and bundle files go first. The offer is worthless once stop begins, and a
+    // quit may end the process before the kill waits below return, which left them in the bridge folder.
+    for (const name of this._bridgeDir ? [OrcaEnv.ORCA_WEB_PAIRING_FILE, OrcaEnv.ORCA_PANES_DIR_FILE] : []) {
+      try {
+        await PowerBrowserAPI.removeStateFile(OrcaEnv.bridgeFileFor(this._bridgeDir, name, this._bridgePlatform));
+      } catch {
+        // Best-effort; the next ready overwrites them.
+      }
+    }
     const graceMs = PowerBrowserAPI.getIntPref("powerbrowser.orca.killGraceMs", 16000);
     const proc = this._proc && this._proc.exitCode == null ? this._proc : null;
     const orcadPid = proc ? proc.pid : null;
@@ -575,14 +584,6 @@ export const OrcaService = {
         await PowerBrowserAPI.removeStateFile(OrcaEnv.bridgeFileFor(this._bridgeDir, OrcaEnv.ORCAD_DATA_ROOT_FILE, this._bridgePlatform));
       } catch {
         // Best-effort; the next ready overwrites it.
-      }
-    }
-    // Phase 64 (P64-34): the pairing and bundle files go with it.
-    for (const name of this._bridgeDir ? [OrcaEnv.ORCA_WEB_PAIRING_FILE, OrcaEnv.ORCA_PANES_DIR_FILE] : []) {
-      try {
-        await PowerBrowserAPI.removeStateFile(OrcaEnv.bridgeFileFor(this._bridgeDir, name, this._bridgePlatform));
-      } catch {
-        // Best-effort, as above.
       }
     }
     this._state = "stopped";
