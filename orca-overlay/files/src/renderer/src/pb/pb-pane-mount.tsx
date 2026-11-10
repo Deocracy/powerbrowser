@@ -46,7 +46,7 @@ import { useAppStartupHydration } from '../app-shell/use-app-startup-hydration'
 import { useDocumentAppearance } from '../app-shell/use-document-appearance'
 import { useRuntimeGraphSync } from '../app-shell/use-runtime-graph-sync'
 import { initWebDeviceKeySupport } from '../web/web-device-key-support'
-import { parseWebPairingInput } from '../web/web-pairing'
+import { parseWebPairingInput, readPairingInputFromLocation } from '../web/web-pairing'
 import { installWebPreloadApi } from '../web/web-preload-api'
 import { callRuntimeResult } from '../web/preload-api/web-runtime-calls'
 import {
@@ -172,11 +172,23 @@ async function step<T>(name: string, run: () => T | Promise<T>): Promise<T> {
   }
 }
 
+// The bridge folder's web-pairing file holds orcad's web-client URL (C5). Orca's own web client
+// reads the offer from that URL's location, so the entry does the same; a bare offer passes through.
+function pairingInputOf(input: string): string {
+  const trimmed = input.trim()
+  if (!/^https?:\/\//i.test(trimmed)) return trimmed
+  try {
+    return readPairingInputFromLocation(new URL(trimmed)) ?? trimmed
+  } catch {
+    return trimmed
+  }
+}
+
 /** Once per document: session-only pairing, the web preload API, then the hidden services root. */
 export function bootstrap(options: { pairing: string }): Promise<void> {
   booting ??= (async () => {
     await initWebDeviceKeySupport().catch(noop)
-    const offer = await step('parseWebPairingInput', () => parseWebPairingInput(options.pairing))
+    const offer = await step('parseWebPairingInput', () => parseWebPairingInput(pairingInputOf(options.pairing)))
     if (!offer || offer.scope !== 'runtime') {
       throw new Error('orca pane bootstrap: parseWebPairingInput failed (not a runtime pairing offer)')
     }
