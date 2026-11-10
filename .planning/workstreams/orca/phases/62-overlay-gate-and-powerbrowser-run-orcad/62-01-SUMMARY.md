@@ -19,6 +19,9 @@ actuals:
   tokens: 14000
   tasks: 3
   commits: 5
+plan_head_before: b6a3e2ce7d8c477d1f408d479282a6d53bde2770
+plan_head_after: 4de4ba0fccd6d491af5fb5bcc6ae50e0cbbacb51
+status: complete
 
 tech-stack:
   added: []
@@ -97,9 +100,9 @@ Status: complete. All three tasks done; no blocker.
 | 2 | fbae49e8 | scripts/verify-orca-overlay.mjs, configuration.toml, scripts/lib/config-schema.json, docs/REBRANDING.md, scripts/verify-platform.sh |
 | 3 | 9a93f27f | scripts/verify-orca-build-shape.mjs, docs/BUILD.md |
 | 3 | fbf3f423 | 62-01-SUMMARY.md |
-| 3 | the commit after fbf3f423 | 62-01-SUMMARY.md (this table corrected) |
+| 3 | 4de4ba0f | 62-01-SUMMARY.md (this table corrected) |
 
-Note on 9a93f27f: this lane session staged the two Task 3 files and, before its own commit ran, a process other than this session committed exactly those staged files on the lane branch (author line as the others, co-author trailer "Claude Opus"). Its content equals this session's working tree (`git status` was clean after fbf3f423), so nothing was lost or added; Task 3 is therefore three commits instead of one. No amend was made.
+Note on 9a93f27f: this lane session staged the two Task 3 files and, before its own commit ran, a takeover executor session (sent by the coordinator to finish the plan) reviewed the staged diff and committed those two files (co-author trailer "Claude Opus"). It changed one thing before committing: the staged `docs/BUILD.md` build-order sentence was garbled ("re-verify `orca/` at the pin; scrub every / the overlay / (step 1b ...); scrub every") and now reads "re-verify `orca/` at the pin; apply the overlay (step 1b, see "Overlay" below); scrub every inherited `ORCA_*` variable". Task 3 is therefore three commits instead of one, plus the takeover's SUMMARY-correction commit. No amend was made. `plan_head_after` and `commits: 5` are measured through 4de4ba0f and exclude that final SUMMARY-correction commit.
 
 ## The seam
 
@@ -149,6 +152,18 @@ Held-back rows (files already listed in those rows gained hits):
 | Orca (title) | 93 | 98 |
 | orca (lower) | 420 | 489 |
 | orcad (lower) | 179 | 180 |
+
+Held-back Orca-family occurrences per lane file already in those rows, from the report's held-back list on the committed lane tree (absolute counts after the lane, not deltas):
+
+| File | orca | Orca | ORCA | orcad | other |
+|------|------|------|------|-------|-------|
+| configuration.toml | 9 | 3 | 0 | 0 | |
+| scripts/lib/config-schema.json | 3 | 3 | 0 | 0 | |
+| docs/REBRANDING.md | 12 | 0 | 2 | 0 | |
+| docs/BUILD.md | 48 | 11 | 1 | 10 | |
+| scripts/build-orca.sh | 38 | 9 | 9 | 14 | Orcad 1 |
+| scripts/verify-orca-build-shape.mjs | 40 | 1 | 0 | 22 | ORCAD 7 |
+| scripts/verify-platform.sh | 46 | 8 | 2 | 10 | |
 
 Unclaimed probe hits (files not yet in any row's `only_in`):
 
