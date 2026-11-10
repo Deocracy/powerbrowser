@@ -3888,6 +3888,11 @@ run_own_checks() {
     # over fixtures, 25 cases. Both hermetic: no orcad, no browser, no network.
     "orca-hidden-electron-self-test|node $REPO_ROOT/scripts/verify-orca-hidden-electron.mjs --self-test"
     "orca-service-live-self-test|node $REPO_ROOT/scripts/verify-orca-service-live.mjs --self-test"
+    # NEW (63-03, TERM-02/EXT-02, P63-15..P63-26): orca-agent-hooks-self-test. Pure verdicts over fixture
+    # observations (relay order, PTY hook names, wrapper identity, planted ORCA_ name, stdout, exit code, degrade)
+    # and fixture copies of the orca-agents sources (process.env reads, stdout writes, registerOverride, preference
+    # setters, settings.json); a child Node imports the real module and must print and start nothing.
+    "orca-agent-hooks-self-test|node $REPO_ROOT/scripts/verify-orca-agent-hooks.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"

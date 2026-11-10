@@ -58,12 +58,25 @@ export function parseWrapperArgs(argv) {
     return { bridgeDir, claude: rest[0] ?? null, args: rest.slice(1) };
 }
 
+/** An error the wrapper raised itself; only these messages reach the log (a CLI error could carry its output). */
+function refuse(message, extra = {}) {
+    return Object.assign(new Error(message), { wrapper: true }, extra);
+}
+
+/** Pure: the log's reason for an error: the wrapper's own message, else only a code or a name. */
+export function logReason(e) {
+    if (e?.wrapper) return e.message;
+    if (typeof e?.code === 'string') return e.code;
+    if (Number.isInteger(e?.status)) return `exit ${e.status}`;
+    return e?.name ?? 'error';
+}
+
 function assertPrivate(path, kind) {
     const st = lstatSync(path);
-    if (kind === 'directory' ? !st.isDirectory() : !st.isFile()) throw new Error(`${kind} is not a regular ${kind}`);
+    if (kind === 'directory' ? !st.isDirectory() : !st.isFile()) throw refuse(`${kind} is not a regular ${kind}`);
     if (POSIX) {
-        if (st.uid !== process.getuid()) throw new Error(`${kind} is owned by another user`);
-        if ((st.mode & 0o077) !== 0) throw new Error(`${kind} grants group or other access`);
+        if (st.uid !== process.getuid()) throw refuse(`${kind} is owned by another user`);
+        if ((st.mode & 0o077) !== 0) throw refuse(`${kind} grants group or other access`);
     }
 }
 
@@ -73,8 +86,8 @@ export function readDataRoot(bridgeDir) {
     const file = join(bridgeDir, DATA_ROOT_FILE);
     assertPrivate(file, 'file');
     const dataRoot = readFileSync(file, 'utf8').split('\n')[0];
-    if (!isAbsolute(dataRoot)) throw new Error('data root is not an absolute path');
-    if (!existsSync(join(dataRoot, 'cli', 'bin', 'orca'))) throw new Error('data root has no Orca CLI');
+    if (!isAbsolute(dataRoot)) throw refuse('data root is not an absolute path');
+    if (!existsSync(join(dataRoot, 'cli', 'bin', 'orca'))) throw refuse('data root has no Orca CLI');
     return dataRoot;
 }
 
@@ -120,7 +133,7 @@ export function firstString(objects, names) {
 export function createPane(dataRoot, cwd, env) {
     const created = runCli(dataRoot, ['terminal', 'create', '--worktree', `path:${cwd}`, '--title', PANE_TITLE, '--command', PLACEHOLDER_COMMAND], env);
     const handle = firstString([created, created?.terminal], ['handle']);
-    if (!handle) throw Object.assign(new Error('create returned no handle'), { pane: null });
+    if (!handle) throw refuse('create returned no handle', { pane: null });
     const pane = {
         handle,
         paneKey: firstString([created, created?.terminal], ['paneKey']),
@@ -143,7 +156,7 @@ export function createPane(dataRoot, cwd, env) {
         pane.tabId ??= firstString([row], ['tabId']);
         pane.paneKeyFrom = 'list';
     }
-    if (!pane.paneKey || !pane.tabId || !pane.worktreeId) throw Object.assign(new Error('pane identity incomplete'), { pane });
+    if (!pane.paneKey || !pane.tabId || !pane.worktreeId) throw refuse('pane identity incomplete', { pane });
     return pane;
 }
 
@@ -168,7 +181,7 @@ export function main(argv, baseEnv = process.env, cwd = process.cwd()) {
     let env;
     let step = 'bridge directory argument missing';
     try {
-        if (!bridgeDir) throw new Error('no --bridge-dir');
+        if (!bridgeDir) throw refuse('no --bridge-dir');
         step = 'read orcad-data-root';
         dataRoot = readDataRoot(bridgeDir);
         step = 'terminal create';
@@ -181,7 +194,7 @@ export function main(argv, baseEnv = process.env, cwd = process.cwd()) {
         }
         env = claudeEnv(baseEnv, pane, dataRoot);
     } catch (e) {
-        logStep(bridgeDir, `${step} failed (${e?.message ?? 'error'}); running claude without an Orca pane`);
+        logStep(bridgeDir, `${step} failed (${logReason(e)}); running claude without an Orca pane`);
         pane = null;
         env = claudeEnv(baseEnv, null, null);
     }
