@@ -3861,6 +3861,11 @@ run_own_checks() {
     # never redistributes them. The self-test plants six faults in mkdtemp fixtures.
     "licence-allowlist|node $REPO_ROOT/scripts/verify-licence-allowlist.mjs"
     "licence-allowlist-self-test|node $REPO_ROOT/scripts/verify-licence-allowlist.mjs --self-test"
+    # NEW (62-01, OVL-01/OVL-05, P62-09/P62-10/P62-17): the Orca overlay gate. Derived at
+    # check time: the seam list from orca-overlay/seams.json, each seam's upstream blob from
+    # git -C orca rev-parse HEAD:<path>, the patched paths from the patches' diff headers,
+    # the changed-line counts from git apply --numstat. Steps that need orca/ SKIP by a line.
+    "orca-overlay|node $REPO_ROOT/scripts/verify-orca-overlay.mjs"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
