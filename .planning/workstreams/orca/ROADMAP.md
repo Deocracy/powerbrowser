@@ -126,7 +126,15 @@ Plans:
   4. A `verify-platform.sh` row records each declared seam's upstream blob. It goes red on a whole-file replacement of an upstream Orca path, on an undeclared seam, or on a seam count over the cap; its `--self-test` plants each fault and requires each to go red naming it.
   5. The same gate derives the list of PB-added overlay files from the tree. It goes red on any file that shadows an upstream path at the pin, or that Orca's `build:web` or `build:orcad` does not compile.
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+**Wave 1**
+- [ ] 62-01-PLAN.md — lane p62-01: orca-overlay/ with the one RUN-04 seam, build-orca.sh hook, overlay gate with self-test and three rows, build-shape seam coexistence, [orca] seam_cap (OVL-01, OVL-05, RUN-04)
+- [ ] 62-02-PLAN.md — lane p62-02: OrcaService on a pure OrcaEnv, PowerBrowserProcesses boundary methods, launch wiring, .onorca.dev row, orca-service / hidden-Electron / live checks (RUN-03, RUN-04, RUN-05)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 62-03-PLAN.md — coordinator: merge 62-01 then 62-02, rebuild Orca and PowerBrowser, live proofs of criteria 1-5, brand rows re-measured, tracking
 
 ### Phase 63: Theia terminals and agent hooks for Orca
 
