@@ -3955,6 +3955,11 @@ run_own_checks() {
     # then each planted fault stops at its named stage (seam-apply, typecheck, coverage, rows, brand scan),
     # and a row or probe that prints SKIP is red.
     "rebase-orca-self-test|bash $REPO_ROOT/scripts/rebase-orca.sh --self-test"
+    # NEW (68-08, BEXT-02, P68-39): uBlock Origin pre-installed through the distribution directory
+    # (<GreD>/distribution/extensions/<id>.xpi, removable, no policy entry). The pin file's shape; with the download
+    # cached in .mozbuild/bundled-xpi/, its sha256, manifest id and version equal the pin and it is signed. A named
+    # SKIP of the cached legs when nothing is cached.
+    "bundled-xpi|node $REPO_ROOT/scripts/verify-bundled-xpi.mjs"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6584,6 +6589,9 @@ run_own_checks() {
       # NEW (68-09, BEXT-01, P68-38): bundled-extensions-live. The built backend's list-extensions on a fresh config dir
       # lists the extension as a user plugin, not a built-in; removing its directory sticks across a restart. No browser.
       "bundled-extensions-live|node $REPO_ROOT/scripts/verify-bundled-extensions.mjs --live"
+      # NEW (68-08, BEXT-02, P68-39): bundled-xpi-packaged. The extracted Linux package's distribution/extensions/
+      # holds exactly the pinned XPIs as <id>.xpi, each byte-equal to its pin. FAILs naming the package build without it.
+      "bundled-xpi-packaged|node $REPO_ROOT/scripts/verify-bundled-xpi.mjs --packaged"
     )
   fi
 

@@ -1,0 +1,11 @@
+{
+  "$comment": "BEXT-02 (P68-39): Gecko add-ons pre-installed through <GreD>/distribution/extensions/<id>.xpi (macOS Contents/Resources/distribution/extensions/), staged unmodified by powerbrowser/packaging/stage-bundled-xpi.sh. Gecko installs each one into the profile once, with no network, and never reinstalls one the user removed (extensions.installedDistroAddon.<id>). There is deliberately no ExtensionSettings policy entry: its force_installed and normal_installed modes stop the user removing the add-on. A bump changes version, url and sha256 together; the sha256 is of the AMO-signed file the url serves. Checked by scripts/verify-bundled-xpi.mjs.",
+  "uBlock0@raymondhill.net": {
+    "name": "uBlock Origin",
+    "version": "1.76.0",
+    "url": "https://addons.mozilla.org/firefox/downloads/file/5225273/ublock_origin-1.76.0.xpi",
+    "sha256": "6f20ff6749193599548770539103069c20948dfcd3e61c3089a67da7bfc3be39",
+    "licence": "GPL-3.0-or-later",
+    "source": "https://github.com/gorhill/uBlock/tree/1.76.0"
+  }
+}
