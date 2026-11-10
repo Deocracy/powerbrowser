@@ -24,6 +24,12 @@
 #      build:mobile-web, build:orcad
 #   7. de-slot: removes the three slot markers and out/runtimes (Node 24.22.1)
 #   8. build:web
+#   9. panes: scripts/build-orca-panes.sh, the Orca pane bundle in out/web/assets/pb-panes/
+#      (Phase 64). It empties pb-panes/ first, so every later step that writes into pb-panes/
+#      (Phase 66's browser-host step) runs after it, here and on the --panes-only path.
+#
+# --panes-only: on an already-built tree, runs step 1, step 1b, step 9 and every later step that
+# writes into pb-panes/; refuses when orca/out/web/web-index.html is absent.
 # orca/ is changed only by the declared seams and PB-added files of
 # orca-overlay/ (D-04, D-16, P62-09). This build is separate
 # from the Theia build and mach build (P59-12). Full output is kept in
@@ -33,6 +39,14 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC_DIR="$REPO_ROOT/orca"
 START=$(date +%s)
+
+PANES_ONLY=0
+for arg in "$@"; do
+  case "$arg" in
+    --panes-only) PANES_ONLY=1 ;;
+    *) echo "build-orca: unknown argument $arg" >&2; exit 2 ;;
+  esac
+done
 
 LOG_DIR="$REPO_ROOT/.mozbuild/orca-build"
 mkdir -p "$LOG_DIR"
@@ -129,6 +143,14 @@ apply_overlay() {
 }
 run_step overlay apply_overlay
 
+# --panes-only: step 9 and every later step that writes into pb-panes/, on a built tree.
+if [ "$PANES_ONLY" = 1 ]; then
+  [ -f "$SRC_DIR/out/web/web-index.html" ] || fail "--panes-only: orca/out/web/web-index.html is missing; run scripts/build-orca.sh without --panes-only first"
+  run_step panes bash "$REPO_ROOT/scripts/build-orca-panes.sh"
+  echo "build-orca: PASS -- panes only in $(( $(date +%s) - START ))s; log $LOG"
+  exit 0
+fi
+
 # 2. Shell entry.
 node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"
 if [ "$node_major" != "24" ] || ! command -v corepack >/dev/null || ! command -v objdump >/dev/null; then
@@ -194,6 +216,9 @@ run_step build:web pnpm run build:web
 for rel in out/web/web-index.html out/orcad/orcad.js; do
   [ -f "$rel" ] || fail "step outputs: orca/$rel is missing"
 done
+
+# 9. The pane bundle (Phase 64); later pb-panes/ writers go after it.
+run_step panes bash "$REPO_ROOT/scripts/build-orca-panes.sh"
 
 # shellcheck source=/dev/null
 . "$REPO_ROOT/generated/upstream-pins.env"
