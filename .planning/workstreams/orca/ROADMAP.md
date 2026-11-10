@@ -249,23 +249,24 @@ The Phase 61 parity result may split or descope this phase. Any such change is a
   4. Linux, macOS and Windows artifacts contain orcad and the overlaid client, with the node-pty prebuild built per target on that target's own runner. The Flatpak manifest grants `--filesystem=home`. Each of these checks is one `verify-platform.sh` row.
   5. The live checks pass on Linux. macOS and Windows smoke results are recorded when a host is available (D-24).
 
-**Plans**: 9 plans
+**Plans**: 10 plans
 
 Plans:
-**Wave 1** *(executable now; six lanes in parallel)*
-- [ ] 68-01-PLAN.md — lane p68-01: Orca in the Linux, Windows and macOS artifacts (windows-orca, macos-orca-arm64/x64/universal, <GreD>/orca staging, host-root grep), orca-packaged-tree, magic natives, Flatpak --filesystem=home, Windows staged-Node path, --rulings release guard, packaged-live check written (PLAT-01, PLAT-02)
+**Wave 1** *(executable now; seven lanes in parallel)*
+- [ ] 68-01-PLAN.md — lane p68-01: Orca in the Linux and macOS artifacts (build-linux Orca step, macos-orca-arm64/x64/universal, package-linux.sh and package-macos.sh <GreD>/orca staging, host-root grep), portable build-orca.sh, orca-packaged-tree, magic natives, Flatpak --filesystem=home, build-linux --rulings guard, release-shape (no Linux job needs a Windows job with this lane alone), packaged-live check written (PLAT-01, PLAT-02)
+- [ ] 68-10-PLAN.md — lane p68-10: Orca in the Windows artifact (windows-orca, build-windows needs, --rulings guard and admission, package-windows.sh staging), win-sign-list and the @ zip filter, win-sign-chain, build-windows-shape over the producer list, staged-Node path in OrcaService and TheiaService, INTERNAL-APIS lines; shares release.yml with 68-01 (other jobs) and OrcaService.sys.mjs with 68-07 (_resolve only) (PLAT-01)
 - [ ] 68-02-PLAN.md — lane p68-02: weekly re-pin: rebase-orca.yml and rebase-orca.sh (--replay-only, fixture self-test), orcaDue, --orca-select, detect-orca, bump-pr-orca with auto-merge, tracking issue, orca-slotless-start --orcad-only (OVL-02)
 - [ ] 68-03-PLAN.md — lane p68-03: orca-mobile-protocol and orca-mobile-skew, seams.json upstream key and --upstream-prs, export-orca-seam-pr.mjs (OVL-03, OVL-06)
 - [ ] 68-04-PLAN.md — lane p68-04: bundle-derived Orca licence notices, per-package rule, agent SDK as ruling 68-A status extension (D-30; red until 68-07 and 68-09 merge) with the owner terms check pending, permissive set pending 68-B, orca-licence-rulings (PLAT-01)
-- [ ] 68-07-PLAN.md — lane p68-07: Claude agent SDK out of orcad (externals seam), loadClaudeAgentSdk reads ORCA_CLAUDE_AGENT_SDK_DIR, OrcaService points it at the extension unless Theia has it disabled, orca-claude-sdk rows; shares OrcaService.sys.mjs with 68-01 (_spawnAndGate only) (BEXT-01)
+- [ ] 68-07-PLAN.md — lane p68-07: Claude agent SDK out of orcad (externals seam), loadClaudeAgentSdk reads ORCA_CLAUDE_AGENT_SDK_DIR, OrcaService points it at the extension unless Theia has it disabled, orca-claude-sdk rows; shares OrcaService.sys.mjs with 68-10 (_spawnAndGate only) (BEXT-01)
 - [ ] 68-09-PLAN.md — lane p68-09: the pre-installed, removable Claude Agent SDK Theia extension: bundled-extensions/claude-agent-sdk, download-plugins assembly into plugins/.user, @powerbrowser/bundled-extensions seed participant, bundled-extensions rows (BEXT-01)
 
-**Wave 2a** *(after the 68-01, 68-04 and 68-09 merges; Phase 67 not needed; launched by 68-06 Task 1)*
-- [ ] 68-08-PLAN.md — lane p68-08: uBlock Origin pre-installed through distribution/extensions (pinned AMO-signed XPI, staging in the three package scripts), filter-list hosts allowlisted, live install/filter/relaunch/disable/remove proof, Bundled extensions notices and inventory rows (BEXT-02)
+**Wave 2** *(coordinator-launched lanes: launched_by: coordinator in each plan's frontmatter; never started by an executor on its own; 68-06 launches each and waits for its SUMMARY)*
+- [ ] 68-08-PLAN.md — lane p68-08, launched by 68-06 Task 1 after the 68-01, 68-10, 68-04 and 68-09 merges (Phase 67 not needed): uBlock Origin pre-installed through distribution/extensions (pinned AMO-signed XPI, staging in the three package scripts), filter-list hosts allowlisted, live install/filter/relaunch/disable/remove proof, Bundled extensions notices and inventory rows (BEXT-02)
+- [ ] 68-05-PLAN.md — lane p68-05, launched by 68-06 Task 2 after Phase 67 and Task 1's last commit: final seam classes, upstream tests and descriptions, one export per D-27 class, orca-upstream-prs, owner hand-off (OVL-06)
 
-**Wave 2** *(after Phase 67; 68-06 Task 1 merges wave 1 early)*
-- [ ] 68-05-PLAN.md — lane p68-05: final seam classes, upstream tests and descriptions, one export per D-27 class, orca-upstream-prs, owner hand-off (OVL-06)
-- [ ] 68-06-PLAN.md — coordinator: merge 03, 04, 01, 07, 09, 02, then launch and merge 08, then 05, identity re-pin, brand rows, container package, orca-packaged-live, PLAT-02 Linux pass, WINDOWS.md entries, tracking
+**Wave 3** *(coordinator; starts when the seven wave-1 SUMMARYs exist, finishes after 68-08 and 68-05 merge)*
+- [ ] 68-06-PLAN.md — coordinator: merge 03, 04, 01, 10, 07, 09, 02, then launch and merge 08 (Task 1), then after Phase 67 launch and merge 05 (Task 2; seams.json and verify-platform.sh ordering by its merge rule (7)), identity re-pin, brand rows, container package, orca-packaged-live, PLAT-02 Linux pass, WINDOWS.md entries, tracking
 
 Open items for this phase:
 - The macOS half of PLAT-01 needs a macOS PowerBrowser build. v1.6 deferred macOS packaging (workstream `deploy`, Phase 55).
