@@ -3914,6 +3914,16 @@ run_own_checks() {
     # orca-agent-status-live-self-test: the live row's pure verdicts (status order, waiting, record growth, prompt
     # cap, agent PTY under Orca's terminal daemon, quit survivors, bridge-folder files) over fixtures.
     "orca-agent-status-live-self-test|node $REPO_ROOT/scripts/verify-orca-agent-status-live.mjs --self-test"
+    # NEW (64-04, TERM-04, P64-33): orca-terminal-keys, ported by copy from refs/heads/ServerDestroyer/p63-02 (never
+    # merged; the o<n> clauses dropped, D-31). The six keys derived from PAGE_KEYS' reserved rows with typescript and
+    # compared both ways with orca-panes' ORCA_TERMINAL_PASSTHROUGH_KEYS; literal ctrl; the when clause exactly the
+    # scoped key; only passthrough rows; the scoped key only on hosted terminal nodes; no terminalFocus row. The
+    # orca-panes half is a named SKIP only while theia/extensions/orca-panes is absent; present without a constant is
+    # red. The self-test runs on a fixture orca-panes tree in C10's shape (11 plants). orca-terminal-keys-live-self-test
+    # (ported from p63-05): its pure verdicts over fixture observations plus a child-Node import-silence check.
+    "orca-terminal-keys|node $REPO_ROOT/scripts/verify-orca-terminal-keys.mjs"
+    "orca-terminal-keys-self-test|node $REPO_ROOT/scripts/verify-orca-terminal-keys.mjs --self-test"
+    "orca-terminal-keys-live-self-test|node $REPO_ROOT/scripts/verify-orca-terminal-keys-live.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6523,6 +6533,13 @@ run_own_checks() {
       # at most two model turns, on the owner's login; Claude session records compared before and after, never with
       # a constant. Run under flock /home/chris/coding/Power-Browser/.git/pb-live.lock. SKIP when not built.
       "orca-agent-status-live|node $REPO_ROOT/scripts/verify-orca-agent-status-live.mjs"
+      # NEW (64-04, TERM-04, P64-33): orca-terminal-keys-live, ported by copy from refs/heads/ServerDestroyer/p63-05
+      # (never merged; runTabStage, the backend-parent chain and the kind 'orca' restore stage dropped, D-31). One
+      # session: the in-session control in a t<n> terminal and a web tab, the six keys reaching a hosted Orca
+      # terminal's PTY (stage 2, a named SKIP only while theia/extensions/orca-panes is absent), then the control
+      # repeated. Coordinator proof on the merged, wired, built tree. Run under
+      # flock /home/chris/coding/Power-Browser/.git/pb-live.lock with ORCA_* unset.
+      "orca-terminal-keys-live|node $REPO_ROOT/scripts/verify-orca-terminal-keys-live.mjs"
     )
   fi
 
