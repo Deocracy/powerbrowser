@@ -49,6 +49,9 @@
 //       H  (Phase 63) no bridge folder can be chosen (no runtime directory, HOME
 //          under /tmp): state still reaches ready, nothing is written through
 //          writePrivateFile, and the "Orca bridge folder" row reads "not available".
+//       I  (Phase 68, D-30, P68-38) Theia's backend-settings.json lists the Claude agent
+//          SDK extension as disabled: orcad's ORCA_CLAUDE_AGENT_SDK_DIR is the empty string.
+//          Scenario A (no settings file) requires the extension's SDK path instead.
 //     Scenario A also checks (Phase 63, D-31, P63-26, P63-35) that orcad-data-root
 //     is written through PowerBrowserProcesses.writePrivateFile into the bridge
 //     folder OrcaEnv.bridgeDirFor derives, only after the ready line, with the
@@ -298,6 +301,8 @@ async function scenarioA(paths, env) {
     for (const name of diff.extra) fails.push(`scenario A: the spawned environment carries ${name}, which is neither a fixed name nor an allowlisted name PowerBrowser has`);
     for (const name of diff.missing) fails.push(`scenario A: the spawned environment lacks ${name}`);
     if (spec.environment[env.ORCAD_HIDDEN_ELECTRON_SWITCH] !== '1') fails.push(`scenario A: ${env.ORCAD_HIDDEN_ELECTRON_SWITCH} is not 1 in the spawned environment`);
+    const sdkDir = env.claudeAgentSdkDir({ profileDir: world.profileDir, backendSettings: null });
+    if (!sdkDir || spec.environment[env.ORCAD_CLAUDE_AGENT_SDK_DIR_ENV] !== sdkDir) fails.push(`scenario A: with no Theia settings file ${env.ORCAD_CLAUDE_AGENT_SDK_DIR_ENV} is ${JSON.stringify(spec.environment[env.ORCAD_CLAUDE_AGENT_SDK_DIR_ENV])}, not the extension's SDK path ${sdkDir}`);
     if (spec.environment.ORCA_USER_DATA !== dataRoot || spec.environment.ORCA_USER_DATA_PATH !== dataRoot) {
         fails.push(`scenario A: the data root names are not both ${dataRoot}`);
     }
@@ -486,6 +491,23 @@ async function scenarioH(paths, env) {
     return fails;
 }
 
+/** I: Theia has the Claude agent SDK extension disabled (Phase 68, P68-38): orcad gets the name with value "". */
+async function scenarioI(paths, env) {
+    const fails = [];
+    const world = baseWorld();
+    const settings = env.theiaBackendSettingsPath(world.profileDir);
+    world.files = { ...world.files, [settings]: { 'installedPlugins.disabledPlugins': JSON.stringify([env.CLAUDE_AGENT_SDK_EXTENSION_ID]) } };
+    const b = makeBoundary(world);
+    const svc = await loadService(paths, b, env);
+    await svc.start();
+    const spawn = b.calls.find((c) => c.name === 'spawnProcessExact' && !c.args[0].command.endsWith('/ln'));
+    if (!spawn) fails.push(`scenario I: orcad was not spawned: ${JSON.stringify(svc.getDiagnosticRows())}`);
+    else if (spawn.args[0].environment[env.ORCAD_CLAUDE_AGENT_SDK_DIR_ENV] !== '') fails.push(`scenario I: SDK extension disabled in Theia, yet ${env.ORCAD_CLAUDE_AGENT_SDK_DIR_ENV} is ${JSON.stringify(spawn.args[0].environment[env.ORCAD_CLAUDE_AGENT_SDK_DIR_ENV])}, not ""`);
+    if (indexOfCall(b.calls, 'readStateFile', (a) => a[0] === settings) < 0) fails.push(`scenario I: Theia's settings file ${settings} was never read`);
+    await svc.stop();
+    return fails;
+}
+
 // ---------------------------------------------------------------------------
 // Static clauses.
 
@@ -638,7 +660,7 @@ export async function check(paths) {
     const bridgeKey = bridgeKeyClause(paths);
     fails.push(...bridgeKey.fails);
     if (bridgeKey.comparison.startsWith('SKIP')) notes.push('SKIP of the POWERBROWSER_ORCA_BRIDGE_DIR comparison only -- lane p63-03 not merged (theia/extensions/orca-agents is absent)');
-    const scenarios = { A: scenarioA, B: scenarioB, C: scenarioC, D: scenarioD, E: scenarioE, F: scenarioF, H: scenarioH };
+    const scenarios = { A: scenarioA, B: scenarioB, C: scenarioC, D: scenarioD, E: scenarioE, F: scenarioF, H: scenarioH, I: scenarioI };
     const saved = globalThis.ChromeUtils;
     try {
         for (const [label, run] of Object.entries(scenarios)) {
@@ -704,12 +726,12 @@ async function runSelfTest() {
             { name: 'stop skips the daemon', naming: 'terminal daemon', file: paths.orcaService, edit: swap('    await this._endDaemon(this._daemonPid, this._daemonTicks, tree.filter(row => row.pid !== orcadPid));\n', '') },
             { name: 'environment name literal in OrcaService', naming: 'outside OrcaEnv', file: paths.orcaService, edit: (t) => `${t}\nconst HOME_NAME = "HOME";\n` },
             { name: 'NODE_OPTIONS in the allowlist', naming: 'steering variable', file: paths.orcaEnv, edit: swap('  "PATH",\n  "HOME",', '  "PATH",\n  "NODE_OPTIONS",\n  "HOME",') },
-            { name: 'switch removed from the fixed names', naming: 'ORCA_DISABLE_INSTALLED_ELECTRON_BROWSER', file: paths.orcaEnv, edit: swap('  ORCAD_HIDDEN_ELECTRON_SWITCH,\n]);', ']);') },
+            { name: 'switch removed from the fixed names', naming: 'ORCA_DISABLE_INSTALLED_ELECTRON_BROWSER', file: paths.orcaEnv, edit: swap('  ORCAD_HIDDEN_ELECTRON_SWITCH,\n  ORCAD_CLAUDE_AGENT_SDK_DIR_ENV,\n]);', '  ORCAD_CLAUDE_AGENT_SDK_DIR_ENV,\n]);') },
             { name: 'orcad-data-root written before ready', naming: 'before ready', file: paths.orcaService, edit: swap('    let proc;\n', '    await PowerBrowserProcesses.writePrivateFile(this._bridgeDir, OrcaEnv.ORCAD_DATA_ROOT_FILE, `${this._effectiveRoot}\\n`);\n    let proc;\n') },
             { name: 'orcad-data-root not removed on stop', naming: 'not removed', file: paths.orcaService, edit: swap('        await PowerBrowserAPI.removeStateFile(OrcaEnv.bridgeFileFor(this._bridgeDir, OrcaEnv.ORCAD_DATA_ROOT_FILE, this._bridgePlatform));\n', '') },
             { name: 'a null bridge folder fails the start', naming: 'null folder fatal', file: paths.orcaService, edit: swap('    if (!this._bridgeDir) {\n', '    if (!this._bridgeDir) {\n      return this._fail("choosing the Orca bridge folder", []);\n') },
-            { name: 'a PTY switch back in the fixed names', naming: 'pty switch', file: paths.orcaEnv, edit: swap('  ORCAD_HIDDEN_ELECTRON_SWITCH,\n]);', '  ORCAD_HIDDEN_ELECTRON_SWITCH,\n  "ORCA_EXTERNAL_PTY_ENDPOINT",\n]);') },
-            { name: 'a ptyEndpoint option back in buildOrcadEnv', naming: 'pty switch', file: paths.orcaEnv, edit: swap('export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion } = {}) {', 'export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion, ptyEndpoint } = {}) {') },
+            { name: 'a PTY switch back in the fixed names', naming: 'pty switch', file: paths.orcaEnv, edit: swap('  ORCAD_CLAUDE_AGENT_SDK_DIR_ENV,\n]);', '  ORCAD_CLAUDE_AGENT_SDK_DIR_ENV,\n  "ORCA_EXTERNAL_PTY_ENDPOINT",\n]);') },
+            { name: 'a ptyEndpoint option back in buildOrcadEnv', naming: 'pty switch', file: paths.orcaEnv, edit: swap('export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion, claudeAgentSdkDir } = {}) {', 'export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion, claudeAgentSdkDir, ptyEndpoint } = {}) {') },
             { name: 'orca-agents backend reads a different key', naming: 'POWERBROWSER_ORCA_BRIDGE_DIR', file: paths.orcaAgentsBackend, edit: swap("'POWERBROWSER_ORCA_BRIDGE_DIR'", "'POWERBROWSER_ORCA_BRIDGE_FOLDER'") },
             { name: 'orca-agents backend module deleted while the extension exists (red, not SKIP)', naming: 'orca-agents-backend-module.ts is missing', file: paths.orcaAgentsBackend, edit: () => null },
             { name: 'TheiaService builds the folder without bridgeDirFor', naming: 'OrcaEnv.bridgeDirFor', file: paths.theiaService, edit: swap('return await OrcaEnv.bridgeDirFor(dataRoot, name => PowerBrowserAPI.getEnv(name), OrcaEnv.nodePlatform(PowerBrowserProcesses.platform()));', 'return `${PowerBrowserAPI.getEnv("HOME")}/.cache/pb-orca-bridge`;') },
@@ -764,6 +786,6 @@ if (isEntryPoint) {
         for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`);
         process.exit(1);
     }
-    console.log(`${NAME}: PASS -- jar.mn ships every shell module; OrcaService spawns only through the exact-environment boundary, spells no environment name and carries no user-facing copy; launch wiring and the .onorca.dev row hold; POWERBROWSER_ORCA_BRIDGE_DIR comparison ${r.bridgeKeyComparison}; stub-boundary scenarios ${r.scenarios.join(', ')} (start with orcad-data-root after ready, reap, stop order, busy port, non-loopback, alias, no bridge folder)`);
+    console.log(`${NAME}: PASS -- jar.mn ships every shell module; OrcaService spawns only through the exact-environment boundary, spells no environment name and carries no user-facing copy; launch wiring and the .onorca.dev row hold; POWERBROWSER_ORCA_BRIDGE_DIR comparison ${r.bridgeKeyComparison}; stub-boundary scenarios ${r.scenarios.join(', ')} (start with orcad-data-root after ready, reap, stop order, busy port, non-loopback, alias, no bridge folder, SDK extension disabled)`);
     process.exit(0);
 }

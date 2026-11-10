@@ -154,7 +154,7 @@ async function runOrcad({ mode, nodeBin, orcaDir, OrcaEnv, home, dataRoot, port,
     mkdirSync(dataRoot, { recursive: true, mode: 0o700 });
     const version = (() => { try { return JSON.parse(readFileSync(join(orcaDir, 'package.json'), 'utf8')).version; } catch { return null; } })() || '0.0.0';
     const base = { PATH: process.env.PATH ?? '', HOME: home };
-    const env = OrcaEnv.buildOrcadEnv((name) => base[name] ?? '', { dataRoot, orcaVersion: version });
+    const env = OrcaEnv.buildOrcadEnv((name) => base[name] ?? '', { dataRoot, orcaVersion: version, claudeAgentSdkDir: '' });
     if (mode === 'stock') delete env[OrcaEnv.ORCAD_HIDDEN_ELECTRON_SWITCH];
     const args = OrcaEnv.buildOrcadArgs({ orcadMain: join(orcaDir, 'out', 'orcad', 'orcad.js'), port, webClientRoot: join(orcaDir, 'out', 'web') });
 

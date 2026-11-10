@@ -24,7 +24,15 @@
 //       bundle: its nonce comes back (the stock path is unchanged).
 // A rejection must carry code ERR_MODULE_NOT_FOUND and name the package (S3
 // and S4 also the directory). The variable name is read from the patched
-// source and must not carry a PowerBrowser token (/pb/i, /powerbrowser/i).
+// source and must not carry a PowerBrowser token (/pb/i, /powerbrowser/i),
+// and must equal OrcaEnv.ORCAD_CLAUDE_AGENT_SDK_DIR_ENV.
+//
+// The OrcaEnv leg (default mode, needs no orca/): powerbrowser/shell/OrcaEnv.sys.mjs
+// is imported by path and claudeAgentSdkDir runs a behavior table (no settings,
+// the extension id disabled, versioned, malformed, non-array, another id);
+// buildOrcadEnv must throw without a claudeAgentSdkDir decision and pass "" as "".
+// THEIA_CONFIG_DIR_NAME must equal the folder TheiaService._resolveConfigDir
+// appends to the profile directory, derived from its template literal.
 //
 // --built (full). ORCAD_EXTERNAL_MODULES, imported from
 // orca/config/scripts/orcad-entry-build.mjs, must list the SDK. The needle
@@ -58,6 +66,8 @@ const LOADER_REL = 'src/main/claude/claude-stream-json-connection.ts';
 const ENTRY_BUILD_REL = 'config/scripts/orcad-entry-build.mjs';
 const WORK_REL = '.mozbuild/orca-claude-sdk';
 const MISSING = 'ERR_MODULE_NOT_FOUND';
+const EXTENSION_ID = 'powerbrowser.claude-agent-sdk';
+const SDK_SUBPATH = `deployedPlugins/${EXTENSION_ID}/extension/node_modules/${SDK_PKG}`;
 
 const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
 
@@ -199,6 +209,49 @@ export function builtLeg({ outDir, sdkDir, externals }) {
     return { fails, needle, scanned: files.length };
 }
 
+/** The OrcaEnv behavior table (P68-38). `env` is the imported OrcaEnv module. Returns red reasons. */
+export function orcaEnvTable(env) {
+    const fails = [];
+    if (typeof env.claudeAgentSdkDir !== 'function' || typeof env.buildOrcadEnv !== 'function') return ['OrcaEnv exports no claudeAgentSdkDir or no buildOrcadEnv'];
+    if (env.CLAUDE_AGENT_SDK_EXTENSION_ID !== EXTENSION_ID) fails.push(`OrcaEnv.CLAUDE_AGENT_SDK_EXTENSION_ID is ${env.CLAUDE_AGENT_SDK_EXTENSION_ID}, not ${EXTENSION_ID} (the id lane 68-09 ships)`);
+    const path = `/p/${env.THEIA_CONFIG_DIR_NAME}/${SDK_SUBPATH}`;
+    const disabled = (value) => ({ 'installedPlugins.disabledPlugins': value });
+    const rows = [
+        ['no settings file', null, path],
+        ['the extension disabled', disabled(JSON.stringify([EXTENSION_ID])), ''],
+        ['the extension disabled by a versioned id', disabled(JSON.stringify([`${EXTENSION_ID}@1.0.0`])), ''],
+        ['a malformed disabled list', disabled('["powerbrowser.claude'), path],
+        ['a non-array disabled list', disabled(JSON.stringify({ [EXTENSION_ID]: true })), path],
+        ['another id disabled', disabled(JSON.stringify(['vscode.git'])), path],
+        ['no disabled key', { other: 1 }, path],
+    ];
+    for (const [label, backendSettings, want] of rows) {
+        let got;
+        try { got = env.claudeAgentSdkDir({ profileDir: '/p', backendSettings }); } catch (err) { got = `threw ${err.message}`; }
+        if (got !== want) fails.push(`table: ${label}: claudeAgentSdkDir returned ${JSON.stringify(got)}, not ${JSON.stringify(want)}`);
+    }
+    const name = env.ORCAD_CLAUDE_AGENT_SDK_DIR_ENV;
+    if (!(env.ORCAD_FIXED_ENV_NAMES ?? []).includes(name)) fails.push(`OrcaEnv.ORCAD_FIXED_ENV_NAMES does not hold ${name}, so orcad may inherit it`);
+    const opts = { dataRoot: '/d', orcaVersion: '1.0.0' };
+    try { env.buildOrcadEnv(() => '', opts); fails.push('table: buildOrcadEnv accepts no claudeAgentSdkDir; every caller must decide'); } catch { /* required */ }
+    try {
+        const built = env.buildOrcadEnv(() => '', { ...opts, claudeAgentSdkDir: '' });
+        if (built[name] !== '') fails.push(`table: buildOrcadEnv with claudeAgentSdkDir "" sets ${name} to ${JSON.stringify(built[name])}`);
+    } catch (err) { fails.push(`table: buildOrcadEnv throws for claudeAgentSdkDir "": ${err.message}`); }
+    try {
+        const built = env.buildOrcadEnv((n) => (n === name ? '/inherited' : ''), { ...opts, claudeAgentSdkDir: '/x' });
+        if (built[name] !== '/x') fails.push(`table: buildOrcadEnv sets ${name} to ${JSON.stringify(built[name])}, not the decided /x`);
+    } catch (err) { fails.push(`table: buildOrcadEnv throws for claudeAgentSdkDir /x: ${err.message}`); }
+    return fails;
+}
+
+/** THEIA_CONFIG_DIR_NAME against the folder TheiaService._resolveConfigDir appends to the profile directory. */
+export function theiaDirFails(theiaSource, env) {
+    const m = /_resolveConfigDir\(\)\s*\{[\s\S]*?return `\$\{profileDir\}\/([^`/]+)`/.exec(String(theiaSource ?? ''));
+    if (!m) return ['derivation: TheiaService._resolveConfigDir has no `${profileDir}/<folder>` template, so the Theia config folder cannot be compared'];
+    return m[1] === env.THEIA_CONFIG_DIR_NAME ? [] : [`derivation: OrcaEnv.THEIA_CONFIG_DIR_NAME is ${env.THEIA_CONFIG_DIR_NAME}, TheiaService._resolveConfigDir uses ${m[1]}`];
+}
+
 /** ORCAD_EXTERNAL_MODULES, imported by file URL in a child node (the module imports a .ts file). */
 function readExternals(orcaDir) {
     const url = pathToFileURL(join(orcaDir, ENTRY_BUILD_REL)).href;
@@ -211,7 +264,15 @@ function seamApplied(orcaDir, rel) {
     try { execFileSync('git', ['-C', orcaDir, 'diff', '--quiet', 'HEAD', '--', rel], { stdio: 'ignore' }); return false; } catch { return true; }
 }
 
-async function defaultMode(root) {
+/** The OrcaEnv leg over `root`: the table and the Theia folder derivation. Resolves { fails, env }. */
+async function orcaEnvLeg(root) {
+    let env;
+    try { env = await import(`${pathToFileURL(join(root, 'powerbrowser', 'shell', 'OrcaEnv.sys.mjs')).href}?t=${Date.now()}`); } catch (err) { return { fails: [`OrcaEnv.sys.mjs does not import in Node: ${err.message}`], env: null }; }
+    return { fails: [...orcaEnvTable(env), ...theiaDirFails(read(join(root, 'powerbrowser', 'shell', 'TheiaService.sys.mjs')), env)], env };
+}
+
+/** The loader leg over `root`; { skip } when orca/ is not fetched, the seam is not applied, or no esbuild. */
+async function loaderLeg(root, env) {
     const orcaDir = join(root, 'orca');
     const src = join(orcaDir, LOADER_REL);
     if (!existsSync(join(orcaDir, '.git')) || !existsSync(src)) return { skip: 'orca/ is not fetched (bash scripts/fetch-orca.sh)' };
@@ -220,9 +281,16 @@ async function defaultMode(root) {
     if (!eb) return { skip: 'no esbuild in orca/node_modules or theia/node_modules (build-orca.sh, or yarn install in theia/)' };
     const name = envNameFrom(read(src));
     const fails = tokenFails(name);
+    if (name && env && name !== env.ORCAD_CLAUDE_AGENT_SDK_DIR_ENV) fails.push(`the loader reads ${name}, OrcaEnv sets ${env.ORCAD_CLAUDE_AGENT_SDK_DIR_ENV}`);
     const r = await loaderScenarios(eb.esbuild, src, name ?? 'ORCA_CLAUDE_AGENT_SDK_DIR', join(root, WORK_REL));
     fails.push(...r.fails);
     return { fails, name, results: r.results };
+}
+
+async function defaultMode(root) {
+    const e = await orcaEnvLeg(root);
+    const l = await loaderLeg(root, e.env);
+    return { fails: [...e.fails, ...(l.fails ?? [])], skip: l.skip, name: l.name, results: l.results ?? {} };
 }
 
 function builtMode(root) {
@@ -247,8 +315,8 @@ if (isEntryPoint) {
     const built = args[0] === '--built';
     const label = built ? `${NAME}-built` : NAME;
     const r = built ? builtMode(REPO_ROOT) : await defaultMode(REPO_ROOT);
-    if (r.skip) {
-        console.log(`${label}: SKIP -- ${r.skip}`);
+    if (r.skip && (built || !r.fails.length)) {
+        console.log(`${label}: SKIP${built ? '' : ' of the loader scenarios (the OrcaEnv leg passed)'} -- ${r.skip}`);
         process.exit(0);
     }
     if (r.fails.length) {
@@ -256,6 +324,6 @@ if (isEntryPoint) {
         process.exit(1);
     }
     if (built) console.log(`${label}: PASS -- ORCAD_EXTERNAL_MODULES lists ${SDK_PKG}; the needle ${r.needle} is in the installed SDK's sdk.mjs and in none of ${r.scanned} files under orca/out`);
-    else console.log(`${label}: PASS -- loadClaudeAgentSdk reads ${r.name} (no PowerBrowser token); ${Object.entries(r.results).map(([k, v]) => `${k.split(' ')[0]} ${v}`).join(', ')}`);
+    else console.log(`${label}: PASS -- loadClaudeAgentSdk reads ${r.name} (no PowerBrowser token, OrcaEnv's name); ${Object.entries(r.results).map(([k, v]) => `${k.split(' ')[0]} ${v}`).join(', ')}; OrcaEnv table and the Theia config folder hold`);
     process.exit(0);
 }

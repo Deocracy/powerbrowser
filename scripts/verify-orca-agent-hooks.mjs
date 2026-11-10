@@ -634,7 +634,7 @@ async function stageDegrade(ctx) {
 
 async function startOrcad(ctx) {
     const { nodeBin, orcaDir, home, dataRoot } = ctx;
-    const env = OrcaEnv.buildOrcadEnv((n) => ({ PATH: process.env.PATH ?? '', HOME: home })[n], { dataRoot, orcaVersion: orcaVersionFromPins(ctx.repoRoot) });
+    const env = OrcaEnv.buildOrcadEnv((n) => ({ PATH: process.env.PATH ?? '', HOME: home })[n], { dataRoot, orcaVersion: orcaVersionFromPins(ctx.repoRoot), claudeAgentSdkDir: '' });
     const port = await freePort(OrcaEnv);
     const lines = [];
     const sink = OrcaEnv.createOutputSink({ pushLog: (l) => { lines.push(l); if (lines.length > 200) lines.shift(); } });

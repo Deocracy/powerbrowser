@@ -15,6 +15,9 @@
 /** The switch the overlay seam in orcad's browser provider reads (lane p62-01, RUN-04). Value "1". */
 export const ORCAD_HIDDEN_ELECTRON_SWITCH = "ORCA_DISABLE_INSTALLED_ELECTRON_BROWSER";
 
+/** Phase 68 (BEXT-01, D-30): the generic name seam 070 in orcad's loadClaudeAgentSdk reads; "" means no SDK. */
+export const ORCAD_CLAUDE_AGENT_SDK_DIR_ENV = "ORCA_CLAUDE_AGENT_SDK_DIR";
+
 /** Names buildOrcadEnv always sets, whatever PowerBrowser inherited. */
 export const ORCAD_FIXED_ENV_NAMES = Object.freeze([
   "ORCA_USER_DATA",
@@ -23,6 +26,7 @@ export const ORCAD_FIXED_ENV_NAMES = Object.freeze([
   "ORCA_TELEMETRY_DISABLED",
   "DO_NOT_TRACK",
   ORCAD_HIDDEN_ELECTRON_SWITCH,
+  ORCAD_CLAUDE_AGENT_SDK_DIR_ENV,
 ]);
 
 /**
@@ -85,12 +89,16 @@ const STDERR_LINE_MAX = 4096;
  * The whole child environment for orcad: each allowlisted name PowerBrowser has, then the fixed
  * names. Nothing else of the browser's environment reaches orcad or the agents under it.
  */
-export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion } = {}) {
+export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion, claudeAgentSdkDir } = {}) {
   if (typeof dataRoot !== "string" || !dataRoot) {
     throw new Error("buildOrcadEnv: no data root");
   }
   if (typeof orcaVersion !== "string" || !orcaVersion) {
     throw new Error("buildOrcadEnv: no Orca version");
+  }
+  // Every caller decides the SDK directory; "" is a decision (no SDK), undefined is not.
+  if (typeof claudeAgentSdkDir !== "string") {
+    throw new Error("buildOrcadEnv: no Claude agent SDK directory decision");
   }
   const env = {};
   for (const name of ORCAD_ENV_ALLOWLIST) {
@@ -106,6 +114,7 @@ export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion } = {}) {
     ORCA_TELEMETRY_DISABLED: "1",
     DO_NOT_TRACK: "1",
     [ORCAD_HIDDEN_ELECTRON_SWITCH]: "1",
+    [ORCAD_CLAUDE_AGENT_SDK_DIR_ENV]: claudeAgentSdkDir,
   };
   for (const name of ORCAD_FIXED_ENV_NAMES) {
     if (typeof fixed[name] !== "string") {
@@ -114,6 +123,37 @@ export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion } = {}) {
     env[name] = fixed[name];
   }
   return env;
+}
+
+/** Phase 68 (D-30, P68-38): the pre-installed Theia extension carrying the Claude agent SDK, unversioned. */
+export const CLAUDE_AGENT_SDK_EXTENSION_ID = "powerbrowser.claude-agent-sdk";
+/** Phase 68 (P68-38): THEIA_CONFIG_DIR under the profile folder, as TheiaService._resolveConfigDir names it. */
+export const THEIA_CONFIG_DIR_NAME = "powerbrowser-theia";
+const THEIA_DISABLED_PLUGINS_KEY = "installedPlugins.disabledPlugins";
+
+/** Phase 68 (P68-38): Theia's backend settings file, which holds the disabled-extension list. */
+export function theiaBackendSettingsPath(profileDir) {
+  return `${profileDir}/${THEIA_CONFIG_DIR_NAME}/backend-settings.json`;
+}
+
+/**
+ * Phase 68 (D-30, P68-38): the value of ORCA_CLAUDE_AGENT_SDK_DIR. The SDK package directory inside the
+ * extension's version-free seeded copy, or "" when Theia has the extension disabled. backendSettings is
+ * the parsed backend-settings.json or null; its disabled list is a JSON string of ids that Theia reads
+ * unversioned, and a missing or malformed list counts as nothing disabled, as Theia's own load does.
+ */
+export function claudeAgentSdkDir({ profileDir, backendSettings }) {
+  let disabled = [];
+  try {
+    disabled = JSON.parse(backendSettings?.[THEIA_DISABLED_PLUGINS_KEY]);
+  } catch {
+    disabled = [];
+  }
+  const unversioned = id => (typeof id === "string" ? id.split("@")[0] : null);
+  if (Array.isArray(disabled) && disabled.some(id => unversioned(id) === CLAUDE_AGENT_SDK_EXTENSION_ID)) {
+    return "";
+  }
+  return `${profileDir}/${THEIA_CONFIG_DIR_NAME}/deployedPlugins/${CLAUDE_AGENT_SDK_EXTENSION_ID}/extension/node_modules/@anthropic-ai/claude-agent-sdk`;
 }
 
 /** The environment for a helper tool (ln): the search path and nothing else. */

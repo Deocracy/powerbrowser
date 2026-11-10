@@ -333,10 +333,15 @@ export const OrcaService = {
   /** One spawn through to a verified ready line. Returns { ok } or { ok: false, recoverable, step, rows }. */
   async _spawnAndGate() {
     const graceMs = PowerBrowserAPI.getIntPref("powerbrowser.orca.killGraceMs", 16000);
+    // Phase 68 (D-30, P68-38): read at every spawn, so a disable in Theia applies at the next orcad start.
+    const profileDir = PowerBrowserAPI.getProfileDir();
+    const backendSettings = await PowerBrowserAPI.readStateFile(OrcaEnv.theiaBackendSettingsPath(profileDir));
     const environment = OrcaEnv.buildOrcadEnv(name => PowerBrowserAPI.getEnv(name), {
       dataRoot: this._effectiveRoot,
       orcaVersion: this._orcaVersion,
+      claudeAgentSdkDir: OrcaEnv.claudeAgentSdkDir({ profileDir, backendSettings }),
     });
+    this._pushLog(`Claude agent SDK extension: ${environment[OrcaEnv.ORCAD_CLAUDE_AGENT_SDK_DIR_ENV] ? "enabled" : "disabled"}`);
     const args = OrcaEnv.buildOrcadArgs({ orcadMain: this._orcadMain, port: this._port, webClientRoot: this._webClientRoot });
 
     let proc;
