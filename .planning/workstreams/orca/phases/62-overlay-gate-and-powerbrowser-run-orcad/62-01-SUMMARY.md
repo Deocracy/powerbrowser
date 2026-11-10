@@ -18,7 +18,7 @@ affects: [62-02, 62-03, 63, 64, 65, 66, 68]
 actuals:
   tokens: 14000
   tasks: 3
-  commits: 3
+  commits: 5
 
 tech-stack:
   added: []
@@ -95,7 +95,11 @@ Status: complete. All three tasks done; no blocker.
 |------|--------|-------|
 | 1 | 04974f7a | orca-overlay/seams.json, orca-overlay/patches/010-installed-electron-switch.patch, scripts/build-orca.sh, scripts/verify-orca-overlay.mjs, scripts/verify-platform.sh |
 | 2 | fbae49e8 | scripts/verify-orca-overlay.mjs, configuration.toml, scripts/lib/config-schema.json, docs/REBRANDING.md, scripts/verify-platform.sh |
-| 3 | the commit that adds this file | scripts/verify-orca-build-shape.mjs, docs/BUILD.md, 62-01-SUMMARY.md |
+| 3 | 9a93f27f | scripts/verify-orca-build-shape.mjs, docs/BUILD.md |
+| 3 | fbf3f423 | 62-01-SUMMARY.md |
+| 3 | the commit after fbf3f423 | 62-01-SUMMARY.md (this table corrected) |
+
+Note on 9a93f27f: this lane session staged the two Task 3 files and, before its own commit ran, a process other than this session committed exactly those staged files on the lane branch (author line as the others, co-author trailer "Claude Opus"). Its content equals this session's working tree (`git status` was clean after fbf3f423), so nothing was lost or added; Task 3 is therefore three commits instead of one. No amend was made.
 
 ## The seam
 
@@ -172,4 +176,4 @@ Rebuild Orca after merge (`nix develop .#orca --command bash scripts/build-orca.
 
 ## Self-Check: PASSED
 
-Files listed above exist; commits 04974f7a and fbae49e8 are on `ServerDestroyer/p62-01`; the lane diff against the merge base lists only `files_modified` paths.
+Files listed above exist; commits 04974f7a, fbae49e8, 9a93f27f and fbf3f423 are on `ServerDestroyer/p62-01`; the lane diff against the merge base lists only `files_modified` paths.
