@@ -98,3 +98,10 @@ None yet.
 Last session: 2026-11-08T22:31:10.710Z
 Stopped at: Phase 59 context gathered
 Resume file: .planning/workstreams/orca/phases/59-carry-forward-from-v1-5-and-v1-6/59-CONTEXT.md
+
+## Deferred Verification
+
+| Phase | State | Resume |
+|-------|-------|--------|
+| 59 | verification_deferred_human (59-06 checklist, verify-work 29/30/31; owner steps in p59-owner) | end-of-milestone pass (D-18): `/gsd-verify-work 59 --ws orca` |
+| 60 | verification_deferred_human (60-05 EXT-01 live session) | end-of-milestone pass (D-18): resume 60-05 Task 2 |

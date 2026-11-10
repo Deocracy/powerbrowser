@@ -82,6 +82,7 @@ below are numbered P59-nn so they do not collide with them.
 ### Decisions added after research (Chris, 2026-11-09)
 - **P60-R1:** Third-party licences get a real allow-list: `inventory/licence-allowlist.json`, one row per tree PowerBrowser builds from (Orca, MIT, at the pinned tag), plus a derived `--quick` row with a `--self-test` that goes red when a vendored tree's LICENSE does not match its row. Criterion 3's "licence allow-list" means this file.
 - **P60-R2:** The brand scan gets a strict `orca` probe: the "Orca" token is classified only in `inventory/brand-tokens.json`, with `coincidental` rows carrying exact counts for the existing substring hits (ErrorCapture, ErrorCalls and the other two files the research names), the same pattern as the Deocracy rows. Any future stray "Orca" in a non-classified file goes red.
+- **P60-R5 (Chris, 2026-11-09): the EXT-01 live session is deferred to the end-of-milestone human pass (59-CONTEXT D-18).** Plan 60-05 stops after its tracer; its Task 2 checkpoint and Task 3 record run in that pass. Phase 60 is executed except EXT-01, whose outcome still reshapes EXT-02 (Phase 63) before that phase is planned; until then Phase 63 plans against the chat-panel assumption and carries a fallback to `claudeCode.useTerminal`.
 
 ### Claude's Discretion
 - Clone depth and fetch mechanics for `fetch-orca.sh`, as long as the commit check holds.

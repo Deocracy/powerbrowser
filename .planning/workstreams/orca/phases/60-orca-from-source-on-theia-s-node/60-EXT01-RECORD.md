@@ -35,3 +35,7 @@ Target platforms at 2.1.321: alpine-arm64, alpine-x64, darwin-arm64, darwin-x64,
 Versions listed: 101; downloads 65,330,241
 Licence (first words): "© Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements" (proprietary; installed at runtime by the user, never pinned, packaged or allow-listed)
 Research recorded 2.1.319 on 2026-11-06; two releases have shipped since then.
+
+## Outcome
+
+Pending — deferred to the end-of-milestone human pass (P60-R5, 2026-11-09). The prepared state: scratch repo `.mozbuild/ext01/scratch-repo`, profile alias `~/.cache/pb-ext01-orca`, Orca worktree `/home/chris/orca/workspaces/scratch-repo/ext01`. The headed PowerBrowser launched for the check was closed on 2026-11-09; relaunch per 60-05 Task 2 when the pass runs. Open VSX offered Anthropic.claude-code 2.1.321 on 2026-11-09.
