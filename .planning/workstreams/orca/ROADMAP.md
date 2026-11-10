@@ -154,15 +154,15 @@ Route chosen by Phase 61: agent sessions run the plain `claude` CLI in a termina
   3. A Claude Code extension session on an Orca worktree appears in Orca with live hook status, through a pane PB's wrapper creates with `terminal.create` and the `ORCA_AGENT_HOOK_*` variables it passes. The wrapper finds orcad's data root through `orcad-data-root`, a file that is 0600 from creation in PowerBrowser's 0700 bridge folder. The extension half runs with EXT-01 in the end-of-milestone pass.
   4. Quitting PowerBrowser ends every agent, orcad and Orca's terminal daemon: the checks record those processes before the quit and find none of them after (D-07; Phase 62's stop path).
 
-**Plans**: 3 plans (3 more superseded by D-31)
+**Plans**: 3/3 plans executed (3 more superseded by D-31)
 
 Plans:
 **Wave 1**
-- [ ] 63-06-PLAN.md — lane p63-06: the bridge folder rebuilt from p63-05's kept parts (OrcaEnv bridgeDirFor, writePrivateFile with no umask window, platform(), orcad-data-root, TheiaService's POWERBROWSER_ORCA_BRIDGE_DIR), orca-bridge-dir, orca-service clauses (EXT-02)
-- [ ] 63-03-PLAN.md — lane p63-03 (amended by D-31): @powerbrowser/orca-agents (claude wrapper, launcher, preference default), orca-agent-hooks and orca-agent-status-live on Orca's engine with a quit stage (TERM-02, EXT-02)
+- [x] 63-06-PLAN.md — lane p63-06: the bridge folder rebuilt from p63-05's kept parts (OrcaEnv bridgeDirFor, writePrivateFile with no umask window, platform(), orcad-data-root, TheiaService's POWERBROWSER_ORCA_BRIDGE_DIR), orca-bridge-dir, orca-service clauses (EXT-02)
+- [x] 63-03-PLAN.md — lane p63-03 (amended by D-31): @powerbrowser/orca-agents (claude wrapper, launcher, preference default), orca-agent-hooks and orca-agent-status-live on Orca's engine with a quit stage (TERM-02, EXT-02)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 63-04-PLAN.md — coordinator (replaced by D-31): merge p63-06 then p63-03, wire orca-agents, rebuild Theia, Orca and PowerBrowser, hook and real-agent live proofs, orca-service-live (D-07), brand rows, superseded stubs, tracking (TERM-02 complete only on a live PASS)
+- [x] 63-04-PLAN.md — coordinator (replaced by D-31): merge p63-06 then p63-03, wire orca-agents, rebuild Theia, Orca and PowerBrowser, hook and real-agent live proofs, orca-service-live (D-07), brand rows, superseded stubs, tracking (TERM-02 complete only on a live PASS)
 
 **Superseded by D-31** *(not executed, not merged; lane branches kept as the record)*
 - 63-01-PLAN.md — lane p63-01: seams 020/030 and the external PTY bridge client
@@ -314,7 +314,7 @@ Phases execute in numeric order: 59 → 60 → 61 → 62 → 63 → 64 → 65 �
 | 60. Orca from source on Theia's Node | 4/5 | In Progress | - |
 | 61. Spikes for pane hosting, browser parity and live sharing | 4/4 | Complete (human items deferred) | 2026-11-10 |
 | 62. Overlay gate and PowerBrowser-run orcad | 3/3 | Complete | 2026-11-09 |
-| 63. Agent hooks on Orca's terminal engine | 0/3 | Planned (rescoped by D-31; 3 plans superseded) | - |
+| 63. Agent hooks on Orca's terminal engine | 3/3 | Executed, verify-work pending (rescoped by D-31; 3 plans superseded) | - |
 | 64. Orca panes as PowerBrowser tabs | 0/5 | Planned (lanes after the 63-04 merge) | - |
 | 65. Orca workspace in Theia | 0/TBD | Not started | - |
 | 66. PowerBrowser web tabs as Orca's browser | 0/6 | Planned | - |

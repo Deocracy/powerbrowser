@@ -67,7 +67,7 @@ Orca terminals and Theia terminals are two kinds, side by side (D-31, Chris 2026
   and is shown as a PowerBrowser tab with Orca's own terminal view (`TerminalPane`, xterm.js)
   hosted through Route A; it accepts input and shows output. Theia terminals stay plain Theia
   terminals beside them; neither replaces the other. (D-31)
-- [ ] **TERM-02**: Agent sessions Orca starts run in Orca terminals with Orca's `ORCA_*` hook
+- [x] **TERM-02**: Agent sessions Orca starts run in Orca terminals with Orca's `ORCA_*` hook
   environment, so agent status hooks report working, waiting and done, and every agent and Orca's
   terminal daemon end when PowerBrowser quits. (D-06, D-07, D-13, D-31)
 - [ ] **TERM-04**: Inside an Orca terminal tab, Ctrl+W, Ctrl+T, Ctrl+Tab and
@@ -221,7 +221,7 @@ Filled by the roadmap.
 | OVL-05 | Phase 62 | Complete |
 | OVL-06 | Phase 68 | Pending |
 | TERM-01 | Phase 64 | Pending |
-| TERM-02 | Phase 63 | Pending |
+| TERM-02 | Phase 63 | Complete |
 | TERM-04 | Phase 64 | Pending |
 | TAB-01 | Phase 64 | Pending |
 | TAB-02 | Phase 64 | Pending |
@@ -238,7 +238,7 @@ Filled by the roadmap.
 | BRW-04 | Phase 66 | Pending |
 | BRW-05 | Phase 66 | Pending |
 | EXT-01 | Phase 60 | Pending |
-| EXT-02 | Phase 63 | Pending |
+| EXT-02 | Phase 63 | Pending: PowerBrowser half proven (63-03, 63-06); extension half with EXT-01 in the end-of-milestone pass |
 | EXT-03 | Phase 61 | Complete |
 | INJ-01 | Phase 67 | Pending |
 | PLAT-01 | Phase 68 | Pending |
