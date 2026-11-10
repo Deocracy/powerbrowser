@@ -132,6 +132,20 @@ Owner decisions are in `DECISIONS.md` (D-01..D-25) and win over `research/`. Res
 - [ ] **PLAT-02**: Live checks pass on Linux; macOS and Windows get a smoke test when a host is
   available. (D-24)
 
+### Bundled extensions (BEXT)
+
+Third-party parts that carry their own terms ship as pre-installed extensions the user can
+switch off or uninstall (Chris 2026-11-10, D-30).
+
+- [ ] **BEXT-01**: Anthropic's Claude agent SDK is not bundled into orcad. It ships inside a
+  pre-installed PowerBrowser Theia extension that carries Anthropic's terms; the user can switch
+  it off or uninstall it. When it is on, Claude's chat-style Orca session loads the SDK from it;
+  when it is off or removed, that session reports the package missing, and Claude terminal
+  panes and every other agent keep working. (ruling 68-A, D-30)
+- [ ] **BEXT-02**: uBlock Origin ships pre-installed and enabled as a browser (Gecko)
+  WebExtension at a pinned version and sha256, unmodified; the user can switch it off or remove
+  it, and its GPL-3.0 licence is listed in the third-party notices. (Chris 2026-11-10)
+
 ## v2 Requirements
 
 Deferred; tracked, not in this roadmap.
@@ -217,12 +231,14 @@ Filled by the roadmap.
 | INJ-01 | Phase 67 | Pending |
 | PLAT-01 | Phase 68 | Pending |
 | PLAT-02 | Phase 68 | Pending |
+| BEXT-01 | Phase 68 | Pending |
+| BEXT-02 | Phase 68 | Pending |
 
 **Coverage:**
-- v1 requirements: 39 total
-- Mapped to phases: 39
+- v1 requirements: 41 total
+- Mapped to phases: 41
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-11-04*
-*Last updated: 2026-11-04 after owner decisions D-01..D-29, the adversarial ownership review and roadmap creation (phases 59-68)*
+*Last updated: 2026-11-04 after owner decisions D-01..D-29, the adversarial ownership review and roadmap creation (phases 59-68); BEXT-01/02 added 2026-11-10 (Chris)*
