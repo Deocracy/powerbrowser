@@ -80,7 +80,7 @@ None yet.
 - **Resumed 2026-11-07.** v1.5 is tagged (`v1.5`) and v1.6 is parked with its live items carried forward; main merged into this branch at 0c717487 (no conflicts, ESR pin unchanged at 153.5.1, legal name now "Deocracy Institute"). Chris ruled the carry-forward phase is Phase 59 and the Orca phases moved to 60-68.
 - In this worktree `--quick` passes except `fixer-isolate-self-test`, which fails the same way on main (pre-existing; "PATH changed inside the isolation"). Run it inside `nix develop .#theia` after the audited Theia install in `docs/BUILD.md` (`--ignore-scripts`). A plain `yarn install` breaks `diff-theia-core`.
 - The EXT-01 outcome (Phase 60) may reshape EXT-02 (Phase 63) before that phase is planned.
-- Phase 61's spike results may split or descope Phases 64 and 65. The roadmap must name each chosen route before those phases are planned.
+- Phase 61's spike results may split or descope Phases 64 and 66. The roadmap must name each chosen route before those phases are planned.
 - The macOS half of PLAT-01 (Phase 68) needs a macOS PowerBrowser build, which v1.6 deferred (workstream `deploy`, Phase 55).
 - The weekly re-pin (OVL-02) must be dispatched by the release-train clock. D-77 forbids a `schedule:` key, and the clock belongs to v1.6.
 - OVL-06 has an open owner question: who opens the upstream pull requests. The GitHub org is moving to `deocracy`, so ask before writing org names.

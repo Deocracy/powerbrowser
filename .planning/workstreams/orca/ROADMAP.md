@@ -100,7 +100,7 @@ Plans:
 
 ### Phase 61: Spikes for pane hosting, browser parity and live sharing
 
-**Goal**: The three design questions the remake depends on have measured answers backed by runnable prototypes, so Phases 63, 63 and 65 build a chosen route rather than an assumed one.
+**Goal**: The three design questions the remake depends on have measured answers backed by runnable prototypes, so Phases 63, 64 and 66 build a chosen route rather than an assumed one.
 **Depends on**: Phase 60 (the pane-hosting spike needs the source build; the browser-parity and live-sharing spikes can start at once on spike 003's harness)
 **Requirements**: TAB-03, BRW-01, EXT-03
 **Success Criteria** (what must be TRUE):
@@ -110,7 +110,7 @@ Plans:
      - the seam patches the route needs, which must fit the D-16 cap.
   2. The browser-parity record lists every ability an Orca browser tab has, derived from Orca's source at the pin by a script that a re-pin can re-run. For each ability it names the Orca component that uses it (agent, CLI, renderer or orcad) and gives a Gecko disposition (WebDriver BiDi, BiDi plus PB code, chrome actor, native, or impossible). It chooses the provider seam and answers `research/FEATURES.md` questions 1-8.
   3. The live-sharing record states, with evidence from a run, whether a running Orca agent can be shared live inside the Claude Code extension. It also shows the floor working: a stopped Orca agent session resumed in the extension with `--resume`.
-  4. Before any of Phases 63, 63 and 65 is planned, this roadmap names the route each spike chose for it, or that phase is split or descoped by an owner decision.
+  4. Before any of Phases 63, 64 and 66 is planned, this roadmap names the route each spike chose for it, or that phase is split or descoped by an owner decision.
 
 **Plans**: TBD
 
@@ -209,7 +209,7 @@ The Phase 61 parity result may split or descope this phase. Any such change is a
 ### Phase 68: Three-OS artifacts, weekly re-pin and upstream seams
 
 **Goal**: The Orca integration ships in Linux, macOS and Windows artifacts and passes live checks on Linux. An automated weekly re-pin keeps it current with Orca releases, and the stock mobile app still pairs.
-**Depends on**: Phases 63, 63 and 65 (each generic seam works before it is offered upstream); all earlier phases for the artifacts
+**Depends on**: Phases 63, 64 and 66 (each generic seam works before it is offered upstream); all earlier phases for the artifacts
 **Requirements**: OVL-02, OVL-03, OVL-06, PLAT-01, PLAT-02
 **Success Criteria** (what must be TRUE):
   1. The release-train clock dispatches the re-pin job weekly (no `schedule:` key, D-77). The job:
