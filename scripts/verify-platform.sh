@@ -3887,8 +3887,11 @@ run_own_checks() {
     # check time: the shell's .sys.mjs set against jar.mn, the environment names from OrcaEnv.sys.mjs, the
     # user-message table and window function names OrcaService must not carry, Orca's own default port and
     # failure codes from the fetched orca/ (a named SKIP of those clauses when it is absent). The shipped
-    # OrcaService source is driven against a stub boundary through scenarios A to F (start, reap, stop order,
-    # busy port, non-loopback bind, data-root alias). The self-test copies the inputs and plants 19 faults.
+    # OrcaService source is driven against a stub boundary through scenarios A to F and H (start, reap, stop
+    # order, busy port, non-loopback bind, data-root alias, no bridge folder; 63-06 adds H, orcad-data-root
+    # written into the bridge folder after ready and removed on stop, orcad's environment kept as Phase 62's,
+    # and the POWERBROWSER_ORCA_BRIDGE_DIR key compared with the orca-agents backend, a named SKIP while lane
+    # p63-03 is unmerged). The self-test copies the inputs and plants 27 faults.
     "orca-service|node $REPO_ROOT/scripts/verify-orca-service.mjs"
     "orca-service-self-test|node $REPO_ROOT/scripts/verify-orca-service.mjs --self-test"
     # orca-hidden-electron-self-test: a fixture Orca tree whose orcad is a stand-in Node script; control green
@@ -3897,6 +3900,12 @@ run_own_checks() {
     # over fixtures, 25 cases. Both hermetic: no orcad, no browser, no network.
     "orca-hidden-electron-self-test|node $REPO_ROOT/scripts/verify-orca-hidden-electron.mjs --self-test"
     "orca-service-live-self-test|node $REPO_ROOT/scripts/verify-orca-service-live.mjs --self-test"
+    # NEW (63-06, EXT-02, P63-26/P63-35/P63-36): orca-bridge-dir, the chrome half of the bridge folder for linux,
+    # darwin and win32 (OrcaEnv's nodePlatform, bridgeDirFor and bridgeFileFor); the orcad-data-root literal joined
+    # across OrcaEnv, orca-agents' protocol file and its wrapper, a named SKIP of that join alone while lane p63-03
+    # is unmerged; and writePrivateFile's A-11 call order. Quick and hermetic; the self-test plants 10 faults.
+    "orca-bridge-dir|node $REPO_ROOT/scripts/verify-orca-bridge-dir.mjs"
+    "orca-bridge-dir-self-test|node $REPO_ROOT/scripts/verify-orca-bridge-dir.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"

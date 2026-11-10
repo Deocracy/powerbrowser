@@ -4,7 +4,8 @@
 
 /*
  * D-96: TheiaService is a *consumer* of the PowerBrowserAPI boundary, not a
- * second one -- it imports nothing else. Supervises the Theia backend
+ * second one -- it imports nothing else but OrcaEnv, a pure module that
+ * reaches no Firefox internal (Phase 63, P63-35). Supervises the Theia backend
  * sidecar: mint token -> resolve sidecar location -> spawn -> watch stdout
  * for the ready sentinel -> health-gate -> set cookie -> swap (Task 1);
  * steady-state health loop with pinned-port restart and backoff (Task 2);
@@ -13,7 +14,8 @@
  * a file.
  */
 
-const { PowerBrowserAPI } = ChromeUtils.importESModule("chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs");
+const { PowerBrowserAPI, PowerBrowserProcesses } = ChromeUtils.importESModule("chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs");
+const OrcaEnv = ChromeUtils.importESModule("chrome://powerbrowser/content/OrcaEnv.sys.mjs");
 
 const HEALTH_PATH = "/powerbrowser/health";
 
@@ -778,6 +780,21 @@ export const TheiaService = {
   },
 
   /**
+   * Phase 63 (D-31, P63-35): the bridge folder, built from the same OrcaEnv builders OrcaService uses, so
+   * chrome and the Theia backend get one folder. Null on any failure, with one log line: the backend then
+   * gets no folder and Theia starts as before.
+   */
+  async _orcaBridgeDir() {
+    try {
+      const dataRoot = OrcaEnv.dataRootFor(PowerBrowserAPI.getProfileDir());
+      return await OrcaEnv.bridgeDirFor(dataRoot, name => PowerBrowserAPI.getEnv(name), OrcaEnv.nodePlatform(PowerBrowserProcesses.platform()));
+    } catch (err) {
+      this._pushLog(`Orca bridge folder not chosen: ${err && err.message ? err.message : err}`);
+      return null;
+    }
+  },
+
+  /**
    * Spawns the backend and waits for it to become healthy. Returns
    * `{ ok, recoverable, message, details }` (SHELL-03/D-113) instead of a bare
    * boolean, so `_restart()`/`start()` can tell an unrecoverable failure
@@ -817,6 +834,7 @@ export const TheiaService = {
   async _spawnAndGate(beforeFirstSwap) {
     const port = beforeFirstSwap ? 0 : this._port;
     const args = [this._backendMain, "--hostname", "127.0.0.1", "--port", String(port)];
+    const orcaBridgeDir = await this._orcaBridgeDir();
     // NO SECRET GOES IN HERE. `environment` becomes the child's
     // /proc/<pid>/environ, which is the exec-time snapshot: it is readable by
     // every same-uid process for the whole life of the backend, and nothing
@@ -884,6 +902,11 @@ export const TheiaService = {
       // credential, so environ visibility is irrelevant like every other
       // non-POWERBROWSER_* key in this object.
       ...(this._pluginsDir ? { THEIA_DEFAULT_PLUGINS: `local-dir:${this._pluginsDir}` } : {}),
+      // Phase 63 (D-31, P63-35): the bridge folder where chrome and the Theia backend leave hand-off
+      // files (orcad-data-root for the EXT-02 wrapper now, Phase 64's files later), the same folder
+      // OrcaService writes to. A path, never a credential. The backend captures and deletes it at module
+      // load with every other POWERBROWSER_* key; null leaves the key out.
+      ...(orcaBridgeDir ? { POWERBROWSER_ORCA_BRIDGE_DIR: orcaBridgeDir } : {}),
     };
 
     let proc;

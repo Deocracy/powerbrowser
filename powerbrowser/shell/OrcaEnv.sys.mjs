@@ -62,6 +62,8 @@ export const ORCAD_BIND_HOST = "127.0.0.1";
 export const ORCAD_DATA_ROOT_NAME = "powerbrowser-orca";
 export const ORCAD_STATE_FILE_NAME = "pb-orca-state.json";
 export const ORCAD_LOCK_FILE_NAME = "orcad.lock";
+/** Phase 63 (P63-26): the one-line file in the bridge folder naming orcad's data root, for the EXT-02 wrapper. */
+export const ORCAD_DATA_ROOT_FILE = "orcad-data-root";
 /**
  * Longest data root, in UTF-8 bytes, whose RPC socket path still fits: the 107-byte Linux and
  * 103-byte macOS sun_path limits minus the 19-byte o-<pid>-<x>.sock suffix. The macOS figure is used
@@ -176,6 +178,13 @@ export function socketPathFits(root) {
 }
 
 const underTmp = dir => dir === "/tmp" || dir.startsWith("/tmp/");
+const isDrivePath = value => /^[A-Za-z]:[\\/]/.test(value);
+
+/** The first 12 hex characters of SHA-256 of the data root: one profile, one name, on every platform. */
+async function rootHashPrefix(dataRoot) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(dataRoot));
+  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("").slice(0, 12);
+}
 
 /**
  * The short alias for a data root that does not fit: <XDG_RUNTIME_DIR>/pb-orca-<12 hex>, else
@@ -183,8 +192,7 @@ const underTmp = dir => dir === "/tmp" || dir.startsWith("/tmp/");
  * profile always gets the same alias. A base under /tmp is refused.
  */
 export async function aliasPathFor(dataRoot, getEnv) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(dataRoot));
-  const hex = [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("").slice(0, 12);
+  const hex = await rootHashPrefix(dataRoot);
   const clean = value => (typeof value === "string" ? value.replace(/\/+$/, "") : "");
   const runtimeDir = clean(getEnv("XDG_RUNTIME_DIR"));
   if (runtimeDir.startsWith("/") && !underTmp(runtimeDir)) {
@@ -195,6 +203,42 @@ export async function aliasPathFor(dataRoot, getEnv) {
     return `${home}/.cache/pb-orca-${hex}`;
   }
   return null;
+}
+
+/** Phase 63 (P63-35): orcad's real data root for a profile folder, the P62 join. Never its alias. */
+export function dataRootFor(profileDir) {
+  return `${profileDir}/${ORCAD_DATA_ROOT_NAME}`;
+}
+
+/** Phase 63 (P63-35): the build platform (linux, macosx or win) in Node's spelling; anything else unchanged. */
+export function nodePlatform(appConstantsPlatform) {
+  return { linux: "linux", macosx: "darwin", win: "win32" }[appConstantsPlatform] ?? appConstantsPlatform;
+}
+
+/**
+ * Phase 63 (D-31, P63-35): the private bridge folder chrome and the Theia backend share for hand-off
+ * files (orcad-data-root now; Phase 64 adds its own), from orcad's real data root and a Node platform
+ * name. linux and darwin: the alias path followed by "-bridge" (never under /tmp); win32:
+ * <LOCALAPPDATA>\pb-orca-<12 hex>-bridge when LOCALAPPDATA is an absolute drive path; otherwise null.
+ */
+export async function bridgeDirFor(dataRoot, getEnv, platform) {
+  if (platform === "linux" || platform === "darwin") {
+    const alias = await aliasPathFor(dataRoot, getEnv);
+    return alias ? `${alias}-bridge` : null;
+  }
+  if (platform === "win32") {
+    const base = getEnv("LOCALAPPDATA");
+    if (typeof base !== "string" || !isDrivePath(base)) {
+      return null;
+    }
+    return `${base.replace(/[\\/]+$/, "")}\\pb-orca-${await rootHashPrefix(dataRoot)}-bridge`;
+  }
+  return null;
+}
+
+/** Phase 63 (P63-35): a file in the bridge folder, joined with that platform's separator. */
+export function bridgeFileFor(dir, name, platform) {
+  return `${dir}${platform === "win32" ? "\\" : "/"}${name}`;
 }
 
 /**
