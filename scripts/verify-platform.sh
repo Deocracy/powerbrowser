@@ -3945,6 +3945,11 @@ run_own_checks() {
     # and TheiaService's config folder. SKIP of the loader without orca/. The self-test is hermetic: eight plants.
     "orca-claude-sdk|node $REPO_ROOT/scripts/verify-orca-claude-sdk.mjs"
     "orca-claude-sdk-self-test|node $REPO_ROOT/scripts/verify-orca-claude-sdk.mjs --self-test"
+    # NEW (68-09, BEXT-01, P68-38): the pre-installed Claude agent SDK extension. Manifest, lock (sha512 equal to Orca's
+    # pnpm-lock.yaml), quoted licence and README copy; the seed's behaviour table; a self-test planting seven faults.
+    "bundled-extensions|node $REPO_ROOT/scripts/verify-bundled-extensions.mjs"
+    "bundled-extensions-seed|node $REPO_ROOT/scripts/verify-bundled-extensions.mjs --seed"
+    "bundled-extensions-self-test|node $REPO_ROOT/scripts/verify-bundled-extensions.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6571,6 +6576,9 @@ run_own_checks() {
       # NEW (68-07, BEXT-01, P68-38): orca-claude-sdk-built. ORCAD_EXTERNAL_MODULES lists the Claude agent SDK (seam 080)
       # and no file under orca/out carries its version needle, proven present in the installed sdk.mjs first.
       "orca-claude-sdk-built|node $REPO_ROOT/scripts/verify-orca-claude-sdk.mjs --built"
+      # NEW (68-09, BEXT-01, P68-38): bundled-extensions-live. The built backend's list-extensions on a fresh config dir
+      # lists the extension as a user plugin, not a built-in; removing its directory sticks across a restart. No browser.
+      "bundled-extensions-live|node $REPO_ROOT/scripts/verify-bundled-extensions.mjs --live"
     )
   fi
 

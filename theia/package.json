@@ -66,7 +66,7 @@
     "@types/react-dom": "19.2.7"
   },
   "scripts": {
-    "build:extensions": "yarn --cwd extensions/branding build && yarn --cwd extensions/token-gate build && yarn --cwd extensions/tab-uris build && yarn --cwd extensions/customize build && yarn --cwd extensions/telemetry build && yarn --cwd extensions/modes build && yarn --cwd extensions/chrome-bar build && yarn --cwd extensions/orca-agents build",
+    "build:extensions": "yarn --cwd extensions/branding build && yarn --cwd extensions/token-gate build && yarn --cwd extensions/tab-uris build && yarn --cwd extensions/customize build && yarn --cwd extensions/telemetry build && yarn --cwd extensions/modes build && yarn --cwd extensions/chrome-bar build && yarn --cwd extensions/orca-agents build && yarn --cwd extensions/bundled-extensions build",
     "build": "yarn build:extensions && yarn --cwd applications/browser build",
     "start": "yarn --cwd applications/browser start"
   }
