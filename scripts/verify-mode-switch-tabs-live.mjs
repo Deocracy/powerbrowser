@@ -74,10 +74,11 @@
  *
  * ORCA SEEDS (Phase 64, P64-19, P64-27, P64-35; interface C9). After the
  * welcome seed, one hosted chat tab and one hosted terminal tab are seeded
- * through powerbrowser.orca.newChat and powerbrowser.orca.newTerminal, with
- * scripts/lib/orca-tabs-live.mjs's stub claude on the launched PowerBrowser's
- * PATH (that relative lib import is the one exception to the rule below, and
- * it runs only when the seeds do). Both must be main-area tabs before the walk,
+ * through powerbrowser.orca.newChat and powerbrowser.orca.newTerminal, inside
+ * scripts/lib/orca-tabs-live.mjs's shared session (PowerBrowser's own orcad, the
+ * booted pane bundle, its worktree selected, the stub claude on the launched
+ * PowerBrowser's PATH; that relative lib import is the one exception to the rule
+ * below, and it runs only when the seeds do). Both must be main-area tabs before the walk,
  * so the set-equality and isAttached assertions cover them on every hop,
  * the Orca mode's included. While theia/extensions/orca-panes is absent the
  * seeds print "Orca seeds: SKIP -- lane p64-02 not merged"; present but a
@@ -128,7 +129,7 @@
  * only (D-69).
  */
 
-import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { withFirefoxPage } from './lib/firefox-bidi.mjs';
@@ -608,26 +609,30 @@ async function runProtocol(derived, plant) {
 
 async function drive(derived, plant) {
     if (existsSync(join(REPO_ROOT, ORCA_PANES_REL))) {
-        // The Orca seeds may launch an agent: the stub claude goes on the launched PowerBrowser's PATH only.
-        const { writeStubAgentDir } = await import('./lib/orca-tabs-live.mjs');
-        const stub = writeStubAgentDir();
-        const savedPath = process.env.PATH;
-        process.env.PATH = `${stub}:${savedPath ?? ''}`;
-        try {
-            return await driveSession(derived, plant);
-        } finally {
-            process.env.PATH = savedPath;
-            rmSync(stub, { recursive: true, force: true });
-        }
+        // The Orca seeds need PowerBrowser's own orcad and a booted pane bundle: the shared Orca tabs session
+        // (it puts the stub claude on the launched PowerBrowser's PATH only). Its worktree is selected through
+        // the bundle's setActiveWorktree, as an activated Orca tab does (P64-23), and the Theia frame is focused.
+        const lib = await import('./lib/orca-tabs-live.mjs');
+        const { pollFor } = await import('./lib/pb-relaunch.mjs');
+        return lib.withOrcaTabsSession({ log: () => {} }, async (ctx) => {
+            const listed = ctx.orca('worktree', 'list');
+            const id = (listed?.result?.worktrees ?? []).find((w) => String(w.id).endsWith(`::${ctx.repo}`))?.id;
+            if (!id) throw new Error('the session worktree is not in the Orca CLI list');
+            await ctx.bundle(`(m.setActiveWorktree(${JSON.stringify(id)}), true)`);
+            await ctx.focusTheiaFrame();
+            const evaluate = (expr) => ctx.app.evaluate(expr);
+            const waitFor = (expr, { timeoutMs = 60000 } = {}) => pollFor(async () => ((await evaluate(expr)) ? true : null), timeoutMs, 'a frontend condition');
+            return driveIn(evaluate, waitFor, derived, plant);
+        });
     }
-    return driveSession(derived, plant);
-}
-
-async function driveSession(derived, plant) {
     // WINDOWS 14: empty URL -- the shell's own supervised frontend is the app
     // under test, and a URL on the command line would open a redundant stock
     // window beside it.
-    return withFirefoxPage('', async ({ evaluate, waitFor }) => {
+    return withFirefoxPage('', ({ evaluate, waitFor }) => driveIn(evaluate, waitFor, derived, plant));
+}
+
+async function driveIn(evaluate, waitFor, derived, plant) {
+    {
         await waitFor('window.theia && window.theia.container ? true : false', { timeoutMs: 60000 });
         await waitFor('!!document.querySelector("#theia-app-shell")', { timeoutMs: 60000 });
         // Waiting for the app's OWN 'ready' state, not for a shell selector and
@@ -645,7 +650,7 @@ async function driveSession(derived, plant) {
         } catch (e) { return false; } })()`, { timeoutMs: 60000 });
         const raw = await evaluate(protocolExpression(derived, plant));
         return JSON.parse(raw);
-    });
+    }
 }
 
 /** Tree-side assertions over one live report. @returns {string[]} */
