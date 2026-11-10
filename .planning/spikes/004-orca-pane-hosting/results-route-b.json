@@ -1,0 +1,171 @@
+{
+  "route": "b",
+  "measure": "all",
+  "command": "PB_FIREFOX_BIN=/home/chris/orca/workspaces/Power-Browser/v1.7-Orca-integration/objdir/dist/bin/powerbrowser flock /home/chris/coding/Power-Browser/.git/pb-live.lock node .planning/spikes/004-orca-pane-hosting/measure.mjs --route b --measure all",
+  "startedAt": "2026-11-10T06:50:28.628Z",
+  "orcaVersion": "1.4.248",
+  "nodeVersion": "24.19.0",
+  "orcadNodeVersion": "24.19.0",
+  "orcadEndpoint": "ws://127.0.0.1:<port>",
+  "theiaBuild": "/home/chris/orca/workspaces/Power-Browser/p61-01/theia/applications/browser/lib/backend/main.js",
+  "theiaOrigin": "http://127.0.0.1:<port>",
+  "cssControl": {
+    "plantedGlobalRules": 1,
+    "counterDelta": 1,
+    "restoredAfterRemoval": true,
+    "theiaDocumentBefore": {
+      "global": 54,
+      "total": 7455,
+      "sheets": 8,
+      "unreadable": 0
+    }
+  },
+  "widgetInMainArea": true,
+  "reactCopies": 1,
+  "reactCopiesNote": "one bundled React per pane document; the Theia document keeps its own",
+  "xterms": 1,
+  "paneSize": {
+    "w": 0,
+    "h": 0
+  },
+  "markerCount": 2,
+  "mounted": true,
+  "ws": "works",
+  "deviceKeySupport": "persistent",
+  "paneDocumentSecureContext": true,
+  "theia": {
+    "secureContext": true,
+    "cspHeader": null,
+    "cspMeta": null
+  },
+  "connectSrcRefusal": "none observed",
+  "observeChannel": "postMessage",
+  "observeTrigger": "the store new-terminal action (createNewTerminalTab) in the hosting client",
+  "observeLatencyMs": 106,
+  "observeToAddWidgetMs": 46,
+  "observeWithinOneSecond": true,
+  "observedPaneMounted": true,
+  "memory": {
+    "method": "ChromeUtils.requestProcInfo() through app.evaluateIn(app.chrome, ...), 5 s after each pane settled; sum of the parent and the children whose windows are on the Theia or orcad origin",
+    "samples": [
+      {
+        "label": "before the first pane",
+        "relevantBytes": 566468608,
+        "totalBytes": 689336320,
+        "processes": 9,
+        "rows": [
+          {
+            "type": "parent",
+            "memory": 175902720,
+            "origins": []
+          },
+          {
+            "type": "web",
+            "memory": 390565888,
+            "origins": [
+              "theia"
+            ]
+          }
+        ]
+      },
+      {
+        "label": "after pane 1",
+        "relevantBytes": 772227072,
+        "totalBytes": 893681664,
+        "processes": 9,
+        "rows": [
+          {
+            "type": "parent",
+            "memory": 194981888,
+            "origins": []
+          },
+          {
+            "type": "web",
+            "memory": 577245184,
+            "origins": [
+              "orcad",
+              "theia"
+            ]
+          }
+        ]
+      },
+      {
+        "label": "after pane 2",
+        "relevantBytes": 853647360,
+        "totalBytes": 975101952,
+        "processes": 9,
+        "rows": [
+          {
+            "type": "parent",
+            "memory": 200167424,
+            "origins": []
+          },
+          {
+            "type": "web",
+            "memory": 653479936,
+            "origins": [
+              "orcad",
+              "theia"
+            ]
+          }
+        ]
+      },
+      {
+        "label": "after pane 3",
+        "relevantBytes": 929464320,
+        "totalBytes": 1048854528,
+        "processes": 9,
+        "rows": [
+          {
+            "type": "parent",
+            "memory": 228950016,
+            "origins": []
+          },
+          {
+            "type": "web",
+            "memory": 700514304,
+            "origins": [
+              "orcad",
+              "theia"
+            ]
+          }
+        ]
+      }
+    ],
+    "firstPaneDeltaBytes": 205758464,
+    "totalDeltaBytes": 362995712,
+    "perPaneDeltaBytes": 120998571,
+    "laterPaneDeltaBytes": 78618624,
+    "lastPaneDeltaBytes": 75816960,
+    "totalAllProcessesDeltaBytes": 359518208,
+    "notMeasured": "the Theia backend (Node) and orcad are not Gecko processes and are outside this number"
+  },
+  "memoryPerPaneBytes": 120998571,
+  "cssLeakOut": {
+    "globalRulesAdded": 0,
+    "rulesAdded": 0,
+    "theiaDocumentCounterDelta": 0,
+    "unreadableSheetsAdded": 0,
+    "orcaSheet": null,
+    "computedStyleDiffs": 0,
+    "changed": []
+  },
+  "cssLeakIn": {
+    "measured": false,
+    "reason": "the pane has no layout box (0 x 0); its computed styles read empty",
+    "comparedProperties": 144
+  },
+  "observeLatencyCliMs": null,
+  "cliCreateBecameTab": false,
+  "secondClientSeesTab": true,
+  "closeLuminoOnlyLeavesOrcaTab": true,
+  "closeStaysClosed": true,
+  "closeCall": "store close action closeTerminalTab(tabId) inside a pane document; the Theia parent needs a parent-to-pane postMessage command or the orcad RPC session.tabs.close to reach it (the harness called it over BiDi)",
+  "closeObservedByChannel": true,
+  "rejectedMessages": 2,
+  "forgedMessageAddedWidget": false,
+  "orcadSurvivors": 0,
+  "finishedAt": "2026-11-10T06:51:18.309Z",
+  "verdict": "FAIL",
+  "failure": "css-leak-in: not measurable, the pane has no layout box in this route"
+}
