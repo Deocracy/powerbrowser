@@ -164,7 +164,7 @@ export function splitVerdict(obs) {
     if (a.tabBar === b.tabBar) fails.push('split: both leaves sit in one Lumino tab bar');
     else if (!liesInDirection(a.rect, b.rect, obs.mode)) fails.push(`split: split bars in the wrong direction, the store records ${obs.mode}`);
     for (const w of obs.widgets) {
-        if (w.xterms !== 1) fails.push(`split: ${w.id} holds ${w.xterms} xterm elements, want 1`);
+        if (w.xterms !== 1) fails.push(`split: ${w.id} shows ${w.xterms} visible xterm elements (total ${w.xtermsTotal ?? '?'}), want 1`);
         if (!w.ownEcho) fails.push(`split: ${w.id}'s marker missing from its own leaf`);
         if (w.otherEcho) fails.push(`split: ${w.id}'s marker reached the other leaf`);
     }
@@ -177,7 +177,7 @@ export function pbSplitVerdict(obs) {
     if (!obs.moved) fails.push('pb-split: the widget did not move to a new Lumino tab bar');
     if (obs.remounts) fails.push(`pb-split: a remount after a PB-side move (${obs.remounts} mountPane calls)`);
     if (obs.newStoreTabs) fails.push(`pb-split: ${obs.newStoreTabs} new store tab(s) after a PB-side move`);
-    if (obs.xterms !== 1) fails.push(`pb-split: ${obs.xterms} xterm elements after the move, want 1`);
+    if (obs.xterms !== 1) fails.push(`pb-split: ${obs.xterms} visible xterm elements after the move, want 1`);
     if (!obs.echo) fails.push('pb-split: the moved terminal no longer echoes');
     return fails;
 }
@@ -338,6 +338,8 @@ async function runLive(lib) {
             const panes = (await ctx.probe(PANES)) ?? [];
             const rec = panes.find((p) => p.kind === 'terminal' && p.tabId === b.widget.options?.tabId && p.key !== b.widget.options?.paneKey);
             const mode = rec?.neighbours?.find((n) => n.key === b.widget.options?.paneKey)?.mode ?? 'unrecorded';
+            // Each leaf widget's xterm renders after its mount; read the widgets once each shows one (or after 10 s).
+            for (const id of [b.widget.id, s.widget?.id].filter(Boolean)) await ctx.pollFor(async () => ((await widgetOf(id))?.xterms ?? 0) >= 1, 10000, 'a leaf xterm').catch(() => false);
             const pair = [await widgetOf(b.widget.id), s.widget ? await widgetOf(s.widget.id) : null].filter(Boolean);
             const widgets = [];
             for (const [w, own, other] of [[pair[0], b.handle, s.handle], [pair[1], s.handle, b.handle]]) {
@@ -364,7 +366,8 @@ async function runLive(lib) {
                 shell.mainPanel.addWidget(w, { mode: 'split-right', ref: other });
                 await sleep(500);
                 const barAfter = [...shell.mainPanel.tabBars()].findIndex(b => b.titles.includes(w.title));
-                return { moved: barAfter !== barBefore, remounts: mounts + (w.node.querySelector('.xterm') === xterm ? 0 : 1), xterms: w.node.querySelectorAll('.xterm').length };`);
+                const visible = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && el.offsetParent !== null; };
+                return { moved: barAfter !== barBefore, remounts: mounts + (w.node.querySelector('.xterm') === xterm ? 0 : 1), xterms: [...w.node.querySelectorAll('.xterm')].filter(visible).length };`);
             const storeAfter = ((await ctx.probe(PANES)) ?? []).length;
             fail('pb-split', pbSplitVerdict({ ...moved, newStoreTabs: Math.max(0, storeAfter - storeBefore), echo: await echoes(wA.id, hA) }));
         } else fail('pb-split', ['pb-split: no hosted terminal from (a) to move']);
@@ -521,21 +524,45 @@ async function openSecondClient(ctx) {
     const page = await ctx.pollFor(async () => (await ctx.app.contexts()).find((x) => x.url.startsWith(base)) ?? null, 30000, 'the second client page').catch(() => null);
     if (!page) return { error: 'the second client page did not load' };
     const evalIn = (expr) => ctx.app.evaluateIn(page.context, expr);
-    const paired = await evalIn(`(async () => {
-        const deadline = Date.now() + 20000;
+    // Orca's pairing field parses the offer itself, not orcad's http web-client URL (WebConnect: parseWebPairingInput).
+    const input = await ctx.pairingInputFromFile();
+    if (!input) return { error: 'no pairing input in the offer' };
+    // Each page call stays inside one BiDi request's 20 s; the wait for the paired screen is polled from here.
+    const submitted = await evalIn(`(async () => {
+        const deadline = Date.now() + 15000;
         let input; while (!(input = document.getElementById('web-runtime-pairing-code')) && Date.now() < deadline) await new Promise(r => setTimeout(r, 200));
         if (!input) return 'no pairing field';
         const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-        set.call(input, ${JSON.stringify(offer)});
+        set.call(input, ${JSON.stringify(input)});
         input.dispatchEvent(new Event('input', { bubbles: true }));
         await new Promise(r => setTimeout(r, 300));
         const btn = [...document.querySelectorAll('button')].find(b => /connect/i.test(b.textContent));
         if (!btn) return 'no connect button';
         btn.click();
-        while (document.getElementById('web-runtime-pairing-code') && Date.now() < deadline + 20000) await new Promise(r => setTimeout(r, 300));
-        return document.getElementById('web-runtime-pairing-code') ? 'still on the pairing screen' : 'ok';
+        return 'ok';
     })()`).catch((e) => `evaluate failed: ${e.message}`);
+    const paired = submitted !== 'ok' ? submitted
+        : await ctx.pollFor(async () => (await evalIn(`!document.getElementById('web-runtime-pairing-code')`).catch(() => false)) === true ? 'ok' : null, 30000, 'the paired client').catch(() => 'still on the pairing screen');
     if (paired !== 'ok') return { error: `pairing in page memory did not complete (${paired})` };
+    // A freshly paired client shows "Select a workspace from the sidebar to begin": select this session's
+    // worktree through Orca's own sidebar row, then wait for its tab strip's New tab control.
+    const selected = await evalIn(`(async () => {
+        const deadline = Date.now() + 15000;
+        const want = ${JSON.stringify(`::${ctx.repo}`)};
+        let row;
+        while (Date.now() < deadline) {
+            const rows = [...document.querySelectorAll('[role="option"][data-worktree-id]')];
+            row = rows.find(e => e.getAttribute('data-worktree-id').endsWith(want)) ?? (rows.length === 1 ? rows[0] : null);
+            if (row) break;
+            await new Promise(r => setTimeout(r, 200));
+        }
+        if (!row) return 'no worktree row in the Orca sidebar';
+        row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); row.click();
+        return 'ok';
+    })()`).catch((e) => `evaluate failed: ${e.message}`);
+    if (selected !== 'ok') return { error: `selecting the worktree did not complete (${selected})` };
+    const strip = await ctx.pollFor(async () => (await evalIn(`!!document.querySelector('[aria-label="New tab"], [title="New tab"]')`).catch(() => false)) === true || null, 15000, 'the worktree tab strip').catch(() => null);
+    if (!strip) return { error: 'the selected worktree shows no New tab control' };
     return {
         /** Clicks Orca's own New tab control (in tab group `groupIndex` when given) and its chat item; resolves the page's Date.now at the click, or null. */
         newChat: (groupIndex) => evalIn(`(async () => {
@@ -545,7 +572,8 @@ async function openSecondClient(ctx) {
             if (!plus) return null;
             plus.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); plus.click();
             await new Promise(r => setTimeout(r, 400));
-            const item = [...document.querySelectorAll('[role="menuitem"]')].find(m => /chat/i.test(m.textContent));
+            // The pinned client names its chat rows in aria-label and title ("Start a chat with <agent>"); the text is the agent.
+            const item = [...document.querySelectorAll('[role="menuitem"]')].find(m => /chat/i.test(m.getAttribute('aria-label') || m.getAttribute('title') || m.textContent));
             if (!item) return null;
             const t = Date.now(); item.click(); return t;
         })()`).catch(() => null),
@@ -556,9 +584,20 @@ async function openSecondClient(ctx) {
             tab.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 10, clientY: 10 }));
             await new Promise(r => setTimeout(r, 400));
             const item = [...document.querySelectorAll('[role="menuitem"]')].find(m => /split/i.test(m.textContent) && /(right|down)/i.test(m.textContent));
-            if (!item) return null;
-            const direction = /down/i.test(item.textContent) ? 'down' : 'right';
-            item.click();
+            let direction;
+            if (item) {
+                direction = /down/i.test(item.textContent) ? 'down' : 'right';
+                item.click();
+            } else {
+                // The pinned client's tab menu offers only "Split terminal" (a pane split); its group split is the
+                // shown chat pane header's own "Split Chat Right" button, which opens a new chat in a new group.
+                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+                await new Promise(r => setTimeout(r, 300));
+                const button = [...document.querySelectorAll('button[aria-label]')].find(e => /^split chat right$/i.test(e.getAttribute('aria-label')) && e.getClientRects().length > 0);
+                if (!button) return null;
+                direction = 'right';
+                button.click();
+            }
             await new Promise(r => setTimeout(r, 800));
             return { direction, groupIndex: document.querySelectorAll('[data-tab-group-strip-id]').length - 1 };
         })()`).catch(() => null),
@@ -635,7 +674,7 @@ function runSelfTest() {
         ['a CLI tab after a freeze', 'freeze guard after New Orca Chat', () => freezeVerdict([{ after: 'New Orca Chat', ms: null }])],
         ['split bars in the wrong direction', 'split bars in the wrong direction', () => splitVerdict(split({ mode: 'split-bottom' }))],
         ['split leaves in one tab bar', 'both leaves sit in one Lumino tab bar', () => splitVerdict(withWidget(split(), 1, { tabBar: 0 }))],
-        ['a second xterm in a leaf widget', 'holds 2 xterm elements', () => splitVerdict(withWidget(split(), 0, { xterms: 2 }))],
+        ['a second xterm in a leaf widget', 'shows 2 visible xterm elements', () => splitVerdict(withWidget(split(), 0, { xterms: 2 }))],
         ['a leaf echoing into the other', "reached the other leaf", () => splitVerdict(withWidget(split(), 1, { otherEcho: true }))],
         ['an OWNER-ITEM line present', 'FAIL by owner item P64-32', () => splitVerdict({ ownerItem: ownerItemOf('x\nOWNER-ITEM: P64-32 split placement needs the owner\n') })],
         ['a remount after a PB-side move', 'a remount after a PB-side move', () => pbSplitVerdict({ moved: true, remounts: 1, newStoreTabs: 0, xterms: 1, echo: true })],

@@ -113,6 +113,8 @@ export const HOSTED_WIDGETS = `const shell = get('ApplicationShell');
     const registry = get('TabUriRegistry');
     const bars = shell.mainPanel.tabBars ? [...shell.mainPanel.tabBars()] : [];
     const out = [];
+    // Visible xterms, as orca-pane-standalone-live judges them: an isolated leaf's root also holds its tab's other leaves' xterms, hidden.
+    const visible = el => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none' && el.offsetParent !== null; };
     for (const area of ['main', 'bottom', 'left', 'right']) {
         for (const w of shell.getWidgets(area)) {
             if (!w.node || !w.node.hasAttribute('data-pb-orca-pane')) continue;
@@ -121,7 +123,7 @@ export const HOSTED_WIDGETS = `const shell = get('ApplicationShell');
             out.push({
                 id: w.id, area, options: w.options ? { ...w.options } : null, kind: w.node.getAttribute('data-pb-orca-pane'),
                 title: w.title.label, tabBar: bars.findIndex(b => b.titles.includes(w.title)),
-                rect: { x: r.x, y: r.y, w: r.width, h: r.height }, xterms: w.node.querySelectorAll('.xterm').length,
+                rect: { x: r.x, y: r.y, w: r.width, h: r.height }, xterms: [...w.node.querySelectorAll('.xterm')].filter(visible).length, xtermsTotal: w.node.querySelectorAll('.xterm').length,
                 attached: w.isAttached, organising: uri ? uri.toString(true) : 'widget:' + w.id,
             });
         }
@@ -217,6 +219,21 @@ export async function withOrcaTabsSession({ log = () => {}, needOrca = true } = 
                 const offer = dir ? (read(OrcaEnv.bridgeFileFor(dir, WEB_PAIRING_FILE, 'linux')) ?? '').trim() : '';
                 if (offer && !secrets.includes(offer)) secrets.push(offer);
                 return offer || null;
+            };
+            /** The pairing input Orca's own pairing field parses: the offer read from the web-client URL's fragment or query, as Orca's web client reads it. */
+            ctx.pairingInputFromFile = async () => {
+                const offer = await ctx.offerFromFile();
+                if (!offer) return null;
+                let input = null;
+                try {
+                    const u = new URL(offer);
+                    const keys = ['pairing', 'pair', 'code', 'token'];
+                    const fromSearch = keys.map((k) => u.searchParams.get(k)).find((v) => v?.trim());
+                    const hash = u.hash.replace(/^#/, '').trim();
+                    input = fromSearch ?? keys.map((k) => new URLSearchParams(hash).get(k)).find((v) => v?.trim()) ?? (hash || null);
+                } catch { /* not a URL: the offer itself */ input = offer; }
+                if (input && !secrets.includes(input)) secrets.push(input);
+                return input;
             };
             if (!(await ctx.probe(ADD_WIDGET_RECORDER))) throw new Error('harness: the addWidget recorder did not install');
             if (needOrca) {
