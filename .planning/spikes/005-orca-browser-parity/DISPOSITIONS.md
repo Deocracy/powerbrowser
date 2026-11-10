@@ -26,12 +26,12 @@ the tree both ways: a row without a derived ability and a derived ability withou
 | browser.check | CLI, agent | BiDi+ | script.callFunction sets the value and dispatches input/change | 1 | [ASSUMED] A1-07 |
 | browser.clear | CLI, agent | BiDi+ | script.callFunction sets the value and dispatches input/change | 1 | [ASSUMED] A1-07 |
 | browser.click | CLI, agent | BiDi | input.performActions pointer and wheel sources | 1 | [ASSUMED] focus on a background tab and DPR alignment unproven (A1-05, Q3) |
-| browser.clientHost.attach | main | native | none in Gecko: S2 seam protocol called by the PB runtime client | 1 | [ASSUMED] until provider-proof.mjs has run (Q1) |
-| browser.clientHost.commandResult | main | native | none in Gecko: S2 seam protocol called by the PB runtime client | 1 | [ASSUMED] until provider-proof.mjs has run (Q1) |
+| browser.clientHost.attach | main | native | none in Gecko: S2 seam protocol called by the PB runtime client | 1 | shown by provider-proof.mjs on 2026-11-09: attach accepted from a PB runtime client with no Orca patch (Q1) |
+| browser.clientHost.commandResult | main | native | none in Gecko: S2 seam protocol called by the PB runtime client | 1 | shown by provider-proof.mjs on 2026-11-09: results for createPage and goto were acknowledged (Q1) |
 | browser.clientHost.fileChannel.abort | main | native | none in Gecko: S2 file transport called by the PB runtime client | 2 | [ASSUMED] carries upload and download bytes |
 | browser.clientHost.fileChannel.read | main | native | none in Gecko: S2 file transport called by the PB runtime client | 2 | [ASSUMED] carries upload and download bytes |
 | browser.clientHost.fileChannel.write | main | native | none in Gecko: S2 file transport called by the PB runtime client | 2 | [ASSUMED] carries upload and download bytes |
-| browser.clientHost.pageMetadata | none | native | none in Gecko: S2 seam protocol called by the PB runtime client | 1 | [ASSUMED] until provider-proof.mjs has run (Q1) |
+| browser.clientHost.pageMetadata | none | native | none in Gecko: S2 seam protocol called by the PB runtime client | 1 | [ASSUMED] not called by the proof; carries title and URL changes the page makes without a command |
 | browser.clipboardRead | CLI, agent | native | chrome clipboard service behind PowerBrowserAPI | 2 | [ASSUMED] not in BiDi; actor is the alternative (A1-15) |
 | browser.clipboardWrite | CLI, agent | native | chrome clipboard service behind PowerBrowserAPI | 2 | [ASSUMED] not in BiDi; actor is the alternative (A1-15) |
 | browser.console | CLI, agent | BiDi | log.entryAdded, network.* events, network.addDataCollector/getData | 1 | [ASSUMED] A1-11 |
@@ -52,7 +52,7 @@ the tree both ways: a row without a derived ability and a derived ability withou
 | browser.fullScreenshot | CLI, agent | BiDi | browsingContext.captureScreenshot origin document | 1 | [ASSUMED] A1-04 |
 | browser.geolocation | CLI, agent, orcad | BiDi | emulation.setGeolocationOverride | 2 | [ASSUMED] A1-19 |
 | browser.get | CLI, agent | BiDi+ | script.callFunction | 2 | [ASSUMED] A1-10 |
-| browser.goto | CLI, agent, main, renderer | native | PowerBrowserAPI.webTabNavigate, result from the PowerBrowserWebTabState push | 1 | [ASSUMED] until provider-proof.mjs has run (A1-01) |
+| browser.goto | CLI, agent, main, renderer | native | PowerBrowserAPI.webTabNavigate, result from the PowerBrowserWebTabState push | 1 | shown end to end by provider-proof.mjs on 2026-11-09: Orca CLI goto through orcad and the S2 host to a PB web tab, result {url, title} (A1-01) |
 | browser.highlight | CLI, agent | actor | overlay drawn by a content actor | 2 | [ASSUMED] A1-10 |
 | browser.hover | CLI, agent | BiDi | input.performActions pointer and wheel sources | 1 | [ASSUMED] focus on a background tab and DPR alignment unproven (A1-05, Q3) |
 | browser.identity.get | CLI, agent | BiDi | emulation.setUserAgentOverride | 2 | [ASSUMED] A1-22 |

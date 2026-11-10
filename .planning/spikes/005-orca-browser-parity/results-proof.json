@@ -1,0 +1,49 @@
+{
+  "date": "2026-11-10T06:22:24.177Z",
+  "command": "flock /home/chris/coding/Power-Browser/.git/pb-live.lock node .planning/spikes/005-orca-browser-parity/provider-proof.mjs",
+  "attachOutcome": "accepted",
+  "halvesEndToEnd": [
+    "pb",
+    "s2"
+  ],
+  "gotoResult": {
+    "url": "http://127.0.0.1:41221/s2",
+    "title": "P61 S2 half cc381a58"
+  },
+  "pbHalf": {
+    "gotoResult": {
+      "url": "http://127.0.0.1:41221/pb",
+      "title": "P61 PB half cc381a58"
+    },
+    "ms": 270,
+    "navigateReply": {
+      "ok": true,
+      "kind": "webTabNavigate",
+      "where": "loading"
+    }
+  },
+  "s2Half": {
+    "attachMs": 254,
+    "theiaOrigin": "http://127.0.0.1:44651",
+    "secureContext": true,
+    "tabCreate": "created",
+    "tabCreateMs": 171,
+    "gotoResult": {
+      "url": "http://127.0.0.1:41221/s2",
+      "title": "P61 S2 half cc381a58"
+    },
+    "gotoMs": 162,
+    "hostCommands": [
+      "createPage:completed:acked",
+      "automation:completed:acked"
+    ]
+  },
+  "notes": [],
+  "orca": "1.4.248",
+  "node": "24.19.0",
+  "pbBinary": "/home/chris/orca/workspaces/Power-Browser/v1.7-Orca-integration/objdir/dist/bin/powerbrowser",
+  "expectedTitles": {
+    "pb": "P61 PB half cc381a58",
+    "s2": "P61 S2 half cc381a58"
+  }
+}
