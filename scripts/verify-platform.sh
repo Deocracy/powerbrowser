@@ -3875,6 +3875,9 @@ run_own_checks() {
     # present tree's LICENSE sha256 must equal its row. An absent tree is a named SKIP of
     # that row only. Runtime-installed proprietary extensions are not rows: PowerBrowser
     # never redistributes them. The self-test plants six faults in mkdtemp fixtures.
+    # Phase 68 (P68-24, P68-25, P68-38) adds the per-package rule over the bundle-derived Orca
+    # shipped set, the package_exceptions and package_rulings rows, PENDING lines that never
+    # change the exit status, and ten more plants plus three controls.
     "licence-allowlist|node $REPO_ROOT/scripts/verify-licence-allowlist.mjs"
     "licence-allowlist-self-test|node $REPO_ROOT/scripts/verify-licence-allowlist.mjs --self-test"
     # NEW (62-01, OVL-01/OVL-05, P62-09/P62-10/P62-17): the Orca overlay gate. Derived at
@@ -6539,6 +6542,9 @@ run_own_checks() {
       # verdict (network read): the newest mobile-android-v* tag's constants by a one-blob partial clone against the
       # pin's; red on a refusing verdict (a re-pin is due). A printed SKIP when orca/ is not fetched.
       "orca-mobile-skew|node $REPO_ROOT/scripts/verify-orca-mobile-protocol.mjs --skew"
+      # NEW (68-04, PLAT-01, P68-25, P68-38): orca-licence-rulings is red while an owner licence item is open (68-B permissive set; the 68-A terms check for the SDK extension). Needs no built orca/.
+      # The coordinator keys its GATE_KNOWN_OPEN_EXCLUSIONS row to the WINDOWS.md entry for those items; release.yml's guard runs the same mode.
+      "orca-licence-rulings|node $REPO_ROOT/scripts/verify-licence-allowlist.mjs --rulings"
     )
   fi
 
