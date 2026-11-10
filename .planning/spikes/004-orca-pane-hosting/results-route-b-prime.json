@@ -1,0 +1,52 @@
+{
+  "route": "b-prime",
+  "measure": "observe",
+  "command": "PB_FIREFOX_BIN=/home/chris/orca/workspaces/Power-Browser/v1.7-Orca-integration/objdir/dist/bin/powerbrowser flock /home/chris/coding/Power-Browser/.git/pb-live.lock node .planning/spikes/004-orca-pane-hosting/measure.mjs --route b-prime --measure observe",
+  "startedAt": "2026-11-10T06:42:15.930Z",
+  "orcaVersion": "1.4.248",
+  "nodeVersion": "24.19.0",
+  "orcadNodeVersion": "24.19.0",
+  "orcadEndpoint": "ws://127.0.0.1:<port>",
+  "theiaBuild": "/home/chris/orca/workspaces/Power-Browser/p61-01/theia/applications/browser/lib/backend/main.js",
+  "theiaOrigin": "http://127.0.0.1:<port>",
+  "widgetInMainArea": true,
+  "reactCopies": 1,
+  "reactCopiesNote": "one bundled React per pane page; the observer in the Theia frame runs on the React of Theia (library bundle, externals)",
+  "xterms": 1,
+  "paneSize": {
+    "w": 1280,
+    "h": 695
+  },
+  "markerCount": 2,
+  "mounted": true,
+  "ws": "works",
+  "deviceKeySupport": "persistent",
+  "paneDocumentSecureContext": true,
+  "theia": {
+    "secureContext": true,
+    "cspHeader": null,
+    "cspMeta": null
+  },
+  "connectSrcRefusal": "none observed",
+  "observerInTheiaFrame": {
+    "ready": true,
+    "known": 2,
+    "sameUseState": true
+  },
+  "observeChannel": "second-client",
+  "observeTrigger": "the store new-terminal action (createNewTerminalTab) in the hosting client",
+  "observeLatencyMs": 51,
+  "observeToAddWidgetMs": 5,
+  "observeWithinOneSecond": true,
+  "observedPaneMounted": true,
+  "observeLatencyCliMs": 209,
+  "cliCreateBecameTab": true,
+  "secondClientSeesTab": true,
+  "closeLuminoOnlyLeavesOrcaTab": true,
+  "closeStaysClosed": true,
+  "closeCall": "store close action closeTerminalTab(tabId) in any paired client (the Theia-frame observer or a pane page), or the orcad RPC session.tabs.close; closing the web tab alone leaves the Orca tab open",
+  "closeObservedByChannel": true,
+  "orcadSurvivors": 0,
+  "finishedAt": "2026-11-10T06:42:39.537Z",
+  "verdict": "PASS"
+}

@@ -1,0 +1,52 @@
+{
+  "route": "a",
+  "measure": "observe",
+  "command": "PB_FIREFOX_BIN=/home/chris/orca/workspaces/Power-Browser/v1.7-Orca-integration/objdir/dist/bin/powerbrowser flock /home/chris/coding/Power-Browser/.git/pb-live.lock node .planning/spikes/004-orca-pane-hosting/measure.mjs --route a --measure observe",
+  "startedAt": "2026-11-10T06:41:11.230Z",
+  "orcaVersion": "1.4.248",
+  "nodeVersion": "24.19.0",
+  "orcadNodeVersion": "24.19.0",
+  "orcadEndpoint": "ws://127.0.0.1:<port>",
+  "orcadSurvivors": 0,
+  "finishedAt": "2026-11-10T06:41:40.554Z",
+  "verdict": "PASS",
+  "theiaBuild": "/home/chris/orca/workspaces/Power-Browser/p61-01/theia/applications/browser/lib/backend/main.js",
+  "theiaOrigin": "http://127.0.0.1:<port>",
+  "reactCopies": 1,
+  "reactVersions": {
+    "theia": "19.2.8",
+    "bundle": "19.2.8"
+  },
+  "renderedInTheiaRoot": true,
+  "routeAForm": "runtime ReactWidget subclass in the Theia frame; React from the lane Theia build (window.__pbReact); no scratch extension",
+  "widgetInMainArea": true,
+  "xterms": 1,
+  "paneSize": {
+    "w": 1280,
+    "h": 695
+  },
+  "markerCount": 2,
+  "mounted": true,
+  "ws": "works",
+  "deviceKeySupport": "persistent",
+  "paneDocumentSecureContext": true,
+  "theia": {
+    "secureContext": true,
+    "cspHeader": null,
+    "cspMeta": null
+  },
+  "connectSrcRefusal": "none observed",
+  "observeChannel": "store",
+  "observeTrigger": "the store new-terminal action (createNewTerminalTab) in the hosting client",
+  "observeLatencyMs": 53,
+  "observeToAddWidgetMs": 13,
+  "observeWithinOneSecond": true,
+  "observedPaneMounted": true,
+  "observeLatencyCliMs": null,
+  "cliCreateBecameTab": false,
+  "secondClientSeesTab": true,
+  "closeLuminoOnlyLeavesOrcaTab": true,
+  "closeStaysClosed": true,
+  "closeCall": "store close action closeTerminalTab(tabId) in the Theia document (PbPane.closeTab)",
+  "closeObservedByChannel": true
+}

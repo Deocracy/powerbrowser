@@ -83,7 +83,9 @@ let booted: Promise<void> | null = null
  * The web bootstrap of web/main.tsx, once per document: device-key probe, the pairing offer
  * (handed in, never read from location here), window.api, and the startup hooks on a hidden root.
  */
-export function bootstrap(options: { pairing?: string | null } = {}): Promise<void> {
+export function bootstrap(
+  options: { pairing?: string | null; appearance?: boolean } = {}
+): Promise<void> {
   booted ??= (async () => {
     await initWebDeviceKeySupport().catch((error: unknown) =>
       console.warn('[pb-pane] device key probe failed', error)
@@ -108,7 +110,7 @@ export function bootstrap(options: { pairing?: string | null } = {}): Promise<vo
     document.body.appendChild(host)
     ReactDOMClient.createRoot(host).render(
       <Providers>
-        <Services />
+        <Services appearance={options.appearance !== false} />
       </Providers>
     )
   })()

@@ -8,6 +8,16 @@ import { mergeConfig } from 'vite'
 import base from './vite.web.config'
 
 const twoCopy = process.env.PB_LIB_TWO_COPY === '1'
+
+// CommonJS dependencies that require() an external (use-sync-external-store's shim does) keep a
+// bare require("react") in an iife bundle, which a browser does not define (measured: the first
+// Route A load threw "require is not defined"). This intro sits inside the bundle's wrapper
+// function, so the name is local to the bundle and nothing is added to the host document.
+const externalRequire = `var require = function (id) {
+  var map = { react: __pbReact.React, 'react-dom': __pbReact.ReactDOM, 'react-dom/client': __pbReact.ReactDOMClient, 'react/jsx-runtime': __pbReact.jsxRuntime };
+  if (!Object.prototype.hasOwnProperty.call(map, id)) throw new Error('pb-pane-lib: require(' + id + ') has no host global');
+  return map[id];
+};`
 const entry = resolve('src/renderer/src/pb/pb-pane-mount.tsx')
 
 export default mergeConfig(base, {
@@ -28,6 +38,7 @@ export default mergeConfig(base, {
       input: entry,
       external: twoCopy ? [] : ['react', 'react-dom', 'react-dom/client', 'react/jsx-runtime'],
       output: {
+        ...(twoCopy ? {} : { intro: externalRequire }),
         globals: {
           react: '__pbReact.React',
           'react-dom': '__pbReact.ReactDOM',

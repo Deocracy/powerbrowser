@@ -69,6 +69,11 @@ for (const name of Object.keys(process.env)) {
     }
 }
 
+// Routes A, B and B' need the lane's own Theia build (page-routes.mjs header): it publishes
+// Theia's React to the frame. The standalone page needs no Theia and keeps the default sidecar.
+const LANE_BACKEND = join(REPO_ROOT, 'theia', 'applications', 'browser', 'lib', 'backend', 'main.js');
+if (args.route !== 'standalone' && !process.env.PB_BACKEND_MAIN) process.env.PB_BACKEND_MAIN = LANE_BACKEND;
+
 const COMMAND = `PB_FIREFOX_BIN=${process.env.PB_FIREFOX_BIN ?? '(unset)'} flock /home/chris/coding/Power-Browser/.git/pb-live.lock `
     + `node ${relative(REPO_ROOT, fileURLToPath(import.meta.url))} --route ${args.route} --measure ${args.measure}`;
 
@@ -267,6 +272,8 @@ const file = join(HERE, `results-${args.route === 'standalone' ? 'standalone' : 
 let previous = {};
 if (args.route !== 'standalone' && args.measure !== 'all' && existsSync(file)) {
     try { previous = JSON.parse(readFileSync(file, 'utf8')); } catch { /* rewritten below */ }
+    // An earlier run's failure text does not describe this run.
+    for (const stale of ['failure', 'mountError', 'wsError']) delete previous[stale];
 }
 const text = redact(JSON.stringify({ ...previous, ...result }, null, 2), stack?.ready?.secrets ?? []);
 failIfSecret(text);
