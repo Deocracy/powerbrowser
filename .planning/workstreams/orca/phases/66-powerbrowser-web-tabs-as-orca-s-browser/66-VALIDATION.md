@@ -11,6 +11,7 @@ created: "2026-11-10"
 # Phase 66 — Validation Strategy
 
 > Per-phase validation contract. Derived from 66-RESEARCH.md "Validation Architecture" and the six plans. Nothing here needs a human (D-18); the four human items and the owner items are in 66-CONTEXT.md "Deferred Verification" for the end-of-milestone pass.
+> Phase 66 executes after Phases 64 and 65 merge, in that order: every lane branches after the Phase 65 coordinator (65-05) merge, the lanes code against interfaces C65 (C3-65, N-2, N-3, N-4), and 66-06 merge rule (6) keeps Phase 65's lines in the six files both phases edit, with build:extensions reading modes, orca-browser, orca-panes, orca-workspace.
 
 ---
 

@@ -11,7 +11,7 @@ created: "2026-11-10"
 # Phase 65 — Validation Strategy
 
 > Per-phase validation contract. Derived from 65-RESEARCH.md "Validation Architecture" and the five plans. Nothing here needs a human (D-18); human items wait for the end-of-milestone pass (65-CONTEXT "Deferred Verification").
-> Phase 65 executes after Phase 64 merges. The Phase 64 rows named below (`orca-pane-*`, `orca-tabs-live`) are those of the Phase 64 plans committed at 545ad293 (contract C12), reconciled on the merged tree by 65-05's prelaunch step; a lane that finds a Phase 64 file under another name records a path substitution.
+> Phase 65 executes after Phase 64 merges. The Phase 64 rows named below (`orca-pane-*`, `orca-tabs-live`) are those of the Phase 64 plans as revised at 04d37a87 (contract C12), reconciled on the merged tree by 65-05's prelaunch step; Phase 65 live checks reach the bundle in the Theia document only through C64-1's boot handle; a lane that finds a Phase 64 file under another name records a path substitution.
 
 ---
 
@@ -50,7 +50,7 @@ created: "2026-11-10"
 | 65-03-T2 | 03 | 1 | TAB-09, TAB-07 | T-65-10 | no PB Add-project control | quick | `--only orca-no-pb-add-project`, `--only orca-no-pb-add-project-self-test` (plants: command label, toolbar item, chrome-bar title, empty vocabulary; control: at least one orca-panes command label parsed) | ❌ W0 | ⬜ pending |
 | 65-03-T3 | 03 | 1 | TAB-07, TAB-09 | T-65-09, T-65-11 | unlisted egress red after a `.invalid` resolution control; Add-project equal to the stock standalone page | quick self-test + full | `--only orca-side-panel-live-self-test`, `--only orca-add-project-live-self-test`; `--only orca-side-panel-live`, `--only orca-add-project-live`, `--only verify-uri-roundtrip` (coordinator) | ❌ W0 | ⬜ pending |
 | 65-04-T1 | 04 | 1 | TAB-08 | T-65-13 | names never reissued while referenced | quick | `--only gui04-registry-shape`, `--only orca-pane-routes-self-test`; builds of modes and orca-panes | ✅ | ⬜ pending |
-| 65-04-T2 | 04 | 1 | TAB-05 | — | N/A | quick | `--only orca-pane-routes`, `--only orca-pane-routes-self-test` (route table ↔ pinned content types; words ↔ docs/URI-SCHEMES.md) | ✅ (Phase 64 row) | ⬜ pending |
+| 65-04-T2 | 04 | 1 | TAB-05 | — | N/A | quick | `--only orca-pane-routes`, `--only orca-pane-routes-self-test` (route table ↔ pinned content types; words ↔ docs/URI-SCHEMES.md); `--only orca-tabs-live-self-test` (stage (g) plants: conflict-review gave a hosted widget, no merge editor opened); `--only orca-tabs-live` (coordinator) | ✅ (Phase 64 rows, extended) | ⬜ pending |
 | 65-04-T3 | 04 | 1 | TAB-08 | T-65-12, T-65-14, T-65-15 | offer in no sink; needles never printed; device rows counted, never read | quick self-test + full | `--only orca-offer-scan-self-test`, `--only orca-relaunch-restore-live-self-test`; `--only orca-offer-scan`, `--only orca-relaunch-restore-live` (coordinator) | ❌ W0 | ⬜ pending |
 | 65-05-T1 | 05 | 2 | all | T-65-16, T-65-17 | merge scope derived from plan frontmatter | full (live) | `--only orca-pane-css-live`, `--only orca-pane-standalone-live`, `--only orca-workspace-live` under the lock | n/a | ⬜ pending |
 | 65-05-T3 | 05 | 2 | all | T-65-18 | brand and allowlist values only from measurement | quick + full (live) | the remaining live rows; `scan-brand-residue` and its self-test; `--quick` | n/a | ⬜ pending |

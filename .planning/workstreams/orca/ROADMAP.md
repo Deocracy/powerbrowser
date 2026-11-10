@@ -217,7 +217,7 @@ Editor, diff and browser-page panes reach the dock through this phase's mapping.
 ### Phase 66: PowerBrowser web tabs as Orca's browser
 
 **Goal**: Orca's agents and the user browse in PowerBrowser web tabs with PowerBrowser chrome. Agent control reaches only Orca-created tabs, and the user can see it and stop it.
-**Depends on**: Phase 61 (browser-parity route and seam); Phase 64
+**Depends on**: Phase 61 (browser-parity route and seam); Phase 64; Phase 65 (lanes launch after the 65-05 coordinator merge; execution order 64 → 65 → 66)
 **Requirements**: BRW-02, BRW-03, BRW-04, BRW-05
 Route chosen by Phase 61: S2, a PB runtime client that attaches through browser.clientHost.attach with no Orca patch, building the tier-1 set of 50 abilities (25 BiDi, 9 BiDi+, 14 native, 1 actor for snapshot, exec as a documented subset); S1 (a 13-line provider-kind patch) stays the fallback. (spike 005, verdict YELLOW)
 **Success Criteria** (what must be TRUE):
