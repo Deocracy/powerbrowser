@@ -367,16 +367,139 @@ jobs:
           retention-days: 1
           overwrite: true
 
+  # Phase 68 (PLAT-01, P68-03, P68-30): Orca for Windows, built on a GitHub-hosted windows-latest runner so that
+  # orcad's node-pty prebuild and every other native in it is a Windows native built on its own target (P68-05);
+  # legion never builds it. It stages the hosted Orca artifact layout (package.json, out/orcad, out/web, the prebuild
+  # manifest copy, BUILD_ROOT and SHA256SUMS) and admits its own output with the gates build-windows applies. The
+  # SHA-256 of SHA256SUMS leaves the job as the output sums_sha256, outside the artifact. It holds no secret and no
+  # write token, and only build-windows needs it, so a failure here never reaches a Linux job.
+  windows-orca:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    outputs:
+      sums_sha256: ${{ steps.sums.outputs.sha256 }}
+    env:
+      RELEASE_SHA: ${{ inputs.sha }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Refuse any ref but main and any event but a dispatch
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF" = "refs/heads/main" ] \
+            || { echo "::error::the release runs only from a workflow_dispatch on refs/heads/main (event $GITHUB_EVENT_NAME, ref $GITHUB_REF)" >&2; exit 1; }
+
+      - name: Require a full 40-hex commit SHA
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a full 40-character lowercase commit SHA" >&2; exit 1; }
+
+      - name: Check out the requested commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+
+      # orcad runs on the Node that package-windows.sh stages, so its natives match that ABI.
+      - name: Read the win32-x64 Node version from node-runtime.json
+        id: node_pin
+        run: |
+          set -euo pipefail
+          V="$(node -p 'require("./powerbrowser/packaging/node-runtime.json")["win32-x64"].version')"
+          [[ "$V" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::the win32-x64 version in node-runtime.json is not v<major>.<minor>.<patch> ('$V'); nothing is built" >&2; exit 1; }
+          echo "version=${V#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up the pinned Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ steps.node_pin.outputs.version }}
+          package-manager-cache: false
+
+      # The Orca clone has deep paths, and the overlay applies against LF worktree files.
+      - name: Allow long paths and keep LF line endings for the Orca clone
+        run: |
+          set -euo pipefail
+          git config --global core.longpaths true
+          git config --global core.autocrlf false
+
+      # Orca's pnpm 12 comes through corepack, which needs 0.34.5 or later. The pinned Node bundles it (v24.19.0 ships
+      # corepack 0.35.0, the version nix develop .#orca pins), so nothing is installed outside a lockfile; an older
+      # corepack stops the job.
+      - name: Require corepack 0.34.5 or later
+        run: |
+          set -euo pipefail
+          C="$(corepack --version)"
+          node -e 'const [a, b] = process.argv.slice(1).map(v => v.split(".").map(Number)); process.exit((a[0] - b[0] || a[1] - b[1] || a[2] - b[2]) < 0 ? 1 : 0)' "$C" 0.34.5 \
+            || { echo "::error::the pinned Node bundles corepack $C, older than 0.34.5, which pnpm 12 needs; nothing is built. Next step: bump the Node pin in node-runtime.json to a release bundling corepack 0.34.5 or later" >&2; exit 1; }
+
+      # Orca's own CI step (prepare-windows-cli-launcher): its build:orcad compiles the CLI launcher with cargo.
+      - name: Add the x86_64-pc-windows-msvc Rust target
+        run: |
+          set -euo pipefail
+          rustup target add x86_64-pc-windows-msvc
+
+      - name: Write the upstream pins fragment through the generator
+        run: |
+          set -euo pipefail
+          mkdir -p generated
+          node --input-type=module -e "import { resolveConfig, emitUpstreamPins } from './scripts/generate.mjs'; import { writeFileSync } from 'node:fs'; const { config } = resolveConfig('./configuration.toml'); writeFileSync('generated/upstream-pins.env', emitUpstreamPins(config, 'release'));"
+
+      - name: Build Orca from source at the pin (orcad, web client)
+        run: |
+          set -euo pipefail
+          bash scripts/fetch-orca.sh
+          bash scripts/build-orca.sh
+
+      # The hosted Orca artifact layout: package.json, out/orcad and out/web (the packaged root), plus the prebuild
+      # manifest copy (the node-pty slot evidence orca-packaged-tree reads in build-windows), BUILD_ROOT and SHA256SUMS.
+      - name: Stage the Orca tree in the hosted artifact layout, then write BUILD_ROOT and SHA256SUMS
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/windows-orca"
+          rm -rf "$OUT"
+          mkdir -p "$OUT/out"
+          test -f orca/out/orcad/orcad.js || { echo "::error::orca/out/orcad/orcad.js is absent after build-orca.sh; nothing is staged" >&2; exit 1; }
+          test -f orca/out/orcad-prebuilds/manifest.json || { echo "::error::orca/out/orcad-prebuilds/manifest.json is absent after build-orca.sh; nothing is staged" >&2; exit 1; }
+          cp -a orca/package.json "$OUT/package.json"
+          cp -a orca/out/orcad orca/out/web "$OUT/out/"
+          cp orca/out/orcad-prebuilds/manifest.json "$OUT/orcad-prebuilds-manifest.json"
+          printf '%s\n' "$GITHUB_WORKSPACE" > "$OUT/BUILD_ROOT"
+          (cd "$OUT" && find . -type f ! -path ./SHA256SUMS -print | sed 's|^\./||' | LC_ALL=C sort | xargs -d '\n' sha256sum > SHA256SUMS)
+
+      - name: Admit the staged Orca tree with the gates build-windows applies, then record the digest outside the artifact
+        id: sums
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/windows-orca"
+          SUMS="$(sha256sum "$OUT/SHA256SUMS" | cut -d' ' -f1)"
+          bash powerbrowser/packaging/check-win-sidecar.sh check "$OUT" "$SUMS"
+          bash powerbrowser/packaging/check-win-sidecar.sh purge "$OUT" "$OUT/package.json" "$OUT/out"
+          echo "sha256=$SUMS" >> "$GITHUB_OUTPUT"
+          echo "windows-orca SHA256SUMS sha256 $SUMS"
+
+      - name: Upload the Windows Orca tree (data for build-windows, admitted there by the digest output)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-orca
+          path: ${{ runner.temp }}/windows-orca/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
   # Phase 54 (PKG-10): the Windows cross build on the same legion runner. Its gates are copied
   # byte for byte from build-linux (the build-windows-shape row compares them), in the same order:
   # ref and event refusal, full SHA, checkout, SHA gate, key gate, then every step after the key gate
   # carries its if:. The job holds no secret, and its only credential-shaped input is the Safe
   # Browsing key directory (PB_KEYDIR at /keys:ro). Its output is data: sign-publish downloads only
   # release-linux, and sign-windows signs and repacks the release-windows bytes but executes none of them.
-  # Its one needs edge is the hosted windows-sidecar job (G-54a): the sidecar artifact and the digest of its
-  # SHA256SUMS come from there, never from a legion output or a repository variable.
+  # Its needs edges are the hosted producers windows-sidecar (G-54a) and windows-orca (P68-03): each artifact and the
+  # digest of its SHA256SUMS come from its producer, never from a legion output or a repository variable.
   build-windows:
-    needs: windows-sidecar
+    needs: [windows-sidecar, windows-orca]
     runs-on: [self-hosted, powerbrowser-release]
     timeout-minutes: 300
     permissions:
@@ -450,6 +573,14 @@ jobs:
         if: steps.key_gate.outputs.build == 'true'
         run: nix develop .#theia --command node scripts/generate.mjs
 
+      # P68-21: no Windows release carries Orca's shipped closure (the agent SDK extension included) while an
+      # owner licence ruling is pending. --rulings exits 1 naming each pending package ruling, before any Orca step.
+      - name: Refuse to build while an Orca licence ruling is pending (P68-21)
+        if: steps.key_gate.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          nix develop .#theia --command node scripts/verify-licence-allowlist.mjs --rulings
+
       - name: Check the win32-x64 Node pin before any staging reads it
         if: steps.key_gate.outputs.build == 'true'
         run: |
@@ -491,18 +622,35 @@ jobs:
           name: windows-sidecar
           path: windows-sidecar
 
-      # package-windows.sh stages the hosted sidecar and the pinned Node runtime into the app dir, rewrites the
-      # package zip from it, and runs `mach repackage installer` and `mach repackage mar` with the arguments the
-      # pinned tree defines. It fails closed: the sidecar directory (the windows-sidecar artifact) must exist and its
-      # SHA256SUMS must hash to the digest the windows-sidecar job recorded outside the artifact, as its job output.
-      # Without them this job stops here and uploads nothing.
-      - name: Stage the sidecar and the Node runtime, then repackage the installer and the complete MAR in the container
+      - name: Download the hosted Windows Orca tree into windows-orca/ (data, admitted by its digest before staging)
+        if: steps.key_gate.outputs.build == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-orca
+          path: windows-orca
+
+      # orca-packaged-tree (run by package-windows.sh) derives its slot-marker names from Orca's own artifact tables
+      # in orca/src at the pin; nothing is built from this clone.
+      - name: Fetch the pinned Orca source for the artifact tables the staging check reads
+        if: steps.key_gate.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          bash scripts/fetch-orca.sh
+
+      # package-windows.sh stages the hosted sidecar, the hosted Orca tree and the pinned Node runtime into the app
+      # dir, rewrites the package zip from it, and runs `mach repackage installer` and `mach repackage mar` with the
+      # arguments the pinned tree defines. It fails closed: each hosted directory (the windows-sidecar and windows-orca
+      # artifacts) must exist and its SHA256SUMS must hash to the digest its producing job recorded outside the
+      # artifact, as its job output. Without them this job stops here and uploads nothing.
+      - name: Stage the sidecar, Orca and the Node runtime, then repackage the installer and the complete MAR in the container
         if: steps.key_gate.outputs.build == 'true'
         env:
           PB_WIN_SIDECAR_SUMS_SHA256: ${{ needs.windows-sidecar.outputs.sums_sha256 }}
+          PB_WIN_ORCA_SUMS_SHA256: ${{ needs.windows-orca.outputs.sums_sha256 }}
         run: |
           set -euo pipefail
           podman run --rm -v "$PWD:/src:rw" -w /src -e PB_WIN_SIDECAR_DIR=/src/windows-sidecar -e PB_WIN_SIDECAR_SUMS_SHA256 \
+            -e PB_WIN_ORCA_DIR=/src/windows-orca -e PB_WIN_ORCA_SUMS_SHA256 \
             pb-gecko-build bash powerbrowser/packaging/package-windows.sh
 
       # Data only: no later job executes anything here. sign-windows signs the inner PE files of the zip and the
@@ -553,7 +701,7 @@ jobs:
   # this hosted job as their builder, a claim this job cannot make. Compromising legion is therefore equivalent
   # to compromising the Windows signing identity (docs/RELEASING.md, "Windows signing (SEC-12)").
   sign-windows:
-    needs: build-windows
+    needs: [build-windows, windows-orca]
     if: needs.build-windows.outputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -662,8 +810,9 @@ jobs:
 
       # The zip name and its top directory are DERIVED from this tree (scripts/win-sign-list.mjs --expected-base:
       # configuration.toml's app basename and ESR version) and the artifact must match them; nothing the artifact
-      # names reaches GITHUB_OUTPUT. Zip entries are refused unless every name matches ^[A-Za-z0-9._/-]+$ with no
+      # names reaches GITHUB_OUTPUT. Zip entries are refused unless every name matches ^[A-Za-z0-9@._/-]+$ with no
       # .. segment and no leading slash, when they are symlinks, or when the top directory is not the derived one.
+      # @ is admitted for Orca's scoped packages (node_modules/@parcel/watcher, @linear/sdk; P68-30).
       - name: Admit the staged zip and the setup stub against the tree-derived names, and unpack the zip
         if: steps.azure_config.outputs.signing == 'true'
         id: inputs
@@ -684,12 +833,12 @@ jobs:
           import re, stat, sys, zipfile
           z = zipfile.ZipFile(sys.argv[1])
           want_top = sys.argv[3]
-          ok_name = re.compile(r'^[A-Za-z0-9._/-]+$')
+          ok_name = re.compile(r'^[A-Za-z0-9@._/-]+$')
           ok_top = re.compile(r'^[A-Za-z0-9._-]+$')
           for i in z.infolist():
               n = i.filename
               if not ok_name.match(n) or n.startswith('/') or '..' in n.split('/') or stat.S_ISLNK(i.external_attr >> 16):
-                  sys.exit(f"refused zip entry {n!r}: only [A-Za-z0-9._/-] names, no .. segment, no leading slash and no symlink")
+                  sys.exit(f"refused zip entry {n!r}: only [A-Za-z0-9@._/-] names, no .. segment, no leading slash and no symlink")
               top = n.split('/')[0]
               if not ok_top.match(top) or top != want_top:
                   sys.exit(f"refused zip entry {n!r}: its top directory is not {want_top!r}")
@@ -736,18 +885,31 @@ jobs:
           bash scripts/fetch-upstream.sh
           bash scripts/apply-patches.sh
 
+      # Orca's PE files are named by the windows-orca artifact's SHA256SUMS, admitted here by the digest its hosted
+      # producer recorded outside the artifact, as build-windows admits it (P68-03, P68-30). Data only.
+      - name: Download the hosted Windows Orca tree into windows-orca/ (its SHA256SUMS names the Orca PE files)
+        if: steps.azure_config.outputs.signing == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-orca
+          path: windows-orca
+
       # The files to sign are the PE files of the staged tree that the pinned package manifest names (set
-      # comparison: an extra PE file or a missing unconditional one stops the job naming it); never a find over
-      # whatever legion produced. The list stays in a file; nothing from it reaches GITHUB_OUTPUT.
+      # comparison: an extra PE file or a missing unconditional one stops the job naming it), and under orca/ the
+      # PE files the admitted Orca SHA256SUMS names (set comparison as well); never a find over whatever legion
+      # produced. The list stays in a file; nothing from it reaches GITHUB_OUTPUT.
       - name: Derive the inner PE files to sign from the pinned package manifest and compare them with the staged tree
         if: steps.azure_config.outputs.signing == 'true'
         id: sign_list
         env:
           PKG: ${{ steps.inputs.outputs.pkg }}
           TOP: ${{ steps.inputs.outputs.top }}
+          PB_WIN_ORCA_SUMS_SHA256: ${{ needs.windows-orca.outputs.sums_sha256 }}
         run: |
           set -euo pipefail
-          node scripts/win-sign-list.mjs --list --pkg "$PKG/$TOP" --manifest upstream/browser/installer/package-manifest.in > "$RUNNER_TEMP/sign-list.txt"
+          bash powerbrowser/packaging/check-win-sidecar.sh check windows-orca "$PB_WIN_ORCA_SUMS_SHA256"
+          node scripts/win-sign-list.mjs --list --pkg "$PKG/$TOP" --manifest upstream/browser/installer/package-manifest.in \
+            --orca-sums windows-orca/SHA256SUMS > "$RUNNER_TEMP/sign-list.txt"
           wc -l < "$RUNNER_TEMP/sign-list.txt"
 
       # Directly before the first signature, after every gate above has passed.

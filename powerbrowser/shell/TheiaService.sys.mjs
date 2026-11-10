@@ -569,7 +569,9 @@ export const TheiaService = {
       };
     }
 
-    const stagedNode = appDir ? `${appDir}/node/bin/node` : "";
+    // Linux and macOS stage <appDir>/node/bin/node; Windows stages <appDir>/node/node.exe (package-windows.sh).
+    let stagedNode = appDir ? `${appDir}/node/bin/node` : "";
+    if (stagedNode && !(await PowerBrowserAPI.pathExists(stagedNode))) stagedNode = `${appDir}/node/node.exe`;
     const configured = PowerBrowserAPI.getStringPref("powerbrowser.sidecar.nodePath", "");
     const useStagedNode =
       !PowerBrowserAPI.prefHasUserValue("powerbrowser.sidecar.nodePath") && stagedNode && (await PowerBrowserAPI.pathExists(stagedNode));
