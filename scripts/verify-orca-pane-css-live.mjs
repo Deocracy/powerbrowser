@@ -11,11 +11,11 @@
 //                the bundle comes from the harness server, a ReactWidget carrying
 //                data-pb-orca-pane holds a terminal pane mounted with mountPane.
 //   real-widget  required when theia/extensions/orca-panes exists (the coordinator, P64-15 runs it
-//                first on the merged tree): the first frontend load runs with every /orca-panes/
-//                request held by a BiDi network intercept (the baseline: no Orca sheet, no Orca
-//                writes), the intercept is removed, the frontend reloads in the same session, "New
-//                Orca Terminal" (powerbrowser.orca.newTerminal) opens a hosted terminal and the
-//                measure runs on that OrcaPaneWidget. An app without orca-panes while the directory
+//                first on the merged tree): PowerBrowser runs its own orcad; the frontend reloads
+//                with the bridge folder's offer file set aside, so the loader has no hand-off (the
+//                baseline: no Orca sheet, no Orca writes); the file is restored, the loader boots the
+//                bundle, "New Orca Terminal" (powerbrowser.orca.newTerminal) opens a hosted terminal
+//                beside a hosted chat ("New Orca Chat") and the measure runs on that OrcaPaneWidget. An app without orca-panes while the directory
 //                exists is red, never a fallback.
 //
 // Both modes, every control before any absence is judged (CLAUDE.md verification rule 1):
@@ -43,7 +43,7 @@
 //   node scripts/verify-orca-pane-css-live.mjs --self-test
 
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, renameSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -201,7 +201,7 @@ async function measure(s, mode) {
     const theiaAfter = JSON.parse(await ev('JSON.stringify(window.__pbTheiaSnapshot())'));
     obs.theia.changed = diffMaps(base0, theiaAfter);
     const html1 = JSON.parse(await ev('JSON.stringify(window.__pbHtmlState())'));
-    const inTheia = JSON.parse(await ev(`JSON.stringify(window.__pbPaneStyles(document.querySelector('[data-pb-orca-pane="terminal"]')))`));
+    const inTheia = JSON.parse(await ev(`JSON.stringify(window.__pbPaneStyles(document.querySelector('[data-pb-orca-pane="terminal"]:has(.xterm)')))`));
 
     // The standalone reference: the same tab on the standalone page.
     // lane-build: the same tab (one orcad); real-widget: a terminal of the harness orcad.
@@ -230,7 +230,7 @@ async function measure(s, mode) {
         await s.showTheiaPane();
         const control = CONTROL_CANDIDATES.find(([prop]) => !changed.some(d => d.key.endsWith('|' + prop)));
         await ev(`(() => { const st = document.createElement('style'); st.id = 'pb-css-pane-control'; st.textContent = '[data-pb-orca-pane="terminal"] .xterm { ${control[0]}: ${control[1]} !important }'; document.head.appendChild(st); return true; })()`);
-        const plantedPane = JSON.parse(await ev(`JSON.stringify(window.__pbPaneStyles(document.querySelector('[data-pb-orca-pane="terminal"]')))`));
+        const plantedPane = JSON.parse(await ev(`JSON.stringify(window.__pbPaneStyles(document.querySelector('[data-pb-orca-pane="terminal"]:has(.xterm)')))`));
         await ev(`(() => { document.getElementById('pb-css-pane-control').remove(); return true; })()`);
         obs.pane = { measured: true, changed, compared: Object.keys(reference).length, control: control[0], controlDelta: diffMaps(reference, plantedPane).length - changed.length };
     }
@@ -280,6 +280,8 @@ async function portalProbe(s, ref, pick, refPick, base0) {
         let portals = [];
         try { portals = await lib.pollFor(async () => { const k = JSON.parse(await evx(`JSON.stringify(${PORTALS_OPEN})`)); return k.includes('popper') ? k : null; }, 5000, `${label} tooltip`); } catch { /* recorded */ }
         out.opened[`${label} tooltip`] = { trigger: opened, portals };
+        if (!opened && process.env.PB_ORCA_PANE_DEBUG === '1') console.log(`debug: ${label} tooltip scope ${await evx(`(() => { const sc = document.querySelector(${J(scope)}); if (!sc) return 'no scope'; const r = sc.getBoundingClientRect();
+            return JSON.stringify({ scope: [r.width, r.height], triggers: [...sc.querySelectorAll('[data-slot="tooltip-trigger"]')].map(e => e.getBoundingClientRect().width), slots: [...new Set([...sc.querySelectorAll('[data-slot]')].map(e => e.getAttribute('data-slot')))].slice(0, 30), text: sc.innerText.slice(0, 200) }); })()`)}`);
     }
     await lib.sleep(800);
     await collect('tooltip');
@@ -319,19 +321,24 @@ async function live() {
     const { pollFor } = await import('./lib/pb-live-probe.mjs');
     let obs = null, harnessError = null;
     try {
-        await harness.withOrcaPaneSession({ log: line => console.log(line) }, async s => {
+        await harness.withOrcaPaneSession({ log: line => console.log(line), pbOrcad: mode === 'real-widget' }, async s => {
             s.lib = { pollFor, sleep: harness.sleep };
             s.mode = mode;
             const ev = expr => s.app.evaluate(expr);
-            if (mode === 'lane-build') await laneBuildSetup(s, ev, harness);
-            else await realWidgetSetup(s, ev, harness);
-            obs = await measure(s, mode);
+            try {
+                if (mode === 'lane-build') await laneBuildSetup(s, ev, harness);
+                else await realWidgetSetup(s, ev, harness);
+                obs = await measure(s, mode);
+            } finally {
+                s.restoreOffer?.();
+            }
         });
     } catch (error) {
         harnessError = String(error?.message ?? error).slice(0, 500);
     }
     if (harnessError) { console.log(`${NAME}: FAIL -- harness: ${harnessError}`); return 1; }
     const verdict = cssVerdict(obs);
+    if (process.env.PB_ORCA_PANE_DEBUG === '1') console.log(`debug: ${J({ pane: obs.pane?.changed?.slice(0, 60), portal: obs.portal?.changed?.slice(0, 40), opened: obs.portal?.opened })}`);
     const t = obs.theia, p = obs.pane, q = obs.portal, h = obs.html;
     console.log(`${NAME}: measured -- Theia ${t.changed.length} of ${t.compared} changed (control ${t.controlDelta} from a ${t.controlBaseline}-diff baseline); pane ${p.measured === false ? 'not measured' : `${p.changed.length} of ${p.compared} changed (control ${p.control} ${p.controlDelta})`}; portal ${q.measured ? `${q.changed.length} of ${q.compared} changed [${q.kinds.join(', ')}], Theia while open ${q.theiaChanged.length}` : `not measured (${q.reason})`}; tooltip/dialog opened ${J(q.opened ?? {}).length > 2 ? Object.entries(q.opened).map(([k, v]) => `${k}=${(v.portals ?? []).length}`).join(' ') : 'none'}; html classes added [${h.classesAdded.join(' ')}] (now [${h.classesNow.join(' ')}], ${h.propsNow} inline), ${h.propsAdded.length} inline propert(y/ies) added or changed [${h.propsAdded.slice(0, 8).join(' ')}] (${h.propsAdded.filter(n => !n.startsWith('--')).length} non-custom), readers ${h.readers.classes.length + h.readers.props.length} over ${h.rules} rule(s), probe ${h.probe.classDetected}/${h.probe.propDetected}`);
     if (verdict) { console.log(`${NAME}: FAIL -- ${mode} mode: ${verdict}`); return 1; }
@@ -377,11 +384,16 @@ async function laneBuildSetup(s, ev, harness) {
     s.showTheiaPane = async () => { await ev(`(async () => { ${harness_GET} const shell = __getByName(window.theia.container, 'ApplicationShell'); await shell.activateWidget('pb-css-orca-pane'); await shell.activateWidget('pb-css-orca-chat'); return true; })()`); await s.lib.sleep(1500); };
 }
 
-/** Real-widget mode: the merged tree's orca-panes, its baseline load held by a BiDi intercept. */
+/** Real-widget mode: the merged tree's orca-panes on PowerBrowser's orcad, its baseline load without a hand-off. */
 async function realWidgetSetup(s, ev, harness) {
     const { app } = s;
     const hasCommand = async () => ev(`(() => { ${harness_GET} try { return !!__getByName(window.theia.container, 'CommandRegistry').getCommand('powerbrowser.orca.newTerminal'); } catch (e) { return false; } })()`);
     if (!(await hasCommand())) throw new Error('theia/extensions/orca-panes exists but the app has no powerbrowser.orca.newTerminal (not built into this frontend; never a lane-build fallback)');
+    // The widgets pair with PowerBrowser's own orcad (C5 hand-off); the throwaway repo is registered there.
+    // One CLI terminal there first: the Orca commands act on the active worktree, else the first worktree
+    // of the pane list, so a fresh orcad with no pane gives them none (a lane p64-02 owner item).
+    const pb = await s.startPbOrcad();
+    s.pbOrca('terminal', 'create', '--worktree', `path:${s.repoDir}`);
     // The standalone reference runs on the harness orcad: one CLI terminal there, made before any mount.
     const created = s.orca('terminal', 'create', '--worktree', `path:${s.repoDir}`);
     s.terminalHandle = /"(term_[A-Za-z0-9_-]+)"/.exec(J(created))?.[1];
@@ -391,28 +403,44 @@ async function realWidgetSetup(s, ev, harness) {
         const focused = await ev(`(() => { const t = document.querySelector('[data-pb-orca-pane="terminal"] .xterm-helper-textarea'); if (!t) return false; t.focus(); return document.activeElement === t; })()`);
         if (theiaCtx && focused) await s.typeIn(theiaCtx, text);
     };
-    await app.send('session.subscribe', { events: ['network.beforeRequestSent'] });
-    const { intercept } = await app.send('network.addIntercept', { phases: ['beforeRequestSent'], urlPatterns: [{ type: 'string', pattern: `${await ev('location.origin')}/orca-panes/` }, { type: 'pattern', pathname: '/orca-panes/*' }] });
-    // The baseline load: every /orca-panes/ request is held, so no Orca sheet and no Orca writes.
+    // The baseline load: the offer file (C5) is set aside inside the 0700 bridge folder, so the loader's
+    // hand-off stays undefined and the reloaded document loads no Orca sheet and makes no Orca writes.
+    // (A BiDi intercept cannot hold it: a held stylesheet request stays pending across the reload and the
+    // client cannot release it, so the mounted pane ran unstyled.) s.restoreOffer always runs.
+    const { ORCA_WEB_PAIRING_FILE } = await import('../powerbrowser/shell/OrcaEnv.sys.mjs');
+    const offerFile = join(pb.bridgeDir, ORCA_WEB_PAIRING_FILE), heldFile = `${offerFile}.css-live-held`;
+    renameSync(offerFile, heldFile);
+    s.restoreOffer = () => { if (existsSync(heldFile)) renameSync(heldFile, offerFile); };
     await ev('(() => { setTimeout(() => location.reload(), 0); return true; })()');
     await s.lib.sleep(3000);
     await s.lib.pollFor(async () => ev(`(() => { ${harness_GET} try { return __getByName(window.theia.container, 'FrontendApplicationStateService').state === 'ready'; } catch (e) { return false; } })()`), 120000, 'the baseline frontend');
+    await s.lib.sleep(6000); // past the loader's longest hand-off backoff
+    if ((await ev(`!!document.querySelector('link[href*="/orca-panes/"]') || !!globalThis[Symbol.for(${J(MODULE_KEY)})]`)) !== false) throw new Error('the baseline document already holds the Orca bundle');
     s.realBaseline = true;
+    let shown = [];
     s.mountInTheia = async () => {
-        await app.send('network.removeIntercept', { intercept });
-        await ev('(() => { setTimeout(() => location.reload(), 0); return true; })()');
-        await s.lib.sleep(3000);
-        await s.lib.pollFor(async () => ev(`(() => { ${harness_GET} try { return __getByName(window.theia.container, 'FrontendApplicationStateService').state === 'ready'; } catch (e) { return false; } })()`), 120000, 'the reloaded frontend');
+        s.restoreOffer();
         await ev(HELPERS);
         await s.lib.pollFor(async () => ev(`!!globalThis[Symbol.for(${J(MODULE_KEY)})] && globalThis[Symbol.for(${J(MODULE_KEY)})].state().booted`), 60000, 'the orca-panes bundle to boot');
+        // The seed terminal listed first, so the command finds its worktree; its widget stays unshown, and
+        // the measured pane is the one holding an xterm.
+        await s.lib.pollFor(async () => ev(`(() => { let n = 0; globalThis[Symbol.for(${J(MODULE_KEY)})].subscribePanes(l => { n = l.filter(r => r.kind === 'terminal').length; })(); return n > 0; })()`), 30000, 'the seed terminal record');
         await ev(`(() => { ${harness_GET} __getByName(window.theia.container, 'CommandRegistry').executeCommand('powerbrowser.orca.newTerminal'); return true; })()`);
         await s.lib.pollFor(async () => (await ev(`document.querySelector('[data-pb-orca-pane="terminal"] .xterm') ? true : false`)) === true, 30000, 'the hosted terminal widget');
         await ev(`(() => { ${harness_GET} __getByName(window.theia.container, 'CommandRegistry').executeCommand('powerbrowser.orca.newChat'); return true; })()`);
         await s.lib.pollFor(async () => (await ev(`document.querySelector('[data-pb-orca-pane="agent-session"] [data-pb-orca-pane-root] *') ? true : false`)) === true, 30000, 'the hosted chat widget');
+        // Both measured panes visible at once, as in lane-build mode: the chat docked split-right of the terminal.
+        const docked = await ev(`(async () => { ${harness_GET} const shell = __getByName(window.theia.container, 'ApplicationShell'); const main = shell.getWidgets('main');
+            const t = main.find(w => w.node.matches('[data-pb-orca-pane="terminal"]') && w.node.querySelector('.xterm')); const c = main.find(w => w.node.matches('[data-pb-orca-pane="agent-session"]'));
+            if (!t || !c) return 'missing'; await shell.addWidget(c, { area: 'main', mode: 'split-right', ref: t }); await shell.activateWidget(t.id); return !t.isHidden && !c.isHidden ? JSON.stringify([t.id, c.id]) : 'hidden'; })()`);
+        if (!docked.startsWith('[')) throw new Error(`the hosted terminal and chat widgets could not be shown side by side (${docked})`);
+        shown = JSON.parse(docked);
+        await s.lib.sleep(1500);
         return JSON.parse(await ev(`(() => { const m = globalThis[Symbol.for(${J(MODULE_KEY)})]; window.PbPanes = m; let list = []; m.subscribePanes(l => { list = l; })();
             const r = list.filter(x => x.kind === 'terminal').pop(); return JSON.stringify({ kind: 'terminal', worktreeId: r.worktreeId, tabId: r.tabId, paneKey: r.paneKey }); })()`));
     };
-    s.showTheiaPane = async () => { await s.lib.sleep(500); };
+    // As in lane-build mode: the reference web tab may take a main-area tab bar, so both are re-activated.
+    s.showTheiaPane = async () => { await ev(`(async () => { ${harness_GET} const shell = __getByName(window.theia.container, 'ApplicationShell'); for (const id of ${J(shown)}) await shell.activateWidget(id); return true; })()`); await s.lib.sleep(1500); };
 }
 
 

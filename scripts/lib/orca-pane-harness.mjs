@@ -11,6 +11,9 @@
 //     standalone variant (/standalone/) and a generated standalone page (/standalone.html);
 //   - launches PowerBrowser through pb-live-probe.mjs (firefox-bidi.mjs: PB_FIREFOX_BIN and
 //     PB_BACKEND_MAIN honoured, MOZ_PURGE_CACHES=1) and hands fn a context.
+// With { pbOrcad: true } PowerBrowser also runs its own orcad (OrcaService, on this tree's orca/,
+// a free port and the PB Node), so the real orca-panes widgets get a hand-off: ctx.startPbOrcad()
+// waits for it, registers the throwaway repo there and returns its CLI as ctx.pbOrca(...argv).
 // The pairing offer stays in memory: it reaches a page only inside a BiDi expression and is never
 // printed, logged or written. Teardown stops only the processes this session started.
 //
@@ -145,11 +148,12 @@ export async function allContexts(app) {
  * PowerBrowser. ctx: { app, origin, repoDir, repoStatus, orca(...argv), withPairing(f),
  * openStandalone(), evalIn(context, expression), typeIn(context, text), log }.
  */
-export async function withOrcaPaneSession({ log = () => {} } = {}, fn) {
+export async function withOrcaPaneSession({ log = () => {}, pbOrcad = false } = {}, fn) {
     let restoreOutput = installOutputRedaction([]);
     scrubEnv();
     process.env.PB_BACKEND_MAIN ??= join(REPO_ROOT, 'theia', 'applications', 'browser', 'lib', 'backend', 'main.js');
     let child = null, ready = null, web = null;
+    const recorded = new Map();
     try {
         const node = await ensurePbNode();
         makeProfile();
@@ -169,6 +173,12 @@ export async function withOrcaPaneSession({ log = () => {} } = {}, fn) {
         };
         orca('repo', 'add', '--path', REPO_DIR);
         web = await serve();
+        const electron = await import('../verify-orca-hidden-electron.mjs');
+        const extraPrefs = pbOrcad ? {
+            'powerbrowser.orca.root': ORCA_DIR,
+            'powerbrowser.orca.port': await electron.freePort(await import('../../powerbrowser/shell/OrcaEnv.sys.mjs')),
+            'powerbrowser.sidecar.nodePath': node.path,
+        } : {};
         await withProbeShell(async app => {
             const evalIn = (context, expression) => app.evaluateIn(context, expression);
             const ctx = {
@@ -189,6 +199,25 @@ export async function withOrcaPaneSession({ log = () => {} } = {}, fn) {
                     await pollFor(async () => (await evalIn(context, 'window.PbPanes.state().worktrees')) > 0, 45000, 'the store to list the throwaway worktree');
                     return context;
                 },
+                /** PowerBrowser's own orcad ready (pbOrcad only): the throwaway repo registered there, ctx.pbOrca set. */
+                async startPbOrcad() {
+                    const state = await pollFor(async () => {
+                        const st = JSON.parse(await app.evaluateIn(app.chrome, `(() => { try { return JSON.stringify(ChromeUtils.importESModule('chrome://powerbrowser/content/OrcaService.sys.mjs').OrcaService.getState()); } catch (e) { return JSON.stringify({ chromeError: String(e) }); } })()`));
+                        if (st.chromeError || st.state === 'failed') throw new Error(`PowerBrowser's OrcaService: ${st.chromeError ?? st.state}`);
+                        return st.state === 'ready' ? st : null;
+                    }, 90000, "PowerBrowser's orcad to be ready");
+                    for (const pid of [state.pid, state.daemonPid]) { const t = Number.isInteger(pid) && pid > 0 ? electron.startTicks(pid) : null; if (t !== null) recorded.set(pid, t); }
+                    const cli = join(state.effectiveRoot, 'cli', 'bin', 'orca');
+                    const cliEnv = { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ORCA_USER_DATA: state.effectiveRoot, ORCA_USER_DATA_PATH: state.effectiveRoot };
+                    ctx.pbOrca = (...argv) => {
+                        const r = spawnSync(cli, [...argv, '--json'], { cwd: REPO_DIR, env: cliEnv, encoding: 'utf8', timeout: 60000 });
+                        const text = redact(`${r.stdout ?? ''}`, ready.secrets);
+                        if (r.status !== 0) throw new Error(`PowerBrowser's orca ${argv.slice(0, 2).join(' ')} exited ${r.status}: ${redact(`${r.stderr ?? ''}${text}`, ready.secrets).trim().split('\n').pop()}`);
+                        try { return JSON.parse(text); } catch { return { raw: text.slice(0, 300) }; }
+                    };
+                    ctx.pbOrca('repo', 'add', '--path', REPO_DIR);
+                    return state;
+                },
                 /** Types text then Enter into the focused element of `context` through BiDi key input. */
                 async typeIn(context, text) {
                     const actions = [];
@@ -198,9 +227,19 @@ export async function withOrcaPaneSession({ log = () => {} } = {}, fn) {
                     await app.send('input.releaseActions', { context }).catch(() => undefined);
                 },
             };
-            await fn(ctx);
-        });
+            try {
+                await fn(ctx);
+            } finally {
+                // A graceful quit runs OrcaService's stop, which removes the bridge folder's hand-off files.
+                if (pbOrcad) await app.quit().catch(() => undefined);
+            }
+        }, { extraPrefs });
     } finally {
+        if (recorded.size) {
+            await sleep(500);
+            const { signalIdentity } = await import('../verify-orca-hidden-electron.mjs');
+            for (const [pid, ticks] of recorded) signalIdentity(pid, ticks, 'SIGKILL');
+        }
         web?.server.close();
         if (child) {
             const { survivors } = await stopOrcad(child, ready?.daemonPid ?? null);
