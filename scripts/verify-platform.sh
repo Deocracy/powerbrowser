@@ -3852,6 +3852,13 @@ run_own_checks() {
     # daemon surviving teardown; then the pairing-leak sentinel (seen with redaction off,
     # absent with it on) and an installed-Orca path that must SKIP.
     "orca-slotless-start-self-test|node $REPO_ROOT/scripts/verify-orca-slotless-start.mjs --self-test"
+    # NEW (61-02, BRW-01, P61-04): orca-browser-parity's self-test. Quick and hermetic: a
+    # mkdtemp fixture Orca tree whose browser abilities carry synthetic names, so green
+    # proves the ability set is derived. Clean control first, a no-tree fixture that must
+    # SKIP, then nine plants each red naming the drift: an orphan row, a missing row, an
+    # empty automation list, a renamed constant, a moved file, a renamed provider class,
+    # no CLI spec, a wrong component set, and a row for a renderer translation key.
+    "orca-browser-parity-self-test|node $REPO_ROOT/scripts/orca-browser-parity.mjs --self-test"
     # NEW (60-04, OVL-04, P60-R1): the third-party licence allow-list. The set of fetched
     # trees is derived from the tracked scripts/fetch-*.sh names and compared with the rows
     # of inventory/licence-allowlist.json both ways; each row's SPDX id must be in
@@ -6450,6 +6457,16 @@ run_own_checks() {
       # surviving teardown. The pairing URL is redacted from all output. One named SKIP line
       # when no built orca/, no built PowerBrowser, or an installed Orca exists.
       "orca-slotless-start|node $REPO_ROOT/scripts/verify-orca-slotless-start.mjs"
+      # NEW (61-02, BRW-01, P61-04): orca-browser-parity, re-run on every Orca re-pin. Full
+      # tier: needs the fetched orca/. Derived at check time: every browser.* RPC name under
+      # orca/src/main/runtime/rpc/methods (test files excluded), the automation method list,
+      # the provider members, the CLI specs, and the components that use each ability.
+      # Compared both ways with the rows of
+      # .planning/spikes/005-orca-browser-parity/DISPOSITIONS.md: red on an ability with no
+      # row, a row with no ability, a users cell that differs from the derived set, an empty
+      # derivation or a moved constant, or a disposition outside the five. Prints one SKIP
+      # line when no fetched orca/ exists.
+      "orca-browser-parity|node $REPO_ROOT/scripts/orca-browser-parity.mjs"
       # NEW (62-01, OVL-05, P62-20): orca-overlay-built. Each PB-added file under orca-overlay/files
       # carries the literal pb-overlay:<its Orca-root path>, which must be in a .js file under
       # orca/out/web or orca/out/orcad (node_modules never counts). Passes as vacuous at zero files.
