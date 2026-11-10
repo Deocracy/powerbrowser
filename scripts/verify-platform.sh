@@ -3914,6 +3914,18 @@ run_own_checks() {
     # orca-agent-status-live-self-test: the live row's pure verdicts (status order, waiting, record growth, prompt
     # cap, agent PTY under Orca's terminal daemon, quit survivors, bridge-folder files) over fixtures.
     "orca-agent-status-live-self-test|node $REPO_ROOT/scripts/verify-orca-agent-status-live.mjs --self-test"
+    # NEW (68-03, OVL-03, P68-15/P68-26): orcad's mobile-facing protocol stays untouched (D-23). The protected set is
+    # derived from the pin: root 1 is every non-test file under orca/mobile/src followed transitively into orca/src;
+    # root 2 is runtime-rpc/ and ipc/mobile.ts, not expanded (a transitive root 2 reaches 40% of src/). Red on any
+    # seams.json path or orca-overlay/files path inside it; a printed SKIP when orca/ is not fetched.
+    "orca-mobile-protocol|node $REPO_ROOT/scripts/verify-orca-mobile-protocol.mjs"
+    "orca-mobile-protocol-self-test|node $REPO_ROOT/scripts/verify-orca-mobile-protocol.mjs --self-test"
+    # orca-mobile-skew-self-test: fixture tag listings and constants with no network, judged by Orca's own
+    # evaluateCompat from the pinned tree; plants desktop-too-old, mobile-too-old, no app tag, constants moved.
+    "orca-mobile-skew-self-test|node $REPO_ROOT/scripts/verify-orca-mobile-protocol.mjs --skew-self-test"
+    # orca-seam-export-self-test (OVL-06, P68-18/P68-36): a seam exported against a file:// fixture main with the
+    # template's derived headings, its overlay import's one pb-overlay: literal replaced, and no PB token left.
+    "orca-seam-export-self-test|node $REPO_ROOT/scripts/export-orca-seam-pr.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6523,6 +6535,10 @@ run_own_checks() {
       # at most two model turns, on the owner's login; Claude session records compared before and after, never with
       # a constant. Run under flock /home/chris/coding/Power-Browser/.git/pb-live.lock. SKIP when not built.
       "orca-agent-status-live|node $REPO_ROOT/scripts/verify-orca-agent-status-live.mjs"
+      # NEW (68-03, OVL-03, P68-16/P68-27): the pin lag against the stock Android app and Orca's own evaluateCompat
+      # verdict (network read): the newest mobile-android-v* tag's constants by a one-blob partial clone against the
+      # pin's; red on a refusing verdict (a re-pin is due). A printed SKIP when orca/ is not fetched.
+      "orca-mobile-skew|node $REPO_ROOT/scripts/verify-orca-mobile-protocol.mjs --skew"
     )
   fi
 
