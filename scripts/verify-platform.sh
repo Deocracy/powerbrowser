@@ -3900,6 +3900,12 @@ run_own_checks() {
     # over fixtures, 25 cases. Both hermetic: no orcad, no browser, no network.
     "orca-hidden-electron-self-test|node $REPO_ROOT/scripts/verify-orca-hidden-electron.mjs --self-test"
     "orca-service-live-self-test|node $REPO_ROOT/scripts/verify-orca-service-live.mjs --self-test"
+    # NEW (68-03, OVL-03, P68-15/P68-26): orcad's mobile-facing protocol stays untouched (D-23). The protected set is
+    # derived from the pin: root 1 is every non-test file under orca/mobile/src followed transitively into orca/src;
+    # root 2 is runtime-rpc/ and ipc/mobile.ts, not expanded (a transitive root 2 reaches 40% of src/). Red on any
+    # seams.json path or orca-overlay/files path inside it; a printed SKIP when orca/ is not fetched.
+    "orca-mobile-protocol|node $REPO_ROOT/scripts/verify-orca-mobile-protocol.mjs"
+    "orca-mobile-protocol-self-test|node $REPO_ROOT/scripts/verify-orca-mobile-protocol.mjs --self-test"
     # NEW (63-06, EXT-02, P63-26/P63-35/P63-36): orca-bridge-dir, the chrome half of the bridge folder for linux,
     # darwin and win32 (OrcaEnv's nodePlatform, bridgeDirFor and bridgeFileFor); the orcad-data-root literal joined
     # across OrcaEnv, orca-agents' protocol file and its wrapper, a named SKIP of that join alone while lane p63-03
