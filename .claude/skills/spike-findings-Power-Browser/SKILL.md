@@ -16,6 +16,11 @@ Phase 31.1.
 PowerBrowser, with PB spawning its own headless orcad daemon. This was decided in the
 2026-11-03 /gsd-explore session. Seed: `.planning/seeds/SEED-261103-o1g-orca-mode-milestone.md`.
 
+**orca-tabs-as-pb-tabs.** How Orca's panes become PowerBrowser dock tabs, each its own Lumino
+widget, with PB observing Orca's layout read-only (TAB-03, D-15). Spike 004 (Phase 61) compared
+Route A (same document, Theia `ReactWidget`), Route B (iframe) and Route B' (PB web tab per pane
+page) and chose Route A for Phase 64. Note: `.planning/workstreams/orca/NOTE-orca-tabs-as-pb-tabs-spike.md`.
+
 Spike sessions wrapped: 2026-10-21 (001, 002a-c) and 2026-11-03 (003).
 </context>
 
@@ -46,6 +51,7 @@ Spike sessions wrapped: 2026-10-21 (001, 002a-c) and 2026-11-03 (003).
 |------|-----------|-------------|
 | WebExtension tab visibility | references/webextension-tab-visibility.md | Patch-stack tracker gate (050) plus a tabbrowser-shaped host behind PowerBrowserAPI. Hidden twin tabs are invalidated, and runtime overrides are a patch with no patch file. |
 | Orca client hosting | references/orca-client-hosting.md | Headless orcad pairs automatically and runs an agent inside a gated PB web tab. Spawn orcad directly on 127.0.0.1 with a PB-owned `ORCA_USER_DATA_PATH`, and treat `webClientUrl` as a bearer credential. |
+| Orca pane hosting | references/orca-pane-hosting.md | Route A: Orca pane components in a Theia ReactWidget on Theia's React, observed through `useAppStore.subscribe` (91 ms), 6.1 MB for a third pane, 0 seam patches; Orca's stylesheet must be scoped to the pane root first (84 Theia values changed unscoped). Route B' is the fallback and the route for browser panes. |
 
 ## Source Files
 
@@ -63,4 +69,5 @@ relative imports (`../../../scripts/lib/…`) only resolve from the originals in
 - 002b-ext-route-gui04-bridge
 - 002c-ext-route-chrome-tab-model
 - 003-orca-headless-client-in-pb
+- 004-orca-pane-hosting
 </metadata>

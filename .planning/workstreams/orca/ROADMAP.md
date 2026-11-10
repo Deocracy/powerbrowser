@@ -150,22 +150,24 @@ Plans:
   4. In an Orca terminal tab, Ctrl+W, Ctrl+T, Ctrl+Tab and Ctrl+PageUp/PageDown reach the terminal program. In any other tab the same keys run PowerBrowser's tab commands.
   5. A Claude Code extension session on an Orca worktree appears in Orca with live hook status, through a pane PB registers for it and the `ORCA_AGENT_HOOK_*` variables PB passes.
 
-**Plans**: 4 plans
+**Plans**: 5 plans
 
 Plans:
 **Wave 1**
 - [ ] 63-01-PLAN.md — lane p63-01: seams S2/S3 with the external PTY bridge client (generic upstream names, P63-29), contract fixture host, orca-pty-contract and orca-pty-provider-live stage 1 (TERM-01, TERM-02)
-- [ ] 63-02-PLAN.md — lane p63-02: @powerbrowser/orca-terminals (bridge core, platform-neutral transport P63-30, OrcaTerminalProcess, o<n> tabs, key passthrough), tab-uris identity, chrome wiring and writePrivateFile, orca-pty-bridge / orca-pty-paths / orca-terminal-keys / keys-live with runTabStage (TERM-01, TERM-04, EXT-02)
+- [ ] 63-02-PLAN.md — lane p63-02: @powerbrowser/orca-terminals (bridge core, platform-neutral listen path P63-30, OrcaTerminalProcess, o<n> tabs, key passthrough), tab-uris identity, orca-pty-bridge / orca-pty-paths / orca-terminal-keys (TERM-01, TERM-04)
+- [ ] 63-05-PLAN.md — lane p63-05 (chrome half split from 63-02): OrcaEnv bridge folder, TheiaService, OrcaService, PowerBrowserProcesses.writePrivateFile and platform(), the Phase 62 checks kept green, orca-bridge-dir, orca-terminal-keys-live with runTabStage (TERM-01, TERM-04, EXT-02)
 - [ ] 63-03-PLAN.md — lane p63-03: @powerbrowser/orca-agents (claude wrapper, launcher, preference default), orca-agent-hooks and orca-agent-status-live (TERM-02, EXT-02)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 63-04-PLAN.md — coordinator: merge 63-01, 63-02, 63-03 in order, wire orca-agents, rebuild Theia, Orca and PowerBrowser, live proofs, orca-service-live P63-09, orca-remote-regression (TERM-03, P63-24), brand rows, 22-member text, tracking
+- [ ] 63-04-PLAN.md — coordinator: merge 63-01, 63-02, 63-05, 63-03 in order, wire orca-agents, rebuild Theia, Orca and PowerBrowser, live proofs, orca-service-live P63-09, orca-remote-regression (TERM-03, P63-24), brand rows, 22-member text, tracking (TERM-02 complete only on a live PASS)
 
 ### Phase 64: Orca panes as PowerBrowser tabs
 
 **Goal**: The Orca mode shows Orca's work as PowerBrowser tabs. Each Orca pane is one Lumino tab that moves between modes and can be organised like any Theia or browser tab.
 **Depends on**: Phase 61 (pane-hosting route); Phase 63 (terminal panes are already Theia terminals)
 **Requirements**: TAB-01, TAB-02, TAB-04, TAB-06
+Route chosen by Phase 61: Route A, Orca pane components in a Theia ReactWidget on Theia's own React with Orca's stylesheet scoped to the pane root; observation channel useAppStore.subscribe in the Theia document (read-only, close by the store's closeTerminalTab); seam patches 0 of about ten; fallback Route B' (one PB web tab per pane page), which is also the route for browser panes. (spike 004, verdict YELLOW)
 **Success Criteria** (what must be TRUE):
   1. An "Orca" mode appears beside Coding in `SHIPPED_MODES` and the chrome bar, and selecting it shows Orca's work.
   2. Each Orca pane opened by the user or an agent appears as its own tab in PowerBrowser's dock and appears as an Organising row. It can be split, and dragged to any other mode and back. Orca's in-tab splits and tab groups appear as Lumino splits; Orca's own tab bar and tab groups are not rendered.
@@ -270,7 +272,7 @@ Phases execute in numeric order: 59 → 60 → 61 → 62 → 63 → 64 → 65 �
 | 60. Orca from source on Theia's Node | 4/5 | In Progress | - |
 | 61. Spikes for pane hosting, browser parity and live sharing | 0/TBD | Not started | - |
 | 62. Overlay gate and PowerBrowser-run orcad | 3/3 | Complete | 2026-11-09 |
-| 63. Theia terminals and agent hooks for Orca | 0/4 | Planned | - |
+| 63. Theia terminals and agent hooks for Orca | 0/5 | Planned | - |
 | 64. Orca panes as PowerBrowser tabs | 0/TBD | Not started | - |
 | 65. Orca workspace in Theia | 0/TBD | Not started | - |
 | 66. PowerBrowser web tabs as Orca's browser | 0/TBD | Not started | - |
