@@ -1552,6 +1552,82 @@ make it before the window opens or list it in the record, and the issue leg cann
 observed until the live tracking-issue writer is wired (phase BLOCKED.md item 3), because
 today `report` prints the view without writing it.
 
+### Orca re-pin (OVL-02)
+
+Orca ships several releases a week. The release train moves the Orca pin (`[upstreams]
+orca_tag` and `orca_commit` in `configuration.toml`) to the newest Orca release once a
+week, re-applies PowerBrowser's seams, and proves the result before a PR exists. **Status:
+the jobs below are defined and fixture-tested; no hosted run has exercised them until the
+owner pushes main.**
+
+**The tick and the dispatch.** `sweep-clock` decides the weekly tick with
+`release-train.mjs --orca-due`: due on the first accepted daily sweep of each ISO week, and
+due when the previous sweep is unknown. There is no `schedule:` key. The owner runs it at
+once by dispatching the train with `repin-orca=true`.
+
+**Selection (`detect-orca`).** The job lists `git ls-remote --tags` of the remote named by
+the one `REMOTE=` line of `scripts/fetch-orca.sh`, and `detect-upstreams.mjs --orca-select`
+picks the newest tag matching `vX.Y.Z` exactly that is strictly newer than `orca_tag`,
+compared as integer triples (`v1.4.10` is newer than `v1.4.9`). `-rc.N`, `-rc.N.perf` and
+`mobile-*` tags never match. The commit is the peeled `^{}` line for an annotated tag, else
+the bare sha (Orca publishes both shapes). Only the newest tag is tried; intermediate tags
+are not walked. Two holds leave the outputs empty and print a `NOTE`: no newer tag, and an
+open same-repository PR whose head starts `chore/orca-`.
+
+**The replay (`rebase-orca`, `.github/workflows/rebase-orca.yml`).** A read-only job
+(`contents: read`, no persisted credential) runs
+`nix develop .#orca --command bash scripts/rebase-orca.sh --tag <tag> --commit <commit>`.
+It is the only place Orca's code runs. Each stage prints `rebase-orca: <stage>`; the first
+failure prints `rebase-orca: FAIL -- <stage> ...`, which becomes the job's `stage` output.
+A row or probe that prints `SKIP` is a failure inside the replay (the one exception is the
+licence row's SKIP for the absent Gecko tree `upstream/`, which this replay never fetches).
+
+| Stage line | What stopped | Human action |
+|---|---|---|
+| `pin-move` | the two pin lines did not move, or a stale `orca/` | check the `[upstreams]` line shapes; remove `orca/` |
+| `fetch` | the tag no longer resolves to the commit | re-run the selection; a moved tag is never fetched |
+| `seam-apply <patch>` | the seam patch does not apply onto the new tag | regenerate the seam against the tag, or rework it |
+| `build` | `build-orca.sh` failed (its log names the step) | fix the build step or the overlay it names |
+| `typecheck:web <file>:<line>`, `typecheck:node <file>:<line>` | Orca's own typecheck failed | fix the overlay file or seam at that location |
+| `typecheck coverage <path>` | an `orca-overlay/files` file is in neither typecheck program | place the file where Orca's program includes it |
+| `row orca-build-shape` / `row orca-overlay` / `row orca-overlay-built` | the build shape, or a seam over its line bound or cap | shrink or split the seam; rebuild |
+| `row licence-allowlist` | Orca's LICENSE changed, or a new package licence | add the row or ruling the licence needs |
+| `row orca-mobile-protocol` | an overlay path entered the protected mobile set | move the change out of the protected paths |
+| `row orca-mobile-skew` | the pin fell outside the mobile skew window | re-pin to a tag inside the window |
+| `row <label> skipped` | a row printed SKIP | provide what the row needs; a SKIP proves nothing |
+| `orcad-only start` | orcad did not start, bind, report the pinned Node, or reap | read the probe's FAIL line; this is the D-04 fallback decision |
+| `notices` | `generate-licensing.mjs --write-orca` failed or skipped | regenerate the notices locally and read its FAIL lines |
+| `brand scan` | a brand token in the tracked tree after the re-pin | re-measure with `node scripts/scan-brand-residue.mjs` |
+
+**The bump PR (`bump-pr-orca`).** Entered only when the stage is `replayed`, in the `bot`
+environment with `permissions: {}`. It re-checks the tag and commit by regex, then runs
+`rebase-orca.sh --replay-only` (pin lines, `fetch-orca.sh` with `TAG` and `COMMIT` exported,
+seam apply, regeneration and the `seams.json` blob rewrite: git and node over tracked data,
+no Orca code), stages exactly `configuration.toml`, `orca-overlay/patches`,
+`orca-overlay/seams.json` and `THIRD-PARTY-NOTICES.txt` and refuses any other change, commits,
+and only then mints the App token. It publishes `chore/orca-<tag>` through
+`publish-bump-branch.sh`, opens or updates the PR and arms `gh pr merge --auto --merge`.
+Auto-merge does not bypass `main-review`: the required check and the owner's approving
+review (or the owner's admin bypass) are still the human step. `verify-workflows.mjs`
+(`orca-repin`) refuses a bump job that mints before the replay, stages another path, runs
+Orca code or merges without `--auto`.
+
+**The notices carry (A-P1).** A re-pin that changes Orca's shipped package closure changes
+the Orca section of `THIRD-PARTY-NOTICES.txt`. The replay rewrites it
+(`generate-licensing.mjs --write-orca`) and uploads it as the `rebase-orca-notices` artifact,
+holding exactly that file. `bump-pr-orca` downloads this run's artifact only, refuses it
+unless it holds exactly `THIRD-PARTY-NOTICES.txt`, and copies it with
+`cp --remove-destination` before staging. The file was written by a job that ran Orca's build, so a
+bump that carries it says so in the PR body and does not arm auto-merge: the owner reads
+the notices diff before merging. To revert A-P1: make the `notices` stage a stop
+when the file changed, and drop `THIRD-PARTY-NOTICES.txt` from the bump's `git add` line
+and from `verify-workflows.mjs`'s expected set.
+
+**The stop issue.** A FAIL stage opens, edits or reopens one issue per candidate tag,
+titled `release-train: orca <tag> stopped`, from the `report` job, carrying the stage line
+and the run URL. No branch or PR is published and the pin stays. A dry run prints what a
+live run would write.
+
 ---
 
 ## Per-release procedure

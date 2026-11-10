@@ -138,6 +138,13 @@
 //                 refusal of a diff outside the two notice files, one git add of exactly those two, and publishes with
 //                 "$GITHUB_WORKSPACE/scripts/publish-bump-branch.sh" "$BRANCH" "$BASE" "$HEAD_SHA", with BASE derived in the
 //                 publish job by git merge-base, never read from the generate job's outputs.
+//  orca-repin     In release-train.yml (Phase 68, OVL-02, P68-11/P68-12/P68-35), when bump-pr-orca exists: its App-token
+//                 mint step comes after the step running scripts/rebase-orca.sh --replay-only and after the git add step;
+//                 its one git add line is exactly git add -A -- configuration.toml orca-overlay/patches
+//                 orca-overlay/seams.json THIRD-PARTY-NOTICES.txt; no run line names build-orca.sh, pnpm, corepack, tsc or
+//                 rebase-orca.sh without --replay-only; every gh pr merge carries --auto; and the step that re-checks TAG and
+//                 COMMIT by regex comes before the first step using either. When detect-orca exists, it names no literal
+//                 remote URL and reads REMOTE with grep -m1 '^REMOTE=' scripts/fetch-orca.sh.
 //  fixer-spend    The fix job (release-train.yml) carries timeout-minutes: 90 and the
 //                 claude-fixer concurrency group, so one attempt is time-bounded and the
 //                 attempts for every release key are serialized (FIX-05). The Console
@@ -212,7 +219,7 @@ try {
     process.exit(1);
 }
 
-const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'fixer-pin', 'fixer-debug', 'fixer-tools', 'fixer-prompt', 'dry-run-gate', 'bot-job-gate', 'uptake-lane', 'dependabot', 'call-event-gate', 'app-token-inputs', 'renovate-job', 'fixer-spend', 'fixer-auth', 'fixer-gate', 'job-env-context'];
+const RULES = ['uses-pinned', 'uses-admitted', 'admission-used', 'no-schedule', 'runner', 'legion', 'claude-code-action', 'issues-write', 'workflow-run-guard', 'workflow-run-chain', 'write-trio', 'no-pr-trigger', 'no-cache', 'event-text', 'fixer-pin', 'fixer-debug', 'fixer-tools', 'fixer-prompt', 'dry-run-gate', 'bot-job-gate', 'uptake-lane', 'dependabot', 'call-event-gate', 'app-token-inputs', 'renovate-job', 'orca-repin', 'fixer-spend', 'fixer-auth', 'fixer-gate', 'job-env-context'];
 // The fixer (Phase 52): its jobs live only in release-train.yml. FIX_PIN is the
 // v1.0.254 commit of claude-code-action; its tag object is a different hash and is refused.
 const FIXER_FILE = 'release-train.yml';
@@ -1068,6 +1075,49 @@ function runChecks(root, overrides = {}) {
         }
     }
 
+    // orca-repin (OVL-02, P68-11/P68-12/P68-35): bump-pr-orca mints the App token only after the --replay-only replay and
+    // the explicit-path staging, stages exactly the four bump paths, runs no Orca code, arms auto-merge rather than
+    // merging, and re-checks the tag and commit before it uses them; detect-orca reads the Orca remote from
+    // scripts/fetch-orca.sh, never a literal URL. Derived from the parsed jobs, so a rewrite of either job is re-read.
+    {
+        const failO = (job, msg) => fail(`${WF_DIR}/${DRY_RUN_FILE}`, job, 'orca-repin', msg);
+        const jobs = docs[DRY_RUN_FILE]?.jobs ?? {};
+        const runOf = st => String(st?.run ?? '');
+        const bump = jobs['bump-pr-orca'];
+        if (bump !== undefined && bump !== null) {
+            const steps = bump.steps ?? [];
+            const at = pred => steps.findIndex(pred);
+            const mint = at(st => String(st?.uses ?? '').split('@')[0] === APP_TOKEN.replace(/@$/, ''));
+            const replay = at(st => /scripts\/rebase-orca\.sh\b[^\n]*--replay-only/.test(runOf(st)));
+            const add = at(st => /^\s*git add\b/m.test(runOf(st)));
+            if (mint === -1) failO('bump-pr-orca', 'mints no App token, so it cannot publish the bump. Next step: restore the mint step after the staging.');
+            if (replay === -1) failO('bump-pr-orca', 'no step runs scripts/rebase-orca.sh --replay-only, so the branch does not carry the replayed pin and seams. Next step: restore the replay step.');
+            if (mint !== -1 && (replay === -1 || add === -1 || mint < replay || mint < add)) {
+                failO('bump-pr-orca', `mints the App token at step ${mint}, before the --replay-only replay (step ${replay}) or the git add (step ${add}), so the token exists while the tagged Orca tree is fetched and staged (P68-35). Next step: move the mint step after the staging.`);
+            }
+            const BUMP_ADD = 'git add -A -- configuration.toml orca-overlay/patches orca-overlay/seams.json THIRD-PARTY-NOTICES.txt';
+            const adds = steps.flatMap(st => runOf(st).split('\n')).map(l => l.trim()).filter(l => /^git add\b/.test(l));
+            if (adds.length !== 1 || adds[0] !== BUMP_ADD) failO('bump-pr-orca', `stages [${adds.join(' | ')}], not exactly '${BUMP_ADD}', so the bump could carry a path outside the explicit set. Next step: stage those four paths only.`);
+            const ORCA_CODE = /\b(?:build-orca\.sh|pnpm|corepack|tsc)\b|scripts\/rebase-orca\.sh(?![^\n]*--replay-only)/;
+            steps.forEach((st, i) => {
+                for (const l of runOf(st).split('\n').filter(x => ORCA_CODE.test(x))) failO('bump-pr-orca', `step ${i} runs Orca code (${l.trim()}) in the job that mints the App token. Next step: run it in rebase-orca.yml's read-only job; this job runs rebase-orca.sh --replay-only alone.`);
+            });
+            const merges = steps.flatMap(st => runOf(st).split('\n')).filter(l => /\bgh pr merge\b/.test(l));
+            if (merges.length === 0) failO('bump-pr-orca', 'arms no auto-merge (no gh pr merge --auto). Next step: restore gh pr merge "$PR" --auto --merge.');
+            for (const l of merges.filter(x => !/\s--auto\b/.test(x))) failO('bump-pr-orca', `merges without --auto (${l.trim()}), so the bot would merge instead of waiting on main-review. Next step: add --auto.`);
+            const recheck = at(st => /\[\[ \$TAG =~ \$TAG_RE \]\]/.test(runOf(st)) && /\[\[ \$COMMIT =~ \$COMMIT_RE \]\]/.test(runOf(st)));
+            const firstUse = at(st => /\$\{?(?:TAG|COMMIT)\b/.test(runOf(st)));
+            if (recheck === -1 || firstUse < recheck) failO('bump-pr-orca', `uses TAG or COMMIT at step ${firstUse} before a step re-checks both against their regexes (step ${recheck}). Next step: put the regex re-check first.`);
+        }
+        const det = jobs['detect-orca'];
+        if (det !== undefined && det !== null) {
+            const text = (det.steps ?? []).map(runOf).join('\n');
+            const literal = text.match(/(?:https?|git|ssh):\/\/\S+|git@\S+:\S+/);
+            if (literal !== null) failO('detect-orca', `names a literal remote ${literal[0]}, so the tags listed may not be the tags fetch-orca.sh clones. Next step: read REMOTE from scripts/fetch-orca.sh with grep -m1 '^REMOTE='.`);
+            if (!text.includes("grep -m1 '^REMOTE=' scripts/fetch-orca.sh")) failO('detect-orca', `does not read the Orca remote from scripts/fetch-orca.sh's REMOTE= line. Next step: REMOTE=$(grep -m1 '^REMOTE=' scripts/fetch-orca.sh | cut -d= -f2- | tr -d '"').`);
+        }
+    }
+
     // dependabot.yml (AUTO-03): read as data, never parsed by the workflow rules above.
     {
         const fail1 = msg => fail(DEPENDABOT_REL, WF_LEVEL, 'dependabot', msg);
@@ -1744,6 +1794,22 @@ function selfTest() {
         ['renovate-job: the publish job stages a third file', trainEdit('          T -C target add -- THIRD-PARTY-NOTICES.txt LICENSING.md\n', '          T -C target add -- THIRD-PARTY-NOTICES.txt LICENSING.md theia/yarn.lock\n'), ...RP, 'not exactly -- THIRD-PARTY-NOTICES.txt LICENSING.md'],
         ['renovate-job: the publish step keeps NODE_OPTIONS', trainEdit(`          unset NODE_OPTIONS\n          (cd target`, `          (cd target`), ...RP, 'unset NODE_OPTIONS'],
         ['renovate-job: the publish job reads the system git config', trainEdit('T() { GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git', 'T() { git'), ...RP, 'no system or global config'],
+    );
+
+    // orca-repin (OVL-02): each plant edits the real release-train.yml text in memory.
+    const OB = [rel('release-train.yml'), 'bump-pr-orca', 'orca-repin'];
+    const MINT_ORCA = "      - name: Mint the bot App token\n        id: app\n        if: ${{ !inputs.dry-run && steps.commit.outputs.committed == 'true' }}\n        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2\n        with:\n          app-id: ${{ vars.BOT_APP_ID }}\n          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}\n          owner: ${{ github.repository_owner }}\n          repositories: powerbrowser\n          permission-contents: write\n          permission-pull-requests: write\n\n";
+    const ORCA_CHECKOUT = '      - name: Check out the repo without persisting a token\n';
+    const mintFirst = () => {
+        if (!TRAIN_TEXT.includes(MINT_ORCA) || !TRAIN_TEXT.includes(ORCA_CHECKOUT)) throw new Error('self-test anchor for the bump-pr-orca mint step is absent from release-train.yml');
+        return { files: { ...files, 'release-train.yml': TRAIN_TEXT.replace(MINT_ORCA, '').replace(ORCA_CHECKOUT, MINT_ORCA + ORCA_CHECKOUT) } };
+    };
+    plants.push(
+        ['orca-repin: the App token minted first', mintFirst(), ...OB, 'before the --replay-only replay'],
+        ['orca-repin: a workflow file added to the bump staging', trainEdit('git add -A -- configuration.toml orca-overlay/patches orca-overlay/seams.json THIRD-PARTY-NOTICES.txt\n', 'git add -A -- configuration.toml orca-overlay/patches orca-overlay/seams.json THIRD-PARTY-NOTICES.txt .github/workflows\n'), ...OB, 'not exactly'],
+        ['orca-repin: gh pr merge without --auto', trainEdit('gh pr merge "$PR" --auto --merge', 'gh pr merge "$PR" --merge'), ...OB, 'merges without --auto'],
+        ['orca-repin: pnpm run in the bump job', trainEdit('          git switch -C "chore/orca-${TAG}" "$BASE"\n', '          git switch -C "chore/orca-${TAG}" "$BASE"\n          (cd orca && pnpm install)\n'), ...OB, 'runs Orca code'],
+        ['orca-repin: a literal Orca URL in detect-orca', trainEdit("          REMOTE=$(grep -m1 '^REMOTE=' scripts/fetch-orca.sh | cut -d= -f2- | tr -d '\"')\n", '          REMOTE=https://example.invalid/orca.git\n'), rel('release-train.yml'), 'detect-orca', 'orca-repin', 'names a literal remote'],
     );
 
     // dependabot.yml (AUTO-03, BL-02, WR-04, WR-05, WR-06): each plant edits the real file text in memory.

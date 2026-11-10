@@ -3950,6 +3950,11 @@ run_own_checks() {
     "bundled-extensions|node $REPO_ROOT/scripts/verify-bundled-extensions.mjs"
     "bundled-extensions-seed|node $REPO_ROOT/scripts/verify-bundled-extensions.mjs --seed"
     "bundled-extensions-self-test|node $REPO_ROOT/scripts/verify-bundled-extensions.mjs --self-test"
+    # NEW (68-02, OVL-02, P68-10/P68-14/P68-28): the Orca re-pin replay. Hermetic: a file:// fixture Orca
+    # repository and a fixture PowerBrowser root driven through the same stage functions; control green,
+    # then each planted fault stops at its named stage (seam-apply, typecheck, coverage, rows, brand scan),
+    # and a row or probe that prints SKIP is red.
+    "rebase-orca-self-test|bash $REPO_ROOT/scripts/rebase-orca.sh --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
