@@ -580,6 +580,44 @@ agent CLI installed system-wide on the host is not reachable from the sandbox.
 and `orca-packaged-live` (full, over the container-built tarball; `orca-packaged-live` runs under
 the live lock). `package-target-natives` judges every ELF, PE and Mach-O by magic, not by name.
 
+### Pane bundle (Phase 64)
+
+`scripts/build-orca-panes.sh` builds the Orca pane bundle: Orca's own pane
+components (`TerminalPane`, the native chat view, `EmulatorPane`, `EditorPanel`)
+compiled by Orca's own Vite from three PB-added overlay files,
+`src/renderer/src/pb/pb-pane-mount.tsx` (the entry), `vite.pb-panes.config.ts`
+(an app-mode ES build over `vite.web.config.ts`, never `build.lib`, which inlines
+every asset) and `pb-css-scope.mjs` (the PostCSS pass that scopes Orca's sheet to
+the pane). Output: `orca/out/web/assets/pb-panes/`, holding `pb-panes.js` (an ES
+module), one stylesheet `pb-panes.css` and every other emitted file, referenced by
+relative URL. Theia's `orca-panes` extension serves that directory and mounts the
+panes in Lumino widgets.
+
+The bundle ships no React. It reads the host's React from
+`globalThis[Symbol.for('powerbrowser.orca-panes.react')]`, and the export names of
+those modules are read at build time from Orca's own React under
+`orca/node_modules` (19.2.8, the version Theia ships). So `build-orca.sh` needs no
+Theia install. The Theia side checks the match: `orca-pane-entry` compares Orca's
+React major.minor with Theia's whenever Theia is installed, and the `orca-panes`
+loader refuses at run time a bundle whose `reactIdentity` is not Theia's React.
+
+`build-orca.sh` runs it as step 9, after `build:web`. It empties `pb-panes/`
+first, so every later step that writes into `pb-panes/` (Phase 66's browser-host
+step) runs after it. On an already-built tree,
+
+```
+nix develop .#orca --command bash scripts/build-orca.sh --panes-only
+```
+
+re-runs fetch-verify, the overlay copy, the pane step and every later step that
+writes into `pb-panes/`, and refuses when `orca/out/web/web-index.html` is absent.
+`bash scripts/build-orca-panes.sh --standalone` also builds the React-bundled
+variant into `.mozbuild/orca-panes-standalone/`, for the standalone page and as the
+two-copy control of the React check. Like `build-orca.sh`'s other steps it runs in
+its caller's shell: it starts no Nix shell of its own, reads nothing under
+`theia/`, and keeps to the portability rules of the hosted runners. No seam is
+added: the overlay keeps its one seam.
+
 ## Firefox half
 
 ```
