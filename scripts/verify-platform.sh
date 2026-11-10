@@ -3960,6 +3960,10 @@ run_own_checks() {
     # cached in .mozbuild/bundled-xpi/, its sha256, manifest id and version equal the pin and it is signed. A named
     # SKIP of the cached legs when nothing is cached.
     "bundled-xpi|node $REPO_ROOT/scripts/verify-bundled-xpi.mjs"
+    # bundled-xpi-self-test: hermetic fixture XPIs in mkdtemp; control green, then eight plants red (sha256, manifest id,
+    # signature, missing allow row, stale BEXT-02 row, extra packaged XPI, rule only in !#if, http url) and the live
+    # row's plant audit (each plant read by its scenario and naming text its red scenario emits).
+    "bundled-xpi-self-test|node $REPO_ROOT/scripts/verify-bundled-xpi.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6592,6 +6596,11 @@ run_own_checks() {
       # NEW (68-08, BEXT-02, P68-39): bundled-xpi-packaged. The extracted Linux package's distribution/extensions/
       # holds exactly the pinned XPIs as <id>.xpi, each byte-equal to its pin. FAILs naming the package build without it.
       "bundled-xpi-packaged|node $REPO_ROOT/scripts/verify-bundled-xpi.mjs --packaged"
+      # bundled-xpi-live: the packaged binary on one fresh profile, three launches: installed from the distribution
+      # directory, enabled and blocking a loopback request matched by a rule derived from the XPI's own default-on list;
+      # still filtering after a relaunch with zero stock windows; disabled lets it through; removed stays removed after a
+      # relaunch. Run under flock /home/chris/coding/Power-Browser/.git/pb-live.lock. --live --dev runs on the dev objdir.
+      "bundled-xpi-live|node $REPO_ROOT/scripts/verify-bundled-xpi.mjs --live"
     )
   fi
 

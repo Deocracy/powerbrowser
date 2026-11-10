@@ -30,6 +30,11 @@
 // Rows are checked too (stale, licence text changed, status consequences; see the
 // inventory's $comment). With no built orca/ the per-package step prints one SKIP line
 // and the tracked-only steps (extension folders, PENDING lines) still run.
+// Bundled-extension rule (BEXT-02, D-30): bundled_extensions row ids equal, as a set both ways, the
+// add-on ids pinned in powerbrowser/packaging/bundled-xpi.json plus the <publisher>.<name> manifest
+// ids of bundled-extensions/*/. A gecko-distribution row's spdx equals its pin's licence, and its
+// cached XPI's licence file line 1 equals the row (one SKIP line when no XPI is cached). These rows
+// are never checked against allowed_spdx.
 // PENDING RULING / PENDING OWNER CHECK lines never change the exit status here;
 // --rulings prints only them and exits 1 while any is open (no built orca/ needed).
 //
@@ -43,7 +48,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -246,9 +251,67 @@ export function packageCheck(repoRoot, allowList, packages) {
     return { fails, pending, passCount };
 }
 
+const XPI_PIN_REL = 'powerbrowser/packaging/bundled-xpi.json';
+const BUNDLED_EXT_DIR = 'bundled-extensions';
+const PY_ZIP_READ = 'import sys,zipfile\nsys.stdout.buffer.write(zipfile.ZipFile(sys.argv[1]).read(sys.argv[2]))';
+
+/** The tree's bundled extensions: { pins: {id: pin}, manifests: [id] } (absent inputs are empty). */
+export function bundledInputs(repoRoot) {
+    const pinPath = join(repoRoot, XPI_PIN_REL);
+    const pins = existsSync(pinPath)
+        ? Object.fromEntries(Object.entries(JSON.parse(readFileSync(pinPath, 'utf8'))).filter(([k]) => !k.startsWith('$')))
+        : {};
+    const root = join(repoRoot, BUNDLED_EXT_DIR);
+    const manifests = (existsSync(root) ? readdirSync(root) : []).sort()
+        .filter((f) => existsSync(join(root, f, 'package.json')))
+        .map((f) => { const m = JSON.parse(readFileSync(join(root, f, 'package.json'), 'utf8')); return `${m.publisher}.${m.name}`; });
+    return { pins, manifests };
+}
+
+/** Line 1 of `member` inside the cached XPI for a pin, or null when no XPI is cached. */
+export function cachedXpiFirstLine(repoRoot, id, pin, member) {
+    const xpi = join(repoRoot, '.mozbuild', 'bundled-xpi', `${id}-${pin.version}.xpi`);
+    if (!existsSync(xpi)) return null;
+    const text = execFileSync('python3', ['-I', '-c', PY_ZIP_READ, xpi, member], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    return text.split(/\r?\n/)[0].trim();
+}
+
+/**
+ * The bundled_extensions rows against the tree. firstLine(id, pin, member) returns the cached
+ * XPI's licence line 1 or null (not cached). Returns { fails[], skips[], count }.
+ */
+export function bundledCheck(allowList, { pins, manifests }, firstLine) {
+    const fails = [];
+    const skips = [];
+    const rows = Array.isArray(allowList?.bundled_extensions) ? allowList.bundled_extensions : [];
+    const want = new Map([...Object.keys(pins).map((id) => [id, 'gecko-distribution']), ...manifests.map((id) => [id, 'theia-preinstalled'])]);
+    if (want.size && !Array.isArray(allowList?.bundled_extensions)) fails.push(`${INVENTORY_REL}: bundled_extensions is missing while the tree pre-installs ${[...want.keys()].join(', ')}`);
+    const seen = new Set();
+    for (const [i, row] of rows.entries()) {
+        const label = row?.id ? `bundled extension "${row.id}"` : `bundled_extensions[${i}]`;
+        const keys = row?.kind === 'gecko-distribution' ? ['id', 'kind', 'spdx', 'ruling', 'licence_file', 'licence_first_line', 'reason'] : ['id', 'kind', 'carries', 'ruling', 'reason'];
+        const missing = keys.filter((k) => typeof row?.[k] !== 'string' || row[k].trim() === '');
+        if (missing.length) { fails.push(`${label}: missing required key(s) ${missing.join(', ')}`); continue; }
+        if (seen.has(row.id)) fails.push(`${label}: duplicate row`);
+        seen.add(row.id);
+        if (!want.has(row.id)) { fails.push(`stale bundled_extensions row ${row.id}: neither ${XPI_PIN_REL} nor ${BUNDLED_EXT_DIR}/*/ names it; remove the row`); continue; }
+        if (row.kind !== want.get(row.id)) { fails.push(`${label}: kind ${row.kind}, but the tree carries it as ${want.get(row.id)}`); continue; }
+        if (row.kind !== 'gecko-distribution') continue;
+        const pin = pins[row.id];
+        if (row.spdx !== pin.licence) fails.push(`${label}: spdx ${row.spdx} differs from the pin's licence ${pin.licence} in ${XPI_PIN_REL}`);
+        const got = firstLine(row.id, pin, row.licence_file);
+        if (got === null) skips.push(`${NAME}: SKIP -- ${row.id} ${pin.version} is not cached in .mozbuild/bundled-xpi/; its ${row.licence_file} line 1 is unchecked (run bash powerbrowser/packaging/stage-bundled-xpi.sh <dir>)`);
+        else if (got !== row.licence_first_line) fails.push(`licence text changed for ${row.id} ${pin.version}: ${row.licence_file} line 1 is ${JSON.stringify(got)}, the row records ${JSON.stringify(row.licence_first_line)}; re-read it and update the row`);
+    }
+    for (const [id, kind] of want) {
+        if (!seen.has(id)) fails.push(kind === 'gecko-distribution' ? `pinned XPI ${id} has no bundled_extensions row in ${INVENTORY_REL}` : `bundled extension ${id} (${BUNDLED_EXT_DIR}/*/) has no bundled_extensions row in ${INVENTORY_REL}`);
+    }
+    return { fails, skips, count: seen.size };
+}
+
 function render(r, pr) {
-    const lines = [...r.skips, ...pr.skips];
-    const fails = [...r.fails, ...pr.fails];
+    const lines = [...r.skips, ...pr.skips, ...(pr.bundled?.skips ?? [])];
+    const fails = [...r.fails, ...pr.fails, ...(pr.bundled?.fails ?? [])];
     if (fails.length) {
         for (const f of fails) lines.push(`${NAME}: FAIL -- ${f}`);
         // No FAIL token here, so the count of FAIL lines is the count of problems.
@@ -256,6 +319,7 @@ function render(r, pr) {
         return { code: 1, lines: [...lines, ...pr.pending] };
     }
     lines.push(`${NAME}: PASS -- ${r.trees.length} fetched tree(s) [${r.trees.join(', ')}] each have a row; ${r.checked.length} LICENSE digest(s) checked [${r.checked.join(', ')}]; allowed ids [${r.allowed.join(', ')}]`);
+    if (pr.bundled) lines.push(`${NAME}: PASS -- ${pr.bundled.count} bundled_extensions row(s) equal the pinned XPIs and ${BUNDLED_EXT_DIR}/*/ as a set`);
     if (pr.passCount !== null) lines.push(`${NAME}: PASS -- ${pr.passCount} shipped Orca package(s) pass by allowed_package_spdx; the rest are named by package_exceptions or package_rulings rows`);
     return { code: 0, lines: [...lines, ...pr.pending] };
 }
@@ -371,7 +435,34 @@ function runSelfTest() {
             if (ok) console.log(`  ok ${p.name}`);
             else { console.error(`  FAIL ${p.name} -> ${detail}`); failures++; }
         }
-        const total = plants.length + pplants.length;
+        // Bundled-extension rows over fixture inputs: a pinned XPI, one extension folder, a stub first-line reader.
+        const bin = { pins: { 'x@fixture': { licence: 'GPL-3.0-or-later', version: '1.0.0' } }, manifests: ['pub.ext'] };
+        const brows = () => [
+            { id: 'x@fixture', kind: 'gecko-distribution', spdx: 'GPL-3.0-or-later', ruling: 'BEXT-02', licence_file: 'LICENSE.txt', licence_first_line: 'GNU GENERAL PUBLIC LICENSE', reason: 'fixture' },
+            { id: 'pub.ext', kind: 'theia-preinstalled', carries: 'p-sdk', ruling: '68-A', reason: 'fixture' },
+        ];
+        const line1 = (l) => () => l;
+        const bcontrol = bundledCheck({ bundled_extensions: brows() }, bin, line1('GNU GENERAL PUBLIC LICENSE'));
+        const bskip = bundledCheck({ bundled_extensions: brows() }, bin, line1(null));
+        if (bcontrol.fails.length || bcontrol.count !== 2 || bskip.fails.length || bskip.skips.length !== 1) {
+            console.error(`${NAME} self-test: FAIL -- the clean bundled fixture is not green with one SKIP when uncached (${[...bcontrol.fails, ...bskip.fails].join(' | ')})`);
+            return 1;
+        }
+        const bred = (naming, allow, inputs, l = 'GNU GENERAL PUBLIC LICENSE') => () => {
+            const text = bundledCheck(allow, inputs, line1(l)).fails.join('\n');
+            return [text.includes(naming), text ? `red: ${text}` : 'stayed green'];
+        };
+        const bplants = [
+            { name: 'pinned-xpi-without-row', test: bred('pinned XPI y@fixture has no bundled_extensions row', { bundled_extensions: brows() }, { ...bin, pins: { ...bin.pins, 'y@fixture': { licence: 'MIT', version: '2.0.0' } } }) },
+            { name: 'stale-bundled-row', test: bred('stale bundled_extensions row z@fixture', { bundled_extensions: [...brows(), { ...brows()[0], id: 'z@fixture' }] }, bin) },
+            { name: 'xpi-licence-first-line-changed', test: bred('licence text changed for x@fixture 1.0.0', { bundled_extensions: brows() }, bin, 'Some other licence') },
+        ];
+        for (const p of bplants) {
+            const [ok, detail] = p.test();
+            if (ok) console.log(`  ok ${p.name}`);
+            else { console.error(`  FAIL ${p.name} -> ${detail}`); failures++; }
+        }
+        const total = plants.length + pplants.length + bplants.length;
         if (failures) {
             console.error(`${NAME} self-test: FAIL -- ${failures} of ${total} plant(s) and control(s) did not hold`);
             return 1;
@@ -414,6 +505,7 @@ try {
     pr.fails.push(`the Orca shipped package set could not be derived: ${err.message}`);
 }
 const p = packageCheck(REPO_ROOT, allowList, packages);
-const { code, lines } = render(check(REPO_ROOT, allowList, lsFiles), { ...p, skips: pr.skips, fails: [...pr.fails, ...p.fails] });
+const bundled = bundledCheck(allowList, bundledInputs(REPO_ROOT), (id, pin, member) => cachedXpiFirstLine(REPO_ROOT, id, pin, member));
+const { code, lines } = render(check(REPO_ROOT, allowList, lsFiles), { ...p, skips: pr.skips, fails: [...pr.fails, ...p.fails], bundled });
 for (const l of lines) (code && !l.startsWith('PENDING') ? console.error : console.log)(l);
 process.exit(code);

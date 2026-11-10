@@ -31,17 +31,23 @@
 //                     reaches the loopback server while the control request does. Relaunch with
 //                     zero stock windows: still active and filtering. Disabled: the request
 //                     arrives. Removed, then relaunched: not reinstalled, the request arrives.
+//   --self-test (quick) Hermetic: a fixture XPI zipped in mkdtemp from a fixture manifest,
+//                     assets.json, list and LICENSE.txt; the control is green first, then eight
+//                     plants (sha256 mismatch, wrong manifest id, missing signature, a default-on host
+//                     with no allow row, a stale BEXT-02 row, a packaged tree with an extra XPI, a rule
+//                     only inside !#if, an http url) each go red naming it; then the live plant audit.
 //   --self-test --live [--dev]  the control session, then one session per plant
 //                     (distro-pref-cleared, filter-unproven), each required red naming its text.
 //   --self-test --static  the plant audit: each plant is read by its scenario, names text its red
 //                     scenario emits, and its branch reports no red itself. No browser.
 //
 // Usage:
-//   node scripts/verify-bundled-xpi.mjs [--packaged | --self-test --static]
+//   node scripts/verify-bundled-xpi.mjs [--packaged | --self-test | --self-test --static]
 //   flock /home/chris/coding/Power-Browser/.git/pb-live.lock node scripts/verify-bundled-xpi.mjs --live [--dev]
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { entryFor } from './lib/endpoint-verdict.mjs';
@@ -486,6 +492,79 @@ async function liveLeg({ dev, selfTest }) {
     }
 }
 
+// ---------------------------------------------------------------- --self-test (quick, hermetic)
+
+const PY_ZIP_WRITE = `import os,sys,zipfile
+z=zipfile.ZipFile(sys.argv[1],'w')
+for r,_,fs in os.walk(sys.argv[2]):
+    for f in fs:
+        p=os.path.join(r,f); z.write(p, os.path.relpath(p, sys.argv[2]))
+z.close()`;
+
+/** A fixture root: pin file, cached XPI, allowlist. `o` varies one input. */
+function fixtureRoot(base, name, o = {}) {
+    const root = join(base, name);
+    const src = join(root, 'src');
+    const put = (rel, body) => { mkdirSync(dirname(join(src, rel)), { recursive: true }); writeFileSync(join(src, rel), body); };
+    const id = 'fx@fixture.invalid';
+    put('manifest.json', JSON.stringify({ manifest_version: 2, name: 'fx', version: '1.0.0', browser_specific_settings: { gecko: { id: o.manifestId ?? id } } }));
+    put('LICENSE.txt', 'GNU GENERAL PUBLIC LICENSE\n');
+    put('assets/assets.json', JSON.stringify({
+        'list-on': { content: 'filters', contentURL: ['https://on.example.invalid/list.txt', 'assets/list-on.txt'], cdnURLs: ['https://cdn.example.invalid/list.txt'] },
+        'list-off': { content: 'filters', off: true, contentURL: 'https://off.example.invalid/list.txt' },
+    }));
+    put('assets/list-on.txt', o.ruleOnlyInIf ? '!#if env_chromium\n/fx-ad.js\n!#endif\n' : '! comment\n||ads.example.invalid^\n/fx-ad.js\n');
+    if (!o.unsigned) put('META-INF/cose.sig', 'sig');
+    mkdirSync(join(root, CACHE_REL), { recursive: true });
+    const xpi = join(root, CACHE_REL, `${id}-1.0.0.xpi`);
+    execFileSync('python3', ['-I', '-c', PY_ZIP_WRITE, xpi, src]);
+    const pin = { name: 'Fixture', version: '1.0.0', url: 'https://example.invalid/fx.xpi', sha256: o.sha256 ?? sha256(xpi), licence: 'GPL-3.0-or-later', source: 'https://example.invalid/src/1.0.0' };
+    mkdirSync(join(root, dirname(PIN_REL)), { recursive: true });
+    writeFileSync(join(root, PIN_REL), JSON.stringify({ $comment: 'fixture', [id]: pin }));
+    const row = h => ({ host: h, disposition: h.startsWith('off') ? 'user-initiated' : 'allow', reason: `${ROW_TAG} fixture` });
+    const hosts = (o.hosts ?? ['on.example.invalid', 'cdn.example.invalid', 'off.example.invalid']).map(row);
+    writeFileSync(join(root, ALLOWLIST_REL), JSON.stringify({ hosts: [...hosts, { host: 'other.example.invalid', disposition: 'allow', reason: 'unrelated' }] }));
+    return { root, id, pin, xpi };
+}
+
+function selfTest() {
+    const base = mkdtempSync(join(tmpdir(), 'bundled-xpi-self-test-'));
+    const failures = [];
+    try {
+        const control = fixtureRoot(base, 'control');
+        const c = staticLeg(control.root);
+        const pkg = join(base, 'pkg');
+        mkdirSync(pkg);
+        copyFileSync(control.xpi, join(pkg, `${control.id}.xpi`));
+        const cp = checkPackagedDir(pkg, { [control.id]: control.pin });
+        const rule = deriveRule(JSON.parse(zipText(control.xpi, 'assets/assets.json')), new Set(zipNames(control.xpi)), m => zipText(control.xpi, m));
+        if (c.failures.length || c.skips.length || cp.length || rule?.rule !== '/fx-ad.js') {
+            return [`the control is not green: ${[...c.failures, ...c.skips, ...cp].join(' | ') || `derived rule ${rule?.rule}`}`];
+        }
+        console.log('  ok  control: pins, cached XPI, endpoint rows and packaged tree green; derived rule /fx-ad.js');
+        const plants = [
+            ['sha256 mismatch', () => staticLeg(fixtureRoot(base, 'p1', { sha256: '0'.repeat(64) }).root).failures, 'sha256 mismatch'],
+            ['wrong manifest id', () => staticLeg(fixtureRoot(base, 'p2', { manifestId: 'other@fixture.invalid' }).root).failures, 'wrong manifest id'],
+            ['missing signature file', () => staticLeg(fixtureRoot(base, 'p3', { unsigned: true }).root).failures, 'missing signature'],
+            ['default-on host with no allow row', () => staticLeg(fixtureRoot(base, 'p4', { hosts: ['on.example.invalid', 'off.example.invalid'] }).root).failures, 'default-on filter list host cdn.example.invalid has no allow row'],
+            ['stale BEXT-02 row', () => staticLeg(fixtureRoot(base, 'p5', { hosts: ['on.example.invalid', 'cdn.example.invalid', 'off.example.invalid', 'gone.example.invalid'] }).root).failures, 'stale BEXT-02 row: gone.example.invalid'],
+            ['packaged tree with an extra XPI', () => { copyFileSync(control.xpi, join(pkg, 'extra@fixture.invalid.xpi')); return checkPackagedDir(pkg, { [control.id]: control.pin }); }, 'carries extra@fixture.invalid.xpi'],
+            ['rule only inside !#if', () => staticLeg(fixtureRoot(base, 'p7', { ruleOnlyInIf: true }).root).failures, 'no plain generic network filter'],
+            ['pin url not https', () => checkPins({ [control.id]: { ...control.pin, url: 'http://example.invalid/fx.xpi' } }), 'the url is not https'],
+        ];
+        for (const [name, run, expect] of plants) {
+            const got = run();
+            const hit = got.find(f => f.includes(expect));
+            if (hit) console.log(`  ok  plant ${name} -> red: ${hit}`);
+            else failures.push(`plant ${name} did not go red naming '${expect}' (got: ${got.join(' | ') || 'green'})`);
+        }
+        failures.push(...liveAuditSelfTest());
+        return failures;
+    } finally {
+        rmSync(base, { recursive: true, force: true });
+    }
+}
+
 function usage(args) {
     console.error(`usage: node scripts/verify-bundled-xpi.mjs [--packaged | --live [--dev] | --self-test --static | --self-test --live [--dev]]  (got: ${args.join(' ')})`);
     process.exit(2);
@@ -524,6 +603,8 @@ if (args.length === 0) {
     report(NAME, r.failures, r.skips, `the pins are well formed${r.notes.length ? `; ${r.notes.join('; ')}` : ''}`);
 } else if (args.length === 1 && args[0] === '--packaged') {
     report(`${NAME} --packaged`, await packagedLeg(), [], 'the package\'s distribution/extensions/ holds exactly the pinned XPIs, each equal to its pin');
+} else if (args.length === 1 && args[0] === '--self-test') {
+    report(`${NAME} --self-test`, selfTest(), [], 'the control is green and every plant went red naming its fault; the live plant audit holds');
 } else if (args.length === 2 && args.includes('--self-test') && args.includes('--static')) {
     report(`${NAME} --self-test --static`, liveAuditSelfTest(), [], `${Object.keys(LIVE_PLANTS).length} live plant(s) each read by their scenario, naming text their red scenario emits; the live sessions were not run`);
 } else if (args[0] === '--live' || (args[0] === '--self-test' && args[1] === '--live')) {

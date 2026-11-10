@@ -24,6 +24,10 @@ The Eclipse Theia framework and the other npm packages the application ships are
 
 The npm packages that Orca's orcad server, web client and mobile-web bundle ship are listed with their licence texts in the "Orca (orcad, web client, mobile-web)" section of [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt). The Orca source is the pin named by the `configuration.toml` keys `upstreams.orca_tag` and `upstreams.orca_commit`; Orca's own licence is checked by `inventory/licence-allowlist.json`.
 
+## Bundled extensions
+
+uBlock Origin 1.76.0 is pre-installed as an unmodified Gecko add-on (`uBlock0@raymondhill.net`) under GPL-3.0-or-later; its source is https://github.com/gorhill/uBlock/tree/1.76.0. @anthropic-ai/claude-agent-sdk 0.3.284 is carried by the pre-installed Theia extension `powerbrowser.claude-agent-sdk` under its own terms (SEE LICENSE IN README.md), not under PowerBrowser's licence. The user can disable or remove each. Their licence texts are in the "Bundled extensions" section of [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt).
+
 ## Node.js runtime
 
 The bundled Node.js runtime's licence text is in the "Node.js runtime" section of [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt).
