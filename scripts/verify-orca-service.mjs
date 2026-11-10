@@ -66,6 +66,20 @@
 //     these clauses only): the port default differs from Orca's own
 //     DEFAULT_WS_PORT, and both failure codes OrcaEnv matches on appear under
 //     orca/src/main.
+// 11. Hand-off files (Phase 64, P64-06, P64-07, P64-34, interface C5). Scenario I
+//     (hand-off files): a ready line whose pairing offer is a canary built at run
+//     time, with the pane bundle folder present: web-pairing (the offer and a
+//     newline) and orca-panes-dir (the folder and a newline) are written through
+//     writePrivateFile into the bridge folder after the ready line and after
+//     orcad-data-root; the canary reaches no log line, console line, getState(),
+//     diagnostics row or parseReadyLine result; stop removes both. Scenario I-b:
+//     the bundle folder absent, no orca-panes-dir write and the "Orca tabs bundle"
+//     row reads "not built". Cross-lane clauses: OrcaEnv's two file names equal
+//     WEB_PAIRING_FILE and PANES_DIR_FILE in theia/extensions/orca-panes'
+//     protocol (SKIP only while that directory is absent, lane p64-02), and
+//     out/web/<ORCA_PANES_DIR_REL> equals the outDir literal of
+//     orca-overlay/files/vite.pb-panes.config.ts (SKIP only while that file is
+//     absent, lane p64-01). Present without the literal is red.
 // 10. Bridge folder key (Phase 63, D-31, P63-35): the POWERBROWSER_ORCA_* key
 //     TheiaService.sys.mjs sets is derived from it, and TheiaService computes
 //     its value through OrcaEnv.bridgeDirFor and OrcaEnv.dataRootFor. When
@@ -126,6 +140,9 @@ export function pathsFor(root) {
         orcaDir: join(root, 'orca'),
         orcaAgentsDir: join(root, 'theia', 'extensions', 'orca-agents'),
         orcaAgentsBackend: join(root, 'theia', 'extensions', 'orca-agents', 'src', 'node', 'orca-agents-backend-module.ts'),
+        orcaPanesDir: join(root, 'theia', 'extensions', 'orca-panes'),
+        orcaPanesProtocol: join(root, 'theia', 'extensions', 'orca-panes', 'src', 'common', 'orca-panes-protocol.ts'),
+        panesViteConfig: join(root, 'orca-overlay', 'files', 'vite.pb-panes.config.ts'),
     };
 }
 
@@ -486,6 +503,108 @@ async function scenarioH(paths, env) {
     return fails;
 }
 
+/** The bridge-folder writes of one file name, with their call index. */
+const writesOf = (calls, name) => calls.map((c, i) => ({ c, i })).filter(({ c }) => c.name === 'writePrivateFile' && c.args[1] === name);
+
+/** One started service whose orcad offers `offer`, with the bundle folder present or not. */
+async function handOffRun(paths, env, offer, bundlePresent) {
+    const port = 26768;
+    const line = `${JSON.stringify({ event: 'orca_server_ready', boundEndpoint: `ws://127.0.0.1:${port}`, health: { nodeVersion: 'v24.19.0', terminalDaemon: { pid: 5002 } }, pairing: { available: true, webClientUrl: offer } })}\n`;
+    const panesDir = `/o/out/web/${env.ORCA_PANES_DIR_REL}`;
+    const world = baseWorld({
+        exists: ['/o/out/orcad/orcad.js', '/o/out/web', ...(bundlePresent ? [panesDir] : [])],
+        orcad: () => fakeProc(5001, { stdout: [line.slice(0, 50), line.slice(50)] }),
+    });
+    const b = makeBoundary(world);
+    const svc = await loadService(paths, b, env);
+    await svc.start();
+    const bridgeDir = await env.bridgeDirFor(`${world.profileDir}/${env.ORCAD_DATA_ROOT_NAME}`, (n) => world.env[n] ?? '', 'linux');
+    return { b, svc, line, panesDir, bridgeDir };
+}
+
+/** I (hand-off files): the offer and the bundle folder reach the bridge folder after ready, and nowhere else. */
+async function scenarioI(paths, env) {
+    const fails = [];
+    // A form redact() has no pattern for, so only never logging the offer keeps it out of the log.
+    const canary = `http://127.0.0.1:26768/PB64CANARY${process.pid}x${Date.now().toString(36)}`;
+    const { b, svc, line, panesDir, bridgeDir } = await handOffRun(paths, env, canary, true);
+    if (svc.getState().state !== 'ready') return [`scenario I: start() ended in state '${svc.getState().state}', not ready`];
+    const readyAt = indexOfCall(b.calls, 'readyLineDelivered');
+    const rootAt = writesOf(b.calls, env.ORCAD_DATA_ROOT_FILE)[0]?.i ?? -1;
+    for (const [name, text] of [[env.ORCA_WEB_PAIRING_FILE, `${canary}\n`], [env.ORCA_PANES_DIR_FILE, `${panesDir}\n`]]) {
+        const writes = writesOf(b.calls, name);
+        if (writes.length !== 1) fails.push(`scenario I: ${name} was written ${writes.length} times through writePrivateFile, not once`);
+        for (const { c, i } of writes) {
+            if (readyAt < 0 || i < readyAt) fails.push(`scenario I: offer before ready -- ${name} was written at call ${i}, the ready line at ${readyAt}`);
+            if (rootAt < 0 || i < rootAt) fails.push(`scenario I: ${name} was written before orcad-data-root (call ${i}, data root at ${rootAt})`);
+            if (c.args[0] !== bridgeDir || c.args[2] !== text) fails.push(`scenario I: ${name} was written to ${c.args[0]} with other content than ${name === env.ORCA_WEB_PAIRING_FILE ? 'the offer' : 'the bundle folder'} and a newline`);
+        }
+    }
+    if (!svc.getDiagnosticRows().some(([label, value]) => label === 'Orca tabs bundle' && value === panesDir)) fails.push('scenario I: the "Orca tabs bundle" row does not name the bundle folder');
+    const token = canary.slice(canary.indexOf('PB64CANARY'));
+    if (env.redact(canary) !== canary) fails.push('scenario I: redact() rewrites the canary, so the log search below proves nothing');
+    const surfaces = {
+        'offer in log': [svc.getRecentLog().join('\n'), b.consoleLines.join('\n')],
+        'offer in state': [JSON.stringify(svc.getState())],
+        'offer in diagnostics': [JSON.stringify(svc.getDiagnosticRows())],
+        'offer in parseReadyLine': [JSON.stringify(env.parseReadyLine(line))],
+    };
+    for (const [what, texts] of Object.entries(surfaces)) {
+        if (texts.some((t) => t.includes(token))) fails.push(`scenario I: ${what} -- the pairing canary reached it`);
+    }
+    await svc.stop();
+    for (const name of [env.ORCA_WEB_PAIRING_FILE, env.ORCA_PANES_DIR_FILE]) {
+        if (indexOfCall(b.calls, 'removeStateFile', (a) => a[0] === env.bridgeFileFor(bridgeDir, name, 'linux')) < 0) fails.push(`scenario I: not removed -- ${name} was left in the bridge folder after stop()`);
+    }
+    return fails;
+}
+
+/** I-b: the bundle folder is not built: no orca-panes-dir file, the row says so, the offer is still written. */
+async function scenarioIb(paths, env) {
+    const fails = [];
+    const { b, svc } = await handOffRun(paths, env, 'http://127.0.0.1:26768/#pairing=PB64IB', false);
+    if (svc.getState().state !== 'ready') fails.push(`scenario I-b: a missing bundle folder left state '${svc.getState().state}', not ready`);
+    if (writesOf(b.calls, env.ORCA_PANES_DIR_FILE).length) fails.push(`scenario I-b: bundle folder absent, yet ${env.ORCA_PANES_DIR_FILE} was written`);
+    if (writesOf(b.calls, env.ORCA_WEB_PAIRING_FILE).length !== 1) fails.push(`scenario I-b: ${env.ORCA_WEB_PAIRING_FILE} was not written once without the bundle folder`);
+    if (!svc.getDiagnosticRows().some(([label, value]) => label === 'Orca tabs bundle' && value === 'not built')) fails.push('scenario I-b: the "Orca tabs bundle" row does not read "not built"');
+    await svc.stop();
+    return fails;
+}
+
+/** Clause 11's cross-lane comparisons. Returns { fails, notes, panes, vite } with 'compared' or a SKIP text each. */
+function handOffClauses(paths, env) {
+    const fails = [];
+    const notes = [];
+    // Interface C5 spells these three; the orca-panes backend and the pane build read the same ones.
+    for (const [constant, want] of [['ORCA_WEB_PAIRING_FILE', 'web-pairing'], ['ORCA_PANES_DIR_FILE', 'orca-panes-dir'], ['ORCA_PANES_DIR_REL', 'assets/pb-panes']]) {
+        if (env[constant] !== want) fails.push(`OrcaEnv.${constant} is ${JSON.stringify(env[constant])}, not '${want}' (interface C5)`);
+    }
+    let panes = 'SKIP (lane p64-02 not merged)';
+    if (!existsSync(paths.orcaPanesDir)) {
+        notes.push('SKIP of the orca-panes file-name comparison only -- lane p64-02 not merged (theia/extensions/orca-panes is absent)');
+    } else {
+        panes = 'compared';
+        const protocol = read(paths.orcaPanesProtocol) ?? '';
+        for (const [constant, theirs] of [['ORCA_WEB_PAIRING_FILE', 'WEB_PAIRING_FILE'], ['ORCA_PANES_DIR_FILE', 'PANES_DIR_FILE']]) {
+            const m = new RegExp(`export const ${theirs}\\b[^=]*=\\s*['"\`]([^'"\`]+)['"\`]`).exec(protocol);
+            if (!m) fails.push(`theia/extensions/orca-panes exists but src/common/orca-panes-protocol.ts has no ${theirs} literal, so OrcaEnv.${constant} cannot be compared`);
+            else if (m[1] !== env[constant]) fails.push(`orca-panes-protocol.ts ${theirs} is '${m[1]}' but OrcaEnv.${constant} is '${env[constant]}': chrome writes a file the Theia backend never reads`);
+        }
+    }
+    let vite = 'SKIP (lane p64-01 not merged)';
+    const config = read(paths.panesViteConfig);
+    if (config === null) {
+        notes.push('SKIP of the bundle-folder comparison only -- lane p64-01 not merged (orca-overlay/files/vite.pb-panes.config.ts is absent)');
+    } else {
+        vite = 'compared';
+        const outLine = /\boutDir\s*:([^\n]*)/.exec(config);
+        const literal = outLine ? [...outLine[1].matchAll(/['"`]([^'"`]+)['"`]/g)].pop()?.[1] : undefined;
+        if (!literal) fails.push('vite.pb-panes.config.ts has no outDir literal, so the bundle folder OrcaEnv names cannot be compared');
+        else if (literal.replace(/^\.\//, '') !== `out/web/${env.ORCA_PANES_DIR_REL}`) fails.push(`vite.pb-panes.config.ts builds the bundle into '${literal}' but OrcaService looks in out/web/${env.ORCA_PANES_DIR_REL}`);
+    }
+    return { fails, notes, panes, vite };
+}
+
 // ---------------------------------------------------------------------------
 // Static clauses.
 
@@ -638,7 +757,10 @@ export async function check(paths) {
     const bridgeKey = bridgeKeyClause(paths);
     fails.push(...bridgeKey.fails);
     if (bridgeKey.comparison.startsWith('SKIP')) notes.push('SKIP of the POWERBROWSER_ORCA_BRIDGE_DIR comparison only -- lane p63-03 not merged (theia/extensions/orca-agents is absent)');
-    const scenarios = { A: scenarioA, B: scenarioB, C: scenarioC, D: scenarioD, E: scenarioE, F: scenarioF, H: scenarioH };
+    const handOff = handOffClauses(paths, env);
+    fails.push(...handOff.fails);
+    notes.push(...handOff.notes);
+    const scenarios = { A: scenarioA, B: scenarioB, C: scenarioC, D: scenarioD, E: scenarioE, F: scenarioF, H: scenarioH, I: scenarioI, 'I-b': scenarioIb };
     const saved = globalThis.ChromeUtils;
     try {
         for (const [label, run] of Object.entries(scenarios)) {
@@ -647,7 +769,7 @@ export async function check(paths) {
     } finally {
         if (saved === undefined) delete globalThis.ChromeUtils; else globalThis.ChromeUtils = saved;
     }
-    return { fails, scenarios: Object.keys(scenarios), notes, bridgeKeyComparison: bridgeKey.comparison };
+    return { fails, scenarios: Object.keys(scenarios), notes, bridgeKeyComparison: bridgeKey.comparison, handOff };
 }
 
 // ---------------------------------------------------------------------------
@@ -670,6 +792,11 @@ async function runSelfTest() {
         // A fixture orca-agents backend, so the control compares the bridge folder key instead of skipping it.
         mkdirSync(dirname(paths.orcaAgentsBackend), { recursive: true });
         writeFileSync(paths.orcaAgentsBackend, "import { POWERBROWSER_ENV } from '@powerbrowser/token-gate/lib/node/powerbrowser-env';\nconst BRIDGE_DIR_KEY = 'POWERBROWSER_ORCA_BRIDGE_DIR';\nexport const bridgeDir = POWERBROWSER_ENV[BRIDGE_DIR_KEY] ?? '';\n");
+        // Fixture orca-panes protocol and pane build config, so the control compares clause 11 instead of skipping it.
+        mkdirSync(dirname(paths.orcaPanesProtocol), { recursive: true });
+        writeFileSync(paths.orcaPanesProtocol, "export const WEB_PAIRING_FILE = 'web-pairing';\nexport const PANES_DIR_FILE = 'orca-panes-dir';\n");
+        mkdirSync(dirname(paths.panesViteConfig), { recursive: true });
+        writeFileSync(paths.panesViteConfig, "export default { build: { outDir: resolve(process.env.PB_PANES_OUT || 'out/web/assets/pb-panes') } };\n");
         git('init', '-q');
         git('add', '.');
         git('-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', 'commit', '-q', '-m', 'fixture');
@@ -713,6 +840,13 @@ async function runSelfTest() {
             { name: 'orca-agents backend reads a different key', naming: 'POWERBROWSER_ORCA_BRIDGE_DIR', file: paths.orcaAgentsBackend, edit: swap("'POWERBROWSER_ORCA_BRIDGE_DIR'", "'POWERBROWSER_ORCA_BRIDGE_FOLDER'") },
             { name: 'orca-agents backend module deleted while the extension exists (red, not SKIP)', naming: 'orca-agents-backend-module.ts is missing', file: paths.orcaAgentsBackend, edit: () => null },
             { name: 'TheiaService builds the folder without bridgeDirFor', naming: 'OrcaEnv.bridgeDirFor', file: paths.theiaService, edit: swap('return await OrcaEnv.bridgeDirFor(dataRoot, name => PowerBrowserAPI.getEnv(name), OrcaEnv.nodePlatform(PowerBrowserProcesses.platform()));', 'return `${PowerBrowserAPI.getEnv("HOME")}/.cache/pb-orca-bridge`;') },
+            { name: 'offer copied to pushLog', naming: 'offer in log', file: paths.orcaService, edit: swap('  async _writeHandOff(offer) {\n', '  async _writeHandOff(offer) {\n    this._pushLog(`offer ${offer}`);\n') },
+            { name: 'offer written before ready', naming: 'offer before ready', file: paths.orcaService, edit: swap('    let proc;\n', '    await PowerBrowserProcesses.writePrivateFile(this._bridgeDir, OrcaEnv.ORCA_WEB_PAIRING_FILE, "stale\\n");\n    let proc;\n') },
+            { name: 'offer placed in getState', naming: 'offer in state', file: paths.orcaService, edit: then(swap('        offer = value;\n', '        offer = value;\n        this._lastOffer = value;\n'), swap('      bridgeDir: this._bridgeDir,\n', '      bridgeDir: this._bridgeDir,\n      lastOffer: this._lastOffer,\n')) },
+            { name: 'orca-panes-dir written with the bundle folder absent', naming: 'bundle folder absent', file: paths.orcaService, edit: swap('    if (!(await PowerBrowserAPI.pathExists(panesDir))) {', '    if (false) {') },
+            { name: 'hand-off files not removed on stop', naming: 'not removed', file: paths.orcaService, edit: swap('[OrcaEnv.ORCA_WEB_PAIRING_FILE, OrcaEnv.ORCA_PANES_DIR_FILE] : []', '[] : []') },
+            { name: 'orca-panes protocol spells another pairing file', naming: 'chrome writes a file the Theia backend never reads', file: paths.orcaPanesProtocol, edit: swap("WEB_PAIRING_FILE = 'web-pairing'", "WEB_PAIRING_FILE = 'pairing-offer'") },
+            { name: 'pane build writes another folder', naming: 'OrcaService looks in', file: paths.panesViteConfig, edit: swap("'out/web/assets/pb-panes'", "'out/web/pb-panes'") },
             { name: 'lock code absent from the fixture source', naming: 'pinned source', file: fixtureCodes, edit: swap('orcad_instance_lock_held', 'orcad_lock_renamed') },
         ];
 
@@ -764,6 +898,6 @@ if (isEntryPoint) {
         for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`);
         process.exit(1);
     }
-    console.log(`${NAME}: PASS -- jar.mn ships every shell module; OrcaService spawns only through the exact-environment boundary, spells no environment name and carries no user-facing copy; launch wiring and the .onorca.dev row hold; POWERBROWSER_ORCA_BRIDGE_DIR comparison ${r.bridgeKeyComparison}; stub-boundary scenarios ${r.scenarios.join(', ')} (start with orcad-data-root after ready, reap, stop order, busy port, non-loopback, alias, no bridge folder)`);
+    console.log(`${NAME}: PASS -- jar.mn ships every shell module; OrcaService spawns only through the exact-environment boundary, spells no environment name and carries no user-facing copy; launch wiring and the .onorca.dev row hold; POWERBROWSER_ORCA_BRIDGE_DIR comparison ${r.bridgeKeyComparison}; stub-boundary scenarios ${r.scenarios.map((s) => ({ I: 'I (hand-off files)', 'I-b': 'I-b (no bundle folder)' }[s] ?? s)).join(', ')} (start with orcad-data-root after ready, reap, stop order, busy port, non-loopback, alias, no bridge folder, offer and bundle folder after ready); orca-panes file names ${r.handOff.panes}; bundle folder ${r.handOff.vite}`);
     process.exit(0);
 }
