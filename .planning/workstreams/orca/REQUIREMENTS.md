@@ -15,7 +15,7 @@ Owner decisions are in `DECISIONS.md` (D-01..D-25) and win over `research/`. Res
   tag (first pin 1.4.248, fallback 1.4.245) with Orca's own `build:orcad` and `build:web` from a
   Nix dev shell carrying pnpm 12.14.0; the pin lives in `configuration.toml` and a `--quick`
   check proves it. (D-04)
-- [ ] **RUN-02**: orcad runs slot-less on Theia's Node 24.19.0; no second Node runtime is
+- [x] **RUN-02**: orcad runs slot-less on Theia's Node 24.19.0; no second Node runtime is
   shipped. (D-14)
 - [ ] **RUN-03**: PowerBrowser spawns orcad through an `OrcaService` consumer of the
   `PowerBrowserAPI` boundary and a supervisor: loopback bind, fixed port, data root
@@ -179,7 +179,7 @@ Filled by the roadmap.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | RUN-01 | Phase 60 | Complete |
-| RUN-02 | Phase 60 | Pending |
+| RUN-02 | Phase 60 | Complete |
 | RUN-03 | Phase 62 | Pending |
 | RUN-04 | Phase 62 | Pending |
 | RUN-05 | Phase 62 | Pending |
