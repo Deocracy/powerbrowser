@@ -70,6 +70,9 @@ Owner decisions are in DECISIONS.md. The ones that shape the phase order:
 - D-15: one Orca pane equals one Lumino tab. Orca's in-tab splits and tab groups are flattened, and the renderer owns layout in shipped builds.
 - D-14: orcad runs slot-less on Theia's Node 24.19.0, proven by Phase 60's probe. The fallback pin is 1.4.245.
 - D-24: live checks pass on Linux only. D-25: the run mode is interactive per phase.
+- P62-14: RUN-04 is the one declared seam, `orca-overlay/patches/010-installed-electron-switch.patch` in `src/main/orcad/orcad-browser-provider.ts`; `installedElectronCandidates` returns nothing when orcad's environment has `ORCA_DISABLE_INSTALLED_ELECTRON_BROWSER=1`, which OrcaEnv always sets.
+- P62-16: orcad's fixed port is the pref `powerbrowser.orca.port`, default 26768 (Orca's own 6768 is taken by a desktop Orca); no manifest key.
+- P62-19: the exact-environment spawn, the process-tree reader and the named reap blocker (`spawnProcessExact`, `listProcessTree`, `addNamedReapBlocker`) live in `PowerBrowserProcesses` at the end of `PowerBrowserAPI.sys.mjs`, with `//` comments only.
 
 ### Pending Todos
 

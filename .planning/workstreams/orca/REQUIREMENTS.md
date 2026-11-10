@@ -17,14 +17,14 @@ Owner decisions are in `DECISIONS.md` (D-01..D-25) and win over `research/`. Res
   check proves it. (D-04)
 - [x] **RUN-02**: orcad runs slot-less on Theia's Node 24.19.0; no second Node runtime is
   shipped. (D-14)
-- [ ] **RUN-03**: PowerBrowser spawns orcad through an `OrcaService` consumer of the
+- [x] **RUN-03**: PowerBrowser spawns orcad through an `OrcaService` consumer of the
   `PowerBrowserAPI` boundary and a supervisor: loopback bind, fixed port, data root
   `powerbrowser-orca` set through both `ORCA_USER_DATA` and `ORCA_USER_DATA_PATH`, an
   allowlisted environment that scrubs inherited `ORCA_*`, telemetry off, and `*.onorca.dev` on
   the egress allowlist. (T-2, T-10, D-08)
-- [ ] **RUN-04**: PowerBrowser's orcad never finds and launches an installed Orca desktop as a
+- [x] **RUN-04**: PowerBrowser's orcad never finds and launches an installed Orca desktop as a
   hidden Electron browser engine. (D-10)
-- [ ] **RUN-05**: Quitting PowerBrowser stops orcad and every agent it started; stale state is
+- [x] **RUN-05**: Quitting PowerBrowser stops orcad and every agent it started; stale state is
   reaped on the next launch. (D-07 revised)
 - [ ] **RUN-06**: When orcad dies, its port is taken or pairing is lost, the user sees a
   PowerBrowser page in PowerBrowser copy with a real next step; every identifier the message
@@ -39,7 +39,7 @@ Owner decisions are in `DECISIONS.md` (D-01..D-25) and win over `research/`. Res
 
 ### Overlay and re-pin (OVL)
 
-- [ ] **OVL-01**: Orca changes are an additive overlay: new PowerBrowser files plus
+- [x] **OVL-01**: Orca changes are an additive overlay: new PowerBrowser files plus
   one-to-few-line regenerated patches at declared seams. A check records each seam's upstream
   blob and goes red on a whole-file replacement of an upstream path, an undeclared seam, or a
   seam count over the cap. (D-04, D-16)
@@ -52,7 +52,7 @@ Owner decisions are in `DECISIONS.md` (D-01..D-25) and win over `research/`. Res
   against the current stock app. (D-23)
 - [x] **OVL-04**: "Orca" is classified only in `inventory/brand-tokens.json`; Orca's licence has a
   row in the licence allow-list; the brand scan stays green over the overlay.
-- [ ] **OVL-05**: The PowerBrowser pane entry and the PTY and browser providers are new files
+- [x] **OVL-05**: The PowerBrowser pane entry and the PTY and browser providers are new files
   only, compiled by Orca's own `build:web` and `build:orcad`. (D-04)
 - [ ] **OVL-06**: The terminal provider, browser provider and extra web entry seams are offered
   to Orca upstream as pull requests once each works in PowerBrowser. (D-27)
@@ -180,18 +180,18 @@ Filled by the roadmap.
 |-------------|-------|--------|
 | RUN-01 | Phase 60 | Complete |
 | RUN-02 | Phase 60 | Complete |
-| RUN-03 | Phase 62 | Pending |
-| RUN-04 | Phase 62 | Pending |
-| RUN-05 | Phase 62 | Pending |
+| RUN-03 | Phase 62 | Complete |
+| RUN-04 | Phase 62 | Complete |
+| RUN-05 | Phase 62 | Complete |
 | RUN-06 | Phase 67 | Pending |
 | RUN-07 | Phase 67 | Pending |
 | RUN-08 | Phase 67 | Pending |
 | RUN-09 | Phase 67 | Pending |
-| OVL-01 | Phase 62 | Pending |
+| OVL-01 | Phase 62 | Complete |
 | OVL-02 | Phase 68 | Pending |
 | OVL-03 | Phase 68 | Pending |
 | OVL-04 | Phase 60 | Complete |
-| OVL-05 | Phase 62 | Pending |
+| OVL-05 | Phase 62 | Complete |
 | OVL-06 | Phase 68 | Pending |
 | TERM-01 | Phase 63 | Pending |
 | TERM-02 | Phase 63 | Pending |
