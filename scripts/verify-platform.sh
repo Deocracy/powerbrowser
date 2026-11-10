@@ -3969,6 +3969,16 @@ run_own_checks() {
     # the portal probe, the derived <html> clause and its probe sheet) over fixtures. Both hermetic.
     "orca-pane-css-self-test|node $REPO_ROOT/scripts/verify-orca-pane-css.mjs --self-test"
     "orca-pane-css-live-self-test|node $REPO_ROOT/scripts/verify-orca-pane-css-live.mjs --self-test"
+    # NEW (64-02, TAB-02/TAB-04/TAB-06/TERM-01, P64-25/P64-31): orca-pane-routes. Quick. Derived at check time with
+    # theia/node_modules/typescript: Orca's TabContentType members from the fetched orca/ compared as a set with
+    # ORCA_PANE_ROUTES' keys; each target a known kind or pending with a requirement id; the hosted words compared
+    # with docs/URI-SCHEMES.md's pb-orca: section; the bundle API and hand-off key against lane p64-01's entry and
+    # Vite config and the loader's module key and boot event against lane p64-04's orca-tabs-live.mjs (each a named
+    # SKIP of that clause alone while the other lane's file is absent); every table target handled by the observer;
+    # no client-side terminal creation in orca-panes or orca-overlay/files. A named SKIP when orca/ is not fetched.
+    # The self-test plants 13 faults in mkdtemp copies.
+    "orca-pane-routes|node $REPO_ROOT/scripts/verify-orca-pane-routes.mjs"
+    "orca-pane-routes-self-test|node $REPO_ROOT/scripts/verify-orca-pane-routes.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"

@@ -12,6 +12,7 @@ import {
     PLUGIN_VIEW_CONTAINER_FACTORY_ID, SETTINGS_WIDGET_FACTORY_ID, POWERBROWSER_VIEW_FACTORY_IDS
 } from './view-factory-table';
 import { extensionDetailUriOf, webviewUriOf } from './existing-scheme-coverage';
+import { orcaPaneUriOf } from './orca-scheme-coverage';
 import { WEB_TAB_FACTORY_ID, WebTabWidget } from './web-tab';
 
 /**
@@ -162,6 +163,10 @@ export class TabUriRegistry {
         const webviewUri = webviewUriOf(factoryId, description.options);
         if (webviewUri) {
             return webviewUri;
+        }
+        const orcaPaneUri = orcaPaneUriOf(factoryId, description.options);
+        if (orcaPaneUri) {
+            return orcaPaneUri;
         }
         if (factoryId === WEB_TAB_FACTORY_ID) {
             // GUI-02 (14.1-02): a web tab's address is the widget's LIVE page
