@@ -41,9 +41,9 @@ Progress: [░░░░░░░░░░] 0%
 | Phase | Name | Requirements | Status |
 |-------|------|--------------|--------|
 | 59 | Carry-forward from v1.5 and v1.6 | CF-01..CF-19 (`.planning/CARRY-FORWARD-v1.7.md`) | Not started |
-| 60 | Orca from source on Theia's Node | RUN-01, RUN-02, OVL-04, EXT-01 | Not started |
-| 61 | Spikes for pane hosting, browser parity and live sharing | TAB-03, BRW-01, EXT-03 | Not started |
-| 62 | Overlay gate and PowerBrowser-run orcad | OVL-01, OVL-05, RUN-03, RUN-04, RUN-05 | Not started |
+| 60 | Orca from source on Theia's Node | RUN-01, RUN-02, OVL-04, EXT-01 | Executed 4/5 (EXT-01 deferred) |
+| 61 | Spikes for pane hosting, browser parity and live sharing | TAB-03, BRW-01, EXT-03 | Complete (human items deferred) |
+| 62 | Overlay gate and PowerBrowser-run orcad | OVL-01, OVL-05, RUN-03, RUN-04, RUN-05 | Complete |
 | 63 | Theia terminals and agent hooks for Orca | TERM-01, TERM-02, TERM-03, TERM-04, EXT-02 | Not started |
 | 64 | Orca panes as PowerBrowser tabs | TAB-01, TAB-02, TAB-04, TAB-06 | Not started |
 | 65 | Orca workspace in Theia | TAB-05, TAB-07, TAB-08, TAB-09 | Not started |
@@ -108,5 +108,5 @@ Resume file: .planning/workstreams/orca/phases/59-carry-forward-from-v1-5-and-v1
 |-------|-------|--------|
 | 59 | verification_deferred_human (59-06 checklist, verify-work 29/30/31; owner steps in p59-owner) | end-of-milestone pass (D-18): `/gsd-verify-work 59 --ws orca` |
 | 60 | verification_deferred_human (60-05 EXT-01 live session) | end-of-milestone pass (D-18): resume 60-05 Task 2 |
-| 61 | verification_deferred_human (EXT-03 extension half of the floor, with EXT-01) | end-of-milestone pass (D-18): the steps under "Blocked on EXT-01" in .planning/spikes/006-orca-live-sharing/README.md |
+| 61 | verification_deferred_human, 6/8 (61-VERIFICATION.md): EXT-03 extension half of the floor, with EXT-01; owner override for criterion 4 ordering (Phase 63 planned before the ROADMAP route line, route taken from the spike 006 record; YAML in 61-VERIFICATION.md); YELLOW conditions for Phases 64 and 66 to be copied into their CONTEXT | end-of-milestone pass (D-18): the steps under "Blocked on EXT-01" in .planning/spikes/006-orca-live-sharing/README.md |
 | 62 | verified 5/5 (62-VERIFICATION.md); owner re-lock of scripts/verify-ng-027-reader-callers.mjs pending; browser-request clause of criterion 2 moves to Phase 66 | end-of-milestone pass (D-18): owner lock-checks; Phase 66 proves the browser request |

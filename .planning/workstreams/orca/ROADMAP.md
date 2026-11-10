@@ -31,7 +31,7 @@ Owner decisions D-01..D-29 (`DECISIONS.md`) and the adopted adversarial review (
 
 - [ ] **Phase 59: Carry-forward from v1.5 and v1.6** - Deferred live items CF-01..CF-19, the v1.5 human checklist and verify-work 29-31, gap-closure code, `--gate` green, v1.6 close-out
 - [ ] **Phase 60: Orca from source on Theia's Node** - Pinned-tag source build in a Nix dev shell, slot-less orcad start probe, brand and licence classification, Claude Code extension check
-- [ ] **Phase 61: Spikes for pane hosting, browser parity and live sharing** - Measured answers to TAB-03, BRW-01 and EXT-03 before the remake is built
+- [x] **Phase 61: Spikes for pane hosting, browser parity and live sharing** - Measured answers to TAB-03, BRW-01 and EXT-03 before the remake is built
 - [x] **Phase 62: Overlay gate and PowerBrowser-run orcad** - Seam check for the additive overlay; OrcaService spawns, supervises and stops orcad
 - [ ] **Phase 63: Theia terminals and agent hooks for Orca** - Theia-backed IPtyProvider, agent sessions and remote hosts in Theia terminal tabs, key policy, extension sessions visible in Orca
 - [ ] **Phase 64: Orca panes as PowerBrowser tabs** - Orca mode, `pb-orca:` URIs, one Orca pane equals one Lumino tab, Orca-only views as their own tabs
@@ -284,7 +284,7 @@ Phases execute in numeric order: 59 → 60 → 61 → 62 → 63 → 64 → 65 �
 |-------|----------------|--------|-----------|
 | 59. Carry-forward from v1.5 and v1.6 | 5/8 | In Progress | - |
 | 60. Orca from source on Theia's Node | 4/5 | In Progress | - |
-| 61. Spikes for pane hosting, browser parity and live sharing | 4/4 | In Progress (verification pending) | - |
+| 61. Spikes for pane hosting, browser parity and live sharing | 4/4 | Complete (human items deferred) | 2026-11-10 |
 | 62. Overlay gate and PowerBrowser-run orcad | 3/3 | Complete | 2026-11-09 |
 | 63. Theia terminals and agent hooks for Orca | 0/5 | Planned | - |
 | 64. Orca panes as PowerBrowser tabs | 0/TBD | Not started | - |
