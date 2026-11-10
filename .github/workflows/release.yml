@@ -1910,3 +1910,336 @@ jobs:
           done
           echo "::error::the public Windows update channel is not proven equal to the MAR origin after $ATTEMPTS attempts over about $((ATTEMPTS - 1)) minutes; nothing was changed. Next step: read the failures of the last attempt above, fix the named descriptor or MAR, then re-run this job" >&2
           exit 1
+
+  # Phase 68 (PLAT-01, P68-04, P68-31): Orca for macOS arm64, built on that target's own hosted runner, so its
+  # node-pty prebuild is native to arm64 and proven so by Orca's prebuild manifest (P68-05). Same trust shape as
+  # windows-sidecar: no secret, no environment, contents: read, no persisted token; its artifact is data, admitted by
+  # macos-orca-universal against the SHA256SUMS digest this job records as its output. Only macos-orca-universal needs
+  # it, so no Linux-path job waits on it (release-shape's linux-independence rule). Two named jobs, never a matrix:
+  # each needs its own sums_sha256 output.
+  macos-orca-arm64:
+    runs-on: macos-15
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    outputs:
+      sums_sha256: ${{ steps.sums.outputs.sha256 }}
+    env:
+      RELEASE_SHA: ${{ inputs.sha }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Refuse any ref but main and any event but a dispatch
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF" = "refs/heads/main" ] \
+            || { echo "::error::the release runs only from a workflow_dispatch on refs/heads/main (event $GITHUB_EVENT_NAME, ref $GITHUB_REF)" >&2; exit 1; }
+
+      - name: Require a full 40-hex commit SHA
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a full 40-character lowercase commit SHA" >&2; exit 1; }
+
+      - name: Check out the requested commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+
+      # orcad's node-pty is compiled against the Node that PowerBrowser stages for this architecture.
+      - name: Read the darwin-arm64 Node version from node-runtime.json
+        id: node_pin
+        run: |
+          set -euo pipefail
+          V="$(node -p 'require("./powerbrowser/packaging/node-runtime.json")["darwin-arm64"].version')"
+          [[ "$V" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::the darwin-arm64 version in node-runtime.json is not v<major>.<minor>.<patch> ('$V'); nothing is built" >&2; exit 1; }
+          echo "version=${V#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up the pinned Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ steps.node_pin.outputs.version }}
+          package-manager-cache: false
+
+      # build-orca.sh uses mapfile (bash 4); the image's /bin/bash is 3.2, so the bash on PATH must be a newer one.
+      - name: Require bash 4 or later on PATH
+        run: |
+          set -euo pipefail
+          [ "${BASH_VERSINFO[0]}" -ge 4 ] || { echo "::error::bash on PATH is $BASH_VERSION (BASH_VERSINFO major ${BASH_VERSINFO[0]}); scripts/build-orca.sh needs bash 4 or later for mapfile" >&2; exit 1; }
+
+      # Orca's pnpm comes through corepack. 0.35.0 is the corepack nix develop .#orca pins; it is installed only when
+      # the runner's bundled corepack is older than 0.34.5, and into the job's temp directory only.
+      - name: Require corepack 0.34.5 or later
+        run: |
+          set -euo pipefail
+          C="$(corepack --version)"
+          if ! node -e 'const [a, b] = process.argv.slice(1).map(v => v.split(".").map(Number)); process.exit((a[0] - b[0] || a[1] - b[1] || a[2] - b[2]) < 0 ? 1 : 0)' "$C" 0.34.5; then
+            npm install --prefix "$RUNNER_TEMP/corepack" corepack@0.35.0
+            echo "$RUNNER_TEMP/corepack/node_modules/.bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Write the upstream pins fragment through the generator
+        run: |
+          set -euo pipefail
+          mkdir -p generated
+          node --input-type=module -e "import { resolveConfig, emitUpstreamPins } from './scripts/generate.mjs'; import { writeFileSync } from 'node:fs'; const { config } = resolveConfig('./configuration.toml'); writeFileSync('generated/upstream-pins.env', emitUpstreamPins(config, 'release'));"
+
+      - name: Build Orca from source at the pin (orcad, web client)
+        run: |
+          set -euo pipefail
+          bash scripts/fetch-orca.sh
+          bash scripts/build-orca.sh
+
+      # The hosted Orca artifact layout: package.json, out/orcad and out/web (the packaged root, checked against the
+      # built tree and the prebuild manifest before anything else is added), then the manifest copy, BUILD_ROOT and
+      # SHA256SUMS. macOS has no sha256sum and no xargs -d; shasum -a 256 writes the same line format.
+      - name: Stage the Orca tree in the hosted artifact layout, check it, then write BUILD_ROOT and SHA256SUMS
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/macos-orca-arm64"
+          rm -rf "$OUT"
+          mkdir -p "$OUT/out"
+          test -f orca/out/orcad/orcad.js || { echo "::error::orca/out/orcad/orcad.js is absent after build-orca.sh; nothing is staged" >&2; exit 1; }
+          cp -a orca/package.json "$OUT/package.json"
+          cp -a orca/out/orcad orca/out/web "$OUT/out/"
+          node scripts/verify-orca-packaged-tree.mjs --target macos-arm64 --stage "$OUT" --prebuild-manifest orca/out/orcad-prebuilds/manifest.json
+          cp orca/out/orcad-prebuilds/manifest.json "$OUT/orcad-prebuilds-manifest.json"
+          printf '%s\n' "$GITHUB_WORKSPACE" > "$OUT/BUILD_ROOT"
+          (cd "$OUT" && find . -type f ! -path ./SHA256SUMS -print | sed 's|^\./||' | LC_ALL=C sort | while IFS= read -r f; do shasum -a 256 "$f"; done > SHA256SUMS)
+
+      - name: Record the SHA256SUMS digest outside the artifact
+        id: sums
+        run: |
+          set -euo pipefail
+          SUMS="$(shasum -a 256 "$RUNNER_TEMP/macos-orca-arm64/SHA256SUMS" | cut -d' ' -f1)"
+          [[ "$SUMS" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::shasum printed no SHA-256 for SHA256SUMS ('$SUMS')" >&2; exit 1; }
+          echo "sha256=$SUMS" >> "$GITHUB_OUTPUT"
+          echo "macos-orca-arm64 SHA256SUMS sha256 $SUMS"
+
+      - name: Upload the macOS arm64 Orca tree (data for macos-orca-universal, admitted there by the digest output)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-orca-arm64
+          path: ${{ runner.temp }}/macos-orca-arm64/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  # Phase 68 (PLAT-01, P68-04, P68-31): Orca for macOS x64, built on that target's own hosted runner, so its
+  # node-pty prebuild is native to x64 and proven so by Orca's prebuild manifest (P68-05). Same trust shape as
+  # windows-sidecar: no secret, no environment, contents: read, no persisted token; its artifact is data, admitted by
+  # macos-orca-universal against the SHA256SUMS digest this job records as its output. Only macos-orca-universal needs
+  # it, so no Linux-path job waits on it (release-shape's linux-independence rule). Two named jobs, never a matrix:
+  # each needs its own sums_sha256 output.
+  macos-orca-x64:
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    outputs:
+      sums_sha256: ${{ steps.sums.outputs.sha256 }}
+    env:
+      RELEASE_SHA: ${{ inputs.sha }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Refuse any ref but main and any event but a dispatch
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF" = "refs/heads/main" ] \
+            || { echo "::error::the release runs only from a workflow_dispatch on refs/heads/main (event $GITHUB_EVENT_NAME, ref $GITHUB_REF)" >&2; exit 1; }
+
+      - name: Require a full 40-hex commit SHA
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a full 40-character lowercase commit SHA" >&2; exit 1; }
+
+      - name: Check out the requested commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+
+      # orcad's node-pty is compiled against the Node that PowerBrowser stages for this architecture.
+      - name: Read the darwin-x64 Node version from node-runtime.json
+        id: node_pin
+        run: |
+          set -euo pipefail
+          V="$(node -p 'require("./powerbrowser/packaging/node-runtime.json")["darwin-x64"].version')"
+          [[ "$V" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::the darwin-x64 version in node-runtime.json is not v<major>.<minor>.<patch> ('$V'); nothing is built" >&2; exit 1; }
+          echo "version=${V#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up the pinned Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ steps.node_pin.outputs.version }}
+          package-manager-cache: false
+
+      # build-orca.sh uses mapfile (bash 4); the image's /bin/bash is 3.2, so the bash on PATH must be a newer one.
+      - name: Require bash 4 or later on PATH
+        run: |
+          set -euo pipefail
+          [ "${BASH_VERSINFO[0]}" -ge 4 ] || { echo "::error::bash on PATH is $BASH_VERSION (BASH_VERSINFO major ${BASH_VERSINFO[0]}); scripts/build-orca.sh needs bash 4 or later for mapfile" >&2; exit 1; }
+
+      # Orca's pnpm comes through corepack. 0.35.0 is the corepack nix develop .#orca pins; it is installed only when
+      # the runner's bundled corepack is older than 0.34.5, and into the job's temp directory only.
+      - name: Require corepack 0.34.5 or later
+        run: |
+          set -euo pipefail
+          C="$(corepack --version)"
+          if ! node -e 'const [a, b] = process.argv.slice(1).map(v => v.split(".").map(Number)); process.exit((a[0] - b[0] || a[1] - b[1] || a[2] - b[2]) < 0 ? 1 : 0)' "$C" 0.34.5; then
+            npm install --prefix "$RUNNER_TEMP/corepack" corepack@0.35.0
+            echo "$RUNNER_TEMP/corepack/node_modules/.bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Write the upstream pins fragment through the generator
+        run: |
+          set -euo pipefail
+          mkdir -p generated
+          node --input-type=module -e "import { resolveConfig, emitUpstreamPins } from './scripts/generate.mjs'; import { writeFileSync } from 'node:fs'; const { config } = resolveConfig('./configuration.toml'); writeFileSync('generated/upstream-pins.env', emitUpstreamPins(config, 'release'));"
+
+      - name: Build Orca from source at the pin (orcad, web client)
+        run: |
+          set -euo pipefail
+          bash scripts/fetch-orca.sh
+          bash scripts/build-orca.sh
+
+      # The hosted Orca artifact layout: package.json, out/orcad and out/web (the packaged root, checked against the
+      # built tree and the prebuild manifest before anything else is added), then the manifest copy, BUILD_ROOT and
+      # SHA256SUMS. macOS has no sha256sum and no xargs -d; shasum -a 256 writes the same line format.
+      - name: Stage the Orca tree in the hosted artifact layout, check it, then write BUILD_ROOT and SHA256SUMS
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/macos-orca-x64"
+          rm -rf "$OUT"
+          mkdir -p "$OUT/out"
+          test -f orca/out/orcad/orcad.js || { echo "::error::orca/out/orcad/orcad.js is absent after build-orca.sh; nothing is staged" >&2; exit 1; }
+          cp -a orca/package.json "$OUT/package.json"
+          cp -a orca/out/orcad orca/out/web "$OUT/out/"
+          node scripts/verify-orca-packaged-tree.mjs --target macos-x64 --stage "$OUT" --prebuild-manifest orca/out/orcad-prebuilds/manifest.json
+          cp orca/out/orcad-prebuilds/manifest.json "$OUT/orcad-prebuilds-manifest.json"
+          printf '%s\n' "$GITHUB_WORKSPACE" > "$OUT/BUILD_ROOT"
+          (cd "$OUT" && find . -type f ! -path ./SHA256SUMS -print | sed 's|^\./||' | LC_ALL=C sort | while IFS= read -r f; do shasum -a 256 "$f"; done > SHA256SUMS)
+
+      - name: Record the SHA256SUMS digest outside the artifact
+        id: sums
+        run: |
+          set -euo pipefail
+          SUMS="$(shasum -a 256 "$RUNNER_TEMP/macos-orca-x64/SHA256SUMS" | cut -d' ' -f1)"
+          [[ "$SUMS" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::shasum printed no SHA-256 for SHA256SUMS ('$SUMS')" >&2; exit 1; }
+          echo "sha256=$SUMS" >> "$GITHUB_OUTPUT"
+          echo "macos-orca-x64 SHA256SUMS sha256 $SUMS"
+
+      - name: Upload the macOS x64 Orca tree (data for macos-orca-universal, admitted there by the digest output)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-orca-x64
+          path: ${{ runner.temp }}/macos-orca-x64/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  # Phase 68 (P68-31): one universal <GreD>/orca from the two thin trees. It admits each with check-win-sidecar.sh
+  # check against the digest its producing job recorded, merges them with package-macos.sh orca-universal (the pair
+  # map is derived from Orca's own artifact tables, so orca/ is fetched for its source only), purges both hosted build
+  # roots, and runs orca-packaged-tree and package-target-natives over the merge. Nothing consumes it yet: the macOS
+  # bundle job is plan 55-03 Task 2. No secret, no environment, no upload.
+  macos-orca-universal:
+    needs: [macos-orca-arm64, macos-orca-x64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      RELEASE_SHA: ${{ inputs.sha }}
+      ARM_SUMS: ${{ needs.macos-orca-arm64.outputs.sums_sha256 }}
+      X64_SUMS: ${{ needs.macos-orca-x64.outputs.sums_sha256 }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Refuse any ref but main and any event but a dispatch
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF" = "refs/heads/main" ] \
+            || { echo "::error::the release runs only from a workflow_dispatch on refs/heads/main (event $GITHUB_EVENT_NAME, ref $GITHUB_REF)" >&2; exit 1; }
+
+      - name: Require a full 40-hex commit SHA
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a full 40-character lowercase commit SHA" >&2; exit 1; }
+
+      - name: Check out the requested commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+
+      # orca-artifacts.mjs imports Orca's TypeScript tables by type stripping, which needs Node 24.
+      - name: Read the linux-x64 Node version from node-runtime.json
+        id: node_pin
+        run: |
+          set -euo pipefail
+          V="$(node -p 'require("./powerbrowser/packaging/node-runtime.json")["linux-x64"].version')"
+          [[ "$V" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::the linux-x64 version in node-runtime.json is not v<major>.<minor>.<patch> ('$V')" >&2; exit 1; }
+          echo "version=${V#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up the pinned Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ steps.node_pin.outputs.version }}
+          package-manager-cache: false
+
+      - name: Fetch Orca's source at the pin (its artifact tables only; nothing is built)
+        run: |
+          set -euo pipefail
+          mkdir -p generated
+          node --input-type=module -e "import { resolveConfig, emitUpstreamPins } from './scripts/generate.mjs'; import { writeFileSync } from 'node:fs'; const { config } = resolveConfig('./configuration.toml'); writeFileSync('generated/upstream-pins.env', emitUpstreamPins(config, 'release'));"
+          bash scripts/fetch-orca.sh
+
+      # The image carries versioned LLVM toolchains; llvm is installed only when no llvm-lipo is found.
+      - name: Put llvm-lipo on PATH
+        run: |
+          set -euo pipefail
+          if ! command -v llvm-lipo >/dev/null; then
+            L="$(ls -1 /usr/lib/llvm-*/bin/llvm-lipo 2>/dev/null | sort -V | tail -n 1 || true)"
+            if [ -z "$L" ]; then
+              sudo apt-get update
+              sudo apt-get install -y llvm
+              L="$(command -v llvm-lipo || ls -1 /usr/lib/llvm-*/bin/llvm-lipo 2>/dev/null | sort -V | tail -n 1 || true)"
+            fi
+            [ -n "$L" ] || { echo "::error::no llvm-lipo after installing llvm; nothing is merged" >&2; exit 1; }
+            dirname "$L" >> "$GITHUB_PATH"
+          fi
+
+      - name: Download the macOS arm64 Orca tree (data, admitted below)
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-orca-arm64
+          path: macos-orca-arm64
+
+      - name: Download the macOS x64 Orca tree (data, admitted below)
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-orca-x64
+          path: macos-orca-x64
+
+      - name: Admit both thin trees against their producing jobs' digests
+        run: |
+          set -euo pipefail
+          bash powerbrowser/packaging/check-win-sidecar.sh check macos-orca-arm64 "$ARM_SUMS"
+          bash powerbrowser/packaging/check-win-sidecar.sh check macos-orca-x64 "$X64_SUMS"
+
+      - name: Merge the universal Orca tree, purge both build roots, and check it
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/orca-universal"
+          LIPO=llvm-lipo bash powerbrowser/packaging/package-macos.sh orca-universal macos-orca-arm64 macos-orca-x64 "$OUT"
+          bash powerbrowser/packaging/check-win-sidecar.sh purge macos-orca-arm64 "$OUT"
+          bash powerbrowser/packaging/check-win-sidecar.sh purge macos-orca-x64 "$OUT"
+          node scripts/verify-orca-packaged-tree.mjs --target macos --built macos-orca-arm64 --also-built macos-orca-x64 --stage "$OUT"
+          node scripts/verify-package-target-natives.mjs --target macos --stage "$OUT"

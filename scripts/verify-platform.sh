@@ -3893,6 +3893,10 @@ run_own_checks() {
     # node-pty slot from Orca's prebuild manifest (one slot, the target's platform and arch, equal sha256 set). The
     # self-test plants a missing file, an extra file, node.exe, a slot marker, Electron, foreign and merged slots.
     "orca-packaged-tree-self-test|node $REPO_ROOT/scripts/verify-orca-packaged-tree.mjs --self-test"
+    # build-orca.sh runs on every target's own runner: objdump only on Linux, no find -printf, the one pins path (P68-30).
+    "build-orca-portable-self-test|node $REPO_ROOT/scripts/verify-build-orca-portable.mjs --self-test"
+    # The macOS Orca merge plan from Orca's own tables: unpaired arch-named file, differing file, zero-pair table (P68-31).
+    "orca-macos-merge-self-test|node $REPO_ROOT/scripts/lib/orca-artifacts.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"

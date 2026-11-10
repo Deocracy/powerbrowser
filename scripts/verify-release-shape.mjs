@@ -60,6 +60,16 @@
 //                verify-licence-allowlist.mjs --rulings precedes it (P68-21: no release while an Orca licence
 //                ruling is pending); the packaging step passes -e PB_HOST_ROOT into the container, so
 //                package-linux.sh's checkout-path grep searches the host build root, never /src (P68-29).
+// 13. macos-orca The hosted Orca jobs macos-orca-arm64 and macos-orca-x64 exist as two named jobs with no strategy
+//                key (each needs its own digest), each exposes outputs.sums_sha256 from its sums step, and
+//                macos-orca-universal needs exactly those two. Every macos-orca-* job has permissions exactly
+//                {contents: read}, no environment, no secrets reference, no continue-on-error at job or step
+//                level, and checks out with persist-credentials: false (P68-04, P68-31, T-68-02).
+// 14. linux-independence  No Linux-path job needs a hosted Orca job (windows-orca or any macos-orca-*), directly or
+//                transitively. A Linux-path job is every job whose name neither contains "windows" (the Windows
+//                chain, build-windows, sign-windows and publish-windows included, which may wait on windows-orca)
+//                nor starts with "macos-"; derived from the parsed needs graph, so it holds with or without lane
+//                p68-10's windows-orca in the file (P68-03; Windows signing never blocks Linux).
 //
 // Instrument: js-yaml from theia/ through createRequire, the same loader as the
 // workflows row. A missing js-yaml, an unreadable file and a parse error are FAILs.
@@ -559,6 +569,45 @@ function runChecks(root, overrides = {}) {
         fail(BUILD_JOB, 'orca-steps', `packaging step does not pass -e PB_HOST_ROOT="$PWD" into the container, so package-linux.sh refuses to run (its checkout-path grep would search for nothing). Next step: add -e PB_HOST_ROOT="$PWD" to the podman run.`);
     }
 
+    // 13. macos-orca (P68-04, P68-31): two named thin jobs, one digest each, merged by the universal job.
+    const MAC_THIN = ['macos-orca-arm64', 'macos-orca-x64'];
+    const MAC_UNIVERSAL = 'macos-orca-universal';
+    for (const id of MAC_THIN) {
+        const job = wf.jobs[id];
+        if (!job) { fail(id, 'macos-orca', `is absent, so macOS ships no Orca built on its own runner. Next step: restore the ${id} job.`); continue; }
+        if (Object.hasOwn(job, 'strategy')) fail(id, 'macos-orca', `carries a strategy key (a matrix): matrix legs share one job output, so each thin tree could not carry its own sums_sha256. Next step: keep ${MAC_THIN.join(' and ')} as two named jobs.`);
+        if (!/\bsteps\.sums\.outputs\.sha256\b/.test(String(job.outputs?.sums_sha256 ?? ''))) fail(id, 'macos-orca', `exposes no outputs.sums_sha256 from its sums step, so ${MAC_UNIVERSAL} has no out-of-band digest to admit the tree against. Next step: restore outputs.sums_sha256: \${{ steps.sums.outputs.sha256 }}.`);
+    }
+    const uniNeeds = [wf.jobs[MAC_UNIVERSAL]?.needs ?? []].flat().sort();
+    if (!wf.jobs[MAC_UNIVERSAL]) fail(MAC_UNIVERSAL, 'macos-orca', `is absent, so the two thin Orca trees are never admitted and merged. Next step: restore the job.`);
+    else if (uniNeeds.join(' ') !== MAC_THIN.join(' ')) fail(MAC_UNIVERSAL, 'macos-orca', `needs ${JSON.stringify(uniNeeds)}, not exactly ${JSON.stringify(MAC_THIN)}. Next step: needs: [${MAC_THIN.join(', ')}].`);
+    for (const id of Object.keys(wf.jobs).filter(j => j.startsWith('macos-orca-'))) {
+        const job = wf.jobs[id];
+        if (Object.hasOwn(job, 'environment')) fail(id, 'macos-orca', `has an environment key; a hosted Orca job holds no environment. Next step: remove it.`);
+        if (!readOnly(job.permissions)) fail(id, 'macos-orca', `has permissions ${JSON.stringify(job.permissions ?? null)}, not exactly {contents: read}. Next step: set contents: read.`);
+        if (/\bsecrets\b/.test(JSON.stringify(job))) fail(id, 'macos-orca', `reaches a secrets reference; a hosted Orca job holds no secret. Next step: remove it.`);
+        if (Object.hasOwn(job, 'continue-on-error') || stepsOf(job).some(st => Object.hasOwn(st, 'continue-on-error'))) fail(id, 'macos-orca', `carries continue-on-error, so a failed build or check would pass. Next step: remove it.`);
+        for (const st of stepsOf(job).filter(st => /^actions\/checkout@/.test(String(st.uses ?? '')))) {
+            if (st.with?.['persist-credentials'] !== false) fail(id, 'macos-orca', `checks out without persist-credentials: false, so the token stays on disk for the Orca build. Next step: set it.`);
+        }
+    }
+
+    // 14. linux-independence (P68-03): the Linux path never waits on a hosted Orca job, through any chain of needs.
+    const needsOf = id => [wf.jobs[id]?.needs ?? []].flat().map(String);
+    const hostedOrca = id => id === 'windows-orca' || id.startsWith('macos-orca-');
+    for (const id of Object.keys(wf.jobs).filter(j => !j.includes('windows') && !j.startsWith('macos-'))) {
+        const seen = new Set();
+        const stack = needsOf(id);
+        while (stack.length) {
+            const n = stack.pop();
+            if (seen.has(n)) continue;
+            seen.add(n);
+            stack.push(...needsOf(n));
+        }
+        const hits = [...seen].filter(hostedOrca).sort();
+        if (hits.length) fail(id, 'linux-independence', `is on the Linux path and needs the hosted Orca job(s) ${hits.join(', ')}, directly or transitively, so a hosted runner failure would stop the Linux release. Next step: remove them from its needs; the Linux package builds its own Orca.`);
+    }
+
     const key = f => [f.file, f.job, f.rule, f.msg];
     failures.sort((a, b) => {
         const ka = key(a), kb = key(b);
@@ -668,6 +717,12 @@ function selfTest() {
         ['packaged step drops orca-packaged-tree', edit('for LABEL in ng063-packaged-launch portable-elf sidecar-no-symlinks package-target-natives packaged-identity install-matrix orca-packaged-tree; do', 'for LABEL in ng063-packaged-launch portable-elf sidecar-no-symlinks package-target-natives packaged-identity install-matrix; do'), 'packaged-rows', 'does not run orca-packaged-tree'],
         ['PB_HOST_ROOT absent from the packaging step', edit(' -e PB_HOST_ROOT="$PWD" -w /src pb-gecko-build bash powerbrowser/packaging/package-linux.sh', ' -w /src pb-gecko-build bash powerbrowser/packaging/package-linux.sh'), 'orca-steps', 'PB_HOST_ROOT'],
         ['Orca build after packaging', edit('          nix develop .#orca --command bash scripts/build-orca.sh\n', '          true\n').replace('      # G-49b (ROADMAP Phase 49 criterion 2)', "      - name: Probe\n        if: steps.key_gate.outputs.build == 'true'\n        run: nix develop .#orca --command bash scripts/build-orca.sh\n\n      # G-49b (ROADMAP Phase 49 criterion 2)"), 'orca-steps', 'after the packaging step'],
+        ['matrix on a macOS thin job', editIn('macos-orca-arm64', '    runs-on: macos-15\n', '    runs-on: macos-15\n    strategy:\n      matrix:\n        arch: [arm64, x64]\n'), 'macos-orca', 'strategy key'],
+        ['macOS thin job without its digest output', editIn('macos-orca-x64', '      sums_sha256: ${{ steps.sums.outputs.sha256 }}\n', '      sums_sha256: probe\n'), 'macos-orca', 'outputs.sums_sha256'],
+        ['macOS Orca job with continue-on-error', editIn('macos-orca-universal', '    timeout-minutes: 30\n', '    timeout-minutes: 30\n    continue-on-error: true\n'), 'macos-orca', 'continue-on-error'],
+        ['macOS Orca job reaching a secret', editIn('macos-orca-arm64', '      RELEASE_SHA: ${{ inputs.sha }}\n', '      RELEASE_SHA: ${{ inputs.sha }}\n      PROBE: ${{ secrets.PROBE }}\n'), 'macos-orca', 'secrets reference'],
+        ['build-linux needs windows-orca', edit(RUNS_ON, `${RUNS_ON}    needs: windows-orca\n`), 'linux-independence', 'windows-orca'],
+        ['sign-publish needs macos-orca-universal (transitive to the thin jobs)', editIn(SIGN_JOB, '    needs: build-linux\n', '    needs: [build-linux, macos-orca-universal]\n'), 'linux-independence', 'macos-orca-arm64, macos-orca-universal, macos-orca-x64'],
         ['rulings guard removed', edit('nix develop .#theia --command node scripts/verify-licence-allowlist.mjs --rulings', 'true'), 'orca-steps', '--rulings'],
         ['packaged-rows step removed', edit('nix develop .#theia --command scripts/verify-platform.sh --only "$LABEL"', 'true "$LABEL"'), 'packaged-rows', 'runs no scripts/verify-platform.sh --only step'],
         ['packaged-rows step after the first upload', edit('      # G-49b (ROADMAP Phase 49 criterion 2)', "      - name: Probe\n        if: steps.key_gate.outputs.build == 'true'\n        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # probe\n        with:\n          name: probe\n          path: probe\n          retention-days: 1\n\n      # G-49b (ROADMAP Phase 49 criterion 2)"), 'packaged-rows', 'does not sit between'],
