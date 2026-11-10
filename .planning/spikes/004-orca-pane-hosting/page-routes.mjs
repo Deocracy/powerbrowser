@@ -565,10 +565,25 @@ async function cssAfter(ctx, h) {
         changed: computed.slice(0, 30),
     };
 
-    // Leak in: the pane's computed styles against the same pane on a standalone page.
+    // Leak in: the pane's computed styles against the same pane on a standalone page. The first
+    // pane is shown again first: a hidden dock tab is display:none, and a document inside a
+    // display:none iframe reports empty computed styles (the first full Route B run read 144 blanks).
+    if (args.route !== 'b-prime') {
+        await probe(app, `const w = window.__pbHost.widgets[${J(ctx.pick.tabId)}] || window.__pbHost.widgets.first; get('ApplicationShell').activateWidget(w.id); await sleep(1500); return w.isVisible;`);
+    }
     const evalPane = await ctx.paneEval(ctx.pick.tabId);
     await evalPane(`(() => { ${CSS_HELPERS} return true; })()`);
     const inRoute = JSON.parse(await evalPane(paneStyles(ctx.pick.tabId)));
+    const paneBox = JSON.parse(await evalPane(readPane(ctx.pick.tabId)));
+    if (paneBox.w === 0 || paneBox.h === 0 || Object.values(inRoute).every(value => value === '')) {
+        // Route B, both full runs: the pane iframe has no layout box (0 x 0) in the headless dock,
+        // so its document reports empty computed styles. Recorded as not measured, never as zero
+        // differences; the run stays red on this sub-check.
+        result.cssLeakIn = { measured: false, reason: `the pane has no layout box (${paneBox.w} x ${paneBox.h}); its computed styles read empty`,
+            comparedProperties: Object.keys(inRoute).length };
+        ctx.deferred.push('css-leak-in: not measurable, the pane has no layout box in this route');
+        return;
+    }
     await openWebTab(app, stack.paneUrl({ tab: ctx.pick.tabId }));
     const reference = await paneContext(ctx, ctx.pick.tabId, { top: true, not: ctx.firstPane });
     const evalRef = expr => app.evaluateIn(reference.context, expr);
@@ -606,7 +621,7 @@ async function procInfo(ctx, label) {
 }
 
 function memorySummary(ctx, samples) {
-    const [m0, m1, , m3] = samples.map(sample => sample.relevantBytes);
+    const [m0, m1, m2, m3] = samples.map(sample => sample.relevantBytes);
     ctx.result.memory = {
         method: 'ChromeUtils.requestProcInfo() through app.evaluateIn(app.chrome, ...), 5 s after each pane settled; sum of the parent and the children whose windows are on the Theia or orcad origin',
         samples,
@@ -614,6 +629,8 @@ function memorySummary(ctx, samples) {
         totalDeltaBytes: m3 - m0,
         perPaneDeltaBytes: Math.round((m3 - m0) / 3),
         laterPaneDeltaBytes: Math.round((m3 - m1) / 2),
+        // The third pane alone: no one-time cost (bundle load, observer start) is left in it.
+        lastPaneDeltaBytes: m3 - m2,
         totalAllProcessesDeltaBytes: samples[3].totalBytes - samples[0].totalBytes,
         notMeasured: 'the Theia backend (Node) and orcad are not Gecko processes and are outside this number',
     };
@@ -626,7 +643,7 @@ export async function runRoute(stack, args, result, h) {
     const route = ROUTES[args.route];
     const want = name => args.measure === name || args.measure === 'all';
     await withProbeShell(async app => {
-        const ctx = { app, stack, args, result, route };
+        const ctx = { app, stack, args, result, route, deferred: [] };
         result.theiaBuild = process.env.PB_BACKEND_MAIN ?? '(coordinating workspace)';
         result.theiaOrigin = (await app.evaluate('location.origin')).replace(/:\d+$/, ':<port>');
         ctx.theiaOrigin = await app.evaluate('location.origin');
@@ -638,7 +655,6 @@ export async function runRoute(stack, args, result, h) {
         await route.mount(ctx);
         await waitForMarker(ctx, h);
         if (mem) samples.push(await mem.procInfo(ctx, 'after pane 1'));
-        if (css) await css.cssAfter(ctx, h);
         if (want('observe') || mem) {
             await measureObserve(ctx, h);
             if (mem) {
@@ -650,7 +666,12 @@ export async function runRoute(stack, args, result, h) {
                 samples.push(await mem.procInfo(ctx, 'after pane 3'));
                 mem.memorySummary(ctx, samples);
             }
-            if (want('observe')) await measureObserveExtras(ctx, h);
         }
+        // After the memory samples: the leak-in reference opens one more pane page, which would
+        // otherwise be counted as pane memory (it was, in the first full Route A run).
+        if (css) await css.cssAfter(ctx, h);
+        if (want('observe')) await measureObserveExtras(ctx, h);
+        // A sub-check that could not be measured does not hide the others, and is still a FAIL.
+        h.failIf(ctx.deferred.length > 0, ctx.deferred[0]?.split(':')[0] ?? '', ctx.deferred.map(text => text.split(': ').slice(1).join(': ')).join('; '));
     });
 }
