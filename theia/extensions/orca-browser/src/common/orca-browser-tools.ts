@@ -6,7 +6,7 @@
  * "User-facing tools", rows U-01..U-30). Each row maps to exactly one of:
  * - { command }: a Theia command id registered by a PB extension;
  * - { render }: a render method of the chrome bar widget, called in its render tree;
- * - { kind }: a web-tab message kind classified in scripts/verify-web-tab-bridge.mjs;
+ * - { webTabKind }: a web-tab message kind (not `kind:`, which verify-web-tab-bridge.mjs reads as a sender) classified in scripts/verify-web-tab-bridge.mjs;
  * - { skip }: the spike's reason the tool has no PB counterpart;
  * - { deferred }: the v2 requirement id in REQUIREMENTS.md that carries it.
  * orca-browser-tools compares the U-row set with this record's keys both ways and
@@ -18,7 +18,7 @@
 export type OrcaBrowserToolHome =
     | { readonly command: string }
     | { readonly render: string }
-    | { readonly kind: string }
+    | { readonly webTabKind: string }
     | { readonly skip: string }
     | { readonly deferred: string };
 
@@ -46,21 +46,21 @@ export const ORCA_BROWSER_TOOLS: Readonly<Record<string, OrcaBrowserToolHome>> =
     // Spike: native, webTabDownloads*.
     'U-13': { command: 'powerbrowser.chrome-bar.downloads' },
     // Spike: native; a page's new window lands as a web tab through the adopt ack (PROMPT-05).
-    'U-14': { kind: 'webTabAdopt' },
+    'U-14': { webTabKind: 'webTabAdopt' },
     // Spike: native; Gecko's own page prompt in the overlay browser webTabOpen creates (agent side dialogAccept/dialogDismiss).
-    'U-15': { kind: 'webTabOpen' },
+    'U-15': { webTabKind: 'webTabOpen' },
     // Spike: native; Gecko's certificate error page in the overlay, the certificate block of the site panel.
-    'U-16': { kind: 'webTabSiteInfo' },
+    'U-16': { webTabKind: 'webTabSiteInfo' },
     // Spike: native, webTabPermission*, webTabSiteInfo.
-    'U-17': { kind: 'webTabSetPermission' },
+    'U-17': { webTabKind: 'webTabSetPermission' },
     // Spike: native, PB's page context menu.
-    'U-18': { kind: 'webTabContextMenuAction' },
+    'U-18': { webTabKind: 'webTabContextMenuAction' },
     'U-19': { skip: 'one PowerBrowser profile in v1.7' },
     'U-20': { skip: "anti-feature; Firefox's own import covers it" },
     'U-21': { skip: 'PowerBrowser has its own extension track' },
     'U-22': { skip: 'tier 2 at the earliest' },
     // Spike: native; Orca-originated links open as PB web tabs through the client host (Q6), which opens them with webTabOpen.
-    'U-23': { kind: 'webTabOpen' },
+    'U-23': { webTabKind: 'webTabOpen' },
     'U-24': { skip: 'anti-feature' },
     'U-25': { skip: 'PowerBrowser has its own egress allow-list' },
     'U-26': { skip: 'later; Theia previews local files' },

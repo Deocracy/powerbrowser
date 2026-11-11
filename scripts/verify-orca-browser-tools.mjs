@@ -44,7 +44,7 @@ export const REL = {
     requirements: '.planning/workstreams/orca/REQUIREMENTS.md',
     extensions: 'theia/extensions',
 };
-export const SHAPES = ['command', 'render', 'kind', 'skip', 'deferred'];
+export const SHAPES = ['command', 'render', 'webTabKind', 'skip', 'deferred'];
 
 /** theia/node_modules/typescript, or undefined when it is not installed. */
 export function loadTypescript(root = REPO_ROOT) {
@@ -154,7 +154,7 @@ export function judge({ rows, tools, commands, renders, kinds, v2 }) {
             if (!renders.has(v)) fails.push(`render method missing: ${id} -> ${v} is not defined and called in chrome-bar-widget.tsx`);
             if (v === 'renderAgentControl') counts.mark++; else counts.contributions++;
         }
-        if (k === 'kind') { counts.contributions++; if (!kinds.has(v)) fails.push(`kind not classified: ${id} -> ${v} is not a KIND_CLASSES key`); }
+        if (k === 'webTabKind') { counts.contributions++; if (!kinds.has(v)) fails.push(`kind not classified: ${id} -> ${v} is not a KIND_CLASSES key`); }
         if (k === 'deferred') { counts.deferrals++; if (!v2.has(v)) fails.push(`deferral to unknown id: ${id} -> ${v} is not a v2 requirement`); }
         if (k === 'skip') { counts.skips++; if (typeof v !== 'string' || !v.trim()) fails.push(`empty skip reason: ${id}`); }
     }
@@ -191,7 +191,7 @@ export function gather(ts, root = REPO_ROOT) {
 
 const FIX = {
     readme: '| ID | Tool | PB | Note |\n|---|---|---|---|\n| U-01 | Address | chrome bar | x |\n| U-02 | Mark | chrome bar | x |\n| U-03 | Popups | native | x |\n| U-04 | Grab | panel | x |\n| U-05 | Profiles | skip | x |\n',
-    tools: "export const ORCA_BROWSER_TOOLS = Object.freeze({ 'U-01': { command: 'pb.focus' }, 'U-02': { render: 'renderAgentControl' }, 'U-03': { kind: 'webTabAdopt' }, 'U-04': { deferred: 'BRW-06' }, 'U-05': { skip: 'one profile' } });\n",
+    tools: "export const ORCA_BROWSER_TOOLS = Object.freeze({ 'U-01': { command: 'pb.focus' }, 'U-02': { render: 'renderAgentControl' }, 'U-03': { webTabKind: 'webTabAdopt' }, 'U-04': { deferred: 'BRW-06' }, 'U-05': { skip: 'one profile' } });\n",
     commands: "export const FOCUS_ID = 'pb.focus';\nexport const FOCUS: Command = { id: FOCUS_ID, label: 'Focus' };\nclass C { registerCommands(c) { c.registerCommand(FOCUS, { execute: () => 1 }); } }\n",
     widget: 'class W {\n    protected renderAgentControl(): React.ReactNode { return 1; }\n    protected render(): React.ReactNode { return this.renderAgentControl(); }\n}\n',
     bridge: "const KIND_CLASSES = new Map([\n    ['webTabOpen', 'tab-lifecycle'],\n    ['webTabAdopt', 'tab-lifecycle'],\n]);\n",
