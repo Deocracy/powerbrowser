@@ -70,6 +70,8 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
   so those features keep working.
 - **D-09 — Keys:** inside an Orca tab, Orca's terminal gets Ctrl+W, Ctrl+T, Ctrl+Tab and
   Ctrl+PageUp/PageDown (a per-tab key policy). PB's tab shortcuts work everywhere else.
+  *(Superseded by D-32, 2026-11-10: in Orca and Theia terminals only Ctrl+W and Ctrl+T go to the
+  shell; Ctrl+Tab and Ctrl+PageUp/PageDown always switch PowerBrowser tabs.)*
 - **D-10 — Hidden Electron is prevented:** PB's orcad must never find and launch an
   installed Orca desktop as a hidden browser engine.
 - **D-11 — No Remote Agent in shipped PB:** WebDriver BiDi is only for tests and the spike.
@@ -203,13 +205,27 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
     provider offer in D-27, and spike item 4 below. D-07's rule stands with a new mechanism: Orca's
     terminal daemon is used, and `OrcaService` ends orcad, the daemon and the daemon's descendants
     on quit (RUN-05; Phase 62's live check ended a 5-process tree including an agent). D-09 (keys)
-    and D-13 (status hooks) apply unchanged to Orca terminal tabs.
+    and D-13 (status hooks) apply unchanged to Orca terminal tabs. *(D-09 superseded by D-32.)*
   - **TERM-03 deferred.** Remote (SSH and paired-server) terminals stay unavailable at this Orca
     version: Phase 64 research measured that headless orcad at 1.4.248 has no SSH stack and no
     paired-server relay; only Electron main has them (`main/startup/main-process-runtime-launch.ts:122`,
     64-RESEARCH A1; 63-RESEARCH finding 1). TERM-03 moves to the v2 requirements and is re-examined
     at a future re-pin whose orcad serves remote terminals. This closes P63-24's open owner item.
     D-20 is held in abeyance until then.
+
+## Terminal keys (2026-11-10)
+
+- **D-32 — Shell keys in terminals.** Chris, 2026-11-10, answering "Terminal keys (TERM-04)": he
+  chose "Shell keys in terminals".
+  - In Orca terminals and Theia terminals, Ctrl+W and Ctrl+T go to the shell, as in a normal
+    terminal.
+  - Ctrl+Tab and Ctrl+PageUp/PageDown always switch PowerBrowser tabs, from terminals too.
+  - Orca's window shortcuts are turned off inside hosted Orca terminals.
+  - A tab is closed with the mouse or Ctrl+Shift+W.
+  - Supersedes D-09 and D-31's "D-09 (keys) ... apply unchanged to Orca terminal tabs". Answers the
+    TERM-04 owner decision 64-05 recorded: Orca's `TerminalPane` shortcuts took Ctrl+W and Ctrl+Tab
+    before the PTY, while Theia `t<n>` terminals already passed Ctrl+W and Ctrl+T to the shell.
+    TERM-04 is restated to this rule. Mechanism: gap-closure plan 64-06.
 
 ## Spikes this direction needs
 

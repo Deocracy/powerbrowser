@@ -70,9 +70,10 @@ Orca terminals and Theia terminals are two kinds, side by side (D-31, Chris 2026
 - [x] **TERM-02**: Agent sessions Orca starts run in Orca terminals with Orca's `ORCA_*` hook
   environment, so agent status hooks report working, waiting and done, and every agent and Orca's
   terminal daemon end when PowerBrowser quits. (D-06, D-07, D-13, D-31)
-- [ ] **TERM-04**: Inside an Orca terminal tab, Ctrl+W, Ctrl+T, Ctrl+Tab and
-  Ctrl+PageUp/PageDown go to the terminal; PowerBrowser's tab shortcuts work everywhere else,
-  including in Theia terminals. (D-09, D-31)
+- [ ] **TERM-04**: In Orca terminal tabs and Theia terminals, Ctrl+W and Ctrl+T go to the shell, as
+  in a normal terminal. Ctrl+Tab and Ctrl+PageUp/PageDown always switch PowerBrowser tabs, from
+  terminals too. Orca's window shortcuts are turned off inside hosted Orca terminals. A tab is
+  closed with the mouse or Ctrl+Shift+W. (D-31, D-32)
 
 TERM-03 (remote terminals) moved to v2; see "Terminals (TERM)" under v2 Requirements.
 
@@ -222,7 +223,7 @@ Filled by the roadmap.
 | OVL-06 | Phase 68 | Pending |
 | TERM-01 | Phase 64 | Pending: orca-tabs-live stage (a) terminal-user did not PASS on the merged tree (New Orca Terminal finds no worktree while no hosted pane exists: the C9 first-worktree fallback reads the pane list, lane p64-02 owner item); stages (b)-(e) PASS; re-run in the end-of-milestone pass |
 | TERM-02 | Phase 63 | Complete |
-| TERM-04 | Phase 64 | Pending: orca-terminal-keys-live stage 2 did not PASS on the merged tree (ctrl+w and ctrl+tab do not reach the PTY of a hosted Orca terminal: Orca's own TerminalPane window-capture shortcuts take them; owner decision under D-09); orca-terminal-keys PASS; re-run in the end-of-milestone pass |
+| TERM-04 | Phase 64 | Pending: owner decision D-32 recorded 2026-11-10 (requirement restated); gap-closure plan 64-06 implements it and re-runs orca-terminal-keys and orca-terminal-keys-live |
 | TAB-01 | Phase 64 | Complete |
 | TAB-02 | Phase 64 | Complete |
 | TAB-03 | Phase 61 | Complete |
@@ -253,4 +254,4 @@ Filled by the roadmap.
 
 ---
 *Requirements defined: 2026-11-04*
-*Last updated: 2026-11-04 after owner decisions D-01..D-29, the adversarial ownership review and roadmap creation (phases 59-68); BEXT-01/02 added 2026-11-10 (Chris); TERM-01..04 rewritten and re-mapped, TERM-03 moved to v2, OVL-06 narrowed 2026-11-10 (D-31)*
+*Last updated: 2026-11-04 after owner decisions D-01..D-29, the adversarial ownership review and roadmap creation (phases 59-68); BEXT-01/02 added 2026-11-10 (Chris); TERM-01..04 rewritten and re-mapped, TERM-03 moved to v2, OVL-06 narrowed 2026-11-10 (D-31); TERM-04 restated 2026-11-10 (D-32)*
