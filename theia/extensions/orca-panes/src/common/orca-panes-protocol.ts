@@ -23,10 +23,15 @@ export const ORCA_PANES_STYLE = 'pb-panes.css';
 /** C6: the JSON-RPC path of the hand-off service. */
 export const ORCA_PANES_SERVICE_PATH = '/services/powerbrowser-orca-panes';
 
+import type { OfferHandOff } from '../node/offer-file-policy';
+
 export const OrcaPanesService = Symbol('OrcaPanesService');
 export interface OrcaPanesService {
-    /** The pairing offer orcad issued at its current start, or undefined until both bridge files are readable and private. Never logged. */
-    handOff(): Promise<{ pairing: string } | undefined>;
+    /**
+     * The pairing offer orcad issued at its current start, undefined until both bridge files are written, or
+     * { refused: <reason code> } when the offer file is not private or not loopback (P67-09). Never logged.
+     */
+    handOff(): Promise<OfferHandOff>;
 }
 
 /** C2: the Symbol.for key under which orca-panes hands Theia's React to the bundle (P64-08). */

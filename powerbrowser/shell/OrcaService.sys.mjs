@@ -729,6 +729,16 @@ export const OrcaService = {
     return true;
   },
 
+  /** Phase 67 (P67-36, 67-03 ruling): the frontend's browser host attached; clears only a held browser-host reason. */
+  browserHostAttached() {
+    if (this._clientReason !== OrcaEnv.ORCA_BROWSER_HOST_REASON) {
+      return false;
+    }
+    this._clientReason = null;
+    this._pushLog("Orca browser host attached.");
+    return true;
+  },
+
   getRecentLog() {
     return this._log.slice();
   },

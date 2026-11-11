@@ -136,7 +136,7 @@ function failureOf(err: unknown, file: string): string {
 }
 
 @injectable()
-export class OrcaPanesServiceImpl implements BackendApplicationContribution {
+export class OrcaPanesServiceImpl implements OrcaPanesService, BackendApplicationContribution {
 
     protected readonly bridgeDir = POWERBROWSER_ENV.POWERBROWSER_ORCA_BRIDGE_DIR;
     protected readonly logged = new Set<string>();
@@ -150,7 +150,7 @@ export class OrcaPanesServiceImpl implements BackendApplicationContribution {
         }
     }
 
-    /** OrcaPanesService.handOff (64 C6) with P67-09's refusal; not declared through OrcaPanesService, whose type has no refusal. */
+    /** OrcaPanesService.handOff (64 C6) with P67-09's refusal. */
     async handOff(): Promise<OfferHandOff> {
         if (!this.bridgeDir) {
             this.logOnce('no bridge folder; Orca panes are not offered');

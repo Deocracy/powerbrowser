@@ -83,7 +83,7 @@ export class OrcaPaneBundle implements FrontendApplicationContribution {
     protected async waitForPairing(): Promise<{ pairing: string }> {
         for (let wait = 1000; ; wait = Math.min(wait * 2, 5000)) {
             const offer = await this.service.handOff().catch(() => undefined);
-            if (offer?.pairing) {
+            if (offer && 'pairing' in offer && offer.pairing) {
                 return { pairing: offer.pairing };
             }
             await delay(wait);

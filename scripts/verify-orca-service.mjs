@@ -96,6 +96,10 @@
 //     PowerBrowserAPI.sys.mjs spreads OrcaEnv.orcaStatusReply(OrcaService.getState()) and
 //     names no other getState field, and orcaStatusReply over a full state has exactly the
 //     keys state and failureClass.
+//     Scenario M (67-06, the 67-03 merge note): after the browser-host reason is held,
+//     browserHostAttached() answers true and leaves failureClass null with no "Orca
+//     browser host" row; a held pairing-lost reason ('unauthorized', a row only in chrome)
+//     keeps its "Orca pairing failure" row.
 //     Scenario K (restart, plan 67-01's H): restart() in ready and in starting answers
 //     false and spawns nothing; in failed (D's busy port) it answers true and spawns
 //     exactly once more.
@@ -666,6 +670,14 @@ async function scenarioG(paths, env) {
     if (svc3.getState().failureClass !== 'browser-not-attached') fails.push(`scenario G: a held browser-host reason reads failureClass ${JSON.stringify(svc3.getState().failureClass)}, not browser-not-attached`);
     if (rowValue(svc3, 'Orca browser host') !== env.ORCA_BROWSER_HOST_REASON) fails.push('scenario G: no "Orca browser host" row reads the browser-host reason');
     if (rowValue(svc3, 'Orca restart count') !== 0) fails.push('scenario G: no "Orca restart count" row');
+    // Scenario M (67-06, the 67-03 merge note, P67-36): the clearing form. browserHostAttached() clears a held
+    // browser-host reason and its row; a held pairing-lost client reason is never cleared by it.
+    if (svc3.browserHostAttached() !== true) fails.push('scenario M: browserHostAttached() did not clear a held browser-host reason');
+    if (svc3.getState().failureClass !== null) fails.push(`scenario M: after browserHostAttached() failureClass reads ${JSON.stringify(svc3.getState().failureClass)}, not null`);
+    if (rowValue(svc3, 'Orca browser host') != null) fails.push('scenario M: the "Orca browser host" row survived browserHostAttached()');
+    svc3.reportClientFailure('unauthorized');
+    svc3.browserHostAttached();
+    if (rowValue(svc3, 'Orca pairing failure') !== 'unauthorized') fails.push('scenario M: browserHostAttached() cleared a pairing-lost reason (pairing-lost reason cleared; the "Orca pairing failure" row is gone)');
 
     // An unexpected exit: the class while the supervisor starts orcad again. The second orcad never
     // reports ready, so the state is read at its spawn.
@@ -1064,6 +1076,7 @@ async function runSelfTest() {
             { name: 'pane build writes another folder', naming: 'OrcaService looks in', file: paths.panesViteConfig, edit: swap("'out/web/assets/pb-panes'", "'out/web/pb-panes'") },
             { name: 'orcaStatusReply returns a third key', naming: 'reply carries more than the class', file: paths.orcaEnv, edit: swap('  return { state: state.state, failureClass: state.failureClass };', '  return { state: state.state, failureClass: state.failureClass, port: state.port };') },
             { name: 'the orcaStatus arm spreads getState() itself', naming: 'spreads getState', file: paths.api, edit: swap('...OrcaEnv.orcaStatusReply(OrcaService.getState()) };', '...OrcaEnv.orcaStatusReply(OrcaService.getState()), ...OrcaService.getState() };') },
+            { name: 'browserHostAttached() clears any client reason', naming: 'pairing-lost reason cleared', file: paths.orcaService, edit: swap('    if (this._clientReason !== OrcaEnv.ORCA_BROWSER_HOST_REASON) {\n      return false;\n    }\n    this._clientReason = null;\n    this._pushLog("Orca browser host attached.");', '    this._clientReason = null;\n    this._pushLog("Orca browser host attached.");') },
             { name: 'restart() acts in ready', naming: 'restart outside failed', file: paths.orcaService, edit: swap('    if (this._state !== "failed" || this._shuttingDown) {', '    if (this._shuttingDown) {') },
             { name: 'the preflight moved after the spawn', naming: 'refusal after spawn', file: paths.orcaService, edit: then(swap('    if (!(await this._preflight())) {\n      return;\n    }\n    await this._reapLeftover({ includeDaemon: true });\n    await this._launch();\n', '    await this._reapLeftover({ includeDaemon: true });\n    await this._launch();\n    await this._preflight();\n')) },
             { name: "the effective root's realPath skipped", naming: 'alias not resolved', file: paths.orcaService, edit: swap('[this._dataRoot, this._effectiveRoot].flatMap(path => [path, real(path)])', '[this._dataRoot, real(this._dataRoot), this._effectiveRoot]') },

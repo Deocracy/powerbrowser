@@ -11782,7 +11782,13 @@ async function handleOrcaShellMessage(data, actorRef) {
     const { OrcaService } = ChromeUtils.importESModule(ORCA_SERVICE_MODULE);
     switch (kind) {
       case "orcaStatus": {
-        if (data.clientReason !== undefined) {
+        // P67-36, 67-03 ruling: { browserHost: "attached" } is the clearing form, sent after each successful attach.
+        if (data.browserHost !== undefined) {
+          if (data.browserHost !== "attached" || data.clientReason !== undefined) {
+            return { ok: false, reason: "validation", message: "handleShellMessage: unknown Orca browser host state" };
+          }
+          OrcaService.browserHostAttached();
+        } else if (data.clientReason !== undefined) {
           if (!OrcaEnv.isClientReason(data.clientReason)) {
             return { ok: false, reason: "validation", message: "handleShellMessage: unknown Orca client reason" };
           }
