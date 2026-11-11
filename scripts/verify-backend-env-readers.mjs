@@ -98,6 +98,10 @@ const EXPECTED_ENV_TOUCHERS = new Map([
     'theia/extensions/token-gate/src/node/powerbrowser-env.ts',
     'the capture-and-delete loop at module load -- the sole sanctioned reader; it sweeps every prefixed key out of the live environment and re-exports the captured values',
   ],
+  [
+    'theia/extensions/orca-workspace/src/node/orca-workspace-backend-module.ts',
+    'copies the environment minus every GIT_* name for the pb-orca-git git child (T-65-05); reads no prefixed key',
+  ],
 ]);
 
 // Any member or index access on the Node process environment object.
