@@ -6,7 +6,11 @@
 // the chrome-side bridge, never through a debugging port, so every listening TCP socket of the shipped build's
 // process tree must be one PowerBrowser itself accounts for: the Theia sidecar's port, orcad's port, or the sidecar's
 // token-gated tab-store endpoint (Phase 29), whose port the backend announces in <profile>/<STORE_ACCESS_FILE_NAME>
-// (the name read from tab-store-access-protocol.ts; only the url's port is read, never the token).
+// (the name read from tab-store-access-protocol.ts; only the url's port is read, never the token), and orcad's own
+// agent-status hook listener (66-06): Orca's agent-hook server binds 127.0.0.1 on an ephemeral port and publishes it
+// in <ORCA_USER_DATA>/agent-hooks[/<dev namespace>]/endpoint.env (the directory and file names read from Orca's
+// server-runtime-env.ts and endpoint-publication.ts at the pin); only the ORCA_AGENT_HOOK_PORT line is read, never
+// the token line, and the port is accepted only when that file names it.
 //
 // One run launches the built binary twice, headless, on scratch profiles, with MOZ_PURGE_CACHES=1, the inherited
 // ORCA_* variables removed, no probe harness and no BiDi client:
@@ -127,7 +131,13 @@ export function controlVerdict(sockets, mainPid) {
 
 /** The shipped launch must show no unaccounted socket at all. */
 export function shippedVerdict(sockets) {
-    return sockets.filter(s => s.owner === 'unaccounted').map(s => `the shipped build listens on ${s.address}:${s.port}, owned by pid ${s.pid} (${s.name}), which is not a port PowerBrowser accounts for (sidecar, orcad, tab-store)`);
+    return sockets.filter(s => s.owner === 'unaccounted').map(s => `the shipped build listens on ${s.address}:${s.port}, owned by pid ${s.pid} (${s.name}), which is not a port PowerBrowser accounts for (sidecar, orcad, tab-store, orcad-agent-hooks)`);
+}
+
+/** The port line of Orca's agent-hook endpoint file text, or null; no other line (the token) is ever returned. */
+export function agentHookPortFrom(text) {
+    const port = Number(/^(?:set )?ORCA_AGENT_HOOK_PORT=(\d+)\r?$/m.exec(String(text ?? ''))?.[1]);
+    return Number.isInteger(port) && port > 0 && port < 65536 ? port : null;
 }
 
 // --- live --------------------------------------------------------------------
@@ -172,6 +182,22 @@ function storeAccessPort(profileDir) {
     } catch {
         return null;
     }
+}
+
+const HOOK_ENV_SRC = 'orca/src/main/agent-hooks/server/server-runtime-env.ts';
+const HOOK_FILE_SRC = 'orca/src/shared/agent-hook-listener/endpoint-publication.ts';
+/** orcad's agent-hook listener port from Orca's own endpoint file under the orcad data root, or null. */
+function agentHookPort(profileDir) {
+    const dirName = /join\(userDataPath, '([^']+)'\)/.exec(read(join(REPO_ROOT, HOOK_ENV_SRC)) ?? '')?.[1];
+    const fileName = /: '(endpoint\.[a-z]+)'/.exec(read(join(REPO_ROOT, HOOK_FILE_SRC)) ?? '')?.[1];
+    if (!dirName || !fileName) throw new Error(`broken instrument: the agent-hook endpoint directory or file name was not found in ${HOOK_ENV_SRC} / ${HOOK_FILE_SRC}`);
+    const dir = join(OrcaEnv.dataRootFor(profileDir), dirName);
+    const namespaced = existsSync(dir) ? readdirSync(dir, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => join(dir, d.name, fileName)) : [];
+    for (const file of [join(dir, fileName), ...namespaced]) {
+        const port = agentHookPortFrom(read(file));
+        if (port) return port;
+    }
+    return null;
 }
 
 function orcadPort(profileDir) {
@@ -229,6 +255,8 @@ async function launch(label, extraArgs, node) {
         // Listeners settle after ready (the Remote Agent binds during startup, the sidecar before its state file).
         let sockets = [];
         for (let i = 0; i < 20; i++) {
+            const hooks = agentHookPort(profileDir);
+            if (hooks) accepted['orcad-agent-hooks'] = hooks;
             sockets = treeSockets(treeProcs(mainPid), accepted);
             if (accountingVerdict(label, sockets, accepted).length === 0) break;
             await sleep(500);
@@ -270,7 +298,8 @@ async function live() {
         shippedFails.forEach(f => console.error(`  ${f}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- the control launch's Remote Agent socket was seen on the main process, and the shipped launch listens only on the sidecar's port ${shipped.accepted.sidecar}, orcad's port ${shipped.accepted.orcad} and the tab-store endpoint's port ${shipped.accepted['tab-store']} (${shipped.sockets.length} listening socket(s))`);
+    const hooks = shipped.accepted['orcad-agent-hooks'] ? `, orcad's agent-hook endpoint port ${shipped.accepted['orcad-agent-hooks']}` : '';
+    console.log(`${NAME}: PASS -- the control launch's Remote Agent socket was seen on the main process, and the shipped launch listens only on the sidecar's port ${shipped.accepted.sidecar}, orcad's port ${shipped.accepted.orcad}${hooks} and the tab-store endpoint's port ${shipped.accepted['tab-store']} (${shipped.sockets.length} listening socket(s))`);
     return 0;
 }
 
@@ -303,6 +332,14 @@ async function selfTest() {
     expect('a control with no extra socket', controlVerdict(clean, 10).fails, 'detector blind: --remote-debugging-port=0 produced no unaccounted socket');
     expect('a control whose extra socket belongs to a child process, not the main one', controlVerdict(treeSockets([base[0], { ...base[1], inodes: new Set(['100', '102']) }, base[2]], accepted), 10).fails, 'detector blind');
     expect('control: a control with the Remote Agent on the main process', controlVerdict(treeSockets(withRemote, accepted), 10).fails, null);
+    // 66-06: orcad's agent-hook listener is accepted only from Orca's endpoint file, and only its port line is read.
+    const hookAccepted = { ...accepted, 'orcad-agent-hooks': 43555 };
+    const hookTree = [base[0], base[1], { ...base[2], inodes: new Set(['101', '102']) }];
+    expect('control: orcad\'s agent-hook socket accounted when its endpoint file names the port', shippedVerdict(treeSockets(hookTree, hookAccepted)), null);
+    expect('orcad\'s agent-hook socket with no endpoint file', shippedVerdict(treeSockets(hookTree, accepted)), 'listens on 127.0.0.1:43555, owned by pid 12 (node)');
+    const endpointText = 'ORCA_AGENT_HOOK_PORT=43555\nORCA_AGENT_HOOK_TOKEN=00000000-planted\nORCA_AGENT_HOOK_ENV=production\n';
+    expect('control: the endpoint file\'s port line read', agentHookPortFrom(endpointText) === 43555 ? [] : [`read ${agentHookPortFrom(endpointText)}`], null);
+    expect('an endpoint file with no port line', agentHookPortFrom('ORCA_AGENT_HOOK_TOKEN=43555\n') === null ? ['no port'] : [], 'no port');
     const v6 = hexAddress('00000000000000000000000001000000');
     if (v6 !== '[::1]') { console.error(`${NAME} self-test: FAIL -- the IPv6 loopback decoded as ${v6}, not [::1]`); failed++; } else console.log('  ok  IPv6 loopback decodes as [::1]');
     if (failed) return 1;
