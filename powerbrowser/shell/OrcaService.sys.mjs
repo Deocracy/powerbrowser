@@ -21,7 +21,7 @@
  * still stopped through its process handle, and the daemon reap is Phase 68's.
  */
 
-const { PowerBrowserAPI, PowerBrowserProcesses } = ChromeUtils.importESModule("chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs");
+const { PowerBrowserAPI, PowerBrowserProcesses, PowerBrowserOrcaHosting } = ChromeUtils.importESModule("chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs");
 const OrcaEnv = ChromeUtils.importESModule("chrome://powerbrowser/content/OrcaEnv.sys.mjs");
 
 const RESTART_BACKOFF_INITIAL_MS = 500;
@@ -62,6 +62,11 @@ export const OrcaService = {
   _stopPromise: null,
   _failureRows: [],
   _log: [],
+  // Phase 67 (P67-02, P67-36): what failureClassOf reads beside the state and the failure rows.
+  _restarting: false,
+  _offerUnavailableReason: null,
+  _clientReason: null,
+  _restartRun: null,
 
   /**
    * Starts orcad once per browser session: resolve paths, reap a previous session, spawn, wait for the
@@ -93,11 +98,71 @@ export const OrcaService = {
       }
     }
 
+    await this._startSequence();
+  },
+
+  /** Resolve, reap, launch: start()'s sequence, which restart() runs again (P67-06). */
+  async _startSequence() {
     if (!(await this._resolve())) {
+      return;
+    }
+    if (!(await this._preflight())) {
       return;
     }
     await this._reapLeftover({ includeDaemon: true });
     await this._launch();
+  },
+
+  /**
+   * Phase 67 (RUN-09, P67-16, P67-17): refuses before anything is reaped or spawned. orcad stores
+   * sign-ins without encryption when its data root is in a temporary folder or when the plaintext
+   * override is set; PowerBrowser refuses both instead. Both roots are compared lexically and
+   * resolved, against Gecko's TmpD, the temp-folder variables and the fixed temp folders, each also
+   * resolved, so a symlink cannot hide a temporary folder. Returns false after recording the refusal.
+   */
+  async _preflight() {
+    const platform = this._bridgePlatform;
+    const real = path => PowerBrowserOrcaHosting.realPath(path);
+    const roots = [
+      PowerBrowserOrcaHosting.tempDir(),
+      ...(OrcaEnv.ORCA_TEMP_ENV_NAMES[platform] ?? []).map(name => PowerBrowserAPI.getEnv(name)),
+      ...(OrcaEnv.ORCA_FIXED_TEMP_ROOTS[platform] ?? []),
+    ]
+      .filter(root => typeof root === "string" && root !== "")
+      .flatMap(root => [root, real(root)]);
+    const paths = [this._dataRoot, this._effectiveRoot].flatMap(path => [path, real(path)]);
+    const root = OrcaEnv.tempRootOf({ paths, roots, platform });
+    if (root) {
+      return this._fail("checking for a temporary profile folder", [["Orca temporary folder", root]]);
+    }
+    const { name, value } = OrcaEnv.ORCA_PLAINTEXT_OVERRIDE;
+    const set = PowerBrowserAPI.getEnv(name);
+    if (set === value) {
+      return this._fail("checking the Orca sign-in storage setting", [["Orca setting", `${name}=${value}`]]);
+    }
+    if (set) {
+      // Orca acts on the one value only; any other is ignored there and here.
+      this._pushLog(`${name} is set to a value Orca ignores; starting Orca as usual.`);
+    }
+    return true;
+  },
+
+  /**
+   * Phase 67 (P67-06): Restart Orca from the failure page. Acts only in the failed state: clears the
+   * failure, then runs start()'s sequence again with a fresh attempt count, without waiting for it.
+   * Anywhere else it logs one line and answers false, so a working orcad is never restarted.
+   */
+  async restart() {
+    if (this._state !== "failed" || this._shuttingDown) {
+      this._pushLog(`restart ignored: Orca is ${this._state}`);
+      return false;
+    }
+    this._state = "starting";
+    this._failureRows = [];
+    this._restarting = false;
+    this._pushLog("Restart requested from the Orca failure page.");
+    this._restartRun = this._startSequence().catch(err => this.reportUnexpectedFailure(err));
+    return true;
   },
 
   /** Resolves every path and value a spawn needs. Returns false after recording the failure. */
@@ -158,7 +223,7 @@ export const OrcaService = {
     this._webClientRoot = `${orcaRoot}/out/web`;
     for (const path of [this._orcadMain, this._webClientRoot]) {
       if (!orcaRoot || !(await PowerBrowserAPI.pathExists(path))) {
-        return this._fail("finding the built Orca files", [["Orca missing path", path]]);
+        return this._fail("finding the built Orca files", [["Orca entry file", path]]);
       }
     }
     const pkg = await PowerBrowserAPI.readStateFile(`${orcaRoot}/package.json`);
@@ -374,6 +439,10 @@ export const OrcaService = {
       onOffer: value => {
         offer = value;
       },
+      // Phase 67 (P67-02): a reason code from the pinned set or null; no other pairing field.
+      onOfferUnavailable: reason => {
+        this._offerUnavailableReason = reason;
+      },
       pushLog: line => {
         stderrTail.push(line);
         if (stderrTail.length > 40) {
@@ -456,6 +525,9 @@ export const OrcaService = {
     offer = null;
     this._state = "ready";
     this._failureRows = [];
+    this._restarting = false;
+    // A new orcad start is a new pairing: a client failure reported against the old one is over.
+    this._clientReason = null;
     this._pushLog(`orcad ready on ${OrcaEnv.ORCAD_BIND_HOST}:${this._port}, pid ${this._pid}, terminal daemon pid ${this._daemonPid}.`);
     void this._supervise(proc);
     return { ok: true };
@@ -505,6 +577,7 @@ export const OrcaService = {
     }
     this._restartCount += 1;
     this._state = "starting";
+    this._restarting = true;
     this._pid = null;
     this._pidTicks = null;
     this._pushLog(`orcad exited unexpectedly; restarting (restart ${this._restartCount}).`);
@@ -622,7 +695,38 @@ export const OrcaService = {
       dataRoot: this._dataRoot,
       effectiveRoot: this._effectiveRoot,
       bridgeDir: this._bridgeDir,
+      orcaVersion: this._orcaVersion,
+      failureClass: this._failureClass(),
     };
+  },
+
+  /** Phase 67 (P67-03): the one class for the current state, through OrcaEnv. */
+  _failureClass() {
+    const row = label => (this._failureRows.find(([l]) => l === label) ?? [])[1];
+    // Shorthand on purpose: orca-failure-classes reads every "step:" property as a failed-step literal.
+    const step = row("Orca failed step");
+    return OrcaEnv.failureClassOf({
+      state: this._state,
+      restarting: this._restarting,
+      step,
+      code: row("Orca failure code"),
+      offerUnavailableReason: this._offerUnavailableReason,
+      clientReason: this._clientReason,
+    });
+  },
+
+  /**
+   * Phase 67 (P67-04, P67-36): a failure the frontend saw, from the closed set OrcaEnv.isClientReason
+   * admits. Kept for the class and the diagnostics rows until orcad's next ready line.
+   */
+  reportClientFailure(reason) {
+    if (!OrcaEnv.isClientReason(reason)) {
+      this._pushLog("A client failure with an unknown reason was ignored.");
+      return false;
+    }
+    this._clientReason = reason;
+    this._pushLog(`Orca client reported ${reason}.`);
+    return true;
   },
 
   getRecentLog() {
@@ -640,9 +744,23 @@ export const OrcaService = {
       // Null once the start resolved means no folder could be chosen; before that the row is left out.
       ["Orca bridge folder", this._bridgeDir ?? (this._dataRoot ? "not available" : null)],
       ["Orca tabs bundle", this._panesBundle],
+      // Phase 67 (P67-05, P67-36): codes only, never an offer, a device token or a credential.
+      ["Orca restart count", this._restartCount],
+      [
+        "Orca pairing failure",
+        this._offerUnavailableReason ?? (this._clientReason && this._clientReason !== OrcaEnv.ORCA_BROWSER_HOST_REASON ? this._clientReason : null),
+      ],
+      ["Orca browser host", this._clientReason === OrcaEnv.ORCA_BROWSER_HOST_REASON ? this._clientReason : null],
+      // P67-19: shared with any other headless orcad this user runs; recorded, not changed.
+      [
+        "Orca credential key folder",
+        OrcaEnv.credentialKeyFolderFor(name => PowerBrowserAPI.getEnv(name), OrcaEnv.nodePlatform(PowerBrowserProcesses.platform())),
+      ],
       ...this._failureRows,
     ];
-    return rows.filter(([, value]) => value !== null && value !== undefined && value !== "");
+    return rows
+      .filter(([, value]) => value !== null && value !== undefined && value !== "")
+      .map(([label, value]) => [label, typeof value === "string" ? OrcaEnv.redact(value) : value]);
   },
 
   /** The terminal handler for a rejection out of start(): a log line and a row, nothing on screen. */
@@ -653,6 +771,7 @@ export const OrcaService = {
   /** Records a failure as state, rows and one log line. Always returns false. */
   _fail(step, rows) {
     this._state = "failed";
+    this._restarting = false;
     this._failureRows = [["Orca failed step", step], ...rows];
     this._pushLog(`orcad not running: ${this._failureRows.map(([label, value]) => `${label}: ${value}`).join("; ")}`);
     return false;

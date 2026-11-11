@@ -301,7 +301,7 @@ let groupSenderPort = null;
 // one JSON document per profile, written atomically by the one chrome-side
 // writer. The frontend sends the whole map; the cap keeps a runaway frontend
 // from filling the disk through this channel.
-const SHELL_MESSAGE_KINDS = new Set(["shellStateLoad", "shellStateSave", "shellFlushed", "shellArmWebTabHistory", "appUpdateState", "checkForUpdates", "restartToUpdate"]);
+const SHELL_MESSAGE_KINDS = new Set(["shellStateLoad", "shellStateSave", "shellFlushed", "shellArmWebTabHistory", "appUpdateState", "checkForUpdates", "restartToUpdate", "orcaStatus", "orcaRestart", "orcaShowDiagnostics"]);
 const SHELL_STATE_FILE_NAME = "powerbrowser-shell-state.json";
 const SHELL_STATE_MAX_CHARS = 16 * 1024 * 1024;
 // NG-032/NG-033: quit flushes chrome is waiting on, flushId -> resolve.
@@ -2328,6 +2328,7 @@ export const PowerBrowserAPI = Object.freeze({
     const path = `${PowerBrowserAPI.getProfileDir()}/${SHELL_STATE_FILE_NAME}`;
     try {
       switch (kind) {
+        case "orcaStatus": case "orcaRestart": case "orcaShowDiagnostics": return handleOrcaShellMessage(data, actorRef);
         case "shellStateLoad": {
           let state = "{}";
           try {
@@ -11765,3 +11766,73 @@ function registerAgentActor() {
   });
 }
 // ---- end Orca agent bridge ----
+
+// ---- Orca hosting (Phase 67, RUN-06/RUN-09, P67-04, P67-16) ----
+// The frontend's three Orca kinds, dispatched by one case line in handleShellMessage's switch,
+// after its groupSenderIsTheia wall. OrcaService is read lazily: powerbrowser.js has already loaded it, so this
+// returns the same instance and adds no load-time import cycle. Replies carry a state and a class name
+// only; every identifier stays in the diagnostics rows.
+const ORCA_SERVICE_MODULE = "chrome://powerbrowser/content/OrcaService.sys.mjs";
+const ORCA_ENV_MODULE = "chrome://powerbrowser/content/OrcaEnv.sys.mjs";
+
+async function handleOrcaShellMessage(data, actorRef) {
+  const kind = data.kind;
+  try {
+    const OrcaEnv = ChromeUtils.importESModule(ORCA_ENV_MODULE);
+    const { OrcaService } = ChromeUtils.importESModule(ORCA_SERVICE_MODULE);
+    switch (kind) {
+      case "orcaStatus": {
+        if (data.clientReason !== undefined) {
+          if (!OrcaEnv.isClientReason(data.clientReason)) {
+            return { ok: false, reason: "validation", message: "handleShellMessage: unknown Orca client reason" };
+          }
+          OrcaService.reportClientFailure(data.clientReason);
+        }
+        return { ok: true, kind, ...OrcaEnv.orcaStatusReply(OrcaService.getState()) };
+      }
+      case "orcaRestart": {
+        // P67-06: acts only in the failed state; anywhere else restart() logs one line and answers false.
+        const accepted = await OrcaService.restart();
+        return { ok: true, kind, accepted };
+      }
+      case "orcaShowDiagnostics": {
+        // The wall above proved the sender is the Theia document in the shell's own content browser.
+        const shellWindow = actorRef?.browsingContext?.top?.embedderElement?.ownerGlobal;
+        if (typeof shellWindow?.powerbrowserOpenDiagnostics !== "function") {
+          return { ok: false, reason: "not-available" };
+        }
+        shellWindow.powerbrowserOpenDiagnostics();
+        return { ok: true, kind, accepted: true };
+      }
+      default:
+        return { ok: false, reason: "validation", message: `handleShellMessage: unknown kind ${String(kind)}` };
+    }
+  } catch (err) {
+    return { ok: false, reason: "store", message: `handleShellMessage: ${kind} failed (store ${err && err.name ? err.name : "error"})` };
+  }
+}
+
+// P67-16 (RUN-09): the two reads OrcaService's refusal needs. Gecko's TmpD is where this browser
+// itself puts temporary files; realPath resolves symlinks with nsIFile normalize(), which is
+// realpath(3) on Unix (xpcom/io/nsLocalFileUnix.cpp). Neither ever throws.
+export const PowerBrowserOrcaHosting = Object.freeze({
+  tempDir() {
+    try {
+      return Services.dirsvc.get("TmpD", Ci.nsIFile).path;
+    } catch {
+      return null;
+    }
+  },
+  realPath(path) {
+    try {
+      const file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
+      file.initWithPath(path);
+      file.normalize();
+      return file.path;
+    } catch {
+      // Absent, not absolute, or not allowed: the lexical form is still compared.
+      return path;
+    }
+  },
+});
+// ---- end Orca hosting ----

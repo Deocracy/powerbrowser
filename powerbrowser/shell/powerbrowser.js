@@ -327,6 +327,14 @@ document.addEventListener(
       diagnosticsElement.style.display = "none";
     };
 
+    // Phase 67 (P67-04): the Orca failure page's Details opens the layer and never closes it, so a
+    // second press does not hide what the first one showed.
+    window.powerbrowserOpenDiagnostics = function powerbrowserOpenDiagnostics() {
+      if (window.getComputedStyle(diagnosticsElement).display === "none") {
+        window.powerbrowserShowDiagnostics();
+      }
+    };
+
     diagnosticsCloseButton.addEventListener("click", () => {
       window.powerbrowserHideDiagnostics();
     });

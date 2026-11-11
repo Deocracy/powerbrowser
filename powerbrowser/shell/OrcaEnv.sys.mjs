@@ -316,8 +316,11 @@ export function bridgeFileFor(dir, name, platform) {
  *
  * Phase 64 (P64-07, A6): onOffer, when given, is called once with readyLineOffer of that same buffer
  * just before it is dropped, so the offer reaches one writer and no other surface.
+ *
+ * Phase 67 (P67-02): onOfferUnavailable, when given, is called once with
+ * readyLineOfferUnavailableReason of that buffer: a reason code or null, never another pairing field.
  */
-export function createOutputSink({ pushLog, onOffer }) {
+export function createOutputSink({ pushLog, onOffer, onOfferUnavailable }) {
   let buffer = "";
   let parsed = null;
   let stderrRest = "";
@@ -339,6 +342,10 @@ export function createOutputSink({ pushLog, onOffer }) {
       if (parsed) {
         if (onOffer) {
           onOffer(readyLineOffer(buffer));
+        }
+        // Phase 67 (P67-02): the reason code alone, and only a member of the pinned set.
+        if (onOfferUnavailable) {
+          onOfferUnavailable(readyLineOfferUnavailableReason(buffer));
         }
         buffer = "";
         resolveReady(parsed);
@@ -389,3 +396,193 @@ export function compareEnvNames(observedNames, expectedNames) {
     missing: [...expected].filter(name => !observed.has(name)).sort(),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Phase 67 (RUN-06, P67-02, P67-03, P67-36): the one chrome-side classification of Orca hosting
+// failures. OrcaService reports the class through getState(); the frontend reads it through the
+// orcaStatus shell kind and renders the copy for it (orca-panes). No copy lives here.
+
+/** The failure classes, in the order of the interfaces block (67-01 and 67-03); browser-not-attached is P67-36. */
+export const ORCA_FAILURE_CLASSES = Object.freeze([
+  "restarting",
+  "could-not-start",
+  "port-in-use",
+  "files-missing",
+  "temporary-profile",
+  "plaintext-setting",
+  "pairing-lost",
+  "browser-not-attached",
+]);
+
+/** orcad failure codes OrcaService puts in the "Orca failure code" row: a busy port and a held lock read the same. */
+export const ORCA_CODE_CLASSES = Object.freeze({
+  [ORCAD_PINNED_PORT_CODE]: "port-in-use",
+  [ORCAD_LOCK_HELD_CODE]: "port-in-use",
+});
+
+/**
+ * Every failed-step string OrcaService passes to _fail or returns as a step, to one class.
+ * orca-failure-classes derives the step set from OrcaService.sys.mjs and compares it with these keys.
+ */
+export const ORCA_STEP_CLASSES = Object.freeze({
+  "resolving the profile folder": "could-not-start",
+  "creating the Orca data folder": "could-not-start",
+  "finding Node.js": "could-not-start",
+  "finding the built Orca files": "files-missing",
+  "reading the Orca version": "could-not-start",
+  "reading the Orca port": "could-not-start",
+  "choosing a short path for the Orca data folder": "could-not-start",
+  "linking a short path to the Orca data folder": "could-not-start",
+  "starting the orcad process": "could-not-start",
+  stopping: "could-not-start",
+  "waiting for orcad to report ready": "could-not-start",
+  "starting orcad": "could-not-start",
+  "checking that orcad is bound to loopback": "could-not-start",
+  "checking the Node.js version orcad runs on": "could-not-start",
+  "an unexpected error": "could-not-start",
+  "checking for a temporary profile folder": "temporary-profile",
+  "checking the Orca sign-in storage setting": "plaintext-setting",
+});
+
+/** Orca's PairingOfferUnavailableReason at the pin (runtime-rpc-pairing-types.ts), seen in orcad's ready line. */
+export const ORCA_OFFER_UNAVAILABLE_REASONS = Object.freeze([
+  "websocket_unavailable",
+  "device_registry_unavailable",
+  "e2ee_key_unavailable",
+  "invalid_advertised_endpoint",
+  "relay_mint_failed",
+  "network_exposure_failed",
+]);
+
+/** The client reason that is browser-not-attached (P67-36); every other client reason is pairing-lost. */
+export const ORCA_BROWSER_HOST_REASON = "browser-host-attach-failed";
+
+/**
+ * The closed set the frontend may send with orcaStatus: Orca's WebRuntimeAuthFailureReason at the pin,
+ * PowerBrowser's offer-file refusals (orca-panes offer-file-policy.ts) and the browser-host reason.
+ */
+export const ORCA_CLIENT_REASONS = Object.freeze([
+  "unauthorized",
+  "device-revoked",
+  "device-downgraded",
+  "insecure-origin",
+  "offer-missing",
+  "offer-unreadable",
+  "offer-symlink",
+  "offer-not-regular",
+  "offer-owner",
+  "offer-mode",
+  "offer-endpoint",
+  ORCA_BROWSER_HOST_REASON,
+]);
+
+/** True only for a member of ORCA_CLIENT_REASONS. */
+export function isClientReason(value) {
+  return typeof value === "string" && ORCA_CLIENT_REASONS.includes(value);
+}
+
+/** The ready line's pairing-unavailable reason when it is a member of the pinned set, else null. */
+export function readyLineOfferUnavailableReason(text) {
+  const line = String(text)
+    .split("\n")
+    .find(l => l.startsWith("{") && l.includes(READY_MARKER));
+  let record = null;
+  try {
+    record = line ? JSON.parse(line) : null;
+  } catch {
+    return null;
+  }
+  const reason = record?.pairing?.reason;
+  return record?.pairing?.available === false && ORCA_OFFER_UNAVAILABLE_REASONS.includes(reason) ? reason : null;
+}
+
+/**
+ * One class or null. While the state is failed a cause with no mapping is could-not-start, never null
+ * (P67-03). While ready, an unavailable pairing offer is pairing-lost and a held browser-host reason
+ * is browser-not-attached (P67-36).
+ */
+export function failureClassOf({ state, restarting, step, code, offerUnavailableReason, clientReason } = {}) {
+  if (restarting === true) {
+    return "restarting";
+  }
+  if (state === "failed") {
+    const own = (map, key) => (typeof key === "string" && Object.hasOwn(map, key) ? map[key] : null);
+    return own(ORCA_CODE_CLASSES, code) ?? own(ORCA_STEP_CLASSES, step) ?? "could-not-start";
+  }
+  if (state === "ready" && offerUnavailableReason) {
+    return "pairing-lost";
+  }
+  if (state === "ready" && clientReason === ORCA_BROWSER_HOST_REASON) {
+    return "browser-not-attached";
+  }
+  return null;
+}
+
+/** The orcaStatus reply body: the state and the class, and nothing else of getState() (P67-04). */
+export function orcaStatusReply(state) {
+  return { state: state.state, failureClass: state.failureClass };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 67 (RUN-09, P67-16..P67-19): what OrcaService refuses before it spawns orcad, and the one
+// sentence that states what protects Orca sign-ins. orca-credential-store compares these with the
+// pinned Orca source.
+
+/** Orca's plaintext override (orcad-secret-protection-gap.ts) and its trigger value; never in ORCAD_ENV_ALLOWLIST. */
+export const ORCA_PLAINTEXT_OVERRIDE = Object.freeze({ name: "ORCA_HEADLESS_SECRET_STORE", value: "plaintext" });
+
+/** Environment names that name a temporary folder, per Node platform (Gecko's TmpD and Node's tmpdir() read them). */
+export const ORCA_TEMP_ENV_NAMES = Object.freeze({
+  linux: Object.freeze(["TMPDIR", "TMP", "TEMP"]),
+  darwin: Object.freeze(["TMPDIR", "TMP", "TEMP"]),
+  win32: Object.freeze(["TEMP", "TMP"]),
+});
+
+/** Fixed temporary folders per Node platform, with macOS's /private forms (A-4). */
+export const ORCA_FIXED_TEMP_ROOTS = Object.freeze({
+  linux: Object.freeze(["/tmp", "/var/tmp"]),
+  darwin: Object.freeze(["/tmp", "/var/tmp", "/private/tmp", "/private/var/tmp"]),
+  win32: Object.freeze([]),
+});
+
+/**
+ * The first of `roots` that equals, or is a whole-segment prefix of, one of `paths`; else null. win32
+ * compares case-insensitively with either separator (Pitfall 6). Empty or non-string entries are skipped.
+ */
+export function tempRootOf({ paths, roots, platform } = {}) {
+  const win = platform === "win32";
+  const norm = value => {
+    let out = win ? value.replace(/\//g, "\\").toLowerCase() : value;
+    const sep = win ? "\\" : "/";
+    while (out.endsWith(sep)) {
+      out = out.slice(0, -1);
+    }
+    return out;
+  };
+  const usable = list => (Array.isArray(list) ? list.filter(v => typeof v === "string" && v !== "") : []);
+  const targets = usable(paths).map(norm);
+  for (const root of usable(roots)) {
+    const r = norm(root);
+    const sep = win ? "\\" : "/";
+    if (targets.some(t => t === r || t.startsWith(`${r}${sep}`))) {
+      return root;
+    }
+  }
+  return null;
+}
+
+/** P67-19: the folder orcad keeps its credential key in (orcadCredentialRoot, homedir()/.orca), or null. */
+export function credentialKeyFolderFor(getEnv, platform) {
+  const home = getEnv(platform === "win32" ? "USERPROFILE" : "HOME");
+  if (typeof home !== "string" || home === "") {
+    return null;
+  }
+  if (platform === "win32") {
+    return `${home.replace(/[\\/]+$/, "")}\\.orca`;
+  }
+  return platform === "linux" || platform === "darwin" ? `${home.replace(/\/+$/, "")}/.orca` : null;
+}
+
+/** P67-18: the protection sentence, byte-identical in website-staging/privacy.html and orca-panes' copy table. */
+export const ORCA_PROTECTION_SENTENCE =
+  "PowerBrowser protects Orca sign-ins with a key file that only your user account can read, not with your system's keyring.";
