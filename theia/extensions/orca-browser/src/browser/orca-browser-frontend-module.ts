@@ -20,9 +20,11 @@
 import { ContainerModule, inject, injectable } from '@theia/core/shared/inversify';
 import { ApplicationShell, FrontendApplicationContribution, Widget, WidgetManager } from '@theia/core/lib/browser';
 import { FrontendApplicationStateService } from '@theia/core/lib/browser/frontend-application-state';
-import { WebTabChannel, WebTabOpenHandler } from '@powerbrowser/tab-uris/lib/browser/web-tab';
+import { WEB_TAB_FACTORY_ID, WebTabChannel, WebTabOpenHandler, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import { ORCA_PANE_FACTORY_ID } from '@powerbrowser/tab-uris/lib/browser/orca-scheme-coverage';
-import { CommandEvent, DispatchDeps, Outcome, PageTable, createPageTable, dispatchCommand } from '../common/orca-browser-dispatch';
+import {
+    BrowserRecord, CommandEvent, DispatchDeps, Outcome, PageTable, createPageTable, createRevealTracker, dispatchCommand
+} from '../common/orca-browser-dispatch';
 
 /** Host bundle interface and link global (66-01-PLAN interfaces); orca-browser-entry-points compares these with lane p66-01's sources. */
 export const HOST_EXPORTS: readonly string[] = Object.freeze(['PB_BROWSER_HOST_API', 'attachBrowserHost']);
@@ -67,10 +69,13 @@ interface HostModule {
     }): Promise<HostSession>;
 }
 
+/** Orca's runtime worktree selector, formed as its renderer's toRuntimeWorktreeSelector forms it (client-hosted-browser-row-close.ts). */
+const worktreeSelector = (worktreeId: string): string => worktreeId.trim().startsWith('id:') ? worktreeId.trim() : `id:${worktreeId.trim()}`;
+
 /** The createPage event's fields kept with a binding: the inventory entry and the user-close selector come from them. */
 type BoundEvent = CommandEvent & Record<string, unknown>;
 
-/** The page table, shared by the host and orca-panes' browser route. */
+/** Orca's page id -> web tab table, shared by the host and orca-panes' browser route (P66-05, P66-09). */
 @injectable()
 export class OrcaBrowserPages {
 
@@ -78,10 +83,19 @@ export class OrcaBrowserPages {
     protected readonly channel: WebTabChannel;
 
     readonly table: PageTable = createPageTable();
+    readonly tracker = createRevealTracker();
 
     /** The web tab id bound to an Orca page, if any. */
     tabOf(browserPageId: string): string | undefined {
         return this.table.tabOf(browserPageId);
+    }
+
+    /** One pane list's browser records -> the bound web tabs to activate (P66-09 rule; never a tab at its own createPage). */
+    reveal(records: readonly BrowserRecord[]): WebTabWidget[] {
+        return this.tracker.next(records, this.table).flatMap(pageId => {
+            const widget = this.channel.widgetOf(this.table.tabOf(pageId) ?? '');
+            return widget && !widget.isDisposed ? [widget] : [];
+        });
     }
 }
 
@@ -112,6 +126,7 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
     protected readonly activated = new WeakMap<Widget, number>();
     protected activations = 0;
     protected session: HostSession | undefined;
+    protected readonly sentMetadata = new Map<string, string>();
 
     onStart(): void {
         this.shell.onDidChangeActiveWidget(({ newValue }) => {
@@ -126,6 +141,8 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
         let step = 'layout';
         try {
             await this.appState.reachedState('initialized_layout');
+            this.closeStaleAgentTabs();
+            this.channel.onPush('state', detail => this.reportMetadata(detail));
             step = 'link';
             const link = await this.waitForLink();
             step = 'connection';
@@ -219,8 +236,11 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
         return {
             table: this.pages.table,
             openAgentTab: async () => {
+                const pageId = event.browserPageId;
                 const widget = await this.openHandler.openAgentTab(this.placementRef(event.command.workspaceId));
-                this.bound.set(event.browserPageId, event as BoundEvent);
+                this.bound.set(pageId, event as BoundEvent);
+                this.pages.tracker.noteCreated(pageId);
+                widget.disposed.connect(() => this.onTabClosed(pageId, widget.tabId));
                 return widget.tabId;
             },
             closeTab: tabId => this.channel.widgetOf(tabId)?.close(),
@@ -231,6 +251,47 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
                 return { url: widget?.url ?? '', title: widget?.pageTitle ?? '' };
             },
         };
+    }
+
+    /**
+     * A7: a user's close of a bound tab is Orca's page close. A close caused by closePage finds the pair already
+     * dropped and sends nothing; a frontend reload never passes here (the host dies with the frontend).
+     */
+    protected onTabClosed(pageId: string, tabId: string): void {
+        const event = this.bound.get(pageId);
+        this.sentMetadata.delete(pageId);
+        if (this.pages.table.tabOf(pageId) !== tabId) {
+            this.bound.delete(pageId);
+            return;
+        }
+        this.pages.table.drop(pageId);
+        this.bound.delete(pageId);
+        const workspaceId = event?.command.workspaceId;
+        void Promise.resolve(this.session?.userClosedPage(workspaceId ? worktreeSelector(workspaceId) : undefined, pageId))
+            .catch(() => console.warn(`${LOG_PREFIX} a user close was not reported`));
+    }
+
+    /** P66-08: agent tabs a previous frontend opened (restored with the layout) belong to pages that ended with it. */
+    protected closeStaleAgentTabs(): void {
+        for (const widget of this.widgetManager.getWidgets(WEB_TAB_FACTORY_ID) as WebTabWidget[]) {
+            if (widget.agent && !widget.isDisposed && this.pages.table.pageOf(widget.tabId) === undefined) {
+                widget.close();
+            }
+        }
+    }
+
+    /** The page's url and title to orcad when a bound tab's state push changes them; nothing else is sent. */
+    protected reportMetadata(detail: Record<string, unknown>): void {
+        const pageId = typeof detail.tabId === 'string' ? this.pages.table.pageOf(detail.tabId) : undefined;
+        if (!pageId || !this.session || typeof detail.url !== 'string') {
+            return;
+        }
+        const metadata = { url: detail.url, title: typeof detail.title === 'string' ? detail.title : '' };
+        const key = JSON.stringify(metadata);
+        if (this.sentMetadata.get(pageId) !== key) {
+            this.sentMetadata.set(pageId, key);
+            void Promise.resolve(this.session.pageMetadata(pageId, metadata)).catch(() => undefined);
+        }
     }
 
     /** P66-07: after the most recently active Orca pane of the page's worktree, else after the current main-area widget, else at the end. */

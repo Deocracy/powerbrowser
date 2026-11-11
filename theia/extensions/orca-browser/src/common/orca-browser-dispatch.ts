@@ -108,6 +108,7 @@ export interface DispatchDeps {
     /** Opens one new background agent web tab for a createPage event; resolves to its tab id. */
     openAgentTab(event: CommandEvent): Promise<string>;
     closeTab(tabId: string): void;
+    /** The web tab's own navigate (webTabNavigate); its reply decides the outcome. */
     navigate(tabId: string, url: string): Promise<unknown>;
     agentCall(tabId: string, method: string, params: Record<string, unknown>): Promise<AgentReply>;
     pageInfo(tabId: string): { url: string; title: string };
@@ -144,6 +145,13 @@ export async function dispatchCommand(event: CommandEvent, deps: DispatchDeps): 
         if (tabId === undefined) {
             return failed('browser_tab_not_found');
         }
+        if (command.type === 'navigate') {
+            const reply = await deps.navigate(tabId, command.url ?? '') as AgentReply | undefined;
+            return reply?.ok === true ? completed() : failed('browser_error');
+        }
+        if (command.type === 'reclaimPage' || command.type === 'restorePage') {
+            return completed(); // the id is bound to a tab this host created; nothing is adopted
+        }
         if (command.type === 'automation') {
             const method = command.method ?? '';
             if (!SERVED_AUTOMATION_METHODS.includes(method)) {
@@ -161,4 +169,58 @@ export async function dispatchCommand(event: CommandEvent, deps: DispatchDeps): 
     } catch {
         return failed('browser_error');
     }
+}
+
+/** The fields of one Orca store record the reveal tracker reads (orca-panes' OrcaPaneRecord, Phase 64 C3). */
+export interface BrowserRecord {
+    browserPageId?: string | null;
+    active: boolean;
+}
+
+export interface RevealTracker {
+    /** Marks a page whose createPage this host served: the activation that follows it is not a reveal. */
+    noteCreated(pageId: string): void;
+    /** One subscribePanes list's browser records -> the pages whose bound web tab is to be revealed. */
+    next(records: readonly BrowserRecord[], table: Pick<PageTable, 'tabOf'>): string[];
+}
+
+/**
+ * P66-09 activation rule: a page is revealed only when its record turns active while the same record was present
+ * and inactive in the previous list, the page was bound before this list, and noteCreated has not marked it. A
+ * mark is cleared without a reveal by the page's first active record (the activation that follows its own
+ * createPage) or by its record staying inactive in two consecutive lists.
+ */
+export function createRevealTracker(): RevealTracker {
+    let previous = new Map<string, boolean>();
+    const created = new Map<string, number>();
+    return {
+        noteCreated(pageId) {
+            created.set(pageId, 0);
+        },
+        next(records, table) {
+            const current = new Map<string, boolean>();
+            for (const record of records) {
+                if (record.browserPageId) {
+                    current.set(record.browserPageId, current.get(record.browserPageId) === true || record.active === true);
+                }
+            }
+            const reveal: string[] = [];
+            for (const [pageId, active] of current) {
+                const inactiveLists = created.get(pageId);
+                if (inactiveLists !== undefined) {
+                    if (active || inactiveLists + 1 >= 2) {
+                        created.delete(pageId);
+                    } else {
+                        created.set(pageId, inactiveLists + 1);
+                    }
+                    continue;
+                }
+                if (active && previous.get(pageId) === false && table.tabOf(pageId) !== undefined) {
+                    reveal.push(pageId);
+                }
+            }
+            previous = current;
+            return reveal;
+        },
+    };
 }

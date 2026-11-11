@@ -262,6 +262,15 @@ export interface NotificationBarText {
 }
 
 /** Phase 37 plan 02 (D-05): whether a tab shares each kind now, as chrome observed it (sharingChanged push). */
+/** Phase 66 (P66-20): chrome's agent state for a tab. active: an agent drove it in the last 20 s; stopped: the user pressed Stop. */
+export interface WebTabAgentControl {
+    active: boolean;
+    stopped: boolean;
+}
+
+/** Phase 66 (P66-21): the title class of a tab an agent controls, so a background tab an agent drives is identifiable in the dock. */
+export const AGENT_CONTROLLED_CLASS = 'pb-agent-controlled';
+
 export interface WebTabSharing {
     camera: boolean;
     microphone: boolean;
@@ -593,6 +602,16 @@ export class WebTabChannel {
             widget.sharing = { camera: detail.camera === true, microphone: detail.microphone === true, screen: detail.screen === true };
             this.tabStatusEmitter.fire(widget);
         });
+        // Phase 66 (P66-20, P66-21): whether an Orca agent controls a tab, as chrome decided it. Display-only, like
+        // sharingChanged: an unknown tab is ignored, and nothing is sent back.
+        this.onPush('agentControlChanged', detail => {
+            const widget = typeof detail.tabId === 'string' ? this.widgets.get(detail.tabId) : undefined;
+            if (!widget) {
+                return;
+            }
+            widget.setAgentControl({ active: detail.active === true, stopped: detail.stopped === true });
+            this.tabStatusEmitter.fire(widget);
+        });
         // Phase 37 plan 04 (D-08): a tab's notification bar appears, changes or goes. Only a known bar kind is kept, and
         // only display fields: the record the bar's buttons act on stays in chrome.
         this.onPush('notificationBar', detail => {
@@ -812,6 +831,9 @@ export class WebTabWidget extends BaseWidget {
 
     /** Phase 37 plan 02 (D-05): the kinds this tab shares now, only from chrome's sharingChanged push; all false until one arrives. */
     sharing: WebTabSharing = { camera: false, microphone: false, screen: false };
+
+    /** Phase 66 (P66-20): whether an Orca agent controls this tab and whether the user stopped it, only from chrome's agentControlChanged push. */
+    agentControl: WebTabAgentControl = { active: false, stopped: false };
 
     /** Phase 37 plan 04 (D-08): this tab's notification bars, one per kind, from chrome's notificationBar push. */
     readonly notificationBars = new Map<NotificationBarKind, NotificationBar>();
@@ -1041,7 +1063,10 @@ export class WebTabWidget extends BaseWidget {
             if (this.isDisposed) {
                 return;
             }
-            const r = this.node.getBoundingClientRect();
+            // A1 (Phase 66): an unshown agent tab sends the box of its own tab area, so chrome parks the overlay under
+            // the frame with a real viewport instead of hiding it; every other tab is unchanged.
+            const parked = this.agent && !(this.isAttached && this.isVisible && this.hasPage && !this.crashed);
+            const r = (parked && this.tabAreaBox()) || this.node.getBoundingClientRect();
             // D-08: the notification bars sit at the top of this node, so the page starts below them and never under them.
             const bars = Math.min(this.barsNode.offsetHeight, r.height);
             // A crashed tab is not showable: the overlay hides and the placeholder carries the crash UI (PAGE-11, 32-08).
@@ -1081,6 +1106,25 @@ export class WebTabWidget extends BaseWidget {
                 }
             }
         });
+    }
+
+    /**
+     * Phase 66 (A1): the box of the tab area this widget sits in: the shown widget of its tab bar (the dock lays out
+     * only the current widget of each area), else the dock itself. Undefined outside a dock.
+     */
+    protected tabAreaBox(): DOMRect | undefined {
+        type Bar = { titles: readonly unknown[]; currentTitle: { owner: Widget } | null };
+        const dock = this.parent as (Widget & { tabBars?(): Iterable<Bar> }) | null;
+        if (!dock?.tabBars) {
+            return undefined;
+        }
+        for (const bar of dock.tabBars()) {
+            const shown = bar.titles.includes(this.title) ? bar.currentTitle?.owner : undefined;
+            if (shown?.isVisible) {
+                return shown.node.getBoundingClientRect();
+            }
+        }
+        return dock.node.getBoundingClientRect();
     }
 
     /** Phase 37 plan 04: shows, replaces or (undefined) removes this tab's bar of one kind. */
@@ -1456,6 +1500,21 @@ export class WebTabWidget extends BaseWidget {
                 this.refreshPermissionIcons(reply as WebTabSiteInfo);
                 return reply as WebTabSiteInfo;
             }) as Promise<WebTabSiteInfo>;
+    }
+
+    /** Phase 66 (P66-21): stores chrome's agent state and marks the tab's title while an agent controls it. */
+    setAgentControl(control: WebTabAgentControl): void {
+        this.agentControl = control;
+        const classes = this.title.className.split(' ').filter(c => c && c !== AGENT_CONTROLLED_CLASS);
+        this.title.className = (control.active ? [...classes, AGENT_CONTROLLED_CLASS] : classes).join(' ');
+    }
+
+    /**
+     * Phase 66 (P66-21, P66-22): ends agent control of this tab for its lifetime. Called only from the chrome bar's
+     * Stop click handler; chrome answers every later webTabAgent call for the tab agent-stopped.
+     */
+    agentStop(): Promise<WebTabReply> {
+        return this.channel.request({ kind: 'webTabAgentStop', tabId: this.tabId });
     }
 
     /**

@@ -4025,10 +4025,14 @@ run_own_checks() {
     # orca-relaunch-restore-live-self-test: the relaunch comparators (dock, modes, identity, echo, pairing UI, devices).
     "orca-offer-scan-self-test|node $REPO_ROOT/scripts/verify-orca-offer-scan.mjs --self-test"
     "orca-relaunch-restore-live-self-test|node $REPO_ROOT/scripts/verify-orca-relaunch-restore-live.mjs --self-test"
-    # NEW (66-02, BRW-02/BRW-03, P66-05/P66-12/P66-19): orca-browser-abilities transpiles @powerbrowser/orca-browser's
-    # pure dispatcher with theia/node_modules/typescript and runs the page-command trace (one tab per createPage, unserved
-    # methods never reach chrome, unbound ids refused, closePage drops the pair). Named SKIP without typescript.
+    # NEW (66-02, BRW-02/BRW-03, P66-05/P66-12/P66-19): orca-browser-abilities derives the 92 abilities, the automation
+    # methods and the tier column with orca-browser-parity.mjs's own exports and requires one row per ability in
+    # @powerbrowser/orca-browser's table, tiers equal, tier-1 rows never unavailable, no BiDi mechanism, dialogs native,
+    # and the tier-1 automation set equal to the served set and (once lane p66-03 is merged, a named SKIP before) to
+    # chrome's AGENT_METHODS; it also runs the dispatcher's page-command and reveal trace (typescript transpile).
+    # The self-test plants each fault in a hermetic fixture tree.
     "orca-browser-abilities|node $REPO_ROOT/scripts/verify-orca-browser-abilities.mjs"
+    "orca-browser-abilities-self-test|node $REPO_ROOT/scripts/verify-orca-browser-abilities.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
