@@ -3,21 +3,29 @@
 // $PB_SIDECAR_STATUS_LOG: the tag, the Origin and Sec-Fetch-Site headers, whether the token cookie arrived
 // (a boolean, never its value), and the status the sidecar answered with. Check instrumentation, never a
 // product file.
+// PB_SIDECAR_STATUS_PATHS (67-02), a comma-separated list of path prefixes: every request whose path starts with
+// one of them is logged too, untagged, with its path (query dropped) and Sec-Fetch-Dest. Unset: tagged rows only.
 'use strict';
 const fs = require('fs');
 const http = require('http');
 const LOG = process.env.PB_SIDECAR_STATUS_LOG;
 if (LOG) {
     const tagOf = url => /[?&]probe=([\w-]+)/.exec(url || '')?.[1];
+    const prefixes = (process.env.PB_SIDECAR_STATUS_PATHS || '').split(',').filter(Boolean);
+    const pathOf = url => String(url || '').replace(/\?.*$/, '');
     const row = (kind, req, tag) => ({
         tag, kind, method: req.method, origin: req.headers.origin ?? null, sfs: req.headers['sec-fetch-site'] ?? null,
         pbCookie: String(req.headers.cookie || '').split(';').some(p => p.trim().startsWith('POWERBROWSER_TOKEN=')),
+        ...(tag ? {} : { path: pathOf(req.url), sfd: req.headers['sec-fetch-dest'] ?? null }),
     });
     const write = obj => { try { fs.appendFileSync(LOG, JSON.stringify(obj) + '\n'); } catch { /* best effort */ } };
     const emit = http.Server.prototype.emit;
     http.Server.prototype.emit = function (event, req, resOrSocket) {
         const tag = (event === 'request' || event === 'upgrade') && tagOf(req.url);
-        if (tag && event === 'request') {
+        if (!tag && event === 'request' && prefixes.some(p => pathOf(req.url).startsWith(p))) {
+            const r = row('http', req, null);
+            resOrSocket.once('finish', () => write({ ...r, status: resOrSocket.statusCode }));
+        } else if (tag && event === 'request') {
             const r = row('http', req, tag);
             resOrSocket.once('finish', () => write({ ...r, status: resOrSocket.statusCode }));
         } else if (tag) {

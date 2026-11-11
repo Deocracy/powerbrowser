@@ -16,11 +16,19 @@
 //            the token is read.
 //   wiring   isOwnOrigin passes req.headers.origin, the sec-fetch-site header and this.port to originVerdict and
 //            admits only 'allow'.
+// Orca rules (67-02, RUN-08 for Orca's traffic; no second policy, the hotfix's rule is the one checked):
+//   orcad-origin  orcad's origin, built from OrcaEnv's ORCAD_BIND_HOST and the powerbrowser.orca.port default in
+//            powerbrowser-sidecar.js (never spelled here), is refused by originVerdict for every Sec-Fetch-Site
+//            value the tables use and with none.
+//   orca-routes   every HTTP route a theia/extensions/orca-*/src/node file registers (app.get/post/use...,
+//            express.static) sits in a configure( body, which BackendApplication runs after the early-middleware
+//            gate; no Orca node file touches EarlyExpressMiddleware or attaches a raw 'request'/'upgrade'
+//            listener; the derived route set is non-empty and holds orca-panes' pane-bundle route prefix.
 //
 // Honestly --quick: text reads and an in-memory type strip (node:module stripTypeScriptTypes). --self-test
 // requires the clean tree green, then plants faults in memory and requires each to go red naming its rule.
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stripTypeScriptTypes } from 'node:module';
@@ -30,6 +38,12 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const POLICY_REL = 'theia/extensions/token-gate/src/common/origin-policy.ts';
 const CONTRIB_REL = 'theia/extensions/token-gate/src/node/token-gate-backend-contribution.ts';
 const SERVICE_REL = 'powerbrowser/shell/TheiaService.sys.mjs';
+const ORCA_ENV_REL = 'powerbrowser/shell/OrcaEnv.sys.mjs';
+const SIDECAR_PREFS_REL = 'powerbrowser/shell/powerbrowser-sidecar.js';
+const PANES_PROTOCOL_REL = 'theia/extensions/orca-panes/src/common/orca-panes-protocol.ts';
+const SIDECAR_PORT = 41673; // a stand-in bound port; the rules compare against it, never against a live one
+// Every Sec-Fetch-Site value the tables above use, plus absent.
+const FETCH_SITES = ['none', 'same-origin', 'same-site', 'cross-site', 'same-everything', undefined];
 
 // Header classes from the live record. PORT stands for the sidecar's bound port, OTHER for the foreign page's.
 // [label, Origin, Sec-Fetch-Site, allowed]
@@ -55,11 +69,27 @@ const EDGES = [
   ['unknown Sec-Fetch-Site value', undefined, 'same-everything', false],
 ];
 
+// Every .ts under theia/extensions/orca-*/src, as { rel, text }. shortcut: *.spec.ts/*.test.ts are skipped, so a
+// test double's app.use is not read as a route; a route in a test file never reaches the sidecar anyway.
+function orcaSources() {
+  const ext = join(ROOT, 'theia/extensions');
+  return readdirSync(ext).filter(d => d.startsWith('orca-')).flatMap(d =>
+    readdirSync(join(ext, d, 'src'), { recursive: true })
+      .filter(f => f.endsWith('.ts') && !/\.(spec|test)\.ts$/.test(f))
+      .map(f => {
+        const rel = `theia/extensions/${d}/src/${f}`;
+        return { rel, text: readFileSync(join(ROOT, rel), 'utf8') };
+      }));
+}
+
 function loadInputs() {
   return {
     policy: readFileSync(join(ROOT, POLICY_REL), 'utf8'),
     contrib: readFileSync(join(ROOT, CONTRIB_REL), 'utf8'),
     service: readFileSync(join(ROOT, SERVICE_REL), 'utf8'),
+    orcaEnv: readFileSync(join(ROOT, ORCA_ENV_REL), 'utf8'),
+    sidecarPrefs: readFileSync(join(ROOT, SIDECAR_PREFS_REL), 'utf8'),
+    orca: orcaSources(),
   };
 }
 
@@ -72,6 +102,17 @@ async function loadPolicy(src) {
   } finally {
     process.emitWarning = emit;
   }
+}
+
+// [start, end) of every `name(...) {` method body in src, by the same indentation rule as methodBody.
+function methodRanges(src, name) {
+  const re = new RegExp(`^( +)(?:protected |public |private )?(?:async )?${name}\\([^)]*\\)[^{]*\\{\\n`, 'gm');
+  const out = [];
+  for (let m; (m = re.exec(src));) {
+    const end = src.indexOf(`\n${m[1]}}\n`, m.index);
+    if (end !== -1) out.push([m.index + m[0].length, end]);
+  }
+  return out;
 }
 
 function methodBody(src, name) {
@@ -99,7 +140,7 @@ async function check(inp) {
     }
     if (mod && typeof mod.originVerdict !== 'function') fail('policy', 'BROKEN', `${POLICY_REL} exports no originVerdict`);
     else if (mod) {
-      const port = 41673;
+      const port = SIDECAR_PORT;
       const value = o => ({ OWN: `${swap[1]}:${port}`, FOREIGN: `${swap[1]}:42727`, OTHER_PORT: `${swap[1]}:${port + 1}` })[o] ?? o;
       for (const [label, o, sfs, allowed] of [...RECORDED, ...EDGES]) {
         const got = mod.originVerdict(value(o), sfs, port);
@@ -140,7 +181,72 @@ async function check(inp) {
     fail('wiring', 'POLICY BYPASSED', `${CONTRIB_REL} isOwnOrigin must return originVerdict(req.headers.origin, <sec-fetch-site>, this.port) === 'allow'`);
   } else passes.push('wiring PASS -- isOwnOrigin passes Origin, Sec-Fetch-Site and the bound port to originVerdict');
 
+  await orcaRules(inp, fail, passes, failures);
   return { failures, passes };
+}
+
+async function orcaRules(inp, fail, passes, failures) {
+  // orcad-origin: the origin orcad serves its web client on, derived from the tree.
+  const portLine = /^pref\("powerbrowser\.orca\.port",\s*(\d+)\);/m.exec(inp.sidecarPrefs);
+  let host;
+  try {
+    host = (await import(`data:text/javascript;base64,${Buffer.from(inp.orcaEnv).toString('base64')}`)).ORCAD_BIND_HOST;
+  } catch (e) {
+    fail('orcad-origin', 'BROKEN', `${ORCA_ENV_REL} does not load: ${e.message}`);
+  }
+  if (!portLine) fail('orcad-origin', 'BROKEN', `orcad port not derivable: ${SIDECAR_PREFS_REL} has no pref("powerbrowser.orca.port", N) line`);
+  else if (typeof host !== 'string' || !host) fail('orcad-origin', 'BROKEN', `${ORCA_ENV_REL} exports no ORCAD_BIND_HOST`);
+  else if (Number(portLine[1]) === SIDECAR_PORT) fail('orcad-origin', 'BROKEN', `orcad's default port equals the stand-in sidecar port ${SIDECAR_PORT}`);
+  else {
+    let mod;
+    try {
+      mod = await loadPolicy(inp.policy);
+    } catch { /* the policy rule already names a load failure */ }
+    const orcad = `http://${host}:${portLine[1]}`;
+    if (typeof mod?.originVerdict === 'function') {
+      // Origin set (cors GET, POST, WebSocket), and absent (no-cors GET, img, navigation) from the same page.
+      for (const origin of [orcad, undefined]) {
+        for (const sfs of FETCH_SITES) {
+          if (origin === undefined && (sfs === undefined || sfs === 'none' || sfs === 'same-origin')) continue; // own-origin classes
+          const got = mod.originVerdict(origin, sfs, SIDECAR_PORT);
+          if (got === 'allow') fail('orcad-origin', 'ADMITS ORCAD', `orcad origin admitted: Origin ${origin ?? 'absent'}, Sec-Fetch-Site ${sfs ?? 'absent'} got allow`);
+        }
+      }
+      if (!failures.some(f => f.rule === 'orcad-origin')) {
+        passes.push(`orcad-origin PASS -- ${orcad} (ORCAD_BIND_HOST, powerbrowser.orca.port default) is refused for Sec-Fetch-Site ${FETCH_SITES.map(s => s ?? 'absent').join(', ')}, and its Origin-less same-site and cross-site requests too`);
+      }
+    } else fail('orcad-origin', 'BROKEN', `${POLICY_REL} gives no originVerdict to check orcad's origin against`);
+  }
+
+  // orca-routes: every Orca HTTP route behind gate().
+  const consts = new Map();
+  for (const f of inp.orca) for (const m of f.text.matchAll(/export const (\w+) = '([^']*)'/g)) consts.set(m[1], m[2]);
+  const bundle = consts.get('ORCA_PANES_ROUTE_PREFIX');
+  const routes = [];
+  for (const f of inp.orca.filter(x => x.rel.includes('/src/node/'))) {
+    // shortcut: matches registrations on an identifier named app (Theia's configure(app) parameter) and
+    // express.static; a route registered through another receiver name would need this widened.
+    const configure = methodRanges(f.text, 'configure');
+    const inConfigure = i => configure.some(([s, e]) => i >= s && i < e);
+    for (const m of f.text.matchAll(/\bapp\.(get|post|put|patch|delete|all|use)\s*\(\s*([^,)]*)|\bexpress\.static\s*\(/g)) {
+      const line = f.text.slice(0, m.index).split('\n').length;
+      const arg = (m[2] ?? '').trim();
+      const path = /^'([^']*)'$/.exec(arg)?.[1] ?? consts.get(arg) ?? (m[1] ? `<unresolved ${arg || 'no path'}>` : null);
+      if (path !== null) routes.push(path);
+      if (!inConfigure(m.index)) fail('orca-routes', 'ROUTE OUTSIDE GATE', `${f.rel}:${line} registers ${m[0].trim()} outside a configure( body, where gate() does not run first`);
+    }
+    if (/\bEarlyExpressMiddleware\b|\bearlyMiddleware\b/.test(f.text)) {
+      fail('orca-routes', 'EARLY HANDLER', `Orca handler ahead of the gate: ${f.rel} references the early middleware`);
+    }
+    const raw = /\.(on|once|addListener|prependListener|prependOnceListener)\(\s*['"](request|upgrade)['"]/.exec(f.text);
+    if (raw) fail('orca-routes', 'RAW LISTENER', `raw listener bypasses the gate: ${f.rel}:${f.text.slice(0, raw.index).split('\n').length} ${raw[0]}`);
+  }
+  if (!routes.length) fail('orca-routes', 'ROUTE SCAN BLIND', 'route scan blind: no HTTP route found under theia/extensions/orca-*/src/node, so the pane-bundle route is not seen either');
+  else if (!bundle) fail('orca-routes', 'BROKEN', `${PANES_PROTOCOL_REL} no longer exports ORCA_PANES_ROUTE_PREFIX`);
+  else if (!routes.includes(bundle)) fail('orca-routes', 'BUNDLE ROUTE MISSING', `pane-bundle route not found: ${bundle} is not among the derived routes (${routes.join(', ')})`);
+  if (!failures.some(f => f.rule === 'orca-routes')) {
+    passes.push(`orca-routes PASS -- ${routes.join(', ')} registered in configure(), behind gate(); no Orca early-middleware handler or raw request/upgrade listener`);
+  }
 }
 
 async function selfTest(base) {
@@ -154,6 +260,17 @@ async function selfTest(base) {
     inp[key] = inp[key].replace(find, replace);
     return true;
   };
+  // Orca plants replace the file array, never edit the shared base in place.
+  const addOrca = text => inp => {
+    inp.orca = [...inp.orca, { rel: 'theia/extensions/orca-planted/src/node/planted.ts', text }];
+    return true;
+  };
+  const mutateOrca = (relPart, find, replace) => inp => {
+    const i = inp.orca.findIndex(f => f.rel.includes(relPart) && f.text.includes(find));
+    if (i === -1) return false;
+    inp.orca = inp.orca.map((f, j) => (j === i ? { ...f, text: f.text.replace(find, replace) } : f));
+    return true;
+  };
   const plants = [
     ['the Origin check removed', mutate('policy', "    if (origin !== undefined && origin !== `http://127.0.0.1:${port}`) {\n        return 'foreign-origin';\n    }\n", ''), 'policy', 'ADMITS FOREIGN'],
     ['a Sec-Fetch-Site deny-list in place of the allow-list', mutate('policy', '!SAME_ORIGIN_SITES.has(fetchSite)', "['same-site', 'cross-site'].includes(fetchSite)"), 'policy', 'ADMITS FOREIGN'],
@@ -163,6 +280,22 @@ async function selfTest(base) {
     ['gate() skips the origin rule', mutate('contrib', '        if (!this.isOwnOrigin(req)) {\n            res.sendStatus(403);\n            return;\n        }\n', ''), 'gate', 'GATE UNWIRED'],
     ['allowWsUpgrade() skips the origin rule', mutate('contrib', '        if (!this.isOwnOrigin(request)) {\n            return false;\n        }\n', ''), 'ws', 'WS UNWIRED'],
     ['isOwnOrigin ignores the verdict', mutate('contrib', ", this.port) === 'allow';", ", this.port) !== undefined;"), 'wiring', 'POLICY BYPASSED'],
+    ['originVerdict admits the orcad port', inp => {
+      const p = /^pref\("powerbrowser\.orca\.port",\s*(\d+)\);/m.exec(inp.sidecarPrefs)?.[1];
+      return p && mutate('policy', '    if (port === undefined) {\n', `    if (origin?.endsWith(':${p}')) {\n        return 'allow';\n    }\n    if (port === undefined) {\n`)(inp);
+    }, 'orcad-origin', 'ADMITS ORCAD'],
+    ['an Orca node file unshifts onto earlyMiddleware.handlers', addOrca(
+      'export class Early {\n    onStart(): void {\n        this.earlyMiddleware.handlers.unshift((req, res, next) => next());\n    }\n}\n'), 'orca-routes', 'EARLY HANDLER'],
+    ['an Orca onStart attaches server.on(\'request\')', addOrca(
+      "export class Raw {\n    onStart(server: http.Server): void {\n        server.on('request', (req, res) => res.end());\n    }\n}\n"), 'orca-routes', 'RAW LISTENER'],
+    ['an Orca node file set with no route', inp => {
+      inp.orca = inp.orca.filter(f => !/\bapp\.\w+\s*\(|express\.static/.test(f.text));
+      return true;
+    }, 'orca-routes', 'ROUTE SCAN BLIND'],
+    ['the bundle route registered in onStart instead of configure', mutateOrca('orca-panes/src/node/',
+      '    configure(app: express.Application): void {\n', '    onStart(app: express.Application): void {\n'), 'orca-routes', 'ROUTE OUTSIDE GATE'],
+    ['the bundle route moved off its prefix', mutateOrca('orca-panes/src/node/',
+      'app.use(ORCA_PANES_ROUTE_PREFIX,', "app.use('/elsewhere/',"), 'orca-routes', 'BUNDLE ROUTE MISSING'],
   ];
   let bad = 0;
   for (const [label, plant, rule, kind] of plants) {
@@ -192,5 +325,5 @@ if (process.argv.includes('--self-test')) {
 const res = await check(inputs);
 for (const p of res.passes) console.log(`  ${p}`);
 for (const f of res.failures) console.log(`  FAIL ${f.rule}/${f.kind} -- ${f.text}`);
-console.log(res.failures.length ? `${NAME}: FAIL -- ${res.failures.length} rule(s) red` : `${NAME}: PASS -- the sidecar admits only its own origin, on HTTP and WebSocket alike`);
+console.log(res.failures.length ? `${NAME}: FAIL -- ${res.failures.length} rule(s) red` : `${NAME}: PASS -- the sidecar admits only its own origin, on HTTP and WebSocket alike; orcad's origin is refused and every Orca route is behind the gate`);
 process.exit(res.failures.length ? 1 : 0);
