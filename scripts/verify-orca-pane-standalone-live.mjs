@@ -31,6 +31,14 @@
 // pbOrcad): each mount waits up to 5 s and is a row { kind, route, attempt, mounted, threw, errorClass,
 // providersAdded, importsAdded, descendantCount }. A planted throwing kind must be recorded on each route
 // first. A kind in MOUNT_KINDS with no mounted row on either route is red naming it and the route.
+// API clauses (Phase 65, B-2..B-10, P65-17, CA-07, CA-12, P65-22): after pairing, state().pairing reads
+// session-only with session-no-ed25519; a marker localStorage key written by the page reads back (the
+// control) and then orca.web.runtimeEnvironment.v1 is absent; subscribeWorktrees reports the scratch
+// worktree with local true; the built CLI's file open of a scratch file yields an edit record within 1 s
+// (else "files.open: unreachable from the paired client" and openPane('editor') is the driver, named);
+// openPane('diff') with a branch source yields a branch diff record with both compare ids; setActiveView
+// round-trips through subscribeActiveView; the services root shows no error fallback (a planted alert in
+// it is detected first).
 // --report <path> writes the rows (under .mozbuild/), the CA-12 hostId values of the scratch orcad's own
 // worktrees and, with --width-probe settings, the narrowest Settings width with no horizontal overflow.
 //
@@ -123,6 +131,35 @@ export function gateVerdict({ kinds, rows, controls, routes = GATE_ROUTES }) {
     return null;
 }
 
+export const OPEN_LIMIT_MS = 1000;
+const HEX_ID = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+
+/**
+ * The API clauses. obs: { pairing, markerReadBack, envKeyPresent, worktree, openFile: { driver, record, ms },
+ * diff, view: { set, restored }, services: { controlDetected, fallback, errors } }. Controls are judged first.
+ */
+export function apiVerdict(obs) {
+    if (!obs) return 'not measured';
+    if (obs.markerReadBack !== true) return 'collector blind: the marker localStorage key written by the page did not read back';
+    if (obs.services?.controlDetected !== true) return 'collector blind: a planted alert in the services root was not detected';
+    if (obs.pairing?.sessionOnly !== true || obs.pairing?.deviceKeySupport !== 'session-no-ed25519') return `pairing is not session-only (sessionOnly ${obs.pairing?.sessionOnly}, deviceKeySupport ${obs.pairing?.deviceKeySupport})`;
+    if (obs.envKeyPresent !== false) return 'the runtime-environment key orca.web.runtimeEnvironment.v1 is present in localStorage';
+    if (!obs.worktree?.found) return 'subscribeWorktrees: no record for the scratch worktree path';
+    if (obs.worktree.local !== true) return 'subscribeWorktrees: the scratch worktree is not local';
+    const f = obs.openFile;
+    if (!f?.record) return `subscribeOpenFiles: no edit record for the opened file (driver ${f?.driver ?? 'none'})`;
+    if (f.record.mode !== 'edit' || f.record.pathMatches !== true || f.record.local !== true) return `subscribeOpenFiles: the opened file's record is ${JSON.stringify(f.record)}`;
+    if (f.driver === 'files.open' && !(f.ms <= OPEN_LIMIT_MS)) return `files.open: the record came after ${f.ms} ms, over ${OPEN_LIMIT_MS} ms`;
+    const d = obs.diff;
+    if (!d?.record) return `openPane('diff'): no diff record${d?.error ? ` (${d.error})` : ''}`;
+    if (d.record.mode !== 'diff' || d.record.diffSource !== 'branch' || !HEX_ID.test(d.record.branch?.mergeBase ?? '') || !HEX_ID.test(d.record.branch?.headOid ?? '')) return `openPane('diff'): the record is ${JSON.stringify(d.record)}`;
+    if (obs.view?.set !== 'tasks') return `setActiveView('tasks'): subscribeActiveView reported ${obs.view?.set}`;
+    if (obs.view?.restored !== 'terminal') return `setActiveView('terminal'): subscribeActiveView reported ${obs.view?.restored}`;
+    if (obs.services.fallback) return 'the services root shows an Orca error fallback (resume-modal boundary)';
+    if ((obs.services.errors ?? []).length) return `services root: ${obs.services.errors[0].phase} ${obs.services.errors[0].message}`;
+    return null;
+}
+
 /** The width probe's clause: null when a width without horizontal overflow was found. */
 export function widthVerdict(probe) {
     if (!probe) return 'the Settings width probe did not run';
@@ -139,16 +176,17 @@ export function lateVerdict(ms) {
 }
 
 /** The output lines and exit code for both stages and the late clause (undefined = not reached). */
-export function render({ isolated, isolatedDetail, mounts, kinds, chatSource, harness, late, lateMs, gate, gateDetail, width, widthDetail }) {
+export function render({ isolated, isolatedDetail, mounts, kinds, chatSource, harness, late, lateMs, gate, gateDetail, width, widthDetail, api }) {
     const lines = [];
     if (isolated !== undefined) lines.push(isolated === null ? `${NAME}: isolated per-leaf mount PASS -- ${isolatedDetail}` : `${NAME}: isolated per-leaf mount FAIL -- ${isolated}`);
     if (mounts !== undefined) lines.push(mounts === null ? `${NAME}: mounts PASS -- ${kinds.join(', ')} (agent-session from ${chatSource})` : `${NAME}: mounts FAIL -- ${mounts}`);
     if (late !== undefined) lines.push(late === null ? `${NAME}: late CLI terminal PASS -- a tab in ${lateMs} ms (limit ${LATE_LIMIT_MS} ms)` : `${NAME}: late CLI terminal FAIL -- ${late}`);
     if (gate !== undefined) lines.push(gate === null ? `${NAME}: mount gate PASS -- ${gateDetail}` : `${NAME}: mount gate FAIL -- ${gate}`);
     if (width !== undefined) lines.push(width === null ? `${NAME}: width probe PASS -- ${widthDetail}` : `${NAME}: width probe FAIL -- ${width}`);
-    const failed = [[isolated, 'isolated per-leaf mount'], [mounts, 'mounts'], [late, 'late CLI terminal'], [gate, 'mount gate'], [width, 'width probe']]
+    if (api !== undefined) lines.push(api === null ? `${NAME}: API PASS -- session-only pairing (session-no-ed25519, no runtime-environment key), local worktree, open-file and branch-diff records, setActiveView round trip, resume offer mounted without fallback` : `${NAME}: API FAIL -- ${api}`);
+    const failed = [[isolated, 'isolated per-leaf mount'], [mounts, 'mounts'], [late, 'late CLI terminal'], [gate, 'mount gate'], [width, 'width probe'], [api, 'API']]
         .filter(([v]) => v !== null && v !== undefined).map(([, name]) => name);
-    const missing = [isolated, mounts, late].some(v => v === undefined);
+    const missing = [isolated, mounts, late, api].some(v => v === undefined);
     const ok = !failed.length && !missing && !harness;
     if (harness) lines.push(`${NAME}: FAIL -- harness: ${harness}`);
     else lines.push(ok ? `${NAME}: PASS -- isolated per-leaf mount, ${kinds.length} hosted type(s) mounted, late CLI terminal in ${lateMs} ms${gate === null ? `, mount gate ${gateDetail}` : ''}` : `${NAME}: FAIL -- ${failed[0] ?? 'not reached'}`);
@@ -315,6 +353,61 @@ export function hostIdValues(listed) {
     return { hostId: [...out.hostId].sort(), executionHostId: [...out.executionHostId].sort() };
 }
 
+/** The API clauses on the standalone page (pairing, storage, worktrees, open files, diff, view, services root). */
+async function apiClauses(s, ctxId, harness) {
+    const ev = expr => s.evalIn(ctxId, expr);
+    const { pollFor, sleep } = s.lib;
+    const obs = {};
+    obs.pairing = JSON.parse(await ev('JSON.stringify(window.PbPanes.state().pairing)'));
+    const marker = `pb-orca-pane-marker-${Date.now().toString(36)}`;
+    obs.markerReadBack = await ev(`(() => { localStorage.setItem(${J(marker)}, 'x'); const ok = localStorage.getItem(${J(marker)}) === 'x'; localStorage.removeItem(${J(marker)}); return ok; })()`);
+    obs.envKeyPresent = await ev(`localStorage.getItem('orca.web.runtimeEnvironment.v1') !== null`);
+    await ev(`(() => { window.__pbWs = null; window.__pbFiles = []; window.__pbView = null;
+        window.PbPanes.subscribeWorktrees(w => { window.__pbWs = w; }); window.PbPanes.subscribeOpenFiles(f => { window.__pbFiles = f; });
+        window.PbPanes.subscribeActiveView(v => { window.__pbView = v; }); return true; })()`);
+    const ws = await pollFor(async () => JSON.parse(await ev('JSON.stringify(window.__pbWs)')), 10000, 'subscribeWorktrees');
+    const wt = (ws?.worktrees ?? []).find(w => w.path === s.repoDir);
+    obs.worktree = { found: !!wt, local: wt?.local };
+    // files.open through the built CLI on a scratch file; the paired hosted client must receive the tab.
+    const name = `pb-open-${Date.now().toString(36)}.txt`;
+    (await import('node:fs')).writeFileSync(join(s.repoDir, name), 'pb\n');
+    const abs = join(s.repoDir, name);
+    const findRecord = async () => JSON.parse(await ev(`JSON.stringify(window.__pbFiles.find(f => f.filePath === ${J(abs)} && f.mode === 'edit') || null)`));
+    let driver = 'files.open', record = null, ms = null;
+    try {
+        s.orca('file', 'open', abs, '--worktree', `path:${s.repoDir}`);
+        const t0 = Date.now();
+        try { record = await pollFor(findRecord, 5000, 'the files.open record'); ms = Date.now() - t0; } catch { record = null; }
+    } catch { record = null; }
+    if (!record) {
+        console.log(`${NAME}: files.open: unreachable from the paired client`);
+        driver = "openPane('editor')";
+        await ev(`window.PbPanes.openPane('editor', ${J(ws.worktrees.find(w => w.path === s.repoDir)?.id ?? '')}, ${J(name)}).then(() => true, () => false)`);
+        try { record = await pollFor(findRecord, 5000, 'the openPane editor record'); } catch { record = null; }
+    }
+    console.log(`${NAME}: files.open driver -- ${driver}${ms !== null ? ` (record in ${ms} ms)` : ''}`);
+    obs.openFile = { driver, ms, record: record ? { mode: record.mode, pathMatches: record.filePath === abs, local: record.local } : null };
+    // A branch diff of README.md against the side branch.
+    const wtId = wt?.id ?? '';
+    const opened = JSON.parse(await ev(`window.PbPanes.openPane('diff', ${J(wtId)}, ${J(J({ source: 'branch', relativePath: 'README.md', baseRef: 'side' }))}).then(id => JSON.stringify({ id }), e => JSON.stringify({ error: String(e && e.message || e).slice(0, 200) }))`));
+    let diff = null;
+    if (opened.id) try { diff = await pollFor(async () => JSON.parse(await ev(`JSON.stringify(window.__pbFiles.find(f => f.mode === 'diff' && f.diffSource === 'branch' && f.relativePath === 'README.md') || null)`)), 5000, 'the diff record'); } catch { diff = null; }
+    obs.diff = { record: diff ? { mode: diff.mode, diffSource: diff.diffSource, branch: diff.branch, local: diff.local } : null, error: opened.error };
+    // setActiveView round trip.
+    await ev(`(() => { window.PbPanes.setActiveView('tasks'); return true; })()`);
+    await sleep(300);
+    const set = JSON.parse(await ev('JSON.stringify(window.__pbView)'))?.view;
+    await ev(`(() => { window.PbPanes.setActiveView('terminal'); return true; })()`);
+    await sleep(300);
+    obs.view = { set, restored: JSON.parse(await ev('JSON.stringify(window.__pbView)'))?.view };
+    // The services root: a planted alert is detected first, then Orca's own fallback must be absent.
+    const servicesQuery = `document.querySelector('[data-pb-orca-services] [role="alert"]') !== null`;
+    const controlDetected = await ev(`(() => { const host = document.querySelector('[data-pb-orca-services]'); if (!host) return false; const a = document.createElement('div'); a.setAttribute('role', 'alert'); a.id = 'pb-services-control'; host.appendChild(a);
+        const seen = ${servicesQuery}; a.remove(); return seen; })()`);
+    obs.services = { controlDetected, fallback: await ev(servicesQuery), errors: JSON.parse(await ev("JSON.stringify(window.PbPanes.state().mountErrors.filter(e => e.kind === 'services'))")) };
+    return obs;
+}
+
 /**
  * The gate on one route: the planted throwing kind first (the detector), then every gate kind. ev evaluates in
  * the route's document; worktreeId is a worktree of the orcad that route is paired with (check-details' tab).
@@ -382,6 +475,8 @@ async function live(opts = {}) {
             result.kinds = (m.mounts ?? []).map(x => x.kind);
             result.chatSource = m.chatSource ?? 'not reached';
             if (process.env.PB_ORCA_PANE_DEBUG === '1') console.log(`debug: ${J(m).slice(0, 3000)}`);
+
+            result.api = apiVerdict(await apiClauses(s, ctxId, harness));
 
             // CA-12 (A4): the hostId values headless orcad reports for its own worktrees; field values only.
             report.hostIds = hostIdValues(s.orca('worktree', 'list'));
@@ -474,15 +569,33 @@ async function selfTest() {
     ok('a window error in a gate mount is red', /^sidebar \(standalone\): boom/.test(gateVerdict({ kinds, rows: rowsOf({ 'sidebar@standalone': { windowErrors: ['boom'] } }), controls: ctl }) ?? ''));
     ok('width probe: a width found is green, none is red', widthVerdict({ narrowest: 380, steps: [[640, false]] }) === null && /overflows horizontally at every width probed, last 1600 px/.test(widthVerdict({ narrowest: null, steps: [[640, true], [1600, true]] }) ?? ''));
     ok('CA-12: hostId values are collected from any depth', J(hostIdValues({ result: { worktrees: [{ hostId: 'local', x: { executionHostId: 'local' } }, { hostId: null }] } })) === J({ hostId: ['local', null], executionHostId: ['local'] }));
+    // API clauses (B-2..B-10, P65-17, CA-07, CA-12, P65-22).
+    const H = 'a'.repeat(40);
+    const api = (o = {}) => ({ pairing: { sessionOnly: true, deviceKeySupport: 'session-no-ed25519' }, markerReadBack: true, envKeyPresent: false, worktree: { found: true, local: true },
+        openFile: { driver: 'files.open', ms: 120, record: { mode: 'edit', pathMatches: true, local: true } }, diff: { record: { mode: 'diff', diffSource: 'branch', branch: { mergeBase: H, headOid: H } } },
+        view: { set: 'tasks', restored: 'terminal' }, services: { controlDetected: true, fallback: false, errors: [] }, ...o });
+    ok('API control green', apiVerdict(api()) === null);
+    ok('API: the openPane editor fallback driver is green', apiVerdict(api({ openFile: { driver: "openPane('editor')", ms: null, record: { mode: 'edit', pathMatches: true, local: true } } })) === null);
+    ok('API: a marker that did not read back is red "collector blind"', /^collector blind: the marker/.test(apiVerdict(api({ markerReadBack: false })) ?? ''));
+    ok('API: an undetected planted services alert is red', /^collector blind: a planted alert/.test(apiVerdict(api({ services: { controlDetected: false, fallback: false, errors: [] } })) ?? ''));
+    ok('API: a persistent device key is red', /pairing is not session-only/.test(apiVerdict(api({ pairing: { sessionOnly: true, deviceKeySupport: 'persistent' } })) ?? ''));
+    ok('API: the runtime-environment key present is red', /orca\.web\.runtimeEnvironment\.v1 is present/.test(apiVerdict(api({ envKeyPresent: true })) ?? ''));
+    ok('API: a non-local worktree is red', /not local/.test(apiVerdict(api({ worktree: { found: true, local: false } })) ?? ''));
+    ok('API: a missing open-file record is red', /no edit record/.test(apiVerdict(api({ openFile: { driver: 'files.open', record: null } })) ?? ''));
+    ok('API: a slow files.open is red', /after 1500 ms/.test(apiVerdict(api({ openFile: { driver: 'files.open', ms: 1500, record: { mode: 'edit', pathMatches: true, local: true } } })) ?? ''));
+    ok('API: a diff record without compare ids is red', /openPane\('diff'\)/.test(apiVerdict(api({ diff: { record: { mode: 'diff', diffSource: 'branch', branch: { mergeBase: null, headOid: H } } } })) ?? ''));
+    ok('API: setActiveView not round-tripping is red', /setActiveView\('terminal'\)/.test(apiVerdict(api({ view: { set: 'tasks', restored: 'tasks' } })) ?? ''));
+    ok('API: a resume-modal fallback is red', /error fallback/.test(apiVerdict(api({ services: { controlDetected: true, fallback: true, errors: [] } })) ?? ''));
     ok('late CLI terminal within the limit is green', lateVerdict(172) === null && lateVerdict(LATE_LIMIT_MS) === null);
     ok('late CLI terminal over the limit is red naming the time', /after 1200 ms, over 1000 ms/.test(lateVerdict(1200) ?? ''));
     ok('late CLI terminal never recorded is red naming the freeze', /within 15 s \(the mirror freeze/.test(lateVerdict(null) ?? ''));
     const r = render({ isolated: null, isolatedDetail: 'd', mounts: 'simulator: x', kinds: STAGE1_KINDS, chatSource: 'createChat', late: null, lateMs: 172 });
     ok('render: isolated line precedes mounts line, last line FAIL', r.code === 1 && /isolated per-leaf mount PASS/.test(r.lines[0]) && /mounts FAIL/.test(r.lines[1]) && /: FAIL -- mounts$/.test(r.lines[3]));
-    const g = render({ isolated: null, isolatedDetail: 'd', mounts: null, kinds: STAGE1_KINDS, chatSource: 'createChat', late: null, lateMs: 172 });
+    const g = render({ isolated: null, isolatedDetail: 'd', mounts: null, kinds: STAGE1_KINDS, chatSource: 'createChat', late: null, lateMs: 172, api: null });
+    ok('render: an API clause never reached is red', render({ isolated: null, isolatedDetail: 'd', mounts: null, kinds: STAGE1_KINDS, chatSource: 'createChat', late: null, lateMs: 172 }).code === 1);
     ok('render: all clauses green gives PASS naming the late time', g.code === 0 && /late CLI terminal in 172 ms$/.test(g.lines.at(-1)));
-    const f = render({ isolated: null, isolatedDetail: 'd', mounts: null, kinds: STAGE1_KINDS, chatSource: 'createChat', late: lateVerdict(null), lateMs: null });
-    ok('render: a late CLI terminal miss alone is red', f.code === 1 && /late CLI terminal FAIL/.test(f.lines[2]) && /: FAIL -- late CLI terminal$/.test(f.lines[3]));
+    const f = render({ isolated: null, isolatedDetail: 'd', mounts: null, kinds: STAGE1_KINDS, chatSource: 'createChat', late: lateVerdict(null), lateMs: null, api: null });
+    ok('render: a late CLI terminal miss alone is red', f.code === 1 && /late CLI terminal FAIL/.test(f.lines[2]) && /: FAIL -- late CLI terminal$/.test(f.lines.at(-1)));
     const child = spawnSync(process.execPath, ['--input-type=module', '-e', `await import(${J(SELF)})`], { encoding: 'utf8', timeout: 30000 });
     ok('importing the module prints and starts nothing', child.status === 0 && child.stdout === '' && child.stderr === '');
     console.log(failed ? `${NAME} self-test: FAIL -- ${failed} case(s)` : `${NAME} self-test: PASS -- every planted fault went red naming it`);

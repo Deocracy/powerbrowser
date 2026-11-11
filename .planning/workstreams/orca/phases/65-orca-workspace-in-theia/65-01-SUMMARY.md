@@ -47,3 +47,13 @@ Measurements:
 - Settings width (P65-09): the narrowest host width at which Orca's Settings has no horizontal overflow is **660 px**. At 640 px, the content scroller `div.min-h-0.flex-1.overflow-y-auto.scrollbar-sleek` is 367 px wide inside a 354 px client area. The probe steps up from 640 px by 20 px in that case; see Deviations.
 - CA-12 (A4): `orca worktree list --json` on headless orcad reports hostId values `["local"]` and executionHostId values `["local"]` for its own worktrees.
 - check-details mounts CheckRunDetailsPanel alone, with no EditorPanel and no EditorContent, and renders Orca's check report (25 elements on both routes).
+
+## Store observation API, session-only pairing, resume offer (Task 2)
+
+Standalone row, built bundle, same lock and environment as the gate:
+- `orca-pane-standalone-live: API PASS -- session-only pairing (session-no-ed25519, no runtime-environment key), local worktree, open-file and branch-diff records, setActiveView round trip, resume offer mounted without fallback`
+- Session-only proof: `state().pairing` reads `{ sessionOnly: true, deviceKeySupport: 'session-no-ed25519' }`. A marker localStorage key written by the page read back first, as the control. Then `orca.web.runtimeEnvironment.v1` was absent.
+- files.open driver: **files.open**. `orca file open <scratch file> --worktree path:<repo>` on headless orcad reached the paired hosted client as an edit-mode `subscribeOpenFiles` record with `local: true`, within the 1000 ms limit (measured 1 ms after the CLI returned). The `openPane('editor')` fallback was not needed.
+- `openPane('diff', '{"source":"branch","relativePath":"README.md","baseRef":"side"}')` gave one record with mode diff, diffSource branch, and 40-hex mergeBase and headOid.
+- Resume offer (P65-22, CA-14): NativeChatResumeOnRestartModal is mounted in the hidden services root inside `OverlayBoundary` with boundaryId `overlay.native-chat-resume-on-restart`. No error fallback appeared, and a planted alert in that root was detected first. The offer is delivered as a mounted surface; no "resume offer not delivered" line.
+- Route A booted with the preset on PowerBrowser's own orcad: every Route A gate row above ran on that boot.
