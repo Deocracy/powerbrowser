@@ -1674,6 +1674,27 @@ export class ChromeBarWidget extends ReactWidget {
         </span>;
     }
 
+    /**
+     * Phase 66 (P66-21, P66-22, D-19): the agent mark for the current web tab, read only from chrome's agentControlChanged
+     * push. Hidden unless an agent is driving the tab. Its Stop button is the only caller of agentStop(), which ends agent
+     * control of this tab for the tab's lifetime; no command, keybinding or menu reaches it.
+     */
+    protected renderAgentControl(): React.ReactNode {
+        if (!currentWebTab()?.agentControl.active) {
+            return undefined;
+        }
+        const label = CHROME_BAR_COPY.agentControlLabel;
+        const stop = CHROME_BAR_COPY.agentStopTooltip(appSubject());
+        return <span className='pb-chrome-bar-agent'>
+            <span className='codicon codicon-robot' role='img' aria-label={label} title={CHROME_BAR_COPY.agentControlTooltip(appSubject())} />
+            <span className='pb-chrome-bar-agent-label'>{label}</span>
+            <button type='button' className='pb-chrome-bar-button pb-chrome-bar-agent-stop' title={stop} aria-label={stop}
+                onClick={() => void currentWebTab()?.agentStop()}>
+                {CHROME_BAR_COPY.agentStopLabel}
+            </button>
+        </span>;
+    }
+
     /** PAGE-02: the zoom chip, shown only while the pushed level is not 100%; one click resets it. */
     protected renderZoomChip(): React.ReactNode {
         const tab = currentWebTab();
@@ -1885,6 +1906,7 @@ export class ChromeBarWidget extends ReactWidget {
             {this.pageStatus && <span className='pb-page-status' aria-label={this.pageStatus}>{this.pageStatus}</span>}
             {this.renderReaderToggle()}
             {this.renderSharing()}
+            {this.renderAgentControl()}
             {this.renderZoomChip()}
             {this.extensionActions.render()}
             <button
