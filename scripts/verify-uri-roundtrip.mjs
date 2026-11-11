@@ -74,6 +74,12 @@
 // orca/ or the pane bundle is absent, or the bundle has not booted (orcad not
 // ready); orca-panes present but the scheme unhandled is red.
 //
+// Phase 65 (P65-10, P65-27; interfaces N-1): the seven Orca page tabs
+// (ORCA_PAGE_ROWS). Each pb-orca:<view> opened twice through the OpenerService
+// round-trips (uriOf(widget).toString(true) equals the input) with exactly one
+// widget of that name in the factory. pb-orca:creating is not a row: it exists
+// only while an Orca worktree creation is pending.
+//
 // Reads the shell's own supervised frontend; takes no URL argument (WINDOWS
 // 14 -- a URL would open a redundant stock window beside the shell).
 //
@@ -378,6 +384,8 @@ function buildNotebookCellCarveOutExpression() {
 
 const ORCA_PANES_REL = 'theia/extensions/orca-panes';
 const ORCA_PANE_FACTORY = 'powerbrowser.orca-pane';
+/** P65-10, N-1: Orca's page tabs, singletons opened by name (pb-orca:creating excluded). */
+const ORCA_PAGE_ROWS = ['pb-orca:tasks', 'pb-orca:activity', 'pb-orca:automations', 'pb-orca:space', 'pb-orca:skills', 'pb-orca:artifacts', 'pb-orca:mobile'];
 /** The pb-orca rows' named SKIP reason from the tree, or null. */
 function pbOrcaSkip() {
     if (!existsSync(join(REPO_ROOT, ORCA_PANES_REL))) return 'lane p64-02 not merged (theia/extensions/orca-panes is absent)';
@@ -436,6 +444,15 @@ function buildPbOrcaExpression() {
         const stale = 'pb-orca:' + String(name).replace(/\\d+$/, '') + '99';
         const s = await open(stale);
         row(stale, !s && hosted().length === count, s ? 'a stale name opened a widget' : 'created ' + (hosted().length - count) + ' hosted widget(s)');
+        for (const page of ${JSON.stringify(ORCA_PAGE_ROWS)}) {
+            const pageName = page.slice('pb-orca:'.length);
+            const first = await open(page);
+            const again = await open(page);
+            const prt = first && registry.uriOf(first);
+            const n = hosted().filter(w => w.options && w.options.name === pageName).length;
+            row(page, !!first && again === first && !!prt && prt.toString(true) === page && n === 1,
+                'uriOf ' + (prt ? prt.toString(true) : 'undefined') + ', ' + n + ' widget(s) named ' + pageName + ', second open ' + (again === first ? 'the same widget' : 'another result'));
+        }
         return JSON.stringify({ rows });
     } catch (e) {
         return JSON.stringify({ rows: [...rows, { label: 'pb-orca rows', ok: false, reason: (e && e.message) || String(e) }] });

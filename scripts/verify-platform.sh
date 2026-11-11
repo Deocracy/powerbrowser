@@ -4000,6 +4000,11 @@ run_own_checks() {
     # 'add (a )?project' and the add-repo entry); PB set from theia/extensions/*/src and the chrome bar; empty intersection.
     "orca-no-pb-add-project|node $REPO_ROOT/scripts/verify-orca-no-pb-add-project.mjs"
     "orca-no-pb-add-project-self-test|node $REPO_ROOT/scripts/verify-orca-no-pb-add-project.mjs --self-test"
+    # orca-side-panel-live-self-test and orca-add-project-live-self-test (65-03, P65-24/P65-14): the live rows' pure
+    # comparators over fixtures (missing or extra sidebar row, agents part stayed, container leaked, control host
+    # absent, unlisted host; unequal or missing add, remove left a row, owned root kept). Hermetic.
+    "orca-side-panel-live-self-test|node $REPO_ROOT/scripts/verify-orca-side-panel-live.mjs --self-test"
+    "orca-add-project-live-self-test|node $REPO_ROOT/scripts/verify-orca-add-project-live.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6660,6 +6665,13 @@ run_own_checks() {
       # detector, close semantics, reload, route and offer containment. Coordinator proof on the merged, wired, built
       # tree after orca-pane-css-live (P64-15); a named SKIP while lane p64-02 or p64-01 is unmerged. Under the live lock.
       "orca-tabs-live|node $REPO_ROOT/scripts/verify-orca-tabs-live.mjs"
+      # NEW (65-03, TAB-07/TAB-09, P65-24/P65-27): orca-side-panel-live, Orca's sidebar, Settings, Agents and right
+      # sidebar in the Orca mode's two view containers (clauses a-i: docking, rows vs the CLI lists, a settings
+      # round-trip, the Agents part, worktree activation, page tabs, no leak into Coding or Browsing, registry, egress
+      # after a planted .invalid control resolution). orca-add-project-live: Orca's Add-project and remove, the stock
+      # standalone page first as the control, then PowerBrowser's side panel. Both under the live lock.
+      "orca-side-panel-live|node $REPO_ROOT/scripts/verify-orca-side-panel-live.mjs"
+      "orca-add-project-live|node $REPO_ROOT/scripts/verify-orca-add-project-live.mjs"
     )
   fi
 
