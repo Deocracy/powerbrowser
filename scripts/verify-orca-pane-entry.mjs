@@ -28,7 +28,11 @@
 //      exports a function setWebDeviceKeySupportForTests (a named SKIP only when orca/ is absent);
 //   j. (P65-27) every member of every interface named Orca<letters>BundleApi under
 //      theia/extensions/*/src is a named export of the entry; a parse yielding zero entry exports is
-//      red "parser blind"; a named SKIP only while no such interface exists.
+//      red "parser blind"; a named SKIP only while no such interface exists;
+//   k. (D-18, 65-05) every modal Orca's app root hosts (AppRootSurfaces.tsx: `activeModal === '<id>'` and
+//      `mountedLazyModalIds.has('<id>')`) that a module of the bundle graph opens (`openModal('<id>'`) is hosted by
+//      the overlay's services root under the same condition; otherwise the hosted surface's trigger opens nothing.
+//      Zero root modals is red "source moved"; zero opened root modals is red "parser blind".
 //
 // Tier: full; --self-test quick (mkdtemp fixtures: a tracked edit, a planted React copy, a version
 // skew, an inlined font, a tab-bar import, a missing C3 export, each red naming it).
@@ -57,6 +61,9 @@ export const C3_EXPORTS = ['bootstrap', 'subscribePanes', 'mountPane', 'closePan
     'subscribeOrchestrationEnabled', 'setOrchestrationFocus', 'viewTitle', 'repair'];
 const EDITOR_MODULE = /(^|\/)components\/editor\/(EditorPanel[^/]*|EditorContent)\.tsx$/;
 const DEVICE_KEY_SUPPORT = 'src/renderer/src/web/web-device-key-support.ts';
+const APP_ROOT_SURFACES = 'src/renderer/src/app-shell/AppRootSurfaces.tsx';
+const HOSTED_MODAL_RE = /(?:activeModal === |mountedLazyModalIds\.has\()'([a-z][a-z-]*)'/g;
+const OPEN_MODAL_RE = /openModal\(\s*['"]([a-z][a-z-]*)['"]/g;
 const PRESET_EXPORT = 'setWebDeviceKeySupportForTests';
 const BUNDLE_API_RE = /^Orca[A-Za-z]+BundleApi$/;
 const REACT_MARKER = 'rendererPackageName';
@@ -257,6 +264,23 @@ export function checkEntry({ orcaDir, overlayDir, standaloneDir, baselineFile, t
             fails.push(`Orca's editor in the pane bundle (D-01): ${chain.slice(0, 6).join(' <- ')}`);
         }
 
+        // k. every app-root modal a bundle module opens is hosted by the overlay (D-18).
+        const rootFile = join(orcaDir, APP_ROOT_SURFACES);
+        const rootModals = existsSync(rootFile) ? new Set([...readFileSync(rootFile, 'utf8').matchAll(HOSTED_MODAL_RE)].map(m => m[1])) : new Set();
+        if (rootModals.size === 0) fails.push(`source moved: orca/${APP_ROOT_SURFACES} hosts zero modals by activeModal or mountedLazyModalIds`);
+        else {
+            const opened = new Map();
+            for (const [mod] of graph) {
+                const text = overrides.get(mod) ?? readFileSync(mod, 'utf8');
+                for (const m of text.matchAll(OPEN_MODAL_RE)) if (rootModals.has(m[1]) && !opened.has(m[1])) opened.set(m[1], mod);
+            }
+            const overlayText = [...overrides.values()].join('\n');
+            const hosted = new Set([...overlayText.matchAll(HOSTED_MODAL_RE)].map(m => m[1]));
+            if (opened.size === 0) fails.push('parser blind: no module of the bundle graph opens a modal the app root hosts');
+            for (const [id, mod] of opened) if (!hosted.has(id)) fails.push(`root dialog not hosted (D-18): ${id}, opened in ${relative(orcaDir, mod)}, has no services-root mount in the overlay`);
+            counts.rootDialogs = opened.size;
+        }
+
         // i. the preset export Orca's session-only pairing relies on (P65-17, CA-07).
         const support = join(orcaDir, DEVICE_KEY_SUPPORT);
         if (!existsSync(support)) notes.push(`${NAME}: SKIP -- preset-export clause: orca/${DEVICE_KEY_SUPPORT} is absent (run scripts/fetch-orca.sh)`);
@@ -280,7 +304,7 @@ function render(r) {
     if (r.skip) return { code: 0, lines: [`${NAME}: SKIP -- ${r.skip}`] };
     if (r.fails.length) return { code: 1, lines: [...r.notes, ...r.fails.map(f => `${NAME}: FAIL -- ${f}`)] };
     const c = r.counts;
-    return { code: 0, lines: [...r.notes, `${NAME}: PASS -- tracked status at baseline; React marker ${c.reactMarkerStandalone} file(s) in the standalone variant, ${c.reactMarkerPanes} in pb-panes/${c.react ? `; React ${c.react}` : ''}; ${c.assets} build:web asset(s), none newly inlined${c.overlaySources ? `; ${c.overlaySources} overlay source(s) import no tab bar, TabGroupPanel or client-side terminal creation; C3 exports exact (C3-65 included)` : ''}${c.modules ? `; ${c.modules} module(s) in the bundle graph, no EditorPanel or EditorContent` : ''}${c.preset ? `; ${PRESET_EXPORT} exported at the pin` : ''}${c.consumers ? `; consumer API ${c.consumers.join(', ')} covered` : ''}`] };
+    return { code: 0, lines: [...r.notes, `${NAME}: PASS -- tracked status at baseline; React marker ${c.reactMarkerStandalone} file(s) in the standalone variant, ${c.reactMarkerPanes} in pb-panes/${c.react ? `; React ${c.react}` : ''}; ${c.assets} build:web asset(s), none newly inlined${c.overlaySources ? `; ${c.overlaySources} overlay source(s) import no tab bar, TabGroupPanel or client-side terminal creation; C3 exports exact (C3-65 included)` : ''}${c.modules ? `; ${c.modules} module(s) in the bundle graph, no EditorPanel or EditorContent` : ''}${c.rootDialogs ? `; ${c.rootDialogs} app-root dialog(s) the bundle opens all hosted` : ''}${c.preset ? `; ${PRESET_EXPORT} exported at the pin` : ''}${c.consumers ? `; consumer API ${c.consumers.join(', ')} covered` : ''}`] };
 }
 
 function realPaths() {
@@ -308,10 +332,12 @@ function fixture(dir, theiaTs) {
     w(join(dir, 'theia', 'node_modules', 'react', 'package.json'), '{"version":"19.2.8"}');
     execFileSync('ln', ['-s', theiaTs, join(dir, 'theia', 'node_modules', 'typescript')]);
     const exports = C3_EXPORTS.map(n => `export const ${n} = 1`).join('\n');
-    w(join(dir, 'overlay', 'files', ENTRY_REL), `import '../assets/main.css'\nimport { a } from './helper'\nexport type T = string\n${exports}\n`);
+    w(join(dir, 'overlay', 'files', ENTRY_REL), `import '../assets/main.css'\nimport { a } from './helper'\nimport { del } from '../components/sidebar/delete-flow'\nexport type T = string\n${exports}\nconst host = (activeModal) => activeModal === 'delete-worktree'\n`);
     w(join(dir, 'overlay', 'files', 'src/renderer/src/pb/helper.ts'), `import { useAppStore } from '../store'\nexport const a = 1\n`);
     w(join(orca, 'src/renderer/src/store/index.ts'), `export const useAppStore = 1\n`);
     w(join(orca, 'src/renderer/src/components/editor/EditorPanel.tsx'), `export default 1\n`);
+    w(join(orca, APP_ROOT_SURFACES), `{activeModal === 'delete-worktree' ? <D /> : null}{mountedLazyModalIds.has('quick-open') ? <Q /> : null}\n`);
+    w(join(orca, 'src/renderer/src/components/sidebar/delete-flow.ts'), `export const del = (s) => s.openModal('delete-worktree')\nexport const own = (s) => s.openModal('edit-meta')\n`);
     w(join(orca, DEVICE_KEY_SUPPORT), `export function ${PRESET_EXPORT}(support: string | null): void {}\n`);
     w(join(dir, 'theia', 'extensions', 'orca-panes', 'src', 'common', 'protocol.ts'), `export interface OrcaPaneBundleApi {\n    bootstrap(options: { pairing: string }): Promise<void>;\n    reactIdentity: unknown;\n}\n`);
     return { orcaDir: orca, overlayDir: join(dir, 'overlay'), standaloneDir: join(dir, 'standalone'), baselineFile: join(dir, 'baseline.txt'), theiaDir: join(dir, 'theia'), font };
@@ -351,6 +377,10 @@ function selfTest() {
     run('a re-exported name counts as an export', p => { writeFileSync(entry(p), readFileSync(entry(p), 'utf8').replace('export const viewTitle = 1', "export { viewTitle } from './helper'")); writeFileSync(join(dirname(entry(p)), 'helper.ts'), 'export const a = 1\nexport const viewTitle = 1\n'); }, null);
     run('an entry with no exports is red "parser blind"', p => writeFileSync(entry(p), "import '../assets/main.css'\n"), /^parser blind/);
     run('an extra value export is red', p => writeFileSync(entry(p), readFileSync(entry(p), 'utf8') + 'export function paneRecords() {}\n'), /exports name\(s\) outside C3: paneRecords/);
+    run('an opened app-root dialog the overlay does not host is red', p => writeFileSync(entry(p), readFileSync(entry(p), 'utf8').replace("activeModal === 'delete-worktree'", "activeModal === 'add-repo'")), /^root dialog not hosted \(D-18\): delete-worktree, opened in src\/renderer\/src\/components\/sidebar\/delete-flow\.ts/);
+    run('a lazily mounted root dialog opened in the graph is red until hosted', p => writeFileSync(join(p.orcaDir, 'src/renderer/src/components/sidebar/delete-flow.ts'), "export const del = (s) => s.openModal('delete-worktree')\nexport const q = (s) => s.openModal('quick-open')\n"), /^root dialog not hosted \(D-18\): quick-open/);
+    run('an app root with no modals is red "source moved"', p => writeFileSync(join(p.orcaDir, APP_ROOT_SURFACES), 'export {}\n'), /^source moved: orca\/src\/renderer\/src\/app-shell\/AppRootSurfaces\.tsx hosts zero modals/);
+    run('a graph that opens no root modal is red "parser blind"', p => writeFileSync(join(p.orcaDir, 'src/renderer/src/components/sidebar/delete-flow.ts'), "export const del = 1\n"), /^parser blind: no module of the bundle graph opens a modal/);
     const bad = spawnSync(process.execPath, [SELF, '--nope'], { encoding: 'utf8' });
     ok('an unknown argument exits 2', bad.status === 2);
     console.log(failed ? `${NAME} self-test: FAIL -- ${failed} case(s)` : `${NAME} self-test: PASS -- every planted fault went red naming it`);

@@ -51,6 +51,8 @@ import { callRuntimeResult } from '../web/preload-api/web-runtime-calls'
 import { NativeChatResumeOnRestartModal } from '../components/NativeChatResumeRuntimeModal'
 import { ModalBoundary, OverlayBoundary } from '../app-shell/app-root-surface-boundaries'
 import { useLazyModalMounts } from '../app-shell/use-lazy-modal-mounts'
+import { usePreloadWorktreeJumpPalette, WorktreeJumpPalette } from '../app-shell/worktree-jump-palette-preload'
+import NewWorkspaceComposerModal from '../components/NewWorkspaceComposerModal'
 import { lazyWithRetry } from '@/lib/lazy-with-retry'
 import { detectLanguage } from '@/lib/language-detect'
 import { toRuntimeWorktreeSelector } from '../runtime/runtime-worktree-selector'
@@ -196,40 +198,106 @@ function staleNavigationEchoes(): void {
     })
 }
 
-// D-18: Orca's Add-project flow. The hosted Sidebar's trigger only sets activeModal; AppRootSurfaces hosts the
-// dialogs, so the services root hosts the same four, lazily and in the same boundaries.
+// D-18: the hosted surfaces' triggers only set activeModal; AppRootSurfaces hosts the dialogs. The services root hosts
+// every AppRootSurfaces modal that a module of this bundle opens, lazily, in the same boundaries and under the same
+// conditions (orca-pane-entry clause k derives that set and requires it here).
 const AddRepoDialog = lazyWithRetry(() => import('../components/sidebar/AddRepoDialog'))
 const NonGitFolderDialog = lazyWithRetry(() => import('../components/sidebar/NonGitFolderDialog'))
 const AddProjectFromFolderDialog = lazyWithRetry(() => import('../components/sidebar/AddProjectFromFolderDialog'))
 const ProjectAddedDialog = lazyWithRetry(() => import('../components/sidebar/ProjectAddedDialog'))
+const AiVaultSessionHistoryDialog = lazyWithRetry(() => import('../components/right-sidebar/AiVaultSessionHistoryDialog'))
+const NodeDistMirrorDialog = lazyWithRetry(() => import('../components/settings/advanced/network/NodeDistMirrorDialog'))
+const DiagramViewerModal = lazyWithRetry(() => import('../components/editor/DiagramViewerModal'))
+const QuickOpen = lazyWithRetry(() => import('../components/QuickOpen'))
+const SetupGuideModal = lazyWithRetry(() => import('../components/setup-guide/SetupGuideModal'))
+const FeatureWallModal = lazyWithRetry(() => import('../components/feature-wall/FeatureWallModal'))
+const DeleteWorktreeDialog = lazyWithRetry(() => import('../components/sidebar/DeleteWorktreeDialog'))
+const PreservedBranchBatchReviewModal = lazyWithRetry(() => import('../components/sidebar/PreservedBranchBatchReviewModal'))
 
-/** AppRootSurfaces' Add-project dialogs (add-repo and its three handoff dialogs), unchanged. */
-function AddProjectDialogs(): React.JSX.Element {
-  const { shouldMountAddRepoDialog } = useLazyModalMounts()
+/** AppRootSurfaces' modals that this bundle's surfaces open, unchanged. */
+function RootDialogs(): React.JSX.Element {
+  const { mountedLazyModalIds, shouldMountAddRepoDialog } = useLazyModalMounts()
+  usePreloadWorktreeJumpPalette()
   const activeModal = useAppStore((state) => state.activeModal)
   return (
-    <React.Suspense fallback={null}>
-      {shouldMountAddRepoDialog ? (
-        <ModalBoundary boundaryId="modal.add-repo" resetKey={activeModal === 'add-repo'}>
-          <AddRepoDialog />
+    <>
+      {activeModal === 'new-workspace-composer' ? (
+        <ModalBoundary boundaryId="modal.new-workspace-composer" resetKey>
+          <NewWorkspaceComposerModal />
         </ModalBoundary>
       ) : null}
-      {activeModal === 'confirm-non-git-folder' ? (
-        <ModalBoundary boundaryId="modal.confirm-non-git-folder" resetKey>
-          <NonGitFolderDialog />
-        </ModalBoundary>
-      ) : null}
-      {activeModal === 'confirm-add-project-from-folder' ? (
-        <ModalBoundary boundaryId="modal.confirm-add-project-from-folder" resetKey>
-          <AddProjectFromFolderDialog />
-        </ModalBoundary>
-      ) : null}
-      {activeModal === 'project-added' ? (
-        <ModalBoundary boundaryId="modal.project-added" resetKey>
-          <ProjectAddedDialog />
-        </ModalBoundary>
-      ) : null}
-    </React.Suspense>
+      <React.Suspense fallback={null}>
+        {shouldMountAddRepoDialog ? (
+          <ModalBoundary boundaryId="modal.add-repo" resetKey={activeModal === 'add-repo'}>
+            <AddRepoDialog />
+          </ModalBoundary>
+        ) : null}
+        {activeModal === 'confirm-non-git-folder' ? (
+          <ModalBoundary boundaryId="modal.confirm-non-git-folder" resetKey>
+            <NonGitFolderDialog />
+          </ModalBoundary>
+        ) : null}
+        {activeModal === 'confirm-add-project-from-folder' ? (
+          <ModalBoundary boundaryId="modal.confirm-add-project-from-folder" resetKey>
+            <AddProjectFromFolderDialog />
+          </ModalBoundary>
+        ) : null}
+        {activeModal === 'project-added' ? (
+          <ModalBoundary boundaryId="modal.project-added" resetKey>
+            <ProjectAddedDialog />
+          </ModalBoundary>
+        ) : null}
+        {activeModal === 'agent-session-history' ? (
+          <ModalBoundary boundaryId="modal.agent-session-history" resetKey>
+            <AiVaultSessionHistoryDialog />
+          </ModalBoundary>
+        ) : null}
+        {activeModal === 'node-dist-mirror' ? (
+          <ModalBoundary boundaryId="modal.node-dist-mirror" resetKey>
+            <NodeDistMirrorDialog />
+          </ModalBoundary>
+        ) : null}
+        {activeModal === 'diagram-viewer' ? (
+          <ModalBoundary boundaryId="modal.diagram-viewer" resetKey>
+            <DiagramViewerModal />
+          </ModalBoundary>
+        ) : null}
+      </React.Suspense>
+      <React.Suspense fallback={null}>
+        {mountedLazyModalIds.has('quick-open') ? (
+          <ModalBoundary boundaryId="modal.quick-open" resetKey={activeModal === 'quick-open'}>
+            <QuickOpen />
+          </ModalBoundary>
+        ) : null}
+        {mountedLazyModalIds.has('worktree-palette') ? (
+          <ModalBoundary boundaryId="modal.worktree-palette" resetKey={activeModal === 'worktree-palette'}>
+            <WorktreeJumpPalette />
+          </ModalBoundary>
+        ) : null}
+        {mountedLazyModalIds.has('setup-guide') ? (
+          <ModalBoundary boundaryId="modal.setup-guide" resetKey={activeModal === 'setup-guide'}>
+            <SetupGuideModal />
+          </ModalBoundary>
+        ) : null}
+        {mountedLazyModalIds.has('feature-wall') ? (
+          <ModalBoundary boundaryId="modal.feature-wall" resetKey={activeModal === 'feature-wall'}>
+            <FeatureWallModal />
+          </ModalBoundary>
+        ) : null}
+      </React.Suspense>
+      <React.Suspense fallback={null}>
+        {activeModal === 'delete-worktree' ? (
+          <ModalBoundary boundaryId="modal.delete-worktree" resetKey>
+            <DeleteWorktreeDialog />
+          </ModalBoundary>
+        ) : null}
+        {activeModal === 'preserved-branch-review' ? (
+          <ModalBoundary boundaryId="modal.preserved-branch-review" resetKey>
+            <PreservedBranchBatchReviewModal />
+          </ModalBoundary>
+        ) : null}
+      </React.Suspense>
+    </>
   )
 }
 
@@ -310,7 +378,7 @@ export function bootstrap(options: { pairing: string }): Promise<void> {
           <PinnedTabCloseDialog />
           <RunningTerminalCloseDialog />
           <ResumeOffer />
-          <AddProjectDialogs />
+          <RootDialogs />
         </Providers>
       )
     })
