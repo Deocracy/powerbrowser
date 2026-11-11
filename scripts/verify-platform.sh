@@ -4030,8 +4030,8 @@ run_own_checks() {
     # call on a user, unknown or foreign tab reaches no page work, the flag is set only at creation, unshown agent tabs
     # are parked and user tabs never are, and every overlay visibility read goes through overlayShownToUser.
     "orca-browser-tab-scope|node $REPO_ROOT/scripts/verify-orca-browser-tab-scope.mjs"
-    # orca-browser-tab-scope-self-test: 18 plants on in-memory copies (wall, flag, parking, raw read, Stop, idle,
-    # container attribute, cookie container, wall container and group checks, parked focus, agent group, dialog
+    # orca-browser-tab-scope-self-test: 17 plants on in-memory copies (wall, flag, parking, raw read, Stop, idle,
+    # container attribute, cookie container, wall container check, parked focus, agent group, dialog
     # types, pinned LoginManager groups, page table x3, empty method list).
     "orca-browser-tab-scope-self-test|node $REPO_ROOT/scripts/verify-orca-browser-tab-scope.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
@@ -6712,6 +6712,13 @@ run_own_checks() {
       # Coordinator proof on the merged tree (p65-01, p65-02, p65-04); under the live lock with ORCA_* unset.
       "orca-offer-scan|node $REPO_ROOT/scripts/verify-orca-offer-scan.mjs"
       "orca-relaunch-restore-live|node $REPO_ROOT/scripts/verify-orca-relaunch-restore-live.mjs"
+      # NEW (66-03, BRW-03, P66-28, D-11): no-remote-agent-port-live launches the built binary twice headless (a control
+      # with --remote-debugging-port=0, then as shipped) and requires every listening TCP socket of the shipped process
+      # tree to be the sidecar's, orcad's or the tab-store endpoint's port, read from the profile at run time, after the
+      # control proved the detector sees the Remote Agent. The self-test plants verdict faults, then runs the control
+      # alone, which must go red naming the Remote Agent's socket. Both under the live lock with ORCA_* unset.
+      "no-remote-agent-port-live|node $REPO_ROOT/scripts/verify-no-remote-agent-port-live.mjs"
+      "no-remote-agent-port-live-self-test|node $REPO_ROOT/scripts/verify-no-remote-agent-port-live.mjs --self-test"
     )
   fi
 
