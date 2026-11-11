@@ -35,17 +35,25 @@
 //   node scripts/verify-orca-pairing-containment.mjs              (live; tier full)
 //   node scripts/verify-orca-pairing-containment.mjs --self-test  (fixtures; tier quick)
 
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { installOutputRedaction } from './lib/orca-run.mjs';
-import { collectorLine, historyCollector, needlesFromOffer, runCollector } from './lib/orca-offer-scan.mjs';
+import { decodeMozLz4, encodeMozLz4Literal } from './lib/mozlz4.mjs';
+import {
+    COLLECTORS, addressFieldCollector, bridgeFolderCollector, collectorLine, copyableTextCollector, historyCollector,
+    logsCollector, needlesFromOffer, nonLoopbackPeerCollector, offerEndpoint, registryFilesFromPin, runCollector,
+    sessionRestoreCollector, setupsCollector, wholeProfileCollector,
+} from './lib/orca-offer-scan.mjs';
 
 const SELF = fileURLToPath(import.meta.url);
+const REPO_ROOT = resolve(dirname(SELF), '..');
 const NAME = 'orca-pairing-containment';
 const SELF_REL = 'scripts/verify-orca-pairing-containment.mjs';
+const OFFER_FILE = 'web-pairing';
+const LOG_CONTROL = 'orcad ready on ';
 
 // ---------------------------------------------------------------------------
 // Fixtures: synthetic offers only, never a real one.
@@ -58,6 +66,8 @@ export function syntheticOffer({ endpoint = 'ws://127.0.0.1:26768', token = 'syn
     return { handOff: `http://127.0.0.1:26768/web-index.html#pairing=${encodeURIComponent(pairingUrl)}`, code, token, pairingUrl };
 }
 
+const put = (path, data, mode) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, data); if (mode) chmodSync(path, mode); };
+
 /** places.sqlite with a moz_places row per url. */
 function writePlaces(profileDir, urls) {
     const db = new DatabaseSync(join(profileDir, 'places.sqlite'));
@@ -65,6 +75,61 @@ function writePlaces(profileDir, urls) {
     const insert = db.prepare('INSERT INTO moz_places (url, title) VALUES (?, ?)');
     for (const url of urls) insert.run(url, 'fixture page');
     db.close();
+}
+
+const sessionFile = (url) => encodeMozLz4Literal(JSON.stringify({ version: ['sessionrestore', 1], windows: [{ tabs: [{ entries: [{ url, title: 'fixture' }] }] }] }));
+
+/** The four pinned source sites holder 5 is derived from, in the pin's own shape; `rename` breaks the registry constant. */
+function writePin(dir, { rename = false } = {}) {
+    put(join(dir, 'src/main/runtime/mobile-pairing-files.ts'), `import { E2EE_KEYPAIR_FILENAME } from '../../shared/runtime-e2ee-keypair-file'\n\nexport const ${rename ? 'DEVICE_REGISTRY_FILE' : 'DEVICE_REGISTRY_FILENAME'} = 'orca-devices.json'\nexport { E2EE_KEYPAIR_FILENAME }\n\nexport const MOBILE_PAIRING_USERDATA_FILES = [\n  DEVICE_REGISTRY_FILENAME,\n  E2EE_KEYPAIR_FILENAME\n] as const\n`);
+    put(join(dir, 'src/shared/runtime-e2ee-keypair-file.ts'), `export const E2EE_KEYPAIR_FILENAME = 'orca-e2ee-keypair.json'\n`);
+    put(join(dir, 'src/main/filesystem/durable-file-write.ts'), 'export function durableWriteTempPath(finalPath: string, owner?: string): string {\n  const ownerSuffix = owner === undefined ? \'\' : `.owner-${owner}`\n  return `${finalPath}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}${ownerSuffix}.tmp`\n}\n');
+    put(join(dir, 'src/main/runtime/device-registry-corruption.ts'), 'function corruptCopyPrefix(registryPath: string): string {\n  return `${basename(registryPath)}.corrupt-`\n}\n');
+    return dir;
+}
+
+/**
+ * A clean fixture under `dir`, every control present: a profile (places, session files, Setups, shell state, an orcad
+ * data root, the Theia origin's storage), a 0700 bridge folder with a 0600 offer file, a /proc tree with loopback
+ * LISTEN sockets, and the captured texts. Holders carry the offer on purpose (registry, its temporary and quarantine
+ * copies, the Theia origin's storage), so a green clean run proves the holder exclusions.
+ */
+function fixture(dir, offer, pin, marker) {
+    const profileDir = join(dir, 'profile');
+    const dataRoot = join(profileDir, 'powerbrowser-orca');
+    const bridgeDir = join(dir, 'bridge');
+    const procRoot = join(dir, 'proc');
+    mkdirSync(profileDir, { recursive: true });
+    writePlaces(profileDir, [marker]);
+    put(join(profileDir, 'sessionstore.jsonlz4'), sessionFile(marker));
+    put(join(profileDir, 'sessionstore-backups/recovery.jsonlz4'), sessionFile(marker));
+    put(join(profileDir, 'powerbrowser-theia/setups.json'), JSON.stringify({ setups: [{ name: 'P67 containment', windows: [] }] }));
+    put(join(profileDir, 'powerbrowser-shell-state.json'), JSON.stringify({ tabs: ['pb-orca:chat1'] }));
+    put(join(profileDir, 'prefs.js'), 'user_pref("browser.startup.homepage", "about:blank");\n');
+    put(join(dataRoot, 'orca-data.json'), JSON.stringify({ repos: [] }));
+    put(join(dataRoot, 'orca-devices.json'), JSON.stringify({ devices: [{ token: offer.token }] }));
+    put(join(dataRoot, 'orca-devices.json.4242.1700000000000.9f3a2b.tmp'), JSON.stringify({ devices: [{ token: offer.token }] }));
+    put(join(dataRoot, 'orca-e2ee-keypair.json'), JSON.stringify({ publicKeyB64: 'c3ludGhldGljLWtleQ' }));
+    put(join(profileDir, 'storage/default/http+++127.0.0.1+40404/ls/data.sqlite'), offer.handOff); // holder 4 stand-in
+    mkdirSync(bridgeDir, { recursive: true });
+    chmodSync(bridgeDir, 0o700);
+    put(join(bridgeDir, OFFER_FILE), offer.handOff, 0o600);
+    put(join(bridgeDir, 'orcad-data-root'), dataRoot, 0o600);
+    const listen = (addr, inode) => `   0: ${addr}:0BB8 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 ${inode} 1 0000000000000000 100 0 0 10 0`;
+    put(join(procRoot, 'net/tcp'), ['  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode', listen('0100007F', 1001), listen('0100007F', 1002)].join('\n') + '\n');
+    put(join(procRoot, 'net/tcp6'), '  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n');
+    for (const [pid, inode] of [[111, 1001], [222, 1002]]) {
+        mkdirSync(join(procRoot, String(pid), 'fd'), { recursive: true });
+        symlinkSync(`socket:[${inode}]`, join(procRoot, String(pid), 'fd', '3'));
+    }
+    return {
+        marker, profileDir, dataRoot, bridgeDir, procRoot, offerFile: OFFER_FILE, holder5: registryFilesFromPin(pin),
+        theiaOriginDir: 'http+++127.0.0.1+40404', setupName: 'P67 containment', logControl: LOG_CONTROL,
+        logTexts: [`${LOG_CONTROL}127.0.0.1:26768, pid 111, terminal daemon pid 112.`, 'POWERBROWSER_SHELL_READY'],
+        addressTexts: [{ kind: 'control', text: marker }, { kind: 'orca', text: 'pb-orca:chat1' }],
+        copyable: { rows: ['Port: 3000', 'Orca port: 26768', 'Orca state: ready'], log: 'theia backend started', tabAddresses: ['pb-orca:chat1'] },
+        endpoint: offerEndpoint(offer.handOff), orcaPort: 26768, pids: { orcad: [111], theia: [222] },
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -77,29 +142,69 @@ function runSelfTest() {
     const secrets = needles.map((n) => n.bytes.toString('utf8'));
     const restore = installOutputRedaction(secrets);
     const marker = 'http://127.0.0.1:1/containment-marker-0001';
+    const pin = writePin(join(root, 'pin'));
     let failures = 0;
     let cases = 0;
+    let plants = 0;
     const printed = [];
-    const say = (line) => { printed.push(line); console.log(line); };
-    // expect: null for green, else a substring the red line must hold.
-    const check = (label, collector, ctx, expect) => {
-        const { red, line } = collectorLine(runCollector(collector, { needles, marker, ...ctx }));
-        printed.push(line);
-        if (expect === null ? red : !(red && line.includes(expect))) {
-            console.error(`  FAIL ${label} -> ${line}`);
-            failures++;
-            return;
-        }
-        cases++;
-        say(`  ok ${label} -> ${line}`);
+    const ok = (line) => { cases++; printed.push(line); console.log(`  ok ${line}`); };
+    const bad = (line) => { failures++; printed.push(line); console.error(`  FAIL ${line}`); };
+    let n = 0;
+    // A fresh clean fixture, changed by `plant`; `expect` null means green, else a text the red line must hold.
+    const check = (label, collector, plant, expect) => {
+        const ctx = { needles, ...fixture(join(root, `case-${++n}`), offer, pin, marker) };
+        plant?.(ctx);
+        const { red, line } = collectorLine(runCollector(collector, ctx));
+        if (expect === null ? red : !(red && line.includes(expect))) { bad(`${label} -> ${line}`); return; }
+        if (expect !== null && !expect.includes('collector blind')) plants++;
+        ok(`${label} -> ${line}`);
     };
-    const profile = (name) => { const dir = join(root, name); mkdirSync(dir); return dir; };
+    const nonLoop = syntheticOffer({ endpoint: 'ws://192.168.1.5:26768' });
     try {
-        { const p = profile('h-clean'); writePlaces(p, [marker]); check('history, clean fixture', historyCollector, { profileDir: p }, null); }
-        { const p = profile('h-row'); writePlaces(p, [marker, `http://127.0.0.1:2/x#pairing=${encodeURIComponent(offer.pairingUrl)}`]); check('history, a moz_places row holding the pairing-fragment needle', historyCollector, { profileDir: p }, 'sink history: FAIL -- offer found'); }
-        { const p = profile('h-blind'); writePlaces(p, ['http://127.0.0.1:1/other']); check('history without its marker row', historyCollector, { profileDir: p }, 'sink history: FAIL -- collector blind'); }
+        // mozlz4: a literal round trip, a hand-built block with an overlapping match, a bad magic.
+        const text = Buffer.from(JSON.stringify({ a: 'b'.repeat(300) }));
+        if (decodeMozLz4(encodeMozLz4Literal(text)).equals(text)) ok('mozlz4 round trip of a 300-byte run'); else bad('mozlz4 round trip differs');
+        const block = Buffer.concat([Buffer.from('mozLz40\0', 'latin1'), Buffer.from([12, 0, 0, 0, 0x35]), Buffer.from('abc'), Buffer.from([3, 0, 0x00])]);
+        if (decodeMozLz4(block).toString() === 'abcabcabcabc') ok('mozlz4 decodes a hand-built match (offset 3, length 9)'); else bad('mozlz4 hand-built match decoded wrong');
+        try { decodeMozLz4(Buffer.from('notLz40\0\0\0\0\0')); bad('mozlz4 accepted a bad magic'); } catch { ok('mozlz4 refuses a bad magic'); }
+        // Holder 5 from the pin: the fixture pin, the real orca/ when fetched, and a renamed constant.
+        if (existsSyncSafe(join(REPO_ROOT, 'orca', 'src'))) {
+            try { const h = registryFilesFromPin(join(REPO_ROOT, 'orca')); if (h.isHolder('orca-devices.json') && h.isHolder('orca-devices.json.corrupt-1') && !h.isHolder('orca-data.json')) ok('holder 5 derived from orca/ at the pin'); else bad('holder 5 at the pin does not hold the registry set'); } catch (e) { bad(`holder 5 at the pin -> ${e.message}`); }
+        } else ok('holder 5 at the pin not checked: no orca/ (the fixture pin stands in)');
+        try { registryFilesFromPin(writePin(join(root, 'pin-moved'), { rename: true })); bad('a renamed registry constant stayed green'); } catch (e) { if (/^source moved/.test(e.message)) { plants++; ok(`a pin whose registry constant is renamed -> ${e.message.split(':')[0]}`); } else bad(`renamed registry constant -> ${e.message}`); }
+        // Every collector green on the clean fixture: each control found, holders excluded.
+        for (const c of COLLECTORS) check(`clean fixture, ${c.sink}`, c, null, null);
+        // P67-12 plants, each on a fresh fixture.
+        check('a moz_places row holding the pairing URL', historyCollector, (x) => writePlaces(x.profileDir, [offer.pairingUrl]), 'sink history: FAIL -- offer found');
+        check('a WAL page holding the raw code', historyCollector, (x) => put(join(x.profileDir, 'places.sqlite-wal'), Buffer.concat([Buffer.alloc(32), Buffer.from(offer.code)])), 'sink history: FAIL -- offer found');
+        check('a compressed session file holding the web-client URL', sessionRestoreCollector, (x) => put(join(x.profileDir, 'sessionstore-backups/previous.jsonlz4'), sessionFile(offer.handOff)), 'sink session restore: FAIL -- offer found');
+        check('a Setups record holding the raw code', setupsCollector, (x) => put(join(x.profileDir, 'powerbrowser-theia/setups.json'), JSON.stringify({ setups: [{ name: 'P67 containment', windows: [{ url: offer.code }] }] })), 'sink setups and shell state: FAIL -- offer found');
+        check('a log text holding the device token', logsCollector, (x) => x.logTexts.push(`connected with ${offer.token}`), 'sink logs: FAIL -- offer found');
+        check('a needle in orca-data.json in the data root', logsCollector, (x) => put(join(x.dataRoot, 'orca-data.json'), JSON.stringify({ t: offer.token })), 'sink logs: FAIL -- offer found');
+        check('a needle in orca-devices.json.corrupt-1 (holder 5, allowed)', logsCollector, (x) => put(join(x.dataRoot, 'orca-devices.json.corrupt-1'), JSON.stringify({ t: offer.token })), null);
+        check('a needle in orca-devices.json.corrupt-1, whole profile (holder 5, allowed)', wholeProfileCollector, (x) => put(join(x.dataRoot, 'orca-devices.json.corrupt-1'), JSON.stringify({ t: offer.token })), null);
+        check('an address text holding the web-client URL', addressFieldCollector, (x) => x.addressTexts.push({ kind: 'orca', text: offer.handOff }), 'sink address field: FAIL -- offer found');
+        check('a diagnostics text holding the raw code', copyableTextCollector, (x) => x.copyable.rows.push(`Orca offer: ${offer.code}`), 'sink copyable text: FAIL -- offer found');
+        check('a tab-address copy holding the pairing URL', copyableTextCollector, (x) => x.copyable.tabAddresses.push(offer.pairingUrl), 'sink copyable text: FAIL -- offer found');
+        check('a profile file outside every holder holding the token', wholeProfileCollector, (x) => appendFileSync(join(x.profileDir, 'prefs.js'), `// ${offer.token}\n`), 'sink whole profile: FAIL -- offer found');
+        check('a 0644 offer file in a 0755 folder', bridgeFolderCollector, (x) => { chmodSync(x.bridgeDir, 0o755); chmodSync(join(x.bridgeDir, OFFER_FILE), 0o644); }, 'sink bridge folder: FAIL -- bridge folder mode');
+        check('a stray copy web-pairing.bak in the bridge folder', bridgeFolderCollector, (x) => put(join(x.bridgeDir, `${OFFER_FILE}.bak`), offer.handOff, 0o600), 'stray copy (1 file other than web-pairing holds a needle)');
+        check('an offer whose endpoint is ws://192.168.1.5:26768', nonLoopbackPeerCollector, (x) => { x.endpoint = offerEndpoint(nonLoop.handOff); }, 'sink non-loopback peer: FAIL -- non-loopback peer: the decoded endpoint');
+        check('a Theia backend LISTEN socket on 0.0.0.0', nonLoopbackPeerCollector, (x) => put(join(x.procRoot, 'net/tcp'), `header\n   0: 0100007F:0BB8 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000 0 1001 1\n   1: 00000000:0BB8 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000 0 1002 1\n`), 'sink non-loopback peer: FAIL -- non-loopback peer: 1 listening socket(s) off loopback');
+        // A blind collector for each control kind.
+        const blind = 'collector blind';
+        check('history without its marker row', historyCollector, (x) => { rmSync(join(x.profileDir, 'places.sqlite')); writePlaces(x.profileDir, ['http://127.0.0.1:1/other']); }, `sink history: FAIL -- ${blind}`);
+        check('session files without the marker', sessionRestoreCollector, (x) => { put(join(x.profileDir, 'sessionstore.jsonlz4'), sessionFile('about:blank')); put(join(x.profileDir, 'sessionstore-backups/recovery.jsonlz4'), sessionFile('about:blank')); }, `sink session restore: FAIL -- ${blind}`);
+        check('setups.json without the saved Setup', setupsCollector, (x) => put(join(x.profileDir, 'powerbrowser-theia/setups.json'), '{"setups":[]}'), `sink setups and shell state: FAIL -- ${blind}`);
+        check('logs without the orcad ready line', logsCollector, (x) => { x.logTexts = ['POWERBROWSER_SHELL_READY']; }, `sink logs: FAIL -- ${blind}`);
+        check('address texts without the control web tab', addressFieldCollector, (x) => { x.addressTexts = x.addressTexts.filter((a) => a.kind !== 'control'); }, `sink address field: FAIL -- ${blind}`);
+        check('diagnostics rows without the Orca port row', copyableTextCollector, (x) => { x.copyable.rows = x.copyable.rows.filter((r) => !r.startsWith('Orca port')); }, `sink copyable text: FAIL -- ${blind}`);
+        check('a profile without the marker bytes in places.sqlite', wholeProfileCollector, (x) => { rmSync(join(x.profileDir, 'places.sqlite')); writePlaces(x.profileDir, ['http://127.0.0.1:1/other']); }, `sink whole profile: FAIL -- ${blind}`);
+        check('a bridge folder without the offer file', bridgeFolderCollector, (x) => rmSync(join(x.bridgeDir, OFFER_FILE)), `sink bridge folder: FAIL -- ${blind}`);
+        check('no LISTEN row for orcad', nonLoopbackPeerCollector, (x) => { x.pids.orcad = [333]; }, `sink non-loopback peer: FAIL -- ${blind}`);
+        // The output never carries a needle (the redaction is a second line of defence, not the proof).
         const leaked = secrets.filter((s) => printed.join('\n').includes(s));
-        if (leaked.length) { console.error(`  FAIL needle bytes in the check's output (${leaked.length} form(s))`); failures++; } else say('  ok the output holds no needle');
+        if (leaked.length) bad(`needle bytes in the check's output (${leaked.length} form(s))`); else ok('the output holds no needle');
     } finally {
         rmSync(root, { recursive: true, force: true });
         restore();
@@ -108,8 +213,12 @@ function runSelfTest() {
         console.error(`${NAME} self-test: FAIL -- ${failures} case(s) did not behave`);
         return 1;
     }
-    console.log(`${NAME} self-test: PASS -- ${cases} cases: each control found on its clean fixture, each plant red naming its sink, each blind collector red`);
+    console.log(`${NAME} self-test: PASS -- ${cases} cases, ${plants} planted faults each red naming its sink, ${COLLECTORS.length} controls found and ${COLLECTORS.length} blind collectors red`);
     return 0;
+}
+
+function existsSyncSafe(path) {
+    try { return realpathSync(path) !== ''; } catch { return false; }
 }
 
 // ---------------------------------------------------------------------------

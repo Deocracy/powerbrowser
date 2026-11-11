@@ -4075,6 +4075,12 @@ run_own_checks() {
     # owner code read from error.code, a stock window judged before the mark was proven, ...) going red by name.
     "orca-browser-agent-live-self-test|node $REPO_ROOT/scripts/verify-orca-browser-agent-live.mjs --self-test"
     "orca-agent-mark-live-self-test|node $REPO_ROOT/scripts/verify-orca-agent-mark-live.mjs --self-test"
+    # NEW (67-04, RUN-07, P67-08..P67-12, A-8): orca-pairing-containment-self-test plants a synthetic offer in every
+    # sink of a fixture profile (history row and WAL, mozlz4 session file, Setups, log, data root, address, diagnostics,
+    # tab-address copy, profile file, bridge folder mode and stray copy, non-loopback endpoint and listener) and requires
+    # each red naming its sink; each collector's control is found first and a blind one is red. The five holders (registry
+    # set derived from the pin) stay green. One scanner: scripts/lib/orca-offer-scan.mjs (P65-23), mozlz4 in scripts/lib.
+    "orca-pairing-containment-self-test|node $REPO_ROOT/scripts/verify-orca-pairing-containment.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
