@@ -4,16 +4,16 @@ milestone: v1.7
 current_phase: 59
 current_phase_name: Carry-forward from v1.5 and v1.6
 status: executing
-stopped_at: Phase 59 context gathered
-last_updated: "2026-11-10T22:31:21.754Z"
+stopped_at: Completed 66-07-PLAN.md
+last_updated: "2026-11-11T16:12:01.967Z"
 last_activity: 2026-11-08
 last_activity_desc: Phase 59 execution started
-state_head: 7e31d172a46a15fd3e696ad72000306dacb74c56
+state_head: 44a0dde5df20ed4c93db78521901234eaadf1916
 progress:
   total_phases: 10
-  completed_phases: 3
-  total_plans: 59
-  completed_plans: 31
+  completed_phases: 4
+  total_plans: 61
+  completed_plans: 49
 milestone_name: Orca integration
 ---
 
@@ -47,7 +47,7 @@ Progress: [░░░░░░░░░░] 0%
 | 63 | Agent hooks on Orca's terminal engine (rescoped by D-31) | TERM-02, EXT-02 | Complete (human items deferred) |
 | 64 | Orca panes as PowerBrowser tabs | TAB-01, TAB-02, TAB-04, TAB-06, TERM-01, TERM-04 | Executed (64-06 gap closure); TAB-04 pending on stage g3 (g2 PASS on the 65-05 tree); verification pending |
 | 65 | Orca workspace in Theia | TAB-05, TAB-07, TAB-08, TAB-09 | Complete (verified 8/8, human items deferred) |
-| 66 | PowerBrowser web tabs as Orca's browser | BRW-02, BRW-03, BRW-04, BRW-05 | Executed (66-06); BRW-04, BRW-05 complete; BRW-02, BRW-03 pending on the clause (j) owner decision |
+| 66 | PowerBrowser web tabs as Orca's browser | BRW-02, BRW-03, BRW-04, BRW-05 | Executed (66-06, 66-07); BRW-02, BRW-03, BRW-04, BRW-05 complete |
 | 67 | Hosting hardening | RUN-06, RUN-07, RUN-08, RUN-09, INJ-01 | Not started |
 | 68 | Three-OS artifacts, weekly re-pin and upstream seams | OVL-02, OVL-03, OVL-06, PLAT-01, PLAT-02 | Not started |
 
@@ -95,7 +95,9 @@ Owner decisions are in DECISIONS.md. The ones that shape the phase order:
 - A3 (as built, measured live): the browser host authenticates as the pane client's own paired device through the pane bundle's link; the renderer path used the device-key credential and a client placement (orca-browser-agent-live (g)). The host waits for the link's readiness event before reading its connection (fix 36efe6ea).
 - A4 (as built): page alert, confirm and prompt are answered natively; HTTP auth and beforeunload are refused to the agent (browser_command_unavailable), proven live in clause (m); closing a web tab cancels its window-modal page prompt (fix 8684931d).
 - A5 (as built): browser.snapshot reproduces agent-browser 0.39.4's grammar from the DOM in the agent child; references come from Orca's pinned agent-browser against Chromium (orca-snapshot-fixtures).
-- P66-09 activation rule: the browser route never activates a tab at its own create; it reveals the bound web tab only on a later store activation of a page bound before it (createRevealTracker). Live, no PB-hosted page ever becomes an Orca store record, so the rule has no event source (Blockers/Concerns).
+- P66-09 activation rule: the browser route never activates a tab at its own create; it reveals the bound web tab only on a later store activation of a page bound before it (createRevealTracker). Restated by D-34 (66-07): a creation mark ends at the page's first listed record, because the row is PowerBrowser's own, added in the background.
+- D-34 (Chris, 2026-11-11, "Add them from PB's side now"): the pane entry adds each agent page to Orca's store when its web tab opens (addBrowserPage: Orca's record builders, browserTabOpenView, createUnifiedTab with activate: false, setRemoteBrowserPageHandle with the staged client-hosted handle stageWebRuntimeBrowserTab writes) and drops it with discardStagedWebRuntimeBrowserTab; createBrowserTab's own managed-browser gate refuses a paired web client without screencast, so it is not called. Measured in 66-07: orcad's session.tabs.list lists no client-hosted page, so no CLI tab switch reaches a client store.
+- Phase 66 gap closed (66-07, 2026-11-11): orca-browser-agent-live PASS with clause (j) (reveal in 16 ms after Orca's own selection of the row); BRW-02 and BRW-03 complete.
 - P66-08 (as built): a frontend reload ends the previous frontend's pages: the host keeps its bound page ids in the Theia document's sessionStorage and closes them with browser.tabClose after the next attach (fix 5c60d6bd), because orcad recovers pages only for the same host client id.
 - 66-02/66-05 split: the Theia lane exceeded the 15-file cap and became 66-02 (wave 1) and 66-05 (wave 2, on p66-02); the coordinator is 66-06.
 - D-33 (Chris, 2026-11-11, 66-06 Task 2, option-g): a failed browser-host attach stays a frontend log line in Phase 66; Phase 67 adds the failure class browser-not-attached to its Orca failure page (P67-36, plans 67-01 and 67-03).
@@ -118,7 +120,7 @@ None yet.
 - OVL-03's live pairing of the stock mobile app needs an Android device. Protocol skew between a newer stock app and the pinned orcad is a recorded risk (D-29).
 - Pin lag: the first pin, 1.4.248, was already one release behind (1.4.249) on 2026-11-04. Orca ships about 5 releases a week.
 - Phase 65 owner items for the end-of-milestone pass (65-05-SUMMARY.md "Deferred Verification"): P65-01 check-details read as an Orca-only view; P65-09 Settings in the left side panel at 660 px or a main-area pb-orca:settings tab; CA-07 one used runtime token row per paired launch (to Phase 67); P65-06 the fixed workspace file and its path in the Theia URL fragment (to Phase 67); P65-17 session-only pairing through Orca's plain test export or a declared seam; populated orchestration and creation surfaces unproven live; launching straight into the Orca mode may contact the favicon hosts without a click; leftover scratch worktree directories under the host's `~/orca/workspaces/repo/` from 65-05's first orca-workspace-live runs need removing by hand.
-- **Phase 66 blocker, owner decision needed (66-06): orca-browser-agent-live clause (j) cannot pass.** No PowerBrowser-hosted Orca page ever becomes an Orca store record in the pane client (measured: zero `browser` records in subscribePanes after CLI creates, a renderer-path create, an active worktree and `tab switch`), because Orca's web client materializes browser tabs through WebRuntimeClient, which the thin host replaces. P66-09's reveal on store activation therefore has no event source. BRW-02 and BRW-03 stay pending until the owner picks: offer an upstream export (option-a), a bundle export that materializes the store tab (pane entry change), or option-d (record (j) known-open in WINDOWS.md).
+- **Resolved by D-34 and 66-07 (2026-11-11): orca-browser-agent-live passes with clause (j).** Former text: **Phase 66 blocker, owner decision needed (66-06): orca-browser-agent-live clause (j) cannot pass.** No PowerBrowser-hosted Orca page ever becomes an Orca store record in the pane client (measured: zero `browser` records in subscribePanes after CLI creates, a renderer-path create, an active worktree and `tab switch`), because Orca's web client materializes browser tabs through WebRuntimeClient, which the thin host replaces. P66-09's reveal on store activation therefore has no event source. BRW-02 and BRW-03 stay pending until the owner picks: offer an upstream export (option-a), a bundle export that materializes the store tab (pane entry change), or option-d (record (j) known-open in WINDOWS.md).
 - O1 (A1): a parked agent page reports `visibilityState` hidden and runs with background timer throttling; `wait` polls at about 1 s there.
 - O2 (A4): a page dialog in an agent tab opens a window-modal dialog over the IDE until the agent or the user answers it (HTTP auth and beforeunload stay the user's).
 - P66-33's "browser host did not attach" diagnostics row: not built in Phase 66 (D-33); Phase 67 RUN-06 adds the failure class browser-not-attached (P67-36). Until then the frontend log line is the only record. The host also does not re-attach after orcad restarts (P67-36's Reconnect covers it).
@@ -133,9 +135,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-08T22:31:10.710Z
-Stopped at: Phase 59 context gathered
-Resume file: .planning/workstreams/orca/phases/59-carry-forward-from-v1-5-and-v1-6/59-CONTEXT.md
+Last session: 2026-11-11T16:12:01.553Z
+Stopped at: Completed 66-07-PLAN.md
+Resume file: None
 
 ## Deferred Verification
 
@@ -148,4 +150,4 @@ Resume file: .planning/workstreams/orca/phases/59-carry-forward-from-v1-5-and-v1
 | 63 | verified 6/7, human_needed (63-VERIFICATION.md; 63-04-SUMMARY.md); TERM-02 complete on a live orca-agent-status-live PASS; EXT-02 extension half deferred | end-of-milestone pass (D-18): the Claude Code extension's claude through PowerBrowser's wrapper with the session live in Orca and spike 006 "Blocked on EXT-01" steps 1-4 (with 60-05 Task 2; research assumptions A3, A5); an owner look at the wrapper's placeholder pane as an Orca terminal tab once Phase 64 hosts terminals; the wrapper path in packaged builds and a Windows twin of the POSIX sh claude-wrapper launcher (Phase 68) |
 | 64 | executed by 64-05 and 64-06; TAB-01, TAB-02, TERM-01, TERM-04, TAB-06 complete; TAB-04 pending (64-06-SUMMARY.md) | end-of-milestone pass (D-18): TAB-04 -- re-run orca-tabs-live stage (g2) tab-groups once the check drives a real Orca tab-group split (Orca's own web client's "Split Chat Right" opened a chat in the same group; its group split is a tab drag to a group edge); the hosted chat's look and behaviour against Orca's own; Orca's running-agent close confirmation readable with working buttons, and the busy-chat close (not exercised: no prompt keeps a chat busy); owner item T-61-04 (P64-07); auto-mode picks P64-05 (boot at frontend start), P64-18 (no activation hook), the Open Question 4 html-clause ruling, P64-37 (the worktree pick); the in-session key control replacing P63-25's (P64-33); the EXT-02 wrapper's placeholder pane as a hosted terminal tab (P64-36); a stored custom mode named "Orca" hidden by the shipped Orca mode; the Orca address-bar default (Address); a layout-restored pb-orca: tab's empty title until boot; OWNER REVIEW (64-06): the Orca chords still active in hosted terminals under terminal-first (terminal.paste Ctrl+V/Ctrl+Shift+V/Shift+Insert, terminal.copySelection Ctrl+Shift+C/Ctrl+C with a selection, terminal.expandPane Ctrl+Shift+Enter), of which Ctrl+V and Ctrl+C-with-selection capture control characters and cannot be released without a seam (Orca's xterm bypass policy hard-codes them); Ctrl+Shift+W from a focused web page goes to the page; the two quick-pick placeholders "Choose the Orca worktree for the new terminal" and "Choose the Orca worktree for the new chat"; OWNER DECISIONS ANSWERED: TERM-04 by D-32, the New Orca Terminal/Chat fallback by P64-37 |
 | 65 | executed by 65-05; TAB-05, TAB-07, TAB-08, TAB-09 complete; orca-tabs-live g3 red (TAB-04); owner items P65-01, P65-09 (660 px), CA-07, P65-06, P65-17, populated orchestration/creation surfaces, launch-into-Orca-mode egress (65-05-SUMMARY.md) | end-of-milestone pass (D-18): `/gsd-verify-work 65 --ws orca`; the owner items; a g3 drive with a second client that receives host frames |
-| 66 | executed by 66-06; BRW-04, BRW-05 complete; BRW-02, BRW-03 pending on orca-browser-agent-live (j) (owner decision, Blockers/Concerns); owner items: copy review of the four mark/Stop strings, clause (f) decoy SKIP on a host with an installed Orca, CSP-strict pages refuse eval, parked-tab timer throttling (O1), agent-tab dialogs over the IDE (O2), same-origin iframes not walked by snapshot, the delta-size approximation, no host re-attach after orcad restarts (P67-36), agent history in Places, spike 005 owner note (S2 over S1), P66-08, P66-11, P66-22, P66-24, P66-26; visual mark check in light and dark themes, a real-worktree agent session with the user working in another tab, the privacy paragraph wording (66-CONTEXT Deferred Verification) | end-of-milestone pass (D-18): `/gsd-verify-work 66 --ws orca`; the owner items; re-run orca-browser-agent-live once (j) is decided |
+| 66 | executed by 66-06 and 66-07; BRW-02..BRW-05 complete (66-07: clause (j) PASS, D-34); orca-tabs-live stage tab-groups-cross-client (g3) still red as before Phase 66; the store row's title stays "New Tab" (page metadata does not update it); owner items: copy review of the four mark/Stop strings, clause (f) decoy SKIP on a host with an installed Orca, CSP-strict pages refuse eval, parked-tab timer throttling (O1), agent-tab dialogs over the IDE (O2), same-origin iframes not walked by snapshot, the delta-size approximation, no host re-attach after orcad restarts (P67-36), agent history in Places, spike 005 owner note (S2 over S1), P66-08, P66-11, P66-22, P66-24, P66-26; visual mark check in light and dark themes, a real-worktree agent session with the user working in another tab, the privacy paragraph wording (66-CONTEXT Deferred Verification) | end-of-milestone pass (D-18): `/gsd-verify-work 66 --ws orca`; the owner items; re-run orca-browser-agent-live |

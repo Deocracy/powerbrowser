@@ -109,9 +109,9 @@ TERM-03 (remote terminals) moved to v2; see "Terminals (TERM)" under v2 Requirem
 
 - [x] **BRW-01**: A browser-parity spike reconciles Orca's browser inventory against Gecko,
   chooses the seam, and answers `research/FEATURES.md` questions 1-8. (direction note)
-- [ ] **BRW-02**: Each Orca browser page is a PowerBrowser web tab with PowerBrowser chrome; the
+- [x] **BRW-02**: Each Orca browser page is a PowerBrowser web tab with PowerBrowser chrome; the
   stock screencast pane and its dead entry points are never shown. (T-9, D-1)
-- [ ] **BRW-03**: Orca agents drive PowerBrowser web tabs through a chrome-side bridge that can
+- [x] **BRW-03**: Orca agents drive PowerBrowser web tabs through a chrome-side bridge that can
   reach only Orca-created tabs; no WebDriver BiDi TCP port in shipped PowerBrowser. (D-11)
 - [x] **BRW-04**: While an agent drives a tab, PowerBrowser's Theia chrome bar shows an
   "agent is controlling this tab" mark with a Stop button; stock browser windows are unchanged.
@@ -239,8 +239,8 @@ Filled by the roadmap.
 | TAB-08 | Phase 65 | Complete |
 | TAB-09 | Phase 65 | Complete |
 | BRW-01 | Phase 61 | Complete |
-| BRW-02 | Phase 66 | Pending |
-| BRW-03 | Phase 66 | Pending |
+| BRW-02 | Phase 66 | Complete |
+| BRW-03 | Phase 66 | Complete |
 | BRW-04 | Phase 66 | Complete |
 | BRW-05 | Phase 66 | Complete |
 | EXT-01 | Phase 60 | Pending |
