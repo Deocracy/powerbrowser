@@ -10,6 +10,8 @@
  * disposes only when the store drops the pane (disposeFromStore). The node
  * carries the CSS scope attribute (C4). No PB-authored text is rendered: until
  * the store has the tab, Orca's own waiting state shows (P64-26).
+ * Phase 65 (N-1): a tab-less page tab (page:<view>, empty tabId) takes Orca's
+ * viewTitle and closes by disposing itself.
  */
 import * as React from '@theia/core/shared/react';
 import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
@@ -54,6 +56,20 @@ export class OrcaPaneWidget extends ReactWidget {
             this.toDispose.push(scoped);
         }
         this.update();
+        if (this.tabless) {
+            // N-1: a page tab has no Orca tab record to retitle it; its title is Orca's own (P65-26).
+            this.bundle.ready().then(api => {
+                const title = (api as unknown as { viewTitle(kind: string): string }).viewTitle(this.options.kind);
+                if (title && !this.isDisposed) {
+                    this.setRecordTitle(title, '');
+                }
+            }).catch(() => { /* the bundle logged its failed step once */ });
+        }
+    }
+
+    /** N-1: a page tab (page:<view>) has no Orca tab behind it. */
+    get tabless(): boolean {
+        return !this.options.tabId;
     }
 
     /** Title from Orca's own label; the tooltip names the worktree (P64-13). */
@@ -110,6 +126,10 @@ export class OrcaPaneWidget extends ReactWidget {
 
     /** P64-11: ask Orca's own close (with its confirmation); never dispose here. */
     protected override onCloseRequest(_msg: Message): void {
+        if (this.tabless) {
+            this.dispose(); // no Orca tab backs a page tab, so there is no Orca close to ask
+            return;
+        }
         const { worktreeId, tabId, paneKey } = this.options;
         if (this.bundle.failed) {
             console.info(`${LOG_PREFIX} Orca ${this.options.kind} pane close not sent: the pane bundle did not boot`);

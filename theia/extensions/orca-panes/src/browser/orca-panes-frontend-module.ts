@@ -19,6 +19,7 @@ import {
 import { OrcaPaneBundle } from './orca-pane-bundle';
 import { OrcaPaneObserver } from './orca-pane-observer';
 import { OrcaPaneWidget, OrcaPaneWidgetOptions } from './orca-pane-widget';
+import { bindOrcaSidePanel } from './side-panel/orca-side-panel-module';
 
 const LOG_PREFIX = '[@powerbrowser/orca-panes]';
 
@@ -180,4 +181,6 @@ export default new ContainerModule(bind => {
     bind(CommandContribution).toService(OrcaPaneCommands);
     bind(OrcaTerminalKeybindings).toSelf().inSingletonScope();
     bind(KeybindingContribution).toService(OrcaTerminalKeybindings);
+    // NEW (65-03): Orca side panel (TAB-07, P65-09)
+    bindOrcaSidePanel(bind);
 });

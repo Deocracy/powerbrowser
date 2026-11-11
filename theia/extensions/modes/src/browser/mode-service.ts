@@ -108,12 +108,16 @@ export interface ModeRules {
  * with shipped defaults"). One row per shipped descriptor, one line per row:
  * gui07-mode-toggle-commands reads this table and compares it with the
  * descriptors' first-activation placements and collapse areas.
+ * P65-09: the orca row docks Orca's two view containers, the left
+ * powerbrowser-orca-view-container and the right
+ * powerbrowser-orca-right-view-container (literals; modes never imports
+ * orca-panes), and adds no activation hook (P64-18).
  */
 export const SHIPPED_MODE_RULES: Readonly<Record<string, ModeRules>> = Object.freeze({
     coding: { left: 'open', right: 'keep', bottom: 'open', furniture: true, organising: false, views: { left: ['explorer-view-container'], right: [], bottom: [] } },
     browsing: { left: 'closed', right: 'closed', bottom: 'closed', furniture: false, organising: false, views: { left: [], right: [], bottom: [] } },
     organising: { left: 'closed', right: 'closed', bottom: 'closed', furniture: false, organising: true, views: { left: [], right: [], bottom: [] } },
-    orca: { left: 'closed', right: 'closed', bottom: 'closed', furniture: true, organising: false, views: { left: [], right: [], bottom: [] } },
+    orca: { left: 'open', right: 'open', bottom: 'closed', furniture: true, organising: false, views: { left: ['powerbrowser-orca-view-container'], right: ['powerbrowser-orca-right-view-container'], bottom: [] } },
 });
 
 export interface CustomModeSnapshot {

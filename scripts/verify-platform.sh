@@ -4010,6 +4010,15 @@ run_own_checks() {
     # text, missing and extra root, dirty editor closed, key left behind, Untitled file, reload) and planRoots,
     # noteUserRemovals and planMigration from orca-root-sync.ts against the plan's behaviour list.
     "orca-workspace-live-self-test|node $REPO_ROOT/scripts/verify-orca-workspace-live.mjs --self-test"
+    # NEW (65-03, TAB-09, P65-15): orca-no-pb-add-project. Vocabulary from Orca's sidebar (translate defaults matching
+    # 'add (a )?project' and the add-repo entry); PB set from theia/extensions/*/src and the chrome bar; empty intersection.
+    "orca-no-pb-add-project|node $REPO_ROOT/scripts/verify-orca-no-pb-add-project.mjs"
+    "orca-no-pb-add-project-self-test|node $REPO_ROOT/scripts/verify-orca-no-pb-add-project.mjs --self-test"
+    # orca-side-panel-live-self-test and orca-add-project-live-self-test (65-03, P65-24/P65-14): the live rows' pure
+    # comparators over fixtures (missing or extra sidebar row, agents part stayed, container leaked, control host
+    # absent, unlisted host; unequal or missing add, remove left a row, owned root kept). Hermetic.
+    "orca-side-panel-live-self-test|node $REPO_ROOT/scripts/verify-orca-side-panel-live.mjs --self-test"
+    "orca-add-project-live-self-test|node $REPO_ROOT/scripts/verify-orca-add-project-live.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6675,6 +6684,13 @@ run_own_checks() {
       # positive control: the Monaco root selector matched in a Theia editor before its absence in Orca pane roots.
       # Coordinator-run on the merged tree after orca-pane-css-live, under the live lock with ORCA_* unset.
       "orca-workspace-live|node $REPO_ROOT/scripts/verify-orca-workspace-live.mjs"
+      # NEW (65-03, TAB-07/TAB-09, P65-24/P65-27): orca-side-panel-live, Orca's sidebar, Settings, Agents and right
+      # sidebar in the Orca mode's two view containers (clauses a-i: docking, rows vs the CLI lists, a settings
+      # round-trip, the Agents part, worktree activation, page tabs, no leak into Coding or Browsing, registry, egress
+      # after a planted .invalid control resolution). orca-add-project-live: Orca's Add-project and remove, the stock
+      # standalone page first as the control, then PowerBrowser's side panel. Both under the live lock.
+      "orca-side-panel-live|node $REPO_ROOT/scripts/verify-orca-side-panel-live.mjs"
+      "orca-add-project-live|node $REPO_ROOT/scripts/verify-orca-add-project-live.mjs"
     )
   fi
 
