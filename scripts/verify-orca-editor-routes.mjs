@@ -299,10 +299,162 @@ function runSelfTest() {
         }
         if (failures) { console.error(`${NAME} self-test: FAIL -- ${failures} problem(s) across ${PLANTS.length} plants`); return 1; }
         console.log(`${NAME} self-test: PASS -- ${PLANTS.length} planted faults each went red naming the drift; the control re-ran green after each undo`);
-        return 0;
+        return runRouteSelfTest();
     } finally {
         rmSync(tmp, { recursive: true, force: true });
     }
+}
+
+// ---------------------------------------------------------------- module loading for the behaviour self-tests
+
+const transpile = (rel, module) => ts.transpileModule(readFileSync(join(REPO_ROOT, rel), 'utf8'), {
+    compilerOptions: { module, target: ts.ScriptTarget.ES2020, experimentalDecorators: true, emitDecoratorMetadata: false, esModuleInterop: false },
+}).outputText;
+
+/** The common protocol has no import, so it loads as an ES module from a data: URL. */
+const loadProtocol = () => import(`data:text/javascript;base64,${Buffer.from(transpile(REL.gitProtocol, ts.ModuleKind.ESNext)).toString('base64')}`);
+
+/** orca-editor-routes as CommonJS: its Theia imports become inert decorator stubs; the protocol is the real one. */
+async function loadRoutes() {
+    const protocol = await loadProtocol();
+    const decorator = () => () => undefined;
+    const stub = new Proxy({}, { get: () => decorator });
+    const mod = { exports: {} };
+    const requireFn = (id) => (id === '../common/orca-git-protocol' ? protocol : stub);
+    new Function('require', 'module', 'exports', transpile(REL.routes, ts.ModuleKind.CommonJS))(requireFn, mod, mod.exports);
+    return mod.exports;
+}
+
+const plain = (v) => JSON.parse(JSON.stringify(v));
+const same = (a, b) => JSON.stringify(plain(a)) === JSON.stringify(plain(b));
+
+// ---------------------------------------------------------------- route self-test (folded into --self-test)
+
+const OID = { head: 'a'.repeat(40), base: 'b'.repeat(40), tip: 'c'.repeat(64), parent: 'd'.repeat(40), commit: 'e'.repeat(40) };
+const FILE = { id: 'f1', tabId: 't1', worktreeId: 'w1', worktreePath: '/w', filePath: '/w/src/a.ts', relativePath: 'src/a.ts', isPreview: false, active: false, local: true };
+const conflictFile = (selectedPath, entries) => ({ ...FILE, mode: 'conflict-review', filePath: '/w', relativePath: '', conflicts: { selectedPath, entries } });
+const ENTRIES = [{ relativePath: 'src/x.ts', conflictKind: 'deleted_by_them' }, { relativePath: 'src/c.ts', conflictKind: 'both_modified' }, { relativePath: 'src/n.ts', conflictKind: 'both_added' }];
+
+export const ROUTE_CASES = [
+    { name: 'edit opens the file in the Theia editor', file: { ...FILE, mode: 'edit' }, want: { open: 'editor', path: '/w/src/a.ts', preview: false } },
+    { name: 'isPreview maps to the preview mode', file: { ...FILE, mode: 'edit', isPreview: true }, want: { open: 'editor', path: '/w/src/a.ts', preview: true } },
+    { name: 'markdown-preview opens the source file with a note naming the mode', file: { ...FILE, mode: 'markdown-preview' }, test: (r) => r.open === 'editor' && r.path === '/w/src/a.ts' && /markdown-preview/.test(r.note ?? '') },
+    { name: 'a remote tab opens nothing and names remote host', file: { ...FILE, mode: 'edit', local: false }, test: (r) => r.open === 'log' && /remote host/.test(r.line) && /edit/.test(r.line) },
+    { name: 'check-details is the hosted row', file: { ...FILE, mode: 'check-details' }, want: { open: 'hosted' } },
+    { name: 'unstaged: :0 vs the working file', file: { ...FILE, mode: 'diff', diffSource: 'unstaged' }, test: (r) => r.open === 'diff' && same(r.left, { path: '/w/src/a.ts', rev: ':0' }) && same(r.right, { path: '/w/src/a.ts' }) },
+    { name: 'staged: HEAD oid at oldPath vs :0 at path', file: { ...FILE, mode: 'diff', diffSource: 'staged', oldPath: 'src/old.ts' }, helpers: { headOid: OID.head }, test: (r) => r.open === 'diff' && same(r.left, { path: '/w/src/old.ts', rev: OID.head }) && same(r.right, { path: '/w/src/a.ts', rev: ':0' }) },
+    { name: 'staged on an unborn HEAD: the left side is empty', file: { ...FILE, mode: 'diff', diffSource: 'staged' }, helpers: { headOid: null }, test: (r) => r.open === 'diff' && same(r.left, { path: '/w/src/a.ts', rev: '' }) },
+    { name: 'branch: mergeBase at oldPath vs headOid at path, never the working file', file: { ...FILE, mode: 'diff', diffSource: 'branch', oldPath: 'src/old.ts', branch: { mergeBase: OID.base, headOid: OID.tip } }, test: (r) => r.open === 'diff' && same(r.left, { path: '/w/src/old.ts', rev: OID.base }) && same(r.right, { path: '/w/src/a.ts', rev: OID.tip }) },
+    { name: 'branch with a null merge base: the left side is empty', file: { ...FILE, mode: 'diff', diffSource: 'branch', branch: { mergeBase: null, headOid: OID.tip } }, test: (r) => r.open === 'diff' && r.left.rev === '' && r.right.rev === OID.tip },
+    { name: 'commit: parentOid vs commitOid', file: { ...FILE, mode: 'diff', diffSource: 'commit', commit: { parentOid: OID.parent, commitOid: OID.commit } }, test: (r) => r.open === 'diff' && same(r.left, { path: '/w/src/a.ts', rev: OID.parent }) && same(r.right, { path: '/w/src/a.ts', rev: OID.commit }) },
+    { name: 'commit with no parent: the left side is empty', file: { ...FILE, mode: 'diff', diffSource: 'commit', commit: { parentOid: null, commitOid: OID.commit } }, test: (r) => r.open === 'diff' && r.left.rev === '' },
+    { name: 'combined-branch: the first entry by the branch rule', file: { ...FILE, mode: 'diff', diffSource: 'combined-branch', branch: { mergeBase: OID.base, headOid: OID.tip }, combinedFirst: { relativePath: 'src/b.ts' } }, test: (r) => r.open === 'diff' && same(r.left, { path: '/w/src/b.ts', rev: OID.base }) && same(r.right, { path: '/w/src/b.ts', rev: OID.tip }) },
+    { name: 'combined-commit: the first entry by the commit rule', file: { ...FILE, mode: 'diff', diffSource: 'combined-commit', commit: { parentOid: OID.parent, commitOid: OID.commit }, combinedFirst: { relativePath: 'src/b.ts', oldPath: 'src/o.ts' } }, test: (r) => r.open === 'diff' && same(r.left, { path: '/w/src/o.ts', rev: OID.parent }) && same(r.right, { path: '/w/src/b.ts', rev: OID.commit }) },
+    { name: 'combined-uncommitted, area staged: the staged rule', file: { ...FILE, mode: 'diff', diffSource: 'combined-uncommitted', combinedFirst: { relativePath: 'src/b.ts', area: 'staged' } }, helpers: { headOid: OID.head }, test: (r) => r.open === 'diff' && same(r.left, { path: '/w/src/b.ts', rev: OID.head }) && same(r.right, { path: '/w/src/b.ts', rev: ':0' }) },
+    { name: 'combined-all, area unstaged: the unstaged rule', file: { ...FILE, mode: 'diff', diffSource: 'combined-all', combinedFirst: { relativePath: 'src/b.ts', area: 'unstaged' } }, test: (r) => r.open === 'diff' && same(r.left, { path: '/w/src/b.ts', rev: ':0' }) && same(r.right, { path: '/w/src/b.ts' }) },
+    { name: 'combined-all, area untracked: an empty left side', file: { ...FILE, mode: 'diff', diffSource: 'combined-all', combinedFirst: { relativePath: 'src/u.ts', area: 'untracked' } }, test: (r) => r.open === 'diff' && same(r.left, { path: '/w/src/u.ts', rev: '' }) && same(r.right, { path: '/w/src/u.ts' }) },
+    { name: 'conflict both_modified on the selected entry: stages 1, 2, 3 and the working file', file: conflictFile('src/c.ts', ENTRIES), want: { open: 'merge', base: { path: '/w/src/c.ts', rev: ':1' }, side1: { path: '/w/src/c.ts', rev: ':2' }, side2: { path: '/w/src/c.ts', rev: ':3' }, result: { path: '/w/src/c.ts' } } },
+    { name: 'conflict both_added: an empty base (no stage 1)', file: conflictFile('src/n.ts', ENTRIES), test: (r) => r.open === 'merge' && same(r.base, { path: '/w/src/n.ts', rev: '' }) && r.side1.rev === ':2' && r.side2.rev === ':3' },
+    { name: 'conflict with no selection: the first entry (deleted_by_them opens the working file)', file: conflictFile(undefined, ENTRIES), helpers: { workingFileExists: true }, want: { open: 'editor', path: '/w/src/x.ts', preview: false } },
+    { name: 'deleted_by_them with no working file: one line naming the mode and the kind', file: conflictFile('src/x.ts', ENTRIES), helpers: { workingFileExists: false }, test: (r) => r.open === 'log' && /conflict-review/.test(r.line) && /deleted_by_them/.test(r.line) },
+];
+
+async function runRouteSelfTest() {
+    if (!existsSync(join(REPO_ROOT, REL.gitProtocol))) { console.error(`${NAME} route self-test: FAIL -- ${REL.gitProtocol} is absent`); return 1; }
+    const { routeOpenFile } = await loadRoutes();
+    if (typeof routeOpenFile !== 'function') { console.error(`${NAME} route self-test: FAIL -- routeOpenFile is not exported by ${REL.routes}`); return 1; }
+    let failures = 0;
+    for (const c of ROUTE_CASES) {
+        let r;
+        try { r = routeOpenFile(c.file, c.helpers ?? {}); } catch (e) { r = { threw: String(e?.message ?? e) }; }
+        const good = c.want ? same(r, c.want) : (() => { try { return c.test(r); } catch { return false; } })();
+        if (good) console.log(`  ok route ${c.name}`);
+        else { console.error(`  FAIL route ${c.name} -> ${JSON.stringify(r)}`); failures++; }
+    }
+    if (failures) { console.error(`${NAME} route self-test: FAIL -- ${failures} of ${ROUTE_CASES.length} routes wrong`); return 1; }
+    console.log(`${NAME} route self-test: PASS -- ${ROUTE_CASES.length} routes match CA-01..CA-03`);
+    return 0;
+}
+
+// ---------------------------------------------------------------- pb-orca-git: spec self-test
+
+const REFUSED = [
+    ['a ".." segment', 'src/../a.ts', ':0'],
+    ['a leading ".." segment', '../a.ts', ':0'],
+    ['a "." segment', 'src/./a.ts', ':0'],
+    ['a leading "./"', './a.ts', ':0'],
+    ['an empty segment', 'src//a.ts', ':0'],
+    ['an empty path', '', ':0'],
+    ['a leading "/"', '/etc/passwd', ':0'],
+    ['a backslash', 'src\\a.ts', ':0'],
+    ['a NUL', 'src/a\0.ts', ':0'],
+    ['a newline', 'src/a\n.ts', ':0'],
+    ['an option-shaped path', '-x', ':0'],
+    ['HEAD as a rev', 'a.ts', 'HEAD'],
+    ['upper-case hex', 'a.ts', 'A'.repeat(40)],
+    ['39 hex', 'a.ts', 'a'.repeat(39)],
+    ['stage :4', 'a.ts', ':4'],
+    ['an option-shaped rev', 'a.ts', '-x'],
+    ['a ref name', 'a.ts', 'main'],
+];
+
+async function runGitSpecSelfTest() {
+    const label = 'orca-git-spec self-test';
+    if (!existsSync(join(REPO_ROOT, REL.gitProtocol))) { console.error(`${label}: FAIL -- ${REL.gitProtocol} is absent`); return 1; }
+    const p = await loadProtocol();
+    const { execFile, execFileSync } = await import('node:child_process');
+    const { realpath } = await import('node:fs/promises');
+    let failures = 0;
+    const ok = (good, text) => { if (good) console.log(`  ok ${text}`); else { console.error(`  FAIL ${text}`); failures++; } };
+    const builds = (rev, rel) => { try { p.catFileArgs('/r', rev, rel); return true; } catch { return false; } };
+
+    // Controls: the argv shape.
+    ok(same(p.catFileArgs('/r', ':0', 'src/a.ts'), ['-c', 'core.fsmonitor=false', '-C', '/r', 'cat-file', 'blob', '--', ':0:src/a.ts']), 'catFileArgs for :0 is git -c core.fsmonitor=false -C <root> cat-file blob -- :0:<path>');
+    ok(same(p.catFileArgs('/r', OID.head, 'src/a.ts').slice(-2), ['--', `${OID.head}:src/a.ts`]), 'a 40-hex object id gives <oid>:<path> after --');
+    ok(p.specRefusal('src/a.ts', OID.tip) === undefined && builds(OID.tip, 'src/a.ts'), 'a 64-hex object id is accepted');
+    ok(p.specRefusal('src/a.ts', ':3') === undefined && p.specRefusal('src/a.ts', '') === undefined, 'stage :3 and the empty side are accepted');
+    ok(!builds('', 'a.ts'), 'the empty side builds no git argv (nothing is run for it)');
+    ok(same(Object.keys(p.withoutGitVars({ PATH: '/bin', GIT_DIR: '/x', git_work_tree: '/y', HOME: '/h' })).sort(), ['HOME', 'PATH']), 'withoutGitVars drops every GIT_* name, any case');
+    const uri = p.orcaGitUri('/w/a b#c.ts', ':2');
+    ok(uri.startsWith(`${p.ORCA_GIT_SCHEME}:/w/`) && !uri.includes(' ') && !uri.includes('#') && decodeURIComponent(uri.split('?')[1]) === ':2', 'orcaGitUri escapes the path and carries the rev as the query');
+
+    // Plants: each refused spec must be refused by both the validator and the argv builder.
+    for (const [what, rel, rev] of REFUSED) ok(p.specRefusal(rel, rev) !== undefined && !builds(rev, rel), `refused: ${what}`);
+
+    // Hermetic repository: one commit, one staged change, a subdirectory.
+    const tmp = realpathSync(mkdtempSync(join(tmpdir(), `${NAME}-git-`)));
+    try {
+        const env = p.withoutGitVars(process.env);
+        const git = (...a) => execFileSync('git', ['-C', tmp, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', ...a], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+        git('init', '-q');
+        mkdirSync(join(tmp, 'sub'));
+        writeFileSync(join(tmp, 'sub', 'a.txt'), 'committed bytes\né\n');
+        git('add', '.');
+        git('commit', '-q', '-m', 'fixture');
+        writeFileSync(join(tmp, 'sub', 'a.txt'), 'staged bytes\n');
+        git('add', 'sub/a.txt');
+        writeFileSync(join(tmp, 'sub', 'a.txt'), 'working bytes\n');
+        const commit = git('rev-parse', 'HEAD').toString().trim();
+        const deps = {
+            realpath: (path) => realpath(path),
+            toplevel: (root) => new Promise((done) => execFile('git', ['-C', root, 'rev-parse', '--show-toplevel'], { env, timeout: p.ORCA_GIT_TIMEOUT_MS }, (err, out) => done(err ? undefined : String(out).trim()))),
+        };
+        // A GIT_DIR inherited by the reader would redirect the read; the reader's environment must drop it.
+        const hostile = { ...process.env, GIT_DIR: join(tmp, 'nowhere') };
+        const read = (rev, rel) => new Promise((done) => execFile('git', p.catFileArgs(tmp, rev, rel), { env: p.withoutGitVars(hostile), encoding: 'buffer', maxBuffer: p.ORCA_GIT_MAX_BYTES, timeout: p.ORCA_GIT_TIMEOUT_MS }, (err, out) => done(err ? undefined : out)));
+        ok(await p.validateRoot(tmp, deps) === undefined, 'the repository toplevel is accepted as a root');
+        ok(await p.validateRoot(join(tmp, 'sub'), deps) !== undefined, 'refused: a root that is a subdirectory of a repository, not its toplevel');
+        ok(await p.validateRoot('relative/root', deps) !== undefined, 'refused: a relative root');
+        const byCommit = await read(commit, 'sub/a.txt');
+        ok(byCommit !== undefined && byCommit.equals(execFileSync('git', ['-C', tmp, 'cat-file', 'blob', `${commit}:sub/a.txt`], { env })), 'the object-id read equals git cat-file blob <commit>:<path>, with GIT_DIR planted in the environment');
+        const byStage = await read(':0', 'sub/a.txt');
+        ok(byStage !== undefined && byStage.equals(execFileSync('git', ['-C', tmp, 'cat-file', 'blob', ':0:sub/a.txt'], { env })) && byStage.toString() === 'staged bytes\n', 'the :0 read equals git cat-file blob :0:<path> (the staged bytes)');
+    } finally {
+        rmSync(tmp, { recursive: true, force: true });
+    }
+    if (failures) { console.error(`${label}: FAIL -- ${failures} case(s) wrong`); return 1; }
+    console.log(`${label}: PASS -- the argv, ${REFUSED.length} planted refusals, the toplevel root rule and the hermetic bytes`);
+    return 0;
 }
 
 // ---------------------------------------------------------------- entry
@@ -323,16 +475,11 @@ if (isEntryPoint) {
     if (!existsSync(TS_DIR) || !statSync(TS_DIR).isDirectory()) { console.log(`${NAME}: SKIP -- theia/node_modules/typescript is absent; run the audited Theia install (docs/BUILD.md "Theia half")`); process.exit(0); }
     ts = createRequire(import.meta.url)(TS_DIR);
     if (mode !== 'git-spec' && !existsSync(join(REPO_ROOT, REL.openFile))) { console.log(`${NAME}: SKIP -- orca/ is not fetched (${REL.openFile} absent); run bash scripts/fetch-orca.sh`); process.exit(0); }
-    if (mode === 'self-test') process.exit(runSelfTest());
+    if (mode === 'self-test') process.exit(await runSelfTest());
     if (mode === 'git-spec') process.exit(await runGitSpecSelfTest());
     const r = check(REPO_ROOT);
     if (r.fails.length) { for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`); process.exit(1); }
     const n = r.notes;
     console.log(`${NAME}: PASS -- ${n.modes.length} modes (${n.modes.join(', ')}), ${n.sources.length} diff sources and ${n.kinds.length} conflict kinds equal ORCA_EDITOR_ROUTES' keys; editor-type content types ${n.editorTypes.join(', ')} each covered; every value a Theia kind except the named row ${HOSTED_ROW.key}; (f) TopLevelView ${n.f === 'compared' ? 'compared with ORCA_PAGE_ROUTES' : 'SKIP (lane p65-04 restore directory absent)'}`);
     process.exit(0);
-}
-
-async function runGitSpecSelfTest() {
-    console.error(`${NAME}: git-spec self-test: FAIL -- ${REL.gitProtocol} is not written yet`);
-    return 1;
 }

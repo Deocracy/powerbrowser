@@ -11,9 +11,13 @@
  */
 import { inject, injectable } from '@theia/core/shared/inversify';
 import { FrontendApplicationContribution, OpenerService, Widget, open } from '@theia/core/lib/browser';
+import { DiffUris } from '@theia/core/lib/browser/diff-uris';
 import URI from '@theia/core/lib/common/uri';
 import { EditorManager } from '@theia/editor/lib/browser';
+import { FileService } from '@theia/filesystem/lib/browser/file-service';
+import { MergeEditorUri } from '@theia/scm/lib/browser/merge-editor/merge-editor';
 import { OrcaPaneBundle } from '@powerbrowser/orca-panes/lib/browser/orca-pane-bundle';
+import { OrcaGitService, orcaGitUri } from '../common/orca-git-protocol';
 
 const LOG_PREFIX = '[@powerbrowser/orca-workspace]';
 
@@ -104,21 +108,59 @@ export interface OrcaRouteHelpers {
     workingFileExists?: boolean;
 }
 
+/** CA-01: a conflict-review tab names the worktree root; its file is the selected entry, else the first. */
+export function selectedConflict(file: OrcaOpenFile): { relativePath: string; conflictKind: string } | undefined {
+    const entries = file.conflicts?.entries ?? [];
+    return entries.find(e => e.relativePath === file.conflicts?.selectedPath) ?? entries[0];
+}
+
 /** The ORCA_EDITOR_ROUTES key of a record. */
 export function routeKeyOf(file: OrcaOpenFile): string {
-    return file.mode === 'diff' ? `diff:${file.diffSource}` : file.mode;
+    if (file.mode === 'diff') {
+        return `diff:${file.diffSource}`;
+    }
+    if (file.mode === 'conflict-review') {
+        return `conflict-review:${selectedConflict(file)?.conflictKind}`;
+    }
+    return file.mode;
+}
+
+/** Whether a diff record needs HEAD resolved before routing (the staged rule). */
+export function needsHead(file: OrcaOpenFile): boolean {
+    return file.mode === 'diff' && (file.diffSource === 'staged'
+        || ((file.diffSource === 'combined-uncommitted' || file.diffSource === 'combined-all') && file.combinedFirst?.area === 'staged'));
 }
 
 const joinPath = (root: string, rel: string): string => `${root.replace(/\/+$/, '')}/${rel}`;
+const blob = (id: string | null | undefined): string => id ?? '';
 
-/** P65-01, P65-02: the Theia route of one record. Pure. */
+/** CA-03: the sides of one diff rule; a null object id is an empty side. */
+function diffSides(file: OrcaOpenFile, rule: string, rel: string, oldRel: string | undefined, area: string | undefined, helpers: OrcaRouteHelpers): [OrcaSide, OrcaSide] {
+    const at = (r: string) => joinPath(file.worktreePath, r);
+    const left = at(oldRel ?? rel);
+    switch (rule) {
+        case 'staged':
+            return [{ path: left, rev: blob(helpers.headOid) }, { path: at(rel), rev: ':0' }];
+        case 'branch':
+            // Pitfall 7: Orca's branch diff is merge base vs the head commit, never the working file.
+            return [{ path: left, rev: blob(file.branch?.mergeBase) }, { path: at(rel), rev: blob(file.branch?.headOid) }];
+        case 'commit':
+            return [{ path: left, rev: blob(file.commit?.parentOid) }, { path: at(rel), rev: blob(file.commit?.commitOid) }];
+        default:
+            // unstaged; an untracked entry has no stage 0, so its left side is empty.
+            return [{ path: at(rel), rev: area === 'untracked' ? '' : ':0' }, { path: at(rel) }];
+    }
+}
+
+/** P65-01, P65-02, CA-01..CA-03: the Theia route of one record. Pure. */
 export function routeOpenFile(file: OrcaOpenFile, helpers: OrcaRouteHelpers = {}): OrcaRoute {
     if (!file.local) {
         return { open: 'log', line: `${file.mode} tab not opened in Theia: remote host` };
     }
-    const target = ORCA_EDITOR_ROUTES[routeKeyOf(file)];
+    const key = routeKeyOf(file);
+    const target = ORCA_EDITOR_ROUTES[key];
     if (!target) {
-        return { open: 'log', line: `${routeKeyOf(file)} has no Theia route` };
+        return { open: 'log', line: `${key} has no Theia route` };
     }
     if (target === 'hosted:check-details') {
         return { open: 'hosted' };
@@ -129,9 +171,38 @@ export function routeOpenFile(file: OrcaOpenFile, helpers: OrcaRouteHelpers = {}
     if (file.mode === 'edit') {
         return { open: 'editor', path: file.filePath, preview: file.isPreview };
     }
-    void helpers;
-    void joinPath;
-    return { open: 'log', line: `${routeKeyOf(file)} is not routed yet` };
+    if (file.mode === 'diff') {
+        const source = file.diffSource ?? '';
+        const combined = source.startsWith('combined-');
+        const first = file.combinedFirst;
+        if (combined && !first) {
+            return { open: 'log', line: `diff ${source} has no entry to open` };
+        }
+        // Theia 1.76 has no multi-diff editor: a combined diff opens its snapshot's first entry by that entry's own rule.
+        const rule = !combined ? source
+            : source === 'combined-branch' ? 'branch'
+                : source === 'combined-commit' ? 'commit'
+                    : first?.area === 'staged' ? 'staged' : 'unstaged';
+        const rel = combined ? first!.relativePath : file.relativePath;
+        const oldRel = combined ? first!.oldPath : file.oldPath;
+        const [left, right] = diffSides(file, rule, rel, oldRel, combined ? first!.area : undefined, helpers);
+        return { open: 'diff', left, right, label: `${rel.split('/').pop()} (${source})` };
+    }
+    // conflict-review (CA-02): the merge editor needs stages 2 and 3; the one-sided kinds open the working file.
+    const conflict = selectedConflict(file)!;
+    const path = joinPath(file.worktreePath, conflict.relativePath);
+    if (target === 'theia-merge') {
+        return {
+            open: 'merge',
+            base: { path, rev: conflict.conflictKind === 'both_added' ? '' : ':1' },
+            side1: { path, rev: ':2' },
+            side2: { path, rev: ':3' },
+            result: { path },
+        };
+    }
+    return helpers.workingFileExists
+        ? { open: 'editor', path, preview: false }
+        : { open: 'log', line: `conflict-review ${conflict.conflictKind}: the working file does not exist, so nothing opens` };
 }
 
 interface Mapping {
@@ -156,6 +227,12 @@ export class OrcaEditorRouter implements FrontendApplicationContribution {
 
     @inject(OpenerService)
     protected readonly openerService: OpenerService;
+
+    @inject(OrcaGitService)
+    protected readonly git: OrcaGitService;
+
+    @inject(FileService)
+    protected readonly fileService: FileService;
 
     protected api: OrcaWorkspaceBundleApi | undefined;
     /** Opened URI (string) -> its widget and the Orca records naming it. */
@@ -225,7 +302,18 @@ export class OrcaEditorRouter implements FrontendApplicationContribution {
         mapping?.records.delete(id);
     }
 
-    protected async routeHelpers(_file: OrcaOpenFile): Promise<OrcaRouteHelpers> {
+    /** HEAD is resolved to an object id at open (staged rule); a one-sided conflict needs its working file. */
+    protected async routeHelpers(file: OrcaOpenFile): Promise<OrcaRouteHelpers> {
+        if (!file.local) {
+            return {};
+        }
+        if (needsHead(file)) {
+            return { headOid: await this.git.resolveHead(file.worktreePath) };
+        }
+        const conflict = file.mode === 'conflict-review' ? selectedConflict(file) : undefined;
+        if (conflict && ORCA_EDITOR_ROUTES[routeKeyOf(file)] === 'theia-editor') {
+            return { workingFileExists: await this.fileService.exists(URI.fromFilePath(joinPath(file.worktreePath, conflict.relativePath))) };
+        }
         return {};
     }
 
@@ -257,7 +345,15 @@ export class OrcaEditorRouter implements FrontendApplicationContribution {
         return undefined;
     }
 
+    /** diff: and merge-editor: URIs whose sides are pb-orca-git: blobs or the working file. */
     protected uriOfRoute(route: OrcaRoute): URI {
+        const side = (s: OrcaSide): URI => s.rev === undefined ? URI.fromFilePath(s.path) : new URI(orcaGitUri(s.path, s.rev));
+        if (route.open === 'diff') {
+            return DiffUris.encode(side(route.left), side(route.right), route.label);
+        }
+        if (route.open === 'merge') {
+            return MergeEditorUri.encode({ baseUri: side(route.base), side1Uri: side(route.side1), side2Uri: side(route.side2), resultUri: side(route.result) });
+        }
         throw new Error(`no URI for the ${route.open} route`);
     }
 

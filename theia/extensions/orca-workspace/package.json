@@ -15,7 +15,8 @@
   },
   "theiaExtensions": [
     {
-      "frontend": "lib/browser/orca-workspace-frontend-module"
+      "frontend": "lib/browser/orca-workspace-frontend-module",
+      "backend": "lib/node/orca-workspace-backend-module"
     }
   ],
   "files": [

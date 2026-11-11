@@ -3999,9 +3999,13 @@ run_own_checks() {
     # NEW (65-02, TAB-05, P65-01/P65-27): orca-editor-routes derives, from the pinned Orca source with typescript, the
     # OpenFile modes, the editor-type TabContentType members (through editorTabContentTypeForMode), DiffSource and
     # GitConflictKind, and compares each with orca-workspace's ORCA_EDITOR_ROUTES keys; every value a Theia kind but the
-    # named check-details row; TopLevelView vs ORCA_PAGE_ROUTES once lane p65-04's restore directory exists.
+    # named check-details row; TopLevelView vs ORCA_PAGE_ROUTES once lane p65-04's restore directory exists. The
+    # self-test also transpiles routeOpenFile and checks the CA-01..CA-03 sides of 21 records.
     "orca-editor-routes|node $REPO_ROOT/scripts/verify-orca-editor-routes.mjs"
     "orca-editor-routes-self-test|node $REPO_ROOT/scripts/verify-orca-editor-routes.mjs --self-test"
+    # orca-git-spec-self-test (65-02, P65-03/CA-06, T-65-04/T-65-05): the pb-orca-git: argv and grammar; 17 planted
+    # refusals; a subdirectory root refused; hermetic bytes equal git cat-file blob with GIT_DIR planted.
+    "orca-git-spec-self-test|node $REPO_ROOT/scripts/verify-orca-editor-routes.mjs --git-spec-self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
