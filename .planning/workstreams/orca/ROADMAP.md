@@ -241,7 +241,7 @@ Route chosen by Phase 61: S2, a PB runtime client that attaches through browser.
   3. While an agent drives a tab, PB's Theia chrome bar shows an "agent is controlling this tab" mark with a Stop button, and Stop ends that control. A stock browser window shows no mark.
   4. Each user-facing tool in the Phase 61 browser inventory is reachable from PB's chrome bar or a Theia side panel. A check compares the inventory's user-facing rows to PB's contributions as a set.
 
-**Plans**: 7/7 plans executed (executes only after Phase 64 is merged)
+**Plans**: 8/8 plans executed (executes only after Phase 64 is merged)
 
 Plans:
 **Wave 1**
@@ -258,6 +258,9 @@ Plans:
 
 **Wave 4** *(gap closure)*
 - [x] 66-07-PLAN.md — gap closure (D-34): the pane entry adds each agent page to Orca's store as a background row, so selecting it brings the PB web tab forward; orca-browser-agent-live clause (j) (BRW-02, BRW-03)
+
+**Wave 5** *(gap closure, 66-VERIFICATION truth 8)*
+- [x] 66-08-PLAN.md — gap closure (D-35): every window, tab or popup an agent page opens is refused (SANDBOXED_AUXILIARY_NAVIGATION on the agent overlay; every new-window receiver refuses an agent opener); orca-browser-tab-scope opens clause, orca-browser-agent-live clause (n) (BRW-03)
 
 **UI hint**: yes
 
@@ -335,6 +338,6 @@ Phases execute in numeric order: 59 → 60 → 61 → 62 → 63 → 64 → 65 �
 | 63. Agent hooks on Orca's terminal engine | 3/3 | Complete (human items deferred) | 2026-11-10 |
 | 64. Orca panes as PowerBrowser tabs | 6/6 | In Progress (64-06 gap closure executed; TAB-04 pending on stage g3, g2 PASS on the 65-05 tree) | - |
 | 65. Orca workspace in Theia | 5/5 | Complete (human items deferred; verified 8/8) | 2026-11-10 |
-| 66. PowerBrowser web tabs as Orca's browser | 7/7 | In Progress | - |
+| 66. PowerBrowser web tabs as Orca's browser | 8/8 | In Progress | - |
 | 67. Hosting hardening | 0/TBD | Not started | - |
 | 68. Three-OS artifacts, weekly re-pin and upstream seams | 7/10 (68-06 in progress) | In Progress | - |
