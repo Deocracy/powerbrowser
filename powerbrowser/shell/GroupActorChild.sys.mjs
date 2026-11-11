@@ -737,7 +737,7 @@ const snapClean = text => String(text ?? "").replace(/\s+/g, " ").trim();
 function agentSnapState(actor) {
   const page = actor.contentWindow.windowGlobalChild.innerWindowId;
   if (!actor.snap || actor.snap.page !== page) {
-    actor.snap = { page, next: 0, refs: new Map(), last: new Set(), revision: 0, baselines: new Map() };
+    actor.snap = { page, next: 0, refs: new Map(), last: new Set(), revision: 0, baseline: null };
   }
   return actor.snap;
 }
@@ -1109,13 +1109,14 @@ function agentSnapshot(actor, params) {
   const origin = doc.location.href;
   let result;
   if (params.delta === true || params.full === true) {
-    // Delta history per option set, as agent-browser keeps it; a URL change or --full starts again from full.
+    // One baseline per page (Orca's snapshot help): a navigation, other flags or --full answer the whole tree and
+    // replace it; otherwise unchanged, or a delta when the change is small.
     const key = JSON.stringify(options);
-    const base = state.baselines.get(key);
+    const base = state.baseline;
     const revision = ++state.revision;
-    state.baselines.set(key, { revision, lines, refs, origin });
+    state.baseline = { key, revision, lines, refs, origin };
     let snapshot = { kind: "full", refs, revision, tree: lines.join("\n") };
-    if (base && params.full !== true && base.origin === origin) {
+    if (base && params.full !== true && base.origin === origin && base.key === key) {
       const changes = snapRefChanges(base.refs, refs);
       const treeChange = snapSplice(base.lines, lines);
       if (!changes.length && !treeChange.deleteCount && !treeChange.lines.length) {
