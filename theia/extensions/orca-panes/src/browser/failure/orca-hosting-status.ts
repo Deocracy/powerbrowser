@@ -14,7 +14,8 @@
  * preload, window.api.runtimeEnvironments.onStatusChanged) asks once.
  *
  * Reconnect (P67-06) re-reads the offer over OrcaPanesService.handOff (64 C6)
- * and calls the pane bundle's repair(offer) (C3-65) and nothing else; for
+ * and calls the pane bundle's repair(offer) (C3-65), after firing onWillRepair
+ * so the pane observer holds its tabs while Orca's store hydrates again (D-36); for
  * browser-not-attached it calls OrcaBrowserHost.attach() instead (P67-36).
  * After a chrome class of restarting, could-not-start or port-in-use returns to
  * ready, the same re-pair runs once by itself: the session-only device row died
@@ -100,6 +101,10 @@ export class OrcaHostingStatus implements FrontendApplicationContribution {
     protected readonly onDidChangeEmitter = new Emitter<void>();
     /** Fires when the effective class may have changed. */
     readonly onDidChange: TheiaEvent<void> = this.onDidChangeEmitter.event;
+
+    protected readonly onWillRepairEmitter = new Emitter<void>();
+    /** D-36: fires immediately before each repair(offer). */
+    readonly onWillRepair: TheiaEvent<void> = this.onWillRepairEmitter.event;
 
     /** The last orcaStatus reply: chrome's state and class. */
     protected chrome: { state: string | null; failureClass: OrcaFailureClass | null } = { state: null, failureClass: null };
@@ -191,6 +196,7 @@ export class OrcaHostingStatus implements FrontendApplicationContribution {
         }
         if (this.api) {
             try {
+                this.onWillRepairEmitter.fire();
                 await this.api.repair(result.pairing);
             } catch {
                 await this.reportClientReason('unauthorized');

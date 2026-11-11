@@ -20,6 +20,11 @@
  * (the store has not hydrated when the bundle boots), and disposing on it
  * re-created and renumbered every hosted tab. A page tab (no Orca tab, empty
  * worktree) never sets Orca's active worktree and is never disposed from a list.
+ *
+ * D-36 (67-07): a re-pair within the document (Reconnect, or the automatic one
+ * after an orcad restart) makes Orca's store hydrate again, and its lists come
+ * empty for some seconds; rehold() returns every tracked widget to the
+ * restored set, so the same hold keeps each tab and its name.
  */
 import { inject, injectable } from '@theia/core/shared/inversify';
 import { Emitter } from '@theia/core/lib/common';
@@ -28,6 +33,7 @@ import { FrontendApplicationStateService } from '@theia/core/lib/browser/fronten
 import { ORCA_PANE_FACTORY_ID } from '@powerbrowser/tab-uris/lib/browser/orca-scheme-coverage';
 import { OrcaPaneBundleApi, OrcaPaneOptions, OrcaPaneRecord } from '../common/orca-panes-protocol';
 import { OrcaPaneBundle } from './orca-pane-bundle';
+import { OrcaHostingStatus } from './failure/orca-hosting-status';
 import { KnownPane, ORCA_PANE_ROUTES, PanePlan, keyOfOptions, planPanes } from './orca-pane-routes';
 import { OrcaPaneWidget } from './orca-pane-widget';
 import { OrcaPaneNameMap } from './restore/orca-pane-name-map';
@@ -56,6 +62,9 @@ export class OrcaPaneObserver implements FrontendApplicationContribution {
     @inject(OrcaPaneNameMap)
     protected readonly names: OrcaPaneNameMap;
 
+    @inject(OrcaHostingStatus)
+    protected readonly hosting: OrcaHostingStatus;
+
     /** Phase 66 (P66-09): the browser host's page table; a browser record resolves through it. */
     @inject(OrcaBrowserPages)
     protected readonly browserPages: OrcaBrowserPages;
@@ -70,6 +79,8 @@ export class OrcaPaneObserver implements FrontendApplicationContribution {
     /** The newest list seen, re-applied once when the restore bound passes. */
     protected newest: OrcaPaneRecord[] | undefined;
     protected hydrated = false;
+    /** Which hold the pending restore-bound timer belongs to (rehold() starts a new one). */
+    protected hold = 0;
     protected loggedHold = false;
     protected applying = false;
 
@@ -80,6 +91,7 @@ export class OrcaPaneObserver implements FrontendApplicationContribution {
     readonly onDidAddWidget = this.onDidAddWidgetEmitter.event;
 
     onStart(): void {
+        this.hosting.onWillRepair(() => this.rehold());
         this.shell.onDidChangeActiveWidget(({ newValue }) => {
             if (newValue instanceof OrcaPaneWidget && !newValue.isDisposed) {
                 this.lastActive = newValue;
@@ -98,6 +110,15 @@ export class OrcaPaneObserver implements FrontendApplicationContribution {
         return [...this.widgets.values(), ...this.restoredWidgets()].find(w => w.options.name === name && !w.isDisposed);
     }
 
+    /** D-36: before a re-pair; every tracked widget is held again as a restored one until a list holds it (P65-35). */
+    rehold(): void {
+        this.widgets.clear();
+        this.known.clear();
+        this.hydrated = false;
+        this.newest = undefined;
+        this.hold += 1;
+    }
+
     /** P65-35: every live hosted widget this observer does not track yet (layout-restored or restore-opened); page widgets excluded. */
     protected restoredWidgets(): OrcaPaneWidget[] {
         const tracked = new Set(this.widgets.values());
@@ -109,7 +130,11 @@ export class OrcaPaneObserver implements FrontendApplicationContribution {
         await this.appState.reachedState('initialized_layout');
         api.subscribePanes(panes => {
             if (!this.newest) {
+                const hold = this.hold;
                 setTimeout(() => {
+                    if (hold !== this.hold) {
+                        return;
+                    }
                     this.hydrated = true;
                     this.latest ??= this.newest;
                     this.drain();

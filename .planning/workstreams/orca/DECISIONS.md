@@ -312,6 +312,10 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
     pairing it last made is kept in page memory without its device token, and passed as
     `previousEnvironment` when Orca's client has already forgotten its own copy. Orca's
     same-host rule (host public key and descriptor) then keeps the id and bumps the revision.
+  - Once the client really changes pairing, Orca's store hydrates again and its pane list is empty
+    for about 10 s (measured). The pane observer therefore holds every hosted tab through a
+    re-pair, as P65-35 holds restored tabs after a reload (`onWillRepair`, `rehold()`), so the
+    tabs keep their widgets and names.
   - P65-17 is unchanged. Nothing is written to Theia-origin storage, and a document reload still
     pairs again under a new id, because page memory does not survive a reload.
   - Proof: orca-failure-page-live's restart clause (gap-closure plan 67-07).

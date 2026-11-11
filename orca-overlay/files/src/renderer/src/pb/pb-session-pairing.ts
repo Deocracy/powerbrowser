@@ -12,8 +12,14 @@ import { parseWebPairingInput, readPairingInputFromLocation } from '../web/web-p
 import {
   createStoredWebRuntimeEnvironment,
   readStoredWebRuntimeEnvironment,
-  saveStoredWebRuntimeEnvironment
+  saveStoredWebRuntimeEnvironment,
+  type StoredWebRuntimeEnvironment
 } from '../web/web-runtime-environment'
+import {
+  closeActiveRuntimeClients,
+  manuallyDisconnectedEnvironmentIds,
+  webRuntimeState
+} from '../web/preload-api/web-runtime-session'
 
 const SESSION_PAIRING_MARKER = 'pb-overlay:src/renderer/src/pb/pb-session-pairing.ts'
 
@@ -52,6 +58,10 @@ export function pairingInputOf(input: string): string {
   }
 }
 
+// D-36: the environment this document last paired, without its device token, so a re-pair after a host restart keeps
+// the id even when the client already forgot its pairing (a new id strands the host's sessions, A6). Page memory only.
+let lastPaired: StoredWebRuntimeEnvironment | null = null
+
 function reason(word: string): Error {
   return new Error(`orca pane pairing: ${word}`)
 }
@@ -73,17 +83,24 @@ export async function pairSessionOnly(input: string): Promise<void> {
     environment = await createStoredWebRuntimeEnvironment({
       name: 'Orca Server',
       offer,
-      previousEnvironment: readStoredWebRuntimeEnvironment()
+      previousEnvironment: readStoredWebRuntimeEnvironment() ?? lastPaired
     })
   } catch {
     throw reason('environment not created')
   }
+  // D-36, as the client's own addFromPairingCode: the open client still holds the replaced pairing's session key, and
+  // its refusal by a restarted host would forget the active pairing, which must by then be this one.
+  closeActiveRuntimeClients()
   // A6: session-only keeps the device token in page memory, never in localStorage.
   saveStoredWebRuntimeEnvironment({ ...environment, sessionOnly: true })
+  webRuntimeState.activeEnvironment = readStoredWebRuntimeEnvironment()
+  manuallyDisconnectedEnvironmentIds.clear()
+  lastPaired = { ...environment, endpoints: environment.endpoints.map((endpoint) => ({ ...endpoint, deviceToken: '' })) }
 }
 
 /**
- * B-8, for P67-06's Reconnect: re-pair session-only from a new offer, as bootstrap pairs, then assert. Repeats none
+ * B-8, for P67-06's Reconnect and the re-pair after a host restart: re-pair session-only from a new offer, as bootstrap
+ * pairs, under the same environment id within this document (D-36), then assert. Repeats none
  * of bootstrap's once-per-document steps (the preload API, the mirror-freeze wrapper, the terminal keys, the
  * services root). Rejects with 'session-only pairing unavailable' when the assertion fails.
  */
