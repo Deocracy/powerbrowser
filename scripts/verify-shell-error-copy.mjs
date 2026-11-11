@@ -603,6 +603,11 @@ const EXPECTED_NAV_COPY = new Set([
   "${name} is sharing your camera with this tab.",
   "${name} is sharing your microphone with this tab.",
   "${name} is sharing your screen with this tab.",
+  // Phase 66 (P66-23): the agent mark and its Stop button.
+  "Agent in control",
+  "An Orca agent you started is controlling this tab in ${name}. Select Stop to end it.",
+  "Stop",
+  "Stop the agent's control of this tab in ${name}. The tab stays open.",
   "${name} blocked a popup from this page.",
   "${name} blocked ${name} popups from this page.",
   "${name} stopped this page from sending you to another page.",

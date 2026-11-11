@@ -73,6 +73,11 @@ export const CHROME_BAR_COPY = Object.freeze({
     sharingCamera: (subject: string) => `${subject} is sharing your camera with this tab.`,
     sharingMicrophone: (subject: string) => `${subject} is sharing your microphone with this tab.`,
     sharingScreen: (subject: string) => `${subject} is sharing your screen with this tab.`,
+    // Phase 66 (P66-23): the agent mark and its Stop button, shown while an Orca agent drives the current web tab.
+    agentControlLabel: 'Agent in control',
+    agentControlTooltip: (subject: string) => `An Orca agent you started is controlling this tab in ${subject}. Select Stop to end it.`,
+    agentStopLabel: 'Stop',
+    agentStopTooltip: (subject: string) => `Stop the agent's control of this tab in ${subject}. The tab stays open.`,
     // Phase 37 plan 04 (D-08, D-10): the notification bars (37-UI-SPEC copy rows). Counts are chrome-computed numbers.
     barPopupBlocked: (subject: string, count: number) => count === 1 ? `${subject} blocked a popup from this page.` : `${subject} blocked ${count} popups from this page.`,
     barRedirectBlocked: (subject: string) => `${subject} stopped this page from sending you to another page.`,

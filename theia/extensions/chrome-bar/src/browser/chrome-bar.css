@@ -1692,6 +1692,35 @@ body[data-pb-mode="browsing"] .lm-TabBar-tab.pb-strip-only {
     color: var(--color-text, #fbfbfe);
 }
 
+/* Phase 66 (P66-21): the agent mark beside the sharing indicator, ringed in the accent like it, with a compact Stop. */
+.pb-chrome-bar-agent {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    padding: 0 2px 0 6px;
+    border: 1px solid var(--theia-focusBorder);
+    border-radius: 12px;
+    color: var(--color-text, #fbfbfe);
+    white-space: nowrap;
+}
+
+.pb-chrome-bar-agent .codicon {
+    font-size: 16px;
+}
+
+.pb-chrome-bar-agent .pb-chrome-bar-agent-stop {
+    width: auto;
+    height: 20px;
+    padding: 0 8px;
+    border-radius: 10px;
+}
+
+/* Phase 66 (P66-21): a dock tab an agent drives carries an accent underline, so a background agent tab is identifiable. */
+.lm-TabBar-tab.pb-agent-controlled {
+    box-shadow: inset 0 -2px 0 var(--theia-focusBorder);
+}
+
 /* PAGE-04 (32-08): the favicon or globe on a web tab, 16px; the crashed mark uses the muted ink, no new accent. */
 .pb-tab-favicon {
     flex: none;
