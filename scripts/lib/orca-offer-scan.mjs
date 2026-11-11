@@ -435,7 +435,10 @@ export const bridgeFolderCollector = Object.freeze({
         const strays = [];
         for (const name of readdirSync(ctx.bridgeDir)) {
             const f = lstatSync(join(ctx.bridgeDir, name));
-            if (!(f.isFile() && (f.mode & 0o777) === 0o600 && f.uid === uid)) badModes++;
+            // The offer file exactly 0600; every other entry a private regular file (Phase 63's claude-wrapper launcher
+            // is 0700 because it is executed): owned by this user, no group or other bits.
+            const mode = f.mode & 0o777;
+            if (!(f.isFile() && f.uid === uid && (name === offerFile ? mode === 0o600 : (mode & 0o077) === 0))) badModes++;
             if (name !== offerFile && f.isFile()) strays.push(readFileSync(join(ctx.bridgeDir, name)));
         }
         const strayHits = strays.filter((b) => countMatches([b], ctx.needles) > 0).length;

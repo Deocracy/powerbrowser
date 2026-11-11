@@ -17,8 +17,8 @@
 //   3. The same in a stock window opened on orcad's address.
 //   4. The Theia document untouched: the query that finds the mark in the orcad page finds nothing in the Theia frame.
 //   5. Remount (A-9): a scratch repository added through Orca's CLI (environment built from scratch), a worktree
-//      created and activated so Landing unmounts in the web tab (the matched element gone), the worktree removed so
-//      Landing mounts again, and the new element must carry the PB mark.
+//      created and activated so Landing unmounts in the web tab (the matched element gone), its tabs closed so Orca
+//      leaves the emptied worktree and Landing mounts again, and the new element must carry the PB mark.
 //   Recorded, not asserted: how many times Landing asked gh for the GitHub star state.
 // Every absence follows a positive read by the same query (CLAUDE.md verification rule 1).
 //
@@ -181,8 +181,11 @@ async function live() {
                 return page;
             };
             // The offer goes only into the connect form's field, through the page.
+            // A page on an origin that is already paired (a stock window after the web tab: one origin, one storage)
+            // boots straight to the client and shows no form; that page needs no pairing.
             const pair = async (page, where) => {
-                await pollFor(async () => (await app.evaluateIn(page.context, `document.getElementById('web-runtime-pairing-code') !== null`).catch(() => false)) || undefined, 30000, `Orca's connect form in ${where}`);
+                const seen = await pollFor(async () => (await app.evaluateIn(page.context, `document.getElementById('web-runtime-pairing-code') !== null ? 'form' : (${S}.some(s => document.querySelector(s)) ? 'paired' : '')`).catch(() => '')) || undefined, 30000, `Orca's connect form or its landing tile in ${where}`);
+                if (seen === 'paired') return;
                 const done = await app.evaluateIn(page.context, `(() => {
                     const el = document.getElementById('web-runtime-pairing-code');
                     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, ${JSON.stringify(input)});
@@ -249,7 +252,9 @@ async function live() {
             }
             let after = { count: 0 };
             if (unmounted) {
-                ctx.orca('worktree', 'rm', '--worktree', createdPath ? `path:${createdPath}` : 'landing-remount', '--force');
+                // Orca leaves an emptied worktree and lands (workspace-emptied-reaction.ts); removing the worktree would
+                // activate the repository's main worktree instead (measured live), so its tabs are closed.
+                ctx.orca('terminal', 'close', '--worktree', createdPath ? `path:${createdPath}` : 'landing-remount', '--all');
                 after = await tile(tabPage, 'the orcad web tab after the remount', true, 30000);
             }
             const r = remountVerdict({ unmounted, after }, markText);

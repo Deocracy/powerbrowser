@@ -206,6 +206,9 @@ function runSelfTest() {
         check('a tab-address copy holding the pairing URL', copyableTextCollector, (x) => x.copyable.tabAddresses.push(offer.pairingUrl), 'sink copyable text: FAIL -- offer found');
         check('a profile file outside every holder holding the token', wholeProfileCollector, (x) => appendFileSync(join(x.profileDir, 'prefs.js'), `// ${offer.token}\n`), 'sink whole profile: FAIL -- offer found');
         check('a 0644 offer file in a 0755 folder', bridgeFolderCollector, (x) => { chmodSync(x.bridgeDir, 0o755); chmodSync(join(x.bridgeDir, OFFER_FILE), 0o644); }, 'sink bridge folder: FAIL -- bridge folder mode');
+        check('a private 0700 launcher beside the offer (Phase 63 claude-wrapper, allowed)', bridgeFolderCollector, (x) => put(join(x.bridgeDir, 'claude-wrapper'), '#!/bin/sh\n', 0o700), null);
+        check('a 0750 launcher in the bridge folder', bridgeFolderCollector, (x) => put(join(x.bridgeDir, 'claude-wrapper'), '#!/bin/sh\n', 0o750), 'sink bridge folder: FAIL -- bridge folder mode');
+        check('a 0640 offer file', bridgeFolderCollector, (x) => chmodSync(join(x.bridgeDir, OFFER_FILE), 0o640), 'sink bridge folder: FAIL -- bridge folder mode');
         check('a stray copy web-pairing.bak in the bridge folder', bridgeFolderCollector, (x) => put(join(x.bridgeDir, `${OFFER_FILE}.bak`), offer.handOff, 0o600), 'stray copy (1 file other than web-pairing holds a needle)');
         check('an offer whose endpoint is ws://192.168.1.5:26768', nonLoopbackPeerCollector, (x) => { x.endpoint = offerEndpoint(nonLoop.handOff); }, 'sink non-loopback peer: FAIL -- non-loopback peer: the decoded endpoint');
         check('a Theia backend LISTEN socket on 0.0.0.0', nonLoopbackPeerCollector, (x) => put(join(x.procRoot, 'net/tcp'), `header\n   0: 0100007F:0BB8 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000 0 1001 1\n   1: 00000000:0BB8 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000 0 1002 1\n`), 'sink non-loopback peer: FAIL -- non-loopback peer: 1 listening socket(s) off loopback');
@@ -253,7 +256,8 @@ async function main() {
     if (pre.fail) { console.error(`${NAME}: FAIL -- ${pre.fail}`); return 1; }
     if (pre.skip) { console.log(`${NAME}: SKIP -- ${pre.skip}`); return 0; }
     for (const k of Object.keys(process.env)) if (k.startsWith('ORCA_')) delete process.env[k];
-    const { servePages, probe, pollFor } = await import('./lib/pb-relaunch.mjs');
+    const { servePages, probe, pollFor, sourceConst } = await import('./lib/pb-relaunch.mjs');
+    const OPEN_BROWSER_WINDOW = sourceConst('theia/extensions/tab-uris/src/browser/browser-window-command.ts', 'OPEN_BROWSER_WINDOW_COMMAND_ID');
     const { openWebTab } = await import('./lib/pb-live-probe.mjs');
     mkdirSync(join(REPO_ROOT, '.mozbuild'), { recursive: true });
     const work = mkdtempSync(join(REPO_ROOT, '.mozbuild', `${NAME}-`));
@@ -288,6 +292,10 @@ async function main() {
                 results.push(runCollector(bridgeFolderCollector, ctx), runCollector(nonLoopbackPeerCollector, ctx));
                 const tabId = await openWebTab(s.app, pages.url(markerPath));
                 await pollFor(async () => ((await s.app.contexts()).some((c) => c.url === pages.url(markerPath)) ? true : null), 30000, 'the marker web tab to load');
+                // Session restore records stock windows only (the shell's web-tab overlays never reach it, measured
+                // live: collector blind), so the marker also travels a stock window, left open over the quit.
+                await probe(s.app, `await get('CommandRegistry').executeCommand(${JSON.stringify(OPEN_BROWSER_WINDOW)}, ${JSON.stringify(pages.url(markerPath))}); return {};`);
+                await pollFor(async () => ((await s.app.contexts()).filter((c) => c.url === pages.url(markerPath)).length >= 2 ? true : null), 30000, 'the marker in a stock window');
                 await s.addRepository();
                 await s.selectWorktree();
                 if (!(await s.newHosted('powerbrowser.orca.newChat', 'agent-session'))) throw new Error('New Orca Chat gave no hosted chat widget within 10 s');
