@@ -42,6 +42,8 @@ ChromeUtils.defineESModuleGetters(lazy, {
   SiteDataManager: "resource:///modules/SiteDataManager.sys.mjs",
   SitePermissions: "resource:///modules/SitePermissions.sys.mjs",
   ContentBlockingAllowList: "resource://gre/modules/ContentBlockingAllowList.sys.mjs",
+  // Phase 66 (P66-26): the Orca-agent container, created once by agentContainerId.
+  ContextualIdentityService: "resource://gre/modules/ContextualIdentityService.sys.mjs",
 });
 
 // Strong references to in-flight one-shot timers created by sleep(). See the
@@ -3580,6 +3582,11 @@ export const PowerBrowserAPI = Object.freeze({
       resendWebTabSharing(tabId);
       return "already-open";
     }
+    // Phase 66 (P66-26): an agent overlay loads in the Orca-agent container, never the user's; no container, no tab.
+    const userContextId = agent === true ? agentContainerId() : 0;
+    if (agent === true && !userContextId) {
+      return "unavailable";
+    }
     const doc = theiaBrowser.ownerDocument;
     const win = doc.defaultView;
     const browser = doc.createXULElement("browser");
@@ -3604,6 +3611,7 @@ export const PowerBrowserAPI = Object.freeze({
       messagemanagergroup: "browsers",
       autocompletepopup: "PopupAutoComplete",
       tabindex: "-1",
+      ...(agent === true ? { usercontextid: String(userContextId) } : {}),
     })) {
       browser.setAttribute(name, value);
     }
@@ -3639,7 +3647,7 @@ export const PowerBrowserAPI = Object.freeze({
     const entry = PowerBrowserAPI.webTabAttach(theiaBrowser, actorRef, tabId, browser, key, spec, grant);
     // Phase 66 (P66-06): an agent tab only from its creation; the already-open return above never reaches this.
     if (agent === true) {
-      entry.agent = true;
+      agentTabCreated(entry, userContextId);
     }
     tabHostAddTab(win, tabId, browser);
     // NG-034: a tab the frontend reopened from last session's snapshot, with
@@ -11102,12 +11110,58 @@ const agentRefusal = message => ({ ok: false, reason: "validation", message: `ha
 // Params validators, one per method (P66-12). params is the automation command's params object as orcad sent it; the
 // page and worktree fields that routed it to this tab are optional strings. A method without a validator is refused.
 const agentText = value => typeof value === "string" && value.length > 0 && value.length <= 65536;
-const agentOptional = (value, test) => value === undefined || test(value);
+const agentOptional = (value, test) => value === undefined || value === null || test(value);
 const agentTarget = params => agentOptional(params.page, agentText) && agentOptional(params.worktree, agentText) && agentOptional(params.expectUrl, agentText);
 const agentElement = params => agentTarget(params) && agentText(params.element);
+const agentNumber = value => typeof value === "number" && Number.isFinite(value);
+const agentBool = value => typeof value === "boolean";
+const agentString = value => typeof value === "string" && value.length <= 65536;
+const agentButton = value => value === "left" || value === "middle" || value === "right";
+const agentImageFormat = value => value === "png" || value === "jpeg";
+const agentLimit = params => agentTarget(params) && agentOptional(params.limit, agentNumber);
+const agentWaitFields = ["selector", "text", "url", "load", "fn", "state"];
 const AGENT_PARAMS = {
+  "browser.back": agentTarget,
+  "browser.forward": agentTarget,
+  "browser.reload": agentTarget,
+  "browser.goto": params => agentTarget(params) && agentText(params.url),
+  "browser.screenshot": params => agentTarget(params) && agentOptional(params.format, agentImageFormat) && agentOptional(params.ifChanged, agentBool) && agentOptional(params.annotate, agentBool),
+  "browser.fullScreenshot": params => agentTarget(params) && agentOptional(params.format, agentImageFormat),
+  "browser.pdf": agentTarget,
+  "browser.cookie.get": params => agentTarget(params) && agentOptional(params.url, agentText),
+  "browser.cookie.set": params => agentTarget(params) && agentText(params.name) && agentString(params.value) && agentOptional(params.domain, agentText) && agentOptional(params.path, agentText) && agentOptional(params.secure, agentBool) && agentOptional(params.httpOnly, agentBool) && agentOptional(params.sameSite, agentText) && agentOptional(params.expires, agentNumber),
+  "browser.cookie.delete": params => agentTarget(params) && agentText(params.name) && agentOptional(params.domain, agentText) && agentOptional(params.url, agentText),
+  "browser.network": agentLimit,
+  "browser.console": agentLimit,
+  "browser.capture.start": agentTarget,
+  "browser.capture.stop": agentTarget,
+  "browser.dialogAccept": params => agentTarget(params) && agentOptional(params.text, agentString),
+  "browser.dialogDismiss": agentTarget,
   "browser.click": agentElement,
-  "browser.screenshot": params => agentTarget(params) && agentOptional(params.format, f => f === "png" || f === "jpeg"),
+  "browser.dblclick": agentElement,
+  "browser.hover": agentElement,
+  "browser.focus": agentElement,
+  "browser.clear": agentElement,
+  "browser.selectAll": agentElement,
+  "browser.scrollIntoView": agentElement,
+  "browser.check": params => agentElement(params) && agentOptional(params.checked, agentBool),
+  "browser.fill": params => agentElement(params) && agentString(params.value),
+  "browser.select": params => agentElement(params) && agentString(params.value),
+  "browser.drag": params => agentTarget(params) && agentText(params.from) && agentText(params.to),
+  "browser.eval": params => agentTarget(params) && agentText(params.expression),
+  "browser.exec": params => agentTarget(params) && agentText(params.command),
+  "browser.type": params => agentTarget(params) && agentText(params.input),
+  "browser.keypress": params => agentTarget(params) && agentText(params.key),
+  "browser.keyboardInsertText": params => agentTarget(params) && agentText(params.text),
+  "browser.mouseMove": params => agentTarget(params) && agentNumber(params.x) && agentNumber(params.y),
+  "browser.mouseDown": params => agentTarget(params) && agentOptional(params.button, agentButton),
+  "browser.mouseUp": params => agentTarget(params) && agentOptional(params.button, agentButton),
+  "browser.mouseClick": params => agentTarget(params) && agentNumber(params.x) && agentNumber(params.y) && agentOptional(params.button, agentButton) && agentOptional(params.radius, agentNumber) && agentOptional(params.modifiers, m => Array.isArray(m) && m.every(agentText)),
+  "browser.mouseWheel": params => agentTarget(params) && agentNumber(params.dy) && agentOptional(params.dx, agentNumber),
+  "browser.scroll": params => agentTarget(params) && (params.direction === "up" || params.direction === "down") && agentOptional(params.amount, v => agentNumber(v) && v > 0),
+  // A wait names at least one condition or a positive timeout.
+  "browser.wait": params => agentTarget(params) && agentOptional(params.timeout, v => agentNumber(v) && v > 0) && agentWaitFields.every(f => agentOptional(params[f], agentText)) && (agentWaitFields.some(f => agentText(params[f])) || agentNumber(params.timeout)),
+  // Lane p66-04 owns the snapshot options; the target fields are what this lane checks.
   "browser.snapshot": agentTarget,
 };
 
@@ -11122,13 +11176,19 @@ function agentWallVerdict(entry, actorRef) {
   if (!entry || entry.owner !== actorRef) {
     return "unknown-tab";
   }
-  if (entry.agent !== true) {
+  if (entry.agent !== true || !agentInOwnContainer(entry)) {
     return "not-agent-tab";
   }
   if (entry.agentControl?.stopped) {
     return "agent-stopped";
   }
   return null;
+}
+
+// P66-26: an agent tab's page must be in the Orca-agent container it was created in, never the user's cookie jar.
+function agentInOwnContainer(entry) {
+  const id = entry.agentUserContextId;
+  return Number.isInteger(id) && id > 0 && entry.browser.browsingContext?.originAttributes?.userContextId === id;
 }
 
 // A1: "shown to the user" means visible and not parked. A parked agent overlay is visibility visible under the Theia
@@ -11143,37 +11203,329 @@ function overlayShownToUser(browser) {
 function webTabPlacement(entry, visible) {
   const parked = !visible && entry.agent === true;
   entry.parked = parked;
+  // An overlay parked while it held the shell's focus gives it back at once (coordinator finding 1).
+  if (parked && entry.browser.ownerDocument.activeElement === entry.browser) {
+    agentFocusGuard(entry.browser.ownerDocument.defaultView, entry.browser);
+  }
   if (entry.agent !== true) {
     return { visibility: visible ? "visible" : "hidden" };
   }
   return { visibility: "visible", zIndex: parked ? "-1" : "1" };
 }
 
-// Native rows (P66-11): each takes (entry, params) and answers { where: "done", result } or { where: "failed", code }.
-const AGENT_NATIVE_ROWS = {
-  "browser.screenshot": (entry, params) => agentScreenshot(entry, params),
-};
+// Orca's BROWSER_CLIENT_AUTOMATION_RESULT_MAX_BYTES: a result over it is rejected by orcad (Pitfall 4).
+const AGENT_RESULT_MAX_BYTES = 768 * 1024;
+const AGENT_LOG_MAX = 500;
+const AGENT_CONTAINER_PREF = "powerbrowser.orca.agentUserContextId";
 
-async function agentScreenshot(entry, params) {
+// P66-26: the Orca-agent container. Created once, its id kept in a pref and re-validated at each use, so a container
+// the user removed is created again rather than reused. 0 when no container can be had; webTabOpen then opens nothing.
+function agentContainerId() {
+  try {
+    const stored = Services.prefs.getIntPref(AGENT_CONTAINER_PREF, 0);
+    if (stored > 0 && lazy.ContextualIdentityService.getPublicIdentityFromId(stored)) {
+      return stored;
+    }
+    const identity = lazy.ContextualIdentityService.create("PowerBrowser Orca agents", "fingerprint", "purple");
+    Services.prefs.setIntPref(AGENT_CONTAINER_PREF, identity.userContextId);
+    return identity.userContextId;
+  } catch (err) {
+    PowerBrowserAPI.log("error", `[orca-agent] the agent container could not be created (${err && err.name ? err.name : "error"})`);
+    return 0;
+  }
+}
+
+// webTabOpen's agent branch: the flag, the container the overlay was created in, the network log and the focus guard.
+function agentTabCreated(entry, userContextId) {
+  entry.agent = true;
+  entry.agentUserContextId = userContextId;
+  entry.agentNetwork = [];
+  agentNetworkInstall();
+  agentFocusGuardInstall(entry.browser.ownerDocument.defaultView);
+}
+
+// Coordinator finding 1 (UI redress): a parked agent overlay never holds the shell's focus. The overlay already has
+// tabindex -1 and an inactive docshell; if focus still lands on it (a page calling window.focus()), it goes back to
+// the overlay the user sees, else to the Theia frame, before the user's next key.
+const agentFocusGuarded = new WeakSet();
+function agentFocusGuardInstall(win) {
+  if (agentFocusGuarded.has(win)) {
+    return;
+  }
+  agentFocusGuarded.add(win);
+  win.addEventListener("focus", event => agentFocusGuard(win, event.target), true);
+}
+
+function agentFocusGuard(win, target) {
+  const entry = webTabs.get(tabIdOfBrowser(target));
+  if (!entry || entry.parked !== true) {
+    return false;
+  }
+  const shown = [...webTabs.values()].find(other => other.browser.ownerDocument.defaultView === win && overlayShownToUser(other.browser));
+  const back = shown ? shown.browser : entry.owner?.browsingContext?.top?.embedderElement;
+  back?.focus();
+  return true;
+}
+
+// Assumption A-3 (Pitfall 4), the result budget: the format asked for, then JPEG, then JPEG at half scale, else browser_error.
+function agentEncodeImage(win, bitmap, format) {
+  try {
+    for (const [type, scale] of [[format, 1], ["jpeg", 1], ["jpeg", 0.5]]) {
+      const canvas = win.document.createElementNS("http://www.w3.org/1999/xhtml", "canvas");
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      const url = canvas.toDataURL(type === "jpeg" ? "image/jpeg" : "image/png");
+      const data = url.slice(url.indexOf(",") + 1);
+      if (data.length + 64 <= AGENT_RESULT_MAX_BYTES) {
+        return agentDone({ data, format: type });
+      }
+    }
+    return agentFailed("browser_error");
+  } finally {
+    bitmap.close?.();
+  }
+}
+
+async function agentScreenshot(entry, params, full) {
   const windowGlobal = entry.browser.browsingContext?.currentWindowGlobal;
   if (!windowGlobal) {
     return agentFailed("browser_error");
   }
   const win = entry.browser.ownerDocument.defaultView;
+  const dpr = win.devicePixelRatio || 1;
+  let rect = null;
+  if (full) {
+    // The document size comes from the agent child; capped so one bitmap stays within 16384 device pixels a side.
+    const size = await windowGlobal.getActor(AGENT_ACTOR_NAME).sendQuery("PowerBrowserAgent:Size", {});
+    const cap = Math.floor(16384 / dpr);
+    rect = new win.DOMRect(0, 0, Math.max(1, Math.min(size?.width || 1, cap)), Math.max(1, Math.min(size?.height || 1, cap)));
+  }
   // Device pixels: a CSS coordinate times the device pixel ratio is the image pixel (G2, dpr2).
-  const bitmap = await windowGlobal.drawSnapshot(null, win.devicePixelRatio || 1, "rgb(255,255,255)");
-  return agentDone(agentEncodeImage(win, bitmap, params.format === "jpeg" ? "jpeg" : "png"));
+  const bitmap = await windowGlobal.drawSnapshot(rect, dpr, "rgb(255,255,255)", rect !== null);
+  return agentEncodeImage(win, bitmap, params.format === "jpeg" ? "jpeg" : "png");
 }
 
-function agentEncodeImage(win, bitmap, format) {
-  const canvas = win.document.createElementNS("http://www.w3.org/1999/xhtml", "canvas");
-  canvas.width = bitmap.width;
-  canvas.height = bitmap.height;
-  canvas.getContext("2d").drawImage(bitmap, 0, 0);
-  bitmap.close?.();
-  const url = canvas.toDataURL(format === "jpeg" ? "image/jpeg" : "image/png");
-  return { data: url.slice(url.indexOf(",") + 1), format };
+// Print to PDF into memory (the stream form WebDriver's print uses), no file written; base64 within the budget.
+async function agentPdf(entry) {
+  const printSvc = Cc["@mozilla.org/gfx/printsettings-service;1"].getService(Ci.nsIPrintSettingsService);
+  const settings = printSvc.createNewPrintSettings();
+  settings.isInitializedFromPrinter = true;
+  settings.isInitializedFromPrefs = true;
+  settings.printerName = "Mozilla Save to PDF";
+  settings.printSilent = true;
+  settings.outputFormat = Ci.nsIPrintSettings.kOutputFormatPDF;
+  const stream = Cc["@mozilla.org/storagestream;1"].createInstance(Ci.nsIStorageStream);
+  stream.init(4096, 0xffffffff);
+  settings.outputDestination = Ci.nsIPrintSettings.kOutputDestinationStream;
+  settings.outputStream = stream.getOutputStream(0);
+  await entry.browser.browsingContext.print(settings);
+  const input = Cc["@mozilla.org/binaryinputstream;1"].createInstance(Ci.nsIBinaryInputStream);
+  input.setInputStream(stream.newInputStream(0));
+  const data = btoa(input.readBytes(input.available()));
+  stream.close();
+  return data.length + 64 <= AGENT_RESULT_MAX_BYTES ? agentDone({ data }) : agentFailed("browser_error");
 }
+
+// Navigation rows: the existing webTab functions (their http(s) scheme wall applies), then the load settles.
+// shortcut: polls isLoadingDocument (seen loading then idle, 1 s if no load starts, 30 s cap); a progress listener
+// would settle exactly, upgrade if agents see a stale url.
+async function agentNavigate(entry, tabId, outcome) {
+  if (outcome !== "loading" && outcome !== "done") {
+    return agentFailed("browser_navigation_failed");
+  }
+  const win = entry.browser.ownerDocument.defaultView;
+  await new Promise(resolve => {
+    let seen = false;
+    let waited = 0;
+    const tick = () => {
+      const loading = !!entry.browser.webProgress?.isLoadingDocument;
+      seen = seen || loading;
+      if ((seen && !loading) || (!seen && waited >= 1000) || waited >= 30000 || !webTabs.has(tabId)) {
+        resolve();
+        return;
+      }
+      waited += 100;
+      win.setTimeout(tick, 100);
+    };
+    win.setTimeout(tick, 100);
+  });
+  return agentDone({ url: webTabPushedSpec(entry.browser.currentURI?.spec ?? ""), title: String(entry.browser.contentTitle ?? "") });
+}
+
+const agentUrl = url => (/^[a-z][a-z0-9+.-]*:/i.test(url) ? url : `https://${url}`);
+
+// Cookie rows (P66-26): only ever in the agent container, never the user's jar.
+function agentOriginAttributes(entry) {
+  return { userContextId: entry.agentUserContextId };
+}
+
+function agentHostOf(entry, url) {
+  try {
+    return url ? new URL(url).hostname : entry.browser.currentURI?.host || "";
+  } catch {
+    return "";
+  }
+}
+
+const AGENT_SAME_SITE = ["None", "Lax", "Strict"];
+
+function agentCookieGet(entry, params) {
+  const attrs = agentOriginAttributes(entry);
+  const host = params.url ? agentHostOf(entry, params.url) : "";
+  if (params.url && !host) {
+    return agentFailed("browser_error");
+  }
+  const cookies = host ? Services.cookies.getCookiesFromHost(host, attrs) : Services.cookies.getCookiesWithOriginAttributes(JSON.stringify(attrs));
+  return agentDone({
+    cookies: cookies.map(c => ({ name: c.name, value: c.value, domain: c.host, path: c.path, expires: c.isSession ? -1 : Math.floor(c.expiry / 1000), httpOnly: c.isHttpOnly, secure: c.isSecure, sameSite: AGENT_SAME_SITE[c.sameSite] ?? "None" })),
+  });
+}
+
+function agentCookieSet(entry, params) {
+  const host = params.domain || agentHostOf(entry, null);
+  if (!host) {
+    return agentFailed("browser_error");
+  }
+  const sameSite = { none: 0, lax: 1, strict: 2 }[String(params.sameSite ?? "lax").toLowerCase()] ?? 1;
+  const session = !agentNumber(params.expires) || params.expires <= 0;
+  const expiry = session ? Date.now() + 24 * 60 * 60 * 1000 : Math.floor(params.expires * 1000);
+  const scheme = params.secure ? Ci.nsICookie.SCHEME_HTTPS : Ci.nsICookie.SCHEME_HTTP;
+  const validation = Services.cookies.add(host, params.path || "/", params.name, params.value, !!params.secure, !!params.httpOnly, session, expiry, agentOriginAttributes(entry), sameSite, scheme, false);
+  return agentDone({ success: !validation || validation.result === Ci.nsICookieValidation.eOK });
+}
+
+function agentCookieDelete(entry, params) {
+  const host = params.domain || agentHostOf(entry, params.url);
+  if (!host) {
+    return agentFailed("browser_error");
+  }
+  const attrs = agentOriginAttributes(entry);
+  let deleted = 0;
+  // Deleted the way a Set-Cookie with a past expiry deletes (CookieStorage::AddCookie, "the intent was simply to delete
+  // the old cookie"), in the agent container only. Services.cookies.remove stays the token-guarded clear helper's
+  // alone (verify-site-identity.mjs counts it).
+  for (const c of Services.cookies.getCookiesFromHost(host, attrs)) {
+    if (c.name === params.name) {
+      Services.cookies.add(c.host, c.path, c.name, "", c.isSecure, c.isHttpOnly, false, 1, attrs, c.sameSite, c.schemeMap, c.isPartitioned);
+      deleted += 1;
+    }
+  }
+  return agentDone({ deleted: deleted > 0 });
+}
+
+// Network rows: one http observer pair, installed with the first agent tab, keeping requests of agent overlays only.
+let agentNetworkInstalled = false;
+const agentNetworkRows = new WeakMap();
+
+function agentNetworkInstall() {
+  if (agentNetworkInstalled) {
+    return;
+  }
+  agentNetworkInstalled = true;
+  Services.obs.addObserver(agentNetworkObserver, "http-on-modify-request");
+  Services.obs.addObserver(agentNetworkObserver, "http-on-examine-response");
+}
+
+const agentNetworkObserver = {
+  observe(subject, topic) {
+    try {
+      const channel = subject.QueryInterface(Ci.nsIHttpChannel);
+      const entry = webTabs.get(tabIdOfBrowser(channel.loadInfo?.browsingContext?.top?.embedderElement));
+      if (entry?.agent !== true) {
+        return;
+      }
+      if (topic === "http-on-modify-request") {
+        const row = { url: channel.URI.spec, method: channel.requestMethod, timestamp: Date.now() };
+        agentNetworkRows.set(channel, row);
+        for (const log of [entry.agentNetwork, entry.agentCapture?.network]) {
+          if (log) {
+            log.push(row);
+            log.splice(0, Math.max(0, log.length - AGENT_LOG_MAX));
+          }
+        }
+      } else {
+        const row = agentNetworkRows.get(channel);
+        if (row) {
+          row.status = channel.responseStatus;
+          row.mimeType = channel.contentType || undefined;
+        }
+      }
+    } catch {
+      // a channel torn down mid-observe, or one without a response yet: nothing to record
+    }
+  },
+};
+
+function agentKeepLast(entries, limit) {
+  const n = agentNumber(limit) && limit > 0 ? Math.floor(limit) : 100;
+  return { entries: entries.slice(-n).map(row => ({ ...row })), truncated: entries.length > n };
+}
+
+// Dialog rows (A4): the stock commonDialog window an agent overlay's page opened, answered with its own buttons.
+function agentDialogWindow(entry) {
+  for (const win of Services.wm.getEnumerator(null)) {
+    if (!win.closed && String(win.location?.href) === "chrome://global/content/commonDialog.xhtml" && win.args?.owningBrowsingContext?.top?.embedderElement === entry.browser) {
+      return win;
+    }
+  }
+  return null;
+}
+
+function agentAnswerDialog(entry, accept, text) {
+  const win = agentDialogWindow(entry);
+  if (!win) {
+    return agentFailed("browser_no_dialog");
+  }
+  if (accept && typeof text === "string") {
+    const box = win.document.getElementById("loginTextbox");
+    if (box) {
+      box.value = text;
+      box.dispatchEvent(new win.Event("input", { bubbles: true }));
+    }
+  }
+  const dialog = win.document.getElementById("commonDialog");
+  if (accept) {
+    dialog.acceptDialog();
+  } else {
+    dialog.cancelDialog();
+  }
+  return agentDone({ accepted: accept });
+}
+
+// Native rows (P66-11, 15): each takes (entry, params, tabId) and answers { where: "done", result } or
+// { where: "failed", code }. The other 25 methods are the PowerBrowserAgent child's run table.
+const AGENT_NATIVE_ROWS = {
+  "browser.goto": (entry, params, tabId) => agentNavigate(entry, tabId, PowerBrowserAPI.webTabNavigate(tabId, agentUrl(params.url))),
+  "browser.back": (entry, params, tabId) => agentNavigate(entry, tabId, PowerBrowserAPI.webTabBack(tabId)),
+  "browser.forward": (entry, params, tabId) => agentNavigate(entry, tabId, PowerBrowserAPI.webTabForward(tabId)),
+  "browser.reload": (entry, params, tabId) => agentNavigate(entry, tabId, PowerBrowserAPI.webTabReload(tabId)),
+  "browser.screenshot": (entry, params) => agentScreenshot(entry, params, false),
+  "browser.fullScreenshot": (entry, params) => agentScreenshot(entry, params, true),
+  "browser.pdf": entry => agentPdf(entry),
+  "browser.cookie.get": (entry, params) => agentCookieGet(entry, params),
+  "browser.cookie.set": (entry, params) => agentCookieSet(entry, params),
+  "browser.cookie.delete": (entry, params) => agentCookieDelete(entry, params),
+  "browser.network": (entry, params) => agentDone(agentKeepLast(entry.agentNetwork ?? [], params.limit)),
+  "browser.capture.start": entry => {
+    entry.agentCapture = { network: [], since: Date.now() };
+    return agentDone({ capturing: true });
+  },
+  // The network half is chrome's; the console half is the child's buffer since the start (P66-11).
+  "browser.capture.stop": async entry => {
+    const capture = entry.agentCapture;
+    entry.agentCapture = null;
+    const consoleRows = await agentRunInChild(entry, "browser.console", { limit: AGENT_LOG_MAX });
+    const since = capture?.since ?? 0;
+    return agentDone({
+      stopped: true,
+      network: (capture?.network ?? []).map(row => ({ ...row })),
+      console: consoleRows.where === "done" ? (consoleRows.result?.entries ?? []).filter(row => !row.timestamp || row.timestamp >= since) : [],
+    });
+  },
+  "browser.dialogAccept": (entry, params) => agentAnswerDialog(entry, true, params.text),
+  "browser.dialogDismiss": entry => agentAnswerDialog(entry, false, null),
+};
 
 // The agent-control state of one tab (P66-20, P66-22), kept on its webTabs entry so it ends with the tab.
 function agentControlOf(entry) {
@@ -11274,7 +11626,7 @@ async function handleWebTabAgent(data, actorRef) {
   let outcome;
   try {
     const native = AGENT_NATIVE_ROWS[data.method];
-    outcome = native ? await native(entry, data.params) : await agentRunInChild(entry, data.method, data.params);
+    outcome = native ? await native(entry, data.params, data.tabId) : await agentRunInChild(entry, data.method, data.params);
   } catch (err) {
     PowerBrowserAPI.log("error", `[orca-agent] ${data.method} failed (${err && err.name ? err.name : "error"})`);
     outcome = agentFailed("browser_error");

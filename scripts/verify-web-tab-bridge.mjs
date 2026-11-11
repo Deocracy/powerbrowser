@@ -41,6 +41,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const API = 'powerbrowser/shell/PowerBrowserAPI.sys.mjs';
 const CHILD = 'powerbrowser/shell/GroupActorChild.sys.mjs';
+const CATALOGUE = 'powerbrowser/INTERNAL-APIS.md';
 const CLIENT = 'theia/extensions/modes/src/browser/group-actor-client.ts';
 const BWC = 'theia/extensions/tab-uris/src/browser/browser-window-command.ts';
 const WEB_TAB = 'theia/extensions/tab-uris/src/browser/web-tab.ts';
@@ -520,12 +521,23 @@ function checkBridge(raw, storeClasses = STORE_KIND_CLASSES, kindClasses = KIND_
         }
     }
 
-    // 7. CHILD PURITY: zero privileged reach (belt to the boundary scan).
-    for (const token of ['Cu.', 'Services.', 'Ci.', 'cloneInto']) {
+    // 7. CHILD PURITY: zero privileged reach (belt to the boundary scan). Phase 66 (A2): Ci. is admitted only on a
+    // child line that has its own INTERNAL-APIS.md table row (File:Line cell), as the boundary scan admits it.
+    for (const token of ['Cu.', 'Services.', 'cloneInto']) {
         if (src[CHILD].includes(token)) {
             failures.push(`${CHILD}: contains ${token} -- the actor child must carry zero privileged reach`);
         }
     }
+    const childLines = (raw[CHILD] ?? '').split('\n');
+    childLines.forEach((line, i) => {
+        if (/^\s*(\/\/|\*)/.test(line) || !line.includes('Ci.')) {
+            return;
+        }
+        const row = new RegExp(`^\\|[^|]*\\| \`GroupActorChild\\.sys\\.mjs:${i + 1}\` \\|`, 'm');
+        if (!row.test(raw[CATALOGUE] ?? '')) {
+            failures.push(`${CHILD}: line ${i + 1} contains Ci. with no ${CATALOGUE} row naming GroupActorChild.sys.mjs:${i + 1} -- the actor child may reach an interface only on a catalogued line (A2)`);
+        }
+    });
     if (!src[CHILD].includes('receiveMessage(')) {
         failures.push(`${CHILD}: receiveMessage( absent -- chrome's state push has no content-side receiver`);
     }
@@ -778,7 +790,7 @@ function checkStoreKinds(src, storeClasses) {
 }
 
 function readSources() {
-    const files = new Set([API, CHILD, CLIENT, BWC, WEB_TAB, MODULE]);
+    const files = new Set([API, CHILD, CATALOGUE, CLIENT, BWC, WEB_TAB, MODULE]);
     // Recursive (30-01): the pill lives under chrome-bar/src/browser/address-bar/.
     const dirs = [CHROME_BAR_DIR, TAB_URIS_DIR];
     if (existsSync(join(REPO_ROOT, ORCA_BROWSER_DIR))) {
@@ -1207,6 +1219,11 @@ function selfTest() {
     ];
 
     cases.push(
+        {
+            name: 'planted uncatalogued Ci. line in the actor child',
+            sources: { ...clean, [CHILD]: clean[CHILD] + '\nexport const plantedInterface = Ci.nsIPlantedInterface;\n' },
+            expect: `contains Ci. with no ${CATALOGUE} row naming GroupActorChild.sys.mjs:${clean[CHILD].split('\n').length + 1}`,
+        },
         {
             name: 'webTabAgent unclassified (orca-browser present)',
             sources: orcaBrowser,

@@ -4030,6 +4030,9 @@ run_own_checks() {
     # call on a user, unknown or foreign tab reaches no page work, the flag is set only at creation, unshown agent tabs
     # are parked and user tabs never are, and every overlay visibility read goes through overlayShownToUser.
     "orca-browser-tab-scope|node $REPO_ROOT/scripts/verify-orca-browser-tab-scope.mjs"
+    # orca-browser-tab-scope-self-test: 14 plants on in-memory copies (wall, flag, parking, raw read, Stop, idle,
+    # container attribute, cookie container, wall container check, parked focus, page table x3, empty method list).
+    "orca-browser-tab-scope-self-test|node $REPO_ROOT/scripts/verify-orca-browser-tab-scope.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"

@@ -112,7 +112,10 @@ is_conditional_pattern() {
 # occurrence must have its own INTERNAL-APIS.md row; any other forbidden
 # pattern in it is an offense as anywhere else.
 ACTOR_CHILD_BASENAME="GroupActorChild.sys.mjs"
-ACTOR_CHILD_PATTERNS=('wrappedJSObject' 'JSWindowActorChild')
+# Phase 66 (A2, P66-13): the PowerBrowserAgent child's key input (nsITextInputProcessor) and console capture
+# (nsIConsoleAPIStorage, a system principal) need XPCOM constructors and interfaces, so the allowance gains exactly
+# Cc[ and Ci., each occurrence catalogued; Services., Cu. and nodePrincipal stay forbidden in the child.
+ACTOR_CHILD_PATTERNS=('wrappedJSObject' 'JSWindowActorChild' 'Cc[' 'Ci.')
 
 is_actor_child_pattern() {
   local pattern
@@ -453,6 +456,23 @@ EOF2
     cat "$tmp/self-test-child.err" >&2
     overall=1
   fi
+  # Phase 66 (A2) plants: the two patterns the allowance gained are waived only on catalogued lines, and a
+  # Services. line stays an offense in the child whatever the catalogue says.
+  local child_plant child_pattern
+  for child_plant in 'Cc[|  const tip = Cc["@mozilla.org/text-input-processor;1"];' 'Ci.|  const iface = Ci.nsITextInputProcessor;' 'Services.|  const prefs = Services.prefs;'; do
+    child_pattern="${child_plant%%|*}"
+    printf '// planted uncatalogued actor-child %s line\n%s\n' "$child_pattern" "${child_plant#*|}" > "$tmp/child/$ACTOR_CHILD_BASENAME"
+    if ACTOR_CHILD_TARGET="$tmp/child/$ACTOR_CHILD_BASENAME" scan_internals_boundary "$tmp/child" >/dev/null 2>"$tmp/self-test-child-a2.err"; then
+      echo "check-internals-boundary: --self-test FAIL -- an uncatalogued actor-child $child_pattern line was NOT rejected" >&2
+      overall=1
+    elif grep -qF "$ACTOR_CHILD_BASENAME:2: $child_pattern" "$tmp/self-test-child-a2.err"; then
+      echo "check-internals-boundary: --self-test PASS -- an uncatalogued actor-child $child_pattern line was correctly rejected"
+    else
+      echo "check-internals-boundary: --self-test FAIL -- the actor-child rejection doesn't name $ACTOR_CHILD_BASENAME:2: $child_pattern" >&2
+      cat "$tmp/self-test-child-a2.err" >&2
+      overall=1
+    fi
+  done
   # A byte-identical copy of the real actor child anywhere else gets no
   # waiver, although every one of its lines has a row.
   mkdir -p "$tmp/elsewhere"
