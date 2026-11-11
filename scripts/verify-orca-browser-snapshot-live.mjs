@@ -41,9 +41,9 @@
 //   node scripts/verify-orca-browser-snapshot-live.mjs --self-test
 
 import { execFile, execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -379,8 +379,87 @@ async function live() {
 
 // --- self-test -----------------------------------------------------------------
 
+// A reference in agent-browser's shape (Chromium-internal lines included) and a PowerBrowser output derived from it
+// with other ref numbers and no internal lines: the control proves bytes and numbering are not compared.
+function selfTestFixtures() {
+    const refRefs = { e1: { name: 'Title', role: 'heading' }, e2: { name: 'Agree', role: 'checkbox' }, e3: { name: 'Go', role: 'button' }, e4: { name: 'Away', role: 'link' } };
+    const ref = {
+        full: { refs: refRefs, removedRefs: [], snapshot: '- main\n  - heading "Title" [level=1, ref=e1]\n  - LabelText\n    - StaticText "Agree"\n  - checkbox "Agree" [checked=false, ref=e2]\n  - button "Go" [ref=e3]\n  - link "Away" [ref=e4]' },
+        interactive: { refs: refRefs, removedRefs: [], snapshot: '- heading "Title" [level=1, ref=e1]\n- checkbox "Agree" [checked=false, ref=e2]\n- button "Go" [ref=e3]\n- link "Away" [ref=e4]' },
+        afterChange: { snapshot: { kind: 'delta', revision: 2, baseRevision: 1, changes: [{ op: 'remove', ref: '@e4' }, { node: { name: 'New', role: 'button' }, op: 'add', ref: '@e5' }], treeChange: { startLine: 6, deleteCount: 1, lines: ['  - button "New" [ref=e5]'] } } },
+    };
+    const pbRefs = { e10: { role: 'heading', name: 'Title' }, e11: { role: 'checkbox', name: 'Agree' }, e12: { role: 'button', name: 'Go' }, e13: { role: 'link', name: 'Away' } };
+    const pbLines = ['- main', '  - heading "Title" [level=1, ref=e10]', '  - checkbox "Agree" [checked=false, ref=e11]', '  - button "Go" [ref=e12]'];
+    const obs = {
+        full: { origin: 'http://127.0.0.1/x.html', refs: pbRefs, removedRefs: [], snapshot: [...pbLines, '  - link "Away" [ref=e13]'].join('\n') },
+        interactive: { refs: pbRefs, removedRefs: [], snapshot: '- heading "Title" [level=1, ref=e10]\n- checkbox "Agree" [checked=false, ref=e11]\n- button "Go" [ref=e12]\n- link "Away" [ref=e13]' },
+        deltaAfter: { snapshot: { kind: 'delta', revision: 4, baseRevision: 3, changes: [], treeChange: { startLine: 4, deleteCount: 1, lines: [] } } },
+        after: { refs: { e10: pbRefs.e10, e11: pbRefs.e11, e12: pbRefs.e12, e14: { role: 'button', name: 'New' } }, removedRefs: ['e13'], snapshot: [...pbLines, '  - button "New" [ref=e14]'].join('\n') },
+    };
+    return { ref, obs };
+}
+
 export function selfTest() {
-    return { lines: ['(self-test lands with Task 3)'], failures: 0, planted: 0 };
+    const lines = [];
+    let failures = 0;
+    let planted = 0;
+    const clone = (v) => JSON.parse(JSON.stringify(v));
+    const expectRed = (name, fails, naming) => {
+        planted++;
+        const hit = fails.some((f) => f.includes(naming));
+        if (hit) lines.push(`  ok  ${name} -> red, naming '${fails.find((f) => f.includes(naming))}'`);
+        else { failures++; lines.push(`  FAIL ${name} -> ${fails.length ? `red without '${naming}': ${fails.join(' | ')}` : 'stayed green'}`); }
+    };
+
+    // Page clauses: control, then one plant per clause.
+    const { ref, obs } = selfTestFixtures();
+    const control = pageVerdict(obs, ref, 'fixture');
+    const counters = [{ text: 'Go', clicks: 0 }, { text: 'New', clicks: 0 }];
+    const clicked = [{ text: 'Go', clicks: 1 }, { text: 'New', clicks: 0 }];
+    const controlRest = [...clickVerdict(counters, clicked, 'Go', 'fixture click'), ...staleVerdict('browser_stale_ref', 'fixture stale')];
+    if (control.length || controlRest.length) {
+        console.error(`${NAME} self-test: FAIL -- the clean control is not green (${[...control, ...controlRest].join(' | ')}), so the plant results below would be meaningless`);
+        return { lines, failures: 1, planted };
+    }
+    lines.push(`${NAME} self-test: clean control green (other ref numbers and no Chromium-internal lines than the reference)`);
+    const page = (name, edit, naming) => { const o = clone(obs); edit(o); expectRed(name, pageVerdict(o, ref, 'fixture'), naming); };
+    page('a ref\'d (role, name) missing from the output', (o) => { delete o.full.refs.e12; o.full.snapshot = o.full.snapshot.replace('  - button "Go" [ref=e12]\n', ''); }, 'ref\'d node button "Go"');
+    page('a ref renumbered after the change', (o) => { o.after.refs.e15 = o.after.refs.e12; delete o.after.refs.e12; }, 'renumbered');
+    page('a line breaking the grammar', (o) => { o.full.snapshot = o.full.snapshot.replace('- button "Go" [ref=e12]', '- button Go [ref=e12]'); }, 'breaks the grammar');
+    page('a checked token differing', (o) => { o.full.snapshot = o.full.snapshot.replace('checked=false', 'checked=true'); }, 'attribute tokens of checkbox "Agree"');
+    page('a delta kind differing', (o) => { o.deltaAfter.snapshot = { kind: 'full', revision: 4, refs: {}, tree: '' }; }, 'delta kind');
+    expectRed('a click landing on another node', clickVerdict(counters, [{ text: 'Go', clicks: 0 }, { text: 'New', clicks: 1 }], 'Go', 'fixture click'), 'landed on "New"');
+    expectRed('a removed node\'s ref answering another code', staleVerdict('browser_ref_not_found', 'fixture stale'), 'not browser_stale_ref');
+
+    // Fixture-version clauses over a mkdtemp tree read by the same reader the --fixtures mode uses.
+    const tmp = mkdtempSync(join(tmpdir(), `${NAME}-`));
+    try {
+        const put = (rel, body) => { mkdirSync(dirname(join(tmp, rel)), { recursive: true }); writeFileSync(join(tmp, rel), typeof body === 'string' ? body : JSON.stringify(body)); };
+        const pageJson = { agentBrowserVersion: '9.8.7', chromiumVersion: '1.0', generatedAt: 'x', full: ref.full, interactive: ref.interactive, afterChange: ref.afterChange };
+        put('orca/package.json', '{ "dependencies": { "agent-browser": "~9.8.5" } }');
+        put('orca/node_modules/agent-browser/package.json', { version: '9.8.7' });
+        put(`${FIX_REL}/manifest.json`, { agentBrowserVersion: '9.8.7', pages: ['one', 'two'] });
+        for (const p of ['one', 'two']) { put(`${FIX_REL}/${p}.html`, '<p>fixture</p>'); put(`${FIX_REL}/${p}.json`, pageJson); }
+        const fixControl = fixturesVerdict(fixturesObs(tmp));
+        if (fixControl.length) { failures++; lines.push(`  FAIL fixture-version control is not green: ${fixControl.join(' | ')}`); }
+        else lines.push(`${NAME} self-test: fixture-version control green (synthetic version 9.8.7 inside ~9.8.5, two pages)`);
+        const plant = (name, rel, body, naming) => {
+            const path = join(tmp, rel);
+            const before = read(path);
+            if (body === null) rmSync(path); else writeFileSync(path, body);
+            expectRed(name, fixturesVerdict(fixturesObs(tmp)), naming);
+            if (before === null) rmSync(path, { force: true }); else writeFileSync(path, before);
+        };
+        plant('an empty fixture set', `${FIX_REL}/manifest.json`, JSON.stringify({ agentBrowserVersion: '9.8.7', pages: [] }), 'broken instrument');
+        plant('a recorded version differing from the installed one', 'orca/node_modules/agent-browser/package.json', JSON.stringify({ version: '9.8.9' }), 'orca/ has 9.8.9 installed');
+        plant('a version outside the tilde range', 'orca/package.json', '{ "dependencies": { "agent-browser": "~9.9.0" } }', 'outside orca/package.json\'s range ~9.9.0');
+        plant('a manifest page without its json', `${FIX_REL}/two.json`, null, 'manifest page two has no two.json');
+        plant('a page json without its afterChange', `${FIX_REL}/one.json`, JSON.stringify({ ...pageJson, afterChange: undefined }), 'one.json lacks afterChange');
+    } finally {
+        rmSync(tmp, { recursive: true, force: true });
+    }
+    if (existsSync(tmp)) { failures++; lines.push(`  FAIL the fixture directory ${tmp} was not removed`); }
+    return { lines, failures, planted };
 }
 
 const isEntryPoint = (() => {
