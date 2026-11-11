@@ -72,6 +72,28 @@ interface HostModule {
 /** Orca's runtime worktree selector, formed as its renderer's toRuntimeWorktreeSelector forms it (client-hosted-browser-row-close.ts). */
 const worktreeSelector = (worktreeId: string): string => worktreeId.trim().startsWith('id:') ? worktreeId.trim() : `id:${worktreeId.trim()}`;
 
+/**
+ * P66-08 (66-06): the bound pages of this frontend, kept in the Theia document's sessionStorage (it survives a reload
+ * of the same window, never a new launch) as browserPageId -> worktree selector. orcad keeps a reloaded frontend's pages
+ * as host-absent rows, because the new host attaches with a new client id; the new host closes them after attach.
+ */
+const ENDED_PAGES_KEY = 'powerbrowser.orca-browser.bound-pages';
+const readBoundPages = (): Record<string, string | null> => {
+    try {
+        const value = JSON.parse(window.sessionStorage.getItem(ENDED_PAGES_KEY) ?? '{}');
+        return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    } catch {
+        return {};
+    }
+};
+const writeBoundPages = (pages: Record<string, string | null>): void => {
+    try {
+        window.sessionStorage.setItem(ENDED_PAGES_KEY, JSON.stringify(pages));
+    } catch {
+        // storage unavailable: a reload then leaves host-absent rows, as before
+    }
+};
+
 /** The createPage event's fields kept with a binding: the inventory entry and the user-close selector come from them. */
 type BoundEvent = CommandEvent & Record<string, unknown>;
 
@@ -171,6 +193,7 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
             this.session = session;
             attached(session);
             link.setPlacement(browserHostClientId);
+            this.closeEndedPages(session);
         } catch {
             console.error(`${LOG_PREFIX} the browser host did not attach at the ${step} step`);
         }
@@ -260,6 +283,8 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
                 const pageId = event.browserPageId;
                 const widget = await this.openHandler.openAgentTab(this.placementRef(event.command.workspaceId));
                 this.bound.set(pageId, event as BoundEvent);
+                const workspaceId = event.command.workspaceId;
+                writeBoundPages({ ...readBoundPages(), [pageId]: workspaceId ? worktreeSelector(workspaceId) : null });
                 this.pages.tracker.noteCreated(pageId);
                 widget.disposed.connect(() => this.onTabClosed(pageId, widget.tabId));
                 return widget.tabId;
@@ -280,6 +305,8 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
      */
     protected onTabClosed(pageId: string, tabId: string): void {
         const event = this.bound.get(pageId);
+        const { [pageId]: _closed, ...stillBound } = readBoundPages();
+        writeBoundPages(stillBound);
         this.sentMetadata.delete(pageId);
         if (this.pages.table.tabOf(pageId) !== tabId) {
             this.bound.delete(pageId);
@@ -290,6 +317,23 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
         const workspaceId = event?.command.workspaceId;
         void Promise.resolve(this.session?.userClosedPage(workspaceId ? worktreeSelector(workspaceId) : undefined, pageId))
             .catch(() => console.warn(`${LOG_PREFIX} a user close was not reported`));
+    }
+
+    /** P66-08: pages a previous frontend of this window bound end with it; each is closed as a user close would be. */
+    protected closeEndedPages(session: HostSession): void {
+        const ended = Object.entries(readBoundPages()).filter(([pageId]) => this.pages.table.tabOf(pageId) === undefined);
+        if (!ended.length) {
+            return;
+        }
+        const kept = readBoundPages();
+        for (const [pageId] of ended) {
+            delete kept[pageId];
+        }
+        writeBoundPages(kept);
+        for (const [pageId, selector] of ended) {
+            void Promise.resolve(session.userClosedPage(selector ?? undefined, pageId))
+                .catch(() => console.warn(`${LOG_PREFIX} a page of the previous frontend was not closed`));
+        }
     }
 
     /** P66-08: agent tabs a previous frontend opened (restored with the layout) belong to pages that ended with it. */
