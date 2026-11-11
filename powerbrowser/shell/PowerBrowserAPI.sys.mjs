@@ -4362,13 +4362,13 @@ export const PowerBrowserAPI = Object.freeze({
       QueryInterface: ChromeUtils.generateQI(["nsIBrowserDOMWindow"]),
       // The in-process path (nsContentTreeOwner.cpp:550); every page here is remote, so null opens a stock window.
       createContentWindow(aURI, aOpenWindowInfo, aWhere, aFlags, aTriggeringPrincipal, aPolicyContainer) {
-        return null;
+        return adoptInProcessWindow(aOpenWindowInfo);
       },
       createContentWindowInFrame(aURI, params, aWhere, aFlags, aName) {
         return adoptContentWindow(aURI, params, aWhere);
       },
       openURI(aURI, aOpenWindowInfo, aWhere, aFlags, aTriggeringPrincipal, aPolicyContainer) {
-        return null;
+        return adoptInProcessWindow(aOpenWindowInfo);
       },
       openURIInFrame(aURI, params, aWhere, aFlags, aName) {
         return adoptContentWindow(aURI, params, aWhere);
@@ -7436,10 +7436,11 @@ function mintPendingKey() {
 
 // openLinkIn: middle-click, Ctrl+click and context-menu opens. The stock function opens AND loads
 // (URILoadingHelper.sys.mjs:465), so this one loads the new overlay through its own docshell. Opens it cannot
-// place open nothing: no overlay opener (null), or a non-web scheme (logged by kind, never the URL).
+// place open nothing: no overlay opener (null), an agent overlay opener for any where (D-35, agentOpenRefused), or a
+// non-web scheme (logged by kind, never the URL).
 function adoptLinkIn(url, where, params) {
   const opener = params?.openerBrowser ?? null;
-  if (tabIdOfBrowser(opener) === null) {
+  if (tabIdOfBrowser(opener) === null || agentOpenRefused(opener, "link open")) {
     return null;
   }
   const spec = typeof url === "string" && url ? url : "about:blank";
@@ -7477,6 +7478,8 @@ function adoptLinkIn(url, where, params) {
 // the returned element itself, so nothing here navigates it (stock skipLoad, tabbrowser.js:2835).
 function adoptContentWindow(aURI, params, aWhere) {
   const { OPEN_PRINT_BROWSER, OPEN_NEWTAB, OPEN_NEWTAB_BACKGROUND } = Ci.nsIBrowserDOMWindow;
+  // D-35: an agent opener throws before the null below, which would open a stock window; print included.
+  agentOpenGuard(params?.openerBrowser, "new window");
   const opener = params?.openerBrowser ?? null;
   if (tabIdOfBrowser(opener) === null || aWhere === OPEN_PRINT_BROWSER) {
     return null;
@@ -7486,6 +7489,13 @@ function adoptContentWindow(aURI, params, aWhere) {
   const browser = createPendingOverlay(opener, aURI ? aURI.spec : "about:blank", background, params.openWindowInfo);
   // refused-scheme: null, so Gecko's own new-window path takes the page, never an overlay.
   return typeof browser === "string" ? null : browser;
+}
+
+// The in-process members (createContentWindow, openURI): every page here is remote, so null opens a stock window. An
+// agent opener (the opener browsing context's top embedder) throws first (D-35).
+function adoptInProcessWindow(openWindowInfo) {
+  agentOpenGuard(openWindowInfo?.parent?.top?.embedderElement, "new window");
+  return null;
 }
 
 // The scheme wall comes before any element exists; the opener wall is the callers'.
@@ -11256,9 +11266,47 @@ function agentContainerId() {
 function agentTabCreated(entry, userContextId) {
   entry.agent = true;
   entry.agentUserContextId = userContextId;
+  // D-35, the content wall: set before the first load, so every document of the overlay carries it.
+  entry.browser.browsingContext.sandboxFlags |= SANDBOXED_AUXILIARY_NAVIGATION;
   entry.agentNetwork = [];
   agentNetworkInstall();
   agentFocusGuardInstall(entry.browser.ownerDocument.defaultView);
+}
+
+// D-35 (66-08): a new window, tab or popup whose opener is an agent overlay is refused on every path; the agent's own
+// navigation inside its tab is unaffected. Two walls. In content, the overlay's browsing context carries
+// SANDBOXED_AUXILIARY_NAVIGATION (nsSandboxFlags.h; Gecko's own PageExtractorParent and BackgroundThumbnailsChild set
+// it the same way), so window.open with or without features, a target=_blank link and a form target create no
+// browsing context (nsWindowWatcher.cpp:982, nsDocShell.cpp:7570). That wall is the only one a popup with features
+// meets: ContentParent opens its stock window without asking browserDOMWindow (ContentParent.cpp:5529). In chrome,
+// every new-window receiver asks agentOpenRefused first: the link opener (middle-click, modified click, Enter on a
+// link) opens nothing, and the browserDOMWindow members throw, because their null makes Gecko open a stock window
+// (ContentParent.cpp:5505-5508) while a failure refuses the open. A content-wall refusal happens before any chrome code
+// runs, so only the chrome wall can log or fail a command; the page's own window.open returns null.
+const SANDBOXED_AUXILIARY_NAVIGATION = 0x2;
+
+// True when opener is an agent overlay. Logged once per tab and path, without the URL; an agent command in flight on
+// that tab then answers browser_command_unavailable (handleWebTabAgent).
+function agentOpenRefused(opener, path) {
+  const entry = webTabs.get(tabIdOfBrowser(opener));
+  if (entry?.agent !== true) {
+    return false;
+  }
+  const control = agentControlOf(entry);
+  control.openRefusals = (control.openRefusals ?? 0) + 1;
+  entry.agentOpensLogged ??= new Set();
+  if (!entry.agentOpensLogged.has(path)) {
+    entry.agentOpensLogged.add(path);
+    PowerBrowserAPI.log("warn", `[orca-agent] refused a ${path} from an agent page (D-35)`);
+  }
+  return true;
+}
+
+// The browserDOMWindow members' form: a thrown failure is ContentParent's refusal (no window, window.open null).
+function agentOpenGuard(opener, path) {
+  if (agentOpenRefused(opener, path)) {
+    throw Components.Exception("", Cr.NS_ERROR_ABORT);
+  }
 }
 
 // Coordinator finding 1 (UI redress): a parked agent overlay never holds the shell's focus. The overlay already has
@@ -11648,6 +11696,7 @@ async function handleWebTabAgent(data, actorRef) {
   }
   const control = agentControlOf(entry);
   agentSetActive(data.tabId, entry, true);
+  const opensRefused = control.openRefusals ?? 0;
   let outcome;
   try {
     const native = AGENT_NATIVE_ROWS[data.method];
@@ -11655,6 +11704,10 @@ async function handleWebTabAgent(data, actorRef) {
   } catch (err) {
     PowerBrowserAPI.log("error", `[orca-agent] ${data.method} failed (${err && err.name ? err.name : "error"})`);
     outcome = agentFailed("browser_error");
+  }
+  // D-35: the command opened a window or tab that chrome refused, so it did not do what it was asked.
+  if ((control.openRefusals ?? 0) !== opensRefused && outcome.where === "done") {
+    outcome = agentFailed("browser_command_unavailable");
   }
   if (control.stopped) {
     return { ok: true, kind, where: "agent-stopped" };

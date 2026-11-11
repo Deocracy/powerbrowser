@@ -1314,7 +1314,7 @@
       "case_form": "lower",
       "class": "coincidental",
       "target": "orca",
-      "expected_count": 4751,
+      "expected_count": 4752,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md",

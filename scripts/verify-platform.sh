@@ -4050,11 +4050,16 @@ run_own_checks() {
     # NEW (66-03, BRW-03/BRW-04, P66-06/P66-12/P66-30, A1): orca-browser-tab-scope evaluates the shipped agent section of
     # PowerBrowserAPI.sys.mjs, webTabOpen, webTabGeometry and the agent arms in node:vm over a stub boundary: an agent
     # call on a user, unknown or foreign tab reaches no page work, the flag is set only at creation, unshown agent tabs
-    # are parked and user tabs never are, and every overlay visibility read goes through overlayShownToUser.
+    # are parked and user tabs never are, and every overlay visibility read goes through overlayShownToUser. 66-08
+    # (D-35): every open path installNewWindowReceivers installs (derived) opens nothing for an agent-overlay opener at
+    # every location, the browserDOMWindow members throw, refusals log once and fail the command in flight, and agent
+    # overlays load with SANDBOXED_AUXILIARY_NAVIGATION.
     "orca-browser-tab-scope|node $REPO_ROOT/scripts/verify-orca-browser-tab-scope.mjs"
     # orca-browser-tab-scope-self-test: 17 plants on in-memory copies (wall, flag, parking, raw read, Stop, idle,
     # container attribute, cookie container, wall container check, parked focus, agent group, dialog
-    # types, pinned LoginManager groups, page table x3, empty method list).
+    # types, pinned LoginManager groups, page table x3, empty method list), plus 66-08's D-35 plants: the link, InFrame
+    # and in-process guards, null instead of a throw, the content wall, the command code, the log rule, a blinded
+    # derivation, and one generated plant per derived open path.
     "orca-browser-tab-scope-self-test|node $REPO_ROOT/scripts/verify-orca-browser-tab-scope.mjs --self-test"
     # NEW (66-04, BRW-03, A5): orca-snapshot-fixtures and orca-browser-snapshot-live-self-test. The snapshot fixtures
     # under scripts/fixtures/orca-snapshot/ come from the pinned agent-browser binary, never from a hand-written tree;
@@ -6774,7 +6779,8 @@ run_own_checks() {
       # NEW (66-05, BRW-02/BRW-03/BRW-04, P66-30): orca-browser-agent-live and orca-agent-mark-live prove ROADMAP Phase
       # 66 criteria 1-3 through the Orca CLI against PB's orcad: one background agent web tab per tab create within 1 s,
       # goto/click/type/screenshot at DPR 1 and 2, parked focus, refusals, the agent container, the decoy (P66-29), the
-      # renderer path, user close, reload, P66-09 activation and the no-Orca-pane create (criteria 1-2); the mark, its
+      # renderer path, user close, reload, P66-09 activation, the no-Orca-pane create and 66-08's (n) agent opens (D-35:
+      # a user tab's window.open and link target adopt as tabs first, then an agent page's create none) (criteria 1-2); the mark, its
       # idle clear, Stop and an unmarked stock window (criterion 3). Every absence follows its detector's positive read.
       # Coordinator-run on the merged, built tree under flock /home/chris/coding/Power-Browser/.git/pb-live.lock with
       # ORCA_* unset; a named SKIP without lane p66-03's AGENT_METHODS, lane p66-02's extension, a built PowerBrowser or

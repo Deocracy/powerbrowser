@@ -54,6 +54,17 @@
 //      bound web tab must become current within 1000 ms, and no second web tab opens. A CLI
 //      tab switch cannot be the source: orcad's session snapshot lists no client-hosted page
 //      (measured, 66-07), so no client store sees it.
+//  (n) agent opens (66-08, D-35): from a user web tab on /opener, a target=_blank link click and a
+//      window.open each adopt as exactly one non-agent web tab, and a window.open with features opens
+//      one stock window (the detectors: tab count, window count and the server's request log). Then,
+//      from an agent tab on the same page, a target=_blank link click, a target=_blank form submit,
+//      window.open with and without features (browser.eval), a middle-click on a link
+//      (browser.mouseClick) and Control+Enter on a focused link (browser.keypress) create no web tab
+//      and no window and load nothing; window.open answers null or throws; the middle-click and the
+//      Control+Enter commands answer failed browser_command_unavailable; the main area's current tab,
+//      chrome's focused overlay and the active window are unchanged; chrome reads
+//      SANDBOXED_AUXILIARY_NAVIGATION on the agent overlay and not on the user's. Last, the agent's own
+//      plain link click still navigates its own tab (D-35 keeps it).
 //  (i) reload, last: a frontend reload leaves no agent web tab, the host re-attaches, and
 //      tab list no longer lists the old pages.
 //
@@ -237,9 +248,33 @@ export function verdictActivation(o) {
     return f;
 }
 
+export function verdictOpens(o) {
+    const u = o.user;
+    const a = o.agent;
+    if (u.linkTabs !== 1 || u.openTabs !== 1 || u.linkLoads < 1 || u.openLoads < 1) return [`detector blind: a user tab's target link and window.open did not each adopt as one loaded tab (link ${u.linkTabs} tab(s) ${u.linkLoads} load(s), window.open ${u.openTabs} tab(s) ${u.openLoads} load(s))`];
+    if (u.agentAmong) return ['detector blind: a tab a user page opened is an agent tab'];
+    if (u.popupWindows !== 1) return [`detector blind: a user tab's window.open with features opened ${u.popupWindows} window(s), not one`];
+    if (!a.currentBefore) return ['detector blind: no main-area current tab before the agent opens'];
+    const f = [];
+    if (a.newTabs) f.push(`the agent page's opens created ${a.newTabs} web tab(s)`);
+    if (a.newWindows) f.push(`the agent page's opens created ${a.newWindows} window(s)`);
+    if (a.loads) f.push(`the agent page's opens loaded ${a.loads} page(s)`);
+    if (a.openReturned !== 'null' && !String(a.openReturned).startsWith('threw')) f.push(`the agent page's window.open answered ${a.openReturned}, not null`);
+    if (a.popupReturned !== 'null' && !String(a.popupReturned).startsWith('threw')) f.push(`the agent page's window.open with features answered ${a.popupReturned}, not null`);
+    for (const [what, reply] of [['middle-click on a link', a.middleReply], ['Control+Enter on a link', a.enterReply]]) {
+        if (reply !== 'failed browser_command_unavailable') f.push(`the agent's ${what} answered ${reply}, not failed browser_command_unavailable`);
+    }
+    if (a.currentAfter !== a.currentBefore) f.push(`the main area's current tab changed (${a.currentBefore} -> ${a.currentAfter})`);
+    if (a.chromeAfter !== a.chromeBefore || a.shellActiveAfter !== a.shellActiveBefore) f.push('the user focus moved during the agent opens');
+    if (!(a.sandboxFlags & 2)) f.push(`the agent overlay lacks SANDBOXED_AUXILIARY_NAVIGATION (sandboxFlags ${a.sandboxFlags})`);
+    if (u.sandboxFlags & 2) f.push('a user overlay has SANDBOXED_AUXILIARY_NAVIGATION');
+    if (!a.ownNavigation) f.push("the agent's own plain link click did not navigate its own tab");
+    return f;
+}
+
 export const VERDICTS = {
     k: verdictNoPane, a: verdictCreate, b: verdictActs, b1: verdictScreenshot, b2: verdictScreenshot, c: verdictFocus,
-    d: verdictRefusals, e: verdictContainer, e2: verdictContainerId, l: verdictLogins, m: verdictAuth, c2: verdictTyping, f: verdictDecoy, g: verdictRenderer, h: verdictUserClose, j: verdictActivation, i: verdictReload,
+    d: verdictRefusals, e: verdictContainer, e2: verdictContainerId, l: verdictLogins, m: verdictAuth, c2: verdictTyping, n: verdictOpens, f: verdictDecoy, g: verdictRenderer, h: verdictUserClose, j: verdictActivation, i: verdictReload,
 };
 
 /** Every clause's fails, each prefixed by its letter; skipped clauses ({ skip }) are listed apart. */
@@ -383,6 +418,81 @@ async function typingObserved(ctx, agentTabId, page) {
     return { controlTyped, controlDiag, controlExpected: 'ab', agentSelfActive, userTyped, userExpected: 'abcdefgh', agentValue, userBlurs, chromeBefore, chromeAfter };
 }
 
+/** (n) D-35: a user tab's opens adopt (the detectors); the same opens from an agent page create and load nothing. */
+async function opensObserved(ctx, agentTabId, page) {
+    const windows = () => ctx.inChrome('let n = 0; for (const w of Services.wm.getEnumerator(null)) { if (!w.closed) n++; } return n;');
+    const loadsOf = (tag) => ctx.requests().filter((r) => r.path === '/agent2' && r.search.includes(`via=${tag}`)).length;
+    const agent2Loads = () => ctx.requests().filter((r) => r.path === '/agent2').length;
+    const sandboxOf = (tabId) => ctx.inChrome(`const o = overlayOf(${JSON.stringify(tabId)}); return o ? o.browsingContext.sandboxFlags : null;`);
+    const shellActive = () => ctx.inChrome('return Services.focus.activeWindow === window;');
+    // New web tabs since `before`, after a settle; the adopt ack is the frontend's, so poll first.
+    const freshTabs = async (before, ms = 5000) => {
+        await ctx.pollFor(async () => ((await ctx.webTabs()).some((w) => !before.includes(w.id)) || null), ms, 'a new web tab').catch(() => null);
+        await sleep(500);
+        return (await ctx.webTabs()).filter((w) => !before.includes(w.id));
+    };
+    const closeAll = async (tabs) => { for (const t of tabs) await ctx.luminoClose(t.id); await sleep(300); };
+    const backToShell = async () => {
+        await ctx.inChrome('window.focus(); return true;');
+        await ctx.pollFor(() => ctx.inChrome('return Services.focus.activeWindow === window || null;'), 5000, 'the shell window to be active').catch(() => null);
+    };
+
+    // The detectors, from a user tab.
+    const userTab = await ctx.openWebTab(ctx.url('/opener'));
+    await ctx.pollFor(() => ctx.inPage('/opener', 'document.readyState === "complete"').then((v) => v || null), 10000, 'the opener user tab').catch(() => null);
+    const userWidget = (await ctx.webTabs()).find((w) => w.tabId === userTab)?.id;
+    await ctx.activate(userWidget);
+    let before = (await ctx.webTabs()).map((w) => w.id);
+    await ctx.inPage('/opener', '(document.getElementById("blank").click(), true)');
+    const linkTabs = await freshTabs(before);
+    const linkLoads = loadsOf('blank');
+    await closeAll(linkTabs);
+    before = (await ctx.webTabs()).map((w) => w.id);
+    await ctx.inPage('/opener', `(window.open(${JSON.stringify(ctx.url('/agent2?via=useropen'))}), true)`);
+    const openTabs = await freshTabs(before);
+    const openLoads = loadsOf('useropen');
+    await closeAll(openTabs);
+    const windowsBefore = await windows();
+    await ctx.inPage('/opener', `(window.open(${JSON.stringify(ctx.url('/agent2?via=userpopup'))}, 'pbpopup', 'width=320,height=240'), true)`);
+    const popupWindows = (await ctx.pollFor(async () => ((await windows()) > windowsBefore ? await windows() : null), 10000, 'the user popup window').catch(() => windowsBefore)) - windowsBefore;
+    await ctx.inChrome(`for (const w of Services.wm.getEnumerator('navigator:browser')) { if (!w.closed && w.gBrowser && w.gBrowser.browsers.some(b => b.currentURI.spec.includes('via=userpopup'))) w.close(); } return true;`);
+    await sleep(500);
+    await backToShell();
+    const user = { linkTabs: linkTabs.length, linkLoads, openTabs: openTabs.length, openLoads, agentAmong: [...linkTabs, ...openTabs].some((t) => t.agent), popupWindows, sandboxFlags: await sandboxOf(userTab) };
+
+    // The agent page: the same opens, every route.
+    await ctx.cli('goto', '--url', ctx.url('/opener'), '--page', page);
+    await ctx.activate(userWidget);
+    await ctx.focusOverlay(userTab);
+    const tabsBefore = (await ctx.webTabs()).map((w) => w.id);
+    const agentBefore = { current: await ctx.currentId(), chrome: await ctx.chromeActiveTabId(), shell: await shellActive(), windows: await windows(), loads: agent2Loads() };
+    await ctx.cli('click', '--element', '#blank', '--page', page);
+    await ctx.cli('click', '--element', '#fs', '--page', page);
+    const openReturned = await ctx.inAgent(agentTabId, `(() => { try { return window.open(${JSON.stringify(ctx.url('/agent2?via=agentopen'))}) === null ? 'null' : 'a window'; } catch (e) { return 'threw ' + e.name; } })()`);
+    const popupReturned = await ctx.inAgent(agentTabId, `(() => { try { return window.open(${JSON.stringify(ctx.url('/agent2?via=agentpopup'))}, 'pbagentpopup', 'width=320,height=240') === null ? 'null' : 'a window'; } catch (e) { return 'threw ' + e.name; } })()`);
+    const plain = await ctx.inAgent(agentTabId, '(() => { const r = document.getElementById("plain").getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()');
+    const middle = plain ? await ctx.agentRaw(agentTabId, 'browser.mouseClick', { x: plain.x, y: plain.y, button: 'middle' }) : null;
+    await ctx.agentRaw(agentTabId, 'browser.focus', { element: '#plain' });
+    const enter = await ctx.agentRaw(agentTabId, 'browser.keypress', { key: 'Control+Enter' });
+    await sleep(3000);
+    const fresh = (await ctx.webTabs()).filter((w) => !tabsBefore.includes(w.id));
+    const reply = (r) => (r ? `${r.where}${r.code ? ` ${r.code}` : ''}` : 'no reply');
+    const agent = {
+        currentBefore: agentBefore.current, currentAfter: await ctx.currentId(),
+        chromeBefore: agentBefore.chrome, chromeAfter: await ctx.chromeActiveTabId(),
+        shellActiveBefore: agentBefore.shell, shellActiveAfter: await shellActive(),
+        newTabs: fresh.length, newWindows: (await windows()) - agentBefore.windows, loads: agent2Loads() - agentBefore.loads,
+        openReturned, popupReturned, middleReply: reply(middle), enterReply: reply(enter),
+        sandboxFlags: await sandboxOf(agentTabId),
+    };
+    await closeAll(fresh);
+    // D-35 keeps the agent's own navigation: a plain link click moves its own tab.
+    await ctx.cli('click', '--element', '#plain', '--page', page);
+    agent.ownNavigation = (await ctx.pollFor(() => ctx.inAgent(agentTabId, 'location.search === "?via=plain"').then((v) => v || null), 10000, 'the agent navigation').catch(() => false)) === true;
+    if (userWidget) await ctx.luminoClose(userWidget);
+    return { user, agent };
+}
+
 async function liveRun(log) {
     const { withBrowserSession, decoyRecordFile } = await import('./lib/orca-browser-live.mjs');
     const { ensurePbNode } = await import('./lib/orca-run.mjs');
@@ -471,6 +581,9 @@ async function liveRun(log) {
 
             // (c2) the user types while the parked agent page calls focus().
             obs.c2 = await typingObserved(ctx, agentTabId, page);
+
+            // (n) D-35: opens from a user tab adopt; the same opens from the agent page open nothing.
+            obs.n = await opensObserved(ctx, agentTabId, page);
 
             // (f) second half, in the scratch HOME holding the decoy.
             if (stock.skip) obs.f = { skip: stock.skip };
@@ -572,12 +685,12 @@ async function main() {
     // One line per clause, so a run records every clause, not only the failing ones.
     for (const k of Object.keys(VERDICTS)) {
         const own = fails.filter((f) => f.startsWith(`(${k}) `));
-        console.log(`${NAME}: clause (${k}) ${obs[k]?.skip ? 'SKIP' : own.length ? 'FAIL' : 'ok'}${k === 'g' && obs.g ? ` (credential ${obs.g.credential}, placement ${obs.g.placement?.kind})` : ''}${['k', 'a'].includes(k) && obs[k] ? ` (${obs[k].ms} ms)` : ''}${k === 'j' && obs.j?.revealMs != null ? ` (reveal ${obs.j.revealMs} ms)` : ''}${k === 'm' && obs.m?.promptType ? ` (${obs.m.promptType})` : ''}${k === 'e2' && obs.e2 ? ` (userContextId ${obs.e2.agentContext})` : ''}${(k === 'b1' || k === 'b2') && obs[k] ? ` (DPR ${obs[k].deviceDpr}, ${obs[k].size?.join('x')} px)` : ''}`);
+        console.log(`${NAME}: clause (${k}) ${obs[k]?.skip ? 'SKIP' : own.length ? 'FAIL' : 'ok'}${k === 'g' && obs.g ? ` (credential ${obs.g.credential}, placement ${obs.g.placement?.kind})` : ''}${['k', 'a'].includes(k) && obs[k] ? ` (${obs[k].ms} ms)` : ''}${k === 'j' && obs.j?.revealMs != null ? ` (reveal ${obs.j.revealMs} ms)` : ''}${k === 'm' && obs.m?.promptType ? ` (${obs.m.promptType})` : ''}${k === 'e2' && obs.e2 ? ` (userContextId ${obs.e2.agentContext})` : ''}${k === 'n' && obs.n?.agent ? ` (user: link ${obs.n.user.linkTabs} tab, window.open ${obs.n.user.openTabs} tab, popup ${obs.n.user.popupWindows} window; agent: ${obs.n.agent.newTabs} tabs, ${obs.n.agent.newWindows} windows, ${obs.n.agent.loads} loads, window.open ${obs.n.agent.openReturned}, with features ${obs.n.agent.popupReturned}, middle-click ${obs.n.agent.middleReply}, Control+Enter ${obs.n.agent.enterReply}, sandboxFlags ${obs.n.agent.sandboxFlags})` : ''}${(k === 'b1' || k === 'b2') && obs[k] ? ` (DPR ${obs[k].deviceDpr}, ${obs[k].size?.join('x')} px)` : ''}`);
     }
     for (const s of skips) console.log(`${NAME}: SKIP ${s}`);
     if (fails.length) { for (const f of fails) console.error(`${NAME}: FAIL -- ${f}`); return 1; }
     const g = obs.g.credential;
-    console.log(`${NAME}: PASS -- (k) no-pane create one tab in ${obs.k.ms} ms; (a) one background agent tab in ${obs.a.ms} ms; (b) goto, click, type, screenshot at DPR 1 and 2; (c) parked focus held; (d) refusals; (e) container; (e2) agent container ${obs.e2.agentContext}; (l) saved login filled for the user only, no LoginManager actor or capture in the agent tab; (m) HTTP auth (${obs.m.promptType}) refused to the agent; (c2) typing kept while the parked page called focus(); (f) ${obs.f.skip ? 'SKIP' : 'no decoy'}; (g) renderer createPage over ${g}; (h) user close; (j) reveal in ${obs.j.revealMs} ms after store activation; (i) reload`);
+    console.log(`${NAME}: PASS -- (k) no-pane create one tab in ${obs.k.ms} ms; (a) one background agent tab in ${obs.a.ms} ms; (b) goto, click, type, screenshot at DPR 1 and 2; (c) parked focus held; (d) refusals; (e) container; (e2) agent container ${obs.e2.agentContext}; (l) saved login filled for the user only, no LoginManager actor or capture in the agent tab; (m) HTTP auth (${obs.m.promptType}) refused to the agent; (c2) typing kept while the parked page called focus(); (n) agent opens refused after user opens adopted; (f) ${obs.f.skip ? 'SKIP' : 'no decoy'}; (g) renderer createPage over ${g}; (h) user close; (j) reveal in ${obs.j.revealMs} ms after store activation; (i) reload`);
     return 0;
 }
 
@@ -596,6 +709,10 @@ const CONTROL = {
     l: { saved: true, userFilled: true, userActor: true, agentFilled: false, agentActor: false, agentSubmitted: true, capturedAfter: 0 },
     m: { promptSeen: true, promptType: 'promptUserAndPass', reply: { where: 'failed', code: 'browser_command_unavailable' }, promptAfter: true, promptAfterClose: false, authorized: false },
     c2: { controlTyped: 'ab', controlExpected: 'ab', agentSelfActive: 'in', userTyped: 'abcdefgh', userExpected: 'abcdefgh', agentValue: '', userBlurs: [], chromeBefore: 'u', chromeAfter: 'u' },
+    n: {
+        user: { linkTabs: 1, linkLoads: 1, openTabs: 1, openLoads: 1, agentAmong: false, popupWindows: 1, sandboxFlags: 0 },
+        agent: { currentBefore: 'u', currentAfter: 'u', chromeBefore: 'u', chromeAfter: 'u', shellActiveBefore: true, shellActiveAfter: true, newTabs: 0, newWindows: 0, loads: 0, openReturned: 'null', popupReturned: 'null', middleReply: 'failed browser_command_unavailable', enterReply: 'failed browser_command_unavailable', sandboxFlags: 2, ownNavigation: true },
+    },
     f: { stock: { pass: { stockMs: 900 } }, createOk: true, title: 'PB agent fixture two', expectedTitle: 'PB agent fixture two', quietMs: 30000, minQuietMs: 10000, markerPresent: false },
     g: { placement: { kind: 'client' }, reply: { ok: true, code: null }, createPageArrived: true, credential: 'device-key' },
     h: { closed: true, listedAfter: false },
@@ -604,6 +721,7 @@ const CONTROL = {
 };
 
 const set = (clause, patch) => (o) => ({ ...o, [clause]: { ...o[clause], ...patch } });
+const setN = (side, patch) => (o) => ({ ...o, n: { ...o.n, [side]: { ...o.n[side], ...patch } } });
 const PLANTS = [
     ['two-tabs-one-page', set('a', { newTabs: [{ tabId: 't1', agent: true, current: false }, { tabId: 't9', agent: true, current: false }] }), 'two tabs for one page'],
     ['tab-current-at-create', set('a', { newTabs: [{ tabId: 't1', agent: true, current: true }] }), 'a tab current at create'],
@@ -646,6 +764,21 @@ const PLANTS = [
     ['typing-user-blur', set('c2', { userBlurs: ['in'] }), 'a user blur was recorded while typing'],
     ['typing-control-blind', set('c2', { controlTyped: '' }), 'detector blind'],
     ['agent-focus-never-ran', set('c2', { agentSelfActive: 'BODY' }), 'detector blind'],
+    ['agent-open-made-a-tab', setN('agent', { newTabs: 1 }), "the agent page's opens created 1 web tab"],
+    ['agent-open-made-a-window', setN('agent', { newWindows: 1 }), "the agent page's opens created 1 window"],
+    ['agent-open-loaded-a-page', setN('agent', { loads: 1 }), "the agent page's opens loaded 1 page"],
+    ['agent-window-open-returned-a-window', setN('agent', { openReturned: 'a window' }), "window.open answered a window"],
+    ['agent-popup-returned-a-window', setN('agent', { popupReturned: 'a window' }), 'window.open with features answered a window'],
+    ['agent-middle-click-done', setN('agent', { middleReply: 'done' }), 'middle-click on a link answered done'],
+    ['agent-enter-done', setN('agent', { enterReply: 'done' }), 'Control+Enter on a link answered done'],
+    ['agent-open-moved-current', setN('agent', { currentAfter: 'w9' }), "the main area's current tab changed"],
+    ['agent-open-moved-focus', setN('agent', { shellActiveAfter: false }), 'the user focus moved'],
+    ['agent-overlay-unsandboxed', setN('agent', { sandboxFlags: 0 }), 'lacks SANDBOXED_AUXILIARY_NAVIGATION'],
+    ['user-overlay-sandboxed', setN('user', { sandboxFlags: 2 }), 'a user overlay has SANDBOXED_AUXILIARY_NAVIGATION'],
+    ['agent-own-navigation-blocked', setN('agent', { ownNavigation: false }), "own plain link click did not navigate"],
+    ['opens-link-detector-blind', setN('user', { linkTabs: 0 }), 'detector blind'],
+    ['opens-popup-detector-blind', setN('user', { popupWindows: 0 }), 'detector blind'],
+    ['opens-load-detector-blind', setN('user', { openLoads: 0 }), 'detector blind'],
 ];
 
 export function runSelfTest() {

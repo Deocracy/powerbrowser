@@ -30,6 +30,16 @@
 // ActorManagerParent.sys.mjs, a named SKIP without upstream/) including the agent group; a raw visibility read
 // outside the predicate.
 //
+// Opens clause (66-08, D-35): the open paths are derived from what installNewWindowReceivers installs on a fake shell
+// window (every function, and every browserDOMWindow member that answers null or an element for a user opener), and the
+// where values from the pinned nsIBrowserDOMWindow IDL's OPEN_* constants (the adopt section's when upstream/ is
+// absent). Red on: any path opening an overlay, a stock window, a load or an adoptTab push for an agent-overlay opener at
+// any where; a browserDOMWindow member answering null or an element for one (Gecko then opens a stock window) instead
+// of throwing the guard's failure; a refusal logged twice per tab and path or with the URL; a command whose open chrome
+// refused answering anything but failed browser_command_unavailable; an agent overlay's first load without
+// SANDBOXED_AUXILIARY_NAVIGATION, or a user overlay with it. Detectors first: a user opener must create an overlay
+// through a member and the link path and reach the stock window. The self-test generates one plant per derived path.
+//
 // Page-table clause: when lane p66-02's theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts exists, it
 // (and ./orca-browser-abilities) is transpiled with theia/node_modules/typescript and its createPageTable must refuse
 // a duplicate page and a second page for a tab; while it is absent the PASS line says "page-table clause SKIP (lane
@@ -54,6 +64,9 @@ const API = 'powerbrowser/shell/PowerBrowserAPI.sys.mjs';
 const CHILD = 'powerbrowser/shell/GroupActorChild.sys.mjs';
 const SECTION_START = '// ---- Orca agent bridge (66-03, BRW-03/BRW-04) ----';
 const SECTION_END = '// ---- end Orca agent bridge ----';
+const ADOPT_START = '// Phase 36 (PROMPT-05): the new-window adopt section.';
+const ADOPT_END = '// Phase 36: new-window adopt section end.';
+const IDL = 'upstream/dom/interfaces/base/nsIBrowserDOMWindow.idl';
 
 let acorn;
 try {
@@ -92,7 +105,7 @@ export function sliceSource(text) {
     const methods = {};
     const functions = {};
     walk(ast, n => {
-        if (n.type === 'Property' && n.key?.type === 'Identifier' && n.value?.type === 'FunctionExpression' && ['webTabOpen', 'webTabGeometry', 'webTabClose'].includes(n.key.name) && !methods[n.key.name]) {
+        if (n.type === 'Property' && n.key?.type === 'Identifier' && n.value?.type === 'FunctionExpression' && ['webTabOpen', 'webTabGeometry', 'webTabClose', 'installNewWindowReceivers'].includes(n.key.name) && !methods[n.key.name]) {
             methods[n.key.name] = text.slice(n.start, n.end);
         }
         if (n.type === 'FunctionDeclaration' && ['handleWebTabAction', 'webTabIdIsValid', 'tabIdOfBrowser'].includes(n.id?.name)) {
@@ -102,8 +115,13 @@ export function sliceSource(text) {
             functions.handleGroupMutation = { node: n, text: text.slice(n.start, n.end) };
         }
     });
-    for (const name of ['webTabOpen', 'webTabGeometry', 'webTabClose']) {
+    for (const name of ['webTabOpen', 'webTabGeometry', 'webTabClose', 'installNewWindowReceivers']) {
         if (!methods[name]) return { error: `broken instrument: PowerBrowserAPI.${name} was not found in ${API}` };
+    }
+    const adoptStart = text.indexOf(ADOPT_START);
+    const adoptEnd = text.indexOf(ADOPT_END);
+    if (adoptStart === -1 || adoptEnd === -1 || adoptEnd < adoptStart) {
+        return { error: `broken instrument: the new-window adopt section markers were not found in ${API}` };
     }
     for (const name of ['handleWebTabAction', 'handleGroupMutation', 'webTabIdIsValid', 'tabIdOfBrowser']) {
         if (!functions[name]) return { error: `broken instrument: function ${name} was not found in ${API}` };
@@ -125,6 +143,7 @@ export function sliceSource(text) {
     }
     return {
         section: text.slice(start, end).replace(/^export /gm, ''),
+        adopt: text.slice(adoptStart, adoptEnd),
         methods,
         helpers: [functions.webTabIdIsValid.text, functions.tabIdOfBrowser.text].join('\n'),
         arms: arms.join('\n'),
@@ -136,6 +155,8 @@ export function sliceSource(text) {
 // The stub boundary.
 
 const CONTAINER = 7;
+const ABORT = 0x80004004;
+const SANDBOXED_AUXILIARY_NAVIGATION = 0x2;
 const AGENT_GROUP = 'powerbrowser-orca-agent';
 const COMMON_DIALOG = 'chrome://global/content/commonDialog.xhtml';
 
@@ -157,7 +178,7 @@ function fakeClock() {
 
 /** One world: the sliced source evaluated over fresh stubs that record every boundary call. */
 export function makeWorld(sliced, { dpr = 2 } = {}) {
-    const rec = { actor: [], aborts: [], draws: [], pushes: [], registered: [], attrs: [], cookies: [], nav: [], wm: 0, print: 0, focus: [], logs: [], answered: [] };
+    const rec = { actor: [], aborts: [], draws: [], pushes: [], registered: [], attrs: [], cookies: [], nav: [], wm: 0, print: 0, focus: [], logs: [], answered: [], created: 0, stock: [], loads: [], uriLoads: 0 };
     const dialogs = [];
     const clock = fakeClock();
     const webTabs = new Map();
@@ -173,7 +194,8 @@ export function makeWorld(sliced, { dpr = 2 } = {}) {
         defaultView: shellWin,
         activeElement: null,
         body: { appendChild(browser) { browser.appended = true; } },
-        createXULElement: () => fakeBrowser(null),
+        createXULElement: () => { rec.created += 1; return fakeBrowser(null); },
+        getElementById: () => theiaBrowser,
         fullscreenElement: null,
         exitFullscreen: () => Promise.resolve(),
         createElementNS: () => ({ width: 0, height: 0, getContext: () => ({ drawImage() {} }), toDataURL: mime => `data:${mime};base64,AAAA` }),
@@ -193,6 +215,7 @@ export function makeWorld(sliced, { dpr = 2 } = {}) {
         browser.removeProgressListener = () => {};
         browser.removeEventListener = () => {};
         browser.focus = () => rec.focus.push(browser.tabIdHint);
+        browser.loadURI = () => { rec.uriLoads += 1; };
         const actor = {
             sendQuery(message, data) {
                 rec.actor.push({ tab: browser.tabIdHint, message, method: data?.method });
@@ -234,7 +257,10 @@ export function makeWorld(sliced, { dpr = 2 } = {}) {
             return entry;
         },
         takeWebTabHistory: () => null,
-        firstWebTabLoad: () => Promise.resolve(),
+        // D-35: the sandbox flags the overlay carries when its first load starts.
+        firstWebTabLoad: (tabId, entry) => { rec.loads.push({ tabId, sandboxFlags: entry.browser.browsingContext.sandboxFlags ?? 0 }); return Promise.resolve(); },
+        openStockTab: url => { rec.stock.push(url); return Promise.resolve('opened'); },
+        sleep: () => new Promise(() => {}),
         scheduleSettleCapture: () => {},
         removeTabRow: () => Promise.resolve(),
         webTabNavigate: navigate('navigate'), webTabBack: navigate('back'), webTabForward: navigate('forward'), webTabReload: navigate('reload'),
@@ -242,14 +268,18 @@ export function makeWorld(sliced, { dpr = 2 } = {}) {
     const cookieCall = name => (...args) => { rec.cookies.push({ name, args }); return name === 'add' ? { result: 0 } : name.startsWith('get') ? [{ host: 'example.com', name: 'a', path: '/', value: 'b', expiry: 0, isSession: true, sameSite: 1 }] : undefined; };
     const prefs = new Map();
     const Services = {
-        prefs: { getIntPref: (name, fallback) => (prefs.has(name) ? prefs.get(name) : fallback), setIntPref: (name, value) => prefs.set(name, value) },
+        prefs: { getIntPref: (name, fallback) => (prefs.has(name) ? prefs.get(name) : fallback), setIntPref: (name, value) => prefs.set(name, value), getBoolPref: (name, fallback) => fallback },
+        io: { newURI: spec => ({ spec }) },
+        scriptSecurityManager: { createNullPrincipal: () => ({ isSystemPrincipal: false }) },
         cookies: { getCookiesFromHost: cookieCall('getCookiesFromHost'), getCookiesWithOriginAttributes: cookieCall('getCookiesWithOriginAttributes'), add: cookieCall('add'), remove: cookieCall('remove') },
         obs: { addObserver: () => {} },
         wm: { getEnumerator: () => { rec.wm += 1; return dialogs; } },
     };
     const iface = new Proxy({}, { get: () => new Proxy({}, { get: (t, k) => String(k) }) });
     const context = vm.createContext({
-        webTabs, PowerBrowserAPI, Services, Ci: iface, Cc: {}, URL, btoa: s => Buffer.from(s, 'binary').toString('base64'),
+        webTabs, PowerBrowserAPI, Services, Ci: iface, Cc: {}, Cr: { NS_ERROR_ABORT: ABORT }, URL,
+        Components: { Exception: (message, result) => Object.assign(new Error(message || 'xpcom'), { result }) },
+        SHELL_CONTENT_BROWSER_ID: 'powerbrowser-content', promptRecords: new Map(), hideBars: () => {}, btoa: s => Buffer.from(s, 'binary').toString('base64'),
         lazy: { ContextualIdentityService: { getPublicIdentityFromId: id => (id === CONTAINER ? { userContextId: id } : null), create: () => ({ userContextId: CONTAINER }) } },
         webTabPushedSpec: spec => spec,
         sendWebTabPush: (target, payload) => rec.pushes.push(payload),
@@ -259,11 +289,11 @@ export function makeWorld(sliced, { dpr = 2 } = {}) {
         GroupActorBase: class {},
         GROUP_ACTOR_PARENT_MODULE: 'chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs',
         GROUP_ACTOR_CHILD_MODULE: 'resource://powerbrowser/GroupActorChild.sys.mjs',
-        ChromeUtils: { registerWindowActor: (name, options) => rec.registered.push({ name, options }) },
+        ChromeUtils: { registerWindowActor: (name, options) => rec.registered.push({ name, options }), generateQI: () => () => {} },
     });
     const exported = ['AGENT_METHODS', 'AGENT_NATIVE_ROWS', 'AGENT_MESSAGE_MANAGER_GROUP', 'overlayShownToUser', 'registerAgentActor'];
-    const program = `${sliced.helpers}\n${sliced.section}\n` +
-        `const __api = ({ ${sliced.methods.webTabOpen}, ${sliced.methods.webTabGeometry}, ${sliced.methods.webTabClose} });\n` +
+    const program = `${sliced.helpers}\n${sliced.section}\n${sliced.adopt}\n` +
+        `const __api = ({ ${sliced.methods.webTabOpen}, ${sliced.methods.webTabGeometry}, ${sliced.methods.webTabClose}, ${sliced.methods.installNewWindowReceivers} });\n` +
         `async function __actionArms(data, actorRef) { const kind = data?.kind; switch (kind) { ${sliced.arms} default: return null; } }\n` +
         `async function __openArm(data, actorRef) { const kind = data?.kind; switch (kind) { ${sliced.openArm} default: return null; } }\n` +
         `({ ${exported.map(n => `${n}: typeof ${n} === 'undefined' ? undefined : ${n}`).join(', ')}, api: __api, actionArms: __actionArms, openArm: __openArm })`;
@@ -534,6 +564,158 @@ export async function runScenarios(sliced, childText, dpr = 2) {
     return failures;
 }
 
+// ---------------------------------------------------------------------------
+// The opens clause (D-35, 66-08): no new window, tab or popup for an agent-overlay opener, on every open path.
+
+/** The where values a browserDOMWindow member is called with: the IDL's OPEN_* constants, else the adopt section's. */
+export function openWhereNames(idlText, adoptText) {
+    const fromIdl = idlText ? [...idlText.matchAll(/const\s+(?:unsigned\s+)?(?:short|long)\s+(OPEN_[A-Z_]+)\s*=/g)].map(m => m[1]) : [];
+    if (fromIdl.length) return [...new Set(fromIdl)];
+    return [...new Set([...adoptText.matchAll(/\b(OPEN_[A-Z_]+)\b/g)].map(m => m[1]))];
+}
+// Test inputs for openLinkIn's where (BrowserUtils.whereToOpenLink's answers plus an unknown word), not an expectation.
+const LINK_WHERES = ['tab', 'tabshifted', 'window', 'current', 'save', 'planted-where'];
+
+/**
+ * The open paths, derived from what installNewWindowReceivers installs: every function it puts on the shell window
+ * (openLinkIn) and every browserDOMWindow member that, for a user overlay opener, answers null or an element (an open
+ * that Gecko or the receiver carries out). A member answering anything else (canClose) is not an open path.
+ */
+function openPaths(w) {
+    const win = {};
+    w.api.installNewWindowReceivers(win);
+    const paths = [];
+    for (const [name, value] of Object.entries(win)) {
+        if (typeof value === 'function') {
+            paths.push({ name, idl: false, call: (opener, where) => value('https://example.com/pop', where, { openerBrowser: opener, triggeringPrincipal: { isSystemPrincipal: false } }) });
+        } else if (value && typeof value === 'object') {
+            for (const [member, fn] of Object.entries(value)) {
+                if (typeof fn !== 'function' || member === 'QueryInterface') continue;
+                const call = (opener, where) => fn.call(value, { spec: 'https://example.com/pop' }, { openerBrowser: opener, parent: { top: { embedderElement: opener } }, openWindowInfo: null }, where, 0, '');
+                paths.push({ name: `${name}.${member}`, idl: true, call });
+            }
+        }
+    }
+    return paths;
+}
+
+export async function opensClause(sliced, idlText) {
+    const failures = [];
+    let w;
+    try {
+        w = makeWorld(sliced);
+    } catch (err) {
+        return [`broken instrument: the sliced source does not evaluate over the stub boundary (${err.message})`];
+    }
+    const wheres = openWhereNames(idlText, sliced.adopt);
+    if (!wheres.length) return ['broken instrument: no OPEN_* location derived from the IDL or the adopt section'];
+    const effects = () => w.rec.created + w.rec.stock.length + w.rec.uriLoads + w.rec.pushes.filter(p => p.kind === 'adoptTab').length;
+    const attempt = fn => { try { return { value: fn() }; } catch (err) { return { threw: err }; } };
+    // Which candidates are open paths: a user opener's answer at OPEN_NEWTAB (or "tab").
+    w.addTab('u1');
+    const user = w.webTabs.get('u1').browser;
+    const all = openPaths(w);
+    const paths = [];
+    for (const path of all) {
+        const r = attempt(() => path.call(user, path.idl ? 'OPEN_NEWTAB' : 'tab'));
+        if (r.threw) failures.push(`opens: ${path.name} threw for a user overlay opener (${r.threw.message}); only an agent opener is refused`);
+        else if (r.value === null || r.value === undefined || typeof r.value === 'object') paths.push(path);
+    }
+    const idlPaths = paths.filter(p => p.idl);
+    if (!idlPaths.length || paths.length === idlPaths.length) {
+        return [...failures, `broken instrument: derived ${idlPaths.length} browserDOMWindow open member(s) and ${paths.length - idlPaths.length} window function(s) from installNewWindowReceivers`];
+    }
+    // Detectors: a user opener's tab open creates an overlay through some member and through the link path, and the
+    // link path's "window" reaches the stock window.
+    const createdBy = paths.filter(p => {
+        const before = w.rec.created;
+        attempt(() => p.call(user, p.idl ? 'OPEN_NEWTAB' : 'tab'));
+        return w.rec.created > before;
+    }).map(p => p.name);
+    if (!createdBy.some(n => n.startsWith('browserDOMWindow.')) || !createdBy.some(n => !n.startsWith('browserDOMWindow.'))) {
+        failures.push(`opens: detector blind: a user overlay opener created an overlay only through [${createdBy.join(', ')}]; a browserDOMWindow member and the link path must each create one`);
+    }
+    const stockBefore = w.rec.stock.length;
+    for (const p of paths.filter(q => !q.idl)) attempt(() => p.call(user, 'window'));
+    if (w.rec.stock.length === stockBefore) failures.push('opens: detector blind: a user opener\'s link open with where "window" never reached the stock window');
+
+    // The agent opener: every path, every where, nothing opens. A browserDOMWindow member must throw the guard's
+    // failure, because its null makes Gecko open a stock window (ContentParent.cpp:5505-5508).
+    w.addTab('a1', { agent: true });
+    const agent = w.webTabs.get('a1').browser;
+    for (const path of paths) {
+        for (const where of path.idl ? wheres : LINK_WHERES) {
+            const before = effects();
+            const r = attempt(() => path.call(agent, where));
+            const opened = effects() - before;
+            if (opened) failures.push(`opens: ${path.name} opened something for an agent opener at ${where} (${opened} overlay, stock-window, load or adoptTab call(s))`);
+            if (path.idl && r.threw?.result !== ABORT) {
+                failures.push(`opens: ${path.name} answered ${r.threw ? `a throw without the guard's failure (${r.threw.message})` : (r.value ? 'an element' : 'null')} for an agent opener at ${where}; a null or element lets Gecko open a window`);
+            }
+            if (!path.idl && (r.threw || (r.value !== null && r.value !== undefined))) {
+                failures.push(`opens: ${path.name} answered ${r.threw ? `a throw (${r.threw.message})` : 'an element'} for an agent opener at ${where}; expected null and nothing opened`);
+            }
+        }
+    }
+    // Logged once per tab and path, with no URL.
+    const refusals = w.rec.logs.filter(l => l.includes('refused'));
+    const perPath = new Set(refusals);
+    if (!refusals.length) failures.push('opens: no refusal was logged for an agent opener');
+    else if (refusals.length !== perPath.size) failures.push(`opens: a refusal was logged more than once per tab and path (${refusals.length} lines, ${perPath.size} distinct)`);
+    if (refusals.some(l => l.includes('example.com'))) failures.push('opens: a refusal log line carries the URL');
+
+    // An agent command during which chrome refused an open answers browser_command_unavailable; one without, done.
+    const linkPath = paths.find(p => !p.idl);
+    w.childReplies.set('browser.mouseClick', () => { attempt(() => linkPath.call(agent, 'tab')); return Promise.resolve({ where: 'done', result: {} }); });
+    const refusedCmd = await w.agent('a1', 'browser.mouseClick', { x: 1, y: 2, button: 'middle' });
+    if (refusedCmd?.where !== 'failed' || refusedCmd?.code !== 'browser_command_unavailable') {
+        failures.push(`opens: an agent command whose open chrome refused answered ${JSON.stringify(refusedCmd)}; expected failed browser_command_unavailable`);
+    }
+    w.childReplies.delete('browser.mouseClick');
+    const plainCmd = await w.agent('a1', 'browser.mouseClick', { x: 1, y: 2 });
+    if (plainCmd?.where !== 'done') failures.push(`opens: an agent command that opened nothing answered ${JSON.stringify(plainCmd)}; expected done (positive control)`);
+
+    // The content wall: an agent overlay carries SANDBOXED_AUXILIARY_NAVIGATION when its first load starts; a user
+    // overlay never does.
+    const v = makeWorld(sliced);
+    v.api.webTabOpen(v.theiaBrowser, v.frontend, 'n1', 'https://example.com/', undefined, undefined, null, true);
+    v.api.webTabOpen(v.theiaBrowser, v.frontend, 'n3', 'https://example.com/', undefined, undefined, null, false);
+    const load = id => v.rec.loads.find(l => l.tabId === id);
+    if (!load('n1') || !load('n3')) failures.push('broken instrument: webTabOpen started no first load, so the content wall is unchecked');
+    else {
+        if (!(load('n1').sandboxFlags & SANDBOXED_AUXILIARY_NAVIGATION)) failures.push(`opens: the agent overlay's first load started without SANDBOXED_AUXILIARY_NAVIGATION (flags ${load('n1').sandboxFlags}), so its page can open popups`);
+        if (load('n3').sandboxFlags & SANDBOXED_AUXILIARY_NAVIGATION) failures.push('opens: a user overlay got SANDBOXED_AUXILIARY_NAVIGATION');
+    }
+    return { failures, paths: paths.map(p => p.name), wheres: wheres.length };
+}
+
+/** One plant per derived open path: its receiver body put back to the pre-D-35 answer (null, or the stock route). */
+export function receiverPlants(text) {
+    const ast = acorn.parse(text, { ecmaVersion: 'latest', sourceType: 'module' });
+    let method = null;
+    walk(ast, n => {
+        if (!method && n.type === 'Property' && n.key?.name === 'installNewWindowReceivers' && n.value?.type === 'FunctionExpression') method = n;
+    });
+    if (!method) return [];
+    const plants = [];
+    walk(method.value.body, n => {
+        if (n.type === 'AssignmentExpression' && n.left.type === 'MemberExpression' && n.left.object?.name === 'win') {
+            const name = n.left.property.name;
+            if (n.right.type === 'ObjectExpression') {
+                for (const prop of n.right.properties) {
+                    if (prop.value?.type !== 'FunctionExpression' || prop.key.name === 'QueryInterface' || prop.kind !== 'init') continue;
+                    const body = prop.value.body;
+                    if (/^\{\s*return (true|false);\s*\}$/.test(text.slice(body.start, body.end))) continue;
+                    plants.push({ name: `${name}.${prop.key.name}`, source: text.slice(0, body.start) + '{ return null; }' + text.slice(body.end) });
+                }
+            } else if (/Function/.test(n.right.type)) {
+                plants.push({ name, source: text.slice(0, n.right.start) + '(url, where, params) => { PowerBrowserAPI.openStockTab(url); return null; }' + text.slice(n.right.end) });
+            }
+        }
+    });
+    return plants;
+}
+
 /** Structural clause (A1): no raw `style.visibility` comparison outside overlayShownToUser. */
 export function visibilityReads(text) {
     const src = stripComments(text);
@@ -628,14 +810,16 @@ export function loginManagerClause(registry) {
     return { failures: list.includes(AGENT_GROUP) ? [`isolation: Gecko's LoginManager actor is registered for ${AGENT_GROUP}, so saved passwords can fill agent pages`] : [], groups: list };
 }
 
-export async function checkSource(text, childText, dispatchFiles, registry = null) {
+export async function checkSource(text, childText, dispatchFiles, registry = null, idlText = null) {
     const sliced = sliceSource(text);
     if (sliced.error) return { failures: [sliced.error] };
     const table = pageTableClause(dispatchFiles);
     const login = loginManagerClause(registry);
-    const failures = [...await runScenarios(sliced, childText, 2), ...await runScenarios(sliced, childText, 1), ...visibilityReads(text), ...table.failures, ...login.failures];
+    const opens = await opensClause(sliced, idlText);
+    const openFailures = Array.isArray(opens) ? opens : opens.failures;
+    const failures = [...await runScenarios(sliced, childText, 2), ...await runScenarios(sliced, childText, 1), ...visibilityReads(text), ...table.failures, ...login.failures, ...openFailures];
     const native = (() => { try { return Object.keys(makeWorld(sliced).AGENT_NATIVE_ROWS ?? {}).length; } catch { return 0; } })();
-    return { failures: [...new Set(failures)], native, skip: !!table.skip, loginSkip: !!login.skip };
+    return { failures: [...new Set(failures)], native, skip: !!table.skip, loginSkip: !!login.skip, paths: opens.paths ?? [], wheres: opens.wheres ?? 0 };
 }
 
 // ---------------------------------------------------------------------------
@@ -669,7 +853,8 @@ async function selfTest() {
     const child = readFileSync(join(REPO_ROOT, CHILD), 'utf8');
     const fixture = { dispatch: FIXTURE_DISPATCH, abilities: FIXTURE_ABILITIES };
     const registry = '\n  LoginManager: {\n    allFrames: true,\n    messageManagerGroups: ["browsers", ""],\n  },\n';
-    const control = await checkSource(text, child, fixture, registry);
+    const idl = readOptional(IDL);
+    const control = await checkSource(text, child, fixture, registry, idl);
     if (control.failures.length) {
         console.error(`${NAME} self-test: FAIL -- the shipped source with the fixture dispatch module is already red, so the plants prove nothing:`);
         control.failures.forEach(f => console.error(`  ${f}`));
@@ -698,7 +883,24 @@ async function selfTest() {
         ['the dialog type filter removed', { api: swap('  if (!AGENT_DIALOG_TYPES.has(win.args?.promptType) || win.args?.inPermitUnload) {\n    return agentFailed("browser_command_unavailable");\n  }\n', '') }, 'dialogs: an HTTP auth dialog in an agent tab'],
         ['a pinned LoginManager actor registered for the agent group', { registry: r => r.replace('["browsers", ""]', '["browsers", "", "powerbrowser-orca-agent"]') }, "isolation: Gecko's LoginManager actor is registered for"],
         ['an empty AGENT_METHODS', { api: s => s.replace(/const AGENT_METHODS = Object\.freeze\(\[[^\]]*\]\);/, 'const AGENT_METHODS = Object.freeze([]);') }, 'broken instrument: AGENT_METHODS is missing or empty'],
+        // D-35 (66-08): the shared guards, the content wall, the command code and the log rule.
+        ['the link-open guard dropped', { api: swap(' || agentOpenRefused(opener, "link open")) {', ') {') }, 'opens: openLinkIn opened something for an agent opener'],
+        ['the InFrame guard dropped', { api: swap('  agentOpenGuard(params?.openerBrowser, "new window");\n', '') }, 'opens: browserDOMWindow.createContentWindowInFrame'],
+        ['the in-process guard dropped', { api: swap('  agentOpenGuard(openWindowInfo?.parent?.top?.embedderElement, "new window");\n', '') }, 'opens: browserDOMWindow.createContentWindow answered null'],
+        ['the guard answering null instead of throwing', { api: swap('    throw Components.Exception("", Cr.NS_ERROR_ABORT);', '    return null;') }, 'a null or element lets Gecko open a window'],
+        ['the content wall removed', { api: swap('  entry.browser.browsingContext.sandboxFlags |= SANDBOXED_AUXILIARY_NAVIGATION;\n', '') }, 'started without SANDBOXED_AUXILIARY_NAVIGATION'],
+        ['a refused open not failing the command', { api: swap('    outcome = agentFailed("browser_command_unavailable");\n  }\n  if (control.stopped) {', '  }\n  if (control.stopped) {') }, 'expected failed browser_command_unavailable'],
+        ['a refusal logged every time', { api: swap('  if (!entry.agentOpensLogged.has(path)) {', '  if (true) {') }, 'logged more than once per tab and path'],
+        ['the opens detector blinded (no receivers installed)', { api: swap('    win.openLinkIn = (url, where, params) => adoptLinkIn(url, where, params);\n', '') }, 'broken instrument: derived'],
     ];
+    // One plant per derived open path, generated from installNewWindowReceivers: the receiver put back to its
+    // pre-D-35 answer must go red naming that path.
+    const derived = receiverPlants(text);
+    if (derived.length < 2) {
+        console.error(`${NAME} self-test: FAIL -- broken instrument: ${derived.length} receiver plant(s) derived from installNewWindowReceivers`);
+        return 1;
+    }
+    for (const { name, source } of derived) plants.push([`the ${name} receiver unguarded`, { api: () => source }, `opens: ${name} `]);
     let failed = 0;
     for (const [name, mutate, expect] of plants) {
         let api;
@@ -717,7 +919,7 @@ async function selfTest() {
             failed++;
             continue;
         }
-        const { failures } = await checkSource(api, child, files, reg);
+        const { failures } = await checkSource(api, child, files, reg, idl);
         if (failures.some(f => f.includes(expect))) {
             console.log(`  ok  ${name} -> red, naming '${expect}'`);
         } else {
@@ -736,7 +938,7 @@ async function main() {
     const child = readFileSync(join(REPO_ROOT, CHILD), 'utf8');
     const dispatch = readOptional(DISPATCH);
     const files = dispatch === null ? null : { dispatch, abilities: readOptional(ABILITIES) ?? undefined };
-    const { failures, native, skip, loginSkip } = await checkSource(text, child, files, readOptional(LOGIN_REGISTRY));
+    const { failures, native, skip, loginSkip, paths, wheres } = await checkSource(text, child, files, readOptional(LOGIN_REGISTRY), readOptional(IDL));
     if (failures.length) {
         console.error(`${NAME}: FAIL -- the chrome side of the Orca agent bridge can reach a tab it did not create as an agent tab, or the drift below.`);
         failures.forEach(f => console.error(`  ${f}`));
@@ -746,7 +948,9 @@ async function main() {
     console.log(`${NAME}: PASS -- ${total} methods (${native} native, ${total - native} actor): every one refused before page work for a user, unknown, foreign, wrong-container or stopped tab; ` +
         'the flag and the container are set only at creation and before append; cookies stay in the agent container; Stop aborts and lasts; the mark clears after 20000 ms; ' +
         'agent overlays sit in their own message manager group with no autocomplete popup and answer only alert/confirm/prompt dialogs; ' +
-        `unshown agent tabs are parked, never hold the focus, and user tabs never park; every visibility read goes through overlayShownToUser${skip ? `; ${PAGE_TABLE_SKIP}` : '; page table compared'}` +
+        `unshown agent tabs are parked, never hold the focus, and user tabs never park; every visibility read goes through overlayShownToUser; ` +
+        `D-35: ${paths.length} open paths derived (${paths.join(', ')}) open nothing for an agent opener at any of ${wheres} OPEN_* locations or ${LINK_WHERES.length} link wheres, ` +
+        `refusals log once without the URL and fail the command in flight, and agent overlays load with SANDBOXED_AUXILIARY_NAVIGATION${skip ? `; ${PAGE_TABLE_SKIP}` : '; page table compared'}` +
         (loginSkip ? '; login-manager group clause SKIP (no upstream/)' : '; the pinned LoginManager actor groups exclude the agent group'));
     return 0;
 }

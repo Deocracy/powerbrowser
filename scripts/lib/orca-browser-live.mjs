@@ -7,7 +7,8 @@
 // with orcad, teardown by recorded pid) plus what the browser rows need:
 //   - a loopback fixture server: /agent (a red 40x40 target at CSS (100, 80), a text
 //     input, a checkbox, a button with a click counter), /user (an input and a focus/blur
-//     log), /cookie (sets a cookie from the page), /stock;
+//     log), /cookie (sets a cookie from the page), /stock, /opener (66-08: a target=_blank link,
+//     a plain link and a target=_blank form) and its request log;
 //   - an Orca CLI runner that never throws and keeps error.code and error.message apart
 //     (Pitfall 8: a host failure reaches the CLI as runtime_error with the code as message),
 //     in an environment built from scratch (PATH, HOME, ORCA_USER_DATA, ORCA_USER_DATA_PATH);
@@ -72,6 +73,12 @@ export function fixturePages() {
         '/user': { title: 'PB user fixture', body: `<input id="in" value="">${LOGGER}` },
         '/cookie': { title: 'PB cookie fixture', body: "<script>document.cookie='pbuser=1; path=/';</script><p>cookie</p>" },
         '/stock': { title: 'PB stock fixture', body: '<p>stock</p>' },
+        // 66-08 (D-35): the opens clause (n). A target=_blank link, a plain link and a target=_blank form, each tagged
+        // with a via= query so the server log tells which open loaded a page.
+        '/opener': {
+            title: 'PB opener fixture',
+            body: '<style>body{margin:0}a,button{position:absolute;left:10px;font-size:20px}</style><a id="blank" href="/agent2?via=blank" target="_blank" style="top:10px">blank</a><a id="plain" href="/agent2?via=plain" style="top:60px">plain</a><form id="f" action="/agent2" target="_blank"><input type="hidden" name="via" value="form"><button id="fs" type="submit" style="top:110px">form</button></form>',
+        },
         // 66-06: a login form for the saved-login clause (l); it posts to a page that exists.
         '/login': { title: 'PB login fixture', body: '<form id="f" method="post" action="/agent2"><input id="u" name="u" autocomplete="username"><input id="p" name="p" type="password" autocomplete="current-password"><button id="go" type="submit">Sign in</button></form>' },
     };
@@ -118,6 +125,8 @@ export async function withBrowserSession({ log = () => {}, dpr = 1, home = null 
             const cliBin = join(state.effectiveRoot, 'cli', 'bin', 'orca');
             Object.assign(ctx, {
                 state, url: (path) => pages.url(path), dpr,
+                /** The fixture server's GET log ({ path, search, at, ... }), live. */
+                requests: () => pages.requests,
                 /** Runs the Orca CLI; never throws. Resolves { ok, result, error, t0, ms }. */
                 cli: (...args) => new Promise((resolve) => {
                     const t0 = Date.now();
