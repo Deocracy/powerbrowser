@@ -8,9 +8,13 @@
  * the static check, derives Orca's TabContentType members from the pinned
  * source and compares them as a set with this table's keys).
  *
- * A pending route opens nothing: editor and diff wait for the Theia editor
- * (TAB-05, Phase 65), browser for the PB web tab (BRW-02, Phase 66). Orca's own
- * editor or screencast pane is never mounted meanwhile (D-01).
+ * A pending route opens nothing: browser waits for the PB web tab (BRW-02,
+ * Phase 66). Orca's own editor or screencast pane is never mounted (D-01).
+ *
+ * Phase 65 (TAB-05; P65-01, P65-10; interfaces N-2): editor, diff and
+ * conflict-review open in Theia's own editors, delivered by
+ * @powerbrowser/orca-workspace (it observes them through subscribeOpenFiles),
+ * so planPanes neither creates nor logs them; the word conflicts is retired.
  */
 import type { OrcaNeighbourMode, OrcaPaneOptions, OrcaPaneRecord } from '../common/orca-panes-protocol';
 
@@ -25,10 +29,11 @@ export const ORCA_PANE_ROUTES: { readonly [kind: string]: OrcaPaneRoute } = Obje
     'terminal': { target: 'hosted-pane', word: 'term' },
     'agent-session': { target: 'hosted-pane', word: 'chat' },
     'simulator': { target: 'hosted-pane', word: 'sim' },
-    'conflict-review': { target: 'hosted-pane', word: 'conflicts' },
+    // theia-editor rows: delivered by @powerbrowser/orca-workspace (TAB-05).
+    'conflict-review': { target: 'theia-editor' },
     'check-details': { target: 'hosted-pane', word: 'checks' },
-    'editor': { target: 'pending', requirement: 'TAB-05' },
-    'diff': { target: 'pending', requirement: 'TAB-05' },
+    'editor': { target: 'theia-editor' },
+    'diff': { target: 'theia-editor' },
     'browser': { target: 'pending', requirement: 'BRW-02' },
 });
 
@@ -144,6 +149,9 @@ export function planPanes(state: PlanState, records: OrcaPaneRecord[]): PanePlan
     }
     for (const record of records) {
         const route = ORCA_PANE_ROUTES[record.kind];
+        if (route?.target === 'theia-editor') {
+            continue; // orca-workspace opens these in Theia's editors
+        }
         if (route?.target !== 'hosted-pane') {
             if (!state.loggedPending?.has(record.kind) && !plan.pending.includes(record.kind)) {
                 plan.pending.push(record.kind);

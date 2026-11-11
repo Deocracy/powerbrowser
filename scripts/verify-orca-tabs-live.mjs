@@ -39,12 +39,30 @@
 //                     client (Orca's own web client in a PB web tab, paired in
 //                     page memory, never through a URL), each one hosted chat
 //                     widget within 1000 ms.
-//  g  other-views     openPane simulator, conflict-review (a UU file) and
-//                     check-details each give one hosted widget.
-//  g2 tab-groups      the second client splits (b)'s worktree into two Orca tab
-//                     groups and opens a chat in the second; the detector first
-//                     (the store's neighbour record), then the second group's
-//                     tab sits in another Lumino tab bar, in that direction.
+//  g  other-views     openPane simulator and check-details each give one hosted
+//                     widget; openPane conflict-review on the UU file opens one
+//                     Theia merge editor (a main-area tab whose merge-editor: URI
+//                     has that file as its result side) within 5000 ms, and only
+//                     after that detector moved, no hosted conflict-review
+//                     widget appeared (Phase 65, P65-01: lane p65-02's
+//                     orca-workspace delivers it; a named SKIP for that half
+//                     only while theia/extensions/orca-workspace is absent).
+//  g3 tab-groups-cross-client  (driven after g, before g2; judged after k;
+//                     P65-34) a CLI terminal T; the second client's Move Tab to
+//                     Split > Right on T: its group strips grow by one (detector
+//                     1), after k's reload T's store record holds split-right
+//                     (detector 2), and only then: during the 5000 ms after
+//                     detector 1, before any reload, T's record held no split
+//                     mode ("live group propagation" otherwise), and T keeps its
+//                     Lumino tab-bar peers across the reload (D-15, P64-12).
+//  g2 tab-groups      (P65-33) stage f's New Orca Chat widget's own Split Chat
+//                     Right, clicked in the Theia document, no second client and
+//                     no prompt: one hosted add; the new chat's store record
+//                     holds a split-right neighbour that had a hosted widget
+//                     (the detector); then the new chat sits in another Lumino
+//                     tab bar than chat1's and than its reference widget's
+//                     (placementFor's rule: the first neighbour with a widget),
+//                     to the reference's right.
 //  h  organising      every hosted widget's Organising key is pb-orca:<name>.
 //  i  no-tab-chrome   selectors derived from Orca's tab-bar and TabGroupPanel
 //                     sources must match in Orca's own web client (the
@@ -54,7 +72,11 @@
 //                     row; orca terminal close disposes the widget within 1000 ms.
 //  k  reload          after a frontend reload every hosted widget is back under
 //                     its pb-orca: name within 5000 ms, none duplicated, and no
-//                     orca.web.runtimeEnvironment.v1 key in localStorage.
+//                     orca.web.runtimeEnvironment.v1 key in localStorage; once
+//                     the store lists the worktree again, every name addresses
+//                     the pane key it addressed before, each key is in the
+//                     store, and the hosted widgets' Lumino tab bars hold the
+//                     same names (P65-35, the 64-TAB-GROUPS side finding).
 //  l  route           /orca-panes/ refuses a request without the token cookie;
 //                     with it, an encoded parent path and an absolute path 404,
 //                     pb-panes.js answers 200.
@@ -103,7 +125,13 @@ const P64_01_SUMMARY_REL = '.planning/workstreams/orca/phases/64-orca-panes-as-p
 const TAB_BAR_DIR_REL = 'orca/src/renderer/src/components/tab-bar';
 const TAB_GROUP_PANEL_REL = 'orca/src/renderer/src/components/tab-group/TabGroupPanel.tsx';
 /** C7: the name word of each hosted kind. */
-export const WORDS = { 'agent-session': 'chat', terminal: 'term', simulator: 'sim', 'conflict-review': 'conflicts', 'check-details': 'checks' };
+export const WORDS = { 'agent-session': 'chat', terminal: 'term', simulator: 'sim', 'check-details': 'checks' };
+/** P65-34: the neighbour modes that come from a split (tab-after is the same group). */
+const SPLIT_MODES = new Set(['split-right', 'split-left', 'split-bottom', 'split-top']);
+/** Orca's paneColumnDirectionLabel fallbacks (TabWorkspaceLayoutMenuSection.tsx), the Move Tab to Split items. */
+const PANE_COLUMN_LABEL = { right: 'Right', left: 'Left', down: 'Down', up: 'Up' };
+/** A hosted widget's Orca key (keyOfOptions): the pane key for a terminal leaf, the tab id otherwise. */
+const keyOf = (options) => options?.paneKey ?? options?.tabId ?? null;
 const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const nameOf = (id) => String(id ?? '').replace(/^orca-pane:/, '');
@@ -241,6 +269,62 @@ export function groupVerdict(obs) {
     return fails;
 }
 
+/**
+ * Phase 65: the working-file path of a merge-editor: URI's result side. query is the URI's query, the JSON array
+ * MergeEditorUri.encode writes ([base, side1, side2, result]); null when it is not one or the result is no file: URI.
+ */
+export function mergeEditorResultPath(query) {
+    try {
+        const result = JSON.parse(String(query))[3];
+        return typeof result === 'string' && result.startsWith('file:') ? fileURLToPath(result) : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Stage g's conflict-review (P65-01, C64-7). obs: { half: 'run' | 'skip', file, mergeEditors: [result path], hostedConflict }.
+ * The merge editor is the detector; the hosted-widget absence is judged only once it is seen.
+ */
+export function conflictReviewVerdict(obs) {
+    if (obs.half === 'skip') return [];
+    const matching = (obs.mergeEditors ?? []).filter((p) => p === obs.file);
+    if (!matching.length) return ['conflict-review: merge editor not opened (no merge-editor: tab with the conflicted file as its result side within 5000 ms)'];
+    if (matching.length > 1) return [`conflict-review: ${matching.length} merge editors opened for one file, want 1`];
+    return obs.hostedConflict ? [`conflict-review: hosted widget appeared (${obs.hostedConflict} hosted conflict-review widget(s))`] : [];
+}
+
+/**
+ * Stage g2 (P65-33). obs: { button, added, detected, second: { tabBar, rect } | null, ref: { tabBar, rect } | null,
+ * chat1: { tabBar, rect } | null }. Judged in order: the button, the add, the store detector, the reference, then the
+ * Lumino placement (groupVerdict), then chat1's tab bar.
+ */
+export function splitChatVerdict(obs) {
+    if (!obs.button) return ['tab-groups: no Split Chat Right button in the hosted chat'];
+    if (!obs.added) return ['tab-groups: Split Chat Right added no hosted widget within 5000 ms'];
+    if (obs.detected && !obs.ref) return ['tab-groups: the new chat\'s record names no neighbour with a hosted widget (no reference widget)'];
+    const fails = groupVerdict({ detected: obs.detected, direction: 'right', second: obs.second, first: obs.ref ? [obs.ref] : [] });
+    if (fails.length) return fails;
+    if (obs.chat1 && obs.second.tabBar === obs.chat1.tabBar) return ['tab-groups: the new chat sits in chat1\'s tab bar'];
+    return [];
+}
+
+/**
+ * Sub-stage g3 (P65-34), the derived non-propagation guard. obs: { error, menu, stripsBefore, stripsAfter,
+ * changedBeforeReload, detectedAfterReload, peersBefore: [name], peersAfter: [name] }. Both detectors are judged
+ * before the absence they make meaningful.
+ */
+export function crossClientVerdict(obs) {
+    if (obs.error) return [`tab-groups-cross-client: ${obs.error}${obs.menu?.length ? ` (menu ${JSON.stringify(obs.menu)})` : ''}`];
+    if (obs.stripsAfter !== obs.stripsBefore + 1) return [`tab-groups-cross-client: Move Tab to Split did not split the second client's group (strips ${obs.stripsBefore} -> ${obs.stripsAfter})`];
+    if (!obs.detectedAfterReload) return ['tab-groups-cross-client: the split never reached PowerBrowser\'s store after the reload, so the pre-reload absence proves nothing'];
+    if (obs.changedBeforeReload) return ['tab-groups-cross-client: live group propagation (PowerBrowser\'s store took another client\'s group split before a reload; revisit P64-12 re-placement)'];
+    const before = [...(obs.peersBefore ?? [])].sort().join(',');
+    const after = [...(obs.peersAfter ?? [])].sort().join(',');
+    if (before !== after) return [`tab-groups-cross-client: an already-shown pane was re-placed after the reload (D-15, P64-12; T's tab-bar peers ${before} -> ${after})`];
+    return [];
+}
+
 /** obs: [{ id, organising }]. */
 export function organisingVerdict(obs) {
     if (!obs.length) return ['organising: no hosted widget to check'];
@@ -263,7 +347,10 @@ export function closeVerdict(obs) {
     return fails;
 }
 
-/** obs: { before: [names], after: [names], ms, storedEnvKey }. */
+/**
+ * obs: { before: [names], after: [names], ms, storedEnvKey, identityBefore: { name: key }, identityAfter: { name: key },
+ * storeKeysAfter: [key], barsBefore: [[name]], barsAfter: [[name]] } (the last five: P65-35).
+ */
 export function reloadVerdict(obs) {
     const fails = [];
     const missing = obs.before.filter((n) => !obs.after.includes(n));
@@ -272,6 +359,16 @@ export function reloadVerdict(obs) {
     if (dup.length) fails.push(`reload: a reload duplicate (${[...new Set(dup)].join(', ')})`);
     if (obs.ms === null || obs.ms > RELOAD_MS) fails.push(`reload: the hosted tabs took ${obs.ms === null ? 'forever' : `${obs.ms} ms`} (limit ${RELOAD_MS} ms)`);
     if (obs.storedEnvKey) fails.push(`reload: a stored environment key ${ENV_STORAGE_KEY} in the Theia document's localStorage`);
+    // P65-35: identity, not just the set of names.
+    const after = obs.identityAfter ?? {};
+    const storeKeys = new Set(obs.storeKeysAfter ?? []);
+    for (const [name, key] of Object.entries(obs.identityBefore ?? {})) {
+        if (!(name in after)) continue; // reported above as not back
+        if (after[name] !== key) fails.push(`reload: pb-orca:${name} now addresses another pane`);
+        if (!storeKeys.has(after[name])) fails.push(`reload: pb-orca:${name} addresses no pane in the store`);
+    }
+    const bars = (list) => JSON.stringify((list ?? []).map((bar) => [...bar].sort().join(',')).sort());
+    if (bars(obs.barsBefore) !== bars(obs.barsAfter)) fails.push('reload: the Lumino tab bars changed across the reload');
     return fails;
 }
 
@@ -324,9 +421,11 @@ function httpStatus(port, path, cookie) {
 const PANES = `const m = globalThis[Symbol.for('powerbrowser.orca-panes.module')];
     let list = null; const off = m.subscribePanes(p => { list = p; }); off(); return list;`;
 
-async function runLive(lib) {
+async function runLive(lib, pre = {}) {
     const stages = {};
     const fail = (stage, reasons) => { stages[stage] = reasons; };
+    const halfSkips = {};
+    stages.halfSkips = halfSkips;
     const ownerItem = ownerItemOf(read(join(REPO_ROOT, P64_01_SUMMARY_REL)));
     let promptsSent = 0;
     await lib.withOrcaTabsSession({ log: () => {}, agent: 'real' }, async (ctx) => {
@@ -441,6 +540,7 @@ async function runLive(lib) {
         const addF = await lib.waitForHostedAdd(ctx, chatCmd.t0, before, 5000);
         const chatAdded = addF ? (await ctx.addedSince(chatCmd.t0)).filter((e) => e.id.startsWith(lib.ORCA_PANE_WIDGET_PREFIX) && !before.includes(e.id)) : [];
         const chatFails = [...agentFails, ...chatVerdict({ storeTab, provider: 'claude', creation: { label: 'chat', kind: 'agent-session', t0: chatCmd.t0, added: chatAdded, widget: addF ? await widgetOf(addF.id) : null } })];
+        const chat1Id = addF?.id ?? null;
         await freezeProbe('New Orca Chat');
         const second = await openSecondClient(ctx);
         // Sends the one fixed prompt into the second client's chat composer, once per run.
@@ -465,49 +565,85 @@ async function runLive(lib) {
         fail('chat', [...chatFails, ...promptBudgetVerdict(promptsSent)]);
         fail('freeze-guard', freezeVerdict(freeze));
 
-        // g. other views through Orca's own openers.
+        // g. other views through Orca's own openers; conflict-review now opens Theia's merge editor (P65-01).
         const worktreeId = b.widget?.options?.worktreeId ?? wA?.options?.worktreeId ?? null;
         const otherFails = [];
         if (!worktreeId) otherFails.push('other-views: no worktree id from a hosted widget');
         else {
             makeConflict(ctx);
-            for (const [kind, detail] of [['simulator', undefined], ['conflict-review', 'README'], ['check-details', undefined]]) {
+            for (const kind of ['simulator', 'check-details']) {
                 before = await lib.hostedIds(ctx);
                 const t0 = Date.now();
-                const opened = await ctx.bundle(`m.openPane(${JSON.stringify(kind)}, ${JSON.stringify(worktreeId)}${detail ? `, ${JSON.stringify(detail)}` : ''}).then(id => ({ id }), e => ({ error: String(e && e.message || e) }))`);
+                const opened = await ctx.bundle(`m.openPane(${JSON.stringify(kind)}, ${JSON.stringify(worktreeId)}).then(id => ({ id }), e => ({ error: String(e && e.message || e) }))`);
                 if (opened?.error) { otherFails.push(`other-views: openPane ${kind} rejected: ${opened.error}`); continue; }
                 const add = await lib.waitForHostedAdd(ctx, t0, before, 5000);
                 const added = add ? (await ctx.addedSince(t0)).filter((e) => e.id.startsWith(lib.ORCA_PANE_WIDGET_PREFIX) && !before.includes(e.id)) : [];
                 otherFails.push(...creationVerdict({ label: `other-views ${kind}`, kind, t0, added, widget: add ? await widgetOf(add.id) : null }));
             }
+            const half = pre.mergeEditor ?? { skip: null, fail: null };
+            if (half.fail) otherFails.push(`other-views: conflict-review: ${half.fail}`);
+            else if (half.skip) halfSkips['other-views'] = `conflict-review merge-editor half SKIP -- ${half.skip}`;
+            else {
+                const file = join(ctx.repo, 'README');
+                const opened = await ctx.bundle(`m.openPane('conflict-review', ${JSON.stringify(worktreeId)}, 'README').then(id => ({ id }), e => ({ error: String(e && e.message || e) }))`);
+                if (opened?.error) otherFails.push(`other-views: openPane conflict-review rejected: ${opened.error}`);
+                else {
+                    // Detector first: the merge editor whose result side is the UU file, then the hosted-widget absence.
+                    const editors = async () => ((await ctx.probe(`const shell = get('ApplicationShell'); const registry = get('TabUriRegistry');
+                        return shell.getWidgets('main').map(w => registry.uriOf(w)).filter(u => u && u.scheme === 'merge-editor').map(u => u.query);`)) ?? []).map(mergeEditorResultPath);
+                    const mergeEditors = await ctx.pollFor(async () => { const e = await editors(); return e.includes(file) ? e : null; }, 5000, 'the merge editor').catch(() => []);
+                    const hostedConflict = (await ctx.hostedWidgets()).filter((w) => w.kind === 'conflict-review').length;
+                    otherFails.push(...conflictReviewVerdict({ half: 'run', file, mergeEditors, hostedConflict }));
+                }
+            }
         }
         fail('other-views', otherFails);
 
-        // g2. Orca tab groups from the second client.
+        // g3. Cross-client group split on a CLI terminal T while PowerBrowser holds one group (P65-34); judged after k.
+        const cross = { error: null, menu: [], stripsBefore: null, stripsAfter: null, changedBeforeReload: false, detectedAfterReload: false, peersBefore: [], peersAfter: [] };
+        const T = await viaCli(['terminal', 'create', '--worktree', ctx.worktree]);
+        const tKey = keyOf(T.widget?.options);
+        const tRecord = async () => ((await ctx.probe(PANES)) ?? []).find((p) => p.key === tKey) ?? null;
+        if (second.error || !T.widget) cross.error = second.error ? `second client: ${second.error}` : 'the CLI terminal T has no hosted widget';
+        else {
+            const moved = await second.moveTabToSplit(T.widget.options?.tabId, 'right');
+            if (!moved || moved.error) Object.assign(cross, { error: moved?.error ?? 'the second client did not answer', menu: moved?.menu ?? [] });
+            else {
+                Object.assign(cross, { stripsBefore: moved.stripsBefore, stripsAfter: moved.stripsAfter });
+                for (const t1 = Date.now(); Date.now() - t1 < 5000; await sleep(250)) {
+                    if ((await tRecord())?.neighbours?.some((n) => SPLIT_MODES.has(n.mode))) cross.changedBeforeReload = true;
+                }
+            }
+        }
+
+        // g2. A tab group made in PowerBrowser's own document: stage f's chat1's own Split Chat Right (P65-33).
         const groupAgentFails = agentVerdict('tab-groups', ctx.agentPrecondition);
         let groupDiag = null;
-        if (second.error || !b.widget) fail('tab-groups', [...groupAgentFails, `tab-groups: tab-group split not observed (${second.error ?? 'no CLI terminal from (b)'})`]);
+        if (!chat1Id) fail('tab-groups', [...groupAgentFails, 'tab-groups: no hosted chat from stage (f) to split']);
         else {
-            // Orca's "Split Chat Right" opens a new chat in the new group itself; only when the split added no tab is a
-            // chat opened in the second group through its own New tab control.
-            before = await lib.hostedIds(ctx);
-            const tSplit = Date.now();
-            const split = await second.splitGroup(b.widget.options?.tabId);
-            let add = split ? await lib.waitForHostedAdd(ctx, tSplit, before, 5000) : null;
-            const made = split && !add ? await second.newChat(split.groupIndex) : null;
-            if (made?.t) add = await lib.waitForHostedAdd(ctx, made.t - 50, before, 5000);
-            if (made?.t && !add && await promptOnce()) add = await lib.waitForHostedAdd(ctx, made.t - 50, before, 60000);
+            await ctx.activate(chat1Id);
+            const beforeWidgets = await ctx.hostedWidgets();
+            before = beforeWidgets.map((w) => w.id);
+            const shownKeys = new Set(beforeWidgets.filter((w) => w.options?.worktreeId === worktreeId).map((w) => keyOf(w.options)));
+            const t0 = Date.now();
+            const button = await ctx.probe(`const w = get('ApplicationShell').getWidgetById(${JSON.stringify(chat1Id)});
+                const b = w && [...w.node.querySelectorAll('button[aria-label]')].find(e => /^split chat right$/i.test(e.getAttribute('aria-label')) && e.getClientRects().length > 0);
+                if (!b) return false; b.click(); return true;`);
+            const add = button ? await lib.waitForHostedAdd(ctx, t0, before, 5000) : null;
             const panes = (await ctx.probe(PANES)) ?? [];
             const all = await ctx.hostedWidgets();
-            const secondW = add ? all.find((w) => w.id === add.id) : null;
-            const rec = secondW ? panes.find((p) => p.key === (secondW.options?.paneKey ?? secondW.options?.tabId)) : null;
-            const wantMode = split?.direction === 'down' ? 'split-bottom' : 'split-right';
-            const firstKeys = new Set(panes.filter((p) => p.worktreeId === worktreeId && p.key !== rec?.key).map((p) => p.key));
-            const detected = !!rec?.neighbours?.some((n) => firstKeys.has(n.key) && n.mode === wantMode);
-            const firstW = all.filter((w) => w.id !== secondW?.id && w.options?.worktreeId === worktreeId && w.area === 'main');
-            groupDiag = { split, added: add?.id ?? null, made, second: secondW?.id ?? null, rec: rec ? { key: rec.key, neighbours: rec.neighbours } : null, panes: panes.filter((p) => p.worktreeId === worktreeId).map((p) => ({ key: p.key, kind: p.kind, neighbours: p.neighbours })) };
-            const noSplit = split ? [] : [`tab-groups: the second client offered no group split (no chat pane header's Split Chat Right${made?.menu?.length ? `; its New tab menu reads ${JSON.stringify(made.menu)}` : ''})`];
-            fail('tab-groups', [...groupAgentFails, ...noSplit, ...groupVerdict({ detected, direction: split?.direction, second: secondW, first: firstW }), ...promptBudgetVerdict(promptsSent)]);
+            const secondW = add ? all.find((w) => w.id === add.id) ?? null : null;
+            const rec = secondW ? panes.find((p) => p.key === keyOf(secondW.options)) ?? null : null;
+            const detected = !!rec?.neighbours?.some((n) => n.mode === 'split-right' && shownKeys.has(n.key));
+            // placementFor's rule, read from the record: the first neighbour that has a hosted widget.
+            const refKey = rec?.neighbours?.find((n) => all.some((w) => w.id !== secondW?.id && keyOf(w.options) === n.key))?.key;
+            const refId = all.find((w) => w.id !== secondW?.id && keyOf(w.options) === refKey)?.id ?? null;
+            const shown = async (id) => { if (!id) return null; await ctx.activate(id); const w = await widgetOf(id); return w ? { tabBar: w.tabBar, rect: w.rect } : null; };
+            const ref = await shown(refId);
+            const chat1 = await shown(chat1Id);
+            const second2 = await shown(secondW?.id);
+            groupDiag = { button, added: add?.id ?? null, record: rec ? { key: rec.key, neighbours: rec.neighbours } : null, reference: refId };
+            fail('tab-groups', [...groupAgentFails, ...splitChatVerdict({ button, added: !!add, detected, second: second2, ref, chat1 }), ...promptBudgetVerdict(promptsSent)]);
         }
 
         // h. Organising rows.
@@ -533,10 +669,17 @@ async function runLive(lib) {
             fail('close', [...closeVerdict({ dialog, afterCancel, disposedMs: gone })]);
         }
         const notes = ['busy-chat close not exercised: no prompt keeps a chat busy; end-of-milestone pass', `prompts sent: ${promptsSent} (budget 1)`];
-        if (stages['tab-groups']?.length && groupDiag) notes.push(`tab-groups observation ${JSON.stringify(groupDiag)}`);
+        if (stages['tab-groups']?.length && groupDiag) notes.push(`tab-groups observation (button, added id, record, reference) ${JSON.stringify(groupDiag)}`);
 
-        // k. Reload.
-        const names = (await lib.hostedIds(ctx)).map(nameOf).sort();
+        // k. Reload, with name identity (P65-35) and g3's post-reload half.
+        const hostedNow = await ctx.hostedWidgets();
+        const names = hostedNow.map((w) => nameOf(w.id)).sort();
+        const identityOf = (list) => Object.fromEntries(list.map((w) => [nameOf(w.id), keyOf(w.options)]));
+        const barsOf = (list) => Object.values(list.filter((w) => w.area === 'main' && w.tabBar >= 0).reduce((acc, w) => ({ ...acc, [w.tabBar]: [...(acc[w.tabBar] ?? []), nameOf(w.id)] }), {}));
+        const peersOf = (list) => { const t = list.find((w) => keyOf(w.options) === tKey); return t && t.tabBar >= 0 ? list.filter((w) => w.area === 'main' && w.tabBar === t.tabBar).map((w) => nameOf(w.id)) : []; };
+        const identityBefore = identityOf(hostedNow);
+        const barsBefore = barsOf(hostedNow);
+        cross.peersBefore = peersOf(hostedNow);
         await ctx.app.evaluate('setTimeout(() => location.reload(), 0), true').catch(() => undefined);
         await sleep(1000);
         await ctx.pollFor(() => ctx.probe(`return get('FrontendApplicationStateService').state === 'ready';`, 5000).catch(() => false), 120000, 'the reloaded frontend');
@@ -544,7 +687,16 @@ async function runLive(lib) {
         const backMs = await ctx.pollFor(async () => { const now = (await lib.hostedIds(ctx)).map(nameOf); return names.every((n) => now.includes(n)) ? Date.now() - tReady : null; }, RELOAD_MS + 5000, 'the hosted tabs after reload').catch(() => null);
         const after = (await lib.hostedIds(ctx)).map(nameOf).sort();
         const storedEnvKey = await ctx.probe(`return Object.keys(localStorage).includes(${JSON.stringify(ENV_STORAGE_KEY)});`);
-        fail('reload', reloadVerdict({ before: names, after, ms: backMs, storedEnvKey }));
+        // The store lists the worktree again (the observer's hold ends there), then identity, store keys and bars.
+        const storeAfter = await ctx.pollFor(async () => { const p = (await ctx.probe(PANES)) ?? []; return p.some((r) => r.worktreeId === worktreeId) ? p : null; }, RELOAD_MS + 5000, 'the store after reload').catch(() => []);
+        await sleep(500);
+        const hostedAfter = await ctx.hostedWidgets();
+        fail('reload', reloadVerdict({ before: names, after, ms: backMs, storedEnvKey, identityBefore, identityAfter: identityOf(hostedAfter), storeKeysAfter: storeAfter.map((r) => r.key), barsBefore, barsAfter: barsOf(hostedAfter) }));
+        if (!cross.error && cross.stripsAfter === cross.stripsBefore + 1) {
+            cross.detectedAfterReload = !!(await ctx.pollFor(async () => ((await tRecord())?.neighbours?.some((n) => n.mode === 'split-right') ? true : null), 5000, 'T split-right after the reload').catch(() => false));
+            cross.peersAfter = peersOf(await ctx.hostedWidgets());
+        }
+        fail('tab-groups-cross-client', crossClientVerdict(cross));
 
         // l. Route containment.
         const theiaCtx = (await ctx.app.contexts()).find((x) => x.url.includes(`127.0.0.1:${ctx.app.port}`) || x.url.includes(`localhost:${ctx.app.port}`));
@@ -690,29 +842,35 @@ async function openSecondClient(ctx) {
             box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
             return true;
         })()`).catch(() => false),
-        /** Splits the group holding tab `tabId` through Orca's own tab context menu; resolves { direction, groupIndex } or null. */
-        splitGroup: (tabId) => evalIn(`(async () => {
+        /**
+         * P65-34: Orca's own tab context menu on tab `tabId`, its "Move Tab to Split" sub-trigger, then the direction's
+         * item (paneColumnDirectionLabel's fallback). Resolves { stripsBefore, stripsAfter } ([data-tab-group-strip-id]
+         * counts around the move), or { error, menu } with the menu texts when an item is absent (the sub-trigger shows
+         * only while the tab's group holds more than one server tab).
+         */
+        moveTabToSplit: (tabId, direction) => evalIn(`(async () => {
+            const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+            const strips = () => document.querySelectorAll('[data-tab-group-strip-id]').length;
+            const items = () => [...document.querySelectorAll('[role="menuitem"]')];
+            const texts = () => items().map(m => m.textContent.replace(/\\s+/g, ' ').trim());
+            const escape = () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+            const stripsBefore = strips();
             const tab = document.querySelector('[data-tab-id="' + CSS.escape(${JSON.stringify(String(tabId ?? ''))}) + '"]');
-            if (!tab) return null;
+            if (!tab) return { error: 'the second client shows no tab for T', menu: [] };
             tab.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 10, clientY: 10 }));
-            await new Promise(r => setTimeout(r, 400));
-            const item = [...document.querySelectorAll('[role="menuitem"]')].find(m => /split/i.test(m.textContent) && /(right|down)/i.test(m.textContent));
-            let direction;
-            if (item) {
-                direction = /down/i.test(item.textContent) ? 'down' : 'right';
-                item.click();
-            } else {
-                // The pinned client's tab menu offers only "Split terminal" (a pane split); its group split is the
-                // shown chat pane header's own "Split Chat Right" button, which opens a new chat in a new group.
-                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-                await new Promise(r => setTimeout(r, 300));
-                const button = [...document.querySelectorAll('button[aria-label]')].find(e => /^split chat right$/i.test(e.getAttribute('aria-label')) && e.getClientRects().length > 0);
-                if (!button) return null;
-                direction = 'right';
-                button.click();
-            }
-            await new Promise(r => setTimeout(r, 800));
-            return { direction, groupIndex: document.querySelectorAll('[data-tab-group-strip-id]').length - 1 };
+            await sleep(400);
+            const trigger = items().find(m => m.textContent.trim().toLowerCase().startsWith('move tab to split'));
+            if (!trigger) { const menu = texts(); escape(); return { error: 'no Move Tab to Split item in T\\'s tab menu', menu }; }
+            trigger.focus();
+            trigger.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse' }));
+            trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+            const label = ${JSON.stringify(PANE_COLUMN_LABEL[direction] ?? 'Right')}.toLowerCase();
+            let item = null;
+            for (let i = 0; i < 20 && !item; i++) { await sleep(100); item = items().find(m => m !== trigger && m.textContent.trim().toLowerCase().startsWith(label)); }
+            if (!item) { const menu = texts(); escape(); return { error: 'no ' + label + ' item in the Move Tab to Split submenu', menu }; }
+            item.click();
+            await sleep(800);
+            return { stripsBefore, stripsAfter: strips() };
         })()`).catch(() => null),
         count: (selectors) => evalIn(`(${JSON.stringify(selectors)}).reduce((n, s) => n + document.querySelectorAll(s).length, 0)`).catch(() => 0),
     };
@@ -724,17 +882,18 @@ async function main() {
     if (pre.fail) { console.error(`${NAME}: FAIL -- ${pre.fail}`); return 1; }
     if (pre.skip) { console.log(`${NAME}: SKIP -- ${pre.skip}`); return 0; }
     let stages;
-    try { stages = await runLive(lib); } catch (err) {
+    try { stages = await runLive(lib, pre); } catch (err) {
         console.error(`${NAME}: FAIL -- harness: ${err.message}`);
         return 1;
     }
-    const order = ['terminal-user', 'terminal-cli', 'terminal-agent', 'freeze-guard', 'split', 'pb-split', 'chat', 'other-views', 'tab-groups', 'organising', 'no-tab-chrome', 'close', 'reload', 'route', 'offer'];
+    const order = ['terminal-user', 'terminal-cli', 'terminal-agent', 'freeze-guard', 'split', 'pb-split', 'chat', 'other-views', 'tab-groups', 'tab-groups-cross-client', 'organising', 'no-tab-chrome', 'close', 'reload', 'route', 'offer'];
     const failed = [];
     for (const s of order) {
         const reasons = stages[s];
         if (reasons === undefined) { failed.push(s); console.log(`${NAME}: ${s}: FAIL -- not reached`); continue; }
         if (reasons.length) failed.push(s);
-        console.log(`${NAME}: ${s}: ${reasons.length ? `FAIL -- ${reasons.join('; ')}` : 'PASS'}`);
+        const half = stages.halfSkips?.[s];
+        console.log(`${NAME}: ${s}: ${reasons.length ? `FAIL -- ${reasons.join('; ')}` : `PASS${half ? ` -- ${half}` : ''}`}`);
     }
     for (const n of stages.notes ?? []) console.log(`${NAME}: note -- ${n}`);
     console.log(failed.length ? `${NAME}: FAIL -- ${failed.join(', ')}` : `${NAME}: PASS -- ${order.join(', ')}`);
@@ -763,6 +922,12 @@ const group = (o = {}) => ({ detected: true, direction: 'right', second: { tabBa
 const pick = (patch = {}) => ({ pre: { activeWorktree: null, hosted: 0 }, picker: { rows: ['repo', 'other'], focused: 'repo' }, expected: ['repo', 'other'], ...patch });
 const agentPre = (patch = {}) => ({ claude: { found: true, version: '2.1.321 (Claude Code)' }, sdk: { set: true, packageJson: true }, ...patch });
 const withWidget = (o, i, patch) => { const c = structuredClone(o); Object.assign(c.widgets[i], patch); return c; };
+const conflict = (o = {}) => ({ half: 'run', file: '/scratch/repo/README', mergeEditors: ['/scratch/repo/README'], hostedConflict: 0, ...o });
+const splitChat = (o = {}) => ({ button: true, added: true, detected: true, second: { tabBar: 1, rect: R(400, 0) }, ref: { tabBar: 0, rect: R(0, 0) }, chat1: { tabBar: 0, rect: R(0, 0) }, ...o });
+const crossClient = (o = {}) => ({ error: null, menu: [], stripsBefore: 1, stripsAfter: 2, changedBeforeReload: false, detectedAfterReload: true, peersBefore: ['term1', 'term4'], peersAfter: ['term4', 'term1'], ...o });
+const reload = (o = {}) => ({ before: ['chat1', 'term2', 'term3'], after: ['chat1', 'term2', 'term3'], ms: 900, storedEnvKey: false,
+    identityBefore: { chat1: 'c1', term2: 'k2', term3: 'k3' }, identityAfter: { chat1: 'c1', term2: 'k2', term3: 'k3' }, storeKeysAfter: ['c1', 'k2', 'k3'],
+    barsBefore: [['term2', 'term3'], ['chat1']], barsAfter: [['chat1'], ['term3', 'term2']], ...o });
 
 function runSelfTest() {
     const sources = [`<div data-tab-id={tab.id} data-tab-strip-slot={id} className="x" />`, `<section data-tab-group-strip-id={groupId} data-testid="g" />`];
@@ -777,7 +942,27 @@ function runSelfTest() {
         ['organising control', null, () => organisingVerdict([{ id: 'orca-pane:term1', organising: 'pb-orca:term1' }])],
         ['no-tab-chrome control', null, () => chromeVerdict({ selectors: deriveTabChromeSelectors(sources), detectorMatches: 5, theiaMatches: { '[data-tab-id]': 0 } })],
         ['close control', null, () => closeVerdict({ dialog: true, afterCancel: { widget: true, storeRow: true }, disposedMs: 300 })],
-        ['reload control', null, () => reloadVerdict({ before: ['chat1', 'term1'], after: ['chat1', 'term1'], ms: 900, storedEnvKey: false })],
+        ['reload control', null, () => reloadVerdict(reload())],
+        ['merge-editor result decoding', null, () => (mergeEditorResultPath(JSON.stringify(['pb-orca-git:/scratch/repo/README?:1', 'pb-orca-git:/scratch/repo/README?:2', 'pb-orca-git:/scratch/repo/README?:3', 'file:///scratch/repo/README'])) === '/scratch/repo/README' ? [] : ['the result side did not decode to the working file'])],
+        ['conflict-review control', null, () => conflictReviewVerdict(conflict())],
+        ['conflict-review merge-editor half skipped', null, () => conflictReviewVerdict({ half: 'skip' })],
+        ['split-chat control', null, () => splitChatVerdict(splitChat())],
+        ['cross-client control', null, () => crossClientVerdict(crossClient())],
+        ['a hosted conflict-review widget beside the merge editor', 'conflict-review: hosted widget appeared', () => conflictReviewVerdict(conflict({ hostedConflict: 1 }))],
+        ['no merge editor for the conflict review', 'conflict-review: merge editor not opened', () => conflictReviewVerdict(conflict({ mergeEditors: [] }))],
+        ['no Split Chat Right button', 'tab-groups: no Split Chat Right button in the hosted chat', () => splitChatVerdict(splitChat({ button: false }))],
+        ['Split Chat Right with no hosted add', 'tab-groups: Split Chat Right added no hosted widget within 5000 ms', () => splitChatVerdict(splitChat({ added: false }))],
+        ['Split Chat Right with no store detection', 'tab-group split not observed', () => splitChatVerdict(splitChat({ detected: false }))],
+        ['the new chat in chat1\'s tab bar', 'tab-groups: the new chat sits in chat1\'s tab bar', () => splitChatVerdict(splitChat({ ref: { tabBar: 2, rect: R(0, 0) }, chat1: { tabBar: 1, rect: R(400, 0) } }))],
+        ['the new chat left of its reference', 'placed in the wrong direction', () => splitChatVerdict(splitChat({ second: { tabBar: 1, rect: R(0, 0) }, ref: { tabBar: 0, rect: R(400, 0) } }))],
+        ['a strip count unchanged by Move Tab to Split', 'Move Tab to Split did not split the second client\'s group', () => crossClientVerdict(crossClient({ stripsAfter: 1 }))],
+        ['no split in T\'s record after the reload', 'the pre-reload absence proves nothing', () => crossClientVerdict(crossClient({ detectedAfterReload: false }))],
+        ['a split in T\'s record before the reload', 'tab-groups-cross-client: live group propagation', () => crossClientVerdict(crossClient({ changedBeforeReload: true }))],
+        ['T\'s tab-bar peers changed after the reload', 'an already-shown pane was re-placed after the reload', () => crossClientVerdict(crossClient({ peersAfter: ['term4'] }))],
+        ['no Move Tab to Split item', 'no Move Tab to Split item', () => crossClientVerdict(crossClient({ error: 'no Move Tab to Split item in T\'s tab menu', menu: ['Close'] }))],
+        ['the side finding\'s term2/term3 swap', 'reload: pb-orca:term2 now addresses another pane', () => reloadVerdict(reload({ identityAfter: { chat1: 'c1', term2: 'k3', term3: 'k2' } }))],
+        ['a key missing from the store after the reload', 'reload: pb-orca:term3 addresses no pane in the store', () => reloadVerdict(reload({ storeKeysAfter: ['c1', 'k2'] }))],
+        ['a widget moved to another tab bar across the reload', 'reload: the Lumino tab bars changed across the reload', () => reloadVerdict(reload({ barsAfter: [['chat1', 'term3'], ['term2']] }))],
         ['route control', null, () => routeVerdict({ noCookie: 403, traversal: 404, absolute: 404, entry: 200 })],
         ['offer control', null, () => offerVerdict({ detector: true, foundIn: [] })],
         ['selector derivation', null, () => (JSON.stringify(deriveTabChromeSelectors(sources)) === JSON.stringify(['[data-tab-group-strip-id]', '[data-tab-id]', '[data-tab-strip-slot]']) ? [] : [`derived ${JSON.stringify(deriveTabChromeSelectors(sources))}`])],

@@ -48,6 +48,8 @@ export const PROTOCOL_REL = 'theia/extensions/orca-panes/src/common/orca-panes-p
 export const PANES_BUNDLE_REL = 'orca/out/web/assets/pb-panes';
 export const ORCAD_REL = 'orca/out/orcad/orcad.js';
 export const BACKEND_MAIN_REL = 'theia/applications/browser/lib/backend/main.js';
+/** Phase 65 (lane p65-02): the extension that opens Orca's editor, diff and conflict-review tabs in Theia's editors. */
+export const ORCA_WORKSPACE_REL = 'theia/extensions/orca-workspace';
 /** C5: the bridge-folder file OrcaService writes after orcad's ready line. */
 export const WEB_PAIRING_FILE = 'web-pairing';
 /** C7 */
@@ -64,9 +66,24 @@ export const firefoxBin = (root = REPO_ROOT) => process.env.PB_FIREFOX_BIN || jo
 export const backendMain = (root = REPO_ROOT) => process.env.PB_BACKEND_MAIN || join(root, BACKEND_MAIN_REL);
 
 /**
+ * Phase 65 (C64-7, P65-01): the clause-level prerequisite of orca-tabs-live stage (g)'s merge-editor half. A named
+ * SKIP only while lane p65-02's orca-workspace is absent; present but missing from the built app's generated
+ * frontend is a FAIL, as orca-panes is treated above.
+ */
+export function mergeEditorHalf(root = REPO_ROOT, main = backendMain(root)) {
+    if (!existsSync(join(root, ORCA_WORKSPACE_REL))) return { skip: `lane p65-02 not merged (${ORCA_WORKSPACE_REL} is absent)`, fail: null };
+    const frontend = join(dirname(main), '..', '..', 'src-gen', 'frontend', 'index.js');
+    if (!/@powerbrowser\/orca-workspace\//.test(read(frontend) ?? '')) {
+        return { skip: null, fail: `orca-workspace not wired into the built app (${frontend} names no @powerbrowser/orca-workspace module)` };
+    }
+    return { skip: null, fail: null };
+}
+
+/**
  * What the live rows need, in order. Resolves { skip, fail } with at most one set: a skip names the
  * absent prerequisite (an unmerged lane first), a fail names a present lane whose code the built app does not carry.
- * needOrca false stops after the orca-panes clauses (the TERM-04 control runs without orcad).
+ * needOrca false stops after the orca-panes clauses (the TERM-04 control runs without orcad). A run that may go
+ * ahead also carries mergeEditor: { skip, fail }, stage (g)'s merge-editor half (Phase 65).
  */
 export function prerequisites({ root = REPO_ROOT, needOrca = true, needPanes = true } = {}) {
     // The unmerged lane is named first: it is the absence a lane run expects, whatever else is built.
@@ -75,16 +92,16 @@ export function prerequisites({ root = REPO_ROOT, needOrca = true, needPanes = t
     if (!existsSync(bin)) return { skip: `no built PowerBrowser (${bin} missing; see docs/BUILD.md "Firefox half")`, fail: null };
     const main = backendMain(root);
     if (!existsSync(main)) return { skip: `no built Theia app (${main} missing; see docs/BUILD.md "Theia half")`, fail: null };
-    if (!needPanes) return { skip: null, fail: null };
+    if (!needPanes) return { skip: null, fail: null, mergeEditor: mergeEditorHalf(root, main) };
     // The generated server of the app being launched names every composed backend module.
     const server = join(dirname(main), '..', '..', 'src-gen', 'backend', 'server.js');
     if (!/@powerbrowser\/orca-panes\//.test(read(server) ?? '')) {
         return { skip: null, fail: `orca-panes not wired into the built app (${server} names no @powerbrowser/orca-panes module; add it to theia/applications/browser/package.json and rebuild)` };
     }
-    if (!needOrca) return { skip: null, fail: null };
+    if (!needOrca) return { skip: null, fail: null, mergeEditor: mergeEditorHalf(root, main) };
     if (!existsSync(join(root, ORCAD_REL))) return { skip: `no built orca/ (${ORCAD_REL} missing; run: nix develop .#orca --command bash scripts/build-orca.sh)`, fail: null };
     if (!existsSync(join(root, PANES_BUNDLE_REL))) return { skip: `lane p64-01 not merged or Orca not built (${PANES_BUNDLE_REL} is absent)`, fail: null };
-    return { skip: null, fail: null };
+    return { skip: null, fail: null, mergeEditor: mergeEditorHalf(root, main) };
 }
 
 /** The stub agent: one line, then stdin echoed until it closes. Never a model. */

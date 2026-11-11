@@ -148,6 +148,9 @@ export class OrcaPaneObserver implements FrontendApplicationContribution {
         for (const kind of plan.pending) {
             this.loggedPending.add(kind);
             const route = ORCA_PANE_ROUTES[kind];
+            if (route?.target === 'theia-editor') {
+                continue; // N-2: @powerbrowser/orca-workspace opens these through subscribeOpenFiles; nothing here
+            }
             console.info(route?.target === 'pending'
                 ? `${LOG_PREFIX} Orca ${kind} panes open nothing until ${route.requirement}`
                 : `${LOG_PREFIX} Orca ${kind} panes have no route`);
