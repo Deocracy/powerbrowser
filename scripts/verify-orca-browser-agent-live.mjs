@@ -65,6 +65,20 @@
 //      chrome's focused overlay and the active window are unchanged; chrome reads
 //      SANDBOXED_AUXILIARY_NAVIGATION on the agent overlay and not on the user's. Last, the agent's own
 //      plain link click still navigates its own tab (D-35 keeps it).
+//  (o) downloads (66-09, D-37): a user web tab's click on a PDF attachment link saves the file into the scratch
+//      profile's download folder first (the detector). Then, from an agent tab, the same kind of link (browser.click)
+//      and a browser.goto of an attachment each reach the fixture server (the second detector) and leave the folder's
+//      listing and the downloads list unchanged, open no window, leave the main area's current tab alone, and answer
+//      failed browser_command_unavailable.
+//  (p) external protocols (66-09, D-37): with a stub application registered in the scratch profile for mailto:, for a
+//      scheme whose launch the fixture origin was granted (in the user's and the agent's container) and for a scheme
+//      that asks, a user tab's clicks launch the stub for the first two and raise one dialog window for the third (the
+//      detectors). The same three clicks from an agent tab launch nothing, open no window and each answer failed
+//      browser_command_unavailable.
+//  (q) first document (66-09, D-37): an agent tab created for a URL whose headers are held is on its initial
+//      about:blank (chrome reads isInitialDocument, the detector); there a browser.mouseClick and a browser.eval of
+//      window.open with features each answer failed browser_command_unavailable, and no window opens and nothing loads.
+//      Once the first load commits, an eval answers again (the guard ends with the initial document).
 //  (i) reload, last: a frontend reload leaves no agent web tab, the host re-attaches, and
 //      tab list no longer lists the old pages.
 //
@@ -80,12 +94,12 @@
 //   node scripts/verify-orca-browser-agent-live.mjs
 //   node scripts/verify-orca-browser-agent-live.mjs --self-test
 
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { INSIDE, OUTSIDE, RED, prerequisites } from './lib/orca-browser-live.mjs';
+import { INSIDE, OUTSIDE, PROTOCOL_ASK, PROTOCOL_PROBE, PROTOCOL_RUN, RED, SLOW_HEADERS_MS, prerequisites } from './lib/orca-browser-live.mjs';
 
 const NAME = 'orca-browser-agent-live';
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), '..', '..');
@@ -272,9 +286,56 @@ export function verdictOpens(o) {
     return f;
 }
 
+const REFUSED = 'failed browser_command_unavailable';
+
+export function verdictDownloads(o) {
+    const u = o.user;
+    const a = o.agent;
+    if (!u.saved) return [`detector blind: a user tab's PDF attachment download saved no file to the profile's download folder (${u.files.join(', ') || 'empty'})`];
+    if (u.rowsAdded < 1) return ['detector blind: a user tab\'s download added no row to the downloads list'];
+    if (a.requests < 2) return [`detector blind: the agent's click and goto reached the fixture server ${a.requests} time(s), not twice, so the wall was never asked`];
+    const f = [];
+    if (a.filesAfter.join('|') !== a.filesBefore.join('|')) f.push(`the agent page's downloads changed the download folder (${a.filesBefore.join(', ') || 'empty'} -> ${a.filesAfter.join(', ') || 'empty'})`);
+    if (a.rowsAfter !== a.rowsBefore) f.push(`the agent page's downloads added ${a.rowsAfter - a.rowsBefore} row(s) to the downloads list`);
+    if (a.newWindows) f.push(`the agent page's downloads opened ${a.newWindows} window(s)`);
+    for (const [what, reply] of [['click on a PDF attachment link', a.clickReply], ['goto of a PDF attachment', a.gotoReply]]) {
+        if (reply !== REFUSED) f.push(`the agent's ${what} answered ${reply}, not ${REFUSED}`);
+    }
+    if (a.currentAfter !== a.currentBefore) f.push(`the main area's current tab changed during the agent downloads (${a.currentBefore} -> ${a.currentAfter})`);
+    return f;
+}
+
+export function verdictProtocols(o) {
+    const u = o.user;
+    const a = o.agent;
+    if (!u.mailtoLaunched || !u.runLaunched) return [`detector blind: a user tab's mailto: and ${PROTOCOL_RUN}: clicks did not each launch the stub application (mailto ${u.mailtoLaunched}, ${PROTOCOL_RUN} ${u.runLaunched})`];
+    if (u.askWindows !== 1) return [`detector blind: a user tab's ${PROTOCOL_ASK}: click opened ${u.askWindows} dialog window(s), not one`];
+    const f = [];
+    if (a.launches) f.push(`the agent page's protocol links launched the stub application ${a.launches} time(s)`);
+    if (a.newWindows) f.push(`the agent page's protocol links opened ${a.newWindows} window(s)`);
+    for (const [what, reply] of Object.entries(a.replies)) {
+        if (reply !== REFUSED) f.push(`the agent's click on a ${what} link answered ${reply}, not ${REFUSED}`);
+    }
+    return f;
+}
+
+export function verdictFirstDocument(o) {
+    if (!o.created) return ['the agent tab for the held first load was not created'];
+    if (o.initialBefore !== true) return [`detector blind: the agent overlay was not on its initial about:blank when the commands ran (isInitialDocument ${o.initialBefore})`];
+    const f = [];
+    for (const [what, reply] of [['browser.mouseClick', o.clickReply], ['browser.eval of window.open with features', o.popupReply]]) {
+        if (reply !== REFUSED) f.push(`${what} on the initial about:blank answered ${reply}, not ${REFUSED}`);
+    }
+    if (o.newWindows) f.push(`a command on the initial about:blank opened ${o.newWindows} window(s)`);
+    if (o.loads) f.push(`a command on the initial about:blank loaded ${o.loads} page(s)`);
+    if (o.initialAfter !== false || o.evalAfter !== 'done /slow') f.push(`after the first load committed an eval answered ${o.evalAfter} (isInitialDocument ${o.initialAfter}), so the guard outlived the initial document`);
+    return f;
+}
+
 export const VERDICTS = {
     k: verdictNoPane, a: verdictCreate, b: verdictActs, b1: verdictScreenshot, b2: verdictScreenshot, c: verdictFocus,
-    d: verdictRefusals, e: verdictContainer, e2: verdictContainerId, l: verdictLogins, m: verdictAuth, c2: verdictTyping, n: verdictOpens, f: verdictDecoy, g: verdictRenderer, h: verdictUserClose, j: verdictActivation, i: verdictReload,
+    d: verdictRefusals, e: verdictContainer, e2: verdictContainerId, l: verdictLogins, m: verdictAuth, c2: verdictTyping, n: verdictOpens,
+    o: verdictDownloads, p: verdictProtocols, q: verdictFirstDocument, f: verdictDecoy, g: verdictRenderer, h: verdictUserClose, j: verdictActivation, i: verdictReload,
 };
 
 /** Every clause's fails, each prefixed by its letter; skipped clauses ({ skip }) are listed apart. */
@@ -493,6 +554,136 @@ async function opensObserved(ctx, agentTabId, page) {
     return { user, agent };
 }
 
+const replyWord = (r) => (r ? `${r.where}${r.code ? ` ${r.code}` : ''}` : 'no reply');
+const windowCount = (ctx) => ctx.inChrome('let n = 0; for (const w of Services.wm.getEnumerator(null)) { if (!w.closed) n++; } return n;');
+const windowHrefs = (ctx) => ctx.inChrome('return [...Services.wm.getEnumerator(null)].filter(w => !w.closed).map(w => String(w.location.href));');
+/** Closes every window not in `keep` (a list of hrefs with multiplicity), oldest kept first. */
+const closeWindowsBut = (ctx, keep) => ctx.inChrome(`const left = new Map(); for (const h of ${JSON.stringify(keep)}) left.set(h, (left.get(h) || 0) + 1);
+    for (const w of [...Services.wm.getEnumerator(null)].filter(x => !x.closed)) { const h = String(w.location.href); if ((left.get(h) || 0) > 0) left.set(h, left.get(h) - 1); else w.close(); }
+    window.focus(); return true;`);
+
+/** (o) D-37: a user tab's download saves (the detector); the agent's click and goto of attachments save and open nothing. */
+export async function downloadsObserved(ctx, agentTabId, page) {
+    const dir = await ctx.inChrome(`const dir = PathUtils.join(Services.dirsvc.get('ProfD', Ci.nsIFile).path, 'pb-downloads');
+        return IOUtils.makeDirectory(dir, { ignoreExisting: true }).then(() => { Services.prefs.setIntPref('browser.download.folderList', 2);
+            Services.prefs.setStringPref('browser.download.dir', dir); Services.prefs.setBoolPref('browser.download.useDownloadDir', true); return dir; });`);
+    const files = () => ctx.inChrome(`return IOUtils.getChildren(${JSON.stringify(dir)}).then(a => a.map(p => PathUtils.filename(p)).sort());`);
+    const rows = () => ctx.inChrome("const { Downloads } = ChromeUtils.importESModule('resource://gre/modules/Downloads.sys.mjs'); return Downloads.getList(Downloads.ALL).then(l => l.getAll()).then(a => a.length);");
+    const pdfRequests = () => ctx.requests().filter((r) => r.path === '/pb-agent.pdf' || r.path === '/pb-agent-goto.pdf').length;
+
+    const keep = await windowHrefs(ctx);
+    const rowsUser = await rows();
+    const userTab = await ctx.openWebTab(ctx.url('/dlpage'));
+    await ctx.pollFor(() => ctx.inPage('/dlpage', 'document.readyState === "complete"').then((v) => v || null), 10000, 'the download user tab').catch(() => null);
+    await ctx.inPage('/dlpage', '(document.getElementById("user").click(), true)');
+    const saved = (await ctx.pollFor(async () => ((await files()).includes('pb-user.pdf') || null), 10000, 'the user download').catch(() => false)) === true;
+    await sleep(1500);
+    const user = { saved, files: await files(), rowsAdded: (await rows()) - rowsUser, windows: (await windowCount(ctx)) - keep.length };
+    await closeWindowsBut(ctx, keep);
+    const userWidget = (await ctx.webTabs()).find((w) => w.tabId === userTab)?.id;
+    if (userWidget) await ctx.luminoClose(userWidget);
+    await sleep(500);
+
+    await ctx.cli('goto', '--url', ctx.url('/dlpage'), '--page', page);
+    const before = { files: await files(), rows: await rows(), windows: await windowCount(ctx), current: await ctx.currentId(), requests: pdfRequests() };
+    const click = await ctx.agentRaw(agentTabId, 'browser.click', { element: '#agent' });
+    const goto = await ctx.agentRaw(agentTabId, 'browser.goto', { url: ctx.url('/pb-agent-goto.pdf') });
+    await sleep(3000);
+    const agent = {
+        filesBefore: before.files, filesAfter: await files(), rowsBefore: before.rows, rowsAfter: await rows(),
+        newWindows: (await windowCount(ctx)) - before.windows, currentBefore: before.current, currentAfter: await ctx.currentId(),
+        requests: pdfRequests() - before.requests, clickReply: replyWord(click), gotoReply: replyWord(goto),
+    };
+    await closeWindowsBut(ctx, keep);
+    return { user, agent };
+}
+
+/** (p) D-37: a user tab's protocol links launch or ask (the detectors); the agent's launch nothing and show nothing. */
+export async function protocolsObserved(ctx, agentTabId, page) {
+    const scratch = mkdtempSync(join(tmpdir(), 'pb-protocol-stub-'));
+    const marker = join(scratch, 'launched');
+    const stub = join(scratch, 'stub.sh');
+    writeFileSync(stub, `#!/bin/sh\nprintf '%s\\n' "$1" >> '${marker}'\n`);
+    chmodSync(stub, 0o755);
+    const launched = () => (existsSync(marker) ? readFileSync(marker, 'utf8').split('\n').filter(Boolean) : []);
+    try {
+        const origin = new URL(ctx.url('/proto')).origin;
+        await ctx.inChrome(`const eps = Cc['@mozilla.org/uriloader/external-protocol-service;1'].getService(Ci.nsIExternalProtocolService);
+            const hs = Cc['@mozilla.org/uriloader/handler-service;1'].getService(Ci.nsIHandlerService);
+            for (const scheme of ['mailto', ${JSON.stringify(PROTOCOL_RUN)}, ${JSON.stringify(PROTOCOL_ASK)}]) {
+                const info = eps.getProtocolHandlerInfo(scheme);
+                const file = Cc['@mozilla.org/file/local;1'].createInstance(Ci.nsIFile); file.initWithPath(${JSON.stringify(stub)});
+                const app = Cc['@mozilla.org/uriloader/local-handler-app;1'].createInstance(Ci.nsILocalHandlerApp); app.executable = file; app.name = 'PB protocol stub';
+                info.possibleApplicationHandlers.appendElement(app); info.preferredApplicationHandler = app;
+                info.preferredAction = Ci.nsIHandlerInfo.useHelperApp; info.alwaysAskBeforeHandling = false; hs.store(info);
+            }
+            // The granted scheme is granted in the user's and the agent's container: without the wall, an agent page of
+            // that origin would launch it with no dialog (67-VERIFICATION finding 3).
+            const agentContext = Services.prefs.getIntPref('powerbrowser.orca.agentUserContextId', 0);
+            for (const userContextId of [0, agentContext]) {
+                const principal = Services.scriptSecurityManager.createContentPrincipal(Services.io.newURI(${JSON.stringify(origin)}), { userContextId });
+                Services.perms.addFromPrincipal(principal, 'open-protocol-handler^' + ${JSON.stringify(PROTOCOL_RUN)}, Services.perms.ALLOW_ACTION);
+            }
+            return true;`);
+        const keep = await windowHrefs(ctx);
+        const userTab = await ctx.openWebTab(ctx.url('/proto'));
+        await ctx.pollFor(() => ctx.inPage('/proto', 'document.readyState === "complete"').then((v) => v || null), 10000, 'the protocol user tab').catch(() => null);
+        await ctx.inPage('/proto', '(document.getElementById("mailto").click(), true)');
+        await ctx.inPage('/proto', '(document.getElementById("run").click(), true)');
+        await ctx.pollFor(() => (launched().length >= 2 || null), 10000, 'the user launches').catch(() => null);
+        const userLaunches = launched();
+        await ctx.inPage('/proto', '(document.getElementById("ask").click(), true)');
+        const askWindows = (await ctx.pollFor(async () => { const n = (await windowCount(ctx)) - keep.length; return n > 0 ? n : null; }, 10000, 'the ask dialog').catch(() => 0));
+        const user = {
+            mailtoLaunched: userLaunches.includes(`mailto:${PROTOCOL_PROBE}`), runLaunched: userLaunches.includes(`${PROTOCOL_RUN}:${PROTOCOL_PROBE}`), askWindows,
+        };
+        await closeWindowsBut(ctx, keep);
+        const userWidget = (await ctx.webTabs()).find((w) => w.tabId === userTab)?.id;
+        if (userWidget) await ctx.luminoClose(userWidget);
+        await sleep(500);
+
+        await ctx.cli('goto', '--url', ctx.url('/proto'), '--page', page);
+        const launchesBefore = launched().length;
+        const windowsBefore = await windowCount(ctx);
+        const replies = {};
+        for (const [what, id] of [['mailto:', 'mailto'], [`${PROTOCOL_RUN}:`, 'run'], [`${PROTOCOL_ASK}:`, 'ask']]) {
+            replies[what] = replyWord(await ctx.agentRaw(agentTabId, 'browser.click', { element: `#${id}` }));
+        }
+        await sleep(3000);
+        const agent = { launches: launched().length - launchesBefore, newWindows: (await windowCount(ctx)) - windowsBefore, replies };
+        await closeWindowsBut(ctx, keep);
+        return { user, agent };
+    } finally {
+        rmSync(scratch, { recursive: true, force: true });
+    }
+}
+
+/** (q) D-37: commands on an agent overlay's initial about:blank are refused until its first load commits. */
+export async function firstDocumentObserved(ctx) {
+    const keep = await windowHrefs(ctx);
+    const before = (await ctx.webTabs()).map((w) => w.id);
+    const pending = ctx.cli('tab', 'create', '--worktree', ctx.worktree, '--url', ctx.url('/slow'));
+    const fresh = await ctx.pollFor(async () => (await ctx.webTabs()).find((w) => !before.includes(w.id) && w.agent) ?? null, 10000, 'the held agent tab').catch(() => null);
+    if (!fresh) { await pending; return { created: false }; }
+    const initial = () => ctx.inChrome(`const o = overlayOf(${JSON.stringify(fresh.tabId)}); const wg = o && o.browsingContext.currentWindowGlobal; return wg ? wg.isInitialDocument : null;`);
+    const initialBefore = await initial();
+    const click = await ctx.agentRaw(fresh.tabId, 'browser.mouseClick', { x: 5, y: 5 });
+    const popup = await ctx.agentRaw(fresh.tabId, 'browser.eval', { expression: `(() => { try { return window.open(${JSON.stringify(ctx.url('/agent2?via=firstdoc'))}, 'pbfirstdoc', 'width=320,height=240') === null ? 'null' : 'a window'; } catch (e) { return 'threw ' + e.name; } })()` });
+    await sleep(2000);
+    const newWindows = (await windowCount(ctx)) - keep.length;
+    const loads = ctx.requests().filter((r) => r.search.includes('via=firstdoc')).length;
+    await ctx.pollFor(async () => ((await initial()) === false || null), SLOW_HEADERS_MS + 20000, 'the held first load').catch(() => null);
+    const after = await ctx.agentRaw(fresh.tabId, 'browser.eval', { expression: 'location.pathname' });
+    const out = {
+        created: true, initialBefore, clickReply: replyWord(click), popupReply: replyWord(popup), newWindows, loads,
+        initialAfter: await initial(), evalAfter: after?.where === 'done' ? `done ${after.result?.result}` : replyWord(after),
+    };
+    await pending;
+    await closeWindowsBut(ctx, keep);
+    await ctx.luminoClose(fresh.id);
+    return out;
+}
+
 async function liveRun(log) {
     const { withBrowserSession, decoyRecordFile } = await import('./lib/orca-browser-live.mjs');
     const { ensurePbNode } = await import('./lib/orca-run.mjs');
@@ -584,6 +775,11 @@ async function liveRun(log) {
 
             // (n) D-35: opens from a user tab adopt; the same opens from the agent page open nothing.
             obs.n = await opensObserved(ctx, agentTabId, page);
+
+            // (o), (p), (q) D-37: downloads, external protocols and the initial document.
+            obs.o = await downloadsObserved(ctx, agentTabId, page);
+            obs.p = await protocolsObserved(ctx, agentTabId, page);
+            obs.q = await firstDocumentObserved(ctx);
 
             // (f) second half, in the scratch HOME holding the decoy.
             if (stock.skip) obs.f = { skip: stock.skip };
@@ -685,12 +881,12 @@ async function main() {
     // One line per clause, so a run records every clause, not only the failing ones.
     for (const k of Object.keys(VERDICTS)) {
         const own = fails.filter((f) => f.startsWith(`(${k}) `));
-        console.log(`${NAME}: clause (${k}) ${obs[k]?.skip ? 'SKIP' : own.length ? 'FAIL' : 'ok'}${k === 'g' && obs.g ? ` (credential ${obs.g.credential}, placement ${obs.g.placement?.kind})` : ''}${['k', 'a'].includes(k) && obs[k] ? ` (${obs[k].ms} ms)` : ''}${k === 'j' && obs.j?.revealMs != null ? ` (reveal ${obs.j.revealMs} ms)` : ''}${k === 'm' && obs.m?.promptType ? ` (${obs.m.promptType})` : ''}${k === 'e2' && obs.e2 ? ` (userContextId ${obs.e2.agentContext})` : ''}${k === 'n' && obs.n?.agent ? ` (user: link ${obs.n.user.linkTabs} tab, window.open ${obs.n.user.openTabs} tab, popup ${obs.n.user.popupWindows} window; agent: ${obs.n.agent.newTabs} tabs, ${obs.n.agent.newWindows} windows, ${obs.n.agent.loads} loads, window.open ${obs.n.agent.openReturned}, with features ${obs.n.agent.popupReturned}, middle-click ${obs.n.agent.middleReply}, Control+Enter ${obs.n.agent.enterReply}, sandboxFlags ${obs.n.agent.sandboxFlags})` : ''}${(k === 'b1' || k === 'b2') && obs[k] ? ` (DPR ${obs[k].deviceDpr}, ${obs[k].size?.join('x')} px)` : ''}`);
+        console.log(`${NAME}: clause (${k}) ${obs[k]?.skip ? 'SKIP' : own.length ? 'FAIL' : 'ok'}${k === 'g' && obs.g ? ` (credential ${obs.g.credential}, placement ${obs.g.placement?.kind})` : ''}${['k', 'a'].includes(k) && obs[k] ? ` (${obs[k].ms} ms)` : ''}${k === 'j' && obs.j?.revealMs != null ? ` (reveal ${obs.j.revealMs} ms)` : ''}${k === 'm' && obs.m?.promptType ? ` (${obs.m.promptType})` : ''}${k === 'e2' && obs.e2 ? ` (userContextId ${obs.e2.agentContext})` : ''}${k === 'n' && obs.n?.agent ? ` (user: link ${obs.n.user.linkTabs} tab, window.open ${obs.n.user.openTabs} tab, popup ${obs.n.user.popupWindows} window; agent: ${obs.n.agent.newTabs} tabs, ${obs.n.agent.newWindows} windows, ${obs.n.agent.loads} loads, window.open ${obs.n.agent.openReturned}, with features ${obs.n.agent.popupReturned}, middle-click ${obs.n.agent.middleReply}, Control+Enter ${obs.n.agent.enterReply}, sandboxFlags ${obs.n.agent.sandboxFlags})` : ''}${(k === 'b1' || k === 'b2') && obs[k] ? ` (DPR ${obs[k].deviceDpr}, ${obs[k].size?.join('x')} px)` : ''}${k === 'o' && obs.o?.agent ? ` (user: saved ${obs.o.user.saved}, ${obs.o.user.rowsAdded} row, ${obs.o.user.windows} window; agent: ${obs.o.agent.requests} requests, folder ${obs.o.agent.filesBefore.length} -> ${obs.o.agent.filesAfter.length} file(s), rows ${obs.o.agent.rowsBefore} -> ${obs.o.agent.rowsAfter}, ${obs.o.agent.newWindows} windows, click ${obs.o.agent.clickReply}, goto ${obs.o.agent.gotoReply})` : ''}${k === 'p' && obs.p?.agent ? ` (user: mailto launched ${obs.p.user.mailtoLaunched}, ${PROTOCOL_RUN} launched ${obs.p.user.runLaunched}, ${PROTOCOL_ASK} ${obs.p.user.askWindows} dialog; agent: ${obs.p.agent.launches} launches, ${obs.p.agent.newWindows} windows, ${Object.entries(obs.p.agent.replies).map(([s, r]) => `${s} ${r}`).join(', ')})` : ''}${k === 'q' && obs.q?.created ? ` (initial ${obs.q.initialBefore}; mouseClick ${obs.q.clickReply}, popup ${obs.q.popupReply}, ${obs.q.newWindows} windows, ${obs.q.loads} loads; after the first load: ${obs.q.evalAfter})` : ''}`);
     }
     for (const s of skips) console.log(`${NAME}: SKIP ${s}`);
     if (fails.length) { for (const f of fails) console.error(`${NAME}: FAIL -- ${f}`); return 1; }
     const g = obs.g.credential;
-    console.log(`${NAME}: PASS -- (k) no-pane create one tab in ${obs.k.ms} ms; (a) one background agent tab in ${obs.a.ms} ms; (b) goto, click, type, screenshot at DPR 1 and 2; (c) parked focus held; (d) refusals; (e) container; (e2) agent container ${obs.e2.agentContext}; (l) saved login filled for the user only, no LoginManager actor or capture in the agent tab; (m) HTTP auth (${obs.m.promptType}) refused to the agent; (c2) typing kept while the parked page called focus(); (n) agent opens refused after user opens adopted; (f) ${obs.f.skip ? 'SKIP' : 'no decoy'}; (g) renderer createPage over ${g}; (h) user close; (j) reveal in ${obs.j.revealMs} ms after store activation; (i) reload`);
+    console.log(`${NAME}: PASS -- (k) no-pane create one tab in ${obs.k.ms} ms; (a) one background agent tab in ${obs.a.ms} ms; (b) goto, click, type, screenshot at DPR 1 and 2; (c) parked focus held; (d) refusals; (e) container; (e2) agent container ${obs.e2.agentContext}; (l) saved login filled for the user only, no LoginManager actor or capture in the agent tab; (m) HTTP auth (${obs.m.promptType}) refused to the agent; (c2) typing kept while the parked page called focus(); (n) agent opens refused after user opens adopted; (o) agent downloads refused after a user download saved; (p) agent protocol links refused after user launches and a dialog; (q) commands refused on the initial about:blank; (f) ${obs.f.skip ? 'SKIP' : 'no decoy'}; (g) renderer createPage over ${g}; (h) user close; (j) reveal in ${obs.j.revealMs} ms after store activation; (i) reload`);
     return 0;
 }
 
@@ -713,6 +909,15 @@ const CONTROL = {
         user: { linkTabs: 1, linkLoads: 1, openTabs: 1, openLoads: 1, agentAmong: false, popupWindows: 1, sandboxFlags: 0 },
         agent: { currentBefore: 'u', currentAfter: 'u', chromeBefore: 'u', chromeAfter: 'u', shellActiveBefore: true, shellActiveAfter: true, newTabs: 0, newWindows: 0, loads: 0, openReturned: 'null', popupReturned: 'null', middleReply: 'failed browser_command_unavailable', enterReply: 'failed browser_command_unavailable', sandboxFlags: 2, ownNavigation: true },
     },
+    o: {
+        user: { saved: true, files: ['pb-user.pdf'], rowsAdded: 1, windows: 1 },
+        agent: { filesBefore: ['pb-user.pdf'], filesAfter: ['pb-user.pdf'], rowsBefore: 1, rowsAfter: 1, newWindows: 0, currentBefore: 'u', currentAfter: 'u', requests: 2, clickReply: 'failed browser_command_unavailable', gotoReply: 'failed browser_command_unavailable' },
+    },
+    p: {
+        user: { mailtoLaunched: true, runLaunched: true, askWindows: 1 },
+        agent: { launches: 0, newWindows: 0, replies: { 'mailto:': 'failed browser_command_unavailable', 'pbrun:': 'failed browser_command_unavailable', 'pbask:': 'failed browser_command_unavailable' } },
+    },
+    q: { created: true, initialBefore: true, clickReply: 'failed browser_command_unavailable', popupReply: 'failed browser_command_unavailable', newWindows: 0, loads: 0, initialAfter: false, evalAfter: 'done /slow' },
     f: { stock: { pass: { stockMs: 900 } }, createOk: true, title: 'PB agent fixture two', expectedTitle: 'PB agent fixture two', quietMs: 30000, minQuietMs: 10000, markerPresent: false },
     g: { placement: { kind: 'client' }, reply: { ok: true, code: null }, createPageArrived: true, credential: 'device-key' },
     h: { closed: true, listedAfter: false },
@@ -722,6 +927,7 @@ const CONTROL = {
 
 const set = (clause, patch) => (o) => ({ ...o, [clause]: { ...o[clause], ...patch } });
 const setN = (side, patch) => (o) => ({ ...o, n: { ...o.n, [side]: { ...o.n[side], ...patch } } });
+const setIn = (clause, side, patch) => (o) => ({ ...o, [clause]: { ...o[clause], [side]: { ...o[clause][side], ...patch } } });
 const PLANTS = [
     ['two-tabs-one-page', set('a', { newTabs: [{ tabId: 't1', agent: true, current: false }, { tabId: 't9', agent: true, current: false }] }), 'two tabs for one page'],
     ['tab-current-at-create', set('a', { newTabs: [{ tabId: 't1', agent: true, current: true }] }), 'a tab current at create'],
@@ -779,6 +985,26 @@ const PLANTS = [
     ['opens-link-detector-blind', setN('user', { linkTabs: 0 }), 'detector blind'],
     ['opens-popup-detector-blind', setN('user', { popupWindows: 0 }), 'detector blind'],
     ['opens-load-detector-blind', setN('user', { openLoads: 0 }), 'detector blind'],
+    // 66-09 (D-37): downloads, external protocols, the initial document.
+    ['agent-download-saved', setIn('o', 'agent', { filesAfter: ['pb-agent.pdf', 'pb-user.pdf'] }), 'changed the download folder'],
+    ['agent-download-partial-left', setIn('o', 'agent', { filesAfter: ['pb-agent.pdf.part', 'pb-user.pdf'] }), 'changed the download folder'],
+    ['agent-download-listed', setIn('o', 'agent', { rowsAfter: 2 }), 'added 1 row(s) to the downloads list'],
+    ['agent-download-viewer-window', setIn('o', 'agent', { newWindows: 1 }), "the agent page's downloads opened 1 window"],
+    ['agent-download-click-done', setIn('o', 'agent', { clickReply: 'done' }), 'click on a PDF attachment link answered done'],
+    ['agent-download-goto-done', setIn('o', 'agent', { gotoReply: 'done' }), 'goto of a PDF attachment answered done'],
+    ['agent-download-moved-current', setIn('o', 'agent', { currentAfter: 'w9' }), "the main area's current tab changed during the agent downloads"],
+    ['download-detector-blind', setIn('o', 'user', { saved: false }), 'detector blind'],
+    ['download-row-detector-blind', setIn('o', 'user', { rowsAdded: 0 }), 'detector blind'],
+    ['agent-download-never-asked', setIn('o', 'agent', { requests: 0 }), 'detector blind'],
+    ['agent-protocol-launched', setIn('p', 'agent', { launches: 1 }), 'launched the stub application 1 time'],
+    ['agent-protocol-dialog', setIn('p', 'agent', { newWindows: 1 }), "the agent page's protocol links opened 1 window"],
+    ['agent-protocol-click-done', setIn('p', 'agent', { replies: { 'mailto:': 'done', 'pbrun:': 'failed browser_command_unavailable', 'pbask:': 'failed browser_command_unavailable' } }), 'click on a mailto: link answered done'],
+    ['protocol-launch-detector-blind', setIn('p', 'user', { runLaunched: false }), 'detector blind'],
+    ['protocol-dialog-detector-blind', setIn('p', 'user', { askWindows: 0 }), 'detector blind'],
+    ['first-document-click-done', set('q', { clickReply: 'done' }), 'browser.mouseClick on the initial about:blank answered done'],
+    ['first-document-popup-opened', set('q', { popupReply: 'done', newWindows: 1, loads: 1 }), 'opened 1 window'],
+    ['first-document-guard-outlives', set('q', { evalAfter: 'failed browser_command_unavailable' }), 'the guard outlived the initial document'],
+    ['first-document-detector-blind', set('q', { initialBefore: false }), 'detector blind'],
 ];
 
 export function runSelfTest() {

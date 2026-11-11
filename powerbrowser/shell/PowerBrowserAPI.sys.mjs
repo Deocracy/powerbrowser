@@ -11268,10 +11268,12 @@ function agentContainerId() {
 function agentTabCreated(entry, userContextId) {
   entry.agent = true;
   entry.agentUserContextId = userContextId;
-  // D-35, the content wall: set before the first load, so every document of the overlay carries it.
-  entry.browser.browsingContext.sandboxFlags |= SANDBOXED_AUXILIARY_NAVIGATION;
+  // D-35, the content wall: set before the first load, so every document of the overlay carries it. D-37 adds the
+  // download wall to the same write.
+  entry.browser.browsingContext.sandboxFlags |= SANDBOXED_AUXILIARY_NAVIGATION | SANDBOXED_DOWNLOADS;
   entry.agentNetwork = [];
   agentNetworkInstall();
+  agentProtocolWallInstall();
   agentFocusGuardInstall(entry.browser.ownerDocument.defaultView);
 }
 
@@ -11286,6 +11288,13 @@ function agentTabCreated(entry, userContextId) {
 // (ContentParent.cpp:5505-5508) while a failure refuses the open. A content-wall refusal happens before any chrome code
 // runs, so only the chrome wall can log or fail a command; the page's own window.open returns null.
 const SANDBOXED_AUXILIARY_NAVIGATION = 0x2;
+// D-37 (66-09): the download wall. With SANDBOXED_DOWNLOADS (nsSandboxFlags.h) on the overlay's browsing context, every
+// load of the overlay (and of its frames, which inherit it) classifies a download as forbidden, and Gecko cancels it
+// with NS_ERROR_ABORT before any file is written, before any download list or panel knows of it and before any
+// viewer opens (nsContentSecurityUtils.cpp ClassifyDownload, nsExternalHelperAppService.cpp:1640-1645). That viewer
+// would otherwise open in a stock window (DownloadUIHelper.loadFileIn). agentNetworkObserver sees the cancelled
+// document channel, so the command in flight answers browser_command_unavailable.
+const SANDBOXED_DOWNLOADS = 0x10000;
 
 // True when opener is an agent overlay. Logged once per tab and path, without the URL; an agent command in flight on
 // that tab then answers browser_command_unavailable (handleWebTabAgent).
@@ -11309,6 +11318,39 @@ function agentOpenGuard(opener, path) {
   if (agentOpenRefused(opener, path)) {
     throw Components.Exception("", Cr.NS_ERROR_ABORT);
   }
+}
+
+// D-37 (66-09): an external protocol (mailto:, zoommtg:, any scheme an application handles) from an agent page is
+// refused: no dialog and no launch. Gecko's sandbox check exempts a top-level browsing context
+// (nsExternalHelperAppService.cpp ExternalProtocolIsBlockedBySandbox), so this wall is chrome's. LoadURI creates a
+// fresh @mozilla.org/content-dispatch-chooser;1 for every external load it allows (:1164-1170); that contract is
+// pointed at a chooser that refuses an agent overlay's browsing context (or a frame inside one) and hands every other
+// load to Gecko's own chooser unchanged.
+const CONTENT_DISPATCH_CHOOSER = "@mozilla.org/content-dispatch-chooser;1";
+let agentProtocolWallInstalled = false;
+
+function agentProtocolWallInstall() {
+  if (agentProtocolWallInstalled) {
+    return;
+  }
+  agentProtocolWallInstalled = true;
+  const registrar = Components.manager.QueryInterface(Ci.nsIComponentRegistrar);
+  const stockChooser = Components.manager.getClassObject(registrar.contractIDToCID(CONTENT_DISPATCH_CHOOSER), Ci.nsIFactory);
+  registrar.registerFactory(Services.uuid.generateUUID(), "PowerBrowser agent dispatch chooser", CONTENT_DISPATCH_CHOOSER, {
+    createInstance(iid) {
+      const chooser = {
+        handleURI(handler, uri, principal, browsingContext, triggeredExternally) {
+          if (agentOpenRefused(browsingContext?.top?.embedderElement, "protocol launch")) {
+            return undefined;
+          }
+          return stockChooser.createInstance(Ci.nsIContentDispatchChooser).handleURI(handler, uri, principal, browsingContext, triggeredExternally);
+        },
+        QueryInterface: ChromeUtils.generateQI(["nsIContentDispatchChooser"]),
+      };
+      return chooser.QueryInterface(iid);
+    },
+    QueryInterface: ChromeUtils.generateQI(["nsIFactory"]),
+  });
 }
 
 // Coordinator finding 1 (UI redress): a parked agent overlay never holds the shell's focus. The overlay already has
@@ -11492,6 +11534,7 @@ function agentNetworkInstall() {
   agentNetworkInstalled = true;
   Services.obs.addObserver(agentNetworkObserver, "http-on-modify-request");
   Services.obs.addObserver(agentNetworkObserver, "http-on-examine-response");
+  Services.obs.addObserver(agentNetworkObserver, "http-on-stop-request");
 }
 
 const agentNetworkObserver = {
@@ -11500,6 +11543,13 @@ const agentNetworkObserver = {
       const channel = subject.QueryInterface(Ci.nsIHttpChannel);
       const entry = webTabs.get(tabIdOfBrowser(channel.loadInfo?.browsingContext?.top?.embedderElement));
       if (entry?.agent !== true) {
+        return;
+      }
+      // D-37: a document load the download wall cancelled (SANDBOXED_DOWNLOADS, NS_ERROR_ABORT) was a download.
+      if (topic === "http-on-stop-request") {
+        if (channel.isDocument && channel.status === Cr.NS_ERROR_ABORT) {
+          agentOpenRefused(entry.browser, "download");
+        }
         return;
       }
       if (topic === "http-on-modify-request") {
@@ -11680,6 +11730,19 @@ async function agentRunInChild(entry, method, params) {
   }
 }
 
+// D-37 (66-09): a refusal that follows a command over the network (a download the wall cancelled, a protocol launch)
+// lands after the child's reply, so a child-run command waits one beat and then, while the overlay loads a document,
+// until the load stops or a refusal lands. shortcut: polls isLoadingDocument with a cap; a per-channel wait would end
+// sooner, upgrade if agents see slow clicks.
+const AGENT_SETTLE_BEAT_MS = 100;
+const AGENT_SETTLE_MAX_MS = 3000;
+
+async function agentSettleOpens(entry, control, opensRefused) {
+  for (let waited = 0; waited === 0 || (waited < AGENT_SETTLE_MAX_MS && entry.browser.webProgress?.isLoadingDocument === true && (control.openRefusals ?? 0) === opensRefused); waited += AGENT_SETTLE_BEAT_MS) {
+    await PowerBrowserAPI.sleep(AGENT_SETTLE_BEAT_MS);
+  }
+}
+
 async function handleWebTabAgent(data, actorRef) {
   const kind = "webTabAgent";
   if (!webTabIdIsValid(data.tabId)) {
@@ -11696,6 +11759,12 @@ async function handleWebTabAgent(data, actorRef) {
   if (verdict) {
     return { ok: true, kind, where: verdict };
   }
+  // D-37 (66-09): the overlay's initial about:blank is made with the browsing context's InitialSandboxFlags, which
+  // chrome cannot set (nsDocShell.cpp:6619-6622), so it lacks both walls. Until the first load commits, only the
+  // browser.goto that replaces it runs.
+  if (data.method !== "browser.goto" && entry.browser.browsingContext?.currentWindowGlobal?.isInitialDocument === true) {
+    return { ok: true, kind, where: "failed", code: "browser_command_unavailable" };
+  }
   const control = agentControlOf(entry);
   agentSetActive(data.tabId, entry, true);
   const opensRefused = control.openRefusals ?? 0;
@@ -11703,6 +11772,9 @@ async function handleWebTabAgent(data, actorRef) {
   try {
     const native = AGENT_NATIVE_ROWS[data.method];
     outcome = native ? await native(entry, data.params, data.tabId) : await agentRunInChild(entry, data.method, data.params);
+    if (!native && outcome.where === "done") {
+      await agentSettleOpens(entry, control, opensRefused);
+    }
   } catch (err) {
     PowerBrowserAPI.log("error", `[orca-agent] ${data.method} failed (${err && err.name ? err.name : "error"})`);
     outcome = agentFailed("browser_error");
