@@ -26,7 +26,7 @@
 export interface ViewFactoryTableRow {
     /** The factory id, verbatim -- also the `view:` path for this row. */
     readonly factoryId: string;
-    /** True for the five rows addressed as a view *container*, not a part. */
+    /** True for the rows addressed as a view *container*, not a part. */
     readonly container: boolean;
 }
 
@@ -52,6 +52,8 @@ export const POWERBROWSER_VIEW_FACTORY_IDS: readonly ViewFactoryTableRow[] = Obj
     { factoryId: 'plugins', container: false }, // packages/plugin-ext/src/main/browser/plugin-frontend-view-contribution.ts:24 PLUGINS_WIDGET_FACTORY_ID
     { factoryId: 'vsx-extensions-view-container', container: true }, // packages/vsx-registry/src/browser/vsx-extensions-view-container.ts:30 static ID
     { factoryId: 'welcome', container: false }, // theia/extensions/branding/src/browser/powerbrowser-frontend-module.ts:18 -- @powerbrowser/branding's own WidgetFactory id, Claude's Discretion per 02-CONTEXT.md (not a Theia-source citation)
+    { factoryId: 'powerbrowser-orca-view-container', container: true }, // theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-module.ts ORCA_LEFT_CONTAINER_ID -- the orca-panes extension's own WidgetFactory id, P65-09 (not a Theia-source citation)
+    { factoryId: 'powerbrowser-orca-right-view-container', container: true }, // theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-module.ts ORCA_RIGHT_CONTAINER_ID -- the orca-panes extension's own WidgetFactory id, P65-09 (not a Theia-source citation)
 ]);
 
 /**
