@@ -320,6 +320,43 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
     pairs again under a new id, because page memory does not survive a reload.
   - Proof: orca-failure-page-live's restart clause (gap-closure plan 67-07).
 
+## What else an agent page can start (2026-11-11)
+
+- **D-37 — Downloads and external protocols from an agent overlay are refused, and an agent overlay's initial document
+  takes no command but the goto that replaces it.** Coordinator ruling in auto mode, 2026-11-11, closing the
+  66-VERIFICATION re-verification gaps (Gap 1 downloads, Gap 2 first `about:blank`, Security finding 3 external
+  protocols) and three 67-VERIFICATION follow-ups. The owner may override it.
+  - Downloads. Cause (66-VERIFICATION Gap 1, proven live in 66-09's probe): an agent page's PDF attachment was saved to
+    the user's download folder and its viewer opened in a stock browser window through `DownloadUIHelper.loadFileIn`,
+    which no D-35 receiver sees. Rule: a download whose source is an agent overlay is refused, not saved and not
+    opened. Mechanism: `SANDBOXED_DOWNLOADS` joins `SANDBOXED_AUXILIARY_NAVIGATION` on the agent overlay's browsing
+    context (same write, same family as D-35's content wall). Gecko then classifies every download of the overlay and
+    its frames as forbidden and cancels it before a file, a download row or a viewer exists. No Gecko patch.
+  - External protocols. Cause (66-VERIFICATION Security finding 3, proven live): an agent page's link to a scheme an
+    application handles raised a standalone dialog window, and with a granted handler it would launch the application
+    with no dialog. Gecko's sandbox check exempts a top-level browsing context, so no sandbox flag covers it. Rule:
+    external-protocol handling for an agent overlay (its page or a frame in it) is refused: no dialog, no launch.
+    Mechanism: chrome points `@mozilla.org/content-dispatch-chooser;1` (the contract `LoadURI` creates for every
+    external load it allows) at a chooser that refuses an agent overlay's browsing context and hands every other load
+    to Gecko's own chooser unchanged. Installed with the first agent tab, through `PowerBrowserAPI.sys.mjs`.
+  - Agent commands. A refused download or protocol launch counts as a refused open (D-35's counter, logged once per tab
+    and path without the URL), so the agent command that triggered it answers `browser_command_unavailable`. Because
+    those refusals land after the page's child replies (a download is a network round trip away from the click), a
+    command served by the page child now waits one 100 ms beat, then while the overlay loads a document (up to 3 s),
+    before it answers.
+  - First document. Cause (66-VERIFICATION Gap 2, proven live): an agent overlay created for a slow first URL stays on
+    its initial `about:blank`, which Gecko makes with the browsing context's `InitialSandboxFlags` (chrome cannot set
+    them), so D-35's wall was absent there; a click then an eval of `window.open` with features opened a stock popup
+    window. Rule: while the overlay's current document is its initial document, every agent command but
+    `browser.goto` (which replaces that document) answers `browser_command_unavailable`.
+  - Phase 67 follow-ups (67-VERIFICATION). The landing-logo answer also requires OrcaService's state to be `ready`
+    (while Orca is failed with port-in-use, another program holds orcad's port). `orca-failure-page-live` waits for a
+    new Theia document (a changed `performance.timeOrigin`) after its reload before any probe (WINDOWS 47).
+    `shell-request-kinds` proves the Orca shell kinds are dispatched only after the sender wall.
+  - Owner items: agent workflows that need a download (a report an agent fetches) or a `mailto:` hand-off; the first
+    would need agent downloads kept in an agent-only folder with a privacy sentence, the second a per-scheme allow list.
+    Mechanism and checks: gap-closure plan 66-09.
+
 ## Spikes this direction needs
 
 1. Browser parity: what an Orca browser tab can do, and how PB chrome provides it
