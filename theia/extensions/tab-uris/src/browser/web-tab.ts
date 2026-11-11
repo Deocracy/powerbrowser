@@ -177,6 +177,11 @@ export interface WebTabOptions {
      * nothing here: chrome checks it is unused, under 5 s old and minted for this exact URL.
      */
     grant?: string;
+    /**
+     * Phase 66 (P66-06, P66-07): an Orca agent's page. Set only by @powerbrowser/orca-browser; the first webTabOpen
+     * carries it, and chrome records it only when it creates the overlay, so no request turns a user's tab into one.
+     */
+    agent?: boolean;
 }
 
 export interface WebTabState {
@@ -341,7 +346,7 @@ export function extensionActionRowsOf(detail: Record<string, unknown>): Extensio
  * section). One stable set for the bridge gate.
  */
 export type WebTabMessage =
-    | { kind: 'webTabOpen'; tabId: string; url: string; key: string; grant?: string }
+    | { kind: 'webTabOpen'; tabId: string; url: string; key: string; grant?: string; agent?: true }
     | { kind: 'webTabGeometry'; tabId: string; x: number; y: number; w: number; h: number; visible: boolean }
     | { kind: 'webTabNavigate'; tabId: string; url: string }
     | { kind: 'webTabBack'; tabId: string }
@@ -389,7 +394,12 @@ export type WebTabMessage =
     // Phase 35 plan 03 (PROMPT-04, D-09): the page menu pick, privileged. It names the tab, chrome's menu id and an
     // offered row id (null dismisses); never a URL. Sent only from chrome-bar's page-context-menu.ts. `path` (35-04)
     // answers a save row's `save-pick` reply with the file the user picked in Theia's save dialog.
-    | { kind: 'webTabContextMenuAction'; tabId: string; menuId: number; itemId: string | null; path?: string };
+    | { kind: 'webTabContextMenuAction'; tabId: string; menuId: number; itemId: string | null; path?: string }
+    // Phase 66 (P66-12): one Orca automation method on an agent tab, sent only by @powerbrowser/orca-browser's dispatcher;
+    // method is the Orca name itself (chrome's AGENT_METHODS), params the command's params as orcad sent them.
+    | { kind: 'webTabAgent'; tabId: string; method: string; params: Record<string, unknown> }
+    // Phase 66 (P66-21, P66-22): ends agent control of the tab for its lifetime; sent only by WebTabWidget.agentStop().
+    | { kind: 'webTabAgentStop'; tabId: string };
 
 /**
  * Window-frame messages the same channel carries for the custom title bar:
@@ -431,6 +441,10 @@ export interface WebTabReply {
     background?: boolean;
     /** `webTabEdit`: whether the page has the command enabled; with checkOnly, the page's live answer (33-05, PAGE-09). */
     enabled?: boolean;
+    /** `webTabAgent` (Phase 66): the method's result when `where` is `done`. */
+    result?: unknown;
+    /** `webTabAgent` (Phase 66): Orca's error code when `where` is `failed`. */
+    code?: string;
 }
 
 /** Phase 31 plan 02: one managed permission on this tab's principal, in table order. */
@@ -735,6 +749,10 @@ export class WebTabWidget extends BaseWidget {
     rowKey = '';
     /** Phase 35 plan 03: the open grant the first webTabOpen carries, then cleared (chrome spends it either way). */
     protected grant: string | undefined;
+    /** Phase 66 (P66-06): an Orca agent's tab (WebTabOptions.agent); fixed for the widget's life. */
+    agent = false;
+    /** Phase 66: the agent flag goes on the first webTabOpen only. */
+    protected agentOpenSent = false;
     url: string;
     pageTitle = '';
     loading = false;
@@ -842,6 +860,7 @@ export class WebTabWidget extends BaseWidget {
         this.tabId = options.id;
         this.rowKey = options.key ?? `web:${options.id}`;
         this.grant = options.grant;
+        this.agent = options.agent === true;
         this.url = options.url;
         this.title.closable = true;
         this.title.iconClass = 'codicon codicon-globe';
@@ -940,7 +959,9 @@ export class WebTabWidget extends BaseWidget {
         // refusal, a nack or silence (timeout included) marks the view lost.
         const grant = this.grant;
         this.grant = undefined;
-        void this.channel.request({ kind: 'webTabOpen', tabId: this.tabId, url: this.url, key: this.rowKey, ...(grant ? { grant } : {}) })
+        const agent = this.agent && !this.agentOpenSent;
+        this.agentOpenSent = true;
+        void this.channel.request({ kind: 'webTabOpen', tabId: this.tabId, url: this.url, key: this.rowKey, ...(grant ? { grant } : {}), ...(agent ? { agent: true as const } : {}) })
             .then(reply => this.setLostView(WebTabWidget.lostReply(reply)));
         this.publish();
         if (!this.listening) {
@@ -1730,8 +1751,18 @@ export class WebTabOpenHandler implements OpenHandler, FrontendApplicationContri
         return widget;
     }
 
-    protected createWidget(url: string, rowKey?: string, grant?: string): Promise<WebTabWidget> {
-        const options: WebTabOptions = { id: `wt-${WEB_TAB_SESSION}-${++nextTabSeq}`, url, ...(rowKey ? { key: rowKey } : {}), ...(grant ? { grant } : {}) };
+    /**
+     * Phase 66 (P66-07): an Orca agent's page, on the empty page (createPage carries no URL), directly after `ref` or
+     * at the end of the main area. Never activated, so the user's focus stays where it is.
+     */
+    async openAgentTab(ref?: Widget): Promise<WebTabWidget> {
+        const widget = await this.createWidget(EMPTY_PAGE_URL, undefined, undefined, true);
+        this.shell.addWidget(widget, ref ? { area: 'main', ref, mode: 'tab-after' } : { area: 'main' });
+        return widget;
+    }
+
+    protected createWidget(url: string, rowKey?: string, grant?: string, asAgent?: boolean): Promise<WebTabWidget> {
+        const options: WebTabOptions = { id: `wt-${WEB_TAB_SESSION}-${++nextTabSeq}`, url, ...(rowKey ? { key: rowKey } : {}), ...(grant ? { grant } : {}), ...(asAgent ? { agent: true } : {}) };
         return this.widgetManager.getOrCreateWidget<WebTabWidget>(WEB_TAB_FACTORY_ID, options);
     }
 }

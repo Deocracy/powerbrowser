@@ -4025,6 +4025,10 @@ run_own_checks() {
     # orca-relaunch-restore-live-self-test: the relaunch comparators (dock, modes, identity, echo, pairing UI, devices).
     "orca-offer-scan-self-test|node $REPO_ROOT/scripts/verify-orca-offer-scan.mjs --self-test"
     "orca-relaunch-restore-live-self-test|node $REPO_ROOT/scripts/verify-orca-relaunch-restore-live.mjs --self-test"
+    # NEW (66-02, BRW-02/BRW-03, P66-05/P66-12/P66-19): orca-browser-abilities transpiles @powerbrowser/orca-browser's
+    # pure dispatcher with theia/node_modules/typescript and runs the page-command trace (one tab per createPage, unserved
+    # methods never reach chrome, unbound ids refused, closePage drops the pair). Named SKIP without typescript.
+    "orca-browser-abilities|node $REPO_ROOT/scripts/verify-orca-browser-abilities.mjs"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
