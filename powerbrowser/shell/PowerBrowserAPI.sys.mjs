@@ -2293,6 +2293,7 @@ export const PowerBrowserAPI = Object.freeze({
       matches: [`${GROUP_ACTOR_THEIA_ORIGIN}/*`],
     });
     registerEditStateActor();
+    registerOrcaLogoActor();
     registerAgentActor();
   },
 
@@ -11841,4 +11842,54 @@ export const PowerBrowserOrcaHosting = Object.freeze({
     }
   },
 });
+
+// Phase 67 (INJ-01, P67-22..P67-26): the PowerBrowserOrcaLogo pair, registered from registerGroupActor (the one
+// registration method). It puts the PowerBrowser mark on Orca's landing tile in orcad-origin documents only. Under
+// Route A (the merged Phase 64 route table has no Route B' target, so no pane page is orcad-origin) those are:
+//   - orcad's address opened in a PowerBrowser web tab;
+//   - orcad's address opened in a stock window.
+// The Theia document never mounts Orca's Landing and is never answered. matches cannot carry a port (NG-038), so every
+// loopback top document loads the child; the parent's port gate (OrcaEnv.logoAnswerFor) is the wall. No
+// messageManagerGroups, so stock windows are covered; top frame only.
+const ORCA_LOGO_ACTOR_NAME = "PowerBrowserOrcaLogo";
+const ORCA_LOGO_QUERY = "PowerBrowserOrcaLogo:Query";
+const ORCA_LOGO_MARK_URL = "chrome://powerbrowser/content/mark.svg";
+let orcaLogoMarkDataUri = null;
+
+function registerOrcaLogoActor() {
+  ChromeUtils.registerWindowActor(ORCA_LOGO_ACTOR_NAME, {
+    parent: { esModuleURI: GROUP_ACTOR_PARENT_MODULE },
+    child: { esModuleURI: GROUP_ACTOR_CHILD_MODULE, events: { DOMContentLoaded: {} } },
+    matches: [`${GROUP_ACTOR_THEIA_ORIGIN}/*`],
+  });
+}
+
+export class PowerBrowserOrcaLogoParent extends GroupActorBase {
+  async receiveMessage(message) {
+    if (message?.name !== ORCA_LOGO_QUERY) {
+      return null;
+    }
+    try {
+      const OrcaEnv = ChromeUtils.importESModule(ORCA_ENV_MODULE);
+      const { OrcaService } = ChromeUtils.importESModule(ORCA_SERVICE_MODULE);
+      const state = OrcaService.getState();
+      const senderPort = this.browsingContext?.currentWindowGlobal?.documentURI?.port ?? -1;
+      const embedder = this.browsingContext?.top?.embedderElement;
+      // The same test groupSenderIsTheia applies: the shell window's own content browser embeds the Theia document.
+      const embeddedByShell =
+        embedder?.id === SHELL_CONTENT_BROWSER_ID && embedder?.ownerDocument?.documentURI === SHELL_DOCUMENT_URL;
+      if (OrcaEnv.logoAnswerFor({ senderPort, orcaPort: state.port, embeddedByShell, orcaVersion: state.orcaVersion, markDataUri: "data:image/svg+xml," }) === null) {
+        return null;
+      }
+      if (orcaLogoMarkDataUri === null) {
+        const text = await (await fetch(ORCA_LOGO_MARK_URL)).text();
+        orcaLogoMarkDataUri = `data:image/svg+xml,${encodeURIComponent(text)}`;
+      }
+      return OrcaEnv.logoAnswerFor({ senderPort, orcaPort: state.port, embeddedByShell, orcaVersion: state.orcaVersion, markDataUri: orcaLogoMarkDataUri });
+    } catch (err) {
+      console.warn(`PowerBrowserOrcaLogo: no answer (${err && err.name ? err.name : "error"})`);
+      return null;
+    }
+  }
+}
 // ---- end Orca hosting ----

@@ -4111,6 +4111,14 @@ run_own_checks() {
     # each red naming its sink; each collector's control is found first and a blind one is red. The five holders (registry
     # set derived from the pin) stay green. One scanner: scripts/lib/orca-offer-scan.mjs (P65-23), mozlz4 in scripts/lib.
     "orca-pairing-containment-self-test|node $REPO_ROOT/scripts/verify-orca-pairing-containment.mjs --self-test"
+    # NEW (67-05, INJ-01, P67-22..P67-26): orca-landing-selectors derives the pinned Orca version, its entry in
+    # OrcaEnv.ORCA_LANDING_SELECTORS and the built Landing chunk, and requires every class token in a className string,
+    # the tile's className pair unique across out/web/assets/*.js with an img inside it, and logoAnswerFor answering
+    # only orcad's own port (not the sidecar's, not the shell-embedded sender, not an unknown version). SKIP of the
+    # bundle clauses without an Orca build. orca-landing-logo-live-self-test is the live row's pure verdicts.
+    "orca-landing-selectors|node $REPO_ROOT/scripts/verify-orca-landing-selectors.mjs"
+    "orca-landing-selectors-self-test|node $REPO_ROOT/scripts/verify-orca-landing-selectors.mjs --self-test"
+    "orca-landing-logo-live-self-test|node $REPO_ROOT/scripts/verify-orca-landing-logo-live.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6837,6 +6845,11 @@ run_own_checks() {
       # Coordinator-run under flock /home/chris/coding/Power-Browser/.git/pb-live.lock, ORCA_* unset; profiles under
       # .mozbuild/pb-live-profiles/ (makeProfile and firefox-bidi defaults; dispose removes the alias and bridge folder).
       "orca-pairing-containment-live|node $REPO_ROOT/scripts/verify-orca-pairing-containment.mjs"
+      # NEW (67-05, INJ-01, P67-22..P67-27): orca-landing-logo-live. Proxy control first (Orca's own logo on a second
+      # port), pairing through the connect form's field only, the PB mark and alt on orcad's origin in a web tab and a
+      # stock window, none in the Theia document after the same query found it in the orcad page, the mark again after
+      # Landing remounts, and gh's call count recorded through a stub. Under flock .git/pb-live.lock with ORCA_* unset.
+      "orca-landing-logo-live|node $REPO_ROOT/scripts/verify-orca-landing-logo-live.mjs"
     )
   fi
 

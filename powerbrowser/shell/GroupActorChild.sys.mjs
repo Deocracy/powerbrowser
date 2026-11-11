@@ -1138,3 +1138,46 @@ function agentSnapshot(actor, params) {
   }
   return result;
 }
+
+// Phase 67 (INJ-01, P67-23 as amended by A-9): the PowerBrowserOrcaLogo child. It loads in every loopback top
+// document (matches cannot carry a port), asks the parent once on DOMContentLoaded, and does nothing more on a null
+// answer, which is what every document but an orcad-origin one gets. With an answer it sets src and alt, and only those
+// two attributes, on each element the version's selectors match, for the document's life: Orca's Landing is a lazy
+// chunk and remounts after the last workspace closes. No import and no privileged global.
+export class PowerBrowserOrcaLogoChild extends JSWindowActorChild {
+  async handleEvent(event) {
+    if (!event || event.type !== "DOMContentLoaded" || this.observer) {
+      return;
+    }
+    let answer = null;
+    try {
+      answer = await this.sendQuery("PowerBrowserOrcaLogo:Query", {});
+    } catch {
+      return;
+    }
+    if (!answer || typeof answer.src !== "string" || typeof answer.alt !== "string" || !Array.isArray(answer.selectors)) {
+      return;
+    }
+    const doc = this.document;
+    const handled = new WeakSet();
+    const apply = () => {
+      for (const selector of answer.selectors) {
+        for (const element of doc.querySelectorAll(selector)) {
+          if (!handled.has(element)) {
+            handled.add(element);
+            element.setAttribute("src", answer.src);
+            element.setAttribute("alt", answer.alt);
+          }
+        }
+      }
+    };
+    this.observer = new this.contentWindow.MutationObserver(apply);
+    this.observer.observe(doc, { childList: true, subtree: true });
+    apply();
+  }
+
+  didDestroy() {
+    this.observer?.disconnect();
+    this.observer = null;
+  }
+}
