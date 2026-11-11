@@ -82,22 +82,22 @@ export function remountVerdict({ unmounted, after }, markText) {
 function selfTest() {
     const mark = '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h1"/></svg>';
     const ours = `data:image/svg+xml,${encodeURIComponent(mark)}`;
-    const orcas = 'data:image/svg+xml,%3Csvg%3EOrca%3C%2Fsvg%3E';
+    const foreign = `data:image/svg+xml,${encodeURIComponent('<svg>Orca</svg>')}`;
     const good = { count: 1, src: ours, alt: ORCA_LOGO_ALT };
     const cases = [
         ['control: orcad page with the PB mark', null, () => markVerdict(good, mark, 'orcad web tab')],
         ['control: base64 form of the mark', null, () => markVerdict({ ...good, src: `data:image/svg+xml;base64,${Buffer.from(mark).toString('base64')}` }, mark, 'x')],
-        ['control: proxy page with Orca\'s logo', null, () => controlVerdict({ count: 1, src: orcas }, mark)],
+        ['control: proxy page with Orca\'s logo', null, () => controlVerdict({ count: 1, src: foreign }, mark)],
         ['control: Theia untouched after a positive read', null, () => theiaVerdict({ theia: 0, orcad: 1 })],
         ['control: remount carrying the mark', null, () => remountVerdict({ unmounted: true, after: good }, mark)],
-        ['a foreign src', 'foreign src', () => markVerdict({ ...good, src: orcas }, mark, 'orcad web tab')],
+        ['a foreign src', 'foreign src', () => markVerdict({ ...good, src: foreign }, mark, 'orcad web tab')],
         ['a wrong alt', 'wrong alt', () => markVerdict({ ...good, alt: 'Orca logo' }, mark, 'orcad web tab')],
         ['no match on orcad\'s page', 'not applied', () => markVerdict({ count: 0 }, mark, 'orcad web tab')],
         ['zero matches on the proxy', 'selector blind', () => controlVerdict({ count: 0 }, mark)],
         ['the mark on the proxy port', 'not orcad\'s', () => controlVerdict({ count: 1, src: ours }, mark)],
         ['an injected attribute in the Theia DOM', 'injected attribute', () => theiaVerdict({ theia: 1, orcad: 1 })],
         ['a blind Theia query', 'proves nothing', () => theiaVerdict({ theia: 0, orcad: 0 })],
-        ['a remount showing Orca\'s logo', 'foreign src', () => remountVerdict({ unmounted: true, after: { count: 1, src: orcas, alt: 'Orca logo' } }, mark)],
+        ['a remount showing Orca\'s logo', 'foreign src', () => remountVerdict({ unmounted: true, after: { count: 1, src: foreign, alt: 'Orca logo' } }, mark)],
         ['Landing never unmounted', 'did not unmount', () => remountVerdict({ unmounted: false, after: good }, mark)],
     ];
     let bad = 0;

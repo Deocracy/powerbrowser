@@ -1146,7 +1146,7 @@ function agentSnapshot(actor, params) {
 // chunk and remounts after the last workspace closes. No import and no privileged global.
 export class PowerBrowserOrcaLogoChild extends JSWindowActorChild {
   async handleEvent(event) {
-    if (!event || event.type !== "DOMContentLoaded" || this.observer) {
+    if (!event || this.observer) { // DOMContentLoaded is the only event this pair registers
       return;
     }
     let answer = null;
