@@ -4261,6 +4261,13 @@ export const PowerBrowserAPI = Object.freeze({
       PowerBrowserAPI.log("error", "[web-tab] tab host drop failed; the overlay is closed anyway");
     }
     webTabCloseToolbox(browser);
+    // 66-06: a window-modal page prompt (an HTTP auth dialog, an alert) outlives its removed overlay and keeps the
+    // keyboard, so it is cancelled as its tab closes.
+    try {
+      agentDialogWindow(entry)?.document.getElementById("commonDialog")?.cancelDialog();
+    } catch {
+      // best-effort, as the listener removals above
+    }
     agentControlClosed(tabId, entry);
     browser.remove();
     webTabs.delete(tabId);
