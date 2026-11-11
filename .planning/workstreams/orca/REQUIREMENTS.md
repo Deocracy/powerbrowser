@@ -113,10 +113,10 @@ TERM-03 (remote terminals) moved to v2; see "Terminals (TERM)" under v2 Requirem
   stock screencast pane and its dead entry points are never shown. (T-9, D-1)
 - [ ] **BRW-03**: Orca agents drive PowerBrowser web tabs through a chrome-side bridge that can
   reach only Orca-created tabs; no WebDriver BiDi TCP port in shipped PowerBrowser. (D-11)
-- [ ] **BRW-04**: While an agent drives a tab, PowerBrowser's Theia chrome bar shows an
+- [x] **BRW-04**: While an agent drives a tab, PowerBrowser's Theia chrome bar shows an
   "agent is controlling this tab" mark with a Stop button; stock browser windows are unchanged.
   (D-19, D-2)
-- [ ] **BRW-05**: The user-facing tools Orca's browser offers, as the spike inventories them,
+- [x] **BRW-05**: The user-facing tools Orca's browser offers, as the spike inventories them,
   are added to PowerBrowser's chrome bar or Theia side panels.
 
 ### Claude Code extension (EXT)
@@ -241,8 +241,8 @@ Filled by the roadmap.
 | BRW-01 | Phase 61 | Complete |
 | BRW-02 | Phase 66 | Pending |
 | BRW-03 | Phase 66 | Pending |
-| BRW-04 | Phase 66 | Pending |
-| BRW-05 | Phase 66 | Pending |
+| BRW-04 | Phase 66 | Complete |
+| BRW-05 | Phase 66 | Complete |
 | EXT-01 | Phase 60 | Pending |
 | EXT-02 | Phase 63 | Pending: PowerBrowser half proven (63-03, 63-06); extension half with EXT-01 in the end-of-milestone pass |
 | EXT-03 | Phase 61 | Complete |

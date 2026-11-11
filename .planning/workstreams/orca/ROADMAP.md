@@ -241,20 +241,20 @@ Route chosen by Phase 61: S2, a PB runtime client that attaches through browser.
   3. While an agent drives a tab, PB's Theia chrome bar shows an "agent is controlling this tab" mark with a Stop button, and Stop ends that control. A stock browser window shows no mark.
   4. Each user-facing tool in the Phase 61 browser inventory is reachable from PB's chrome bar or a Theia side panel. A check compares the inventory's user-facing rows to PB's contributions as a set.
 
-**Plans**: 6 plans (executes only after Phase 64 is merged)
+**Plans**: 6/6 plans executed (executes only after Phase 64 is merged)
 
 Plans:
 **Wave 1**
-- [ ] 66-01-PLAN.md — lane p66-01: thin browser host built by Orca's Vite from overlay files, pane-bundle link for one device and client placement (A3), orca-browser-host-bundle (BRW-02, BRW-03)
-- [ ] 66-02-PLAN.md — lane p66-02: @powerbrowser/orca-browser (client host, page table, dispatcher, 92-row ability table), orca-panes browser row, web-tab.ts agent option, push and parking box, orca-browser-abilities / orca-browser-entry-points (BRW-02, BRW-03)
-- [ ] 66-03-PLAN.md — lane p66-03: chrome-side agent bridge (flag, wall, 40 methods native or PowerBrowserAgent child, parking, container, dialogs, mark state and Stop), A2 allowance, orca-browser-tab-scope, no-remote-agent-port-live, privacy paragraph (BRW-03, BRW-04)
+- [x] 66-01-PLAN.md — lane p66-01: thin browser host built by Orca's Vite from overlay files, pane-bundle link for one device and client placement (A3), orca-browser-host-bundle (BRW-02, BRW-03)
+- [x] 66-02-PLAN.md — lane p66-02: @powerbrowser/orca-browser (client host, page table, dispatcher, 92-row ability table), orca-panes browser row, web-tab.ts agent option, push and parking box, orca-browser-abilities / orca-browser-entry-points (BRW-02, BRW-03)
+- [x] 66-03-PLAN.md — lane p66-03: chrome-side agent bridge (flag, wall, 40 methods native or PowerBrowserAgent child, parking, container, dialogs, mark state and Stop), A2 allowance, orca-browser-tab-scope, no-remote-agent-port-live, privacy paragraph (BRW-03, BRW-04)
 
 **Wave 2** *(each lane builds on its wave-1 parent lane's branch)*
-- [ ] 66-04-PLAN.md — lane p66-04 on p66-03: snapshot in the agent child, refs and delta, agent-browser 0.39.4 fixtures, orca-browser-snapshot-live / orca-snapshot-fixtures (BRW-03)
-- [ ] 66-05-PLAN.md — lane p66-05 on p66-02: chrome-bar mark and Stop, copy rows, tools map with orca-browser-tools, live rows orca-browser-agent-live and orca-agent-mark-live (BRW-02..BRW-05)
+- [x] 66-04-PLAN.md — lane p66-04 on p66-03: snapshot in the agent child, refs and delta, agent-browser 0.39.4 fixtures, orca-browser-snapshot-live / orca-snapshot-fixtures (BRW-03)
+- [x] 66-05-PLAN.md — lane p66-05 on p66-02: chrome-bar mark and Stop, copy rows, tools map with orca-browser-tools, live rows orca-browser-agent-live and orca-agent-mark-live (BRW-02..BRW-05)
 
 **Wave 3** *(blocked on Waves 1-2)*
-- [ ] 66-06-PLAN.md — coordinator: merge 01..05 in order, rebuild Orca, Theia and PowerBrowser, cross-lane clauses compared, live proofs of criteria 1-4, brand rows, tracking and owner items
+- [x] 66-06-PLAN.md — coordinator: merge 01..05 in order, rebuild Orca, Theia and PowerBrowser, cross-lane clauses compared, live proofs of criteria 1-4, brand rows, tracking and owner items
 
 **UI hint**: yes
 
@@ -332,6 +332,6 @@ Phases execute in numeric order: 59 → 60 → 61 → 62 → 63 → 64 → 65 �
 | 63. Agent hooks on Orca's terminal engine | 3/3 | Complete (human items deferred) | 2026-11-10 |
 | 64. Orca panes as PowerBrowser tabs | 6/6 | In Progress (64-06 gap closure executed; TAB-04 pending on stage g3, g2 PASS on the 65-05 tree) | - |
 | 65. Orca workspace in Theia | 5/5 | Complete (human items deferred; verified 8/8) | 2026-11-10 |
-| 66. PowerBrowser web tabs as Orca's browser | 0/6 | Planned | - |
+| 66. PowerBrowser web tabs as Orca's browser | 6/6 | In Progress | - |
 | 67. Hosting hardening | 0/TBD | Not started | - |
 | 68. Three-OS artifacts, weekly re-pin and upstream seams | 7/10 (68-06 in progress) | In Progress | - |
