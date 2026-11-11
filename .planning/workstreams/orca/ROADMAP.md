@@ -215,7 +215,18 @@ Editor, diff and browser-page panes reach the dock through this phase's mapping.
   3. Orca's Add-project flow adds a project and the sidebar remove removes it, as in stock Orca. A check over PB's contributed commands and toolbar items finds no PB Add-project control.
   4. After quitting and relaunching, restoring a Setup reopens its Orca tabs in their modes and splits, connected to the new orcad pairing with no user step. The stored Setup is scanned for the live offer and holds none; the scan's self-test plants the offer and goes red.
 
-**Plans**: TBD
+**Plans**: 5/5 plans executed (4 lanes and a coordinator; lanes launched after the Phase 64 merge)
+
+Plans:
+**Wave 1**
+- [x] 65-01-PLAN.md — lane p65-01: the Orca side (13 mount kinds and the P65-04 gate, the read-only store API, session-only pairing, the resume offer and Add-project dialogs in the services root, entry clauses and CSS probes) (TAB-05, TAB-07, TAB-08)
+- [x] 65-02-PLAN.md — lane p65-02: @powerbrowser/orca-workspace (Orca files, diffs and conflicts in Theia's editors through pb-orca-git:, worktrees as workspace folders, the fixed workspace file), orca-editor-routes, orca-workspace-live (TAB-05)
+- [x] 65-03-PLAN.md — lane p65-03: Orca's sidebar, Settings, Agents and right sidebar in two view containers of the Orca mode, page tabs, orca-no-pb-add-project, orca-side-panel-live, orca-add-project-live (TAB-07, TAB-09)
+- [x] 65-04-PLAN.md — lane p65-04: pb-orca name map, restore opener and reload hold, the route table, the offer scanner, orca-relaunch-restore-live, orca-tabs-live stages g, g2, g3, k (TAB-08, TAB-05, TAB-04)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [x] 65-05-PLAN.md — coordinator: merge p65-01..p65-04, rebuild, CSS isolation first, live proofs, measured egress rows, brand rows, tracking
+
 **UI hint**: yes
 
 ### Phase 66: PowerBrowser web tabs as Orca's browser
@@ -319,8 +330,8 @@ Phases execute in numeric order: 59 → 60 → 61 → 62 → 63 → 64 → 65 �
 | 61. Spikes for pane hosting, browser parity and live sharing | 4/4 | Complete (human items deferred) | 2026-11-10 |
 | 62. Overlay gate and PowerBrowser-run orcad | 3/3 | Complete | 2026-11-09 |
 | 63. Agent hooks on Orca's terminal engine | 3/3 | Complete (human items deferred) | 2026-11-10 |
-| 64. Orca panes as PowerBrowser tabs | 6/6 | In Progress (64-06 gap closure executed; TAB-04 pending on stage g2) | - |
-| 65. Orca workspace in Theia | 0/TBD | Not started | - |
+| 64. Orca panes as PowerBrowser tabs | 6/6 | In Progress (64-06 gap closure executed; TAB-04 pending on stage g3, g2 PASS on the 65-05 tree) | - |
+| 65. Orca workspace in Theia | 5/5 | In Progress | - |
 | 66. PowerBrowser web tabs as Orca's browser | 0/6 | Planned | - |
 | 67. Hosting hardening | 0/TBD | Not started | - |
 | 68. Three-OS artifacts, weekly re-pin and upstream seams | 7/10 (68-06 in progress) | In Progress | - |

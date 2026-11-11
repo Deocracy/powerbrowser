@@ -95,14 +95,14 @@ TERM-03 (remote terminals) moved to v2; see "Terminals (TERM)" under v2 Requirem
   client next adopts orcad's layout (start or frontend reload). Later regrouping of panes
   PowerBrowser already shows is not mirrored (D-15, P64-12). (D-01, D-15, T-5; re-worded per
   64-TAB-GROUPS.md, 65-CONTEXT P65-37)
-- [ ] **TAB-05**: Files and diffs open in Theia's editor, with Orca worktrees opened as Theia
+- [x] **TAB-05**: Files and diffs open in Theia's editor, with Orca worktrees opened as Theia
   workspace folders; Orca's own editor is not used. (D-01)
 - [x] **TAB-06**: Chat and the other Orca-only views each open as their own PowerBrowser tab.
   (D-01)
-- [ ] **TAB-07**: Orca's worktree sidebar, settings and orchestration panel live in a
+- [x] **TAB-07**: Orca's worktree sidebar, settings and orchestration panel live in a
   PowerBrowser side panel; modifications are additive only. (D-02, D-16)
-- [ ] **TAB-08**: Setups restore re-pairs Orca tabs and never persists the pairing offer. (T-5)
-- [ ] **TAB-09**: Orca's own Add-project flow and sidebar remove behave as in Orca; PowerBrowser
+- [x] **TAB-08**: Setups restore re-pairs Orca tabs and never persists the pairing offer. (T-5)
+- [x] **TAB-09**: Orca's own Add-project flow and sidebar remove behave as in Orca; PowerBrowser
   adds no separate Add-project button. (D-18, T-7)
 
 ### Browser replacement (BRW)
@@ -232,12 +232,12 @@ Filled by the roadmap.
 | TAB-01 | Phase 64 | Complete |
 | TAB-02 | Phase 64 | Complete |
 | TAB-03 | Phase 61 | Complete |
-| TAB-04 | Phase 64 | Pending: orca-tabs-live stage (g2) tab-groups did not PASS on the 64-06 tree. Cause (64-TAB-GROUPS.md, 1121d847; the 64-06 note was wrong): the second client's Split Chat Right did make a second group, but a client-local one that is never sent to orcad, so PowerBrowser's store could not hold it; a group another client makes reaches PowerBrowser's store only when its hosted client next adopts orcad's layout, and a tab drag in the second client would also stay red. Requirement re-worded per the finding (P65-37); lane p65-04 re-drives g2 with the hosted chat's own Split Chat Right in PowerBrowser's document, adds the cross-client guard g3 and placement fixtures, and fixes the reload renumbering the finding found (P65-33..P65-36); stages (a)-(e2), (h)-(k) and gui07-mode-switch-tabs-live PASS; re-run on the merged Phase 65 tree (65-05) |
-| TAB-05 | Phase 65 | Pending |
+| TAB-04 | Phase 64 | Pending: on the merged Phase 65 tree (65-05) orca-tabs-live stage (g2) tab-groups PASS (the hosted chat's own Split Chat Right places the new chat's widget in a tab bar to the right of its reference), and stages (a)-(e2), (g), (h)-(k) and gui07-mode-switch-tabs-live PASS; sub-stage (g3) tab-groups-cross-client is red: Orca's pinned web client, opened as the second client at stage (f), never shows the CLI terminal T created later (likely the pinned host's navigation-echo freeze, 64-MIRROR-FREEZE.md, which only PowerBrowser's own client works around). Requirement re-worded per 64-TAB-GROUPS.md (P65-37). Next: a g3 drive with a second client that receives host frames; end-of-milestone pass (65-05-SUMMARY.md "Still red") |
+| TAB-05 | Phase 65 | Complete |
 | TAB-06 | Phase 64 | Complete |
-| TAB-07 | Phase 65 | Pending |
-| TAB-08 | Phase 65 | Pending |
-| TAB-09 | Phase 65 | Pending |
+| TAB-07 | Phase 65 | Complete |
+| TAB-08 | Phase 65 | Complete |
+| TAB-09 | Phase 65 | Complete |
 | BRW-01 | Phase 61 | Complete |
 | BRW-02 | Phase 66 | Pending |
 | BRW-03 | Phase 66 | Pending |
