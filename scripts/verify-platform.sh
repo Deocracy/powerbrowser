@@ -6867,6 +6867,10 @@ run_own_checks() {
       # still filtering after a relaunch with zero stock windows; disabled lets it through; removed stays removed after a
       # relaunch. Run under flock /home/chris/coding/Power-Browser/.git/pb-live.lock. --live --dev runs on the dev objdir.
       "bundled-xpi-live|node $REPO_ROOT/scripts/verify-bundled-xpi.mjs --live"
+      # NEW (68-05, OVL-06, P68-19/P68-37): orca-upstream-prs is red until the owner records an upstream PR URL for each D-27
+      # class (browser-provider, web-entry) in its seams.json rows' upstream.pr. The coordinator keys its
+      # GATE_KNOWN_OPEN_EXCLUSIONS row to the upstream-PRs WINDOWS.md entry. Reads seams.json only; no network.
+      "orca-upstream-prs|node $REPO_ROOT/scripts/verify-orca-overlay.mjs --upstream-prs"
     )
   fi
 
