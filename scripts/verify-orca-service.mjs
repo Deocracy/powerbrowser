@@ -75,7 +75,9 @@
 //     newline) and orca-panes-dir (the folder and a newline) are written through
 //     writePrivateFile into the bridge folder after the ready line and after
 //     orcad-data-root; the canary reaches no log line, console line, getState(),
-//     diagnostics row or parseReadyLine result; stop removes both. Scenario J-b:
+//     diagnostics row or parseReadyLine result; stop removes both, and (64-06)
+//     every removal of orcad-data-root, web-pairing and orca-panes-dir during stop
+//     precedes the killProcess call for orcad. Scenario J-b:
 //     the bundle folder absent, no orca-panes-dir write and the "Orca tabs bundle"
 //     row reads "not built". Cross-lane clauses: OrcaEnv's two file names equal
 //     WEB_PAIRING_FILE and PANES_DIR_FILE in theia/extensions/orca-panes'
@@ -574,9 +576,15 @@ async function scenarioJ(paths, env) {
     for (const [what, texts] of Object.entries(surfaces)) {
         if (texts.some((t) => t.includes(token))) fails.push(`scenario J: ${what} -- the pairing canary reached it`);
     }
+    const stopFrom = b.calls.length;
     await svc.stop();
-    for (const name of [env.ORCA_WEB_PAIRING_FILE, env.ORCA_PANES_DIR_FILE]) {
-        if (indexOfCall(b.calls, 'removeStateFile', (a) => a[0] === env.bridgeFileFor(bridgeDir, name, 'linux')) < 0) fails.push(`scenario J: not removed -- ${name} was left in the bridge folder after stop()`);
+    const stopCalls = b.calls.slice(stopFrom);
+    const killAt = indexOfCall(stopCalls, 'killProcess');
+    for (const name of [env.ORCAD_DATA_ROOT_FILE, env.ORCA_WEB_PAIRING_FILE, env.ORCA_PANES_DIR_FILE]) {
+        const at = indexOfCall(stopCalls, 'removeStateFile', (a) => a[0] === env.bridgeFileFor(bridgeDir, name, 'linux'));
+        if (at < 0) fails.push(`scenario J: not removed -- ${name} was left in the bridge folder after stop()`);
+        else if (killAt < 0) fails.push('scenario J: stop() did not end orcad through its process handle, so the removal order cannot be judged');
+        else if (at > killAt) fails.push(`scenario J: bridge files removed after orcad is signalled -- ${name} at stop call ${at}, orcad's kill at ${killAt}; a quit can end the process during the kill waits and leave it behind`);
     }
     return fails;
 }
@@ -855,7 +863,8 @@ async function runSelfTest() {
             { name: 'NODE_OPTIONS in the allowlist', naming: 'steering variable', file: paths.orcaEnv, edit: swap('  "PATH",\n  "HOME",', '  "PATH",\n  "NODE_OPTIONS",\n  "HOME",') },
             { name: 'switch removed from the fixed names', naming: 'ORCA_DISABLE_INSTALLED_ELECTRON_BROWSER', file: paths.orcaEnv, edit: swap('  ORCAD_HIDDEN_ELECTRON_SWITCH,\n  ORCAD_CLAUDE_AGENT_SDK_DIR_ENV,\n]);', '  ORCAD_CLAUDE_AGENT_SDK_DIR_ENV,\n]);') },
             { name: 'orcad-data-root written before ready', naming: 'before ready', file: paths.orcaService, edit: swap('    let proc;\n', '    await PowerBrowserProcesses.writePrivateFile(this._bridgeDir, OrcaEnv.ORCAD_DATA_ROOT_FILE, `${this._effectiveRoot}\\n`);\n    let proc;\n') },
-            { name: 'orcad-data-root not removed on stop', naming: 'not removed', file: paths.orcaService, edit: swap('        await PowerBrowserAPI.removeStateFile(OrcaEnv.bridgeFileFor(this._bridgeDir, OrcaEnv.ORCAD_DATA_ROOT_FILE, this._bridgePlatform));\n', '') },
+            { name: 'orcad-data-root not removed on stop', naming: 'not removed', file: paths.orcaService, edit: swap('[OrcaEnv.ORCAD_DATA_ROOT_FILE, OrcaEnv.ORCA_WEB_PAIRING_FILE', '[OrcaEnv.ORCA_WEB_PAIRING_FILE') },
+            { name: 'bridge files removed after orcad is signalled', naming: 'orcad-data-root at stop call', file: paths.orcaService, edit: then(swap('[OrcaEnv.ORCAD_DATA_ROOT_FILE, OrcaEnv.ORCA_WEB_PAIRING_FILE', '[OrcaEnv.ORCA_WEB_PAIRING_FILE'), swap('    this._state = "stopped";\n    this._pid = null;', '    if (this._bridgeDir) {\n      try {\n        await PowerBrowserAPI.removeStateFile(OrcaEnv.bridgeFileFor(this._bridgeDir, OrcaEnv.ORCAD_DATA_ROOT_FILE, this._bridgePlatform));\n      } catch {\n        // Best-effort.\n      }\n    }\n    this._state = "stopped";\n    this._pid = null;')) },
             { name: 'a null bridge folder fails the start', naming: 'null folder fatal', file: paths.orcaService, edit: swap('    if (!this._bridgeDir) {\n', '    if (!this._bridgeDir) {\n      return this._fail("choosing the Orca bridge folder", []);\n') },
             { name: 'a PTY switch back in the fixed names', naming: 'pty switch', file: paths.orcaEnv, edit: swap('  ORCAD_CLAUDE_AGENT_SDK_DIR_ENV,\n]);', '  ORCAD_CLAUDE_AGENT_SDK_DIR_ENV,\n  "ORCA_EXTERNAL_PTY_ENDPOINT",\n]);') },
             { name: 'a ptyEndpoint option back in buildOrcadEnv', naming: 'pty switch', file: paths.orcaEnv, edit: swap('export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion, claudeAgentSdkDir } = {}) {', 'export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion, claudeAgentSdkDir, ptyEndpoint } = {}) {') },
@@ -866,7 +875,7 @@ async function runSelfTest() {
             { name: 'offer written before ready', naming: 'offer before ready', file: paths.orcaService, edit: swap('    let proc;\n', '    await PowerBrowserProcesses.writePrivateFile(this._bridgeDir, OrcaEnv.ORCA_WEB_PAIRING_FILE, "stale\\n");\n    let proc;\n') },
             { name: 'offer placed in getState', naming: 'offer in state', file: paths.orcaService, edit: then(swap('        offer = value;\n', '        offer = value;\n        this._lastOffer = value;\n'), swap('      bridgeDir: this._bridgeDir,\n', '      bridgeDir: this._bridgeDir,\n      lastOffer: this._lastOffer,\n')) },
             { name: 'orca-panes-dir written with the bundle folder absent', naming: 'bundle folder absent', file: paths.orcaService, edit: swap('    if (!(await PowerBrowserAPI.pathExists(panesDir))) {', '    if (false) {') },
-            { name: 'hand-off files not removed on stop', naming: 'not removed', file: paths.orcaService, edit: swap('[OrcaEnv.ORCA_WEB_PAIRING_FILE, OrcaEnv.ORCA_PANES_DIR_FILE] : []', '[] : []') },
+            { name: 'hand-off files not removed on stop', naming: 'not removed', file: paths.orcaService, edit: swap('[OrcaEnv.ORCAD_DATA_ROOT_FILE, OrcaEnv.ORCA_WEB_PAIRING_FILE, OrcaEnv.ORCA_PANES_DIR_FILE] : []', '[] : []') },
             { name: 'orca-panes protocol spells another pairing file', naming: 'chrome writes a file the Theia backend never reads', file: paths.orcaPanesProtocol, edit: swap("WEB_PAIRING_FILE = 'web-pairing'", "WEB_PAIRING_FILE = 'pairing-offer'") },
             { name: 'pane build writes another folder', naming: 'OrcaService looks in', file: paths.panesViteConfig, edit: swap("'out/web/assets/pb-panes'", "'out/web/pb-panes'") },
             { name: 'lock code absent from the fixture source', naming: 'pinned source', file: fixtureCodes, edit: swap('orcad_instance_lock_held', 'orcad_lock_renamed') },
