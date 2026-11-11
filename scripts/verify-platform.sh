@@ -4094,6 +4094,17 @@ run_own_checks() {
     "orca-credential-store|node $REPO_ROOT/scripts/verify-orca-credential-store.mjs"
     "orca-credential-store-self-test|node $REPO_ROOT/scripts/verify-orca-credential-store.mjs --self-test"
     "orca-credential-store-live-self-test|node $REPO_ROOT/scripts/verify-orca-credential-store-live.mjs --self-test"
+    # NEW (67-03, RUN-06/RUN-07, P67-01..P67-09, P67-32): orca-offer-file judges real lstat results of a temp folder
+    # through orca-panes' offer-file-policy.ts (type-stripped): symlink, non-regular, other owner, group/other bits,
+    # missing, non-loopback or mismatched endpoint, undecodable text; OFFER_REFUSAL_REASONS against the copy table's
+    # (and, once merged, OrcaEnv's) offer-* client reasons; decodeOffer against Orca's pinned parser (SKIP without
+    # orca/); and handOff's order (lstat and the verdict before the read, both offer verdicts before the return, no
+    # value in a returned error or log line). The self-test plants six faults and requires each red by rule.
+    "orca-offer-file|node $REPO_ROOT/scripts/verify-orca-offer-file.mjs"
+    "orca-offer-file-self-test|node $REPO_ROOT/scripts/verify-orca-offer-file.mjs --self-test"
+    # orca-failure-page-live-self-test: the live row's pure verdicts (a text not in the table, another class's text, a
+    # missing or extra button, no page, a blind control, a page up before the induction, no recovery in the bound).
+    "orca-failure-page-live-self-test|node $REPO_ROOT/scripts/verify-orca-failure-page-live.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6807,6 +6818,12 @@ run_own_checks() {
       # absence for a temporary profile and the plaintext override. flock /home/chris/coding/Power-Browser/.git/pb-live.lock,
       # ORCA_* unset; HOME is the developer's own, so orcad writes the user's ~/.orca key folder (owner item).
       "orca-credential-store-live|node $REPO_ROOT/scripts/verify-orca-credential-store-live.mjs"
+      # NEW (67-03, RUN-06, P67-01, P67-29, A-7): orca-failure-page-live induces restarting (kill -9 of orcad),
+      # port-in-use (a listener on the Orca port, relaunch), pairing-lost twice (orca-devices.json without the hosted
+      # client's keyed rows, the offer row kept so Reconnect recovers, then a SIGSTOP past the client's liveness; and
+      # the offer file at 0644) and browser-not-attached (the host bundle moved aside), with a positive control of each
+      # hosted pane's own content before every induction. Under flock .git/pb-live.lock with ORCA_* unset.
+      "orca-failure-page-live|node $REPO_ROOT/scripts/verify-orca-failure-page-live.mjs"
     )
   fi
 

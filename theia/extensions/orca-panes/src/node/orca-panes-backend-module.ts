@@ -16,6 +16,14 @@
  * request resolves only to a regular file inside the bundle directory's
  * realpath (T-64-06). The offer travels only over Theia's authenticated
  * JSON-RPC socket and is never logged (T-64-08).
+ *
+ * Phase 67 (RUN-07, P67-09): handOff lstats the offer file before any read and
+ * reads it only after offerFileVerdict (a regular file, own uid, no group or
+ * other bit), through a no-follow open whose fstat must match the lstat; it
+ * returns the offer only after decodeOffer and offerEndpointVerdict accept it.
+ * A refusal is { refused: <one reason code> }, with no path, mode or content;
+ * the log line names the code only. undefined keeps its meaning: the files are
+ * not written yet.
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -27,6 +35,7 @@ import { POWERBROWSER_ENV } from '@powerbrowser/token-gate/lib/node/powerbrowser
 import {
     ORCA_PANES_ROUTE_PREFIX, ORCA_PANES_SERVICE_PATH, OrcaPanesService, PANES_DIR_FILE, WEB_PAIRING_FILE
 } from '../common/orca-panes-protocol';
+import { OfferHandOff, OfferRefusalReason, decodeOffer, offerEndpointVerdict, offerFileVerdict, offerPortOf } from './offer-file-policy';
 
 const LOG_PREFIX = '[@powerbrowser/orca-panes]';
 
@@ -93,6 +102,20 @@ export function resolveInside(rootReal: string, requestPath: string): string | u
 
 const currentUid = (): number => (typeof process.getuid === 'function' ? process.getuid() : -1);
 
+/** Reads a file already judged by its lstat: no-follow open (POSIX), and the opened file must be that same inode. */
+async function readNoFollow(full: string, judged: fs.Stats): Promise<string> {
+    const handle = await fs.promises.open(full, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    try {
+        const opened = await handle.stat();
+        if (!opened.isFile() || opened.ino !== judged.ino || opened.dev !== judged.dev) {
+            throw new Error('changed');
+        }
+        return await handle.readFile('utf8');
+    } finally {
+        await handle.close();
+    }
+}
+
 /** Reads one bridge file after both checks; throws an Error whose message names the failed check, never a value. */
 function readBridgeFile(dir: string, file: string): string {
     const dirVerdict = privateDirVerdict(fs.lstatSync(dir), currentUid(), process.platform);
@@ -113,7 +136,7 @@ function failureOf(err: unknown, file: string): string {
 }
 
 @injectable()
-export class OrcaPanesServiceImpl implements OrcaPanesService, BackendApplicationContribution {
+export class OrcaPanesServiceImpl implements BackendApplicationContribution {
 
     protected readonly bridgeDir = POWERBROWSER_ENV.POWERBROWSER_ORCA_BRIDGE_DIR;
     protected readonly logged = new Set<string>();
@@ -127,18 +150,58 @@ export class OrcaPanesServiceImpl implements OrcaPanesService, BackendApplicatio
         }
     }
 
-    async handOff(): Promise<{ pairing: string } | undefined> {
+    /** OrcaPanesService.handOff (64 C6) with P67-09's refusal; not declared through OrcaPanesService, whose type has no refusal. */
+    async handOff(): Promise<OfferHandOff> {
         if (!this.bridgeDir) {
             this.logOnce('no bridge folder; Orca panes are not offered');
             return undefined;
         }
         try {
-            const pairing = readBridgeFile(this.bridgeDir, WEB_PAIRING_FILE);
-            return pairing ? { pairing } : undefined;
+            const dirVerdict = privateDirVerdict(await fs.promises.lstat(this.bridgeDir), currentUid(), process.platform);
+            if (!dirVerdict.ok) {
+                this.logOnce(`no pairing hand-off: ${dirVerdict.reason}`);
+                return undefined;
+            }
         } catch (err) {
-            this.logOnce(`no pairing hand-off: ${failureOf(err, WEB_PAIRING_FILE)}`);
+            this.logOnce(`no pairing hand-off: the bridge folder is not readable (${(err as NodeJS.ErrnoException).code ?? 'error'})`);
             return undefined;
         }
+        const full = path.join(this.bridgeDir, WEB_PAIRING_FILE);
+        let stat: fs.Stats | null;
+        try {
+            stat = await fs.promises.lstat(full);
+        } catch (err) {
+            if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+                return undefined; // not written yet (orcad is starting, or stopped and removed it)
+            }
+            return this.refuse('offer-unreadable');
+        }
+        const verdict = offerFileVerdict({ stat, uid: currentUid(), platform: process.platform });
+        if (!verdict.ok) {
+            return this.refuse(verdict.reason);
+        }
+        let text: string;
+        try {
+            text = await readNoFollow(full, stat);
+        } catch {
+            return this.refuse('offer-unreadable');
+        }
+        const pairing = text.replace(/\r?\n$/, '');
+        const offer = decodeOffer(pairing);
+        if (!offer) {
+            return this.refuse('offer-unreadable');
+        }
+        const endpoint = offerEndpointVerdict(offer, offerPortOf(pairing));
+        if (!endpoint.ok) {
+            return this.refuse(endpoint.reason);
+        }
+        return { pairing };
+    }
+
+    /** One reason code, logged once and returned; never a path, mode, owner or content. */
+    protected refuse(reason: OfferRefusalReason): { refused: OfferRefusalReason } {
+        this.logOnce(`the pairing hand-off was refused: ${reason}`);
+        return { refused: reason };
     }
 
     /** The bundle directory's realpath, re-read when orca-panes-dir changes (every orcad start rewrites it). */
