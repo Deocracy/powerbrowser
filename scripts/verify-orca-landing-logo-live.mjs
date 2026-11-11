@@ -17,8 +17,13 @@
 //   3. The same in a stock window opened on orcad's address.
 //   4. The Theia document untouched: the query that finds the mark in the orcad page finds nothing in the Theia frame.
 //   5. Remount (A-9): a scratch repository added through Orca's CLI (environment built from scratch), a worktree
-//      created and activated so Landing unmounts in the web tab (the matched element gone), its tabs closed so Orca
-//      leaves the emptied worktree and Landing mounts again, and the new element must carry the PB mark.
+//      created and activated so Landing unmounts in the web tab (the matched element gone), then its tabs closed in
+//      that page through Orca's own close button (SortableTab.tsx data-tab-close-button, Orca's E2E hook; a running-
+//      process confirmation answered "Stop and Close"), so Orca deselects the emptied worktree (terminal-tab-actions.ts,
+//      workspace-emptied-reaction.ts: setActiveWorktree(null)) and Landing mounts again (AppWorkspaceShell.tsx: Landing
+//      renders while activeView is 'terminal' and activeWorktreeId is null); the new element must carry the PB mark.
+//      Neither removing the worktree (Orca activates the main worktree) nor the CLI's host-side close clears the
+//      page's own selection (67-06, measured live).
 //   Recorded, not asserted: how many times Landing asked gh for the GitHub star state.
 // Every absence follows a positive read by the same query (CLAUDE.md verification rule 1).
 //
@@ -242,8 +247,7 @@ async function live() {
             if (!th.length) passes.push(`ok  Theia document: 0 injected attributes (the same query found ${orcad} in the orcad page)`);
 
             // 5. Remount (A-9): a worktree activated, then removed.
-            const created = ctx.orca('worktree', 'create', '--repo', `path:${ctx.repo}`, '--name', 'landing-remount', '--activate');
-            const createdPath = (created?.result ?? created)?.worktree?.path;
+            ctx.orca('worktree', 'create', '--repo', `path:${ctx.repo}`, '--name', 'landing-remount', '--activate');
             let unmounted = await pollFor(async () => (JSON.parse(await app.evaluateIn(tabPage.context, tileRead)).count === 0) || undefined, 15000, 'Landing to unmount').then(() => true, () => false);
             if (!unmounted) {
                 // The CLI's activation targets the host; a user activates it in the page's sidebar.
@@ -252,10 +256,19 @@ async function live() {
             }
             let after = { count: 0 };
             if (unmounted) {
-                // Orca leaves an emptied worktree and lands (workspace-emptied-reaction.ts); removing the worktree would
-                // activate the repository's main worktree instead (measured live), so its tabs are closed.
-                ctx.orca('terminal', 'close', '--worktree', createdPath ? `path:${createdPath}` : 'landing-remount', '--all');
-                after = await tile(tabPage, 'the orcad web tab after the remount', true, 30000);
+                // Orca's own close path in the page: each pass answers a running-process confirmation or closes one tab,
+                // until Landing is back (whatever it shows is judged below) or 30 s pass.
+                const closeOne = `(() => { const confirm = [...document.querySelectorAll('[role="dialog"] button, [role="alertdialog"] button')].find(b => b.textContent.trim() === 'Stop and Close');
+                    if (confirm) { confirm.click(); return 'confirmed'; }
+                    const b = document.querySelector('[data-tab-close-button="true"]'); if (b) { b.click(); return 'closed'; } return 'none'; })()`;
+                const until = Date.now() + 30000;
+                while (Date.now() < until) {
+                    after = JSON.parse(await app.evaluateIn(tabPage.context, tileRead).catch(() => '{"count":0}'));
+                    if (after.count > 0) break;
+                    await app.evaluateIn(tabPage.context, closeOne).catch(() => 'none');
+                    await new Promise((r) => setTimeout(r, 500));
+                }
+                if (after.count > 0 && decodeDataUri(after.src) !== markText) after = await tile(tabPage, 'the orcad web tab after the remount', true, 5000);
             }
             const r = remountVerdict({ unmounted, after }, markText);
             failures.push(...r);

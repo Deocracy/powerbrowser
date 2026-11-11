@@ -13,7 +13,13 @@
 // editable field or text inside .pb-orca-pane-host) and no failure page, else the collector is blind.
 //   1 restarting      kill -9 of orcad by recorded identity (pid plus start ticks): within 5 s every hosted tab
 //                     and the side panel show the restarting sentence; within 60 s the page is gone and each pane
-//                     shows its content again (the automatic re-pair, P67-06).
+//                     shows its content again (the automatic re-pair, P67-06). Then (D-36, 67-07) after a settle
+//                     past the 6-10 s at which 67-06 saw the client refused: each pane still shows content and no
+//                     page, the client's environment id equals the one before the kill and its status reads
+//                     verified, no warn/error line in the Theia document carried the client's stranded-environment
+//                     messages (read from the pinned session source; the console watch must have seen at least one
+//                     line during the induction, else it is blind), and a terminal created by the CLI becomes a
+//                     hosted tab within 10 s (the host's sessions are not stranded).
 //   2 port-in-use     a clean quit (the layout is saved), a Node listener on 127.0.0.1:<Orca port>, relaunch: the
 //                     restored hosted tabs show the port-in-use sentence with Restart Orca and Details; Details
 //                     opens chrome's diagnostics layer with a row labelled "Orca failure code" (label read, value
@@ -59,10 +65,14 @@ const COPY_REL = 'theia/extensions/orca-panes/src/browser/failure/orca-failure-c
 const POLICY_REL = 'theia/extensions/orca-panes/src/node/offer-file-policy.ts';
 const SIDE_MODULE_REL = 'theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-module.ts';
 const HEARTBEAT_REL = 'orca/src/renderer/src/web/web-runtime-connection-heartbeat.ts';
+const SESSION_REL = 'orca/src/renderer/src/web/preload-api/web-runtime-session.ts';
 const HOST_BUNDLE_REL = 'orca/out/web/assets/pb-panes/pb-browser-host.js';
 const SERVICE_URL = 'chrome://powerbrowser/content/OrcaService.sys.mjs';
 const SHOW_MS = 5000;
 const RECOVER_MS = 60000;
+/** D-36: past the 6-10 s after the automatic re-pair at which 67-06 measured the refusal. */
+const SETTLE_MS = 20000;
+const CLI_TAB_MS = 10000;
 
 async function importTs(rel) {
   const emit = process.emitWarning;
@@ -133,6 +143,21 @@ export function recoveryVerdict({ label, startedAt, recoveredAt, boundMs }) {
   return [];
 }
 
+/**
+ * D-36, after the restart recovery and a settle: the panes still show content, the client kept its environment id and
+ * is verified, the console watch saw lines (not blind) but none of the stranded-environment messages, and a CLI
+ * terminal became a hosted tab.
+ */
+export function strandVerdict({ control, sameId, verification, lines, stranded, newTab }) {
+  const fails = control.map(f => f.replace(/^control: /, 'after the settle: '));
+  if (!lines) fails.push('console watch blind -- no warn or error line was seen during the induction');
+  if (stranded) fails.push(`${stranded} line(s) carried the client's stranded-environment messages`);
+  if (!sameId) fails.push('the client re-paired under a new environment id (sessions stranded, D-36)');
+  if (verification !== 'verified') fails.push(`the client's status reads ${verification ?? 'nothing'}, not verified`);
+  if (!newTab) fails.push(`a terminal created by the CLI did not become a hosted tab within ${CLI_TAB_MS} ms`);
+  return fails.map(f => `restart recovery: ${f}`);
+}
+
 function runSelfTest(table) {
   const rs = expectedPage(table, 'restarting');
   const pl = expectedPage(table, 'pairing-lost');
@@ -140,6 +165,18 @@ function runSelfTest(table) {
   const content = (over = {}) => ({ id: 'orca-pane:chat1', kind: 'agent-session', page: null, text: null, buttons: [], content: true, ...over });
   const cases = [
     ['a correct restarting page is green', pageVerdict([view()], table, 'restarting'), null],
+    ...(() => {
+      const good = { control: [], sameId: true, verification: 'verified', lines: 3, stranded: 0, newTab: true };
+      return [
+        ['a kept environment is green', strandVerdict(good), null],
+        ['a new environment id', strandVerdict({ ...good, sameId: false }), 'new environment id'],
+        ['a stranded-environment line', strandVerdict({ ...good, stranded: 2 }), 'stranded-environment'],
+        ['a blind console watch', strandVerdict({ ...good, lines: 0 }), 'console watch blind'],
+        ['a refused client', strandVerdict({ ...good, verification: 'blocked' }), 'reads blocked'],
+        ['no CLI tab', strandVerdict({ ...good, newTab: false }), 'did not become a hosted tab'],
+        ['a page after the settle', strandVerdict({ ...good, control: ['control: orca-pane:chat1 already shows the pairing-lost page before the induction'] }), 'after the settle'],
+      ];
+    })(),
     ['a text not in the table', pageVerdict([view({ text: 'Orca stopped' })], table, 'restarting'), 'not in the table'],
     ['another class\'s text', pageVerdict([view({ page: 'pairing-lost', text: pl.text })], table, 'restarting'), 'not restarting'],
     ['a missing button', pageVerdict([view({ page: 'pairing-lost', text: pl.text, buttons: ['Details'] })], table, 'pairing-lost'), 'missing the button "Reconnect"'],
@@ -181,6 +218,13 @@ const READ_VIEWS = `return [...document.querySelectorAll('[data-pb-orca-pane]')]
       content: !!host && host.style.display !== 'none' && (host.querySelector('.xterm, textarea, [contenteditable="true"]') !== null || host.textContent.trim().length > 0),
     };
   });`;
+
+/** The client's stranded-environment messages, read from the pinned session source (empty when one is gone). */
+export function strandMessages(src) {
+  const unknown = /new Error\(`(Unknown Orca runtime environment):/.exec(src)?.[1];
+  const unpaired = /new Error\('(Pair this web client with an Orca server first)\.'\)/.exec(src)?.[1];
+  return unknown && unpaired ? [unknown, unpaired] : [];
+}
 
 const sourceConst = (rel, name) => new RegExp(`${name}\\s*=\\s*'([^']+)'`).exec(readFileSync(join(REPO_ROOT, rel), 'utf8'))?.[1];
 
@@ -304,12 +348,38 @@ async function live(table) {
         if (await control(ctx, 'restarting')) {
           // The side panel's views with their own content, read before the induction (their positive control).
           const sideIds = (await ctx.views()).filter(v => !hostedIds().includes(v.id) && v.content).map(v => v.id);
+          // D-36: a watch on the Theia document's warn and error lines, and the environment id before the kill.
+          const messages = strandMessages(readFileSync(join(REPO_ROOT, SESSION_REL), 'utf8'));
+          if (messages.length !== 2) throw new Error(`the stranded-environment messages are not in ${SESSION_REL}`);
+          const watching = await probe(ctx.app, `const w = globalThis.__pbStrandWatch = { lines: 0, stranded: 0, id: null };
+            const needles = ${JSON.stringify(messages)};
+            for (const k of ['warn', 'error']) {
+              const own = console[k].bind(console);
+              console[k] = (...a) => { w.lines += 1; const t = a.map(String).join(' '); if (needles.some(n => t.includes(n))) w.stranded += 1; return own(...a); };
+            }
+            w.id = (await window.api.runtimeEnvironments.list())[0]?.id ?? null;
+            return w.id !== null;`);
+          if (watching !== true) fail(['restart recovery: harness -- no paired environment to compare before the kill']);
           const t0 = Date.now();
           signalIdentity(s.pid, s.ticks, 'SIGKILL');
           const seen = await ctx.pagesShow('restarting', [...hostedIds(), ...sideIds.slice(0, 1)], SHOW_MS);
           fail(pageVerdict(seen, table, 'restarting').map(f => `restarting: ${f}`));
           if (!sideIds.length) fail(['restarting: the Orca side panel showed no view to read']);
-          fail(await ctx.recovered('restarting', hostedIds(), t0));
+          const back = await ctx.recovered('restarting', hostedIds(), t0);
+          fail(back);
+          if (!back.length && watching === true) {
+            await new Promise(r => setTimeout(r, SETTLE_MS));
+            await ctx.showEach(hostedIds());
+            const control = controlVerdict(await ctx.views(), hostedIds());
+            const seen = await probe(ctx.app, `const w = globalThis.__pbStrandWatch;
+              const env = (await window.api.runtimeEnvironments.list())[0];
+              const snap = (await window.api.runtimeEnvironments.getStatusSnapshots())[0];
+              return { sameId: !!env && env.id === w.id, verification: snap?.verification ?? null, lines: w.lines, stranded: w.stranded };`);
+            const terms = (await ctx.views()).filter(v => v.kind === 'terminal').map(v => v.id);
+            orca('terminal', 'create', '--worktree', `path:${repo}`);
+            const newTab = await pollFor(async () => (await ctx.views()).some(v => v.kind === 'terminal' && !terms.includes(v.id)) || undefined, CLI_TAB_MS, 'a CLI terminal tab').then(() => true, () => false);
+            fail(strandVerdict({ control, ...seen, newTab }));
+          }
         }
 
         // 3 pairing-lost through an auth refusal
@@ -433,7 +503,7 @@ async function live(table) {
     if (existsSync(hostAside)) renameSync(hostAside, join(REPO_ROOT, HOST_BUNDLE_REL));
     for (const n of notes) console.log(`${NAME}: note -- ${n}`);
     for (const f of fails) console.log(`${NAME}: FAIL -- ${f}`);
-    console.log(fails.length ? `${NAME}: FAIL -- ${fails.length} failure(s)` : `${NAME}: PASS -- every hosted view showed the PowerBrowser page for each induced class and recovered`);
+    console.log(fails.length ? `${NAME}: FAIL -- ${fails.length} failure(s)` : `${NAME}: PASS -- every hosted view showed the PowerBrowser page for each induced class and recovered; after the restart the client kept its environment id, logged no stranded-environment line and a CLI terminal became a hosted tab`);
     restoreOutput();
   }
   return fails.length ? 1 : 0;
