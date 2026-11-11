@@ -420,13 +420,15 @@ export class ModeService implements FrontendApplicationContribution {
     /**
      * Research A5 (measured false in 65-05): a revisited mode's saved layout detaches stray side views
      * (perspective-service.js detachStrayWidgets), but a first visit only adds (applyViewPlacements), so a view
-     * another shipped mode's row docks (the Orca containers, Coding's Explorer) stayed docked in a mode whose row
-     * does not list it. Those views are detached the way stock detaches strays (parent = null, never disposed),
-     * and the owning mode's ensureInArea docks the same widget again.
+     * another shipped mode's row docks (the Orca containers) stayed docked in a mode whose row does not list it.
+     * Those views are detached the way stock detaches strays (parent = null, never disposed), and the owning
+     * mode's ensureInArea docks the same widget again. Coding's views are the stock IDE layout's own (Explorer),
+     * which the shell docks in every mode and view: URIs reopen through openView, so they are left alone.
      */
     protected detachOtherModesViews(rules: ModeRules): void {
         for (const area of ['left', 'right'] as const) {
-            const owned = new Set(Object.values(SHIPPED_MODE_RULES).flatMap(row => row.views[area]));
+            const ide = new Set(SHIPPED_MODE_RULES.coding.views[area]);
+            const owned = new Set(Object.values(SHIPPED_MODE_RULES).flatMap(row => row.views[area]).filter(id => !ide.has(id)));
             for (const widget of this.shell.getWidgets(area)) {
                 const factoryId = this.widgetManager.getDescription(widget)?.factoryId;
                 if (factoryId && owned.has(factoryId) && !rules.views[area].includes(factoryId)) {
