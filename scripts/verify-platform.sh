@@ -4043,6 +4043,12 @@ run_own_checks() {
     # p66-01's files, a named SKIP while pb-browser-host-link.ts is absent. The self-test plants each fault in a fixture.
     "orca-browser-entry-points|node $REPO_ROOT/scripts/verify-orca-browser-entry-points.mjs"
     "orca-browser-entry-points-self-test|node $REPO_ROOT/scripts/verify-orca-browser-entry-points.mjs --self-test"
+    # NEW (66-05, BRW-05, P66-24/P66-25): orca-browser-tools parses spike 005's U-rows (U-01..U-30) and compares them as a
+    # set with ORCA_BROWSER_TOOLS (typescript transpile), then proves each mapped contribution exists: a command id in a
+    # registerCommand call, a render method defined and called in chrome-bar-widget.tsx, a kind in verify-web-tab-bridge's
+    # KIND_CLASSES, a deferral in REQUIREMENTS.md's v2 section, a non-empty skip reason. The self-test plants each fault.
+    "orca-browser-tools|node $REPO_ROOT/scripts/verify-orca-browser-tools.mjs"
+    "orca-browser-tools-self-test|node $REPO_ROOT/scripts/verify-orca-browser-tools.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
