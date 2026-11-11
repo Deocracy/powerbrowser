@@ -33,6 +33,14 @@
 //     declaration reading var() of a name of P. A planted probe sheet (synthetic names when C or P
 //     is empty) must be detected first.
 //   An unmeasured value is measured:false and red, never a zero.
+//   - Side-panel probe (Phase 65, P65-08): the sidebar kind mounted through the entry into a host
+//     carrying data-pb-orca-pane="sidebar" in the Theia document and on the standalone page; its
+//     values compared (a planted host rule on the side mount must register first), Theia's values
+//     while it is mounted, and Orca's tooltip on its Add-project button against the standalone page's.
+//   - Add-project dialog probe (D-18): Orca's own Add-project button in that sidebar mount opens
+//     Orca's dialog, which portals to document.body; its portal nodes against the standalone page's
+//     (a planted rule on the dialog must register first), Theia's values and the side mount's values
+//     while it is open. Both probes run after the Theia and pane controls registered.
 //
 // Tier: full (live) under flock /home/chris/coding/Power-Browser/.git/pb-live.lock with every
 // inherited ORCA_* unset; --self-test quick (pure verdicts over fixtures). SKIP named when nothing
@@ -81,6 +89,19 @@ export function htmlVerdict(h) {
 }
 
 /**
+ * One Phase 65 probe (side-panel or Add-project dialog). p: { measured, reason, controlDelta, theiaChanged,
+ * paneChanged, portalChanged, compared }. Returns null or the failure naming the probe.
+ */
+export function probeVerdict(name, p) {
+    if (!p || p.measured === false) return `${name} probe not measured${p?.reason ? `: ${p.reason}` : ''}`;
+    if (!(p.controlDelta >= 1)) return `${name} probe: its planted control did not register (the detector is blind)`;
+    if (p.theiaChanged.length) return `${name} probe: ${p.theiaChanged.length} Theia value(s) changed, first ${p.theiaChanged[0].key}: ${p.theiaChanged[0].before} -> ${p.theiaChanged[0].after}`;
+    if (p.paneChanged.length) return `${name} probe: ${p.paneChanged.length} pane value(s) differ from the standalone page, first ${p.paneChanged[0].key}: ${p.paneChanged[0].before} -> ${p.paneChanged[0].after}`;
+    if (p.portalChanged.length) return `${name} probe: ${p.portalChanged.length} portal value(s) differ from the standalone page, first ${p.portalChanged[0].key}`;
+    return null;
+}
+
+/**
  * The whole judgment. obs: { theia: { controlBaseline, controlDelta, changed: [], compared },
  * pane: { measured, changed, compared, controlDelta }, portal: { measured, changed, compared, theiaChanged }, html }.
  */
@@ -96,7 +117,7 @@ export function cssVerdict(obs) {
     if (p.changed.length) return `${p.changed.length} pane value(s) differ from the standalone page, first ${p.changed[0].key}: ${p.changed[0].before} -> ${p.changed[0].after}`;
     if (q.changed.length) return `${q.changed.length} portal value(s) differ from the standalone page, first ${q.changed[0].key}`;
     if (q.theiaChanged.length) return `${q.theiaChanged.length} Theia value(s) changed while Orca's portals were open, first ${q.theiaChanged[0].key}`;
-    return htmlVerdict(obs.html);
+    return probeVerdict('side-panel', obs.side) ?? probeVerdict('Add-project dialog', obs.addProject) ?? htmlVerdict(obs.html);
 }
 
 /**
@@ -162,7 +183,11 @@ const HELPERS = `(() => {
         const xterm = [...root.querySelectorAll('.xterm')].find(x => x.getBoundingClientRect().width > 0) || root.querySelector('.xterm');
         return window.__pbStyles({ root, body: root.firstElementChild, xterm, rows: xterm && xterm.querySelector('.xterm-rows'), row: xterm && xterm.querySelector('.xterm-rows > div'),
             viewport: xterm && xterm.querySelector('.xterm-viewport'), helper: xterm && xterm.querySelector('.xterm-helper-textarea') }); };
-    window.__pbPortalStyles = () => { const nodes = [...document.body.children].filter(e => e.hasAttribute('data-radix-popper-content-wrapper') || e.hasAttribute('data-slot'));
+    window.__pbSideStyles = scope => { const root = scope && scope.querySelector('[data-pb-orca-pane-root]'); if (!root) return null;
+        const add = root.querySelector('button[aria-label="Add project"]');
+        const leaf = [...root.querySelectorAll('*')].find(e => e.childElementCount === 0 && (e.textContent || '').trim() && e.getBoundingClientRect().width > 0);
+        return window.__pbStyles({ 'side-root': root, 'side-body': root.firstElementChild, 'side-add': add, 'side-add-icon': add && add.querySelector('svg'), 'side-text': leaf }); };
+    window.__pbPortalStyles = onlyNew => { const nodes = [...document.body.children].filter(e => (e.hasAttribute('data-radix-popper-content-wrapper') || e.hasAttribute('data-slot')) && !(onlyNew && e.hasAttribute('data-pb-pre')));
         const out = {}; nodes.forEach((n, i) => { const k = n.hasAttribute('data-radix-popper-content-wrapper') ? 'popper' : 'slot-' + n.getAttribute('data-slot');
             Object.assign(out, window.__pbStyles({ [k]: n, [k + '>text']: [...n.querySelectorAll('*')].find(e => e.childElementCount === 0 && (e.textContent || '').trim()) || null })); });
         return out; };
@@ -238,6 +263,9 @@ async function measure(s, mode) {
     // Portal probe: an Orca tooltip and an Orca dialog, opened in both documents.
     obs.portal = await portalProbe(s, ref, pick, refPick, base0);
 
+    // Phase 65: the side-panel and Add-project dialog probes, after both controls above registered.
+    Object.assign(obs, await sideProbes(s, ref, base0));
+
     // The derived html clause, its probe sheet detected first.
     const C = html1.classes.filter(c => !html0.classes.includes(c));
     const P = Object.keys(html1.props).filter(n => html0.props[n] !== html1.props[n]);
@@ -255,6 +283,8 @@ async function measure(s, mode) {
 const OPEN_TOOLTIP = scopeSel => `(() => { const scope = document.querySelector(${J(scopeSel)});
     const t = scope && [...scope.querySelectorAll('[data-slot="tooltip-trigger"]')].find(e => e.getBoundingClientRect().width > 0);
     if (!t) return false; t.focus(); t.dispatchEvent(new FocusEvent('focusin', { bubbles: true })); t.dispatchEvent(new FocusEvent('focus')); return true; })()`;
+/** The same focus-opened Radix tooltip, on one trigger element. */
+const OPEN_TOOLTIP_ON = sel => `(() => { const t = document.querySelector(${J(sel)}); if (!t) return false; t.focus(); t.dispatchEvent(new FocusEvent('focusin', { bubbles: true })); t.dispatchEvent(new FocusEvent('focus')); return true; })()`;
 const CLOSE_TOOLTIP = `(() => { if (document.activeElement) document.activeElement.blur(); document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); return true; })()`;
 const PORTALS_OPEN = `[...document.body.children].filter(e => e.hasAttribute('data-radix-popper-content-wrapper') || e.hasAttribute('data-slot')).map(e => e.hasAttribute('data-slot') ? e.getAttribute('data-slot') : 'popper')`;
 
@@ -309,6 +339,82 @@ async function portalProbe(s, ref, pick, refPick, base0) {
     return out;
 }
 
+/** Mounts the sidebar kind in both documents, then opens Orca's Add-project dialog from each mount. */
+async function sideProbes(s, ref, base0) {
+    const { app, lib } = s;
+    const ev = expr => app.evaluate(expr), evRef = expr => s.evalIn(ref, expr);
+    const side = { measured: false, theiaChanged: [], paneChanged: [], portalChanged: [], compared: 0 };
+    const add = { measured: false, theiaChanged: [], paneChanged: [], portalChanged: [], compared: 0 };
+    const pick = { kind: 'sidebar', worktreeId: '', tabId: '', paneKey: null };
+    const scope = { theia: '#pb-css-side', standalone: '#pb-host-css-side' };
+    await ev(`(() => { const host = document.createElement('div'); host.id = 'pb-css-side'; host.setAttribute('data-pb-orca-pane', 'sidebar');
+        host.style.cssText = 'position:fixed;left:0;top:0;width:320px;height:640px;display:flex;overflow:hidden;z-index:2147483000';
+        const root = document.createElement('div'); root.style.cssText = 'display:flex;flex:1;min-width:0;min-height:0'; host.appendChild(root); document.body.appendChild(host);
+        window.__pbSideUnmount = window.PbPanes.mountPane(root, ${J(pick)}); return true; })()`);
+    await evRef(`(() => { const root = window.__pbHost('sidebar', 'css-side', [0, 620, 320, 640]); window.__pbSideUnmount = window.PbPanes.mountPane(root, ${J(pick)}); return true; })()`);
+    const addReady = async (evx, sel) => evx(`!!document.querySelector(${J(sel + ' button[aria-label="Add project"]')})`);
+    try { await lib.pollFor(async () => (await addReady(ev, scope.theia)) && (await addReady(evRef, scope.standalone)), 30000, "the sidebar mounts' Add-project buttons"); } catch { /* measured below */ }
+    await lib.sleep(1500);
+    const styles = async (evx, sel) => JSON.parse(await evx(`JSON.stringify(window.__pbSideStyles(document.querySelector(${J(sel)})))`));
+    const inTheia = await styles(ev, scope.theia), reference = await styles(evRef, scope.standalone);
+    if (!inTheia || !reference) {
+        side.reason = !inTheia ? 'no sidebar mount in the Theia document' : 'no sidebar mount on the standalone page';
+        add.reason = 'no sidebar mount to open it from';
+    } else {
+        side.measured = true;
+        side.paneChanged = diffMaps(reference, inTheia);
+        side.compared = Object.keys(reference).length;
+        side.theiaChanged = diffMaps(base0, JSON.parse(await ev('JSON.stringify(window.__pbTheiaSnapshot())')));
+        await ev(`(() => { const st = document.createElement('style'); st.id = 'pb-css-side-control'; st.textContent = '#pb-css-side [data-pb-orca-pane-root] { letter-spacing: 3px !important }'; document.head.appendChild(st); return true; })()`);
+        side.controlDelta = diffMaps(reference, await styles(ev, scope.theia)).length - side.paneChanged.length;
+        await ev(`(() => { document.getElementById('pb-css-side-control').remove(); return true; })()`);
+        // Orca's tooltip on the Add-project button, in both documents.
+        const tips = {};
+        for (const [label, evx, sel] of [['theia', ev, scope.theia], ['standalone', evRef, scope.standalone]]) {
+            await evx(OPEN_TOOLTIP_ON(`${sel} button[aria-label="Add project"]`));
+            try { await lib.pollFor(async () => JSON.parse(await evx(`JSON.stringify(${PORTALS_OPEN})`)).includes('popper'), 5000, `${label} side tooltip`); } catch { /* recorded */ }
+            tips[label] = JSON.parse(await evx('JSON.stringify(window.__pbPortalStyles())'));
+            await evx(CLOSE_TOOLTIP);
+        }
+        const tipKeys = Object.keys(tips.standalone).filter(k => k in tips.theia && !k.endsWith('|present'));
+        side.portalChanged = diffMaps(Object.fromEntries(tipKeys.map(k => [k, tips.standalone[k]])), Object.fromEntries(tipKeys.map(k => [k, tips.theia[k]])));
+        side.portalCompared = tipKeys.length;
+        await lib.sleep(800);
+
+        // Add-project dialog: Orca's own trigger in each sidebar mount. Only portal nodes that appear after the click
+        // are measured (an earlier probe's dialog may still be open in a document).
+        const open = {};
+        const NEW_DIALOG = `[...document.body.children].some(e => e.hasAttribute('data-slot') && !e.hasAttribute('data-pb-pre'))`;
+        for (const [label, evx, sel] of [['theia', ev, scope.theia], ['standalone', evRef, scope.standalone]]) {
+            await evx(`(() => { for (const e of document.body.children) e.setAttribute('data-pb-pre', ''); const b = document.querySelector(${J(sel + ' button[aria-label="Add project"]')}); if (b) b.click(); return !!b; })()`);
+            try { await lib.pollFor(async () => (await evx(NEW_DIALOG)) === true, 10000, `${label} Add-project dialog`); } catch { /* recorded */ }
+            await lib.sleep(800);
+            open[label] = JSON.parse(await evx('JSON.stringify(window.__pbPortalStyles(true))'));
+        }
+        const keys = Object.keys(open.standalone).filter(k => k in open.theia && !k.endsWith('|present') && !k.startsWith('popper'));
+        add.kinds = [...new Set(keys.map(k => k.split('|')[0].replace(/>text$/, '')))];
+        if (!keys.length) add.reason = `Orca's Add-project dialog opened in neither or one document (theia [${Object.keys(open.theia).map(k => k.split('|')[0]).filter((v, i, a) => a.indexOf(v) === i).join(', ')}], standalone [${Object.keys(open.standalone).map(k => k.split('|')[0]).filter((v, i, a) => a.indexOf(v) === i).join(', ')}])`;
+        else {
+            add.measured = true;
+            add.compared = Object.keys(reference).length;
+            add.portalCompared = keys.length;
+            if (process.env.PB_ORCA_PANE_DEBUG === '1') for (const [label, evx] of [['theia', ev], ['standalone', evRef]]) console.log(`debug: ${label} dialog leaf ${await evx(`(() => { const n = [...document.body.children].find(e => e.getAttribute('data-slot') === 'dialog-content' && !e.hasAttribute('data-pb-pre')); const t = n && [...n.querySelectorAll('*')].find(e => e.childElementCount === 0 && (e.textContent || '').trim()); return t ? t.tagName + '.' + String(t.className).slice(0, 80) + ' :: ' + t.textContent.trim().slice(0, 60) : 'none'; })()`)}`);
+            add.portalChanged = diffMaps(Object.fromEntries(keys.map(k => [k, open.standalone[k]])), Object.fromEntries(keys.map(k => [k, open.theia[k]])));
+            add.theiaChanged = diffMaps(base0, JSON.parse(await ev('JSON.stringify(window.__pbTheiaSnapshot())')));
+            add.paneChanged = diffMaps(reference, await styles(ev, scope.theia));
+            if (process.env.PB_ORCA_PANE_DEBUG === '1') console.log(`debug: add-project portal changed ${J(add.portalChanged)}`);
+            await ev(`(() => { const st = document.createElement('style'); st.id = 'pb-css-add-control'; st.textContent = 'body > [data-slot="dialog-content"], body > [data-slot="dialog-content"] * { letter-spacing: 3px !important }'; document.head.appendChild(st); return true; })()`);
+            const planted = JSON.parse(await ev('JSON.stringify(window.__pbPortalStyles(true))'));
+            await ev(`(() => { document.getElementById('pb-css-add-control').remove(); return true; })()`);
+            add.controlDelta = diffMaps(Object.fromEntries(keys.map(k => [k, open.standalone[k]])), Object.fromEntries(keys.map(k => [k, planted[k]]))).length - add.portalChanged.length;
+        }
+        for (const evx of [ev, evRef]) await evx(`(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); for (const e of document.querySelectorAll('[data-pb-pre]')) e.removeAttribute('data-pb-pre'); return true; })()`);
+    }
+    for (const evx of [ev, evRef]) await evx('(() => { try { window.__pbSideUnmount && window.__pbSideUnmount(); } catch (e) {} return true; })()');
+    await ev(`(() => { document.getElementById('pb-css-side')?.remove(); return true; })()`);
+    return { side, addProject: add };
+}
+
 async function live() {
     const harness = await import('./lib/orca-pane-harness.mjs');
     const skips = harness.skipReasons();
@@ -341,8 +447,11 @@ async function live() {
     if (process.env.PB_ORCA_PANE_DEBUG === '1') console.log(`debug: ${J({ pane: obs.pane?.changed?.slice(0, 60), portal: obs.portal?.changed?.slice(0, 40), opened: obs.portal?.opened })}`);
     const t = obs.theia, p = obs.pane, q = obs.portal, h = obs.html;
     console.log(`${NAME}: measured -- Theia ${t.changed.length} of ${t.compared} changed (control ${t.controlDelta} from a ${t.controlBaseline}-diff baseline); pane ${p.measured === false ? 'not measured' : `${p.changed.length} of ${p.compared} changed (control ${p.control} ${p.controlDelta})`}; portal ${q.measured ? `${q.changed.length} of ${q.compared} changed [${q.kinds.join(', ')}], Theia while open ${q.theiaChanged.length}` : `not measured (${q.reason})`}; tooltip/dialog opened ${J(q.opened ?? {}).length > 2 ? Object.entries(q.opened).map(([k, v]) => `${k}=${(v.portals ?? []).length}`).join(' ') : 'none'}; html classes added [${h.classesAdded.join(' ')}] (now [${h.classesNow.join(' ')}], ${h.propsNow} inline), ${h.propsAdded.length} inline propert(y/ies) added or changed [${h.propsAdded.slice(0, 8).join(' ')}] (${h.propsAdded.filter(n => !n.startsWith('--')).length} non-custom), readers ${h.readers.classes.length + h.readers.props.length} over ${h.rules} rule(s), probe ${h.probe.classDetected}/${h.probe.propDetected}`);
+    const probeLine = (name, p) => !p ? `${name} not reached` : p.measured === false ? `${name} not measured (${p.reason})`
+        : `${name}: Theia ${p.theiaChanged.length}, pane ${p.paneChanged.length} of ${p.compared}, portal ${p.portalChanged.length}${p.portalCompared !== undefined ? ` of ${p.portalCompared}` : ''} changed (control ${p.controlDelta})${p.kinds ? ` [${p.kinds.join(', ')}]` : ''}`;
+    console.log(`${NAME}: probes -- ${probeLine('side-panel', obs.side)}; ${probeLine('Add-project dialog', obs.addProject)}`);
     if (verdict) { console.log(`${NAME}: FAIL -- ${mode} mode: ${verdict}`); return 1; }
-    console.log(`${NAME}: PASS -- ${mode} mode; Theia 0 of ${t.compared} and pane 0 of ${p.compared} values changed with both controls registered; portal probe 0 of ${q.compared}; Orca's <html> writes (${h.classesAdded.length} class(es), ${h.propsAdded.length} custom propert(y/ies)) read by no Theia rule`);
+    console.log(`${NAME}: PASS -- ${mode} mode; Theia 0 of ${t.compared} and pane 0 of ${p.compared} values changed with both controls registered; portal probe 0 of ${q.compared}; Orca's <html> writes (${h.classesAdded.length} class(es), ${h.propsAdded.length} custom propert(y/ies)) read by no Theia rule; side-panel and Add-project dialog probes 0 changed with their controls registered`);
     return 0;
 }
 
@@ -452,8 +561,9 @@ function selfTest() {
     let failed = 0;
     const ok = (name, cond) => { console.log(`  ${cond ? 'ok ' : 'NOT OK '} ${name}`); if (!cond) failed += 1; };
     const html = (o = {}) => ({ classesAdded: ['light'], propsAdded: ['--background'], readers: { classes: [], props: [] }, unreadable: 0, rules: 900, probe: { classDetected: true, propDetected: true }, ...o });
+    const probe = (o = {}) => ({ measured: true, controlDelta: 2, theiaChanged: [], paneChanged: [], portalChanged: [], compared: 25, ...o });
     const good = (o = {}) => ({ theia: { controlBaseline: 0, controlDelta: 1, changed: [], compared: 200 }, pane: { measured: true, changed: [], compared: 126, control: 'letter-spacing', controlDelta: 2 },
-        portal: { measured: true, changed: [], compared: 72, theiaChanged: [], kinds: ['popper', 'dialog-content'] }, html: html(), ...o });
+        portal: { measured: true, changed: [], compared: 72, theiaChanged: [], kinds: ['popper', 'dialog-content'] }, side: probe(), addProject: probe(), html: html(), ...o });
     const d = { key: 'button|color', before: 'a', after: 'b' };
     ok('control green', cssVerdict(good()) === null);
     ok('a changed Theia value is red', /1 Theia element property value\(s\) changed, first button\|color/.test(cssVerdict(good({ theia: { ...good().theia, changed: [d] } })) ?? ''));
@@ -473,6 +583,16 @@ function selfTest() {
     ok('a missing tooltip is red', /needs an Orca tooltip and an Orca dialog/.test(cssVerdict(good({ portal: { ...good().portal, kinds: ['slot-dialog-content'] } })) ?? ''));
     ok('the probe sheet not detected is red', /html clause blind/.test(cssVerdict(good({ html: html({ probe: { classDetected: true, propDetected: false } }) })) ?? ''));
     ok('an unreadable Theia sheet is red', /unreadable through CSSOM/.test(cssVerdict(good({ html: html({ unreadable: 1 }) })) ?? ''));
+    ok('side-panel: a changed Theia value is red naming the probe', /^side-panel probe: 1 Theia value/.test(cssVerdict(good({ side: probe({ theiaChanged: [d] }) })) ?? ''));
+    ok('side-panel: a changed pane value is red naming the probe', /^side-panel probe: 1 pane value/.test(cssVerdict(good({ side: probe({ paneChanged: [d] }) })) ?? ''));
+    ok('side-panel: a changed tooltip portal value is red naming the probe', /^side-panel probe: 1 portal value/.test(cssVerdict(good({ side: probe({ portalChanged: [d] }) })) ?? ''));
+    ok('side-panel: a control that did not register is red naming the probe', /^side-panel probe: its planted control did not register/.test(cssVerdict(good({ side: probe({ controlDelta: 0 }) })) ?? ''));
+    ok('side-panel: not measured is red', /^side-panel probe not measured: no sidebar/.test(cssVerdict(good({ side: { measured: false, reason: 'no sidebar mount in the Theia document' } })) ?? ''));
+    ok('Add-project dialog: a changed portal value is red naming the probe', /^Add-project dialog probe: 1 portal value/.test(cssVerdict(good({ addProject: probe({ portalChanged: [d] }) })) ?? ''));
+    ok('Add-project dialog: a changed Theia value while open is red', /^Add-project dialog probe: 1 Theia value/.test(cssVerdict(good({ addProject: probe({ theiaChanged: [d] }) })) ?? ''));
+    ok('Add-project dialog: a control that did not register is red naming the probe', /^Add-project dialog probe: its planted control did not register/.test(cssVerdict(good({ addProject: probe({ controlDelta: 0 }) })) ?? ''));
+    ok('Add-project dialog: not reached is red', /^Add-project dialog probe not measured/.test(cssVerdict(good({ addProject: undefined })) ?? ''));
+    ok('the probes are judged only after the Theia control registered', /^Theia control/.test(cssVerdict(good({ theia: { ...good().theia, controlDelta: 0 }, side: probe({ paneChanged: [d] }) })) ?? ''));
     ok('diffMaps counts additions and removals', diffMaps({ a: '1', b: '2' }, { a: '1', c: '3' }).length === 2);
     const child = spawnSync(process.execPath, ['--input-type=module', '-e', `await import(${J(SELF)})`], { encoding: 'utf8', timeout: 30000 });
     ok('importing the module prints and starts nothing', child.status === 0 && child.stdout === '' && child.stderr === '');

@@ -361,9 +361,9 @@ const RENDERER_SRC = join(ORCA_DIR, 'src', 'renderer', 'src');
 const PB_DIR = join(RENDERER_SRC, 'pb');
 
 /** Resolves an import specifier of a file under orca/src the way Orca's Vite config does ('@/' and relative); null for packages. */
-export function resolveOrcaImport(from, spec, exists = existsSync) {
+export function resolveOrcaImport(from, spec, exists = existsSync, rendererSrc = RENDERER_SRC) {
     let base;
-    if (spec.startsWith('@/')) base = join(RENDERER_SRC, spec.slice(2));
+    if (spec.startsWith('@/')) base = join(rendererSrc, spec.slice(2));
     else if (spec.startsWith('.')) base = join(dirname(from), spec);
     else return null;
     for (const ext of ['', '.ts', '.tsx', '.js', '.mjs', '/index.ts', '/index.tsx', '/index.js']) {
@@ -394,7 +394,7 @@ export function importSpecifiers(ts, fileName, text) {
  * imports (static, re-export, dynamic). `overrides` maps an orca path to replacement text (an overlay file not
  * yet copied). Returns Map<absolute path, importer or null>; packages are not followed.
  */
-export function moduleGraph(ts, starts, overrides = new Map()) {
+export function moduleGraph(ts, starts, overrides = new Map(), rendererSrc = RENDERER_SRC) {
     const graph = new Map();
     const queue = [];
     for (const s of starts) { graph.set(s, null); queue.push(s); }
@@ -404,7 +404,7 @@ export function moduleGraph(ts, starts, overrides = new Map()) {
         const text = overrides.get(file) ?? (existsSync(file) ? readFileSync(file, 'utf8') : null);
         if (text === null) continue;
         for (const spec of importSpecifiers(ts, file, text)) {
-            const r = resolveOrcaImport(file, spec, p => overrides.has(p) || existsSync(p));
+            const r = resolveOrcaImport(file, spec, p => overrides.has(p) || existsSync(p), rendererSrc);
             if (r && !graph.has(r)) { graph.set(r, file); queue.push(r); }
         }
     }
@@ -412,11 +412,11 @@ export function moduleGraph(ts, starts, overrides = new Map()) {
 }
 
 /** The overlay's pb/ files as overrides at their orca/ paths (the graph reads the overlay, never a stale copy). */
-export function overlayOverrides() {
-    const dir = join(REPO_ROOT, 'orca-overlay', 'files', 'src', 'renderer', 'src', 'pb');
+export function overlayOverrides(overlayFilesDir = join(REPO_ROOT, 'orca-overlay', 'files'), orcaDir = ORCA_DIR) {
+    const dir = join(overlayFilesDir, 'src', 'renderer', 'src', 'pb');
     const out = new Map();
     if (!existsSync(dir)) return out;
-    for (const name of readdirSync(dir)) out.set(join(PB_DIR, name), readFileSync(join(dir, name), 'utf8'));
+    for (const name of readdirSync(dir)) out.set(join(orcaDir, 'src', 'renderer', 'src', 'pb', name), readFileSync(join(dir, name), 'utf8'));
     return out;
 }
 

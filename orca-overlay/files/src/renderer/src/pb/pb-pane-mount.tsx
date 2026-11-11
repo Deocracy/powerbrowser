@@ -49,7 +49,9 @@ import { initWebDeviceKeySupport } from '../web/web-device-key-support'
 import { installWebPreloadApi } from '../web/web-preload-api'
 import { callRuntimeResult } from '../web/preload-api/web-runtime-calls'
 import { NativeChatResumeOnRestartModal } from '../components/NativeChatResumeRuntimeModal'
-import { OverlayBoundary } from '../app-shell/app-root-surface-boundaries'
+import { ModalBoundary, OverlayBoundary } from '../app-shell/app-root-surface-boundaries'
+import { useLazyModalMounts } from '../app-shell/use-lazy-modal-mounts'
+import { lazyWithRetry } from '@/lib/lazy-with-retry'
 import { detectLanguage } from '@/lib/language-detect'
 import { toRuntimeWorktreeSelector } from '../runtime/runtime-worktree-selector'
 import { makePaneKey } from '../../../shared/stable-pane-id'
@@ -194,6 +196,43 @@ function staleNavigationEchoes(): void {
     })
 }
 
+// D-18: Orca's Add-project flow. The hosted Sidebar's trigger only sets activeModal; AppRootSurfaces hosts the
+// dialogs, so the services root hosts the same four, lazily and in the same boundaries.
+const AddRepoDialog = lazyWithRetry(() => import('../components/sidebar/AddRepoDialog'))
+const NonGitFolderDialog = lazyWithRetry(() => import('../components/sidebar/NonGitFolderDialog'))
+const AddProjectFromFolderDialog = lazyWithRetry(() => import('../components/sidebar/AddProjectFromFolderDialog'))
+const ProjectAddedDialog = lazyWithRetry(() => import('../components/sidebar/ProjectAddedDialog'))
+
+/** AppRootSurfaces' Add-project dialogs (add-repo and its three handoff dialogs), unchanged. */
+function AddProjectDialogs(): React.JSX.Element {
+  const { shouldMountAddRepoDialog } = useLazyModalMounts()
+  const activeModal = useAppStore((state) => state.activeModal)
+  return (
+    <React.Suspense fallback={null}>
+      {shouldMountAddRepoDialog ? (
+        <ModalBoundary boundaryId="modal.add-repo" resetKey={activeModal === 'add-repo'}>
+          <AddRepoDialog />
+        </ModalBoundary>
+      ) : null}
+      {activeModal === 'confirm-non-git-folder' ? (
+        <ModalBoundary boundaryId="modal.confirm-non-git-folder" resetKey>
+          <NonGitFolderDialog />
+        </ModalBoundary>
+      ) : null}
+      {activeModal === 'confirm-add-project-from-folder' ? (
+        <ModalBoundary boundaryId="modal.confirm-add-project-from-folder" resetKey>
+          <AddProjectFromFolderDialog />
+        </ModalBoundary>
+      ) : null}
+      {activeModal === 'project-added' ? (
+        <ModalBoundary boundaryId="modal.project-added" resetKey>
+          <ProjectAddedDialog />
+        </ModalBoundary>
+      ) : null}
+    </React.Suspense>
+  )
+}
+
 /** B-9 (P65-22, CA-14): Orca's resume offer inside its overlay boundary, as AppRootSurfaces.tsx mounts it. */
 function ResumeOffer(): React.JSX.Element {
   const activeView = useAppStore((state) => state.activeView)
@@ -271,6 +310,7 @@ export function bootstrap(options: { pairing: string }): Promise<void> {
           <PinnedTabCloseDialog />
           <RunningTerminalCloseDialog />
           <ResumeOffer />
+          <AddProjectDialogs />
         </Providers>
       )
     })
