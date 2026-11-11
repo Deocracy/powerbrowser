@@ -23,8 +23,9 @@
 //  e. first add: no reload (a page marker survives), <fixed workspace URI>:perspective-layouts
 //     deep-equals the old _global_:perspective-layouts, no Untitled file in the workspaces dir;
 //  a. orca file open: a Theia editor on the file: URI within 1 s;
-//  b. diffs (unstaged and staged from the CLI; branch, commit and combined-uncommitted through the
-//     bundle's check-only openPane) and conflicts (both_modified and deleted_by_them through
+//  b. diffs (unstaged, staged, branch, commit and combined-uncommitted through the bundle's
+//     check-only openPane: headless orcad refuses the CLI's file open-changed, it has no app window)
+//     and conflicts (both_modified and deleted_by_them through
 //     openPane's JSON detail): each diff side's text equals git cat-file blob of its CA-03 spec
 //     (the working file for the unstaged right side), the merge editor's sides equal stages 1, 2
 //     and 3, and deleted_by_them opens the working file in the editor;
@@ -47,7 +48,7 @@
 //   node scripts/verify-orca-workspace-live.mjs --self-test
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -66,7 +67,7 @@ const FIXED_FILE = 'powerbrowser.theia-workspace';
 const MONACO_SELECTOR = '.monaco-editor';
 const LAYOUT_KEY = 'perspective-layouts';
 /** The diff sources this row drives, each with its driver; a required source without one is red. */
-const DRIVERS = { unstaged: 'cli', staged: 'cli', branch: 'openPane', commit: 'openPane', 'combined-uncommitted': 'openPane' };
+const DRIVERS = { unstaged: 'openPane', staged: 'openPane', branch: 'openPane', commit: 'openPane', 'combined-uncommitted': 'openPane' };
 const REQUIRED_SOURCES = ['unstaged', 'staged', 'branch', 'commit', 'combined-uncommitted'];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -199,7 +200,7 @@ function buildFixtureRepo(repo, env) {
     git('add', '.'); git('commit', '-q', '-m', 'base');
     git('checkout', '-q', '-b', 'feature'); put('b.txt', 'b on feature\n'); git('commit', '-q', '-am', 'feature');
     git('checkout', '-q', 'main');
-    git('checkout', '-q', '-b', 'side'); put('conflict.txt', 'conflict on side\n'); git('rm', '-q', 'gone.txt'); git('commit', '-q', '-m', 'side');
+    git('checkout', '-q', '-b', 'side'); put('conflict.txt', 'conflict on side\n'); git('rm', '-q', 'gone.txt'); git('commit', '-q', '-am', 'side');
     git('checkout', '-q', 'main'); put('conflict.txt', 'conflict on main\n'); put('gone.txt', 'gone on main\n'); git('commit', '-q', '-am', 'main');
     try { git('merge', '-q', 'side'); } catch { /* the conflicts are the fixture */ }
     put('s.txt', 's staged\n'); git('add', 's.txt'); put('a.txt', 'a unstaged\n');
@@ -215,7 +216,8 @@ const EDITORS = `const shell = get('ApplicationShell');
             out.merges.push({ id: w.id, base: w.baseUri.toString(), side1: w.side1Uri.toString(), side2: w.side2Uri.toString(), result: w.resultUri.toString(), baseText: t(w.basePane), side1Text: t(w.side1Pane), side2Text: t(w.side2Pane) });
             continue;
         }
-        const uri = typeof w.getResourceUri === 'function' ? w.getResourceUri() : undefined;
+        // A diff editor's getResourceUri() is its modified side; the editor's own uri is the diff: URI.
+        const uri = w.editor && w.editor.uri && w.editor.uri.scheme === 'diff' ? w.editor.uri : typeof w.getResourceUri === 'function' ? w.getResourceUri() : undefined;
         if (!uri || !w.editor) continue;
         if (uri.scheme === 'diff') {
             let sides = [];
@@ -263,6 +265,7 @@ async function runLive() {
     const userFolder = join(scratch, 'user-folder');
     const stubDir = lib.writeStubAgentDir();
     const recorded = new Map();
+    const createdParents = new Set();
     try {
         for (const k of lib.scrubbedNames()) delete process.env[k];
         const live = await import('./lib/pb-live-probe.mjs');
@@ -333,11 +336,17 @@ async function runLive() {
 
             // (b) diffs and conflicts: drivers, then the texts against git.
             for (const s of REQUIRED_SOURCES) if (!DRIVERS[s]) fails.push(`(b) no driver for ${s}`);
-            orca('file', 'open-changed', '--mode', 'diff', '--worktree', `path:${repo}`);
             const head = git('rev-parse', 'HEAD');
+            let mergeSeen = null;
             const openPane = (kind, detail) => bundle(`m.openPane(${JSON.stringify(kind)}, ${JSON.stringify(worktreeId)}, ${JSON.stringify(detail)})`);
+            // C64-6: select the worktree first; Orca polls git status only for the active worktree, and its combined
+            // uncommitted diff snapshots that status.
+            await bundle(`m.setActiveWorktree(${JSON.stringify(worktreeId)})`);
             for (const [kind, detail] of [
-                ['diff', JSON.stringify({ source: 'branch', relativePath: 'b.txt' })],
+                ['diff', JSON.stringify({ source: 'unstaged', relativePath: 'a.txt' })],
+                ['diff', JSON.stringify({ source: 'staged', relativePath: 's.txt' })],
+                // baseRef explicit: Orca's default comes from a branch compare its source-control panel ran, and none ran here.
+                ['diff', JSON.stringify({ source: 'branch', relativePath: 'b.txt', baseRef: 'feature' })],
                 ['diff', JSON.stringify({ source: 'commit', relativePath: 'conflict.txt', commitOid: head })],
                 ['diff', JSON.stringify({ source: 'combined-uncommitted', relativePath: 's.txt' })],
                 ['conflict-review', JSON.stringify({ relativePath: 'conflict.txt', conflictKind: 'both_modified' })],
@@ -345,7 +354,11 @@ async function runLive() {
             ]) {
                 const r = await openPane(kind, detail);
                 if (r?.error) fails.push(`(b) openPane ${kind} failed: ${r.error}`);
+                // Orca keeps one Conflict Review tab per worktree, so the next conflict replaces this one: read the merge editor now.
+                if (detail.includes('both_modified')) mergeSeen = await pollFor(async () => (await p(EDITORS)).merges.find((mm) => sideOf(mm.result).path === join(repo, 'conflict.txt')) ?? null, 10000, 'the merge editor').catch(() => null);
             }
+            const combined = JSON.stringify({ source: 'combined-uncommitted', relativePath: 's.txt' });
+            await pollFor(async () => ((await openFiles()) ?? []).some((r) => r.diffSource === 'combined-uncommitted' && r.combinedFirst) || (await openPane('diff', combined), null), 20000, 'the combined diff over a loaded git status').catch(() => null);
             await sleep(3000);
             const records = (await openFiles()) ?? [];
             const view = await p(EDITORS);
@@ -355,23 +368,29 @@ async function runLive() {
             for (const rec of records.filter((r) => r.mode === 'diff' && r.worktreePath === repo)) {
                 diffSources.add(rec.diffSource);
                 const want = expectedDiffSides(rec, git('rev-parse', '--verify', '--quiet', 'HEAD^{commit}'));
+                if (want.rel === undefined) { fails.push(`(b) diff:${rec.diffSource} has no entry to open`); continue; }
                 const w = view.diffs.find((d) => { const l = sideOf(d.left); const r = sideOf(d.right); return l.path === join(repo, want.left.rel) && l.rev === want.left.rev && r.path === join(repo, want.right.rel) && r.rev === want.right.rev; });
                 if (!w) { fails.push(`(b) diff:${rec.diffSource} ${want.rel}: no Theia diff editor with the CA-03 sides`); continue; }
                 fails.push(...blobVerdict(`diff:${rec.diffSource} ${want.rel} left`, w.leftText, textOf(want.left)).map((f) => `(b) ${f}`));
                 fails.push(...blobVerdict(`diff:${rec.diffSource} ${want.rel} right`, w.rightText, textOf(want.right)).map((f) => `(b) ${f}`));
             }
             for (const s of REQUIRED_SOURCES) if (!diffSources.has(s)) fails.push(`(b) no Orca diff tab of source ${s} was observed`);
-            const merge = view.merges.find((mm) => sideOf(mm.result).path === join(repo, 'conflict.txt'));
+            const merge = mergeSeen;
             if (!merge) fails.push('(b) both_modified conflict.txt opened no Theia merge editor');
             else for (const [side, stage] of [['base', 1], ['side1', 2], ['side2', 3]]) fails.push(...blobVerdict(`merge ${side} (stage ${stage})`, merge[`${side}Text`], blob(`:${stage}`, 'conflict.txt')).map((f) => `(b) ${f}`));
             if (!view.editors.some((e) => e.uri === `file://${repo}/gone.txt`)) fails.push('(b) deleted_by_them gone.txt did not open the working file in the Theia editor');
 
             // (c) the Monaco detector: positive in the Theia editor first, then nothing in any Orca pane root.
-            const aEditor = view.editors.find((e) => e.uri === aUri);
+            // Read on the shown editor: Theia moves a hidden editor's node out for tab previews.
+            const aShown = view.editors.find((e) => e.uri === aUri);
+            const aEditor = aShown && { ...aShown, monaco: await p(`const w = get('ApplicationShell').getWidgetById(${JSON.stringify(aShown.id)}); if (!w) return false; await get('ApplicationShell').activateWidget(w.id); await sleep(500); return !!w.node.querySelector(${JSON.stringify(MONACO_SELECTOR)});`) };
             if (!aEditor?.monaco) fails.push(`(c) blind detector: ${MONACO_SELECTOR} matched nothing in the Theia editor of (a), so its absence below proves nothing`);
             else {
+                // A hosted Orca terminal gives the scan a pane root; a scan over zero roots would prove nothing.
+                await p(`await get('CommandService').executeCommand('powerbrowser.orca.newTerminal'); return await until(() => document.querySelectorAll('[data-pb-orca-pane]').length > 0, 20000);`, 30000);
                 const inPanes = await p(`return [...document.querySelectorAll('[data-pb-orca-pane]')].map(n => ({ kind: n.getAttribute('data-pb-orca-pane'), n: n.querySelectorAll(${JSON.stringify(MONACO_SELECTOR)}).length }));`);
                 for (const pane of inPanes.filter((x) => x.n > 0)) fails.push(`(c) Orca's editor DOM (${MONACO_SELECTOR}) inside an Orca ${pane.kind} pane`);
+                if (inPanes.length === 0) fails.push('(c) no Orca pane root to scan, so the absence of Orca\'s editor in pane roots proves nothing');
                 notes.push(`(c) ${inPanes.length} Orca pane root(s) scanned`);
             }
 
@@ -379,7 +398,9 @@ async function runLive() {
             const storeLocal = async () => { const s = await worktreesNow(); return [...(s?.worktrees ?? []).filter((w) => w.local && !w.isArchived).map((w) => w.path), ...(s?.folders ?? []).filter((f) => f.local).map((f) => f.path)]; };
             const ownedPaths = async () => ((await storage('powerbrowser.orca.ownedRoots')) ?? []).map((u) => decodeURIComponent(new URL(u).pathname));
             await sleep(1500);
-            fails.push(...rootsVerdict(await ownedPaths(), await storeLocal()).map((f) => `(d) ${f}`));
+            const owned0 = await ownedPaths();
+            fails.push(...rootsVerdict(owned0, await storeLocal()).map((f) => `(d) ${f}`));
+            notes.push(`(d) ${owned0.length} PB-owned root(s) compared with the store's local worktrees`);
             const created = orca('worktree', 'create', '--repo', `path:${repo}`, '--name', 'ws-live', '--setup', 'skip');
             void created;
             const wt = await pollFor(async () => (await storeLocal()).find((x) => x !== repo && x.includes('ws-live')) ?? null, 30000, 'the created worktree in the store').catch(() => null);
@@ -394,8 +415,11 @@ async function runLive() {
                 orca('file', 'open', join(wt, 'dirty.txt'), '--worktree', `path:${wt}`);
                 const both = await pollFor(async () => { const e = (await p(EDITORS)).editors; return (e.some((x) => x.uri === cleanUri) && e.some((x) => x.uri === dirtyUri)) || null; }, 10000, 'the clean and dirty editors').catch(() => false);
                 if (!both) fails.push('(d) the two editors under the created worktree did not open');
-                const dirtied = await p(`const w = get('EditorManager').all.find(e => e.getResourceUri().toString() === ${JSON.stringify(dirtyUri)});
-                    if (!w) return false; w.editor.document.textEditorModel.setValue('unsaved text'); await sleep(200); return !!(w.saveable && w.saveable.dirty);`);
+                // Theia's browser default files.autoSave is afterDelay, which would save the fixture clean before the removal.
+                const dirtyNow = () => p(`const w = get('EditorManager').all.find(e => e.getResourceUri().toString() === ${JSON.stringify(dirtyUri)}); return !!(w && w.saveable && w.saveable.dirty);`);
+                const dirtied = await p(`await get('PreferenceService').set('files.autoSave', 'off', 1);
+                    const w = get('EditorManager').all.find(e => e.getResourceUri().toString() === ${JSON.stringify(dirtyUri)});
+                    if (!w) return false; w.editor.document.textEditorModel.setValue('unsaved text'); await sleep(1500); return !!(w.saveable && w.saveable.dirty);`) && await dirtyNow();
                 if (!dirtied) fails.push('(d) blind fixture: the dirty editor never became dirty, so its survival proves nothing');
                 orca('worktree', 'rm', '--worktree', `path:${wt}`, '--force');
                 const removed = await pollFor(async () => !(await rootsNow()).includes(wt) || null, 30000, 'the removed worktree root to go').catch(() => false);
@@ -411,6 +435,16 @@ async function runLive() {
             const finalRoots = await rootsNow();
             if (!finalRoots.includes(userFolder)) fails.push('(d) a root added through Theia was removed by a sync');
             if (finalRoots.includes(repo)) fails.push('(d) a PB-owned root removed through Theia came back after the next store event');
+            // Orca creates worktrees under its workspaceDir (the host's ~/orca/workspaces/<repo>/): remove both through Orca.
+            const second = await pollFor(async () => (await storeLocal()).find((x) => x.includes('ws-live-2')) ?? null, 15000, 'the second created worktree').catch(() => null);
+            if (second) {
+                orca('worktree', 'rm', '--worktree', `path:${second}`, '--force');
+                const gone = await pollFor(async () => !(await storeLocal()).includes(second) || null, 30000, 'the second worktree to go').catch(() => false);
+                if (!gone || existsSync(second)) notes.push('cleanup: the second created worktree is still on disk under Orca\'s workspace directory');
+            }
+            createdParents.add(dirname(second ?? wt ?? ''));
+            // The dirty fixture's editor is reverted, so nothing saves it back into the removed worktree at quit.
+            if (wt) await p(`for (const w of get('EditorManager').all) if (w.getResourceUri().toString() === ${JSON.stringify(`file://${wt}/dirty.txt`)}) { await w.editor.document.revert(); w.close(); } return true;`);
 
             // (f) quit.
             const quit = await app.quit();
@@ -424,6 +458,8 @@ async function runLive() {
     } finally {
         rmSync(scratch, { recursive: true, force: true });
         rmSync(stubDir, { recursive: true, force: true });
+        // Only an empty directory goes (non-recursive): never anything else under Orca's workspace directory.
+        for (const d of createdParents) if (d && d !== '.') try { rmdirSync(d); } catch { /* not empty or absent */ }
         for (const [k, v] of Object.entries(savedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
         restoreOutput();
     }
