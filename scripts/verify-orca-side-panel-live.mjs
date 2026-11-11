@@ -21,8 +21,13 @@
 //                  orca repo list --json and orca worktree list --json as sets.
 //  c  setting      the experimental orchestration switch (its aria-label derived
 //                  from Orca's setting component) toggled in the hosted Settings
-//                  changes settings.experimentalOrchestrationPanel in orcad's
-//                  orca-data.json (value only), and toggling back restores it.
+//                  changes experimentalOrchestrationPanel in the store Orca's
+//                  web client persists it to (localStorage under the key
+//                  derived from web-storage.ts; the setting is not among the
+//                  runtime-backed settings web-preferences-store.ts sends to
+//                  orcad, so orcad's profile state never holds the change, in
+//                  stock Orca's web client either), and toggling back restores
+//                  it. The switch sits in Settings' Experimental section.
 //                  terminalShortcutPolicy and keybindings are never touched
 //                  (C64-1's hostedTerminalKeys holds them in memory).
 //  d  agents       with that setting on the Agents part is in the left
@@ -42,9 +47,14 @@
 //                  verification rule 1).
 //  i  egress       the Theia document first fetches http://pb-egress-control.invalid/
 //                  and the resolver log must name that host (else "collector
-//                  blind"); every other host resolved during the run, loopback
-//                  excluded, must pass endpoint-verdict.mjs's unattended verdict,
-//                  else red naming the host for the coordinator's measured row.
+//                  blind"). Immediately before the Orca mode is selected (the
+//                  user action that shows the panels) it fetches
+//                  http://pb-egress-user-action.invalid/, which the log must
+//                  also name. A host first resolved in the parent log after
+//                  that marker passes endpoint-verdict.mjs's user-action
+//                  verdict; every other host, loopback excluded (and any seen
+//                  only in a child log, which cannot be ordered), must pass the
+//                  unattended verdict, else red naming the host (P65-24; 65-05).
 // Output names clauses, counts and host names only; never a path, the ready
 // line, a pairing URL, an offer or a token.
 //
@@ -75,6 +85,7 @@ export const RIGHT = 'powerbrowser-orca-right-view-container';
 export const PARTS = { 'powerbrowser-orca-sidebar-view': 'sidebar', 'powerbrowser-orca-settings-view': 'settings', 'powerbrowser-orca-right-sidebar-view': 'right-sidebar' };
 export const AGENTS = 'powerbrowser-orca-agents-view';
 export const CONTROL_HOST = 'pb-egress-control.invalid';
+export const ACTION_HOST = 'pb-egress-user-action.invalid';
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
 const SRC = {
@@ -84,6 +95,8 @@ const SRC = {
     nav: ['orca/src/renderer/src/components/sidebar/SidebarNav.tsx', 'orca/src/renderer/src/components/sidebar/SidebarTaskNavButton.tsx'],
     toggle: 'orca/src/renderer/src/components/settings/orchestration/OrchestrationPanelExperimentalSetting.tsx',
     views: 'orca/src/shared/ui-chrome-types.ts',
+    webStorage: 'orca/src/renderer/src/web/preload-api/web-storage.ts',
+    webPreferences: 'orca/src/renderer/src/web/preload-api/web-preferences-store.ts',
 };
 
 // ---- pure comparators (the self-test feeds these fixtures) ----
@@ -120,11 +133,29 @@ export function leakVerdict(areasByMode) {
     return fails;
 }
 
-/** i: the control first, then the unattended verdict over every other non-loopback host. */
-export function egressVerdict({ resolved, allowlist }) {
+/**
+ * i: the control first, then each non-loopback host under its verdict. `afterAction` (when given) lists the hosts
+ * first resolved after the user-action marker; those take the user-action verdict, every other host the unattended one.
+ */
+export function egressVerdict({ resolved, allowlist, afterAction }) {
     if (!resolved.includes(CONTROL_HOST)) return [`collector blind: the control host ${CONTROL_HOST} is not in the resolver log`];
-    const observed = resolved.filter(h => h !== CONTROL_HOST && !LOOPBACK.has(h));
-    return violations(allowlist, observed, { userAction: false }).map(h => `unlisted host ${h} resolved while the Orca side panels rendered (unattended verdict)`);
+    if (afterAction !== undefined && !resolved.includes(ACTION_HOST)) return [`collector blind: the user-action marker ${ACTION_HOST} is not in the resolver log`];
+    const observed = resolved.filter(h => h !== CONTROL_HOST && h !== ACTION_HOST && !LOOPBACK.has(h));
+    const after = new Set(afterAction ?? []);
+    return [
+        ...violations(allowlist, observed.filter(h => !after.has(h)), { userAction: false }).map(h => `unlisted host ${h} resolved while the Orca side panels rendered (unattended verdict)`),
+        ...violations(allowlist, observed.filter(h => after.has(h)), { userAction: true }).map(h => `unlisted host ${h} resolved after the Orca mode was selected (user-action verdict)`),
+    ];
+}
+
+/** The hosts whose first `Resolving host` line in the parent log <base>.moz_log comes after the marker's first line. */
+export function hostsAfterMarker(base, marker) {
+    const file = `${base}.moz_log`;
+    if (!existsSync(file)) return [];
+    const order = [];
+    for (const m of readFileSync(file, 'latin1').matchAll(/Resolving host \[([^\]]+)\]/g)) if (!order.includes(m[1])) order.push(m[1]);
+    const at = order.indexOf(marker);
+    return at < 0 ? [] : order.slice(at + 1);
 }
 
 /** The anchored `Resolving host [...]` names of <base>.moz_log and its .child-N.moz_log siblings (verify-endpoints.sh layer 3). */
@@ -227,10 +258,15 @@ async function live() {
             git('init', '-q');
             git('commit', '-q', '--allow-empty', '-m', 'fixture');
             ctx.orca('repo', 'add', '--path', repo2);
+            // i (user-action marker): hosts first resolved after this follow the user selecting the Orca mode.
+            await ctx.probe(`try { await fetch('http://${ACTION_HOST}/', { mode: 'no-cors' }); } catch (e) { /* NXDOMAIN expected */ } return true;`);
             await ctx.probe(`await get('ModeService').activateMode('orca'); return true;`);
+            // The shell's active widget follows document focus; the automated window starts without it.
+            await ctx.focusTheiaFrame();
 
-            // a
+            // a: a collapsed part mounts when shown (C64-4), so each is expanded first, as a user opens it.
             const panel = await ctx.probe(`const wm = get('WidgetManager'); const shell = get('ApplicationShell');
+                for (const id of [${J(LEFT)}, ${J(RIGHT)}]) { const c = wm.tryGetWidget(id); if (c) for (const part of c.getParts()) part.collapsed = false; }
                 await until(() => ${J(Object.keys(PARTS))}.every(id => { const w = wm.tryGetWidget(id); return w && w.node.querySelector('.pb-orca-pane-host *'); }), 20000);
                 const area = id => { const w = wm.tryGetWidget(id); return w && w.isAttached ? shell.getAreaFor(w) : null; };
                 const parts = Object.fromEntries(${J(Object.keys(PARTS))}.map(id => { const w = wm.tryGetWidget(id); return [id, !!(w && w.node.querySelector('.pb-orca-pane-host *'))]; }));
@@ -253,13 +289,19 @@ async function live() {
             clause('b rows', [...setVerdict('repositories', rows.repos, cliRepos), ...setVerdict('worktrees', rows.worktrees, cliWorktrees)],
                 `${new Set(rows.repos).size} repository and ${new Set(rows.worktrees).size} worktree rows equal the CLI lists`);
 
-            // c and d: one switch, read in orcad's store and in the dock.
-            const state = await ctx.orcaState();
-            const dataFile = [join(state.effectiveRoot, 'orca-data.json'), join(state.dataRoot ?? '', 'orca-data.json')].find(existsSync);
-            const stored = () => { try { return JSON.parse(readFileSync(dataFile, 'utf8')).settings?.experimentalOrchestrationPanel === true; } catch { return null; } };
+            // c and d: one switch, read in Orca's web settings store and in the dock.
+            // Orca's web client keeps this setting in its own localStorage store (derived key); it is not runtime-backed.
+            const storageKey = /export const SETTINGS_STORAGE_KEY = '([^']+)'/.exec(readFileSync(join(REPO_ROOT, SRC.webStorage), 'utf8'))?.[1];
+            const runtimeBacked = /runtimeUpdates\.experimentalOrchestrationPanel\b/.test(readFileSync(join(REPO_ROOT, SRC.webPreferences), 'utf8'));
+            const judgeable = !!storageKey && !runtimeBacked;
+            const readStored = () => ctx.probe(`try { const v = JSON.parse(localStorage.getItem(${J(storageKey)}) || '{}').experimentalOrchestrationPanel; return typeof v === 'boolean' ? v : null; } catch (e) { return null; }`);
+            const pollStored = (want, what) => ctx.pollFor(async () => (await readStored()) === want, 10000, what);
             const toggle = () => ctx.probe(`const part = get('WidgetManager').tryGetWidget('powerbrowser-orca-settings-view');
                 const c = get('WidgetManager').tryGetWidget(${J(LEFT)}); c && c.activateWidget(part.id);
                 const find = () => part.node.querySelector('[aria-label=${J(sel.toggleLabel)}]');
+                // Orca's Settings shows one section at a time; the switch is in its Experimental section.
+                if (!find()) { await until(() => [...part.node.querySelectorAll('button, a')].some(e => e.textContent.trim() === 'Experimental'), 10000);
+                    const nav = [...part.node.querySelectorAll('button, a')].find(e => e.textContent.trim() === 'Experimental'); nav && nav.click(); }
                 await until(find, 10000);
                 const sw = find();
                 if (!sw) return { error: 'switch not found' };
@@ -269,21 +311,21 @@ async function live() {
             const waitAgents = (want) => ctx.probe(`const wm = get('WidgetManager');
                 return await until(() => { const c = wm.tryGetWidget(${J(LEFT)}); const a = wm.tryGetWidget(${J(AGENTS)}); return !!(c && a && c.getPartFor(a)) === ${want}; }, 2000);`);
             const cFails = [];
-            const before = dataFile ? stored() : null;
-            if (!dataFile) cFails.push('orca-data.json not found in the data root');
-            if (before === true) { await toggle(); await ctx.pollFor(async () => stored() === false, 10000, 'the setting off').catch(() => undefined); }
+            const before = judgeable ? await readStored() : null;
+            if (!judgeable) cFails.push(runtimeBacked ? `source moved: experimentalOrchestrationPanel is now runtime-backed in ${SRC.webPreferences}; judge orcad's profile state` : `source moved: no SETTINGS_STORAGE_KEY in ${SRC.webStorage}`);
+            if (before === true) { await toggle(); await pollStored(false, 'the setting off').catch(() => undefined); }
             const on = await toggle();
             if (on?.error) cFails.push(`settings ${on.error} (aria-label derived from ${SRC.toggle})`);
-            const storedOn = await ctx.pollFor(async () => stored() === true, 10000, 'the setting on in orcad').then(() => true, () => false);
-            if (!storedOn) cFails.push('the hosted switch did not set the setting in orcad\'s store');
+            const storedOn = await pollStored(true, 'the setting on in Orca\'s web settings store').then(() => true, () => false);
+            if (!storedOn) cFails.push('the hosted switch did not set the setting in Orca\'s web settings store');
             await waitAgents(true);
             const presentWhenOn = await agentsIn();
             await toggle();
-            const storedOff = await ctx.pollFor(async () => stored() === false, 10000, 'the setting off in orcad').then(() => true, () => false);
-            if (!storedOff) cFails.push('toggling back did not restore the setting in orcad\'s store');
+            const storedOff = await pollStored(false, 'the setting off in Orca\'s web settings store').then(() => true, () => false);
+            if (!storedOff) cFails.push('toggling back did not restore the setting in Orca\'s web settings store');
             await waitAgents(false);
             const presentWhenOff = await agentsIn();
-            clause('c setting', cFails, 'the hosted switch round-tripped through orcad\'s store');
+            clause('c setting', cFails, 'the hosted switch round-tripped through Orca\'s web settings store');
             clause('d agents', agentsVerdict({ presentWhenOn, presentWhenOff }), 'agents part added with the setting on and removed with it off, each within 2 s');
 
             // e
@@ -357,7 +399,10 @@ async function live() {
     // i, after the browser has exited and flushed its logs.
     const { hosts } = JSON.parse(readFileSync(join(REPO_ROOT, 'powerbrowser', 'endpoint-allowlist.json'), 'utf8'));
     const resolved = resolvedHosts(logBase);
-    clause('i egress', egressVerdict({ resolved, allowlist: hosts }), `control seen; ${resolved.filter(h => h !== CONTROL_HOST && !LOOPBACK.has(h)).length} other host(s) pass the unattended verdict`);
+    const afterAction = hostsAfterMarker(logBase, ACTION_HOST);
+    const others = resolved.filter(h => h !== CONTROL_HOST && h !== ACTION_HOST && !LOOPBACK.has(h));
+    const nAfter = others.filter(h => afterAction.includes(h)).length;
+    clause('i egress', egressVerdict({ resolved, allowlist: hosts, afterAction }), `control and user-action marker seen; ${others.length - nAfter} host(s) pass the unattended verdict, ${nAfter} first resolved after the Orca mode was selected pass the user-action verdict`);
     const failed = results.filter(r => r.fails.length).map(r => r.name);
     if (failed.length) { console.error(`${NAME}: FAIL -- ${failed.join(', ')}`); return 1; }
     console.log(`${NAME}: PASS -- ${results.length} clauses`);
@@ -380,6 +425,10 @@ function selfTest() {
         ['a control host absent', () => egressVerdict({ resolved: ['api.github.com'], allowlist: allow }), 'collector blind'],
         ['an unlisted host', () => egressVerdict({ resolved: [CONTROL_HOST, 'tracker.example.net'], allowlist: allow }), 'unlisted host tracker.example.net'],
         ['a user-initiated host resolved unattended', () => egressVerdict({ resolved: [CONTROL_HOST, 'example.org'], allowlist: allow }), 'unlisted host example.org'],
+        ['control: a user-initiated host after the user-action marker', () => egressVerdict({ resolved: [CONTROL_HOST, ACTION_HOST, 'example.org'], allowlist: allow, afterAction: ['example.org'] }), null],
+        ['a user-initiated host before the user-action marker', () => egressVerdict({ resolved: [CONTROL_HOST, ACTION_HOST, 'example.org'], allowlist: allow, afterAction: [] }), 'unlisted host example.org resolved while'],
+        ['an unlisted host after the user-action marker', () => egressVerdict({ resolved: [CONTROL_HOST, ACTION_HOST, 'tracker.example.net'], allowlist: allow, afterAction: ['tracker.example.net'] }), 'unlisted host tracker.example.net resolved after'],
+        ['the user-action marker absent', () => egressVerdict({ resolved: [CONTROL_HOST, 'example.org'], allowlist: allow, afterAction: [] }), 'collector blind: the user-action marker'],
     ];
     let failures = 0;
     for (const [name, run, naming] of cases) {

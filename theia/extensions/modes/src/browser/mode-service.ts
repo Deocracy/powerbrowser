@@ -341,6 +341,7 @@ export class ModeService implements FrontendApplicationContribution {
                 await this.ensureInArea(viewId, area);
             }
         }
+        this.detachOtherModesViews(rules);
         // collapse() floats a promise (expand is sync void): attach the
         // no-op catch so a shutdown-time rejection is silence, not noise.
         if (rules.left === 'open') {
@@ -416,6 +417,26 @@ export class ModeService implements FrontendApplicationContribution {
      * The whole body is guarded because a widget-manager failure is a missing
      * side view, never a reason to abandon the rest of the switch.
      */
+    /**
+     * Research A5 (measured false in 65-05): a revisited mode's saved layout detaches stray side views
+     * (perspective-service.js detachStrayWidgets), but a first visit only adds (applyViewPlacements), so a view
+     * another shipped mode's row docks (the Orca containers, Coding's Explorer) stayed docked in a mode whose row
+     * does not list it. Those views are detached the way stock detaches strays (parent = null, never disposed),
+     * and the owning mode's ensureInArea docks the same widget again.
+     */
+    protected detachOtherModesViews(rules: ModeRules): void {
+        for (const area of ['left', 'right'] as const) {
+            const owned = new Set(Object.values(SHIPPED_MODE_RULES).flatMap(row => row.views[area]));
+            for (const widget of this.shell.getWidgets(area)) {
+                const factoryId = this.widgetManager.getDescription(widget)?.factoryId;
+                if (factoryId && owned.has(factoryId) && !rules.views[area].includes(factoryId)) {
+                    // eslint-disable-next-line no-null/no-null
+                    widget.parent = null;
+                }
+            }
+        }
+    }
+
     protected async ensureInArea(viewId: string, area: 'left' | 'right' | 'bottom'): Promise<void> {
         try {
             const widget = await this.widgetManager.getOrCreateWidget(viewId);
