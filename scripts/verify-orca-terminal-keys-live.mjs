@@ -1,45 +1,54 @@
 #!/usr/bin/env node
 // scripts/verify-orca-terminal-keys-live.mjs
 //
-// orca-terminal-keys-live (Phase 64, TERM-04 live, criterion 7; D-09, D-31,
-// P64-33; interface C10): the six tab keys pressed in a hosted Orca terminal tab
-// reach its PTY, and the same keys in a Theia t<n> terminal and a web tab keep
-// PowerBrowser's behaviour.
+// orca-terminal-keys-live (Phase 64, TERM-04 live, criterion 7; D-32, P64-33;
+// interfaces C10', C13): D-32 measured in one PowerBrowser session. In a hosted
+// Orca terminal and in a Theia t<n> terminal, Ctrl+W and Ctrl+T reach the shell
+// with the tab count and the active tab unchanged; Ctrl+Tab, Ctrl+Shift+Tab,
+// Ctrl+PageUp and Ctrl+PageDown switch the active PowerBrowser tab from both
+// terminals and from a web tab, and reach neither PTY; Ctrl+Shift+W closes the
+// current tab from Theia focus (a t<n> tab closes; a hosted Orca terminal running
+// a process shows Orca's own running-terminal confirmation, or closes).
 //
 // Ported from refs/heads/ServerDestroyer/p63-05:scripts/verify-orca-terminal-keys-live.mjs
 // by reading it and writing it again (never merged). Kept: the in-session
 // control, keySpecFor, visibleFormFor, segmentsOf, the raw-mode cat -v probe
-// command and the import-silence self-test. Not ported, because they belong to
-// the dropped o<n> bridge (D-31): runTabStage, the backend-parent chain, the
-// kind 'orca' restore stage and the o<n> name pattern.
+// command and the import-silence self-test.
 //
 // One PowerBrowser session (scripts/lib/orca-tabs-live.mjs):
-//  1. Control, before any Orca terminal tab exists: each of the six keys is
-//     pressed in a t<n> terminal tab running a raw-mode cat -v recorder and in a
-//     web tab; the effect is recorded: the tab count change (main and bottom
-//     areas, where Theia's terminals open), whether
-//     the active widget changed, and for t<n> the bytes the recorder saw.
+//  1. Control, before any Orca terminal tab exists: each key is pressed in a t<n>
+//     terminal tab running a raw-mode cat -v recorder and in a web tab; the
+//     effect is recorded (tab count change over the main and bottom areas,
+//     whether the active widget changed, and for t<n> the bytes the recorder
+//     saw) and judged by D-32: in t<n> the shell keys put ^W and ^T in the
+//     recorder with nothing switched, the switch keys switch with no recorder
+//     bytes, the close key closes the tab; in the web tab the switch keys switch.
 //  2. Only when the prerequisites hold (orca-panes merged and wired, orcad and
 //     the pane bundle built): an Orca terminal created through orcad's CLI runs
 //     the same recorder, its hosted tab is focused and each key is pressed with
-//     a typed separator. orcad's terminal read must show ^W and ^T and a
-//     non-empty sequence for every other key; the tab count and the active
-//     widget must not change on any key. While theia/extensions/orca-panes is
-//     absent this stage prints its named SKIP.
+//     a typed separator. orcad's terminal read must show ^W and ^T with the tab
+//     count and active widget unchanged; each switch key must switch the active
+//     widget with an empty segment, judged only when every shell-key segment was
+//     read (the PTY read proven first, CLAUDE.md verification rule 1). The close
+//     key, pressed last, must dispose the hosted widget or open Orca's
+//     running-terminal confirmation (detected positively, as orca-tabs-live
+//     stage j does); the check then cancels and closes the terminal through the
+//     CLI. While theia/extensions/orca-panes is absent this stage prints its
+//     named SKIP.
 //  3. The t<n> and web tabs are measured again and each key's effect must
 //     equal the control.
 //  Why an in-session control stands in for P63-25's control taken before the
 //  Orca extension is loaded: orca-terminal-keys proves statically that every
 //  passthrough row's when clause is the scoped key powerbrowser.orcaTerminalFocus,
-//  created only on hosted terminal nodes, so outside one the rows are inert and
-//  the session behaves as one without the extension. Measuring again after a
-//  hosted terminal had focus catches a key left set on another widget. This
-//  substitution is an owner-review item (64-04-SUMMARY).
+//  created only on hosted terminal nodes, so outside one the rows are inert.
+//  Measuring again after a hosted terminal had focus catches a key left set on
+//  another widget. This substitution is an owner-review item (64-04-SUMMARY).
 //
-// Keys, derived at check time: ORCA_TERMINAL_PASSTHROUGH_KEYS from orca-panes'
-// protocol file when orca-panes is present, else the reserved PAGE_KEYS rows
-// (verify-orca-terminal-keys.mjs's derivation); each key's visible form from
-// its name. TERMINAL_NAME_PATTERN from tab-uris' terminal-naming-contribution.ts.
+// Keys, derived at check time: the shell, switch and close keys from
+// verify-orca-terminal-keys.mjs's derivation over the reserved PAGE_KEYS rows;
+// with orca-panes present, ORCA_TERMINAL_PASSTHROUGH_KEYS must equal the shell
+// keys. Each key's visible form from its name. TERMINAL_NAME_PATTERN from
+// tab-uris' terminal-naming-contribution.ts.
 //
 // Run under the live lock with this shell's ORCA_* unset:
 //   flock /home/chris/coding/Power-Browser/.git/pb-live.lock node scripts/verify-orca-terminal-keys-live.mjs
@@ -71,6 +80,9 @@ const WORK_REL = '.mozbuild/orca-terminal-keys-live';
 // Raw mode so ^W reaches cat instead of the line discipline's word erase.
 export const PROBE_COMMAND = 'stty -icanon -echo -isig -iexten; exec cat -v';
 const sep = (i) => `@K${i}@`;
+const READY_MARK = '@READY@';
+/** Orca's confirmation dialog, as orca-tabs-live stage j detects it. */
+const CONFIRMATION_SELECTOR = 'body > [data-radix-popper-content-wrapper] [role="dialog"], body > [data-radix-popper-content-wrapper] [role="alertdialog"], body > [role="dialog"], body > [role="alertdialog"], body > div [role="alertdialog"]';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
 
@@ -122,56 +134,84 @@ export function segmentsOf(text, keys) {
 }
 
 /**
- * The keys to press: the protocol's list when orca-panes is present (a missing or unmappable list throws, red),
- * else the reserved PAGE_KEYS rows. Resolves { keys, source, userName }.
+ * D-32's keys from the static check's derivation; with orca-panes present its passthrough list must equal the shell
+ * keys. Resolves { keys (shell, switch, close in that order), shell, switch, close, userName }.
  */
 export async function readKeys(root = REPO_ROOT) {
     const userName = readPattern(read(join(root, NAMING_REL)), 'TERMINAL_NAME_PATTERN');
     if (!userName) throw new Error(`${NAMING_REL} exports no TERMINAL_NAME_PATTERN`);
-    let keys;
-    let source;
+    const { loadTypeScript, deriveD32 } = await import('./verify-orca-terminal-keys.mjs');
+    if (!loadTypeScript()) throw new Error('theia/node_modules/typescript is absent, so PAGE_KEYS cannot be derived; run the audited Theia install');
+    const d = deriveD32(read(join(root, PAGE_KEYS_REL)) ?? '');
+    if (d.fails.length) throw new Error(d.fails.join('; '));
     if (existsSync(join(root, ORCA_PANES_REL))) {
-        keys = readPassthroughKeys(read(join(root, PROTOCOL_REL)));
-        if (!keys || !keys.length) throw new Error(`${PROTOCOL_REL} exports no ORCA_TERMINAL_PASSTHROUGH_KEYS while ${ORCA_PANES_REL} is present`);
-        source = 'ORCA_TERMINAL_PASSTHROUGH_KEYS';
-    } else {
-        const { loadTypeScript, derivePageKeys } = await import('./verify-orca-terminal-keys.mjs');
-        if (!loadTypeScript()) throw new Error('theia/node_modules/typescript is absent, so PAGE_KEYS cannot be derived; run the audited Theia install');
-        const d = derivePageKeys(read(join(root, PAGE_KEYS_REL)) ?? '');
-        if (d.fails.length) throw new Error(d.fails.join('; '));
-        keys = d.keys;
-        source = 'PAGE_KEYS reserved rows';
+        const passthrough = readPassthroughKeys(read(join(root, PROTOCOL_REL)));
+        if (!passthrough) throw new Error(`${PROTOCOL_REL} exports no ORCA_TERMINAL_PASSTHROUGH_KEYS while ${ORCA_PANES_REL} is present`);
+        if ([...passthrough].sort().join() !== [...d.shell].sort().join()) throw new Error(`ORCA_TERMINAL_PASSTHROUGH_KEYS (${passthrough.join(', ')}) differs from the shell keys (${d.shell.join(', ')}); orca-terminal-keys is red`);
     }
+    const keys = [...d.shell, ...d.switch, d.close];
     const unmapped = keys.filter((k) => !keySpecFor(k));
-    if (unmapped.length) throw new Error(`unmapped key ${unmapped.join(', ')} in ${source}`);
-    return { keys, source, userName };
+    if (unmapped.length) throw new Error(`unmapped key ${unmapped.join(', ')} in the D-32 keys`);
+    return { keys, shell: d.shell, switch: d.switch, close: d.close, userName };
 }
 
 // ---------------------------------------------------------------------------
 // Pure verdicts (the self-test's subject). Each returns red reasons.
 
-/** Stage 1: the control measured every key in both tabs. obs: { keys, control: { term, web } }. */
+/** Stage 1 (D-32 in t<n> and the web tab). obs: { keys, shell, switch, close, control: { term, web } }. */
 export function controlVerdict(obs) {
     if (!obs.keys?.length) return ['no keys were read, so nothing was pressed'];
     const missing = obs.keys.filter((k) => !obs.control?.term?.[k] || !obs.control?.web?.[k]);
-    return missing.length ? [`control incomplete: no effect recorded for ${missing.join(', ')} in the t<n> terminal or the web tab`] : [];
+    if (missing.length) return [`control incomplete: no effect recorded for ${missing.join(', ')} in the t<n> terminal or the web tab`];
+    const fails = [];
+    const term = obs.control.term;
+    for (const key of obs.shell) {
+        const e = term[key];
+        if (!String(e.bytes ?? '').includes(visibleFormFor(key) ?? '\0')) fails.push(`${visibleFormFor(key)} missing: ${key} pressed in the t<n> terminal did not reach its shell (recorder read ${JSON.stringify(e.bytes)})`);
+        if (e.tabDelta !== 0 || e.activeChanged) fails.push(`${key} closed or switched a tab from the t<n> terminal (tab count change ${e.tabDelta}, active widget changed ${e.activeChanged})`);
+    }
+    for (const key of obs.switch) {
+        const e = term[key];
+        if (e.bytes) fails.push(`${key} reached the t<n> PTY (recorder read ${JSON.stringify(e.bytes)}); D-32 switch keys reach no PTY`);
+        if (e.tabDelta !== 0 || !e.activeChanged) fails.push(`${key} did not switch the PowerBrowser tab from the t<n> terminal (tab count change ${e.tabDelta}, active widget changed ${e.activeChanged})`);
+        const w = obs.control.web[key];
+        if (w.tabDelta !== 0 || !w.activeChanged) fails.push(`${key} did not switch the PowerBrowser tab from the web tab (tab count change ${w.tabDelta}, active widget changed ${w.activeChanged})`);
+    }
+    if (term[obs.close].tabDelta !== -1) fails.push(`${obs.close} did not close the t<n> terminal tab (tab count change ${term[obs.close].tabDelta})`);
+    return fails;
 }
 
-/** Stage 2. obs: { keys, orca: { text, effects: { key: { tabDelta, activeChanged } } } }. */
+/**
+ * Stage 2. obs: { shell, switch, close, orca: { tab, text, effects: { key: { tabDelta, activeChanged } }, closed: { disposed, dialog } } }.
+ * The text holds a separator before each shell and switch key and one after the last of them.
+ */
 export function orcaStageVerdict(obs) {
     const fails = [];
     if (!obs.orca) return ['stage 2 not measured'];
     if (!obs.orca.tab) return ['hosted terminal tab missing: the CLI-created Orca terminal produced no hosted widget'];
-    const segments = segmentsOf(obs.orca.text ?? '', obs.keys);
-    obs.keys.forEach((key, i) => {
+    const ptyKeys = [...obs.shell, ...obs.switch];
+    const segments = segmentsOf(obs.orca.text ?? '', ptyKeys);
+    obs.shell.forEach((key, i) => {
         const form = visibleFormFor(key);
         const seg = segments[i];
         if (seg === null) fails.push(`separators around ${key} are missing from orcad's terminal read, so the hosted terminal did not get the typed text`);
-        else if (form && !seg.includes(form)) fails.push(`${form} missing: ${key} pressed in the hosted Orca terminal did not reach the PTY (read ${JSON.stringify(seg)})`);
-        else if (!form && !seg.length) fails.push(`no sequence for ${key}: it did not reach the PTY from the hosted Orca terminal`);
+        else if (!seg.includes(form)) fails.push(`${form} missing: ${key} pressed in the hosted Orca terminal did not reach the PTY (read ${JSON.stringify(seg)})`);
         const e = obs.orca.effects?.[key];
         if (!e || e.tabDelta !== 0 || e.activeChanged) fails.push(`${key} closed or switched a tab in the hosted Orca terminal (tab count change ${e?.tabDelta}, active widget changed ${e?.activeChanged})`);
     });
+    const proven = obs.shell.every((_, i) => segments[i] !== null);
+    if (!proven) fails.push('switch keys not judged: the shell-key segments were not all read, so an empty switch-key segment would prove nothing');
+    else {
+        obs.switch.forEach((key, j) => {
+            const seg = segments[obs.shell.length + j];
+            if (seg === null) fails.push(`separators around ${key} are missing from orcad's terminal read`);
+            else if (seg.length) fails.push(`${key} reached the hosted Orca terminal's PTY (read ${JSON.stringify(seg)}); D-32 switch keys reach no PTY`);
+            const e = obs.orca.effects?.[key];
+            if (!e || e.tabDelta !== 0 || !e.activeChanged) fails.push(`${key} did not switch the PowerBrowser tab from the hosted Orca terminal (tab count change ${e?.tabDelta}, active widget changed ${e?.activeChanged})`);
+        });
+    }
+    const c = obs.orca.closed;
+    if (!c || (!c.disposed && !c.dialog)) fails.push(`${obs.close} in the hosted Orca terminal neither closed it nor opened Orca's running-terminal confirmation`);
     return fails;
 }
 
@@ -231,8 +271,8 @@ async function run({ log }) {
     if (base.skip) return { skip: base.skip };
     const orcaPrereq = lib.prerequisites({ needOrca: true });
     const panesPresent = existsSync(join(REPO_ROOT, ORCA_PANES_REL));
-    const { keys, source, userName } = await readKeys();
-    const obs = { keys, control: { term: {}, web: {} }, orca: null, after: { term: {}, web: {} } };
+    const { keys, userName, ...sets } = await readKeys();
+    const obs = { keys, shell: sets.shell, switch: sets.switch, close: sets.close, control: { term: {}, web: {} }, orca: null, after: { term: {}, web: {} } };
     const work = join(REPO_ROOT, WORK_REL);
     mkdirSync(work, { recursive: true });
     let stage2Skip = orcaPrereq.skip;
@@ -281,10 +321,10 @@ async function run({ log }) {
                 }
             };
             await measure(obs.control);
-            log(`control: ${keys.length} keys measured in a t<n> terminal and a web tab (keys from ${source})`);
+            log(`control: ${keys.length} keys measured in a t<n> terminal and a web tab (shell ${sets.shell.join(', ')}; switch ${sets.switch.join(', ')}; close ${sets.close})`);
 
             if (!stage2Skip && !stage2Fail) {
-                obs.orca = { tab: null, text: '', effects: {} };
+                obs.orca = { tab: null, text: '', effects: {}, closed: null };
                 const before = await lib.hostedIds(ctx);
                 const t0 = Date.now();
                 const created = ctx.orca('terminal', 'create', '--worktree', ctx.worktree, '--command', PROBE_COMMAND);
@@ -294,16 +334,43 @@ async function run({ log }) {
                 hosted = added?.id ?? null;
                 obs.orca.tab = hosted;
                 if (hosted) {
-                    await ctx.focusTheiaFrame();
-                    await ctx.activate(hosted);
-                    for (const [i, key] of keys.entries()) {
+                    // The recorder must be reading before the first separator: until the shell has run the probe command,
+                    // typed text lands on the shell's command line. A ready marker is typed until cat -v echoes it.
+                    let ready = false;
+                    for (let attempt = 0; attempt < 15 && !ready; attempt++) {
+                        await ctx.focusTheiaFrame();
+                        await ctx.activate(hosted);
+                        await ctx.typeText(READY_MARK);
+                        // After the shell's echo of the probe command, only cat -v (raw, -echo) can print the marker.
+                        const echoed = () => { const t = lib.terminalText(ctx, handle); return t.slice(t.lastIndexOf('exec cat -v') + 1).includes(READY_MARK); };
+                        ready = await ctx.pollFor(async () => echoed(), 2000, 'the ready marker').then(() => true, () => false);
+                    }
+                    if (!ready) log('note -- the hosted recorder never echoed the ready marker within 30 s');
+                    const ptyKeys = [...sets.shell, ...sets.switch];
+                    for (const [i, key] of ptyKeys.entries()) {
+                        await ctx.focusTheiaFrame();
+                        await ctx.activate(hosted);
                         await ctx.typeText(sep(i));
                         obs.orca.effects[key] = await effectOf(ctx, keySpecFor(key), null);
-                        await ctx.activate(hosted);
                     }
-                    await ctx.typeText(sep(keys.length));
-                    await ctx.pollFor(async () => lib.terminalText(ctx, handle).includes(sep(keys.length)), 15000, 'the last separator in orcad\'s terminal read').catch(() => false);
+                    await ctx.focusTheiaFrame();
+                    await ctx.activate(hosted);
+                    await ctx.typeText(sep(ptyKeys.length));
+                    await ctx.pollFor(async () => lib.terminalText(ctx, handle).includes(sep(ptyKeys.length)), 15000, 'the last separator in orcad\'s terminal read').catch(() => false);
                     obs.orca.text = lib.terminalText(ctx, handle);
+                    // The close key last: the recorder keeps the terminal busy, so Orca's own close asks first.
+                    await ctx.pressKey(keySpecFor(sets.close));
+                    obs.orca.closed = await ctx.pollFor(async () => {
+                        const disposed = !(await lib.hostedIds(ctx)).includes(hosted);
+                        const dialog = await ctx.probe(`return !!document.querySelector(${JSON.stringify(CONFIRMATION_SELECTOR)});`);
+                        return disposed || dialog ? { disposed, dialog } : null;
+                    }, 5000, 'the close key\'s effect').catch(() => ({ disposed: false, dialog: false }));
+                    log(`note -- the close key in the hosted terminal ${obs.orca.closed.dialog ? 'opened Orca\'s running-terminal confirmation' : obs.orca.closed.disposed ? 'disposed the hosted widget' : 'had no observed effect'}`);
+                    if (obs.orca.closed.dialog) {
+                        await ctx.probe(`const d = document.querySelector('[role="dialog"], [role="alertdialog"]'); const btn = d && [...d.querySelectorAll('button')].find(b => /cancel/i.test(b.textContent)); if (btn) btn.click(); await sleep(500); return !!btn;`);
+                    }
+                    try { ctx.orca('terminal', 'close', '--terminal', handle); } catch (err) { log(`note -- the CLI close of the probe terminal failed: ${err.message}`); }
+                    hosted = null;
                 }
             }
             await measure(obs.after);
@@ -325,13 +392,14 @@ async function main() {
     if (r.skip) { say(`SKIP -- ${r.skip}`); return 0; }
     const control = controlVerdict(r.obs);
     const repeat = repeatVerdict(r.obs);
+    say(control.length ? `control: FAIL -- ${control.join('; ')}` : 'control: PASS -- in t<n> the shell keys reached the shell, the switch keys switched with no PTY bytes and the close key closed the tab; in the web tab the switch keys switched');
     if (r.stage2Skip) say(`stage 2: SKIP -- ${r.stage2Skip}`);
-    else say(r.stage2.length ? `stage 2: FAIL -- ${r.stage2.join('; ')}` : 'stage 2: PASS -- every key reached the hosted terminal\'s PTY with the tab count and active widget unchanged');
+    else say(r.stage2.length ? `stage 2: FAIL -- ${r.stage2.join('; ')}` : 'stage 2: PASS -- the shell keys reached the hosted terminal\'s PTY with nothing switched; the switch keys switched the tab and reached no PTY; the close key requested Orca\'s close');
     say(repeat.length ? `stage 3: FAIL -- ${repeat.join('; ')}` : 'stage 3: equal to the control');
     say(`note -- control effects t<n> ${JSON.stringify(r.obs.control.term)}, web ${JSON.stringify(r.obs.control.web)}`);
     const fails = overallVerdict({ control, stage2: r.stage2, stage2Skip: r.stage2Skip, panesPresent: r.panesPresent, repeat });
     if (fails.length) { for (const f of fails) console.error(`${NAME}: FAIL -- ${f}`); console.log(`${NAME}: FAIL`); return 1; }
-    say(`PASS -- control measured; stage 2 ${r.stage2Skip ? 'SKIP (orca-panes absent)' : 'PASS'}; the t<n> and web tab effects equal the in-session control`);
+    say(`PASS -- D-32 control in t<n> and the web tab; stage 2 ${r.stage2Skip ? 'SKIP (orca-panes absent)' : 'PASS'}; the t<n> and web tab effects equal the in-session control`);
     return 0;
 }
 
@@ -350,30 +418,42 @@ process.exit(kids ? 3 : 0);`;
     return { exitCode: r.status === 3 ? 0 : r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '', timedOut: r.error?.code === 'ETIMEDOUT', startedProcess: r.status === 3 };
 }
 
-const KEYS = ['ctrl+w', 'ctrl+t', 'ctrl+tab', 'ctrl+shift+tab', 'ctrl+pageup', 'ctrl+pagedown'];
-const FORMS = { 'ctrl+w': '^W', 'ctrl+t': '^T', 'ctrl+tab': '\t', 'ctrl+shift+tab': '^[[Z', 'ctrl+pageup': '^[[5;5~', 'ctrl+pagedown': '^[[6;5~' };
+const SHELL = ['ctrl+w', 'ctrl+t'];
+const SWITCH = ['ctrl+tab', 'ctrl+shift+tab', 'ctrl+pagedown', 'ctrl+pageup'];
+const CLOSE = 'ctrl+shift+w';
+const KEYS = [...SHELL, ...SWITCH, CLOSE];
+const FORMS = { 'ctrl+w': '^W', 'ctrl+t': '^T' };
 function fixtureObs() {
-    const still = { tabDelta: 0, activeChanged: false };
-    const term = { 'ctrl+w': { tabDelta: -1, activeChanged: true, bytes: '' }, 'ctrl+t': { tabDelta: 1, activeChanged: true, bytes: '' }, 'ctrl+tab': { tabDelta: 0, activeChanged: true, bytes: '' }, 'ctrl+shift+tab': { tabDelta: 0, activeChanged: true, bytes: '' }, 'ctrl+pageup': { tabDelta: 0, activeChanged: true, bytes: '' }, 'ctrl+pagedown': { tabDelta: 0, activeChanged: true, bytes: '' } };
-    const web = Object.fromEntries(KEYS.map((k) => [k, { tabDelta: term[k].tabDelta, activeChanged: true }]));
+    const term = {
+        'ctrl+w': { tabDelta: 0, activeChanged: false, bytes: '^W' }, 'ctrl+t': { tabDelta: 0, activeChanged: false, bytes: '^T' },
+        ...Object.fromEntries(SWITCH.map((k) => [k, { tabDelta: 0, activeChanged: true, bytes: '' }])),
+        [CLOSE]: { tabDelta: -1, activeChanged: true, bytes: '' },
+    };
+    const web = { 'ctrl+w': { tabDelta: -1, activeChanged: true }, 'ctrl+t': { tabDelta: 1, activeChanged: true }, ...Object.fromEntries(SWITCH.map((k) => [k, { tabDelta: 0, activeChanged: true }])), [CLOSE]: { tabDelta: 0, activeChanged: false } };
+    const pty = [...SHELL, ...SWITCH];
     return {
-        keys: KEYS,
+        keys: KEYS, shell: SHELL, switch: SWITCH, close: CLOSE,
         control: { term: structuredClone(term), web: structuredClone(web) },
-        orca: { tab: 'orca-pane:term1', text: `${KEYS.map((k, i) => `${sep(i)}${FORMS[k]}`).join('')}${sep(KEYS.length)}`, effects: Object.fromEntries(KEYS.map((k) => [k, { ...still }])) },
+        orca: {
+            tab: 'orca-pane:term1', text: `${pty.map((k, i) => `${sep(i)}${FORMS[k] ?? ''}`).join('')}${sep(pty.length)}`,
+            effects: { ...Object.fromEntries(SHELL.map((k) => [k, { tabDelta: 0, activeChanged: false }])), ...Object.fromEntries(SWITCH.map((k) => [k, { tabDelta: 0, activeChanged: true }])) },
+            closed: { disposed: false, dialog: true },
+        },
         after: { term: structuredClone(term), web: structuredClone(web) },
     };
 }
 const all = (o) => overallVerdict({ control: controlVerdict(o), stage2: orcaStageVerdict(o), stage2Skip: null, panesPresent: true, repeat: repeatVerdict(o) });
+const both = (o, f) => { f(o.control); f(o.after); return o; };
 
 function runSelfTest() {
-    const keysTs = `export const ORCA_TERMINAL_PASSTHROUGH_KEYS: readonly string[] = Object.freeze([\n    'ctrl+w', 'ctrl+t', 'ctrl+tab',\n    'ctrl+shift+tab', 'ctrl+pageup', 'ctrl+pagedown',\n]);\n`;
+    const keysTs = `export const ORCA_TERMINAL_PASSTHROUGH_KEYS: readonly string[] = Object.freeze([\n    'ctrl+w', 'ctrl+t',\n]);\n`;
     const namingTs = 'export const TERMINAL_NAME_PATTERN = /^t(\\d+)$/;\n';
     const derive = () => {
         const fails = [];
-        if (JSON.stringify(readPassthroughKeys(keysTs)) !== JSON.stringify(KEYS)) fails.push(`readPassthroughKeys gave ${JSON.stringify(readPassthroughKeys(keysTs))}`);
+        if (JSON.stringify(readPassthroughKeys(keysTs)) !== JSON.stringify(SHELL)) fails.push(`readPassthroughKeys gave ${JSON.stringify(readPassthroughKeys(keysTs))}`);
         const t = readPattern(namingTs, 'TERMINAL_NAME_PATTERN');
         if (!t?.test('t3') || t.test('orca-pane:term3')) fails.push('readPattern did not read TERMINAL_NAME_PATTERN');
-        if (KEYS.some((k) => !keySpecFor(k)) || keySpecFor('ctrl+f13') !== null) fails.push('keySpecFor maps a key it cannot press or drops one of the six');
+        if (KEYS.some((k) => !keySpecFor(k)) || keySpecFor('ctrl+f13') !== null) fails.push('keySpecFor maps a key it cannot press or drops one of the seven');
         if (visibleFormFor('ctrl+w') !== '^W' || visibleFormFor('ctrl+tab') !== null) fails.push('visibleFormFor');
         return fails;
     };
@@ -386,9 +466,16 @@ function runSelfTest() {
         ['control missing a key', 'control incomplete', () => { const o = fixtureObs(); delete o.control.web['ctrl+t']; delete o.after.web['ctrl+t']; return all(o); }],
         ['hosted terminal tab missing', 'hosted terminal tab missing', () => { const o = fixtureObs(); o.orca.tab = null; return all(o); }],
         ['^W missing', '^W missing', () => { const o = fixtureObs(); o.orca.text = o.orca.text.replace('^W', ''); return all(o); }],
-        ['a separator missing', 'separators around ctrl+tab are missing', () => { const o = fixtureObs(); o.orca.text = o.orca.text.replace(sep(2), ''); return all(o); }],
-        ['a key that closed the hosted tab', 'closed or switched a tab', () => { const o = fixtureObs(); o.orca.effects['ctrl+w'] = { tabDelta: -1, activeChanged: true }; return all(o); }],
-        ['a key that switched away from the hosted tab', 'closed or switched a tab', () => { const o = fixtureObs(); o.orca.effects['ctrl+pagedown'] = { tabDelta: 0, activeChanged: true }; return all(o); }],
+        ['a separator missing', 'separators around ctrl+shift+tab are missing', () => { const o = fixtureObs(); o.orca.text = o.orca.text.replace(sep(4), ''); return all(o); }],
+        ['ctrl+tab reaching the hosted PTY', 'ctrl+tab reached the hosted Orca terminal\'s PTY', () => { const o = fixtureObs(); o.orca.text = o.orca.text.replace(`${sep(2)}${sep(3)}`, `${sep(2)}\t${sep(3)}`); return all(o); }],
+        ['ctrl+w closing the hosted tab', 'ctrl+w closed or switched a tab in the hosted Orca terminal', () => { const o = fixtureObs(); o.orca.effects['ctrl+w'] = { tabDelta: -1, activeChanged: true }; return all(o); }],
+        ['a switch key that switched nothing from the hosted terminal', 'ctrl+pagedown did not switch the PowerBrowser tab from the hosted Orca terminal', () => { const o = fixtureObs(); o.orca.effects['ctrl+pagedown'] = { tabDelta: 0, activeChanged: false }; return all(o); }],
+        ['ctrl+pagedown bytes in the t<n> recorder', 'ctrl+pagedown reached the t<n> PTY', () => all(both(fixtureObs(), (m) => { m.term['ctrl+pagedown'].bytes = '^[[6;5~'; }))],
+        ['ctrl+shift+w leaving t<n> open', 'ctrl+shift+w did not close the t<n> terminal tab', () => all(both(fixtureObs(), (m) => { m.term[CLOSE] = { tabDelta: 0, activeChanged: false, bytes: '' }; }))],
+        ['ctrl+w closing t<n>', 'ctrl+w closed or switched a tab from the t<n> terminal', () => all(both(fixtureObs(), (m) => { m.term['ctrl+w'] = { tabDelta: -1, activeChanged: true, bytes: '' }; }))],
+        ['a switch key not switching from the web tab', 'ctrl+tab did not switch the PowerBrowser tab from the web tab', () => all(both(fixtureObs(), (m) => { m.web['ctrl+tab'] = { tabDelta: 0, activeChanged: false }; }))],
+        ['the close key doing nothing in the hosted terminal', 'neither closed it nor opened Orca\'s running-terminal confirmation', () => { const o = fixtureObs(); o.orca.closed = { disposed: false, dialog: false }; return all(o); }],
+        ['a switch key judged with no proven PTY read', 'switch keys not judged', () => { const o = fixtureObs(); o.orca.text = o.orca.text.replace(sep(0), ''); return orcaStageVerdict(o); }],
         ['a t<n> effect differing from the control', 't<n> tab differs from the control', () => { const o = fixtureObs(); o.after.term['ctrl+tab'] = { tabDelta: 0, activeChanged: false, bytes: '\t' }; return all(o); }],
         ['a web-tab effect differing from the control', 'web tab differs from the control', () => { const o = fixtureObs(); o.after.web['ctrl+t'] = { tabDelta: 0, activeChanged: false }; return all(o); }],
         ['an import that printed a line', 'side effect on import', () => importSilenceVerdict({ exitCode: 0, stdout: 'orca-terminal-keys-live: SKIP\n', stderr: '', timedOut: false, startedProcess: false })],

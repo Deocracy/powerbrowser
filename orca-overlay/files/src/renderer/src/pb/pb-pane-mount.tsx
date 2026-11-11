@@ -57,6 +57,7 @@ import {
 import { makePaneKey } from '../../../shared/stable-pane-id'
 import { CLIENT_NAVIGATION_PUBLICATION_EPOCH_SUFFIX } from '../../../shared/runtime-session-contracts'
 import { resolveUnifiedTabLabel } from '../../../shared/tab-title-resolution'
+import type { KeybindingActionId, KeybindingOverrides, TerminalShortcutPolicy } from '../../../shared/keybindings'
 import type { Tab, TabGroupLayoutNode } from '../../../shared/tab-types'
 import type { TerminalPaneLayoutNode } from '../../../shared/terminal-tab-types'
 import type { TuiAgent } from '../../../shared/tui-agent'
@@ -163,6 +164,37 @@ function staleNavigationEchoes(): void {
     })
 }
 
+// D-32 (C13): hosted Orca terminals give their keys to the shell. 'terminal-first' is Orca's own escape hatch for
+// shells and TUIs (it turns Orca's window shortcuts and its TUI-clashing terminal actions off in a terminal). It is set
+// in this document's store only, never through Orca's settings actions, so orcad's persisted settings and every other
+// client keep their own policy; it is re-applied whenever hydration or a host refresh replaces the settings object.
+const HOSTED_TERMINAL_SHORTCUT_POLICY: TerminalShortcutPolicy = 'terminal-first'
+// Still active under terminal-first, yet control characters a terminal program reads: Ctrl+[ (Escape) and Ctrl+] are
+// Orca's split-pane focus keys. Released the same way (empty bindings in this store only; PowerBrowser splits panes).
+const HOSTED_TERMINAL_RELEASED_ACTIONS: readonly KeybindingActionId[] = ['terminal.focusPreviousPane', 'terminal.focusNextPane']
+
+function hostedTerminalKeysPatch(state: State): Partial<State> | null {
+  const patch: Partial<State> = {}
+  if (state.settings && state.settings.terminalShortcutPolicy !== HOSTED_TERMINAL_SHORTCUT_POLICY) {
+    patch.settings = { ...state.settings, terminalShortcutPolicy: HOSTED_TERMINAL_SHORTCUT_POLICY }
+  }
+  if (HOSTED_TERMINAL_RELEASED_ACTIONS.some((id) => state.keybindings?.[id]?.length !== 0)) {
+    const released: KeybindingOverrides = {}
+    for (const id of HOSTED_TERMINAL_RELEASED_ACTIONS) released[id] = []
+    patch.keybindings = { ...state.keybindings, ...released }
+  }
+  return Object.keys(patch).length ? patch : null
+}
+
+function hostedTerminalKeys(): void {
+  const apply = (state: State): void => {
+    const patch = hostedTerminalKeysPatch(state)
+    if (patch) useAppStore.setState(patch)
+  }
+  apply(useAppStore.getState())
+  useAppStore.subscribe((state) => apply(state))
+}
+
 // Each step names itself on failure; the pairing input never enters a message.
 async function step<T>(name: string, run: () => T | Promise<T>): Promise<T> {
   try {
@@ -205,6 +237,7 @@ export function bootstrap(options: { pairing: string }): Promise<void> {
     )
     await step('installWebPreloadApi', () => installWebPreloadApi())
     staleNavigationEchoes()
+    hostedTerminalKeys()
     await step('services root', () => {
       const host = document.createElement('div')
       host.hidden = true

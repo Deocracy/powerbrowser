@@ -1,5 +1,5 @@
 import { injectable } from '@theia/core/shared/inversify';
-import { KeybindingContribution, KeybindingRegistry } from '@theia/core/lib/browser';
+import { CommonCommands, KeybindingContribution, KeybindingRegistry } from '@theia/core/lib/browser';
 import {
     CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID,
     CHROME_BAR_CLEAR_HISTORY_COMMAND_ID,
@@ -70,6 +70,12 @@ export class ChromeBarKeybindingContribution implements KeybindingContribution {
             command: CHROME_BAR_CLEAR_HISTORY_COMMAND_ID,
             keybinding: 'ctrlcmd+shift+delete',
         });
+        // D-32: always-on tab keys. Ctrl+PageDown/PageUp step PowerBrowser tabs as Ctrl+Tab/Ctrl+Shift+Tab do (Theia
+        // core's NEXT_TAB/PREVIOUS_TAB rows), and Ctrl+Shift+W closes the current tab through its own close. No when
+        // clause, because the ruling includes terminals and editors; literal ctrl, so macOS Cmd keeps its own keys.
+        keybindings.registerKeybinding({ command: CommonCommands.NEXT_TAB.id, keybinding: 'ctrl+pagedown' });
+        keybindings.registerKeybinding({ command: CommonCommands.PREVIOUS_TAB.id, keybinding: 'ctrl+pageup' });
+        keybindings.registerKeybinding({ command: CommonCommands.CLOSE_TAB.id, keybinding: 'ctrl+shift+w' });
         // WR-02: F6/Shift+F6 in the pill go to the page (the pill's own keydown
         // handler). Theia's capture-phase dispatch would otherwise run
         // @theia/debug's F6 (Pause, `inDebugMode`) first and stop the event.

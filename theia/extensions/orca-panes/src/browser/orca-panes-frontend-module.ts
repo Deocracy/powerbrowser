@@ -120,7 +120,7 @@ export class OrcaPaneCommands implements CommandContribution {
     }
 }
 
-/** C10 (P64-33, D-09): in a hosted Orca terminal the six tab keys reach the terminal program; every other tab keeps PowerBrowser's bindings. */
+/** C10' (D-32, P64-33): in a hosted Orca terminal the shell keys (Ctrl+W, Ctrl+T) reach the shell; the switch keys switch PowerBrowser tabs from every tab. */
 @injectable()
 export class OrcaTerminalKeybindings implements KeybindingContribution {
     registerKeybindings(keybindings: KeybindingRegistry): void {

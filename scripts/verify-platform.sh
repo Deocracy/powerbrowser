@@ -3979,13 +3979,15 @@ run_own_checks() {
     # The self-test plants 13 faults in mkdtemp copies.
     "orca-pane-routes|node $REPO_ROOT/scripts/verify-orca-pane-routes.mjs"
     "orca-pane-routes-self-test|node $REPO_ROOT/scripts/verify-orca-pane-routes.mjs --self-test"
-    # NEW (64-04, TERM-04, P64-33): orca-terminal-keys, ported by copy from refs/heads/ServerDestroyer/p63-02 (never
-    # merged; the o<n> clauses dropped, D-31). The six keys derived from PAGE_KEYS' reserved rows with typescript and
-    # compared both ways with orca-panes' ORCA_TERMINAL_PASSTHROUGH_KEYS; literal ctrl; the when clause exactly the
-    # scoped key; only passthrough rows; the scoped key only on hosted terminal nodes; no terminalFocus row. The
-    # orca-panes half is a named SKIP only while theia/extensions/orca-panes is absent; present without a constant is
-    # red. The self-test runs on a fixture orca-panes tree in C10's shape (11 plants). orca-terminal-keys-live-self-test
-    # (ported from p63-05): its pure verdicts over fixture observations plus a child-Node import-silence check.
+    # NEW (64-04, TERM-04, P64-33; D-32 since 64-06): orca-terminal-keys. From PAGE_KEYS' reserved rows (typescript):
+    # the shell keys (letter rows, ctrl+w and ctrl+t) compared both ways with orca-panes' ORCA_TERMINAL_PASSTHROUGH_KEYS;
+    # the switch keys (keycode rows) bound to Theia's NEXT_TAB/PREVIOUS_TAB with no when clause, paired by PAGE_SHORTCUTS'
+    # action bodies; the close key ctrl+shift+w bound to CLOSE_TAB; no passthrough row or other registration takes a
+    # switch or close key. Orca half (C13, a named SKIP only while orca/ is absent): the entry's in-memory policy is
+    # Orca's non-default 'terminal-first', no Orca terminal action active under it takes a D-32 key or a releasable
+    # control chord, and the remaining active chords print as a note. orca-panes half a named SKIP only while its
+    # directory is absent. Self-test: 23 plants. orca-terminal-keys-live-self-test: D-32's pure verdicts over fixture
+    # observations plus a child-Node import-silence check.
     "orca-terminal-keys|node $REPO_ROOT/scripts/verify-orca-terminal-keys.mjs"
     "orca-terminal-keys-self-test|node $REPO_ROOT/scripts/verify-orca-terminal-keys.mjs --self-test"
     "orca-terminal-keys-live-self-test|node $REPO_ROOT/scripts/verify-orca-terminal-keys-live.mjs --self-test"
@@ -6641,11 +6643,11 @@ run_own_checks() {
       # is judged. Live: flock /home/chris/coding/Power-Browser/.git/pb-live.lock, every inherited ORCA_* unset.
       "orca-pane-css|node $REPO_ROOT/scripts/verify-orca-pane-css.mjs"
       "orca-pane-css-live|node $REPO_ROOT/scripts/verify-orca-pane-css-live.mjs"
-      # NEW (64-04, TERM-04, P64-33): orca-terminal-keys-live, ported by copy from refs/heads/ServerDestroyer/p63-05
-      # (never merged; runTabStage, the backend-parent chain and the kind 'orca' restore stage dropped, D-31). One
-      # session: the in-session control in a t<n> terminal and a web tab, the six keys reaching a hosted Orca
-      # terminal's PTY (stage 2, a named SKIP only while theia/extensions/orca-panes is absent), then the control
-      # repeated. Coordinator proof on the merged, wired, built tree. Run under
+      # NEW (64-04, TERM-04, P64-33; D-32 since 64-06): orca-terminal-keys-live. One session: the in-session control
+      # in a t<n> terminal and a web tab judged by D-32 (shell keys to the shell, switch keys switch tabs with no PTY
+      # bytes, ctrl+shift+w closes t<n>); stage 2 in a hosted Orca terminal (shell keys reach the PTY, switch keys
+      # switch and reach no PTY once the PTY read is proven, the close key requests Orca's close; a named SKIP only
+      # while theia/extensions/orca-panes is absent); then the control repeated. Run under
       # flock /home/chris/coding/Power-Browser/.git/pb-live.lock with ORCA_* unset.
       "orca-terminal-keys-live|node $REPO_ROOT/scripts/verify-orca-terminal-keys-live.mjs"
       # orca-tabs-live (64-04, TAB-01..TAB-06/TERM-01, criteria 2, 3, 6): every creation path gives one hosted tab

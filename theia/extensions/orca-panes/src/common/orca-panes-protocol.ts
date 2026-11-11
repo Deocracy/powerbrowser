@@ -33,12 +33,15 @@ export interface OrcaPanesService {
 export const ORCA_PANES_REACT_KEY = 'powerbrowser.orca-panes.react';
 
 /**
- * C10 (P64-33, D-09): in a hosted Orca terminal the six tab keys reach the
- * terminal program. Literal ctrl, so macOS Cmd keeps PowerBrowser's tab
- * commands. The context key is scoped to each hosted terminal widget's node.
+ * C10' (D-32, P64-33): in a hosted Orca terminal the shell keys, the reserved
+ * PAGE_KEYS rows with a letter key, reach the shell, as Theia's own terminals
+ * give them. The switch keys (Ctrl+Tab, Ctrl+PageUp/PageDown) are not here:
+ * they switch PowerBrowser tabs from every tab, terminals included. Literal
+ * ctrl, so macOS Cmd keeps PowerBrowser's tab commands. The context key is
+ * scoped to each hosted terminal widget's node.
  */
 export const ORCA_TERMINAL_PASSTHROUGH_KEYS: readonly string[] = Object.freeze([
-    'ctrl+w', 'ctrl+t', 'ctrl+tab', 'ctrl+shift+tab', 'ctrl+pageup', 'ctrl+pagedown',
+    'ctrl+w', 'ctrl+t',
 ]);
 export const ORCA_TERMINAL_FOCUS_KEY = 'powerbrowser.orcaTerminalFocus';
 export const ORCA_TERMINAL_KEYS_WHEN = 'powerbrowser.orcaTerminalFocus';
