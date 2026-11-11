@@ -4056,6 +4056,14 @@ run_own_checks() {
     # container attribute, cookie container, wall container check, parked focus, agent group, dialog
     # types, pinned LoginManager groups, page table x3, empty method list).
     "orca-browser-tab-scope-self-test|node $REPO_ROOT/scripts/verify-orca-browser-tab-scope.mjs --self-test"
+    # NEW (66-04, BRW-03, A5): orca-snapshot-fixtures and orca-browser-snapshot-live-self-test. The snapshot fixtures
+    # under scripts/fixtures/orca-snapshot/ come from the pinned agent-browser binary, never from a hand-written tree;
+    # their recorded version must equal orca/'s installed agent-browser and sit inside orca/package.json's tilde range.
+    # On a re-pin that moves agent-browser, re-run node scripts/gen-orca-snapshot-fixtures.mjs (SKIP without orca/).
+    # The self-test plants 12 faults over in-memory and mkdtemp fixtures (ref'd node, renumbered ref, grammar, token,
+    # delta kind, click target, stale code, empty set, version, range, missing json, missing afterChange).
+    "orca-snapshot-fixtures|node $REPO_ROOT/scripts/verify-orca-browser-snapshot-live.mjs --fixtures"
+    "orca-browser-snapshot-live-self-test|node $REPO_ROOT/scripts/verify-orca-browser-snapshot-live.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6746,6 +6754,12 @@ run_own_checks() {
       # alone, which must go red naming the Remote Agent's socket. Both under the live lock with ORCA_* unset.
       "no-remote-agent-port-live|node $REPO_ROOT/scripts/verify-no-remote-agent-port-live.mjs"
       "no-remote-agent-port-live-self-test|node $REPO_ROOT/scripts/verify-no-remote-agent-port-live.mjs --self-test"
+      # NEW (66-04, BRW-03, P66-16/A5): orca-browser-snapshot-live drives the Orca CLI against PowerBrowser's orcad on
+      # each fixture page and compares the agent child's snapshot with the pinned agent-browser's reference output
+      # structurally: line grammar, ref'd (role, name) multiset, level/checked/expanded/selected tokens, the --delta
+      # kind after the page's scripted change, ref survival, click @eN on the named node and browser_stale_ref for a
+      # removed node. Coordinator proof on the merged tree (p66-01..p66-04); under the live lock with ORCA_* unset.
+      "orca-browser-snapshot-live|node $REPO_ROOT/scripts/verify-orca-browser-snapshot-live.mjs"
     )
   fi
 

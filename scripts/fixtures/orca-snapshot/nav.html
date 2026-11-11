@@ -1,0 +1,18 @@
+<!doctype html><html><head><title>Snapshot fixture nav</title></head><body>
+<header><h1>Guide</h1></header>
+<nav aria-label="Sections"><ul id="sections"><li><a href="#intro">Intro</a></li><li><a href="#setup">Setup</a></li><li id="last"><a href="#faq">FAQ</a></li></ul></nav>
+<main>
+<h2>Plans</h2>
+<table><thead><tr><th>Plan</th><th>Price</th></tr></thead><tbody><tr><td>Free</td><td>0</td></tr><tr><td>Pro</td><td>10</td></tr></tbody></table>
+<h3>Details</h3>
+<details><summary>More</summary><p>Hidden text.</p></details>
+<details open><summary>Open part</summary><p>Shown text.</p></details>
+<div role="tablist" aria-label="Views"><button role="tab" aria-selected="true" id="tab-a">Alpha</button><button role="tab" aria-selected="false" id="tab-b">Beta</button></div>
+<div role="tabpanel">Alpha panel</div>
+</main>
+<script>
+// Fixture instrumentation, not page content: every click on a button-like element counts on that element.
+document.addEventListener('click', e => { const b = e.target.closest('button, [role=button], [role=tab]'); if (b) b.dataset.clicks = String((+b.dataset.clicks || 0) + 1); }, true);
+// The scripted change the delta references are taken after: the last section link goes, a button takes its place.
+function pbChange() { document.getElementById('last').remove(); const b = document.createElement('button'); b.type = 'button'; b.textContent = 'More sections'; document.getElementById('sections').after(b); return 1; }
+</script></body></html>

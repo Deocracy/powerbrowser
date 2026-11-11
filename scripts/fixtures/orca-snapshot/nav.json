@@ -1,0 +1,165 @@
+{
+ "agentBrowserVersion": "0.39.4",
+ "chromiumVersion": "157.0.8103.38",
+ "generatedAt": "2026-11-11T05:58:56.014Z",
+ "full": {
+  "refs": {
+   "e15": {
+    "name": "Sections",
+    "role": "navigation"
+   },
+   "e16": {
+    "name": "Guide",
+    "role": "heading"
+   },
+   "e17": {
+    "name": "Plans",
+    "role": "heading"
+   },
+   "e18": {
+    "name": "Details",
+    "role": "heading"
+   },
+   "e19": {
+    "name": "Alpha",
+    "role": "tab"
+   },
+   "e20": {
+    "name": "Beta",
+    "role": "tab"
+   },
+   "e21": {
+    "name": "Intro",
+    "role": "link"
+   },
+   "e22": {
+    "name": "Setup",
+    "role": "link"
+   },
+   "e23": {
+    "name": "FAQ",
+    "role": "link"
+   },
+   "e24": {
+    "name": "Free",
+    "role": "cell"
+   },
+   "e25": {
+    "name": "0",
+    "role": "cell"
+   },
+   "e26": {
+    "name": "Pro",
+    "role": "cell"
+   },
+   "e27": {
+    "name": "10",
+    "role": "cell"
+   },
+   "e28": {
+    "name": "Plan",
+    "role": "columnheader"
+   },
+   "e29": {
+    "name": "Price",
+    "role": "columnheader"
+   }
+  },
+  "removedRefs": [],
+  "snapshot": "- banner\n  - heading \"Guide\" [level=1, ref=e16]\n- navigation \"Sections\" [ref=e15]\n  - list\n    - listitem [level=1]\n      - ListMarker \"• \"\n      - link \"Intro\" [ref=e21]\n    - listitem [level=1]\n      - ListMarker \"• \"\n      - link \"Setup\" [ref=e22]\n    - listitem [level=1]\n      - ListMarker \"• \"\n      - link \"FAQ\" [ref=e23]\n- main\n  - heading \"Plans\" [level=2, ref=e17]\n  - table\n    - rowgroup\n      - row\n        - columnheader \"Plan\" [ref=e28]\n        - columnheader \"Price\" [ref=e29]\n    - row\n      - cell \"Free\" [ref=e24]\n      - cell \"0\" [ref=e25]\n    - row\n      - cell \"Pro\" [ref=e26]\n      - cell \"10\" [ref=e27]\n  - heading \"Details\" [level=3, ref=e18]\n  - group\n    - DisclosureTriangle \"More\" [expanded=false]\n      - StaticText \"More\"\n  - group\n    - DisclosureTriangle \"Open part\" [expanded=true]\n      - StaticText \"Open part\"\n    - paragraph\n      - StaticText \"Shown text.\"\n  - tablist \"Views\"\n    - tab \"Alpha\" [selected, ref=e19]\n    - tab \"Beta\" [ref=e20]\n  - tabpanel\n    - StaticText \"Alpha panel\""
+ },
+ "interactive": {
+  "refs": {
+   "e15": {
+    "name": "Sections",
+    "role": "navigation"
+   },
+   "e16": {
+    "name": "Guide",
+    "role": "heading"
+   },
+   "e17": {
+    "name": "Plans",
+    "role": "heading"
+   },
+   "e18": {
+    "name": "Details",
+    "role": "heading"
+   },
+   "e19": {
+    "name": "Alpha",
+    "role": "tab"
+   },
+   "e20": {
+    "name": "Beta",
+    "role": "tab"
+   },
+   "e21": {
+    "name": "Intro",
+    "role": "link"
+   },
+   "e22": {
+    "name": "Setup",
+    "role": "link"
+   },
+   "e23": {
+    "name": "FAQ",
+    "role": "link"
+   },
+   "e24": {
+    "name": "Free",
+    "role": "cell"
+   },
+   "e25": {
+    "name": "0",
+    "role": "cell"
+   },
+   "e26": {
+    "name": "Pro",
+    "role": "cell"
+   },
+   "e27": {
+    "name": "10",
+    "role": "cell"
+   },
+   "e28": {
+    "name": "Plan",
+    "role": "columnheader"
+   },
+   "e29": {
+    "name": "Price",
+    "role": "columnheader"
+   }
+  },
+  "removedRefs": [],
+  "snapshot": "- heading \"Guide\" [level=1, ref=e16]\n- navigation \"Sections\" [ref=e15]\n  - link \"Intro\" [ref=e21]\n  - link \"Setup\" [ref=e22]\n  - link \"FAQ\" [ref=e23]\n- heading \"Plans\" [level=2, ref=e17]\n- columnheader \"Plan\" [ref=e28]\n- columnheader \"Price\" [ref=e29]\n- cell \"Free\" [ref=e24]\n- cell \"0\" [ref=e25]\n- cell \"Pro\" [ref=e26]\n- cell \"10\" [ref=e27]\n- heading \"Details\" [level=3, ref=e18]\n- tab \"Alpha\" [selected, ref=e19]\n- tab \"Beta\" [ref=e20]"
+ },
+ "afterChange": {
+  "snapshot": {
+   "baseRevision": 3,
+   "changes": [
+    {
+     "op": "remove",
+     "ref": "@e23"
+    },
+    {
+     "node": {
+      "name": "More sections",
+      "role": "button"
+     },
+     "op": "add",
+     "ref": "@e30"
+    }
+   ],
+   "kind": "delta",
+   "revision": 4,
+   "treeChange": {
+    "deleteCount": 3,
+    "lines": [
+     "  - button \"More sections\" [ref=e30]"
+    ],
+    "startLine": 10
+   }
+  }
+ }
+}

@@ -193,7 +193,7 @@ export class PowerBrowserEditStateChild extends JSWindowActorChild {
 // cannot message it and a user's tab never gets one. Chrome sends only methods of its frozen AGENT_METHODS list with
 // params its validators passed. One arm per actor method, keyed by the Orca method name; every answer is
 // { where: "done", result } or { where: "failed", code } with an Orca BrowserErrorCode. Element targets are CSS
-// selectors here; lane p66-04 adds @eN refs to the same resolver. No module import.
+// selectors or @eN refs of this page's snapshots, through one resolver (agentFind). No module import.
 class AgentRowError extends Error {
   constructor(code) {
     super(code);
@@ -201,14 +201,35 @@ class AgentRowError extends Error {
   }
 }
 
-// The element a selector names, or the Orca code for why there is none.
-function agentElement(actor, selector) {
-  let element;
+// The one element resolver of every element-targeted row (P66-16): "@eN" or "eN" names a ref of this page's
+// snapshots, anything else is a CSS selector. null when a selector matches nothing; an unknown ref is
+// browser_ref_not_found, a ref whose node left this document browser_stale_ref (null for a wait, where gone answers).
+function agentFind(actor, target, staleIsGone = false) {
+  const ref = /^@?(e\d+)$/.exec(target);
+  if (ref) {
+    const entry = agentSnapState(actor).refs.get(ref[1]);
+    if (!entry) {
+      throw new AgentRowError("browser_ref_not_found");
+    }
+    const node = entry.node.deref();
+    if (node && actor.document.contains(node)) {
+      return node;
+    }
+    if (staleIsGone) {
+      return null;
+    }
+    throw new AgentRowError("browser_stale_ref");
+  }
   try {
-    element = actor.document.querySelector(selector);
+    return actor.document.querySelector(target);
   } catch {
     throw new AgentRowError("browser_error");
   }
+}
+
+// The element a target names, or the Orca code for why there is none.
+function agentElement(actor, selector) {
+  const element = agentFind(actor, selector);
   if (!element) {
     throw new AgentRowError("browser_ref_not_found");
   }
@@ -571,7 +592,7 @@ const AGENT_RUN = {
     if (params.selector) {
       const gone = params.state === "hidden" || params.state === "detached";
       tests.push(() => {
-        const element = doc.querySelector(params.selector);
+        const element = agentFind(actor, params.selector, true);
         return gone ? !element || !agentVisible(element) : !!element && (params.state !== "visible" || agentVisible(element));
       });
     }
@@ -609,10 +630,8 @@ const AGENT_RUN = {
     return { entries: rows.slice(-n).map(row => ({ ...row })), truncated: rows.length > n };
   },
   "browser.exec": (actor, params) => agentExec(actor, params.command),
-  // Lane p66-04 replaces this arm with the snapshot builder (P66-16); until then the agent gets a defined error.
-  "browser.snapshot": () => {
-    throw new AgentRowError("browser_command_unavailable");
-  },
+  // P66-16, A5: agent-browser 0.39.4's snapshot, built from this page's DOM (agentSnapshot, after the classes).
+  "browser.snapshot": (actor, params) => agentSnapshot(actor, params),
 };
 
 const AGENT_CONSOLE_MAX = 1000;
@@ -676,4 +695,446 @@ export class PowerBrowserAgentChild extends JSWindowActorChild {
       return failed(err);
     }
   }
+}
+
+// Phase 66 plan 04 (BRW-03, P66-16, 66-RESEARCH A5/G9): browser.snapshot in agent-browser 0.39.4's format, computed
+// from the DOM through Xrays (no accessibility service, no XPCOM). Lines are `- <role> "<name>" [<attrs>, ref=eN]`,
+// optionally `: <value>` and ` clickable [<hints>]`; refs is { eN: { role, name } }; --delta answers full, unchanged
+// or delta with revision and baseRevision, as the pinned binary does (scripts/fixtures/orca-snapshot/ hold its
+// replies). Chromium-internal roles agent-browser prints (LabelText, MenuListPopup, ListMarker, rowgroup for tbody)
+// have no DOM rule here; orca-browser-snapshot-live compares ref'd nodes, attribute tokens and delta kinds, not bytes.
+
+// agent-browser's ref'd roles: interactive roles always, content roles when they have a name, plus clickables.
+const SNAP_INTERACTIVE = new Set([
+  "button", "link", "textbox", "checkbox", "radio", "combobox", "listbox", "menuitem", "menuitemcheckbox",
+  "menuitemradio", "option", "searchbox", "slider", "spinbutton", "switch", "tab", "treeitem",
+]);
+const SNAP_CONTENT = new Set(["heading", "cell", "gridcell", "columnheader", "rowheader", "listitem", "article", "region", "main", "navigation"]);
+const SNAP_FROM_CONTENT = new Set([
+  "button", "link", "heading", "cell", "gridcell", "columnheader", "rowheader", "option", "tab", "checkbox", "radio",
+  "switch", "menuitem", "menuitemcheckbox", "menuitemradio", "treeitem", "tooltip", "DisclosureTriangle",
+]);
+const SNAP_ARIA_ROLES = new Set([
+  ...SNAP_INTERACTIVE, ...SNAP_CONTENT, "alert", "alertdialog", "application", "banner", "blockquote", "complementary",
+  "contentinfo", "definition", "dialog", "document", "feed", "figure", "form", "grid", "group", "img", "list", "log",
+  "marquee", "math", "menu", "menubar", "meter", "note", "paragraph", "progressbar", "radiogroup", "row", "rowgroup",
+  "scrollbar", "search", "separator", "status", "table", "tablist", "tabpanel", "term", "timer", "toolbar", "tooltip",
+  "tree", "treegrid", "generic",
+]);
+const SNAP_SKIP = new Set(["script", "style", "template", "noscript", "head", "link", "meta", "title", "iframe", "frame", "object", "embed"]);
+const SNAP_INPUT_ROLES = {
+  button: "button", submit: "button", reset: "button", image: "button", file: "button", checkbox: "checkbox",
+  radio: "radio", range: "slider", number: "spinbutton", search: "searchbox",
+};
+const SNAP_LANDMARK_SCOPE = "article, aside, main, nav, section";
+// Orca's BROWSER_CLIENT_AUTOMATION_RESULT_MAX_BYTES (browser-client-automation-protocol.ts).
+const SNAP_MAX_BYTES = 768 * 1024;
+
+const snapClean = text => String(text ?? "").replace(/\s+/g, " ").trim();
+
+// The per-page ref table and delta baselines. The actor is per document already; the innerWindowId check makes the
+// page identity explicit, so a new document starts with an empty table and no baseline (T-66-17).
+function agentSnapState(actor) {
+  const page = actor.contentWindow.windowGlobalChild.innerWindowId;
+  if (!actor.snap || actor.snap.page !== page) {
+    actor.snap = { page, next: 0, refs: new Map(), last: new Set(), revision: 0, baseline: null };
+  }
+  return actor.snap;
+}
+
+function snapRole(el) {
+  const aria = (el.getAttribute("role") || "").trim().split(/\s+/)[0];
+  if (aria === "none" || aria === "presentation") {
+    return null;
+  }
+  if (SNAP_ARIA_ROLES.has(aria)) {
+    return aria;
+  }
+  const tag = el.localName;
+  if (/^h[1-6]$/.test(tag)) {
+    return "heading";
+  }
+  switch (tag) {
+    case "a":
+    case "area":
+      return el.hasAttribute("href") ? "link" : null;
+    case "input": {
+      const type = (el.getAttribute("type") || "text").toLowerCase();
+      if (type === "hidden") {
+        return null;
+      }
+      return SNAP_INPUT_ROLES[type] || (el.hasAttribute("list") ? "combobox" : "textbox");
+    }
+    case "textarea":
+      return "textbox";
+    case "select":
+      return el.multiple || el.size > 1 ? "listbox" : "combobox";
+    case "button":
+      return "button";
+    case "option":
+      return "option";
+    case "optgroup":
+    case "fieldset":
+    case "details":
+      return "group";
+    case "summary":
+      return el.parentElement?.localName === "details" ? "DisclosureTriangle" : null;
+    case "header":
+      return el.parentElement?.closest(SNAP_LANDMARK_SCOPE) ? null : "banner";
+    case "footer":
+      return el.parentElement?.closest(SNAP_LANDMARK_SCOPE) ? null : "contentinfo";
+    case "section":
+      return el.hasAttribute("aria-label") || el.hasAttribute("aria-labelledby") ? "region" : null;
+    case "img":
+      return el.getAttribute("alt") === "" ? null : "img";
+    case "th":
+      return el.getAttribute("scope") === "row" ? "rowheader" : "columnheader";
+    case "td":
+      return el.closest("table")?.getAttribute("role") === "grid" ? "gridcell" : "cell";
+    default:
+      return {
+        article: "article", aside: "complementary", dialog: "dialog", figure: "figure", form: "form", hr: "separator",
+        li: "listitem", ul: "list", ol: "list", menu: "list", main: "main", nav: "navigation", output: "status",
+        p: "paragraph", progress: "progressbar", meter: "meter", table: "table", thead: "rowgroup", tfoot: "rowgroup",
+        tr: "row", blockquote: "blockquote",
+      }[tag] || null;
+  }
+}
+
+// Visible text of a subtree, for names from content; `skip` is a control whose own text a label must not repeat.
+function snapText(node, skip = null) {
+  if (node.nodeType === node.TEXT_NODE) {
+    return node.data;
+  }
+  if (node.nodeType !== node.ELEMENT_NODE || node === skip || SNAP_SKIP.has(node.localName)) {
+    return "";
+  }
+  // An option of a closed select has no box, so the visibility test does not apply inside a select.
+  const boxless = !node.checkVisibility() && !node.closest("select") && node.ownerDocument.defaultView?.getComputedStyle(node)?.display !== "contents";
+  if (node.getAttribute("aria-hidden") === "true" || boxless) {
+    return "";
+  }
+  const label = snapClean(node.getAttribute("aria-label"));
+  if (label) {
+    return ` ${label} `;
+  }
+  if (node.localName === "img") {
+    return node.getAttribute("alt") || "";
+  }
+  if (node.localName === "input" && ["button", "submit", "reset"].includes(node.type)) {
+    return node.value;
+  }
+  let text = "";
+  for (const child of node.childNodes) {
+    text += snapText(child, skip);
+  }
+  return text;
+}
+
+function snapName(el, role) {
+  const doc = el.ownerDocument;
+  const labelledBy = (el.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean);
+  if (labelledBy.length) {
+    const name = snapClean(labelledBy.map(id => (doc.getElementById(id) ? snapText(doc.getElementById(id)) : "")).join(" "));
+    if (name) {
+      return name;
+    }
+  }
+  const label = snapClean(el.getAttribute("aria-label"));
+  if (label) {
+    return label;
+  }
+  const tag = el.localName;
+  if (tag === "input" && ["button", "submit", "reset"].includes(el.type)) {
+    return snapClean(el.value || { submit: "Submit", reset: "Reset" }[el.type] || "");
+  }
+  if (tag === "input" && el.type === "image") {
+    return snapClean(el.getAttribute("alt") || el.value || "Submit");
+  }
+  if (el.labels?.length) {
+    const name = snapClean([...el.labels].map(l => snapText(l, el)).join(" "));
+    if (name) {
+      return name;
+    }
+  }
+  const caption = { fieldset: "legend", figure: "figcaption", table: "caption" }[tag];
+  if (caption) {
+    const part = [...el.children].find(c => c.localName === caption);
+    if (part) {
+      return snapClean(snapText(part));
+    }
+  }
+  if (tag === "img" || tag === "area") {
+    const alt = snapClean(el.getAttribute("alt"));
+    if (alt) {
+      return alt;
+    }
+  }
+  if (SNAP_FROM_CONTENT.has(role)) {
+    const text = snapClean(snapText(el));
+    if (text) {
+      return text;
+    }
+  }
+  return snapClean(el.getAttribute("title") || ((role === "textbox" || role === "searchbox") && el.getAttribute("placeholder")) || "");
+}
+
+// The attribute tokens agent-browser prints before the ref, in its order.
+function snapAttrs(el, role) {
+  const attrs = [];
+  const level = role === "heading" ? Number(el.getAttribute("aria-level")) || Number(/^h([1-6])$/.exec(el.localName)?.[1]) || 2
+    : role === "listitem" ? snapListDepth(el)
+      : role === "treeitem" ? Number(el.getAttribute("aria-level")) || 0
+        : 0;
+  if (level) {
+    attrs.push(`level=${level}`);
+  }
+  if (["checkbox", "radio", "switch", "menuitemcheckbox", "menuitemradio"].includes(role)) {
+    const native = el.localName === "input" && (el.type === "checkbox" || el.type === "radio");
+    const aria = el.getAttribute("aria-checked");
+    attrs.push(`checked=${native ? (el.indeterminate ? "mixed" : String(el.checked)) : aria === "true" || aria === "mixed" ? aria : "false"}`);
+  }
+  const expanded = el.getAttribute("aria-expanded");
+  if (role === "DisclosureTriangle") {
+    attrs.push(`expanded=${el.parentElement.open === true}`);
+  } else if (expanded === "true" || expanded === "false") {
+    attrs.push(`expanded=${expanded}`);
+  } else if (role === "combobox" && el.localName === "select") {
+    attrs.push("expanded=false");
+  }
+  if ((el.localName === "option" && el.selected) || el.getAttribute("aria-selected") === "true") {
+    attrs.push("selected");
+  }
+  if (el.disabled === true || el.getAttribute("aria-disabled") === "true") {
+    attrs.push("disabled");
+  }
+  return attrs;
+}
+
+function snapListDepth(el) {
+  let depth = 0;
+  for (let at = el.parentElement; at; at = at.parentElement) {
+    if (["ul", "ol", "menu"].includes(at.localName) || at.getAttribute("role") === "list") {
+      depth++;
+    }
+  }
+  return depth || 1;
+}
+
+function snapValue(el, role) {
+  if (role === "combobox" && el.localName === "select") {
+    return snapClean(el.selectedOptions?.[0]?.textContent);
+  }
+  if (["textbox", "searchbox", "spinbutton", "slider", "combobox"].includes(role) && typeof el.value === "string" && el.type !== "password") {
+    return snapClean(el.value);
+  }
+  return "";
+}
+
+// cursor:pointer that is the element's own (not inherited from its parent), onclick, or a focusable tabindex.
+function snapHints(el, style) {
+  const hints = [];
+  if (style?.cursor === "pointer" && el.ownerDocument.defaultView.getComputedStyle(el.parentElement || el)?.cursor !== "pointer") {
+    hints.push("cursor:pointer");
+  }
+  if (el.hasAttribute("onclick")) {
+    hints.push("onclick");
+  }
+  if (el.hasAttribute("tabindex") && el.tabIndex >= 0) {
+    hints.push("tabindex");
+  }
+  return hints;
+}
+
+// The tree of emitted nodes under `root`; elements without a role are transparent (their children move up).
+function snapTree(actor, root) {
+  const state = agentSnapState(actor);
+  const known = new Map();
+  for (const [ref, entry] of state.refs) {
+    const node = entry.node.deref();
+    if (node) {
+      known.set(node, ref);
+    }
+  }
+  const nodes = [];
+  const walk = (el, out, ctx) => {
+    for (const child of el.childNodes) {
+      if (child.nodeType === child.TEXT_NODE) {
+        const text = snapClean(child.data);
+        if (text && !ctx.quiet) {
+          out.push({ role: "StaticText", name: text, attrs: [], children: [] });
+        }
+        continue;
+      }
+      if (child.nodeType !== child.ELEMENT_NODE || SNAP_SKIP.has(child.localName) || child.getAttribute("aria-hidden") === "true") {
+        continue;
+      }
+      const style = actor.contentWindow.getComputedStyle(child);
+      if (!ctx.inSelect && !child.checkVisibility() && style?.display !== "contents") {
+        continue;
+      }
+      // visibility:hidden hides this element but not a child that sets visibility:visible again.
+      const shown = ctx.inSelect || style?.display === "contents" || child.checkVisibility({ visibilityProperty: true });
+      let role = shown ? snapRole(child) : null;
+      const hints = shown && !SNAP_INTERACTIVE.has(role) ? snapHints(child, style) : [];
+      if (!role && hints.length) {
+        role = "generic";
+      }
+      const inner = { ...ctx, inSelect: ctx.inSelect || child.localName === "select", quiet: ctx.quiet || (child.localName === "label" && !!child.control) };
+      if (!role) {
+        walk(child, out, inner);
+        continue;
+      }
+      const name = role === "generic" ? snapClean(child.getAttribute("aria-label")) : snapName(child, role);
+      const item = { role, name, attrs: snapAttrs(child, role), value: snapValue(child, role), hints, children: [], element: child };
+      if (SNAP_INTERACTIVE.has(role) || (SNAP_CONTENT.has(role) && name) || hints.length) {
+        let ref = known.get(child);
+        if (!ref) {
+          ref = `e${++state.next}`;
+          known.set(child, ref);
+        }
+        state.refs.set(ref, { node: new WeakRef(child), role, name });
+        item.ref = ref;
+        nodes.push(item);
+      }
+      out.push(item);
+      walk(child, item.children, { ...inner, quiet: inner.quiet || (!!item.ref && SNAP_FROM_CONTENT.has(role)) });
+    }
+  };
+  const top = [];
+  if (root === actor.document.body || root === actor.document.documentElement) {
+    walk(root, top, { quiet: false, inSelect: false });
+  } else {
+    walk({ childNodes: [root] }, top, { quiet: false, inSelect: false });
+  }
+  return { top, nodes };
+}
+
+// The lines and the refs they show, under the snapshot's options.
+function snapRender(top, options) {
+  const lines = [];
+  const shown = new Set();
+  const emit = (items, depth) => {
+    for (const item of items) {
+      if (options.interactive && !item.ref) {
+        emit(item.children, depth);
+        continue;
+      }
+      if (options.depth !== undefined && depth >= options.depth) {
+        continue;
+      }
+      if (options.compact && !item.ref && !item.name && !item.value && item.role !== "StaticText" && !snapHasContent(item.children, options)) {
+        continue;
+      }
+      const name = item.name || (options.interactive && item.element ? snapClean(snapText(item.element)) : "");
+      const attrs = [...item.attrs];
+      if (item.ref) {
+        attrs.push(`ref=${item.ref}`);
+        shown.add(item.ref);
+      }
+      if (options.urls && item.role === "link" && item.element?.href) {
+        attrs.push(`url=${item.element.href}`);
+      }
+      lines.push(`${"  ".repeat(depth)}- ${item.role}${name ? ` ${JSON.stringify(name)}` : ""}${attrs.length ? ` [${attrs.join(", ")}]` : ""}` +
+        `${item.value ? `: ${item.value}` : ""}${item.hints?.length ? ` clickable [${item.hints.join(", ")}]` : ""}`);
+      emit(item.children, depth + 1);
+    }
+  };
+  emit(top, 0);
+  return { lines, shown };
+}
+
+function snapHasContent(items, options) {
+  return items.some(item => item.ref || item.name || item.value || item.role === "StaticText" || snapHasContent(item.children, options));
+}
+
+// One contiguous splice from the baseline's lines to these, as agent-browser's treeChange.
+function snapSplice(before, after) {
+  let start = 0;
+  while (start < before.length && start < after.length && before[start] === after[start]) {
+    start++;
+  }
+  let end = 0;
+  while (end < before.length - start && end < after.length - start && before[before.length - 1 - end] === after[after.length - 1 - end]) {
+    end++;
+  }
+  return { startLine: start, deleteCount: before.length - start - end, lines: after.slice(start, after.length - end) };
+}
+
+function snapRefChanges(before, after) {
+  const changes = [];
+  for (const ref of Object.keys(before)) {
+    if (!Object.hasOwn(after, ref)) {
+      changes.push({ op: "remove", ref: `@${ref}` });
+    }
+  }
+  for (const [ref, node] of Object.entries(after)) {
+    if (!Object.hasOwn(before, ref)) {
+      changes.push({ op: "add", ref: `@${ref}`, node });
+    } else {
+      for (const field of ["role", "name"]) {
+        if (before[ref][field] !== node[field]) {
+          changes.push({ op: "replace", ref: `@${ref}`, field, value: node[field] });
+        }
+      }
+    }
+  }
+  return changes;
+}
+
+function agentSnapshot(actor, params) {
+  const options = {
+    interactive: params.interactive === true,
+    compact: params.compact === true,
+    depth: Number.isInteger(params.depth) && params.depth > 0 ? params.depth : undefined,
+    selector: typeof params.selector === "string" && params.selector ? params.selector : undefined,
+    urls: params.urls === true,
+  };
+  const state = agentSnapState(actor);
+  const doc = actor.document;
+  const root = options.selector ? agentElement(actor, options.selector) : doc.body || doc.documentElement;
+  if (!root) {
+    return { origin: doc.location.href, refs: {}, removedRefs: [], snapshot: "" };
+  }
+  const { top, nodes } = snapTree(actor, root);
+  const { lines, shown } = snapRender(top, options);
+  const refs = {};
+  for (const item of nodes) {
+    if (shown.has(item.ref)) {
+      refs[item.ref] = { role: item.role, name: item.name };
+    }
+  }
+  const removedRefs = [...state.last].filter(ref => !Object.hasOwn(refs, ref));
+  state.last = new Set(Object.keys(refs));
+  const origin = doc.location.href;
+  let result;
+  if (params.delta === true || params.full === true) {
+    // One baseline per page (Orca's snapshot help): a navigation, other flags or --full answer the whole tree and
+    // replace it; otherwise unchanged, or a delta when the change is small.
+    const key = JSON.stringify(options);
+    const base = state.baseline;
+    const revision = ++state.revision;
+    state.baseline = { key, revision, lines, refs, origin };
+    let snapshot = { kind: "full", refs, revision, tree: lines.join("\n") };
+    if (base && params.full !== true && base.origin === origin && base.key === key) {
+      const changes = snapRefChanges(base.refs, refs);
+      const treeChange = snapSplice(base.lines, lines);
+      if (!changes.length && !treeChange.deleteCount && !treeChange.lines.length) {
+        snapshot = { kind: "unchanged", revision, baseRevision: base.revision };
+      } else if ((treeChange.deleteCount + treeChange.lines.length) * 4 <= Math.max(lines.length, base.lines.length)) {
+        // shortcut: a delta when it touches at most a quarter of the lines; agent-browser's own size rule is not
+        // published, and the fixtures' scripted changes are small enough that both rules agree.
+        snapshot = { kind: "delta", revision, baseRevision: base.revision, changes, treeChange };
+      }
+    }
+    result = { origin, snapshot };
+  } else {
+    result = { origin, refs, removedRefs, snapshot: lines.join("\n") };
+  }
+  const bytes = new TextEncoder().encode(JSON.stringify(result)).length;
+  if (bytes > SNAP_MAX_BYTES) {
+    console.warn(`PowerBrowserAgent: snapshot of ${bytes} bytes is over the ${SNAP_MAX_BYTES}-byte result budget`);
+    throw new AgentRowError("browser_error");
+  }
+  return result;
 }

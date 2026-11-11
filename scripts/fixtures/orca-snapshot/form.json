@@ -1,0 +1,145 @@
+{
+ "agentBrowserVersion": "0.39.4",
+ "chromiumVersion": "157.0.8103.38",
+ "generatedAt": "2026-11-11T05:58:55.754Z",
+ "full": {
+  "refs": {
+   "e1": {
+    "name": "Sign in",
+    "role": "heading"
+   },
+   "e10": {
+    "name": "",
+    "role": "generic"
+   },
+   "e11": {
+    "name": "Email",
+    "role": "textbox"
+   },
+   "e12": {
+    "name": "Free",
+    "role": "option"
+   },
+   "e13": {
+    "name": "Pro",
+    "role": "option"
+   },
+   "e2": {
+    "name": "Privacy",
+    "role": "link"
+   },
+   "e3": {
+    "name": "Home",
+    "role": "link"
+   },
+   "e4": {
+    "name": "Docs",
+    "role": "link"
+   },
+   "e5": {
+    "name": "Remember me",
+    "role": "checkbox"
+   },
+   "e6": {
+    "name": "Plan",
+    "role": "combobox"
+   },
+   "e7": {
+    "name": "Log in",
+    "role": "button"
+   },
+   "e8": {
+    "name": "Log in",
+    "role": "button"
+   },
+   "e9": {
+    "name": "Custom",
+    "role": "button"
+   }
+  },
+  "removedRefs": [],
+  "snapshot": "- banner\n  - navigation\n    - link \"Home\" [ref=e3]\n    - link \"Docs\" [ref=e4]\n- main\n  - heading \"Sign in\" [level=1, ref=e1]\n  - paragraph\n    - StaticText \"Use your account.\"\n  - form\n    - LabelText\n      - StaticText \"Email \"\n      - textbox \"Email\" [ref=e11]\n    - checkbox \"Remember me\" [checked=false, ref=e5]\n    - combobox \"Plan\" [expanded=false, ref=e6]: Free\n      - MenuListPopup\n        - option \"Free\" [selected, ref=e12]\n        - option \"Pro\" [ref=e13]\n    - button \"Log in\" [ref=e7]\n    - button \"Log in\" [ref=e8]\n    - button \"Custom\" [ref=e9]\n    - generic [ref=e10] clickable [cursor:pointer, onclick]\n      - StaticText \"Clickable div\"\n- contentinfo\n  - link \"Privacy\" [ref=e2]"
+ },
+ "interactive": {
+  "refs": {
+   "e1": {
+    "name": "Sign in",
+    "role": "heading"
+   },
+   "e10": {
+    "name": "",
+    "role": "generic"
+   },
+   "e11": {
+    "name": "Email",
+    "role": "textbox"
+   },
+   "e12": {
+    "name": "Free",
+    "role": "option"
+   },
+   "e13": {
+    "name": "Pro",
+    "role": "option"
+   },
+   "e2": {
+    "name": "Privacy",
+    "role": "link"
+   },
+   "e3": {
+    "name": "Home",
+    "role": "link"
+   },
+   "e4": {
+    "name": "Docs",
+    "role": "link"
+   },
+   "e5": {
+    "name": "Remember me",
+    "role": "checkbox"
+   },
+   "e6": {
+    "name": "Plan",
+    "role": "combobox"
+   },
+   "e7": {
+    "name": "Log in",
+    "role": "button"
+   },
+   "e8": {
+    "name": "Log in",
+    "role": "button"
+   },
+   "e9": {
+    "name": "Custom",
+    "role": "button"
+   }
+  },
+  "removedRefs": [],
+  "snapshot": "- link \"Home\" [ref=e3]\n- link \"Docs\" [ref=e4]\n- heading \"Sign in\" [level=1, ref=e1]\n- textbox \"Email\" [ref=e11]\n- checkbox \"Remember me\" [checked=false, ref=e5]\n- combobox \"Plan\" [expanded=false, ref=e6]: Free\n  - option \"Free\" [selected, ref=e12]\n  - option \"Pro\" [ref=e13]\n- button \"Log in\" [ref=e7]\n- button \"Log in\" [ref=e8]\n- button \"Custom\" [ref=e9]\n- generic \"Clickable div\" [ref=e10] clickable [cursor:pointer, onclick]\n- link \"Privacy\" [ref=e2]"
+ },
+ "afterChange": {
+  "snapshot": {
+   "baseRevision": 1,
+   "changes": [
+    {
+     "node": {
+      "name": "Added",
+      "role": "button"
+     },
+     "op": "add",
+     "ref": "@e14"
+    }
+   ],
+   "kind": "delta",
+   "revision": 2,
+   "treeChange": {
+    "deleteCount": 0,
+    "lines": [
+     "    - button \"Added\" [ref=e14]"
+    ],
+    "startLine": 20
+   }
+  }
+ }
+}
