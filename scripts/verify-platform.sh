@@ -4105,6 +4105,12 @@ run_own_checks() {
     # orca-failure-page-live-self-test: the live row's pure verdicts (a text not in the table, another class's text, a
     # missing or extra button, no page, a blind control, a page up before the induction, no recovery in the bound).
     "orca-failure-page-live-self-test|node $REPO_ROOT/scripts/verify-orca-failure-page-live.mjs --self-test"
+    # NEW (67-04, RUN-07, P67-08..P67-12, A-8): orca-pairing-containment-self-test plants a synthetic offer in every
+    # sink of a fixture profile (history row and WAL, mozlz4 session file, Setups, log, data root, address, diagnostics,
+    # tab-address copy, profile file, bridge folder mode and stray copy, non-loopback endpoint and listener) and requires
+    # each red naming its sink; each collector's control is found first and a blind one is red. The five holders (registry
+    # set derived from the pin) stay green. One scanner: scripts/lib/orca-offer-scan.mjs (P65-23), mozlz4 in scripts/lib.
+    "orca-pairing-containment-self-test|node $REPO_ROOT/scripts/verify-orca-pairing-containment.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6824,6 +6830,13 @@ run_own_checks() {
       # the offer file at 0644) and browser-not-attached (the host bundle moved aside), with a positive control of each
       # hosted pane's own content before every induction. Under flock .git/pb-live.lock with ORCA_* unset.
       "orca-failure-page-live|node $REPO_ROOT/scripts/verify-orca-failure-page-live.mjs"
+      # NEW (67-04, RUN-07, P67-10/P67-11, P67-21): orca-pairing-containment-live pairs, opens a marker web tab and a
+      # hosted chat tab, reads the diagnostics layer, every address text and tab-address copy, saves a Setup, captures
+      # stdout/stderr, quits, then runs every collector over the profile, the bridge folder and the captured text; each
+      # control (marker URL, ready line, Orca port row, the offer in web-pairing, an orcad LISTEN row) is found first.
+      # Coordinator-run under flock /home/chris/coding/Power-Browser/.git/pb-live.lock, ORCA_* unset; profiles under
+      # .mozbuild/pb-live-profiles/ (makeProfile and firefox-bidi defaults; dispose removes the alias and bridge folder).
+      "orca-pairing-containment-live|node $REPO_ROOT/scripts/verify-orca-pairing-containment.mjs"
     )
   fi
 

@@ -24,10 +24,12 @@
 // Nothing here prints, logs or writes a needle. Results carry sink names,
 // form names, origins and counts.
 
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { decodeMozLz4 } from './mozlz4.mjs';
+import { isLoopbackEndpoint } from '../../powerbrowser/shell/OrcaEnv.sys.mjs';
 
 /** P65-17: the web client's stored-environment key, which session-only pairing removes. */
 export const RUNTIME_ENV_KEY = 'orca.web.runtimeEnvironment.v1';
@@ -193,3 +195,272 @@ export function formatScan(result) {
     for (const o of result.origins ?? []) lines.push(`origin ${o.origin}: ${o.read ? `marker ${o.hasMarker ? 'found' : 'absent'}, ${RUNTIME_ENV_KEY} ${o.hasRuntimeKey ? 'present' : 'absent'}` : 'not read'}`);
     return lines;
 }
+
+// ---------------------------------------------------------------------------
+// Phase 67 (RUN-07; P67-08, P67-10, P67-11): collectors, one per sink, on the needles above. A collector is
+// { sink, control, read }: control(ctx) is true when the sink's harmless marker travelled the same path and was
+// found, read(ctx) returns { chunks, faults } (chunks: Buffers or strings scanned for needles; faults: named
+// findings that are not a needle, such as a folder mode). runCollector never judges an absence without its
+// control: a collector whose control was not found is "collector blind", never green (CLAUDE.md rule 1).
+
+/** Needle occurrences over a list of Buffers or strings. */
+export function countMatches(chunks, needles) {
+    let n = 0;
+    for (const chunk of chunks ?? []) {
+        if (chunk === null || chunk === undefined) continue;
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8');
+        for (const { bytes: needle } of needles) n += occurrences(bytes, needle);
+    }
+    return n;
+}
+
+/** { sink, blind, matches, faults, unreadable }: counts and names only, never a needle or a read value. */
+export function runCollector(collector, ctx) {
+    let control = false;
+    let got = { chunks: [], faults: [] };
+    let unreadable = false;
+    try { control = collector.control(ctx) === true; } catch { control = false; unreadable = true; }
+    try { got = collector.read(ctx) ?? got; } catch { unreadable = true; }
+    return { sink: collector.sink, blind: !control, matches: countMatches(got.chunks, ctx.needles ?? []), faults: got.faults ?? [], unreadable };
+}
+
+/** One output line per collector result and whether it is red. */
+export function collectorLine(r) {
+    const reasons = [];
+    if (r.blind) reasons.push(`collector blind (control not found${r.unreadable ? ', sink unreadable' : ''})`);
+    if (r.matches) reasons.push(`offer found (${r.matches} match${r.matches === 1 ? '' : 'es'})`);
+    for (const f of r.faults) reasons.push(f);
+    return reasons.length
+        ? { red: true, line: `sink ${r.sink}: FAIL -- ${reasons.join('; ')}` }
+        : { red: false, line: `sink ${r.sink}: control found, 0 matches` };
+}
+
+/** A scratch copy of a SQLite file and its -wal, removed after fn(path, walBytes) returns. */
+function withDbCopy(db, fn) {
+    const tmp = mkdtempSync(join(tmpdir(), 'orca-offer-scan-db-'));
+    try {
+        const copy = join(tmp, 'copy.sqlite');
+        copyFileSync(db, copy);
+        const wal = existsSync(`${db}-wal`) ? readFileSync(`${db}-wal`) : null;
+        if (wal) copyFileSync(`${db}-wal`, `${copy}-wal`);
+        return fn(copy, wal);
+    } finally {
+        rmSync(tmp, { recursive: true, force: true });
+    }
+}
+
+/** places.sqlite's moz_places url and title texts (read through node:sqlite on a copy) and the raw -wal bytes. */
+export function readHistory(profileDir) {
+    return withDbCopy(join(profileDir, 'places.sqlite'), (copy, wal) => {
+        const conn = new DatabaseSync(copy, { readOnly: true });
+        let rows;
+        try { rows = conn.prepare('SELECT url, title FROM moz_places').all(); } finally { conn.close(); }
+        return { texts: rows.flatMap((r) => [r.url, r.title]).filter((x) => typeof x === 'string'), wal };
+    });
+}
+
+/** History (P67-10): moz_places through node:sqlite plus the raw WAL; control: the marker URL in a moz_places row. */
+export const historyCollector = Object.freeze({
+    sink: 'history',
+    control: (ctx) => !!ctx.marker && readHistory(ctx.profileDir).texts.some((t) => t.includes(ctx.marker)),
+    read: (ctx) => { const h = readHistory(ctx.profileDir); return { chunks: [...h.texts, h.wal], faults: [] }; },
+});
+
+/** Every regular file under `dir` as [relative path, absolute path], skipping each relative path `skip` accepts. */
+function walkFiles(dir, skip = () => false, rel = '') {
+    let names;
+    try { names = readdirSync(join(dir, rel)); } catch { return []; }
+    const out = [];
+    for (const name of names) {
+        const r = rel ? `${rel}/${name}` : name;
+        if (skip(r)) continue;
+        let st;
+        try { st = lstatSync(join(dir, r)); } catch { continue; }
+        if (st.isDirectory()) out.push(...walkFiles(dir, skip, r));
+        else if (st.isFile()) out.push([r, join(dir, r)]); // sockets, links and devices are not file content
+    }
+    return out;
+}
+
+const readOrNull = (path) => { try { return readFileSync(path); } catch { return null; } };
+
+/**
+ * Holder 5 (P67-08, A-8): orcad's registry file set, derived from the Orca source at the pin under `orcaRoot`:
+ * DEVICE_REGISTRY_FILENAME and MOBILE_PAIRING_USERDATA_FILES (mobile-pairing-files.ts), the keypair name
+ * (runtime-e2ee-keypair-file.ts), the durable-write temporary (durableWriteTempPath, durable-file-write.ts) and the
+ * quarantine copy (corruptCopyPrefix, device-registry-corruption.ts). Returns { registry, keypair, isHolder(rel) };
+ * throws "source moved: <file> ..." when a site no longer reads as expected.
+ */
+export function registryFilesFromPin(orcaRoot) {
+    const src = (rel) => {
+        const text = readOrNull(join(orcaRoot, rel))?.toString('utf8');
+        if (text === undefined) throw new Error(`source moved: ${rel} is absent at the pin`);
+        return [rel, text];
+    };
+    const need = ([rel, text], re, what) => {
+        const m = re.exec(text);
+        if (!m) throw new Error(`source moved: ${rel} no longer declares ${what}`);
+        return m;
+    };
+    const files = src('src/main/runtime/mobile-pairing-files.ts');
+    const registry = need(files, /\bDEVICE_REGISTRY_FILENAME\s*=\s*'([^']+)'/, 'DEVICE_REGISTRY_FILENAME')[1];
+    const list = need(files, /\bMOBILE_PAIRING_USERDATA_FILES\s*=\s*\[([^\]]*)\]/, 'MOBILE_PAIRING_USERDATA_FILES')[1];
+    if (!/\bDEVICE_REGISTRY_FILENAME\b/.test(list) || !/\bE2EE_KEYPAIR_FILENAME\b/.test(list)) throw new Error('source moved: MOBILE_PAIRING_USERDATA_FILES no longer lists the registry and the keypair');
+    const keypair = need(src('src/shared/runtime-e2ee-keypair-file.ts'), /\bE2EE_KEYPAIR_FILENAME\s*=\s*'([^']+)'/, 'E2EE_KEYPAIR_FILENAME')[1];
+    const durable = src('src/main/filesystem/durable-file-write.ts');
+    const tempTail = need(durable, /function durableWriteTempPath\([^)]*\)[^{]*\{[\s\S]{0,400}?return `\$\{finalPath\}([^`]+)`/, 'durableWriteTempPath')[1];
+    const ownerSuffix = need(durable, /\bownerSuffix\s*=\s*owner === undefined \? '' : `([^`]+)`/, 'the durable-write owner suffix')[1];
+    const corruptSuffix = need(src('src/main/runtime/device-registry-corruption.ts'), /return `\$\{basename\(registryPath\)\}([^`$]+)`/, 'corruptCopyPrefix')[1];
+    // A template literal as a pattern: each ${...} matches one name segment, ${ownerSuffix} its own template or nothing.
+    const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const toPattern = (tpl) => tpl.split(/(\$\{[^}]*\})/).map((part) => (part === '${ownerSuffix}' ? `(?:${toPattern(ownerSuffix)})?` : part.startsWith('${') ? '[^/]+?' : esc(part))).join('');
+    const temp = new RegExp(`^${esc(registry)}${toPattern(tempTail)}$`);
+    const isHolder = (rel) => !rel.includes('/') && (rel === registry || rel === keypair || temp.test(rel) || rel.startsWith(`${registry}${corruptSuffix}`));
+    return { registry, keypair, isHolder };
+}
+
+/** The decoded offer's endpoint (decodePairingPayload's field), or null. */
+export function offerEndpoint(handOffText) {
+    try {
+        const code = codeOf(pairingInputOf(handOffText));
+        const endpoint = JSON.parse(Buffer.from(code.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')).endpoint;
+        return typeof endpoint === 'string' ? endpoint : null;
+    } catch { return null; }
+}
+
+/** True for a /proc/net/tcp or tcp6 local address on loopback (127/8, ::1, ::ffff:127/104). */
+export function isLoopbackProcAddress(hex) {
+    const h = String(hex).toUpperCase();
+    if (h.length === 8) return h.endsWith('7F'); // IPv4 in host byte order: the first octet is the last byte
+    if (h === '00000000000000000000000001000000') return true;
+    return h.length === 32 && h.startsWith('0000000000000000FFFF0000') && h.endsWith('7F');
+}
+
+/** LISTEN sockets owned by `pids`: [{ pid, address, loopback }], joining <procRoot>/net/tcp{,6} with each pid's fd inodes. */
+export function listenSockets(pids, procRoot = '/proc') {
+    const listening = new Map();
+    for (const table of ['tcp', 'tcp6']) {
+        const text = readOrNull(join(procRoot, 'net', table))?.toString('utf8') ?? '';
+        for (const line of text.split('\n').slice(1)) {
+            const f = line.trim().split(/\s+/);
+            if (f.length > 9 && f[3] === '0A') listening.set(f[9], f[1].split(':')[0]);
+        }
+    }
+    const out = [];
+    for (const pid of pids.filter((p) => Number.isInteger(p) && p > 0)) {
+        let fds = [];
+        try { fds = readdirSync(join(procRoot, String(pid), 'fd')); } catch { continue; }
+        for (const fd of fds) {
+            let target;
+            try { target = readlinkSync(join(procRoot, String(pid), 'fd', fd)); } catch { continue; }
+            const inode = /socket:\[(\d+)\]/.exec(target)?.[1];
+            if (inode && listening.has(inode)) out.push({ pid, address: listening.get(inode), loopback: isLoopbackProcAddress(listening.get(inode)) });
+        }
+    }
+    return out;
+}
+
+const textsOf = (list) => (list ?? []).map((x) => (typeof x === 'string' ? x : x?.text)).filter((x) => typeof x === 'string');
+
+/** sessionstore.jsonlz4 and every file in sessionstore-backups/, mozlz4 files decoded, others as bytes. */
+export function readSessionFiles(profileDir) {
+    const paths = [join(profileDir, 'sessionstore.jsonlz4'), ...walkFiles(join(profileDir, 'sessionstore-backups')).map(([, abs]) => abs)];
+    return paths.map(readOrNull).filter(Boolean).map((b) => (b.subarray(0, 7).toString('latin1') === 'mozLz40' ? decodeMozLz4(b) : b));
+}
+
+/** The profile's files minus the Theia origin's storage folder (holder 4) and the data root's registry set (holder 5). */
+function profileFiles(ctx) {
+    const theia = ctx.theiaOriginDir ? `storage/default/${ctx.theiaOriginDir}` : null;
+    const root = ctx.dataRootName ?? 'powerbrowser-orca';
+    return walkFiles(ctx.profileDir, (rel) => rel === theia || (rel.startsWith(`${root}/`) && ctx.holder5.isHolder(rel.slice(root.length + 1))));
+}
+
+/** Session restore (P67-10): the decoded session files; control: the marker URL in their text. */
+export const sessionRestoreCollector = Object.freeze({
+    sink: 'session restore',
+    control: (ctx) => !!ctx.marker && readSessionFiles(ctx.profileDir).some((b) => b.includes(ctx.marker)),
+    read: (ctx) => ({ chunks: readSessionFiles(ctx.profileDir), faults: [] }),
+});
+
+/** Setups and shell state (Phase 65's byte sinks); control: every sink read and the saved Setup's name in setups.json. */
+export const setupsCollector = Object.freeze({
+    sink: 'setups and shell state',
+    control: (ctx) => {
+        const sinks = collectSinks(ctx.profileDir);
+        return !!ctx.setupName && sinks.every((s) => s.read) && sinks.find((s) => s.name === 'setups.json').bytes.includes(ctx.setupName);
+    },
+    read: (ctx) => ({ chunks: collectSinks(ctx.profileDir).map((s) => s.bytes), faults: [] }),
+});
+
+/** Logs: PB stdout and stderr, the OrcaService and TheiaService log lines, orcad's data root minus holder 5; control: the ready line. */
+export const logsCollector = Object.freeze({
+    sink: 'logs',
+    control: (ctx) => !!ctx.logControl && textsOf(ctx.logTexts).some((t) => t.includes(ctx.logControl)),
+    read: (ctx) => ({ chunks: [...textsOf(ctx.logTexts), ...walkFiles(ctx.dataRoot, (rel) => ctx.holder5.isHolder(rel)).map(([, abs]) => readOrNull(abs))], faults: [] }),
+});
+
+/** Address field: every Orca tab's and the control web tab's address text; control: the marker in a control text. */
+export const addressFieldCollector = Object.freeze({
+    sink: 'address field',
+    control: (ctx) => !!ctx.marker && (ctx.addressTexts ?? []).some((a) => a.kind === 'control' && String(a.text).includes(ctx.marker)),
+    read: (ctx) => ({ chunks: textsOf(ctx.addressTexts), faults: [] }),
+});
+
+/** Copyable text: the diagnostics rows and log as Copy diagnostics joins them, and each Orca tab's address copy; control: the Orca port row. */
+export const copyableTextCollector = Object.freeze({
+    sink: 'copyable text',
+    control: (ctx) => (ctx.copyable?.rows ?? []).some((r) => /^Orca port: \d+$/.test(r)),
+    read: (ctx) => ({ chunks: [[...(ctx.copyable?.rows ?? []), ctx.copyable?.log ?? ''].join('\n'), ...textsOf(ctx.copyable?.tabAddresses)], faults: [] }),
+});
+
+/** Whole profile: a byte scan of every file but holders 4 and 5; control: the marker URL bytes in places.sqlite or its WAL. */
+export const wholeProfileCollector = Object.freeze({
+    sink: 'whole profile',
+    control: (ctx) => !!ctx.marker && ['places.sqlite', 'places.sqlite-wal'].some((f) => readOrNull(join(ctx.profileDir, f))?.includes(ctx.marker)),
+    read: (ctx) => ({ chunks: profileFiles(ctx).map(([, abs]) => readOrNull(abs)), faults: [] }),
+});
+
+/** Bridge folder: 0700 folder and 0600 files owned by this user, no needle outside the offer file; control: the offer found in it. */
+export const bridgeFolderCollector = Object.freeze({
+    sink: 'bridge folder',
+    control: (ctx) => {
+        const bytes = ctx.bridgeDir ? readOrNull(join(ctx.bridgeDir, ctx.offerFile ?? 'web-pairing')) : null;
+        return !!bytes && countMatches([bytes], ctx.needles) > 0;
+    },
+    read: (ctx) => {
+        const uid = process.getuid?.();
+        const offerFile = ctx.offerFile ?? 'web-pairing';
+        const st = lstatSync(ctx.bridgeDir);
+        let badModes = st.isDirectory() && (st.mode & 0o777) === 0o700 && st.uid === uid ? 0 : 1;
+        const strays = [];
+        for (const name of readdirSync(ctx.bridgeDir)) {
+            const f = lstatSync(join(ctx.bridgeDir, name));
+            if (!(f.isFile() && (f.mode & 0o777) === 0o600 && f.uid === uid)) badModes++;
+            if (name !== offerFile && f.isFile()) strays.push(readFileSync(join(ctx.bridgeDir, name)));
+        }
+        const strayHits = strays.filter((b) => countMatches([b], ctx.needles) > 0).length;
+        const faults = [];
+        if (badModes) faults.push(`bridge folder mode (${badModes} entr${badModes === 1 ? 'y is' : 'ies are'} not 0700/0600 or not owned by this user)`);
+        if (strayHits) faults.push(`stray copy (${strayHits} file${strayHits === 1 ? '' : 's'} other than ${offerFile} hold${strayHits === 1 ? 's' : ''} a needle)`);
+        return { chunks: strays, faults };
+    },
+});
+
+/** Non-loopback peer: the decoded endpoint is ws://127.0.0.1:<orca port>, every LISTEN socket of orcad and the Theia backend on loopback; control: one orcad LISTEN row. */
+export const nonLoopbackPeerCollector = Object.freeze({
+    sink: 'non-loopback peer',
+    control: (ctx) => listenSockets(ctx.pids?.orcad ?? [], ctx.procRoot).length > 0,
+    read: (ctx) => {
+        const faults = [];
+        if (!isLoopbackEndpoint(ctx.endpoint, ctx.orcaPort)) faults.push('non-loopback peer: the decoded endpoint is not ws://127.0.0.1:<orca port>');
+        const off = listenSockets([...(ctx.pids?.orcad ?? []), ...(ctx.pids?.theia ?? [])], ctx.procRoot).filter((s) => !s.loopback).length;
+        if (off) faults.push(`non-loopback peer: ${off} listening socket(s) off loopback`);
+        return { chunks: [], faults };
+    },
+});
+
+/** Every Phase 67 collector, in output order. */
+export const COLLECTORS = Object.freeze([
+    historyCollector, sessionRestoreCollector, setupsCollector, logsCollector, addressFieldCollector,
+    copyableTextCollector, wholeProfileCollector, bridgeFolderCollector, nonLoopbackPeerCollector,
+]);

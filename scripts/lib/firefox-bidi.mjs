@@ -21,11 +21,11 @@
 
 import { spawn } from 'node:child_process';
 import { appendFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
 import { existsSync, createWriteStream, readFileSync } from 'node:fs';
+import { aliasPathFor, bridgeDirFor, dataRootFor, nodePlatform } from '../../powerbrowser/shell/OrcaEnv.sys.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..');
@@ -42,6 +42,34 @@ const REPO_ROOT = join(__dirname, '..', '..');
 // profile's user.js). Chrome-side .sys.mjs changes still load from the main
 // checkout, because objdir/dist/bin symlinks into it.
 export const FIREFOX_BIN = process.env.PB_FIREFOX_BIN || join(REPO_ROOT, 'objdir', 'dist', 'bin', 'powerbrowser');
+
+// P67-21 as amended by A-6: PowerBrowser refuses Orca on a profile under a temp folder, so every live profile and
+// config home is a mkdtemp child of one repo-local, ignored base.
+export const LIVE_PROFILE_BASE = join(REPO_ROOT, '.mozbuild', 'pb-live-profiles');
+
+/** A new folder under LIVE_PROFILE_BASE, named `prefix` plus mkdtemp's suffix. */
+export async function liveProfileDir(prefix) {
+    await mkdir(LIVE_PROFILE_BASE, { recursive: true });
+    return mkdtemp(join(LIVE_PROFILE_BASE, prefix));
+}
+
+/**
+ * Removes the data-root alias and the bridge folder OrcaEnv derives for `profileDir` (aliasPathFor, bridgeDirFor
+ * over dataRootFor), ignoring absent paths: with a repo-local profile every launch that starts orcad makes both
+ * (A-6, Pitfall 7). A removal error is logged, never thrown.
+ */
+export async function removeOrcaPathsFor(profileDir) {
+    const getEnv = name => process.env[name];
+    const dataRoot = dataRootFor(profileDir);
+    for (const path of [await aliasPathFor(dataRoot, getEnv), await bridgeDirFor(dataRoot, getEnv, nodePlatform(process.platform))]) {
+        if (!path) continue;
+        try {
+            await rm(path, { recursive: true, force: true }); // rm does not follow the alias link
+        } catch (err) {
+            console.error(`firefox-bidi: could not remove ${path} (${err.code ?? err.message})`);
+        }
+    }
+}
 
 // 39-REVIEW CR-01: the pids of the browsers withFirefoxPage launched that are still running. pb-kwin's real-input
 // gate accepts only a window one of them owns, so a PowerBrowser the owner has open never receives a send.
@@ -274,7 +302,7 @@ export async function captureScreenshot(url, outputPath, { windowSize = '800,600
         );
     }
 
-    const profileDir = await mkdtemp(join(tmpdir(), 'powerbrowser-firefox-bidi-'));
+    const profileDir = await liveProfileDir('powerbrowser-firefox-bidi-');
     await applyProfileOverrides(profileDir);
     let sigintHandler;
 
@@ -299,6 +327,7 @@ export async function captureScreenshot(url, outputPath, { windowSize = '800,600
             });
         }
         await rm(profileDir, { recursive: true, force: true });
+        await removeOrcaPathsFor(profileDir);
     };
 
     sigintHandler = () => {
@@ -357,7 +386,9 @@ export async function captureScreenshot(url, outputPath, { windowSize = '800,600
  * settle past any debounce) before capturing -- the only way to actually
  * see the rendered app.
  */
-export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, stdoutPath, profileDir: keptProfileDir, capabilities = {} } = {}) {
+// PB_LIVE_STDOUT_PATH / PB_LIVE_STDERR_PATH (67-04): the default tee targets, for a caller that cannot pass them
+// through a wrapper (orca-pairing-containment captures PowerBrowser's output under Phase 65's withOrcaProfile).
+export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, stdoutPath = process.env.PB_LIVE_STDOUT_PATH, stderrPath = process.env.PB_LIVE_STDERR_PATH, profileDir: keptProfileDir, capabilities = {} } = {}) {
     if (!existsSync(binPath)) {
         throw new Error(
             `firefox-bidi: ${binPath} does not exist. Run the Phase 1 Firefox build first ` +
@@ -369,7 +400,7 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
     // survives this launch, so a second withFirefoxPage call relaunches on it.
     // The caller creates and removes it; without it a temporary one is used.
     if (keptProfileDir) await mkdir(keptProfileDir, { recursive: true });
-    const profileDir = keptProfileDir || await mkdtemp(join(tmpdir(), 'powerbrowser-firefox-bidi-'));
+    const profileDir = keptProfileDir || await liveProfileDir('powerbrowser-firefox-bidi-');
     await applyProfileOverrides(profileDir);
     const port = await freePort();
 
@@ -390,6 +421,7 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
     // instance to get it would assert against a different process than the
     // one under test.
     const stdoutSink = stdoutPath ? createWriteStream(stdoutPath) : undefined;
+    const stderrSink = stderrPath ? createWriteStream(stderrPath) : undefined;
     // An EMPTY `url` means "launch with no URL argument at all", which is not
     // the same launch as `about:blank`. Found live (01-05): with GUI-01's
     // startup-window move landed, a URL on the command line opens a stock
@@ -420,6 +452,9 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
     if (stdoutSink) {
         child.stdout.pipe(stdoutSink);
     }
+    if (stderrSink) {
+        child.stderr.pipe(stderrSink);
+    }
 
     let ws;
     let client;
@@ -443,7 +478,13 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
         if (stdoutSink) {
             await new Promise(resolve => stdoutSink.end(resolve));
         }
-        if (!keptProfileDir) await rm(profileDir, { recursive: true, force: true });
+        if (stderrSink) {
+            await new Promise(resolve => stderrSink.end(resolve));
+        }
+        if (!keptProfileDir) {
+            await rm(profileDir, { recursive: true, force: true });
+            await removeOrcaPathsFor(profileDir);
+        }
     };
 
     // CR-03: this handler must not call process.exit() itself. A caller
