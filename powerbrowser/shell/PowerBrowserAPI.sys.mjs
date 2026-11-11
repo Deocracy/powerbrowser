@@ -301,7 +301,7 @@ let groupSenderPort = null;
 // one JSON document per profile, written atomically by the one chrome-side
 // writer. The frontend sends the whole map; the cap keeps a runaway frontend
 // from filling the disk through this channel.
-const SHELL_MESSAGE_KINDS = new Set(["shellStateLoad", "shellStateSave", "shellFlushed", "shellArmWebTabHistory", "appUpdateState", "checkForUpdates", "restartToUpdate"]);
+const SHELL_MESSAGE_KINDS = new Set(["shellStateLoad", "shellStateSave", "shellFlushed", "shellArmWebTabHistory", "appUpdateState", "checkForUpdates", "restartToUpdate", "orcaStatus", "orcaRestart", "orcaShowDiagnostics"]);
 const SHELL_STATE_FILE_NAME = "powerbrowser-shell-state.json";
 const SHELL_STATE_MAX_CHARS = 16 * 1024 * 1024;
 // NG-032/NG-033: quit flushes chrome is waiting on, flushId -> resolve.
@@ -2324,6 +2324,7 @@ export const PowerBrowserAPI = Object.freeze({
       PowerBrowserAPI.log("error", "[handleShellMessage] rejecting non-Theia-origin sender");
       return { ok: false, reason: "validation", message: "handleShellMessage: rejecting non-Theia-origin sender" };
     }
+    if (ORCA_SHELL_KINDS.has(data && data.kind)) return handleOrcaShellMessage(data, actorRef);
     const kind = data && data.kind;
     const path = `${PowerBrowserAPI.getProfileDir()}/${SHELL_STATE_FILE_NAME}`;
     try {
@@ -11712,3 +11713,36 @@ function registerAgentActor() {
   });
 }
 // ---- end Orca agent bridge ----
+
+// ---- Orca hosting (Phase 67, RUN-06/RUN-09, P67-04, P67-16) ----
+// The frontend's three Orca kinds, dispatched by one line in handleShellMessage after its
+// groupSenderIsTheia wall. OrcaService is read lazily: powerbrowser.js has already loaded it, so this
+// returns the same instance and adds no load-time import cycle. Replies carry a state and a class name
+// only; every identifier stays in the diagnostics rows.
+const ORCA_SHELL_KINDS = new Set(["orcaStatus", "orcaRestart", "orcaShowDiagnostics"]);
+const ORCA_SERVICE_MODULE = "chrome://powerbrowser/content/OrcaService.sys.mjs";
+const ORCA_ENV_MODULE = "chrome://powerbrowser/content/OrcaEnv.sys.mjs";
+
+async function handleOrcaShellMessage(data, actorRef) {
+  const kind = data.kind;
+  try {
+    const OrcaEnv = ChromeUtils.importESModule(ORCA_ENV_MODULE);
+    const { OrcaService } = ChromeUtils.importESModule(ORCA_SERVICE_MODULE);
+    switch (kind) {
+      case "orcaStatus": {
+        if (data.clientReason !== undefined) {
+          if (!OrcaEnv.isClientReason(data.clientReason)) {
+            return { ok: false, reason: "validation", message: "handleShellMessage: unknown Orca client reason" };
+          }
+          OrcaService.reportClientFailure(data.clientReason);
+        }
+        return { ok: true, kind, ...OrcaEnv.orcaStatusReply(OrcaService.getState()) };
+      }
+      default:
+        return { ok: false, reason: "validation", message: "handleShellMessage: not available yet" };
+    }
+  } catch (err) {
+    return { ok: false, reason: "store", message: `handleShellMessage: ${kind} failed (store ${err && err.name ? err.name : "error"})` };
+  }
+}
+// ---- end Orca hosting ----

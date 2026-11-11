@@ -85,6 +85,17 @@
 //     out/web/<ORCA_PANES_DIR_REL> equals the outDir literal of
 //     orca-overlay/files/vite.pb-panes.config.ts (SKIP only while that file is
 //     absent, lane p64-01). Present without the literal is red.
+// 12. Failure classes (Phase 67, RUN-06, P67-02..P67-05, P67-36). Scenario G (failure
+//     classes): the busy port of D reads failureClass port-in-use; a ready line whose
+//     pairing is unavailable (reason device_registry_unavailable plus a sentinel field)
+//     reads pairing-lost with the row "Orca pairing failure", and the sentinel reaches no
+//     getState(), log line or diagnostics row; an unexpected exit reads restarting while
+//     the supervisor starts orcad again; from ready, reportClientFailure of the
+//     browser-host reason reads browser-not-attached with the row "Orca browser host", and
+//     an unknown reason is refused. Static: the orcaStatus arm of handleOrcaShellMessage in
+//     PowerBrowserAPI.sys.mjs spreads OrcaEnv.orcaStatusReply(OrcaService.getState()) and
+//     names no other getState field, and orcaStatusReply over a full state has exactly the
+//     keys state and failureClass.
 // 10. Bridge folder key (Phase 63, D-31, P63-35): the POWERBROWSER_ORCA_* key
 //     TheiaService.sys.mjs sets is derived from it, and TheiaService computes
 //     its value through OrcaEnv.bridgeDirFor and OrcaEnv.dataRootFor. When
@@ -137,6 +148,7 @@ export function pathsFor(root) {
         shellDir,
         orcaService: join(shellDir, 'OrcaService.sys.mjs'),
         orcaEnv: join(shellDir, 'OrcaEnv.sys.mjs'),
+        api: join(shellDir, 'PowerBrowserAPI.sys.mjs'),
         theiaService: join(shellDir, 'TheiaService.sys.mjs'),
         shellJs: join(shellDir, 'powerbrowser.js'),
         prefs: join(shellDir, 'powerbrowser-sidecar.js'),
@@ -255,13 +267,18 @@ function makeBoundary(world) {
         platform: () => world.platform ?? 'linux',
         writePrivateFile: async (dir, name, text) => { rec('writePrivateFile', dir, name, text); },
     };
-    return { api, processes, calls, consoleLines, alive, files };
+    // Phase 67 (P67-16): Gecko's TmpD and nsIFile normalize(), from the world's tmpD and realPaths.
+    const hosting = {
+        getTempDir: () => { rec('getTempDir'); return world.tmpD ?? '/tmp'; },
+        realPath: (path) => { rec('realPath', path); return world.realPaths?.[path] ?? path; },
+    };
+    return { api, processes, hosting, calls, consoleLines, alive, files };
 }
 
 async function loadService(paths, boundary, env) {
     globalThis.ChromeUtils = {
         importESModule: (url) => {
-            if (url === 'chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs') return { PowerBrowserAPI: boundary.api, PowerBrowserProcesses: boundary.processes };
+            if (url === 'chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs') return { PowerBrowserAPI: boundary.api, PowerBrowserProcesses: boundary.processes, PowerBrowserOrcaHosting: boundary.hosting };
             if (url === 'chrome://powerbrowser/content/OrcaEnv.sys.mjs') return env;
             throw new Error(`OrcaService imported an unexpected module URL: ${url}`);
         },
@@ -601,6 +618,88 @@ async function scenarioJb(paths, env) {
     return fails;
 }
 
+const rowValue = (svc, label) => (svc.getDiagnosticRows().find(([l]) => l === label) ?? [])[1];
+
+/** G (failure classes, Phase 67): one class per cause, and no pairing field on any surface. */
+async function scenarioG(paths, env) {
+    const fails = [];
+    // The busy port of D.
+    const busy = makeBoundary(baseWorld({
+        orcad: () => fakeProc(5001, { stderr: [`PinnedPortUnavailableError: { code: '${env.ORCAD_PINNED_PORT_CODE}' }\n`], exitCode: 1 }),
+    }));
+    const svc1 = await loadService(paths, busy, env);
+    await svc1.start();
+    if (svc1.getState().failureClass !== 'port-in-use') fails.push(`scenario G: a busy port reads failureClass ${JSON.stringify(svc1.getState().failureClass)}, not port-in-use`);
+    await svc1.stop();
+
+    // Pairing unavailable at orcad start, with a sentinel field beside the reason.
+    const sentinel = `PB67SENTINEL${process.pid}x${Date.now().toString(36)}`;
+    const line = `${JSON.stringify({ event: 'orca_server_ready', boundEndpoint: 'ws://127.0.0.1:26768', health: { nodeVersion: 'v24.19.0', terminalDaemon: { pid: 5002 } }, pairing: { available: false, reason: 'device_registry_unavailable', guidance: sentinel, extra: sentinel } })}\n`;
+    const unavailable = makeBoundary(baseWorld({ orcad: () => fakeProc(5001, { stdout: [line.slice(0, 30), line.slice(30)] }) }));
+    const svc2 = await loadService(paths, unavailable, env);
+    await svc2.start();
+    if (svc2.getState().state !== 'ready') fails.push(`scenario G: an unavailable pairing offer left state '${svc2.getState().state}', not ready`);
+    if (svc2.getState().failureClass !== 'pairing-lost') fails.push(`scenario G: an unavailable pairing offer reads failureClass ${JSON.stringify(svc2.getState().failureClass)}, not pairing-lost`);
+    if (rowValue(svc2, 'Orca pairing failure') !== 'device_registry_unavailable') fails.push('scenario G: no "Orca pairing failure" row reads device_registry_unavailable');
+    for (const [where, text] of [['getState', JSON.stringify(svc2.getState())], ['the log', `${svc2.getRecentLog().join('\n')}\n${unavailable.consoleLines.join('\n')}`], ['the diagnostics rows', JSON.stringify(svc2.getDiagnosticRows())]]) {
+        if (text.includes(sentinel)) fails.push(`scenario G: a pairing field beside the reason reached ${where}`);
+    }
+
+    // From ready: the browser host could not attach (P67-36); an unknown reason is refused.
+    if (svc2.reportClientFailure('not-a-reason') !== false) fails.push('scenario G: reportClientFailure accepted a reason outside ORCA_CLIENT_REASONS');
+    if (svc2.getRecentLog().some((l) => l.includes('not-a-reason'))) fails.push('scenario G: the refused client reason was echoed into the log');
+    await svc2.stop();
+    const attach = makeBoundary(baseWorld());
+    const svc3 = await loadService(paths, attach, env);
+    await svc3.start();
+    svc3.reportClientFailure(env.ORCA_BROWSER_HOST_REASON);
+    if (svc3.getState().failureClass !== 'browser-not-attached') fails.push(`scenario G: a held browser-host reason reads failureClass ${JSON.stringify(svc3.getState().failureClass)}, not browser-not-attached`);
+    if (rowValue(svc3, 'Orca browser host') !== env.ORCA_BROWSER_HOST_REASON) fails.push('scenario G: no "Orca browser host" row reads the browser-host reason');
+    if (rowValue(svc3, 'Orca restart count') !== 0) fails.push('scenario G: no "Orca restart count" row');
+
+    // An unexpected exit: the class while the supervisor starts orcad again. The second orcad never
+    // reports ready, so the state is read at its spawn.
+    let first = null;
+    let seen = null;
+    const world = baseWorld();
+    const readyOrcad = world.orcad;
+    world.orcad = (spec) => {
+        if (!first) { first = readyOrcad(spec); return first; }
+        seen = { state: svc4.getState().state, failureClass: svc4.getState().failureClass };
+        return fakeProc(5011);
+    };
+    const exiting = makeBoundary(world);
+    const svc4 = await loadService(paths, exiting, env);
+    await svc4.start();
+    await svc3.stop();
+    first.exit(1);
+    for (let i = 0; i < 200 && !seen; i++) await new Promise((r) => setTimeout(r, 2));
+    if (!seen) fails.push('scenario G: orcad was not started again after an unexpected exit');
+    else if (seen.state !== 'starting' || seen.failureClass !== 'restarting') fails.push(`scenario G: while the supervisor restarts orcad the state is ${seen.state} with failureClass ${JSON.stringify(seen.failureClass)}, not starting with restarting`);
+    await svc4.stop();
+    return fails;
+}
+
+/** Clause 12's static half: the orcaStatus reply is built by OrcaEnv.orcaStatusReply alone. */
+function orcaStatusClauses(paths, env) {
+    const fails = [];
+    const api = read(paths.api);
+    if (api === null) return [`${paths.api} is missing`];
+    const at = api.indexOf('async function handleOrcaShellMessage(');
+    const armAt = at < 0 ? -1 : api.indexOf('case "orcaStatus":', at);
+    if (armAt < 0) return ['PowerBrowserAPI.sys.mjs has no orcaStatus arm in handleOrcaShellMessage'];
+    const rest = api.slice(armAt + 1);
+    const end = rest.search(/\n\s*(case "|default:)/);
+    const arm = rest.slice(0, end < 0 ? undefined : end);
+    if (!arm.includes('...OrcaEnv.orcaStatusReply(OrcaService.getState())')) fails.push('the orcaStatus arm does not spread OrcaEnv.orcaStatusReply(OrcaService.getState())');
+    const bare = arm.replaceAll('OrcaEnv.orcaStatusReply(OrcaService.getState())', '');
+    if (/getState\(\)/.test(bare)) fails.push('the orcaStatus arm spreads getState or reads a getState field beside orcaStatusReply');
+    const full = { state: 'failed', failureClass: 'port-in-use', port: 26768, pid: 5001, daemonPid: 5002, boundEndpoint: 'ws://127.0.0.1:26768', nodeVersion: 'v24.19.0', restartCount: 1, dataRoot: '/p', effectiveRoot: '/p', bridgeDir: '/b', orcaVersion: '9.9.9' };
+    const keys = Object.keys(env.orcaStatusReply(full)).sort().join();
+    if (keys !== 'failureClass,state') fails.push(`orcaStatusReply's keys over a full state are ${keys}: reply carries more than the class`);
+    return fails;
+}
+
 /** Clause 11's cross-lane comparisons. Returns { fails, notes, panes, vite } with 'compared' or a SKIP text each. */
 function handOffClauses(paths, env) {
     const fails = [];
@@ -790,7 +889,8 @@ export async function check(paths) {
     const handOff = handOffClauses(paths, env);
     fails.push(...handOff.fails);
     notes.push(...handOff.notes);
-    const scenarios = { A: scenarioA, B: scenarioB, C: scenarioC, D: scenarioD, E: scenarioE, F: scenarioF, H: scenarioH, I: scenarioI, J: scenarioJ, 'J-b': scenarioJb };
+    fails.push(...orcaStatusClauses(paths, env));
+    const scenarios = { A: scenarioA, B: scenarioB, C: scenarioC, D: scenarioD, E: scenarioE, F: scenarioF, G: scenarioG, H: scenarioH, I: scenarioI, J: scenarioJ, 'J-b': scenarioJb };
     const saved = globalThis.ChromeUtils;
     try {
         for (const [label, run] of Object.entries(scenarios)) {
@@ -878,6 +978,8 @@ async function runSelfTest() {
             { name: 'hand-off files not removed on stop', naming: 'not removed', file: paths.orcaService, edit: swap('[OrcaEnv.ORCAD_DATA_ROOT_FILE, OrcaEnv.ORCA_WEB_PAIRING_FILE, OrcaEnv.ORCA_PANES_DIR_FILE] : []', '[] : []') },
             { name: 'orca-panes protocol spells another pairing file', naming: 'chrome writes a file the Theia backend never reads', file: paths.orcaPanesProtocol, edit: swap("WEB_PAIRING_FILE = 'web-pairing'", "WEB_PAIRING_FILE = 'pairing-offer'") },
             { name: 'pane build writes another folder', naming: 'OrcaService looks in', file: paths.panesViteConfig, edit: swap("'out/web/assets/pb-panes'", "'out/web/pb-panes'") },
+            { name: 'orcaStatusReply returns a third key', naming: 'reply carries more than the class', file: paths.orcaEnv, edit: swap('  return { state: state.state, failureClass: state.failureClass };', '  return { state: state.state, failureClass: state.failureClass, port: state.port };') },
+            { name: 'the orcaStatus arm spreads getState() itself', naming: 'spreads getState', file: paths.api, edit: swap('...OrcaEnv.orcaStatusReply(OrcaService.getState()) };', '...OrcaEnv.orcaStatusReply(OrcaService.getState()), ...OrcaService.getState() };') },
             { name: 'lock code absent from the fixture source', naming: 'pinned source', file: fixtureCodes, edit: swap('orcad_instance_lock_held', 'orcad_lock_renamed') },
         ];
 
@@ -929,6 +1031,6 @@ if (isEntryPoint) {
         for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`);
         process.exit(1);
     }
-    console.log(`${NAME}: PASS -- jar.mn ships every shell module; OrcaService spawns only through the exact-environment boundary, spells no environment name and carries no user-facing copy; launch wiring and the .onorca.dev row hold; POWERBROWSER_ORCA_BRIDGE_DIR comparison ${r.bridgeKeyComparison}; stub-boundary scenarios ${r.scenarios.map((s) => ({ J: 'J (hand-off files)', 'J-b': 'J-b (no bundle folder)' }[s] ?? s)).join(', ')} (start with orcad-data-root after ready, reap, stop order, busy port, non-loopback, alias, no bridge folder, SDK extension disabled, offer and bundle folder after ready); orca-panes file names ${r.handOff.panes}; bundle folder ${r.handOff.vite}`);
+    console.log(`${NAME}: PASS -- jar.mn ships every shell module; OrcaService spawns only through the exact-environment boundary, spells no environment name and carries no user-facing copy; launch wiring and the .onorca.dev row hold; POWERBROWSER_ORCA_BRIDGE_DIR comparison ${r.bridgeKeyComparison}; stub-boundary scenarios ${r.scenarios.map((s) => ({ J: 'J (hand-off files)', 'J-b': 'J-b (no bundle folder)', G: 'G (failure classes)' }[s] ?? s)).join(', ')} (start with orcad-data-root after ready, reap, stop order, busy port, non-loopback, alias, failure classes, no bridge folder, SDK extension disabled, offer and bundle folder after ready); the orcaStatus reply is the state and the class only; orca-panes file names ${r.handOff.panes}; bundle folder ${r.handOff.vite}`);
     process.exit(0);
 }
