@@ -4025,6 +4025,10 @@ run_own_checks() {
     # orca-relaunch-restore-live-self-test: the relaunch comparators (dock, modes, identity, echo, pairing UI, devices).
     "orca-offer-scan-self-test|node $REPO_ROOT/scripts/verify-orca-offer-scan.mjs --self-test"
     "orca-relaunch-restore-live-self-test|node $REPO_ROOT/scripts/verify-orca-relaunch-restore-live.mjs --self-test"
+    # NEW (66-01, BRW-03, P66-30/A3/A9): orca-browser-host-bundle-self-test. Hermetic fixtures over the real host, link and
+    # pane-entry sources; plants a web-runtime-client.ts reach, a constant write, a private subscribe, an inlined asset,
+    # a tracked edit, a token over v2, a link without the placement, an empty module list and an entry without the link.
+    "orca-browser-host-bundle-self-test|node $REPO_ROOT/scripts/verify-orca-browser-host-bundle.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6703,6 +6707,11 @@ run_own_checks() {
       # Coordinator proof on the merged tree (p65-01, p65-02, p65-04); under the live lock with ORCA_* unset.
       "orca-offer-scan|node $REPO_ROOT/scripts/verify-orca-offer-scan.mjs"
       "orca-relaunch-restore-live|node $REPO_ROOT/scripts/verify-orca-relaunch-restore-live.mjs"
+      # NEW (66-01, BRW-03, P66-02/P66-30): orca-browser-host-bundle. The served directory from the pane config's outDir;
+      # pb-browser-host.js imported in Node and attached to a scratch orcad with the offer held in memory: CLI tab create
+      # is one createPage, goto is answered, the user close (browser.tabClose) drops the page. Needs the Orca build and
+      # CLI; run under the live lock with ORCA_* unset; a named SKIP when the bundle, orcad or the CLI is absent.
+      "orca-browser-host-bundle|node $REPO_ROOT/scripts/verify-orca-browser-host-bundle.mjs"
     )
   fi
 

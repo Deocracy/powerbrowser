@@ -618,6 +618,59 @@ its caller's shell: it starts no Nix shell of its own, reads nothing under
 `theia/`, and keeps to the portability rules of the hosted runners. No seam is
 added: the overlay keeps its one seam.
 
+### Browser host bundle (pb-browser-host.js)
+
+`scripts/build-orca-browser-host.sh` builds the thin browser host (Phase 66,
+P66-02): a PB-owned client of orcad's `browser.clientHost.attach` protocol, through
+which Orca's agents and Orca's UI reach PowerBrowser web tabs. Orca's own Vite
+compiles it from two PB-added overlay files, `src/renderer/src/pb/browser-host/pb-browser-host.ts`
+(the entry) and `vite.pb-browser-host.config.ts` (a library build over
+`vite.web.config.ts`'s aliases and defines: one ES file, no code splitting, minify
+off, Orca's plugins left out). It writes `pb-browser-host.js` into the pane bundle's
+directory, the `outDir` of `vite.pb-panes.config.ts` (`orca/out/web/assets/pb-panes/`),
+without emptying it, so the Theia backend's pane route (`/orca-panes/`) serves it as
+`/orca-panes/pb-browser-host.js`. orcad's port never serves it, and no file is added to
+the bridge folder. Beside it, in the ignored `orca/out/pb-browser-host-meta/`, the build
+records the bundle's module list (`modules.json`) and orca/'s tracked status just
+before Vite ran (`tracked-before.txt`); the tracked status after the build must be
+unchanged.
+
+`build-orca.sh` runs it as step 10, right after the pane step, on the full path and on
+`--panes-only` alike: the pane step empties `pb-panes/`, so the host is rebuilt after
+it on both paths.
+
+Why it is not Orca's `WebRuntimeClient` (condition 1 of spike 005): the host imports
+only Orca's shared pairing and protocol modules (`createPairedE2EEClientHandshake`,
+`BrowserClientHostEvent`, the capability constants) and the web E2EE primitives. It
+passes the browser-host capabilities through `sealAuth`'s own option instead of
+writing Orca's capability constant, and it carries the attach subscription and every
+command result on its one socket instead of calling a private subscribe. A token
+credential uses legacy framing; a device-key credential uses framing v2 (A9).
+
+The pane entry imports one more overlay file for its side effect,
+`src/renderer/src/pb/browser-host/pb-browser-host-link.ts`. It defines
+`globalThis[Symbol.for('powerbrowser.orca-browser.link')]` with `connection()` (the
+pane client's endpoint and its current credential, so the host authenticates as the
+same paired device, A3 b) and `setPlacement(id)` (Orca's renderer then creates browser
+pages with a client placement on the host, A3 a), and dispatches
+`powerbrowser-orca-browser-link` once after the pane client's first `status.get`.
+
+The rows that prove it: `orca-browser-host-bundle` (full; the static clauses, then the
+bundle imported in Node and attached to a scratch orcad: CLI `tab create` arrives as
+one `createPage`, `goto` is answered, a user close drops the page; run it under
+`flock /home/chris/coding/Power-Browser/.git/pb-live.lock` with `ORCA_*` unset),
+`orca-browser-host-bundle-self-test` (quick, hermetic plants) and
+`orca-overlay-built` (each overlay file's marker in the built output). The full row
+also needs Orca's CLI, which `build-orca.sh` does not build:
+
+```
+( cd orca && nix develop ..#orca --ignore-environment --keep HOME --keep TERM --command bash -c \
+  'export COREPACK_HOME=$PWD/../.mozbuild/corepack PATH=$PWD/../.mozbuild/corepack/bin:$PATH; \
+   pnpm run build:packages && ORCA_CLI_BUILD_COMPILER=tsrs node config/scripts/build-cli.mjs' )
+```
+
+Without the bundle, orcad or the CLI the row prints a named SKIP. No seam is added.
+
 ## Firefox half
 
 ```
