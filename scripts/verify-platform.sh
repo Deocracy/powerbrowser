@@ -4025,6 +4025,11 @@ run_own_checks() {
     # orca-relaunch-restore-live-self-test: the relaunch comparators (dock, modes, identity, echo, pairing UI, devices).
     "orca-offer-scan-self-test|node $REPO_ROOT/scripts/verify-orca-offer-scan.mjs --self-test"
     "orca-relaunch-restore-live-self-test|node $REPO_ROOT/scripts/verify-orca-relaunch-restore-live.mjs --self-test"
+    # NEW (66-03, BRW-03/BRW-04, P66-06/P66-12/P66-30, A1): orca-browser-tab-scope evaluates the shipped agent section of
+    # PowerBrowserAPI.sys.mjs, webTabOpen, webTabGeometry and the agent arms in node:vm over a stub boundary: an agent
+    # call on a user, unknown or foreign tab reaches no page work, the flag is set only at creation, unshown agent tabs
+    # are parked and user tabs never are, and every overlay visibility read goes through overlayShownToUser.
+    "orca-browser-tab-scope|node $REPO_ROOT/scripts/verify-orca-browser-tab-scope.mjs"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"

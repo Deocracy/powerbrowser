@@ -186,3 +186,92 @@ export class PowerBrowserEditStateChild extends JSWindowActorChild {
     return undefined;
   }
 }
+
+// Phase 66 plan 03 (BRW-03, P66-13): the content half of the PowerBrowserAgent pair, the actor rows of Orca's agent
+// methods. Like the edit-state child it has no events and no matches pin: Gecko creates it only when chrome's
+// agentRunInChild asks the top document of an agent overlay for it, after chrome's wall has passed, so page script
+// cannot message it and a user's tab never gets one. Chrome sends only methods of its frozen AGENT_METHODS list with
+// params its validators passed. One arm per actor method, keyed by the Orca method name; every answer is
+// { where: "done", result } or { where: "failed", code } with an Orca BrowserErrorCode. Element targets are CSS
+// selectors here; lane p66-04 adds @eN refs to the same resolver. No module import.
+class AgentRowError extends Error {
+  constructor(code) {
+    super(code);
+    this.code = code;
+  }
+}
+
+// The element a selector names, or the Orca code for why there is none.
+function agentElement(actor, selector) {
+  let element;
+  try {
+    element = actor.document.querySelector(selector);
+  } catch {
+    throw new AgentRowError("browser_error");
+  }
+  if (!element) {
+    throw new AgentRowError("browser_ref_not_found");
+  }
+  return element;
+}
+
+// The element's centre in CSS pixels of the viewport, scrolled into view first; the hit at that point must be the
+// element or inside it, else the element is covered or has no box.
+function agentCentre(actor, element) {
+  element.scrollIntoView({ block: "center", inline: "center" });
+  const rect = element.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) {
+    throw new AgentRowError("browser_element_not_interactable");
+  }
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+  const hit = actor.document.elementFromPoint(x, y);
+  if (!hit || (hit !== element && !element.contains(hit))) {
+    throw new AgentRowError("browser_element_not_interactable");
+  }
+  return { x, y };
+}
+
+// Trusted pointer input in the page's own window (G2, measured by p66-probe-child.sys.mjs).
+function agentMouse(actor, type, x, y, button = 0, clickCount = 1) {
+  const win = actor.contentWindow;
+  win.synthesizeMouseEvent(type, x, y, { button, clickCount, inputSource: win.MouseEvent.MOZ_SOURCE_MOUSE }, { isDOMEventSynthesized: true });
+}
+
+const AGENT_RUN = {
+  "browser.click": (actor, params) => {
+    const { x, y } = agentCentre(actor, agentElement(actor, params.element));
+    agentMouse(actor, "mousemove", x, y);
+    agentMouse(actor, "mousedown", x, y);
+    agentMouse(actor, "mouseup", x, y);
+    return { clicked: params.element };
+  },
+  // Lane p66-04 replaces this arm with the snapshot builder (P66-16); until then the agent gets a defined error.
+  "browser.snapshot": () => {
+    throw new AgentRowError("browser_command_unavailable");
+  },
+};
+
+export class PowerBrowserAgentChild extends JSWindowActorChild {
+  receiveMessage(message) {
+    if (message.name === "PowerBrowserAgent:Abort") {
+      this.aborted = true;
+      return undefined;
+    }
+    if (message.name !== "PowerBrowserAgent:Run") {
+      return undefined;
+    }
+    const { method, params } = message.data || {};
+    const arm = Object.hasOwn(AGENT_RUN, method) ? AGENT_RUN[method] : null;
+    if (!arm) {
+      return { where: "failed", code: "browser_command_unavailable" };
+    }
+    this.aborted = false;
+    const failed = err => ({ where: "failed", code: err instanceof AgentRowError ? err.code : "browser_error" });
+    try {
+      return Promise.resolve(arm(this, params || {})).then(result => ({ where: "done", result }), failed);
+    } catch (err) {
+      return failed(err);
+    }
+  }
+}

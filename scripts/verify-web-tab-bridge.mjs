@@ -33,7 +33,7 @@
  * no network -- it belongs in `verify-platform.sh --quick`.
  */
 
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -47,6 +47,15 @@ const WEB_TAB = 'theia/extensions/tab-uris/src/browser/web-tab.ts';
 const MODULE = 'theia/extensions/tab-uris/src/browser/tab-uris-frontend-module.ts';
 const CHROME_BAR_DIR = 'theia/extensions/chrome-bar/src/browser';
 const TAB_URIS_DIR = 'theia/extensions/tab-uris/src/browser';
+// Phase 66 (P66-12): lane p66-02's extension, the one sender of webTabAgent. Read when present.
+const ORCA_BROWSER_DIR = 'theia/extensions/orca-browser/src';
+const ORCA_BROWSER_MODULE = `${ORCA_BROWSER_DIR}/browser/orca-browser-frontend-module.ts`;
+// The agent contract chrome serves (lane p66-03) and the frontend speaks (lane p66-02). While no orca-browser source
+// is in the tree, rules 1, 9 and the privileged-kind rule leave out exactly these names and the PASS line says so;
+// once any orca-browser source is present nothing is left out.
+const AGENT_CONTRACT_NAMES = ['webTabAgent', 'webTabAgentStop', 'agentControlChanged'];
+const agentContractSkipped = src => !Object.keys(src).some(file => file.startsWith(`${ORCA_BROWSER_DIR}/`));
+const AGENT_CONTRACT_SKIP_NOTE = 'agent contract SKIP (lane p66-02 not merged)';
 
 /**
  * Phase 27 privileged-kind rule (powerbrowser/INTERNAL-APIS.md): every
@@ -121,6 +130,12 @@ const KIND_CLASSES = new Map([
     // Phase 35 plan 03 (PROMPT-04, D-09): the page menu pick performs a row outside the tab's own navigation
     // (clipboard writes, a new tab with the page's principal), so privileged; fenced to its owning file below.
     ['webTabContextMenuAction', 'privileged'],
+    // Phase 66 plan 03 (P66-12): an Orca agent's automation call drives a page on the agent's behalf (input, page-world
+    // evaluation, cookies of the agent container), so privileged; fenced to the orca-browser dispatcher's module.
+    ['webTabAgent', 'privileged'],
+    // Phase 66 plan 03 (P66-12, P66-22): Stop ends agent control of a tab for its lifetime, so privileged; sent only by
+    // WebTabWidget.agentStop(), which only the chrome bar's Stop click handler calls (P66-21).
+    ['webTabAgentStop', 'privileged'],
 ]);
 
 /**
@@ -136,6 +151,8 @@ const PRIVILEGED_WEB_TAB_KINDS = new Map([
     ['webTabClearSiteData', { owner: WEB_TAB, reason: "clears a site's stored data" }],
     ['webTabShieldToggle', { owner: WEB_TAB, reason: 'writes the per-site shield exception' }],
     ['webTabContextMenuAction', { owner: PAGE_CONTEXT_MENU, reason: 'performs a page menu row: a clipboard write, a new tab with the page principal, a page media or frame command' }],
+    ['webTabAgent', { owner: ORCA_BROWSER_MODULE, reason: "drives an Orca-created page on an agent's behalf" }],
+    ['webTabAgentStop', { owner: WEB_TAB, reason: 'ends agent control of a tab for its lifetime' }],
 ]);
 
 /**
@@ -265,6 +282,11 @@ const STOCK_TAB_KIND = /openStockTab|OPEN_STOCK_TAB_KIND/;
  * begins a line or follows whitespace, so `http://…` inside a string and
  * `\/\//` inside a regex literal survive.
  */
+/** The frontend sources the push and privileged rules read: chrome bar, tab-uris and (Phase 66) orca-browser. */
+function isFrontendFile(file) {
+    return file.startsWith(`${CHROME_BAR_DIR}/`) || file.startsWith(`${TAB_URIS_DIR}/`) || file.startsWith(`${ORCA_BROWSER_DIR}/`);
+}
+
 function stripComments(text) {
     return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '$1');
 }
@@ -332,7 +354,9 @@ function checkBridge(raw, storeClasses = STORE_KIND_CLASSES, kindClasses = KIND_
     const src = Object.fromEntries(Object.entries(raw).map(([file, text]) => [file, stripComments(text)]));
 
     // 1. KINDS: the chrome dispatch arms vs the frontend message union.
+    const skipped = agentContractSkipped(raw) ? new Set(AGENT_CONTRACT_NAMES) : new Set();
     const apiKinds = derive(src[API], /case "(webTab[A-Za-z]+)"/g);
+    const servedKinds = apiKinds.filter(kind => !skipped.has(kind));
     const tsKinds = derive(src[WEB_TAB], /kind: '(webTab[A-Za-z]+)'/g);
     if (apiKinds.length === 0) {
         failures.push(`${API}: derived ZERO case "webTab…" arms -- the parse found nothing, so the kind comparison proves nothing`);
@@ -341,7 +365,7 @@ function checkBridge(raw, storeClasses = STORE_KIND_CLASSES, kindClasses = KIND_
         failures.push(`${WEB_TAB}: derived ZERO kind: 'webTab…' literals -- the parse found nothing, so the kind comparison proves nothing`);
     }
     if (apiKinds.length && tsKinds.length) {
-        const { surplus, missing } = diff(apiKinds, tsKinds);
+        const { surplus, missing } = diff(servedKinds, tsKinds);
         if (surplus.length) {
             failures.push(`kinds: chrome serves case arms the frontend never sends: ${surplus.join(', ')}`);
         }
@@ -544,8 +568,8 @@ function checkBridge(raw, storeClasses = STORE_KIND_CLASSES, kindClasses = KIND_
         // Phase 33: a push kind may carry a hyphen (bookmarks-changed); [A-Za-z]+ alone left it underived.
         ...derive(src[API], /sendWebTabPush\(\s*[\w$.]+\s*,\s*\{\s*kind:\s*"([A-Za-z][A-Za-z-]*)"/g),
         ...derive(src[API], /sendAsyncMessage\(\s*"PowerBrowserWebTabState"\s*,\s*\{\s*kind:\s*"([A-Za-z][A-Za-z-]*)"/g),
-    ];
-    const frontendFiles = Object.keys(src).filter(file => file.startsWith(`${CHROME_BAR_DIR}/`) || file.startsWith(`${TAB_URIS_DIR}/`));
+    ].filter(kind => !skipped.has(kind));
+    const frontendFiles = Object.keys(src).filter(isFrontendFile);
     const frontendText = frontendFiles.map(file => src[file]).join('\n');
     const constants = new Map(derive(frontendText, /export const ([A-Za-z_$][\w$]*\s*=\s*'[A-Za-z][A-Za-z-]*')/g)
         .map(pair => /^(\S+)\s*=\s*'([A-Za-z][A-Za-z-]*)'$/.exec(pair)).map(m => [m[1], m[2]]));
@@ -609,7 +633,7 @@ function checkBridge(raw, storeClasses = STORE_KIND_CLASSES, kindClasses = KIND_
             failures.push(`classification: ${kind} has the unknown class '${kindClass}'`);
         }
     }
-    failures.push(...checkWebTabPrivileged(src, kindClasses, privilegedKinds));
+    failures.push(...checkWebTabPrivileged(src, kindClasses, privilegedKinds, skipped));
 
     failures.push(...checkStoreKinds(src, storeClasses));
     return failures;
@@ -623,19 +647,20 @@ function checkBridge(raw, storeClasses = STORE_KIND_CLASSES, kindClasses = KIND_
  * method in web-tab.ts, be called only from the chrome-bar event-handler tree,
  * and be named or called by no command or keybinding file.
  */
-function checkWebTabPrivileged(src, classes, privilegedKinds) {
+function checkWebTabPrivileged(src, classes, privilegedKinds, skipped = new Set()) {
     const failures = [];
     const commandLike = Object.entries(src).filter(([file, text]) =>
         (text.includes('registerCommand(') || text.includes('registerKeybinding(')) && file.startsWith(`${CHROME_BAR_DIR}/`));
-    const privileged = [...classes].filter(([, kindClass]) => kindClass === 'privileged').map(([kind]) => kind);
-    const listed = diff(privileged, [...privilegedKinds.keys()]);
+    const classedPrivileged = [...classes].filter(([, kindClass]) => kindClass === 'privileged').map(([kind]) => kind);
+    const listed = diff(classedPrivileged, [...privilegedKinds.keys()]);
+    const privileged = classedPrivileged.filter(kind => !skipped.has(kind));
     for (const kind of listed.surplus) {
         failures.push(`classification: the privileged webTab kind ${kind} is not listed in PRIVILEGED_WEB_TAB_KINDS with its reason and owning file`);
     }
     for (const kind of listed.missing) {
         failures.push(`classification: PRIVILEGED_WEB_TAB_KINDS lists ${kind}, which KIND_CLASSES does not class privileged (stale)`);
     }
-    const frontendFiles = Object.keys(src).filter(file => file.startsWith(`${CHROME_BAR_DIR}/`) || file.startsWith(`${TAB_URIS_DIR}/`));
+    const frontendFiles = Object.keys(src).filter(isFrontendFile);
     for (const kind of privileged) {
         for (const [file, text] of commandLike) {
             if (new RegExp(`\\b${kind}\\b`).test(text)) {
@@ -755,7 +780,11 @@ function checkStoreKinds(src, storeClasses) {
 function readSources() {
     const files = new Set([API, CHILD, CLIENT, BWC, WEB_TAB, MODULE]);
     // Recursive (30-01): the pill lives under chrome-bar/src/browser/address-bar/.
-    for (const dir of [CHROME_BAR_DIR, TAB_URIS_DIR]) {
+    const dirs = [CHROME_BAR_DIR, TAB_URIS_DIR];
+    if (existsSync(join(REPO_ROOT, ORCA_BROWSER_DIR))) {
+        dirs.push(ORCA_BROWSER_DIR);
+    }
+    for (const dir of dirs) {
         for (const name of readdirSync(join(REPO_ROOT, dir), { recursive: true })) {
             if (/\.tsx?$/.test(name)) {
                 files.add(`${dir}/${name}`);
@@ -795,6 +824,18 @@ function selfTest() {
         'async function handleStoreRequest(', '\n}', 'case "resolveTypedAddress": {', `case "${kind}": { break; }\n      case "resolveTypedAddress": {`);
     const relaying = kind => clean[STORE_PROTOCOL].replace("    'queryTabsWithPlaces',\n", `    'queryTabsWithPlaces',\n    '${kind}',\n`);
     const classedAs = (kind, kindClass) => new Map([...STORE_KIND_CLASSES, [kind, kindClass]]);
+    // Phase 66 plan 03: lane p66-02's side of the agent contract, simulated as source-map entries so the agent rules
+    // run with nothing left out: the dispatcher's one webTabAgent literal, the web-tab.ts union members, agentStop()
+    // with its agentControlChanged subscription, and the chrome bar's Stop click handler.
+    const ORCA_PLANT = `${ORCA_BROWSER_DIR}/browser/orca-browser-planted.ts`;
+    const withOrcaBrowser = (sources = clean) => ({
+        ...sources,
+        [ORCA_BROWSER_MODULE]: "export const sendAgent = (channel, tabId, method, params) => channel.request({ kind: 'webTabAgent', tabId, method, params });\n",
+        [WEB_TAB]: sources[WEB_TAB] + "\nexport type PlantedAgentRequest = { kind: 'webTabAgent'; tabId: string } | { kind: 'webTabAgentStop'; tabId: string };\n" +
+            "export class PlantedAgentTab {\n    agentStop() { return this.request({ kind: 'webTabAgentStop', tabId: this.tabId }); }\n    wire() { this.onPush('agentControlChanged', () => undefined); }\n}\n",
+        [WIDGET]: sources[WIDGET] + "\nexport const plantedStopClick = (tab) => tab.agentStop();\n",
+    });
+    const orcaBrowser = withOrcaBrowser();
     const cases = [
         {
             name: 'planted unclassified store kind',
@@ -1165,7 +1206,44 @@ function selfTest() {
         },
     ];
 
+    cases.push(
+        {
+            name: 'webTabAgent unclassified (orca-browser present)',
+            sources: orcaBrowser,
+            kindClasses: new Map([...KIND_CLASSES].filter(([kind]) => kind !== 'webTabAgent')),
+            expect: 'webTab arms with no KIND_CLASSES entry (classify each under the privileged-kind rule): webTabAgent',
+        },
+        {
+            name: 'webTabAgent sent from a second frontend file',
+            sources: { ...orcaBrowser, [ORCA_PLANT]: "export const planted = (channel) => channel.request({ kind: 'webTabAgent', tabId: 'x', method: 'browser.click', params: {} });\n" },
+            expect: `the privileged webTab kind webTabAgent is sent from ${ORCA_PLANT}, outside its owning file ${ORCA_BROWSER_MODULE}`,
+        },
+        {
+            name: "webTabAgentStop's agentStop( called from a tab-uris file",
+            sources: { ...orcaBrowser, [MODULE]: orcaBrowser[MODULE] + "\nexport const plantedStop = (tab) => tab.agentStop();\n" },
+            expect: `the privileged webTab kind webTabAgentStop is called outside the chrome-bar event-handler tree, in ${MODULE}`,
+        },
+        {
+            name: 'orca-browser present but web-tab.ts lacking the webTabAgent union member',
+            sources: { ...orcaBrowser, [WEB_TAB]: orcaBrowser[WEB_TAB].replace("{ kind: 'webTabAgent'; tabId: string } | ", '') },
+            expect: 'kinds: chrome serves case arms the frontend never sends: webTabAgent',
+        },
+        {
+            name: 'orca-browser present and no agentControlChanged subscription',
+            sources: { ...orcaBrowser, [WEB_TAB]: orcaBrowser[WEB_TAB].replace("this.onPush('agentControlChanged',", 'this.onPushGone(') },
+            expect: 'chrome pushes kinds no frontend source subscribes to: agentControlChanged',
+        },
+    );
+
     let failed = 0;
+    // Positive control (Phase 66): with lane p66-02's side simulated, the agent contract is compared in full and holds.
+    const agentControl = checkBridge(orcaBrowser);
+    if (agentControl.length) {
+        console.error(`verify-web-tab-bridge --self-test: FAIL -- the simulated orca-browser side went red, so the agent plants prove nothing: ${agentControl.join(' | ')}`);
+        failed++;
+    } else {
+        console.log('  ok  simulated orca-browser side (agent contract compared, nothing left out) -> green');
+    }
     // Positive control (Phase 33): the widget is a sanctioned privileged caller, so its clearHistory call stays green.
     const widgetCall = checkBridge({ ...clean, [WIDGET]: clean[WIDGET] + "\nvoid this.store.clearHistory('today');\n" });
     if (widgetCall.length) {
@@ -1218,7 +1296,8 @@ function main() {
         `verify-web-tab-bridge: PASS -- ${kinds.length} webTab kinds, the request/response/state event names, ` +
         'the open-handler priority, the overlay attribute order, the embedder-is-primary wall, the no-stock-window rule, ' +
         'push-kind parity, action routing, kind classification and store-kind classification ' +
-        `agree across ${Object.keys(sources).length} sources`
+        `agree across ${Object.keys(sources).length} sources` +
+        (agentContractSkipped(sources) ? `; ${AGENT_CONTRACT_SKIP_NOTE}` : '')
     );
     return 0;
 }
