@@ -25,7 +25,6 @@ import TerminalPane from '../components/terminal-pane/TerminalPane'
 import { requestActiveTerminalPaneClose } from '../components/terminal-pane/request-active-terminal-pane-close'
 import NativeChatView from '../components/native-chat/NativeChatView'
 import EmulatorPane from '../components/emulator-pane/EmulatorPane'
-import EditorPanel from '../components/editor/EditorPanel'
 import { closeTerminalTab } from '../components/terminal/terminal-tab-actions'
 import { createWorkspaceTabCloseCommands } from '../components/tab-group/workspace-tab-close-commands'
 import { ensureSimulatorTab } from '../lib/ensure-simulator-tab'
@@ -47,14 +46,14 @@ import { useDocumentAppearance } from '../app-shell/use-document-appearance'
 import { useRuntimeGraphSync } from '../app-shell/use-runtime-graph-sync'
 import { orderEmptyQueryWorktrees } from '../lib/order-empty-query-worktrees'
 import { initWebDeviceKeySupport } from '../web/web-device-key-support'
-import { parseWebPairingInput, readPairingInputFromLocation } from '../web/web-pairing'
 import { installWebPreloadApi } from '../web/web-preload-api'
 import { callRuntimeResult } from '../web/preload-api/web-runtime-calls'
-import {
-  createStoredWebRuntimeEnvironment,
-  readStoredWebRuntimeEnvironment,
-  saveStoredWebRuntimeEnvironment
-} from '../web/web-runtime-environment'
+import { NativeChatResumeOnRestartModal } from '../components/NativeChatResumeRuntimeModal'
+import { ModalBoundary, OverlayBoundary } from '../app-shell/app-root-surface-boundaries'
+import { useLazyModalMounts } from '../app-shell/use-lazy-modal-mounts'
+import { lazyWithRetry } from '@/lib/lazy-with-retry'
+import { detectLanguage } from '@/lib/language-detect'
+import { toRuntimeWorktreeSelector } from '../runtime/runtime-worktree-selector'
 import { makePaneKey } from '../../../shared/stable-pane-id'
 import { CLIENT_NAVIGATION_PUBLICATION_EPOCH_SUFFIX } from '../../../shared/runtime-session-contracts'
 import { resolveUnifiedTabLabel } from '../../../shared/tab-title-resolution'
@@ -62,14 +61,46 @@ import type { KeybindingActionId, KeybindingOverrides, TerminalShortcutPolicy } 
 import type { Tab, TabGroupLayoutNode } from '../../../shared/tab-types'
 import type { TerminalPaneLayoutNode } from '../../../shared/terminal-tab-types'
 import type { TuiAgent } from '../../../shared/tui-agent'
+import type { GitConflictKind } from '../../../shared/git-status-types'
+import type { DiffSource } from '../../../shared/editor-tab-view-types'
+import type {
+  GitBranchChangeEntry,
+  GitBranchCompareResult,
+  GitCommitCompareResult
+} from '../../../shared/git-diff-compare-types'
+import { SIDE_MOUNT_KINDS, SIDE_MOUNTS_BUILD, SideMountBody } from './pb-side-mounts'
+import { WORKSPACE_API_BUILD } from './pb-workspace-api'
+import { SESSION_PAIRING_BUILD, assertSessionOnly, pairSessionOnly, pairingState, presetSessionOnly } from './pb-session-pairing'
+
+// Phase 65 (C3-65): the observation API, the orchestration focus and repair, re-exported as named exports.
+export {
+  subscribeOpenFiles,
+  subscribeWorktrees,
+  subscribeActiveView,
+  setActiveView,
+  subscribeActiveWorktree,
+  subscribeOrchestrationEnabled,
+  viewTitle
+} from './pb-workspace-api'
+export { setOrchestrationFocus } from './pb-side-mounts'
+export { repair } from './pb-session-pairing'
 
 const ENTRY_MARKER = 'pb-overlay:src/renderer/src/pb/pb-pane-mount.tsx'
 
 /** The marker literals of the entry, the Vite config and the scoping pass (orca-overlay-built reads them). */
 export const PB_OVERLAY_BUILD: readonly string[] = Object.freeze([
   ENTRY_MARKER,
+  ...SIDE_MOUNTS_BUILD,
+  ...WORKSPACE_API_BUILD,
+  ...SESSION_PAIRING_BUILD,
   ...(PB_CONFIG_MARKERS as readonly string[])
 ])
+
+/** Phase 64's hosted kinds this file mounts itself (conflict-review opens in Theia's merge editor, P65-01). */
+const PANE_KINDS = ['terminal', 'agent-session', 'simulator'] as const
+
+/** Every kind mountPane accepts (B-1, C3-65); check-details is CheckRunDetailsPanel alone (pb-side-mounts). */
+export const MOUNT_KINDS: readonly string[] = Object.freeze([...PANE_KINDS, ...SIDE_MOUNT_KINDS])
 
 /** The React object this bundle runs on (the default export: the host's React object itself, not a
  * namespace copy); the orca-panes loader compares it with Theia's. */
@@ -165,6 +196,53 @@ function staleNavigationEchoes(): void {
     })
 }
 
+// D-18: Orca's Add-project flow. The hosted Sidebar's trigger only sets activeModal; AppRootSurfaces hosts the
+// dialogs, so the services root hosts the same four, lazily and in the same boundaries.
+const AddRepoDialog = lazyWithRetry(() => import('../components/sidebar/AddRepoDialog'))
+const NonGitFolderDialog = lazyWithRetry(() => import('../components/sidebar/NonGitFolderDialog'))
+const AddProjectFromFolderDialog = lazyWithRetry(() => import('../components/sidebar/AddProjectFromFolderDialog'))
+const ProjectAddedDialog = lazyWithRetry(() => import('../components/sidebar/ProjectAddedDialog'))
+
+/** AppRootSurfaces' Add-project dialogs (add-repo and its three handoff dialogs), unchanged. */
+function AddProjectDialogs(): React.JSX.Element {
+  const { shouldMountAddRepoDialog } = useLazyModalMounts()
+  const activeModal = useAppStore((state) => state.activeModal)
+  return (
+    <React.Suspense fallback={null}>
+      {shouldMountAddRepoDialog ? (
+        <ModalBoundary boundaryId="modal.add-repo" resetKey={activeModal === 'add-repo'}>
+          <AddRepoDialog />
+        </ModalBoundary>
+      ) : null}
+      {activeModal === 'confirm-non-git-folder' ? (
+        <ModalBoundary boundaryId="modal.confirm-non-git-folder" resetKey>
+          <NonGitFolderDialog />
+        </ModalBoundary>
+      ) : null}
+      {activeModal === 'confirm-add-project-from-folder' ? (
+        <ModalBoundary boundaryId="modal.confirm-add-project-from-folder" resetKey>
+          <AddProjectFromFolderDialog />
+        </ModalBoundary>
+      ) : null}
+      {activeModal === 'project-added' ? (
+        <ModalBoundary boundaryId="modal.project-added" resetKey>
+          <ProjectAddedDialog />
+        </ModalBoundary>
+      ) : null}
+    </React.Suspense>
+  )
+}
+
+/** B-9 (P65-22, CA-14): Orca's resume offer inside its overlay boundary, as AppRootSurfaces.tsx mounts it. */
+function ResumeOffer(): React.JSX.Element {
+  const activeView = useAppStore((state) => state.activeView)
+  return (
+    <OverlayBoundary boundaryId="overlay.native-chat-resume-on-restart" resetKey={activeView}>
+      <NativeChatResumeOnRestartModal />
+    </OverlayBoundary>
+  )
+}
+
 // D-32 (C13): hosted Orca terminals give their keys to the shell. 'terminal-first' is Orca's own escape hatch for
 // shells and TUIs (it turns Orca's window shortcuts and its TUI-clashing terminal actions off in a terminal). It is set
 // in this document's store only, never through Orca's settings actions, so orcad's persisted settings and every other
@@ -205,37 +283,17 @@ async function step<T>(name: string, run: () => T | Promise<T>): Promise<T> {
   }
 }
 
-// The bridge folder's web-pairing file holds orcad's web-client URL (C5). Orca's own web client
-// reads the offer from that URL's location, so the entry does the same; a bare offer passes through.
-function pairingInputOf(input: string): string {
-  const trimmed = input.trim()
-  if (!/^https?:\/\//i.test(trimmed)) return trimmed
-  try {
-    return readPairingInputFromLocation(new URL(trimmed)) ?? trimmed
-  } catch {
-    return trimmed
-  }
-}
-
-/** Once per document: session-only pairing, the web preload API, then the hidden services root. */
+/**
+ * Once per document: session-only pairing (the offer read from orcad's web-client URL, C64-5), the web preload
+ * API, then the hidden services root. Orca's device-key support is preset to session-no-ed25519 immediately
+ * before Orca's own init (P65-17, Pitfall 6); nothing connects unless the pairing is session-only (CA-07).
+ */
 export function bootstrap(options: { pairing: string }): Promise<void> {
   booting ??= (async () => {
+    presetSessionOnly()
     await initWebDeviceKeySupport().catch(noop)
-    const offer = await step('parseWebPairingInput', () => parseWebPairingInput(pairingInputOf(options.pairing)))
-    if (!offer || offer.scope !== 'runtime') {
-      throw new Error('orca pane bootstrap: parseWebPairingInput failed (not a runtime pairing offer)')
-    }
-    const environment = await step('createStoredWebRuntimeEnvironment', () =>
-      createStoredWebRuntimeEnvironment({
-        name: 'Orca Server',
-        offer,
-        previousEnvironment: readStoredWebRuntimeEnvironment()
-      })
-    )
-    // A6: session-only keeps the device token in page memory, never in localStorage.
-    await step('saveStoredWebRuntimeEnvironment', () =>
-      saveStoredWebRuntimeEnvironment({ ...environment, sessionOnly: true })
-    )
+    await step('pairing', () => pairSessionOnly(options.pairing))
+    if (!assertSessionOnly()) throw new Error('session-only pairing unavailable')
     await step('installWebPreloadApi', () => installWebPreloadApi())
     staleNavigationEchoes()
     hostedTerminalKeys()
@@ -251,6 +309,8 @@ export function bootstrap(options: { pairing: string }): Promise<void> {
           <AppBackgroundServices />
           <PinnedTabCloseDialog />
           <RunningTerminalCloseDialog />
+          <ResumeOffer />
+          <AddProjectDialogs />
         </Providers>
       )
     })
@@ -456,7 +516,15 @@ function Waiting(): React.JSX.Element {
   return <div className="h-full w-full bg-background" data-pb-orca-waiting="" />
 }
 
-function PaneBody({ pick }: { pick: PanePick }): React.JSX.Element {
+function PaneBody({ pick }: { pick: PanePick }): React.JSX.Element | null {
+  if (!MOUNT_KINDS.includes(pick.kind)) throw new Error(`orca pane: no hosted mount for content type ${pick.kind}`)
+  if ((SIDE_MOUNT_KINDS as readonly string[]).includes(pick.kind)) {
+    return <SideMountBody kind={pick.kind} worktreeId={pick.worktreeId} tabId={pick.tabId} />
+  }
+  return <HostedPaneBody pick={pick} />
+}
+
+function HostedPaneBody({ pick }: { pick: PanePick }): React.JSX.Element {
   const { kind, worktreeId, tabId, paneKey } = pick
   const unified = useAppStore((state) => unifiedTabFor(state, worktreeId, tabId))
   const owner = useAppStore((state) =>
@@ -503,22 +571,13 @@ function PaneBody({ pick }: { pick: PanePick }): React.JSX.Element {
   if (kind === 'simulator') {
     return <EmulatorPane tab={unified as never} worktreeId={worktreeId} isActive />
   }
-  if (kind === 'conflict-review' || kind === 'check-details') {
-    return (
-      <EditorPanel
-        activeFileId={unified.entityId}
-        activeViewStateId={unified.entityId}
-        isVisible
-        isCmdSaveOwner
-      />
-    )
-  }
   throw new Error(`orca pane: no hosted mount for content type ${kind}`)
 }
 
 let mountSequence = 0
 
-/** A separate React root on the host React for one pane; returns the unmount. */
+/** A separate React root on the host React for one pane; returns the unmount. A kind not in MOUNT_KINDS throws
+ * inside the render naming the kind, so mountErrors records it (the standalone row's detector control). */
 export function mountPane(element: HTMLElement, pick: PanePick): () => void {
   mountSequence += 1
   const root = ReactDOMClient.createRoot(element, rootOptions(pick.kind))
@@ -584,24 +643,101 @@ export async function createChat(worktreeId: string): Promise<void> {
   }
 }
 
-/** Orca's own openers; resolves the tab id. Used by checks. */
+type DiffDetail = { source: DiffSource; relativePath: string; oldPath?: string; commitOid?: string; baseRef?: string }
+
+/** Branch- or commit-compare through the paired host's own git RPC (what Orca's source-control panel reads). */
+async function compareFor(worktreeId: string, detail: DiffDetail): Promise<GitBranchCompareResult | GitCommitCompareResult> {
+  const worktree = toRuntimeWorktreeSelector(worktreeId)
+  if (detail.source === 'commit' || detail.source === 'combined-commit') {
+    if (!detail.commitOid) throw new Error('orca pane: a commit diff needs commitOid')
+    return callRuntimeResult<GitCommitCompareResult>('git.commitCompare', { worktree, commitId: detail.commitOid }, 15_000)
+  }
+  const baseRef = detail.baseRef ?? useAppStore.getState().gitBranchCompareSummaryByWorktree?.[worktreeId]?.baseRef
+  if (!baseRef) throw new Error('orca pane: a branch diff needs baseRef')
+  return callRuntimeResult<GitBranchCompareResult>('git.branchCompare', { worktree, baseRef, admissionTier: 'interactive' }, 15_000)
+}
+
+/** B-10: Orca's own diff opener for each source. */
+async function openDiffPane(worktreeId: string, path: string, detail: DiffDetail): Promise<void> {
+  const state = useAppStore.getState()
+  const language = detectLanguage(detail.relativePath)
+  const entryOf = (entries: GitBranchChangeEntry[]): GitBranchChangeEntry =>
+    entries.find((e) => e.path === detail.relativePath) ?? { path: detail.relativePath, status: 'modified', ...(detail.oldPath ? { oldPath: detail.oldPath } : {}) }
+  switch (detail.source) {
+    case 'unstaged':
+    case 'staged':
+      state.openDiff(worktreeId, `${path}/${detail.relativePath}`, detail.relativePath, language, detail.source === 'staged', detail.oldPath ? { oldPath: detail.oldPath } : undefined)
+      return
+    case 'combined-all':
+    case 'combined-uncommitted':
+      state.openAllDiffs(worktreeId, path)
+      return
+    case 'branch': {
+      const { summary, entries } = (await compareFor(worktreeId, detail)) as GitBranchCompareResult
+      state.openBranchDiff(worktreeId, path, entryOf(entries), summary, language)
+      return
+    }
+    case 'combined-branch': {
+      const { summary } = (await compareFor(worktreeId, detail)) as GitBranchCompareResult
+      state.openBranchAllDiffs(worktreeId, path, summary)
+      return
+    }
+    case 'commit': {
+      const { summary, entries } = (await compareFor(worktreeId, detail)) as GitCommitCompareResult
+      state.openCommitDiff(worktreeId, path, entryOf(entries), summary, language)
+      return
+    }
+    case 'combined-commit': {
+      const { summary, entries } = (await compareFor(worktreeId, detail)) as GitCommitCompareResult
+      state.openCommitAllDiffs(worktreeId, path, summary, entries)
+      return
+    }
+  }
+  throw new Error(`orca pane: unknown diff source ${String(detail.source)}`)
+}
+
+function parseDetail<T>(detail: string | undefined, what: string): T {
+  try {
+    return JSON.parse(detail ?? '') as T
+  } catch {
+    throw new Error(`orca pane: ${what} detail is not JSON`)
+  }
+}
+
+/**
+ * Orca's own openers; resolves the Orca tab id. Used by checks only, never by a PowerBrowser command (P64-10).
+ * editor: detail is a repo-relative path. diff: detail is JSON { source, relativePath, oldPath?, commitOid?,
+ * baseRef? } (baseRef defaults to the base of Orca's own branch compare). conflict-review: a plain path (recorded
+ * both_modified, Phase 64) or JSON { relativePath, conflictKind }.
+ */
 export async function openPane(
-  kind: 'simulator' | 'conflict-review' | 'check-details',
+  kind: 'simulator' | 'conflict-review' | 'check-details' | 'editor' | 'diff',
   worktreeId: string,
   detail?: string
 ): Promise<string> {
   const state = useAppStore.getState()
+  const path = worktreeOf(state, worktreeId)?.path ?? ''
+  const before = new Set(state.openFiles.map((file) => file.id))
+  const newest = (match: (file: State['openFiles'][number]) => boolean): string | null => {
+    const files = useAppStore.getState().openFiles.filter((file) => file.worktreeId === worktreeId && match(file))
+    return (files.find((file) => !before.has(file.id)) ?? files.at(-1))?.id ?? null
+  }
   let entity: string | null = null
   if (kind === 'simulator') {
     entity = ensureSimulatorTab(worktreeId, { placement: 'activeGroup' })
   } else if (kind === 'conflict-review') {
-    state.openConflictReview(
-      worktreeId,
-      worktreeOf(state, worktreeId)?.path ?? '',
-      [{ path: detail ?? '', conflictKind: 'both_modified' }],
-      'live-summary'
-    )
+    const parsed = detail?.trim().startsWith('{')
+      ? parseDetail<{ relativePath: string; conflictKind: GitConflictKind }>(detail, 'conflict-review')
+      : { relativePath: detail ?? '', conflictKind: 'both_modified' as GitConflictKind }
+    state.openConflictReview(worktreeId, path, [{ path: parsed.relativePath, conflictKind: parsed.conflictKind }], 'live-summary')
     entity = `${worktreeId}::conflict-review`
+  } else if (kind === 'editor') {
+    const relativePath = detail ?? ''
+    entity = state.openFile({ filePath: `${path}/${relativePath}`, relativePath, worktreeId, language: detectLanguage(relativePath), mode: 'edit' })
+  } else if (kind === 'diff') {
+    const parsed = parseDetail<DiffDetail>(detail, 'diff')
+    await openDiffPane(worktreeId, path, parsed)
+    entity = newest((file) => file.mode === 'diff' && file.diffSource === parsed.source)
   } else {
     state.openCheckRunDetails(
       worktreeId,
@@ -631,7 +767,13 @@ export type OrcaWorktree = { id: string; label: string; path: string }
 
 /** C3': what a check and the Orca commands read. No credential. worktrees is every worktree in Orca's store, in Orca's
  * own empty-query order (visited first by recency, then activity, then display label), as its worktree palette lists them. */
-export function state(): { booted: boolean; worktrees: OrcaWorktree[]; panes: number; mountErrors: MountError[] } {
+export function state(): {
+  booted: boolean
+  worktrees: OrcaWorktree[]
+  panes: number
+  mountErrors: MountError[]
+  pairing: { sessionOnly: boolean; deviceKeySupport: string | null }
+} {
   const store = useAppStore.getState()
   const { switchableWorktreesForRows } = orderEmptyQueryWorktrees({
     visibleWorktrees: Object.values(store.worktreesByRepo ?? {}).flat(),
@@ -642,6 +784,7 @@ export function state(): { booted: boolean; worktrees: OrcaWorktree[]; panes: nu
     booted: isBooted,
     worktrees: switchableWorktreesForRows.map((w) => ({ id: w.id, label: w.displayName || w.path, path: w.path })),
     panes: paneRecords(store).length,
-    mountErrors: mountErrors.map((error) => ({ ...error }))
+    mountErrors: mountErrors.map((error) => ({ ...error })),
+    pairing: pairingState()
   }
 }

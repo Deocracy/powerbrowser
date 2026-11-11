@@ -18,8 +18,17 @@
 //   f. the entry's own import specifiers, and those of every overlay file it imports, reach nothing
 //      under components/tab-bar/, not TabGroupPanel, and no client-side terminal creation
 //      (terminal-tab-create, createNewTerminalTab, createWebRuntimeSessionTerminal; A4);
-//   g. the entry's value exports equal the C3 bundle API exactly (TypeScript parse with
-//      theia/node_modules/typescript; a SKIP for f and g when Theia is not installed).
+//   g. the entry's value exports (re-exports with export { ... } from included) equal the C3 bundle API
+//      with Phase 65's C3-65 names exactly (TypeScript parse with theia/node_modules/typescript; a SKIP
+//      for f..j when Theia is not installed);
+//   h. (Phase 65, D-01) the bundle's module graph, walked from the entry (overlay files read at their
+//      orca/ paths) through every value import, holds no components/editor/EditorPanel*.tsx and no
+//      components/editor/EditorContent.tsx: Orca's own editor is never mounted;
+//   i. (P65-17, CA-07 re-pin guard) orca/src/renderer/src/web/web-device-key-support.ts at the pin
+//      exports a function setWebDeviceKeySupportForTests (a named SKIP only when orca/ is absent);
+//   j. (P65-27) every member of every interface named Orca<letters>BundleApi under
+//      theia/extensions/*/src is a named export of the entry; a parse yielding zero entry exports is
+//      red "parser blind"; a named SKIP only while no such interface exists.
 //
 // Tier: full; --self-test quick (mkdtemp fixtures: a tracked edit, a planted React copy, a version
 // skew, an inlined font, a tab-bar import, a missing C3 export, each red naming it).
@@ -35,12 +44,21 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { moduleGraph, overlayOverrides } from './lib/orca-pane-harness.mjs';
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-pane-entry';
 const SELF = fileURLToPath(import.meta.url);
 export const ENTRY_REL = 'src/renderer/src/pb/pb-pane-mount.tsx';
 export const C3_EXPORTS = ['bootstrap', 'subscribePanes', 'mountPane', 'closePane', 'createTerminal', 'createChat', 'openPane',
-    'activeWorktree', 'setActiveWorktree', 'state', 'reactIdentity', 'PB_OVERLAY_BUILD'];
+    'activeWorktree', 'setActiveWorktree', 'state', 'reactIdentity', 'PB_OVERLAY_BUILD',
+    // C3-65 (Phase 65 lane p65-01)
+    'MOUNT_KINDS', 'subscribeOpenFiles', 'subscribeWorktrees', 'subscribeActiveView', 'setActiveView', 'subscribeActiveWorktree',
+    'subscribeOrchestrationEnabled', 'setOrchestrationFocus', 'viewTitle', 'repair'];
+const EDITOR_MODULE = /(^|\/)components\/editor\/(EditorPanel[^/]*|EditorContent)\.tsx$/;
+const DEVICE_KEY_SUPPORT = 'src/renderer/src/web/web-device-key-support.ts';
+const PRESET_EXPORT = 'setWebDeviceKeySupportForTests';
+const BUNDLE_API_RE = /^Orca[A-Za-z]+BundleApi$/;
 const REACT_MARKER = 'rendererPackageName';
 const ASSET_RE = /\.(ttf|otf|woff2?|eot|wasm|png|jpe?g|gif|webp|avif|ico|svg)$/i;
 const FORBIDDEN_IMPORT = [
@@ -102,10 +120,36 @@ export function valueExportsOf(ts, file) {
     for (const st of sf.statements) {
         if (ts.isFunctionDeclaration(st) && exported(st) && st.name) out.push(st.name.text);
         else if (ts.isClassDeclaration(st) && exported(st) && st.name) out.push(st.name.text);
-        else if (ts.isVariableStatement(st) && exported(st)) for (const d of st.declarationList.declarations) if (ts.isIdentifier(d.name)) out.push(d.name.text);
+        else if (ts.isVariableStatement(st) && exported(st)) { for (const d of st.declarationList.declarations) if (ts.isIdentifier(d.name)) out.push(d.name.text); }
+        // export { a } and export { a } from './x' (the second form is how the entry re-exports C3-65 names).
         else if (ts.isExportDeclaration(st) && !st.isTypeOnly && st.exportClause && ts.isNamedExports(st.exportClause)) for (const el of st.exportClause.elements) if (!el.isTypeOnly) out.push(el.name.text);
     }
     return out.sort();
+}
+
+/** Member names of every interface named Orca<letters>BundleApi in the .ts/.tsx files under theia/extensions/<x>/src. */
+export function consumerApiMembers(ts, theiaDir) {
+    const out = new Map();
+    const extDir = join(theiaDir, 'extensions');
+    if (!existsSync(extDir)) return out;
+    for (const ext of readdirSync(extDir)) {
+        for (const file of listFiles(join(extDir, ext, 'src')).filter(f => /\.tsx?$/.test(f) && !f.endsWith('.d.ts'))) {
+            const sf = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+            for (const st of sf.statements) {
+                if (!ts.isInterfaceDeclaration(st) || !BUNDLE_API_RE.test(st.name.text)) continue;
+                const members = st.members.filter(m => m.name && (ts.isIdentifier(m.name) || ts.isStringLiteral(m.name))).map(m => m.name.text);
+                out.set(`${st.name.text} (${relative(theiaDir, file)})`, members);
+            }
+        }
+    }
+    return out;
+}
+
+/** Whether `file` exports a function named `name` (a declaration or an export of a local function). */
+export function exportsFunction(ts, file, name) {
+    const sf = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const exported = n => (ts.getModifiers?.(n) ?? n.modifiers ?? []).some(m => m.kind === ts.SyntaxKind.ExportKeyword);
+    return sf.statements.some(st => ts.isFunctionDeclaration(st) && exported(st) && st.name?.text === name);
 }
 
 /**
@@ -198,6 +242,36 @@ export function checkEntry({ orcaDir, overlayDir, standaloneDir, baselineFile, t
         const missing = want.filter(n => !got.includes(n)), extra = got.filter(n => !want.includes(n));
         if (missing.length) fails.push(`the entry does not export C3 name(s): ${missing.join(', ')}`);
         if (extra.length) fails.push(`the entry exports name(s) outside C3: ${extra.join(', ')}`);
+
+        // h. Orca's editor out of the bundle's module graph (D-01).
+        const rendererSrc = join(orcaDir, 'src', 'renderer', 'src');
+        const overrides = overlayOverrides(filesDir, orcaDir);
+        const start = join(rendererSrc, 'pb', 'pb-pane-mount.tsx');
+        const graph = moduleGraph(ts, [start], overrides, rendererSrc);
+        counts.modules = graph.size;
+        if (graph.size < 2) fails.push(`module graph blind: the walk from the entry reached ${graph.size} module(s)`);
+        for (const [mod] of graph) {
+            if (!EDITOR_MODULE.test(mod)) continue;
+            const chain = [];
+            for (let at = mod; at; at = graph.get(at)) chain.push(relative(orcaDir, at));
+            fails.push(`Orca's editor in the pane bundle (D-01): ${chain.slice(0, 6).join(' <- ')}`);
+        }
+
+        // i. the preset export Orca's session-only pairing relies on (P65-17, CA-07).
+        const support = join(orcaDir, DEVICE_KEY_SUPPORT);
+        if (!existsSync(support)) notes.push(`${NAME}: SKIP -- preset-export clause: orca/${DEVICE_KEY_SUPPORT} is absent (run scripts/fetch-orca.sh)`);
+        else if (!exportsFunction(ts, support, PRESET_EXPORT)) fails.push(`source moved: ${PRESET_EXPORT} (P65-17) is no longer an exported function of orca/${DEVICE_KEY_SUPPORT}`);
+        else counts.preset = true;
+
+        // j. every consumer Orca*BundleApi member is a named export of the entry (P65-27).
+        const consumers = consumerApiMembers(ts, theiaDir);
+        if (got.length === 0) fails.push('parser blind: the entry parse yielded zero exports');
+        else if (consumers.size === 0) notes.push(`${NAME}: SKIP -- consumer-API clause: no interface named Orca<letters>BundleApi under theia/extensions/*/src`);
+        else {
+            const exported = new Set(got);
+            for (const [iface, members] of consumers) for (const m of members) if (!exported.has(m)) fails.push(`bundle API drift: ${m} (${iface}) is not a named export of the entry`);
+            counts.consumers = [...consumers.keys()].map(k => k.split(' ')[0]);
+        }
     }
     return { skip: null, fails, notes, counts };
 }
@@ -206,7 +280,7 @@ function render(r) {
     if (r.skip) return { code: 0, lines: [`${NAME}: SKIP -- ${r.skip}`] };
     if (r.fails.length) return { code: 1, lines: [...r.notes, ...r.fails.map(f => `${NAME}: FAIL -- ${f}`)] };
     const c = r.counts;
-    return { code: 0, lines: [...r.notes, `${NAME}: PASS -- tracked status at baseline; React marker ${c.reactMarkerStandalone} file(s) in the standalone variant, ${c.reactMarkerPanes} in pb-panes/${c.react ? `; React ${c.react}` : ''}; ${c.assets} build:web asset(s), none newly inlined${c.overlaySources ? `; ${c.overlaySources} overlay source(s) import no tab bar, TabGroupPanel or client-side terminal creation; C3 exports exact` : ''}`] };
+    return { code: 0, lines: [...r.notes, `${NAME}: PASS -- tracked status at baseline; React marker ${c.reactMarkerStandalone} file(s) in the standalone variant, ${c.reactMarkerPanes} in pb-panes/${c.react ? `; React ${c.react}` : ''}; ${c.assets} build:web asset(s), none newly inlined${c.overlaySources ? `; ${c.overlaySources} overlay source(s) import no tab bar, TabGroupPanel or client-side terminal creation; C3 exports exact (C3-65 included)` : ''}${c.modules ? `; ${c.modules} module(s) in the bundle graph, no EditorPanel or EditorContent` : ''}${c.preset ? `; ${PRESET_EXPORT} exported at the pin` : ''}${c.consumers ? `; consumer API ${c.consumers.join(', ')} covered` : ''}`] };
 }
 
 function realPaths() {
@@ -236,6 +310,10 @@ function fixture(dir, theiaTs) {
     const exports = C3_EXPORTS.map(n => `export const ${n} = 1`).join('\n');
     w(join(dir, 'overlay', 'files', ENTRY_REL), `import '../assets/main.css'\nimport { a } from './helper'\nexport type T = string\n${exports}\n`);
     w(join(dir, 'overlay', 'files', 'src/renderer/src/pb/helper.ts'), `import { useAppStore } from '../store'\nexport const a = 1\n`);
+    w(join(orca, 'src/renderer/src/store/index.ts'), `export const useAppStore = 1\n`);
+    w(join(orca, 'src/renderer/src/components/editor/EditorPanel.tsx'), `export default 1\n`);
+    w(join(orca, DEVICE_KEY_SUPPORT), `export function ${PRESET_EXPORT}(support: string | null): void {}\n`);
+    w(join(dir, 'theia', 'extensions', 'orca-panes', 'src', 'common', 'protocol.ts'), `export interface OrcaPaneBundleApi {\n    bootstrap(options: { pairing: string }): Promise<void>;\n    reactIdentity: unknown;\n}\n`);
     return { orcaDir: orca, overlayDir: join(dir, 'overlay'), standaloneDir: join(dir, 'standalone'), baselineFile: join(dir, 'baseline.txt'), theiaDir: join(dir, 'theia'), font };
 }
 
@@ -266,6 +344,12 @@ function selfTest() {
     run('a tab-bar import in an imported overlay file is red', p => writeFileSync(join(dirname(entry(p)), 'helper.ts'), "import { TabGroupPanel } from '../components/tab-group/TabGroupPanel'\nexport const a = 1\n"), /helper\.ts imports .*TabGroupPanel/);
     run('a client-side terminal creation import is red', p => writeFileSync(entry(p), readFileSync(entry(p), 'utf8') + "import { createNewTerminalTab } from '../components/terminal/terminal-tab-create'\n"), /terminal-tab-create/);
     run('a missing C3 export is red', p => writeFileSync(entry(p), readFileSync(entry(p), 'utf8').replace('export const createChat = 1', 'const createChat = 1')), /does not export C3 name\(s\): createChat/);
+    run("Orca's editor in the module graph is red", p => writeFileSync(entry(p), readFileSync(entry(p), 'utf8') + "import EditorPanel from '../components/editor/EditorPanel'\n"), /^Orca's editor in the pane bundle \(D-01\): src\/renderer\/src\/components\/editor\/EditorPanel\.tsx <- src\/renderer\/src\/pb\/pb-pane-mount\.tsx/);
+    run("Orca's editor reached through a dynamic import in an overlay file is red", p => writeFileSync(join(dirname(entry(p)), 'helper.ts'), "export const a = () => import('@/components/editor/EditorPanel')\n"), /^Orca's editor in the pane bundle \(D-01\): .*EditorPanel\.tsx <- .*helper\.ts/);
+    run('a renamed preset export is red', p => writeFileSync(join(p.orcaDir, DEVICE_KEY_SUPPORT), 'export function setWebDeviceKeySupportForTesting(support: string | null): void {}\n'), /^source moved: setWebDeviceKeySupportForTests \(P65-17\)/);
+    run('a consumer interface member the entry lacks is red', p => writeFileSync(join(p.theiaDir, 'extensions', 'orca-panes', 'src', 'common', 'protocol.ts'), 'export interface OrcaSidePanelBundleApi {\n    subscribeLayout(cb: () => void): () => void;\n}\n'), /^bundle API drift: subscribeLayout \(OrcaSidePanelBundleApi/);
+    run('a re-exported name counts as an export', p => { writeFileSync(entry(p), readFileSync(entry(p), 'utf8').replace('export const viewTitle = 1', "export { viewTitle } from './helper'")); writeFileSync(join(dirname(entry(p)), 'helper.ts'), 'export const a = 1\nexport const viewTitle = 1\n'); }, null);
+    run('an entry with no exports is red "parser blind"', p => writeFileSync(entry(p), "import '../assets/main.css'\n"), /^parser blind/);
     run('an extra value export is red', p => writeFileSync(entry(p), readFileSync(entry(p), 'utf8') + 'export function paneRecords() {}\n'), /exports name\(s\) outside C3: paneRecords/);
     const bad = spawnSync(process.execPath, [SELF, '--nope'], { encoding: 'utf8' });
     ok('an unknown argument exits 2', bad.status === 2);
