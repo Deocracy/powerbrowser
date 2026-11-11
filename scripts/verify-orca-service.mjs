@@ -279,7 +279,7 @@ function makeBoundary(world) {
     };
     // Phase 67 (P67-16): Gecko's TmpD and nsIFile normalize(), from the world's tmpD and realPaths.
     const hosting = {
-        getTempDir: () => { rec('getTempDir'); return world.tmpD ?? '/tmp'; },
+        tempDir: () => { rec('tempDir'); return world.tmpD ?? '/tmp'; },
         realPath: (path) => { rec('realPath', path); return world.realPaths?.[path] ?? path; },
     };
     return { api, processes, hosting, calls, consoleLines, alive, files };

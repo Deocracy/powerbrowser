@@ -124,7 +124,7 @@ export const OrcaService = {
     const platform = this._bridgePlatform;
     const real = path => PowerBrowserOrcaHosting.realPath(path);
     const roots = [
-      PowerBrowserOrcaHosting.getTempDir(),
+      PowerBrowserOrcaHosting.tempDir(),
       ...(OrcaEnv.ORCA_TEMP_ENV_NAMES[platform] ?? []).map(name => PowerBrowserAPI.getEnv(name)),
       ...(OrcaEnv.ORCA_FIXED_TEMP_ROOTS[platform] ?? []),
     ]

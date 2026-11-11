@@ -2324,11 +2324,11 @@ export const PowerBrowserAPI = Object.freeze({
       PowerBrowserAPI.log("error", "[handleShellMessage] rejecting non-Theia-origin sender");
       return { ok: false, reason: "validation", message: "handleShellMessage: rejecting non-Theia-origin sender" };
     }
-    if (ORCA_SHELL_KINDS.has(data && data.kind)) return handleOrcaShellMessage(data, actorRef);
     const kind = data && data.kind;
     const path = `${PowerBrowserAPI.getProfileDir()}/${SHELL_STATE_FILE_NAME}`;
     try {
       switch (kind) {
+        case "orcaStatus": case "orcaRestart": case "orcaShowDiagnostics": return handleOrcaShellMessage(data, actorRef);
         case "shellStateLoad": {
           let state = "{}";
           try {
@@ -11715,11 +11715,10 @@ function registerAgentActor() {
 // ---- end Orca agent bridge ----
 
 // ---- Orca hosting (Phase 67, RUN-06/RUN-09, P67-04, P67-16) ----
-// The frontend's three Orca kinds, dispatched by one line in handleShellMessage after its
-// groupSenderIsTheia wall. OrcaService is read lazily: powerbrowser.js has already loaded it, so this
+// The frontend's three Orca kinds, dispatched by one case line in handleShellMessage's switch,
+// after its groupSenderIsTheia wall. OrcaService is read lazily: powerbrowser.js has already loaded it, so this
 // returns the same instance and adds no load-time import cycle. Replies carry a state and a class name
 // only; every identifier stays in the diagnostics rows.
-const ORCA_SHELL_KINDS = new Set(["orcaStatus", "orcaRestart", "orcaShowDiagnostics"]);
 const ORCA_SERVICE_MODULE = "chrome://powerbrowser/content/OrcaService.sys.mjs";
 const ORCA_ENV_MODULE = "chrome://powerbrowser/content/OrcaEnv.sys.mjs";
 
@@ -11764,7 +11763,7 @@ async function handleOrcaShellMessage(data, actorRef) {
 // itself puts temporary files; realPath resolves symlinks with nsIFile normalize(), which is
 // realpath(3) on Unix (xpcom/io/nsLocalFileUnix.cpp). Neither ever throws.
 export const PowerBrowserOrcaHosting = Object.freeze({
-  getTempDir() {
+  tempDir() {
     try {
       return Services.dirsvc.get("TmpD", Ci.nsIFile).path;
     } catch {
