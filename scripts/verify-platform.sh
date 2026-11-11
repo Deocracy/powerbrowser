@@ -4006,6 +4006,10 @@ run_own_checks() {
     # orca-git-spec-self-test (65-02, P65-03/CA-06, T-65-04/T-65-05): the pb-orca-git: argv and grammar; 17 planted
     # refusals; a subdirectory root refused; hermetic bytes equal git cat-file blob with GIT_DIR planted.
     "orca-git-spec-self-test|node $REPO_ROOT/scripts/verify-orca-editor-routes.mjs --git-spec-self-test"
+    # orca-workspace-live-self-test (65-02, P65-05/P65-06/P65-07): the live row's comparators on fixtures (wrong revision
+    # text, missing and extra root, dirty editor closed, key left behind, Untitled file, reload) and planRoots,
+    # noteUserRemovals and planMigration from orca-root-sync.ts against the plan's behaviour list.
+    "orca-workspace-live-self-test|node $REPO_ROOT/scripts/verify-orca-workspace-live.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6666,6 +6670,11 @@ run_own_checks() {
       # detector, close semantics, reload, route and offer containment. Coordinator proof on the merged, wired, built
       # tree after orca-pane-css-live (P64-15); a named SKIP while lane p64-02 or p64-01 is unmerged. Under the live lock.
       "orca-tabs-live|node $REPO_ROOT/scripts/verify-orca-tabs-live.mjs"
+      # NEW (65-02, TAB-05, P65-05/P65-27): orca-workspace-live. Drivers: the built CLI (file open, open-changed, repo add,
+      # worktree create and rm) and the bundle's check-only openPane for branch, commit, combined and conflict opens;
+      # positive control: the Monaco root selector matched in a Theia editor before its absence in Orca pane roots.
+      # Coordinator-run on the merged tree after orca-pane-css-live, under the live lock with ORCA_* unset.
+      "orca-workspace-live|node $REPO_ROOT/scripts/verify-orca-workspace-live.mjs"
     )
   fi
 

@@ -9,6 +9,7 @@ import { ResourceResolver } from '@theia/core/lib/common/resource';
 import { ORCA_GIT_SERVICE_PATH, OrcaGitService } from '../common/orca-git-protocol';
 import { OrcaEditorRouter } from './orca-editor-routes';
 import { OrcaGitResourceResolver } from './orca-git-resource';
+import { OrcaRootSync } from './orca-root-sync';
 
 export default new ContainerModule(bind => {
     // P65-03: the pb-orca-git: blob reader, over Theia's authenticated websocket.
@@ -20,4 +21,8 @@ export default new ContainerModule(bind => {
 
     bind(OrcaEditorRouter).toSelf().inSingletonScope();
     bind(FrontendApplicationContribution).toService(OrcaEditorRouter);
+
+    // P65-05..P65-07: local Orca worktrees as workspace folders.
+    bind(OrcaRootSync).toSelf().inSingletonScope();
+    bind(FrontendApplicationContribution).toService(OrcaRootSync);
 });

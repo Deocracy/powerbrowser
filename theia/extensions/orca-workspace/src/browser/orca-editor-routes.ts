@@ -10,14 +10,14 @@
  * subscribeOpenFiles and opens each record through Theia's own openers.
  */
 import { inject, injectable } from '@theia/core/shared/inversify';
-import { FrontendApplicationContribution, OpenerService, Widget, open } from '@theia/core/lib/browser';
+import { ApplicationShell, FrontendApplicationContribution, Navigatable, OpenerService, Saveable, Widget, open } from '@theia/core/lib/browser';
 import { DiffUris } from '@theia/core/lib/browser/diff-uris';
 import URI from '@theia/core/lib/common/uri';
 import { EditorManager } from '@theia/editor/lib/browser';
 import { FileService } from '@theia/filesystem/lib/browser/file-service';
 import { MergeEditorUri } from '@theia/scm/lib/browser/merge-editor/merge-editor';
 import { OrcaPaneBundle } from '@powerbrowser/orca-panes/lib/browser/orca-pane-bundle';
-import { OrcaGitService, orcaGitUri } from '../common/orca-git-protocol';
+import { ORCA_GIT_SCHEME, OrcaGitService, orcaGitUri } from '../common/orca-git-protocol';
 
 const LOG_PREFIX = '[@powerbrowser/orca-workspace]';
 
@@ -234,6 +234,9 @@ export class OrcaEditorRouter implements FrontendApplicationContribution {
     @inject(FileService)
     protected readonly fileService: FileService;
 
+    @inject(ApplicationShell)
+    protected readonly shell: ApplicationShell;
+
     protected api: OrcaWorkspaceBundleApi | undefined;
     /** Opened URI (string) -> its widget and the Orca records naming it. */
     protected readonly byUri = new Map<string, Mapping>();
@@ -243,6 +246,9 @@ export class OrcaEditorRouter implements FrontendApplicationContribution {
     protected firstSnapshot = true;
     protected queue: Promise<void> = Promise.resolve();
     protected latest: OrcaOpenFile[] | undefined;
+    /** Widgets PB itself disposes: their disposal never calls Orca's close. */
+    protected readonly pbDisposing = new WeakSet<Widget>();
+    protected readonly watched = new WeakSet<Widget>();
 
     onStart(): void {
         this.bundle.ready().then(loaded => {
@@ -276,30 +282,108 @@ export class OrcaEditorRouter implements FrontendApplicationContribution {
         for (const file of files) {
             seen.add(file.id);
             const signature = signatureOf(file);
-            if (this.known.get(file.id)?.signature === signature) {
+            const previous = this.known.get(file.id);
+            if (previous?.signature === signature) {
                 continue;
             }
-            this.forget(file.id);
+            this.detach(file.id);
             const mode = first ? 'open' : file.active && file.worktreeId === activeWorktree ? 'activate' : file.active ? 'reveal' : 'open';
-            const uri = await this.openRecord(file, mode);
+            // One record that cannot open (a refused read, a missing file) never holds up the rest of the snapshot.
+            const uri = await this.openRecord(file, mode).catch(err => {
+                this.logOnce(file.id, `${routeKeyOf(file)} did not open in Theia: ${(err as Error)?.message ?? 'unknown error'}`);
+                return undefined;
+            });
             this.known.set(file.id, { signature, uri });
             if (uri) {
                 this.byUri.get(uri)?.records.set(file.id, { worktreeId: file.worktreeId, tabId: file.tabId });
             }
+            if (previous?.uri && previous.uri !== uri) {
+                this.releaseIfOrphan(previous.uri);
+            }
         }
         for (const id of [...this.known.keys()]) {
             if (!seen.has(id)) {
-                this.forget(id);
+                // P65-02: an Orca-side close.
+                const uri = this.detach(id);
+                if (uri) {
+                    this.releaseIfOrphan(uri);
+                }
             }
         }
     }
 
-    /** Drops a record from the maps. */
-    protected forget(id: string): void {
+    /** Drops a record from the maps; resolves the URI it mapped to. */
+    protected detach(id: string): string | undefined {
         const uri = this.known.get(id)?.uri;
         this.known.delete(id);
-        const mapping = uri ? this.byUri.get(uri) : undefined;
-        mapping?.records.delete(id);
+        if (uri) {
+            this.byUri.get(uri)?.records.delete(id);
+        }
+        return uri;
+    }
+
+    /** T-65-07: a widget no Orca tab names any more is disposed only when it holds no unsaved text; a dirty one stays as a plain Theia editor. */
+    protected releaseIfOrphan(uri: string): void {
+        const mapping = this.byUri.get(uri);
+        if (!mapping || mapping.records.size > 0) {
+            return;
+        }
+        this.byUri.delete(uri);
+        if (!Saveable.isDirty(mapping.widget)) {
+            this.pbDisposing.add(mapping.widget);
+            mapping.widget.dispose();
+        }
+    }
+
+    /** A Theia-side close of a mapped widget closes every Orca tab mapped to it, through Orca's own close (P65-02). */
+    protected onWidgetDisposed(widget: Widget): void {
+        for (const [uri, mapping] of this.byUri) {
+            if (mapping.widget !== widget) {
+                continue;
+            }
+            this.byUri.delete(uri);
+            if (this.pbDisposing.has(widget)) {
+                return;
+            }
+            for (const [id, pick] of mapping.records) {
+                // Kept as known with nothing open, so the record is not reopened while Orca closes its tab.
+                this.known.set(id, { signature: this.known.get(id)?.signature ?? '', uri: undefined });
+                this.api?.closePane({ worktreeId: pick.worktreeId, tabId: pick.tabId, paneKey: null });
+            }
+            return;
+        }
+    }
+
+    /**
+     * P65-07: closes every clean editor, diff and merge widget with a resource or a side under root (a
+     * file-system path) after the store dropped that worktree; dirty widgets stay open.
+     */
+    closeCleanUnder(root: string): void {
+        const under = (u: URI | undefined): boolean => {
+            if (!u) {
+                return false;
+            }
+            if (DiffUris.isDiffUri(u)) {
+                return DiffUris.decode(u).some(under);
+            }
+            if (MergeEditorUri.isMergeEditorUri(u)) {
+                const m = MergeEditorUri.decode(u);
+                return [m.baseUri, m.side1Uri, m.side2Uri, m.resultUri].some(under);
+            }
+            if (u.scheme !== 'file' && u.scheme !== ORCA_GIT_SCHEME) {
+                return false;
+            }
+            const path = u.path.fsPath();
+            return path === root || path.startsWith(`${root}/`);
+        };
+        for (const widget of [...this.shell.getWidgets('main'), ...this.shell.getWidgets('bottom')]) {
+            const merge = widget as Widget & { resultUri?: URI; baseUri?: URI };
+            const uris = [Navigatable.is(widget) ? widget.getResourceUri() : undefined, merge.resultUri, merge.baseUri];
+            if (uris.some(under) && !Saveable.isDirty(widget)) {
+                this.pbDisposing.add(widget);
+                widget.dispose();
+            }
+        }
     }
 
     /** HEAD is resolved to an object id at open (staged rule); a one-sided conflict needs its working file. */
@@ -358,6 +442,10 @@ export class OrcaEditorRouter implements FrontendApplicationContribution {
     }
 
     protected track(uri: string, widget: Widget): void {
+        if (!this.watched.has(widget)) {
+            this.watched.add(widget);
+            widget.disposed.connect(() => this.onWidgetDisposed(widget));
+        }
         const mapping = this.byUri.get(uri);
         if (mapping && mapping.widget === widget) {
             return;
