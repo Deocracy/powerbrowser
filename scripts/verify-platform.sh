@@ -3996,6 +3996,12 @@ run_own_checks() {
     # Organising key, tab chrome in Theia, a blind detector, close, reload, route, offer, OWNER-ITEM), plus a child-Node
     # import-silence check. Hermetic.
     "orca-tabs-live-self-test|node $REPO_ROOT/scripts/verify-orca-tabs-live.mjs --self-test"
+    # NEW (65-04, TAB-08, P65-23/P65-31): orca-offer-scan-self-test plants a fixture offer, in every needle form derived
+    # from Orca's own encoders (web-pairing.ts, pairing.ts, createWebClientUrl), into copies of setups.json and the shell
+    # state, and runs the node:sqlite key probe with and without its marker (collector blind) and with the runtime key.
+    # orca-relaunch-restore-live-self-test: the relaunch comparators (dock, modes, identity, echo, pairing UI, devices).
+    "orca-offer-scan-self-test|node $REPO_ROOT/scripts/verify-orca-offer-scan.mjs --self-test"
+    "orca-relaunch-restore-live-self-test|node $REPO_ROOT/scripts/verify-orca-relaunch-restore-live.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6656,6 +6662,12 @@ run_own_checks() {
       # detector, close semantics, reload, route and offer containment. Coordinator proof on the merged, wired, built
       # tree after orca-pane-css-live (P64-15); a named SKIP while lane p64-02 or p64-01 is unmerged. Under the live lock.
       "orca-tabs-live|node $REPO_ROOT/scripts/verify-orca-tabs-live.mjs"
+      # NEW (65-04, TAB-08, criterion 4; P65-23/P65-31): orca-offer-scan pairs, writes the marker, opens a hosted chat,
+      # saves a Setup, quits and scans the profile for that launch's offer. orca-relaunch-restore-live saves Orca and
+      # Coding tabs in a Setup, quits, relaunches, restores and compares dock, modes, names, echo, devices and the scan.
+      # Coordinator proof on the merged tree (p65-01, p65-02, p65-04); under the live lock with ORCA_* unset.
+      "orca-offer-scan|node $REPO_ROOT/scripts/verify-orca-offer-scan.mjs"
+      "orca-relaunch-restore-live|node $REPO_ROOT/scripts/verify-orca-relaunch-restore-live.mjs"
     )
   fi
 
