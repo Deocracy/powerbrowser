@@ -4047,6 +4047,15 @@ run_own_checks() {
     # p66-01's files, a named SKIP while pb-browser-host-link.ts is absent. The self-test plants each fault in a fixture.
     "orca-browser-entry-points|node $REPO_ROOT/scripts/verify-orca-browser-entry-points.mjs"
     "orca-browser-entry-points-self-test|node $REPO_ROOT/scripts/verify-orca-browser-entry-points.mjs --self-test"
+    # NEW (66-03, BRW-03/BRW-04, P66-06/P66-12/P66-30, A1): orca-browser-tab-scope evaluates the shipped agent section of
+    # PowerBrowserAPI.sys.mjs, webTabOpen, webTabGeometry and the agent arms in node:vm over a stub boundary: an agent
+    # call on a user, unknown or foreign tab reaches no page work, the flag is set only at creation, unshown agent tabs
+    # are parked and user tabs never are, and every overlay visibility read goes through overlayShownToUser.
+    "orca-browser-tab-scope|node $REPO_ROOT/scripts/verify-orca-browser-tab-scope.mjs"
+    # orca-browser-tab-scope-self-test: 17 plants on in-memory copies (wall, flag, parking, raw read, Stop, idle,
+    # container attribute, cookie container, wall container check, parked focus, agent group, dialog
+    # types, pinned LoginManager groups, page table x3, empty method list).
+    "orca-browser-tab-scope-self-test|node $REPO_ROOT/scripts/verify-orca-browser-tab-scope.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6730,6 +6739,13 @@ run_own_checks() {
       # is one createPage, goto is answered, the user close (browser.tabClose) drops the page. Needs the Orca build and
       # CLI; run under the live lock with ORCA_* unset; a named SKIP when the bundle, orcad or the CLI is absent.
       "orca-browser-host-bundle|node $REPO_ROOT/scripts/verify-orca-browser-host-bundle.mjs"
+      # NEW (66-03, BRW-03, P66-28, D-11): no-remote-agent-port-live launches the built binary twice headless (a control
+      # with --remote-debugging-port=0, then as shipped) and requires every listening TCP socket of the shipped process
+      # tree to be the sidecar's, orcad's or the tab-store endpoint's port, read from the profile at run time, after the
+      # control proved the detector sees the Remote Agent. The self-test plants verdict faults, then runs the control
+      # alone, which must go red naming the Remote Agent's socket. Both under the live lock with ORCA_* unset.
+      "no-remote-agent-port-live|node $REPO_ROOT/scripts/verify-no-remote-agent-port-live.mjs"
+      "no-remote-agent-port-live-self-test|node $REPO_ROOT/scripts/verify-no-remote-agent-port-live.mjs --self-test"
     )
   fi
 

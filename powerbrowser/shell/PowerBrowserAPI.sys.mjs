@@ -42,6 +42,8 @@ ChromeUtils.defineESModuleGetters(lazy, {
   SiteDataManager: "resource:///modules/SiteDataManager.sys.mjs",
   SitePermissions: "resource:///modules/SitePermissions.sys.mjs",
   ContentBlockingAllowList: "resource://gre/modules/ContentBlockingAllowList.sys.mjs",
+  // Phase 66 (P66-26): the Orca-agent container, created once by agentContainerId.
+  ContextualIdentityService: "resource://gre/modules/ContextualIdentityService.sys.mjs",
 });
 
 // Strong references to in-flight one-shot timers created by sleep(). See the
@@ -2291,6 +2293,7 @@ export const PowerBrowserAPI = Object.freeze({
       matches: [`${GROUP_ACTOR_THEIA_ORIGIN}/*`],
     });
     registerEditStateActor();
+    registerAgentActor();
   },
 
   /**
@@ -2789,8 +2792,12 @@ export const PowerBrowserAPI = Object.freeze({
           if (data.grant !== undefined && (typeof data.grant !== "string" || !OPEN_GRANT_RE.test(data.grant))) {
             return { ok: false, reason: "validation", message: "handleGroupMutation: refusing malformed open grant" };
           }
+          // Phase 66 (P66-06): the optional agent flag is exactly true or absent; webTabOpen records it only on a new overlay.
+          if (data.agent !== undefined && data.agent !== true) {
+            return { ok: false, reason: "validation", message: "handleGroupMutation: refusing an agent flag that is not true" };
+          }
           const theiaBrowser = actorRef.browsingContext.top.embedderElement;
-          return { ok: true, kind, where: PowerBrowserAPI.webTabOpen(theiaBrowser, actorRef, data.tabId, data.url, data.key, data.grant) };
+          return { ok: true, kind, where: PowerBrowserAPI.webTabOpen(theiaBrowser, actorRef, data.tabId, data.url, data.key, data.grant, null, data.agent === true) };
         }
         case "webTabGeometry": {
           if (!webTabIdIsValid(data.tabId)) {
@@ -3565,7 +3572,7 @@ export const PowerBrowserAPI = Object.freeze({
    * listener or load: Gecko loads into it, and webTabAttach registers it when
    * the frontend acks (the adopt section at the end of the file).
    */
-  webTabOpen(theiaBrowser, actorRef, tabId, url, key, grant, pending = null) {
+  webTabOpen(theiaBrowser, actorRef, tabId, url, key, grant, pending = null, agent = false) {
     const spec = typeof url === "string" && url ? url : "about:blank";
     if (spec !== "about:blank" && !/^https?:\/\//i.test(spec)) {
       return "refused-scheme";
@@ -3574,6 +3581,11 @@ export const PowerBrowserAPI = Object.freeze({
       showActivationOnAttach(theiaBrowser, tabId);
       resendWebTabSharing(tabId);
       return "already-open";
+    }
+    // Phase 66 (P66-26): an agent overlay loads in the Orca-agent container, never the user's; no container, no tab.
+    const userContextId = agent === true ? agentContainerId() : 0;
+    if (agent === true && !userContextId) {
+      return "unavailable";
     }
     const doc = theiaBrowser.ownerDocument;
     const win = doc.defaultView;
@@ -3599,6 +3611,11 @@ export const PowerBrowserAPI = Object.freeze({
       messagemanagergroup: "browsers",
       autocompletepopup: "PopupAutoComplete",
       tabindex: "-1",
+      // Phase 66: an agent overlay also leaves the "browsers" message manager group and the autocomplete popup, so
+      // the login manager (autofill and capture of saved passwords), the user's WebExtensions tab host and every
+      // saved-entry dropdown never attach to a page an agent drives (coordinator finding 3).
+      // Quoted keys: the bridge check's attribute rule reads the stock (unquoted) keys above.
+      ...(agent === true ? { "usercontextid": String(userContextId), messagemanagergroup: AGENT_MESSAGE_MANAGER_GROUP, "autocompletepopup": "" } : {}),
     })) {
       browser.setAttribute(name, value);
     }
@@ -3632,6 +3649,10 @@ export const PowerBrowserAPI = Object.freeze({
       return browser;
     }
     const entry = PowerBrowserAPI.webTabAttach(theiaBrowser, actorRef, tabId, browser, key, spec, grant);
+    // Phase 66 (P66-06): an agent tab only from its creation; the already-open return above never reaches this.
+    if (agent === true) {
+      agentTabCreated(entry, userContextId);
+    }
     tabHostAddTab(win, tabId, browser);
     // NG-034: a tab the frontend reopened from last session's snapshot, with
     // its history armed, gets its back/forward history back; any other tab
@@ -4174,7 +4195,7 @@ export const PowerBrowserAPI = Object.freeze({
     // LAST view is what the Panorama card must show. Scheduled BEFORE the
     // assignment below turns docShellIsActive off, so the page is still
     // painting when the settle timer draws it.
-    const wasVisible = entry.browser.style.visibility === "visible";
+    const wasVisible = overlayShownToUser(entry.browser);
     if (wasVisible && !visible && entry.uri) {
       PowerBrowserAPI.scheduleSettleCapture(entry.uri, win);
     }
@@ -4187,7 +4208,8 @@ export const PowerBrowserAPI = Object.freeze({
       top: `${host.top + top}px`,
       width: `${width}px`,
       height: `${height}px`,
-      visibility: visible ? "visible" : "hidden",
+      // Phase 66 (A1): an unshown agent overlay is parked under the Theia frame, never hidden; others as before.
+      ...webTabPlacement(entry, visible),
     });
     entry.browser.docShellIsActive = !!visible;
     return "applied";
@@ -4239,6 +4261,7 @@ export const PowerBrowserAPI = Object.freeze({
       PowerBrowserAPI.log("error", "[web-tab] tab host drop failed; the overlay is closed anyway");
     }
     webTabCloseToolbox(browser);
+    agentControlClosed(tabId, entry);
     browser.remove();
     webTabs.delete(tabId);
     return "closed";
@@ -5021,7 +5044,7 @@ function isMintedSavedPageDir(candidate, root) {
 // second frozen export below: the boundary is one file, not one object.
 // ---------------------------------------------------------------------------
 
-const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle", "webTabFind", "webTabFindNext", "webTabFindClose", "webTabZoomIn", "webTabZoomOut", "webTabZoomReset", "webTabMute", "webTabDownloadsSubscribe", "webTabDownloadsAction", "webTabPrint", "webTabSavePick", "webTabSaveExport", "webTabEdit", "webTabReader", "webTabViewSource", "webTabDevtools", "webTabAdopt", "webTabBarAction", "webTabContextMenuAction"]);
+const WEB_TAB_ACTION_KINDS = new Set(["webTabStop", "webTabHistory", "webTabGotoIndex", "webTabActivated", "webTabSiteInfo", "webTabSetPermission", "webTabClearSiteData", "webTabShieldToggle", "webTabFind", "webTabFindNext", "webTabFindClose", "webTabZoomIn", "webTabZoomOut", "webTabZoomReset", "webTabMute", "webTabDownloadsSubscribe", "webTabDownloadsAction", "webTabPrint", "webTabSavePick", "webTabSaveExport", "webTabEdit", "webTabReader", "webTabViewSource", "webTabDevtools", "webTabAdopt", "webTabBarAction", "webTabContextMenuAction", "webTabAgent", "webTabAgentStop"]);
 
 // Phase 31 (D-31-11): the permission IDs chrome admits on the site-info
 // read path -- the six upstream Firefox IDs, the same set the Theia table
@@ -5554,6 +5577,13 @@ async function handleWebTabAction(data, actorRef) {
     // PROMPT-04 (D-09): the page menu pick, the first privileged kind here; walls in handlePageMenuAction (Phase 35 section).
     case "webTabContextMenuAction": {
       return handlePageMenuAction(data, actorRef);
+    }
+    // Phase 66 plan 03 (P66-06, P66-12): Orca agent requests; the wall and every row live in the Orca agent bridge section.
+    case "webTabAgent": {
+      return handleWebTabAgent(data, actorRef);
+    }
+    case "webTabAgentStop": {
+      return handleWebTabAgentStop(data, actorRef);
     }
     default:
       return { ok: false, reason: "validation", message: "handleWebTabAction: unknown kind" };
@@ -7013,7 +7043,7 @@ export const PowerBrowserTabHost = Object.freeze({
       getTabForBrowser: browser => host.byBrowser.get(browser) ?? null,
       // Phase 35 plan 01 (T-35-28): PictureInPicture.removePiPBrowserFromWeakMap asks this before closing; stock keeps only
       // the visible browser active (tabbrowser.js:8031-8041), and webTabGeometry writes visibility with docShellIsActive.
-      shouldActivateDocShell: browser => host.byBrowser.has(browser) && browser.style.visibility === "visible",
+      shouldActivateDocShell: browser => host.byBrowser.has(browser) && overlayShownToUser(browser),
       getBrowserForTab: tab => (isHostTab(host, tab) ? tab.linkedBrowser : null),
       isTab: tab => isHostTab(host, tab),
       getIcon: tab => (isHostTab(host, tab) ? tab.image : null),
@@ -8600,7 +8630,7 @@ function installPageContextMenu(window) {
     set contentData(data) {
       state.captured = data;
       // D-19 (35-07): no capture during element fullscreen; a Theia menu cannot draw over the fullscreen top layer.
-      state.kept = !document.fullscreenElement && tabIdOfBrowser(data?.browser) !== null && data.browser.style.visibility === "visible";
+      state.kept = !document.fullscreenElement && tabIdOfBrowser(data?.browser) !== null && overlayShownToUser(data.browser);
     },
   };
   document.getElementById("contentAreaContextMenu").addEventListener(
@@ -8786,7 +8816,7 @@ async function runPageMenuRow(id, pending, state, itemId) {
       // request from outside the focused tab is denied: so the overlay is focused once shown (a hidden one cannot be).
       const win = data.browser.ownerDocument.defaultView;
       const run = frames => {
-        if (data.browser.style.visibility !== "visible" && frames > 0) {
+        if (!overlayShownToUser(data.browser) && frames > 0) {
           win.requestAnimationFrame(() => run(frames - 1));
           return;
         }
@@ -9348,7 +9378,7 @@ function installFullscreen(window) {
     timeoutHide = null;
     timeoutShow = null;
     // Focus leaves the hidden warning for the page, unless that overlay is gone or hidden (a tab switch).
-    if (fullscreenBrowser && tabIdOfBrowser(fullscreenBrowser) !== null && fullscreenBrowser.style.visibility === "visible") {
+    if (fullscreenBrowser && tabIdOfBrowser(fullscreenBrowser) !== null && overlayShownToUser(fullscreenBrowser)) {
       fullscreenBrowser.focus();
     }
   };
@@ -9433,7 +9463,7 @@ function installFullscreen(window) {
         }
       }
       // T-35-25: only a visible overlay of the active window stays fullscreen (the selected-browser check, :628-634).
-      if (!aBrowser || tabIdOfBrowser(aBrowser) === null || aBrowser.style.visibility !== "visible" || Services.focus.activeWindow != window) {
+      if (!aBrowser || tabIdOfBrowser(aBrowser) === null || !overlayShownToUser(aBrowser) || Services.focus.activeWindow != window) {
         abortEnterFullscreen(window, aActor);
         return;
       }
@@ -9478,7 +9508,7 @@ function installFullscreen(window) {
       Services.obs.notifyObservers(null, "pointer-lock-entered");
       // PointerlockFsWarning.showPointerLock (:39-46): none while fullscreen, whose warning already covers the page.
       if (!document.fullscreen) {
-        const browser = [...webTabs.values()].find(entry => entry.browser.ownerDocument.defaultView === window && entry.browser.style.visibility === "visible")?.browser;
+        const browser = [...webTabs.values()].find(entry => entry.browser.ownerDocument.defaultView === window && overlayShownToUser(entry.browser))?.browser;
         showWarning(originNoSuffix, "pointerlock-warning", Services.prefs.getIntPref("pointer-lock-api.warning.timeout"), 0, false, browser);
       }
     },
@@ -11047,3 +11077,631 @@ export const PowerBrowserProcesses = Object.freeze({
     return lazy.AppConstants.platform;
   },
 });
+
+// ---- Orca agent bridge (66-03, BRW-03/BRW-04) ----
+// Phase 66 plan 03 (P66-06, P66-11, P66-12, P66-13, A1): Orca agents drive PowerBrowser web tabs through two
+// web-tab action kinds. webTabAgent carries { tabId, method, params }, where method is the Orca automation method
+// itself; webTabAgentStop ends agent control of one tab for its lifetime. This section is chrome's half of that
+// contract and the second, independent wall: a tab is an agent tab only when webTabOpen created it with the agent
+// flag, and every agent request for any other tab is refused before any page work. Requests look up webTabs only,
+// so a stock browser window's tabs are unreachable by construction. Each method is served natively here (screenshots,
+// navigation, PDF, cookies, network, dialogs) or by the PowerBrowserAgent child in GroupActorChild.sys.mjs (input,
+// page-world reads and writes, waits, console). No WebDriver BiDi module is used, in process or over a port (P66-11).
+// Nothing at this section's top level calls into Firefox: scripts/verify-orca-browser-tab-scope.mjs evaluates the
+// section in node:vm over a stub boundary.
+
+// The tier-1 automation methods chrome serves (P66-12), compared with the pinned Orca set by orca-browser-abilities.
+const AGENT_METHODS = Object.freeze([
+  "browser.back", "browser.capture.start", "browser.capture.stop", "browser.check", "browser.clear", "browser.click",
+  "browser.console", "browser.cookie.delete", "browser.cookie.get", "browser.cookie.set", "browser.dblclick",
+  "browser.dialogAccept", "browser.dialogDismiss", "browser.drag", "browser.eval", "browser.exec", "browser.fill",
+  "browser.focus", "browser.forward", "browser.fullScreenshot", "browser.goto", "browser.hover",
+  "browser.keyboardInsertText", "browser.keypress", "browser.mouseClick", "browser.mouseDown", "browser.mouseMove",
+  "browser.mouseUp", "browser.mouseWheel", "browser.network", "browser.pdf", "browser.reload", "browser.screenshot",
+  "browser.scroll", "browser.scrollIntoView", "browser.select", "browser.selectAll", "browser.snapshot", "browser.type",
+  "browser.wait",
+]);
+const AGENT_ACTOR_NAME = "PowerBrowserAgent";
+// The message manager group of agent overlays. Gecko's LoginManager actor is registered for "browsers",
+// "webext-browsers", "chatbot-browser" and "" only (ActorManagerParent.sys.mjs), so it never attaches here; the
+// PowerBrowserAgent pair is registered for this group alone. orca-browser-tab-scope derives that list from the pin.
+const AGENT_MESSAGE_MANAGER_GROUP = "powerbrowser-orca-agent";
+const AGENT_RUN_MESSAGE = "PowerBrowserAgent:Run";
+const AGENT_ABORT_MESSAGE = "PowerBrowserAgent:Abort";
+// Orca's own ACTIVITY_IDLE_MS (browser-agent-activity.ts): the mark clears after this long with no served call.
+const AGENT_IDLE_MS = 20000;
+
+const agentDone = result => ({ where: "done", result });
+const agentFailed = code => ({ where: "failed", code });
+const agentRefusal = message => ({ ok: false, reason: "validation", message: `handleWebTabAgent: ${message}` });
+
+// Params validators, one per method (P66-12). params is the automation command's params object as orcad sent it; the
+// page and worktree fields that routed it to this tab are optional strings. A method without a validator is refused.
+const agentText = value => typeof value === "string" && value.length > 0 && value.length <= 65536;
+const agentOptional = (value, test) => value === undefined || value === null || test(value);
+const agentTarget = params => agentOptional(params.page, agentText) && agentOptional(params.worktree, agentText) && agentOptional(params.expectUrl, agentText);
+const agentElement = params => agentTarget(params) && agentText(params.element);
+const agentNumber = value => typeof value === "number" && Number.isFinite(value);
+const agentBool = value => typeof value === "boolean";
+const agentString = value => typeof value === "string" && value.length <= 65536;
+const agentButton = value => value === "left" || value === "middle" || value === "right";
+const agentImageFormat = value => value === "png" || value === "jpeg";
+const agentLimit = params => agentTarget(params) && agentOptional(params.limit, agentNumber);
+const agentWaitFields = ["selector", "text", "url", "load", "fn", "state"];
+const AGENT_PARAMS = {
+  "browser.back": agentTarget,
+  "browser.forward": agentTarget,
+  "browser.reload": agentTarget,
+  "browser.goto": params => agentTarget(params) && agentText(params.url),
+  "browser.screenshot": params => agentTarget(params) && agentOptional(params.format, agentImageFormat) && agentOptional(params.ifChanged, agentBool) && agentOptional(params.annotate, agentBool),
+  "browser.fullScreenshot": params => agentTarget(params) && agentOptional(params.format, agentImageFormat),
+  "browser.pdf": agentTarget,
+  "browser.cookie.get": params => agentTarget(params) && agentOptional(params.url, agentText),
+  "browser.cookie.set": params => agentTarget(params) && agentText(params.name) && agentString(params.value) && agentOptional(params.domain, agentText) && agentOptional(params.path, agentText) && agentOptional(params.secure, agentBool) && agentOptional(params.httpOnly, agentBool) && agentOptional(params.sameSite, agentText) && agentOptional(params.expires, agentNumber),
+  "browser.cookie.delete": params => agentTarget(params) && agentText(params.name) && agentOptional(params.domain, agentText) && agentOptional(params.url, agentText),
+  "browser.network": agentLimit,
+  "browser.console": agentLimit,
+  "browser.capture.start": agentTarget,
+  "browser.capture.stop": agentTarget,
+  "browser.dialogAccept": params => agentTarget(params) && agentOptional(params.text, agentString),
+  "browser.dialogDismiss": agentTarget,
+  "browser.click": agentElement,
+  "browser.dblclick": agentElement,
+  "browser.hover": agentElement,
+  "browser.focus": agentElement,
+  "browser.clear": agentElement,
+  "browser.selectAll": agentElement,
+  "browser.scrollIntoView": agentElement,
+  "browser.check": params => agentElement(params) && agentOptional(params.checked, agentBool),
+  "browser.fill": params => agentElement(params) && agentString(params.value),
+  "browser.select": params => agentElement(params) && agentString(params.value),
+  "browser.drag": params => agentTarget(params) && agentText(params.from) && agentText(params.to),
+  "browser.eval": params => agentTarget(params) && agentText(params.expression),
+  "browser.exec": params => agentTarget(params) && agentText(params.command),
+  "browser.type": params => agentTarget(params) && agentText(params.input),
+  "browser.keypress": params => agentTarget(params) && agentText(params.key),
+  "browser.keyboardInsertText": params => agentTarget(params) && agentText(params.text),
+  "browser.mouseMove": params => agentTarget(params) && agentNumber(params.x) && agentNumber(params.y),
+  "browser.mouseDown": params => agentTarget(params) && agentOptional(params.button, agentButton),
+  "browser.mouseUp": params => agentTarget(params) && agentOptional(params.button, agentButton),
+  "browser.mouseClick": params => agentTarget(params) && agentNumber(params.x) && agentNumber(params.y) && agentOptional(params.button, agentButton) && agentOptional(params.radius, agentNumber) && agentOptional(params.modifiers, m => Array.isArray(m) && m.every(agentText)),
+  "browser.mouseWheel": params => agentTarget(params) && agentNumber(params.dy) && agentOptional(params.dx, agentNumber),
+  "browser.scroll": params => agentTarget(params) && (params.direction === "up" || params.direction === "down") && agentOptional(params.amount, v => agentNumber(v) && v > 0),
+  // A wait names at least one condition or a positive timeout.
+  "browser.wait": params => agentTarget(params) && agentOptional(params.timeout, v => agentNumber(v) && v > 0) && agentWaitFields.every(f => agentOptional(params[f], agentText)) && (agentWaitFields.some(f => agentText(params[f])) || agentNumber(params.timeout)),
+  // Lane p66-04 owns the snapshot options; the target fields are what this lane checks.
+  "browser.snapshot": agentTarget,
+};
+
+function agentParamsOk(method, params) {
+  const validator = AGENT_PARAMS[method];
+  return typeof validator === "function" && !!params && typeof params === "object" && !Array.isArray(params) && validator(params) === true;
+}
+
+// The wall (P66-06, P66-22): null when an agent may act on this entry, else the refusal word. Only webTabs is read,
+// and only an overlay this sender's frontend opened with the agent flag passes.
+function agentWallVerdict(entry, actorRef) {
+  if (!entry || entry.owner !== actorRef) {
+    return "unknown-tab";
+  }
+  if (entry.agent !== true || !agentInOwnContainer(entry)) {
+    return "not-agent-tab";
+  }
+  if (entry.agentControl?.stopped) {
+    return "agent-stopped";
+  }
+  return null;
+}
+
+// P66-26 and coordinator finding 2: an agent tab's page must be in the Orca-agent container it was created in, never
+// the user's cookie jar. (Its message manager group is set once in webTabOpen's literal; verify-extension-actions.mjs
+// proves no other site names that attribute, so nothing can move an agent overlay back into "browsers".)
+function agentInOwnContainer(entry) {
+  const id = entry.agentUserContextId;
+  return Number.isInteger(id) && id > 0 && entry.browser.browsingContext?.originAttributes?.userContextId === id;
+}
+
+// A1: "shown to the user" means visible and not parked. A parked agent overlay is visibility visible under the Theia
+// frame, so every read that asks whether the user sees an overlay goes through this predicate, never the style alone.
+function overlayShownToUser(browser) {
+  return browser.style.visibility === "visible" && !webTabs.get(tabIdOfBrowser(browser))?.parked;
+}
+
+// A1: webTabGeometry's placement. An agent overlay whose widget is not shown is parked (visible, under the Theia frame
+// at z-index -1, at the box the frontend sent) so input and focus reach its page without reaching the user's; every
+// other overlay is shown or hidden exactly as before.
+function webTabPlacement(entry, visible) {
+  const parked = !visible && entry.agent === true;
+  entry.parked = parked;
+  // An overlay parked while it held the shell's focus gives it back at once (coordinator finding 1).
+  if (parked && entry.browser.ownerDocument.activeElement === entry.browser) {
+    agentFocusGuard(entry.browser.ownerDocument.defaultView, entry.browser);
+  }
+  if (entry.agent !== true) {
+    return { visibility: visible ? "visible" : "hidden" };
+  }
+  return { visibility: "visible", zIndex: parked ? "-1" : "1" };
+}
+
+// Orca's BROWSER_CLIENT_AUTOMATION_RESULT_MAX_BYTES: a result over it is rejected by orcad (Pitfall 4).
+const AGENT_RESULT_MAX_BYTES = 768 * 1024;
+const AGENT_LOG_MAX = 500;
+const AGENT_CONTAINER_PREF = "powerbrowser.orca.agentUserContextId";
+
+// P66-26: the Orca-agent container. Created once, its id kept in a pref and re-validated at each use, so a container
+// the user removed is created again rather than reused. 0 when no container can be had; webTabOpen then opens nothing.
+function agentContainerId() {
+  try {
+    const stored = Services.prefs.getIntPref(AGENT_CONTAINER_PREF, 0);
+    if (stored > 0 && lazy.ContextualIdentityService.getPublicIdentityFromId(stored)) {
+      return stored;
+    }
+    const identity = lazy.ContextualIdentityService.create("PowerBrowser Orca agents", "fingerprint", "purple");
+    Services.prefs.setIntPref(AGENT_CONTAINER_PREF, identity.userContextId);
+    return identity.userContextId;
+  } catch (err) {
+    PowerBrowserAPI.log("error", `[orca-agent] the agent container could not be created (${err && err.name ? err.name : "error"})`);
+    return 0;
+  }
+}
+
+// webTabOpen's agent branch: the flag, the container the overlay was created in, the network log and the focus guard.
+function agentTabCreated(entry, userContextId) {
+  entry.agent = true;
+  entry.agentUserContextId = userContextId;
+  entry.agentNetwork = [];
+  agentNetworkInstall();
+  agentFocusGuardInstall(entry.browser.ownerDocument.defaultView);
+}
+
+// Coordinator finding 1 (UI redress): a parked agent overlay never holds the shell's focus. The overlay already has
+// tabindex -1 and an inactive docshell; if focus still lands on it (a page calling window.focus()), it goes back to
+// the overlay the user sees, else to the Theia frame, before the user's next key.
+const agentFocusGuarded = new WeakSet();
+function agentFocusGuardInstall(win) {
+  if (agentFocusGuarded.has(win)) {
+    return;
+  }
+  agentFocusGuarded.add(win);
+  win.addEventListener("focus", event => agentFocusGuard(win, event.target), true);
+}
+
+function agentFocusGuard(win, target) {
+  const entry = webTabs.get(tabIdOfBrowser(target));
+  if (!entry || entry.parked !== true) {
+    return false;
+  }
+  const shown = [...webTabs.values()].find(other => other.browser.ownerDocument.defaultView === win && overlayShownToUser(other.browser));
+  const back = shown ? shown.browser : entry.owner?.browsingContext?.top?.embedderElement;
+  back?.focus();
+  return true;
+}
+
+// Assumption A-3 (Pitfall 4), the result budget: the format asked for, then JPEG, then JPEG at half scale, else browser_error.
+function agentEncodeImage(win, bitmap, format) {
+  try {
+    for (const [type, scale] of [[format, 1], ["jpeg", 1], ["jpeg", 0.5]]) {
+      const canvas = win.document.createElementNS("http://www.w3.org/1999/xhtml", "canvas");
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      const url = canvas.toDataURL(type === "jpeg" ? "image/jpeg" : "image/png");
+      const data = url.slice(url.indexOf(",") + 1);
+      if (data.length + 64 <= AGENT_RESULT_MAX_BYTES) {
+        return agentDone({ data, format: type });
+      }
+    }
+    return agentFailed("browser_error");
+  } finally {
+    bitmap.close?.();
+  }
+}
+
+async function agentScreenshot(entry, params, full) {
+  const windowGlobal = entry.browser.browsingContext?.currentWindowGlobal;
+  if (!windowGlobal) {
+    return agentFailed("browser_error");
+  }
+  const win = entry.browser.ownerDocument.defaultView;
+  const dpr = win.devicePixelRatio || 1;
+  let rect = null;
+  if (full) {
+    // The document size comes from the agent child; capped so one bitmap stays within 16384 device pixels a side.
+    const size = await windowGlobal.getActor(AGENT_ACTOR_NAME).sendQuery("PowerBrowserAgent:Size", {});
+    const cap = Math.floor(16384 / dpr);
+    rect = new win.DOMRect(0, 0, Math.max(1, Math.min(size?.width || 1, cap)), Math.max(1, Math.min(size?.height || 1, cap)));
+  }
+  // Device pixels: a CSS coordinate times the device pixel ratio is the image pixel (G2, dpr2).
+  const bitmap = await windowGlobal.drawSnapshot(rect, dpr, "rgb(255,255,255)", rect !== null);
+  return agentEncodeImage(win, bitmap, params.format === "jpeg" ? "jpeg" : "png");
+}
+
+// Print to PDF into memory (the stream form WebDriver's print uses), no file written; base64 within the budget.
+async function agentPdf(entry) {
+  const printSvc = Cc["@mozilla.org/gfx/printsettings-service;1"].getService(Ci.nsIPrintSettingsService);
+  const settings = printSvc.createNewPrintSettings();
+  settings.isInitializedFromPrinter = true;
+  settings.isInitializedFromPrefs = true;
+  settings.printerName = "Mozilla Save to PDF";
+  settings.printSilent = true;
+  settings.outputFormat = Ci.nsIPrintSettings.kOutputFormatPDF;
+  const stream = Cc["@mozilla.org/storagestream;1"].createInstance(Ci.nsIStorageStream);
+  stream.init(4096, 0xffffffff);
+  settings.outputDestination = Ci.nsIPrintSettings.kOutputDestinationStream;
+  settings.outputStream = stream.getOutputStream(0);
+  await entry.browser.browsingContext.print(settings);
+  const input = Cc["@mozilla.org/binaryinputstream;1"].createInstance(Ci.nsIBinaryInputStream);
+  input.setInputStream(stream.newInputStream(0));
+  const data = btoa(input.readBytes(input.available()));
+  stream.close();
+  return data.length + 64 <= AGENT_RESULT_MAX_BYTES ? agentDone({ data }) : agentFailed("browser_error");
+}
+
+// Navigation rows: the existing webTab functions (their http(s) scheme wall applies), then the load settles.
+// shortcut: polls isLoadingDocument (seen loading then idle, 1 s if no load starts, 30 s cap); a progress listener
+// would settle exactly, upgrade if agents see a stale url.
+async function agentNavigate(entry, tabId, outcome) {
+  if (outcome !== "loading" && outcome !== "done") {
+    return agentFailed("browser_navigation_failed");
+  }
+  const win = entry.browser.ownerDocument.defaultView;
+  await new Promise(resolve => {
+    let seen = false;
+    let waited = 0;
+    const tick = () => {
+      const loading = !!entry.browser.webProgress?.isLoadingDocument;
+      seen = seen || loading;
+      if ((seen && !loading) || (!seen && waited >= 1000) || waited >= 30000 || !webTabs.has(tabId)) {
+        resolve();
+        return;
+      }
+      waited += 100;
+      win.setTimeout(tick, 100);
+    };
+    win.setTimeout(tick, 100);
+  });
+  return agentDone({ url: webTabPushedSpec(entry.browser.currentURI?.spec ?? ""), title: String(entry.browser.contentTitle ?? "") });
+}
+
+const agentUrl = url => (/^[a-z][a-z0-9+.-]*:/i.test(url) ? url : `https://${url}`);
+
+// Cookie rows (P66-26): only ever in the agent container, never the user's jar.
+function agentOriginAttributes(entry) {
+  return { userContextId: entry.agentUserContextId };
+}
+
+function agentHostOf(entry, url) {
+  try {
+    return url ? new URL(url).hostname : entry.browser.currentURI?.host || "";
+  } catch {
+    return "";
+  }
+}
+
+const AGENT_SAME_SITE = ["None", "Lax", "Strict"];
+
+function agentCookieGet(entry, params) {
+  const attrs = agentOriginAttributes(entry);
+  const host = params.url ? agentHostOf(entry, params.url) : "";
+  if (params.url && !host) {
+    return agentFailed("browser_error");
+  }
+  const cookies = host ? Services.cookies.getCookiesFromHost(host, attrs) : Services.cookies.getCookiesWithOriginAttributes(JSON.stringify(attrs));
+  return agentDone({
+    cookies: cookies.map(c => ({ name: c.name, value: c.value, domain: c.host, path: c.path, expires: c.isSession ? -1 : Math.floor(c.expiry / 1000), httpOnly: c.isHttpOnly, secure: c.isSecure, sameSite: AGENT_SAME_SITE[c.sameSite] ?? "None" })),
+  });
+}
+
+function agentCookieSet(entry, params) {
+  const host = params.domain || agentHostOf(entry, null);
+  if (!host) {
+    return agentFailed("browser_error");
+  }
+  const sameSite = { none: 0, lax: 1, strict: 2 }[String(params.sameSite ?? "lax").toLowerCase()] ?? 1;
+  const session = !agentNumber(params.expires) || params.expires <= 0;
+  const expiry = session ? Date.now() + 24 * 60 * 60 * 1000 : Math.floor(params.expires * 1000);
+  const scheme = params.secure ? Ci.nsICookie.SCHEME_HTTPS : Ci.nsICookie.SCHEME_HTTP;
+  const validation = Services.cookies.add(host, params.path || "/", params.name, params.value, !!params.secure, !!params.httpOnly, session, expiry, agentOriginAttributes(entry), sameSite, scheme, false);
+  return agentDone({ success: !validation || validation.result === Ci.nsICookieValidation.eOK });
+}
+
+function agentCookieDelete(entry, params) {
+  const host = params.domain || agentHostOf(entry, params.url);
+  if (!host) {
+    return agentFailed("browser_error");
+  }
+  const attrs = agentOriginAttributes(entry);
+  let deleted = 0;
+  // Deleted the way a Set-Cookie with a past expiry deletes (CookieStorage::AddCookie, "the intent was simply to delete
+  // the old cookie"), in the agent container only. Services.cookies.remove stays the token-guarded clear helper's
+  // alone (verify-site-identity.mjs counts it).
+  for (const c of Services.cookies.getCookiesFromHost(host, attrs)) {
+    if (c.name === params.name) {
+      Services.cookies.add(c.host, c.path, c.name, "", c.isSecure, c.isHttpOnly, false, 1, attrs, c.sameSite, c.schemeMap, c.isPartitioned);
+      deleted += 1;
+    }
+  }
+  return agentDone({ deleted: deleted > 0 });
+}
+
+// Network rows: one http observer pair, installed with the first agent tab, keeping requests of agent overlays only.
+let agentNetworkInstalled = false;
+const agentNetworkRows = new WeakMap();
+
+function agentNetworkInstall() {
+  if (agentNetworkInstalled) {
+    return;
+  }
+  agentNetworkInstalled = true;
+  Services.obs.addObserver(agentNetworkObserver, "http-on-modify-request");
+  Services.obs.addObserver(agentNetworkObserver, "http-on-examine-response");
+}
+
+const agentNetworkObserver = {
+  observe(subject, topic) {
+    try {
+      const channel = subject.QueryInterface(Ci.nsIHttpChannel);
+      const entry = webTabs.get(tabIdOfBrowser(channel.loadInfo?.browsingContext?.top?.embedderElement));
+      if (entry?.agent !== true) {
+        return;
+      }
+      if (topic === "http-on-modify-request") {
+        const row = { url: channel.URI.spec, method: channel.requestMethod, timestamp: Date.now() };
+        agentNetworkRows.set(channel, row);
+        for (const log of [entry.agentNetwork, entry.agentCapture?.network]) {
+          if (log) {
+            log.push(row);
+            log.splice(0, Math.max(0, log.length - AGENT_LOG_MAX));
+          }
+        }
+      } else {
+        const row = agentNetworkRows.get(channel);
+        if (row) {
+          row.status = channel.responseStatus;
+          row.mimeType = channel.contentType || undefined;
+        }
+      }
+    } catch {
+      // a channel torn down mid-observe, or one without a response yet: nothing to record
+    }
+  },
+};
+
+function agentKeepLast(entries, limit) {
+  const n = agentNumber(limit) && limit > 0 ? Math.floor(limit) : 100;
+  return { entries: entries.slice(-n).map(row => ({ ...row })), truncated: entries.length > n };
+}
+
+// Dialog rows (A4): the stock commonDialog window an agent overlay's page opened, answered with its own buttons.
+function agentDialogWindow(entry) {
+  for (const win of Services.wm.getEnumerator(null)) {
+    if (!win.closed && String(win.location?.href) === "chrome://global/content/commonDialog.xhtml" && win.args?.owningBrowsingContext?.top?.embedderElement === entry.browser) {
+      return win;
+    }
+  }
+  return null;
+}
+
+// Coordinator finding 3: only a page's own alert, confirm and prompt are an agent's to answer. An HTTP auth dialog
+// (which the login manager prefills), a beforeunload confirm or any other commonDialog stays the user's; permission
+// prompts and file pickers are not commonDialog windows, so agentDialogWindow never finds them.
+const AGENT_DIALOG_TYPES = new Set(["alert", "alertCheck", "confirm", "confirmCheck", "prompt"]);
+
+function agentAnswerDialog(entry, accept, text) {
+  const win = agentDialogWindow(entry);
+  if (!win) {
+    return agentFailed("browser_no_dialog");
+  }
+  if (!AGENT_DIALOG_TYPES.has(win.args?.promptType) || win.args?.inPermitUnload) {
+    return agentFailed("browser_command_unavailable");
+  }
+  if (accept && typeof text === "string") {
+    const box = win.document.getElementById("loginTextbox");
+    if (box) {
+      box.value = text;
+      box.dispatchEvent(new win.Event("input", { bubbles: true }));
+    }
+  }
+  const dialog = win.document.getElementById("commonDialog");
+  if (accept) {
+    dialog.acceptDialog();
+  } else {
+    dialog.cancelDialog();
+  }
+  return agentDone({ accepted: accept });
+}
+
+// Native rows (P66-11, 15): each takes (entry, params, tabId) and answers { where: "done", result } or
+// { where: "failed", code }. The other 25 methods are the PowerBrowserAgent child's run table.
+const AGENT_NATIVE_ROWS = {
+  "browser.goto": (entry, params, tabId) => agentNavigate(entry, tabId, PowerBrowserAPI.webTabNavigate(tabId, agentUrl(params.url))),
+  "browser.back": (entry, params, tabId) => agentNavigate(entry, tabId, PowerBrowserAPI.webTabBack(tabId)),
+  "browser.forward": (entry, params, tabId) => agentNavigate(entry, tabId, PowerBrowserAPI.webTabForward(tabId)),
+  "browser.reload": (entry, params, tabId) => agentNavigate(entry, tabId, PowerBrowserAPI.webTabReload(tabId)),
+  "browser.screenshot": (entry, params) => agentScreenshot(entry, params, false),
+  "browser.fullScreenshot": (entry, params) => agentScreenshot(entry, params, true),
+  "browser.pdf": entry => agentPdf(entry),
+  "browser.cookie.get": (entry, params) => agentCookieGet(entry, params),
+  "browser.cookie.set": (entry, params) => agentCookieSet(entry, params),
+  "browser.cookie.delete": (entry, params) => agentCookieDelete(entry, params),
+  "browser.network": (entry, params) => agentDone(agentKeepLast(entry.agentNetwork ?? [], params.limit)),
+  "browser.capture.start": entry => {
+    entry.agentCapture = { network: [], since: Date.now() };
+    return agentDone({ capturing: true });
+  },
+  // The network half is chrome's; the console half is the child's buffer since the start (P66-11).
+  "browser.capture.stop": async entry => {
+    const capture = entry.agentCapture;
+    entry.agentCapture = null;
+    const consoleRows = await agentRunInChild(entry, "browser.console", { limit: AGENT_LOG_MAX });
+    const since = capture?.since ?? 0;
+    return agentDone({
+      stopped: true,
+      network: (capture?.network ?? []).map(row => ({ ...row })),
+      console: consoleRows.where === "done" ? (consoleRows.result?.entries ?? []).filter(row => !row.timestamp || row.timestamp >= since) : [],
+    });
+  },
+  "browser.dialogAccept": (entry, params) => agentAnswerDialog(entry, true, params.text),
+  "browser.dialogDismiss": entry => agentAnswerDialog(entry, false, null),
+};
+
+// The agent-control state of one tab (P66-20, P66-22), kept on its webTabs entry so it ends with the tab.
+function agentControlOf(entry) {
+  if (!entry.agentControl) {
+    entry.agentControl = { active: false, stopped: false, idleTimer: null, inFlight: new Set() };
+  }
+  return entry.agentControl;
+}
+
+function agentPush(tabId, entry) {
+  const control = agentControlOf(entry);
+  const theiaBrowser = entry.owner?.browsingContext?.top?.embedderElement;
+  if (theiaBrowser) {
+    sendWebTabPush(theiaBrowser, { kind: "agentControlChanged", tabId, active: control.active, stopped: control.stopped });
+  }
+}
+
+function agentSetActive(tabId, entry, active) {
+  const control = agentControlOf(entry);
+  const win = entry.browser.ownerDocument.defaultView;
+  if (control.idleTimer !== null) {
+    win.clearTimeout(control.idleTimer);
+    control.idleTimer = null;
+  }
+  if (control.active !== active) {
+    control.active = active;
+    agentPush(tabId, entry);
+  }
+}
+
+function agentArmIdle(tabId, entry) {
+  const control = agentControlOf(entry);
+  const win = entry.browser.ownerDocument.defaultView;
+  if (control.idleTimer !== null) {
+    win.clearTimeout(control.idleTimer);
+    control.idleTimer = null;
+  }
+  // A call still in flight keeps the mark lit; the last one to finish arms the timer.
+  if (control.inFlight.size) {
+    return;
+  }
+  control.idleTimer = win.setTimeout(() => {
+    control.idleTimer = null;
+    agentSetActive(tabId, entry, false);
+  }, AGENT_IDLE_MS);
+}
+
+// Called by webTabClose (and so by webTabDropOwnedBy): the mark goes out with the tab and an in-flight call ends.
+function agentControlClosed(tabId, entry) {
+  if (!entry.agentControl) {
+    return;
+  }
+  for (const call of entry.agentControl.inFlight) {
+    call.abort(agentFailed("browser_tab_closed"));
+  }
+  agentSetActive(tabId, entry, false);
+}
+
+// An actor row: one PowerBrowserAgent:Run query to the child of the overlay's top document. getActor is called only
+// here, after the wall, so only an agent overlay ever gets a PowerBrowserAgent child (P66-13).
+async function agentRunInChild(entry, method, params) {
+  const control = agentControlOf(entry);
+  const actor = entry.browser.browsingContext.currentWindowGlobal.getActor(AGENT_ACTOR_NAME);
+  const call = { actor, abort: null };
+  const aborted = new Promise(resolve => {
+    call.abort = resolve;
+  });
+  control.inFlight.add(call);
+  try {
+    const reply = await Promise.race([actor.sendQuery(AGENT_RUN_MESSAGE, { method, params }), aborted]);
+    if (reply?.where === "done") {
+      return agentDone(reply.result);
+    }
+    return agentFailed(reply?.where === "failed" && typeof reply.code === "string" ? reply.code : "browser_error");
+  } finally {
+    control.inFlight.delete(call);
+  }
+}
+
+async function handleWebTabAgent(data, actorRef) {
+  const kind = "webTabAgent";
+  if (!webTabIdIsValid(data.tabId)) {
+    return agentRefusal("refusing malformed tabId");
+  }
+  if (!AGENT_METHODS.includes(data.method)) {
+    return agentRefusal("refusing a method outside AGENT_METHODS");
+  }
+  if (!agentParamsOk(data.method, data.params)) {
+    return agentRefusal("refusing params that fail the method's validator");
+  }
+  const entry = webTabs.get(data.tabId);
+  const verdict = agentWallVerdict(entry, actorRef);
+  if (verdict) {
+    return { ok: true, kind, where: verdict };
+  }
+  const control = agentControlOf(entry);
+  agentSetActive(data.tabId, entry, true);
+  let outcome;
+  try {
+    const native = AGENT_NATIVE_ROWS[data.method];
+    outcome = native ? await native(entry, data.params, data.tabId) : await agentRunInChild(entry, data.method, data.params);
+  } catch (err) {
+    PowerBrowserAPI.log("error", `[orca-agent] ${data.method} failed (${err && err.name ? err.name : "error"})`);
+    outcome = agentFailed("browser_error");
+  }
+  if (control.stopped) {
+    return { ok: true, kind, where: "agent-stopped" };
+  }
+  if (!webTabs.has(data.tabId)) {
+    return { ok: true, kind, where: "unknown-tab" };
+  }
+  agentArmIdle(data.tabId, entry);
+  return outcome.where === "done" ? { ok: true, kind, where: "done", result: outcome.result } : { ok: true, kind, where: "failed", code: outcome.code };
+}
+
+// Stop (P66-22): sent only from the chrome bar's Stop button. Lasts for the tab's lifetime and aborts an in-flight call.
+function handleWebTabAgentStop(data, actorRef) {
+  const kind = "webTabAgentStop";
+  if (!webTabIdIsValid(data.tabId)) {
+    return { ok: false, reason: "validation", message: "handleWebTabAgentStop: refusing malformed tabId" };
+  }
+  const entry = webTabs.get(data.tabId);
+  if (!entry || entry.owner !== actorRef) {
+    return { ok: true, kind, where: "unknown-tab" };
+  }
+  if (entry.agent !== true) {
+    return { ok: true, kind, where: "not-agent-tab" };
+  }
+  const control = agentControlOf(entry);
+  const wasStopped = control.stopped;
+  control.stopped = true;
+  for (const call of control.inFlight) {
+    try {
+      call.actor.sendAsyncMessage(AGENT_ABORT_MESSAGE, {});
+    } catch {
+      // the page navigated away; its child is gone and the race below ends the call anyway
+    }
+    call.abort(agentFailed("browser_owner_unavailable"));
+  }
+  // One push per change: agentSetActive pushes when the mark was lit, else the stopped flag alone changed.
+  if (control.active) {
+    agentSetActive(data.tabId, entry, false);
+  } else if (!wasStopped) {
+    agentPush(data.tabId, entry);
+  }
+  return { ok: true, kind, where: "stopped" };
+}
+
+// P66-13: the PowerBrowserAgent pair, registered from registerGroupActor beside the edit-state pair. No matches and no
+// events: Gecko creates the child only when agentRunInChild asks an agent overlay's top document for it.
+export class PowerBrowserAgentParent extends GroupActorBase {}
+
+function registerAgentActor() {
+  ChromeUtils.registerWindowActor(AGENT_ACTOR_NAME, {
+    parent: { esModuleURI: GROUP_ACTOR_PARENT_MODULE },
+    child: { esModuleURI: GROUP_ACTOR_CHILD_MODULE },
+    messageManagerGroups: [AGENT_MESSAGE_MANAGER_GROUP],
+    allFrames: false,
+  });
+}
+// ---- end Orca agent bridge ----

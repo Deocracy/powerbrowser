@@ -708,7 +708,10 @@ function groupFamily(ctx, out) {
   const wto = methodSpan(api, 'webTabOpen');
   if (wto.error) return brokenOut(out, F, 'webTabOpen', wto.error);
   for (const w of writes) {
-    const overlay = w.rel === API_REL && w.text.includes('messagemanagergroup: "browsers"') && w.line >= wto.start && w.line <= wto.end;
+    // Phase 66 (66-03, coordinator finding 3): webTabOpen's agent-only spread moves an Orca agent overlay to its own
+    // group, so the login manager and the extension tab host never attach to it; that literal is the one other write.
+    const literal = w.text.includes('messagemanagergroup: "browsers"') || w.text.includes('messagemanagergroup: AGENT_MESSAGE_MANAGER_GROUP');
+    const overlay = w.rel === API_REL && literal && w.line >= wto.start && w.line <= wto.end;
     if (!overlay) {
       failOut(out, F, `${w.rel}:${w.line + 1}`, 'WRITE SITE', `${w.rel}:${w.line + 1} writes messagemanagergroup (${w.text}); the only write allowed is webTabOpen's overlay literal`);
     }
