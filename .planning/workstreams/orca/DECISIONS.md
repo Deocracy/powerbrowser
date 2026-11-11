@@ -227,6 +227,20 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
     before the PTY, while Theia `t<n>` terminals already passed Ctrl+W and Ctrl+T to the shell.
     TERM-04 is restated to this rule. Mechanism: gap-closure plan 64-06.
 
+## Browser host attach failure (2026-11-11)
+
+- **D-33 — A failed browser-host attach is folded into Phase 67's failure page.** Chris,
+  2026-11-11, answering 66-06 Task 2 (the P66-33 diagnostics-row route): "Fold into Phase 67".
+  - In Phase 66 a failed attach of PowerBrowser's browser host for Orca stays one frontend log
+    line from `@powerbrowser/orca-browser` that names the failed step and no value. Phase 66 adds
+    no diagnostics row and no frontend-to-chrome kind for it (66-06 option-g).
+  - Phase 67 adds "browser could not attach" as one more failure class on its Orca failure page
+    (RUN-06), with its own sentence, buttons and diagnostics row. Mechanism: 67-CONTEXT P67-36,
+    plans 67-01 (the class and the client reason in chrome) and 67-03 (the copy, the sender in
+    `@powerbrowser/orca-browser` and the live induction).
+  - Supersedes P66-33's "and a diagnostics row" for Phase 66. Options e (a third non-agent
+    web-tab kind) and f (a store request kind) are not built.
+
 ## Spikes this direction needs
 
 1. Browser parity: what an Orca browser tab can do, and how PB chrome provides it

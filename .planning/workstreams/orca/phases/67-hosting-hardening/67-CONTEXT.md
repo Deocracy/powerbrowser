@@ -3,6 +3,7 @@
 **Gathered:** 2026-11-10
 **Status:** Ready for planning (after the research items in P67-10, P67-14 and P67-29: registry files, header record, pairing-loss induction)
 **Mode:** Smart discuss, auto mode (Chris 2026-11-09: "Claude takes the recommended answers, keeps going"). Every P67 decision is Claude's recommended pick; Chris may override any of them before the dependent work lands or in the end-of-milestone pass (59-CONTEXT D-18). This ruling replaces D-25's interactive discuss step for this phase.
+**Amended 2026-11-11 by owner ruling D-33** (a failed browser-host attach is one more failure class on the Orca failure page): see "Amendment after D-33" (P67-36).
 **Amended 2026-11-10 by owner ruling D-31** (Orca terminals on Orca's own engine and view, side by side with Theia terminals): see "Amendments after D-31" (P67-32..P67-35).
 
 <domain>
@@ -181,7 +182,7 @@ Out of scope: packaging, the three-OS artifacts and Windows file ACLs (Phase 68)
   - `orca-landing-selectors` and its self-test (quick, SKIP without the build). The selector constant has an entry for the version pinned in `configuration.toml`, and each class token of that entry occurs in the built `Landing-*.js`. Plants: a missing version entry, a token absent from the bundle.
   - `orca-landing-logo-live` (live). orcad's address in a PB web tab with a fresh data root renders `Landing`. Positive control: the same page reached through a loopback proxy on a second port, where the actor's port gate does not apply, shows exactly one matched element whose `src` is Orca's logo. Then, on orcad's own port, the one matched element's `src` decodes to `brand/mark.svg` and its `alt` is the PB text. The Theia document is unchanged (its DOM has no injected attribute).
   - Extended, not new: `verify-orca-service.mjs` scenarios for `failureClassOf`, `restart()` and the preflight; `verify-orca-bridge-dir.mjs` for the re-applied folder mode; `internals-boundary` and `internals-catalogue` for the new rows; `verify-registry-shape.mjs` and `gui04-registry-shape` unchanged and green.
-- **P67-30 (Claude's pick): no new user-facing copy beyond the seven sentences, the protection sentence, the three button labels and the logo's alt text.** Everything else is a log line or a diagnostics row.
+- **P67-30 (Claude's pick): no new user-facing copy beyond the seven sentences (eight after P67-36), the protection sentence, the three button labels and the logo's alt text.** Everything else is a log line or a diagnostics row.
 
 ### Mechanics and lane cut
 - **P67-31 (Claude's pick): four lanes with disjoint files, then a coordinator plan.**
@@ -209,6 +210,16 @@ Source: `DECISIONS.md` D-31, 63-CONTEXT P63-31..P63-40, 64-CONTEXT P64-30..P64-3
 - **P67-33 (amends P67-09; 63-CONTEXT P63-36): `writePrivateFile` already has no umask window and re-applies the folder mode when Phase 67 starts.** Lane p63-06 lands 67-RESEARCH A-11's body (folder 0700 re-set on every call, exclusive empty `.tmp`, 0600 before content, overwrite write, move) and `verify-orca-bridge-dir.mjs` checks the call order statically. Phase 67 does not edit `writePrivateFile`; P67-09 keeps the offer file's own hardening (lstat, regular file, own uid, no group or other bits) and the hardened offer reader. 67-RESEARCH's citations of `ServerDestroyer/p63-05 PowerBrowserAPI.sys.mjs:11018-11027` refer to code that is never merged; read the v1.7 branch after the 63-04 merge instead.
 - **P67-34 (renames, P63-35):** every "`pty-bridge` folder" and "bridge folder" reference means lane p63-06's bridge folder (`<XDG_RUNTIME_DIR or HOME/.cache>/pb-orca-<12 hex>-bridge`, `POWERBROWSER_ORCA_BRIDGE_DIR`, `OrcaService.getState().bridgeDir`); `OrcaService` removes `orcad-data-root` on stop (lane p63-06) as the offer-file removal copies.
 - **P67-35 (amends P67-28):** the overlay keeps 1 landed seam (010 from Phase 62; Phase 63 lands none after D-31) and 2 planned (070 and 080, Phase 68): 3 of the 10-seam cap.
+
+### Amendment after D-33 (coordinator 66-06, 2026-11-11; owner ruling, not an auto-mode pick)
+Source: `DECISIONS.md` D-33 (Chris: "Fold into Phase 67"), 66-CONTEXT P66-33, 66-06-SUMMARY "Task 2". Wins over P67-02, P67-03, P67-30 and the interfaces blocks of 67-01 and 67-03 where they say "seven classes".
+
+- **P67-36 (amends P67-02, P67-03, P67-30): eighth failure class `browser-not-attached`.** Phase 66's `@powerbrowser/orca-browser` attaches PowerBrowser's browser host for Orca at frontend start; when an attach step fails, or the host detaches, Phase 66 writes one frontend log line only. Phase 67 makes that a failure class.
+  - Class `browser-not-attached`, appended after `pairing-lost` (eight classes, in that order). Copy: "PowerBrowser couldn't connect Orca's agents to its web tabs, so agents can't open pages. Choose Reconnect, or open Details if this keeps happening." Buttons: reconnect, details.
+  - Cause: the frontend client reason `browser-host-attach-failed`, added to `ORCA_CLIENT_REASONS`. `ORCA_CLIENT_REASON_CLASS` maps it to `browser-not-attached`; every other client reason stays `pairing-lost`. `failureClassOf` returns `browser-not-attached` while the state is ready and that reason is held; `OrcaService` records the diagnostics row "Orca browser host" reading the reason code, never a value from the host.
+  - Sender: `OrcaBrowserHost` in `theia/extensions/orca-browser/src/browser/orca-browser-frontend-module.ts` sends `{ kind: 'orcaStatus', clientReason: 'browser-host-attach-failed' }` on each logged attach failure and on `onDetached`, through its own copy of update-client.ts's `request()` (orca-browser cannot import orca-panes: orca-panes depends on orca-browser from 66-02). The log line stays.
+  - Reconnect for this class calls an exported `OrcaBrowserHost.attach()` (orca-panes may import orca-browser) once, which also covers Phase 66's recorded gap that the host does not re-attach after orcad restarts; a successful attach clears the reason.
+  - Proof: `orca-failure-classes` counts eight classes and checks the one non-pairing-lost client reason; `orca-failure-page-live` gains induction 5: the built `orca/out/web/assets/pb-panes/pb-browser-host.js` moved aside (restored in `finally`), launch, require the `browser-not-attached` sentence and the "Orca browser host" row label, restore the file, click Reconnect, require the page gone and the host attached.
 
 ### Claude's Discretion
 - Exact sentence polish within the copywriting contract; the page's layout inside the widget.
