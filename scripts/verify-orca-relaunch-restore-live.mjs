@@ -12,7 +12,8 @@
 // select its worktree through the bundle's setActiveWorktree; in the Orca mode
 // New Orca Chat and New Orca Terminal, the terminal split into two hosted
 // terminal tabs with the built CLI's terminal split; in the Coding mode an
-// editor (orca file open) and a diff (orca file open-changed --mode diff);
+// editor (orca file open) and an unstaged diff (the bundle's openPane('diff'),
+// since headless orcad refuses orca file open-changed);
 // record the dock, each mode's tabs and each pb-orca: name's pane key; save a
 // Setup through Setups' own command; quit normally; count orca-devices.json
 // rows by credentialKind, ephemeral and lastSeenAt only.
@@ -390,7 +391,7 @@ async function runLive() {
             offers.push(await s.offer());
             await s.writeMarker(MARKER_KEY);
             await s.addRepository();
-            await s.selectWorktree();
+            const worktreeId = await s.selectWorktree();
             await s.mode('orca');
             const chat = await s.newHosted('powerbrowser.orca.newChat', 'agent-session');
             const term = await s.newHosted('powerbrowser.orca.newTerminal', 'terminal');
@@ -404,9 +405,13 @@ async function runLive() {
             await s.mode('coding');
             writeFileSync(join(session.repo, 'README'), 'orca relaunch scratch repository, changed\n');
             s.orca('file', 'open', 'README', '--worktree', session.worktree);
-            s.orca('file', 'open-changed', '--mode', 'diff', '--worktree', session.worktree);
-            const editors = await s.pollFor(async () => { const u = await s.mainTabUris(); return u.some((x) => x.startsWith('file:')) && u.some((x) => x.startsWith('diff:')) ? u : null; }, 10000, 'the editor and the diff').catch(() => null);
-            if (!editors) throw new Error('launch 1: orca file open and open-changed --mode diff gave no Theia editor and diff tab (lane p65-02 not merged?)');
+            // Headless orcad refuses the CLI's file open-changed (it has no app window): Orca's own unstaged diff
+            // opener runs through the bundle's openPane('diff') (B-10), as Orca's source-control panel opens it.
+            const diff = await s.bundle(`m.openPane('diff', ${JSON.stringify(worktreeId)}, ${JSON.stringify(JSON.stringify({ source: 'unstaged', relativePath: 'README' }))})`);
+            if (diff?.error) throw new Error(`launch 1: openPane diff failed: ${diff.error}`);
+            // TabUriRegistry addresses no editor; an editor widget's own uri is file: or, for a diff editor, diff:.
+            const editors = await s.pollFor(async () => { const u = await s.probe(`return get('ApplicationShell').getWidgets('main').map(w => w.editor && w.editor.uri ? w.editor.uri.toString(true) : null).filter(Boolean);`); return u.some((x) => x.startsWith('file:')) && u.some((x) => x.startsWith('diff:')) ? u : null; }, 10000, 'the editor and the diff').catch(() => null);
+            if (!editors) throw new Error('launch 1: orca file open and openPane diff gave no Theia editor and diff tab (lane p65-02 not merged?)');
             const modes = await s.modeTabs(['orca', 'coding']);
             const identity = await s.identity();
             if (!(await s.saveSetup(SETUP_NAME))) throw new Error('launch 1: the Setup was not saved through Setups\' own command');
