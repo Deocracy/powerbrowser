@@ -1242,12 +1242,14 @@ function selfTest() {
         },
         {
             name: 'orca-browser present but web-tab.ts lacking the webTabAgent union member',
-            sources: { ...orcaBrowser, [WEB_TAB]: orcaBrowser[WEB_TAB].replace("{ kind: 'webTabAgent'; tabId: string } | ", '') },
+            // The merged tree carries lane p66-02's own union line beside the simulated one; the plant removes both.
+            sources: { ...orcaBrowser, [WEB_TAB]: orcaBrowser[WEB_TAB].replace("{ kind: 'webTabAgent'; tabId: string } | ", '').replace(/^\s*\| \{ kind: 'webTabAgent';.*$/m, '') },
             expect: 'kinds: chrome serves case arms the frontend never sends: webTabAgent',
         },
         {
             name: 'orca-browser present and no agentControlChanged subscription',
-            sources: { ...orcaBrowser, [WEB_TAB]: orcaBrowser[WEB_TAB].replace("this.onPush('agentControlChanged',", 'this.onPushGone(') },
+            // replaceAll: the merged tree's own subscription and the simulated one are both removed.
+            sources: { ...orcaBrowser, [WEB_TAB]: orcaBrowser[WEB_TAB].replaceAll("this.onPush('agentControlChanged',", 'this.onPushGone(') },
             expect: 'chrome pushes kinds no frontend source subscribes to: agentControlChanged',
         },
     );
