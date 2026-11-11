@@ -666,8 +666,13 @@ also needs Orca's CLI, which `build-orca.sh` does not build:
 ```
 ( cd orca && nix develop ..#orca --ignore-environment --keep HOME --keep TERM --command bash -c \
   'export COREPACK_HOME=$PWD/../.mozbuild/corepack PATH=$PWD/../.mozbuild/corepack/bin:$PATH; \
-   pnpm run build:packages && ORCA_CLI_BUILD_COMPILER=tsrs node config/scripts/build-cli.mjs' )
+   pnpm --config.verify-deps-before-run=false run build:packages && ORCA_CLI_BUILD_COMPILER=tsrs node config/scripts/build-cli.mjs' )
 ```
+
+`--config.verify-deps-before-run=false` keeps pnpm from re-installing `orca/node_modules` with its own
+defaults (the global virtual store) instead of `build-orca.sh`'s knobs. Measured in 66-06: without it the
+re-install moved the module layout, and `licensing` derived a package Orca does not ship (`entities@7.0.1`,
+a test-only dependency of happy-dom); re-running `build-orca.sh` restores the layout.
 
 Without the bundle, orcad or the CLI the row prints a named SKIP. No seam is added.
 

@@ -1063,14 +1063,14 @@ export class WebTabWidget extends BaseWidget {
             if (this.isDisposed) {
                 return;
             }
+            // A crashed tab is not showable: the overlay hides and the placeholder carries the crash UI (PAGE-11, 32-08).
+            const showable = this.isAttached && this.isVisible && this.hasPage && !this.crashed;
             // A1 (Phase 66): an unshown agent tab sends the box of its own tab area, so chrome parks the overlay under
             // the frame with a real viewport instead of hiding it; every other tab is unchanged.
-            const parked = this.agent && !(this.isAttached && this.isVisible && this.hasPage && !this.crashed);
+            const parked = this.agent && !showable;
             const r = (parked && this.tabAreaBox()) || this.node.getBoundingClientRect();
             // D-08: the notification bars sit at the top of this node, so the page starts below them and never under them.
             const bars = Math.min(this.barsNode.offsetHeight, r.height);
-            // A crashed tab is not showable: the overlay hides and the placeholder carries the crash UI (PAGE-11, 32-08).
-            const showable = this.isAttached && this.isVisible && this.hasPage && !this.crashed;
             const msg: WebTabMessage = {
                 kind: 'webTabGeometry',
                 tabId: this.tabId,
