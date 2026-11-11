@@ -40,6 +40,23 @@
 // SANDBOXED_AUXILIARY_NAVIGATION, or a user overlay with it. Detectors first: a user opener must create an overlay
 // through a member and the link path and reach the stock window. The self-test generates one plant per derived path.
 //
+// Walls outside the receivers (66-09, D-37): the derivation above sees only what installNewWindowReceivers installs, so
+// three more clauses cover what does not run through it.
+//  - downloads: the sandbox bits Gecko's ClassifyDownload tests (derived from the pinned
+//    dom/security/nsContentSecurityUtils.cpp and dom/base/nsSandboxFlags.h; the section's own constant without
+//    upstream/) must all be on an agent overlay's first load and on no user overlay's; every network observer the
+//    section registers is driven with every topic it registered for, and an agent overlay's document channel that
+//    stopped with NS_ERROR_ABORT (the wall's cancel) must fail the command in flight with browser_command_unavailable
+//    and log once without the URL, also when the cancel lands after the child's reply (the settle), while a user overlay's channel, an agent subresource and an agent document that
+//    loaded must not (the detector and controls).
+//  - external protocols: a factory must be registered for the dispatch-chooser contract the pinned
+//    nsExternalHelperAppService.cpp LoadURI creates (the section's constant without upstream/); its chooser must hand
+//    a user overlay's and a null browsing context to the stock chooser (the detector), and refuse an agent overlay's
+//    and a frame inside one, failing the command in flight and logging once without the URL.
+//  - the initial document: on an agent overlay whose current window global is the initial about:blank, every method
+//    of AGENT_METHODS but browser.goto answers failed browser_command_unavailable with no page work, and browser.goto
+//    still navigates.
+//
 // Page-table clause: when lane p66-02's theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts exists, it
 // (and ./orca-browser-abilities) is transpiled with theia/node_modules/typescript and its createPageTable must refuse
 // a duplicate page and a second page for a tab; while it is absent the PASS line says "page-table clause SKIP (lane
@@ -67,6 +84,9 @@ const SECTION_END = '// ---- end Orca agent bridge ----';
 const ADOPT_START = '// Phase 36 (PROMPT-05): the new-window adopt section.';
 const ADOPT_END = '// Phase 36: new-window adopt section end.';
 const IDL = 'upstream/dom/interfaces/base/nsIBrowserDOMWindow.idl';
+const SANDBOX_H = 'upstream/dom/base/nsSandboxFlags.h';
+const CLASSIFY = 'upstream/dom/security/nsContentSecurityUtils.cpp';
+const EXTHANDLER = 'upstream/uriloader/exthandler/nsExternalHelperAppService.cpp';
 
 let acorn;
 try {
@@ -178,7 +198,7 @@ function fakeClock() {
 
 /** One world: the sliced source evaluated over fresh stubs that record every boundary call. */
 export function makeWorld(sliced, { dpr = 2 } = {}) {
-    const rec = { actor: [], aborts: [], draws: [], pushes: [], registered: [], attrs: [], cookies: [], nav: [], wm: 0, print: 0, focus: [], logs: [], answered: [], created: 0, stock: [], loads: [], uriLoads: 0 };
+    const rec = { actor: [], aborts: [], draws: [], pushes: [], registered: [], attrs: [], cookies: [], nav: [], wm: 0, print: 0, focus: [], logs: [], answered: [], created: 0, stock: [], loads: [], uriLoads: 0, observers: [], factories: [], stockChooser: [] };
     const dialogs = [];
     const clock = fakeClock();
     const webTabs = new Map();
@@ -260,7 +280,8 @@ export function makeWorld(sliced, { dpr = 2 } = {}) {
         // D-35: the sandbox flags the overlay carries when its first load starts.
         firstWebTabLoad: (tabId, entry) => { rec.loads.push({ tabId, sandboxFlags: entry.browser.browsingContext.sandboxFlags ?? 0 }); return Promise.resolve(); },
         openStockTab: url => { rec.stock.push(url); return Promise.resolve('opened'); },
-        sleep: () => new Promise(() => {}),
+        // A short beat (the agent settle, D-37) passes at once; a long timeout (the adopt fallback) never fires.
+        sleep: ms => (ms < 1000 ? new Promise(resolve => setTimeout(resolve, 0)) : new Promise(() => {})),
         scheduleSettleCapture: () => {},
         removeTabRow: () => Promise.resolve(),
         webTabNavigate: navigate('navigate'), webTabBack: navigate('back'), webTabForward: navigate('forward'), webTabReload: navigate('reload'),
@@ -272,13 +293,23 @@ export function makeWorld(sliced, { dpr = 2 } = {}) {
         io: { newURI: spec => ({ spec }) },
         scriptSecurityManager: { createNullPrincipal: () => ({ isSystemPrincipal: false }) },
         cookies: { getCookiesFromHost: cookieCall('getCookiesFromHost'), getCookiesWithOriginAttributes: cookieCall('getCookiesWithOriginAttributes'), add: cookieCall('add'), remove: cookieCall('remove') },
-        obs: { addObserver: () => {} },
+        obs: { addObserver: (observer, topic) => rec.observers.push({ observer, topic }) },
+        uuid: { generateUUID: () => `{fake-${rec.factories.length}}` },
         wm: { getEnumerator: () => { rec.wm += 1; return dialogs; } },
     };
     const iface = new Proxy({}, { get: () => new Proxy({}, { get: (t, k) => String(k) }) });
     const context = vm.createContext({
         webTabs, PowerBrowserAPI, Services, Ci: iface, Cc: {}, Cr: { NS_ERROR_ABORT: ABORT }, URL,
-        Components: { Exception: (message, result) => Object.assign(new Error(message || 'xpcom'), { result }) },
+        Components: {
+            Exception: (message, result) => Object.assign(new Error(message || 'xpcom'), { result }),
+            manager: {
+                QueryInterface: () => ({
+                    contractIDToCID: contract => `{stock ${contract}}`,
+                    registerFactory: (cid, description, contract, factory) => rec.factories.push({ cid, contract, factory }),
+                }),
+                getClassObject: cid => ({ createInstance: () => ({ handleURI: (...args) => { rec.stockChooser.push({ cid: String(cid), args }); } }) }),
+            },
+        },
         SHELL_CONTENT_BROWSER_ID: 'powerbrowser-content', promptRecords: new Map(), hideBars: () => {}, btoa: s => Buffer.from(s, 'binary').toString('base64'),
         lazy: { ContextualIdentityService: { getPublicIdentityFromId: id => (id === CONTAINER ? { userContextId: id } : null), create: () => ({ userContextId: CONTAINER }) } },
         webTabPushedSpec: spec => spec,
@@ -289,7 +320,7 @@ export function makeWorld(sliced, { dpr = 2 } = {}) {
         GroupActorBase: class {},
         GROUP_ACTOR_PARENT_MODULE: 'chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs',
         GROUP_ACTOR_CHILD_MODULE: 'resource://powerbrowser/GroupActorChild.sys.mjs',
-        ChromeUtils: { registerWindowActor: (name, options) => rec.registered.push({ name, options }), generateQI: () => () => {} },
+        ChromeUtils: { registerWindowActor: (name, options) => rec.registered.push({ name, options }), generateQI: () => function () { return this; } },
     });
     const exported = ['AGENT_METHODS', 'AGENT_NATIVE_ROWS', 'AGENT_MESSAGE_MANAGER_GROUP', 'overlayShownToUser', 'registerAgentActor'];
     const program = `${sliced.helpers}\n${sliced.section}\n${sliced.adopt}\n` +
@@ -689,6 +720,134 @@ export async function opensClause(sliced, idlText) {
     return { failures, paths: paths.map(p => p.name), wheres: wheres.length };
 }
 
+// ---------------------------------------------------------------------------
+// Walls outside the receivers (66-09, D-37): downloads, external protocols, the initial document.
+
+/** A #define-free C++ constant table: NAME -> value, from `const unsigned long NAME = 0x...;`. */
+function cppConstants(text) {
+    return new Map([...(text ?? '').matchAll(/const\s+unsigned\s+long\s+([A-Z_]+)\s*=\s*(0x[0-9A-Fa-f]+|\d+)\s*;/g)].map(m => [m[1], Number(m[2])]));
+}
+
+/** The sandbox bits a forbidden download is classified by: the flags ClassifyDownload tests, valued from the header. */
+export function downloadSandboxBits(sliced, sandboxH, classify) {
+    const body = /ClassifyDownload\(nsIChannel\* aChannel\)\s*\{([\s\S]*?)\n\}/.exec(classify ?? '')?.[1];
+    const table = cppConstants(sandboxH);
+    if (body && table.size) {
+        const names = [...new Set([...body.matchAll(/&\s*(SANDBOXED_[A-Z_]+)/g)].map(m => m[1]))];
+        const bits = names.map(n => table.get(n));
+        if (!names.length || bits.some(b => !Number.isInteger(b))) return { error: `broken instrument: ClassifyDownload's sandbox flags [${names.join(', ')}] were not all found in ${SANDBOX_H}` };
+        return { bits: bits.reduce((a, b) => a | b, 0), names, from: 'the pin' };
+    }
+    const own = /const SANDBOXED_DOWNLOADS = (0x[0-9A-Fa-f]+);/.exec(sliced.section)?.[1];
+    return own ? { bits: Number(own), names: ['SANDBOXED_DOWNLOADS'], from: 'the section (no upstream/)' } : { error: 'broken instrument: no download sandbox flag derived from upstream/ or the agent section' };
+}
+
+/** The contract LoadURI asks for its dispatch chooser (the pin), else the section's constant. */
+export function chooserContract(sliced, exthandler) {
+    const pinned = /nsCOMPtr<nsIContentDispatchChooser>\s+chooser\s*=\s*do_CreateInstance\("([^"]+)"/.exec(exthandler ?? '')?.[1];
+    if (pinned) return { contract: pinned, from: 'the pin' };
+    const own = /const CONTENT_DISPATCH_CHOOSER = "([^"]+)";/.exec(sliced.section)?.[1];
+    return own ? { contract: own, from: 'the section (no upstream/)' } : { error: 'broken instrument: no dispatch-chooser contract derived from upstream/ or the agent section' };
+}
+
+const fakeChannel = (browser, { isDocument = true, status = ABORT } = {}) => ({
+    isDocument, status, URI: { spec: 'https://example.com/file.pdf' }, requestMethod: 'GET', responseStatus: 200, contentType: 'application/pdf',
+    loadInfo: { browsingContext: { top: { embedderElement: browser } } },
+    QueryInterface() { return this; },
+});
+
+export async function wallsClause(sliced, upstream = {}) {
+    const failures = [];
+    let w;
+    try {
+        w = makeWorld(sliced);
+    } catch (err) {
+        return { failures: [`broken instrument: the sliced source does not evaluate over the stub boundary (${err.message})`] };
+    }
+    const dl = downloadSandboxBits(sliced, upstream.sandboxH, upstream.classify);
+    const chooser = chooserContract(sliced, upstream.exthandler);
+    if (dl.error) failures.push(dl.error);
+    if (chooser.error) failures.push(chooser.error);
+    w.api.webTabOpen(w.theiaBrowser, w.frontend, 'd1', 'https://example.com/', undefined, undefined, null, true);
+    w.api.webTabOpen(w.theiaBrowser, w.frontend, 'u1', 'https://example.com/', undefined, undefined, null, false);
+    const agent = w.webTabs.get('d1')?.browser;
+    const user = w.webTabs.get('u1')?.browser;
+    if (!agent || !user) return { failures: [...failures, 'broken instrument: webTabOpen did not register the agent and user overlays'] };
+    const loadFlags = id => w.rec.loads.find(l => l.tabId === id)?.sandboxFlags ?? null;
+
+    // Downloads: the wall's bits on the agent overlay's first load, never on a user overlay's.
+    if (!dl.error) {
+        if (loadFlags('d1') === null || loadFlags('u1') === null) failures.push('broken instrument: webTabOpen started no first load, so the download wall is unchecked');
+        else {
+            if ((loadFlags('d1') & dl.bits) !== dl.bits) failures.push(`downloads: the agent overlay's first load started without ${dl.names.join(', ')} (flags ${loadFlags('d1')}), so its page can save a file and open its viewer in a stock window`);
+            if (loadFlags('u1') & dl.bits) failures.push(`downloads: a user overlay got ${dl.names.join(', ')}, so the user's own downloads would be refused`);
+        }
+    }
+    // Downloads: every registered network observer, every topic it registered for, fired during an agent command.
+    const fireAll = channel => { for (const { observer, topic } of w.rec.observers) { try { observer.observe(channel, topic); } catch { /* an observer that throws is judged by its effect */ } } };
+    if (!w.rec.observers.length) failures.push('downloads: the agent section registered no network observer, so a download the wall cancelled can fail no command');
+    const during = async (channel) => {
+        w.childReplies.set('browser.click', () => { fireAll(channel); return Promise.resolve({ where: 'done', result: {} }); });
+        const reply = await w.agent('d1', 'browser.click', { element: '#dl' });
+        w.childReplies.delete('browser.click');
+        return reply;
+    };
+    // The cancel lands after the child's reply (a download is a network round trip away from the click).
+    w.childReplies.set('browser.click', () => { setTimeout(() => fireAll(fakeChannel(agent)), 0); return Promise.resolve({ where: 'done', result: {} }); });
+    const late = await w.agent('d1', 'browser.click', { element: '#dl' });
+    w.childReplies.delete('browser.click');
+    if (late?.where !== 'failed' || late?.code !== 'browser_command_unavailable') failures.push(`downloads: a command whose download the wall cancelled after the child's reply answered ${JSON.stringify(late)}; expected failed browser_command_unavailable (the command must settle before answering)`);
+    const refused = await during(fakeChannel(agent));
+    if (refused?.where !== 'failed' || refused?.code !== 'browser_command_unavailable') failures.push(`downloads: a command during which the wall cancelled the agent overlay's download answered ${JSON.stringify(refused)}; expected failed browser_command_unavailable`);
+    for (const [what, channel] of [['a user overlay\'s cancelled download', fakeChannel(user)], ['an agent subresource that was cancelled', fakeChannel(agent, { isDocument: false })], ['an agent document that loaded', fakeChannel(agent, { status: 0 })]]) {
+        const reply = await during(channel);
+        if (reply?.where !== 'done') failures.push(`downloads: ${what} failed the agent command (${JSON.stringify(reply)}); only a cancelled agent document load is a refused download`);
+    }
+    await during(fakeChannel(agent));
+    const dlLogs = w.rec.logs.filter(l => l.includes('refused a download'));
+    if (dlLogs.length !== 1) failures.push(`downloads: a refused download was logged ${dlLogs.length} time(s) for one tab; expected once`);
+    if (w.rec.logs.some(l => l.includes('example.com'))) failures.push('downloads: a refusal log line carries the URL');
+
+    // External protocols: the chooser registered for the pinned contract; stock for the user, refusal for the agent.
+    if (!chooser.error) {
+        const reg = w.rec.factories.filter(f => f.contract === chooser.contract);
+        if (reg.length !== 1) failures.push(`protocols: ${reg.length} factories registered for ${chooser.contract} (from ${chooser.from}); expected exactly one, so LoadURI's chooser is Gecko's own for an agent page`);
+        else {
+            const instance = reg[0].factory.createInstance('nsIContentDispatchChooser');
+            const handle = bc => { const before = w.rec.stockChooser.length; try { instance.handleURI({}, { spec: 'pbtest:secret-example.com' }, {}, bc, false); } catch (err) { return `threw ${err.message}`; } return w.rec.stockChooser.length - before; };
+            const userBc = { top: { embedderElement: user } };
+            const agentBc = { top: { embedderElement: agent } };
+            if (handle(userBc) !== 1) failures.push('protocols: detector blind: a user overlay\'s external load did not reach the stock chooser');
+            if (handle(null) !== 1) failures.push('protocols: an external load with no browsing context did not reach the stock chooser');
+            if (handle(agentBc) !== 0) failures.push('protocols: an agent overlay\'s external load reached the stock chooser (a dialog or a launch)');
+            if (handle({ top: agentBc.top, parent: agentBc }) !== 0) failures.push('protocols: an external load from a frame inside an agent overlay reached the stock chooser');
+            w.childReplies.set('browser.click', () => { handle(agentBc); return Promise.resolve({ where: 'done', result: {} }); });
+            const reply = await w.agent('d1', 'browser.click', { element: '#mailto' });
+            w.childReplies.delete('browser.click');
+            if (reply?.where !== 'failed' || reply?.code !== 'browser_command_unavailable') failures.push(`protocols: a command whose external load chrome refused answered ${JSON.stringify(reply)}; expected failed browser_command_unavailable`);
+            const pLogs = w.rec.logs.filter(l => l.includes('refused a protocol'));
+            if (pLogs.length !== 1) failures.push(`protocols: a refused external load was logged ${pLogs.length} time(s) for one tab; expected once`);
+            if (w.rec.logs.some(l => l.includes('pbtest:'))) failures.push('protocols: a refusal log line carries the URI');
+        }
+    }
+
+    // The initial document: only browser.goto runs until the first load commits.
+    const v = makeWorld(sliced);
+    const entry = v.addTab('i1', { agent: true });
+    entry.browser.browsingContext.currentWindowGlobal.isInitialDocument = true;
+    for (const method of (v.AGENT_METHODS ?? []).filter(m => m !== 'browser.goto' && SAMPLE_PARAMS[m])) {
+        const before = v.pageWork();
+        const reply = await v.agent('i1', method, SAMPLE_PARAMS[method]);
+        if (reply?.where !== 'failed' || reply?.code !== 'browser_command_unavailable' || v.pageWork() !== before) {
+            failures.push(`initial document: ${method} on an agent overlay still on its initial about:blank answered ${JSON.stringify(reply)} after ${v.pageWork() - before} page call(s); expected failed browser_command_unavailable and none`);
+        }
+    }
+    const navBefore = v.rec.nav.length;
+    await v.agent('i1', 'browser.goto', SAMPLE_PARAMS['browser.goto']);
+    if (v.rec.nav.length === navBefore) failures.push('initial document: browser.goto on the initial about:blank did not navigate, so the tab can never leave it');
+    return { failures, dl, chooser };
+}
+
 /** One plant per derived open path: its receiver body put back to the pre-D-35 answer (null, or the stock route). */
 export function receiverPlants(text) {
     const ast = acorn.parse(text, { ecmaVersion: 'latest', sourceType: 'module' });
@@ -810,16 +969,17 @@ export function loginManagerClause(registry) {
     return { failures: list.includes(AGENT_GROUP) ? [`isolation: Gecko's LoginManager actor is registered for ${AGENT_GROUP}, so saved passwords can fill agent pages`] : [], groups: list };
 }
 
-export async function checkSource(text, childText, dispatchFiles, registry = null, idlText = null) {
+export async function checkSource(text, childText, dispatchFiles, registry = null, idlText = null, upstream = {}) {
     const sliced = sliceSource(text);
     if (sliced.error) return { failures: [sliced.error] };
     const table = pageTableClause(dispatchFiles);
     const login = loginManagerClause(registry);
     const opens = await opensClause(sliced, idlText);
     const openFailures = Array.isArray(opens) ? opens : opens.failures;
-    const failures = [...await runScenarios(sliced, childText, 2), ...await runScenarios(sliced, childText, 1), ...visibilityReads(text), ...table.failures, ...login.failures, ...openFailures];
+    const walls = await wallsClause(sliced, upstream);
+    const failures = [...await runScenarios(sliced, childText, 2), ...await runScenarios(sliced, childText, 1), ...visibilityReads(text), ...table.failures, ...login.failures, ...openFailures, ...walls.failures];
     const native = (() => { try { return Object.keys(makeWorld(sliced).AGENT_NATIVE_ROWS ?? {}).length; } catch { return 0; } })();
-    return { failures: [...new Set(failures)], native, skip: !!table.skip, loginSkip: !!login.skip, paths: opens.paths ?? [], wheres: opens.wheres ?? 0 };
+    return { failures: [...new Set(failures)], native, skip: !!table.skip, loginSkip: !!login.skip, paths: opens.paths ?? [], wheres: opens.wheres ?? 0, walls };
 }
 
 // ---------------------------------------------------------------------------
@@ -854,7 +1014,8 @@ async function selfTest() {
     const fixture = { dispatch: FIXTURE_DISPATCH, abilities: FIXTURE_ABILITIES };
     const registry = '\n  LoginManager: {\n    allFrames: true,\n    messageManagerGroups: ["browsers", ""],\n  },\n';
     const idl = readOptional(IDL);
-    const control = await checkSource(text, child, fixture, registry, idl);
+    const upstream = { sandboxH: readOptional(SANDBOX_H), classify: readOptional(CLASSIFY), exthandler: readOptional(EXTHANDLER) };
+    const control = await checkSource(text, child, fixture, registry, idl, upstream);
     if (control.failures.length) {
         console.error(`${NAME} self-test: FAIL -- the shipped source with the fixture dispatch module is already red, so the plants prove nothing:`);
         control.failures.forEach(f => console.error(`  ${f}`));
@@ -888,7 +1049,18 @@ async function selfTest() {
         ['the InFrame guard dropped', { api: swap('  agentOpenGuard(params?.openerBrowser, "new window");\n', '') }, 'opens: browserDOMWindow.createContentWindowInFrame'],
         ['the in-process guard dropped', { api: swap('  agentOpenGuard(openWindowInfo?.parent?.top?.embedderElement, "new window");\n', '') }, 'opens: browserDOMWindow.createContentWindow answered null'],
         ['the guard answering null instead of throwing', { api: swap('    throw Components.Exception("", Cr.NS_ERROR_ABORT);', '    return null;') }, 'a null or element lets Gecko open a window'],
-        ['the content wall removed', { api: swap('  entry.browser.browsingContext.sandboxFlags |= SANDBOXED_AUXILIARY_NAVIGATION;\n', '') }, 'started without SANDBOXED_AUXILIARY_NAVIGATION'],
+        ['the content wall removed', { api: swap('  entry.browser.browsingContext.sandboxFlags |= SANDBOXED_AUXILIARY_NAVIGATION | SANDBOXED_DOWNLOADS;\n', '') }, 'started without SANDBOXED_AUXILIARY_NAVIGATION'],
+        // D-37 (66-09): the download wall, its detector, the protocol chooser and the initial-document guard.
+        ['the download wall dropped from the flag write', { api: swap('sandboxFlags |= SANDBOXED_AUXILIARY_NAVIGATION | SANDBOXED_DOWNLOADS;', 'sandboxFlags |= SANDBOXED_AUXILIARY_NAVIGATION;') }, "downloads: the agent overlay's first load started without SANDBOXED_DOWNLOADS"],
+        ['the download wall on a different bit', { api: swap('const SANDBOXED_DOWNLOADS = 0x10000;', 'const SANDBOXED_DOWNLOADS = 0x20000;') }, "downloads: the agent overlay's first load started without SANDBOXED_DOWNLOADS"],
+        ['the cancelled-download observer not registered', { api: swap('  Services.obs.addObserver(agentNetworkObserver, "http-on-stop-request");\n', '') }, "downloads: a command during which the wall cancelled the agent overlay's download answered"],
+        ['every cancelled agent channel counted as a download', { api: swap('channel.isDocument && channel.status === Cr.NS_ERROR_ABORT', 'channel.status === Cr.NS_ERROR_ABORT') }, 'downloads: an agent subresource that was cancelled failed the agent command'],
+        ['the settle after a child-run command dropped', { api: swap('      await agentSettleOpens(entry, control, opensRefused);\n', '') }, "downloads: a command whose download the wall cancelled after the child's reply answered"],
+        ['the protocol chooser not installed', { api: swap('  agentNetworkInstall();\n  agentProtocolWallInstall();\n', '  agentNetworkInstall();\n') }, 'protocols: 0 factories registered for @mozilla.org/content-dispatch-chooser;1'],
+        ['the protocol chooser handing agent loads to the stock chooser', { api: swap('          if (agentOpenRefused(browsingContext?.top?.embedderElement, "protocol launch")) {', '          if (false) {') }, "protocols: an agent overlay's external load reached the stock chooser"],
+        ['the protocol chooser refusing every load', { api: swap('          if (agentOpenRefused(browsingContext?.top?.embedderElement, "protocol launch")) {', '          if (agentOpenRefused(browsingContext?.top?.embedderElement, "protocol launch") || true) {') }, "protocols: detector blind: a user overlay's external load did not reach the stock chooser"],
+        ['the initial-document guard dropped', { api: swap('  if (data.method !== "browser.goto" && entry.browser.browsingContext?.currentWindowGlobal?.isInitialDocument === true) {', '  if (false) {') }, 'initial document: browser.click on an agent overlay still on its initial about:blank'],
+        ['the initial-document guard refusing browser.goto too', { api: swap('  if (data.method !== "browser.goto" && entry.browser.browsingContext?.currentWindowGlobal?.isInitialDocument === true) {', '  if (entry.browser.browsingContext?.currentWindowGlobal?.isInitialDocument === true) {') }, 'initial document: browser.goto on the initial about:blank did not navigate'],
         ['a refused open not failing the command', { api: swap('    outcome = agentFailed("browser_command_unavailable");\n  }\n  if (control.stopped) {', '  }\n  if (control.stopped) {') }, 'expected failed browser_command_unavailable'],
         ['a refusal logged every time', { api: swap('  if (!entry.agentOpensLogged.has(path)) {', '  if (true) {') }, 'logged more than once per tab and path'],
         ['the opens detector blinded (no receivers installed)', { api: swap('    win.openLinkIn = (url, where, params) => adoptLinkIn(url, where, params);\n', '') }, 'broken instrument: derived'],
@@ -919,7 +1091,7 @@ async function selfTest() {
             failed++;
             continue;
         }
-        const { failures } = await checkSource(api, child, files, reg, idl);
+        const { failures } = await checkSource(api, child, files, reg, idl, upstream);
         if (failures.some(f => f.includes(expect))) {
             console.log(`  ok  ${name} -> red, naming '${expect}'`);
         } else {
@@ -938,7 +1110,8 @@ async function main() {
     const child = readFileSync(join(REPO_ROOT, CHILD), 'utf8');
     const dispatch = readOptional(DISPATCH);
     const files = dispatch === null ? null : { dispatch, abilities: readOptional(ABILITIES) ?? undefined };
-    const { failures, native, skip, loginSkip, paths, wheres } = await checkSource(text, child, files, readOptional(LOGIN_REGISTRY), readOptional(IDL));
+    const upstream = { sandboxH: readOptional(SANDBOX_H), classify: readOptional(CLASSIFY), exthandler: readOptional(EXTHANDLER) };
+    const { failures, native, skip, loginSkip, paths, wheres, walls } = await checkSource(text, child, files, readOptional(LOGIN_REGISTRY), readOptional(IDL), upstream);
     if (failures.length) {
         console.error(`${NAME}: FAIL -- the chrome side of the Orca agent bridge can reach a tab it did not create as an agent tab, or the drift below.`);
         failures.forEach(f => console.error(`  ${f}`));
@@ -950,7 +1123,9 @@ async function main() {
         'agent overlays sit in their own message manager group with no autocomplete popup and answer only alert/confirm/prompt dialogs; ' +
         `unshown agent tabs are parked, never hold the focus, and user tabs never park; every visibility read goes through overlayShownToUser; ` +
         `D-35: ${paths.length} open paths derived (${paths.join(', ')}) open nothing for an agent opener at any of ${wheres} OPEN_* locations or ${LINK_WHERES.length} link wheres, ` +
-        `refusals log once without the URL and fail the command in flight, and agent overlays load with SANDBOXED_AUXILIARY_NAVIGATION${skip ? `; ${PAGE_TABLE_SKIP}` : '; page table compared'}` +
+        `refusals log once without the URL and fail the command in flight, and agent overlays load with SANDBOXED_AUXILIARY_NAVIGATION; ` +
+        `D-37: agent overlays load with ${walls.dl.names.join(', ')} (from ${walls.dl.from}) and a cancelled agent download fails the command, ` +
+        `the ${walls.chooser.contract} chooser (from ${walls.chooser.from}) refuses agent external loads and passes user ones, and only browser.goto runs on the initial about:blank${skip ? `; ${PAGE_TABLE_SKIP}` : '; page table compared'}` +
         (loginSkip ? '; login-manager group clause SKIP (no upstream/)' : '; the pinned LoginManager actor groups exclude the agent group'));
     return 0;
 }

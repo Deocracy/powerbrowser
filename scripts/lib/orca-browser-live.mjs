@@ -8,7 +8,8 @@
 //   - a loopback fixture server: /agent (a red 40x40 target at CSS (100, 80), a text
 //     input, a checkbox, a button with a click counter), /user (an input and a focus/blur
 //     log), /cookie (sets a cookie from the page), /stock, /opener (66-08: a target=_blank link,
-//     a plain link and a target=_blank form) and its request log;
+//     a plain link and a target=_blank form), and (66-09) /dlpage with PDF attachments, /proto with protocol links and
+//     /slow, whose response headers are held, and its request log;
 //   - an Orca CLI runner that never throws and keeps error.code and error.message apart
 //     (Pitfall 8: a host failure reaches the CLI as runtime_error with the code as message),
 //     in an environment built from scratch (PATH, HOME, ORCA_USER_DATA, ORCA_USER_DATA_PATH);
@@ -59,6 +60,19 @@ export function prerequisites(root = REPO_ROOT) {
     return { skip: base.skip, fail: base.fail };
 }
 
+/** 66-09: the external-protocol fixture: a scheme whose handler runs without asking, one that asks, and a probe word. */
+export const PROTOCOL_RUN = 'pbrun';
+export const PROTOCOL_ASK = 'pbask';
+export const PROTOCOL_PROBE = 'pb-protocol-probe';
+/** 66-09: how long /slow holds its response headers (the first-document clause runs inside this window). */
+export const SLOW_HEADERS_MS = 10000;
+// A one-page PDF served as an attachment: Gecko saves it and, its preferred action being handleInternally, opens it.
+const PDF = '%PDF-1.1\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj 3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 100 100]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n';
+function pdfAttachment(res, name) {
+    res.writeHead(200, { 'content-type': 'application/pdf', 'content-disposition': `attachment; filename="${name}"` });
+    res.end(PDF);
+}
+
 const LOGGER = `<script>window.__log=[];for(const t of ['focus','blur','click','input'])addEventListener(t,e=>__log.push({type:e.type,target:(e.target&&(e.target.id||e.target.nodeName))||'window'}),true);</script>`;
 
 /** The fixture pages, in serveNavPages' spec form. */
@@ -79,6 +93,21 @@ export function fixturePages() {
             title: 'PB opener fixture',
             body: '<style>body{margin:0}a,button{position:absolute;left:10px;font-size:20px}</style><a id="blank" href="/agent2?via=blank" target="_blank" style="top:10px">blank</a><a id="plain" href="/agent2?via=plain" style="top:60px">plain</a><form id="f" action="/agent2" target="_blank"><input type="hidden" name="via" value="form"><button id="fs" type="submit" style="top:110px">form</button></form>',
         },
+        // 66-09 (D-37): clause (o) downloads (two links to PDF attachments), (p) external protocols (mailto:, a scheme
+        // with a granted handler, a scheme that asks) and (q) a first load whose headers are held, so the overlay stays
+        // on its initial about:blank.
+        '/dlpage': {
+            title: 'PB download fixture',
+            body: '<style>a{position:absolute;left:10px;font-size:20px}</style><a id="user" href="/pb-user.pdf" style="top:10px">user</a><a id="agent" href="/pb-agent.pdf" style="top:60px">agent</a>',
+        },
+        '/pb-user.pdf': { raw: (req, res) => pdfAttachment(res, 'pb-user.pdf') },
+        '/pb-agent.pdf': { raw: (req, res) => pdfAttachment(res, 'pb-agent.pdf') },
+        '/pb-agent-goto.pdf': { raw: (req, res) => pdfAttachment(res, 'pb-agent-goto.pdf') },
+        '/proto': {
+            title: 'PB protocol fixture',
+            body: `<style>a{position:absolute;left:10px;font-size:20px}</style><a id="mailto" href="mailto:${PROTOCOL_PROBE}" style="top:10px">mail</a><a id="run" href="${PROTOCOL_RUN}:${PROTOCOL_PROBE}" style="top:60px">run</a><a id="ask" href="${PROTOCOL_ASK}:${PROTOCOL_PROBE}" style="top:110px">ask</a>`,
+        },
+        '/slow': { raw: (req, res) => setTimeout(() => { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<!doctype html><title>PB slow fixture</title><p>slow</p>'); }, SLOW_HEADERS_MS) },
         // 66-06: a login form for the saved-login clause (l); it posts to a page that exists.
         '/login': { title: 'PB login fixture', body: '<form id="f" method="post" action="/agent2"><input id="u" name="u" autocomplete="username"><input id="p" name="p" type="password" autocomplete="current-password"><button id="go" type="submit">Sign in</button></form>' },
     };

@@ -604,11 +604,13 @@ export function logoSelectorsFor(version) {
 }
 
 /**
- * P67-23: the PowerBrowserOrcaLogo parent's answer. Only a document on orcad's own port, not embedded by the shell's
- * Theia browser, running an Orca version with selectors, gets { src, alt, selectors }; every other sender gets null.
+ * P67-23: the PowerBrowserOrcaLogo parent's answer. Only a document on orcad's own port while Orca is ready, not
+ * embedded by the shell's Theia browser, running an Orca version with selectors, gets { src, alt, selectors }; every
+ * other sender gets null. D-37 (67-VERIFICATION): the port alone is not orcad's while Orca is not ready (failed with
+ * port-in-use means another program holds it), so the state is part of the gate.
  */
-export function logoAnswerFor({ senderPort, orcaPort, embeddedByShell, orcaVersion, markDataUri } = {}) {
-  if (!Number.isInteger(senderPort) || !Number.isInteger(orcaPort) || senderPort !== orcaPort || embeddedByShell !== false) {
+export function logoAnswerFor({ senderPort, orcaPort, orcaState, embeddedByShell, orcaVersion, markDataUri } = {}) {
+  if (orcaState !== "ready" || !Number.isInteger(senderPort) || !Number.isInteger(orcaPort) || senderPort !== orcaPort || embeddedByShell !== false) {
     return null;
   }
   const selectors = logoSelectorsFor(orcaVersion);
