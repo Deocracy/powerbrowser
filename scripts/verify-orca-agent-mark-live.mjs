@@ -17,8 +17,9 @@
 //  4. A CLI click again, then a click on the chrome bar's Stop: the mark is gone, the
 //     widget records stopped, and the next CLI command fails with browser_owner_unavailable
 //     in error.message (error.code is runtime_error, Pitfall 8).
-//  5. Only after step 2 proved the mark: a second stock window through openStockTab has no
-//     mark element and a node set equal to the baseline.
+//  5. Only after step 2 proved the mark: openStockTab again (the GUI-01 command puts the page
+//     in the existing stock window as a tab, not in a second window, 66-06), and that stock
+//     window has no mark element and a node set equal to the baseline.
 // Each judgment is a pure exported verdict over the recorded observation.
 //
 // Tier: full, under flock /home/chris/coding/Power-Browser/.git/pb-live.lock; the same named
@@ -97,7 +98,7 @@ async function liveRun(log) {
         const next = await ctx.cli('click', '--element', '#btn', '--page', page);
         order.push('stop');
 
-        const second = await ctx.openStock([first]);
+        const second = await ctx.openStock();
         const stock = await ctx.stockChrome(second);
         order.push('stockCheck');
         return {
