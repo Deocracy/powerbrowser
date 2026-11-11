@@ -4082,6 +4082,13 @@ run_own_checks() {
     # The self-test plants an added Orca reason, a removed class, a class without copy, an unmapped step and more.
     "orca-failure-classes|node $REPO_ROOT/scripts/verify-orca-failure-classes.mjs"
     "orca-failure-classes-self-test|node $REPO_ROOT/scripts/verify-orca-failure-classes.mjs --self-test"
+    # orca-credential-store derives from the pin the plaintext override's name and trigger value, isTemporaryKeyDir's
+    # roots and the written key-record backends, and requires PB's override pair, a superset of the roots, the name off
+    # orcad's allowlist and the privacy.html data-orca-credential-protection sentence while only host-file is written.
+    # orca-credential-store-live-self-test is the live row's pure verdicts (null report, pending string, walker blind).
+    "orca-credential-store|node $REPO_ROOT/scripts/verify-orca-credential-store.mjs"
+    "orca-credential-store-self-test|node $REPO_ROOT/scripts/verify-orca-credential-store.mjs --self-test"
+    "orca-credential-store-live-self-test|node $REPO_ROOT/scripts/verify-orca-credential-store-live.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6788,6 +6795,12 @@ run_own_checks() {
       # lane p66-01's built host bundle.
       "orca-browser-agent-live|node $REPO_ROOT/scripts/verify-orca-browser-agent-live.mjs"
       "orca-agent-mark-live|node $REPO_ROOT/scripts/verify-orca-agent-mark-live.mjs"
+      # NEW (67-01, RUN-09, P67-16..P67-20): orca-credential-store-live. Positive control first: the built orcad run
+      # through scripts/lib/orca-run.mjs on a temporary data root reports the pinned disposable-profile string; then PB on
+      # a normal profile reports a pinned host-key string and the /proc walker finds orcad before steps 3 and 4 judge its
+      # absence for a temporary profile and the plaintext override. flock /home/chris/coding/Power-Browser/.git/pb-live.lock,
+      # ORCA_* unset; HOME is the developer's own, so orcad writes the user's ~/.orca key folder (owner item).
+      "orca-credential-store-live|node $REPO_ROOT/scripts/verify-orca-credential-store-live.mjs"
     )
   fi
 
