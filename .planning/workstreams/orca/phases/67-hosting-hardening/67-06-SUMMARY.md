@@ -2,7 +2,7 @@
 phase: 67-hosting-hardening
 plan: 06
 subsystem: coordinator (merges, builds, live proofs, brand rows, tracking)
-status: blocked
+status: complete  # Task 2 decided by D-36 (coordinator, option-a); Task 3 remainder done by 67-07
 tags: [orca, coordinator, RUN-06, RUN-07, RUN-08, RUN-09, INJ-01, task-2-reached]
 requires: [Phases 64-66 merged (p66-* merges), hotfix-sidecar-origin merged (abca6309), lane SUMMARYs 67-01..67-05 committed]
 provides:
@@ -48,6 +48,11 @@ plan_head_after: a308e0c4  # measured before this file's own commit
 ---
 
 # Phase 67 Plan 06: Coordinator Summary (stopped at Task 2)
+
+**Status update (67-07, 2026-11-11):** Task 2 was decided by coordinator ruling D-36 (option-a). Gap-closure plan
+67-07 fixed the restart re-pair (WINDOWS 45) and the remount leg (WINDOWS 46), with orca-failure-page-live and
+orca-landing-logo-live PASS. It also finished this plan's Task 3 remainder: seam and egress rows, FEATURES.md T-8,
+ROADMAP, REQUIREMENTS (RUN-06..RUN-09 and INJ-01 complete), STATE and WINDOWS. See 67-07-SUMMARY.md.
 
 All five lanes are merged, built and checked. Criteria 2, 3 and 4 are proven live. Criterion 5 is proven except
 the remount leg. Criterion 1 is not proven: after orcad is killed, Orca's own client is refused shortly after the
