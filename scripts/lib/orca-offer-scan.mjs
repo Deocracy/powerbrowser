@@ -193,3 +193,73 @@ export function formatScan(result) {
     for (const o of result.origins ?? []) lines.push(`origin ${o.origin}: ${o.read ? `marker ${o.hasMarker ? 'found' : 'absent'}, ${RUNTIME_ENV_KEY} ${o.hasRuntimeKey ? 'present' : 'absent'}` : 'not read'}`);
     return lines;
 }
+
+// ---------------------------------------------------------------------------
+// Phase 67 (RUN-07; P67-08, P67-10, P67-11): collectors, one per sink, on the needles above. A collector is
+// { sink, control, read }: control(ctx) is true when the sink's harmless marker travelled the same path and was
+// found, read(ctx) returns { chunks, faults } (chunks: Buffers or strings scanned for needles; faults: named
+// findings that are not a needle, such as a folder mode). runCollector never judges an absence without its
+// control: a collector whose control was not found is "collector blind", never green (CLAUDE.md rule 1).
+
+/** Needle occurrences over a list of Buffers or strings. */
+export function countMatches(chunks, needles) {
+    let n = 0;
+    for (const chunk of chunks ?? []) {
+        if (chunk === null || chunk === undefined) continue;
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8');
+        for (const { bytes: needle } of needles) n += occurrences(bytes, needle);
+    }
+    return n;
+}
+
+/** { sink, blind, matches, faults, unreadable }: counts and names only, never a needle or a read value. */
+export function runCollector(collector, ctx) {
+    let control = false;
+    let got = { chunks: [], faults: [] };
+    let unreadable = false;
+    try { control = collector.control(ctx) === true; } catch { control = false; unreadable = true; }
+    try { got = collector.read(ctx) ?? got; } catch { unreadable = true; }
+    return { sink: collector.sink, blind: !control, matches: countMatches(got.chunks, ctx.needles ?? []), faults: got.faults ?? [], unreadable };
+}
+
+/** One output line per collector result and whether it is red. */
+export function collectorLine(r) {
+    const reasons = [];
+    if (r.blind) reasons.push(`collector blind (control not found${r.unreadable ? ', sink unreadable' : ''})`);
+    if (r.matches) reasons.push(`offer found (${r.matches} match${r.matches === 1 ? '' : 'es'})`);
+    for (const f of r.faults) reasons.push(f);
+    return reasons.length
+        ? { red: true, line: `sink ${r.sink}: FAIL -- ${reasons.join('; ')}` }
+        : { red: false, line: `sink ${r.sink}: control found, 0 matches` };
+}
+
+/** A scratch copy of a SQLite file and its -wal, removed after fn(path, walBytes) returns. */
+function withDbCopy(db, fn) {
+    const tmp = mkdtempSync(join(tmpdir(), 'orca-offer-scan-db-'));
+    try {
+        const copy = join(tmp, 'copy.sqlite');
+        copyFileSync(db, copy);
+        const wal = existsSync(`${db}-wal`) ? readFileSync(`${db}-wal`) : null;
+        if (wal) copyFileSync(`${db}-wal`, `${copy}-wal`);
+        return fn(copy, wal);
+    } finally {
+        rmSync(tmp, { recursive: true, force: true });
+    }
+}
+
+/** places.sqlite's moz_places url and title texts (read through node:sqlite on a copy) and the raw -wal bytes. */
+export function readHistory(profileDir) {
+    return withDbCopy(join(profileDir, 'places.sqlite'), (copy, wal) => {
+        const conn = new DatabaseSync(copy, { readOnly: true });
+        let rows;
+        try { rows = conn.prepare('SELECT url, title FROM moz_places').all(); } finally { conn.close(); }
+        return { texts: rows.flatMap((r) => [r.url, r.title]).filter((x) => typeof x === 'string'), wal };
+    });
+}
+
+/** History (P67-10): moz_places through node:sqlite plus the raw WAL; control: the marker URL in a moz_places row. */
+export const historyCollector = Object.freeze({
+    sink: 'history',
+    control: (ctx) => !!ctx.marker && readHistory(ctx.profileDir).texts.some((t) => t.includes(ctx.marker)),
+    read: (ctx) => { const h = readHistory(ctx.profileDir); return { chunks: [...h.texts, h.wal], faults: [] }; },
+});
