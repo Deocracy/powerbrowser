@@ -6,15 +6,17 @@
  *
  * The Orca mode docks both containers from its rules row (mode-service.ts,
  * ensureInArea); modes and tab-uris spell the container ids as literals. The
- * Agents part is added and removed at run time by OrcaSidePanelSync (P65-12).
+ * Agents part is added and removed at run time by OrcaSidePanelSync (P65-12),
+ * bound here with the factories.
  * No command, menu, toolbar item or keybinding is registered here: no
  * toggleCommandId, so the only PB-authored strings are the 'Orca' labels.
  */
 import { injectable, interfaces } from '@theia/core/shared/inversify';
 import {
-    AbstractViewContribution, ViewContainer, WidgetFactory, WidgetManager, bindViewContribution, codicon
+    AbstractViewContribution, FrontendApplicationContribution, ViewContainer, WidgetFactory, WidgetManager, bindViewContribution, codicon
 } from '@theia/core/lib/browser';
 import { OrcaSideViewOptions, OrcaSideViewWidget } from './orca-side-view-widget';
+import { OrcaSidePanelSync } from './orca-side-panel-sync';
 
 export const ORCA_LEFT_CONTAINER_ID = 'powerbrowser-orca-view-container';
 export const ORCA_RIGHT_CONTAINER_ID = 'powerbrowser-orca-right-view-container';
@@ -88,4 +90,6 @@ export function bindOrcaSidePanel(bind: interfaces.Bind): void {
     ]);
     bindViewContribution(bind, OrcaLeftContainerContribution);
     bindViewContribution(bind, OrcaRightContainerContribution);
+    bind(OrcaSidePanelSync).toSelf().inSingletonScope();
+    bind(FrontendApplicationContribution).toService(OrcaSidePanelSync);
 }

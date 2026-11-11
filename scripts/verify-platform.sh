@@ -3996,6 +3996,10 @@ run_own_checks() {
     # Organising key, tab chrome in Theia, a blind detector, close, reload, route, offer, OWNER-ITEM), plus a child-Node
     # import-silence check. Hermetic.
     "orca-tabs-live-self-test|node $REPO_ROOT/scripts/verify-orca-tabs-live.mjs --self-test"
+    # NEW (65-03, TAB-09, P65-15): orca-no-pb-add-project. Vocabulary from Orca's sidebar (translate defaults matching
+    # 'add (a )?project' and the add-repo entry); PB set from theia/extensions/*/src and the chrome bar; empty intersection.
+    "orca-no-pb-add-project|node $REPO_ROOT/scripts/verify-orca-no-pb-add-project.mjs"
+    "orca-no-pb-add-project-self-test|node $REPO_ROOT/scripts/verify-orca-no-pb-add-project.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
