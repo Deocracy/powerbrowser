@@ -5,15 +5,15 @@ current_phase: 59
 current_phase_name: Carry-forward from v1.5 and v1.6
 status: executing
 stopped_at: Completed 67-07-PLAN.md
-last_updated: "2026-11-11T20:00:55.608Z"
+last_updated: "2026-11-11T21:08:06.463Z"
 last_activity: 2026-11-08
 last_activity_desc: Phase 59 execution started
-state_head: b6552490baec9dc0b7a81ebfe49e0853aacdd4e4
+state_head: a625378d3323a73fe4e1b4cebedafa2ac8140d57
 progress:
   total_phases: 10
   completed_phases: 4
   total_plans: 63
-  completed_plans: 55
+  completed_plans: 59
 milestone_name: Orca integration
 ---
 
@@ -111,6 +111,9 @@ Owner decisions are in DECISIONS.md. The ones that shape the phase order:
 - P67-21: live profiles are repo-local (.mozbuild/pb-live-profiles/), because OrcaService refuses a profile under a temporary folder. P67-23: the PowerBrowserOrcaLogo actor puts the PB mark on Orca's landing tile on orcad-origin documents only.
 - D-36 (coordinator ruling in auto mode, 2026-11-11; the owner may override): the hosted Orca client keeps its environment id across an orcad restart. Each session-only pairing closes Orca's active clients and becomes Orca's active environment (as Orca's addFromPairingCode does); the last pairing, token blanked, stays in page memory as previousEnvironment. The pane observer holds every hosted tab through a re-pair (onWillRepair, rehold()). P65-17 unchanged: nothing in Theia-origin storage, a reload pairs under a new id.
 - Phase 67 gaps closed (67-07, 2026-11-11): orca-failure-page-live PASS with every induction and the restart clause (same id, verified, no stranded-environment line, a CLI terminal becomes a tab); orca-landing-logo-live PASS with the remount leg (Orca's own tab close button); WINDOWS 45 and 46 fixed.
+- [Phase 68]: 68-06 Task 2: the Linux package was built from the dev objdir (POWERBROWSER_OBJDIR=objdir, package-linux.sh in nix develop .#firefox) because the Safe Browsing key directory the release mozconfig needs is absent on this host; the packaged proofs ran on it and WINDOWS entry 30 stays open for the container release tarball
+- [Phase 68]: 68-06: OrcaService falls back to port 26768 when powerbrowser.orca.port is unset, because a package carries no powerbrowser-sidecar.js (dev-tree prefs, not in the package manifest); without it every packaged Orca start failed (fix 21898a67)
+- [Phase 68]: 68-05: seam 010 (ORCA_DISABLE_INSTALLED_ELECTRON_BROWSER) is the browser-provider upstream offer, exported with a new Orca test; no web-entry seam exists (WINDOWS 52), so orca-upstream-prs stays red naming web-entry until the owner rules on that class
 
 ### Pending Todos
 
@@ -135,6 +138,7 @@ None yet.
 - Agent-tab visits enter the user's Places history: the agent container scopes cookies and storage only.
 - Phase 67 note: RUN-06 covers "browser host did not attach" (P67-36). Phase 68 note: add orca-browser-abilities, orca-browser-entry-points, orca-browser-host-bundle and orca-snapshot-fixtures to the weekly re-pin job; there is no browser-provider seam to offer upstream under S2 (D-27).
 - **Resolved by D-36 and 67-07 (2026-11-11): orca-failure-page-live passes every induction, the restart clause included; WINDOWS 45 fixed.** Former text: Phase 67 (67-06 Task 2, owner decision): orca-failure-page-live criterion 1 not proven - after orcad is killed, Orca's client is refused after the automatic re-pair, clears its stored environment, and the pane bundle's repair() re-pairs under a new environment id that strands its sessions; root cause in orca-overlay pb-session-pairing.ts, outside Phase 67's files (WINDOWS 45). Options: a fix the Phase 65 repair at source, b record restart recovery as not delivered, c re-plan lane p67-03's recovery
+- Phase 68 (68-06, WINDOWS entries): 48 macOS release artifact with Orca (Phase 55 items 8, 9); 49 macOS smoke test; 50 Windows smoke test (CF-10); 51 upstream issue and PR for seam 010; 52 no web-entry seam to export (owner ruling); 53 Windows claude-wrapper launcher; 54 packaged live rows ended by a signal leave orcad running; 55 orca-tabs-live g3 (TAB-04). Entry 44 (licence rulings) and entry 30 (container release tarball) stay open.
 
 ## Deferred Items
 
@@ -161,3 +165,4 @@ Resume file: None
 | 65 | executed by 65-05; TAB-05, TAB-07, TAB-08, TAB-09 complete; orca-tabs-live g3 red (TAB-04); owner items P65-01, P65-09 (660 px), CA-07, P65-06, P65-17, populated orchestration/creation surfaces, launch-into-Orca-mode egress (65-05-SUMMARY.md) | end-of-milestone pass (D-18): `/gsd-verify-work 65 --ws orca`; the owner items; a g3 drive with a second client that receives host frames |
 | 66 | executed by 66-06, 66-07 and 66-08; BRW-02..BRW-05 complete (66-07: clause (j) PASS, D-34; 66-08: agent-opened windows refused, clause (n) PASS, D-35, owner item: popups an agent workflow needs, such as OAuth, as agent overlays); orca-tabs-live stage tab-groups-cross-client (g3) still red as before Phase 66; the store row's title stays "New Tab" (page metadata does not update it); owner items: copy review of the four mark/Stop strings, clause (f) decoy SKIP on a host with an installed Orca, CSP-strict pages refuse eval, parked-tab timer throttling (O1), agent-tab dialogs over the IDE (O2), same-origin iframes not walked by snapshot, the delta-size approximation, no host re-attach after orcad restarts (P67-36), agent history in Places, spike 005 owner note (S2 over S1), P66-08, P66-11, P66-22, P66-24, P66-26; visual mark check in light and dark themes, a real-worktree agent session with the user working in another tab, the privacy paragraph wording (66-CONTEXT Deferred Verification) | end-of-milestone pass (D-18): `/gsd-verify-work 66 --ws orca`; the owner items; re-run orca-browser-agent-live |
 | 67 | executed by 67-06 and 67-07; RUN-06..RUN-09 and INJ-01 complete; orca-tabs-live g3 red as before; owner items P67-17, P67-18, P67-19, P67-21, CA-07, live rows on the real ~/.orca, P65-06, T-61-04, D-35 popups, the external-protocol dialog, the browser-host page class, the copy, D-36 (67-06-SUMMARY.md "Owner items") | end-of-milestone pass (D-18): `/gsd-verify-work 67 --ws orca`; the failure page in light and dark themes and its buttons, the PB mark on Orca's dark landing tile, the protection sentence and the two RUN-09 sentences |
+| 68 | executed by 68-01..68-10 (68-06 coordinator); BEXT-01 and BEXT-02 complete; OVL-02, OVL-03, OVL-06, PLAT-01, PLAT-02 pending (PLAT-02 Linux pass 35/38: orca-tabs-live g3 red, WINDOWS 55); package built from the dev objdir, no container release tarball (WINDOWS 30) | end-of-milestone pass (D-18): pair the stock Android app beside the orca-mobile-skew output (P68-17); open the upstream issue and PR for seam 010 and record the URL, rule on the web-entry class (WINDOWS 51, 52); the first live weekly re-pin tick, the bump PR with auto-merge armed and the owner's approving review; a release.yml dispatch producing Linux and Windows artifacts with Orca (first real runs of windows-orca and the macOS jobs; container release tarball, WINDOWS 30); macOS and Windows smoke tests (WINDOWS 48, 49, 50); ruling 68-B and the 68-A terms check for the SDK extension (D-30) and the GPL-3.0 section 6 reading for uBlock Origin (P68-39) (WINDOWS 44); reinstalling the SDK extension after an uninstall (no affordance in v1.7, 68-09); A-P1 confirmation (the re-pin carries THIRD-PARTY-NOTICES.txt); the Windows claude-wrapper launcher (WINDOWS 53); packaged live rows that end PowerBrowser by a signal leave orcad running (WINDOWS 54) |

@@ -314,7 +314,7 @@ Plans:
   4. Linux, macOS and Windows artifacts contain orcad and the overlaid client, with the node-pty prebuild built per target on that target's own runner. The Flatpak manifest grants `--filesystem=home`. Each of these checks is one `verify-platform.sh` row.
   5. The live checks pass on Linux. macOS and Windows smoke results are recorded when a host is available (D-24).
 
-**Plans**: 7/10 plans executed (68-06 in progress: Task 1 wave-1 merges done; 68-08, 68-05 not launched)
+**Plans**: 10/10 plans executed (68-06 complete 2026-11-11: all nine lanes merged, dev-objdir package proven, PLAT-02 Linux pass 35/38; BEXT-01 and BEXT-02 complete; OVL-02, OVL-03, OVL-06, PLAT-01, PLAT-02 pending owner and host items, WINDOWS 44, 48-55)
 
 Plans:
 **Wave 1** *(executable now; seven lanes in parallel)*
@@ -327,11 +327,11 @@ Plans:
 - [x] 68-09-PLAN.md — lane p68-09: the pre-installed, removable Claude Agent SDK Theia extension: bundled-extensions/claude-agent-sdk, download-plugins assembly into plugins/.user, @powerbrowser/bundled-extensions seed participant, bundled-extensions rows (BEXT-01)
 
 **Wave 2** *(coordinator-launched lanes: launched_by: coordinator in each plan's frontmatter; never started by an executor on its own; 68-06 launches each and waits for its SUMMARY)*
-- [ ] 68-08-PLAN.md — lane p68-08, launched by 68-06 Task 1 after the 68-01, 68-10, 68-04 and 68-09 merges (Phase 67 not needed): uBlock Origin pre-installed through distribution/extensions (pinned AMO-signed XPI, staging in the three package scripts), filter-list hosts allowlisted, live install/filter/relaunch/disable/remove proof, Bundled extensions notices and inventory rows (BEXT-02)
-- [ ] 68-05-PLAN.md — lane p68-05, launched by 68-06 Task 2 after Phase 67 and Task 1's last commit: final seam classes, upstream tests and descriptions, one export per D-27 class, orca-upstream-prs, owner hand-off (OVL-06)
+- [x] 68-08-PLAN.md — lane p68-08, launched by 68-06 Task 1 after the 68-01, 68-10, 68-04 and 68-09 merges (Phase 67 not needed): uBlock Origin pre-installed through distribution/extensions (pinned AMO-signed XPI, staging in the three package scripts), filter-list hosts allowlisted, live install/filter/relaunch/disable/remove proof, Bundled extensions notices and inventory rows (BEXT-02)
+- [x] 68-05-PLAN.md — lane p68-05, launched by 68-06 Task 2 after Phase 67 and Task 1's last commit: final seam classes, upstream tests and descriptions, one export per D-27 class, orca-upstream-prs, owner hand-off (OVL-06)
 
 **Wave 3** *(coordinator; starts when the seven wave-1 SUMMARYs exist, finishes after 68-08 and 68-05 merge)*
-- [ ] 68-06-PLAN.md — coordinator: merge 03, 04, 01, 10, 07, 09, 02, then launch and merge 08 (Task 1), then after Phase 67 launch and merge 05 (Task 2; seams.json and verify-platform.sh ordering by its merge rule (7)), identity re-pin, brand rows, container package, orca-packaged-live, PLAT-02 Linux pass, WINDOWS.md entries, tracking
+- [x] 68-06-PLAN.md — coordinator: merge 03, 04, 01, 10, 07, 09, 02, then launch and merge 08 (Task 1), then after Phase 67 launch and merge 05 (Task 2; seams.json and verify-platform.sh ordering by its merge rule (7)), identity re-pin, brand rows, container package, orca-packaged-live, PLAT-02 Linux pass, WINDOWS.md entries, tracking
 
 Open items for this phase:
 - The macOS half of PLAT-01 needs a macOS PowerBrowser build. v1.6 deferred macOS packaging (workstream `deploy`, Phase 55).
@@ -356,4 +356,4 @@ Phases execute in numeric order: 59 → 60 → 61 → 62 → 63 → 64 → 65 �
 | 65. Orca workspace in Theia | 5/5 | Complete (human items deferred; verified 8/8) | 2026-11-10 |
 | 66. PowerBrowser web tabs as Orca's browser | 8/8 | In Progress | - |
 | 67. Hosting hardening | 7/7 | In Progress (67-07 gap closure executed; verify-work pending) | - |
-| 68. Three-OS artifacts, weekly re-pin and upstream seams | 7/10 (68-06 in progress) | In Progress | - |
+| 68. Three-OS artifacts, weekly re-pin and upstream seams | 10/10 | In Progress | - |

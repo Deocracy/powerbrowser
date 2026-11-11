@@ -2,10 +2,10 @@
 phase: 68-three-os-artifacts-weekly-re-pin-and-upstream-seams
 plan: 06
 subsystem: coordination
-status: in-progress
+status: complete
 tags: [merge, coordinator, brand-rows, licence, re-pin, live]
-requires: ["68-01", "68-02", "68-03", "68-04", "68-07", "68-09", "68-10"]
-provides: ["wave-1 lanes on ServerDestroyer/v1.7-Orca-integration", "identity re-pin PASS on the merged tree", "WINDOWS.md entry 44"]
+requires: ["68-01", "68-02", "68-03", "68-04", "68-05", "68-07", "68-08", "68-09", "68-10"]
+provides: ["all nine Phase 68 lanes on ServerDestroyer/v1.7-Orca-integration", "identity re-pin PASS on the merged tree", "Linux package with <GreD>/orca (dev objdir) and its packaged and live proofs", "PLAT-02 Linux pass", "WINDOWS.md entries 44 and 48-55"]
 affects: [scripts/verify-platform.sh, inventory/brand-tokens.json, inventory/licence-allowlist.json, orca-overlay/seams.json, .planning/WINDOWS.md]
 key-files:
   created:
@@ -20,27 +20,47 @@ key-files:
     - scripts/verify-macos-package-payload.mjs
     - scripts/rebase-orca.sh
     - scripts/verify-orca-mobile-protocol.mjs
+    - powerbrowser/shell/OrcaService.sys.mjs
+    - scripts/verify-orca-packaged-live.mjs
+    - powerbrowser/endpoint-allowlist.json
+    - website-staging/privacy.html
+    - .planning/workstreams/orca/REQUIREMENTS.md
+    - .planning/workstreams/orca/STATE.md
+    - .planning/workstreams/orca/ROADMAP.md
 decisions:
   - "P68-37: wave 1 (lanes 03, 04, 01, 10, 07, 09, 02) merged into v1.7 on 2026-11-10; 08 and 05 remain coordinator-launched"
   - "p68-10 merged despite its BLOCKER line, by the coordinator's instruction, with the lane's one-line rule-8 fix as fix(68-06)"
   - "The re-pin replay's pnpm run carries --config.verify-deps-before-run=false so it never re-installs orca/node_modules outside build-orca.sh's knobs"
   - "Open owner licence items (68-B, the 68-A terms check, the uBlock Origin GPL-3.0 s6 reading) are WINDOWS.md entry 44; the release guard stays closed"
+  - "Task 2's package is the dev-objdir fallback: no Safe Browsing key directory exists on this host; entry 30 and the two orca-packaged rows' exclusions stay"
+  - "OrcaService falls back to port 26768: a package carries no powerbrowser-sidecar.js, so the 0 fallback failed every packaged Orca start (fix 21898a67)"
+  - "PLAT-02 stays Pending: the Linux pass is 35/38 (orca-tabs-live g3, WINDOWS 55; two owner-gated rows); BEXT-01 and BEXT-02 complete on recorded PASS"
 plan_head_before: b37ad5b17fe84ae995970b1c0126fdd6dcfedc87
+plan_head_after: 0458c0e2
+commits: 216
+commits_note: "git rev-list --count b37ad5b1..0458c0e2 = 216 (116 first-parent); the range also holds Phases 64-67's merges and other sessions' commits. 68-06's own: 7 wave-1 merges, p68-08 and p68-05 merges, 6 fix(68-06), 0458c0e2, 3 docs(68-06) including the one adding this file"
 plan_head_task1_last_code: 7e31d172
 metrics:
-  completed: 2026-11-10
-  tasks_done: "Task 1 without step 3b (1 of 3 tasks, partial)"
+  completed: 2026-11-11
+  tasks_done: "3 of 3"
 ---
 
-# Phase 68 Plan 06: Coordinator Summary (Task 1 of 3, in progress)
+# Phase 68 Plan 06: Coordinator Summary
 
 Task 1's wave-1 half is done. All seven wave-1 lanes are merged by full ref in the plan order. The
 identity re-pin replays every stage on the merged tree. Orca-family brand rows were re-measured, and
 the open owner licence items are recorded as WINDOWS.md entry 44 with their exclusion rows. The
 three live rows the lanes could not run all pass, and `--quick` is green (365 PASS, 0 FAIL).
 
-**Pending.** Task 1 step (3b), launching and merging lane p68-08, was not run: the caller excluded it
-for this session. Tasks 2 and 3 wait for Phase 67. Lane p68-05 was not launched.
+**Completed 2026-11-11 (Task 1 step 3b, Tasks 2 and 3).** Lane p68-08 was merged (6d3c32c4) with
+its privacy-page coordinator items (28124115). Lane p68-05 ran in its own Orca worktree, executed
+by the coordinator with no Orca agent, and was merged (8f766a69). The Linux package was built from
+the dev objdir, because this host has no Safe Browsing key directory. orca-packaged-tree,
+orca-packaged-live and the BEXT packaged rows pass on it. The packaged live run found that the
+package never started Orca; fix 21898a67 corrects that. The PLAT-02 Linux pass ran 38 derived rows:
+35 PASS and 3 red, none of them caused by Phase 68 code. Entries 48-55 record what this host cannot
+prove. BEXT-01 and BEXT-02 are complete. OVL-02, OVL-03, OVL-06, PLAT-01 and PLAT-02 stay Pending,
+each with its deferred items named.
 
 ## Lanes
 
@@ -53,8 +73,8 @@ for this session. Tasks 2 and 3 wait for Phase 67. Lane p68-05 was not launched.
 | p68-07 | /home/chris/orca/workspaces/Power-Browser/p68-07 | refs/heads/ServerDestroyer/p68-07 | 014398e4 |
 | p68-09 | /home/chris/orca/workspaces/Power-Browser/p68-09 | refs/heads/ServerDestroyer/p68-09 | 6a61d70a |
 | p68-02 | /home/chris/orca/workspaces/Power-Browser/p68-02 | refs/heads/ServerDestroyer/p68-02 | 9a553b88 |
-| p68-08 | not launched (excluded this session) | — | — |
-| p68-05 | not launched (Task 2, after Phase 67) | — | — |
+| p68-08 | /home/chris/orca/workspaces/Power-Browser/p68-08 | refs/heads/ServerDestroyer/p68-08 | 455db0d1 |
+| p68-05 | /home/chris/orca/workspaces/Power-Browser/p68-05 (created without an Orca agent; the coordinator executed 68-05) | refs/heads/ServerDestroyer/p68-05 | d3a32bc7 |
 
 ## Pre-merge baseline
 
@@ -207,23 +227,223 @@ until Task 2 builds the container tarball).
 2. **Accepted scope deviations:** p68-07's scripts/verify-orca-agent-hooks.mjs and p68-09's theia/package.json. p68-01's 5edf17c3 also carries its Task 3 files, all inside files_modified.
 3. **[Rule 1] rebase-orca.sh pnpm run re-install** (fix 554c66d7). This was found by the identity re-pin. The stale shipped-set cache key, which does not cover the install layout, stays as is: with the fix the replay no longer changes the layout, and a hand-run `pnpm run` in orca/ can still stale the cache until build-orca.sh restores the layout.
 4. **[Rule 1] orca-pin literal** in p68-03's header comment (fix 7e31d172).
-5. **Step (3b) not run.** By the caller's instruction, p68-08 was not launched, so the plan's automated check for 8 merges and at least 12 `# NEW (68-0` blocks (10 now) cannot pass until it is.
+5. **Step (3b) was deferred in the first session** by the caller's instruction. It was done on 2026-11-11, so the merge record now has all nine lanes (below).
 6. **Registry block order:** every lane inserted its blocks directly after the anchor. They were moved after the Phase 63 blocks in each merge resolution, per rule 2.
 
-## Pending (Tasks 1(3b), 2, 3)
+## Task 1 step (3b): lane p68-08
 
-- Task 1 (3b): launch lane p68-08 (prerequisites p68-01, p68-10, p68-04 and p68-09 are merged), merge it last, run its rows plus `verify-bundled-xpi.mjs --live --dev` under the live lock.
-- Task 1 (9): STATE.md decisions and the roadmap plan-progress refresh are recorded below under Tracking.
-- Task 2 (after Phase 67): p68-05 launch and merge, container release package, packaged proofs, PLAT-02 Linux pass, removal of the two entry-30 rows.
-- Task 3: WINDOWS.md entries for macOS, Windows and upstream PRs; the orca-upstream-prs exclusion; the deferred row; requirements; the final `--gate`.
+- Merge 6d3c32c4 by `refs/heads/ServerDestroyer/p68-08` (tip 455db0d1). Scope check: 15 changed paths, all inside 68-08-PLAN.md files_modified. No BLOCKER line. The verify-platform.sh conflicts at the quick and full anchors were resolved by rule (2): the branch's 64-01 and 67-05 blocks stay where they are, and the 68-08 blocks follow them byte for byte.
+- Coordinator items, fix 28124115: website-staging/privacy.html gains the unattended `<li>` for uBlock Origin's eight default-on filter-list hosts. The versioncheck-bg allow row's reason and the privacy sentence no longer say "only once you have installed one". The disposition stays `allow`.
+- Rows after the merge (previous session, logs .mozbuild/p68-06/m8-*.log), re-run in this session (step1-*.log): bundled-xpi, bundled-xpi-self-test, licensing, licensing-self-test, licence-allowlist, licence-allowlist-self-test, allowlist-schema, allowlist-doc-consistency (+ self-test), privacy-hosts: all PASS. `verify-bundled-xpi --live --dev` PASS (bundled-xpi-live-dev.log), and `verify-bundled-extensions --live` PASS.
+
+## Task 2
+
+### Lane p68-05 (upstream seam export)
+
+The Orca worktree p68-05 was created with `worktree create ... --name p68-05 --parent-worktree active --base-branch ServerDestroyer/v1.7-Orca-integration`, without `--agent`. The session before the restart created it and wrote the upstream material and the export but committed nothing. This session reviewed that material and re-ran everything, then committed it. Lane commits: ef8eba40, 6e74c0c6, d3a32bc7. Merge 8f766a69: 5 changed paths, all inside 68-05 files_modified except `.gitignore` (accepted, below). There was no BLOCKER line and no conflict. seams.json is unchanged, and the 68-05 block follows the 68-08 block at the full anchor (rule 7). Afterwards orca-overlay, orca-overlay-self-test and orca-seam-export-self-test: PASS.
+
+Seam classification (seams.json, unchanged): 010-installed-electron-switch is `browser-provider`, the offer. 070-claude-agent-sdk-dir and 080-orcad-external-claude-agent-sdk are `pb-only` (68-07, P68-38). Every `pr` is null. No web-entry seam exists, because Phase 64 added none.
+
+- Export browser-provider: `export-orca-seam-pr: PASS -- 010-installed-electron-switch exported to .mozbuild/orca-upstream/browser-provider/ (seam.patch, issue.md, pr.md with 12 template headings, test-command.txt); nothing was opened upstream`. The seam applies to Orca main 21c8fdc0.
+- Export web-entry: refused, `no seam of class web-entry (classes present: browser-provider, pb-only)`. Recorded as WINDOWS 52.
+- Upstream test `orca-overlay/upstream/010-installed-electron-switch/src/main/orcad/orcad-browser-provider.installed-electron-switch.test.ts`: 2 files and 17 tests passed on the seamed orca/. With the seam reverted, 1 of 3 tests fails. Orca's `pnpm test` needs bun 1.4.4, which is absent from `.#orca`, so vitest ran under node (deviation in 68-05-SUMMARY.md).
+- Orca issue texts prepared from 64-MIRROR-FREEZE.md, in 68-05-SUMMARY.md "Orca issue texts". Issue A, the host double projection, is already fixed on Orca main; it is not to be filed, and the overlay's echo wrapper can go at the first re-pin that carries the fix. Issue B, the web client's missing authoritative-inventory capability, is still present on main and is to be filed.
+
+### Release package (dev-objdir fallback)
+
+The container release build was not run, for two reasons. The release mozconfig needs `--with-google-safebrowsing-api-keyfile=/keys/sb-gapi.data`, and there is no `/keys` directory and no `PB_KEYDIR` on this host. Also, `podman` in this sandbox fails with "cannot re-exec process to join the existing user namespace". Under the plan's fallback the dev objdir was packaged instead. Tree a625378d, host legion (NixOS, Linux 6.18.60), toolchain `nix develop .#firefox`:
+
+| Step | Command | Wall time |
+|------|---------|-----------|
+| Orca | `nix develop .#orca --command bash scripts/build-orca.sh` (ORCA_* unset) | 34 s (`build-orca: PASS -- built v1.4.248 (965978bc78…) in 33s`) |
+| Theia | `nix develop .#theia --command bash -c 'cd theia && yarn build'` | about 1 min |
+| Gecko chrome JS | `cd upstream && MOZCONFIG=../.mozconfig nix develop ..#firefox --command ./mach build faster` | 4 s (libxul from 2026-11-08; patches last changed 2026-11-06) |
+| Package | `POWERBROWSER_OBJDIR=objdir PB_HOST_ROOT=$PWD nix develop .#firefox --command bash powerbrowser/packaging/package-linux.sh` | 310 s, then 313 s after the fix |
+
+Output: objdir/dist/powerbrowser-153.5.1.en-US.linux-x86_64.tar.xz (189 MB), the complete MAR, and release-manifest.json (release v153.5.1-1, channel default). objdir/config.status is unchanged by the package step (sha256 prefix b16c05a10edf051d before and after). Every packaged row below ran on this package with `POWERBROWSER_OBJDIR=objdir`.
+
+A first `./mach build faster` without `MOZCONFIG` started a configure in `upstream/obj-x86_64-pc-linux-gnu` and failed at libclang. That directory (364 KB, ignored by upstream's .gitignore) is left behind, because the sandbox denied its removal. It is an owner clean-up item. `git -C upstream diff` is unchanged.
+
+### Packaged proofs
+
+| Row | Result |
+|-----|--------|
+| ng063-packaged-launch | PASS -- the packaged tree reached a ready workbench on its own Theia and Node |
+| portable-elf | FAIL -- `toolchain-baseline.txt sysroot line is missing or UNMEASURED -- measure it in the release container` (release-only; entry 30, excluded) |
+| sidecar-no-symlinks | PASS -- find <stage> -type l is EMPTY over the staged tree |
+| package-target-natives | PASS -- 38 native(s) match --target linux-x64 (ELF x86-64), sorted and stable |
+| orca-packaged-tree | PASS -- 2894 files equal the built tree (linux-x64), node-pty slot linux-x64-glibc built on linux-x64 |
+| bundled-xpi-packaged (`verify-bundled-xpi --packaged`) | PASS -- the package's distribution/extensions/ holds exactly the pinned XPIs, each equal to its pin |
+| orca-claude-sdk-built | PASS -- ORCAD_EXTERNAL_MODULES lists @anthropic-ai/claude-agent-sdk; the needle CLAUDE_AGENT_SDK_VERSION="0.3.284" is in the installed SDK's sdk.mjs and in none of 9705 files under orca/out |
+| orca-packaged-live (lock) | first run FAIL (fix 1 below); after the fix PASS -- the packaged PowerBrowser ran orcad on its own node/bin/node with the web client from <GreD>/orca/out/web, a quit left no orcad or terminal daemon, and the packaged web client paired in a web tab |
+| bundled-xpi-live (`verify-bundled-xpi --live`, lock) | PASS -- on the extracted Linux package: first start installed and enabled it in the profile scope and it blocked the fixture request; after a relaunch with no stock window it still filtered; disabled, the request arrived; removed, it stayed removed after a relaunch |
+| bundled-extensions-live (lock) | PASS -- Theia deploys each bundled extension as a user plugin, never a built-in, and an uninstall is not undone |
+
+Every row was re-run on the final package (after both fixes): all PASS except portable-elf. The
+entry-30 exclusion rows for orca-packaged-tree and orca-packaged-live stay: both rows pass with
+`POWERBROWSER_OBJDIR=objdir`, but a default run still looks for objdir-release, and no container
+release tarball exists. A comment line above the exclusion rows records this.
+
+### fix(68-06) commits in Task 2 (rule 5)
+
+4. **21898a67**, powerbrowser/shell/OrcaService.sys.mjs (in 68-07's and 68-10's files_modified; not ledger-locked). Failing:
+   `["Orca failed step","reading the Orca port"],["Orca port",0],["Orca error","buildOrcadArgs: port 0 is not an integer from 1024 to 32767"]`.
+   powerbrowser-sidecar.js is a dev-tree prefs file (`JS_PREFERENCE_PP_FILES`, not in the package manifest; the packaged browser/omni.ja has no `powerbrowser.orca.*` default), so `getIntPref("powerbrowser.orca.port", 0)` gave 0 in every package, and the packaged Orca never started. The fallback is now 26768, the default, as every other Orca and sidecar pref falls back to its default. Afterwards orca-service, -self-test, internals-boundary, internals-catalogue, ng-040-internals-catalogue-lines, shell-error-copy-no-internals, start-path-recovery, orca-hidden-electron-self-test and orca-service-live-self-test: PASS.
+5. **a625378d**, scripts/verify-orca-packaged-live.mjs (68-01's file; not ledger-locked). After fix 4, the row passed, but the pairing step's PowerBrowser (pairWebTab, which the harness ends with a signal, not a quit) left its OrcaService's orcad and terminal daemon running from the deleted extraction root. live() now stops every process with an argument under that root, by recorded pid and start ticks, before removing it. The pure selector `strayUnder` gained self-test cases: a planted stray goes red, and a sibling prefix stays green. orca-packaged-live and orca-packaged-live-self-test: PASS. The same leak in other packaged rows is WINDOWS 54.
+
+### PLAT-02 Linux pass
+
+The labels are the full-tier rows inside every `# NEW (6N-0M, ...)` block, N = 0..8, in registry
+order: 38 labels (.mozbuild/p68-06/plat02-labels.txt). Each row ran alone with `--only` under
+`flock /home/chris/coding/Power-Browser/.git/pb-live.lock`, with ORCA_* unset,
+`PB_LIVE_LOCK_HELD=1` and `POWERBROWSER_OBJDIR=objdir`. Logs: .mozbuild/p68-06/plat02/.
+
+| Block | Label | Result | Time |
+|-------|-------|--------|------|
+| 60-02 | orca-build-shape | PASS | 0 s |
+| 60-03 | orca-slotless-start | PASS | 12 s |
+| 61-02 | orca-browser-parity | PASS | 1 s |
+| 62-01 | orca-overlay-built | PASS | 1 s |
+| 62-02 | orca-hidden-electron | PASS | 13 s |
+| 62-02 | orca-service-live | PASS | 43 s |
+| 63-03 | orca-agent-hooks | PASS | 5 s |
+| 63-03 | orca-agent-status-live | PASS (a real claude, 1 prompt; idle, working, permission, working, idle) | 18 s |
+| 68-03 | orca-mobile-skew | PASS (pin 8 tags behind v1.4.256; stock app 0.0.64; verdict ok) | 2 s |
+| 68-04 | orca-licence-rulings | FAIL by design: PENDING RULING 68-B, PENDING OWNER CHECK 68-A (WINDOWS 44, excluded) | 0 s |
+| 68-01 | orca-packaged-tree | PASS | 2 s |
+| 68-01 | orca-packaged-live | PASS | 20 s |
+| 68-07 | orca-claude-sdk-built | PASS | 1 s |
+| 68-09 | bundled-extensions-live | PASS | 9 s |
+| 64-01 | orca-pane-entry | PASS | 5 s |
+| 64-01 | orca-pane-standalone-live | PASS | 89 s |
+| 64-01 | orca-pane-css | PASS | 1 s |
+| 64-01 | orca-pane-css-live | PASS | 66 s |
+| 64-04 | orca-terminal-keys-live | PASS | 137 s |
+| 64-04 | orca-tabs-live | FAIL: stage tab-groups-cross-client (g3), "the second client shows no tab for T", red since Phase 64 (TAB-04), not caused by Phase 68 code; WINDOWS 55, excluded | 113 s |
+| 65-02 | orca-workspace-live | PASS | 39 s |
+| 65-03 | orca-side-panel-live | PASS | 19 s |
+| 65-03 | orca-add-project-live | PASS | 27 s |
+| 65-04 | orca-offer-scan | PASS | 12 s |
+| 65-04 | orca-relaunch-restore-live | PASS | 54 s |
+| 66-01 | orca-browser-host-bundle | PASS | 20 s |
+| 66-03 | no-remote-agent-port-live | PASS | 58 s |
+| 66-03 | no-remote-agent-port-live-self-test | PASS | 29 s |
+| 66-04 | orca-browser-snapshot-live | PASS | 78 s |
+| 66-05 | orca-browser-agent-live | PASS | 127 s |
+| 66-05 | orca-agent-mark-live | PASS | 197 s |
+| 67-01 | orca-credential-store-live | PASS | 33 s |
+| 67-03 | orca-failure-page-live | PASS | 177 s |
+| 67-04 | orca-pairing-containment-live | PASS | 33 s |
+| 67-05 | orca-landing-logo-live | PASS | 33 s |
+| 68-08 | bundled-xpi-packaged | PASS | 1 s |
+| 68-08 | bundled-xpi-live | PASS | 43 s |
+| 68-05 | orca-upstream-prs | FAIL by design: no PR URL for browser-provider or web-entry (WINDOWS 51, 52, excluded) | 164 s (lock wait) |
+
+Result: 35 PASS and 3 FAIL. Two FAILs are owner-gated by design, and one is a Phase 64 stage that was already red. PLAT-02 stays Pending (its macOS and Windows half is WINDOWS 49 and 50).
+
+**Process hygiene during the pass.** After each row, the pass script stopped every orcad.js or
+daemon-entry.js process younger than that row's duration plus 5 s, by pid. Ten rows left their
+own orcad behind, in the same signal-ended-browser pattern as WINDOWS 54: orca-slotless-start,
+orca-terminal-keys-live, orca-relaunch-restore-live, no-remote-agent-port-live-self-test,
+orca-browser-snapshot-live, orca-browser-agent-live, orca-agent-mark-live,
+orca-credential-store-live, orca-failure-page-live and bundled-xpi-live. **Deviation:**
+orca-upstream-prs waited 164 s for the live lock, which another session held. The age window
+therefore covered that session's run, and pid 2791392 was stopped. A session in the gap-66-09
+worktree took the lock at 13:36:32 for `node scripts/verify-orca-failure-page-live.mjs`, so
+2791392 was most likely that run's orcad. That run may have gone red because of this. The two
+orcad processes from other sessions that were running before the pass (1690681, 2155244) were
+not touched.
+
+## Task 3
+
+### WINDOWS.md entries (gsd-tools windows append --phase 68 --ws orca)
+
+| id | kind | file | subject | exclusion row |
+|----|------|------|---------|---------------|
+| 48 | unrun-verify | powerbrowser/packaging/package-macos.sh | macOS release artifact with Orca (Phase 55 BLOCKED items 8, 9) | — |
+| 49 | unrun-verify | powerbrowser/packaging/package-macos.sh | macOS smoke test (D-24) | — |
+| 50 | unrun-verify | powerbrowser/packaging/package-windows.sh | Windows smoke test (CF-10) | — |
+| 51 | unrun-verify | orca-overlay/seams.json | upstream issue and PR for seam 010 (owner) | `orca-upstream-prs|51|owner opens the upstream issues and PRs (OVL-06, D-27)` |
+| 52 | deviation | orca-overlay/seams.json | web-entry export refused: no seam (owner ruling on the class) | covered by the orca-upstream-prs row |
+| 53 | unmet-truth | theia/extensions/orca-agents/src/node/claude-wrapper-launcher.ts | Windows twin of the POSIX sh claude-wrapper launcher | — |
+| 54 | deviation | scripts/lib/firefox-bidi.mjs | packaged live rows ended by a signal leave orcad running | — |
+| 55 | unmet-truth | scripts/verify-orca-tabs-live.mjs | orca-tabs-live g3 red (Phase 64, TAB-04) | `orca-tabs-live|55|stage tab-groups-cross-client (g3) red since Phase 64 (TAB-04)` |
+
+Entry 44 (the owner licence items) and entry 30 (the container release tarball) stay open with their rows. D-31 dropped the PTY transport, so no Windows named-pipe or macOS PTY transport entry was written.
+
+### Brand rows (rule 3, second measurement)
+
+The rows were measured with the scanner's own matcher on the staged tree after the p68-08 and p68-05 merges, the fixes and the exclusion rows (.mozbuild/p68-06/brand-measure-t2.mjs, report .mozbuild/p68-06/brand-report-t2.md). No exclude entry was added. `node scripts/scan-brand-residue.mjs`: PASS over 835 files; `--self-test`: PASS.
+
+| Row | Count | Files added |
+|-----|-------|-------------|
+| Orca (title) | 2841 -> 2852 | orca-overlay/upstream/010-installed-electron-switch/upstream.json |
+| orca (lower) | 5330 -> 5345 | none |
+| ORCA (upper) | 1220 -> 1225 | the upstream test file, upstream.json |
+| orcad (lower) | 1639 -> 1651 | the upstream test file, upstream.json |
+| renderOrcaSection (literal) | 5 -> 6 | none |
+| runOrca( (literal) | 4 -> 5 | none |
+| resolveOrca (literal) | 4 -> 5 | upstream.json |
+
+### Requirements
+
+- BEXT-01 Complete (recorded PASS: orca-claude-sdk, orca-claude-sdk-built, bundled-extensions, bundled-extensions-live, licence-allowlist); the 68-A terms check stays an owner item (WINDOWS 44).
+- BEXT-02 Complete (recorded PASS on the package: bundled-xpi-packaged, bundled-xpi-live); the GPL-3.0 section 6 reading stays an owner item (WINDOWS 44).
+- OVL-02 Pending: first live weekly tick, bump PR with auto-merge, owner review.
+- OVL-03 Pending: stock Android app pairing.
+- OVL-06 Pending: owner opens the issue and PR (WINDOWS 51); web-entry ruling (WINDOWS 52).
+- PLAT-01 Pending: container release tarball (30), windows-orca and build-windows first run, macOS artifact (48), licence rulings (44).
+- PLAT-02 Pending: Linux pass 35/38 (orca-tabs-live g3, WINDOWS 55); macOS and Windows smoke (49, 50).
+
+### Deferred Verification (STATE.md row for Phase 68)
+
+- Pair the stock Android app beside the orca-mobile-skew output (P68-17).
+- Open the upstream issue and then the PR for seam 010, record the URL, and rule on the web-entry class (WINDOWS 51, 52).
+- The first live weekly re-pin tick, the bump PR with auto-merge armed, and the owner's approving review.
+- A release.yml dispatch that produces Linux and Windows artifacts with Orca: the first real runs of windows-orca and the macOS jobs, and the container release tarball (WINDOWS 30).
+- macOS and Windows smoke tests, and the macOS artifact (WINDOWS 48, 49, 50).
+- Ruling 68-B, the 68-A terms check (D-30) and the GPL-3.0 section 6 reading for uBlock Origin (P68-39) (WINDOWS 44).
+- Reinstalling the SDK extension after an uninstall (no affordance in v1.7, 68-09).
+- A-P1 confirmation.
+- The Windows claude-wrapper launcher (WINDOWS 53).
+- Packaged live rows that end PowerBrowser by a signal leave orcad running (WINDOWS 54).
+- Clean-up of `upstream/obj-x86_64-pc-linux-gnu`.
+- Orca issue B (68-05-SUMMARY.md).
+
+### Final --quick (Task 3)
+
+`nix develop .#theia --command scripts/verify-platform.sh --quick`, run on the staged final tree,
+gave **412 PASS, 0 FAIL, 0 SKIP**: `verify-platform: PASS -- all checks passed` (baseline 351 PASS,
+empty red list). The run took 663 s, and its log is .mozbuild/p68-06/t3-final-quick.log. Among the
+passing rows are scan-brand-residue, licence-allowlist, orca-overlay, orca-mobile-protocol,
+orca-claude-sdk and bundled-extensions.
+
+
+### Deviations in Tasks 2 and 3
+
+7. **Dev-objdir package** instead of the container release build: no Safe Browsing key directory, and podman is unusable in this sandbox. Recorded above. Entry 30 stays.
+8. **Phase 67 precondition.** Task 2 requires Phase 67 complete with its ROADMAP entry checked. Its plans are executed and verified (docs(67) 82b093c4), but the ROADMAP checkbox is still unchecked. Task 2 ran on the caller's instruction.
+9. **Lane p68-05 ran without an Orca agent**, executed by the coordinator. Its `.gitignore` negation line is outside its files_modified (accepted at the merge).
+10. **`--gate` not run.** The caller's step list ends with `--quick`. A full `--gate` repeats every live row of the registry, and other sessions hold the live lock throughout. The PLAT-02 pass and the packaged rows are the full-tier evidence. Every Orca red found is keyed to an open entry.
+11. **Process stopped outside this run** (PLAT-02 pass, orca-upstream-prs window): see "Process hygiene" above.
+12. **Stray `upstream/obj-x86_64-pc-linux-gnu`** from a mach call without MOZCONFIG; its removal was denied.
 
 ## Tracking
 
 - `gsd-tools roadmap update-plan-progress 68 --ws orca` checked the seven wave-1 lane lines. It also ticked 68-06, because this in-progress SUMMARY exists, and counted 8/10. That was corrected by hand: 68-06 is unchecked, and the Plans line and progress row read 7/10 with "68-06 in progress".
 - STATE.md gained five Phase 68 decisions through `gsd-tools state add-decision --phase 68 --ws orca`: P68-37, A-P1, the --rulings release guard with entry 44, D-30/P68-38/P68-39, and the pnpm verify-deps fix. The tool also recomputed the progress counters. No state.advance-plan was run, and nothing was pushed or dispatched.
 - REQUIREMENTS.md is untouched; Task 3 owns it.
+- 2026-11-11 (Tasks 2 and 3): three more decisions through `gsd-tools state add-decision --phase 68 --ws orca`: the dev-objdir package, the OrcaService port fallback, and seam 010 as the only upstream offer. STATE.md gained the Phase 68 Deferred Verification row and one Blockers/Concerns line naming entries 48-55. `requirements mark-complete BEXT-01 BEXT-02 --ws orca`. The traceability cells of OVL-02, OVL-03, OVL-06, PLAT-01 and PLAT-02 are Pending with their deferred items, and BEXT-01 and BEXT-02 name their owner items. `roadmap update-plan-progress 68 --ws orca` ticked 68-08, 68-05 and 68-06 (10/10), and the Plans line text was corrected by hand. The Phase 68 checkbox stays unchecked, because verify-work follows. No state.advance-plan or phase complete was run, and nothing was pushed or dispatched.
 
 ## Self-Check: PASSED
+
+2026-11-11 (Tasks 2 and 3):
+- 6d3c32c4, 28124115, 8f766a69, 21898a67, a625378d and 0458c0e2 are ancestors of HEAD; lane commits ef8eba40, 6e74c0c6 and d3a32bc7 are on refs/heads/ServerDestroyer/p68-05.
+- `git log --merges` names p68-03, p68-04, p68-01, p68-10, p68-07, p68-09, p68-02, p68-08 and p68-05; `grep -c '# NEW (68-0' scripts/verify-platform.sh` = 13.
+- The plan's Task 3 exclusion check exits 0: ids 44, 30, 30, 51 and 55 are all open in WINDOWS.md.
+- Logs exist: .mozbuild/p68-06/t2-package-linux-2.log, t2-final-*.log, plat02/results.txt, t3-final-quick.log and brand-report-t2.md.
+
+2026-11-10 (Task 1):
 
 - Commits d5d2a605, 2efd5ded, 93457ca9, 8f770d0f, 15713704, e49a8693, 2074609e, b2204949, 29a67f9f, 554c66d7, 316cb6f6 and 7e31d172 are ancestors of HEAD.
 - The logs exist: .mozbuild/p68-06/identity-repin.log (with `rebase-orca: PASS`), brand-report.md, baseline-quick.log and final-quick-2.log.

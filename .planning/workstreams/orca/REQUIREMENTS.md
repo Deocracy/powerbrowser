@@ -147,12 +147,12 @@ TERM-03 (remote terminals) moved to v2; see "Terminals (TERM)" under v2 Requirem
 Third-party parts that carry their own terms ship as pre-installed extensions the user can
 switch off or uninstall (Chris 2026-11-10, D-30).
 
-- [ ] **BEXT-01**: Anthropic's Claude agent SDK is not bundled into orcad. It ships inside a
+- [x] **BEXT-01**: Anthropic's Claude agent SDK is not bundled into orcad. It ships inside a
   pre-installed PowerBrowser Theia extension that carries Anthropic's terms; the user can switch
   it off or uninstall it. When it is on, Claude's chat-style Orca session loads the SDK from it;
   when it is off or removed, that session reports the package missing, and Claude terminal
   panes and every other agent keep working. (ruling 68-A, D-30)
-- [ ] **BEXT-02**: uBlock Origin ships pre-installed and enabled as a browser (Gecko)
+- [x] **BEXT-02**: uBlock Origin ships pre-installed and enabled as a browser (Gecko)
   WebExtension at a pinned version and sha256, unmodified; the user can switch it off or remove
   it, and its GPL-3.0 licence is listed in the third-party notices. (Chris 2026-11-10)
 
@@ -221,11 +221,11 @@ Filled by the roadmap.
 | RUN-08 | Phase 67 | Complete |
 | RUN-09 | Phase 67 | Complete |
 | OVL-01 | Phase 62 | Complete |
-| OVL-02 | Phase 68 | Pending |
-| OVL-03 | Phase 68 | Pending |
+| OVL-02 | Phase 68 | Pending: re-pin replay PASS on the merged tree (68-06 identity re-pin); deferred: the first live weekly tick, the bump PR with auto-merge armed and the owner's approving review (needs main pushed and the release-train clock) |
+| OVL-03 | Phase 68 | Pending: orca-mobile-protocol and orca-mobile-skew PASS (68-06, verdict ok, 8 tags behind); deferred: pairing the stock Android app with PowerBrowser's orcad (owner, needs an Android device) |
 | OVL-04 | Phase 60 | Complete |
 | OVL-05 | Phase 62 | Complete |
-| OVL-06 | Phase 68 | Pending |
+| OVL-06 | Phase 68 | Pending: seam 010 exported as the browser-provider upstream PR with a new Orca test (68-05); deferred: the owner opens the issue and PR and records the URL (WINDOWS 51); web-entry has no seam to offer (WINDOWS 52, owner ruling) |
 | TERM-01 | Phase 64 | Complete |
 | TERM-02 | Phase 63 | Complete |
 | TERM-04 | Phase 64 | Complete |
@@ -247,10 +247,10 @@ Filled by the roadmap.
 | EXT-02 | Phase 63 | Pending: PowerBrowser half proven (63-03, 63-06); extension half with EXT-01 in the end-of-milestone pass |
 | EXT-03 | Phase 61 | Complete |
 | INJ-01 | Phase 67 | Complete |
-| PLAT-01 | Phase 68 | Pending |
-| PLAT-02 | Phase 68 | Pending |
-| BEXT-01 | Phase 68 | Pending |
-| BEXT-02 | Phase 68 | Pending |
+| PLAT-01 | Phase 68 | Pending: Linux package with <GreD>/orca built from the dev objdir and proven (orca-packaged-tree, orca-packaged-live PASS, 68-06); deferred: the container release tarball (WINDOWS 30), the first release.yml run of windows-orca and build-windows, the macOS artifact (WINDOWS 48), ruling 68-B and the 68-A terms check (WINDOWS 44) |
+| PLAT-02 | Phase 68 | Pending: 68-06 Linux pass 35 of 38 rows PASS; red: orca-tabs-live g3 (TAB-04, WINDOWS 55), orca-licence-rulings (owner, WINDOWS 44), orca-upstream-prs (owner, WINDOWS 51, 52); deferred: macOS and Windows smoke tests (WINDOWS 49, 50) |
+| BEXT-01 | Phase 68 | Complete (68-06: orca-claude-sdk, orca-claude-sdk-built, bundled-extensions, bundled-extensions-live, licence-allowlist PASS); deferred owner item: Anthropic's terms permit redistributing the SDK extension (68-A, WINDOWS 44) |
+| BEXT-02 | Phase 68 | Complete (68-06: bundled-xpi-packaged and bundled-xpi-live PASS on the dev-objdir package); deferred owner item: the GPL-3.0 section 6 reading for the bundled XPI (WINDOWS 44) |
 
 **Coverage:**
 - v1 requirements: 40 total (TERM-03 moved to v2 by D-31)
