@@ -34,7 +34,7 @@
 //   node scripts/verify-orca-packaged-live.mjs
 //   node scripts/verify-orca-packaged-live.mjs --self-test
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,6 +70,11 @@ export function rootVerdict({ cmdline, prefix }) {
 export function survivorVerdict(before, now) {
     if (!before.length) return ['vacuous: no orcad process was recorded before the quit'];
     return before.filter((p) => now.get(p.pid) === p.ticks).map((p) => `${p.what} pid ${p.pid} survived the quit`);
+}
+
+/** procs: [{ pid, argv }]. Those with an argument under root (this run's extraction root), so cleanup signals only them. */
+export function strayUnder(root, procs) {
+    return procs.filter((p) => p.argv.some((a) => under(a, root) && a !== root));
 }
 
 /** The packaged web client must pair in a PowerBrowser web tab. */
@@ -110,6 +115,9 @@ function selfTest() {
         check('nothing recorded before quit', survivorVerdict([], new Map()), 'vacuous');
         check('control paired', pairVerdict({ paired: true }), null);
         check('paired=false', pairVerdict({ paired: false }), 'did not pair');
+        const procs = [{ pid: 201, argv: ['node', join(tmp, 'elsewhere', 'orcad.js')] }, { pid: 202, argv: ['node', `${prefix}-old/orca/out/orcad/orcad.js`] }];
+        check('control no stray under the extraction root', strayUnder(prefix, procs).map((p) => `stray ${p.pid}`), null);
+        check('stray orcad under the extraction root', strayUnder(prefix, [...procs, { pid: 203, argv: argv(join(prefix, 'orca/out/web')) }]).map((p) => `stray ${p.pid}`), 'stray 203');
     } finally {
         rmSync(tmp, { recursive: true, force: true });
     }
@@ -141,11 +149,26 @@ async function live() {
     } catch (e) {
         fails.push(`harness: ${e.message}`);
     } finally {
+        await stopStrays(dirname(prefix));
         rmSync(dirname(prefix), { recursive: true, force: true });
     }
     if (fails.length) { for (const f of fails) console.error(`${NAME}: FAIL -- ${f}`); return 1; }
     console.log(`${NAME}: PASS -- the packaged PowerBrowser ran orcad on its own node/bin/node with the web client from <GreD>/orca/out/web, a quit left no orcad or terminal daemon, and the packaged web client paired in a web tab`);
     return 0;
+}
+
+// The pairing step's PowerBrowser ends by a signal from the harness, not a quit, so its OrcaService leaves its orcad and
+// terminal daemon running from the extraction root (68-06). Stopped by recorded pid and start ticks, never by name.
+async function stopStrays(root) {
+    const { startTicks, signalIdentity } = await import('./verify-orca-hidden-electron.mjs');
+    const procs = readdirSync('/proc').filter((n) => /^\d+$/.test(n) && Number(n) !== process.pid).map((n) => ({ pid: Number(n), argv: argvOf(Number(n)) }));
+    const found = strayUnder(root, procs).map((p) => ({ pid: p.pid, ticks: startTicks(p.pid) })).filter((p) => p.ticks !== null);
+    if (!found.length) return;
+    for (const p of found) signalIdentity(p.pid, p.ticks, 'SIGTERM');
+    const until = Date.now() + 10000;
+    while (Date.now() < until && found.some((p) => startTicks(p.pid) === p.ticks)) await new Promise((r) => setTimeout(r, 250));
+    for (const p of found) signalIdentity(p.pid, p.ticks, 'SIGKILL');
+    console.log(`${NAME}: stopped ${found.length} process(es) left running from the extracted package after the pairing step`);
 }
 
 async function runPackaged(prefix, fails) {
