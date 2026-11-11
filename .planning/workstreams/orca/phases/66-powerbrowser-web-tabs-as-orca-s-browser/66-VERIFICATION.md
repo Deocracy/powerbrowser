@@ -1,8 +1,8 @@
 ---
 phase: 66-powerbrowser-web-tabs-as-orca-s-browser
-verified: 2026-11-11T12:00:00Z
+verified: 2026-11-11T20:41:43Z
 status: gaps_found
-score: 11/12 must-haves verified
+score: 16/18 must-haves verified
 covered_files:
   - ".planning/workstreams/orca/phases/66-powerbrowser-web-tabs-as-orca-s-browser/66-01-PLAN.md"
   - ".planning/workstreams/orca/phases/66-powerbrowser-web-tabs-as-orca-s-browser/66-01-SUMMARY.md"
@@ -18,6 +18,9 @@ covered_files:
   - ".planning/workstreams/orca/phases/66-powerbrowser-web-tabs-as-orca-s-browser/66-06-SUMMARY.md"
   - ".planning/workstreams/orca/phases/66-powerbrowser-web-tabs-as-orca-s-browser/66-07-PLAN.md"
   - ".planning/workstreams/orca/phases/66-powerbrowser-web-tabs-as-orca-s-browser/66-07-SUMMARY.md"
+  - ".planning/workstreams/orca/phases/66-powerbrowser-web-tabs-as-orca-s-browser/66-08-PLAN.md"
+  - ".planning/workstreams/orca/phases/66-powerbrowser-web-tabs-as-orca-s-browser/66-08-SUMMARY.md"
+  - "inventory/brand-tokens.json"
   - "orca-overlay/files/src/renderer/src/pb/browser-host/pb-browser-host-link.ts"
   - "orca-overlay/files/src/renderer/src/pb/browser-host/pb-browser-host.ts"
   - "orca-overlay/files/src/renderer/src/pb/pb-pane-mount.tsx"
@@ -25,6 +28,8 @@ covered_files:
   - "powerbrowser/INTERNAL-APIS.md"
   - "powerbrowser/shell/GroupActorChild.sys.mjs"
   - "powerbrowser/shell/PowerBrowserAPI.sys.mjs"
+  - "powerbrowser/shell/powerbrowser.js"
+  - "scripts/lib/orca-browser-live.mjs"
   - "scripts/verify-no-remote-agent-port-live.mjs"
   - "scripts/verify-orca-agent-mark-live.mjs"
   - "scripts/verify-orca-browser-abilities.mjs"
@@ -43,190 +48,243 @@ covered_files:
   - "theia/extensions/orca-panes/src/browser/orca-pane-routes.ts"
   - "theia/extensions/tab-uris/src/browser/web-tab.ts"
   - "website-staging/privacy.html"
-covered_digest: "v3:sha256:e97efbb410aadd1f4f2c242ac257f0c093c2d0efbfd9de55fd30596d5bc959b1"
+covered_digest: "v3:sha256:fe8d50ca1287ef91f7b6b99de041fe5584f132b6f801c9180fa722735233ac8b"
 behavior_unverified: 0
 overrides_applied: 0
+re_verification:
+  previous_status: gaps_found
+  previous_score: 11/12
+  gaps_closed:
+    - "The five new-window receivers (createContentWindow, createContentWindowInFrame, openURI, openURIInFrame, openLinkIn) and the popup-with-features route refuse an agent opener: no overlay, no stock window, no load (66-08, D-35)"
+  gaps_remaining:
+    - "Pages an agent tab opens stay inside the agent isolation: a download from an agent page still opens its viewer in the user's stock browser window, or opens a new stock window"
+  regressions: []
 gaps:
-  - truth: "Pages an agent tab opens (window.open, target=_blank, a middle-click or Enter on a link) stay inside the agent isolation: Orca-agent container, no login manager or autocomplete popup, background placement, and the agent mark/Stop"
+  - truth: "Pages an agent tab opens stay inside the agent isolation (D-35: no new window, tab or popup exists for an agent-overlay opener on any open path; not adopted, not sent to a stock window)"
     status: failed
     reason: >-
-      The Phase 36 new-window adopt paths do not check whether the opener is an agent overlay. adoptContentWindow
-      and adoptLinkIn hand every opener's new window to createPendingOverlay, which calls webTabOpen in its pending
-      mode with agent left at false. The overlay therefore gets the stock attribute literal: messagemanagergroup
-      "browsers" (so Gecko's LoginManager actor attaches) and autocompletepopup "PopupAutoComplete". On the
-      link-click path (adoptLinkIn) openWindowInfo is null and no usercontextid is set, so the new tab loads in the
-      user's default cookie jar; ClickHandlerParent's params.userContextId is ignored. On the window.open path the
-      popup keeps an opener relationship with the agent page, so a same-origin popup is scriptable from the agent's
-      browser.eval. Saved logins are not partitioned by container, so a popup to a login page of the agent page's
-      origin can be autofilled and read back by the agent. The adopted tab is a non-agent tab, so it carries no mark
-      and Stop does not cover it. A foreground popup is activated (web-tab.ts:1758), which moves the user's view.
-      The agent child's input rows produce trusted events (synthesizeMouseEvent, nsITextInputProcessor), which give
-      the transient user activation that window.open and link opens require. ClickHandler is registered with no
-      messageManagerGroups (upstream/browser/components/DesktopActorRegistry.sys.mjs:361-373), so it also attaches
-      to agent overlays. No check covers this: orca-browser-agent-live clauses (e), (e2) and (l) read the agent tab
-      only, and no clause opens a window from an agent tab. The privacy paragraph (website-staging/privacy.html:86)
-      states "An agent never reaches your other tabs or your browser windows" and "your saved passwords are not
-      filled into them". Whether each path works end to end (popup blocking, autofill timing, the triggering
-      principal of a container-6 page loading into container 0) is not proven live. The missing guard, however, is
-      visible in the code.
+      66-08 closed every path that runs through installNewWindowReceivers, and the content wall closes the
+      popup-with-features path. One path does not go through either: a download that an agent page starts. A page an
+      agent drives can start a download with a plain navigation (browser.goto to an http(s) URL served with
+      Content-Disposition: attachment) or a trusted click on such a link. Overlay downloads save to the user's
+      Downloads folder with no prompt; the page-tools-live probe records "saved-to-download-dir-without-prompt"
+      for a user overlay, and the agent overlay uses the same path. For a type whose preferred action is
+      handleInternally (PDF by default; PowerBrowser sets no download or pdfjs pref), Gecko marks the download
+      launchWhenSucceeded and handleInternally with no prompt (nsExternalHelperAppService.cpp:1818-1836).
+      DownloadIntegration.launchDownload then calls DownloadUIHelper.loadFileIn (DownloadIntegration.sys.mjs:889-909).
+      loadFileIn rejects the shell window, because its windowtype is powerbrowser:main and not navigator:browser
+      (powerbrowser.xhtml:21). It therefore opens the file through openTrustedLinkIn in the top stock browser
+      window. If no stock window is open, it opens a new one at BROWSER_CHROME_URL (DownloadUIHelper.sys.mjs:83-131).
+      Neither route reaches adoptLinkIn, so agentOpenRefused is never consulted. The resulting tab is in the
+      stock window: the "browsers" message manager group, no agent mark, not covered by Stop. A new stock window
+      takes the user's view. The tab does keep the agent container, because loadFileIn passes the download's
+      userContextId. Its URL is file://, and the agent page holds no reference to it. The exposure is therefore
+      lower than the original gap: no saved password and no user-jar cookie reaches the agent. It still breaks
+      D-35's rule ("not sent to a stock window ... on every path") and the privacy sentence "An agent never
+      reaches your other tabs or your browser windows". A related effect: an agent page can write any file it
+      serves into the user's Downloads folder, and the file appears in the user's downloads panel. No PB code
+      looks at a download's source container. The downloads view (PowerBrowserAPI.sys.mjs:7189-7213) only
+      serializes rows. This is derived from the code and has not been proven live.
     artifacts:
-      - path: "powerbrowser/shell/PowerBrowserAPI.sys.mjs:7440-7475"
-        issue: "adoptLinkIn: checks only that the opener is an overlay (tabIdOfBrowser), never entry.agent; passes openWindowInfo null and ignores params.userContextId; where 'window' goes to openStockTab (the user's stock window and jar)"
-      - path: "powerbrowser/shell/PowerBrowserAPI.sys.mjs:7478-7489"
-        issue: "adoptContentWindow: same opener check only; an agent page's window.open becomes a pending ordinary overlay"
-      - path: "powerbrowser/shell/PowerBrowserAPI.sys.mjs:7492-7499"
-        issue: "createPendingOverlay calls webTabOpen(..., pending) with agent defaulting to false"
-      - path: "powerbrowser/shell/PowerBrowserAPI.sys.mjs:3611-3618"
-        issue: "the non-agent literal sets messagemanagergroup 'browsers' and autocompletepopup 'PopupAutoComplete'; the agent override applies only when agent === true"
-      - path: "theia/extensions/tab-uris/src/browser/web-tab.ts:1755-1759"
-        issue: "adopt() activates a non-background adopted tab, so an agent-opened popup takes the user's view"
-      - path: "website-staging/privacy.html:86"
-        issue: "the privacy statement does not hold for agent-opened windows until this is closed"
+      - path: "powerbrowser/shell/PowerBrowserAPI.sys.mjs:7189-7213"
+        issue: "downloadsView.onDownloadAdded serializes every download; nothing refuses, or stops the launch of, a download whose source is an agent overlay (source.userContextId equal to the agent container, or source.browsingContextId whose top embedder is an agent overlay)"
+      - path: "powerbrowser/shell/PowerBrowserAPI.sys.mjs:11268-11276"
+        issue: "agentTabCreated installs the content wall and the focus guard, but no download refusal for the overlay"
+      - path: "upstream/toolkit/components/downloads/DownloadUIHelper.sys.mjs:83-131"
+        issue: "(upstream, not to be edited) the shell window is not navigator:browser, so the viewer goes to getTopWindow() (a stock window) or to a new BROWSER_CHROME_URL window"
+      - path: "scripts/verify-orca-browser-tab-scope.mjs:580-600"
+        issue: "openPaths derives only what installNewWindowReceivers installs, so a path that bypasses the receivers (download viewer, external protocol) is outside the derivation and no plant can cover it"
     missing:
-      - "In adoptContentWindow and adoptLinkIn, when the opener overlay's entry has agent === true: either refuse the open (return null for the window.open path only after confirming the stock fallback does not open it either; open nothing on the link path), or create the new overlay as an agent overlay (the agent container, AGENT_MESSAGE_MANAGER_GROUP, empty autocompletepopup, background, agentTabCreated). The agent never takes the stock-window route (where 'window', or a null return that makes Gecko open BROWSER_CHROME_URL)"
-      - "A non-adopted window.open from an agent page (popup features, which go to nsWindowWatcher and a stock window) handled the same way. Gecko opens a stock window when browserDOMWindow returns null, so refusing has to stop the open, not divert it"
-      - "orca-browser-tab-scope clauses (stub boundary) for an agent opener on both adopt paths, with plants that drop the guard. An orca-browser-agent-live clause that first proves window.open and a middle-click open a tab from a user tab (positive read), then requires that the same open from an agent tab yields no LoginManager actor, no user-jar cookie and no non-agent tab, and does not change the current main-area widget"
-      - "Re-read the privacy paragraph against the result"
+      - "Refuse downloads whose source is an agent overlay. One way: in the downloads view's onDownloadAdded (or a Downloads list view registered in the agent section), when download.source.userContextId equals the agent container id or the source browsing context's top embedder is an agent overlay, finalize(true) the download (removing the partial file) before it succeeds. Log once per tab without the URL. An agent command in flight then answers browser_command_unavailable, as agentOpenRefused does. Alternatively, keep agent downloads and set launchWhenSucceeded = false, but D-35 and the privacy page then need a sentence about files an agent saves"
+      - "orca-browser-agent-live: a clause that first proves a user tab's attachment download of a PDF opens its viewer, or at least saves (the detector). It then requires that the same navigation from an agent tab saves no file to the profile's download dir, opens no stock tab or window, and leaves the user's current tab unchanged"
+      - "A tab-scope (stub-boundary) clause with a plant that drops the download refusal"
+      - "Re-read privacy.html:86 against the result, and add a sentence on agent downloads if they are kept rather than refused"
+  - truth: "Content wall: an agent overlay's browsing context carries SANDBOXED_AUXILIARY_NAVIGATION from creation, before its first load; a user overlay never does"
+    status: partial
+    reason: >-
+      The browsing context field is set in agentTabCreated (PowerBrowserAPI.sys.mjs:11272), after appendChild has
+      created the remote frame loader and before firstWebTabLoad navigates. Every document created after that carries
+      the flag, and live clause (n) read sandboxFlags 2 on the loaded /opener page. The overlay's initial about:blank
+      document, however, is created in the content process by the browser construction that appendChild sends.
+      A document takes its sandbox flags only at creation (nsDocShell.cpp:6619-6686). Setting the field later does not
+      update an existing document. So the initial about:blank probably carries no SANDBOXED_AUXILIARY_NAVIGATION. It
+      stays the current document until the first real load commits: at least the 25 ms polling of firstWebTabLoad
+      (:3813-3825), and for a slow first URL the whole network wait. During that window the wall already admits
+      agent commands. A browser.mouseClick gives the document transient activation, and then a browser.eval of
+      window.open(url, name, "popup") takes the OPEN_NEWWINDOW route. That route has no chrome receiver
+      (ContentParent.cpp CommonCreateWindow → nsWindowWatcher::OpenWindowWithRemoteTab), so a stock popup window
+      would open. Not proven: no check evaluates an open in the initial document, and the inference about IPC
+      ordering is mine. No chrome code on this route can refuse it.
+    artifacts:
+      - path: "powerbrowser/shell/PowerBrowserAPI.sys.mjs:11268-11276"
+        issue: "the flag is written after the frame loader exists, so the initial about:blank document may predate it"
+      - path: "powerbrowser/shell/PowerBrowserAPI.sys.mjs:11202-11213"
+        issue: "agentWallVerdict admits commands before the first load commits"
+    missing:
+      - "A live probe: create an agent page for a deliberately slow URL, then immediately run mouseClick and then eval window.open(..., 'popup') and record whether a stock window opens and what document.sandboxFlags-equivalent state the initial document has (for example, window.open throwing InvalidAccessError or not)"
+      - "If it opens: refuse agent commands until the first load has committed (entry.firstLoad cleared and the current document is not the initial about:blank), or set InitialSandboxFlags before the remote browser is constructed, if Gecko offers a pre-construction hook. Add a tab-scope plant for whichever guard is chosen"
 deferred: []
 ---
 
 # Phase 66: PowerBrowser web tabs as Orca's browser Verification Report
 
 **Phase Goal:** Orca's agents and the user browse in PowerBrowser web tabs with PowerBrowser chrome. Agent control reaches only Orca-created tabs, and the user can see it and stop it.
-**Verified:** 2026-11-11
+**Verified:** 2026-11-11T20:41:43Z
 **Status:** gaps_found
-**Re-verification:** No (initial verification)
+**Re-verification:** Yes, after gap closure 66-08 (D-35) and Phase 67's merge
+
+## What changed since the initial verification
+
+- **The original gap is closed for the paths it named.** Truth 8 named `window.open`, `target=_blank`, a middle-click and Enter on a link. Each one now opens nothing from an agent page. The evidence: the code (below), my own plants against the derived tab-scope clause, and the coordinator's raw live output `.mozbuild/p66-08/agent-live-2.txt`, clause (n).
+- **Phase 67's merge did not touch the guarded code.** `git diff 368a3f44..HEAD` on `PowerBrowserAPI.sys.mjs` has four hunks: one `SHELL_MESSAGE_KINDS` line (:304), one `registerOrcaLogoActor()` call (:2296), one `case` line (:2332), and the appended Orca-hosting section after the agent bridge's end marker (:11770+). The adopt section, `installNewWindowReceivers`, `webTabOpen`'s literal and the agent section are byte-identical, shifted 2 lines. The 43 lines `GroupActorChild.sys.mjs` gained are the logo child after `agentSnapshot`, and its actor `matches` only the Theia origin. The p66-08 live runs predate the merge (08:41-08:55, merge 09:20), and the merge did not change the code they exercised.
+- **One open path remains (new Gap 1).** A download started by an agent page opens its viewer in the stock window. **One property of the content wall is unproven (new Gap 2):** the initial `about:blank` may not carry the flag.
+- **A claim in the 66-08 SUMMARY is wrong.** It says an external-protocol link raises "a prompt, not a window". In PB that prompt is a standalone chrome window (Security finding 3).
 
 ## Method
 
-- I read the delivered code. SUMMARY claims were not taken as evidence. The code read: the chrome bridge end-of-file section and the `webTabOpen` agent branch of `PowerBrowserAPI.sys.mjs`, the `PowerBrowserAgentChild` in `GroupActorChild.sys.mjs`, `@powerbrowser/orca-browser` (dispatch, page table, reveal tracker, frontend module), the agent pieces of `web-tab.ts`, the chrome-bar mark and copy, the D-34 store-row functions in `pb-pane-mount.tsx`, the row wiring in `pb-browser-host.ts`, the orca-panes `browser` route, and the Phase 36 new-window adopt section.
-- I ran 22 quick rows one at a time under `nix develop .#theia`, plus `diff-theia-core.sh`. Every row passed (table below).
-- I did not run any live rows or builds, because Phase 67 lanes are running on this host. Live behaviour rests on the coordinator's own output files in `.mozbuild/p66-06/` and `.mozbuild/p66-07/`. I read those files directly; they are raw run output, not SUMMARY narration.
+- The code I read: the adopt section (`PowerBrowserAPI.sys.mjs:7395-7560`), `installNewWindowReceivers` (:4362-4386), `webTabOpen` (:3577-3680), the agent section (:11120-11345, :11545, :11695-11770), `tabsBridgeCreate` (:10568), the page context menu capture (:8652), `firstWebTabLoad` (:3813), the downloads view (:7137-7213), the gBrowser stand-in (`powerbrowser.js:78-140`), the agent child's input rows (`GroupActorChild.sys.mjs:255-300, :472-481`), and the tab-scope opens clause (`verify-orca-browser-tab-scope.mjs:565-718`).
+- The upstream code I read for each candidate open path is cited in the table under "Open paths 66-08 might have missed".
+- I ran 17 quick rows one at a time under `nix develop .#theia` with `scripts/verify-platform.sh --only <label>`. All passed (table below).
+- I planted faults in a scratch harness that imports the shipped tab-scope exports. Each guard removal went red, and so did a sixth receiver member nobody wrote.
+- I did no live runs and no builds. The live evidence is the coordinator's raw output in `.mozbuild/p66-08/`.
 
 ## Goal Achievement
 
 ### Observable Truths
 
+Truths 1-12 are carried from the initial verification. Truths 13-18 are the 66-08 plan's must-haves (its seventh must-have, the re-runs, is truth 18).
+
 | # | Truth | Status | Evidence |
 |---|-------|--------|----------|
-| 1 | SC1: a browser page Orca or an agent opens is a PB web tab with PB's chrome bar, address field and history. A derived check proves each Orca browser-pane entry point routes to a PB web tab, and the screencast pane is never shown | VERIFIED | `orca-pane-routes.ts:41` `'browser': { target: 'pb-web-tab' }`. The observer (`orca-pane-observer.ts:237`) activates only what `OrcaBrowserPages.reveal` returns and creates nothing. `createPage` opens a `WebTabWidget` through `openAgentTab` (`orca-browser-frontend-module.ts:282-291`), so the tab gets the standard chrome bar. I ran `orca-browser-entry-points`: PASS, "the pane entry's graph (8666 modules) reaches none of the 13 page-mounting components; browser routes to pb-web-tab; callers 17 createBrowserTab, 4 createWebRuntimeSessionBrowserTab: 13 reachable, 8 dead". Its self-test PASS. Live: `.mozbuild/p66-07/agent-live-2.txt` clauses (k), (a), (g) and (j) "reveal 16 ms" |
-| 2 | SC2: an agent navigates, clicks, types and screenshots through the chrome-side bridge. A request for a non-Orca tab is refused. No WebDriver BiDi port listens, and the check's control run proves the detector | VERIFIED | `handleWebTabAgent` (`PowerBrowserAPI.sys.mjs:11632-11673`) refuses in order: malformed id, a method outside the frozen `AGENT_METHODS`, params failing the method's validator, then the wall. Native rows run in chrome, actor rows through `getActor` only after the wall. The page table refuses unmapped ids with `browser_tab_not_found` (`orca-browser-dispatch.ts:144-147`). I ran `orca-browser-tab-scope`: PASS, "40 methods (15 native, 25 actor): every one refused before page work for a user, unknown, foreign, wrong-container or stopped tab"; its self-test PASS. Live: agent-live-2 (b), (b1), (b2), (d). `.mozbuild/p66-06/final-no-remote-agent-port-live.txt`: the control run saw `127.0.0.1:36851 pid 188786 powerbrowser unaccounted`, and the shipped launch had 4 sockets, each accounted for |
-| 3 | SC3: while an agent drives a tab, the chrome bar shows the "agent is controlling" mark with a Stop button, and Stop ends control. A stock window shows no mark | VERIFIED | Chrome owns the state: `agentSetActive`/`agentArmIdle` (20 s), push `agentControlChanged`. `renderAgentControl` (`chrome-bar-widget.tsx:1682-1695`) renders only when `currentWebTab()?.agentControl.active`, and the Stop click is the one caller of `agentStop()`. `handleWebTabAgentStop` sets `stopped` for the tab's lifetime and aborts in-flight calls. The wall then answers `agent-stopped`, which maps to `browser_owner_unavailable`. Live: `.mozbuild/p66-07/orca-agent-mark-live.txt` PASS, "mark and title class while driving, cleared after 21000 ms idle, Stop ended control ... stock window unmarked with chrome equal to the baseline (286 nodes)". The positive read comes before the absence |
-| 4 | SC4: each user-facing tool in the Phase 61 inventory is reachable from the chrome bar or a side panel, and a set comparison proves it | VERIFIED | I ran `orca-browser-tools`: PASS, "30 U-rows equal the map's 30 entries: 15 existing contributions, 1 mark, 10 skips, 4 deferrals". Its self-test PASS. The skips are the spike's own dispositions. Deferrals U-06/U-07/U-08/U-12 point at BRW-06..BRW-08, which REQUIREMENTS.md placed in v2 when the milestone was defined (commit 8faee780, 2026-11-04, owner D-3/D-4/D-6), so this is not a phase-level descope. Owner confirmation of P66-24 is in the deferred human items |
-| 5 | Chrome wall: only an overlay this frontend created with the agent flag, in its own container and not stopped, accepts agent kinds. Stock-window tabs are unreachable by construction | VERIFIED | `agentWallVerdict` (`:11190-11201`) requires `entry.owner === actorRef`, `entry.agent === true` and `agentInOwnContainer` (the live `originAttributes.userContextId` equals the creation id, `:11206-11209`), and not stopped. The flag is set only after a new overlay is created (`:3652-3655`). The `already-open` return at `:3580-3584` comes first, and `handleGroupMutation` refuses any flag value other than `true` (`:2795-2798`). Lookups read only `webTabs`; stock windows' tabs are never in it |
-| 6 | Agent overlay isolation: Orca-agent container, no LoginManager, no autocomplete, dialog answering limited to alert/confirm/prompt, HTTP auth and beforeunload refused, permission prompts and file pickers unanswerable | VERIFIED (for the agent overlay itself) | The attribute override at `:3618` (usercontextid, `messagemanagergroup: powerbrowser-orca-agent`, empty `autocompletepopup`) is set before `appendChild`. Without a container no tab opens (`:3586-3589`). Cookie rows use `{ userContextId: entry.agentUserContextId }` only. `AGENT_DIALOG_TYPES` = alert, alertCheck, confirm, confirmCheck, prompt; `inPermitUnload` is refused; the dialog must belong to this overlay (`agentDialogWindow`). There is no code path that answers permission doorhangers or file pickers. Live: agent-live-2 (e), (e2) "userContextId 6", (l), (m) "promptUserAndPass". This truth covers the agent overlay only; truth 8 covers windows the agent page opens |
-| 7 | Agent tabs open in the background and never take the user's focus; a parked overlay that receives focus gives it back | VERIFIED | `openAgentTab` with the placement ref and no activation. `webTabPlacement` parks unshown agent overlays at z-index -1. The capture-phase focus guard (`agentFocusGuardInstall`/`agentFocusGuard`, `:11268-11286`) returns focus to the shown overlay or the Theia frame. Live: agent-live-2 (a), (c), (c2) "typing kept while the parked page called focus()" |
-| 8 | Pages an agent tab opens stay inside the agent isolation (container, no login manager, background, marked) | FAILED | See Gaps. `adoptContentWindow`/`adoptLinkIn` (`:7440-7489`) never consult `entry.agent`. `createPendingOverlay` (`:7499`) opens an ordinary overlay with messagemanagergroup "browsers" and PopupAutoComplete. The link path uses the user's default jar |
-| 9 | The remote-debugging port is never open in a shipped launch | VERIFIED | No shipped config (powerbrowser/, generated/, flatpak/, homebrew-tap/, winget/, systemd/, nix/, brand/, configuration.toml) names `--remote-debugging-port`, `remote.active-protocols` or marionette. Product code imports no `remote/` module; the only mention is a comment at `:940`. The live row enumerates `/proc/net/tcp*` for the process tree and is blind-proofed by the control run (row 2 evidence). The flag stays available to someone who launches the binary by hand, which is outside the shipped launch |
-| 10 | Seams are only 010, 070 and 080; there is no Theia core edit and no edit to a file tracked in Orca's git | VERIFIED | `orca-overlay/seams.json` lists exactly 010, 070 and 080. No phase-66 commit touches `orca-overlay/patches` or `seams.json` (`git log 5a13abab..HEAD`). I ran `orca-overlay`: PASS, 3 seams. I ran `diff-theia-core.sh`: "PASS -- zero changes inside @theia/*". The phase's Theia changes outside `extensions/` are the build order and one dependency line. Live `orca-browser-host-bundle` (p66-07): PASS, including the `git -C orca status` clause |
-| 11 | Firefox internals are reached only through the boundary file plus catalogued GroupActorChild rows (hard rule 2) | VERIFIED | The 3 `Cc[`/`Ci.` lines in `GroupActorChild.sys.mjs` (:293, :651, :652) and the `wrappedJSObject` uses (:373, :654) each have a row (`INTERNAL-APIS.md:443-447`). `registerAgentActor` and the child class are at :421-422. I ran `internals-boundary`, `internals-catalogue` and `ng-040-internals-catalogue-lines`: all PASS. No `.sys.mjs` file was added |
-| 12 | D-34: each agent page has a background Orca store row keyed by browserPageId; selecting the row reveals the bound tab with no second widget; the row is dropped on closePage or a user close | VERIFIED | `addBrowserPage`/`removeBrowserPage`/`selectBrowserPage` (`pb-pane-mount.tsx:730-772`) use Orca's builders with `activate: false` and a staged client-hosted handle. `followRow` in `pb-browser-host.ts:80-92` adds or drops the row only on a completed command. The reveal tracker's creation mark ends at the first listed record (`orca-browser-dispatch.ts:194-221`). I ran `orca-browser-abilities`: PASS, trace scenario green. `orca-browser-entry-points` clause 10 is part of its PASS. Live: (j) "reveal 16 ms" |
+| 1 | SC1: a browser page Orca or an agent opens is a PB web tab with PB's chrome bar; each Orca browser-pane entry point routes to a PB web tab; the screencast pane is never shown | VERIFIED (regression check) | `orca-browser-entry-points` PASS today; route and observer files unchanged since the initial pass |
+| 2 | SC2: agent navigation, click, type, screenshot through the chrome bridge; a non-Orca tab is refused; no BiDi port listens, the detector proven by a control run | VERIFIED (regression check) | `orca-browser-tab-scope` PASS: 40 methods each refused for a user, unknown, foreign, wrong-container or stopped tab. `handleWebTabAgent` and the wall are unchanged except 66-08's refusal count (:11701, :11711) |
+| 3 | SC3: the "agent is controlling" mark with Stop; Stop ends control; a stock window shows no mark | VERIFIED (regression check) | `.mozbuild/p66-08/orca-agent-mark-live.txt` PASS on the 66-08 tree. `orca-agent-mark-live-self-test` PASS today |
+| 4 | SC4: each user-facing tool in the Phase 61 inventory is reachable; a set comparison proves it | VERIFIED (regression check) | `orca-browser-tools` PASS today |
+| 5 | Chrome wall: only an agent-flagged overlay this frontend created, in its own container and not stopped, accepts agent kinds | VERIFIED (regression check) | `agentWallVerdict` :11202-11213 and `agentInOwnContainer` :11218-11221 are unchanged |
+| 6 | Agent overlay isolation: agent container, no LoginManager, no autocomplete, dialogs limited to alert/confirm/prompt, HTTP auth and beforeunload refused | VERIFIED (regression check) | The literal override is at :3620. `AGENT_DIALOG_TYPES` is at :11545 and `inPermitUnload` is refused at :11552. The LoginManager registry clause passes inside tab-scope. Live agent-live-2 clauses (e), (e2) "agent container 6", (l) and (m) passed again on the 66-08 tree |
+| 7 | Agent tabs open in the background and never take focus; a parked overlay gives focus back | VERIFIED (regression check) | `agentFocusGuardInstall`/`agentFocusGuard` :11318-11335 are unchanged. Live (c), (c2) |
+| 8 | Pages an agent tab opens stay inside the agent isolation (D-35: refused on every open path) | FAILED (narrowed) | **Closed:** the five receivers and the popup-with-features route (truths 13-17). **Open:** the download viewer (Gap 1). An agent page's PDF download opens in the user's stock window, or in a new stock window, through `DownloadUIHelper.loadFileIn`, which no PB guard sees |
+| 9 | The remote-debugging port is never open in a shipped launch | VERIFIED (regression check) | No shipped config changed. Phase 67 adds no remote-agent import |
+| 10 | Seams only 010, 070, 080; no Theia core edit; no tracked Orca edit | VERIFIED (regression check) | `orca-overlay` PASS (3 seams). 66-08's commit touches no `orca/`, `orca-overlay/patches` or `seams.json` file. `git -C upstream diff` is empty |
+| 11 | Firefox internals only through the boundary file plus catalogued GroupActorChild rows | VERIFIED | `internals-boundary`, `internals-catalogue` and `ng-040-internals-catalogue-lines` PASS today. 66-08 added rows for `Cr.NS_ERROR_ABORT` and the `sandboxFlags` write |
+| 12 | D-34 store rows keyed by browserPageId; reveal with no second widget; row dropped on close | VERIFIED (regression check) | `orca-browser-abilities` PASS. Live (j) "reveal in 11 ms" |
+| 13 | Content wall: SANDBOXED_AUXILIARY_NAVIGATION on the agent browsing context from creation, before its first load; never on a user overlay | UNCERTAIN (Gap 2) | Set at :11272, after the frame loader exists and before `firstWebTabLoad`. Inherited by subframes (`nsFrameLoader.cpp:3072-3075`) and copied on a browsing-context replacement (`CanonicalBrowsingContext.cpp:356-357`). Live (n): `sandboxFlags 2`, and `window.open` with and without features threw InvalidAccessError. Not established: the initial `about:blank` document, which is created before the field is written and is current until the first load commits |
+| 14 | Chrome wall: every receiver `installNewWindowReceivers` installs refuses an agent opener; the browserDOMWindow members throw; openLinkIn opens nothing for every where | VERIFIED | `adoptLinkIn` :7445 returns null before the `where` branch, so "window" never reaches `openStockTab`. `adoptContentWindow` :7484 calls `agentOpenGuard` before the print/Theia null. `adoptInProcessWindow` :7498-7501 handles both in-process members (:4366-4377). `agentOpenGuard` :11308-11313 throws `NS_ERROR_ABORT`; ContentParent treats a failure as a refusal and a null as "open a stock window". `createPendingOverlay`'s only other caller, `tabsBridgeCreate` :10592, is extension-initiated, not an agent-page path |
+| 15 | A chrome-refused open is logged once per tab and path without the URL; an in-flight agent command answers `browser_command_unavailable` | VERIFIED | `agentOpenRefused` :11292-11305 logs the path name with no URL, through a per-entry Set. `handleWebTabAgent` :11701/:11711 turns a `done` into the failure when the count moved. The tab-scope clause has a positive `done` control. Live (n): middle-click and Control+Enter answered `failed browser_command_unavailable` |
+| 16 | orca-browser-tab-scope derives every open path from `installNewWindowReceivers`, requires the guard at every OPEN_* location from the pinned IDL, one generated plant per path | VERIFIED | PASS today: "5 open paths derived ... at any of 12 OPEN_* locations or 6 link wheres". Self-test: 30 plants red. My own plants against the shipped source went red in five cases: link guard dropped, InFrame guard dropped, in-process guard dropped, content wall dropped, and a new unguarded `openURIInNewWindow` member (derived as a 6th path and red). Limit: the derivation sees only the receivers, so Gap 1's path is outside it |
+| 17 | orca-browser-agent-live clause (n): user opens adopt first (detectors), then agent opens create no tab, window or load; current tab and focus unchanged; the agent's own link click still navigates | VERIFIED | `.mozbuild/p66-08/agent-live-2.txt`: "clause (n) ok (user: link 1 tab, window.open 1 tab, popup 1 window; agent: 0 tabs, 0 windows, 0 loads, ... sandboxFlags 2)". `verdictOpens` (:251-275) requires `ownNavigation`, with plant `agent-own-navigation-blocked` (:778). `orca-browser-agent-live-self-test` PASS today |
+| 18 | The listed live and quick rows were re-run; --quick green; nothing pushed | VERIFIED | p66-08 files: agent-live 1 and 2 PASS, mark-live PASS, new-window-adopt-live 12/12 PASS. `quick.txt` was red only on `fixer-isolate-self-test`, whose cause is the sandbox's socket (outside this phase). My 17 rows passed today |
 
-**Score:** 11/12 truths verified (0 present, behavior-unverified)
+**Score:** 16/18 truths verified (0 present, behavior-unverified). 1 FAILED (truth 8, Gap 1), 1 UNCERTAIN (truth 13, Gap 2).
+
+### Open paths 66-08 might have missed (checked from current code)
+
+| Candidate | Verdict | Evidence |
+|-----------|---------|----------|
+| window.open / target=_blank / form target (InFrame members) | Closed | Truth 14. Content wall first, chrome throw second |
+| Popup with features, shift-open (OPEN_NEWWINDOW, no chrome receiver) | Closed after first load; see Gap 2 for the initial document | `nsWindowWatcher.cpp:980-983` refuses when the active document carries the flag |
+| Middle-click, modified click, Enter, every `where` | Closed | `adoptLinkIn` :7445. Live (n) |
+| In-process members | Closed | :7498-7501 |
+| Print (`OPEN_PRINT_BROWSER`) | Closed | The guard runs before the print null at :7484-7487 |
+| Document PiP (`documentPictureInPicture.requestWindow`) | Closed by the content wall (same caveat as Gap 2) | `DocumentPictureInPicture.cpp:148` opens through `OpenWindow2` with `PRINT_NONE`, so it meets the window-watcher sandbox check; the call also needs transient activation |
+| Video PiP (toggle click or `requestPictureInPicture`) | Not reachable | `PictureInPictureLauncher`, `PictureInPicture` and `PictureInPictureToggle` are registered only for `browsers` (and `pip-player`) (`ActorManagerParent.sys.mjs:739-775`). Agent overlays are in `powerbrowser-orca-agent` |
+| View-source, `about:`, `chrome:`, `file:` (navigation into a privileged page) | Not reachable | `browser.goto` goes through `webTabNavigate` :4147, which accepts http(s) and about:blank only, with a null principal. Page-initiated loads of those schemes are refused by Gecko's CheckLoadURI. Back and forward stay in the tab's own history |
+| Context menu raised by trusted synthetic right-click | Not an agent open path | A parked overlay's capture is refused (`overlayShownToUser`, :8652). On a shown agent tab the menu opens, but "Open link in new tab" runs only on a user's pick (`runPageMenuRow` :8801). The agent's input cannot reach the Theia menu |
+| Drag-and-drop of a link | Not an open path | `browser.drag` (`GroupActorChild.sys.mjs:472-481`) synthesizes mouse events in the page's own window. No drop target outside the page receives them, and no window is created |
+| Extension `tabs.create` with the agent tab as opener | Not an agent-page path | `tabsBridgeCreate` :10568-10596 is extension-initiated. Agent overlays are in the extension tab host (`tabHostAddTab` :3662), which is the pre-existing design |
+| **Download → viewer** | **Open: Gap 1** | `nsExternalHelperAppService.cpp:1818-1836` → `DownloadIntegration.sys.mjs:889-909` → `DownloadUIHelper.sys.mjs:83-131` (stock window or a new one). No PB guard |
+| **External protocol (mailto:, zoommtg:, ...)** | **Open, owner item** | Security finding 3 |
 
 ### Required Artifacts
 
 | Artifact | Expected | Status | Details |
 |----------|----------|--------|---------|
-| `powerbrowser/shell/PowerBrowserAPI.sys.mjs` (agent section :11088-11714, webTabOpen :3575-3660) | wall, 40 methods, container, parking, focus guard, dialogs, mark state, Stop | VERIFIED | Substantive and wired: the `webTabAgent`/`webTabAgentStop` arms are at :5588 |
-| `powerbrowser/shell/GroupActorChild.sys.mjs` (`PowerBrowserAgentChild` :639, snapshot after) | 25 actor rows plus snapshot | VERIFIED | Created only through `getActor` after the wall; registered for the agent group only |
-| `theia/extensions/orca-browser/**` | page table, dispatch, reveal tracker, abilities, tools | VERIFIED | Listed in `theia/applications/browser/package.json` and `build:extensions` |
-| `theia/extensions/tab-uris/src/browser/web-tab.ts` | agent option, push, kinds, Stop | VERIFIED | The flag goes on the first `webTabOpen` only (:984-986) |
-| `theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx`, `chrome-bar-copy.ts` | mark and Stop, copy rows | VERIFIED | Rendered at :1909. The copy carries no internal identifier (`shell-error-copy-no-internals` PASS) |
-| `orca-overlay/files/src/renderer/src/pb/browser-host/*`, `pb-pane-mount.tsx` | thin host, store rows | VERIFIED | Imports no `web-runtime-client` and writes no capability constant (grep: 0) |
+| `powerbrowser/shell/PowerBrowserAPI.sys.mjs` | `agentOpenRefused`, `agentOpenGuard`, `adoptInProcessWindow`, the content wall in `agentTabCreated` | VERIFIED | :11288 `SANDBOXED_AUXILIARY_NAVIGATION = 0x2` matches `nsSandboxFlags.h:32`. Wired from all five receivers |
+| `scripts/verify-orca-browser-tab-scope.mjs` | `opensClause`, `receiverPlants` | VERIFIED | :602, :693; registered rows PASS |
+| `scripts/verify-orca-browser-agent-live.mjs` | clause (n), `verdictOpens` | VERIFIED | :251, :441 (fixture `/opener`) |
+| Earlier artifacts (agent section, GroupActorChild agent child, orca-browser extension, web-tab, chrome-bar, overlay host) | as initial pass | VERIFIED (regression check) | Unchanged apart from Phase 67's additive hunks |
 
 ### Key Link Verification
 
 | From | To | Via | Status |
 |------|----|-----|--------|
-| pb-browser-host (Orca attach stream) | OrcaBrowserHost.serve | `onCommand` → `dispatchCommand` | WIRED |
-| dispatch automation | chrome `handleWebTabAgent` | `channel.request({kind:'webTabAgent'})` | WIRED |
-| chrome actor rows | PowerBrowserAgentChild | `getActor(AGENT_ACTOR_NAME).sendQuery("PowerBrowserAgent:Run")` | WIRED |
-| chrome mark state | chrome bar | `agentControlChanged` push → `setAgentControl` → `renderAgentControl` | WIRED |
-| Stop button | chrome Stop | `agentStop()` → `webTabAgentStop` | WIRED |
-| Orca store row selection | web tab reveal | orca-panes observer → `OrcaBrowserPages.reveal` → `activateWidget` | WIRED |
-| completed createPage/closePage | Orca store row | `followRow` → `addBrowserPage`/`removeBrowserPage` | WIRED |
+| `installNewWindowReceivers` | `agentOpenRefused` | `adoptLinkIn` (:7445), `adoptContentWindow` (:7484), `adoptInProcessWindow` (:7499) | WIRED |
+| `agentOpenRefused` | `handleWebTabAgent` | `control.openRefusals` read at :11701/:11711 | WIRED |
+| `webTabOpen` agent branch | content wall | `agentTabCreated` (:3655 call, :11272 write) | WIRED (timing caveat, Gap 2) |
+| Earlier seven links (attach stream, `webTabAgent`, actor rows, mark push, Stop, store reveal, `followRow`) | | | WIRED (unchanged) |
 
 ### Behavioral Spot-Checks (run by this verifier, quick rows only)
 
 | Row | Result |
 |-----|--------|
-| orca-browser-host-bundle-self-test | PASS |
-| orca-browser-abilities / -self-test | PASS / PASS |
-| orca-browser-entry-points / -self-test | PASS / PASS |
-| orca-browser-tab-scope / -self-test | PASS / PASS |
-| orca-snapshot-fixtures, orca-browser-snapshot-live-self-test | PASS, PASS |
-| orca-browser-tools / -self-test | PASS / PASS |
-| orca-browser-agent-live-self-test, orca-agent-mark-live-self-test | PASS, PASS |
+| orca-browser-tab-scope / -self-test | PASS / PASS (30 plants) |
+| new-window-adopt / -self-test | PASS / PASS |
 | gui02-web-tab-bridge / -self-test | PASS / PASS |
+| orca-browser-agent-live-self-test, orca-agent-mark-live-self-test | PASS, PASS |
 | internals-boundary, internals-catalogue, ng-040-internals-catalogue-lines | PASS |
-| orca-overlay | PASS (3 seams: 010, 070, 080) |
-| privacy-hosts, shell-error-copy-no-internals | PASS |
-| scripts/diff-theia-core.sh | PASS, zero changes inside @theia/* |
+| orca-browser-abilities, orca-browser-entry-points, orca-browser-tools | PASS |
+| orca-overlay, privacy-hosts, shell-error-copy-no-internals | PASS |
+| Scratch plants against `opensClause` (shipped source plus 5 edits) | shipped GREEN; each of the 5 plants RED, naming its path |
 
-### Can the checks go red?
+### Probe Execution
 
-- `orca-browser-tab-scope` evaluates the shipped section in `node:vm` over a stub boundary. Its self-test plants a missing wall arm, a flag honoured on an existing tab, a duplicate-accepting table, a wrong container and a missing Stop, and each goes red. This derives from the shipped source rather than from a copy.
-- `orca-browser-abilities` makes a three-way set comparison: the pinned Orca tier-1 set, chrome's `AGENT_METHODS` parsed from source, and the dispatcher's served set. Plants include an extra method, a missing method on each side, a BiDi row and an empty derivation.
-- `orca-browser-entry-points` derives the page-mounting components and the `createBrowserTab` callers with TypeScript from the pin. Plants include a new component, an imported screencast pane and a zero-member parse. 66-07 added 12 plants for the store-row clause.
-- `orca-browser-tools` makes a set comparison of the U-rows parsed from the spike README against the map, and requires each contribution to exist in the tree.
-- `no-remote-agent-port-live` runs a control launch with `--remote-debugging-port=0`, which must show an unaccounted main-process socket before the shipped launch is judged. The ports it accepts are derived at run time (orcad's agent-hook port is read from Orca's `endpoint.env`).
-- `orca-agent-mark-live` proves the mark present before it judges the stock window unmarked. `orca-browser-agent-live` (l) proves login autofill in a user tab before it judges the agent tab empty, and (j) requires the user tab current before the create.
-- Not covered: no check opens a window from an agent tab (Gap 1).
+No `scripts/*/tests/probe-*.sh` is declared by 66-08. Live rows were not run (instruction). The p66-08 raw outputs were read directly.
 
 ### Requirements Coverage
 
 | Requirement | Source Plans | Status | Evidence |
 |-------------|--------------|--------|----------|
 | BRW-02 | 66-01, 66-02, 66-05, 66-07 | SATISFIED | Truths 1, 12 |
-| BRW-03 | 66-01..66-04, 66-07 | SATISFIED for the bridge; the security gap is in Gap 1 | Truths 2, 5, 6, 9. "can reach only Orca-created tabs" holds for agent control. Agent-opened windows leave the isolation (Truth 8) |
+| BRW-03 | 66-01..66-04, 66-07, 66-08 | SATISFIED for agent control. The isolation of agent-caused pages is still open (Gap 1) | Truths 2, 5, 6, 9, 14-17. Agent control still reaches only Orca-created tabs. The download viewer is not agent-controlled, but it is placed in the user's window |
 | BRW-04 | 66-03, 66-05 | SATISFIED | Truth 3 |
 | BRW-05 | 66-05 | SATISFIED | Truth 4 |
 
-No orphaned requirement: REQUIREMENTS.md maps only BRW-02..BRW-05 to Phase 66, and each appears in a plan.
+No orphaned requirement.
 
 ### Prohibitions (judgment tier; non-authoritative LLM-judge verdicts)
 
 | Prohibition | Verdict |
 |-------------|---------|
-| No `web-runtime-client` import, no Orca constant write, no private member (66-01) | Holds: grep over `pb/browser-host/` found 0. The host-bundle static clauses are green |
-| No seam patch, no tracked Orca edit, seams.json untouched (66-01) | Holds: no phase-66 commit touches either |
-| No pairing material in logs/results (66-01) | Holds for the p66-07 evidence files I read. The one "pairing" match is the word in a PASS line |
-| No Orca browser component mounted (66-02) | Holds: entry-points PASS |
-| No WebDriver BiDi / Remote Agent module in product code (66-03) | Holds: grep found 0 imports |
-| No accessibility service in the child (66-04) | Holds: grep found 0 |
-| No custom browser chrome beyond the chrome bar (66-05) | Holds: one mark element and one Stop button inside the existing bar |
-| Coordinator process prohibitions (66-06, 66-07) | Not independently re-derivable; accepted on the merge records |
+| 66-08: no edit to Theia core, `upstream/`, tracked `orca/` files or the ledger; no new seam | Holds: 368a3f44 touches 7 files, none of them in those trees. `git -C upstream diff` is empty. Seams are still 3 |
+| 66-08: hunks only in the open/adopt functions and the agent section | Holds: the 61-line diff to the API file sits in the adopt section, two receiver bodies (line-neutral) and the agent section |
+| 66-08: no ready line, pairing URL, offer, token or saved password in output | Holds for the p66-08 files I read |
+| 66-08: no push, explicit-path commits, no check weakened | Not independently re-derivable for the push. No check was weakened: tab-scope gained 13 plants and agent-live gained 15 |
+| Earlier prohibitions (66-01..66-07) | Unchanged from the initial pass |
 
 ### Anti-Patterns Found
 
 | File | Line | Pattern | Severity | Impact |
 |------|------|---------|----------|--------|
-| PowerBrowserAPI.sys.mjs | 11348-11349 | `shortcut:` comment on navigation settle polling | Info | Documented limit with an upgrade trigger; not a debt marker |
-| — | — | TBD/FIXME/XXX in phase files | none found | — |
+| PowerBrowserAPI.sys.mjs | 11398 | `shortcut:` comment on the navigation settle polling (carried) | Info | Documented limit with an upgrade trigger |
+| 66-08 changed files | — | TBD/FIXME/XXX | none found | — |
 
 ### Security Findings
 
-1. **Blocker (Gap 1): agent-opened windows leave the agent isolation.** Details are in the gaps frontmatter. Two consequences follow from the code alone. First, a link opened from an agent tab by a middle-click (or Enter on a focused link, which takes modifiers through nsTextInputProcessor) becomes a non-agent PB web tab in the user's default jar with the login manager attached. Second, a `window.open` from an agent page becomes a non-agent tab with the login manager attached, scriptable by the agent page when same-origin. Exploitability end to end is not proven live.
-2. **Info: an agent can raise prompts it cannot answer.** A trusted synthesized click on `<input type=file>` or a permission request makes Gecko show a file picker or doorhanger to the user. The agent has no path to answer it (`agentAnswerDialog` reads only this overlay's commonDialog windows, and only alert/confirm/prompt), but the user may be asked to act on an agent's behalf. Record this for the owner.
-3. **Info: the agent container is a public contextual identity.** "PowerBrowser Orca agents" is visible wherever containers are listed. A user could open a stock tab in it and share the agent's cookies. The id is kept in the user pref `powerbrowser.orca.agentUserContextId` and re-validated at each use.
-4. **Info, recorded earlier as an owner item:** agent-tab visits enter the user's Places history (66-06 Deferred).
-5. **Holds:** agent control of a non-agent tab, of a stock-window tab, of the HTTP-auth dialog or of the user's focus is refused or guarded in code and proven live (truths 5-7). The remote-debugging port is never open in a shipped launch (truth 9).
+1. **Blocker (Gap 1): an agent page's download opens outside the agent isolation.** The path is a PDF (handleInternally) download that leads to `DownloadUIHelper.loadFileIn`. The viewer opens as a stock-window tab, or as a new stock window when none is open, with no mark and no Stop, and the file is written to the user's Downloads folder. This is derived from the code and not live-proven. The tab keeps the agent container and the agent page has no handle on it, so no password or user cookie reaches the agent. It still breaks D-35's "not sent to a stock window" and the privacy sentence. Fix site: `PowerBrowserAPI.sys.mjs:7189-7213` (downloads view) or the agent section near :11268.
+2. **Warning (Gap 2): the initial `about:blank` of an agent overlay may lack the content wall.** If it does, an agent can open a stock popup window, using a click and then an eval of `window.open(..., "popup")`, before the first load commits. Unproven: it needs one live probe.
+3. **Warning, owner item (already listed in 67-06 as "External protocols"; corrected here):** The 66-08 SUMMARY calls the external-protocol prompt "a prompt, not a window". In PB the shell's gBrowser stand-in (`powerbrowser.js:78`) has no `getTabDialogBox`, so `ContentDispatchChooser._openDialog` falls back to `Services.ww.openWindow(..., "chrome,dialog=yes,centerscreen")` (`ContentDispatchChooser.sys.mjs:368-391`). That is a standalone chrome window, raised by an agent page's link to `mailto:`, `zoommtg:` and similar schemes. It can take focus, and the focus guard does not cover it. Worse, protocol permissions are not isolated by container (`permissions.isolateBy.userContext` defaults to false). If the user once allowed an origin to open a scheme whose handler is set not to ask, an agent page of that origin launches the external application with an agent-chosen URI and no dialog at all (`ContentDispatchChooser.sys.mjs:74-90`). The owner should decide whether agent overlays refuse external-protocol loads outright. The refusal could be chrome-side, where the agent child or a load observer sees the scheme.
+4. **T-66-08-04 (accepted risk) judged acceptable, with one recorded limit.** `CanSet(IDX_SandboxFlags)` accepts any process (`BrowsingContext.h:1601-1603`), and `ContentParent::CommonCreateWindow` does not re-check the opener's flags for OPEN_NEWWINDOW. A compromised agent-container content process could therefore open a featured popup. That requires a renderer compromise. Fission places agent-container pages in their own processes, because the process key carries the origin attributes. A compromised content process has broader IPC options than this one, and Gecko's own iframe sandbox has the same trust assumption. The chrome wall still covers every receiver chrome owns. If the owner wants defense in depth without a Gecko patch, chrome could observe new top-level windows (`domwindowopened`) whose opener browsing context's top embedder is an agent overlay and close them.
+5. **Carried (Info):** an agent can raise prompts it cannot answer (file picker, permission doorhanger). The agent container is a public contextual identity. Agent visits enter Places history. Agent overlays are visible to installed extensions through the tab host (pre-existing design).
+6. **Holds:** agent control of non-agent tabs, stock tabs, HTTP auth and focus is refused or guarded. The five receivers refuse agent openers. Video PiP is unreachable. The remote-debugging port is closed in shipped launches.
 
 ### Deferred Human Verification (end-of-milestone pass, 59-CONTEXT D-18)
 
-These are not gaps. They go to the single end-of-milestone owner pass.
+These items are carried, not gaps:
 
-1. **Mark and Stop are readable and placed correctly.** Test: drive a tab with the CLI and look at the chrome bar and the tab title in light and dark themes. Expected: the mark beside the sharing indicator, a clear Stop button, and the title class visible. Why human: visual.
-2. **Live agent session.** Test: in a real worktree, an Orca agent browses, fills a form and takes a screenshot while the user types in another tab. Expected: no focus loss, and the result is correct. Why human: needs a live agent login.
-3. **Copy review.** Review the four mark/Stop strings in `chrome-bar-copy.ts:77-80` and the privacy paragraph (`privacy.html:86`, to be re-read after Gap 1). Why human: owner copy.
-4. **Owner table.** S2 over S1, P66-08, P66-11, P66-22, P66-24 (U-06/U-07/U-08/U-12 deferred to v2), P66-26, and O1 (parked timer throttling), O2 (agent page dialogs block the IDE) and Places history. Why human: auto-mode picks the owner may override.
+1. Mark and Stop are readable and correctly placed (visual, light and dark themes).
+2. A live agent session in a real worktree while the user types elsewhere.
+3. Copy review: `chrome-bar-copy.ts:77-80` and `privacy.html:86` (re-read after Gap 1).
+4. Owner table: S2 over S1, P66-08, P66-11, P66-22, P66-24, P66-26, O1, O2, Places history, D-35's popup revisit, external protocols (finding 3, corrected above), and T-66-08-04.
 
 ### Gaps Summary
 
-All four roadmap criteria are met in the code, and the coordinator's live output supports each of them. Agent control is walled twice (the page table, then the chrome flag, owner and container check), and Stop and the mark work. One security truth fails: the Phase 36 new-window adopt paths do not know about agent overlays. A page an agent drives can therefore open a window or a tab that is an ordinary user tab: it has the login manager, sometimes uses the user's cookie jar, and carries no mark. In the `window.open` case the agent page can still script it. This contradicts P66-26's intent and the shipped privacy paragraph. The fix is local: an `entry.agent` check on the opener in `adoptContentWindow`/`adoptLinkIn` and on the nsWindowWatcher popup path, plus tab-scope plants and one live clause. No later phase in this milestone covers it (Phase 67 is failure pages, pairing containment, the Origin check, the credential-storage refusal and the logo), so it is not deferred.
+66-08 did what its plan said. Every new-window receiver chrome owns refuses an agent opener, the popup-with-features route meets the content wall, and the tab-scope derivation goes red on a dropped guard or an unguarded new member. The live run shows zero tabs, windows and loads from an agent page after positive user-side detectors. Phase 67's merge left that code untouched. The phase's four roadmap criteria hold, and agent control still reaches only Orca-created tabs.
+
+D-35's stated rule is "every open path, nothing sent to a stock window". One path still contradicts it: a download started by an agent page opens its viewer through Gecko's download UI helper, which goes straight to a stock browser window and never consults the shell's receivers. The derived check cannot see this path, because it enumerates only the receivers. The fix is local, a download-source check for agent overlays plus one live clause. Gap 2 is a single live probe of the initial `about:blank`. It needs a guard only if the probe opens a window.
+
+No later phase in this milestone covers either gap: Phase 67 is hosting hardening and Phase 68 is artifacts and re-pin.
 
 ---
 
-_Verified: 2026-11-11_
+_Verified: 2026-11-11T20:41:43Z_
 _Verifier: Claude (gsd-verifier)_
