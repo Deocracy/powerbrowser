@@ -22,7 +22,7 @@
  * worktree) never sets Orca's active worktree and is never disposed from a list.
  *
  * D-36 (67-07): a re-pair within the document (Reconnect, or the automatic one
- * after an orcad restart) makes Orca's store hydrate again, and its lists come
+ * after a restart of Orca's server) makes Orca's store hydrate again, and its lists come
  * empty for some seconds; rehold() returns every tracked widget to the
  * restored set, so the same hold keeps each tab and its name.
  */
