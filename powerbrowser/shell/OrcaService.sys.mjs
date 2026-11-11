@@ -232,9 +232,9 @@ export const OrcaService = {
     }
     this._orcaVersion = pkg.version;
 
-    // Fallback 0 is outside the valid range on purpose: a missing pref is a named failure here, not
-    // a second copy of the default.
-    this._port = PowerBrowserAPI.getIntPref("powerbrowser.orca.port", 0);
+    // A package carries no powerbrowser-sidecar.js (a dev-tree prefs file, not in the package
+    // manifest), so the fallback is the default, as for every other Orca and sidecar pref (68-06).
+    this._port = PowerBrowserAPI.getIntPref("powerbrowser.orca.port", 26768);
     try {
       OrcaEnv.buildOrcadArgs({ orcadMain: this._orcadMain, port: this._port, webClientRoot: this._webClientRoot });
     } catch (err) {
