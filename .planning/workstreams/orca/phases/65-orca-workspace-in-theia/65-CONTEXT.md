@@ -102,6 +102,33 @@ Source: `DECISIONS.md` D-31, 63-CONTEXT P63-31..P63-40, 64-CONTEXT P64-30..P64-3
 - **P65-31 (amends P65-25 and the `orca-relaunch-restore-live` row): seams and the relaunch check.** The overlay holds one landed seam (010) and two planned in Phase 68 (070, 080): 3 of 10. The relaunch row opens "an Orca terminal split into two hosted terminal tabs" and requires "each restored terminal tab echoes typed input on a new PTY under its old `pb-orca:` name"; nothing in it reads `o<n>`.
 - **P65-32 (amends the Phase Boundary and lane p65-04): no `orca-terminals` edits.** Phase 65 builds on Phase 64's hosted terminal tabs; the offer file lives in lane p63-06's bridge folder (`POWERBROWSER_ORCA_BRIDGE_DIR`, P63-35). Lane p65-04 drops "the pane-key → `o<n>` map and its hand-off in `theia/extensions/orca-terminals` (frontend and bridge allocator)"; its restore files under `theia/extensions/orca-panes/src/browser/restore/**` cover terminals.
 
+### Amendments after 64-TAB-GROUPS (coordinator, 2026-11-10; lane p65-04 only)
+Source: `../64-orca-panes-as-powerbrowser-tabs/64-TAB-GROUPS.md` (1121d847), recommendation (b), its side finding, and `64-VERIFICATION.md`'s TAB-04 gap. These picks win over the drag-driven stage (g2) and the planPanes `move` re-placement that 65-05's prelaunch step added to lane p65-04 at the owner's request. Lanes p65-01..p65-03 are unaffected; the C64 block stays byte for byte in every lane plan, and 65-04 carries a separate amendment paragraph after it.
+
+- **P65-33 (supersedes the drag-driven g2): orca-tabs-live stage (g2) makes the tab group in PowerBrowser's own document.** It clicks stage (f)'s hosted chat's own "Split Chat Right" (Orca's `NativeChatPaneHeader`, rendered in the hosted chat), with no second client and no prompt. Judged in order: one hosted add, then the new chat's store record holds a `split-right` neighbour from the first group (the detector), then the new chat's widget sits in another Lumino tab bar to the right of its reference widget (the first neighbour in its record that has a widget, which is `placementFor`'s rule). The re-placement list is not built, because regrouping of panes already shown is not mirrored (D-15, P64-12), and `planPanes` keeps placing a widget only when it creates it (C64-3). Reasons: Split Chat Right is client-local and applies at once in PowerBrowser's store. A drag in the second client stays red before a PowerBrowser reload, because a client that holds groups keeps them. The 64-06 cause ("a chat in the same tab group") was wrong.
+- **P65-34: sub-stage (g3) `tab-groups-cross-client` is the derived non-propagation guard.**
+  - Drive: it runs while PowerBrowser holds one group. The second client chooses Move Tab to Split ▸ Right on a CLI terminal T.
+  - Detectors: the second client's group strips grow by one, and after stage (k)'s reload T's record holds `split-right`. Both are judged before the absence: for 5000 ms before any reload, T's record held no split mode.
+  - Failure name: if the absence fails, the sub-stage is red naming "live group propagation", which is the signal to revisit P64-12 if a re-pin mirrors live group changes or turns on `layout.intents.v1`.
+  - Lumino half: 64-TAB-GROUPS defers it until the side finding is settled. P65-35 settles it in this lane, so it is asserted here. The settled outcome for T, a pane shown before the reload, is that its Lumino tab-bar peers are unchanged and no second tab bar appears. A second tab bar for T after the reload appeared only through the renumbering defect.
+- **P65-35 (amends P64-28's observer, fixes the 64-TAB-GROUPS side finding): restored hosted widgets keep their names and panes across a frontend reload.**
+  - Defect: Theia's layout restorer recreates the widgets, but the first `subscribePanes` list can arrive empty. `planPanes` then disposed every restored key, the observer cleared `restored`, and the next list re-created the panes and renumbered them, so `pb-orca:term2` opened another pane. This violates P64-28.
+  - Hold rule: `planPanes` holds a restored widget (returned in `held`, neither adopted nor disposed) until a list holds a record of its worktree. For one worktree that is the first non-empty list. The rule is per worktree because a list can hold only another worktree's tabs.
+  - Bound: the hold also ends once the observer's bound `ORCA_RESTORE_HOLD_MS` = 15000 has passed. This is the discretion item "the waiting widget's bound". The C3 and C3-65 API has no store-hydration signal, and no lane changes it alone (P65-28).
+  - Restored set: the observer recomputes it at every list from the WidgetManager's untracked widgets. Restore-opener widgets are included and page widgets are excluded.
+  - Tombstones: name-map tombstones follow the same hold rule.
+  - Checks: orca-tabs-live stage (k) compares name → pane key, store presence and tab-bar groupings, with the finding's term2/term3 swap as a plant. The relaunch row compares name → key.
+- **P65-36: orca-pane-routes clause (h) covers placement with pure fixtures.** It transpiles `orca-pane-routes.ts` in memory and runs the finding's six cases, plus the hold case of P65-35. The six cases are: both panes new in one plan; a known first group; split-bottom; a same-group tab-after neighbour winning; a regrouped known key getting no placement; a restored key adopted, not placed. Each case has one self-test plant. This closes 64-VERIFICATION's "no static coverage" row for `planPanes` and `placementFor`. `paneRecords`' `groupNeighbours` stays covered only by g2's live store record, because it is not exported and the overlay belongs to lane p65-01.
+- **P65-37: TAB-04's tab-group clause is re-worded per the finding** (REQUIREMENTS.md, recorded by this amendment). Groups held in PowerBrowser's hosted client are placed at a pane's first appearance:
+  - a group made in PowerBrowser, at once;
+  - a group another client made, on PowerBrowser's next start or frontend reload.
+
+  Regrouping of panes already shown is not mirrored (D-15, P64-12). The traceability row's 64-06 cause is corrected. ROADMAP Phase 64 criterion 2 keeps its wording until the coordinator updates it.
+- **P65-38 (from lane p65-03's finished SUMMARY): no `setActiveWorktree('')` for a page tab.** Phase 64's observer calls `setActiveWorktree` with the activated widget's `worktreeId`. A page tab (`pb-orca:<view>`, made by lane p65-04's restore opener) has `worktreeId ''`, so the observer sent an empty id.
+  - Fix: lane p65-04 guards the call on a non-empty `worktreeId`.
+  - Check: orca-pane-routes clause (i) requires the guard from the observer's AST, with one self-test plant.
+  - Merge order: lane p65-03's seven page rows in `verify-uri-roundtrip.mjs` and its `orca-side-panel-live` clause (f) open page tabs through p65-04's opener. They go green only after both lanes merge.
+
 ### Claude's Discretion
 - File layout inside `orca-workspace` and the side-panel and restore directories; the backend service name for `git show`; the fixed workspace file name in P65-06; the storage key names of P65-05, P65-18 and P65-20; the waiting widget's bound before it disposes; the tombstone pruning schedule; view ids inside the containers; the exact name words for the page tabs.
 
@@ -193,4 +220,4 @@ Source: `DECISIONS.md` D-31, 63-CONTEXT P63-31..P63-40, 64-CONTEXT P64-30..P64-3
 ---
 
 *Phase: 65-orca-workspace-in-theia*
-*Context gathered: 2026-11-10 (auto mode); amended by owner ruling D-31 2026-11-10 (P65-29..P65-32)*
+*Context gathered: 2026-11-10 (auto mode); amended by owner ruling D-31 2026-11-10 (P65-29..P65-32); amended after 64-TAB-GROUPS.md and lane p65-03's SUMMARY 2026-11-10 (P65-33..P65-38)*

@@ -88,8 +88,13 @@ TERM-03 (remote terminals) moved to v2; see "Terminals (TERM)" under v2 Requirem
   widgets. (D-15)
 - [ ] **TAB-04**: One Orca pane equals one Lumino tab: every Orca pane (terminal, agent
   session, editor, diff, browser page, chat and other Orca-only views) is a tab in PowerBrowser's
-  dock, moves between all modes and appears as an Organising row; Orca's in-tab splits and tab
-  groups are flattened into Lumino splits. (D-01, D-15, T-5)
+  dock, moves between all modes and appears as an Organising row; Orca's in-tab splits, and Orca
+  tab groups held in PowerBrowser's hosted Orca client, are flattened into Lumino splits at a
+  pane's first appearance, in the direction Orca records: a group made in PowerBrowser (a hosted
+  chat's Split Chat Right) at once, and a group another paired client made when PowerBrowser's
+  client next adopts orcad's layout (start or frontend reload). Later regrouping of panes
+  PowerBrowser already shows is not mirrored (D-15, P64-12). (D-01, D-15, T-5; re-worded per
+  64-TAB-GROUPS.md, 65-CONTEXT P65-37)
 - [ ] **TAB-05**: Files and diffs open in Theia's editor, with Orca worktrees opened as Theia
   workspace folders; Orca's own editor is not used. (D-01)
 - [x] **TAB-06**: Chat and the other Orca-only views each open as their own PowerBrowser tab.
@@ -227,7 +232,7 @@ Filled by the roadmap.
 | TAB-01 | Phase 64 | Complete |
 | TAB-02 | Phase 64 | Complete |
 | TAB-03 | Phase 61 | Complete |
-| TAB-04 | Phase 64 | Pending: orca-tabs-live stage (g2) tab-groups did not PASS on the 64-06 tree (Orca's own web client's "Split Chat Right" opened a chat in the same tab group: the store recorded only tab-after neighbours; the pinned client's group split is a tab drag to a group edge, not driven by the check); stages (a)-(e2), (h)-(k) and gui07-mode-switch-tabs-live PASS; re-run in the end-of-milestone pass |
+| TAB-04 | Phase 64 | Pending: orca-tabs-live stage (g2) tab-groups did not PASS on the 64-06 tree. Cause (64-TAB-GROUPS.md, 1121d847; the 64-06 note was wrong): the second client's Split Chat Right did make a second group, but a client-local one that is never sent to orcad, so PowerBrowser's store could not hold it; a group another client makes reaches PowerBrowser's store only when its hosted client next adopts orcad's layout, and a tab drag in the second client would also stay red. Requirement re-worded per the finding (P65-37); lane p65-04 re-drives g2 with the hosted chat's own Split Chat Right in PowerBrowser's document, adds the cross-client guard g3 and placement fixtures, and fixes the reload renumbering the finding found (P65-33..P65-36); stages (a)-(e2), (h)-(k) and gui07-mode-switch-tabs-live PASS; re-run on the merged Phase 65 tree (65-05) |
 | TAB-05 | Phase 65 | Pending |
 | TAB-06 | Phase 64 | Complete |
 | TAB-07 | Phase 65 | Pending |
