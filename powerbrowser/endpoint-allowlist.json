@@ -195,7 +195,7 @@
     {
       "host": "versioncheck-bg.addons.mozilla.org",
       "disposition": "allow",
-      "reason": "38-05 (EXT-09): the periodic background update check for add-ons installed from the add-ons site (extensions.update.background.url, browser/app/profile/firefox.js:230; AddonManager backgroundUpdateCheck calls findUpdates with UPDATE_WHEN_PERIODIC_UPDATE even though extensions.update.autoUpdateDefault=false keeps the found update from installing itself). Contacted only once such an add-on is installed, so the fresh-profile layer-3 capture never sees it. Deliberate egress named in the REQUIREMENTS 'Inherited network egress' footer."
+      "reason": "38-05 (EXT-09): the periodic background update check for add-ons installed from the add-ons site (extensions.update.background.url, browser/app/profile/firefox.js:230; AddonManager backgroundUpdateCheck calls findUpdates with UPDATE_WHEN_PERIODIC_UPDATE even though extensions.update.autoUpdateDefault=false keeps the found update from installing itself). Every profile now carries such an add-on: uBlock Origin, pre-installed from the distribution directory (plan 68-08), is AMO-signed with no update_url, so the periodic check reaches this host on every profile until the user removes it; the check runs on the daily add-on update timer, so the short fresh-profile layer-3 capture does not see it. Deliberate egress named in the REQUIREMENTS 'Inherited network egress' footer."
     },
     {
       "host": "update.googleapis.com",
