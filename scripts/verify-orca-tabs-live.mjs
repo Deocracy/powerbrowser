@@ -825,7 +825,7 @@ async function openSecondClient(ctx) {
                 if (launch) { const t = Date.now(); launch.click(); return { t, via: 'Configure Claude, Launch chat' }; }
             }
             if (!item) {
-                const menu = items.map(m => [m.textContent, m.getAttribute('aria-label'), m.getAttribute('title')].filter(Boolean).join(' | ').replace(/\s+/g, ' ').trim()).filter(t => /claude|chat|agent/i.test(t));
+                const menu = items.map(m => [m.textContent, m.getAttribute('aria-label'), m.getAttribute('title')].filter(Boolean).join(' | ').replace(/\\s+/g, ' ').trim()).filter(t => /claude|chat|agent/i.test(t));
                 document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
                 return { t: null, menu };
             }
