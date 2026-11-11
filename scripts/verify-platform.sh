@@ -4049,6 +4049,11 @@ run_own_checks() {
     # KIND_CLASSES, a deferral in REQUIREMENTS.md's v2 section, a non-empty skip reason. The self-test plants each fault.
     "orca-browser-tools|node $REPO_ROOT/scripts/verify-orca-browser-tools.mjs"
     "orca-browser-tools-self-test|node $REPO_ROOT/scripts/verify-orca-browser-tools.mjs --self-test"
+    # orca-browser-agent-live-self-test and orca-agent-mark-live-self-test: the live rows' pure verdicts over a control
+    # observation set, each planted fault (two tabs for one page, a user blur, a blind detector, a decoy marker, the
+    # owner code read from error.code, a stock window judged before the mark was proven, ...) going red by name.
+    "orca-browser-agent-live-self-test|node $REPO_ROOT/scripts/verify-orca-browser-agent-live.mjs --self-test"
+    "orca-agent-mark-live-self-test|node $REPO_ROOT/scripts/verify-orca-agent-mark-live.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6727,6 +6732,16 @@ run_own_checks() {
       # Coordinator proof on the merged tree (p65-01, p65-02, p65-04); under the live lock with ORCA_* unset.
       "orca-offer-scan|node $REPO_ROOT/scripts/verify-orca-offer-scan.mjs"
       "orca-relaunch-restore-live|node $REPO_ROOT/scripts/verify-orca-relaunch-restore-live.mjs"
+      # NEW (66-05, BRW-02/BRW-03/BRW-04, P66-30): orca-browser-agent-live and orca-agent-mark-live prove ROADMAP Phase
+      # 66 criteria 1-3 through the Orca CLI against PB's orcad: one background agent web tab per tab create within 1 s,
+      # goto/click/type/screenshot at DPR 1 and 2, parked focus, refusals, the agent container, the decoy (P66-29), the
+      # renderer path, user close, reload, P66-09 activation and the no-Orca-pane create (criteria 1-2); the mark, its
+      # idle clear, Stop and an unmarked stock window (criterion 3). Every absence follows its detector's positive read.
+      # Coordinator-run on the merged, built tree under flock /home/chris/coding/Power-Browser/.git/pb-live.lock with
+      # ORCA_* unset; a named SKIP without lane p66-03's AGENT_METHODS, lane p66-02's extension, a built PowerBrowser or
+      # lane p66-01's built host bundle.
+      "orca-browser-agent-live|node $REPO_ROOT/scripts/verify-orca-browser-agent-live.mjs"
+      "orca-agent-mark-live|node $REPO_ROOT/scripts/verify-orca-agent-mark-live.mjs"
     )
   fi
 
