@@ -434,7 +434,12 @@ async function live(table) {
           const file = await offerPath(st);
           try {
             chmodSync(file, 0o644);
+            // WINDOWS 47: the outgoing document can still answer the ready probe, and a probe started in it is lost when
+            // the reload commits. The barrier is a new document (a different performance.timeOrigin) before any probe.
+            const originBefore = await ctx.app.evaluate('performance.timeOrigin');
+            if (typeof originBefore !== 'number') throw new Error('harness: no performance.timeOrigin before the reload');
             await ctx.app.evaluate('location.reload(); true').catch(() => undefined);
+            await pollFor(async () => { const now = await ctx.app.evaluate('performance.timeOrigin').catch(() => null); return typeof now === 'number' && now !== originBefore; }, 120000, 'a new Theia document after the reload');
             await pollFor(async () => (await probe(ctx.app, `return get('FrontendApplicationStateService').state === 'ready';`, 20000).catch(() => false)) === true, 120000, 'the reloaded frontend');
             const ids = await pollFor(async () => { const v = await ctx.views(); return v.length ? v.map(x => x.id) : null; }, 60000, 'hosted views after the reload');
             const seen = await ctx.pagesShow('pairing-lost', ids, RECOVER_MS);

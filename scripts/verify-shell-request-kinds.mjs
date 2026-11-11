@@ -19,7 +19,10 @@
 //      files naming the shell-state request channel), plus the
 //      `ShellStateMessage` union members in profile-storage.ts;
 //
-// and then compares those derived sets as equality. A hand-kept list of
+// and then compares those derived sets as equality. Clause 3 (D-37, 67-VERIFICATION): the sender wall comes first.
+// handleShellMessage's first statement is `if (!groupSenderIsTheia(actorRef))` returning a refusal, every case label
+// sits after it, and each handler a case returns into (derived from the case bodies; the hosting kinds' handler since
+// Phase 67) is called nowhere in the file except inside handleShellMessage after that wall. A hand-kept list of
 // kinds can only ever agree with the tree it was copied from; these
 // comparisons go red on an ADDED kind on either side and a REMOVED kind on
 // either side. The default-case rule is static shape: its body must contain
@@ -130,6 +133,37 @@ function defaultCaseReturnsOkFalse(body) {
     return /ok\s*:\s*false/.test(seg);
 }
 
+/** Clause 3: the sender wall precedes every dispatch. Failure strings; empty when it holds. */
+function senderWallFirst(src, body) {
+    const failures = [];
+    const wall = /\n\s*if\s*\(\s*!groupSenderIsTheia\(actorRef\)\s*\)\s*\{([\s\S]*?)\n {4}\}/.exec(body);
+    if (!wall || !/return\s*\{\s*ok:\s*false/.test(wall[1])) {
+        failures.push(`${BOUNDARY_REL} handleShellMessage does not open with the groupSenderIsTheia sender wall returning { ok: false }, so a kind can be dispatched for a non-Theia sender. Next step: restore the wall as its first statement.`);
+        return failures;
+    }
+    if (body.slice(0, wall.index).trim() !== '') failures.push(`${BOUNDARY_REL} handleShellMessage runs code ahead of the sender wall. Next step: make the wall its first statement.`);
+    const wallEnd = wall.index + wall[0].length;
+    const firstCase = body.search(/case\s+"[^"]+"\s*:/);
+    if (firstCase !== -1 && firstCase < wallEnd) failures.push(`${BOUNDARY_REL} handleShellMessage has a case label ahead of the sender wall. Next step: move it after the wall.`);
+    // The handlers the cases return into, derived from the case bodies.
+    const handlers = [...new Set([...body.matchAll(/case\s+"[^"]+"\s*:[^\n]*?return\s+(handle[A-Za-z]+)\s*\(/g)].map(m => m[1]))];
+    if (!handlers.length) {
+        failures.push(`broken instrument: no case of handleShellMessage returns into a handler function, so no handler's wall is checked. Next step: check the instrument (${SELF_REL}: its handler matcher).`);
+    }
+    const bodyStart = src.indexOf(body);
+    for (const handler of handlers) {
+        for (const m of src.matchAll(new RegExp(`\\b${handler}\\s*\\(`, 'g'))) {
+            if (/function\s+$/.test(src.slice(Math.max(0, m.index - 20), m.index))) continue;
+            const at = m.index - bodyStart;
+            if (at < wallEnd || at > body.length) {
+                const line = src.slice(0, m.index).split('\n').length;
+                failures.push(`${BOUNDARY_REL}:${line} calls ${handler} ${at < 0 || at > body.length ? "outside handleShellMessage's walled switch" : 'ahead of the sender wall'}, so its kinds can run for a non-Theia sender. Next step: dispatch it only from the case after the wall.`);
+            }
+        }
+    }
+    return failures;
+}
+
 function runChecks(root, overrides = {}) {
     const failures = [];
     const read = overrides.read ?? ((rel) => readText(root, rel));
@@ -164,6 +198,9 @@ function runChecks(root, overrides = {}) {
         failures.push(`${BOUNDARY_REL} handleShellMessage accepts '${k}' with no SHELL_MESSAGE_KINDS entry for it. Next step: add the set entry or remove the case.`);
     }
     const accepted = [...new Set(caseKinds)];
+
+    // --- 3. the sender wall precedes every dispatch ---
+    failures.push(...senderWallFirst(boundarySrc, body));
 
     // --- the default case must return { ok: false }, never throw ---
     if (!defaultCaseReturnsOkFalse(body)) {
@@ -324,7 +361,7 @@ function main() {
         failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- handleShellMessage accepts exactly the kinds the Theia client dispatches (${accepted.length} kinds); the default case returns { ok: false }`);
+    console.log(`${NAME}: PASS -- handleShellMessage accepts exactly the kinds the Theia client dispatches (${accepted.length} kinds); the sender wall comes before every case and every handler call; the default case returns { ok: false }`);
     return 0;
 }
 
@@ -363,6 +400,13 @@ function selfTest() {
         },
     });
 
+    // The routed kind and its handler, derived (the hosting kinds and their handler since Phase 67).
+    const routedMatch = /case\s+"([^"]+)"\s*:[^\n]*?return\s+(handle[A-Za-z]+)\s*\(/.exec(handleShellMessageBody(realRead(BOUNDARY_REL)) ?? '');
+    if (!routedMatch) {
+        console.error(`${NAME}: --self-test FAIL -- broken instrument: no case of handleShellMessage returns into a handler, so the sender-wall plants have no target`);
+        return 1;
+    }
+    const routed = { kind: routedMatch[1], handler: routedMatch[2] };
     const strayAccepted = 'shellStrayAccepted';
     const strayDispatched = 'shellStrayDispatched';
     const victim = baseline.dispatched[baseline.dispatched.length - 1];
@@ -371,6 +415,9 @@ function selfTest() {
         ['stray kind dispatched only', withClient(PROFILE_STORAGE_REL, `// plant: dispatched-kind literal\nconst PLANT = { kind: '${strayDispatched}' } as const;`), strayDispatched, 'dispatched'],
         [`removed kind on the chrome side (${victim})`, withBoundary(t => t.replace(`"${victim}"`, `"${victim}Removed"`).replace(`case "${victim}":`, `case "${victim}Removed":`)), victim, 'accepted'],
         [`removed kind on the client side (${victim})`, withoutKind(victim), victim, 'dispatched'],
+        [`a request of kind ${routed.kind} dispatched to ${routed.handler} ahead of the sender wall`, withBoundary(t => t.replace('  async handleShellMessage(data, actorRef) {\n', `  async handleShellMessage(data, actorRef) {\n    if (data?.kind === "${routed.kind}") return ${routed.handler}(data, actorRef);\n`)), 'ahead of the sender wall', 'wall'],
+        [`a second caller of ${routed.handler} outside the walled switch`, withBoundary(t => `${t}\nexport const plantedCaller = (data, actorRef) => ${routed.handler}(data, actorRef);\n`), "outside handleShellMessage's walled switch", 'wall'],
+        ['the sender wall removed', withBoundary(t => t.replace('    if (!groupSenderIsTheia(actorRef)) {\n      PowerBrowserAPI.log("error", "[handleShellMessage] rejecting non-Theia-origin sender");\n      return { ok: false, reason: "validation", message: "handleShellMessage: rejecting non-Theia-origin sender" };\n    }\n', '')), 'does not open with the groupSenderIsTheia sender wall', 'wall'],
         ['throwing default case', withBoundary(t => t.replace('return { ok: false, reason: "validation", message: `handleShellMessage: unknown kind ${String(kind)}` };', 'throw new Error(`unknown kind ${String(kind)}`);')), 'default', 'throw'],
     ];
 
@@ -379,6 +426,7 @@ function selfTest() {
         const { failures } = runChecks(REPO_ROOT, { files, ...overrides });
         const hit = side === 'throw'
             ? failures.some(f => f.includes('default case') && f.includes('ok: false'))
+            : side === 'wall' ? failures.some(f => f.includes(needle))
             : failures.some(f => f.includes(`'${needle}'`));
         if (hit) {
             console.log(`  ok  ${name} -> red naming '${needle}' (${side})`);

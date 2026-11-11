@@ -10,12 +10,14 @@
  *   3. the parent part's class tokens occur together in exactly one className string across out/web/assets/*.js,
  *      and the element directly inside that parent is an img whose className carries the child part's tokens;
  *   4. OrcaEnv.logoAnswerFor over a derived case table answers only orcad's own port (the powerbrowser.orca.port
- *      default in powerbrowser-sidecar.js), not shell-embedded, on the pinned version with a data: mark, and refuses
- *      the sidecar's port, the shell-embedded sender, an unknown version and a non-data mark.
+ *      default in powerbrowser-sidecar.js) while Orca is ready, not shell-embedded, on the pinned version with a data:
+ *      mark, and refuses the sidecar's port, the shell-embedded sender, an unknown version, a non-data mark and every
+ *      other OrcaService state (derived from the state literals OrcaService.sys.mjs assigns; D-37: while Orca is
+ *      failed with port-in-use, another program holds orcad's port).
  * Clauses 2 and 3 print one SKIP line while orca/out/web/assets is absent (no Orca build). A re-pin that moves Orca's
  * landing markup turns this row red before a user sees Orca's logo come back.
  *
- * --self-test runs the check on mkdtemp copies (OrcaEnv, the pins file, the sidecar prefs, a fixture assets folder
+ * --self-test runs the check on mkdtemp copies (OrcaEnv, OrcaService, the pins file, the sidecar prefs, a fixture assets folder
  * with a synthetic Landing chunk and a second asset): the copies green, then each planted fault red by name.
  */
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -28,6 +30,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 export const defaultPaths = (root = REPO_ROOT) => ({
     orcaEnv: join(root, 'powerbrowser/shell/OrcaEnv.sys.mjs'),
+    orcaService: join(root, 'powerbrowser/shell/OrcaService.sys.mjs'),
     pins: join(root, 'generated/upstream-pins.env'),
     prefs: join(root, 'powerbrowser/shell/powerbrowser-sidecar.js'),
     assets: join(root, 'orca/out/web/assets'),
@@ -115,12 +118,18 @@ export async function check(paths) {
     // Clause 4: the parent's gate over derived cases.
     const prefs = existsSync(paths.prefs) ? readFileSync(paths.prefs, 'utf8') : '';
     const orcaPort = Number(prefs.match(/pref\("powerbrowser\.orca\.port",\s*(\d+)\)/)?.[1]);
+    // Every state OrcaService can be in: the literals it assigns to _state (its initializer and each this._state =).
+    const service = existsSync(paths.orcaService) ? readFileSync(paths.orcaService, 'utf8') : '';
+    const states = [...new Set([...service.matchAll(/\b_state(?::|\s*=)\s*"([a-z-]+)"/g)].map((m) => m[1]))];
     if (!Number.isInteger(orcaPort)) {
         fail('gate', `no powerbrowser.orca.port default in ${paths.prefs}`);
+    } else if (!states.includes('ready') || states.length < 2) {
+        fail('gate', `broken instrument: derived states [${states.join(', ')}] from ${paths.orcaService}, which must include ready and another state`);
     } else {
         const mark = 'data:image/svg+xml,%3Csvg%2F%3E';
-        const base = { senderPort: orcaPort, orcaPort, embeddedByShell: false, orcaVersion: version, markDataUri: mark };
+        const base = { senderPort: orcaPort, orcaPort, orcaState: 'ready', embeddedByShell: false, orcaVersion: version, markDataUri: mark };
         const cases = [
+            ...states.filter((st) => st !== 'ready').map((st) => [`Orca ${st} on orcad's port`, { ...base, orcaState: st }, false]),
             ['orcad-origin document', base, true],
             ['the sidecar port', { ...base, senderPort: orcaPort + 1 }, false],
             ['the shell-embedded sender', { ...base, embeddedByShell: true }, false],
@@ -132,7 +141,7 @@ export async function check(paths) {
             const ok = answers ? (got && got.src === mark && got.alt === env.ORCA_LOGO_ALT && Array.isArray(got.selectors)) : got === null;
             if (!ok) fail('gate', `logoAnswerFor ${answers ? 'refused' : 'answered'} ${label}`);
         }
-        if (!failures.some((f) => f.rule === 'gate')) passes.push(`ok gate: only orcad's port ${orcaPort}, not shell-embedded, ${version}, a data: mark is answered (${cases.length} cases)`);
+        if (!failures.some((f) => f.rule === 'gate')) passes.push(`ok gate: only orcad's port ${orcaPort} while Orca is ready, not shell-embedded, ${version}, a data: mark is answered (${cases.length} cases; states ${states.join(', ')})`);
     }
     return { passes, failures, version };
 }
@@ -146,12 +155,14 @@ async function selfTest() {
         const real = defaultPaths();
         const paths = {
             orcaEnv: join(dir, 'OrcaEnv.sys.mjs'),
+            orcaService: join(dir, 'OrcaService.sys.mjs'),
             pins: join(dir, 'upstream-pins.env'),
             prefs: join(dir, 'powerbrowser-sidecar.js'),
             assets: join(dir, 'assets'),
         };
         const reset = () => {
             copyFileSync(real.orcaEnv, paths.orcaEnv);
+            copyFileSync(real.orcaService, paths.orcaService);
             copyFileSync(real.pins, paths.pins);
             copyFileSync(real.prefs, paths.prefs);
             rmSync(paths.assets, { recursive: true, force: true });
@@ -177,6 +188,7 @@ async function selfTest() {
             ['a second asset holding the same className pair', 'selector not unique', () => writeFileSync(join(paths.assets, 'Other-fixture.js'), 'const B=(0,F.jsx)(`div`,{className:`size-20 rounded-2xl`});\n')],
             ['the tile holding a span, not the img', 'is not img', swap(join(paths.assets, 'Landing-fixture.js'), '(0,F.jsx)(`img`,{src:C,alt:`Orca logo`,className:`size-12`})', '(0,F.jsx)(`span`,{className:`size-12`})')],
             ['a gate that admits any port', "refused orcad-origin document|answered the sidecar port", swap(paths.orcaEnv, 'senderPort !== orcaPort || ', '')],
+            ['a gate that ignores Orca\'s state (answers while failed with port-in-use)', 'answered Orca failed on orcad', swap(paths.orcaEnv, 'orcaState !== "ready" || ', '')],
             ['a gate that admits the shell-embedded sender', 'answered the shell-embedded sender', swap(paths.orcaEnv, ' || embeddedByShell !== false)', ')')],
         ];
         let bad = 0;

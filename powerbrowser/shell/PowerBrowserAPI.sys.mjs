@@ -11952,14 +11952,14 @@ export class PowerBrowserOrcaLogoParent extends GroupActorBase {
       // The same test groupSenderIsTheia applies: the shell window's own content browser embeds the Theia document.
       const embeddedByShell =
         embedder?.id === SHELL_CONTENT_BROWSER_ID && embedder?.ownerDocument?.documentURI === SHELL_DOCUMENT_URL;
-      if (OrcaEnv.logoAnswerFor({ senderPort, orcaPort: state.port, embeddedByShell, orcaVersion: state.orcaVersion, markDataUri: "data:image/svg+xml," }) === null) {
+      if (OrcaEnv.logoAnswerFor({ senderPort, orcaPort: state.port, orcaState: state.state, embeddedByShell, orcaVersion: state.orcaVersion, markDataUri: "data:image/svg+xml," }) === null) {
         return null;
       }
       if (orcaLogoMarkDataUri === null) {
         const text = await (await fetch(ORCA_LOGO_MARK_URL)).text();
         orcaLogoMarkDataUri = `data:image/svg+xml,${encodeURIComponent(text)}`;
       }
-      return OrcaEnv.logoAnswerFor({ senderPort, orcaPort: state.port, embeddedByShell, orcaVersion: state.orcaVersion, markDataUri: orcaLogoMarkDataUri });
+      return OrcaEnv.logoAnswerFor({ senderPort, orcaPort: state.port, orcaState: state.state, embeddedByShell, orcaVersion: state.orcaVersion, markDataUri: orcaLogoMarkDataUri });
     } catch (err) {
       console.warn(`PowerBrowserOrcaLogo: no answer (${err && err.name ? err.name : "error"})`);
       return null;
