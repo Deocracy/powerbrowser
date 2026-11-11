@@ -427,6 +427,27 @@ export function setupRowMeta(modeLabel: string, windows: number, tabs: number): 
     return `${modeLabel} · ${windows} ${windowWord} · ${tabs} ${tabWord}`;
 }
 
+/**
+ * P65-18 (TAB-08): every tab URI a saved Setup or the session snapshot names, from each window's tab list and
+ * dock tree. orca-panes keeps a closed pb-orca: name reserved while this set still holds it.
+ */
+export function referencedTabUrisOf(store: { setups: SetupSnapshot[] } | undefined, session: SessionSnapshot | undefined): Set<string> {
+    const uris = new Set<string>();
+    const walk = (node: SetupDockNode | null | undefined): void => {
+        if (node?.type === 'tabs') {
+            node.tabs.forEach(tab => uris.add(tab));
+        } else if (node) {
+            node.children.forEach(walk);
+        }
+    };
+    for (const win of [...(store?.setups ?? []).flatMap(setup => setup.windows), ...(session?.windows ?? [])]) {
+        win.tabs.forEach(tab => uris.add(tab));
+        walk(win.dock?.main);
+        walk(win.dock?.bottom);
+    }
+    return uris;
+}
+
 @injectable()
 export class SetupsService implements FrontendApplicationContribution {
 
@@ -1386,6 +1407,23 @@ export class SetupsService implements FrontendApplicationContribution {
         if (pointer) {
             await this.restoreSetup(pointer);
         }
+    }
+
+    /** P65-18: the tab URIs setups.json and the session snapshot name; an unreadable part counts as empty, with one log line. */
+    async referencedTabUris(): Promise<Set<string>> {
+        let setups: SetupSnapshot[] = [];
+        try {
+            setups = parseSetupStore((await this.fileService.read(this.setupsUri)).value).setups;
+        } catch {
+            console.info('[@powerbrowser/modes] no saved setups read for the referenced tab list');
+        }
+        let session: SessionSnapshot | undefined;
+        try {
+            session = parseSessionSnapshot(await this.profileStorage.getData<unknown>(SESSION_STORAGE_KEY));
+        } catch {
+            console.info('[@powerbrowser/modes] no saved session read for the referenced tab list');
+        }
+        return referencedTabUrisOf({ setups }, session);
     }
 
     protected async persistLastSession(name: string | null): Promise<void> {

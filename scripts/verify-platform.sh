@@ -4019,6 +4019,12 @@ run_own_checks() {
     # absent, unlisted host; unequal or missing add, remove left a row, owned root kept). Hermetic.
     "orca-side-panel-live-self-test|node $REPO_ROOT/scripts/verify-orca-side-panel-live.mjs --self-test"
     "orca-add-project-live-self-test|node $REPO_ROOT/scripts/verify-orca-add-project-live.mjs --self-test"
+    # NEW (65-04, TAB-08, P65-23/P65-31): orca-offer-scan-self-test plants a fixture offer, in every needle form derived
+    # from Orca's own encoders (web-pairing.ts, pairing.ts, createWebClientUrl), into copies of setups.json and the shell
+    # state, and runs the node:sqlite key probe with and without its marker (collector blind) and with the runtime key.
+    # orca-relaunch-restore-live-self-test: the relaunch comparators (dock, modes, identity, echo, pairing UI, devices).
+    "orca-offer-scan-self-test|node $REPO_ROOT/scripts/verify-orca-offer-scan.mjs --self-test"
+    "orca-relaunch-restore-live-self-test|node $REPO_ROOT/scripts/verify-orca-relaunch-restore-live.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -6691,6 +6697,12 @@ run_own_checks() {
       # standalone page first as the control, then PowerBrowser's side panel. Both under the live lock.
       "orca-side-panel-live|node $REPO_ROOT/scripts/verify-orca-side-panel-live.mjs"
       "orca-add-project-live|node $REPO_ROOT/scripts/verify-orca-add-project-live.mjs"
+      # NEW (65-04, TAB-08, criterion 4; P65-23/P65-31): orca-offer-scan pairs, writes the marker, opens a hosted chat,
+      # saves a Setup, quits and scans the profile for that launch's offer. orca-relaunch-restore-live saves Orca and
+      # Coding tabs in a Setup, quits, relaunches, restores and compares dock, modes, names, echo, devices and the scan.
+      # Coordinator proof on the merged tree (p65-01, p65-02, p65-04); under the live lock with ORCA_* unset.
+      "orca-offer-scan|node $REPO_ROOT/scripts/verify-orca-offer-scan.mjs"
+      "orca-relaunch-restore-live|node $REPO_ROOT/scripts/verify-orca-relaunch-restore-live.mjs"
     )
   fi
 

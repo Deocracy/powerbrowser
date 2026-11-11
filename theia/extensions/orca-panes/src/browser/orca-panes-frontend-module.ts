@@ -20,6 +20,7 @@ import { OrcaPaneBundle } from './orca-pane-bundle';
 import { OrcaPaneObserver } from './orca-pane-observer';
 import { OrcaPaneWidget, OrcaPaneWidgetOptions } from './orca-pane-widget';
 import { bindOrcaSidePanel } from './side-panel/orca-side-panel-module';
+import { bindOrcaRestore } from './restore/orca-pane-name-map'; // NEW (65-04)
 
 const LOG_PREFIX = '[@powerbrowser/orca-panes]';
 
@@ -183,4 +184,6 @@ export default new ContainerModule(bind => {
     bind(KeybindingContribution).toService(OrcaTerminalKeybindings);
     // NEW (65-03): Orca side panel (TAB-07, P65-09)
     bindOrcaSidePanel(bind);
+    // NEW (65-04): pb-orca name map and restore (TAB-08, P65-18)
+    bindOrcaRestore(bind);
 });

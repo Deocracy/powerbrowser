@@ -30,7 +30,20 @@
 //  g. ORCA_PANES_MODULE_KEY and ORCA_PANES_BOOT_EVENT of orca-pane-bundle.ts, each
 //     a string literal of scripts/lib/orca-tabs-live.mjs, the live harness that
 //     reaches the bundle through them (SKIP for this clause only while that file
-//     is absent, lane p64-04 not merged).
+//     is absent, lane p64-04 not merged);
+//  h. placement (Phase 65, P65-36): orca-pane-routes.ts transpiled in memory with
+//     ts.transpileModule and evaluated with a require that throws for any
+//     specifier, then seven pure fixtures on planPanes (both panes new in one
+//     plan, a known first group, split-bottom, a same-group tab-after neighbour
+//     winning, a regrouped known key getting no placement, a restored key
+//     adopted, the restore hold of an empty list), each red naming
+//     "placement case <n> (<title>)";
+//  i. the worktree guard (P65-38): every setActiveWorktree call in
+//     orca-pane-observer.ts sits under an if whose condition, or the left side of
+//     a &&, holds the call's own argument, so a page tab (empty worktreeId)
+//     never sends one.
+// Clause (c) also compares PAGE_WORDS (the words of ORCA_PAGE_ROUTES) with the
+// "| Page |" table of the same doc section (Phase 65, N-1, N-2).
 // A clause that reads another lane's file is red, never SKIP, when the file is
 // present but missing the item it reads.
 //
@@ -136,12 +149,124 @@ export function deriveRoutes(text) {
     return routes;
 }
 
-export function deriveDocWords(doc) {
+/** The tables of the pb-orca: section, keyed by their first header cell: { Word: [first-column code], Page: [...] }. */
+export function deriveDocTables(doc) {
     const start = doc.indexOf('## `pb-orca:`');
     if (start < 0) return undefined;
     const end = doc.indexOf('\n## ', start + 1);
-    const section = doc.slice(start, end < 0 ? undefined : end);
-    return section.split('\n').map((l) => /^\|\s*`([^`]+)`\s*\|/.exec(l)?.[1]).filter(Boolean);
+    const tables = {};
+    let header = null;
+    for (const line of doc.slice(start, end < 0 ? undefined : end).split('\n')) {
+        if (!line.startsWith('|')) { header = null; continue; }
+        const first = /^\|\s*([^|]*?)\s*\|/.exec(line)?.[1] ?? '';
+        if (header === null) { header = first; tables[header] ??= []; continue; }
+        const code = /^`([^`]+)`$/.exec(first)?.[1];
+        if (code) tables[header].push(code);
+    }
+    return tables;
+}
+
+/** The hosted-pane word column of the pb-orca: section. */
+export function deriveDocWords(doc) {
+    const tables = deriveDocTables(doc);
+    return tables ? tables.Word ?? [] : undefined;
+}
+
+/** The page words of the pb-orca: section's page table (pb-orca:<word>). */
+export function deriveDocPageWords(doc) {
+    return (deriveDocTables(doc)?.Page ?? []).map((c) => c.replace(/^pb-orca:/, ''));
+}
+
+/** The word of every ORCA_PAGE_ROUTES row that has one (PAGE_WORDS' keys), or undefined when the constant is absent. */
+export function derivePageRouteWords(text) {
+    const obj = unwrap(constInitializer(parse('orca-pane-routes.ts', text), 'ORCA_PAGE_ROUTES'));
+    if (!obj || !ts.isObjectLiteralExpression(obj)) return undefined;
+    const words = [];
+    for (const p of obj.properties) {
+        if (!ts.isPropertyAssignment(p) || !ts.isObjectLiteralExpression(p.initializer)) continue;
+        for (const q of p.initializer.properties) if (ts.isPropertyAssignment(q) && nameOf(q.name) === 'word' && stringOf(q.initializer) !== undefined) words.push(stringOf(q.initializer));
+    }
+    return words;
+}
+
+/** P65-38: each setActiveWorktree call of the observer, with whether an enclosing if or && guards its own argument. */
+export function deriveWorktreeGuards(text) {
+    const calls = [];
+    walk(parse('orca-pane-observer.ts', text), (n) => {
+        if (!ts.isCallExpression(n)) return;
+        const callee = ts.isPropertyAccessExpression(n.expression) ? n.expression.name.text : ts.isIdentifier(n.expression) ? n.expression.text : '';
+        if (callee !== 'setActiveWorktree') return;
+        const arg = n.arguments[0]?.getText() ?? '';
+        let guarded = false;
+        for (let child = n, up = n.parent; up && !guarded; child = up, up = up.parent) {
+            if (ts.isIfStatement(up) && child === up.thenStatement && arg && up.expression.getText().includes(arg)) guarded = true;
+            if (ts.isBinaryExpression(up) && up.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken && child === up.right && arg && up.left.getText().includes(arg)) guarded = true;
+        }
+        calls.push({ arg, guarded, line: n.getSourceFile().getLineAndCharacterOfPosition(n.getStart()).line + 1 });
+    });
+    return calls;
+}
+
+/** P65-36: orca-pane-routes.ts compiled in memory; a run-time import is refused. Returns { module } or { error }. */
+export function loadRoutesModule(text) {
+    const js = ts.transpileModule(text, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
+    const module = { exports: {} };
+    const refuse = (spec) => { throw new Error(`orca-pane-routes.ts imports ${spec} at run time`); };
+    try {
+        new Function('exports', 'require', 'module', js)(module.exports, refuse, module);
+    } catch (err) {
+        return { error: err.message };
+    }
+    return { module: module.exports };
+}
+
+/** P65-36: the seven placement fixtures over planPanes; returns red reasons (empty when every case holds). */
+export function placementFixtures(r) {
+    const W = (name) => `orca-pane:${name}`;
+    const rec = (key, neighbours = [], o = {}) => ({ key, kind: 'terminal', worktreeId: 'w', worktreeLabel: 'w', tabId: key, paneKey: null, active: false, title: key, neighbours, ...o });
+    const known = (entries) => new Map(entries.map(([key, name, title = key]) => [key, { name, title, widgetId: W(name) }]));
+    const opts = (name, key) => ({ name, kind: 'terminal', worktreeId: 'w', tabId: key, paneKey: null });
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    const cases = [
+        ['both panes new in one plan', () => {
+            const p = r.planPanes({ known: new Map(), restored: [] }, [rec('A'), rec('B', [{ key: 'A', mode: 'split-right' }])]);
+            const a = p.create.find((c) => c.record.key === 'A');
+            const b = p.create.find((c) => c.record.key === 'B');
+            return a && b && a.placement === undefined && same(b.placement, { mode: 'split-right', ref: W(a.name) });
+        }],
+        ['a known first group', () => {
+            const p = r.planPanes({ known: known([['A', 'term1']]), restored: [] }, [rec('A'), rec('B', [{ key: 'A', mode: 'split-right' }])]);
+            return p.create.length === 1 && same(p.create[0].placement, { mode: 'split-right', ref: W('term1') });
+        }],
+        ['a split-bottom neighbour', () => {
+            const p = r.planPanes({ known: known([['A', 'term1']]), restored: [] }, [rec('A'), rec('B', [{ key: 'A', mode: 'split-bottom' }])]);
+            return p.create.length === 1 && same(p.create[0].placement, { mode: 'split-bottom', ref: W('term1') });
+        }],
+        ['a same-group tab-after neighbour wins over a split one', () => {
+            const p = r.planPanes({ known: known([['A', 'term1'], ['C', 'term2']]), restored: [] }, [rec('A'), rec('C'), rec('B', [{ key: 'A', mode: 'tab-after' }, { key: 'C', mode: 'split-right' }])]);
+            return p.create.length === 1 && same(p.create[0].placement, { mode: 'tab-after', ref: W('term1') });
+        }],
+        ['a regrouped known key gets no placement', () => {
+            const p = r.planPanes({ known: known([['A', 'term1', 'old'], ['C', 'term2']]), restored: [] }, [rec('A', [{ key: 'C', mode: 'split-right' }], { title: 'new' }), rec('C', [{ key: 'A', mode: 'split-left' }])]);
+            const lists = [...p.create.map((c) => c.record.key), ...p.adopt.map((x) => x.key), ...p.dispose, ...(p.held ?? []), ...p.pending];
+            return !lists.includes('A') && p.retitle.some((x) => x.key === 'A' && x.title === 'new');
+        }],
+        ['a restored key is adopted, not placed', () => {
+            const p = r.planPanes({ known: known([['X', 'term1']]), restored: [opts('term4', 'K')] }, [rec('X'), rec('K', [{ key: 'X', mode: 'split-right' }])]);
+            return p.create.length === 0 && same(p.adopt, [{ key: 'K', widgetId: W('term4') }]);
+        }],
+        ['the restore hold of an empty list', () => {
+            const p = r.planPanes({ known: new Map(), restored: [opts('term2', 'K')], hydrated: false }, []);
+            return p.dispose.length === 0 && same(p.held, ['K']);
+        }],
+    ];
+    const fails = [];
+    cases.forEach(([title, run], i) => {
+        let ok;
+        try { ok = run(); } catch (err) { ok = false; title = `${title}: threw ${err.message}`; }
+        if (!ok) fails.push(`placement case ${i + 1} (${title}) failed`);
+    });
+    return { fails, ran: cases.length };
 }
 
 export function deriveInterfaceMembers(text, name) {
@@ -204,7 +329,7 @@ const setDiff = (a, b) => [...a].filter((x) => !b.has(x));
 
 export function check(root) {
     const fails = [];
-    const notes = { members: [], targets: [], words: [], d: 'SKIP', g: 'SKIP' };
+    const notes = { members: [], targets: [], words: [], pageWords: [], d: 'SKIP', g: 'SKIP', placement: 0, guards: 0 };
     const read = (rel) => readFileSync(join(root, rel), 'utf8');
     const has = (rel) => existsSync(join(root, rel));
 
@@ -243,6 +368,15 @@ export function check(root) {
     else {
         for (const w of setDiff(new Set(words), new Set(docWords))) fails.push(`word ${w} missing from the doc's pb-orca: word column`);
         for (const w of setDiff(new Set(docWords), new Set(words))) fails.push(`doc word ${w} has no hosted route`);
+        // c (Phase 65). page words against the doc's page table.
+        const pageWords = derivePageRouteWords(read(REL.routes));
+        const docPages = deriveDocPageWords(read(REL.doc));
+        if (!pageWords?.length) fails.push(`ORCA_PAGE_ROUTES with page words not found in ${REL.routes}`);
+        else {
+            notes.pageWords = pageWords;
+            for (const w of setDiff(new Set(pageWords), new Set(docPages))) fails.push(`page word ${w} missing from the doc's page table`);
+            for (const w of setDiff(new Set(docPages), new Set(pageWords))) fails.push(`doc page word ${w} has no page route`);
+        }
     }
 
     // d. the bundle API and the hand-off key against lane p64-01's entry and config.
@@ -290,6 +424,25 @@ export function check(root) {
         if (!literals.has(moduleKey)) fails.push(`module key '${moduleKey}' of the loader is not a literal of ${REL.tabsLive}`);
         if (!literals.has(bootEvent)) fails.push(`boot event '${bootEvent}' of the loader is not a literal of ${REL.tabsLive}`);
     }
+    // h. placement fixtures on the compiled planner (P65-36).
+    const loaded = loadRoutesModule(read(REL.routes));
+    if (loaded.error) fails.push(loaded.error);
+    else if (typeof loaded.module.planPanes !== 'function') fails.push(`planPanes is not exported by ${REL.routes}`);
+    else {
+        const { fails: placementFails, ran } = placementFixtures(loaded.module);
+        if (!ran) fails.push('placement: zero fixtures ran');
+        fails.push(...placementFails);
+        notes.placement = ran - placementFails.length;
+        notes.placementOf = ran;
+    }
+
+    // i. setActiveWorktree only under a guard on its own argument (P65-38).
+    const guards = deriveWorktreeGuards(read(REL.observer));
+    if (!guards.length) fails.push(`source moved: no setActiveWorktree call in ${REL.observer}`);
+    for (const g of guards.filter((x) => !x.guarded)) fails.push(`setActiveWorktree called without a worktreeId guard (${REL.observer}:${g.line}, argument ${g.arg || 'none'})`);
+    notes.guards = guards.filter((x) => x.guarded).length;
+    notes.guardsOf = guards.length;
+
     notes.apiMembers = apiMembers ?? [];
     return { fails, notes };
 }
@@ -328,6 +481,18 @@ export const PLANTS = [
     { name: 'creation-method-in-orca-panes', naming: `holds the ${CREATION_METHOD} method string`, file: REL.observer, edit: (s) => `${s}\nexport const PLANTED_METHOD = '${CREATION_METHOD}';\n` },
     { name: 'module-key-mismatch', naming: 'module key', file: REL.tabsLive, edit: (s) => s.replace(/powerbrowser\.orca-panes\.module/g, 'powerbrowser.orca-panes.planted') },
     { name: 'empty-union', naming: 'source moved', file: REL.tabTypes, edit: (s) => s.replace(/export type TabContentType =[\s\S]*?\n\n/, 'export type TabContentType = string\n\n') },
+    // Phase 65 (N-1, N-2, P65-36, P65-38).
+    { name: 'page-word-missing-from-doc', naming: 'page word mobile missing from the doc\'s page table', file: REL.doc, edit: (s) => s.replace(/\n\| `pb-orca:mobile` \|[^\n]*/, '') },
+    { name: 'extra-doc-page-word', naming: 'doc page word planted has no page route', file: REL.doc, edit: (s) => s.replace('| `pb-orca:tasks` |', '| `pb-orca:planted` | Planted |\n| `pb-orca:tasks` |') },
+    { name: 'theia-editor-without-observer-branch', naming: 'table target theia-editor has no observer branch', file: REL.observer, edit: (s) => s.replace("route?.target === 'theia-editor'", "route?.kind === 'theia-editor'") },
+    { name: 'placement-create-not-recorded', naming: 'placement case 1', file: REL.routes, edit: (s) => s.replace('            widgetIdByKey.set(record.key, ORCA_PANE_WIDGET_ID_PREFIX + name);\n', '') },
+    { name: 'placement-mode-ignored', naming: 'placement case 3', file: REL.routes, edit: (s) => s.replace('return { mode: neighbour.mode, ref };', "return { mode: 'split-right', ref };") },
+    { name: 'placement-far-end-first', naming: 'placement case 4', file: REL.routes, edit: (s) => s.replace('for (const neighbour of record.neighbours) {', 'for (const neighbour of [...record.neighbours].reverse()) {') },
+    { name: 'placement-known-ids-dropped', naming: 'placement case 2', file: REL.routes, edit: (s) => s.replace('new Map<string, string>([...state.known].map(([key, k]) => [key, k.widgetId]))', 'new Map<string, string>()') },
+    { name: 'placement-known-branch-skipped', naming: 'placement case 5', file: REL.routes, edit: (s) => s.replace('        if (known) {', '        if (known && false) {') },
+    { name: 'placement-restored-branch-skipped', naming: 'placement case 6', file: REL.routes, edit: (s) => s.replace('} else if (restored) {', '} else if (restored && false) {') },
+    { name: 'placement-hold-removed', naming: 'placement case 7', file: REL.routes, edit: (s) => s.replace('(state.hydrated || listedWorktrees.has(options.worktreeId) ? plan.dispose : plan.held)', 'plan.dispose') },
+    { name: 'worktree-guard-removed', naming: 'without a worktreeId guard', file: REL.observer, edit: (s) => s.replace('if (worktreeId) {', 'if (true) {') },
 ];
 
 function runSelfTest() {
@@ -385,6 +550,6 @@ if (isEntryPoint) {
     const r = check(REPO_ROOT);
     if (r.fails.length) { for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`); process.exit(1); }
     const n = r.notes;
-    console.log(`${NAME}: PASS -- ${n.members.length} TabContentType members (${n.members.join(', ')}) equal ORCA_PANE_ROUTES' keys; targets ${n.targets.join(', ')}, each with an observer branch; words ${n.words.join(', ')} equal the doc's; no client-side terminal creation; (d) bundle API and hand-off key ${n.d === 'compared' ? 'compared' : 'SKIP (lane p64-01 entry absent)'}; (g) module key and boot event ${n.g === 'compared' ? 'compared' : 'SKIP (lane p64-04 not merged)'}`);
+    console.log(`${NAME}: PASS -- ${n.members.length} TabContentType members (${n.members.join(', ')}) equal ORCA_PANE_ROUTES' keys; targets ${n.targets.join(', ')}, each with an observer branch; words ${n.words.join(', ')} equal the doc's; page words ${n.pageWords.join(', ')} equal the doc's page table; placement ${n.placement}/${n.placementOf}; worktree guard ${n.guards}/${n.guardsOf}; no client-side terminal creation; (d) bundle API and hand-off key ${n.d === 'compared' ? 'compared' : 'SKIP (lane p64-01 entry absent)'}; (g) module key and boot event ${n.g === 'compared' ? 'compared' : 'SKIP (lane p64-04 not merged)'}`);
     process.exit(0);
 }
