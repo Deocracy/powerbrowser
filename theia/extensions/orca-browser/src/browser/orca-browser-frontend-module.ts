@@ -146,7 +146,7 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
             step = 'link';
             const link = await this.waitForLink();
             step = 'connection';
-            const connection = await link.connection();
+            const connection = await this.connectionWhenReady(link);
             step = 'host bundle';
             const host = await this.loadHost();
             if (host?.PB_BROWSER_HOST_API !== 1 || HOST_EXPORTS.some(name => !(name in host))) {
@@ -193,6 +193,27 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
             };
             window.addEventListener(LINK_EVENT, onLink);
         });
+    }
+
+    /**
+     * The link is defined when the pane bundle evaluates, but its connection() rejects with link_not_ready until the
+     * pane client's first status call has completed (then the link fires LINK_EVENT once). Retries on that event, or
+     * after a second if the event fired before the listener was added; any other rejection is a failure.
+     */
+    protected async connectionWhenReady(link: HostLink): Promise<HostConnection> {
+        for (;;) {
+            try {
+                return await link.connection();
+            } catch (error) {
+                if (!(error instanceof Error && error.message === 'link_not_ready')) {
+                    throw error;
+                }
+            }
+            await new Promise<void>(resolve => {
+                const timer = window.setTimeout(resolve, 1000);
+                window.addEventListener(LINK_EVENT, () => { window.clearTimeout(timer); resolve(); }, { once: true });
+            });
+        }
     }
 
     /** The host bundle, imported by a module script as orca-panes' loader imports the pane bundle (its import() is page text, which the commonjs emit cannot rewrite). */
