@@ -183,9 +183,9 @@ Route chosen by Phase 61: Route A, Orca pane components in a Theia ReactWidget o
   4. A check derives Orca's tab content types from the pinned source and compares them as a set to PB's pane-to-tab mapping (hosted Orca pane, Theia editor or PB web tab), so a content type added upstream goes red naming it.
   5. `pb-orca:` URIs are documented in `docs/URI-SCHEMES.md` and round-trip in `verify-uri-roundtrip.mjs`, and `verify-registry-shape.mjs` passes with `TabUriRegistry`'s exported shape unchanged.
   6. Every Orca terminal, whether opened by the user, an agent, Orca's CLI or the EXT-02 wrapper, is a PowerBrowser tab showing Orca's own terminal view (`TerminalPane`, xterm.js) on Orca's engine; it accepts input and shows output, and an Orca in-tab split appears as Lumino splits. Theia's own terminals stay plain Theia terminals beside them (TERM-01).
-  7. In an Orca terminal tab, Ctrl+W, Ctrl+T, Ctrl+Tab and Ctrl+PageUp/PageDown reach the terminal program; in a Theia terminal, a web tab and every other tab the same keys run PowerBrowser's tab commands, each effect equal to a control measured in the same session. A check derives the key set from the chrome's reserved page keys and compares it with the passthrough rows as a set (TERM-04).
+  7. In Orca terminal tabs and Theia terminals, Ctrl+W and Ctrl+T reach the shell; Ctrl+Tab and Ctrl+PageUp/PageDown switch PowerBrowser tabs from every tab, terminals included; Orca's window shortcuts are off inside hosted Orca terminals; Ctrl+Shift+W closes the current tab. Each effect is measured live in one session, and a check derives the shell, switch and close keys from the chrome's reserved page keys and compares them with the passthrough rows and the tab bindings as sets (TERM-04, D-32).
 
-**Plans**: 5/5 plans executed (4 lanes and a coordinator; lanes branch after the 63-04 merge)
+**Plans**: 6/6 plans executed (4 lanes, a coordinator and a gap-closure plan; lanes branch after the 63-04 merge)
 
 Plans:
 **Wave 1**
@@ -196,6 +196,9 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [x] 64-05-PLAN.md — coordinator: merge p64-01..p64-04, wire orca-panes, rebuild, CSS isolation proven first on the merged tree, live proofs, brand rows, tracking by requirement outcome
+
+**Wave 3** *(gap closure)*
+- [x] 64-06-PLAN.md — gap closure: D-32 terminal keys, worktree pick (P64-37), chat stages on the real claude, orcad-data-root removed first on stop
 
 **UI hint**: yes
 
@@ -316,7 +319,7 @@ Phases execute in numeric order: 59 → 60 → 61 → 62 → 63 → 64 → 65 �
 | 61. Spikes for pane hosting, browser parity and live sharing | 4/4 | Complete (human items deferred) | 2026-11-10 |
 | 62. Overlay gate and PowerBrowser-run orcad | 3/3 | Complete | 2026-11-09 |
 | 63. Agent hooks on Orca's terminal engine | 3/3 | Complete (human items deferred) | 2026-11-10 |
-| 64. Orca panes as PowerBrowser tabs | 5/5 | In Progress (lanes after the 63-04 merge) | - |
+| 64. Orca panes as PowerBrowser tabs | 6/6 | In Progress (64-06 gap closure executed; TAB-04 pending on stage g2) | - |
 | 65. Orca workspace in Theia | 0/TBD | Not started | - |
 | 66. PowerBrowser web tabs as Orca's browser | 0/6 | Planned | - |
 | 67. Hosting hardening | 0/TBD | Not started | - |

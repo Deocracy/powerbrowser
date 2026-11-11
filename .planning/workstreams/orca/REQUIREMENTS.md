@@ -62,7 +62,7 @@ Owner decisions are in `DECISIONS.md` (D-01..D-31) and win over `research/`. Res
 
 Orca terminals and Theia terminals are two kinds, side by side (D-31, Chris 2026-11-10).
 
-- [ ] **TERM-01**: Every Orca terminal runs on Orca's own engine (orcad's stock local PTY
+- [x] **TERM-01**: Every Orca terminal runs on Orca's own engine (orcad's stock local PTY
   provider and its terminal daemon, with no PowerBrowser PTY provider and no terminal seam patch)
   and is shown as a PowerBrowser tab with Orca's own terminal view (`TerminalPane`, xterm.js)
   hosted through Route A; it accepts input and shows output. Theia terminals stay plain Theia
@@ -70,7 +70,7 @@ Orca terminals and Theia terminals are two kinds, side by side (D-31, Chris 2026
 - [x] **TERM-02**: Agent sessions Orca starts run in Orca terminals with Orca's `ORCA_*` hook
   environment, so agent status hooks report working, waiting and done, and every agent and Orca's
   terminal daemon end when PowerBrowser quits. (D-06, D-07, D-13, D-31)
-- [ ] **TERM-04**: In Orca terminal tabs and Theia terminals, Ctrl+W and Ctrl+T go to the shell, as
+- [x] **TERM-04**: In Orca terminal tabs and Theia terminals, Ctrl+W and Ctrl+T go to the shell, as
   in a normal terminal. Ctrl+Tab and Ctrl+PageUp/PageDown always switch PowerBrowser tabs, from
   terminals too. Orca's window shortcuts are turned off inside hosted Orca terminals. A tab is
   closed with the mouse or Ctrl+Shift+W. (D-31, D-32)
@@ -92,7 +92,7 @@ TERM-03 (remote terminals) moved to v2; see "Terminals (TERM)" under v2 Requirem
   groups are flattened into Lumino splits. (D-01, D-15, T-5)
 - [ ] **TAB-05**: Files and diffs open in Theia's editor, with Orca worktrees opened as Theia
   workspace folders; Orca's own editor is not used. (D-01)
-- [ ] **TAB-06**: Chat and the other Orca-only views each open as their own PowerBrowser tab.
+- [x] **TAB-06**: Chat and the other Orca-only views each open as their own PowerBrowser tab.
   (D-01)
 - [ ] **TAB-07**: Orca's worktree sidebar, settings and orchestration panel live in a
   PowerBrowser side panel; modifications are additive only. (D-02, D-16)
@@ -221,15 +221,15 @@ Filled by the roadmap.
 | OVL-04 | Phase 60 | Complete |
 | OVL-05 | Phase 62 | Complete |
 | OVL-06 | Phase 68 | Pending |
-| TERM-01 | Phase 64 | Pending: orca-tabs-live stage (a) terminal-user did not PASS on the merged tree (New Orca Terminal finds no worktree while no hosted pane exists: the C9 first-worktree fallback reads the pane list, lane p64-02 owner item); stages (b)-(e) PASS; re-run in the end-of-milestone pass |
+| TERM-01 | Phase 64 | Complete |
 | TERM-02 | Phase 63 | Complete |
-| TERM-04 | Phase 64 | Pending: owner decision D-32 recorded 2026-11-10 (requirement restated); gap-closure plan 64-06 implements it and re-runs orca-terminal-keys and orca-terminal-keys-live |
+| TERM-04 | Phase 64 | Complete |
 | TAB-01 | Phase 64 | Complete |
 | TAB-02 | Phase 64 | Complete |
 | TAB-03 | Phase 61 | Complete |
-| TAB-04 | Phase 64 | Pending: orca-tabs-live stages (a) terminal-user, (e2) pb-split and (g2) tab-groups did not PASS on the merged tree ((a) the lane p64-02 command-fallback owner item, (e2) follows from (a), (g2) the stub-agent session offers no chat row and so no chat-header group split in Orca's own client); (b)-(e), (h)-(k) and gui07-mode-switch-tabs-live PASS; re-run in the end-of-milestone pass |
+| TAB-04 | Phase 64 | Pending: orca-tabs-live stage (g2) tab-groups did not PASS on the 64-06 tree (Orca's own web client's "Split Chat Right" opened a chat in the same tab group: the store recorded only tab-after neighbours; the pinned client's group split is a tab drag to a group edge, not driven by the check); stages (a)-(e2), (h)-(k) and gui07-mode-switch-tabs-live PASS; re-run in the end-of-milestone pass |
 | TAB-05 | Phase 65 | Pending |
-| TAB-06 | Phase 64 | Pending: orca-tabs-live stage (f) chat did not PASS on the merged tree (its second-client half: with the stub agent Orca's own New tab menu offers no chat row, agent rows open terminals); orca-pane-standalone-live and stage (g) other-views PASS; re-run in the end-of-milestone pass |
+| TAB-06 | Phase 64 | Complete |
 | TAB-07 | Phase 65 | Pending |
 | TAB-08 | Phase 65 | Pending |
 | TAB-09 | Phase 65 | Pending |
@@ -254,4 +254,4 @@ Filled by the roadmap.
 
 ---
 *Requirements defined: 2026-11-04*
-*Last updated: 2026-11-04 after owner decisions D-01..D-29, the adversarial ownership review and roadmap creation (phases 59-68); BEXT-01/02 added 2026-11-10 (Chris); TERM-01..04 rewritten and re-mapped, TERM-03 moved to v2, OVL-06 narrowed 2026-11-10 (D-31); TERM-04 restated 2026-11-10 (D-32)*
+*Last updated: 2026-11-04 after owner decisions D-01..D-29, the adversarial ownership review and roadmap creation (phases 59-68); BEXT-01/02 added 2026-11-10 (Chris); TERM-01..04 rewritten and re-mapped, TERM-03 moved to v2, OVL-06 narrowed 2026-11-10 (D-31); TERM-04 restated 2026-11-10 (D-32); TERM-01, TERM-04 and TAB-06 complete 2026-11-11 on 64-06's recorded PASS lines*
