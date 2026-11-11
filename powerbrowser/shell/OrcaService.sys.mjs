@@ -377,6 +377,10 @@ export const OrcaService = {
 
   /** Spawn attempts with TheiaService's backoff, on the same port every time. */
   async _launch() {
+    // P67-24: a version with no landing selectors keeps Orca's own logo; said once per start, never guessed.
+    if (this._orcaVersion && !OrcaEnv.logoSelectorsFor(this._orcaVersion)) {
+      this._pushLog(`No Orca logo selectors for ${this._orcaVersion}; Orca's own logo stays.`);
+    }
     const giveUpAttempts = PowerBrowserAPI.getIntPref("powerbrowser.orca.giveUpAttempts", 5);
     let backoffMs = RESTART_BACKOFF_INITIAL_MS;
     for (let attempt = 1; ; attempt += 1) {
@@ -766,6 +770,7 @@ export const OrcaService = {
         "Orca credential key folder",
         OrcaEnv.credentialKeyFolderFor(name => PowerBrowserAPI.getEnv(name), OrcaEnv.nodePlatform(PowerBrowserProcesses.platform())),
       ],
+      ["Orca logo selectors", this._orcaVersion && !OrcaEnv.logoSelectorsFor(this._orcaVersion) ? `none for ${this._orcaVersion}` : null],
       ...this._failureRows,
     ];
     return rows

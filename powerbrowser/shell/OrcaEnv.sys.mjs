@@ -586,3 +586,34 @@ export function credentialKeyFolderFor(getEnv, platform) {
 /** P67-18: the protection sentence, byte-identical in website-staging/privacy.html and orca-panes' copy table. */
 export const ORCA_PROTECTION_SENTENCE =
   "PowerBrowser protects Orca sign-ins with a key file that only your user account can read, not with your system's keyring.";
+
+// ---- Orca landing logo (Phase 67, INJ-01, P67-22..P67-24) ----
+// The CSS selectors of Orca's landing-tile logo, keyed by the Orca version they were read from (Landing.tsx:258-267 and
+// the built out/web/assets/Landing-*.js at the pin). A version with no entry gets no injection, one log line and the
+// diagnostics row "Orca logo selectors", never a guess. orca-landing-selectors ties the entry to the built chunk.
+export const ORCA_LANDING_SELECTORS = Object.freeze({
+  "1.4.248": Object.freeze(["div.size-20.rounded-2xl > img.size-12"]),
+});
+
+/** The alt text the PowerBrowser mark carries on Orca's landing tile (the only copy INJ-01 adds). */
+export const ORCA_LOGO_ALT = "PowerBrowser logo";
+
+/** The selector list for an Orca version, or null when the version has no entry. */
+export function logoSelectorsFor(version) {
+  return typeof version === "string" && Object.hasOwn(ORCA_LANDING_SELECTORS, version) ? ORCA_LANDING_SELECTORS[version] : null;
+}
+
+/**
+ * P67-23: the PowerBrowserOrcaLogo parent's answer. Only a document on orcad's own port, not embedded by the shell's
+ * Theia browser, running an Orca version with selectors, gets { src, alt, selectors }; every other sender gets null.
+ */
+export function logoAnswerFor({ senderPort, orcaPort, embeddedByShell, orcaVersion, markDataUri } = {}) {
+  if (!Number.isInteger(senderPort) || !Number.isInteger(orcaPort) || senderPort !== orcaPort || embeddedByShell !== false) {
+    return null;
+  }
+  const selectors = logoSelectorsFor(orcaVersion);
+  if (!selectors || selectors.length === 0 || typeof markDataUri !== "string" || !markDataUri.startsWith("data:image/svg+xml")) {
+    return null;
+  }
+  return { src: markDataUri, alt: ORCA_LOGO_ALT, selectors: [...selectors] };
+}
