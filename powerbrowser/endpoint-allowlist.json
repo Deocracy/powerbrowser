@@ -146,6 +146,11 @@
       "reason": "P62-05, P62-15 (D-08, D-23): Orca's cloud hosts (push, login, relay, share, feedback) behind the pairing relay, reached by the orcad PowerBrowser runs. The leading dot matches every subdomain and not the bare onorca.dev. Reachable only for an Orca feature the user starts, so an unattended contact is a failure exactly as for a `deny` entry; orcad runs with telemetry off, and orca-service-live records whether an idle orcad dials out."
     },
     {
+      "host": "t2.gstatic.com",
+      "disposition": "user-initiated",
+      "reason": "P65-24 (Phase 65, measured by orca-side-panel-live in 65-05): Orca's side panel (its hosted sidebar and Settings) renders agent and repository icons from https://www.google.com/s2/favicons (orca/src/renderer/src/lib/agent-catalog.tsx, orca/src/shared/repo-icon.ts), which redirects here. First resolved in the measured run only after the user selected the Orca mode; an unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs). Whether launching straight into the Orca mode may contact it is an open owner item (65-05-SUMMARY.md)."
+    },
+    {
       "host": "cloudflare-dns.com",
       "disposition": "deny",
       "reason": "TRR open item, resolved 03-03: NOT network.trr.mode (confirmed 0/off by default in modules/libpref/init/StaticPrefList.yaml:15642-15644 -- TRR is not active in this build). The real source is network.connectivity-service.DNS_HTTPS.domain (modules/libpref/init/all.js:3260), read by NetworkConnectivityService.cpp's own unattended-startup DNS-over-HTTPS-record probe. No DRM/security-parity rationale applies (unlike Remote Settings/Safe Browsing), so per D-85 this is turned off at the single master switch, network.connectivity-service.enabled = false, rather than waived. Not named in D-83..D-88; this entry and the two below are the explicit resolution the 03-02-SUMMARY.md open item asked for."
