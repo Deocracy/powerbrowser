@@ -235,15 +235,19 @@ async function live(table) {
           } catch { /* judged below */ }
           return last;
         };
+        // A hosted pane mounts its Orca view when its tab is first shown, so a tab that was never current has no
+        // content to read; each tab is shown once, as a user would look at it, before its content is judged.
+        const showEach = ids => probe(app, `const shell = get('ApplicationShell');
+          for (const id of ${JSON.stringify(ids)}) { if (shell.getWidgetById(id)) await shell.activateWidget(id); await sleep(300); } return true;`, 30000).catch(() => false);
         const recovered = async (label, ids, startedAt) => {
           let at = NaN;
           try {
-            await pollFor(async () => { const v = await views(); return ids.every(id => v.some(x => x.id === id && !x.page && x.content)); }, RECOVER_MS, label);
+            await pollFor(async () => { await showEach(ids); const v = await views(); return ids.every(id => v.some(x => x.id === id && !x.page && x.content)); }, RECOVER_MS, label);
             at = Date.now();
           } catch { /* judged below */ }
           return recoveryVerdict({ label, startedAt, recoveredAt: at, boundMs: RECOVER_MS });
         };
-        const ctx = { app, orcaState, views, click, diagnosticsRow, pagesShow, recovered };
+        const ctx = { app, orcaState, views, click, diagnosticsRow, pagesShow, recovered, showEach };
         try {
           return await fn(ctx);
         } finally {
@@ -256,6 +260,7 @@ async function live(table) {
       };
       const offerPath = async s => OrcaEnv.bridgeFileFor(await OrcaEnv.bridgeDirFor(s.dataRoot, n => process.env[n], 'linux'), 'web-pairing', 'linux');
       const control = async (ctx, label) => {
+        await ctx.showEach(hostedIds());
         const c = controlVerdict(await ctx.views(), hostedIds());
         if (c.length) fail(c.map(f => `${label}: ${f}`));
         return c.length === 0;
@@ -272,9 +277,21 @@ async function live(table) {
         const orca = (...a) => JSON.parse(execFileSync(cli, [...a, '--json'], { env: cliEnv, cwd: repo, encoding: 'utf8', timeout: 60000 }));
         orca('repo', 'add', '--path', repo);
         orca('terminal', 'create', '--worktree', `path:${repo}`);
+        // C64-6: the worktree selected in the pane client first, as the other Orca rows do; with none selected New Orca
+        // Chat waits on a worktree quick pick that nothing answers.
+        const selected = await probe(ctx.app, `const m = globalThis[Symbol.for('powerbrowser.orca-panes.module')];
+          if (!(await until(() => m.state().worktrees.some(w => w.path === ${JSON.stringify(repo)}), 30000))) return false;
+          m.setActiveWorktree(m.state().worktrees.find(w => w.path === ${JSON.stringify(repo)}).id); return true;`, 60000);
+        if (selected !== true) throw new Error('the scratch worktree never reached the pane client\'s store');
         await probe(ctx.app, `await get('CommandService').executeCommand('powerbrowser.orca.newChat'); return true;`);
-        await probe(ctx.app, `await get('ApplicationShell').revealWidget(${JSON.stringify(containerId)}); return true;`);
+        // The Orca side panel lives in the Orca mode, and a collapsed part mounts only when shown (C64-4), as
+        // orca-side-panel-live opens it.
+        await probe(ctx.app, `await get('ModeService').activateMode('orca');
+          const c = await get('ApplicationShell').revealWidget(${JSON.stringify(containerId)});
+          if (c && typeof c.getParts === 'function') for (const part of c.getParts()) part.collapsed = false;
+          return true;`);
         const kinds = await pollFor(async () => {
+          await ctx.showEach((await ctx.views()).filter(x => x.kind === 'terminal' || x.kind === 'agent-session').map(x => x.id));
           const v = await ctx.views();
           const chat = v.find(x => x.kind === 'agent-session' && x.content);
           const term = v.find(x => x.kind === 'terminal' && x.content);
@@ -324,6 +341,14 @@ async function live(table) {
             const seen = await ctx.pagesShow('pairing-lost', hostedIds(), RECOVER_MS);
             if (!seen.every(v => v.page === 'pairing-lost') || !seen.length) {
               notes.push(`auth-refusal induction not achieved at the pin: ${seen.map(v => `${v.id}=${v.page ?? (v.content ? 'content' : 'empty')}`).join(', ') || 'no view read'} (rows removed: ${drop.size})`);
+              // The pause past the liveness bound can leave another class up (the browser host detached while orcad
+              // was stopped): its own Reconnect must bring content back before the next induction's control.
+              const shown = seen.find(v => v.page);
+              if (shown) {
+                const t0 = Date.now();
+                await ctx.click(shown.id, 'reconnect');
+                fail(await ctx.recovered(`auth-refusal pause (${shown.page}) Reconnect`, hostedIds(), t0));
+              }
             } else {
               fail(pageVerdict(seen, table, 'pairing-lost').map(f => `auth-refusal: ${f}`));
               const t0 = Date.now();

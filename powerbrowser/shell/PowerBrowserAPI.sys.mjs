@@ -11804,7 +11804,9 @@ async function handleOrcaShellMessage(data, actorRef) {
       }
       case "orcaShowDiagnostics": {
         // The wall above proved the sender is the Theia document in the shell's own content browser.
-        const shellWindow = actorRef?.browsingContext?.top?.embedderElement?.ownerGlobal;
+        // ownerDocument.defaultView, as windowChrome reaches it: measured live, ownerGlobal from this module is not the
+        // shell window and carries none of powerbrowser.js's functions.
+        const shellWindow = actorRef?.browsingContext?.top?.embedderElement?.ownerDocument?.defaultView;
         if (typeof shellWindow?.powerbrowserOpenDiagnostics !== "function") {
           return { ok: false, reason: "not-available" };
         }
