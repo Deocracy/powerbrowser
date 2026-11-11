@@ -75,6 +75,13 @@ export interface OrcaPaneOptions extends OrcaPanePick {
     name: string;
 }
 
+/** C3': one Orca worktree as the bundle's state() lists it. */
+export interface OrcaWorktree {
+    id: string;
+    label: string;
+    path: string;
+}
+
 /** C3: the bundle's named exports this extension calls (orca-pane-routes compares them with the entry's exports). */
 export interface OrcaPaneBundleApi {
     bootstrap(options: { pairing: string }): Promise<void>;
@@ -85,5 +92,7 @@ export interface OrcaPaneBundleApi {
     createChat(worktreeId: string): Promise<void>;
     activeWorktree(): string | null;
     setActiveWorktree(worktreeId: string): void;
+    /** C3': worktrees in Orca's own recency order; no credential. */
+    state(): { booted: boolean; worktrees: OrcaWorktree[]; panes: number; mountErrors: Array<{ kind: string; phase: string; message: string }> };
     reactIdentity: unknown;
 }

@@ -8,14 +8,24 @@
 // Orca's own tab chrome comes with it.
 //
 // One PowerBrowser session (scripts/lib/orca-tabs-live.mjs: orcad, the booted
-// pane bundle, ORCA_* scrubbed, redaction first, a stub claude on the launched
-// PowerBrowser's PATH). Stages, in order, each printing one line
-// "orca-tabs-live: <stage>: PASS|FAIL -- ...":
-//  a  terminal-user   New Orca Terminal: one hosted terminal widget term<n>
-//                     within 1000 ms (the command's start to the recorded
-//                     addWidget); a typed marker appears in orcad's terminal read.
+// pane bundle, ORCA_* scrubbed, redaction first) on the real agent (64-06, D-30):
+// withOrcaTabsSession({ agent: 'real' }) puts no stub on PATH; the owner's claude
+// must answer --version naming Claude Code, and orcad's environment must set the
+// pre-installed SDK extension's directory holding the SDK's package.json
+// (presence only, never the value). Stages f and g2 are red naming a missing
+// precondition. Prompt budget: at most one fixed minimal prompt ("Reply with the
+// single word OK.") per run, sent only when Orca's own client shows a chat tab
+// only after a first message; two prompts are red. Stages, in order, each
+// printing one line "orca-tabs-live: <stage>: PASS|FAIL -- ...":
+//  a  terminal-user   New Orca Terminal with no hosted pane and no active Orca
+//                     worktree (the precondition, observed first): Theia's quick
+//                     pick lists state().worktrees' labels in Orca's order with
+//                     the first focused (P64-37); Enter selects it, and one
+//                     hosted terminal widget term<n> is added within 1000 ms of
+//                     the Enter; a typed marker appears in orcad's terminal read.
 //  b  terminal-cli    orca terminal create: the same within 1000 ms of the CLI's exit.
-//  c  terminal-agent  orca agent launch --agent claude --surface terminal (stub): the same.
+//  c  terminal-agent  orca agent launch --agent claude --surface terminal: the
+//                     real claude's TUI starts in it; no prompt is sent.
 //  d  freeze-guard    after (a) and after each PB-side chat creation, a CLI
 //                     terminal still becomes a tab within 1000 ms (A4).
 //  e  split           orca terminal split on (b): two hosted terminal widgets of
@@ -85,6 +95,8 @@ const SELF = fileURLToPath(import.meta.url);
 const NAME = 'orca-tabs-live';
 const SELF_REL = 'scripts/verify-orca-tabs-live.mjs';
 const LIMIT_MS = 1000;
+/** The one fixed prompt a run may send (D-30 budget). */
+export const MINIMAL_PROMPT = 'Reply with the single word OK.';
 const RELOAD_MS = 5000;
 const ENV_STORAGE_KEY = 'orca.web.runtimeEnvironment.v1';
 const P64_01_SUMMARY_REL = '.planning/workstreams/orca/phases/64-orca-panes-as-powerbrowser-tabs/64-01-SUMMARY.md';
@@ -150,6 +162,36 @@ export function creationVerdict(obs) {
     return fails;
 }
 
+/**
+ * Stage a's pick (P64-37). obs: { pre: { activeWorktree, hosted }, picker: { rows: [label], focused } | null,
+ * expected: [label] (state().worktrees' labels in order) }.
+ */
+export function pickVerdict(obs) {
+    if (obs.pre?.activeWorktree !== null || obs.pre?.hosted !== 0) return [`terminal-user: precondition not met (active Orca worktree ${JSON.stringify(obs.pre?.activeWorktree)}, ${obs.pre?.hosted} hosted pane(s)), so the stage would not exercise the pick`];
+    if (!obs.picker) return ['terminal-user: the worktree quick pick did not appear'];
+    const fails = [];
+    if (!obs.expected?.length) fails.push('terminal-user: state().worktrees listed no worktree');
+    if (JSON.stringify(obs.picker.rows) !== JSON.stringify(obs.expected)) fails.push(`terminal-user: picker rows ${JSON.stringify(obs.picker.rows)} differ from Orca's order ${JSON.stringify(obs.expected)}`);
+    if (obs.picker.focused !== obs.picker.rows[0]) fails.push(`terminal-user: wrong preselection: the focused row is ${JSON.stringify(obs.picker.focused)}, not the first`);
+    return fails;
+}
+
+/** The real-agent precondition for stages f and g2. pre: { claude: { found, version }, sdk: { set, packageJson } | null }. */
+export function agentVerdict(stage, pre) {
+    if (!pre) return [`${stage}: the session ran no real agent (stub claude)`];
+    const fails = [];
+    if (!pre.claude?.found) fails.push(`${stage}: no claude on the base PATH`);
+    else if (!/Claude Code/.test(pre.claude.version ?? '')) fails.push(`${stage}: claude --version does not name Claude Code (${JSON.stringify(pre.claude.version)})`);
+    if (!pre.sdk?.set) fails.push(`${stage}: ORCA_CLAUDE_AGENT_SDK_DIR is absent or empty in orcad's environment (the pre-installed SDK extension)`);
+    else if (!pre.sdk.packageJson) fails.push(`${stage}: the SDK directory orcad was given lacks the SDK's package.json`);
+    return fails;
+}
+
+/** At most one model prompt per run. */
+export function promptBudgetVerdict(promptsSent) {
+    return promptsSent > 1 ? [`chat: more than one prompt sent in one run (${promptsSent}; the budget is 1)`] : [];
+}
+
 /** obs: [{ after, ms }] with ms null when no tab came. */
 export function freezeVerdict(obs) {
     return obs.filter((o) => o.ms === null || o.ms > LIMIT_MS).map((o) => `freeze guard after ${o.after}: a CLI terminal became a tab ${o.ms === null ? 'never' : `in ${o.ms} ms`} (limit ${LIMIT_MS} ms)`);
@@ -184,7 +226,7 @@ export function pbSplitVerdict(obs) {
 
 /** obs: { storeTab: boolean, creation } for New Orca Chat; the creation verdict otherwise. */
 export function chatVerdict(obs) {
-    if (!obs.storeTab) return ['chat: chat launch produced no tab (provider: stub claude)'];
+    if (!obs.storeTab) return [`chat: chat launch produced no tab (provider: ${obs.provider ?? 'claude'})`];
     return creationVerdict(obs.creation);
 }
 
@@ -286,7 +328,8 @@ async function runLive(lib) {
     const stages = {};
     const fail = (stage, reasons) => { stages[stage] = reasons; };
     const ownerItem = ownerItemOf(read(join(REPO_ROOT, P64_01_SUMMARY_REL)));
-    await lib.withOrcaTabsSession({ log: () => {} }, async (ctx) => {
+    let promptsSent = 0;
+    await lib.withOrcaTabsSession({ log: () => {}, agent: 'real' }, async (ctx) => {
         const handles = () => handlesIn(ctx.orca('terminal', 'list', '--worktree', ctx.worktree));
         const echoes = async (id, handle) => {
             const marker = `pbecho${Date.now() % 1000000}`;
@@ -312,22 +355,40 @@ async function runLive(lib) {
             freeze.push({ after, ms: c.added[0] ? c.added[0].t - c.t0 : null });
         };
 
-        // a. New Orca Terminal.
+        // a. New Orca Terminal with no hosted pane and no active worktree: the P64-37 pick.
+        await ctx.pollFor(async () => (await ctx.bundle('m.state().worktrees.length')) > 0, 30000, 'the store to list the scratch worktree').catch(() => false);
         let before = await lib.hostedIds(ctx);
         let known = handles();
-        const cmd = await ctx.command('powerbrowser.orca.newTerminal');
-        const addA = await lib.waitForHostedAdd(ctx, cmd.t0, before, 5000);
+        const pre = { activeWorktree: await ctx.bundle('m.activeWorktree()'), hosted: before.length };
+        const expected = ((await ctx.bundle('m.state().worktrees')) ?? []).map((w) => w.label);
+        // Not awaited: the command waits on the pick.
+        await ctx.probe(`get('CommandService').executeCommand('powerbrowser.orca.newTerminal').catch(() => undefined); return true;`);
+        const picker = await ctx.pollFor(() => ctx.probe(`const w = document.querySelector('.quick-input-widget');
+            if (!w || w.style.display === 'none' || !w.getClientRects().length) return null;
+            const rows = [...w.querySelectorAll('.quick-input-list .monaco-list-row')];
+            if (!rows.length) return null;
+            const label = r => (r.querySelector('.label-name') || r).textContent.trim();
+            const focused = rows.find(r => r.classList.contains('focused'));
+            return { rows: rows.map(label), focused: focused ? label(focused) : null };`), 5000, 'the worktree quick pick').catch(() => null);
+        let tEnter = Date.now();
+        if (picker) {
+            await ctx.focusTheiaFrame();
+            tEnter = Date.now();
+            await ctx.pressKey({ key: 'Enter', code: 'Enter', keyCode: 13 });
+        }
+        const addA = picker ? await lib.waitForHostedAdd(ctx, tEnter, before, 5000) : null;
         const wA = addA ? await widgetOf(addA.id) : null;
         const hA = [...handles()].find((h) => !known.has(h)) ?? null;
-        const a = { label: 'terminal-user', kind: 'terminal', t0: cmd.t0, added: addA ? (await ctx.addedSince(cmd.t0)).filter((e) => e.id.startsWith(lib.ORCA_PANE_WIDGET_PREFIX) && !before.includes(e.id)) : [], widget: wA, echo: wA && hA ? await echoes(wA.id, hA) : false };
-        fail('terminal-user', creationVerdict(a));
+        const a = { label: 'terminal-user', kind: 'terminal', t0: tEnter, added: addA ? (await ctx.addedSince(tEnter)).filter((e) => e.id.startsWith(lib.ORCA_PANE_WIDGET_PREFIX) && !before.includes(e.id)) : [], widget: wA, echo: wA && hA ? await echoes(wA.id, hA) : false };
+        const pickFails = pickVerdict({ pre, picker, expected });
+        fail('terminal-user', pickFails.length ? pickFails : creationVerdict(a));
         await freezeProbe('New Orca Terminal');
 
         // b. CLI terminal.
         const b = await viaCli(['terminal', 'create', '--worktree', ctx.worktree]);
         fail('terminal-cli', creationVerdict({ label: 'terminal-cli', kind: 'terminal', ...b, echo: b.widget && b.handle ? await echoes(b.widget.id, b.handle) : false }));
 
-        // c. Agent-opened terminal (stub claude).
+        // c. Agent-opened terminal: the real claude's TUI starts in it; nothing is typed, so no prompt is sent.
         const c = await viaCli(['agent', 'launch', '--agent', 'claude', '--surface', 'terminal', '--worktree', ctx.worktree]);
         fail('terminal-agent', creationVerdict({ label: 'terminal-agent', kind: 'terminal', ...c }));
 
@@ -372,28 +433,36 @@ async function runLive(lib) {
             fail('pb-split', pbSplitVerdict({ ...moved, newStoreTabs: Math.max(0, storeAfter - storeBefore), echo: await echoes(wA.id, hA) }));
         } else fail('pb-split', ['pb-split: no hosted terminal from (a) to move']);
 
-        // f. chat: New Orca Chat, then a second paired client.
+        // f. chat: New Orca Chat, then a second paired client, on the real claude.
+        const agentFails = agentVerdict('chat', ctx.agentPrecondition);
         before = await lib.hostedIds(ctx);
         const chatCmd = await ctx.command('powerbrowser.orca.newChat');
         const storeTab = !!(await ctx.pollFor(async () => ((await ctx.probe(PANES)) ?? []).some((p) => p.kind === 'agent-session'), 5000, 'a chat store tab').catch(() => false));
         const addF = await lib.waitForHostedAdd(ctx, chatCmd.t0, before, 5000);
         const chatAdded = addF ? (await ctx.addedSince(chatCmd.t0)).filter((e) => e.id.startsWith(lib.ORCA_PANE_WIDGET_PREFIX) && !before.includes(e.id)) : [];
-        const chatFails = chatVerdict({ storeTab, creation: { label: 'chat', kind: 'agent-session', t0: chatCmd.t0, added: chatAdded, widget: addF ? await widgetOf(addF.id) : null } });
+        const chatFails = [...agentFails, ...chatVerdict({ storeTab, provider: 'claude', creation: { label: 'chat', kind: 'agent-session', t0: chatCmd.t0, added: chatAdded, widget: addF ? await widgetOf(addF.id) : null } })];
         await freezeProbe('New Orca Chat');
         const second = await openSecondClient(ctx);
+        // Sends the one fixed prompt into the second client's chat composer, once per run.
+        const promptOnce = async () => {
+            if (promptsSent >= 1) return false;
+            promptsSent += 1;
+            return second.prompt(MINIMAL_PROMPT);
+        };
         if (second.error) chatFails.push(`chat: second client: ${second.error}`);
         else {
             before = await lib.hostedIds(ctx);
             const t0 = Date.now();
             const made = await second.newChat(null);
-            if (!made) chatFails.push('chat: second client: Orca\'s own new-chat control not found in its page');
-            const add = await lib.waitForHostedAdd(ctx, t0, before, 5000);
+            if (!made?.t) chatFails.push(`chat: second client: Orca offers no chat row; its New tab menu reads ${JSON.stringify(made?.menu ?? [])}`);
+            let add = made?.t ? await lib.waitForHostedAdd(ctx, t0, before, 5000) : null;
+            if (made?.t && !add && await promptOnce()) add = await lib.waitForHostedAdd(ctx, t0, before, 60000);
             const added = add ? (await ctx.addedSince(t0)).filter((e) => e.id.startsWith(lib.ORCA_PANE_WIDGET_PREFIX) && !before.includes(e.id)) : [];
             // The clock starts when the page's control was clicked; the page reports its own Date.now.
-            chatFails.push(...creationVerdict({ label: 'chat (second client)', kind: 'agent-session', t0: made || t0, added, widget: add ? await widgetOf(add.id) : null }));
+            if (made?.t) chatFails.push(...creationVerdict({ label: 'chat (second client)', kind: 'agent-session', t0: made.t, added, widget: add ? await widgetOf(add.id) : null }));
             await freezeProbe('a second-client chat');
         }
-        fail('chat', chatFails);
+        fail('chat', [...chatFails, ...promptBudgetVerdict(promptsSent)]);
         fail('freeze-guard', freezeVerdict(freeze));
 
         // g. other views through Orca's own openers.
@@ -415,12 +484,19 @@ async function runLive(lib) {
         fail('other-views', otherFails);
 
         // g2. Orca tab groups from the second client.
-        if (second.error || !b.widget) fail('tab-groups', [`tab-groups: tab-group split not observed (${second.error ?? 'no CLI terminal from (b)'})`]);
+        const groupAgentFails = agentVerdict('tab-groups', ctx.agentPrecondition);
+        let groupDiag = null;
+        if (second.error || !b.widget) fail('tab-groups', [...groupAgentFails, `tab-groups: tab-group split not observed (${second.error ?? 'no CLI terminal from (b)'})`]);
         else {
-            const split = await second.splitGroup(b.widget.options?.tabId);
+            // Orca's "Split Chat Right" opens a new chat in the new group itself; only when the split added no tab is a
+            // chat opened in the second group through its own New tab control.
             before = await lib.hostedIds(ctx);
-            const made = split ? await second.newChat(split.groupIndex) : null;
-            const add = made ? await lib.waitForHostedAdd(ctx, made - 50, before, 5000) : null;
+            const tSplit = Date.now();
+            const split = await second.splitGroup(b.widget.options?.tabId);
+            let add = split ? await lib.waitForHostedAdd(ctx, tSplit, before, 5000) : null;
+            const made = split && !add ? await second.newChat(split.groupIndex) : null;
+            if (made?.t) add = await lib.waitForHostedAdd(ctx, made.t - 50, before, 5000);
+            if (made?.t && !add && await promptOnce()) add = await lib.waitForHostedAdd(ctx, made.t - 50, before, 60000);
             const panes = (await ctx.probe(PANES)) ?? [];
             const all = await ctx.hostedWidgets();
             const secondW = add ? all.find((w) => w.id === add.id) : null;
@@ -429,7 +505,9 @@ async function runLive(lib) {
             const firstKeys = new Set(panes.filter((p) => p.worktreeId === worktreeId && p.key !== rec?.key).map((p) => p.key));
             const detected = !!rec?.neighbours?.some((n) => firstKeys.has(n.key) && n.mode === wantMode);
             const firstW = all.filter((w) => w.id !== secondW?.id && w.options?.worktreeId === worktreeId && w.area === 'main');
-            fail('tab-groups', groupVerdict({ detected, direction: split?.direction, second: secondW, first: firstW }));
+            groupDiag = { split, added: add?.id ?? null, made, second: secondW?.id ?? null, rec: rec ? { key: rec.key, neighbours: rec.neighbours } : null, panes: panes.filter((p) => p.worktreeId === worktreeId).map((p) => ({ key: p.key, kind: p.kind, neighbours: p.neighbours })) };
+            const noSplit = split ? [] : [`tab-groups: the second client offered no group split (no chat pane header's Split Chat Right${made?.menu?.length ? `; its New tab menu reads ${JSON.stringify(made.menu)}` : ''})`];
+            fail('tab-groups', [...groupAgentFails, ...noSplit, ...groupVerdict({ detected, direction: split?.direction, second: secondW, first: firstW }), ...promptBudgetVerdict(promptsSent)]);
         }
 
         // h. Organising rows.
@@ -454,7 +532,8 @@ async function runLive(lib) {
             const gone = await ctx.pollFor(async () => !(await lib.hostedIds(ctx)).includes(busy.widget.id), 5000, 'the widget disposed').then(() => Date.now() - t0, () => null);
             fail('close', [...closeVerdict({ dialog, afterCancel, disposedMs: gone })]);
         }
-        const notes = ['busy-chat close not exercised (the stub agent cannot hold a chat busy); end-of-milestone pass'];
+        const notes = ['busy-chat close not exercised: no prompt keeps a chat busy; end-of-milestone pass', `prompts sent: ${promptsSent} (budget 1)`];
+        if (stages['tab-groups']?.length && groupDiag) notes.push(`tab-groups observation ${JSON.stringify(groupDiag)}`);
 
         // k. Reload.
         const names = (await lib.hostedIds(ctx)).map(nameOf).sort();
@@ -564,19 +643,53 @@ async function openSecondClient(ctx) {
     const strip = await ctx.pollFor(async () => (await evalIn(`!!document.querySelector('[aria-label="New tab"], [title="New tab"]')`).catch(() => false)) === true || null, 15000, 'the worktree tab strip').catch(() => null);
     if (!strip) return { error: 'the selected worktree shows no New tab control' };
     return {
-        /** Clicks Orca's own New tab control (in tab group `groupIndex` when given) and its chat item; resolves the page's Date.now at the click, or null. */
+        /**
+         * Clicks Orca's own New tab control (in tab group `groupIndex` when given) and its chat item; resolves { t } (the
+         * page's Date.now at the click), or { t: null, menu } with the menu items' texts when Orca offers no chat row.
+         */
         newChat: (groupIndex) => evalIn(`(async () => {
             const strips = [...document.querySelectorAll('[data-tab-group-strip-id]')];
             const scope = ${JSON.stringify(groupIndex)} === null ? document : (strips[${Number(groupIndex) || 0}] || document);
             const plus = scope.querySelector('[aria-label="New tab"], [title="New tab"]');
-            if (!plus) return null;
+            if (!plus) return { t: null, menu: ['no New tab control'] };
             plus.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); plus.click();
             await new Promise(r => setTimeout(r, 400));
+            // Orca fills the agent rows once every answer is known; until then each row is a "Loading agents" placeholder.
+            for (let i = 0; i < 60 && document.querySelector('[role="menuitem"][aria-label="Loading agents"]'); i++) await new Promise(r => setTimeout(r, 200));
             // The pinned client names its chat rows in aria-label and title ("Start a chat with <agent>"); the text is the agent.
-            const item = [...document.querySelectorAll('[role="menuitem"]')].find(m => /chat/i.test(m.getAttribute('aria-label') || m.getAttribute('title') || m.textContent));
-            if (!item) return null;
-            const t = Date.now(); item.click(); return t;
+            const items = [...document.querySelectorAll('[role="menuitem"]')];
+            const item = items.find(m => /chat/i.test(m.getAttribute('aria-label') || m.getAttribute('title') || m.textContent));
+            // The pinned client's agent picker: a row launches the agent's default surface; its "Configure <agent>"
+            // setup opens Orca's own launch panel, whose "Launch chat" button starts a chat.
+            const configure = item ? null : [...document.querySelectorAll('[aria-label]')].find(e => /^configure claude$/i.test(e.getAttribute('aria-label')) && e.getClientRects().length > 0);
+            if (configure) {
+                configure.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); configure.click();
+                configure.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+                let launch = null;
+                for (let i = 0; i < 20 && !launch; i++) {
+                    await new Promise(r => setTimeout(r, 150));
+                    launch = [...document.querySelectorAll('button')].find(b => /^launch chat$/i.test((b.getAttribute('aria-label') || b.textContent || '').trim()) && b.getClientRects().length > 0 && !b.disabled);
+                }
+                if (launch) { const t = Date.now(); launch.click(); return { t, via: 'Configure Claude, Launch chat' }; }
+            }
+            if (!item) {
+                const menu = items.map(m => [m.textContent, m.getAttribute('aria-label'), m.getAttribute('title')].filter(Boolean).join(' | ').replace(/\s+/g, ' ').trim()).filter(t => /claude|chat|agent/i.test(t));
+                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+                return { t: null, menu };
+            }
+            const t = Date.now(); item.click(); return { t };
         })()`).catch(() => null),
+        /** Types `text` into the visible chat composer and submits it; resolves whether a composer took it. */
+        prompt: (text) => evalIn(`(async () => {
+            const box = [...document.querySelectorAll('textarea, [contenteditable="true"]')].find(e => e.getClientRects().length > 0 && !e.closest('[data-terminal-search-root]') && !e.classList.contains('xterm-helper-textarea'));
+            if (!box) return false;
+            box.focus();
+            if (box.tagName === 'TEXTAREA') { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(box, ${JSON.stringify(text)}); box.dispatchEvent(new Event('input', { bubbles: true })); }
+            else { box.textContent = ${JSON.stringify(text)}; box.dispatchEvent(new InputEvent('input', { bubbles: true })); }
+            await new Promise(r => setTimeout(r, 300));
+            box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+            return true;
+        })()`).catch(() => false),
         /** Splits the group holding tab `tabId` through Orca's own tab context menu; resolves { direction, groupIndex } or null. */
         splitGroup: (tabId) => evalIn(`(async () => {
             const tab = document.querySelector('[data-tab-id="' + CSS.escape(${JSON.stringify(String(tabId ?? ''))}) + '"]');
@@ -647,6 +760,8 @@ const R = (x, y, w = 400, h = 300) => ({ x, y, w, h });
 const creation = (o = {}) => ({ label: 'terminal-user', kind: 'terminal', t0: 1000, added: [{ id: 'orca-pane:term1', t: 1400 }], widget: { id: 'orca-pane:term1', kind: 'terminal' }, echo: true, ...o });
 const split = (o = {}) => ({ ownerItem: null, mode: 'split-right', widgets: [{ id: 'orca-pane:term2', tabBar: 0, rect: R(0, 0), xterms: 1, ownEcho: true, otherEcho: false }, { id: 'orca-pane:term3', tabBar: 1, rect: R(400, 0), xterms: 1, ownEcho: true, otherEcho: false }], ...o });
 const group = (o = {}) => ({ detected: true, direction: 'right', second: { tabBar: 2, rect: R(400, 0) }, first: [{ tabBar: 0, rect: R(0, 0) }], ...o });
+const pick = (patch = {}) => ({ pre: { activeWorktree: null, hosted: 0 }, picker: { rows: ['repo', 'other'], focused: 'repo' }, expected: ['repo', 'other'], ...patch });
+const agentPre = (patch = {}) => ({ claude: { found: true, version: '2.1.321 (Claude Code)' }, sdk: { set: true, packageJson: true }, ...patch });
 const withWidget = (o, i, patch) => { const c = structuredClone(o); Object.assign(c.widgets[i], patch); return c; };
 
 function runSelfTest() {
@@ -678,7 +793,23 @@ function runSelfTest() {
         ['a leaf echoing into the other', "reached the other leaf", () => splitVerdict(withWidget(split(), 1, { otherEcho: true }))],
         ['an OWNER-ITEM line present', 'FAIL by owner item P64-32', () => splitVerdict({ ownerItem: ownerItemOf('x\nOWNER-ITEM: P64-32 split placement needs the owner\n') })],
         ['a remount after a PB-side move', 'a remount after a PB-side move', () => pbSplitVerdict({ moved: true, remounts: 1, newStoreTabs: 0, xterms: 1, echo: true })],
-        ['chat launch with no store tab', 'chat launch produced no tab (provider: stub claude)', () => chatVerdict({ storeTab: false })],
+        ['chat launch with no store tab', 'chat launch produced no tab (provider: claude)', () => chatVerdict({ storeTab: false, provider: 'claude' })],
+        ['pick control', null, () => pickVerdict(pick())],
+        ['real-agent control', null, () => agentVerdict('chat', agentPre())],
+        ['prompt budget 0', null, () => promptBudgetVerdict(0)],
+        ['prompt budget 1', null, () => promptBudgetVerdict(1)],
+        ['picker absent', 'the worktree quick pick did not appear', () => pickVerdict(pick({ picker: null }))],
+        ['wrong preselection', 'wrong preselection', () => pickVerdict(pick({ picker: { rows: ['repo', 'other'], focused: 'other' } }))],
+        ['picker order differs', "differ from Orca's order", () => pickVerdict(pick({ picker: { rows: ['other', 'repo'], focused: 'other' } }))],
+        ['pick precondition not met', 'precondition not met', () => pickVerdict(pick({ pre: { activeWorktree: 'wt1', hosted: 0 } }))],
+        ['pick precondition with a hosted pane', 'precondition not met', () => pickVerdict(pick({ pre: { activeWorktree: null, hosted: 1 } }))],
+        ['an add later than 1000 ms after the Enter', 'late addWidget', () => creationVerdict(creation({ t0: 1000, added: [{ id: 'orca-pane:term1', t: 2001 }] }))],
+        ['no claude on the base PATH', 'no claude on the base PATH', () => agentVerdict('chat', agentPre({ claude: { found: false, version: '' } }))],
+        ['claude --version not naming Claude Code', 'does not name Claude Code', () => agentVerdict('tab-groups', agentPre({ claude: { found: true, version: '1.0.0 (stub)' } }))],
+        ['the SDK variable absent', 'ORCA_CLAUDE_AGENT_SDK_DIR is absent or empty', () => agentVerdict('chat', agentPre({ sdk: { set: false, packageJson: false } }))],
+        ['the SDK directory without package.json', "lacks the SDK's package.json", () => agentVerdict('chat', agentPre({ sdk: { set: true, packageJson: false } }))],
+        ['a stub session', 'ran no real agent', () => agentVerdict('chat', null)],
+        ['two prompts in one run', 'more than one prompt', () => promptBudgetVerdict(2)],
         ['a second-group tab in the first group\'s tab bar', 'second-group tab sits in the first group\'s tab bar', () => groupVerdict(group({ second: { tabBar: 0, rect: R(400, 0) } }))],
         ['a second-group tab placed in the wrong direction', 'placed in the wrong direction', () => groupVerdict(group({ direction: 'down' }))],
         ['a tab-group split the detector did not observe', 'tab-group split not observed', () => groupVerdict(group({ detected: false }))],

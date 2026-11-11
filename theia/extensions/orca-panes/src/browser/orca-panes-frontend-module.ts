@@ -10,6 +10,7 @@ import {
     WebSocketConnectionProvider, WidgetFactory
 } from '@theia/core/lib/browser';
 import { CommandContribution, CommandRegistry } from '@theia/core/lib/common';
+import { QuickInputService } from '@theia/core/lib/common/quick-pick-service';
 import URI from '@theia/core/lib/common/uri';
 import { ORCA_PANE_FACTORY_ID } from '@powerbrowser/tab-uris/lib/browser/orca-scheme-coverage';
 import {
@@ -60,7 +61,17 @@ export class OrcaPaneOpenHandler implements OpenHandler {
     }
 }
 
-/** C9 (P64-21, P64-31, D-18): command palette only; Orca creates the pane, PB shows it. */
+/** The two quick-pick placeholders (P64-37), plain words, no internal identifier. */
+const PICK_PLACEHOLDER = {
+    'terminal': 'Choose the Orca worktree for the new terminal',
+    'agent-session': 'Choose the Orca worktree for the new chat',
+} as const;
+
+/**
+ * C9' (P64-21, P64-31, P64-37, D-18): command palette only; Orca creates the pane, PB shows it. With no active Orca
+ * worktree, a quick pick of Orca's worktrees in Orca's own recency order, the first preselected; accepting it selects
+ * that worktree in Orca (P64-10, P64-23), then creates the pane there.
+ */
 @injectable()
 export class OrcaPaneCommands implements CommandContribution {
 
@@ -72,6 +83,9 @@ export class OrcaPaneCommands implements CommandContribution {
 
     @inject(ApplicationShell)
     protected readonly shell: ApplicationShell;
+
+    @inject(QuickInputService)
+    protected readonly quickInput: QuickInputService;
 
     registerCommands(commands: CommandRegistry): void {
         commands.registerCommand({ id: 'powerbrowser.orca.newChat', label: 'New Orca Chat' }, { execute: () => this.create('agent-session') });
@@ -85,10 +99,20 @@ export class OrcaPaneCommands implements CommandContribution {
         } catch {
             return; // the bundle logged its failed step once
         }
-        const worktreeId = api.activeWorktree() ?? this.observer.worktreeIds[0];
+        let worktreeId = api.activeWorktree();
         if (!worktreeId) {
-            console.info(`${LOG_PREFIX} no Orca worktree; no ${kind} pane created`);
-            return;
+            const worktrees = api.state().worktrees;
+            if (!worktrees.length) {
+                console.info(`${LOG_PREFIX} no Orca worktree; no ${kind} pane created`);
+                return;
+            }
+            const items = worktrees.map(w => ({ label: w.label, description: w.path, worktree: w.id }));
+            const picked = await this.quickInput.showQuickPick(items, { placeholder: PICK_PLACEHOLDER[kind], activeItem: items[0] });
+            if (!picked) {
+                return; // Escape creates nothing
+            }
+            worktreeId = picked.worktree;
+            api.setActiveWorktree(worktreeId);
         }
         const added = this.nextWidget(kind, worktreeId, 5000);
         try {

@@ -45,6 +45,7 @@ import { useAppShellServices } from '../app-shell/use-app-shell-services'
 import { useAppStartupHydration } from '../app-shell/use-app-startup-hydration'
 import { useDocumentAppearance } from '../app-shell/use-document-appearance'
 import { useRuntimeGraphSync } from '../app-shell/use-runtime-graph-sync'
+import { orderEmptyQueryWorktrees } from '../lib/order-empty-query-worktrees'
 import { initWebDeviceKeySupport } from '../web/web-device-key-support'
 import { parseWebPairingInput, readPairingInputFromLocation } from '../web/web-pairing'
 import { installWebPreloadApi } from '../web/web-preload-api'
@@ -626,12 +627,20 @@ export function setActiveWorktree(worktreeId: string): void {
   useAppStore.getState().setActiveWorktree(worktreeId)
 }
 
-/** What a check reads. No credential. */
-export function state(): { booted: boolean; worktrees: number; panes: number; mountErrors: MountError[] } {
+export type OrcaWorktree = { id: string; label: string; path: string }
+
+/** C3': what a check and the Orca commands read. No credential. worktrees is every worktree in Orca's store, in Orca's
+ * own empty-query order (visited first by recency, then activity, then display label), as its worktree palette lists them. */
+export function state(): { booted: boolean; worktrees: OrcaWorktree[]; panes: number; mountErrors: MountError[] } {
   const store = useAppStore.getState()
+  const { switchableWorktreesForRows } = orderEmptyQueryWorktrees({
+    visibleWorktrees: Object.values(store.worktreesByRepo ?? {}).flat(),
+    activeWorktreeId: null,
+    lastVisitedAtByWorktreeId: store.lastVisitedAtByWorktreeId ?? {}
+  })
   return {
     booted: isBooted,
-    worktrees: Object.values(store.worktreesByRepo ?? {}).flat().length,
+    worktrees: switchableWorktreesForRows.map((w) => ({ id: w.id, label: w.displayName || w.path, path: w.path })),
     panes: paneRecords(store).length,
     mountErrors: mountErrors.map((error) => ({ ...error }))
   }

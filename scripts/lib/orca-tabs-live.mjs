@@ -4,7 +4,11 @@
 // one live session the Phase 64 rows share. PowerBrowser on a scratch profile
 // with orcad and the booted Orca pane bundle, inherited ORCA_* scrubbed, output
 // redaction installed before anything else, and a stub `claude` on the launched
-// PowerBrowser's PATH only.
+// PowerBrowser's PATH only (agent 'stub', the default). With agent 'real' (64-06,
+// D-30) no stub is written: the owner's own claude on the base PATH must answer
+// --version naming Claude Code, and orcad's environment is read once for the
+// pre-installed SDK extension's directory variable, recording only whether it is
+// set and holds the SDK's package.json, never its value.
 //
 // Lane p64-02's code (theia/extensions/orca-panes) and lane p64-01's bundle
 // (orca/out/web/assets/pb-panes) are read only through the C1-C12 contracts.
@@ -94,6 +98,32 @@ export function writeStubAgentDir() {
     return dir;
 }
 
+/** D-30: the variable orcad reads the SDK's directory from (OrcaEnv's ORCAD_CLAUDE_AGENT_SDK_DIR_ENV). */
+const SDK_DIR_ENV = 'ORCA_CLAUDE_AGENT_SDK_DIR';
+
+/** The real claude on `path`: { found, version } (the --version line only; no prompt is sent). */
+export function realClaudeOn(path, home) {
+    try {
+        const version = execFileSync('claude', ['--version'], { env: { PATH: path, HOME: home ?? '' }, timeout: 30000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim().split('\n')[0];
+        return { found: true, version };
+    } catch (e) {
+        return { found: e.code !== 'ENOENT', version: '' };
+    }
+}
+
+/** Whether a process's environment sets the SDK directory and that directory holds package.json. The value never leaves this function. */
+export function sdkDirIn(pid) {
+    let set = false;
+    let packageJson = false;
+    try {
+        const line = readFileSync(`/proc/${pid}/environ`, 'latin1').split('\0').find((e) => e.startsWith(`${SDK_DIR_ENV}=`));
+        const dir = line ? line.slice(SDK_DIR_ENV.length + 1) : '';
+        set = dir.length > 0;
+        packageJson = set && existsSync(join(dir, 'package.json'));
+    } catch { /* unreadable: both false */ }
+    return { set, packageJson };
+}
+
 /** The environment names a session removes from this process before it launches anything. */
 export function scrubbedNames(env = process.env) {
     return Object.keys(env).filter((k) => /^ORCA_/.test(k) || k === 'NODE_OPTIONS' || k === 'NODE_PATH');
@@ -146,7 +176,8 @@ export const BOOT_WAIT = `const key = Symbol.for(${JSON.stringify(ORCA_PANES_MOD
  * luminoClose(id), activate(id), sendText(id, text), typeInto(id, text), typeText(text), pressKey(spec), focusTheiaFrame(),
  * focusOverlay(tabId), openWebTab(url), addedSince(t), tabState(), offerFromFile(), repo, worktree, stubDir }.
  */
-export async function withOrcaTabsSession({ log = () => {}, needOrca = true } = {}, fn) {
+export async function withOrcaTabsSession({ log = () => {}, needOrca = true, agent = 'stub' } = {}, fn) {
+    if (agent !== 'stub' && agent !== 'real') throw new Error(`withOrcaTabsSession: agent must be 'stub' or 'real', not ${agent}`);
     const { installOutputRedaction, ensurePbNode, redact } = await import('./orca-run.mjs');
     const secrets = [];
     // Redaction first: nothing below may print before it is in place. The offer joins the list once read.
@@ -165,16 +196,21 @@ export async function withOrcaTabsSession({ log = () => {}, needOrca = true } = 
         const OrcaEnv = await import('../../powerbrowser/shell/OrcaEnv.sys.mjs');
         const record = (pid) => { const t = Number.isInteger(pid) && pid > 0 ? startTicks(pid) : null; if (t !== null) recorded.set(pid, t); return t; };
         const basePath = savedEnv.PATH ?? '';
-        stubDir = writeStubAgentDir();
         // The stub is on the launched PowerBrowser's PATH (and so orcad's), never on the Orca CLI's.
-        process.env.PATH = `${stubDir}:${basePath}`;
+        const claude = agent === 'real' ? realClaudeOn(basePath, savedEnv.HOME ?? process.env.HOME) : null;
+        if (agent === 'stub') {
+            stubDir = writeStubAgentDir();
+            process.env.PATH = `${stubDir}:${basePath}`;
+        } else process.env.PATH = basePath;
         const prefs = { 'powerbrowser.orca.root': join(REPO_ROOT, 'orca'), 'powerbrowser.orca.port': await freePort(OrcaEnv) };
         if (needOrca) prefs['powerbrowser.sidecar.nodePath'] = (await ensurePbNode()).path;
         return await live.withProbeShell(async (app) => {
             const chromeJson = async (expr) => JSON.parse(await app.evaluateIn(app.chrome, `(() => { try { return JSON.stringify(${expr}); } catch (e) { return JSON.stringify({ chromeError: String(e) }); } })()`));
             const orcaState = () => chromeJson(`ChromeUtils.importESModule(${JSON.stringify(SERVICE_URL)}).OrcaService.getState()`);
             const ctx = {
-                app, log, record, pollFor, repo, stubDir, worktree: null, scratch,
+                app, log, record, pollFor, repo, stubDir, worktree: null, scratch, agent,
+                /** agent 'real': { claude: { found, version }, sdk: { set, packageJson } | null }; null for the stub. */
+                agentPrecondition: agent === 'real' ? { claude, sdk: null } : null,
                 probe: (body, ms) => probe(app, body, ms),
                 orcaState,
                 pressKey: (spec) => live.pressKey(app, spec),
@@ -240,6 +276,7 @@ export async function withOrcaTabsSession({ log = () => {}, needOrca = true } = 
                 const state = await pollFor(async () => { const s = await orcaState(); if (s.chromeError || s.state === 'failed') throw new Error(`OrcaService: ${s.chromeError ?? s.state}`); return s.state === 'ready' ? s : null; }, 90000, 'OrcaService to reach ready');
                 record(state.pid);
                 record(state.daemonPid);
+                if (ctx.agentPrecondition) ctx.agentPrecondition.sdk = sdkDirIn(state.pid);
                 await ctx.offerFromFile();
                 const boot = await ctx.probe(BOOT_WAIT, 200000);
                 if (!boot?.booted) throw new Error(`the Orca pane bundle did not boot: ${JSON.stringify(boot?.error ?? boot?.state ?? boot)}`);

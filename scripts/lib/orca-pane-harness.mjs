@@ -196,7 +196,7 @@ export async function withOrcaPaneSession({ log = () => {}, pbOrcad = false } = 
                         .then(() => { window.__pbBoot = 'ok'; }, e => { window.__pbBoot = 'failed: ' + String(e && e.message || e).slice(0, 300); }); return true; })()`);
                     const boot = await pollFor(async () => evalIn(context, 'window.__pbBoot'), 45000, 'bootstrap to settle');
                     if (boot !== 'ok') throw new Error(`standalone bootstrap ${boot}`);
-                    await pollFor(async () => (await evalIn(context, 'window.PbPanes.state().worktrees')) > 0, 45000, 'the store to list the throwaway worktree');
+                    await pollFor(async () => (await evalIn(context, 'window.PbPanes.state().worktrees.length')) > 0, 45000, 'the store to list the throwaway worktree');
                     return context;
                 },
                 /** PowerBrowser's own orcad ready (pbOrcad only): the throwaway repo registered there, ctx.pbOrca set. */

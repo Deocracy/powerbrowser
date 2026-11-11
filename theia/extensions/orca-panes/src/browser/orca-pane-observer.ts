@@ -45,9 +45,6 @@ export class OrcaPaneObserver implements FrontendApplicationContribution {
     protected latest: OrcaPaneRecord[] | undefined;
     protected applying = false;
 
-    /** The worktree ids of the last pane list, in list order. */
-    worktreeIds: string[] = [];
-
     /** The most recently active hosted tab, for the empty pb-orca: path. */
     lastActive: OrcaPaneWidget | undefined;
 
@@ -99,7 +96,6 @@ export class OrcaPaneObserver implements FrontendApplicationContribution {
     }
 
     protected async apply(records: OrcaPaneRecord[]): Promise<void> {
-        this.worktreeIds = [...new Set(records.map(r => r.worktreeId))];
         const restoredOptions: OrcaPaneOptions[] = this.restored.map(w => w.options);
         const plan: PanePlan = planPanes({ known: this.known, restored: restoredOptions, loggedPending: this.loggedPending }, records);
         const byKey = new Map(records.map(r => [r.key, r]));
