@@ -422,9 +422,11 @@ async function realWidgetSetup(s, ev, harness) {
         s.restoreOffer();
         await ev(HELPERS);
         await s.lib.pollFor(async () => ev(`!!globalThis[Symbol.for(${J(MODULE_KEY)})] && globalThis[Symbol.for(${J(MODULE_KEY)})].state().booted`), 60000, 'the orca-panes bundle to boot');
-        // The seed terminal listed first, so the command finds its worktree; its widget stays unshown, and
-        // the measured pane is the one holding an xterm.
+        // The seed terminal listed first; its widget stays unshown, and the measured pane is the one holding an xterm.
         await s.lib.pollFor(async () => ev(`(() => { let n = 0; globalThis[Symbol.for(${J(MODULE_KEY)})].subscribePanes(l => { n = l.filter(r => r.kind === 'terminal').length; })(); return n > 0; })()`), 30000, 'the seed terminal record');
+        // 64-06 (P64-37): with no active Orca worktree the commands ask through a quick pick; select Orca's first
+        // worktree through the store's own action (P64-23) so they act on it, as orca-tabs-live stage (a) proves the pick.
+        await ev(`(() => { const m = globalThis[Symbol.for(${J(MODULE_KEY)})]; const w = m.state().worktrees[0]; if (w && !m.activeWorktree()) m.setActiveWorktree(w.id); return true; })()`);
         await ev(`(() => { ${harness_GET} __getByName(window.theia.container, 'CommandRegistry').executeCommand('powerbrowser.orca.newTerminal'); return true; })()`);
         await s.lib.pollFor(async () => (await ev(`document.querySelector('[data-pb-orca-pane="terminal"] .xterm') ? true : false`)) === true, 30000, 'the hosted terminal widget');
         await ev(`(() => { ${harness_GET} __getByName(window.theia.container, 'CommandRegistry').executeCommand('powerbrowser.orca.newChat'); return true; })()`);
