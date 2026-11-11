@@ -25,7 +25,6 @@ import TerminalPane from '../components/terminal-pane/TerminalPane'
 import { requestActiveTerminalPaneClose } from '../components/terminal-pane/request-active-terminal-pane-close'
 import NativeChatView from '../components/native-chat/NativeChatView'
 import EmulatorPane from '../components/emulator-pane/EmulatorPane'
-import EditorPanel from '../components/editor/EditorPanel'
 import { closeTerminalTab } from '../components/terminal/terminal-tab-actions'
 import { createWorkspaceTabCloseCommands } from '../components/tab-group/workspace-tab-close-commands'
 import { ensureSimulatorTab } from '../lib/ensure-simulator-tab'
@@ -62,14 +61,22 @@ import type { KeybindingActionId, KeybindingOverrides, TerminalShortcutPolicy } 
 import type { Tab, TabGroupLayoutNode } from '../../../shared/tab-types'
 import type { TerminalPaneLayoutNode } from '../../../shared/terminal-tab-types'
 import type { TuiAgent } from '../../../shared/tui-agent'
+import { SIDE_MOUNT_KINDS, SIDE_MOUNTS_BUILD, SideMountBody } from './pb-side-mounts'
 
 const ENTRY_MARKER = 'pb-overlay:src/renderer/src/pb/pb-pane-mount.tsx'
 
 /** The marker literals of the entry, the Vite config and the scoping pass (orca-overlay-built reads them). */
 export const PB_OVERLAY_BUILD: readonly string[] = Object.freeze([
   ENTRY_MARKER,
+  ...SIDE_MOUNTS_BUILD,
   ...(PB_CONFIG_MARKERS as readonly string[])
 ])
+
+/** Phase 64's hosted kinds this file mounts itself (conflict-review opens in Theia's merge editor, P65-01). */
+const PANE_KINDS = ['terminal', 'agent-session', 'simulator'] as const
+
+/** Every kind mountPane accepts (B-1, C3-65); check-details is CheckRunDetailsPanel alone (pb-side-mounts). */
+export const MOUNT_KINDS: readonly string[] = Object.freeze([...PANE_KINDS, ...SIDE_MOUNT_KINDS])
 
 /** The React object this bundle runs on (the default export: the host's React object itself, not a
  * namespace copy); the orca-panes loader compares it with Theia's. */
@@ -456,7 +463,15 @@ function Waiting(): React.JSX.Element {
   return <div className="h-full w-full bg-background" data-pb-orca-waiting="" />
 }
 
-function PaneBody({ pick }: { pick: PanePick }): React.JSX.Element {
+function PaneBody({ pick }: { pick: PanePick }): React.JSX.Element | null {
+  if (!MOUNT_KINDS.includes(pick.kind)) throw new Error(`orca pane: no hosted mount for content type ${pick.kind}`)
+  if ((SIDE_MOUNT_KINDS as readonly string[]).includes(pick.kind)) {
+    return <SideMountBody kind={pick.kind} worktreeId={pick.worktreeId} tabId={pick.tabId} />
+  }
+  return <HostedPaneBody pick={pick} />
+}
+
+function HostedPaneBody({ pick }: { pick: PanePick }): React.JSX.Element {
   const { kind, worktreeId, tabId, paneKey } = pick
   const unified = useAppStore((state) => unifiedTabFor(state, worktreeId, tabId))
   const owner = useAppStore((state) =>
@@ -503,22 +518,13 @@ function PaneBody({ pick }: { pick: PanePick }): React.JSX.Element {
   if (kind === 'simulator') {
     return <EmulatorPane tab={unified as never} worktreeId={worktreeId} isActive />
   }
-  if (kind === 'conflict-review' || kind === 'check-details') {
-    return (
-      <EditorPanel
-        activeFileId={unified.entityId}
-        activeViewStateId={unified.entityId}
-        isVisible
-        isCmdSaveOwner
-      />
-    )
-  }
   throw new Error(`orca pane: no hosted mount for content type ${kind}`)
 }
 
 let mountSequence = 0
 
-/** A separate React root on the host React for one pane; returns the unmount. */
+/** A separate React root on the host React for one pane; returns the unmount. A kind not in MOUNT_KINDS throws
+ * inside the render naming the kind, so mountErrors records it (the standalone row's detector control). */
 export function mountPane(element: HTMLElement, pick: PanePick): () => void {
   mountSequence += 1
   const root = ReactDOMClient.createRoot(element, rootOptions(pick.kind))

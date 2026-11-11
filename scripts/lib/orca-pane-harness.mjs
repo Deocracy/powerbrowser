@@ -21,10 +21,13 @@
 
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, extname, join, normalize, sep } from 'node:path';
 
+import { createRequire } from 'node:module';
+
+import { ORCA_PANES_MODULE_KEY } from './orca-tabs-live.mjs';
 import { REPO_ROOT, ensurePbNode, installOutputRedaction, orcaVersionFromPins, orcadEnv, redact, startOrcad, stopOrcad } from './orca-run.mjs';
 import { openWebTab, pollFor, withProbeShell } from './pb-live-probe.mjs';
 
@@ -247,6 +250,239 @@ export async function withOrcaPaneSession({ log = () => {}, pbOrcad = false } = 
         }
         restoreOutput();
     }
+}
+
+// ---------------------------------------------------------------- Phase 65 mount gate (P65-04)
+
+/** The entry expression of each route: the standalone page's own import, or C64-1's boot handle in the Theia document. */
+export const ROUTE_ENTRY = Object.freeze({
+    standalone: 'window.PbPanes',
+    'route-a': `globalThis[Symbol.for(${J(ORCA_PANES_MODULE_KEY)})]`,
+});
+
+/** Kinds whose body Orca renders empty in a state the gate cannot set without writing Orca's settings (recorded, not hidden). */
+export const EMPTY_BY_DESIGN = Object.freeze({
+    orchestration: 'Orca mounts no crew panel while experimentalOrchestrationPanel is off or nothing is focused',
+    'page:creation': 'Orca renders no creation surface while no worktree creation is pending',
+});
+
+/**
+ * One gate row from a mount observation: mounted means no throw, no React error recorded by the root, no
+ * window error, no Orca error-boundary fallback in the host and at least one element (or a recorded empty state).
+ */
+export function gateRow(o, benign = /^ResizeObserver loop/) {
+    const windowErrors = (o.windowErrors ?? []).filter(e => !benign.test(e));
+    const reactErrors = o.reactErrors ?? [];
+    const threw = o.threw ?? null;
+    const first = threw ?? reactErrors[0]?.message ?? windowErrors[0] ?? (o.fallback ? 'Orca error-boundary fallback in the host' : null);
+    const empty = o.descendantCount === 0 && !first && EMPTY_BY_DESIGN[o.kind] ? EMPTY_BY_DESIGN[o.kind] : null;
+    const mounted = !first && (o.descendantCount > 0 || !!empty);
+    return {
+        kind: o.kind, route: o.route, attempt: o.attempt ?? 1, mounted, threw: threw !== null || reactErrors.length > 0,
+        errorClass: first ? (/(\w*Error)\b/.exec(first)?.[1] ?? first.replace(/\s+/g, ' ').slice(0, 80)) : null,
+        message: first ? first.slice(0, 200) : null,
+        providersAdded: o.providersAdded ?? [], importsAdded: o.importsAdded ?? [], descendantCount: o.descendantCount ?? 0,
+        ...(empty ? { empty } : {}),
+    };
+}
+
+/**
+ * Mounts `pick` through the route's entry into a fresh host (data-pb-orca-pane=kind) and observes it for up to
+ * waitMs (early when elements appear and the count holds). Returns the raw observation for gateRow.
+ */
+export async function gateMount(ev, route, pick, { waitMs = 5000, box = [0, 0, 900, 700] } = {}) {
+    const M = ROUTE_ENTRY[route];
+    const id = `gate-${pick.kind.replace(/[^\w-]/g, '-')}-${Date.now().toString(36)}`;
+    const started = await ev(`(() => { const m = ${M};
+        if (!window.__pbGateErrors) { window.__pbGateErrors = []; addEventListener('error', e => window.__pbGateErrors.push(String(e.error && e.error.message || e.message).slice(0, 300)));
+            addEventListener('unhandledrejection', e => window.__pbGateErrors.push('rejection: ' + String(e.reason && e.reason.message || e.reason).slice(0, 300))); }
+        window.__pbGateBefore = [m.state().mountErrors.length, window.__pbGateErrors.length];
+        const host = document.createElement('div'); host.setAttribute('data-pb-orca-pane', ${J(pick.kind)}); host.id = ${J(id)};
+        host.style.cssText = 'position:fixed;overflow:hidden;display:flex;z-index:2147483000;left:${box[0]}px;top:${box[1]}px;width:${box[2]}px;height:${box[3]}px';
+        const root = document.createElement('div'); root.style.cssText = 'display:flex;flex:1;min-width:0;min-height:0'; host.appendChild(root); document.body.appendChild(host);
+        try { window.__pbGateUnmount = m.mountPane(root, ${J(pick)}); return 'ok'; } catch (e) { return 'threw: ' + String(e && e.message || e).slice(0, 300); } })()`);
+    const read = async () => JSON.parse(await ev(`JSON.stringify((() => { const host = document.getElementById(${J(id)}); const m = ${M};
+        return { descendantCount: host ? host.querySelectorAll('[data-pb-orca-pane-root] *').length : 0,
+            fallback: !!(host && host.querySelector('[role="alert"] .text-destructive')),
+            reactErrors: m.state().mountErrors.slice(window.__pbGateBefore[0]), windowErrors: window.__pbGateErrors.slice(window.__pbGateBefore[1]) }; })())`));
+    let obs = await read();
+    const t0 = Date.now();
+    let lastCount = -1;
+    while (Date.now() - t0 < waitMs) {
+        await sleep(400);
+        obs = await read();
+        if (obs.descendantCount > 0 && obs.descendantCount === lastCount) break;
+        lastCount = obs.descendantCount;
+    }
+    return { ...obs, kind: pick.kind, route, hostId: id, threw: started === 'ok' ? null : started.slice('threw: '.length) };
+}
+
+/** Unmounts and removes a gate host. */
+export async function gateUnmount(ev, hostId) {
+    await ev(`(() => { try { window.__pbGateUnmount && window.__pbGateUnmount(); } catch (e) {} document.getElementById(${J(hostId)})?.remove(); return true; })()`);
+}
+
+/**
+ * The narrowest host width at which nothing in the mounted host scrolls horizontally: the host and every element
+ * whose overflow-x is auto or scroll keep scrollWidth <= clientWidth + 1. Steps down from `from` by `step`; when
+ * `from` already overflows it steps up by `step` (to `ceiling`) to the first width without overflow. null when none.
+ */
+export async function widthProbe(ev, hostId, { from = 640, step = 20, floor = 200, ceiling = 1600, settleMs = 350 } = {}) {
+    let narrowest = null;
+    const steps = [];
+    const measure = async w => {
+        await ev(`(() => { document.getElementById(${J(hostId)}).style.width = '${w}px'; return true; })()`);
+        await sleep(settleMs);
+        const offenders = JSON.parse(await ev(`JSON.stringify((() => { const host = document.getElementById(${J(hostId)});
+            const els = [host, ...host.querySelectorAll('*')].filter(e => e === host || /^(auto|scroll)$/.test(getComputedStyle(e).overflowX));
+            return els.filter(e => e.clientWidth > 0 && e.scrollWidth > e.clientWidth + 1).slice(0, 4)
+                .map(e => [e === host ? 'host' : e.tagName.toLowerCase() + (e.getAttribute('data-slot') ? '[' + e.getAttribute('data-slot') + ']' : '') + '.' + String(e.className || '').split(/\\s+/).slice(0, 4).join('.'), e.scrollWidth, e.clientWidth]); })())`));
+        steps.push(offenders.length ? [w, true, offenders] : [w, false]);
+        return offenders.length > 0;
+    };
+    if (await measure(from)) {
+        for (let w = from + step; w <= ceiling; w += step) if (!(await measure(w))) return { narrowest: w, direction: 'up', steps };
+        return { narrowest: null, direction: 'up', steps };
+    }
+    narrowest = from;
+    for (let w = from - step; w >= floor; w -= step) {
+        if (await measure(w)) break;
+        narrowest = w;
+    }
+    return { narrowest, direction: 'down', steps };
+}
+
+function overlayTs() {
+    const pkg = join(REPO_ROOT, 'theia', 'package.json');
+    try { return createRequire(pkg)('typescript'); } catch { return null; }
+}
+
+const RENDERER_SRC = join(ORCA_DIR, 'src', 'renderer', 'src');
+const PB_DIR = join(RENDERER_SRC, 'pb');
+
+/** Resolves an import specifier of a file under orca/src the way Orca's Vite config does ('@/' and relative); null for packages. */
+export function resolveOrcaImport(from, spec, exists = existsSync) {
+    let base;
+    if (spec.startsWith('@/')) base = join(RENDERER_SRC, spec.slice(2));
+    else if (spec.startsWith('.')) base = join(dirname(from), spec);
+    else return null;
+    for (const ext of ['', '.ts', '.tsx', '.js', '.mjs', '/index.ts', '/index.tsx', '/index.js']) {
+        const p = normalize(base + ext);
+        if (exists(p) && (ext !== '' || /\.(m?[jt]sx?)$/.test(p))) return p;
+    }
+    return null;
+}
+
+/** Value import specifiers of one source (static, re-export and dynamic import()), with typescript. */
+export function importSpecifiers(ts, fileName, text) {
+    const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, /\.tsx$/.test(fileName) ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+    const specs = [];
+    const visit = n => {
+        if ((ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) && n.moduleSpecifier && ts.isStringLiteral(n.moduleSpecifier)) {
+            if (!n.importClause?.isTypeOnly && !n.isTypeOnly) specs.push(n.moduleSpecifier.text);
+        } else if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword && n.arguments[0] && ts.isStringLiteral(n.arguments[0])) {
+            specs.push(n.arguments[0].text);
+        }
+        ts.forEachChild(n, visit);
+    };
+    visit(sf);
+    return specs;
+}
+
+/**
+ * The pane bundle's module graph from its source: every orca/src module reachable from `starts` through value
+ * imports (static, re-export, dynamic). `overrides` maps an orca path to replacement text (an overlay file not
+ * yet copied). Returns Map<absolute path, importer or null>; packages are not followed.
+ */
+export function moduleGraph(ts, starts, overrides = new Map()) {
+    const graph = new Map();
+    const queue = [];
+    for (const s of starts) { graph.set(s, null); queue.push(s); }
+    while (queue.length) {
+        const file = queue.pop();
+        if (!/\.(m?[jt]sx?)$/.test(file)) continue;
+        const text = overrides.get(file) ?? (existsSync(file) ? readFileSync(file, 'utf8') : null);
+        if (text === null) continue;
+        for (const spec of importSpecifiers(ts, file, text)) {
+            const r = resolveOrcaImport(file, spec, p => overrides.has(p) || existsSync(p));
+            if (r && !graph.has(r)) { graph.set(r, file); queue.push(r); }
+        }
+    }
+    return graph;
+}
+
+/** The overlay's pb/ files as overrides at their orca/ paths (the graph reads the overlay, never a stale copy). */
+export function overlayOverrides() {
+    const dir = join(REPO_ROOT, 'orca-overlay', 'files', 'src', 'renderer', 'src', 'pb');
+    const out = new Map();
+    if (!existsSync(dir)) return out;
+    for (const name of readdirSync(dir)) out.set(join(PB_DIR, name), readFileSync(join(dir, name), 'utf8'));
+    return out;
+}
+
+/**
+ * Spike 004 Question 3's import list per kind: the Orca modules pb-side-mounts.tsx imports for each kind's surface
+ * (the closure of the declarations its SideMountBody branch renders), minus the modules the entry already imports.
+ * Derived from the overlay source with typescript; {} when typescript is absent.
+ */
+export function kindImports(kinds) {
+    const ts = overlayTs();
+    if (!ts) return {};
+    const overrides = overlayOverrides();
+    const sideFile = join(PB_DIR, 'pb-side-mounts.tsx'), entryFile = join(PB_DIR, 'pb-pane-mount.tsx');
+    const text = overrides.get(sideFile);
+    if (!text) return {};
+    const rel = p => p.slice(ORCA_DIR.length + 1);
+    const entrySpecs = new Set(importSpecifiers(ts, entryFile, overrides.get(entryFile) ?? '').map(s => resolveOrcaImport(entryFile, s, p => overrides.has(p) || existsSync(p)) ?? s));
+    const sf = ts.createSourceFile(sideFile, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const imports = new Map(), decls = new Map();
+    for (const st of sf.statements) {
+        if (ts.isImportDeclaration(st) && st.importClause && !st.importClause.isTypeOnly) {
+            const spec = st.moduleSpecifier.text, c = st.importClause;
+            if (c.name) imports.set(c.name.text, spec);
+            if (c.namedBindings && ts.isNamedImports(c.namedBindings)) for (const e of c.namedBindings.elements) { if (!e.isTypeOnly) imports.set(e.name.text, spec); }
+            else if (c.namedBindings) imports.set(c.namedBindings.name.text, spec);
+        } else if (ts.isFunctionDeclaration(st) && st.name) decls.set(st.name.text, st);
+        else if (ts.isVariableStatement(st)) for (const d of st.declarationList.declarations) if (ts.isIdentifier(d.name)) decls.set(d.name.text, d);
+    }
+    const objectOf = name => { const d = decls.get(name); const init = d?.initializer?.arguments?.[0] ?? d?.initializer; const out = {};
+        if (init && ts.isObjectLiteralExpression(init)) for (const p of init.properties) if (ts.isPropertyAssignment(p)) out[(p.name.text ?? p.name.getText(sf))] = ts.isIdentifier(p.initializer) ? p.initializer.text : p.initializer.text ?? p.initializer.getText(sf);
+        return out; };
+    const pageViews = objectOf('PAGE_VIEWS'), pages = objectOf('PAGES');
+    // SideMountBody's `if (kind === 'x') return <Component ...>` branches.
+    const branches = {};
+    const body = decls.get('SideMountBody');
+    const visit = n => {
+        if (ts.isIfStatement(n) && ts.isBinaryExpression(n.expression) && ts.isStringLiteral(n.expression.right) && n.expression.left.getText(sf) === 'kind') {
+            let el = null; const find = x => { if (!el && (ts.isJsxSelfClosingElement(x) || ts.isJsxOpeningElement(x))) el = x.tagName.getText(sf); ts.forEachChild(x, find); }; find(n.thenStatement);
+            if (el) branches[n.expression.right.text] = [el];
+        }
+        ts.forEachChild(n, visit);
+    };
+    if (body) visit(body);
+    const closure = starts => {
+        const seen = new Set(), specs = new Set(), queue = [...starts];
+        while (queue.length) {
+            const name = queue.pop();
+            if (seen.has(name)) continue;
+            seen.add(name);
+            if (imports.has(name)) { specs.add(imports.get(name)); continue; }
+            const d = decls.get(name);
+            if (!d) continue;
+            const v = n => { if (ts.isIdentifier(n)) queue.push(n.text);
+                if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword && ts.isStringLiteral(n.arguments[0])) specs.add(n.arguments[0].text);
+                ts.forEachChild(n, v); };
+            v(d.initializer ?? d.body ?? d);
+        }
+        return [...specs].map(s => resolveOrcaImport(sideFile, s, p => overrides.has(p) || existsSync(p)) ?? s).filter(p => !entrySpecs.has(p)).map(p => p.startsWith(ORCA_DIR) ? rel(p) : p).sort();
+    };
+    const out = {};
+    for (const kind of kinds) {
+        const view = kind === 'settings' ? 'settings' : pageViews[kind];
+        const starts = branches[kind] ?? (view && pages[view] ? [pages[view], 'PageBoundary'] : null);
+        out[kind] = starts ? closure(starts) : [];
+    }
+    return out;
 }
 
 /** The terminal handles `orca terminal list` reports, as a sorted array. */
