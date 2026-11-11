@@ -12,6 +12,10 @@
  * the store has the tab, Orca's own waiting state shows (P64-26).
  * Phase 65 (N-1): a tab-less page tab (page:<view>, empty tabId) takes Orca's
  * viewTitle and closes by disposing itself.
+ * Phase 67 (P67-01, P67-32): while OrcaHostingStatus reports a failure class,
+ * the pane root is hidden (its React root stays mounted) and the PowerBrowser
+ * failure page renders in its place; Orca's own connection states inside the
+ * hidden root are never revealed while the page is up.
  */
 import * as React from '@theia/core/shared/react';
 import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
@@ -21,6 +25,8 @@ import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import { ORCA_TERMINAL_FOCUS_KEY, OrcaPaneOptions } from '../common/orca-panes-protocol';
 import { OrcaPaneBundle } from './orca-pane-bundle';
 import { ORCA_PANE_WIDGET_ID_PREFIX } from './orca-pane-routes';
+import { OrcaFailurePage } from './failure/orca-failure-page';
+import { OrcaHostingStatus } from './failure/orca-hosting-status';
 
 const LOG_PREFIX = '[@powerbrowser/orca-panes]';
 
@@ -43,6 +49,9 @@ export class OrcaPaneWidget extends ReactWidget {
     @inject(ContextKeyService)
     protected readonly contextKeys: ContextKeyService;
 
+    @inject(OrcaHostingStatus)
+    protected readonly hostingStatus: OrcaHostingStatus;
+
     @postConstruct()
     protected init(): void {
         this.id = ORCA_PANE_WIDGET_ID_PREFIX + this.options.name;
@@ -55,6 +64,7 @@ export class OrcaPaneWidget extends ReactWidget {
             scoped.createKey<boolean>(ORCA_TERMINAL_FOCUS_KEY, true);
             this.toDispose.push(scoped);
         }
+        this.toDispose.push(this.hostingStatus.onDidChange(() => this.update()));
         this.update();
         if (this.tabless) {
             // N-1: a page tab has no Orca tab record to retitle it; its title is Orca's own (P65-26).
@@ -79,7 +89,11 @@ export class OrcaPaneWidget extends ReactWidget {
     }
 
     protected render(): React.ReactNode {
-        return <div className='pb-orca-pane-host' style={{ width: '100%', height: '100%' }} ref={this.setHost} />;
+        const failureClass = this.hostingStatus.failureClass;
+        return <React.Fragment>
+            <div className='pb-orca-pane-host' style={{ width: '100%', height: '100%', display: failureClass ? 'none' : undefined }} ref={this.setHost} />
+            {failureClass ? <OrcaFailurePage failureClass={failureClass} status={this.hostingStatus} /> : undefined}
+        </React.Fragment>;
     }
 
     protected setHost = (element: HTMLDivElement | null): void => {
@@ -119,7 +133,8 @@ export class OrcaPaneWidget extends ReactWidget {
     protected override onActivateRequest(msg: Message): void {
         super.onActivateRequest(msg);
         // Rendered elements only: an isolated terminal leaf's root also holds its tab's other leaves' xterms, hidden.
-        const candidates = this.host?.querySelectorAll<HTMLElement>('textarea, input, [tabindex]:not([tabindex="-1"]), button, [contenteditable="true"]') ?? [];
+        // The node, not the host: while the failure page is up its buttons are the rendered ones.
+        const candidates = this.node.querySelectorAll<HTMLElement>('textarea, input, [tabindex]:not([tabindex="-1"]), button, [contenteditable="true"]');
         const focusable = Array.from(candidates).find(element => element.getClientRects().length > 0);
         (focusable ?? this.node).focus();
     }

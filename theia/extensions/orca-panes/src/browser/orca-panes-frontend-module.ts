@@ -21,6 +21,7 @@ import { OrcaPaneObserver } from './orca-pane-observer';
 import { OrcaPaneWidget, OrcaPaneWidgetOptions } from './orca-pane-widget';
 import { bindOrcaSidePanel } from './side-panel/orca-side-panel-module';
 import { bindOrcaRestore } from './restore/orca-pane-name-map'; // NEW (65-04)
+import { OrcaHostingStatus } from './failure/orca-hosting-status'; // NEW (67-03)
 
 const LOG_PREFIX = '[@powerbrowser/orca-panes]';
 
@@ -162,6 +163,9 @@ export default new ContainerModule(bind => {
     ).inSingletonScope();
     bind(OrcaPaneBundle).toSelf().inSingletonScope();
     bind(FrontendApplicationContribution).toService(OrcaPaneBundle);
+    // NEW (67-03): one hosting-status client for every hosted view's failure page (RUN-06, P67-07)
+    bind(OrcaHostingStatus).toSelf().inSingletonScope();
+    bind(FrontendApplicationContribution).toService(OrcaHostingStatus);
 
     // C7: one widget per hosted pane; the options are the widget's identity and replay on layout restore (P64-28).
     bind(WidgetFactory).toDynamicValue(ctx => ({

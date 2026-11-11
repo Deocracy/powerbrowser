@@ -70,6 +70,13 @@
 // by exemption list -- a user-facing string added at a NEW site is the known
 // residual hole, stated here rather than silently assumed covered.
 //
+// 67-03 Orca hosting copy (RUN-06, P67-29). The hosted Orca views' failure page:
+// its sentences, protection line and button labels are derived by type-stripping
+// orca-panes' failure/orca-failure-copy.ts; each passes the shape test and names
+// PowerBrowser, each class's sentence names exactly the buttons it renders, the
+// copy and button tables share their keys, and the failure folder's components
+// carry no ad-hoc text. See checkOrcaCopy below.
+//
 // Usage:
 //   node scripts/verify-shell-error-copy.mjs [--file <path>]
 //   node scripts/verify-shell-error-copy.mjs --self-test
@@ -83,6 +90,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
+import { stripTypeScriptTypes } from "node:module";
 import { resolveConfig } from "./generate.mjs";
 
 const SELF = fileURLToPath(import.meta.url);
@@ -1349,6 +1357,168 @@ function runModesCopySelfTest() {
 }
 
 // ---------------------------------------------------------------------------
+// 67-03 Orca hosting copy (RUN-06, P67-02, P67-29, P67-30, P67-36). The PowerBrowser page a hosted Orca
+// view shows on failure takes every word from orca-panes' failure/orca-failure-copy.ts. Derived by type
+// stripping that file (node:module stripTypeScriptTypes) and importing it, then:
+//   - every class sentence and the protection sentence passes leakFailures and names PowerBrowser;
+//   - ORCA_FAILURE_COPY and ORCA_FAILURE_BUTTONS have the same keys, and every button id has a label;
+//   - for each class, the labels its sentence names (Restart Orca, Reconnect, Details as substrings)
+//     equal the labels of the buttons it renders (01-13: the stated step and the controls are one fact);
+//   - every render site under failure/ resolves to the tables: a JSX text node, a string-literal JSX
+//     child or a literal title/aria-label/placeholder/alt attribute in a .tsx there is red naming the file,
+//     and some .tsx there must index ORCA_FAILURE_COPY and ORCA_BUTTON_LABELS.
+// A zero derivation is red. When failure/ is absent the scope prints one named SKIP line.
+
+const ORCA_FAILURE_DIR_REL = "theia/extensions/orca-panes/src/browser/failure/";
+const ORCA_COPY_REL = `${ORCA_FAILURE_DIR_REL}orca-failure-copy.ts`;
+
+/** rel -> source for every .ts/.tsx under failure/, or null when the directory is absent. */
+function readOrcaSources() {
+  let names;
+  try {
+    names = readdirSync(join(REPO_ROOT, ORCA_FAILURE_DIR_REL));
+  } catch {
+    return null;
+  }
+  const out = {};
+  for (const name of names.filter((n) => /\.tsx?$/.test(n)).sort()) {
+    out[`${ORCA_FAILURE_DIR_REL}${name}`] = readFileSync(join(REPO_ROOT, ORCA_FAILURE_DIR_REL, name), "utf8");
+  }
+  return out;
+}
+
+async function loadOrcaCopy(src) {
+  const emit = process.emitWarning;
+  process.emitWarning = () => {}; // stripTypeScriptTypes is flagged experimental on Node 24
+  try {
+    const js = stripTypeScriptTypes(src);
+    return await import(`data:text/javascript;base64,${Buffer.from(js).toString("base64")}`);
+  } catch (err) {
+    return { loadError: err?.message ?? String(err) };
+  } finally {
+    process.emitWarning = emit;
+  }
+}
+
+/** @returns {{ failures: string[], messages: number }} */
+async function checkOrcaCopy(sources) {
+  const out = [];
+  const mod = await loadOrcaCopy(sources[ORCA_COPY_REL] ?? "");
+  const { ORCA_FAILURE_COPY: copy, ORCA_FAILURE_BUTTONS: buttons, ORCA_BUTTON_LABELS: labels, ORCA_PROTECTION_SENTENCE: protection } = mod;
+  if (mod.loadError || !copy || !buttons || !labels || typeof protection !== "string") {
+    out.push(`Orca copy: ${ORCA_COPY_REL} did not yield ORCA_FAILURE_COPY, ORCA_FAILURE_BUTTONS, ORCA_BUTTON_LABELS and ORCA_PROTECTION_SENTENCE${mod.loadError ? ` (${mod.loadError})` : ""}`);
+    return { failures: out, messages: 0 };
+  }
+  const messages = Object.entries(copy).map(([cls, entry]) => [cls, entry?.message]);
+  if (messages.length === 0) {
+    out.push("Orca copy: derived ZERO strings from ORCA_FAILURE_COPY -- the comparison proves nothing");
+    return { failures: out, messages: 0 };
+  }
+  for (const [cls, message] of [...messages, ["protection sentence", protection]]) {
+    if (typeof message !== "string" || message.length === 0) {
+      out.push(`Orca copy: class '${cls}' has no message string`);
+      continue;
+    }
+    out.push(...leakFailures("Orca copy", message));
+    if (!message.includes("PowerBrowser")) out.push(`Orca copy: ${JSON.stringify(message)} (${cls}) does not name PowerBrowser`);
+  }
+  for (const value of Object.values(labels)) out.push(...leakFailures("Orca button label", String(value)));
+  for (const cls of Object.keys(buttons)) {
+    if (!Object.hasOwn(copy, cls)) out.push(`Orca copy: class '${cls}' has buttons but no copy`);
+  }
+  for (const cls of Object.keys(copy)) {
+    if (!Object.hasOwn(buttons, cls)) {
+      out.push(`Orca copy: class '${cls}' has copy but no buttons`);
+      continue;
+    }
+    const message = copy[cls]?.message ?? "";
+    const rendered = new Set();
+    for (const id of buttons[cls]) {
+      if (typeof labels[id] !== "string") out.push(`Orca copy: class '${cls}' renders the button '${id}', which ORCA_BUTTON_LABELS has no label for`);
+      else rendered.add(labels[id]);
+    }
+    for (const label of Object.values(labels)) {
+      const named = message.includes(label);
+      if (named && !rendered.has(label)) out.push(`Orca copy: class '${cls}' names "${label}" but does not render that button`);
+      if (!named && rendered.has(label)) out.push(`Orca copy: class '${cls}' renders "${label}" but its sentence does not name it`);
+    }
+  }
+  // Render sites: no ad-hoc text in the failure folder's components.
+  const tsx = Object.keys(sources).filter((rel) => rel.endsWith(".tsx"));
+  for (const rel of tsx) {
+    const code = blankComments(sources[rel]);
+    for (const m of code.matchAll(/(?<!=)>([^<>{}]*[A-Za-z][^<>{}]*)</g)) {
+      out.push(`Orca copy: ad-hoc JSX text ${JSON.stringify(m[1].trim())} in ${rel} -- page text must come from orca-failure-copy.ts`);
+    }
+    for (const m of code.matchAll(/(?<![=\w])\{\s*('(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`)\s*\}/g)) {
+      out.push(`Orca copy: ad-hoc string-literal JSX child ${m[1]} in ${rel} -- page text must come from orca-failure-copy.ts`);
+    }
+    for (const m of code.matchAll(/\b(title|aria-label|placeholder|alt)=\{?\s*('(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*")/g)) {
+      out.push(`Orca copy: ad-hoc ${m[1]} attribute ${m[2]} in ${rel} -- page text must come from orca-failure-copy.ts`);
+    }
+  }
+  if (!tsx.some((rel) => /ORCA_FAILURE_COPY\[/.test(sources[rel]) && /ORCA_BUTTON_LABELS\[/.test(sources[rel]))) {
+    out.push(`Orca copy: no .tsx under ${ORCA_FAILURE_DIR_REL} indexes ORCA_FAILURE_COPY and ORCA_BUTTON_LABELS -- the page's render site does not resolve to the tables`);
+  }
+  return { failures: out, messages: messages.length };
+}
+
+const ORCA_PAGE_REL = `${ORCA_FAILURE_DIR_REL}orca-failure-page.tsx`;
+const ORCA_COPY_FAULTS = [
+  {
+    name: "a failure code leaked into the could-not-start sentence",
+    apply: (s) => ({ ...s, [ORCA_COPY_REL]: s[ORCA_COPY_REL].replace("PowerBrowser couldn't start Orca. Choose", "PowerBrowser couldn't start Orca (ORCAD_START_FAILED). Choose") }),
+    expect: "ORCAD_START_FAILED",
+  },
+  {
+    name: "an ad-hoc literal in the page component",
+    apply: (s) => ({ ...s, [ORCA_PAGE_REL]: s[ORCA_PAGE_REL].replace("<p>{copy.message}</p>", "<p>Orca stopped working</p>") }),
+    expect: `ad-hoc JSX text "Orca stopped working" in ${ORCA_PAGE_REL}`,
+  },
+  {
+    name: "a sentence naming Restart Orca for a class that does not render it",
+    apply: (s) => ({ ...s, [ORCA_COPY_REL]: s[ORCA_COPY_REL].replace("Reinstall, or open Details for the missing path.", "Reinstall, choose Restart Orca, or open Details for the missing path.") }),
+    expect: `class 'files-missing' names "Restart Orca" but does not render that button`,
+  },
+  {
+    name: "a class with buttons but no copy",
+    apply: (s) => ({ ...s, [ORCA_COPY_REL]: s[ORCA_COPY_REL].replace(/\n {4}'browser-not-attached': \{\n[^}]*\},/, "") }),
+    expect: "class 'browser-not-attached' has buttons but no copy",
+  },
+];
+
+async function runOrcaCopySelfTest() {
+  const clean = readOrcaSources();
+  if (!clean) {
+    console.log(`  SKIP  Orca copy faults -- ${ORCA_FAILURE_DIR_REL} is absent`);
+    return true;
+  }
+  const baseline = await checkOrcaCopy(clean);
+  if (baseline.failures.length !== 0) {
+    console.error("verify-shell-error-copy --self-test: FAIL -- the Orca-copy baseline is already red:");
+    baseline.failures.forEach((f) => console.error(`  ${f}`));
+    return false;
+  }
+  let allOk = true;
+  for (const fault of ORCA_COPY_FAULTS) {
+    const mutated = fault.apply(clean);
+    if (JSON.stringify(mutated) === JSON.stringify(clean)) {
+      console.error(`  FAIL  ${fault.name} -- the fault did not apply; this self-test row proves nothing`);
+      allOk = false;
+      continue;
+    }
+    const found = (await checkOrcaCopy(mutated)).failures;
+    if (!found.some((f) => f.includes(fault.expect))) {
+      console.error(`  FAIL  ${fault.name} -- did NOT go red naming ${JSON.stringify(fault.expect)}; got: ${found.join(" | ") || "(no failures at all)"}`);
+      allOk = false;
+    } else {
+      console.log(`  ok    ${fault.name} -- red, naming the drift`);
+    }
+  }
+  return allOk;
+}
+
+// ---------------------------------------------------------------------------
 // --self-test: plant faults, require each to go red naming the drift.
 // ---------------------------------------------------------------------------
 
@@ -1581,7 +1751,12 @@ if (selfTest) {
   if (modesOk) {
     console.log(`verify-shell-error-copy: PASS -- all ${MODES_COPY_FAULTS.length} planted modes-copy faults went red naming the drift`);
   }
-  if (shellOk && modesOk) {
+  console.log(`verify-shell-error-copy --self-test: planting ${ORCA_COPY_FAULTS.length} Orca-copy fault(s)`);
+  const orcaOk = await runOrcaCopySelfTest();
+  if (orcaOk) {
+    console.log(`verify-shell-error-copy: PASS -- all ${ORCA_COPY_FAULTS.length} planted Orca-copy faults went red naming the drift`);
+  }
+  if (shellOk && modesOk && orcaOk) {
     process.exit(0);
   }
   console.error("verify-shell-error-copy: FAIL -- see the self-test rows above");
@@ -1595,6 +1770,14 @@ if (!argv.includes("--file")) {
     fail(f);
   }
   console.log(`verify-shell-error-copy: widget copy derived from ${widgetCopySourceRels(modesSources).length} chrome-bar source(s)`);
+  const orcaSources = readOrcaSources();
+  if (!orcaSources) {
+    console.log(`verify-shell-error-copy: Orca scope SKIP -- ${ORCA_FAILURE_DIR_REL} is absent`);
+  } else {
+    const orca = await checkOrcaCopy(orcaSources);
+    orca.failures.forEach((f) => fail(f));
+    console.log(`verify-shell-error-copy: Orca scope -- ${orca.messages} messages checked from ${Object.keys(orcaSources).length} source(s) under ${ORCA_FAILURE_DIR_REL}`);
+  }
 }
 if (failures.length === 0) {
   console.log(`verify-shell-error-copy: PASS -- no internal identifier can reach the error layer (${target})`);
