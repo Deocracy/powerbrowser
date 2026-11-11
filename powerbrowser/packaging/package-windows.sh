@@ -75,6 +75,7 @@ with zipfile.ZipFile(archive) as z:
 PY
 test -f "$STAGE/node/node.exe" || fail "the staged Windows node.exe is absent"
 cp "$ROOT/powerbrowser/distribution/policies.json" "$STAGE/distribution/policies.json"
+bash "$ROOT/powerbrowser/packaging/stage-bundled-xpi.sh" "$STAGE/distribution"
 
 # <GreD>/orca: the packaged root only (package.json, out/orcad, out/web), never the provenance files.
 rm -rf "$STAGE/orca"

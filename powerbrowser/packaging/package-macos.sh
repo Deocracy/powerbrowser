@@ -397,6 +397,7 @@ tar -xzf "$ARCHIVE" -C "$RES/node" --strip-components=1 "node-$NODE_VERSION-$NOD
 test -f "$RES/node/bin/node" || fail "the archive carries no node-$NODE_VERSION-$NODE_BIN_DIR/bin/node member"
 chmod 755 "$RES/node/bin/node"
 cp "$ROOT/powerbrowser/distribution/policies.json" "$RES/distribution/policies.json"
+bash "$ROOT/powerbrowser/packaging/stage-bundled-xpi.sh" "$RES/distribution"
 
 # Orca: package.json, out/orcad and out/web of the admitted artifact, as <GreD>/orca. Its build root is purged.
 rm -rf "$RES/orca"

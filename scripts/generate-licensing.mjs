@@ -23,6 +23,14 @@
 //  - The shipped Orca packages (orcad, web client, mobile-web), derived from the
 //    bundles by scripts/lib/orca-shipped-packages.mjs. With no built orca/ the Orca
 //    section is not re-derived (one SKIP line) and the tracked section is kept.
+//  - The bundled extensions (BEXT-02, D-30): the Gecko add-ons pinned in
+//    powerbrowser/packaging/bundled-xpi.json, their licence text read from the cached XPI
+//    (.mozbuild/bundled-xpi/<id>-<version>.xpi, sha256-checked against the pin; with no cache
+//    the tracked text is kept after one SKIP line), and the package each
+//    bundled-extensions/*/ Theia extension carries, from its package.json and
+//    package-lock.json, its licence text read from the built plugins/.user copy, else
+//    orca/node_modules, else the byte-for-byte quote in the extension's own LICENSE.md
+//    (one SKIP line; verify-bundled-extensions.mjs holds the quote equal to the package's file).
 //
 // Modes:
 //   node scripts/generate-licensing.mjs              write both files (temp file + rename each);
@@ -47,7 +55,7 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
-    copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync,
+    copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync,
     renameSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -75,6 +83,12 @@ const FETCH_UPSTREAM = 'bash scripts/fetch-upstream.sh && bash scripts/apply-pat
 const THEIA_INSTALL = "nix develop .#theia --command bash -c 'cd theia && yarn install --frozen-lockfile'";
 const NO_LICENCE_FILE = 'no licence file shipped in the package';
 const RULE = '-'.repeat(79);
+const XPI_PIN_REL = 'powerbrowser/packaging/bundled-xpi.json';
+const XPI_CACHE_DIR = '.mozbuild/bundled-xpi';
+const BUNDLED_EXT_DIR = 'bundled-extensions';
+const USER_PLUGINS_REL = 'theia/applications/browser/plugins/.user';
+// The heading bundled-extensions/<folder>/LICENSE.md quotes the carried package's LICENSE.md under.
+const EXT_QUOTE_HEADING = "## The package's LICENSE.md, quoted byte for byte";
 
 class Fail extends Error {}
 
@@ -310,8 +324,117 @@ export function orcaSectionOf(notices) {
     const start = notices.indexOf(`\n${ORCA_HEADING}\n`);
     if (start < 0) return null;
     const node = NODE_HEADER.exec(notices.slice(start + 1));
+    const bundled = notices.indexOf(`\n${BUNDLED_HEADING}\n`, start + 1);
+    const end = bundled >= 0 ? bundled + 1 : node ? start + 1 + node.index : notices.length;
+    return { start: start + 1, end, text: notices.slice(start + 1, end) };
+}
+
+// --- bundled extensions (BEXT-02, D-30) -------------------------------------------
+
+export const BUNDLED_HEADING = '== Bundled extensions ==';
+
+/** The Bundled extensions section from its heading up to (not including) the Node heading, or null. */
+export function bundledSectionOf(notices) {
+    const start = notices.indexOf(`\n${BUNDLED_HEADING}\n`);
+    if (start < 0) return null;
+    const node = NODE_HEADER.exec(notices.slice(start + 1));
     const end = node ? start + 1 + node.index : notices.length;
     return { start: start + 1, end, text: notices.slice(start + 1, end) };
+}
+
+const itemHeader = (it) => `${it.name} ${it.version} (${it.licence})`;
+
+/** The section text: one block per item, in pin order then extension folder order. */
+export function renderBundledSection(items) {
+    const out = [
+        BUNDLED_HEADING,
+        '',
+        `Extensions pre-installed in every profile; the user can disable or remove each. Derived from ${XPI_PIN_REL} and ${BUNDLED_EXT_DIR}/*/.`,
+        '',
+    ];
+    for (const it of items) out.push(RULE, itemHeader(it), `Carried as: ${it.carrier}`, `Source: ${it.source}`, '', it.text.replace(/\n*$/, ''), '');
+    out.push(RULE, '', '');
+    return out.join('\n');
+}
+
+/** An item's licence text as the tracked notices carry it, or null. */
+export function keptBundledText(notices, item) {
+    const lines = (bundledSectionOf(notices ?? '')?.text ?? '').split('\n');
+    const h = lines.indexOf(itemHeader(item));
+    if (h < 0) return null;
+    const body = [];
+    for (let i = h + 4; i < lines.length && lines[i] !== RULE; i++) body.push(lines[i]);
+    return body.length ? body.join('\n') : null;
+}
+
+const PY_ZIP_READ = 'import sys,zipfile\nsys.stdout.buffer.write(zipfile.ZipFile(sys.argv[1]).read(sys.argv[2]))';
+
+function xpiMember(xpi, member) {
+    const r = spawnSync('python3', ['-I', '-c', PY_ZIP_READ, xpi, member], { maxBuffer: 64 * 1024 * 1024 });
+    if (r.error || r.status !== 0) {
+        const last = r.error ? r.error.message : r.stderr.toString().trim().split('\n').pop();
+        throw new Fail(`reading ${member} from ${xpi} failed: ${last}. Next step: delete that file and run: bash powerbrowser/packaging/stage-bundled-xpi.sh <dir>`);
+    }
+    return r.stdout.toString('utf8');
+}
+
+const readIf = (p) => (existsSync(p) ? readFileSync(p, 'utf8') : null);
+
+/**
+ * The bundled extension items: { name, version, licence, carrier, source, text, kind, bundle }.
+ * root and trackedNotices are parameters so the self-test can use fixtures.
+ */
+export function bundledItems(root, trackedNotices) {
+    const items = [];
+    const pinPath = join(root, XPI_PIN_REL);
+    const pins = existsSync(pinPath) ? JSON.parse(readFileSync(pinPath, 'utf8')) : {};
+    for (const [id, pin] of Object.entries(pins)) {
+        if (id.startsWith('$')) continue;
+        const it = { name: pin.name, version: pin.version, licence: pin.licence, carrier: `Gecko distribution add-on ${id}, unmodified`, source: pin.source, kind: 'gecko-distribution', bundle: id };
+        const xpi = join(root, XPI_CACHE_DIR, `${id}-${pin.version}.xpi`);
+        if (existsSync(xpi)) {
+            const got = sha256(xpi);
+            if (got !== pin.sha256) throw new Fail(`${XPI_CACHE_DIR}/${id}-${pin.version}.xpi hashes to ${got}, but ${XPI_PIN_REL} pins ${pin.sha256}. Next step: delete that file and run: bash powerbrowser/packaging/stage-bundled-xpi.sh <dir>`);
+            it.text = xpiMember(xpi, 'LICENSE.txt');
+        } else {
+            it.text = keptBundledText(trackedNotices, it);
+            if (it.text === null) throw new Fail(`no cached ${XPI_CACHE_DIR}/${id}-${pin.version}.xpi and ${NOTICES_REL} carries no text for ${itemHeader(it)}. Next step: run: bash powerbrowser/packaging/stage-bundled-xpi.sh <dir>, then ${RERUN}`);
+            console.log(`${NAME}: SKIP -- ${pin.name} licence text not re-derived: ${XPI_CACHE_DIR}/${id}-${pin.version}.xpi is not cached; the tracked text is kept`);
+        }
+        items.push(it);
+    }
+    const extRoot = join(root, BUNDLED_EXT_DIR);
+    const folders = existsSync(extRoot) ? readdirSync(extRoot).filter((f) => existsSync(join(extRoot, f, 'package.json'))).sort() : [];
+    for (const folder of folders) {
+        const m = readJson(join(extRoot, folder, 'package.json'));
+        const lock = readJson(join(extRoot, folder, 'package-lock.json'));
+        const extId = `${m.publisher}.${m.name}`;
+        for (const dep of Object.keys(m.dependencies ?? {}).sort()) {
+            const entry = lock?.packages?.[`node_modules/${dep}`];
+            if (!entry?.version || !entry?.resolved) throw new Fail(`${BUNDLED_EXT_DIR}/${folder}/package-lock.json pins no version and resolved url for ${dep}. Next step: regenerate that lock.`);
+            const it = { name: dep, version: entry.version, licence: entry.license ?? 'no licence field', carrier: `pre-installed Theia extension ${extId}`, source: entry.resolved, kind: 'theia-preinstalled', bundle: extId };
+            it.text = [join(root, USER_PLUGINS_REL, extId, 'extension', 'node_modules', dep, 'LICENSE.md'), join(root, 'orca', 'node_modules', dep, 'LICENSE.md')]
+                .map(readIf).find((t) => t !== null) ?? null;
+            if (it.text === null) {
+                const own = readIf(join(extRoot, folder, 'LICENSE.md')) ?? '';
+                const at = own.indexOf(`${EXT_QUOTE_HEADING}\n\n`);
+                const end = at < 0 ? -1 : own.indexOf('\n\n## ', at + EXT_QUOTE_HEADING.length + 2);
+                if (end < 0) throw new Fail(`no built or Orca copy of ${dep}'s LICENSE.md, and ${BUNDLED_EXT_DIR}/${folder}/LICENSE.md has no "${EXT_QUOTE_HEADING}" quote. Next step: run yarn build in theia/, then ${RERUN}`);
+                it.text = own.slice(at + EXT_QUOTE_HEADING.length + 2, end + 1);
+                console.log(`${NAME}: SKIP -- ${dep} licence text read from the quote in ${BUNDLED_EXT_DIR}/${folder}/LICENSE.md: no built plugins/.user or orca/node_modules copy`);
+            }
+            items.push(it);
+        }
+    }
+    return items;
+}
+
+/** LICENSING.md's paragraph for the bundled extensions. */
+function bundledParagraph(product, items) {
+    const parts = items.map((it) => (it.kind === 'gecko-distribution'
+        ? `${it.name} ${it.version} is pre-installed as an unmodified Gecko add-on (\`${it.bundle}\`) under ${it.licence}; its source is ${it.source}.`
+        : `${it.name} ${it.version} is carried by the pre-installed Theia extension \`${it.bundle}\` under its own terms (${it.licence}), not under ${product}'s licence.`));
+    return `${parts.join(' ')} The user can disable or remove each. Their licence texts are in the "Bundled extensions" section of [${NOTICES_REL}](${NOTICES_REL}).`;
 }
 
 /** The name@version entries an Orca section lists: the lines after each rule up to a blank line. */
@@ -346,11 +469,12 @@ export function replaceOrcaSection(notices, sectionText) {
 }
 
 /**
- * THIRD-PARTY-NOTICES.txt text, sections Gecko, Theia, Orca, Node.
+ * THIRD-PARTY-NOTICES.txt text, sections Gecko, Theia, Orca, Bundled extensions, Node.
  * gecko: { tag, defines, text }; packages: theiaClosure() output; orca: the Orca section text
- * (renderOrcaSection) or undefined; node: { version, url, member, text }.
+ * (renderOrcaSection) or undefined; bundled: renderBundledSection() text or undefined;
+ * node: { version, url, member, text }.
  */
-export function renderNotices({ gecko, packages, orca, node }) {
+export function renderNotices({ gecko, packages, orca, bundled, node }) {
     const out = [
         'THIRD-PARTY NOTICES',
         '',
@@ -368,11 +492,12 @@ export function renderNotices({ gecko, packages, orca, node }) {
     for (const g of licenceGroups(packages)) out.push(RULE, ...g.names, '', g.body, '');
     out.push(RULE, '');
     if (orca !== undefined) out.push(orca.replace(/\n\n$/, ''), '');
+    if (bundled !== undefined) out.push(bundled.replace(/\n\n$/, ''), '');
     out.push(nodeHeader(node.version), '', `From ${node.member} in ${node.url}.`, '', node.text.replace(/\n*$/, '\n'));
     return out.join('\n');
 }
 
-function renderLicensing(config) {
+function renderLicensing(config, bundled = []) {
     const product = config.identity.display_name;
     const { license, copyright_holder: holder, trademark_notice: trademark } = config.legal;
     return [
@@ -402,6 +527,7 @@ function renderLicensing(config) {
         '',
         `The npm packages that Orca's orcad server, web client and mobile-web bundle ship are listed with their licence texts in the "Orca (orcad, web client, mobile-web)" section of [${NOTICES_REL}](${NOTICES_REL}). The Orca source is the pin named by the \`configuration.toml\` keys \`upstreams.orca_tag\` and \`upstreams.orca_commit\`; Orca's own licence is checked by \`inventory/licence-allowlist.json\`.`,
         '',
+        ...(bundled.length ? ['## Bundled extensions', '', bundledParagraph(product, bundled), ''] : []),
         '## Node.js runtime',
         '',
         `The bundled Node.js runtime's licence text is in the "Node.js runtime" section of [${NOTICES_REL}](${NOTICES_REL}).`,
@@ -474,6 +600,7 @@ async function run(check) {
     const out = [];
     const orca = await orcaPart(trackedNotices, deriveOrca);
     if (check && orca.packages) out.push(...compareOrcaSets(orca.packages, orcaSectionOf(trackedNotices ?? '')?.text));
+    const bundled = bundledItems(REPO_ROOT, trackedNotices);
 
     let nodeText;
     if (!check) {
@@ -492,10 +619,10 @@ async function run(check) {
     }
 
     const files = [
-        [LICENSING_REL, renderLicensing(config)],
-        [NOTICES_REL, renderNotices({ gecko, packages, orca: orca.text, node: { ...pin, text: nodeText } })],
+        [LICENSING_REL, renderLicensing(config, bundled)],
+        [NOTICES_REL, renderNotices({ gecko, packages, orca: orca.text, bundled: bundled.length ? renderBundledSection(bundled) : undefined, node: { ...pin, text: nodeText } })],
     ];
-    const summary = `${packages.length} Theia packages in ${licenceGroups(packages).length} licence groups, ${orca.packages ? `Orca ${orcaSummary(orca.packages)}` : 'Orca section kept'}, Node.js runtime ${pin.version}`;
+    const summary = `${packages.length} Theia packages in ${licenceGroups(packages).length} licence groups, ${orca.packages ? `Orca ${orcaSummary(orca.packages)}` : 'Orca section kept'}, ${bundled.length} bundled extension item(s), Node.js runtime ${pin.version}`;
     if (!check) {
         for (const [rel, text] of files) writeAtomic(rel, text);
         console.log(`${NAME}: wrote ${files.map(([rel]) => rel).join(' and ')} (${summary})`);
@@ -628,6 +755,22 @@ async function selfTest() {
             'control: the Gecko and Theia sections render byte-identically through the shared licence grouping, with or without the Orca section');
         const skipped = await runOrca(false, { noticesText: withOrca, derive: async () => ({ skip: 'fixture' }) });
         report(skipped.failures.length === 0, 'control: no built orca/ is a SKIP, not a red');
+
+        // Bundled extensions (BEXT-02): the section sits between Orca and Node, and the Orca-only modes leave it alone.
+        const items = [
+            { name: 'Fixture Add-on', version: '1.0.0', licence: 'GPL-3.0-or-later', carrier: 'Gecko distribution add-on fx@example.invalid, unmodified', source: 'https://example.invalid/fx/1.0.0', text: 'GPL fixture\n\nsecond paragraph\n' },
+            { name: '@fixture/sdk', version: '2.0.0', licence: 'SEE LICENSE IN README.md', carrier: 'pre-installed Theia extension fixture.sdk', source: 'https://example.invalid/sdk-2.0.0.tgz', text: 'Fixture terms.\n' },
+        ];
+        const withBundled = renderNotices({ gecko, packages: theiaClosure(nm, baseApp), orca: renderOrcaSection(shipped), bundled: renderBundledSection(items), node });
+        const b = bundledSectionOf(withBundled);
+        report(b && withBundled.indexOf(BUNDLED_HEADING) > withBundled.indexOf(ORCA_HEADING) && withBundled.slice(b.end).startsWith('== Node.js runtime'),
+            'the Bundled extensions section sits after the Orca section and before the Node.js runtime section');
+        report(!orcaSectionOf(withBundled).text.includes(BUNDLED_HEADING), 'the Orca section ends at the Bundled extensions heading');
+        const rewritten = (await runOrca(true, { noticesText: withBundled, derive: async () => ({ packages: [...shipped, op('o-new', '3.0.0')] }) })).text;
+        report(bundledSectionOf(rewritten)?.text === b.text && rewritten.includes('o-new@3.0.0'), 'control: --write-orca leaves the Bundled extensions section byte-identical');
+        report(items.every((it) => keptBundledText(withBundled, it) === it.text), 'control: each bundled item\'s kept text round-trips byte for byte');
+        const bumped = keptBundledText(withBundled, { ...items[0], version: '1.0.1' });
+        report(bumped === null, 'a bumped pin with no cached XPI finds no kept text (so the run fails naming it)');
     } finally {
         rmSync(tmp, { recursive: true, force: true });
     }

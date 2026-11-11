@@ -235,6 +235,101 @@
       "disposition": "allow",
       "trigger": "user-feature",
       "reason": "User-initiated (NG-069, R15): the AI chat and completion feature through @theia/ai-openai (the openai package base URL). It is contacted only after the user configures an OpenAI API key and sends a request. With no key configured it is never contacted, and nothing is sent at startup."
+    },
+    {
+      "host": "cdn.jsdelivr.net",
+      "disposition": "allow",
+      "reason": "BEXT-02 (P68-39): uBlock Origin default-on filter list host, from the pinned XPI's assets.json"
+    },
+    {
+      "host": "curbengh.github.io",
+      "disposition": "allow",
+      "reason": "BEXT-02 (P68-39): uBlock Origin default-on filter list host, from the pinned XPI's assets.json"
+    },
+    {
+      "host": "malware-filter.gitlab.io",
+      "disposition": "allow",
+      "reason": "BEXT-02 (P68-39): uBlock Origin default-on filter list host, from the pinned XPI's assets.json"
+    },
+    {
+      "host": "pgl.yoyo.org",
+      "disposition": "allow",
+      "reason": "BEXT-02 (P68-39): uBlock Origin default-on filter list host, from the pinned XPI's assets.json"
+    },
+    {
+      "host": "publicsuffix.org",
+      "disposition": "allow",
+      "reason": "BEXT-02 (P68-39): uBlock Origin default-on filter list host, from the pinned XPI's assets.json"
+    },
+    {
+      "host": "raw.githubusercontent.com",
+      "disposition": "allow",
+      "reason": "BEXT-02 (P68-39): uBlock Origin default-on filter list host, from the pinned XPI's assets.json"
+    },
+    {
+      "host": "ublockorigin.github.io",
+      "disposition": "allow",
+      "reason": "BEXT-02 (P68-39): uBlock Origin default-on filter list host, from the pinned XPI's assets.json"
+    },
+    {
+      "host": "ublockorigin.pages.dev",
+      "disposition": "allow",
+      "reason": "BEXT-02 (P68-39): uBlock Origin default-on filter list host, from the pinned XPI's assets.json"
+    },
+    {
+      "host": "cdn.statically.io",
+      "disposition": "user-initiated",
+      "reason": "BEXT-02 (P68-39): uBlock Origin opt-in filter list host, from the pinned XPI's assets.json"
+    },
+    {
+      "host": "easylist-downloads.adblockplus.org",
+      "disposition": "user-initiated",
+      "reason": "BEXT-02 (P68-39): uBlock Origin opt-in filter list host, from the pinned XPI's assets.json"
+    },
+    {
+      "host": "easylist.to",
+      "disposition": "user-initiated",
+      "reason": "BEXT-02 (P68-39): uBlock Origin opt-in filter list host, from the pinned XPI's assets.json"
+    },
+    {
+      "host": "filters.adtidy.org",
+      "disposition": "user-initiated",
+      "reason": "BEXT-02 (P68-39): uBlock Origin opt-in filter list host, from the pinned XPI's assets.json"
+    },
+    {
+      "host": "hole.cert.pl",
+      "disposition": "user-initiated",
+      "reason": "BEXT-02 (P68-39): uBlock Origin opt-in filter list host, from the pinned XPI's assets.json"
+    },
+    {
+      "host": "phishing-filter.pages.dev",
+      "disposition": "user-initiated",
+      "reason": "BEXT-02 (P68-39): uBlock Origin opt-in filter list host, from the pinned XPI's assets.json"
+    },
+    {
+      "host": "secure.fanboy.co.nz",
+      "disposition": "user-initiated",
+      "reason": "BEXT-02 (P68-39): uBlock Origin opt-in filter list host, from the pinned XPI's assets.json"
+    },
+    {
+      "host": "someonewhocares.org",
+      "disposition": "user-initiated",
+      "reason": "BEXT-02 (P68-39): uBlock Origin opt-in filter list host, from the pinned XPI's assets.json"
+    },
+    {
+      "host": "stanev.org",
+      "disposition": "user-initiated",
+      "reason": "BEXT-02 (P68-39): uBlock Origin opt-in filter list host, from the pinned XPI's assets.json"
+    },
+    {
+      "host": "ubo-et.lepik.io",
+      "disposition": "user-initiated",
+      "reason": "BEXT-02 (P68-39): uBlock Origin opt-in filter list host, from the pinned XPI's assets.json"
+    },
+    {
+      "host": "www.void.gr",
+      "disposition": "user-initiated",
+      "reason": "BEXT-02 (P68-39): uBlock Origin opt-in filter list host, from the pinned XPI's assets.json"
     }
   ],
   "prefs": [

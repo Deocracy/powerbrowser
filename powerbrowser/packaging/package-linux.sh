@@ -118,6 +118,7 @@ cp "$ROOT/theia/node_modules/better-sqlite3/prebuilds/linux-x64.node" "$STAGE/th
 tar -xJf "$ARCHIVE" -C "$STAGE/node" --strip-components=1 "node-$NODE_VERSION-linux-x64/bin/node" "node-$NODE_VERSION-linux-x64/LICENSE"
 test "$("$STAGE/node/bin/node" --version)" = "$NODE_VERSION" || fail "the staged node does not report $NODE_VERSION"
 cp "$ROOT/powerbrowser/distribution/policies.json" "$STAGE/distribution/policies.json"
+bash "$ROOT/powerbrowser/packaging/stage-bundled-xpi.sh" "$STAGE/distribution"
 # M-6: no checkout path ships in the sidecar. Two sources, both build-host-only:
 # native .node files carry a RUNPATH naming the checkout's build dir, and the
 # backend bundles carry esbuild `node-file:` module keys and comments naming
