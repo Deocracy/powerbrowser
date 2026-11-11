@@ -241,6 +241,25 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
   - Supersedes P66-33's "and a diagnostics row" for Phase 66. Options e (a third non-agent
     web-tab kind) and f (a store request kind) are not built.
 
+## Agent pages in Orca's store (2026-11-11)
+
+- **D-34 — PowerBrowser adds each agent page to Orca's store from its own side.** Chris,
+  2026-11-11, answering the orca-browser-agent-live clause (j) blocker of 66-06: "Add them from
+  PB's side now".
+  - Cause, measured in 66-06-SUMMARY.md (Task 2): no PowerBrowser-hosted page ever became an
+    Orca store record in the pane client. PowerBrowser's thin browser host bypasses
+    `WebRuntimeClient`, and WebRuntimeClient's browser path is the only path that puts a browser
+    tab into the pane client's store. P66-09's reveal on a store activation therefore had no event
+    source.
+  - PowerBrowser's own Orca entry file (`pb-pane-mount.tsx`) adds a store row for each agent page
+    when its web tab opens, and drops it on closePage or a user close. The row carries the
+    page's browserPageId, so Phase 64's observer maps it to the existing web tab and creates no
+    second widget. The row opens in the background and never moves focus (P66-07).
+  - Selecting the row in Orca's store brings the PowerBrowser web tab forward (P66-09).
+  - No Orca patch and no seam: the entry uses Orca's own store actions and record types at the
+    pin. Mechanism and checks: gap-closure plan 66-07. Replaces options (a), (b) and (d) of the
+    66-06 blocker.
+
 ## Spikes this direction needs
 
 1. Browser parity: what an Orca browser tab can do, and how PB chrome provides it
