@@ -5,15 +5,15 @@ current_phase: 59
 current_phase_name: Carry-forward from v1.5 and v1.6
 status: executing
 stopped_at: Completed 66-08-PLAN.md
-last_updated: "2026-11-11T16:12:01.967Z"
+last_updated: "2026-11-11T18:45:47.005Z"
 last_activity: 2026-11-08
 last_activity_desc: Phase 59 execution started
-state_head: 44a0dde5df20ed4c93db78521901234eaadf1916
+state_head: cf6c47a3cb24ba6da9cae307c4b4eadc5d7e17aa
 progress:
   total_phases: 10
   completed_phases: 4
   total_plans: 62
-  completed_plans: 50
+  completed_plans: 55
 milestone_name: Orca integration
 ---
 
@@ -128,6 +128,7 @@ None yet.
 - P66-33's "browser host did not attach" diagnostics row: not built in Phase 66 (D-33); Phase 67 RUN-06 adds the failure class browser-not-attached (P67-36). Until then the frontend log line is the only record. The host also does not re-attach after orcad restarts (P67-36's Reconnect covers it).
 - Agent-tab visits enter the user's Places history: the agent container scopes cookies and storage only.
 - Phase 67 note: RUN-06 covers "browser host did not attach" (P67-36). Phase 68 note: add orca-browser-abilities, orca-browser-entry-points, orca-browser-host-bundle and orca-snapshot-fixtures to the weekly re-pin job; there is no browser-provider seam to offer upstream under S2 (D-27).
+- Phase 67 (67-06 Task 2, owner decision): orca-failure-page-live criterion 1 not proven - after orcad is killed, Orca's client is refused after the automatic re-pair, clears its stored environment, and the pane bundle's repair() re-pairs under a new environment id that strands its sessions; root cause in orca-overlay pb-session-pairing.ts, outside Phase 67's files (WINDOWS 45). Options: a fix the Phase 65 repair at source, b record restart recovery as not delivered, c re-plan lane p67-03's recovery
 
 ## Deferred Items
 
