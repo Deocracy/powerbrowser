@@ -3611,7 +3611,10 @@ export const PowerBrowserAPI = Object.freeze({
       messagemanagergroup: "browsers",
       autocompletepopup: "PopupAutoComplete",
       tabindex: "-1",
-      ...(agent === true ? { usercontextid: String(userContextId) } : {}),
+      // Phase 66: an agent overlay also leaves the "browsers" message manager group and the autocomplete popup, so
+      // the login manager (autofill and capture of saved passwords), the user's WebExtensions tab host and every
+      // saved-entry dropdown never attach to a page an agent drives (coordinator finding 3).
+      ...(agent === true ? { usercontextid: String(userContextId), messagemanagergroup: AGENT_MESSAGE_MANAGER_GROUP, autocompletepopup: "" } : {}),
     })) {
       browser.setAttribute(name, value);
     }
@@ -11098,6 +11101,10 @@ const AGENT_METHODS = Object.freeze([
   "browser.wait",
 ]);
 const AGENT_ACTOR_NAME = "PowerBrowserAgent";
+// The message manager group of agent overlays. Gecko's LoginManager actor is registered for "browsers",
+// "webext-browsers", "chatbot-browser" and "" only (ActorManagerParent.sys.mjs), so it never attaches here; the
+// PowerBrowserAgent pair is registered for this group alone. orca-browser-tab-scope derives that list from the pin.
+const AGENT_MESSAGE_MANAGER_GROUP = "powerbrowser-orca-agent";
 const AGENT_RUN_MESSAGE = "PowerBrowserAgent:Run";
 const AGENT_ABORT_MESSAGE = "PowerBrowserAgent:Abort";
 // Orca's own ACTIVITY_IDLE_MS (browser-agent-activity.ts): the mark clears after this long with no served call.
@@ -11185,10 +11192,12 @@ function agentWallVerdict(entry, actorRef) {
   return null;
 }
 
-// P66-26: an agent tab's page must be in the Orca-agent container it was created in, never the user's cookie jar.
+// P66-26 and coordinator findings 2 and 3: an agent tab's page must be in the Orca-agent container it was created
+// in (never the user's cookie jar) and in the agent message manager group (no login manager).
 function agentInOwnContainer(entry) {
   const id = entry.agentUserContextId;
-  return Number.isInteger(id) && id > 0 && entry.browser.browsingContext?.originAttributes?.userContextId === id;
+  return Number.isInteger(id) && id > 0 && entry.browser.browsingContext?.originAttributes?.userContextId === id &&
+    entry.browser.getAttribute("messagemanagergroup") === AGENT_MESSAGE_MANAGER_GROUP;
 }
 
 // A1: "shown to the user" means visible and not parked. A parked agent overlay is visibility visible under the Theia
@@ -11472,10 +11481,18 @@ function agentDialogWindow(entry) {
   return null;
 }
 
+// Coordinator finding 3: only a page's own alert, confirm and prompt are an agent's to answer. An HTTP auth dialog
+// (which the login manager prefills), a beforeunload confirm or any other commonDialog stays the user's; permission
+// prompts and file pickers are not commonDialog windows, so agentDialogWindow never finds them.
+const AGENT_DIALOG_TYPES = new Set(["alert", "alertCheck", "confirm", "confirmCheck", "prompt"]);
+
 function agentAnswerDialog(entry, accept, text) {
   const win = agentDialogWindow(entry);
   if (!win) {
     return agentFailed("browser_no_dialog");
+  }
+  if (!AGENT_DIALOG_TYPES.has(win.args?.promptType) || win.args?.inPermitUnload) {
+    return agentFailed("browser_command_unavailable");
   }
   if (accept && typeof text === "string") {
     const box = win.document.getElementById("loginTextbox");
@@ -11682,7 +11699,7 @@ function registerAgentActor() {
   ChromeUtils.registerWindowActor(AGENT_ACTOR_NAME, {
     parent: { esModuleURI: GROUP_ACTOR_PARENT_MODULE },
     child: { esModuleURI: GROUP_ACTOR_CHILD_MODULE },
-    messageManagerGroups: ["browsers"],
+    messageManagerGroups: [AGENT_MESSAGE_MANAGER_GROUP],
     allFrames: false,
   });
 }

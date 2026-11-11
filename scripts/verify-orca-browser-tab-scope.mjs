@@ -24,7 +24,11 @@
 // the usercontextid attribute missing, set after appendChild or set on a user overlay; a cookie-service call without
 // the agent userContextId; Stop not aborting an in-flight call or not pushing active false and stopped true; the mark
 // not clearing after exactly 20000 ms; a user tab parked, an unshown agent tab not parked, or focus left on a parked
-// overlay (coordinator finding 1); a raw visibility read outside the predicate.
+// overlay (coordinator finding 1); an agent overlay left in the "browsers" message manager group or with an
+// autocomplete popup, the pair registered outside the agent group, an agent tab in "browsers" not refused, an HTTP
+// auth dialog answered (coordinator finding 3), the pinned LoginManager actor groups (upstream/toolkit/modules/
+// ActorManagerParent.sys.mjs, a named SKIP without upstream/) including the agent group; a raw visibility read
+// outside the predicate.
 //
 // Page-table clause: when lane p66-02's theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts exists, it
 // (and ./orca-browser-abilities) is transpiled with theia/node_modules/typescript and its createPageTable must refuse
@@ -132,6 +136,8 @@ export function sliceSource(text) {
 // The stub boundary.
 
 const CONTAINER = 7;
+const AGENT_GROUP = 'powerbrowser-orca-agent';
+const COMMON_DIALOG = 'chrome://global/content/commonDialog.xhtml';
 
 function fakeClock() {
     let now = 0;
@@ -151,7 +157,8 @@ function fakeClock() {
 
 /** One world: the sliced source evaluated over fresh stubs that record every boundary call. */
 export function makeWorld(sliced, { dpr = 2 } = {}) {
-    const rec = { actor: [], aborts: [], draws: [], pushes: [], registered: [], attrs: [], cookies: [], nav: [], wm: 0, print: 0, focus: [], logs: [] };
+    const rec = { actor: [], aborts: [], draws: [], pushes: [], registered: [], attrs: [], cookies: [], nav: [], wm: 0, print: 0, focus: [], logs: [], answered: [] };
+    const dialogs = [];
     const clock = fakeClock();
     const webTabs = new Map();
     const childReplies = new Map();
@@ -181,6 +188,7 @@ export function makeWorld(sliced, { dpr = 2 } = {}) {
         const browser = { tabIdHint, appended: false, docShellIsActive: false, ownerDocument: doc, removed: false, attrs };
         browser.style = {};
         browser.setAttribute = (name, value) => { attrs.set(name, value); rec.attrs.push({ browser, name, value, appended: browser.appended }); };
+        browser.getAttribute = name => (attrs.has(name) ? attrs.get(name) : null);
         browser.remove = () => { browser.removed = true; };
         browser.removeProgressListener = () => {};
         browser.removeEventListener = () => {};
@@ -205,9 +213,10 @@ export function makeWorld(sliced, { dpr = 2 } = {}) {
         return browser;
     }
 
-    function addTab(tabId, { agent = false, owner = frontend, container = agent ? CONTAINER : 0 } = {}) {
+    function addTab(tabId, { agent = false, owner = frontend, container = agent ? CONTAINER : 0, group = agent ? AGENT_GROUP : 'browsers' } = {}) {
         const browser = fakeBrowser(tabId);
         if (container) browser.attrs.set('usercontextid', String(container));
+        browser.attrs.set('messagemanagergroup', group);
         const entry = { browser, owner, uri: `web:${tabId}`, rowKey: `web:${tabId}` };
         if (agent) Object.assign(entry, { agent: true, agentUserContextId: CONTAINER, agentNetwork: [] });
         webTabs.set(tabId, entry);
@@ -236,7 +245,7 @@ export function makeWorld(sliced, { dpr = 2 } = {}) {
         prefs: { getIntPref: (name, fallback) => (prefs.has(name) ? prefs.get(name) : fallback), setIntPref: (name, value) => prefs.set(name, value) },
         cookies: { getCookiesFromHost: cookieCall('getCookiesFromHost'), getCookiesWithOriginAttributes: cookieCall('getCookiesWithOriginAttributes'), add: cookieCall('add'), remove: cookieCall('remove') },
         obs: { addObserver: () => {} },
-        wm: { getEnumerator: () => { rec.wm += 1; return []; } },
+        wm: { getEnumerator: () => { rec.wm += 1; return dialogs; } },
     };
     const iface = new Proxy({}, { get: () => new Proxy({}, { get: (t, k) => String(k) }) });
     const context = vm.createContext({
@@ -252,7 +261,7 @@ export function makeWorld(sliced, { dpr = 2 } = {}) {
         GROUP_ACTOR_CHILD_MODULE: 'resource://powerbrowser/GroupActorChild.sys.mjs',
         ChromeUtils: { registerWindowActor: (name, options) => rec.registered.push({ name, options }) },
     });
-    const exported = ['AGENT_METHODS', 'AGENT_NATIVE_ROWS', 'overlayShownToUser', 'registerAgentActor'];
+    const exported = ['AGENT_METHODS', 'AGENT_NATIVE_ROWS', 'AGENT_MESSAGE_MANAGER_GROUP', 'overlayShownToUser', 'registerAgentActor'];
     const program = `${sliced.helpers}\n${sliced.section}\n` +
         `const __api = ({ ${sliced.methods.webTabOpen}, ${sliced.methods.webTabGeometry}, ${sliced.methods.webTabClose} });\n` +
         `async function __actionArms(data, actorRef) { const kind = data?.kind; switch (kind) { ${sliced.arms} default: return null; } }\n` +
@@ -269,6 +278,14 @@ export function makeWorld(sliced, { dpr = 2 } = {}) {
     return {
         ...out, rec, clock, webTabs, frontend, otherFrontend, theiaBrowser, addTab, childReplies, shellWin, doc,
         focusEvent: target => focusListeners.forEach(fn => fn({ target })),
+        // A commonDialog window the given overlay's page opened, of one prompt type.
+        openDialog: (browser, promptType) => dialogs.push({
+            closed: false, location: { href: COMMON_DIALOG }, Event: class {},
+            args: { promptType, owningBrowsingContext: { top: { embedderElement: browser } } },
+            document: { getElementById: id => (id === 'commonDialog'
+                ? { acceptDialog: () => rec.answered.push(`accept ${promptType}`), cancelDialog: () => rec.answered.push(`cancel ${promptType}`) }
+                : { value: '', dispatchEvent() {} }) },
+        }),
         // A throw is an answer too: a plant that breaks a guard must go red by name, never crash the check.
         agent: (tabId, method, params, actorRef = frontend) => settle(out.actionArms({ kind: 'webTabAgent', tabId, method, params }, actorRef)),
         stop: (tabId, actorRef = frontend) => settle(out.actionArms({ kind: 'webTabAgentStop', tabId }, actorRef)),
@@ -470,6 +487,38 @@ export async function runScenarios(sliced, childText, dpr = 2) {
         failures.push(`parking: shown overlays are not reported shown (user ${w.overlayShownToUser(userEntry.browser)}, agent ${w.overlayShownToUser(agentEntry.browser)}, agent zIndex ${a.zIndex}); the predicate or the unpark is broken`);
     }
 
+    // Coordinator finding 3: an agent overlay is in its own message manager group (no login manager, no extension tab
+    // host) with no autocomplete popup; an agent tab left in "browsers" is refused; the pair is registered for that
+    // group alone; only alert, confirm and prompt dialogs are an agent's to answer.
+    w = fresh();
+    w.api.webTabOpen(w.theiaBrowser, w.frontend, 'n1', 'https://example.com/', undefined, undefined, null, true);
+    w.api.webTabOpen(w.theiaBrowser, w.frontend, 'n3', 'https://example.com/', undefined, undefined, null, false);
+    const attrOf = (id, name) => w.rec.attrs.filter(x => x.browser === w.webTabs.get(id)?.browser && x.name === name);
+    const group = attrOf('n1', 'messagemanagergroup');
+    if (w.AGENT_MESSAGE_MANAGER_GROUP !== AGENT_GROUP || group.at(-1)?.value !== AGENT_GROUP || group.some(x => x.appended)) {
+        failures.push(`isolation: the agent overlay's message manager group is ${JSON.stringify(group.map(x => x.value))} (section constant ${JSON.stringify(w.AGENT_MESSAGE_MANAGER_GROUP)}); expected ${AGENT_GROUP} before append, so the login manager never attaches`);
+    }
+    if (attrOf('n1', 'autocompletepopup').at(-1)?.value !== '') failures.push('isolation: the agent overlay keeps an autocomplete popup, so saved-entry dropdowns can fill it');
+    if (attrOf('n3', 'messagemanagergroup').at(-1)?.value !== 'browsers') failures.push('isolation: a user overlay left the browsers group');
+    w.registerAgentActor?.();
+    const groups = w.rec.registered.find(r => r.name === 'PowerBrowserAgent')?.options?.messageManagerGroups;
+    if (JSON.stringify(groups) !== JSON.stringify([AGENT_GROUP])) failures.push(`isolation: the PowerBrowserAgent pair is registered for ${JSON.stringify(groups)}; expected [${AGENT_GROUP}] alone`);
+    w.addTab('g1', { agent: true, group: 'browsers' });
+    reply = await w.agent('g1', 'browser.click', { element: '#e' });
+    if (reply?.where !== 'not-agent-tab' || w.rec.actor.some(c => c.tab === 'g1')) failures.push(`isolation: an agent tab in the browsers group answered ${JSON.stringify(reply)}; expected not-agent-tab with no page work`);
+    w.addTab('a1', { agent: true });
+    w.openDialog(w.webTabs.get('a1').browser, 'promptUserAndPass');
+    reply = await w.agent('a1', 'browser.dialogAccept', { text: 'x' });
+    if (reply?.where !== 'failed' || reply?.code !== 'browser_command_unavailable' || w.rec.answered.length) {
+        failures.push(`dialogs: an HTTP auth dialog in an agent tab answered ${JSON.stringify(reply)} with ${JSON.stringify(w.rec.answered)}; expected failed browser_command_unavailable and no answer`);
+    }
+    w.webTabs.get('a1').agentControl = undefined;
+    const w2 = fresh();
+    w2.addTab('a1', { agent: true });
+    w2.openDialog(w2.webTabs.get('a1').browser, 'alert');
+    reply = await w2.agent('a1', 'browser.dialogAccept', {});
+    if (reply?.where !== 'done' || w2.rec.answered[0] !== 'accept alert') failures.push(`dialogs: an alert in an agent tab answered ${JSON.stringify(reply)}; expected done (positive control)`);
+
     // Focus (coordinator finding 1): a parked agent overlay never keeps the shell's focus.
     w = fresh();
     w.api.webTabOpen(w.theiaBrowser, w.frontend, 'a1', 'https://example.com/', undefined, undefined, null, true);
@@ -512,6 +561,7 @@ export function visibilityReads(text) {
 // The page-table clause: lane p66-02's pure dispatch module, transpiled with theia's TypeScript.
 
 const DISPATCH = 'theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts';
+const LOGIN_REGISTRY = 'upstream/toolkit/modules/ActorManagerParent.sys.mjs';
 const ABILITIES = 'theia/extensions/orca-browser/src/common/orca-browser-abilities.ts';
 export const PAGE_TABLE_SKIP = 'page-table clause SKIP (lane p66-02 not merged)';
 
@@ -571,13 +621,24 @@ function readOptional(rel) {
     }
 }
 
-export async function checkSource(text, childText, dispatchFiles) {
+/** Derived from the pin: Gecko's LoginManager actor groups must not include the agent group (SKIP without upstream/). */
+export function loginManagerClause(registry) {
+    if (registry === null) return { skip: true, failures: [] };
+    const body = /\n {2}LoginManager: \{([\s\S]*?)\n {2}\},/.exec(registry)?.[1];
+    const groups = body && /messageManagerGroups:\s*\[([^\]]*)\]/.exec(body)?.[1];
+    if (!groups) return { failures: ['broken instrument: the LoginManager actor groups were not found in upstream ActorManagerParent.sys.mjs, so the agent group is not proven outside them'] };
+    const list = [...groups.matchAll(/"([^"]*)"/g)].map(m => m[1]);
+    return { failures: list.includes(AGENT_GROUP) ? [`isolation: Gecko's LoginManager actor is registered for ${AGENT_GROUP}, so saved passwords can fill agent pages`] : [], groups: list };
+}
+
+export async function checkSource(text, childText, dispatchFiles, registry = null) {
     const sliced = sliceSource(text);
     if (sliced.error) return { failures: [sliced.error] };
     const table = pageTableClause(dispatchFiles);
-    const failures = [...await runScenarios(sliced, childText, 2), ...await runScenarios(sliced, childText, 1), ...visibilityReads(text), ...table.failures];
+    const login = loginManagerClause(registry);
+    const failures = [...await runScenarios(sliced, childText, 2), ...await runScenarios(sliced, childText, 1), ...visibilityReads(text), ...table.failures, ...login.failures];
     const native = (() => { try { return Object.keys(makeWorld(sliced).AGENT_NATIVE_ROWS ?? {}).length; } catch { return 0; } })();
-    return { failures: [...new Set(failures)], native, skip: !!table.skip };
+    return { failures: [...new Set(failures)], native, skip: !!table.skip, loginSkip: !!login.skip };
 }
 
 // ---------------------------------------------------------------------------
@@ -610,7 +671,8 @@ async function selfTest() {
     const text = readFileSync(join(REPO_ROOT, API), 'utf8');
     const child = readFileSync(join(REPO_ROOT, CHILD), 'utf8');
     const fixture = { dispatch: FIXTURE_DISPATCH, abilities: FIXTURE_ABILITIES };
-    const control = await checkSource(text, child, fixture);
+    const registry = '\n  LoginManager: {\n    allFrames: true,\n    messageManagerGroups: ["browsers", ""],\n  },\n';
+    const control = await checkSource(text, child, fixture, registry);
     if (control.failures.length) {
         console.error(`${NAME} self-test: FAIL -- the shipped source with the fixture dispatch module is already red, so the plants prove nothing:`);
         control.failures.forEach(f => console.error(`  ${f}`));
@@ -628,13 +690,17 @@ async function selfTest() {
         ['a raw style.visibility read added', { api: swap('    const wasVisible = overlayShownToUser(entry.browser);', '    const wasVisible = entry.browser.style.visibility === "visible";') }, 'visibility: a raw style.visibility comparison outside overlayShownToUser'],
         ['Stop not aborting an in-flight call', { api: swap('    call.abort(agentFailed("browser_owner_unavailable"));\n', '') }, 'stop: Stop did not abort an in-flight call'],
         ['the idle timer not clearing', { api: swap('    control.idleTimer = null;\n    agentSetActive(tabId, entry, false);\n  }, AGENT_IDLE_MS);', '    control.idleTimer = null;\n  }, AGENT_IDLE_MS);') }, 'mark: 20000 ms without a call did not clear active'],
-        ['the container attribute set after append', { api: s => swap('    doc.body.appendChild(browser);\n', '    doc.body.appendChild(browser);\n    if (agent === true) { browser.setAttribute("usercontextid", String(userContextId)); }\n')(swap('      ...(agent === true ? { usercontextid: String(userContextId) } : {}),\n', '')(s)) }, 'the usercontextid attribute was set after appendChild'],
+        ['the container attribute set after append', { api: s => swap('    doc.body.appendChild(browser);\n', '    doc.body.appendChild(browser);\n    if (agent === true) { browser.setAttribute("usercontextid", String(userContextId)); }\n')(swap('{ usercontextid: String(userContextId), messagemanagergroup', '{ messagemanagergroup')(s)) }, 'the usercontextid attribute was set after appendChild'],
         ['a cookie row without the agent userContextId', { api: swap('  return { userContextId: entry.agentUserContextId };', '  return {};') }, 'without the agent userContextId'],
         ['the wall without the container check', { api: swap('entry.agent !== true || !agentInOwnContainer(entry)', 'entry.agent !== true') }, 'on an agent tab whose page is in the default container'],
         ['the parked-focus guard removed', { api: swap('  back?.focus();\n', '') }, 'focus: focus landing on a parked agent overlay was not returned'],
         ['a table accepting a duplicate page', { dispatch: swap("            if (byPage.has(pageId)) return 'duplicate-page';\n", '') }, 'page-table: the table accepted a duplicate page'],
         ['a table accepting a second page for a tab', { dispatch: swap("            if (byTab.has(tabId)) return 'duplicate-tab';\n", '') }, 'page-table: the table accepted a second page for a tab'],
         ['the dispatch file present without createPageTable', { dispatch: swap('export function createPageTable()', 'export function createPageTableGone()') }, 'page-table: orca-browser-dispatch.ts has no createPageTable export'],
+        ['the agent overlay left in the browsers group', { api: swap('usercontextid: String(userContextId), messagemanagergroup: AGENT_MESSAGE_MANAGER_GROUP, ', 'usercontextid: String(userContextId), ') }, "isolation: the agent overlay's message manager group"],
+        ['the wall without the group check', { api: swap(' &&\n    entry.browser.getAttribute("messagemanagergroup") === AGENT_MESSAGE_MANAGER_GROUP;', ';') }, 'isolation: an agent tab in the browsers group'],
+        ['the dialog type filter removed', { api: swap('  if (!AGENT_DIALOG_TYPES.has(win.args?.promptType) || win.args?.inPermitUnload) {\n    return agentFailed("browser_command_unavailable");\n  }\n', '') }, 'dialogs: an HTTP auth dialog in an agent tab'],
+        ['a pinned LoginManager actor registered for the agent group', { registry: r => r.replace('["browsers", ""]', '["browsers", "", "powerbrowser-orca-agent"]') }, "isolation: Gecko's LoginManager actor is registered for"],
         ['an empty AGENT_METHODS', { api: s => s.replace(/const AGENT_METHODS = Object\.freeze\(\[[^\]]*\]\);/, 'const AGENT_METHODS = Object.freeze([]);') }, 'broken instrument: AGENT_METHODS is missing or empty'],
     ];
     let failed = 0;
@@ -644,17 +710,18 @@ async function selfTest() {
         try {
             api = mutate.api ? mutate.api(text) : text;
             files = mutate.dispatch ? { ...fixture, dispatch: mutate.dispatch(fixture.dispatch) } : fixture;
+            var reg = mutate.registry ? mutate.registry(registry) : registry;
         } catch (err) {
             console.error(`${NAME} self-test: FAIL -- '${name}': ${err.message}`);
             failed++;
             continue;
         }
-        if (api === text && files === fixture) {
+        if (api === text && files === fixture && reg === registry) {
             console.error(`${NAME} self-test: FAIL -- '${name}' changed nothing; its anchor has drifted`);
             failed++;
             continue;
         }
-        const { failures } = await checkSource(api, child, files);
+        const { failures } = await checkSource(api, child, files, reg);
         if (failures.some(f => f.includes(expect))) {
             console.log(`  ok  ${name} -> red, naming '${expect}'`);
         } else {
@@ -673,7 +740,7 @@ async function main() {
     const child = readFileSync(join(REPO_ROOT, CHILD), 'utf8');
     const dispatch = readOptional(DISPATCH);
     const files = dispatch === null ? null : { dispatch, abilities: readOptional(ABILITIES) ?? undefined };
-    const { failures, native, skip } = await checkSource(text, child, files);
+    const { failures, native, skip, loginSkip } = await checkSource(text, child, files, readOptional(LOGIN_REGISTRY));
     if (failures.length) {
         console.error(`${NAME}: FAIL -- the chrome side of the Orca agent bridge can reach a tab it did not create as an agent tab, or the drift below.`);
         failures.forEach(f => console.error(`  ${f}`));
@@ -682,7 +749,9 @@ async function main() {
     const total = /const AGENT_METHODS = Object\.freeze\(\[([^\]]*)\]\)/.exec(text)[1].match(/"browser\.[A-Za-z.]+"/g).length;
     console.log(`${NAME}: PASS -- ${total} methods (${native} native, ${total - native} actor): every one refused before page work for a user, unknown, foreign, wrong-container or stopped tab; ` +
         'the flag and the container are set only at creation and before append; cookies stay in the agent container; Stop aborts and lasts; the mark clears after 20000 ms; ' +
-        `unshown agent tabs are parked, never hold the focus, and user tabs never park; every visibility read goes through overlayShownToUser${skip ? `; ${PAGE_TABLE_SKIP}` : '; page table compared'}`);
+        'agent overlays sit in their own message manager group with no autocomplete popup and answer only alert/confirm/prompt dialogs; ' +
+        `unshown agent tabs are parked, never hold the focus, and user tabs never park; every visibility read goes through overlayShownToUser${skip ? `; ${PAGE_TABLE_SKIP}` : '; page table compared'}` +
+        (loginSkip ? '; login-manager group clause SKIP (no upstream/)' : '; the pinned LoginManager actor groups exclude the agent group'));
     return 0;
 }
 
