@@ -14,7 +14,9 @@
 //   - reads of the Theia frame (web tabs, the current widget, the addWidget clock, the
 //     chrome bar, title classes, the page table, a raw webTabAgent through WebTabChannel),
 //     of chrome (overlay entries, focus, elementFromPoint) and of page documents through
-//     WebDriver BiDi contexts (the harness only; D-11);
+//     WebDriver BiDi contexts (the harness only; D-11). Agent tabs are not BiDi contexts: their message manager
+//     group has no BiDi frame actor (MessageHandlerFrameActor is registered for "browsers" only), so an agent
+//     document is read through the bridge's own browser.eval (inAgent), a page-world read (66-06);
 //   - a store-activation recorder over the pane bundle's subscribePanes (Phase 64 C3).
 // Nothing runs on import: every helper is a function.
 //
@@ -70,6 +72,8 @@ export function fixturePages() {
         '/user': { title: 'PB user fixture', body: `<input id="in" value="">${LOGGER}` },
         '/cookie': { title: 'PB cookie fixture', body: "<script>document.cookie='pbuser=1; path=/';</script><p>cookie</p>" },
         '/stock': { title: 'PB stock fixture', body: '<p>stock</p>' },
+        // 66-06: a login form for the saved-login clause (l); it posts to a page that exists.
+        '/login': { title: 'PB login fixture', body: '<form id="f" method="post" action="/agent2"><input id="u" name="u" autocomplete="username"><input id="p" name="p" type="password" autocomplete="current-password"><button id="go" type="submit">Sign in</button></form>' },
     };
 }
 
@@ -128,6 +132,11 @@ export async function withBrowserSession({ log = () => {}, dpr = 1, home = null 
                 /** A raw webTabAgent from the frontend, as the dispatcher sends it; resolves chrome's reply. */
                 agentRaw: (tabId, method, params = {}) => ctx.probe(`return await get('WebTabChannel').request({ kind: 'webTabAgent', tabId: ${JSON.stringify(tabId)}, method: ${JSON.stringify(method)}, params: ${JSON.stringify(params)} });`),
                 inChrome: (body) => live.inChrome(app, body),
+                /** Evaluates expr (JSON-safe result) in an agent tab's page through the bridge's browser.eval; null on a refusal. */
+                inAgent: async (tabId, expr) => {
+                    const r = await ctx.agentRaw(tabId, 'browser.eval', { expression: `JSON.stringify((${expr}) ?? null)` });
+                    return r?.where === 'done' && typeof r.result?.result === 'string' ? JSON.parse(r.result.result) : null;
+                },
                 chromeActiveTabId: () => live.chromeActiveTabId(app),
                 /** The BiDi context of the one page document whose URL ends with path. */
                 contentOf: async (path) => {

@@ -22,6 +22,21 @@
 //      real user tab answers not-agent-tab and for a real stock-window tab unknown-tab.
 //  (e) container (P66-26): the agent tab reads a cookie it set itself (positive), then a
 //      cookie a user tab set on the same host is not visible to the agent.
+//  (e2) container id (66-06): chrome reads the agent overlay's userContextId, which must equal
+//      the agent container's pref and not be 0, after the positive read of a user overlay at 0.
+//  (l) saved logins (66-06, coordinator finding 3): a login saved in the scratch profile for the
+//      fixture origin is autofilled in a user web tab (the positive read, and chrome finds the
+//      LoginManager actor on the user tab's window global); in an agent tab the same form stays
+//      empty, the window global has no LoginManager actor, and an agent-typed submit adds no
+//      login. The saved password is generated in memory, compared by length only, never printed.
+//  (m) HTTP auth (66-06): an agent tab loads a loopback page answering 401 Basic; chrome must
+//      find the auth commonDialog the page opened (the detector), then the agent's
+//      browser.dialogAccept is refused with browser_command_unavailable and the prompt stays;
+//      closing the tab then closes the prompt (an orphaned window-modal prompt keeps the keyboard).
+//  (c2) typing focus (66-06): the user types into a user tab (positive read: the keys land);
+//      then the parked agent page calls window.focus() and element.focus() on a timer (positive
+//      read: its own activeElement moves) while the user keeps typing; every key must land in
+//      the user tab, none in the agent page, and the user records no blur.
 //  (f) decoy (P66-29): verify-orca-hidden-electron's exported run proves both orcad-emitted
 //      detectors fire on stock orcad in this invocation; then, with the decoy at
 //      ~/.local/bin/orca-ide in this session's scratch HOME, tab create and goto through PB's
@@ -37,6 +52,9 @@
 //      detector), then the bound web tab must become current within 1000 ms.
 //  (i) reload, last: a frontend reload leaves no agent web tab, the host re-attaches, and
 //      tab list no longer lists the old pages.
+//
+// Agent documents are read through the bridge's own browser.eval (ctx.inAgent): agent tabs are
+// not WebDriver BiDi contexts, because their message manager group has no BiDi frame actor.
 //
 // Tier: full, under flock /home/chris/coding/Power-Browser/.git/pb-live.lock. A named SKIP
 // (exit 0) without lane p66-03's AGENT_METHODS, lane p66-02's extension, a built PowerBrowser
@@ -128,11 +146,51 @@ export function verdictContainer(o) {
     return o.userVisible ? ['the user cookie is visible to the agent tab'] : [];
 }
 
+export function verdictContainerId(o) {
+    if (o.userContext !== 0) return [`detector blind: the user overlay's userContextId read ${JSON.stringify(o.userContext)}, not 0`];
+    const f = [];
+    if (!Number.isInteger(o.agentContext) || o.agentContext === 0) f.push(`the agent tab is not in a container (userContextId ${JSON.stringify(o.agentContext)})`);
+    else if (o.agentContext !== o.containerPref) f.push(`the agent tab's userContextId ${o.agentContext} is not the agent container ${o.containerPref}`);
+    return f;
+}
+
+export function verdictLogins(o) {
+    if (!o.saved) return ['detector blind: the scratch login was not saved'];
+    if (!o.userFilled || !o.userActor) return [`detector blind: the saved login was not autofilled in the user tab (filled ${o.userFilled}, LoginManager actor ${o.userActor})`];
+    const f = [];
+    if (o.agentFilled) f.push('the saved login was autofilled in the agent tab');
+    if (o.agentActor) f.push("the agent tab's window global has a LoginManager actor");
+    if (!o.agentSubmitted) f.push('detector blind: the agent submit did not leave the login page');
+    if (o.capturedAfter > 0) f.push(`the agent submit stored ${o.capturedAfter} login(s)`);
+    return f;
+}
+
+export function verdictAuth(o) {
+    if (!o.promptSeen) return ['detector blind: no HTTP auth dialog was found for the agent tab'];
+    const f = [];
+    if (o.reply.where !== 'failed' || o.reply.code !== 'browser_command_unavailable') f.push(`the agent's dialogAccept on an HTTP auth prompt answered ${o.reply.where}${o.reply.code ? ` ${o.reply.code}` : ''}, not failed browser_command_unavailable`);
+    if (!o.promptAfter) f.push('the HTTP auth prompt was closed by the agent');
+    if (o.authorized) f.push('the server received credentials from the agent tab');
+    if (o.promptAfterClose) f.push("the HTTP auth prompt outlived its closed tab (it keeps the user's keyboard)");
+    return f;
+}
+
+export function verdictTyping(o) {
+    if (o.controlTyped !== o.controlExpected) return [`detector blind: the user's keys did not land in the user tab before the agent ran (${JSON.stringify(o.controlTyped)}${o.controlDiag ? `; ${o.controlDiag}` : ''})`];
+    if (o.agentSelfActive !== 'in') return [`detector blind: the agent page's own focus() never moved its activeElement (${JSON.stringify(o.agentSelfActive)})`];
+    const f = [];
+    if (o.userTyped !== o.userExpected) f.push(`keys typed while the agent page called focus() landed elsewhere: the user input reads ${JSON.stringify(o.userTyped)}, not ${JSON.stringify(o.userExpected)}`);
+    if (o.agentValue !== '') f.push(`the parked agent page received keys (${JSON.stringify(o.agentValue)})`);
+    if (o.userBlurs.length) f.push(`a user blur was recorded while typing: ${o.userBlurs.join(', ')}`);
+    if (o.chromeBefore !== o.chromeAfter) f.push(`chrome focus moved while typing: ${o.chromeBefore} -> ${o.chromeAfter}`);
+    return f;
+}
+
 export function verdictDecoy(o) {
     if (!o.stock?.pass) return [`detector blind: the stock decoy run did not prove both detectors (${(o.stock?.fails ?? []).join('; ') || 'no result'})`];
     const f = [];
     if (!o.createOk) f.push(`tab create through PB's orcad failed: ${o.code}`);
-    if (o.title !== o.expectedTitle) f.push(`goto through PB's orcad gave ${JSON.stringify(o.title)}, not ${JSON.stringify(o.expectedTitle)}`);
+    if (o.title !== o.expectedTitle) f.push(`goto through PB's orcad gave ${JSON.stringify(o.title)}, not ${JSON.stringify(o.expectedTitle)}${o.gotoCode ? ` (${o.gotoCode})` : ''}`);
     if (o.quietMs < o.minQuietMs) f.push(`judged after ${o.quietMs} ms, before the ${o.minQuietMs} ms quiet window`);
     if (o.markerPresent) f.push("a decoy marker is present: PB's orcad launched the decoy");
     return f;
@@ -156,7 +214,7 @@ export function verdictUserClose(o) {
 export function verdictReload(o) {
     const f = [];
     if (o.agentWidgetsAfter > 0) f.push(`an agent widget survived a reload (${o.agentWidgetsAfter})`);
-    if (!o.reattached) f.push('the host did not re-attach after the reload');
+    if (!o.reattached) f.push(`the host did not re-attach after the reload${o.diag ? ` (${o.diag})` : ''}`);
     if (o.oldListed.length) f.push(`old pages are still listed after the reload (${o.oldListed.length})`);
     return f;
 }
@@ -173,7 +231,7 @@ export function verdictActivation(o) {
 
 export const VERDICTS = {
     k: verdictNoPane, a: verdictCreate, b: verdictActs, b1: verdictScreenshot, b2: verdictScreenshot, c: verdictFocus,
-    d: verdictRefusals, e: verdictContainer, f: verdictDecoy, g: verdictRenderer, h: verdictUserClose, j: verdictActivation, i: verdictReload,
+    d: verdictRefusals, e: verdictContainer, e2: verdictContainerId, l: verdictLogins, m: verdictAuth, c2: verdictTyping, f: verdictDecoy, g: verdictRenderer, h: verdictUserClose, j: verdictActivation, i: verdictReload,
 };
 
 /** Every clause's fails, each prefixed by its letter; skipped clauses ({ skip }) are listed apart. */
@@ -206,7 +264,8 @@ async function createObserved(ctx) {
 
 async function screenshotObserved(ctx, pageId) {
     await ctx.cli('goto', '--url', ctx.url('/agent'), '--page', pageId);
-    const [w, h, deviceDpr] = (await ctx.inPage('/agent', '[innerWidth, innerHeight, devicePixelRatio]')) ?? [0, 0, null];
+    const tabId = await ctx.tabOfPage(pageId);
+    const [w, h, deviceDpr] = (await ctx.inAgent(tabId, '[innerWidth, innerHeight, devicePixelRatio]')) ?? [0, 0, null];
     const r = await ctx.cli('screenshot', '--page', pageId);
     const base = { dpr: ctx.dpr, deviceDpr, ok: r.ok && !!r.result?.path, code: r.error?.code ?? r.error?.message, viewportCss: [w, h] };
     if (!base.ok) return { ...base, size: [0, 0], inside: null, outside: null };
@@ -216,6 +275,105 @@ async function screenshotObserved(ctx, pageId) {
 }
 
 const userFocus = (ctx) => ctx.inPage('/user', '({ hasFocus: document.hasFocus(), active: document.activeElement && (document.activeElement.id || document.activeElement.nodeName), blurs: __log.filter(e => e.type === "blur").map(e => e.target) })');
+
+const LOGIN_USER = 'pbuser';
+const countLogins = (ctx, username) => ctx.inChrome(`return Services.logins.getAllLogins().then(all => all.filter(l => l.username === ${JSON.stringify(username)}).length);`);
+const loginActor = (ctx, tabId) => ctx.inChrome(`const o = overlayOf(${JSON.stringify(tabId)}); const wg = o && o.browsingContext && o.browsingContext.currentWindowGlobal;
+    if (!wg) return null; try { return !!wg.getExistingActor('LoginManager'); } catch (e) { return false; }`);
+
+/** (l): a scratch login, autofilled in a user tab, absent from the agent tab; the password never leaves memory. */
+async function loginsObserved(ctx, agentTabId, page) {
+    const origin = new URL(ctx.url('/login')).origin;
+    const secret = `pb-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+    // The harness's WebDriver session sets signon.rememberSignons and signon.autofillForms to false (remote agent
+    // recommended prefs); a user's profile has them at the default true, so the clause restores the defaults first.
+    await ctx.inChrome(`Services.prefs.clearUserPref('signon.rememberSignons'); Services.prefs.clearUserPref('signon.autofillForms');
+        Services.prefs.setBoolPref('signon.rememberSignons', true); Services.prefs.setBoolPref('signon.autofillForms', true); return true;`);
+    const saved = await ctx.inChrome(`const li = Cc['@mozilla.org/login-manager/loginInfo;1'].createInstance(Ci.nsILoginInfo);
+        li.init(${JSON.stringify(origin)}, ${JSON.stringify(origin)}, null, ${JSON.stringify(LOGIN_USER)}, ${JSON.stringify(secret)}, 'u', 'p');
+        return Services.logins.addLoginAsync(li).then(() => true, () => false);`);
+    const userTab = await ctx.openWebTab(ctx.url('/login'));
+    const userFilled = await ctx.pollFor(() => ctx.inPage('/login', `document.getElementById('u').value === ${JSON.stringify(LOGIN_USER)} && document.getElementById('p').value.length === ${secret.length}`).then((v) => v || null), 10000, 'the user tab autofill').catch(() => false);
+    const userActor = await loginActor(ctx, userTab);
+    await ctx.cli('goto', '--url', ctx.url('/login'), '--page', page);
+    await sleep(2000);
+    const agentFilled = (await ctx.inAgent(agentTabId, `document.getElementById('u').value.length + document.getElementById('p').value.length`)) !== 0;
+    const agentActor = await loginActor(ctx, agentTabId);
+    await ctx.cli('focus', '--element', '#u', '--page', page);
+    await ctx.cli('type', '--input', 'pbagent', '--page', page);
+    await ctx.cli('focus', '--element', '#p', '--page', page);
+    await ctx.cli('type', '--input', 'agent-typed-word', '--page', page);
+    await ctx.cli('click', '--element', '#go', '--page', page);
+    const agentSubmitted = await ctx.pollFor(() => ctx.inAgent(agentTabId, 'location.pathname === "/agent2"').then((v) => v || null), 10000, 'the agent submit').catch(() => false);
+    await sleep(1500);
+    const closed = (await ctx.webTabs()).find((w) => w.tabId === userTab)?.id;
+    if (closed) await ctx.luminoClose(closed);
+    return { saved: saved === true, userFilled: userFilled === true, userActor: userActor === true, agentFilled, agentActor: agentActor === true, agentSubmitted: agentSubmitted === true, capturedAfter: await countLogins(ctx, 'pbagent') };
+}
+
+/** (m): an agent page that answers 401 Basic; the auth dialog must be found, and the agent's accept refused. */
+async function authObserved(ctx) {
+    const { createServer } = await import('node:http');
+    let authorized = false;
+    const server = createServer((req, res) => {
+        if (req.headers.authorization) authorized = true;
+        res.writeHead(401, { 'www-authenticate': 'Basic realm="pb-agent-auth"', 'content-type': 'text/plain' });
+        res.end('auth');
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const authUrl = `http://127.0.0.1:${server.address().port}/auth`;
+    try {
+        const c = await createObserved(ctx);
+        const tabId = c.boundTab;
+        if (!tabId) return { promptSeen: false, reply: {}, promptAfter: false, authorized };
+        const pendingGoto = ctx.cli('goto', '--url', authUrl, '--page', c.pageId);
+        const dialog = (id) => ctx.inChrome(`const o = overlayOf(${JSON.stringify(id)}); if (!o) return null;
+            for (const w of Services.wm.getEnumerator(null)) { if (!w.closed && String(w.location && w.location.href) === 'chrome://global/content/commonDialog.xhtml' && w.args && w.args.owningBrowsingContext && w.args.owningBrowsingContext.top && w.args.owningBrowsingContext.top.embedderElement === o) return w.args.promptType || 'unknown'; }
+            return null;`);
+        const promptType = await ctx.pollFor(() => dialog(tabId), 15000, 'the HTTP auth dialog').catch(() => null);
+        const reply = promptType ? await ctx.agentRaw(tabId, 'browser.dialogAccept', {}) : null;
+        await sleep(500);
+        const promptAfter = promptType ? !!(await dialog(tabId)) : false;
+        if (c.widgetId) await ctx.luminoClose(c.widgetId);
+        await sleep(1000);
+        const promptAfterClose = promptType ? await ctx.inChrome(`for (const w of Services.wm.getEnumerator(null)) { if (!w.closed && String(w.location && w.location.href) === 'chrome://global/content/commonDialog.xhtml') return true; } return false;`) : false;
+        // The goto waits on a load the prompt holds; it ends with the closed tab, before the next clause drives orcad.
+        await Promise.race([pendingGoto, sleep(30000)]);
+        return { promptSeen: !!promptType, promptType, reply: { where: reply?.where ?? null, code: reply?.code ?? null }, promptAfter, promptAfterClose: promptAfterClose === true, authorized };
+    } finally {
+        server.close();
+    }
+}
+
+/** (c2): keys typed into the user tab while the parked agent page tries to take focus. */
+async function typingObserved(ctx, agentTabId, page) {
+    await ctx.cli('goto', '--url', ctx.url('/agent'), '--page', page);
+    // A fresh user tab on /user: the clause (a) user tab is on /cookie by now, and (j) reads it there.
+    const userTab = await ctx.openWebTab(ctx.url('/user'));
+    await ctx.pollFor(() => ctx.inPage('/user', 'document.readyState === "complete"').then((v) => v || null), 10000, 'the typing user tab').catch(() => null);
+    const userWidget = (await ctx.webTabs()).find((w) => w.tabId === userTab)?.id;
+    await ctx.activate(userWidget);
+    // Clause (d) opened a stock window, which holds the window focus; the user comes back to the PowerBrowser window.
+    await ctx.inChrome('window.focus(); return true;');
+    await ctx.pollFor(() => ctx.inChrome('return Services.focus.activeWindow === window || null;'), 5000, 'the shell window to be active').catch(() => null);
+    const focused = await ctx.focusOverlay(userTab);
+    const pageFocus = await ctx.inPage('/user', '(document.getElementById("in").value = "", document.getElementById("in").focus(), __log.length = 0, document.hasFocus())');
+    const chromeAt = await ctx.chromeActiveTabId();
+    await ctx.typeText('ab');
+    const controlTyped = await ctx.inPage('/user', 'document.getElementById("in").value');
+    const controlDiag = controlTyped === 'ab' ? null : `overlay focused ${focused}, page hasFocus ${pageFocus}, chrome focus on the user tab ${chromeAt === userTab}, dialogs ${await ctx.inChrome(`let n = 0; for (const w of Services.wm.getEnumerator(null)) if (!w.closed && w !== window) n++; return n;`)}`;
+    const chromeBefore = await ctx.chromeActiveTabId();
+    await ctx.inAgent(agentTabId, '(document.getElementById("in").value = "", window.__pbSteal = setInterval(() => { window.focus(); document.getElementById("in").focus(); }, 25), true)');
+    await sleep(1500);
+    const agentSelfActive = await ctx.inAgent(agentTabId, 'document.activeElement && document.activeElement.id');
+    for (const ch of 'cdefgh') { await ctx.typeText(ch); await sleep(300); }
+    const userTyped = await ctx.inPage('/user', 'document.getElementById("in").value');
+    const userBlurs = (await userFocus(ctx))?.blurs ?? [];
+    const chromeAfter = await ctx.chromeActiveTabId();
+    const agentValue = await ctx.inAgent(agentTabId, '(clearInterval(window.__pbSteal), document.getElementById("in").value)');
+    if (userWidget) await ctx.luminoClose(userWidget);
+    return { controlTyped, controlDiag, controlExpected: 'ab', agentSelfActive, userTyped, userExpected: 'abcdefgh', agentValue, userBlurs, chromeBefore, chromeAfter };
+}
 
 async function liveRun(log) {
     const { withBrowserSession, decoyRecordFile } = await import('./lib/orca-browser-live.mjs');
@@ -256,11 +414,11 @@ async function liveRun(log) {
             await ctx.inPage('/user', '(document.getElementById("in").focus(), __log.length = 0, true)');
             await ctx.cli('goto', '--url', ctx.url('/agent'), '--page', page);
             const before = { chrome: await ctx.chromeActiveTabId(), ...(await userFocus(ctx)) };
+            const agentTabId = a.boundTab;
             await ctx.cli('focus', '--element', '#in', '--page', page);
-            const agentActiveAfterFocus = await ctx.inPage('/agent', 'document.activeElement && document.activeElement.id');
+            const agentActiveAfterFocus = await ctx.inAgent(agentTabId, 'document.activeElement && document.activeElement.id');
             await ctx.cli('type', '--input', 'pb-typed', '--page', page);
             const after = { chrome: await ctx.chromeActiveTabId(), ...(await userFocus(ctx)) };
-            const agentTabId = a.boundTab;
             const chromeHitIsAgent = await ctx.inChrome(`const o = overlayOf(${JSON.stringify(agentTabId)}); if (!o) return false; const r = o.getBoundingClientRect();
                 const e = document.elementFromPoint(r.x + ${INSIDE.x}, r.y + ${INSIDE.y}); return W.tabIdOfBrowser(e) === ${JSON.stringify(agentTabId)};`);
             obs.c = { agentActiveAfterFocus, before: { chrome: before.chrome, userHasFocus: before.hasFocus, userActive: before.active }, after: { chrome: after.chrome, userHasFocus: after.hasFocus, userActive: after.active }, userBlurs: after.blurs ?? [], chromeHitIsAgent };
@@ -268,10 +426,10 @@ async function liveRun(log) {
             // (b) goto, click, type; (b1) screenshot at DPR 1.
             const g = await ctx.cli('goto', '--url', ctx.url('/agent'), '--page', page);
             await ctx.cli('click', '--element', '#btn', '--page', page);
-            const clickCount = await ctx.inPage('/agent', 'document.getElementById("btn").dataset.count || "0"');
+            const clickCount = await ctx.inAgent(agentTabId, 'document.getElementById("btn").dataset.count || "0"');
             await ctx.cli('focus', '--element', '#in', '--page', page);
             await ctx.cli('type', '--input', 'pb-typed', '--page', page);
-            obs.b = { title: g.result?.title ?? null, expectedTitle: 'PB agent fixture', clickCount, typed: await ctx.inPage('/agent', 'document.getElementById("in").value'), expectedTyped: 'pb-typed' };
+            obs.b = { title: g.result?.title ?? null, expectedTitle: 'PB agent fixture', clickCount, typed: await ctx.inAgent(agentTabId, 'document.getElementById("in").value'), expectedTyped: 'pb-typed' };
             obs.b1 = await screenshotObserved(ctx, page);
 
             // (d) refusals, naming a real user tab and a real stock-window tab.
@@ -292,6 +450,20 @@ async function liveRun(log) {
             const userCookieSet = String(await ctx.inPage('/cookie', 'document.cookie')).includes('pbuser=1');
             obs.e = { ownRead, userCookieSet, userVisible: cookieNames(await ctx.cli('cookie', 'get', '--page', page)).includes('pbuser') };
 
+            // (e2) the agent tab's container, read in chrome; the user overlay at 0 first.
+            obs.e2 = JSON.parse(await ctx.inChrome(`const u = overlayOf(${JSON.stringify(userTab)}); const g = overlayOf(${JSON.stringify(agentTabId)});
+                return JSON.stringify({ userContext: u ? u.browsingContext.originAttributes.userContextId : null, agentContext: g ? g.browsingContext.originAttributes.userContextId : null,
+                    containerPref: Services.prefs.getIntPref('powerbrowser.orca.agentUserContextId', -1) });`));
+
+            // (l) saved logins: a login saved for the fixture origin; the user tab is the positive read.
+            obs.l = await loginsObserved(ctx, agentTabId, page);
+
+            // (m) an HTTP auth prompt in a second agent tab, refused to the agent.
+            obs.m = await authObserved(ctx);
+
+            // (c2) the user types while the parked agent page calls focus().
+            obs.c2 = await typingObserved(ctx, agentTabId, page);
+
             // (f) second half, in the scratch HOME holding the decoy.
             if (stock.skip) obs.f = { skip: stock.skip };
             else {
@@ -302,7 +474,7 @@ async function liveRun(log) {
                 const waited = Date.now() - readyAt;
                 if (waited < minQuietMs) await sleep(minQuietMs - waited);
                 const roots = [ctx.state.dataRoot, ctx.state.effectiveRoot].filter(Boolean);
-                obs.f = { stock, createOk: fCreate.ok, code: fCreate.error?.code, title: fGoto.result?.title ?? null, expectedTitle: 'PB agent fixture two', quietMs: Date.now() - readyAt, minQuietMs, markerPresent: roots.some((r) => existsSync(join(r, recordFile))) };
+                obs.f = { stock, createOk: fCreate.ok, code: fCreate.error?.code, gotoCode: fGoto.error ? `${fGoto.error.code}: ${String(fGoto.error.message).slice(0, 80)}` : null, title: fGoto.result?.title ?? null, expectedTitle: 'PB agent fixture two', quietMs: Date.now() - readyAt, minQuietMs, markerPresent: roots.some((r) => existsSync(join(r, recordFile))) };
             }
 
             // (g) the renderer path through the pane client's own connection.
@@ -351,10 +523,20 @@ async function liveRun(log) {
             const oldPages = listIds(await ctx.cli('tab', 'list', '--worktree', W));
             await ctx.app.evaluate('(location.reload(), true)').catch(() => undefined);
             await sleep(2000);
-            const reattached = await ctx.pollFor(async () => { try { return await ctx.hostAttached(); } catch { return null; } }, 180000, 'the host to re-attach').catch(() => false);
+            // A probe started while the new frontend has no container yet answers { error } (truthy): only true counts.
+            const reattached = await ctx.pollFor(async () => { try { return (await ctx.hostAttached()) === true || null; } catch { return null; } }, 180000, 'the host to re-attach').catch(() => false);
             let oldListed = oldPages;
             for (let i = 0; i < 40 && oldListed.length; i++) { await sleep(250); const now = listIds(await ctx.cli('tab', 'list', '--worktree', W)); oldListed = oldPages.filter((p) => now.includes(p)); }
-            obs.i = { agentWidgetsAfter: (await ctx.webTabs()).filter((w) => w.agent).length, reattached: reattached === true, oldListed };
+            const diag = reattached === true ? null : await ctx.probe(`const l = globalThis[Symbol.for('powerbrowser.orca-browser.link')]; let c = 'no link';
+                if (l) { try { c = 'connection ' + (await l.connection()).credential.kind; } catch (e) { c = 'connection ' + String(e && e.message).slice(0, 40); } }
+                let attach = 'not tried';
+                const host = globalThis[Symbol.for('powerbrowser.orca-browser.host-module')];
+                if (l && host) {
+                    try { const k = await l.connection(); const s = await host.attachBrowserHost({ connection: { endpoint: k.endpoint, hostPublicKeyB64: k.hostPublicKeyB64 }, credential: k.credential, browserHostClientId: 'pb-host-diag-' + crypto.randomUUID(), inventory: () => [], onCommand: () => undefined, onDetached: () => undefined }); s.detach(); attach = 'a second attach succeeds'; }
+                    catch (e) { attach = 'a second attach fails: ' + String(e && e.message).slice(0, 60); }
+                }
+                return c + ', host module ' + !!host + ', bundle booted ' + !!(globalThis[Symbol.for('powerbrowser.orca-panes.module')] && globalThis[Symbol.for('powerbrowser.orca-panes.module')].state().booted) + ', ' + attach;`, 60000).catch((e) => `probe: ${String(e?.message ?? e).slice(0, 80)}`);
+            obs.i = { agentWidgetsAfter: (await ctx.webTabs()).filter((w) => w.agent).length, reattached: reattached === true, oldListed, diag };
         });
         // (b2) the screenshot half in a second launch at DPR 2.
         await withBrowserSession({ log, dpr: 2 }, async (ctx) => {
@@ -376,10 +558,15 @@ async function main() {
     let obs;
     try { obs = await liveRun(log); } catch (e) { console.error(`${NAME}: FAIL -- harness: ${String(e?.message ?? e).split('\n')[0]}`); return 1; }
     const { fails, skips } = judgeAll(obs);
+    // One line per clause, so a run records every clause, not only the failing ones.
+    for (const k of Object.keys(VERDICTS)) {
+        const own = fails.filter((f) => f.startsWith(`(${k}) `));
+        console.log(`${NAME}: clause (${k}) ${obs[k]?.skip ? 'SKIP' : own.length ? 'FAIL' : 'ok'}${k === 'g' && obs.g ? ` (credential ${obs.g.credential}, placement ${obs.g.placement?.kind})` : ''}${['k', 'a'].includes(k) && obs[k] ? ` (${obs[k].ms} ms)` : ''}${k === 'j' && obs.j?.revealMs != null ? ` (reveal ${obs.j.revealMs} ms)` : ''}${k === 'm' && obs.m?.promptType ? ` (${obs.m.promptType})` : ''}${k === 'e2' && obs.e2 ? ` (userContextId ${obs.e2.agentContext})` : ''}${(k === 'b1' || k === 'b2') && obs[k] ? ` (DPR ${obs[k].deviceDpr}, ${obs[k].size?.join('x')} px)` : ''}`);
+    }
     for (const s of skips) console.log(`${NAME}: SKIP ${s}`);
     if (fails.length) { for (const f of fails) console.error(`${NAME}: FAIL -- ${f}`); return 1; }
     const g = obs.g.credential;
-    console.log(`${NAME}: PASS -- (k) no-pane create one tab in ${obs.k.ms} ms; (a) one background agent tab in ${obs.a.ms} ms; (b) goto, click, type, screenshot at DPR 1 and 2; (c) parked focus held; (d) refusals; (e) container; (f) ${obs.f.skip ? 'SKIP' : 'no decoy'}; (g) renderer createPage over ${g}; (h) user close; (j) reveal in ${obs.j.revealMs} ms after store activation; (i) reload`);
+    console.log(`${NAME}: PASS -- (k) no-pane create one tab in ${obs.k.ms} ms; (a) one background agent tab in ${obs.a.ms} ms; (b) goto, click, type, screenshot at DPR 1 and 2; (c) parked focus held; (d) refusals; (e) container; (e2) agent container ${obs.e2.agentContext}; (l) saved login filled for the user only, no LoginManager actor or capture in the agent tab; (m) HTTP auth (${obs.m.promptType}) refused to the agent; (c2) typing kept while the parked page called focus(); (f) ${obs.f.skip ? 'SKIP' : 'no decoy'}; (g) renderer createPage over ${g}; (h) user close; (j) reveal in ${obs.j.revealMs} ms after store activation; (i) reload`);
     return 0;
 }
 
@@ -394,6 +581,10 @@ const CONTROL = {
     c: { agentActiveAfterFocus: 'in', before: { chrome: 'u', userHasFocus: true, userActive: 'in' }, after: { chrome: 'u', userHasFocus: true, userActive: 'in' }, userBlurs: [], chromeHitIsAgent: false },
     d: { invented: { ok: false, code: 'browser_unavailable' }, userTab: 'not-agent-tab', stockTab: 'unknown-tab' },
     e: { ownRead: true, userCookieSet: true, userVisible: false },
+    e2: { userContext: 0, agentContext: 7, containerPref: 7 },
+    l: { saved: true, userFilled: true, userActor: true, agentFilled: false, agentActor: false, agentSubmitted: true, capturedAfter: 0 },
+    m: { promptSeen: true, promptType: 'promptUserAndPass', reply: { where: 'failed', code: 'browser_command_unavailable' }, promptAfter: true, promptAfterClose: false, authorized: false },
+    c2: { controlTyped: 'ab', controlExpected: 'ab', agentSelfActive: 'in', userTyped: 'abcdefgh', userExpected: 'abcdefgh', agentValue: '', userBlurs: [], chromeBefore: 'u', chromeAfter: 'u' },
     f: { stock: { pass: { stockMs: 900 } }, createOk: true, title: 'PB agent fixture two', expectedTitle: 'PB agent fixture two', quietMs: 30000, minQuietMs: 10000, markerPresent: false },
     g: { placement: { kind: 'client' }, reply: { ok: true, code: null }, createPageArrived: true, credential: 'device-key' },
     h: { closed: true, listedAfter: false },
@@ -426,6 +617,20 @@ const PLANTS = [
     ['stock-tab-not-unknown', set('d', { stockTab: 'not-agent-tab' }), 'the stock-window tab answered'],
     ['invented-page-served', set('d', { invented: { ok: true, code: null } }), 'an invented page id was served'],
     ['no-pane-detector-blind', set('k', { linkPresent: false }), 'detector blind'],
+    ['agent-tab-outside-container', set('e2', { agentContext: 0 }), 'the agent tab is not in a container'],
+    ['agent-tab-in-another-container', set('e2', { agentContext: 3 }), 'is not the agent container'],
+    ['container-detector-blind', set('e2', { userContext: null }), 'detector blind'],
+    ['login-autofilled-in-agent-tab', set('l', { agentFilled: true }), 'autofilled in the agent tab'],
+    ['login-actor-on-agent-tab', set('l', { agentActor: true }), 'has a LoginManager actor'],
+    ['agent-submit-captured', set('l', { capturedAfter: 1 }), 'the agent submit stored 1 login'],
+    ['login-detector-blind', set('l', { userFilled: false }), 'detector blind'],
+    ['auth-prompt-answered', set('m', { reply: { where: 'done', code: null }, promptAfter: false }), 'not failed browser_command_unavailable'],
+    ['auth-detector-blind', set('m', { promptSeen: false }), 'detector blind'],
+    ['auth-prompt-outlives-tab', set('m', { promptAfterClose: true }), 'outlived its closed tab'],
+    ['agent-took-the-keys', set('c2', { userTyped: 'ab', agentValue: 'cdefgh' }), 'the parked agent page received keys'],
+    ['typing-user-blur', set('c2', { userBlurs: ['in'] }), 'a user blur was recorded while typing'],
+    ['typing-control-blind', set('c2', { controlTyped: '' }), 'detector blind'],
+    ['agent-focus-never-ran', set('c2', { agentSelfActive: 'BODY' }), 'detector blind'],
 ];
 
 export function runSelfTest() {
