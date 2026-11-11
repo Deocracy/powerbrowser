@@ -20,7 +20,9 @@
 //     environment is Phase 62's: no fixed name and no buildOrcadEnv option
 //     spells a PTY (the "pty switch" plant).
 //  4. The powerbrowser.orca.port default in powerbrowser-sidecar.js is an
-//     integer inside OrcaEnv's PORT_MIN..PORT_MAX.
+//     integer inside OrcaEnv's PORT_MIN..PORT_MAX, and every getIntPref
+//     fallback for it in OrcaService.sys.mjs (68-06: a package carries no
+//     prefs file) equals that default.
 //  5. Scenarios. The shipped OrcaService source is imported into Node against
 //     a stub boundary (a fake ChromeUtils whose importESModule returns stub
 //     PowerBrowserAPI and PowerBrowserProcesses objects and the real OrcaEnv),
@@ -885,6 +887,10 @@ function staticClauses(paths, env, notes) {
     if (!m) fails.push('powerbrowser-sidecar.js has no integer powerbrowser.orca.port default');
     else if (Number(m[1]) < env.PORT_MIN || Number(m[1]) > env.PORT_MAX) fails.push(`the powerbrowser.orca.port default ${m[1]} is outside 1024..32767 (above it is the ephemeral range)`);
     const portDefault = m ? Number(m[1]) : null;
+    // 68-06 gave OrcaService a literal fallback (a package carries no powerbrowser-sidecar.js); it must stay the pref default.
+    const fallbacks = [...(service ?? '').matchAll(/getIntPref\("powerbrowser\.orca\.port",\s*([^)]*?)\s*\)/g)].map((x) => x[1]);
+    if (!fallbacks.length) fails.push('OrcaService.sys.mjs reads powerbrowser.orca.port nowhere through getIntPref, so its packaged fallback cannot be compared');
+    for (const f of fallbacks) if (Number(f) !== portDefault || !/^\d+$/.test(f)) fails.push(`OrcaService's powerbrowser.orca.port fallback ${f} is not the powerbrowser-sidecar.js default ${portDefault}: a package, which carries no prefs file, would start orcad on a different port`);
 
     // 6. Wiring.
     const shell = read(paths.shellJs) ?? '';
@@ -1044,6 +1050,7 @@ async function runSelfTest() {
             { name: 'port guard removed', naming: 'port 0', file: paths.orcaEnv, edit: swap('port < PORT_MIN || ', '') },
             { name: 'bind host 0.0.0.0', naming: 'loopback', file: paths.orcaEnv, edit: swap('ORCAD_BIND_HOST = "127.0.0.1"', 'ORCAD_BIND_HOST = "0.0.0.0"') },
             { name: 'port default 40000', naming: '1024..32767', file: paths.prefs, edit: swap('pref("powerbrowser.orca.port", 26768);', 'pref("powerbrowser.orca.port", 40000);') },
+            { name: 'OrcaService port fallback drifted from the prefs default', naming: 'fallback 26769 is not the powerbrowser-sidecar.js default 26768', file: paths.orcaService, edit: swap('getIntPref("powerbrowser.orca.port", 26768)', 'getIntPref("powerbrowser.orca.port", 26769)') },
             { name: 'port default 7777 (the fixture Orca default)', naming: "Orca's own default", file: paths.prefs, edit: swap('pref("powerbrowser.orca.port", 26768);', 'pref("powerbrowser.orca.port", 7777);') },
             { name: '.onorca.dev row removed', naming: 'no .onorca.dev row', file: paths.allowlist, edit: hosts((h) => h.filter((x) => !orcaRow(x))) },
             { name: '.onorca.dev disposition allow', naming: 'not user-initiated', file: paths.allowlist, edit: hosts((h) => h.map((x) => (orcaRow(x) ? { ...x, disposition: 'allow' } : x))) },
