@@ -58,7 +58,9 @@ export const C3_EXPORTS = ['bootstrap', 'subscribePanes', 'mountPane', 'closePan
     'activeWorktree', 'setActiveWorktree', 'state', 'reactIdentity', 'PB_OVERLAY_BUILD',
     // C3-65 (Phase 65 lane p65-01)
     'MOUNT_KINDS', 'subscribeOpenFiles', 'subscribeWorktrees', 'subscribeActiveView', 'setActiveView', 'subscribeActiveWorktree',
-    'subscribeOrchestrationEnabled', 'setOrchestrationFocus', 'viewTitle', 'repair'];
+    'subscribeOrchestrationEnabled', 'setOrchestrationFocus', 'viewTitle', 'repair',
+    // C3-66 (66-07, D-34): the store row of each browser-host page, and the checks' selection of it
+    'addBrowserPage', 'removeBrowserPage', 'selectBrowserPage'];
 const EDITOR_MODULE = /(^|\/)components\/editor\/(EditorPanel[^/]*|EditorContent)\.tsx$/;
 const DEVICE_KEY_SUPPORT = 'src/renderer/src/web/web-device-key-support.ts';
 const APP_ROOT_SURFACES = 'src/renderer/src/app-shell/AppRootSurfaces.tsx';

@@ -68,6 +68,29 @@ type Frame = {
   _meta?: { runtimeId?: string | null }
 }
 
+// D-34 (P66-09): the pane entry keeps an Orca store row per page whose web tab is open; the bundle namespace is stored
+// under this key by @powerbrowser/orca-panes (C3). Absent (a Node probe, a pane bundle that did not boot): no row.
+const PANES_MODULE_KEY = Symbol.for('powerbrowser.orca-panes.module')
+type PaneRows = { addBrowserPage?: (worktreeId: string, browserPageId: string) => boolean; removeBrowserPage?: (browserPageId: string) => void }
+
+function paneRows(): PaneRows | undefined {
+  return (globalThis as Record<symbol, unknown>)[PANES_MODULE_KEY] as PaneRows | undefined
+}
+
+/** A completed createPage adds the page's row, a completed closePage drops it; a row failure never touches the host. */
+function followRow(event: BrowserClientHostCommandEvent, outcome: BrowserHostOutcome): void {
+  if (outcome.status !== 'completed') return
+  try {
+    if (event.command.type === 'createPage' && event.command.workspaceId) {
+      paneRows()?.addBrowserPage?.(event.command.workspaceId, event.browserPageId)
+    } else if (event.command.type === 'closePage') {
+      paneRows()?.removeBrowserPage?.(event.browserPageId)
+    }
+  } catch {
+    // the store refused the row; the page and its web tab are unaffected
+  }
+}
+
 const ATTACH_TIMEOUT_MS = 15_000
 const CALL_TIMEOUT_MS = 20_000
 const CLIENT_CAPABILITIES = [
@@ -166,6 +189,7 @@ export function attachBrowserHost(options: AttachBrowserHostOptions): Promise<Br
     const session: BrowserHostSession = {
       browserHostClientId,
       commandResult: (event, outcome) => {
+        followRow(event, outcome)
         const { type: _type, command: _command, ...authority } = event
         const { result, ...rest } = outcome as { status: string; result?: unknown; errorCode?: string }
         // Orca's result schema names the completed value `value`.
@@ -193,8 +217,14 @@ export function attachBrowserHost(options: AttachBrowserHostOptions): Promise<Br
         })
       },
       // A7: the user's close, on this connection; orcad then sends closePage, which the caller answers completed.
-      userClosedPage: (worktreeSelector, browserPageId) =>
-        call('browser.tabClose', { worktree: worktreeSelector, page: browserPageId }),
+      userClosedPage: (worktreeSelector, browserPageId) => {
+        try {
+          paneRows()?.removeBrowserPage?.(browserPageId)
+        } catch {
+          // as in followRow
+        }
+        return call('browser.tabClose', { worktree: worktreeSelector, page: browserPageId })
+      },
       detach: () => end('detached', false)
     }
 

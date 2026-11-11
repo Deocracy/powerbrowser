@@ -47,6 +47,7 @@ import { useRuntimeGraphSync } from '../app-shell/use-runtime-graph-sync'
 import { orderEmptyQueryWorktrees } from '../lib/order-empty-query-worktrees'
 import { initWebDeviceKeySupport } from '../web/web-device-key-support'
 import { installWebPreloadApi } from '../web/web-preload-api'
+import { readStoredWebRuntimeEnvironment } from '../web/web-runtime-environment'
 import { callRuntimeResult } from '../web/preload-api/web-runtime-calls'
 import { NativeChatResumeOnRestartModal } from '../components/NativeChatResumeRuntimeModal'
 import { ModalBoundary, OverlayBoundary } from '../app-shell/app-root-surface-boundaries'
@@ -56,6 +57,11 @@ import NewWorkspaceComposerModal from '../components/NewWorkspaceComposerModal'
 import { lazyWithRetry } from '@/lib/lazy-with-retry'
 import { detectLanguage } from '@/lib/language-detect'
 import { toRuntimeWorktreeSelector } from '../runtime/runtime-worktree-selector'
+import { discardStagedWebRuntimeBrowserTab, type StagedWebRuntimeBrowserTab } from '../runtime/web-runtime-browser-tab-staging'
+import { buildBrowserPage, buildWorkspaceFromPage, findPage } from '../store/slices/browser-page-records'
+import { browserTabOpenView } from '../store/slices/browser/browser-tab-open-view'
+import { createBrowserUuid } from '@/lib/browser-uuid'
+import { toRuntimeExecutionHostId } from '../../../shared/execution-host'
 import { makePaneKey } from '../../../shared/stable-pane-id'
 import { CLIENT_NAVIGATION_PUBLICATION_EPOCH_SUFFIX } from '../../../shared/runtime-session-contracts'
 import { resolveUnifiedTabLabel } from '../../../shared/tab-title-resolution'
@@ -710,6 +716,59 @@ export async function createChat(worktreeId: string): Promise<void> {
   if (!launch) {
     throw new Error('orca pane: the chat launch was refused')
   }
+}
+
+// D-34 (P66-09): PowerBrowser's browser host bypasses WebRuntimeClient, the only path that puts a browser page into this
+// store, so each page whose web tab opened gets its row here, in the shape the web client's browser path stages a
+// client-hosted page (stageWebRuntimeBrowserTab): a background row carrying the page id with a staged, client-hosted
+// handle, exempt from snapshot culling and dropped by Orca's session restore (a reload leaves no duplicate). The
+// records are the ones createBrowserTab draws; its own call is not used because its managed-browser gate refuses a
+// paired web client whose runtime has no screencast, and orcad here has no engine (the page is PowerBrowser's).
+const browserPageRows = new Map<string, StagedWebRuntimeBrowserTab>()
+
+/** The row of a page the browser host opened (called by pb-browser-host.ts); false when one exists or no pairing. */
+export function addBrowserPage(worktreeId: string, browserPageId: string): boolean {
+  // The session-only pairing's environment (settings carry no active environment in this client).
+  const environmentId = readStoredWebRuntimeEnvironment()?.id
+  if (!environmentId || browserPageRows.has(browserPageId) || findPage(useAppStore.getState().browserPagesByWorkspace, browserPageId)) {
+    return false
+  }
+  const workspaceId = createBrowserUuid()
+  const page = buildBrowserPage(workspaceId, worktreeId, 'about:blank', undefined, environmentId, browserPageId)
+  const workspace = buildWorkspaceFromPage(workspaceId, worktreeId, page, [page.id])
+  useAppStore.setState((s) => ({
+    browserTabsByWorktree: { ...s.browserTabsByWorktree, [worktreeId]: [...(s.browserTabsByWorktree[worktreeId] ?? []), workspace] },
+    browserPagesByWorkspace: { ...s.browserPagesByWorkspace, [workspaceId]: [page] },
+    ...browserTabOpenView(s, worktreeId, workspace, page, { activate: false })
+  }))
+  const state = useAppStore.getState()
+  state.setRemoteBrowserPageHandle(page.id, { environmentId, remotePageId: browserPageId, staged: true, stagedClientHosted: true })
+  state.createUnifiedTab(worktreeId, 'browser', {
+    entityId: workspaceId,
+    label: workspace.title,
+    executionHostId: toRuntimeExecutionHostId(environmentId),
+    activate: false
+  })
+  browserPageRows.set(browserPageId, { workspaceId, pageId: page.id, clientHosted: true })
+  return true
+}
+
+/** Drops that row on closePage or a user close, with Orca's own discard (it sends no second browser.tabClose). */
+export function removeBrowserPage(browserPageId: string): void {
+  const staged = browserPageRows.get(browserPageId)
+  browserPageRows.delete(browserPageId)
+  if (staged) discardStagedWebRuntimeBrowserTab(staged)
+}
+
+/** Orca's own selection of a page's row (focusBrowserTabInWorktree, the store action a tab switch --focus ends in on
+ * Orca's desktop). Used by checks only, never by a PowerBrowser command (P64-10): orcad's session snapshot lists no
+ * client-hosted page, so no CLI switch reaches this store. */
+export function selectBrowserPage(browserPageId: string): boolean {
+  const state = useAppStore.getState()
+  const page = findPage(state.browserPagesByWorkspace, browserPageId)
+  if (!page) return false
+  state.focusBrowserTabInWorktree(page.worktreeId, browserPageId)
+  return true
 }
 
 type DiffDetail = { source: DiffSource; relativePath: string; oldPath?: string; commitOid?: string; baseRef?: string }

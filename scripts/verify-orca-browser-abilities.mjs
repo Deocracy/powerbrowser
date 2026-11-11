@@ -31,8 +31,9 @@
 // an unbound id is refused, closePage drops the pair, navigate and reclaim go
 // through the table, a user close then closePage answers completed, the outcome
 // table of the contract (A8), and the P66-09 reveal tracker: a page bound before a
-// later store activation is revealed once; its own createPage activation, an
-// unbound page and a page bound after the change are not.
+// later store activation is revealed once (D-34: also the first selection after its
+// background row was listed); its own createPage record, an unbound page and a page
+// bound after the change are not.
 //
 // Tier: quick. Named SKIP for everything when theia/node_modules/typescript is
 // absent, and for (a)-(g) when orca/src is absent. Every judgment is an exported
@@ -180,10 +181,15 @@ export async function revealFailures(dispatch) {
     const create = async (id) => { tracker.noteCreated(id); await dispatch.dispatchCommand(ev(id, 'createPage'), deps); };
     const list = (...recs) => tracker.next(recs.map(([browserPageId, active]) => ({ browserPageId, active })), deps.table);
     const step = (name, got, want) => { if (got.join() !== want.join()) fails.push(`trace ${name}: revealed [${got.join(', ')}], expected [${want.join(', ')}]`); };
-    // A: created, its record inactive once, then active: the activation that follows its own createPage.
+    // A (D-34): PowerBrowser's own background row, listed inactive at its create, then selected in the store.
     await create('A');
-    step('createPage activation is not a reveal (inactive first)', list(['A', false]), []);
-    step('createPage activation is not a reveal', list(['A', true]), []);
+    step('a background row is not revealed at its create', list(['A', false]), []);
+    step('a store selection after the create is revealed', list(['A', true]), ['A']);
+    step('a revealed page is not revealed again while active', list(['A', true]), []);
+    // E: a row listed before its createPage was served, then activated by that create: not a reveal.
+    step('a row listed before its createPage is not revealed', list(['A', true], ['E', false]), []);
+    await create('E');
+    step('createPage activation is not a reveal', list(['A', true], ['E', true]), []);
     // C: created and active at once; later the user leaves it and comes back in Orca: revealed once.
     await create('C');
     step('createPage activation is not a reveal (active first)', list(['A', true], ['C', true]), []);
@@ -352,7 +358,8 @@ export const PLANTS = [
     { name: 'tab-scope-present-agent-methods-absent', naming: 'AGENT_METHODS not found or empty', file: REL.api, edit: () => '// fixture boundary without the agent section\n' },
     { name: 'trace-duplicate-opens-second-tab', naming: 'trace duplicate createPage opens nothing', file: REL.dispatch, edit: sub('            if (table.tabOf(pageId) !== undefined) {\n                return failed(\'browser_error\'); // a bound id never gets a second tab\n            }\n', '') },
     { name: 'trace-unserved-reaches-agent', naming: 'trace unserved method never reaches agentCall', file: REL.dispatch, edit: sub('if (!SERVED_AUTOMATION_METHODS.includes(method)) {', 'if (false) {') },
-    { name: 'trace-reveal-at-own-createPage', naming: 'trace createPage activation is not a reveal', file: REL.dispatch, edit: sub('            created.set(pageId, 0);\n', '') },
+    { name: 'trace-reveal-at-own-createPage', naming: 'trace createPage activation is not a reveal', file: REL.dispatch, edit: sub('            created.add(pageId);\n', '') },
+    { name: 'trace-selection-swallowed-by-creation-window', naming: 'trace a store selection after the create is revealed', file: REL.dispatch, edit: sub('                if (created.delete(pageId)) {\n', "                if (created.has(pageId)) {\n                    if (active || created.has(pageId + '#held')) created.delete(pageId); else created.add(pageId + '#held');\n") },
     { name: 'trace-reveal-bound-after-change', naming: 'trace a page bound after the change is not revealed', file: REL.dispatch, edit: sub(' && table.tabOf(pageId) !== undefined) {', ') {') },
     { name: 'trace-unbound-id-served', naming: 'trace unbound id refused', file: REL.dispatch, edit: sub("        if (tabId === undefined) {\n            return failed('browser_tab_not_found');\n        }\n", '') },
 ];

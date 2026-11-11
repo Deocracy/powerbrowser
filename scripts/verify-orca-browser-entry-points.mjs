@@ -43,6 +43,21 @@
 //  7. the link assigns prepareBrowserClientHostPlacement (A3 a);
 //  8. the export names of pb-browser-host.ts equal HOST_EXPORTS;
 //  9. the link holds the LINK_KEY and LINK_EVENT literals of @powerbrowser/orca-browser.
+// Store-row clause 10 (66-07, D-34; compared on every run), names derived from the pinned source:
+//  e. stageWebRuntimeBrowserTab (runtime/web-runtime-browser-tab-staging.ts), the web client's browser-path staging:
+//     the store actions it calls (createBrowserTab, setRemoteBrowserPageHandle), the handle keys it sets to true
+//     (staged, stagedClientHosted), and the exported function of that file that closes a row with reason 'cleanup'
+//     (the discard);
+//  f. createBrowserTab (store/slices/browser/browser-tab-actions.ts): the builders of its page and browserTab, the
+//     call spread into its record write, the store action that creates its 'browser' unified tab, and the record keys
+//     it writes;
+//  g. the browser slice action whose second parameter is browserPageId (browser-page-focus-actions.ts), the store
+//     action a tab switch --focus ends in.
+//  The entry's addBrowserPage calls every e/f name except createBrowserTab (its managed-browser gate refuses a paired
+//  web client without screencast, D-34), writes f's record keys, creates the unified tab with 'browser' and
+//  activate: false, and sets each e handle key to true; removeBrowserPage calls e's discard; selectBrowserPage calls
+//  g; pb-browser-host.ts calls addBrowserPage once and removeBrowserPage on closePage and on a user close, through
+//  the key @powerbrowser/orca-panes stores the bundle under (ORCA_PANES_MODULE_KEY).
 //
 // Tier: quick. One named SKIP when orca/src or theia/node_modules/typescript is
 // absent. Every judgment is an exported pure verdict. --self-test builds a
@@ -76,6 +91,10 @@ export const REL = {
     protocol: 'theia/extensions/orca-panes/src/common/orca-panes-protocol.ts',
     backend: 'theia/extensions/orca-panes/src/node/orca-panes-backend-module.ts',
     module: 'theia/extensions/orca-browser/src/browser/orca-browser-frontend-module.ts',
+    staging: 'orca/src/renderer/src/runtime/web-runtime-browser-tab-staging.ts',
+    tabActions: 'orca/src/renderer/src/store/slices/browser/browser-tab-actions.ts',
+    focusActions: 'orca/src/renderer/src/store/slices/browser/browser-page-focus-actions.ts',
+    paneBundle: 'theia/extensions/orca-panes/src/browser/orca-pane-bundle.ts',
 };
 export const CREATORS = ['createBrowserTab', 'createWebRuntimeSessionBrowserTab'];
 const NOT_SOURCE = /\.(test|test-fixture|spec)\.tsx?$/;
@@ -198,6 +217,113 @@ export function assignsPlacement(text, file) {
         if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken && /\.prepareBrowserClientHostPlacement$/.test(n.left.getText())) found = true;
     });
     return found;
+}
+
+// ---------------------------------------------------------------- store-row derivations (clause 10)
+
+/** The body node of a function named `name`: a function declaration, a const arrow, or an object property arrow. */
+export function functionNamed(text, file, name) {
+    let found;
+    walk(parse(file, text), (n) => {
+        if (found) return;
+        if (ts.isFunctionDeclaration(n) && n.name?.text === name) found = n;
+        else if ((ts.isVariableDeclaration(n) || ts.isPropertyAssignment(n)) && n.name.getText() === name && n.initializer && (ts.isArrowFunction(n.initializer) || ts.isFunctionExpression(n.initializer))) found = n.initializer;
+    });
+    return found;
+}
+
+const calleeName = (call) => ts.isIdentifier(call.expression) ? call.expression.text : ts.isPropertyAccessExpression(call.expression) ? call.expression.name.text : undefined;
+
+/** Calls under a node: [{ name, call }]. */
+export function callsUnder(node) {
+    const out = [];
+    if (node) walk(node, (n) => { if (ts.isCallExpression(n)) { const name = calleeName(n); if (name) out.push({ name, call: n }); } });
+    return out;
+}
+
+/** Keys set to the literal true in object literals under a node. */
+function trueKeysUnder(node) {
+    const out = new Set();
+    walk(node, (n) => { if (ts.isPropertyAssignment(n) && n.initializer.kind === ts.SyntaxKind.TrueKeyword) out.add(n.name.getText()); });
+    return out;
+}
+
+/** e, f, g from the pinned source; every member is empty when the source moved. */
+export function deriveStoreRow(read) {
+    const staging = read(REL.staging);
+    const stage = functionNamed(staging, REL.staging, 'stageWebRuntimeBrowserTab');
+    // A store action: a method called on the store state (`state.x(...)` or `useAppStore.getState().x(...)`).
+    const onStore = (e) => ts.isIdentifier(e) ? e.text === 'state' : ts.isCallExpression(e) && calleeName(e) === 'getState';
+    const storeCalls = callsUnder(stage).filter((c) => ts.isPropertyAccessExpression(c.call.expression) && onStore(c.call.expression.expression));
+    const actions = [...new Set(storeCalls.map((c) => c.name))];
+    const handleKeys = new Set();
+    // The handle: the keys set to true by the store actions other than the creator (CREATORS[0]).
+    for (const c of storeCalls.filter((x) => x.name !== CREATORS[0])) for (const k of trueKeysUnder(c.call)) handleKeys.add(k);
+    let discard;
+    for (const st of parse(REL.staging, staging).statements) {
+        if (ts.isFunctionDeclaration(st) && st.name && (st.modifiers ?? []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
+            && callsUnder(st).some((c) => c.name === 'closeBrowserTab' && c.call.arguments.some((a) => ts.isObjectLiteralExpression(a) && a.properties.some((p) => ts.isPropertyAssignment(p) && p.name.getText() === 'reason' && stringOf(p.initializer) === 'cleanup')))) discard = st.name.text;
+    }
+    const tabActions = read(REL.tabActions);
+    const create = functionNamed(tabActions, REL.tabActions, CREATORS[0]);
+    const builders = [];
+    const recordKeys = new Set();
+    let spread;
+    let unifiedAction;
+    if (create) walk(create, (n) => {
+        if (ts.isVariableDeclaration(n) && ['page', 'browserTab'].includes(n.name.getText()) && n.initializer && ts.isCallExpression(n.initializer)) builders.push(calleeName(n.initializer));
+        if (ts.isCallExpression(n) && calleeName(n) && n.arguments.some((a) => stringOf(a) === 'browser') && ts.isPropertyAccessExpression(n.expression)) unifiedAction ??= calleeName(n);
+        if (ts.isObjectLiteralExpression(n) && n.properties.some((p) => ts.isSpreadAssignment(p) && ts.isCallExpression(p.expression))) {
+            for (const p of n.properties) {
+                if (ts.isSpreadAssignment(p) && ts.isCallExpression(p.expression)) spread ??= calleeName(p.expression);
+                if (ts.isPropertyAssignment(p) && /^browser/.test(p.name.getText())) recordKeys.add(p.name.getText());
+            }
+        }
+    });
+    const focusText = read(REL.focusActions);
+    let focus;
+    walk(parse(REL.focusActions, focusText), (n) => {
+        if (!focus && ts.isPropertyAssignment(n) && n.initializer && ts.isArrowFunction(n.initializer) && n.initializer.parameters[1]?.name.getText() === 'browserPageId') focus = n.name.getText();
+    });
+    return { actions, handleKeys: [...handleKeys], discard, builders: builders.filter(Boolean), spread, unifiedAction, recordKeys: [...recordKeys], focus };
+}
+
+/** Clause 10 against the entry and host texts; returns failure lines. */
+export function storeRowFailures(d, entryText, hostText, panesKey) {
+    const fails = [];
+    const moved = [];
+    if (!d.actions.includes(CREATORS[0]) || d.actions.length < 2) moved.push(`stageWebRuntimeBrowserTab calls [${d.actions.join(', ')}]`);
+    if (!d.handleKeys.length) moved.push('no handle key set to true');
+    if (!d.discard) moved.push('no exported cleanup discard');
+    if (d.builders.length !== 2 || !d.spread || !d.unifiedAction || !d.recordKeys.length) moved.push(`createBrowserTab's builders [${d.builders.join(', ')}], spread ${d.spread}, unified action ${d.unifiedAction}, record keys [${d.recordKeys.join(', ')}]`);
+    if (!d.focus) moved.push('no browser slice action takes browserPageId second');
+    if (moved.length) return [`source moved: store-row derivation (${moved.join('; ')})`];
+    const add = functionNamed(entryText, REL.entry, 'addBrowserPage');
+    const remove = functionNamed(entryText, REL.entry, 'removeBrowserPage');
+    const select = functionNamed(entryText, REL.entry, 'selectBrowserPage');
+    if (!add || !remove || !select) return [`the pane entry lacks ${[!add && 'addBrowserPage', !remove && 'removeBrowserPage', !select && 'selectBrowserPage'].filter(Boolean).join(', ')} (D-34)`];
+    const addCalls = callsUnder(add);
+    const want = [...d.builders, d.spread, d.unifiedAction, ...d.actions.filter((a) => a !== CREATORS[0])];
+    for (const name of want) if (!addCalls.some((c) => c.name === name)) fails.push(`addBrowserPage does not call Orca's ${name} (D-34)`);
+    const written = new Set();
+    walk(add, (n) => { if (ts.isPropertyAssignment(n)) written.add(n.name.getText()); });
+    for (const k of d.recordKeys) if (!written.has(k)) fails.push(`addBrowserPage does not write the record key ${k}`);
+    const unified = addCalls.find((c) => c.name === d.unifiedAction);
+    if (unified && !(unified.call.arguments.some((a) => stringOf(a) === 'browser') && unified.call.arguments.some((a) => ts.isObjectLiteralExpression(a) && a.properties.some((p) => ts.isPropertyAssignment(p) && p.name.getText() === 'activate' && p.initializer.kind === ts.SyntaxKind.FalseKeyword)))) {
+        fails.push(`addBrowserPage's ${d.unifiedAction} is not a 'browser' tab with activate: false (P66-07)`);
+    }
+    const handle = addCalls.find((c) => c.name !== CREATORS[0] && d.actions.includes(c.name));
+    const keys = handle ? trueKeysUnder(handle.call) : new Set();
+    for (const k of d.handleKeys) if (handle && !keys.has(k)) fails.push(`addBrowserPage's handle does not set ${k}: true`);
+    if (!callsUnder(remove).some((c) => c.name === d.discard)) fails.push(`removeBrowserPage does not call Orca's ${d.discard}`);
+    if (!callsUnder(select).some((c) => c.name === d.focus)) fails.push(`selectBrowserPage does not call Orca's ${d.focus}`);
+    const hostCalls = hostText ? callsUnder(parse(REL.host, hostText)) : [];
+    const count = (n) => hostCalls.filter((c) => c.name === n).length;
+    if (count('addBrowserPage') !== 1 || count('removeBrowserPage') < 2) fails.push(`pb-browser-host.ts calls addBrowserPage ${count('addBrowserPage')} time(s) and removeBrowserPage ${count('removeBrowserPage')} (want 1 and closePage plus a user close)`);
+    const hostLiterals = new Set();
+    if (hostText) walk(parse(REL.host, hostText), (n) => { const v = stringOf(n); if (v !== undefined) hostLiterals.add(v); });
+    if (!panesKey || !hostLiterals.has(panesKey)) fails.push(`pb-browser-host.ts does not reach the bundle through ORCA_PANES_MODULE_KEY '${panesKey}'`);
+    return fails;
 }
 
 // ---------------------------------------------------------------- module graph
@@ -341,6 +467,11 @@ export function check(root = REPO_ROOT) {
     if (!hostPrefix || hostPrefix !== routePrefix) fails.push(`served prefix mismatch: HOST_PREFIX '${hostPrefix}' in ${REL.module}, ORCA_PANES_ROUTE_PREFIX '${routePrefix}' in ${REL.protocol}`);
     if (!/app\.use\(\s*ORCA_PANES_ROUTE_PREFIX\b/.test(read(REL.backend))) fails.push(`served prefix: ${REL.backend} does not serve ORCA_PANES_ROUTE_PREFIX`);
 
+    // Clause 10: the entry's store row (D-34).
+    const storeRow = deriveStoreRow(read);
+    notes.storeRow = storeRow;
+    fails.push(...storeRowFailures(storeRow, read(REL.entry), existsSync(join(root, REL.host)) ? read(REL.host) : '', constValue(read(REL.paneBundle), REL.paneBundle, 'ORCA_PANES_MODULE_KEY')));
+
     // Cross-lane clauses 6-9.
     if (!existsSync(join(root, REL.link))) {
         notes.crossLane = 'skip';
@@ -371,6 +502,60 @@ export function check(root = REPO_ROOT) {
 
 // ---------------------------------------------------------------- self-test
 
+const FIX_STORE_ROW = {
+    staging: [
+        "import { useAppStore } from '../store'",
+        'export function stageWebRuntimeBrowserTab(args: any) {',
+        '  const state = useAppStore.getState()',
+        "  const workspace = state.createBrowserTab(args.worktreeId, 'about:blank', { activate: args.activate })",
+        '  const pageId = useAppStore.getState().browserPagesByWorkspace[workspace.id]?.find(() => true)?.id',
+        '  useAppStore.getState().setRemoteBrowserPageHandle(pageId, { environmentId: args.environmentId, remotePageId: args.remotePageId, staged: true, ...(args.clientHosted ? { stagedClientHosted: true } : {}) })',
+        '  console.warn(pageId)',
+        '}',
+        'export function discardStagedWebRuntimeBrowserTab(staged: any) {',
+        "  useAppStore.getState().closeBrowserTab(staged.workspaceId, { reason: 'cleanup' })",
+        '}',
+        '',
+    ].join('\n'),
+    tabActions: [
+        'export function createBrowserTabActions(set: any, get: any) {',
+        '  return {',
+        '    createBrowserTab: (worktreeId: string, url: string, options: any) => {',
+        '      const page = buildBrowserPage(worktreeId, url)',
+        '      const browserTab = buildWorkspaceFromPage(worktreeId, page)',
+        '      set((s: any) => ({ browserTabsByWorktree: { [worktreeId]: [browserTab] }, browserPagesByWorkspace: { [browserTab.id]: [page] }, ...browserTabOpenView(s, worktreeId, browserTab, page, options) }))',
+        "      const state = get()",
+        "      state.createUnifiedTab(worktreeId, 'browser', { entityId: browserTab.id, activate: options?.activate ?? true })",
+        '      return browserTab',
+        '    }',
+        '  }',
+        '}',
+        '',
+    ].join('\n'),
+    focusActions: 'export const focus = (set: any, get: any) => ({\n  focusBrowserTabInWorktree: (worktreeId: string, browserPageId: string) => { get().activateTab(browserPageId) }\n})\n',
+    entry: [
+        'export function addBrowserPage(worktreeId: string, browserPageId: string) {',
+        '  const page = buildBrowserPage(worktreeId, browserPageId)',
+        '  const workspace = buildWorkspaceFromPage(worktreeId, page)',
+        '  useAppStore.setState((s: any) => ({ browserTabsByWorktree: { [worktreeId]: [workspace] }, browserPagesByWorkspace: { [workspace.id]: [page] }, ...browserTabOpenView(s, worktreeId, workspace, page, { activate: false }) }))',
+        '  const state = useAppStore.getState()',
+        '  state.setRemoteBrowserPageHandle(page.id, { environmentId: "e", remotePageId: browserPageId, staged: true, stagedClientHosted: true })',
+        "  state.createUnifiedTab(worktreeId, 'browser', { entityId: workspace.id, activate: false })",
+        '  return true',
+        '}',
+        'export function removeBrowserPage(browserPageId: string) { discardStagedWebRuntimeBrowserTab({ workspaceId: browserPageId }) }',
+        'export function selectBrowserPage(browserPageId: string) { useAppStore.getState().focusBrowserTabInWorktree("w", browserPageId); return true }',
+        '',
+    ].join('\n'),
+    host: [
+        "const PANES_MODULE_KEY = Symbol.for('powerbrowser.orca-panes.module')",
+        'const rows = (): any => (globalThis as any)[PANES_MODULE_KEY]',
+        "function followRow(event: any) { if (event.command.type === 'createPage') rows()?.addBrowserPage?.(event.command.workspaceId, event.browserPageId); else rows()?.removeBrowserPage?.(event.browserPageId) }",
+        'function userClosed(id: string) { rows()?.removeBrowserPage?.(id) }',
+        '',
+    ].join('\n'),
+};
+
 const FIX = {
     paneDir: `${REL.browserPane}`,
     entryImports: ["import { openBrowser } from '@/runtime/open-browser'", "import './browser-host/pb-browser-host-link'", "import { Bar } from '@/components/browser-pane/BrowserAddressBar'"],
@@ -392,10 +577,13 @@ function buildFixture(tmp) {
     put(`${REL.renderer}/src/components/tab-bar/new-browser-tab.ts`, "import { createBrowserTab } from '@/store/browser-tab-actions'\nexport const plus = () => createBrowserTab('about:blank')\n");
     put(`${REL.renderer}/src/runtime/web-runtime-browser-creation.ts`, 'export async function createWebRuntimeSessionBrowserTab(url: string) { return url }\n');
     put(`${REL.renderer}/src/runtime/open-browser.ts`, "import { createWebRuntimeSessionBrowserTab } from './web-runtime-browser-creation'\nexport const openBrowser = () => createWebRuntimeSessionBrowserTab('https://x.test')\n");
-    put(REL.entry, `${FIX.entryImports.join('\n')}\nexport const PANE = [openBrowser, Bar]\n`);
+    put(REL.entry, `${FIX.entryImports.join('\n')}\nexport const PANE = [openBrowser, Bar]\n${FIX_STORE_ROW.entry}`);
     put(REL.link, "const LINK = Symbol.for('powerbrowser.orca-browser.link')\nexport function link(id: string) {\n  ;(window as any).api.runtimeEnvironments.prepareBrowserClientHostPlacement = () => ({ kind: 'client', browserHostClientId: id })\n  window.dispatchEvent(new Event('powerbrowser-orca-browser-link'))\n  return LINK\n}\n");
-    put(REL.host, 'export const PB_BROWSER_HOST_API = 1\nexport async function attachBrowserHost() { return undefined }\n');
-    for (const r of [REL.routes, REL.protocol, REL.backend, REL.module]) copy(r);
+    put(REL.host, `export const PB_BROWSER_HOST_API = 1\nexport async function attachBrowserHost() { return undefined }\n${FIX_STORE_ROW.host}`);
+    put(REL.staging, FIX_STORE_ROW.staging);
+    put(REL.tabActions, FIX_STORE_ROW.tabActions);
+    put(REL.focusActions, FIX_STORE_ROW.focusActions);
+    for (const r of [REL.routes, REL.protocol, REL.backend, REL.module, REL.paneBundle]) copy(r);
 }
 
 const sub = (from, to) => (s) => { const out = s.replace(from, to); return out; };
@@ -410,6 +598,18 @@ export const PLANTS = [
     { name: 'host-export-differs', naming: 'differ from HOST_EXPORTS', file: REL.host, edit: sub('export async function attachBrowserHost', 'export async function attachHost') },
     { name: 'prefix-mismatch', naming: 'served prefix mismatch', file: REL.module, edit: sub("export const HOST_PREFIX = '/orca-panes/';", "export const HOST_PREFIX = '/orca-browser/';") },
     { name: 'link-key-differs', naming: 'link key', file: REL.link, edit: sub("Symbol.for('powerbrowser.orca-browser.link')", "Symbol.for('powerbrowser.orca-browser.planted')") },
+    { name: 'row-without-handle', naming: "addBrowserPage does not call Orca's setRemoteBrowserPageHandle", file: REL.entry, edit: sub('  state.setRemoteBrowserPageHandle(', '  state.otherHandle(') },
+    { name: 'row-activated-at-create', naming: "is not a 'browser' tab with activate: false", file: REL.entry, edit: sub("'browser', { entityId: workspace.id, activate: false }", "'browser', { entityId: workspace.id, activate: true }") },
+    { name: 'row-not-client-hosted', naming: 'does not set stagedClientHosted: true', file: REL.entry, edit: sub(', stagedClientHosted: true })', ' })') },
+    { name: 'row-record-key-missing', naming: 'does not write the record key browserPagesByWorkspace', file: REL.entry, edit: sub(' browserPagesByWorkspace: { [workspace.id]: [page] },', '') },
+    { name: 'row-spread-missing', naming: "does not call Orca's browserTabOpenView", file: REL.entry, edit: sub(', ...browserTabOpenView(s, worktreeId, workspace, page, { activate: false })', '') },
+    { name: 'remove-without-discard', naming: "does not call Orca's discardStagedWebRuntimeBrowserTab", file: REL.entry, edit: sub('{ discardStagedWebRuntimeBrowserTab(', '{ keepRow(') },
+    { name: 'select-without-focus', naming: "does not call Orca's focusBrowserTabInWorktree", file: REL.entry, edit: sub('.focusBrowserTabInWorktree("w"', '.activateTab("w"') },
+    { name: 'entry-without-select', naming: 'lacks selectBrowserPage', file: REL.entry, edit: sub('export function selectBrowserPage(', 'export function chooseBrowserPage(') },
+    { name: 'host-user-close-keeps-row', naming: 'removeBrowserPage 1', file: REL.host, edit: sub('{ rows()?.removeBrowserPage?.(id) }', '{ return id }') },
+    { name: 'host-key-differs', naming: 'ORCA_PANES_MODULE_KEY', file: REL.host, edit: sub("Symbol.for('powerbrowser.orca-panes.module')", "Symbol.for('powerbrowser.orca-panes.planted')") },
+    { name: 'pinned-handle-action-renamed', naming: "does not call Orca's setRemoteBrowserPageHandleV2", file: REL.staging, edit: (s) => s.replace('getState().setRemoteBrowserPageHandle(', 'getState().setRemoteBrowserPageHandleV2(') },
+    { name: 'staging-source-moved', naming: 'source moved: store-row derivation', file: REL.staging, edit: sub('export function stageWebRuntimeBrowserTab(', 'export function stageBrowserTab(') },
     { name: 'link-event-differs', naming: 'link event', file: REL.link, edit: sub("new Event('powerbrowser-orca-browser-link')", "new Event('powerbrowser-orca-browser-planted')") },
 ];
 
@@ -461,6 +661,8 @@ function main() {
     r.lines.forEach((l) => console.log(`  ${l}`));
     if (r.fails.length) { console.error(`${NAME}: FAIL`); r.fails.forEach((f) => console.error(`  ${f}`)); return 1; }
     const callers = CREATORS.map((c) => `${r.notes.callers[c]} ${c}`).join(', ');
+    const row = r.notes.storeRow;
+    console.log(`${NAME}: store row (D-34): addBrowserPage runs ${[...row.builders, row.spread, row.unifiedAction, ...row.actions.filter((a) => a !== CREATORS[0])].join(', ')} with ${row.handleKeys.join(', ')}; removeBrowserPage runs ${row.discard}; selectBrowserPage runs ${row.focus} (derived from the pin)`);
     console.log(`${NAME}: PASS -- the pane entry's graph (${r.notes.graph} modules) reaches none of the ${r.notes.mounting.length} page-mounting components; browser routes to pb-web-tab; callers ${callers}: ${r.notes.reachable} reachable, ${r.notes.dead} dead; served prefix equals the orca-panes route; cross-lane clauses ${r.notes.crossLane === 'compared' ? 'compared' : 'SKIP ("lane p66-01 not merged")'}`);
     return 0;
 }

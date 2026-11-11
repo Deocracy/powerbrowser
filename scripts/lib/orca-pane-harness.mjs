@@ -23,7 +23,7 @@ import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, extname, join, normalize, sep } from 'node:path';
+import { dirname, extname, join, normalize, relative, sep } from 'node:path';
 
 import { createRequire } from 'node:module';
 
@@ -416,7 +416,12 @@ export function overlayOverrides(overlayFilesDir = join(REPO_ROOT, 'orca-overlay
     const dir = join(overlayFilesDir, 'src', 'renderer', 'src', 'pb');
     const out = new Map();
     if (!existsSync(dir)) return out;
-    for (const name of readdirSync(dir)) out.set(join(orcaDir, 'src', 'renderer', 'src', 'pb', name), readFileSync(join(dir, name), 'utf8'));
+    // Recursive: pb/browser-host/ (Phase 66) is a subdirectory.
+    for (const e of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+        if (!e.isFile()) continue;
+        const name = relative(dir, join(e.parentPath, e.name));
+        out.set(join(orcaDir, 'src', 'renderer', 'src', 'pb', name), readFileSync(join(dir, name), 'utf8'));
+    }
     return out;
 }
 

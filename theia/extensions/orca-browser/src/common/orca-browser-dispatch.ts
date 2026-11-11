@@ -187,15 +187,16 @@ export interface RevealTracker {
 /**
  * P66-09 activation rule: a page is revealed only when its record turns active while the same record was present
  * and inactive in the previous list, the page was bound before this list, and noteCreated has not marked it. A
- * mark is cleared without a reveal by the page's first active record (the activation that follows its own
- * createPage) or by its record staying inactive in two consecutive lists.
+ * mark is cleared without a reveal by the page's first listed record: D-34's row is PowerBrowser's own, added in the
+ * background after the createPage it served, so no creation activation follows it and the next activation is a
+ * selection.
  */
 export function createRevealTracker(): RevealTracker {
     let previous = new Map<string, boolean>();
-    const created = new Map<string, number>();
+    const created = new Set<string>();
     return {
         noteCreated(pageId) {
-            created.set(pageId, 0);
+            created.add(pageId);
         },
         next(records, table) {
             const current = new Map<string, boolean>();
@@ -206,13 +207,7 @@ export function createRevealTracker(): RevealTracker {
             }
             const reveal: string[] = [];
             for (const [pageId, active] of current) {
-                const inactiveLists = created.get(pageId);
-                if (inactiveLists !== undefined) {
-                    if (active || inactiveLists + 1 >= 2) {
-                        created.delete(pageId);
-                    } else {
-                        created.set(pageId, inactiveLists + 1);
-                    }
+                if (created.delete(pageId)) {
                     continue;
                 }
                 if (active && previous.get(pageId) === false && table.tabOf(pageId) !== undefined) {

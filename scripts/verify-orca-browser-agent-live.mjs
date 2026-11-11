@@ -46,10 +46,14 @@
 //      connection arrives as createPage (bound in the page table), with no
 //      browser_host_lease_stale; the record names the credential path (token or device-key).
 //  (h) user close (A7): a Lumino close of an agent tab removes its page from tab list.
-//  (j) activation (P66-09): a CLI create with a user tab current leaves the current widget
-//      and the user's focus alone (after the positive read that the page is bound and
-//      listed); tab switch --page must first turn the page's store record active (the
-//      detector), then the bound web tab must become current within 1000 ms.
+//  (j) activation (P66-09, D-34): a CLI create with a user tab current leaves the current
+//      widget and the user's focus alone (after the positive read that the page is bound and
+//      listed); the page then has an Orca store row, listed inactive (D-34: the pane entry
+//      adds it); Orca's own selection of that row (the bundle's selectBrowserPage, which runs
+//      focusBrowserTabInWorktree) must first turn the record active (the detector), then the
+//      bound web tab must become current within 1000 ms, and no second web tab opens. A CLI
+//      tab switch cannot be the source: orcad's session snapshot lists no client-hosted page
+//      (measured, 66-07), so no client store sees it.
 //  (i) reload, last: a frontend reload leaves no agent web tab, the host re-attaches, and
 //      tab list no longer lists the old pages.
 //
@@ -221,11 +225,15 @@ export function verdictReload(o) {
 
 export function verdictActivation(o) {
     if (!o.bound || !o.listed) return ['detector blind: the new page was not bound and listed before the create was judged'];
+    if (o.currentBefore !== o.userWidget) return [`detector blind: the user tab was not the main area's current tab before the create (${o.currentBefore ?? 'none'})`];
     const f = [];
     if (o.currentAfterCreate !== o.currentBefore) f.push('a tab revealed at its own create');
     if (o.userFocusAfter !== o.userFocusBefore) f.push('the user focus changed at create');
+    if (!o.rowListed) return [...f, 'the page has no Orca store row after its create (D-34)'];
+    if (o.rowActive) f.push('the page\'s store row was active at its create');
     if (!o.activationSeen) return [...f, 'detector blind: store activation not observed'];
-    if (o.currentAfterActivation !== o.boundWidget || !(o.revealMs !== null && o.revealMs <= REVEAL_MS)) f.push(`the store activation revealed nothing within ${REVEAL_MS} ms`);
+    if (o.currentAfterActivation !== o.boundWidget || !(o.revealMs !== null && o.revealMs <= REVEAL_MS)) f.push(`the store activation revealed nothing within ${REVEAL_MS} ms (current ${o.currentAfterActivation ?? 'none'})`);
+    if (o.webTabsAfter !== o.webTabsBefore) f.push(`the store activation changed the web tab count (${o.webTabsBefore} -> ${o.webTabsAfter})`);
     return f;
 }
 
@@ -504,8 +512,11 @@ async function liveRun(log) {
             const listed = listIds(await ctx.cli('tab', 'list', '--worktree', W)).includes(j.pageId);
             const currentAfterCreate = await ctx.currentId();
             const userFocusAfter = JSON.stringify(await ctx.inPage('/cookie', 'document.hasFocus()'));
+            // D-34: the pane entry's row for the page, read from the pane list (positive read before the activation).
+            const row = await ctx.pollFor(() => ctx.bundle(`(() => { let r = null; m.subscribePanes((l) => { r = l.find((p) => p.browserPageId === ${JSON.stringify(j.pageId)}) ?? null; })(); return r && { active: r.active }; })()`), 5000, 'the page\'s store row').catch(() => null);
+            const webTabsBefore = (await ctx.webTabs()).length;
             const tSwitch = Date.now();
-            await ctx.cli('tab', 'switch', '--page', j.pageId, '--worktree', W);
+            await ctx.bundle(`m.selectBrowserPage(${JSON.stringify(j.pageId)})`);
             let tAct = null;
             for (let i = 0; i < 40 && tAct === null; i++) {
                 const hit = (await ctx.paneLog(tSwitch)).find((e) => e.browser.some((r) => r.id === j.pageId && r.active));
@@ -517,7 +528,7 @@ async function liveRun(log) {
                 for (let i = 0; i < 12 && currentAfterActivation !== j.widgetId; i++) { currentAfterActivation = await ctx.currentId(); if (currentAfterActivation !== j.widgetId) await sleep(100); }
                 if (currentAfterActivation === j.widgetId) revealMs = Date.now() - tAct;
             }
-            obs.j = { bound: !!j.boundTab, listed, currentBefore, currentAfterCreate, userFocusBefore, userFocusAfter, activationSeen: tAct !== null, boundWidget: j.widgetId, currentAfterActivation, revealMs };
+            obs.j = { bound: !!j.boundTab, listed, userWidget, currentBefore, currentAfterCreate, userFocusBefore, userFocusAfter, rowListed: !!row, rowActive: row?.active === true, activationSeen: tAct !== null, boundWidget: j.widgetId, currentAfterActivation, revealMs, webTabsBefore, webTabsAfter: (await ctx.webTabs()).length };
 
             // (i) reload, last.
             const oldPages = listIds(await ctx.cli('tab', 'list', '--worktree', W));
@@ -588,7 +599,7 @@ const CONTROL = {
     f: { stock: { pass: { stockMs: 900 } }, createOk: true, title: 'PB agent fixture two', expectedTitle: 'PB agent fixture two', quietMs: 30000, minQuietMs: 10000, markerPresent: false },
     g: { placement: { kind: 'client' }, reply: { ok: true, code: null }, createPageArrived: true, credential: 'device-key' },
     h: { closed: true, listedAfter: false },
-    j: { bound: true, listed: true, currentBefore: 'u', currentAfterCreate: 'u', userFocusBefore: 'true', userFocusAfter: 'true', activationSeen: true, boundWidget: 'w2', currentAfterActivation: 'w2', revealMs: 140 },
+    j: { bound: true, listed: true, userWidget: 'u', currentBefore: 'u', currentAfterCreate: 'u', userFocusBefore: 'true', userFocusAfter: 'true', rowListed: true, rowActive: false, activationSeen: true, boundWidget: 'w2', currentAfterActivation: 'w2', revealMs: 140, webTabsBefore: 3, webTabsAfter: 3 },
     i: { agentWidgetsAfter: 0, reattached: true, oldListed: [] },
 };
 
@@ -612,6 +623,10 @@ const PLANTS = [
     ['tab-revealed-at-create', set('j', { currentAfterCreate: 'w2' }), 'a tab revealed at its own create'],
     ['activation-revealed-nothing', set('j', { currentAfterActivation: 'u', revealMs: null }), 'revealed nothing'],
     ['activation-detector-blind', set('j', { activationSeen: false, currentAfterActivation: 'w2', revealMs: 10 }), 'store activation not observed'],
+    ['user-tab-not-current', set('j', { currentBefore: null, currentAfterCreate: null }), "user tab was not the main area's current tab"],
+    ['no-store-row', set('j', { rowListed: false, rowActive: false }), 'no Orca store row'],
+    ['store-row-active-at-create', set('j', { rowActive: true }), 'store row was active at its create'],
+    ['second-tab-on-activation', set('j', { webTabsAfter: 4 }), 'changed the web tab count'],
     ['orca-pane-during-no-pane', set('k', { paneWidgetsAfter: 1 }), 'Orca-pane widget present'],
     ['no-web-tab-from-no-pane', set('k', { newTabs: 0, ms: null }), 'no web tab from the no-pane create'],
     ['stock-tab-not-unknown', set('d', { stockTab: 'not-agent-tab' }), 'the stock-window tab answered'],

@@ -124,7 +124,9 @@ export async function withBrowserSession({ log = () => {}, dpr = 1, home = null 
                     execFile(cliBin, [...args, '--json'], { env: cliEnv, cwd: ctx.repo, timeout: 90000, encoding: 'utf8' }, (_e, stdout) => resolve({ ...cliOutcome(stdout), t0, ms: Date.now() - t0 }));
                 }),
                 webTabs: () => ctx.probe(WEB_TABS),
-                currentId: () => ctx.probe(`const c = get('ApplicationShell').currentWidget; return c ? c.id : null;`),
+                // The main area's current tab (66-07): the focus tracker's currentWidget stays null when no Theia node takes
+                // DOM focus (a web tab's page is a chrome overlay), so it cannot see a tab brought forward.
+                currentId: () => ctx.probe(`const c = get('ApplicationShell').getCurrentWidget('main'); return c ? c.id : null;`),
                 tabOfPage: (pageId) => ctx.probe(`return get('OrcaBrowserPages').tabOf(${JSON.stringify(pageId)}) ?? null;`),
                 hostAttached: () => ctx.probe(`return await until(() => !!get('OrcaBrowserHost').session, 60000);`, 90000),
                 linkPresent: () => ctx.probe(`return !!globalThis[Symbol.for(${JSON.stringify(LINK_KEY)})];`),
