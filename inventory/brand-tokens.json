@@ -976,7 +976,7 @@
       "case_form": "title",
       "class": "coincidental",
       "target": "Orca",
-      "expected_count": 2322,
+      "expected_count": 2830,
       "expected_files": [
         ".claude/hooks/ledger-session-check.py",
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
@@ -1043,6 +1043,7 @@
         "scripts/generate-licensing.mjs",
         "scripts/generate.mjs",
         "scripts/lib/config-schema.json",
+        "scripts/lib/firefox-bidi.mjs",
         "scripts/lib/orca-artifacts.mjs",
         "scripts/lib/orca-browser-live.mjs",
         "scripts/lib/orca-offer-scan.mjs",
@@ -1050,6 +1051,7 @@
         "scripts/lib/orca-run.mjs",
         "scripts/lib/orca-shipped-packages.mjs",
         "scripts/lib/orca-tabs-live.mjs",
+        "scripts/lib/pb-relaunch.mjs",
         "scripts/orca-browser-parity.mjs",
         "scripts/rebase-orca.sh",
         "scripts/release-train.mjs",
@@ -1075,14 +1077,22 @@
         "scripts/verify-orca-browser-tools.mjs",
         "scripts/verify-orca-build-shape.mjs",
         "scripts/verify-orca-claude-sdk.mjs",
+        "scripts/verify-orca-credential-store-live.mjs",
+        "scripts/verify-orca-credential-store.mjs",
         "scripts/verify-orca-editor-routes.mjs",
+        "scripts/verify-orca-failure-classes.mjs",
+        "scripts/verify-orca-failure-page-live.mjs",
         "scripts/verify-orca-hidden-electron.mjs",
+        "scripts/verify-orca-landing-logo-live.mjs",
+        "scripts/verify-orca-landing-selectors.mjs",
         "scripts/verify-orca-mobile-protocol.mjs",
         "scripts/verify-orca-no-pb-add-project.mjs",
+        "scripts/verify-orca-offer-file.mjs",
         "scripts/verify-orca-offer-scan.mjs",
         "scripts/verify-orca-overlay.mjs",
         "scripts/verify-orca-packaged-live.mjs",
         "scripts/verify-orca-packaged-tree.mjs",
+        "scripts/verify-orca-pairing-containment.mjs",
         "scripts/verify-orca-pane-css-live.mjs",
         "scripts/verify-orca-pane-css.mjs",
         "scripts/verify-orca-pane-entry.mjs",
@@ -1103,6 +1113,8 @@
         "scripts/verify-release-shape.mjs",
         "scripts/verify-shell-error-contract.mjs",
         "scripts/verify-shell-error-copy.mjs",
+        "scripts/verify-sidecar-origin-gate-live.mjs",
+        "scripts/verify-sidecar-origin-gate.mjs",
         "scripts/verify-upstream-pins.mjs",
         "scripts/verify-uri-roundtrip.mjs",
         "scripts/verify-web-tab-bridge.mjs",
@@ -1121,6 +1133,9 @@
         "theia/extensions/orca-browser/src/common/orca-browser-abilities.ts",
         "theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts",
         "theia/extensions/orca-browser/src/common/orca-browser-tools.ts",
+        "theia/extensions/orca-panes/src/browser/failure/orca-failure-copy.ts",
+        "theia/extensions/orca-panes/src/browser/failure/orca-failure-page.tsx",
+        "theia/extensions/orca-panes/src/browser/failure/orca-hosting-status.ts",
         "theia/extensions/orca-panes/src/browser/orca-pane-bundle.ts",
         "theia/extensions/orca-panes/src/browser/orca-pane-observer.ts",
         "theia/extensions/orca-panes/src/browser/orca-pane-routes.ts",
@@ -1131,6 +1146,7 @@
         "theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-sync.ts",
         "theia/extensions/orca-panes/src/browser/side-panel/orca-side-view-widget.tsx",
         "theia/extensions/orca-panes/src/common/orca-panes-protocol.ts",
+        "theia/extensions/orca-panes/src/node/offer-file-policy.ts",
         "theia/extensions/orca-panes/src/node/orca-panes-backend-module.ts",
         "theia/extensions/orca-workspace/src/browser/orca-editor-routes.ts",
         "theia/extensions/orca-workspace/src/browser/orca-git-resource.ts",
@@ -1208,6 +1224,7 @@
         "scripts/generate-licensing.mjs",
         "scripts/generate.mjs",
         "scripts/lib/config-schema.json",
+        "scripts/lib/firefox-bidi.mjs",
         "scripts/lib/orca-artifacts.mjs",
         "scripts/lib/orca-browser-live.mjs",
         "scripts/lib/orca-offer-scan.mjs",
@@ -1215,6 +1232,7 @@
         "scripts/lib/orca-run.mjs",
         "scripts/lib/orca-shipped-packages.mjs",
         "scripts/lib/orca-tabs-live.mjs",
+        "scripts/lib/pb-relaunch.mjs",
         "scripts/orca-browser-parity.mjs",
         "scripts/rebase-orca.sh",
         "scripts/release-train.mjs",
@@ -1240,14 +1258,22 @@
         "scripts/verify-orca-browser-tools.mjs",
         "scripts/verify-orca-build-shape.mjs",
         "scripts/verify-orca-claude-sdk.mjs",
+        "scripts/verify-orca-credential-store-live.mjs",
+        "scripts/verify-orca-credential-store.mjs",
         "scripts/verify-orca-editor-routes.mjs",
+        "scripts/verify-orca-failure-classes.mjs",
+        "scripts/verify-orca-failure-page-live.mjs",
         "scripts/verify-orca-hidden-electron.mjs",
+        "scripts/verify-orca-landing-logo-live.mjs",
+        "scripts/verify-orca-landing-selectors.mjs",
         "scripts/verify-orca-mobile-protocol.mjs",
         "scripts/verify-orca-no-pb-add-project.mjs",
+        "scripts/verify-orca-offer-file.mjs",
         "scripts/verify-orca-offer-scan.mjs",
         "scripts/verify-orca-overlay.mjs",
         "scripts/verify-orca-packaged-live.mjs",
         "scripts/verify-orca-packaged-tree.mjs",
+        "scripts/verify-orca-pairing-containment.mjs",
         "scripts/verify-orca-pane-css-live.mjs",
         "scripts/verify-orca-pane-css.mjs",
         "scripts/verify-orca-pane-entry.mjs",
@@ -1268,6 +1294,8 @@
         "scripts/verify-release-shape.mjs",
         "scripts/verify-shell-error-contract.mjs",
         "scripts/verify-shell-error-copy.mjs",
+        "scripts/verify-sidecar-origin-gate-live.mjs",
+        "scripts/verify-sidecar-origin-gate.mjs",
         "scripts/verify-upstream-pins.mjs",
         "scripts/verify-uri-roundtrip.mjs",
         "scripts/verify-web-tab-bridge.mjs",
@@ -1286,6 +1314,9 @@
         "theia/extensions/orca-browser/src/common/orca-browser-abilities.ts",
         "theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts",
         "theia/extensions/orca-browser/src/common/orca-browser-tools.ts",
+        "theia/extensions/orca-panes/src/browser/failure/orca-failure-copy.ts",
+        "theia/extensions/orca-panes/src/browser/failure/orca-failure-page.tsx",
+        "theia/extensions/orca-panes/src/browser/failure/orca-hosting-status.ts",
         "theia/extensions/orca-panes/src/browser/orca-pane-bundle.ts",
         "theia/extensions/orca-panes/src/browser/orca-pane-observer.ts",
         "theia/extensions/orca-panes/src/browser/orca-pane-routes.ts",
@@ -1296,6 +1327,7 @@
         "theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-sync.ts",
         "theia/extensions/orca-panes/src/browser/side-panel/orca-side-view-widget.tsx",
         "theia/extensions/orca-panes/src/common/orca-panes-protocol.ts",
+        "theia/extensions/orca-panes/src/node/offer-file-policy.ts",
         "theia/extensions/orca-panes/src/node/orca-panes-backend-module.ts",
         "theia/extensions/orca-workspace/src/browser/orca-editor-routes.ts",
         "theia/extensions/orca-workspace/src/browser/orca-git-resource.ts",
@@ -1307,14 +1339,14 @@
         "theia/extensions/tab-uris/src/browser/web-tab.ts",
         "website-staging/privacy.html"
       ],
-      "reason": "P60-R2 (OVL-04, plan 60-04): the product name of the third-party agent workspace PowerBrowser builds from source (scripts/fetch-orca.sh, scripts/build-orca.sh) and hosts as a mode. Evidence: .claude/hooks/ledger-session-check.py:200, .claude/skills/spike-findings-Power-Browser/SKILL.md:3, .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:1 and 16 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 62 (plan 62-03) re-measured this row on the merged tree after the overlay gate and OrcaService lanes, adding docs/REBRANDING.md, orca-overlay/seams.json, powerbrowser/INTERNAL-APIS.md, powerbrowser/endpoint-allowlist.json, powerbrowser/shell/OrcaEnv.sys.mjs, powerbrowser/shell/OrcaService.sys.mjs, powerbrowser/shell/PowerBrowserAPI.sys.mjs, powerbrowser/shell/jar.mn, powerbrowser/shell/powerbrowser-sidecar.js, powerbrowser/shell/powerbrowser.js, scripts/verify-orca-hidden-electron.mjs, scripts/verify-orca-overlay.mjs, scripts/verify-orca-service-live.mjs, scripts/verify-orca-service.mjs, scripts/verify-shell-error-contract.mjs. COUNT MOVED 313 -> 381 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 004, adding .claude/skills/spike-findings-Power-Browser/references/orca-pane-hosting.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/results.md). COUNT MOVED 93 -> 103 (plan 61-02, BRW-01, P61-15: scripts/orca-browser-parity.mjs and its two verify-platform.sh rows) COUNT MOVED 103 -> 105 (plan 61-02 Task 2, BRW-01, P61-15: component users and tripwires in scripts/orca-browser-parity.mjs and its verify-platform.sh comments) COUNT MOVED 381 -> 393 (plan 61-04, P61-15: re-measured on the merged tree after the p61-02 lane merge, adding scripts/orca-browser-parity.mjs). COUNT MOVED 393 -> 497 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 005 and 006, adding .claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md, .claude/skills/spike-findings-Power-Browser/references/orca-live-sharing.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/README.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/README.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/results.md). Phase 63 (plan 63-04) re-measured this row on the merged tree after lanes p63-06 and p63-03 and the orca-agents wiring, adding powerbrowser/shell/TheiaService.sys.mjs, scripts/verify-orca-agent-hooks.mjs, scripts/verify-orca-agent-status-live.mjs, scripts/verify-orca-bridge-dir.mjs, theia/extensions/orca-agents/bin/claude-wrapper.mjs, theia/extensions/orca-agents/src/browser/orca-agents-frontend-module.ts, theia/extensions/orca-agents/src/common/orca-agents-protocol.ts, theia/extensions/orca-agents/src/node/orca-agents-backend-module.ts. Phase 68 (plan 68-06) re-measured this row on the merged tree after lanes p68-03, p68-04, p68-01, p68-10, p68-07, p68-09 and p68-02, adding .github/workflows/rebase-orca.yml, .github/workflows/release-train.yml, .github/workflows/release.yml, LICENSING.md, THIRD-PARTY-NOTICES.txt, bundled-extensions/claude-agent-sdk/README.md, bundled-extensions/claude-agent-sdk/package.json, docs/RELEASING.md, powerbrowser/packaging/package-linux.sh, powerbrowser/packaging/package-macos.sh, powerbrowser/packaging/package-windows.sh, scripts/detect-upstreams.mjs, scripts/export-orca-seam-pr.mjs, scripts/generate-licensing.mjs, scripts/lib/orca-artifacts.mjs, scripts/lib/orca-shipped-packages.mjs, scripts/rebase-orca.sh, scripts/release-train.mjs, scripts/verify-build-orca-portable.mjs, scripts/verify-build-windows-shape.mjs, scripts/verify-bundled-extensions.mjs, scripts/verify-flathub-manifest.mjs, scripts/verify-licence-allowlist.mjs, scripts/verify-orca-claude-sdk.mjs, scripts/verify-orca-mobile-protocol.mjs, scripts/verify-orca-packaged-live.mjs, scripts/verify-orca-packaged-tree.mjs, scripts/verify-package-target-natives.mjs, scripts/verify-release-shape.mjs, scripts/verify-upstream-pins.mjs, scripts/verify-win-sign-chain.mjs, scripts/verify-workflows.mjs, scripts/win-sign-list.mjs. COUNT MOVED 637 -> 1064. Phase 64 (plan 64-05) re-measured this row over the merged tree, adding docs/URI-SCHEMES.md, orca-overlay/files/pb-css-scope.mjs, orca-overlay/files/src/renderer/src/pb/pb-pane-mount.tsx, orca-overlay/files/vite.pb-panes.config.ts, scripts/build-orca-panes.sh, scripts/lib/orca-pane-harness.mjs, scripts/lib/orca-tabs-live.mjs, scripts/verify-mode-switch-tabs-live.mjs, scripts/verify-orca-pane-css-live.mjs, scripts/verify-orca-pane-css.mjs, scripts/verify-orca-pane-entry.mjs, scripts/verify-orca-pane-routes.mjs, scripts/verify-orca-pane-standalone-live.mjs, scripts/verify-orca-tabs-live.mjs, scripts/verify-orca-terminal-keys-live.mjs, scripts/verify-orca-terminal-keys.mjs, scripts/verify-uri-roundtrip.mjs, theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx, theia/extensions/modes/src/browser/mode-descriptors.ts, theia/extensions/orca-panes/src/browser/orca-pane-bundle.ts, theia/extensions/orca-panes/src/browser/orca-pane-observer.ts, theia/extensions/orca-panes/src/browser/orca-pane-routes.ts, theia/extensions/orca-panes/src/browser/orca-pane-widget.tsx, theia/extensions/orca-panes/src/browser/orca-panes-frontend-module.ts, theia/extensions/orca-panes/src/common/orca-panes-protocol.ts, theia/extensions/orca-panes/src/node/orca-panes-backend-module.ts, theia/extensions/tab-uris/src/browser/orca-scheme-coverage.ts. Phase 64 (plan 64-06) re-measured this row over the 64-06 tree. Phase 65 (plan 65-05) re-measured this row over the merged Phase 65 tree with this scanner's own matcher: count 1591 -> 2108; files added: orca-overlay/files/src/renderer/src/pb/pb-session-pairing.ts, orca-overlay/files/src/renderer/src/pb/pb-side-mounts.tsx, orca-overlay/files/src/renderer/src/pb/pb-workspace-api.ts, scripts/lib/orca-offer-scan.mjs, scripts/verify-orca-add-project-live.mjs, scripts/verify-orca-editor-routes.mjs, scripts/verify-orca-no-pb-add-project.mjs, scripts/verify-orca-offer-scan.mjs, scripts/verify-orca-relaunch-restore-live.mjs, scripts/verify-orca-side-panel-live.mjs, scripts/verify-orca-workspace-live.mjs, theia/extensions/modes/src/browser/mode-service.ts, theia/extensions/orca-panes/src/browser/restore/orca-pane-name-map.ts, theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-module.ts, theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-sync.ts, theia/extensions/orca-panes/src/browser/side-panel/orca-side-view-widget.tsx, theia/extensions/orca-workspace/src/browser/orca-editor-routes.ts, theia/extensions/orca-workspace/src/browser/orca-git-resource.ts, theia/extensions/orca-workspace/src/browser/orca-root-sync.ts, theia/extensions/orca-workspace/src/browser/orca-workspace-frontend-module.ts, theia/extensions/orca-workspace/src/common/orca-git-protocol.ts, theia/extensions/orca-workspace/src/node/orca-workspace-backend-module.ts. Phase 66 (plan 66-06) re-measured this row on the merged tree with this scanner's own matcher, 2108 -> 2305, adding orca-overlay/files/src/renderer/src/pb/browser-host/pb-browser-host-link.ts, orca-overlay/files/src/renderer/src/pb/browser-host/pb-browser-host.ts, orca-overlay/files/vite.pb-browser-host.config.ts, powerbrowser/shell/GroupActorChild.sys.mjs, scripts/build-orca-browser-host.sh, scripts/gen-orca-snapshot-fixtures.mjs, scripts/lib/orca-browser-live.mjs, scripts/verify-ext-tab-host-scope.mjs, scripts/verify-no-remote-agent-port-live.mjs, scripts/verify-orca-agent-mark-live.mjs, scripts/verify-orca-browser-abilities.mjs, scripts/verify-orca-browser-agent-live.mjs, scripts/verify-orca-browser-entry-points.mjs, scripts/verify-orca-browser-host-bundle.mjs, scripts/verify-orca-browser-snapshot-live.mjs, scripts/verify-orca-browser-tab-scope.mjs, scripts/verify-orca-browser-tools.mjs, scripts/verify-shell-error-copy.mjs, scripts/verify-web-tab-bridge.mjs, theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts, theia/extensions/orca-browser/src/browser/orca-browser-frontend-module.ts, theia/extensions/orca-browser/src/common/orca-browser-abilities.ts, theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts, theia/extensions/orca-browser/src/common/orca-browser-tools.ts, theia/extensions/tab-uris/src/browser/web-tab.ts, website-staging/privacy.html."
+      "reason": "P60-R2 (OVL-04, plan 60-04): the product name of the third-party agent workspace PowerBrowser builds from source (scripts/fetch-orca.sh, scripts/build-orca.sh) and hosts as a mode. Evidence: .claude/hooks/ledger-session-check.py:200, .claude/skills/spike-findings-Power-Browser/SKILL.md:3, .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:1 and 16 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 62 (plan 62-03) re-measured this row on the merged tree after the overlay gate and OrcaService lanes, adding docs/REBRANDING.md, orca-overlay/seams.json, powerbrowser/INTERNAL-APIS.md, powerbrowser/endpoint-allowlist.json, powerbrowser/shell/OrcaEnv.sys.mjs, powerbrowser/shell/OrcaService.sys.mjs, powerbrowser/shell/PowerBrowserAPI.sys.mjs, powerbrowser/shell/jar.mn, powerbrowser/shell/powerbrowser-sidecar.js, powerbrowser/shell/powerbrowser.js, scripts/verify-orca-hidden-electron.mjs, scripts/verify-orca-overlay.mjs, scripts/verify-orca-service-live.mjs, scripts/verify-orca-service.mjs, scripts/verify-shell-error-contract.mjs. COUNT MOVED 313 -> 381 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 004, adding .claude/skills/spike-findings-Power-Browser/references/orca-pane-hosting.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/results.md). COUNT MOVED 93 -> 103 (plan 61-02, BRW-01, P61-15: scripts/orca-browser-parity.mjs and its two verify-platform.sh rows) COUNT MOVED 103 -> 105 (plan 61-02 Task 2, BRW-01, P61-15: component users and tripwires in scripts/orca-browser-parity.mjs and its verify-platform.sh comments) COUNT MOVED 381 -> 393 (plan 61-04, P61-15: re-measured on the merged tree after the p61-02 lane merge, adding scripts/orca-browser-parity.mjs). COUNT MOVED 393 -> 497 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 005 and 006, adding .claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md, .claude/skills/spike-findings-Power-Browser/references/orca-live-sharing.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/README.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/README.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/results.md). Phase 63 (plan 63-04) re-measured this row on the merged tree after lanes p63-06 and p63-03 and the orca-agents wiring, adding powerbrowser/shell/TheiaService.sys.mjs, scripts/verify-orca-agent-hooks.mjs, scripts/verify-orca-agent-status-live.mjs, scripts/verify-orca-bridge-dir.mjs, theia/extensions/orca-agents/bin/claude-wrapper.mjs, theia/extensions/orca-agents/src/browser/orca-agents-frontend-module.ts, theia/extensions/orca-agents/src/common/orca-agents-protocol.ts, theia/extensions/orca-agents/src/node/orca-agents-backend-module.ts. Phase 68 (plan 68-06) re-measured this row on the merged tree after lanes p68-03, p68-04, p68-01, p68-10, p68-07, p68-09 and p68-02, adding .github/workflows/rebase-orca.yml, .github/workflows/release-train.yml, .github/workflows/release.yml, LICENSING.md, THIRD-PARTY-NOTICES.txt, bundled-extensions/claude-agent-sdk/README.md, bundled-extensions/claude-agent-sdk/package.json, docs/RELEASING.md, powerbrowser/packaging/package-linux.sh, powerbrowser/packaging/package-macos.sh, powerbrowser/packaging/package-windows.sh, scripts/detect-upstreams.mjs, scripts/export-orca-seam-pr.mjs, scripts/generate-licensing.mjs, scripts/lib/orca-artifacts.mjs, scripts/lib/orca-shipped-packages.mjs, scripts/rebase-orca.sh, scripts/release-train.mjs, scripts/verify-build-orca-portable.mjs, scripts/verify-build-windows-shape.mjs, scripts/verify-bundled-extensions.mjs, scripts/verify-flathub-manifest.mjs, scripts/verify-licence-allowlist.mjs, scripts/verify-orca-claude-sdk.mjs, scripts/verify-orca-mobile-protocol.mjs, scripts/verify-orca-packaged-live.mjs, scripts/verify-orca-packaged-tree.mjs, scripts/verify-package-target-natives.mjs, scripts/verify-release-shape.mjs, scripts/verify-upstream-pins.mjs, scripts/verify-win-sign-chain.mjs, scripts/verify-workflows.mjs, scripts/win-sign-list.mjs. COUNT MOVED 637 -> 1064. Phase 64 (plan 64-05) re-measured this row over the merged tree, adding docs/URI-SCHEMES.md, orca-overlay/files/pb-css-scope.mjs, orca-overlay/files/src/renderer/src/pb/pb-pane-mount.tsx, orca-overlay/files/vite.pb-panes.config.ts, scripts/build-orca-panes.sh, scripts/lib/orca-pane-harness.mjs, scripts/lib/orca-tabs-live.mjs, scripts/verify-mode-switch-tabs-live.mjs, scripts/verify-orca-pane-css-live.mjs, scripts/verify-orca-pane-css.mjs, scripts/verify-orca-pane-entry.mjs, scripts/verify-orca-pane-routes.mjs, scripts/verify-orca-pane-standalone-live.mjs, scripts/verify-orca-tabs-live.mjs, scripts/verify-orca-terminal-keys-live.mjs, scripts/verify-orca-terminal-keys.mjs, scripts/verify-uri-roundtrip.mjs, theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx, theia/extensions/modes/src/browser/mode-descriptors.ts, theia/extensions/orca-panes/src/browser/orca-pane-bundle.ts, theia/extensions/orca-panes/src/browser/orca-pane-observer.ts, theia/extensions/orca-panes/src/browser/orca-pane-routes.ts, theia/extensions/orca-panes/src/browser/orca-pane-widget.tsx, theia/extensions/orca-panes/src/browser/orca-panes-frontend-module.ts, theia/extensions/orca-panes/src/common/orca-panes-protocol.ts, theia/extensions/orca-panes/src/node/orca-panes-backend-module.ts, theia/extensions/tab-uris/src/browser/orca-scheme-coverage.ts. Phase 64 (plan 64-06) re-measured this row over the 64-06 tree. Phase 65 (plan 65-05) re-measured this row over the merged Phase 65 tree with this scanner's own matcher: count 1591 -> 2108; files added: orca-overlay/files/src/renderer/src/pb/pb-session-pairing.ts, orca-overlay/files/src/renderer/src/pb/pb-side-mounts.tsx, orca-overlay/files/src/renderer/src/pb/pb-workspace-api.ts, scripts/lib/orca-offer-scan.mjs, scripts/verify-orca-add-project-live.mjs, scripts/verify-orca-editor-routes.mjs, scripts/verify-orca-no-pb-add-project.mjs, scripts/verify-orca-offer-scan.mjs, scripts/verify-orca-relaunch-restore-live.mjs, scripts/verify-orca-side-panel-live.mjs, scripts/verify-orca-workspace-live.mjs, theia/extensions/modes/src/browser/mode-service.ts, theia/extensions/orca-panes/src/browser/restore/orca-pane-name-map.ts, theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-module.ts, theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-sync.ts, theia/extensions/orca-panes/src/browser/side-panel/orca-side-view-widget.tsx, theia/extensions/orca-workspace/src/browser/orca-editor-routes.ts, theia/extensions/orca-workspace/src/browser/orca-git-resource.ts, theia/extensions/orca-workspace/src/browser/orca-root-sync.ts, theia/extensions/orca-workspace/src/browser/orca-workspace-frontend-module.ts, theia/extensions/orca-workspace/src/common/orca-git-protocol.ts, theia/extensions/orca-workspace/src/node/orca-workspace-backend-module.ts. Phase 66 (plan 66-06) re-measured this row on the merged tree with this scanner's own matcher, 2108 -> 2305, adding orca-overlay/files/src/renderer/src/pb/browser-host/pb-browser-host-link.ts, orca-overlay/files/src/renderer/src/pb/browser-host/pb-browser-host.ts, orca-overlay/files/vite.pb-browser-host.config.ts, powerbrowser/shell/GroupActorChild.sys.mjs, scripts/build-orca-browser-host.sh, scripts/gen-orca-snapshot-fixtures.mjs, scripts/lib/orca-browser-live.mjs, scripts/verify-ext-tab-host-scope.mjs, scripts/verify-no-remote-agent-port-live.mjs, scripts/verify-orca-agent-mark-live.mjs, scripts/verify-orca-browser-abilities.mjs, scripts/verify-orca-browser-agent-live.mjs, scripts/verify-orca-browser-entry-points.mjs, scripts/verify-orca-browser-host-bundle.mjs, scripts/verify-orca-browser-snapshot-live.mjs, scripts/verify-orca-browser-tab-scope.mjs, scripts/verify-orca-browser-tools.mjs, scripts/verify-shell-error-copy.mjs, scripts/verify-web-tab-bridge.mjs, theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts, theia/extensions/orca-browser/src/browser/orca-browser-frontend-module.ts, theia/extensions/orca-browser/src/common/orca-browser-abilities.ts, theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts, theia/extensions/orca-browser/src/common/orca-browser-tools.ts, theia/extensions/tab-uris/src/browser/web-tab.ts, website-staging/privacy.html. Phase 67 (plan 67-06) re-measured this row on the merged Phase 67 tree with this scanner's own matcher, adding scripts/lib/firefox-bidi.mjs, scripts/lib/pb-relaunch.mjs, scripts/verify-orca-credential-store-live.mjs, scripts/verify-orca-credential-store.mjs, scripts/verify-orca-failure-classes.mjs, scripts/verify-orca-failure-page-live.mjs, scripts/verify-orca-landing-logo-live.mjs, scripts/verify-orca-landing-selectors.mjs, scripts/verify-orca-offer-file.mjs, scripts/verify-orca-pairing-containment.mjs, scripts/verify-sidecar-origin-gate-live.mjs, scripts/verify-sidecar-origin-gate.mjs, theia/extensions/orca-panes/src/browser/failure/orca-failure-copy.ts, theia/extensions/orca-panes/src/browser/failure/orca-failure-page.tsx, theia/extensions/orca-panes/src/browser/failure/orca-hosting-status.ts, theia/extensions/orca-panes/src/node/offer-file-policy.ts."
     },
     {
       "token": "orca",
       "case_form": "lower",
       "class": "coincidental",
       "target": "orca",
-      "expected_count": 4752,
+      "expected_count": 5327,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md",
@@ -1375,6 +1407,8 @@
         "scripts/generate-licensing.mjs",
         "scripts/generate.mjs",
         "scripts/lib/config-schema.json",
+        "scripts/lib/firefox-bidi.mjs",
+        "scripts/lib/mozlz4.mjs",
         "scripts/lib/orca-artifacts.mjs",
         "scripts/lib/orca-browser-live.mjs",
         "scripts/lib/orca-offer-scan.mjs",
@@ -1407,14 +1441,22 @@
         "scripts/verify-orca-browser-tools.mjs",
         "scripts/verify-orca-build-shape.mjs",
         "scripts/verify-orca-claude-sdk.mjs",
+        "scripts/verify-orca-credential-store-live.mjs",
+        "scripts/verify-orca-credential-store.mjs",
         "scripts/verify-orca-editor-routes.mjs",
+        "scripts/verify-orca-failure-classes.mjs",
+        "scripts/verify-orca-failure-page-live.mjs",
         "scripts/verify-orca-hidden-electron.mjs",
+        "scripts/verify-orca-landing-logo-live.mjs",
+        "scripts/verify-orca-landing-selectors.mjs",
         "scripts/verify-orca-mobile-protocol.mjs",
         "scripts/verify-orca-no-pb-add-project.mjs",
+        "scripts/verify-orca-offer-file.mjs",
         "scripts/verify-orca-offer-scan.mjs",
         "scripts/verify-orca-overlay.mjs",
         "scripts/verify-orca-packaged-live.mjs",
         "scripts/verify-orca-packaged-tree.mjs",
+        "scripts/verify-orca-pairing-containment.mjs",
         "scripts/verify-orca-pane-css-live.mjs",
         "scripts/verify-orca-pane-css.mjs",
         "scripts/verify-orca-pane-entry.mjs",
@@ -1434,6 +1476,9 @@
         "scripts/verify-platform.sh",
         "scripts/verify-release-shape.mjs",
         "scripts/verify-shell-error-contract.mjs",
+        "scripts/verify-shell-error-copy.mjs",
+        "scripts/verify-sidecar-origin-gate-live.mjs",
+        "scripts/verify-sidecar-origin-gate.mjs",
         "scripts/verify-upstream-pins.mjs",
         "scripts/verify-uri-roundtrip.mjs",
         "scripts/verify-web-tab-bridge.mjs",
@@ -1459,6 +1504,9 @@
         "theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts",
         "theia/extensions/orca-browser/src/common/orca-browser-tools.ts",
         "theia/extensions/orca-panes/package.json",
+        "theia/extensions/orca-panes/src/browser/failure/orca-failure-copy.ts",
+        "theia/extensions/orca-panes/src/browser/failure/orca-failure-page.tsx",
+        "theia/extensions/orca-panes/src/browser/failure/orca-hosting-status.ts",
         "theia/extensions/orca-panes/src/browser/orca-pane-bundle.ts",
         "theia/extensions/orca-panes/src/browser/orca-pane-observer.ts",
         "theia/extensions/orca-panes/src/browser/orca-pane-routes.ts",
@@ -1469,6 +1517,7 @@
         "theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-sync.ts",
         "theia/extensions/orca-panes/src/browser/side-panel/orca-side-view-widget.tsx",
         "theia/extensions/orca-panes/src/common/orca-panes-protocol.ts",
+        "theia/extensions/orca-panes/src/node/offer-file-policy.ts",
         "theia/extensions/orca-panes/src/node/orca-panes-backend-module.ts",
         "theia/extensions/orca-workspace/package.json",
         "theia/extensions/orca-workspace/src/browser/orca-editor-routes.ts",
@@ -1481,7 +1530,8 @@
         "theia/extensions/tab-uris/src/browser/tab-uri-registry.ts",
         "theia/extensions/tab-uris/src/browser/view-factory-table.ts",
         "theia/extensions/tab-uris/src/browser/web-tab.ts",
-        "theia/package.json"
+        "theia/package.json",
+        "website-staging/privacy.html"
       ],
       "only_in": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
@@ -1543,6 +1593,8 @@
         "scripts/generate-licensing.mjs",
         "scripts/generate.mjs",
         "scripts/lib/config-schema.json",
+        "scripts/lib/firefox-bidi.mjs",
+        "scripts/lib/mozlz4.mjs",
         "scripts/lib/orca-artifacts.mjs",
         "scripts/lib/orca-browser-live.mjs",
         "scripts/lib/orca-offer-scan.mjs",
@@ -1575,14 +1627,22 @@
         "scripts/verify-orca-browser-tools.mjs",
         "scripts/verify-orca-build-shape.mjs",
         "scripts/verify-orca-claude-sdk.mjs",
+        "scripts/verify-orca-credential-store-live.mjs",
+        "scripts/verify-orca-credential-store.mjs",
         "scripts/verify-orca-editor-routes.mjs",
+        "scripts/verify-orca-failure-classes.mjs",
+        "scripts/verify-orca-failure-page-live.mjs",
         "scripts/verify-orca-hidden-electron.mjs",
+        "scripts/verify-orca-landing-logo-live.mjs",
+        "scripts/verify-orca-landing-selectors.mjs",
         "scripts/verify-orca-mobile-protocol.mjs",
         "scripts/verify-orca-no-pb-add-project.mjs",
+        "scripts/verify-orca-offer-file.mjs",
         "scripts/verify-orca-offer-scan.mjs",
         "scripts/verify-orca-overlay.mjs",
         "scripts/verify-orca-packaged-live.mjs",
         "scripts/verify-orca-packaged-tree.mjs",
+        "scripts/verify-orca-pairing-containment.mjs",
         "scripts/verify-orca-pane-css-live.mjs",
         "scripts/verify-orca-pane-css.mjs",
         "scripts/verify-orca-pane-entry.mjs",
@@ -1602,6 +1662,9 @@
         "scripts/verify-platform.sh",
         "scripts/verify-release-shape.mjs",
         "scripts/verify-shell-error-contract.mjs",
+        "scripts/verify-shell-error-copy.mjs",
+        "scripts/verify-sidecar-origin-gate-live.mjs",
+        "scripts/verify-sidecar-origin-gate.mjs",
         "scripts/verify-upstream-pins.mjs",
         "scripts/verify-uri-roundtrip.mjs",
         "scripts/verify-web-tab-bridge.mjs",
@@ -1627,6 +1690,9 @@
         "theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts",
         "theia/extensions/orca-browser/src/common/orca-browser-tools.ts",
         "theia/extensions/orca-panes/package.json",
+        "theia/extensions/orca-panes/src/browser/failure/orca-failure-copy.ts",
+        "theia/extensions/orca-panes/src/browser/failure/orca-failure-page.tsx",
+        "theia/extensions/orca-panes/src/browser/failure/orca-hosting-status.ts",
         "theia/extensions/orca-panes/src/browser/orca-pane-bundle.ts",
         "theia/extensions/orca-panes/src/browser/orca-pane-observer.ts",
         "theia/extensions/orca-panes/src/browser/orca-pane-routes.ts",
@@ -1637,6 +1703,7 @@
         "theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-sync.ts",
         "theia/extensions/orca-panes/src/browser/side-panel/orca-side-view-widget.tsx",
         "theia/extensions/orca-panes/src/common/orca-panes-protocol.ts",
+        "theia/extensions/orca-panes/src/node/offer-file-policy.ts",
         "theia/extensions/orca-panes/src/node/orca-panes-backend-module.ts",
         "theia/extensions/orca-workspace/package.json",
         "theia/extensions/orca-workspace/src/browser/orca-editor-routes.ts",
@@ -1649,16 +1716,17 @@
         "theia/extensions/tab-uris/src/browser/tab-uri-registry.ts",
         "theia/extensions/tab-uris/src/browser/view-factory-table.ts",
         "theia/extensions/tab-uris/src/browser/web-tab.ts",
-        "theia/package.json"
+        "theia/package.json",
+        "website-staging/privacy.html"
       ],
-      "reason": "P60-R2 (OVL-04, plan 60-04): the tree path orca/, the config keys upstreams.orca_tag / orca_commit, the devShell name, script and row names (fetch-orca, orca-pin, orca-run) and the workstream path .planning/workstreams/orca/. Evidence: .claude/skills/spike-findings-Power-Browser/SKILL.md:15, .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:4, .claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md:3 and 17 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 62 (plan 62-03) re-measured this row on the merged tree after the overlay gate and OrcaService lanes, adding powerbrowser/INTERNAL-APIS.md, powerbrowser/endpoint-allowlist.json, powerbrowser/shell/OrcaEnv.sys.mjs, powerbrowser/shell/OrcaService.sys.mjs, powerbrowser/shell/powerbrowser-sidecar.js, scripts/verify-orca-hidden-electron.mjs, scripts/verify-orca-overlay.mjs, scripts/verify-orca-service-live.mjs, scripts/verify-orca-service.mjs, scripts/verify-shell-error-contract.mjs. COUNT MOVED 797 -> 861 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 004, adding .claude/skills/spike-findings-Power-Browser/references/orca-pane-hosting.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/results.md). COUNT MOVED 420 -> 452 (plan 61-02, BRW-01, P61-15: scripts/orca-browser-parity.mjs and its two verify-platform.sh rows) COUNT MOVED 452 -> 466 (plan 61-02 Task 2, BRW-01, P61-15: component users and tripwires in scripts/orca-browser-parity.mjs and its verify-platform.sh comments) COUNT MOVED 861 -> 907 (plan 61-04, P61-15: re-measured on the merged tree after the p61-02 lane merge, adding scripts/orca-browser-parity.mjs). COUNT MOVED 907 -> 1050 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 005 and 006, adding .claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md, .claude/skills/spike-findings-Power-Browser/references/orca-live-sharing.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/README.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/README.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/results.md). Phase 63 (plan 63-04) re-measured this row on the merged tree after lanes p63-06 and p63-03 and the orca-agents wiring, adding powerbrowser/shell/TheiaService.sys.mjs, scripts/verify-orca-agent-hooks.mjs, scripts/verify-orca-agent-status-live.mjs, scripts/verify-orca-bridge-dir.mjs, theia/applications/browser/package.json, theia/extensions/orca-agents/bin/claude-wrapper.mjs, theia/extensions/orca-agents/package.json, theia/extensions/orca-agents/src/browser/orca-agents-frontend-module.ts, theia/extensions/orca-agents/src/common/orca-agents-protocol.ts, theia/extensions/orca-agents/src/node/claude-wrapper-launcher.ts, theia/extensions/orca-agents/src/node/orca-agents-backend-module.ts, theia/package.json. Phase 68 (plan 68-06) re-measured this row on the merged tree after lanes p68-03, p68-04, p68-01, p68-10, p68-07, p68-09 and p68-02, adding .github/workflows/rebase-orca.yml, .github/workflows/release-train.yml, .github/workflows/release.yml, LICENSING.md, THIRD-PARTY-NOTICES.txt, docs/RELEASING.md, powerbrowser/packaging/package-linux.sh, powerbrowser/packaging/package-macos.sh, powerbrowser/packaging/package-windows.sh, scripts/detect-upstreams.mjs, scripts/export-orca-seam-pr.mjs, scripts/generate-licensing.mjs, scripts/lib/orca-artifacts.mjs, scripts/lib/orca-shipped-packages.mjs, scripts/rebase-orca.sh, scripts/release-train.mjs, scripts/verify-build-orca-portable.mjs, scripts/verify-build-windows-shape.mjs, scripts/verify-bundled-extensions.mjs, scripts/verify-licence-allowlist.mjs, scripts/verify-orca-claude-sdk.mjs, scripts/verify-orca-mobile-protocol.mjs, scripts/verify-orca-packaged-live.mjs, scripts/verify-orca-packaged-tree.mjs, scripts/verify-package-target-natives.mjs, scripts/verify-release-shape.mjs, scripts/verify-upstream-pins.mjs, scripts/verify-workflows.mjs, scripts/win-sign-list.mjs. COUNT MOVED 1287 -> 2667 (2662 after the lane merges; +5 from the 68-06 fix comment in scripts/rebase-orca.sh and the three 68-06 exclusion rows in scripts/verify-platform.sh). Phase 64 (plan 64-05) re-measured this row over the merged tree, adding docs/URI-SCHEMES.md, orca-overlay/files/pb-css-scope.mjs, orca-overlay/files/src/renderer/src/pb/pb-pane-mount.tsx, orca-overlay/files/vite.pb-panes.config.ts, scripts/build-orca-panes.sh, scripts/lib/orca-pane-harness.mjs, scripts/lib/orca-tabs-live.mjs, scripts/verify-mode-switch-tabs-live.mjs, scripts/verify-mode-toggle-commands.mjs, scripts/verify-orca-pane-css-live.mjs, scripts/verify-orca-pane-css.mjs, scripts/verify-orca-pane-entry.mjs, scripts/verify-orca-pane-routes.mjs, scripts/verify-orca-pane-standalone-live.mjs, scripts/verify-orca-tabs-live.mjs, scripts/verify-orca-terminal-keys-live.mjs, scripts/verify-orca-terminal-keys.mjs, scripts/verify-uri-roundtrip.mjs, theia/extensions/chrome-bar/src/browser/address-bar/address-bar-mode-table.ts, theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx, theia/extensions/chrome-bar/src/browser/chrome-bar.css, theia/extensions/modes/src/browser/mode-descriptors.ts, theia/extensions/modes/src/browser/mode-service.ts, theia/extensions/orca-panes/package.json, theia/extensions/orca-panes/src/browser/orca-pane-bundle.ts, theia/extensions/orca-panes/src/browser/orca-pane-observer.ts, theia/extensions/orca-panes/src/browser/orca-pane-routes.ts, theia/extensions/orca-panes/src/browser/orca-pane-widget.tsx, theia/extensions/orca-panes/src/browser/orca-panes-frontend-module.ts, theia/extensions/orca-panes/src/common/orca-panes-protocol.ts, theia/extensions/orca-panes/src/node/orca-panes-backend-module.ts, theia/extensions/tab-uris/src/browser/orca-scheme-coverage.ts, theia/extensions/tab-uris/src/browser/tab-uri-registry.ts. Phase 64 (plan 64-06) re-measured this row over the 64-06 tree. Phase 65 (plan 65-05) re-measured this row over the merged Phase 65 tree with this scanner's own matcher: count 3582 -> 4199; files added: orca-overlay/files/src/renderer/src/pb/pb-session-pairing.ts, orca-overlay/files/src/renderer/src/pb/pb-side-mounts.tsx, orca-overlay/files/src/renderer/src/pb/pb-workspace-api.ts, scripts/lib/orca-offer-scan.mjs, scripts/verify-backend-env-readers.mjs, scripts/verify-orca-add-project-live.mjs, scripts/verify-orca-editor-routes.mjs, scripts/verify-orca-no-pb-add-project.mjs, scripts/verify-orca-offer-scan.mjs, scripts/verify-orca-relaunch-restore-live.mjs, scripts/verify-orca-side-panel-live.mjs, scripts/verify-orca-workspace-live.mjs, theia/extensions/modes/src/browser/setups-service.ts, theia/extensions/orca-panes/src/browser/restore/orca-pane-name-map.ts, theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-module.ts, theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-sync.ts, theia/extensions/orca-panes/src/browser/side-panel/orca-side-view-widget.tsx, theia/extensions/orca-workspace/package.json, theia/extensions/orca-workspace/src/browser/orca-editor-routes.ts, theia/extensions/orca-workspace/src/browser/orca-git-resource.ts, theia/extensions/orca-workspace/src/browser/orca-root-sync.ts, theia/extensions/orca-workspace/src/browser/orca-workspace-frontend-module.ts, theia/extensions/orca-workspace/src/common/orca-git-protocol.ts, theia/extensions/orca-workspace/src/node/orca-workspace-backend-module.ts, theia/extensions/tab-uris/src/browser/view-factory-table.ts. Phase 66 (plan 66-06) re-measured this row on the merged tree with this scanner's own matcher, 4199 -> 4740, adding orca-overlay/files/src/renderer/src/pb/browser-host/pb-browser-host-link.ts, orca-overlay/files/src/renderer/src/pb/browser-host/pb-browser-host.ts, orca-overlay/files/vite.pb-browser-host.config.ts, powerbrowser/shell/GroupActorChild.sys.mjs, powerbrowser/shell/PowerBrowserAPI.sys.mjs, scripts/build-orca-browser-host.sh, scripts/gen-orca-snapshot-fixtures.mjs, scripts/lib/orca-browser-live.mjs, scripts/verify-no-remote-agent-port-live.mjs, scripts/verify-orca-agent-mark-live.mjs, scripts/verify-orca-browser-abilities.mjs, scripts/verify-orca-browser-agent-live.mjs, scripts/verify-orca-browser-entry-points.mjs, scripts/verify-orca-browser-host-bundle.mjs, scripts/verify-orca-browser-snapshot-live.mjs, scripts/verify-orca-browser-tab-scope.mjs, scripts/verify-orca-browser-tools.mjs, scripts/verify-web-tab-bridge.mjs, theia/extensions/orca-browser/package.json, theia/extensions/orca-browser/src/browser/orca-browser-frontend-module.ts, theia/extensions/orca-browser/src/common/orca-browser-abilities.ts, theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts, theia/extensions/orca-browser/src/common/orca-browser-tools.ts, theia/extensions/tab-uris/src/browser/web-tab.ts."
+      "reason": "P60-R2 (OVL-04, plan 60-04): the tree path orca/, the config keys upstreams.orca_tag / orca_commit, the devShell name, script and row names (fetch-orca, orca-pin, orca-run) and the workstream path .planning/workstreams/orca/. Evidence: .claude/skills/spike-findings-Power-Browser/SKILL.md:15, .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:4, .claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md:3 and 17 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 62 (plan 62-03) re-measured this row on the merged tree after the overlay gate and OrcaService lanes, adding powerbrowser/INTERNAL-APIS.md, powerbrowser/endpoint-allowlist.json, powerbrowser/shell/OrcaEnv.sys.mjs, powerbrowser/shell/OrcaService.sys.mjs, powerbrowser/shell/powerbrowser-sidecar.js, scripts/verify-orca-hidden-electron.mjs, scripts/verify-orca-overlay.mjs, scripts/verify-orca-service-live.mjs, scripts/verify-orca-service.mjs, scripts/verify-shell-error-contract.mjs. COUNT MOVED 797 -> 861 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 004, adding .claude/skills/spike-findings-Power-Browser/references/orca-pane-hosting.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/results.md). COUNT MOVED 420 -> 452 (plan 61-02, BRW-01, P61-15: scripts/orca-browser-parity.mjs and its two verify-platform.sh rows) COUNT MOVED 452 -> 466 (plan 61-02 Task 2, BRW-01, P61-15: component users and tripwires in scripts/orca-browser-parity.mjs and its verify-platform.sh comments) COUNT MOVED 861 -> 907 (plan 61-04, P61-15: re-measured on the merged tree after the p61-02 lane merge, adding scripts/orca-browser-parity.mjs). COUNT MOVED 907 -> 1050 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 005 and 006, adding .claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md, .claude/skills/spike-findings-Power-Browser/references/orca-live-sharing.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/README.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/README.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/results.md). Phase 63 (plan 63-04) re-measured this row on the merged tree after lanes p63-06 and p63-03 and the orca-agents wiring, adding powerbrowser/shell/TheiaService.sys.mjs, scripts/verify-orca-agent-hooks.mjs, scripts/verify-orca-agent-status-live.mjs, scripts/verify-orca-bridge-dir.mjs, theia/applications/browser/package.json, theia/extensions/orca-agents/bin/claude-wrapper.mjs, theia/extensions/orca-agents/package.json, theia/extensions/orca-agents/src/browser/orca-agents-frontend-module.ts, theia/extensions/orca-agents/src/common/orca-agents-protocol.ts, theia/extensions/orca-agents/src/node/claude-wrapper-launcher.ts, theia/extensions/orca-agents/src/node/orca-agents-backend-module.ts, theia/package.json. Phase 68 (plan 68-06) re-measured this row on the merged tree after lanes p68-03, p68-04, p68-01, p68-10, p68-07, p68-09 and p68-02, adding .github/workflows/rebase-orca.yml, .github/workflows/release-train.yml, .github/workflows/release.yml, LICENSING.md, THIRD-PARTY-NOTICES.txt, docs/RELEASING.md, powerbrowser/packaging/package-linux.sh, powerbrowser/packaging/package-macos.sh, powerbrowser/packaging/package-windows.sh, scripts/detect-upstreams.mjs, scripts/export-orca-seam-pr.mjs, scripts/generate-licensing.mjs, scripts/lib/orca-artifacts.mjs, scripts/lib/orca-shipped-packages.mjs, scripts/rebase-orca.sh, scripts/release-train.mjs, scripts/verify-build-orca-portable.mjs, scripts/verify-build-windows-shape.mjs, scripts/verify-bundled-extensions.mjs, scripts/verify-licence-allowlist.mjs, scripts/verify-orca-claude-sdk.mjs, scripts/verify-orca-mobile-protocol.mjs, scripts/verify-orca-packaged-live.mjs, scripts/verify-orca-packaged-tree.mjs, scripts/verify-package-target-natives.mjs, scripts/verify-release-shape.mjs, scripts/verify-upstream-pins.mjs, scripts/verify-workflows.mjs, scripts/win-sign-list.mjs. COUNT MOVED 1287 -> 2667 (2662 after the lane merges; +5 from the 68-06 fix comment in scripts/rebase-orca.sh and the three 68-06 exclusion rows in scripts/verify-platform.sh). Phase 64 (plan 64-05) re-measured this row over the merged tree, adding docs/URI-SCHEMES.md, orca-overlay/files/pb-css-scope.mjs, orca-overlay/files/src/renderer/src/pb/pb-pane-mount.tsx, orca-overlay/files/vite.pb-panes.config.ts, scripts/build-orca-panes.sh, scripts/lib/orca-pane-harness.mjs, scripts/lib/orca-tabs-live.mjs, scripts/verify-mode-switch-tabs-live.mjs, scripts/verify-mode-toggle-commands.mjs, scripts/verify-orca-pane-css-live.mjs, scripts/verify-orca-pane-css.mjs, scripts/verify-orca-pane-entry.mjs, scripts/verify-orca-pane-routes.mjs, scripts/verify-orca-pane-standalone-live.mjs, scripts/verify-orca-tabs-live.mjs, scripts/verify-orca-terminal-keys-live.mjs, scripts/verify-orca-terminal-keys.mjs, scripts/verify-uri-roundtrip.mjs, theia/extensions/chrome-bar/src/browser/address-bar/address-bar-mode-table.ts, theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx, theia/extensions/chrome-bar/src/browser/chrome-bar.css, theia/extensions/modes/src/browser/mode-descriptors.ts, theia/extensions/modes/src/browser/mode-service.ts, theia/extensions/orca-panes/package.json, theia/extensions/orca-panes/src/browser/orca-pane-bundle.ts, theia/extensions/orca-panes/src/browser/orca-pane-observer.ts, theia/extensions/orca-panes/src/browser/orca-pane-routes.ts, theia/extensions/orca-panes/src/browser/orca-pane-widget.tsx, theia/extensions/orca-panes/src/browser/orca-panes-frontend-module.ts, theia/extensions/orca-panes/src/common/orca-panes-protocol.ts, theia/extensions/orca-panes/src/node/orca-panes-backend-module.ts, theia/extensions/tab-uris/src/browser/orca-scheme-coverage.ts, theia/extensions/tab-uris/src/browser/tab-uri-registry.ts. Phase 64 (plan 64-06) re-measured this row over the 64-06 tree. Phase 65 (plan 65-05) re-measured this row over the merged Phase 65 tree with this scanner's own matcher: count 3582 -> 4199; files added: orca-overlay/files/src/renderer/src/pb/pb-session-pairing.ts, orca-overlay/files/src/renderer/src/pb/pb-side-mounts.tsx, orca-overlay/files/src/renderer/src/pb/pb-workspace-api.ts, scripts/lib/orca-offer-scan.mjs, scripts/verify-backend-env-readers.mjs, scripts/verify-orca-add-project-live.mjs, scripts/verify-orca-editor-routes.mjs, scripts/verify-orca-no-pb-add-project.mjs, scripts/verify-orca-offer-scan.mjs, scripts/verify-orca-relaunch-restore-live.mjs, scripts/verify-orca-side-panel-live.mjs, scripts/verify-orca-workspace-live.mjs, theia/extensions/modes/src/browser/setups-service.ts, theia/extensions/orca-panes/src/browser/restore/orca-pane-name-map.ts, theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-module.ts, theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-sync.ts, theia/extensions/orca-panes/src/browser/side-panel/orca-side-view-widget.tsx, theia/extensions/orca-workspace/package.json, theia/extensions/orca-workspace/src/browser/orca-editor-routes.ts, theia/extensions/orca-workspace/src/browser/orca-git-resource.ts, theia/extensions/orca-workspace/src/browser/orca-root-sync.ts, theia/extensions/orca-workspace/src/browser/orca-workspace-frontend-module.ts, theia/extensions/orca-workspace/src/common/orca-git-protocol.ts, theia/extensions/orca-workspace/src/node/orca-workspace-backend-module.ts, theia/extensions/tab-uris/src/browser/view-factory-table.ts. Phase 66 (plan 66-06) re-measured this row on the merged tree with this scanner's own matcher, 4199 -> 4740, adding orca-overlay/files/src/renderer/src/pb/browser-host/pb-browser-host-link.ts, orca-overlay/files/src/renderer/src/pb/browser-host/pb-browser-host.ts, orca-overlay/files/vite.pb-browser-host.config.ts, powerbrowser/shell/GroupActorChild.sys.mjs, powerbrowser/shell/PowerBrowserAPI.sys.mjs, scripts/build-orca-browser-host.sh, scripts/gen-orca-snapshot-fixtures.mjs, scripts/lib/orca-browser-live.mjs, scripts/verify-no-remote-agent-port-live.mjs, scripts/verify-orca-agent-mark-live.mjs, scripts/verify-orca-browser-abilities.mjs, scripts/verify-orca-browser-agent-live.mjs, scripts/verify-orca-browser-entry-points.mjs, scripts/verify-orca-browser-host-bundle.mjs, scripts/verify-orca-browser-snapshot-live.mjs, scripts/verify-orca-browser-tab-scope.mjs, scripts/verify-orca-browser-tools.mjs, scripts/verify-web-tab-bridge.mjs, theia/extensions/orca-browser/package.json, theia/extensions/orca-browser/src/browser/orca-browser-frontend-module.ts, theia/extensions/orca-browser/src/common/orca-browser-abilities.ts, theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts, theia/extensions/orca-browser/src/common/orca-browser-tools.ts, theia/extensions/tab-uris/src/browser/web-tab.ts. Phase 67 (plan 67-06) re-measured this row on the merged Phase 67 tree with this scanner's own matcher, adding scripts/lib/firefox-bidi.mjs, scripts/lib/mozlz4.mjs, scripts/verify-orca-credential-store-live.mjs, scripts/verify-orca-credential-store.mjs, scripts/verify-orca-failure-classes.mjs, scripts/verify-orca-failure-page-live.mjs, scripts/verify-orca-landing-logo-live.mjs, scripts/verify-orca-landing-selectors.mjs, scripts/verify-orca-offer-file.mjs, scripts/verify-orca-pairing-containment.mjs, scripts/verify-shell-error-copy.mjs, scripts/verify-sidecar-origin-gate-live.mjs, scripts/verify-sidecar-origin-gate.mjs, theia/extensions/orca-panes/src/browser/failure/orca-failure-copy.ts, theia/extensions/orca-panes/src/browser/failure/orca-failure-page.tsx, theia/extensions/orca-panes/src/browser/failure/orca-hosting-status.ts, theia/extensions/orca-panes/src/node/offer-file-policy.ts, website-staging/privacy.html."
     },
     {
       "token": "ORCA",
       "case_form": "upper",
       "class": "coincidental",
       "target": "ORCA",
-      "expected_count": 946,
+      "expected_count": 1220,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
@@ -1684,6 +1752,7 @@
         "powerbrowser/packaging/package-windows.sh",
         "powerbrowser/shell/OrcaEnv.sys.mjs",
         "powerbrowser/shell/OrcaService.sys.mjs",
+        "powerbrowser/shell/PowerBrowserAPI.sys.mjs",
         "powerbrowser/shell/TheiaService.sys.mjs",
         "scripts/build-orca-browser-host.sh",
         "scripts/build-orca-panes.sh",
@@ -1715,12 +1784,20 @@
         "scripts/verify-orca-browser-tab-scope.mjs",
         "scripts/verify-orca-browser-tools.mjs",
         "scripts/verify-orca-claude-sdk.mjs",
+        "scripts/verify-orca-credential-store-live.mjs",
+        "scripts/verify-orca-credential-store.mjs",
         "scripts/verify-orca-editor-routes.mjs",
+        "scripts/verify-orca-failure-classes.mjs",
+        "scripts/verify-orca-failure-page-live.mjs",
         "scripts/verify-orca-hidden-electron.mjs",
+        "scripts/verify-orca-landing-logo-live.mjs",
+        "scripts/verify-orca-landing-selectors.mjs",
         "scripts/verify-orca-mobile-protocol.mjs",
+        "scripts/verify-orca-offer-file.mjs",
         "scripts/verify-orca-offer-scan.mjs",
         "scripts/verify-orca-packaged-live.mjs",
         "scripts/verify-orca-packaged-tree.mjs",
+        "scripts/verify-orca-pairing-containment.mjs",
         "scripts/verify-orca-pane-css-live.mjs",
         "scripts/verify-orca-pane-css.mjs",
         "scripts/verify-orca-pane-routes.mjs",
@@ -1736,7 +1813,9 @@
         "scripts/verify-orca-terminal-keys.mjs",
         "scripts/verify-orca-workspace-live.mjs",
         "scripts/verify-platform.sh",
+        "scripts/verify-shell-error-copy.mjs",
         "scripts/verify-sidecar-origin-gate-live.mjs",
+        "scripts/verify-sidecar-origin-gate.mjs",
         "scripts/verify-upstream-pins.mjs",
         "scripts/verify-uri-roundtrip.mjs",
         "scripts/verify-web-tab-bridge.mjs",
@@ -1749,6 +1828,9 @@
         "theia/extensions/orca-browser/src/browser/orca-browser-frontend-module.ts",
         "theia/extensions/orca-browser/src/common/orca-browser-abilities.ts",
         "theia/extensions/orca-browser/src/common/orca-browser-tools.ts",
+        "theia/extensions/orca-panes/src/browser/failure/orca-failure-copy.ts",
+        "theia/extensions/orca-panes/src/browser/failure/orca-failure-page.tsx",
+        "theia/extensions/orca-panes/src/browser/failure/orca-hosting-status.ts",
         "theia/extensions/orca-panes/src/browser/orca-pane-bundle.ts",
         "theia/extensions/orca-panes/src/browser/orca-pane-observer.ts",
         "theia/extensions/orca-panes/src/browser/orca-pane-routes.ts",
@@ -1758,6 +1840,7 @@
         "theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-module.ts",
         "theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-sync.ts",
         "theia/extensions/orca-panes/src/common/orca-panes-protocol.ts",
+        "theia/extensions/orca-panes/src/node/offer-file-policy.ts",
         "theia/extensions/orca-panes/src/node/orca-panes-backend-module.ts",
         "theia/extensions/orca-workspace/src/browser/orca-editor-routes.ts",
         "theia/extensions/orca-workspace/src/browser/orca-git-resource.ts",
@@ -1793,6 +1876,7 @@
         "powerbrowser/packaging/package-windows.sh",
         "powerbrowser/shell/OrcaEnv.sys.mjs",
         "powerbrowser/shell/OrcaService.sys.mjs",
+        "powerbrowser/shell/PowerBrowserAPI.sys.mjs",
         "powerbrowser/shell/TheiaService.sys.mjs",
         "scripts/build-orca-browser-host.sh",
         "scripts/build-orca-panes.sh",
@@ -1824,12 +1908,20 @@
         "scripts/verify-orca-browser-tab-scope.mjs",
         "scripts/verify-orca-browser-tools.mjs",
         "scripts/verify-orca-claude-sdk.mjs",
+        "scripts/verify-orca-credential-store-live.mjs",
+        "scripts/verify-orca-credential-store.mjs",
         "scripts/verify-orca-editor-routes.mjs",
+        "scripts/verify-orca-failure-classes.mjs",
+        "scripts/verify-orca-failure-page-live.mjs",
         "scripts/verify-orca-hidden-electron.mjs",
+        "scripts/verify-orca-landing-logo-live.mjs",
+        "scripts/verify-orca-landing-selectors.mjs",
         "scripts/verify-orca-mobile-protocol.mjs",
+        "scripts/verify-orca-offer-file.mjs",
         "scripts/verify-orca-offer-scan.mjs",
         "scripts/verify-orca-packaged-live.mjs",
         "scripts/verify-orca-packaged-tree.mjs",
+        "scripts/verify-orca-pairing-containment.mjs",
         "scripts/verify-orca-pane-css-live.mjs",
         "scripts/verify-orca-pane-css.mjs",
         "scripts/verify-orca-pane-routes.mjs",
@@ -1845,7 +1937,9 @@
         "scripts/verify-orca-terminal-keys.mjs",
         "scripts/verify-orca-workspace-live.mjs",
         "scripts/verify-platform.sh",
+        "scripts/verify-shell-error-copy.mjs",
         "scripts/verify-sidecar-origin-gate-live.mjs",
+        "scripts/verify-sidecar-origin-gate.mjs",
         "scripts/verify-upstream-pins.mjs",
         "scripts/verify-uri-roundtrip.mjs",
         "scripts/verify-web-tab-bridge.mjs",
@@ -1858,6 +1952,9 @@
         "theia/extensions/orca-browser/src/browser/orca-browser-frontend-module.ts",
         "theia/extensions/orca-browser/src/common/orca-browser-abilities.ts",
         "theia/extensions/orca-browser/src/common/orca-browser-tools.ts",
+        "theia/extensions/orca-panes/src/browser/failure/orca-failure-copy.ts",
+        "theia/extensions/orca-panes/src/browser/failure/orca-failure-page.tsx",
+        "theia/extensions/orca-panes/src/browser/failure/orca-hosting-status.ts",
         "theia/extensions/orca-panes/src/browser/orca-pane-bundle.ts",
         "theia/extensions/orca-panes/src/browser/orca-pane-observer.ts",
         "theia/extensions/orca-panes/src/browser/orca-pane-routes.ts",
@@ -1867,6 +1964,7 @@
         "theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-module.ts",
         "theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-sync.ts",
         "theia/extensions/orca-panes/src/common/orca-panes-protocol.ts",
+        "theia/extensions/orca-panes/src/node/offer-file-policy.ts",
         "theia/extensions/orca-panes/src/node/orca-panes-backend-module.ts",
         "theia/extensions/orca-workspace/src/browser/orca-editor-routes.ts",
         "theia/extensions/orca-workspace/src/browser/orca-git-resource.ts",
@@ -1877,14 +1975,14 @@
         "theia/extensions/tab-uris/src/browser/orca-scheme-coverage.ts",
         "theia/extensions/tab-uris/src/browser/view-factory-table.ts"
       ],
-      "reason": "P60-R2 (OVL-04, plan 60-04): Orca's own environment namespace (ORCA_USER_DATA, ORCA_VERSION, ORCA_TELEMETRY_DISABLED, ORCA_PNPM_GLOBAL_VIRTUAL_STORE, ORCA_PAIRING_CODE) and PowerBrowser's ORCA_DIR constants; PowerBrowser mints no ORCA_ name of its own. Evidence: .claude/skills/spike-findings-Power-Browser/SKILL.md:48, .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:19, .claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md:86 and 10 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 62 (plan 62-03) re-measured this row on the merged tree after the overlay gate and OrcaService lanes, adding orca-overlay/patches/010-installed-electron-switch.patch, orca-overlay/seams.json, powerbrowser/shell/OrcaEnv.sys.mjs, scripts/verify-orca-hidden-electron.mjs, scripts/verify-orca-service-live.mjs, scripts/verify-orca-service.mjs. COUNT MOVED 158 -> 165 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 004, adding .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs). COUNT MOVED 165 -> 189 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 005 and 006, adding .claude/skills/spike-findings-Power-Browser/references/orca-live-sharing.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/README.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/README.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/results.md). Phase 63 (plan 63-04) re-measured this row on the merged tree after lanes p63-06 and p63-03 and the orca-agents wiring, adding powerbrowser/shell/TheiaService.sys.mjs, scripts/verify-orca-agent-hooks.mjs, scripts/verify-orca-agent-status-live.mjs, scripts/verify-orca-bridge-dir.mjs, scripts/verify-sidecar-origin-gate-live.mjs, theia/extensions/orca-agents/bin/claude-wrapper.mjs, theia/extensions/orca-agents/src/browser/orca-agents-frontend-module.ts, theia/extensions/orca-agents/src/common/orca-agents-protocol.ts, theia/extensions/orca-agents/src/node/orca-agents-backend-module.ts. Phase 68 (plan 68-06) re-measured this row on the merged tree after lanes p68-03, p68-04, p68-01, p68-10, p68-07, p68-09 and p68-02, adding .github/workflows/release-train.yml, .github/workflows/release.yml, orca-overlay/patches/070-claude-agent-sdk-dir.patch, powerbrowser/packaging/package-macos.sh, powerbrowser/packaging/package-windows.sh, scripts/detect-upstreams.mjs, scripts/export-orca-seam-pr.mjs, scripts/generate-licensing.mjs, scripts/lib/orca-artifacts.mjs, scripts/lib/orca-shipped-packages.mjs, scripts/rebase-orca.sh, scripts/verify-build-windows-shape.mjs, scripts/verify-bundled-extensions.mjs, scripts/verify-orca-claude-sdk.mjs, scripts/verify-orca-mobile-protocol.mjs, scripts/verify-orca-packaged-live.mjs, scripts/verify-orca-packaged-tree.mjs, scripts/verify-upstream-pins.mjs, scripts/verify-workflows.mjs, scripts/win-sign-list.mjs. COUNT MOVED 294 -> 441. Phase 64 (plan 64-05) re-measured this row over the merged tree, adding powerbrowser/shell/OrcaService.sys.mjs, scripts/build-orca-panes.sh, scripts/lib/orca-pane-harness.mjs, scripts/lib/orca-tabs-live.mjs, scripts/verify-mode-switch-tabs-live.mjs, scripts/verify-orca-pane-css-live.mjs, scripts/verify-orca-pane-css.mjs, scripts/verify-orca-pane-routes.mjs, scripts/verify-orca-pane-standalone-live.mjs, scripts/verify-orca-tabs-live.mjs, scripts/verify-orca-terminal-keys-live.mjs, scripts/verify-orca-terminal-keys.mjs, scripts/verify-uri-roundtrip.mjs, theia/extensions/orca-panes/src/browser/orca-pane-bundle.ts, theia/extensions/orca-panes/src/browser/orca-pane-observer.ts, theia/extensions/orca-panes/src/browser/orca-pane-routes.ts, theia/extensions/orca-panes/src/browser/orca-pane-widget.tsx, theia/extensions/orca-panes/src/browser/orca-panes-frontend-module.ts, theia/extensions/orca-panes/src/common/orca-panes-protocol.ts, theia/extensions/orca-panes/src/node/orca-panes-backend-module.ts, theia/extensions/tab-uris/src/browser/orca-scheme-coverage.ts. Phase 64 (plan 64-06) re-measured this row over the 64-06 tree. Phase 65 (plan 65-05) re-measured this row over the merged Phase 65 tree with this scanner's own matcher: count 682 -> 846; files added: scripts/verify-orca-add-project-live.mjs, scripts/verify-orca-editor-routes.mjs, scripts/verify-orca-offer-scan.mjs, scripts/verify-orca-relaunch-restore-live.mjs, scripts/verify-orca-side-panel-live.mjs, scripts/verify-orca-workspace-live.mjs, theia/extensions/orca-panes/src/browser/restore/orca-pane-name-map.ts, theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-module.ts, theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-sync.ts, theia/extensions/orca-workspace/src/browser/orca-editor-routes.ts, theia/extensions/orca-workspace/src/browser/orca-git-resource.ts, theia/extensions/orca-workspace/src/browser/orca-root-sync.ts, theia/extensions/orca-workspace/src/browser/orca-workspace-frontend-module.ts, theia/extensions/orca-workspace/src/common/orca-git-protocol.ts, theia/extensions/orca-workspace/src/node/orca-workspace-backend-module.ts, theia/extensions/tab-uris/src/browser/view-factory-table.ts. Phase 66 (plan 66-06) re-measured this row on the merged tree with this scanner's own matcher, 846 -> 942, adding scripts/build-orca-browser-host.sh, scripts/lib/orca-browser-live.mjs, scripts/verify-no-remote-agent-port-live.mjs, scripts/verify-orca-browser-abilities.mjs, scripts/verify-orca-browser-entry-points.mjs, scripts/verify-orca-browser-host-bundle.mjs, scripts/verify-orca-browser-snapshot-live.mjs, scripts/verify-orca-browser-tab-scope.mjs, scripts/verify-orca-browser-tools.mjs, scripts/verify-web-tab-bridge.mjs, theia/extensions/orca-browser/src/browser/orca-browser-frontend-module.ts, theia/extensions/orca-browser/src/common/orca-browser-abilities.ts, theia/extensions/orca-browser/src/common/orca-browser-tools.ts."
+      "reason": "P60-R2 (OVL-04, plan 60-04): Orca's own environment namespace (ORCA_USER_DATA, ORCA_VERSION, ORCA_TELEMETRY_DISABLED, ORCA_PNPM_GLOBAL_VIRTUAL_STORE, ORCA_PAIRING_CODE) and PowerBrowser's ORCA_DIR constants; PowerBrowser mints no ORCA_ name of its own. Evidence: .claude/skills/spike-findings-Power-Browser/SKILL.md:48, .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:19, .claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md:86 and 10 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 62 (plan 62-03) re-measured this row on the merged tree after the overlay gate and OrcaService lanes, adding orca-overlay/patches/010-installed-electron-switch.patch, orca-overlay/seams.json, powerbrowser/shell/OrcaEnv.sys.mjs, scripts/verify-orca-hidden-electron.mjs, scripts/verify-orca-service-live.mjs, scripts/verify-orca-service.mjs. COUNT MOVED 158 -> 165 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 004, adding .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs). COUNT MOVED 165 -> 189 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 005 and 006, adding .claude/skills/spike-findings-Power-Browser/references/orca-live-sharing.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/README.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/README.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/results.md). Phase 63 (plan 63-04) re-measured this row on the merged tree after lanes p63-06 and p63-03 and the orca-agents wiring, adding powerbrowser/shell/TheiaService.sys.mjs, scripts/verify-orca-agent-hooks.mjs, scripts/verify-orca-agent-status-live.mjs, scripts/verify-orca-bridge-dir.mjs, scripts/verify-sidecar-origin-gate-live.mjs, theia/extensions/orca-agents/bin/claude-wrapper.mjs, theia/extensions/orca-agents/src/browser/orca-agents-frontend-module.ts, theia/extensions/orca-agents/src/common/orca-agents-protocol.ts, theia/extensions/orca-agents/src/node/orca-agents-backend-module.ts. Phase 68 (plan 68-06) re-measured this row on the merged tree after lanes p68-03, p68-04, p68-01, p68-10, p68-07, p68-09 and p68-02, adding .github/workflows/release-train.yml, .github/workflows/release.yml, orca-overlay/patches/070-claude-agent-sdk-dir.patch, powerbrowser/packaging/package-macos.sh, powerbrowser/packaging/package-windows.sh, scripts/detect-upstreams.mjs, scripts/export-orca-seam-pr.mjs, scripts/generate-licensing.mjs, scripts/lib/orca-artifacts.mjs, scripts/lib/orca-shipped-packages.mjs, scripts/rebase-orca.sh, scripts/verify-build-windows-shape.mjs, scripts/verify-bundled-extensions.mjs, scripts/verify-orca-claude-sdk.mjs, scripts/verify-orca-mobile-protocol.mjs, scripts/verify-orca-packaged-live.mjs, scripts/verify-orca-packaged-tree.mjs, scripts/verify-upstream-pins.mjs, scripts/verify-workflows.mjs, scripts/win-sign-list.mjs. COUNT MOVED 294 -> 441. Phase 64 (plan 64-05) re-measured this row over the merged tree, adding powerbrowser/shell/OrcaService.sys.mjs, scripts/build-orca-panes.sh, scripts/lib/orca-pane-harness.mjs, scripts/lib/orca-tabs-live.mjs, scripts/verify-mode-switch-tabs-live.mjs, scripts/verify-orca-pane-css-live.mjs, scripts/verify-orca-pane-css.mjs, scripts/verify-orca-pane-routes.mjs, scripts/verify-orca-pane-standalone-live.mjs, scripts/verify-orca-tabs-live.mjs, scripts/verify-orca-terminal-keys-live.mjs, scripts/verify-orca-terminal-keys.mjs, scripts/verify-uri-roundtrip.mjs, theia/extensions/orca-panes/src/browser/orca-pane-bundle.ts, theia/extensions/orca-panes/src/browser/orca-pane-observer.ts, theia/extensions/orca-panes/src/browser/orca-pane-routes.ts, theia/extensions/orca-panes/src/browser/orca-pane-widget.tsx, theia/extensions/orca-panes/src/browser/orca-panes-frontend-module.ts, theia/extensions/orca-panes/src/common/orca-panes-protocol.ts, theia/extensions/orca-panes/src/node/orca-panes-backend-module.ts, theia/extensions/tab-uris/src/browser/orca-scheme-coverage.ts. Phase 64 (plan 64-06) re-measured this row over the 64-06 tree. Phase 65 (plan 65-05) re-measured this row over the merged Phase 65 tree with this scanner's own matcher: count 682 -> 846; files added: scripts/verify-orca-add-project-live.mjs, scripts/verify-orca-editor-routes.mjs, scripts/verify-orca-offer-scan.mjs, scripts/verify-orca-relaunch-restore-live.mjs, scripts/verify-orca-side-panel-live.mjs, scripts/verify-orca-workspace-live.mjs, theia/extensions/orca-panes/src/browser/restore/orca-pane-name-map.ts, theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-module.ts, theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-sync.ts, theia/extensions/orca-workspace/src/browser/orca-editor-routes.ts, theia/extensions/orca-workspace/src/browser/orca-git-resource.ts, theia/extensions/orca-workspace/src/browser/orca-root-sync.ts, theia/extensions/orca-workspace/src/browser/orca-workspace-frontend-module.ts, theia/extensions/orca-workspace/src/common/orca-git-protocol.ts, theia/extensions/orca-workspace/src/node/orca-workspace-backend-module.ts, theia/extensions/tab-uris/src/browser/view-factory-table.ts. Phase 66 (plan 66-06) re-measured this row on the merged tree with this scanner's own matcher, 846 -> 942, adding scripts/build-orca-browser-host.sh, scripts/lib/orca-browser-live.mjs, scripts/verify-no-remote-agent-port-live.mjs, scripts/verify-orca-browser-abilities.mjs, scripts/verify-orca-browser-entry-points.mjs, scripts/verify-orca-browser-host-bundle.mjs, scripts/verify-orca-browser-snapshot-live.mjs, scripts/verify-orca-browser-tab-scope.mjs, scripts/verify-orca-browser-tools.mjs, scripts/verify-web-tab-bridge.mjs, theia/extensions/orca-browser/src/browser/orca-browser-frontend-module.ts, theia/extensions/orca-browser/src/common/orca-browser-abilities.ts, theia/extensions/orca-browser/src/common/orca-browser-tools.ts. Phase 67 (plan 67-06) re-measured this row on the merged Phase 67 tree with this scanner's own matcher, adding powerbrowser/shell/PowerBrowserAPI.sys.mjs, scripts/verify-orca-credential-store-live.mjs, scripts/verify-orca-credential-store.mjs, scripts/verify-orca-failure-classes.mjs, scripts/verify-orca-failure-page-live.mjs, scripts/verify-orca-landing-logo-live.mjs, scripts/verify-orca-landing-selectors.mjs, scripts/verify-orca-offer-file.mjs, scripts/verify-orca-pairing-containment.mjs, scripts/verify-shell-error-copy.mjs, scripts/verify-sidecar-origin-gate.mjs, theia/extensions/orca-panes/src/browser/failure/orca-failure-copy.ts, theia/extensions/orca-panes/src/browser/failure/orca-failure-page.tsx, theia/extensions/orca-panes/src/browser/failure/orca-hosting-status.ts, theia/extensions/orca-panes/src/node/offer-file-policy.ts."
     },
     {
       "token": "orcad",
       "case_form": "lower",
       "class": "coincidental",
       "target": "orcad",
-      "expected_count": 1330,
+      "expected_count": 1639,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md",
@@ -1922,6 +2020,7 @@
         "powerbrowser/packaging/package-linux.sh",
         "powerbrowser/packaging/package-macos.sh",
         "powerbrowser/packaging/package-windows.sh",
+        "powerbrowser/shell/GroupActorChild.sys.mjs",
         "powerbrowser/shell/OrcaEnv.sys.mjs",
         "powerbrowser/shell/OrcaService.sys.mjs",
         "powerbrowser/shell/PowerBrowserAPI.sys.mjs",
@@ -1931,6 +2030,7 @@
         "scripts/build-orca.sh",
         "scripts/generate-licensing.mjs",
         "scripts/generate.mjs",
+        "scripts/lib/firefox-bidi.mjs",
         "scripts/lib/orca-artifacts.mjs",
         "scripts/lib/orca-browser-live.mjs",
         "scripts/lib/orca-offer-scan.mjs",
@@ -1953,12 +2053,20 @@
         "scripts/verify-orca-browser-snapshot-live.mjs",
         "scripts/verify-orca-build-shape.mjs",
         "scripts/verify-orca-claude-sdk.mjs",
+        "scripts/verify-orca-credential-store-live.mjs",
+        "scripts/verify-orca-credential-store.mjs",
+        "scripts/verify-orca-failure-classes.mjs",
+        "scripts/verify-orca-failure-page-live.mjs",
         "scripts/verify-orca-hidden-electron.mjs",
+        "scripts/verify-orca-landing-logo-live.mjs",
+        "scripts/verify-orca-landing-selectors.mjs",
         "scripts/verify-orca-mobile-protocol.mjs",
+        "scripts/verify-orca-offer-file.mjs",
         "scripts/verify-orca-offer-scan.mjs",
         "scripts/verify-orca-overlay.mjs",
         "scripts/verify-orca-packaged-live.mjs",
         "scripts/verify-orca-packaged-tree.mjs",
+        "scripts/verify-orca-pairing-containment.mjs",
         "scripts/verify-orca-pane-css-live.mjs",
         "scripts/verify-orca-pane-standalone-live.mjs",
         "scripts/verify-orca-relaunch-restore-live.mjs",
@@ -1972,6 +2080,8 @@
         "scripts/verify-orca-workspace-live.mjs",
         "scripts/verify-package-target-natives.mjs",
         "scripts/verify-platform.sh",
+        "scripts/verify-sidecar-origin-gate-live.mjs",
+        "scripts/verify-sidecar-origin-gate.mjs",
         "scripts/verify-uri-roundtrip.mjs",
         "scripts/win-sign-list.mjs",
         "theia/extensions/orca-agents/bin/claude-wrapper.mjs",
@@ -1980,9 +2090,11 @@
         "theia/extensions/orca-browser/src/browser/orca-browser-frontend-module.ts",
         "theia/extensions/orca-browser/src/common/orca-browser-abilities.ts",
         "theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts",
+        "theia/extensions/orca-panes/src/browser/failure/orca-hosting-status.ts",
         "theia/extensions/orca-panes/src/browser/orca-pane-bundle.ts",
         "theia/extensions/orca-panes/src/browser/restore/orca-pane-name-map.ts",
         "theia/extensions/orca-panes/src/common/orca-panes-protocol.ts",
+        "theia/extensions/orca-panes/src/node/offer-file-policy.ts",
         "theia/extensions/orca-panes/src/node/orca-panes-backend-module.ts",
         "theia/extensions/tab-uris/src/browser/web-tab.ts"
       ],
@@ -2023,6 +2135,7 @@
         "powerbrowser/packaging/package-linux.sh",
         "powerbrowser/packaging/package-macos.sh",
         "powerbrowser/packaging/package-windows.sh",
+        "powerbrowser/shell/GroupActorChild.sys.mjs",
         "powerbrowser/shell/OrcaEnv.sys.mjs",
         "powerbrowser/shell/OrcaService.sys.mjs",
         "powerbrowser/shell/PowerBrowserAPI.sys.mjs",
@@ -2032,6 +2145,7 @@
         "scripts/build-orca.sh",
         "scripts/generate-licensing.mjs",
         "scripts/generate.mjs",
+        "scripts/lib/firefox-bidi.mjs",
         "scripts/lib/orca-artifacts.mjs",
         "scripts/lib/orca-browser-live.mjs",
         "scripts/lib/orca-offer-scan.mjs",
@@ -2054,12 +2168,20 @@
         "scripts/verify-orca-browser-snapshot-live.mjs",
         "scripts/verify-orca-build-shape.mjs",
         "scripts/verify-orca-claude-sdk.mjs",
+        "scripts/verify-orca-credential-store-live.mjs",
+        "scripts/verify-orca-credential-store.mjs",
+        "scripts/verify-orca-failure-classes.mjs",
+        "scripts/verify-orca-failure-page-live.mjs",
         "scripts/verify-orca-hidden-electron.mjs",
+        "scripts/verify-orca-landing-logo-live.mjs",
+        "scripts/verify-orca-landing-selectors.mjs",
         "scripts/verify-orca-mobile-protocol.mjs",
+        "scripts/verify-orca-offer-file.mjs",
         "scripts/verify-orca-offer-scan.mjs",
         "scripts/verify-orca-overlay.mjs",
         "scripts/verify-orca-packaged-live.mjs",
         "scripts/verify-orca-packaged-tree.mjs",
+        "scripts/verify-orca-pairing-containment.mjs",
         "scripts/verify-orca-pane-css-live.mjs",
         "scripts/verify-orca-pane-standalone-live.mjs",
         "scripts/verify-orca-relaunch-restore-live.mjs",
@@ -2073,6 +2195,8 @@
         "scripts/verify-orca-workspace-live.mjs",
         "scripts/verify-package-target-natives.mjs",
         "scripts/verify-platform.sh",
+        "scripts/verify-sidecar-origin-gate-live.mjs",
+        "scripts/verify-sidecar-origin-gate.mjs",
         "scripts/verify-uri-roundtrip.mjs",
         "scripts/win-sign-list.mjs",
         "theia/extensions/orca-agents/bin/claude-wrapper.mjs",
@@ -2081,20 +2205,22 @@
         "theia/extensions/orca-browser/src/browser/orca-browser-frontend-module.ts",
         "theia/extensions/orca-browser/src/common/orca-browser-abilities.ts",
         "theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts",
+        "theia/extensions/orca-panes/src/browser/failure/orca-hosting-status.ts",
         "theia/extensions/orca-panes/src/browser/orca-pane-bundle.ts",
         "theia/extensions/orca-panes/src/browser/restore/orca-pane-name-map.ts",
         "theia/extensions/orca-panes/src/common/orca-panes-protocol.ts",
+        "theia/extensions/orca-panes/src/node/offer-file-policy.ts",
         "theia/extensions/orca-panes/src/node/orca-panes-backend-module.ts",
         "theia/extensions/tab-uris/src/browser/web-tab.ts"
       ],
-      "reason": "P60-R2 (OVL-04, plan 60-04): Orca's headless daemon (orcad, orcad.js, out/orcad/) and identifiers built on it (orcadEnv). Evidence: .claude/skills/spike-findings-Power-Browser/SKILL.md:3, .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:3, .claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md:9 and 9 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 62 (plan 62-03) re-measured this row on the merged tree after the overlay gate and OrcaService lanes, adding orca-overlay/patches/010-installed-electron-switch.patch, orca-overlay/seams.json, powerbrowser/INTERNAL-APIS.md, powerbrowser/endpoint-allowlist.json, powerbrowser/shell/OrcaEnv.sys.mjs, powerbrowser/shell/OrcaService.sys.mjs, powerbrowser/shell/PowerBrowserAPI.sys.mjs, powerbrowser/shell/powerbrowser-sidecar.js, powerbrowser/shell/powerbrowser.js, scripts/verify-orca-hidden-electron.mjs, scripts/verify-orca-overlay.mjs, scripts/verify-orca-service-live.mjs, scripts/verify-orca-service.mjs. COUNT MOVED 535 -> 583 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 004, adding .claude/skills/spike-findings-Power-Browser/references/orca-pane-hosting.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/results.md). COUNT MOVED 179 -> 187 (plan 61-02 Task 2, BRW-01, P61-15: component users and tripwires in scripts/orca-browser-parity.mjs and its verify-platform.sh comments) COUNT MOVED 583 -> 591 (plan 61-04, P61-15: re-measured on the merged tree after the p61-02 lane merge, adding scripts/orca-browser-parity.mjs). COUNT MOVED 591 -> 684 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 005 and 006, adding .claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md, .claude/skills/spike-findings-Power-Browser/references/orca-live-sharing.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/README.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/README.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/results.md). Phase 63 (plan 63-04) re-measured this row on the merged tree after lanes p63-06 and p63-03 and the orca-agents wiring, adding powerbrowser/shell/TheiaService.sys.mjs, scripts/verify-orca-agent-hooks.mjs, scripts/verify-orca-agent-status-live.mjs, scripts/verify-orca-bridge-dir.mjs, theia/extensions/orca-agents/bin/claude-wrapper.mjs, theia/extensions/orca-agents/src/common/orca-agents-protocol.ts, theia/extensions/orca-agents/src/node/claude-wrapper-launcher.ts. Phase 68 (plan 68-06) re-measured this row on the merged tree after lanes p68-03, p68-04, p68-01, p68-10, p68-07, p68-09 and p68-02, adding .github/workflows/rebase-orca.yml, .github/workflows/release-train.yml, .github/workflows/release.yml, LICENSING.md, THIRD-PARTY-NOTICES.txt, docs/RELEASING.md, orca-overlay/patches/080-orcad-external-claude-agent-sdk.patch, powerbrowser/packaging/package-linux.sh, powerbrowser/packaging/package-macos.sh, powerbrowser/packaging/package-windows.sh, scripts/generate-licensing.mjs, scripts/lib/orca-artifacts.mjs, scripts/lib/orca-shipped-packages.mjs, scripts/rebase-orca.sh, scripts/verify-licence-allowlist.mjs, scripts/verify-orca-claude-sdk.mjs, scripts/verify-orca-mobile-protocol.mjs, scripts/verify-orca-packaged-live.mjs, scripts/verify-orca-packaged-tree.mjs, scripts/verify-package-target-natives.mjs, scripts/win-sign-list.mjs. COUNT MOVED 783 -> 1104. Phase 64 (plan 64-05) re-measured this row over the merged tree, adding orca-overlay/files/src/renderer/src/pb/pb-pane-mount.tsx, scripts/lib/orca-pane-harness.mjs, scripts/lib/orca-tabs-live.mjs, scripts/verify-mode-switch-tabs-live.mjs, scripts/verify-orca-pane-css-live.mjs, scripts/verify-orca-pane-standalone-live.mjs, scripts/verify-orca-tabs-live.mjs, scripts/verify-orca-terminal-keys-live.mjs, scripts/verify-uri-roundtrip.mjs, theia/extensions/orca-panes/src/browser/orca-pane-bundle.ts, theia/extensions/orca-panes/src/common/orca-panes-protocol.ts, theia/extensions/orca-panes/src/node/orca-panes-backend-module.ts. Phase 64 (plan 64-06) re-measured this row over the 64-06 tree, adding scripts/verify-orca-terminal-keys.mjs. Phase 65 (plan 65-05) re-measured this row over the merged Phase 65 tree with this scanner's own matcher: count 1184 -> 1218; files added: orca-overlay/files/src/renderer/src/pb/pb-session-pairing.ts, scripts/lib/orca-offer-scan.mjs, scripts/verify-orca-add-project-live.mjs, scripts/verify-orca-offer-scan.mjs, scripts/verify-orca-relaunch-restore-live.mjs, scripts/verify-orca-side-panel-live.mjs, scripts/verify-orca-workspace-live.mjs, theia/extensions/orca-panes/src/browser/restore/orca-pane-name-map.ts. Phase 66 (plan 66-06) re-measured this row on the merged tree with this scanner's own matcher, 1218 -> 1327, adding orca-overlay/files/src/renderer/src/pb/browser-host/pb-browser-host-link.ts, orca-overlay/files/src/renderer/src/pb/browser-host/pb-browser-host.ts, scripts/lib/orca-browser-live.mjs, scripts/verify-no-remote-agent-port-live.mjs, scripts/verify-orca-browser-abilities.mjs, scripts/verify-orca-browser-agent-live.mjs, scripts/verify-orca-browser-host-bundle.mjs, scripts/verify-orca-browser-snapshot-live.mjs, theia/extensions/orca-browser/src/browser/orca-browser-frontend-module.ts, theia/extensions/orca-browser/src/common/orca-browser-abilities.ts, theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts, theia/extensions/tab-uris/src/browser/web-tab.ts."
+      "reason": "P60-R2 (OVL-04, plan 60-04): Orca's headless daemon (orcad, orcad.js, out/orcad/) and identifiers built on it (orcadEnv). Evidence: .claude/skills/spike-findings-Power-Browser/SKILL.md:3, .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:3, .claude/skills/spike-findings-Power-Browser/sources/003-orca-headless-client-in-pb/README.md:9 and 9 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 62 (plan 62-03) re-measured this row on the merged tree after the overlay gate and OrcaService lanes, adding orca-overlay/patches/010-installed-electron-switch.patch, orca-overlay/seams.json, powerbrowser/INTERNAL-APIS.md, powerbrowser/endpoint-allowlist.json, powerbrowser/shell/OrcaEnv.sys.mjs, powerbrowser/shell/OrcaService.sys.mjs, powerbrowser/shell/PowerBrowserAPI.sys.mjs, powerbrowser/shell/powerbrowser-sidecar.js, powerbrowser/shell/powerbrowser.js, scripts/verify-orca-hidden-electron.mjs, scripts/verify-orca-overlay.mjs, scripts/verify-orca-service-live.mjs, scripts/verify-orca-service.mjs. COUNT MOVED 535 -> 583 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 004, adding .claude/skills/spike-findings-Power-Browser/references/orca-pane-hosting.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/README.md, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs, .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/results.md). COUNT MOVED 179 -> 187 (plan 61-02 Task 2, BRW-01, P61-15: component users and tripwires in scripts/orca-browser-parity.mjs and its verify-platform.sh comments) COUNT MOVED 583 -> 591 (plan 61-04, P61-15: re-measured on the merged tree after the p61-02 lane merge, adding scripts/orca-browser-parity.mjs). COUNT MOVED 591 -> 684 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 005 and 006, adding .claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md, .claude/skills/spike-findings-Power-Browser/references/orca-live-sharing.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/README.md, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/README.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/results.md). Phase 63 (plan 63-04) re-measured this row on the merged tree after lanes p63-06 and p63-03 and the orca-agents wiring, adding powerbrowser/shell/TheiaService.sys.mjs, scripts/verify-orca-agent-hooks.mjs, scripts/verify-orca-agent-status-live.mjs, scripts/verify-orca-bridge-dir.mjs, theia/extensions/orca-agents/bin/claude-wrapper.mjs, theia/extensions/orca-agents/src/common/orca-agents-protocol.ts, theia/extensions/orca-agents/src/node/claude-wrapper-launcher.ts. Phase 68 (plan 68-06) re-measured this row on the merged tree after lanes p68-03, p68-04, p68-01, p68-10, p68-07, p68-09 and p68-02, adding .github/workflows/rebase-orca.yml, .github/workflows/release-train.yml, .github/workflows/release.yml, LICENSING.md, THIRD-PARTY-NOTICES.txt, docs/RELEASING.md, orca-overlay/patches/080-orcad-external-claude-agent-sdk.patch, powerbrowser/packaging/package-linux.sh, powerbrowser/packaging/package-macos.sh, powerbrowser/packaging/package-windows.sh, scripts/generate-licensing.mjs, scripts/lib/orca-artifacts.mjs, scripts/lib/orca-shipped-packages.mjs, scripts/rebase-orca.sh, scripts/verify-licence-allowlist.mjs, scripts/verify-orca-claude-sdk.mjs, scripts/verify-orca-mobile-protocol.mjs, scripts/verify-orca-packaged-live.mjs, scripts/verify-orca-packaged-tree.mjs, scripts/verify-package-target-natives.mjs, scripts/win-sign-list.mjs. COUNT MOVED 783 -> 1104. Phase 64 (plan 64-05) re-measured this row over the merged tree, adding orca-overlay/files/src/renderer/src/pb/pb-pane-mount.tsx, scripts/lib/orca-pane-harness.mjs, scripts/lib/orca-tabs-live.mjs, scripts/verify-mode-switch-tabs-live.mjs, scripts/verify-orca-pane-css-live.mjs, scripts/verify-orca-pane-standalone-live.mjs, scripts/verify-orca-tabs-live.mjs, scripts/verify-orca-terminal-keys-live.mjs, scripts/verify-uri-roundtrip.mjs, theia/extensions/orca-panes/src/browser/orca-pane-bundle.ts, theia/extensions/orca-panes/src/common/orca-panes-protocol.ts, theia/extensions/orca-panes/src/node/orca-panes-backend-module.ts. Phase 64 (plan 64-06) re-measured this row over the 64-06 tree, adding scripts/verify-orca-terminal-keys.mjs. Phase 65 (plan 65-05) re-measured this row over the merged Phase 65 tree with this scanner's own matcher: count 1184 -> 1218; files added: orca-overlay/files/src/renderer/src/pb/pb-session-pairing.ts, scripts/lib/orca-offer-scan.mjs, scripts/verify-orca-add-project-live.mjs, scripts/verify-orca-offer-scan.mjs, scripts/verify-orca-relaunch-restore-live.mjs, scripts/verify-orca-side-panel-live.mjs, scripts/verify-orca-workspace-live.mjs, theia/extensions/orca-panes/src/browser/restore/orca-pane-name-map.ts. Phase 66 (plan 66-06) re-measured this row on the merged tree with this scanner's own matcher, 1218 -> 1327, adding orca-overlay/files/src/renderer/src/pb/browser-host/pb-browser-host-link.ts, orca-overlay/files/src/renderer/src/pb/browser-host/pb-browser-host.ts, scripts/lib/orca-browser-live.mjs, scripts/verify-no-remote-agent-port-live.mjs, scripts/verify-orca-browser-abilities.mjs, scripts/verify-orca-browser-agent-live.mjs, scripts/verify-orca-browser-host-bundle.mjs, scripts/verify-orca-browser-snapshot-live.mjs, theia/extensions/orca-browser/src/browser/orca-browser-frontend-module.ts, theia/extensions/orca-browser/src/common/orca-browser-abilities.ts, theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts, theia/extensions/tab-uris/src/browser/web-tab.ts. Phase 67 (plan 67-06) re-measured this row on the merged Phase 67 tree with this scanner's own matcher, adding powerbrowser/shell/GroupActorChild.sys.mjs, scripts/lib/firefox-bidi.mjs, scripts/verify-orca-credential-store-live.mjs, scripts/verify-orca-credential-store.mjs, scripts/verify-orca-failure-classes.mjs, scripts/verify-orca-failure-page-live.mjs, scripts/verify-orca-landing-logo-live.mjs, scripts/verify-orca-landing-selectors.mjs, scripts/verify-orca-offer-file.mjs, scripts/verify-orca-pairing-containment.mjs, scripts/verify-sidecar-origin-gate-live.mjs, scripts/verify-sidecar-origin-gate.mjs, theia/extensions/orca-panes/src/browser/failure/orca-hosting-status.ts, theia/extensions/orca-panes/src/node/offer-file-policy.ts."
     },
     {
       "token": "ORCAD",
       "case_form": "upper",
       "class": "coincidental",
       "target": "ORCAD",
-      "expected_count": 192,
+      "expected_count": 222,
       "expected_files": [
         "docs/BUILD.md",
         "orca-overlay/patches/080-orcad-external-claude-agent-sdk.patch",
@@ -2111,11 +2237,15 @@
         "scripts/verify-orca-bridge-dir.mjs",
         "scripts/verify-orca-build-shape.mjs",
         "scripts/verify-orca-claude-sdk.mjs",
+        "scripts/verify-orca-credential-store.mjs",
+        "scripts/verify-orca-failure-classes.mjs",
         "scripts/verify-orca-hidden-electron.mjs",
         "scripts/verify-orca-packaged-tree.mjs",
         "scripts/verify-orca-service-live.mjs",
         "scripts/verify-orca-service.mjs",
         "scripts/verify-platform.sh",
+        "scripts/verify-shell-error-copy.mjs",
+        "scripts/verify-sidecar-origin-gate.mjs",
         "theia/extensions/orca-agents/src/common/orca-agents-protocol.ts"
       ],
       "only_in": [
@@ -2134,21 +2264,25 @@
         "scripts/verify-orca-bridge-dir.mjs",
         "scripts/verify-orca-build-shape.mjs",
         "scripts/verify-orca-claude-sdk.mjs",
+        "scripts/verify-orca-credential-store.mjs",
+        "scripts/verify-orca-failure-classes.mjs",
         "scripts/verify-orca-hidden-electron.mjs",
         "scripts/verify-orca-packaged-tree.mjs",
         "scripts/verify-orca-service-live.mjs",
         "scripts/verify-orca-service.mjs",
         "scripts/verify-platform.sh",
+        "scripts/verify-shell-error-copy.mjs",
+        "scripts/verify-sidecar-origin-gate.mjs",
         "theia/extensions/orca-agents/src/common/orca-agents-protocol.ts"
       ],
-      "reason": "P60-R2 (OVL-04, plan 60-04): Orca's ORCAD_*_FILENAME slot-marker constant names (derived from orca/src/shared/orcad-artifacts.ts) and PowerBrowser's ORCAD_ENV_NAMES. Evidence: scripts/lib/orca-run.mjs:77, scripts/verify-orca-build-shape.mjs:47. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 62 (plan 62-03) re-measured this row on the merged tree after the overlay gate and OrcaService lanes, adding powerbrowser/INTERNAL-APIS.md, powerbrowser/shell/OrcaEnv.sys.mjs, powerbrowser/shell/OrcaService.sys.mjs, scripts/verify-orca-hidden-electron.mjs, scripts/verify-orca-service-live.mjs, scripts/verify-orca-service.mjs. Phase 63 (plan 63-04) re-measured this row on the merged tree after lanes p63-06 and p63-03 and the orca-agents wiring, adding scripts/verify-orca-bridge-dir.mjs, theia/extensions/orca-agents/src/common/orca-agents-protocol.ts. Phase 68 (plan 68-06) re-measured this row on the merged tree after lanes p68-03, p68-04, p68-01, p68-10, p68-07, p68-09 and p68-02, adding docs/BUILD.md, orca-overlay/patches/080-orcad-external-claude-agent-sdk.patch, powerbrowser/packaging/package-macos.sh, scripts/lib/orca-artifacts.mjs, scripts/lib/orca-shipped-packages.mjs, scripts/verify-orca-claude-sdk.mjs, scripts/verify-orca-packaged-tree.mjs, scripts/verify-platform.sh. COUNT MOVED 107 -> 180. Phase 64 (plan 64-05) re-measured this row over the merged tree, adding scripts/lib/orca-tabs-live.mjs. Phase 64 (plan 64-06) re-measured this row over the 64-06 tree. Phase 66 (plan 66-06) re-measured this row on the merged tree with this scanner's own matcher, 190 -> 192, adding scripts/lib/orca-browser-live.mjs, scripts/verify-no-remote-agent-port-live.mjs."
+      "reason": "P60-R2 (OVL-04, plan 60-04): Orca's ORCAD_*_FILENAME slot-marker constant names (derived from orca/src/shared/orcad-artifacts.ts) and PowerBrowser's ORCAD_ENV_NAMES. Evidence: scripts/lib/orca-run.mjs:77, scripts/verify-orca-build-shape.mjs:47. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 62 (plan 62-03) re-measured this row on the merged tree after the overlay gate and OrcaService lanes, adding powerbrowser/INTERNAL-APIS.md, powerbrowser/shell/OrcaEnv.sys.mjs, powerbrowser/shell/OrcaService.sys.mjs, scripts/verify-orca-hidden-electron.mjs, scripts/verify-orca-service-live.mjs, scripts/verify-orca-service.mjs. Phase 63 (plan 63-04) re-measured this row on the merged tree after lanes p63-06 and p63-03 and the orca-agents wiring, adding scripts/verify-orca-bridge-dir.mjs, theia/extensions/orca-agents/src/common/orca-agents-protocol.ts. Phase 68 (plan 68-06) re-measured this row on the merged tree after lanes p68-03, p68-04, p68-01, p68-10, p68-07, p68-09 and p68-02, adding docs/BUILD.md, orca-overlay/patches/080-orcad-external-claude-agent-sdk.patch, powerbrowser/packaging/package-macos.sh, scripts/lib/orca-artifacts.mjs, scripts/lib/orca-shipped-packages.mjs, scripts/verify-orca-claude-sdk.mjs, scripts/verify-orca-packaged-tree.mjs, scripts/verify-platform.sh. COUNT MOVED 107 -> 180. Phase 64 (plan 64-05) re-measured this row over the merged tree, adding scripts/lib/orca-tabs-live.mjs. Phase 64 (plan 64-06) re-measured this row over the 64-06 tree. Phase 66 (plan 66-06) re-measured this row on the merged tree with this scanner's own matcher, 190 -> 192, adding scripts/lib/orca-browser-live.mjs, scripts/verify-no-remote-agent-port-live.mjs. Phase 67 (plan 67-06) re-measured this row on the merged Phase 67 tree with this scanner's own matcher, adding scripts/verify-orca-credential-store.mjs, scripts/verify-orca-failure-classes.mjs, scripts/verify-shell-error-copy.mjs, scripts/verify-sidecar-origin-gate.mjs."
     },
     {
       "token": "Orcad",
       "case_form": "literal",
       "class": "coincidental",
       "target": "Orcad",
-      "expected_count": 102,
+      "expected_count": 125,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs",
@@ -2164,11 +2298,14 @@
         "scripts/verify-orca-agent-hooks.mjs",
         "scripts/verify-orca-browser-host-bundle.mjs",
         "scripts/verify-orca-claude-sdk.mjs",
+        "scripts/verify-orca-credential-store-live.mjs",
+        "scripts/verify-orca-credential-store.mjs",
         "scripts/verify-orca-hidden-electron.mjs",
         "scripts/verify-orca-packaged-live.mjs",
         "scripts/verify-orca-service-live.mjs",
         "scripts/verify-orca-service.mjs",
-        "scripts/verify-orca-slotless-start.mjs"
+        "scripts/verify-orca-slotless-start.mjs",
+        "scripts/verify-sidecar-origin-gate-live.mjs"
       ],
       "only_in": [
         ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
@@ -2185,13 +2322,16 @@
         "scripts/verify-orca-agent-hooks.mjs",
         "scripts/verify-orca-browser-host-bundle.mjs",
         "scripts/verify-orca-claude-sdk.mjs",
+        "scripts/verify-orca-credential-store-live.mjs",
+        "scripts/verify-orca-credential-store.mjs",
         "scripts/verify-orca-hidden-electron.mjs",
         "scripts/verify-orca-packaged-live.mjs",
         "scripts/verify-orca-service-live.mjs",
         "scripts/verify-orca-service.mjs",
-        "scripts/verify-orca-slotless-start.mjs"
+        "scripts/verify-orca-slotless-start.mjs",
+        "scripts/verify-sidecar-origin-gate-live.mjs"
       ],
-      "reason": "P60-R2 (OVL-04, plan 60-04): camelCase joins the boundary matcher rejects (left letter): startOrcad, stopOrcad, probeOrcad, serveWithOrcad, stageOrcadMobileWebBundle. Evidence: .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:25, scripts/build-orca.sh:89, scripts/lib/orca-run.mjs:19 and 1 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 62 (plan 62-03) re-measured this row on the merged tree after the overlay gate and OrcaService lanes, adding powerbrowser/shell/OrcaEnv.sys.mjs, powerbrowser/shell/OrcaService.sys.mjs, scripts/verify-orca-hidden-electron.mjs, scripts/verify-orca-service-live.mjs, scripts/verify-orca-service.mjs. COUNT MOVED 47 -> 51 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 004, adding .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs). COUNT MOVED 51 -> 60 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 005 and 006, adding .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs). Phase 63 (plan 63-04) re-measured this row on the merged tree after lanes p63-06 and p63-03 and the orca-agents wiring, adding scripts/verify-orca-agent-hooks.mjs. Phase 68 (plan 68-06) re-measured this row on the merged tree after lanes p68-03, p68-04, p68-01, p68-10, p68-07, p68-09 and p68-02, adding scripts/lib/orca-shipped-packages.mjs, scripts/verify-orca-claude-sdk.mjs, scripts/verify-orca-packaged-live.mjs. COUNT MOVED 70 -> 93. Phase 64 (plan 64-05) re-measured this row over the merged tree, adding scripts/lib/orca-pane-harness.mjs. Phase 66 (plan 66-06) re-measured this row on the merged tree with this scanner's own matcher, 97 -> 102, adding scripts/verify-orca-browser-host-bundle.mjs."
+      "reason": "P60-R2 (OVL-04, plan 60-04): camelCase joins the boundary matcher rejects (left letter): startOrcad, stopOrcad, probeOrcad, serveWithOrcad, stageOrcadMobileWebBundle. Evidence: .claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md:25, scripts/build-orca.sh:89, scripts/lib/orca-run.mjs:19 and 1 more file(s) in only_in. Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 62 (plan 62-03) re-measured this row on the merged tree after the overlay gate and OrcaService lanes, adding powerbrowser/shell/OrcaEnv.sys.mjs, powerbrowser/shell/OrcaService.sys.mjs, scripts/verify-orca-hidden-electron.mjs, scripts/verify-orca-service-live.mjs, scripts/verify-orca-service.mjs. COUNT MOVED 47 -> 51 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 004, adding .claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs). COUNT MOVED 51 -> 60 (plan 61-04, P61-10/P61-15: spike-findings wrap-up of 005 and 006, adding .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/provider-proof.mjs, .claude/skills/spike-findings-Power-Browser/sources/005-orca-browser-parity/results.md, .claude/skills/spike-findings-Power-Browser/sources/006-orca-live-sharing/floor-run.mjs). Phase 63 (plan 63-04) re-measured this row on the merged tree after lanes p63-06 and p63-03 and the orca-agents wiring, adding scripts/verify-orca-agent-hooks.mjs. Phase 68 (plan 68-06) re-measured this row on the merged tree after lanes p68-03, p68-04, p68-01, p68-10, p68-07, p68-09 and p68-02, adding scripts/lib/orca-shipped-packages.mjs, scripts/verify-orca-claude-sdk.mjs, scripts/verify-orca-packaged-live.mjs. COUNT MOVED 70 -> 93. Phase 64 (plan 64-05) re-measured this row over the merged tree, adding scripts/lib/orca-pane-harness.mjs. Phase 66 (plan 66-06) re-measured this row on the merged tree with this scanner's own matcher, 97 -> 102, adding scripts/verify-orca-browser-host-bundle.mjs. Phase 67 (plan 67-06) re-measured this row on the merged Phase 67 tree with this scanner's own matcher, adding scripts/verify-orca-credential-store-live.mjs, scripts/verify-orca-credential-store.mjs, scripts/verify-sidecar-origin-gate-live.mjs."
     },
     {
       "token": "onorca",
@@ -2374,15 +2514,18 @@
       "case_form": "literal",
       "class": "coincidental",
       "target": "withOrca",
-      "expected_count": 33,
+      "expected_count": 39,
       "expected_files": [
         "scripts/generate-licensing.mjs",
+        "scripts/lib/firefox-bidi.mjs",
         "scripts/lib/orca-browser-live.mjs",
         "scripts/lib/orca-pane-harness.mjs",
         "scripts/lib/orca-tabs-live.mjs",
         "scripts/verify-mode-switch-tabs-live.mjs",
         "scripts/verify-orca-add-project-live.mjs",
+        "scripts/verify-orca-landing-logo-live.mjs",
         "scripts/verify-orca-offer-scan.mjs",
+        "scripts/verify-orca-pairing-containment.mjs",
         "scripts/verify-orca-pane-css-live.mjs",
         "scripts/verify-orca-pane-standalone-live.mjs",
         "scripts/verify-orca-relaunch-restore-live.mjs",
@@ -2395,12 +2538,15 @@
       ],
       "only_in": [
         "scripts/generate-licensing.mjs",
+        "scripts/lib/firefox-bidi.mjs",
         "scripts/lib/orca-browser-live.mjs",
         "scripts/lib/orca-pane-harness.mjs",
         "scripts/lib/orca-tabs-live.mjs",
         "scripts/verify-mode-switch-tabs-live.mjs",
         "scripts/verify-orca-add-project-live.mjs",
+        "scripts/verify-orca-landing-logo-live.mjs",
         "scripts/verify-orca-offer-scan.mjs",
+        "scripts/verify-orca-pairing-containment.mjs",
         "scripts/verify-orca-pane-css-live.mjs",
         "scripts/verify-orca-pane-standalone-live.mjs",
         "scripts/verify-orca-relaunch-restore-live.mjs",
@@ -2411,7 +2557,7 @@
         "scripts/verify-uri-roundtrip.mjs",
         "scripts/verify-web-tab-bridge.mjs"
       ],
-      "reason": "Phase 68 (plan 68-06), 60-04 literal-row rule: the self-test fixture withOrca in generate-licensing, which the boundary matcher rejects (left letter h). Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 64 (plan 64-05) re-measured this row over the merged tree, adding scripts/lib/orca-pane-harness.mjs, scripts/lib/orca-tabs-live.mjs, scripts/verify-mode-switch-tabs-live.mjs, scripts/verify-orca-pane-css-live.mjs, scripts/verify-orca-pane-standalone-live.mjs, scripts/verify-orca-tabs-live.mjs, scripts/verify-orca-terminal-keys-live.mjs, scripts/verify-uri-roundtrip.mjs. Phase 64 (plan 64-06) re-measured this row over the 64-06 tree. Phase 65 (plan 65-05) re-measured this row over the merged Phase 65 tree with this scanner's own matcher: count 21 -> 27; files added: scripts/verify-orca-add-project-live.mjs, scripts/verify-orca-offer-scan.mjs, scripts/verify-orca-relaunch-restore-live.mjs, scripts/verify-orca-side-panel-live.mjs, scripts/verify-orca-workspace-live.mjs. Phase 66 (plan 66-06) re-measured this row on the merged tree with this scanner's own matcher, 27 -> 33, adding scripts/lib/orca-browser-live.mjs, scripts/verify-web-tab-bridge.mjs."
+      "reason": "Phase 68 (plan 68-06), 60-04 literal-row rule: the self-test fixture withOrca in generate-licensing, which the boundary matcher rejects (left letter h). Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated. Phase 64 (plan 64-05) re-measured this row over the merged tree, adding scripts/lib/orca-pane-harness.mjs, scripts/lib/orca-tabs-live.mjs, scripts/verify-mode-switch-tabs-live.mjs, scripts/verify-orca-pane-css-live.mjs, scripts/verify-orca-pane-standalone-live.mjs, scripts/verify-orca-tabs-live.mjs, scripts/verify-orca-terminal-keys-live.mjs, scripts/verify-uri-roundtrip.mjs. Phase 64 (plan 64-06) re-measured this row over the 64-06 tree. Phase 65 (plan 65-05) re-measured this row over the merged Phase 65 tree with this scanner's own matcher: count 21 -> 27; files added: scripts/verify-orca-add-project-live.mjs, scripts/verify-orca-offer-scan.mjs, scripts/verify-orca-relaunch-restore-live.mjs, scripts/verify-orca-side-panel-live.mjs, scripts/verify-orca-workspace-live.mjs. Phase 66 (plan 66-06) re-measured this row on the merged tree with this scanner's own matcher, 27 -> 33, adding scripts/lib/orca-browser-live.mjs, scripts/verify-web-tab-bridge.mjs. Phase 67 (plan 67-06) re-measured this row on the merged Phase 67 tree with this scanner's own matcher, adding scripts/lib/firefox-bidi.mjs, scripts/verify-orca-landing-logo-live.mjs, scripts/verify-orca-pairing-containment.mjs."
     },
     {
       "token": "repoOrca",
@@ -2686,6 +2832,212 @@
         "scripts/lib/orca-pane-harness.mjs"
       ],
       "reason": "Phase 65 (plan 65-05): an in-word join the boundary matcher rejects (the letters before \"Orca\" are part of a camelCase identifier: resolveOrcaImport, the pane harness's import resolver), in scripts/lib/orca-pane-harness.mjs; measured with this scanner's own matcher on the merged Phase 65 tree."
+    },
+    {
+      "token": "handleOrcaShellMessage",
+      "case_form": "literal",
+      "class": "coincidental",
+      "target": "handleOrcaShellMessage",
+      "expected_count": 8,
+      "expected_files": [
+        "powerbrowser/INTERNAL-APIS.md",
+        "powerbrowser/shell/PowerBrowserAPI.sys.mjs",
+        "scripts/verify-orca-service.mjs"
+      ],
+      "only_in": [
+        "powerbrowser/INTERNAL-APIS.md",
+        "powerbrowser/shell/PowerBrowserAPI.sys.mjs",
+        "scripts/verify-orca-service.mjs"
+      ],
+      "reason": "Phase 67 (plan 67-06), 60-04 literal-row rule: the camelCase identifier handleOrcaShellMessage, added by Phase 67 in powerbrowser/INTERNAL-APIS.md, powerbrowser/shell/PowerBrowserAPI.sys.mjs, scripts/verify-orca-service.mjs, which the boundary matcher rejects (a letter joins the Orca form). Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
+    },
+    {
+      "token": "PowerBrowserOrcaHosting",
+      "case_form": "literal",
+      "class": "coincidental",
+      "target": "PowerBrowserOrcaHosting",
+      "expected_count": 7,
+      "expected_files": [
+        "powerbrowser/INTERNAL-APIS.md",
+        "powerbrowser/shell/OrcaService.sys.mjs",
+        "powerbrowser/shell/PowerBrowserAPI.sys.mjs",
+        "scripts/verify-orca-service.mjs"
+      ],
+      "only_in": [
+        "powerbrowser/INTERNAL-APIS.md",
+        "powerbrowser/shell/OrcaService.sys.mjs",
+        "powerbrowser/shell/PowerBrowserAPI.sys.mjs",
+        "scripts/verify-orca-service.mjs"
+      ],
+      "reason": "Phase 67 (plan 67-06), 60-04 literal-row rule: the camelCase identifier PowerBrowserOrcaHosting, added by Phase 67 in powerbrowser/INTERNAL-APIS.md, powerbrowser/shell/OrcaService.sys.mjs, powerbrowser/shell/PowerBrowserAPI.sys.mjs, scripts/verify-orca-service.mjs, which the boundary matcher rejects (a letter joins the Orca form). Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
+    },
+    {
+      "token": "PowerBrowserOrcaLogo",
+      "case_form": "literal",
+      "class": "coincidental",
+      "target": "PowerBrowserOrcaLogo",
+      "expected_count": 18,
+      "expected_files": [
+        "powerbrowser/INTERNAL-APIS.md",
+        "powerbrowser/shell/GroupActorChild.sys.mjs",
+        "powerbrowser/shell/OrcaEnv.sys.mjs",
+        "powerbrowser/shell/PowerBrowserAPI.sys.mjs",
+        "scripts/verify-orca-landing-selectors.mjs"
+      ],
+      "only_in": [
+        "powerbrowser/INTERNAL-APIS.md",
+        "powerbrowser/shell/GroupActorChild.sys.mjs",
+        "powerbrowser/shell/OrcaEnv.sys.mjs",
+        "powerbrowser/shell/PowerBrowserAPI.sys.mjs",
+        "scripts/verify-orca-landing-selectors.mjs"
+      ],
+      "reason": "Phase 67 (plan 67-06), 60-04 literal-row rule: the camelCase identifier PowerBrowserOrcaLogo, added by Phase 67 in powerbrowser/INTERNAL-APIS.md, powerbrowser/shell/GroupActorChild.sys.mjs, powerbrowser/shell/OrcaEnv.sys.mjs, powerbrowser/shell/PowerBrowserAPI.sys.mjs, scripts/verify-orca-landing-selectors.mjs, which the boundary matcher rejects (a letter joins the Orca form). Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
+    },
+    {
+      "token": "registerOrcaLogoActor",
+      "case_form": "literal",
+      "class": "coincidental",
+      "target": "registerOrcaLogoActor",
+      "expected_count": 3,
+      "expected_files": [
+        "powerbrowser/INTERNAL-APIS.md",
+        "powerbrowser/shell/PowerBrowserAPI.sys.mjs"
+      ],
+      "only_in": [
+        "powerbrowser/INTERNAL-APIS.md",
+        "powerbrowser/shell/PowerBrowserAPI.sys.mjs"
+      ],
+      "reason": "Phase 67 (plan 67-06), 60-04 literal-row rule: the camelCase identifier registerOrcaLogoActor, added by Phase 67 in powerbrowser/INTERNAL-APIS.md, powerbrowser/shell/PowerBrowserAPI.sys.mjs, which the boundary matcher rejects (a letter joins the Orca form). Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
+    },
+    {
+      "token": "removeOrcaPathsFor",
+      "case_form": "literal",
+      "class": "coincidental",
+      "target": "removeOrcaPathsFor",
+      "expected_count": 5,
+      "expected_files": [
+        "scripts/lib/firefox-bidi.mjs",
+        "scripts/lib/pb-relaunch.mjs"
+      ],
+      "only_in": [
+        "scripts/lib/firefox-bidi.mjs",
+        "scripts/lib/pb-relaunch.mjs"
+      ],
+      "reason": "Phase 67 (plan 67-06), 60-04 literal-row rule: the camelCase identifier removeOrcaPathsFor, added by Phase 67 in scripts/lib/firefox-bidi.mjs, scripts/lib/pb-relaunch.mjs, which the boundary matcher rejects (a letter joins the Orca form). Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
+    },
+    {
+      "token": "readyOrca",
+      "case_form": "literal",
+      "class": "coincidental",
+      "target": "readyOrca",
+      "expected_count": 7,
+      "expected_files": [
+        "scripts/verify-orca-failure-page-live.mjs",
+        "scripts/verify-orca-service.mjs"
+      ],
+      "only_in": [
+        "scripts/verify-orca-failure-page-live.mjs",
+        "scripts/verify-orca-service.mjs"
+      ],
+      "reason": "Phase 67 (plan 67-06), 60-04 literal-row rule: the camelCase identifier readyOrca, added by Phase 67 in scripts/verify-orca-failure-page-live.mjs, scripts/verify-orca-service.mjs, which the boundary matcher rejects (a letter joins the Orca form). Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
+    },
+    {
+      "token": "loadOrcaParser",
+      "case_form": "literal",
+      "class": "coincidental",
+      "target": "loadOrcaParser",
+      "expected_count": 2,
+      "expected_files": [
+        "scripts/verify-orca-offer-file.mjs"
+      ],
+      "only_in": [
+        "scripts/verify-orca-offer-file.mjs"
+      ],
+      "reason": "Phase 67 (plan 67-06), 60-04 literal-row rule: the camelCase identifier loadOrcaParser, added by Phase 67 in scripts/verify-orca-offer-file.mjs, which the boundary matcher rejects (a letter joins the Orca form). Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
+    },
+    {
+      "token": "checkOrcaCopy",
+      "case_form": "literal",
+      "class": "coincidental",
+      "target": "checkOrcaCopy",
+      "expected_count": 5,
+      "expected_files": [
+        "scripts/verify-shell-error-copy.mjs"
+      ],
+      "only_in": [
+        "scripts/verify-shell-error-copy.mjs"
+      ],
+      "reason": "Phase 67 (plan 67-06), 60-04 literal-row rule: the camelCase identifier checkOrcaCopy, added by Phase 67 in scripts/verify-shell-error-copy.mjs, which the boundary matcher rejects (a letter joins the Orca form). Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
+    },
+    {
+      "token": "readOrcaSources",
+      "case_form": "literal",
+      "class": "coincidental",
+      "target": "readOrcaSources",
+      "expected_count": 3,
+      "expected_files": [
+        "scripts/verify-shell-error-copy.mjs"
+      ],
+      "only_in": [
+        "scripts/verify-shell-error-copy.mjs"
+      ],
+      "reason": "Phase 67 (plan 67-06), 60-04 literal-row rule: the camelCase identifier readOrcaSources, added by Phase 67 in scripts/verify-shell-error-copy.mjs, which the boundary matcher rejects (a letter joins the Orca form). Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
+    },
+    {
+      "token": "loadOrcaCopy",
+      "case_form": "literal",
+      "class": "coincidental",
+      "target": "loadOrcaCopy",
+      "expected_count": 2,
+      "expected_files": [
+        "scripts/verify-shell-error-copy.mjs"
+      ],
+      "only_in": [
+        "scripts/verify-shell-error-copy.mjs"
+      ],
+      "reason": "Phase 67 (plan 67-06), 60-04 literal-row rule: the camelCase identifier loadOrcaCopy, added by Phase 67 in scripts/verify-shell-error-copy.mjs, which the boundary matcher rejects (a letter joins the Orca form). Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
+    },
+    {
+      "token": "runOrcaCopySelfTest",
+      "case_form": "literal",
+      "class": "coincidental",
+      "target": "runOrcaCopySelfTest",
+      "expected_count": 2,
+      "expected_files": [
+        "scripts/verify-shell-error-copy.mjs"
+      ],
+      "only_in": [
+        "scripts/verify-shell-error-copy.mjs"
+      ],
+      "reason": "Phase 67 (plan 67-06), 60-04 literal-row rule: the camelCase identifier runOrcaCopySelfTest, added by Phase 67 in scripts/verify-shell-error-copy.mjs, which the boundary matcher rejects (a letter joins the Orca form). Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
+    },
+    {
+      "token": "addOrca",
+      "case_form": "literal",
+      "class": "coincidental",
+      "target": "addOrca",
+      "expected_count": 3,
+      "expected_files": [
+        "scripts/verify-sidecar-origin-gate.mjs"
+      ],
+      "only_in": [
+        "scripts/verify-sidecar-origin-gate.mjs"
+      ],
+      "reason": "Phase 67 (plan 67-06), 60-04 literal-row rule: the camelCase identifier addOrca, added by Phase 67 in scripts/verify-sidecar-origin-gate.mjs, which the boundary matcher rejects (a letter joins the Orca form). Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
+    },
+    {
+      "token": "mutateOrca",
+      "case_form": "literal",
+      "class": "coincidental",
+      "target": "mutateOrca",
+      "expected_count": 3,
+      "expected_files": [
+        "scripts/verify-sidecar-origin-gate.mjs"
+      ],
+      "only_in": [
+        "scripts/verify-sidecar-origin-gate.mjs"
+      ],
+      "reason": "Phase 67 (plan 67-06), 60-04 literal-row rule: the camelCase identifier mutateOrca, added by Phase 67 in scripts/verify-sidecar-origin-gate.mjs, which the boundary matcher rejects (a letter joins the Orca form). Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
     }
   ]
 }

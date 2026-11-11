@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 13
+open_count: 15
 waived_count: 2
 fixed_count: 29
-total_count: 44
-last_updated: 2026-11-10T22:08:56.684Z
+total_count: 46
+last_updated: 2026-11-11T18:33:38.266Z
 ---
 
 # Broken Windows Ledger
@@ -59,6 +59,8 @@ last_updated: 2026-11-10T22:08:56.684Z
 | 42 | 39 | deviation | scripts/verify-ng-067-frontend-errors.mjs |  | ng067-frontend-errors-reach-telemetry flaked: 'at level error no frontend.uncaught-error event was sent' in the 39-19 full run, then PASS 2 of 2 alone; repro: scripts/verify-platform.sh --only ng067-frontend-errors-reach-telemetry; cause so far: timing in the frontend error delivery or its read-back, not isolated; source: no UAT test (NG-067 registry row) | fixed |  | 2026-11-07T10:18:35.742Z | 2026-11-09T06:25:41.438Z |
 | 43 | 39 | deviation | scripts/verify-page-furniture-live.mjs |  | page-furniture-live-self-test flaked: clean control 'context-menu: Copy Image Link did not put the image URL on the clipboard' in the 39-19 full run, then PASS 2 of 2 alone; the plain page-furniture-live row passed; repro: scripts/verify-platform.sh --only page-furniture-live-self-test; cause so far: the headless clipboard read-back after Copy Image Link is timing-dependent (the menu-edit Paste and iframe-edit-rows flakes share the headless clipboard); source: 35-UAT test 6 | fixed |  | 2026-11-07T10:18:36.853Z | 2026-11-09T17:03:27.646Z |
 | 44 | 68 | deviation | inventory/licence-allowlist.json |  | open owner licence items: (1) ruling 68-B, the per-package permissive set allowed_package_spdx and its exception rows; (2) ruling 68-A was decided 2026-11-10 (D-30: the Claude agent SDK ships in a pre-installed, removable Theia extension, out of orcad), and the owner still confirms that Anthropic's terms (https://code.claude.com/docs/en/legal-and-compliance) permit redistributing it, then sets terms_check to confirmed; (3) the GPL-3.0 section 6 reading for the bundled uBlock Origin XPI (P68-39); no release is cut while (1) or (2) is open (release.yml --rulings guard); repro: scripts/verify-platform.sh --only orca-licence-rulings; source: 68-CONTEXT P68-38, P68-39 | open |  | 2026-11-10T22:08:56.684Z |  |
+| 45 | 67 | unmet-truth | theia/extensions/orca-panes/src/browser/failure/orca-hosting-status.ts |  | orca-failure-page-live: after orcad is killed the automatic re-pair brings content back, then Orca's client is refused (access-revoked), clears its stored environment, and repair() re-pairs under a new environment id that strands its sessions; the next control reads pairing-lost (or browser-not-attached that Reconnect cannot clear). Root cause in orca-overlay pb-session-pairing.ts repair (67-06 Task 2, owner decision) | open |  | 2026-11-11T18:33:38.140Z |  |
+| 46 | 67 | unrun-verify | scripts/verify-orca-landing-logo-live.mjs |  | orca-landing-logo-live remount leg (A-9): Landing unmounts on worktree activation but did not mount again within 30 s after the worktree was removed (main worktree activated) or its terminals closed; proxy control, web tab, stock window and Theia legs PASS (67-06) | open |  | 2026-11-11T18:33:38.266Z |  |
 
 ````json
 [
@@ -608,6 +610,32 @@ last_updated: 2026-11-10T22:08:56.684Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-11-10T22:08:56.684Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 45,
+    "kind": "unmet-truth",
+    "phase": "67",
+    "file": "theia/extensions/orca-panes/src/browser/failure/orca-hosting-status.ts",
+    "line": null,
+    "description": "orca-failure-page-live: after orcad is killed the automatic re-pair brings content back, then Orca's client is refused (access-revoked), clears its stored environment, and repair() re-pairs under a new environment id that strands its sessions; the next control reads pairing-lost (or browser-not-attached that Reconnect cannot clear). Root cause in orca-overlay pb-session-pairing.ts repair (67-06 Task 2, owner decision)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-11T18:33:38.140Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 46,
+    "kind": "unrun-verify",
+    "phase": "67",
+    "file": "scripts/verify-orca-landing-logo-live.mjs",
+    "line": null,
+    "description": "orca-landing-logo-live remount leg (A-9): Landing unmounts on worktree activation but did not mount again within 30 s after the worktree was removed (main worktree activated) or its terminals closed; proxy control, web tab, stock window and Theia legs PASS (67-06)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-11T18:33:38.266Z",
     "resolved_at": null,
     "milestone": "v1.5"
   }
