@@ -4033,6 +4033,16 @@ run_own_checks() {
     # The self-test plants each fault in a hermetic fixture tree.
     "orca-browser-abilities|node $REPO_ROOT/scripts/verify-orca-browser-abilities.mjs"
     "orca-browser-abilities-self-test|node $REPO_ROOT/scripts/verify-orca-browser-abilities.mjs --self-test"
+    # NEW (66-02, BRW-02, P66-10, A3): orca-browser-entry-points derives from the pinned Orca source (typescript) the
+    # page-mounting components under components/browser-pane/ (a webview element or a pointer-driven stream surface,
+    # directly or through imports in that directory), the callers of createBrowserTab and createWebRuntimeSessionBrowserTab,
+    # and TabContentType's browser member; it walks the PB pane entry's import graph (overlay files at their in-tree
+    # paths) and requires that it reaches no page-mounting component, that the browser route is pb-web-tab, that each
+    # caller is listed reachable or dead with its reason, and that the host bundle's served prefix is orca-panes' route.
+    # Cross-lane: the link import, the placement assignment, HOST_EXPORTS and the link key/event are compared with lane
+    # p66-01's files, a named SKIP while pb-browser-host-link.ts is absent. The self-test plants each fault in a fixture.
+    "orca-browser-entry-points|node $REPO_ROOT/scripts/verify-orca-browser-entry-points.mjs"
+    "orca-browser-entry-points-self-test|node $REPO_ROOT/scripts/verify-orca-browser-entry-points.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
