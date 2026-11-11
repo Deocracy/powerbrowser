@@ -12,9 +12,11 @@
 //   1. the standalone page (Orca's renderer unmodified, its sidebar mounted from
 //      the standalone bundle) against the scratch orcad;
 //   2. PowerBrowser's Orca side panel against PowerBrowser's orcad.
-// Steps: Orca's Add-project control in the sidebar; the dialog's server-path
-// step (in a web client Browse goes there, CA-13): "enter a host path", the
-// repository path typed into its path field, "Add Git Project"; orca repo list
+// Steps: Orca's Add-project control in the sidebar; the start step's Browse
+// entry, which in a web client opens the server-path step (CA-13) with Orca's
+// host file browser in front; that browser's Cancel; "enter a host path" when
+// the path field is not already open; the repository path typed into its path
+// field, "Add Git Project"; orca repo list
 // --json recorded; then the repository's header actions, "Remove Project" and
 // the dialog's confirm; orca repo list --json recorded again. Every label and
 // selector is derived at check time from Orca's sidebar sources (typescript).
@@ -51,6 +53,8 @@ const SIDEBAR = 'orca/src/renderer/src/components/sidebar';
 const SRC = {
     trigger: `${SIDEBAR}/sidebar-header-actions.tsx`,
     server: `${SIDEBAR}/AddRepoServerStartStep.tsx`,
+    startActions: `${SIDEBAR}/add-repo-local-start-actions.ts`,
+    browser: `${SIDEBAR}/RemoteFileBrowser.tsx`,
     actions: `${SIDEBAR}/worktree-list/rows/repo-header-project-actions.tsx`,
     header: `${SIDEBAR}/worktree-list/rows/SectionHeader.tsx`,
     confirm: `${SIDEBAR}/RemoveFolderDialog.tsx`,
@@ -120,8 +124,17 @@ export function deriveSteps() {
         const id = n.attributes.properties.find(p => ts.isJsxAttribute(p) && p.name.getText() === 'id');
         if (id?.initializer && ts.isStringLiteral(id.initializer)) pathInput = id.initializer.text;
     });
+    // The start step's primary action: the object literal whose onClick is onBrowse; its title's translate default.
+    let browse;
+    visit(parse(SRC.startActions), n => {
+        if (browse || !ts.isObjectLiteralExpression(n)) return;
+        const prop = name => n.properties.find(p => ts.isPropertyAssignment(p) && p.name.getText() === name);
+        if (prop('onClick')?.initializer.getText() === 'onBrowse') browse = defaults(prop('title') ?? n)[0];
+    });
     const steps = {
         trigger,
+        browse,
+        browserCancel: labelOf(SRC.browser, 'onClick', /^\{onCancel\}$/),
         manualEntry: labelOf(SRC.server, 'onClick', /setPathEntryOpen\(true\)/),
         pathInput,
         addGit: labelOf(SRC.server, 'onClick', /onAddServerPath\('git'\)/),
@@ -151,9 +164,15 @@ function addBody(steps, root, repo) {
         const trigger = await wait(() => sidebar.querySelector('[aria-label=' + JSON.stringify(${J(steps.trigger)}) + ']'), 15000);
         if (!trigger) return 'no Add-project control in the sidebar';
         press(trigger);
-        const manual = await wait(() => byText('button', ${J(steps.manualEntry)}), 10000);
-        if (!manual) return 'no server-path step in the Add-project dialog';
-        press(manual);
+        const browse = await wait(() => byText('[role=dialog] button', ${J(steps.browse)}), 10000);
+        if (!browse) return 'no Browse entry in the Add-project dialog';
+        press(browse);
+        // A web client opens the server-path step with the host file browser in front; its Cancel shows the path field.
+        const cancel = await wait(() => byText('[role=dialog] button', ${J(steps.browserCancel)}), 10000);
+        if (!cancel) return 'no host file browser on the server-path step';
+        press(cancel);
+        const manual = await wait(() => document.getElementById(${J(steps.pathInput)}) ? null : byText('button', ${J(steps.manualEntry)}), 1500);
+        if (manual) press(manual);
         const input = await wait(() => document.getElementById(${J(steps.pathInput)}), 10000);
         if (!input) return 'no host path field';
         setInput(input, ${J(repo)});
