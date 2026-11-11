@@ -11738,11 +11738,49 @@ async function handleOrcaShellMessage(data, actorRef) {
         }
         return { ok: true, kind, ...OrcaEnv.orcaStatusReply(OrcaService.getState()) };
       }
+      case "orcaRestart": {
+        // P67-06: acts only in the failed state; anywhere else restart() logs one line and answers false.
+        const accepted = await OrcaService.restart();
+        return { ok: true, kind, accepted };
+      }
+      case "orcaShowDiagnostics": {
+        // The wall above proved the sender is the Theia document in the shell's own content browser.
+        const shellWindow = actorRef?.browsingContext?.top?.embedderElement?.ownerGlobal;
+        if (typeof shellWindow?.powerbrowserOpenDiagnostics !== "function") {
+          return { ok: false, reason: "not-available" };
+        }
+        shellWindow.powerbrowserOpenDiagnostics();
+        return { ok: true, kind, accepted: true };
+      }
       default:
-        return { ok: false, reason: "validation", message: "handleShellMessage: not available yet" };
+        return { ok: false, reason: "validation", message: `handleShellMessage: unknown kind ${String(kind)}` };
     }
   } catch (err) {
     return { ok: false, reason: "store", message: `handleShellMessage: ${kind} failed (store ${err && err.name ? err.name : "error"})` };
   }
 }
+
+// P67-16 (RUN-09): the two reads OrcaService's refusal needs. Gecko's TmpD is where this browser
+// itself puts temporary files; realPath resolves symlinks with nsIFile normalize(), which is
+// realpath(3) on Unix (xpcom/io/nsLocalFileUnix.cpp). Neither ever throws.
+export const PowerBrowserOrcaHosting = Object.freeze({
+  getTempDir() {
+    try {
+      return Services.dirsvc.get("TmpD", Ci.nsIFile).path;
+    } catch {
+      return null;
+    }
+  },
+  realPath(path) {
+    try {
+      const file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
+      file.initWithPath(path);
+      file.normalize();
+      return file.path;
+    } catch {
+      // Absent, not absolute, or not allowed: the lexical form is still compared.
+      return path;
+    }
+  },
+});
 // ---- end Orca hosting ----

@@ -440,6 +440,8 @@ export const ORCA_STEP_CLASSES = Object.freeze({
   "checking that orcad is bound to loopback": "could-not-start",
   "checking the Node.js version orcad runs on": "could-not-start",
   "an unexpected error": "could-not-start",
+  "checking for a temporary profile folder": "temporary-profile",
+  "checking the Orca sign-in storage setting": "plaintext-setting",
 });
 
 /** Orca's PairingOfferUnavailableReason at the pin (runtime-rpc-pairing-types.ts), seen in orcad's ready line. */
@@ -520,3 +522,67 @@ export function failureClassOf({ state, restarting, step, code, offerUnavailable
 export function orcaStatusReply(state) {
   return { state: state.state, failureClass: state.failureClass };
 }
+
+// ---------------------------------------------------------------------------
+// Phase 67 (RUN-09, P67-16..P67-19): what OrcaService refuses before it spawns orcad, and the one
+// sentence that states what protects Orca sign-ins. orca-credential-store compares these with the
+// pinned Orca source.
+
+/** Orca's plaintext override (orcad-secret-protection-gap.ts) and its trigger value; never in ORCAD_ENV_ALLOWLIST. */
+export const ORCA_PLAINTEXT_OVERRIDE = Object.freeze({ name: "ORCA_HEADLESS_SECRET_STORE", value: "plaintext" });
+
+/** Environment names that name a temporary folder, per Node platform (Gecko's TmpD and Node's tmpdir() read them). */
+export const ORCA_TEMP_ENV_NAMES = Object.freeze({
+  linux: Object.freeze(["TMPDIR", "TMP", "TEMP"]),
+  darwin: Object.freeze(["TMPDIR", "TMP", "TEMP"]),
+  win32: Object.freeze(["TEMP", "TMP"]),
+});
+
+/** Fixed temporary folders per Node platform, with macOS's /private forms (A-4). */
+export const ORCA_FIXED_TEMP_ROOTS = Object.freeze({
+  linux: Object.freeze(["/tmp", "/var/tmp"]),
+  darwin: Object.freeze(["/tmp", "/var/tmp", "/private/tmp", "/private/var/tmp"]),
+  win32: Object.freeze([]),
+});
+
+/**
+ * The first of `roots` that equals, or is a whole-segment prefix of, one of `paths`; else null. win32
+ * compares case-insensitively with either separator (Pitfall 6). Empty or non-string entries are skipped.
+ */
+export function tempRootOf({ paths, roots, platform } = {}) {
+  const win = platform === "win32";
+  const norm = value => {
+    let out = win ? value.replace(/\//g, "\\").toLowerCase() : value;
+    const sep = win ? "\\" : "/";
+    while (out.endsWith(sep)) {
+      out = out.slice(0, -1);
+    }
+    return out;
+  };
+  const usable = list => (Array.isArray(list) ? list.filter(v => typeof v === "string" && v !== "") : []);
+  const targets = usable(paths).map(norm);
+  for (const root of usable(roots)) {
+    const r = norm(root);
+    const sep = win ? "\\" : "/";
+    if (targets.some(t => t === r || t.startsWith(`${r}${sep}`))) {
+      return root;
+    }
+  }
+  return null;
+}
+
+/** P67-19: the folder orcad keeps its credential key in (orcadCredentialRoot, homedir()/.orca), or null. */
+export function credentialKeyFolderFor(getEnv, platform) {
+  const home = getEnv(platform === "win32" ? "USERPROFILE" : "HOME");
+  if (typeof home !== "string" || home === "") {
+    return null;
+  }
+  if (platform === "win32") {
+    return `${home.replace(/[\\/]+$/, "")}\\.orca`;
+  }
+  return platform === "linux" || platform === "darwin" ? `${home.replace(/\/+$/, "")}/.orca` : null;
+}
+
+/** P67-18: the protection sentence, byte-identical in website-staging/privacy.html and orca-panes' copy table. */
+export const ORCA_PROTECTION_SENTENCE =
+  "PowerBrowser protects Orca sign-ins with a key file that only your user account can read, not with your system's keyring.";

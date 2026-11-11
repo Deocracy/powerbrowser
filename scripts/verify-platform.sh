@@ -4075,6 +4075,13 @@ run_own_checks() {
     # owner code read from error.code, a stock window judged before the mark was proven, ...) going red by name.
     "orca-browser-agent-live-self-test|node $REPO_ROOT/scripts/verify-orca-browser-agent-live.mjs --self-test"
     "orca-agent-mark-live-self-test|node $REPO_ROOT/scripts/verify-orca-agent-mark-live.mjs --self-test"
+    # NEW (67-01, RUN-06/RUN-09, P67-02..P67-06, P67-16..P67-20): orca-failure-classes derives OrcaService's failed
+    # steps (_fail and step: literals), OrcaEnv's ORCAD_*_CODE values and, with typescript over the pinned Orca source,
+    # PairingOfferUnavailableReason and WebRuntimeAuthFailureReason, and requires each to land in exactly one of the
+    # eight classes, every class reached. Lane p67-03's copy and offer-policy files print one named SKIP while absent.
+    # The self-test plants an added Orca reason, a removed class, a class without copy, an unmapped step and more.
+    "orca-failure-classes|node $REPO_ROOT/scripts/verify-orca-failure-classes.mjs"
+    "orca-failure-classes-self-test|node $REPO_ROOT/scripts/verify-orca-failure-classes.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"

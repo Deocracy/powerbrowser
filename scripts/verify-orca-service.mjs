@@ -96,6 +96,16 @@
 //     PowerBrowserAPI.sys.mjs spreads OrcaEnv.orcaStatusReply(OrcaService.getState()) and
 //     names no other getState field, and orcaStatusReply over a full state has exactly the
 //     keys state and failureClass.
+//     Scenario K (restart, plan 67-01's H): restart() in ready and in starting answers
+//     false and spawns nothing; in failed (D's busy port) it answers true and spawns
+//     exactly once more.
+//     Scenario L (RUN-09 refusal, plan 67-01's J): with the stub's TmpD at /scratch/tmpd,
+//     a profile under it, a profile under $TMPDIR, and a long profile whose alias
+//     resolves under TmpD each fail with failureClass temporary-profile and the row "Orca
+//     temporary folder", spawn no orcad and read no reap record; a profile outside every
+//     root with the plaintext override at its trigger value fails with plaintext-setting
+//     and the row "Orca setting"; with another value orcad starts. Every run carries the
+//     "Orca credential key folder" row (HOME/.orca).
 // 10. Bridge folder key (Phase 63, D-31, P63-35): the POWERBROWSER_ORCA_* key
 //     TheiaService.sys.mjs sets is derived from it, and TheiaService computes
 //     its value through OrcaEnv.bridgeDirFor and OrcaEnv.dataRootFor. When
@@ -680,6 +690,80 @@ async function scenarioG(paths, env) {
     return fails;
 }
 
+/** K (restart, Phase 67 P67-06): restart() acts only in the failed state. */
+async function scenarioK(paths, env) {
+    const fails = [];
+    const ready = makeBoundary(baseWorld());
+    const svc1 = await loadService(paths, ready, env);
+    await svc1.start();
+    const before = orcadSpawns(ready.calls).length;
+    if ((await svc1.restart()) !== false) fails.push('scenario K: restart outside failed -- restart() in ready answered true');
+    await svc1._restartRun;
+    if (orcadSpawns(ready.calls).length !== before) fails.push('scenario K: restart outside failed -- restart() in ready spawned orcad again');
+    await svc1.stop();
+
+    const slow = makeBoundary(baseWorld({ orcad: () => fakeProc(5001) }));
+    const svc2 = await loadService(paths, slow, env);
+    const started = svc2.start();
+    for (let i = 0; i < 200 && !orcadSpawns(slow.calls).length; i++) await new Promise((r) => setTimeout(r, 2));
+    if (svc2.getState().state !== 'starting') fails.push(`scenario K: the slow orcad left state '${svc2.getState().state}', not starting`);
+    if ((await svc2.restart()) !== false) fails.push('scenario K: restart outside failed -- restart() in starting answered true');
+    if (orcadSpawns(slow.calls).length !== 1) fails.push('scenario K: restart outside failed -- restart() in starting spawned orcad again');
+    await svc2.stop();
+    await started;
+
+    const busy = makeBoundary(baseWorld({
+        orcad: () => fakeProc(5001, { stderr: [`{ code: '${env.ORCAD_PINNED_PORT_CODE}' }\n`], exitCode: 1 }),
+    }));
+    const svc3 = await loadService(paths, busy, env);
+    await svc3.start();
+    if (svc3.getState().state !== 'failed') fails.push(`scenario K: the busy port left state '${svc3.getState().state}', not failed`);
+    const accepted = await svc3.restart();
+    await svc3._restartRun;
+    if (accepted !== true) fails.push('scenario K: restart() in failed answered false');
+    if (orcadSpawns(busy.calls).length !== 2) fails.push(`scenario K: restart() in failed led to ${orcadSpawns(busy.calls).length} spawns in all, not 2`);
+    await svc3.stop();
+    return fails;
+}
+
+/** L (RUN-09 refusal, Phase 67 P67-16, P67-17): nothing is spawned or reaped for a refused start. */
+async function scenarioL(paths, env) {
+    const fails = [];
+    const tmpD = '/scratch/tmpd';
+    const longProfile = `/${'q'.repeat(99)}`;
+    const alias = await env.aliasPathFor(`${longProfile}/${env.ORCAD_DATA_ROOT_NAME}`, (n) => ({ XDG_RUNTIME_DIR: '/run/user/1000', HOME: '/home/u' })[n] ?? '');
+    const base = { PATH: '/usr/bin', HOME: '/home/u', XDG_RUNTIME_DIR: '/run/user/1000', LANG: 'C.UTF-8' };
+    const { name, value } = env.ORCA_PLAINTEXT_OVERRIDE;
+    const cases = [
+        { label: 'a profile under TmpD', world: { tmpD, profileDir: `${tmpD}/prof` }, cls: 'temporary-profile', row: 'Orca temporary folder' },
+        { label: 'a profile under $TMPDIR', world: { tmpD, profileDir: '/data/t/prof', env: { ...base, TMPDIR: '/data/t/' } }, cls: 'temporary-profile', row: 'Orca temporary folder' },
+        // The data root's own realpath call fails (returns its input); only the alias resolves into TmpD.
+        { label: 'a long profile whose alias resolves under TmpD', world: { tmpD, profileDir: longProfile, realPaths: { [alias]: `${tmpD}/real` } }, cls: 'temporary-profile', row: 'Orca temporary folder', naming: 'alias not resolved' },
+        { label: 'the plaintext override', world: { tmpD, env: { ...base, [name]: value } }, cls: 'plaintext-setting', row: 'Orca setting' },
+        { label: 'another override value', world: { tmpD, env: { ...base, [name]: 'keyring' } }, cls: null },
+    ];
+    for (const c of cases) {
+        const b = makeBoundary(baseWorld({ env: base, ...c.world }));
+        const svc = await loadService(paths, b, env);
+        await svc.start();
+        const state = svc.getState();
+        const spawns = orcadSpawns(b.calls).length;
+        const tag = `scenario L (${c.label})`;
+        if (c.cls === null) {
+            if (state.state !== 'ready' || spawns !== 1) fails.push(`${tag}: orcad did not start (state ${state.state}, ${spawns} spawns): ${JSON.stringify(svc.getDiagnosticRows())}`);
+            if (!svc.getRecentLog().some((l) => l.includes(name) && l.includes('ignores'))) fails.push(`${tag}: no log line says the other value is ignored`);
+        } else {
+            if (state.failureClass !== c.cls) fails.push(`${tag}: ${c.naming ? `${c.naming} -- ` : ''}failureClass is ${JSON.stringify(state.failureClass)}, not ${c.cls}`);
+            if (spawns) fails.push(`${tag}: refusal after spawn -- orcad was spawned ${spawns} time(s)`);
+            if (indexOfCall(b.calls, 'readStateFile', (a) => String(a[0]).endsWith(env.ORCAD_STATE_FILE_NAME)) >= 0) fails.push(`${tag}: refusal after spawn -- the reap record was read`);
+            if (!rowValue(svc, c.row)) fails.push(`${tag}: no "${c.row}" diagnostics row`);
+        }
+        if (rowValue(svc, 'Orca credential key folder') !== '/home/u/.orca') fails.push(`${tag}: the "Orca credential key folder" row is not /home/u/.orca`);
+        await svc.stop();
+    }
+    return fails;
+}
+
 /** Clause 12's static half: the orcaStatus reply is built by OrcaEnv.orcaStatusReply alone. */
 function orcaStatusClauses(paths, env) {
     const fails = [];
@@ -890,7 +974,7 @@ export async function check(paths) {
     fails.push(...handOff.fails);
     notes.push(...handOff.notes);
     fails.push(...orcaStatusClauses(paths, env));
-    const scenarios = { A: scenarioA, B: scenarioB, C: scenarioC, D: scenarioD, E: scenarioE, F: scenarioF, G: scenarioG, H: scenarioH, I: scenarioI, J: scenarioJ, 'J-b': scenarioJb };
+    const scenarios = { A: scenarioA, B: scenarioB, C: scenarioC, D: scenarioD, E: scenarioE, F: scenarioF, G: scenarioG, H: scenarioH, I: scenarioI, J: scenarioJ, 'J-b': scenarioJb, K: scenarioK, L: scenarioL };
     const saved = globalThis.ChromeUtils;
     try {
         for (const [label, run] of Object.entries(scenarios)) {
@@ -980,6 +1064,9 @@ async function runSelfTest() {
             { name: 'pane build writes another folder', naming: 'OrcaService looks in', file: paths.panesViteConfig, edit: swap("'out/web/assets/pb-panes'", "'out/web/pb-panes'") },
             { name: 'orcaStatusReply returns a third key', naming: 'reply carries more than the class', file: paths.orcaEnv, edit: swap('  return { state: state.state, failureClass: state.failureClass };', '  return { state: state.state, failureClass: state.failureClass, port: state.port };') },
             { name: 'the orcaStatus arm spreads getState() itself', naming: 'spreads getState', file: paths.api, edit: swap('...OrcaEnv.orcaStatusReply(OrcaService.getState()) };', '...OrcaEnv.orcaStatusReply(OrcaService.getState()), ...OrcaService.getState() };') },
+            { name: 'restart() acts in ready', naming: 'restart outside failed', file: paths.orcaService, edit: swap('    if (this._state !== "failed" || this._shuttingDown) {', '    if (this._shuttingDown) {') },
+            { name: 'the preflight moved after the spawn', naming: 'refusal after spawn', file: paths.orcaService, edit: then(swap('    if (!(await this._preflight())) {\n      return;\n    }\n    await this._reapLeftover({ includeDaemon: true });\n    await this._launch();\n', '    await this._reapLeftover({ includeDaemon: true });\n    await this._launch();\n    await this._preflight();\n')) },
+            { name: "the effective root's realPath skipped", naming: 'alias not resolved', file: paths.orcaService, edit: swap('[this._dataRoot, this._effectiveRoot].flatMap(path => [path, real(path)])', '[this._dataRoot, real(this._dataRoot), this._effectiveRoot]') },
             { name: 'lock code absent from the fixture source', naming: 'pinned source', file: fixtureCodes, edit: swap('orcad_instance_lock_held', 'orcad_lock_renamed') },
         ];
 
@@ -1031,6 +1118,6 @@ if (isEntryPoint) {
         for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`);
         process.exit(1);
     }
-    console.log(`${NAME}: PASS -- jar.mn ships every shell module; OrcaService spawns only through the exact-environment boundary, spells no environment name and carries no user-facing copy; launch wiring and the .onorca.dev row hold; POWERBROWSER_ORCA_BRIDGE_DIR comparison ${r.bridgeKeyComparison}; stub-boundary scenarios ${r.scenarios.map((s) => ({ J: 'J (hand-off files)', 'J-b': 'J-b (no bundle folder)', G: 'G (failure classes)' }[s] ?? s)).join(', ')} (start with orcad-data-root after ready, reap, stop order, busy port, non-loopback, alias, failure classes, no bridge folder, SDK extension disabled, offer and bundle folder after ready); the orcaStatus reply is the state and the class only; orca-panes file names ${r.handOff.panes}; bundle folder ${r.handOff.vite}`);
+    console.log(`${NAME}: PASS -- jar.mn ships every shell module; OrcaService spawns only through the exact-environment boundary, spells no environment name and carries no user-facing copy; launch wiring and the .onorca.dev row hold; POWERBROWSER_ORCA_BRIDGE_DIR comparison ${r.bridgeKeyComparison}; stub-boundary scenarios ${r.scenarios.map((s) => ({ J: 'J (hand-off files)', 'J-b': 'J-b (no bundle folder)', G: 'G (failure classes)', K: 'K (restart)', L: 'L (RUN-09 refusal)' }[s] ?? s)).join(', ')} (start with orcad-data-root after ready, reap, stop order, busy port, non-loopback, alias, failure classes, no bridge folder, SDK extension disabled, offer and bundle folder after ready, restart only when failed, temp folder and plaintext override refused before any spawn); the orcaStatus reply is the state and the class only; orca-panes file names ${r.handOff.panes}; bundle folder ${r.handOff.vite}`);
     process.exit(0);
 }
