@@ -6703,6 +6703,11 @@ run_own_checks() {
       # Coordinator proof on the merged tree (p65-01, p65-02, p65-04); under the live lock with ORCA_* unset.
       "orca-offer-scan|node $REPO_ROOT/scripts/verify-orca-offer-scan.mjs"
       "orca-relaunch-restore-live|node $REPO_ROOT/scripts/verify-orca-relaunch-restore-live.mjs"
+      # NEW (66-01, BRW-03, P66-02/P66-30): orca-browser-host-bundle. The served directory from the pane config's outDir;
+      # pb-browser-host.js imported in Node and attached to a scratch orcad with the offer held in memory: CLI tab create
+      # is one createPage, goto is answered, the user close (browser.tabClose) drops the page. Needs the Orca build and
+      # CLI; run under the live lock with ORCA_* unset; a named SKIP when the bundle, orcad or the CLI is absent.
+      "orca-browser-host-bundle|node $REPO_ROOT/scripts/verify-orca-browser-host-bundle.mjs"
     )
   fi
 

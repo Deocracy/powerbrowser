@@ -27,6 +27,8 @@
 #   9. panes: scripts/build-orca-panes.sh, the Orca pane bundle in out/web/assets/pb-panes/
 #      (Phase 64). It empties pb-panes/ first, so every later step that writes into pb-panes/
 #      (Phase 66's browser-host step) runs after it, here and on the --panes-only path.
+#   10. browser host: scripts/build-orca-browser-host.sh, the thin browser host pb-browser-host.js beside
+#      the pane bundle in out/web/assets/pb-panes/ (Phase 66, P66-02), after step 9 on both paths.
 #
 # --panes-only: on an already-built tree, runs step 1, step 1b, step 9 and every later step that
 # writes into pb-panes/; refuses when orca/out/web/web-index.html is absent.
@@ -147,6 +149,7 @@ run_step overlay apply_overlay
 if [ "$PANES_ONLY" = 1 ]; then
   [ -f "$SRC_DIR/out/web/web-index.html" ] || fail "--panes-only: orca/out/web/web-index.html is missing; run scripts/build-orca.sh without --panes-only first"
   run_step panes bash "$REPO_ROOT/scripts/build-orca-panes.sh"
+  run_step browser-host bash "$REPO_ROOT/scripts/build-orca-browser-host.sh"
   echo "build-orca: PASS -- panes only in $(( $(date +%s) - START ))s; log $LOG"
   exit 0
 fi
@@ -224,6 +227,9 @@ done
 
 # 9. The pane bundle (Phase 64); later pb-panes/ writers go after it.
 run_step panes bash "$REPO_ROOT/scripts/build-orca-panes.sh"
+
+# 10. The thin browser host (Phase 66), into pb-panes/ after the pane step emptied it.
+run_step browser-host bash "$REPO_ROOT/scripts/build-orca-browser-host.sh"
 
 # shellcheck source=/dev/null
 . "$REPO_ROOT/generated/upstream-pins.env"
