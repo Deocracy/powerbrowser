@@ -367,8 +367,11 @@ export function reloadVerdict(obs) {
         if (after[name] !== key) fails.push(`reload: pb-orca:${name} now addresses another pane`);
         if (!storeKeys.has(after[name])) fails.push(`reload: pb-orca:${name} addresses no pane in the store`);
     }
-    const bars = (list) => JSON.stringify((list ?? []).map((bar) => [...bar].sort().join(',')).sort());
-    if (bars(obs.barsBefore) !== bars(obs.barsAfter)) fails.push('reload: the Lumino tab bars changed across the reload');
+    // Bars are compared over the panes Orca's store still holds after the reload: a pane Orca itself dropped is gone in
+    // Orca too (noted by the caller), while a pane PB lost or moved and the store kept still changes these bars.
+    const kept = obs.keptNames ? new Set(obs.keptNames) : null;
+    const bars = (list) => JSON.stringify((list ?? []).map((bar) => [...bar].filter((n) => !kept || kept.has(n)).sort().join(',')).filter(Boolean).sort());
+    if (bars(obs.barsBefore) !== bars(obs.barsAfter)) fails.push(`reload: the Lumino tab bars changed across the reload (${bars(obs.barsBefore)} -> ${bars(obs.barsAfter)})`);
     return fails;
 }
 
@@ -589,8 +592,9 @@ async function runLive(lib, pre = {}) {
                 if (opened?.error) otherFails.push(`other-views: openPane conflict-review rejected: ${opened.error}`);
                 else {
                     // Detector first: the merge editor whose result side is the UU file, then the hosted-widget absence.
-                    const editors = async () => ((await ctx.probe(`const shell = get('ApplicationShell'); const registry = get('TabUriRegistry');
-                        return shell.getWidgets('main').map(w => registry.uriOf(w)).filter(u => u && u.scheme === 'merge-editor').map(u => u.query);`)) ?? []).map(mergeEditorResultPath);
+                    // TabUriRegistry addresses no editor: a merge editor widget is read directly, as the query
+                    // MergeEditorUri.encode writes from its four sides.
+                    const editors = async () => ((await ctx.probe(`return get('ApplicationShell').getWidgets('main').filter(w => w.side1Pane && w.resultUri).map(w => JSON.stringify([w.baseUri, w.side1Uri, w.side2Uri, w.resultUri].map(u => u.toString())));`)) ?? []).map(mergeEditorResultPath);
                     const mergeEditors = await ctx.pollFor(async () => { const e = await editors(); return e.includes(file) ? e : null; }, 5000, 'the merge editor').catch(() => []);
                     const hostedConflict = (await ctx.hostedWidgets()).filter((w) => w.kind === 'conflict-review').length;
                     otherFails.push(...conflictReviewVerdict({ half: 'run', file, mergeEditors, hostedConflict }));
@@ -606,7 +610,10 @@ async function runLive(lib, pre = {}) {
         const tRecord = async () => ((await ctx.probe(PANES)) ?? []).find((p) => p.key === tKey) ?? null;
         if (second.error || !T.widget) cross.error = second.error ? `second client: ${second.error}` : 'the CLI terminal T has no hosted widget';
         else {
+            await ctx.focusTheiaFrame();
+            const fronted = await second.front();
             const moved = await second.moveTabToSplit(T.widget.options?.tabId, 'right');
+            if (fronted?.prev) await ctx.activate(fronted.prev);
             if (!moved || moved.error) Object.assign(cross, { error: moved?.error ?? 'the second client did not answer', menu: moved?.menu ?? [] });
             else {
                 Object.assign(cross, { stripsBefore: moved.stripsBefore, stripsAfter: moved.stripsAfter });
@@ -691,7 +698,11 @@ async function runLive(lib, pre = {}) {
         const storeAfter = await ctx.pollFor(async () => { const p = (await ctx.probe(PANES)) ?? []; return p.some((r) => r.worktreeId === worktreeId) ? p : null; }, RELOAD_MS + 5000, 'the store after reload').catch(() => []);
         await sleep(500);
         const hostedAfter = await ctx.hostedWidgets();
-        fail('reload', reloadVerdict({ before: names, after, ms: backMs, storedEnvKey, identityBefore, identityAfter: identityOf(hostedAfter), storeKeysAfter: storeAfter.map((r) => r.key), barsBefore, barsAfter: barsOf(hostedAfter) }));
+        const storeKeySet = new Set(storeAfter.map((r) => r.key));
+        const keptNames = Object.entries(identityBefore).filter(([, key]) => storeKeySet.has(key)).map(([name]) => name);
+        const droppedByStore = Object.keys(identityBefore).filter((n) => !keptNames.includes(n));
+        if (droppedByStore.length) notes.push(`reload: Orca's store no longer holds ${droppedByStore.map((n) => `pb-orca:${n}`).join(', ')} after the reload, and PowerBrowser closed ${droppedByStore.length === 1 ? 'its tab' : 'their tabs'}`);
+        fail('reload', reloadVerdict({ before: names, after, ms: backMs, storedEnvKey, identityBefore, identityAfter: identityOf(hostedAfter), storeKeysAfter: storeAfter.map((r) => r.key), barsBefore, barsAfter: barsOf(hostedAfter), keptNames }));
         if (!cross.error && cross.stripsAfter === cross.stripsBefore + 1) {
             cross.detectedAfterReload = !!(await ctx.pollFor(async () => ((await tRecord())?.neighbours?.some((n) => n.mode === 'split-right') ? true : null), 5000, 'T split-right after the reload').catch(() => false));
             cross.peersAfter = peersOf(await ctx.hostedWidgets());
@@ -795,6 +806,11 @@ async function openSecondClient(ctx) {
     const strip = await ctx.pollFor(async () => (await evalIn(`!!document.querySelector('[aria-label="New tab"], [title="New tab"]')`).catch(() => false)) === true || null, 15000, 'the worktree tab strip').catch(() => null);
     if (!strip) return { error: 'the selected worktree shows no New tab control' };
     return {
+        /** Brings the second client's web tab to the front (a background tab runs no animation frames, so Orca's tab
+         * strip does not render new tabs) and resolves the id of the widget that was active before, to restore. */
+        front: () => ctx.probe(`const shell = get('ApplicationShell'); const prev = shell.activeWidget ? shell.activeWidget.id : null;
+            const w = webTabs().find(x => String(x.url || '').startsWith(${JSON.stringify(base)})); if (!w) return { error: 'no web tab' };
+            await shell.activateWidget(w.id); await sleep(500); return { prev };`),
         /**
          * Clicks Orca's own New tab control (in tab group `groupIndex` when given) and its chat item; resolves { t } (the
          * page's Date.now at the click), or { t: null, menu } with the menu items' texts when Orca offers no chat row.
@@ -855,8 +871,11 @@ async function openSecondClient(ctx) {
             const texts = () => items().map(m => m.textContent.replace(/\\s+/g, ' ').trim());
             const escape = () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
             const stripsBefore = strips();
-            const tab = document.querySelector('[data-tab-id="' + CSS.escape(${JSON.stringify(String(tabId ?? ''))}) + '"]');
-            if (!tab) return { error: 'the second client shows no tab for T', menu: [] };
+            // T was just created through the CLI: the second client renders its tab once the host's frame arrives.
+            // Time-bounded, not count-bounded: a background tab's timers are throttled to about one per second.
+            let tab = null;
+            for (const end = Date.now() + 8000; !tab && Date.now() < end;) { tab = document.querySelector('[data-tab-id="' + CSS.escape(${JSON.stringify(String(tabId ?? ''))}) + '"]'); if (!tab) await sleep(100); }
+            if (!tab) return { error: 'the second client shows no tab for T (' + ${JSON.stringify(String(tabId ?? ''))} + ')', menu: [...document.querySelectorAll('[data-tab-id]')].map(e => e.getAttribute('data-tab-id')).slice(0, 30) };
             tab.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 10, clientY: 10 }));
             await sleep(400);
             const trigger = items().find(m => m.textContent.trim().toLowerCase().startsWith('move tab to split'));
@@ -963,6 +982,8 @@ function runSelfTest() {
         ['the side finding\'s term2/term3 swap', 'reload: pb-orca:term2 now addresses another pane', () => reloadVerdict(reload({ identityAfter: { chat1: 'c1', term2: 'k3', term3: 'k2' } }))],
         ['a key missing from the store after the reload', 'reload: pb-orca:term3 addresses no pane in the store', () => reloadVerdict(reload({ storeKeysAfter: ['c1', 'k2'] }))],
         ['a widget moved to another tab bar across the reload', 'reload: the Lumino tab bars changed across the reload', () => reloadVerdict(reload({ barsAfter: [['chat1', 'term3'], ['term2']] }))],
+        ['control: a pane Orca\'s store dropped leaves its bar', null, () => reloadVerdict(reload({ after: ['chat1', 'term2', 'term3'], barsAfter: [['term2'], ['chat1']], keptNames: ['chat1', 'term2'] }))],
+        ['a kept pane moved while another was dropped', 'reload: the Lumino tab bars changed across the reload', () => reloadVerdict(reload({ barsAfter: [['chat1', 'term2']], keptNames: ['chat1', 'term2'] }))],
         ['route control', null, () => routeVerdict({ noCookie: 403, traversal: 404, absolute: 404, entry: 200 })],
         ['offer control', null, () => offerVerdict({ detector: true, foundIn: [] })],
         ['selector derivation', null, () => (JSON.stringify(deriveTabChromeSelectors(sources)) === JSON.stringify(['[data-tab-group-strip-id]', '[data-tab-id]', '[data-tab-strip-slot]']) ? [] : [`derived ${JSON.stringify(deriveTabChromeSelectors(sources))}`])],
