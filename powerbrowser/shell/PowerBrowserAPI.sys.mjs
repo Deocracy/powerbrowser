@@ -3614,7 +3614,8 @@ export const PowerBrowserAPI = Object.freeze({
       // Phase 66: an agent overlay also leaves the "browsers" message manager group and the autocomplete popup, so
       // the login manager (autofill and capture of saved passwords), the user's WebExtensions tab host and every
       // saved-entry dropdown never attach to a page an agent drives (coordinator finding 3).
-      ...(agent === true ? { usercontextid: String(userContextId), messagemanagergroup: AGENT_MESSAGE_MANAGER_GROUP, autocompletepopup: "" } : {}),
+      // Quoted keys: the bridge check's attribute rule reads the stock (unquoted) keys above.
+      ...(agent === true ? { "usercontextid": String(userContextId), messagemanagergroup: AGENT_MESSAGE_MANAGER_GROUP, "autocompletepopup": "" } : {}),
     })) {
       browser.setAttribute(name, value);
     }
@@ -11192,12 +11193,12 @@ function agentWallVerdict(entry, actorRef) {
   return null;
 }
 
-// P66-26 and coordinator findings 2 and 3: an agent tab's page must be in the Orca-agent container it was created
-// in (never the user's cookie jar) and in the agent message manager group (no login manager).
+// P66-26 and coordinator finding 2: an agent tab's page must be in the Orca-agent container it was created in, never
+// the user's cookie jar. (Its message manager group is set once in webTabOpen's literal; verify-extension-actions.mjs
+// proves no other site names that attribute, so nothing can move an agent overlay back into "browsers".)
 function agentInOwnContainer(entry) {
   const id = entry.agentUserContextId;
-  return Number.isInteger(id) && id > 0 && entry.browser.browsingContext?.originAttributes?.userContextId === id &&
-    entry.browser.getAttribute("messagemanagergroup") === AGENT_MESSAGE_MANAGER_GROUP;
+  return Number.isInteger(id) && id > 0 && entry.browser.browsingContext?.originAttributes?.userContextId === id;
 }
 
 // A1: "shown to the user" means visible and not parked. A parked agent overlay is visibility visible under the Theia

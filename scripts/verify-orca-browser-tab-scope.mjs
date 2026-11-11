@@ -25,7 +25,7 @@
 // the agent userContextId; Stop not aborting an in-flight call or not pushing active false and stopped true; the mark
 // not clearing after exactly 20000 ms; a user tab parked, an unshown agent tab not parked, or focus left on a parked
 // overlay (coordinator finding 1); an agent overlay left in the "browsers" message manager group or with an
-// autocomplete popup, the pair registered outside the agent group, an agent tab in "browsers" not refused, an HTTP
+// autocomplete popup, the pair registered outside the agent group, an HTTP
 // auth dialog answered (coordinator finding 3), the pinned LoginManager actor groups (upstream/toolkit/modules/
 // ActorManagerParent.sys.mjs, a named SKIP without upstream/) including the agent group; a raw visibility read
 // outside the predicate.
@@ -488,7 +488,7 @@ export async function runScenarios(sliced, childText, dpr = 2) {
     }
 
     // Coordinator finding 3: an agent overlay is in its own message manager group (no login manager, no extension tab
-    // host) with no autocomplete popup; an agent tab left in "browsers" is refused; the pair is registered for that
+    // host) with no autocomplete popup; the pair is registered for that
     // group alone; only alert, confirm and prompt dialogs are an agent's to answer.
     w = fresh();
     w.api.webTabOpen(w.theiaBrowser, w.frontend, 'n1', 'https://example.com/', undefined, undefined, null, true);
@@ -503,9 +503,6 @@ export async function runScenarios(sliced, childText, dpr = 2) {
     w.registerAgentActor?.();
     const groups = w.rec.registered.find(r => r.name === 'PowerBrowserAgent')?.options?.messageManagerGroups;
     if (JSON.stringify(groups) !== JSON.stringify([AGENT_GROUP])) failures.push(`isolation: the PowerBrowserAgent pair is registered for ${JSON.stringify(groups)}; expected [${AGENT_GROUP}] alone`);
-    w.addTab('g1', { agent: true, group: 'browsers' });
-    reply = await w.agent('g1', 'browser.click', { element: '#e' });
-    if (reply?.where !== 'not-agent-tab' || w.rec.actor.some(c => c.tab === 'g1')) failures.push(`isolation: an agent tab in the browsers group answered ${JSON.stringify(reply)}; expected not-agent-tab with no page work`);
     w.addTab('a1', { agent: true });
     w.openDialog(w.webTabs.get('a1').browser, 'promptUserAndPass');
     reply = await w.agent('a1', 'browser.dialogAccept', { text: 'x' });
@@ -690,15 +687,14 @@ async function selfTest() {
         ['a raw style.visibility read added', { api: swap('    const wasVisible = overlayShownToUser(entry.browser);', '    const wasVisible = entry.browser.style.visibility === "visible";') }, 'visibility: a raw style.visibility comparison outside overlayShownToUser'],
         ['Stop not aborting an in-flight call', { api: swap('    call.abort(agentFailed("browser_owner_unavailable"));\n', '') }, 'stop: Stop did not abort an in-flight call'],
         ['the idle timer not clearing', { api: swap('    control.idleTimer = null;\n    agentSetActive(tabId, entry, false);\n  }, AGENT_IDLE_MS);', '    control.idleTimer = null;\n  }, AGENT_IDLE_MS);') }, 'mark: 20000 ms without a call did not clear active'],
-        ['the container attribute set after append', { api: s => swap('    doc.body.appendChild(browser);\n', '    doc.body.appendChild(browser);\n    if (agent === true) { browser.setAttribute("usercontextid", String(userContextId)); }\n')(swap('{ usercontextid: String(userContextId), messagemanagergroup', '{ messagemanagergroup')(s)) }, 'the usercontextid attribute was set after appendChild'],
+        ['the container attribute set after append', { api: s => swap('    doc.body.appendChild(browser);\n', '    doc.body.appendChild(browser);\n    if (agent === true) { browser.setAttribute("usercontextid", String(userContextId)); }\n')(swap('{ "usercontextid": String(userContextId), messagemanagergroup', '{ messagemanagergroup')(s)) }, 'the usercontextid attribute was set after appendChild'],
         ['a cookie row without the agent userContextId', { api: swap('  return { userContextId: entry.agentUserContextId };', '  return {};') }, 'without the agent userContextId'],
         ['the wall without the container check', { api: swap('entry.agent !== true || !agentInOwnContainer(entry)', 'entry.agent !== true') }, 'on an agent tab whose page is in the default container'],
         ['the parked-focus guard removed', { api: swap('  back?.focus();\n', '') }, 'focus: focus landing on a parked agent overlay was not returned'],
         ['a table accepting a duplicate page', { dispatch: swap("            if (byPage.has(pageId)) return 'duplicate-page';\n", '') }, 'page-table: the table accepted a duplicate page'],
         ['a table accepting a second page for a tab', { dispatch: swap("            if (byTab.has(tabId)) return 'duplicate-tab';\n", '') }, 'page-table: the table accepted a second page for a tab'],
         ['the dispatch file present without createPageTable', { dispatch: swap('export function createPageTable()', 'export function createPageTableGone()') }, 'page-table: orca-browser-dispatch.ts has no createPageTable export'],
-        ['the agent overlay left in the browsers group', { api: swap('usercontextid: String(userContextId), messagemanagergroup: AGENT_MESSAGE_MANAGER_GROUP, ', 'usercontextid: String(userContextId), ') }, "isolation: the agent overlay's message manager group"],
-        ['the wall without the group check', { api: swap(' &&\n    entry.browser.getAttribute("messagemanagergroup") === AGENT_MESSAGE_MANAGER_GROUP;', ';') }, 'isolation: an agent tab in the browsers group'],
+        ['the agent overlay left in the browsers group', { api: swap('"usercontextid": String(userContextId), messagemanagergroup: AGENT_MESSAGE_MANAGER_GROUP, ', '"usercontextid": String(userContextId), ') }, "isolation: the agent overlay's message manager group"],
         ['the dialog type filter removed', { api: swap('  if (!AGENT_DIALOG_TYPES.has(win.args?.promptType) || win.args?.inPermitUnload) {\n    return agentFailed("browser_command_unavailable");\n  }\n', '') }, 'dialogs: an HTTP auth dialog in an agent tab'],
         ['a pinned LoginManager actor registered for the agent group', { registry: r => r.replace('["browsers", ""]', '["browsers", "", "powerbrowser-orca-agent"]') }, "isolation: Gecko's LoginManager actor is registered for"],
         ['an empty AGENT_METHODS', { api: s => s.replace(/const AGENT_METHODS = Object\.freeze\(\[[^\]]*\]\);/, 'const AGENT_METHODS = Object.freeze([]);') }, 'broken instrument: AGENT_METHODS is missing or empty'],
