@@ -46,7 +46,7 @@ Progress: [░░░░░░░░░░] 0%
 | 62 | Overlay gate and PowerBrowser-run orcad | OVL-01, OVL-05, RUN-03, RUN-04, RUN-05 | Complete |
 | 63 | Agent hooks on Orca's terminal engine (rescoped by D-31) | TERM-02, EXT-02 | Complete (human items deferred) |
 | 64 | Orca panes as PowerBrowser tabs | TAB-01, TAB-02, TAB-04, TAB-06, TERM-01, TERM-04 | Executed (64-06 gap closure); TAB-04 pending on stage g3 (g2 PASS on the 65-05 tree); verification pending |
-| 65 | Orca workspace in Theia | TAB-05, TAB-07, TAB-08, TAB-09 | Executed 5/5 (65-05 coordinator); TAB-05, TAB-07, TAB-08, TAB-09 complete; verification pending |
+| 65 | Orca workspace in Theia | TAB-05, TAB-07, TAB-08, TAB-09 | Complete (verified 8/8, human items deferred) |
 | 66 | PowerBrowser web tabs as Orca's browser | BRW-02, BRW-03, BRW-04, BRW-05 | Not started |
 | 67 | Hosting hardening | RUN-06, RUN-07, RUN-08, RUN-09, INJ-01 | Not started |
 | 68 | Three-OS artifacts, weekly re-pin and upstream seams | OVL-02, OVL-03, OVL-06, PLAT-01, PLAT-02 | Not started |
