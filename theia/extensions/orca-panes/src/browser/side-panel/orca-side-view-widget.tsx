@@ -5,12 +5,17 @@
  * one pane bundle on first show, or on attach when attached already visible
  * (OrcaPaneWidget's 1f46dba0 rule, C64-4). The title is Orca's own (viewTitle);
  * nothing PB-authored is rendered, and a failed mount is one log line (P62-13).
+ * Phase 67 (P67-01, 65-CONTEXT correction): while OrcaHostingStatus reports a
+ * failure class, the hosted component's host is hidden (still mounted) and the
+ * PowerBrowser failure page renders in its place, as in OrcaPaneWidget.
  */
 import * as React from '@theia/core/shared/react';
 import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
 import { Message } from '@theia/core/shared/@lumino/messaging';
 import { ReactWidget } from '@theia/core/lib/browser/widgets/react-widget';
 import { OrcaPaneBundle } from '../orca-pane-bundle';
+import { OrcaFailurePage } from '../failure/orca-failure-page';
+import { OrcaHostingStatus } from '../failure/orca-hosting-status';
 
 const LOG_PREFIX = '[@powerbrowser/orca-panes]';
 
@@ -56,12 +61,16 @@ export class OrcaSideViewWidget extends ReactWidget {
     @inject(OrcaPaneBundle)
     protected readonly bundle: OrcaPaneBundle;
 
+    @inject(OrcaHostingStatus)
+    protected readonly hostingStatus: OrcaHostingStatus;
+
     @postConstruct()
     protected init(): void {
         this.id = this.options.id;
         this.title.closable = false;
         this.node.tabIndex = -1;
         this.node.setAttribute('data-pb-orca-pane', this.options.kind);
+        this.toDispose.push(this.hostingStatus.onDidChange(() => this.update()));
         this.update();
         // The part header shows Orca's own title even while the part is collapsed and unmounted (P65-26).
         sidePanelApi(this.bundle).then(api => {
@@ -73,7 +82,11 @@ export class OrcaSideViewWidget extends ReactWidget {
     }
 
     protected render(): React.ReactNode {
-        return <div className='pb-orca-pane-host' style={{ width: '100%', height: '100%' }} ref={this.setHost} />;
+        const failureClass = this.hostingStatus.failureClass;
+        return <React.Fragment>
+            <div className='pb-orca-pane-host' style={{ width: '100%', height: '100%', display: failureClass ? 'none' : undefined }} ref={this.setHost} />
+            {failureClass ? <OrcaFailurePage failureClass={failureClass} status={this.hostingStatus} /> : undefined}
+        </React.Fragment>;
     }
 
     protected setHost = (element: HTMLDivElement | null): void => {
