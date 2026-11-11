@@ -51,7 +51,7 @@
 //
 // Tier: full (needs a built orca/ with the seam; starts orcad twice, no
 // browser, no display). --self-test is quick and hermetic: a fixture Orca
-// tree whose orcad is a stand-in Node script, six cases.
+// tree whose orcad is a stand-in Node script, seven cases.
 //
 // Usage:
 //   node scripts/verify-orca-hidden-electron.mjs
@@ -186,7 +186,7 @@ async function runOrcad({ mode, nodeBin, orcaDir, OrcaEnv, home, dataRoot, port,
         } else {
             await sleep(quietMs);
         }
-        return { latencyMs: Date.now() - began, seen: seen(), alive: exited === null };
+        return { latencyMs: Date.now() - began, seen: seen(), alive: exited === null, exited, tail: tail() };
     } finally {
         // By recorded pid only: orcad, its terminal daemon, then whatever of their tree is left.
         const tree = [...descendants(ppidMap(), [child.pid, daemonPid])].map((pid) => [pid, startTicks(pid)]);
@@ -248,7 +248,7 @@ export async function run(options) {
         if (switched.fail) return { fails: [switched.fail] };
         const fired = [switched.seen.record && `${d.recordFile} in the data root`, switched.seen.warn && `the "${d.warnText}" warning`].filter(Boolean);
         if (fired.length) return { fails: [`orcad launched the installed Orca with the switch set (${OrcaEnv.ORCAD_HIDDEN_ELECTRON_SWITCH}=1): ${fired.join(' and ')}`] };
-        if (!switched.alive) return { fails: ['orcad exited during the switched run, so the absence of the detectors proves nothing'] };
+        if (!switched.alive) return { fails: [`orcad exited during the switched run (${switched.exited}), so the absence of the detectors proves nothing; stderr: ${switched.tail}`] };
         return { pass: { stockMs: stock.latencyMs, switchedMs: quietMs, recordFile: d.recordFile } };
     } finally {
         rmSync(baseDir, { recursive: true, force: true });
@@ -257,7 +257,7 @@ export async function run(options) {
 
 // --- self-test ---------------------------------------------------------------
 
-const STANDIN = (obeysSwitch) => `// Stand-in orcad for ${SELF_REL} --self-test.
+const STANDIN = (obeysSwitch, exitsSwitched = false) => `// Stand-in orcad for ${SELF_REL} --self-test.
 const fs = require('fs');
 const path = require('path');
 const SWITCH = 'ORCA_DISABLE_INSTALLED_ELECTRON_BROWSER';
@@ -274,7 +274,7 @@ if (${obeysSwitch ? "process.env[SWITCH] !== '1'" : 'true'}) {
         }
     } catch { /* no decoy */ }
 }
-process.on('SIGTERM', () => process.exit(0));
+${exitsSwitched ? "if (process.env[SWITCH] === '1') setTimeout(() => process.exit(7), 200);\n" : ''}process.on('SIGTERM', () => process.exit(0));
 setInterval(() => {}, 1000);
 `;
 
@@ -314,6 +314,7 @@ async function runSelfTest() {
         const cases = [
             { name: 'control: stock run launches the decoy, switched run does not', naming: null, go: () => run(base) },
             { name: 'a stand-in orcad that ignores the switch', naming: 'with the switch set', go: withFile(standin, STANDIN(false), () => run(base)) },
+            { name: 'a stand-in orcad that exits after ready with the switch set', naming: 'exited during the switched run (code 7)', go: withFile(standin, STANDIN(true, true), () => run(base)) },
             { name: 'the switch name misspelled in OrcaEnv', naming: 'adds no line naming', go: () => run({ ...base, OrcaEnv: { ...RealOrcaEnv, ORCAD_HIDDEN_ELECTRON_SWITCH: 'ORCA_DISABLE_INSTALED_ELECTRON_BROWSER' } }) },
             { name: 'a #! script decoy (never launched, so the stock run is silent)', naming: 'detector blind', go: () => run({ ...base, makeDecoy: scriptDecoy }) },
             { name: 'a provider source with no candidate literal', naming: 'source moved', go: withFile(provider, "console.warn('[fixture] Installed Electron browser provider unavailable:', error)\n", () => run(base)) },
