@@ -31,6 +31,8 @@ theia/applications/.scratch-*
 
 # Firefox fork build spill (D-01 containment)
 upstream/
+# The unanchored rule above also matched the Orca seams' upstream material (68-05, OVL-06); keep it tracked.
+!orca-overlay/upstream/
 objdir/
 objdir-release/
 objdir-nplus1/
