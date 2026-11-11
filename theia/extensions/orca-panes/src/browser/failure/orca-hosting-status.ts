@@ -1,6 +1,6 @@
 /**
- * Phase 67 (RUN-06; P67-01, P67-04, P67-07, P67-32, P67-36): the frontend's
- * view of Orca's hosting state, shared by every hosted Orca view.
+ * Phase 67 (RUN-06; P67-01, P67-04, P67-06, P67-07, P67-09, P67-32, P67-36):
+ * the frontend's view of Orca's hosting state, shared by every hosted Orca view.
  *
  * It reaches chrome only through the shell kinds orcaStatus, orcaRestart and
  * orcaShowDiagnostics on the PowerBrowserGroupRequest / PowerBrowserGroupResponse
@@ -10,11 +10,23 @@
  * Polling (P67-07): orcaStatus once a second while at least one failure page
  * is shown, and while the pane bundle has not settled its boot (a hosted tab
  * restored before orcad is ready has no other way to learn that orcad failed).
- * Log lines name the kind and the reply's reason field only.
+ * After boot, a change of the Orca client's own connection state (Orca's web
+ * preload, window.api.runtimeEnvironments.onStatusChanged) asks once.
+ *
+ * Reconnect (P67-06) re-reads the offer over OrcaPanesService.handOff (64 C6)
+ * and calls the pane bundle's repair(offer) (C3-65) and nothing else; for
+ * browser-not-attached it calls OrcaBrowserHost.attach() instead (P67-36).
+ * After a chrome class of restarting, could-not-start or port-in-use returns to
+ * ready, the same re-pair runs once by itself: the session-only device row died
+ * with the old orcad (P65-17, A-7). The offer is passed on and dropped, never
+ * stored or logged. Log lines name the kind and the reply's reason field only.
  */
 import { inject, injectable } from '@theia/core/shared/inversify';
 import { Emitter, Event as TheiaEvent } from '@theia/core/lib/common/event';
 import { FrontendApplicationContribution } from '@theia/core/lib/browser';
+import { OrcaBrowserHost } from '@powerbrowser/orca-browser/lib/browser/orca-browser-frontend-module';
+import { OrcaPanesService } from '../../common/orca-panes-protocol';
+import type { OfferHandOff } from '../../node/offer-file-policy';
 import { OrcaPaneBundle } from '../orca-pane-bundle';
 import { ORCA_CLIENT_REASON_CLASS, ORCA_FAILURE_COPY, OrcaFailureClass } from './orca-failure-copy';
 
@@ -24,10 +36,21 @@ const SHELL_RESPONSE_EVENT = 'PowerBrowserGroupResponse';
 const SHELL_ACK_TIMEOUT_MS = 5000;
 /** P67-07 (Claude's discretion): one orcaStatus a second while a page is shown. */
 export const ORCA_STATUS_POLL_MS = 1000;
+/** Ready polls before a still-booting frontend asks the backend why (the loader's own hand-off backoff caps at 5 s). */
+const STUCK_BOOT_POLLS = 6;
+/** Chrome classes after which a return to ready re-pairs once by itself (P67-06). */
+const REPAIR_AFTER: readonly OrcaFailureClass[] = ['restarting', 'could-not-start', 'port-in-use'];
+/** Orca's WebRuntimeAuthFailureReason members: held until the client verifies again or a re-pair succeeds. */
+const AUTH_REASONS: readonly string[] = ['unauthorized', 'device-revoked', 'device-downgraded', 'insecure-origin'];
 
-/** The messages this client sends (interfaces block, shared with lane p67-01). */
+/**
+ * The messages this client sends (interfaces block, shared with lane p67-01). The clearing form
+ * { kind: 'orcaStatus', browserHost: 'attached' } is sent by @powerbrowser/orca-browser's
+ * OrcaBrowserHost after each successful attach (coordinator ruling at 67-03), never by this client.
+ */
 export type OrcaShellMessage =
     | { kind: 'orcaStatus'; clientReason?: string }
+    | { kind: 'orcaStatus'; browserHost: 'attached' }
     | { kind: 'orcaRestart' }
     | { kind: 'orcaShowDiagnostics' };
 
@@ -42,6 +65,23 @@ interface ShellReply {
 
 type ShellOutcome = ShellReply | 'no-chrome';
 
+/** C3-65: the pane entry's re-pair, which OrcaPaneBundleApi (64 C3) does not list. */
+interface RepairApi {
+    repair(offer: string): Promise<void>;
+}
+
+/** The part of Orca's RuntimeHostStatusSnapshot (shared/runtime-host-status.ts) this client reads. */
+interface ClientStatus {
+    verification?: string;
+    blockedReason?: string;
+    transport?: string;
+}
+
+interface ClientStatusApi {
+    onStatusChanged(listener: (snapshot: ClientStatus) => void): () => void;
+    getStatusSnapshots?(): Promise<ClientStatus[]>;
+}
+
 const isFailureClass = (value: unknown): value is OrcaFailureClass =>
     typeof value === 'string' && Object.prototype.hasOwnProperty.call(ORCA_FAILURE_COPY, value);
 
@@ -51,6 +91,12 @@ export class OrcaHostingStatus implements FrontendApplicationContribution {
     @inject(OrcaPaneBundle)
     protected readonly bundle: OrcaPaneBundle;
 
+    @inject(OrcaPanesService)
+    protected readonly service: OrcaPanesService;
+
+    @inject(OrcaBrowserHost)
+    protected readonly browserHost: OrcaBrowserHost;
+
     protected readonly onDidChangeEmitter = new Emitter<void>();
     /** Fires when the effective class may have changed. */
     readonly onDidChange: TheiaEvent<void> = this.onDidChangeEmitter.event;
@@ -59,11 +105,16 @@ export class OrcaHostingStatus implements FrontendApplicationContribution {
     protected chrome: { state: string | null; failureClass: OrcaFailureClass | null } = { state: null, failureClass: null };
     /** A client failure this frontend saw (a key of ORCA_CLIENT_REASON_CLASS); frontend-only. */
     protected clientReason: string | undefined;
+    /** The chrome class kept on the page while the automatic re-pair after it runs. */
+    protected held: OrcaFailureClass | null = null;
+    protected api: RepairApi | undefined;
     protected readonly pages = new Set<object>();
     protected timer: number | undefined;
     protected bootSettled = false;
+    protected readyPollsBeforeBoot = 0;
     protected seq = 0;
     protected polling: Promise<void> | undefined;
+    protected reconnecting: Promise<void> | undefined;
     protected readonly logged = new Set<string>();
 
     onStart(): void {
@@ -71,14 +122,30 @@ export class OrcaHostingStatus implements FrontendApplicationContribution {
             this.bootSettled = true;
             this.schedule();
         };
-        this.bundle.ready().then(settle, settle);
+        this.bundle.ready().then(api => {
+            this.api = api as unknown as RepairApi;
+            this.watchClient();
+            settle();
+        }, settle);
+        this.browserHost.onDidChangeState(() => this.onDidChangeEmitter.fire());
         this.schedule();
         void this.poll();
     }
 
-    /** The class every hosted view shows: chrome's when set, else the client's, else none. */
+    /**
+     * The class every hosted view shows: chrome's when set, then the class held during an automatic
+     * re-pair, then this frontend's client reason, then its own browser host's failure. A chrome
+     * browser-not-attached gives way to this frontend's own attached host: chrome holds that reason
+     * until it receives the clearing form, and this frontend's state is the fresher one.
+     */
     get failureClass(): OrcaFailureClass | null {
-        return this.chrome.failureClass ?? (this.clientReason ? ORCA_CLIENT_REASON_CLASS[this.clientReason] ?? null : null);
+        let chrome = this.chrome.failureClass;
+        if (chrome === 'browser-not-attached' && this.browserHost.state === 'attached') {
+            chrome = null;
+        }
+        const client = this.clientReason ? ORCA_CLIENT_REASON_CLASS[this.clientReason] ?? null : null;
+        const host: OrcaFailureClass | null = this.browserHost.state === 'failed' ? 'browser-not-attached' : null;
+        return chrome ?? this.held ?? client ?? host;
     }
 
     /** A failure page appeared (handle: any object the page keeps until hide). */
@@ -100,7 +167,44 @@ export class OrcaHostingStatus implements FrontendApplicationContribution {
         return this.send({ kind: 'orcaShowDiagnostics' }).then(() => undefined);
     }
 
-    /** A client failure from the closed set: held here (pairing-lost) and reported to chrome for its diagnostics row. */
+    /** Reconnect: one attempt at a time. */
+    reconnect(): Promise<void> {
+        return this.reconnecting ??= this.runReconnect().finally(() => { this.reconnecting = undefined; });
+    }
+
+    protected async runReconnect(): Promise<void> {
+        if (this.failureClass === 'browser-not-attached') {
+            await this.browserHost.attach(); // its outcome fires onDidChangeState
+            return;
+        }
+        const result = await (this.service.handOff() as Promise<OfferHandOff>).catch(() => undefined);
+        if (!result) {
+            // No offer while orcad is ready means it is missing; otherwise orcad is not up and the poll says so.
+            if (this.chrome.state === 'ready') {
+                await this.reportClientReason('offer-missing');
+            }
+            return;
+        }
+        if ('refused' in result) {
+            await this.reportClientReason(result.refused);
+            return;
+        }
+        if (this.api) {
+            try {
+                await this.api.repair(result.pairing);
+            } catch {
+                await this.reportClientReason('unauthorized');
+                return;
+            }
+        }
+        // Not booted yet: the loader's own hand-off loop pairs with this offer.
+        this.setClientReason(undefined);
+        if (this.browserHost.state === 'failed') {
+            void this.browserHost.attach();
+        }
+    }
+
+    /** A client failure from the closed set: held here and reported to chrome for its diagnostics row. */
     reportClientReason(reason: string): Promise<void> {
         if (!Object.prototype.hasOwnProperty.call(ORCA_CLIENT_REASON_CLASS, reason)) {
             return Promise.resolve();
@@ -109,11 +213,43 @@ export class OrcaHostingStatus implements FrontendApplicationContribution {
         return this.send({ kind: 'orcaStatus', clientReason: reason }).then(reply => this.take(reply));
     }
 
-    protected setClientReason(reason: string | undefined): void {
+    protected change(mutate: () => void): void {
         const before = this.failureClass;
-        this.clientReason = reason;
+        mutate();
         if (this.failureClass !== before) {
             this.onDidChangeEmitter.fire();
+        }
+    }
+
+    protected setClientReason(reason: string | undefined): void {
+        this.change(() => { this.clientReason = reason; });
+    }
+
+    /** Orca's client connection state, from Orca's web preload in this document (66-01). */
+    protected watchClient(): void {
+        const environments = (window as unknown as { api?: { runtimeEnvironments?: ClientStatusApi } }).api?.runtimeEnvironments;
+        if (typeof environments?.onStatusChanged !== 'function') {
+            console.warn(`${LOG_PREFIX} the Orca client's connection state is not exposed; client failures are not reported`);
+            return;
+        }
+        environments.onStatusChanged(snapshot => this.onClientStatus(snapshot));
+        environments.getStatusSnapshots?.().then(list => list.forEach(s => this.onClientStatus(s)), () => undefined);
+    }
+
+    /**
+     * A refused client is held at verification 'blocked' with blockedReason 'access-revoked' (Orca's status owner:
+     * authenticationRejected); the snapshot carries no finer reason, so it is reported as 'unauthorized'. A host with
+     * an unreadable registry answers registry_unavailable, which the client retries and never reports (A-12).
+     */
+    protected onClientStatus(snapshot: ClientStatus): void {
+        if (snapshot?.verification === 'blocked' && snapshot.blockedReason === 'access-revoked') {
+            if (this.clientReason !== 'unauthorized') {
+                void this.reportClientReason('unauthorized');
+            }
+        } else if (snapshot?.transport !== 'ready') {
+            void this.poll(); // the client lost orcad: ask chrome why
+        } else if (snapshot.verification === 'verified' && this.clientReason && AUTH_REASONS.includes(this.clientReason)) {
+            this.setClientReason(undefined);
         }
     }
 
@@ -142,10 +278,32 @@ export class OrcaHostingStatus implements FrontendApplicationContribution {
             state: typeof reply.state === 'string' ? reply.state : null,
             failureClass: isFailureClass(reply.failureClass) ? reply.failureClass : null,
         };
-        const before = this.failureClass;
-        this.chrome = next;
-        if (this.failureClass !== before) {
-            this.onDidChangeEmitter.fire();
+        const before = this.chrome.failureClass;
+        const recovered = before !== null && REPAIR_AFTER.includes(before) && next.state === 'ready' && next.failureClass === null;
+        this.change(() => {
+            this.chrome = next;
+            if (recovered) {
+                this.held = before;
+            }
+        });
+        if (recovered) {
+            void this.reconnect().finally(() => this.change(() => { this.held = null; }));
+        }
+        this.readyPollsBeforeBoot = !this.bootSettled && next.state === 'ready' ? this.readyPollsBeforeBoot + 1 : 0;
+        if (this.readyPollsBeforeBoot >= STUCK_BOOT_POLLS) {
+            void this.checkStuckOffer();
+        }
+    }
+
+    /** orcad is ready but the loader still has no offer: a refused hand-off is the reason, shown as pairing-lost (P67-09). */
+    protected async checkStuckOffer(): Promise<void> {
+        const result = await (this.service.handOff() as Promise<OfferHandOff>).catch(() => undefined);
+        if (result && 'refused' in result) {
+            if (this.clientReason !== result.refused) {
+                await this.reportClientReason(result.refused);
+            }
+        } else if (result && this.clientReason?.startsWith('offer-')) {
+            this.setClientReason(undefined); // the file is good again; the loader boots with it
         }
     }
 

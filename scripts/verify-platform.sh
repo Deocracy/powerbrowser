@@ -4075,6 +4075,14 @@ run_own_checks() {
     # owner code read from error.code, a stock window judged before the mark was proven, ...) going red by name.
     "orca-browser-agent-live-self-test|node $REPO_ROOT/scripts/verify-orca-browser-agent-live.mjs --self-test"
     "orca-agent-mark-live-self-test|node $REPO_ROOT/scripts/verify-orca-agent-mark-live.mjs --self-test"
+    # NEW (67-03, RUN-06/RUN-07, P67-01..P67-09, P67-32): orca-offer-file judges real lstat results of a temp folder
+    # through orca-panes' offer-file-policy.ts (type-stripped): symlink, non-regular, other owner, group/other bits,
+    # missing, non-loopback or mismatched endpoint, undecodable text; OFFER_REFUSAL_REASONS against the copy table's
+    # (and, once merged, OrcaEnv's) offer-* client reasons; decodeOffer against Orca's pinned parser (SKIP without
+    # orca/); and handOff's order (lstat and the verdict before the read, both offer verdicts before the return, no
+    # value in a returned error or log line). The self-test plants six faults and requires each red by rule.
+    "orca-offer-file|node $REPO_ROOT/scripts/verify-orca-offer-file.mjs"
+    "orca-offer-file-self-test|node $REPO_ROOT/scripts/verify-orca-offer-file.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"

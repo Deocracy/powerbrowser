@@ -16,8 +16,17 @@
  *
  * Failures are one log line naming the step, never a value: the connection
  * carries pairing material.
+ *
+ * Phase 67 (P67-36, D-33): attach() is the start path, callable again after a
+ * failure or a detach (orca-panes' Reconnect and its re-pair after an orcad
+ * restart). Each logged attach failure and each detach also sends
+ * { kind: 'orcaStatus', clientReason: 'browser-host-attach-failed' } to chrome;
+ * each successful attach sends the clearing form { kind: 'orcaStatus',
+ * browserHost: 'attached' }. Both go through this file's own copy of tab-uris'
+ * update-client.ts request(), since orca-browser cannot import orca-panes.
  */
 import { ContainerModule, inject, injectable } from '@theia/core/shared/inversify';
+import { Emitter, Event as TheiaEvent } from '@theia/core/lib/common/event';
 import { ApplicationShell, FrontendApplicationContribution, Widget, WidgetManager } from '@theia/core/lib/browser';
 import { FrontendApplicationStateService } from '@theia/core/lib/browser/frontend-application-state';
 import { WEB_TAB_FACTORY_ID, WebTabChannel, WebTabOpenHandler, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
@@ -37,6 +46,15 @@ export const HOST_ENTRY = 'pb-browser-host.js';
 const HOST_MODULE_KEY = 'powerbrowser.orca-browser.host-module';
 const HOST_LOADED_EVENT = 'powerbrowser-orca-browser-host-module';
 const LOG_PREFIX = '[@powerbrowser/orca-browser]';
+
+/** P67-36: the client reason chrome holds for a failed or detached host, and the message that clears it (interfaces block). */
+export const BROWSER_HOST_REASON = 'browser-host-attach-failed';
+export type BrowserHostStatusMessage = { kind: 'orcaStatus'; clientReason: typeof BROWSER_HOST_REASON } | { kind: 'orcaStatus'; browserHost: 'attached' };
+export type BrowserHostState = 'attaching' | 'attached' | 'failed';
+
+const SHELL_REQUEST_EVENT = 'PowerBrowserGroupRequest';
+const SHELL_RESPONSE_EVENT = 'PowerBrowserGroupResponse';
+const SHELL_ACK_TIMEOUT_MS = 5000;
 
 interface HostConnection {
     endpoint: string;
@@ -149,6 +167,18 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
     protected activations = 0;
     protected session: HostSession | undefined;
     protected readonly sentMetadata = new Map<string, string>();
+    protected prepared: Promise<void> | undefined;
+    protected attaching: Promise<boolean> | undefined;
+    protected attempts = 0;
+    protected seq = 0;
+    protected hostState: BrowserHostState = 'attaching';
+    protected readonly onDidChangeStateEmitter = new Emitter<BrowserHostState>();
+    /** P67-36: fires on every attach outcome and detach; orca-panes' failure page reads it. */
+    readonly onDidChangeState: TheiaEvent<BrowserHostState> = this.onDidChangeStateEmitter.event;
+
+    get state(): BrowserHostState {
+        return this.hostState;
+    }
 
     onStart(): void {
         this.shell.onDidChangeActiveWidget(({ newValue }) => {
@@ -156,15 +186,39 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
                 this.activated.set(newValue, ++this.activations);
             }
         });
-        void this.run();
+        void this.attach();
     }
 
-    protected async run(): Promise<void> {
-        let step = 'layout';
-        try {
+    /** Attaches the host unless it is attached already; concurrent calls share one attempt. Resolves true when attached. */
+    attach(): Promise<boolean> {
+        if (this.session) {
+            return Promise.resolve(true);
+        }
+        return this.attaching ??= this.run().finally(() => { this.attaching = undefined; });
+    }
+
+    /** Once per frontend: the layout, the stale agent tabs and the metadata push. */
+    protected prepare(): Promise<void> {
+        return this.prepared ??= (async () => {
             await this.appState.reachedState('initialized_layout');
             this.closeStaleAgentTabs();
             this.channel.onPush('state', detail => this.reportMetadata(detail));
+        })();
+    }
+
+    protected setState(state: BrowserHostState): void {
+        this.hostState = state;
+        this.onDidChangeStateEmitter.fire(state);
+        void this.request(state === 'attached'
+            ? { kind: 'orcaStatus', browserHost: 'attached' }
+            : { kind: 'orcaStatus', clientReason: BROWSER_HOST_REASON });
+    }
+
+    protected async run(): Promise<boolean> {
+        let step = 'layout';
+        this.hostState = 'attaching';
+        try {
+            await this.prepare();
             step = 'link';
             const link = await this.waitForLink();
             step = 'connection';
@@ -188,15 +242,47 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
                     this.session = undefined;
                     link.setPlacement(null);
                     console.warn(`${LOG_PREFIX} the browser host detached: ${reason}`);
+                    this.setState('failed');
                 },
             });
             this.session = session;
             attached(session);
             link.setPlacement(browserHostClientId);
             this.closeEndedPages(session);
+            this.setState('attached');
+            return true;
         } catch {
             console.error(`${LOG_PREFIX} the browser host did not attach at the ${step} step`);
+            this.setState('failed');
+            return false;
         }
+    }
+
+    /** tab-uris' update-client.ts request(), copied: own id prefix, 5 s acknowledgement, nothing off 127.0.0.1. Replies are not read. */
+    protected request(msg: BrowserHostStatusMessage): Promise<void> {
+        if (location.protocol !== 'http:' || location.hostname !== '127.0.0.1') {
+            return Promise.resolve();
+        }
+        return new Promise<void>(resolve => {
+            const requestId = `orca-browser-${msg.kind}-${Date.now().toString(36)}-${(this.seq += 1)}`;
+            const settle = (): void => {
+                window.removeEventListener(SHELL_RESPONSE_EVENT, onResponse);
+                window.clearTimeout(timer);
+                resolve();
+            };
+            const onResponse = (event: Event): void => {
+                if ((event as CustomEvent).detail?.requestId === requestId) {
+                    settle();
+                }
+            };
+            const timer = window.setTimeout(settle, SHELL_ACK_TIMEOUT_MS);
+            window.addEventListener(SHELL_RESPONSE_EVENT, onResponse);
+            try {
+                document.dispatchEvent(new CustomEvent(SHELL_REQUEST_EVENT, { bubbles: true, detail: { requestId, msg } }));
+            } catch {
+                settle();
+            }
+        });
     }
 
     protected waitForLink(): Promise<HostLink> {
@@ -242,7 +328,13 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
     /** The host bundle, imported by a module script as orca-panes' loader imports the pane bundle (its import() is page text, which the commonjs emit cannot rewrite). */
     protected loadHost(): Promise<HostModule> {
         const key = Symbol.for(HOST_MODULE_KEY);
+        const loaded = (globalThis as Record<symbol, unknown>)[key] as HostModule | undefined;
+        if (loaded) {
+            return Promise.resolve(loaded);
+        }
         const failedEvent = HOST_LOADED_EVENT + '-failed';
+        // A retry after a failed load asks for a new URL, so the document's module map cannot answer with the old failure.
+        const attempt = (this.attempts += 1);
         return new Promise<HostModule>((resolve, reject) => {
             const onLoaded = () => {
                 window.removeEventListener(failedEvent, onFailed);
@@ -254,7 +346,7 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
             };
             window.addEventListener(HOST_LOADED_EVENT, onLoaded, { once: true });
             window.addEventListener(failedEvent, onFailed, { once: true });
-            const url = new URL(HOST_PREFIX + HOST_ENTRY, document.baseURI).href;
+            const url = new URL(HOST_PREFIX + HOST_ENTRY + (attempt > 1 ? `?attempt=${attempt}` : ''), document.baseURI).href;
             const script = document.createElement('script');
             script.type = 'module';
             script.textContent = [

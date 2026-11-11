@@ -33,8 +33,8 @@ export function OrcaFailurePage({ failureClass, status }: OrcaFailurePageProps):
     const copy = ORCA_FAILURE_COPY[failureClass];
     const actions: Record<OrcaFailureButton, () => void> = {
         restart: () => void status.restart(),
-        // Task 1 of 67-03: Reconnect opens Details until Task 2 wires reconnect().
-        reconnect: () => void status.showDetails(),
+        // Re-pair through repair(offer), or re-attach the browser host for browser-not-attached (P67-06, P67-36).
+        reconnect: () => void status.reconnect(),
         details: () => void status.showDetails(),
     };
     return (
