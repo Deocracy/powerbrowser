@@ -294,6 +294,28 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
     option then is to open them as agent overlays in the agent container (the agent message
     manager group, no autocomplete, background, marked, covered by Stop).
 
+## Re-pairing after orcad restarts (2026-11-11)
+
+- **D-36 — The hosted Orca client keeps its environment id across an orcad restart.** Coordinator
+  ruling in auto mode, 2026-11-11, answering 67-06 Task 2 (criterion 1 restart recovery):
+  option-a. The owner may override it.
+  - Cause (67-07): the overlay's `repair()` saved the new session-only pairing through Orca's
+    storage call only. Orca's web preload kept its own active environment (the replaced pairing)
+    and its open client, which still held the session device key of the killed orcad. That key's
+    row died with orcad (P65-17), so the restarted orcad refused the old client's reconnect.
+    Orca's client then forgot "the active pairing", which by then was the new one, and the next
+    `repair()` minted a new environment id. Orca's own comment says a new id strands the host's
+    sessions (`web-runtime-environment.ts`, 64-RESEARCH A6).
+  - Fix (overlay file `pb-session-pairing.ts`, Orca's own exports at the pin, no seam, no tracked
+    `orca/` edit): every session-only pairing does what Orca's `addFromPairingCode` does. It
+    closes the active clients, saves the pairing, and makes it Orca's active environment. The
+    pairing it last made is kept in page memory without its device token, and passed as
+    `previousEnvironment` when Orca's client has already forgotten its own copy. Orca's
+    same-host rule (host public key and descriptor) then keeps the id and bumps the revision.
+  - P65-17 is unchanged. Nothing is written to Theia-origin storage, and a document reload still
+    pairs again under a new id, because page memory does not survive a reload.
+  - Proof: orca-failure-page-live's restart clause (gap-closure plan 67-07).
+
 ## Spikes this direction needs
 
 1. Browser parity: what an Orca browser tab can do, and how PB chrome provides it
