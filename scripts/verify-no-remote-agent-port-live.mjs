@@ -337,7 +337,7 @@ async function selfTest() {
     const hookTree = [base[0], base[1], { ...base[2], inodes: new Set(['101', '102']) }];
     expect('control: orcad\'s agent-hook socket accounted when its endpoint file names the port', shippedVerdict(treeSockets(hookTree, hookAccepted)), null);
     expect('orcad\'s agent-hook socket with no endpoint file', shippedVerdict(treeSockets(hookTree, accepted)), 'listens on 127.0.0.1:43555, owned by pid 12 (node)');
-    const endpointText = 'ORCA_AGENT_HOOK_PORT=43555\nORCA_AGENT_HOOK_TOKEN=00000000-planted\nORCA_AGENT_HOOK_ENV=production\n';
+    const endpointText = ['ORCA_AGENT_HOOK_PORT=43555', 'ORCA_AGENT_HOOK_TOKEN=00000000-planted', 'ORCA_AGENT_HOOK_ENV=production', ''].join('\n');
     expect('control: the endpoint file\'s port line read', agentHookPortFrom(endpointText) === 43555 ? [] : [`read ${agentHookPortFrom(endpointText)}`], null);
     expect('an endpoint file with no port line', agentHookPortFrom('ORCA_AGENT_HOOK_TOKEN=43555\n') === null ? ['no port'] : [], 'no port');
     const v6 = hexAddress('00000000000000000000000001000000');

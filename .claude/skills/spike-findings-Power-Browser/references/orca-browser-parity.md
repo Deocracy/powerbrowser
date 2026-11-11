@@ -99,6 +99,23 @@ driver's own fixture HTTP server in run 3.
 - User-facing tools U-01 to U-30 each have a PB location or a skip reason in the spike README
   (BRW-05).
 
+## Built in Phase 66
+
+- The built record is `theia/extensions/orca-browser/src/common/orca-browser-abilities.ts` (92 rows,
+  checked by `orca-browser-abilities`). `DISPOSITIONS.md` stays the Phase 61 record: its 34 BiDi and
+  BiDi+ tier-1 rows were relabelled native or actor when built (P66-11), and no BiDi module is used.
+- A1: unshown agent tabs are parked (laid out, occluded, inactive docshell) so input reaches them
+  without focus; chrome decides "shown to the user" with one predicate, `overlayShownToUser`.
+- A2: the agent content actor may use `Cc[` and `Ci.` only on lines catalogued in `INTERNAL-APIS.md`.
+- A3: the browser host authenticates as the pane client's own paired device through the pane
+  bundle's link; measured live in 66-06 with the device-key credential.
+- A4: page dialogs (alert, confirm, prompt) are answered natively; HTTP auth and beforeunload are not
+  the agent's to answer.
+- A5: `browser.snapshot` reproduces agent-browser's text grammar from the DOM; references are
+  generated from Orca's pinned agent-browser against Chromium (`orca-snapshot-fixtures`).
+- Agent tabs are not WebDriver BiDi contexts (their message manager group has no BiDi frame actor);
+  a live check reads them through the bridge's own `browser.eval`.
+
 ## Origin
 
 Synthesized from spike 005 (frontmatter VALIDATED, VERDICT YELLOW, 2026-11-09, plan 61-02).
