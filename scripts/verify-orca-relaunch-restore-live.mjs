@@ -30,8 +30,11 @@
 //   pairing-ui   WebConnect's selectors (derived from Orca's source) match on
 //                Orca's own web client page (the detector), then nothing in
 //                PowerBrowser
-//   no-input     the harness's input log is empty between launch 2 and the
-//                connected state
+// No "no-input" clause: launch 2 performs only reads until connected() returns (by
+// the order of runLive's code), and a clause that judged the harness's own input
+// log could never go red from product behaviour (CLAUDE.md verification rule 1;
+// removed by 65-05). "No user step" is evidenced by connected() itself (session-only
+// pairing reached with no input) and by pairing-ui (detector first).
 //   offer-scan   scripts/lib/orca-offer-scan.mjs green for both launches' offers
 //   devices      orca-devices.json gained exactly one used runtime token row
 //                and holds no persisted keyed row
@@ -144,12 +147,6 @@ export function pairingDomVerdict(obs) {
     return obs.theia ? [`pairing-ui: Orca's pairing UI is in the PowerBrowser document (${obs.theia} element(s))`] : [];
 }
 
-/** log: [{ t, what }]; from..to: launch 2's start and its connected state. */
-export function inputLogVerdict(log, from, to) {
-    const early = (log ?? []).filter((e) => e.t >= from && e.t <= to);
-    return early.length ? [`no-input: ${early.length} harness input(s) between the relaunch and the connection (${early.map((e) => e.what).join(', ')})`] : [];
-}
-
 /** Row summaries { credentialKind, ephemeral, lastSeenAt } after launch 1 and after launch 2 (CA-07, research Q1 item 3). */
 export function deviceRowsVerdict(before, after) {
     const used = (rows) => (rows ?? []).filter((r) => r.credentialKind === undefined && r.lastSeenAt > 0).length;
@@ -199,7 +196,7 @@ export function livePrerequisites() {
 
 /**
  * One scratch profile with PowerBrowser's own orcad, kept across launches. fn(session): session.profileDir,
- * session.launch(body) (one launch; body(s) gets the launch context), session.inputLog. Tears down every recorded
+ * session.launch(body) (one launch; body(s) gets the launch context). Tears down every recorded
  * process, the scratch repository and the profile; inherited ORCA_* are scrubbed and output redaction is installed
  * before anything is launched.
  */
@@ -227,11 +224,10 @@ export async function withOrcaProfile(fn) {
             'powerbrowser.sidecar.nodePath': (await ensurePbNode()).path,
         };
         profile = await relaunch.makeProfile(prefs);
-        const inputLog = [];
         const record = (pid) => { const t = Number.isInteger(pid) && pid > 0 ? startTicks(pid) : null; if (t !== null) recorded.set(pid, t); };
         const session = {
-            profileDir: profile.profileDir, repo, inputLog, worktree: `path:${repo}`,
-            launch: (body) => relaunch.withShell(profile, async (app) => body(launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, record, inputLog, repo }))),
+            profileDir: profile.profileDir, repo, worktree: `path:${repo}`,
+            launch: (body) => relaunch.withShell(profile, async (app) => body(launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, record, repo }))),
         };
         return await fn(session);
     } finally {
@@ -245,18 +241,17 @@ export async function withOrcaProfile(fn) {
     }
 }
 
-function launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, record, inputLog, repo }) {
+function launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, record, repo }) {
     const probe = (body, ms) => relaunch.probe(app, body, ms);
     const pollFor = relaunch.pollFor;
     const chromeJson = async (expr) => JSON.parse(await app.evaluateIn(app.chrome, `(() => { try { return JSON.stringify(${expr}); } catch (e) { return JSON.stringify({ chromeError: String(e) }); } })()`));
     const orcaState = () => chromeJson(`ChromeUtils.importESModule('chrome://powerbrowser/content/OrcaService.sys.mjs').OrcaService.getState()`);
-    const input = (what) => inputLog.push({ t: Date.now(), what });
     const SAVE = sourceConst(SETUPS_COMMANDS_REL, 'SETUPS_SAVE_COMMAND_ID');
     const RESTORE = sourceConst(SETUPS_COMMANDS_REL, 'SETUPS_RESTORE_COMMAND_ID');
     const ACTIVATE = sourceConst(MODES_COMMANDS_REL, 'MODES_ACTIVATE_COMMAND_ID');
     let state = null;
     const s = {
-        app, probe, pollFor, startedAt: Date.now(),
+        app, probe, pollFor,
         bundle: (expr) => probe(`const m = globalThis[Symbol.for(${JSON.stringify(lib.ORCA_PANES_MODULE_KEY)})];
             if (!m) return { error: 'no bundle module' };
             return await (${expr});`),
@@ -282,7 +277,6 @@ function launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, rec
             return text;
         },
         async writeMarker(key) {
-            input('marker');
             return probe(`localStorage.setItem(${JSON.stringify(key)}, '1'); return localStorage.getItem(${JSON.stringify(key)}) === '1';`);
         },
         /** The built CLI against this launch's orcad, never this process's ORCA_* values. */
@@ -296,7 +290,6 @@ function launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, rec
         },
         async addRepository() {
             if (!state) await s.connected();
-            input('repo add');
             if (!existsSync(repo)) {
                 mkdirSync(repo, { recursive: true });
                 writeFileSync(join(repo, 'README'), 'orca relaunch scratch repository\n');
@@ -309,13 +302,11 @@ function launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, rec
         },
         /** C64-6: the worktree selected with the bundle's setActiveWorktree before an Orca command. */
         async selectWorktree() {
-            input('setActiveWorktree');
             const id = await pollFor(async () => (await s.bundle(`m.state().worktrees.find(w => w.path === ${JSON.stringify(repo)})?.id ?? null`)) ?? null, 30000, 'the scratch worktree in the store');
             await s.bundle(`(m.setActiveWorktree(${JSON.stringify(id)}), true)`);
             return id;
         },
         async command(id, ...args) {
-            input(`command ${id}`);
             return probe(`try { await get('CommandService').executeCommand(${[JSON.stringify(id), ...args.map((x) => JSON.stringify(x))].join(', ')}); return true; } catch (e) { return false; }`);
         },
         async mode(id) { await s.command(ACTIVATE, id); await sleep(800); },
@@ -327,7 +318,6 @@ function launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, rec
         },
         /** Setups' own Save Setup command, its capped name field answered as ng-036 answers it. */
         async saveSetup(name) {
-            input('save setup');
             return probe(`const field = () => [...document.querySelectorAll('.quick-input-widget .quick-input-box input')].find(e => e.offsetParent !== null) || null;
                 const saving = get('CommandService').executeCommand(${JSON.stringify(SAVE)});
                 if (!(await until(() => field() !== null, 10000))) return false;
@@ -340,7 +330,7 @@ function launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, rec
                 const stored = JSON.parse((await get('FileService').read(setups.setupsUri)).value);
                 return (stored.setups || []).some(row => row.name === ${JSON.stringify(name)});`);
         },
-        async restoreSetup(name) { input('restore setup'); return s.command(RESTORE, name); },
+        async restoreSetup(name) { return s.command(RESTORE, name); },
         savedDock: (name) => probe(`const setups = get('SetupsService');
             const stored = JSON.parse((await get('FileService').read(setups.setupsUri)).value);
             const row = (stored.setups || []).find(r => r.name === ${JSON.stringify(name)});
@@ -366,13 +356,11 @@ function launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, rec
         },
         terminalText: (handle) => lib.terminalText({ orca: (...a) => s.orca(...a) }, handle),
         async typeInto(id, text) {
-            input(`type into ${id}`);
             await live.focusTheiaFrame(app);
             await probe(`await get('ApplicationShell').activateWidget(${JSON.stringify(id)}); return true;`);
             for (const ch of text) await live.pressKey(app, ch === '\n' ? { key: 'Enter', code: 'Enter', keyCode: 13 } : { key: ch });
         },
         async openWebClientPage(offerText) {
-            input('web client page');
             const u = new URL(offerText);
             const base = `${u.origin}${u.pathname}`;
             await live.openWebTab(app, base);
@@ -427,11 +415,8 @@ async function runLive() {
         });
         const devicesBefore = deviceRows(session.profileDir);
         // Launch 2: nothing but reads until connected.
-        let launchAt = Date.now();
         await session.launch(async (s) => {
-            launchAt = s.startedAt;
             const connectedAt = await s.connected();
-            clauses['no-input'] = inputLogVerdict(session.inputLog, launchAt, connectedAt);
             offers.push(await s.offer());
             await s.writeMarker(MARKER_KEY);
             const theia = await s.probe(`return ${JSON.stringify(selectors)}.reduce((n, sel) => n + document.querySelectorAll(sel).length, 0);`);
@@ -490,7 +475,7 @@ async function main() {
         console.error(`${NAME}: FAIL -- harness: ${err.message}`);
         return 1;
     }
-    const order = ['no-input', 'dock', 'modes', 'chat', 'terminals', 'identity', 'pairing-ui', 'not-gone', 'devices', 'offer-scan'];
+    const order = ['dock', 'modes', 'chat', 'terminals', 'identity', 'pairing-ui', 'not-gone', 'devices', 'offer-scan'];
     const failed = [];
     for (const c of order) {
         const reasons = clauses[c];
@@ -520,7 +505,6 @@ function runSelfTest() {
         ['chat control', null, () => chatVerdict({ inStore: true, composer: true })],
         ['terminals control', null, () => echoVerdict([{ name: 'term1', handle: 'h1' }, { name: 'term2', handle: 'h2' }])],
         ['pairing-ui control', null, () => pairingDomVerdict({ selectors: ['#web-runtime-pairing-code'], detector: 2, theia: 0 })],
-        ['no-input control', null, () => inputLogVerdict([{ t: 100, what: 'save setup' }, { t: 900, what: 'restore setup' }], 200, 800)],
         ['devices control', null, () => deviceRowsVerdict(before, rows([undefined, undefined, 5], [undefined, undefined, 9], ['device-key', true, 9]))],
         ['not-gone control', null, () => notGoneVerdict(['chat1', 'term1'], ['term1', 'chat1'])],
         ['pairing selectors from Orca\'s source', null, () => (JSON.stringify(pairingSelectors('<input id="web-runtime-name" /><input\n id="web-runtime-pairing-code" />')) === JSON.stringify(['#web-runtime-name', '#web-runtime-pairing-code']) ? [] : ['selector derivation drifted'])],
@@ -534,7 +518,6 @@ function runSelfTest() {
         ['a terminal that did not echo', 'terminals: pb-orca:term2 did not echo its marker', () => echoVerdict([{ name: 'term1', handle: 'h1' }, { name: 'term2', handle: null }])],
         ['pairing DOM present in PowerBrowser', 'pairing-ui: Orca\'s pairing UI is in the PowerBrowser document', () => pairingDomVerdict({ selectors: ['#web-runtime-pairing-code'], detector: 1, theia: 1 })],
         ['a blind pairing detector', 'proves nothing', () => pairingDomVerdict({ selectors: ['#web-runtime-pairing-code'], detector: 0, theia: 0 })],
-        ['harness input before the connection', 'no-input: 1 harness input(s)', () => inputLogVerdict([{ t: 300, what: 'restore setup' }], 200, 800)],
         ['two new token rows', 'devices: 2 new used runtime token row(s)', () => deviceRowsVerdict(before, rows([undefined, undefined, 5], [undefined, undefined, 7], [undefined, undefined, 9]))],
         ['a persisted keyed row', 'devices: 1 persisted keyed row(s)', () => deviceRowsVerdict(before, rows([undefined, undefined, 5], [undefined, undefined, 9], ['device-key', undefined, 9]))],
         ['a restored widget disposed as gone', 'not-gone: pb-orca:term2 was disposed as gone', () => notGoneVerdict(['term1', 'term2'], ['term1'])],
