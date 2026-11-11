@@ -31,6 +31,7 @@ import { OrcaPaneBundle } from './orca-pane-bundle';
 import { KnownPane, ORCA_PANE_ROUTES, PanePlan, keyOfOptions, planPanes } from './orca-pane-routes';
 import { OrcaPaneWidget } from './orca-pane-widget';
 import { OrcaPaneNameMap } from './restore/orca-pane-name-map';
+import { OrcaBrowserPages } from '@powerbrowser/orca-browser/lib/browser/orca-browser-frontend-module'; // NEW (66-02)
 
 const LOG_PREFIX = '[@powerbrowser/orca-panes]';
 
@@ -54,6 +55,13 @@ export class OrcaPaneObserver implements FrontendApplicationContribution {
 
     @inject(OrcaPaneNameMap)
     protected readonly names: OrcaPaneNameMap;
+
+    /** Phase 66 (P66-09): the browser host's page table; a browser record resolves through it. */
+    @inject(OrcaBrowserPages)
+    protected readonly browserPages: OrcaBrowserPages;
+
+    /** Phase 66: browser pages already logged as having no web tab; each is logged once. */
+    protected readonly loggedUnbound = new Set<string>();
 
     protected readonly known = new Map<string, KnownPane>();
     protected readonly widgets = new Map<string, OrcaPaneWidget>();
@@ -109,6 +117,7 @@ export class OrcaPaneObserver implements FrontendApplicationContribution {
             }
             this.newest = panes;
             this.latest = panes;
+            this.revealBrowserTabs(panes);
             this.drain();
         });
     }
@@ -151,7 +160,10 @@ export class OrcaPaneObserver implements FrontendApplicationContribution {
             if (route?.target === 'theia-editor') {
                 continue; // N-2: @powerbrowser/orca-workspace opens these through subscribeOpenFiles; nothing here
             }
-            console.info(route?.target === 'pending'
+            if (route?.target === 'pb-web-tab') {
+                continue; // Phase 66: revealBrowserTabs resolves these through the browser host's page table
+            }
+            console.info(route && 'requirement' in route
                 ? `${LOG_PREFIX} Orca ${kind} panes open nothing until ${route.requirement}`
                 : `${LOG_PREFIX} Orca ${kind} panes have no route`);
         }
@@ -205,6 +217,25 @@ export class OrcaPaneObserver implements FrontendApplicationContribution {
             // Never activated: an agent opening a pane must not take focus (P64-10).
             await this.shell.addWidget(widget, ref ? { area: 'main', mode: placement!.mode, ref } : { area: 'main' });
             this.onDidAddWidgetEmitter.fire(widget);
+        }
+    }
+
+    /**
+     * Phase 66 (P66-07, P66-09, D-01): every list's browser records against the browser host's page table, on every
+     * list (not only the drained ones), so the reveal tracker sees each activation. No widget is created and no Orca
+     * component is mounted; only the tabs reveal() returns are activated. A page with no web tab logs one line.
+     */
+    protected revealBrowserTabs(records: OrcaPaneRecord[]): void {
+        const browser = records.filter(record => ORCA_PANE_ROUTES[record.kind]?.target === 'pb-web-tab');
+        for (const record of browser) {
+            const pageId = record.browserPageId;
+            if (pageId && !this.browserPages.tabOf(pageId) && !this.loggedUnbound.has(pageId)) {
+                this.loggedUnbound.add(pageId);
+                console.info(`${LOG_PREFIX} an Orca browser page opens nothing until PowerBrowser's browser host creates it`);
+            }
+        }
+        for (const widget of this.browserPages.reveal(browser)) {
+            this.shell.activateWidget(widget.id);
         }
     }
 

@@ -470,13 +470,14 @@ const PLANT_FILE = 'orca-overlay/files/src/renderer/src/pb/pb-plant.ts';
 export const PLANTS = [
     { name: 'content-type-added', naming: 'added content type planted-kind', file: REL.tabTypes, edit: (s) => s.replace("export type TabContentType =\n  | 'terminal'", "export type TabContentType =\n  | 'planted-kind'\n  | 'terminal'") },
     { name: 'content-type-removed', naming: 'removed content type simulator', file: REL.tabTypes, edit: (s) => s.replace(/(export type TabContentType =[\s\S]*?)\n {2}\| 'simulator'/, '$1') },
-    { name: 'unknown-target', naming: 'unknown target kind pb-window', file: REL.routes, edit: (s) => s.replace("'browser': { target: 'pending', requirement: 'BRW-02' }", "'browser': { target: 'pb-window', requirement: 'BRW-02' }") },
-    { name: 'pending-without-requirement', naming: 'pending route browser has no requirement id', file: REL.routes, edit: (s) => s.replace("'browser': { target: 'pending', requirement: 'BRW-02' }", "'browser': { target: 'pending' }") },
+    { name: 'unknown-target', naming: 'unknown target kind pb-window', file: REL.routes, edit: (s) => s.replace("'browser': { target: 'pb-web-tab' }", "'browser': { target: 'pb-window', requirement: 'BRW-02' }") },
+    { name: 'pending-without-requirement', naming: 'pending route browser has no requirement id', file: REL.routes, edit: (s) => s.replace("'browser': { target: 'pb-web-tab' }", "'browser': { target: 'pending' }") },
     { name: 'word-missing-from-doc', naming: 'word sim missing from the doc', file: REL.doc, edit: (s) => s.replace(/\n\| `sim` \|[^\n]*/, '') },
     { name: 'extra-doc-word', naming: 'doc word remote has no hosted route', file: REL.doc, edit: (s) => s.replace('| `checks` |', '| `remote` | `terminal` on another host |\n| `checks` |') },
     { name: 'api-member-not-exported', naming: 'bundle API member plantedMember is not a named export', file: REL.protocol, edit: (s) => s.replace('export interface OrcaPaneBundleApi {\n', 'export interface OrcaPaneBundleApi {\n    plantedMember(): void;\n') },
     { name: 'hand-off-key-mismatch', naming: 'hand-off key mismatch', file: REL.viteConfig, edit: (s) => s.replace(/const KEY = (['"])powerbrowser\.orca-panes\.react\1/, "const KEY = 'powerbrowser.orca-panes.planted'") },
-    { name: 'target-without-observer-branch', naming: 'table target pb-web-tab has no observer branch', file: REL.routes, edit: (s) => s.replace("'browser': { target: 'pending', requirement: 'BRW-02' }", "'browser': { target: 'pb-web-tab' }") },
+    // Phase 66 (66-02): browser is pb-web-tab, so the plant removes the observer's pb-web-tab branches instead.
+    { name: 'target-without-observer-branch', naming: 'table target pb-web-tab has no observer branch', file: REL.observer, edit: (s) => s.replaceAll(".target === 'pb-web-tab'", ".kind === 'pb-web-tab'") },
     { name: 'creation-import-in-overlay', naming: 'imports ../components/terminal/terminal-tab-create', file: PLANT_FILE, edit: () => "import { createNewTerminalTab } from '../components/terminal/terminal-tab-create'\nexport const plant = createNewTerminalTab\n" },
     { name: 'creation-method-in-orca-panes', naming: `holds the ${CREATION_METHOD} method string`, file: REL.observer, edit: (s) => `${s}\nexport const PLANTED_METHOD = '${CREATION_METHOD}';\n` },
     { name: 'module-key-mismatch', naming: 'module key', file: REL.tabsLive, edit: (s) => s.replace(/powerbrowser\.orca-panes\.module/g, 'powerbrowser.orca-panes.planted') },

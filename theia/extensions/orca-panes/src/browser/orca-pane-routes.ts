@@ -11,6 +11,10 @@
  * A pending route opens nothing: browser waits for the PB web tab (BRW-02,
  * Phase 66). Orca's own editor or screencast pane is never mounted (D-01).
  *
+ * Phase 66 (BRW-02; P66-09): browser is a PowerBrowser web tab. Pages are
+ * created only by @powerbrowser/orca-browser's host; the observer resolves a
+ * browser record through its page table and creates nothing.
+ *
  * Phase 65 (TAB-05; P65-01, P65-10; interfaces N-2): editor, diff and
  * conflict-review open in Theia's own editors, delivered by
  * @powerbrowser/orca-workspace (it observes them through subscribeOpenFiles),
@@ -34,7 +38,7 @@ export const ORCA_PANE_ROUTES: { readonly [kind: string]: OrcaPaneRoute } = Obje
     'check-details': { target: 'hosted-pane', word: 'checks' },
     'editor': { target: 'theia-editor' },
     'diff': { target: 'theia-editor' },
-    'browser': { target: 'pending', requirement: 'BRW-02' },
+    'browser': { target: 'pb-web-tab' },
 });
 
 /** The pb-orca: name word of each hosted kind. */

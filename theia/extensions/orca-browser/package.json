@@ -1,0 +1,23 @@
+{
+  "private": true,
+  "name": "@powerbrowser/orca-browser",
+  "version": "0.1.0",
+  "license": "MIT",
+  "dependencies": {
+    "@powerbrowser/tab-uris": "0.1.0",
+    "@theia/core": "1.76.0"
+  },
+  "theiaExtensions": [
+    {
+      "frontend": "lib/browser/orca-browser-frontend-module"
+    }
+  ],
+  "files": [
+    "lib",
+    "src"
+  ],
+  "scripts": {
+    "clean": "rm -rf lib *.tsbuildinfo",
+    "build": "tsc -b"
+  }
+}
