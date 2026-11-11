@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 22
+open_count: 21
 waived_count: 2
-fixed_count: 31
+fixed_count: 32
 total_count: 55
-last_updated: 2026-11-11T21:37:37.789Z
+last_updated: 2026-11-11T22:10:08.897Z
 ---
 
 # Broken Windows Ledger
@@ -61,7 +61,7 @@ last_updated: 2026-11-11T21:37:37.789Z
 | 44 | 68 | deviation | inventory/licence-allowlist.json |  | open owner licence items: (1) ruling 68-B, the per-package permissive set allowed_package_spdx and its exception rows; (2) ruling 68-A was decided 2026-11-10 (D-30: the Claude agent SDK ships in a pre-installed, removable Theia extension, out of orcad), and the owner still confirms that Anthropic's terms (https://code.claude.com/docs/en/legal-and-compliance) permit redistributing it, then sets terms_check to confirmed; (3) the GPL-3.0 section 6 reading for the bundled uBlock Origin XPI (P68-39); no release is cut while (1) or (2) is open (release.yml --rulings guard); repro: scripts/verify-platform.sh --only orca-licence-rulings; source: 68-CONTEXT P68-38, P68-39 | open |  | 2026-11-10T22:08:56.684Z |  |
 | 45 | 67 | unmet-truth | theia/extensions/orca-panes/src/browser/failure/orca-hosting-status.ts |  | orca-failure-page-live: after orcad is killed the automatic re-pair brings content back, then Orca's client is refused (access-revoked), clears its stored environment, and repair() re-pairs under a new environment id that strands its sessions; the next control reads pairing-lost (or browser-not-attached that Reconnect cannot clear). Root cause in orca-overlay pb-session-pairing.ts repair (67-06 Task 2, owner decision) | fixed |  | 2026-11-11T18:33:38.140Z | 2026-11-11T20:00:22.319Z |
 | 46 | 67 | unrun-verify | scripts/verify-orca-landing-logo-live.mjs |  | orca-landing-logo-live remount leg (A-9): Landing unmounts on worktree activation but did not mount again within 30 s after the worktree was removed (main worktree activated) or its terminals closed; proxy control, web tab, stock window and Theia legs PASS (67-06) | fixed |  | 2026-11-11T18:33:38.266Z | 2026-11-11T20:00:22.426Z |
-| 47 | 67 | deviation | scripts/verify-orca-failure-page-live.mjs |  | orca-failure-page-live intermittent harness red, 1 of 6 runs on the 67-07 tree (5 PASS): offer-refusal induction, after the Theia document reload the page probe did not return ('timed out after 60000 ms waiting for hosted views after the reload (last error: timed out after 180000 ms waiting for the page probe to finish)'); cause not found; repro: scripts/verify-platform.sh --only orca-failure-page-live under the pb-live lock; source: 67-07-SUMMARY.md | open |  | 2026-11-11T20:18:17.325Z |  |
+| 47 | 67 | deviation | scripts/verify-orca-failure-page-live.mjs |  | orca-failure-page-live intermittent harness red, 1 of 6 runs on the 67-07 tree (5 PASS): offer-refusal induction, after the Theia document reload the page probe did not return ('timed out after 60000 ms waiting for hosted views after the reload (last error: timed out after 180000 ms waiting for the page probe to finish)'); cause not found; repro: scripts/verify-platform.sh --only orca-failure-page-live under the pb-live lock; source: 67-07-SUMMARY.md | fixed | Closed after the 66-09 merge (2c713811): f42a2cb4 makes the row record performance.timeOrigin before location.reload() and wait for a different value before the page probe. 6 of 6 counted runs green in the gap-66-09 worktree (.mozbuild/p66-09/w47-run1, run3, run4, run5, run6, run7; run2 also PASS but not counted, it overlapped the 68-06 pass cleanup), each logging: 'orca-failure-page-live: PASS -- every hosted view showed the PowerBrowser page for each induced class and recovered; after the restart the client kept its environment id, logged no stranded-environment line and a CLI terminal became a hosted tab'. Merged tree, one more run (.mozbuild/coord-6609/failure-page-live.txt, 172 s): same PASS line. | 2026-11-11T20:18:17.325Z | 2026-11-11T22:10:08.897Z |
 | 48 | 68 | unrun-verify | powerbrowser/packaging/package-macos.sh |  | macOS release artifact with Orca not built: package-macos.sh's per-arch Orca staging and the universal merge exist (68-01) and release.yml's macos-orca-arm64, macos-orca-x64 and macos-orca-universal jobs are shape-checked (release-shape, orca-macos-merge-self-test), but no build-macos job exists and the macOS Gecko cross-build is blocked by Phase 55 BLOCKED.md items 8 (build-time checks never run, no macOS host) and 9 (no Darwin rust-std in the firefox-macos shell; owner chooses a route); repro: scripts/verify-platform.sh --only macos-package-payload; source: 68-06 Task 3, PLAT-01, D-24 | open |  | 2026-11-11T21:07:34.010Z |  |
 | 49 | 68 | unrun-verify | powerbrowser/packaging/package-macos.sh |  | macOS smoke test of a build with Orca not run: needs a Mac and a macOS artifact (D-24: macOS gets a smoke test when a host exists); steps: install the artifact, start PowerBrowser, open Orca mode, confirm orcad runs from <GreD>/orca on the staged Node and a quit leaves no orcad; source: 68-06 Task 3, PLAT-02, D-24 | open |  | 2026-11-11T21:07:34.116Z |  |
 | 50 | 68 | unrun-verify | powerbrowser/packaging/package-windows.sh |  | Windows smoke test of a build with Orca not run: needs the Windows 11 VM (CF-10, OWNER-PASS section 11) and a windows-orca plus build-windows artifact from a release.yml dispatch; the Windows staging and admission order are proven only by build-windows-shape on this host; steps: install, start, open Orca mode, confirm orcad runs from <GreD>/orca on node/node.exe and a quit leaves no orcad; source: 68-06 Task 3, PLAT-02, D-24, CF-10 | open |  | 2026-11-11T21:07:34.218Z |  |
@@ -655,10 +655,10 @@ last_updated: 2026-11-11T21:37:37.789Z
     "file": "scripts/verify-orca-failure-page-live.mjs",
     "line": null,
     "description": "orca-failure-page-live intermittent harness red, 1 of 6 runs on the 67-07 tree (5 PASS): offer-refusal induction, after the Theia document reload the page probe did not return ('timed out after 60000 ms waiting for hosted views after the reload (last error: timed out after 180000 ms waiting for the page probe to finish)'); cause not found; repro: scripts/verify-platform.sh --only orca-failure-page-live under the pb-live lock; source: 67-07-SUMMARY.md",
-    "status": "open",
-    "reason": "",
+    "status": "fixed",
+    "reason": "Closed after the 66-09 merge (2c713811): f42a2cb4 makes the row record performance.timeOrigin before location.reload() and wait for a different value before the page probe. 6 of 6 counted runs green in the gap-66-09 worktree (.mozbuild/p66-09/w47-run1, run3, run4, run5, run6, run7; run2 also PASS but not counted, it overlapped the 68-06 pass cleanup), each logging: 'orca-failure-page-live: PASS -- every hosted view showed the PowerBrowser page for each induced class and recovered; after the restart the client kept its environment id, logged no stranded-environment line and a CLI terminal became a hosted tab'. Merged tree, one more run (.mozbuild/coord-6609/failure-page-live.txt, 172 s): same PASS line.",
     "recorded_at": "2026-11-11T20:18:17.325Z",
-    "resolved_at": null,
+    "resolved_at": "2026-11-11T22:10:08.897Z",
     "milestone": "v1.5"
   },
   {
