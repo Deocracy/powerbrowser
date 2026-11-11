@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 14
+open_count: 22
 waived_count: 2
 fixed_count: 31
-total_count: 47
-last_updated: 2026-11-11T20:18:17.325Z
+total_count: 55
+last_updated: 2026-11-11T21:37:37.789Z
 ---
 
 # Broken Windows Ledger
@@ -62,6 +62,14 @@ last_updated: 2026-11-11T20:18:17.325Z
 | 45 | 67 | unmet-truth | theia/extensions/orca-panes/src/browser/failure/orca-hosting-status.ts |  | orca-failure-page-live: after orcad is killed the automatic re-pair brings content back, then Orca's client is refused (access-revoked), clears its stored environment, and repair() re-pairs under a new environment id that strands its sessions; the next control reads pairing-lost (or browser-not-attached that Reconnect cannot clear). Root cause in orca-overlay pb-session-pairing.ts repair (67-06 Task 2, owner decision) | fixed |  | 2026-11-11T18:33:38.140Z | 2026-11-11T20:00:22.319Z |
 | 46 | 67 | unrun-verify | scripts/verify-orca-landing-logo-live.mjs |  | orca-landing-logo-live remount leg (A-9): Landing unmounts on worktree activation but did not mount again within 30 s after the worktree was removed (main worktree activated) or its terminals closed; proxy control, web tab, stock window and Theia legs PASS (67-06) | fixed |  | 2026-11-11T18:33:38.266Z | 2026-11-11T20:00:22.426Z |
 | 47 | 67 | deviation | scripts/verify-orca-failure-page-live.mjs |  | orca-failure-page-live intermittent harness red, 1 of 6 runs on the 67-07 tree (5 PASS): offer-refusal induction, after the Theia document reload the page probe did not return ('timed out after 60000 ms waiting for hosted views after the reload (last error: timed out after 180000 ms waiting for the page probe to finish)'); cause not found; repro: scripts/verify-platform.sh --only orca-failure-page-live under the pb-live lock; source: 67-07-SUMMARY.md | open |  | 2026-11-11T20:18:17.325Z |  |
+| 48 | 68 | unrun-verify | powerbrowser/packaging/package-macos.sh |  | macOS release artifact with Orca not built: package-macos.sh's per-arch Orca staging and the universal merge exist (68-01) and release.yml's macos-orca-arm64, macos-orca-x64 and macos-orca-universal jobs are shape-checked (release-shape, orca-macos-merge-self-test), but no build-macos job exists and the macOS Gecko cross-build is blocked by Phase 55 BLOCKED.md items 8 (build-time checks never run, no macOS host) and 9 (no Darwin rust-std in the firefox-macos shell; owner chooses a route); repro: scripts/verify-platform.sh --only macos-package-payload; source: 68-06 Task 3, PLAT-01, D-24 | open |  | 2026-11-11T21:07:34.010Z |  |
+| 49 | 68 | unrun-verify | powerbrowser/packaging/package-macos.sh |  | macOS smoke test of a build with Orca not run: needs a Mac and a macOS artifact (D-24: macOS gets a smoke test when a host exists); steps: install the artifact, start PowerBrowser, open Orca mode, confirm orcad runs from <GreD>/orca on the staged Node and a quit leaves no orcad; source: 68-06 Task 3, PLAT-02, D-24 | open |  | 2026-11-11T21:07:34.116Z |  |
+| 50 | 68 | unrun-verify | powerbrowser/packaging/package-windows.sh |  | Windows smoke test of a build with Orca not run: needs the Windows 11 VM (CF-10, OWNER-PASS section 11) and a windows-orca plus build-windows artifact from a release.yml dispatch; the Windows staging and admission order are proven only by build-windows-shape on this host; steps: install, start, open Orca mode, confirm orcad runs from <GreD>/orca on node/node.exe and a quit leaves no orcad; source: 68-06 Task 3, PLAT-02, D-24, CF-10 | open |  | 2026-11-11T21:07:34.218Z |  |
+| 51 | 68 | unrun-verify | orca-overlay/seams.json |  | Upstream issue and PR for the browser-provider seam (010-installed-electron-switch) not opened: owner opens the issue on Orca's repository with .mozbuild/orca-upstream/browser-provider/issue.md, then the PR from a fork with seam.patch and pr.md, and records the PR URL in seam 010's upstream.pr (68-05-SUMMARY.md Owner hand-off; regenerate the export first, Orca main moves daily); the fork and org are the owner's choice; repro: scripts/verify-platform.sh --only orca-upstream-prs; source: 68-05, OVL-06, D-27 | open |  | 2026-11-11T21:07:34.323Z |  |
+| 52 | 68 | deviation | orca-overlay/seams.json |  | web-entry upstream export refused: node scripts/export-orca-seam-pr.mjs --class web-entry exits 2 with 'no seam of class web-entry (classes present: browser-provider, pb-only)' because Phase 64 hosts Orca panes through overlay files only and added no seam; orca-upstream-prs therefore stays red naming web-entry until the owner rules the class out (as D-31 did for the terminal provider, then the check's PR_CLASSES change under that ruling) or a later phase adds a web-entry seam in Phase 64's files; repro: node scripts/verify-orca-overlay.mjs --upstream-prs; source: 68-05, D-27 | open |  | 2026-11-11T21:07:34.430Z |  |
+| 53 | 68 | unmet-truth | theia/extensions/orca-agents/src/node/claude-wrapper-launcher.ts |  | The claude-wrapper launcher writes only a POSIX sh script (#!/bin/sh), so an agent launched through PowerBrowser's wrapper on Windows has no launcher; no Phase 68 lane landed a Windows twin (.cmd or a node shim); repro: grep -n '#!/bin/sh' theia/extensions/orca-agents/src/node/claude-wrapper-launcher.ts; source: lane p63-03, 68-06 Task 3, TERM-02/EXT-02 | open |  | 2026-11-11T21:07:34.542Z |  |
+| 54 | 68 | deviation | scripts/lib/firefox-bidi.mjs |  | Packaged live rows that end PowerBrowser with the harness's SIGTERM/SIGKILL instead of a quit leave the packaged OrcaService's orcad running from the deleted extraction root (/tmp/pb-pkg-*) once the package starts Orca (after fix 21898a67); observed after ng063-packaged-launch on 2026-11-11 and stopped by pid in 68-06; orca-packaged-live now stops its own (a625378d); the shared teardown (withFirefoxPage) or each packaged row should stop orcad by recorded identity; repro: run scripts/verify-platform.sh --only ng063-packaged-launch with POWERBROWSER_OBJDIR set to a packaged objdir, then list processes whose arguments name /tmp/pb-pkg-; source: 68-06 Task 2 | open |  | 2026-11-11T21:07:34.646Z |  |
+| 55 | 68 | unmet-truth | scripts/verify-orca-tabs-live.mjs |  | orca-tabs-live stage tab-groups-cross-client (g3) red in the 68-06 PLAT-02 Linux pass (2026-11-11), as on every tree since Phase 64/65 (TAB-04 pending): 'the second client shows no tab for T (web-terminal-...)'; not caused by Phase 68 code; owner of the stage: Phase 64 (TAB-04), end-of-milestone pass; repro: flock /home/chris/coding/Power-Browser/.git/pb-live.lock scripts/verify-platform.sh --only orca-tabs-live with ORCA_* unset; source: 68-06 Task 2, 64-06-SUMMARY.md | open |  | 2026-11-11T21:37:37.789Z |  |
 
 ````json
 [
@@ -650,6 +658,110 @@ last_updated: 2026-11-11T20:18:17.325Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-11-11T20:18:17.325Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 48,
+    "kind": "unrun-verify",
+    "phase": "68",
+    "file": "powerbrowser/packaging/package-macos.sh",
+    "line": null,
+    "description": "macOS release artifact with Orca not built: package-macos.sh's per-arch Orca staging and the universal merge exist (68-01) and release.yml's macos-orca-arm64, macos-orca-x64 and macos-orca-universal jobs are shape-checked (release-shape, orca-macos-merge-self-test), but no build-macos job exists and the macOS Gecko cross-build is blocked by Phase 55 BLOCKED.md items 8 (build-time checks never run, no macOS host) and 9 (no Darwin rust-std in the firefox-macos shell; owner chooses a route); repro: scripts/verify-platform.sh --only macos-package-payload; source: 68-06 Task 3, PLAT-01, D-24",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-11T21:07:34.010Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 49,
+    "kind": "unrun-verify",
+    "phase": "68",
+    "file": "powerbrowser/packaging/package-macos.sh",
+    "line": null,
+    "description": "macOS smoke test of a build with Orca not run: needs a Mac and a macOS artifact (D-24: macOS gets a smoke test when a host exists); steps: install the artifact, start PowerBrowser, open Orca mode, confirm orcad runs from <GreD>/orca on the staged Node and a quit leaves no orcad; source: 68-06 Task 3, PLAT-02, D-24",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-11T21:07:34.116Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 50,
+    "kind": "unrun-verify",
+    "phase": "68",
+    "file": "powerbrowser/packaging/package-windows.sh",
+    "line": null,
+    "description": "Windows smoke test of a build with Orca not run: needs the Windows 11 VM (CF-10, OWNER-PASS section 11) and a windows-orca plus build-windows artifact from a release.yml dispatch; the Windows staging and admission order are proven only by build-windows-shape on this host; steps: install, start, open Orca mode, confirm orcad runs from <GreD>/orca on node/node.exe and a quit leaves no orcad; source: 68-06 Task 3, PLAT-02, D-24, CF-10",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-11T21:07:34.218Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 51,
+    "kind": "unrun-verify",
+    "phase": "68",
+    "file": "orca-overlay/seams.json",
+    "line": null,
+    "description": "Upstream issue and PR for the browser-provider seam (010-installed-electron-switch) not opened: owner opens the issue on Orca's repository with .mozbuild/orca-upstream/browser-provider/issue.md, then the PR from a fork with seam.patch and pr.md, and records the PR URL in seam 010's upstream.pr (68-05-SUMMARY.md Owner hand-off; regenerate the export first, Orca main moves daily); the fork and org are the owner's choice; repro: scripts/verify-platform.sh --only orca-upstream-prs; source: 68-05, OVL-06, D-27",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-11T21:07:34.323Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 52,
+    "kind": "deviation",
+    "phase": "68",
+    "file": "orca-overlay/seams.json",
+    "line": null,
+    "description": "web-entry upstream export refused: node scripts/export-orca-seam-pr.mjs --class web-entry exits 2 with 'no seam of class web-entry (classes present: browser-provider, pb-only)' because Phase 64 hosts Orca panes through overlay files only and added no seam; orca-upstream-prs therefore stays red naming web-entry until the owner rules the class out (as D-31 did for the terminal provider, then the check's PR_CLASSES change under that ruling) or a later phase adds a web-entry seam in Phase 64's files; repro: node scripts/verify-orca-overlay.mjs --upstream-prs; source: 68-05, D-27",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-11T21:07:34.430Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 53,
+    "kind": "unmet-truth",
+    "phase": "68",
+    "file": "theia/extensions/orca-agents/src/node/claude-wrapper-launcher.ts",
+    "line": null,
+    "description": "The claude-wrapper launcher writes only a POSIX sh script (#!/bin/sh), so an agent launched through PowerBrowser's wrapper on Windows has no launcher; no Phase 68 lane landed a Windows twin (.cmd or a node shim); repro: grep -n '#!/bin/sh' theia/extensions/orca-agents/src/node/claude-wrapper-launcher.ts; source: lane p63-03, 68-06 Task 3, TERM-02/EXT-02",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-11T21:07:34.542Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 54,
+    "kind": "deviation",
+    "phase": "68",
+    "file": "scripts/lib/firefox-bidi.mjs",
+    "line": null,
+    "description": "Packaged live rows that end PowerBrowser with the harness's SIGTERM/SIGKILL instead of a quit leave the packaged OrcaService's orcad running from the deleted extraction root (/tmp/pb-pkg-*) once the package starts Orca (after fix 21898a67); observed after ng063-packaged-launch on 2026-11-11 and stopped by pid in 68-06; orca-packaged-live now stops its own (a625378d); the shared teardown (withFirefoxPage) or each packaged row should stop orcad by recorded identity; repro: run scripts/verify-platform.sh --only ng063-packaged-launch with POWERBROWSER_OBJDIR set to a packaged objdir, then list processes whose arguments name /tmp/pb-pkg-; source: 68-06 Task 2",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-11T21:07:34.646Z",
+    "resolved_at": null,
+    "milestone": "v1.5"
+  },
+  {
+    "id": 55,
+    "kind": "unmet-truth",
+    "phase": "68",
+    "file": "scripts/verify-orca-tabs-live.mjs",
+    "line": null,
+    "description": "orca-tabs-live stage tab-groups-cross-client (g3) red in the 68-06 PLAT-02 Linux pass (2026-11-11), as on every tree since Phase 64/65 (TAB-04 pending): 'the second client shows no tab for T (web-terminal-...)'; not caused by Phase 68 code; owner of the stage: Phase 64 (TAB-04), end-of-milestone pass; repro: flock /home/chris/coding/Power-Browser/.git/pb-live.lock scripts/verify-platform.sh --only orca-tabs-live with ORCA_* unset; source: 68-06 Task 2, 64-06-SUMMARY.md",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-11T21:37:37.789Z",
     "resolved_at": null,
     "milestone": "v1.5"
   }

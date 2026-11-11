@@ -7042,6 +7042,10 @@ declare -a GATE_KNOWN_OPEN_EXCLUSIONS=(
   "orca-licence-rulings|44|owner items open: ruling 68-B and the 68-A terms check for the SDK extension"
   "orca-packaged-tree|30|no container-built release tarball yet (68-06 Task 2 builds it)"
   "orca-packaged-live|30|no container-built release tarball yet (68-06 Task 2 builds it)"
+  # 68-06 (2026-11-11): Task 2 built the package from the dev objdir (no Safe Browsing key directory here), so
+  # the two rows above stay keyed to entry 30 until a container release tarball exists.
+  "orca-upstream-prs|51|owner opens the upstream issues and PRs (OVL-06, D-27)"
+  "orca-tabs-live|55|stage tab-groups-cross-client (g3) red since Phase 64 (TAB-04)"
 )
 
 # Before consolidation, --gate ran this script's own set and then SHELLED OUT to
