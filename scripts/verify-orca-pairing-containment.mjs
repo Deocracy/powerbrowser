@@ -31,11 +31,29 @@
 // counts only, through installOutputRedaction; no offer, needle, token or
 // pairing URL is printed, logged or written.
 //
+// Live run (tier full; a coordinator proof on the merged, built tree):
+//   flock /home/chris/coding/Power-Browser/.git/pb-live.lock node scripts/verify-orca-pairing-containment.mjs
+// MOZ_PURGE_CACHES=1 is set and every inherited ORCA_* name removed at start
+// (Phase 65's withOrcaProfile, scripts/verify-orca-relaunch-restore-live.mjs).
+// One launch on a profile under .mozbuild/pb-live-profiles/ (P67-21): ready
+// and paired; the offer read once from <bridgeDir>/web-pairing; the bridge
+// folder and non-loopback-peer collectors run while orcad runs; a marker page
+// (servePages, random path) opens in a PB web tab; New Orca Chat opens a
+// hosted chat tab; the diagnostics layer's rows and log are read from the
+// chrome document; the address text of every Orca tab and of the control web
+// tab is read from the chrome bar, and each Orca tab's address copy from
+// TabUriRegistry (the OS clipboard is never read); a Setup is saved through
+// Setups' own command; stdout (devtools.console.stdout.content in user.js) and
+// stderr are captured to a .mozbuild work folder removed after the run;
+// PowerBrowser quits; then every collector runs. A run that read zero sinks
+// is red. SKIP (exit 0, one named line) without a built PowerBrowser, Theia
+// app or orca/, as Phase 65's livePrerequisites decides.
+//
 // Usage:
 //   node scripts/verify-orca-pairing-containment.mjs              (live; tier full)
 //   node scripts/verify-orca-pairing-containment.mjs --self-test  (fixtures; tier quick)
 
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -224,8 +242,115 @@ function existsSyncSafe(path) {
 // ---------------------------------------------------------------------------
 // Live.
 
+const chromeRead = async (app, body) => JSON.parse(await app.evaluateIn(app.chrome, `(() => { try {
+    const OrcaService = ChromeUtils.importESModule('chrome://powerbrowser/content/OrcaService.sys.mjs').OrcaService;
+    const TheiaService = ChromeUtils.importESModule('chrome://powerbrowser/content/TheiaService.sys.mjs').TheiaService;
+    return JSON.stringify((() => { ${body} })()); } catch (e) { return JSON.stringify({ chromeError: String(e) }); } })()`));
+
 async function main() {
-    console.log(`${NAME}: SKIP -- the live run lands in Task 3 of plan 67-04`);
+    const live = await import('./verify-orca-relaunch-restore-live.mjs');
+    const pre = await live.livePrerequisites();
+    if (pre.fail) { console.error(`${NAME}: FAIL -- ${pre.fail}`); return 1; }
+    if (pre.skip) { console.log(`${NAME}: SKIP -- ${pre.skip}`); return 0; }
+    for (const k of Object.keys(process.env)) if (k.startsWith('ORCA_')) delete process.env[k];
+    const { servePages, probe, pollFor } = await import('./lib/pb-relaunch.mjs');
+    const { openWebTab } = await import('./lib/pb-live-probe.mjs');
+    mkdirSync(join(REPO_ROOT, '.mozbuild'), { recursive: true });
+    const work = mkdtempSync(join(REPO_ROOT, '.mozbuild', `${NAME}-`));
+    const markerPath = `/containment-marker-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const pages = await servePages({ [markerPath]: { title: 'PowerBrowser containment marker', body: 'marker' } });
+    const marker = markerPath; // the random path: what every control looks for, whether or not a surface trims the scheme
+    const setupName = 'P67 containment';
+    const secrets = [];
+    const restoreOutput = installOutputRedaction(secrets); // withOrcaProfile's own redaction ends when it returns
+    process.env.PB_LIVE_STDOUT_PATH = join(work, 'stdout.log');
+    process.env.PB_LIVE_STDERR_PATH = join(work, 'stderr.log');
+    const results = [];
+    let fragmentLine = null;
+    try {
+        await live.withOrcaProfile(async (session) => {
+            appendFileSync(join(session.profileDir, 'user.js'), 'user_pref("devtools.console.stdout.content", true);\n');
+            const holder5 = registryFilesFromPin(join(REPO_ROOT, 'orca'));
+            let ctx = null;
+            const quit = await session.launch(async (s) => {
+                const offer = await s.offer(); // read once, held in memory and in the redaction list
+                const needles = needlesFromOffer(offer);
+                secrets.push(...needles.map((n) => n.bytes.toString('utf8')));
+                const st = await chromeRead(s.app, 'return { orca: OrcaService.getState(), theia: TheiaService.getState() };');
+                if (st.chromeError) throw new Error(`reading service state: ${st.chromeError}`);
+                ctx = {
+                    needles, marker, setupName, holder5, logControl: LOG_CONTROL, offerFile: OFFER_FILE,
+                    profileDir: session.profileDir, dataRoot: st.orca.dataRoot, bridgeDir: st.orca.bridgeDir,
+                    theiaOriginDir: `http+++127.0.0.1+${s.app.port}`, endpoint: offerEndpoint(offer), orcaPort: st.orca.port,
+                    pids: { orcad: [st.orca.pid], theia: [st.theia.pid] }, procRoot: '/proc',
+                };
+                // While orcad runs: the offer file is removed on stop (P67-09).
+                results.push(runCollector(bridgeFolderCollector, ctx), runCollector(nonLoopbackPeerCollector, ctx));
+                const tabId = await openWebTab(s.app, pages.url(markerPath));
+                await pollFor(async () => ((await s.app.contexts()).some((c) => c.url === pages.url(markerPath)) ? true : null), 30000, 'the marker web tab to load');
+                await s.addRepository();
+                await s.selectWorktree();
+                if (!(await s.newHosted('powerbrowser.orca.newChat', 'agent-session'))) throw new Error('New Orca Chat gave no hosted chat widget within 10 s');
+                const diag = await chromeRead(s.app, `window.powerbrowserShowDiagnostics();
+                    const rows = [...document.getElementById('powerbrowser-diagnostics-fields').children].map(r => r.textContent);
+                    const log = document.getElementById('powerbrowser-diagnostics-log').textContent;
+                    window.powerbrowserHideDiagnostics();
+                    return { rows, log, orcaLog: OrcaService.getRecentLog(), theiaLog: TheiaService.getRecentLog() };`);
+                if (diag.chromeError) throw new Error(`reading the diagnostics layer: ${diag.chromeError}`);
+                ctx.copyable = { rows: diag.rows, log: diag.log };
+                ctx.logTexts = [...diag.orcaLog, ...diag.theiaLog];
+                const orcaIds = (await s.hostedWidgets()).map((w) => w.id);
+                const tabs = await probe(s.app, `const shell = get('ApplicationShell');
+                    const registry = get('TabUriRegistry');
+                    const web = get('WebTabChannel').widgetOf(${JSON.stringify(tabId)});
+                    const out = [];
+                    for (const [kind, id] of [...${JSON.stringify(orcaIds)}.map(i => ['orca', i]), ['control', web.id]]) {
+                        const w = shell.getWidgetById(id);
+                        await shell.activateWidget(id);
+                        await until(() => shell.mainPanel.currentTitle?.owner === w, 5000);
+                        await new Promise(r => setTimeout(r, 300));
+                        const input = document.querySelector('.pb-chrome-bar-input');
+                        const uri = kind === 'orca' && w ? registry.uriOf(w) : null;
+                        out.push({ kind, text: input ? input.value : null, copy: uri ? uri.toString(true) : null });
+                    }
+                    return { out, hash: location.hash };`);
+                ctx.addressTexts = tabs.out.filter((t) => typeof t.text === 'string').map(({ kind, text }) => ({ kind, text }));
+                ctx.copyable.tabAddresses = tabs.out.filter((t) => t.kind === 'orca' && t.copy).map((t) => t.copy);
+                const fragment = String(tabs.hash ?? '').replace(/^#/, '');
+                fragmentLine = `clause theia-fragment (recorded, 65-RESEARCH Q2): ${fragment ? (ctx.addressTexts.some((a) => a.text.includes(fragment)) ? 'PRESENT in an address text' : `absent from ${ctx.addressTexts.length} address text(s)`) : 'the Theia document has no fragment'}`;
+                if (!(await s.saveSetup(setupName))) throw new Error('the Setup was not saved through Setups\' own command');
+                return s.quit();
+            });
+            if (quit !== 'exited') throw new Error(`PowerBrowser did not exit after its own quit (${quit})`);
+            const captured = (f) => { try { return readFileSync(join(work, f), 'utf8'); } catch { return ''; } };
+            ctx.logTexts.push(captured('stdout.log'), captured('stderr.log'));
+            for (const c of COLLECTORS) if (c !== bridgeFolderCollector && c !== nonLoopbackPeerCollector) results.push(runCollector(c, ctx));
+        });
+    } catch (err) {
+        console.error(`${NAME}: FAIL -- harness: ${err.message}`);
+        restoreOutput();
+        return 1;
+    } finally {
+        await pages.close();
+        delete process.env.PB_LIVE_STDOUT_PATH;
+        delete process.env.PB_LIVE_STDERR_PATH;
+        rmSync(work, { recursive: true, force: true }); // the captured output may hold a needle; it never outlives the run
+    }
+    try { return report(results, fragmentLine); } finally { restoreOutput(); }
+}
+
+function report(results, fragmentLine) {
+    if (!results.length) { console.error(`${NAME}: FAIL -- zero sinks read: an absence proves nothing`); return 1; }
+    let red = 0;
+    for (const r of results) {
+        const { red: isRed, line } = collectorLine(r);
+        if (isRed) { red++; console.error(`${NAME}: ${line}`); } else console.log(`${NAME}: ${line}`);
+    }
+    if (fragmentLine) console.log(`${NAME}: ${fragmentLine}`);
+    const missing = COLLECTORS.filter((c) => !results.some((r) => r.sink === c.sink)).map((c) => c.sink);
+    if (missing.length) { console.error(`${NAME}: FAIL -- sink(s) not read: ${missing.join(', ')}`); return 1; }
+    if (red) { console.error(`${NAME}: FAIL -- ${red} of ${results.length} sink(s) red`); return 1; }
+    console.log(`${NAME}: PASS -- ${results.length} sinks read, each control found, no needle of the launch's offer outside its five holders`);
     return 0;
 }
 

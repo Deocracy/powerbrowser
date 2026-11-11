@@ -6787,6 +6787,13 @@ run_own_checks() {
       # lane p66-01's built host bundle.
       "orca-browser-agent-live|node $REPO_ROOT/scripts/verify-orca-browser-agent-live.mjs"
       "orca-agent-mark-live|node $REPO_ROOT/scripts/verify-orca-agent-mark-live.mjs"
+      # NEW (67-04, RUN-07, P67-10/P67-11, P67-21): orca-pairing-containment-live pairs, opens a marker web tab and a
+      # hosted chat tab, reads the diagnostics layer, every address text and tab-address copy, saves a Setup, captures
+      # stdout/stderr, quits, then runs every collector over the profile, the bridge folder and the captured text; each
+      # control (marker URL, ready line, Orca port row, the offer in web-pairing, an orcad LISTEN row) is found first.
+      # Coordinator-run under flock /home/chris/coding/Power-Browser/.git/pb-live.lock, ORCA_* unset; profiles under
+      # .mozbuild/pb-live-profiles/ (makeProfile and firefox-bidi defaults; dispose removes the alias and bridge folder).
+      "orca-pairing-containment-live|node $REPO_ROOT/scripts/verify-orca-pairing-containment.mjs"
     )
   fi
 

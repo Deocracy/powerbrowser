@@ -16,13 +16,12 @@
 //     tree so no check re-spells an id.
 
 import { lstatSync, readFileSync } from 'node:fs';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { rm, writeFile } from 'node:fs/promises';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { withFirefoxPage } from './firefox-bidi.mjs';
+import { liveProfileDir, removeOrcaPathsFor, withFirefoxPage } from './firefox-bidi.mjs';
 
 export const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const SHELL_DOCUMENT_URL = 'chrome://powerbrowser/content/powerbrowser.xhtml';
@@ -247,8 +246,9 @@ function profileLocked(profileDir) {
  * cannot be set later through any probe.
  */
 export async function makeProfile(extraPrefs = {}) {
-    const profileDir = await mkdtemp(join(tmpdir(), 'pb-ng-c-profile-'));
-    const configHome = await mkdtemp(join(tmpdir(), 'pb-ng-c-config-'));
+    // P67-21, A-6: PowerBrowser refuses Orca on a temp-folder profile; both folders live under .mozbuild/pb-live-profiles/.
+    const profileDir = await liveProfileDir('pb-ng-c-profile-');
+    const configHome = await liveProfileDir('pb-ng-c-config-');
     const lines = ['user_pref("browser.sessionstore.resume_from_crash", false);'];
     for (const [key, value] of Object.entries(extraPrefs)) {
         lines.push(`user_pref(${JSON.stringify(key)}, ${JSON.stringify(value)});`);
@@ -261,6 +261,8 @@ export async function makeProfile(extraPrefs = {}) {
         dispose: async () => {
             await rm(profileDir, { recursive: true, force: true });
             await rm(configHome, { recursive: true, force: true });
+            // The data-root alias and bridge folder OrcaEnv's aliasPathFor and bridgeDirFor derive for this profile.
+            await removeOrcaPathsFor(profileDir);
         },
     };
 }
