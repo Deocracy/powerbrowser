@@ -260,6 +260,40 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
     pin. Mechanism and checks: gap-closure plan 66-07. Replaces options (a), (b) and (d) of the
     66-06 blocker.
 
+## Windows an agent page opens (2026-11-11)
+
+- **D-35 — A new window, tab or popup whose opener is an agent overlay is refused.** Coordinator
+  ruling in auto mode, 2026-11-11, closing the 66-VERIFICATION gap (truth 8); the owner may
+  override it.
+  - Cause (66-VERIFICATION): the Phase 36 new-window adopt paths (`adoptLinkIn`,
+    `adoptContentWindow`, `createPendingOverlay`) and the stock-window route never checked the
+    opener's agent flag, so a link or `window.open` from an agent page became an ordinary user tab
+    or stock window: the "browsers" message manager group (login manager attached), the user's
+    cookie jar on the link path, no mark, not covered by Stop, a foreground popup taking the
+    user's view, and a same-origin popup scriptable by the agent. Agent input is trusted, so it
+    supplies the user activation those opens need.
+  - Rule: the open is refused, not adopted, not sent to a stock window and not opened anywhere
+    else, on every path: link targets (including a middle-click, a modified click and Enter on a
+    link), `window.open` with or without features, form targets, the ClickHandler routes, and
+    every `where` value. The agent's own navigation inside its tab is unaffected.
+  - A refused open is logged once per tab and path, with no URL. When chrome refuses an open
+    while an agent command is in flight on that tab, the command answers
+    `browser_command_unavailable`. A new `browser_popup_refused` is not used: Orca's
+    `BrowserErrorCode` is a closed union in a tracked Orca file (`runtime-browser-contracts.ts`),
+    so a new code would need an Orca edit, and `browser_command_unavailable` already means "the
+    command cannot do this here" (the HTTP-auth refusal uses it).
+  - Two walls. In content, the agent overlay's browsing context carries
+    `SANDBOXED_AUXILIARY_NAVIGATION` from creation, so `window.open`, `target=_blank` and form
+    targets create no browsing context; this is the only wall a popup with features meets, because
+    Gecko opens that stock window without asking chrome. In chrome, every new-window receiver
+    refuses an agent opener: the link opener opens nothing, and the `browserDOMWindow` members
+    throw, because their null makes Gecko open a stock window. A content-wall refusal happens
+    before chrome code runs, so it is not logged and fails no command; the page's own
+    `window.open` returns null. Mechanism and checks: gap-closure plan 66-08.
+  - Owner item: revisit if real agent workflows need popups (for example an OAuth sign-in). The
+    option then is to open them as agent overlays in the agent container (the agent message
+    manager group, no autocomplete, background, marked, covered by Stop).
+
 ## Spikes this direction needs
 
 1. Browser parity: what an Orca browser tab can do, and how PB chrome provides it
