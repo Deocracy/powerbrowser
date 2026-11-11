@@ -53,7 +53,7 @@
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -90,10 +90,17 @@ export function deriveRpc(orcaRoot) {
     return out;
 }
 
-/** Quoted 'browser.<name>' literals in the non-test sources under orcaRoot/rel. */
+const OVERLAY_FILES = join(REPO_ROOT, 'orca-overlay', 'files');
+
+/**
+ * Quoted 'browser.<name>' literals in the non-test sources under orcaRoot/rel. A file whose Orca-relative path is a
+ * PowerBrowser overlay copy (the same path under orca-overlay/files/, which build-orca.sh copies in) is PB's own code,
+ * not Orca's, and adds no user (66-06: the Phase 66 browser host is a renderer-tree overlay; P66-19 keeps the table).
+ */
 function quotedNames(orcaRoot, rel) {
     const out = new Set();
     for (const f of sourceFiles(join(orcaRoot, rel))) {
+        if (existsSync(join(OVERLAY_FILES, relative(orcaRoot, f)))) continue;
         for (const m of readFileSync(f, 'utf8').matchAll(new RegExp(`['"\`](${ABILITY})['"\`]`, 'g'))) out.add(m[1]);
     }
     return out;
@@ -231,13 +238,15 @@ function runSelfTest() {
         put('src/main/orcad/fixture.ts', "route('browser.fixtureAlpha')\n");
         // The second name is a translation key, not an ability: it must add no renderer user.
         put('src/renderer/src/fixture.tsx', "call('browser.fixtureBeta.gamma'); t('browser.fixtureI18n.title')\n");
+        // A PB overlay copy (a path that exists under orca-overlay/files/) is not Orca's code: it must add no renderer user.
+        put('src/renderer/src/pb/browser-host/pb-browser-host.ts', "call('browser.fixtureAlpha')\n");
         const control = check(root, table);
         const i18nUser = control.derived?.users.has('browser.fixtureI18n.title');
         if (control.fails.length || control.lines.length !== 2 || i18nUser) {
             console.error(`${NAME} self-test: FAIL -- the clean fixture is not green (${control.fails.join(' | ') || (i18nUser ? 'a translation key became an ability user' : `${control.lines.length} abilities, expected 2`)}), so the plant results below would be meaningless`);
             return 1;
         }
-        console.log(`${NAME} self-test: clean control green (2 synthetic abilities derived with their users; the test-file name and the renderer translation key ignored)`);
+        console.log(`${NAME} self-test: clean control green (2 synthetic abilities derived with their users; the test-file name, the renderer translation key and a PB overlay copy ignored)`);
         console.log(`${NAME} self-test: SKIP case -> a fixture with no orca/src gives one SKIP and no FAIL`);
 
         // A tree plant rewrites one fixture file and returns its undo; null means the anchor was absent.
