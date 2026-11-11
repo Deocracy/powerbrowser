@@ -18,6 +18,7 @@ import { FileService } from '@theia/filesystem/lib/browser/file-service';
 import { MergeEditorUri } from '@theia/scm/lib/browser/merge-editor/merge-editor';
 import { OrcaPaneBundle } from '@powerbrowser/orca-panes/lib/browser/orca-pane-bundle';
 import { ORCA_GIT_SCHEME, OrcaGitService, orcaGitUri } from '../common/orca-git-protocol';
+import { SetupsService } from '@powerbrowser/modes/lib/browser/setups-service';
 
 const LOG_PREFIX = '[@powerbrowser/orca-workspace]';
 
@@ -237,6 +238,9 @@ export class OrcaEditorRouter implements FrontendApplicationContribution {
     @inject(ApplicationShell)
     protected readonly shell: ApplicationShell;
 
+    @inject(SetupsService)
+    protected readonly setups: SetupsService;
+
     protected api: OrcaWorkspaceBundleApi | undefined;
     /** Opened URI (string) -> its widget and the Orca records naming it. */
     protected readonly byUri = new Map<string, Mapping>();
@@ -251,7 +255,8 @@ export class OrcaEditorRouter implements FrontendApplicationContribution {
     protected readonly watched = new WeakSet<Widget>();
 
     onStart(): void {
-        this.bundle.ready().then(loaded => {
+        // The last session's tabs are re-applied first, so an Orca record finds a file the session already reopened.
+        Promise.all([this.bundle.ready(), this.setups.sessionRestored]).then(([loaded]) => {
             this.api = narrowWorkspaceApi(loaded);
             if (!this.api) {
                 console.warn(`${LOG_PREFIX} the Orca pane bundle has no subscribeOpenFiles, so Orca files do not open in Theia`);
@@ -415,18 +420,29 @@ export class OrcaEditorRouter implements FrontendApplicationContribution {
                 this.logOnce(file.id, route.note);
             }
             uri = URI.fromFilePath(route.path);
-            const widget = await this.editorManager.open(uri, { mode, preview: route.preview });
+            const counter = this.openCounterOf(uri);
+            const widget = await this.editorManager.open(uri, counter === undefined ? { mode, preview: route.preview } : { mode, counter });
             this.track(uri.toString(), widget);
             return uri.toString();
         } else {
             uri = this.uriOfRoute(route);
         }
-        const widget = await open(this.openerService, uri, { mode });
+        const counter = this.openCounterOf(uri);
+        const widget = counter === undefined ? await open(this.openerService, uri, { mode }) : await this.editorManager.open(uri, { mode, counter });
         if (widget instanceof Widget) {
             this.track(uri.toString(), widget);
             return uri.toString();
         }
         return undefined;
+    }
+
+    /**
+     * Stock reuses an editor only in the target tab bar; an Orca record names a file or diff, so an editor of that URI
+     * already in any tab bar (a restored session, a Setup) is revealed by its counter instead of opened a second time.
+     */
+    protected openCounterOf(uri: URI): number | undefined {
+        const existing = this.editorManager.all.find(w => w.editor.uri.toString() === uri.toString() && !!this.shell.getTabBarFor(w));
+        return existing ? Number(existing.id.slice(existing.id.lastIndexOf(':') + 1)) : undefined;
     }
 
     /** diff: and merge-editor: URIs whose sides are pb-orca-git: blobs or the working file. */

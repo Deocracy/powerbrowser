@@ -944,6 +944,12 @@ export class SetupsService implements FrontendApplicationContribution {
             // resource-URI fallback below instead of losing the tab.
         }
         try {
+            // A diff editor's resource URI is its modified file, which reopens as a plain editor; its own diff: URI
+            // reopens the diff (65-05).
+            const editorUri = (widget as unknown as { editor?: { uri?: { scheme?: string; toString(): string } } }).editor?.uri;
+            if (editorUri?.scheme === 'diff') {
+                return editorUri.toString();
+            }
             const navigable = widget as unknown as { getResourceUri?: () => { toString(): string } };
             const resource = navigable.getResourceUri?.();
             if (resource) {

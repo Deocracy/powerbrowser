@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "license": "MIT",
   "dependencies": {
+    "@powerbrowser/modes": "0.1.0",
     "@powerbrowser/orca-panes": "0.1.0",
     "@powerbrowser/tab-uris": "0.1.0",
     "@theia/core": "1.76.0",
