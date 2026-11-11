@@ -3996,6 +3996,12 @@ run_own_checks() {
     # Organising key, tab chrome in Theia, a blind detector, close, reload, route, offer, OWNER-ITEM), plus a child-Node
     # import-silence check. Hermetic.
     "orca-tabs-live-self-test|node $REPO_ROOT/scripts/verify-orca-tabs-live.mjs --self-test"
+    # NEW (65-02, TAB-05, P65-01/P65-27): orca-editor-routes derives, from the pinned Orca source with typescript, the
+    # OpenFile modes, the editor-type TabContentType members (through editorTabContentTypeForMode), DiffSource and
+    # GitConflictKind, and compares each with orca-workspace's ORCA_EDITOR_ROUTES keys; every value a Theia kind but the
+    # named check-details row; TopLevelView vs ORCA_PAGE_ROUTES once lane p65-04's restore directory exists.
+    "orca-editor-routes|node $REPO_ROOT/scripts/verify-orca-editor-routes.mjs"
+    "orca-editor-routes-self-test|node $REPO_ROOT/scripts/verify-orca-editor-routes.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
