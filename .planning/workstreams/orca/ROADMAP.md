@@ -278,8 +278,24 @@ The Phase 61 parity result may split or descope this phase. Any such change is a
   4. Starting Orca with a temp-directory data root, or with the plaintext secret-store override, is refused with a PowerBrowser message. PB copy states that protection is a same-user key file, not an OS keyring.
   5. Orca's landing page shows the PowerBrowser logo through a JSWindowActor gated on the orcad origin and catalogued in `INTERNAL-APIS.md`. The selector list for the pinned Orca version is checked against the built client, so a selector that no longer matches goes red.
 
-**Plans**: TBD
+**Plans**: 7/7 plans executed (4 lanes, a lane after the 67-01 merge, a coordinator and a gap-closure plan)
 **UI hint**: yes
+
+Plans:
+**Wave 1** *(lanes in parallel)*
+- [x] 67-01-PLAN.md — lane p67-01: Orca failure classes, shell kinds and the RUN-09 refusal in chrome (RUN-06, RUN-09)
+- [x] 67-02-PLAN.md — lane p67-02: sidecar Origin gate checks extended to Orca's request classes (RUN-08)
+- [x] 67-03-PLAN.md — lane p67-03: the Orca failure page, the status client and the hardened offer reader (RUN-06)
+- [x] 67-04-PLAN.md — lane p67-04: pairing-offer containment scanner and repo-local live profiles (RUN-07)
+
+**Wave 2** *(after the 67-01 merge)*
+- [x] 67-05-PLAN.md — lane p67-05: the PowerBrowser mark on Orca's landing tile (INJ-01)
+
+**Wave 3**
+- [x] 67-06-PLAN.md — coordinator: merges, builds, header re-record, live proofs, brand rows (stopped at Task 2; its Task 3 remainder done by 67-07)
+
+**Wave 4** *(gap closure)*
+- [x] 67-07-PLAN.md — D-36: the re-pair after an orcad restart keeps the environment id and the hosted tabs; the landing remount leg through Orca's own close path; 67-06's Task 3 remainder (RUN-06, INJ-01)
 
 ### Phase 68: Three-OS artifacts, weekly re-pin and upstream seams
 
@@ -339,5 +355,5 @@ Phases execute in numeric order: 59 → 60 → 61 → 62 → 63 → 64 → 65 �
 | 64. Orca panes as PowerBrowser tabs | 6/6 | In Progress (64-06 gap closure executed; TAB-04 pending on stage g3, g2 PASS on the 65-05 tree) | - |
 | 65. Orca workspace in Theia | 5/5 | Complete (human items deferred; verified 8/8) | 2026-11-10 |
 | 66. PowerBrowser web tabs as Orca's browser | 8/8 | In Progress | - |
-| 67. Hosting hardening | 0/TBD | Not started | - |
+| 67. Hosting hardening | 7/7 | In Progress (67-07 gap closure executed; verify-work pending) | - |
 | 68. Three-OS artifacts, weekly re-pin and upstream seams | 7/10 (68-06 in progress) | In Progress | - |

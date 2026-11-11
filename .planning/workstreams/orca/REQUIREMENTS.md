@@ -26,14 +26,14 @@ Owner decisions are in `DECISIONS.md` (D-01..D-31) and win over `research/`. Res
   hidden Electron browser engine. (D-10)
 - [x] **RUN-05**: Quitting PowerBrowser stops orcad and every agent it started; stale state is
   reaped on the next launch. (D-07 revised)
-- [ ] **RUN-06**: When orcad dies, its port is taken or pairing is lost, the user sees a
+- [x] **RUN-06**: When orcad dies, its port is taken or pairing is lost, the user sees a
   PowerBrowser page in PowerBrowser copy with a real next step; every identifier the message
   omits appears as a diagnostics row. (T-6)
-- [ ] **RUN-07**: The pairing offer never appears in history, session restore, logs, the
+- [x] **RUN-07**: The pairing offer never appears in history, session restore, logs, the
   address field or copyable text. (T-3, spike 003)
-- [ ] **RUN-08**: The Theia token gate rejects sidecar requests whose Origin is not one of
+- [x] **RUN-08**: The Theia token gate rejects sidecar requests whose Origin is not one of
   PowerBrowser's own pages. (D-17)
-- [ ] **RUN-09**: A credential-storage check refuses a temp-directory data root and the
+- [x] **RUN-09**: A credential-storage check refuses a temp-directory data root and the
   plaintext secret-store override, and PowerBrowser copy states that protection is a same-user
   key file, not an OS keyring. (T-8)
 
@@ -130,7 +130,7 @@ TERM-03 (remote terminals) moved to v2; see "Terminals (TERM)" under v2 Requirem
 
 ### Injection (INJ)
 
-- [ ] **INJ-01**: The landing logo becomes the PowerBrowser logo through a JSWindowActor gated on
+- [x] **INJ-01**: The landing logo becomes the PowerBrowser logo through a JSWindowActor gated on
   the orcad origin, with a catalogue row in `INTERNAL-APIS.md` and a selector list per Orca
   version. (T-11)
 
@@ -216,10 +216,10 @@ Filled by the roadmap.
 | RUN-03 | Phase 62 | Complete |
 | RUN-04 | Phase 62 | Complete |
 | RUN-05 | Phase 62 | Complete |
-| RUN-06 | Phase 67 | Pending |
-| RUN-07 | Phase 67 | Pending |
-| RUN-08 | Phase 67 | Pending |
-| RUN-09 | Phase 67 | Pending |
+| RUN-06 | Phase 67 | Complete |
+| RUN-07 | Phase 67 | Complete |
+| RUN-08 | Phase 67 | Complete |
+| RUN-09 | Phase 67 | Complete |
 | OVL-01 | Phase 62 | Complete |
 | OVL-02 | Phase 68 | Pending |
 | OVL-03 | Phase 68 | Pending |
@@ -246,7 +246,7 @@ Filled by the roadmap.
 | EXT-01 | Phase 60 | Pending |
 | EXT-02 | Phase 63 | Pending: PowerBrowser half proven (63-03, 63-06); extension half with EXT-01 in the end-of-milestone pass |
 | EXT-03 | Phase 61 | Complete |
-| INJ-01 | Phase 67 | Pending |
+| INJ-01 | Phase 67 | Complete |
 | PLAT-01 | Phase 68 | Pending |
 | PLAT-02 | Phase 68 | Pending |
 | BEXT-01 | Phase 68 | Pending |
