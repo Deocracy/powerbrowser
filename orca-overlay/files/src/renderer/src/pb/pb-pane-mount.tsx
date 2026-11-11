@@ -73,6 +73,7 @@ import type {
 import { SIDE_MOUNT_KINDS, SIDE_MOUNTS_BUILD, SideMountBody } from './pb-side-mounts'
 import { WORKSPACE_API_BUILD } from './pb-workspace-api'
 import { SESSION_PAIRING_BUILD, assertSessionOnly, pairSessionOnly, pairingState, presetSessionOnly } from './pb-session-pairing'
+import './browser-host/pb-browser-host-link'
 
 // Phase 65 (C3-65): the observation API, the orchestration focus and repair, re-exported as named exports.
 export {

@@ -4025,6 +4025,10 @@ run_own_checks() {
     # orca-relaunch-restore-live-self-test: the relaunch comparators (dock, modes, identity, echo, pairing UI, devices).
     "orca-offer-scan-self-test|node $REPO_ROOT/scripts/verify-orca-offer-scan.mjs --self-test"
     "orca-relaunch-restore-live-self-test|node $REPO_ROOT/scripts/verify-orca-relaunch-restore-live.mjs --self-test"
+    # NEW (66-01, BRW-03, P66-30/A3/A9): orca-browser-host-bundle-self-test. Hermetic fixtures over the real host, link and
+    # pane-entry sources; plants a web-runtime-client.ts reach, a constant write, a private subscribe, an inlined asset,
+    # a tracked edit, a token over v2, a link without the placement, an empty module list and an entry without the link.
+    "orca-browser-host-bundle-self-test|node $REPO_ROOT/scripts/verify-orca-browser-host-bundle.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
