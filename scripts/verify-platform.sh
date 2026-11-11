@@ -6719,6 +6719,12 @@ run_own_checks() {
       # alone, which must go red naming the Remote Agent's socket. Both under the live lock with ORCA_* unset.
       "no-remote-agent-port-live|node $REPO_ROOT/scripts/verify-no-remote-agent-port-live.mjs"
       "no-remote-agent-port-live-self-test|node $REPO_ROOT/scripts/verify-no-remote-agent-port-live.mjs --self-test"
+      # NEW (66-04, BRW-03, P66-16/A5): orca-browser-snapshot-live drives the Orca CLI against PowerBrowser's orcad on
+      # each fixture page and compares the agent child's snapshot with the pinned agent-browser's reference output
+      # structurally: line grammar, ref'd (role, name) multiset, level/checked/expanded/selected tokens, the --delta
+      # kind after the page's scripted change, ref survival, click @eN on the named node and browser_stale_ref for a
+      # removed node. Coordinator proof on the merged tree (p66-01..p66-04); under the live lock with ORCA_* unset.
+      "orca-browser-snapshot-live|node $REPO_ROOT/scripts/verify-orca-browser-snapshot-live.mjs"
     )
   fi
 
