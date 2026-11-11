@@ -38,6 +38,31 @@ export const NAME_WORDS: { readonly [kind: string]: string } = Object.freeze(Obj
     return route.target === 'hosted-pane' ? { ...words, [kind]: route.word } : words;
 }, {} as { [kind: string]: string }));
 
+/**
+ * N-2 (P65-10): Orca's top-level views, keyed by every TopLevelView member of the pinned Orca. A page is a
+ * singleton tab pb-orca:<word> mounting kind page:<view>; settings reveals the side panel's Settings part;
+ * terminal stands for the creation surface while an Orca worktree creation is pending.
+ */
+export type OrcaPageRoute =
+    | { readonly word: string; readonly kind: string; readonly whilePendingCreation?: true }
+    | { readonly reveal: string };
+
+export const ORCA_PAGE_ROUTES: { readonly [view: string]: OrcaPageRoute } = Object.freeze({
+    'tasks': { word: 'tasks', kind: 'page:tasks' },
+    'activity': { word: 'activity', kind: 'page:activity' },
+    'automations': { word: 'automations', kind: 'page:automations' },
+    'space': { word: 'space', kind: 'page:space' },
+    'skills': { word: 'skills', kind: 'page:skills' },
+    'artifacts': { word: 'artifacts', kind: 'page:artifacts' },
+    'mobile': { word: 'mobile', kind: 'page:mobile' },
+    'settings': { reveal: 'powerbrowser-orca-settings-view' },
+    'terminal': { word: 'creating', kind: 'page:creation', whilePendingCreation: true },
+});
+
+/** The pb-orca: page word -> mount kind, derived from ORCA_PAGE_ROUTES. */
+export const PAGE_WORDS: { readonly [word: string]: string } = Object.freeze(Object.values(ORCA_PAGE_ROUTES).reduce((words, route) =>
+    'word' in route ? { ...words, [route.word]: route.kind } : words, {} as { [word: string]: string }));
+
 export const ORCA_PANE_WIDGET_ID_PREFIX = 'orca-pane:';
 
 /** A widget's Orca key: the pane key for a terminal leaf, the tab id otherwise (C3). */
@@ -76,6 +101,12 @@ export interface PlanState {
     restored: OrcaPaneOptions[];
     /** Kinds already logged as not hosted; each is logged once. */
     loggedPending?: Set<string>;
+    /** P65-18: key -> name of the persisted name map's live entries; a record with a stored name takes it back. */
+    namesByKey?: Map<string, string>;
+    /** P65-18: every name in the map, live or tombstone; never minted again while held there. */
+    reservedNames?: Iterable<string>;
+    /** P65-35: true once the observer's restore bound has passed; absent reads as false. */
+    hydrated?: boolean;
 }
 
 export interface PanePlan {
@@ -84,6 +115,8 @@ export interface PanePlan {
     dispose: string[];
     retitle: Array<{ key: string; title: string }>;
     pending: string[];
+    /** P65-35: restored keys kept in place (neither adopted nor disposed) until a list holds their worktree or the bound passes. */
+    held: string[];
 }
 
 /**
@@ -92,13 +125,18 @@ export interface PanePlan {
  * key is adopted under its stored name; anything else is created under a
  * minted name (restored names are reserved first) and placed beside its
  * nearest neighbour already open, including one created earlier in this plan
- * (P64-12). Known or restored keys missing from the list are disposed. Kinds
- * that are not hosted come back in pending, once each.
+ * (P64-12). A key the name map knows takes its stored name back; a mint skips
+ * every name the map holds (P65-18). Known keys missing from the list are
+ * disposed; a restored key missing from it is disposed only once the list holds
+ * a record of its worktree or the restore bound has passed (hydrated), and is
+ * held otherwise, so an empty first list after a reload renumbers nothing
+ * (P65-35). Kinds that are not hosted come back in pending, once each.
  */
 export function planPanes(state: PlanState, records: OrcaPaneRecord[]): PanePlan {
-    const plan: PanePlan = { create: [], adopt: [], dispose: [], retitle: [], pending: [] };
+    const plan: PanePlan = { create: [], adopt: [], dispose: [], retitle: [], pending: [], held: [] };
     const restoredByKey = new Map(state.restored.map(options => [keyOfOptions(options), options]));
-    const taken = new Set<string>([...state.restored.map(o => o.name), ...[...state.known.values()].map(k => k.name)]);
+    const inUse = new Set<string>([...state.restored.map(o => o.name), ...[...state.known.values()].map(k => k.name)]);
+    const taken = new Set<string>([...inUse, ...(state.reservedNames ?? [])]);
     const widgetIdByKey = new Map<string, string>([...state.known].map(([key, k]) => [key, k.widgetId]));
     const seen = new Set<string>();
     for (const options of state.restored) {
@@ -125,15 +163,23 @@ export function planPanes(state: PlanState, records: OrcaPaneRecord[]): PanePlan
         } else if (restored) {
             plan.adopt.push({ key: record.key, widgetId: ORCA_PANE_WIDGET_ID_PREFIX + restored.name });
         } else {
-            const name = mintName(route.word, taken);
+            const stored = state.namesByKey?.get(record.key);
+            const name = stored && !inUse.has(stored) ? stored : mintName(route.word, taken);
             taken.add(name);
+            inUse.add(name);
             plan.create.push({ record, name, placement: placementFor(record, widgetIdByKey) });
             widgetIdByKey.set(record.key, ORCA_PANE_WIDGET_ID_PREFIX + name);
         }
     }
-    for (const key of [...state.known.keys(), ...restoredByKey.keys()]) {
+    for (const key of state.known.keys()) {
         if (!seen.has(key)) {
             plan.dispose.push(key);
+        }
+    }
+    const listedWorktrees = new Set(records.map(record => record.worktreeId));
+    for (const [key, options] of restoredByKey) {
+        if (!seen.has(key)) {
+            (state.hydrated || listedWorktrees.has(options.worktreeId) ? plan.dispose : plan.held).push(key);
         }
     }
     return plan;
