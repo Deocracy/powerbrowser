@@ -78,9 +78,9 @@ TERM-03 (remote terminals) moved to v2; see "Terminals (TERM)" under v2 Requirem
 
 ### Tabs and modes (TAB)
 
-- [ ] **TAB-01**: An "Orca" mode appears beside Coding in `SHIPPED_MODES` and the chrome bar.
+- [x] **TAB-01**: An "Orca" mode appears beside Coding in `SHIPPED_MODES` and the chrome bar.
   (T-1)
-- [ ] **TAB-02**: `pb-orca:` URIs follow `docs/URI-SCHEMES.md`, round-trip in
+- [x] **TAB-02**: `pb-orca:` URIs follow `docs/URI-SCHEMES.md`, round-trip in
   `verify-uri-roundtrip.mjs`, and leave `TabUriRegistry`'s exported shape unchanged. (T-4)
 - [x] **TAB-03**: A spike shows how PowerBrowser's dock observes the client's layout state
   (the renderer owns it in shipped builds) and how Orca's pane components mount inside Lumino
@@ -220,15 +220,15 @@ Filled by the roadmap.
 | OVL-04 | Phase 60 | Complete |
 | OVL-05 | Phase 62 | Complete |
 | OVL-06 | Phase 68 | Pending |
-| TERM-01 | Phase 64 | Pending |
+| TERM-01 | Phase 64 | Pending: orca-tabs-live stage (a) terminal-user did not PASS on the merged tree (New Orca Terminal finds no worktree while no hosted pane exists: the C9 first-worktree fallback reads the pane list, lane p64-02 owner item); stages (b)-(e) PASS; re-run in the end-of-milestone pass |
 | TERM-02 | Phase 63 | Complete |
-| TERM-04 | Phase 64 | Pending |
-| TAB-01 | Phase 64 | Pending |
-| TAB-02 | Phase 64 | Pending |
+| TERM-04 | Phase 64 | Pending: orca-terminal-keys-live stage 2 did not PASS on the merged tree (ctrl+w and ctrl+tab do not reach the PTY of a hosted Orca terminal: Orca's own TerminalPane window-capture shortcuts take them; owner decision under D-09); orca-terminal-keys PASS; re-run in the end-of-milestone pass |
+| TAB-01 | Phase 64 | Complete |
+| TAB-02 | Phase 64 | Complete |
 | TAB-03 | Phase 61 | Complete |
-| TAB-04 | Phase 64 | Pending |
+| TAB-04 | Phase 64 | Pending: orca-tabs-live stages (a) terminal-user, (e2) pb-split and (g2) tab-groups did not PASS on the merged tree ((a) the lane p64-02 command-fallback owner item, (e2) follows from (a), (g2) the stub-agent session offers no chat row and so no chat-header group split in Orca's own client); (b)-(e), (h)-(k) and gui07-mode-switch-tabs-live PASS; re-run in the end-of-milestone pass |
 | TAB-05 | Phase 65 | Pending |
-| TAB-06 | Phase 64 | Pending |
+| TAB-06 | Phase 64 | Pending: orca-tabs-live stage (f) chat did not PASS on the merged tree (its second-client half: with the stub agent Orca's own New tab menu offers no chat row, agent rows open terminals); orca-pane-standalone-live and stage (g) other-views PASS; re-run in the end-of-milestone pass |
 | TAB-07 | Phase 65 | Pending |
 | TAB-08 | Phase 65 | Pending |
 | TAB-09 | Phase 65 | Pending |
