@@ -9,7 +9,8 @@
 //     input, a checkbox, a button with a click counter), /user (an input and a focus/blur
 //     log), /cookie (sets a cookie from the page), /stock, /opener (66-08: a target=_blank link,
 //     a plain link and a target=_blank form), and (66-09) /dlpage with PDF attachments, /proto with protocol links and
-//     /slow, whose response headers are held, and its request log;
+//     /slow, whose response headers are held, (66-10) /clip (clipboard writes and reads on a click, an input, a
+//     same-origin frame) and /perm, and its request log;
 //   - an Orca CLI runner that never throws and keeps error.code and error.message apart
 //     (Pitfall 8: a host failure reaches the CLI as runtime_error with the code as message),
 //     in an environment built from scratch (PATH, HOME, ORCA_USER_DATA, ORCA_USER_DATA_PATH);
@@ -73,6 +74,32 @@ function pdfAttachment(res, name) {
     res.end(PDF);
 }
 
+/**
+ * 66-10 (D-38): the clipboard markers, random per run so a stale clipboard never matches. Only these words, never
+ * clipboard text, leave the browser: chrome compares the clipboard with them and answers the matching name.
+ */
+const CLIP_RUN = Math.random().toString(36).slice(2, 10);
+export const CLIP_MARKERS = Object.freeze({
+    user: `pb-clip-user-${CLIP_RUN}`, write: `pb-clip-agent-write-${CLIP_RUN}`, copy: `pb-clip-agent-copy-${CLIP_RUN}`, frame: `pb-clip-agent-frame-${CLIP_RUN}`,
+});
+// The /clip button: execCommand copy of the textarea, writeText from the page and from its same-origin frame, then
+// readText (raced against 3 s, so a paste prompt cannot hold the clause); each outcome recorded as a word, the read as
+// whether it equals the user's marker.
+const CLIP_SCRIPT = `<script>
+const M = ${JSON.stringify(CLIP_MARKERS)};
+const settle = p => Promise.race([p.then(v => 'resolved' + (typeof v === 'string' ? (v === M.user ? ' user-marker' : ' other') : ''), e => 'rejected ' + (e && e.name)), new Promise(r => setTimeout(() => r('pending'), 3000))]);
+document.getElementById('go').addEventListener('click', async () => {
+  const r = { clicked: true, active: navigator.userActivation ? navigator.userActivation.isActive : null };
+  const t = document.getElementById('src'); t.focus(); t.select();
+  try { r.execCopy = String(document.execCommand('copy')); } catch (e) { r.execCopy = 'threw ' + e.name; }
+  r.writeText = await settle(navigator.clipboard.writeText(M.write));
+  const f = document.getElementById('f').contentWindow;
+  r.frameWrite = f && f.navigator.clipboard ? await settle(f.navigator.clipboard.writeText(M.frame)) : 'no frame clipboard';
+  r.readText = await settle(navigator.clipboard.readText());
+  window.__clip = r;
+});
+</script>`;
+
 const LOGGER = `<script>window.__log=[];for(const t of ['focus','blur','click','input'])addEventListener(t,e=>__log.push({type:e.type,target:(e.target&&(e.target.id||e.target.nodeName))||'window'}),true);</script>`;
 
 /** The fixture pages, in serveNavPages' spec form. */
@@ -108,6 +135,13 @@ export function fixturePages() {
             body: `<style>a{position:absolute;left:10px;font-size:20px}</style><a id="mailto" href="mailto:${PROTOCOL_PROBE}" style="top:10px">mail</a><a id="run" href="${PROTOCOL_RUN}:${PROTOCOL_PROBE}" style="top:60px">run</a><a id="ask" href="${PROTOCOL_ASK}:${PROTOCOL_PROBE}" style="top:110px">ask</a>`,
         },
         '/slow': { raw: (req, res) => setTimeout(() => { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<!doctype html><title>PB slow fixture</title><p>slow</p>'); }, SLOW_HEADERS_MS) },
+        // 66-10 (D-38, D-39): clause (r), the clipboard (a button, a textarea holding the copy marker, an input, a
+        // same-origin frame), and clause (s), a page that reads its notification permission.
+        '/clip': {
+            title: 'PB clipboard fixture',
+            body: `<style>body{margin:0}#go{position:absolute;left:10px;top:10px}#src{position:absolute;left:10px;top:60px}#in{position:absolute;left:10px;top:140px}</style><button id="go">go</button><textarea id="src">${CLIP_MARKERS.copy}</textarea><input id="in" value=""><iframe id="f" srcdoc="<p>frame</p>" style="position:absolute;left:10px;top:200px;width:100px;height:40px"></iframe>${CLIP_SCRIPT}`,
+        },
+        '/perm': { title: 'PB permission fixture', body: '<p>perm</p>' },
         // 66-06: a login form for the saved-login clause (l); it posts to a page that exists.
         '/login': { title: 'PB login fixture', body: '<form id="f" method="post" action="/agent2"><input id="u" name="u" autocomplete="username"><input id="p" name="p" type="password" autocomplete="current-password"><button id="go" type="submit">Sign in</button></form>' },
     };

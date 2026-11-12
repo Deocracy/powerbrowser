@@ -79,6 +79,16 @@
 //      about:blank (chrome reads isInitialDocument, the detector); there a browser.mouseClick and a browser.eval of
 //      window.open with features each answer failed browser_command_unavailable, and no window opens and nothing loads.
 //      Once the first load commits, an eval answers again (the guard ends with the initial document).
+//  (r) clipboard (66-10, D-38): in a user tab on /clip, with user activation, an execCommand copy, a same-origin frame's
+//      writeText and the page's writeText each put their marker on the clipboard, and a user Control+v pastes the user
+//      marker (the detectors). Then the agent's click on the same page's button (whose handler runs execCommand copy,
+//      writeText from the page and its frame, and readText) leaves the clipboard on the user marker, each async call
+//      answers rejected NotAllowedError, and the agent's Control+v, Shift+Insert and Control+c answer failed
+//      browser_command_unavailable and paste nothing, while its Control+a still runs. Chrome compares the clipboard with
+//      the run's markers and answers a marker name only; the user's own clipboard text is restored, never printed.
+//  (s) site permissions (66-10, D-39): with permissions.isolateBy.userContext true, a notification permission granted
+//      to the fixture origin in the default container reads granted in a user tab (the detector) and default in the
+//      agent tab; granted in the agent container, the agent tab reads granted (the second detector).
 //  (i) reload, last: a frontend reload leaves no agent web tab, the host re-attaches, and
 //      tab list no longer lists the old pages.
 //
@@ -99,7 +109,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { INSIDE, OUTSIDE, PROTOCOL_ASK, PROTOCOL_PROBE, PROTOCOL_RUN, RED, SLOW_HEADERS_MS, prerequisites } from './lib/orca-browser-live.mjs';
+import { CLIP_MARKERS, INSIDE, OUTSIDE, PROTOCOL_ASK, PROTOCOL_PROBE, PROTOCOL_RUN, RED, SLOW_HEADERS_MS, prerequisites } from './lib/orca-browser-live.mjs';
 
 const NAME = 'orca-browser-agent-live';
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), '..', '..');
@@ -332,10 +342,40 @@ export function verdictFirstDocument(o) {
     return f;
 }
 
+const REJECTED = 'rejected NotAllowedError';
+
+export function verdictClipboard(o) {
+    const u = o.user;
+    const a = o.agent;
+    if (u.copy !== 'copy' || u.frame !== 'frame' || u.write !== 'user') return [`detector blind: a user tab's execCommand copy, frame writeText and writeText left the clipboard on ${u.copy}, ${u.frame}, ${u.write}, not copy, frame, user`];
+    if (u.pasted !== 'user') return [`detector blind: a user tab's Control+v pasted ${u.pasted}, not the user marker`];
+    if (a.clickReply !== 'done' || a.rec?.clicked !== true) return [`detector blind: the agent's click on the clipboard button answered ${a.clickReply} and its handler ${a.rec?.clicked ? 'ran' : 'never ran'}`];
+    if (a.rec.active === false) return ['detector blind: the agent click gave the page no user activation, so a refusal proves nothing'];
+    if (a.controlReply !== 'done') return [`detector blind: the agent's Control+a answered ${a.controlReply}, so keypress itself is broken`];
+    const f = [];
+    if (a.afterClick !== 'user') f.push(`the agent page's click changed the clipboard to ${a.afterClick}`);
+    for (const k of ['writeText', 'frameWrite', 'readText']) {
+        if (a.rec[k] !== REJECTED) f.push(`the agent page's ${k} answered ${a.rec[k]}, not ${REJECTED}`);
+    }
+    for (const [what, reply] of [['Control+v', a.ctrlV], ['Shift+Insert', a.shiftInsert], ['Control+c', a.ctrlC]]) {
+        if (reply !== REFUSED) f.push(`the agent's ${what} answered ${reply}, not ${REFUSED}`);
+    }
+    if (a.input !== 'empty') f.push(`the agent page's input holds ${a.input} after the agent's paste keys`);
+    if (a.afterKeys !== 'user') f.push(`the agent's keys changed the clipboard to ${a.afterKeys}`);
+    return f;
+}
+
+export function verdictPermissions(o) {
+    if (o.pref !== true) return [`permissions.isolateBy.userContext reads ${o.pref} in the running browser, not true`];
+    if (o.user !== 'granted') return [`detector blind: a user tab read the default-container grant as ${o.user}, not granted`];
+    if (o.agentOwn !== 'granted') return [`detector blind: the agent tab read its own container's grant as ${o.agentOwn}, not granted`];
+    return o.agent === 'default' ? [] : [`the agent tab read the user's default-container grant as ${o.agent}, not default`];
+}
+
 export const VERDICTS = {
     k: verdictNoPane, a: verdictCreate, b: verdictActs, b1: verdictScreenshot, b2: verdictScreenshot, c: verdictFocus,
     d: verdictRefusals, e: verdictContainer, e2: verdictContainerId, l: verdictLogins, m: verdictAuth, c2: verdictTyping, n: verdictOpens,
-    o: verdictDownloads, p: verdictProtocols, q: verdictFirstDocument, f: verdictDecoy, g: verdictRenderer, h: verdictUserClose, j: verdictActivation, i: verdictReload,
+    o: verdictDownloads, p: verdictProtocols, q: verdictFirstDocument, r: verdictClipboard, s: verdictPermissions, f: verdictDecoy, g: verdictRenderer, h: verdictUserClose, j: verdictActivation, i: verdictReload,
 };
 
 /** Every clause's fails, each prefixed by its letter; skipped clauses ({ skip }) are listed apart. */
@@ -684,6 +724,88 @@ export async function firstDocumentObserved(ctx) {
     return out;
 }
 
+// Chrome's clipboard helpers (66-10): text read, text write. Every caller compares in chrome and returns a word.
+const CHROME_CLIP = `const clip = {
+    read() { try { const t = Cc['@mozilla.org/widget/transferable;1'].createInstance(Ci.nsITransferable); t.init(null); t.addDataFlavor('text/plain');
+        Services.clipboard.getData(t, Services.clipboard.kGlobalClipboard); const o = {}; t.getTransferData('text/plain', o); return o.value.QueryInterface(Ci.nsISupportsString).data; } catch { return null; } },
+    set(s) { Cc['@mozilla.org/widget/clipboardhelper;1'].getService(Ci.nsIClipboardHelper).copyString(s); },
+};`;
+const clipName = `(v => { const m = ${JSON.stringify(CLIP_MARKERS)}; return Object.keys(m).find(k => m[k] === v) ?? (v ? 'other' : 'empty'); })`;
+
+/** (r) D-38: a user tab writes and reads the clipboard (the detectors); an agent page and the agent's keys do neither. */
+export async function clipboardObserved(ctx, agentTabId, page) {
+    const M = CLIP_MARKERS;
+    const state = () => ctx.inChrome(`${CHROME_CLIP} return ${clipName}(clip.read());`);
+    // The user's clipboard text stays in chrome memory and is put back at the end; it never reaches this process.
+    await ctx.inChrome(`${CHROME_CLIP} window.__pbClipSaved = clip.read(); clip.set('pb-clip-start'); return true;`);
+    try {
+        const userTab = await ctx.openWebTab(ctx.url('/clip'));
+        await ctx.pollFor(() => ctx.inPage('/clip', 'document.readyState === "complete"').then((v) => v || null), 10000, 'the clipboard user tab').catch(() => null);
+        const context = await ctx.contentOf('/clip');
+        const activated = async (expression) => {
+            if (!context) return null;
+            try { return (await ctx.app.send('script.evaluate', { expression, target: { context }, awaitPromise: true, userActivation: true }))?.result?.value ?? null; } catch { return null; }
+        };
+        await activated('(() => { const t = document.getElementById("src"); t.focus(); t.select(); return String(document.execCommand("copy")); })()');
+        const copy = await state();
+        await activated(`document.getElementById("f").contentWindow.navigator.clipboard.writeText(${JSON.stringify(M.frame)}).then(() => "resolved", e => "rejected " + e.name)`);
+        const frame = await state();
+        await activated(`navigator.clipboard.writeText(${JSON.stringify(M.user)}).then(() => "resolved", e => "rejected " + e.name)`);
+        const write = await state();
+        const userWidget = (await ctx.webTabs()).find((w) => w.tabId === userTab)?.id;
+        if (userWidget) await ctx.activate(userWidget);
+        await ctx.inChrome('window.focus(); return true;');
+        await ctx.focusOverlay(userTab);
+        await ctx.inPage('/clip', '(document.getElementById("in").value = "", document.getElementById("in").focus(), true)');
+        await ctx.pressKey({ key: 'v', code: 'KeyV', modifiers: ['control'] });
+        await sleep(500);
+        const pasted = await ctx.inPage('/clip', `${clipName}(document.getElementById("in").value)`);
+        const user = { copy, frame, write, pasted };
+        if (userWidget) await ctx.luminoClose(userWidget);
+        await sleep(500);
+
+        await ctx.cli('goto', '--url', ctx.url('/clip'), '--page', page);
+        const clickReply = replyWord(await ctx.agentRaw(agentTabId, 'browser.click', { element: '#go' }));
+        const rec = await ctx.pollFor(() => ctx.inAgent(agentTabId, 'window.__clip'), 15000, 'the agent click handler').catch(() => null);
+        const afterClick = await state();
+        await ctx.agentRaw(agentTabId, 'browser.focus', { element: '#in' });
+        const press = async (key) => replyWord(await ctx.agentRaw(agentTabId, 'browser.keypress', { key }));
+        const agent = { clickReply, rec, afterClick, ctrlV: await press('Control+v'), shiftInsert: await press('Shift+Insert'), ctrlC: await press('Control+c'), controlReply: await press('Control+a') };
+        await sleep(500);
+        agent.input = await ctx.inAgent(agentTabId, `${clipName}(document.getElementById("in").value)`);
+        agent.afterKeys = await state();
+        return { user, agent };
+    } finally {
+        await ctx.inChrome(`${CHROME_CLIP} if (typeof window.__pbClipSaved === 'string' && window.__pbClipSaved) clip.set(window.__pbClipSaved); delete window.__pbClipSaved; return true;`).catch(() => undefined);
+    }
+}
+
+/** (s) D-39: a default-container grant reads granted in a user tab (the detector) and default in the agent tab. */
+export async function permissionsObserved(ctx, agentTabId, page) {
+    const origin = new URL(ctx.url('/perm')).origin;
+    const grant = (op, userContextId) => ctx.inChrome(`const agentContext = Services.prefs.getIntPref('powerbrowser.orca.agentUserContextId', 0);
+        const principal = Services.scriptSecurityManager.createContentPrincipal(Services.io.newURI(${JSON.stringify(origin)}), { userContextId: ${userContextId === 'agent' ? 'agentContext' : 0} });
+        ${op === 'add' ? "Services.perms.addFromPrincipal(principal, 'desktop-notification', Services.perms.ALLOW_ACTION);" : "Services.perms.removeFromPrincipal(principal, 'desktop-notification');"} return true;`);
+    try {
+        const pref = await ctx.inChrome("return Services.prefs.getBoolPref('permissions.isolateBy.userContext', false);");
+        await grant('add', 0);
+        const userTab = await ctx.openWebTab(ctx.url('/perm'));
+        await ctx.pollFor(() => ctx.inPage('/perm', 'document.readyState === "complete"').then((v) => v || null), 10000, 'the permission user tab').catch(() => null);
+        const user = await ctx.inPage('/perm', 'Notification.permission');
+        const userWidget = (await ctx.webTabs()).find((w) => w.tabId === userTab)?.id;
+        if (userWidget) await ctx.luminoClose(userWidget);
+        await ctx.cli('goto', '--url', ctx.url('/perm'), '--page', page);
+        const agent = await ctx.inAgent(agentTabId, 'Notification.permission');
+        await grant('add', 'agent');
+        await ctx.cli('goto', '--url', ctx.url('/perm?own=1'), '--page', page);
+        const agentOwn = await ctx.inAgent(agentTabId, 'Notification.permission');
+        return { pref, user, agent, agentOwn };
+    } finally {
+        await grant('remove', 0).catch(() => undefined);
+        await grant('remove', 'agent').catch(() => undefined);
+    }
+}
+
 async function liveRun(log) {
     const { withBrowserSession, decoyRecordFile } = await import('./lib/orca-browser-live.mjs');
     const { ensurePbNode } = await import('./lib/orca-run.mjs');
@@ -780,6 +902,10 @@ async function liveRun(log) {
             obs.o = await downloadsObserved(ctx, agentTabId, page);
             obs.p = await protocolsObserved(ctx, agentTabId, page);
             obs.q = await firstDocumentObserved(ctx);
+
+            // (r) D-38 the clipboard, (s) D-39 site permissions per container.
+            obs.r = await clipboardObserved(ctx, agentTabId, page);
+            obs.s = await permissionsObserved(ctx, agentTabId, page);
 
             // (f) second half, in the scratch HOME holding the decoy.
             if (stock.skip) obs.f = { skip: stock.skip };
@@ -881,12 +1007,12 @@ async function main() {
     // One line per clause, so a run records every clause, not only the failing ones.
     for (const k of Object.keys(VERDICTS)) {
         const own = fails.filter((f) => f.startsWith(`(${k}) `));
-        console.log(`${NAME}: clause (${k}) ${obs[k]?.skip ? 'SKIP' : own.length ? 'FAIL' : 'ok'}${k === 'g' && obs.g ? ` (credential ${obs.g.credential}, placement ${obs.g.placement?.kind})` : ''}${['k', 'a'].includes(k) && obs[k] ? ` (${obs[k].ms} ms)` : ''}${k === 'j' && obs.j?.revealMs != null ? ` (reveal ${obs.j.revealMs} ms)` : ''}${k === 'm' && obs.m?.promptType ? ` (${obs.m.promptType})` : ''}${k === 'e2' && obs.e2 ? ` (userContextId ${obs.e2.agentContext})` : ''}${k === 'n' && obs.n?.agent ? ` (user: link ${obs.n.user.linkTabs} tab, window.open ${obs.n.user.openTabs} tab, popup ${obs.n.user.popupWindows} window; agent: ${obs.n.agent.newTabs} tabs, ${obs.n.agent.newWindows} windows, ${obs.n.agent.loads} loads, window.open ${obs.n.agent.openReturned}, with features ${obs.n.agent.popupReturned}, middle-click ${obs.n.agent.middleReply}, Control+Enter ${obs.n.agent.enterReply}, sandboxFlags ${obs.n.agent.sandboxFlags})` : ''}${(k === 'b1' || k === 'b2') && obs[k] ? ` (DPR ${obs[k].deviceDpr}, ${obs[k].size?.join('x')} px)` : ''}${k === 'o' && obs.o?.agent ? ` (user: saved ${obs.o.user.saved}, ${obs.o.user.rowsAdded} row, ${obs.o.user.windows} window; agent: ${obs.o.agent.requests} requests, folder ${obs.o.agent.filesBefore.length} -> ${obs.o.agent.filesAfter.length} file(s), rows ${obs.o.agent.rowsBefore} -> ${obs.o.agent.rowsAfter}, ${obs.o.agent.newWindows} windows, click ${obs.o.agent.clickReply}, goto ${obs.o.agent.gotoReply})` : ''}${k === 'p' && obs.p?.agent ? ` (user: mailto launched ${obs.p.user.mailtoLaunched}, ${PROTOCOL_RUN} launched ${obs.p.user.runLaunched}, ${PROTOCOL_ASK} ${obs.p.user.askWindows} dialog; agent: ${obs.p.agent.launches} launches, ${obs.p.agent.newWindows} windows, ${Object.entries(obs.p.agent.replies).map(([s, r]) => `${s} ${r}`).join(', ')})` : ''}${k === 'q' && obs.q?.created ? ` (initial ${obs.q.initialBefore}; mouseClick ${obs.q.clickReply}, popup ${obs.q.popupReply}, ${obs.q.newWindows} windows, ${obs.q.loads} loads; after the first load: ${obs.q.evalAfter})` : ''}`);
+        console.log(`${NAME}: clause (${k}) ${obs[k]?.skip ? 'SKIP' : own.length ? 'FAIL' : 'ok'}${k === 'g' && obs.g ? ` (credential ${obs.g.credential}, placement ${obs.g.placement?.kind})` : ''}${['k', 'a'].includes(k) && obs[k] ? ` (${obs[k].ms} ms)` : ''}${k === 'j' && obs.j?.revealMs != null ? ` (reveal ${obs.j.revealMs} ms)` : ''}${k === 'm' && obs.m?.promptType ? ` (${obs.m.promptType})` : ''}${k === 'e2' && obs.e2 ? ` (userContextId ${obs.e2.agentContext})` : ''}${k === 'n' && obs.n?.agent ? ` (user: link ${obs.n.user.linkTabs} tab, window.open ${obs.n.user.openTabs} tab, popup ${obs.n.user.popupWindows} window; agent: ${obs.n.agent.newTabs} tabs, ${obs.n.agent.newWindows} windows, ${obs.n.agent.loads} loads, window.open ${obs.n.agent.openReturned}, with features ${obs.n.agent.popupReturned}, middle-click ${obs.n.agent.middleReply}, Control+Enter ${obs.n.agent.enterReply}, sandboxFlags ${obs.n.agent.sandboxFlags})` : ''}${(k === 'b1' || k === 'b2') && obs[k] ? ` (DPR ${obs[k].deviceDpr}, ${obs[k].size?.join('x')} px)` : ''}${k === 'o' && obs.o?.agent ? ` (user: saved ${obs.o.user.saved}, ${obs.o.user.rowsAdded} row, ${obs.o.user.windows} window; agent: ${obs.o.agent.requests} requests, folder ${obs.o.agent.filesBefore.length} -> ${obs.o.agent.filesAfter.length} file(s), rows ${obs.o.agent.rowsBefore} -> ${obs.o.agent.rowsAfter}, ${obs.o.agent.newWindows} windows, click ${obs.o.agent.clickReply}, goto ${obs.o.agent.gotoReply})` : ''}${k === 'p' && obs.p?.agent ? ` (user: mailto launched ${obs.p.user.mailtoLaunched}, ${PROTOCOL_RUN} launched ${obs.p.user.runLaunched}, ${PROTOCOL_ASK} ${obs.p.user.askWindows} dialog; agent: ${obs.p.agent.launches} launches, ${obs.p.agent.newWindows} windows, ${Object.entries(obs.p.agent.replies).map(([s, r]) => `${s} ${r}`).join(', ')})` : ''}${k === 'q' && obs.q?.created ? ` (initial ${obs.q.initialBefore}; mouseClick ${obs.q.clickReply}, popup ${obs.q.popupReply}, ${obs.q.newWindows} windows, ${obs.q.loads} loads; after the first load: ${obs.q.evalAfter})` : ''}${k === 'r' && obs.r?.agent ? ` (user: copy ${obs.r.user.copy}, frame ${obs.r.user.frame}, write ${obs.r.user.write}, paste ${obs.r.user.pasted}; agent: click ${obs.r.agent.clickReply}, activation ${obs.r.agent.rec?.active}, execCommand ${obs.r.agent.rec?.execCopy}, writeText ${obs.r.agent.rec?.writeText}, frame ${obs.r.agent.rec?.frameWrite}, readText ${obs.r.agent.rec?.readText}, clipboard ${obs.r.agent.afterClick}; Control+v ${obs.r.agent.ctrlV}, Shift+Insert ${obs.r.agent.shiftInsert}, Control+c ${obs.r.agent.ctrlC}, Control+a ${obs.r.agent.controlReply}, input ${obs.r.agent.input}, clipboard ${obs.r.agent.afterKeys})` : ''}${k === 's' && obs.s ? ` (pref ${obs.s.pref}; user tab ${obs.s.user}, agent tab ${obs.s.agent}, agent's own grant ${obs.s.agentOwn})` : ''}`);
     }
     for (const s of skips) console.log(`${NAME}: SKIP ${s}`);
     if (fails.length) { for (const f of fails) console.error(`${NAME}: FAIL -- ${f}`); return 1; }
     const g = obs.g.credential;
-    console.log(`${NAME}: PASS -- (k) no-pane create one tab in ${obs.k.ms} ms; (a) one background agent tab in ${obs.a.ms} ms; (b) goto, click, type, screenshot at DPR 1 and 2; (c) parked focus held; (d) refusals; (e) container; (e2) agent container ${obs.e2.agentContext}; (l) saved login filled for the user only, no LoginManager actor or capture in the agent tab; (m) HTTP auth (${obs.m.promptType}) refused to the agent; (c2) typing kept while the parked page called focus(); (n) agent opens refused after user opens adopted; (o) agent downloads refused after a user download saved; (p) agent protocol links refused after user launches and a dialog; (q) commands refused on the initial about:blank; (f) ${obs.f.skip ? 'SKIP' : 'no decoy'}; (g) renderer createPage over ${g}; (h) user close; (j) reveal in ${obs.j.revealMs} ms after store activation; (i) reload`);
+    console.log(`${NAME}: PASS -- (k) no-pane create one tab in ${obs.k.ms} ms; (a) one background agent tab in ${obs.a.ms} ms; (b) goto, click, type, screenshot at DPR 1 and 2; (c) parked focus held; (d) refusals; (e) container; (e2) agent container ${obs.e2.agentContext}; (l) saved login filled for the user only, no LoginManager actor or capture in the agent tab; (m) HTTP auth (${obs.m.promptType}) refused to the agent; (c2) typing kept while the parked page called focus(); (n) agent opens refused after user opens adopted; (o) agent downloads refused after a user download saved; (p) agent protocol links refused after user launches and a dialog; (q) commands refused on the initial about:blank; (r) agent clipboard writes, reads and keys refused after user writes and a paste; (s) a default-container grant not effective in the agent tab; (f) ${obs.f.skip ? 'SKIP' : 'no decoy'}; (g) renderer createPage over ${g}; (h) user close; (j) reveal in ${obs.j.revealMs} ms after store activation; (i) reload`);
     return 0;
 }
 
@@ -918,6 +1044,14 @@ const CONTROL = {
         agent: { launches: 0, newWindows: 0, replies: { 'mailto:': 'failed browser_command_unavailable', 'pbrun:': 'failed browser_command_unavailable', 'pbask:': 'failed browser_command_unavailable' } },
     },
     q: { created: true, initialBefore: true, clickReply: 'failed browser_command_unavailable', popupReply: 'failed browser_command_unavailable', newWindows: 0, loads: 0, initialAfter: false, evalAfter: 'done /slow' },
+    r: {
+        user: { copy: 'copy', frame: 'frame', write: 'user', pasted: 'user' },
+        agent: {
+            clickReply: 'done', rec: { clicked: true, active: true, execCopy: 'true', writeText: 'rejected NotAllowedError', frameWrite: 'rejected NotAllowedError', readText: 'rejected NotAllowedError' }, afterClick: 'user',
+            ctrlV: 'failed browser_command_unavailable', shiftInsert: 'failed browser_command_unavailable', ctrlC: 'failed browser_command_unavailable', controlReply: 'done', input: 'empty', afterKeys: 'user',
+        },
+    },
+    s: { pref: true, user: 'granted', agent: 'default', agentOwn: 'granted' },
     f: { stock: { pass: { stockMs: 900 } }, createOk: true, title: 'PB agent fixture two', expectedTitle: 'PB agent fixture two', quietMs: 30000, minQuietMs: 10000, markerPresent: false },
     g: { placement: { kind: 'client' }, reply: { ok: true, code: null }, createPageArrived: true, credential: 'device-key' },
     h: { closed: true, listedAfter: false },
@@ -928,6 +1062,7 @@ const CONTROL = {
 const set = (clause, patch) => (o) => ({ ...o, [clause]: { ...o[clause], ...patch } });
 const setN = (side, patch) => (o) => ({ ...o, n: { ...o.n, [side]: { ...o.n[side], ...patch } } });
 const setIn = (clause, side, patch) => (o) => ({ ...o, [clause]: { ...o[clause], [side]: { ...o[clause][side], ...patch } } });
+const setRec = (patch) => (o) => ({ ...o, r: { ...o.r, agent: { ...o.r.agent, rec: { ...o.r.agent.rec, ...patch } } } });
 const PLANTS = [
     ['two-tabs-one-page', set('a', { newTabs: [{ tabId: 't1', agent: true, current: false }, { tabId: 't9', agent: true, current: false }] }), 'two tabs for one page'],
     ['tab-current-at-create', set('a', { newTabs: [{ tabId: 't1', agent: true, current: true }] }), 'a tab current at create'],
@@ -1005,6 +1140,28 @@ const PLANTS = [
     ['first-document-popup-opened', set('q', { popupReply: 'done', newWindows: 1, loads: 1 }), 'opened 1 window'],
     ['first-document-guard-outlives', set('q', { evalAfter: 'failed browser_command_unavailable' }), 'the guard outlived the initial document'],
     ['first-document-detector-blind', set('q', { initialBefore: false }), 'detector blind'],
+    // 66-10 (D-38, D-39): the clipboard and per-container permissions.
+    ['agent-click-wrote-clipboard', setIn('r', 'agent', { afterClick: 'write' }), "the agent page's click changed the clipboard to write"],
+    ['agent-execcommand-copied', setIn('r', 'agent', { afterClick: 'copy' }), "the agent page's click changed the clipboard to copy"],
+    ['agent-writetext-resolved', setRec({ writeText: 'resolved' }), "the agent page's writeText answered resolved"],
+    ['agent-frame-write-resolved', setRec({ frameWrite: 'resolved' }), "the agent page's frameWrite answered resolved"],
+    ['agent-readtext-read-user', setRec({ readText: 'resolved user-marker' }), "the agent page's readText answered resolved user-marker"],
+    ['agent-readtext-pending', setRec({ readText: 'pending' }), "the agent page's readText answered pending"],
+    ['agent-ctrl-v-done', setIn('r', 'agent', { ctrlV: 'done' }), "the agent's Control+v answered done"],
+    ['agent-shift-insert-done', setIn('r', 'agent', { shiftInsert: 'done' }), "the agent's Shift+Insert answered done"],
+    ['agent-ctrl-c-done', setIn('r', 'agent', { ctrlC: 'done' }), "the agent's Control+c answered done"],
+    ['agent-pasted-user-clipboard', setIn('r', 'agent', { input: 'user' }), "the agent page's input holds user"],
+    ['agent-keys-changed-clipboard', setIn('r', 'agent', { afterKeys: 'other' }), "the agent's keys changed the clipboard to other"],
+    ['clipboard-copy-detector-blind', setIn('r', 'user', { copy: 'other' }), 'detector blind'],
+    ['clipboard-frame-detector-blind', setIn('r', 'user', { frame: 'copy' }), 'detector blind'],
+    ['clipboard-paste-detector-blind', setIn('r', 'user', { pasted: 'empty' }), 'detector blind'],
+    ['clipboard-agent-handler-never-ran', setIn('r', 'agent', { rec: null }), 'detector blind'],
+    ['clipboard-agent-no-activation', setRec({ active: false }), 'detector blind'],
+    ['clipboard-keypress-broken', setIn('r', 'agent', { controlReply: 'failed browser_error' }), 'detector blind'],
+    ['agent-reads-user-grant', set('s', { agent: 'granted' }), "the agent tab read the user's default-container grant as granted"],
+    ['isolation-pref-off', set('s', { pref: false }), 'permissions.isolateBy.userContext reads false'],
+    ['permission-user-detector-blind', set('s', { user: 'default' }), 'detector blind'],
+    ['permission-agent-detector-blind', set('s', { agentOwn: 'default' }), 'detector blind'],
 ];
 
 export function runSelfTest() {
