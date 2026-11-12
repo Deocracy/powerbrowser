@@ -314,10 +314,33 @@ function agentKeyEvent(actor, key) {
   return new actor.contentWindow.KeyboardEvent("", { key: name, code });
 }
 
+// D-38 (66-10): the clipboard bindings of Gecko's shortcut tables (dom/events/ShortcutKeyDefinitions.cpp, every entry
+// for Windows, macOS or Linux whose command copies, cuts or pastes), as modifiers+key; accel is Control or Meta. Agent
+// keys carry no native event, so GTK's own bindings never run for them. orca-browser-tab-scope derives the same set.
+const AGENT_CLIPBOARD_KEYS = Object.freeze([
+  "accel+c", "accel+x", "accel+v", "accel+shift+v", "accel+alt+shift+v", "control+Insert", "shift+Insert", "shift+Delete", "control+Delete",
+]);
+const AGENT_MODIFIER_WORDS = { Control: "control", Ctrl: "control", Shift: "shift", Alt: "alt", Meta: "meta", Cmd: "meta", Command: "meta" };
+
+// True when a binding's modifiers are all held (accel by Control or Meta) and its key is the pressed one.
+function agentClipboardKey(held, key) {
+  const words = new Set(held.map(name => AGENT_MODIFIER_WORDS[name]));
+  return AGENT_CLIPBOARD_KEYS.some(binding => {
+    const parts = binding.split("+");
+    const bound = parts.pop();
+    return (bound.length === 1 ? bound === key.toLowerCase() : bound === key) &&
+      parts.every(word => (word === "accel" ? words.has("control") || words.has("meta") : words.has(word)));
+  });
+}
+
 // "Control+a", "Enter", "Shift+Tab": modifiers held down around the last key.
 function agentPress(actor, tip, combo) {
   const parts = combo.length > 1 && combo.endsWith("+") ? [...combo.slice(0, -2).split("+").filter(Boolean), "+"] : combo.split("+");
   const key = parts.pop();
+  // D-38: no clipboard key reaches the page, and none is half-sent.
+  if (agentClipboardKey(parts, key)) {
+    throw new AgentRowError("browser_command_unavailable");
+  }
   const held = parts.map(name => {
     if (!AGENT_MODIFIERS[name]) {
       throw new AgentRowError("browser_error");
@@ -693,6 +716,35 @@ export class PowerBrowserAgentChild extends JSWindowActorChild {
       return Promise.resolve(arm(this, params || {})).then(result => ({ where: "done", result }), failed);
     } catch (err) {
       return failed(err);
+    }
+  }
+}
+
+// D-38 (66-10): the content half of the PowerBrowserAgentPage pair, an agent overlay's clipboard wall. Gecko creates it
+// in every document of an agent overlay, frames included (the agent message manager group only), so a user's tab never
+// gets one. Gecko has no per-browsing-context clipboard switch, so the wall is here. At DOMWindowCreated, before any
+// script of that window runs, each Clipboard.prototype method answers a rejected promise: the page's own
+// Promise.reject bound (in the page realm) to a page NotAllowedError, so no chrome function reaches the page. A trusted
+// copy, cut or paste is cancelled at the chrome event handler, ahead of every page listener, so Gecko writes nothing
+// and pastes nothing (nsCopySupport.cpp FireClipboardEvent: no default action, an empty clipboardData): that covers
+// execCommand copy, cut and paste, key and menu commands, middle-click paste and a page's clipboardData. No import.
+const AGENT_CLIPBOARD_METHODS = Object.freeze(["read", "readText", "write", "writeText"]);
+
+export class PowerBrowserAgentPageChild extends JSWindowActorChild {
+  handleEvent(event) {
+    if (event.type !== "DOMWindowCreated") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    const page = this.contentWindow.wrappedJSObject;
+    const proto = page.Clipboard?.prototype;
+    if (!proto) {
+      return; // not a secure context: the page has no async Clipboard API
+    }
+    const refuse = page.Promise.reject.bind(page.Promise, new page.DOMException("Clipboard access is not available in this tab.", "NotAllowedError"));
+    for (const name of AGENT_CLIPBOARD_METHODS) {
+      Object.defineProperty(proto, name, { value: refuse, writable: false, configurable: false });
     }
   }
 }

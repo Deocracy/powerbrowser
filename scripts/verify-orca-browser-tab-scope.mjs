@@ -69,7 +69,7 @@
 //   node scripts/verify-orca-browser-tab-scope.mjs
 //   node scripts/verify-orca-browser-tab-scope.mjs --self-test
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -896,6 +896,200 @@ export function visibilityReads(text) {
 }
 
 // ---------------------------------------------------------------------------
+// The clipboard clause (66-10, D-38) and the permissions clause (66-10, D-39).
+
+const SHORTCUTS = 'upstream/dom/events/ShortcutKeyDefinitions.cpp';
+const CLIPBOARD_IDL = 'upstream/dom/webidl/Clipboard.webidl';
+const EVENT_NAMES = 'upstream/dom/events/EventNameList.inc';
+const PERMISSION_MANAGER = 'upstream/extensions/permissions/PermissionManager.cpp';
+const STATIC_PREFS = 'upstream/modules/libpref/init/StaticPrefList.yaml';
+const BRANDING_DIR = 'powerbrowser/branding';
+const AGENT_PAGE_ACTOR = 'PowerBrowserAgentPage';
+// The platforms PowerBrowser builds for; an #if branch naming none of them (Android, Emacs-only) is not ours.
+const OUR_PLATFORMS = /\b(XP_WIN|MOZ_WIDGET_GTK|MOZ_WIDGET_COCOA)\b/;
+const canonicalBinding = b => { const parts = b.split('+'); const key = parts.pop(); return [...parts.sort(), key].join('+'); };
+
+/** The clipboard bindings of the pinned shortcut tables, as modifiers+key (accel kept), for our platforms. */
+export function clipboardBindings(text) {
+    const lines = (text ?? '').replace(/\\\n/g, ' ').split('\n');
+    const stack = [];
+    const found = new Set();
+    for (const line of lines) {
+        const pre = /^\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)$/.exec(line);
+        if (pre) {
+            if (pre[1] === 'endif') stack.pop();
+            else if (pre[1] === 'else') stack[stack.length - 1] = true; // the other branch may be ours: conservative
+            else if (pre[1] === 'elif') stack[stack.length - 1] = OUR_PLATFORMS.test(pre[2]) || stack[stack.length - 1];
+            else stack.push(pre[1] === 'if' && /^\s*!/.test(pre[2]) ? true : OUR_PLATFORMS.test(pre[2]));
+            continue;
+        }
+        const m = /\{\s*u"keypress",\s*(?:u"VK_([A-Z_]+)"|nullptr),\s*(?:u"(.)"|nullptr),\s*(?:u"([a-z,]+)"|nullptr),\s*u"(cmd_\w+)"\s*\}/.exec(line);
+        if (!m || !/^cmd_(copy|cut|paste)/i.test(m[4]) || stack.some(s => !s)) continue;
+        const key = m[1] ? m[1][0] + m[1].slice(1).toLowerCase() : m[2].toLowerCase();
+        found.add(canonicalBinding([...(m[3] ? m[3].split(',') : []), key].join('+')));
+    }
+    return [...found].sort();
+}
+
+/** The methods of the pinned `interface Clipboard`. */
+export function clipboardMethods(idl) {
+    const body = /interface\s+Clipboard\s*:\s*EventTarget\s*\{([\s\S]*?)\};/.exec(idl ?? '')?.[1];
+    return body ? [...new Set([...body.matchAll(/(\w+)\s*\(/g)].map(m => m[1]))].sort() : [];
+}
+
+/** The events of the pinned clipboard event class. */
+export function clipboardEvents(list) {
+    return [...(list ?? '').replace(/\n\s+/g, ' ').matchAll(/EVENT\((\w+),[^)]*eClipboardEventClass\)/g)].map(m => m[1]).sort();
+}
+
+/** The child's tables, functions and the page class, evaluated over a stub actor base. */
+function loadChild(childText) {
+    const context = vm.createContext({ JSWindowActorChild: class {}, Cc: {}, Ci: {}, Object, Array, Set, Map, Error, Promise, String, JSON });
+    return vm.runInContext(`${childText.replace(/^export /gm, '')}\n;({ agentPress, AGENT_CLIPBOARD_KEYS, AGENT_CLIPBOARD_METHODS, PowerBrowserAgentPageChild, AgentRowError })`, context, { filename: CHILD });
+}
+
+const setDiff = (a, b) => a.filter(x => !b.includes(x));
+
+export async function clipboardClause(sliced, text, childText, upstream = {}) {
+    const failures = [];
+    let child;
+    try {
+        child = loadChild(childText);
+    } catch (err) {
+        return { failures: [`broken instrument: ${CHILD} does not evaluate over the stub actor base (${err.message})`] };
+    }
+    const own = [...(child.AGENT_CLIPBOARD_KEYS ?? [])].map(canonicalBinding).sort();
+    const pinned = upstream.shortcuts ? clipboardBindings(upstream.shortcuts) : null;
+    if (pinned && !pinned.length) failures.push(`broken instrument: no clipboard binding was derived from ${SHORTCUTS}`);
+    const bindings = pinned ?? own;
+    if (pinned && pinned.length) {
+        for (const b of setDiff(pinned, own)) failures.push(`clipboard: the pinned shortcut tables bind ${b} to a clipboard command, and the child's AGENT_CLIPBOARD_KEYS lacks it`);
+        for (const b of setDiff(own, pinned)) failures.push(`clipboard: the child's AGENT_CLIPBOARD_KEYS has ${b}, which no pinned clipboard binding has (stale table)`);
+    }
+    if (!bindings.length) failures.push('broken instrument: no clipboard binding to drive');
+
+    // The key refusal: every binding, accel as Control and as Meta, is refused before any key; controls still type.
+    const press = combo => {
+        const sent = [];
+        const tip = { keydown: e => sent.push(e.key), keyup: () => undefined };
+        const actor = { contentWindow: { KeyboardEvent: class { constructor(_t, init) { Object.assign(this, init); } } } };
+        try {
+            child.agentPress(actor, tip, combo);
+            return { sent, code: null };
+        } catch (err) {
+            return { sent, code: err?.code ?? 'threw' };
+        }
+    };
+    const WORD = { accel: ['Control', 'Meta'], control: ['Control'], shift: ['Shift'], alt: ['Alt'], meta: ['Meta'] };
+    for (const binding of bindings) {
+        const parts = binding.split('+');
+        const key = parts.pop();
+        let combos = [[]];
+        for (const word of parts) combos = combos.flatMap(c => (WORD[word] ?? [word]).map(n => [...c, n]));
+        for (const c of combos) {
+            const combo = [...c, key].join('+');
+            const r = press(combo);
+            if (r.code !== 'browser_command_unavailable' || r.sent.length) failures.push(`clipboard: the agent's ${combo} answered ${r.code ?? 'done'} with ${r.sent.length} key(s) sent; expected browser_command_unavailable and none`);
+        }
+    }
+    for (const combo of ['Control+a', 'Enter', 'Shift+Tab', 'v', 'Insert']) {
+        const r = press(combo);
+        if (r.code || !r.sent.length) failures.push(`clipboard: detector blind: the control ${combo} answered ${r.code} with ${r.sent.length} key(s) sent, so the refusal is not specific to clipboard keys`);
+    }
+
+    // The page wall: derived Clipboard methods and clipboard events against the child and the registration.
+    const methods = upstream.clipboardIdl ? clipboardMethods(upstream.clipboardIdl) : [...(child.AGENT_CLIPBOARD_METHODS ?? [])];
+    const events = upstream.eventNames ? clipboardEvents(upstream.eventNames) : ['copy', 'cut', 'paste'];
+    if (!methods.length) failures.push(`broken instrument: no Clipboard method was derived from ${CLIPBOARD_IDL}`);
+    if (!events.length) failures.push(`broken instrument: no clipboard event was derived from ${EVENT_NAMES}`);
+    for (const m of setDiff(methods, [...(child.AGENT_CLIPBOARD_METHODS ?? [])])) failures.push(`clipboard: the pinned Clipboard interface has ${m}, which the page wall leaves to the page`);
+    let w;
+    try {
+        w = makeWorld(sliced);
+        w.registerAgentActor?.();
+    } catch (err) {
+        return { failures: [...failures, `broken instrument: registerAgentActor does not run over the stub boundary (${err.message})`] };
+    }
+    const reg = w.rec.registered.find(r => r.name === AGENT_PAGE_ACTOR)?.options;
+    const agentReg = w.rec.registered.find(r => r.name === 'PowerBrowserAgent')?.options;
+    if (!reg) failures.push(`clipboard: no ${AGENT_PAGE_ACTOR} pair is registered, so agent pages keep the clipboard`);
+    else {
+        if (JSON.stringify(reg.messageManagerGroups) !== JSON.stringify([AGENT_GROUP])) failures.push(`clipboard: the ${AGENT_PAGE_ACTOR} pair is registered for ${JSON.stringify(reg.messageManagerGroups)}; expected [${AGENT_GROUP}] alone`);
+        if (reg.allFrames !== true) failures.push(`clipboard: the ${AGENT_PAGE_ACTOR} pair is top-frame only, so an agent page's frames keep the clipboard`);
+        if (reg.matches || reg.remoteTypes) failures.push(`clipboard: the ${AGENT_PAGE_ACTOR} pair narrows its documents (matches or remoteTypes), so some agent documents keep the clipboard`);
+        if (reg.child?.esModuleURI !== agentReg?.child?.esModuleURI) failures.push(`clipboard: the ${AGENT_PAGE_ACTOR} child module is not the agent child's`);
+        const ev = reg.child?.events ?? {};
+        if (!ev.DOMWindowCreated) failures.push(`clipboard: the ${AGENT_PAGE_ACTOR} pair does not listen for DOMWindowCreated, so the Clipboard methods are never replaced`);
+        for (const e of events) if (ev[e]?.capture !== true || ev[e]?.mozSystemGroup) failures.push(`clipboard: the ${AGENT_PAGE_ACTOR} pair does not catch ${e} capturing in the default group, so a page listener runs first or the event writes`);
+    }
+    if (!new RegExp(`export class ${AGENT_PAGE_ACTOR}Child extends JSWindowActorChild`).test(childText)) failures.push(`clipboard: ${CHILD} exports no ${AGENT_PAGE_ACTOR}Child class`);
+    if (!new RegExp(`export class ${AGENT_PAGE_ACTOR}Parent extends`).test(text)) failures.push(`clipboard: ${API} exports no ${AGENT_PAGE_ACTOR}Parent class`);
+
+    // Drive the page child: a window with the Clipboard API, one without, and each clipboard event.
+    const originals = Object.fromEntries(methods.map(m => [m, () => 'original']));
+    const proto = { ...originals };
+    class FakeDOMException extends Error { constructor(message, name) { super(message); this.name = name; } }
+    const page = { Clipboard: { prototype: proto }, Promise, DOMException: FakeDOMException };
+    const actor = Object.assign(new child.PowerBrowserAgentPageChild(), { contentWindow: { wrappedJSObject: page } });
+    try {
+        actor.handleEvent({ type: 'DOMWindowCreated' });
+        Object.assign(new child.PowerBrowserAgentPageChild(), { contentWindow: { wrappedJSObject: { Promise, DOMException: FakeDOMException } } }).handleEvent({ type: 'DOMWindowCreated' });
+    } catch (err) {
+        failures.push(`clipboard: the page child threw at DOMWindowCreated (${err.message})`);
+    }
+    for (const m of methods) {
+        let outcome;
+        try {
+            const r = proto[m]?.call({});
+            outcome = r instanceof Promise ? await r.then(() => 'resolved', e => `rejected ${e?.name}`) : `answered ${r}`;
+        } catch (err) {
+            outcome = `threw ${err.message}`;
+        }
+        if (outcome !== 'rejected NotAllowedError') failures.push(`clipboard: an agent page's navigator.clipboard.${m} ${outcome}; expected rejected NotAllowedError`);
+        const d = Object.getOwnPropertyDescriptor(proto, m);
+        if (d && (d.writable || d.configurable)) failures.push(`clipboard: the replaced Clipboard.${m} stays writable or configurable, so page script can put a saved original back`);
+    }
+    for (const type of events) {
+        const seen = [];
+        try {
+            actor.handleEvent({ type, preventDefault: () => seen.push('prevent'), stopImmediatePropagation: () => seen.push('stop') });
+        } catch (err) {
+            seen.push(`threw ${err.message}`);
+        }
+        if (!seen.includes('prevent') || !seen.includes('stop')) failures.push(`clipboard: a trusted ${type} in an agent page was ${seen.join(' and ') || 'left alone'}; expected cancelled and stopped, so Gecko writes or pastes nothing and no page listener runs`);
+    }
+    return { failures, bindings: bindings.length, from: pinned ? 'the pin' : 'the child (no upstream/)', methods, events };
+}
+
+/** The pref the pinned PermissionManager reads to keep the userContextId, with its pinned default. */
+export function isolationPref(permissionManager, staticPrefs) {
+    const accessor = /!StaticPrefs::(\w+)\(\)\)\s*\{\s*flags\s*\|=\s*OriginAttributes::STRIP_USER_CONTEXT_ID/.exec(permissionManager ?? '')?.[1];
+    if (!accessor) return { error: `broken instrument: the pref guarding STRIP_USER_CONTEXT_ID was not found in ${PERMISSION_MANAGER}` };
+    for (const m of (staticPrefs ?? '').matchAll(/^- name: (\S+)\n\s+type: \w+\n\s+value: (\w+)/gm)) {
+        if (m[1].replace(/[.-]/g, '_') === accessor) return { name: m[1], pinned: m[2] };
+    }
+    return { error: `broken instrument: ${accessor} (${PERMISSION_MANAGER}) names no pref in ${STATIC_PREFS}` };
+}
+
+/** branding: { variant: firefox-branding.js text }. Each variant must set the isolation pref to the opposite of the pin. */
+export function permissionsClause(upstream = {}, branding = {}) {
+    const pref = upstream.permissionManager && upstream.staticPrefs ? isolationPref(upstream.permissionManager, upstream.staticPrefs) : { name: 'permissions.isolateBy.userContext', pinned: 'false', own: true };
+    if (pref.error) return { failures: [pref.error] };
+    const want = pref.pinned === 'false' ? 'true' : pref.pinned === 'true' ? null : undefined;
+    if (want !== 'true') return { failures: [`permissions: the pinned default of ${pref.name} is ${pref.pinned}, not false; re-derive D-39`] };
+    const failures = [];
+    const variants = Object.keys(branding);
+    if (variants.length < 2) failures.push(`broken instrument: ${variants.length} branding variant(s) under ${BRANDING_DIR}`);
+    const escaped = pref.name.replace(/\./g, '\\.');
+    for (const v of variants) {
+        const lines = branding[v].split('\n').filter(l => !/^\s*\/\//.test(l) && l.includes(pref.name));
+        const values = lines.map(l => new RegExp(`^pref\\("${escaped}",\\s*(\\w+)\\);$`).exec(l.trim())?.[1] ?? 'unparsed');
+        if (values.length !== 1 || values[0] !== want) failures.push(`permissions: ${BRANDING_DIR}/${v}/pref/firefox-branding.js sets ${pref.name} to [${values.join(', ') || 'nothing'}]; expected exactly one pref() to ${want}, so a grant in one container is used in every other`);
+    }
+    return { failures, pref: pref.name, from: pref.own ? 'the clause (no upstream/)' : 'the pin', variants };
+}
+
+// ---------------------------------------------------------------------------
 // The page-table clause: lane p66-02's pure dispatch module, transpiled with theia's TypeScript.
 
 const DISPATCH = 'theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts';
@@ -951,6 +1145,20 @@ export function pageTableClause(files) {
     return { failures };
 }
 
+/** Every pin text the walls, clipboard and permissions clauses derive from (null when upstream/ is absent). */
+function readUpstream() {
+    return {
+        sandboxH: readOptional(SANDBOX_H), classify: readOptional(CLASSIFY), exthandler: readOptional(EXTHANDLER), shortcuts: readOptional(SHORTCUTS),
+        clipboardIdl: readOptional(CLIPBOARD_IDL), eventNames: readOptional(EVENT_NAMES), permissionManager: readOptional(PERMISSION_MANAGER), staticPrefs: readOptional(STATIC_PREFS),
+    };
+}
+
+/** Each tracked branding variant's firefox-branding.js, by variant directory. */
+function readBranding() {
+    return Object.fromEntries(readdirSync(join(REPO_ROOT, BRANDING_DIR), { withFileTypes: true }).filter(d => d.isDirectory())
+        .map(d => [d.name, readOptional(`${BRANDING_DIR}/${d.name}/pref/firefox-branding.js`)]).filter(([, t]) => t !== null));
+}
+
 function readOptional(rel) {
     try {
         return readFileSync(join(REPO_ROOT, rel), 'utf8');
@@ -969,7 +1177,7 @@ export function loginManagerClause(registry) {
     return { failures: list.includes(AGENT_GROUP) ? [`isolation: Gecko's LoginManager actor is registered for ${AGENT_GROUP}, so saved passwords can fill agent pages`] : [], groups: list };
 }
 
-export async function checkSource(text, childText, dispatchFiles, registry = null, idlText = null, upstream = {}) {
+export async function checkSource(text, childText, dispatchFiles, registry = null, idlText = null, upstream = {}, branding = {}) {
     const sliced = sliceSource(text);
     if (sliced.error) return { failures: [sliced.error] };
     const table = pageTableClause(dispatchFiles);
@@ -977,9 +1185,11 @@ export async function checkSource(text, childText, dispatchFiles, registry = nul
     const opens = await opensClause(sliced, idlText);
     const openFailures = Array.isArray(opens) ? opens : opens.failures;
     const walls = await wallsClause(sliced, upstream);
-    const failures = [...await runScenarios(sliced, childText, 2), ...await runScenarios(sliced, childText, 1), ...visibilityReads(text), ...table.failures, ...login.failures, ...openFailures, ...walls.failures];
+    const clipboard = await clipboardClause(sliced, text, childText, upstream);
+    const permissions = permissionsClause(upstream, branding);
+    const failures = [...clipboard.failures, ...permissions.failures, ...await runScenarios(sliced, childText, 2), ...await runScenarios(sliced, childText, 1), ...visibilityReads(text), ...table.failures, ...login.failures, ...openFailures, ...walls.failures];
     const native = (() => { try { return Object.keys(makeWorld(sliced).AGENT_NATIVE_ROWS ?? {}).length; } catch { return 0; } })();
-    return { failures: [...new Set(failures)], native, skip: !!table.skip, loginSkip: !!login.skip, paths: opens.paths ?? [], wheres: opens.wheres ?? 0, walls };
+    return { failures: [...new Set(failures)], native, skip: !!table.skip, loginSkip: !!login.skip, paths: opens.paths ?? [], wheres: opens.wheres ?? 0, walls, clipboard, permissions };
 }
 
 // ---------------------------------------------------------------------------
@@ -1014,8 +1224,9 @@ async function selfTest() {
     const fixture = { dispatch: FIXTURE_DISPATCH, abilities: FIXTURE_ABILITIES };
     const registry = '\n  LoginManager: {\n    allFrames: true,\n    messageManagerGroups: ["browsers", ""],\n  },\n';
     const idl = readOptional(IDL);
-    const upstream = { sandboxH: readOptional(SANDBOX_H), classify: readOptional(CLASSIFY), exthandler: readOptional(EXTHANDLER) };
-    const control = await checkSource(text, child, fixture, registry, idl, upstream);
+    const upstream = readUpstream();
+    const branding = readBranding();
+    const control = await checkSource(text, child, fixture, registry, idl, upstream, branding);
     if (control.failures.length) {
         console.error(`${NAME} self-test: FAIL -- the shipped source with the fixture dispatch module is already red, so the plants prove nothing:`);
         control.failures.forEach(f => console.error(`  ${f}`));
@@ -1063,8 +1274,40 @@ async function selfTest() {
         ['the initial-document guard refusing browser.goto too', { api: swap('  if (data.method !== "browser.goto" && entry.browser.browsingContext?.currentWindowGlobal?.isInitialDocument === true) {', '  if (entry.browser.browsingContext?.currentWindowGlobal?.isInitialDocument === true) {') }, 'initial document: browser.goto on the initial about:blank did not navigate'],
         ['a refused open not failing the command', { api: swap('    outcome = agentFailed("browser_command_unavailable");\n  }\n  if (control.stopped) {', '  }\n  if (control.stopped) {') }, 'expected failed browser_command_unavailable'],
         ['a refusal logged every time', { api: swap('  if (!entry.agentOpensLogged.has(path)) {', '  if (true) {') }, 'logged more than once per tab and path'],
+        // D-38 (66-10): the key refusal, its table, the page wall and its registration.
+        ['the clipboard key refusal dropped', { child: swap('  if (agentClipboardKey(parts, key)) {', '  if (false) {') }, "clipboard: the agent's Control+c answered done"],
+        ['every key refused', { child: swap('  if (agentClipboardKey(parts, key)) {', '  if (true) {') }, 'clipboard: detector blind: the control Control+a'],
+        ['Shift+Insert missing from the child table', { child: swap('"control+Insert", "shift+Insert",', '"control+Insert",') }, 'bind shift+Insert to a clipboard command, and the child\'s AGENT_CLIPBOARD_KEYS lacks it'],
+        ['a stale binding in the child table', { child: swap('"accel+c", "accel+x",', '"accel+c", "accel+q", "accel+x",') }, 'has accel+q, which no pinned clipboard binding has'],
+        ['accel matched by Control only', { child: swap('words.has("control") || words.has("meta")', 'words.has("control")') }, "clipboard: the agent's Meta+c answered done"],
+        ['the Clipboard methods not replaced', { child: swap('      Object.defineProperty(proto, name, { value: refuse, writable: false, configurable: false });\n', '') }, "clipboard: an agent page's navigator.clipboard.writeText answered original"],
+        ['the replaced methods left writable', { child: swap('{ value: refuse, writable: false, configurable: false }', '{ value: refuse, writable: true, configurable: true }') }, 'stays writable or configurable'],
+        ['readText left to the page', { child: swap('["read", "readText", "write", "writeText"]', '["read", "write", "writeText"]') }, 'the pinned Clipboard interface has readText, which the page wall leaves to the page'],
+        ['clipboard events not cancelled', { child: swap('      event.preventDefault();\n      event.stopImmediatePropagation();\n', '      event.stopImmediatePropagation();\n') }, 'clipboard: a trusted copy in an agent page was stop'],
+        ['the page pair not registered', { api: s => s.replace(/  ChromeUtils\.registerWindowActor\(AGENT_PAGE_ACTOR_NAME, \{[\s\S]*?\n  \}\);\n/, '') }, 'no PowerBrowserAgentPage pair is registered'],
+        ['the page pair top-frame only', { api: swap('messageManagerGroups: [AGENT_MESSAGE_MANAGER_GROUP],\n    allFrames: true,', 'messageManagerGroups: [AGENT_MESSAGE_MANAGER_GROUP],\n    allFrames: false,') }, 'pair is top-frame only'],
+        ['the page pair in the browsers group too', { api: swap('messageManagerGroups: [AGENT_MESSAGE_MANAGER_GROUP],\n    allFrames: true,', 'messageManagerGroups: [AGENT_MESSAGE_MANAGER_GROUP, "browsers"],\n    allFrames: true,') }, 'pair is registered for ["powerbrowser-orca-agent","browsers"]'],
+        ['paste not caught capturing', { api: swap('paste: { capture: true } }', 'paste: {} }') }, 'does not catch paste capturing'],
+        ['DOMWindowCreated not listened for', { api: swap('events: { DOMWindowCreated: {}, ', 'events: { ') }, 'does not listen for DOMWindowCreated'],
+        // D-39 (66-10): the isolation pref in each branding variant.
+        ['the pref missing from dev', { branding: b => ({ ...b, dev: b.dev.replace('pref("permissions.isolateBy.userContext", true);\n', '') }) }, 'dev/pref/firefox-branding.js sets permissions.isolateBy.userContext to [nothing]'],
+        ['the pref false in release', { branding: b => ({ ...b, release: b.release.replace('pref("permissions.isolateBy.userContext", true);', 'pref("permissions.isolateBy.userContext", false);') }) }, 'release/pref/firefox-branding.js sets permissions.isolateBy.userContext to [false]'],
+        ['the pref overridden later in dev', { branding: b => ({ ...b, dev: `${b.dev}pref("permissions.isolateBy.userContext", false);\n` }) }, 'sets permissions.isolateBy.userContext to [true, false]'],
         ['the opens detector blinded (no receivers installed)', { api: swap('    win.openLinkIn = (url, where, params) => adoptLinkIn(url, where, params);\n', '') }, 'broken instrument: derived'],
     ];
+    // D-38/D-39 pin plants (66-10): drift in a pinned table must name it. Only with upstream/.
+    if (upstream.shortcuts && upstream.clipboardIdl && upstream.eventNames && upstream.permissionManager && upstream.staticPrefs) {
+        const pin = (key, from, to) => u => { if (!u[key].includes(from)) throw new Error(`plant anchor not found: ${from.slice(0, 70)}`); return { ...u, [key]: u[key].replace(from, to) }; };
+        plants.push(
+            ['a new pinned clipboard binding', { upstream: pin('shortcuts', 'ShortcutKeyData ShortcutKeys::sInputHandlers[] = {\n', 'ShortcutKeyData ShortcutKeys::sInputHandlers[] = {\n    {u"keypress", nullptr, u"y", u"accel", u"cmd_paste"},\n') }, 'bind accel+y to a clipboard command'],
+            ['a new pinned Clipboard method', { upstream: pin('clipboardIdl', 'Promise<DOMString> readText();', 'Promise<DOMString> readText();\n  Promise<undefined> writeImage();') }, 'has writeImage, which the page wall leaves to the page'],
+            ['a new pinned clipboard event', { upstream: pin('eventNames', 'EVENT(copy, eCopy,', 'EVENT(beforecopy, eBeforeCopy, EventNameType_HTMLXUL, eClipboardEventClass)\nEVENT(copy, eCopy,') }, 'does not catch beforecopy capturing'],
+            ['the pinned isolation default flipped', { upstream: pin('staticPrefs', 'name: permissions.isolateBy.userContext\n  type: RelaxedAtomicBool\n  value: false', 'name: permissions.isolateBy.userContext\n  type: RelaxedAtomicBool\n  value: true') }, 'is true, not false; re-derive D-39'],
+            ['the pinned isolation accessor renamed', { upstream: pin('permissionManager', 'StaticPrefs::permissions_isolateBy_userContext()', 'StaticPrefs::permissions_isolateBy_userContextRenamed()') }, 'names no pref in'],
+        );
+    } else {
+        console.log('  note: the D-38/D-39 pin plants need upstream/; skipped');
+    }
     // One plant per derived open path, generated from installNewWindowReceivers: the receiver put back to its
     // pre-D-35 answer must go red naming that path.
     const derived = receiverPlants(text);
@@ -1077,8 +1320,14 @@ async function selfTest() {
     for (const [name, mutate, expect] of plants) {
         let api;
         let files;
+        let kid;
+        let brand;
+        let up;
         try {
             api = mutate.api ? mutate.api(text) : text;
+            kid = mutate.child ? mutate.child(child) : child;
+            brand = mutate.branding ? mutate.branding(branding) : branding;
+            up = mutate.upstream ? mutate.upstream(upstream) : upstream;
             files = mutate.dispatch ? { ...fixture, dispatch: mutate.dispatch(fixture.dispatch) } : fixture;
             var reg = mutate.registry ? mutate.registry(registry) : registry;
         } catch (err) {
@@ -1086,12 +1335,12 @@ async function selfTest() {
             failed++;
             continue;
         }
-        if (api === text && files === fixture && reg === registry) {
+        if (api === text && files === fixture && reg === registry && kid === child && brand === branding && up === upstream) {
             console.error(`${NAME} self-test: FAIL -- '${name}' changed nothing; its anchor has drifted`);
             failed++;
             continue;
         }
-        const { failures } = await checkSource(api, child, files, reg, idl, upstream);
+        const { failures } = await checkSource(api, kid, files, reg, idl, up, brand);
         if (failures.some(f => f.includes(expect))) {
             console.log(`  ok  ${name} -> red, naming '${expect}'`);
         } else {
@@ -1110,8 +1359,7 @@ async function main() {
     const child = readFileSync(join(REPO_ROOT, CHILD), 'utf8');
     const dispatch = readOptional(DISPATCH);
     const files = dispatch === null ? null : { dispatch, abilities: readOptional(ABILITIES) ?? undefined };
-    const upstream = { sandboxH: readOptional(SANDBOX_H), classify: readOptional(CLASSIFY), exthandler: readOptional(EXTHANDLER) };
-    const { failures, native, skip, loginSkip, paths, wheres, walls } = await checkSource(text, child, files, readOptional(LOGIN_REGISTRY), readOptional(IDL), upstream);
+    const { failures, native, skip, loginSkip, paths, wheres, walls, clipboard, permissions } = await checkSource(text, child, files, readOptional(LOGIN_REGISTRY), readOptional(IDL), readUpstream(), readBranding());
     if (failures.length) {
         console.error(`${NAME}: FAIL -- the chrome side of the Orca agent bridge can reach a tab it did not create as an agent tab, or the drift below.`);
         failures.forEach(f => console.error(`  ${f}`));
@@ -1125,7 +1373,9 @@ async function main() {
         `D-35: ${paths.length} open paths derived (${paths.join(', ')}) open nothing for an agent opener at any of ${wheres} OPEN_* locations or ${LINK_WHERES.length} link wheres, ` +
         `refusals log once without the URL and fail the command in flight, and agent overlays load with SANDBOXED_AUXILIARY_NAVIGATION; ` +
         `D-37: agent overlays load with ${walls.dl.names.join(', ')} (from ${walls.dl.from}) and a cancelled agent download fails the command, ` +
-        `the ${walls.chooser.contract} chooser (from ${walls.chooser.from}) refuses agent external loads and passes user ones, and only browser.goto runs on the initial about:blank${skip ? `; ${PAGE_TABLE_SKIP}` : '; page table compared'}` +
+        `the ${walls.chooser.contract} chooser (from ${walls.chooser.from}) refuses agent external loads and passes user ones, and only browser.goto runs on the initial about:blank; ` +
+        `D-38: ${clipboard.bindings} clipboard key bindings (from ${clipboard.from}) refused to the agent with Control and Meta, the Clipboard methods [${clipboard.methods.join(', ')}] reject and [${clipboard.events.join(', ')}] are cancelled in every agent document; ` +
+        `D-39: ${permissions.pref} (from ${permissions.from}) set opposite the pinned default in [${permissions.variants.join(', ')}]${skip ? `; ${PAGE_TABLE_SKIP}` : '; page table compared'}` +
         (loginSkip ? '; login-manager group clause SKIP (no upstream/)' : '; the pinned LoginManager actor groups exclude the agent group'));
     return 0;
 }

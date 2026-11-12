@@ -357,6 +357,39 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
     would need agent downloads kept in an agent-only folder with a privacy sentence, the second a per-scheme allow list.
     Mechanism and checks: gap-closure plan 66-09.
 
+## The clipboard and site permissions (2026-11-11)
+
+- **D-38 — "No clipboard access".** Chris, 2026-11-11, answering the 66-VERIFICATION owner decision on the
+  clipboard; his choice: "No clipboard access". Agent tabs can neither write nor read the system clipboard.
+  - Cause (66-VERIFICATION): an agent's trusted click gives the page transient activation, and with it
+    `navigator.clipboard.writeText` and `document.execCommand('copy')` write the system clipboard
+    (`nsContentUtils.cpp:8450-8458`, no focus requirement), so a parked agent page could replace what the user pastes
+    next, for example into an Orca terminal. An agent `Control+v` pasted the user's clipboard into the page.
+  - Rule: page clipboard writes and reads (the async Clipboard API, `document.execCommand` copy, cut and paste, and
+    clipboard events) from an agent tab and its frames are refused. The agent's paste, copy and cut keys answer
+    `browser_command_unavailable`. Orca's agent methods have no clipboard command. Agents can still type text.
+  - Mechanism (no Gecko patch): Gecko has no per-browsing-context clipboard switch (the parent writes whatever a
+    content process sends), so the wall is content-side, in a second agent pair, `PowerBrowserAgentPage`, registered
+    for the agent message manager group only, all frames. At `DOMWindowCreated`, before any page script of the window
+    runs, `Clipboard.prototype`'s read, readText, write and writeText become the page's own `Promise.reject` bound to a
+    `NotAllowedError`. A trusted copy, cut or paste event is cancelled at the chrome event handler, ahead of every page
+    listener, so Gecko copies, cuts and pastes nothing (`nsCopySupport.cpp` `FireClipboardEvent`). That covers
+    `execCommand`, key and menu commands, middle-click paste and a page's `clipboardData`, also when the user acts in
+    an agent tab. The agent child refuses the clipboard bindings of Gecko's shortcut tables
+    (`ShortcutKeyDefinitions.cpp`) before sending any key. User tabs are unchanged.
+  - Residual (owner item): on Linux, Gecko copies a selection the agent itself makes by mouse or select-all into the
+    PRIMARY selection (`AutoCopyListener`). There is no per-document switch, so closing it would need a Gecko patch or
+    turning off `clipboard.autocopy` for the user too. Mechanism and checks: gap-closure plan 66-10.
+- **D-39 — "Separate per container".** Chris, 2026-11-11, answering the 66-VERIFICATION owner decision on site
+  permissions shared across containers; his choice: "Separate per container".
+  - `permissions.isolateBy.userContext` is true for all of PowerBrowser, set in both branding variants'
+    `firefox-branding.js` through `scripts/generate.mjs`, like `network.dns.disablePrefetch`. A permission granted to
+    an origin in one container (notifications, geolocation, camera or microphone remembered, a protocol handler) is
+    not used by that origin in another container. That includes the agent container and the user's default one, in
+    both directions, so the notification-click route to `clients.openWindow` needs a grant made in the agent container.
+  - Side effect accepted: every container, the user's own included, keeps separate permissions. Mechanism and checks:
+    gap-closure plan 66-10.
+
 ## Spikes this direction needs
 
 1. Browser parity: what an Orca browser tab can do, and how PB chrome provides it

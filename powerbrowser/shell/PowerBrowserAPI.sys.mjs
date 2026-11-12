@@ -11830,12 +11830,28 @@ function handleWebTabAgentStop(data, actorRef) {
 // events: Gecko creates the child only when agentRunInChild asks an agent overlay's top document for it.
 export class PowerBrowserAgentParent extends GroupActorBase {}
 
+// D-38 (66-10): the PowerBrowserAgentPage pair, an agent overlay's clipboard wall (GroupActorChild.sys.mjs). Every
+// document of an agent overlay, frames included, and nothing outside the agent group. DOMWindowCreated replaces the
+// async Clipboard API before page script runs; copy, cut and paste are caught capturing, ahead of every page listener.
+// The child sends nothing, so the parent has no message to answer.
+const AGENT_PAGE_ACTOR_NAME = "PowerBrowserAgentPage";
+export class PowerBrowserAgentPageParent extends GroupActorBase {}
+
 function registerAgentActor() {
   ChromeUtils.registerWindowActor(AGENT_ACTOR_NAME, {
     parent: { esModuleURI: GROUP_ACTOR_PARENT_MODULE },
     child: { esModuleURI: GROUP_ACTOR_CHILD_MODULE },
     messageManagerGroups: [AGENT_MESSAGE_MANAGER_GROUP],
     allFrames: false,
+  });
+  ChromeUtils.registerWindowActor(AGENT_PAGE_ACTOR_NAME, {
+    parent: { esModuleURI: GROUP_ACTOR_PARENT_MODULE },
+    child: {
+      esModuleURI: GROUP_ACTOR_CHILD_MODULE,
+      events: { DOMWindowCreated: {}, copy: { capture: true }, cut: { capture: true }, paste: { capture: true } },
+    },
+    messageManagerGroups: [AGENT_MESSAGE_MANAGER_GROUP],
+    allFrames: true,
   });
 }
 // ---- end Orca agent bridge ----

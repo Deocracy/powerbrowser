@@ -2899,6 +2899,15 @@ const FIREFOX_BRANDING_BASE_LINES = Object.freeze([
     '// Number of usages of the web console.',
     '// If this is less than 5, then pasting code into the web console is disabled',
     'pref("devtools.selfxss.count", 5);',
+    '',
+    '// --- D-39 (Phase 66 plan 10, owner ruling 2026-11-11, "Separate per container"):',
+    '// site permissions are kept per container. permissions.isolateBy.userContext',
+    '// defaults false (modules/libpref/init/StaticPrefList.yaml:16999-17002), and',
+    '// PermissionManager::MaybeStripOriginAttributes then drops the userContextId',
+    '// (extensions/permissions/PermissionManager.cpp:4456), so a grant made in one',
+    '// container is used by the same origin in every other, the agent',
+    '// container included. Every container keeps its own permissions; accepted. ---',
+    'pref("permissions.isolateBy.userContext", true);',
 ]);
 
 const FIREFOX_BRANDING_DEV_TAIL_LINES = Object.freeze([
