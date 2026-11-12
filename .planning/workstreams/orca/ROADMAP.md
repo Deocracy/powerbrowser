@@ -265,6 +265,9 @@ Plans:
 **Wave 6** *(gap closure, D-37)*
 - [x] 66-09-PLAN.md — gap closure (D-37): agent-overlay downloads (SANDBOXED_DOWNLOADS), external-protocol loads (agent-aware dispatch chooser) and commands on the initial about:blank refused; Phase 67 follow-ups (logo gate on Orca ready, reload barrier for WINDOWS 47, sender-wall plants); orca-browser-tab-scope walls clause, orca-browser-agent-live clauses (o), (p), (q) (BRW-03)
 
+**Wave 7** *(gap closure, D-38, D-39)*
+- [x] 66-10-PLAN.md — gap closure (D-38, D-39): agent tabs get no clipboard access (Clipboard API rejected, copy/cut/paste cancelled, clipboard keys refused); site permissions kept per container (permissions.isolateBy.userContext); orca-browser-agent-live clauses (r) and (s)
+
 **UI hint**: yes
 
 The Phase 61 parity result may split or descope this phase. Any such change is an owner decision recorded in `DECISIONS.md`.

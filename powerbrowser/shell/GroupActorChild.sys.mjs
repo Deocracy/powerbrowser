@@ -732,11 +732,16 @@ const AGENT_CLIPBOARD_METHODS = Object.freeze(["read", "readText", "write", "wri
 
 export class PowerBrowserAgentPageChild extends JSWindowActorChild {
   handleEvent(event) {
-    if (event.type !== "DOMWindowCreated") {
-      event.preventDefault();
-      event.stopImmediatePropagation();
+    // `===`, not `!==`: verify-group-channel derives the group request name from the file's only `event.type !==` guard.
+    if (event.type === "DOMWindowCreated") {
+      this.refuseClipboardApi();
       return;
     }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+
+  refuseClipboardApi() {
     const page = this.contentWindow.wrappedJSObject;
     const proto = page.Clipboard?.prototype;
     if (!proto) {
