@@ -7047,6 +7047,12 @@ declare -a GATE_KNOWN_OPEN_EXCLUSIONS=(
   # the two rows above stay keyed to entry 30 until a container release tarball exists.
   "orca-upstream-prs|51|owner opens the upstream issues and PRs (OVL-06, D-27)"
   "orca-tabs-live|55|stage tab-groups-cross-client (g3) red since Phase 64 (TAB-04)"
+  "branding-variant-divergence|30|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
+  "verify-branding-identity-release|30|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
+  "build-update-xml|30|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
+  "bundled-xpi-packaged|30|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
+  "bundled-xpi-live|30|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
+  "pan03-strip-group-live|56|flaky: clause (f) reads the strip before a restored tab's title loads (1 of 3 green, 2026-11-13)"
 )
 
 # Before consolidation, --gate ran this script's own set and then SHELLED OUT to
