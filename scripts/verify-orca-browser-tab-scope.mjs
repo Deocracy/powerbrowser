@@ -945,7 +945,7 @@ export function clipboardEvents(list) {
 /** The child's tables, functions and the page class, evaluated over a stub actor base. */
 function loadChild(childText) {
     const context = vm.createContext({ JSWindowActorChild: class {}, Cc: {}, Ci: {}, Object, Array, Set, Map, Error, Promise, String, JSON });
-    return vm.runInContext(`${childText.replace(/^export /gm, '')}\n;({ agentPress, AGENT_CLIPBOARD_KEYS, AGENT_CLIPBOARD_METHODS, PowerBrowserAgentPageChild, AgentRowError })`, context, { filename: CHILD });
+    return vm.runInContext(`${childText.replace(/^export /gm, '')}\n;({ agentPress, AGENT_CLIPBOARD_KEYS, AGENT_CLIPBOARD_METHODS, AGENT_CLIPBOARD_EVENTS, PowerBrowserAgentPageChild, AgentRowError })`, context, { filename: CHILD });
 }
 
 const setDiff = (a, b) => a.filter(x => !b.includes(x));
@@ -1020,8 +1020,11 @@ export async function clipboardClause(sliced, text, childText, upstream = {}) {
         if (reg.child?.esModuleURI !== agentReg?.child?.esModuleURI) failures.push(`clipboard: the ${AGENT_PAGE_ACTOR} child module is not the agent child's`);
         const ev = reg.child?.events ?? {};
         if (!ev.DOMWindowCreated) failures.push(`clipboard: the ${AGENT_PAGE_ACTOR} pair does not listen for DOMWindowCreated, so the Clipboard methods are never replaced`);
-        for (const e of events) if (ev[e]?.capture !== true || ev[e]?.mozSystemGroup) failures.push(`clipboard: the ${AGENT_PAGE_ACTOR} pair does not catch ${e} capturing in the default group, so a page listener runs first or the event writes`);
+        // Gecko adds a pair's registered events to every content window root, whatever its groups, and a cut or copy listener
+        // in a field's event chain enables Cut and Copy on a collapsed caret (EditorBase::CheckForClipboardCommandListener).
+        for (const e of events) if (ev[e]) failures.push(`clipboard: the ${AGENT_PAGE_ACTOR} pair registers ${e}, which Gecko listens for on every tab's window root, so Cut and Copy stay enabled on every collapsed caret in every tab`);
     }
+    for (const e of setDiff(events, [...(child.AGENT_CLIPBOARD_EVENTS ?? [])])) failures.push(`clipboard: the pinned clipboard event class has ${e}, which the child's AGENT_CLIPBOARD_EVENTS leaves to the page`);
     if (!new RegExp(`export class ${AGENT_PAGE_ACTOR}Child extends JSWindowActorChild`).test(childText)) failures.push(`clipboard: ${CHILD} exports no ${AGENT_PAGE_ACTOR}Child class`);
     if (!new RegExp(`export class ${AGENT_PAGE_ACTOR}Parent extends`).test(text)) failures.push(`clipboard: ${API} exports no ${AGENT_PAGE_ACTOR}Parent class`);
 
@@ -1030,10 +1033,13 @@ export async function clipboardClause(sliced, text, childText, upstream = {}) {
     const proto = { ...originals };
     class FakeDOMException extends Error { constructor(message, name) { super(message); this.name = name; } }
     const page = { Clipboard: { prototype: proto }, Promise, DOMException: FakeDOMException };
-    const actor = Object.assign(new child.PowerBrowserAgentPageChild(), { contentWindow: { wrappedJSObject: page } });
+    // The overlay's chrome event handler records each listener the child adds to it.
+    const added = [];
+    const docShell = { chromeEventHandler: { addEventListener: (type, listener, options) => added.push({ type, listener, options }) } };
+    const actor = Object.assign(new child.PowerBrowserAgentPageChild(), { contentWindow: { wrappedJSObject: page }, docShell });
     try {
         actor.handleEvent({ type: 'DOMWindowCreated' });
-        Object.assign(new child.PowerBrowserAgentPageChild(), { contentWindow: { wrappedJSObject: { Promise, DOMException: FakeDOMException } } }).handleEvent({ type: 'DOMWindowCreated' });
+        Object.assign(new child.PowerBrowserAgentPageChild(), { contentWindow: { wrappedJSObject: { Promise, DOMException: FakeDOMException } }, docShell }).handleEvent({ type: 'DOMWindowCreated' });
     } catch (err) {
         failures.push(`clipboard: the page child threw at DOMWindowCreated (${err.message})`);
     }
@@ -1051,8 +1057,11 @@ export async function clipboardClause(sliced, text, childText, upstream = {}) {
     }
     for (const type of events) {
         const seen = [];
+        const mine = added.filter(a => a.type === type);
+        const capturing = mine.filter(a => (a.options === true || a.options?.capture === true) && !a.options?.mozSystemGroup);
+        if (!capturing.length) failures.push(`clipboard: the ${AGENT_PAGE_ACTOR} child does not catch ${type} capturing in the default group on the overlay's chrome event handler, so a page listener runs first or the event writes`);
         try {
-            actor.handleEvent({ type, preventDefault: () => seen.push('prevent'), stopImmediatePropagation: () => seen.push('stop') });
+            for (const { listener } of capturing) listener({ type, preventDefault: () => seen.push('prevent'), stopImmediatePropagation: () => seen.push('stop') });
         } catch (err) {
             seen.push(`threw ${err.message}`);
         }
@@ -1283,12 +1292,15 @@ async function selfTest() {
         ['the Clipboard methods not replaced', { child: swap('      Object.defineProperty(proto, name, { value: refuse, writable: false, configurable: false });\n', '') }, "clipboard: an agent page's navigator.clipboard.writeText answered original"],
         ['the replaced methods left writable', { child: swap('{ value: refuse, writable: false, configurable: false }', '{ value: refuse, writable: true, configurable: true }') }, 'stays writable or configurable'],
         ['readText left to the page', { child: swap('["read", "readText", "write", "writeText"]', '["read", "write", "writeText"]') }, 'the pinned Clipboard interface has readText, which the page wall leaves to the page'],
-        ['clipboard events not cancelled', { child: swap("    event.preventDefault();\n    event.stopImmediatePropagation();\n  }\n\n  refuseClipboardApi", "    event.stopImmediatePropagation();\n  }\n\n  refuseClipboardApi") }, 'clipboard: a trusted copy in an agent page was stop'],
+        ['clipboard events not cancelled', { child: swap("function agentClipboardCancel(event) {\n  event.preventDefault();\n", "function agentClipboardCancel(event) {\n") }, 'clipboard: a trusted copy in an agent page was stop'],
         ['the page pair not registered', { api: s => s.replace(/  ChromeUtils\.registerWindowActor\(AGENT_PAGE_ACTOR_NAME, \{[\s\S]*?\n  \}\);\n/, '') }, 'no PowerBrowserAgentPage pair is registered'],
         ['the page pair top-frame only', { api: swap('messageManagerGroups: [AGENT_MESSAGE_MANAGER_GROUP],\n    allFrames: true,', 'messageManagerGroups: [AGENT_MESSAGE_MANAGER_GROUP],\n    allFrames: false,') }, 'pair is top-frame only'],
         ['the page pair in the browsers group too', { api: swap('messageManagerGroups: [AGENT_MESSAGE_MANAGER_GROUP],\n    allFrames: true,', 'messageManagerGroups: [AGENT_MESSAGE_MANAGER_GROUP, "browsers"],\n    allFrames: true,') }, 'pair is registered for ["powerbrowser-orca-agent","browsers"]'],
-        ['paste not caught capturing', { api: swap('paste: { capture: true } }', 'paste: {} }') }, 'does not catch paste capturing'],
-        ['DOMWindowCreated not listened for', { api: swap('events: { DOMWindowCreated: {}, ', 'events: { ') }, 'does not listen for DOMWindowCreated'],
+        ['clipboard caught bubbling', { child: swap('addEventListener(type, agentClipboardCancel, true)', 'addEventListener(type, agentClipboardCancel, false)') }, 'does not catch copy capturing'],
+        ['paste left out of the child events', { child: swap('["copy", "cut", "paste"]', '["copy", "cut"]') }, "has paste, which the child's AGENT_CLIPBOARD_EVENTS leaves to the page"],
+        // The 39-16 edit-greying regression: registered clipboard events reach every tab's window root.
+        ['clipboard events registered on the pair', { api: swap('events: { DOMWindowCreated: {} },', 'events: { DOMWindowCreated: {}, copy: { capture: true } },') }, 'pair registers copy, which Gecko listens for on every tab'],
+        ['DOMWindowCreated not listened for', { api: swap('events: { DOMWindowCreated: {} },', 'events: {},') }, 'does not listen for DOMWindowCreated'],
         // D-39 (66-10): the isolation pref in each branding variant.
         ['the pref missing from dev', { branding: b => ({ ...b, dev: b.dev.replace('pref("permissions.isolateBy.userContext", true);\n', '') }) }, 'dev/pref/firefox-branding.js sets permissions.isolateBy.userContext to [nothing]'],
         ['the pref false in release', { branding: b => ({ ...b, release: b.release.replace('pref("permissions.isolateBy.userContext", true);', 'pref("permissions.isolateBy.userContext", false);') }) }, 'release/pref/firefox-branding.js sets permissions.isolateBy.userContext to [false]'],

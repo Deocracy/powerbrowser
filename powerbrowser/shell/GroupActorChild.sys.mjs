@@ -728,17 +728,28 @@ export class PowerBrowserAgentChild extends JSWindowActorChild {
 // copy, cut or paste is cancelled at the chrome event handler, ahead of every page listener, so Gecko writes nothing
 // and pastes nothing (nsCopySupport.cpp FireClipboardEvent: no default action, an empty clipboardData): that covers
 // execCommand copy, cut and paste, key and menu commands, middle-click paste and a page's clipboardData. No import.
+// The clipboard listeners go on this overlay's own chrome event handler, never in the pair's registered events: Gecko
+// adds registered events to every content window root whatever the group (JSActorService::RegisterChromeEventTarget),
+// and a cut or copy listener in a field's event chain enables Cut and Copy on every collapsed caret in every tab
+// (EditorBase::CheckForClipboardCommandListener).
 const AGENT_CLIPBOARD_METHODS = Object.freeze(["read", "readText", "write", "writeText"]);
+const AGENT_CLIPBOARD_EVENTS = Object.freeze(["copy", "cut", "paste"]);
+
+// One module function, so a second document of the same overlay adds no second listener.
+function agentClipboardCancel(event) {
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}
 
 export class PowerBrowserAgentPageChild extends JSWindowActorChild {
   handleEvent(event) {
     // `===`, not `!==`: verify-group-channel derives the group request name from the file's only `event.type !==` guard.
     if (event.type === "DOMWindowCreated") {
+      for (const type of AGENT_CLIPBOARD_EVENTS) {
+        this.docShell.chromeEventHandler.addEventListener(type, agentClipboardCancel, true);
+      }
       this.refuseClipboardApi();
-      return;
     }
-    event.preventDefault();
-    event.stopImmediatePropagation();
   }
 
   refuseClipboardApi() {

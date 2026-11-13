@@ -11831,9 +11831,9 @@ function handleWebTabAgentStop(data, actorRef) {
 export class PowerBrowserAgentParent extends GroupActorBase {}
 
 // D-38 (66-10): the PowerBrowserAgentPage pair, an agent overlay's clipboard wall (GroupActorChild.sys.mjs). Every
-// document of an agent overlay, frames included, and nothing outside the agent group. DOMWindowCreated replaces the
-// async Clipboard API before page script runs; copy, cut and paste are caught capturing, ahead of every page listener.
-// The child sends nothing, so the parent has no message to answer.
+// document of an agent overlay, frames included, nothing outside the agent group; the child sends nothing. DOMWindowCreated replaces the
+// async Clipboard API before page script runs and puts the copy, cut and paste cancel on the overlay's own chrome event
+// handler, capturing, ahead of every page listener; never registered here, where it would reach every tab's window root.
 const AGENT_PAGE_ACTOR_NAME = "PowerBrowserAgentPage";
 export class PowerBrowserAgentPageParent extends GroupActorBase {}
 
@@ -11848,7 +11848,7 @@ function registerAgentActor() {
     parent: { esModuleURI: GROUP_ACTOR_PARENT_MODULE },
     child: {
       esModuleURI: GROUP_ACTOR_CHILD_MODULE,
-      events: { DOMWindowCreated: {}, copy: { capture: true }, cut: { capture: true }, paste: { capture: true } },
+      events: { DOMWindowCreated: {} },
     },
     messageManagerGroups: [AGENT_MESSAGE_MANAGER_GROUP],
     allFrames: true,
