@@ -21,10 +21,11 @@
 
 import { spawn } from 'node:child_process';
 import { appendFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
-import { existsSync, createWriteStream, readFileSync } from 'node:fs';
+import { existsSync, createWriteStream, readdirSync, readFileSync } from 'node:fs';
 import { aliasPathFor, bridgeDirFor, dataRootFor, nodePlatform } from '../../powerbrowser/shell/OrcaEnv.sys.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -77,6 +78,43 @@ const launchedPids = new Set();
 /** The pids of the browsers this process launched through withFirefoxPage that have not exited. */
 export function launchedBrowserPids() {
     return [...launchedPids];
+}
+
+// WINDOWS 54: a packaged row ends PowerBrowser with SIGTERM/SIGKILL, not a quit, so its OrcaService leaves orcad and
+// its terminal daemon running from the extraction root the row then deletes. Teardown stops them by recorded identity:
+// an argument under this run's own mkdtemp root, started no earlier than this run's browser, and pid plus start ticks
+// at signal time (signalIdentity). Never by name, so another session's orcad survives.
+
+/** The run's package extraction root when binPath lies under a <tmpdir>/pb-pkg-* folder (lib/built-tree.mjs extractPackage), else null. */
+export function extractionRootOf(binPath, tmp = tmpdir()) {
+    const rel = relative(resolve(tmp), resolve(binPath));
+    const first = rel.split(sep)[0];
+    if (!rel || isAbsolute(rel) || first === rel || !first.startsWith('pb-pkg-')) return null;
+    return join(resolve(tmp), first);
+}
+
+/** procs: [{ pid, argv, ticks }]. Those with an argument under root that started at or after `since` (start ticks; null: any). */
+export function strayUnder(root, procs, since = null) {
+    return procs.filter((p) => p.argv.some((a) => a.startsWith(`${root}/`)) && (since === null || Number(p.ticks) >= Number(since)));
+}
+
+const argvOf = (pid) => { try { return readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean); } catch { return []; } };
+
+/** Stops every process strayUnder(root, <all processes>, since) names: SIGTERM, up to 10 s, then SIGKILL. Returns the count. */
+export async function stopStrays(root, { since = null, label = 'firefox-bidi' } = {}) {
+    const { startTicks, signalIdentity } = await import('../verify-orca-hidden-electron.mjs');
+    let names;
+    try { names = readdirSync('/proc'); } catch { return 0; }
+    const procs = names.filter((n) => /^\d+$/.test(n) && Number(n) !== process.pid)
+        .map((n) => ({ pid: Number(n), argv: argvOf(Number(n)), ticks: startTicks(Number(n)) })).filter((p) => p.ticks !== null);
+    const found = strayUnder(root, procs, since);
+    if (!found.length) return 0;
+    for (const p of found) signalIdentity(p.pid, p.ticks, 'SIGTERM');
+    const until = Date.now() + 10000;
+    while (Date.now() < until && found.some((p) => startTicks(p.pid) === p.ticks)) await new Promise((r) => setTimeout(r, 250));
+    for (const p of found) signalIdentity(p.pid, p.ticks, 'SIGKILL');
+    console.log(`${label}: stopped ${found.length} process(es) left running from the extracted package ${root}`);
+    return found.length;
 }
 
 /**
@@ -449,6 +487,8 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
         launchedPids.add(child.pid);
         child.once('exit', () => launchedPids.delete(child.pid));
     }
+    const pkgRoot = extractionRootOf(binPath);
+    const launchTicks = pkgRoot && child.pid ? (await import('../verify-orca-hidden-electron.mjs')).startTicks(child.pid) : null;
     if (stdoutSink) {
         child.stdout.pipe(stdoutSink);
     }
@@ -475,6 +515,7 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
                 child.once('exit', () => { clearTimeout(timer); resolve(); });
             });
         }
+        if (pkgRoot && launchTicks !== null) await stopStrays(pkgRoot, { since: launchTicks });
         if (stdoutSink) {
             await new Promise(resolve => stdoutSink.end(resolve));
         }

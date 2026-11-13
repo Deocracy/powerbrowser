@@ -3938,7 +3938,8 @@ run_own_checks() {
     "build-orca-portable-self-test|node $REPO_ROOT/scripts/verify-build-orca-portable.mjs --self-test"
     # The macOS Orca merge plan from Orca's own tables: unpaired arch-named file, differing file, zero-pair table (P68-31).
     "orca-macos-merge-self-test|node $REPO_ROOT/scripts/lib/orca-artifacts.mjs --self-test"
-    # The packaged-live verdicts over fixtures: a Node from elsewhere, a web root outside GreD, a survivor, no pairing.
+    # The packaged-live verdicts over fixtures: a Node from elsewhere, a web root outside GreD, a survivor, no pairing;
+    # and the shared packaged teardown (lib/firefox-bidi.mjs, WINDOWS 54): extraction root from binPath, strays by root+ticks.
     "orca-packaged-live-self-test|node $REPO_ROOT/scripts/verify-orca-packaged-live.mjs --self-test"
     # NEW (68-07, BEXT-01, P68-38): orcad loads the Claude agent SDK only from ORCA_CLAUDE_AGENT_SDK_DIR (seam 070):
     # the bundled loader runs S1-S5 in child nodes; the variable name carries no PowerBrowser token; the OrcaEnv table
