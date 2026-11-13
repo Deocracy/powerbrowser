@@ -1,5 +1,5 @@
 {
-  "ledger_version": 421,
+  "ledger_version": 424,
   "frozen_at": "2026-09-27",
   "items": [
     {
@@ -967,7 +967,7 @@
     {
       "id": "NG-075",
       "text": "A Windows MSIX package is built. Evidence: docs/BUILD.md:966-967 staged-unexecuted; PKG-01 box checked (v1.1-REQUIREMENTS.md:31).",
-      "status": "deferred-requested",
+      "status": "deferred-approved",
       "spec_ref": "docs/non-gui/GAPS.md:105",
       "test_ref": "",
       "code_ref": "",
@@ -1045,7 +1045,7 @@
     {
       "id": "NG-081",
       "text": "Per-fixture Gecko builds (BLD-02) and fixture live builds (VER-03, DOC-02) run. Evidence: v1.0 07-VERIFICATION.md:18, 75 \"NOT RUN\".",
-      "status": "deferred-requested",
+      "status": "deferred-approved",
       "spec_ref": "docs/non-gui/GAPS.md:111",
       "test_ref": "",
       "code_ref": "",
@@ -1149,7 +1149,7 @@
     {
       "id": "NG-089",
       "text": "UAT sheets 10, 13, 14, 14.1, 14.1.1 and 15 have no pending result, and each records a React 19 runtime result (UAT-01).",
-      "status": "deferred-requested",
+      "status": "deferred-approved",
       "spec_ref": ".planning/REQUIREMENTS.md UAT-01",
       "test_ref": "scripts/verify-ng-089-uat-sheets.mjs::ng089-uat-sheets",
       "code_ref": ".planning/milestones UAT sheets 10, 13, 14, 14.1, 14.1.1, 15",
