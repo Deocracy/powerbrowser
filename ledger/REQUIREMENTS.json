@@ -1,5 +1,5 @@
 {
-  "ledger_version": 414,
+  "ledger_version": 421,
   "frozen_at": "2026-09-27",
   "items": [
     {
@@ -967,15 +967,15 @@
     {
       "id": "NG-075",
       "text": "A Windows MSIX package is built. Evidence: docs/BUILD.md:966-967 staged-unexecuted; PKG-01 box checked (v1.1-REQUIREMENTS.md:31).",
-      "status": "open",
+      "status": "deferred-requested",
       "spec_ref": "docs/non-gui/GAPS.md:105",
       "test_ref": "",
       "code_ref": "",
       "evidence": "",
       "owner": "chris",
-      "phase": "999.2",
-      "deferred_at": "2026-09-25",
-      "reason": "Chris 2026-11-08 D-14 reopened for v1.7, Windows MSIX waits for a later v1.7 phase, R15 drop withdrawn"
+      "phase": "59",
+      "deferred_at": "2026-11-12",
+      "reason": "Windows MSIX is out of scope per R15 (CF-12)"
     },
     {
       "id": "NG-076",
@@ -1006,15 +1006,15 @@
     {
       "id": "NG-078",
       "text": "A release pipeline exists, per docs/RELEASING.md and SEED-001. Evidence: RELEASING.md:11-12; SEED-001 dormant; no release.yml.",
-      "status": "open",
+      "status": "done",
       "spec_ref": "docs/non-gui/GAPS.md:108",
-      "test_ref": "",
+      "test_ref": "scripts/verify-release-shape.mjs::release-shape",
       "code_ref": "",
-      "evidence": "",
+      "evidence": "Superseded by DIST-02 (release-shape: release.yml dispatch-only, gated build; passes), DIST-07 (release-asset-set: draft asset set equals 9 derived names; passes) and release-identity (passes). See .planning/CARRY-FORWARD-v1.7.md CF-12. REL-03 has no static registry check in scripts/ or REQUIREMENTS.md.",
       "owner": "chris",
       "phase": "59",
       "deferred_at": "2026-09-25",
-      "reason": "Chris 2026-11-08 D-14 reopened for v1.7, Phase 59 plan 59-05 records the release pipeline as evidence"
+      "reason": "Superseded by DIST-02, DIST-07 (check release-shape, release-asset-set); REL-03 has no static check"
     },
     {
       "id": "NG-079",
@@ -1032,28 +1032,28 @@
     {
       "id": "NG-080",
       "text": "A production crash-ingest host receives reports. Evidence: collector is loopback only (scripts/crash-collector.mjs:27, 89, 343).",
-      "status": "open",
+      "status": "done",
       "spec_ref": "docs/non-gui/GAPS.md:110",
-      "test_ref": "",
+      "test_ref": "scripts/verify-worker-submit.mjs::crash-submit",
       "code_ref": "",
-      "evidence": "",
+      "evidence": "Superseded by TEL-07 (crash-submit, verify-crash-collector, both pass: receiver Worker speaks the collector contract), TEL-09 (crash-ping-consent passes) and TEL-13 (crash-autosubmit-lock and crash-autosubmit-env pass). See .planning/CARRY-FORWARD-v1.7.md CF-12. Static contract only; no live receiver call was run.",
       "owner": "chris",
       "phase": "59",
       "deferred_at": "2026-09-25",
-      "reason": "Chris 2026-11-08 D-14 reopened for v1.7, closes in Phase 59 plan 59-05 with the live crash receiver and TEL-13"
+      "reason": "Superseded by TEL-07, TEL-09, TEL-13 (check crash-submit, crash-ping-consent, crash-autosubmit-lock); static contract only"
     },
     {
       "id": "NG-081",
       "text": "Per-fixture Gecko builds (BLD-02) and fixture live builds (VER-03, DOC-02) run. Evidence: v1.0 07-VERIFICATION.md:18, 75 \"NOT RUN\".",
-      "status": "open",
+      "status": "deferred-requested",
       "spec_ref": "docs/non-gui/GAPS.md:111",
       "test_ref": "",
       "code_ref": "",
       "evidence": "",
       "owner": "chris",
-      "phase": "999.2",
-      "deferred_at": "2026-09-25",
-      "reason": "Chris 2026-11-08 D-14 reopened for v1.7, per-fixture Gecko builds wait for a later v1.7 phase"
+      "phase": "59",
+      "deferred_at": "2026-11-12",
+      "reason": "Per-fixture Gecko builds (BLD-02) and fixture live builds stay deferred (CF-12)"
     },
     {
       "id": "NG-082",
@@ -1149,15 +1149,15 @@
     {
       "id": "NG-089",
       "text": "UAT sheets 10, 13, 14, 14.1, 14.1.1 and 15 have no pending result, and each records a React 19 runtime result (UAT-01).",
-      "status": "open",
+      "status": "deferred-requested",
       "spec_ref": ".planning/REQUIREMENTS.md UAT-01",
       "test_ref": "scripts/verify-ng-089-uat-sheets.mjs::ng089-uat-sheets",
       "code_ref": ".planning/milestones UAT sheets 10, 13, 14, 14.1, 14.1.1, 15",
       "evidence": "",
       "owner": "chris",
-      "phase": "26",
-      "deferred_at": "2026-10-19",
-      "reason": "Chris 2026-11-08 D-14 reopened for v1.7, Phase 59 plan 59-06 records the UAT sheet results"
+      "phase": "59",
+      "deferred_at": "2026-11-12",
+      "reason": "UAT sheets 10, 13, 14, 14.1, 14.1.1, 15 stay deferred, WINDOWS.md 35 (CF-12)"
     }
   ],
   "current_phase": null,
