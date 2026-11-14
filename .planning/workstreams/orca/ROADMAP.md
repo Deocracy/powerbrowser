@@ -10,7 +10,7 @@ Owner decisions D-01..D-31 (`DECISIONS.md`) and the adopted adversarial review (
 
 ## Milestones
 
-- **v1.7 Orca integration** — Phases 60–67 (planning; workstream `orca`; requirements in `.planning/workstreams/orca/REQUIREMENTS.md`)
+- **v1.7 Orca integration** — Phases 59–68 (executed; workstream `orca`; requirements in `.planning/workstreams/orca/REQUIREMENTS.md`)
 
 ## Hard constraints (every phase)
 
@@ -154,7 +154,7 @@ Route chosen by Phase 61: agent sessions run the plain `claude` CLI in a termina
   3. A Claude Code extension session on an Orca worktree appears in Orca with live hook status, through a pane PB's wrapper creates with `terminal.create` and the `ORCA_AGENT_HOOK_*` variables it passes. The wrapper finds orcad's data root through `orcad-data-root`, a file that is 0600 from creation in PowerBrowser's 0700 bridge folder. The extension half runs with EXT-01 in the end-of-milestone pass.
   4. Quitting PowerBrowser ends every agent, orcad and Orca's terminal daemon: the checks record those processes before the quit and find none of them after (D-07; Phase 62's stop path).
 
-**Plans**: 3/3 plans executed (3 more superseded by D-31)
+**Plans**: 6/6 plan files have a SUMMARY (3 executed, 3 superseded by D-31)
 
 Plans:
 **Wave 1**
@@ -241,7 +241,7 @@ Route chosen by Phase 61: S2, a PB runtime client that attaches through browser.
   3. While an agent drives a tab, PB's Theia chrome bar shows an "agent is controlling this tab" mark with a Stop button, and Stop ends that control. A stock browser window shows no mark.
   4. Each user-facing tool in the Phase 61 browser inventory is reachable from PB's chrome bar or a Theia side panel. A check compares the inventory's user-facing rows to PB's contributions as a set.
 
-**Plans**: 9/9 plans executed (executes only after Phase 64 is merged)
+**Plans**: 10/10 plans executed (executes only after Phase 64 is merged)
 
 Plans:
 **Wave 1**
@@ -357,9 +357,9 @@ Phases execute in numeric order: 59 → 60 → 61 → 62 → 63 → 64 → 65 �
 | 60. Orca from source on Theia's Node | 4/5 | In Progress | - |
 | 61. Spikes for pane hosting, browser parity and live sharing | 4/4 | Complete (human items deferred) | 2026-11-10 |
 | 62. Overlay gate and PowerBrowser-run orcad | 3/3 | Complete | 2026-11-09 |
-| 63. Agent hooks on Orca's terminal engine | 3/3 | Complete (human items deferred) | 2026-11-10 |
+| 63. Agent hooks on Orca's terminal engine | 6/6 (3 executed, 3 superseded) | Complete (human items deferred) | 2026-11-10 |
 | 64. Orca panes as PowerBrowser tabs | 6/6 | In Progress (64-06 gap closure executed; TAB-04 pending on stage g3, g2 PASS on the 65-05 tree) | - |
 | 65. Orca workspace in Theia | 5/5 | Complete (human items deferred; verified 8/8) | 2026-11-10 |
-| 66. PowerBrowser web tabs as Orca's browser | 9/9 | In Progress | - |
+| 66. PowerBrowser web tabs as Orca's browser | 10/10 | In Progress | - |
 | 67. Hosting hardening | 7/7 | In Progress (67-07 gap closure executed; verify-work pending) | - |
 | 68. Three-OS artifacts, weekly re-pin and upstream seams | 10/10 | In Progress | - |

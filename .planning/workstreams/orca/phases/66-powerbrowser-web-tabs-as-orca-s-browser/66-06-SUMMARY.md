@@ -41,6 +41,7 @@ actuals:
   commits: 36    # git rev-list --count aba9f691..HEAD with this file's commit: 19 on the first-parent line, 17 lane commits brought by the merges
 plan_head_before: aba9f691
 plan_head_after: "the commit that adds this file"
+requirements-completed: [BRW-04, BRW-05]
 ---
 
 # Phase 66 Plan 06: coordinator, Phase 66 merged, built and proven live (one owner blocker) Summary

@@ -43,6 +43,7 @@ plan_head_task1_last_code: 7e31d172
 metrics:
   completed: 2026-11-11
   tasks_done: "3 of 3"
+requirements-completed: [BEXT-01, BEXT-02]
 ---
 
 # Phase 68 Plan 06: Coordinator Summary

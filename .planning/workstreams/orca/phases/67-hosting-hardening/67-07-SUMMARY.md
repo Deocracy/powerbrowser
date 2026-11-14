@@ -45,6 +45,7 @@ actuals:
   commits: 5
 plan_head_before: 59c15f6ded986c4091af9d720137d52e76182397
 plan_head_after: b85fa06c87e329671b0b28191d86b21833517fd7
+requirements-completed: [RUN-06, RUN-07, RUN-08, RUN-09, INJ-01]
 ---
 
 # Phase 67 Plan 07: Restart re-pair keeps Orca's environment id; landing remount leg

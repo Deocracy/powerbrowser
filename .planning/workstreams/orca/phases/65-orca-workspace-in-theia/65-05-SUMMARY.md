@@ -59,6 +59,7 @@ actuals:
   commits: 34  # git rev-list --count 29e2021e..ffc48715: 4 merges, 15 lane commits, 15 coordinator commits (19 first-parent); the SUMMARY/tracking commit follows
 plan_head_before: 29e2021ef4d87ffc43c8111d0eefd8f7640b3673
 plan_head_after: ffc487155e5c54750cbe0c69890d182b083d9dec
+requirements-completed: [TAB-05, TAB-07, TAB-08, TAB-09]
 ---
 
 # Phase 65 Plan 05: Phase 65 coordinator Summary

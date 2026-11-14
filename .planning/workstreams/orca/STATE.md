@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
 milestone: v1.7
-current_phase: 59
-current_phase_name: Carry-forward from v1.5 and v1.6
-status: executing
-stopped_at: Completed 66-10-PLAN.md
-last_updated: "2026-11-11T21:08:06.463Z"
-last_activity: 2026-11-08
-last_activity_desc: Phase 59 execution started
+current_phase: 68
+current_phase_name: Three-OS artifacts, weekly re-pin and upstream seams
+status: executed, verification pending
+stopped_at: v1.7 milestone audit (gaps_found), 5d05e3ad
+last_updated: "2026-11-13T00:00:00.000Z"
+last_activity: 2026-11-13
+last_activity_desc: v1.7 milestone audit (gaps_found)
 state_head: a625378d3323a73fe4e1b4cebedafa2ac8140d57
 progress:
   total_phases: 10
   completed_phases: 4
-  total_plans: 64
-  completed_plans: 60
+  total_plans: 65
+  completed_plans: 62
 milestone_name: Orca integration
 ---
 
@@ -25,23 +25,23 @@ See: .planning/PROJECT.md (shared project file; its "Current Milestone" section 
 Scope: .planning/workstreams/orca/REQUIREMENTS.md. Owner decisions: .planning/workstreams/orca/DECISIONS.md (D-01..D-29). Roadmap: .planning/workstreams/orca/ROADMAP.md.
 
 **Core value (this milestone):** Theia is the default GUI; Orca's agent workflow runs inside PowerBrowser as real PowerBrowser tabs, with PowerBrowser's own engine and chrome as the agents' browser.
-**Current focus:** Phase 59 — Carry-forward from v1.5 and v1.6
+**Current focus:** v1.7 milestone audit gaps (phases 61-68 executed; owner plans 59-05/06/07 and 60-05 pending)
 
 ## Current Position
 
-Phase: 59 (Carry-forward from v1.5 and v1.6) — EXECUTING
-Plan: 1 of 7
-Status: Executing Phase 59
-Last activity: 2026-11-08 — Phase 59 execution started
+Phase: 68 (Three-OS artifacts, weekly re-pin and upstream seams) — EXECUTED (68-01..68-10); verification pending
+Plan: 68-10 of 10; phases 59 and 60 partially executed (owner plans 59-05, 59-06, 59-07 and 60-05 pending)
+Status: Milestone audit found gaps (v1.7-MILESTONE-AUDIT.md)
+Last activity: 2026-11-13 — v1.7 milestone audit (gaps_found)
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█████████░] 62 of 65 plan files have a SUMMARY (3 are superseded stubs)
 
 ## Phases
 
 | Phase | Name | Requirements | Status |
 |-------|------|--------------|--------|
-| 59 | Carry-forward from v1.5 and v1.6 | CF-01..CF-19 (`.planning/CARRY-FORWARD-v1.7.md`) | Not started |
-| 60 | Orca from source on Theia's Node | RUN-01, RUN-02, OVL-04, EXT-01 | Executed 4/5 (EXT-01 deferred) |
+| 59 | Carry-forward from v1.5 and v1.6 | CF-01..CF-19 (`.planning/CARRY-FORWARD-v1.7.md`) | Partially executed (59-05, 59-06, 59-07 owner plans pending) |
+| 60 | Orca from source on Theia's Node | RUN-01, RUN-02, OVL-04, EXT-01 | Partially executed 4/5 (60-05 EXT-01 owner plan pending) |
 | 61 | Spikes for pane hosting, browser parity and live sharing | TAB-03, BRW-01, EXT-03 | Complete (human items deferred) |
 | 62 | Overlay gate and PowerBrowser-run orcad | OVL-01, OVL-05, RUN-03, RUN-04, RUN-05 | Complete |
 | 63 | Agent hooks on Orca's terminal engine (rescoped by D-31) | TERM-02, EXT-02 | Complete (human items deferred) |
@@ -49,7 +49,7 @@ Progress: [░░░░░░░░░░] 0%
 | 65 | Orca workspace in Theia | TAB-05, TAB-07, TAB-08, TAB-09 | Complete (verified 8/8, human items deferred) |
 | 66 | PowerBrowser web tabs as Orca's browser | BRW-02, BRW-03, BRW-04, BRW-05 | Executed (66-06, 66-07, 66-08, 66-09, 66-10); BRW-02, BRW-03, BRW-04, BRW-05 complete |
 | 67 | Hosting hardening | RUN-06, RUN-07, RUN-08, RUN-09, INJ-01 | Executed (67-01..67-07; 67-07 gap closure, D-36); RUN-06..RUN-09 and INJ-01 complete; verification pending |
-| 68 | Three-OS artifacts, weekly re-pin and upstream seams | OVL-02, OVL-03, OVL-06, PLAT-01, PLAT-02 | Not started |
+| 68 | Three-OS artifacts, weekly re-pin and upstream seams | OVL-02, OVL-03, OVL-06, PLAT-01, PLAT-02 | Executed (68-01..68-10); verification pending |
 
 ## Performance Metrics
 
@@ -151,8 +151,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-11T20:00:55.183Z
-Stopped at: Completed 66-10-PLAN.md
+Last session: 2026-11-13
+Stopped at: v1.7 milestone audit (gaps_found), 5d05e3ad
 Resume file: None
 
 ## Deferred Verification

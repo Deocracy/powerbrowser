@@ -53,6 +53,7 @@ actuals:
   commits: 32
 plan_head_before: 86d211c0463d637b0a30dda458ef3220b3c2f061
 plan_head_after: see the docs(64-05) SUMMARY commit
+requirements-completed: [TAB-01, TAB-02]
 ---
 
 # Phase 64 Plan 05: coordinator — lanes merged, panes wired, live proofs and tracking Summary

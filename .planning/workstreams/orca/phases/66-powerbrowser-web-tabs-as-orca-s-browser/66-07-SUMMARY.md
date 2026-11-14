@@ -49,6 +49,7 @@ actuals:
   commits: 3      # git rev-list --count 85c7895d..HEAD with this file's commit
 plan_head_before: 85c7895d
 plan_head_after: "the commit that adds this file"
+requirements-completed: [BRW-02, BRW-03]
 ---
 
 # Phase 66 Plan 07: Orca store rows for PowerBrowser agent pages (D-34) Summary
