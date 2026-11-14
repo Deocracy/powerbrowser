@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 24
+open_count: 21
 waived_count: 2
-fixed_count: 32
+fixed_count: 35
 total_count: 58
-last_updated: 2026-11-11T22:10:08.897Z
+last_updated: 2026-11-14T01:40:00.000Z
 ---
 
 # Broken Windows Ledger
@@ -70,9 +70,9 @@ last_updated: 2026-11-11T22:10:08.897Z
 | 53 | 68 | unmet-truth | theia/extensions/orca-agents/src/node/claude-wrapper-launcher.ts |  | The claude-wrapper launcher writes only a POSIX sh script (#!/bin/sh), so an agent launched through PowerBrowser's wrapper on Windows has no launcher; no Phase 68 lane landed a Windows twin (.cmd or a node shim); repro: grep -n '#!/bin/sh' theia/extensions/orca-agents/src/node/claude-wrapper-launcher.ts; source: lane p63-03, 68-06 Task 3, TERM-02/EXT-02 | open | Held 2026-11-13 (owner ruling): a .cmd launcher (branch worktree-agent-a82bf5f2c523276a9, 5b84e185) was not merged: cmd.exe re-parses %* (BatBadBut), and Node refuses to spawn a .cmd without a shell since CVE-2024-27980; needs a launcher that bypasses cmd.exe (e.g. an .exe shim), tested on the first Windows build | 2026-11-11T21:07:34.542Z |  |
 | 54 | 68 | deviation | scripts/lib/firefox-bidi.mjs |  | Packaged live rows that end PowerBrowser with the harness's SIGTERM/SIGKILL instead of a quit leave the packaged OrcaService's orcad running from the deleted extraction root (/tmp/pb-pkg-*) once the package starts Orca (after fix 21898a67); observed after ng063-packaged-launch on 2026-11-11 and stopped by pid in 68-06; orca-packaged-live now stops its own (a625378d); the shared teardown (withFirefoxPage) or each packaged row should stop orcad by recorded identity; repro: run scripts/verify-platform.sh --only ng063-packaged-launch with POWERBROWSER_OBJDIR set to a packaged objdir, then list processes whose arguments name /tmp/pb-pkg-; source: 68-06 Task 2 | open | Fixed in 0ea32a1a (withFirefoxPage stops the orcad a packaged run started, by recorded identity); live confirmation pending: orca-packaged-live and ng063-packaged-launch on a packaged objdir | 2026-11-11T21:07:34.646Z |  |
 | 55 | 68 | unmet-truth | scripts/verify-orca-tabs-live.mjs |  | orca-tabs-live stage tab-groups-cross-client (g3) red in the 68-06 PLAT-02 Linux pass (2026-11-11), as on every tree since Phase 64/65 (TAB-04 pending): 'the second client shows no tab for T (web-terminal-...)'; not caused by Phase 68 code; owner of the stage: Phase 64 (TAB-04), end-of-milestone pass; repro: flock /home/chris/coding/Power-Browser/.git/pb-live.lock scripts/verify-platform.sh --only orca-tabs-live with ORCA_* unset; source: 68-06 Task 2, 64-06-SUMMARY.md | open |  | 2026-11-11T21:37:37.789Z |  |
-| 56 | 59 | deviation | scripts/verify-pan03-strip-group-live.mjs |  | pan03-strip-group-live clause (f) flaky: passed 1 of 3 runs on fca5bcac/4aeac713 (2026-11-13); after the relaunch the strip is read before a restored tab's title loads, so that tab paints as 'New Tab' or its bare URL instead of 'page l'; the check should wait for the restored tab's title; repro: flock /home/chris/coding/Power-Browser/.git/pb-live.lock scripts/verify-platform.sh --only pan03-strip-group-live with PB_LIVE_LOCK_HELD=1 and ORCA_* unset; source: v1.7 gate run 2026-11-13 | open |  | 2026-11-13T09:30:00.000Z |  |
-| 57 | 59 | deviation | scripts/verify-ng-018-scheduled-integrity-check.mjs |  | ng-018-scheduled-integrity-check flaky: red once in the v1.7 gate run at d55a380b (2026-11-13, 'the store rebuilt after the scheduled check is not at the head'), green in 3 other runs that day (2 of them alone right after); repro: flock /home/chris/coding/Power-Browser/.git/pb-live.lock scripts/verify-platform.sh --only ng-018-scheduled-integrity-check with PB_LIVE_LOCK_HELD=1 and ORCA_* unset; source: v1.7 gate run 2026-11-13 | open |  | 2026-11-13T19:30:00.000Z |  |
-| 58 | 63 | deviation | scripts/verify-orca-agent-status-live.mjs |  | orca-agent-status-live flaky: red once in the v1.7 gate run at d55a380b (2026-11-13, 4 h into the run): the agent process and the terminal daemon were still alive 25 s after app.quit(); green in 3 other runs that day (2 alone right after). The quit-ends-agents rule (D-03) held in those runs; whether a slow shutdown under load can outlive the 25 s budget is open; repro: flock /home/chris/coding/Power-Browser/.git/pb-live.lock scripts/verify-platform.sh --only orca-agent-status-live with PB_LIVE_LOCK_HELD=1 and ORCA_* unset; source: v1.7 gate run 2026-11-13 | open |  | 2026-11-13T19:30:00.000Z |  |
+| 56 | 59 | deviation | scripts/verify-pan03-strip-group-live.mjs |  | pan03-strip-group-live clause (f) flaky: passed 1 of 3 runs on fca5bcac/4aeac713 (2026-11-13); after the relaunch the strip is read before a restored tab's title loads, so that tab paints as 'New Tab' or its bare URL instead of 'page l'; the check should wait for the restored tab's title; repro: flock /home/chris/coding/Power-Browser/.git/pb-live.lock scripts/verify-platform.sh --only pan03-strip-group-live with PB_LIVE_LOCK_HELD=1 and ORCA_* unset; source: v1.7 gate run 2026-11-13 | fixed | Fixed in 740dcd8f (supersedes the title wait in 417dbe61, which went 1 of 5: a restored background tab is not loaded after the relaunch, so it keeps its URL or 'New Tab' label and never regains 'page l'). Clause (f) now compares the painted data-pb-tab ids with the derived widgets and checks B's tab by its key, so labels no longer matter. 9 of 10 runs green on the fixed tree (4 of 5, then 5 of 5); the one red ended in 6 s, before any clause ran, and its output was not kept. | 2026-11-13T09:30:00.000Z | 2026-11-14T01:40:00.000Z |
+| 57 | 59 | deviation | scripts/verify-ng-018-scheduled-integrity-check.mjs |  | ng-018-scheduled-integrity-check flaky: red once in the v1.7 gate run at d55a380b (2026-11-13, 'the store rebuilt after the scheduled check is not at the head'), green in 3 other runs that day (2 of them alone right after); repro: flock /home/chris/coding/Power-Browser/.git/pb-live.lock scripts/verify-platform.sh --only ng-018-scheduled-integrity-check with PB_LIVE_LOCK_HELD=1 and ORCA_* unset; source: v1.7 gate run 2026-11-13 | fixed | Fixed in 417dbe61. Race in the check, not the product: quarantineAndRebuildTabStore (powerbrowser/shell/PowerBrowserAPI.sys.mjs, the backup to corruptPath before IOUtils.remove and migrateTabStoreToHead) writes .corrupt-1 before it migrates the new store, and the check tore the shell down as soon as .corrupt-1 appeared; a store cut off mid-rebuild is migrated by the next launch (NG-085). The check now waits up to 30 s for the rebuilt store to reach the head before the teardown. 5 of 5 runs green. The check file is ledger-locked; the owner must re-lock its hash. | 2026-11-13T19:30:00.000Z | 2026-11-14T01:40:00.000Z |
+| 58 | 63 | deviation | scripts/verify-orca-agent-status-live.mjs |  | orca-agent-status-live flaky: red once in the v1.7 gate run at d55a380b (2026-11-13, 4 h into the run): the agent process and the terminal daemon were still alive 25 s after app.quit(); green in 3 other runs that day (2 alone right after). The quit-ends-agents rule (D-03) held in those runs; whether a slow shutdown under load can outlive the 25 s budget is open; repro: flock /home/chris/coding/Power-Browser/.git/pb-live.lock scripts/verify-platform.sh --only orca-agent-status-live with PB_LIVE_LOCK_HELD=1 and ORCA_* unset; source: v1.7 gate run 2026-11-13 | fixed | Fixed in 417dbe61. Product leak: OrcaService.stopAndReap gave up after killGraceMs + 4500 ms while _stopTree still waited up to killGraceMs + 500 ms for orcad before the daemon's 3 s step and two /proc scans; once the blocker returned, the quit ended the process and the daemon step never ran, so the terminal daemon and its agent outlived the browser. _stopTree now lists orcad and the daemon before any signal, and an overrun SIGKILLs what is left of that list before the blocker returns (verify-orca-service scenario M, plant 'stop overrun leaves the daemon'; self-test 43 of 43 red). orca-agent-status-live 7 of 7 green, 2 of them beside two parallel --quick gates (load average about 7); the 25 s budget is unchanged. | 2026-11-13T19:30:00.000Z | 2026-11-14T01:40:00.000Z |
 
 ````json
 [
@@ -775,10 +775,10 @@ last_updated: 2026-11-11T22:10:08.897Z
     "file": "scripts/verify-pan03-strip-group-live.mjs",
     "line": null,
     "description": "pan03-strip-group-live clause (f) flaky: passed 1 of 3 runs on fca5bcac/4aeac713 (2026-11-13); after the relaunch the strip is read before a restored tab's title loads, so that tab paints as 'New Tab' or its bare URL instead of 'page l'; the check should wait for the restored tab's title; repro: flock /home/chris/coding/Power-Browser/.git/pb-live.lock scripts/verify-platform.sh --only pan03-strip-group-live with PB_LIVE_LOCK_HELD=1 and ORCA_* unset; source: v1.7 gate run 2026-11-13",
-    "status": "open",
-    "reason": "",
+    "status": "fixed",
+    "reason": "Fixed in 740dcd8f (supersedes the title wait in 417dbe61, which went 1 of 5: a restored background tab is not loaded after the relaunch, so it keeps its URL or 'New Tab' label and never regains 'page l'). Clause (f) now compares the painted data-pb-tab ids with the derived widgets and checks B's tab by its key, so labels no longer matter. 9 of 10 runs green on the fixed tree (4 of 5, then 5 of 5); the one red ended in 6 s, before any clause ran, and its output was not kept.",
     "recorded_at": "2026-11-13T09:30:00.000Z",
-    "resolved_at": null,
+    "resolved_at": "2026-11-14T01:40:00.000Z",
     "milestone": "v1.5"
   },
   {
@@ -788,10 +788,10 @@ last_updated: 2026-11-11T22:10:08.897Z
     "file": "scripts/verify-ng-018-scheduled-integrity-check.mjs",
     "line": null,
     "description": "ng-018-scheduled-integrity-check flaky: red once in the v1.7 gate run at d55a380b (2026-11-13, 'the store rebuilt after the scheduled check is not at the head'), green in 3 other runs that day (2 of them alone right after); repro: flock /home/chris/coding/Power-Browser/.git/pb-live.lock scripts/verify-platform.sh --only ng-018-scheduled-integrity-check with PB_LIVE_LOCK_HELD=1 and ORCA_* unset; source: v1.7 gate run 2026-11-13",
-    "status": "open",
-    "reason": "",
+    "status": "fixed",
+    "reason": "Fixed in 417dbe61. Race in the check, not the product: quarantineAndRebuildTabStore (powerbrowser/shell/PowerBrowserAPI.sys.mjs, the backup to corruptPath before IOUtils.remove and migrateTabStoreToHead) writes .corrupt-1 before it migrates the new store, and the check tore the shell down as soon as .corrupt-1 appeared; a store cut off mid-rebuild is migrated by the next launch (NG-085). The check now waits up to 30 s for the rebuilt store to reach the head before the teardown. 5 of 5 runs green. The check file is ledger-locked; the owner must re-lock its hash.",
     "recorded_at": "2026-11-13T19:30:00.000Z",
-    "resolved_at": null,
+    "resolved_at": "2026-11-14T01:40:00.000Z",
     "milestone": "v1.5"
   },
   {
@@ -801,10 +801,10 @@ last_updated: 2026-11-11T22:10:08.897Z
     "file": "scripts/verify-orca-agent-status-live.mjs",
     "line": null,
     "description": "orca-agent-status-live flaky: red once in the v1.7 gate run at d55a380b (2026-11-13, 4 h into the run): the agent process and the terminal daemon were still alive 25 s after app.quit(); green in 3 other runs that day (2 alone right after). The quit-ends-agents rule (D-03) held in those runs; whether a slow shutdown under load can outlive the 25 s budget is open; repro: flock /home/chris/coding/Power-Browser/.git/pb-live.lock scripts/verify-platform.sh --only orca-agent-status-live with PB_LIVE_LOCK_HELD=1 and ORCA_* unset; source: v1.7 gate run 2026-11-13",
-    "status": "open",
-    "reason": "",
+    "status": "fixed",
+    "reason": "Fixed in 417dbe61. Product leak: OrcaService.stopAndReap gave up after killGraceMs + 4500 ms while _stopTree still waited up to killGraceMs + 500 ms for orcad before the daemon's 3 s step and two /proc scans; once the blocker returned, the quit ended the process and the daemon step never ran, so the terminal daemon and its agent outlived the browser. _stopTree now lists orcad and the daemon before any signal, and an overrun SIGKILLs what is left of that list before the blocker returns (verify-orca-service scenario M, plant 'stop overrun leaves the daemon'; self-test 43 of 43 red). orca-agent-status-live 7 of 7 green, 2 of them beside two parallel --quick gates (load average about 7); the 25 s budget is unchanged.",
     "recorded_at": "2026-11-13T19:30:00.000Z",
-    "resolved_at": null,
+    "resolved_at": "2026-11-14T01:40:00.000Z",
     "milestone": "v1.5"
   }
 ]

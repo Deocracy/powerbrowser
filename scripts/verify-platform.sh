@@ -7052,9 +7052,6 @@ declare -a GATE_KNOWN_OPEN_EXCLUSIONS=(
   "build-update-xml|30|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
   "bundled-xpi-packaged|30|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
   "bundled-xpi-live|30|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
-  "pan03-strip-group-live|56|flaky: clause (f) reads the strip before a restored tab's title loads (1 of 3 green, 2026-11-13)"
-  "ng-018-scheduled-integrity-check|57|flaky: 1 red in 4 runs on 2026-11-13 (store not at head after the scheduled check)"
-  "orca-agent-status-live|58|flaky: 1 red in 4 runs on 2026-11-13 (agent and daemon alive 25 s after quit, under a 4 h gate load)"
 )
 
 # Before consolidation, --gate ran this script's own set and then SHELLED OUT to
