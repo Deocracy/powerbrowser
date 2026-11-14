@@ -60,6 +60,7 @@ export const OrcaService = {
   _quitObserverOff: null,
   _reapBlockerAdded: false,
   _stopPromise: null,
+  _stopRows: [],
   _failureRows: [],
   _log: [],
   // Phase 67 (P67-02, P67-36): what failureClassOf reads beside the state and the failure rows.
@@ -636,7 +637,12 @@ export const OrcaService = {
     const graceMs = PowerBrowserAPI.getIntPref("powerbrowser.orca.killGraceMs", 16000);
     const proc = this._proc && this._proc.exitCode == null ? this._proc : null;
     const orcadPid = proc ? proc.pid : null;
-    const tree = orcadPid ? await PowerBrowserProcesses.listProcessTree([orcadPid]) : [];
+    // The daemon is a root too: one adopted after an orcad respawn is no longer orcad's child. stopAndReap
+    // kills what is left of this list when the stop overruns its budget (WINDOWS 58).
+    const daemonRoot = (await this._sameIdentity(this._daemonPid, this._daemonTicks)) ? [this._daemonPid] : [];
+    const roots = orcadPid ? [orcadPid, ...daemonRoot] : daemonRoot;
+    const tree = roots.length ? await PowerBrowserProcesses.listProcessTree(roots) : [];
+    this._stopRows = tree;
     if (proc) {
       try {
         void PowerBrowserAPI.killProcess(proc, graceMs).catch(() => {});
@@ -679,7 +685,10 @@ export const OrcaService = {
         PowerBrowserAPI.sleep(graceMs + 4500).then(() => false),
       ]);
       if (!done) {
-        PowerBrowserAPI.log("error", `[OrcaService] stop did not finish within ${graceMs + 4500} ms (${live}); shutdown continues without it.`);
+        PowerBrowserAPI.log("error", `[OrcaService] stop did not finish within ${graceMs + 4500} ms (${live}); its remaining processes are killed and shutdown continues.`);
+        // The quit ends this process once the blocker returns, and the stop's daemon step with it: the
+        // daemon and its agents would outlive the browser (D-07, WINDOWS 58). orcad, the first row, goes first.
+        await this._killSnapshot(this._stopRows, null);
       }
     } catch (err) {
       PowerBrowserAPI.log("error", `[OrcaService] reap failed (${err && err.name ? err.name : "error"}); shutdown continues without it.`);

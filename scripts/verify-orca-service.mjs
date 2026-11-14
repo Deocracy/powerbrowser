@@ -41,6 +41,9 @@
 //       C  stop order: orcad through its handle with a grace of at least
 //          16000 ms, the wait, the daemon's SIGTERM, then SIGKILL for a
 //          snapshot descendant that stayed alive; no negative (group) pid.
+//       M  (WINDOWS 58) orcad outlasts the quit blocker's budget: the daemon and
+//          its agent get SIGKILL before the blocker returns, since the quit ends
+//          the stop's own daemon step with the process.
 //       D  busy port: orcad exits with the pinned-port code; one spawn only,
 //          state failed, a diagnostics row naming the code.
 //       E  a ready line naming a non-loopback address: orcad is ended, state
@@ -256,7 +259,8 @@ function makeBoundary(world) {
             return true;
         },
         killProcess: async (proc, graceMs) => { rec('killProcess', proc.pid, graceMs); alive.delete(proc.pid); proc.exit(0); },
-        waitForExit: async (proc, graceMs) => { rec('waitForExit', proc.pid, graceMs); return true; },
+        // world.slowExit: orcad outlasts the blocker's budget (the fake 2 s sleep), as under a loaded host (WINDOWS 58).
+        waitForExit: async (proc, graceMs) => { rec('waitForExit', proc.pid, graceMs); if (world.slowExit) await new Promise((r) => setTimeout(r, 3000)); return true; },
         // Records the moment the whole ready line has been handed to OrcaService, so writes can be ordered after it.
         readPipeChunk: async (proc, which) => {
             const chunk = await proc.read(which);
@@ -465,6 +469,21 @@ async function scenarioC(paths, env) {
     if (b.calls.some((c) => c.name === 'signalBarePid' && !(c.args[0] > 0))) fails.push('scenario C: a signal was sent to a non-positive pid (a process group)');
     if (!calls.some((c) => c.name === 'removeStateFile')) fails.push('scenario C: stop left the state file behind');
     if (!calls.some((c) => c.name === 'quitObserverOff')) fails.push('scenario C: stop did not detach the quit observer');
+    return fails;
+}
+
+/** M: the stop overruns the quit blocker's budget: the daemon and its agent are killed before the blocker returns. */
+async function scenarioM(paths, env) {
+    const fails = [];
+    const b = makeBoundary(baseWorld({ slowExit: true, immortal: [5003] }));
+    const svc = await loadService(paths, b, env);
+    await svc.start();
+    const before = b.calls.length;
+    await svc.stopAndReap();
+    const calls = b.calls.slice(before);
+    for (const [pid, what] of [[5002, 'terminal daemon'], [5003, 'agent']]) {
+        if (!calls.some((c) => c.name === 'signalBarePid' && c.args[0] === pid && c.args[1] === 9)) fails.push(`scenario M: the stop overran the quit budget and the ${what} (pid ${pid}) was not killed before the blocker returned, so it outlives the browser`);
+    }
     return fails;
 }
 
@@ -992,7 +1011,7 @@ export async function check(paths) {
     fails.push(...handOff.fails);
     notes.push(...handOff.notes);
     fails.push(...orcaStatusClauses(paths, env));
-    const scenarios = { A: scenarioA, B: scenarioB, C: scenarioC, D: scenarioD, E: scenarioE, F: scenarioF, G: scenarioG, H: scenarioH, I: scenarioI, J: scenarioJ, 'J-b': scenarioJb, K: scenarioK, L: scenarioL };
+    const scenarios = { A: scenarioA, B: scenarioB, C: scenarioC, D: scenarioD, E: scenarioE, F: scenarioF, G: scenarioG, H: scenarioH, I: scenarioI, J: scenarioJ, 'J-b': scenarioJb, K: scenarioK, L: scenarioL, M: scenarioM };
     const saved = globalThis.ChromeUtils;
     try {
         for (const [label, run] of Object.entries(scenarios)) {
@@ -1062,6 +1081,7 @@ async function runSelfTest() {
             { name: 'quit observer registered after the spawn', naming: 'quit observer', file: paths.orcaService, edit: then(swap(OBSERVER, 'void 0;'), swap('    this._proc = proc;\n', `    this._proc = proc;\n    ${OBSERVER}\n`)) },
             { name: 'reap signals on a ticks mismatch', naming: 'recycled pid', file: paths.orcaService, edit: swap('observed === null || String(observed) !== String(ticks)', 'false') },
             { name: 'stop skips the daemon', naming: 'terminal daemon', file: paths.orcaService, edit: swap('    await this._endDaemon(this._daemonPid, this._daemonTicks, tree.filter(row => row.pid !== orcadPid));\n', '') },
+            { name: 'stop overrun leaves the daemon', naming: 'outlives the browser', file: paths.orcaService, edit: swap('        await this._killSnapshot(this._stopRows, null);\n', '') },
             { name: 'environment name literal in OrcaService', naming: 'outside OrcaEnv', file: paths.orcaService, edit: (t) => `${t}\nconst HOME_NAME = "HOME";\n` },
             { name: 'NODE_OPTIONS in the allowlist', naming: 'steering variable', file: paths.orcaEnv, edit: swap('  "PATH",\n  "HOME",', '  "PATH",\n  "NODE_OPTIONS",\n  "HOME",') },
             { name: 'switch removed from the fixed names', naming: 'ORCA_DISABLE_INSTALLED_ELECTRON_BROWSER', file: paths.orcaEnv, edit: swap('  ORCAD_HIDDEN_ELECTRON_SWITCH,\n  ORCAD_CLAUDE_AGENT_SDK_DIR_ENV,\n]);', '  ORCAD_CLAUDE_AGENT_SDK_DIR_ENV,\n]);') },
@@ -1138,6 +1158,6 @@ if (isEntryPoint) {
         for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`);
         process.exit(1);
     }
-    console.log(`${NAME}: PASS -- jar.mn ships every shell module; OrcaService spawns only through the exact-environment boundary, spells no environment name and carries no user-facing copy; launch wiring and the .onorca.dev row hold; POWERBROWSER_ORCA_BRIDGE_DIR comparison ${r.bridgeKeyComparison}; stub-boundary scenarios ${r.scenarios.map((s) => ({ J: 'J (hand-off files)', 'J-b': 'J-b (no bundle folder)', G: 'G (failure classes)', K: 'K (restart)', L: 'L (RUN-09 refusal)' }[s] ?? s)).join(', ')} (start with orcad-data-root after ready, reap, stop order, busy port, non-loopback, alias, failure classes, no bridge folder, SDK extension disabled, offer and bundle folder after ready, restart only when failed, temp folder and plaintext override refused before any spawn); the orcaStatus reply is the state and the class only; orca-panes file names ${r.handOff.panes}; bundle folder ${r.handOff.vite}`);
+    console.log(`${NAME}: PASS -- jar.mn ships every shell module; OrcaService spawns only through the exact-environment boundary, spells no environment name and carries no user-facing copy; launch wiring and the .onorca.dev row hold; POWERBROWSER_ORCA_BRIDGE_DIR comparison ${r.bridgeKeyComparison}; stub-boundary scenarios ${r.scenarios.map((s) => ({ J: 'J (hand-off files)', 'J-b': 'J-b (no bundle folder)', G: 'G (failure classes)', K: 'K (restart)', L: 'L (RUN-09 refusal)', M: 'M (stop overrun)' }[s] ?? s)).join(', ')} (start with orcad-data-root after ready, reap, stop order, busy port, non-loopback, alias, failure classes, no bridge folder, SDK extension disabled, offer and bundle folder after ready, restart only when failed, temp folder and plaintext override refused before any spawn, daemon killed when the stop overruns the quit budget); the orcaStatus reply is the state and the class only; orca-panes file names ${r.handOff.panes}; bundle folder ${r.handOff.vite}`);
     process.exit(0);
 }
