@@ -367,11 +367,12 @@ export function reloadVerdict(obs) {
         if (after[name] !== key) fails.push(`reload: pb-orca:${name} now addresses another pane`);
         if (!storeKeys.has(after[name])) fails.push(`reload: pb-orca:${name} addresses no pane in the store`);
     }
-    // Bars are compared over the panes Orca's store still holds after the reload: a pane Orca itself dropped is gone in
-    // Orca too (noted by the caller), while a pane PB lost or moved and the store kept still changes these bars.
+    // The before-bars drop the panes Orca's store no longer holds after the reload: a pane Orca itself dropped is gone in
+    // Orca too (noted by the caller). The after-bars are not filtered, so a pane PB lost or moved, and a dropped pane
+    // re-created under a new name (P65-35 renumbering), still change these bars.
     const kept = obs.keptNames ? new Set(obs.keptNames) : null;
-    const bars = (list) => JSON.stringify((list ?? []).map((bar) => [...bar].filter((n) => !kept || kept.has(n)).sort().join(',')).filter(Boolean).sort());
-    if (bars(obs.barsBefore) !== bars(obs.barsAfter)) fails.push(`reload: the Lumino tab bars changed across the reload (${bars(obs.barsBefore)} -> ${bars(obs.barsAfter)})`);
+    const bars = (list, keep) => JSON.stringify((list ?? []).map((bar) => [...bar].filter((n) => !keep || keep.has(n)).sort().join(',')).filter(Boolean).sort());
+    if (bars(obs.barsBefore, kept) !== bars(obs.barsAfter)) fails.push(`reload: the Lumino tab bars changed across the reload (${bars(obs.barsBefore, kept)} -> ${bars(obs.barsAfter)})`);
     return fails;
 }
 
@@ -984,6 +985,7 @@ function runSelfTest() {
         ['a widget moved to another tab bar across the reload', 'reload: the Lumino tab bars changed across the reload', () => reloadVerdict(reload({ barsAfter: [['chat1', 'term3'], ['term2']] }))],
         ['control: a pane Orca\'s store dropped leaves its bar', null, () => reloadVerdict(reload({ after: ['chat1', 'term2', 'term3'], barsAfter: [['term2'], ['chat1']], keptNames: ['chat1', 'term2'] }))],
         ['a kept pane moved while another was dropped', 'reload: the Lumino tab bars changed across the reload', () => reloadVerdict(reload({ barsAfter: [['chat1', 'term2']], keptNames: ['chat1', 'term2'] }))],
+        ['a dropped pane re-created under a new name', 'reload: the Lumino tab bars changed across the reload', () => reloadVerdict(reload({ barsAfter: [['term2', 'term4'], ['chat1']], keptNames: ['chat1', 'term2'] }))],
         ['route control', null, () => routeVerdict({ noCookie: 403, traversal: 404, absolute: 404, entry: 200 })],
         ['offer control', null, () => offerVerdict({ detector: true, foundIn: [] })],
         ['selector derivation', null, () => (JSON.stringify(deriveTabChromeSelectors(sources)) === JSON.stringify(['[data-tab-group-strip-id]', '[data-tab-id]', '[data-tab-strip-slot]']) ? [] : [`derived ${JSON.stringify(deriveTabChromeSelectors(sources))}`])],
