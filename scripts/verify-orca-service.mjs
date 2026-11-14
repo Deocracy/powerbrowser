@@ -44,6 +44,11 @@
 //       M  (WINDOWS 58) orcad outlasts the quit blocker's budget: the daemon and
 //          its agent get SIGKILL before the blocker returns, since the quit ends
 //          the stop's own daemon step with the process.
+//       N  (WINDOWS 58, second cause) the real PowerBrowserProcesses.addNamedReapBlocker,
+//          evaluated against an AsyncShutdown holding exactly the phases upstream's
+//          AsyncShutdown.sys.mjs defines, registers the orcad blocker. A phase that does not
+//          exist throws inside start()'s try, so no quit waits on the stop and the daemon and
+//          its agent outlive the browser. SKIP of this scenario only when upstream/ is absent.
 //       D  busy port: orcad exits with the pinned-port code; one spawn only,
 //          state failed, a diagnostics row naming the code.
 //       E  a ready line naming a non-loopback address: orcad is ended, state
@@ -179,6 +184,7 @@ export function pathsFor(root) {
         orcaPanesDir: join(root, 'theia', 'extensions', 'orca-panes'),
         orcaPanesProtocol: join(root, 'theia', 'extensions', 'orca-panes', 'src', 'common', 'orca-panes-protocol.ts'),
         panesViteConfig: join(root, 'orca-overlay', 'files', 'vite.pb-panes.config.ts'),
+        asyncShutdown: join(root, 'upstream', 'toolkit', 'components', 'asyncshutdown', 'AsyncShutdown.sys.mjs'),
     };
 }
 
@@ -485,6 +491,31 @@ async function scenarioM(paths, env) {
         if (!calls.some((c) => c.name === 'signalBarePid' && c.args[0] === pid && c.args[1] === 9)) fails.push(`scenario M: the stop overran the quit budget and the ${what} (pid ${pid}) was not killed before the blocker returned, so it outlives the browser`);
     }
     return fails;
+}
+
+/** The AsyncShutdown phases upstream defines (`AsyncShutdown.<name> = getPhase("<topic>")`): Map name -> topic. */
+export function asyncShutdownPhases(text) {
+    return new Map([...String(text ?? '').matchAll(/^\s*AsyncShutdown\.(\w+) = getPhase\("([^"]+)"\)/gm)].map((m) => [m[1], m[2]]));
+}
+
+/** N: the boundary's own registration, run against the phases upstream defines, registers the orcad blocker. */
+async function scenarioN(paths, env) {
+    const phases = asyncShutdownPhases(read(paths.asyncShutdown));
+    if (!existsSync(paths.asyncShutdown)) return [];
+    if (!phases.size) return [`scenario N: no AsyncShutdown phase parsed from ${paths.asyncShutdown}; the instrument is broken`];
+    const method = /\n  (addNamedReapBlocker\(name, fn\) \{[\s\S]*?\n  \},)/.exec(read(paths.api) ?? '')?.[1];
+    if (!method) return ['scenario N: PowerBrowserAPI.sys.mjs has no addNamedReapBlocker(name, fn) method'];
+    const added = [];
+    const AsyncShutdown = Object.fromEntries([...phases.keys()].map((phase) => [phase, { addBlocker: (name, fn) => added.push({ phase, name, fn }) }]));
+    const ChromeUtils = { importESModule: () => ({ AsyncShutdown }) };
+    const blocker = () => undefined;
+    try {
+        (await import('node:vm')).runInNewContext(`({ ${method} })`, { ChromeUtils }).addNamedReapBlocker(env.ORCAD_REAP_BLOCKER_NAME, blocker);
+    } catch (err) {
+        return [`scenario N: addNamedReapBlocker throws against the phases upstream's AsyncShutdown defines (${[...phases.keys()].join(', ')}): ${err.message}; the quit blocker is never registered, so nothing holds the quit while the stop runs`];
+    }
+    if (!added.some((a) => a.name === env.ORCAD_REAP_BLOCKER_NAME && a.fn === blocker)) return [`scenario N: addNamedReapBlocker registered no '${env.ORCAD_REAP_BLOCKER_NAME}' blocker on any AsyncShutdown phase; the quit blocker is never registered`];
+    return [];
 }
 
 /** D: the pinned port is busy. One spawn, no retry, a row naming the code. */
@@ -1006,12 +1037,13 @@ export async function check(paths) {
     const fails = staticClauses(paths, env, notes);
     const bridgeKey = bridgeKeyClause(paths);
     fails.push(...bridgeKey.fails);
+    if (!existsSync(paths.asyncShutdown)) notes.push(`SKIP of scenario N only -- upstream/ is not fetched (${paths.asyncShutdown} is absent; run scripts/fetch-upstream.sh)`);
     if (bridgeKey.comparison.startsWith('SKIP')) notes.push('SKIP of the POWERBROWSER_ORCA_BRIDGE_DIR comparison only -- lane p63-03 not merged (theia/extensions/orca-agents is absent)');
     const handOff = handOffClauses(paths, env);
     fails.push(...handOff.fails);
     notes.push(...handOff.notes);
     fails.push(...orcaStatusClauses(paths, env));
-    const scenarios = { A: scenarioA, B: scenarioB, C: scenarioC, D: scenarioD, E: scenarioE, F: scenarioF, G: scenarioG, H: scenarioH, I: scenarioI, J: scenarioJ, 'J-b': scenarioJb, K: scenarioK, L: scenarioL, M: scenarioM };
+    const scenarios = { A: scenarioA, B: scenarioB, C: scenarioC, D: scenarioD, E: scenarioE, F: scenarioF, G: scenarioG, H: scenarioH, I: scenarioI, J: scenarioJ, 'J-b': scenarioJb, K: scenarioK, L: scenarioL, M: scenarioM, N: scenarioN };
     const saved = globalThis.ChromeUtils;
     try {
         for (const [label, run] of Object.entries(scenarios)) {
@@ -1033,6 +1065,8 @@ async function runSelfTest() {
         mkdirSync(join(tmp, 'powerbrowser'), { recursive: true });
         cpSync(join(REPO_ROOT, 'powerbrowser', 'shell'), paths.shellDir, { recursive: true });
         cpSync(join(REPO_ROOT, 'powerbrowser', 'endpoint-allowlist.json'), paths.allowlist);
+        mkdirSync(dirname(paths.asyncShutdown), { recursive: true });
+        cpSync(pathsFor(REPO_ROOT).asyncShutdown, paths.asyncShutdown);
         // A fixture Orca source tree with a synthetic default port, so green proves the port is derived.
         const fixtureCodes = join(paths.orcaDir, 'src', 'main', 'orcad', 'fixture-codes.ts');
         mkdirSync(dirname(join(paths.orcaDir, WS_PORT_REL)), { recursive: true });
@@ -1081,6 +1115,7 @@ async function runSelfTest() {
             { name: 'quit observer registered after the spawn', naming: 'quit observer', file: paths.orcaService, edit: then(swap(OBSERVER, 'void 0;'), swap('    this._proc = proc;\n', `    this._proc = proc;\n    ${OBSERVER}\n`)) },
             { name: 'reap signals on a ticks mismatch', naming: 'recycled pid', file: paths.orcaService, edit: swap('observed === null || String(observed) !== String(ticks)', 'false') },
             { name: 'stop skips the daemon', naming: 'terminal daemon', file: paths.orcaService, edit: swap('    await this._endDaemon(this._daemonPid, this._daemonTicks, tree.filter(row => row.pid !== orcadPid));\n', '') },
+            { name: 'reap blocker on an AsyncShutdown phase upstream does not define', naming: 'never registered', file: paths.api, edit: swap('AsyncShutdown.appShutdownConfirmed.addBlocker(name, fn);', 'AsyncShutdown.quitApplicationGranted.addBlocker(name, fn);') },
             { name: 'stop overrun leaves the daemon', naming: 'outlives the browser', file: paths.orcaService, edit: swap('        await this._killSnapshot(this._stopRows, null);\n', '') },
             { name: 'environment name literal in OrcaService', naming: 'outside OrcaEnv', file: paths.orcaService, edit: (t) => `${t}\nconst HOME_NAME = "HOME";\n` },
             { name: 'NODE_OPTIONS in the allowlist', naming: 'steering variable', file: paths.orcaEnv, edit: swap('  "PATH",\n  "HOME",', '  "PATH",\n  "NODE_OPTIONS",\n  "HOME",') },
@@ -1158,6 +1193,6 @@ if (isEntryPoint) {
         for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`);
         process.exit(1);
     }
-    console.log(`${NAME}: PASS -- jar.mn ships every shell module; OrcaService spawns only through the exact-environment boundary, spells no environment name and carries no user-facing copy; launch wiring and the .onorca.dev row hold; POWERBROWSER_ORCA_BRIDGE_DIR comparison ${r.bridgeKeyComparison}; stub-boundary scenarios ${r.scenarios.map((s) => ({ J: 'J (hand-off files)', 'J-b': 'J-b (no bundle folder)', G: 'G (failure classes)', K: 'K (restart)', L: 'L (RUN-09 refusal)', M: 'M (stop overrun)' }[s] ?? s)).join(', ')} (start with orcad-data-root after ready, reap, stop order, busy port, non-loopback, alias, failure classes, no bridge folder, SDK extension disabled, offer and bundle folder after ready, restart only when failed, temp folder and plaintext override refused before any spawn, daemon killed when the stop overruns the quit budget); the orcaStatus reply is the state and the class only; orca-panes file names ${r.handOff.panes}; bundle folder ${r.handOff.vite}`);
+    console.log(`${NAME}: PASS -- jar.mn ships every shell module; OrcaService spawns only through the exact-environment boundary, spells no environment name and carries no user-facing copy; launch wiring and the .onorca.dev row hold; POWERBROWSER_ORCA_BRIDGE_DIR comparison ${r.bridgeKeyComparison}; stub-boundary scenarios ${r.scenarios.map((s) => ({ J: 'J (hand-off files)', 'J-b': 'J-b (no bundle folder)', G: 'G (failure classes)', K: 'K (restart)', L: 'L (RUN-09 refusal)', M: 'M (stop overrun)', N: 'N (blocker registers on an upstream phase)' }[s] ?? s)).join(', ')} (start with orcad-data-root after ready, reap, stop order, busy port, non-loopback, alias, failure classes, no bridge folder, SDK extension disabled, offer and bundle folder after ready, restart only when failed, temp folder and plaintext override refused before any spawn, daemon killed when the stop overruns the quit budget); the orcaStatus reply is the state and the class only; orca-panes file names ${r.handOff.panes}; bundle folder ${r.handOff.vite}`);
     process.exit(0);
 }

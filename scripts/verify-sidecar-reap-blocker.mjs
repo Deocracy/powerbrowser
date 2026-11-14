@@ -6,10 +6,11 @@
 // files with acorn (comments and strings are not code, so a comment cannot satisfy a rule) and, for
 // the three methods whose behaviour matters, EVALUATES their source against stub boundaries:
 //
-//  1. registration  PowerBrowserAPI.addSidecarReapBlocker calls AsyncShutdown.quitApplicationGranted
-//                   .addBlocker with the name "PowerBrowser: reap sidecar", and TheiaService.start()
-//                   calls PowerBrowserAPI.addSidecarReapBlocker. Quit and restart both reach
-//                   quit-application-granted (restartToUpdate quits with eRestart).
+//  1. registration  PowerBrowserAPI.addSidecarReapBlocker calls AsyncShutdown.<phase>.addBlocker with
+//                   the name "PowerBrowser: reap sidecar", where <phase> is one upstream's
+//                   AsyncShutdown.sys.mjs defines (derived; a missing phase throws at registration,
+//                   WINDOWS 58), and TheiaService.start() calls PowerBrowserAPI.addSidecarReapBlocker.
+//                   Every phase is a quit topic that restartToUpdate's eRestart also reaches.
 //  2. reap          TheiaService.stopAndReap, run against a stub boundary, (a) waits on a live
 //                   Subprocess handle for killGraceMs + 500 ms through PowerBrowserAPI.waitForExit,
 //                   (b) never waits on a handle that was not live (a stale pid is never touched),
@@ -35,6 +36,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 
+import { asyncShutdownPhases } from './verify-orca-service.mjs';
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'sidecar-reap-blocker';
 const SELF_REL = 'scripts/verify-sidecar-reap-blocker.mjs';
@@ -45,6 +48,7 @@ const BLOCKER_NAME = 'PowerBrowser: reap sidecar';
 const REGISTER_FN = 'addSidecarReapBlocker';
 const GRACE_PREF = 'powerbrowser.sidecar.killGraceMs';
 const API_BASE = API_REL.split('/').pop();
+const ASYNC_SHUTDOWN_REL = 'upstream/toolkit/components/asyncshutdown/AsyncShutdown.sys.mjs';
 
 const args = process.argv.slice(2);
 for (const a of args) {
@@ -228,6 +232,10 @@ async function runChecks(root, overrides = {}) {
         theia: overrides.theia !== undefined ? overrides.theia : readText(root, THEIA_REL),
         catalogue: overrides.catalogue !== undefined ? overrides.catalogue : readText(root, CATALOGUE_REL),
     };
+    // null (upstream/ not fetched): the phase clause alone is skipped, said in the PASS line.
+    const asyncShutdownText = readText(root, ASYNC_SHUTDOWN_REL);
+    const phases = asyncShutdownText === null ? null : asyncShutdownPhases(asyncShutdownText);
+    if (phases !== null && phases.size === 0) fail(ASYNC_SHUTDOWN_REL, 'vacuity', 'no AsyncShutdown.<phase> = getPhase(...) line parsed. Next step: re-derive the phase pattern from upstream.');
     const rels = { api: API_REL, theia: THEIA_REL, catalogue: CATALOGUE_REL };
     for (const k of Object.keys(texts)) {
         if (texts[k] === null) { fail(rels[k], 'vacuity', `could not be read. Next step: restore ${rels[k]}.`); return { failures, line: 0 }; }
@@ -242,11 +250,14 @@ async function runChecks(root, overrides = {}) {
     const reg = methodOf(api, REGISTER_FN);
     let addBlockerLine = 0;
     if (reg === null) {
-        fail(API_REL, 'registration', `has no ${REGISTER_FN} method. Next step: add the boundary method that registers the reap blocker on AsyncShutdown.quitApplicationGranted.`);
+        fail(API_REL, 'registration', `has no ${REGISTER_FN} method. Next step: add the boundary method that registers the reap blocker on an AsyncShutdown phase.`);
     } else {
-        const call = callsOf(reg, ['quitApplicationGranted', 'addBlocker'])[0];
+        const call = callsOf(reg, ['addBlocker']).find(c => c.callee.object?.object?.name === 'AsyncShutdown');
+        const phase = call?.callee.object.property?.name;
         if (call === undefined || call.arguments[0]?.type !== 'Literal' || call.arguments[0].value !== BLOCKER_NAME) {
-            fail(API_REL, 'registration', `${REGISTER_FN} does not call quitApplicationGranted.addBlocker with the name '${BLOCKER_NAME}'. Next step: restore the addBlocker call with that name.`);
+            fail(API_REL, 'registration', `${REGISTER_FN} does not call AsyncShutdown.<phase>.addBlocker with the name '${BLOCKER_NAME}'. Next step: restore the addBlocker call with that name.`);
+        } else if (phases !== null && !phases.has(phase)) {
+            fail(API_REL, 'registration', `${REGISTER_FN} registers on AsyncShutdown.${phase}, which ${ASYNC_SHUTDOWN_REL} does not define (it defines ${[...phases.keys()].join(', ')}): the call throws, the blocker is never registered and no quit waits on the reap. Next step: register on a phase upstream defines.`);
         } else {
             addBlockerLine = call.loc.start.line;
         }
@@ -287,7 +298,7 @@ async function runChecks(root, overrides = {}) {
     if (rows.length === 0 || addBlockerLine === 0 || !rows.some(r => r.includes(`${API_BASE}:${addBlockerLine}`))) {
         fail(CATALOGUE_REL, 'catalogue', `has no table row naming "reap sidecar" with File:Line ${API_BASE}:${addBlockerLine}. Next step: add the row for the AsyncShutdown addBlocker call.`);
     }
-    return { failures, line: addBlockerLine };
+    return { failures, line: addBlockerLine, phases };
 }
 
 const fmt = f => `${f.file} [${f.rule}]: ${f.msg}`;
@@ -322,6 +333,7 @@ async function selfTest() {
         ['registration call missing from start()', { theia: once(theia, `PowerBrowserAPI.${REGISTER_FN}(`, 'PowerBrowserAPI.noopRegistration(', 'registration') }, 'registration', REGISTER_FN],
         ['registration only named in a comment', { theia: once(theia, `PowerBrowserAPI.${REGISTER_FN}(reapBlocker);`, `// PowerBrowserAPI.${REGISTER_FN}(reapBlocker);`, 'comment') }, 'registration', REGISTER_FN],
         ['blocker renamed', { api: once(api, `"${BLOCKER_NAME}"`, '"PowerBrowser: other"', 'name') }, 'registration', BLOCKER_NAME],
+        ['blocker on a phase upstream does not define', { api: regex(api, /AsyncShutdown\.\w+\.addBlocker\("PowerBrowser: reap sidecar"/, 'AsyncShutdown.quitApplicationGranted.addBlocker("PowerBrowser: reap sidecar"', 'phase') }, 'registration', 'quitApplicationGranted'],
         ['reap polls a bare pid instead of waiting on the handle', { theia: once(theia, REAP_CALL, 'PowerBrowserAPI.signalBarePid(pid, 0)', 'poll') }, 'reap', 'signalBarePid'],
         ['reap wait call only in a comment', { theia: once(theia, REAP_CALL, `false /* ${REAP_CALL} */`, 'wait comment') }, 'reap', 'waitForExit'],
         ['reap waits on a stale handle', { theia: once(theia, LIVE_TEST, 'this._proc', 'live test') }, 'reap', 'stale pid'],
@@ -355,13 +367,13 @@ async function selfTest() {
 
 async function main() {
     if (args.includes('--self-test')) return selfTest();
-    const { failures, line } = await runChecks(REPO_ROOT);
+    const { failures, line, phases } = await runChecks(REPO_ROOT);
     if (failures.length > 0) {
         console.error(`${NAME}: FAIL -- ${failures.length} problem(s) with the sidecar reap blocker.`);
         failures.forEach(f => console.error(`  ${fmt(f)}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- ${REGISTER_FN} registers '${BLOCKER_NAME}' on AsyncShutdown.quitApplicationGranted at ${API_REL}:${line}, which quit and restart both reach; TheiaService.start() registers it; stopAndReap (evaluated against stubs) waits on the live Subprocess handle for the kill grace plus 500 ms, never waits on a stale one and never rejects; waitForExit and signalBarePid keep their contracts; ${CATALOGUE_REL} cites the registration.`);
+    console.log(`${NAME}: PASS -- ${REGISTER_FN} registers '${BLOCKER_NAME}' at ${API_REL}:${line} on ${phases === null ? 'an AsyncShutdown phase (SKIP of the phase-exists clause only: upstream/ is not fetched)' : 'an AsyncShutdown phase upstream defines'}, which quit and restart both reach; TheiaService.start() registers it; stopAndReap (evaluated against stubs) waits on the live Subprocess handle for the kill grace plus 500 ms, never waits on a stale one and never rejects; waitForExit and signalBarePid keep their contracts; ${CATALOGUE_REL} cites the registration.`);
     return 0;
 }
 

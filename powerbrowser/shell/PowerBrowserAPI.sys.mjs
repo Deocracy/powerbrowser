@@ -725,13 +725,13 @@ export const PowerBrowserAPI = Object.freeze({
 
   /**
    * UPD-30 (Phase 54): registers `fn` as the AsyncShutdown blocker that quit and restart both await.
-   * restartToUpdate quits with eRestart, which also raises quit-application-granted, so one
-   * registration covers both paths and the sidecar is reaped before the updater rename can run.
+   * The phase is quit-application (ESR 153 has no quit-application-granted barrier), which eRestart
+   * also raises: one registration covers quit and restartToUpdate, before the updater rename runs.
    * AsyncShutdown rejects a second blocker under the same name, so the caller registers once per process.
    */
   addSidecarReapBlocker(fn) {
     const { AsyncShutdown } = ChromeUtils.importESModule("resource://gre/modules/AsyncShutdown.sys.mjs");
-    AsyncShutdown.quitApplicationGranted.addBlocker("PowerBrowser: reap sidecar", fn);
+    AsyncShutdown.appShutdownConfirmed.addBlocker("PowerBrowser: reap sidecar", fn);
   },
 
   /**
@@ -11046,15 +11046,15 @@ export const PowerBrowserProcesses = Object.freeze({
   },
 
   //
-  // Registers `fn` as a quit blocker under `name`, awaited by quit and restart alike. The sidecar's own
-  // blocker keeps its name through addSidecarReapBlocker; a caller asking for that name here is refused.
+  // Registers `fn` as a quit-application blocker under `name`, awaited by quit and restart alike. The sidecar's
+  // own blocker keeps its name through addSidecarReapBlocker; a caller asking for that name here is refused.
   //
   addNamedReapBlocker(name, fn) {
     if (typeof name !== "string" || !name.startsWith("PowerBrowser: reap ") || name.endsWith(" sidecar")) {
       throw new Error("addNamedReapBlocker: the name must be a new 'PowerBrowser: reap <what>' name");
     }
     const { AsyncShutdown } = ChromeUtils.importESModule("resource://gre/modules/AsyncShutdown.sys.mjs");
-    AsyncShutdown.quitApplicationGranted.addBlocker(name, fn);
+    AsyncShutdown.appShutdownConfirmed.addBlocker(name, fn);
   },
 
   //
