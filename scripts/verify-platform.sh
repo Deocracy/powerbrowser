@@ -3956,6 +3956,11 @@ run_own_checks() {
     # then each planted fault stops at its named stage (seam-apply, typecheck, coverage, rows, brand scan),
     # and a row or probe that prints SKIP is red.
     "rebase-orca-self-test|bash $REPO_ROOT/scripts/rebase-orca.sh --self-test"
+    # rebase-orca-coverage (OVL-02): the replay's typecheck coverage stage on this tree's fetched orca/: every
+    # orca-overlay/files path in tsc --listFilesOnly of Orca's two programs or orca-overlay/tsconfig.pb-build.json.
+    # A named SKIP without an installed orca/ or before build-orca.sh copied an overlay file in; the self-test's
+    # real-overlay cases (the real files green and counted, an uncovered root file red) hold without one.
+    "rebase-orca-coverage|bash $REPO_ROOT/scripts/rebase-orca.sh --coverage-only"
     # NEW (64-01, TAB-04/TAB-06/TERM-01, P64-25/P64-32): orca-pane-entry-self-test and
     # orca-pane-standalone-live-self-test. Hermetic: mkdtemp fixtures for the pane bundle's build gate (a tracked
     # edit, a planted React copy, a version skew, an inlined font, a tab-bar import, a missing C3 export); fixture

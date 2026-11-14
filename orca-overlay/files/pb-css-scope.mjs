@@ -74,6 +74,8 @@ export function scopeSelector(selector) {
 
 const isAnimationProp = (prop) => prop === 'animation' || prop === 'animation-name' || /^--animat/.test(prop)
 
+// raws.pbScoped marks a rule this pass wrote or already scoped: postcss revisits a changed rule, hands
+// visitors a proxy (so a WeakSet of nodes misses), and types raws as open where a node is closed.
 export function scopePlugin() {
   return {
     postcssPlugin: 'pb-orca-scope',
@@ -97,11 +99,11 @@ export function scopePlugin() {
       // win there. Portal roots are body children whose own Orca classes must still win.
       const paneReset = postcss.rule({ selector: PANE_ROOT, nodes: [postcss.decl({ prop: 'font-size', value: 'medium', important: true })] })
       const portalReset = postcss.rule({ selector: `:where(${PORTAL_ROOTS})`, nodes: [postcss.decl({ prop: 'font-size', value: 'medium' })] })
-      paneReset.__pbScoped = portalReset.__pbScoped = true
+      paneReset.raws.pbScoped = portalReset.raws.pbScoped = true
       root.prepend(paneReset, portalReset)
     },
     Rule(rule) {
-      if (rule.__pbScoped) return
+      if (rule.raws.pbScoped) return
       for (let p = rule.parent; p; p = p.parent) {
         if (p.type === 'atrule' && /keyframes$/i.test(p.name)) return
         // A nested rule is scoped through its parent.
@@ -110,13 +112,13 @@ export function scopePlugin() {
       const custom = rule.nodes.filter((n) => n.type === 'decl' && n.prop.startsWith('--') && !HOST_OWNED_PROPERTY.test(n.prop))
       if (custom.length && rule.selectors.every(isRootOrTheme)) {
         const kept = rule.clone({ nodes: [] })
-        kept.__pbScoped = true
+        kept.raws.pbScoped = true
         custom.forEach((d) => { d.remove(); kept.append(d) })
         rule.before(kept)
         if (!rule.nodes.length) { rule.remove(); return }
       }
       rule.selectors = rule.selectors.flatMap((s) => scopeSelector(s))
-      rule.__pbScoped = true
+      rule.raws.pbScoped = true
     }
   }
 }

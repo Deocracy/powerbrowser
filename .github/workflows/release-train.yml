@@ -1129,7 +1129,7 @@ jobs:
             exit 1
           fi
           if git diff --cached --quiet; then echo "release-train: NOTE -- the Orca re-pin to ${TAG} changed nothing to commit; no PR"; exit 0; fi
-          git commit -m "chore(orca): move the Orca pin to ${TAG}" -m "Replayed through rebase-orca.yml (seams re-applied and regenerated, typecheck:web and typecheck:node, the Orca rows, orcad, notices and the brand scan); the pin moved in configuration.toml."
+          git commit -m "chore(orca): move the Orca pin to ${TAG}" -m "Replayed through rebase-orca.yml (seams re-applied and regenerated, typecheck:web, typecheck:node and typecheck:pb-build, the Orca rows, orcad, notices and the brand scan); the pin moved in configuration.toml."
           echo "committed=true" >> "$GITHUB_OUTPUT"
 
       - name: Mint the bot App token
@@ -1160,7 +1160,7 @@ jobs:
             exit 0
           fi
           TITLE="chore(orca): move the Orca pin to ${TAG}"
-          BODY="Orca re-pin to ${TAG} (${COMMIT}), replayed through rebase-orca.yml: seams re-applied and regenerated, Orca's typecheck:web and typecheck:node, the Orca rows, orcad, notices and the brand scan. verify.yml runs on this PR; auto-merge is armed and the owner's approving review is the gate."
+          BODY="Orca re-pin to ${TAG} (${COMMIT}), replayed through rebase-orca.yml: seams re-applied and regenerated, Orca's typecheck:web, typecheck:node and typecheck:pb-build, the Orca rows, orcad, notices and the brand scan. verify.yml runs on this PR; auto-merge is armed and the owner's approving review is the gate."
           # The notices file was written by the replay job, which ran Orca's build, so it is not trusted bytes: a bump
           # that carries it is labelled in the body and never auto-merged; the owner reads the notices diff.
           if [ "$NOTICES" = "changed" ]; then

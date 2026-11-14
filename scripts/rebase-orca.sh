@@ -14,7 +14,8 @@
 #   build               scripts/build-orca.sh (installs Orca's dependencies, scripts off)
 #   typecheck:web       Orca's own typecheck:web, then typecheck:node; a red one names <file>:<line>
 #   typecheck:node
-#   typecheck coverage  every orca-overlay/files path is in tsc --listFilesOnly of one of the two programs
+#   typecheck:pb-build  orca-overlay/tsconfig.pb-build.json, PB's program for the overlay files at Orca's root
+#   typecheck coverage  every orca-overlay/files path is in tsc --listFilesOnly of one of the three programs
 #   row <label>         verify-platform.sh --only, for each of ROWS below
 #   orcad-only start    verify-orca-slotless-start.mjs --orcad-only
 #   notices             generate-licensing.mjs --write-orca (the Orca section of THIRD-PARTY-NOTICES.txt)
@@ -40,6 +41,7 @@
 #   nix develop .#orca --command bash scripts/rebase-orca.sh --tag vX.Y.Z --commit <40-hex peeled commit>
 #   bash scripts/rebase-orca.sh --replay-only --tag vX.Y.Z --commit <40-hex peeled commit>
 #   bash scripts/rebase-orca.sh --self-test
+#   bash scripts/rebase-orca.sh --coverage-only   (the coverage stage alone, on the fetched and built orca/)
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -51,6 +53,9 @@ ROWS=(orca-build-shape orca-overlay orca-overlay-built orca-mobile-protocol lice
 BUMP_PATHS=(configuration.toml orca-overlay/patches orca-overlay/seams.json)
 # licence-allowlist checks every fetched tree; upstream/ is the Gecko tree, absent here by design.
 SKIP_OUT_OF_SCOPE='^licence-allowlist: SKIP -- upstream/ absent'
+# The three typecheck programs, as tsc -p paths from orca/. Orca's two leave its root build configs out
+# (its own vite.web.config.ts too); PB's root overlay files are in the third, kept beside files/.
+PROGRAMS=(config/tsconfig.tc.web.json config/tsconfig.node.json ../orca-overlay/tsconfig.pb-build.json)
 
 # This tree is worked on from inside Orca desktop; none of its variables reach an Orca process.
 for name in "${!ORCA_@}"; do unset "$name"; done
@@ -177,10 +182,13 @@ stage_typecheck() {
   fi
 }
 
-# Every PB-added overlay file must be in one of the two typecheck programs, or the
+# The third program has no Orca package script; tsc runs it from orca/ like the two scripts do.
+pb_build_tsc() { node node_modules/typescript/bin/tsc --noEmit -p "${PROGRAMS[2]}"; }
+
+# Every PB-added overlay file must be in one of the three typecheck programs, or the
 # typecheck above proved nothing about it.
 stage_coverage() {
-  local root="$1" orca="$1/orca" list path real
+  local root="$1" orca list path real program
   local files=()
   say "typecheck coverage"
   if [ -d "$root/orca-overlay/files" ]; then
@@ -190,14 +198,21 @@ stage_coverage() {
     say "typecheck coverage -- 0 overlay files at this pin (vacuous; the self-test proves the stage)"
     return 0
   fi
-  list="$(cd "$orca" && node node_modules/typescript/bin/tsc --listFilesOnly -p config/tsconfig.tc.web.json && node node_modules/typescript/bin/tsc --listFilesOnly -p config/tsconfig.node.json)" \
-    || { red "typecheck coverage tsc --listFilesOnly failed. Next step: run it from orca/ on config/tsconfig.tc.web.json and config/tsconfig.node.json."; return 1; }
-  for path in "${files[@]}"; do
-    real="$(realpath -e "$orca/$path" 2>/dev/null)" || { red "typecheck coverage $path is not in orca/ after the build. Next step: check build-orca.sh's overlay copy."; return 1; }
-    printf '%s\n' "$list" | grep -qxF -- "$real" \
-      || { red "typecheck coverage $path is in neither typecheck program. Next step: place it where config/tsconfig.tc.web.json or config/tsconfig.node.json includes it."; return 1; }
+  # tsc names files under its physical working directory; compare against the same spelling.
+  orca="$(cd "$root/orca" 2>/dev/null && pwd -P)" || { red "typecheck coverage orca/ is absent. Next step: fetch and build it (scripts/fetch-orca.sh, scripts/build-orca.sh)."; return 1; }
+  list=""
+  for program in "${PROGRAMS[@]}"; do
+    list+="$(cd "$orca" && node node_modules/typescript/bin/tsc --listFilesOnly -p "$program")"$'\n' \
+      || { red "typecheck coverage tsc --listFilesOnly -p $program failed. Next step: run it from orca/."; return 1; }
   done
-  say "typecheck coverage -- ${#files[@]} overlay file(s), each in a typecheck program"
+  for path in "${files[@]}"; do
+    real="$(realpath -es "$orca/$path" 2>/dev/null)" || { red "typecheck coverage $path is not in orca/ after the build. Next step: check build-orca.sh's overlay copy."; return 1; }
+    # A here-string, not a pipe: grep -q stops at the first match and, under pipefail, a printf
+    # into a closed pipe (Orca's real programs list ~40k files) would make a covered file red.
+    grep -qxF -- "$real" <<<"$list" \
+      || { red "typecheck coverage $path is in no typecheck program. Next step: place it where ${PROGRAMS[*]} includes it (a file at Orca's root: name it vite.pb-*.config.ts or pb-*.mjs)."; return 1; }
+  done
+  say "typecheck coverage -- ${#files[@]} overlay file(s), each in one of ${#PROGRAMS[@]} typecheck programs"
 }
 
 stage_rows() {
@@ -257,6 +272,7 @@ run_replay() {
   stage_build "$root" || return 1
   stage_typecheck "$root" typecheck:web "$run" || return 1
   stage_typecheck "$root" typecheck:node "$run" || return 1
+  stage_typecheck "$root" typecheck:pb-build pb_build_tsc || return 1
   stage_coverage "$root" || return 1
   stage_rows "$root" || return 1
   stage_orcad "$root" || return 1
@@ -354,6 +370,8 @@ EOF
 make_root() {
   local root="$1" repo="$2" variant="$3" seed="$1.seed"
   mkdir -p "$root/scripts" "$root/orca-overlay/patches"
+  # The real third program: the fixture tsc reads its include globs as tsc would.
+  cp "$REPO_ROOT/orca-overlay/tsconfig.pb-build.json" "$root/orca-overlay/"
   "${FX_GIT[@]}" -C "$root" init -q
   printf '/orca/\n/orca.partial/\n/generated/\n' > "$root/.gitignore"
   printf '[upstreams]\norca_tag = "v1.0.1"\norca_commit = "%s"\n' "$FX_C1" > "$root/configuration.toml"
@@ -375,11 +393,19 @@ set -e
 root="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$root/orca/node_modules/typescript/bin"
 cat > "$root/orca/node_modules/typescript/bin/tsc" <<'TSC'
-const { readFileSync, readdirSync, statSync } = require('node:fs');
-const { dirname, join, resolve } = require('node:path');
+const { existsSync, readFileSync, readdirSync, statSync } = require('node:fs');
+const { dirname, join, relative, resolve } = require('node:path');
 const cfg = resolve(process.argv[process.argv.indexOf('-p') + 1]);
-const walk = (d) => readdirSync(d).flatMap((n) => statSync(join(d, n)).isDirectory() ? walk(join(d, n)) : [join(d, n)]);
-for (const inc of JSON.parse(readFileSync(cfg, 'utf8')).include) for (const f of walk(resolve(dirname(cfg), inc.split('*')[0]))) console.log(f);
+const walk = (d) => existsSync(d) ? readdirSync(d).flatMap((n) => statSync(join(d, n)).isDirectory() ? walk(join(d, n)) : [join(d, n)]) : [];
+const glob = (p) => new RegExp('^' + p.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*\*\/\*/g, '\0').replace(/\*/g, '[^/]*').replace(/\0/g, '.*') + '$');
+const files = JSON.parse(readFileSync(cfg, 'utf8').replace(/^\s*\/\/.*$/gm, '')).include
+  .flatMap((inc) => { const p = resolve(dirname(cfg), inc); return walk(dirname(p.split('*')[0] + 'x')).filter((f) => glob(p).test(f)); });
+if (process.argv.includes('--listFilesOnly')) { for (const f of files) console.log(f); process.exit(0); }
+// Without --listFilesOnly it typechecks: a planted marker in an included file is a type error at its line.
+for (const f of files) {
+  const at = readFileSync(f, 'utf8').split('\n').findIndex((l) => l.includes('PLANTED-TYPE-ERROR'));
+  if (at >= 0) { console.log(`${relative(process.cwd(), f)}(${at + 1},1): error TS2322: planted type error`); process.exit(1); }
+}
 TSC
 if [ -d "$root/orca-overlay/files" ]; then cp -r "$root/orca-overlay/files/." "$root/orca/"; fi
 touch "$root/ran-build"
@@ -423,6 +449,14 @@ EOF
   case "$variant" in
     uncovered) mkdir -p "$root/orca-overlay/files/extra" && echo 'export const x = 1;' > "$root/orca-overlay/files/extra/x.ts" ;;
     covered) mkdir -p "$root/orca-overlay/files/src" && echo 'export const pbAdded = 1;' > "$root/orca-overlay/files/src/pb-added.ts" ;;
+    real*) cp -r "$REPO_ROOT/orca-overlay/files" "$root/orca-overlay/" ;;
+  esac
+  # The real overlay files plus one more at Orca's root: a near-miss of the naming rule, a name
+  # inside it, and a name inside it carrying a type error.
+  case "$variant" in
+    realuncovered) echo 'export const extra = 1;' > "$root/orca-overlay/files/vite.pb-extra.ts" ;;
+    realcovered) echo 'export const extra = 1;' > "$root/orca-overlay/files/vite.pb-extra.config.ts" ;;
+    realtypeerror) printf 'export const ok = 1\nexport const bad = PLANTED-TYPE-ERROR\n' > "$root/orca-overlay/files/pb-planted.mjs" ;;
     brand) printf 'notes: %s%s\n' FIXTURE BRAND > "$root/notes.txt" ;;
     rowskip) echo 'orca-overlay|orca-overlay: SKIP -- no built thing' > "$root/skip-row" ;;
     upstreamskip) echo 'licence-allowlist|licence-allowlist: SKIP -- upstream/ absent; its LICENSE digest is unchecked' > "$root/skip-row" ;;
@@ -483,8 +517,19 @@ run_self_test() {
   expect_pass control
   expect_stop "seam conflict" conflict control "seam-apply 010-"
   expect_stop "type error" typeerror control "typecheck:web src/a.ts:3"
-  expect_stop "overlay file outside both programs" control uncovered "typecheck coverage"
+  expect_stop "overlay file outside every program" control uncovered "typecheck coverage"
   expect_pass "overlay file inside a program (coverage is not vacuous)" control covered
+  # The real overlay files, at commit time: each must be in a program, and the stage must count them all.
+  local real_n
+  real_n="$(find "$REPO_ROOT/orca-overlay/files" -type f | wc -l)"
+  [ "$real_n" -gt 0 ] || miss "real overlay files" "orca-overlay/files is empty; the real-file cases prove nothing"
+  expect_pass "the real orca-overlay/files" control real
+  grep -qF "typecheck coverage -- $real_n overlay file(s)" "$FX_LOG" \
+    && ok "the real orca-overlay/files -> coverage counted all $real_n" \
+    || miss "the real orca-overlay/files" "the coverage line does not count $real_n file(s): $(grep -m1 'typecheck coverage --' "$FX_LOG" || echo '<no coverage line>')"
+  expect_stop "real overlay plus an uncovered root file" control realuncovered "typecheck coverage vite.pb-extra.ts is in no typecheck program"
+  expect_pass "real overlay plus a covered root file" control realcovered
+  expect_stop "type error in a root overlay file" control realtypeerror "typecheck:pb-build pb-planted.mjs:2"
   expect_stop "brand token" control brand "brand scan"
   expect_stop "changed LICENSE" licence control "row licence-allowlist"
   expect_stop "row prints SKIP" control rowskip "row orca-overlay skipped"
@@ -517,7 +562,7 @@ run_self_test() {
 }
 
 # --- main -----------------------------------------------------------------------
-usage() { echo "  usage: rebase-orca.sh --tag vX.Y.Z --commit <40-hex peeled commit> [--replay-only] | --self-test" >&2; }
+usage() { echo "  usage: rebase-orca.sh --tag vX.Y.Z --commit <40-hex peeled commit> [--replay-only] | --self-test | --coverage-only" >&2; }
 
 MODE=full
 REPIN_TAG=""
@@ -528,6 +573,18 @@ while [ $# -gt 0 ]; do
       [ $# -eq 1 ] || { echo "rebase-orca: FAIL -- --self-test takes no other argument" >&2; usage; exit 2; }
       run_self_test
       exit $? ;;
+    --coverage-only)
+      [ $# -eq 1 ] || { echo "rebase-orca: FAIL -- --coverage-only takes no other argument" >&2; usage; exit 2; }
+      # The stage on this tree's fetched orca/, as the replay runs it after build. Without Orca's
+      # installed tsc, or before build-orca.sh copied an overlay file in, it is a named SKIP; the
+      # self-test's real-overlay cases hold the commit-time line.
+      [ -f "$REPO_ROOT/orca/node_modules/typescript/bin/tsc" ] \
+        || { echo "rebase-orca-coverage: SKIP -- no installed orca/ (nix develop .#orca --command bash scripts/build-orca.sh)"; exit 0; }
+      while IFS= read -r f; do
+        [ -e "$REPO_ROOT/orca/$f" ] || { echo "rebase-orca-coverage: SKIP -- orca/$f is not copied in yet (run scripts/build-orca.sh)"; exit 0; }
+      done < <(cd "$REPO_ROOT/orca-overlay/files" && find . -type f -printf '%P\n')
+      stage_coverage "$REPO_ROOT" || exit 1
+      exit 0 ;;
     --tag|--commit)
       [ $# -ge 2 ] || { echo "rebase-orca: FAIL -- $1 needs a value" >&2; usage; exit 2; }
       if [ "$1" = --tag ]; then REPIN_TAG="$2"; else REPIN_COMMIT="$2"; fi
