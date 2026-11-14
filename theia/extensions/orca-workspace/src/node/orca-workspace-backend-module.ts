@@ -44,7 +44,7 @@ function runGit(args: string[]): Promise<{ out: Buffer } | { reason: string }> {
 const ROOT_DEPS: RootDeps = {
     realpath: path => fs.realpath(path),
     toplevel: async root => {
-        const r = await runGit(['-C', root, 'rev-parse', '--show-toplevel']);
+        const r = await runGit(['-c', 'core.fsmonitor=false', '-C', root, 'rev-parse', '--show-toplevel']);
         return 'out' in r ? r.out.toString('utf8').trim() : undefined;
     },
 };

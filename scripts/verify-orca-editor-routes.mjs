@@ -36,7 +36,7 @@
 // Limit: the TopLevelView clause compares keys only; what each page row does is
 // orca-pane-routes' and the live rows' concern.
 
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -423,6 +423,7 @@ async function runGitSpecSelfTest() {
 
     // Hermetic repository: one commit, one staged change, a subdirectory.
     const tmp = realpathSync(mkdtempSync(join(tmpdir(), `${NAME}-git-`)));
+    const link = `${tmp}-link`;
     try {
         const env = p.withoutGitVars(process.env);
         const git = (...a) => execFileSync('git', ['-C', tmp, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', ...a], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -437,7 +438,7 @@ async function runGitSpecSelfTest() {
         const commit = git('rev-parse', 'HEAD').toString().trim();
         const deps = {
             realpath: (path) => realpath(path),
-            toplevel: (root) => new Promise((done) => execFile('git', ['-C', root, 'rev-parse', '--show-toplevel'], { env, timeout: p.ORCA_GIT_TIMEOUT_MS }, (err, out) => done(err ? undefined : String(out).trim()))),
+            toplevel: (root) => new Promise((done) => execFile('git', ['-c', 'core.fsmonitor=false', '-C', root, 'rev-parse', '--show-toplevel'], { env, timeout: p.ORCA_GIT_TIMEOUT_MS }, (err, out) => done(err ? undefined : String(out).trim()))),
         };
         // A GIT_DIR inherited by the reader would redirect the read; the reader's environment must drop it.
         const hostile = { ...process.env, GIT_DIR: join(tmp, 'nowhere') };
@@ -445,15 +446,18 @@ async function runGitSpecSelfTest() {
         ok(await p.validateRoot(tmp, deps) === undefined, 'the repository toplevel is accepted as a root');
         ok(await p.validateRoot(join(tmp, 'sub'), deps) !== undefined, 'refused: a root that is a subdirectory of a repository, not its toplevel');
         ok(await p.validateRoot('relative/root', deps) !== undefined, 'refused: a relative root');
+        symlinkSync(tmp, link);
+        ok(await p.validateRoot(link, deps) === 'root-realpath', 'refused by the realpath rule: a symlink to the repository toplevel');
         const byCommit = await read(commit, 'sub/a.txt');
         ok(byCommit !== undefined && byCommit.equals(execFileSync('git', ['-C', tmp, 'cat-file', 'blob', `${commit}:sub/a.txt`], { env })), 'the object-id read equals git cat-file blob <commit>:<path>, with GIT_DIR planted in the environment');
         const byStage = await read(':0', 'sub/a.txt');
         ok(byStage !== undefined && byStage.equals(execFileSync('git', ['-C', tmp, 'cat-file', 'blob', ':0:sub/a.txt'], { env })) && byStage.toString() === 'staged bytes\n', 'the :0 read equals git cat-file blob :0:<path> (the staged bytes)');
     } finally {
         rmSync(tmp, { recursive: true, force: true });
+        rmSync(link, { force: true });
     }
     if (failures) { console.error(`${label}: FAIL -- ${failures} case(s) wrong`); return 1; }
-    console.log(`${label}: PASS -- the argv, ${REFUSED.length} planted refusals, the toplevel root rule and the hermetic bytes`);
+    console.log(`${label}: PASS -- the argv, ${REFUSED.length} planted refusals, the toplevel and realpath root rules and the hermetic bytes`);
     return 0;
 }
 
