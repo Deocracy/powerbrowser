@@ -118,7 +118,7 @@ driver's own fixture HTTP server in run 3.
 
 ## Origin
 
-Synthesized from spike 005 (frontmatter VALIDATED, VERDICT YELLOW, 2026-11-09, plan 61-02).
+Synthesized from spike 005 (verdict YELLOW, 2026-11-09, plan 61-02).
 Sources: `sources/005-orca-browser-parity/` (README.md, results.md, provider-proof.mjs). The
 disposition table, patch, host source and results JSON stay in
 `.planning/spikes/005-orca-browser-parity/`.

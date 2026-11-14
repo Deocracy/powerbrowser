@@ -4,7 +4,7 @@ idea: orca-browser-parity
 name: orca-browser-parity
 type: standard
 validates: "Given the pinned Orca tree, when the parity script derives every browser ability with its users, then each ability has a Gecko disposition and one ability (navigate plus read title) runs from the Orca CLI through orcad to a PowerBrowser web tab"
-verdict: VALIDATED
+verdict: YELLOW
 related: [BRW-01, D-11, D-16, spike-003]
 tags: [orca, orcad, browser, provider, client-host, bidi, web-tab, parity, live-probe]
 ---
@@ -82,7 +82,7 @@ input is passed in memory only.
 
 ## Results
 
-**VALIDATED** (2026-11-09). See `results.md` for the table and `results-proof.json` for the raw run.
+**YELLOW** (2026-11-09; see VERDICT): the seam is proven on one ability and the inventory is gated; the rest of the ability set is unproven. See `results.md` for the table and `results-proof.json` for the raw run.
 
 ### Ability inventory
 

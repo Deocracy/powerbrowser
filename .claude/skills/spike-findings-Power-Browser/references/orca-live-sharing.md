@@ -85,6 +85,6 @@ no model turn; `claude agents --json` listed it; `claude stop <8-character job i
 
 ## Origin
 
-Synthesized from spike 006 (frontmatter PARTIAL, VERDICT YELLOW, 2026-11-09, plan 61-03).
+Synthesized from spike 006 (verdict YELLOW, 2026-11-09, plan 61-03).
 Sources: `sources/006-orca-live-sharing/` (README.md, results.md, floor-run.mjs).
 `results-floor.json` and `extension-notes.md` stay in `.planning/spikes/006-orca-live-sharing/`.

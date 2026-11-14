@@ -4,7 +4,7 @@ idea: orca-live-sharing
 name: orca-live-sharing
 type: standard
 validates: "Given a Claude agent session started by PowerBrowser's orcad and then stopped, when it is resumed with claude --resume <id>, then the conversation continues in the same session file; and the Claude Code extension's capability to attach to a running external session is recorded from its published package"
-verdict: PARTIAL
+verdict: YELLOW
 related: [EXT-03, EXT-01, EXT-02, D-06, D-18]
 tags: [orca, orcad, claude-code, extension, resume, background-session, attach, live-sharing]
 ---
@@ -74,7 +74,7 @@ directory under `~/.claude/projects` in place and prints its name.
 
 ## Results
 
-**PARTIAL** (2026-11-09): the floor is proven on the CLI, the extension's capability is recorded
+**YELLOW** (2026-11-09; see VERDICT): the floor is proven on the CLI, the extension's capability is recorded
 from source, and two parts are not proven: the extension half of the floor (blocked on EXT-01)
 and attach from a second client. Table: `results.md` (8 numbered rows).
 
