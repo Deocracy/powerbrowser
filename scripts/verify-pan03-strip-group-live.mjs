@@ -40,14 +40,16 @@ const PROBES = `
     // The home pane's strip tabs, unfiltered: what the strip would paint with no group.
     const home = () => strip().mainTabs();
     // The expected strip, from membership reads only.
-    const derived = () => {
+    const paintedIds = () => Array.from(document.querySelectorAll('.pb-tab-strip .pb-tab:not(.pb-tab-stack)')).map(e => e.getAttribute('data-pb-tab'));
+    const derivedWidgets = () => {
         const m = A.model();
         const active = m.getActiveGroupId();
         const cur = current();
         const members = new Set(active ? m.getTabs(active).map(t => t.uri) : []);
         const loose = new Set(m.listUngrouped().map(t => t.uri));
-        return home().filter(w => w === cur || members.has(keyOf(w)) || loose.has(keyOf(w))).map(labelOf);
+        return home().filter(w => w === cur || members.has(keyOf(w)) || loose.has(keyOf(w)));
     };
+    const derived = () => derivedWidgets().map(labelOf);
     const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
     const settle = async (test, n) => { for (let i = 0; i < (n || 40) && !test(); i++) await A.sleep(125); return !!test(); };
     const stripMatches = async () => {
@@ -254,7 +256,7 @@ await runCheck(`verify-${NAME}`, async ({ pages, expect, failures }) => {
         expect(e.hidden.length === 0, `(e) in Coding these main-area tabs are not displayed in their dock bar: ${e.hidden.join(' | ')}`);
         expect(e.back.ok, `(e) back in Browsing the strip paints [${e.back.painted.join(' | ')}], want [${e.back.derived.join(' | ')}]`);
         detail(`(e) Coding with A active: all ${e.count} main-area tabs displayed in their dock bars; back in Browsing the strip is filtered again`);
-        return { ga: b.ga, keys, labelC: b.labelC, labels: Object.fromEntries(Object.keys(keys).map((n, i) => [n, opened.labels[i]])) };
+        return { ga: b.ga, keys, labelC: b.labelC };
     });
     if (!first || failures.length) {
         return;
@@ -269,15 +271,14 @@ await runCheck(`verify-${NAME}`, async ({ pages, expect, failures }) => {
             const loadedMs = Date.now() - t0;
             const keys = ${JSON.stringify(first.keys)};
             const reopened = await settle(() => Object.values(keys).every(k => byKey(k)), 160);
-            // A restored tab paints 'New Tab' or its URL until its page title loads (WINDOWS 56):
-            // wait for every test tab to carry the label it had before the quit, then read the strip.
-            const labels = ${JSON.stringify(first.labels)};
-            const unlabelled = () => Object.keys(keys).filter(n => !byKey(keys[n]) || labelOf(byKey(keys[n])) !== labels[n]);
-            const titled = await settle(() => !unlabelled().length, 160);
-            const match = await stripMatches();
+            // A restored background tab is not loaded, so it reads its URL or 'New Tab', and several
+            // tabs can share a label (WINDOWS 56): after the relaunch the strip is compared by widget id.
+            const ids = await settle(() => same(paintedIds(), derivedWidgets().map(w => w.id)));
+            const match = { ok: ids, painted: painted(), derived: derived() };
+            const c = byKey(keys.c);
             return {
-                loaded, loadedMs, reopened, titled,
-                untitled: unlabelled().map(n => labels[n] + ' reads ' + (byKey(keys[n]) ? labelOf(byKey(keys[n])) : 'no tab')),
+                loaded, loadedMs, reopened,
+                cOpen: !!c && home().includes(c), cPainted: !!c && paintedIds().includes(c.id),
                 open: Object.values(keys).filter(k => byKey(k)),
                 organising: !!A.shell().getWidgetById('powerbrowser.modes.organising'),
                 mode: document.body.dataset.pbMode,
@@ -290,11 +291,10 @@ await runCheck(`verify-${NAME}`, async ({ pages, expect, failures }) => {
         expect(!f.organising, '(f) the Organising surface is attached, so the load cannot be credited to the model');
         expect(f.mode === 'browsing', `(f) the relaunch opened in ${f.mode}, want browsing`);
         expect(f.reopened, `(f) the restore did not reopen every test tab: open [${f.open.join(', ')}]`);
-        expect(f.titled, `(f) a restored tab never got back its title within 20 s: ${f.untitled.join('; ')}`);
         expect(f.active === first.ga, `(f) after the relaunch the active group is ${f.active}, want A ${first.ga}`);
         expect(f.match.ok, `(f) the strip paints [${f.match.painted.join(' | ')}], want the derived set [${f.match.derived.join(' | ')}]`);
-        expect(f.home.includes(first.labelC) && !f.match.painted.includes(first.labelC),
-            `(f) the strip is not filtered: B's "${first.labelC}" is ${f.home.includes(first.labelC) ? 'painted' : 'not open'}`);
+        expect(f.cOpen && !f.cPainted,
+            `(f) the strip is not filtered: B's tab ${first.keys.c} is ${f.cOpen ? 'painted' : 'not open'}`);
         detail(`(f) relaunch: model loaded in ${f.loadedMs} ms with Organising never opened; A active; strip [${f.match.painted.join(' | ')}] of ${f.home.length} home tabs, B's tab filtered out`);
     });
     if (!failures.length) {
