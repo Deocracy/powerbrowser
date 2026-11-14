@@ -400,24 +400,6 @@ export class ModeService implements FrontendApplicationContribution {
     }
 
     /**
-     * Put a view in an area before expanding it. Stock's `expand(id)`
-     * (side-panel-handler.js:282-289) is a pure find over the widgets ALREADY
-     * in that dock: a miss returns undefined having done nothing, which is why
-     * Coding could collapse into a mode with no Theia view at all. The only
-     * stock code that ever ADDS the view is applyViewPlacements, and that runs
-     * on a mode's FIRST activation only -- once Coding has a saved layout
-     * without the Explorer, nothing else can put it back.
-     *
-     * Additive by construction: it creates or fetches the widget and adds it,
-     * and has no branch that can detach, move, or close anything. The guard is
-     * real parentage, NOT `shell.getWidgetById`, which resolves against the
-     * shell's FocusTracker (application-shell.js:1923-1929) and keeps returning
-     * a DETACHED widget until it is disposed -- in the exact failure case being
-     * fixed here it would report the view present and this would do nothing.
-     * The whole body is guarded because a widget-manager failure is a missing
-     * side view, never a reason to abandon the rest of the switch.
-     */
-    /**
      * Research A5 (measured false in 65-05): a revisited mode's saved layout detaches stray side views
      * (perspective-service.js detachStrayWidgets), but a first visit only adds (applyViewPlacements), so a view
      * another shipped mode's row docks (the Orca containers) stayed docked in a mode whose row does not list it.
@@ -439,6 +421,24 @@ export class ModeService implements FrontendApplicationContribution {
         }
     }
 
+    /**
+     * Put a view in an area before expanding it. Stock's `expand(id)`
+     * (side-panel-handler.js:282-289) is a pure find over the widgets ALREADY
+     * in that dock: a miss returns undefined having done nothing, which is why
+     * Coding could collapse into a mode with no Theia view at all. The only
+     * stock code that ever ADDS the view is applyViewPlacements, and that runs
+     * on a mode's FIRST activation only -- once Coding has a saved layout
+     * without the Explorer, nothing else can put it back.
+     *
+     * Additive by construction: it creates or fetches the widget and adds it,
+     * and has no branch that can detach, move, or close anything. The guard is
+     * real parentage, NOT `shell.getWidgetById`, which resolves against the
+     * shell's FocusTracker (application-shell.js:1923-1929) and keeps returning
+     * a DETACHED widget until it is disposed -- in the exact failure case being
+     * fixed here it would report the view present and this would do nothing.
+     * The whole body is guarded because a widget-manager failure is a missing
+     * side view, never a reason to abandon the rest of the switch.
+     */
     protected async ensureInArea(viewId: string, area: 'left' | 'right' | 'bottom'): Promise<void> {
         try {
             const widget = await this.widgetManager.getOrCreateWidget(viewId);
