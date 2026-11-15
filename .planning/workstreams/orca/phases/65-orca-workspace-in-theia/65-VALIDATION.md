@@ -2,9 +2,9 @@
 phase: "65"
 slug: "orca-workspace-in-theia"
 # status lifecycle: draft (seeded by plan-phase) → validated (set by validate-phase §6)
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: validated
+nyquist_compliant: true
+wave_0_complete: true
 created: "2026-11-10"
 ---
 
@@ -40,33 +40,33 @@ created: "2026-11-10"
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 65-01-T1 | 01 | 1 | TAB-07, TAB-05 | T-65-03 | new kinds are overlay files only; check-details without Orca's editor | full (live gate) | `build-orca.sh` log lines; `node scripts/verify-orca-pane-standalone-live.mjs --report .mozbuild/p65-01/mount-gate.json --width-probe settings` under the lock | ✅ (Phase 64 row, extended) | ⬜ pending |
-| 65-01-T2 | 01 | 1 | TAB-08, TAB-05 | T-65-01, T-65-02 | session-only preset before init; refuses to connect otherwise; LS runtime key absent after a marker control | full (live) | `--only orca-pane-standalone-live` (API, session-only and resume-modal clauses) | ✅ (extended) | ⬜ pending |
-| 65-01-T3 | 01 | 1 | TAB-05, TAB-07 | T-65-03 | no EditorPanel/EditorContent in the bundle; preset export present at the pin; consumer API ⊆ entry exports | full + quick self-test | `--only orca-pane-entry`, `--only orca-pane-entry-self-test`, `--only orca-pane-css-live-self-test`, `--only orca-overlay`, `--only orca-overlay-built` | ✅ (extended) | ⬜ pending |
-| 65-02-T1 | 02 | 1 | TAB-05 | — | N/A | quick | `--only orca-editor-routes`, `--only orca-editor-routes-self-test` (plants: added mode, diff source, conflict kind, top-level view; EditorPanel value; check-details as a Theia kind; zero-member parse) | ❌ W0 | ⬜ pending |
-| 65-02-T2 | 02 | 1 | TAB-05 | T-65-04, T-65-05, T-65-06 | spec grammar, toplevel root, execFile argv with `--`, no textconv, fsmonitor off, GIT_* stripped, size cap | quick | `--only orca-git-spec-self-test` (plants: `..`, `.`, empty segment, leading `/` and `./`, backslash, NUL, `HEAD`, upper-case hex, 39 hex, `:4`, `-x`, subdirectory root; hermetic bytes equal `git cat-file blob`) | ❌ W0 | ⬜ pending |
-| 65-02-T3 | 02 | 1 | TAB-05 | T-65-07, T-65-08 | dirty editors never closed; only PB-owned roots removed; user removal honoured | quick self-test + full | `--only orca-workspace-live-self-test`; `--only orca-workspace-live` (coordinator) | ❌ W0 | ⬜ pending |
-| 65-03-T1 | 03 | 1 | TAB-07 | — | N/A | quick | `--only gui07-mode-toggle-commands`, `--only gui04-registry-shape` | ✅ | ⬜ pending |
-| 65-03-T2 | 03 | 1 | TAB-09, TAB-07 | T-65-10 | no PB Add-project control | quick | `--only orca-no-pb-add-project`, `--only orca-no-pb-add-project-self-test` (plants: command label, toolbar item, chrome-bar title, empty vocabulary; control: at least one orca-panes command label parsed) | ❌ W0 | ⬜ pending |
-| 65-03-T3 | 03 | 1 | TAB-07, TAB-09 | T-65-09, T-65-11 | unlisted egress red after a `.invalid` resolution control; Add-project equal to the stock standalone page | quick self-test + full | `--only orca-side-panel-live-self-test`, `--only orca-add-project-live-self-test`; `--only orca-side-panel-live`, `--only orca-add-project-live`, `--only verify-uri-roundtrip` (coordinator) | ❌ W0 | ⬜ pending |
-| 65-04-T1 | 04 | 1 | TAB-08 | T-65-13 | names never reissued while referenced | quick | `--only gui04-registry-shape`, `--only orca-pane-routes-self-test`; builds of modes and orca-panes | ✅ | ⬜ pending |
-| 65-04-T2 | 04 | 1 | TAB-05 | — | N/A | quick | `--only orca-pane-routes`, `--only orca-pane-routes-self-test` (route table ↔ pinned content types; words ↔ docs/URI-SCHEMES.md); `--only orca-tabs-live-self-test` (stage (g) plants: conflict-review gave a hosted widget, no merge editor opened); `--only orca-tabs-live` (coordinator) | ✅ (Phase 64 rows, extended) | ⬜ pending |
-| 65-04-T3 | 04 | 1 | TAB-08 | T-65-12, T-65-14, T-65-15 | offer in no sink; needles never printed; device rows counted, never read | quick self-test + full | `--only orca-offer-scan-self-test`, `--only orca-relaunch-restore-live-self-test`; `--only orca-offer-scan`, `--only orca-relaunch-restore-live` (coordinator) | ❌ W0 | ⬜ pending |
-| 65-05-T1 | 05 | 2 | all | T-65-16, T-65-17 | merge scope derived from plan frontmatter | full (live) | `--only orca-pane-css-live`, `--only orca-pane-standalone-live`, `--only orca-workspace-live` under the lock | n/a | ⬜ pending |
-| 65-05-T3 | 05 | 2 | all | T-65-18 | brand and allowlist values only from measurement | quick + full (live) | the remaining live rows; `scan-brand-residue` and its self-test; `--quick` | n/a | ⬜ pending |
+| 65-01-T1 | 01 | 1 | TAB-07, TAB-05 | T-65-03 | new kinds are overlay files only; check-details without Orca's editor | full (live gate) | `build-orca.sh` log lines; `node scripts/verify-orca-pane-standalone-live.mjs --report .mozbuild/p65-01/mount-gate.json --width-probe settings` under the lock | ✅ (Phase 64 row, extended) | ✅ green |
+| 65-01-T2 | 01 | 1 | TAB-08, TAB-05 | T-65-01, T-65-02 | session-only preset before init; refuses to connect otherwise; LS runtime key absent after a marker control | full (live) | `--only orca-pane-standalone-live` (API, session-only and resume-modal clauses) | ✅ (extended) | ✅ green |
+| 65-01-T3 | 01 | 1 | TAB-05, TAB-07 | T-65-03 | no EditorPanel/EditorContent in the bundle; preset export present at the pin; consumer API ⊆ entry exports | full + quick self-test | `--only orca-pane-entry`, `--only orca-pane-entry-self-test`, `--only orca-pane-css-live-self-test`, `--only orca-overlay`, `--only orca-overlay-built` | ✅ (extended) | ✅ green |
+| 65-02-T1 | 02 | 1 | TAB-05 | — | N/A | quick | `--only orca-editor-routes`, `--only orca-editor-routes-self-test` (plants: added mode, diff source, conflict kind, top-level view; EditorPanel value; check-details as a Theia kind; zero-member parse) | ✅ | ✅ green |
+| 65-02-T2 | 02 | 1 | TAB-05 | T-65-04, T-65-05, T-65-06 | spec grammar, toplevel root, execFile argv with `--`, no textconv, fsmonitor off, GIT_* stripped, size cap | quick | `--only orca-git-spec-self-test` (plants: `..`, `.`, empty segment, leading `/` and `./`, backslash, NUL, `HEAD`, upper-case hex, 39 hex, `:4`, `-x`, subdirectory root; hermetic bytes equal `git cat-file blob`) | ✅ | ✅ green |
+| 65-02-T3 | 02 | 1 | TAB-05 | T-65-07, T-65-08 | dirty editors never closed; only PB-owned roots removed; user removal honoured | quick self-test + full | `--only orca-workspace-live-self-test`; `--only orca-workspace-live` (coordinator) | ✅ | ✅ green |
+| 65-03-T1 | 03 | 1 | TAB-07 | — | N/A | quick | `--only gui07-mode-toggle-commands`, `--only gui04-registry-shape` | ✅ | ✅ green |
+| 65-03-T2 | 03 | 1 | TAB-09, TAB-07 | T-65-10 | no PB Add-project control | quick | `--only orca-no-pb-add-project`, `--only orca-no-pb-add-project-self-test` (plants: command label, toolbar item, chrome-bar title, empty vocabulary; control: at least one orca-panes command label parsed) | ✅ | ✅ green |
+| 65-03-T3 | 03 | 1 | TAB-07, TAB-09 | T-65-09, T-65-11 | unlisted egress red after a `.invalid` resolution control; Add-project equal to the stock standalone page | quick self-test + full | `--only orca-side-panel-live-self-test`, `--only orca-add-project-live-self-test`; `--only orca-side-panel-live`, `--only orca-add-project-live`, `--only verify-uri-roundtrip` (coordinator) | ✅ | ✅ green |
+| 65-04-T1 | 04 | 1 | TAB-08 | T-65-13 | names never reissued while referenced | quick | `--only gui04-registry-shape`, `--only orca-pane-routes-self-test`; builds of modes and orca-panes | ✅ | ✅ green |
+| 65-04-T2 | 04 | 1 | TAB-05 | — | N/A | quick | `--only orca-pane-routes`, `--only orca-pane-routes-self-test` (route table ↔ pinned content types; words ↔ docs/URI-SCHEMES.md); `--only orca-tabs-live-self-test` (stage (g) plants: conflict-review gave a hosted widget, no merge editor opened); `--only orca-tabs-live` (coordinator) | ✅ (Phase 64 rows, extended) | ✅ green |
+| 65-04-T3 | 04 | 1 | TAB-08 | T-65-12, T-65-14, T-65-15 | offer in no sink; needles never printed; device rows counted, never read | quick self-test + full | `--only orca-offer-scan-self-test`, `--only orca-relaunch-restore-live-self-test`; `--only orca-offer-scan`, `--only orca-relaunch-restore-live` (coordinator) | ✅ | ✅ green |
+| 65-05-T1 | 05 | 2 | all | T-65-16, T-65-17 | merge scope derived from plan frontmatter | full (live) | `--only orca-pane-css-live`, `--only orca-pane-standalone-live`, `--only orca-workspace-live` under the lock | n/a | ✅ green |
+| 65-05-T3 | 05 | 2 | all | T-65-18 | brand and allowlist values only from measurement | quick + full (live) | the remaining live rows; `scan-brand-residue` and its self-test; `--quick` | n/a | ✅ green |
 
-*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+*Status: ✅ green · ✅ green · ❌ red · ⚠️ flaky*
 
 ---
 
 ## Wave 0 Requirements
 
-- [ ] Phase 64 merged and its contract rows C64-1..C64-8 reconciled (65-05 prelaunch)
-- [ ] P65-04 mount gate: every new kind on the standalone page and under Route A, two attempts, providers and imports, Settings width (65-01 Task 1, the first live task)
-- [ ] CA-12 fixture: `orca worktree list --json` hostId values from a scratch data root (65-01 Task 1)
-- [ ] `scripts/verify-orca-editor-routes.mjs` (with `--git-spec-self-test`), `scripts/verify-orca-workspace-live.mjs`, `scripts/verify-orca-no-pb-add-project.mjs`, `scripts/verify-orca-side-panel-live.mjs`, `scripts/verify-orca-add-project-live.mjs`, `scripts/lib/orca-offer-scan.mjs` + `scripts/verify-orca-offer-scan.mjs`, `scripts/verify-orca-relaunch-restore-live.mjs`, each with `--self-test` and exit 2 plus a `Next step:` line on an unknown argument
-- [ ] Registry blocks `# NEW (65-02, …)`, `# NEW (65-03, …)`, `# NEW (65-04, …)` at both anchors
-- [ ] Brand rows re-measured by the coordinator on the staged merged tree
+- [x] Phase 64 merged and its contract rows C64-1..C64-8 reconciled (65-05 prelaunch)
+- [x] P65-04 mount gate: every new kind on the standalone page and under Route A, two attempts, providers and imports, Settings width (65-01 Task 1, the first live task)
+- [x] CA-12 fixture: `orca worktree list --json` hostId values from a scratch data root (65-01 Task 1)
+- [x] `scripts/verify-orca-editor-routes.mjs` (with `--git-spec-self-test`), `scripts/verify-orca-workspace-live.mjs`, `scripts/verify-orca-no-pb-add-project.mjs`, `scripts/verify-orca-side-panel-live.mjs`, `scripts/verify-orca-add-project-live.mjs`, `scripts/lib/orca-offer-scan.mjs` + `scripts/verify-orca-offer-scan.mjs`, `scripts/verify-orca-relaunch-restore-live.mjs`, each with `--self-test` and exit 2 plus a `Next step:` line on an unknown argument
+- [x] Registry blocks `# NEW (65-02, …)`, `# NEW (65-03, …)`, `# NEW (65-04, …)` at both anchors
+- [x] Brand rows re-measured by the coordinator on the staged merged tree
 
 ---
 
@@ -86,11 +86,26 @@ All phase behaviors have automated verification. The items below are deferred to
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 420s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references
+- [x] No watch-mode flags
+- [x] Feedback latency < 420s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** validated 2026-11-14 (static Nyquist audit at f6e2cab5)
+
+---
+
+## Validation Audit 2026-11-14
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+
+Every command named in the map is a row in `scripts/verify-platform.sh`; no new check was needed.
+Re-run here, static only, at f6e2cab5: every quick row and `-self-test` row named above PASS.
+Not re-run here (live lock held; audit was static by instruction): the live rows and the full rows that start an app or need a build (`diff-theia-core` reported port 3939 occupied, an environment condition, not a defect). Their PASS is the one recorded in the plan SUMMARYs and 65-VERIFICATION.md.
+Manual-only items are unchanged and stay in the end-of-milestone pass.
