@@ -196,6 +196,8 @@ async function live() {
     if (!existsSync(FIREFOX_BIN)) return { skip: `no built PowerBrowser (${FIREFOX_BIN} missing; see docs/BUILD.md "Firefox half")` };
     if (!existsSync(join(orcaDir, 'out', 'orcad', 'orcad.js'))) return { skip: 'no built orca/ (orca/out/orcad/orcad.js missing; run: nix develop .#orca --command bash scripts/build-orca.sh)' };
     if (!onPath('claude')) return { skip: 'claude is not on PATH (the real-agent stage needs the owner\'s claude login)' };
+    const unseeded = seedClaudeLogin(); // the real claude runs under the scratch HOME orcad inherits
+    if (unseeded) return { skip: unseeded };
     if (process.env.PB_LIVE_HEADED === '1' || process.env.PB_REAL_INPUT === '1') return { fails: ['this row runs headless only; unset PB_LIVE_HEADED and PB_REAL_INPUT'] };
     const { makeProfile, pollFor, withShell } = await import('./lib/pb-relaunch.mjs');
 
@@ -229,7 +231,6 @@ async function live() {
             git('init', '-q'); git('add', '.'); git('commit', '-q', '-m', 'fixture');
         }
         let quitResult = null;
-        seedClaudeLogin(); // the real claude runs under the scratch HOME orcad inherits
         await withShell(profile, async (app) => {
             const state = await pollFor(async () => { const s = await chromeJson(app, `ChromeUtils.importESModule(${JSON.stringify(SERVICE_URL)}).OrcaService.getState()`); return s.state === 'ready' ? s : null; }, 90000, 'OrcaService to reach ready');
             const theia = await chromeJson(app, `ChromeUtils.importESModule(${JSON.stringify(THEIA_URL)}).TheiaService.getState()`);

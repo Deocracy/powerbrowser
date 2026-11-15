@@ -216,7 +216,10 @@ export async function withOrcaTabsSession({ log = () => {}, needOrca = true, age
         const basePath = savedEnv.PATH ?? '';
         // The stub is on the launched PowerBrowser's PATH (and so orcad's), never on the Orca CLI's.
         const claude = agent === 'real' ? realClaudeOn(basePath, savedEnv.HOME ?? process.env.HOME) : null;
-        if (agent === 'real') seedClaudeLogin(); // the real agent runs under the scratch HOME orcad inherits
+        if (agent === 'real') { // the real agent runs under the scratch HOME orcad inherits
+            const unseeded = seedClaudeLogin();
+            if (unseeded) throw new Error(`the real agent cannot run: ${unseeded}`);
+        }
         if (agent === 'stub') {
             stubDir = writeStubAgentDir();
             process.env.PATH = `${stubDir}:${basePath}`;

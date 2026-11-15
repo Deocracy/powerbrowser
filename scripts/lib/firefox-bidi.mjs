@@ -25,7 +25,7 @@ import { join, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
-import { copyFileSync, existsSync, createWriteStream, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, createWriteStream, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { aliasPathFor, bridgeDirFor, dataRootFor, nodePlatform } from '../../powerbrowser/shell/OrcaEnv.sys.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -109,20 +109,48 @@ export function liveEnv(env = process.env) {
     return assertScratchHome(out);
 }
 
+/** Minutes of access-token life a real-agent run needs before it starts, so claude never refreshes inside the scratch HOME. */
+export const CLAUDE_TOKEN_MARGIN_MIN = 60;
+/** The ~/.claude.json keys a non-interactive claude needs to skip onboarding; folder trust is written by orcad itself. */
+export const CLAUDE_STATE_KEYS = Object.freeze(['hasCompletedOnboarding', 'lastOnboardingVersion', 'oauthAccount', 'userID']);
+
 /**
- * Copies the real claude's sign-in (~/.claude/.credentials.json, ~/.claude.json) into liveHome(), for the rows that
- * drive the owner's real agent (orca-tabs-live, orca-agent-status-live). Copies, never links: orcad writes Claude's
- * hooks into HOME/.claude/settings.json, and those must not reach the real file.
+ * Seeds liveHome() with exactly what the real claude needs to run non-interactively, for the rows that drive the
+ * owner's real agent (orca-tabs-live, orca-agent-status-live). Every file is written fresh, never linked or copied
+ * whole, so nothing the run writes (orcad's hooks in HOME/.claude/settings.json, session records) reaches ~/.claude:
+ *   .claude/.credentials.json  the claudeAiOauth sign-in only (no MCP server tokens, so no MCP refresh can happen)
+ *   .claude.json               CLAUDE_STATE_KEYS only (no mcpServers, no per-project state)
+ *   .claude/settings.json      skipDangerousModePermissionPrompt, mirrored from the real settings: orcad launches
+ *                              claude with --dangerously-skip-permissions, and without it claude stops at the
+ *                              Bypass Permissions confirmation, whose default is "No, exit"
+ * Token refresh: a refresh rotates the refresh token, and the rotated one would live only in the scratch copy, leaving
+ * the real sign-in with a spent token. So the run is refused unless the access token outlives CLAUDE_TOKEN_MARGIN_MIN,
+ * and at exit a changed refresh token in the copy sets a failing exit code naming it.
+ * Returns null when seeded, or the reason the row must not run.
  */
 export function seedClaudeLogin() {
+    const real = realHomes().find(h => existsSync(join(h, '.claude', '.credentials.json')));
+    if (!real) return 'no Claude sign-in in the real home (~/.claude/.credentials.json); sign in to claude once, then re-run';
+    const readJson = (f) => { try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return {}; } };
+    const oauth = readJson(join(real, '.claude', '.credentials.json')).claudeAiOauth;
+    if (!oauth?.refreshToken) return 'the Claude sign-in holds no claude.ai login (an API-key setup is not seeded); sign in to claude once, then re-run';
+    const minutesLeft = Math.floor((Number(oauth.expiresAt) - Date.now()) / 60000);
+    if (!(minutesLeft >= CLAUDE_TOKEN_MARGIN_MIN)) return `the Claude sign-in expires in ${Number.isFinite(minutesLeft) ? minutesLeft : '?'} min, under the ${CLAUDE_TOKEN_MARGIN_MIN} min a run needs without refreshing it in a scratch copy; use claude once so it refreshes its own sign-in, then re-run`;
     const home = liveHome();
-    const real = realHomes().find(h => existsSync(join(h, '.claude')));
-    if (!real) return home;
+    const state = readJson(join(real, '.claude.json'));
+    const settings = readJson(join(real, '.claude', 'settings.json'));
     mkdirSync(join(home, '.claude'), { recursive: true, mode: 0o700 });
-    for (const rel of [join('.claude', '.credentials.json'), '.claude.json']) {
-        if (existsSync(join(real, rel))) copyFileSync(join(real, rel), join(home, rel));
-    }
-    return home;
+    const creds = join(home, '.claude', '.credentials.json');
+    writeFileSync(creds, JSON.stringify({ claudeAiOauth: oauth }), { mode: 0o600 });
+    writeFileSync(join(home, '.claude.json'), JSON.stringify(Object.fromEntries(CLAUDE_STATE_KEYS.filter(k => k in state).map(k => [k, state[k]]))), { mode: 0o600 });
+    writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify(settings.skipDangerousModePermissionPrompt === true ? { skipDangerousModePermissionPrompt: true } : {}), { mode: 0o600 });
+    // prepend: runs before liveHome's removal listener
+    process.prependOnceListener('exit', () => {
+        if (readJson(creds).claudeAiOauth?.refreshToken === oauth.refreshToken) return;
+        console.error('firefox-bidi: FAIL -- claude refreshed its sign-in inside the scratch HOME; the real ~/.claude sign-in may now need a fresh login (run claude and sign in)');
+        process.exitCode = 1;
+    });
+    return null;
 }
 
 /**

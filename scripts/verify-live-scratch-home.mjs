@@ -11,10 +11,13 @@
 // env: liveEnv(...) (scripts/lib/firefox-bidi.mjs), which moves HOME and the XDG base folders to a per-run scratch
 // HOME and throws at launch when HOME is still the real one. A launch with no env inherits the real HOME and is red.
 // It also requires the runtime half: liveEnv returns assertScratchHome(...), and assertScratchHome compares against
-// os.homedir() (through realHomes) and throws, proven by calling it.
+// os.homedir() (through realHomes) and throws, proven by calling it. And the real-agent seed: seedClaudeLogin writes
+// fresh files (never copies or links a real one), seeds skipDangerousModePermissionPrompt, and keeps its token-expiry
+// margin (CLAUDE_TOKEN_MARGIN_MIN), so claude never refreshes the owner's sign-in inside a scratch copy.
 //
 // --self-test plants: a PowerBrowser spawn with no env, one with env: process.env, a CLI launch whose env sets
-// HOME: homedir(), an orcad launch through an args identifier, liveEnv without its assertion, and the runtime guard
+// HOME: homedir(), an orcad launch through an args identifier, liveEnv without its assertion, seedClaudeLogin copying
+// the credentials file whole, dropping the bypass-prompt setting, or dropping the expiry margin, and the runtime guard
 // accepting the real HOME. Each must go red naming the drift; the controls (the same launches with liveEnv) stay green.
 
 import { readdirSync, readFileSync } from 'node:fs';
@@ -111,6 +114,13 @@ export function verdict(files) {
     if (guard === null) fails.push(`${HELPER_REL} exports no assertScratchHome`);
     else if (!/throw /.test(guard) || !/inRealHome\(/.test(guard)) fails.push(`${HELPER_REL}: assertScratchHome neither tests inRealHome nor throws`);
     if (!/homedir\(\)/.test(fn('realHomes') ?? '')) fails.push(`${HELPER_REL}: realHomes does not include os.homedir()`);
+    const seed = fn('seedClaudeLogin');
+    if (seed === null) fails.push(`${HELPER_REL} exports no seedClaudeLogin`);
+    else {
+        if (/\b(copyFileSync|cpSync|symlinkSync|linkSync)\(/.test(seed)) fails.push(`${HELPER_REL}: seedClaudeLogin copies or links a whole real file, so MCP tokens and real-home state ride into the scratch HOME`);
+        if (!/skipDangerousModePermissionPrompt/.test(seed)) fails.push(`${HELPER_REL}: seedClaudeLogin does not seed skipDangerousModePermissionPrompt, so claude stops at the Bypass Permissions confirmation`);
+        if (!/CLAUDE_TOKEN_MARGIN_MIN/.test(seed)) fails.push(`${HELPER_REL}: seedClaudeLogin has no token-expiry margin, so claude can refresh the sign-in inside a scratch copy`);
+    }
     if (!launches) fails.push('vacuous: no live launch site was found under scripts/');
     return { fails, launches };
 }
@@ -155,6 +165,10 @@ async function selfTest() {
     rows.push(['control: the same launches through liveEnv stay green', ok.length === 0, ok]);
     const unguarded = { ...tree, [HELPER_REL]: tree[HELPER_REL].replace('return assertScratchHome(out);', 'return out;') };
     red('liveEnv without its runtime assertion', verdict(unguarded).fails, 'liveEnv does not return assertScratchHome');
+    const seedPlant = (from, to) => verdict({ ...tree, [HELPER_REL]: tree[HELPER_REL].replace(from, to) }).fails;
+    red('seedClaudeLogin copying the whole credentials file', seedPlant("writeFileSync(creds, JSON.stringify({ claudeAiOauth: oauth }), { mode: 0o600 });", "copyFileSync(join(real, '.claude', '.credentials.json'), creds);"), 'copies or links a whole real file');
+    red('seedClaudeLogin without the bypass-prompt setting', seedPlant(/settings\.skipDangerousModePermissionPrompt === true \? \{ skipDangerousModePermissionPrompt: true \} : \{\}/, '{}'), 'does not seed skipDangerousModePermissionPrompt');
+    red('seedClaudeLogin without the token-expiry margin', seedPlant(/if \(!\(minutesLeft >= CLAUDE_TOKEN_MARGIN_MIN\)\) return [^\n]*\n/, ''), 'no token-expiry margin');
     red('the runtime guard accepting the real HOME', await runtimeVerdict({ ...mod, assertScratchHome: () => undefined }), 'accepted HOME = os.homedir()');
     rows.push(['control: the runtime guard', (await runtimeVerdict(mod)).length === 0, await runtimeVerdict(mod)]);
     let bad = 0;
