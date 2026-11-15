@@ -2,10 +2,11 @@
 phase: "61"
 slug: "spikes-for-pane-hosting-browser-parity-and-live-sharing"
 # status lifecycle: draft (seeded by plan-phase) → validated (set by validate-phase §6)
-status: draft
-nyquist_compliant: false
+status: validated
+nyquist_compliant: true
 wave_0_complete: false
 created: "2026-11-09"
+audited: "2026-11-14"
 ---
 
 # Phase 61 — Validation Strategy
@@ -39,15 +40,15 @@ created: "2026-11-09"
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 61-004-W0 | 01 | 1 | TAB-03 | — | pairing URL never logged | live probe | `flock /home/chris/coding/Power-Browser/.git/pb-live.lock node .planning/spikes/004-orca-pane-hosting/measure.mjs --route a` (A1 multi-input Vite build leaves Orca untouched: `git -C orca status --porcelain --untracked-files=no` empty; A4 single React copy: in-page probe global) | ❌ W0 | ⬜ pending |
-| 61-004-routes | 01 | 1 | TAB-03 | — | loopback only | live probe | same script `--route b`, `--route b-prime`; `--measure css`, `--measure memory` (ChromeUtils.requestProcInfo), `--measure ws` | ❌ W0 | ⬜ pending |
-| 61-004-observe | 01 | 1 | TAB-03 | — | N/A | live probe | pane opened in Orca's client appears as a Lumino tab < 1 s (store subscribe / page script / `layout.subscribe`) | ❌ W0 | ⬜ pending |
-| 61-005-script | 02 | 1 | BRW-01 | — | N/A | derive-and-compare | `scripts/verify-platform.sh --only orca-browser-parity-self-test`; `--only orca-browser-parity` (SKIP line when `orca/` absent) | ❌ W0 | ⬜ pending |
-| 61-005-proof | 02 | 1 | BRW-01 | T-61-xx | web tab navigation through `PowerBrowserAPI.webTabNavigate` only | live probe | `flock … node .planning/spikes/005-orca-browser-parity/provider-proof.mjs` (S2 attach first; S1 recorded as fallback) | ❌ W0 | ⬜ pending |
-| 61-006-floor | 03 | 1 | EXT-03 | — | no token in logs; one minimal prompt spends Chris's login | live (CLI) | `node .planning/spikes/006-orca-live-sharing/floor-run.mjs` (marker echoed, session jsonl grew) | ❌ W0 | ⬜ pending |
-| 61-006-ext | 03 | 1 | EXT-03 | — | extension studied in scratch only, never redistributed | document review | `extension-notes.md` cites file/pattern; grep commands listed | ❌ W0 | ⬜ pending |
-| 61-brand | 01/02/03 | 1 | — | — | N/A | quick | `node scripts/scan-brand-residue.mjs` after `git add` (P61-15 rows) | ✅ | ⬜ pending |
-| 61-coord | 04 | 2 | criterion 4 | — | N/A | doc check | `grep -c "Route chosen by Phase 61" .planning/workstreams/orca/ROADMAP.md` = 3; MANIFEST rows 004–006; skill wrap-up present | n/a | ⬜ pending |
+| 61-004-W0 | 01 | 1 | TAB-03 | — | pairing URL never logged | live probe | `flock /home/chris/coding/Power-Browser/.git/pb-live.lock node .planning/spikes/004-orca-pane-hosting/measure.mjs --route a` (A1 multi-input Vite build leaves Orca untouched: `git -C orca status --porcelain --untracked-files=no` empty; A4 single React copy: in-page probe global) | ❌ W0 | live, recorded (spike 004) |
+| 61-004-routes | 01 | 1 | TAB-03 | — | loopback only | live probe | same script `--route b`, `--route b-prime`; `--measure css`, `--measure memory` (ChromeUtils.requestProcInfo), `--measure ws` | ❌ W0 | live, recorded (spike 004) |
+| 61-004-observe | 01 | 1 | TAB-03 | — | N/A | live probe | pane opened in Orca's client appears as a Lumino tab < 1 s (store subscribe / page script / `layout.subscribe`) | ❌ W0 | live, recorded (spike 004) |
+| 61-005-script | 02 | 1 | BRW-01 | — | N/A | derive-and-compare | `scripts/verify-platform.sh --only orca-browser-parity-self-test`; `--only orca-browser-parity` (SKIP line when `orca/` absent) | ❌ W0 | ✅ green |
+| 61-005-proof | 02 | 1 | BRW-01 | T-61-xx | web tab navigation through `PowerBrowserAPI.webTabNavigate` only | live probe | `flock … node .planning/spikes/005-orca-browser-parity/provider-proof.mjs` (S2 attach first; S1 recorded as fallback) | ❌ W0 | live, recorded (spike 005) |
+| 61-006-floor | 03 | 1 | EXT-03 | — | no token in logs; one minimal prompt spends Chris's login | live (CLI) | `node .planning/spikes/006-orca-live-sharing/floor-run.mjs` (marker echoed, session jsonl grew) | ❌ W0 | live, recorded (spike 006) |
+| 61-006-ext | 03 | 1 | EXT-03 | — | extension studied in scratch only, never redistributed | document review | `extension-notes.md` cites file/pattern; grep commands listed | ❌ W0 | manual (document review) |
+| 61-brand | 01/02/03 | 1 | — | — | N/A | quick | `node scripts/scan-brand-residue.mjs` after `git add` (P61-15 rows) | ✅ | ✅ green |
+| 61-coord | 04 | 2 | criterion 4 | — | N/A | doc check | `grep -c "Route chosen by Phase 61" .planning/workstreams/orca/ROADMAP.md` = 3; MANIFEST rows 004–006; skill wrap-up present | n/a | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -81,4 +82,10 @@ created: "2026-11-09"
 - [ ] Feedback latency < 420s
 - [ ] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-11-14 (manual-only items listed above)
+
+## Validation Audit 2026-11-14
+
+Re-run on f6e2cab5, static only: `orca-browser-parity` and `orca-browser-parity-self-test` PASS against the pinned orca/ tree; `grep -c "Route chosen by Phase 61" ROADMAP.md` = 3; spikes 004, 005, 006 present; brand scan PASS.
+
+The spike probes (004 routes/measures, 005 provider proof, 006 floor run) are one-off live spike prototypes, not regression rows; their run evidence is in each spike README. They stay live-recorded, not registry rows, by design. No new check needed. The extension half of EXT-03 is manual-only (blocked on EXT-01).
