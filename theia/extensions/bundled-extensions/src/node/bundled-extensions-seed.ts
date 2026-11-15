@@ -53,8 +53,30 @@ export async function seedBundledExtensions(input: SeedInput): Promise<{ record:
     const fs = input.fs ?? nodeFs.promises;
     const record = parseRecord(input.record);
     const actions: SeedAction[] = [];
+    for (const { id, version, dir } of await shippedExtensions(fs, input.sources)) {
+        // Recorded at this version: nothing to do, whether or not the user removed it.
+        if (record[id] === version) continue;
+        // Recorded at another version: upgrade a present copy only, so an uninstall sticks.
+        if (record[id] !== undefined && !await exists(fs, path.join(input.deploymentDir, id))) continue;
+        await copyInto(fs, dir, input.deploymentDir, id);
+        actions.push({ id, version, action: record[id] === undefined ? 'seeded' : 'upgraded' });
+        record[id] = version; // only after the copy succeeded
+    }
+    return { record, actions };
+}
+
+export interface ShippedExtension {
+    id: string;
+    version: string;
+    /** The shipped folder, <source>/<id>. */
+    dir: string;
+}
+
+/** Every extension the installed PowerBrowser ships; the first source wins for an id. */
+export async function shippedExtensions(fs: typeof nodeFs.promises, sources: string[]): Promise<ShippedExtension[]> {
+    const out: ShippedExtension[] = [];
     const seen = new Set<string>();
-    for (const source of input.sources) {
+    for (const source of sources) {
         let names: string[];
         try {
             names = await fs.readdir(source);
@@ -66,16 +88,43 @@ export async function seedBundledExtensions(input: SeedInput): Promise<{ record:
             const version = await readVersion(fs, path.join(source, id));
             if (!version) continue;
             seen.add(id);
-            // Recorded at this version: nothing to do, whether or not the user removed it.
-            if (record[id] === version) continue;
-            // Recorded at another version: upgrade a present copy only, so an uninstall sticks.
-            if (record[id] !== undefined && !await exists(fs, path.join(input.deploymentDir, id))) continue;
-            await copyInto(fs, path.join(source, id), input.deploymentDir, id);
-            actions.push({ id, version, action: record[id] === undefined ? 'seeded' : 'upgraded' });
-            record[id] = version; // only after the copy succeeded
+            out.push({ id, version, dir: path.join(source, id) });
         }
     }
-    return { record, actions };
+    return out;
+}
+
+export interface ReinstallInput {
+    sources: string[];
+    deploymentDir: string;
+    id: string;
+    fs?: typeof nodeFs.promises;
+}
+
+export type ReinstallOutcome = { result: 'reinstalled'; version: string } | { result: 'present' | 'unknown' };
+
+/** The shipped ids whose deployed copy is gone from the profile: what a reinstall can bring back. */
+export async function absentBundledExtensions(input: Omit<ReinstallInput, 'id'>): Promise<string[]> {
+    const fs = input.fs ?? nodeFs.promises;
+    const absent: string[] = [];
+    for (const { id } of await shippedExtensions(fs, input.sources)) {
+        if (!await exists(fs, path.join(input.deploymentDir, id))) absent.push(id);
+    }
+    return absent;
+}
+
+/**
+ * The reinstall rule (68-11). Only the user's explicit command runs it, never the seed:
+ * an id that is not shipped is refused, a present copy is left alone, and an absent one is
+ * copied back from the shipped folder. The caller deploys it and updates the record.
+ */
+export async function reinstallBundledExtension(input: ReinstallInput): Promise<ReinstallOutcome> {
+    const fs = input.fs ?? nodeFs.promises;
+    const shipped = (await shippedExtensions(fs, input.sources)).find(s => s.id === input.id);
+    if (!shipped) return { result: 'unknown' };
+    if (await exists(fs, path.join(input.deploymentDir, shipped.id))) return { result: 'present' };
+    await copyInto(fs, shipped.dir, input.deploymentDir, shipped.id);
+    return { result: 'reinstalled', version: shipped.version };
 }
 
 async function exists(fs: typeof nodeFs.promises, p: string): Promise<boolean> {
@@ -134,11 +183,15 @@ export class BundledExtensionsSeed implements PluginDeployerParticipant {
     @inject(PluginVSCodeEnvironment)
     protected readonly environments: PluginVSCodeEnvironment;
 
+    /** The shipped-extension directories this start read; the reinstall service reuses them. */
+    sources: string[] = [];
+
     async onWillStart(context: PluginDeployerStartContext): Promise<void> {
         try {
+            this.sources = sourcesOf(context.systemEntries);
             const deploymentDir = FileUri.fsPath(await this.environments.getDeploymentDirUri());
             const stored = await this.settings.get(SEED_RECORD_KEY);
-            const { record, actions } = await seedBundledExtensions({ sources: sourcesOf(context.systemEntries), deploymentDir, record: stored });
+            const { record, actions } = await seedBundledExtensions({ sources: this.sources, deploymentDir, record: stored });
             for (const a of actions) this.logger.info(`bundled extension ${a.id}@${a.version} ${a.action}`);
             const next = JSON.stringify(record);
             if (next !== stored) await this.settings.set(SEED_RECORD_KEY, next);

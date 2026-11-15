@@ -10,6 +10,7 @@
   },
   "theiaExtensions": [
     {
+      "frontend": "lib/browser/bundled-extensions-frontend-module",
       "backend": "lib/node/bundled-extensions-backend-module"
     }
   ],
