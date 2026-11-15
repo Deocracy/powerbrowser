@@ -136,10 +136,10 @@ TERM-03 (remote terminals) moved to v2; see "Terminals (TERM)" under v2 Requirem
 
 ### Platforms (PLAT)
 
-- [ ] **PLAT-01**: Linux, macOS and Windows artifacts build orcad and the overlaid client, with
+- [ ] **PLAT-01**: (D-40: Linux only in v1.7; macOS and Windows moved to the next version) Linux, macOS and Windows artifacts build orcad and the overlaid client, with
   the node-pty prebuild built per target on that target's own runner; Flatpak gets
   `--filesystem=home`; each check is a `verify-platform.sh` row. (T-12)
-- [ ] **PLAT-02**: Live checks pass on Linux; macOS and Windows get a smoke test when a host is
+- [ ] **PLAT-02**: (D-40: the macOS and Windows smoke tests moved to the next version) Live checks pass on Linux; macOS and Windows get a smoke test when a host is
   available. (D-24)
 
 ### Bundled extensions (BEXT)

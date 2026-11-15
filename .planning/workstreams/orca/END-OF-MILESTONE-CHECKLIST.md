@@ -48,9 +48,9 @@ Say "accept" or "override" for each. Accept is the recorded default.
 - [ ] Local release build; Anthropic Console fixer and triage workspaces with spend caps; Nix channel hash record and Cachix; TEL-13 crash-reporter switch-on. (CF CF-05, CF-06, CF-09, CF-11)
 - [ ] First Linux release: release probe, merge the bump PR, approve the `release` and `descriptor` environments, hop drill, `/download` check. (CF CF-08)
 - [ ] First live weekly re-pin tick: confirm the bump PR with auto-merge armed and give the approving review. (STATE row 68; 68-06-S "Tracking" OVL-02)
-- [ ] Dispatch `release.yml` to produce Linux and Windows artifacts with Orca (first real runs of `windows-orca` and the macOS jobs), including the container-built release tarball. (STATE row 68; WIN 30, 48)
-- [ ] Windows 11 VM (ISO, licence, disk) and the Windows smoke test of the Orca build: install, start, open Orca mode, orcad runs from `<GreD>/orca` on `node/node.exe`, quit leaves no orcad. (CF CF-10; WIN 50; STATE row 68)
-- [ ] macOS smoke test and artifact, which need a Mac (and an owner choice for the Darwin rust-std route). (WIN 48, 49; STATE row 68; CF section 2 "Phase 55 macOS")
+- [ ] Dispatch `release.yml` to produce the Linux artifact with Orca (D-40: the `windows-orca` and macOS jobs moved to the next version), including the container-built release tarball. (STATE row 68; WIN 30, 48)
+- [~] (D-40: moved to the next version) Windows 11 VM (ISO, licence, disk) and the Windows smoke test of the Orca build: install, start, open Orca mode, orcad runs from `<GreD>/orca` on `node/node.exe`, quit leaves no orcad. (CF CF-10; WIN 50; STATE row 68)
+- [~] (D-40: moved to the next version) macOS smoke test and artifact, which need a Mac (and an owner choice for the Darwin rust-std route). (WIN 48, 49; STATE row 68; CF section 2 "Phase 55 macOS")
 - [ ] Rotate the Cloudflare token `powerbrowser-claude` (`~/.config/cloudflare/pb-token`, expires 2026-12-06; it was pasted in a chat). (CF CF-13)
 - [ ] Settle the open owner values: mailbox, spend caps, Cloudflare payment method on file (recorded UNKNOWN), disk for `pkg-win11`. (CF section 2 "Also deferred"; 59-04-S task 3)
 
@@ -84,5 +84,5 @@ Say "accept" or "override" for each. Accept is the recorded default.
 - [ ] Which of section 2's credential steps already ran in the `p59-owner` child workspace? Its log (`59-OWNER-LOG.md` on branch `ServerDestroyer/p59-owner`) is not on this branch, so I could not tell what is done. (59-CONTEXT D-16; 59-07prep-S)
 - [ ] Plan 57-08 (clearing `MOZ_CRASHREPORTER_AUTO_SUBMIT`) must land before the TEL-13 switch; CF calls it unblocked and 59-04-S calls it complete, but no source states it shipped. (CF CF-11, CF-15; 59-04-S)
 - [ ] Were tags `v1.5` and `v1.6` pushed already? CF section 0 says `v1.5` was pushed, CF-19 says it waits; `v1.6` is untagged (v1.6 still open). Decide whether to close v1.6 and tag it. (CF header, CF section 3, CF-19; 59-CONTEXT D-11)
-- [ ] Windows twin of the POSIX claude-wrapper launcher (WIN 53) and the packaged-row teardown that leaves orcad running (WIN 54) are code gaps, not owner checks; confirm whether to fix, or re-date them under the owner date. (WIN 53, 54; STATE row 68)
-- [ ] Phase 55 macOS items (WIN 22, 23) and FIX-10 / Phase 43 / Phase 58 dated deferrals: in scope for this sitting, or stay dated? (CF section 5)
+- [x] Windows twin of the POSIX claude-wrapper launcher (WIN 53) and the packaged-row teardown that leaves orcad running (WIN 54) are code gaps, not owner checks; confirm whether to fix, or re-date them under the owner date. (WIN 53, 54; STATE row 68) — resolved: WIN 54 fixed (0ea32a1a); WIN 53 moved to the next version (D-40).
+- [x] Phase 55 macOS items (WIN 22, 23) and FIX-10 / Phase 43 / Phase 58 dated deferrals: in scope for this sitting, or stay dated? (CF section 5) — resolved: stay dated; macOS moved to the next version (D-40).

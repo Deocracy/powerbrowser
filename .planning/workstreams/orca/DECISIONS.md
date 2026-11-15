@@ -389,6 +389,13 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
     both directions, so the notification-click route to `clients.openWindow` needs a grant made in the agent container.
   - Side effect accepted: every container, the user's own included, keeps separate permissions. Mechanism and checks:
     gap-closure plan 66-10.
+- **D-40 — Linux only for v1.7.** Chris, 2026-11-15: "I want to defer the other OSs in order to get to testing; the
+  other OSs can go to the next version." v1.7 ships and is tested on Linux (the generic tarball and Flatpak, tested
+  on NixOS). Android stays: OVL-03, the stock Orca Android app pairing with PowerBrowser's orcad.
+  - Moved to the next version: the macOS and Windows halves of PLAT-01 and PLAT-02 (release.yml's windows-orca,
+    build-windows and macOS Orca jobs, the macOS artifact, both smoke tests), WINDOWS 32, 48, 49, 50 and 53, the
+    macOS/Windows rows of END-OF-MILESTONE-CHECKLIST.md, and ledger rows NG-076 and NG-077 (deferral requested).
+  - The code for those jobs stays in the tree; nothing is deleted.
 
 ## Spikes this direction needs
 
