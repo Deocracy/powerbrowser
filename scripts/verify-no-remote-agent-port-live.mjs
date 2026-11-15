@@ -52,6 +52,7 @@ import { fileURLToPath } from 'node:url';
 
 import * as OrcaEnv from '../powerbrowser/shell/OrcaEnv.sys.mjs';
 import { descendants, ensurePbNode } from './lib/orca-run.mjs';
+import { liveEnv } from './lib/firefox-bidi.mjs';
 import { freePort, ppidMap, signalIdentity, startTicks } from './verify-orca-hidden-electron.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -226,7 +227,7 @@ async function launch(label, extraArgs, node) {
     delete env.PB_LIVE_HEADED;
     delete env.PB_REAL_INPUT;
     // stdout and stderr are discarded unread: orcad's ready line and any pairing text never reach this script.
-    const child = spawn(FIREFOX_BIN, ['-no-remote', '-profile', profileDir, '-purgecaches', ...extraArgs], { env, stdio: 'ignore' });
+    const child = spawn(FIREFOX_BIN, ['-no-remote', '-profile', profileDir, '-purgecaches', ...extraArgs], { env: liveEnv(env), stdio: 'ignore' });
     const mainPid = child.pid;
     const exited = new Promise(r => child.once('exit', r));
     const recorded = new Map();

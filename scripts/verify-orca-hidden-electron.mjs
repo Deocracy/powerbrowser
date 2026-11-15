@@ -66,6 +66,7 @@ import { fileURLToPath } from 'node:url';
 
 import * as RealOrcaEnv from '../powerbrowser/shell/OrcaEnv.sys.mjs';
 import { BROWSER_PROVIDER_REL, descendants, ensurePbNode, installOutputRedaction, installedOrcaPaths } from './lib/orca-run.mjs';
+import { liveEnv } from './lib/firefox-bidi.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-hidden-electron';
@@ -160,7 +161,7 @@ async function runOrcad({ mode, nodeBin, orcaDir, OrcaEnv, home, dataRoot, port,
 
     const lines = [];
     const sink = OrcaEnv.createOutputSink({ pushLog: (l) => { lines.push(l); if (lines.length > 400) lines.shift(); } });
-    const child = spawn(nodeBin, args, { cwd: dataRoot, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(nodeBin, args, { cwd: dataRoot, env: liveEnv(env), stdio: ['ignore', 'pipe', 'pipe'] });
     let exited = null;
     const exit = new Promise((r) => {
         child.once('exit', (code, signal) => { exited = signal ?? `code ${code}`; r(); });

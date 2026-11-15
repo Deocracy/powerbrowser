@@ -48,6 +48,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { liveEnv } from './lib/firefox-bidi.mjs';
 
 import {
     REPO_ROOT as LIB_ROOT, ensurePbNode, installOutputRedaction, orcaVersionFromPins, orcadEnv, redact, startOrcad, stopOrcad,
@@ -358,7 +359,7 @@ const payload = (json) => json?.result ?? json;
 function cli(nodeBin, env, cwd, secrets, args) {
     const started = Date.now();
     return new Promise((resolveP) => {
-        execFile(nodeBin, [join(ORCA_DIR, 'out', 'cli', 'index.js'), ...args, '--json'], { env, cwd, encoding: 'utf8', timeout: 90000 }, (error, stdout, stderr) => {
+        execFile(nodeBin, [join(ORCA_DIR, 'out', 'cli', 'index.js'), ...args, '--json'], { env: liveEnv(env), cwd, encoding: 'utf8', timeout: 90000 }, (error, stdout, stderr) => {
             let json = null;
             try { json = JSON.parse(stdout); } catch { /* reported as not ok */ }
             resolveP({ ok: !error && json !== null && json.ok !== false, json, code: json?.error?.code ?? null, text: redact(`${stdout}${stderr}`, secrets).trim().slice(0, 300), started, ended: Date.now() });

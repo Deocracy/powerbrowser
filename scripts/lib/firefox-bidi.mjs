@@ -22,10 +22,10 @@
 import { spawn } from 'node:child_process';
 import { appendFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir, userInfo } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
-import { existsSync, createWriteStream, readdirSync, readFileSync } from 'node:fs';
+import { copyFileSync, existsSync, createWriteStream, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { aliasPathFor, bridgeDirFor, dataRootFor, nodePlatform } from '../../powerbrowser/shell/OrcaEnv.sys.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -54,13 +54,85 @@ export async function liveProfileDir(prefix) {
     return mkdtemp(join(LIVE_PROFILE_BASE, prefix));
 }
 
+// Owner ruling 2026-11-15 ("Scratch HOME"): no live launch of PowerBrowser, orcad or the Orca CLI sees the developer's
+// real home, so orcad's ~/.orca (credential key, agent hooks), ~/.config/orca and the agent's ~/.claude edits land in
+// one per-run folder under LIVE_PROFILE_BASE, removed when this process exits. Every launch passes env: liveEnv(...);
+// live-scratch-home (scripts/verify-live-scratch-home.mjs) goes red on a launch that does not.
+/** The variables that decide where a launched process writes home data, with each one's default under HOME. */
+export const LIVE_HOME_VARS = Object.freeze({ HOME: '', XDG_CONFIG_HOME: '.config', XDG_DATA_HOME: '.local/share', XDG_STATE_HOME: '.local/state', XDG_CACHE_HOME: '.cache' });
+const HARNESS_SCRATCH = join(REPO_ROOT, '.mozbuild');
+const within = (p, root) => { const r = relative(root, p); return r === '' || (!r.startsWith('..') && !isAbsolute(r)); };
+/** The developer's real home folders: os.homedir() (HOME) and the passwd entry, which differ when the harness itself runs under a scratch HOME. */
+export function realHomes() {
+    let pw = '';
+    try { pw = userInfo().homedir; } catch { /* no passwd entry */ }
+    return [...new Set([homedir(), pw].filter(Boolean).map(h => resolve(h)))];
+}
+/** True when `path` is unset, a real home or inside one, unless it is harness scratch under <repo>/.mozbuild. */
+export function inRealHome(path, homes = realHomes()) {
+    if (typeof path !== 'string' || path === '') return true;
+    const p = resolve(path);
+    return homes.some(h => within(p, h)) && !within(p, HARNESS_SCRATCH);
+}
+
+let scratchHome = null;
+/** This run's scratch HOME (mode 0700, under LIVE_PROFILE_BASE): made on first use, removed when the process exits. */
+export function liveHome() {
+    if (scratchHome) return scratchHome;
+    mkdirSync(LIVE_PROFILE_BASE, { recursive: true });
+    const home = mkdtempSync(join(LIVE_PROFILE_BASE, 'pb-home-'));
+    process.once('exit', () => rmSync(home, { recursive: true, force: true }));
+    return (scratchHome = home);
+}
+
+/** Throws unless HOME and every XDG base folder in `env` are set and outside the real home: the runtime half of the ruling. */
+export function assertScratchHome(env, what = 'a live launch') {
+    for (const name of Object.keys(LIVE_HOME_VARS)) {
+        if (inRealHome(env?.[name])) throw new Error(`firefox-bidi: ${what} would run with ${name}=${env?.[name] || '(unset)'}, the developer's real home (owner ruling 2026-11-15, Scratch HOME)`);
+    }
+    return env;
+}
+
+/**
+ * `env` with HOME and the XDG base folders moved off the real home: HOME to liveHome(), an XDG folder to its default
+ * under that HOME. A value already outside the real home is kept (a row's own configHome, a check's own scratch HOME).
+ * XAUTHORITY is the one real-home file passed through, explicitly, so a headed run can still reach the X server.
+ */
+export function liveEnv(env = process.env) {
+    const out = { ...env };
+    if (inRealHome(out.HOME)) out.HOME = liveHome();
+    for (const [name, sub] of Object.entries(LIVE_HOME_VARS)) if (sub && inRealHome(out[name])) out[name] = join(out.HOME, sub);
+    if (!out.XAUTHORITY) {
+        const xauth = realHomes().map(h => join(h, '.Xauthority')).find(f => existsSync(f));
+        if (xauth) out.XAUTHORITY = xauth;
+    }
+    return assertScratchHome(out);
+}
+
+/**
+ * Copies the real claude's sign-in (~/.claude/.credentials.json, ~/.claude.json) into liveHome(), for the rows that
+ * drive the owner's real agent (orca-tabs-live, orca-agent-status-live). Copies, never links: orcad writes Claude's
+ * hooks into HOME/.claude/settings.json, and those must not reach the real file.
+ */
+export function seedClaudeLogin() {
+    const home = liveHome();
+    const real = realHomes().find(h => existsSync(join(h, '.claude')));
+    if (!real) return home;
+    mkdirSync(join(home, '.claude'), { recursive: true, mode: 0o700 });
+    for (const rel of [join('.claude', '.credentials.json'), '.claude.json']) {
+        if (existsSync(join(real, rel))) copyFileSync(join(real, rel), join(home, rel));
+    }
+    return home;
+}
+
 /**
  * Removes the data-root alias and the bridge folder OrcaEnv derives for `profileDir` (aliasPathFor, bridgeDirFor
  * over dataRootFor), ignoring absent paths: with a repo-local profile every launch that starts orcad makes both
  * (A-6, Pitfall 7). A removal error is logged, never thrown.
  */
 export async function removeOrcaPathsFor(profileDir) {
-    const getEnv = name => process.env[name];
+    const env = liveEnv(); // the HOME the launch had: aliasPathFor falls back to <HOME>/.cache
+    const getEnv = name => env[name];
     const dataRoot = dataRootFor(profileDir);
     for (const path of [await aliasPathFor(dataRoot, getEnv), await bridgeDirFor(dataRoot, getEnv, nodePlatform(process.platform))]) {
         if (!path) continue;
@@ -350,7 +422,7 @@ export async function captureScreenshot(url, outputPath, { windowSize = '800,600
         '--window-size', windowSize,
         '--screenshot', outputPath,
         url,
-    ], { stdio: ['ignore', 'ignore', 'pipe'] });
+    ], { env: liveEnv(), stdio: ['ignore', 'ignore', 'pipe'] });
 
     const cleanup = async () => {
         if (sigintHandler) process.off('SIGINT', sigintHandler);
@@ -482,7 +554,7 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
         '--remote-allow-hosts', '127.0.0.1',
         '--remote-allow-system-access',
         ...(url ? [url] : []),
-    ], { env, stdio: ['ignore', stdoutSink ? 'pipe' : 'ignore', 'pipe'] });
+    ], { env: liveEnv(env), stdio: ['ignore', stdoutSink ? 'pipe' : 'ignore', 'pipe'] });
     if (child.pid) {
         launchedPids.add(child.pid);
         child.once('exit', () => launchedPids.delete(child.pid));

@@ -30,6 +30,7 @@ import { createRequire } from 'node:module';
 import { ORCA_PANES_MODULE_KEY } from './orca-tabs-live.mjs';
 import { REPO_ROOT, ensurePbNode, installOutputRedaction, orcaVersionFromPins, orcadEnv, redact, startOrcad, stopOrcad } from './orca-run.mjs';
 import { openWebTab, pollFor, withProbeShell } from './pb-live-probe.mjs';
+import { liveEnv } from './firefox-bidi.mjs';
 
 export const ORCA_DIR = join(REPO_ROOT, 'orca');
 export const PANES_DIR = join(ORCA_DIR, 'out', 'web', 'assets', 'pb-panes');
@@ -169,7 +170,7 @@ export async function withOrcaPaneSession({ log = () => {}, pbOrcad = false } = 
         if (client.hostname !== '127.0.0.1') throw new Error('the web client is not on loopback');
         const pairing = decodeURIComponent(client.hash.replace(/^#/, '').replace(/^pairing=/, ''));
         const orca = (...argv) => {
-            const r = spawnSync(node.path, [CLI_JS, ...argv, '--json'], { cwd: REPO_DIR, env, encoding: 'utf8', timeout: 60000 });
+            const r = spawnSync(node.path, [CLI_JS, ...argv, '--json'], { cwd: REPO_DIR, env: liveEnv(env), encoding: 'utf8', timeout: 60000 });
             const text = redact(`${r.stdout ?? ''}`, ready.secrets);
             if (r.status !== 0) throw new Error(`orca ${argv.slice(0, 2).join(' ')} exited ${r.status}: ${redact(`${r.stderr ?? ''}${text}`, ready.secrets).trim().split('\n').pop()}`);
             try { return JSON.parse(text); } catch { return { raw: text.slice(0, 300) }; }
@@ -213,7 +214,7 @@ export async function withOrcaPaneSession({ log = () => {}, pbOrcad = false } = 
                     const cli = join(state.effectiveRoot, 'cli', 'bin', 'orca');
                     const cliEnv = { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ORCA_USER_DATA: state.effectiveRoot, ORCA_USER_DATA_PATH: state.effectiveRoot };
                     ctx.pbOrca = (...argv) => {
-                        const r = spawnSync(cli, [...argv, '--json'], { cwd: REPO_DIR, env: cliEnv, encoding: 'utf8', timeout: 60000 });
+                        const r = spawnSync(cli, [...argv, '--json'], { cwd: REPO_DIR, env: liveEnv(cliEnv), encoding: 'utf8', timeout: 60000 });
                         const text = redact(`${r.stdout ?? ''}`, ready.secrets);
                         if (r.status !== 0) throw new Error(`PowerBrowser's orca ${argv.slice(0, 2).join(' ')} exited ${r.status}: ${redact(`${r.stderr ?? ''}${text}`, ready.secrets).trim().split('\n').pop()}`);
                         try { return JSON.parse(text); } catch { return { raw: text.slice(0, 300) }; }

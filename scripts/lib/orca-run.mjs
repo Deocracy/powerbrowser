@@ -25,6 +25,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
+import { liveEnv } from './firefox-bidi.mjs';
 import { fileURLToPath } from 'node:url';
 
 import { NODE_ARCHIVE_DIR, fetchArchive, readNodePin, verifyArchive } from '../generate-licensing.mjs';
@@ -175,7 +176,7 @@ export function installOutputRedaction(secrets) {
 export function startOrcad({ nodeBin, orcaDir, profileDir, env, timeoutMs = 60000 }) {
     const args = [join(orcaDir, 'out', 'orcad', 'orcad.js'), '--bind', '127.0.0.1', '--port', '0', '--json',
         '--web-client-root', join(orcaDir, 'out', 'web')];
-    const child = spawn(nodeBin, args, { cwd: profileDir, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(nodeBin, args, { cwd: profileDir, env: liveEnv(env), detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     let err = '';
     return new Promise((resolveP, rejectP) => {

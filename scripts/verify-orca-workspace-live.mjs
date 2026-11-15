@@ -53,6 +53,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { liveEnv } from './lib/firefox-bidi.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-workspace-live';
@@ -299,7 +300,7 @@ async function runLive() {
             const cliEnv = { PATH: basePath, HOME: gitEnv.HOME, ORCA_USER_DATA: state.effectiveRoot, ORCA_USER_DATA_PATH: state.effectiveRoot };
             const cli = join(state.effectiveRoot, 'cli', 'bin', 'orca');
             const orca = (...a) => {
-                try { return JSON.parse(execFileSync(cli, [...a, '--json'], { env: cliEnv, cwd: repo, timeout: 60000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })); } catch (e) {
+                try { return JSON.parse(execFileSync(cli, [...a, '--json'], { env: liveEnv(cliEnv), cwd: repo, timeout: 60000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })); } catch (e) {
                     throw new Error(`the Orca CLI call '${a.slice(0, 2).join(' ')}' failed: ${redact(String(e.stderr ?? e.message), secrets).trim().split('\n').pop()}`);
                 }
             };

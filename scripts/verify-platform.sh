@@ -4105,6 +4105,13 @@ run_own_checks() {
     "orca-credential-store|node $REPO_ROOT/scripts/verify-orca-credential-store.mjs"
     "orca-credential-store-self-test|node $REPO_ROOT/scripts/verify-orca-credential-store.mjs --self-test"
     "orca-credential-store-live-self-test|node $REPO_ROOT/scripts/verify-orca-credential-store-live.mjs --self-test"
+    # NEW (owner ruling 2026-11-15, Scratch HOME): live-scratch-home derives every spawn/execFile call under scripts/
+    # that launches PowerBrowser (--profile), orcad (orcad.js, buildOrcadArgs) or the Orca CLI, and requires each to pass
+    # env: liveEnv(...) (lib/firefox-bidi.mjs: a per-run scratch HOME and XDG folders, asserted at launch), so no live
+    # row writes the real ~/.orca. The self-test plants a launch with no env, env: process.env, HOME: homedir(), an orcad
+    # launch through an args identifier, liveEnv without its assertion and a guard that accepts the real HOME.
+    "live-scratch-home|node $REPO_ROOT/scripts/verify-live-scratch-home.mjs"
+    "live-scratch-home-self-test|node $REPO_ROOT/scripts/verify-live-scratch-home.mjs --self-test"
     # NEW (67-03, RUN-06/RUN-07, P67-01..P67-09, P67-32): orca-offer-file judges real lstat results of a temp folder
     # through orca-panes' offer-file-policy.ts (type-stripped): symlink, non-regular, other owner, group/other bits,
     # missing, non-loopback or mismatched endpoint, undecodable text; OFFER_REFUSAL_REASONS against the copy table's
@@ -6850,7 +6857,7 @@ run_own_checks() {
       # through scripts/lib/orca-run.mjs on a temporary data root reports the pinned disposable-profile string; then PB on
       # a normal profile reports a pinned host-key string and the /proc walker finds orcad before steps 3 and 4 judge its
       # absence for a temporary profile and the plaintext override. flock /home/chris/coding/Power-Browser/.git/pb-live.lock,
-      # ORCA_* unset; HOME is the developer's own, so orcad writes the user's ~/.orca key folder (owner item).
+      # ORCA_* unset; HOME is a per-run scratch folder (ruling 2026-11-15, live-scratch-home), never the real ~/.orca.
       "orca-credential-store-live|node $REPO_ROOT/scripts/verify-orca-credential-store-live.mjs"
       # NEW (67-03, RUN-06, P67-01, P67-29, A-7): orca-failure-page-live induces restarting (kill -9 of orcad),
       # port-in-use (a listener on the Orca port, relaunch), pairing-lost twice (orca-devices.json without the hosted

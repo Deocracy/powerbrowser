@@ -46,6 +46,7 @@ import { createServer } from 'node:http';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { liveEnv } from './lib/firefox-bidi.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-browser-snapshot-live';
@@ -259,7 +260,7 @@ async function chromeJson(app, expr) {
 // The CLI runs asynchronously: a blocking call would stall this process's fixture server while the page loads.
 function cliRunner(bin, env, cwd) {
     return (args) => new Promise((done) => {
-        execFile(bin, [...args, '--json'], { env, cwd, encoding: 'utf8', timeout: 90000 }, (error, stdout) => {
+        execFile(bin, [...args, '--json'], { env: liveEnv(env), cwd, encoding: 'utf8', timeout: 90000 }, (error, stdout) => {
             let json = null;
             try { json = JSON.parse(stdout); } catch { /* reported below */ }
             done({ ok: !error && json?.ok !== false && json !== null, result: json?.result ?? null, error: json?.error ?? (json ? null : { message: String(stdout).slice(0, 300) }) });

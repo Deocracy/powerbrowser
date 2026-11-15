@@ -36,6 +36,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { liveEnv, seedClaudeLogin } from './firefox-bidi.mjs';
 
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -215,6 +216,7 @@ export async function withOrcaTabsSession({ log = () => {}, needOrca = true, age
         const basePath = savedEnv.PATH ?? '';
         // The stub is on the launched PowerBrowser's PATH (and so orcad's), never on the Orca CLI's.
         const claude = agent === 'real' ? realClaudeOn(basePath, savedEnv.HOME ?? process.env.HOME) : null;
+        if (agent === 'real') seedClaudeLogin(); // the real agent runs under the scratch HOME orcad inherits
         if (agent === 'stub') {
             stubDir = writeStubAgentDir();
             process.env.PATH = `${stubDir}:${basePath}`;
@@ -308,7 +310,7 @@ export async function withOrcaTabsSession({ log = () => {}, needOrca = true, age
                 ctx.git = git;
                 const cli = join(state.effectiveRoot, 'cli', 'bin', 'orca');
                 ctx.orca = (...a) => {
-                    try { return JSON.parse(execFileSync(cli, [...a, '--json'], { env: cliEnv, cwd: repo, timeout: 60000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })); } catch (e) {
+                    try { return JSON.parse(execFileSync(cli, [...a, '--json'], { env: liveEnv(cliEnv), cwd: repo, timeout: 60000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })); } catch (e) {
                         throw new Error(`the Orca CLI call '${a.slice(0, 2).join(' ')}' failed: ${redact(String(e.stderr ?? e.message), secrets).trim().split('\n').pop()}`);
                     }
                 };

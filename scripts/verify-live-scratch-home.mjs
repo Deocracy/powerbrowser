@@ -1,0 +1,178 @@
+#!/usr/bin/env node
+// scripts/verify-live-scratch-home.mjs
+//
+// live-scratch-home (owner ruling 2026-11-15, "Scratch HOME"): no live harness launches PowerBrowser, orcad or the
+// Orca CLI with the developer's real HOME, so a live row never writes the real ~/.orca, ~/.config/orca or ~/.claude.
+//
+// It derives the launch sites from the tree, not from a list: every spawn, spawnSync, execFile and execFileSync call
+// in scripts/**/*.mjs whose command or arguments (with a bare identifier resolved to its const/let definition in the
+// same file) carry a launch mark: a --profile/-profile argument (PowerBrowser), orcad.js or buildOrcadArgs (orcad),
+// or the Orca CLI ('cli', 'bin', 'orca', CLI_JS, 'out', 'cli', or a [...args, '--json'] tail). Each one must pass
+// env: liveEnv(...) (scripts/lib/firefox-bidi.mjs), which moves HOME and the XDG base folders to a per-run scratch
+// HOME and throws at launch when HOME is still the real one. A launch with no env inherits the real HOME and is red.
+// It also requires the runtime half: liveEnv returns assertScratchHome(...), and assertScratchHome compares against
+// os.homedir() (through realHomes) and throws, proven by calling it.
+//
+// --self-test plants: a PowerBrowser spawn with no env, one with env: process.env, a CLI launch whose env sets
+// HOME: homedir(), an orcad launch through an args identifier, liveEnv without its assertion, and the runtime guard
+// accepting the real HOME. Each must go red naming the drift; the controls (the same launches with liveEnv) stay green.
+
+import { readdirSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const SCRIPTS = join(REPO_ROOT, 'scripts');
+const HELPER_REL = 'scripts/lib/firefox-bidi.mjs';
+const SELF_REL = 'scripts/verify-live-scratch-home.mjs';
+
+const CALL_RE = /(?<![.\w$])(spawn|spawnSync|execFile|execFileSync)\(/g;
+const LAUNCH_MARK = /'--?profile'|orcad\.js|buildOrcadArgs|'cli',\s*'bin',\s*'orca'|\bCLI_JS\b|'out',\s*'cli'|\[\s*\.\.\.\w+,\s*'--json'\s*\]/;
+
+/** The text from `open` (an opening paren) to its match, skipping strings, templates and comments. */
+function balanced(src, open) {
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+        const c = src[i];
+        if (c === "'" || c === '"' || c === '`') {
+            for (i++; i < src.length && src[i] !== c; i++) if (src[i] === '\\') i++;
+        } else if (c === '/' && src[i + 1] === '/') {
+            i = src.indexOf('\n', i); if (i < 0) return null;
+        } else if (c === '/' && src[i + 1] === '*') {
+            i = src.indexOf('*/', i + 2) + 1; if (i <= 0) return null;
+        } else if (c === '(' || c === '[' || c === '{') depth++;
+        else if (c === ')' || c === ']' || c === '}') { if (--depth === 0) return src.slice(open + 1, i); }
+    }
+    return null;
+}
+
+/** Top-level comma split of an argument list. */
+function splitArgs(text) {
+    const out = [];
+    let depth = 0, start = 0;
+    for (let i = 0; i < text.length; i++) {
+        const c = text[i];
+        if (c === "'" || c === '"' || c === '`') { for (i++; i < text.length && text[i] !== c; i++) if (text[i] === '\\') i++; }
+        else if ('([{'.includes(c)) depth++;
+        else if (')]}'.includes(c)) depth--;
+        else if (c === ',' && depth === 0) { out.push(text.slice(start, i).trim()); start = i + 1; }
+    }
+    out.push(text.slice(start).trim());
+    return out;
+}
+
+/** The last `const|let|var id = ...;` before `pos`, as text (empty when none). */
+function definition(src, id, pos) {
+    const re = new RegExp(`(?:const|let|var)\\s+${id.replace(/\$/g, '\\$')}\\s*=\\s*`, 'g');
+    let last = null;
+    for (let m; (m = re.exec(src)) && m.index < pos;) last = m;
+    if (!last) return '';
+    const end = src.indexOf(';', last.index);
+    return src.slice(last.index, end < 0 ? undefined : end);
+}
+
+/** Pure. Every launch call in `src`: { line, kind, envOk, text }. */
+export function launchesIn(src) {
+    const found = [];
+    for (const m of src.matchAll(CALL_RE)) {
+        const open = m.index + m[0].length - 1;
+        const body = balanced(src, open);
+        if (body === null) continue;
+        const args = splitArgs(body);
+        const resolved = args.slice(0, 2).map(a => (/^[A-Za-z_$][\w$]*$/.test(a) ? `${a} ${definition(src, a, m.index)}` : a)).join(' ');
+        if (!LAUNCH_MARK.test(resolved)) continue;
+        const opts = args.slice(2).find(a => a.startsWith('{')) ?? '{}';
+        // The env property of the options literal: `env: <expr>`, or the shorthand `env` (expression env).
+        const prop = splitArgs(opts.slice(1, -1)).find(p => /^env\b\s*(?::|$)/.test(p));
+        const env = prop === undefined ? null : (prop.includes(':') ? prop.slice(prop.indexOf(':') + 1).trim() : 'env');
+        found.push({ line: src.slice(0, m.index).split('\n').length, call: m[1], env, envOk: env !== null && /^liveEnv\(/.test(env) });
+    }
+    return found;
+}
+
+/** Pure. Red reasons for `files` ({ rel: source }). */
+export function verdict(files) {
+    const fails = [];
+    let launches = 0;
+    for (const [rel, src] of Object.entries(files)) {
+        if (rel === SELF_REL) continue;
+        for (const l of launchesIn(src)) {
+            launches++;
+            if (!l.envOk) fails.push(`${rel}:${l.line}: a live launch (${l.call}) ${l.env === null ? 'passes no env, so it inherits the real HOME' : `passes env: ${l.env}, not liveEnv(...)`}`);
+        }
+    }
+    const helper = files[HELPER_REL] ?? '';
+    const fn = (name) => { const i = helper.search(new RegExp(`export function ${name}\\(`)); return i < 0 ? null : balanced(helper, helper.indexOf('{', i)); };
+    const live = fn('liveEnv');
+    const guard = fn('assertScratchHome');
+    if (live === null) fails.push(`${HELPER_REL} exports no liveEnv`);
+    else if (!/return assertScratchHome\(/.test(live)) fails.push(`${HELPER_REL}: liveEnv does not return assertScratchHome(...), so a launch is never checked at runtime`);
+    if (guard === null) fails.push(`${HELPER_REL} exports no assertScratchHome`);
+    else if (!/throw /.test(guard) || !/inRealHome\(/.test(guard)) fails.push(`${HELPER_REL}: assertScratchHome neither tests inRealHome nor throws`);
+    if (!/homedir\(\)/.test(fn('realHomes') ?? '')) fails.push(`${HELPER_REL}: realHomes does not include os.homedir()`);
+    if (!launches) fails.push('vacuous: no live launch site was found under scripts/');
+    return { fails, launches };
+}
+
+/** Red reasons from calling the runtime guard: the real HOME must throw, a scratch one must pass. */
+export async function runtimeVerdict(mod) {
+    const fails = [];
+    const scratch = Object.fromEntries(Object.entries(mod.LIVE_HOME_VARS).map(([k, sub]) => [k, join('/nonexistent-pb-scratch-home', sub)]));
+    let threw = false;
+    try { mod.assertScratchHome({ ...scratch, HOME: homedir() }); } catch { threw = true; }
+    if (!threw) fails.push('runtime: assertScratchHome accepted HOME = os.homedir()');
+    try { mod.assertScratchHome(scratch); } catch (e) { fails.push(`runtime: assertScratchHome refused a scratch HOME (${e.message})`); }
+    const kept = mod.liveEnv(scratch);
+    if (kept.HOME !== scratch.HOME) fails.push('runtime: liveEnv replaced a HOME that was already scratch');
+    return fails;
+}
+
+function treeFiles() {
+    const files = {};
+    for (const ent of readdirSync(SCRIPTS, { recursive: true, withFileTypes: true })) {
+        if (!ent.isFile() || !ent.name.endsWith('.mjs')) continue;
+        const abs = join(ent.parentPath ?? ent.path, ent.name);
+        if (abs.includes(`${join('scripts', 'node_modules')}`)) continue;
+        files[relative(REPO_ROOT, abs)] = readFileSync(abs, 'utf8');
+    }
+    return files;
+}
+
+async function selfTest() {
+    const tree = treeFiles();
+    const mod = await import('./lib/firefox-bidi.mjs');
+    const rows = [];
+    const red = (name, fails, needle) => rows.push([name, fails.some(f => f.includes(needle)), fails]);
+    const plant = (src) => verdict({ ...tree, 'scripts/planted-live.mjs': src }).fails;
+    const control = verdict(tree).fails;
+    rows.push(['control: the tree is green', control.length === 0, control]);
+    red('PowerBrowser spawn with no env', plant("spawn(FIREFOX_BIN, ['--headless', '--profile', dir], { stdio: 'ignore' });\n"), 'planted-live.mjs:1: a live launch (spawn) passes no env');
+    red('PowerBrowser spawn with env: process.env', plant("spawn('bash', ['-c', 'x', binPath, '--profile', dir], { env: process.env, stdio: 'ignore' });\n"), 'passes env: process.env');
+    red('CLI launch with HOME: homedir()', plant("const cli = join(root, 'cli', 'bin', 'orca');\nexecFileSync(cli, [...a, '--json'], { env: { PATH, HOME: homedir() }, cwd });\n"), 'planted-live.mjs:2');
+    red('orcad launch through an args identifier', plant("const args = [join(dir, 'out', 'orcad', 'orcad.js'), '--json'];\nconst child = spawn(nodeBin, args, { cwd, env });\n"), 'passes env: env');
+    const ok = verdict({ ...tree, 'scripts/planted-live.mjs': "spawn(FIREFOX_BIN, ['--profile', d], { env: liveEnv(env) });\nconst cli = join(r, 'cli', 'bin', 'orca');\nexecFile(cli, [...a, '--json'], { env: liveEnv({ PATH }), cwd });\n" }).fails;
+    rows.push(['control: the same launches through liveEnv stay green', ok.length === 0, ok]);
+    const unguarded = { ...tree, [HELPER_REL]: tree[HELPER_REL].replace('return assertScratchHome(out);', 'return out;') };
+    red('liveEnv without its runtime assertion', verdict(unguarded).fails, 'liveEnv does not return assertScratchHome');
+    red('the runtime guard accepting the real HOME', await runtimeVerdict({ ...mod, assertScratchHome: () => undefined }), 'accepted HOME = os.homedir()');
+    rows.push(['control: the runtime guard', (await runtimeVerdict(mod)).length === 0, await runtimeVerdict(mod)]);
+    let bad = 0;
+    for (const [name, pass, fails] of rows) {
+        console.log(`verify-live-scratch-home --self-test: ${pass ? 'PASS' : 'FAIL'} -- ${name}${pass ? '' : `: ${fails.join(' | ') || 'nothing went red'}`}`);
+        if (!pass) bad++;
+    }
+    console.log(`verify-live-scratch-home: ${bad ? 'FAIL' : 'PASS'} -- ${rows.length - bad}/${rows.length} self-test rows`);
+    process.exit(bad ? 1 : 0);
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+    if (process.argv.includes('--self-test')) await selfTest();
+    else {
+        const { fails, launches } = verdict(treeFiles());
+        fails.push(...await runtimeVerdict(await import('./lib/firefox-bidi.mjs')));
+        for (const f of fails) console.error(`verify-live-scratch-home: FAIL -- ${f}`);
+        if (fails.length) process.exit(1);
+        console.log(`verify-live-scratch-home: PASS -- ${launches} live launch site(s) under scripts/ pass env: liveEnv(...), and the runtime guard refuses the real HOME`);
+    }
+}

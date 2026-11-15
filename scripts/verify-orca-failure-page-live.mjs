@@ -58,6 +58,7 @@ import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from '
 import { stripTypeScriptTypes } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { liveEnv } from './lib/firefox-bidi.mjs';
 
 const NAME = 'orca-failure-page-live';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -318,7 +319,7 @@ async function live(table) {
         const repo = join(profile.profileDir, 'repo');
         execFileSync('bash', ['-c', 'mkdir -p "$1" && cd "$1" && git init -q && git -c user.name=f -c user.email=f@invalid commit -q --allow-empty -m f', '_', repo]);
         const cliEnv = { PATH: process.env.PATH, HOME: process.env.HOME, ORCA_USER_DATA: s.effectiveRoot, ORCA_USER_DATA_PATH: s.effectiveRoot };
-        const orca = (...a) => JSON.parse(execFileSync(cli, [...a, '--json'], { env: cliEnv, cwd: repo, encoding: 'utf8', timeout: 60000 }));
+        const orca = (...a) => JSON.parse(execFileSync(cli, [...a, '--json'], { env: liveEnv(cliEnv), cwd: repo, encoding: 'utf8', timeout: 60000 }));
         orca('repo', 'add', '--path', repo);
         orca('terminal', 'create', '--worktree', `path:${repo}`);
         // C64-6: the worktree selected in the pane client first, as the other Orca rows do; with none selected New Orca

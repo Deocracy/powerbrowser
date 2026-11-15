@@ -65,6 +65,7 @@ import * as OrcaEnv from '../powerbrowser/shell/OrcaEnv.sys.mjs';
 import { descendants, ensurePbNode, installOutputRedaction } from './lib/orca-run.mjs';
 import { freePort, ppidMap, signalIdentity, startTicks } from './verify-orca-hidden-electron.mjs';
 import { deriveClaudeHookEvents, deriveStatusMap, readAgentStatus, scrubOwnOrcaEnv } from './verify-orca-agent-hooks.mjs';
+import { liveEnv, liveHome, seedClaudeLogin } from './lib/firefox-bidi.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-agent-status-live';
@@ -145,7 +146,7 @@ export function quitVerdict(recorded, alive) {
 
 // --- observations ----------------------------------------------------------------
 
-const encodedProjectDir = (cwd) => join(homedir(), '.claude', 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'));
+const encodedProjectDir = (cwd) => join(liveHome(), '.claude', 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'));
 /** { files, records, newest }: the session files and their line count for `cwd`; never reads beyond counting. */
 function sessionRecords(cwd) {
     const dir = encodedProjectDir(cwd);
@@ -228,6 +229,7 @@ async function live() {
             git('init', '-q'); git('add', '.'); git('commit', '-q', '-m', 'fixture');
         }
         let quitResult = null;
+        seedClaudeLogin(); // the real claude runs under the scratch HOME orcad inherits
         await withShell(profile, async (app) => {
             const state = await pollFor(async () => { const s = await chromeJson(app, `ChromeUtils.importESModule(${JSON.stringify(SERVICE_URL)}).OrcaService.getState()`); return s.state === 'ready' ? s : null; }, 90000, 'OrcaService to reach ready');
             const theia = await chromeJson(app, `ChromeUtils.importESModule(${JSON.stringify(THEIA_URL)}).TheiaService.getState()`);
@@ -244,7 +246,7 @@ async function live() {
 
             // Agent.
             const env = { PATH: process.env.PATH ?? '', HOME: homedir(), ORCA_USER_DATA: dataRoot, ORCA_USER_DATA_PATH: dataRoot };
-            cli = (args) => JSON.parse(execFileSync(join(dataRoot, 'cli', 'bin', 'orca'), [...args, '--json'], { env, cwd: repo, timeout: 60000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }))?.result;
+            cli = (args) => JSON.parse(execFileSync(join(dataRoot, 'cli', 'bin', 'orca'), [...args, '--json'], { env: liveEnv(env), cwd: repo, timeout: 60000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }))?.result;
             cli(['repo', 'add', '--path', repo]);
             const list = () => cli(['terminal', 'list'])?.terminals ?? [];
             const before = new Set(list().map((t) => t.handle));
@@ -266,7 +268,7 @@ async function live() {
                 if (st && st !== sequence[sequence.length - 1]) sequence.push(st);
                 if (st === sm.map.working && workingAt === null) workingAt = Date.now();
                 if (derivedWaitingEvent && st === sm.map.waiting && !answered) {
-                    execFileSync(join(dataRoot, 'cli', 'bin', 'orca'), ['terminal', 'send', '--terminal', handle, '--text', '\r', '--json'], { env, timeout: 30000, stdio: 'ignore' });
+                    execFileSync(join(dataRoot, 'cli', 'bin', 'orca'), ['terminal', 'send', '--terminal', handle, '--text', '\r', '--json'], { env: liveEnv(env), timeout: 30000, stdio: 'ignore' });
                     answered = true; // an answer, not a prompt: the reply is the second model turn
                 }
                 const waitingDone = !derivedWaitingEvent || answered || (workingAt !== null && Date.now() - workingAt > WAITING_HOLD_MS);

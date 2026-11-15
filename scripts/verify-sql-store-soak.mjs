@@ -40,6 +40,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { liveEnv } from './lib/firefox-bidi.mjs';
 
 const NAME = 'verify-sql-store-soak';
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -261,7 +262,7 @@ function startupWiringPresent() {
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function driveOnce({ profileDir, args, settleMs = 10000, readyTimeoutMs = 120000 }) {
-  const child = spawn(BIN, ['--headless', '--profile', profileDir, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(BIN, ['--headless', '--profile', profileDir, ...args], { env: liveEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '';
   if (child.stdout) child.stdout.on('data', c => { output += c.toString(); });
   if (child.stderr) child.stderr.on('data', c => { output += c.toString(); });

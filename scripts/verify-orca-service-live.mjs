@@ -71,6 +71,7 @@ import { fileURLToPath } from 'node:url';
 import * as OrcaEnv from '../powerbrowser/shell/OrcaEnv.sys.mjs';
 import { descendants, ensurePbNode, installOutputRedaction, orcaVersionFromPins } from './lib/orca-run.mjs';
 import { freePort, ppidMap, signalIdentity, startTicks } from './verify-orca-hidden-electron.mjs';
+import { liveEnv } from './lib/firefox-bidi.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-service-live';
@@ -301,7 +302,7 @@ async function live() {
             git('commit', '-q', '-m', 'fixture');
             const cli = join(orcad.ORCA_USER_DATA, 'cli', 'bin', 'orca');
             const orca = (...a) => {
-                try { execFileSync(cli, a, { env: cliEnv, cwd: repo, timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e) {
+                try { execFileSync(cli, a, { env: liveEnv(cliEnv), cwd: repo, timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e) {
                     throw new Error(`the Orca CLI call '${a.slice(0, 2).join(' ')}' failed: ${OrcaEnv.redact(String(e.stderr ?? e.message)).trim().split('\n').pop()}`);
                 }
             };

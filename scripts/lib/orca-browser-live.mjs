@@ -29,6 +29,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { liveEnv } from './firefox-bidi.mjs';
 
 import { ORCA_PANES_MODULE_KEY, PANES_BUNDLE_REL, REPO_ROOT, firefoxBin, prerequisites as tabsPrerequisites } from './orca-tabs-live.mjs';
 
@@ -193,7 +194,7 @@ export async function withBrowserSession({ log = () => {}, dpr = 1, home = null 
                 /** Runs the Orca CLI; never throws. Resolves { ok, result, error, t0, ms }. */
                 cli: (...args) => new Promise((resolve) => {
                     const t0 = Date.now();
-                    execFile(cliBin, [...args, '--json'], { env: cliEnv, cwd: ctx.repo, timeout: 90000, encoding: 'utf8' }, (_e, stdout) => resolve({ ...cliOutcome(stdout), t0, ms: Date.now() - t0 }));
+                    execFile(cliBin, [...args, '--json'], { env: liveEnv(cliEnv), cwd: ctx.repo, timeout: 90000, encoding: 'utf8' }, (_e, stdout) => resolve({ ...cliOutcome(stdout), t0, ms: Date.now() - t0 }));
                 }),
                 webTabs: () => ctx.probe(WEB_TABS),
                 // The main area's current tab (66-07): the focus tracker's currentWidget stays null when no Theia node takes

@@ -25,8 +25,8 @@
 // Every step quits PowerBrowser and removes its profile, and the alias and bridge folder OrcaEnv
 // derives for it.
 //
-// HOME is the developer's own (67-RESEARCH Open Question 2, an owner item): orcad keeps its credential
-// key in ~/.orca (orcadCredentialRoot), so step 2 writes or reuses the user's real ~/.orca key file.
+// HOME is a per-run scratch folder (owner ruling 2026-11-15, Scratch HOME; lib/firefox-bidi.mjs liveEnv): orcad keeps its credential
+// key in <HOME>/.orca (orcadCredentialRoot), so step 2 writes a key file that is removed when the run exits.
 //
 // Run under flock /home/chris/coding/Power-Browser/.git/pb-live.lock: the script re-execs itself
 // under <git common dir>/pb-live.lock unless PB_LIVE_LOCK_HELD=1. It removes every ORCA_* name from

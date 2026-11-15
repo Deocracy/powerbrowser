@@ -48,6 +48,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { startupWiringPresent } from './lib/startup-wiring.mjs';
+import { liveEnv } from './lib/firefox-bidi.mjs';
 
 const NAME = 'verify-sql-store-absence';
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -387,7 +388,7 @@ function readStoreRows(profileDir) {
 // mid-session readonly opens contend with the writer's WAL lock and throw
 // SQLITE_BUSY intermittently, while post-shutdown reads are deterministic.
 async function driveOnce({ profileDir, args, settleMs = 60000, readyTimeoutMs = 120000 }) {
-  const child = spawn(BIN, ['--headless', '--profile', profileDir, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(BIN, ['--headless', '--profile', profileDir, ...args], { env: liveEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '';
   if (child.stdout) child.stdout.on('data', c => { output += c.toString(); });
   if (child.stderr) child.stderr.on('data', c => { output += c.toString(); });

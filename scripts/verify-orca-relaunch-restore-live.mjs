@@ -65,6 +65,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { liveEnv } from './lib/firefox-bidi.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SELF = fileURLToPath(import.meta.url);
@@ -283,7 +284,7 @@ function launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, rec
         /** The built CLI against this launch's orcad, never this process's ORCA_* values. */
         orca(...a) {
             const env = { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ORCA_USER_DATA: state.effectiveRoot, ORCA_USER_DATA_PATH: state.effectiveRoot };
-            try { return JSON.parse(execFileSync(join(state.effectiveRoot, 'cli', 'bin', 'orca'), [...a, '--json'], { env, cwd: repo, timeout: 60000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })); } catch (e) {
+            try { return JSON.parse(execFileSync(join(state.effectiveRoot, 'cli', 'bin', 'orca'), [...a, '--json'], { env: liveEnv(env), cwd: repo, timeout: 60000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })); } catch (e) {
                 let said = [e.stderr, e.stdout, e.message].map((x) => String(x ?? '').trim()).find(Boolean) ?? '';
                 try { const reply = JSON.parse(String(e.stdout ?? '')); said = reply?.error?.message ?? reply?.error?.code ?? said; } catch { /* not a JSON reply */ }
                 throw new Error(`the Orca CLI call '${a.slice(0, 2).join(' ')}' failed: ${redact(said, secrets).split('\n').pop()}`);

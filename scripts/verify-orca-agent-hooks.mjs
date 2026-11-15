@@ -105,6 +105,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import * as OrcaEnv from '../powerbrowser/shell/OrcaEnv.sys.mjs';
 import { descendants, ensurePbNode, installOutputRedaction, orcaVersionFromPins } from './lib/orca-run.mjs';
+import { liveEnv } from './lib/firefox-bidi.mjs';
 import { freePort, ppidMap, signalIdentity, startTicks } from './verify-orca-hidden-electron.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -250,7 +251,7 @@ export function cliEnv(home, dataRoot) {
 export function orcaCli(dataRoot, env, args, timeout = 30000) {
     let out;
     try {
-        out = execFileSync(join(dataRoot, 'cli', 'bin', 'orca'), [...args, '--json'], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout });
+        out = execFileSync(join(dataRoot, 'cli', 'bin', 'orca'), [...args, '--json'], { env: liveEnv(env), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout });
     } catch (e) {
         const msg = (() => { try { return JSON.parse(e.stdout).error?.message; } catch { return null; } })();
         throw new Error(`orca ${args.slice(0, 2).join(' ')} failed: ${msg ?? String(e.stderr ?? e.message).trim().split('\n').pop()}`);
@@ -639,7 +640,7 @@ async function startOrcad(ctx) {
     const lines = [];
     const sink = OrcaEnv.createOutputSink({ pushLog: (l) => { lines.push(l); if (lines.length > 200) lines.shift(); } });
     const child = spawn(nodeBin, OrcaEnv.buildOrcadArgs({ orcadMain: join(orcaDir, 'out', 'orcad', 'orcad.js'), port, webClientRoot: join(orcaDir, 'out', 'web') }),
-        { cwd: dataRoot, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+        { cwd: dataRoot, env: liveEnv(env), detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     ctx.track(child.pid);
     child.stdout.on('data', (d) => sink.onStdout(String(d)));
     child.stderr.on('data', (d) => sink.onStderr(String(d)));
