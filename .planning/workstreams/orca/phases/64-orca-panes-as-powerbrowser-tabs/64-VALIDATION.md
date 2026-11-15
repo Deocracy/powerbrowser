@@ -2,9 +2,9 @@
 phase: "64"
 slug: "orca-panes-as-powerbrowser-tabs"
 # status lifecycle: draft (seeded by plan-phase) → validated (set by validate-phase §6)
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: validated
+nyquist_compliant: true
+wave_0_complete: true
 created: "2026-11-10"
 ---
 
@@ -44,24 +44,25 @@ created: "2026-11-10"
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 64-bundle | 01 | 1 | TAB-04, TAB-06, TERM-01 | T-64-02, T-64-03 | no tracked Orca edit; no React copy in the bundle; no seam; no Theia dependency in the Orca build | full | `nix develop .#orca --command bash scripts/build-orca.sh` with `theia/node_modules` moved aside (log: overlay copied ×2, `build-orca-panes: PASS`); `build-orca-panes.sh --standalone` React marker ≥ 1 before the `pb-panes/` count of 0; `build-orca-panes.sh` with no nested Nix shell and no GNU find format option; `--only orca-overlay`, `--only orca-overlay-built` | ❌ W0 | ⬜ pending |
-| 64-typecheck | 01 | 1 | TAB-04 | — | overlay sources typed against Orca's own types | full | `pnpm run typecheck:web` in `orca/` inside `nix develop .#orca`, once in-lane (64-01 T3) | n/a | ⬜ pending |
-| 64-isolated | 01 | 1 | TERM-01 (D-15, P64-32) | — | N/A | full (live) | `orca-pane-standalone-live` stage 0, run first: two leaves of one split tab, one root each, one xterm each, input reaches only its own PTY, handle count unchanged; on failure an `OWNER-ITEM: P64-32` line | ❌ W0 | ⬜ pending |
-| 64-standalone | 01 | 1 | TAB-06 (criterion 3) | — | N/A | full (live) + quick self-test | `--only orca-pane-standalone-live` (planted throwing child first, then every hosted kind), `--only orca-pane-standalone-live-self-test` | ❌ W0 | ⬜ pending |
-| 64-entry | 01 | 1 | TAB-04 (spike conditions 3, 4) | T-64-02, T-64-03 | React identity; no inlined assets; no tab-bar import | full + quick self-test | `--only orca-pane-entry` (tracked status, marker 0 after the standalone variant's ≥ 1, React major.minor against Theia's when Theia is installed (a named SKIP for that clause otherwise), inlined asset names, entry imports, C3 exports), `--only orca-pane-entry-self-test` | ❌ W0 | ⬜ pending |
-| 64-css-static | 01 | 1 | TAB-04 (condition 1) | T-64-01 | no Orca rule outside the scope; no keyframe or root property collision | full + quick self-test | `--only orca-pane-css` (built sheet against Theia's built CSS), `--only orca-pane-css-self-test` (fixtures) | ❌ W0 | ⬜ pending |
-| 64-css-live | 01, 05 | 1, 2 | TAB-04 (condition 1, P64-15) | T-64-01 | Theia and pane values unchanged; html writes unread by Theia | full (live) + quick self-test | `--only orca-pane-css-live` (lane-build mode in 64-01; real-widget mode first on the merged tree in 64-05), `--only orca-pane-css-live-self-test` | ❌ W0 | ⬜ pending |
-| 64-handoff | 02 | 1 | TAB-04 (P64-06, P64-07) | T-64-06, T-64-07, T-64-08, T-64-09 | private-file reads; path containment; route behind the token gate | quick (inline) | `yarn --cwd extensions/orca-panes build` + the Node run of `privateDirVerdict`, `privateFileVerdict`, `resolveInside` (64-02 T1 verify); `bash scripts/diff-theia-core.sh` | ❌ W0 | ⬜ pending |
-| 64-widgets | 02 | 1 | TAB-02, TAB-04, TAB-06 | T-64-10 | close goes through Orca's confirmation | quick (inline) | the Node run of `planPanes`, `mintName`, `placementFor`, `orcaPaneUriOf` (64-02 T2 verify); `--only gui04-registry-shape` | ❌ W0 | ⬜ pending |
-| 64-routes | 02 | 1 | TAB-02, TAB-04 (criterion 4) | T-64-11 | no client-side terminal creation (A4) | quick | `--only orca-pane-routes`, `--only orca-pane-routes-self-test` (plants: added and removed content type, unknown target, pending without requirement, doc word drift both ways, bundle API member missing, hand-off key mismatch, table kind without observer branch, creation-module import, C3 module key differing from orca-tabs-live.mjs, empty union) | ❌ W0 | ⬜ pending |
-| 64-mode | 03 | 1 | TAB-01 (criterion 1) | T-64-15 | no activation hook on the switch path | quick + full (live) | `--only gui07-mode-toggle-commands` (with the dress clause), `--only gui07-mode-toggle-commands-self-test`, `--only gui07-mode-switch-tabs-invariant`; `verify-mode-switch-tabs-live.mjs` with the Orca hop derived | ✅ (edit) | ⬜ pending |
-| 64-offer | 03 | 1 | TAB-04 (P64-07) | T-64-13, T-64-14 | offer only in the 0600 file; never in log, state or diagnostics | quick | `--only orca-service` (scenarios I (hand-off files) and I-b named in its PASS line without asserting the full list, cross-lane literal clauses), `--only orca-service-self-test` (plants: offer in log, before ready, in state, bundle folder absent, not removed) | ✅ (edit) | ⬜ pending |
-| 64-keys | 04 | 1 | TERM-04 (criterion 7) | — | Theia terminals keep PowerBrowser's bindings | quick | `--only orca-terminal-keys`, `--only orca-terminal-keys-self-test` (fixture orca-panes tree) | ❌ W0 | ⬜ pending |
-| 64-keys-live | 04, 05 | 1, 2 | TERM-04 (criterion 7) | T-64-17 | N/A | full (live) + quick self-test | `--only orca-terminal-keys-live` (control in t<n> and a web tab first; hosted Orca terminal stage on the merged tree), `--only orca-terminal-keys-live-self-test` | ❌ W0 | ⬜ pending |
-| 64-tabs-live | 04, 05 | 1, 2 | TAB-04, TAB-06, TERM-01 (criteria 2, 3, 6) | T-64-06, T-64-07, T-64-08, T-64-16 | route refuses without the cookie and outside the folder; offer contained; Orca's close confirmation honoured | full (live) + quick self-test | `--only orca-tabs-live` (stages a-m, including e2 PB-side split and g2 Orca tab groups as Lumino splits), `--only orca-tabs-live-self-test` | ❌ W0 | ⬜ pending |
-| 64-roundtrip | 04, 05 | 1, 2 | TAB-02 (criterion 5) | — | N/A | full (live) | `node scripts/verify-uri-roundtrip.mjs --scheme pb-orca` (uriOf equals the input; one widget per name; empty path; stale name) | ✅ (edit) | ⬜ pending |
-| 64-mode-seeds | 04, 05 | 1, 2 | TAB-04 (criterion 2: moves between modes) | — | N/A | full (live) + quick self-test | `--only gui07-mode-switch-tabs-live` (a hosted chat and a hosted terminal seeded after the snapshots), `--only gui07-mode-switch-tabs-live-self-test` | ✅ (edit) | ⬜ pending |
-| 64-coord | 05 | 2 | all | T-64-19..T-64-22 | merged by full ref, scope-checked; brand rows measured | quick + live | `--quick` against the baseline; the builds; the live order above; `node scripts/scan-brand-residue.mjs` and `--self-test` | n/a | ⬜ pending |
+| 64-bundle | 01 | 1 | TAB-04, TAB-06, TERM-01 | T-64-02, T-64-03 | no tracked Orca edit; no React copy in the bundle; no seam; no Theia dependency in the Orca build | full | `nix develop .#orca --command bash scripts/build-orca.sh` with `theia/node_modules` moved aside (log: overlay copied ×2, `build-orca-panes: PASS`); `build-orca-panes.sh --standalone` React marker ≥ 1 before the `pb-panes/` count of 0; `build-orca-panes.sh` with no nested Nix shell and no GNU find format option; `--only orca-overlay`, `--only orca-overlay-built` | ✅ | ✅ green (live record, not re-run: static-only audit) |
+| 64-typecheck | 01 | 1 | TAB-04 | — | overlay sources typed against Orca's own types | full | `pnpm run typecheck:web` in `orca/` inside `nix develop .#orca`, once in-lane (64-01 T3) | n/a | ✅ green (live record, not re-run: static-only audit) |
+| 64-isolated | 01 | 1 | TERM-01 (D-15, P64-32) | — | N/A | full (live) | `orca-pane-standalone-live` stage 0, run first: two leaves of one split tab, one root each, one xterm each, input reaches only its own PTY, handle count unchanged; on failure an `OWNER-ITEM: P64-32` line | ✅ | ✅ green (live record, not re-run: static-only audit) |
+| 64-standalone | 01 | 1 | TAB-06 (criterion 3) | — | N/A | full (live) + quick self-test | `--only orca-pane-standalone-live` (planted throwing child first, then every hosted kind), `--only orca-pane-standalone-live-self-test` | ✅ | self-test ✅ green (static re-run 2026-11-14); live ✅ green (live record, not re-run: static-only audit) |
+| 64-entry | 01 | 1 | TAB-04 (spike conditions 3, 4) | T-64-02, T-64-03 | React identity; no inlined assets; no tab-bar import | full + quick self-test | `--only orca-pane-entry` (tracked status, marker 0 after the standalone variant's ≥ 1, React major.minor against Theia's when Theia is installed (a named SKIP for that clause otherwise), inlined asset names, entry imports, C3 exports), `--only orca-pane-entry-self-test` | ✅ | ✅ green (static re-run 2026-11-14) |
+| 64-css-static | 01 | 1 | TAB-04 (condition 1) | T-64-01 | no Orca rule outside the scope; no keyframe or root property collision | full + quick self-test | `--only orca-pane-css` (built sheet against Theia's built CSS), `--only orca-pane-css-self-test` (fixtures) | ✅ | self-test ✅ green (static re-run 2026-11-14); check SKIP here (no built Theia CSS in the main tree) |
+| 64-css-live | 01, 05 | 1, 2 | TAB-04 (condition 1, P64-15) | T-64-01 | Theia and pane values unchanged; html writes unread by Theia | full (live) + quick self-test | `--only orca-pane-css-live` (lane-build mode in 64-01; real-widget mode first on the merged tree in 64-05), `--only orca-pane-css-live-self-test` | ✅ | self-test ✅ green (static re-run 2026-11-14); live ✅ green (live record, not re-run: static-only audit) |
+| 64-handoff | 02 | 1 | TAB-04 (P64-06, P64-07) | T-64-06, T-64-07, T-64-08, T-64-09 | private-file reads; path containment; route behind the token gate | quick (inline) | `yarn --cwd extensions/orca-panes build` + the Node run of `privateDirVerdict`, `privateFileVerdict`, `resolveInside` (64-02 T1 verify); `bash scripts/diff-theia-core.sh` | ✅ | ✅ green (live record, not re-run: static-only audit) |
+| 64-widgets | 02 | 1 | TAB-02, TAB-04, TAB-06 | T-64-10 | close goes through Orca's confirmation | quick (inline) | the Node run of `planPanes`, `mintName`, `placementFor`, `orcaPaneUriOf` (64-02 T2 verify); `--only gui04-registry-shape` | ✅ | ✅ green (static re-run 2026-11-14) |
+| 64-routes | 02 | 1 | TAB-02, TAB-04 (criterion 4) | T-64-11 | no client-side terminal creation (A4) | quick | `--only orca-pane-routes`, `--only orca-pane-routes-self-test` (plants: added and removed content type, unknown target, pending without requirement, doc word drift both ways, bundle API member missing, hand-off key mismatch, table kind without observer branch, creation-module import, C3 module key differing from orca-tabs-live.mjs, empty union) | ✅ | ✅ green (static re-run 2026-11-14) |
+| 64-mode | 03 | 1 | TAB-01 (criterion 1) | T-64-15 | no activation hook on the switch path | quick + full (live) | `--only gui07-mode-toggle-commands` (with the dress clause), `--only gui07-mode-toggle-commands-self-test`, `--only gui07-mode-switch-tabs-invariant`; `verify-mode-switch-tabs-live.mjs` with the Orca hop derived | ✅ (edit) | ✅ green (static re-run 2026-11-14) |
+| 64-offer | 03 | 1 | TAB-04 (P64-07) | T-64-13, T-64-14 | offer only in the 0600 file; never in log, state or diagnostics | quick | `--only orca-service` (scenarios I (hand-off files) and I-b named in its PASS line without asserting the full list, cross-lane literal clauses), `--only orca-service-self-test` (plants: offer in log, before ready, in state, bundle folder absent, not removed) | ✅ (edit) | ✅ green (static re-run 2026-11-14) |
+| 64-keys | 04 | 1 | TERM-04 (criterion 7) | — | Theia terminals keep PowerBrowser's bindings | quick | `--only orca-terminal-keys`, `--only orca-terminal-keys-self-test` (fixture orca-panes tree) | ✅ | ✅ green (static re-run 2026-11-14) |
+| 64-keys-live | 04, 05 | 1, 2 | TERM-04 (criterion 7) | T-64-17 | N/A | full (live) + quick self-test | `--only orca-terminal-keys-live` (control in t<n> and a web tab first; hosted Orca terminal stage on the merged tree), `--only orca-terminal-keys-live-self-test` | ✅ | self-test ✅ green (static re-run 2026-11-14); live ✅ green (live record, not re-run: static-only audit) |
+| 64-tabs-live | 04, 05 | 1, 2 | TAB-04, TAB-06, TERM-01 (criteria 2, 3, 6) | T-64-06, T-64-07, T-64-08, T-64-16 | route refuses without the cookie and outside the folder; offer contained; Orca's close confirmation honoured | full (live) + quick self-test | `--only orca-tabs-live` (stages a-m, including e2 PB-side split and g2 Orca tab groups as Lumino splits), `--only orca-tabs-live-self-test` | ✅ | self-test ✅ green (static re-run 2026-11-14); live green except stage g2/g3 (WINDOWS 55, owner pass) |
+| 64-roundtrip | 04, 05 | 1, 2 | TAB-02 (criterion 5) | — | N/A | full (live) | `node scripts/verify-uri-roundtrip.mjs --scheme pb-orca` (uriOf equals the input; one widget per name; empty path; stale name) | ✅ (edit) | ✅ green (live record, not re-run: static-only audit) |
+| 64-mode-seeds | 04, 05 | 1, 2 | TAB-04 (criterion 2: moves between modes) | — | N/A | full (live) + quick self-test | `--only gui07-mode-switch-tabs-live` (a hosted chat and a hosted terminal seeded after the snapshots), `--only gui07-mode-switch-tabs-live-self-test` | ✅ (edit) | ✅ green (live record, not re-run: static-only audit) |
+| 64-coord | 05 | 2 | all | T-64-19..T-64-22 | merged by full ref, scope-checked; brand rows measured | quick + live | `--quick` against the baseline; the builds; the live order above; `node scripts/scan-brand-residue.mjs` and `--self-test` | n/a | ✅ green (live record, not re-run: static-only audit) |
+| 64-groups | validation | — | TAB-04 (criterion 2: tab groups as Lumino splits) | — | N/A | quick + self-test | `--only orca-pane-groups`, `--only orca-pane-groups-self-test` (paneRecords' group branch taken from pb-pane-mount.tsx by AST on four two-group layouts, fed to planPanes; plants: group branch dropped, row direction swapped, split side inverted, same group as split, paneRecords renamed, placement ignored) | ✅ | ✅ green (added 2026-11-14) |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -69,32 +70,55 @@ created: "2026-11-10"
 
 ## Wave 0 Requirements
 
-- [ ] The overlay entry, Vite config and scoping pass compiled by `scripts/build-orca-panes.sh` (64-01 T1, T3) before any row that reads the bundle
-- [ ] `scripts/lib/orca-pane-harness.mjs` (from the spike's `measure.mjs`, `page-routes.mjs` and `p64-probe/probe-64.mjs`, with A9's scope-aware rule counter and the control planted on a property that differs nowhere in the baseline) and the standalone variant of the bundle (`build-orca-panes.sh --standalone`, React bundled; also the two-copy control)
-- [ ] The lane-build React hand-off for 64-01's in-lane CSS measure (one line appended to the git-ignored `src-gen/frontend/index.js`, `git diff --name-only -- theia` empty)
-- [ ] `scripts/lib/orca-tabs-live.mjs` with the stub agent written into a scratch directory at run time (Open Question 3)
-- [ ] The portal probe (an Orca tooltip and an Orca dialog opened in the pane) and the derived html clause's probe sheet in `verify-orca-pane-css-live.mjs`
-- [ ] New scripts each with `--self-test`: `verify-orca-pane-entry.mjs`, `verify-orca-pane-standalone-live.mjs`, `verify-orca-pane-css.mjs`, `verify-orca-pane-css-live.mjs`, `verify-orca-pane-routes.mjs`, `verify-orca-terminal-keys.mjs`, `verify-orca-terminal-keys-live.mjs`, `verify-orca-tabs-live.mjs`
-- [ ] Extended: `verify-mode-toggle-commands.mjs` (dress clause, anchors derived from the clean sources), `verify-orca-service.mjs` (scenario I), `verify-uri-roundtrip.mjs` (pb-orca rows), `verify-mode-switch-tabs-live.mjs` (Orca seeds)
-- [ ] orca-panes wired into `theia/package.json` and the browser app by the coordinator (64-05 T1), before any merged-tree live row
-- [ ] Brand rows re-measured by the coordinator after the lanes merge
-- [ ] Re-run after the chrome edits: `shell-error-copy-no-internals`, `internals-boundary`, `internals-catalogue`, `ng-040-internals-catalogue-lines`, `start-path-recovery`, `orca-bridge-dir`, `orca-service-live`
+- [x] The overlay entry, Vite config and scoping pass compiled by `scripts/build-orca-panes.sh` (64-01 T1, T3) before any row that reads the bundle
+- [x] `scripts/lib/orca-pane-harness.mjs` (from the spike's `measure.mjs`, `page-routes.mjs` and `p64-probe/probe-64.mjs`, with A9's scope-aware rule counter and the control planted on a property that differs nowhere in the baseline) and the standalone variant of the bundle (`build-orca-panes.sh --standalone`, React bundled; also the two-copy control)
+- [x] The lane-build React hand-off for 64-01's in-lane CSS measure (one line appended to the git-ignored `src-gen/frontend/index.js`, `git diff --name-only -- theia` empty)
+- [x] `scripts/lib/orca-tabs-live.mjs` with the stub agent written into a scratch directory at run time (Open Question 3)
+- [x] The portal probe (an Orca tooltip and an Orca dialog opened in the pane) and the derived html clause's probe sheet in `verify-orca-pane-css-live.mjs`
+- [x] New scripts each with `--self-test`: `verify-orca-pane-entry.mjs`, `verify-orca-pane-standalone-live.mjs`, `verify-orca-pane-css.mjs`, `verify-orca-pane-css-live.mjs`, `verify-orca-pane-routes.mjs`, `verify-orca-terminal-keys.mjs`, `verify-orca-terminal-keys-live.mjs`, `verify-orca-tabs-live.mjs`
+- [x] Extended: `verify-mode-toggle-commands.mjs` (dress clause, anchors derived from the clean sources), `verify-orca-service.mjs` (scenario I), `verify-uri-roundtrip.mjs` (pb-orca rows), `verify-mode-switch-tabs-live.mjs` (Orca seeds)
+- [x] orca-panes wired into `theia/package.json` and the browser app by the coordinator (64-05 T1), before any merged-tree live row
+- [x] Brand rows re-measured by the coordinator after the lanes merge
+- [x] Re-run after the chrome edits: `shell-error-copy-no-internals`, `internals-boundary`, `internals-catalogue`, `ng-040-internals-catalogue-lines`, `start-path-recovery`, `orca-bridge-dir`, `orca-service-live`
 
 ---
 
 ## Manual-Only Verifications
 
-All phase behaviors have automated verification. The items that need eyes (the hosted chat's look against Orca's own, Orca's close confirmation readable with working buttons, the EXT-02 placeholder pane's look) and the owner items (T-61-04, P64-05, P64-18, the Open Question 4 ruling, the in-session key control of P64-33, any `OWNER-ITEM: P64-32` line) run in the end-of-milestone pass (59-CONTEXT D-18) and do not gate this phase's automated rows. Overrides of the auto-mode picks P64-01..P64-29 are Chris's at any time.
+Every behavior has an automated row except the TAB-04 cross-client group stage (orca-tabs-live g2/g3, WINDOWS 55), which is red and owner-routed (see the audit section). The items that need eyes (the hosted chat's look against Orca's own, Orca's close confirmation readable with working buttons, the EXT-02 placeholder pane's look) and the owner items (T-61-04, P64-05, P64-18, the Open Question 4 ruling, the in-session key control of P64-33, any `OWNER-ITEM: P64-32` line) run in the end-of-milestone pass (59-CONTEXT D-18) and do not gate this phase's automated rows. Overrides of the auto-mode picks P64-01..P64-29 are Chris's at any time.
 
 ---
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 420s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references
+- [x] No watch-mode flags
+- [x] Feedback latency < 420s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** validated 2026-11-14 by the Nyquist audit (static rows re-run; live rows taken from their recorded runs, see the audit section).
+
+---
+
+## Validation Audit 2026-11-14
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 2 |
+| Resolved | 1 |
+| Escalated | 1 (known red, owner/manual) |
+
+Gap 1 (resolved): 64-VERIFICATION asked for "a pure fixture test for paneRecords' group branch plus planPanes/placementFor". orca-pane-routes already held seven planPanes placement fixtures (P65-36). Before this audit nothing exercised the overlay's group branch. The new `scripts/verify-orca-pane-groups.mjs` (rows `orca-pane-groups`, `orca-pane-groups-self-test`) takes leavesOf, groupLeavesOf, neighboursIn and paneRecords out of `pb-pane-mount.tsx` by name, runs them on four two-group layouts (horizontal and vertical, each group order) and feeds the records to planPanes. The second group's new pane must be planned as the Lumino split the layout gives. The self-test has 6 plants, each red naming the drift. PASS.
+
+Gap 2 (escalated, not papered over): orca-tabs-live stage g2/g3 (tab-groups-cross-client) is red on every tree since Phase 64 (WINDOWS 55). The open question is whether the pinned orcad publishes one client's group layout to another client's store. Only a live two-client run can answer it, so it stays manual/owner in the end-of-milestone pass. The new static check proves only PB's side of the mapping. TAB-04 remains Pending.
+
+Static rows re-run at f6e2cab5: orca-pane-entry, orca-pane-entry-self-test, orca-pane-standalone-live-self-test, orca-pane-css-self-test, orca-pane-css-live-self-test, orca-pane-routes(-self-test), orca-terminal-keys(-self-test), orca-terminal-keys-live-self-test, orca-tabs-live-self-test, gui07-mode-toggle-commands(-self-test), gui07-mode-switch-tabs-invariant, gui04-registry-shape, orca-service(-self-test), orca-overlay: all PASS. orca-pane-css: SKIP (no built Theia frontend CSS in the main tree). Live rows were not re-run, because the live lock was held.
+
+Manual-only, with reasons:
+- orca-tabs-live g2/g3: needs two live web clients on the pinned orcad (WINDOWS 55; owner may override the group clause)
+- the hosted chat's look against Orca's own, and Orca's close confirmation (readable, working buttons): both need a person to look
+- busy-chat close confirmation: needs a running agent turn
+- the EXT-02 wrapper pane as a hosted tab: needs EXT-01 (the extension running on Theia)
+- the owner items T-61-04, P64-05, P64-18, Open Question 4, P64-33's in-session key control, any `OWNER-ITEM: P64-32`, and the 64-06 key-policy items: owner rulings, not checks
