@@ -4,7 +4,7 @@
 // "Re-dated to <date> (Phase 59 D-09)". Reads and writes through gsd-core's broken-windows parser
 // so gsd-tools keeps parsing the file afterwards.
 //
-//   node scripts/redate-windows.mjs --date YYYY-MM-DD [--file <...>/.planning/WINDOWS.md] [--dry-run] <id> [<id>...]
+//   node scripts/redate-windows.mjs --date YYYY-MM-DD|'next version' [--file <...>/.planning/WINDOWS.md] [--dry-run] <id> [<id>...]
 //   node scripts/redate-windows.mjs --self-test
 import fs from 'node:fs';
 import os from 'node:os';
@@ -17,7 +17,9 @@ const BW_PATH = process.env.GSD_BROKEN_WINDOWS
 const bw = require(BW_PATH);
 
 const DEFAULT_FILE = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '.planning', 'WINDOWS.md');
-const PREFIX_RE = /^Re-dated to \d{4}-\d{2}-\d{2} \(Phase 59 D-09\)(?:; )?/;
+// D-46 (2026-11-15): the owner date may also be the literal "next version".
+const DATE_RE = /^(?:\d{4}-\d{2}-\d{2}|next version)$/;
+const PREFIX_RE = /^Re-dated to (?:\d{4}-\d{2}-\d{2}|next version) \(Phase 59 D-09\)(?:; )?/;
 
 function redateReason(oldReason, date) {
   // A second re-date replaces the earlier prefix instead of stacking one on top of it.
@@ -28,7 +30,7 @@ function redateReason(oldReason, date) {
 // Returns the planned changes; writes only when dryRun is false. Throws on any refused id before
 // anything is written.
 export function redate({ file, date, ids, dryRun, now = new Date().toISOString() }) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`--date must be YYYY-MM-DD, got ${JSON.stringify(date)}`);
+  if (!DATE_RE.test(date)) throw new Error(`--date must be YYYY-MM-DD or "next version", got ${JSON.stringify(date)}`);
   if (ids.length === 0) throw new Error('at least one WINDOWS.md id is required');
   const planningDir = path.dirname(file);
   if (path.basename(planningDir) !== '.planning') throw new Error(`--file must be <project>/.planning/WINDOWS.md, got ${file}`);
@@ -129,6 +131,11 @@ function selfTest() {
     const again = bw.parseLedger(fs.readFileSync(file, 'utf8')).entries.find((e) => e.id === a);
     check('a second re-date replaces the prefix instead of stacking',
       again.reason.startsWith('Re-dated to 2100-02-02 (Phase 59 D-09)') && !again.reason.includes('2099-01-01'));
+    redate({ file, date: 'next version', ids: [a], dryRun: false });
+    redate({ file, date: 'next version', ids: [a], dryRun: false });
+    const nv = bw.parseLedger(fs.readFileSync(file, 'utf8')).entries.find((e) => e.id === a);
+    check('"next version" is accepted and replaces a dated prefix, also on a repeat',
+      nv.reason === redateReason(fixture.entries.find((e) => e.id === a).reason, 'next version') && !nv.reason.includes('2100-02-02'));
     check('the real WINDOWS.md was not touched', !fs.readFileSync(DEFAULT_FILE, 'utf8').includes('Re-dated to 2099-01-01'));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -149,7 +156,7 @@ function main(argv) {
     else { console.error(`redate-windows: unknown argument ${a}`); process.exit(2); }
   }
   if (opts.selfTest) return selfTest();
-  if (!opts.date) { console.error('redate-windows: --date YYYY-MM-DD is required'); process.exit(2); }
+  if (!opts.date) { console.error('redate-windows: --date YYYY-MM-DD or --date "next version" is required'); process.exit(2); }
   try {
     printChanges(redate(opts), opts.dryRun);
   } catch (e) {
