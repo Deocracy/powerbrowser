@@ -77,6 +77,10 @@
 // copy and button tables share their keys, and the failure folder's components
 // carry no ad-hoc text. See checkOrcaCopy below.
 //
+// 68-11 reinstall copy. The bundled-extensions reinstall command's label and its
+// notifications, derived from bundled-extensions-copy.ts by the same type-strip
+// import; see checkBundledCopy below.
+//
 // Usage:
 //   node scripts/verify-shell-error-copy.mjs [--file <path>]
 //   node scripts/verify-shell-error-copy.mjs --self-test
@@ -1388,6 +1392,11 @@ function readOrcaSources() {
 }
 
 async function loadOrcaCopy(src) {
+  return importStripped(src);
+}
+
+/** Type-strips a self-contained .ts copy table and imports it; { loadError } when that fails. */
+async function importStripped(src) {
   const emit = process.emitWarning;
   process.emitWarning = () => {}; // stripTypeScriptTypes is flagged experimental on Node 24
   try {
@@ -1508,6 +1517,121 @@ async function runOrcaCopySelfTest() {
       continue;
     }
     const found = (await checkOrcaCopy(mutated)).failures;
+    if (!found.some((f) => f.includes(fault.expect))) {
+      console.error(`  FAIL  ${fault.name} -- did NOT go red naming ${JSON.stringify(fault.expect)}; got: ${found.join(" | ") || "(no failures at all)"}`);
+      allOk = false;
+    } else {
+      console.log(`  ok    ${fault.name} -- red, naming the drift`);
+    }
+  }
+  return allOk;
+}
+
+// ---------------------------------------------------------------------------
+// 68-11 bundled-extension reinstall copy. The command label and the three
+// notifications are derived by type-stripping bundled-extensions-copy.ts; each
+// passes the shape test, each notification names PowerBrowser, the declared
+// message keys equal the REINSTALL_MESSAGES.<key> references in the command
+// file (set equality, so an added, removed or stale key goes red), the command's
+// label resolves to REINSTALL_COMMAND_LABEL, and the command file passes no
+// ad-hoc string literal to a notification. A zero derivation is red.
+// ---------------------------------------------------------------------------
+
+const BUNDLED_SRC_REL = "theia/extensions/bundled-extensions/src/";
+const BUNDLED_COPY_REL = `${BUNDLED_SRC_REL}common/bundled-extensions-copy.ts`;
+const BUNDLED_CMD_REL = `${BUNDLED_SRC_REL}browser/reinstall-command.ts`;
+
+/** rel -> source for the copy table and the command file, or null when either is absent. */
+function readBundledSources() {
+  try {
+    return Object.fromEntries([BUNDLED_COPY_REL, BUNDLED_CMD_REL].map((rel) => [rel, readFileSync(join(REPO_ROOT, rel), "utf8")]));
+  } catch {
+    return null;
+  }
+}
+
+/** @returns {Promise<{ failures: string[], messages: number }>} */
+async function checkBundledCopy(sources) {
+  const out = [];
+  const mod = await importStripped(sources[BUNDLED_COPY_REL] ?? "");
+  const { REINSTALL_COMMAND_LABEL: label, REINSTALL_MESSAGES: messages } = mod;
+  if (mod.loadError || typeof label !== "string" || !messages || typeof messages !== "object") {
+    out.push(`reinstall copy: ${BUNDLED_COPY_REL} did not yield REINSTALL_COMMAND_LABEL and REINSTALL_MESSAGES${mod.loadError ? ` (${mod.loadError})` : ""}`);
+    return { failures: out, messages: 0 };
+  }
+  const entries = Object.entries(messages);
+  if (entries.length === 0) {
+    out.push("reinstall copy: derived ZERO messages from REINSTALL_MESSAGES -- the comparison proves nothing");
+    return { failures: out, messages: 0 };
+  }
+  out.push(...leakFailures("reinstall command label", label));
+  for (const [key, message] of entries) {
+    if (typeof message !== "string" || message.length === 0) {
+      out.push(`reinstall copy: REINSTALL_MESSAGES.${key} has no message string`);
+      continue;
+    }
+    out.push(...leakFailures("reinstall copy", message));
+    if (!message.includes("PowerBrowser")) out.push(`reinstall copy: ${JSON.stringify(message)} (${key}) does not name PowerBrowser`);
+  }
+  const cmd = blankComments(sources[BUNDLED_CMD_REL] ?? "");
+  const referenced = new Set([...cmd.matchAll(/\bREINSTALL_MESSAGES\.(\w+)/g)].map((m) => m[1]));
+  for (const key of referenced) {
+    if (!Object.hasOwn(messages, key)) out.push(`reinstall copy: REINSTALL_MESSAGES.${key} is referenced but not declared`);
+  }
+  for (const [key] of entries) {
+    if (!referenced.has(key)) out.push(`reinstall copy: REINSTALL_MESSAGES.${key} is declared but never shown`);
+  }
+  if (!/\blabel:\s*REINSTALL_COMMAND_LABEL\b/.test(cmd)) out.push(`reinstall copy: the command in ${BUNDLED_CMD_REL} does not take its label from REINSTALL_COMMAND_LABEL`);
+  for (const m of cmd.matchAll(/\.(info|warn|error)\(\s*('(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`)/g)) {
+    out.push(`reinstall copy: ad-hoc notification text ${m[2]} in ${BUNDLED_CMD_REL} -- notification text must come from bundled-extensions-copy.ts`);
+  }
+  return { failures: out, messages: entries.length };
+}
+
+const BUNDLED_COPY_FAULTS = [
+  {
+    name: "an internal id leaked into the reinstalled notification",
+    apply: (s) => ({ ...s, [BUNDLED_COPY_REL]: s[BUNDLED_COPY_REL].replace("PowerBrowser reinstalled the Claude extension.", "PowerBrowser reinstalled bundledExtensions.seeded.entry.") }),
+    expect: "bundledExtensions.seeded.entry",
+  },
+  {
+    name: "a notification that does not name the product",
+    apply: (s) => ({ ...s, [BUNDLED_COPY_REL]: s[BUNDLED_COPY_REL].replace("or restart PowerBrowser and then try it.", "or restart and then try it.").replace("PowerBrowser couldn't reinstall", "We couldn't reinstall") }),
+    expect: "(failed) does not name PowerBrowser",
+  },
+  {
+    name: "an ad-hoc literal shown by the command",
+    apply: (s) => ({ ...s, [BUNDLED_CMD_REL]: s[BUNDLED_CMD_REL].replace("this.messages.error(REINSTALL_MESSAGES.failed)", "this.messages.error('Reinstall failed')") }),
+    expect: "ad-hoc notification text 'Reinstall failed'",
+  },
+  {
+    name: "a declared message the command never shows",
+    apply: (s) => ({ ...s, [BUNDLED_CMD_REL]: s[BUNDLED_CMD_REL].replace("this.messages.info(REINSTALL_MESSAGES.present)", "this.messages.info(REINSTALL_MESSAGES.reinstalled)") }),
+    expect: "REINSTALL_MESSAGES.present is declared but never shown",
+  },
+];
+
+async function runBundledCopySelfTest() {
+  const clean = readBundledSources();
+  if (!clean) {
+    console.log(`  SKIP  reinstall copy faults -- ${BUNDLED_SRC_REL} is absent`);
+    return true;
+  }
+  const baseline = await checkBundledCopy(clean);
+  if (baseline.failures.length !== 0) {
+    console.error("verify-shell-error-copy --self-test: FAIL -- the reinstall-copy baseline is already red:");
+    baseline.failures.forEach((f) => console.error(`  ${f}`));
+    return false;
+  }
+  let allOk = true;
+  for (const fault of BUNDLED_COPY_FAULTS) {
+    const mutated = fault.apply(clean);
+    if (JSON.stringify(mutated) === JSON.stringify(clean)) {
+      console.error(`  FAIL  ${fault.name} -- the fault did not apply; this self-test row proves nothing`);
+      allOk = false;
+      continue;
+    }
+    const found = (await checkBundledCopy(mutated)).failures;
     if (!found.some((f) => f.includes(fault.expect))) {
       console.error(`  FAIL  ${fault.name} -- did NOT go red naming ${JSON.stringify(fault.expect)}; got: ${found.join(" | ") || "(no failures at all)"}`);
       allOk = false;
@@ -1756,7 +1880,12 @@ if (selfTest) {
   if (orcaOk) {
     console.log(`verify-shell-error-copy: PASS -- all ${ORCA_COPY_FAULTS.length} planted Orca-copy faults went red naming the drift`);
   }
-  if (shellOk && modesOk && orcaOk) {
+  console.log(`verify-shell-error-copy --self-test: planting ${BUNDLED_COPY_FAULTS.length} reinstall-copy fault(s)`);
+  const bundledOk = await runBundledCopySelfTest();
+  if (bundledOk) {
+    console.log(`verify-shell-error-copy: PASS -- all ${BUNDLED_COPY_FAULTS.length} planted reinstall-copy faults went red naming the drift`);
+  }
+  if (shellOk && modesOk && orcaOk && bundledOk) {
     process.exit(0);
   }
   console.error("verify-shell-error-copy: FAIL -- see the self-test rows above");
@@ -1777,6 +1906,14 @@ if (!argv.includes("--file")) {
     const orca = await checkOrcaCopy(orcaSources);
     orca.failures.forEach((f) => fail(f));
     console.log(`verify-shell-error-copy: Orca scope -- ${orca.messages} messages checked from ${Object.keys(orcaSources).length} source(s) under ${ORCA_FAILURE_DIR_REL}`);
+  }
+  const bundledSources = readBundledSources();
+  if (!bundledSources) {
+    fail(`reinstall copy: ${BUNDLED_COPY_REL} or ${BUNDLED_CMD_REL} is missing`);
+  } else {
+    const bundled = await checkBundledCopy(bundledSources);
+    bundled.failures.forEach((f) => fail(f));
+    console.log(`verify-shell-error-copy: reinstall scope -- ${bundled.messages} messages and the command label checked`);
   }
 }
 if (failures.length === 0) {

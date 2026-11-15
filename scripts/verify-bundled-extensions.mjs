@@ -18,14 +18,22 @@
 //                     orca/pnpm-lock.yaml exists, the dependency's version and integrity must equal
 //                     Orca's own entry, so the SDK Orca is typed and tested against is the one the
 //                     extension carries; an Orca re-pin that moves the SDK turns this red.
+//                     The reinstall affordance (68-11), derived from the extension's sources:
+//                     the reinstall command is visible and enabled only while its id is absent,
+//                     its id equals a shipped manifest's publisher.name, the service's reinstall is
+//                     called only from that command's execute handler, and the copy-back rule is
+//                     called only from the reinstall service, never from the seed. An uninstall is
+//                     therefore undone only by the user's explicit action.
 //   --seed (quick)    The seed rule's behaviour table against the compiled seedBundledExtensions,
-//                     in mkdtemp directories. One SKIP line when the extension is not compiled.
+//                     plus the reinstall rule's table against reinstallBundledExtension and
+//                     absentBundledExtensions, in mkdtemp directories. One SKIP line when the
+//                     extension is not compiled.
 //   --live (full)     The built backend's list-extensions on a fresh THEIA_CONFIG_DIR: the
 //                     extension is listed as a user plugin and not as a built-in; after its
 //                     deployed directory is removed (what Theia's Uninstall does) a second start
 //                     neither lists nor re-seeds it; the backend-settings record names each id at
 //                     its version. One SKIP line when the backend is not built.
-//   --self-test       Hermetic fixtures: a control green first, then seven plants, each required
+//   --self-test       Hermetic fixtures: a control green first, then the plants, each required
 //                     red naming it.
 //
 // LIMIT. --live proves Theia deploys the extension as a user plugin and that removing its
@@ -44,7 +52,8 @@ import { fileURLToPath } from 'node:url';
 const NAME = 'verify-bundled-extensions';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const APP_DIR = join(REPO_ROOT, 'theia', 'applications', 'browser');
-const SEED_JS = join(REPO_ROOT, 'theia', 'extensions', 'bundled-extensions', 'lib', 'node', 'bundled-extensions-seed.js');
+const EXT_DIR = join(REPO_ROOT, 'theia', 'extensions', 'bundled-extensions');
+const SEED_JS = join(EXT_DIR, 'lib', 'node', 'bundled-extensions-seed.js');
 
 // User-facing copy rule (01-UI-SPEC): no environment variable, pref key, absolute path or
 // package-manager command in README.md.
@@ -131,6 +140,81 @@ export function orcaPins(text, dep) {
     return out;
 }
 
+// ---------------------------------------------------------------- reinstall leg (68-11)
+
+const REINSTALL_CMD_REL = 'src/browser/reinstall-command.ts';
+const REINSTALL_SVC_REL = 'src/node/bundled-extensions-service.ts';
+const PROTOCOL_REL = 'src/common/bundled-extensions-protocol.ts';
+
+/** rel -> source for every .ts under the extension's src/, or {} when it is absent. */
+export function readExtensionSources(extDir) {
+    const out = {};
+    const walk = rel => {
+        let names;
+        try { names = readdirSync(join(extDir, rel), { withFileTypes: true }); } catch { return; }
+        for (const d of names) {
+            const r = `${rel}/${d.name}`;
+            if (d.isDirectory()) walk(r);
+            else if (r.endsWith('.ts')) out[r] = readFileSync(join(extDir, r), 'utf8');
+        }
+    };
+    walk('src');
+    return out;
+}
+
+const stripComments = src => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+
+/**
+ * The reinstall affordance's two promises, derived from the sources: it is offered only while
+ * the extension is absent, and nothing but the user's command runs it.
+ * @param {Record<string,string>} sources rel -> text under theia/extensions/bundled-extensions
+ * @param {string[]} shippedIds publisher.name of every bundled-extensions manifest
+ */
+export function checkReinstall(sources, shippedIds) {
+    const failures = [];
+    const code = Object.fromEntries(Object.entries(sources).map(([rel, s]) => [rel, stripComments(s)]));
+    const id = code[PROTOCOL_REL]?.match(/export const CLAUDE_EXTENSION_ID = '([^']+)'/)?.[1];
+    if (!id) failures.push(`${PROTOCOL_REL} declares no CLAUDE_EXTENSION_ID`);
+    else if (!shippedIds.includes(id)) failures.push(`CLAUDE_EXTENSION_ID is ${id}, which no bundled extension ships (shipped: ${shippedIds.join(', ') || 'none'})`);
+    const cmd = code[REINSTALL_CMD_REL];
+    if (!cmd) {
+        failures.push(`${REINSTALL_CMD_REL} is missing -- there is no reinstall command`);
+        return failures;
+    }
+    const gate = /\bthis\.absent\.has\(CLAUDE_EXTENSION_ID\)/;
+    for (const key of ['isVisible', 'isEnabled']) {
+        const body = cmd.match(new RegExp(`\\b${key}:\\s*\\(\\)\\s*=>\\s*([^,\\n]+)`))?.[1];
+        if (!body || !gate.test(body) || /\|\||\btrue\b/.test(body)) {
+            failures.push(`the reinstall command's ${key} is ${JSON.stringify(body ?? 'missing')}, not this.absent.has(CLAUDE_EXTENSION_ID) -- it would be offered while the extension is present`);
+        }
+    }
+    // Every call of the service's reinstall must sit in the command's execute handler.
+    // The owner is the nearest enclosing handler key or method definition before the call.
+    const SITE = /\b(execute|isVisible|isEnabled):|^[ \t]*(?:(?:protected|public|private|async)\s+)*(\w+)\([^)]*\)\s*(?::\s*[^{;=]+)?\{/gm;
+    let calls = 0;
+    for (const [rel, text] of Object.entries(code)) {
+        for (const m of text.matchAll(/\.reinstall\(/g)) {
+            calls++;
+            const site = [...text.slice(0, m.index).matchAll(SITE)].pop();
+            const owner = site ? (site[1] ? `${site[1]}:` : `${site[2]}()`) : undefined;
+            if (rel !== REINSTALL_CMD_REL || owner !== 'execute:') {
+                failures.push(`${rel} calls reinstall outside the command's execute handler (in ${owner ?? 'module scope'}) -- a reinstall must come only from the user's action`);
+            }
+        }
+        for (const m of text.matchAll(/\breinstallBundledExtension\(/g)) {
+            if (/function\s+$/.test(text.slice(0, m.index))) continue; // its definition
+            if (rel !== REINSTALL_SVC_REL) failures.push(`${rel} calls reinstallBundledExtension; only the reinstall service may, so the seed never undoes an uninstall`);
+        }
+    }
+    if (calls === 0) failures.push(`no file calls the service's reinstall -- the command does nothing`);
+    return failures;
+}
+
+function shippedIdsOf(root) {
+    const folders = existsSync(root) ? readdirSync(root) : [];
+    return folders.map(n => readJson(join(root, n, 'package.json'))).filter(Boolean).map(m => `${m.publisher}.${m.name}`);
+}
+
 // ---------------------------------------------------------------- seed leg
 
 /**
@@ -209,9 +293,72 @@ export async function runSeedScenarios(seed) {
     return results;
 }
 
-function loadSeed() {
+/**
+ * The reinstall rule's table (68-11). reinstall is reinstallBundledExtension or a fixture, absent
+ * is absentBundledExtensions.
+ * @returns {Promise<{ name: string, ok: boolean, detail: string }[]>}
+ */
+export async function runReinstallScenarios({ reinstall, absent }) {
+    const id = 'fixture.bundled';
+    const results = [];
+    const scenario = async (name, fn) => {
+        const t = mkdtempSync(join(tmpdir(), 'pb-reinstall-'));
+        try {
+            const src = join(t, 'plugins', '.user');
+            const deploy = join(t, 'deployedPlugins');
+            mkdirSync(join(src, id, 'extension'), { recursive: true });
+            writeFileSync(join(src, id, 'extension', 'package.json'), JSON.stringify({ name: 'bundled', publisher: 'fixture', version: '1.0.0' }));
+            const args = { sources: [src], deploymentDir: deploy };
+            const detail = await fn({ args, deploy, src });
+            results.push({ name, ok: detail === true, detail: detail === true ? '' : detail });
+        } catch (err) {
+            results.push({ name, ok: false, detail: `threw ${err.message}` });
+        } finally {
+            rmSync(t, { recursive: true, force: true });
+        }
+    };
+    await scenario('reinstall, absent: copied back and reported', async ({ args, deploy }) => {
+        const before = await absent(args);
+        if (JSON.stringify(before) !== JSON.stringify([id])) return `absent listed ${JSON.stringify(before)} before the reinstall`;
+        const r = await reinstall({ ...args, id });
+        if (r.result !== 'reinstalled' || r.version !== '1.0.0') return `the outcome is ${JSON.stringify(r)}`;
+        if (readJson(join(deploy, id, 'extension', 'package.json'))?.version !== '1.0.0') return 'the extension was not copied back';
+        const after = await absent(args);
+        return after.length === 0 || `absent still lists ${JSON.stringify(after)}`;
+    });
+    await scenario('reinstall, present: left alone', async ({ args, deploy }) => {
+        mkdirSync(join(deploy, id), { recursive: true });
+        writeFileSync(join(deploy, id, 'user-marker'), 'kept');
+        const r = await reinstall({ ...args, id });
+        if (!existsSync(join(deploy, id, 'user-marker'))) return 'the present copy was overwritten';
+        if (r.result !== 'present') return `the outcome is ${JSON.stringify(r)}`;
+        const listed = await absent(args);
+        return listed.length === 0 || `absent lists a present extension: ${JSON.stringify(listed)}`;
+    });
+    for (const bad of ['not.shipped', '../fixture.bundled', '.hidden']) {
+        await scenario(`reinstall, id ${JSON.stringify(bad)} not shipped: refused`, async ({ args, deploy, src }) => {
+            mkdirSync(join(src, '.hidden', 'extension'), { recursive: true });
+            writeFileSync(join(src, '.hidden', 'extension', 'package.json'), JSON.stringify({ version: '1.0.0' }));
+            const r = await reinstall({ ...args, id: bad });
+            if (r.result !== 'unknown') return `the outcome is ${JSON.stringify(r)}`;
+            return !existsSync(deploy) || readdirSync(deploy).length === 0 || `something was copied: ${readdirSync(deploy).join(', ')}`;
+        });
+    }
+    return results;
+}
+
+function loadSeedModule() {
     if (!existsSync(SEED_JS)) return null;
-    return createRequire(SEED_JS)(SEED_JS).seedBundledExtensions;
+    return createRequire(SEED_JS)(SEED_JS);
+}
+
+function loadSeed() {
+    return loadSeedModule()?.seedBundledExtensions ?? null;
+}
+
+function loadReinstall() {
+    const m = loadSeedModule();
+    return m ? { reinstall: m.reinstallBundledExtension, absent: m.absentBundledExtensions } : null;
 }
 
 // ---------------------------------------------------------------- live leg
@@ -338,6 +485,51 @@ async function selfTest() {
             lines.push(`${red ? 'PASS' : 'FAIL'} plant "${name}" -> ${red ? `red: ${r.name}: ${r.detail}` : 'the scenario runner stayed green'}`);
             if (!red) ok = false;
         }
+
+        // 68-11: the reinstall leg over the tree's own sources, then one plant per promise.
+        const src = readExtensionSources(EXT_DIR);
+        const ids = shippedIdsOf(join(REPO_ROOT, 'bundled-extensions'));
+        const reControl = checkReinstall(src, ids);
+        lines.push(`${reControl.length === 0 ? 'PASS' : 'FAIL'} control: the tree's reinstall command is green${reControl.length ? ` -- ${reControl.join(' | ')}` : ''}`);
+        if (reControl.length) ok = false;
+        const CMD = 'src/browser/reinstall-command.ts', SEED = 'src/node/bundled-extensions-seed.ts', PROTO = 'src/common/bundled-extensions-protocol.ts';
+        const rePlants = [
+            ['the command offered while the extension is present', CMD, s => s.replace(/isVisible: \(\) => [^,\n]+/, 'isVisible: () => true'), /isVisible is "true"/],
+            ['the command enabled whatever the state', CMD, s => s.replace(/isEnabled: \(\) => [^,\n]+/, 'isEnabled: () => this.absent.has(CLAUDE_EXTENSION_ID) || true'), /isEnabled is .*offered while the extension is present/],
+            ['a reinstall run at start', CMD, s => s.replace('this.refresh();\n', 'this.refresh();\n        this.service.reinstall(CLAUDE_EXTENSION_ID);\n'), /calls reinstall outside the command's execute handler \(in onStart\(\)/],
+            ['the seed copying an uninstalled extension back', SEED, s => s.replace('this.sources = sourcesOf(context.systemEntries);', 'this.sources = sourcesOf(context.systemEntries);\n            await reinstallBundledExtension({ sources: this.sources, deploymentDir: \'\', id: \'x\' });'), /bundled-extensions-seed\.ts calls reinstallBundledExtension/],
+            ['the command naming an id nothing ships', PROTO, s => s.replace(/CLAUDE_EXTENSION_ID = '[^']+'/, "CLAUDE_EXTENSION_ID = 'powerbrowser.not-shipped'"), /CLAUDE_EXTENSION_ID is powerbrowser\.not-shipped/],
+        ];
+        for (const [pname, rel, plant, expect] of rePlants) {
+            const mutated = { ...src, [rel]: plant(src[rel] ?? '') };
+            if (mutated[rel] === src[rel]) {
+                lines.push(`FAIL plant "${pname}" -> the plant did not apply; it proves nothing`);
+                ok = false;
+                continue;
+            }
+            const hit = checkReinstall(mutated, ids).find(x => expect.test(x));
+            lines.push(`${hit ? 'PASS' : 'FAIL'} plant "${pname}" -> ${hit ? `red: ${hit}` : 'stayed green or red for the wrong reason'}`);
+            if (!hit) ok = false;
+        }
+        const reName = 'a reinstall that overwrites a present copy';
+        const re = loadReinstall();
+        if (!re) {
+            lines.push(`SKIP plant "${reName}" -- the seed is not compiled (theia/extensions/bundled-extensions/lib)`);
+        } else {
+            const reControlRuns = await runReinstallScenarios(re);
+            const greenFirst = reControlRuns.every(x => x.ok);
+            const clobber = {
+                absent: re.absent,
+                reinstall: async input => {
+                    rmSync(join(input.deploymentDir, input.id), { recursive: true, force: true });
+                    return re.reinstall(input);
+                },
+            };
+            const r = (await runReinstallScenarios(clobber)).find(x => x.name.startsWith('reinstall, present'));
+            const red = greenFirst && r && !r.ok && /overwritten/.test(r.detail);
+            lines.push(`${red ? 'PASS' : 'FAIL'} plant "${reName}" -> ${red ? `red: ${r.name}: ${r.detail}` : greenFirst ? 'the scenario runner stayed green' : `the reinstall control is red: ${reControlRuns.filter(x => !x.ok).map(x => `${x.name}: ${x.detail}`).join(' | ')}`}`);
+            if (!red) ok = false;
+        }
     } finally {
         rmSync(t, { recursive: true, force: true });
     }
@@ -366,20 +558,26 @@ function report(failures, skips, passes, what) {
 
 const mode = process.argv[2] ?? '';
 if (mode === '') {
-    const r = checkStatic({ root: join(REPO_ROOT, 'bundled-extensions'), userDir: join(APP_DIR, 'plugins', '.user'), orcaDir: join(REPO_ROOT, 'orca') });
-    report(r.failures, r.skips, r.passes, 'every bundled extension is a declarative VS Code manifest pinning one package by version and sha512, quoting its licence, with clean user-facing copy');
+    const root = join(REPO_ROOT, 'bundled-extensions');
+    const r = checkStatic({ root, userDir: join(APP_DIR, 'plugins', '.user'), orcaDir: join(REPO_ROOT, 'orca') });
+    const reinstall = checkReinstall(readExtensionSources(EXT_DIR), shippedIdsOf(root));
+    if (reinstall.length === 0) r.passes.push('the reinstall command is offered only while the extension is absent and runs only on the user\'s action');
+    report([...r.failures, ...reinstall], r.skips, r.passes, 'every bundled extension is a declarative VS Code manifest pinning one package by version and sha512, quoting its licence, with clean user-facing copy; reinstall is offered only while absent and never automatic');
 } else if (mode === '--seed') {
     const seed = loadSeed();
     if (!seed) {
         console.log(`${NAME}: SKIP -- the seed is not compiled (theia/extensions/bundled-extensions/lib); run yarn build in theia/`);
     } else {
-        const results = await runSeedScenarios(seed);
-        report(results.filter(r => !r.ok).map(r => `seed scenario "${r.name}": ${r.detail}`), [], results.filter(r => r.ok).map(r => r.name), `${results.length} seed scenarios hold`);
+        const results = [
+            ...(await runSeedScenarios(seed)),
+            ...(await runReinstallScenarios(loadReinstall())),
+        ];
+        report(results.filter(r => !r.ok).map(r => `scenario "${r.name}": ${r.detail}`), [], results.filter(r => r.ok).map(r => r.name), `${results.length} seed and reinstall scenarios hold`);
     }
 } else if (mode === '--live') {
     const r = await live();
     if (r.skip) console.log(`${NAME}: SKIP -- ${r.skip}`);
-    else report(r.failures, [], r.shipped.map(s => `${s.id}@${s.version} deployed as a user plugin; removal sticks`), 'Theia deploys each bundled extension as a user plugin, never a built-in, and an uninstall is not undone');
+    else report(r.failures, [], r.shipped.map(s => `${s.id}@${s.version} deployed as a user plugin; removal sticks`), 'Theia deploys each bundled extension as a user plugin, never a built-in, and an uninstall is not undone automatically');
 } else if (mode === '--self-test') {
     const r = await selfTest();
     for (const l of r.lines) console.log(`  ${l}`);
