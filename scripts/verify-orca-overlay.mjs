@@ -27,7 +27,7 @@
 // Limit: a marker literal in a bundle proves the file was compiled into it,
 // not that its code runs.
 //
-// Upstream key (Phase 68, OVL-06, P68-19, P68-36, D-27, D-31): every row
+// Upstream key (Phase 68, OVL-06, P68-19, P68-36, D-27, D-31, D-45): every row
 // carries upstream = { class, pr }, class one of UPSTREAM_CLASSES, pr null or
 // https://github.com/<owner>/<repo>/pull/<n> with owner and repo parsed from
 // the REMOTE= line of scripts/fetch-orca.sh (a missing line is red, never a
@@ -37,7 +37,8 @@
 // patch file name without .patch. Nothing under upstream/ reaches a build:
 // build-orca.sh copies files/ and applies patches/ only.
 // --upstream-prs: red until each class in PR_CLASSES has a row with a non-null
-// pr (D-31 removed the terminal-provider class); 68-05 registers that row.
+// pr (D-31 removed the terminal-provider class, D-45 the web-entry class);
+// 68-05 registers that row.
 //
 // Tier: default quick (steps that need orca/ print one SKIP line when it is
 // not fetched); --built full; --self-test quick (hermetic mkdtemp fixtures).
@@ -65,9 +66,9 @@ const REGENERATE = join(REPO_ROOT, 'scripts', 'regenerate-patches.sh');
 // P62-17, D-16: a seam is "one-to-few-line"; added plus deleted lines per upstream path.
 const SEAM_LINE_BOUND = 20;
 const ROW_KEYS = ['patch', 'path', 'reason', 'upstream', 'upstream_blob'];
-// D-27 as amended by D-31: the seam classes, and the ones upstream must receive a PR for.
-const UPSTREAM_CLASSES = ['browser-provider', 'web-entry', 'pb-only'];
-const PR_CLASSES = ['browser-provider', 'web-entry'];
+// D-27 as amended by D-31 and D-45: the seam classes, and the ones upstream must receive a PR for.
+const UPSTREAM_CLASSES = ['browser-provider', 'pb-only'];
+const PR_CLASSES = ['browser-provider'];
 const UPSTREAM_DOC_KEYS = ['change', 'problem', 'testing', 'title'];
 const MANIFEST_REL = 'configuration.toml';
 const SOURCE_KINDS = new Set(['.ts', '.tsx', '.js', '.mjs', '.cjs']);
@@ -180,7 +181,7 @@ export function check({ repoRoot = REPO_ROOT, overlayDir = join(repoRoot, 'orca-
         if (typeof r.reason !== 'string' || !r.reason.trim() || r.reason.includes('\n')) return bad(`reason of ${r.path} is not one line`);
         const u = r.upstream;
         if (!u || typeof u !== 'object' || Array.isArray(u) || Object.keys(u).sort().join() !== 'class,pr') return bad(`upstream of ${r.path} is not an object with exactly class and pr`);
-        if (!UPSTREAM_CLASSES.includes(u.class)) return bad(`upstream class '${u.class}' of ${r.path} is not one of ${UPSTREAM_CLASSES.join(', ')} (D-27, D-31)`);
+        if (!UPSTREAM_CLASSES.includes(u.class)) return bad(`upstream class '${u.class}' of ${r.path} is not one of ${UPSTREAM_CLASSES.join(', ')} (D-27, D-31, D-45)`);
         if (u.pr !== null) {
             const m = typeof u.pr === 'string' && u.pr.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/[0-9]+$/);
             if (!m) return bad(`upstream pr of ${r.path} is not null or a pull URL https://github.com/<owner>/<repo>/pull/<n>: ${u.pr}`);
@@ -407,7 +408,7 @@ function runSelfTest() {
         const src = (p) => `export const id = 'pb-overlay:${p}'\n`;
         const up = (cls) => ({ class: cls, pr: null });
         const rowA = { path: 'src/a.ts', upstream_blob: blob('src/a.ts'), patch: 'patches/010-a.patch', reason: 'fixture seam', upstream: up('browser-provider') };
-        const rowTiny = { path: 'src/tiny.ts', upstream_blob: blob('src/tiny.ts'), patch: 'patches/020-tiny.patch', reason: 'fixture seam', upstream: up('web-entry') };
+        const rowTiny = { path: 'src/tiny.ts', upstream_blob: blob('src/tiny.ts'), patch: 'patches/020-tiny.patch', reason: 'fixture seam', upstream: up('pb-only') };
         const PR = (n) => `https://github.com/fixture-owner/fixture-repo/pull/${n}`;
         const DOC = `${JSON.stringify({ title: 't', problem: 'p', change: 'c', testing: 'x' })}\n`;
         const base = () => ({
@@ -477,6 +478,7 @@ function runSelfTest() {
             { name: 'built-marker-absent', naming: `not compiled by build:web or build:orcad: ${ADDED}`, apply: (s) => { s.out = { 'out/web/assets/.fixture-app.js': 'const a=1;' }; } },
             { name: 'upstream-key-missing', naming: 'keys are not exactly patch, path, reason, upstream, upstream_blob', apply: (s) => { delete s.seams[0].upstream; } },
             { name: 'upstream-class-unknown', naming: "upstream class 'terminal-provider'", apply: (s) => { s.seams[0].upstream.class = 'terminal-provider'; } },
+            { name: 'upstream-class-web-entry-ruled-out', naming: "upstream class 'web-entry'", apply: (s) => { s.seams[0].upstream.class = 'web-entry'; } },
             { name: 'upstream-pr-on-another-repository', naming: 'is on other-owner/fixture-repo, not on the Orca remote fixture-owner/fixture-repo', apply: (s) => { s.seams[0].upstream.pr = 'https://github.com/other-owner/fixture-repo/pull/1'; } },
             { name: 'upstream-pr-not-a-pull-url', naming: 'is not null or a pull URL', apply: (s) => { s.seams[0].upstream.pr = PR(1).replace('/pull/', '/issues/'); } },
             { name: 'upstream-dir-for-unknown-seam', naming: 'upstream material for unknown seam 099-gone', apply: (s) => { s.upstream['099-gone/upstream.json'] = DOC; } },
@@ -497,7 +499,7 @@ function runSelfTest() {
             const after = run(base());
             if (after.fails.length) { console.error(`${NAME} self-test: FAIL -- plant ${p.name} did not clean up: ${after.fails.join(' | ')}`); return 1; }
         }
-        // --upstream-prs: control with a PR for each class (and the rows still green), plant with web-entry missing.
+        // --upstream-prs: control with a PR on every row (and the rows still green), plant with browser-provider's PR missing.
         const both = base();
         two(both);
         both.seams[0].upstream.pr = PR(1);
@@ -509,10 +511,10 @@ function runSelfTest() {
             return 1;
         }
         console.log(`${NAME} self-test: control green -- --upstream-prs with a PR on ${PR_CLASSES.join(' and ')}`);
-        both.seams[1].upstream.pr = null;
+        both.seams[0].upstream.pr = null;
         const one = missingPrClasses(both.seams);
-        if (one.join() !== 'web-entry') { console.error(`  FAIL upstream-prs-one-class-missing -> named '${one.join(', ')}', want web-entry`); failures++; } else {
-            console.log("  ok upstream-prs-one-class-missing -> red, naming 'web-entry'");
+        if (one.join() !== 'browser-provider') { console.error(`  FAIL upstream-prs-one-class-missing -> named '${one.join(', ')}', want browser-provider`); failures++; } else {
+            console.log("  ok upstream-prs-one-class-missing -> red, naming 'browser-provider'");
         }
         const total = plants.length + 1;
         if (failures) {

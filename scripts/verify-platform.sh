@@ -6879,7 +6879,7 @@ run_own_checks() {
       # relaunch. Run under flock /home/chris/coding/Power-Browser/.git/pb-live.lock. --live --dev runs on the dev objdir.
       "bundled-xpi-live|node $REPO_ROOT/scripts/verify-bundled-xpi.mjs --live"
       # NEW (68-05, OVL-06, P68-19/P68-37): orca-upstream-prs is red until the owner records an upstream PR URL for each D-27
-      # class (browser-provider, web-entry) in its seams.json rows' upstream.pr. The coordinator keys its
+      # class (browser-provider; D-45 ruled web-entry out) in its seams.json rows' upstream.pr. The coordinator keys its
       # GATE_KNOWN_OPEN_EXCLUSIONS row to the upstream-PRs WINDOWS.md entry. Reads seams.json only; no network.
       "orca-upstream-prs|node $REPO_ROOT/scripts/verify-orca-overlay.mjs --upstream-prs"
     )
@@ -7050,7 +7050,6 @@ declare -a GATE_KNOWN_OPEN_EXCLUSIONS=(
   "extension-actions-live|29|private-access session 2: options page opens in the private stock window, matches stock; deferred to 999.17"
   "extension-actions-live-self-test|29|private-access session 2: options page opens in the private stock window, matches stock; deferred to 999.17"
   # 68-06 (2026-11-10)
-  "orca-licence-rulings|44|owner items open: ruling 68-B and the 68-A terms check for the SDK extension"
   "orca-packaged-tree|30|no container-built release tarball yet (68-06 Task 2 builds it)"
   "orca-packaged-live|30|no container-built release tarball yet (68-06 Task 2 builds it)"
   # 68-06 (2026-11-11): Task 2 built the package from the dev objdir (no Safe Browsing key directory here), so

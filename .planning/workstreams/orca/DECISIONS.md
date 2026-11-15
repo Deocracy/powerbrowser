@@ -397,6 +397,48 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
     macOS/Windows rows of END-OF-MILESTONE-CHECKLIST.md, and ledger rows NG-076 and NG-077 (deferral requested).
   - The code for those jobs stays in the tree; nothing is deleted.
 
+## Owner rulings batch (2026-11-15)
+
+- **D-41 — "Accept all defaults".** Chris, 2026-11-15, answering section 1 of `END-OF-MILESTONE-CHECKLIST.md`;
+  his words: "Accept all defaults". Each item below keeps the recorded default; nothing in the tree changes.
+  - D-35: a new window, tab or popup whose opener is an agent overlay stays refused.
+  - D-37: agent downloads and external-app (`mailto:`-style) links stay refused, including the external-protocol
+    dialog from agent pages.
+  - D-36: the hosted Orca client keeps its environment id across an orcad restart.
+  - D-38 residual acknowledged: on Linux, text an agent selects by mouse or select-all is copied to the PRIMARY
+    selection.
+  - D-39 acknowledged: separate permissions per container apply to every container, the user's own included.
+  - The remaining agent-tab risks are accepted (T-66-08-04, T-66-09-04): permission prompts and the file picker need
+    the user, the agent container is visible, audio and WebRTC run without devices, a compromised content process
+    could clear its own sandbox flags.
+  - The Phase 64, 65, 66 and 67 auto-mode picks stand as recorded (64-V, 65-05-S, 66-C, 66-06-S, 67-06-S owner items).
+    Not covered: the HOME-for-live-rows ruling and the SDK reinstall affordance, which stay open.
+  - The Phase 61 ordering override for roadmap criterion 4 and the YELLOW conditions copied into Phases 64 and 66
+    are approved.
+  - A-P1 confirmed: the re-pin carries THIRD-PARTY-NOTICES.txt.
+  - The judgment-tier plan prohibitions marked "unverified" in 67-01..67-05 are accepted.
+  - Not covered: the copy-wording approval, which stays open.
+- **D-42 — Licence ruling 68-B approved.** Chris, 2026-11-15: the per-package permissive set
+  `allowed_package_spdx` and the `khroma` `package_exceptions` row in `inventory/licence-allowlist.json` are approved
+  as proposed. `allowed_package_spdx_ruling.status` is `approved` (decided 2026-11-15).
+- **D-43 — Ruling 68-A terms check confirmed.** Chris, 2026-11-15: "Confirmed, terms permit it." Anthropic's terms
+  permit redistributing `@anthropic-ai/claude-agent-sdk` in the pre-installed, removable extension
+  `bundled-extensions/claude-agent-sdk` (D-30). The `package_rulings` row's `terms_check` is `confirmed`.
+- **D-44 — uBlock Origin GPL-3.0 section 6 reading accepted.** Chris, 2026-11-15: uBlock Origin ships as the
+  unmodified signed XPI, with its licence and a source offer (the upstream source at the pinned tag) in
+  THIRD-PARTY-NOTICES.txt. Closes the P68-39 owner row in 68-CONTEXT and WINDOWS 44 item 3; recorded on the
+  `bundled_extensions` row for `uBlock0@raymondhill.net`. With D-42 and D-43, WINDOWS 44 is fixed and its
+  `orca-licence-rulings` exclusion row is removed.
+- **D-45 — The "web-entry" upstream class is ruled out for v1.7.** Chris, 2026-11-15, as D-31 did for the terminal
+  provider: Phase 64 hosts Orca panes through overlay files only and has no seam to offer, so no web-entry PR is
+  owed. `scripts/verify-orca-overlay.mjs` drops `web-entry` from `UPSTREAM_CLASSES` and `PR_CLASSES` (a row of that
+  class is now red), so `orca-upstream-prs` asks only for the browser-provider PR (WINDOWS 51, still the owner's).
+  Closes WINDOWS 52. A later version may add a web-entry seam and the class with it.
+- **D-46 — Owner date for every WINDOWS entry still open: "next version".** Chris, 2026-11-15, answering 59-CONTEXT
+  D-09 ("one owner date for every entry still open"). Recorded through `scripts/redate-windows.mjs --date "next
+  version"` as the reason prefix "Re-dated to next version (Phase 59 D-09)"; each entry keeps its id, its open
+  status and its `GATE_KNOWN_OPEN_EXCLUSIONS` row, and closes only with its fix.
+
 ## Spikes this direction needs
 
 1. Browser parity: what an Orca browser tab can do, and how PB chrome provides it

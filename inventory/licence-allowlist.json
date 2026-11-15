@@ -4,8 +4,9 @@
   "allowed_package_spdx": ["MIT", "ISC", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "0BSD", "BlueOak-1.0.0", "Unlicense", "CC0-1.0", "Python-2.0", "MPL-2.0", "CC-BY-4.0"],
   "allowed_package_spdx_ruling": {
     "ruling": "68-B",
-    "status": "pending",
-    "reason": "owner ruling on the per-package permissive set (68-CONTEXT); CC-BY-4.0 is for data packages (caniuse-lite)"
+    "status": "approved",
+    "decided": "2026-11-15 (D-42)",
+    "reason": "owner ruling on the per-package permissive set (68-CONTEXT); CC-BY-4.0 is for data packages (caniuse-lite). Chris approved this set and the khroma package_exceptions row on 2026-11-15 (.planning/workstreams/orca/DECISIONS.md D-42)."
   },
   "package_exceptions": [
     {
@@ -13,7 +14,7 @@
       "licence_field": null,
       "licence_file": "license",
       "licence_first_line": "The MIT License (MIT)",
-      "ruling": "68-B",
+      "ruling": "68-B (approved 2026-11-15, D-42)",
       "reason": "khroma@2.1.0 ships in the web client and mobile-web; its package.json has no license key and khroma/license:1 reads `The MIT License (MIT)`."
     }
   ],
@@ -29,9 +30,10 @@
       "licence_file": "LICENSE.md",
       "licence_first_line": "© Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements outlined here: https://code.claude.com/docs/en/legal-and-compliance.",
       "evidence": "CLAUDE_AGENT_SDK_VERSION=\"0.3.284\" was in orca/out/orcad/orcad-server.js before lane 68-07's externals seam; loaded lazily by loadClaudeAgentSdk (orca/src/main/claude/claude-stream-json-connection.ts:38), used only by Claude's structured session",
-      "terms_check": "pending",
+      "terms_check": "confirmed",
+      "terms_check_decided": "2026-11-15 (D-43): Chris, \"Confirmed, terms permit it\"",
       "windows_id": 44,
-      "reason": "D-30 (2026-11-10): the SDK leaves orcad's bundle and ships in the pre-installed, user-removable Theia extension bundled-extensions/claude-agent-sdk; the owner still confirms that Anthropic's terms permit redistributing that extension."
+      "reason": "D-30 (2026-11-10): the SDK leaves orcad's bundle and ships in the pre-installed, user-removable Theia extension bundled-extensions/claude-agent-sdk. Chris confirmed on 2026-11-15 that Anthropic's terms permit redistributing that extension (D-43)."
     }
   ],
   "trees": [
@@ -67,7 +69,7 @@
       "ruling": "BEXT-02 (Chris 2026-11-10)",
       "licence_file": "LICENSE.txt",
       "licence_first_line": "GNU GENERAL PUBLIC LICENSE",
-      "reason": "uBlock Origin ships unmodified as <GreD>/distribution/extensions/uBlock0@raymondhill.net.xpi at the version pinned in powerbrowser/packaging/bundled-xpi.json (P68-39). The XPI's LICENSE.txt:1 reads `GNU GENERAL PUBLIC LICENSE` and :2 `Version 3, 29 June 2007`; its source headers (js/background.js:6-9) grant `either version 3 of the License, or (at your option) any later version`, hence GPL-3.0-or-later (addons.mozilla.org lists the coarser GPL-3.0-only). The notices link the upstream source at the pinned tag."
+      "reason": "uBlock Origin ships unmodified as <GreD>/distribution/extensions/uBlock0@raymondhill.net.xpi at the version pinned in powerbrowser/packaging/bundled-xpi.json (P68-39). The XPI's LICENSE.txt:1 reads `GNU GENERAL PUBLIC LICENSE` and :2 `Version 3, 29 June 2007`; its source headers (js/background.js:6-9) grant `either version 3 of the License, or (at your option) any later version`, hence GPL-3.0-or-later (addons.mozilla.org lists the coarser GPL-3.0-only). The notices link the upstream source at the pinned tag. GPL-3.0 section 6 reading accepted by Chris 2026-11-15 (D-44): the unmodified signed XPI ships with its licence and a source offer in THIRD-PARTY-NOTICES.txt (the upstream source at the pinned tag)."
     },
     {
       "id": "powerbrowser.claude-agent-sdk",
