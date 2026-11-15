@@ -3985,6 +3985,11 @@ run_own_checks() {
     # The self-test plants 13 faults in mkdtemp copies.
     "orca-pane-routes|node $REPO_ROOT/scripts/verify-orca-pane-routes.mjs"
     "orca-pane-routes-self-test|node $REPO_ROOT/scripts/verify-orca-pane-routes.mjs --self-test"
+    # NEW (64 validation, TAB-04 group clause): orca-pane-groups. The overlay's paneRecords group branch taken out of
+    # pb-pane-mount.tsx by name (typescript AST), run on two-group fixture stores, then fed to planPanes: the second
+    # group's new pane is a Lumino split. Cross-client publication stays orca-tabs-live g3's. SKIP without typescript.
+    "orca-pane-groups|node $REPO_ROOT/scripts/verify-orca-pane-groups.mjs"
+    "orca-pane-groups-self-test|node $REPO_ROOT/scripts/verify-orca-pane-groups.mjs --self-test"
     # NEW (64-04, TERM-04, P64-33; D-32 since 64-06): orca-terminal-keys. From PAGE_KEYS' reserved rows (typescript):
     # the shell keys (letter rows, ctrl+w and ctrl+t) compared both ways with orca-panes' ORCA_TERMINAL_PASSTHROUGH_KEYS;
     # the switch keys (keycode rows) bound to Theia's NEXT_TAB/PREVIOUS_TAB with no when clause, paired by PAGE_SHORTCUTS'
