@@ -1,5 +1,6 @@
-// 68-11: "Reinstall the Claude Extension", in the command palette and the Help menu, offered
-// only while the extension is absent from the profile. The absent list is refreshed at start
+// 68-11: "Reinstall the Claude Extension", in the command palette and the Help menu (and, through
+// this command's isVisible, the chrome bar's Application menu Help), offered only while the
+// extension is absent from the profile. The absent list is refreshed at start
 // and on every deploy notification, which Theia also sends after an uninstall. Running the
 // command is the only path to a reinstall; nothing here runs it.
 import { inject, injectable } from '@theia/core/shared/inversify';

@@ -26,7 +26,10 @@
 //                     service's reinstall is called only from that command's execute handler,
 //                     and the copy-back rule is
 //                     called only from the reinstall service, never from the seed. An uninstall is
-//                     therefore undone only by the user's explicit action.
+//                     therefore undone only by the user's explicit action. The Application menu's
+//                     Help submenu (chrome-bar-widget.tsx) carries one reinstall row, labelled
+//                     REINSTALL_COMMAND_LABEL, running REINSTALL_CLAUDE.id, and present only while
+//                     this.commands.isVisible(REINSTALL_CLAUDE.id), the command's own gate.
 //   --seed (quick)    The seed rule's behaviour table against the compiled seedBundledExtensions,
 //                     plus the reinstall rule's table against reinstallBundledExtension and
 //                     absentBundledExtensions, plus the compiled reinstall service with a stubbed
@@ -234,6 +237,44 @@ export function checkReinstall(sources, shippedIds) {
         }
     }
     if (calls === 0) failures.push(`no file calls the service's reinstall -- the command does nothing`);
+    return failures;
+}
+
+const WIDGET_PATH = join(REPO_ROOT, 'theia', 'extensions', 'chrome-bar', 'src', 'browser', 'chrome-bar-widget.tsx');
+const WIDGET_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx';
+
+/**
+ * Owner ruling 2026-11-16: the Application menu's Help submenu carries the reinstall row in every
+ * mode, shown only while the command's own isVisible holds (CommandRegistry.isVisible runs the
+ * handler checkReinstall pins to this.absent.has), labelled by REINSTALL_COMMAND_LABEL and running
+ * the command id. The names are derived from the extension's sources and the widget's imports.
+ * @param {string} widget chrome-bar-widget.tsx text
+ * @param {Record<string,string>} sources rel -> text under theia/extensions/bundled-extensions
+ */
+export function checkHelpRow(widget, sources) {
+    const failures = [];
+    const cmd = stripComments(sources[REINSTALL_CMD_REL] ?? '');
+    const copy = stripComments(sources['src/common/bundled-extensions-copy.ts'] ?? '');
+    const label = copy.match(/export const REINSTALL_COMMAND_LABEL = '([^']+)'/)?.[1];
+    if (!/export const REINSTALL_CLAUDE: Command = \{\s*id: '[^']+',\s*label: REINSTALL_COMMAND_LABEL,/.test(cmd) || !label) {
+        failures.push(`${REINSTALL_CMD_REL} no longer declares REINSTALL_CLAUDE with label REINSTALL_COMMAND_LABEL -- the Help row has nothing to derive from`);
+        return failures;
+    }
+    const code = stripComments(widget);
+    const imported = (name, mod) => new RegExp(`import \\{[^}]*\\b${name}\\b[^}]*\\} from '@powerbrowser/bundled-extensions/lib/${mod}';`).test(code);
+    if (!imported('REINSTALL_CLAUDE', 'browser/reinstall-command')) failures.push(`${WIDGET_REL} does not import REINSTALL_CLAUDE from the bundled-extensions reinstall command`);
+    if (!imported('REINSTALL_COMMAND_LABEL', 'common/bundled-extensions-copy')) failures.push(`${WIDGET_REL} does not import REINSTALL_COMMAND_LABEL from the bundled-extensions copy`);
+    const help = code.match(/protected appSubmenu\([\s\S]*?\n {12}case 'help':([\s\S]*?)\n {12}(?:case '|default:)/)?.[1];
+    if (!help) {
+        failures.push(`${WIDGET_REL} has no case 'help' in appSubmenu -- the Help submenu did not derive`);
+        return failures;
+    }
+    const rows = [...help.matchAll(/this\.commandLeaf\('[a-z-]+',\s*([^,]+),\s*([^,)]+)/g)].filter(m => /REINSTALL/.test(m[0]));
+    const gated = /\.\.\.\(this\.commands\.isVisible\(REINSTALL_CLAUDE\.id\) \? \[this\.commandLeaf\('[a-z-]+', REINSTALL_COMMAND_LABEL, REINSTALL_CLAUDE\.id\)\] : \[\]\)/;
+    if (rows.length !== 1) failures.push(`the Help submenu holds ${rows.length} reinstall rows, not one`);
+    else if (!gated.test(help)) failures.push(`the Help submenu's reinstall row is ${JSON.stringify(rows[0][0])}, not shown only while this.commands.isVisible(REINSTALL_CLAUDE.id) holds with REINSTALL_COMMAND_LABEL -- it would be offered while the extension is present, or labelled apart from the command`);
+    if (code.includes(`'${label}'`)) failures.push(`${WIDGET_REL} spells the label ${JSON.stringify(label)} itself instead of REINSTALL_COMMAND_LABEL`);
+    if (/\.absent\(/.test(code)) failures.push(`${WIDGET_REL} reads the absent list itself -- the Help row must reuse the command's isVisible, not duplicate it`);
     return failures;
 }
 
@@ -596,6 +637,30 @@ async function selfTest() {
             lines.push(`${hit ? 'PASS' : 'FAIL'} plant "${pname}" -> ${hit ? `red: ${hit}` : 'stayed green or red for the wrong reason'}`);
             if (!hit) ok = false;
         }
+        // Owner ruling 2026-11-16: the Help submenu row, over the tree's widget, then its plants.
+        const widget = readText(WIDGET_PATH) ?? '';
+        const helpControl = checkHelpRow(widget, src);
+        lines.push(`${helpControl.length === 0 ? 'PASS' : 'FAIL'} control: the tree's Help submenu reinstall row is green${helpControl.length ? ` -- ${helpControl.join(' | ')}` : ''}`);
+        if (helpControl.length) ok = false;
+        const GATE = 'this.commands.isVisible(REINSTALL_CLAUDE.id) ? [';
+        const helpPlants = [
+            ['the Help row removed', w => w.replace(/\n[^\n]*this\.commands\.isVisible\(REINSTALL_CLAUDE\.id\)[^\n]*/, ''), /holds 0 reinstall rows/],
+            ['the Help row shown whatever the state', w => w.replace(GATE, 'true ? ['), /not shown only while this\.commands\.isVisible/],
+            ['the Help row gate negated', w => w.replace(GATE, '!this.commands.isVisible(REINSTALL_CLAUDE.id) ? ['), /not shown only while this\.commands\.isVisible/],
+            ['the Help row labelled by a literal', w => w.replace(/(commandLeaf\('[a-z-]+', )REINSTALL_COMMAND_LABEL/, `$1'Reinstall the Claude Extension'`), /not shown only while|spells the label/],
+            ['the Help row gated on its own absent read', w => w.replace(GATE, '(await this.bundled.absent()).length ? ['), /reads the absent list itself/],
+        ];
+        for (const [pname, plant, expect] of helpPlants) {
+            const mutated = plant(widget);
+            if (mutated === widget) {
+                lines.push(`FAIL plant "${pname}" -> the plant did not apply; it proves nothing`);
+                ok = false;
+                continue;
+            }
+            const hit = checkHelpRow(mutated, src).find(x => expect.test(x));
+            lines.push(`${hit ? 'PASS' : 'FAIL'} plant "${pname}" -> ${hit ? `red: ${hit}` : 'stayed green or red for the wrong reason'}`);
+            if (!hit) ok = false;
+        }
         const reName = 'a reinstall that overwrites a present copy';
         const re = loadReinstall();
         if (!re) {
@@ -666,9 +731,12 @@ const mode = process.argv[2] ?? '';
 if (mode === '') {
     const root = join(REPO_ROOT, 'bundled-extensions');
     const r = checkStatic({ root, userDir: join(APP_DIR, 'plugins', '.user'), orcaDir: join(REPO_ROOT, 'orca') });
-    const reinstall = checkReinstall(readExtensionSources(EXT_DIR), shippedIdsOf(root));
+    const sources = readExtensionSources(EXT_DIR);
+    const reinstall = checkReinstall(sources, shippedIdsOf(root));
     if (reinstall.length === 0) r.passes.push('the reinstall command is offered only while the extension is absent and runs only on the user\'s action');
-    report([...r.failures, ...reinstall], r.skips, r.passes, 'every bundled extension is a declarative VS Code manifest pinning one package by version and sha512, quoting its licence, with clean user-facing copy; reinstall is offered only while absent and never automatic');
+    const helpRow = checkHelpRow(readText(WIDGET_PATH) ?? '', sources);
+    if (helpRow.length === 0) r.passes.push('the Application menu\'s Help submenu carries the reinstall row, gated on the command\'s own isVisible');
+    report([...r.failures, ...reinstall, ...helpRow], r.skips, r.passes, 'every bundled extension is a declarative VS Code manifest pinning one package by version and sha512, quoting its licence, with clean user-facing copy; reinstall is offered only while absent, in the palette and the Application menu\'s Help, and never automatic');
 } else if (mode === '--seed') {
     const seed = loadSeed();
     if (!seed) {

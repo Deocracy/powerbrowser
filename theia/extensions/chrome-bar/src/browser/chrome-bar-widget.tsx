@@ -76,6 +76,8 @@ import { ProfileStorageService } from '@powerbrowser/tab-uris/lib/browser/profil
 import { MENU_ORDER, MENU_PHASE } from './site-identity/site-identity-table';
 import { APP_MENU_ID, AppMenuRow, AppMenuSubmenu, WIRED_MENU_IDS, buildAppMenu, withinBudget } from './site-identity/app-menu';
 import { MODE_ATTRIBUTE } from '@powerbrowser/modes/lib/browser/mode-attribute';
+import { REINSTALL_CLAUDE } from '@powerbrowser/bundled-extensions/lib/browser/reinstall-command';
+import { REINSTALL_COMMAND_LABEL } from '@powerbrowser/bundled-extensions/lib/common/bundled-extensions-copy';
 import '../../src/browser/chrome-bar.css';
 
 /** NAV-03: the session-history menu's path. The menu is built per request from the history reply, never registered. */
@@ -1273,6 +1275,8 @@ export class ChromeBarWidget extends ReactWidget {
             case 'help':
                 return ordered([
                     this.menuLeaf('get-help', CHROME_BAR_COPY.getHelpRow, () => this.openStockPageRow('support')),
+                    // Owner ruling 2026-11-16: reachable in every mode, shown only while the command's own isVisible holds.
+                    ...(this.commands.isVisible(REINSTALL_CLAUDE.id) ? [this.commandLeaf('reinstall-claude', REINSTALL_COMMAND_LABEL, REINSTALL_CLAUDE.id)] : []),
                     this.menuGroup('help-about', [this.menuLeaf('about', CHROME_BAR_COPY.aboutAppRow(appSubject()), () => this.openStockPageRow('about'))]),
                 ]);
             default:

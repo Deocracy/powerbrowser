@@ -9,5 +9,6 @@ If you switch this extension off or remove it in the Extensions view, Claude cha
 report that the SDK is missing. Claude in a terminal, and every other agent, keep working.
 
 To get Claude chat sessions back, switch this extension on again in the Extensions view. If you
-removed it, choose Reinstall the Claude Extension from the Help menu or the command palette.
+removed it, choose Reinstall the Claude Extension from Help in the Application menu, or from the
+command palette.
 PowerBrowser never reinstalls it on its own.
