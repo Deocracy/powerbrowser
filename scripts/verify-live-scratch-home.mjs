@@ -4,12 +4,14 @@
 // live-scratch-home (owner ruling 2026-11-15, "Scratch HOME"): no live harness launches PowerBrowser, orcad or the
 // Orca CLI with the developer's real HOME, so a live row never writes the real ~/.orca, ~/.config/orca or ~/.claude.
 //
-// It derives the launch sites from the tree, not from a list: every spawn, spawnSync, execFile and execFileSync call
-// in scripts/**/*.mjs whose command or arguments (with a bare identifier resolved to its const/let definition in the
+// It derives the launch sites from the tree, not from a list: every spawn, spawnSync, execFile, execFileSync, exec,
+// execSync and fork call in scripts/**/*.mjs whose command or arguments (with a bare identifier resolved to its const/let definition in the
 // same file) carry a launch mark: a --profile/-profile argument (PowerBrowser), orcad.js or buildOrcadArgs (orcad), claude,
 // or the Orca CLI ('cli', 'bin', 'orca', CLI_JS, 'out', 'cli', or a [...args, '--json'] tail). Each one must pass
 // env: liveEnv(...) (scripts/lib/firefox-bidi.mjs), which moves HOME and the XDG base folders to a per-run scratch
 // HOME and throws at launch when HOME is still the real one. A launch with no env inherits the real HOME and is red.
+// In scripts/**/*.sh, every "$...bin..." --profile line must set HOME= (not $HOME); SHELL_EXEMPT names the one file that
+// keeps the real HOME on purpose, and an exemption that names no launch is red (68-11-REVIEW WR-01).
 // It also requires the runtime half: liveEnv returns assertScratchHome(...), and assertScratchHome compares against
 // os.homedir() (through realHomes) and throws, proven by calling it, also for a home-relocating name such as
 // CLAUDE_CONFIG_DIR=~/.claude, which liveEnv must drop (68-11-REVIEW WR-02). And the real-agent seed: seedClaudeLogin writes
@@ -39,8 +41,15 @@ const SCRIPTS = join(REPO_ROOT, 'scripts');
 const HELPER_REL = 'scripts/lib/firefox-bidi.mjs';
 const SELF_REL = 'scripts/verify-live-scratch-home.mjs';
 
-const CALL_RE = /(?<![.\w$])(spawn|spawnSync|execFile|execFileSync)\(/g;
-const LAUNCH_MARK = /^'claude'(?:\s|$)|'--?profile'|orcad\.js|buildOrcadArgs|'cli',\s*'bin',\s*'orca'|\bCLI_JS\b|'out',\s*'cli'|\[\s*\.\.\.\w+,\s*'--json'\s*\]/;
+const CALL_RE = /(?<![.\w$])(spawn|spawnSync|execFile|execFileSync|exec|execSync|fork)\(/g;
+// Q: either quote. FIREFOX_BIN, binPath and dist/bin/powerbrowser catch a PowerBrowser launch whose --profile is pushed
+// later or sits in a template; an orcad* identifier catches orcad started through a variable main path (68-11-REVIEW WR-01).
+const Q = `['"]`;
+const LAUNCH_MARK = new RegExp([
+    `^${Q}claude${Q}(?:\\s|$)`, `${Q}--?profile${Q}`, '--?profile\\b', '\\bFIREFOX_BIN\\b', '\\bbinPath\\b', 'dist/bin/powerbrowser',
+    'orcad\\.js', '\\borcad\\w*\\b', 'buildOrcadArgs', `${Q}cli${Q},\\s*${Q}bin${Q},\\s*${Q}orca${Q}`, '\\bCLI_JS\\b',
+    `${Q}out${Q},\\s*${Q}cli${Q}`, `\\[\\s*\\.\\.\\.\\w+,\\s*${Q}--json${Q}\\s*\\]`,
+].join('|'));
 
 /** The text from `open` (an opening paren) to its match, skipping strings, templates and comments. */
 function balanced(src, open) {
@@ -103,12 +112,48 @@ export function launchesIn(src) {
     return found;
 }
 
-/** Pure. Red reasons for `files` ({ rel: source }). */
+/**
+ * Shell files whose PowerBrowser launches keep the real HOME on purpose, with why. An entry whose file holds no launch is
+ * red (a stale exemption), so the list can only shrink with the tree.
+ */
+export const SHELL_EXEMPT = Object.freeze({
+    'scripts/verify-endpoints.sh': 'layer 2 proves by strace that a launch under the real $HOME never opens ~/.mozilla/firefox; every launch there runs on a mktemp profile, where PowerBrowser refuses Orca',
+});
+
+/**
+ * Pure. Every PowerBrowser launch in shell source `src` (continuation lines joined; comments skipped): a "$...bin..."
+ * command word with a --profile argument. homeOk: the line sets HOME= to something other than $HOME.
+ */
+export function shellLaunchesIn(src) {
+    const lines = src.split('\n');
+    const found = [];
+    for (let i = 0; i < lines.length; i++) {
+        const first = i;
+        let line = lines[i];
+        while (line.endsWith('\\') && i + 1 < lines.length) line = `${line.slice(0, -1)} ${lines[++i]}`;
+        if (/^\s*#/.test(line) || !/"\$\{?\w*(?:bin|BIN)\w*\}?"/.test(line) || !/(?:^|\s)--?profile(?:\s|=|$)/.test(line)) continue;
+        found.push({ line: first + 1, homeOk: /(?:^|[\s("])HOME=(?!"?\$\{?HOME\b)/.test(line) });
+    }
+    return found;
+}
+
+/** Pure. Red reasons for `files` ({ rel: source }): .mjs launches need env: liveEnv(...), .sh launches HOME=. */
 export function verdict(files) {
     const fails = [];
-    let launches = 0;
+    let launches = 0, exempt = 0;
     for (const [rel, src] of Object.entries(files)) {
         if (rel === SELF_REL) continue;
+        if (rel.endsWith('.sh')) {
+            const sh = shellLaunchesIn(src);
+            if (rel in SHELL_EXEMPT) {
+                exempt += sh.length;
+                if (!sh.length) fails.push(`${rel}: named in SHELL_EXEMPT but holds no PowerBrowser launch; remove the stale exemption`);
+                continue;
+            }
+            launches += sh.length;
+            for (const l of sh) if (!l.homeOk) fails.push(`${rel}:${l.line}: a PowerBrowser launch with no HOME= on the line, so it runs with the real HOME`);
+            continue;
+        }
         for (const l of launchesIn(src)) {
             launches++;
             if (!l.envOk) fails.push(`${rel}:${l.line}: a live launch (${l.call}) ${l.env === null ? 'passes no env, so it inherits the real HOME' : `passes env: ${l.env}, not liveEnv(...)`}`);
@@ -135,7 +180,8 @@ export function verdict(files) {
         if (!/CLAUDE_TOKEN_MARGIN_MIN/.test(seed)) fails.push(`${HELPER_REL}: seedClaudeLogin has no token-expiry margin, so claude can refresh the sign-in inside a scratch copy`);
     }
     if (!launches) fails.push('vacuous: no live launch site was found under scripts/');
-    return { fails, launches };
+    for (const rel of Object.keys(SHELL_EXEMPT)) if (!(rel in files)) fails.push(`${rel}: named in SHELL_EXEMPT but absent from the tree; remove the stale exemption`);
+    return { fails, launches, exempt };
 }
 
 /** Red reasons from calling the runtime guard: the real HOME must throw, a scratch one must pass. */
@@ -269,7 +315,7 @@ export async function signalVerdict(src) {
 function treeFiles() {
     const files = {};
     for (const ent of readdirSync(SCRIPTS, { recursive: true, withFileTypes: true })) {
-        if (!ent.isFile() || !ent.name.endsWith('.mjs')) continue;
+        if (!ent.isFile() || !/\.(?:mjs|sh)$/.test(ent.name)) continue;
         const abs = join(ent.parentPath ?? ent.path, ent.name);
         if (abs.includes(`${join('scripts', 'node_modules')}`)) continue;
         files[relative(REPO_ROOT, abs)] = readFileSync(abs, 'utf8');
@@ -291,6 +337,17 @@ async function selfTest() {
     red('orcad launch through an args identifier', plant("const args = [join(dir, 'out', 'orcad', 'orcad.js'), '--json'];\nconst child = spawn(nodeBin, args, { cwd, env });\n"), 'passes env: env');
     red('the real claude run with a hand-built env', plant("execFileSync('claude', ['--version'], { env: { PATH: path, HOME: home } });\n"), 'planted-live.mjs:1: a live launch (execFileSync) passes env: { PATH: path, HOME: home }');
     red('an Orca bridge path from the harness env', plant("const dir = await OrcaEnv.bridgeDirFor(s.dataRoot, (n) => process.env[n], 'linux');\n"), "planted-live.mjs:1: an Orca path derived from the harness's own process.env");
+    // WR-01: one plant per launch form the derivation used to miss.
+    red('double-quoted --profile', plant('spawn(bin, ["--headless", "--profile", dir], { stdio: "ignore" });\n'), 'planted-live.mjs:1: a live launch (spawn) passes no env');
+    red('--profile pushed onto an args array', plant("const args = ['--headless'];\nargs.push('--profile', dir);\nspawn(FIREFOX_BIN, args, { stdio: 'ignore' });\n"), 'planted-live.mjs:3: a live launch (spawn) passes no env');
+    red('execSync with a template command', plant('execSync(`${FIREFOX_BIN} --headless --profile ${dir}`);\n'), 'planted-live.mjs:1: a live launch (execSync) passes no env');
+    red('orcad through a variable main path', plant("spawn(nodeBin, [orcadMain, '--port', '0'], { env: process.env });\n"), 'planted-live.mjs:1: a live launch (spawn) passes env: process.env');
+    const plantSh = (src) => verdict({ ...tree, 'scripts/planted-live.sh': src }).fails;
+    red('shell launch with no HOME=', plantSh('setsid env "XDG_CONFIG_HOME=$x" "$bin" --headless \\\n  --profile "$profile" >"$log" 2>&1 &\n'), 'planted-live.sh:1: a PowerBrowser launch with no HOME=');
+    red('shell launch with HOME="$HOME"', plantSh('timeout 30 env HOME="$HOME" "$bin" --profile "$profile"\n'), 'planted-live.sh:1: a PowerBrowser launch with no HOME=');
+    const shOk = plantSh('timeout 30 env "HOME=$HARNESS_HOME" "$bin" --profile "$profile"\n');
+    rows.push(['control: a shell launch with HOME= stays green', shOk.length === 0, shOk]);
+    red('a stale shell exemption', verdict({ ...tree, 'scripts/verify-endpoints.sh': '# no launch\n' }).fails, 'holds no PowerBrowser launch');
     const ok = verdict({ ...tree, 'scripts/planted-live.mjs': "spawn(FIREFOX_BIN, ['--profile', d], { env: liveEnv(env) });\nconst cli = join(r, 'cli', 'bin', 'orca');\nexecFile(cli, [...a, '--json'], { env: liveEnv({ PATH }), cwd });\n" }).fails;
     rows.push(['control: the same launches through liveEnv stay green', ok.length === 0, ok]);
     const unguarded = { ...tree, [HELPER_REL]: tree[HELPER_REL].replace('return assertScratchHome(out);', 'return out;') };
@@ -325,11 +382,11 @@ async function selfTest() {
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     if (process.argv.includes('--self-test')) await selfTest();
     else {
-        const { fails, launches } = verdict(treeFiles());
+        const { fails, launches, exempt } = verdict(treeFiles());
         fails.push(...await runtimeVerdict(await import('./lib/firefox-bidi.mjs')));
         fails.push(...await signalVerdict(readFileSync(join(REPO_ROOT, HELPER_REL), 'utf8')));
         for (const f of fails) console.error(`verify-live-scratch-home: FAIL -- ${f}`);
         if (fails.length) process.exit(1);
-        console.log(`verify-live-scratch-home: PASS -- ${launches} live launch site(s) under scripts/ pass env: liveEnv(...), and the runtime guard refuses the real HOME`);
+        console.log(`verify-live-scratch-home: PASS -- ${launches} live launch site(s) under scripts/ run under a scratch HOME (.mjs: env: liveEnv(...); .sh: HOME=), ${exempt} in ${Object.keys(SHELL_EXEMPT).join(', ')} keep the real HOME by named exemption; the runtime guard refuses the real HOME`);
     }
 }

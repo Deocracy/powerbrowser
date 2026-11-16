@@ -118,6 +118,11 @@ track_temp() { TEMP_PATHS+=("$1"); }
 REAL_XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-}"
 HARNESS_CONFIG_HOME="$(mktemp -d)"; track_temp "$HARNESS_CONFIG_HOME"
 export XDG_CONFIG_HOME="$HARNESS_CONFIG_HOME"
+# Owner ruling 2026-11-15 (Scratch HOME), 68-11-REVIEW WR-01: every PowerBrowser launch in this file passes
+# HOME=$HARNESS_HOME (not exported: gh, git and node keep the real HOME), and XAUTHORITY explicitly, so a headed launch
+# still reaches the X server. live-scratch-home goes red on a launch line here without HOME=.
+HARNESS_HOME="$(mktemp -d)"; track_temp "$HARNESS_HOME"
+HARNESS_XAUTHORITY="${XAUTHORITY:-$HOME/.Xauthority}"
 # gh resolves its config (and so its auth) from XDG_CONFIG_HOME/gh, which the export above
 # points at an empty dir: every full-tier gh api row (repo-controls, descriptor-monotonic) would
 # fail as unauthenticated. Point gh at the caller's real config dir instead, only when it exists
@@ -403,7 +408,7 @@ start_shell() {
     cp "$VERIFY05_USER_JS_PROFILE" "$profile/user.js"
   fi
 
-  setsid "${env_args[@]}" "$bin" --headless --profile "$profile" >"$log" 2>&1 &
+  setsid "${env_args[@]}" "HOME=$HARNESS_HOME" "$bin" --headless --profile "$profile" >"$log" 2>&1 &
   BROWSER_SPAWN_PID=$!
   return 0
 }
@@ -569,7 +574,7 @@ start_shell_display() {
     cp "$VERIFY05_USER_JS_PROFILE" "$profile/user.js"
   fi
 
-  setsid env "DISPLAY=$display_to_use" "XDG_CONFIG_HOME=${VERIFY05_XDG_CONFIG_HOME:-$HARNESS_CONFIG_HOME}" "$bin" --profile "$profile" >"$log" 2>&1 &
+  setsid env "DISPLAY=$display_to_use" "XDG_CONFIG_HOME=${VERIFY05_XDG_CONFIG_HOME:-$HARNESS_CONFIG_HOME}" "HOME=$HARNESS_HOME" "XAUTHORITY=$HARNESS_XAUTHORITY" "$bin" --profile "$profile" >"$log" 2>&1 &
   BROWSER_SPAWN_PID=$!
   DISPLAY_IN_USE="$display_to_use"
   return 0
@@ -1960,9 +1965,9 @@ check_side05_second_launch_focuses() {
     second_log="$(mktemp)"; track_temp "$second_log"
 
     if [ "$round" = "bare" ]; then
-      timeout 30 env "DISPLAY=$display_to_use" "$bin" --profile "$profile" >"$second_log" 2>&1
+      timeout 30 env "DISPLAY=$display_to_use" "HOME=$HARNESS_HOME" "XAUTHORITY=$HARNESS_XAUTHORITY" "$bin" --profile "$profile" >"$second_log" 2>&1
     else
-      timeout 30 env "DISPLAY=$display_to_use" "$bin" --profile "$profile" "$arg_path" >"$second_log" 2>&1
+      timeout 30 env "DISPLAY=$display_to_use" "HOME=$HARNESS_HOME" "XAUTHORITY=$HARNESS_XAUTHORITY" "$bin" --profile "$profile" "$arg_path" >"$second_log" 2>&1
     fi
     second_rc=$?
 
@@ -2048,7 +2053,7 @@ check_side05_no_second_backend() {
 
   local second_log second_rc
   second_log="$(mktemp)"; track_temp "$second_log"
-  timeout 30 env "DISPLAY=$display_to_use" "$bin" --profile "$profile" >"$second_log" 2>&1
+  timeout 30 env "DISPLAY=$display_to_use" "HOME=$HARNESS_HOME" "XAUTHORITY=$HARNESS_XAUTHORITY" "$bin" --profile "$profile" >"$second_log" 2>&1
   second_rc=$?
   if [ "$second_rc" -eq 124 ]; then
     echo "side05-no-second-backend: FAIL -- SIDE-05 -- second launch against the same profile did not exit within 30s; log:" >&2
@@ -3604,7 +3609,7 @@ check_gui01_single_shell_window() {
   # in the second process's own (0-byte) log.
   local second_log second_rc
   second_log="$(mktemp)"; track_temp "$second_log"
-  timeout 30 env "DISPLAY=$display_to_use" "$bin" --profile "$profile" >"$second_log" 2>&1
+  timeout 30 env "DISPLAY=$display_to_use" "HOME=$HARNESS_HOME" "XAUTHORITY=$HARNESS_XAUTHORITY" "$bin" --profile "$profile" >"$second_log" 2>&1
   second_rc=$?
 
   if [ "$second_rc" -eq 124 ]; then
@@ -4105,11 +4110,13 @@ run_own_checks() {
     "orca-credential-store|node $REPO_ROOT/scripts/verify-orca-credential-store.mjs"
     "orca-credential-store-self-test|node $REPO_ROOT/scripts/verify-orca-credential-store.mjs --self-test"
     "orca-credential-store-live-self-test|node $REPO_ROOT/scripts/verify-orca-credential-store-live.mjs --self-test"
-    # NEW (owner ruling 2026-11-15, Scratch HOME): live-scratch-home derives every spawn/execFile call under scripts/
-    # that launches PowerBrowser (--profile), orcad (orcad.js, buildOrcadArgs) or the Orca CLI, and requires each to pass
-    # env: liveEnv(...) (lib/firefox-bidi.mjs: a per-run scratch HOME and XDG folders, asserted at launch), so no live
-    # row writes the real ~/.orca. The self-test plants a launch with no env, env: process.env, HOME: homedir(), an orcad
-    # launch through an args identifier, liveEnv without its assertion and a guard that accepts the real HOME.
+    # NEW (owner ruling 2026-11-15, Scratch HOME): live-scratch-home derives every spawn/execFile/exec/fork call under
+    # scripts/ that launches PowerBrowser (--profile in either quote, FIREFOX_BIN, binPath), orcad, the Orca CLI or claude,
+    # and requires each to pass env: liveEnv(...) (lib/firefox-bidi.mjs: a per-run scratch HOME and XDG folders, asserted
+    # at launch); every "$bin" --profile line in scripts/*.sh must set HOME= (verify-endpoints.sh is a named exemption).
+    # It also runs the scratch HOME's lifetime in child nodes: removal on exit, SIGINT, SIGTERM, SIGHUP, the sweep after a
+    # SIGKILL, and the compare-and-swap write-back of a refresh token claude rotated (68-11-REVIEW CR-01, CR-02, WR-01).
+    # The self-test plants each launch form, each lifetime fault and a guard that accepts the real HOME.
     "live-scratch-home|node $REPO_ROOT/scripts/verify-live-scratch-home.mjs"
     "live-scratch-home-self-test|node $REPO_ROOT/scripts/verify-live-scratch-home.mjs --self-test"
     # NEW (67-03, RUN-06/RUN-07, P67-01..P67-09, P67-32): orca-offer-file judges real lstat results of a temp folder
