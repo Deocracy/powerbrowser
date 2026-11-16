@@ -25,7 +25,8 @@ import { join, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
-import { existsSync, createWriteStream, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, createWriteStream, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { aliasPathFor, bridgeDirFor, dataRootFor, nodePlatform } from '../../powerbrowser/shell/OrcaEnv.sys.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -79,6 +80,11 @@ let scratchHome = null;
 /** The signals that end a live run: verify-platform.sh stops a check with SIGTERM to its group; Node runs no 'exit' listener on any of them. */
 export const LIVE_HOME_SIGNALS = Object.freeze(['SIGINT', 'SIGTERM', 'SIGHUP']);
 const HOME_PID_FILE = '.pid';
+const HOME_SEED_FILE = '.seeded'; // SHA-256 of the refresh token seedClaudeLogin wrote, never the token
+const sha256 = (s) => createHash('sha256').update(String(s)).digest('hex');
+const readJson = (f) => { try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return {}; } };
+/** The real ~/.claude/.credentials.json (the first real home holding one), or null. */
+const realClaudeCredentials = () => realHomes().map(h => join(h, '.claude', '.credentials.json')).find(f => existsSync(f)) ?? null;
 
 /** True while the run that made scratch HOME `dir` is alive (its .pid). A folder with no .pid yet counts as alive for a minute. */
 function homeInUse(dir) {
@@ -88,9 +94,46 @@ function homeInUse(dir) {
     try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 }
 
-/** Removes scratch HOME `dir`. */
+/**
+ * 68-11-REVIEW CR-02: true when scratch HOME `dir` holds no Claude sign-in that exists nowhere else. When claude rotated
+ * the seeded refresh token inside it, the rotated one is the only valid one, so it is written back to the real
+ * credentials file if that still holds the seeded token (compare-and-swap; a 0600 temp file renamed over it, the file's
+ * other keys kept). Otherwise the folder must be kept, and its path is printed with what to do. Never prints a token.
+ */
+function scratchSignInSettled(dir) {
+    const scratchFile = join(dir, '.claude', '.credentials.json');
+    const rotated = readJson(scratchFile).claudeAiOauth;
+    if (!rotated?.refreshToken) return true;
+    let seeded = '';
+    try { seeded = readFileSync(join(dir, HOME_SEED_FILE), 'utf8').trim(); } catch { /* seeded before .seeded existed */ }
+    if (sha256(rotated.refreshToken) === seeded) return true;
+    const realFile = realClaudeCredentials();
+    const real = realFile ? readJson(realFile) : {};
+    const realToken = real.claudeAiOauth?.refreshToken;
+    if (realToken === rotated.refreshToken) return true;
+    if (seeded && realToken && sha256(realToken) === seeded) {
+        const tmp = `${realFile}.pb-${process.pid}.tmp`;
+        try {
+            rmSync(tmp, { force: true });
+            writeFileSync(tmp, JSON.stringify({ ...real, claudeAiOauth: rotated }), { mode: 0o600, flag: 'wx' });
+            renameSync(tmp, realFile);
+            console.error(`firefox-bidi: claude refreshed its sign-in inside the scratch HOME; the new sign-in was written back to ${realFile}`);
+            return true;
+        } catch (e) {
+            rmSync(tmp, { force: true });
+            console.error(`firefox-bidi: could not write the refreshed sign-in back to ${realFile} (${e.code ?? 'error'})`);
+        }
+    }
+    const target = realFile ?? '~/.claude/.credentials.json';
+    console.error(`firefox-bidi: FAIL -- claude refreshed its sign-in inside a scratch HOME, and it was not written back because ${target} changed during the run. The refreshed sign-in is kept in ${scratchFile}. If claude asks you to sign in again, replace the claudeAiOauth entry in ${target} with the one in that file; otherwise delete the folder ${dir}`);
+    return false;
+}
+
+/** Removes scratch HOME `dir` unless it holds the only copy of a refreshed Claude sign-in; returns whether it was removed. */
 function disposeHome(dir) {
+    if (!scratchSignInSettled(dir)) return false;
     rmSync(dir, { recursive: true, force: true });
+    return true;
 }
 
 /**
@@ -108,7 +151,7 @@ export function liveHome() {
     const home = mkdtempSync(join(LIVE_PROFILE_BASE, 'pb-home-'));
     writeFileSync(join(home, HOME_PID_FILE), String(process.pid), { mode: 0o600 });
     scratchHome = home;
-    process.once('exit', () => disposeHome(home));
+    process.once('exit', () => { if (!disposeHome(home)) process.exitCode = 1; });
     for (const sig of LIVE_HOME_SIGNALS) {
         const onSignal = () => {
             // Another listener (withFirefoxPage's SIGINT) unwinds to a natural exit, which runs the 'exit' listener.
@@ -162,14 +205,16 @@ export const CLAUDE_STATE_KEYS = Object.freeze(['hasCompletedOnboarding', 'lastO
  *                              Bypass Permissions confirmation, whose default is "No, exit"
  * Token refresh: a refresh rotates the refresh token, and the rotated one would live only in the scratch copy, leaving
  * the real sign-in with a spent token. So the run is refused unless the access token outlives CLAUDE_TOKEN_MARGIN_MIN,
- * and at exit a changed refresh token in the copy sets a failing exit code naming it.
+ * and the SHA-256 of the seeded refresh token is kept beside the copy (.seeded): whenever the scratch HOME is removed
+ * (exit, an ending signal, or the next run's sweep), a rotated token is written back or the folder kept
+ * (scratchSignInSettled).
  * Returns null when seeded, or the reason the row must not run.
  */
 export function seedClaudeLogin() {
-    const real = realHomes().find(h => existsSync(join(h, '.claude', '.credentials.json')));
-    if (!real) return 'no Claude sign-in in the real home (~/.claude/.credentials.json); sign in to claude once, then re-run';
-    const readJson = (f) => { try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return {}; } };
-    const oauth = readJson(join(real, '.claude', '.credentials.json')).claudeAiOauth;
+    const realFile = realClaudeCredentials();
+    if (!realFile) return 'no Claude sign-in in the real home (~/.claude/.credentials.json); sign in to claude once, then re-run';
+    const real = dirname(dirname(realFile));
+    const oauth = readJson(realFile).claudeAiOauth;
     if (!oauth?.refreshToken) return 'the Claude sign-in holds no claude.ai login (an API-key setup is not seeded); sign in to claude once, then re-run';
     const minutesLeft = Math.floor((Number(oauth.expiresAt) - Date.now()) / 60000);
     if (!(minutesLeft >= CLAUDE_TOKEN_MARGIN_MIN)) return `the Claude sign-in expires in ${Number.isFinite(minutesLeft) ? minutesLeft : '?'} min, under the ${CLAUDE_TOKEN_MARGIN_MIN} min a run needs without refreshing it in a scratch copy; use claude once so it refreshes its own sign-in, then re-run`;
@@ -178,15 +223,10 @@ export function seedClaudeLogin() {
     const settings = readJson(join(real, '.claude', 'settings.json'));
     mkdirSync(join(home, '.claude'), { recursive: true, mode: 0o700 });
     const creds = join(home, '.claude', '.credentials.json');
+    writeFileSync(join(home, HOME_SEED_FILE), sha256(oauth.refreshToken), { mode: 0o600 });
     writeFileSync(creds, JSON.stringify({ claudeAiOauth: oauth }), { mode: 0o600 });
     writeFileSync(join(home, '.claude.json'), JSON.stringify(Object.fromEntries(CLAUDE_STATE_KEYS.filter(k => k in state).map(k => [k, state[k]]))), { mode: 0o600 });
     writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify(settings.skipDangerousModePermissionPrompt === true ? { skipDangerousModePermissionPrompt: true } : {}), { mode: 0o600 });
-    // prepend: runs before liveHome's removal listener
-    process.prependOnceListener('exit', () => {
-        if (readJson(creds).claudeAiOauth?.refreshToken === oauth.refreshToken) return;
-        console.error('firefox-bidi: FAIL -- claude refreshed its sign-in inside the scratch HOME; the real ~/.claude sign-in may now need a fresh login (run claude and sign in)');
-        process.exitCode = 1;
-    });
     return null;
 }
 

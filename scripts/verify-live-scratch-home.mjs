@@ -14,18 +14,21 @@
 // os.homedir() (through realHomes) and throws, proven by calling it. And the real-agent seed: seedClaudeLogin writes
 // fresh files (never copies or links a real one), seeds skipDangerousModePermissionPrompt, and keeps its token-expiry
 // margin (CLAUDE_TOKEN_MARGIN_MIN), so claude never refreshes the owner's sign-in inside a scratch copy.
-// The scratch HOME's lifetime is run, not read: child nodes import the helper, make a scratch HOME and are ended by
-// SIGTERM, SIGHUP and SIGINT (each must remove it and still die by that signal), and one is SIGKILLed (the next run's
-// liveHome() must sweep its folder). 68-11-REVIEW CR-01.
+// The scratch HOME's lifetime is run, not read (68-11-REVIEW CR-01, CR-02): child nodes import the helper, seed a
+// fixture sign-in, rotate its refresh token as a claude refresh would, and end by a normal exit, SIGTERM, SIGHUP, SIGINT
+// (each must remove the folder, still end by that signal, and write the rotated token back) or SIGKILL (the next run's
+// liveHome() must sweep the folder and write the token back). When the real file changed during the run, nothing may be
+// overwritten and the folder must be kept.
 //
 // --self-test plants: a PowerBrowser spawn with no env, one with env: process.env, a CLI launch whose env sets
 // HOME: homedir(), an orcad launch through an args identifier, liveEnv without its assertion, seedClaudeLogin copying
 // the credentials file whole, dropping the bypass-prompt setting, or dropping the expiry margin, and the runtime guard
-// accepting the real HOME, a helper with no signal listener and one with no sweep. Each must go red naming the drift;
+// accepting the real HOME, a helper with no signal listener, one with no sweep, one that deletes a rotated token and one
+// that writes back with no compare-and-swap. Each must go red naming the drift;
 // the controls (the same launches with liveEnv, the helper as it is) stay green.
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -164,27 +167,74 @@ function runHelperChild(src, body, home) {
 }
 let probeSeq = 0;
 
-/** Red reasons from ending children that made a scratch HOME from helper source `src`: each signal must remove it, and a later run must sweep one a SIGKILL left. */
+/**
+ * Red reasons from children that seed a scratch HOME from helper source `src` under a fixture sign-in (HOME is a fixture
+ * folder, so realHomes() finds its .claude/.credentials.json first; fake token strings, never the owner's), rotate the
+ * scratch copy's refresh token as a claude refresh would, and then end. CR-01: each ending signal and a normal exit
+ * remove the folder and the child still ends by that signal; a SIGKILLed run's folder is swept by the next liveHome().
+ * CR-02: every one of those paths writes the rotated token back (other keys kept, mode 0600), and when the real file
+ * changed during the run (the owner's own claude refreshed it) nothing is overwritten and the folder is kept.
+ */
 export async function signalVerdict(src) {
     const fails = [];
     mkdirSync(LIVE_PROFILE_BASE, { recursive: true });
     const home = mkdtempSync(join(LIVE_PROFILE_BASE, 'fixture-home-'));
+    const realFile = join(home, '.claude', '.credentials.json');
+    const setReal = (refreshToken) => {
+        mkdirSync(dirname(realFile), { recursive: true });
+        writeFileSync(realFile, JSON.stringify({ claudeAiOauth: { accessToken: 'fixture-access', refreshToken, expiresAt: Date.now() + 2 * 3600000 }, mcpOAuth: { fixture: 'kept' } }), { mode: 0o600 });
+    };
+    const real = () => { try { return JSON.parse(readFileSync(realFile, 'utf8')); } catch { return {}; } };
+    const rotateTo = (token) => `const why = m.seedClaudeLogin(); if (why) { console.log('not seeded: ' + why); process.exit(3); }
+        const fs = await import('node:fs'); const f = m.liveHome() + '/.claude/.credentials.json';
+        const c = JSON.parse(fs.readFileSync(f, 'utf8')); c.claudeAiOauth.refreshToken = ${JSON.stringify(token)}; fs.writeFileSync(f, JSON.stringify(c));
+        console.log(m.liveHome());`;
+    const seeded = async (r, what) => {
+        const dir = await r.line;
+        if (dir.startsWith('/')) return dir;
+        fails.push(`${what}: the child made no seeded scratch HOME (${dir || 'no output'})`);
+        r.child.kill('SIGKILL'); await r.done;
+        return null;
+    };
+    const wroteBack = (what, token) => {
+        const r = real();
+        if (r.claudeAiOauth?.refreshToken !== token) fails.push(`${what}: the refresh token claude rotated inside the scratch HOME was not written back to the real credentials file, so it is lost`);
+        else if (r.mcpOAuth?.fixture !== 'kept') fails.push(`${what}: the write-back dropped the real credentials file's other keys`);
+        else if ((statSync(realFile).mode & 0o077) !== 0) fails.push(`${what}: the written-back credentials file is readable by group or others`);
+    };
     try {
-        for (const sig of ['SIGTERM', 'SIGHUP', 'SIGINT']) {
-            const r = runHelperChild(src, "console.log(m.liveHome()); setInterval(() => {}, 1e6);", home);
-            const dir = await r.line;
-            if (!dir) { fails.push(`signal: the child made no scratch HOME before ${sig}`); r.child.kill('SIGKILL'); await r.done; continue; }
-            r.child.kill(sig);
+        for (const sig of ['exit', 'SIGTERM', 'SIGHUP', 'SIGINT']) {
+            setReal('fixture-seeded');
+            const r = runHelperChild(src, rotateTo(`fixture-rotated-${sig}`) + (sig === 'exit' ? '' : '\nsetInterval(() => {}, 1e6);'), home);
+            const dir = await seeded(r, sig);
+            if (!dir) continue;
+            if (sig !== 'exit') r.child.kill(sig);
             const end = await r.done;
             if (existsSync(dir)) { fails.push(`signal: ${sig} left the scratch HOME ${relative(REPO_ROOT, dir)} on disk`); rmSync(dir, { recursive: true, force: true }); }
-            if (end.signal !== sig) fails.push(`signal: the child did not end by ${sig} (code ${end.code}, signal ${end.signal}), so the caller sees a different exit`);
+            if (sig !== 'exit' && end.signal !== sig) fails.push(`signal: the child did not end by ${sig} (code ${end.code}, signal ${end.signal}), so the caller sees a different exit`);
+            wroteBack(sig, `fixture-rotated-${sig}`);
         }
-        const killed = runHelperChild(src, "console.log(m.liveHome()); setInterval(() => {}, 1e6);", home);
-        const stale = await killed.line;
-        killed.child.kill('SIGKILL');
-        await killed.done;
-        await runHelperChild(src, 'm.liveHome();', home).done;
-        if (stale && existsSync(stale)) { fails.push(`sweep: the scratch HOME a SIGKILLed run left (${relative(REPO_ROOT, stale)}) survived the next run's liveHome()`); rmSync(stale, { recursive: true, force: true }); }
+        setReal('fixture-seeded');
+        const killed = runHelperChild(src, rotateTo('fixture-rotated-SIGKILL') + '\nsetInterval(() => {}, 1e6);', home);
+        const stale = await seeded(killed, 'SIGKILL');
+        if (stale) {
+            killed.child.kill('SIGKILL');
+            await killed.done;
+            await runHelperChild(src, 'm.liveHome();', home).done;
+            if (existsSync(stale)) { fails.push(`sweep: the scratch HOME a SIGKILLed run left (${relative(REPO_ROOT, stale)}) survived the next run's liveHome()`); rmSync(stale, { recursive: true, force: true }); }
+            wroteBack('sweep', 'fixture-rotated-SIGKILL');
+        }
+        setReal('fixture-seeded');
+        const raced = runHelperChild(src, rotateTo('fixture-rotated-raced') + '\nsetInterval(() => {}, 1e6);', home);
+        const keep = await seeded(raced, 'compare-and-swap');
+        if (keep) {
+            setReal('fixture-owner-refreshed');
+            raced.child.kill('SIGTERM');
+            await raced.done;
+            if (real().claudeAiOauth?.refreshToken !== 'fixture-owner-refreshed') fails.push('compare-and-swap: the write-back overwrote a real sign-in that changed during the run');
+            if (!existsSync(join(keep, '.claude', '.credentials.json'))) fails.push('compare-and-swap: a refreshed sign-in that could not be written back was deleted with its scratch HOME');
+            rmSync(keep, { recursive: true, force: true });
+        }
     } finally {
         rmSync(home, { recursive: true, force: true });
     }
@@ -226,10 +276,12 @@ async function selfTest() {
     rows.push(['control: the runtime guard', (await runtimeVerdict(mod)).length === 0, await runtimeVerdict(mod)]);
     const helperSrc = tree[HELPER_REL];
     const signalControl = await signalVerdict(helperSrc);
-    rows.push(['control: every ending signal removes the scratch HOME and a later run sweeps a killed one', signalControl.length === 0, signalControl]);
+    rows.push(['control: every ending removes the scratch HOME and writes a rotated token back, a later run sweeps a killed one, a changed real sign-in is kept', signalControl.length === 0, signalControl]);
     const helperPlant = (from, to) => { const planted = helperSrc.replace(from, to); return planted === helperSrc ? Promise.resolve([`plant did not apply: ${from}`]) : signalVerdict(planted); };
     red('scratch HOME with no signal listener', await helperPlant('process.on(sig, onSignal);', ''), 'SIGTERM left the scratch HOME');
     red('scratch HOME with no sweep of dead runs', await helperPlant("if (name.startsWith('pb-home-') && !homeInUse(dir)) disposeHome(dir);", ''), 'survived the next run');
+    red('a rotated refresh token deleted, not written back', await helperPlant('if (sha256(rotated.refreshToken) === seeded) return true;', 'return true;'), 'so it is lost');
+    red('a write-back with no compare-and-swap', await helperPlant('if (seeded && realToken && sha256(realToken) === seeded) {', 'if (realFile) {'), 'overwrote a real sign-in');
     let bad = 0;
     for (const [name, pass, fails] of rows) {
         console.log(`verify-live-scratch-home --self-test: ${pass ? 'PASS' : 'FAIL'} -- ${name}${pass ? '' : `: ${fails.join(' | ') || 'nothing went red'}`}`);
