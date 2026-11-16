@@ -65,7 +65,7 @@ import * as OrcaEnv from '../powerbrowser/shell/OrcaEnv.sys.mjs';
 import { descendants, ensurePbNode, installOutputRedaction } from './lib/orca-run.mjs';
 import { freePort, ppidMap, signalIdentity, startTicks } from './verify-orca-hidden-electron.mjs';
 import { deriveClaudeHookEvents, deriveStatusMap, readAgentStatus, scrubOwnOrcaEnv } from './verify-orca-agent-hooks.mjs';
-import { liveEnv, liveHome, seedClaudeLogin } from './lib/firefox-bidi.mjs';
+import { liveEnv, seedClaudeLogin } from './lib/firefox-bidi.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-agent-status-live';
@@ -146,7 +146,7 @@ export function quitVerdict(recorded, alive) {
 
 // --- observations ----------------------------------------------------------------
 
-const encodedProjectDir = (cwd) => join(liveHome(), '.claude', 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'));
+const encodedProjectDir = (cwd) => join(liveEnv().HOME, '.claude', 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-')); // the HOME claude ran with (68-11-REVIEW WR-03)
 /** { files, records, newest }: the session files and their line count for `cwd`; never reads beyond counting. */
 function sessionRecords(cwd) {
     const dir = encodedProjectDir(cwd);

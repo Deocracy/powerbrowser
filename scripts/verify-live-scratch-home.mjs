@@ -30,7 +30,7 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -38,7 +38,6 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SCRIPTS = join(REPO_ROOT, 'scripts');
 const HELPER_REL = 'scripts/lib/firefox-bidi.mjs';
 const SELF_REL = 'scripts/verify-live-scratch-home.mjs';
-const LIVE_PROFILE_BASE = join(REPO_ROOT, '.mozbuild', 'pb-live-profiles');
 
 const CALL_RE = /(?<![.\w$])(spawn|spawnSync|execFile|execFileSync)\(/g;
 const LAUNCH_MARK = /'--?profile'|orcad\.js|buildOrcadArgs|'cli',\s*'bin',\s*'orca'|\bCLI_JS\b|'out',\s*'cli'|\[\s*\.\.\.\w+,\s*'--json'\s*\]/;
@@ -185,8 +184,8 @@ let probeSeq = 0;
  */
 export async function signalVerdict(src) {
     const fails = [];
-    mkdirSync(LIVE_PROFILE_BASE, { recursive: true });
-    const home = mkdtempSync(join(LIVE_PROFILE_BASE, 'fixture-home-'));
+    // Outside <repo>/.mozbuild, so liveEnv treats the fixture HOME as the real one and launches get the seeded liveHome().
+    const home = mkdtempSync(join(tmpdir(), 'pb-fixture-home-'));
     const realFile = join(home, '.claude', '.credentials.json');
     const setReal = (refreshToken) => {
         mkdirSync(dirname(realFile), { recursive: true });
@@ -243,6 +242,20 @@ export async function signalVerdict(src) {
             if (!existsSync(join(keep, '.claude', '.credentials.json'))) fails.push('compare-and-swap: a refreshed sign-in that could not be written back was deleted with its scratch HOME');
             rmSync(keep, { recursive: true, force: true });
         }
+        // WR-03: a harness HOME of its own under <repo>/.mozbuild is kept by liveEnv, so the seed must refuse, not seed a HOME no launch gets.
+        const ownBase = join(REPO_ROOT, '.mozbuild', 'pb-live-profiles');
+        mkdirSync(ownBase, { recursive: true });
+        const own = mkdtempSync(join(ownBase, 'fixture-home-'));
+        try {
+            mkdirSync(join(own, '.claude'), { recursive: true });
+            writeFileSync(join(own, '.claude', '.credentials.json'), readFileSync(realFile));
+            const r = runHelperChild(src, 'console.log(String(m.seedClaudeLogin()));', own);
+            const why = await r.line;
+            await r.done;
+            if (why === 'null') fails.push('seed: seedClaudeLogin seeded the scratch HOME while launches keep a HOME of their own, so claude never sees the sign-in');
+        } finally {
+            rmSync(own, { recursive: true, force: true });
+        }
     } finally {
         rmSync(home, { recursive: true, force: true });
     }
@@ -292,6 +305,7 @@ async function selfTest() {
     red('scratch HOME with no signal listener', await helperPlant('process.on(sig, onSignal);', ''), 'SIGTERM left the scratch HOME');
     red('scratch HOME with no sweep of dead runs', await helperPlant("if (name.startsWith('pb-home-') && !homeInUse(dir)) disposeHome(dir);", ''), 'survived the next run');
     red('a rotated refresh token deleted, not written back', await helperPlant('if (sha256(rotated.refreshToken) === seeded) return true;', 'return true;'), 'so it is lost');
+    red('a seed into a HOME the launch does not get', await helperPlant(/    if \(launchHome !== home\) return [^\n]*\n/, ''), 'claude never sees the sign-in');
     red('a write-back with no compare-and-swap', await helperPlant('if (seeded && realToken && sha256(realToken) === seeded) {', 'if (realFile) {'), 'overwrote a real sign-in');
     let bad = 0;
     for (const [name, pass, fails] of rows) {

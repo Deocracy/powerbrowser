@@ -232,6 +232,10 @@ export function seedClaudeLogin() {
     const minutesLeft = Math.floor((Number(oauth.expiresAt) - Date.now()) / 60000);
     if (!(minutesLeft >= CLAUDE_TOKEN_MARGIN_MIN)) return `the Claude sign-in expires in ${Number.isFinite(minutesLeft) ? minutesLeft : '?'} min, under the ${CLAUDE_TOKEN_MARGIN_MIN} min a run needs without refreshing it in a scratch copy; use claude once so it refreshes its own sign-in, then re-run`;
     const home = liveHome();
+    // 68-11-REVIEW WR-03: a launch keeps a HOME already outside the real home, and claude must find the seed in the HOME
+    // it gets. Only liveHome() is settled and removed (scratchSignInSettled), so the sign-in is never written elsewhere.
+    const launchHome = liveEnv().HOME;
+    if (launchHome !== home) return `this run's launches get HOME=${launchHome}, not the scratch HOME the sign-in is seeded into, so claude would not find it; run the row without a HOME of its own`;
     const state = readJson(join(real, '.claude.json'));
     const settings = readJson(join(real, '.claude', 'settings.json'));
     mkdirSync(join(home, '.claude'), { recursive: true, mode: 0o700 });
