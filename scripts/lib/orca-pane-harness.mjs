@@ -22,7 +22,6 @@
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { dirname, extname, join, normalize, relative, sep } from 'node:path';
 
 import { createRequire } from 'node:module';
@@ -39,7 +38,10 @@ export const CLI_JS = join(ORCA_DIR, 'out', 'cli', 'index.js');
 export const BUNDLE_KEY = 'powerbrowser.orca-panes.react';
 const WORK = join(REPO_ROOT, '.mozbuild', 'orca-pane-harness');
 const PROFILE_REAL = join(WORK, 'orca-profile');
-const PROFILE_ALIAS = join(homedir(), '.cache', 'pb-orca-pane-harness');
+// A short alias, so orcad's socket under it fits ORCAD_SOCKET_ROOT_BUDGET: under XDG_RUNTIME_DIR, else the scratch HOME's
+// .cache, never the real ~/.cache (68-11-REVIEW IN-01). shortcut: the scratch-HOME fallback is a long repo path that can
+// exceed the socket budget; a session without XDG_RUNTIME_DIR then fails at orcad start, not by writing the real home.
+const profileAlias = () => join(process.env.XDG_RUNTIME_DIR?.startsWith('/') ? process.env.XDG_RUNTIME_DIR : join(liveEnv().HOME, '.cache'), 'pb-orca-pane-harness');
 const REPO_DIR = join(WORK, 'repo');
 const J = JSON.stringify;
 export const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -87,9 +89,10 @@ function makeRepo() {
 function makeProfile() {
     rmSync(PROFILE_REAL, { recursive: true, force: true });
     mkdirSync(PROFILE_REAL, { recursive: true });
-    mkdirSync(dirname(PROFILE_ALIAS), { recursive: true });
-    try { if (lstatSync(PROFILE_ALIAS).isSymbolicLink()) rmSync(PROFILE_ALIAS); } catch { /* absent */ }
-    symlinkSync(PROFILE_REAL, PROFILE_ALIAS);
+    const alias = profileAlias();
+    mkdirSync(dirname(alias), { recursive: true });
+    try { if (lstatSync(alias).isSymbolicLink()) rmSync(alias); } catch { /* absent */ }
+    symlinkSync(PROFILE_REAL, alias);
 }
 
 /** The standalone page: each mount host carries data-pb-orca-pane (C4); window errors recorded. */
@@ -162,8 +165,8 @@ export async function withOrcaPaneSession({ log = () => {}, pbOrcad = false } = 
         const node = await ensurePbNode();
         makeProfile();
         const repoStatus = makeRepo();
-        const env = orcadEnv(process.env, { profileDir: PROFILE_ALIAS, orcaVersion: orcaVersionFromPins() });
-        ({ child, ready } = await startOrcad({ nodeBin: node.path, orcaDir: ORCA_DIR, profileDir: PROFILE_ALIAS, env }));
+        const env = orcadEnv(process.env, { profileDir: profileAlias(), orcaVersion: orcaVersionFromPins() });
+        ({ child, ready } = await startOrcad({ nodeBin: node.path, orcaDir: ORCA_DIR, profileDir: profileAlias(), env }));
         restoreOutput(); restoreOutput = installOutputRedaction(ready.secrets);
         if (!ready.webClientUrl) throw new Error('the ready line offers no web-client pairing');
         const client = new URL(ready.webClientUrl);
