@@ -1533,8 +1533,9 @@ async function runOrcaCopySelfTest() {
 // passes the shape test, each notification names PowerBrowser, the declared
 // message keys equal the REINSTALL_MESSAGES.<key> references in the command
 // file (set equality, so an added, removed or stale key goes red), the command's
-// label resolves to REINSTALL_COMMAND_LABEL, and the command file passes no
-// ad-hoc string literal to a notification. A zero derivation is red.
+// label resolves to REINSTALL_COMMAND_LABEL, and every notification the command
+// file shows takes a REINSTALL_MESSAGES entry as its text (a literal, String(err)
+// or a variable is red). A zero derivation is red.
 // ---------------------------------------------------------------------------
 
 const BUNDLED_SRC_REL = "theia/extensions/bundled-extensions/src/";
@@ -1582,10 +1583,29 @@ async function checkBundledCopy(sources) {
     if (!referenced.has(key)) out.push(`reinstall copy: REINSTALL_MESSAGES.${key} is declared but never shown`);
   }
   if (!/\blabel:\s*REINSTALL_COMMAND_LABEL\b/.test(cmd)) out.push(`reinstall copy: the command in ${BUNDLED_CMD_REL} does not take its label from REINSTALL_COMMAND_LABEL`);
-  for (const m of cmd.matchAll(/\.(info|warn|error)\(\s*('(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`)/g)) {
-    out.push(`reinstall copy: ad-hoc notification text ${m[2]} in ${BUNDLED_CMD_REL} -- notification text must come from bundled-extensions-copy.ts`);
+  // WR-07: a positive rule. Every notification's first argument is a REINSTALL_MESSAGES entry,
+  // so String(err), err.message or a variable is red as well as a literal.
+  for (const m of cmd.matchAll(/\.(log|info|warn|error)\(/g)) {
+    const arg = firstArgument(cmd, m.index + m[0].length);
+    if (!/^REINSTALL_MESSAGES\.\w+$/.test(arg)) {
+      out.push(`reinstall copy: ad-hoc notification text ${arg || "(none)"} in ${BUNDLED_CMD_REL} -- notification text must be a REINSTALL_MESSAGES entry from bundled-extensions-copy.ts`);
+    }
   }
   return { failures: out, messages: entries.length };
+}
+
+/** The first call argument starting at `from` (just past the open paren), trimmed; bracket depth only. */
+function firstArgument(text, from) {
+  let depth = 0;
+  for (let i = from; i < text.length; i++) {
+    const c = text[i];
+    if ("([{".includes(c)) depth++;
+    else if (")]}".includes(c)) {
+      if (depth === 0) return text.slice(from, i).trim();
+      depth--;
+    } else if (c === "," && depth === 0) return text.slice(from, i).trim();
+  }
+  return text.slice(from).trim();
 }
 
 const BUNDLED_COPY_FAULTS = [
@@ -1603,6 +1623,11 @@ const BUNDLED_COPY_FAULTS = [
     name: "an ad-hoc literal shown by the command",
     apply: (s) => ({ ...s, [BUNDLED_CMD_REL]: s[BUNDLED_CMD_REL].replace("this.messages.error(REINSTALL_MESSAGES.failed)", "this.messages.error('Reinstall failed')") }),
     expect: "ad-hoc notification text 'Reinstall failed'",
+  },
+  {
+    name: "a raw exception message shown by the command",
+    apply: (s) => ({ ...s, [BUNDLED_CMD_REL]: s[BUNDLED_CMD_REL].replace("this.messages.error(REINSTALL_MESSAGES.failed)", "this.messages.error(String(err))") }),
+    expect: "ad-hoc notification text String(err)",
   },
   {
     name: "a declared message the command never shows",
