@@ -6,7 +6,7 @@
 //
 // It derives the launch sites from the tree, not from a list: every spawn, spawnSync, execFile and execFileSync call
 // in scripts/**/*.mjs whose command or arguments (with a bare identifier resolved to its const/let definition in the
-// same file) carry a launch mark: a --profile/-profile argument (PowerBrowser), orcad.js or buildOrcadArgs (orcad),
+// same file) carry a launch mark: a --profile/-profile argument (PowerBrowser), orcad.js or buildOrcadArgs (orcad), claude,
 // or the Orca CLI ('cli', 'bin', 'orca', CLI_JS, 'out', 'cli', or a [...args, '--json'] tail). Each one must pass
 // env: liveEnv(...) (scripts/lib/firefox-bidi.mjs), which moves HOME and the XDG base folders to a per-run scratch
 // HOME and throws at launch when HOME is still the real one. A launch with no env inherits the real HOME and is red.
@@ -40,7 +40,7 @@ const HELPER_REL = 'scripts/lib/firefox-bidi.mjs';
 const SELF_REL = 'scripts/verify-live-scratch-home.mjs';
 
 const CALL_RE = /(?<![.\w$])(spawn|spawnSync|execFile|execFileSync)\(/g;
-const LAUNCH_MARK = /'--?profile'|orcad\.js|buildOrcadArgs|'cli',\s*'bin',\s*'orca'|\bCLI_JS\b|'out',\s*'cli'|\[\s*\.\.\.\w+,\s*'--json'\s*\]/;
+const LAUNCH_MARK = /^'claude'(?:\s|$)|'--?profile'|orcad\.js|buildOrcadArgs|'cli',\s*'bin',\s*'orca'|\bCLI_JS\b|'out',\s*'cli'|\[\s*\.\.\.\w+,\s*'--json'\s*\]/;
 
 /** The text from `open` (an opening paren) to its match, skipping strings, templates and comments. */
 function balanced(src, open) {
@@ -289,6 +289,7 @@ async function selfTest() {
     red('PowerBrowser spawn with env: process.env', plant("spawn('bash', ['-c', 'x', binPath, '--profile', dir], { env: process.env, stdio: 'ignore' });\n"), 'passes env: process.env');
     red('CLI launch with HOME: homedir()', plant("const cli = join(root, 'cli', 'bin', 'orca');\nexecFileSync(cli, [...a, '--json'], { env: { PATH, HOME: homedir() }, cwd });\n"), 'planted-live.mjs:2');
     red('orcad launch through an args identifier', plant("const args = [join(dir, 'out', 'orcad', 'orcad.js'), '--json'];\nconst child = spawn(nodeBin, args, { cwd, env });\n"), 'passes env: env');
+    red('the real claude run with a hand-built env', plant("execFileSync('claude', ['--version'], { env: { PATH: path, HOME: home } });\n"), 'planted-live.mjs:1: a live launch (execFileSync) passes env: { PATH: path, HOME: home }');
     red('an Orca bridge path from the harness env', plant("const dir = await OrcaEnv.bridgeDirFor(s.dataRoot, (n) => process.env[n], 'linux');\n"), "planted-live.mjs:1: an Orca path derived from the harness's own process.env");
     const ok = verdict({ ...tree, 'scripts/planted-live.mjs': "spawn(FIREFOX_BIN, ['--profile', d], { env: liveEnv(env) });\nconst cli = join(r, 'cli', 'bin', 'orca');\nexecFile(cli, [...a, '--json'], { env: liveEnv({ PATH }), cwd });\n" }).fails;
     rows.push(['control: the same launches through liveEnv stay green', ok.length === 0, ok]);

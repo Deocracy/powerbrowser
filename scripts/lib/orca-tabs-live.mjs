@@ -120,9 +120,9 @@ export function writeStubAgentDir() {
 const SDK_DIR_ENV = 'ORCA_CLAUDE_AGENT_SDK_DIR';
 
 /** The real claude on `path`: { found, version } (the --version line only; no prompt is sent). */
-export function realClaudeOn(path, home) {
+export function realClaudeOn(path) {
     try {
-        const version = execFileSync('claude', ['--version'], { env: { PATH: path, HOME: home ?? '' }, timeout: 30000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim().split('\n')[0];
+        const version = execFileSync('claude', ['--version'], { env: liveEnv({ PATH: path }), timeout: 30000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim().split('\n')[0];
         return { found: true, version };
     } catch (e) {
         return { found: e.code !== 'ENOENT', version: '' };
@@ -215,7 +215,7 @@ export async function withOrcaTabsSession({ log = () => {}, needOrca = true, age
         const record = (pid) => { const t = Number.isInteger(pid) && pid > 0 ? startTicks(pid) : null; if (t !== null) recorded.set(pid, t); return t; };
         const basePath = savedEnv.PATH ?? '';
         // The stub is on the launched PowerBrowser's PATH (and so orcad's), never on the Orca CLI's.
-        const claude = agent === 'real' ? realClaudeOn(basePath, savedEnv.HOME ?? process.env.HOME) : null;
+        const claude = agent === 'real' ? realClaudeOn(basePath) : null;
         if (agent === 'real') { // the real agent runs under the scratch HOME orcad inherits
             const unseeded = seedClaudeLogin();
             if (unseeded) throw new Error(`the real agent cannot run: ${unseeded}`);
