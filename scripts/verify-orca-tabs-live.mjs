@@ -58,7 +58,8 @@
 //                     (detector 2), and only then: during the 5000 ms after
 //                     detector 1, before any reload, T's record held no split
 //                     mode ("live group propagation" otherwise), and T keeps its
-//                     Lumino tab-bar peers across the reload (D-15, P64-12).
+//                     Lumino tab-bar peers across the reload (D-15, P64-12),
+//                     less the panes the store dropped at it (as in k).
 //  g2 tab-groups      (P65-33) stage f's New Orca Chat widget's own Split Chat
 //                     Right, clicked in the Theia document, no second client and
 //                     no prompt: one hosted add; the new chat's store record
@@ -315,15 +316,17 @@ export function splitChatVerdict(obs) {
 
 /**
  * Sub-stage g3 (P65-34), the derived non-propagation guard. obs: { error, menu, stripsBefore, stripsAfter,
- * changedBeforeReload, detectedAfterReload, peersBefore: [name], peersAfter: [name] }. Both detectors are judged
- * before the absence they make meaningful.
+ * changedBeforeReload, detectedAfterReload, peersBefore: [name], peersAfter: [name], keptNames?: [name] }. Both
+ * detectors are judged before the absence they make meaningful. As in reloadVerdict, the before-peers drop the panes
+ * the store no longer holds after the reload; the after-peers are not filtered.
  */
 export function crossClientVerdict(obs) {
     if (obs.error) return [`tab-groups-cross-client: ${obs.error}${obs.menu?.length ? ` (menu ${JSON.stringify(obs.menu)})` : ''}`];
     if (obs.stripsAfter !== obs.stripsBefore + 1) return [`tab-groups-cross-client: Move Tab to Split did not split the second client's group (strips ${obs.stripsBefore} -> ${obs.stripsAfter})`];
     if (!obs.detectedAfterReload) return ['tab-groups-cross-client: the split never reached PowerBrowser\'s store after the reload, so the pre-reload absence proves nothing'];
     if (obs.changedBeforeReload) return ['tab-groups-cross-client: live group propagation (PowerBrowser\'s store took another client\'s group split before a reload; revisit P64-12 re-placement)'];
-    const before = [...(obs.peersBefore ?? [])].sort().join(',');
+    const kept = obs.keptNames ? new Set(obs.keptNames) : null;
+    const before = (obs.peersBefore ?? []).filter((n) => !kept || kept.has(n)).sort().join(',');
     const after = [...(obs.peersAfter ?? [])].sort().join(',');
     if (before !== after) return [`tab-groups-cross-client: an already-shown pane was re-placed after the reload (D-15, P64-12; T's tab-bar peers ${before} -> ${after})`];
     return [];
@@ -713,6 +716,7 @@ async function runLive(lib, pre = {}) {
         if (!cross.error && cross.stripsAfter === cross.stripsBefore + 1) {
             cross.detectedAfterReload = !!(await ctx.pollFor(async () => ((await tRecord())?.neighbours?.some((n) => n.mode === 'split-right') ? true : null), 5000, 'T split-right after the reload').catch(() => false));
             cross.peersAfter = peersOf(await ctx.hostedWidgets());
+            cross.keptNames = keptNames;
         }
         fail('tab-groups-cross-client', crossClientVerdict(cross));
 
@@ -1015,6 +1019,9 @@ function runSelfTest() {
         ['no split in T\'s record after the reload', 'the pre-reload absence proves nothing', () => crossClientVerdict(crossClient({ detectedAfterReload: false }))],
         ['a split in T\'s record before the reload', 'tab-groups-cross-client: live group propagation', () => crossClientVerdict(crossClient({ changedBeforeReload: true }))],
         ['T\'s tab-bar peers changed after the reload', 'an already-shown pane was re-placed after the reload', () => crossClientVerdict(crossClient({ peersAfter: ['term4'] }))],
+        ['control: a peer the store dropped leaves T\'s bar', null, () => crossClientVerdict(crossClient({ peersBefore: ['term1', 'term4', 'sim1'], keptNames: ['term1', 'term4'] }))],
+        ['a kept peer moved while another was dropped', 'an already-shown pane was re-placed after the reload', () => crossClientVerdict(crossClient({ peersBefore: ['term1', 'term4', 'sim1'], peersAfter: ['term1'], keptNames: ['term1', 'term4'] }))],
+        ['a dropped peer back in T\'s bar under its name', 'an already-shown pane was re-placed after the reload', () => crossClientVerdict(crossClient({ peersBefore: ['term1', 'term4', 'sim1'], peersAfter: ['term1', 'term4', 'sim1'], keptNames: ['term1', 'term4'] }))],
         ['no Move Tab to Split item', 'no Move Tab to Split item', () => crossClientVerdict(crossClient({ error: 'no Move Tab to Split item in T\'s tab menu', menu: ['Close'] }))],
         ['the side finding\'s term2/term3 swap', 'reload: pb-orca:term2 now addresses another pane', () => reloadVerdict(reload({ identityAfter: { chat1: 'c1', term2: 'k3', term3: 'k2' } }))],
         ['a key missing from the store after the reload', 'reload: pb-orca:term3 addresses no pane in the store', () => reloadVerdict(reload({ storeKeysAfter: ['c1', 'k2'] }))],
