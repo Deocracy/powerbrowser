@@ -3,17 +3,17 @@ gsd_state_version: "1.0"
 milestone: v1.7
 current_phase: 68
 current_phase_name: Three-OS artifacts, weekly re-pin and upstream seams
-status: resumed, running 68-11 live rows
-stopped_at: "Session resumed 2026-11-15; running 68-11 live rows (build, bundled-extensions-live/seed/self-test, GUI pass)"
-last_updated: "2026-11-15T00:00:00.000Z"
-last_activity: 2026-11-15
-last_activity_desc: resumed after pause; owner rulings D-40..D-46 and 68-11 landed
+status: Phase 68 re-verified (human_needed 8/13); 68-11 review fixes in progress
+stopped_at: "2026-11-16: 68-11 complete, live rows PASS (f6d291a0); 68-11 code review found 2 critical and 8 warnings (ffbefe01), fixes in progress; next TAB-04 g3 attempt, full gate, milestone re-audit"
+last_updated: "2026-11-16T00:00:00.000Z"
+last_activity: 2026-11-16
+last_activity_desc: Phase 68 re-verified (3febce70); 68-11 code review (ffbefe01); owner rulings D-47..D-51 recorded; --quick green
 state_head: a625378d3323a73fe4e1b4cebedafa2ac8140d57
 progress:
   total_phases: 10
   completed_phases: 4
-  total_plans: 65
-  completed_plans: 62
+  total_plans: 66
+  completed_plans: 63
 milestone_name: Orca integration
 ---
 
@@ -22,19 +22,19 @@ milestone_name: Orca integration
 ## Project Reference
 
 See: .planning/PROJECT.md (shared project file; its "Current Milestone" section is v1.5, not this milestone)
-Scope: .planning/workstreams/orca/REQUIREMENTS.md. Owner decisions: .planning/workstreams/orca/DECISIONS.md (D-01..D-29). Roadmap: .planning/workstreams/orca/ROADMAP.md.
+Scope: .planning/workstreams/orca/REQUIREMENTS.md. Owner decisions: .planning/workstreams/orca/DECISIONS.md (D-01..D-51). Roadmap: .planning/workstreams/orca/ROADMAP.md.
 
 **Core value (this milestone):** Theia is the default GUI; Orca's agent workflow runs inside PowerBrowser as real PowerBrowser tabs, with PowerBrowser's own engine and chrome as the agents' browser.
-**Current focus:** 68-11 live rows (reinstall affordance), then Phase 68 verification and the end-of-milestone checklist (D-40: Linux only)
+**Current focus:** 68-11 review fixes (2 critical, 8 warnings, 68-11-REVIEW.md), then the TAB-04 stage g3 attempt (D-49), the full gate and the milestone re-audit (D-40: Linux only)
 
 ## Current Position
 
-Phase: 68 (Three-OS artifacts, weekly re-pin and upstream seams) — EXECUTED (68-01..68-10); verification pending
-Plan: 68-10 of 10; phases 59 and 60 partially executed (owner plans 59-05, 59-06, 59-07 and 60-05 pending)
+Phase: 68 (Three-OS artifacts, weekly re-pin and upstream seams) — EXECUTED (68-01..68-11); re-verified 2026-11-16 as human_needed 8/13 with no code gap (3febce70, 68-VERIFICATION.md)
+Plan: 68-11 of 11 complete, live rows PASS (f6d291a0); code review of 68-11 and the scratch-HOME change found 2 critical and 8 warnings (ffbefe01, 68-11-REVIEW.md), fixes in progress; phases 59 and 60 partially executed (owner plans 59-05, 59-06, 59-07 and 60-05 pending)
 Status: Milestone audit found gaps (v1.7-MILESTONE-AUDIT.md)
-Last activity: 2026-11-15 — resumed; six orphan orcad processes (WINDOWS 54 pattern) stopped; 68-11 live rows started
+Last activity: 2026-11-16 — Phase 68 re-verification (3febce70), 68-11 code review (ffbefe01), `--quick` green; next: review fixes, TAB-04 g3 attempt, full gate, milestone re-audit
 
-Progress: [█████████░] 62 of 65 plan files have a SUMMARY (3 are superseded stubs)
+Progress: [█████████░] 63 of 66 plan files have a SUMMARY (3 are superseded stubs)
 
 ## Phases
 
@@ -49,7 +49,7 @@ Progress: [█████████░] 62 of 65 plan files have a SUMMARY (3
 | 65 | Orca workspace in Theia | TAB-05, TAB-07, TAB-08, TAB-09 | Complete (verified 8/8, human items deferred) |
 | 66 | PowerBrowser web tabs as Orca's browser | BRW-02, BRW-03, BRW-04, BRW-05 | Executed (66-06, 66-07, 66-08, 66-09, 66-10); BRW-02, BRW-03, BRW-04, BRW-05 complete |
 | 67 | Hosting hardening | RUN-06, RUN-07, RUN-08, RUN-09, INJ-01 | Executed (67-01..67-07; 67-07 gap closure, D-36); RUN-06..RUN-09 and INJ-01 complete; verification pending |
-| 68 | Three-OS artifacts, weekly re-pin and upstream seams | OVL-02, OVL-03, OVL-06, PLAT-01, PLAT-02 | Executed (68-01..68-10); verification pending |
+| 68 | Three-OS artifacts, weekly re-pin and upstream seams | OVL-02, OVL-03, OVL-06, PLAT-01, PLAT-02 | Executed (68-01..68-11); re-verified 2026-11-16, human_needed 8/13, no code gap (3febce70); 68-11 review fixes in progress (ffbefe01) |
 
 ## Performance Metrics
 
@@ -154,6 +154,7 @@ None yet.
 Last session: 2026-11-13
 Stopped at: v1.7 milestone audit (gaps_found), 5d05e3ad
 Resume file: None
+Session 2026-11-16: 68-11 live rows PASS (f6d291a0); Phase 68 re-verified (3febce70); 68-11 review (ffbefe01); D-47..D-51 recorded; `--quick` green; tracking cleaned up.
 
 ## Deferred Verification
 

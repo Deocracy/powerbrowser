@@ -10,7 +10,7 @@ Owner decisions D-01..D-31 (`DECISIONS.md`) and the adopted adversarial review (
 
 ## Milestones
 
-- **v1.7 Orca integration** — Phases 59–68 (executed; workstream `orca`; requirements in `.planning/workstreams/orca/REQUIREMENTS.md`)
+- **v1.7 Orca integration** — Phases 59–68 (61–68 executed, 59 and 60 partially executed; workstream `orca`; requirements in `.planning/workstreams/orca/REQUIREMENTS.md`)
 
 ## Hard constraints (every phase)
 
@@ -320,7 +320,7 @@ Plans:
   4. Linux, macOS and Windows artifacts contain orcad and the overlaid client, with the node-pty prebuild built per target on that target's own runner. The Flatpak manifest grants `--filesystem=home`. Each of these checks is one `verify-platform.sh` row.
   5. The live checks pass on Linux. macOS and Windows smoke results are recorded when a host is available (D-24).
 
-**Plans**: 10/10 plans executed (68-06 complete 2026-11-11: all nine lanes merged, dev-objdir package proven, PLAT-02 Linux pass 35/38; BEXT-01 and BEXT-02 complete; OVL-02, OVL-03, OVL-06, PLAT-01, PLAT-02 pending owner and host items, WINDOWS 44, 48-55)
+**Plans**: 11/11 plans executed (68-11 complete 2026-11-15, live rows PASS f6d291a0; 68-06 complete 2026-11-11: all nine lanes merged, dev-objdir package proven, PLAT-02 Linux pass 35/38; BEXT-01 and BEXT-02 complete; OVL-02, OVL-03, OVL-06, PLAT-01, PLAT-02 pending owner and host items, WINDOWS 44, 48-55)
 
 Plans:
 **Wave 1** *(executable now; seven lanes in parallel)*
@@ -338,6 +338,9 @@ Plans:
 
 **Wave 3** *(coordinator; starts when the seven wave-1 SUMMARYs exist, finishes after 68-08 and 68-05 merge)*
 - [x] 68-06-PLAN.md — coordinator: merge 03, 04, 01, 10, 07, 09, 02, then launch and merge 08 (Task 1), then after Phase 67 launch and merge 05 (Task 2; seams.json and verify-platform.sh ordering by its merge rule (7)), identity re-pin, brand rows, container package, orca-packaged-live, PLAT-02 Linux pass, WINDOWS.md entries, tracking
+
+**Wave 4** *(gap closure, owner ruling 2026-11-15)*
+- [x] 68-11-PLAN.md — gap closure (D-51): the "Reinstall the Claude Extension" command copies the shipped bundled Claude extension back into the profile and deploys it through Theia's PluginServer.install; visible only while the extension is absent; palette and Help menu (D-48) (BEXT-01)
 
 Open items for this phase:
 - The macOS half of PLAT-01 needs a macOS PowerBrowser build. v1.6 deferred macOS packaging (workstream `deploy`, Phase 55).

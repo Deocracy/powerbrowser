@@ -45,6 +45,7 @@ actuals:
   commits: 28
 plan_head_before: a2607ccbeee59e208dcc9d6332343a7f67dc844a
 plan_head_after: a308e0c4  # measured before this file's own commit
+requirements-completed: [RUN-06, RUN-07, RUN-08, RUN-09, INJ-01]  # marked complete by 67-07 (see Status update)
 ---
 
 # Phase 67 Plan 06: Coordinator Summary (stopped at Task 2)

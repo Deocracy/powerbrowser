@@ -439,6 +439,29 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
   version"` as the reason prefix "Re-dated to next version (Phase 59 D-09)"; each entry keeps its id, its open
   status and its `GATE_KNOWN_OPEN_EXCLUSIONS` row, and closes only with its fix.
 
+### Owner rulings (2026-11-16)
+
+- **D-47 — Ledger rows NG-076 and NG-077: deferral approved.** Chris, 2026-11-16, answer "Approve both", consistent
+  with D-40. The ledger tool accepts the approval only as lines typed by the owner, so the ledger rows stay
+  `deferred-requested` until he types them.
+- **D-48 — "Reinstall the Claude Extension" is in the Application menu's Help submenu.** Chris, 2026-11-16, answer "Add
+  it": the command is reachable in every mode. Being built 2026-11-16.
+- **D-49 — TAB-04 / `orca-tabs-live` stage g3 (WINDOWS 55): attempt a fix now.** Chris, 2026-11-16, answer "Try to fix
+  it now", with a second-client drive. The coordinator reports back if it is not a contained fix.
+- **D-50 — Live rows run under a per-run scratch HOME.** Recorded 2026-11-16 from commits a8196e05 and ac5aa95b
+  ("fix(live): run every live launch under a per-run scratch HOME (owner ruling 2026-11-15, Scratch HOME)"). The
+  commit message states that live rows launched PowerBrowser, orcad and the Orca CLI with the developer's real HOME, so
+  orcad wrote the real `~/.orca` and `~/.config/orca`, and that HOME now moves to one `mkdtemp` folder under
+  `.mozbuild/pb-live-profiles`. Commit 32f47718 follows it: the scratch HOME is seeded with only what `claude` needs,
+  and the real sign-in is never refreshed there. The ruling's own wording is not in `DECISIONS.md` or the commit
+  messages beyond the label "Scratch HOME". Closes the open question in the D-41 note.
+- **D-51 — The bundled Claude extension gets a reinstall affordance.** Recorded 2026-11-16 from commit f526133a
+  ("plan the bundled Claude extension reinstall affordance (gap closure, owner ruling 2026-11-15)") and
+  `68-11-PLAN.md`, which states: a user who removed the Claude extension can get it back from PowerBrowser itself
+  through a command, in the command palette and the Help menu, that copies the shipped folder back into the profile and
+  deploys it through Theia's own `PluginServer.install`; an uninstall is never undone automatically. Closes the open
+  question in the D-41 note. D-48 extends where the command appears.
+
 ## Spikes this direction needs
 
 1. Browser parity: what an Orca browser tab can do, and how PB chrome provides it
