@@ -11,7 +11,8 @@
 // env: liveEnv(...) (scripts/lib/firefox-bidi.mjs), which moves HOME and the XDG base folders to a per-run scratch
 // HOME and throws at launch when HOME is still the real one. A launch with no env inherits the real HOME and is red.
 // It also requires the runtime half: liveEnv returns assertScratchHome(...), and assertScratchHome compares against
-// os.homedir() (through realHomes) and throws, proven by calling it. And the real-agent seed: seedClaudeLogin writes
+// os.homedir() (through realHomes) and throws, proven by calling it, also for a home-relocating name such as
+// CLAUDE_CONFIG_DIR=~/.claude, which liveEnv must drop (68-11-REVIEW WR-02). And the real-agent seed: seedClaudeLogin writes
 // fresh files (never copies or links a real one), seeds skipDangerousModePermissionPrompt, and keeps its token-expiry
 // margin (CLAUDE_TOKEN_MARGIN_MIN), so claude never refreshes the owner's sign-in inside a scratch copy.
 // The scratch HOME's lifetime is run, not read (68-11-REVIEW CR-01, CR-02): child nodes import the helper, seed a
@@ -144,6 +145,13 @@ export async function runtimeVerdict(mod) {
     try { mod.assertScratchHome(scratch); } catch (e) { fails.push(`runtime: assertScratchHome refused a scratch HOME (${e.message})`); }
     const kept = mod.liveEnv(scratch);
     if (kept.HOME !== scratch.HOME) fails.push('runtime: liveEnv replaced a HOME that was already scratch');
+    const relocated = { ...scratch, CLAUDE_CONFIG_DIR: join(homedir(), '.claude') };
+    threw = false;
+    try { mod.assertScratchHome(relocated); } catch { threw = true; }
+    if (!threw) fails.push('runtime: assertScratchHome accepted CLAUDE_CONFIG_DIR inside the real home');
+    try {
+        if ('CLAUDE_CONFIG_DIR' in mod.liveEnv(relocated)) fails.push('runtime: liveEnv passed CLAUDE_CONFIG_DIR=~/.claude through, so claude would use the real config');
+    } catch (e) { fails.push(`runtime: liveEnv did not drop CLAUDE_CONFIG_DIR=~/.claude (${e.message})`); }
     return fails;
 }
 
@@ -274,6 +282,9 @@ async function selfTest() {
     red('seedClaudeLogin without the token-expiry margin', seedPlant(/if \(!\(minutesLeft >= CLAUDE_TOKEN_MARGIN_MIN\)\) return [^\n]*\n/, ''), 'no token-expiry margin');
     red('the runtime guard accepting the real HOME', await runtimeVerdict({ ...mod, assertScratchHome: () => undefined }), 'accepted HOME = os.homedir()');
     rows.push(['control: the runtime guard', (await runtimeVerdict(mod)).length === 0, await runtimeVerdict(mod)]);
+    const homeVarsOnly = (env) => { for (const n of Object.keys(mod.LIVE_HOME_VARS)) if (mod.inRealHome(env?.[n])) throw new Error(n); return env; };
+    red('the runtime guard checking HOME and XDG only', await runtimeVerdict({ ...mod, assertScratchHome: homeVarsOnly }), 'accepted CLAUDE_CONFIG_DIR');
+    red('liveEnv passing CLAUDE_CONFIG_DIR through', await runtimeVerdict({ ...mod, liveEnv: (e) => ({ ...mod.liveEnv(e), CLAUDE_CONFIG_DIR: e.CLAUDE_CONFIG_DIR }) }), 'passed CLAUDE_CONFIG_DIR');
     const helperSrc = tree[HELPER_REL];
     const signalControl = await signalVerdict(helperSrc);
     rows.push(['control: every ending removes the scratch HOME and writes a rotated token back, a later run sweeps a killed one, a changed real sign-in is kept', signalControl.length === 0, signalControl]);

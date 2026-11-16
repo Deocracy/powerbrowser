@@ -165,23 +165,35 @@ export function liveHome() {
     return home;
 }
 
-/** Throws unless HOME and every XDG base folder in `env` are set and outside the real home: the runtime half of the ruling. */
+/**
+ * A variable name that relocates a program's home data by convention (CLAUDE_CONFIG_DIR, CODEX_HOME, GEMINI_HOME,
+ * XDG_CONFIG_HOME, HOME): orcad and claude read CLAUDE_CONFIG_DIR before HOME (68-11-REVIEW WR-02).
+ */
+export const HOME_RELOCATING_NAME = /(^|_)(HOME|CONFIG_DIR|DATA_DIR|STATE_DIR|CACHE_DIR)$/;
+
+/**
+ * Throws unless HOME and every XDG base folder in `env` are set and outside the real home, and no other
+ * HOME_RELOCATING_NAME variable points inside it: the runtime half of the ruling.
+ */
 export function assertScratchHome(env, what = 'a live launch') {
-    for (const name of Object.keys(LIVE_HOME_VARS)) {
-        if (inRealHome(env?.[name])) throw new Error(`firefox-bidi: ${what} would run with ${name}=${env?.[name] || '(unset)'}, the developer's real home (owner ruling 2026-11-15, Scratch HOME)`);
-    }
+    const refuse = (name) => { throw new Error(`firefox-bidi: ${what} would run with ${name}=${env?.[name] || '(unset)'}, the developer's real home (owner ruling 2026-11-15, Scratch HOME)`); };
+    for (const name of Object.keys(LIVE_HOME_VARS)) if (inRealHome(env?.[name])) refuse(name);
+    for (const [name, value] of Object.entries(env ?? {})) if (HOME_RELOCATING_NAME.test(name) && value && inRealHome(value)) refuse(name);
     return env;
 }
 
 /**
  * `env` with HOME and the XDG base folders moved off the real home: HOME to liveHome(), an XDG folder to its default
  * under that HOME. A value already outside the real home is kept (a row's own configHome, a check's own scratch HOME).
+ * Any other HOME_RELOCATING_NAME variable inside the real home (CLAUDE_CONFIG_DIR=~/.claude) is dropped, so the
+ * launched program falls back to the scratch HOME.
  * XAUTHORITY is the one real-home file passed through, explicitly, so a headed run can still reach the X server.
  */
 export function liveEnv(env = process.env) {
     const out = { ...env };
     if (inRealHome(out.HOME)) out.HOME = liveHome();
     for (const [name, sub] of Object.entries(LIVE_HOME_VARS)) if (sub && inRealHome(out[name])) out[name] = join(out.HOME, sub);
+    for (const name of Object.keys(out)) if (!(name in LIVE_HOME_VARS) && HOME_RELOCATING_NAME.test(name) && out[name] && inRealHome(out[name])) delete out[name];
     if (!out.XAUTHORITY) {
         const xauth = realHomes().map(h => join(h, '.Xauthority')).find(f => existsSync(f));
         if (xauth) out.XAUTHORITY = xauth;
