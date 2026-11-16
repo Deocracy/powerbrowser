@@ -253,7 +253,9 @@ export function seedClaudeLogin() {
  * (A-6, Pitfall 7). A removal error is logged, never thrown.
  */
 export async function removeOrcaPathsFor(profileDir) {
-    const env = liveEnv(); // the HOME the launch had: aliasPathFor falls back to <HOME>/.cache
+    // The HOME the launch had (aliasPathFor falls back to <HOME>/.cache). A process with no scratch HOME launched nothing
+    // through liveEnv(), so it gets none rather than making one just to compute a path (68-11-REVIEW IN-03).
+    const env = scratchHome || !inRealHome(process.env.HOME) ? liveEnv() : { ...process.env, HOME: '' };
     const getEnv = name => env[name];
     const dataRoot = dataRootFor(profileDir);
     for (const path of [await aliasPathFor(dataRoot, getEnv), await bridgeDirFor(dataRoot, getEnv, nodePlatform(process.platform))]) {
