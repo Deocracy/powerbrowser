@@ -7069,7 +7069,6 @@ declare -a GATE_KNOWN_OPEN_EXCLUSIONS=(
   # 68-06 (2026-11-11): Task 2 built the package from the dev objdir (no Safe Browsing key directory here), so
   # the two rows above stay keyed to entry 30 until a container release tarball exists.
   "orca-upstream-prs|51|owner opens the upstream issues and PRs (OVL-06, D-27)"
-  "orca-tabs-live|55|stage tab-groups-cross-client (g3) red since Phase 64 (TAB-04)"
   "branding-variant-divergence|30|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
   "verify-branding-identity-release|30|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
   "build-update-xml|30|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
