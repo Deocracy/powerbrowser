@@ -114,3 +114,19 @@ From `theia/extensions/bundled-extensions/src/common/bundled-extensions-copy.ts`
 - No check ties the README's quoted command name to `REINSTALL_COMMAND_LABEL`. If the label changes, update the README by hand.
 
 ## Self-Check: PASSED
+
+## Live rows run (2026-11-15, coordinator)
+
+Tree 0247ebdb, Theia built in `nix develop .#theia` (lib newer than 4c265724). Standalone sidecar on :4000 with a fresh `THEIA_CONFIG_DIR` and a scratch HOME, driven through chrome-devtools (real key and click input).
+
+1. `bundled-extensions-live`: PASS ("an uninstall is not undone automatically").
+2. `bundled-extensions-seed`: PASS (13 scenarios). `bundled-extensions-self-test`: PASS (control green, every plant red).
+3. GUI pass:
+   - (a) PASS. Fresh profile: the palette lists nothing for "Reinstall"; Help (Coding mode) shows About, Welcome, Open Walkthrough only.
+   - (b) PASS. After Uninstall in the Extensions view, the palette lists "Reinstall the Claude Extension" without a reload.
+   - (c) PASS. Running it shows one toast "PowerBrowser reinstalled the Claude extension. Start a new Claude chat session to use it."; `deployedPlugins/powerbrowser.claude-agent-sdk` is back; the Extensions view shows it installed (Uninstall button); the palette no longer lists the command; the log reads "reinstalled".
+   - (d) PASS. After a backend restart it stays installed, no seed runs, and `bundledExtensions.seeded` holds `0.3.284`.
+   - (e) PASS. Uninstall, then restart without the command: "Deploy batch of 0 accepted plugins", folder absent. Help (Coding mode) then lists "Reinstall the Claude Extension".
+4. Not run: the "Start a new Claude chat session" claim needs a full PowerBrowser with orcad and a real claude, which the standalone sidecar does not have. It stays a coordinator or owner live row.
+
+Finding: Theia's menu bar is hidden outside Coding mode, and the Application menu's Help submenu is hand-built (Get Help, About; `chrome-bar-widget.tsx:1273`), so in Browsing, Organising and Orca modes the command is reachable only from the palette. Owner decision: add the row to the Application menu's Help submenu, or accept palette plus Coding-mode Help.
