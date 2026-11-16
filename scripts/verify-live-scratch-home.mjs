@@ -14,21 +14,27 @@
 // os.homedir() (through realHomes) and throws, proven by calling it. And the real-agent seed: seedClaudeLogin writes
 // fresh files (never copies or links a real one), seeds skipDangerousModePermissionPrompt, and keeps its token-expiry
 // margin (CLAUDE_TOKEN_MARGIN_MIN), so claude never refreshes the owner's sign-in inside a scratch copy.
+// The scratch HOME's lifetime is run, not read: child nodes import the helper, make a scratch HOME and are ended by
+// SIGTERM, SIGHUP and SIGINT (each must remove it and still die by that signal), and one is SIGKILLed (the next run's
+// liveHome() must sweep its folder). 68-11-REVIEW CR-01.
 //
 // --self-test plants: a PowerBrowser spawn with no env, one with env: process.env, a CLI launch whose env sets
 // HOME: homedir(), an orcad launch through an args identifier, liveEnv without its assertion, seedClaudeLogin copying
 // the credentials file whole, dropping the bypass-prompt setting, or dropping the expiry margin, and the runtime guard
-// accepting the real HOME. Each must go red naming the drift; the controls (the same launches with liveEnv) stay green.
+// accepting the real HOME, a helper with no signal listener and one with no sweep. Each must go red naming the drift;
+// the controls (the same launches with liveEnv, the helper as it is) stay green.
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SCRIPTS = join(REPO_ROOT, 'scripts');
 const HELPER_REL = 'scripts/lib/firefox-bidi.mjs';
 const SELF_REL = 'scripts/verify-live-scratch-home.mjs';
+const LIVE_PROFILE_BASE = join(REPO_ROOT, '.mozbuild', 'pb-live-profiles');
 
 const CALL_RE = /(?<![.\w$])(spawn|spawnSync|execFile|execFileSync)\(/g;
 const LAUNCH_MARK = /'--?profile'|orcad\.js|buildOrcadArgs|'cli',\s*'bin',\s*'orca'|\bCLI_JS\b|'out',\s*'cli'|\[\s*\.\.\.\w+,\s*'--json'\s*\]/;
@@ -138,6 +144,53 @@ export async function runtimeVerdict(mod) {
     return fails;
 }
 
+/**
+ * Runs `body` in a child node that imports the helper source `src` as `m` (written next to the helper, so its relative
+ * imports resolve), with HOME=`home`. Resolves { lines, done }: the child's first stdout line, and its { code, signal }.
+ */
+function runHelperChild(src, body, home) {
+    const probe = join(SCRIPTS, 'lib', `.scratch-home-probe-${process.pid}-${probeSeq++}.mjs`);
+    writeFileSync(probe, src);
+    const code = `const m = await import(${JSON.stringify(pathToFileURL(probe).href)});\n${body}`;
+    const child = spawn(process.execPath, ['--input-type=module', '-e', code], { env: { PATH: process.env.PATH, HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    const line = new Promise((res) => {
+        child.stdout.on('data', (d) => { out += d; if (out.includes('\n')) res(out.split('\n')[0].trim()); });
+        child.once('exit', () => res(out.split('\n')[0].trim()));
+    });
+    child.stderr.resume();
+    const done = new Promise((res) => child.once('exit', (c, s) => { rmSync(probe, { force: true }); res({ code: c, signal: s }); }));
+    return { child, line, done };
+}
+let probeSeq = 0;
+
+/** Red reasons from ending children that made a scratch HOME from helper source `src`: each signal must remove it, and a later run must sweep one a SIGKILL left. */
+export async function signalVerdict(src) {
+    const fails = [];
+    mkdirSync(LIVE_PROFILE_BASE, { recursive: true });
+    const home = mkdtempSync(join(LIVE_PROFILE_BASE, 'fixture-home-'));
+    try {
+        for (const sig of ['SIGTERM', 'SIGHUP', 'SIGINT']) {
+            const r = runHelperChild(src, "console.log(m.liveHome()); setInterval(() => {}, 1e6);", home);
+            const dir = await r.line;
+            if (!dir) { fails.push(`signal: the child made no scratch HOME before ${sig}`); r.child.kill('SIGKILL'); await r.done; continue; }
+            r.child.kill(sig);
+            const end = await r.done;
+            if (existsSync(dir)) { fails.push(`signal: ${sig} left the scratch HOME ${relative(REPO_ROOT, dir)} on disk`); rmSync(dir, { recursive: true, force: true }); }
+            if (end.signal !== sig) fails.push(`signal: the child did not end by ${sig} (code ${end.code}, signal ${end.signal}), so the caller sees a different exit`);
+        }
+        const killed = runHelperChild(src, "console.log(m.liveHome()); setInterval(() => {}, 1e6);", home);
+        const stale = await killed.line;
+        killed.child.kill('SIGKILL');
+        await killed.done;
+        await runHelperChild(src, 'm.liveHome();', home).done;
+        if (stale && existsSync(stale)) { fails.push(`sweep: the scratch HOME a SIGKILLed run left (${relative(REPO_ROOT, stale)}) survived the next run's liveHome()`); rmSync(stale, { recursive: true, force: true }); }
+    } finally {
+        rmSync(home, { recursive: true, force: true });
+    }
+    return fails;
+}
+
 function treeFiles() {
     const files = {};
     for (const ent of readdirSync(SCRIPTS, { recursive: true, withFileTypes: true })) {
@@ -171,6 +224,12 @@ async function selfTest() {
     red('seedClaudeLogin without the token-expiry margin', seedPlant(/if \(!\(minutesLeft >= CLAUDE_TOKEN_MARGIN_MIN\)\) return [^\n]*\n/, ''), 'no token-expiry margin');
     red('the runtime guard accepting the real HOME', await runtimeVerdict({ ...mod, assertScratchHome: () => undefined }), 'accepted HOME = os.homedir()');
     rows.push(['control: the runtime guard', (await runtimeVerdict(mod)).length === 0, await runtimeVerdict(mod)]);
+    const helperSrc = tree[HELPER_REL];
+    const signalControl = await signalVerdict(helperSrc);
+    rows.push(['control: every ending signal removes the scratch HOME and a later run sweeps a killed one', signalControl.length === 0, signalControl]);
+    const helperPlant = (from, to) => { const planted = helperSrc.replace(from, to); return planted === helperSrc ? Promise.resolve([`plant did not apply: ${from}`]) : signalVerdict(planted); };
+    red('scratch HOME with no signal listener', await helperPlant('process.on(sig, onSignal);', ''), 'SIGTERM left the scratch HOME');
+    red('scratch HOME with no sweep of dead runs', await helperPlant("if (name.startsWith('pb-home-') && !homeInUse(dir)) disposeHome(dir);", ''), 'survived the next run');
     let bad = 0;
     for (const [name, pass, fails] of rows) {
         console.log(`verify-live-scratch-home --self-test: ${pass ? 'PASS' : 'FAIL'} -- ${name}${pass ? '' : `: ${fails.join(' | ') || 'nothing went red'}`}`);
@@ -185,6 +244,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     else {
         const { fails, launches } = verdict(treeFiles());
         fails.push(...await runtimeVerdict(await import('./lib/firefox-bidi.mjs')));
+        fails.push(...await signalVerdict(readFileSync(join(REPO_ROOT, HELPER_REL), 'utf8')));
         for (const f of fails) console.error(`verify-live-scratch-home: FAIL -- ${f}`);
         if (fails.length) process.exit(1);
         console.log(`verify-live-scratch-home: PASS -- ${launches} live launch site(s) under scripts/ pass env: liveEnv(...), and the runtime guard refuses the real HOME`);

@@ -25,7 +25,7 @@ import { join, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
-import { existsSync, createWriteStream, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, createWriteStream, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { aliasPathFor, bridgeDirFor, dataRootFor, nodePlatform } from '../../powerbrowser/shell/OrcaEnv.sys.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -76,13 +76,50 @@ export function inRealHome(path, homes = realHomes()) {
 }
 
 let scratchHome = null;
-/** This run's scratch HOME (mode 0700, under LIVE_PROFILE_BASE): made on first use, removed when the process exits. */
+/** The signals that end a live run: verify-platform.sh stops a check with SIGTERM to its group; Node runs no 'exit' listener on any of them. */
+export const LIVE_HOME_SIGNALS = Object.freeze(['SIGINT', 'SIGTERM', 'SIGHUP']);
+const HOME_PID_FILE = '.pid';
+
+/** True while the run that made scratch HOME `dir` is alive (its .pid). A folder with no .pid yet counts as alive for a minute. */
+function homeInUse(dir) {
+    let pid = 0;
+    try { pid = Number(readFileSync(join(dir, HOME_PID_FILE), 'utf8').trim()) || 0; } catch { /* no .pid */ }
+    if (!pid) { try { return Date.now() - statSync(dir).mtimeMs < 60000; } catch { return false; } }
+    try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+
+/** Removes scratch HOME `dir`. */
+function disposeHome(dir) {
+    rmSync(dir, { recursive: true, force: true });
+}
+
+/**
+ * This run's scratch HOME (mode 0700, under LIVE_PROFILE_BASE): made on first use, removed when the process exits or a
+ * LIVE_HOME_SIGNALS signal ends it. SIGKILL cannot be caught, so making one first removes every pb-home-* folder whose
+ * run is no longer alive.
+ */
 export function liveHome() {
     if (scratchHome) return scratchHome;
     mkdirSync(LIVE_PROFILE_BASE, { recursive: true });
+    for (const name of readdirSync(LIVE_PROFILE_BASE)) {
+        const dir = join(LIVE_PROFILE_BASE, name);
+        if (name.startsWith('pb-home-') && !homeInUse(dir)) disposeHome(dir);
+    }
     const home = mkdtempSync(join(LIVE_PROFILE_BASE, 'pb-home-'));
-    process.once('exit', () => rmSync(home, { recursive: true, force: true }));
-    return (scratchHome = home);
+    writeFileSync(join(home, HOME_PID_FILE), String(process.pid), { mode: 0o600 });
+    scratchHome = home;
+    process.once('exit', () => disposeHome(home));
+    for (const sig of LIVE_HOME_SIGNALS) {
+        const onSignal = () => {
+            // Another listener (withFirefoxPage's SIGINT) unwinds to a natural exit, which runs the 'exit' listener.
+            if (process.listenerCount(sig) > 1) return;
+            disposeHome(home);
+            process.off(sig, onSignal); // the default disposition again, so the re-raised signal ends the process
+            process.kill(process.pid, sig);
+        };
+        process.on(sig, onSignal);
+    }
+    return home;
 }
 
 /** Throws unless HOME and every XDG base folder in `env` are set and outside the real home: the runtime half of the ruling. */
