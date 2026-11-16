@@ -86,7 +86,7 @@ TERM-03 (remote terminals) moved to v2; see "Terminals (TERM)" under v2 Requirem
 - [x] **TAB-03**: A spike shows how PowerBrowser's dock observes the client's layout state
   (the renderer owns it in shipped builds) and how Orca's pane components mount inside Lumino
   widgets. (D-15)
-- [ ] **TAB-04**: One Orca pane equals one Lumino tab: every Orca pane (terminal, agent
+- [x] **TAB-04**: One Orca pane equals one Lumino tab: every Orca pane (terminal, agent
   session, editor, diff, browser page, chat and other Orca-only views) is a tab in PowerBrowser's
   dock, moves between all modes and appears as an Organising row; Orca's in-tab splits, and Orca
   tab groups held in PowerBrowser's hosted Orca client, are flattened into Lumino splits at a
@@ -232,7 +232,7 @@ Filled by the roadmap.
 | TAB-01 | Phase 64 | Complete |
 | TAB-02 | Phase 64 | Complete |
 | TAB-03 | Phase 61 | Complete |
-| TAB-04 | Phase 64 | Pending: on the merged Phase 65 tree (65-05) orca-tabs-live stage (g2) tab-groups PASS (the hosted chat's own Split Chat Right places the new chat's widget in a tab bar to the right of its reference), and stages (a)-(e2), (g), (h)-(k) and gui07-mode-switch-tabs-live PASS; sub-stage (g3) tab-groups-cross-client is red: Orca's pinned web client, opened as the second client at stage (f), never shows the CLI terminal T created later (likely the pinned host's navigation-echo freeze, 64-MIRROR-FREEZE.md, which only PowerBrowser's own client works around). Requirement re-worded per 64-TAB-GROUPS.md (P65-37). Next: a g3 drive with a second client that receives host frames; end-of-milestone pass (65-05-SUMMARY.md "Still red") |
+| TAB-04 | Phase 64 | Complete |
 | TAB-05 | Phase 65 | Complete |
 | TAB-06 | Phase 64 | Complete |
 | TAB-07 | Phase 65 | Complete |
