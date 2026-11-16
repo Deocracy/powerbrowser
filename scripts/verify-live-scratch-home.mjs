@@ -113,6 +113,10 @@ export function verdict(files) {
             launches++;
             if (!l.envOk) fails.push(`${rel}:${l.line}: a live launch (${l.call}) ${l.env === null ? 'passes no env, so it inherits the real HOME' : `passes env: ${l.env}, not liveEnv(...)`}`);
         }
+        // WR-04: OrcaEnv falls back to <HOME>/.cache, so a harness path derived from its own env misses what the launch wrote.
+        for (const m of src.matchAll(/\b(?:bridgeDirFor|aliasPathFor)\([^;\n]*process\.env\[/g)) {
+            fails.push(`${rel}:${src.slice(0, m.index).split('\n').length}: an Orca path derived from the harness's own process.env, not the launch's liveEnv()`);
+        }
     }
     const helper = files[HELPER_REL] ?? '';
     const fn = (name) => { const i = helper.search(new RegExp(`export function ${name}\\(`)); return i < 0 ? null : balanced(helper, helper.indexOf('{', i)); };
@@ -285,6 +289,7 @@ async function selfTest() {
     red('PowerBrowser spawn with env: process.env', plant("spawn('bash', ['-c', 'x', binPath, '--profile', dir], { env: process.env, stdio: 'ignore' });\n"), 'passes env: process.env');
     red('CLI launch with HOME: homedir()', plant("const cli = join(root, 'cli', 'bin', 'orca');\nexecFileSync(cli, [...a, '--json'], { env: { PATH, HOME: homedir() }, cwd });\n"), 'planted-live.mjs:2');
     red('orcad launch through an args identifier', plant("const args = [join(dir, 'out', 'orcad', 'orcad.js'), '--json'];\nconst child = spawn(nodeBin, args, { cwd, env });\n"), 'passes env: env');
+    red('an Orca bridge path from the harness env', plant("const dir = await OrcaEnv.bridgeDirFor(s.dataRoot, (n) => process.env[n], 'linux');\n"), "planted-live.mjs:1: an Orca path derived from the harness's own process.env");
     const ok = verdict({ ...tree, 'scripts/planted-live.mjs': "spawn(FIREFOX_BIN, ['--profile', d], { env: liveEnv(env) });\nconst cli = join(r, 'cli', 'bin', 'orca');\nexecFile(cli, [...a, '--json'], { env: liveEnv({ PATH }), cwd });\n" }).fails;
     rows.push(['control: the same launches through liveEnv stay green', ok.length === 0, ok]);
     const unguarded = { ...tree, [HELPER_REL]: tree[HELPER_REL].replace('return assertScratchHome(out);', 'return out;') };

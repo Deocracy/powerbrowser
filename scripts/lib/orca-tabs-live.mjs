@@ -273,7 +273,7 @@ export async function withOrcaTabsSession({ log = () => {}, needOrca = true, age
             ctx.typeInto = async (id, text) => { await ctx.focusTheiaFrame(); await ctx.activate(id); await ctx.typeText(text); };
             ctx.offerFromFile = async () => {
                 const s = await orcaState();
-                const dir = s.dataRoot ? await OrcaEnv.bridgeDirFor(s.dataRoot, (n) => process.env[n], 'linux') : null;
+                const dir = s.dataRoot ? await OrcaEnv.bridgeDirFor(s.dataRoot, (n) => liveEnv()[n], 'linux') : null;
                 const offer = dir ? (read(OrcaEnv.bridgeFileFor(dir, WEB_PAIRING_FILE, 'linux')) ?? '').trim() : '';
                 if (offer && !secrets.includes(offer)) secrets.push(offer);
                 return offer || null;

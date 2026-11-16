@@ -272,7 +272,7 @@ function launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, rec
         /** The web-pairing file's text, held in memory and added to the redaction list; never printed. */
         async offer() {
             if (!state) await s.connected();
-            const dir = await OrcaEnv.bridgeDirFor(state.dataRoot, (n) => process.env[n], 'linux');
+            const dir = await OrcaEnv.bridgeDirFor(state.dataRoot, (n) => liveEnv()[n], 'linux');
             const text = (read(OrcaEnv.bridgeFileFor(dir, lib.WEB_PAIRING_FILE, 'linux')) ?? '').trim();
             if (!text) throw new Error('no web-pairing file in the bridge folder');
             if (!secrets.includes(text)) secrets.push(text);

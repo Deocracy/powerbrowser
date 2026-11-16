@@ -303,7 +303,7 @@ async function live(table) {
         const s = await pollFor(async () => { const st = await ctx.orcaState(); return st.state === 'ready' ? st : null; }, 90000, 'OrcaService to reach ready');
         return { ...s, ticks: startTicks(s.pid) };
       };
-      const offerPath = async s => OrcaEnv.bridgeFileFor(await OrcaEnv.bridgeDirFor(s.dataRoot, n => process.env[n], 'linux'), 'web-pairing', 'linux');
+      const offerPath = async s => OrcaEnv.bridgeFileFor(await OrcaEnv.bridgeDirFor(s.dataRoot, n => liveEnv()[n], 'linux'), 'web-pairing', 'linux');
       const control = async (ctx, label) => {
         await ctx.showEach(hostedIds());
         const c = controlVerdict(await ctx.views(), hostedIds());
