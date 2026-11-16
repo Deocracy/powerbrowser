@@ -19,9 +19,12 @@
 //                     Orca's own entry, so the SDK Orca is typed and tested against is the one the
 //                     extension carries; an Orca re-pin that moves the SDK turns this red.
 //                     The reinstall affordance (68-11), derived from the extension's sources:
-//                     the reinstall command is visible and enabled only while its id is absent,
-//                     its id equals a shipped manifest's publisher.name, the service's reinstall is
-//                     called only from that command's execute handler, and the copy-back rule is
+//                     the reinstall command's isVisible and isEnabled are exactly
+//                     this.absent.has(CLAUDE_EXTENSION_ID), the set is only ever filled from the
+//                     service's absent list (or emptied), its id equals a shipped manifest's
+//                     publisher.name, no source runs the command through executeCommand, the
+//                     service's reinstall is called only from that command's execute handler,
+//                     and the copy-back rule is
 //                     called only from the reinstall service, never from the seed. An uninstall is
 //                     therefore undone only by the user's explicit action.
 //   --seed (quick)    The seed rule's behaviour table against the compiled seedBundledExtensions,
@@ -184,11 +187,32 @@ export function checkReinstall(sources, shippedIds) {
         failures.push(`${REINSTALL_CMD_REL} is missing -- there is no reinstall command`);
         return failures;
     }
-    const gate = /\bthis\.absent\.has\(CLAUDE_EXTENSION_ID\)/;
+    // WR-05: the gate is exactly this.absent.has(...), so a negation or an added term is red.
     for (const key of ['isVisible', 'isEnabled']) {
-        const body = cmd.match(new RegExp(`\\b${key}:\\s*\\(\\)\\s*=>\\s*([^,\\n]+)`))?.[1];
-        if (!body || !gate.test(body) || /\|\||\btrue\b/.test(body)) {
+        const body = cmd.match(new RegExp(`\\b${key}:\\s*\\(\\)\\s*=>\\s*([^,\\n]+)`))?.[1]?.trim();
+        if (body !== 'this.absent.has(CLAUDE_EXTENSION_ID)') {
             failures.push(`the reinstall command's ${key} is ${JSON.stringify(body ?? 'missing')}, not this.absent.has(CLAUDE_EXTENSION_ID) -- it would be offered while the extension is present`);
+        }
+    }
+    // The set the gate reads holds only what the service reports absent, or nothing.
+    const ALLOWED_ABSENT = new Set(['new Set<string>()', 'new Set()', 'new Set(await this.service.absent())']);
+    const assigned = [...cmd.matchAll(/\babsent\s*=(?![=>])\s*([^;\n]+)/g)].map(m => m[1].trim());
+    for (const value of assigned) {
+        if (!ALLOWED_ABSENT.has(value)) failures.push(`the reinstall command assigns this.absent = ${value}, not the service's absent list -- the command would be offered whatever the profile holds`);
+    }
+    if (!assigned.includes('new Set(await this.service.absent())')) failures.push('the reinstall command never fills this.absent from this.service.absent() -- its gate is tied to nothing');
+    for (const m of cmd.matchAll(/\bthis\.absent\.(add|delete|clear)\(/g)) {
+        failures.push(`the reinstall command calls this.absent.${m[1]}(), so the gate no longer equals the service's absent list`);
+    }
+    // Running the command from code is a reinstall nobody asked for.
+    const cmdId = cmd.match(/export const REINSTALL_CLAUDE: Command = \{\s*id: '([^']+)'/)?.[1];
+    if (!cmdId) failures.push(`${REINSTALL_CMD_REL} declares no REINSTALL_CLAUDE command id`);
+    for (const [rel, text] of Object.entries(code)) {
+        for (const m of text.matchAll(/\bexecuteCommand\(\s*([^,)]+)/g)) {
+            const arg = m[1].trim();
+            if (arg === 'REINSTALL_CLAUDE.id' || (cmdId && arg === `'${cmdId}'`)) {
+                failures.push(`${rel} runs the reinstall command through executeCommand(${arg}) -- a reinstall must come only from the user's action`);
+            }
         }
     }
     // Every call of the service's reinstall must sit in the command's execute handler.
@@ -554,6 +578,10 @@ async function selfTest() {
             ['the command offered while the extension is present', CMD, s => s.replace(/isVisible: \(\) => [^,\n]+/, 'isVisible: () => true'), /isVisible is "true"/],
             ['the command enabled whatever the state', CMD, s => s.replace(/isEnabled: \(\) => [^,\n]+/, 'isEnabled: () => this.absent.has(CLAUDE_EXTENSION_ID) || true'), /isEnabled is .*offered while the extension is present/],
             ['a reinstall run at start', CMD, s => s.replace('this.refresh();\n', 'this.refresh();\n        this.service.reinstall(CLAUDE_EXTENSION_ID);\n'), /calls reinstall outside the command's execute handler \(in onStart\(\)/],
+            // WR-05: the three plants the first version of this leg stayed green on.
+            ['a negated gate', CMD, s => s.replace(/(isVisible|isEnabled): \(\) => this\.absent/g, '$1: () => !this.absent'), /isVisible is "!this\.absent\.has\(CLAUDE_EXTENSION_ID\)"/],
+            ['the command run through executeCommand at start', CMD, s => s.replace('this.refresh();\n', 'this.refresh();\n        this.cmds.executeCommand(REINSTALL_CLAUDE.id);\n'), /runs the reinstall command through executeCommand\(REINSTALL_CLAUDE\.id\)/],
+            ['a fixed absent set', CMD, s => s.replace('this.absent = new Set(await this.service.absent());', 'this.absent = new Set([CLAUDE_EXTENSION_ID]);'), /assigns this\.absent = new Set\(\[CLAUDE_EXTENSION_ID\]\)/],
             ['the seed copying an uninstalled extension back', SEED, s => s.replace('this.sources = sourcesOf(context.systemEntries);', 'this.sources = sourcesOf(context.systemEntries);\n            await reinstallBundledExtension({ sources: this.sources, deploymentDir: \'\', id: \'x\' });'), /bundled-extensions-seed\.ts calls reinstallBundledExtension/],
             ['the command naming an id nothing ships', PROTO, s => s.replace(/CLAUDE_EXTENSION_ID = '[^']+'/, "CLAUDE_EXTENSION_ID = 'powerbrowser.not-shipped'"), /CLAUDE_EXTENSION_ID is powerbrowser\.not-shipped/],
         ];
