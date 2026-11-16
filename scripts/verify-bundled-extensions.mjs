@@ -26,8 +26,10 @@
 //                     therefore undone only by the user's explicit action.
 //   --seed (quick)    The seed rule's behaviour table against the compiled seedBundledExtensions,
 //                     plus the reinstall rule's table against reinstallBundledExtension and
-//                     absentBundledExtensions, in mkdtemp directories. One SKIP line when the
-//                     extension is not compiled.
+//                     absentBundledExtensions, plus the compiled reinstall service with a stubbed
+//                     deploy: a deploy that throws after the copy undoes the copy and records
+//                     nothing (WR-06), so the command stays offered. In mkdtemp directories. One
+//                     SKIP line when the extension is not compiled.
 //   --live (full)     The built backend's list-extensions on a fresh THEIA_CONFIG_DIR: the
 //                     extension is listed as a user plugin and not as a built-in; after its
 //                     deployed directory is removed (what Theia's Uninstall does) a second start
@@ -54,6 +56,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const APP_DIR = join(REPO_ROOT, 'theia', 'applications', 'browser');
 const EXT_DIR = join(REPO_ROOT, 'theia', 'extensions', 'bundled-extensions');
 const SEED_JS = join(EXT_DIR, 'lib', 'node', 'bundled-extensions-seed.js');
+const SERVICE_JS = join(EXT_DIR, 'lib', 'node', 'bundled-extensions-service.js');
 
 // User-facing copy rule (01-UI-SPEC): no environment variable, pref key, absolute path or
 // package-manager command in README.md.
@@ -347,6 +350,60 @@ export async function runReinstallScenarios({ reinstall, absent }) {
     return results;
 }
 
+/**
+ * The reinstall service's table (WR-06). make({ sources, deploymentDir, settings, install }) returns
+ * an object with reinstall(id), normally the compiled BundledExtensionsServiceImpl with stubs.
+ * @returns {Promise<{ name: string, ok: boolean, detail: string }[]>}
+ */
+export async function runServiceScenarios(make, recordKey) {
+    const id = 'fixture.bundled';
+    const results = [];
+    const scenario = async (name, install, fn) => {
+        const t = mkdtempSync(join(tmpdir(), 'pb-reinstall-svc-'));
+        try {
+            const src = join(t, 'plugins', '.user');
+            const deploy = join(t, 'deployedPlugins');
+            mkdirSync(join(src, id, 'extension'), { recursive: true });
+            writeFileSync(join(src, id, 'extension', 'package.json'), JSON.stringify({ name: 'bundled', publisher: 'fixture', version: '1.0.0' }));
+            const store = {};
+            const settings = { get: async k => store[k], set: async (k, v) => { store[k] = v; } };
+            const result = await make({ sources: [src], deploymentDir: deploy, settings, install }).reinstall(id);
+            const detail = await fn({ result, deploy, record: store[recordKey] });
+            results.push({ name, ok: detail === true, detail: detail === true ? '' : detail });
+        } catch (err) {
+            results.push({ name, ok: false, detail: `threw ${err.message}` });
+        } finally {
+            rmSync(t, { recursive: true, force: true });
+        }
+    };
+    await scenario('service, deployment succeeds: reinstalled and recorded', async () => undefined, ({ result, deploy, record }) => {
+        if (result !== 'reinstalled') return `the outcome is ${JSON.stringify(result)}`;
+        if (!existsSync(join(deploy, id))) return 'the extension was not copied back';
+        return record === JSON.stringify({ [id]: '1.0.0' }) || `the record is ${JSON.stringify(record)}`;
+    });
+    await scenario('service, deployment fails after the copy: copy undone, nothing recorded', async () => { throw new Error('no deployment'); }, ({ result, deploy, record }) => {
+        if (result !== 'failed') return `the outcome is ${JSON.stringify(result)}`;
+        if (existsSync(join(deploy, id))) return 'the copy was left behind, so the extension reads as present and the command the failure message names is hidden';
+        return record === undefined || `the record claims a reinstall that did not happen: ${record}`;
+    });
+    return results;
+}
+
+/** make() for runServiceScenarios over the compiled service, or null when it is not compiled. */
+function loadServiceMaker() {
+    if (!existsSync(SERVICE_JS)) return null;
+    const req = createRequire(SERVICE_JS);
+    const { BundledExtensionsServiceImpl } = req(SERVICE_JS);
+    const { FileUri } = req('@theia/core/lib/common/file-uri');
+    return ({ sources, deploymentDir, settings, install }) => Object.assign(new BundledExtensionsServiceImpl(), {
+        logger: { info() {}, error() {} },
+        settings,
+        environments: { getDeploymentDirUri: async () => FileUri.create(deploymentDir) },
+        seed: { sources },
+        pluginServer: { install },
+    });
+}
+
 function loadSeedModule() {
     if (!existsSync(SEED_JS)) return null;
     return createRequire(SEED_JS)(SEED_JS);
@@ -530,6 +587,27 @@ async function selfTest() {
             lines.push(`${red ? 'PASS' : 'FAIL'} plant "${reName}" -> ${red ? `red: ${r.name}: ${r.detail}` : greenFirst ? 'the scenario runner stayed green' : `the reinstall control is red: ${reControlRuns.filter(x => !x.ok).map(x => `${x.name}: ${x.detail}`).join(' | ')}`}`);
             if (!red) ok = false;
         }
+        // WR-06: the service table must discriminate: the pre-fix order (copy, record, then a
+        // deploy that throws, nothing undone) leaves the copy behind and the command hidden.
+        const svcName = 'a failed deploy that leaves the copy behind';
+        const make = loadServiceMaker();
+        if (!make || !re) {
+            lines.push(`SKIP plant "${svcName}" -- the service is not compiled (theia/extensions/bundled-extensions/lib)`);
+        } else {
+            const key = loadSeedModule().SEED_RECORD_KEY;
+            const svcControl = await runServiceScenarios(make, key);
+            const leaky = ({ sources, deploymentDir, settings, install }) => ({
+                reinstall: async id => {
+                    const outcome = await re.reinstall({ sources, deploymentDir, id });
+                    await settings.set(key, JSON.stringify({ [id]: outcome.version }));
+                    try { await install(); return 'reinstalled'; } catch { return 'failed'; }
+                },
+            });
+            const r = (await runServiceScenarios(leaky, key)).find(x => x.name.includes('deployment fails'));
+            const red = svcControl.every(x => x.ok) && r && !r.ok && /left behind/.test(r.detail);
+            lines.push(`${red ? 'PASS' : 'FAIL'} plant "${svcName}" -> ${red ? `red: ${r.name}: ${r.detail}` : `control ${svcControl.map(x => `${x.name}: ${x.ok ? 'ok' : x.detail}`).join(' | ')}; plant stayed green`}`);
+            if (!red) ok = false;
+        }
     } finally {
         rmSync(t, { recursive: true, force: true });
     }
@@ -568,9 +646,12 @@ if (mode === '') {
     if (!seed) {
         console.log(`${NAME}: SKIP -- the seed is not compiled (theia/extensions/bundled-extensions/lib); run yarn build in theia/`);
     } else {
+        const make = loadServiceMaker();
         const results = [
             ...(await runSeedScenarios(seed)),
             ...(await runReinstallScenarios(loadReinstall())),
+            ...(make ? await runServiceScenarios(make, loadSeedModule().SEED_RECORD_KEY)
+                : [{ name: 'the reinstall service is compiled', ok: false, detail: 'lib/node/bundled-extensions-service.js is absent while the seed is compiled' }]),
         ];
         report(results.filter(r => !r.ok).map(r => `scenario "${r.name}": ${r.detail}`), [], results.filter(r => r.ok).map(r => r.name), `${results.length} seed and reinstall scenarios hold`);
     }
