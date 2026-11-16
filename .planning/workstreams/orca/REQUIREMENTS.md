@@ -4,7 +4,7 @@
 **Core Value:** Theia is the default GUI; Orca's agent workflow runs inside PowerBrowser as real
 PowerBrowser tabs, with PowerBrowser's own engine and chrome as the agents' browser.
 
-Owner decisions are in `DECISIONS.md` (D-01..D-31) and win over `research/`. Research feature ids
+Owner decisions are in `DECISIONS.md` (D-01..D-51) and win over `research/`. Research feature ids
 (T-n, D-n in `research/FEATURES.md`) are cited where a requirement comes from them.
 
 ## v1 Requirements
@@ -225,7 +225,7 @@ Filled by the roadmap.
 | OVL-03 | Phase 68 | Pending: orca-mobile-protocol and orca-mobile-skew PASS (68-06, verdict ok, 8 tags behind); deferred: pairing the stock Android app with PowerBrowser's orcad (owner, needs an Android device) |
 | OVL-04 | Phase 60 | Complete |
 | OVL-05 | Phase 62 | Complete |
-| OVL-06 | Phase 68 | Pending: seam 010 exported as the browser-provider upstream PR with a new Orca test (68-05); deferred: the owner opens the issue and PR and records the URL (WINDOWS 51); web-entry has no seam to offer (WINDOWS 52, owner ruling) |
+| OVL-06 | Phase 68 | Pending: seam 010 exported as the browser-provider upstream PR with a new Orca test (68-05); deferred: the owner opens the issue and PR and records the URL (WINDOWS 51); the web-entry class is ruled out for v1.7 (D-45, WINDOWS 52 fixed) |
 | TERM-01 | Phase 64 | Complete |
 | TERM-02 | Phase 63 | Complete |
 | TERM-04 | Phase 64 | Complete |
@@ -247,10 +247,10 @@ Filled by the roadmap.
 | EXT-02 | Phase 63 | Pending: PowerBrowser half proven (63-03, 63-06); extension half with EXT-01 in the end-of-milestone pass |
 | EXT-03 | Phase 61 | Complete |
 | INJ-01 | Phase 67 | Complete |
-| PLAT-01 | Phase 68 | Pending: Linux package with <GreD>/orca built from the dev objdir and proven (orca-packaged-tree, orca-packaged-live PASS, 68-06); deferred: the container release tarball (WINDOWS 30), the first release.yml run of windows-orca and build-windows, the macOS artifact (WINDOWS 48), ruling 68-B and the 68-A terms check (WINDOWS 44) |
-| PLAT-02 | Phase 68 | Pending: 68-06 Linux pass 35 of 38 rows PASS; red: orca-tabs-live g3 (TAB-04, WINDOWS 55), orca-licence-rulings (owner, WINDOWS 44), orca-upstream-prs (owner, WINDOWS 51, 52); deferred: macOS and Windows smoke tests (WINDOWS 49, 50) |
-| BEXT-01 | Phase 68 | Complete (68-06: orca-claude-sdk, orca-claude-sdk-built, bundled-extensions, bundled-extensions-live, licence-allowlist PASS); deferred owner item: Anthropic's terms permit redistributing the SDK extension (68-A, WINDOWS 44) |
-| BEXT-02 | Phase 68 | Complete (68-06: bundled-xpi-packaged and bundled-xpi-live PASS on the dev-objdir package); deferred owner item: the GPL-3.0 section 6 reading for the bundled XPI (WINDOWS 44) |
+| PLAT-01 | Phase 68 | Pending: Linux package with <GreD>/orca built from the dev objdir and proven (orca-packaged-tree, orca-packaged-live PASS, 68-06); deferred: the container release tarball and the first release.yml run (WINDOWS 30); ruling 68-B and the 68-A terms check closed (D-42, D-43; WINDOWS 44 fixed); windows-orca, build-windows and the macOS artifact (WINDOWS 48) moved to the next version (D-40) |
+| PLAT-02 | Phase 68 | Pending: 68-06 Linux pass 35 of 38 rows PASS; of its three reds, orca-tabs-live g3 is green since 2ce581f2 and 3ad91d13 (D-49, WINDOWS 55 fixed) and orca-licence-rulings passes (D-42..D-44, WINDOWS 44 fixed); orca-upstream-prs stays red until the owner records the browser-provider PR (WINDOWS 51; web-entry ruled out by D-45, WINDOWS 52 fixed); no Linux live pass or full gate on the current tree yet; macOS and Windows smoke tests moved to the next version (D-40; WINDOWS 49, 50) |
+| BEXT-01 | Phase 68 | Complete (68-06: orca-claude-sdk, orca-claude-sdk-built, bundled-extensions, bundled-extensions-live, licence-allowlist PASS); Anthropic's terms check confirmed (D-43, WINDOWS 44 fixed); reinstall affordance added by 68-11 (D-51, D-48) |
+| BEXT-02 | Phase 68 | Complete (68-06: bundled-xpi-packaged and bundled-xpi-live PASS on the dev-objdir package); the GPL-3.0 section 6 reading accepted (D-44, WINDOWS 44 fixed) |
 
 **Coverage:**
 - v1 requirements: 40 total (TERM-03 moved to v2 by D-31)
@@ -259,4 +259,4 @@ Filled by the roadmap.
 
 ---
 *Requirements defined: 2026-11-04*
-*Last updated: 2026-11-04 after owner decisions D-01..D-29, the adversarial ownership review and roadmap creation (phases 59-68); BEXT-01/02 added 2026-11-10 (Chris); TERM-01..04 rewritten and re-mapped, TERM-03 moved to v2, OVL-06 narrowed 2026-11-10 (D-31); TERM-04 restated 2026-11-10 (D-32); TERM-01, TERM-04 and TAB-06 complete 2026-11-11 on 64-06's recorded PASS lines*
+*Last updated: 2026-11-04 after owner decisions D-01..D-29, the adversarial ownership review and roadmap creation (phases 59-68); BEXT-01/02 added 2026-11-10 (Chris); TERM-01..04 rewritten and re-mapped, TERM-03 moved to v2, OVL-06 narrowed 2026-11-10 (D-31); TERM-04 restated 2026-11-10 (D-32); TERM-01, TERM-04 and TAB-06 complete 2026-11-11 on 64-06's recorded PASS lines; TAB-04 complete 2026-11-16 (D-49); OVL-06, PLAT-01, PLAT-02, BEXT-01, BEXT-02 rows brought up to D-40..D-51 by the 2026-11-16 milestone re-audit*

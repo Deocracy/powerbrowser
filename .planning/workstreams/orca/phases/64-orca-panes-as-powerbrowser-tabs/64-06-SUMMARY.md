@@ -3,6 +3,7 @@ phase: 64-orca-panes-as-powerbrowser-tabs
 plan: 06
 subsystem: orca-panes-gap-closure
 status: complete
+requirements-completed: [TERM-01, TERM-04, TAB-06]
 tags: [orca, terminal-keys, D-32, P64-37, real-agent, orcaservice, gap-closure]
 requires:
   - "64-05 (lanes merged, panes wired; b775f938) and D-32 (fd0a4b3a)"

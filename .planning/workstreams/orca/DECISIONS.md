@@ -445,7 +445,8 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
   with D-40. The ledger tool accepts the approval only as lines typed by the owner, so the ledger rows stay
   `deferred-requested` until he types them.
 - **D-48 — "Reinstall the Claude Extension" is in the Application menu's Help submenu.** Chris, 2026-11-16, answer "Add
-  it": the command is reachable in every mode. Being built 2026-11-16.
+  it": the command is reachable in every mode. Built 2026-11-16 in 0a7d9a72 (chrome bar's Application menu Help
+  submenu; bundled-extensions Help-row leg with five self-test plants); not yet run in a rebuilt GUI.
 - **D-49 — TAB-04 / `orca-tabs-live` stage g3 (WINDOWS 55): attempt a fix now.** Chris, 2026-11-16, answer "Try to fix
   it now", with a second-client drive. The coordinator reports back if it is not a contained fix.
   Outcome (2026-11-16): fixed in the check, not the product (2ce581f2, 3ad91d13, scripts/verify-orca-tabs-live.mjs only): the second client is reloaded once the tab exists (upstream echo bug, 64-MIRROR-FREEZE.md), and crossClientVerdict applies the dropped-pane filter. Four live runs green; self-test 57 plants; TAB-04 complete, WINDOWS 55 fixed. Residual: a stock Orca web client shows tabs created after it opened the worktree only after a reload (upstream bug, open).

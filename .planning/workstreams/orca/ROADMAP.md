@@ -53,10 +53,11 @@ Owner decisions D-01..D-31 (`DECISIONS.md`) and the adopted adversarial review (
   3. `scripts/verify-platform.sh --gate` passes with no exclusions, or every remaining `GATE_KNOWN_OPEN_EXCLUSIONS` id is re-dated in WINDOWS.md. An open WINDOWS.md entry closes only with its fix.
   4. v1.6 is closed on workstream `deploy` (R1/R16 override closeout, tag `v1.6`) once the owner pass is done; every push waits on Chris's word (CF-19).
 
-**Plans**: 5/8 plans executed
+**Plans**: 6/9 plans executed (59-05, 59-06, 59-07 are owner plans; 59-07prep-SUMMARY.md is a prep record, not a plan)
 
 Plans:
 - [x] 59-08-PLAN.md
+- [x] 59-09-PLAN.md — gap closure: page-menu edit rows act on the right-clicked field (999.30, WINDOWS 43)
 
 **Wave 1**
 - [x] 59-01-PLAN.md — lane: record the 2026-11-07 live state in five deploy SUMMARYs (CF-14)
@@ -320,7 +321,7 @@ Plans:
   4. Linux, macOS and Windows artifacts contain orcad and the overlaid client, with the node-pty prebuild built per target on that target's own runner. The Flatpak manifest grants `--filesystem=home`. Each of these checks is one `verify-platform.sh` row.
   5. The live checks pass on Linux. macOS and Windows smoke results are recorded when a host is available (D-24).
 
-**Plans**: 11/11 plans executed (68-11 complete 2026-11-15, live rows PASS f6d291a0; 68-06 complete 2026-11-11: all nine lanes merged, dev-objdir package proven, PLAT-02 Linux pass 35/38; BEXT-01 and BEXT-02 complete; OVL-02, OVL-03, OVL-06, PLAT-01, PLAT-02 pending owner and host items, WINDOWS 44, 48-55)
+**Plans**: 11/11 plans executed (68-11 complete 2026-11-15, live rows PASS f6d291a0; 68-06 complete 2026-11-11: all nine lanes merged, dev-objdir package proven, PLAT-02 Linux pass 35/38; BEXT-01 and BEXT-02 complete; OVL-02, OVL-03, OVL-06, PLAT-01, PLAT-02 pending owner, push and release items, WINDOWS 30, 51, 54; 44, 52, 55 fixed; 48-50, 53 moved to the next version by D-40)
 
 Plans:
 **Wave 1** *(executable now; seven lanes in parallel)*
@@ -347,7 +348,8 @@ Open items for this phase:
 - Who opens the upstream pull requests, and under which GitHub org, is an owner question. The org is moving to `deocracy`.
 - Pairing the stock mobile app needs an Android device. Protocol skew between a newer stock app and the pinned orcad is a recorded risk (D-29).
 - Windows signing never blocks Linux.
-- The owner confirms that Anthropic's terms permit redistributing the Claude Agent SDK extension (D-30); until then the release guard stays closed. The owner's reading of GPL-3.0 section 6 for the bundled uBlock Origin XPI is also open (P68-39).
+- Closed 2026-11-15: Anthropic's terms permit redistributing the Claude Agent SDK extension (D-43), and the GPL-3.0 section 6 reading for the bundled uBlock Origin XPI is accepted (D-44); the release guard is open (orca-licence-rulings PASS).
+- D-40 (2026-11-15): v1.7 is Linux only; the macOS and Windows halves of criteria 4 and 5 moved to the next version.
 
 ## Progress
 
@@ -356,13 +358,13 @@ Phases execute in numeric order: 59 → 60 → 61 → 62 → 63 → 64 → 65 �
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 59. Carry-forward from v1.5 and v1.6 | 5/8 | In Progress | - |
+| 59. Carry-forward from v1.5 and v1.6 | 6/9 | In Progress | - |
 | 60. Orca from source on Theia's Node | 4/5 | In Progress | - |
 | 61. Spikes for pane hosting, browser parity and live sharing | 4/4 | Complete (human items deferred) | 2026-11-10 |
 | 62. Overlay gate and PowerBrowser-run orcad | 3/3 | Complete | 2026-11-09 |
 | 63. Agent hooks on Orca's terminal engine | 6/6 (3 executed, 3 superseded) | Complete (human items deferred) | 2026-11-10 |
-| 64. Orca panes as PowerBrowser tabs | 6/6 | In Progress (64-06 gap closure executed; TAB-04 pending on stage g3, g2 PASS on the 65-05 tree) | - |
+| 64. Orca panes as PowerBrowser tabs | 6/6 | In Progress (64-06 gap closure executed; TAB-04 complete, g3 green since 2ce581f2 and 3ad91d13, D-49; 64-VERIFICATION.md gaps_found predates the fix, re-verification pending) | - |
 | 65. Orca workspace in Theia | 5/5 | Complete (human items deferred; verified 8/8) | 2026-11-10 |
 | 66. PowerBrowser web tabs as Orca's browser | 10/10 | In Progress | - |
 | 67. Hosting hardening | 7/7 | In Progress (67-07 gap closure executed; verify-work pending) | - |
-| 68. Three-OS artifacts, weekly re-pin and upstream seams | 10/10 | In Progress | - |
+| 68. Three-OS artifacts, weekly re-pin and upstream seams | 11/11 | In Progress (re-verified human_needed 8/13, 3febce70; 68-11 review findings fixed) | - |

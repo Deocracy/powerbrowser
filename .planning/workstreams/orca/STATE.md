@@ -3,17 +3,17 @@ gsd_state_version: "1.0"
 milestone: v1.7
 current_phase: 68
 current_phase_name: Three-OS artifacts, weekly re-pin and upstream seams
-status: Phase 68 re-verified (human_needed 8/13); 68-11 review fixes in progress
-stopped_at: "2026-11-16: 68-11 complete, live rows PASS (f6d291a0); 68-11 code review found 2 critical and 8 warnings (ffbefe01), fixes in progress; next TAB-04 g3 attempt, full gate, milestone re-audit"
+status: Milestone re-audit 2026-11-16 at 65d7e653 (v1.7-MILESTONE-AUDIT.md); full gate at 65d7e653 not completed
+stopped_at: "2026-11-16: 68-11 review findings fixed (2fea5fa8..04fe4400, 0a7d9a72, 9018e1e5, 98777f97, e6dd6a25); TAB-04 closed (D-49); milestone re-audit; next: full gate at the current head"
 last_updated: "2026-11-16T00:00:00.000Z"
 last_activity: 2026-11-16
-last_activity_desc: Phase 68 re-verified (3febce70); 68-11 code review (ffbefe01); owner rulings D-47..D-51 recorded; --quick green
+last_activity_desc: 68-11 review fixes; TAB-04 g3 green (2ce581f2, 3ad91d13); WINDOWS 55 fixed; milestone re-audit
 state_head: a625378d3323a73fe4e1b4cebedafa2ac8140d57
 progress:
   total_phases: 10
   completed_phases: 4
   total_plans: 66
-  completed_plans: 63
+  completed_plans: 62
 milestone_name: Orca integration
 ---
 
@@ -25,16 +25,16 @@ See: .planning/PROJECT.md (shared project file; its "Current Milestone" section 
 Scope: .planning/workstreams/orca/REQUIREMENTS.md. Owner decisions: .planning/workstreams/orca/DECISIONS.md (D-01..D-51). Roadmap: .planning/workstreams/orca/ROADMAP.md.
 
 **Core value (this milestone):** Theia is the default GUI; Orca's agent workflow runs inside PowerBrowser as real PowerBrowser tabs, with PowerBrowser's own engine and chrome as the agents' browser.
-**Current focus:** 68-11 review fixes (2 critical, 8 warnings, 68-11-REVIEW.md), then the TAB-04 stage g3 attempt (D-49), the full gate and the milestone re-audit (D-40: Linux only)
+**Current focus:** the full gate at the current head (none completed since 1edc97d6), then the owner pass in END-OF-MILESTONE-CHECKLIST.md (D-40: Linux only)
 
 ## Current Position
 
 Phase: 68 (Three-OS artifacts, weekly re-pin and upstream seams) — EXECUTED (68-01..68-11); re-verified 2026-11-16 as human_needed 8/13 with no code gap (3febce70, 68-VERIFICATION.md)
-Plan: 68-11 of 11 complete, live rows PASS (f6d291a0); code review of 68-11 and the scratch-HOME change found 2 critical and 8 warnings (ffbefe01, 68-11-REVIEW.md), fixes in progress; phases 59 and 60 partially executed (owner plans 59-05, 59-06, 59-07 and 60-05 pending)
-Status: Milestone audit found gaps (v1.7-MILESTONE-AUDIT.md)
-Last activity: 2026-11-16 — Phase 68 re-verification (3febce70), 68-11 code review (ffbefe01), `--quick` green; next: review fixes, TAB-04 g3 attempt, full gate, milestone re-audit
+Plan: 68-11 of 11 complete, live rows PASS (f6d291a0); code review of 68-11 and the scratch-HOME change found 2 critical, 8 warnings and 4 info (ffbefe01, 68-11-REVIEW.md), all 14 fixed 2026-11-16; phases 59 and 60 partially executed (owner plans 59-05, 59-06, 59-07 and 60-05 pending)
+Status: Milestone re-audit 2026-11-16 (v1.7-MILESTONE-AUDIT.md)
+Last activity: 2026-11-16 — 68-11 review fixes, TAB-04 g3 green (D-49), milestone re-audit; next: full gate at the current head
 
-Progress: [█████████░] 63 of 66 plan files have a SUMMARY (3 are superseded stubs)
+Progress: [█████████░] 62 of 66 plan files have a SUMMARY (63-01, 63-02, 63-05 are superseded stubs; 59-05, 59-06, 59-07, 60-05 are owner plans)
 
 ## Phases
 
@@ -45,11 +45,11 @@ Progress: [█████████░] 63 of 66 plan files have a SUMMARY (3
 | 61 | Spikes for pane hosting, browser parity and live sharing | TAB-03, BRW-01, EXT-03 | Complete (human items deferred) |
 | 62 | Overlay gate and PowerBrowser-run orcad | OVL-01, OVL-05, RUN-03, RUN-04, RUN-05 | Complete |
 | 63 | Agent hooks on Orca's terminal engine (rescoped by D-31) | TERM-02, EXT-02 | Complete (human items deferred) |
-| 64 | Orca panes as PowerBrowser tabs | TAB-01, TAB-02, TAB-04, TAB-06, TERM-01, TERM-04 | Executed (64-06 gap closure); TAB-04 complete (g2 PASS on the 65-05 tree; g3 green since 2ce581f2 and 3ad91d13, D-49); verification pending |
+| 64 | Orca panes as PowerBrowser tabs | TAB-01, TAB-02, TAB-04, TAB-06, TERM-01, TERM-04 | Executed (64-06 gap closure); TAB-04 complete (g2 PASS on the 65-05 tree; g3 green since 2ce581f2 and 3ad91d13, D-49); 64-VERIFICATION.md (gaps_found, 2026-11-11) predates the fix, re-verification pending |
 | 65 | Orca workspace in Theia | TAB-05, TAB-07, TAB-08, TAB-09 | Complete (verified 8/8, human items deferred) |
 | 66 | PowerBrowser web tabs as Orca's browser | BRW-02, BRW-03, BRW-04, BRW-05 | Executed (66-06, 66-07, 66-08, 66-09, 66-10); BRW-02, BRW-03, BRW-04, BRW-05 complete |
-| 67 | Hosting hardening | RUN-06, RUN-07, RUN-08, RUN-09, INJ-01 | Executed (67-01..67-07; 67-07 gap closure, D-36); RUN-06..RUN-09 and INJ-01 complete; verification pending |
-| 68 | Three-OS artifacts, weekly re-pin and upstream seams | OVL-02, OVL-03, OVL-06, PLAT-01, PLAT-02 | Executed (68-01..68-11); re-verified 2026-11-16, human_needed 8/13, no code gap (3febce70); 68-11 review fixes in progress (ffbefe01) |
+| 67 | Hosting hardening | RUN-06, RUN-07, RUN-08, RUN-09, INJ-01 | Executed (67-01..67-07; 67-07 gap closure, D-36); RUN-06..RUN-09 and INJ-01 complete; verified human_needed 10/10 (67-VERIFICATION.md) |
+| 68 | Three-OS artifacts, weekly re-pin and upstream seams | OVL-02, OVL-03, OVL-06, PLAT-01, PLAT-02 | Executed (68-01..68-11); re-verified 2026-11-16, human_needed 8/13, no code gap (3febce70); 68-11 review findings all fixed 2026-11-16 |
 
 ## Performance Metrics
 
@@ -154,6 +154,7 @@ None yet.
 Last session: 2026-11-13
 Stopped at: v1.7 milestone audit (gaps_found), 5d05e3ad
 Resume file: None
+Session 2026-11-16 (re-audit): v1.7 milestone re-audit at 65d7e653 (v1.7-MILESTONE-AUDIT.md); no full gate has completed since 1edc97d6.
 Session 2026-11-16 (later): TAB-04 closed, orca-tabs-live g3 green in four consecutive live runs (2ce581f2, 3ad91d13; D-49, WINDOWS 55 fixed); a stock Orca web client shows tabs created after it opened the worktree only after a reload (upstream bug, open).
 Session 2026-11-16: 68-11 live rows PASS (f6d291a0); Phase 68 re-verified (3febce70); 68-11 review (ffbefe01); D-47..D-51 recorded; `--quick` green; tracking cleaned up.
 
@@ -167,7 +168,7 @@ Session 2026-11-16: 68-11 live rows PASS (f6d291a0); Phase 68 re-verified (3febc
 | 62 | verified 5/5 (62-VERIFICATION.md); owner re-lock of scripts/verify-ng-027-reader-callers.mjs pending; browser-request clause of criterion 2 moves to Phase 66 | end-of-milestone pass (D-18): owner lock-checks; Phase 66 proves the browser request |
 | 63 | verified 6/7, human_needed (63-VERIFICATION.md; 63-04-SUMMARY.md); TERM-02 complete on a live orca-agent-status-live PASS; EXT-02 extension half deferred | end-of-milestone pass (D-18): the Claude Code extension's claude through PowerBrowser's wrapper with the session live in Orca and spike 006 "Blocked on EXT-01" steps 1-4 (with 60-05 Task 2; research assumptions A3, A5); an owner look at the wrapper's placeholder pane as an Orca terminal tab once Phase 64 hosts terminals; the wrapper path in packaged builds and a Windows twin of the POSIX sh claude-wrapper launcher (Phase 68) |
 | 64 | executed by 64-05 and 64-06; TAB-01, TAB-02, TERM-01, TERM-04, TAB-06 complete; TAB-04 complete (g3 green since 2ce581f2 and 3ad91d13, D-49; 64-06-SUMMARY.md) | end-of-milestone pass (D-18): TAB-04 -- re-run orca-tabs-live stage (g2) tab-groups once the check drives a real Orca tab-group split (Orca's own web client's "Split Chat Right" opened a chat in the same group; its group split is a tab drag to a group edge); the hosted chat's look and behaviour against Orca's own; Orca's running-agent close confirmation readable with working buttons, and the busy-chat close (not exercised: no prompt keeps a chat busy); owner item T-61-04 (P64-07); auto-mode picks P64-05 (boot at frontend start), P64-18 (no activation hook), the Open Question 4 html-clause ruling, P64-37 (the worktree pick); the in-session key control replacing P63-25's (P64-33); the EXT-02 wrapper's placeholder pane as a hosted terminal tab (P64-36); a stored custom mode named "Orca" hidden by the shipped Orca mode; the Orca address-bar default (Address); a layout-restored pb-orca: tab's empty title until boot; OWNER REVIEW (64-06): the Orca chords still active in hosted terminals under terminal-first (terminal.paste Ctrl+V/Ctrl+Shift+V/Shift+Insert, terminal.copySelection Ctrl+Shift+C/Ctrl+C with a selection, terminal.expandPane Ctrl+Shift+Enter), of which Ctrl+V and Ctrl+C-with-selection capture control characters and cannot be released without a seam (Orca's xterm bypass policy hard-codes them); Ctrl+Shift+W from a focused web page goes to the page; the two quick-pick placeholders "Choose the Orca worktree for the new terminal" and "Choose the Orca worktree for the new chat"; OWNER DECISIONS ANSWERED: TERM-04 by D-32, the New Orca Terminal/Chat fallback by P64-37 |
-| 65 | executed by 65-05; TAB-05, TAB-07, TAB-08, TAB-09 complete; orca-tabs-live g3 green since 2ce581f2 and 3ad91d13 (TAB-04, D-49); owner items P65-01, P65-09 (660 px), CA-07, P65-06, P65-17, populated orchestration/creation surfaces, launch-into-Orca-mode egress (65-05-SUMMARY.md) | end-of-milestone pass (D-18): `/gsd-verify-work 65 --ws orca`; the owner items; a g3 drive with a second client that receives host frames |
+| 65 | executed by 65-05; TAB-05, TAB-07, TAB-08, TAB-09 complete; orca-tabs-live g3 green since 2ce581f2 and 3ad91d13 (TAB-04, D-49); owner items P65-01, P65-09 (660 px), CA-07, P65-06, P65-17, populated orchestration/creation surfaces, launch-into-Orca-mode egress (65-05-SUMMARY.md) | end-of-milestone pass (D-18): `/gsd-verify-work 65 --ws orca`; the owner items |
 | 66 | executed by 66-06, 66-07, 66-08, 66-09 and 66-10 (D-38 no clipboard for agent tabs, D-39 permissions per container; owner item: Linux PRIMARY-selection autocopy from agent selections, accepted risk); BRW-02..BRW-05 complete (66-07: clause (j) PASS, D-34; 66-08: agent-opened windows refused, clause (n) PASS, D-35, owner item: popups an agent workflow needs, such as OAuth, as agent overlays; 66-09: agent downloads, external protocols and commands on the initial about:blank refused, clauses (o), (p), (q) PASS, D-37, owner item: whether agent workflows need a download or a mailto: hand-off); orca-tabs-live stage tab-groups-cross-client (g3) was red through Phase 66 and is green since 2ce581f2 and 3ad91d13 (D-49); the store row's title stays "New Tab" (page metadata does not update it); owner items: copy review of the four mark/Stop strings, clause (f) decoy SKIP on a host with an installed Orca, CSP-strict pages refuse eval, parked-tab timer throttling (O1), agent-tab dialogs over the IDE (O2), same-origin iframes not walked by snapshot, the delta-size approximation, no host re-attach after orcad restarts (P67-36), agent history in Places, spike 005 owner note (S2 over S1), P66-08, P66-11, P66-22, P66-24, P66-26; visual mark check in light and dark themes, a real-worktree agent session with the user working in another tab, the privacy paragraph wording (66-CONTEXT Deferred Verification) | end-of-milestone pass (D-18): `/gsd-verify-work 66 --ws orca`; the owner items; re-run orca-browser-agent-live |
 | 67 | executed by 67-06 and 67-07; RUN-06..RUN-09 and INJ-01 complete; orca-tabs-live g3 green since 2ce581f2 and 3ad91d13 (D-49); owner items P67-17, P67-18, P67-19, P67-21, CA-07, live rows on the real ~/.orca, P65-06, T-61-04, D-35 popups, the external-protocol dialog, the browser-host page class, the copy, D-36 (67-06-SUMMARY.md "Owner items") | end-of-milestone pass (D-18): `/gsd-verify-work 67 --ws orca`; the failure page in light and dark themes and its buttons, the PB mark on Orca's dark landing tile, the protection sentence and the two RUN-09 sentences |
-| 68 | executed by 68-01..68-10 (68-06 coordinator); BEXT-01 and BEXT-02 complete; OVL-02, OVL-03, OVL-06, PLAT-01, PLAT-02 pending (PLAT-02 Linux pass 35/38: orca-tabs-live g3 was red, green since 2ce581f2 and 3ad91d13, WINDOWS 55 fixed); package built from the dev objdir, no container release tarball (WINDOWS 30) | end-of-milestone pass (D-18): pair the stock Android app beside the orca-mobile-skew output (P68-17); open the upstream issue and PR for seam 010 and record the URL, rule on the web-entry class (WINDOWS 51, 52); the first live weekly re-pin tick, the bump PR with auto-merge armed and the owner's approving review; a release.yml dispatch producing Linux and Windows artifacts with Orca (first real runs of windows-orca and the macOS jobs; container release tarball, WINDOWS 30); macOS and Windows smoke tests (WINDOWS 48, 49, 50); ruling 68-B and the 68-A terms check for the SDK extension (D-30) and the GPL-3.0 section 6 reading for uBlock Origin (P68-39) (WINDOWS 44); reinstalling the SDK extension after an uninstall (no affordance in v1.7, 68-09); A-P1 confirmation (the re-pin carries THIRD-PARTY-NOTICES.txt); the Windows claude-wrapper launcher (WINDOWS 53); packaged live rows that end PowerBrowser by a signal leave orcad running (WINDOWS 54) |
+| 68 | executed by 68-01..68-10 (68-06 coordinator); BEXT-01 and BEXT-02 complete; OVL-02, OVL-03, OVL-06, PLAT-01, PLAT-02 pending (PLAT-02 Linux pass 35/38: orca-tabs-live g3 was red, green since 2ce581f2 and 3ad91d13, WINDOWS 55 fixed); package built from the dev objdir, no container release tarball (WINDOWS 30) | end-of-milestone pass (D-18): pair the stock Android app beside the orca-mobile-skew output (P68-17); open the upstream issue and PR for seam 010 and record the URL (WINDOWS 51; web-entry ruled out by D-45, WINDOWS 52 fixed); the first live weekly re-pin tick, the bump PR with auto-merge armed and the owner's approving review; a release.yml dispatch producing Linux and Windows artifacts with Orca (first real runs of windows-orca and the macOS jobs; container release tarball, WINDOWS 30); macOS and Windows smoke tests (WINDOWS 48, 49, 50; moved to the next version by D-40); ruling 68-B, the 68-A terms check and the uBlock Origin GPL-3.0 section 6 reading closed (D-42..D-44, WINDOWS 44 fixed); reinstall affordance added (68-11, D-51, D-48); A-P1 confirmed (D-41); the Windows claude-wrapper launcher (WINDOWS 53, next version by D-40); packaged live rows that end PowerBrowser by a signal leave orcad running (WINDOWS 54) |
