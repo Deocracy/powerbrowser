@@ -207,10 +207,11 @@ export const CLAUDE_STATE_KEYS = Object.freeze(['hasCompletedOnboarding', 'lastO
  * the real sign-in with a spent token. So the run is refused unless the access token outlives CLAUDE_TOKEN_MARGIN_MIN,
  * and the SHA-256 of the seeded refresh token is kept beside the copy (.seeded): whenever the scratch HOME is removed
  * (exit, an ending signal, or the next run's sweep), a rotated token is written back or the folder kept
- * (scratchSignInSettled).
+ * (scratchSignInSettled). A second call in the same process keeps the first seed (68-11-REVIEW IN-04).
  * Returns null when seeded, or the reason the row must not run.
  */
 export function seedClaudeLogin() {
+    if (scratchHome && existsSync(join(scratchHome, HOME_SEED_FILE))) return null; // once per process: .seeded names the first seed
     const realFile = realClaudeCredentials();
     if (!realFile) return 'no Claude sign-in in the real home (~/.claude/.credentials.json); sign in to claude once, then re-run';
     const real = dirname(dirname(realFile));
