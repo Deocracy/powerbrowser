@@ -48,7 +48,11 @@
 //                     orca-workspace delivers it; a named SKIP for that half
 //                     only while theia/extensions/orca-workspace is absent).
 //  g3 tab-groups-cross-client  (driven after g, before g2; judged after k;
-//                     P65-34) a CLI terminal T; the second client's Move Tab to
+//                     P65-34) a CLI terminal T; the second client, reloaded
+//                     once T exists (the pinned stock client takes no host
+//                     frame after it opens the worktree: 64-MIRROR-FREEZE.md's
+//                     echo, which only PB's own client works around), so T is
+//                     in its first adoption; its Move Tab to
 //                     Split > Right on T: its group strips grow by one (detector
 //                     1), after k's reload T's store record holds split-right
 //                     (detector 2), and only then: during the 5000 ms after
@@ -613,7 +617,9 @@ async function runLive(lib, pre = {}) {
         else {
             await ctx.focusTheiaFrame();
             const fronted = await second.front();
-            const moved = await second.moveTabToSplit(T.widget.options?.tabId, 'right');
+            // The stage-f client stopped taking host frames when it opened the worktree; a fresh load adopts T.
+            const reloaded = await second.reload();
+            const moved = reloaded ? { error: `the second client did not reconnect after its reload (${reloaded})` } : await second.moveTabToSplit(T.widget.options?.tabId, 'right');
             if (fronted?.prev) await ctx.activate(fronted.prev);
             if (!moved || moved.error) Object.assign(cross, { error: moved?.error ?? 'the second client did not answer', menu: moved?.menu ?? [] });
             else {
@@ -770,8 +776,34 @@ async function openSecondClient(ctx) {
     // Orca's pairing field parses the offer itself, not orcad's http web-client URL (WebConnect: parseWebPairingInput).
     const input = await ctx.pairingInputFromFile();
     if (!input) return { error: 'no pairing input in the offer' };
+    const error = await connect(ctx, evalIn, input);
+    if (error) return { error };
+    return {
+        /**
+         * g3: reloads the page and opens the worktree again; resolves an error string or null. The pinned stock client
+         * applies no host session-tabs frame once it has opened the worktree (its own terminal attach or create draws
+         * the host's double-projected echo, 64-MIRROR-FREEZE.md), so a tab made after the load reaches it only at the
+         * first adoption of a new load. A stored pairing reconnects by itself; the pairing field is filled only if it shows.
+         */
+        reload: async () => {
+            await evalIn('setTimeout(() => location.reload(), 0), true').catch(() => undefined);
+            await sleep(1000);
+            return connect(ctx, evalIn, input);
+        },
+        ...secondClientControls(ctx, base, evalIn),
+    };
+}
+
+/**
+ * Pairs the second client in page memory when the page shows its pairing field (a stored pairing reconnects without one),
+ * then selects this session's worktree through the client's own sidebar row and waits for its tab strip's New tab control.
+ * Resolves an error string, or null once the strip is there.
+ */
+async function connect(ctx, evalIn, input) {
+    const screen = await ctx.pollFor(async () => (await evalIn(`document.getElementById('web-runtime-pairing-code') ? 'field' : document.querySelector('[role="option"][data-worktree-id]') ? 'rows' : null`).catch(() => null)), 30000, 'the pairing field or the worktree rows').catch(() => null);
+    if (!screen) return 'the page showed neither the pairing field nor a worktree row';
     // Each page call stays inside one BiDi request's 20 s; the wait for the paired screen is polled from here.
-    const submitted = await evalIn(`(async () => {
+    const submitted = screen === 'rows' ? 'ok' : await evalIn(`(async () => {
         const deadline = Date.now() + 15000;
         let input; while (!(input = document.getElementById('web-runtime-pairing-code')) && Date.now() < deadline) await new Promise(r => setTimeout(r, 200));
         if (!input) return 'no pairing field';
@@ -786,7 +818,7 @@ async function openSecondClient(ctx) {
     })()`).catch((e) => `evaluate failed: ${e.message}`);
     const paired = submitted !== 'ok' ? submitted
         : await ctx.pollFor(async () => (await evalIn(`!document.getElementById('web-runtime-pairing-code')`).catch(() => false)) === true ? 'ok' : null, 30000, 'the paired client').catch(() => 'still on the pairing screen');
-    if (paired !== 'ok') return { error: `pairing in page memory did not complete (${paired})` };
+    if (paired !== 'ok') return `pairing in page memory did not complete (${paired})`;
     // A freshly paired client shows "Select a workspace from the sidebar to begin": select this session's
     // worktree through Orca's own sidebar row, then wait for its tab strip's New tab control.
     const selected = await evalIn(`(async () => {
@@ -803,9 +835,13 @@ async function openSecondClient(ctx) {
         row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); row.click();
         return 'ok';
     })()`).catch((e) => `evaluate failed: ${e.message}`);
-    if (selected !== 'ok') return { error: `selecting the worktree did not complete (${selected})` };
+    if (selected !== 'ok') return `selecting the worktree did not complete (${selected})`;
     const strip = await ctx.pollFor(async () => (await evalIn(`!!document.querySelector('[aria-label="New tab"], [title="New tab"]')`).catch(() => false)) === true || null, 15000, 'the worktree tab strip').catch(() => null);
-    if (!strip) return { error: 'the selected worktree shows no New tab control' };
+    return strip ? null : 'the selected worktree shows no New tab control';
+}
+
+/** The second client's page controls. */
+function secondClientControls(ctx, base, evalIn) {
     return {
         /** Brings the second client's web tab to the front (a background tab runs no animation frames, so Orca's tab
          * strip does not render new tabs) and resolves the id of the widget that was active before, to restore. */
@@ -872,7 +908,7 @@ async function openSecondClient(ctx) {
             const texts = () => items().map(m => m.textContent.replace(/\\s+/g, ' ').trim());
             const escape = () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
             const stripsBefore = strips();
-            // T was just created through the CLI: the second client renders its tab once the host's frame arrives.
+            // T reaches the reloaded client in its first adoption (reload()); the strip renders it once that lands.
             // Time-bounded, not count-bounded: a background tab's timers are throttled to about one per second.
             let tab = null;
             for (const end = Date.now() + 8000; !tab && Date.now() < end;) { tab = document.querySelector('[data-tab-id="' + CSS.escape(${JSON.stringify(String(tabId ?? ''))}) + '"]'); if (!tab) await sleep(100); }
