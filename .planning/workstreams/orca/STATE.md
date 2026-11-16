@@ -3,11 +3,11 @@ gsd_state_version: "1.0"
 milestone: v1.7
 current_phase: 68
 current_phase_name: Three-OS artifacts, weekly re-pin and upstream seams
-status: executed, verification pending
-stopped_at: v1.7 milestone audit (gaps_found), 5d05e3ad
-last_updated: "2026-11-13T00:00:00.000Z"
-last_activity: 2026-11-13
-last_activity_desc: v1.7 milestone audit (gaps_found)
+status: resumed, running 68-11 live rows
+stopped_at: "Session resumed 2026-11-15; running 68-11 live rows (build, bundled-extensions-live/seed/self-test, GUI pass)"
+last_updated: "2026-11-15T00:00:00.000Z"
+last_activity: 2026-11-15
+last_activity_desc: resumed after pause; owner rulings D-40..D-46 and 68-11 landed
 state_head: a625378d3323a73fe4e1b4cebedafa2ac8140d57
 progress:
   total_phases: 10
@@ -25,14 +25,14 @@ See: .planning/PROJECT.md (shared project file; its "Current Milestone" section 
 Scope: .planning/workstreams/orca/REQUIREMENTS.md. Owner decisions: .planning/workstreams/orca/DECISIONS.md (D-01..D-29). Roadmap: .planning/workstreams/orca/ROADMAP.md.
 
 **Core value (this milestone):** Theia is the default GUI; Orca's agent workflow runs inside PowerBrowser as real PowerBrowser tabs, with PowerBrowser's own engine and chrome as the agents' browser.
-**Current focus:** v1.7 milestone audit gaps (phases 61-68 executed; owner plans 59-05/06/07 and 60-05 pending)
+**Current focus:** 68-11 live rows (reinstall affordance), then Phase 68 verification and the end-of-milestone checklist (D-40: Linux only)
 
 ## Current Position
 
 Phase: 68 (Three-OS artifacts, weekly re-pin and upstream seams) — EXECUTED (68-01..68-10); verification pending
 Plan: 68-10 of 10; phases 59 and 60 partially executed (owner plans 59-05, 59-06, 59-07 and 60-05 pending)
 Status: Milestone audit found gaps (v1.7-MILESTONE-AUDIT.md)
-Last activity: 2026-11-13 — v1.7 milestone audit (gaps_found)
+Last activity: 2026-11-15 — resumed; six orphan orcad processes (WINDOWS 54 pattern) stopped; 68-11 live rows started
 
 Progress: [█████████░] 62 of 65 plan files have a SUMMARY (3 are superseded stubs)
 
