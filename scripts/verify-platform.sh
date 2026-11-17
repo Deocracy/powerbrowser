@@ -4119,6 +4119,10 @@ run_own_checks() {
     # The self-test plants each launch form, each lifetime fault and a guard that accepts the real HOME.
     "live-scratch-home|node $REPO_ROOT/scripts/verify-live-scratch-home.mjs"
     "live-scratch-home-self-test|node $REPO_ROOT/scripts/verify-live-scratch-home.mjs --self-test"
+    # NEW (2026-11-16 gate): the run loop's leak leg (scripts/verify-orcad-leak.mjs) turns a script row red when an orcad
+    # outlives it in the row's own session, and stops it. The self-test derives the orcad entry from OrcaService, reads the
+    # loop for the leg, and plants a detached orcad-shaped process (red, stopped) beside a non-orcad survivor (green, alive).
+    "orcad-leak-self-test|node $REPO_ROOT/scripts/verify-orcad-leak.mjs --self-test"
     # NEW (67-03, RUN-06/RUN-07, P67-01..P67-09, P67-32): orca-offer-file judges real lstat results of a temp folder
     # through orca-panes' offer-file-policy.ts (type-stripped): symlink, non-regular, other owner, group/other bits,
     # missing, non-loopback or mismatched endpoint, undecodable text; OFFER_REFUSAL_REASONS against the copy table's
@@ -6941,7 +6945,15 @@ run_own_checks() {
       bash\ */*|node\ */*)
         setsid $cmd &
         CURRENT_CHECK_PID=$!
-        if wait "$CURRENT_CHECK_PID"; then
+        local row_ok=1
+        wait "$CURRENT_CHECK_PID" || row_ok=0
+        # Leak leg: when anything of the row's process group outlives it (kill -0, a builtin, so a clean row costs no
+        # fork), an orcad still in the row's session is named, stopped and turns the row red (2026-11-16 gate).
+        if kill -0 -- "-$CURRENT_CHECK_PID" 2>/dev/null \
+          && ! node "$REPO_ROOT/scripts/verify-orcad-leak.mjs" --session "$CURRENT_CHECK_PID" --label "$label"; then
+          row_ok=0
+        fi
+        if [ "$row_ok" -eq 1 ]; then
           SUMMARY+=("$label: PASS")
         else
           SUMMARY+=("$label: FAIL")
