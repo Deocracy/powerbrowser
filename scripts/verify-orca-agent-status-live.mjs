@@ -65,7 +65,7 @@ import * as OrcaEnv from '../powerbrowser/shell/OrcaEnv.sys.mjs';
 import { descendants, ensurePbNode, installOutputRedaction } from './lib/orca-run.mjs';
 import { freePort, ppidMap, signalIdentity, startTicks } from './verify-orca-hidden-electron.mjs';
 import { deriveClaudeHookEvents, deriveStatusMap, readAgentStatus, scrubOwnOrcaEnv } from './verify-orca-agent-hooks.mjs';
-import { liveEnv, seedClaudeLogin } from './lib/firefox-bidi.mjs';
+import { liveEnv, seedClaudeLogin, stopStrays } from './lib/firefox-bidi.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-agent-status-live';
@@ -294,7 +294,7 @@ async function live() {
                 if (ticks !== null) recordedForQuit.push({ pid, ticks, what });
             }
             quitResult = await app.quit();
-        });
+        }, { keepStrays: true }); // the quit verdict below judges the survivors; the harness must not stop them first
         if (quitResult !== 'exited') fails.push(`app.quit() returned '${quitResult}', not exited`);
         const until = Date.now() + QUIT_BUDGET_MS;
         let alive = new Map();
@@ -312,6 +312,7 @@ async function live() {
         const tree = [...descendants(ppidMap(), [...cleanup.keys()])];
         for (const pid of tree) if (!cleanup.has(pid)) cleanup.set(pid, startTicks(pid));
         for (const [pid, ticks] of cleanup) signalIdentity(pid, ticks, 'SIGKILL');
+        await stopStrays(profile.profileDir, { label: NAME }); // keepStrays: what the launch left is this row's to stop
         await profile.dispose();
         rmSync(repo, { recursive: true, force: true });
     }

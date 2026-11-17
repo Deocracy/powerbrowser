@@ -14,13 +14,19 @@
 // Derived at check time, never hand-kept: the orcad entry is the suffix of OrcaService.sys.mjs's `_orcadMain`
 // assignment, and the self-test reads verify-platform.sh for the leg's invocation.
 //
+// withFirefoxPage's named opt-out, keepStrays (orca-service-live's reap, the quit verdicts), leaves what outlives the
+// browser to the row; the leg is unchanged by it. The self-test runs a planted row through firefox-bidi.mjs's own
+// teardown step (stopRunStrays) with the opt-out (its orcad must go red here) and without it (green: the teardown
+// stopped it), and reads firefox-bidi.mjs for that step's call in withFirefoxPage.
+//
 //   node scripts/verify-orcad-leak.mjs --session <sid> --label <row>
 //   node scripts/verify-orcad-leak.mjs --self-test
 
 import { spawn, spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { signalIdentity, startTicks } from './verify-orca-hidden-electron.mjs';
 
 const NAME = 'verify-orcad-leak';
@@ -28,6 +34,9 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SERVICE = 'powerbrowser/shell/OrcaService.sys.mjs';
 const DRIVER = 'scripts/verify-platform.sh';
 const LEG_CALL = 'scripts/verify-orcad-leak.mjs" --session "$CURRENT_CHECK_PID"';
+// withFirefoxPage's teardown and its named opt-out (keepStrays): the plant row below runs this same step.
+const BIDI = 'scripts/lib/firefox-bidi.mjs';
+const TEARDOWN_CALL = 'await stopRunStrays([pkgRoot, profileDir], launchTicks, { keepStrays });';
 
 /** The orcad entry OrcaService spawns, as the path suffix after its Orca root; null when the assignment is gone. */
 export function orcadEntry(serviceSource) {
@@ -113,6 +122,53 @@ async function selfTest() {
         check('live: the non-orcad survivor is left running', alive(bystander) ? [] : [`pid ${bystander.pid} was stopped`], null);
     } finally {
         for (const p of [leaked, bystander]) signalIdentity(p.pid, p.ticks, 'SIGKILL');
+    }
+
+    // The harness's named opt-out (withFirefoxPage keepStrays) must not blind the leg. A planted row in a session of its
+    // own (as the driver's setsid) leaves an orcad-shaped child working under its profile, runs withFirefoxPage's own
+    // teardown step with or without the opt-out, and exits; the leg then judges its session as the driver runs it.
+    const bidi = readFileSync(join(REPO_ROOT, BIDI), 'utf8');
+    const teardown = (text) => (text.includes(TEARDOWN_CALL) ? [] : [`${BIDI}'s withFirefoxPage teardown does not run stopRunStrays with the caller's keepStrays`]);
+    check('withFirefoxPage tears down through stopRunStrays with keepStrays', teardown(bidi), null);
+    check('withFirefoxPage with that teardown call removed', teardown(bidi.split(TEARDOWN_CALL).join('')), 'does not run stopRunStrays');
+    const lib = (rel) => JSON.stringify(pathToFileURL(join(REPO_ROOT, rel)).href);
+    const plantRow = async (keepStrays) => {
+        const profile = realpathSync(mkdtempSync(join(tmpdir(), 'orcad-leak-row-')));
+        mkdirSync(join(profile, 'powerbrowser-orca'));
+        const body = [
+            `import { spawn } from 'node:child_process';`,
+            `import { stopRunStrays } from ${lib(BIDI)};`,
+            `import { startTicks } from ${lib('scripts/verify-orca-hidden-electron.mjs')};`,
+            `const since = startTicks(process.pid);`,
+            `const c = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1e9)', ${JSON.stringify(join(REPO_ROOT, `upstream/../orca${entry}`))}], { cwd: ${JSON.stringify(join(profile, 'powerbrowser-orca'))}, stdio: 'ignore' });`,
+            `await new Promise((r) => setTimeout(r, 300));`,
+            `await stopRunStrays([${JSON.stringify(profile)}], since, { keepStrays: ${keepStrays} });`,
+            `console.log(c.pid);`,
+            `process.exit(0);`,
+        ].join('\n');
+        const row = spawn(process.execPath, ['--input-type=module', '-e', body], { detached: true, stdio: ['ignore', 'pipe', 'inherit'] });
+        let out = '';
+        row.stdout.on('data', (d) => { out += d; });
+        await new Promise((r) => row.once('exit', r));
+        const pid = Number(out.trim().split('\n').pop());
+        return { sid: row.pid, profile, orcad: { pid, ticks: Number.isInteger(pid) ? startTicks(pid) : null } };
+    };
+    for (const keepStrays of [true, false]) {
+        const { sid, profile, orcad } = await plantRow(keepStrays);
+        try {
+            const leg = cli(sid);
+            if (keepStrays) {
+                check('live: a keepStrays row that leaves its orcad', orcad.ticks === null ? [`vacuous: the row's orcad pid ${orcad.pid} was not running when the leg ran`]
+                    : leg.status === 1 ? [leg.stderr.trim()] : [`exit ${leg.status}: ${leg.stderr.trim()}`], `planted-row left orcad pid ${orcad.pid}`);
+                check('live: the keepStrays row\'s orcad is stopped by the leg', orcad.ticks !== null && alive(orcad) ? [`pid ${orcad.pid} still running`] : [], null);
+            } else {
+                check('live: the same row without keepStrays (its teardown stops the orcad)', orcad.ticks !== null ? [`the teardown left pid ${orcad.pid} running`]
+                    : leg.status === 0 ? [] : [`exit ${leg.status}: ${leg.stderr.trim()}`], null);
+            }
+        } finally {
+            if (orcad.ticks !== null) signalIdentity(orcad.pid, orcad.ticks, 'SIGKILL');
+            rmSync(profile, { recursive: true, force: true });
+        }
     }
     if (misses) {
         console.error(`${NAME} --self-test: FAIL -- ${misses} case(s) missed`);

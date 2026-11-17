@@ -274,9 +274,10 @@ export async function makeProfile(extraPrefs = {}) {
  * contexts(scope?), chrome (the shell document's context), port (the
  * sidecar's), quit({ how, timeoutMs }) -> 'exited' | 'timeout'. Returns what
  * `fn` returns. withFirefoxPage stops a browser that is still running and
- * leaves the profile in place.
+ * leaves the profile in place. `keepStrays` is withFirefoxPage's opt-out:
+ * what outlives the browser is left for the caller to judge and stop.
  */
-export async function withShell(profile, fn, { capabilities } = {}) {
+export async function withShell(profile, fn, { capabilities, keepStrays } = {}) {
     return withFirefoxPage('', async ({ evaluate, evaluateIn, send, waitFor, exitCode }) => {
         await waitFor('window.theia && window.theia.container ? true : false', { timeoutMs: 120000 });
         await waitFor(`(() => { try { ${GET_BY_NAME}
@@ -325,7 +326,7 @@ export async function withShell(profile, fn, { capabilities } = {}) {
             },
         };
         return fn(app);
-    }, { profileDir: profile.profileDir, capabilities });
+    }, { profileDir: profile.profileDir, capabilities, keepStrays });
 }
 
 /**

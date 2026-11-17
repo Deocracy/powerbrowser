@@ -71,7 +71,7 @@ import { fileURLToPath } from 'node:url';
 import * as OrcaEnv from '../powerbrowser/shell/OrcaEnv.sys.mjs';
 import { descendants, ensurePbNode, installOutputRedaction, orcaVersionFromPins } from './lib/orca-run.mjs';
 import { freePort, ppidMap, signalIdentity, startTicks } from './verify-orca-hidden-electron.mjs';
-import { liveEnv } from './lib/firefox-bidi.mjs';
+import { liveEnv, stopStrays } from './lib/firefox-bidi.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-service-live';
@@ -322,7 +322,7 @@ async function live() {
             })).filter((p) => p.ticks !== null);
             notes.tree = before.length;
             quitResult = await app.quit();
-        });
+        }, { keepStrays: true }); // the quit verdict below judges what outlives this launch; the harness must not stop it first
         if (quitResult !== 'exited') fails.push(`app.quit() returned '${quitResult}', not exited`);
         let quitFails = [];
         for (let i = 0; i < 100; i++) {
@@ -332,7 +332,8 @@ async function live() {
         }
         fails.push(...quitFails);
 
-        // ---- Launch 2: SIGKILL PowerBrowser; orcad must survive it, or there is nothing to reap.
+        // ---- Launch 2: SIGKILL PowerBrowser; orcad must survive it, or there is nothing to reap. keepStrays: the
+        // harness would otherwise stop the orphan before launch 3, the product's reap, could (gate at 2788eb05).
         if (!fails.length) {
             let oldOrcad = null;
             let oldDaemon = null;
@@ -341,7 +342,7 @@ async function live() {
                 oldOrcad = { pid: state.pid, ticks: record(state.pid) };
                 oldDaemon = { pid: state.daemonPid, ticks: record(state.daemonPid) };
                 process.kill(onePbPid(), 'SIGKILL');
-            }).catch((e) => { if (!oldOrcad) throw e; /* the session died with the browser, as intended */ });
+            }, { keepStrays: true }).catch((e) => { if (!oldOrcad) throw e; /* the session died with the browser, as intended */ });
             await sleep(2000);
             const survivedKill = startTicks(oldOrcad.pid) === oldOrcad.ticks;
 
@@ -379,6 +380,8 @@ async function live() {
         // Only identities this run recorded, and only while they are still those processes.
         await sleep(500);
         for (const [pid, ticks] of recorded) signalIdentity(pid, ticks, 'SIGKILL');
+        // Launches 1 and 2 keep their strays (keepStrays); whatever this run left under its profile is stopped here.
+        if (profileDir) await stopStrays(profileDir, { label: NAME });
         try { if (aliasPath && lstatSync(aliasPath).isSymbolicLink()) unlinkSync(aliasPath); } catch { /* already gone */ }
         if (profileDir) rmSync(profileDir, { recursive: true, force: true });
         if (configHome) rmSync(configHome, { recursive: true, force: true });

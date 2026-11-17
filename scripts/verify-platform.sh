@@ -4122,6 +4122,8 @@ run_own_checks() {
     # NEW (2026-11-16 gate): the run loop's leak leg (scripts/verify-orcad-leak.mjs) turns a script row red when an orcad
     # outlives it in the row's own session, and stops it. The self-test derives the orcad entry from OrcaService, reads the
     # loop for the leg, and plants a detached orcad-shaped process (red, stopped) beside a non-orcad survivor (green, alive).
+    # 2026-11-17: a planted row that opts out of withFirefoxPage's stray stop (keepStrays) and leaks must still go red;
+    # the same row without the opt-out is green, its teardown having stopped the orcad.
     "orcad-leak-self-test|node $REPO_ROOT/scripts/verify-orcad-leak.mjs --self-test"
     # NEW (67-03, RUN-06/RUN-07, P67-01..P67-09, P67-32): orca-offer-file judges real lstat results of a temp folder
     # through orca-panes' offer-file-policy.ts (type-stripped): symlink, non-regular, other owner, group/other bits,

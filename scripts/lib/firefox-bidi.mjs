@@ -316,6 +316,19 @@ export async function stopStrays(root, { since = null, label = 'firefox-bidi' } 
 }
 
 /**
+ * withFirefoxPage's teardown over the run's roots (its extraction root when packaged, and its profile): stopStrays
+ * for each, from the browser's start ticks. keepStrays (withFirefoxPage's named opt-out) stops nothing, for a row that
+ * judges what outlives the browser itself -- a quit's survivors, or an orphan the next launch must reap -- and then
+ * stops it; verify-platform.sh's leak leg (verify-orcad-leak.mjs) still judges that row after it exits.
+ */
+export async function stopRunStrays(roots, since, { keepStrays = false } = {}) {
+    if (keepStrays || since === null) return 0;
+    let stopped = 0;
+    for (const root of roots.filter(Boolean)) stopped += await stopStrays(root, { since });
+    return stopped;
+}
+
+/**
  * A BiDi RemoteValue as the plain value the evaluated expression returned. Primitives arrive as their value already;
  * an object arrives as [key, RemoteValue] pairs and an array as a RemoteValue list, so a caller reading `.field` off
  * a raw object result reads undefined (found live in the v1.5 end-of-milestone pass). Nodes, windows and other
@@ -624,7 +637,9 @@ export async function captureScreenshot(url, outputPath, { windowSize = '800,600
  */
 // PB_LIVE_STDOUT_PATH / PB_LIVE_STDERR_PATH (67-04): the default tee targets, for a caller that cannot pass them
 // through a wrapper (orca-pairing-containment captures PowerBrowser's output under Phase 65's withOrcaProfile).
-export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, stdoutPath = process.env.PB_LIVE_STDOUT_PATH, stderrPath = process.env.PB_LIVE_STDERR_PATH, profileDir: keptProfileDir, capabilities = {} } = {}) {
+// keepStrays (2026-11-17, gate at 2788eb05): teardown leaves what outlives the browser running (stopRunStrays), for a
+// row that judges it and stops it itself; every other caller keeps the teardown's stop.
+export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, stdoutPath = process.env.PB_LIVE_STDOUT_PATH, stderrPath = process.env.PB_LIVE_STDERR_PATH, profileDir: keptProfileDir, capabilities = {}, keepStrays = false } = {}) {
     if (!existsSync(binPath)) {
         throw new Error(
             `firefox-bidi: ${binPath} does not exist. Run the Phase 1 Firefox build first ` +
@@ -716,7 +731,7 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
         // The harness's SIGTERM kills PowerBrowser outright (it exits by the signal; no quit blocker runs), so OrcaService
         // never stops orcad. orcad, its terminal daemon and the daemon's watcher work in <profile>/powerbrowser-orca (a dev
         // run names only shared paths in argv), and a packaged run's also name its extraction root (WINDOWS 54).
-        if (launchTicks !== null) for (const root of [pkgRoot, profileDir].filter(Boolean)) await stopStrays(root, { since: launchTicks });
+        await stopRunStrays([pkgRoot, profileDir], launchTicks, { keepStrays });
         if (stdoutSink) {
             await new Promise(resolve => stdoutSink.end(resolve));
         }

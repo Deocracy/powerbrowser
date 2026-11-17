@@ -210,7 +210,7 @@ async function runPackaged(prefix, fails) {
                 }
             }
             if (await app.quit({ timeoutMs: 30000 }) !== 'exited') fails.push('the packaged PowerBrowser did not exit within 30 s of the quit');
-        });
+        }, { keepStrays: true }); // the survivor verdict below judges what the quit left; live()'s finally stops it after
     } finally {
         await profile.dispose();
     }
