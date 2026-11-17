@@ -40,7 +40,40 @@ import { I18nProvider } from '../i18n/I18nProvider'
 import { useAppStore } from '../store'
 import { AppBackgroundServices } from '../app-shell/AppBackgroundServices'
 import { useAppSessionPersistence } from '../app-shell/use-app-session-persistence'
-import { useAppShellServices } from '../app-shell/use-app-shell-services'
+import { useClosedEditorTabCleanup } from '../components/editor/useClosedEditorTabCleanup'
+import { useIpcEvents } from '../hooks/useIpcEvents'
+import { useAutomationDispatchEvents } from '../hooks/useAutomationDispatchEvents'
+import { useReadOnScreenAttention } from '../hooks/useReadOnScreenAttention'
+import { useAppMenuPaste } from '../hooks/useAppMenuPaste'
+import { useAppMenuSelectionActions } from '../hooks/useAppMenuSelectionActions'
+import { useLargeTextControlPaste } from '../hooks/useLargeTextControlPaste'
+import { resolvePrimarySelectionMiddleClickPaste } from '../hooks/usePrimarySelectionPaste'
+import { useRadixBodyPointerEventsRecovery } from '../hooks/useRadixBodyPointerEventsRecovery'
+import { useOsc52ClipboardDefaultOnNotice } from '../components/terminal-pane/osc52-clipboard-default-on-notice'
+import { useLocalStructuredSessionTabsSync } from '../runtime/local-structured-session-tabs-sync'
+import { useHostStructuredAgentsSync } from '../runtime/host-structured-agents-sync'
+import { useLegacyChatRenameMigration } from '../runtime/legacy-chat-rename-migration'
+import { useHostModelCatalogSnapshotsSync } from '../runtime/host-model-catalog-snapshots-sync'
+import { useRemoteRuntimeRecoveryTriggers } from '../runtime/use-remote-runtime-recovery-triggers'
+import { useTerminalViewerColorPublication } from '../app-shell/use-terminal-viewer-color-publication'
+import { useBrowserIdentityMigrationNotice } from '../components/browser-pane/browser-user-agent-migration-notice'
+import { useBrowserClientHostedDownloadNotices } from '../components/browser-pane/browser-client-hosted-download-notices'
+import { useCodexTerminalServerIsolationNotice } from '../components/terminal-pane/codex-terminal-server-isolation-notice'
+import { useVisibleHostedReviewRefresh } from '../app-shell/use-visible-hosted-review-refresh'
+import { useProfileStateSaveDelayNotice } from '../app-shell/use-profile-state-save-delay-notice'
+import { isLinuxUserAgent } from '../components/terminal-pane/pane-helpers'
+import {
+  consumePrimarySelectionNativePasteSuppression,
+  readPrimarySelectionText,
+  setPrimarySelectionEnabled,
+  setPrimarySelectionText
+} from '../lib/primary-selection'
+import {
+  findEditablePrimarySelectionPasteTarget,
+  pastePrimarySelectionTextIntoTarget,
+  type EditablePrimarySelectionPasteTarget
+} from '../lib/primary-selection-paste'
+import { readCurrentPrimarySelectionText } from '../lib/primary-selection-capture'
 import { useAppStartupHydration } from '../app-shell/use-app-startup-hydration'
 import { useDocumentAppearance } from '../app-shell/use-document-appearance'
 import { useRuntimeGraphSync } from '../app-shell/use-runtime-graph-sync'
@@ -168,9 +201,142 @@ function Providers({ children }: { children: React.ReactNode }): React.JSX.Eleme
   )
 }
 
+// Owner ruling 2026-11-17 ("Limit the hook to Orca panes"): Orca's primary-selection hook listens on the whole document,
+// so in the Theia document it cancelled the native middle-click paste into every Theia text field and pasted Orca's own
+// captured text instead. This is that hook with each listener that cancels or pastes acting only on events inside a hosted
+// pane root (mountPane's container); the capture, the paste and the terminal's native-paste guard are Orca's functions.
+// The capture stays document-wide and only reads, so a hosted terminal pastes the last selection in this document.
+const PANE_ROOT_SELECTOR = '[data-pb-orca-pane-root]'
+const PRIMARY_SELECTION_PENDING_TARGET_TTL_MS = 750
+
+type Listener = [type: string, listener: (event: never) => void, capture: boolean]
+
+function inPaneRoot(target: EventTarget | null): boolean {
+  const element = target instanceof Element ? target : target instanceof Node ? target.parentElement : null
+  return element?.closest(PANE_ROOT_SELECTOR) != null
+}
+
+function suppressEvent(event: Event): void {
+  event.preventDefault()
+  event.stopPropagation()
+  event.stopImmediatePropagation()
+}
+
+function usePanePrimarySelectionPaste(enabled: boolean): void {
+  React.useEffect(() => {
+    setPrimarySelectionEnabled(enabled)
+    // As Orca's: the opt-out blocks native middle-click paste on Linux only, and installs nothing elsewhere.
+    if (!enabled && !isLinuxUserAgent()) return
+    let pending: EditablePrimarySelectionPasteTarget | null = null
+    let pendingUntil = 0
+    let captureTimer: number | null = null
+
+    const scheduleCapture = (): void => {
+      if (captureTimer !== null) window.clearTimeout(captureTimer)
+      captureTimer = window.setTimeout(() => {
+        captureTimer = null
+        const text = readCurrentPrimarySelectionText()
+        if (text) setPrimarySelectionText(text)
+      }, 100)
+    }
+    const onMouseDown = (event: MouseEvent): void => {
+      const target = event.button === 1 && inPaneRoot(event.target) ? findEditablePrimarySelectionPasteTarget(event.target) : null
+      if (target) {
+        pending = target
+        pendingUntil = Date.now() + PRIMARY_SELECTION_PENDING_TARGET_TTL_MS
+      }
+    }
+    const onPasteInput = (event: Event): void => {
+      const target = event.target
+      if (!inPaneRoot(target) || (event instanceof InputEvent && event.inputType !== 'insertFromPaste')) return
+      if (pending && Date.now() <= pendingUntil && target instanceof Node && pending.contains(target)) {
+        suppressEvent(event)
+        return
+      }
+      // A terminal's own middle-click paste arms this once; consume it on xterm's surface so the native paste is not doubled.
+      const terminal = target instanceof Element && (target.classList.contains('xterm-helper-textarea') || target.closest('.xterm') !== null)
+      if (terminal && consumePrimarySelectionNativePasteSuppression()) suppressEvent(event)
+    }
+    const onMouseUp = (event: MouseEvent): void => {
+      const target = pending
+      pending = null
+      if (event.button !== 1) return
+      if (!enabled) {
+        if (inPaneRoot(event.target)) event.preventDefault()
+        return
+      }
+      if (!target || Date.now() > pendingUntil) return
+      suppressEvent(event)
+      const point = { clientX: event.clientX, clientY: event.clientY }
+      void readPrimarySelectionText().then((text) => {
+        // The read is async: paste only while the original target still holds focus.
+        if (text && target.isConnected && target.contains(target.ownerDocument.activeElement)) {
+          void pastePrimarySelectionTextIntoTarget(target, text, point).catch(() => {})
+        }
+      })
+    }
+    const onAuxClick = (event: MouseEvent): void => {
+      if (event.button !== 1 || !inPaneRoot(event.target)) return
+      if (!enabled) event.preventDefault()
+      else if (findEditablePrimarySelectionPasteTarget(event.target)) suppressEvent(event)
+    }
+
+    // Orca's order: the capture's mouseup listener before the one that may stop the event.
+    const captureListeners: Listener[] = enabled
+      ? [['selectionchange', scheduleCapture, false], ['mouseup', scheduleCapture, true], ['keyup', scheduleCapture, true]]
+      : []
+    const listeners: Listener[] = [
+      ...captureListeners,
+      ['mousedown', onMouseDown, true],
+      ['beforeinput', onPasteInput, true],
+      ['paste', onPasteInput, true],
+      ['mouseup', onMouseUp, true],
+      ['auxclick', onAuxClick, true]
+    ]
+    for (const [type, listener, capture] of listeners) document.addEventListener(type, listener as EventListener, capture)
+    return () => {
+      setPrimarySelectionEnabled(false)
+      if (captureTimer !== null) window.clearTimeout(captureTimer)
+      for (const [type, listener, capture] of listeners) document.removeEventListener(type, listener as EventListener, capture)
+    }
+  }, [enabled])
+}
+
+/** Orca's useAppShellServices (app-shell/use-app-shell-services.ts) with its primary-selection hook scoped to the hosted
+ * panes. orca-pane-entry clause l derives Orca's call list at check time and requires this one to match it. */
+function useHostedAppShellServices(): void {
+  const workspaceSessionReady = useAppStore((s) => s.workspaceSessionReady)
+  const persistedUIReady = useAppStore((s) => s.persistedUIReady)
+  const primarySelectionMiddleClickPaste = useAppStore((s) =>
+    resolvePrimarySelectionMiddleClickPaste(s.settings?.primarySelectionMiddleClickPaste)
+  )
+
+  useClosedEditorTabCleanup()
+  useRadixBodyPointerEventsRecovery()
+  useLocalStructuredSessionTabsSync()
+  useHostStructuredAgentsSync()
+  useLegacyChatRenameMigration()
+  useHostModelCatalogSnapshotsSync()
+  useIpcEvents()
+  useProfileStateSaveDelayNotice()
+  useRemoteRuntimeRecoveryTriggers()
+  useVisibleHostedReviewRefresh({ enabled: workspaceSessionReady })
+  useTerminalViewerColorPublication()
+  useAutomationDispatchEvents()
+  useReadOnScreenAttention()
+  useAppMenuPaste()
+  useAppMenuSelectionActions()
+  useLargeTextControlPaste()
+  usePanePrimarySelectionPaste(primarySelectionMiddleClickPaste)
+  useOsc52ClipboardDefaultOnNotice(persistedUIReady)
+  useBrowserIdentityMigrationNotice()
+  useBrowserClientHostedDownloadNotices()
+  useCodexTerminalServerIsolationNotice()
+}
+
 /** The startup hooks App runs, minus its window chrome (P64-04, Pattern 3). */
 function Services(): null {
-  useAppShellServices()
+  useHostedAppShellServices()
   useAppStartupHydration(noop)
   useAppSessionPersistence()
   useRuntimeGraphSync()

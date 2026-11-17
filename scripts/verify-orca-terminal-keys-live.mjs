@@ -35,6 +35,14 @@
 //     stage j does); the check then cancels and closes the terminal through the
 //     CLI. While theia/extensions/orca-panes is absent this stage prints its
 //     named SKIP.
+//  2b. Paste (owner ruling 2026-11-17, "Limit the hook to Orca panes"): a second
+//     CLI terminal prints a token alone on its cleared first row (the command
+//     line holds only its halves); a trusted drag across that row selects it and
+//     a trusted middle-click in the terminal must paste it there exactly once
+//     (orcad's read holds it printed + 1), with no system-selection text in the
+//     PTY. Then, with a sentinel on the system selection, a trusted middle-click
+//     into a contenteditable in the Theia document must insert exactly the
+//     sentinel: Orca's selection paste acts only inside its panes.
 //  3. The t<n> and web tabs are measured again and each key's effect must
 //     equal the control.
 //  Why an in-session control stands in for P63-25's control taken before the
@@ -215,6 +223,21 @@ export function orcaStageVerdict(obs) {
     return fails;
 }
 
+/** Stage 2b. obs.paste: { token, sentinel, tab, printed, count, terminalSentinel, clip, theia }. */
+export function pasteVerdict(obs) {
+    const p = obs.paste;
+    if (!p) return ['paste leg not measured'];
+    if (!p.tab) return ['paste leg: the CLI-created paste terminal produced no hosted widget'];
+    if (!p.printed) return ['paste leg: the token the paste terminal printed never reached orcad\'s terminal read, so a paste count proves nothing'];
+    const fails = [];
+    const pasted = p.count - p.printed;
+    if (pasted !== 1) fails.push(`paste leg: a middle-click in the hosted Orca terminal after selecting its token pasted it ${pasted} time(s), want once (Orca's selection paste in its own terminal)`);
+    if (p.terminalSentinel) fails.push('paste leg: the system selection reached the hosted Orca terminal\'s PTY');
+    if (p.clip !== 'ok') fails.push(`paste leg: NOT SCORED -- the system selection could not be written (${p.clip})`);
+    else if ((p.theia ?? '').trim() !== p.sentinel) fails.push(`paste leg: a middle-click into a Theia editable inserted ${JSON.stringify(p.theia)}, not the system selection ${JSON.stringify(p.sentinel)} (Orca's selection paste must act only in its panes)`);
+    return fails;
+}
+
 const sameEffect = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 /** Stage 3. obs: { keys, control: { term, web }, after: { term, web } }. */
 export function repeatVerdict(obs) {
@@ -259,6 +282,71 @@ async function effectOf(ctx, spec, recorderFile) {
     const effect = { tabDelta: after.ids.length - before.ids.length, activeChanged: after.active !== before.active };
     if (recorderFile) effect.bytes = (read(recorderFile) ?? '').slice(size);
     return effect;
+}
+
+/** Trusted pointer input (BiDi) in `context`, released after. */
+async function pointer(app, context, actions) {
+    await app.send('input.performActions', { context, actions: [{ type: 'pointer', id: 'pb-paste-mouse', parameters: { pointerType: 'mouse' }, actions }] });
+    await app.send('input.releaseActions', { context });
+}
+const moveTo = (x, y) => ({ type: 'pointerMove', x: Math.round(x), y: Math.round(y) });
+const middleClick = (x, y) => [moveTo(x, y), { type: 'pointerDown', button: 1 }, { type: 'pointerUp', button: 1 }, { type: 'pause', duration: 300 }];
+
+/** Chrome scope: puts `text` on the system selection, the source of a native middle-click paste; 'ok' or 'error: ...'. */
+const setSelection = (app, text) => app.evaluateIn(app.chrome, `(() => {
+    try {
+        Cc['@mozilla.org/widget/clipboardhelper;1'].getService(Ci.nsIClipboardHelper)
+            .copyStringToClipboard(${JSON.stringify(text)}, Ci.nsIClipboard.kSelectionClipboard);
+        return 'ok';
+    } catch (e) {
+        return 'error: ' + e;
+    }
+})()`);
+
+/** Stage 2b (header). Resolves pasteVerdict's observation; closes its terminal through the CLI. */
+async function pasteLeg(ctx, lib) {
+    const n = String(Date.now()).slice(-6);
+    const out = { token: `@P${n}P@`, sentinel: `pb-paste-sentinel-${n}`, tab: null, printed: 0, count: 0, terminalSentinel: false, clip: null, theia: null };
+    const before = await lib.hostedIds(ctx);
+    const t0 = Date.now();
+    const created = ctx.orca('terminal', 'create', '--worktree', ctx.worktree, '--command', `printf '\\033[2J\\033[H@P%sP@\\n' ${n}; ${PROBE_COMMAND}`);
+    const handle = created?.result?.terminal?.handle;
+    if (!handle) throw new Error('the Orca CLI created the paste terminal but returned no handle');
+    try {
+        out.tab = (await lib.waitForHostedAdd(ctx, t0, before, 30000))?.id ?? null;
+        if (!out.tab) return out;
+        const tokens = () => lib.terminalText(ctx, handle).split(out.token).length - 1;
+        out.printed = await ctx.pollFor(async () => tokens() || null, 15000, 'the printed token').catch(() => 0);
+        await ctx.focusTheiaFrame();
+        await ctx.activate(out.tab);
+        const href = await ctx.app.evaluate('location.href');
+        const theia = (await ctx.app.contexts()).find((c) => c.url === href)?.context;
+        const screen = await ctx.probe(`const w = get('ApplicationShell').getWidgetById(${JSON.stringify(out.tab)});
+            const s = w && w.node.querySelector('.xterm-screen'); if (!s) return null;
+            const r = s.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };`);
+        if (!theia || !screen) throw new Error(`harness: no Theia context (${!!theia}) or no .xterm-screen in ${out.tab} (${!!screen})`);
+        // Row 0 holds only the token, so a drag across the row selects exactly the token.
+        const y0 = screen.top + 4;
+        await pointer(ctx.app, theia, [moveTo(screen.left + 2, y0), { type: 'pointerDown', button: 0 }, moveTo((screen.left + screen.right) / 2, y0), moveTo(screen.right - 4, y0), { type: 'pointerUp', button: 0 }]);
+        await sleep(500); // Orca stores a terminal selection 100 ms after it settles
+        await pointer(ctx.app, theia, middleClick((screen.left + screen.right) / 2, (screen.top + screen.bottom) / 2));
+        await ctx.pollFor(async () => tokens() > out.printed || null, 5000, 'the pasted token').catch(() => null);
+        await sleep(700); // a second, native paste would have landed by now
+        out.count = tokens();
+        out.clip = await setSelection(ctx.app, out.sentinel);
+        const ed = await ctx.probe(`const ed = document.createElement('div');
+            ed.id = 'pb-paste-theia'; ed.contentEditable = 'true';
+            Object.assign(ed.style, { position: 'fixed', left: '40%', top: '60%', width: '240px', height: '40px', zIndex: '99999', background: '#fff' });
+            document.body.appendChild(ed); ed.focus();
+            const r = ed.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 };`);
+        await pointer(ctx.app, theia, middleClick(ed.x, ed.y));
+        await sleep(500);
+        out.theia = await ctx.probe(`const ed = document.getElementById('pb-paste-theia'); const t = ed ? ed.textContent : null; if (ed) ed.remove(); return t;`);
+        out.terminalSentinel = lib.terminalText(ctx, handle).includes(out.sentinel);
+        return out;
+    } finally {
+        try { ctx.orca('terminal', 'close', '--terminal', handle); } catch (err) { ctx.log(`note -- the CLI close of the paste terminal failed: ${err.message}`); }
+    }
 }
 
 async function waitForWidget(ctx, pattern, except, ms = 30000) {
@@ -372,6 +460,8 @@ async function run({ log }) {
                     try { ctx.orca('terminal', 'close', '--terminal', handle); } catch (err) { log(`note -- the CLI close of the probe terminal failed: ${err.message}`); }
                     hosted = null;
                 }
+                obs.paste = await pasteLeg(ctx, lib);
+                log(`note -- paste leg: token ${obs.paste.printed} printed, ${obs.paste.count} after the terminal middle-click; Theia editable ${JSON.stringify(obs.paste.theia)} (sentinel ${obs.paste.sentinel})`);
             }
             await measure(obs.after);
         } finally {
@@ -379,7 +469,7 @@ async function run({ log }) {
         }
     });
     if (stage2Fail) return { obs, panesPresent, stage2Skip: null, stage2: [stage2Fail] };
-    return { obs, panesPresent, stage2Skip, stage2: stage2Skip ? [] : orcaStageVerdict(obs) };
+    return { obs, panesPresent, stage2Skip, stage2: stage2Skip ? [] : [...orcaStageVerdict(obs), ...pasteVerdict(obs)] };
 }
 
 async function main() {
@@ -394,7 +484,7 @@ async function main() {
     const repeat = repeatVerdict(r.obs);
     say(control.length ? `control: FAIL -- ${control.join('; ')}` : 'control: PASS -- in t<n> the shell keys reached the shell, the switch keys switched with no PTY bytes and the close key closed the tab; in the web tab the switch keys switched');
     if (r.stage2Skip) say(`stage 2: SKIP -- ${r.stage2Skip}`);
-    else say(r.stage2.length ? `stage 2: FAIL -- ${r.stage2.join('; ')}` : 'stage 2: PASS -- the shell keys reached the hosted terminal\'s PTY with nothing switched; the switch keys switched the tab and reached no PTY; the close key requested Orca\'s close');
+    else say(r.stage2.length ? `stage 2: FAIL -- ${r.stage2.join('; ')}` : 'stage 2: PASS -- the shell keys reached the hosted terminal\'s PTY with nothing switched; the switch keys switched the tab and reached no PTY; the close key requested Orca\'s close; a terminal selection pasted once into that terminal and a Theia editable got the system selection');
     say(repeat.length ? `stage 3: FAIL -- ${repeat.join('; ')}` : 'stage 3: equal to the control');
     say(`note -- control effects t<n> ${JSON.stringify(r.obs.control.term)}, web ${JSON.stringify(r.obs.control.web)}`);
     const fails = overallVerdict({ control, stage2: r.stage2, stage2Skip: r.stage2Skip, panesPresent: r.panesPresent, repeat });
@@ -439,10 +529,12 @@ function fixtureObs() {
             effects: { ...Object.fromEntries(SHELL.map((k) => [k, { tabDelta: 0, activeChanged: false }])), ...Object.fromEntries(SWITCH.map((k) => [k, { tabDelta: 0, activeChanged: true }])) },
             closed: { disposed: false, dialog: true },
         },
+        paste: { token: '@P1P@', sentinel: 'pb-paste-sentinel-1', tab: 'orca-pane:term2', printed: 1, count: 2, terminalSentinel: false, clip: 'ok', theia: 'pb-paste-sentinel-1' },
         after: { term: structuredClone(term), web: structuredClone(web) },
     };
 }
-const all = (o) => overallVerdict({ control: controlVerdict(o), stage2: orcaStageVerdict(o), stage2Skip: null, panesPresent: true, repeat: repeatVerdict(o) });
+const all = (o) => overallVerdict({ control: controlVerdict(o), stage2: [...orcaStageVerdict(o), ...pasteVerdict(o)], stage2Skip: null, panesPresent: true, repeat: repeatVerdict(o) });
+const withPaste = (patch) => { const o = fixtureObs(); Object.assign(o.paste, patch); return all(o); };
 const both = (o, f) => { f(o.control); f(o.after); return o; };
 
 function runSelfTest() {
@@ -478,6 +570,15 @@ function runSelfTest() {
         ['a switch key judged with no proven PTY read', 'switch keys not judged', () => { const o = fixtureObs(); o.orca.text = o.orca.text.replace(sep(0), ''); return orcaStageVerdict(o); }],
         ['a t<n> effect differing from the control', 't<n> tab differs from the control', () => { const o = fixtureObs(); o.after.term['ctrl+tab'] = { tabDelta: 0, activeChanged: false, bytes: '\t' }; return all(o); }],
         ['a web-tab effect differing from the control', 'web tab differs from the control', () => { const o = fixtureObs(); o.after.web['ctrl+t'] = { tabDelta: 0, activeChanged: false }; return all(o); }],
+        ['no paste in the hosted terminal', 'pasted it 0 time(s), want once', () => withPaste({ count: 1 })],
+        ['a doubled paste in the hosted terminal', 'pasted it 2 time(s), want once', () => withPaste({ count: 3 })],
+        ['the system selection in the hosted terminal', 'the system selection reached the hosted Orca terminal', () => withPaste({ terminalSentinel: true })],
+        ["Orca's selection pasted into a Theia editable", 'not the system selection', () => withPaste({ theia: '@P1P@' })],
+        ['nothing pasted into a Theia editable', 'not the system selection', () => withPaste({ theia: '' })],
+        ['the token never read back', 'never reached orcad\'s terminal read', () => withPaste({ printed: 0 })],
+        ['the paste terminal never hosted', 'paste terminal produced no hosted widget', () => withPaste({ tab: null })],
+        ['the system selection unwritable', 'NOT SCORED -- the system selection could not be written', () => withPaste({ clip: 'error: x' })],
+        ['the paste leg not run', 'paste leg not measured', () => { const o = fixtureObs(); o.paste = null; return all(o); }],
         ['an import that printed a line', 'side effect on import', () => importSilenceVerdict({ exitCode: 0, stdout: 'orca-terminal-keys-live: SKIP\n', stderr: '', timedOut: false, startedProcess: false })],
         ['an import that started a process', 'side effect on import', () => importSilenceVerdict({ exitCode: 0, stdout: '', stderr: '', timedOut: false, startedProcess: true })],
     ];

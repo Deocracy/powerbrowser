@@ -6514,7 +6514,8 @@ run_own_checks() {
       # NEW (Phase 34 plan 01): the tab strip on the built binary, every scenario
       # in scripts/verify-tab-strip-live.mjs (34-01 lands menu; 34-02..05 add theirs:
       # twelve, ending with bookmark-all and modes). Needs the built binary and the
-      # last Theia app build; bookmark-all is NOT SCORED until Phase 33's bookmarkPage lands.
+      # last Theia app build; bookmark-all is NOT SCORED until Phase 33's bookmarkPage lands. middle is
+      # NOT SCORED while a built Orca pane bundle has not booted, and its Theia-frame paste must be the sentinel.
       "tab-strip-live|node $REPO_ROOT/scripts/verify-tab-strip-live.mjs"
       "tab-strip-live-self-test|node $REPO_ROOT/scripts/verify-tab-strip-live.mjs --self-test"
 
@@ -6790,7 +6791,9 @@ run_own_checks() {
       "bundled-extensions-live|node $REPO_ROOT/scripts/verify-bundled-extensions.mjs --live"
       # NEW (64-01, TAB-04/TAB-06/TERM-01, P64-25/P64-32): orca-pane-entry, the pane bundle's build gate (tracked
       # status at the pre-build baseline, no React copy after the standalone detector moved, Orca's React major.minor
-      # equal to Theia's when Theia is installed, nothing newly inlined, entry imports and C3 exports). SKIP when
+      # equal to Theia's when Theia is installed, nothing newly inlined, entry imports and C3 exports; clause l, owner
+      # ruling 2026-11-17: no bundle module calls Orca's document-wide useAppShellServices or usePrimarySelectionPaste,
+      # and the entry's pane-scoped copies match Orca's calls and listener types). SKIP when
       # the bundle is not built. orca-pane-standalone-live: the bundle on a standalone page in a PowerBrowser web
       # tab with a scratch orcad; the isolated per-leaf terminal mount (P64-32) is measured first, then every
       # hosted type mounts after the planted throwing child registers. Run under
@@ -6810,7 +6813,8 @@ run_own_checks() {
       # in a t<n> terminal and a web tab judged by D-32 (shell keys to the shell, switch keys switch tabs with no PTY
       # bytes, ctrl+shift+w closes t<n>); stage 2 in a hosted Orca terminal (shell keys reach the PTY, switch keys
       # switch and reach no PTY once the PTY read is proven, the close key requests Orca's close; a named SKIP only
-      # while theia/extensions/orca-panes is absent); then the control repeated. Run under
+      # while theia/extensions/orca-panes is absent); stage 2b: a hosted terminal's own selection pastes there once on a
+      # middle-click, and a Theia editable gets the system selection (owner ruling 2026-11-17); then the control repeated. Run under
       # flock /home/chris/coding/Power-Browser/.git/pb-live.lock with ORCA_* unset.
       "orca-terminal-keys-live|node $REPO_ROOT/scripts/verify-orca-terminal-keys-live.mjs"
       # orca-tabs-live (64-04, TAB-01..TAB-06/TERM-01, criteria 2, 3, 6): every creation path gives one hosted tab
