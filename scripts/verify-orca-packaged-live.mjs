@@ -123,6 +123,11 @@ function selfTest() {
         const timed = [{ pid: 301, ticks: '100', argv: ['node', join(pkg, 'powerbrowser/orca/out/orcad/orcad.js')] }];
         check('control an orcad under the root older than the browser is left alone', strayUnder(pkg, timed, '200').map((p) => `stray ${p.pid}`), null);
         check('stray orcad started after the browser under the root', strayUnder(pkg, timed, '50').map((p) => `stray ${p.pid}`), 'stray 301');
+        // A dev objdir run's orcad names only shared paths; its working folder is the run's <profile>/powerbrowser-orca.
+        const profile = join(tmp, 'powerbrowser-firefox-bidi-ab12');
+        const dev = (pid, cwd) => ({ pid, ticks: '100', argv: ['node', join(REPO_ROOT, 'upstream/../orca/out/orcad/orcad.js')], cwd });
+        check('control an orcad working in a sibling run\'s profile is left alone', strayUnder(profile, [dev(401, `${profile}9/powerbrowser-orca`)], '50').map((p) => `stray ${p.pid}`), null);
+        check('stray orcad working in the run\'s deleted profile', strayUnder(profile, [dev(402, `${profile}/powerbrowser-orca (deleted)`)], '50').map((p) => `stray ${p.pid}`), 'stray 402');
     } finally {
         rmSync(tmp, { recursive: true, force: true });
     }

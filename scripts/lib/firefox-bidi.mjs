@@ -25,7 +25,7 @@ import { join, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
-import { existsSync, createWriteStream, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, createWriteStream, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { aliasPathFor, bridgeDirFor, dataRootFor, nodePlatform } from '../../powerbrowser/shell/OrcaEnv.sys.mjs';
 
@@ -289,12 +289,14 @@ export function extractionRootOf(binPath, tmp = tmpdir()) {
     return join(resolve(tmp), first);
 }
 
-/** procs: [{ pid, argv, ticks }]. Those with an argument under root that started at or after `since` (start ticks; null: any). */
+/** procs: [{ pid, argv, cwd, ticks }]. Those with an argument or working folder under root that started at or after `since` (start ticks; null: any). */
 export function strayUnder(root, procs, since = null) {
-    return procs.filter((p) => p.argv.some((a) => a.startsWith(`${root}/`)) && (since === null || Number(p.ticks) >= Number(since)));
+    const under = (path) => typeof path === 'string' && path.startsWith(`${root}/`);
+    return procs.filter((p) => (p.argv.some(under) || under(p.cwd)) && (since === null || Number(p.ticks) >= Number(since)));
 }
 
 const argvOf = (pid) => { try { return readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean); } catch { return []; } };
+const cwdOf = (pid) => { try { return readlinkSync(`/proc/${pid}/cwd`); } catch { return ''; } };
 
 /** Stops every process strayUnder(root, <all processes>, since) names: SIGTERM, up to 10 s, then SIGKILL. Returns the count. */
 export async function stopStrays(root, { since = null, label = 'firefox-bidi' } = {}) {
@@ -302,14 +304,14 @@ export async function stopStrays(root, { since = null, label = 'firefox-bidi' } 
     let names;
     try { names = readdirSync('/proc'); } catch { return 0; }
     const procs = names.filter((n) => /^\d+$/.test(n) && Number(n) !== process.pid)
-        .map((n) => ({ pid: Number(n), argv: argvOf(Number(n)), ticks: startTicks(Number(n)) })).filter((p) => p.ticks !== null);
+        .map((n) => ({ pid: Number(n), argv: argvOf(Number(n)), cwd: cwdOf(Number(n)), ticks: startTicks(Number(n)) })).filter((p) => p.ticks !== null);
     const found = strayUnder(root, procs, since);
     if (!found.length) return 0;
     for (const p of found) signalIdentity(p.pid, p.ticks, 'SIGTERM');
     const until = Date.now() + 10000;
     while (Date.now() < until && found.some((p) => startTicks(p.pid) === p.ticks)) await new Promise((r) => setTimeout(r, 250));
     for (const p of found) signalIdentity(p.pid, p.ticks, 'SIGKILL');
-    console.log(`${label}: stopped ${found.length} process(es) left running from the extracted package ${root}`);
+    console.log(`${label}: stopped ${found.length} process(es) left running under ${root}`);
     return found.length;
 }
 
@@ -684,7 +686,7 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
         child.once('exit', () => launchedPids.delete(child.pid));
     }
     const pkgRoot = extractionRootOf(binPath);
-    const launchTicks = pkgRoot && child.pid ? (await import('../verify-orca-hidden-electron.mjs')).startTicks(child.pid) : null;
+    const launchTicks = child.pid ? (await import('../verify-orca-hidden-electron.mjs')).startTicks(child.pid) : null;
     if (stdoutSink) {
         child.stdout.pipe(stdoutSink);
     }
@@ -711,7 +713,10 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
                 child.once('exit', () => { clearTimeout(timer); resolve(); });
             });
         }
-        if (pkgRoot && launchTicks !== null) await stopStrays(pkgRoot, { since: launchTicks });
+        // The harness's SIGTERM kills PowerBrowser outright (it exits by the signal; no quit blocker runs), so OrcaService
+        // never stops orcad. orcad, its terminal daemon and the daemon's watcher work in <profile>/powerbrowser-orca (a dev
+        // run names only shared paths in argv), and a packaged run's also name its extraction root (WINDOWS 54).
+        if (launchTicks !== null) for (const root of [pkgRoot, profileDir].filter(Boolean)) await stopStrays(root, { since: launchTicks });
         if (stdoutSink) {
             await new Promise(resolve => stdoutSink.end(resolve));
         }
