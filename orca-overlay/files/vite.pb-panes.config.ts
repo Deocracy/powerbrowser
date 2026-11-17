@@ -88,6 +88,10 @@ export default mergeConfig(base, {
     emptyOutDir: true,
     outDir: resolve(process.env.PB_PANES_OUT || 'out/web/assets/pb-panes'),
     cssCodeSplit: false,
+    // No <link rel=modulepreload> per dynamic import: the host imports the entry with no HTML preload links, so the
+    // helper linked deps the entry had already imported, and Gecko fires 'error' on a modulepreload whose module is in
+    // the module map (169 at first boot, gate 2026-11-17). The bundle is served on loopback; preloading buys nothing.
+    modulePreload: false,
     rollupOptions: {
       input: { 'pb-panes': resolve('src/renderer/src/pb/pb-pane-mount.tsx') },
       preserveEntrySignatures: 'exports-only',
