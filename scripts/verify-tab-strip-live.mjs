@@ -611,6 +611,9 @@ async function middle({ app, pages, expect, plant }) {
     const sentinel = `pb-strip-sentinel-${Date.now()}`;
     const clip = await setSelection(app, sentinel);
     expect(clip === 'ok', `middle: NOT SCORED -- the selection clipboard could not be written (${clip})`);
+    // A BiDi click moves no chrome focus: while the page overlay holds it, Gecko fires the frame editable's paste event
+    // but inserts nothing, so the frame is focused first, as a real click would focus it.
+    expect(await focusTheiaFrame(app) === true, 'middle: NOT SCORED -- chrome focus could not be put on the Theia frame');
     await pointer(app, theia, middleClick(setup.editable.x, setup.editable.y));
     await pointer(app, overlay, middleClick(pageEditable.x, pageEditable.y));
     const controls = await step(app, 'middle: positive controls', "return { frame: S.framePaste.slice(), text: document.getElementById('pb-paste-frame').textContent };");
