@@ -22,7 +22,8 @@ import { inject, injectable, postConstruct } from '@theia/core/shared/inversify'
 import { Message } from '@theia/core/shared/@lumino/messaging';
 import { ReactWidget } from '@theia/core/lib/browser/widgets/react-widget';
 import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
-import { ORCA_TERMINAL_FOCUS_KEY, OrcaPaneOptions } from '../common/orca-panes-protocol';
+import { ApplicationShell } from '@theia/core/lib/browser/shell/application-shell';
+import { ORCA_TERMINAL_FOCUS_KEY, OrcaPaneActivity, OrcaPaneOptions } from '../common/orca-panes-protocol';
 import { OrcaPaneBundle } from './orca-pane-bundle';
 import { ORCA_PANE_WIDGET_ID_PREFIX } from './orca-pane-routes';
 import { OrcaFailurePage } from './failure/orca-failure-page';
@@ -51,6 +52,21 @@ export class OrcaPaneWidget extends ReactWidget {
 
     @inject(OrcaHostingStatus)
     protected readonly hostingStatus: OrcaHostingStatus;
+
+    @inject(ApplicationShell)
+    protected readonly shell: ApplicationShell;
+
+    /**
+     * Owner ruling 2026-11-17 ("Fix now"): Orca takes focus in this pane only while this is Theia's active widget (the user
+     * activated its tab, ran a command that activates it, or clicked inside it); being shown or created never moves focus.
+     */
+    protected readonly activity: OrcaPaneActivity = {
+        isActive: () => this.shell.activeWidget === this,
+        onDidChange: listener => {
+            const subscription = this.shell.onDidChangeActiveWidget(() => listener());
+            return () => subscription.dispose();
+        },
+    };
 
     @postConstruct()
     protected init(): void {
@@ -125,7 +141,7 @@ export class OrcaPaneWidget extends ReactWidget {
         const { kind, worktreeId, tabId, paneKey } = this.options;
         this.bundle.ready().then(api => {
             if (!this.isDisposed) {
-                this.unmount = api.mountPane(host, { kind, worktreeId, tabId, paneKey });
+                this.unmount = api.mountPane(host, { kind, worktreeId, tabId, paneKey }, this.activity);
             }
         }).catch(() => { /* the bundle logged its failed step once */ });
     }

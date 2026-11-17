@@ -87,11 +87,18 @@ export interface OrcaWorktree {
     path: string;
 }
 
+/** Whether a hosted pane's widget is Theia's active widget; the bundle passes it to Orca as its focused-group flag. */
+export interface OrcaPaneActivity {
+    isActive(): boolean;
+    onDidChange(listener: () => void): () => void;
+}
+
 /** C3: the bundle's named exports this extension calls (orca-pane-routes compares them with the entry's exports). */
 export interface OrcaPaneBundleApi {
-    bootstrap(options: { pairing: string }): Promise<void>;
+    /** The two primary-selection fields: the user's Middle-click Paste from Selection choice, kept in the profile. */
+    bootstrap(options: { pairing: string; rememberedPrimarySelectionPaste?: boolean; rememberPrimarySelectionPaste?: (value: boolean) => void }): Promise<void>;
     subscribePanes(listener: (panes: OrcaPaneRecord[]) => void): () => void;
-    mountPane(element: HTMLElement, pick: OrcaPanePick): () => void;
+    mountPane(element: HTMLElement, pick: OrcaPanePick, activity?: OrcaPaneActivity): () => void;
     closePane(pick: { worktreeId: string; tabId: string; paneKey: string | null }): void;
     createTerminal(worktreeId: string): Promise<void>;
     createChat(worktreeId: string): Promise<void>;

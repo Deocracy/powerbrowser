@@ -593,19 +593,22 @@ const HOSTED_TERMINAL_SHORTCUT_POLICY: TerminalShortcutPolicy = 'terminal-first'
 const HOSTED_TERMINAL_RELEASED_ACTIONS: readonly KeybindingActionId[] = ['terminal.focusPreviousPane', 'terminal.focusNextPane']
 // Owner ruling 2026-11-17 ("Preset it ON on Linux, in memory"): Orca's web client stores Middle-click Paste from Selection
 // off in a browser (its default reads process.platform), so on Linux hosted terminals start with it on, set like the policy
-// above. The user's own switch in Orca's hosted Settings wins for the session; after a reload or restart the preset applies
-// again, because the off Orca stored is indistinguishable from its default.
+// above. The user's own switch in Orca's hosted Settings wins for the session. Owner ruling 2026-11-17 ("Remember my 'off'"):
+// Orca keeps its settings in this document's localStorage, whose origin changes at every launch, so PowerBrowser records the
+// user's last write in its profile (orca-panes passes it to bootstrap) and presets that value instead of on.
 const PRIMARY_SELECTION_PASTE_KEY = 'primarySelectionMiddleClickPaste' satisfies keyof GlobalSettings
 const PRESET_PRIMARY_SELECTION_PASTE = isLinuxUserAgent()
 let userChosePrimarySelectionPaste = false
+let rememberedPrimarySelectionPaste: boolean | undefined
 
 function hostedTerminalKeysPatch(state: State): Partial<State> | null {
   const patch: Partial<State> = {}
   if (state.settings && state.settings.terminalShortcutPolicy !== HOSTED_TERMINAL_SHORTCUT_POLICY) {
     patch.settings = { ...state.settings, terminalShortcutPolicy: HOSTED_TERMINAL_SHORTCUT_POLICY }
   }
-  if (PRESET_PRIMARY_SELECTION_PASTE && !userChosePrimarySelectionPaste && state.settings && state.settings[PRIMARY_SELECTION_PASTE_KEY] !== true) {
-    patch.settings = { ...(patch.settings ?? state.settings), [PRIMARY_SELECTION_PASTE_KEY]: true }
+  const preset = rememberedPrimarySelectionPaste ?? true
+  if (PRESET_PRIMARY_SELECTION_PASTE && !userChosePrimarySelectionPaste && state.settings && state.settings[PRIMARY_SELECTION_PASTE_KEY] !== preset) {
+    patch.settings = { ...(patch.settings ?? state.settings), [PRIMARY_SELECTION_PASTE_KEY]: preset }
   }
   if (HOSTED_TERMINAL_RELEASED_ACTIONS.some((id) => state.keybindings?.[id]?.length !== 0)) {
     const released: KeybindingOverrides = {}
@@ -624,12 +627,17 @@ function hostedTerminalKeys(): void {
   useAppStore.subscribe((state) => apply(state))
 }
 
-/** Ends the preset once the user writes the switch (Orca's InputPane, through the host's settings API); passes each update on unchanged. */
-function observePrimarySelectionPasteChoice(): void {
+/** Ends the preset once the user writes the switch (Orca's InputPane, through the host's settings API) and has PowerBrowser
+ * remember the value; passes each update on unchanged. */
+function observePrimarySelectionPasteChoice(remember: ((value: boolean) => void) | undefined): void {
   const api = window.api.settings
   const set = api.set.bind(api)
   api.set = (updates) => {
-    if (Object.hasOwn(updates, PRIMARY_SELECTION_PASTE_KEY)) userChosePrimarySelectionPaste = true
+    if (Object.hasOwn(updates, PRIMARY_SELECTION_PASTE_KEY)) {
+      userChosePrimarySelectionPaste = true
+      const value = updates[PRIMARY_SELECTION_PASTE_KEY]
+      if (typeof value === 'boolean') remember?.(value)
+    }
     return set(updates)
   }
 }
@@ -648,7 +656,13 @@ async function step<T>(name: string, run: () => T | Promise<T>): Promise<T> {
  * API, then the hidden services root. Orca's device-key support is preset to session-no-ed25519 immediately
  * before Orca's own init (P65-17, Pitfall 6); nothing connects unless the pairing is session-only (CA-07).
  */
-export function bootstrap(options: { pairing: string }): Promise<void> {
+export function bootstrap(options: {
+  pairing: string
+  /** The user's last write of Middle-click Paste from Selection, from PowerBrowser's profile; undefined when none. */
+  rememberedPrimarySelectionPaste?: boolean
+  /** Records the user's write in PowerBrowser's profile. */
+  rememberPrimarySelectionPaste?: (value: boolean) => void
+}): Promise<void> {
   booting ??= (async () => {
     presetSessionOnly()
     await initWebDeviceKeySupport().catch(noop)
@@ -656,7 +670,8 @@ export function bootstrap(options: { pairing: string }): Promise<void> {
     if (!assertSessionOnly()) throw new Error('session-only pairing unavailable')
     await step('installWebPreloadApi', () => installWebPreloadApi())
     staleNavigationEchoes()
-    observePrimarySelectionPasteChoice()
+    rememberedPrimarySelectionPaste = options.rememberedPrimarySelectionPaste
+    observePrimarySelectionPasteChoice(options.rememberPrimarySelectionPaste)
     hostedTerminalKeys()
     await step('services root', () => {
       const host = document.createElement('div')
@@ -877,16 +892,25 @@ function Waiting(): React.JSX.Element {
   return <div className="h-full w-full bg-background" data-pb-orca-waiting="" />
 }
 
-function PaneBody({ pick }: { pick: PanePick }): React.JSX.Element | null {
+/**
+ * Owner ruling 2026-11-17 ("Fix now"): whether the hosting tab is the one the user activated (Theia's active widget). It is
+ * passed as Orca's focused-group flag (TerminalPane's isActive, NativeChatView's isFocusedGroup), which gates every focus
+ * Orca takes on mount, reveal and layout change, so a pane shown or created in the background never takes keyboard focus.
+ */
+export type PaneActivity = { isActive(): boolean; onDidChange(listener: () => void): () => void }
+const ALWAYS_ACTIVE: PaneActivity = { isActive: () => true, onDidChange: () => noop }
+
+function PaneBody({ pick, activity }: { pick: PanePick; activity: PaneActivity }): React.JSX.Element | null {
   if (!MOUNT_KINDS.includes(pick.kind)) throw new Error(`orca pane: no hosted mount for content type ${pick.kind}`)
   if ((SIDE_MOUNT_KINDS as readonly string[]).includes(pick.kind)) {
     return <SideMountBody kind={pick.kind} worktreeId={pick.worktreeId} tabId={pick.tabId} />
   }
-  return <HostedPaneBody pick={pick} />
+  return <HostedPaneBody pick={pick} activity={activity} />
 }
 
-function HostedPaneBody({ pick }: { pick: PanePick }): React.JSX.Element {
+function HostedPaneBody({ pick, activity }: { pick: PanePick; activity: PaneActivity }): React.JSX.Element {
   const { kind, worktreeId, tabId, paneKey } = pick
+  const active = React.useSyncExternalStore(activity.onDidChange, activity.isActive)
   const unified = useAppStore((state) => unifiedTabFor(state, worktreeId, tabId))
   const owner = useAppStore((state) =>
     structuredAgentSessionOwnerForTab(state, { worktreeId, executionHostId: unified?.executionHostId })
@@ -903,7 +927,7 @@ function HostedPaneBody({ pick }: { pick: PanePick }): React.JSX.Element {
         tabId={tabId}
         worktreeId={worktreeId}
         cwd={terminal.startupCwd ?? worktreePath}
-        isActive
+        isActive={active}
         isVisible
         isWorktreeActive
         isolatedPaneKey={paneKey}
@@ -924,7 +948,7 @@ function HostedPaneBody({ pick }: { pick: PanePick }): React.JSX.Element {
         sessionId={unified.entityId}
         agent={(unified.agentSessionAgent ?? 'claude') as never}
         isVisible
-        isFocusedGroup
+        isFocusedGroup={active}
         target={target}
       />
     )
@@ -938,8 +962,9 @@ function HostedPaneBody({ pick }: { pick: PanePick }): React.JSX.Element {
 let mountSequence = 0
 
 /** A separate React root on the host React for one pane; returns the unmount. A kind not in MOUNT_KINDS throws
- * inside the render naming the kind, so mountErrors records it (the standalone row's detector control). */
-export function mountPane(element: HTMLElement, pick: PanePick): () => void {
+ * inside the render naming the kind, so mountErrors records it (the standalone row's detector control). Without an
+ * activity (a check's bare mount) the pane counts as active, as Phase 64 mounted every pane. */
+export function mountPane(element: HTMLElement, pick: PanePick, activity: PaneActivity = ALWAYS_ACTIVE): () => void {
   mountSequence += 1
   const root = ReactDOMClient.createRoot(element, rootOptions(pick.kind))
   root.render(
@@ -949,7 +974,7 @@ export function mountPane(element: HTMLElement, pick: PanePick): () => void {
         data-pb-orca-pane-root={pick.kind}
         style={{ position: 'relative', display: 'flex', flexDirection: 'column', width: '100%', height: '100%', minHeight: 0 }}
       >
-        <PaneBody pick={pick} />
+        <PaneBody pick={pick} activity={activity} />
       </div>
     </Providers>
   )

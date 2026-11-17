@@ -22,6 +22,7 @@ import * as ReactDOMClient from '@theia/core/shared/react-dom/client';
 import * as jsxRuntime from '@theia/core/shared/react/jsx-runtime';
 import { inject, injectable } from '@theia/core/shared/inversify';
 import { FrontendApplicationContribution } from '@theia/core/lib/browser';
+import { ProfileStorageService } from '@powerbrowser/tab-uris/lib/browser/profile-storage';
 import {
     ORCA_PANES_ENTRY, ORCA_PANES_REACT_KEY, ORCA_PANES_ROUTE_PREFIX, ORCA_PANES_STYLE, OrcaPaneBundleApi, OrcaPanesService
 } from '../common/orca-panes-protocol';
@@ -29,6 +30,13 @@ import {
 /** C3 boot handle: where the module script stores the entry's namespace, and the window event it dispatches once after. */
 export const ORCA_PANES_MODULE_KEY = 'powerbrowser.orca-panes.module';
 export const ORCA_PANES_BOOT_EVENT = 'powerbrowser-orca-panes-module';
+
+/**
+ * Owner ruling 2026-11-17 ("Remember my 'off'"): the user's last write of Orca's Middle-click Paste from Selection switch,
+ * a boolean in the profile store beside powerbrowser.orca.paneNames. Orca keeps its own value in this document's
+ * localStorage, whose origin changes at every launch, so without this record the bundle's Linux preset came back on.
+ */
+export const ORCA_PRIMARY_SELECTION_PASTE_KEY = 'powerbrowser.orca.primarySelectionPaste';
 
 const LOG_PREFIX = '[@powerbrowser/orca-panes]';
 const LOAD_FAILED_EVENT = ORCA_PANES_BOOT_EVENT + '-failed';
@@ -40,6 +48,9 @@ export class OrcaPaneBundle implements FrontendApplicationContribution {
 
     @inject(OrcaPanesService)
     protected readonly service: OrcaPanesService;
+
+    @inject(ProfileStorageService)
+    protected readonly storage: ProfileStorageService;
 
     protected booting: Promise<OrcaPaneBundleApi> | undefined;
 
@@ -70,7 +81,15 @@ export class OrcaPaneBundle implements FrontendApplicationContribution {
                 throw new Error('the pane bundle runs a React other than Theia\'s');
             }
             step = 'bootstrap';
-            await api.bootstrap(offer);
+            const remembered = await this.storage.getData<unknown>(ORCA_PRIMARY_SELECTION_PASTE_KEY).catch(() => undefined);
+            await api.bootstrap({
+                ...offer,
+                rememberedPrimarySelectionPaste: typeof remembered === 'boolean' ? remembered : undefined,
+                rememberPrimarySelectionPaste: value => {
+                    this.storage.setData(ORCA_PRIMARY_SELECTION_PASTE_KEY, value)
+                        .catch(err => console.warn(`${LOG_PREFIX} the Middle-click Paste from Selection choice was not saved: ${(err as Error)?.message ?? 'unknown error'}`));
+                },
+            });
             return api;
         } catch (err) {
             this.failed = step;

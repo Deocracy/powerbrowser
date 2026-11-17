@@ -36,10 +36,16 @@
 //     bypass policy hard-codes (xterm-bypass-policy.ts);
 //  f. the selection-paste preset (owner ruling 2026-11-17, "Preset it ON on Linux, in memory"): the one setting
 //     Orca's Middle-click Paste switch writes (InputPane.tsx's updateSettings literal) must be the key the entry
-//     presets, to true, under isLinuxUserAgent() and !userChosePrimarySelectionPaste; Orca's default
-//     (getDefaultPrimarySelectionMiddleClickPaste) must still read process.platform, the preset's premise; the user's
-//     write is seen by one window.api.settings.set wrapper that passes each update on unchanged and records it, the
-//     entry's only reach of window.api.settings.
+//     presets, to rememberedPrimarySelectionPaste ?? true, under isLinuxUserAgent() and !userChosePrimarySelectionPaste;
+//     Orca's default (getDefaultPrimarySelectionMiddleClickPaste) must still read process.platform, the preset's premise;
+//     the user's write is seen by one window.api.settings.set wrapper that passes each update on unchanged, records it
+//     and hands the written value to its parameter (the entry's only reach of window.api.settings). "Remember my 'off'"
+//     (owner ruling 2026-11-17): bootstrap assigns the remembered value and the writer from option fields that
+//     orca-panes' bootstrap call passes (derived from the entry), reading and writing one powerbrowser.orca. profile key;
+//  g. the first-show focus gate (owner ruling 2026-11-17, "Fix now"): every prop TerminalPane's layout restore focuses
+//     with (pinned terminal-pane-layout-restore.ts) and one of the chat composer's reveal props (const revealed) are
+//     passed {active}, the entry's useSyncExternalStore over mountPane's activity; the orca-panes widget mounts with
+//     this.activity, which reads ApplicationShell's active widget and its change event.
 // Red on: the passthrough set differing from the shell keys either way; a
 // passthrough row anywhere under theia/extensions naming a switch key or the
 // close key; a switch key with no binding to NEXT_TAB or PREVIOUS_TAB, with a
@@ -94,7 +100,10 @@ const REL = {
     browserDir: 'theia/extensions/orca-panes/src/browser',
     frontend: 'theia/extensions/orca-panes/src/browser/orca-panes-frontend-module.ts',
     widget: 'theia/extensions/orca-panes/src/browser/orca-pane-widget.tsx',
-    entry: 'orca-overlay/files/src/renderer/src/pb/pb-pane-mount.tsx',
+    bundle: 'theia/extensions/orca-panes/src/browser/orca-pane-bundle.ts',
+    orcaLayoutRestore: 'orca/src/renderer/src/components/terminal-pane/terminal-pane-layout-restore.ts',
+    orcaChatReveal: 'orca/src/renderer/src/components/native-chat/use-native-chat-composer-reveal-focus.ts',
+    entry:'orca-overlay/files/src/renderer/src/pb/pb-pane-mount.tsx',
     orca: 'orca',
     orcaTypes: 'orca/src/shared/keybindings/types.ts',
     orcaEffective: 'orca/src/shared/keybindings/effective.ts',
@@ -391,7 +400,14 @@ function selectionPreset(root, entrySf) {
     walk(entrySf, (n) => { if (ts.isPropertyAssignment(n) && ts.isComputedPropertyName(n.name) && n.name.expression.getText() === 'PRIMARY_SELECTION_PASTE_KEY') assignment = n; });
     if (!assignment) fails.push(`the entry never presets ${keyLit} in its store`);
     else {
-        if (assignment.initializer.kind !== ts.SyntaxKind.TrueKeyword) fails.push(`the entry presets ${keyLit} to ${assignment.initializer.getText()}, not true`);
+        // "Remember my 'off'": the value is the user's remembered choice, else true (a local const may hold it).
+        let fn = assignment.parent;
+        while (fn && !ts.isFunctionDeclaration(fn)) fn = fn.parent;
+        const value = unwrap(ts.isIdentifier(assignment.initializer) && fn ? constInitializer(fn, assignment.initializer.text) : assignment.initializer);
+        const remembered = value && ts.isBinaryExpression(value) && value.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken && value.left.getText() === 'rememberedPrimarySelectionPaste';
+        const fallback = remembered ? value.right : value;
+        if (fallback?.kind !== ts.SyntaxKind.TrueKeyword) fails.push(`the entry presets ${keyLit} to ${value ? value.getText() : assignment.initializer.getText()}, not true`);
+        if (!remembered) fails.push(`the preset ignores the user's remembered choice: it sets ${keyLit} to ${value ? value.getText() : assignment.initializer.getText()}, not rememberedPrimarySelectionPaste ?? true (${REL.entry}:${lineOf(entrySf, assignment)})`);
         let cond = assignment.parent;
         while (cond && !ts.isIfStatement(cond)) cond = cond.parent;
         const text = cond ? cond.expression.getText() : '';
@@ -408,16 +424,63 @@ function selectionPreset(root, entrySf) {
     });
     if (!observer) return { fails: [...fails, `no observer of the user's switch: the entry assigns no window.api.settings.set wrapper, so a user's off would be overwritten`], observer: null };
     const param = observer.arrow.parameters[0]?.name.getText();
+    // "Remember my 'off'": the observer function's own parameter is the profile record's writer; it is called with the value written.
+    const rememberParam = observer.fn.parameters[0]?.name.getText();
     let records = false;
+    let remembers = false;
     walk(observer.arrow.body, (n) => {
         if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken && n.left.getText() === 'userChosePrimarySelectionPaste' && n.right.kind === ts.SyntaxKind.TrueKeyword) records = true;
         if (!ts.isCallExpression(n)) return;
         const callee = n.expression.getText();
         if (callee === 'Object.hasOwn') return;
+        if (rememberParam && callee === rememberParam) {
+            const arg = n.arguments[0];
+            const value = unwrap(arg && ts.isIdentifier(arg) ? constInitializer(observer.arrow, arg.text) : arg);
+            if (value && ts.isElementAccessExpression(value) && value.expression.getText() === param && value.argumentExpression.getText() === 'PRIMARY_SELECTION_PASTE_KEY') remembers = true;
+            return;
+        }
         if (n.arguments.length !== 1 || n.arguments[0].getText() !== param) fails.push(`the observer writes through the host's settings API (${REL.entry}:${lineOf(entrySf, n)}: ${n.getText().slice(0, 80)}); it must pass each update on unchanged`);
     });
     if (!records) fails.push(`the user's write never ends the preset: the observer (${REL.entry}:${lineOf(entrySf, observer.arrow)}) does not set userChosePrimarySelectionPaste = true`);
+    if (!remembers) fails.push(`the user's write is not remembered: the observer (${REL.entry}:${lineOf(entrySf, observer.arrow)}) does not call its parameter ${rememberParam ?? '(none)'} with ${param}[PRIMARY_SELECTION_PASTE_KEY]`);
+    // bootstrap hands the observer and the preset the two option fields orca-panes must pass.
+    const passed = { remember: null, remembered: null };
+    walk(entrySf, (n) => {
+        if (ts.isCallExpression(n) && callName(n) === observer.fn.name?.getText() && n.arguments[0] && ts.isPropertyAccessExpression(n.arguments[0])) passed.remember = n.arguments[0].name.getText();
+        if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken && n.left.getText() === 'rememberedPrimarySelectionPaste' && ts.isPropertyAccessExpression(n.right)) passed.remembered = n.right.name.getText();
+    });
+    if (!passed.remember) fails.push(`the user's write is not remembered: bootstrap passes ${observer.fn.name?.getText()} no option field to write the profile record with`);
+    if (!passed.remembered) fails.push(`the remembered choice is never read: bootstrap assigns rememberedPrimarySelectionPaste from no option field`);
+    if (existsSync(join(root, REL.bundle))) fails.push(...rememberedRecord(root, Object.values(passed).filter(Boolean)));
     return { fails, key, observer: { contains: (node) => node.pos >= observer.fn.pos && node.end <= observer.fn.end } };
+}
+
+/**
+ * "Remember my 'off'", the orca-panes half: OrcaPaneBundle's bootstrap call passes every option field the entry reads for the
+ * choice (`fields`, derived from the entry), and the record it reads before bootstrap is the record it writes on a choice,
+ * one key in the profile store (getData and setData of the same key, a powerbrowser.orca. string).
+ */
+function rememberedRecord(root, fields) {
+    const fails = [];
+    const sf = parse(REL.bundle, readFileSync(join(root, REL.bundle), 'utf8'));
+    let call = null;
+    const keys = { getData: [], setData: [] };
+    walk(sf, (n) => {
+        if (!ts.isCallExpression(n) || !ts.isPropertyAccessExpression(n.expression)) return;
+        const name = n.expression.name.getText();
+        if (name === 'bootstrap' && n.arguments[0] && ts.isObjectLiteralExpression(n.arguments[0])) call = n;
+        if (name in keys && /\bstorage\b/.test(n.expression.expression.getText())) keys[name].push(n.arguments[0]);
+    });
+    if (!call) return [`orca-panes never boots the bundle with an options object (${REL.bundle}: no bootstrap({ ... }) call)`];
+    const props = propsOf(call.arguments[0]);
+    for (const field of fields) if (!(field in props)) fails.push(`orca-panes does not pass ${field}, which the entry's bootstrap reads for the remembered choice (${REL.bundle}:${lineOf(sf, call)})`);
+    const keyText = (node) => { const lit = stringOf(node) ?? (node && ts.isIdentifier(node) ? stringOf(unwrap(constInitializer(sf, node.text))) : undefined); return lit; };
+    const read = keys.getData.map(keyText);
+    const written = keys.setData.map(keyText);
+    if (read.length !== 1 || written.length !== 1) fails.push(`orca-panes reads ${read.length} and writes ${written.length} profile record(s) in ${REL.bundle}, want one of each for the choice`);
+    else if (read[0] === undefined || read[0] !== written[0]) fails.push(`orca-panes writes the choice under ${JSON.stringify(written[0])} but reads ${JSON.stringify(read[0])} at boot, so the user's choice is never read back`);
+    else if (!read[0].startsWith('powerbrowser.orca.')) fails.push(`the choice's profile record '${read[0]}' is not a powerbrowser.orca. key`);
+    return fails;
 }
 
 /** Resolves { fails, policy, active: [{ id, keys }], ownerItems: [{ key, id }], released }. */
@@ -587,8 +650,73 @@ export function check(root) {
         out.released = o.released;
         out.note = o.active.map((a) => `${a.id} ${a.keys.join('/')}`).join(', ');
         out.ownerItems = o.ownerItems;
+        if (!o.fails.length) fails.push(...focusGate(root, panesPresent));
     }
     return out;
+}
+
+/**
+ * g. The first-show focus gate (owner ruling 2026-11-17, "Fix now"). From the pinned Orca: the props TerminalPane's layout
+ * restore focuses with (each `focus:` value of its setActivePane calls and replayTerminalLayout's focus argument) and the
+ * props the chat composer's reveal claim is gated on (`const revealed = ...`). The entry must pass every terminal focus prop,
+ * and at least one of the chat reveal props, as the pane's activity (`active`, read with useSyncExternalStore from mountPane's
+ * activity), never a bare true; with orca-panes present, the widget must mount with its activity, read from Theia's active widget.
+ */
+function focusGate(root, panesPresent) {
+    const fails = [];
+    for (const rel of [REL.orcaLayoutRestore, REL.orcaChatReveal]) if (!existsSync(join(root, rel))) fails.push(`${rel} is missing while ${REL.orca}/ is present`);
+    if (fails.length) return fails;
+    const read = (rel) => readFileSync(join(root, rel), 'utf8');
+    const terminalFlags = new Set();
+    walk(parse(REL.orcaLayoutRestore, read(REL.orcaLayoutRestore)), (n) => {
+        if (!ts.isCallExpression(n)) return;
+        if (callName(n) === 'replayTerminalLayout' && n.arguments[2] && ts.isIdentifier(n.arguments[2])) terminalFlags.add(n.arguments[2].text);
+        if (callName(n) === 'setActivePane' && n.arguments[1] && ts.isObjectLiteralExpression(n.arguments[1])) {
+            const focus = propsOf(n.arguments[1]).focus;
+            if (focus && ts.isIdentifier(focus)) terminalFlags.add(focus.text);
+        }
+    });
+    const chatFlags = new Set();
+    const revealed = constInitializer(parse(REL.orcaChatReveal, read(REL.orcaChatReveal)), 'revealed');
+    if (revealed) walk(revealed, (n) => { if (ts.isIdentifier(n)) chatFlags.add(n.text); });
+    if (!terminalFlags.size) fails.push(`source moved: no focus flag of TerminalPane's first pane found in ${REL.orcaLayoutRestore} (replayTerminalLayout's third argument, setActivePane's focus)`);
+    if (!chatFlags.size) fails.push(`source moved: no const revealed in ${REL.orcaChatReveal}`);
+    if (fails.length) return fails;
+
+    const entrySf = parse(REL.entry, read(REL.entry));
+    const activeInit = unwrap(constInitializer(entrySf, 'active'));
+    if (!activeInit || !ts.isCallExpression(activeInit) || callName(activeInit) !== 'useSyncExternalStore' || !/\bactivity\b/.test(activeInit.getText())) {
+        fails.push(`the entry reads no pane activity: const active is ${activeInit ? activeInit.getText() : 'missing'}, not useSyncExternalStore over mountPane's activity`);
+    }
+    const attrs = (tag) => {
+        let found = null;
+        walk(entrySf, (n) => { if ((ts.isJsxSelfClosingElement(n) || ts.isJsxOpeningElement(n)) && n.tagName.getText() === tag) found = n; });
+        if (!found) return null;
+        const out = {};
+        for (const a of found.attributes.properties) if (ts.isJsxAttribute(a)) out[a.name.getText()] = a.initializer ? a.initializer.getText() : 'true';
+        return out;
+    };
+    const terminal = attrs('TerminalPane');
+    const chat = attrs('NativeChatView');
+    if (!terminal) fails.push(`the entry mounts no TerminalPane`);
+    else for (const flag of terminalFlags) if (terminal[flag] !== '{active}') fails.push(`TerminalPane's ${flag} is ${terminal[flag] ?? 'unset'}, not {active}: Orca focuses a terminal's first pane on ${flag}, so a pane shown in the background takes keyboard focus`);
+    if (!chat) fails.push(`the entry mounts no NativeChatView`);
+    else if (![...chatFlags].some((flag) => chat[flag] === '{active}')) fails.push(`NativeChatView reads none of ${[...chatFlags].join(', ')} from {active}: Orca's composer claims focus on reveal, so a chat shown in the background takes keyboard focus`);
+
+    if (!panesPresent) return fails;
+    if (!existsSync(join(root, REL.widget))) return [...fails, `${REL.widget} is missing while ${REL.panes} is present`];
+    const widgetSf = parse(REL.widget, read(REL.widget));
+    let mount = null;
+    let activity = null;
+    walk(widgetSf, (n) => {
+        if (ts.isCallExpression(n) && callName(n) === 'mountPane') mount = n;
+        if (ts.isPropertyDeclaration(n) && n.name.getText() === 'activity' && n.initializer && ts.isObjectLiteralExpression(n.initializer)) activity = propsOf(n.initializer);
+    });
+    if (!mount || mount.arguments[2]?.getText() !== 'this.activity') fails.push(`the widget mounts its pane without its activity (${REL.widget}: ${mount ? mount.getText().slice(0, 90) : 'no mountPane call'}), so Orca counts it active whenever it is shown`);
+    if (!activity || !/\.activeWidget\s*===\s*this\b/.test(activity.isActive?.getText() ?? '') || !/onDidChangeActiveWidget/.test(activity.onDidChange?.getText() ?? '')) {
+        fails.push(`the widget's activity does not read Theia's active widget (${REL.widget}: isActive must be shell.activeWidget === this, onDidChange shell.onDidChangeActiveWidget)`);
+    }
+    return fails;
 }
 
 function panesHalf(root, k, d32, fails) {
@@ -667,24 +795,12 @@ export class OrcaTerminalKeybindings implements KeybindingContribution {
     }
 }
 `,
-    [REL.widget]: `import { ORCA_TERMINAL_FOCUS_KEY } from '../common/orca-panes-protocol';
-
-export class OrcaPaneWidget {
-    protected init(): void {
-        this.node.setAttribute('data-pb-orca-pane', this.options.kind);
-        if (this.options.kind === 'terminal') {
-            const scoped = this.contextKeys.createScoped(this.node);
-            scoped.createKey<boolean>(ORCA_TERMINAL_FOCUS_KEY, true);
-            this.toDispose.push(scoped);
-        }
-        this.update();
-    }
-}
-`,
 };
 
 /** The tree's own files the self-test copies (the Orca sources at the pin, the chrome-bar rows, Theia core's rows). */
-const COPIED = [REL.pageKeys, REL.shortcuts, REL.chromeKeys, REL.theiaCommon, REL.entry, REL.orcaTypes, REL.orcaEffective, REL.orcaDefs, REL.orcaPane, REL.orcaInputPane, REL.orcaPlatformDefaults];
+const COPIED = [REL.pageKeys, REL.shortcuts, REL.chromeKeys, REL.theiaCommon, REL.entry, REL.orcaTypes, REL.orcaEffective, REL.orcaDefs, REL.orcaPane, REL.orcaInputPane, REL.orcaPlatformDefaults, REL.orcaChatReveal];
+/** orca-panes' own widget and bundle loader, copied with the fixture (after the SKIP half, which runs without orca-panes). */
+const PANES_COPIED = [REL.widget, REL.bundle];
 const OTHER_EXTENSION = 'theia/extensions/plant-ext/src/browser/plant-keybindings.ts';
 const CORE3 = `${REL.orcaDefs}/definitions-core-3.ts`;
 
@@ -716,7 +832,7 @@ export const PLANTS = [
     { name: 'a released action Orca does not match in terminals', naming: "releases 'tab.close', which is not active in hosted terminals", file: REL.entry, edit: (s) => s.replace("['terminal.focusPreviousPane', 'terminal.focusNextPane']", "['terminal.focusPreviousPane', 'terminal.focusNextPane', 'tab.close']") },
     { name: 'the entry persists the policy through Orca', naming: 'calls Orca\'s updateSettings', file: REL.entry, edit: (s) => s.replace('  apply(useAppStore.getState())\n', "  apply(useAppStore.getState())\n  void useAppStore.getState().updateSettings({ terminalShortcutPolicy: 'terminal-first' })\n") },
     // The Linux selection-paste preset (owner ruling 2026-11-17, "Preset it ON on Linux, in memory").
-    { name: 'the preset set to false', naming: 'not true', file: REL.entry, edit: (s) => s.replace('[PRIMARY_SELECTION_PASTE_KEY]: true }', '[PRIMARY_SELECTION_PASTE_KEY]: false }') },
+    { name: 'the preset set to false', naming: 'not true', file: REL.entry, edit: (s) => s.replace('rememberedPrimarySelectionPaste ?? true', 'rememberedPrimarySelectionPaste ?? false') },
     { name: 'the preset on every platform', naming: 'the preset is not limited to Linux: PRESET_PRIMARY_SELECTION_PASTE is true', file: REL.entry, edit: (s) => s.replace('const PRESET_PRIMARY_SELECTION_PASTE = isLinuxUserAgent()', 'const PRESET_PRIMARY_SELECTION_PASTE = true') },
     { name: "the preset ignoring the user's choice", naming: "does not yield to the user's choice", file: REL.entry, edit: (s) => s.replace('PRESET_PRIMARY_SELECTION_PASTE && !userChosePrimarySelectionPaste && ', 'PRESET_PRIMARY_SELECTION_PASTE && ') },
     { name: 'the observer never recording the write', naming: "the user's write never ends the preset", file: REL.entry, edit: (s) => s.replace('userChosePrimarySelectionPaste = true\n', 'void 0\n') },
@@ -724,6 +840,21 @@ export const PLANTS = [
     { name: "a key Orca's switch does not write", naming: "not the setting Orca's switch writes", file: REL.entry, edit: (s) => s.replace("PRIMARY_SELECTION_PASTE_KEY = 'primarySelectionMiddleClickPaste'", "PRIMARY_SELECTION_PASTE_KEY = 'primarySelectionPaste'") },
     { name: "Orca's default no longer reading process.platform", naming: 'the preset\'s premise', file: REL.orcaPlatformDefaults, edit: (s) => s.replace("export const getDefaultPrimarySelectionMiddleClickPaste = (\n  platform = typeof process !== 'undefined' ? process.platform : ''", "export const getDefaultPrimarySelectionMiddleClickPaste = (\n  platform = navigator.userAgent") },
     { name: 'a second reach of window.api.settings', naming: 'reaches window.api.settings, the host', file: REL.entry, edit: (s) => s.replace('  apply(useAppStore.getState())\n', '  apply(useAppStore.getState())\n  void window.api.settings.getSync()\n') },
+    // "Remember my 'off'" (owner ruling 2026-11-17): the user's write is kept in the profile and preset at the next boot.
+    { name: 'the preset ignoring the remembered choice', naming: "the preset ignores the user's remembered choice", file: REL.entry, edit: (s) => s.replace('const preset = rememberedPrimarySelectionPaste ?? true', 'const preset = true') },
+    { name: 'the write never remembered', naming: "the user's write is not remembered: the observer", file: REL.entry, edit: (s) => s.replace("      if (typeof value === 'boolean') remember?.(value)\n", '') },
+    { name: 'a different value remembered', naming: "the user's write is not remembered: the observer", file: REL.entry, edit: (s) => s.replace('remember?.(value)', 'remember?.(true)') },
+    { name: 'the remembered choice never read by bootstrap', naming: 'the remembered choice is never read', file: REL.entry, edit: (s) => s.replace('    rememberedPrimarySelectionPaste = options.rememberedPrimarySelectionPaste\n', '') },
+    { name: 'orca-panes not passing the remembered choice', naming: 'orca-panes does not pass rememberedPrimarySelectionPaste', file: REL.bundle, edit: (s) => s.replace("                rememberedPrimarySelectionPaste: typeof remembered === 'boolean' ? remembered : undefined,\n", '') },
+    { name: 'the choice written under another key', naming: 'so the user\'s choice is never read back', file: REL.bundle, edit: (s) => s.replace('this.storage.setData(ORCA_PRIMARY_SELECTION_PASTE_KEY, value)', "this.storage.setData('powerbrowser.orca.other', value)") },
+    // The first-show focus gate (owner ruling 2026-11-17, "Fix now").
+    { name: 'TerminalPane mounted active', naming: "TerminalPane's isActive is true, not {active}", file: REL.entry, edit: (s) => s.replace('        isActive={active}\n', '        isActive\n') },
+    { name: 'NativeChatView mounted as the focused group', naming: 'NativeChatView reads none of', file: REL.entry, edit: (s) => s.replace('isFocusedGroup={active}', 'isFocusedGroup') },
+    { name: 'the activity not read', naming: 'the entry reads no pane activity', file: REL.entry, edit: (s) => s.replace('const active = React.useSyncExternalStore(activity.onDidChange, activity.isActive)', 'const active = true') },
+    { name: 'the widget mounting without its activity', naming: 'the widget mounts its pane without its activity', file: REL.widget, edit: (s) => s.replace('{ kind, worktreeId, tabId, paneKey }, this.activity)', '{ kind, worktreeId, tabId, paneKey })') },
+    { name: "the activity not Theia's active widget", naming: "the widget's activity does not read Theia's active widget", file: REL.widget, edit: (s) => s.replace('isActive: () => this.shell.activeWidget === this,', 'isActive: () => this.isVisible,') },
+    { name: 'Orca focusing the first pane on isVisible', naming: "TerminalPane's isVisible is true, not {active}", file: REL.orcaLayoutRestore, edit: (s) => s.replace('manager.setActivePane(restoredActivePaneId, { focus: isActive })', 'manager.setActivePane(restoredActivePaneId, { focus: deps.isVisible })').replace('const { initialLayoutRef, tabId, worktreeId, isActive, managerRef } = deps', 'const { initialLayoutRef, tabId, worktreeId, isActive, managerRef, isVisible } = deps').replace('{ focus: deps.isVisible }', '{ focus: isVisible }') },
+    { name: "Orca's reveal claim moved", naming: 'source moved: no const revealed', file: REL.orcaChatReveal, edit: (s) => s.replace('const revealed = isVisible && isFocusedGroup', 'const shown = isVisible && isFocusedGroup') },
 ];
 
 function runSelfTest() {
@@ -741,6 +872,7 @@ function runSelfTest() {
         }
         console.log(`${NAME} self-test: control without orca-panes green -- orca-panes ${skipRun.panes}`);
         for (const [rel, text] of Object.entries(FIXTURE)) { mkdirSync(dirname(join(tmp, rel)), { recursive: true }); writeFileSync(join(tmp, rel), text); }
+        for (const rel of PANES_COPIED) { mkdirSync(dirname(join(tmp, rel)), { recursive: true }); cpSync(join(REPO_ROOT, rel), join(tmp, rel)); }
         const control = check(tmp);
         if (control.fails.length || control.panes !== 'compared' || control.orca !== 'compared') { console.error(`${NAME} self-test: FAIL -- control is not green: ${control.fails.join(' | ')}`); return 1; }
         console.log(`${NAME} self-test: control green -- the tree's PAGE_KEYS, chrome-bar rows, Theia core rows and Orca sources, and a fixture orca-panes tree in C10's shape`);
