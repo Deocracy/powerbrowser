@@ -278,7 +278,9 @@ function runSelfTest() {
 // ---- --skew: the pin against the newest stock Android app (P68-16, P68-27, D-29) ----
 
 const SKEW = 'orca-mobile-skew';
-const APP_CONSTANTS_REL = 'mobile/src/transport/protocol-version.ts';
+// Old layout first, then the transport/connection/ layout (moved by mobile-android-v0.0.65).
+const APP_CONSTANTS_RELS = ['mobile/src/transport/protocol-version.ts', 'mobile/src/transport/connection/protocol-version.ts'];
+const APP_CONSTANTS_REL = APP_CONSTANTS_RELS.join(' or ');
 const PIN_CONSTANTS_REL = 'src/shared/protocol-version.ts';
 const COMPAT_REL = 'src/shared/protocol-compat.ts';
 const APP_JSON_REL = 'mobile/app.json';
@@ -345,13 +347,21 @@ export async function importAppConstants(text, label, scratch) {
     return { mobileProtocolVersion: m.MOBILE_PROTOCOL_VERSION, minCompatibleDesktopVersion: m.MIN_COMPATIBLE_DESKTOP_VERSION };
 }
 
+// The constants at whichever known layout holds them; read(rel) returns the file's text or throws when absent.
+export async function constantsAt(read, tag, scratch) {
+    for (const rel of APP_CONSTANTS_RELS) {
+        let text = '';
+        try { text = read(rel); } catch { continue; }
+        try { return await importAppConstants(text, `${rel} at ${tag}`, scratch); } catch { /* try the next layout */ }
+    }
+    return importAppConstants('', `${APP_CONSTANTS_REL} at ${tag}`, scratch);
+}
+
 // One-blob partial clone of <remote> at <tag>, then the constants file at HEAD.
 export async function appConstants(remote, tag, scratch) {
     const dir = mkdtempSync(join(scratch, 'app-'));
     execFileSync('git', ['-c', 'advice.detachedHead=false', 'clone', '-q', '--filter=blob:none', '--no-checkout', '--depth', '1', '--branch', tag, remote, dir], { stdio: ['ignore', 'pipe', 'pipe'] });
-    let text = '';
-    try { text = execFileSync('git', ['-C', dir, 'show', `HEAD:${APP_CONSTANTS_REL}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); } catch { /* reported as moved */ }
-    return importAppConstants(text, `${APP_CONSTANTS_REL} at ${tag}`, scratch);
+    return constantsAt((rel) => execFileSync('git', ['-C', dir, 'show', `HEAD:${rel}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }), tag, scratch);
 }
 
 export async function pinConstants(orcaDir) {
@@ -417,9 +427,11 @@ async function runSkewSelfTest({ orcaDir = join(REPO_ROOT, 'orca') } = {}) {
         const pin = await pinConstants(orcaDir);
         const compat = await loadCompat(orcaDir);
         // One fixture case: a listing and a constants text through the same functions the live row calls.
-        const evaluate = async (refs, text) => {
+        // files maps a layout path to its text; a bare string is the old layout's file.
+        const evaluate = async (refs, files) => {
             const app = newestAppTag(refs);
-            const v = verdictOf(compat, await importAppConstants(text, `${APP_CONSTANTS_REL} at ${app.tag}`, scratch), pin);
+            const tree = typeof files === 'string' ? { [APP_CONSTANTS_RELS[0]]: files } : files;
+            const v = verdictOf(compat, await constantsAt((rel) => { if (!(rel in tree)) throw new Error('absent'); return tree[rel]; }, app.tag, scratch), pin);
             if (v.refuses) throw new Error(`verdict ${v.kind}`);
             return { app, v };
         };
@@ -429,11 +441,15 @@ async function runSkewSelfTest({ orcaDir = join(REPO_ROOT, 'orca') } = {}) {
             console.error(`${SKEW} self-test: FAIL -- control picked ${ctl.app.tag}, ${lag.behind} behind ${lag.newest} (want mobile-android-v0.0.10, 1 behind v1.0.10: integer ordering, -rc excluded)`);
             return 1;
         }
+        const moved = await evaluate(listing, { [APP_CONSTANTS_RELS[1]]: constants(pin.desktopProtocolVersion, pin.desktopMinCompatibleMobileVersion) });
+        console.log(`${SKEW} self-test: new layout green -- ${APP_CONSTANTS_RELS[1]} found, verdict ${moved.v.kind}`);
         console.log(`${SKEW} self-test: control green -- the pin's constants against an app of the same versions: verdict ${ctl.v.kind}; newest app tag ${ctl.app.tag}; 1 tag behind v1.0.10`);
         const plants = [
             { name: 'app-needs-newer-desktop', naming: 'desktop-too-old', run: () => evaluate(listing, constants(pin.desktopProtocolVersion, pin.desktopProtocolVersion + 1)) },
             { name: 'app-older-than-pin-minimum', naming: 'mobile-too-old', run: () => evaluate(listing, constants(pin.desktopMinCompatibleMobileVersion - 1, 0)) },
             { name: 'listing-with-no-app-tag', naming: 'no mobile-android tag', run: () => evaluate(listing.filter((r) => !r.includes('mobile-android')), constants(pin.desktopProtocolVersion, 0)) },
+            { name: 'new-layout-needs-newer-desktop', naming: 'desktop-too-old', run: () => evaluate(listing, { [APP_CONSTANTS_RELS[1]]: constants(pin.desktopProtocolVersion, pin.desktopProtocolVersion + 1) }) },
+            { name: 'constants-in-neither-layout', naming: 'constants file moved', run: () => evaluate(listing, { 'mobile/src/transport/elsewhere/protocol-version.ts': constants(pin.desktopProtocolVersion, 0) }) },
             { name: 'constants-file-moved', naming: 'constants file moved', run: () => evaluate(listing, 'export const SOMETHING_ELSE = 1\n') },
         ];
         let failures = 0;
