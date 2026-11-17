@@ -41,6 +41,12 @@
 //                and holds no persisted keyed row
 //   not-gone     no restored Orca widget was disposed as gone, read after the
 //                observer's restore bound (A8)
+//   paste-choice (owner ruling 2026-11-17, "Remember my 'off'") launch 1, on the
+//                fresh profile: Orca's Middle-click Paste from Selection switch reads
+//                on on Linux, and the user turns it off in Orca's hosted Settings;
+//                launch 2: it reads off, a CLI terminal's selection middle-clicked
+//                pastes nothing, and once the user turns it on the same pastes once
+//                (the detector that the off count can go red)
 // Output names clauses and counts only; no offer, token or needle is printed.
 //
 // The launch helpers are exported for scripts/verify-orca-offer-scan.mjs.
@@ -147,6 +153,24 @@ export function pairingDomVerdict(obs) {
     if (!obs?.selectors?.length) return [`pairing-ui: source moved: no id selector derived from ${WEB_CONNECT_REL}`];
     if (!obs.detector) return ['pairing-ui: the pairing selectors matched nothing on Orca\'s own web client page, so their absence in PowerBrowser proves nothing'];
     return obs.theia ? [`pairing-ui: Orca's pairing UI is in the PowerBrowser document (${obs.theia} element(s))`] : [];
+}
+
+/**
+ * paste-choice (owner ruling 2026-11-17, "Remember my 'off'"). obs: { platform, fresh: { checked }, off: { before, checked },
+ * relaunch: { checked }, tab, printed, offCount, on: { checked }, onCount }: the switch read on a fresh profile, turned off by
+ * the user, read after the relaunch; the token counts in orcad's read after a selection and middle-click with it off, then on.
+ */
+export function pasteChoiceVerdict(obs) {
+    if (!obs) return ['paste-choice: not measured'];
+    const fails = [];
+    const wantOn = obs.platform === 'linux';
+    if (obs.fresh?.checked !== wantOn) fails.push(`paste-choice: on a fresh profile Orca's Middle-click Paste from Selection reads ${JSON.stringify(obs.fresh)}, want ${wantOn ? 'on (the Linux preset)' : "off (Orca's web default)"}`);
+    if (obs.off?.error || obs.off?.checked !== false) return [...fails, `paste-choice: NOT SCORED -- the user could not turn the switch off in launch 1 (${JSON.stringify(obs.off)})`];
+    if (obs.relaunch?.checked !== false) fails.push(`paste-choice: after the relaunch the switch reads ${JSON.stringify(obs.relaunch)}, want off: the user's off was not remembered`);
+    if (!obs.tab || !obs.printed) return [...fails, `paste-choice: NOT SCORED -- the paste terminal ${obs.tab ? 'never printed its token' : 'produced no hosted widget'}`];
+    if (obs.offCount !== obs.printed) fails.push(`paste-choice: after the relaunch, with the user's off, a terminal selection pasted ${obs.offCount - obs.printed} time(s) on a middle-click, want none`);
+    if (obs.on?.checked !== true || obs.onCount - obs.offCount !== 1) fails.push(`paste-choice: NOT SCORED -- turned on again the switch reads ${JSON.stringify(obs.on)} and the selection pasted ${obs.onCount - obs.offCount} time(s), want once, so the off count proves nothing`);
+    return fails;
 }
 
 /** Row summaries { credentialKind, ephemeral, lastSeenAt } after launch 1 and after launch 2 (CA-07, research Q1 item 3). */
@@ -384,12 +408,21 @@ async function runLive() {
     const scan = await import('./lib/orca-offer-scan.mjs');
     const selectors = pairingSelectors(read(join(REPO_ROOT, WEB_CONNECT_REL)));
     const holdMs = sourceNumber(OBSERVER_REL, 'ORCA_RESTORE_HOLD_MS');
+    const keys = await import('./verify-orca-terminal-keys-live.mjs');
+    const live = await import('./lib/pb-live-probe.mjs');
+    // The shape orca-terminal-keys-live's paste helpers read.
+    const keysCtx = (s) => ({ app: s.app, probe: s.probe, focusTheiaFrame: () => live.focusTheiaFrame(s.app),
+        activate: (id) => s.probe(`const shell = get('ApplicationShell'); await shell.activateWidget(${JSON.stringify(id)}); return await until(() => shell.activeWidget && shell.activeWidget.id === ${JSON.stringify(id)}, 5000);`) });
+    const pasteChoice = { platform: process.platform };
     await withOrcaProfile(async (session) => {
         let saved = null;
         // Launch 1.
         await session.launch(async (s) => {
             await s.connected();
             offers.push(await s.offer());
+            // paste-choice: a fresh profile reads the preset; the user turns the switch off in Orca's hosted Settings.
+            pasteChoice.fresh = await keys.setPasteSetting(keysCtx(s), null);
+            pasteChoice.off = await keys.setPasteSetting(keysCtx(s), false);
             await s.writeMarker(MARKER_KEY);
             await s.addRepository();
             const worktreeId = await s.selectWorktree();
@@ -462,6 +495,31 @@ async function runLive() {
             clauses['pairing-ui'] = pairingDomVerdict({ selectors, detector, theia });
             await sleep(Math.max(0, connectedAt + holdMs + 2000 - Date.now()));
             clauses['not-gone'] = notGoneVerdict(Object.keys(saved.identity), Object.keys(await s.identity()));
+            // paste-choice: the switch after the relaunch, then a terminal selection middle-clicked with it off and on.
+            pasteChoice.relaunch = await keys.setPasteSetting(keysCtx(s), null);
+            const href = await s.app.evaluate('location.href');
+            const theiaContext = (await s.app.contexts()).find((c) => c.url === href)?.context;
+            const n = String(Date.now()).slice(-6);
+            const token = `@R${n}R@`;
+            const ids0 = (await s.hostedWidgets()).map((w) => w.id);
+            const handles0 = s.handles();
+            s.orca('terminal', 'create', '--worktree', session.worktree, '--command', `printf '\\033[2J\\033[H@R%sR@\\n' ${n}; ${keys.PROBE_COMMAND}`);
+            pasteChoice.tab = await s.pollFor(async () => (await s.hostedWidgets()).find((w) => w.kind === 'terminal' && !ids0.includes(w.id))?.id ?? null, 30000, 'the paste terminal').catch(() => null);
+            const handle = await s.pollFor(async () => s.handles().find((h) => !handles0.includes(h)) ?? null, 10000, 'the paste terminal handle').catch(() => null);
+            const tokens = () => (handle ? s.terminalText(handle).split(token).length - 1 : 0);
+            if (pasteChoice.tab && handle && theiaContext) {
+                pasteChoice.printed = await s.pollFor(async () => tokens() || null, 15000, 'the printed token').catch(() => 0);
+                await keys.selectAndMiddleClick(keysCtx(s), theiaContext, pasteChoice.tab);
+                await sleep(1500);
+                pasteChoice.offCount = tokens();
+                pasteChoice.on = await keys.setPasteSetting(keysCtx(s), true);
+                await keys.selectAndMiddleClick(keysCtx(s), theiaContext, pasteChoice.tab);
+                await s.pollFor(async () => (tokens() > pasteChoice.offCount ? true : null), 5000, 'the pasted token').catch(() => null);
+                await sleep(700);
+                pasteChoice.onCount = tokens();
+            }
+            if (handle) { try { s.orca('terminal', 'close', '--terminal', handle); } catch { /* the quit ends it */ } }
+            clauses['paste-choice'] = pasteChoiceVerdict(pasteChoice);
             if ((await s.quit()) !== 'exited') throw new Error('launch 2 did not quit normally');
         });
         clauses.devices = deviceRowsVerdict(devicesBefore, deviceRows(session.profileDir));
@@ -481,7 +539,7 @@ async function main() {
         console.error(`${NAME}: FAIL -- harness: ${err.message}`);
         return 1;
     }
-    const order = ['dock', 'modes', 'chat', 'terminals', 'identity', 'pairing-ui', 'not-gone', 'devices', 'offer-scan'];
+    const order = ['dock', 'modes', 'chat', 'terminals', 'identity', 'pairing-ui', 'not-gone', 'paste-choice', 'devices', 'offer-scan'];
     const failed = [];
     for (const c of order) {
         const reasons = clauses[c];
@@ -500,6 +558,8 @@ async function main() {
 const tabs = (...t) => ({ type: 'tabs', tabs: t, current: t[0] ?? null });
 const split = (orientation, ...children) => ({ type: 'split', orientation, sizes: children.map(() => 1 / children.length), children });
 const DOCK = split('horizontal', tabs('pb-orca:chat1', 'pb-orca:term1'), split('vertical', tabs('pb-orca:term2'), tabs('file:///r/README', 'diff:x')));
+
+const PASTE_CHOICE = { platform: 'linux', fresh: { checked: true }, off: { before: true, checked: false }, relaunch: { checked: false }, tab: 'orca-pane:term3', printed: 1, offCount: 1, on: { before: false, checked: true }, onCount: 2 };
 
 function runSelfTest() {
     const rows = (...r) => r.map(([credentialKind, ephemeral, lastSeenAt]) => ({ credentialKind, ephemeral, lastSeenAt }));
@@ -527,6 +587,14 @@ function runSelfTest() {
         ['two new token rows', 'devices: 2 new used runtime token row(s)', () => deviceRowsVerdict(before, rows([undefined, undefined, 5], [undefined, undefined, 7], [undefined, undefined, 9]))],
         ['a persisted keyed row', 'devices: 1 persisted keyed row(s)', () => deviceRowsVerdict(before, rows([undefined, undefined, 5], [undefined, undefined, 9], ['device-key', undefined, 9]))],
         ['a restored widget disposed as gone', 'not-gone: pb-orca:term2 was disposed as gone', () => notGoneVerdict(['term1', 'term2'], ['term1'])],
+        ['paste-choice control', null, () => pasteChoiceVerdict(PASTE_CHOICE)],
+        ["the user's off forgotten by the relaunch", "the user's off was not remembered", () => pasteChoiceVerdict({ ...PASTE_CHOICE, relaunch: { checked: true } })],
+        ['a paste after the relaunch with the off', 'pasted 1 time(s) on a middle-click, want none', () => pasteChoiceVerdict({ ...PASTE_CHOICE, offCount: 2, onCount: 3 })],
+        ['a fresh profile not preset on', 'on a fresh profile', () => pasteChoiceVerdict({ ...PASTE_CHOICE, fresh: { checked: false } })],
+        ['a blind paste detector', 'so the off count proves nothing', () => pasteChoiceVerdict({ ...PASTE_CHOICE, onCount: 1 })],
+        ['the off never set', 'NOT SCORED -- the user could not turn the switch off', () => pasteChoiceVerdict({ ...PASTE_CHOICE, off: { error: 'switch not found' } })],
+        ['no paste terminal', 'NOT SCORED -- the paste terminal produced no hosted widget', () => pasteChoiceVerdict({ ...PASTE_CHOICE, tab: null })],
+        ['the clause not reached', 'paste-choice: not measured', () => pasteChoiceVerdict(undefined)],
     ];
     let failures = 0;
     let ok = 0;

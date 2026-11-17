@@ -4004,8 +4004,11 @@ run_own_checks() {
     # control chord, and the remaining active chords print as a note. Linux selection-paste preset (owner ruling
     # 2026-11-17, "Preset it ON on Linux, in memory"): the entry presets in its store the one setting Orca's switch writes,
     # to true, under isLinuxUserAgent() until the user writes it, seen by a pass-through window.api.settings.set wrapper
-    # (its only reach of window.api.settings); Orca's default must still read process.platform. orca-panes half a named
-    # SKIP only while its directory is absent. Self-test: 31 plants. orca-terminal-keys-live-self-test: D-32's and the
+    # (its only reach of window.api.settings); Orca's default must still read process.platform; "Remember my 'off'": the
+    # preset is the user's last write, kept in one powerbrowser.orca. profile record orca-panes reads at boot and writes on
+    # the choice. First-show focus gate ("Fix now"): the props Orca's terminal layout restore focuses with and one chat
+    # reveal prop are the pane's activity (Theia's active widget, passed to mountPane by the orca-panes widget). orca-panes
+    # half a named SKIP only while its directory is absent. Self-test: 44 plants. orca-terminal-keys-live-self-test: D-32's and the
     # paste and app-wide listener legs' pure verdicts over fixture observations plus a child-Node import-silence check.
     "orca-terminal-keys|node $REPO_ROOT/scripts/verify-orca-terminal-keys.mjs"
     "orca-terminal-keys-self-test|node $REPO_ROOT/scripts/verify-orca-terminal-keys.mjs --self-test"
@@ -6823,7 +6826,10 @@ run_own_checks() {
       # gets the system selection throughout, and after the user turns the switch off in Orca's hosted Settings it stays
       # off and the terminal pastes nothing; stage 2c: with Orca's checkpoint failing the Theia browser's leave check still
       # permits, 100 KiB pastes reach Theia's editor and quick input as Gecko pastes them, and after an activation in Orca's
-      # worktree palette keys typed in a Theia editor or a web tab reach no Orca terminal; then the control repeated. Run under
+      # worktree palette keys typed in a Theia editor or a web tab reach no Orca terminal; stage 2d (owner ruling 2026-11-17,
+      # "Fix now"): an Orca terminal the CLI creates and shows beside a Theia editor, and one a restored layout shows there,
+      # take none of the keys typed in the editor nor its focus; a tab click and New Orca Terminal give the terminal keyboard
+      # focus and its keys; then the control repeated. Run under
       # flock /home/chris/coding/Power-Browser/.git/pb-live.lock with ORCA_* unset.
       "orca-terminal-keys-live|node $REPO_ROOT/scripts/verify-orca-terminal-keys-live.mjs"
       # orca-tabs-live (64-04, TAB-01..TAB-06/TERM-01, criteria 2, 3, 6): every creation path gives one hosted tab
@@ -6846,7 +6852,9 @@ run_own_checks() {
       "orca-add-project-live|node $REPO_ROOT/scripts/verify-orca-add-project-live.mjs"
       # NEW (65-04, TAB-08, criterion 4; P65-23/P65-31): orca-offer-scan pairs, writes the marker, opens a hosted chat,
       # saves a Setup, quits and scans the profile for that launch's offer. orca-relaunch-restore-live saves Orca and
-      # Coding tabs in a Setup, quits, relaunches, restores and compares dock, modes, names, echo, devices and the scan.
+      # Coding tabs in a Setup, quits, relaunches, restores and compares dock, modes, names, echo, devices and the scan;
+      # paste-choice ("Remember my 'off'"): the user's off of Orca's Middle-click Paste from Selection, set in launch 1 on a
+      # fresh profile that read on, reads off after the relaunch and a terminal selection pastes nothing until it is on again.
       # Coordinator proof on the merged tree (p65-01, p65-02, p65-04); under the live lock with ORCA_* unset.
       "orca-offer-scan|node $REPO_ROOT/scripts/verify-orca-offer-scan.mjs"
       "orca-relaunch-restore-live|node $REPO_ROOT/scripts/verify-orca-relaunch-restore-live.mjs"

@@ -67,6 +67,14 @@
 //     after must all land in the editor and none in the terminal's PTY; then, with
 //     a web tab's input focused, a focus call into the terminal from the Theia
 //     document (what the helper does) must leave the typed keys in the page.
+//  2d. First-show focus (owner ruling 2026-11-17, "Fix now"). Background: keys typed into a Theia editor while the
+//     CLI creates an Orca terminal (cat -v) that is then shown beside the editor with no activation must all land in
+//     the editor, with keyboard focus still in it and nothing in the terminal's PTY; the terminal's xterm must exist
+//     (its first pane was created). Restore: the same around the dock's restoreLayout showing a never-shown CLI terminal
+//     beside the editor and the editor activated, as ApplicationShell.setLayoutData applies a stored layout. Click: a
+//     trusted click on the first terminal's tab must give it keyboard focus and its keys must reach the PTY (the read's
+//     control). Command: New Orca Terminal, run with an editor focused, must give its terminal keyboard focus and a
+//     typed marker must reach its PTY.
 //  3. The t<n> and web tabs are measured again and each key's effect must
 //     equal the control.
 //  Why an in-session control stands in for P63-25's control taken before the
@@ -343,6 +351,39 @@ export function listenersVerdict(obs) {
     return fails;
 }
 
+/**
+ * Stage 2d. obs.focusGate: { background, restore: { hidden, mounted, visible, inEditor, text, want, pty }, click: { tab, focused,
+ * reached }, command: { worktree, error, tab, focused, reached, editorText } }.
+ */
+export function focusGateVerdict(obs) {
+    const g = obs.focusGate;
+    if (!g) return ['focus gate leg not measured'];
+    const fails = [];
+    const shownLeg = (leg, what) => {
+        if (!leg) return fails.push(`focus gate: ${what} not measured`);
+        if (what === 'restore' && !leg.hidden) return fails.push('focus gate: restore NOT SCORED -- the terminal was already shown before the restored layout showed it');
+        if (!leg.mounted || !leg.visible) return fails.push(`focus gate: ${what} NOT SCORED -- the terminal never showed its xterm (mounted ${leg.mounted}, visible ${leg.visible}), so its first pane was never created`);
+        if (leg.text !== leg.want) fails.push(`focus gate: ${what}: keys typed in the Theia editor landed there as ${JSON.stringify(leg.text)}, want ${JSON.stringify(leg.want)} (the Orca terminal took focus when it was first shown)`);
+        if (!leg.inEditor) fails.push(`focus gate: ${what}: keyboard focus left the Theia editor when the Orca terminal was first shown`);
+        if (leg.pty) fails.push(`focus gate: ${what}: keys typed in the Theia editor reached the Orca terminal's PTY (${JSON.stringify(leg.pty)})`);
+    };
+    shownLeg(g.background, 'background');
+    shownLeg(g.restore, 'restore');
+    const c = g.click;
+    if (!c?.tab) fails.push('focus gate: click NOT SCORED -- the terminal\'s tab was not found to click');
+    else {
+        if (!c.focused) fails.push('focus gate: a click on the Orca terminal\'s tab did not give it keyboard focus');
+        if (!c.reached) fails.push('focus gate: keys typed after a click on the Orca terminal\'s tab did not reach its PTY');
+    }
+    const n = g.command;
+    if (!n || n.error || !n.tab) fails.push(`focus gate: New Orca Terminal produced no hosted terminal (${JSON.stringify(n)})`);
+    else {
+        if (!n.focused) fails.push('focus gate: the terminal New Orca Terminal created did not get keyboard focus');
+        if (!n.reached) fails.push('focus gate: keys typed after New Orca Terminal did not reach its PTY');
+    }
+    return fails;
+}
+
 const sameEffect = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 /** Stage 3. obs: { keys, control: { term, web }, after: { term, web } }. */
 export function repeatVerdict(obs) {
@@ -423,7 +464,7 @@ async function theiaPaste(ctx, theia, sentinel) {
 }
 
 /** Sets Orca's own switch in its hosted Settings (Orca mode's Settings part), as a user does: { before, checked } or { error }; want null only reads it: { checked }. */
-async function setPasteSetting(ctx, want) {
+export async function setPasteSetting(ctx, want) {
     const { label, section } = readPasteSetting(read(join(REPO_ROOT, INPUT_PANE_REL)), read(join(REPO_ROOT, SETTINGS_SECTIONS_REL)));
     if (!label || !section) return { error: `source moved: no switch label in ${INPUT_PANE_REL} or no input section title in ${SETTINGS_SECTIONS_REL}` };
     return ctx.probe(`const mode = document.body.getAttribute('data-pb-mode');
@@ -455,7 +496,7 @@ async function setPasteSetting(ctx, want) {
 }
 
 /** Drag-selects row 0 of a hosted terminal's screen and middle-clicks it; resolves after the paste could land. */
-async function selectAndMiddleClick(ctx, theia, tab) {
+export async function selectAndMiddleClick(ctx, theia, tab) {
     await ctx.focusTheiaFrame();
     await ctx.activate(tab);
     const screen = await ctx.probe(`const shell = get('ApplicationShell');
@@ -665,6 +706,100 @@ export async function appWideLeg(ctx, lib, pages) {
     }
 }
 
+const J = JSON.stringify;
+/** What cat -v printed after the shell's echo of the probe command: only keys that reached the PTY. */
+const catOutOf = (text) => { const i = text.lastIndexOf('exec cat -v'); return i < 0 ? '' : text.slice(i + 'exec cat -v'.length).replace(/\s+/g, ''); };
+
+/** Stage 2d (header). Resolves focusGateVerdict's observation; closes what it opened. */
+export async function focusGateLeg(ctx, lib) {
+    const out = { background: null, restore: null, command: null, click: null };
+    const href = await ctx.app.evaluate('location.href');
+    const theia = (await ctx.app.contexts()).find((c) => c.url === href)?.context;
+    if (!theia) throw new Error('harness: no BiDi context for the Theia frame');
+    const opened = [];
+    const handles = [];
+    const model = (id) => ctx.probe(`const w = get('ApplicationShell').getWidgetById(${J(id)}); return w && w.editor ? w.editor.getControl().getModel().getValue() : null;`);
+    const editor = async () => { const b = (await ctx.tabState()).ids; await ctx.command('workbench.action.files.newUntitledFile'); const id = await ctx.pollFor(async () => (await ctx.tabState()).ids.find((x) => !b.includes(x)) ?? null, 10000, 'an untitled editor'); opened.push(id); return id; };
+    const listHandles = () => { const found = new Set(); const walk = (o) => { if (o && typeof o === 'object') for (const [k, v] of Object.entries(o)) { if (k === 'handle' && typeof v === 'string') found.add(v); else walk(v); } }; walk(ctx.orca('terminal', 'list', '--worktree', ctx.worktree)); return [...found]; };
+    /** A CLI-created terminal running cat -v; the observer adds its widget in the background (never activated). */
+    const cliTerminal = async () => {
+        const ids0 = await lib.hostedIds(ctx);
+        const t0 = Date.now();
+        const handle = ctx.orca('terminal', 'create', '--worktree', ctx.worktree, '--command', PROBE_COMMAND)?.result?.terminal?.handle;
+        if (!handle) throw new Error('the Orca CLI created a focus-gate terminal but returned no handle');
+        handles.push(handle);
+        const T = (await lib.waitForHostedAdd(ctx, t0, ids0, 30000))?.id;
+        if (!T) throw new Error('harness: a CLI-created focus-gate terminal produced no hosted widget');
+        opened.push(T);
+        const hidden = await ctx.probe(`await sleep(500); const t = get('ApplicationShell').getWidgetById(${J(T)}); return !!t && !t.node.querySelector('.xterm-helper-textarea');`);
+        return { T, handle, hidden, read: () => catOutOf(lib.terminalText(ctx, handle)) };
+    };
+    /** Keys typed into E before and after T is created (`make`) and then shown by `show` (page code naming s, w, E, T) unless
+     * it already shows; T's xterm proves its first pane was created. */
+    const typedWhileShown = async (E, make, show) => {
+        await ctx.focusTheiaFrame();
+        await ctx.activate(E);
+        await typeKeys(ctx, 'abc');
+        const t = await make();
+        const shown = await ctx.probe(`const s = get('ApplicationShell'); const w = (id) => s.getWidgetById(id); const E = ${J(E)}, T = ${J(t.T)};
+            if (!w(T).isVisible) { ${show} }
+            const mounted = !!(await until(() => w(T) && w(T).isVisible && w(T).node.querySelector('.xterm-helper-textarea'), 20000));
+            await sleep(1500); return { mounted, visible: !!(w(T) && w(T).isVisible) };`);
+        await typeKeys(ctx, 'xyz');
+        await sleep(600);
+        const inEditor = await ctx.probe(`const e = get('ApplicationShell').getWidgetById(${J(E)}); return !!(e && e.node.contains(document.activeElement));`);
+        return { t, obs: { hidden: t.hidden, ...shown, inEditor, text: await model(E), want: 'abcxyz', pty: t.read() } };
+    };
+    try {
+        // (1) While the user types in an editor, the CLI creates a terminal (the observer adds it, never activated) and it is
+        // shown beside the editor without an activation (an agent opening a terminal beside it).
+        const E1 = await editor();
+        const { t: t1, obs: background } = await typedWhileShown(E1, cliTerminal, `await s.addWidget(w(T), { area: 'main', mode: 'split-right', ref: w(E) });`);
+        out.background = background;
+        // A click on its tab is the user's activation: focus moves into the terminal and the keys reach its PTY.
+        await ctx.focusTheiaFrame();
+        const tab = await ctx.probe(`const el = document.getElementById('shell-tab-' + ${J(t1.T)}); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 };`);
+        if (tab) await pointer(ctx.app, theia, [moveTo(tab.x, tab.y), { type: 'pointerDown', button: 0 }, { type: 'pointerUp', button: 0 }, { type: 'pause', duration: 300 }]);
+        const clickFocus = await ctx.probe(`const t = get('ApplicationShell').getWidgetById(${J(t1.T)}); return !!(await until(() => t && document.activeElement && document.activeElement.classList.contains('xterm-helper-textarea') && t.node.contains(document.activeElement), 5000));`);
+        const before = t1.read();
+        await typeKeys(ctx, 'qq');
+        const reached = await ctx.pollFor(async () => (t1.read().slice(before.length).includes('qq') ? true : null), 5000, 'the clicked terminal\'s keys').then(() => true, () => false);
+        out.click = { tab: !!tab, focused: clickFocus, reached };
+
+        // (2) A restored layout: the dock's restoreLayout (what ApplicationShell.setLayoutData applies) puts a never-shown
+        // terminal beside the editor, and the stored active widget, the editor, is activated as setLayoutData does.
+        const E2 = await editor();
+        const t2 = await cliTerminal();
+        out.restore = (await typedWhileShown(E2, async () => t2, `const mp = s.mainPanel; const others = [...mp.widgets()].filter((x) => x.id !== E && x.id !== T);
+            mp.restoreLayout({ main: { type: 'split-area', orientation: 'horizontal', sizes: [0.5, 0.5], children: [
+                { type: 'tab-area', widgets: [w(E), ...others], currentIndex: 0 }, { type: 'tab-area', widgets: [w(T)], currentIndex: 0 }] } });
+            await s.activateWidget(E);`)).obs;
+
+        // (3) New Orca Terminal, the user's command: its terminal gets keyboard focus and the keys reach its PTY.
+        const wt = await ctx.bundle(`(() => { const all = m.state().worktrees; const r = all.find((x) => x.path === ${J(ctx.repo)}) ?? (all.length === 1 ? all[0] : null); if (r) m.setActiveWorktree(r.id); return r ? r.id : null; })()`);
+        const E3 = await editor();
+        await ctx.focusTheiaFrame();
+        await ctx.activate(E3);
+        const handles0 = listHandles();
+        const ids0 = await lib.hostedIds(ctx);
+        const t0 = Date.now();
+        const ran = await ctx.command('powerbrowser.orca.newTerminal');
+        const T3 = (await lib.waitForHostedAdd(ctx, t0, ids0, 30000))?.id ?? null;
+        if (T3) opened.push(T3);
+        const focused = T3 ? await ctx.probe(`const t = get('ApplicationShell').getWidgetById(${J(T3)}); return !!(await until(() => t && document.activeElement && document.activeElement.classList.contains('xterm-helper-textarea') && t.node.contains(document.activeElement), 20000));`) : false;
+        const handle = await ctx.pollFor(async () => listHandles().find((h) => !handles0.includes(h)) ?? null, 10000, 'the command\'s terminal handle').catch(() => null);
+        if (handle) handles.push(handle);
+        const marker = `pbcmd${Date.now() % 100000}`;
+        if (focused) await typeKeys(ctx, marker);
+        const reached3 = handle && focused ? await ctx.pollFor(async () => (lib.terminalText(ctx, handle).includes(marker) ? true : null), 10000, 'the command terminal\'s keys').then(() => true, () => false) : false;
+        out.command = { worktree: !!wt, error: ran?.error ?? null, tab: T3, focused, reached: reached3, editorText: await model(E3) };
+        return out;
+    } finally {
+        await ctx.probe(`const s = get('ApplicationShell'); for (const id of ${J(opened)}) { const w = s.getWidgetById(id); if (!w || id.startsWith('orca-pane:')) continue; if (w.editor) { try { await w.editor.document.revert(); } catch {} } w.close(); } return true;`);
+        for (const handle of handles) { try { ctx.orca('terminal', 'close', '--terminal', handle); } catch (err) { ctx.log(`note -- the CLI close of a focus-gate terminal failed: ${err.message}`); } }
+    }
+}
+
 async function waitForWidget(ctx, pattern, except, ms = 30000) {
     return ctx.pollFor(async () => (await ctx.tabState()).ids.find((id) => pattern.test(id) && !except.includes(id)) ?? null, ms, `a main-area widget matching ${pattern}`);
 }
@@ -782,6 +917,8 @@ async function run({ log }) {
                 obs.listeners = await appWideLeg(ctx, lib, pages);
                 const li = obs.listeners;
                 log(`note -- app-wide listeners: leave ${JSON.stringify(li.leave)}; large paste editor ${JSON.stringify(li.paste?.editor)}, quick input reached ${li.paste?.quick?.reached} (${String(li.paste?.quick?.value ?? '').length} of ${String(li.paste?.quick?.expected ?? '').length} characters); activation focus ${JSON.stringify(li.focus)}`);
+                obs.focusGate = await focusGateLeg(ctx, lib);
+                log(`note -- focus gate: ${JSON.stringify(obs.focusGate)}`);
             }
             await measure(obs.after);
         } finally {
@@ -789,7 +926,7 @@ async function run({ log }) {
         }
     });
     if (stage2Fail) return { obs, panesPresent, stage2Skip: null, stage2: [stage2Fail] };
-    return { obs, panesPresent, stage2Skip, stage2: stage2Skip ? [] : [...orcaStageVerdict(obs), ...pasteVerdict(obs), ...listenersVerdict(obs)] };
+    return { obs, panesPresent, stage2Skip, stage2: stage2Skip ? [] : [...orcaStageVerdict(obs), ...pasteVerdict(obs), ...listenersVerdict(obs), ...focusGateVerdict(obs)] };
 }
 
 async function main() {
@@ -859,10 +996,17 @@ function fixtureObs() {
             paste: { editor: { reached: true, equal: true, len: 102455 }, quick: { reached: true, value: 'line 0 line 1', expected: 'line 0 line 1', pref: 2 }, ui: { before: 0, after: 0 } },
             focus: { palette: { mode: 'coding' }, control: true, editor: { text: 'abcxyz', want: 'abcxyz', pty: '' }, web: { text: 'defghi', want: 'defghi', pty: '' } },
         },
+        focusGate: {
+            background: { hidden: true, mounted: true, visible: true, inEditor: true, text: 'abcxyz', want: 'abcxyz', pty: '' },
+            restore: { hidden: true, mounted: true, visible: true, inEditor: true, text: 'abcxyz', want: 'abcxyz', pty: '' },
+            click: { tab: true, focused: true, reached: true },
+            command: { worktree: true, error: null, tab: 'orca-pane:term5', focused: true, reached: true, editorText: '' },
+        },
         after: { term: structuredClone(term), web: structuredClone(web) },
     };
 }
-const all = (o) => overallVerdict({ control: controlVerdict(o), stage2: [...orcaStageVerdict(o), ...pasteVerdict(o), ...listenersVerdict(o)], stage2Skip: null, panesPresent: true, repeat: repeatVerdict(o) });
+const all = (o) => overallVerdict({ control: controlVerdict(o), stage2: [...orcaStageVerdict(o), ...pasteVerdict(o), ...listenersVerdict(o), ...focusGateVerdict(o)], stage2Skip: null, panesPresent: true, repeat: repeatVerdict(o) });
+const withGate = (f) => { const o = fixtureObs(); f(o.focusGate); return all(o); };
 const withPaste = (patch) => { const o = fixtureObs(); Object.assign(o.paste, patch); return all(o); };
 const withTheia = (state, patch) => { const o = fixtureObs(); Object.assign(o.paste.theia[state], patch); return all(o); };
 const both = (o, f) => { f(o.control); f(o.after); return o; };
@@ -934,6 +1078,16 @@ function runSelfTest() {
         ['an unproven terminal read', 'activation focus: NOT SCORED -- keys typed into the Orca terminal itself', () => withListeners((l) => { l.focus.control = false; })],
         ['editor keys taken by the Orca terminal', 'keys typed in a Theia editor reached the Orca terminal\'s PTY ("xyz")', () => withListeners((l) => { l.focus.editor.text = 'abc'; l.focus.editor.pty = 'xyz'; })],
         ['web-tab keys taken by the Orca terminal', 'keys typed in a web tab reached the Orca terminal\'s PTY ("ghi")', () => withListeners((l) => { l.focus.web.text = 'def'; l.focus.web.pty = 'ghi'; })],
+        ['background-created terminal taking the editor keys', 'background: keys typed in the Theia editor landed there as "abc"', () => withGate((g) => { g.background.text = 'abc'; g.background.pty = 'xyz'; g.background.inEditor = false; })],
+        ['the background terminal reaching the PTY only', "background: keys typed in the Theia editor reached the Orca terminal's PTY", () => withGate((g) => { g.background.pty = 'x'; })],
+        ['focus left the editor on a restored layout', 'restore: keyboard focus left the Theia editor', () => withGate((g) => { g.restore.inEditor = false; })],
+        ['a restore leg over a terminal already shown', 'restore NOT SCORED -- the terminal was already shown', () => withGate((g) => { g.restore.hidden = false; })],
+        ['a background leg whose terminal never mounted', 'background NOT SCORED -- the terminal never showed its xterm', () => withGate((g) => { g.background.mounted = false; })],
+        ['a tab click giving no focus', "a click on the Orca terminal's tab did not give it keyboard focus", () => withGate((g) => { g.click.focused = false; })],
+        ['a tab click whose keys never reached the PTY', "keys typed after a click on the Orca terminal's tab did not reach its PTY", () => withGate((g) => { g.click.reached = false; })],
+        ['New Orca Terminal not focusing its terminal', 'the terminal New Orca Terminal created did not get keyboard focus', () => withGate((g) => { g.command.focused = false; })],
+        ['New Orca Terminal creating nothing', 'New Orca Terminal produced no hosted terminal', () => withGate((g) => { g.command.tab = null; })],
+        ['the focus gate leg not run', 'focus gate leg not measured', () => { const o = fixtureObs(); o.focusGate = null; return all(o); }],
         ['the app-wide listener leg not run', 'app-wide listener leg not measured', () => { const o = fixtureObs(); o.listeners = null; return all(o); }],
         ['the token never read back', 'never reached orcad\'s terminal read', () => withPaste({ printed: 0 })],
         ['the paste terminal never hosted', 'paste terminal produced no hosted widget', () => withPaste({ tab: null })],
