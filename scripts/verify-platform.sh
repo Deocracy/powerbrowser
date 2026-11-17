@@ -6813,8 +6813,9 @@ run_own_checks() {
       # in a t<n> terminal and a web tab judged by D-32 (shell keys to the shell, switch keys switch tabs with no PTY
       # bytes, ctrl+shift+w closes t<n>); stage 2 in a hosted Orca terminal (shell keys reach the PTY, switch keys
       # switch and reach no PTY once the PTY read is proven, the close key requests Orca's close; a named SKIP only
-      # while theia/extensions/orca-panes is absent); stage 2b: a hosted terminal's own selection pastes there once on a
-      # middle-click, and a Theia editable gets the system selection (owner ruling 2026-11-17); then the control repeated. Run under
+      # while theia/extensions/orca-panes is absent); stage 2b (owner ruling 2026-11-17): a Theia editable gets the system
+      # selection at Orca's default (off in its web client) and with Orca's own switch turned on in its hosted Settings,
+      # and with it on a hosted terminal's selection pastes there once on a middle-click; then the control repeated. Run under
       # flock /home/chris/coding/Power-Browser/.git/pb-live.lock with ORCA_* unset.
       "orca-terminal-keys-live|node $REPO_ROOT/scripts/verify-orca-terminal-keys-live.mjs"
       # orca-tabs-live (64-04, TAB-01..TAB-06/TERM-01, criteria 2, 3, 6): every creation path gives one hosted tab
