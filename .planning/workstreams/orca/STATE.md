@@ -3,11 +3,11 @@ gsd_state_version: "1.0"
 milestone: v1.7
 current_phase: 68
 current_phase_name: Three-OS artifacts, weekly re-pin and upstream seams
-status: Milestone re-audit 2026-11-16 at 65d7e653 (v1.7-MILESTONE-AUDIT.md); full gate at 65d7e653 not completed
-stopped_at: "2026-11-16: 68-11 review findings fixed (2fea5fa8..04fe4400, 0a7d9a72, 9018e1e5, 98777f97, e6dd6a25); TAB-04 closed (D-49); milestone re-audit; next: full gate at the current head"
-last_updated: "2026-11-16T00:00:00.000Z"
-last_activity: 2026-11-16
-last_activity_desc: 68-11 review fixes; TAB-04 g3 green (2ce581f2, 3ad91d13); WINDOWS 55 fixed; milestone re-audit
+status: Gate runs 1 and 2 red and fixed, run 3 stopped to take in D-55 and D-56; next one full gate on the final code (2026-11-17)
+stopped_at: "2026-11-17: gate run 3 stopped by the coordinator to take in D-55/D-56 (0232b5a7); next: one full gate on the final code, then phase 64 re-verification and the 68 verification refresh"
+last_updated: "2026-11-17T00:00:00.000Z"
+last_activity: 2026-11-17
+last_activity_desc: gate runs 1-2 findings fixed; D-52..D-56 recorded; WINDOWS 59..67 added (59..64 fixed)
 state_head: a625378d3323a73fe4e1b4cebedafa2ac8140d57
 progress:
   total_phases: 10
@@ -22,17 +22,17 @@ milestone_name: Orca integration
 ## Project Reference
 
 See: .planning/PROJECT.md (shared project file; its "Current Milestone" section is v1.5, not this milestone)
-Scope: .planning/workstreams/orca/REQUIREMENTS.md. Owner decisions: .planning/workstreams/orca/DECISIONS.md (D-01..D-51). Roadmap: .planning/workstreams/orca/ROADMAP.md.
+Scope: .planning/workstreams/orca/REQUIREMENTS.md. Owner decisions: .planning/workstreams/orca/DECISIONS.md (D-01..D-56). Roadmap: .planning/workstreams/orca/ROADMAP.md.
 
 **Core value (this milestone):** Theia is the default GUI; Orca's agent workflow runs inside PowerBrowser as real PowerBrowser tabs, with PowerBrowser's own engine and chrome as the agents' browser.
-**Current focus:** the full gate at the current head (none completed since 1edc97d6), then the owner pass in END-OF-MILESTONE-CHECKLIST.md (D-40: Linux only)
+**Current focus:** gate run 1 at 4a7308ba was red on 3 unexcluded rows; gate run 2 at 2788eb05 was red on 19 (17 from a mid-run ledger change, 2 regressions), all fixed; gate run 3 was stopped by the coordinator to take in D-55 and D-56. Next: one full gate on the final code, then the phase 64 re-verification and the phase 68 verification refresh, then the owner pass in END-OF-MILESTONE-CHECKLIST.md (D-40: Linux only)
 
 ## Current Position
 
 Phase: 68 (Three-OS artifacts, weekly re-pin and upstream seams) — EXECUTED (68-01..68-11); re-verified 2026-11-16 as human_needed 8/13 with no code gap (3febce70, 68-VERIFICATION.md)
 Plan: 68-11 of 11 complete, live rows PASS (f6d291a0); code review of 68-11 and the scratch-HOME change found 2 critical, 8 warnings and 4 info (ffbefe01, 68-11-REVIEW.md), all 14 fixed 2026-11-16; phases 59 and 60 partially executed (owner plans 59-05, 59-06, 59-07 and 60-05 pending)
-Status: Milestone re-audit 2026-11-16 (v1.7-MILESTONE-AUDIT.md)
-Last activity: 2026-11-16 — 68-11 review fixes, TAB-04 g3 green (D-49), milestone re-audit; next: full gate at the current head
+Status: Gate runs 1 and 2 fixed, run 3 stopped for D-55/D-56; milestone re-audit 2026-11-16 (v1.7-MILESTONE-AUDIT.md) predates them
+Last activity: 2026-11-17 — gate runs 1 and 2 findings fixed (WINDOWS 59..64), D-52..D-56 recorded; next: one full gate on the final code, then phase 64 re-verification and the 68 verification refresh
 
 Progress: [█████████░] 62 of 66 plan files have a SUMMARY (63-01, 63-02, 63-05 are superseded stubs; 59-05, 59-06, 59-07, 60-05 are owner plans)
 
@@ -47,8 +47,8 @@ Progress: [█████████░] 62 of 66 plan files have a SUMMARY (6
 | 63 | Agent hooks on Orca's terminal engine (rescoped by D-31) | TERM-02, EXT-02 | Complete (human items deferred) |
 | 64 | Orca panes as PowerBrowser tabs | TAB-01, TAB-02, TAB-04, TAB-06, TERM-01, TERM-04 | Executed (64-06 gap closure); TAB-04 complete (g2 PASS on the 65-05 tree; g3 green since 2ce581f2 and 3ad91d13, D-49); 64-VERIFICATION.md (gaps_found, 2026-11-11) predates the fix, re-verification pending |
 | 65 | Orca workspace in Theia | TAB-05, TAB-07, TAB-08, TAB-09 | Complete (verified 8/8, human items deferred) |
-| 66 | PowerBrowser web tabs as Orca's browser | BRW-02, BRW-03, BRW-04, BRW-05 | Executed (66-06, 66-07, 66-08, 66-09, 66-10); BRW-02, BRW-03, BRW-04, BRW-05 complete |
-| 67 | Hosting hardening | RUN-06, RUN-07, RUN-08, RUN-09, INJ-01 | Executed (67-01..67-07; 67-07 gap closure, D-36); RUN-06..RUN-09 and INJ-01 complete; verified human_needed 10/10 (67-VERIFICATION.md) |
+| 66 | PowerBrowser web tabs as Orca's browser | BRW-02, BRW-03, BRW-04, BRW-05 | Complete (66-06..66-10 executed); BRW-02, BRW-03, BRW-04, BRW-05 complete; verified human_needed 25/25 (66-VERIFICATION.md) |
+| 67 | Hosting hardening | RUN-06, RUN-07, RUN-08, RUN-09, INJ-01 | Executed (67-01..67-07; 67-07 gap closure, D-36); RUN-06..RUN-09 and INJ-01 complete; verified human_needed 10/10 (67-VERIFICATION.md); complete |
 | 68 | Three-OS artifacts, weekly re-pin and upstream seams | OVL-02, OVL-03, OVL-06, PLAT-01, PLAT-02 | Executed (68-01..68-11); re-verified 2026-11-16, human_needed 8/13, no code gap (3febce70); 68-11 review findings all fixed 2026-11-16 |
 
 ## Performance Metrics
@@ -156,6 +156,7 @@ Stopped at: v1.7 milestone audit (gaps_found), 5d05e3ad
 Resume file: None
 Session 2026-11-16 (re-audit): v1.7 milestone re-audit at 65d7e653 (v1.7-MILESTONE-AUDIT.md); no full gate has completed since 1edc97d6.
 Session 2026-11-16 (later): TAB-04 closed, orca-tabs-live g3 green in four consecutive live runs (2ce581f2, 3ad91d13; D-49, WINDOWS 55 fixed); a stock Orca web client shows tabs created after it opened the worktree only after a reload (upstream bug, open).
+Session 2026-11-17: gate run 1 (4a7308ba) red on 3 unexcluded rows, run 2 (2788eb05) red on 19 (17 from a mid-run ledger change, 2 regressions), all fixed (WINDOWS 59..64); owner rulings D-52..D-56; run 3 stopped to take in D-55/D-56; next one full gate on the final code.
 Session 2026-11-16: 68-11 live rows PASS (f6d291a0); Phase 68 re-verified (3febce70); 68-11 review (ffbefe01); D-47..D-51 recorded; `--quick` green; tracking cleaned up.
 
 ## Deferred Verification

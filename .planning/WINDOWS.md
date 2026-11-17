@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 18
+open_count: 21
 waived_count: 2
-fixed_count: 38
-total_count: 58
-last_updated: 2026-11-16T16:00:00.000Z
+fixed_count: 44
+total_count: 67
+last_updated: 2026-11-17T22:54:29.815Z
 ---
 
 # Broken Windows Ledger
@@ -73,6 +73,15 @@ last_updated: 2026-11-16T16:00:00.000Z
 | 56 | 59 | deviation | scripts/verify-pan03-strip-group-live.mjs |  | pan03-strip-group-live clause (f) flaky: passed 1 of 3 runs on fca5bcac/4aeac713 (2026-11-13); after the relaunch the strip is read before a restored tab's title loads, so that tab paints as 'New Tab' or its bare URL instead of 'page l'; the check should wait for the restored tab's title; repro: flock /home/chris/coding/Power-Browser/.git/pb-live.lock scripts/verify-platform.sh --only pan03-strip-group-live with PB_LIVE_LOCK_HELD=1 and ORCA_* unset; source: v1.7 gate run 2026-11-13 | fixed | Fixed in 740dcd8f (supersedes the title wait in 417dbe61, which went 1 of 5: a restored background tab is not loaded after the relaunch, so it keeps its URL or 'New Tab' label and never regains 'page l'). Clause (f) now compares the painted data-pb-tab ids with the derived widgets and checks B's tab by its key, so labels no longer matter. 9 of 10 runs green on the fixed tree (4 of 5, then 5 of 5); the one red ended in 6 s, before any clause ran, and its output was not kept. | 2026-11-13T09:30:00.000Z | 2026-11-14T01:40:00.000Z |
 | 57 | 59 | deviation | scripts/verify-ng-018-scheduled-integrity-check.mjs |  | ng-018-scheduled-integrity-check flaky: red once in the v1.7 gate run at d55a380b (2026-11-13, 'the store rebuilt after the scheduled check is not at the head'), green in 3 other runs that day (2 of them alone right after); repro: flock /home/chris/coding/Power-Browser/.git/pb-live.lock scripts/verify-platform.sh --only ng-018-scheduled-integrity-check with PB_LIVE_LOCK_HELD=1 and ORCA_* unset; source: v1.7 gate run 2026-11-13 | fixed | Fixed in 417dbe61. Race in the check, not the product: quarantineAndRebuildTabStore (powerbrowser/shell/PowerBrowserAPI.sys.mjs, the backup to corruptPath before IOUtils.remove and migrateTabStoreToHead) writes .corrupt-1 before it migrates the new store, and the check tore the shell down as soon as .corrupt-1 appeared; a store cut off mid-rebuild is migrated by the next launch (NG-085). The check now waits up to 30 s for the rebuilt store to reach the head before the teardown. 5 of 5 runs green. The check file is ledger-locked; the owner must re-lock its hash. | 2026-11-13T19:30:00.000Z | 2026-11-14T01:40:00.000Z |
 | 58 | 63 | deviation | scripts/verify-orca-agent-status-live.mjs |  | orca-agent-status-live flaky: red once in the v1.7 gate run at d55a380b (2026-11-13, 4 h into the run): the agent process and the terminal daemon were still alive 25 s after app.quit(); green in 3 other runs that day (2 alone right after). The quit-ends-agents rule (D-03) held in those runs; whether a slow shutdown under load can outlive the 25 s budget is open; repro: flock /home/chris/coding/Power-Browser/.git/pb-live.lock scripts/verify-platform.sh --only orca-agent-status-live with PB_LIVE_LOCK_HELD=1 and ORCA_* unset; source: v1.7 gate run 2026-11-13 | fixed | Fixed in 417dbe61 and ad9a1939. Second root cause (red again in the full gate at 1edc97d6, 2026-11-14): the quit blocker was never registered. PowerBrowserAPI.addNamedReapBlocker (and addSidecarReapBlocker) called AsyncShutdown.quitApplicationGranted.addBlocker; the pinned upstream/toolkit/components/asyncshutdown/AsyncShutdown.sys.mjs:1121-1134 defines no such phase, so the call threw inside OrcaService.start()'s try and every launch logged 'Reap blocker not registered: ... AsyncShutdown.quitApplicationGranted is undefined'. Only the quit-application-granted observer started stop(); nothing held the quit, and an instrumented run showed Gecko exiting 230 ms into _endDaemon's wait for the terminal daemon, so a daemon slow on SIGTERM under load, and its agent, outlived the browser. 417dbe61's overrun kill lives in stopAndReap and never ran. Both blockers now register on AsyncShutdown.appShutdownConfirmed (quit-application, raised by quit and eRestart); instrumented, the quit returns only after the daemon step. verify-orca-service scenario N runs the real addNamedReapBlocker against the phases parsed from upstream (plant: the old phase name, self-test 44 of 44); sidecar-reap-blocker derives the same set instead of hand-keeping the name. orca-agent-status-live 15 of 15 green after the fix (5 alone, 10 beside 1 to 4 parallel --quick loops, load average up to 5.5); negative control with the old phase under the same load: 1 of 4 red with the gate's exact two 'survived quit' lines. The 25 s budget is unchanged. | 2026-11-13T19:30:00.000Z | 2026-11-14T21:45:00.000Z |
+| 59 | 68 | deviation | powerbrowser/shell/PowerBrowserAPI.sys.mjs |  | ext-tab-host-live options-page-switch red in the v1.7 gate of 2026-11-16 (3 of 15 runs alone): stockWindowStarted's 50 ms poll of gBrowserInit.delayedStartupFinished let a second openOptionsPage reach the started window before the deferred select, so the options page loaded into the empty initial tab and the select added a second options tab; source: v1.7 gate run 2026-11-16 | fixed | Fixed in 0b1ff185 (stockWindowStarted also races the window's delayedStartupPromise, resolved beside the flag, so the select runs before any second call can land) and 3824e0c4 (WR-07 accepts the module sleep inside the race; a new leg requires the race on win.delayedStartupPromise). Product race, 3 of 15 red alone before. | 2026-11-17T22:54:27.933Z | 2026-11-17T22:54:29.100Z |
+| 60 | 68 | deviation | scripts/lib/firefox-bidi.mjs |  | tel06-error-delivery-live leaked its orcad: the harness ends PowerBrowser with SIGTERM, no quit blocker runs, and orcad plus its terminal daemon and scope watcher stayed alive holding port 26768 for four hours, which masked later rows in the earlier v1.7 gate runs; source: v1.7 gate run 2026-11-16 | fixed | Fixed in ed0ecc33 (withFirefoxPage stops the orcad a dev-objdir run leaves behind, matched by its working folder under the run's profile), 9fd3891c (verify-platform leak leg: a script row that leaves orcad running in its own session goes red and the orcad is stopped; scripts/verify-orcad-leak.mjs) and 8d1db795 (keepStrays opt-out for orca-service-live, whose orphan must survive to the product's reap). The SIGTERM behaviour of the product itself is entry 65. | 2026-11-17T22:54:28.056Z | 2026-11-17T22:54:29.225Z |
+| 61 | 68 | deviation | scripts/verify-first-boot-surface.mjs |  | first-boot-surface-fresh recorded 169 modulepreload error events at every first boot (5 of 5 runs alone): the Orca pane bundle emitted modulepreload links for modules the entry had already imported and Gecko fires an error event on such a link; no user-visible effect; source: v1.7 gate run 2 at 2788eb05 (2026-11-17) | fixed | Fixed in 41229f23 (the pane bundle emits no modulepreload links). 5 of 5 runs alone were red before. | 2026-11-17T22:54:28.186Z | 2026-11-17T22:54:29.356Z |
+| 62 | 64 | unmet-truth | theia/extensions/orca-panes |  | Orca's document-wide primary-selection paste hook (usePrimarySelectionPaste, mounted by the pane services root) cancelled the native middle-click paste into every Theia text field and pasted Orca's own captured selection instead; found by the v1.7 gate (tab-strip-live red) and masked at 4a7308ba by the leaked orcad of the earlier entry; source: v1.7 gate run 2 at 2788eb05 (2026-11-17) | fixed | Fixed in e50bd945 (the services root calls useHostedAppShellServices, whose usePanePrimarySelectionPaste acts only on targets inside [data-pb-orca-pane-root]; owner ruling "Limit the hook to Orca panes", D-54), with a772ea83 and 57fed2a0 (checks) and e324130a (debug record). | 2026-11-17T22:54:28.325Z | 2026-11-17T22:54:29.489Z |
+| 63 | 64 | unmet-truth | theia/extensions/orca-panes |  | Orca's large-paste takeover (useLargeTextControlPaste: claimed every paste over 64 KiB into any Theia input or editor and dropped Gecko's newline handling) and its beforeunload checkpoint (cancelled the unload when Orca's checkpoint threw, which held PowerBrowser's quit veto and a Theia reload) acted on the Theia document; found by the owner-ruled test of Orca's app-wide listeners (2026-11-17); source: .planning/debug/orca-selection-preset-and-app-listeners.md | fixed | Fixed in 8d2530b2 (usePaneLargeTextControlPaste claims a paste over 64 KiB only inside a hosted pane root; useHostedAppSessionPersistence runs Orca's checkpoint at every unload and only reports a failure) with live legs in 45eca9fb and 21cfdc81 and the record in 6729ce22 and 0232b5a7 (D-56). The workspace-activation focus helper was tested and does not take focus from Theia UI. | 2026-11-17T22:54:28.459Z | 2026-11-17T22:54:29.617Z |
+| 64 | 68 | deviation | scripts/verify-orca-mobile-protocol.mjs |  | orca-mobile-skew did not find the stock app's protocol constants at mobile-android-v0.0.65: the app moved them to a transport/connection layout and the check read only the old path; source: v1.7 gate run 1 at 4a7308ba (2026-11-16) | fixed | Fixed in f4dd366b (the check finds the stock app's protocol constants at the transport/connection layout as well as the old one). Verdict at v0.0.65 against pin v1.4.248: ok. | 2026-11-17T22:54:28.594Z | 2026-11-17T22:54:29.746Z |
+| 65 | 68 | deviation | powerbrowser/shell/OrcaService.sys.mjs |  | PowerBrowser ended by SIGTERM exits within about 50 ms without running a quit blocker, so OrcaService does not stop its orcad, terminal daemon or scope watcher; OrcaService reaps a leftover only at the next launch of the same profile; not investigated, the live harness now stops them itself (ed0ecc33); owner ruling needed on whether to debug it in v1.7; source: v1.7 gate 2026-11-16 | open | Re-dated to next version (Phase 59 D-09) | 2026-11-17T22:54:28.720Z |  |
+| 66 | 64 | unmet-truth | theia/extensions/orca-panes |  | A hosted Orca terminal focuses itself when it is first shown (TerminalPane createInitialPane/setActivePane, its own mount; PowerBrowser mounts every hosted terminal with isActive) and can take typing from a visible Theia editor; owner decision pending; source: .planning/debug/orca-selection-preset-and-app-listeners.md | open | Re-dated to next version (Phase 59 D-09) | 2026-11-17T22:54:28.845Z |  |
+| 67 | 64 | unmet-truth | orca-overlay/seams.json |  | Upstream Orca bug: a stock Orca web client stops applying host tab updates after it opens the worktree, so tabs created later show only after a reload; the TAB-04 check (orca-tabs-live g3) reloads its second client to work around it; source: .planning/workstreams/orca/phases/64-orca-panes-as-powerbrowser-tabs/64-MIRROR-FREEZE.md | open | Re-dated to next version (Phase 59 D-09) | 2026-11-17T22:54:28.973Z |  |
 
 ````json
 [
@@ -806,6 +815,123 @@ last_updated: 2026-11-16T16:00:00.000Z
     "recorded_at": "2026-11-13T19:30:00.000Z",
     "resolved_at": "2026-11-14T21:45:00.000Z",
     "milestone": "v1.5"
+  },
+  {
+    "id": 59,
+    "kind": "deviation",
+    "phase": "68",
+    "file": "powerbrowser/shell/PowerBrowserAPI.sys.mjs",
+    "line": null,
+    "description": "ext-tab-host-live options-page-switch red in the v1.7 gate of 2026-11-16 (3 of 15 runs alone): stockWindowStarted's 50 ms poll of gBrowserInit.delayedStartupFinished let a second openOptionsPage reach the started window before the deferred select, so the options page loaded into the empty initial tab and the select added a second options tab; source: v1.7 gate run 2026-11-16",
+    "status": "fixed",
+    "reason": "Fixed in 0b1ff185 (stockWindowStarted also races the window's delayedStartupPromise, resolved beside the flag, so the select runs before any second call can land) and 3824e0c4 (WR-07 accepts the module sleep inside the race; a new leg requires the race on win.delayedStartupPromise). Product race, 3 of 15 red alone before.",
+    "recorded_at": "2026-11-17T22:54:27.933Z",
+    "resolved_at": "2026-11-17T22:54:29.100Z",
+    "milestone": "v1.7"
+  },
+  {
+    "id": 60,
+    "kind": "deviation",
+    "phase": "68",
+    "file": "scripts/lib/firefox-bidi.mjs",
+    "line": null,
+    "description": "tel06-error-delivery-live leaked its orcad: the harness ends PowerBrowser with SIGTERM, no quit blocker runs, and orcad plus its terminal daemon and scope watcher stayed alive holding port 26768 for four hours, which masked later rows in the earlier v1.7 gate runs; source: v1.7 gate run 2026-11-16",
+    "status": "fixed",
+    "reason": "Fixed in ed0ecc33 (withFirefoxPage stops the orcad a dev-objdir run leaves behind, matched by its working folder under the run's profile), 9fd3891c (verify-platform leak leg: a script row that leaves orcad running in its own session goes red and the orcad is stopped; scripts/verify-orcad-leak.mjs) and 8d1db795 (keepStrays opt-out for orca-service-live, whose orphan must survive to the product's reap). The SIGTERM behaviour of the product itself is entry 65.",
+    "recorded_at": "2026-11-17T22:54:28.056Z",
+    "resolved_at": "2026-11-17T22:54:29.225Z",
+    "milestone": "v1.7"
+  },
+  {
+    "id": 61,
+    "kind": "deviation",
+    "phase": "68",
+    "file": "scripts/verify-first-boot-surface.mjs",
+    "line": null,
+    "description": "first-boot-surface-fresh recorded 169 modulepreload error events at every first boot (5 of 5 runs alone): the Orca pane bundle emitted modulepreload links for modules the entry had already imported and Gecko fires an error event on such a link; no user-visible effect; source: v1.7 gate run 2 at 2788eb05 (2026-11-17)",
+    "status": "fixed",
+    "reason": "Fixed in 41229f23 (the pane bundle emits no modulepreload links). 5 of 5 runs alone were red before.",
+    "recorded_at": "2026-11-17T22:54:28.186Z",
+    "resolved_at": "2026-11-17T22:54:29.356Z",
+    "milestone": "v1.7"
+  },
+  {
+    "id": 62,
+    "kind": "unmet-truth",
+    "phase": "64",
+    "file": "theia/extensions/orca-panes",
+    "line": null,
+    "description": "Orca's document-wide primary-selection paste hook (usePrimarySelectionPaste, mounted by the pane services root) cancelled the native middle-click paste into every Theia text field and pasted Orca's own captured selection instead; found by the v1.7 gate (tab-strip-live red) and masked at 4a7308ba by the leaked orcad of the earlier entry; source: v1.7 gate run 2 at 2788eb05 (2026-11-17)",
+    "status": "fixed",
+    "reason": "Fixed in e50bd945 (the services root calls useHostedAppShellServices, whose usePanePrimarySelectionPaste acts only on targets inside [data-pb-orca-pane-root]; owner ruling \"Limit the hook to Orca panes\", D-54), with a772ea83 and 57fed2a0 (checks) and e324130a (debug record).",
+    "recorded_at": "2026-11-17T22:54:28.325Z",
+    "resolved_at": "2026-11-17T22:54:29.489Z",
+    "milestone": "v1.7"
+  },
+  {
+    "id": 63,
+    "kind": "unmet-truth",
+    "phase": "64",
+    "file": "theia/extensions/orca-panes",
+    "line": null,
+    "description": "Orca's large-paste takeover (useLargeTextControlPaste: claimed every paste over 64 KiB into any Theia input or editor and dropped Gecko's newline handling) and its beforeunload checkpoint (cancelled the unload when Orca's checkpoint threw, which held PowerBrowser's quit veto and a Theia reload) acted on the Theia document; found by the owner-ruled test of Orca's app-wide listeners (2026-11-17); source: .planning/debug/orca-selection-preset-and-app-listeners.md",
+    "status": "fixed",
+    "reason": "Fixed in 8d2530b2 (usePaneLargeTextControlPaste claims a paste over 64 KiB only inside a hosted pane root; useHostedAppSessionPersistence runs Orca's checkpoint at every unload and only reports a failure) with live legs in 45eca9fb and 21cfdc81 and the record in 6729ce22 and 0232b5a7 (D-56). The workspace-activation focus helper was tested and does not take focus from Theia UI.",
+    "recorded_at": "2026-11-17T22:54:28.459Z",
+    "resolved_at": "2026-11-17T22:54:29.617Z",
+    "milestone": "v1.7"
+  },
+  {
+    "id": 64,
+    "kind": "deviation",
+    "phase": "68",
+    "file": "scripts/verify-orca-mobile-protocol.mjs",
+    "line": null,
+    "description": "orca-mobile-skew did not find the stock app's protocol constants at mobile-android-v0.0.65: the app moved them to a transport/connection layout and the check read only the old path; source: v1.7 gate run 1 at 4a7308ba (2026-11-16)",
+    "status": "fixed",
+    "reason": "Fixed in f4dd366b (the check finds the stock app's protocol constants at the transport/connection layout as well as the old one). Verdict at v0.0.65 against pin v1.4.248: ok.",
+    "recorded_at": "2026-11-17T22:54:28.594Z",
+    "resolved_at": "2026-11-17T22:54:29.746Z",
+    "milestone": "v1.7"
+  },
+  {
+    "id": 65,
+    "kind": "deviation",
+    "phase": "68",
+    "file": "powerbrowser/shell/OrcaService.sys.mjs",
+    "line": null,
+    "description": "PowerBrowser ended by SIGTERM exits within about 50 ms without running a quit blocker, so OrcaService does not stop its orcad, terminal daemon or scope watcher; OrcaService reaps a leftover only at the next launch of the same profile; not investigated, the live harness now stops them itself (ed0ecc33); owner ruling needed on whether to debug it in v1.7; source: v1.7 gate 2026-11-16",
+    "status": "open",
+    "reason": "Re-dated to next version (Phase 59 D-09)",
+    "recorded_at": "2026-11-17T22:54:28.720Z",
+    "resolved_at": null,
+    "milestone": "v1.7"
+  },
+  {
+    "id": 66,
+    "kind": "unmet-truth",
+    "phase": "64",
+    "file": "theia/extensions/orca-panes",
+    "line": null,
+    "description": "A hosted Orca terminal focuses itself when it is first shown (TerminalPane createInitialPane/setActivePane, its own mount; PowerBrowser mounts every hosted terminal with isActive) and can take typing from a visible Theia editor; owner decision pending; source: .planning/debug/orca-selection-preset-and-app-listeners.md",
+    "status": "open",
+    "reason": "Re-dated to next version (Phase 59 D-09)",
+    "recorded_at": "2026-11-17T22:54:28.845Z",
+    "resolved_at": null,
+    "milestone": "v1.7"
+  },
+  {
+    "id": 67,
+    "kind": "unmet-truth",
+    "phase": "64",
+    "file": "orca-overlay/seams.json",
+    "line": null,
+    "description": "Upstream Orca bug: a stock Orca web client stops applying host tab updates after it opens the worktree, so tabs created later show only after a reload; the TAB-04 check (orca-tabs-live g3) reloads its second client to work around it; source: .planning/workstreams/orca/phases/64-orca-panes-as-powerbrowser-tabs/64-MIRROR-FREEZE.md",
+    "status": "open",
+    "reason": "Re-dated to next version (Phase 59 D-09)",
+    "recorded_at": "2026-11-17T22:54:28.973Z",
+    "resolved_at": null,
+    "milestone": "v1.7"
   }
 ]
 ````

@@ -444,6 +444,7 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
 - **D-47 — Ledger rows NG-076 and NG-077: deferral approved.** Chris, 2026-11-16, answer "Approve both", consistent
   with D-40. The ledger tool accepts the approval only as lines typed by the owner, so the ledger rows stay
   `deferred-requested` until he types them.
+  Amended 2026-11-17: the owner typed the approvals and they are recorded in fafb672d ("chore: record owner approvals of NG-076 and NG-077 deferrals (D-40, D-47)"); NG-076 and NG-077 are approved, no longer `deferred-requested`.
 - **D-48 — "Reinstall the Claude Extension" is in the Application menu's Help submenu.** Chris, 2026-11-16, answer "Add
   it": the command is reachable in every mode. Built 2026-11-16 in 0a7d9a72 (chrome bar's Application menu Help
   submenu; bundled-extensions Help-row leg with five self-test plants); not yet run in a rebuilt GUI.
@@ -463,6 +464,31 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
   through a command, in the command palette and the Help menu, that copies the shipped folder back into the profile and
   deploys it through Theia's own `PluginServer.install`; an uninstall is never undone automatically. Closes the open
   question in the D-41 note. D-48 extends where the command appears.
+
+### Owner rulings (2026-11-16 and 2026-11-17)
+
+- **D-52 — Debugging that makes many attempts without success goes to Fable 5.2.** Chris, 2026-11-16. Otherwise the
+  subagent tiers are Opus 5.5 for hard code, Sonnet 5.5 for medium work and Haiku 5.5 for easy and bookkeeping work.
+- **D-53 — Worktree clean-up after the 55 merge.** Chris, 2026-11-16. Merged lane and agent worktrees are removed and
+  their branches kept. Kept worktrees: `agent-a82bf5f2` (the unmerged WINDOWS 53 launcher), `p59-owner`, `p63-01`,
+  `p63-02`, `p63-05`.
+- **D-54 — Limit the hook to Orca panes.** Chris, 2026-11-17, answer "Limit the hook to Orca panes". Orca's
+  primary-selection paste hook acts only on targets inside hosted Orca panes (`[data-pb-orca-pane-root]`), so a
+  middle-click into a Theia text field pastes the system selection again. Commits e50bd945 (the scoped hook),
+  a772ea83 and 57fed2a0 (checks); diagnosis in `.planning/debug/orca-primary-selection-scope.md` (e324130a). WINDOWS 62.
+- **D-55 — Preset it ON on Linux, in memory.** Chris, 2026-11-17. Orca's "Middle-click Paste from Selection" is on for
+  Linux in PowerBrowser, set in memory only, the D-32 pattern. The user's own switch write wins for the session. After a
+  restart it is on again, because PowerBrowser stores nothing. Commit 8d2530b2 (the preset, in
+  `hostedTerminalKeysPatch` under `isLinuxUserAgent()`, seen through a pass-through `window.api.settings.set`
+  wrapper), 45eca9fb and 21cfdc81 (live legs of `orca-terminal-keys-live`), 6729ce22 and 0232b5a7 (investigation record
+  `.planning/debug/orca-selection-preset-and-app-listeners.md`).
+- **D-56 — Test and scope if needed.** Chris, 2026-11-17. Orca's app-wide listeners were tested against Theia UI.
+  Orca's large-paste takeover (pastes over 64 KiB into any Theia input or editor) and its unload handler (its checkpoint
+  cancelled the unload when it threw, which held PowerBrowser's quit veto and a Theia reload) did affect Theia UI: the
+  large paste is now claimed only inside hosted pane roots and the checkpoint only reports a failure, never cancels the
+  unload (8d2530b2). The workspace-activation focus helper was tested and does not take focus from Theia UI in the
+  measured paths. WINDOWS 63. Separate open owner item: a hosted terminal focuses itself when first shown (TerminalPane's
+  own mount, not one of the listeners; WINDOWS 66).
 
 ## Spikes this direction needs
 

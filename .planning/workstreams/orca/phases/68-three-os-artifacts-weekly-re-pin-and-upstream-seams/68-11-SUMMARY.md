@@ -4,6 +4,7 @@ plan: 11
 subsystem: theia-bundled-extensions
 status: complete
 gap_closure: true
+requirements-completed: [BEXT-01]
 tags: [BEXT-01, D-30, P68-38, reinstall, owner-ruling-2026-11-15]
 requires:
   - "68-09 seed (bundled-extensions-seed.ts, the bundledExtensions.seeded record)"
@@ -130,3 +131,15 @@ Tree 0247ebdb, Theia built in `nix develop .#theia` (lib newer than 4c265724). S
 4. Not run: the "Start a new Claude chat session" claim needs a full PowerBrowser with orcad and a real claude, which the standalone sidecar does not have. It stays a coordinator or owner live row.
 
 Finding: Theia's menu bar is hidden outside Coding mode, and the Application menu's Help submenu is hand-built (Get Help, About; `chrome-bar-widget.tsx:1273`), so in Browsing, Organising and Orca modes the command is reachable only from the palette. Owner decision: add the row to the Application menu's Help submenu, or accept palette plus Coding-mode Help.
+
+## Review fixes (2026-11-16)
+
+All 14 findings of `68-11-REVIEW.md` (ffbefe01: 2 critical, 8 warnings, 4 info) are fixed:
+
+- CR-01 2fea5fa8 (remove the scratch HOME on SIGTERM/SIGHUP/SIGINT, sweep the folders of dead runs); CR-02 b12906fc (write a refresh token claude rotated in the scratch HOME back, never delete it)
+- WR-01 04fe4400; WR-02 740fcc79; WR-03 1c7630de; WR-04 200a5820 (scratch-HOME findings)
+- WR-05 98777f97 (checkReinstall goes red on a negated gate, executeCommand and a fixed absent set); WR-06 9018e1e5 (the reinstall copy is undone when deployment fails, recorded only after the deploy); WR-07 e6dd6a25 (the copy scan requires every notification text to be a REINSTALL_MESSAGES entry)
+- WR-08 0a7d9a72 (owner ruling D-48: "Reinstall the Claude Extension" in the Application menu's Help submenu, so it is reachable in every mode)
+- IN-01 9fab2fd5; IN-02 f62fe981; IN-03 c62a5d38; IN-04 3f067596 (scratch-HOME findings)
+
+The scratch-HOME range is 2fea5fa8..04fe4400. Per D-48 the Help-submenu row was not yet run in a rebuilt GUI (END-OF-MILESTONE-CHECKLIST.md section 3).
