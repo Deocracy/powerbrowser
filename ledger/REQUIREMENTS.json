@@ -1,5 +1,5 @@
 {
-  "ledger_version": 426,
+  "ledger_version": 428,
   "frozen_at": "2026-09-27",
   "items": [
     {
@@ -980,7 +980,7 @@
     {
       "id": "NG-076",
       "text": "A macOS DMG with .icns is built. Evidence: same as NG-075.",
-      "status": "deferred-requested",
+      "status": "deferred-approved",
       "spec_ref": "docs/non-gui/GAPS.md:106",
       "test_ref": "",
       "code_ref": "",
@@ -993,7 +993,7 @@
     {
       "id": "NG-077",
       "text": "The Windows and macOS install matrix and per-OS MAR update hop run. Evidence: docs/BUILD.md:997-998.",
-      "status": "deferred-requested",
+      "status": "deferred-approved",
       "spec_ref": "docs/non-gui/GAPS.md:107",
       "test_ref": "",
       "code_ref": "",
