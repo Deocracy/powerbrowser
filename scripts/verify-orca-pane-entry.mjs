@@ -33,11 +33,16 @@
 //      `mountedLazyModalIds.has('<id>')`) that a module of the bundle graph opens (`openModal('<id>'`) is hosted by
 //      the overlay's services root under the same condition; otherwise the hosted surface's trigger opens nothing.
 //      Zero root modals is red "source moved"; zero opened root modals is red "parser blind".
-//   l. (owner ruling 2026-11-17, "Limit the hook to Orca panes") no module of the bundle graph calls Orca's
-//      document-wide useAppShellServices or usePrimarySelectionPaste; the entry's useHostedAppShellServices calls
-//      exactly what Orca's useAppShellServices calls (typescript AST, compared as sets both ways) with
-//      usePrimarySelectionPaste replaced by the entry's usePanePrimarySelectionPaste; and that hook registers the same
-//      document event types as Orca's. A missing Orca function or zero derived calls or types is red "source moved".
+//   l. (owner rulings 2026-11-17, "Limit the hook to Orca panes", "Test and scope if needed") no module of the bundle
+//      graph calls Orca's document-wide useAppShellServices, usePrimarySelectionPaste, useLargeTextControlPaste or
+//      useAppSessionPersistence; the entry's useHostedAppShellServices calls exactly what Orca's useAppShellServices calls
+//      (typescript AST, compared as sets both ways) with the two hooks replaced by the entry's pane-scoped versions, and
+//      its useHostedAppSessionPersistence exactly what Orca's useAppSessionPersistence calls less the three calls of its
+//      unload veto, cancelling nothing; each scoped or hosted copy registers the same document event types as Orca's
+//      original; and every document- or window-level listener the services root installs (derived by following its
+//      hooks' calls into Orca's modules) equals APP_WIDE_LISTENERS, where each is classified: a listener a re-pin adds
+//      is red until it is scoped or classified, a classification nothing installs is red. A missing Orca function or zero
+//      derived calls, types or listeners is red "source moved" or "parser blind".
 //
 // Tier: full; --self-test quick (mkdtemp fixtures: a tracked edit, a planted React copy, a version
 // skew, an inlined font, a tab-bar import, a missing C3 export, each red naming it).
@@ -53,7 +58,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { moduleGraph, overlayOverrides } from './lib/orca-pane-harness.mjs';
+import { moduleGraph, overlayOverrides, resolveOrcaImport } from './lib/orca-pane-harness.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-pane-entry';
@@ -74,8 +79,39 @@ const OPEN_MODAL_RE = /openModal\(\s*['"]([a-z][a-z-]*)['"]/g;
 const PRESET_EXPORT = 'setWebDeviceKeySupportForTests';
 const APP_SHELL_SERVICES = 'src/renderer/src/app-shell/use-app-shell-services.ts';
 const PRIMARY_SELECTION_HOOK = 'src/renderer/src/hooks/usePrimarySelectionPaste.ts';
+const SESSION_PERSISTENCE = 'src/renderer/src/app-shell/use-app-session-persistence.ts';
 const APP_WIDE_SERVICES = 'useAppShellServices', APP_WIDE_HOOK = 'usePrimarySelectionPaste';
 const HOSTED_SERVICES = 'useHostedAppShellServices', PANE_HOOK = 'usePanePrimarySelectionPaste';
+/** Orca's app-wide hooks the services root runs scoped (owner rulings 2026-11-17), each to the entry's version. */
+const HOSTED_SWAPS = new Map([[APP_WIDE_HOOK, PANE_HOOK], ['useLargeTextControlPaste', 'usePaneLargeTextControlPaste']]);
+const APP_WIDE_PERSISTENCE = 'useAppSessionPersistence', HOSTED_PERSISTENCE = 'useHostedAppSessionPersistence';
+/** The calls of Orca's useAppSessionPersistence that make its unload veto; the hosted copy has none of them. */
+const VETO_CALLS = ['createShutdownCheckpointBeforeUnloadHandler', 'showShutdownCheckpointFailureToast', 'isPairedWebClientWindow'];
+/** Hooks no bundle module may call: each acts on the whole Theia document (or holds its unload). */
+const APP_WIDE_ORIGINALS = [APP_WIDE_SERVICES, ...HOSTED_SWAPS.keys(), APP_WIDE_PERSISTENCE];
+/**
+ * Every document- or window-level listener the services root installs, by the hook the root calls and target:type, each
+ * classified (owner ruling 2026-11-17, "Test and scope if needed"). Compared both ways with the derivation at check time:
+ * a listener a re-pin adds is red until it is classified here or scoped.
+ */
+export const APP_WIDE_LISTENERS = {
+    'usePanePrimarySelectionPaste document:type': 'scoped: cancels or pastes only inside a hosted pane root; the selection capture only reads',
+    'usePaneLargeTextControlPaste document:paste': 'scoped: claims a large paste only inside a hosted pane root',
+    'useHostedAppSessionPersistence window:beforeunload': "never cancels: Orca's checkpoint runs and a failure is only reported",
+    'useHostedAppSessionPersistence window:ORCA_RENDERER_SHUTDOWN_CHECKPOINT_ABORTED_EVENT': "Orca's own event; nothing in Theia dispatches it",
+    'useHostedAppSessionPersistence window:ORCA_APP_RESTART_ABORTED_EVENT': "Orca's own event; nothing in Theia dispatches it",
+    'useHostedAppSessionPersistence window:ORCA_UPDATER_QUIT_AND_INSTALL_ABORTED_EVENT': "Orca's own event; nothing in Theia dispatches it",
+    'useHostedAppSessionPersistence window:ORCA_RENDERER_UNLOAD_PREVENTED_EVENT': "Orca's own event; nothing in Theia dispatches it",
+    'useHostedAppSessionPersistence window:ORCA_UPDATER_QUIT_AND_INSTALL_STARTED_EVENT': "Orca's own event; nothing in Theia dispatches it",
+    'useHostedAppSessionPersistence window:ORCA_APP_RESTART_STARTED_EVENT': "Orca's own event; nothing in Theia dispatches it",
+    'useIpcEvents document:focusin': 'reads only: a floating-terminal file reveal, never cancels or moves focus',
+    'useIpcEvents document:pointerdown': "reads only: ends a pending floating reveal or Orca's own pending chat-composer focus",
+    'useIpcEvents document:keydown': "reads only: ends Orca's own pending chat-composer focus",
+    'useIpcEvents document:type': 'reads only: composition state for an agent browser page input',
+    'useRemoteRuntimeRecoveryTriggers window:online': 'reads only: reconnects the runtime when the network returns',
+    'useVisibleHostedReviewRefresh document:visibilitychange': 'reads only: refreshes reviews when the document is shown',
+    'useTerminalViewerColorPublication window:focus': 'reads only: republishes terminal colours on focus',
+};
 const APP_WIDE_LISTENER_RE = /document\.addEventListener\(\s*'([a-z]+)'/g;
 const PANE_LISTENER_RE = /\['([a-z]+)',\s*\w+,\s*(?:true|false)\]/g;
 const BUNDLE_API_RE = /^Orca[A-Za-z]+BundleApi$/;
@@ -187,11 +223,74 @@ export function callsUnder(ts, node) {
     return out;
 }
 
+const APP_WIDE_TARGET = /^(document|window|globalThis|window\.document)$/;
+
+/**
+ * Document- and window-level listeners reachable from function `name` of `file`: every `<target>.addEventListener(type`
+ * whose target is document or window (or a parameter a caller passed one of them as), following calls to local and
+ * imported functions (named imports and re-exports, '@/' and relative) up to `depth`. Returns a Set of 'target:type'
+ * (the type literal, or its expression text). `read(file)` gives a module's text (the overlay over orca/).
+ */
+export function appWideListeners(ts, file, name, read, rendererSrc, depth = 6) {
+    const mods = new Map();
+    const mod = f => {
+        if (!mods.has(f)) {
+            const sf = ts.createSourceFile(f, read(f), ts.ScriptTarget.Latest, true, /\.tsx$/.test(f) ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+            const fns = new Map(), imports = new Map();
+            for (const st of sf.statements) {
+                if (ts.isFunctionDeclaration(st) && st.name) fns.set(st.name.text, st);
+                if (ts.isVariableStatement(st)) for (const d of st.declarationList.declarations) if (ts.isIdentifier(d.name) && d.initializer && (ts.isArrowFunction(d.initializer) || ts.isFunctionExpression(d.initializer))) fns.set(d.name.text, d.initializer);
+                const clause = ts.isImportDeclaration(st) ? st.importClause?.namedBindings : ts.isExportDeclaration(st) ? st.exportClause : null;
+                if (st.moduleSpecifier && ts.isStringLiteral(st.moduleSpecifier) && clause && (ts.isNamedImports(clause) || ts.isNamedExports(clause))) {
+                    for (const el of clause.elements) imports.set(el.name.text, { spec: st.moduleSpecifier.text, name: (el.propertyName ?? el.name).text });
+                }
+            }
+            mods.set(f, { f, fns, imports });
+        }
+        return mods.get(f);
+    };
+    const resolveFn = (m, fn, hops = 0) => {
+        if (m.fns.has(fn)) return { m, node: m.fns.get(fn) };
+        const imp = m.imports.get(fn);
+        const target = imp && hops < 4 ? resolveOrcaImport(m.f, imp.spec, p => existsSync(p) || read.has?.(p), rendererSrc) : null;
+        return target ? resolveFn(mod(target), imp.name, hops + 1) : null;
+    };
+    const out = new Set(), seen = new Set();
+    const visit = (m, node, bind, level) => {
+        const key = `${m.f}#${node.pos}#${JSON.stringify(bind)}`;
+        if (seen.has(key) || level > depth) return;
+        seen.add(key);
+        const targetOf = e => { const t = e.getText(); return APP_WIDE_TARGET.test(t) ? t.replace(/^(globalThis|window\.document)$/, s => (s === 'globalThis' ? 'window' : 'document')) : bind[t] ?? null; };
+        const walk = n => {
+            if (ts.isCallExpression(n)) {
+                const ex = n.expression;
+                if (ts.isPropertyAccessExpression(ex) && ex.name.text === 'addEventListener') {
+                    const target = targetOf(ex.expression), a0 = n.arguments[0];
+                    if (target && a0) out.add(`${target}:${ts.isStringLiteralLike(a0) ? a0.text : a0.getText()}`);
+                }
+                if (ts.isIdentifier(ex)) {
+                    const r = resolveFn(m, ex.text);
+                    if (r) {
+                        const nb = {};
+                        n.arguments.forEach((arg, i) => { const t = targetOf(arg), p = r.node.parameters?.[i]; if (t && p && ts.isIdentifier(p.name)) nb[p.name.text] = t; });
+                        visit(r.m, r.node, nb, level + 1);
+                    }
+                }
+            }
+            ts.forEachChild(n, walk);
+        };
+        walk(node);
+    };
+    const start = resolveFn(mod(file), name);
+    if (start) visit(start.m, start.node, {}, 0);
+    return out;
+}
+
 /**
  * The gate over one tree. paths: { orcaDir, overlayDir, standaloneDir, baselineFile, theiaDir }.
  * Returns { skip, fails, notes, counts }.
  */
-export function checkEntry({ orcaDir, overlayDir, standaloneDir, baselineFile, theiaDir }) {
+export function checkEntry({ orcaDir, overlayDir, standaloneDir, baselineFile, theiaDir, listenerTable = APP_WIDE_LISTENERS }) {
     const panesDir = join(orcaDir, 'out', 'web', 'assets', 'pb-panes');
     if (!existsSync(join(panesDir, 'pb-panes.js'))) {
         return { skip: 'no built pane bundle (orca/out/web/assets/pb-panes/pb-panes.js; run nix develop .#orca --command bash scripts/build-orca.sh)', fails: [], notes: [] };
@@ -309,27 +408,56 @@ export function checkEntry({ orcaDir, overlayDir, standaloneDir, baselineFile, t
             counts.rootDialogs = opened.size;
         }
 
-        // l. Orca's primary-selection hook only in the hosted panes (owner ruling 2026-11-17).
+        // l. Orca's app-wide hooks only scoped to the hosted panes, its unload veto never (owner rulings 2026-11-17).
         for (const [mod] of graph) {
             const text = overrides.get(mod) ?? readFileSync(mod, 'utf8');
-            if (!text.includes(APP_WIDE_SERVICES) && !text.includes(APP_WIDE_HOOK)) continue;
+            if (!APP_WIDE_ORIGINALS.some(n => text.includes(n))) continue;
             const sf = ts.createSourceFile(mod, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
             for (const name of new Set(callsUnder(ts, sf))) {
-                if (name === APP_WIDE_SERVICES || name === APP_WIDE_HOOK) fails.push(`${relative(orcaDir, mod)} calls ${name}: Orca's middle-click paste listeners would act on the whole Theia document (owner ruling 2026-11-17)`);
+                if (APP_WIDE_ORIGINALS.includes(name)) fails.push(`${relative(orcaDir, mod)} calls ${name}: Orca's listeners would act on the whole Theia document or hold its unload (owner rulings 2026-11-17)`);
             }
         }
-        const servicesFile = join(orcaDir, APP_SHELL_SERVICES), hookFile = join(orcaDir, PRIMARY_SELECTION_HOOK);
+        const servicesFile = join(orcaDir, APP_SHELL_SERVICES), hookFile = join(orcaDir, PRIMARY_SELECTION_HOOK), persistenceFile = join(orcaDir, SESSION_PERSISTENCE);
         const orcaServices = existsSync(servicesFile) ? functionIn(ts, servicesFile, readFileSync(servicesFile, 'utf8'), APP_WIDE_SERVICES) : null;
+        const orcaPersistence = existsSync(persistenceFile) ? functionIn(ts, persistenceFile, readFileSync(persistenceFile, 'utf8'), APP_WIDE_PERSISTENCE) : null;
         const orcaTypes = new Set(existsSync(hookFile) ? [...readFileSync(hookFile, 'utf8').matchAll(APP_WIDE_LISTENER_RE)].map(m => m[1]) : []);
         const entryText = readFileSync(entry, 'utf8');
         const hosted = functionIn(ts, entry, entryText, HOSTED_SERVICES), paneHook = functionIn(ts, entry, entryText, PANE_HOOK);
-        if (!orcaServices?.calls.includes(APP_WIDE_HOOK)) fails.push(`source moved: orca/${APP_SHELL_SERVICES} has no function ${APP_WIDE_SERVICES} calling ${APP_WIDE_HOOK}`);
-        else if (!hosted) fails.push(`the entry defines no function ${HOSTED_SERVICES} (Orca's ${APP_WIDE_SERVICES} with ${PANE_HOOK})`);
+        const hostedPersistence = functionIn(ts, entry, entryText, HOSTED_PERSISTENCE), servicesRoot = functionIn(ts, entry, entryText, 'Services');
+        const sameCalls = (theirs, ours, mine, origin, map) => {
+            const want = new Set(theirs.calls.map(map).filter(Boolean)), got = new Set(ours.calls);
+            for (const n of want) if (!got.has(n)) fails.push(`${mine} lacks ${n}, which Orca's ${origin} calls`);
+            for (const n of got) if (!want.has(n)) fails.push(`${mine} calls ${n}, which Orca's ${origin} does not`);
+            return want.size;
+        };
+        const missingSwaps = [...HOSTED_SWAPS.keys()].filter(n => !orcaServices?.calls.includes(n));
+        if (!orcaServices || missingSwaps.length) fails.push(`source moved: orca/${APP_SHELL_SERVICES} has no function ${APP_WIDE_SERVICES} calling ${missingSwaps.join(' and ') || [...HOSTED_SWAPS.keys()].join(' and ')}`);
+        else if (!hosted) fails.push(`the entry defines no function ${HOSTED_SERVICES} (Orca's ${APP_WIDE_SERVICES} with ${[...HOSTED_SWAPS.values()].join(' and ')})`);
+        else counts.hostedServices = sameCalls(orcaServices, hosted, HOSTED_SERVICES, APP_WIDE_SERVICES, n => HOSTED_SWAPS.get(n) ?? n);
+        if (!VETO_CALLS.every(n => orcaPersistence?.calls.includes(n))) fails.push(`source moved: orca/${SESSION_PERSISTENCE} has no function ${APP_WIDE_PERSISTENCE} calling ${VETO_CALLS.join(', ')}`);
+        else if (!hostedPersistence) fails.push(`the entry defines no function ${HOSTED_PERSISTENCE} (Orca's ${APP_WIDE_PERSISTENCE} without its unload veto)`);
         else {
-            const want = new Set(orcaServices.calls.map(n => n === APP_WIDE_HOOK ? PANE_HOOK : n)), got = new Set(hosted.calls);
-            for (const n of want) if (!got.has(n)) fails.push(`${HOSTED_SERVICES} lacks ${n}, which Orca's ${APP_WIDE_SERVICES} calls`);
-            for (const n of got) if (!want.has(n)) fails.push(`${HOSTED_SERVICES} calls ${n}, which Orca's ${APP_WIDE_SERVICES} does not`);
-            counts.hostedServices = want.size;
+            counts.hostedPersistence = sameCalls(orcaPersistence, hostedPersistence, HOSTED_PERSISTENCE, APP_WIDE_PERSISTENCE, n => (VETO_CALLS.includes(n) ? null : n));
+            if (/\.preventDefault\(|returnValue/.test(hostedPersistence.text)) fails.push(`${HOSTED_PERSISTENCE} cancels an event: PowerBrowser's quit and reload must never be held by Orca's checkpoint`);
+            if (!servicesRoot?.calls.includes(HOSTED_PERSISTENCE)) fails.push(`the services root (Services) does not call ${HOSTED_PERSISTENCE}`);
+        }
+
+        // l (listeners). Every document- or window-level listener the services root installs is classified, both ways.
+        const read = Object.assign(p => overrides.get(p) ?? readFileSync(p, 'utf8'), { has: p => overrides.has(p) });
+        const entryAt = join(rendererSrc, 'pb', 'pb-pane-mount.tsx');
+        const rootHooks = [...new Set([...(servicesRoot?.calls ?? []), ...(hosted?.calls ?? [])])].filter(n => n !== HOSTED_SERVICES);
+        const derived = new Map();
+        for (const hook of rootHooks) for (const l of appWideListeners(ts, entryAt, hook, read, rendererSrc)) derived.set(`${hook} ${l}`, hook);
+        if (servicesRoot && derived.size === 0) fails.push('parser blind: the services root installs no document or window listener');
+        for (const key of derived.keys()) if (!(key in listenerTable)) fails.push(`unclassified app-wide listener: ${key} (scope it to the hosted panes or classify it in APP_WIDE_LISTENERS)`);
+        for (const key of Object.keys(listenerTable)) if (!derived.has(key)) fails.push(`stale classification: ${key} is no longer installed by the services root`);
+        counts.appWideListeners = derived.size;
+        // A scoped or hosted copy registers what Orca's original registers.
+        for (const [orcaHook, mine] of [...HOSTED_SWAPS].filter(([o]) => o !== APP_WIDE_HOOK).concat([[APP_WIDE_PERSISTENCE, HOSTED_PERSISTENCE]])) {
+            const theirs = appWideListeners(ts, orcaHook === APP_WIDE_PERSISTENCE ? persistenceFile : servicesFile, orcaHook, read, rendererSrc);
+            const ours = appWideListeners(ts, entryAt, mine, read, rendererSrc);
+            for (const l of theirs) if (!ours.has(l)) fails.push(`${mine} has no ${l} listener, which Orca's ${orcaHook} adds`);
+            for (const l of ours) if (!theirs.has(l)) fails.push(`${mine} adds a ${l} listener, which Orca's ${orcaHook} does not`);
         }
         if (orcaTypes.size === 0) fails.push(`source moved: orca/${PRIMARY_SELECTION_HOOK} adds no document listener`);
         else if (!paneHook) fails.push(`the entry defines no function ${PANE_HOOK}`);
@@ -363,7 +491,7 @@ function render(r) {
     if (r.skip) return { code: 0, lines: [`${NAME}: SKIP -- ${r.skip}`] };
     if (r.fails.length) return { code: 1, lines: [...r.notes, ...r.fails.map(f => `${NAME}: FAIL -- ${f}`)] };
     const c = r.counts;
-    return { code: 0, lines: [...r.notes, `${NAME}: PASS -- tracked status at baseline; React marker ${c.reactMarkerStandalone} file(s) in the standalone variant, ${c.reactMarkerPanes} in pb-panes/${c.react ? `; React ${c.react}` : ''}; ${c.assets} build:web asset(s), none newly inlined${c.overlaySources ? `; ${c.overlaySources} overlay source(s) import no tab bar, TabGroupPanel or client-side terminal creation; C3 exports exact (C3-65 included)` : ''}${c.modules ? `; ${c.modules} module(s) in the bundle graph, no EditorPanel or EditorContent` : ''}${c.rootDialogs ? `; ${c.rootDialogs} app-root dialog(s) the bundle opens all hosted` : ''}${c.hostedServices ? `; no unscoped primary-selection hook, ${c.hostedServices} app-shell call(s) and ${c.paneListeners} listener type(s) equal to Orca's` : ''}${c.preset ? `; ${PRESET_EXPORT} exported at the pin` : ''}${c.consumers ? `; consumer API ${c.consumers.join(', ')} covered` : ''}`] };
+    return { code: 0, lines: [...r.notes, `${NAME}: PASS -- tracked status at baseline; React marker ${c.reactMarkerStandalone} file(s) in the standalone variant, ${c.reactMarkerPanes} in pb-panes/${c.react ? `; React ${c.react}` : ''}; ${c.assets} build:web asset(s), none newly inlined${c.overlaySources ? `; ${c.overlaySources} overlay source(s) import no tab bar, TabGroupPanel or client-side terminal creation; C3 exports exact (C3-65 included)` : ''}${c.modules ? `; ${c.modules} module(s) in the bundle graph, no EditorPanel or EditorContent` : ''}${c.rootDialogs ? `; ${c.rootDialogs} app-root dialog(s) the bundle opens all hosted` : ''}${c.hostedServices ? `; no unscoped app-wide hook, ${c.hostedServices} app-shell call(s) and ${c.paneListeners} selection listener type(s) equal to Orca's` : ''}${c.hostedPersistence ? `; ${c.hostedPersistence} session-persistence call(s) equal to Orca's less its unload veto` : ''}${c.appWideListeners ? `; ${c.appWideListeners} app-wide listener(s) of the services root all classified` : ''}${c.preset ? `; ${PRESET_EXPORT} exported at the pin` : ''}${c.consumers ? `; consumer API ${c.consumers.join(', ')} covered` : ''}`] };
 }
 
 function realPaths() {
@@ -391,10 +519,16 @@ function fixture(dir, theiaTs) {
     w(join(dir, 'theia', 'node_modules', 'react', 'package.json'), '{"version":"19.2.8"}');
     execFileSync('ln', ['-s', theiaTs, join(dir, 'theia', 'node_modules', 'typescript')]);
     const exports = C3_EXPORTS.map(n => `export const ${n} = 1`).join('\n');
-    const services = `function ${HOSTED_SERVICES}() {\n  const on = useAppStore((s) => s.on)\n  useLargeTextControlPaste()\n  ${PANE_HOOK}(on)\n}\n`;
-    const paneHook = `function ${PANE_HOOK}(enabled) {\n  const listeners = [...(enabled ? [['selectionchange', capture, false]] : []), ['mousedown', onDown, true], ['paste', onPaste, true]]\n}\n`;
-    w(join(dir, 'overlay', 'files', ENTRY_REL), `import '../assets/main.css'\nimport { a } from './helper'\nimport { del } from '../components/sidebar/delete-flow'\nimport { resolvePrimarySelectionMiddleClickPaste } from '../hooks/usePrimarySelectionPaste'\nexport type T = string\n${exports}\nconst host = (activeModal) => activeModal === 'delete-worktree'\n${paneHook}${services}`);
-    w(join(orca, APP_SHELL_SERVICES), `import { ${APP_WIDE_HOOK} } from '../hooks/usePrimarySelectionPaste'\nexport function ${APP_WIDE_SERVICES}(): void {\n  const on = useAppStore((s) => s.on)\n  useLargeTextControlPaste()\n  ${APP_WIDE_HOOK}(on)\n}\n`);
+    const services = `function ${HOSTED_SERVICES}() {\n  const on = useAppStore((s) => s.on)\n  useRecovery()\n  usePaneLargeTextControlPaste()\n  ${PANE_HOOK}(on)\n}\n`;
+    const paneHook = `function ${PANE_HOOK}(enabled) {\n  const listeners = [...(enabled ? [['selectionchange', capture, false]] : []), ['mousedown', onDown, true], ['paste', onPaste, true]]\n  for (const [t, l, c] of listeners) document.addEventListener(t, l, c)\n}\n`;
+    const hostedHooks = `function usePaneLargeTextControlPaste() {\n  useEffect(() => { document.addEventListener('paste', onPaste, true) }, [])\n}\nfunction ${HOSTED_PERSISTENCE}() {\n  useEffect(() => { window.addEventListener('beforeunload', (event) => { guard.persistOnce() }) }, [])\n}\nfunction Services() {\n  ${HOSTED_SERVICES}()\n  ${HOSTED_PERSISTENCE}()\n}\n`;
+    w(join(dir, 'overlay', 'files', ENTRY_REL), `import '../assets/main.css'\nimport { a } from './helper'\nimport { del } from '../components/sidebar/delete-flow'\nimport { resolvePrimarySelectionMiddleClickPaste } from '../hooks/usePrimarySelectionPaste'\nimport { useRecovery } from '../runtime/recovery'\nexport type T = string\n${exports}\nconst host = (activeModal) => activeModal === 'delete-worktree'\n${paneHook}${hostedHooks}${services}`);
+    w(join(orca, APP_SHELL_SERVICES), `import { ${APP_WIDE_HOOK} } from '../hooks/usePrimarySelectionPaste'\nimport { useLargeTextControlPaste } from '../hooks/useLargeTextControlPaste'\nimport { useRecovery } from '../runtime/recovery'\nexport function ${APP_WIDE_SERVICES}(): void {\n  const on = useAppStore((s) => s.on)\n  useRecovery()\n  useLargeTextControlPaste()\n  ${APP_WIDE_HOOK}(on)\n}\n`);
+    w(join(orca, 'src/renderer/src/hooks/useLargeTextControlPaste.ts'), `import { addLargeTextControlPasteListener } from '@/lib/large-text-control-paste'\nexport function useLargeTextControlPaste(): void {\n  useEffect(() => addLargeTextControlPasteListener(document, {}), [])\n}\n`);
+    w(join(orca, 'src/renderer/src/lib/large-text-control-paste.ts'), `export function addLargeTextControlPasteListener(target, options) {\n  target.addEventListener('paste', onPaste, { capture: true })\n}\n`);
+    w(join(orca, 'src/renderer/src/runtime/recovery.ts'), `import { onReturn } from './recovery-helper'\nexport function useRecovery(): void {\n  useEffect(() => onReturn(window), [])\n}\n`);
+    w(join(orca, 'src/renderer/src/runtime/recovery-helper.ts'), `export const onReturn = (target) => {\n  target.addEventListener('online', reconnect)\n}\n`);
+    w(join(orca, SESSION_PERSISTENCE), `export function ${APP_WIDE_PERSISTENCE}(): void {\n  useEffect(() => {\n    const handler = createShutdownCheckpointBeforeUnloadHandler(guard, isPairedWebClientWindow() ? undefined : () => showShutdownCheckpointFailureToast('reload'))\n    window.addEventListener('beforeunload', handler)\n  }, [])\n}\n`);
     w(join(orca, PRIMARY_SELECTION_HOOK), `export const resolvePrimarySelectionMiddleClickPaste = (s) => s\nexport function ${APP_WIDE_HOOK}(enabled: boolean): void {\n  document.addEventListener('selectionchange', capture)\n  document.addEventListener('mousedown', onDown, true)\n  document.addEventListener('paste', onPaste, true)\n}\n`);
     w(join(dir, 'overlay', 'files', 'src/renderer/src/pb/helper.ts'), `import { useAppStore } from '../store'\nexport const a = 1\n`);
     w(join(orca, 'src/renderer/src/store/index.ts'), `export const useAppStore = 1\n`);
@@ -403,7 +537,8 @@ function fixture(dir, theiaTs) {
     w(join(orca, 'src/renderer/src/components/sidebar/delete-flow.ts'), `export const del = (s) => s.openModal('delete-worktree')\nexport const own = (s) => s.openModal('edit-meta')\n`);
     w(join(orca, DEVICE_KEY_SUPPORT), `export function ${PRESET_EXPORT}(support: string | null): void {}\n`);
     w(join(dir, 'theia', 'extensions', 'orca-panes', 'src', 'common', 'protocol.ts'), `export interface OrcaPaneBundleApi {\n    bootstrap(options: { pairing: string }): Promise<void>;\n    reactIdentity: unknown;\n}\n`);
-    return { orcaDir: orca, overlayDir: join(dir, 'overlay'), standaloneDir: join(dir, 'standalone'), baselineFile: join(dir, 'baseline.txt'), theiaDir: join(dir, 'theia'), font };
+    const listenerTable = { [`${PANE_HOOK} document:t`]: 'scoped', 'usePaneLargeTextControlPaste document:paste': 'scoped', [`${HOSTED_PERSISTENCE} window:beforeunload`]: 'never cancels', 'useRecovery window:online': 'reads only' };
+    return { orcaDir: orca, overlayDir: join(dir, 'overlay'), standaloneDir: join(dir, 'standalone'), baselineFile: join(dir, 'baseline.txt'), theiaDir: join(dir, 'theia'), listenerTable, font };
 }
 
 function selfTest() {
@@ -450,12 +585,22 @@ function selfTest() {
     run("Orca's useAppShellServices in the graph is red for the hook it calls", p => appendEntry(p, `import { ${APP_WIDE_SERVICES} } from '../app-shell/use-app-shell-services'\n`), /^src\/renderer\/src\/app-shell\/use-app-shell-services\.ts calls usePrimarySelectionPaste/);
     run('the unscoped hook called from an overlay file is red', p => writeFileSync(join(dirname(entry(p)), 'helper.ts'), `import { ${APP_WIDE_HOOK} } from '../hooks/usePrimarySelectionPaste'\nexport const a = () => ${APP_WIDE_HOOK}(true)\n`), /^src\/renderer\/src\/pb\/helper\.ts calls usePrimarySelectionPaste/);
     run('a hook Orca adds to useAppShellServices is red until hosted', p => editFile(join(p.orcaDir, APP_SHELL_SERVICES), '  useLargeTextControlPaste()\n', '  useLargeTextControlPaste()\n  useNewShellThing()\n'), /^useHostedAppShellServices lacks useNewShellThing/);
-    run('a hook the hosted services add is red', p => editFile(entry(p), '  useLargeTextControlPaste()\n', '  useLargeTextControlPaste()\n  usePbExtra()\n'), /^useHostedAppShellServices calls usePbExtra, which Orca's/);
-    run('the hosted services keeping the unscoped hook is red', p => editFile(entry(p), `  ${PANE_HOOK}(on)\n`, `  ${APP_WIDE_HOOK}(on)\n`), /calls usePrimarySelectionPaste: Orca's middle-click paste listeners/);
+    run('a hook the hosted services add is red', p => editFile(entry(p), '  usePaneLargeTextControlPaste()\n', '  usePaneLargeTextControlPaste()\n  usePbExtra()\n'), /^useHostedAppShellServices calls usePbExtra, which Orca's/);
+    run('the hosted services keeping the unscoped hook is red', p => editFile(entry(p), `  ${PANE_HOOK}(on)\n`, `  ${APP_WIDE_HOOK}(on)\n`), /calls usePrimarySelectionPaste: Orca's listeners would act/);
     run('a document listener Orca adds is red until the pane hook has it', p => editFile(join(p.orcaDir, PRIMARY_SELECTION_HOOK), "  document.addEventListener('paste'", "  document.addEventListener('contextmenu', onMenu, true)\n  document.addEventListener('paste'"), /^usePanePrimarySelectionPaste has no 'contextmenu' listener/);
     run('a listener the pane hook adds is red', p => editFile(entry(p), "['paste', onPaste, true]", "['paste', onPaste, true], ['keydown', onKey, true]"), /^usePanePrimarySelectionPaste adds a 'keydown' listener/);
     run('Orca services without the hook is red "source moved"', p => editFile(join(p.orcaDir, APP_SHELL_SERVICES), `  ${APP_WIDE_HOOK}(on)\n`, ''), /^source moved: orca\/src\/renderer\/src\/app-shell\/use-app-shell-services\.ts has no function useAppShellServices calling usePrimarySelectionPaste/);
     run('an Orca hook with no document listener is red "source moved"', p => writeFileSync(join(p.orcaDir, PRIMARY_SELECTION_HOOK), `export const resolvePrimarySelectionMiddleClickPaste = (s) => s\nexport function ${APP_WIDE_HOOK}(): void {}\n`), /^source moved: orca\/src\/renderer\/src\/hooks\/usePrimarySelectionPaste\.ts adds no document listener/);
+    // Owner ruling 2026-11-17, "Test and scope if needed": the large paste and the unload veto, and every app-wide listener classified.
+    const recovery = p => join(p.orcaDir, 'src/renderer/src/runtime/recovery-helper.ts');
+    run('the hosted services keeping Orca\'s large-paste hook is red', p => editFile(entry(p), '  usePaneLargeTextControlPaste()\n', '  useLargeTextControlPaste()\n'), /calls useLargeTextControlPaste: Orca's listeners would act/);
+    run('a listener type Orca\'s large paste adds is red until the pane copy has it', p => editFile(join(p.orcaDir, 'src/renderer/src/lib/large-text-control-paste.ts'), "  target.addEventListener('paste'", "  target.addEventListener('beforeinput', onInput, true)\n  target.addEventListener('paste'"), /^usePaneLargeTextControlPaste has no document:beforeinput listener/);
+    run('a document listener a re-pin adds to an app-shell hook (through an imported helper) is red until classified', p => editFile(recovery(p), "  target.addEventListener('online'", "  document.addEventListener('keydown', onKey, true)\n  target.addEventListener('online'"), /^unclassified app-wide listener: useRecovery document:keydown/);
+    run('a classified listener nothing installs any more is red', p => editFile(recovery(p), "  target.addEventListener('online', reconnect)\n", ''), /^stale classification: useRecovery window:online/);
+    run("the services root mounting Orca's useAppSessionPersistence is red", p => editFile(entry(p), `  ${HOSTED_PERSISTENCE}()\n}`, `  ${APP_WIDE_PERSISTENCE}()\n}`), /calls useAppSessionPersistence: Orca's listeners would act on the whole Theia document or hold its unload/);
+    run('the hosted session persistence calling Orca\'s veto handler is red', p => editFile(entry(p), '(event) => { guard.persistOnce() }', 'createShutdownCheckpointBeforeUnloadHandler(guard)'), /^useHostedAppSessionPersistence calls createShutdownCheckpointBeforeUnloadHandler, which Orca's/);
+    run('the hosted session persistence cancelling the unload is red', p => editFile(entry(p), '{ guard.persistOnce() }', '{ if (!guard.persistOnce()) event.preventDefault() }'), /^useHostedAppSessionPersistence cancels an event/);
+    run('Orca\'s persistence without its veto is red "source moved"', p => editFile(join(p.orcaDir, SESSION_PERSISTENCE), 'createShutdownCheckpointBeforeUnloadHandler(guard, ', 'makeHandler(guard, '), /^source moved: orca\/src\/renderer\/src\/app-shell\/use-app-session-persistence\.ts has no function useAppSessionPersistence/);
     const bad = spawnSync(process.execPath, [SELF, '--nope'], { encoding: 'utf8' });
     ok('an unknown argument exits 2', bad.status === 2);
     console.log(failed ? `${NAME} self-test: FAIL -- ${failed} case(s)` : `${NAME} self-test: PASS -- every planted fault went red naming it`);

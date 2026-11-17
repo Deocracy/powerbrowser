@@ -12,7 +12,7 @@
 import '../assets/main.css'
 
 import * as React from 'react'
-import ReactObject from 'react'
+import ReactObject, { useEffect } from 'react'
 import * as ReactDOMClient from 'react-dom/client'
 // @ts-expect-error -- virtual module served by vite.pb-panes.config.ts's marker plugin
 import { PB_CONFIG_MARKERS } from 'virtual:pb-panes-markers'
@@ -39,14 +39,29 @@ import { readStructuredChatTabName } from '../runtime/structured-chat-tab-name'
 import { I18nProvider } from '../i18n/I18nProvider'
 import { useAppStore } from '../store'
 import { AppBackgroundServices } from '../app-shell/AppBackgroundServices'
-import { useAppSessionPersistence } from '../app-shell/use-app-session-persistence'
+import { createSessionWriteSubscriber } from '../lib/session-write-subscriber'
+import { buildActiveViewUnloadPatch } from '../lib/active-view-persist'
+import { isIntentionalAppRestartInProgress, registerUpdaterBeforeUnloadBypass } from '../lib/updater-beforeunload'
+import { buildWorkspaceSessionPayload, shouldPersistWorkspaceSession } from '../lib/workspace-session'
+import { buildWorkspaceSessionHostSnapshots, patchWorkspaceSessionByHost } from '../lib/workspace-session-host-persistence'
+import { createShutdownCheckpointGuard } from '../lib/shutdown-checkpoint-guard'
+import { createShutdownCheckpointPersist } from '../app-shell/shutdown-checkpoint-persist'
+import { shutdownBufferCaptures } from '../components/terminal-pane/shutdown-buffer-captures'
+import { dispatchWindowCloseRequest, isWindowCloseCheckpointInProgress } from '../components/window-close-request-coordinator'
+import { ORCA_LAYOUT_OWNER_IS_MAIN } from '../../../shared/layout-owner-switch'
+import { ORCA_APP_RESTART_ABORTED_EVENT, ORCA_UPDATER_QUIT_AND_INSTALL_ABORTED_EVENT } from '../../../shared/updater-renderer-events'
+import {
+  ORCA_RENDERER_SHUTDOWN_CHECKPOINT_ABORTED_EVENT,
+  ORCA_RENDERER_SHUTDOWN_CHECKPOINT_FAILED_EVENT,
+  ORCA_RENDERER_UNLOAD_PREVENTED_EVENT
+} from '../../../shared/renderer-shutdown-events'
 import { useClosedEditorTabCleanup } from '../components/editor/useClosedEditorTabCleanup'
 import { useIpcEvents } from '../hooks/useIpcEvents'
 import { useAutomationDispatchEvents } from '../hooks/useAutomationDispatchEvents'
 import { useReadOnScreenAttention } from '../hooks/useReadOnScreenAttention'
 import { useAppMenuPaste } from '../hooks/useAppMenuPaste'
 import { useAppMenuSelectionActions } from '../hooks/useAppMenuSelectionActions'
-import { useLargeTextControlPaste } from '../hooks/useLargeTextControlPaste'
+import { handleLargeTextControlPasteEvent } from '../lib/large-text-control-paste'
 import { resolvePrimarySelectionMiddleClickPaste } from '../hooks/usePrimarySelectionPaste'
 import { useRadixBodyPointerEventsRecovery } from '../hooks/useRadixBodyPointerEventsRecovery'
 import { useOsc52ClipboardDefaultOnNotice } from '../components/terminal-pane/osc52-clipboard-default-on-notice'
@@ -99,6 +114,7 @@ import { makePaneKey } from '../../../shared/stable-pane-id'
 import { CLIENT_NAVIGATION_PUBLICATION_EPOCH_SUFFIX } from '../../../shared/runtime-session-contracts'
 import { resolveUnifiedTabLabel } from '../../../shared/tab-title-resolution'
 import type { KeybindingActionId, KeybindingOverrides, TerminalShortcutPolicy } from '../../../shared/keybindings'
+import type { GlobalSettings } from '../../../shared/global-settings-types'
 import type { Tab, TabGroupLayoutNode } from '../../../shared/tab-types'
 import type { TerminalPaneLayoutNode } from '../../../shared/terminal-tab-types'
 import type { TuiAgent } from '../../../shared/tui-agent'
@@ -302,8 +318,22 @@ function usePanePrimarySelectionPaste(enabled: boolean): void {
   }, [enabled])
 }
 
-/** Orca's useAppShellServices (app-shell/use-app-shell-services.ts) with its primary-selection hook scoped to the hosted
- * panes. orca-pane-entry clause l derives Orca's call list at check time and requires this one to match it. */
+// Owner ruling 2026-11-17 ("Test and scope if needed"): Orca's useLargeTextControlPaste claims every paste above 64 KiB into
+// any input or textarea of the document, so Theia's editors and inputs never saw their own paste event and a single-line
+// field lost Gecko's newline handling. The same claim, for targets inside a hosted pane root only. Orca's too-large toast
+// is not repeated: the Theia document mounts no toaster, so it showed nothing here.
+function usePaneLargeTextControlPaste(): void {
+  useEffect(() => {
+    const onPaste = (event: Event): void => {
+      if (inPaneRoot(event.target)) handleLargeTextControlPasteEvent(event as ClipboardEvent)
+    }
+    document.addEventListener('paste', onPaste, true)
+    return () => document.removeEventListener('paste', onPaste, true)
+  }, [])
+}
+
+/** Orca's useAppShellServices (app-shell/use-app-shell-services.ts) with its primary-selection and large-paste hooks scoped
+ * to the hosted panes. orca-pane-entry clause l derives Orca's call list at check time and requires this one to match it. */
 function useHostedAppShellServices(): void {
   const workspaceSessionReady = useAppStore((s) => s.workspaceSessionReady)
   const persistedUIReady = useAppStore((s) => s.persistedUIReady)
@@ -326,7 +356,7 @@ function useHostedAppShellServices(): void {
   useReadOnScreenAttention()
   useAppMenuPaste()
   useAppMenuSelectionActions()
-  useLargeTextControlPaste()
+  usePaneLargeTextControlPaste()
   usePanePrimarySelectionPaste(primarySelectionMiddleClickPaste)
   useOsc52ClipboardDefaultOnNotice(persistedUIReady)
   useBrowserIdentityMigrationNotice()
@@ -334,11 +364,80 @@ function useHostedAppShellServices(): void {
   useCodexTerminalServerIsolationNotice()
 }
 
+// Owner ruling 2026-11-17 ("Test and scope if needed"): Orca's useAppSessionPersistence cancels the unload when its
+// shutdown checkpoint throws (a full localStorage, a snapshot error), and PowerBrowser's quit and a Theia reload ask the
+// same leave check, so Orca could hold them. This is that hook with the checkpoint still run at every unload and a
+// failure reported as Orca reports it, never by cancelling. orca-pane-entry clause l requires Orca's calls less the veto's.
+const SLEEPING_AGENT_RESUME_CAPTURE_INTERVAL_MS = 60_000 // as Orca's: bounds hard-kill loss of resume records
+
+function useHostedAppSessionPersistence(): void {
+  useEffect(() => registerUpdaterBeforeUnloadBypass(), [])
+
+  useEffect(() => {
+    return createSessionWriteSubscriber({
+      store: useAppStore,
+      onPersistError: (error) => console.warn('[session] Session patch failed:', error),
+      persist: ({ patch }) => patchWorkspaceSessionByHost(window.api.session, patch, useAppStore.getState()).written
+    })
+  }, [])
+
+  useEffect(() => {
+    const shutdownCheckpointPersist = createShutdownCheckpointPersist({
+      shouldCaptureSession: () => shouldPersistWorkspaceSession(useAppStore.getState()),
+      captureTerminalBuffers: () => {
+        for (const capture of shutdownBufferCaptures.values()) {
+          try {
+            capture({ includeLocalBuffers: false })
+          } catch {
+            // As Orca's: one pane's failure does not block the rest.
+          }
+        }
+      },
+      captureSleepingAgentSessions: ORCA_LAYOUT_OWNER_IS_MAIN
+        ? () => {}
+        : () => useAppStore.getState().captureAllSleepingAgentSessions('quit'),
+      buildSessionSnapshots: () => {
+        const freshState = useAppStore.getState()
+        return buildWorkspaceSessionHostSnapshots(buildWorkspaceSessionPayload(freshState), freshState)
+      },
+      buildUiPatch: () => buildActiveViewUnloadPatch(useAppStore.getState()),
+      hasDirtyOpenFiles: () => useAppStore.getState().openFiles.some((file) => file.isDirty),
+      isDegradableShutdownInProgress: () => isIntentionalAppRestartInProgress() || isWindowCloseCheckpointInProgress(),
+      stageBeforeUnloadSync: (args) => window.api.app.stageBeforeUnloadSync(args)
+    })
+    const shutdownCheckpoint = createShutdownCheckpointGuard(shutdownCheckpointPersist.run, shutdownCheckpointPersist.abandonAttempt)
+    const persistBeforeUnload = (event: Event): void => {
+      if (!shutdownCheckpoint.persistOnce()) event.currentTarget?.dispatchEvent(new Event(ORCA_RENDERER_SHUTDOWN_CHECKPOINT_FAILED_EVENT))
+    }
+    window.addEventListener('beforeunload', persistBeforeUnload)
+    window.addEventListener(ORCA_RENDERER_SHUTDOWN_CHECKPOINT_ABORTED_EVENT, shutdownCheckpoint.abortAfterCheckpointFailure)
+    window.addEventListener(ORCA_APP_RESTART_ABORTED_EVENT, shutdownCheckpoint.abandonAttempt)
+    window.addEventListener(ORCA_UPDATER_QUIT_AND_INSTALL_ABORTED_EVENT, shutdownCheckpoint.abandonAttempt)
+    window.addEventListener(ORCA_RENDERER_UNLOAD_PREVENTED_EVENT, shutdownCheckpoint.abandonAttempt)
+    return () => {
+      window.removeEventListener('beforeunload', persistBeforeUnload)
+      window.removeEventListener(ORCA_RENDERER_SHUTDOWN_CHECKPOINT_ABORTED_EVENT, shutdownCheckpoint.abortAfterCheckpointFailure)
+      window.removeEventListener(ORCA_APP_RESTART_ABORTED_EVENT, shutdownCheckpoint.abandonAttempt)
+      window.removeEventListener(ORCA_UPDATER_QUIT_AND_INSTALL_ABORTED_EVENT, shutdownCheckpoint.abandonAttempt)
+      window.removeEventListener(ORCA_RENDERER_UNLOAD_PREVENTED_EVENT, shutdownCheckpoint.abandonAttempt)
+    }
+  }, [])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (shouldPersistWorkspaceSession(useAppStore.getState())) useAppStore.getState().captureAllSleepingAgentSessions('periodic')
+    }, SLEEPING_AGENT_RESUME_CAPTURE_INTERVAL_MS)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  useEffect(() => window.api.ui.onWindowCloseRequested(dispatchWindowCloseRequest), [])
+}
+
 /** The startup hooks App runs, minus its window chrome (P64-04, Pattern 3). */
 function Services(): null {
   useHostedAppShellServices()
   useAppStartupHydration(noop)
-  useAppSessionPersistence()
+  useHostedAppSessionPersistence()
   useRuntimeGraphSync()
   useDocumentAppearance()
   return null
@@ -492,11 +591,21 @@ const HOSTED_TERMINAL_SHORTCUT_POLICY: TerminalShortcutPolicy = 'terminal-first'
 // Still active under terminal-first, yet control characters a terminal program reads: Ctrl+[ (Escape) and Ctrl+] are
 // Orca's split-pane focus keys. Released the same way (empty bindings in this store only; PowerBrowser splits panes).
 const HOSTED_TERMINAL_RELEASED_ACTIONS: readonly KeybindingActionId[] = ['terminal.focusPreviousPane', 'terminal.focusNextPane']
+// Owner ruling 2026-11-17 ("Preset it ON on Linux, in memory"): Orca's web client stores Middle-click Paste from Selection
+// off in a browser (its default reads process.platform), so on Linux hosted terminals start with it on, set like the policy
+// above. The user's own switch in Orca's hosted Settings wins for the session; after a reload or restart the preset applies
+// again, because the off Orca stored is indistinguishable from its default.
+const PRIMARY_SELECTION_PASTE_KEY = 'primarySelectionMiddleClickPaste' satisfies keyof GlobalSettings
+const PRESET_PRIMARY_SELECTION_PASTE = isLinuxUserAgent()
+let userChosePrimarySelectionPaste = false
 
 function hostedTerminalKeysPatch(state: State): Partial<State> | null {
   const patch: Partial<State> = {}
   if (state.settings && state.settings.terminalShortcutPolicy !== HOSTED_TERMINAL_SHORTCUT_POLICY) {
     patch.settings = { ...state.settings, terminalShortcutPolicy: HOSTED_TERMINAL_SHORTCUT_POLICY }
+  }
+  if (PRESET_PRIMARY_SELECTION_PASTE && !userChosePrimarySelectionPaste && state.settings && state.settings[PRIMARY_SELECTION_PASTE_KEY] !== true) {
+    patch.settings = { ...(patch.settings ?? state.settings), [PRIMARY_SELECTION_PASTE_KEY]: true }
   }
   if (HOSTED_TERMINAL_RELEASED_ACTIONS.some((id) => state.keybindings?.[id]?.length !== 0)) {
     const released: KeybindingOverrides = {}
@@ -513,6 +622,16 @@ function hostedTerminalKeys(): void {
   }
   apply(useAppStore.getState())
   useAppStore.subscribe((state) => apply(state))
+}
+
+/** Ends the preset once the user writes the switch (Orca's InputPane, through the host's settings API); passes each update on unchanged. */
+function observePrimarySelectionPasteChoice(): void {
+  const api = window.api.settings
+  const set = api.set.bind(api)
+  api.set = (updates) => {
+    if (Object.hasOwn(updates, PRIMARY_SELECTION_PASTE_KEY)) userChosePrimarySelectionPaste = true
+    return set(updates)
+  }
 }
 
 // Each step names itself on failure; the pairing input never enters a message.
@@ -537,6 +656,7 @@ export function bootstrap(options: { pairing: string }): Promise<void> {
     if (!assertSessionOnly()) throw new Error('session-only pairing unavailable')
     await step('installWebPreloadApi', () => installWebPreloadApi())
     staleNavigationEchoes()
+    observePrimarySelectionPasteChoice()
     hostedTerminalKeys()
     await step('services root', () => {
       const host = document.createElement('div')

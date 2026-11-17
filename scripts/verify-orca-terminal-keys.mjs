@@ -33,7 +33,13 @@
 //     ctrl on Linux), every matches('id') and keybindingMatchesAction('id', ...)
 //     literal in TerminalPane's keyboard sources (components/terminal-pane, tests
 //     excluded), the actions the entry releases, and the chords Orca's xterm
-//     bypass policy hard-codes (xterm-bypass-policy.ts).
+//     bypass policy hard-codes (xterm-bypass-policy.ts);
+//  f. the selection-paste preset (owner ruling 2026-11-17, "Preset it ON on Linux, in memory"): the one setting
+//     Orca's Middle-click Paste switch writes (InputPane.tsx's updateSettings literal) must be the key the entry
+//     presets, to true, under isLinuxUserAgent() and !userChosePrimarySelectionPaste; Orca's default
+//     (getDefaultPrimarySelectionMiddleClickPaste) must still read process.platform, the preset's premise; the user's
+//     write is seen by one window.api.settings.set wrapper that passes each update on unchanged and records it, the
+//     entry's only reach of window.api.settings.
 // Red on: the passthrough set differing from the shell keys either way; a
 // passthrough row anywhere under theia/extensions naming a switch key or the
 // close key; a switch key with no binding to NEXT_TAB or PREVIOUS_TAB, with a
@@ -95,6 +101,8 @@ const REL = {
     orcaDefs: 'orca/src/shared/keybindings',
     orcaPane: 'orca/src/renderer/src/components/terminal-pane',
     orcaBypass: 'orca/src/renderer/src/components/terminal-pane/xterm-bypass-policy.ts',
+    orcaInputPane: 'orca/src/renderer/src/components/settings/input/InputPane.tsx',
+    orcaPlatformDefaults: 'orca/src/shared/terminal-platform-defaults.ts',
 };
 const MODIFIERS = { accel: 'ctrl', shift: 'shift', alt: 'alt' };
 const MODIFIER_ORDER = ['ctrl', 'shift', 'alt', 'meta'];
@@ -350,6 +358,68 @@ function terminalPaneActions(root) {
     return ids;
 }
 
+const unwrap = (n) => (n && (ts.isSatisfiesExpression?.(n) || ts.isAsExpression(n) || ts.isParenthesizedExpression(n)) ? unwrap(n.expression) : n);
+
+/**
+ * Owner ruling 2026-11-17, "Preset it ON on Linux, in memory": the entry presets the one setting Orca's Middle-click Paste
+ * switch writes (InputPane's updateSettings literal) to true in its store, only where isLinuxUserAgent() holds and only
+ * until the user writes the switch; Orca's default must still read process.platform (off in a browser), the premise.
+ * The user's write is seen at window.api.settings.set by one observer that passes each update on unchanged; that observer
+ * is the only reach of window.api.settings the entry may have. Resolves { fails, key, observer: { contains(node) } | null }.
+ */
+function selectionPreset(root, entrySf) {
+    const fails = [];
+    for (const rel of [REL.orcaInputPane, REL.orcaPlatformDefaults]) if (!existsSync(join(root, rel))) fails.push(`${rel} is missing while ${REL.orca}/ is present`);
+    if (fails.length) return { fails, observer: null };
+    const read = (rel) => readFileSync(join(root, rel), 'utf8');
+    const written = new Set();
+    walk(parse(REL.orcaInputPane, read(REL.orcaInputPane)), (n) => {
+        if (ts.isCallExpression(n) && callName(n) === 'updateSettings' && n.arguments[0] && ts.isObjectLiteralExpression(n.arguments[0])) for (const k of Object.keys(propsOf(n.arguments[0]))) written.add(k);
+    });
+    const key = written.size === 1 ? [...written][0] : undefined;
+    if (!key) fails.push(`source moved: Orca's Middle-click Paste switch in ${REL.orcaInputPane} writes ${written.size} setting(s) through updateSettings, want exactly one`);
+    const def = constInitializer(parse(REL.orcaPlatformDefaults, read(REL.orcaPlatformDefaults)), 'getDefaultPrimarySelectionMiddleClickPaste');
+    if (!def) fails.push(`source moved: getDefaultPrimarySelectionMiddleClickPaste not found in ${REL.orcaPlatformDefaults}`);
+    else if (!/process\.platform/.test(def.getText())) fails.push(`Orca's default for ${key} no longer reads process.platform (${REL.orcaPlatformDefaults}), so the preset's premise (off in a browser) must be judged again`);
+
+    const keyLit = stringOf(unwrap(constInitializer(entrySf, 'PRIMARY_SELECTION_PASTE_KEY')));
+    if (keyLit === undefined) return { fails: [...fails, `PRIMARY_SELECTION_PASTE_KEY (a string literal) not found in ${REL.entry}`], observer: null };
+    if (key && keyLit !== key) fails.push(`the entry presets '${keyLit}', not the setting Orca's switch writes ('${key}')`);
+    const gate = unwrap(constInitializer(entrySf, 'PRESET_PRIMARY_SELECTION_PASTE'));
+    if (!gate || !ts.isCallExpression(gate) || callName(gate) !== 'isLinuxUserAgent') fails.push(`the preset is not limited to Linux: PRESET_PRIMARY_SELECTION_PASTE is ${gate ? gate.getText() : 'missing'}, not isLinuxUserAgent()`);
+    let assignment = null;
+    walk(entrySf, (n) => { if (ts.isPropertyAssignment(n) && ts.isComputedPropertyName(n.name) && n.name.expression.getText() === 'PRIMARY_SELECTION_PASTE_KEY') assignment = n; });
+    if (!assignment) fails.push(`the entry never presets ${keyLit} in its store`);
+    else {
+        if (assignment.initializer.kind !== ts.SyntaxKind.TrueKeyword) fails.push(`the entry presets ${keyLit} to ${assignment.initializer.getText()}, not true`);
+        let cond = assignment.parent;
+        while (cond && !ts.isIfStatement(cond)) cond = cond.parent;
+        const text = cond ? cond.expression.getText() : '';
+        if (!/\bPRESET_PRIMARY_SELECTION_PASTE\b/.test(text)) fails.push(`the preset is not limited to Linux: its condition (${REL.entry}:${lineOf(entrySf, assignment)}) does not read PRESET_PRIMARY_SELECTION_PASTE`);
+        if (!/!\s*userChosePrimarySelectionPaste\b/.test(text)) fails.push(`the preset does not yield to the user's choice: its condition (${REL.entry}:${lineOf(entrySf, assignment)}) does not read !userChosePrimarySelectionPaste`);
+    }
+    // The observer: `<api>.set = (<p>) => ...` in the function that reads window.api.settings.
+    let observer = null;
+    walk(entrySf, (n) => {
+        if (!ts.isBinaryExpression(n) || n.operatorToken.kind !== ts.SyntaxKind.EqualsToken || !ts.isPropertyAccessExpression(n.left) || n.left.name.getText() !== 'set' || !ts.isArrowFunction(n.right)) return;
+        let fn = n.parent;
+        while (fn && !ts.isFunctionDeclaration(fn)) fn = fn.parent;
+        if (fn && /window\.api\.settings\b/.test(fn.getText())) observer = { fn, arrow: n.right };
+    });
+    if (!observer) return { fails: [...fails, `no observer of the user's switch: the entry assigns no window.api.settings.set wrapper, so a user's off would be overwritten`], observer: null };
+    const param = observer.arrow.parameters[0]?.name.getText();
+    let records = false;
+    walk(observer.arrow.body, (n) => {
+        if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken && n.left.getText() === 'userChosePrimarySelectionPaste' && n.right.kind === ts.SyntaxKind.TrueKeyword) records = true;
+        if (!ts.isCallExpression(n)) return;
+        const callee = n.expression.getText();
+        if (callee === 'Object.hasOwn') return;
+        if (n.arguments.length !== 1 || n.arguments[0].getText() !== param) fails.push(`the observer writes through the host's settings API (${REL.entry}:${lineOf(entrySf, n)}: ${n.getText().slice(0, 80)}); it must pass each update on unchanged`);
+    });
+    if (!records) fails.push(`the user's write never ends the preset: the observer (${REL.entry}:${lineOf(entrySf, observer.arrow)}) does not set userChosePrimarySelectionPaste = true`);
+    return { fails, key, observer: { contains: (node) => node.pos >= observer.fn.pos && node.end <= observer.fn.end } };
+}
+
 /** Resolves { fails, policy, active: [{ id, keys }], ownerItems: [{ key, id }], released }. */
 function orcaHalf(root, d32) {
     const fails = [];
@@ -364,9 +434,11 @@ function orcaHalf(root, d32) {
     const released = releasedInit ? stringsOf(releasedInit) : [];
     if (policy === undefined) fails.push(`HOSTED_TERMINAL_SHORTCUT_POLICY (a string literal) not found in ${REL.entry}`);
     if (!releasedInit) fails.push(`HOSTED_TERMINAL_RELEASED_ACTIONS not found in ${REL.entry}`);
+    const preset = selectionPreset(root, entrySf);
+    fails.push(...preset.fails);
     walk(entrySf, (n) => {
         if (ts.isCallExpression(n) && ORCA_WRITE_ACTIONS.includes(callName(n))) fails.push(`${REL.entry}:${lineOf(entrySf, n)} calls Orca's ${callName(n)}, which writes orcad's persisted settings or keybindings (C13 sets the policy in memory only)`);
-        if (ts.isPropertyAccessExpression(n) && /^window\.api\.(settings|keybindings)$/.test(n.getText())) fails.push(`${REL.entry}:${lineOf(entrySf, n)} reaches ${n.getText()}, the host's persisted settings or keybindings`);
+        if (ts.isPropertyAccessExpression(n) && /^window\.api\.(settings|keybindings)$/.test(n.getText()) && !preset.observer?.contains(n)) fails.push(`${REL.entry}:${lineOf(entrySf, n)} reaches ${n.getText()}, the host's persisted settings or keybindings`);
     });
 
     // Orca's policy vocabulary.
@@ -612,7 +684,7 @@ export class OrcaPaneWidget {
 };
 
 /** The tree's own files the self-test copies (the Orca sources at the pin, the chrome-bar rows, Theia core's rows). */
-const COPIED = [REL.pageKeys, REL.shortcuts, REL.chromeKeys, REL.theiaCommon, REL.entry, REL.orcaTypes, REL.orcaEffective, REL.orcaDefs, REL.orcaPane];
+const COPIED = [REL.pageKeys, REL.shortcuts, REL.chromeKeys, REL.theiaCommon, REL.entry, REL.orcaTypes, REL.orcaEffective, REL.orcaDefs, REL.orcaPane, REL.orcaInputPane, REL.orcaPlatformDefaults];
 const OTHER_EXTENSION = 'theia/extensions/plant-ext/src/browser/plant-keybindings.ts';
 const CORE3 = `${REL.orcaDefs}/definitions-core-3.ts`;
 
@@ -643,6 +715,15 @@ export const PLANTS = [
     { name: 'Ctrl+[ no longer released by the entry', naming: 'takes ctrl+[, a control character', file: REL.entry, edit: (s) => s.replace("['terminal.focusPreviousPane', 'terminal.focusNextPane']", "['terminal.focusNextPane']") },
     { name: 'a released action Orca does not match in terminals', naming: "releases 'tab.close', which is not active in hosted terminals", file: REL.entry, edit: (s) => s.replace("['terminal.focusPreviousPane', 'terminal.focusNextPane']", "['terminal.focusPreviousPane', 'terminal.focusNextPane', 'tab.close']") },
     { name: 'the entry persists the policy through Orca', naming: 'calls Orca\'s updateSettings', file: REL.entry, edit: (s) => s.replace('  apply(useAppStore.getState())\n', "  apply(useAppStore.getState())\n  void useAppStore.getState().updateSettings({ terminalShortcutPolicy: 'terminal-first' })\n") },
+    // The Linux selection-paste preset (owner ruling 2026-11-17, "Preset it ON on Linux, in memory").
+    { name: 'the preset set to false', naming: 'not true', file: REL.entry, edit: (s) => s.replace('[PRIMARY_SELECTION_PASTE_KEY]: true }', '[PRIMARY_SELECTION_PASTE_KEY]: false }') },
+    { name: 'the preset on every platform', naming: 'the preset is not limited to Linux: PRESET_PRIMARY_SELECTION_PASTE is true', file: REL.entry, edit: (s) => s.replace('const PRESET_PRIMARY_SELECTION_PASTE = isLinuxUserAgent()', 'const PRESET_PRIMARY_SELECTION_PASTE = true') },
+    { name: "the preset ignoring the user's choice", naming: "does not yield to the user's choice", file: REL.entry, edit: (s) => s.replace('PRESET_PRIMARY_SELECTION_PASTE && !userChosePrimarySelectionPaste && ', 'PRESET_PRIMARY_SELECTION_PASTE && ') },
+    { name: 'the observer never recording the write', naming: "the user's write never ends the preset", file: REL.entry, edit: (s) => s.replace('userChosePrimarySelectionPaste = true\n', 'void 0\n') },
+    { name: 'the preset written through the settings API', naming: "writes through the host's settings API", file: REL.entry, edit: (s) => s.replace('    return set(updates)\n', '    return set({ ...updates, [PRIMARY_SELECTION_PASTE_KEY]: true })\n') },
+    { name: "a key Orca's switch does not write", naming: "not the setting Orca's switch writes", file: REL.entry, edit: (s) => s.replace("PRIMARY_SELECTION_PASTE_KEY = 'primarySelectionMiddleClickPaste'", "PRIMARY_SELECTION_PASTE_KEY = 'primarySelectionPaste'") },
+    { name: "Orca's default no longer reading process.platform", naming: 'the preset\'s premise', file: REL.orcaPlatformDefaults, edit: (s) => s.replace("export const getDefaultPrimarySelectionMiddleClickPaste = (\n  platform = typeof process !== 'undefined' ? process.platform : ''", "export const getDefaultPrimarySelectionMiddleClickPaste = (\n  platform = navigator.userAgent") },
+    { name: 'a second reach of window.api.settings', naming: 'reaches window.api.settings, the host', file: REL.entry, edit: (s) => s.replace('  apply(useAppStore.getState())\n', '  apply(useAppStore.getState())\n  void window.api.settings.getSync()\n') },
 ];
 
 function runSelfTest() {
@@ -703,6 +784,6 @@ if (isEntryPoint) {
         console.log(`${NAME}: note -- Orca chords still active in hosted terminals under '${r.orcaPolicy}' (released in memory: ${r.released.join(', ')}): ${r.note || 'none'}`);
         for (const o of r.ownerItems) console.log(`${NAME}: note -- owner item: ${o.key} stays ${o.id} (Orca's xterm bypass policy hard-codes it; no in-memory release)`);
     }
-    console.log(`${NAME}: PASS -- shell keys ${r.d32.shell.join(', ')}; switch keys ${r.d32.switch.join(', ')}; close key ${r.d32.close}; derived from PAGE_KEYS reserved rows; orca-panes rows ${r.panes}; switch and close bindings, twins and collisions compared; Orca terminal-first half ${r.orca}`);
+    console.log(`${NAME}: PASS -- shell keys ${r.d32.shell.join(', ')}; switch keys ${r.d32.switch.join(', ')}; close key ${r.d32.close}; derived from PAGE_KEYS reserved rows; orca-panes rows ${r.panes}; switch and close bindings, twins and collisions compared; Orca terminal-first half and the Linux selection-paste preset ${r.orca}`);
     process.exit(0);
 }

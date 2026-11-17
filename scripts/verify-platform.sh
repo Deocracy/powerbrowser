@@ -4001,9 +4001,12 @@ run_own_checks() {
     # action bodies; the close key ctrl+shift+w bound to CLOSE_TAB; no passthrough row or other registration takes a
     # switch or close key. Orca half (C13, a named SKIP only while orca/ is absent): the entry's in-memory policy is
     # Orca's non-default 'terminal-first', no Orca terminal action active under it takes a D-32 key or a releasable
-    # control chord, and the remaining active chords print as a note. orca-panes half a named SKIP only while its
-    # directory is absent. Self-test: 23 plants. orca-terminal-keys-live-self-test: D-32's pure verdicts over fixture
-    # observations plus a child-Node import-silence check.
+    # control chord, and the remaining active chords print as a note. Linux selection-paste preset (owner ruling
+    # 2026-11-17, "Preset it ON on Linux, in memory"): the entry presets in its store the one setting Orca's switch writes,
+    # to true, under isLinuxUserAgent() until the user writes it, seen by a pass-through window.api.settings.set wrapper
+    # (its only reach of window.api.settings); Orca's default must still read process.platform. orca-panes half a named
+    # SKIP only while its directory is absent. Self-test: 31 plants. orca-terminal-keys-live-self-test: D-32's and the
+    # paste and app-wide listener legs' pure verdicts over fixture observations plus a child-Node import-silence check.
     "orca-terminal-keys|node $REPO_ROOT/scripts/verify-orca-terminal-keys.mjs"
     "orca-terminal-keys-self-test|node $REPO_ROOT/scripts/verify-orca-terminal-keys.mjs --self-test"
     "orca-terminal-keys-live-self-test|node $REPO_ROOT/scripts/verify-orca-terminal-keys-live.mjs --self-test"
@@ -6792,8 +6795,10 @@ run_own_checks() {
       # NEW (64-01, TAB-04/TAB-06/TERM-01, P64-25/P64-32): orca-pane-entry, the pane bundle's build gate (tracked
       # status at the pre-build baseline, no React copy after the standalone detector moved, Orca's React major.minor
       # equal to Theia's when Theia is installed, nothing newly inlined, entry imports and C3 exports; clause l, owner
-      # ruling 2026-11-17: no bundle module calls Orca's document-wide useAppShellServices or usePrimarySelectionPaste,
-      # and the entry's pane-scoped copies match Orca's calls and listener types). SKIP when
+      # rulings 2026-11-17: no bundle module calls Orca's document-wide useAppShellServices, usePrimarySelectionPaste,
+      # useLargeTextControlPaste or useAppSessionPersistence; the entry's pane-scoped and veto-free copies match Orca's
+      # calls and listener types; every document or window listener the services root installs, derived through its
+      # hooks' calls, is classified in APP_WIDE_LISTENERS both ways, so a re-pin's new one is red). SKIP when
       # the bundle is not built. orca-pane-standalone-live: the bundle on a standalone page in a PowerBrowser web
       # tab with a scratch orcad; the isolated per-leaf terminal mount (P64-32) is measured first, then every
       # hosted type mounts after the planted throwing child registers. Run under
@@ -6813,9 +6818,12 @@ run_own_checks() {
       # in a t<n> terminal and a web tab judged by D-32 (shell keys to the shell, switch keys switch tabs with no PTY
       # bytes, ctrl+shift+w closes t<n>); stage 2 in a hosted Orca terminal (shell keys reach the PTY, switch keys
       # switch and reach no PTY once the PTY read is proven, the close key requests Orca's close; a named SKIP only
-      # while theia/extensions/orca-panes is absent); stage 2b (owner ruling 2026-11-17): a Theia editable gets the system
-      # selection at Orca's default (off in its web client) and with Orca's own switch turned on in its hosted Settings,
-      # and with it on a hosted terminal's selection pastes there once on a middle-click; then the control repeated. Run under
+      # while theia/extensions/orca-panes is absent); stage 2b (owner rulings 2026-11-17): Orca's switch reads on at
+      # PowerBrowser's default on Linux, a hosted terminal's selection pastes there once on a middle-click, a Theia editable
+      # gets the system selection throughout, and after the user turns the switch off in Orca's hosted Settings it stays
+      # off and the terminal pastes nothing; stage 2c: with Orca's checkpoint failing the Theia browser's leave check still
+      # permits, 100 KiB pastes reach Theia's editor and quick input as Gecko pastes them, and after an activation in Orca's
+      # worktree palette keys typed in a Theia editor or a web tab reach no Orca terminal; then the control repeated. Run under
       # flock /home/chris/coding/Power-Browser/.git/pb-live.lock with ORCA_* unset.
       "orca-terminal-keys-live|node $REPO_ROOT/scripts/verify-orca-terminal-keys-live.mjs"
       # orca-tabs-live (64-04, TAB-01..TAB-06/TERM-01, criteria 2, 3, 6): every creation path gives one hosted tab
