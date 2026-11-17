@@ -6606,15 +6606,15 @@ const STOCK_PAGE_TRUSTED_URLS = Object.freeze({
   support: "about:support",
 });
 
-/** A stock window's startup, polled: the window's own delayed-startup flag, never a Services observer. */
+/** A stock window's startup: the window's own delayed-startup flag and promise, never a Services observer. */
 async function stockWindowStarted(win) {
   const deadline = Date.now() + 15000;
   while (!win.closed && !(win.gBrowserInit && win.gBrowserInit.delayedStartupFinished)) {
     if (Date.now() > deadline) {
       throw new Error("openStockPage: the stock window did not finish starting");
     }
-    // WR-07: the module's sleep(), not win.setTimeout: a window's timer never fires once the window is destroyed.
-    await PowerBrowserAPI.sleep(50);
+    // WR-07: the module's sleep(), not win.setTimeout (dead with the window). The window's delayedStartupPromise wakes the caller in the startup task's microtasks: on a 50 ms tick alone, an openOptionsPage call reached the started window first and its stock switch loaded a second tab.
+    await Promise.race([PowerBrowserAPI.sleep(50), win.delayedStartupPromise].filter(Boolean));
   }
   if (win.closed) {
     throw new Error("openStockPage: the stock window closed while starting");
