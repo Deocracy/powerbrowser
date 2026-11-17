@@ -976,7 +976,7 @@
       "case_form": "title",
       "class": "coincidental",
       "target": "Orca",
-      "expected_count": 2975,
+      "expected_count": 3066,
       "expected_files": [
         ".claude/hooks/ledger-session-check.py",
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
@@ -1358,7 +1358,7 @@
       "case_form": "lower",
       "class": "coincidental",
       "target": "orca",
-      "expected_count": 5504,
+      "expected_count": 5555,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md",
@@ -1750,7 +1750,7 @@
       "case_form": "upper",
       "class": "coincidental",
       "target": "ORCA",
-      "expected_count": 1225,
+      "expected_count": 1253,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
@@ -1769,6 +1769,7 @@
         ".github/workflows/release.yml",
         "docs/BUILD.md",
         "docs/REBRANDING.md",
+        "orca-overlay/files/src/renderer/src/pb/pb-pane-mount.tsx",
         "orca-overlay/patches/010-installed-electron-switch.patch",
         "orca-overlay/patches/070-claude-agent-sdk-dir.patch",
         "orca-overlay/seams.json",
@@ -1826,6 +1827,7 @@
         "scripts/verify-orca-pairing-containment.mjs",
         "scripts/verify-orca-pane-css-live.mjs",
         "scripts/verify-orca-pane-css.mjs",
+        "scripts/verify-orca-pane-entry.mjs",
         "scripts/verify-orca-pane-routes.mjs",
         "scripts/verify-orca-pane-standalone-live.mjs",
         "scripts/verify-orca-pin.mjs",
@@ -1895,6 +1897,7 @@
         ".github/workflows/release.yml",
         "docs/BUILD.md",
         "docs/REBRANDING.md",
+        "orca-overlay/files/src/renderer/src/pb/pb-pane-mount.tsx",
         "orca-overlay/patches/010-installed-electron-switch.patch",
         "orca-overlay/patches/070-claude-agent-sdk-dir.patch",
         "orca-overlay/seams.json",
@@ -1952,6 +1955,7 @@
         "scripts/verify-orca-pairing-containment.mjs",
         "scripts/verify-orca-pane-css-live.mjs",
         "scripts/verify-orca-pane-css.mjs",
+        "scripts/verify-orca-pane-entry.mjs",
         "scripts/verify-orca-pane-routes.mjs",
         "scripts/verify-orca-pane-standalone-live.mjs",
         "scripts/verify-orca-pin.mjs",
@@ -2010,7 +2014,7 @@
       "case_form": "lower",
       "class": "coincidental",
       "target": "orcad",
-      "expected_count": 1783,
+      "expected_count": 1784,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md",
@@ -2894,14 +2898,16 @@
       "case_form": "literal",
       "class": "coincidental",
       "target": "resolveOrca",
-      "expected_count": 5,
+      "expected_count": 7,
       "expected_files": [
         "orca-overlay/upstream/010-installed-electron-switch/upstream.json",
-        "scripts/lib/orca-pane-harness.mjs"
+        "scripts/lib/orca-pane-harness.mjs",
+        "scripts/verify-orca-pane-entry.mjs"
       ],
       "only_in": [
         "orca-overlay/upstream/010-installed-electron-switch/upstream.json",
-        "scripts/lib/orca-pane-harness.mjs"
+        "scripts/lib/orca-pane-harness.mjs",
+        "scripts/verify-orca-pane-entry.mjs"
       ],
       "reason": "Phase 65 (plan 65-05): an in-word join the boundary matcher rejects (the letters before \"Orca\" are part of a camelCase identifier: resolveOrcaImport, the pane harness's import resolver), in scripts/lib/orca-pane-harness.mjs; measured with this scanner's own matcher on the merged Phase 65 tree. Phase 68 (plan 68-06 Task 2) re-measured this row after the p68-08 and p68-05 merges and the 68-06 fixes and exclusion rows; files added: orca-overlay/upstream/010-installed-electron-switch/upstream.json."
     },
