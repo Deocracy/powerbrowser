@@ -54,12 +54,14 @@
 //     own leave check (asyncPermitUnload('dontUnload'), what PowerBrowser's quit
 //     veto asks) must still permit, after a trusted input gave the page user
 //     activation. Large paste: 100 KiB through Gecko's paste command into an
-//     untitled Theia editor must reach the editor's own paste listener and arrive
-//     unchanged; 100 KiB of lines into Theia's quick input must reach it and equal
+//     untitled Theia editor must get past the document's capture listeners (where
+//     Orca's claim stopped it) and arrive unchanged; 100 KiB of lines into Theia's
+//     quick input must get past them too and equal
 //     Gecko's single-line paste of it (editor.singleLine.pasteNewlines 2, read at
 //     run time: trailing newlines dropped, the rest spaces); no Orca toast or
-//     dialog appears. Activation focus: with an Orca terminal hidden behind a Theia
-//     editor, its worktree is chosen in Orca's own worktree palette (the hosted
+//     dialog appears. Activation focus: with an Orca terminal (shown once first, so
+//     its own first-pane focus is spent) hidden behind a Theia editor, its worktree
+//     is chosen in Orca's own worktree palette (the hosted
 //     sidebar's search button, label read from SidebarNav.tsx), keyboard focus goes
 //     to a second Theia editor and the terminal is revealed: keys typed before and
 //     after must all land in the editor and none in the terminal's PTY; then, with
@@ -317,14 +319,14 @@ export function listenersVerdict(obs) {
     const e = l.paste?.editor;
     if (!e) fails.push('large paste: the Theia editor was not measured');
     else {
-        if (!e.reached) fails.push("large paste: a 100 KiB paste never reached the Theia editor's own paste listener (Orca claimed it)");
+        if (!e.reached) fails.push("large paste: a 100 KiB paste into the Theia editor never got past the document's capture listeners (Orca claimed it)");
         if (!e.equal) fails.push(`large paste: the Theia editor holds ${e.len} characters, not the 100 KiB pasted`);
     }
     const q = l.paste?.quick;
     if (!q) fails.push("large paste: Theia's quick input was not measured");
     else if (q.pref !== 2) fails.push(`large paste: NOT SCORED -- editor.singleLine.pasteNewlines is ${q.pref}, the oracle assumes 2`);
     else {
-        if (!q.reached) fails.push("large paste: 100 KiB of lines never reached Theia's quick input's own paste listener (Orca claimed it)");
+        if (!q.reached) fails.push("large paste: 100 KiB of lines into Theia's quick input never got past the document's capture listeners (Orca claimed it)");
         if (q.value !== q.expected) fails.push(`large paste: Theia's quick input holds ${JSON.stringify(String(q.value).slice(0, 40))}, not Gecko's single-line paste ${JSON.stringify(String(q.expected).slice(0, 40))} (${String(q.value).length} vs ${String(q.expected).length} characters)`);
     }
     const ui = l.paste?.ui;
@@ -516,8 +518,12 @@ export async function pasteLeg(ctx, lib) {
 const chromePaste = (app) => app.evaluateIn(app.chrome, `(() => { const b = document.getElementById('powerbrowser-content'); b.focus();
     const c = document.commandDispatcher.getControllerForCommand('cmd_paste'); if (!c) return 'no controller'; c.doCommand('cmd_paste'); return 'ok'; })()`);
 const setClipboard = (app, text) => app.evaluateIn(app.chrome, `(() => { try { Cc['@mozilla.org/widget/clipboardhelper;1'].getService(Ci.nsIClipboardHelper).copyString(${JSON.stringify(text)}); return 'ok'; } catch (e) { return 'error: ' + e; } })()`);
-/** Page-realm source: a once-listener on the focused element recording whether its own paste listener ran. */
-const MARK_PASTE_TARGET = `window.__pbPasteReached = false; const t = document.activeElement; if (t) t.addEventListener('paste', () => { window.__pbPasteReached = true; }, { once: true }); return t ? t.localName : null;`;
+/**
+ * Page-realm source: a once capture listener on <body> recording whether a paste got past the document's capture
+ * listeners (Orca's claim stops it there) and whether its target is inside `within`. Monaco stops a paste at its own
+ * textarea, so a listener on the target's ancestors in the bubble phase would never see it.
+ */
+const markPaste = (within) => `window.__pbPasteReached = false; document.body.addEventListener('paste', (e) => { window.__pbPasteReached = !!(e.target && e.target.closest && e.target.closest(${JSON.stringify(within)})); }, { capture: true, once: true }); return true;`;
 const ORCA_UI = `return document.querySelectorAll('[data-sonner-toast], [data-sonner-toaster], body > [role="dialog"], body > [role="alertdialog"], body > div [role="alertdialog"]').length;`;
 const typeKeys = async (ctx, text) => { for (const ch of text) await ctx.pressKey({ key: ch }); };
 
@@ -550,7 +556,7 @@ export async function appWideLeg(ctx, lib, pages) {
         if ((await setClipboard(app, code)) !== 'ok') throw new Error('harness: the clipboard could not be written');
         await ctx.focusTheiaFrame();
         await ctx.activate(editor);
-        await ctx.probe(MARK_PASTE_TARGET);
+        await ctx.probe(markPaste('.monaco-editor'));
         await chromePaste(app);
         let value = null;
         for (let last = -1, i = 0; i < 40; i++) { await sleep(250); value = await model(editor); if (value !== null && value.length === last) break; last = value ? value.length : -1; }
@@ -563,7 +569,7 @@ export async function appWideLeg(ctx, lib, pages) {
     const opened = await ctx.probe(`get('QuickInputService').open(''); await until(() => document.querySelector('.quick-input-box input'), 5000);
         const i = document.querySelector('.quick-input-box input'); if (!i) return false; i.focus(); return document.activeElement === i;`);
     if (!opened) throw new Error("harness: Theia's quick input did not open");
-    await ctx.probe(MARK_PASTE_TARGET);
+    await ctx.probe(markPaste('.quick-input-widget'));
     await chromePaste(app);
     await sleep(2500);
     out.paste.quick = await ctx.probe(`const i = document.querySelector('.quick-input-box input'); return { reached: window.__pbPasteReached, value: i ? i.value : null };`);
@@ -598,6 +604,12 @@ export async function appWideLeg(ctx, lib, pages) {
             await s.activateWidget(${JSON.stringify(E)}); s.revealWidget(${JSON.stringify(E2)}); await sleep(400);
             return { T: w(${JSON.stringify(T)}).isVisible, E: w(${JSON.stringify(E)}).isVisible, E2: w(${JSON.stringify(E2)}).isVisible };`);
         if (layout.T || !layout.E || !layout.E2) throw new Error(`harness: the focus layout did not form: ${JSON.stringify(layout)}`);
+        // T shown once first: Orca's TerminalPane creates its first pane when it is first shown and focuses it (its own
+        // mount, not the activation helper), so the leg below judges the helper alone. Then T hidden behind E again.
+        await ctx.focusTheiaFrame();
+        await ctx.activate(T);
+        await ctx.probe(`const s = get('ApplicationShell'); await until(() => s.getWidgetById(${JSON.stringify(T)}).node.querySelector('.xterm-helper-textarea'), 15000);
+            await s.activateWidget(${JSON.stringify(E)}); s.revealWidget(${JSON.stringify(E2)}); await sleep(400); return !s.getWidgetById(${JSON.stringify(T)}).isVisible;`);
         out.focus.palette = await ctx.probe(`const mode = document.body.getAttribute('data-pb-mode');
             await get('ModeService').activateMode('orca');
             try {
@@ -912,9 +924,9 @@ function runSelfTest() {
         ['Orca holding the leave check', 'Orca must never hold PowerBrowser\'s quit', () => withListeners((l) => { l.leave.permit = false; })],
         ['a leave check without user activation', 'leave check: NOT SCORED -- the Theia document had no user activation', () => withListeners((l) => { l.leave.activated = false; })],
         ["a leave check with Orca's checkpoint not failing", "leave check: NOT SCORED -- Orca's checkpoint reported no failure", () => withListeners((l) => { l.leave.failed = 0; })],
-        ['Orca claiming the editor paste', "never reached the Theia editor's own paste listener", () => withListeners((l) => { l.paste.editor.reached = false; })],
+        ['Orca claiming the editor paste', "into the Theia editor never got past the document's capture listeners", () => withListeners((l) => { l.paste.editor.reached = false; })],
         ['an editor paste arriving changed', 'the Theia editor holds 5 characters', () => withListeners((l) => { l.paste.editor.equal = false; l.paste.editor.len = 5; })],
-        ['Orca claiming the quick input paste', "never reached Theia's quick input's own paste listener", () => withListeners((l) => { l.paste.quick.reached = false; })],
+        ['Orca claiming the quick input paste', "into Theia's quick input never got past the document's capture listeners", () => withListeners((l) => { l.paste.quick.reached = false; })],
         ['newlines stripped in the quick input', "Theia's quick input holds \"line 0line 1\"", () => withListeners((l) => { l.paste.quick.value = 'line 0line 1'; })],
         ['an unexpected newline pref', 'editor.singleLine.pasteNewlines is 3', () => withListeners((l) => { l.paste.quick.pref = 3; })],
         ['an Orca toast after a paste', '1 Orca toast or dialog element(s) appeared', () => withListeners((l) => { l.paste.ui.after = 1; })],
