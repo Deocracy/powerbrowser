@@ -1006,7 +1006,15 @@ function cases(m, srcs, mm) {
             if (/win\.setTimeout/.test(body)) {
                 return 'the poll waits on win.setTimeout, which never fires once the stock window is destroyed (the openStockPage reply would hang)';
             }
-            return body.includes('await PowerBrowserAPI.sleep(') ? null : 'the poll does not wait on the module sleep()';
+            return /await (Promise\.race\(\[)?PowerBrowserAPI\.sleep\(/.test(body) ? null : 'the poll does not wait on the module sleep()';
+        }],
+        // 2026-11-16 gate (ext-tab-host-live options-page-switch): on the 50 ms tick alone, a second openOptionsPage reached
+        // the just-started window's stock switchToTabHavingURI before the deferred options tab was added, so two opened.
+        ['the stock-window startup wait also wakes on the window\'s own delayedStartupPromise', () => {
+            const code = stripComments(apiSrc);
+            const start = code.indexOf('async function stockWindowStarted(win) {');
+            const body = start < 0 ? '' : code.slice(start, code.indexOf('\n}\n', start));
+            return /await Promise\.race\(\[[^\]]*win\.delayedStartupPromise/.test(body) ? null : 'the wait only polls the flag: an extension call can reach the started window between the flag and the caller';
         }],
         ['webTabSiteInfo captures the origin before its await and refuses a page change (WR-01)', () => {
             const code = stripComments(apiSrc);
@@ -1264,9 +1272,16 @@ const PLANTS = [
     {
         name: 'the stock-window poll waits on a window timer (WR-07)',
         rel: API_REL,
-        from: '    await PowerBrowserAPI.sleep(50);',
-        to: '    await new Promise(resolve => win.setTimeout(resolve, 50));',
+        from: '    await Promise.race([PowerBrowserAPI.sleep(50), win.delayedStartupPromise].filter(Boolean));',
+        to: '    await Promise.race([new Promise(resolve => win.setTimeout(resolve, 50)), win.delayedStartupPromise].filter(Boolean));',
         expect: 'the stock-window startup poll uses the module sleep, not a window timer (WR-07)',
+    },
+    {
+        name: 'the stock-window wait polls the flag only (2026-11-16 gate)',
+        rel: API_REL,
+        from: '    await Promise.race([PowerBrowserAPI.sleep(50), win.delayedStartupPromise].filter(Boolean));',
+        to: '    await PowerBrowserAPI.sleep(50);',
+        expect: 'the stock-window startup wait also wakes on the window\'s own delayedStartupPromise',
     },
     {
         name: 'the purge joins the clear try (WR-06)',
