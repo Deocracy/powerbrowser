@@ -38,8 +38,8 @@ requirements:
   PLAT-02:
     status: needs_human
     plans: ["68-01", "68-06"]
-    evidence: "Last Linux live pass is 68-06 (35 of 38). Two of its three reds are now cleared: orca-licence-rulings PASS here (WINDOWS 44 fixed) and web-entry dropped (WINDOWS 52 fixed). Still red: orca-upstream-prs (owner, WINDOWS 51) and orca-tabs-live stage g3 tab-groups-cross-client (WINDOWS 55, TAB-04, Phase 64 owner of the stage, open, re-dated to next version by D-46). The flaky reds 56, 57, 58 are fixed (79354809, ad9a1939). No live row was run here."
-    human: "A Linux live pass on the current tree, and an owner decision on orca-tabs-live g3 (drive it green or accept WINDOWS 55's next-version date as the PLAT-02 exclusion). macOS and Windows smoke tests moved to the next version (D-40)."
+    evidence: "Last Linux live pass is 68-06 (35 of 38). Two of its three reds are now cleared: orca-licence-rulings PASS here (WINDOWS 44 fixed) and web-entry dropped (WINDOWS 52 fixed). Still red: orca-upstream-prs (owner, WINDOWS 51). orca-tabs-live stage g3 tab-groups-cross-client is green since 2ce581f2 and 3ad91d13 (WINDOWS 55 fixed, TAB-04, D-49). Gate run 4 at 080814fd had no unexcluded product red; orca-tabs-live did not run in it because the Claude sign-in was under 60 minutes from expiry (WINDOWS 69). The flaky reds 56, 57, 58 are fixed (79354809, ad9a1939). No live row was run here."
+    human: "A Linux live pass on the current tree, including orca-tabs-live once the Claude sign-in is refreshed (WINDOWS 69). macOS and Windows smoke tests moved to the next version (D-40)."
   BEXT-01:
     status: satisfied
     plans: ["68-04", "68-07", "68-09", "68-11", "68-06"]
@@ -75,9 +75,9 @@ human_verification:
   - test: "Container-built Linux release tarball and the first release.yml run"
     expected: "The Linux artifact carries <GreD>/orca with the linux-x64-glibc node-pty slot; orca-packaged-tree and orca-packaged-live pass on objdir-release"
     why_human: "Needs the push, the release runner and the release keys (PLAT-01, WINDOWS 30)"
-  - test: "Linux live pass on the current tree, and orca-tabs-live stage g3 driven green or accepted as excluded"
-    expected: "Every Phase 68 live row green; g3 either green or recorded by the owner as the PLAT-02 exclusion under WINDOWS 55"
-    why_human: "Live rows are out of scope for this static run; g3 is a Phase 64 TAB-04 red the owner dated 'next version' (D-46) without ruling it out of PLAT-02"
+  - test: "Linux live pass on the current tree, including orca-tabs-live with a fresh Claude sign-in"
+    expected: "Every Phase 68 live row green; orca-tabs-live g3 has been green since 2ce581f2 and 3ad91d13 (WINDOWS 55 fixed)"
+    why_human: "Live rows are out of scope for this static run; orca-tabs-live needs a Claude sign-in more than 60 minutes from expiry (WINDOWS 69)"
   - test: "Owner review of the 68-11 reinstall copy and Help-menu placement; confirm the 'Start a new Claude chat session' claim"
     expected: "Copy approved or reworded; the command added to the Application menu's Help submenu or palette-plus-Coding-mode accepted; a new chat session after reinstall loads the SDK without restarting orcad"
     why_human: "Owner copy and UI decision (D-41 left copy open); the claim needs a full PowerBrowser with orcad and a real claude (BEXT-01)"
@@ -109,7 +109,7 @@ Method: static only. Every row listed below was run in this worktree with `scrip
 | 6 | SC3: the browser-provider seam has an upstream PR open, linked from the seam table; web-entry ruled out (D-45); the build does not depend on acceptance | ? UNCERTAIN (owner) | D-45 in code (verify-orca-overlay.mjs:70-71). The export and its self-test are green. `orca-upstream-prs` exits 1 with "class browser-provider has no seams.json row with a non-null upstream pr", the owner's WINDOWS 51. Seams apply locally (`orca-overlay` PASS, `orca-overlay-built` PASS: 9 markers found in out/) |
 | 7 | SC4a (Linux, D-40): the Linux artifact contains orcad and the overlaid client with the node-pty prebuild built on its runner | ? UNCERTAIN (first release) | `release-shape` and its self-test PASS. `orca-licence-rulings` now PASS, so the build-linux guard opens. Recorded in 68-06: the dev-objdir package passes orca-packaged-tree (slot linux-x64-glibc) and orca-packaged-live. The container release tarball is WINDOWS 30, owner steps |
 | 8 | SC4b: the Flatpak manifest grants `--filesystem=home`; each artifact check is one verify-platform.sh row | ✓ VERIFIED | flatpak/org.debios.PowerBrowser.json:16; `flathub-manifest` PASS, self-test PASS (23 plants). Each packaged check is a single registry line |
-| 9 | SC5 (Linux, D-40): the live checks pass on Linux | ? UNCERTAIN (human) | The last pass is 68-06, 35 of 38. Since then, orca-licence-rulings is green here (WINDOWS 44 fixed) and the flakes 56-58 are fixed. Still red: orca-tabs-live g3 (WINDOWS 55, TAB-04, open, dated next version by D-46) and orca-upstream-prs (WINDOWS 51). Not re-run here |
+| 9 | SC5 (Linux, D-40): the live checks pass on Linux | ? UNCERTAIN (human) | The last pass is 68-06, 35 of 38. Since then, orca-licence-rulings is green here (WINDOWS 44 fixed) and the flakes 56-58 are fixed. Still red: orca-upstream-prs (WINDOWS 51). orca-tabs-live g3 is green since 2ce581f2 and 3ad91d13 (WINDOWS 55 fixed). Not re-run here |
 | 10 | BEXT-01: the SDK is not in orcad; it ships in a pre-installed removable Theia extension; on: the session loads it; off/removed: reports it missing | ✓ VERIFIED | `orca-claude-sdk` PASS (S1, S5 loaded; S2-S4 rejected); self-test PASS (8 plants). `bundled-extensions` PASS, self-test PASS. Recorded in 68-06: orca-claude-sdk-built, bundled-extensions-live |
 | 11 | BEXT-02: uBlock Origin pre-installed, pinned version and sha256, unmodified, removable, in the notices | ✓ VERIFIED | `bundled-xpi` PASS (1.76.0), self-test PASS; `licence-allowlist` PASS, its self-test PASS (19 plants). D-44 closes the GPL s6 reading |
 | 12 | 68-11: the reinstall copies a shipped id only, leaves a present copy alone, never runs automatically, and its copy lives in the copy table and passes the copy check | ✓ VERIFIED | `bundled-extensions-seed` PASS: 13 scenarios, including the 5 reinstall cases (absent, present, three refused ids such as ".hidden"). `bundled-extensions` reinstall leg PASS: "reinstall is offered only while absent and never automatic". Self-test plants "a reinstall at start", "the seed copying back" and "overwrites a present copy" each go red. `shell-error-copy-no-internals` PASS and its self-test PASS (4 reinstall plants). `diff-theia-core` PASS. Reading the code: `.reinstall(` is called only in reinstall-command.ts:49 `execute`; `reinstallBundledExtension` is called only in bundled-extensions-service.ts:54 |
@@ -185,7 +185,7 @@ No `scripts/*/tests/probe-*.sh` is declared by the Phase 68 plans. Not applicabl
 | OVL-03 | 68-03, 68-06 | ? NEEDS HUMAN | Protocol untouched (run here); Android pairing (owner device) |
 | OVL-06 | 68-03, 68-05, 68-06 | ? NEEDS HUMAN | Web-entry ruled out (D-45, in code); the browser-provider PR is the owner's (WINDOWS 51) |
 | PLAT-01 | 68-01, 68-04, 68-06, 68-10 | ? NEEDS HUMAN | Linux static and dev-objdir proof; the container tarball and first release are WINDOWS 30; macOS and Windows deferred (D-40) |
-| PLAT-02 | 68-01, 68-06 | ? NEEDS HUMAN | Linux live pass not re-run; g3 red (WINDOWS 55) needs a drive or an owner exclusion ruling; macOS and Windows deferred (D-40) |
+| PLAT-02 | 68-01, 68-06 | ? NEEDS HUMAN | Linux live pass not re-run here; g3 green since 2ce581f2 and 3ad91d13 (WINDOWS 55 fixed); gate run 4 at 080814fd had no unexcluded product red, and its orca-tabs-live row waits on a fresh Claude sign-in (WINDOWS 69); macOS and Windows deferred (D-40) |
 | BEXT-01 | 68-04, 68-07, 68-09, 68-11, 68-06 | ✓ SATISFIED | Truths 10 and 12; owner copy and Help-placement items remain |
 | BEXT-02 | 68-08, 68-06 | ✓ SATISFIED | Truth 11; D-44 closed |
 
@@ -207,7 +207,7 @@ The debt-marker scan found no TBD, FIXME, XXX, TODO, HACK or PLACEHOLDER on any 
 2. **Stock Android app pairing.** Owner, with a device.
 3. **Browser-provider upstream PR.** Owner (WINDOWS 51).
 4. **Container Linux release tarball and first release.yml run.** WINDOWS 30.
-5. **Linux live pass on the current tree, plus orca-tabs-live g3.** Drive it green, or the owner records it as PLAT-02's exclusion (WINDOWS 55).
+5. **Linux live pass on the current tree, including orca-tabs-live.** orca-tabs-live g3 has been green since 2ce581f2 and 3ad91d13 (WINDOWS 55 fixed); the row needs a fresh Claude sign-in to run (WINDOWS 69).
 6. **68-11 owner items.** Approve the copy, decide the Help-menu placement, and confirm the "new chat session" claim with orcad running.
 7. **68-11 command visibility transitions.** Truth 13; the coordinator's recorded GUI pass can be accepted or repeated.
 

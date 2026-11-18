@@ -3,11 +3,11 @@ gsd_state_version: "1.0"
 milestone: v1.7
 current_phase: 68
 current_phase_name: Three-OS artifacts, weekly re-pin and upstream seams
-status: Gate runs 1 and 2 red and fixed, run 3 stopped to take in D-55 and D-56; next one full gate on the final code (2026-11-17)
-stopped_at: "2026-11-17: gate run 3 stopped by the coordinator to take in D-55/D-56 (0232b5a7); next: one full gate on the final code, then phase 64 re-verification and the 68 verification refresh"
+status: Gate run 4 at 080814fd has no unexcluded product red; 2 rows wait on the owner's sign-in and desktop (2026-11-17)
+stopped_at: "2026-11-17: gate run 4 at 080814fd done; next: orca-tabs-live and real-input-gate-self-test on the owner's sign-in and desktop, phase 64 re-verification (in progress), milestone re-audit"
 last_updated: "2026-11-17T00:00:00.000Z"
 last_activity: 2026-11-17
-last_activity_desc: gate runs 1-2 findings fixed; D-52..D-56 recorded; WINDOWS 59..67 added (59..64 fixed)
+last_activity_desc: gate run 4 result recorded; D-57 and D-58 recorded; WINDOWS 66 and 68 fixed, 69 open
 state_head: a625378d3323a73fe4e1b4cebedafa2ac8140d57
 progress:
   total_phases: 10
@@ -22,17 +22,17 @@ milestone_name: Orca integration
 ## Project Reference
 
 See: .planning/PROJECT.md (shared project file; its "Current Milestone" section is v1.5, not this milestone)
-Scope: .planning/workstreams/orca/REQUIREMENTS.md. Owner decisions: .planning/workstreams/orca/DECISIONS.md (D-01..D-56). Roadmap: .planning/workstreams/orca/ROADMAP.md.
+Scope: .planning/workstreams/orca/REQUIREMENTS.md. Owner decisions: .planning/workstreams/orca/DECISIONS.md (D-01..D-58). Roadmap: .planning/workstreams/orca/ROADMAP.md.
 
 **Core value (this milestone):** Theia is the default GUI; Orca's agent workflow runs inside PowerBrowser as real PowerBrowser tabs, with PowerBrowser's own engine and chrome as the agents' browser.
-**Current focus:** gate run 1 at 4a7308ba was red on 3 unexcluded rows; gate run 2 at 2788eb05 was red on 19 (17 from a mid-run ledger change, 2 regressions), all fixed; gate run 3 was stopped by the coordinator to take in D-55 and D-56. Next: one full gate on the final code, then the phase 64 re-verification and the phase 68 verification refresh, then the owner pass in END-OF-MILESTONE-CHECKLIST.md (D-40: Linux only)
+**Current focus:** gate run 1 at 4a7308ba was red on 3 unexcluded rows; gate run 2 at 2788eb05 was red on 19 (17 from a mid-run ledger change, 2 regressions), all fixed; gate run 3 was stopped to take in D-55 and D-56; gate run 4 at 080814fd has 584 PASS, 33 red, 31 excluded under open WINDOWS entries and 2 unexcluded environmental reds (orca-tabs-live, real-input-gate-self-test; WINDOWS 69). Next: those two rows on the owner's sign-in and desktop, the phase 64 re-verification (in progress), the milestone re-audit, then the owner pass in END-OF-MILESTONE-CHECKLIST.md (D-40: Linux only)
 
 ## Current Position
 
 Phase: 68 (Three-OS artifacts, weekly re-pin and upstream seams) — EXECUTED (68-01..68-11); re-verified 2026-11-16 as human_needed 8/13 with no code gap (3febce70, 68-VERIFICATION.md)
 Plan: 68-11 of 11 complete, live rows PASS (f6d291a0); code review of 68-11 and the scratch-HOME change found 2 critical, 8 warnings and 4 info (ffbefe01, 68-11-REVIEW.md), all 14 fixed 2026-11-16; phases 59 and 60 partially executed (owner plans 59-05, 59-06, 59-07 and 60-05 pending)
-Status: Gate runs 1 and 2 fixed, run 3 stopped for D-55/D-56; milestone re-audit 2026-11-16 (v1.7-MILESTONE-AUDIT.md) predates them
-Last activity: 2026-11-17 — gate runs 1 and 2 findings fixed (WINDOWS 59..64), D-52..D-56 recorded; next: one full gate on the final code, then phase 64 re-verification and the 68 verification refresh
+Status: Gate run 4 at 080814fd has no unexcluded product red; milestone re-audit 2026-11-16 (v1.7-MILESTONE-AUDIT.md) predates gate runs 1-4 and D-52..D-58
+Last activity: 2026-11-17 — gate run 4 at 080814fd; D-57 and D-58 recorded; WINDOWS 66 and 68 fixed, 69 open; next: the two owner-dependent rows, phase 64 re-verification (in progress), milestone re-audit
 
 Progress: [█████████░] 62 of 66 plan files have a SUMMARY (63-01, 63-02, 63-05 are superseded stubs; 59-05, 59-06, 59-07, 60-05 are owner plans)
 
@@ -157,6 +157,7 @@ Resume file: None
 Session 2026-11-16 (re-audit): v1.7 milestone re-audit at 65d7e653 (v1.7-MILESTONE-AUDIT.md); no full gate has completed since 1edc97d6.
 Session 2026-11-16 (later): TAB-04 closed, orca-tabs-live g3 green in four consecutive live runs (2ce581f2, 3ad91d13; D-49, WINDOWS 55 fixed); a stock Orca web client shows tabs created after it opened the worktree only after a reload (upstream bug, open).
 Session 2026-11-17: gate run 1 (4a7308ba) red on 3 unexcluded rows, run 2 (2788eb05) red on 19 (17 from a mid-run ledger change, 2 regressions), all fixed (WINDOWS 59..64); owner rulings D-52..D-56; run 3 stopped to take in D-55/D-56; next one full gate on the final code.
+Session 2026-11-17 (gate run 4): gate run 4 at 080814fd — 584 PASS, 33 red, 31 excluded under open WINDOWS entries, 2 unexcluded and environmental (orca-tabs-live did not run: the Claude sign-in was under 60 minutes from expiry; real-input-gate-self-test: another window was focused); both re-run alone and failed for the same reasons (WINDOWS 69); they wait on the owner (refresh the Claude sign-in; desktop unlocked with no other window taking focus). Decision range D-01..D-58 (D-57 first-show focus, D-58 remembered paste choice; WINDOWS 66 and 68 fixed). Next: those two rows, phase 64 re-verification (in progress), milestone re-audit.
 Session 2026-11-16: 68-11 live rows PASS (f6d291a0); Phase 68 re-verified (3febce70); 68-11 review (ffbefe01); D-47..D-51 recorded; `--quick` green; tracking cleaned up.
 
 ## Deferred Verification

@@ -2,9 +2,9 @@
 schema_version: 1
 open_count: 21
 waived_count: 2
-fixed_count: 44
-total_count: 67
-last_updated: 2026-11-17T22:54:29.815Z
+fixed_count: 46
+total_count: 69
+last_updated: 2026-11-18T04:48:58.206Z
 ---
 
 # Broken Windows Ledger
@@ -80,8 +80,10 @@ last_updated: 2026-11-17T22:54:29.815Z
 | 63 | 64 | unmet-truth | theia/extensions/orca-panes |  | Orca's large-paste takeover (useLargeTextControlPaste: claimed every paste over 64 KiB into any Theia input or editor and dropped Gecko's newline handling) and its beforeunload checkpoint (cancelled the unload when Orca's checkpoint threw, which held PowerBrowser's quit veto and a Theia reload) acted on the Theia document; found by the owner-ruled test of Orca's app-wide listeners (2026-11-17); source: .planning/debug/orca-selection-preset-and-app-listeners.md | fixed | Fixed in 8d2530b2 (usePaneLargeTextControlPaste claims a paste over 64 KiB only inside a hosted pane root; useHostedAppSessionPersistence runs Orca's checkpoint at every unload and only reports a failure) with live legs in 45eca9fb and 21cfdc81 and the record in 6729ce22 and 0232b5a7 (D-56). The workspace-activation focus helper was tested and does not take focus from Theia UI. | 2026-11-17T22:54:28.459Z | 2026-11-17T22:54:29.617Z |
 | 64 | 68 | deviation | scripts/verify-orca-mobile-protocol.mjs |  | orca-mobile-skew did not find the stock app's protocol constants at mobile-android-v0.0.65: the app moved them to a transport/connection layout and the check read only the old path; source: v1.7 gate run 1 at 4a7308ba (2026-11-16) | fixed | Fixed in f4dd366b (the check finds the stock app's protocol constants at the transport/connection layout as well as the old one). Verdict at v0.0.65 against pin v1.4.248: ok. | 2026-11-17T22:54:28.594Z | 2026-11-17T22:54:29.746Z |
 | 65 | 68 | deviation | powerbrowser/shell/OrcaService.sys.mjs |  | PowerBrowser ended by SIGTERM exits within about 50 ms without running a quit blocker, so OrcaService does not stop its orcad, terminal daemon or scope watcher; OrcaService reaps a leftover only at the next launch of the same profile; not investigated, the live harness now stops them itself (ed0ecc33); owner ruling needed on whether to debug it in v1.7; source: v1.7 gate 2026-11-16 | open | Re-dated to next version (Phase 59 D-09) | 2026-11-17T22:54:28.720Z |  |
-| 66 | 64 | unmet-truth | theia/extensions/orca-panes |  | A hosted Orca terminal focuses itself when it is first shown (TerminalPane createInitialPane/setActivePane, its own mount; PowerBrowser mounts every hosted terminal with isActive) and can take typing from a visible Theia editor; owner decision pending; source: .planning/debug/orca-selection-preset-and-app-listeners.md | open | Re-dated to next version (Phase 59 D-09) | 2026-11-17T22:54:28.845Z |  |
+| 66 | 64 | unmet-truth | theia/extensions/orca-panes |  | A hosted Orca terminal focuses itself when it is first shown (TerminalPane createInitialPane/setActivePane, its own mount; PowerBrowser mounts every hosted terminal with isActive) and can take typing from a visible Theia editor; owner decision pending; source: .planning/debug/orca-selection-preset-and-app-listeners.md | fixed | Fixed in 7d730b00 (mountPane takes the hosting widget's activity, ApplicationShell's active widget, and the entry passes it as TerminalPane's isActive and NativeChatView's isFocusedGroup, so a hosted Orca terminal or chat takes focus only while its tab is Theia's active widget; owner ruling "Fix now", D-57) and c05cb098 (orca-terminal-keys-live 2d: keys typed in a Theia editor stay in the editor while a CLI-created or restored terminal is shown beside it, and a tab click or New Orca Terminal gives the terminal focus). Hosted chats got the same gate. Orca's settings and tasks pages were not checked for first-show focus. A control bundle with the old hard-wired value is red in the new legs; the fixed bundle is green 5 of 5. | 2026-11-17T22:54:28.845Z | 2026-11-18T04:48:58.016Z |
 | 67 | 64 | unmet-truth | orca-overlay/seams.json |  | Upstream Orca bug: a stock Orca web client stops applying host tab updates after it opens the worktree, so tabs created later show only after a reload; the TAB-04 check (orca-tabs-live g3) reloads its second client to work around it; source: .planning/workstreams/orca/phases/64-orca-panes-as-powerbrowser-tabs/64-MIRROR-FREEZE.md | open | Re-dated to next version (Phase 59 D-09) | 2026-11-17T22:54:28.973Z |  |
+| 68 | 64 | unmet-truth | theia/extensions/orca-panes |  | The user's Middle-click Paste from Selection choice did not survive a restart: PowerBrowser's Linux preset (D-55) was held in memory and Orca keeps its own value in the Theia page's browser storage, whose origin is new at every launch (the sidecar listens on a fresh port), so a user who switched it off found it on again after every restart; source: .planning/debug/orca-first-show-focus-and-paste-choice.md (dc57d058); not covered by entries 62 and 63, which are about where Orca's hooks act, not what is remembered | fixed | Fixed in 7d730b00 (OrcaPaneBundle reads powerbrowser.orca.primarySelectionPaste from ProfileStorageService before bootstrap, the settings.set observer writes the user's value there, and the Linux preset is that value, else on; owner ruling "Remember my 'off'", D-58), c05cb098 (orca-relaunch-restore-live paste-choice leg: off set in launch 1 reads off after the relaunch) and dc57d058 (investigation record). The record stores the chosen value, on or off, because Orca's own copy lives in per-launch browser storage. A control bundle that never writes the record is red; the fixed bundle is green 5 of 5. | 2026-11-18T04:48:57.872Z | 2026-11-18T04:48:58.016Z |
+| 69 | 68 | unrun-verify | scripts/verify-platform.sh |  | Two gate rows need the owner's desktop or sign-in and failed unattended in v1.7 gate run 4 at 080814fd (2026-11-17), and again when re-run alone: orca-tabs-live refuses when the Claude sign-in is under 60 minutes from expiry (the CR-02 safeguard, b12906fc; 38 minutes in the gate) and real-input-gate-self-test fails when another window is focused or the screen is locked (its clean control capture wrote no file). Neither is a product red. They are re-run, not excluded, and have no GATE_KNOWN_OPEN_EXCLUSIONS row: run claude once to refresh the sign-in, then scripts/verify-platform.sh --only orca-tabs-live; run scripts/verify-platform.sh --only real-input-gate-self-test with the desktop unlocked and no other window taking focus; source: v1.7 gate run 4 | open | Re-dated to next version (Phase 59 D-09) | 2026-11-18T04:48:58.016Z |  |
 
 ````json
 [
@@ -914,10 +916,10 @@ last_updated: 2026-11-17T22:54:29.815Z
     "file": "theia/extensions/orca-panes",
     "line": null,
     "description": "A hosted Orca terminal focuses itself when it is first shown (TerminalPane createInitialPane/setActivePane, its own mount; PowerBrowser mounts every hosted terminal with isActive) and can take typing from a visible Theia editor; owner decision pending; source: .planning/debug/orca-selection-preset-and-app-listeners.md",
-    "status": "open",
-    "reason": "Re-dated to next version (Phase 59 D-09)",
+    "status": "fixed",
+    "reason": "Fixed in 7d730b00 (mountPane takes the hosting widget's activity, ApplicationShell's active widget, and the entry passes it as TerminalPane's isActive and NativeChatView's isFocusedGroup, so a hosted Orca terminal or chat takes focus only while its tab is Theia's active widget; owner ruling \"Fix now\", D-57) and c05cb098 (orca-terminal-keys-live 2d: keys typed in a Theia editor stay in the editor while a CLI-created or restored terminal is shown beside it, and a tab click or New Orca Terminal gives the terminal focus). Hosted chats got the same gate. Orca's settings and tasks pages were not checked for first-show focus. A control bundle with the old hard-wired value is red in the new legs; the fixed bundle is green 5 of 5.",
     "recorded_at": "2026-11-17T22:54:28.845Z",
-    "resolved_at": null,
+    "resolved_at": "2026-11-18T04:48:58.016Z",
     "milestone": "v1.7"
   },
   {
@@ -930,6 +932,32 @@ last_updated: 2026-11-17T22:54:29.815Z
     "status": "open",
     "reason": "Re-dated to next version (Phase 59 D-09)",
     "recorded_at": "2026-11-17T22:54:28.973Z",
+    "resolved_at": null,
+    "milestone": "v1.7"
+  },
+  {
+    "id": 68,
+    "kind": "unmet-truth",
+    "phase": "64",
+    "file": "theia/extensions/orca-panes",
+    "line": null,
+    "description": "The user's Middle-click Paste from Selection choice did not survive a restart: PowerBrowser's Linux preset (D-55) was held in memory and Orca keeps its own value in the Theia page's browser storage, whose origin is new at every launch (the sidecar listens on a fresh port), so a user who switched it off found it on again after every restart; source: .planning/debug/orca-first-show-focus-and-paste-choice.md (dc57d058); not covered by entries 62 and 63, which are about where Orca's hooks act, not what is remembered",
+    "status": "fixed",
+    "reason": "Fixed in 7d730b00 (OrcaPaneBundle reads powerbrowser.orca.primarySelectionPaste from ProfileStorageService before bootstrap, the settings.set observer writes the user's value there, and the Linux preset is that value, else on; owner ruling \"Remember my 'off'\", D-58), c05cb098 (orca-relaunch-restore-live paste-choice leg: off set in launch 1 reads off after the relaunch) and dc57d058 (investigation record). The record stores the chosen value, on or off, because Orca's own copy lives in per-launch browser storage. A control bundle that never writes the record is red; the fixed bundle is green 5 of 5.",
+    "recorded_at": "2026-11-18T04:48:57.872Z",
+    "resolved_at": "2026-11-18T04:48:58.016Z",
+    "milestone": "v1.7"
+  },
+  {
+    "id": 69,
+    "kind": "unrun-verify",
+    "phase": "68",
+    "file": "scripts/verify-platform.sh",
+    "line": null,
+    "description": "Two gate rows need the owner's desktop or sign-in and failed unattended in v1.7 gate run 4 at 080814fd (2026-11-17), and again when re-run alone: orca-tabs-live refuses when the Claude sign-in is under 60 minutes from expiry (the CR-02 safeguard, b12906fc; 38 minutes in the gate) and real-input-gate-self-test fails when another window is focused or the screen is locked (its clean control capture wrote no file). Neither is a product red. They are re-run, not excluded, and have no GATE_KNOWN_OPEN_EXCLUSIONS row: run claude once to refresh the sign-in, then scripts/verify-platform.sh --only orca-tabs-live; run scripts/verify-platform.sh --only real-input-gate-self-test with the desktop unlocked and no other window taking focus; source: v1.7 gate run 4",
+    "status": "open",
+    "reason": "Re-dated to next version (Phase 59 D-09)",
+    "recorded_at": "2026-11-18T04:48:58.016Z",
     "resolved_at": null,
     "milestone": "v1.7"
   }

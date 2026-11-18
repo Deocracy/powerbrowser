@@ -489,6 +489,19 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
   unload (8d2530b2). The workspace-activation focus helper was tested and does not take focus from Theia UI in the
   measured paths. WINDOWS 63. Separate open owner item: a hosted terminal focuses itself when first shown (TerminalPane's
   own mount, not one of the listeners; WINDOWS 66).
+- **D-57 — Fix now.** Chris, 2026-11-17, answer "Fix now". A hosted Orca terminal or chat takes focus only while its
+  tab is Theia's active widget. `mountPane` takes the hosting widget's activity (`ApplicationShell`'s active widget) and
+  passes it as `TerminalPane`'s `isActive` and `NativeChatView`'s `isFocusedGroup`, Orca's focused-group flag, which gated
+  the first pane's focus and the composer's reveal claim. Commits 7d730b00 (the fix) and c05cb098 (live legs: keys typed in
+  an editor stay in the editor while a terminal is shown beside it or restored; a tab click and New Orca Terminal give the
+  terminal focus). Orca's settings and tasks pages were not checked. WINDOWS 66.
+- **D-58 — Remember my "off".** Chris, 2026-11-17, answer "Remember my 'off'". The user's Middle-click Paste from
+  Selection choice is stored per profile under `powerbrowser.orca.primarySelectionPaste` (`ProfileStorageService`) and
+  applied at start (7d730b00; record in dc57d058, `.planning/debug/orca-first-show-focus-and-paste-choice.md`; leg in
+  c05cb098). As built it stores the chosen value, on or off, and the Linux preset is that value, else on. The owner asked
+  that PowerBrowser stop presetting once the user chose and let Orca's stored value rule. Orca keeps its setting only in
+  the Theia page's browser storage, and the sidecar listens on a new port at every launch, so that storage is new at every
+  launch and would read off even for a user who chose on. WINDOWS 68.
 
 ## Spikes this direction needs
 

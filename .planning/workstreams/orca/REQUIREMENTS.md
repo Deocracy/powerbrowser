@@ -4,7 +4,7 @@
 **Core Value:** Theia is the default GUI; Orca's agent workflow runs inside PowerBrowser as real
 PowerBrowser tabs, with PowerBrowser's own engine and chrome as the agents' browser.
 
-Owner decisions are in `DECISIONS.md` (D-01..D-51) and win over `research/`. Research feature ids
+Owner decisions are in `DECISIONS.md` (D-01..D-58) and win over `research/`. Research feature ids
 (T-n, D-n in `research/FEATURES.md`) are cited where a requirement comes from them.
 
 ## v1 Requirements
