@@ -143,3 +143,14 @@ All 14 findings of `68-11-REVIEW.md` (ffbefe01: 2 critical, 8 warnings, 4 info) 
 - IN-01 9fab2fd5; IN-02 f62fe981; IN-03 c62a5d38; IN-04 3f067596 (scratch-HOME findings)
 
 The scratch-HOME range is 2fea5fa8..04fe4400. Per D-48 the Help-submenu row was not yet run in a rebuilt GUI (END-OF-MILESTONE-CHECKLIST.md section 3).
+
+## GUI check (2026-11-17)
+
+The Help-submenu row from 0a7d9a72 (D-48) was run in the rebuilt frontend: standalone sidecar on :4000 (`POWERBROWSER_TOKEN_DISABLE=1`, scratch `THEIA_CONFIG_DIR` and HOME under the session scratchpad), driven through chrome-devtools. Application menu -> Help, per mode:
+
+- Extension present (Browsing, Coding): Help lists Get Help and About PowerBrowser only; no reinstall row.
+- After Uninstall in the Extensions view (`deployedPlugins` empty): Help lists "Reinstall the Claude Extension" between Get Help and About in Browsing, Organising, Coding and Orca. Orca was entered through the mode control; the standalone sidecar has no orcad, so the Orca layout carried no Orca panes and only the mode label and the Help row were checked there.
+- Clicking the row in Browsing: one toast, "PowerBrowser reinstalled the Claude extension. Start a new Claude chat session to use it."; `deployedPlugins/powerbrowser.claude-agent-sdk` is back, the log reads "reinstalled", the Extensions view lists Claude Agent SDK v0.3.284 with Uninstall, and Help no longer lists the row.
+- Console errors seen (`@powerbrowser/modes` loading groups, `@powerbrowser/chrome-bar` search engines and extension subscribe) come from the missing Gecko shell, not from this row.
+
+Screenshots: the session scratchpad `help-row/` (0-present-browsing, 2-absent-browsing, 3-absent-organising, 4-absent-coding, 5-absent-orca, 6-toast-after-click-browsing). END-OF-MILESTONE-CHECKLIST.md section 3 item for this row can be ticked for the standalone sidecar; a full PowerBrowser run is still not done.
