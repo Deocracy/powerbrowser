@@ -38,7 +38,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { extractionRootOf, stopStrays, strayUnder } from './lib/firefox-bidi.mjs';
+// lib/firefox-bidi.mjs is imported only dynamically: it fixes its launch binary from PB_FIREFOX_BIN when it is first
+// evaluated, and runPackaged sets that name to the extracted binary. A static import here made the live run launch
+// the dev objdir binary (0ea32a1a, found 2026-11-18); runPackaged now compares the module's binary with the package's.
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-packaged-live';
@@ -80,7 +82,8 @@ export function pairVerdict({ paired }) {
 
 // --- self-test ---------------------------------------------------------------
 
-function selfTest() {
+async function selfTest() {
+    const { extractionRootOf, strayUnder } = await import('./lib/firefox-bidi.mjs');
     const tmp = mkdtempSync(join(tmpdir(), `${NAME}-selftest-`));
     let misses = 0;
     const ok = (label) => console.log(`  ok ${label}`);
@@ -160,6 +163,7 @@ async function live() {
         fails.push(`harness: ${e.message}`);
     } finally {
         // The pairing step's PowerBrowser ends by a harness signal (68-06); lib/firefox-bidi.mjs stopStrays, by identity.
+        const { stopStrays } = await import('./lib/firefox-bidi.mjs');
         await stopStrays(dirname(prefix), { label: NAME });
         rmSync(dirname(prefix), { recursive: true, force: true });
     }
@@ -183,7 +187,11 @@ async function runPackaged(prefix, fails) {
     process.env.MOZ_PURGE_CACHES = '1';
 
     const { makeProfile, withShell, pollFor } = await import('./lib/pb-relaunch.mjs');
-    const { launchedBrowserPids } = await import('./lib/firefox-bidi.mjs');
+    const { launchedBrowserPids, FIREFOX_BIN } = await import('./lib/firefox-bidi.mjs');
+    if (FIREFOX_BIN !== bin) {
+        fails.push(`the harness would launch ${FIREFOX_BIN}, not the packaged binary ${bin} (lib/firefox-bidi.mjs was evaluated before PB_FIREFOX_BIN was set)`);
+        return;
+    }
     const { descendants, orcadEnv, orcaVersionFromPins, startOrcad, stopOrcad, installOutputRedaction, redact } = await import('./lib/orca-run.mjs');
     const { ppidMap, startTicks } = await import('./verify-orca-hidden-electron.mjs');
 
@@ -253,4 +261,4 @@ for (const a of args) {
         process.exit(2);
     }
 }
-process.exit(args.includes('--self-test') ? selfTest() : await live());
+process.exit(args.includes('--self-test') ? await selfTest() : await live());
