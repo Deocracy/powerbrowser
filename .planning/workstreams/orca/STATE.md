@@ -3,11 +3,11 @@ gsd_state_version: "1.0"
 milestone: v1.7
 current_phase: 68
 current_phase_name: Three-OS artifacts, weekly re-pin and upstream seams
-status: Gate run 4 at 080814fd has no unexcluded product red; 2 rows wait on the owner's sign-in and desktop (2026-11-17)
-stopped_at: "2026-11-17: gate run 4 at 080814fd done; phase 64 re-verified (78353b7f); milestone re-audit at 78353b7f (gaps_found, owner-bound); next: orca-tabs-live, orca-agent-status-live and real-input-gate-self-test on the owner's sign-in and desktop"
+status: WINDOWS 69 rows, the packaged rows and the identity re-pin all PASS alone (2026-11-18); full gate run 5 is next
+stopped_at: "2026-11-18: D-59 moved the post-push items and the EXT-01 session to the next version; WINDOWS 54 and 69 fixed; orca-packaged-live harness fix dc08c717; next: full gate run 5, then the owner pass (59-05, 59-06, 59-07)"
 last_updated: "2026-11-17T00:00:00.000Z"
-last_activity: 2026-11-17
-last_activity_desc: gate run 4 result recorded; D-57 and D-58 recorded; WINDOWS 66 and 68 fixed, 69 open
+last_activity: 2026-11-18
+last_activity_desc: D-59 recorded; WINDOWS 54 and 69 fixed; identity re-pin PASS with 9 overlay files; four child workspaces closed
 state_head: a625378d3323a73fe4e1b4cebedafa2ac8140d57
 progress:
   total_phases: 10
@@ -158,6 +158,7 @@ Session 2026-11-16 (re-audit): v1.7 milestone re-audit at 65d7e653 (v1.7-MILESTO
 Session 2026-11-16 (later): TAB-04 closed, orca-tabs-live g3 green in four consecutive live runs (2ce581f2, 3ad91d13; D-49, WINDOWS 55 fixed); a stock Orca web client shows tabs created after it opened the worktree only after a reload (upstream bug, open).
 Session 2026-11-17: gate run 1 (4a7308ba) red on 3 unexcluded rows, run 2 (2788eb05) red on 19 (17 from a mid-run ledger change, 2 regressions), all fixed (WINDOWS 59..64); owner rulings D-52..D-56; run 3 stopped to take in D-55/D-56; next one full gate on the final code.
 Session 2026-11-17 (gate run 4): gate run 4 at 080814fd — 584 PASS, 33 red, 31 excluded under open WINDOWS entries, 2 unexcluded and environmental (orca-tabs-live did not run: the Claude sign-in was under 60 minutes from expiry; real-input-gate-self-test: another window was focused); both re-run alone and failed for the same reasons (WINDOWS 69); they wait on the owner (refresh the Claude sign-in; desktop unlocked with no other window taking focus). Decision range D-01..D-58 (D-57 first-show focus, D-58 remembered paste choice; WINDOWS 66 and 68 fixed). Next: those two rows, phase 64 re-verification (in progress), milestone re-audit.
+Session 2026-11-18: owner ruling D-59 (post-push items and the EXT-01 session move to the next version; 59-05, 59-06, 59-07 stay). On the owner's refreshed sign-in and unlocked desktop, each alone: orca-tabs-live PASS (16 legs), orca-agent-status-live PASS (not SKIP), real-input-gate-self-test PASS (WINDOWS 69 fixed). Dev-objdir package rebuilt; ng063-packaged-launch PASS and orca-packaged-live PASS with no process left under /tmp/pb-pkg- (WINDOWS 54 fixed). orca-packaged-live had launched the dev objdir binary since 0ea32a1a; fixed in dc08c717. Identity re-pin `rebase-orca.sh --tag v1.4.248 --commit 965978bc78bf` PASS: 3 seams, 9 overlay files each in one of 3 typecheck programs, 6 rows green, tracked tree unchanged (OVL-02's local half). `--quick` took 872 s with live rows running beside it: site-identity-self-test takes 312 s alone and orca-service-self-test 223 s alone, which is over the ledger hook's 480 s limit; its one red, live-scratch-home-self-test, was green twice when run alone (it ran while a live row swept scratch HOMEs). The child workspaces p59-owner, p63-01, p63-02 and p63-05 were closed; their branches are kept.
 Session 2026-11-16: 68-11 live rows PASS (f6d291a0); Phase 68 re-verified (3febce70); 68-11 review (ffbefe01); D-47..D-51 recorded; `--quick` green; tracking cleaned up.
 
 ## Deferred Verification

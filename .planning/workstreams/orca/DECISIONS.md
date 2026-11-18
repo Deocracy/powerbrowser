@@ -502,6 +502,15 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
   that PowerBrowser stop presetting once the user chose and let Orca's stored value rule. Orca keeps its setting only in
   the Theia page's browser storage, and the sidecar listens on a new port at every launch, so that storage is new at every
   launch and would read off even for a user who chose on. WINDOWS 68.
+- **D-59 — Post-push items and the EXT-01 session move to the next version.** Chris, 2026-11-18, answering "which
+  remaining work should move to the next version instead of blocking the close?" with "Post-push items" and "EXT-01
+  live session". Moved: the first `release.yml` Linux run and the container tarball (PLAT-01, and the packaged rows of
+  PLAT-02 under WINDOWS 30 and 31); the first weekly re-pin tick and the bump-PR review (OVL-02's scheduled half); the
+  browser-provider PR to Orca upstream (OVL-06, WINDOWS 51); Android pairing (OVL-03); the EXT-01 live session (plan
+  60-05) and the extension half of EXT-02. Not moved, so still in v1.7: plan 59-06 (the v1.5 human checks), plans 59-05
+  and 59-07, the WINDOWS 69 rows and the full gate after them, the local identity re-pin run for OVL-02, and the
+  packaged live confirmation of WINDOWS 54. The same answer set kept the `ServerDestroyer/p63-01`, `p63-02` and `p63-05`
+  branches after their workspaces were closed.
 
 ## Spikes this direction needs
 
