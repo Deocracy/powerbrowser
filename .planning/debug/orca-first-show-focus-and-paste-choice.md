@@ -1,16 +1,16 @@
 ---
-status: investigating
+status: awaiting_human_verify
 trigger: "Job 1 (owner ruling 2026-11-17, 'Fix now'): a hosted Orca terminal focuses itself when its terminal is first created (first show), taking keyboard focus from a visible Theia editor; it must take focus only on user activation or a click inside. Job 2 ('Remember my off'): the Linux in-memory preset of Middle-click Paste from Selection returns after every restart; PowerBrowser must remember that the user made a choice, per profile"
 created: 2026-11-17T12:00:00Z
-updated: 2026-11-17T12:00:00Z
+updated: 2026-11-18T01:10:00Z
 ---
 
 ## Current Focus
 
 hypothesis: Job 1: HostedPaneBody mounts TerminalPane with isActive hard-wired true; Orca's isActive is its focused-group flag and gates replayTerminalLayout's createInitialPane({focus}), setActivePane({focus}) in layout restore and reconciliation, queueResizeAll(focusActive); NativeChatView's isFocusedGroup gates the composer reveal claim the same way. Job 2: userChosePrimarySelectionPaste is a module variable, and Orca's own stored value lives in the Theia origin's localStorage, which changes at every launch
-test: live legs orca-terminal-keys-live 2d and orca-relaunch-restore-live paste-choice, 5 runs each
-expecting: background create/restore leaves focus and keys in the editor; a tab click and New Orca Terminal focus the terminal; the off reads off after a relaunch
-next_action: run orca-terminal-keys-live with the fix committed and the tree clean
+test: done -- orca-terminal-keys-live 5/5 and orca-relaunch-restore-live 5/5 on the fixed bundle; each new leg red on a control bundle
+expecting: n/a
+next_action: owner: in a real session, type in an editor while an agent opens an Orca terminal beside it; switch Middle-click Paste from Selection off, quit and relaunch
 bug_class: Bohrbug
 reasoning_checkpoint:
   hypothesis: "a hosted terminal takes focus on first show because PowerBrowser passes TerminalPane isActive=true, and Orca focuses its first pane (createInitialPane/setActivePane in terminal-pane-layout-restore.ts) whenever isActive holds; the off returns after a restart because nothing PowerBrowser keeps records it and Orca's localStorage is per launch origin (TheiaService spawns on port 0)"
@@ -54,10 +54,26 @@ started: Phase 64 (isActive hard-wired); 8d2530b2 (preset in memory)
   checked: build-orca.sh --panes-only, theia yarn build (tsc -b, 0 errors), orca-pane-entry and self-test, orca-terminal-keys (clause f extended, clause g new) and self-test (44 plants), orca-terminal-keys-live-self-test (58), orca-relaunch-restore-live-self-test (19), orca-tabs-live-self-test, brand scan after reconciling four held-back Orca counts
   found: all green
   implication: static legs in place; live legs next
+- timestamp: 2026-11-18T00:20Z
+  checked: control bundle with TerminalPane isActive and NativeChatView isFocusedGroup hard-wired true again (built, overlay source restored, tree clean), orca-terminal-keys-live once
+  found: 2d red: background and restore both "abc" in the editor, "xyz" in the terminal's PTY, focus out of the editor; click and New Orca Terminal green
+  implication: the background and restore legs detect the first-show steal; the fixed bundle turns them green (run before the control, and 5/5 after)
+- timestamp: 2026-11-18T00:58Z
+  checked: control bundle whose settings.set observer never calls remember (no profile record), orca-relaunch-restore-live once
+  found: paste-choice red: after the relaunch the switch reads on and a terminal selection pastes once (the reported bug); fixed bundle 5/5 green
+  implication: the relaunch clause detects a forgotten off; the fresh-profile read (on) and the turned-on paste (once) are its detectors
+- timestamp: 2026-11-18T01:05Z
+  checked: one at a time via --only, ORCA_* unset, tree clean before each: orca-terminal-keys-live x5, orca-relaunch-restore-live x5, tab-strip-live, orca-tabs-live, orca-pane-css-live, first-boot-surface-fresh, orca-service-live; orca-terminal-keys, its self-test, orca-terminal-keys-live-self-test, orca-relaunch-restore-live-self-test x5; --quick
+  found: all rc 0; no PowerBrowser or orcad process left after any run
+  implication: verified
 
 ## Resolution
 
 root_cause: Job 1: HostedPaneBody mounted TerminalPane with isActive and NativeChatView with isFocusedGroup hard-wired true; those props are Orca's focused-group flag and gate the first pane's focus (terminal-pane-layout-restore.ts:32,90) and the composer's reveal claim, so a pane first shown in the background took keyboard focus. Job 2: the user's switch write was kept only in a module variable, and Orca's own stored value lives in a per-launch localStorage origin
 fix: mountPane takes the hosting widget's activity (OrcaPaneWidget.activity: ApplicationShell.activeWidget === this, onDidChangeActiveWidget) and HostedPaneBody passes it as isActive / isFocusedGroup; the profile record powerbrowser.orca.primarySelectionPaste (ProfileStorageService, as powerbrowser.orca.paneNames) is read by OrcaPaneBundle before bootstrap and written by the settings.set observer; the Linux preset is rememberedPrimarySelectionPaste ?? true
-verification:
+verification: control bundles reproduce both symptoms in the new legs (Evidence 00:20Z, 00:58Z); fixed: orca-terminal-keys-live 5/5, orca-relaunch-restore-live 5/5, the five once-each rows green, extended static rows 5/5, --quick green, brand scan PASS
+oracle_type: specified (exact typed text in the editor model, keyboard focus owner, PTY read by orcad, the switch's aria-checked, exact token counts)
+why_not_caught: no live leg showed a hosted pane for the first time while the user typed elsewhere; no row crossed a relaunch with an Orca setting changed
+recurrence_guard: orca-terminal-keys clause g (6 plants) and clause f's remembered-choice plants (6); orca-terminal-keys-live 2d; orca-relaunch-restore-live paste-choice
+deviation: the owner asked that PowerBrowser stop presetting once the user chose and let Orca's stored value rule; Orca stores it in a per-launch origin, so the record keeps the user's value and the preset uses it
 files_changed: [orca-overlay/files/src/renderer/src/pb/pb-pane-mount.tsx, theia/extensions/orca-panes/src/browser/orca-pane-widget.tsx, theia/extensions/orca-panes/src/browser/orca-pane-bundle.ts, theia/extensions/orca-panes/src/common/orca-panes-protocol.ts, scripts/verify-orca-terminal-keys.mjs, scripts/verify-orca-terminal-keys-live.mjs, scripts/verify-orca-relaunch-restore-live.mjs, scripts/verify-platform.sh, inventory/brand-tokens.json]
