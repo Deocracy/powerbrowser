@@ -4,7 +4,7 @@ milestone: v1.7
 current_phase: 68
 current_phase_name: Three-OS artifacts, weekly re-pin and upstream seams
 status: Gate run 4 at 080814fd has no unexcluded product red; 2 rows wait on the owner's sign-in and desktop (2026-11-17)
-stopped_at: "2026-11-17: gate run 4 at 080814fd done; next: orca-tabs-live and real-input-gate-self-test on the owner's sign-in and desktop, phase 64 re-verification (in progress), milestone re-audit"
+stopped_at: "2026-11-17: gate run 4 at 080814fd done; phase 64 re-verified (78353b7f); milestone re-audit at 78353b7f (gaps_found, owner-bound); next: orca-tabs-live, orca-agent-status-live and real-input-gate-self-test on the owner's sign-in and desktop"
 last_updated: "2026-11-17T00:00:00.000Z"
 last_activity: 2026-11-17
 last_activity_desc: gate run 4 result recorded; D-57 and D-58 recorded; WINDOWS 66 and 68 fixed, 69 open
@@ -25,14 +25,14 @@ See: .planning/PROJECT.md (shared project file; its "Current Milestone" section 
 Scope: .planning/workstreams/orca/REQUIREMENTS.md. Owner decisions: .planning/workstreams/orca/DECISIONS.md (D-01..D-58). Roadmap: .planning/workstreams/orca/ROADMAP.md.
 
 **Core value (this milestone):** Theia is the default GUI; Orca's agent workflow runs inside PowerBrowser as real PowerBrowser tabs, with PowerBrowser's own engine and chrome as the agents' browser.
-**Current focus:** gate run 1 at 4a7308ba was red on 3 unexcluded rows; gate run 2 at 2788eb05 was red on 19 (17 from a mid-run ledger change, 2 regressions), all fixed; gate run 3 was stopped to take in D-55 and D-56; gate run 4 at 080814fd has 584 PASS, 33 red, 31 excluded under open WINDOWS entries and 2 unexcluded environmental reds (orca-tabs-live, real-input-gate-self-test; WINDOWS 69). Next: those two rows on the owner's sign-in and desktop, the phase 64 re-verification (in progress), the milestone re-audit, then the owner pass in END-OF-MILESTONE-CHECKLIST.md (D-40: Linux only)
+**Current focus:** gate run 1 at 4a7308ba was red on 3 unexcluded rows; gate run 2 at 2788eb05 was red on 19 (17 from a mid-run ledger change, 2 regressions), all fixed; gate run 3 was stopped to take in D-55 and D-56; gate run 4 at 080814fd has 584 PASS, 33 red, 31 excluded under open WINDOWS entries and 2 unexcluded environmental reds (orca-tabs-live, real-input-gate-self-test; WINDOWS 69). orca-agent-status-live printed SKIP on the same sign-in and was counted among the 584 PASS. Phase 64 re-verified human_needed 11/11 (78353b7f); milestone re-audit at 78353b7f (v1.7-MILESTONE-AUDIT.md). Next: those rows on the owner's sign-in and desktop, then the owner pass in END-OF-MILESTONE-CHECKLIST.md (D-40: Linux only)
 
 ## Current Position
 
 Phase: 68 (Three-OS artifacts, weekly re-pin and upstream seams) — EXECUTED (68-01..68-11); re-verified 2026-11-16 as human_needed 8/13 with no code gap (3febce70, 68-VERIFICATION.md)
 Plan: 68-11 of 11 complete, live rows PASS (f6d291a0); code review of 68-11 and the scratch-HOME change found 2 critical, 8 warnings and 4 info (ffbefe01, 68-11-REVIEW.md), all 14 fixed 2026-11-16; phases 59 and 60 partially executed (owner plans 59-05, 59-06, 59-07 and 60-05 pending)
-Status: Gate run 4 at 080814fd has no unexcluded product red; milestone re-audit 2026-11-16 (v1.7-MILESTONE-AUDIT.md) predates gate runs 1-4 and D-52..D-58
-Last activity: 2026-11-17 — gate run 4 at 080814fd; D-57 and D-58 recorded; WINDOWS 66 and 68 fixed, 69 open; next: the two owner-dependent rows, phase 64 re-verification (in progress), milestone re-audit
+Status: Gate run 4 at 080814fd has no unexcluded product red; milestone re-audit 2026-11-17 at 78353b7f (v1.7-MILESTONE-AUDIT.md, gaps_found: phase 59 unverified, gate exit 1 on WINDOWS 69 rows)
+Last activity: 2026-11-17 — gate run 4 at 080814fd; D-57 and D-58 recorded; WINDOWS 66 and 68 fixed, 69 open; phase 64 re-verified (78353b7f); milestone re-audit done; next: the owner-dependent rows (WINDOWS 69)
 
 Progress: [█████████░] 62 of 66 plan files have a SUMMARY (63-01, 63-02, 63-05 are superseded stubs; 59-05, 59-06, 59-07, 60-05 are owner plans)
 
@@ -45,7 +45,7 @@ Progress: [█████████░] 62 of 66 plan files have a SUMMARY (6
 | 61 | Spikes for pane hosting, browser parity and live sharing | TAB-03, BRW-01, EXT-03 | Complete (human items deferred) |
 | 62 | Overlay gate and PowerBrowser-run orcad | OVL-01, OVL-05, RUN-03, RUN-04, RUN-05 | Complete |
 | 63 | Agent hooks on Orca's terminal engine (rescoped by D-31) | TERM-02, EXT-02 | Complete (human items deferred) |
-| 64 | Orca panes as PowerBrowser tabs | TAB-01, TAB-02, TAB-04, TAB-06, TERM-01, TERM-04 | Executed (64-06 gap closure); TAB-04 complete (g2 PASS on the 65-05 tree; g3 green since 2ce581f2 and 3ad91d13, D-49); 64-VERIFICATION.md (gaps_found, 2026-11-11) predates the fix, re-verification pending |
+| 64 | Orca panes as PowerBrowser tabs | TAB-01, TAB-02, TAB-04, TAB-06, TERM-01, TERM-04 | Complete (64-06 gap closure); TAB-04 complete (g3 green since 2ce581f2 and 3ad91d13, D-49); re-verified human_needed 11/11 (78353b7f, 64-VERIFICATION.md) |
 | 65 | Orca workspace in Theia | TAB-05, TAB-07, TAB-08, TAB-09 | Complete (verified 8/8, human items deferred) |
 | 66 | PowerBrowser web tabs as Orca's browser | BRW-02, BRW-03, BRW-04, BRW-05 | Complete (66-06..66-10 executed); BRW-02, BRW-03, BRW-04, BRW-05 complete; verified human_needed 25/25 (66-VERIFICATION.md) |
 | 67 | Hosting hardening | RUN-06, RUN-07, RUN-08, RUN-09, INJ-01 | Executed (67-01..67-07; 67-07 gap closure, D-36); RUN-06..RUN-09 and INJ-01 complete; verified human_needed 10/10 (67-VERIFICATION.md); complete |

@@ -34,7 +34,7 @@ Owner decisions D-01..D-31 (`DECISIONS.md`) and the adopted adversarial review (
 - [x] **Phase 61: Spikes for pane hosting, browser parity and live sharing** - Measured answers to TAB-03, BRW-01 and EXT-03 before the remake is built
 - [x] **Phase 62: Overlay gate and PowerBrowser-run orcad** - Seam check for the additive overlay; OrcaService spawns, supervises and stops orcad
 - [x] **Phase 63: Agent hooks on Orca's terminal engine** - Orca terminals on Orca's own engine beside Theia terminals (D-31), agent status hooks, extension sessions visible in Orca, agents end on quit; remote terminals (TERM-03) deferred to v2
-- [ ] **Phase 64: Orca panes as PowerBrowser tabs** - Orca mode, `pb-orca:` URIs, one Orca pane equals one Lumino tab, Orca-only views as their own tabs, Orca terminals as hosted `TerminalPane` tabs with the key policy
+- [x] **Phase 64: Orca panes as PowerBrowser tabs** - Orca mode, `pb-orca:` URIs, one Orca pane equals one Lumino tab, Orca-only views as their own tabs, Orca terminals as hosted `TerminalPane` tabs with the key policy
 - [x] **Phase 65: Orca workspace in Theia** - Theia editor and workspace folders for worktrees, Orca side panel, Orca's Add-project flow, Setups restore
 - [x] **Phase 66: PowerBrowser web tabs as Orca's browser** - Browser pages as PB web tabs, chrome-side agent bridge, agent-control mark, Orca browser tools in PB chrome
 - [x] **Phase 67: Hosting hardening** - Failure page, pairing-offer containment, sidecar Origin check, credential-storage check, landing logo
@@ -363,7 +363,7 @@ Phases execute in numeric order: 59 → 60 → 61 → 62 → 63 → 64 → 65 �
 | 61. Spikes for pane hosting, browser parity and live sharing | 4/4 | Complete (human items deferred) | 2026-11-10 |
 | 62. Overlay gate and PowerBrowser-run orcad | 3/3 | Complete | 2026-11-09 |
 | 63. Agent hooks on Orca's terminal engine | 6/6 (3 executed, 3 superseded) | Complete (human items deferred) | 2026-11-10 |
-| 64. Orca panes as PowerBrowser tabs | 6/6 | In Progress (64-06 gap closure executed; TAB-04 complete, g3 green since 2ce581f2 and 3ad91d13, D-49; 64-VERIFICATION.md gaps_found predates the fix, re-verification pending) | - |
+| 64. Orca panes as PowerBrowser tabs | 6/6 | Complete (human items deferred; re-verified human_needed 11/11, 78353b7f; TAB-04 closed, D-49) | - |
 | 65. Orca workspace in Theia | 5/5 | Complete (human items deferred; verified 8/8) | 2026-11-10 |
 | 66. PowerBrowser web tabs as Orca's browser | 10/10 | Complete (human items deferred; verified human_needed 25/25) | - |
 | 67. Hosting hardening | 7/7 | Complete (human items deferred; verified human_needed 10/10) | - |
