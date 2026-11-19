@@ -1,8 +1,8 @@
 ---
-status: verifying
+status: awaiting_human_verify
 trigger: "Owner, 2026-11-18, with a screenshot of the dev build on a fresh profile: 'Bit GUI problem. orca dose not look like orca'"
 created: 2026-11-18T00:00:00Z
-updated: 2026-11-19T13:30:00Z
+updated: 2026-11-19T14:10:00Z
 ---
 
 ## Current Focus
@@ -53,15 +53,19 @@ hypothesis: |
   C3 (no floor): the hosted Orca parts have only Lumino's generic 100 px dock minimum, not Orca's 220 px.
 test: done (clause m red on the unfixed build, green after 125d27f4 + 47f3bc9b; ablations show each rule carries a step)
 expecting: n/a
-next_action: "run tab-strip-live on the committed tree; then owner relaunches and judges the Orca side panels (drag each
-  edge from inside the panel; switch to Browsing or Organising and back)"
+next_action: "owner relaunches the dev build on his profile and judges the Orca side panels (drag each
+  edge from inside the panel; switch to Browsing or Organising and back); on 'looks right' -> archive; the two owner
+  calls below stay open (Orca's status bar; Welcome vs Orca's Landing)"
+status_note: round 3 fixed and verified live headless (125d27f4, 47f3bc9b; clause m red before, green after). The Theia
+  bundle is rebuilt from the committed source; the Orca pane bundle is unchanged since round 2 (no overlay edit) and
+  intact (pb-browser-host.js present). The owner's instance (pid 36562, orcad 36998 on 26768) was left running.
 previous_status_note: round 2 fixed and verified live headless. A: 94e23217 (Theia's status bar has its own mode rule; the
   Orca mode hides it). B: fa82a7f7 (Orca's right-sidebar flag and the Theia right panel are one state in the Orca mode;
   Orca's RightSidebarToggle at the main area's top right while the panel is collapsed; clauses k and l). The Theia
   bundle and the Orca pane bundle (with the browser host and the standalone variant) are rebuilt. Awaiting the owner's
   look on his machine. Open owner calls, not acted on: Orca's own status bar at the bottom (feasible, see the Evidence
   entry 'Orca status bar'), and Welcome vs Orca's Landing in the main area.
-next_action: owner relaunches the dev build and judges A and B against the real Orca app; on "looks right" ->
+previous_next_action: owner relaunches the dev build and judges A and B against the real Orca app; on "looks right" ->
   archive; on a status-bar or Landing request -> new investigation/plan (a feature, not a defect fix).
 hypothesis_A: |
   Theia's status bar shows in Orca mode because ModeRules has no status-bar rule: activateMode hides it with
@@ -580,7 +584,7 @@ verification_round3:
   target_test: { result: pass, note: "orca-side-panel-live m width: red on the unfixed build (left 100 after the Browsing and the Organising round trips; drags from -5/+5 left and +2/+3 right inside Orca's band moved 0; left squeeze to 100; right squeeze blind on Orca's dead handle), green after (13 clauses)" }
   mutation_check: { result: pass, note: "runtime ablations on the fixed build (probe-ablate.mjs): no band -> 4 band points move 0; Orca's handles live with the band -> 4 points move 0; no minimum -> squeezes 100/100; guard without minimum -> Browsing trip keeps 320/320. No Stryker." }
   no_op_deletion: { result: pass, deletion_justified_by_rca: n/a (a guard, two CSS rules, a min-width) }
-  adjacent_tests: { result: pass, suites_run: [orca-side-panel-live a-l h i, orca-side-panel-live-self-test, scan-brand-residue (+self-test), branding-preflight (+self-test), shell-furniture (+self-test), gui07-mode-toggle-commands (+self-test), gui07-mode-switch-tabs-invariant (+self-test), gui07-mode-switch-tabs-live (+self-test), tab-strip (+self-test), chrome-bar-typecheck, orca-pane-css (+self-test), gui06-chrome-bar-placement, page-furniture-live, ng-035-custom-mode-saves-layout, orca-pane-css-live (second run; the first timed out in its harness waiting for a hosted terminal widget, before any measurement)], pending: [tab-strip-live (refuses an uncommitted tree; run after this commit)] }
+  adjacent_tests: { result: pass, suites_run: [orca-side-panel-live a-l h i, orca-side-panel-live-self-test, scan-brand-residue (+self-test), branding-preflight (+self-test), shell-furniture (+self-test), gui07-mode-toggle-commands (+self-test), gui07-mode-switch-tabs-invariant (+self-test), gui07-mode-switch-tabs-live (+self-test), tab-strip (+self-test), chrome-bar-typecheck, orca-pane-css (+self-test), gui06-chrome-bar-placement, page-furniture-live, ng-035-custom-mode-saves-layout, orca-pane-css-live (second run; the first timed out in its harness waiting for a hosted terminal widget, before any measurement), tab-strip-live on the committed tree (menu, keyboard-menu, reorder, double, overflow, bookmark-all PASS; middle NOT SCORED: its launch uses the default powerbrowser.orca.port 26768, held by the owner's running orcad pid 36998, so the pane bundle cannot boot -- environmental, not this change)] }
   revert_and_reconfirm: { result: pass, bug_returned_on_revert: true, fixed_on_reapply: true, note: "the same row red on the build of 74f81f61 and green on the build with the fix, the fix the only change between the runs" }
   pointer_path: "WebDriver BiDi input.performActions on the Theia document (hit-tested and dispatched by Gecko as trusted events in that document); not OS input: PB_REAL_INPUT/pb-kwin needs a headed window and would take the owner's pointer while his instance runs"
   live_on_owner_machine: not run (headless 1280x768 and 2048x1252; the owner's instance pid 36562 was left running)
