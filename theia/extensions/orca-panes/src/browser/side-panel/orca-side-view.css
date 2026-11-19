@@ -1,0 +1,24 @@
+/*
+ * A hosted Orca side surface fills its view-container part, as Orca's own shell column does
+ * (debug orca-mode-fresh-profile-look, 2026-11-18; checked by orca-side-panel-live clause j).
+ *
+ * The part node carries data-pb-orca-pane, and the scoped pane stylesheet maps Orca's body rule
+ * (height: 100dvh) onto that attribute. A main-area pane is sized inline by its Lumino layout; a part
+ * is not, so without the first rule its node is a viewport tall and Orca's footer row falls below the
+ * part.
+ */
+.pb-orca-side-view {
+  height: 100%;
+}
+
+/*
+ * Orca mounts Sidebar and RightSidebar in a row flexbox whose column is exactly the surface's width,
+ * which useSidebarResize writes inline from Orca's store (sidebarWidth, rightSidebarWidth). Here the
+ * column is the Theia part: the surface takes the part's height (the pane root is a column flexbox)
+ * and the part's width. Only !important in a stylesheet outranks the inline width.
+ */
+.pb-orca-side-view > .pb-orca-pane-host > [data-pb-orca-pane-root] > :first-child {
+  flex: 1 1 0%;
+  min-height: 0;
+  width: auto !important;
+}

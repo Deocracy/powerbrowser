@@ -193,8 +193,10 @@ export const BOOT_WAIT = `const key = Symbol.for(${JSON.stringify(ORCA_PANES_MOD
  * command(id, ...args), orca(...args), orcaState(), bundle(expr), hostedWidgets(), organisingKeys(), uriOf(id),
  * luminoClose(id), activate(id), sendText(id, text), typeInto(id, text), typeText(text), pressKey(spec), focusTheiaFrame(),
  * focusOverlay(tabId), openWebTab(url), addedSince(t), tabState(), offerFromFile(), repo, worktree, stubDir }.
+ * registerRepo false: the scratch repository is created but never added to orcad, so the session starts in Orca's
+ * no-project state, as a fresh profile does (ctx.worktree stays null; ctx.orca still works).
  */
-export async function withOrcaTabsSession({ log = () => {}, needOrca = true, agent = 'stub' } = {}, fn) {
+export async function withOrcaTabsSession({ log = () => {}, needOrca = true, agent = 'stub', registerRepo = true } = {}, fn) {
     if (agent !== 'stub' && agent !== 'real') throw new Error(`withOrcaTabsSession: agent must be 'stub' or 'real', not ${agent}`);
     const { installOutputRedaction, ensurePbNode, redact } = await import('./orca-run.mjs');
     const secrets = [];
@@ -317,8 +319,10 @@ export async function withOrcaTabsSession({ log = () => {}, needOrca = true, age
                         throw new Error(`the Orca CLI call '${a.slice(0, 2).join(' ')}' failed: ${redact(String(e.stderr ?? e.message), secrets).trim().split('\n').pop()}`);
                     }
                 };
-                ctx.orca('repo', 'add', '--path', repo);
-                ctx.worktree = `path:${repo}`;
+                if (registerRepo) {
+                    ctx.orca('repo', 'add', '--path', repo);
+                    ctx.worktree = `path:${repo}`;
+                }
             }
             try {
                 return await fn(ctx);

@@ -16,8 +16,11 @@ import { ReactWidget } from '@theia/core/lib/browser/widgets/react-widget';
 import { OrcaPaneBundle } from '../orca-pane-bundle';
 import { OrcaFailurePage } from '../failure/orca-failure-page';
 import { OrcaHostingStatus } from '../failure/orca-hosting-status';
+import '../../../src/browser/side-panel/orca-side-view.css';
 
 const LOG_PREFIX = '[@powerbrowser/orca-panes]';
+/** The part node's class; orca-side-view.css makes the node fill its part body and the Orca surface fill the node. */
+export const SIDE_VIEW_CLASS = 'pb-orca-side-view';
 
 /**
  * C3-65: the bundle exports the side panel calls. Narrowed from the loader's
@@ -69,6 +72,7 @@ export class OrcaSideViewWidget extends ReactWidget {
         this.id = this.options.id;
         this.title.closable = false;
         this.node.tabIndex = -1;
+        this.addClass(SIDE_VIEW_CLASS);
         this.node.setAttribute('data-pb-orca-pane', this.options.kind);
         this.toDispose.push(this.hostingStatus.onDidChange(() => this.update()));
         this.update();

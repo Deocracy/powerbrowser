@@ -10,9 +10,20 @@
 // orcad and the booted pane bundle, ORCA_* scrubbed, redaction first; a plain
 // probe shell boots no bundle), with MOZ_LOG=nsHostResolver:5 written to the
 // scratch directory. The bundle is reached only through C3's boot handle
-// (ctx.bundle); this check imports nothing of the bundle itself. Two scratch
-// repositories are registered with the built CLI. Clauses, each printing one
+// (ctx.bundle); this check imports nothing of the bundle itself. The session
+// starts with no project (registerRepo false, as a fresh profile does); two
+// scratch repositories are registered with the built CLI after clause j's
+// no-project half. Clauses, each printing one
 // line "orca-side-panel-live: <clause>: PASS|FAIL -- <counts>":
+//  j  fill         (debug orca-mode-fresh-profile-look, 2026-11-18) each mounted
+//                  side part's node and its Orca surface (the pane root's first
+//                  element child) fill the part's body, every edge within
+//                  FILL_TOLERANCE px. The expectation is the body's own box, read
+//                  at check time. Judged in the no-project state right after the
+//                  Orca mode is selected (the store must hold 0 worktrees, else
+//                  red), again with the projects and every part expanded, and
+//                  at a wider side area (PART_WIDE px) where Orca's stored
+//                  sidebar widths are narrower than the part.
 //  a  containers   in the Orca mode the left container is in the left area and
 //                  the right container in the right area; each part's host has
 //                  descendants and state().mountErrors names none of its kinds.
@@ -84,6 +95,10 @@ export const LEFT = 'powerbrowser-orca-view-container';
 export const RIGHT = 'powerbrowser-orca-right-view-container';
 export const PARTS = { 'powerbrowser-orca-sidebar-view': 'sidebar', 'powerbrowser-orca-settings-view': 'settings', 'powerbrowser-orca-right-sidebar-view': 'right-sidebar' };
 export const AGENTS = 'powerbrowser-orca-agents-view';
+/** j: a surface edge may differ from the part body's by sub-pixel rounding only. */
+export const FILL_TOLERANCE = 1;
+/** j: the side-area width of the wide pass, above Orca's stored sidebar (280) and right-sidebar (350) defaults. */
+export const PART_WIDE = 460;
 export const CONTROL_HOST = 'pb-egress-control.invalid';
 export const ACTION_HOST = 'pb-egress-user-action.invalid';
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
@@ -119,6 +134,26 @@ export function agentsVerdict({ presentWhenOn, presentWhenOff }) {
     const fails = [];
     if (!presentWhenOn) fails.push('agents part absent with the orchestration setting on');
     if (presentWhenOff) fails.push('agents part stayed with the orchestration setting off');
+    return fails;
+}
+
+/**
+ * j: one part's boxes ({ x, y, w, h } each, or null): the part body is the expectation; the widget node and the Orca
+ * surface must each match it on every edge. Red names the part, the box and the edge.
+ */
+export function fillVerdict(part, { body, node, surface }) {
+    if (!body || !(body.w > 0) || !(body.h > 0)) return [`${part}: the part body has no box, so the comparison is blind`];
+    const fails = [];
+    const edges = b => ({ left: b.x, top: b.y, right: b.x + b.w, bottom: b.y + b.h });
+    const want = edges(body);
+    for (const [what, box] of [['node', node], ['surface', surface]]) {
+        if (!box) { fails.push(`${part}: no ${what} box`); continue; }
+        const got = edges(box);
+        for (const edge of ['left', 'top', 'right', 'bottom']) {
+            const d = Math.round(got[edge] - want[edge]);
+            if (Math.abs(d) > FILL_TOLERANCE) fails.push(`${part}: ${what} ${edge} edge ${d > 0 ? '+' : ''}${d}px from the part body's (${what} ${box.w}x${box.h}, body ${body.w}x${body.h})`);
+        }
+    }
     return fails;
 }
 
@@ -246,23 +281,50 @@ async function live() {
     const clause = (name, fails, counts) => { results.push({ name, fails }); console.log(`${NAME}: ${name}: ${fails.length ? 'FAIL' : 'PASS'} -- ${fails.length ? fails.join('; ') : counts}`); };
     const J = JSON.stringify;
     try {
-        await lib.withOrcaTabsSession({ log: () => {} }, async (ctx) => {
+        await lib.withOrcaTabsSession({ log: () => {}, registerRepo: false }, async (ctx) => {
             // i (control first): a resolution the collector must see before any absence is judged.
             await ctx.probe(`try { await fetch('http://${CONTROL_HOST}/', { mode: 'no-cors' }); } catch (e) { /* NXDOMAIN expected */ } return true;`);
             const pairing = await ctx.bundle('m.state().pairing');
             if (!pairing?.sessionOnly) throw new Error('the bundle is not paired session-only (C3-65 state().pairing)');
-            // A second repository beside the session's own.
+            // i (user-action marker): hosts first resolved after this follow the user selecting the Orca mode.
+            await ctx.probe(`try { await fetch('http://${ACTION_HOST}/', { mode: 'no-cors' }); } catch (e) { /* NXDOMAIN expected */ } return true;`);
+            await ctx.probe(`await get('ModeService').activateMode('orca'); return true;`);
+            // The shell's active widget follows document focus; the automated window starts without it.
+            await ctx.focusTheiaFrame();
+
+            // j: every visible part's body box against its node and its Orca surface.
+            const jFails = [];
+            const jCounts = [];
+            const fill = async (when) => {
+                const boxes = await ctx.probe(`const wm = get('WidgetManager');
+                    const box = e => { if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; };
+                    await until(() => ${J([...Object.keys(PARTS)].filter(id => PARTS[id] !== 'settings'))}.every(id => { const w = wm.tryGetWidget(id); return w && w.node.querySelector('[data-pb-orca-pane-root] > *'); }), 20000);
+                    await sleep(500);
+                    const out = {};
+                    for (const [id, kind] of Object.entries(${J({ ...PARTS, [AGENTS]: 'orchestration' })})) {
+                        const w = wm.tryGetWidget(id);
+                        if (!w || !w.isAttached || !w.isVisible) continue;
+                        const root = w.node.querySelector('[data-pb-orca-pane-root]');
+                        out[kind] = { body: box(w.node.parentElement), node: box(w.node), surface: box(root && root.firstElementChild) };
+                    }
+                    return out;`);
+                const kinds = Object.keys(boxes ?? {});
+                if (!kinds.includes('sidebar') || !kinds.includes('right-sidebar')) jFails.push(`${when}: ${['sidebar', 'right-sidebar'].filter(k => !kinds.includes(k)).join(' and ')} not shown, so the comparison is blind`);
+                for (const kind of kinds) jFails.push(...fillVerdict(`${when} ${kind}`, boxes[kind]));
+                jCounts.push(`${when}: ${kinds.length} part(s)`);
+            };
+            const worktreesBefore = await ctx.bundle('m.state().worktrees');
+            if (!Array.isArray(worktreesBefore) || worktreesBefore.length) jFails.push(`the no-project state was not reached (${Array.isArray(worktreesBefore) ? worktreesBefore.length : 'no'} worktree(s) in the store)`);
+            await fill('no project');
+
+            // The projects: the session's own repository and a second one.
+            ctx.orca('repo', 'add', '--path', ctx.repo);
             const repo2 = join(ctx.scratch, 'repo-two');
             mkdirSync(repo2, { recursive: true });
             const git = (...a) => execFileSync('git', ['-C', repo2, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', ...a], { stdio: ['ignore', 'pipe', 'pipe'] });
             git('init', '-q');
             git('commit', '-q', '--allow-empty', '-m', 'fixture');
             ctx.orca('repo', 'add', '--path', repo2);
-            // i (user-action marker): hosts first resolved after this follow the user selecting the Orca mode.
-            await ctx.probe(`try { await fetch('http://${ACTION_HOST}/', { mode: 'no-cors' }); } catch (e) { /* NXDOMAIN expected */ } return true;`);
-            await ctx.probe(`await get('ModeService').activateMode('orca'); return true;`);
-            // The shell's active widget follows document focus; the automated window starts without it.
-            await ctx.focusTheiaFrame();
 
             // a: a collapsed part mounts when shown (C64-4), so each is expanded first, as a user opens it.
             const panel = await ctx.probe(`const wm = get('WidgetManager'); const shell = get('ApplicationShell');
@@ -288,6 +350,12 @@ async function live() {
             const cliWorktrees = ids(ctx.orca('worktree', 'list'), 'worktrees');
             clause('b rows', [...setVerdict('repositories', rows.repos, cliRepos), ...setVerdict('worktrees', rows.worktrees, cliWorktrees)],
                 `${new Set(rows.repos).size} repository and ${new Set(rows.worktrees).size} worktree rows equal the CLI lists`);
+
+            // j (with projects, every part expanded by clause a), then at the wide side-area width.
+            await fill('projects');
+            await ctx.probe(`const shell = get('ApplicationShell'); shell.resize(${PART_WIDE}, 'left'); shell.resize(${PART_WIDE}, 'right'); await sleep(800); return true;`);
+            await fill(`wide ${PART_WIDE}px`);
+            clause('j fill', jFails, `every shown part's node and Orca surface fill its body (${jCounts.join('; ')})`);
 
             // c and d: one switch, read in Orca's web settings store and in the dock.
             // Orca's web client keeps this setting in its own localStorage store (derived key); it is not runtime-backed.
@@ -429,6 +497,14 @@ function selfTest() {
         ['a user-initiated host before the user-action marker', () => egressVerdict({ resolved: [CONTROL_HOST, ACTION_HOST, 'example.org'], allowlist: allow, afterAction: [] }), 'unlisted host example.org resolved while'],
         ['an unlisted host after the user-action marker', () => egressVerdict({ resolved: [CONTROL_HOST, ACTION_HOST, 'tracker.example.net'], allowlist: allow, afterAction: ['tracker.example.net'] }), 'unlisted host tracker.example.net resolved after'],
         ['the user-action marker absent', () => egressVerdict({ resolved: [CONTROL_HOST, 'example.org'], allowlist: allow, afterAction: [] }), 'collector blind: the user-action marker'],
+        // j, the boxes measured in the 2026-11-18 reproduction (a 244 px part at 1280x768, the owner's wider part).
+        ['control: node and surface fill the part body', () => fillVerdict('sidebar', { body: { x: 0, y: 131, w: 244, h: 591 }, node: { x: 0, y: 131, w: 244, h: 591.4 }, surface: { x: 0, y: 131, w: 244, h: 591 } }), null],
+        ['a surface wider than the part (Orca\'s stored width)', () => fillVerdict('right-sidebar', { body: { x: 1036, y: 107, w: 244, h: 615 }, node: { x: 1036, y: 107, w: 244, h: 615 }, surface: { x: 1036, y: 107, w: 350, h: 615 } }), 'surface right edge +106px'],
+        ['a surface narrower than the part', () => fillVerdict('sidebar', { body: { x: 0, y: 131, w: 400, h: 591 }, node: { x: 0, y: 131, w: 400, h: 591 }, surface: { x: 0, y: 131, w: 280, h: 591 } }), 'surface right edge -120px'],
+        ['a surface of content height', () => fillVerdict('sidebar', { body: { x: 0, y: 131, w: 244, h: 591 }, node: { x: 0, y: 131, w: 244, h: 591 }, surface: { x: 0, y: 131, w: 244, h: 320 } }), 'surface bottom edge -271px'],
+        ['a node a viewport tall (Orca\'s body rule on the pane attribute)', () => fillVerdict('sidebar', { body: { x: 0, y: 131, w: 244, h: 591 }, node: { x: 0, y: 131, w: 244, h: 768 }, surface: { x: 0, y: 131, w: 244, h: 591 } }), 'node bottom edge +177px'],
+        ['no surface box', () => fillVerdict('settings', { body: { x: 0, y: 131, w: 244, h: 300 }, node: { x: 0, y: 131, w: 244, h: 300 }, surface: null }), 'settings: no surface box'],
+        ['a part body with no box', () => fillVerdict('sidebar', { body: { x: 0, y: 0, w: 0, h: 0 }, node: null, surface: null }), 'the comparison is blind'],
     ];
     let failures = 0;
     for (const [name, run, naming] of cases) {
