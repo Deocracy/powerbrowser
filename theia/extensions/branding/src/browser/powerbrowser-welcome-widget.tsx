@@ -111,8 +111,14 @@ export class PowerBrowserWelcomeWidget extends ReactWidget {
 
     // Per CONTEXT.md's discretion leaning: product name, version, and one
     // repo link only -- no invented marketing copy or tagline.
+    // The items sit in Theia's own `gs-content-container`, as Theia's
+    // getting-started widget nests its content: since the 1.76 re-pin,
+    // `@theia/ai-ide` brings `@theia/getting-started`'s `.gs-container` rule
+    // (flex column, space-between, full height), which spread four direct
+    // children over the whole main area (found 2026-11-18; checked by
+    // first-boot-surface's welcome layout clause).
     protected render(): React.ReactNode {
-        return <div className='gs-container'>
+        return <div className='gs-container'><div className='gs-content-container'>
             {/* INLINE, not an <img>. The mark inherits the Theia theme's
                 foreground through currentColor, and an <img> is a separate
                 document that inherits nothing -- which is how the OS-driven
@@ -138,6 +144,6 @@ export class PowerBrowserWelcomeWidget extends ReactWidget {
             <p>
                 <a href={this.repoUrl} onClick={this.openRepo}>{this.repoUrl}</a>
             </p>
-        </div>;
+        </div></div>;
     }
 }

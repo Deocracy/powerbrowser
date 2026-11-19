@@ -9,6 +9,11 @@
  *     `unhandledrejection` events into window.__pbBootErrors. A Theia document without that
  *     array is a FAIL: a zero count from a counter that never ran proves nothing;
  *   - the main area holds exactly the seed widget of powerbrowser-welcome-contribution.ts;
+ *   - (fresh only) the seed's items are stacked: read again with the seed's node WELCOME_SHRINK px
+ *     shorter, no item's offset from the first item moves. Since the 1.76 re-pin @theia/ai-ide brings
+ *     @theia/getting-started's `.gs-container` rule (flex column, space-between), which spread the
+ *     four items over the full height until the welcome widget wrapped them in Theia's own
+ *     `.gs-content-container` (debug session of 2026-11-18);
  *   - the active perspective is the launch-mode fallback of mode-service.ts applyLaunchMode;
  *   - no widget carries the @theia/getting-started widget id. Positive control: its command
  *     must open that widget. When the package is not installed (1.74.1), the expectation is
@@ -67,6 +72,10 @@ const SETTINGS_COMMANDS_JS_REL = 'theia/node_modules/@theia/preferences/lib/brow
 // package to read this same key, so a rename upstream goes red here.
 const STARTUP_EDITOR_KEY = 'workbench.startupEditor';
 const FORCED_ERROR_TYPE = 'ForcedRenderError';
+// Welcome layout (debug session of 2026-11-18): the seed's items are read twice, at the
+// widget's own height and with its node WELCOME_SHRINK px shorter. Stacked content keeps every item's offset
+// from the first; content spread over the free height (a flex container distributing space) moves them.
+const WELCOME_SHRINK = 200;
 
 const read = rel => readFileSync(join(REPO_ROOT, rel), 'utf8');
 const show = value => JSON.stringify(value);
@@ -210,6 +219,22 @@ export function judge(expected, observed) {
     if (!(observed.forced.counted >= 1)) {
         f.push(`the forced ${FORCED_ERROR_TYPE} never reached the boot error counter (entries: ${show(observed.forced.counted)})`);
     }
+    if (!expected.carried) f.push(...welcomeLayoutFailures(observed.welcomeLayout));
+    return f;
+}
+
+/** The seed's items keep their offsets when its free height shrinks; red names the item and the move. */
+export function welcomeLayoutFailures(layout) {
+    if (!layout) return ['welcome layout: the seed widget was not shown in the main area, so its layout was not measured'];
+    const [full, short] = layout.offsets;
+    const shrink = Math.round(layout.heights[0] - layout.heights[1]);
+    if (full.length < 2) return [`welcome layout: ${full.length} item(s) found, fewer than two, so the comparison is blind`];
+    if (shrink < WELCOME_SHRINK / 2) return [`welcome layout: the seed's height changed by ${shrink}px, not ${WELCOME_SHRINK}px, so the comparison is blind`];
+    const f = [];
+    full.forEach((y, i) => {
+        const d = Math.round(short[i] - y);
+        if (Math.abs(d) > 1) f.push(`welcome item ${i + 1} of ${full.length} moved ${d}px when the seed's height shrank by ${shrink}px: the welcome content is spread over the free height, not stacked`);
+    });
     return f;
 }
 
@@ -250,6 +275,20 @@ async function observe(expected, profileDir) {
             const areas = {};
             for (const a of ['main', 'left', 'right', 'bottom']) areas[a] = shell.getWidgets(a).map(w => w.id);
             const mainAddresses = ${MAIN_ADDRESSES};
+            // Welcome layout: the items are the children of the first element below the node with more than one child.
+            let welcomeLayout = null;
+            const seed = shell.getWidgets('main').find(w => w.id === E.mainArea[0]);
+            if (!E.carried && seed && seed.isVisible) {
+                const items = () => { let c = seed.node; while (c && c.childElementCount === 1) c = c.firstElementChild; return c ? [...c.children] : []; };
+                const read = () => { const list = items(); const top = list.length ? list[0].getBoundingClientRect().top : 0;
+                    return { height: seed.node.getBoundingClientRect().height, offsets: list.map(e => e.getBoundingClientRect().top - top) }; };
+                const full = read();
+                const saved = seed.node.style.height;
+                seed.node.style.height = (full.height - ${WELCOME_SHRINK}) + 'px';
+                const short = read();
+                seed.node.style.height = saved;
+                welcomeLayout = { heights: [full.height, short.height], offsets: [full.offsets, short.offsets] };
+            }
             const perspective = get('PerspectiveService').getActivePerspectiveId();
             const prefs = get('PreferenceService');
             await prefs.ready;
@@ -275,7 +314,7 @@ async function observe(expected, profileDir) {
             const prop = get('PreferenceSchemaService').getSchemaProperty(E.level.key);
             const schema = prop ? { description: prop.description, default: prop.default, enumDescriptions: prop.enumDescriptions } : null;
             settingsWidget.close();
-            return { areas, mainAddresses, perspective, startupEditor, level, gettingStartedPresent, gettingStartedControl, settings: { domDescription, schema } };
+            return { areas, mainAddresses, welcomeLayout, perspective, startupEditor, level, gettingStartedPresent, gettingStartedControl, settings: { domDescription, schema } };
         `);
         if (obs.error) throw new Error(obs.error);
         obs.counterPresent = counterPresent === true;
@@ -469,6 +508,7 @@ function selfTest() {
         counterPresent: true,
         bootErrors: [],
         forced: { logged: 2, counted: 2 },
+        welcomeLayout: { heights: [695, 495], offsets: [[0, 89, 152, 188], [0, 89, 152, 188]] },
     });
     const withGs = { ...expected, gettingStarted: expected.gettingStarted ?? { widgetId: 'planted.gs.widget', commandId: 'planted.gs.widget' } };
     const declared = { ...expected, startupEditor: expected.startupEditor ?? 'planted-declared-default' };
@@ -491,6 +531,11 @@ function selfTest() {
         ['carried: restored set missing a fixture id', carried, o => { o.mainAddresses = o.mainAddresses.filter(id => id !== 'planted-fixture-view'); }, /missing \["planted-fixture-view"\]/],
         ['carried: restored set with a surplus id', carried, o => { o.mainAddresses.push('planted-carried-surplus'); }, /surplus \["planted-carried-surplus"\]/],
         ['carried: one-id fixture', { ...carried, mainArea: [...expected.mainArea] }, () => {}, /fewer than two/],
+        // The 2026-11-18 reproduction: .gs-container's space-between spreading the four items (1280x768, Browsing).
+        ['welcome items spread over the free height', expected, o => { o.welcomeLayout = { heights: [695, 495], offsets: [[0, 241, 464, 664], [0, 174, 331, 464]] }; }, /welcome item 2 of 4 moved -67px[\s\S]*spread over the free height/],
+        ['welcome layout not measured', expected, o => { o.welcomeLayout = null; }, /welcome layout: the seed widget was not shown/],
+        ['welcome height unchanged', expected, o => { o.welcomeLayout.heights = [695, 695]; }, /changed by 0px, not 200px, so the comparison is blind/],
+        ['welcome with one item', expected, o => { o.welcomeLayout.offsets = [[0], [0]]; }, /1 item\(s\) found, fewer than two/],
     ];
     const out = [];
     const cleanFailures = [expected, withGs, declared, carried].flatMap(exp => judge(exp, clean(exp)));
