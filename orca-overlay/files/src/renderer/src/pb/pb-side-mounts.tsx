@@ -4,7 +4,9 @@
 // (app-shell/AppWorkspaceShell.tsx: WorktreeSidebar, ActivePage, PendingCreationSurface, the right
 // sidebar's boundary; components/editor/EditorContent.tsx's check-details branch), unchanged: no section
 // hidden, no copy rewritten (P65-13). check-details mounts CheckRunDetailsPanel alone, never Orca's
-// editor (D-01). Nothing here writes Orca's store.
+// editor (D-01). right-sidebar-toggle (debug orca-mode-fresh-profile-look, 2026-11-18) is Orca's own
+// RightSidebarToggle, which AppWorkspaceShell shows at the workspace area's top right while the right
+// sidebar is closed. Nothing here writes Orca's store; the toggle calls Orca's own toggleRightSidebar.
 import * as React from 'react'
 import { Suspense, useRef, useSyncExternalStore } from 'react'
 import { toast } from 'sonner'
@@ -14,6 +16,7 @@ import { pendingCreationOpensNativeChat } from '@/lib/pending-worktree-creation'
 import { useAppStore } from '../store'
 import Sidebar from '../components/Sidebar'
 import RightSidebar from '../components/right-sidebar'
+import { RightSidebarToggle } from '../app-shell/TitlebarMainStrip'
 import { RecoverableRenderErrorBoundary } from '../components/error-boundaries/RecoverableRenderErrorBoundary'
 import { CheckRunDetailsPanel } from '../components/editor/CheckRunDetailsPanel'
 import { NativeChatCrewPanel } from '../components/orchestration-crew/NativeChatCrewPanel'
@@ -74,6 +77,7 @@ export const SIDE_MOUNT_KINDS: readonly string[] = Object.freeze([
   'settings',
   'orchestration',
   'right-sidebar',
+  'right-sidebar-toggle',
   'check-details',
   ...Object.keys(PAGE_VIEWS),
   'page:creation'
@@ -291,6 +295,7 @@ function OrchestrationMount(): React.JSX.Element | null {
 export function SideMountBody({ kind, worktreeId, tabId }: { kind: string; worktreeId: string; tabId: string }): React.JSX.Element | null {
   if (kind === 'sidebar') return <SidebarMount />
   if (kind === 'right-sidebar') return <RightSidebarMount />
+  if (kind === 'right-sidebar-toggle') return <RightSidebarToggle />
   if (kind === 'orchestration') return <OrchestrationMount />
   if (kind === 'check-details') return <CheckDetailsMount worktreeId={worktreeId} tabId={tabId} />
   if (kind === 'page:creation') return <CreationMount />

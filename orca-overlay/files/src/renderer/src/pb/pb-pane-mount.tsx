@@ -131,6 +131,7 @@ import { SESSION_PAIRING_BUILD, assertSessionOnly, pairSessionOnly, pairingState
 import './browser-host/pb-browser-host-link'
 
 // Phase 65 (C3-65): the observation API, the orchestration focus and repair, re-exported as named exports.
+// B-8 (2026-11-18): Orca's right-sidebar flag and its own setter, for the Theia right panel that hosts RightSidebar.
 export {
   subscribeOpenFiles,
   subscribeWorktrees,
@@ -138,6 +139,8 @@ export {
   setActiveView,
   subscribeActiveWorktree,
   subscribeOrchestrationEnabled,
+  subscribeRightSidebarOpen,
+  setRightSidebarOpen,
   viewTitle
 } from './pb-workspace-api'
 export { setOrchestrationFocus } from './pb-side-mounts'

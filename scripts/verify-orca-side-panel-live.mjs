@@ -24,6 +24,27 @@
 //                  red), again with the projects and every part expanded, and
 //                  at a wider side area (PART_WIDE px) where Orca's stored
 //                  sidebar widths are narrower than the part.
+//  k  status bar   (debug orca-mode-fresh-profile-look round 2, owner 2026-11-18:
+//                  "the botom has the thiea purpel bar witch should not be
+//                  there") Theia's status bar is not shown in the Orca mode:
+//                  StatusBarImpl hidden, its node without height, and the side
+//                  areas reaching the shell's bottom edge (Lumino reserves a
+//                  hidden-by-CSS bar's row, so the reclaimed row is measured).
+//                  Judged when the Orca mode is first selected and again after
+//                  Coding; Coding is the control (the bar shows there with a
+//                  box), else red "instrument blind".
+//  l  right toggle (same debug, defect B) Orca's right-sidebar toggle works as in
+//                  Orca. Its labels are derived from Orca's source (the close
+//                  button in components/right-sidebar/index.tsx, RightSidebarToggle
+//                  in app-shell/TitlebarMainStrip.tsx). Orca's close button in the
+//                  hosted right sidebar collapses the Theia right panel; while
+//                  collapsed a visible Orca toggle sits at the top right of the
+//                  main area (its right edge within TOGGLE_CORNER px of the main
+//                  area's, inside its first tab row) and expands the panel with
+//                  Orca's right sidebar current and its content back (Orca's close
+//                  button shown again). Theia's Toggle Right Panel command does the
+//                  same both ways, and its reopen must bring Orca's content back.
+//                  In Coding no Orca toggle shows (the control is the Orca pass).
 //  a  containers   in the Orca mode the left container is in the left area and
 //                  the right container in the right area; each part's host has
 //                  descendants and state().mountErrors names none of its kinds.
@@ -99,6 +120,10 @@ export const AGENTS = 'powerbrowser-orca-agents-view';
 export const FILL_TOLERANCE = 1;
 /** j: the side-area width of the wide pass, above Orca's stored sidebar (280) and right-sidebar (350) defaults. */
 export const PART_WIDE = 460;
+/** l: how far the closed-state toggle's right edge may sit from the main area's right edge (Orca: the button plus its mr-2). */
+export const TOGGLE_CORNER = 48;
+/** l: the main area's first tab row, Theia's --theia-private-horizontal-tab-height. */
+export const TAB_ROW = 35;
 export const CONTROL_HOST = 'pb-egress-control.invalid';
 export const ACTION_HOST = 'pb-egress-user-action.invalid';
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
@@ -112,6 +137,8 @@ const SRC = {
     views: 'orca/src/shared/ui-chrome-types.ts',
     webStorage: 'orca/src/renderer/src/web/preload-api/web-storage.ts',
     webPreferences: 'orca/src/renderer/src/web/preload-api/web-preferences-store.ts',
+    rightSidebar: 'orca/src/renderer/src/components/right-sidebar/index.tsx',
+    titlebarStrip: 'orca/src/renderer/src/app-shell/TitlebarMainStrip.tsx',
 };
 
 // ---- pure comparators (the self-test feeds these fixtures) ----
@@ -154,6 +181,63 @@ export function fillVerdict(part, { body, node, surface }) {
             if (Math.abs(d) > FILL_TOLERANCE) fails.push(`${part}: ${what} ${edge} edge ${d > 0 ? '+' : ''}${d}px from the part body's (${what} ${box.w}x${box.h}, body ${body.w}x${body.h})`);
         }
     }
+    return fails;
+}
+
+/**
+ * k: Theia's status bar in each judged pass. passes: [{ when, mode, hiddenFlag, barHeight, splitBottom, shellBottom }].
+ * The Orca passes must show no bar and reclaim its row; the Coding pass is the control and must show it.
+ */
+export function statusBarVerdict(passes) {
+    const fails = [];
+    const orca = passes.filter(p => p.mode === 'orca');
+    const coding = passes.filter(p => p.mode === 'coding');
+    if (!orca.length) fails.push('no Orca pass was measured, so the comparison is blind');
+    if (!coding.length) fails.push('no Coding pass was measured, so the instrument has no control');
+    for (const p of coding) {
+        if (p.hiddenFlag || !(p.barHeight > 0)) fails.push(`instrument blind: Theia's status bar is not shown in Coding (${p.when}: hidden ${p.hiddenFlag}, ${p.barHeight}px), so its absence in the Orca mode proves nothing`);
+    }
+    for (const p of orca) {
+        if (!p.hiddenFlag || p.barHeight > 0) fails.push(`${p.when}: Theia's status bar shows in the Orca mode (${p.barHeight}px high, hidden flag ${p.hiddenFlag})`);
+        const gap = Math.round(p.shellBottom - p.splitBottom);
+        if (Math.abs(gap) > FILL_TOLERANCE) fails.push(`${p.when}: the side areas end ${gap}px above the shell's bottom edge in the Orca mode (the status bar's row stays reserved)`);
+    }
+    return fails;
+}
+
+/**
+ * l: one Orca right-sidebar toggle run. obs: { closeBefore, afterClose, afterToggle, afterTheiaCollapse, afterTheiaExpand,
+ * coding }, where each closed pass is { collapsed, toggles: [{ x, y, w, h }], main: { x, y, w, h } }, each open pass
+ * { expanded, current, closeShown }, and coding is { toggles }. Red names the step.
+ */
+export function rightToggleVerdict(obs, right = RIGHT) {
+    const fails = [];
+    if (!obs?.closeBefore) return ['blind: Orca\'s own close button is not in the hosted right sidebar, so the toggle cannot be judged'];
+    const closed = (what, pass) => {
+        if (!pass) { fails.push(`${what}: not reached`); return; }
+        if (!pass.collapsed) { fails.push(`${what}: the Theia right panel stayed expanded`); return; }
+        const shown = (pass.toggles ?? []).filter(t => t.w > 0 && t.h > 0);
+        if (!shown.length) { fails.push(`${what}: with the right panel collapsed no Orca toggle is shown to bring it back`); return; }
+        const m = pass.main;
+        const placed = shown.find(t => Math.abs((m.x + m.w) - (t.x + t.w)) <= TOGGLE_CORNER && t.y >= m.y - 1 && t.y + t.h <= m.y + TAB_ROW + 1);
+        if (!placed) {
+            const t = shown[0];
+            fails.push(`${what}: the Orca toggle is not at the top right of the main area (toggle right edge ${Math.round(m.x + m.w - (t.x + t.w))}px from the main area's, top ${Math.round(t.y - m.y)}px below its top)`);
+        }
+    };
+    const opened = (what, pass) => {
+        if (!pass) { fails.push(`${what}: not reached`); return; }
+        if (!pass.expanded) { fails.push(`${what}: the Theia right panel stayed collapsed`); return; }
+        if (pass.current !== right) fails.push(`${what}: the right panel opened on ${pass.current ?? 'no view'}, not Orca's right sidebar`);
+        if (!pass.closeShown) fails.push(`${what}: the right panel opened without Orca's sidebar content (Orca's close button absent: its open flag stayed off)`);
+    };
+    closed('Orca\'s close button', obs.afterClose);
+    opened('the Orca toggle', obs.afterToggle);
+    closed('Theia\'s Toggle Right Panel (collapse)', obs.afterTheiaCollapse);
+    opened('Theia\'s Toggle Right Panel (expand)', obs.afterTheiaExpand);
+    const leaked = (obs.coding?.toggles ?? []).filter(t => t.w > 0 && t.h > 0).length;
+    if (!obs.coding) fails.push('Coding: not reached');
+    else if (leaked) fails.push(`Coding: ${leaked} Orca right-sidebar toggle(s) shown outside the Orca mode`);
     return fails;
 }
 
@@ -254,7 +338,18 @@ export function deriveSelectors() {
         if (!toggleLabel && ts.isJsxAttribute(n) && attrName(n) === 'ariaLabel') toggleLabel = translateDefaults(n)[0];
     });
     if (!toggleLabel) fails.push(`source moved: no ariaLabel translate default in ${SRC.toggle}`);
-    return { fails, worktreeAttr, repoAttr, pages, toggleLabel };
+    // l: the aria-label of Orca's open-state close button (RightSidebar) and of its closed-state RightSidebarToggle.
+    const ariaDefault = (root) => {
+        let found;
+        visit(root, n => { if (!found && ts.isJsxAttribute(n) && attrName(n) === 'aria-label' && n.initializer) found = translateDefaults(n)[0]; });
+        return found;
+    };
+    const closeLabel = ariaDefault(parse(SRC.rightSidebar));
+    let reopenLabel;
+    visit(parse(SRC.titlebarStrip), n => { if (!reopenLabel && ts.isFunctionDeclaration(n) && n.name?.text === 'RightSidebarToggle') reopenLabel = ariaDefault(n); });
+    if (!closeLabel) fails.push(`source moved: no aria-label translate default in ${SRC.rightSidebar}`);
+    if (!reopenLabel) fails.push(`source moved: no RightSidebarToggle with an aria-label translate default in ${SRC.titlebarStrip}`);
+    return { fails, worktreeAttr, repoAttr, pages, toggleLabel, closeLabel, reopenLabel };
 }
 
 // ---- the live run ----
@@ -272,6 +367,9 @@ async function live() {
     if (!loadTypeScript()) { console.log(`${NAME}: SKIP -- theia/node_modules/typescript is absent; run the audited Theia install`); return 0; }
     const sel = deriveSelectors();
     if (sel.fails.length) { for (const f of sel.fails) console.error(`${NAME}: FAIL -- ${f}`); return 1; }
+    // l: the id of Theia's own Toggle Right Panel command, read from the installed @theia/core.
+    const toggleRight = /TOGGLE_RIGHT_PANEL\s*=[^{]*\{\s*id:\s*'([^']+)'/.exec(readFileSync(join(REPO_ROOT, 'theia/node_modules/@theia/core/lib/browser/common-commands.js'), 'utf8'))?.[1];
+    if (!toggleRight) { console.error(`${NAME}: FAIL -- source moved: no TOGGLE_RIGHT_PANEL id in @theia/core common-commands.js`); return 1; }
     const logDir = join(REPO_ROOT, '.mozbuild', NAME);
     mkdirSync(logDir, { recursive: true });
     const logBase = join(logDir, `resolver-${process.pid}`);
@@ -291,6 +389,21 @@ async function live() {
             await ctx.probe(`await get('ModeService').activateMode('orca'); return true;`);
             // The shell's active widget follows document focus; the automated window starts without it.
             await ctx.focusTheiaFrame();
+
+            // k: Theia's status bar and the row it would reserve, measured per pass.
+            const kPasses = [];
+            const statusPass = async (when, mode) => kPasses.push({ when, mode, ...(await ctx.probe(`const shell = get('ApplicationShell');
+                await sleep(500);
+                const bar = document.getElementById('theia-statusBar');
+                const split = document.getElementById('theia-left-right-split-panel');
+                return { hiddenFlag: get('StatusBarImpl').isHidden, barHeight: bar ? bar.getBoundingClientRect().height : 0,
+                         splitBottom: split ? split.getBoundingClientRect().bottom : null, shellBottom: shell.node.getBoundingClientRect().bottom };`)) });
+            await statusPass('Orca selected', 'orca');
+            // l: the closed-state toggles (Orca's RightSidebarToggle label, outside the right panel) wherever they are.
+            const VISIBLE_REOPEN = `[...document.querySelectorAll('button[aria-label=${J(sel.reopenLabel)}]')]
+                .filter(b => !get('ApplicationShell').rightPanelHandler.container.node.contains(b))
+                .map(b => { const r = b.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; })
+                .filter(t => t.w > 0 && t.h > 0)`;
 
             // j: every visible part's body box against its node and its Orca surface.
             const jFails = [];
@@ -356,6 +469,36 @@ async function live() {
             await ctx.probe(`const shell = get('ApplicationShell'); shell.resize(${PART_WIDE}, 'left'); shell.resize(${PART_WIDE}, 'right'); await sleep(800); return true;`);
             await fill(`wide ${PART_WIDE}px`);
             clause('j fill', jFails, `every shown part's node and Orca surface fill its body (${jCounts.join('; ')})`);
+
+            // l: Orca's close button, the closed-state toggle, then Theia's own toggle command both ways.
+            const rightState = (want) => ctx.probe(`const shell = get('ApplicationShell'); const rh = shell.rightPanelHandler;
+                const collapsed = () => rh.tabBar.currentTitle === null && rh.dockPanel.isHidden;
+                const expanded = () => rh.tabBar.currentTitle !== null && !rh.dockPanel.isHidden;
+                ${want === 'collapsed' ? 'await until(collapsed, 2000);' : want === 'expanded' ? 'await until(expanded, 2000);' : ''}
+                await sleep(400);
+                const part = get('WidgetManager').tryGetWidget('powerbrowser-orca-right-sidebar-view');
+                const close = part && part.isVisible ? [...part.node.querySelectorAll('button[aria-label=${J(sel.closeLabel)}]')].find(b => b.getBoundingClientRect().width > 0) : null;
+                const m = shell.mainPanel.node.getBoundingClientRect();
+                return { collapsed: collapsed(), expanded: expanded(), current: rh.tabBar.currentTitle ? rh.tabBar.currentTitle.owner.id : null,
+                         closeShown: !!close, toggles: ${VISIBLE_REOPEN}, main: { x: m.x, y: m.y, w: m.width, h: m.height } };`);
+            const lObs = {};
+            lObs.closeBefore = (await rightState('expanded')).closeShown;
+            if (lObs.closeBefore) {
+                await ctx.probe(`const part = get('WidgetManager').tryGetWidget('powerbrowser-orca-right-sidebar-view');
+                    const b = [...part.node.querySelectorAll('button[aria-label=${J(sel.closeLabel)}]')].find(x => x.getBoundingClientRect().width > 0);
+                    if (b) b.click(); return !!b;`);
+                lObs.afterClose = await rightState('collapsed');
+                const clicked = await ctx.probe(`const shown = [...document.querySelectorAll('button[aria-label=${J(sel.reopenLabel)}]')]
+                    .filter(b => !get('ApplicationShell').rightPanelHandler.container.node.contains(b) && b.getBoundingClientRect().width > 0);
+                    if (shown[0]) shown[0].click(); return shown.length > 0;`);
+                if (clicked) lObs.afterToggle = await rightState('expanded');
+                // Theia's command toggles: from an open panel it collapses, so open it first when the steps above left it closed.
+                if (!(await rightState('none')).expanded) { await ctx.command(toggleRight); await rightState('expanded'); }
+                await ctx.command(toggleRight);
+                lObs.afterTheiaCollapse = await rightState('collapsed');
+                await ctx.command(toggleRight);
+                lObs.afterTheiaExpand = await rightState('expanded');
+            }
 
             // c and d: one switch, read in Orca's web settings store and in the dock.
             // Orca's web client keeps this setting in its own localStorage store (derived key); it is not runtime-backed.
@@ -450,8 +593,18 @@ async function live() {
                     const wm = get('WidgetManager'); const shell = get('ApplicationShell');
                     const area = id => { const w = wm.tryGetWidget(id); return w && w.isAttached ? shell.getAreaFor(w) : null; };
                     return { [${J(LEFT)}]: area(${J(LEFT)}), [${J(RIGHT)}]: area(${J(RIGHT)}) };`);
+                if (mode === 'coding') {
+                    await statusPass('Coding', 'coding');
+                    lObs.coding = { toggles: await ctx.probe(`await sleep(300); return ${VISIBLE_REOPEN};`) };
+                }
             }
             clause('g modes', leakVerdict(areasByMode), 'neither container in the left or right area in Coding or Browsing');
+
+            // k, the second Orca pass: back from Coding and Browsing.
+            await ctx.probe(`await get('ModeService').activateMode('orca'); return true;`);
+            await statusPass('Orca after Coding and Browsing', 'orca');
+            clause('k status bar', statusBarVerdict(kPasses), `Theia's status bar hidden and its row reclaimed in ${kPasses.filter(p => p.mode === 'orca').length} Orca pass(es); shown in Coding (control)`);
+            clause('l right toggle', rightToggleVerdict(lObs), 'Orca\'s close button collapsed the right panel, Orca\'s toggle at the main area\'s top right reopened it with Orca\'s content, Theia\'s Toggle Right Panel kept Orca\'s flag in step both ways, no toggle in Coding');
 
             // h
             const reg = await ctx.probe(`const r = get('TabUriRegistry'); return [${J(LEFT)}, ${J(RIGHT)}].filter(id => !r.getViewContribution(id));`);
@@ -479,6 +632,31 @@ async function live() {
 
 // ---- self-test ----
 
+/** k fixture: two Orca passes and the Coding control at 1280x768; `over` replaces fields of the orca or coding passes. */
+function kFixture(over = {}) {
+    return [
+        { when: 'Orca selected', mode: 'orca', hiddenFlag: true, barHeight: 0, splitBottom: 768, shellBottom: 768, ...over.orca },
+        { when: 'Coding', mode: 'coding', hiddenFlag: false, barHeight: 22, splitBottom: 746, shellBottom: 768, ...over.coding },
+        { when: 'Orca after Coding', mode: 'orca', hiddenFlag: true, barHeight: 0, splitBottom: 768, shellBottom: 768 },
+    ];
+}
+
+/** l fixture: a passing run (main area 0..1280 from y=72, the toggle at its top right); `over` merges into each step. */
+function lFixture(over = {}) {
+    const main = { x: 244, y: 72, w: 1036, h: 674 };
+    const closed = { collapsed: true, toggles: [{ x: 1240, y: 77.5, w: 32, h: 24 }], main };
+    const open = { expanded: true, current: RIGHT, closeShown: true };
+    const merge = (base, key) => (key in over ? (over[key] === undefined ? undefined : { ...base, ...over[key] }) : base);
+    return {
+        closeBefore: 'closeBefore' in over ? over.closeBefore : true,
+        afterClose: merge(closed, 'afterClose'),
+        afterToggle: merge(open, 'afterToggle'),
+        afterTheiaCollapse: merge(closed, 'afterTheiaCollapse'),
+        afterTheiaExpand: merge(open, 'afterTheiaExpand'),
+        coding: merge({ toggles: [] }, 'coding'),
+    };
+}
+
 function selfTest() {
     const allow = [{ host: 'api.github.com', disposition: 'allow' }, { host: 'example.org', disposition: 'user-initiated' }];
     const cases = [
@@ -505,6 +683,22 @@ function selfTest() {
         ['a node a viewport tall (Orca\'s body rule on the pane attribute)', () => fillVerdict('sidebar', { body: { x: 0, y: 131, w: 244, h: 591 }, node: { x: 0, y: 131, w: 244, h: 768 }, surface: { x: 0, y: 131, w: 244, h: 591 } }), 'node bottom edge +177px'],
         ['no surface box', () => fillVerdict('settings', { body: { x: 0, y: 131, w: 244, h: 300 }, node: { x: 0, y: 131, w: 244, h: 300 }, surface: null }), 'settings: no surface box'],
         ['a part body with no box', () => fillVerdict('sidebar', { body: { x: 0, y: 0, w: 0, h: 0 }, node: null, surface: null }), 'the comparison is blind'],
+        // k, the bars measured in the round-2 reproduction (1280x768: the bar 22 px at y=746, the side areas ending there).
+        ['control: no bar in the Orca mode, shown in Coding', () => statusBarVerdict(kFixture()), null],
+        ['Theia\'s status bar in the Orca mode', () => statusBarVerdict(kFixture({ orca: { hiddenFlag: false, barHeight: 22, splitBottom: 746 } })), 'Theia\'s status bar shows in the Orca mode (22px high'],
+        ['a bar hidden by CSS whose row stays reserved', () => statusBarVerdict(kFixture({ orca: { hiddenFlag: true, barHeight: 0, splitBottom: 746 } })), 'the side areas end 22px above the shell\'s bottom edge'],
+        ['the Coding control not showing the bar', () => statusBarVerdict(kFixture({ coding: { hiddenFlag: true, barHeight: 0, splitBottom: 768 } })), 'instrument blind'],
+        ['no Orca pass measured', () => statusBarVerdict(kFixture().filter(p => p.mode !== 'orca')), 'no Orca pass was measured'],
+        // l, the round-2 reproduction: Orca's close left the panel open, no toggle anywhere, Theia's reopen came back empty.
+        ['control: the toggle works both ways', () => rightToggleVerdict(lFixture()), null],
+        ['Orca\'s close leaves the panel expanded', () => rightToggleVerdict(lFixture({ afterClose: { collapsed: false } })), 'Orca\'s close button: the Theia right panel stayed expanded'],
+        ['no toggle while collapsed', () => rightToggleVerdict(lFixture({ afterClose: { toggles: [] } })), 'no Orca toggle is shown to bring it back'],
+        ['a toggle away from the top right', () => rightToggleVerdict(lFixture({ afterClose: { toggles: [{ x: 600, y: 300, w: 32, h: 24 }] } })), 'not at the top right of the main area'],
+        ['the toggle never clicked', () => rightToggleVerdict(lFixture({ afterToggle: undefined })), 'the Orca toggle: not reached'],
+        ['a reopen on another view', () => rightToggleVerdict(lFixture({ afterToggle: { current: 'chat-view' } })), 'opened on chat-view'],
+        ['Theia\'s reopen without Orca\'s content', () => rightToggleVerdict(lFixture({ afterTheiaExpand: { closeShown: false } })), 'Theia\'s Toggle Right Panel (expand): the right panel opened without Orca\'s sidebar content'],
+        ['a toggle shown in Coding', () => rightToggleVerdict(lFixture({ coding: { toggles: [{ x: 1240, y: 72, w: 32, h: 24 }] } })), 'Coding: 1 Orca right-sidebar toggle'],
+        ['no close button to start from', () => rightToggleVerdict(lFixture({ closeBefore: false })), 'blind: Orca\'s own close button'],
     ];
     let failures = 0;
     for (const [name, run, naming] of cases) {

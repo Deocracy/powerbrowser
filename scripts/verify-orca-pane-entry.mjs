@@ -70,7 +70,9 @@ export const C3_EXPORTS = ['bootstrap', 'subscribePanes', 'mountPane', 'closePan
     'MOUNT_KINDS', 'subscribeOpenFiles', 'subscribeWorktrees', 'subscribeActiveView', 'setActiveView', 'subscribeActiveWorktree',
     'subscribeOrchestrationEnabled', 'setOrchestrationFocus', 'viewTitle', 'repair',
     // C3-66 (66-07, D-34): the store row of each browser-host page, and the checks' selection of it
-    'addBrowserPage', 'removeBrowserPage', 'selectBrowserPage'];
+    'addBrowserPage', 'removeBrowserPage', 'selectBrowserPage',
+    // B-8 (debug orca-mode-fresh-profile-look, 2026-11-18): Orca's right-sidebar flag and its own setter
+    'subscribeRightSidebarOpen', 'setRightSidebarOpen'];
 const EDITOR_MODULE = /(^|\/)components\/editor\/(EditorPanel[^/]*|EditorContent)\.tsx$/;
 const DEVICE_KEY_SUPPORT = 'src/renderer/src/web/web-device-key-support.ts';
 const APP_ROOT_SURFACES = 'src/renderer/src/app-shell/AppRootSurfaces.tsx';

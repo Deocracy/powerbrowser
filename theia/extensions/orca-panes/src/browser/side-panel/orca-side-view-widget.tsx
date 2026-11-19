@@ -37,6 +37,10 @@ export interface OrcaSidePanelBundleApi {
     subscribeOrchestrationEnabled(listener: (enabled: boolean) => void): () => void;
     setOrchestrationFocus(focus: { worktreeId: string; tabId: string; paneKey?: string } | null): void;
     viewTitle(kind: string): string;
+    /** B-8: Orca's right-sidebar open flag (the value its close button and RightSidebarToggle flip); null until Orca's persisted UI is hydrated. */
+    subscribeRightSidebarOpen(listener: (open: boolean | null) => void): () => void;
+    /** B-8: Orca's own setRightSidebarOpen action. */
+    setRightSidebarOpen(open: boolean): void;
 }
 
 /** The loader's api, narrowed to the side-panel exports (C3-65). */

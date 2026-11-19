@@ -22,3 +22,34 @@
   min-height: 0;
   width: auto !important;
 }
+
+/*
+ * Orca's closed-state right-sidebar toggle (orca-right-sidebar-toggle.ts; debug orca-mode-fresh-profile-look,
+ * 2026-11-18, defect B; checked by orca-side-panel-live clause l): at the main area's top right, in its first tab
+ * row, as Orca's AppWorkspaceShell places it at the workspace area's top right. The host carries the pane scope
+ * attribute, so Orca's body rule (a viewport tall, Orca's background) reaches it at zero specificity; these
+ * declarations replace it. The tab bar under it keeps the button's width clear (padding set from the script).
+ */
+.pb-orca-right-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 10;
+  width: auto;
+  height: var(--theia-private-horizontal-tab-height, 35px);
+  display: flex;
+  align-items: center;
+  background: transparent;
+  overflow: visible;
+}
+
+.pb-orca-right-toggle[hidden] {
+  display: none;
+}
+
+.pb-orca-right-toggle > [data-pb-orca-pane-root] {
+  width: auto !important;
+  height: 100% !important;
+  flex-direction: row !important;
+  align-items: center;
+}

@@ -2,8 +2,8 @@
 // CA-03, CA-11, CA-12): the read-only observation API of Orca's store that the Theia lanes consume (interfaces
 // B-2..B-7 of 65-01-PLAN.md), re-exported by the pane entry. scripts/build-orca.sh copies it to
 // orca/src/renderer/src/pb/. Every subscription calls back once on subscribe and then only when its
-// projection changes; nothing here writes Orca's store except setActiveView, which calls Orca's own action.
-// No field carries file contents, a pairing offer or a token.
+// projection changes; nothing here writes Orca's store except setActiveView and setRightSidebarOpen, which call
+// Orca's own actions. No field carries file contents, a pairing offer or a token.
 import { translate } from '@/i18n/i18n'
 import { useAppStore } from '../store'
 import { readStoredWebRuntimeEnvironment } from '../web/web-runtime-environment'
@@ -190,6 +190,21 @@ export function subscribeActiveWorktree(cb: (worktreeId: string | null) => void)
 /** B-6: the setting use-orchestration-panel-enabled reads. */
 export function subscribeOrchestrationEnabled(cb: (enabled: boolean) => void): () => void {
   return subscribeProjection((state) => state.settings?.experimentalOrchestrationPanel === true, cb)
+}
+
+// ---------------------------------------------------------------- B-8 (debug orca-mode-fresh-profile-look, 2026-11-18)
+
+/**
+ * B-8: Orca's right-sidebar open flag, the value its close button and RightSidebarToggle flip (toggleRightSidebar);
+ * null until Orca has hydrated its persisted UI (persistedUIReady), which replaces the store's default with the saved value.
+ */
+export function subscribeRightSidebarOpen(cb: (open: boolean | null) => void): () => void {
+  return subscribeProjection((state) => (state.persistedUIReady ? state.rightSidebarOpen === true : null), cb)
+}
+
+/** B-8: Orca's own setRightSidebarOpen action; the Theia right panel hosting RightSidebar opened or closed. */
+export function setRightSidebarOpen(open: boolean): void {
+  useAppStore.getState().setRightSidebarOpen(open)
 }
 
 // ---------------------------------------------------------------- B-7

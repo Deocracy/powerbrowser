@@ -18,6 +18,19 @@
  * (d) The Agents part exists only while Orca's experimentalOrchestrationPanel
  *     setting is on.
  * (e) The focused Orca chat or terminal tab is the orchestration focus.
+ * (f) (debug orca-mode-fresh-profile-look, 2026-11-18, defect B) Orca's right
+ *     sidebar open flag and the Theia right panel that hosts RightSidebar are
+ *     one state while the active mode docks Orca's right container on the right:
+ *     Orca's close button and RightSidebarToggle (toggleRightSidebar) and its own
+ *     setRightSidebarOpen(true) callers open and close the panel; the panel
+ *     opened or closed from Theia (Toggle Right Panel, a tab click, a mode)
+ *     writes the flag through Orca's own setRightSidebarOpen, so Orca renders
+ *     its content and its close button again. While that panel is collapsed,
+ *     Orca's own RightSidebarToggle shows at the main area's top right
+ *     (orca-right-sidebar-toggle.ts). Each direction writes only a changed
+ *     value, so the two never loop; a mode that does not dock the container
+ *     (judged from the active perspective's own view placements) changes
+ *     neither side.
  * PB creates no Orca pane and writes no copy; failures are log lines.
  */
 import { inject, injectable } from '@theia/core/shared/inversify';
@@ -26,12 +39,16 @@ import {
     ApplicationShell, FrontendApplicationContribution, Navigatable, OpenerService, ViewContainer, WidgetManager, open
 } from '@theia/core/lib/browser';
 import { FrontendApplicationStateService } from '@theia/core/lib/browser/frontend-application-state';
+import { PerspectiveService } from '@theia/core/lib/browser/perspective-service';
 import URI from '@theia/core/lib/common/uri';
 import { ORCA_PANE_FACTORY_ID } from '@powerbrowser/tab-uris/lib/browser/orca-scheme-coverage';
 import { OrcaPaneBundle } from '../orca-pane-bundle';
 import { OrcaPaneWidget } from '../orca-pane-widget';
 import { OrcaSidePanelBundleApi, sidePanelApi } from './orca-side-view-widget';
-import { ORCA_AGENTS_PART_OPTIONS, ORCA_AGENTS_VIEW_ID, ORCA_LEFT_CONTAINER_ID, ORCA_SETTINGS_VIEW_ID } from './orca-side-panel-module';
+import { OrcaRightSidebarToggleHost } from './orca-right-sidebar-toggle';
+import {
+    ORCA_AGENTS_PART_OPTIONS, ORCA_AGENTS_VIEW_ID, ORCA_LEFT_CONTAINER_ID, ORCA_RIGHT_CONTAINER_ID, ORCA_SETTINGS_VIEW_ID
+} from './orca-side-panel-module';
 
 const LOG_PREFIX = '[@powerbrowser/orca-panes]';
 
@@ -79,7 +96,13 @@ export class OrcaSidePanelSync implements FrontendApplicationContribution {
     @inject(FrontendApplicationStateService)
     protected readonly appState: FrontendApplicationStateService;
 
+    @inject(PerspectiveService)
+    protected readonly perspectives: PerspectiveService;
+
     protected api: OrcaSidePanelBundleApi | undefined;
+    /** (f) Orca's right-sidebar flag, as last read or written; undefined until the first read. */
+    protected rightOpen: boolean | undefined;
+    protected rightToggle: OrcaRightSidebarToggleHost | undefined;
     /** The store's activeView, as last reported. */
     protected activeView: string | undefined;
     protected pendingCreation = false;
@@ -124,6 +147,72 @@ export class OrcaSidePanelSync implements FrontendApplicationContribution {
             console.warn(`${LOG_PREFIX} the Orca side panel did not subscribe to the store: ${(err as Error)?.name ?? 'Error'}`);
         }
         this.applyAgents();
+        this.startRightSidebar(api);
+    }
+
+    // (f) Orca's right sidebar and the Theia right panel
+    protected startRightSidebar(api: OrcaSidePanelBundleApi): void {
+        try {
+            this.rightToggle = new OrcaRightSidebarToggleHost(this.shell, api);
+            const handler = this.shell.rightPanelHandler;
+            // A panel opens or closes by changing its tab bar's current title (stock expand and collapse); a mode
+            // switch changes the active perspective, whose placements decide whether the container belongs here.
+            handler.tabBar.currentChanged.connect(() => this.rightPanelChanged());
+            this.perspectives.onDidChangePerspective(() => this.rightPanelChanged());
+            api.subscribeRightSidebarOpen(open => {
+                if (open === null) {
+                    return; // Orca has not read its saved UI yet; its default would be read as a choice
+                }
+                const starting = this.rightOpen === undefined;
+                this.rightOpen = open;
+                // The first value after hydration is the starting state, not a choice: the panel as the mode left it
+                // wins (the Orca mode opens its right panel on every activation, launch included).
+                if (starting) {
+                    this.rightPanelChanged();
+                } else {
+                    this.applyRightOpen(open);
+                }
+            });
+            this.rightPanelChanged();
+        } catch (err) {
+            console.warn(`${LOG_PREFIX} the Orca right sidebar did not join the right panel: ${(err as Error)?.name ?? 'Error'}`);
+        }
+    }
+
+    /** Orca's right container, when the active mode docks it on the right and it is there; else undefined. */
+    protected dockedRightContainer(): Widget | undefined {
+        if (this.perspectives.getActivePerspective()?.viewPlacements.get(ORCA_RIGHT_CONTAINER_ID) !== 'right') {
+            return undefined;
+        }
+        const container = this.widgetManager.tryGetWidget(ORCA_RIGHT_CONTAINER_ID);
+        return container && container.isAttached && this.shell.getAreaFor(container) === 'right' ? container : undefined;
+    }
+
+    protected rightPanelOpen(): boolean {
+        return this.shell.rightPanelHandler.tabBar.currentTitle !== null;
+    }
+
+    /** Theia's right panel opened or closed (or the mode changed): carry it to Orca's flag, then show or hide the toggle. */
+    protected rightPanelChanged(): void {
+        const docked = !!this.dockedRightContainer();
+        const open = this.rightPanelOpen();
+        if (docked && this.api && this.rightOpen !== undefined && open !== this.rightOpen) {
+            this.rightOpen = open;
+            this.api.setRightSidebarOpen(open);
+        }
+        this.rightToggle?.setShown(docked && !open);
+    }
+
+    /** Orca's flag changed in Orca (its close button, RightSidebarToggle, an action that reveals the sidebar). */
+    protected applyRightOpen(open: boolean): void {
+        if (this.dockedRightContainer()) {
+            if (open && !this.rightPanelOpen()) {
+                this.shell.rightPanelHandler.expand(ORCA_RIGHT_CONTAINER_ID);
+            } else if (!open && this.rightPanelOpen()) {
+                this.shell.collapsePanel('right').catch(() => undefined);
+            }
+        }
+        this.rightPanelChanged();
     }
 
     // (a) store -> shell
