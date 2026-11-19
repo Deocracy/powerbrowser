@@ -33,6 +33,17 @@ export const ORCA_SIDE_VIEW_KINDS: ReadonlyArray<readonly [string, string]> = [
     [ORCA_RIGHT_SIDEBAR_VIEW_ID, 'right-sidebar'],
 ];
 
+/**
+ * Orca's own minimum widths (debug orca-mode-fresh-profile-look round 3): MIN_WIDTH in
+ * orca/src/renderer/src/components/sidebar/index.tsx and RIGHT_SIDEBAR_MIN_WIDTH in
+ * components/right-sidebar/right-sidebar-width.ts. Each container carries its value as its node's min-width, which the
+ * side dock reads while the container is its current view, so no route (a drag, a layout restore, a window resize)
+ * leaves the panel narrower than Orca allows. orca-side-panel-live clause m reads both values from Orca's source at
+ * check time and squeezes each panel against them.
+ */
+export const ORCA_SIDEBAR_MIN_WIDTH = 220;
+export const ORCA_RIGHT_SIDEBAR_MIN_WIDTH = 220;
+
 /** The Agents part's place in the left container while Orca's setting is on (P65-12). */
 export const ORCA_AGENTS_PART_OPTIONS: ViewContainer.Factory.WidgetOptions = { order: 1, canHide: false };
 
@@ -53,13 +64,14 @@ export class OrcaRightContainerContribution extends AbstractViewContribution<Vie
 }
 
 function bindContainer(
-    bind: interfaces.Bind, id: string, iconClass: string, parts: Array<[string, ViewContainer.Factory.WidgetOptions]>
+    bind: interfaces.Bind, id: string, iconClass: string, minWidth: number, parts: Array<[string, ViewContainer.Factory.WidgetOptions]>
 ): void {
     bind(WidgetFactory).toDynamicValue(ctx => ({
         id,
         createWidget: async () => {
             const container = ctx.container.get<ViewContainer.Factory>(ViewContainer.Factory)({ id });
             container.setTitleOptions({ label: ORCA_LABEL, iconClass, closeable: true });
+            container.node.style.minWidth = `${minWidth}px`;
             const widgets = ctx.container.get(WidgetManager);
             for (const [partId, options] of parts) {
                 container.addWidget(await widgets.getOrCreateWidget(partId), options);
@@ -81,11 +93,11 @@ export function bindOrcaSidePanel(bind: interfaces.Bind): void {
             },
         })).inSingletonScope();
     }
-    bindContainer(bind, ORCA_LEFT_CONTAINER_ID, codicon('list-tree'), [
+    bindContainer(bind, ORCA_LEFT_CONTAINER_ID, codicon('list-tree'), ORCA_SIDEBAR_MIN_WIDTH, [
         [ORCA_SIDEBAR_VIEW_ID, { order: 0, canHide: false }],
         [ORCA_SETTINGS_VIEW_ID, { order: 2, initiallyCollapsed: true }],
     ]);
-    bindContainer(bind, ORCA_RIGHT_CONTAINER_ID, codicon('layout-sidebar-right'), [
+    bindContainer(bind, ORCA_RIGHT_CONTAINER_ID, codicon('layout-sidebar-right'), ORCA_RIGHT_SIDEBAR_MIN_WIDTH, [
         [ORCA_RIGHT_SIDEBAR_VIEW_ID, { order: 0, canHide: false }],
     ]);
     bindViewContribution(bind, OrcaLeftContainerContribution);

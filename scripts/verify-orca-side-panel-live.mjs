@@ -45,6 +45,24 @@
 //                  button shown again). Theia's Toggle Right Panel command does the
 //                  same both ways, and its reopen must bring Orca's content back.
 //                  In Coding no Orca toggle shows (the control is the Orca pass).
+//  m  width        (same debug, round 3, owner 2026-11-19: "after I added a few
+//                  tabs I could not drag out the right slide in orca mode") each
+//                  Orca side panel, set to SIDE_START px, keeps its width (within
+//                  WIDTH_TOLERANCE) after WEB_TABS web tabs added with the "+"
+//                  button and after a Browsing and an Organising round trip back
+//                  to the Orca mode. A pointer drag of DRAG px toward the main
+//                  area, started at each of three points across Orca's own grab
+//                  band for that edge (derived at check time from the handle's
+//                  class in Orca's source: the sidebar's straddles the border, the
+//                  right sidebar's lies inside it), widens the panel by DRAG px. A
+//                  drag from the edge far toward the window side stops at Orca's
+//                  own minimum (MIN_WIDTH in components/sidebar/index.tsx,
+//                  RIGHT_SIDEBAR_MIN_WIDTH in right-sidebar-width.ts), and must
+//                  have narrowed the panel (else red "instrument blind"). The
+//                  pointer is WebDriver BiDi input.performActions on the Theia
+//                  document: hit-tested and dispatched as trusted events by Gecko
+//                  in that document, not OS input (a Gecko web-page overlay over
+//                  the main area is outside this path).
 //  a  containers   in the Orca mode the left container is in the left area and
 //                  the right container in the right area; each part's host has
 //                  descendants and state().mountErrors names none of its kinds.
@@ -124,6 +142,16 @@ export const PART_WIDE = 460;
 export const TOGGLE_CORNER = 48;
 /** l: the main area's first tab row, Theia's --theia-private-horizontal-tab-height. */
 export const TAB_ROW = 35;
+/** m: the side width each run starts from, above Orca's minimum so a squeeze has room to show. */
+export const SIDE_START = 320;
+/** m: web tabs added with the "+" button before the width is read again. */
+export const WEB_TABS = 3;
+/** m: the drag distance toward the main area. */
+export const DRAG = 60;
+/** m: a side width may differ from its expectation by sub-pixel rounding and a handle's half pixel only. */
+export const WIDTH_TOLERANCE = 2;
+/** m: Tailwind's spacing step (0.25rem at Orca's 16 px root), to read a handle's offset and width from its classes. */
+export const TW_SPACING = 4;
 export const CONTROL_HOST = 'pb-egress-control.invalid';
 export const ACTION_HOST = 'pb-egress-user-action.invalid';
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
@@ -139,6 +167,8 @@ const SRC = {
     webPreferences: 'orca/src/renderer/src/web/preload-api/web-preferences-store.ts',
     rightSidebar: 'orca/src/renderer/src/components/right-sidebar/index.tsx',
     titlebarStrip: 'orca/src/renderer/src/app-shell/TitlebarMainStrip.tsx',
+    sidebarIndex: 'orca/src/renderer/src/components/sidebar/index.tsx',
+    rightSidebarWidth: 'orca/src/renderer/src/components/right-sidebar/right-sidebar-width.ts',
 };
 
 // ---- pure comparators (the self-test feeds these fixtures) ----
@@ -238,6 +268,62 @@ export function rightToggleVerdict(obs, right = RIGHT) {
     const leaked = (obs.coding?.toggles ?? []).filter(t => t.w > 0 && t.h > 0).length;
     if (!obs.coding) fails.push('Coding: not reached');
     else if (leaked) fails.push(`Coding: ${leaked} Orca right-sidebar toggle(s) shown outside the Orca mode`);
+    return fails;
+}
+
+/**
+ * m: a resize handle's grab band from its Tailwind classes, as x offsets from the panel's inner edge (the border with
+ * the main area). The sidebar's handle is anchored by right-* (a negative value straddles the border), the right
+ * sidebar's by left-*. Null when the classes give no anchor or no width.
+ */
+export function bandFromClasses(classes) {
+    const tokens = String(classes ?? '').split(/\s+/);
+    const step = (re) => { for (const t of tokens) { const m = re.exec(t); if (m) return (m[1] ? -1 : 1) * Number(m[2]) * TW_SPACING; } return null; };
+    const w = step(/^()w-([\d.]+)$/);
+    const right = step(/^(-)?right-([\d.]+)$/);
+    const left = step(/^(-)?left-([\d.]+)$/);
+    if (!(w > 0)) return null;
+    if (right !== null) return [-right - w, -right];
+    if (left !== null) return [left, left + w];
+    return null;
+}
+
+/** m: three start points strictly inside a band: one pixel in from each end, and its middle. */
+export function bandSamples([from, to]) {
+    return [from + 1, (from + to) / 2, to - 1];
+}
+
+/**
+ * m: one width run. obs: { keep: [{ when, before: { left, right }, after: { left, right } }], drags: [{ side, offset,
+ * before, after }], squeeze: [{ side, before, after }] }; expect: { min: { left, right }, drag }. Red names the side,
+ * the step and the measured width.
+ */
+export function widthVerdict(obs, expect) {
+    const fails = [];
+    const tol = WIDTH_TOLERANCE;
+    if (!obs?.keep?.length) fails.push('no width was read around the web tabs or a mode round trip, so the comparison is blind');
+    for (const pass of obs?.keep ?? []) {
+        for (const side of ['left', 'right']) {
+            const b = pass.before?.[side];
+            const a = pass.after?.[side];
+            if (typeof b !== 'number' || typeof a !== 'number') { fails.push(`${side} panel: not shown ${pass.when}, so its width is unread`); continue; }
+            if (Math.abs(a - b) > tol) fails.push(`${side} panel ${Math.round(a)}px ${pass.when}, ${Math.round(b)}px before`);
+        }
+    }
+    for (const side of ['left', 'right']) {
+        const drags = (obs?.drags ?? []).filter(d => d.side === side);
+        if (!drags.length) fails.push(`${side}: no drag was measured, so the comparison is blind`);
+        for (const d of drags) {
+            const moved = Math.round(d.after - d.before);
+            if (Math.abs(moved - expect.drag) > tol) fails.push(`${side}: a drag started ${d.offset > 0 ? '+' : ''}${d.offset}px from the panel's edge (inside Orca's grab band) changed its width by ${moved}px, not ${expect.drag}px`);
+        }
+        const sq = (obs?.squeeze ?? []).find(s => s.side === side);
+        const min = expect.min?.[side];
+        if (!(min > 0)) fails.push(`${side}: Orca's minimum width was not derived, so the comparison is blind`);
+        else if (!sq) fails.push(`${side}: no squeeze was measured, so the comparison is blind`);
+        else if (!(sq.after < sq.before - tol)) fails.push(`instrument blind: the squeeze drag did not narrow the ${side} panel (${Math.round(sq.before)}px -> ${Math.round(sq.after)}px)`);
+        else if (sq.after < min - tol) fails.push(`${side} panel squeezed to ${Math.round(sq.after)}px, below Orca's minimum ${min}px`);
+    }
     return fails;
 }
 
@@ -352,6 +438,48 @@ export function deriveSelectors() {
     return { fails, worktreeAttr, repoAttr, pages, toggleLabel, closeLabel, reopenLabel };
 }
 
+/**
+ * m: Orca's own minimum widths and resize-handle grab bands, and the "+" button's label, read from source at check
+ * time. The handle is the element whose onMouseDown is useSidebarResize's onResizeStart; its className is a literal
+ * or names a module constant holding one.
+ */
+export function deriveWidthRules() {
+    if (!loadTypeScript()) throw new Error("theia/node_modules/typescript is absent");
+    const fails = [];
+    const num = (rel, re) => { const m = re.exec(readFileSync(join(REPO_ROOT, rel), 'utf8')); return m ? Number(m[1]) : null; };
+    const min = {
+        left: num(SRC.sidebarIndex, /\bconst MIN_WIDTH = (\d+)/),
+        right: num(SRC.rightSidebarWidth, /export const RIGHT_SIDEBAR_MIN_WIDTH = (\d+)/),
+    };
+    if (!min.left) fails.push(`source moved: no MIN_WIDTH in ${SRC.sidebarIndex}`);
+    if (!min.right) fails.push(`source moved: no RIGHT_SIDEBAR_MIN_WIDTH in ${SRC.rightSidebarWidth}`);
+    const handleClasses = (rel) => {
+        const root = parse(rel);
+        const consts = new Map();
+        visit(root, n => { if (ts.isVariableDeclaration(n) && n.initializer && (ts.isStringLiteral(n.initializer) || ts.isNoSubstitutionTemplateLiteral(n.initializer))) consts.set(n.name.getText(), n.initializer.text); });
+        let found = null;
+        visit(root, n => {
+            if (found || !(ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n))) return;
+            const attrs = n.attributes.properties.filter(ts.isJsxAttribute);
+            if (!attrs.some(a => attrName(a) === 'onMouseDown' && a.initializer?.getText() === '{onResizeStart}')) return;
+            const cls = attrs.find(a => attrName(a) === 'className')?.initializer;
+            if (!cls) return;
+            if (ts.isStringLiteral(cls)) { found = cls.text; return; }
+            const parts = [];
+            visit(cls, c => { if (ts.isStringLiteral(c)) parts.push(c.text); else if (ts.isIdentifier(c) && consts.has(c.text)) parts.push(consts.get(c.text)); });
+            found = parts.join(' ');
+        });
+        return found;
+    };
+    const band = { left: bandFromClasses(handleClasses(SRC.sidebarIndex)), right: bandFromClasses(handleClasses(SRC.rightSidebar)) };
+    if (!band.left) fails.push(`source moved: no resize handle (onMouseDown={onResizeStart}) with a readable offset and width in ${SRC.sidebarIndex}`);
+    if (!band.right) fails.push(`source moved: no resize handle (onMouseDown={onResizeStart}) with a readable offset and width in ${SRC.rightSidebar}`);
+    const chromeBar = 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx';
+    const newTabLabel = /aria-label='([^']+)'\s*aria-keyshortcuts=\{BUTTON_SHORTCUTS\.newTab\.aria\}/.exec(readFileSync(join(REPO_ROOT, chromeBar), 'utf8'))?.[1];
+    if (!newTabLabel) fails.push(`source moved: no New Tab button (aria-keyshortcuts BUTTON_SHORTCUTS.newTab) in ${chromeBar}`);
+    return { fails, min, band, newTabLabel };
+}
+
 // ---- the live run ----
 
 const ids = (list, key) => {
@@ -367,6 +495,8 @@ async function live() {
     if (!loadTypeScript()) { console.log(`${NAME}: SKIP -- theia/node_modules/typescript is absent; run the audited Theia install`); return 0; }
     const sel = deriveSelectors();
     if (sel.fails.length) { for (const f of sel.fails) console.error(`${NAME}: FAIL -- ${f}`); return 1; }
+    const widthRules = deriveWidthRules();
+    if (widthRules.fails.length) { for (const f of widthRules.fails) console.error(`${NAME}: FAIL -- ${f}`); return 1; }
     // l: the id of Theia's own Toggle Right Panel command, read from the installed @theia/core.
     const toggleRight = /TOGGLE_RIGHT_PANEL\s*=[^{]*\{\s*id:\s*'([^']+)'/.exec(readFileSync(join(REPO_ROOT, 'theia/node_modules/@theia/core/lib/browser/common-commands.js'), 'utf8'))?.[1];
     if (!toggleRight) { console.error(`${NAME}: FAIL -- source moved: no TOGGLE_RIGHT_PANEL id in @theia/core common-commands.js`); return 1; }
@@ -606,6 +736,73 @@ async function live() {
             clause('k status bar', statusBarVerdict(kPasses), `Theia's status bar hidden and its row reclaimed in ${kPasses.filter(p => p.mode === 'orca').length} Orca pass(es); shown in Coding (control)`);
             clause('l right toggle', rightToggleVerdict(lObs), 'Orca\'s close button collapsed the right panel, Orca\'s toggle at the main area\'s top right reopened it with Orca\'s content, Theia\'s Toggle Right Panel kept Orca\'s flag in step both ways, no toggle in Coding');
 
+            // m: widths through web tabs and mode round trips, drags across Orca's grab band, and Orca's minimum.
+            // The pointer is BiDi input on the Theia document (hit-tested and dispatched there as trusted events).
+            const theiaContext = async () => {
+                const href = await ctx.app.evaluate('location.href');
+                const found = (await ctx.app.contexts()).find(c => c.url === href);
+                if (!found) throw new Error('no BiDi context for the Theia frame');
+                return found.context;
+            };
+            const pointer = async (actions) => {
+                const context = await theiaContext();
+                await ctx.app.send('input.performActions', { context, actions: [{ type: 'pointer', id: 'pb-side-width-mouse', parameters: { pointerType: 'mouse' }, actions }] });
+                await ctx.app.send('input.releaseActions', { context });
+            };
+            const dragFrom = (x, y, dx) => {
+                const steps = [];
+                for (let i = 1; i <= 10; i++) steps.push({ type: 'pointerMove', x: Math.round(x + dx * i / 10), y: Math.round(y), duration: 20 });
+                return pointer([{ type: 'pointerMove', x: Math.round(x), y: Math.round(y) }, { type: 'pointerDown', button: 0 }, ...steps, { type: 'pointerUp', button: 0 }]);
+            };
+            const widths = () => ctx.probe(`const shell = get('ApplicationShell'); const out = { inner: [innerWidth, innerHeight] };
+                for (const side of ['left', 'right']) {
+                    const h = shell[side + 'PanelHandler']; const r = h.container.node.getBoundingClientRect();
+                    const shown = !h.container.isHidden && !h.dockPanel.isHidden;
+                    out[side] = shown ? { size: r.width, edge: side === 'left' ? r.right : r.left } : null;
+                }
+                return out;`);
+            const sizesOf = (w) => ({ left: w.left?.size, right: w.right?.size });
+            // Fixture, not under test: both sides to SIDE_START through Theia's own API, Orca's containers current.
+            const setStart = () => ctx.probe(`const shell = get('ApplicationShell');
+                shell.leftPanelHandler.expand(${J(LEFT)}); shell.rightPanelHandler.expand(${J(RIGHT)}); await sleep(300);
+                shell.resize(${SIDE_START}, 'left'); shell.resize(${SIDE_START}, 'right'); await sleep(600); return true;`);
+            const mObs = { keep: [], drags: [], squeeze: [] };
+            await setStart();
+            let mBefore = sizesOf(await widths());
+            for (let i = 0; i < WEB_TABS; i++) {
+                const at = await ctx.probe(`const b = [...document.querySelectorAll('button')].find(x => x.getAttribute('aria-label') === ${J(widthRules.newTabLabel)} && x.getBoundingClientRect().width > 0);
+                    if (!b) return null; const r = b.getBoundingClientRect(); window.__pbMainCount = get('ApplicationShell').getWidgets('main').length; return { x: r.x + r.width / 2, y: r.y + r.height / 2 };`);
+                if (!at) break;
+                await pointer([{ type: 'pointerMove', x: Math.round(at.x), y: Math.round(at.y) }, { type: 'pointerDown', button: 0 }, { type: 'pointerUp', button: 0 }]);
+                await ctx.probe(`await until(() => get('ApplicationShell').getWidgets('main').length > window.__pbMainCount, 5000); await sleep(300); return true;`);
+            }
+            mObs.keep.push({ when: `after ${WEB_TABS} web tabs from the "+" button`, before: mBefore, after: sizesOf(await widths()) });
+            for (const [away, when] of [['browsing', 'after a Browsing round trip'], ['organising', 'after an Organising round trip']]) {
+                await setStart();
+                mBefore = sizesOf(await widths());
+                await ctx.probe(`await get('ModeService').activateMode(${J(away)}); await sleep(500); await get('ModeService').activateMode('orca'); await sleep(900); return true;`);
+                mObs.keep.push({ when, before: mBefore, after: sizesOf(await widths()) });
+            }
+            for (const side of ['left', 'right']) {
+                for (const offset of bandSamples(widthRules.band[side])) {
+                    await setStart();
+                    const w = await widths();
+                    if (!w[side]) continue;
+                    await dragFrom(w[side].edge + offset, w.inner[1] / 2, side === 'left' ? DRAG : -DRAG);
+                    await ctx.probe(`await sleep(400); return true;`);
+                    mObs.drags.push({ side, offset, before: w[side].size, after: (await widths())[side]?.size ?? 0 });
+                }
+                await setStart();
+                const w = await widths();
+                if (!w[side]) continue;
+                // From the edge itself to two pixels inside the window's outer side.
+                await dragFrom(w[side].edge, w.inner[1] / 2, side === 'left' ? 2 - w[side].edge : (w.inner[0] - 2) - w[side].edge);
+                await ctx.probe(`await sleep(400); return true;`);
+                mObs.squeeze.push({ side, before: w[side].size, after: (await widths())[side]?.size ?? 0 });
+            }
+            clause('m width', widthVerdict(mObs, { min: widthRules.min, drag: DRAG }),
+                `each side kept its width through ${WEB_TABS} web tabs and a Browsing and an Organising round trip; drags from ${mObs.drags.length} points across Orca's grab bands (left ${widthRules.band.left.join('..')}px, right ${widthRules.band.right.join('..')}px from the edge) moved the panel ${DRAG}px; squeezes stopped at Orca's minimum (left ${widthRules.min.left}px, right ${widthRules.min.right}px); BiDi pointer input`);
+
             // h
             const reg = await ctx.probe(`const r = get('TabUriRegistry'); return [${J(LEFT)}, ${J(RIGHT)}].filter(id => !r.getViewContribution(id));`);
             clause('h registry', reg.map(id => `TabUriRegistry has no view contribution for ${id} (its startup error would fire)`), 'both container ids resolve to a view contribution');
@@ -657,6 +854,27 @@ function lFixture(over = {}) {
     };
 }
 
+/**
+ * m fixture: a passing run at SIDE_START (the round-3 measurements: 320 px sides, a 60 px drag moving 60 px, a squeeze
+ * stopping at 220). `over.keep` replaces the keep passes, `over.drag` and `over.squeeze` map each entry.
+ */
+function mFixture(over = {}) {
+    const s = { left: SIDE_START, right: SIDE_START };
+    const keep = over.keep ?? [
+        { when: `after ${WEB_TABS} web tabs from the "+" button`, before: s, after: s },
+        { when: 'after a Browsing round trip', before: s, after: s },
+        { when: 'after an Organising round trip', before: s, after: s },
+    ];
+    const drags = [];
+    for (const side of ['left', 'right']) for (const offset of bandSamples(side === 'left' ? [-6, 6] : [0, 4])) drags.push({ side, offset, before: SIDE_START, after: SIDE_START + DRAG });
+    const squeeze = [{ side: 'left', before: SIDE_START, after: 220 }, { side: 'right', before: SIDE_START, after: 220 }];
+    return {
+        obs: { keep, drags: drags.map(over.drag ?? (d => d)).filter(Boolean), squeeze: squeeze.map(over.squeeze ?? (q => q)).filter(Boolean) },
+        expect: { min: over.min ?? { left: 220, right: 220 }, drag: DRAG },
+    };
+}
+const mRun = (over) => { const { obs, expect } = mFixture(over); return widthVerdict(obs, expect); };
+
 function selfTest() {
     const allow = [{ host: 'api.github.com', disposition: 'allow' }, { host: 'example.org', disposition: 'user-initiated' }];
     const cases = [
@@ -699,6 +917,21 @@ function selfTest() {
         ['Theia\'s reopen without Orca\'s content', () => rightToggleVerdict(lFixture({ afterTheiaExpand: { closeShown: false } })), 'Theia\'s Toggle Right Panel (expand): the right panel opened without Orca\'s sidebar content'],
         ['a toggle shown in Coding', () => rightToggleVerdict(lFixture({ coding: { toggles: [{ x: 1240, y: 72, w: 32, h: 24 }] } })), 'Coding: 1 Orca right-sidebar toggle'],
         ['no close button to start from', () => rightToggleVerdict(lFixture({ closeBefore: false })), 'blind: Orca\'s own close button'],
+        // m, the round-3 reproduction: Browsing -> Orca left the left side at Lumino's 100 px; a drag inside Orca's band
+        // landed on Orca's handle and moved nothing; a squeeze went to 100.
+        ['control: widths kept, band drags move, squeeze stops at the minimum', () => mRun(), null],
+        ['control: the band parser reads Orca\'s sidebar handle', () => (bandFromClasses('group absolute -right-1.5 top-0 z-10 flex h-full w-3 cursor-col-resize').join() === '-6,6' ? [] : ['wrong band']), null],
+        ['control: the band parser reads Orca\'s right-sidebar handle', () => (bandFromClasses('absolute top-0 left-0 w-1 h-full cursor-col-resize').join() === '0,4' ? [] : ['wrong band']), null],
+        ['a left side at 100 px after a Browsing round trip', () => mRun({ keep: [{ when: 'after a Browsing round trip', before: { left: 320, right: 320 }, after: { left: 100, right: 320 } }] }), 'left panel 100px after a Browsing round trip, 320px before'],
+        ['a right side narrowed by web tabs', () => mRun({ keep: [{ when: 'after 3 web tabs from the "+" button', before: { left: 320, right: 320 }, after: { left: 320, right: 244 } }] }), 'right panel 244px after 3 web tabs'],
+        ['a side hidden after a round trip', () => mRun({ keep: [{ when: 'after an Organising round trip', before: { left: 320, right: 320 }, after: { left: undefined, right: 320 } }] }), 'left panel: not shown after an Organising round trip'],
+        ['no width read at all', () => mRun({ keep: [] }), 'comparison is blind'],
+        ['a drag inside Orca\'s band that moved nothing (Orca\'s dead handle)', () => mRun({ drag: d => (d.side === 'left' && d.offset === -5 ? { ...d, after: d.before } : d) }), 'left: a drag started -5px from the panel\'s edge (inside Orca\'s grab band) changed its width by 0px, not 60px'],
+        ['a right drag that moved half the distance', () => mRun({ drag: d => (d.side === 'right' && d.offset === 3 ? { ...d, after: d.before + 30 } : d) }), 'right: a drag started +3px from the panel\'s edge (inside Orca\'s grab band) changed its width by 30px'],
+        ['no right drag measured', () => mRun({ drag: d => (d.side === 'right' ? null : d) }), 'right: no drag was measured'],
+        ['a squeeze to Lumino\'s 100 px', () => mRun({ squeeze: q => (q.side === 'left' ? { ...q, after: 100 } : q) }), 'left panel squeezed to 100px, below Orca\'s minimum 220px'],
+        ['a squeeze that never moved the edge', () => mRun({ squeeze: q => (q.side === 'right' ? { ...q, after: q.before } : q) }), 'instrument blind: the squeeze drag did not narrow the right panel'],
+        ['Orca\'s minimum not derived', () => mRun({ min: { left: 220, right: null } }), 'right: Orca\'s minimum width was not derived'],
     ];
     let failures = 0;
     for (const [name, run, naming] of cases) {

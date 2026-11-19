@@ -24,6 +24,36 @@
 }
 
 /*
+ * Resizing a hosted Orca side part (debug orca-mode-fresh-profile-look round 3, owner 2026-11-19: "I could not drag
+ * out the right slide in orca mode"; checked by orca-side-panel-live clause m).
+ *
+ * In Orca a drag on the sidebar's edge resizes the sidebar. Here the Theia side panel is what must resize, and its
+ * split handle does so. Orca's own handles (the sidebar's data-sidebar-resize-handle, the right sidebar's
+ * cursor-col-resize strip on its inner column) only write Orca's stored width, which the rule above overrides, yet they
+ * showed the resize cursor over most of the edge, so a drag that started there moved nothing. They take no pointer
+ * here.
+ */
+.pb-orca-side-view [data-sidebar-resize-handle],
+.pb-orca-side-view > .pb-orca-pane-host > [data-pb-orca-pane-root] > :first-child > :first-child > .cursor-col-resize {
+  pointer-events: none;
+}
+
+/*
+ * In the Orca mode Theia's side split handles take Orca's grab band: Orca's sidebar handle straddles the border, 6 px
+ * each side ('absolute -right-1.5 w-3' in components/sidebar/index.tsx), where Theia's sash is about 4 px. The band is a
+ * transparent pseudo-element of the handle itself, so Lumino's own drag runs and the sash keeps its look; a hidden
+ * handle (a collapsed side) hides it too.
+ */
+body[data-pb-mode="orca"] #theia-left-right-split-panel > .lm-SplitPanel-handle::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -6px;
+  width: 12px;
+}
+
+/*
  * Orca's closed-state right-sidebar toggle (orca-right-sidebar-toggle.ts; debug orca-mode-fresh-profile-look,
  * 2026-11-18, defect B; checked by orca-side-panel-live clause l): at the main area's top right, in its first tab
  * row, as Orca's AppWorkspaceShell places it at the workspace area's top right. The host carries the pane scope

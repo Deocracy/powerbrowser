@@ -6844,12 +6844,14 @@ run_own_checks() {
       # Coordinator-run on the merged tree after orca-pane-css-live, under the live lock with ORCA_* unset.
       "orca-workspace-live|node $REPO_ROOT/scripts/verify-orca-workspace-live.mjs"
       # NEW (65-03, TAB-07/TAB-09, P65-24/P65-27): orca-side-panel-live, Orca's sidebar, Settings, Agents and right
-      # sidebar in the Orca mode's two view containers (clauses a-l: docking, rows vs the CLI lists, a settings
+      # sidebar in the Orca mode's two view containers (clauses a-m: docking, rows vs the CLI lists, a settings
       # round-trip, the Agents part, worktree activation, page tabs, no leak into Coding or Browsing, registry, egress
       # after a planted .invalid control resolution; j, 2026-11-18: each part's node and Orca surface fill the part
       # body, from no project on; k, 2026-11-18: no Theia status bar in the Orca mode, its row reclaimed, Coding the
       # control; l, 2026-11-18: Orca's right-sidebar close button and its RightSidebarToggle at the main area's top
-      # right collapse and reopen the Theia right panel with Orca's content, as Theia's Toggle Right Panel does).
+      # right collapse and reopen the Theia right panel with Orca's content, as Theia's Toggle Right Panel does;
+      # m, 2026-11-19: each side keeps its width through web tabs and a Browsing and an Organising round trip, BiDi
+      # pointer drags from across Orca's grab band resize it, and a squeeze stops at Orca's minimum from its source).
       # orca-add-project-live: Orca's Add-project and remove, the stock
       # standalone page first as the control, then PowerBrowser's side panel. Both under the live lock.
       "orca-side-panel-live|node $REPO_ROOT/scripts/verify-orca-side-panel-live.mjs"
