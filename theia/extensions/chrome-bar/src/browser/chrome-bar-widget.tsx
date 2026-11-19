@@ -2178,8 +2178,23 @@ export class ChromeBarContribution implements FrontendApplicationContribution {
         // onDidAddWidget, which is what runs this.
         // A collapsed side stays hidden even in Coding: its icons are across
         // its own top, so there is no rail to leave standing.
-        this.shell.leftPanelHandler.container.setHidden(!ideDress || this.shell.leftPanelHandler.dockPanel.isHidden);
-        this.shell.rightPanelHandler.container.setHidden(!ideDress || this.shell.rightPanelHandler.dockPanel.isHidden);
+        //
+        // Not while a mode switch is in flight. The attribute is published
+        // last (ModeService.activateMode), so during the switch it still names
+        // the mode being left while the perspective already names the one
+        // being entered, and a saved layout that re-adds a side view fires
+        // onDidAddWidget mid-restore. Acting on the old mode then hid a side
+        // container between Theia's queued size request and its application:
+        // the request ran against a hidden handle, and when the switch showed
+        // the container again Lumino gave it its minimum (100 px). Returning
+        // to Orca from Browsing or Organising left Orca's sidebar at 100 px
+        // (debug orca-mode-fresh-profile-look round 3, owner 2026-11-19;
+        // orca-side-panel-live clause m). The switch asserts both containers
+        // itself, and its attribute publish runs this again.
+        if (this.perspectives.getActivePerspectiveId() === modeId) {
+            this.shell.leftPanelHandler.container.setHidden(!ideDress || this.shell.leftPanelHandler.dockPanel.isHidden);
+            this.shell.rightPanelHandler.container.setHidden(!ideDress || this.shell.rightPanelHandler.dockPanel.isHidden);
+        }
         // Showing a tab bar changes its class; it does not, on its own, make
         // the dock re-run its layout. Without this the dock kept allocating
         // the content as if the bar were still hidden, so the page was drawn
