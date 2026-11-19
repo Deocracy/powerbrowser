@@ -116,9 +116,10 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -470,6 +471,46 @@ function wantSequence(rows) {
  * tested only itself. It is removed; the plant drives the real instruments.)
  */
 function catalogueFailures() {
+    const key = catalogueInputKey();
+    if (!catalogueVerdicts.has(key)) {
+        catalogueVerdicts.set(key, runCatalogueInstruments());
+    }
+    return catalogueVerdicts.get(key);
+}
+
+/**
+ * D-60: the two instruments read only the REAL tree, never the planted `srcs` map: their own two scripts, the
+ * catalogue, and powerbrowser/shell (the boundary file, the actor child, and every `<name>.sys.mjs` a catalogue
+ * row cites, which ng-040 resolves inside that directory). Their verdict is memoized per process on a SHA-256
+ * over the path and bytes of every one of those files, re-read on every call: a call whose inputs differ by
+ * one byte, or whose shell directory gained or lost a file, runs both instruments again. A self-test plant
+ * edits only its in-memory sources and a scratch table, so every plant reuses the clean run's verdict; the
+ * catalogue plant drives the instrument on its own planted tree below, outside this memo.
+ */
+const CATALOGUE_INPUT_FILES = ['scripts/check-internals-boundary.sh', 'scripts/verify-ng-040-internals-catalogue-lines.mjs', INTERNAL_APIS_REL];
+const CATALOGUE_INPUT_DIR = 'powerbrowser/shell';
+const catalogueVerdicts = new Map();
+function catalogueInputKey() {
+    const dirFiles = readdirSync(join(REPO_ROOT, CATALOGUE_INPUT_DIR), { recursive: true, withFileTypes: true })
+        .filter(entry => entry.isFile())
+        .map(entry => relative(REPO_ROOT, join(entry.parentPath, entry.name)));
+    const hash = createHash('sha256');
+    for (const rel of [...new Set([...CATALOGUE_INPUT_FILES, ...dirFiles])].sort()) {
+        let bytes;
+        try {
+            bytes = readFileSync(join(REPO_ROOT, rel));
+        } catch {
+            bytes = null;
+        }
+        hash.update(`${rel}\0${bytes === null ? 'absent' : bytes.length}\0`);
+        if (bytes !== null) {
+            hash.update(bytes);
+        }
+    }
+    return hash.digest('hex');
+}
+
+function runCatalogueInstruments() {
     const out = [];
     const catalogue = spawnSync('bash', ['scripts/check-internals-boundary.sh', '--catalogue'], { cwd: REPO_ROOT, encoding: 'utf8' });
     if (catalogue.status !== 0) {
