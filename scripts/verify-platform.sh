@@ -6844,9 +6844,10 @@ run_own_checks() {
       # Coordinator-run on the merged tree after orca-pane-css-live, under the live lock with ORCA_* unset.
       "orca-workspace-live|node $REPO_ROOT/scripts/verify-orca-workspace-live.mjs"
       # NEW (65-03, TAB-07/TAB-09, P65-24/P65-27): orca-side-panel-live, Orca's sidebar, Settings, Agents and right
-      # sidebar in the Orca mode's two view containers (clauses a-i: docking, rows vs the CLI lists, a settings
+      # sidebar in the Orca mode's two view containers (clauses a-j: docking, rows vs the CLI lists, a settings
       # round-trip, the Agents part, worktree activation, page tabs, no leak into Coding or Browsing, registry, egress
-      # after a planted .invalid control resolution). orca-add-project-live: Orca's Add-project and remove, the stock
+      # after a planted .invalid control resolution; j, 2026-11-18: each part's node and Orca surface fill the part
+      # body, from no project on). orca-add-project-live: Orca's Add-project and remove, the stock
       # standalone page first as the control, then PowerBrowser's side panel. Both under the live lock.
       "orca-side-panel-live|node $REPO_ROOT/scripts/verify-orca-side-panel-live.mjs"
       "orca-add-project-live|node $REPO_ROOT/scripts/verify-orca-add-project-live.mjs"
