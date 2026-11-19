@@ -434,7 +434,7 @@ Plans:
 **Source phase:** 27 (found in 39-15)
 **Deferred at:** 2026-11-07, v1.5 close-out residual (plan 39-19); product defect, the fix window closed at 39-18
 **Follow-ups:**
-- [ ] long-press Back: holding Back 600 ms and releasing on the pill leaves keyboard focus in the pill, so a real Escape is the pill's and the history menu stays open (3 of 3 headed real-input runs). Repro: `PB_REAL_INPUT=1 PB_LIVE_HEADED=1 node scripts/verify-nav-keys-live.mjs --scenario long-press`. Cause so far: the release on the pill moves focus there. Source: 27-UAT test 4. WINDOWS.md entry 27.
+- [x] (fixed in 59-03; headed real-input run green 2026-11-18, plan 59-06 Task 2; WINDOWS 27 fixed) long-press Back: holding Back 600 ms and releasing on the pill leaves keyboard focus in the pill, so a real Escape is the pill's and the history menu stays open (3 of 3 headed real-input runs). Repro: `PB_REAL_INPUT=1 PB_LIVE_HEADED=1 node scripts/verify-nav-keys-live.mjs --scenario long-press`. Cause so far: the release on the pill moves focus there. Source: 27-UAT test 4. WINDOWS.md entry 27.
 
 ### Phase 999.29: Residual — WINDOWS.md 28: page-tools crash-navigate flake (BACKLOG)
 

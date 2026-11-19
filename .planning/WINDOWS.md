@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 20
+open_count: 19
 waived_count: 2
-fixed_count: 47
+fixed_count: 48
 total_count: 69
-last_updated: 2026-11-18T23:40:50.771Z
+last_updated: 2026-11-19T02:23:11.097Z
 ---
 
 # Broken Windows Ledger
@@ -41,7 +41,7 @@ last_updated: 2026-11-18T23:40:50.771Z
 | 24 | 44 | unrun-verify | scripts/build-update-xml.mjs |  | 44-02 full-tier row build-update-xml not run green: it FAILs by design because .mozbuild/mar-hop/nplus1.mar is absent. Build the N-plus-1 MAR per docs/BUILD.md, then run scripts/verify-platform.sh --only build-update-xml. UPD-14 stays open until it passes. | open | Re-dated to next version (Phase 59 D-09) | 2026-11-01T05:21:09.443Z |  |
 | 25 | 39 | deviation | scripts/verify-address-bar-live.mjs | 5000 | address-bar-live-self-test: plant ctrl-d-everywhere stays green on bookmark-keys (3 of 3 sessions with the 39-08 harness and 3 of 3 with the pre-39-08 harness at 5d0dfa95); pre-existing, the plant no longer bites in the README editor; first lead: the bookmark command may be disabled with an editor current, so Theia skips the planted binding; repro: node scripts/verify-address-bar-live.mjs --self-test (plant ctrl-d-everywhere on bookmark-keys), red again in the 39-19 full run as "stayed green ... got: (no failures at all)"; source: 33-UAT test 1 | open | Re-dated to next version (Phase 59 D-09) | 2026-11-06T21:08:45.534Z |  |
 | 26 | 39 | skipped-test | scripts/verify-prompts-live.mjs |  | prompts-live dialog and dialog-probe are skipped by derivation while REQUIREMENTS.md records PROMPT-03 deferred to 999.3 (OQ1 ruling 2026-11-05); repro: node scripts/verify-prompts-live.mjs --scenario dialog; cause: stock page dialogs lock the IDE; source: 37-UAT tests 8 and 9 | open | Re-dated to next version (Phase 59 D-09) | 2026-11-06T22:32:05.803Z |  |
-| 27 | 39 | deviation | theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx | 976 | long-press Back: with a real pointer, holding Back 600 ms then releasing on the pill leaves keyboard focus in the pill, so a real Escape is the pill's and the history menu stays open (39-15 verify-nav-keys-live long-press under PB_REAL_INPUT=1, 3 of 3 runs); the T4 claim itself (Enter on Back goes back after the hold) passes; repro: PB_REAL_INPUT=1 PB_LIVE_HEADED=1 node scripts/verify-nav-keys-live.mjs --scenario long-press (headed, real input); cause so far: the release on the pill moves keyboard focus there, so Escape goes to the pill, not the history menu; source: 27-UAT test 4 | open | Re-dated to next version (Phase 59 D-09) | 2026-11-07T02:53:12.909Z |  |
+| 27 | 39 | deviation | theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx | 976 | long-press Back: with a real pointer, holding Back 600 ms then releasing on the pill leaves keyboard focus in the pill, so a real Escape is the pill's and the history menu stays open (39-15 verify-nav-keys-live long-press under PB_REAL_INPUT=1, 3 of 3 runs); the T4 claim itself (Enter on Back goes back after the hold) passes; repro: PB_REAL_INPUT=1 PB_LIVE_HEADED=1 node scripts/verify-nav-keys-live.mjs --scenario long-press (headed, real input); cause so far: the release on the pill moves keyboard focus there, so Escape goes to the pill, not the history menu; source: 27-UAT test 4 | fixed | Re-dated to next version (Phase 59 D-09) | 2026-11-07T02:53:12.909Z | 2026-11-19T02:23:11.097Z |
 | 28 | 39 | deviation | scripts/verify-page-tools-live.mjs |  | page-tools-live crash-navigate flaked once in three registry runs on 2026-11-06 (4ce04c24): 'a URL sent to a crashed tab did not load it (no loaded push with crashed false)'; the scenario passed alone 2 of 2 right after, and in the 116ac682 run; the code was not changed by 39-16; for the 39-18 flake work; repro: node scripts/verify-page-tools-live.mjs --scenario crash-navigate; cause so far: not isolated, the loaded push after a crash-restore navigate arrives late or not at all; page-tools-live passed in the 39-19 full run; source: 32-UAT test 1 | open | Re-dated to next version (Phase 59 D-09) | 2026-11-07T04:37:55.475Z |  |
 | 29 | 39 | deviation | patches/050-extension-tab-host.patch |  | 38 T22 step 4: the options page of an extension not allowed in private windows opens in the private stock window opened last (stock openOptionsPage uses windowTracker.topWindow); fix needs a patch 050 hunk and a Gecko rebuild; owner deferred to backlog 999.17 on 2026-11-06 (39-17), matches stock behaviour; repro: 38-UAT test 22 step 4, scenario private-access session 2; source: 38-UAT test 22 | open | Re-dated to next version (Phase 59 D-09) | 2026-11-07T04:50:37.188Z |  |
 | 30 | 39 | unrun-verify | powerbrowser/packaging/package-linux.sh |  | 39-19 full run (6ac27ac2): ng063-packaged-launch, portable-elf, sidecar-no-symlinks, package-target-natives, packaged-identity, install-matrix, ng065-mar-signature-enforced, ng072-policies-packaged-webextension, search-engines-packaged and mar-update-hop are red because no container-built release tarball exists in objdir-release/dist and hop.json has no served key; repro: scripts/verify-platform.sh --only portable-elf; cause so far: the PKG-17 container build with the release keys and the N-plus-1 MAR hop are owner steps in .planning/workstreams/deploy/OWNER-PASS.md, not run; source: no UAT test, 39-BASELINE environment rows | open | Re-dated to next version (Phase 59 D-09) | 2026-11-07T10:18:30.468Z |  |
@@ -409,10 +409,10 @@ last_updated: 2026-11-18T23:40:50.771Z
     "file": "theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx",
     "line": 976,
     "description": "long-press Back: with a real pointer, holding Back 600 ms then releasing on the pill leaves keyboard focus in the pill, so a real Escape is the pill's and the history menu stays open (39-15 verify-nav-keys-live long-press under PB_REAL_INPUT=1, 3 of 3 runs); the T4 claim itself (Enter on Back goes back after the hold) passes; repro: PB_REAL_INPUT=1 PB_LIVE_HEADED=1 node scripts/verify-nav-keys-live.mjs --scenario long-press (headed, real input); cause so far: the release on the pill moves keyboard focus there, so Escape goes to the pill, not the history menu; source: 27-UAT test 4",
-    "status": "open",
+    "status": "fixed",
     "reason": "Re-dated to next version (Phase 59 D-09)",
     "recorded_at": "2026-11-07T02:53:12.909Z",
-    "resolved_at": null,
+    "resolved_at": "2026-11-19T02:23:11.097Z",
     "milestone": "v1.5"
   },
   {
