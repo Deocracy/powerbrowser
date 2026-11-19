@@ -7104,6 +7104,9 @@ declare -a GATE_KNOWN_OPEN_EXCLUSIONS=(
   # 68-06 (2026-11-11): Task 2 built the package from the dev objdir (no Safe Browsing key directory here), so
   # the two rows above stay keyed to entry 30 until a container release tarball exists.
   "orca-upstream-prs|51|owner opens the upstream issues and PRs (OVL-06, D-27)"
+  # 2026-11-18 (D-60): the row takes a real screen capture and fails while another window has focus, which a
+  # 4.4 h gate on the owner's desktop cannot avoid (gate runs 4 and 5). It passed alone on 2026-11-18.
+  "real-input-gate-self-test|69|needs an unlocked desktop with no other window focused; run alone (PASS 2026-11-18)"
   "branding-variant-divergence|30|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
   "verify-branding-identity-release|30|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
   "build-update-xml|30|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"

@@ -511,6 +511,13 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
   and 59-07, the WINDOWS 69 rows and the full gate after them, the local identity re-pin run for OVL-02, and the
   packaged live confirmation of WINDOWS 54. The same answer set kept the `ServerDestroyer/p63-01`, `p63-02` and `p63-05`
   branches after their workspaces were closed.
+- **D-60 — Gate run 5 rulings.** Chris, 2026-11-18, four answers after gate run 5 (da97a4e9, exit 1 on
+  real-input-gate-self-test). (1) "Exclude under WINDOWS 69": real-input-gate-self-test gets a
+  `GATE_KNOWN_OPEN_EXCLUSIONS` row keyed to WINDOWS 69, backed by its alone PASS of 2026-11-18; one more gate run
+  proves the exit. (2) "Alone PASS stands": orca-agent-status-live's alone PASS of 2026-11-18 is TERM-02's real-agent
+  evidence; its SKIP inside the gate stays counted as it is, noted under WINDOWS 69. (3) "Speed up the two tests":
+  site-identity-self-test (312 s) and orca-service-self-test (223 s) are made to fit the 480 s limit of the quick
+  check the completion hook runs, without dropping a planted fault. (4) Plan 59-06 (the v1.5 human checks) is next.
 
 ## Spikes this direction needs
 
