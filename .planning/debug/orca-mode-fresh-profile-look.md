@@ -1,13 +1,61 @@
 ---
-status: awaiting_human_verify
+status: verifying
 trigger: "Owner, 2026-11-18, with a screenshot of the dev build on a fresh profile: 'Bit GUI problem. orca dose not look like orca'"
 created: 2026-11-18T00:00:00Z
-updated: 2026-11-19T04:10:00Z
+updated: 2026-11-19T13:30:00Z
 ---
 
 ## Current Focus
 
-status_note: round 2 fixed and verified live headless. A: 94e23217 (Theia's status bar has its own mode rule; the
+round: 3
+bug_class_round3: Bohrbug (deterministic: same sequence, same 100 px; same pointer offset, same dead drag)
+reasoning_checkpoint_round3:
+  hypothesis: "C1: chrome-bar's furniture re-assert acts on the stale body[data-pb-mode] during a mode switch and hides
+    the left container between Theia's queued side-panel resize and its application, so the left part lands on Lumino's
+    100 px minimum after Browsing/Organising -> Orca. C2: Orca's dead resize handles own the resize-cursor band inside
+    the hosted parts. C3: no Orca minimum on the hosted parts."
+  confirming_evidence:
+    - "probe-routes: Orca->Coding->Orca->Browsing->Orca gives left 100, right 244; tabs, toggles, Coding trips keep 244"
+    - "probe-trace: left move completes with its handle hidden; 'left expand' sees cont.hidden=true; setRelativeSizes([0,1,0])"
+    - "probe-drag2: pointerdown 3 px inside the left edge targets [data-sidebar-resize-handle] and moves 0 px; on the edge
+      Theia's handle moves 81 px; right +3 targets Orca's w-1 handle, 0 px"
+  falsification_test: "with the re-assert skipped while the published mode differs from the live perspective, the
+    Browsing round trip still ends below the size before it; or with Orca's handles inert and Theia's handle given Orca's
+    band, a drag from inside the band still moves 0; or a squeeze still reaches 100"
+  fix_rationale: "C1 removes the stale-state hide (ModeService asserts the containers itself at the switch's end and its
+    attribute publish re-runs the re-assert); C2 makes the only resize affordance in Orca's band the one that resizes the
+    Theia part (Orca's band geometry, Theia's live split handle); C3 puts Orca's own floor on the part so no route
+    (restore, drag, window) leaves it unusable, and heals the owner's saved 100"
+  blind_spots: "BiDi pointer input is hit-tested in the content process; Gecko web-tab overlays in the chrome document
+    (a loaded page) are not in that path; the owner's exact sequence is inferred, not observed; the Organising trip is
+    inferred from the same ideDress rule until clause m runs it"
+  candidate_causes:
+    - "code (chrome-bar re-assert, stale mode attribute): confirmed by trace"
+    - "code (Orca's handles live in hosted parts): confirmed by hit test and drag"
+    - "data (owner's saved perspective layout carrying 100): consequence, not cause; healed by the floor"
+    - "environment (window size, DPR): ruled out, same result at 1280 and 2048"
+  and_gate: "yes for the owner's report: the narrow part (C1) AND the dead band (C2) are both needed for 'cannot drag it
+    out'; either alone is recoverable (a narrow part with a working band can be dragged out; a dead band on a normal
+    part is a nuisance). C3 is the floor that stops C1-like routes."
+hypothesis: |
+  C1 (narrow left panel): chrome-bar's furniture re-assert (ChromeBarContribution.observeMode -> applyStripHome, run on
+  every shell add/remove and main-panel layoutModified) reads the mode from body[data-pb-mode], which ModeService
+  publishes only at the END of activateMode. Returning to Orca from Browsing (or Organising), the saved Orca layout
+  re-adds Orca's containers (detached in Browsing), the add fires the re-assert with the stale 'browsing' value, and it
+  hides both side containers mid-restore. The right container is re-shown by its own refresh; the left one stays hidden
+  while Theia's queued setSidePanelSize runs (a no-op on a hidden handle) after stock refresh's setRelativeSizes([0,1,0]),
+  so when ModeService finally shows it Lumino clamps the 0 hint to the side dock's 100 px minimum. The perspective then
+  saves 100, so it persists. Tabs are not the trigger.
+  C2 (drag does nothing): Orca's own resize handles stay live inside the hosted parts (sidebar: [data-sidebar-resize-handle],
+  'absolute -right-1.5 w-3', clipped to the inner 6 px; right sidebar: 'absolute left-0 w-1'), show col-resize, and write
+  only Orca's stored width, which orca-side-view.css overrides; Theia's split handle (::after 4 px) gets only ~3 px at the
+  edge. Approaching the edge from inside a panel, the first resize cursor is always Orca's dead one.
+  C3 (no floor): the hosted Orca parts have only Lumino's generic 100 px dock minimum, not Orca's 220 px.
+test: done (clause m red on the unfixed build, green after 125d27f4 + 47f3bc9b; ablations show each rule carries a step)
+expecting: n/a
+next_action: "run tab-strip-live on the committed tree; then owner relaunches and judges the Orca side panels (drag each
+  edge from inside the panel; switch to Browsing or Organising and back)"
+previous_status_note: round 2 fixed and verified live headless. A: 94e23217 (Theia's status bar has its own mode rule; the
   Orca mode hides it). B: fa82a7f7 (Orca's right-sidebar flag and the Theia right panel are one state in the Orca mode;
   Orca's RightSidebarToggle at the main area's top right while the panel is collapsed; clauses k and l). The Theia
   bundle and the Orca pane bundle (with the browser host and the standalone variant) are rebuilt. Awaiting the owner's
@@ -137,6 +185,26 @@ Orchestrator's interpretation (not the owner's words):
   component.
 - Still open, not acted on: Welcome vs Orca's Landing in the main area with no Orca tab.
 
+## Checkpoint response (round 3, 2026-11-19)
+
+DATA_START
+Owner, on the build with 94e23217 and fa82a7f7, with a screenshot (images/5.png, 2560x1565; previous: images/3.png):
+"after I added a few tabs I could not drag out the right slide in orca mode"
+He drew a red arrow pointing right at the right edge of the LEFT side panel (about x=97..145, y=570 in the 2000-px
+rendering; x1.28 for original pixels).
+DATA_END
+
+Orchestrator's interpretation (not the owner's words):
+- images/5.png: Orca mode, four main-area tabs (Welcome + three "New Tab" web tabs, the active one "Type an address
+  above to get started."). The LEFT side panel hosting Orca's Workspaces sidebar is about 97 px wide (2000-px
+  rendering); in images/3.png about 267 px. Its content is clipped ("Onbo...", "Automatio", "Orca Mobile" cut to one
+  letter, the Projects heading gone, "No workspaces found" on three lines). The side tab bar above it shows two icons
+  and "...". Theia's status bar gone (intended). Right panel open and filled.
+- The arrow marks the left panel's right edge: "drag out" most likely means widening that panel by its edge, which does
+  not move. "right slide" may also mean the right side panel; test dragging both.
+- To find: why the left panel shrank after web tabs were added; why the edge cannot be dragged (Orca's handle over
+  Theia's split handle?); a minimum width for hosted Orca side parts derived from Orca's source.
+
 ## Questions this session must answer
 
 - Which of the three symptoms are defects and which are the intended empty state? Sources: .planning/workstreams/orca/DECISIONS.md,
@@ -156,6 +224,12 @@ Orchestrator's interpretation (not the owner's words):
 - The owner judges the result on the machine; ask him through the AskUserQuestion box, never in prose.
 
 ## Eliminated
+
+- hypothesis: adding web tabs shrinks the left Orca part (main-area min width growing with tabs, the right-toggle host's
+    tab-bar padding, OrcaSidePanelSync)
+  evidence: 3 and 4 web tabs added by the '+' command and by BiDi clicks on the '+' button, at 1280x768 and 2048x1252:
+    both parts keep 244/391 px and the main area's min-width stays 100 px. The 100 px comes from a mode round trip.
+  timestamp: 2026-11-19 (round 3)
 
 - hypothesis: Orca's scoped stylesheet reaches Theia and spreads the Welcome page (symptom 2)
   evidence: the spread is present in Browsing mode before Orca mode is entered, comes from @theia/getting-started's
@@ -336,6 +410,83 @@ Orchestrator's interpretation (not the owner's words):
   implication: feasible, but not a defect fix: the Orca app-update segment and the floating-terminal toggle (shown when
     the user sets floatingTerminalTriggerLocation 'status-bar') would act on things PowerBrowser does not host, and
     usage depends on what PB's orcad can read. Left as an owner call; the defect (Theia's bar in Orca mode) is fixed.
+- timestamp: 2026-11-19 (round 3)
+  checked: owner screenshot images/5.png against images/3.png (2560 px wide, devicePixelRatio 1.25)
+  found: left part 97 px in the 2000-px rendering = 124 device px = 99.3 CSS px; in images/3.png 267 -> 273.4 CSS px,
+    which equals the Orca layout's saved left size 274 in his profile's powerbrowser-shell-state.json (perspective-layouts,
+    read from a copy). The right part 244 CSS px in both. The side tab bar shows 2 icons + '...' = 100 px.
+  implication: the left part sits at exactly Lumino's 100 px dock minimum (the side dock's inline min-width), not at a
+    width a user would drag to by chance.
+- timestamp: 2026-11-19 (round 3)
+  checked: scratch probe-drag.mjs (headless 1280x768) and probe-drag2.mjs (window 2048x1252 = the owner's CSS size; the
+    Orca mode button and the '+' button clicked with BiDi input.performActions on the Theia context)
+  found: 3 and 4 web tabs added: left/right 244/244 and 391/391 throughout; the main area's min-width stays 100 px. Drags
+    (BiDi pointer, 10 moves): left edge +0 -> Theia's .lm-SplitPanel-handle, moved 81 px; left edge -3 ->
+    [data-sidebar-resize-handle] (Orca's, cursor col-resize), moved 0; left -5 -> view container panel, 0; left +2/+5 ->
+    the web tab widget, 0. Right edge -2/+0 -> Theia's handle, moved 80; right +3 -> Orca's 'absolute top-0 left-0 w-1'
+    handle (col-resize), moved 0. elementFromPoint at 1280: Orca's handle at dx -6..-2, Theia's at 0, main area at +2.
+  implication: adding tabs does not shrink a part (hypothesis eliminated). The drag defect is real and deterministic:
+    Orca's dead handle owns most of the band where the resize cursor appears.
+- timestamp: 2026-11-19 (round 3)
+  checked: scratch probe-routes.mjs: the left/right sizes after each route (toggle left/right off and on, Coding and back,
+    Browsing and back, a 700 px window and back, a squeeze drag)
+  found: toggles, Coding round trips and window resizes keep 244. 'orca again 2' (Orca -> Coding -> Orca -> Browsing ->
+    Orca) -> left 100, right 244. A squeeze drag takes either side to 100 (min-width 100px). Coding -> Orca afterwards
+    restores 100/100 (the saved layout).
+  implication: a mode round trip through Browsing lands the left part at its minimum with no drag at all; once there the
+    saved Orca layout keeps it, and the dead band blocks the drag back. Matches the owner's state.
+- timestamp: 2026-11-19 (round 3)
+  checked: scratch probe-trace.mjs: setLayoutData/refresh/setPanelSize/expand/collapse of both handlers,
+    SplitPositionHandler.setSidePanelSize/moveSplitPos and the split panel's setRelativeSizes, traced through Browsing ->
+    Orca (saved layout) and through the same cycle for Coding
+  found: Browsing -> Orca: left setLayoutData -> refresh -> setPanelSize(244) queued with the container hidden ->
+    setRelativeSizes([0,1,0]) -> container shown; right setLayoutData (re-adding Orca's right container) -> ...; the
+    queued moves complete with handles 'hid/1036' (left handle still hidden); 'left expand' sees cont.hidden=true; the
+    container is shown only by ModeService's final setHidden, at Lumino's min 100. Coding -> Browsing -> Coding stays 244
+    (Coding's views are never detached, so no add fires during its restore).
+    Source: chrome-bar-widget.tsx observeMode: apply() on shell.onDidAddWidget/onDidRemoveWidget/layoutModified ->
+    applyStripHome(body[data-pb-mode]) -> leftPanelHandler.container.setHidden(!ideDress || dock hidden); ideDress is
+    false for 'browsing'; mode-service.ts publishes the attribute last (publishModeAttribute(target) after the switch).
+  implication: C1 confirmed: a stale-mode re-assert hides the left container between Theia's size request and its
+    application. Orca-specific only in that Orca's containers are the side views a saved layout re-adds after Browsing
+    or Organising detached them.
+- timestamp: 2026-11-19 (round 3)
+  checked: Orca source: components/sidebar/index.tsx (MIN_WIDTH 220, MAX_WIDTH 500, handle 'group absolute -right-1.5
+    top-0 z-10 flex h-full w-3 cursor-col-resize', data-sidebar-resize-handle); components/right-sidebar/index.tsx (handle
+    'absolute top-0 left-0 w-1 h-full cursor-col-resize ... z-10'; min RIGHT_SIDEBAR_MIN_WIDTH), right-sidebar-width.ts
+    (RIGHT_SIDEBAR_MIN_WIDTH 220, side activity bar 40); hooks/useSidebarResize.ts (drag writes container.style.width
+    per frame and the store on mouseup, clamped to [min, max])
+  found: Orca's grab band for the sidebar straddles the border, 6 px each side (12 px); for the right sidebar 4 px inside.
+    Both minimums 220 px. In PB the handles' writes land on an inline width orca-side-view.css overrides.
+  implication: the minimum for each hosted part is 220 px from Orca's source; the band to make work is Orca's 12 px.
+- timestamp: 2026-11-19 (round 3)
+  checked: new clause m width in scripts/verify-orca-side-panel-live.mjs (minimums and grab bands derived from Orca's
+    source at check time: 220/220, sidebar band -6..+6 px, right sidebar 0..+4 px; '+' button label from the chrome
+    bar's source); self-test; then the live row on the UNFIXED build (HEAD 74f81f61 built) under the live lock
+  found: self-test 38 plants red naming the drift, 11 controls green. Live: "m width: FAIL -- left panel 100px after a
+    Browsing round trip, 320px before; left panel 100px after an Organising round trip, 320px before; left: a drag
+    started -5px ... changed its width by 0px, not 60px; left: ... +5px ... 0px; left panel squeezed to 100px, below
+    Orca's minimum 220px; right: ... +2px ... 0px; right: ... +3px ... 0px; instrument blind: the squeeze drag did not
+    narrow the right panel (320px -> 320px)". Clauses a-l, h, i PASS. Web tabs alone: no failure.
+    The right squeeze's 'instrument blind' was explained by probe-overlay.mjs: the right edge sat at x=959.5, the rounded
+    start point 0.5 px inside it, which is Orca's dead right handle (Theia's handle covers about 1.5 px each side); Orca's
+    drag overlay is removed on mouseup (0 left behind).
+  implication: m is red on exactly C1 (both round trips), C2 (band drags) and C3 (squeeze to 100) before any fix.
+- timestamp: 2026-11-19 (round 3)
+  checked: fix applied (chrome-bar-widget.tsx guard; orca-side-view.css inert Orca handles + Orca-mode band;
+    orca-side-panel-module.ts container min-width from Orca's minimums), chrome-bar and orca-panes tsc -b, Theia app
+    rebuilt (theia build --mode development, 0 errors); orca-side-panel-live on the fixed build
+  found: "m width: PASS -- each side kept its width through 3 web tabs and a Browsing and an Organising round trip; drags
+    from 6 points across Orca's grab bands (left -6..6px, right 0..4px from the edge) moved the panel 60px; squeezes
+    stopped at Orca's minimum (left 220px, right 220px); BiDi pointer input"; a-l, h, i PASS; 13 clauses.
+  implication: C1-C3 fixed headless; no regression in the other side-panel clauses.
+- timestamp: 2026-11-19 (round 3)
+  checked: runtime ablations on the fixed build, one at a time (scratch probe-ablate.mjs, BiDi drags)
+  found: fixed: band drags all 60, squeezes 220/220, Browsing trip 320/320. No band: left -5 and +5, right +2 and +3 move
+    0. Orca's handles live again (pointer-events auto) WITH the band: left -5 and right +1..+3 move 0 -- Orca's z-10
+    handles sit above Theia's split handle, so the inert rule is required, not defensive. No minimum: squeezes 100/100.
+    No minimum but the guard: Browsing trip keeps 320/320 (the guard alone fixes the round trip).
+  implication: each of the four rules carries its own step of clause m; none is redundant.
 
 ## Resolution
 
@@ -367,6 +518,24 @@ root_cause: |
   at the main area's top right while the panel is collapsed).
   Why the checks missed A and B: no live row looked at Theia's status bar in the Orca mode or clicked Orca's toggle;
   65-CONTEXT's "look and behave as in Orca" pass was deferred and never run.
+  Round 3 (owner 2026-11-19, "after I added a few tabs I could not drag out the right slide in orca mode"; images/5.png:
+  the left part at 100 CSS px), an AND of two defects plus a missing floor:
+  C1 (defect): chrome-bar's furniture re-assert (ChromeBarContribution.applyStripHome, run on every shell add/remove and
+  main-panel layoutModified) read the mode from body[data-pb-mode], which ModeService publishes only at the end of
+  activateMode. Returning to the Orca mode from Browsing or Organising, the saved Orca layout re-adds Orca's side
+  containers (Browsing/Organising detached them), the add ran the re-assert with the old mode, and it hid both side
+  containers mid-restore. The right one was re-shown by its own refresh; the left stayed hidden while Theia's queued
+  setSidePanelSize ran against its hidden handle (after stock refresh's setRelativeSizes([0,1,0])), so when ModeService
+  showed it Lumino gave it the side dock's 100 px minimum, and the Orca perspective saved 100. Adding web tabs is not a
+  trigger (eliminated); the owner most likely passed through Browsing or Organising while checking round 2's status bar.
+  C2 (defect): Orca's own resize handles stayed live in the hosted parts, showed the resize cursor over most of the edge
+  (the sidebar's inner 6 px, the right sidebar's inner 4 px; they sit above Theia's split handle) and wrote only Orca's
+  stored width, which orca-side-view.css overrides; Theia's handle had about 3 px. A drag started where the cursor first
+  turned into a resize cursor moved nothing.
+  C3 (missing floor): the hosted parts had only Lumino's generic 100 px dock minimum, not Orca's 220 px, so any route
+  could leave Orca's sidebar unusably narrow.
+  Why the checks missed it: no live row resized a side panel, dragged its edge, or returned to the Orca mode from
+  Browsing/Organising and read the widths; k's second Orca pass made that trip but measured only the status bar.
   Why the live checks passed: no live row read any bounding box (orca-side-panel-live clause a requires only that a
   part host has descendants; orca-pane-css-live counts computed-value changes, not geometry), and every Orca live row
   registered a repository before its first clause, so none saw the no-project state. The welcome's look had no
@@ -388,10 +557,34 @@ fix: |
   state); orca-right-sidebar-toggle.ts (host at the main area's top right, top-right tab bar padded by the host width);
   orca-side-view.css host rules; orca-side-panel-live clauses k and l; orca-pane-entry C3 list; inventory counts;
   registry note.
+  Round 3: C1 in chrome-bar-widget.tsx: the side-container lines of applyStripHome run only when the published mode is
+  the live perspective (a switch in flight is left to ModeService, whose attribute publish re-runs the re-assert).
+  C2 in orca-side-view.css: Orca's sidebar [data-sidebar-resize-handle] and the right sidebar's edge strip take no
+  pointer in hosted parts; in the Orca mode Theia's side split handles get Orca's 12 px grab band as a transparent
+  ::before (Lumino's own drag, the sash's look unchanged). C3 in orca-side-panel-module.ts: each Orca container's node
+  carries Orca's minimum (ORCA_SIDEBAR_MIN_WIDTH 220 = MIN_WIDTH, ORCA_RIGHT_SIDEBAR_MIN_WIDTH 220 =
+  RIGHT_SIDEBAR_MIN_WIDTH) as min-width, which the side dock reads while the container is current; this also lifts the
+  owner's saved 100 px to 220 on his next launch. orca-side-panel-live clause m; registry note; inventory counts
+  (Orca 3239->3281, orca 5662->5679, ORCA 1266->1270).
+  Design choice recorded (closest to the real Orca app): Orca's handles are made inert and Theia's split handle takes
+  Orca's grab band (12 px straddling the border, as the sidebar's -right-1.5 w-3 handle), rather than forwarding Orca's
+  handle drag to the Theia panel: the Theia panel is what resizes, a drag starting anywhere Orca's band would start one
+  resizes it live by the pointer distance, and no second width store (Orca's sidebarWidth) has to be kept in step with
+  the Theia panel. Orca's minimum (220) is applied; Orca's sidebar maximum (MAX_WIDTH 500) is not (Theia's panel keeps
+  its own range).
   Design choice recorded (closest to the real Orca app): the closed-state control is Orca's own RightSidebarToggle at
   the top right of the area Orca calls its workspace (Theia's main area), as AppWorkspaceShell places it, rather than a
   PowerBrowser button; PB's layout-control "Toggle Right Panel" in the menubar row stays as it was and now also keeps
   Orca's content in step.
+verification_round3:
+  target_test: { result: pass, note: "orca-side-panel-live m width: red on the unfixed build (left 100 after the Browsing and the Organising round trips; drags from -5/+5 left and +2/+3 right inside Orca's band moved 0; left squeeze to 100; right squeeze blind on Orca's dead handle), green after (13 clauses)" }
+  mutation_check: { result: pass, note: "runtime ablations on the fixed build (probe-ablate.mjs): no band -> 4 band points move 0; Orca's handles live with the band -> 4 points move 0; no minimum -> squeezes 100/100; guard without minimum -> Browsing trip keeps 320/320. No Stryker." }
+  no_op_deletion: { result: pass, deletion_justified_by_rca: n/a (a guard, two CSS rules, a min-width) }
+  adjacent_tests: { result: pass, suites_run: [orca-side-panel-live a-l h i, orca-side-panel-live-self-test, scan-brand-residue (+self-test), branding-preflight (+self-test), shell-furniture (+self-test), gui07-mode-toggle-commands (+self-test), gui07-mode-switch-tabs-invariant (+self-test), gui07-mode-switch-tabs-live (+self-test), tab-strip (+self-test), chrome-bar-typecheck, orca-pane-css (+self-test), gui06-chrome-bar-placement, page-furniture-live, ng-035-custom-mode-saves-layout, orca-pane-css-live (second run; the first timed out in its harness waiting for a hosted terminal widget, before any measurement)], pending: [tab-strip-live (refuses an uncommitted tree; run after this commit)] }
+  revert_and_reconfirm: { result: pass, bug_returned_on_revert: true, fixed_on_reapply: true, note: "the same row red on the build of 74f81f61 and green on the build with the fix, the fix the only change between the runs" }
+  pointer_path: "WebDriver BiDi input.performActions on the Theia document (hit-tested and dispatched by Gecko as trusted events in that document); not OS input: PB_REAL_INPUT/pb-kwin needs a headed window and would take the owner's pointer while his instance runs"
+  live_on_owner_machine: not run (headless 1280x768 and 2048x1252; the owner's instance pid 36562 was left running)
+  guardrail_verdict: accepted
 verification_round2:
   target_test: { result: pass, note: "orca-side-panel-live k status bar and l right toggle: red on the unfixed build (k: bar 22px and its row reserved in both Orca passes; l: close left the panel expanded, no toggle, Theia's reopen without content), green after (12 clauses)" }
   mutation_check: { result: skipped, reason_if_skipped: "no Stryker; the red run on the unfixed build fails each l step the two causes predict (bridge: close/reopen steps; host: no-toggle steps) and k on both bar conditions; self-test plants each failure mode (28 red, 8 controls green)" }
@@ -422,9 +615,18 @@ files_changed:
     orca-side-panel-sync.ts, orca-side-view-widget.tsx, orca-side-view.css
   - (round 2) scripts/verify-orca-side-panel-live.mjs, scripts/verify-orca-pane-entry.mjs, scripts/verify-platform.sh
     (registry note), inventory/brand-tokens.json
+  - (round 3) theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx
+  - (round 3) theia/extensions/orca-panes/src/browser/side-panel/orca-side-view.css, orca-side-panel-module.ts
+  - (round 3) scripts/verify-orca-side-panel-live.mjs (clause m), scripts/verify-platform.sh (registry note),
+    inventory/brand-tokens.json
 residuals:
-  - Orca's own resize handles (sidebar right edge, right sidebar left edge) stay in the DOM; a drag writes Orca's
-    stored width with no visible effect. Not changed (no section hidden, P65-13 spirit).
+  - (closed in round 3) Orca's own resize handles took the pointer over most of the edge and moved nothing; they are
+    inert in hosted parts and Theia's split handle takes Orca's band in the Orca mode. Outside the Orca mode (a custom
+    mode docking Orca's containers) the edge resizes through Theia's own ~4 px sash.
+  - Orca's sidebar maximum (MAX_WIDTH 500) is not applied to the Theia panel; Orca's right sidebar minimum with its
+    activity bar on the side would be 220 + 40 in Orca, the panel floor here is 220.
+  - Clause m's pointer is BiDi input in the Theia document, not OS input: a Gecko web-page overlay (a loaded page in the
+    main area) can cover the band's main-area half for a real pointer; the band's panel half is unaffected.
   - (closed in round 2) Orca's right sidebar "Toggle right sidebar" button now collapses the Theia right panel.
   - Orca's left-sidebar toggle (TitlebarLeftControls) is not hosted; the left panel opens and closes through PB's
     layout control and the mode. Not reported by the owner.
