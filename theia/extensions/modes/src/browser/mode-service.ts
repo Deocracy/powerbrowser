@@ -96,8 +96,14 @@ export interface ModeRules {
     left: PanelRule;
     right: PanelRule;
     bottom: PanelRule;
-    /** The IDE furniture: the status bar and both icon rails (14-UI-SPEC per-mode furniture, amended 2026-09-08). */
+    /** The IDE furniture: both side containers (their icon rows) and the IDE dress (14-UI-SPEC per-mode furniture, amended 2026-09-08). */
     furniture: boolean;
+    /**
+     * Theia's status bar. Its own rule since 2026-11-18 (debug orca-mode-fresh-profile-look, owner: "the botom has
+     * the thiea purpel bar witch should not be there"): the Orca mode keeps the furniture for its side panels but
+     * not Theia's status bar, which Orca's own app does not have.
+     */
+    statusBar: boolean;
     /** Whether the mode opens the Organising slot (the Panorama canvas). */
     organising: boolean;
     views: ModeViews;
@@ -114,10 +120,10 @@ export interface ModeRules {
  * orca-panes), and adds no activation hook (P64-18).
  */
 export const SHIPPED_MODE_RULES: Readonly<Record<string, ModeRules>> = Object.freeze({
-    coding: { left: 'open', right: 'keep', bottom: 'open', furniture: true, organising: false, views: { left: ['explorer-view-container'], right: [], bottom: [] } },
-    browsing: { left: 'closed', right: 'closed', bottom: 'closed', furniture: false, organising: false, views: { left: [], right: [], bottom: [] } },
-    organising: { left: 'closed', right: 'closed', bottom: 'closed', furniture: false, organising: true, views: { left: [], right: [], bottom: [] } },
-    orca: { left: 'open', right: 'open', bottom: 'closed', furniture: true, organising: false, views: { left: ['powerbrowser-orca-view-container'], right: ['powerbrowser-orca-right-view-container'], bottom: [] } },
+    coding: { left: 'open', right: 'keep', bottom: 'open', furniture: true, statusBar: true, organising: false, views: { left: ['explorer-view-container'], right: [], bottom: [] } },
+    browsing: { left: 'closed', right: 'closed', bottom: 'closed', furniture: false, statusBar: false, organising: false, views: { left: [], right: [], bottom: [] } },
+    organising: { left: 'closed', right: 'closed', bottom: 'closed', furniture: false, statusBar: false, organising: true, views: { left: [], right: [], bottom: [] } },
+    orca: { left: 'open', right: 'open', bottom: 'closed', furniture: true, statusBar: false, organising: false, views: { left: ['powerbrowser-orca-view-container'], right: ['powerbrowser-orca-right-view-container'], bottom: [] } },
 });
 
 export interface CustomModeSnapshot {
@@ -127,6 +133,8 @@ export interface CustomModeSnapshot {
     bottomVisible: boolean;
     /** NG-035: whether the IDE furniture shows in this mode. */
     furniture: boolean;
+    /** Whether Theia's status bar shows in this mode; a row saved before it existed reads its furniture flag. */
+    statusBar: boolean;
     /** NG-035: the views docked per side area when the mode was saved. */
     views: ModeViews;
 }
@@ -220,12 +228,14 @@ function parseModeStore(raw: string): ParsedModeStore {
         // NG-035: `furniture` and `views` are optional so a row written before
         // them still loads; a `layout` from an older build is an unknown field
         // and drops as before.
+        // `statusBar` is optional too: before 2026-11-18 the furniture flag carried the status bar as well.
         customs.push({
             name,
             leftVisible: row['leftVisible'] as boolean,
             rightVisible: row['rightVisible'] as boolean,
             bottomVisible: row['bottomVisible'] as boolean,
             furniture: row['furniture'] === true,
+            statusBar: typeof row['statusBar'] === 'boolean' ? row['statusBar'] : row['furniture'] === true,
             views: parseModeViews(row['views']) ?? legacyModeViews(row['leftVisible'] as boolean),
         });
     }
@@ -365,9 +375,11 @@ export class ModeService implements FrontendApplicationContribution {
             closeOrganisingSlot();
         }
         // 14-UI-SPEC per-mode furniture (amended 2026-09-08): a mode's
-        // `furniture` rule decides whether it keeps the icon rails and the
-        // status bar (Coding's shipped row does);
-        // Browsing is a browser and Organising is a full-screen canvas.
+        // `furniture` rule decides whether it keeps the icon rails, and its
+        // `statusBar` rule whether it keeps Theia's status bar (Coding's
+        // shipped row keeps both; Orca keeps the rails for its side panels and
+        // not the bar, 2026-11-18); Browsing is a browser and Organising is a
+        // full-screen canvas.
         //
         // Not CSS. Lumino positions both absolutely, so `display: none` hides
         // them while their space stays reserved -- measured live 2026-09-08,
@@ -388,7 +400,7 @@ export class ModeService implements FrontendApplicationContribution {
         // our URL row shares it, so hiding the menubar alone leaves the main
         // area at y=72 with 32px of dead space above it. It is solved by the
         // strip relocation, which moves the bar out of the top panel anyway.
-        this.statusBarWidget.setHidden(!rules.furniture);
+        this.statusBarWidget.setHidden(!rules.statusBar);
         // A collapsed side stays hidden: with the icons across its top there
         // is no rail to show (TopTabsSidePanelHandler).
         this.shell.leftPanelHandler.container.setHidden(!rules.furniture || this.shell.leftPanelHandler.dockPanel.isHidden);
@@ -485,14 +497,18 @@ export class ModeService implements FrontendApplicationContribution {
             void this.flash('A mode with this name already exists. Choose a different name.');
             return;
         }
+        const active = this.resolveTarget(this.safeActiveId() ?? '');
         const row: CustomModeSnapshot = {
             name,
             leftVisible: this.shell.isExpanded('left'),
             rightVisible: this.shell.isExpanded('right'),
             bottomVisible: this.shell.isExpanded('bottom'),
             // NG-035: the layout, not only the three flags -- which views sit in
-            // which side area, and whether the IDE furniture is showing.
-            furniture: !this.statusBarWidget.isHidden,
+            // which side area, and whether the IDE furniture is showing. The
+            // furniture is the current mode's rule: the status bar no longer
+            // stands for it (the Orca mode keeps the rails without the bar).
+            furniture: this.rulesFor(active).furniture,
+            statusBar: !this.statusBarWidget.isHidden,
             views: { left: this.viewsIn('left'), right: this.viewsIn('right'), bottom: this.viewsIn('bottom') },
         };
         const customs = [...this.lastGoodCustoms, row];
@@ -534,6 +550,7 @@ export class ModeService implements FrontendApplicationContribution {
                 right: custom.rightVisible ? 'open' : 'closed',
                 bottom: custom.bottomVisible ? 'open' : 'closed',
                 furniture: custom.furniture,
+                statusBar: custom.statusBar,
                 organising: false,
                 views: custom.views,
             };
