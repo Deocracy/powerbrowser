@@ -136,7 +136,8 @@
 //
 // --self-test copies the inputs and a fixture Orca source tree into a mkdtemp
 // directory, runs the same check on the copies as a green control, then plants
-// each fault, requires red naming it, undoes it and requires green again.
+// each fault, requires red naming it, undoes it and requires green again. The plants run in worker threads,
+// each on its own copy of the control tree that it first checks green, and print in plant order (D-60).
 //
 // Honestly --quick: text reads, in-process imports and git grep over the
 // fetched orca/ checkout. No build, browser, display or network.
@@ -147,9 +148,10 @@
 
 import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { availableParallelism, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-service';
@@ -1055,36 +1057,164 @@ export async function check(paths) {
     return { fails, scenarios: Object.keys(scenarios), notes, bridgeKeyComparison: bridgeKey.comparison, handOff };
 }
 
+/** The fixture source file that carries the two failure codes, in the tree at `paths`. */
+const fixtureCodesFor = (paths) => join(paths.orcaDir, 'src', 'main', 'orcad', 'fixture-codes.ts');
+
+/** Copies the inputs and the fixture source tree into `tmp`. Returns { paths, fixtureCodes }. */
+function buildSelfTestTree(tmp) {
+    const paths = pathsFor(tmp);
+    mkdirSync(join(tmp, 'powerbrowser'), { recursive: true });
+    cpSync(join(REPO_ROOT, 'powerbrowser', 'shell'), paths.shellDir, { recursive: true });
+    cpSync(join(REPO_ROOT, 'powerbrowser', 'endpoint-allowlist.json'), paths.allowlist);
+    mkdirSync(dirname(paths.asyncShutdown), { recursive: true });
+    cpSync(pathsFor(REPO_ROOT).asyncShutdown, paths.asyncShutdown);
+    // A fixture Orca source tree with a synthetic default port, so green proves the port is derived.
+    const fixtureCodes = fixtureCodesFor(paths);
+    mkdirSync(dirname(join(paths.orcaDir, WS_PORT_REL)), { recursive: true });
+    mkdirSync(dirname(fixtureCodes), { recursive: true });
+    writeFileSync(join(paths.orcaDir, WS_PORT_REL), 'export const DEFAULT_WS_PORT = 7777\n');
+    writeFileSync(fixtureCodes, "export const CODES = ['pinned_port_unavailable', 'orcad_instance_lock_held']\n");
+    const git = (...a) => execFileSync('git', ['-C', paths.orcaDir, ...a], { stdio: ['ignore', 'pipe', 'pipe'] });
+    // A fixture orca-agents backend, so the control compares the bridge folder key instead of skipping it.
+    mkdirSync(dirname(paths.orcaAgentsBackend), { recursive: true });
+    writeFileSync(paths.orcaAgentsBackend, "import { POWERBROWSER_ENV } from '@powerbrowser/token-gate/lib/node/powerbrowser-env';\nconst BRIDGE_DIR_KEY = 'POWERBROWSER_ORCA_BRIDGE_DIR';\nexport const bridgeDir = POWERBROWSER_ENV[BRIDGE_DIR_KEY] ?? '';\n");
+    // Fixture orca-panes protocol and pane build config, so the control compares clause 11 instead of skipping it.
+    mkdirSync(dirname(paths.orcaPanesProtocol), { recursive: true });
+    writeFileSync(paths.orcaPanesProtocol, "export const WEB_PAIRING_FILE = 'web-pairing';\nexport const PANES_DIR_FILE = 'orca-panes-dir';\n");
+    mkdirSync(dirname(paths.panesViteConfig), { recursive: true });
+    writeFileSync(paths.panesViteConfig, "export default { build: { outDir: resolve(process.env.PB_PANES_OUT || 'out/web/assets/pb-panes') } };\n");
+    git('init', '-q');
+    git('add', '.');
+    git('-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', 'commit', '-q', '-m', 'fixture');
+    return { paths, fixtureCodes };
+}
+
+/** The planted faults over the tree at `paths`, in their fixed order. */
+function selfTestPlants(paths, fixtureCodes) {
+    const swap = (a, b) => (text) => { if (!text.includes(a)) throw new Error(`plant target not found: ${a.slice(0, 60)}`); return text.replace(a, b); };
+    const then = (...fns) => (text) => fns.reduce((t, fn) => fn(t), text);
+    const hosts = (fn) => (text) => { const j = JSON.parse(text); j.hosts = fn(j.hosts); return JSON.stringify(j, null, 2); };
+    const orcaRow = (h) => h.host === '.onorca.dev';
+    const OBSERVER = 'this._quitObserverOff = PowerBrowserAPI.onQuitGranted(() => this.stop());';
+    return [
+        { name: 'jar.mn line removed', naming: 'jar.mn', file: paths.jarMn, edit: (t) => swap('   content/powerbrowser/OrcaService.sys.mjs     (OrcaService.sys.mjs)\n', '')(t) },
+        { name: 'port guard removed', naming: 'port 0', file: paths.orcaEnv, edit: swap('port < PORT_MIN || ', '') },
+        { name: 'bind host 0.0.0.0', naming: 'loopback', file: paths.orcaEnv, edit: swap('ORCAD_BIND_HOST = "127.0.0.1"', 'ORCAD_BIND_HOST = "0.0.0.0"') },
+        { name: 'port default 40000', naming: '1024..32767', file: paths.prefs, edit: swap('pref("powerbrowser.orca.port", 26768);', 'pref("powerbrowser.orca.port", 40000);') },
+        { name: 'OrcaService port fallback drifted from the prefs default', naming: 'fallback 26769 is not the powerbrowser-sidecar.js default 26768', file: paths.orcaService, edit: swap('getIntPref("powerbrowser.orca.port", 26768)', 'getIntPref("powerbrowser.orca.port", 26769)') },
+        { name: 'port default 7777 (the fixture Orca default)', naming: "Orca's own default", file: paths.prefs, edit: swap('pref("powerbrowser.orca.port", 26768);', 'pref("powerbrowser.orca.port", 7777);') },
+        { name: '.onorca.dev row removed', naming: 'no .onorca.dev row', file: paths.allowlist, edit: hosts((h) => h.filter((x) => !orcaRow(x))) },
+        { name: '.onorca.dev disposition allow', naming: 'not user-initiated', file: paths.allowlist, edit: hosts((h) => h.map((x) => (orcaRow(x) ? { ...x, disposition: 'allow' } : x))) },
+        { name: 'extra api.onorca.dev row', naming: 'api.onorca.dev', file: paths.allowlist, edit: hosts((h) => [...h, { host: 'api.onorca.dev', disposition: 'user-initiated', reason: 'plant' }]) },
+        { name: 'socket budget 200', naming: 'socket path', file: paths.orcaEnv, edit: swap('ORCAD_SOCKET_ROOT_BUDGET = 84', 'ORCAD_SOCKET_ROOT_BUDGET = 200') },
+        { name: 'sink logs stdout', naming: 'pairing', file: paths.orcaEnv, edit: swap('      buffer += String(chunk);\n', '      buffer += String(chunk);\n      pushLog(String(chunk));\n') },
+        { name: 'user-message table in OrcaService', naming: 'user-facing copy (P62-13)', file: paths.orcaService, edit: (t) => `${t}\nconst USER_MESSAGE = { orcaFailed: "PowerBrowser couldn't start Orca. Choose Retry." };\n` },
+        { name: 'start statement loses its .catch(', naming: 'powerbrowser.js', file: paths.shellJs, edit: swap('.finally(() => OrcaService.start().catch(err => OrcaService.reportUnexpectedFailure(err)))', '.finally(() => OrcaService.start())') },
+        { name: 'quit observer registered after the spawn', naming: 'quit observer', file: paths.orcaService, edit: then(swap(OBSERVER, 'void 0;'), swap('    this._proc = proc;\n', `    this._proc = proc;\n    ${OBSERVER}\n`)) },
+        { name: 'reap signals on a ticks mismatch', naming: 'recycled pid', file: paths.orcaService, edit: swap('observed === null || String(observed) !== String(ticks)', 'false') },
+        { name: 'stop skips the daemon', naming: 'terminal daemon', file: paths.orcaService, edit: swap('    await this._endDaemon(this._daemonPid, this._daemonTicks, tree.filter(row => row.pid !== orcadPid));\n', '') },
+        { name: 'reap blocker on an AsyncShutdown phase upstream does not define', naming: 'never registered', file: paths.api, edit: swap('AsyncShutdown.appShutdownConfirmed.addBlocker(name, fn);', 'AsyncShutdown.quitApplicationGranted.addBlocker(name, fn);') },
+        { name: 'stop overrun leaves the daemon', naming: 'outlives the browser', file: paths.orcaService, edit: swap('        await this._killSnapshot(this._stopRows, null);\n', '') },
+        { name: 'environment name literal in OrcaService', naming: 'outside OrcaEnv', file: paths.orcaService, edit: (t) => `${t}\nconst HOME_NAME = "HOME";\n` },
+        { name: 'NODE_OPTIONS in the allowlist', naming: 'steering variable', file: paths.orcaEnv, edit: swap('  "PATH",\n  "HOME",', '  "PATH",\n  "NODE_OPTIONS",\n  "HOME",') },
+        { name: 'switch removed from the fixed names', naming: 'ORCA_DISABLE_INSTALLED_ELECTRON_BROWSER', file: paths.orcaEnv, edit: swap('  ORCAD_HIDDEN_ELECTRON_SWITCH,\n  ORCAD_CLAUDE_AGENT_SDK_DIR_ENV,\n]);', '  ORCAD_CLAUDE_AGENT_SDK_DIR_ENV,\n]);') },
+        { name: 'orcad-data-root written before ready', naming: 'before ready', file: paths.orcaService, edit: swap('    let proc;\n', '    await PowerBrowserProcesses.writePrivateFile(this._bridgeDir, OrcaEnv.ORCAD_DATA_ROOT_FILE, `${this._effectiveRoot}\\n`);\n    let proc;\n') },
+        { name: 'orcad-data-root not removed on stop', naming: 'not removed', file: paths.orcaService, edit: swap('[OrcaEnv.ORCAD_DATA_ROOT_FILE, OrcaEnv.ORCA_WEB_PAIRING_FILE', '[OrcaEnv.ORCA_WEB_PAIRING_FILE') },
+        { name: 'bridge files removed after orcad is signalled', naming: 'orcad-data-root at stop call', file: paths.orcaService, edit: then(swap('[OrcaEnv.ORCAD_DATA_ROOT_FILE, OrcaEnv.ORCA_WEB_PAIRING_FILE', '[OrcaEnv.ORCA_WEB_PAIRING_FILE'), swap('    this._state = "stopped";\n    this._pid = null;', '    if (this._bridgeDir) {\n      try {\n        await PowerBrowserAPI.removeStateFile(OrcaEnv.bridgeFileFor(this._bridgeDir, OrcaEnv.ORCAD_DATA_ROOT_FILE, this._bridgePlatform));\n      } catch {\n        // Best-effort.\n      }\n    }\n    this._state = "stopped";\n    this._pid = null;')) },
+        { name: 'a null bridge folder fails the start', naming: 'null folder fatal', file: paths.orcaService, edit: swap('    if (!this._bridgeDir) {\n', '    if (!this._bridgeDir) {\n      return this._fail("choosing the Orca bridge folder", []);\n') },
+        { name: 'a PTY switch back in the fixed names', naming: 'pty switch', file: paths.orcaEnv, edit: swap('  ORCAD_CLAUDE_AGENT_SDK_DIR_ENV,\n]);', '  ORCAD_CLAUDE_AGENT_SDK_DIR_ENV,\n  "ORCA_EXTERNAL_PTY_ENDPOINT",\n]);') },
+        { name: 'a ptyEndpoint option back in buildOrcadEnv', naming: 'pty switch', file: paths.orcaEnv, edit: swap('export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion, claudeAgentSdkDir } = {}) {', 'export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion, claudeAgentSdkDir, ptyEndpoint } = {}) {') },
+        { name: 'orca-agents backend reads a different key', naming: 'POWERBROWSER_ORCA_BRIDGE_DIR', file: paths.orcaAgentsBackend, edit: swap("'POWERBROWSER_ORCA_BRIDGE_DIR'", "'POWERBROWSER_ORCA_BRIDGE_FOLDER'") },
+        { name: 'orca-agents backend module deleted while the extension exists (red, not SKIP)', naming: 'orca-agents-backend-module.ts is missing', file: paths.orcaAgentsBackend, edit: () => null },
+        { name: 'TheiaService builds the folder without bridgeDirFor', naming: 'OrcaEnv.bridgeDirFor', file: paths.theiaService, edit: swap('return await OrcaEnv.bridgeDirFor(dataRoot, name => PowerBrowserAPI.getEnv(name), OrcaEnv.nodePlatform(PowerBrowserProcesses.platform()));', 'return `${PowerBrowserAPI.getEnv("HOME")}/.cache/pb-orca-bridge`;') },
+        { name: 'offer copied to pushLog', naming: 'offer in log', file: paths.orcaService, edit: swap('  async _writeHandOff(offer) {\n', '  async _writeHandOff(offer) {\n    this._pushLog(`offer ${offer}`);\n') },
+        { name: 'offer written before ready', naming: 'offer before ready', file: paths.orcaService, edit: swap('    let proc;\n', '    await PowerBrowserProcesses.writePrivateFile(this._bridgeDir, OrcaEnv.ORCA_WEB_PAIRING_FILE, "stale\\n");\n    let proc;\n') },
+        { name: 'offer placed in getState', naming: 'offer in state', file: paths.orcaService, edit: then(swap('        offer = value;\n', '        offer = value;\n        this._lastOffer = value;\n'), swap('      bridgeDir: this._bridgeDir,\n', '      bridgeDir: this._bridgeDir,\n      lastOffer: this._lastOffer,\n')) },
+        { name: 'orca-panes-dir written with the bundle folder absent', naming: 'bundle folder absent', file: paths.orcaService, edit: swap('    if (!(await PowerBrowserAPI.pathExists(panesDir))) {', '    if (false) {') },
+        { name: 'hand-off files not removed on stop', naming: 'not removed', file: paths.orcaService, edit: swap('[OrcaEnv.ORCAD_DATA_ROOT_FILE, OrcaEnv.ORCA_WEB_PAIRING_FILE, OrcaEnv.ORCA_PANES_DIR_FILE] : []', '[] : []') },
+        { name: 'orca-panes protocol spells another pairing file', naming: 'chrome writes a file the Theia backend never reads', file: paths.orcaPanesProtocol, edit: swap("WEB_PAIRING_FILE = 'web-pairing'", "WEB_PAIRING_FILE = 'pairing-offer'") },
+        { name: 'pane build writes another folder', naming: 'OrcaService looks in', file: paths.panesViteConfig, edit: swap("'out/web/assets/pb-panes'", "'out/web/pb-panes'") },
+        { name: 'orcaStatusReply returns a third key', naming: 'reply carries more than the class', file: paths.orcaEnv, edit: swap('  return { state: state.state, failureClass: state.failureClass };', '  return { state: state.state, failureClass: state.failureClass, port: state.port };') },
+        { name: 'the orcaStatus arm spreads getState() itself', naming: 'spreads getState', file: paths.api, edit: swap('...OrcaEnv.orcaStatusReply(OrcaService.getState()) };', '...OrcaEnv.orcaStatusReply(OrcaService.getState()), ...OrcaService.getState() };') },
+        { name: 'browserHostAttached() clears any client reason', naming: 'pairing-lost reason cleared', file: paths.orcaService, edit: swap('    if (this._clientReason !== OrcaEnv.ORCA_BROWSER_HOST_REASON) {\n      return false;\n    }\n    this._clientReason = null;\n    this._pushLog("Orca browser host attached.");', '    this._clientReason = null;\n    this._pushLog("Orca browser host attached.");') },
+        { name: 'restart() acts in ready', naming: 'restart outside failed', file: paths.orcaService, edit: swap('    if (this._state !== "failed" || this._shuttingDown) {', '    if (this._shuttingDown) {') },
+        { name: 'the preflight moved after the spawn', naming: 'refusal after spawn', file: paths.orcaService, edit: then(swap('    if (!(await this._preflight())) {\n      return;\n    }\n    await this._reapLeftover({ includeDaemon: true });\n    await this._launch();\n', '    await this._reapLeftover({ includeDaemon: true });\n    await this._launch();\n    await this._preflight();\n')) },
+        { name: "the effective root's realPath skipped", naming: 'alias not resolved', file: paths.orcaService, edit: swap('[this._dataRoot, this._effectiveRoot].flatMap(path => [path, real(path)])', '[this._dataRoot, real(this._dataRoot), this._effectiveRoot]') },
+        { name: 'lock code absent from the fixture source', naming: 'pinned source', file: fixtureCodes, edit: swap('orcad_instance_lock_held', 'orcad_lock_renamed') },
+    ];
+}
+
+/**
+ * Plants each fault of `indexes` in the tree at `paths`, requires red naming it, undoes it and requires green
+ * again (a real check() each time, never a cached one). Resolves one record per plant run: its output lines, in
+ * order, whether it failed, and the clean-up failure that ends the run (the tree is then dirty, so no later
+ * plant runs on it).
+ */
+async function runPlants(paths, plants, indexes) {
+    const records = [];
+    for (const index of indexes) {
+        const p = plants[index];
+        const lines = [];
+        const out = (text) => lines.push(['out', text]);
+        const err = (text) => lines.push(['err', text]);
+        let failed = false;
+        const original = readFileSync(p.file, 'utf8');
+        try {
+            const edited = p.edit(original);
+            if (edited === null) rmSync(p.file); else writeFileSync(p.file, edited);
+            const r = await check(paths);
+            const text = r.fails.join('\n');
+            if (!r.fails.length) { err(`  FAIL ${p.name} -> stayed green`); failed = true; }
+            else if (!text.includes(p.naming)) { err(`  FAIL ${p.name} -> red, but not naming '${p.naming}': ${text}`); failed = true; }
+            else out(`  ok ${p.name} -> red, naming '${p.naming}'`);
+        } catch (err2) {
+            err(`  FAIL ${p.name} -> ${err2.message}`); failed = true;
+        } finally {
+            writeFileSync(p.file, original);
+        }
+        const after = await check(paths);
+        if (after.fails.length) {
+            records.push({ index, lines, failed, cleanup: `${NAME} self-test: FAIL -- plant '${p.name}' did not clean up: ${after.fails.join(' | ')}` });
+            break;
+        }
+        records.push({ index, lines, failed, cleanup: null });
+    }
+    return records;
+}
+
+const SELF_TEST_WORKER = `${NAME} self-test worker`;
+
+/**
+ * D-60: one self-test worker. It copies the control tree into its own mkdtemp directory, runs the control on
+ * that copy (it must be green, as the control was), then runs its share of the plants there. Each worker is a
+ * worker thread, so the service module's ChromeUtils binding and the scenario timers stay per worker.
+ */
+async function selfTestWorker({ tree, indexes }) {
+    const tmp = mkdtempSync(join(tmpdir(), `${NAME}-worker-`));
+    try {
+        cpSync(tree, tmp, { recursive: true });
+        const paths = pathsFor(tmp);
+        const control = await check(paths);
+        if (control.fails.length || control.notes.length) return { controlRed: [...control.fails, ...control.notes] };
+        return { records: await runPlants(paths, selfTestPlants(paths, fixtureCodesFor(paths)), indexes) };
+    } finally {
+        rmSync(tmp, { recursive: true, force: true });
+    }
+}
+
 // ---------------------------------------------------------------------------
 // --self-test
 
+/**
+ * D-60: each check() spends about 2 s of wall time idle in scenario M (the stub's fake quit budget must lose
+ * its race), and the self-test runs 1 + 2 x plants of them. The plants are therefore spread round-robin over
+ * worker threads, each on its own byte-identical copy of the control tree; every plant still runs its planted
+ * check and its clean-up check for real. The output is printed in plant order, exactly as a serial run prints it.
+ */
 async function runSelfTest() {
     const tmp = mkdtempSync(join(tmpdir(), `${NAME}-`));
     try {
-        const paths = pathsFor(tmp);
-        mkdirSync(join(tmp, 'powerbrowser'), { recursive: true });
-        cpSync(join(REPO_ROOT, 'powerbrowser', 'shell'), paths.shellDir, { recursive: true });
-        cpSync(join(REPO_ROOT, 'powerbrowser', 'endpoint-allowlist.json'), paths.allowlist);
-        mkdirSync(dirname(paths.asyncShutdown), { recursive: true });
-        cpSync(pathsFor(REPO_ROOT).asyncShutdown, paths.asyncShutdown);
-        // A fixture Orca source tree with a synthetic default port, so green proves the port is derived.
-        const fixtureCodes = join(paths.orcaDir, 'src', 'main', 'orcad', 'fixture-codes.ts');
-        mkdirSync(dirname(join(paths.orcaDir, WS_PORT_REL)), { recursive: true });
-        mkdirSync(dirname(fixtureCodes), { recursive: true });
-        writeFileSync(join(paths.orcaDir, WS_PORT_REL), 'export const DEFAULT_WS_PORT = 7777\n');
-        writeFileSync(fixtureCodes, "export const CODES = ['pinned_port_unavailable', 'orcad_instance_lock_held']\n");
-        const git = (...a) => execFileSync('git', ['-C', paths.orcaDir, ...a], { stdio: ['ignore', 'pipe', 'pipe'] });
-        // A fixture orca-agents backend, so the control compares the bridge folder key instead of skipping it.
-        mkdirSync(dirname(paths.orcaAgentsBackend), { recursive: true });
-        writeFileSync(paths.orcaAgentsBackend, "import { POWERBROWSER_ENV } from '@powerbrowser/token-gate/lib/node/powerbrowser-env';\nconst BRIDGE_DIR_KEY = 'POWERBROWSER_ORCA_BRIDGE_DIR';\nexport const bridgeDir = POWERBROWSER_ENV[BRIDGE_DIR_KEY] ?? '';\n");
-        // Fixture orca-panes protocol and pane build config, so the control compares clause 11 instead of skipping it.
-        mkdirSync(dirname(paths.orcaPanesProtocol), { recursive: true });
-        writeFileSync(paths.orcaPanesProtocol, "export const WEB_PAIRING_FILE = 'web-pairing';\nexport const PANES_DIR_FILE = 'orca-panes-dir';\n");
-        mkdirSync(dirname(paths.panesViteConfig), { recursive: true });
-        writeFileSync(paths.panesViteConfig, "export default { build: { outDir: resolve(process.env.PB_PANES_OUT || 'out/web/assets/pb-panes') } };\n");
-        git('init', '-q');
-        git('add', '.');
-        git('-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', 'commit', '-q', '-m', 'fixture');
+        const { paths, fixtureCodes } = buildSelfTestTree(tmp);
 
         const control = await check(paths);
         if (control.fails.length || control.notes.length) {
@@ -1093,76 +1223,30 @@ async function runSelfTest() {
         }
         console.log(`${NAME} self-test: control green on copies (scenarios ${control.scenarios.join(', ')}, fixture Orca default port 7777)`);
 
-        const swap = (a, b) => (text) => { if (!text.includes(a)) throw new Error(`plant target not found: ${a.slice(0, 60)}`); return text.replace(a, b); };
-        const then = (...fns) => (text) => fns.reduce((t, fn) => fn(t), text);
-        const hosts = (fn) => (text) => { const j = JSON.parse(text); j.hosts = fn(j.hosts); return JSON.stringify(j, null, 2); };
-        const orcaRow = (h) => h.host === '.onorca.dev';
-        const OBSERVER = 'this._quitObserverOff = PowerBrowserAPI.onQuitGranted(() => this.stop());';
-        const plants = [
-            { name: 'jar.mn line removed', naming: 'jar.mn', file: paths.jarMn, edit: (t) => swap('   content/powerbrowser/OrcaService.sys.mjs     (OrcaService.sys.mjs)\n', '')(t) },
-            { name: 'port guard removed', naming: 'port 0', file: paths.orcaEnv, edit: swap('port < PORT_MIN || ', '') },
-            { name: 'bind host 0.0.0.0', naming: 'loopback', file: paths.orcaEnv, edit: swap('ORCAD_BIND_HOST = "127.0.0.1"', 'ORCAD_BIND_HOST = "0.0.0.0"') },
-            { name: 'port default 40000', naming: '1024..32767', file: paths.prefs, edit: swap('pref("powerbrowser.orca.port", 26768);', 'pref("powerbrowser.orca.port", 40000);') },
-            { name: 'OrcaService port fallback drifted from the prefs default', naming: 'fallback 26769 is not the powerbrowser-sidecar.js default 26768', file: paths.orcaService, edit: swap('getIntPref("powerbrowser.orca.port", 26768)', 'getIntPref("powerbrowser.orca.port", 26769)') },
-            { name: 'port default 7777 (the fixture Orca default)', naming: "Orca's own default", file: paths.prefs, edit: swap('pref("powerbrowser.orca.port", 26768);', 'pref("powerbrowser.orca.port", 7777);') },
-            { name: '.onorca.dev row removed', naming: 'no .onorca.dev row', file: paths.allowlist, edit: hosts((h) => h.filter((x) => !orcaRow(x))) },
-            { name: '.onorca.dev disposition allow', naming: 'not user-initiated', file: paths.allowlist, edit: hosts((h) => h.map((x) => (orcaRow(x) ? { ...x, disposition: 'allow' } : x))) },
-            { name: 'extra api.onorca.dev row', naming: 'api.onorca.dev', file: paths.allowlist, edit: hosts((h) => [...h, { host: 'api.onorca.dev', disposition: 'user-initiated', reason: 'plant' }]) },
-            { name: 'socket budget 200', naming: 'socket path', file: paths.orcaEnv, edit: swap('ORCAD_SOCKET_ROOT_BUDGET = 84', 'ORCAD_SOCKET_ROOT_BUDGET = 200') },
-            { name: 'sink logs stdout', naming: 'pairing', file: paths.orcaEnv, edit: swap('      buffer += String(chunk);\n', '      buffer += String(chunk);\n      pushLog(String(chunk));\n') },
-            { name: 'user-message table in OrcaService', naming: 'user-facing copy (P62-13)', file: paths.orcaService, edit: (t) => `${t}\nconst USER_MESSAGE = { orcaFailed: "PowerBrowser couldn't start Orca. Choose Retry." };\n` },
-            { name: 'start statement loses its .catch(', naming: 'powerbrowser.js', file: paths.shellJs, edit: swap('.finally(() => OrcaService.start().catch(err => OrcaService.reportUnexpectedFailure(err)))', '.finally(() => OrcaService.start())') },
-            { name: 'quit observer registered after the spawn', naming: 'quit observer', file: paths.orcaService, edit: then(swap(OBSERVER, 'void 0;'), swap('    this._proc = proc;\n', `    this._proc = proc;\n    ${OBSERVER}\n`)) },
-            { name: 'reap signals on a ticks mismatch', naming: 'recycled pid', file: paths.orcaService, edit: swap('observed === null || String(observed) !== String(ticks)', 'false') },
-            { name: 'stop skips the daemon', naming: 'terminal daemon', file: paths.orcaService, edit: swap('    await this._endDaemon(this._daemonPid, this._daemonTicks, tree.filter(row => row.pid !== orcadPid));\n', '') },
-            { name: 'reap blocker on an AsyncShutdown phase upstream does not define', naming: 'never registered', file: paths.api, edit: swap('AsyncShutdown.appShutdownConfirmed.addBlocker(name, fn);', 'AsyncShutdown.quitApplicationGranted.addBlocker(name, fn);') },
-            { name: 'stop overrun leaves the daemon', naming: 'outlives the browser', file: paths.orcaService, edit: swap('        await this._killSnapshot(this._stopRows, null);\n', '') },
-            { name: 'environment name literal in OrcaService', naming: 'outside OrcaEnv', file: paths.orcaService, edit: (t) => `${t}\nconst HOME_NAME = "HOME";\n` },
-            { name: 'NODE_OPTIONS in the allowlist', naming: 'steering variable', file: paths.orcaEnv, edit: swap('  "PATH",\n  "HOME",', '  "PATH",\n  "NODE_OPTIONS",\n  "HOME",') },
-            { name: 'switch removed from the fixed names', naming: 'ORCA_DISABLE_INSTALLED_ELECTRON_BROWSER', file: paths.orcaEnv, edit: swap('  ORCAD_HIDDEN_ELECTRON_SWITCH,\n  ORCAD_CLAUDE_AGENT_SDK_DIR_ENV,\n]);', '  ORCAD_CLAUDE_AGENT_SDK_DIR_ENV,\n]);') },
-            { name: 'orcad-data-root written before ready', naming: 'before ready', file: paths.orcaService, edit: swap('    let proc;\n', '    await PowerBrowserProcesses.writePrivateFile(this._bridgeDir, OrcaEnv.ORCAD_DATA_ROOT_FILE, `${this._effectiveRoot}\\n`);\n    let proc;\n') },
-            { name: 'orcad-data-root not removed on stop', naming: 'not removed', file: paths.orcaService, edit: swap('[OrcaEnv.ORCAD_DATA_ROOT_FILE, OrcaEnv.ORCA_WEB_PAIRING_FILE', '[OrcaEnv.ORCA_WEB_PAIRING_FILE') },
-            { name: 'bridge files removed after orcad is signalled', naming: 'orcad-data-root at stop call', file: paths.orcaService, edit: then(swap('[OrcaEnv.ORCAD_DATA_ROOT_FILE, OrcaEnv.ORCA_WEB_PAIRING_FILE', '[OrcaEnv.ORCA_WEB_PAIRING_FILE'), swap('    this._state = "stopped";\n    this._pid = null;', '    if (this._bridgeDir) {\n      try {\n        await PowerBrowserAPI.removeStateFile(OrcaEnv.bridgeFileFor(this._bridgeDir, OrcaEnv.ORCAD_DATA_ROOT_FILE, this._bridgePlatform));\n      } catch {\n        // Best-effort.\n      }\n    }\n    this._state = "stopped";\n    this._pid = null;')) },
-            { name: 'a null bridge folder fails the start', naming: 'null folder fatal', file: paths.orcaService, edit: swap('    if (!this._bridgeDir) {\n', '    if (!this._bridgeDir) {\n      return this._fail("choosing the Orca bridge folder", []);\n') },
-            { name: 'a PTY switch back in the fixed names', naming: 'pty switch', file: paths.orcaEnv, edit: swap('  ORCAD_CLAUDE_AGENT_SDK_DIR_ENV,\n]);', '  ORCAD_CLAUDE_AGENT_SDK_DIR_ENV,\n  "ORCA_EXTERNAL_PTY_ENDPOINT",\n]);') },
-            { name: 'a ptyEndpoint option back in buildOrcadEnv', naming: 'pty switch', file: paths.orcaEnv, edit: swap('export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion, claudeAgentSdkDir } = {}) {', 'export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion, claudeAgentSdkDir, ptyEndpoint } = {}) {') },
-            { name: 'orca-agents backend reads a different key', naming: 'POWERBROWSER_ORCA_BRIDGE_DIR', file: paths.orcaAgentsBackend, edit: swap("'POWERBROWSER_ORCA_BRIDGE_DIR'", "'POWERBROWSER_ORCA_BRIDGE_FOLDER'") },
-            { name: 'orca-agents backend module deleted while the extension exists (red, not SKIP)', naming: 'orca-agents-backend-module.ts is missing', file: paths.orcaAgentsBackend, edit: () => null },
-            { name: 'TheiaService builds the folder without bridgeDirFor', naming: 'OrcaEnv.bridgeDirFor', file: paths.theiaService, edit: swap('return await OrcaEnv.bridgeDirFor(dataRoot, name => PowerBrowserAPI.getEnv(name), OrcaEnv.nodePlatform(PowerBrowserProcesses.platform()));', 'return `${PowerBrowserAPI.getEnv("HOME")}/.cache/pb-orca-bridge`;') },
-            { name: 'offer copied to pushLog', naming: 'offer in log', file: paths.orcaService, edit: swap('  async _writeHandOff(offer) {\n', '  async _writeHandOff(offer) {\n    this._pushLog(`offer ${offer}`);\n') },
-            { name: 'offer written before ready', naming: 'offer before ready', file: paths.orcaService, edit: swap('    let proc;\n', '    await PowerBrowserProcesses.writePrivateFile(this._bridgeDir, OrcaEnv.ORCA_WEB_PAIRING_FILE, "stale\\n");\n    let proc;\n') },
-            { name: 'offer placed in getState', naming: 'offer in state', file: paths.orcaService, edit: then(swap('        offer = value;\n', '        offer = value;\n        this._lastOffer = value;\n'), swap('      bridgeDir: this._bridgeDir,\n', '      bridgeDir: this._bridgeDir,\n      lastOffer: this._lastOffer,\n')) },
-            { name: 'orca-panes-dir written with the bundle folder absent', naming: 'bundle folder absent', file: paths.orcaService, edit: swap('    if (!(await PowerBrowserAPI.pathExists(panesDir))) {', '    if (false) {') },
-            { name: 'hand-off files not removed on stop', naming: 'not removed', file: paths.orcaService, edit: swap('[OrcaEnv.ORCAD_DATA_ROOT_FILE, OrcaEnv.ORCA_WEB_PAIRING_FILE, OrcaEnv.ORCA_PANES_DIR_FILE] : []', '[] : []') },
-            { name: 'orca-panes protocol spells another pairing file', naming: 'chrome writes a file the Theia backend never reads', file: paths.orcaPanesProtocol, edit: swap("WEB_PAIRING_FILE = 'web-pairing'", "WEB_PAIRING_FILE = 'pairing-offer'") },
-            { name: 'pane build writes another folder', naming: 'OrcaService looks in', file: paths.panesViteConfig, edit: swap("'out/web/assets/pb-panes'", "'out/web/pb-panes'") },
-            { name: 'orcaStatusReply returns a third key', naming: 'reply carries more than the class', file: paths.orcaEnv, edit: swap('  return { state: state.state, failureClass: state.failureClass };', '  return { state: state.state, failureClass: state.failureClass, port: state.port };') },
-            { name: 'the orcaStatus arm spreads getState() itself', naming: 'spreads getState', file: paths.api, edit: swap('...OrcaEnv.orcaStatusReply(OrcaService.getState()) };', '...OrcaEnv.orcaStatusReply(OrcaService.getState()), ...OrcaService.getState() };') },
-            { name: 'browserHostAttached() clears any client reason', naming: 'pairing-lost reason cleared', file: paths.orcaService, edit: swap('    if (this._clientReason !== OrcaEnv.ORCA_BROWSER_HOST_REASON) {\n      return false;\n    }\n    this._clientReason = null;\n    this._pushLog("Orca browser host attached.");', '    this._clientReason = null;\n    this._pushLog("Orca browser host attached.");') },
-            { name: 'restart() acts in ready', naming: 'restart outside failed', file: paths.orcaService, edit: swap('    if (this._state !== "failed" || this._shuttingDown) {', '    if (this._shuttingDown) {') },
-            { name: 'the preflight moved after the spawn', naming: 'refusal after spawn', file: paths.orcaService, edit: then(swap('    if (!(await this._preflight())) {\n      return;\n    }\n    await this._reapLeftover({ includeDaemon: true });\n    await this._launch();\n', '    await this._reapLeftover({ includeDaemon: true });\n    await this._launch();\n    await this._preflight();\n')) },
-            { name: "the effective root's realPath skipped", naming: 'alias not resolved', file: paths.orcaService, edit: swap('[this._dataRoot, this._effectiveRoot].flatMap(path => [path, real(path)])', '[this._dataRoot, real(this._dataRoot), this._effectiveRoot]') },
-            { name: 'lock code absent from the fixture source', naming: 'pinned source', file: fixtureCodes, edit: swap('orcad_instance_lock_held', 'orcad_lock_renamed') },
-        ];
+        const plants = selfTestPlants(paths, fixtureCodes);
+        const workerCount = Math.max(1, Math.min(plants.length, 12, availableParallelism()));
+        const shares = Array.from({ length: workerCount }, (_, w) => plants.map((_, i) => i).filter((i) => i % workerCount === w));
+        const results = await Promise.all(shares.map((indexes) => new Promise((resolveWorker, rejectWorker) => {
+            const worker = new Worker(new URL(import.meta.url), { workerData: { [SELF_TEST_WORKER]: true, tree: tmp, indexes } });
+            // Resolved on the result, not on exit: a scenario M timer may keep the worker alive a few seconds more.
+            worker.once('message', resolveWorker);
+            worker.once('error', rejectWorker);
+            worker.once('exit', (code) => rejectWorker(new Error(`a self-test worker exited with code ${code} and no result`)));
+        })));
+        const controlRed = results.find((r) => r.controlRed);
+        if (controlRed) {
+            console.error(`${NAME} self-test: FAIL -- the unmodified copies are not green: ${controlRed.controlRed.join(' | ')}`);
+            return 1;
+        }
+        const byIndex = new Map(results.flatMap((r) => r.records).map((record) => [record.index, record]));
 
         let failures = 0;
-        for (const p of plants) {
-            const original = readFileSync(p.file, 'utf8');
-            try {
-                const edited = p.edit(original);
-                if (edited === null) rmSync(p.file); else writeFileSync(p.file, edited);
-                const r = await check(paths);
-                const text = r.fails.join('\n');
-                if (!r.fails.length) { console.error(`  FAIL ${p.name} -> stayed green`); failures++; }
-                else if (!text.includes(p.naming)) { console.error(`  FAIL ${p.name} -> red, but not naming '${p.naming}': ${text}`); failures++; }
-                else console.log(`  ok ${p.name} -> red, naming '${p.naming}'`);
-            } catch (err) {
-                console.error(`  FAIL ${p.name} -> ${err.message}`); failures++;
-            } finally {
-                writeFileSync(p.file, original);
-            }
-            const after = await check(paths);
-            if (after.fails.length) { console.error(`${NAME} self-test: FAIL -- plant '${p.name}' did not clean up: ${after.fails.join(' | ')}`); return 1; }
+        for (const [index, p] of plants.entries()) {
+            const record = byIndex.get(index);
+            if (!record) { console.error(`${NAME} self-test: FAIL -- plant '${p.name}' never ran`); return 1; }
+            for (const [stream, text] of record.lines) (stream === 'out' ? console.log : console.error)(text);
+            if (record.failed) failures++;
+            if (record.cleanup) { console.error(record.cleanup); return 1; }
         }
         if (failures) {
             console.error(`${NAME} self-test: FAIL -- ${failures} of ${plants.length} plant(s) did not go red naming the drift`);
@@ -1178,7 +1262,9 @@ async function runSelfTest() {
 const isEntryPoint = (() => {
     try { return realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; }
 })();
-if (isEntryPoint) {
+if (!isMainThread && workerData?.[SELF_TEST_WORKER]) {
+    parentPort.postMessage(await selfTestWorker(workerData));
+} else if (isEntryPoint && isMainThread) {
     const args = process.argv.slice(2);
     const unknown = args.find((a) => a !== '--self-test');
     if (unknown !== undefined) {
