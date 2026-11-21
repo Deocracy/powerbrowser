@@ -976,7 +976,7 @@
       "case_form": "title",
       "class": "coincidental",
       "target": "Orca",
-      "expected_count": 3806,
+      "expected_count": 3845,
       "expected_files": [
         ".claude/hooks/ledger-session-check.py",
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
@@ -1130,6 +1130,7 @@
         "scripts/verify-release-shape.mjs",
         "scripts/verify-shell-error-contract.mjs",
         "scripts/verify-shell-error-copy.mjs",
+        "scripts/verify-shell-request-kinds.mjs",
         "scripts/verify-sidecar-origin-gate-live.mjs",
         "scripts/verify-sidecar-origin-gate.mjs",
         "scripts/verify-tab-strip-live.mjs",
@@ -1332,6 +1333,7 @@
         "scripts/verify-release-shape.mjs",
         "scripts/verify-shell-error-contract.mjs",
         "scripts/verify-shell-error-copy.mjs",
+        "scripts/verify-shell-request-kinds.mjs",
         "scripts/verify-sidecar-origin-gate-live.mjs",
         "scripts/verify-sidecar-origin-gate.mjs",
         "scripts/verify-tab-strip-live.mjs",
@@ -1388,7 +1390,7 @@
       "case_form": "lower",
       "class": "coincidental",
       "target": "orca",
-      "expected_count": 6509,
+      "expected_count": 6601,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md",
@@ -1820,7 +1822,7 @@
       "case_form": "upper",
       "class": "coincidental",
       "target": "ORCA",
-      "expected_count": 1468,
+      "expected_count": 1489,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
@@ -2108,7 +2110,7 @@
       "case_form": "lower",
       "class": "coincidental",
       "target": "orcad",
-      "expected_count": 2449,
+      "expected_count": 2545,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md",
@@ -2372,7 +2374,7 @@
       "case_form": "upper",
       "class": "coincidental",
       "target": "ORCAD",
-      "expected_count": 255,
+      "expected_count": 263,
       "expected_files": [
         "docs/BUILD.md",
         "orca-overlay/patches/080-orcad-external-claude-agent-sdk.patch",
@@ -2446,7 +2448,7 @@
       "case_form": "literal",
       "class": "coincidental",
       "target": "Orcad",
-      "expected_count": 150,
+      "expected_count": 166,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
         ".claude/skills/spike-findings-Power-Browser/sources/004-orca-pane-hosting/measure.mjs",
@@ -2467,6 +2469,7 @@
         "scripts/verify-orca-claude-sdk.mjs",
         "scripts/verify-orca-credential-store-live.mjs",
         "scripts/verify-orca-credential-store.mjs",
+        "scripts/verify-orca-failure-classes.mjs",
         "scripts/verify-orca-hidden-electron.mjs",
         "scripts/verify-orca-packaged-live.mjs",
         "scripts/verify-orca-service-live.mjs",
@@ -2496,6 +2499,7 @@
         "scripts/verify-orca-claude-sdk.mjs",
         "scripts/verify-orca-credential-store-live.mjs",
         "scripts/verify-orca-credential-store.mjs",
+        "scripts/verify-orca-failure-classes.mjs",
         "scripts/verify-orca-hidden-electron.mjs",
         "scripts/verify-orca-packaged-live.mjs",
         "scripts/verify-orca-service-live.mjs",
@@ -3026,15 +3030,17 @@
       "case_form": "literal",
       "class": "coincidental",
       "target": "resolveOrca",
-      "expected_count": 7,
+      "expected_count": 19,
       "expected_files": [
         "orca-overlay/upstream/010-installed-electron-switch/upstream.json",
         "scripts/lib/orca-pane-harness.mjs",
+        "scripts/verify-orca-failure-classes.mjs",
         "scripts/verify-orca-pane-entry.mjs"
       ],
       "only_in": [
         "orca-overlay/upstream/010-installed-electron-switch/upstream.json",
         "scripts/lib/orca-pane-harness.mjs",
+        "scripts/verify-orca-failure-classes.mjs",
         "scripts/verify-orca-pane-entry.mjs"
       ],
       "reason": "Phase 65 (plan 65-05): an in-word join the boundary matcher rejects (the letters before \"Orca\" are part of a camelCase identifier: resolveOrcaImport, the pane harness's import resolver), in scripts/lib/orca-pane-harness.mjs; measured with this scanner's own matcher on the merged Phase 65 tree. Phase 68 (plan 68-06 Task 2) re-measured this row after the p68-08 and p68-05 merges and the 68-06 fixes and exclusion rows; files added: orca-overlay/upstream/010-installed-electron-switch/upstream.json."
@@ -3044,18 +3050,20 @@
       "case_form": "literal",
       "class": "coincidental",
       "target": "handleOrcaShellMessage",
-      "expected_count": 13,
+      "expected_count": 15,
       "expected_files": [
         "powerbrowser/INTERNAL-APIS.md",
         "powerbrowser/shell/PowerBrowserAPI.sys.mjs",
         "scripts/verify-agent-tab-walls.mjs",
-        "scripts/verify-orca-service.mjs"
+        "scripts/verify-orca-service.mjs",
+        "scripts/verify-shell-request-kinds.mjs"
       ],
       "only_in": [
         "powerbrowser/INTERNAL-APIS.md",
         "powerbrowser/shell/PowerBrowserAPI.sys.mjs",
         "scripts/verify-agent-tab-walls.mjs",
-        "scripts/verify-orca-service.mjs"
+        "scripts/verify-orca-service.mjs",
+        "scripts/verify-shell-request-kinds.mjs"
       ],
       "reason": "Phase 67 (plan 67-06), 60-04 literal-row rule: the camelCase identifier handleOrcaShellMessage, added by Phase 67 in powerbrowser/INTERNAL-APIS.md, powerbrowser/shell/PowerBrowserAPI.sys.mjs, scripts/verify-orca-service.mjs, which the boundary matcher rejects (a letter joins the Orca form). Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured by the scan itself on the staged tree, never estimated."
     },
@@ -3274,17 +3282,19 @@
       "case_form": "literal",
       "class": "coincidental",
       "target": "setOrcaPortSource",
-      "expected_count": 5,
+      "expected_count": 8,
       "expected_files": [
         ".planning/workstreams/orca/audit-fix/results/G2-orcad-hosting.md",
         "powerbrowser/shell/TheiaService.sys.mjs",
         "powerbrowser/shell/powerbrowser.js",
+        "scripts/verify-orca-service.mjs",
         "scripts/verify-orcad-lifecycle.mjs"
       ],
       "only_in": [
         ".planning/workstreams/orca/audit-fix/results/G2-orcad-hosting.md",
         "powerbrowser/shell/TheiaService.sys.mjs",
         "powerbrowser/shell/powerbrowser.js",
+        "scripts/verify-orca-service.mjs",
         "scripts/verify-orcad-lifecycle.mjs"
       ],
       "reason": "v1.7 audit fix (2026-11-21), 60-04 literal-row rule: the camelCase identifier setOrcaPortSource, added by an audit-fix lane in .planning/workstreams/orca/audit-fix/results/G2-orcad-hosting.md, powerbrowser/shell/TheiaService.sys.mjs, powerbrowser/shell/powerbrowser.js, scripts/verify-orcad-lifecycle.mjs, which the boundary matcher rejects (a letter joins the Orca form). Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured over the tracked tree and then confirmed by the scan itself."
