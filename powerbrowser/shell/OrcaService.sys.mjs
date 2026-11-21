@@ -205,8 +205,10 @@ export const OrcaService = {
       return this._fail("creating the Orca data folder", [["Orca error", messageOf(err)]]);
     }
 
+    // Before the alias step, which differs by platform (audit fix 62-WR-06).
+    this._bridgePlatform = OrcaEnv.nodePlatform(PowerBrowserProcesses.platform());
     this._effectiveRoot = this._dataRoot;
-    if (!OrcaEnv.socketPathFits(this._dataRoot)) {
+    if (OrcaEnv.aliasNeeded(this._dataRoot, this._bridgePlatform)) {
       const alias = await this._makeAlias();
       if (!alias) {
         return false;
@@ -217,7 +219,6 @@ export const OrcaService = {
     // Phase 63 (D-31, P63-35): the private folder chrome and the Theia backend share for hand-off files.
     // TheiaService builds the same path from the same builders. orcad itself never needs it, so a folder
     // that cannot be chosen costs the agent wrapper its data root, not the start.
-    this._bridgePlatform = OrcaEnv.nodePlatform(PowerBrowserProcesses.platform());
     this._bridgeDir = await OrcaEnv.bridgeDirFor(this._dataRoot, name => PowerBrowserAPI.getEnv(name), this._bridgePlatform);
     if (!this._bridgeDir) {
       this._pushLog("Orca bridge folder not available; the agent wrapper and Orca tabs cannot find this Orca");
@@ -280,14 +281,23 @@ export const OrcaService = {
       return null;
     }
     try {
-      await PowerBrowserAPI.ensureDirectory(alias.slice(0, alias.lastIndexOf("/")));
+      const parent = alias.slice(0, alias.lastIndexOf("/"));
+      await PowerBrowserAPI.ensureDirectory(parent);
       const ln = await PowerBrowserAPI.pathSearch("ln");
       if (!ln) {
         throw new Error("no ln on the search path");
       }
+      // Audit fix 62-WR-06: BSD ln has no -T. A path that resolves to itself under its resolved parent is
+      // a real file or folder, not a link, and -sfn would write into it, so it is refused there instead.
+      if (this._bridgePlatform === "darwin" && (await PowerBrowserAPI.pathExists(alias))) {
+        const real = PowerBrowserOrcaHosting.realPath(alias);
+        if (real === `${PowerBrowserOrcaHosting.realPath(parent)}${alias.slice(alias.lastIndexOf("/"))}`) {
+          throw new Error("the short path is a real folder, not a link");
+        }
+      }
       const linker = await PowerBrowserProcesses.spawnProcessExact({
         command: ln,
-        args: ["-sfnT", this._dataRoot, alias],
+        args: OrcaEnv.aliasLinkArgs(this._bridgePlatform, this._dataRoot, alias),
         environment: OrcaEnv.buildToolEnv(getEnv),
       });
       const { exitCode } = await linker.wait();

@@ -60,6 +60,15 @@ export const ORCAD_ENV_ALLOWLIST = Object.freeze([
   "http_proxy",
   "https_proxy",
   "no_proxy",
+  // Audit fix 62-WR-06: the Windows names a Node process and its shells need there. Unset on Linux and
+  // macOS, so they add nothing to orcad's environment on those platforms.
+  "SystemRoot",
+  "USERPROFILE",
+  "LOCALAPPDATA",
+  "ComSpec",
+  "PATHEXT",
+  "TEMP",
+  "TMP",
 ]);
 
 export const ORCAD_BIND_HOST = "127.0.0.1";
@@ -243,6 +252,23 @@ export function redact(text) {
 /** True when orcad's RPC socket under `root` fits the socket path limit. */
 export function socketPathFits(root) {
   return typeof root === "string" && root !== "" && new TextEncoder().encode(root).length <= ORCAD_SOCKET_ROOT_BUDGET;
+}
+
+/**
+ * Audit fix 62-WR-06: whether a data root needs the short alias on a Node platform. Never on win32, where
+ * orcad's RPC endpoint is a named pipe and no socket path exists to fit.
+ */
+export function aliasNeeded(root, platform) {
+  return platform !== "win32" && !socketPathFits(root);
+}
+
+/**
+ * Audit fix 62-WR-06: ln's arguments for the alias. GNU ln (linux) takes -T, which refuses to write into a
+ * real directory; BSD ln (darwin) has no -T, so there the caller checks that the alias is not a real
+ * directory before it runs -sfn, which replaces a link without following it.
+ */
+export function aliasLinkArgs(platform, target, alias) {
+  return [platform === "darwin" ? "-sfn" : "-sfnT", target, alias];
 }
 
 const underTmp = dir => dir === "/tmp" || dir.startsWith("/tmp/");
