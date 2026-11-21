@@ -4205,8 +4205,8 @@ run_own_checks() {
     # ids each one covers are in .planning/workstreams/orca/audit-fix/results/<lane>.md.
     # G1a chrome shell: agent tabs keep their agent status, cookie rows act on the current site, Stop covers the frontend,
     # the loopback wall for agent pages, result budget, edit route in agent overlays.
+    # Its self-test (40 planted faults, about 30 s) is in the full tier below.
     "agent-tab-walls|node $REPO_ROOT/scripts/verify-agent-tab-walls.mjs"
-    "agent-tab-walls-self-test|node $REPO_ROOT/scripts/verify-agent-tab-walls.mjs --self-test"
     # G2 orcad hosting: the lifetime tie, restart, quit ordering, hand-off file removal, the crash window. Its self-test
     # runs about two minutes on real stand-in processes and is in the full tier below.
     "orcad-lifecycle|node $REPO_ROOT/scripts/verify-orcad-lifecycle.mjs"
@@ -4228,7 +4228,6 @@ run_own_checks() {
     "bundled-extensions-upgrade|node $REPO_ROOT/scripts/verify-bundled-extensions-upgrade.mjs"
     "bundled-extensions-upgrade-self-test|node $REPO_ROOT/scripts/verify-bundled-extensions-upgrade.mjs --self-test"
     "claude-wrapper-pane|node $REPO_ROOT/scripts/verify-claude-wrapper-pane.mjs"
-    "claude-wrapper-pane-self-test|node $REPO_ROOT/scripts/verify-claude-wrapper-pane.mjs --self-test"
     "token-cookie-shadow|node $REPO_ROOT/scripts/verify-token-cookie-shadow.mjs"
     "token-cookie-shadow-self-test|node $REPO_ROOT/scripts/verify-token-cookie-shadow.mjs --self-test"
     # G5a CI and release: build and fetch script order, same-run artifact digests for credential-holding jobs, npm on win32.
@@ -7040,6 +7039,10 @@ run_own_checks() {
       # NEW (audit-fix integration, 2026-11-21): orcad-lifecycle's self-test, 27 planted faults over real stand-in
       # processes, about two minutes, so not --quick. The check itself is a quick row.
       "orcad-lifecycle-self-test|node $REPO_ROOT/scripts/verify-orcad-lifecycle.mjs --self-test"
+      # The two slowest self-tests of the audit-fix checks (about 30 s and 70 s) are full-tier for the same reason: with
+      # them the quick tier no longer fitted the 480 s limit of the stop hook that runs it. Their checks are quick rows.
+      "agent-tab-walls-self-test|node $REPO_ROOT/scripts/verify-agent-tab-walls.mjs --self-test"
+      "claude-wrapper-pane-self-test|node $REPO_ROOT/scripts/verify-claude-wrapper-pane.mjs --self-test"
       # NEW (59-07prep; full tier since audit harness-driver-06, 59-CR-03): the D-09 re-date tool's self-test. On a
       # synthetic ledger built with gsd-core's own constructors (two open, one fixed, one waived; 59-WR-04) it proves
       # the dry run writes nothing, that a fixed, waived or unknown id is refused before anything is written, and that
