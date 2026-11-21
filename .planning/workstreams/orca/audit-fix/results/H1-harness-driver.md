@@ -1,6 +1,6 @@
 # Result: H1-harness-driver
 
-Branch: worktree-agent-af1e134a3e7cb0ea4   Base: 0f9f2735401a08132a479c95c09c53f03015fa19, fast-forwarded to 1dd2cbfc for the review round   Final: abb798b6 (last fix; the protocol update and this record are the commits after it)
+Branch: worktree-agent-af1e134a3e7cb0ea4   Base: 0f9f2735401a08132a479c95c09c53f03015fa19, fast-forwarded to 1dd2cbfc for the review round and to f8d798e4 for the lock round   Final: c1e214a2 (last fix; this record is the commit after it)
 
 The SKIP protocol the other harness lanes follow is `.planning/workstreams/orca/audit-fix/SKIP-PROTOCOL.md`. It was corrected in 834bd116, committed on its own, and updated for the new exclusion modes after abb798b6.
 
@@ -27,7 +27,7 @@ Review round, 2026-11-21:
 | harness-driver-08 | fixed | 3a67fd9a, e7f8f3d1, 336fe4ae, abb798b6 | scripts/verify-platform-driver.mjs --self-test (41 cases, 21 planted driver faults) | Review point 4 confirmed: seven faults were unplanted. All seven are now planted. |
 | H1-review-6: stray fixture variable | fixed | abb798b6 | scripts/verify-platform-driver.mjs --self-test::the tracked driver refuses a stray fixture variable; a driver copy outside the staged path refuses it too | Confirmed at verify-platform.sh:108-123 (before the fix). Fixture mode is now honoured only when the driver is the self-test's staged copy; otherwise PB_VERIFY_FIXTURE_REGISTRY is a FAIL with exit 1. |
 | harness-driver-07 | fixed | e7f8f3d1 | scripts/verify-platform-driver.mjs --self-test::--gate fails a row that leaves a process behind; nothing a row left is still running | --sweep stops every other survivor of the row's group or token (2 s grace, TERM, KILL) and names it on a NOTE; FAIL under --gate. |
-| harness-live-tabs-14 | fixed | 336fe4ae, abb798b6 | scripts/verify-platform-driver.mjs --self-test::a driver killed by SIGKILL releases the live lock; a lock wait is bounded and names the holder | Review point 3 confirmed: the holder outlived a killed driver. The holder now polls the driver's pid and start ticks each second and exits when the driver is gone. The wait is bounded at PB_LIVE_LOCK_WAIT_S (default 6 h) and names the holder's pid and command. |
+| harness-live-tabs-14 | fixed | 336fe4ae, abb798b6, c1e214a2 | scripts/verify-platform-driver.mjs --self-test::a driver killed by SIGKILL releases the live lock; a lock wait is bounded and names the holder; a forged PB_LIVE_LOCK_HELD=1 while another process holds the lock is a FAIL; a PB_LIVE_LOCK_HOLDER naming the holder with wrong start ticks is a FAIL; an ancestor holder goes on | Review point 3: the holder now ends with the driver, and the wait is bounded and names the holder. Lock round (c1e214a2), confirmed: the driver trusted an inherited PB_LIVE_LOCK_HELD=1, and its wait message told the user to set it. It now follows the live-lock contract in SKIP-PROTOCOL.md: it exports PB_LIVE_LOCK_HOLDER=<pid>:<start ticks>, goes on only for that holder or an ancestor flock shown in /proc/locks, and FAILs a forged variable by name. The two row comments on `flock <lock> node <row>` now say that form is the contract's ancestor case. |
 | harness-static-browser-06 | partial | 3a67fd9a | scripts/verify-platform-driver.mjs --self-test::exit 0 with a SKIP last line is SKIP | Status corrected (review point 5). The driver half is done; the per-script exit-77 conversion and the page-table SKIP branch deletion remain: Handoffs. |
 
 ## Registry requests
@@ -70,6 +70,7 @@ None.
   - Revert with 3a67fd9a and abb798b6.
 - harness-driver-07: a row that leaves any process behind has it stopped. That is a NOTE in --quick and the full run, and FAIL under --gate. Revert with e7f8f3d1.
 - harness-driver-04: lib/orca-run.mjs now SIGKILLs an orcad whose start rejected, and every orcad still running when its process exits or gets SIGINT, SIGTERM or SIGHUP. Revert with e7f8f3d1.
+- harness-live-tabs-14 (lock round): an inherited PB_LIVE_LOCK_HELD=1 or PB_LIVE_LOCK_HOLDER that /proc/locks does not confirm now makes the first full-tier row FAIL by name. It no longer skips the lock. Full-tier rows also see PB_LIVE_LOCK_HOLDER=<pid>:<start ticks>, and the wait message no longer suggests setting a variable. Revert with c1e214a2.
 - harness-live-tabs-14: a run with a full-tier row now takes pb-live.lock and holds it to the end.
   - A second session's live run waits for it, at most PB_LIVE_LOCK_WAIT_S (default 21600 s). Past that bound it is a FAIL naming the holder.
   - The lock is released even when the driver is SIGKILLed.
@@ -120,6 +121,16 @@ None.
   - Re-run the gate after a push whose verify.yml run is green, so that ng074-ci-green-on-main returns to entry 31's "no run" state or passes.
 
 ## Quick gate
+Lock round: `nix develop .#theia --command scripts/verify-platform.sh --quick` at c1e214a2 exited 1 in 10 min 23 s. The log is in the worktree at .mozbuild/quick-H1.log (git-ignored).
+
+Counts: 444 PASS, 3 FAIL, 0 SKIP. None of the three is caused by this round, which touched only the driver's full-tier lock path, its self-test and the protocol:
+- orca-pane-css-self-test: the provisioned orca/ predates the overlay, as in the review round below.
+- orca-failure-classes: unmapped orcad codes (orcad_invalid_bind_address, orcad_data_root_shared, orcad_data_root_unusable, orcad_data_root_wrong_owner) between the provisioned orca/ and ORCA_CODE_CLASSES. That is product mapping, not this lane's files.
+- fixer-isolate-self-test: "could not make /run/user/1000/cc-socks/<pid>.sock read-only". That is a socket of this agent session's sandbox, so it is the host environment.
+
+The six red-by-design rows of the review round are PASS here. verify-platform-driver-self-test (46 cases, 23 plants) is PASS in 15.2 s.
+
+Review round:
 `nix develop .#theia --command scripts/verify-platform.sh --quick` at abb798b6 exited 1 in 11 min 18 s, at load average 9-11 from other lanes' gates.
 
 Counts: 438 PASS, 7 FAIL, 0 SKIP. Each FAIL row:
