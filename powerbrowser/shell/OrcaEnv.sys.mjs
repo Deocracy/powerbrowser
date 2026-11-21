@@ -931,23 +931,41 @@ export function orcadKeeperReleaseLine() {
 // ---- Who holds orcad's port (audit fix orcad-hosting-03, diagnostics part) ----
 
 /**
- * The uid of the listener on 127.0.0.1:<port> or 0.0.0.0:<port>, from the text of /proc/net/tcp, or null. A row
- * is "sl local_address rem_address st tx:rx tr:tm retrnsmt uid ...", the address in hex with the IPv4 address
- * little-endian, and st 0A is LISTEN.
+ * Local addresses, as /proc/net/tcp and /proc/net/tcp6 spell them (each 32-bit word in host order, little-endian),
+ * whose listener blocks orcad's bind on 127.0.0.1: 127.0.0.1 and 0.0.0.0, and in the IPv6 table :: (dual-stack,
+ * Node's default, listed in the IPv6 table only) and the IPv4-mapped ::ffff:127.0.0.1 and ::ffff:0.0.0.0. ::1 is
+ * not listed: it does not hold the IPv4 address (audit follow-up to orcad-hosting-03).
  */
-export function portHolderUidOf(tcpText, port) {
-  if (typeof tcpText !== "string" || !Number.isInteger(port)) {
+const LOOPBACK_BLOCKING_ADDRESSES = Object.freeze([
+  "0100007F",
+  "00000000",
+  "00000000000000000000000000000000",
+  "0000000000000000FFFF00000100007F",
+  "0000000000000000FFFF000000000000",
+]);
+
+/**
+ * The uid of a listener whose address blocks 127.0.0.1:<port>, from the text of /proc/net/tcp and /proc/net/tcp6
+ * (a string or an array of them), or null. A row is "sl local_address rem_address st tx:rx tr:tm retrnsmt uid ...",
+ * and st 0A is LISTEN.
+ */
+export function portHolderUidOf(tables, port) {
+  const texts = (Array.isArray(tables) ? tables : [tables]).filter(text => typeof text === "string");
+  if (!texts.length || !Number.isInteger(port)) {
     return null;
   }
   const hexPort = port.toString(16).toUpperCase().padStart(4, "0");
-  for (const line of tcpText.split("\n").slice(1)) {
-    const fields = line.trim().split(/\s+/);
-    if (fields.length < 8 || fields[3] !== "0A") {
-      continue;
-    }
-    if (fields[1] === `0100007F:${hexPort}` || fields[1] === `00000000:${hexPort}`) {
-      const uid = Number(fields[7]);
-      return Number.isInteger(uid) ? uid : null;
+  for (const text of texts) {
+    for (const line of text.split("\n").slice(1)) {
+      const fields = line.trim().split(/\s+/);
+      if (fields.length < 8 || fields[3] !== "0A") {
+        continue;
+      }
+      const [address, rowPort] = fields[1].toUpperCase().split(":");
+      if (rowPort === hexPort && LOOPBACK_BLOCKING_ADDRESSES.includes(address)) {
+        const uid = Number(fields[7]);
+        return Number.isInteger(uid) ? uid : null;
+      }
     }
   }
   return null;
