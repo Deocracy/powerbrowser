@@ -1689,21 +1689,27 @@ export class ChromeBarWidget extends ReactWidget {
 
     /**
      * Phase 66 (P66-21, P66-22, D-19): the agent mark for the current web tab, read only from chrome's agentControlChanged
-     * push. Hidden unless an agent is driving the tab. Its Stop button is the only caller of agentStop(), which ends agent
-     * control of this tab for the tab's lifetime; no command, keybinding or menu reaches it.
+     * push. agent-browser-04: shown on every agent tab, not only while an agent drives it, so the user can stop an agent
+     * before it acts. Its Stop button and, on a stopped agent tab, its Resume button are the only callers of agentStop();
+     * Stop ends agent control of every agent tab and refuses new ones until Resume. No command, keybinding or menu
+     * reaches either.
      */
     protected renderAgentControl(): React.ReactNode {
-        if (!currentWebTab()?.agentControl.active) {
+        const tab = currentWebTab();
+        if (!tab?.agent) {
             return undefined;
         }
-        const label = CHROME_BAR_COPY.agentControlLabel;
-        const stop = CHROME_BAR_COPY.agentStopTooltip(appSubject());
+        const subject = appSubject();
+        const { active, stopped } = tab.agentControl;
+        const label = stopped ? CHROME_BAR_COPY.agentStoppedLabel : active ? CHROME_BAR_COPY.agentControlLabel : CHROME_BAR_COPY.agentIdleLabel;
+        const tooltip = stopped ? CHROME_BAR_COPY.agentStoppedTooltip(subject) : active ? CHROME_BAR_COPY.agentControlTooltip(subject) : CHROME_BAR_COPY.agentIdleTooltip(subject);
+        const action = stopped ? CHROME_BAR_COPY.agentResumeTooltip(subject) : CHROME_BAR_COPY.agentStopTooltip(subject);
         return <span className='pb-chrome-bar-agent'>
-            <span className='codicon codicon-robot' role='img' aria-label={label} title={CHROME_BAR_COPY.agentControlTooltip(appSubject())} />
+            <span className='codicon codicon-robot' role='img' aria-label={label} title={tooltip} />
             <span className='pb-chrome-bar-agent-label'>{label}</span>
-            <button type='button' className='pb-chrome-bar-button pb-chrome-bar-agent-stop' title={stop} aria-label={stop}
-                onClick={() => void currentWebTab()?.agentStop()}>
-                {CHROME_BAR_COPY.agentStopLabel}
+            <button type='button' className='pb-chrome-bar-button pb-chrome-bar-agent-stop' title={action} aria-label={action}
+                onClick={() => void currentWebTab()?.agentStop(stopped)}>
+                {stopped ? CHROME_BAR_COPY.agentResumeLabel : CHROME_BAR_COPY.agentStopLabel}
             </button>
         </span>;
     }

@@ -3607,7 +3607,13 @@ export const PowerBrowserAPI = Object.freeze({
     // agent-browser-02: agent status belongs to the tab id and row key in chrome. A tab id (or row key) chrome once
     // created as an agent tab opens as one again (the crash recreate and the lost-view reopen close, then open), whatever
     // the frontend sends; the flag alone still never turns an open tab into one (the already-open return above).
-    agent = agent === true || (pending === null && agentTabRemembered(tabId, key));
+    // agent-browser-04: while the user has agents stopped, no new agent tab is made; a remembered one may reopen (it
+    // is stopped from creation).
+    const remembered = pending === null && agentTabRemembered(tabId, key);
+    if (agent === true && !remembered && agentOwnerStopped(actorRef)) {
+      return "agent-stopped";
+    }
+    agent = agent === true || remembered;
     // Phase 66 (P66-26): an agent overlay loads in the Orca-agent container, never the user's; no container, no tab.
     const userContextId = agent === true ? agentContainerId() : 0;
     if (agent === true && !userContextId) {
@@ -11277,7 +11283,7 @@ function agentWallVerdict(entry, actorRef) {
   if (entry.agent !== true || !agentInOwnContainer(entry)) {
     return "not-agent-tab";
   }
-  if (entry.agentControl?.stopped) {
+  if (entry.agentControl?.stopped || agentOwnerStopped(actorRef)) {
     return "agent-stopped";
   }
   return null;
@@ -11358,6 +11364,11 @@ function agentTabCreated(entry, userContextId, tabId) {
   agentNetworkInstall();
   agentProtocolWallInstall();
   agentFocusGuardInstall(entry.browser.ownerDocument.defaultView);
+  // agent-browser-04: a tab re-created while its frontend has agents stopped is stopped from the start.
+  if (agentOwnerStopped(entry.owner)) {
+    agentControlOf(entry).stopped = true;
+    agentPush(tabId, entry);
+  }
 }
 
 // D-35 (66-08): a new window, tab or popup whose opener is an agent overlay is refused on every path; the agent's own
@@ -12185,7 +12196,7 @@ async function handleWebTabAgent(data, actorRef) {
   if ((control.openRefusals ?? 0) !== opensRefused && outcome.where === "done") {
     outcome = agentFailed("browser_command_unavailable");
   }
-  if (control.stopped) {
+  if (control.stopped || agentOwnerStopped(actorRef)) {
     return { ok: true, kind, where: "agent-stopped" };
   }
   if (!webTabs.has(data.tabId)) {
@@ -12195,19 +12206,17 @@ async function handleWebTabAgent(data, actorRef) {
   return outcome.where === "done" ? { ok: true, kind, where: "done", result: outcome.result } : { ok: true, kind, where: "failed", code: outcome.code };
 }
 
-// Stop (P66-22): sent only from the chrome bar's Stop button. Lasts for the tab's lifetime and aborts an in-flight call.
-function handleWebTabAgentStop(data, actorRef) {
-  const kind = "webTabAgentStop";
-  if (!webTabIdIsValid(data.tabId)) {
-    return { ok: false, reason: "validation", message: "handleWebTabAgentStop: refusing malformed tabId" };
-  }
-  const entry = webTabs.get(data.tabId);
-  if (!entry || entry.owner !== actorRef) {
-    return { ok: true, kind, where: "unknown-tab" };
-  }
-  if (entry.agent !== true) {
-    return { ok: true, kind, where: "not-agent-tab" };
-  }
+// agent-browser-04: Stop is the frontend's, not one tab's. A Stop pressed on any agent tab stops every agent tab that
+// frontend owns, and while it lasts chrome refuses every agent call (agentWallVerdict) and every new agent tab
+// (webTabOpen answers agent-stopped), so an agent cannot carry on through a new background tab. It lasts until the
+// user presses Resume on a stopped agent tab's mark, or the frontend goes (its actor is the key).
+const agentStoppedOwners = new WeakSet();
+
+function agentOwnerStopped(actorRef) {
+  return !!actorRef && agentStoppedOwners.has(actorRef);
+}
+
+function agentStopEntry(tabId, entry) {
   const control = agentControlOf(entry);
   const wasStopped = control.stopped;
   control.stopped = true;
@@ -12221,9 +12230,44 @@ function handleWebTabAgentStop(data, actorRef) {
   }
   // One push per change: agentSetActive pushes when the mark was lit, else the stopped flag alone changed.
   if (control.active) {
-    agentSetActive(data.tabId, entry, false);
+    agentSetActive(tabId, entry, false);
   } else if (!wasStopped) {
-    agentPush(data.tabId, entry);
+    agentPush(tabId, entry);
+  }
+}
+
+// Stop (P66-22): sent only from the chrome bar's agent mark. `resume: true` is the mark's Resume button on a stopped
+// agent tab. Both act on every agent tab of the sender's frontend (agent-browser-04).
+function handleWebTabAgentStop(data, actorRef) {
+  const kind = "webTabAgentStop";
+  if (!webTabIdIsValid(data.tabId)) {
+    return { ok: false, reason: "validation", message: "handleWebTabAgentStop: refusing malformed tabId" };
+  }
+  if (data.resume !== undefined && data.resume !== true) {
+    return { ok: false, reason: "validation", message: "handleWebTabAgentStop: refusing a resume flag that is not true" };
+  }
+  const entry = webTabs.get(data.tabId);
+  if (!entry || entry.owner !== actorRef) {
+    return { ok: true, kind, where: "unknown-tab" };
+  }
+  if (entry.agent !== true) {
+    return { ok: true, kind, where: "not-agent-tab" };
+  }
+  const owned = [...webTabs].filter(([, other]) => other.owner === actorRef && other.agent === true);
+  if (data.resume === true) {
+    agentStoppedOwners.delete(actorRef);
+    for (const [tabId, other] of owned) {
+      if (other.agentControl?.stopped) {
+        other.agentControl.stopped = false;
+        agentPush(tabId, other);
+      }
+    }
+    return { ok: true, kind, where: "resumed" };
+  }
+  agentStoppedOwners.add(actorRef);
+  // The tab the user pressed Stop on goes last, so its push is the last one the frontend sees.
+  for (const [tabId, other] of [...owned.filter(([id]) => id !== data.tabId), [data.tabId, entry]]) {
+    agentStopEntry(tabId, other);
   }
   return { ok: true, kind, where: "stopped" };
 }

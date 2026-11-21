@@ -28,6 +28,11 @@
 //                or row key without the flag is an agent overlay (container and group before append); a fresh user
 //                tab is not; every webTabOpen request in web-tab.ts spreads this.agentFlag(), which is { agent: true }
 //                for every agent widget.
+//  stop          [agent-browser-04, 66-WR-06]  Stop on one agent tab stops every agent tab of that frontend, refuses
+//                its new agent tabs, reopens a remembered one stopped, spares another frontend, and Resume undoes it;
+//                the transpiled dispatcher refuses createPage while stopped and maps a DispatchFailure and an agent-wall
+//                navigate refusal to their codes; the host sends navigate as browser.goto through webTabAgent and
+//                awaits the first open's reply; the chrome-bar mark shows on every agent tab and offers Resume.
 //
 // Tier: quick (text reads and node:vm). --self-test plants each pre-fix fault in an in-memory copy of the tree and
 // requires the clause to go red naming it.
@@ -42,6 +47,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import { makeWorld, sliceSource } from './verify-orca-browser-tab-scope.mjs';
+import { ev, fakeDeps, loadModules, loadTypescript } from './verify-orca-browser-abilities.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'agent-tab-walls';
@@ -57,6 +63,10 @@ const FILES = {
     child: 'powerbrowser/shell/GroupActorChild.sys.mjs',
     orcaService: 'powerbrowser/shell/OrcaService.sys.mjs',
     webTab: 'theia/extensions/tab-uris/src/browser/web-tab.ts',
+    chromeBar: 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx',
+    dispatch: 'theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts',
+    abilities: 'theia/extensions/orca-browser/src/common/orca-browser-abilities.ts',
+    frontendModule: 'theia/extensions/orca-browser/src/browser/orca-browser-frontend-module.ts',
 };
 
 function stripComments(text) {
@@ -432,7 +442,96 @@ async function agentFlagClause(texts) {
     return failures;
 }
 
-const CLAUSES = [scrollClause, editStateClause, budgetClause, historyClause, servicesClause, cookiesClause, agentFlagClause];
+/** The text of a method or function body named `name` in `code` (from its signature to the matching brace). */
+function bodyOf(code, signature) {
+    const at = code.indexOf(signature);
+    if (at === -1) return null;
+    let depth = 0;
+    for (let i = code.indexOf('{', at + signature.length - 1); i < code.length; i += 1) {
+        if (code[i] === '{') depth += 1;
+        if (code[i] === '}') { depth -= 1; if (depth === 0) return code.slice(at, i + 1); }
+    }
+    return null;
+}
+
+// agent-browser-04 (and 66-WR-06): Stop is the frontend's. Over the stub world: Stop on one agent tab stops the
+// frontend's other agent tabs, refuses its new agent tabs (agent-stopped, no overlay), lets a remembered agent tab
+// reopen stopped, and leaves another frontend's agent tab working; Resume undoes all of it. The transpiled dispatcher
+// answers createPage browser_owner_unavailable while agents are stopped or when the open dep says so, and maps a
+// navigate refused by chrome's agent wall to its code. In the sources: the host sends navigate as browser.goto through
+// webTabAgent and awaits the first open's reply; the chrome-bar mark is shown for every agent tab.
+async function stopClause(texts) {
+    const failures = [];
+    const w = worldOf(texts);
+    w.addTab('a1', { agent: true });
+    w.addTab('a2', { agent: true });
+    w.addTab('f1', { agent: true, owner: w.otherFrontend });
+    if (w.api.webTabOpen(w.theiaBrowser, w.frontend, 'r1', 'https://example.com/', undefined, undefined, null, true) !== 'opened') return ['stop: broken instrument: the agent open did not open'];
+    w.api.webTabClose('r1');
+    const stopped = await w.stop('a1');
+    if (stopped?.where !== 'stopped') return [`stop: broken instrument: Stop answered ${JSON.stringify(stopped)}`];
+    const other = await w.agent('a2', 'browser.click', { element: '#e' });
+    if (other?.where !== 'agent-stopped') failures.push(`stop: after Stop on one agent tab, another agent tab of the same frontend answered ${JSON.stringify(other?.where)}; expected agent-stopped (agent-browser-04)`);
+    const fresh = w.api.webTabOpen(w.theiaBrowser, w.frontend, 'n1', 'about:blank', undefined, undefined, null, true);
+    if (fresh !== 'agent-stopped' || w.webTabs.has('n1')) failures.push(`stop: a new agent tab after Stop answered ${fresh} (entry ${w.webTabs.has('n1')}); expected agent-stopped and no overlay, so an agent cannot carry on in a new background tab (agent-browser-04)`);
+    const reopen = w.api.webTabOpen(w.theiaBrowser, w.frontend, 'r1', 'https://example.com/', undefined, undefined, null, true);
+    const reopenCall = await w.agent('r1', 'browser.click', { element: '#e' });
+    if (reopen !== 'opened' || reopenCall?.where !== 'agent-stopped') failures.push(`stop: a stopped frontend's crashed agent tab reopened ${reopen} and answered ${JSON.stringify(reopenCall?.where)}; expected opened and agent-stopped`);
+    const foreign = await w.agent('f1', 'browser.click', { element: '#e' }, w.otherFrontend);
+    if (foreign?.where !== 'done') failures.push(`stop: Stop in one frontend stopped another frontend's agent tab (${JSON.stringify(foreign?.where)})`);
+    const lastPush = w.rec.pushes.filter(p => p.kind === 'agentControlChanged' && p.tabId === 'a2').at(-1);
+    if (lastPush?.stopped !== true) failures.push(`stop: the other agent tab's mark was not told it is stopped (${JSON.stringify(lastPush)})`);
+    const resumed = await w.actionArms({ kind: 'webTabAgentStop', tabId: 'a2', resume: true }, w.frontend);
+    const after = await w.agent('a1', 'browser.click', { element: '#e' });
+    const afterOpen = w.api.webTabOpen(w.theiaBrowser, w.frontend, 'n2', 'about:blank', undefined, undefined, null, true);
+    if (resumed?.where !== 'resumed' || after?.where !== 'done' || afterOpen !== 'opened') failures.push(`stop: Resume answered ${JSON.stringify(resumed?.where)}, then a call ${JSON.stringify(after?.where)} and a new agent tab ${afterOpen}; expected resumed, done, opened`);
+
+    // The dispatcher.
+    const ts = loadTypescript(REPO_ROOT);
+    if (!ts) return [...failures, 'stop: broken instrument: typescript is not installed in theia/'];
+    const { dispatch } = loadModules(ts, { abilities: texts.abilities, dispatch: texts.dispatch });
+    const base = fakeDeps(dispatch);
+    const stoppedDeps = { ...base.deps, agentsStopped: () => true };
+    let out = await dispatch.dispatchCommand(ev('p1', 'createPage'), stoppedDeps);
+    if (out.status !== 'failed' || out.errorCode !== 'browser_owner_unavailable' || base.log.opened.length) failures.push(`stop: createPage while agents are stopped answered ${JSON.stringify(out)} after ${base.log.opened.length} open(s); expected browser_owner_unavailable and none (agent-browser-04)`);
+    if (typeof dispatch.DispatchFailure !== 'function') {
+        failures.push('stop: the dispatcher exports no DispatchFailure, so a refused open answers browser_error only (66-WR-06)');
+    } else {
+        const refusing = { ...fakeDeps(dispatch).deps, openAgentTab: async () => { throw new dispatch.DispatchFailure('browser_owner_unavailable'); } };
+        out = await dispatch.dispatchCommand(ev('p2', 'createPage'), refusing);
+        if (out.errorCode !== 'browser_owner_unavailable' || refusing.table.tabOf('p2') !== undefined) failures.push(`stop: createPage whose open chrome refused answered ${JSON.stringify(out)}; expected browser_owner_unavailable and no binding (66-WR-06)`);
+    }
+    for (const [where, code] of [['agent-stopped', 'browser_owner_unavailable'], ['not-agent-tab', 'browser_tab_not_found']]) {
+        const { deps } = fakeDeps(dispatch);
+        deps.navigate = async () => ({ ok: true, kind: 'webTabAgent', where });
+        await dispatch.dispatchCommand(ev('p3', 'createPage'), deps);
+        out = await dispatch.dispatchCommand(ev('p3', 'navigate', { url: 'https://example.com/' }), deps);
+        if (out.status !== 'failed' || out.errorCode !== code) failures.push(`stop: a navigate chrome's agent wall answered ${where} came back ${JSON.stringify(out)}; expected ${code} (agent-browser-04)`);
+    }
+
+    // The host and the mark, in their sources.
+    const host = stripComments(texts.frontendModule);
+    const navigateDep = /navigate: \(tabId, url\) => ([^\n]*)/.exec(host)?.[1] ?? '';
+    if (!/kind: 'webTabAgent'/.test(navigateDep) || !/'browser\.goto'/.test(navigateDep) || /\.navigate\(/.test(navigateDep)) {
+        failures.push(`stop: the host's navigate dep (${navigateDep.slice(0, 120) || 'missing'}) does not go through chrome's agent wall as browser.goto (agent-browser-04, 66-CR-01)`);
+    }
+    const openDep = bodyOf(host, 'openAgentTab: async () =>') ?? '';
+    if (!/await widget\.opened/.test(openDep) || !/throw new DispatchFailure\(/.test(openDep)) {
+        failures.push('stop: the host\'s openAgentTab dep does not await the first open\'s reply and fail createPage when chrome made no overlay (66-WR-06)');
+    }
+    if (!/readonly opened: Promise<WebTabReply>/.test(texts.webTab) || !/this\.resolveOpened\?\.\(reply\)/.test(stripComments(texts.webTab))) {
+        failures.push(`stop: ${FILES.webTab} does not expose the first open's reply as opened (66-WR-06)`);
+    }
+    const mark = bodyOf(stripComments(texts.chromeBar), 'protected renderAgentControl(): React.ReactNode {') ?? '';
+    const guard = /if \(([^)]*)\) \{\s*return undefined;/.exec(mark)?.[1] ?? '';
+    if (!/\.agent\b/.test(guard) || /agentControl\.active/.test(guard)) {
+        failures.push(`stop: the chrome-bar mark is shown on "${guard}", not on every agent tab, so the user cannot stop an agent before it acts (agent-browser-04)`);
+    }
+    if (!/agentStop\(stopped\)/.test(mark)) failures.push('stop: the chrome-bar mark has no Resume on a stopped agent tab');
+    return failures;
+}
+
+const CLAUSES = [scrollClause, editStateClause, budgetClause, historyClause, servicesClause, cookiesClause, agentFlagClause, stopClause];
 
 export async function checkTexts(texts) {
     const failures = [];
@@ -461,8 +560,48 @@ function replaceOnce(text, from, to, what) {
 
 const PLANTS = [
     {
+        name: 'agent-browser-04: Stop ends control of the one tab only',
+        plant: t => ({ ...t, api: replaceOnce(replaceOnce(t.api, 'for (const [tabId, other] of [...owned.filter(([id]) => id !== data.tabId), [data.tabId, entry]]) {', 'for (const [tabId, other] of [[data.tabId, entry]]) {', 'stop loop'), 'agentStoppedOwners.add(actorRef);', 'void 0;', 'owner stop') }),
+        expect: 'another agent tab of the same frontend answered',
+    },
+    {
+        name: 'agent-browser-04: chrome opens new agent tabs after Stop',
+        plant: t => ({ ...t, api: replaceOnce(t.api, 'if (agent === true && !remembered && agentOwnerStopped(actorRef)) {', 'if (false) {', 'open refusal') }),
+        expect: 'a new agent tab after Stop answered',
+    },
+    {
+        name: 'agent-browser-04: the dispatcher opens pages while agents are stopped',
+        plant: t => ({ ...t, dispatch: replaceOnce(t.dispatch, 'if (deps.agentsStopped?.()) {', 'if (false) {', 'dispatch stop') }),
+        expect: 'createPage while agents are stopped',
+    },
+    {
+        name: '66-WR-06: a refused open answers browser_error only',
+        plant: t => ({ ...t, dispatch: replaceOnce(t.dispatch, "return failed(error instanceof DispatchFailure ? error.errorCode : 'browser_error');", "return failed('browser_error');", 'failure code') }),
+        expect: 'whose open chrome refused',
+    },
+    {
+        name: 'agent-browser-04: a navigate chrome refused reports done',
+        plant: t => ({ ...t, dispatch: replaceOnce(t.dispatch, "const outcome = reply?.ok === true && reply.where === undefined ? completed() : outcomeOf(reply);\n            return outcome.status === 'completed' ? completed() : outcome;", "return reply?.ok === true ? completed() : failed('browser_error');", 'navigate mapping') }),
+        expect: 'agent wall answered agent-stopped',
+    },
+    {
+        name: '66-CR-01: the host navigates through the widget, outside the agent wall',
+        plant: t => ({ ...t, frontendModule: replaceOnce(t.frontendModule, "navigate: (tabId, url) => this.channel.request({ kind: 'webTabAgent', tabId, method: 'browser.goto', params: { url } }),", 'navigate: (tabId, url) => this.channel.widgetOf(tabId)?.navigate(url) ?? Promise.resolve(undefined),', 'navigate dep') }),
+        expect: 'does not go through chrome\'s agent wall',
+    },
+    {
+        name: '66-WR-06: createPage completes before chrome makes the overlay',
+        plant: t => ({ ...t, frontendModule: replaceOnce(t.frontendModule, 'const reply = widget.isAttached ? await widget.opened : { ok: false };', "const reply = { ok: true, where: 'opened' };", 'open await') }),
+        expect: 'does not await the first open',
+    },
+    {
+        name: 'agent-browser-04: the mark shows only while an agent is active',
+        plant: t => ({ ...t, chromeBar: replaceOnce(t.chromeBar, 'if (!tab?.agent) {', 'if (!tab?.agentControl.active) {', 'mark guard') }),
+        expect: 'not on every agent tab',
+    },
+    {
         name: 'agent-browser-02: chrome forgets an agent tab id at close',
-        plant: t => ({ ...t, api: replaceOnce(t.api, 'agent = agent === true || (pending === null && agentTabRemembered(tabId, key));', 'agent = agent === true;', 'remembered id') }),
+        plant: t => ({ ...t, api: replaceOnce(t.api, 'const remembered = pending === null && agentTabRemembered(tabId, key);', 'const remembered = false;', 'remembered id') }),
         expect: 'reopened as a user tab',
     },
     {

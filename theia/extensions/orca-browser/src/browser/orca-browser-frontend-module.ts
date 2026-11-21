@@ -32,7 +32,7 @@ import { FrontendApplicationStateService } from '@theia/core/lib/browser/fronten
 import { WEB_TAB_FACTORY_ID, WebTabChannel, WebTabOpenHandler, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import { ORCA_PANE_FACTORY_ID } from '@powerbrowser/tab-uris/lib/browser/orca-scheme-coverage';
 import {
-    BrowserRecord, CommandEvent, DispatchDeps, Outcome, PageTable, createPageTable, createRevealTracker, dispatchCommand
+    BrowserRecord, CommandEvent, DispatchDeps, DispatchFailure, Outcome, PageTable, createPageTable, createRevealTracker, dispatchCommand
 } from '../common/orca-browser-dispatch';
 
 /** Host bundle interface and link global (66-01-PLAN interfaces); orca-browser-entry-points compares these with lane p66-01's sources. */
@@ -374,6 +374,13 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
             openAgentTab: async () => {
                 const pageId = event.browserPageId;
                 const widget = await this.openHandler.openAgentTab(this.placementRef(event.command.workspaceId));
+                // 66-WR-06: createPage completes only once chrome has made the overlay; otherwise the tab closes
+                // (before the close handler below is connected, so no user close is reported) and createPage fails.
+                const reply = widget.isAttached ? await widget.opened : { ok: false };
+                if (reply.ok !== true || (reply.where !== 'opened' && reply.where !== 'loading')) {
+                    widget.close();
+                    throw new DispatchFailure(reply.where === 'agent-stopped' ? 'browser_owner_unavailable' : 'browser_error');
+                }
                 this.bound.set(pageId, event as BoundEvent);
                 const workspaceId = event.command.workspaceId;
                 writeBoundPages({ ...readBoundPages(), [pageId]: workspaceId ? worktreeSelector(workspaceId) : null });
@@ -382,7 +389,11 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
                 return widget.tabId;
             },
             closeTab: tabId => this.channel.widgetOf(tabId)?.close(),
-            navigate: (tabId, url) => this.channel.widgetOf(tabId)?.navigate(url) ?? Promise.resolve(undefined),
+            // agent-browser-04 / 66-CR-01: Orca's navigate goes through chrome's agent wall as browser.goto, never the
+            // user's webTabNavigate, so a stopped tab or a tab that is not an agent tab is never driven, and the mark lights.
+            navigate: (tabId, url) => this.channel.request({ kind: 'webTabAgent', tabId, method: 'browser.goto', params: { url } }),
+            agentsStopped: () => (this.widgetManager.getWidgets(WEB_TAB_FACTORY_ID) as WebTabWidget[])
+                .some(widget => widget.agent && !widget.isDisposed && widget.agentControl.stopped),
             agentCall: (tabId, method, params) => this.channel.request({ kind: 'webTabAgent', tabId, method, params }),
             pageInfo: tabId => {
                 const widget = this.channel.widgetOf(tabId);
