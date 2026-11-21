@@ -32,6 +32,12 @@
 //                  The lockfile lines of that step are run on a two-commit fixture repository: a change to only a
 //                  Cargo.lock, only a Gemfile.lock or only a JS lockfile must read changed, and a change to source
 //                  files alone (including one named *-lock.ts) must read unchanged.
+//   skip-exit      (H1 SKIP-protocol handoff) every direct call, in a run step of these workflows, of a script that
+//                  can exit 77 (its text imports scripts/lib/skip-verdict.mjs, names SKIP_EXIT, or exits or returns 77;
+//                  scripts/verify-platform.sh, whose --only reports a skipped row as exit 0 plus a SKIP summary line,
+//                  is found the same way) handles that skip deliberately: it runs under bash scripts/run-no-skip.sh, or
+//                  the step tests the status against 77 itself. A bare call would read 77 as a failure with no name,
+//                  or, for an unconverted script or the driver, a skip as a pass.
 // Every clause derives what it compares from the parsed YAML (job and step lookups by what they run, not by
 // a list kept here), so a renamed step is still found.
 //
@@ -217,7 +223,39 @@ export function check(texts) {
         if (/cp -a "\$PB_MAC_ORCA_DIR\//.test(pm)) fail('powerbrowser/packaging/package-macos.sh', '(script)', 'mode-carry', 'copies from $PB_MAC_ORCA_DIR directly, not from the unpacked tree. Next step: stage from the tree tar -xpf wrote.');
     }
 
+    // skip-exit (H1 SKIP-protocol handoff)
+    for (const f of FILES) {
+        for (const [jId, j] of Object.entries(docs[f]?.jobs ?? {})) {
+            stepsOf(j).forEach((st, i) => {
+                const r = runOf(st);
+                const explicit77 = /(?:-eq|==|=)\s*"?77\b|\b77\)/.test(r);
+                for (const l of r.split('\n').filter(x => !/^\s*#/.test(x))) {
+                    for (const m of l.matchAll(/(?:^|[\s;&|(]|--command\s)(?:node|bash)?\s*"?(?:\$GITHUB_WORKSPACE\/)?(scripts\/[\w.-]+\.(?:mjs|sh))\b/g)) {
+                        // The wrapper is the handling, not a call to handle.
+                        if (m[1] === 'scripts/run-no-skip.sh' || !canExit77(m[1], texts)) continue;
+                        const wrapped = new RegExp(`run-no-skip\\.sh"?\\s+(?:--allow-skip\\s+(?:'[^']*'|"[^"]*"|\\S+)\\s+)?--\\s+[^\\n]*${m[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(l);
+                        if (!wrapped && !explicit77) fail(f, jId, 'skip-exit', `step ${i} calls ${m[1]}, which can exit 77 (did not run), with no deliberate handling: set -e reads its 77 as an unnamed failure, and a skip that exits 0 as a pass. Next step: run it as bash scripts/run-no-skip.sh -- ..., or test the status against 77 in the step.`);
+                    }
+                }
+            });
+        }
+    }
+
     return fails;
+}
+
+// A script can exit 77 when its text says so (SKIP-PROTOCOL.md); read from the tree at check time, or from overrides.
+// Comment lines are left out, so a script that only explains 77 is not one that exits with it.
+const can77 = new Map();
+const says77 = t => /skip-verdict\.mjs|SKIP_EXIT|exit\(77\)|\breturn 77\b|\bexit 77\b/.test(String(t).split('\n').filter(l => !/^\s*(?:#|\/\/|\*|\/\*)/.test(l)).join('\n'));
+function canExit77(rel, texts) {
+    if (texts.scripts?.[rel] !== undefined) return says77(texts.scripts[rel]);
+    if (!can77.has(rel)) {
+        let t = '';
+        try { t = readFileSync(join(REPO_ROOT, rel), 'utf8'); } catch { t = ''; }
+        can77.set(rel, says77(t));
+    }
+    return can77.get(rel);
 }
 
 // The lockfile lines of the range step (after its git fetch, before its GITHUB_OUTPUT write), run with bash on a
@@ -305,6 +343,10 @@ function selfTest() {
             { ...real, 'release.yml': `${real['release.yml'].replace(/\n*$/, '\n')}\n  planted-reader:\n    needs: build-linux\n${head}    steps:\n      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n          name: release-linux\n          path: release\n      - run: cat release/release-manifest.json\n` },
             'artifact-digest', 'job planted-reader [artifact-digest]: downloads release-linux but never takes']),
         ['a reader of the artifact before its admission', edit('release.yml', '      - name: Admit release-linux by the SHA256SUMS digest build-linux recorded (before anything reads it)\n', '      - name: Read the manifest first\n        run: cat release/release-manifest.json\n\n      - name: Admit release-linux by the SHA256SUMS digest build-linux recorded (before anything reads it)\n'), 'artifact-digest', 'job sign-publish [artifact-digest]: downloads release-linux into release'],
+        // H1 SKIP-protocol handoff: a bare call of a script that can exit 77, and the explicit forms that pass.
+        ['verify-upstream-pins called bare in the bump job', edit('release-train.yml', 'bash scripts/run-no-skip.sh -- nix develop .#theia --command node scripts/verify-upstream-pins.mjs', 'nix develop .#theia --command node scripts/verify-upstream-pins.mjs'), 'skip-exit', 'calls scripts/verify-upstream-pins.mjs'],
+        ['a packaged row run through the driver without the wrapper', edit('release.yml', 'bash scripts/run-no-skip.sh -- nix develop .#theia --command scripts/verify-platform.sh --only "$LABEL"', 'nix develop .#theia --command scripts/verify-platform.sh --only "$LABEL"'), 'skip-exit', 'calls scripts/verify-platform.sh'],
+        ['a script converted to exit 77 while its call stays bare', { ...real, scripts: { 'scripts/verify-licence-allowlist.mjs': "import { SKIP_EXIT } from './lib/skip-verdict.mjs';" }, 'release.yml': real['release.yml'].replace('bash scripts/run-no-skip.sh -- nix develop .#theia --command node scripts/verify-licence-allowlist.mjs --rulings', 'nix develop .#theia --command node scripts/verify-licence-allowlist.mjs --rulings') }, 'skip-exit', 'calls scripts/verify-licence-allowlist.mjs'],
         ['the stop issue prints the stage line as the stage', edit('release-train.yml', '"$TAG" "$KEYWORD" "${DETAIL:-none}" "$RUN_URL"', '"$TAG" "$STAGE" "${DETAIL:-none}" "$RUN_URL"'), 'stage-line', 'without reducing it to a keyword'],
         ['a backtick admitted', edit('release-train.yml', `STAGE=$(printf '%s' "$STAGE_OUT" | tr -cd "A-Za-z0-9 _./:@()'*,=<>+-" | cut -c1-300)`, `STAGE=$(printf '%s' "$STAGE_OUT" | tr -cd "A-Za-z0-9 _./:@()'*,=<>+\`-" | cut -c1-300)`), 'stage-line', 'without first cutting it'],
         // ci-supply-chain-01, the pre-fix sign-publish: no admission of release-linux by build-linux's digest.
@@ -359,4 +401,4 @@ if (fails.length) {
     for (const f of fails) console.error(`  ${f}`);
     process.exit(1);
 }
-console.log(`${NAME}: PASS -- clauses enforced: stage-line, artifact-digest, mode-carry, orca-automerge`);
+console.log(`${NAME}: PASS -- clauses enforced: stage-line, artifact-digest, mode-carry, orca-automerge, skip-exit`);
