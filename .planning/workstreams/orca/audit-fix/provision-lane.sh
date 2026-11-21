@@ -44,6 +44,17 @@ for dir in "$SRC"/theia/extensions/*/; do
 done
 if [ "${1:-}" = "--with-objdir" ]; then copy objdir; fi
 
+# A relative link that leaves the worktree (the corepack shims point into /nix/store
+# through nine `..` segments) resolves from the integration worktree's depth only.
+# Re-point each link that is broken here at the path it resolves to there.
+relinked=0
+while IFS= read -r -d '' link; do
+  rel="${link#"$DST"/}"
+  target="$(realpath -e "$SRC/$rel" 2>/dev/null || true)"
+  if [ -n "$target" ]; then ln -sfn "$target" "$link"; relinked=$((relinked + 1)); fi
+done < <(find "$DST/.mozbuild" -xtype l -print0 2>/dev/null)
+echo "  relinked $relinked link(s) under .mozbuild that pointed outside the worktree"
+
 # The copied build outputs match the integration worktree's sources at copy time.
 # Rebuild the extensions so lib/ matches this worktree's sources.
 echo "provision-lane: done in $(( $(date +%s) - start )) s. Next: nix develop .#theia --command bash -c 'cd theia && yarn build:extensions'"
