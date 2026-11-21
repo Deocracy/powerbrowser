@@ -40,6 +40,10 @@
 //                  complete; a timeout past the timer limit is lowered and still completes; the host's deadline lies
 //                  between chrome's and Orca's forwarding hop; a command chrome never answers fails browser_timeout.
 //  budget          66-WR-04: a completed value over Orca's result budget is answered with a result orcad accepts.
+//  snapshotIdentity 59-WR-03 round 3: the host's url and title caps equal the pinned page metadata schema's bounds;
+//                  a snapshot at chrome's own budget (agentResultFits with agentSnapshotReserve, evaluated from chrome's
+//                  source) reaches orcad completed, with a url and title at their caps and with a tab url longer
+//                  than the cap chrome measured.
 //  startDeadline   66-WR-02: with no link, and with a link that never becomes ready, the attach fails and logs the step.
 //  detachedClose   66-WR-03: a user close while detached reaches orcad after re-attach; a createPage for that page
 //                  opens nothing; a close orcad refuses is not sent again.
@@ -233,6 +237,10 @@ function makeSchemas(ts, zod) {
         },
         commandEvent: protocol.BrowserClientHostCommandEvent,
         inventoryMaxBytes: protocol.BROWSER_CLIENT_HOST_PAGE_INVENTORY_MAX_BYTES,
+        metadataCaps: (() => {
+            const shape = shared('browser-client-page-metadata-protocol.ts').BrowserClientPageMetadataParams.shape;
+            return { url: shape.url.maxLength, title: shape.title.maxLength };
+        })(),
         waitHop: shared('browser-wait-timeout.ts').browserWaitRequestTimeoutMs,
     };
 }
@@ -795,6 +803,68 @@ async function budgetScenario(env) {
     return result?.status === 'failed' ? [] : [`budget: a snapshot over Orca's result budget reached orcad as ${JSON.stringify(result).slice(0, 120)} (${refusalText(w) || 'no refusal'}); expected an accepted failed result`];
 }
 
+/**
+ * Chrome's result budget for a snapshot, evaluated from PowerBrowserAPI.sys.mjs itself: AGENT_RESULT_MAX_BYTES, the
+ * AGENT_SNAPSHOT_* bounds, agentResultFits and agentSnapshotReserve (webTabPushedSpec stands in as the identity).
+ */
+function chromeSnapshotBudget(files) {
+    const text = files[REL.api] ?? readFileSync(join(REPO_ROOT, REL.api), 'utf8');
+    const pick = (re, what) => {
+        const m = re.exec(text);
+        if (!m) throw new FixtureError(`${what} not found in ${REL.api}`);
+        return m[0];
+    };
+    const source = [
+        pick(/^const AGENT_RESULT_MAX_BYTES = [^\n]*$/m, 'AGENT_RESULT_MAX_BYTES'),
+        pick(/^const AGENT_SNAPSHOT_URL_UNITS = [^\n]*$/m, 'AGENT_SNAPSHOT_URL_UNITS'),
+        pick(/^const AGENT_SNAPSHOT_TITLE_UNITS = [^\n]*$/m, 'AGENT_SNAPSHOT_TITLE_UNITS'),
+        pick(/^const AGENT_SNAPSHOT_ID_BYTES = [^\n]*$/m, 'AGENT_SNAPSHOT_ID_BYTES'),
+        pick(/^function agentResultFits\([\s\S]*?\n}\n/m, 'agentResultFits'),
+        pick(/^function agentSnapshotReserve\([\s\S]*?\n}\n/m, 'agentSnapshotReserve'),
+        'const webTabPushedSpec = spec => spec;',
+        '({ fits: agentResultFits, reserve: (url, title) => agentSnapshotReserve({ browser: { currentURI: { spec: url }, contentTitle: title } }) })',
+    ].join('\n');
+    return vm.runInNewContext(source, {});
+}
+
+async function snapshotIdentityScenario(env) {
+    const fails = [];
+    const caps = env.schemas.metadataCaps;
+    const wire = makeWireModule(env);
+    if (wire.PAGE_METADATA_URL_MAX !== caps.url || wire.PAGE_METADATA_TITLE_MAX !== caps.title) {
+        fails.push(`snapshotIdentity: the host caps url and title at ${wire.PAGE_METADATA_URL_MAX} and ${wire.PAGE_METADATA_TITLE_MAX}; the pinned page metadata schema bounds them at ${caps.url} and ${caps.title}`);
+    }
+    const chrome = chromeSnapshotBudget(env.files);
+    // The worst JSON cost per unit chrome's reserve assumes: 3 bytes for a url unit, 6 for an escaped title unit.
+    const capUrl = `https://example.com/${'\u20ac'.repeat(caps.url - 20)}`;
+    const capTitle = '\u0001'.repeat(caps.title);
+    const reserve = chrome.reserve(capUrl, capTitle);
+    let low = 0;
+    let high = 800 * 1024;
+    while (low < high) {
+        const mid = Math.ceil((low + high) / 2);
+        if (chrome.fits({ snapshot: 'x'.repeat(mid) }, reserve)) low = mid; else high = mid - 1;
+    }
+    const snapshot = 'x'.repeat(low);
+    const cases = [
+        ['a url and title at their caps', capUrl, capTitle],
+        ["a tab url longer than the cap chrome measured", `${capUrl}${'\u20ac'.repeat(2000)}`, capTitle],
+    ];
+    for (const [what, url, title] of cases) {
+        const w = makeWorld({ ...env, agent: msg => ({ after: 5, reply: { ok: true, where: 'done', result: msg.method === 'browser.snapshot' ? { snapshot } : {} } }) });
+        if (!(await attached(w))) return [...fails, `snapshotIdentity: the host did not attach (${refusalText(w) || 'no refusal'})`];
+        const tabId = await orcadPage(w, 'page-1');
+        const widget = w.widgets.get(tabId);
+        widget.url = url;
+        widget.pageTitle = title;
+        const result = await settled(w, w.orcad.command('page-1', { type: 'automation', method: 'browser.snapshot', params: {} }), 1000);
+        if (result?.status !== 'completed' || result.value?.url?.length > caps.url || result.value?.title?.length > caps.title) {
+            fails.push(`snapshotIdentity: a snapshot at chrome's limit with ${what} reached orcad as ${JSON.stringify(result).slice(0, 80)}${result?.value ? ` (url ${result.value.url?.length}, title ${result.value.title?.length} units)` : ''} (${refusalText(w) || 'no refusal'}); expected completed with the url and title within ${caps.url} and ${caps.title}`);
+        }
+    }
+    return fails;
+}
+
 async function startDeadlineScenario(env) {
     const fails = [];
     for (const [link, step] of [[null, 'link'], ['never-ready', 'connection']]) {
@@ -994,7 +1064,7 @@ async function credentialScenario(env) {
 
 const SCENARIOS = [
     ['metadata', metadataScenario], ['metadataReattach', metadataReattachScenario], ['restart', restartScenario], ['lostResult', lostResultScenario],
-    ['timeout', timeoutScenario], ['budget', budgetScenario], ['startDeadline', startDeadlineScenario], ['detachedClose', detachedCloseScenario],
+    ['timeout', timeoutScenario], ['budget', budgetScenario], ['snapshotIdentity', snapshotIdentityScenario], ['startDeadline', startDeadlineScenario], ['detachedClose', detachedCloseScenario],
     ['duplicate', duplicateScenario], ['closeBeforeBind', closeBeforeBindScenario], ['inventoryBudget', inventoryBudgetScenario],
     ['chromeStatus', chromeStatusScenario], ['placement', placementScenario], ['credential', credentialScenario],
 ];
@@ -1025,7 +1095,7 @@ function skipReason() {
     return null;
 }
 
-const readAll = () => Object.fromEntries(['frontend', 'dispatch', 'wire', 'host', 'link'].map(k => [REL[k], readFileSync(join(REPO_ROOT, REL[k]), 'utf8')]));
+const readAll = () => Object.fromEntries(['frontend', 'dispatch', 'wire', 'host', 'link', 'api'].map(k => [REL[k], readFileSync(join(REPO_ROOT, REL[k]), 'utf8')]));
 
 function sub(rel, from, to) {
     return files => {
@@ -1082,6 +1152,9 @@ const PLANTS = [
     { name: '66-WR-04: no budget and no retry', clause: 'budget', edits: [
         sub(REL.frontend, 'const outcome = boundedOutcome(await dispatchCommand(event, this.deps(event)));', 'const outcome = await dispatchCommand(event, this.deps(event));'),
         sub(REL.frontend, "if (outcome.status === 'completed' && event.command?.type === 'automation') {", 'if (false) {'),
+    ] },
+    { name: '59-WR-03 round 3: the snapshot url added uncapped', clause: 'snapshotIdentity', edits: [
+        sub(REL.wire, "url: (typeof url === 'string' ? url : '').slice(0, PAGE_METADATA_URL_MAX),", "url: typeof url === 'string' ? url : '',"),
     ] },
     { name: '66-WR-02: no deadline on the start steps', clause: 'startDeadline', edits: [
         sub(REL.wire, 'export const START_STEP_DEADLINE_MS = 60_000;', 'export const START_STEP_DEADLINE_MS = 2_000_000_000;'),
