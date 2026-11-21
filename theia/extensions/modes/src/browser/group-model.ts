@@ -110,6 +110,9 @@ function toFinite(value: unknown, fallback: number): number {
     return Number.isFinite(n) ? n : fallback;
 }
 
+/** The last key `tabKeyOf` computed for each widget while it was alive. */
+const liveKeys = new WeakMap<Widget, string>();
+
 /**
  * NG-001: the one row-key rule, for every kind of tab (docs/TAB-STORE.md).
  * A web tab is keyed by its own identity (`WebTabWidget.rowKey`), never its
@@ -121,9 +124,21 @@ export function tabKeyOf(widget: Widget, registry: TabUriRegistry): string {
     if (widget instanceof WebTabWidget) {
         return widget.rowKey;
     }
+    // A `disposed` listener runs after WidgetManager's own, which has already
+    // dropped the widget's description, so the registry address is gone by
+    // then. Lumino sets isDisposed before it emits, so the key the widget had
+    // while alive is returned instead of the `widget:` fallback.
+    const last = liveKeys.get(widget);
+    if (widget.isDisposed && last !== undefined) {
+        return last;
+    }
     const address = registry.uriOf(widget) ?? (NavigatableWidget.is(widget) ? widget.getResourceUri() : undefined);
     const key = address?.toString(true);
-    return key && !/^(webview|https?):/i.test(key) ? key : `widget:${widget.id}`;
+    const result = key && !/^(webview|https?):/i.test(key) ? key : `widget:${widget.id}`;
+    if (!widget.isDisposed) {
+        liveKeys.set(widget, result);
+    }
+    return result;
 }
 
 @injectable()
@@ -726,8 +741,8 @@ export class GroupModel implements FrontendApplicationContribution {
             return;
         }
         const card = from.card;
-        const before = sameGroup && toGroupId !== null
-            ? (this.members.get(toGroupId) ?? []).findIndex(tab => tab.uri === uri)
+        const before = from.groupId !== null
+            ? (this.members.get(from.groupId) ?? []).findIndex(tab => tab.uri === uri)
             : undefined;
         const apply = (): void => {
             this.removeCardLocal(uri);
@@ -818,6 +833,7 @@ export class GroupModel implements FrontendApplicationContribution {
         }
         const removed = this.groups[index];
         const stragglers = [...(this.members.get(id) ?? [])];
+        const wasActive = this.activeGroupId === id;
         const apply = (): void => {
             this.groups = this.groups.filter(candidate => candidate.id !== id);
             this.members.delete(id);
@@ -830,11 +846,13 @@ export class GroupModel implements FrontendApplicationContribution {
         };
         const revert = (): void => {
             this.groups = [...this.groups.slice(0, index), removed, ...this.groups.slice(index)];
-            this.members.set(id, stragglers);
-            for (const tab of stragglers) {
-                this.removeCardLocal(tab.uri);
-            }
+            // Out of the loose list before the group is restored: removeCardLocal
+            // searches the groups first and would take them back out of this one.
             this.ungrouped = this.ungrouped.filter(tab => !stragglers.some(other => other.uri === tab.uri));
+            this.members.set(id, stragglers);
+            if (wasActive) {
+                this.activeGroupId = id;
+            }
         };
         await this.persist(`dissolve:${id}`, apply, revert, () => client.mutate({ kind: 'dissolveGroup', id }));
     }
@@ -1042,7 +1060,7 @@ export class GroupModel implements FrontendApplicationContribution {
         this.reopening.add(tab.uri);
         try {
             const target = new URI(web ? (tab.url || EMPTY_PAGE_URL) : tab.uri);
-            const options: WebTabOpenerOptions = web ? { rowKey: tab.uri } : { widgetOptions: { area: 'main' } } as WebTabOpenerOptions;
+            const options: WebTabOpenerOptions = web ? { rowKey: tab.uri, url: tab.url || EMPTY_PAGE_URL } : { widgetOptions: { area: 'main' } } as WebTabOpenerOptions;
             const opener = await this.openers.getOpener(target, options);
             await opener.open(target, options);
         } finally {
@@ -1087,26 +1105,30 @@ export class GroupModel implements FrontendApplicationContribution {
     private async persist(key: string, apply: () => void, revert: () => void, write: () => Promise<unknown>): Promise<void> {
         apply();
         this.changeEmitter.fire();
-        let slot = this.pendingWrites.get(key);
-        if (!slot) {
-            slot = { attempts: 0, revert, write };
-            if (this.pendingWrites.size >= GroupModel.PENDING_WRITES_MAX) {
-                const oldest = this.pendingWrites.keys().next();
-                if (!oldest.done) {
-                    this.pendingWrites.delete(oldest.value);
-                }
+        // One slot per call: an earlier same-key write still in flight must not
+        // clear this one's Retry entry when it lands, and Retry replays this write.
+        const slot = { attempts: this.pendingWrites.get(key)?.attempts ?? 0, revert, write };
+        this.pendingWrites.delete(key);
+        if (this.pendingWrites.size >= GroupModel.PENDING_WRITES_MAX) {
+            const oldest = this.pendingWrites.keys().next();
+            if (!oldest.done) {
+                this.pendingWrites.delete(oldest.value);
             }
-            this.pendingWrites.set(key, slot);
         }
+        this.pendingWrites.set(key, slot);
         try {
             await write();
-            this.pendingWrites.delete(key);
+            if (this.pendingWrites.get(key) === slot) {
+                this.pendingWrites.delete(key);
+            }
         } catch (error) {
             slot.attempts += 1;
             if (slot.attempts >= 2) {
                 revert();
                 this.changeEmitter.fire();
-                this.pendingWrites.delete(key);
+                if (this.pendingWrites.get(key) === slot) {
+                    this.pendingWrites.delete(key);
+                }
             }
             throw error;
         }

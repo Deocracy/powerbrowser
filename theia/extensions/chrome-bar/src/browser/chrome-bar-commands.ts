@@ -295,6 +295,18 @@ export function openStockPage(page: string): void {
     openStockPagePath?.(page);
 }
 
+let repaintChromeBar: (() => void) | undefined;
+
+/** Set by the chrome bar widget: its print and save notices read tab flags that no state push carries. */
+export function setRepaintChromeBar(repaint: (() => void) | undefined): void {
+    repaintChromeBar = repaint;
+}
+
+/** PAGE-03/PAGE-08: runs a page tool whose failure notice the bar shows, then repaints the bar. */
+export function withBarRepaint<T>(run: Promise<T>): Promise<T> {
+    return run.finally(() => repaintChromeBar?.());
+}
+
 /**
  * GUI-02-owned navigable-tab predicate (13-04, flipped in 14.1-02): back,
  * forward, and reload all read enablement from this one export, and so do
@@ -482,12 +494,18 @@ export class ChromeBarCommandContribution implements CommandContribution {
         });
         // MENU-03 (D-13): the Phase 32 page tools, one tab method each -- the method the page relay's key runs.
         commands.registerCommand(CHROME_BAR_PRINT, {
-            execute: () => currentWebTab()?.print(),
+            execute: () => {
+                const tab = currentWebTab();
+                return tab ? withBarRepaint(tab.print()) : undefined;
+            },
             isEnabled: () => !!currentWebTab(),
             isVisible: () => true,
         });
         commands.registerCommand(CHROME_BAR_SAVE_PAGE, {
-            execute: () => currentWebTab()?.savePage(chooseSaveDestination),
+            execute: () => {
+                const tab = currentWebTab();
+                return tab ? withBarRepaint(tab.savePage(chooseSaveDestination)) : undefined;
+            },
             isEnabled: () => !!currentWebTab(),
             isVisible: () => true,
         });

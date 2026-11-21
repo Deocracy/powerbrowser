@@ -713,6 +713,7 @@ const EXPECTED_NAV_COPY = new Set([
   "There is a security problem with ${name}",
   "Local page on ${name}",
   "${name} can't show site information for this page. Try reloading the page.",
+  "Close site information",
   "Permissions",
   "No special permissions set for this site",
   "Allowed",

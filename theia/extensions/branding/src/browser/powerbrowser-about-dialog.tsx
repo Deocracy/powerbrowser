@@ -2,9 +2,11 @@ import * as React from '@theia/core/shared/react';
 import { injectable, inject } from '@theia/core/shared/inversify';
 import { AboutDialog, AboutDialogProps, ABOUT_CONTENT_CLASS } from '@theia/core/lib/browser/about-dialog';
 import { FrontendApplicationConfigProvider } from '@theia/core/lib/browser/frontend-application-config-provider';
+import { CommandService, MessageService } from '@theia/core/lib/common';
 import { powerBrowserMarkInline, inlineMarkFromSvg } from './powerbrowser-mark';
-import { POWERBROWSER_REPO_URL } from './powerbrowser-welcome-widget';
+import { POWERBROWSER_REPO_URL, OPEN_LINK_FAILED_COPY } from './powerbrowser-welcome-widget';
 import { readBrandingConfig } from './powerbrowser-branding-config';
+import { OPEN_BROWSER_WINDOW_ID } from './powerbrowser-report-bug-contribution';
 
 // GEN-05 (04-01, carried over from the welcome widget): the boot fallback
 // for the dialog title. The title itself resolves at runtime through the
@@ -39,6 +41,12 @@ const FALLBACK_LEGAL_NOTICES = [
 // re-implemented here.
 @injectable()
 export class PowerBrowserAboutDialog extends AboutDialog {
+
+    @inject(CommandService)
+    protected readonly commands: CommandService;
+
+    @inject(MessageService)
+    protected readonly messages: MessageService;
 
     constructor(@inject(AboutDialogProps) protected override readonly props: AboutDialogProps) {
         super(props);
@@ -87,6 +95,13 @@ export class PowerBrowserAboutDialog extends AboutDialog {
         return channel !== undefined ? inlineMarkFromSvg(channel, 48) : powerBrowserMarkInline(48);
     }
 
+    // The stock-window opener, not window.open: from the Theia frame window.open opens a new OS window per click.
+    protected openRepo(): void {
+        this.commands.executeCommand(OPEN_BROWSER_WINDOW_ID, this.repoUrl).catch(() => {
+            this.messages.error(OPEN_LINK_FAILED_COPY);
+        });
+    }
+
     // PowerBrowser's own body -- mark, name, version, one repo link. No
     // renderExtensions() call, no eclipse-theia.github.io link (D-35,
     // criterion 1).
@@ -108,7 +123,8 @@ export class PowerBrowserAboutDialog extends AboutDialog {
                 <a
                     role='button'
                     tabIndex={0}
-                    onClick={() => this.windowService.openNewWindow(this.repoUrl, { external: true })}>
+                    onClick={() => this.openRepo()}
+                    onKeyDown={e => { if (this.isEnterKey(e)) { this.openRepo(); } }}>
                     {this.repoUrl}
                 </a>
             </p>

@@ -275,6 +275,9 @@ export class ModeService implements FrontendApplicationContribution {
     protected registeredCustomIds = new Set<string>();
     protected droppedCustomIds = new Set<string>();
     protected customModesLoadedPromise: Promise<void> | undefined;
+    protected persistedModeReapplied = false;
+    /** Bumped by every activateMode; an earlier call that sees a newer value stops applying its rules. */
+    protected switchSeq = 0;
 
     onStart(): void {
         // Fire-and-forget: awaiting this read here re-enters the boot-chain
@@ -331,6 +334,10 @@ export class ModeService implements FrontendApplicationContribution {
      */
     async activateMode(id: string): Promise<void> {
         const target = this.resolveTarget(id);
+        // Stock serialises only the perspective swap; the steps after each await
+        // below are skipped once a newer switch has started, so an earlier call
+        // cannot apply its panels, furniture and attribute over the later mode.
+        const seq = ++this.switchSeq;
         // Unguarded on purpose, and the fallback switch that used to sit in a
         // catch here is gone with the catch: stock's doSwitchPerspective returns
         // silently for an already-active id (perspective-service.js:114-116) and
@@ -342,6 +349,9 @@ export class ModeService implements FrontendApplicationContribution {
         // reject -- the catch could never run, and the 'browsing' retry inside
         // it was unreachable code claiming to be a safety net.
         await this.perspectives.switchPerspective(target);
+        if (seq !== this.switchSeq) {
+            return;
+        }
         const rules = this.rulesFor(target);
         // NG-035: dock the mode's views before any panel opens or closes.
         // ensureInArea is additive (see its note below), and stock's
@@ -350,6 +360,9 @@ export class ModeService implements FrontendApplicationContribution {
             for (const viewId of rules.views[area]) {
                 await this.ensureInArea(viewId, area);
             }
+        }
+        if (seq !== this.switchSeq) {
+            return;
         }
         this.detachOtherModesViews(rules);
         // collapse() floats a promise (expand is sync void): attach the
@@ -368,6 +381,9 @@ export class ModeService implements FrontendApplicationContribution {
             this.shell.expandPanel('bottom');
         } else if (rules.bottom === 'closed') {
             await this.shell.collapsePanel('bottom');
+        }
+        if (seq !== this.switchSeq) {
+            return;
         }
         if (rules.organising) {
             openOrganisingSlot();
@@ -686,7 +702,11 @@ export class ModeService implements FrontendApplicationContribution {
         const active = this.safeActiveId();
         if (active !== undefined && this.droppedCustomIds.has(active)) {
             void this.activateMode('browsing');
-        } else {
+        } else if (!this.persistedModeReapplied) {
+            // The persisted id is the mode the last quit stored (storeLayout runs
+            // only at the quit flush), so it is re-applied once per launch: on a
+            // later reload it would undo the user's switches of this session.
+            this.persistedModeReapplied = true;
             void this.reapplyPersistedMode();
         }
     }

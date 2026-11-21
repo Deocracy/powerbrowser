@@ -834,9 +834,17 @@ export class SetupsService implements FrontendApplicationContribution {
         }));
     }
 
+    /**
+     * PAN-04: a tab of a group in its undo window is shown nowhere and closes with the group, so no snapshot
+     * records it. The quit flush takes the session snapshot before the pending close has closed the widgets.
+     */
+    protected isPendingClose(widget: Widget): boolean {
+        return this.groupModel.isClosingKey(this.groupModel.keyOf(widget));
+    }
+
     /** Snapshot the core window plus tracked dependents, rects verbatim. */
     protected snapshotWindows(): SetupWindowSnapshot[] {
-        const coreTabs = this.tabsOfShell();
+        const coreTabs = this.tabsOfShell().filter(entry => !this.isPendingClose(entry.widget));
         const active = this.shell.activeWidget?.id;
         const core: SetupWindowSnapshot = {
             x: window.screenX,
@@ -882,7 +890,7 @@ export class SetupsService implements FrontendApplicationContribution {
         if (area.type === 'tab-area') {
             const tabs: string[] = [];
             for (const widget of area.widgets) {
-                const uri = this.tabUriOf(widget);
+                const uri = this.isPendingClose(widget) ? undefined : this.tabUriOf(widget);
                 if (uri !== undefined && !tabs.includes(uri)) {
                     tabs.push(uri);
                 }
@@ -1437,10 +1445,13 @@ export class SetupsService implements FrontendApplicationContribution {
         try {
             const raw = (await this.fileService.read(this.setupsUri)).value;
             const parsed = parseSetupStore(raw);
-            if (parsed.ok) {
-                setups = parsed.setups;
-                this.lastGoodSetups = parsed.setups;
+            if (!parsed.ok) {
+                // An unreadable store is shown empty but never overwritten unasked:
+                // this runs on every quit, and writing here would erase every setup.
+                return;
             }
+            setups = parsed.setups;
+            this.lastGoodSetups = parsed.setups;
         } catch {
             if (name === null) {
                 return;

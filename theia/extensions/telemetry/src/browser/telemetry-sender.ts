@@ -223,6 +223,12 @@ export class PowerBrowserTelemetrySender {
     protected async sendInflight(): Promise<void> {
         const current = this.inflight;
         if (current === null) return;
+        // The level is live: a batch taken while it admitted events is not sent after the user lowers it.
+        current.payload = current.payload.filter(event => this.admits(event.kind));
+        if (current.payload.length === 0) {
+            this.inflight = null;
+            return this.sendNext();
+        }
         current.attempts += 1;
         let ok = false;
         try {
@@ -265,7 +271,9 @@ export class PowerBrowserTelemetrySender {
     }
 
     protected async sendNext(): Promise<void> {
-        if (this.inflight !== null || this.queue.length === 0) return;
+        if (this.inflight !== null) return;
+        this.queue = this.queue.filter(event => this.admits(event.kind));
+        if (this.queue.length === 0) return;
         const batch = this.queue.splice(0, this.maxBatchSize);
         this.inflight = { payload: batch, attempts: 0 };
         await this.sendInflight();

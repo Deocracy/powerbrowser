@@ -2481,8 +2481,13 @@ export const PowerBrowserAPI = Object.freeze({
    * UPD-18 (46-01): one update topic notification mapped to the contracted
    * appUpdate status. An explicit table (46 review WR-04): update-available
    * with show-prompt to available, with cant-apply or unsupported to
-   * cant-apply; staged and downloaded to ready; everything else, update-error
-   * and any unnamed status included, to error. The subject may be null (cant-apply notifies with a
+   * cant-apply; staged and downloaded to ready for the statuses upstream's
+   * own listener treats as ready (UpdateListener.sys.mjs:395-402) and to null
+   * for any other, which pushes nothing: both topics carry update.state, which
+   * after a failed staging is "failed" or, once the service falls back to a
+   * complete update, "downloading" (UpdateService.sys.mjs:5181), and neither
+   * is an update the user can restart into. Everything else, update-error and
+   * any unnamed status included, to error. The subject may be null (cant-apply notifies with a
    * null subject): the null guard runs before any QueryInterface, and the
    * version read never throws. The returned triple is primitives only.
    */
@@ -2494,7 +2499,7 @@ export const PowerBrowserAPI = Object.freeze({
       return status === "cant-apply" || status === "unsupported" ? "cant-apply" : "error";
     }
     if (topic === "update-staged" || topic === "update-downloaded") {
-      return "ready";
+      return ["applied", "pending", "applied-service", "pending-service", "pending-elevate", "success"].includes(status) ? "ready" : null;
     }
     return "error";
   },
@@ -2526,7 +2531,10 @@ export const PowerBrowserAPI = Object.freeze({
     const observer = {
       observe: (subject, topic, status) => {
         try {
-          PowerBrowserAPI.pushAppUpdate(theiaBrowser, PowerBrowserAPI.mapUpdateNotification(topic, status), PowerBrowserAPI.updateVersionFromSubject(subject));
+          const mapped = PowerBrowserAPI.mapUpdateNotification(topic, status);
+          if (mapped !== null) {
+            PowerBrowserAPI.pushAppUpdate(theiaBrowser, mapped, PowerBrowserAPI.updateVersionFromSubject(subject));
+          }
         } catch (err) {
           PowerBrowserAPI.log("error", `[update-observer] push failed (${err && err.name ? err.name : "error"})`);
         }
@@ -2601,8 +2609,8 @@ export const PowerBrowserAPI = Object.freeze({
       if (cancelQuit.data) {
         return false;
       }
-      Services.startup.quit(Ci.nsIAppStartup.eAttemptQuit | Ci.nsIAppStartup.eRestart);
-      return true;
+      // quit() returns false when a window's CanClose vetoes it (nsIAppStartup.idl:152-156): that is a cancelled restart too.
+      return Services.startup.quit(Ci.nsIAppStartup.eAttemptQuit | Ci.nsIAppStartup.eRestart) !== false;
     } catch {
       return false;
     }
@@ -2883,7 +2891,8 @@ export const PowerBrowserAPI = Object.freeze({
         case "windowDragRegions": {
           const rects = Array.isArray(data.rects) ? data.rects : null;
           const finite = r => r && [r.x, r.y, r.w, r.h].every(Number.isFinite);
-          if (!rects || !rects.every(finite) || !Number.isFinite(data.height)) {
+          // Each rect becomes a chrome-document element; the frontend sends one per gap in two top rows, far below this bound.
+          if (!rects || rects.length > 64 || !rects.every(finite) || !Number.isFinite(data.height)) {
             return { ok: false, reason: "validation", message: "handleGroupMutation: refusing malformed drag regions" };
           }
           const win = actorRef.browsingContext.top.embedderElement.ownerDocument.defaultView;
@@ -3450,9 +3459,20 @@ export const PowerBrowserAPI = Object.freeze({
       if (!container) {
         return;
       }
-      for (const name of TAB_STORE_EVENTS) {
-        container.addEventListener(name, onTabEvent);
-        attached.push([container, name]);
+      // A window enumerated above and then announced by delayed-startup is attached once. A closed
+      // window's container leaves `attached`, which would otherwise keep its document alive until quit.
+      if (!attached.some(([held]) => held === container)) {
+        for (const name of TAB_STORE_EVENTS) {
+          container.addEventListener(name, onTabEvent);
+          attached.push([container, name]);
+        }
+        win.addEventListener("unload", () => {
+          for (let i = attached.length - 1; i >= 0; i -= 1) {
+            if (attached[i][0] === container) {
+              attached.splice(i, 1);
+            }
+          }
+        }, { once: true });
       }
       // NG-001: tabs already in the window (a new window's first tab, a
       // restored session) may have no event left to fire, and the sweep only
@@ -5010,7 +5030,8 @@ async function savePageCopy(uri) {
     // separators, so ".." segments and Windows separators cannot escape the
     // check, and the filename shape matches the minted id above.
     if (previous && previous !== dir && isMintedSavedPageDir(previous, root)) {
-      await IOUtils.remove(previous, { recursive: true, ignoreAbsent: true });
+      // The new row is committed: a failed removal of the old copy must not reach the catch below, which deletes `dir`.
+      await IOUtils.remove(previous, { recursive: true, ignoreAbsent: true }).catch(() => PowerBrowserAPI.log("warn", "[savePageCopy] the previous copy was not removed"));
     }
     return { dir, bytes };
   } catch (err) {
@@ -6025,7 +6046,25 @@ async function webTabSaveCopyOut(dir, path) {
   await IOUtils.writeUTF8(path, html.replace(/(["'(=\s])page_files\//g, (_match, lead) => `${lead}${filesName}/`));
   const sourceFiles = PathUtils.join(dir, "page_files");
   if (await IOUtils.exists(sourceFiles)) {
-    await IOUtils.copy(sourceFiles, PathUtils.join(PathUtils.parent(path), filesName), { recursive: true });
+    await webTabSaveCopyTree(sourceFiles, PathUtils.join(PathUtils.parent(path), filesName));
+  }
+}
+
+// IOUtils.copy into an EXISTING directory puts the source inside it (IOUtils.cpp CopyOrMoveSync, case 1). A save over an
+// earlier save of the same name would land its files in <stem>_files/page_files while the page links <stem>_files, so
+// an existing folder is filled entry by entry instead.
+async function webTabSaveCopyTree(source, dest) {
+  if (!(await IOUtils.exists(dest))) {
+    await IOUtils.copy(source, dest, { recursive: true });
+    return;
+  }
+  for (const child of await IOUtils.getChildren(source)) {
+    const target = PathUtils.join(dest, PathUtils.filename(child));
+    if ((await IOUtils.stat(child)).type === "directory") {
+      await webTabSaveCopyTree(child, target);
+    } else {
+      await IOUtils.copy(child, target);
+    }
   }
 }
 
@@ -6667,7 +6706,9 @@ async function openStockPageFromMenu(page) {
 // window with no nsIBrowserDOMWindow. The shell has none, so the Theia <browser> was never asked.
 const shellQuitVeto = {
   observe(subject) {
-    if (!subject || typeof subject.data !== "boolean" || subject.data) {
+    // instanceof does the QueryInterface: a cancel flag created natively (a session-manager logout, the macOS dock's Quit)
+    // arrives as a bare nsISupports with no `data` until then (BrowserGlue.sys.mjs's own observer does the same).
+    if (!subject || !(subject instanceof Ci.nsISupportsPRBool) || subject.data) {
       return;
     }
     if (!shellBrowsersPermitUnload()) {
@@ -7228,7 +7269,11 @@ function webTabDownloadsSubscribe(frame) {
       downloadsState.list = list;
       list.addView(downloadsView);
       Services.obs.addObserver(downloadsQuitObserver, "quit-application-granted");
-    })();
+    })().catch(err => {
+      // A failed install is not kept: the next subscribe tries again instead of answering from this rejection.
+      downloadsState.installed = null;
+      throw err;
+    });
   }
   return downloadsState.installed;
 }
@@ -7976,10 +8021,10 @@ async function showBlockedPopupBar(host, browser) {
       setBar(browser, "blocked-popup", null, null);
       return;
     }
-    const opened = openedPopups.get(browser) ?? new Set();
+    // The opened set is read after the await: an Allow answered meanwhile stores a new set, and its popup must not be offered again.
     const popups = (await blocker.getBlockedPopups())
       .map(p => ({ key: `${p.innerWindowId}:${p.reportIndex}`, spec: String(p.popupWindowURISpec || ""), browsingContext: p.browsingContext, innerWindowId: p.innerWindowId, reportIndex: p.reportIndex }))
-      .filter(p => !opened.has(p.key));
+      .filter(p => !openedPopups.get(browser)?.has(p.key));
     if (!popups.length && !redirectBlocked) {
       setBar(browser, "blocked-popup", null, null);
       return;
@@ -9083,7 +9128,8 @@ function pageMenuSavePick(id, pending) {
   const { data, facts } = pending;
   const link = id === "context-savelink";
   const url = link ? data.context.linkURL : facts.mediaURL;
-  if (!pageMenuTargetAllowed(data.principal, url)) {
+  // pageMenuSave builds a non-private download on the public list, so a private tab is refused, as the other save kinds refuse it.
+  if (lazy.PrivateBrowsingUtils.isBrowserPrivate(data.browser) || !pageMenuTargetAllowed(data.principal, url)) {
     return { where: "refused" };
   }
   pending.save = { url, referrerInfo: link && data.context.onLink ? data.linkReferrerInfo : data.referrerInfo, principal: data.principal, cookieJarSettings: data.cookieJarSettings };
@@ -9468,6 +9514,8 @@ function installFullscreen(window) {
         aActor.requestOrigin = null;
         return;
       }
+      // A pointer-lock warning still set would be reused by showWarning for the fullscreen text; it closes first (:580-582).
+      closeWarning("pointerlock-warning");
       // A remote browser's content enters fullscreen state first, through any OOP ancestor frames (:586-623).
       if (aBrowser?.hasAttribute("remote")) {
         const [targetActor, inProcessBC] = fullscreenNextRecipient(aActor, false);

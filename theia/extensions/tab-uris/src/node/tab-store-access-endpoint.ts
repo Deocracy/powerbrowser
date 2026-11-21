@@ -228,6 +228,9 @@ export class TabStoreAccessEndpoint implements BackendApplicationContribution {
         } catch {
             return this.json(res, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'invalid JSON' } });
         }
+        if (!msg || typeof msg !== 'object') {
+            return this.json(res, { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'invalid request' } });
+        }
         const id = msg.id === undefined ? null : msg.id;
         try {
             const result = await this.dispatch(String(msg.method ?? ''), (msg.params ?? {}) as Args);

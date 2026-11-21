@@ -249,6 +249,14 @@ export class UpdateClientContribution implements FrontendApplicationContribution
         // The once-per-session flag is cleared by an observed completed check
         // in onAppUpdatePush, never here (CR-06).
         const reply = await this.request({ kind: 'checkForUpdates' });
+        // A check that finds no update sends no push, so a failed-check item would otherwise stay; a later error push restores it.
+        if (reply !== 'no-chrome' && reply.ok && !this.readyVersion) {
+            try {
+                await this.statusBar.removeElement(this.statusBarId);
+            } catch {
+                // Status bar unavailable: nothing to clear.
+            }
+        }
         if (reply !== 'no-chrome' && !reply.ok && reply.reason === 'not-started') {
             try {
                 const actions = await this.messages.warn(POWERBROWSER_UPDATE_COPY.checkNotStartedBody, POWERBROWSER_UPDATE_COPY.tryAgainLabel);
