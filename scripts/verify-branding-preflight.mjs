@@ -46,7 +46,9 @@ import { readFileSync, existsSync, mkdtempSync, mkdirSync, readdirSync, writeFil
 import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { resolveConfig, emitTheiaBranding } from './generate.mjs';
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'verify-branding-preflight';
@@ -61,8 +63,10 @@ const DESKTOP_ROOT_TOKEN = '@POWERBROWSER_REPO_ROOT@';
 
 const args = process.argv.slice(2);
 const SELF_TEST = args.includes('--self-test');
+// --root=<dir> runs the main mode over another tree (the self-test's SKIP control uses it).
+const ROOT_ARG = args.find(a => a.startsWith('--root='));
 for (const a of args) {
-    if (a !== '--self-test') {
+    if (a !== '--self-test' && !a.startsWith('--root=')) {
         console.error(`${NAME}: FAIL -- unknown argument '${a}'`);
         process.exit(1);
     }
@@ -75,9 +79,13 @@ for (const a of args) {
 // typo; nine wrong values is a whole surface that was never written.
 function makeReporter() {
     const failures = [];
+    // A clause not run because a git-ignored input is absent (SKIP-PROTOCOL.md rule 2).
+    const skips = [];
     return {
         failures,
+        skips,
         fail(msg) { failures.push(msg); },
+        skip(msg) { skips.push(msg); },
         eq(label, actual, expected, where) {
             if (actual === expected) return true;
             failures.push(
@@ -1038,7 +1046,9 @@ function runChecks(root) {
                 pinLegalNotices(r, appPkgRel, block?.legalNotices, expectedNotices, copyNext);
             }
             const fragText = readText(root, fragRel);
-            if (fragText !== null) {
+            if (fragText === null) {
+                r.skip(`${fragRel} is absent (never generated in this copy), so its legalNotices pin did not run. Next step: run node scripts/generate.mjs`);
+            } else {
                 let frag = null;
                 try {
                     frag = JSON.parse(fragText);
@@ -1166,6 +1176,7 @@ function runChecks(root) {
 function selfTest() {
     const dir = mkdtempSync(join(tmpdir(), 'branding-preflight-selftest-'));
     let ok = true;
+    const selfSkips = [];
     try {
         // Mirror the real tree's shape, then mutate exactly one literal.
         const copy = [
@@ -1757,7 +1768,8 @@ function selfTest() {
         const fragRel = 'generated/theia-branding.json';
         const fragPath = join(dir, fragRel);
         if (!existsSync(fragPath)) {
-            console.log(`${NAME}: --self-test -- SKIP the dropped-notice plant: no ${fragRel} in this checkout (never generated), and the check skips an absent fragment`);
+            // The plant cannot run: the self-test is a SKIP unless something failed (SKIP-PROTOCOL.md rule 4).
+            selfSkips.push(`the dropped-notice plant did not run: no ${fragRel} in this checkout (never generated). Next step: run node scripts/generate.mjs`);
         } else {
             const fragOriginal = readFileSync(fragPath, 'utf8');
             const frag = JSON.parse(fragOriginal);
@@ -1781,6 +1793,21 @@ function selfTest() {
             }
             writeFileSync(fragPath, fragOriginal);
         }
+
+        // SKIP control (SKIP-PROTOCOL.md rule 2): the main mode, run as a child with its output captured, over the
+        // green fixture with its generated fragment removed. Every other section runs green and 11b's fragment pin
+        // does not run, so it must exit 77 with the SKIP line last and no PASS line.
+        rmSync(fragPath, { force: true });
+        const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url), `--root=${dir}`], { encoding: 'utf8' });
+        const lines = (r.stdout ?? '').split('\n').filter(l => l.trim() !== '');
+        const last = lines[lines.length - 1] ?? '';
+        if (r.status !== SKIP_EXIT || !last.startsWith(`${NAME}: SKIP -- ${fragRel} is absent`)
+            || lines.some(l => l.includes(`${NAME}: PASS`)) || /: SKIP/.test(r.stderr ?? '')) {
+            console.error(`${NAME}: --self-test FAIL -- control: a fixture without ${fragRel} did not exit 77 with the SKIP line last and no PASS line (status ${r.status}, last line ${JSON.stringify(last)}, stderr ${JSON.stringify((r.stderr ?? '').slice(0, 300))})`);
+            ok = false;
+        } else {
+            console.log(`${NAME}: --self-test -- control: a fixture without ${fragRel} exits 77 with the SKIP line last`);
+        }
     } finally {
         rmSync(dir, { recursive: true, force: true });
     }
@@ -1789,17 +1816,23 @@ function selfTest() {
         console.error(`${NAME}: --self-test FAIL`);
         process.exit(1);
     }
+    if (selfSkips.length) {
+        console.log(skipLine(`${NAME} --self-test`, selfSkips.join('; ')));
+        process.exit(SKIP_EXIT);
+    }
     console.log(`${NAME}: --self-test PASS`);
     process.exit(0);
 }
 
 if (SELF_TEST) selfTest();
 
-const result = runChecks(REPO_ROOT);
+const result = runChecks(ROOT_ARG ? resolve(ROOT_ARG.slice('--root='.length)) : REPO_ROOT);
 if (result.failures.length > 0) {
     console.error(`${NAME}: FAIL -- ${result.failures.length} branding literal(s) disagree with inventory/brand-tokens.json`);
     for (const f of result.failures) console.error(`  - ${f}`);
     process.exit(1);
 }
+// A clause not run for an absent input: exit 77 with the SKIP line printed last (SKIP-PROTOCOL.md).
+if (verdictExit(NAME, result.failures, result.skips) === SKIP_EXIT) process.exit(SKIP_EXIT);
 console.log(`${NAME}: PASS -- every hand-written branding literal equals the inventory's declared target`);
 process.exit(0);
