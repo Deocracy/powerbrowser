@@ -8,7 +8,8 @@
 // On evaluation it defines globalThis[Symbol.for('powerbrowser.orca-browser.link')] = { connection, setPlacement }
 // (non-writable, not configurable). Once the pane client's first runtime call has completed (a status.get through
 // window.api, so a device-key migration has already happened), it dispatches the window event
-// 'powerbrowser-orca-browser-link' once; connection() rejects with link_not_ready before that. Nothing here logs, and
+// 'powerbrowser-orca-browser-link'; connection() rejects with link_not_ready before that, and again after a re-pair
+// until the pane client has made a status call under the new pairing (66-WR-01). Nothing here logs, and
 // no error carries a token, key, endpoint or offer.
 import { readStoredWebRuntimeEnvironment } from '../../web/web-runtime-environment'
 import { webRuntimeCredentialFor } from '../../web/preload-api/web-runtime-credentials'
@@ -29,6 +30,25 @@ type RuntimeEnvironmentsApi = {
 }
 
 let ready = false
+// 66-WR-01: the credential source key (webRuntimeCredentialFor's cache key: environment id, pairing revision, endpoint
+// key) readiness was armed for. A re-pair changes it; connection() then waits for the pane client's next status call,
+// which creates the new source with the pane client's own callbacks, rather than creating and caching it here with
+// none (a stored token would never be forgotten and a revoked device would never drop its pairing).
+let readyKey: string | null = null
+let polling = false
+// T-66-04: the host id placements are bound to, the first one placed (the Theia host places its own id once attached).
+let placedHostId: string | null = null
+
+type StoredEnvironment = NonNullable<ReturnType<typeof readStoredWebRuntimeEnvironment>>
+
+function preferredEndpoint(environment: StoredEnvironment): StoredEnvironment['endpoints'][number] | undefined {
+  return environment.endpoints.find((entry) => entry.id === environment.preferredEndpointId) ?? environment.endpoints[0]
+}
+
+/** The key webRuntimeCredentialFor caches the environment's credential source under. */
+function credentialKey(environment: StoredEnvironment): string {
+  return `${environment.id}\0${environment.pairingRevision ?? environment.createdAt}\0${preferredEndpoint(environment)?.publicKeyB64}`
+}
 
 function runtimeEnvironments(): RuntimeEnvironmentsApi | null {
   return ((window as unknown as { api?: { runtimeEnvironments?: RuntimeEnvironmentsApi } }).api?.runtimeEnvironments ??
@@ -40,10 +60,15 @@ async function connection(): Promise<{ endpoint: string; hostPublicKeyB64: strin
   if (!ready) throw new Error('link_not_ready')
   const environment = readStoredWebRuntimeEnvironment()
   if (!environment) throw new Error('no_environment')
-  const endpoint =
-    environment.endpoints.find((entry) => entry.id === environment.preferredEndpointId) ?? environment.endpoints[0]
+  if (credentialKey(environment) !== readyKey) {
+    ready = false
+    awaitPaneClient()
+    throw new Error('link_not_ready')
+  }
+  const endpoint = preferredEndpoint(environment)
   if (!endpoint) throw new Error('no_endpoint')
-  // The pane client created this source on its first call; the callbacks are used only on a cache miss.
+  // The pane client's status call created the source under this key (readyKey), so this is a cache hit and these
+  // callbacks are never bound.
   const plan = await webRuntimeCredentialFor(environment, {
     forgetStoredToken: () => {},
     forgetPairing: () => {}
@@ -57,34 +82,55 @@ async function connection(): Promise<{ endpoint: string; hostPublicKeyB64: strin
   throw new Error(`unsupported_plan:${plan.kind}`)
 }
 
-/** A3 (a): Orca's renderer creates browser pages on the thin host (id) or, with null, back on the server. */
+/**
+ * A3 (a): Orca's renderer creates browser pages on the thin host (id) or, with null, back on the server. T-66-04: the
+ * first id placed binds the link; a later call naming another id is refused and leaves the placement as it was. The
+ * Theia host keeps one id for the frontend's life, so its own re-attach places the same id again.
+ */
 function setPlacement(browserHostClientId: string | null): void {
   if (browserHostClientId !== null && (typeof browserHostClientId !== 'string' || !browserHostClientId)) {
     throw new TypeError('invalid_host_id')
   }
+  if (browserHostClientId !== null && placedHostId !== null && browserHostClientId !== placedHostId) {
+    throw new Error('placement_refused')
+  }
   const api = runtimeEnvironments()
   if (!api) throw new Error('link_not_ready')
+  if (browserHostClientId !== null) placedHostId = browserHostClientId
   const placement: Placement =
     browserHostClientId === null ? { kind: 'server' } : { kind: 'client', browserHostClientId }
   // window.api is Orca's withFallback proxy with no set trap, so this lands on the underlying object.
   api.prepareBrowserClientHostPlacement = async () => ({ ...placement })
 }
 
+/** Arms readiness once the pane client has completed a status call; one poll at a time. */
+function awaitPaneClient(): void {
+  if (polling) return
+  polling = true
+  pollPaneClient()
+}
+
 // shortcut: polls every 250 ms for window.api and a stored environment, because the pane entry exposes no readiness
 // promise; replace with the entry's own signal if it ever exports one.
-function awaitPaneClient(): void {
+function pollPaneClient(): void {
   const api = runtimeEnvironments()
-  if (!api || !readStoredWebRuntimeEnvironment()) {
-    setTimeout(awaitPaneClient, POLL_MS)
+  const environment = readStoredWebRuntimeEnvironment()
+  if (!api || !environment) {
+    setTimeout(pollPaneClient, POLL_MS)
     return
   }
+  const key = credentialKey(environment)
   api.getStatus({ selector: 'active' }).then(
     (status) => {
-      if (status?.ok !== true) return void setTimeout(awaitPaneClient, POLL_MS * 4)
+      const after = readStoredWebRuntimeEnvironment()
+      // A pairing that changed during the call is armed by the next call, made under it.
+      if (status?.ok !== true || !after || credentialKey(after) !== key) return void setTimeout(pollPaneClient, POLL_MS * 4)
+      readyKey = key
       ready = true
+      polling = false
       window.dispatchEvent(new Event(LINK_EVENT))
     },
-    () => void setTimeout(awaitPaneClient, POLL_MS * 4)
+    () => void setTimeout(pollPaneClient, POLL_MS * 4)
   )
 }
 
