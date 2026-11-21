@@ -9103,7 +9103,9 @@ function pageMenuEdit(data, cmd) {
   if (!global) {
     return { where: "refused" };
   }
-  data.context.onTextInput ? global.getActor(EDIT_STATE_ACTOR_NAME).sendAsyncMessage("PowerBrowserEditState:Do", { cmd }) : global.getActor("Controllers").doCommand(cmd); // WINDOWS 43: a field's row runs on that field (GroupActorChild)
+  // WINDOWS 43: a field's row runs on that field (GroupActorChild). 59-WR-01: only where the edit-state pair exists; an
+  // agent overlay's field keeps the group-agnostic Controllers route it had before 59-09.
+  data.context.onTextInput && editStateReaches(data.browser) ? global.getActor(EDIT_STATE_ACTOR_NAME).sendAsyncMessage("PowerBrowserEditState:Do", { cmd }) : global.getActor("Controllers").doCommand(cmd);
   return { where: "done" };
 }
 
@@ -10076,11 +10078,20 @@ const EDIT_STATE_QUERY = "PowerBrowserEditState:Query";
 
 export class PowerBrowserEditStateParent extends GroupActorBase {}
 
+// 59-WR-01 / chrome-actor-06: the message manager groups the pair is registered for. An overlay outside them (an agent
+// overlay, AGENT_MESSAGE_MANAGER_GROUP) has no edit-state child, and getActor throws NotSupportedError there, so every
+// edit-state read and write asks editStateReaches first.
+const EDIT_STATE_GROUPS = Object.freeze(["browsers"]);
+
+function editStateReaches(browser) {
+  return EDIT_STATE_GROUPS.includes(browser?.getAttribute("messagemanagergroup"));
+}
+
 function registerEditStateActor() {
   ChromeUtils.registerWindowActor(EDIT_STATE_ACTOR_NAME, {
     parent: { esModuleURI: GROUP_ACTOR_PARENT_MODULE },
     child: { esModuleURI: GROUP_ACTOR_CHILD_MODULE },
-    messageManagerGroups: ["browsers"],
+    messageManagerGroups: [...EDIT_STATE_GROUPS],
     allFrames: true, // CR-02 (35-REVIEW): a focused subframe answers for itself, as its Controllers actor does
   });
 }
@@ -10090,6 +10101,9 @@ function registerEditStateActor() {
 // falls back to the cached flag, so the row stays usable rather than greyed by an error.
 const EDIT_STATE_BUDGET_MS = 250;
 async function webTabEditEnabled(entry, cmd, cached) {
+  if (!editStateReaches(entry.browser)) {
+    return cached;
+  }
   try {
     const actor = webTabEditContext(entry.browser).currentWindowGlobal.getActor(EDIT_STATE_ACTOR_NAME);
     const query = actor.sendQuery(EDIT_STATE_QUERY, { cmd }).then(answer => answer === true);
@@ -11022,6 +11036,9 @@ Services.obs.addObserver(function extensionLateStartup(win) {
 // PowerBrowserEditState child answers from the ContextMenu actor's target, the field pageMenuEdit runs the row on;
 // no answer, a target with no controllers, or EDIT_STATE_BUDGET_MS without a reply keeps the cached state.
 async function pageEditTargetCommands(data, cached) {
+  if (!editStateReaches(data.browser)) {
+    return cached;
+  }
   try {
     const actor = webTabEditContext(data.browser, data.frameBrowsingContext).currentWindowGlobal.getActor(EDIT_STATE_ACTOR_NAME);
     const query = actor.sendQuery("PowerBrowserEditState:Target", { cmds: WEB_TAB_EDIT_CMDS }).then(states => states ?? cached);
