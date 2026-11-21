@@ -61,6 +61,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-pane-routes';
 const SELF_REL = 'scripts/verify-orca-pane-routes.mjs';
@@ -544,13 +546,18 @@ if (isEntryPoint) {
         console.error(`Next step: run node ${SELF_REL} for the check, or add --self-test for the planted-fault run.`);
         process.exit(2);
     }
-    if (!existsSync(TS_DIR) || !statSync(TS_DIR).isDirectory()) { console.log(`${NAME}: SKIP -- theia/node_modules/typescript is absent; run the audited Theia install`); process.exit(0); }
-    if (!existsSync(join(REPO_ROOT, REL.tabTypes))) { console.log(`${NAME}: SKIP -- orca/ is not fetched (${REL.tabTypes} absent); run bash scripts/fetch-orca.sh`); process.exit(0); }
+    // Not run is SKIP (exit 77, the one SKIP line), never a pass: the self-test needs the same inputs as the check.
+    if (!existsSync(TS_DIR) || !statSync(TS_DIR).isDirectory()) { console.log(skipLine(NAME, 'theia/node_modules/typescript is absent. Next step: run the audited Theia install')); process.exit(SKIP_EXIT); }
+    if (!existsSync(join(REPO_ROOT, REL.tabTypes))) { console.log(skipLine(NAME, `orca/ is not fetched (${REL.tabTypes} absent), so neither the check nor its self-test ran. Next step: bash scripts/fetch-orca.sh`)); process.exit(SKIP_EXIT); }
     ts = createRequire(import.meta.url)(TS_DIR);
     if (args[0] === '--self-test') process.exit(runSelfTest());
     const r = check(REPO_ROOT);
     if (r.fails.length) { for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`); process.exit(1); }
     const n = r.notes;
-    console.log(`${NAME}: PASS -- ${n.members.length} TabContentType members (${n.members.join(', ')}) equal ORCA_PANE_ROUTES' keys; targets ${n.targets.join(', ')}, each with an observer branch; words ${n.words.join(', ')} equal the doc's; page words ${n.pageWords.join(', ')} equal the doc's page table; placement ${n.placement}/${n.placementOf}; worktree guard ${n.guards}/${n.guardsOf}; no client-side terminal creation; (d) bundle API and hand-off key ${n.d === 'compared' ? 'compared' : 'SKIP (lane p64-01 entry absent)'}; (g) module key and boot event ${n.g === 'compared' ? 'compared' : 'SKIP (lane p64-04 not merged)'}`);
+    const skips = [];
+    if (n.d !== 'compared') skips.push(`clause d (bundle API and hand-off key) did not run: ${REL.entry} is absent. Next step: scripts/build-orca.sh`);
+    if (n.g !== 'compared') skips.push(`clause g (module key and boot event) did not run: ${REL.tabsLive} is absent`);
+    if (skips.length) { console.log(skipLine(NAME, skips.join('; '))); process.exit(SKIP_EXIT); }
+    console.log(`${NAME}: PASS -- ${n.members.length} TabContentType members (${n.members.join(', ')}) equal ORCA_PANE_ROUTES' keys; targets ${n.targets.join(', ')}, each with an observer branch; words ${n.words.join(', ')} equal the doc's; page words ${n.pageWords.join(', ')} equal the doc's page table; placement ${n.placement}/${n.placementOf}; worktree guard ${n.guards}/${n.guardsOf}; no client-side terminal creation; (d) bundle API and hand-off key compared; (g) module key and boot event compared`);
     process.exit(0);
 }

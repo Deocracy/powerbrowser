@@ -32,11 +32,7 @@ export function fixtureGitEnv(base = process.env) {
 
 const HOSTILE_VARS = ['HOME', 'XDG_CONFIG_HOME', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM'];
 
-/**
- * Run fn() with a global git config that fails every signed commit and every hook, then restore the environment.
- * Returns what fn returns.
- */
-export function withHostileGitConfig(fn) {
+function hostileSetup() {
     const home = mkdtempSync(join(tmpdir(), 'hostile-git-home-'));
     const hooks = join(home, 'hooks');
     mkdirSync(hooks, { recursive: true });
@@ -45,13 +41,26 @@ export function withHostileGitConfig(fn) {
     }
     writeFileSync(join(home, '.gitconfig'), `[commit]\n\tgpgsign = true\n[tag]\n\tgpgsign = true\n[gpg]\n\tprogram = /bin/false\n[core]\n\thooksPath = ${hooks}\n`);
     const saved = Object.fromEntries(HOSTILE_VARS.map((k) => [k, process.env[k]]));
-    try {
-        process.env.HOME = home;
-        process.env.XDG_CONFIG_HOME = home;
-        for (const k of ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM']) delete process.env[k];
-        return fn();
-    } finally {
+    process.env.HOME = home;
+    process.env.XDG_CONFIG_HOME = home;
+    for (const k of ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM']) delete process.env[k];
+    return () => {
         for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
         rmSync(home, { recursive: true, force: true });
-    }
+    };
+}
+
+/**
+ * Run fn() with a global git config that fails every signed commit and every hook, then restore the environment.
+ * Returns what fn returns.
+ */
+export function withHostileGitConfig(fn) {
+    const restore = hostileSetup();
+    try { return fn(); } finally { restore(); }
+}
+
+/** withHostileGitConfig for an async fn: the environment is restored after the promise settles. */
+export async function withHostileGitConfigAsync(fn) {
+    const restore = hostileSetup();
+    try { return await fn(); } finally { restore(); }
 }
