@@ -69,7 +69,7 @@
 //
 // The live lock: started without PB_LIVE_LOCK_HELD=1 (that is, not under
 // scripts/verify-platform.sh) the row takes <git common dir>/pb-live.lock
-// itself, before it launches anything. Do not wrap it in flock on that file.
+// itself, before it launches anything. Run through flock on that file or with the driver's PB_LIVE_LOCK_HELD=1 and it goes on; a hand-set PB_LIVE_LOCK_HELD=1 with a free lock is an error.
 // Every inherited ORCA_* is removed from its own environment. What it prints
 // after its two launches is redacted with the launches' own list.
 //
@@ -203,6 +203,15 @@ export function deviceRowsVerdict(before, after) {
     return fails;
 }
 
+/** The three command ids this row's own run uses, read from Theia's sources (null when one moved). */
+export function rowCommandIds() {
+    return {
+        SETUPS_SAVE_COMMAND_ID: sourceConst(SETUPS_COMMANDS_REL, 'SETUPS_SAVE_COMMAND_ID'),
+        SETUPS_RESTORE_COMMAND_ID: sourceConst(SETUPS_COMMANDS_REL, 'SETUPS_RESTORE_COMMAND_ID'),
+        MODES_ACTIVATE_COMMAND_ID: sourceConst(MODES_COMMANDS_REL, 'MODES_ACTIVATE_COMMAND_ID'),
+    };
+}
+
 /** The command ids the live run reads from Theia's sources (a regex over the const); null when the source moved. */
 export function sourceIdsVerdict(ids) {
     const missing = Object.entries(ids).filter(([, id]) => !id).map(([name]) => name);
@@ -332,8 +341,9 @@ function launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, rec
     const SAVE = sourceConst(SETUPS_COMMANDS_REL, 'SETUPS_SAVE_COMMAND_ID');
     const RESTORE = sourceConst(SETUPS_COMMANDS_REL, 'SETUPS_RESTORE_COMMAND_ID');
     const ACTIVATE = sourceConst(MODES_COMMANDS_REL, 'MODES_ACTIVATE_COMMAND_ID');
-    const idFails = sourceIdsVerdict({ SETUPS_SAVE_COMMAND_ID: SAVE, SETUPS_RESTORE_COMMAND_ID: RESTORE, MODES_ACTIVATE_COMMAND_ID: ACTIVATE });
-    if (idFails.length) throw new Error(idFails.join('; '));
+    // Each caller needs only the ids it uses (verify-orca-offer-scan and verify-orca-pairing-containment share this context and only
+    // save a Setup): an id is required where it is used, and this row's own run requires all three up front (rowCommandIds).
+    const needId = (name, id) => { const f = sourceIdsVerdict({ [name]: id }); if (f.length) throw new Error(f.join('; ')); return id; };
     let state = null;
     const s = {
         app, probe, pollFor,
@@ -366,7 +376,7 @@ function launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, rec
         },
         /** The built CLI against this launch's orcad, never this process's ORCA_* values. */
         orca(...a) {
-            const env = { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ORCA_USER_DATA: state.effectiveRoot, ORCA_USER_DATA_PATH: state.effectiveRoot };
+            const env = { PATH: process.env.PATH ?? '', HOME: dirname(repo), ORCA_USER_DATA: state.effectiveRoot, ORCA_USER_DATA_PATH: state.effectiveRoot };
             try { return JSON.parse(execFileSync(join(state.effectiveRoot, 'cli', 'bin', 'orca'), [...a, '--json'], { env: liveEnv(env), cwd: repo, timeout: 60000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })); } catch (e) {
                 let said = [e.stderr, e.stdout, e.message].map((x) => String(x ?? '').trim()).find(Boolean) ?? '';
                 try { const reply = JSON.parse(String(e.stdout ?? '')); said = reply?.error?.message ?? reply?.error?.code ?? said; } catch { /* not a JSON reply */ }
@@ -379,7 +389,8 @@ function launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, rec
                 mkdirSync(repo, { recursive: true });
                 writeFileSync(join(repo, 'README'), 'orca relaunch scratch repository\n');
                 // No developer config reaches the fixture's version control: no signing, no hooks (harness-live-tabs-13).
-                const git = lib.fixtureGit(repo, process.env.PATH ?? '', dirname(repo));
+                const { fixtureGit } = await import('./lib/orca-pane-harness.mjs'); // the pane harness's hardened runner, scratch HOME
+                const git = fixtureGit(repo, dirname(repo));
                 git('init', '-q');
                 git('add', '.');
                 git('commit', '-q', '-m', 'fixture');
@@ -398,7 +409,7 @@ function launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, rec
         },
         /** Activates a mode and proves it took: the command ran and the body names the mode (a no-op switch would leave both tab lists under one name). */
         async mode(id) {
-            const ran = commandResultVerdict(`switching to the ${id} mode`, await s.command(ACTIVATE, id));
+            const ran = commandResultVerdict(`switching to the ${id} mode`, await s.command(needId('MODES_ACTIVATE_COMMAND_ID', ACTIVATE), id));
             if (ran.length) throw new Error(ran.join('; '));
             const took = await pollFor(async () => ((await probe(`return document.body.getAttribute('data-pb-mode');`)) === id ? true : null), 10000, `the body to name the ${id} mode`).catch(() => false);
             if (!took) throw new Error(`switching to the ${id} mode did not take (the body never named it)`);
@@ -413,7 +424,7 @@ function launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, rec
         /** Setups' own Save Setup command, its capped name field answered as ng-036 answers it. */
         async saveSetup(name) {
             return probe(`const field = () => [...document.querySelectorAll('.quick-input-widget .quick-input-box input')].find(e => e.offsetParent !== null) || null;
-                const saving = get('CommandService').executeCommand(${JSON.stringify(SAVE)});
+                const saving = get('CommandService').executeCommand(${JSON.stringify(needId('SETUPS_SAVE_COMMAND_ID', SAVE))});
                 if (!(await until(() => field() !== null, 10000))) return false;
                 field().value = ${JSON.stringify(name)};
                 field().dispatchEvent(new Event('input', { bubbles: true }));
@@ -426,7 +437,7 @@ function launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, rec
         },
         /** Setups' own restore command; throws unless it ran. */
         async restoreSetup(name) {
-            const ran = commandResultVerdict(`restoring the Setup '${name}'`, await s.command(RESTORE, name));
+            const ran = commandResultVerdict(`restoring the Setup '${name}'`, await s.command(needId('SETUPS_RESTORE_COMMAND_ID', RESTORE), name));
             if (ran.length) throw new Error(ran.join('; '));
         },
         /** The own URI of every Theia editor widget in the main area (file: for an editor, diff: for a diff editor). */
@@ -481,6 +492,8 @@ function deviceRows(profileDir) {
 }
 
 async function runLive() {
+    const idFails = sourceIdsVerdict(rowCommandIds());
+    if (idFails.length) throw new Error(idFails.join('; '));
     const clauses = {};
     const offers = [];
     const scan = await import('./lib/orca-offer-scan.mjs');
@@ -656,6 +669,7 @@ const PASTE_CHOICE = { platform: 'linux', fresh: { checked: true }, off: { befor
 
 async function runSelfTest() {
     const lib = await import('./lib/orca-tabs-live.mjs');
+    const { fixtureGit: paneGit } = await import('./lib/orca-pane-harness.mjs');
     const rows = (...r) => r.map(([credentialKind, ephemeral, lastSeenAt]) => ({ credentialKind, ephemeral, lastSeenAt }));
     const before = rows([undefined, undefined, 5]);
     const cases = [
@@ -707,7 +721,10 @@ async function runSelfTest() {
         ['terminal-keeps-tab control', null, () => terminalKeptVerdict({ id: 'orca-pane:term1', hosted: ['orca-pane:term1', 'orca-pane:term2'], paneKey: 'tab:leaf1' })],
         ['a terminal closed and reopened under the next name (64-WR-03)', 'orca-pane:term1 was closed when the CLI split', () => terminalKeptVerdict({ id: 'orca-pane:term1', hosted: ['orca-pane:term2', 'orca-pane:term3'], paneKey: null })],
         ['a terminal that kept its widget but no leaf key', 'addresses no leaf pane key after the split', () => terminalKeptVerdict({ id: 'orca-pane:term1', hosted: ['orca-pane:term1'], paneKey: null })],
-        ['fixture git ignores a developer config with signing and hooks (harness-live-tabs-13)', null, () => lib.fixtureGitVerdict()],
+        ['fixture git (the pane harness\'s) ignores a developer config with signing and hooks (harness-live-tabs-13)', null, () => lib.fixtureGitVerdict((repo, home) => paneGit(repo, home))],
+        ['the save id alone is enough for a caller that only saves a Setup', null, () => sourceIdsVerdict({ SETUPS_SAVE_COMMAND_ID: 'a.b' })],
+        ['this row requires all three ids up front', 'no SETUPS_RESTORE_COMMAND_ID, MODES_ACTIVATE_COMMAND_ID found', () => sourceIdsVerdict({ SETUPS_SAVE_COMMAND_ID: 'a.b', SETUPS_RESTORE_COMMAND_ID: null, MODES_ACTIVATE_COMMAND_ID: undefined })],
+        ['the row\'s three ids are all found in the tree', null, () => sourceIdsVerdict(rowCommandIds())],
         ['the live lock is taken by a row started outside the driver (harness-live-tabs-14)', null, () => lib.lockProbeVerdict(SELF, NAME)],
         ['the real main with no built PowerBrowser exits 77 with the one SKIP line', null, () => skipRun()],
         ['a skip alone exits 77, a failure wins over it', null, () => (lib.verdictExitQuiet(NAME, [], ['x']) === SKIP_EXIT && lib.verdictExitQuiet(NAME, ['f'], ['x']) === 1 ? [] : ['the exit status for a skip or a failure is wrong'])],
@@ -732,8 +749,8 @@ async function runSelfTest() {
 
 /** The real main on a tree with no built PowerBrowser: exit 77 and the one SKIP line (no browser is started). */
 function skipRun() {
-    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('ORCA_')));
-    const r = spawnSync(process.execPath, [SELF], { encoding: 'utf8', timeout: 30000, cwd: REPO_ROOT, env: { ...env, PB_LIVE_LOCK_HELD: '1', PB_FIREFOX_BIN: '/nonexistent/pb-self-test/powerbrowser' } });
+    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('ORCA_') && k !== 'PB_LIVE_LOCK_HELD'));
+    const r = spawnSync(process.execPath, [SELF], { encoding: 'utf8', timeout: 30000, cwd: REPO_ROOT, env: { ...env, PB_FIREFOX_BIN: '/nonexistent/pb-self-test/powerbrowser' } });
     const fails = [];
     if (r.status !== SKIP_EXIT) fails.push(`exit ${r.status}, want ${SKIP_EXIT} (${String(r.stdout).trim().slice(0, 120)} ${String(r.stderr).trim().slice(0, 120)})`);
     if (!new RegExp(`^${NAME}: SKIP -- .+`, 'm').test(r.stdout ?? '')) fails.push('no "<name>: SKIP -- <reason>" line on stdout');
@@ -753,10 +770,14 @@ if (isEntryPoint) {
     if (args.includes('--self-test')) process.exit(await runSelfTest());
     // A live row started outside the driver takes the live lock itself, before it launches anything.
     const lib = await import('./lib/orca-tabs-live.mjs');
-    let held;
-    try { held = lib.reexecUnderLiveLock(SELF, args); } catch (err) {
-        console.error(`${NAME}: FAIL -- ${err.message}`);
-        process.exit(1);
+    // Nothing to launch (a prerequisite is absent: the row only prints its SKIP or FAIL) needs no lock.
+    const mayLaunch = args.includes('--lock-probe') || await (async () => { const pre = await livePrerequisites(); return !pre.skip && !pre.fail; })();
+    let held = null;
+    if (mayLaunch) {
+        try { held = await lib.reexecUnderLiveLock(SELF, args); } catch (err) {
+            console.error(`${NAME}: FAIL -- ${err.message}`);
+            process.exit(1);
+        }
     }
     if (held !== null) process.exit(held);
     if (args.includes('--lock-probe')) { console.log(lib.lockProbeLine(NAME)); process.exit(0); }

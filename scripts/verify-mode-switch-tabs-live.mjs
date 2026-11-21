@@ -124,8 +124,9 @@
  *
  * THE LIVE LOCK. Started without PB_LIVE_LOCK_HELD=1 (that is, not under
  * scripts/verify-platform.sh) the row, and its --self-test, take
- * <git common dir>/pb-live.lock themselves before they launch anything. Do not
- * wrap them in flock on that file. --lock-probe prints whether the process holds
+ * <git common dir>/pb-live.lock themselves before they launch anything. Running them
+ * under flock on that file, or with the driver's PB_LIVE_LOCK_HELD=1, also works; a hand-set PB_LIVE_LOCK_HELD=1 with a free lock is an
+ * error. --lock-probe prints whether the process holds
  * it and launches nothing. --self-test boots browsers, so it is a full-tier row.
  *
  * Usage:
@@ -877,7 +878,7 @@ if (args.includes('--help')) {
     // Both modes launch a browser: a run started outside the driver takes the live lock first.
     const lib = await import('./lib/orca-tabs-live.mjs');
     let held;
-    try { held = lib.reexecUnderLiveLock(SELF, args); } catch (err) {
+    try { held = await lib.reexecUnderLiveLock(SELF, args); } catch (err) {
         console.error(`${NAME}: FAIL -- ${err.message}`);
         process.exit(1);
     }
