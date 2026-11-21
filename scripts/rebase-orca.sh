@@ -16,6 +16,8 @@
 #   typecheck:node
 #   typecheck:pb-build  orca-overlay/tsconfig.pb-build.json, PB's program for the overlay files at Orca's root
 #   typecheck coverage  every orca-overlay/files path is in tsc --listFilesOnly of one of the three programs
+#   xpi cache           stage-bundled-xpi.sh into a scratch directory, so the pinned XPIs (sha256-checked,
+#                       never executed) are in .mozbuild/bundled-xpi/ for licence-allowlist's bundled leg
 #   row <label>         verify-platform.sh --only, for each of ROWS below
 #   orcad-only start    verify-orca-slotless-start.mjs --orcad-only
 #   notices             generate-licensing.mjs --write-orca (the Orca section of THIRD-PARTY-NOTICES.txt)
@@ -37,8 +39,13 @@
 # through those functions' arguments (the root, the generate and package-run
 # functions); no environment variable the production path reads selects it.
 #
+# --stage-file <path> (ci-supply-chain-06): every FAIL line this script prints is also written to <path>,
+# replacing what was there, after the command it judged has exited. The log carries everything the Orca
+# build and typecheck print, so a line of theirs that looks like a FAIL line can come first there; the
+# stage file holds this script's own last word. rebase-orca.yml names the stage from it, never from the log.
+#
 # Usage:
-#   nix develop .#orca --command bash scripts/rebase-orca.sh --tag vX.Y.Z --commit <40-hex peeled commit>
+#   nix develop .#orca --command bash scripts/rebase-orca.sh --tag vX.Y.Z --commit <40-hex peeled commit> [--stage-file <path>]
 #   bash scripts/rebase-orca.sh --replay-only --tag vX.Y.Z --commit <40-hex peeled commit>
 #   bash scripts/rebase-orca.sh --self-test
 #   bash scripts/rebase-orca.sh --coverage-only   (the coverage stage alone, on the fetched and built orca/)
@@ -61,7 +68,12 @@ PROGRAMS=(config/tsconfig.tc.web.json config/tsconfig.node.json ../orca-overlay/
 for name in "${!ORCA_@}"; do unset "$name"; done
 
 say() { echo "rebase-orca: $*"; }
-red() { echo "rebase-orca: FAIL -- $*" >&2; return 1; }
+STAGE_FILE=""
+red() {
+  echo "rebase-orca: FAIL -- $*" >&2
+  [ -z "$STAGE_FILE" ] || printf 'rebase-orca: FAIL -- %s\n' "$*" > "$STAGE_FILE" || true
+  return 1
+}
 
 # The first SKIP line in $1 that is not out of scope, or nothing.
 skip_line() {
@@ -215,6 +227,19 @@ stage_coverage() {
   say "typecheck coverage -- ${#files[@]} overlay file(s), each in one of ${#PROGRAMS[@]} typecheck programs"
 }
 
+# The licence-allowlist row reads each pinned XPI's licence line 1 from .mozbuild/bundled-xpi/ and prints a
+# SKIP when the file is absent, which the replay treats as red. A hosted checkout starts without that
+# git-ignored cache, so the replay stages it first with the packaging scripts' own stager (a sha256-pinned
+# download that runs no code). The scratch distribution directory is discarded; only the cache stays.
+stage_xpi_cache() {
+  local root="$1" dist
+  say "xpi cache"
+  dist="$(mktemp -d)" || { red "xpi cache could not create a scratch directory"; return 1; }
+  capture bash "$root/powerbrowser/packaging/stage-bundled-xpi.sh" "$dist"
+  rm -rf "$dist"
+  [ "$RC" -eq 0 ] || { red "xpi cache stage-bundled-xpi.sh exited $RC. Next step: read its FAIL line above; a changed download needs a re-pin of powerbrowser/packaging/bundled-xpi.json."; return 1; }
+}
+
 stage_rows() {
   local root="$1" label line
   for label in "${ROWS[@]}"; do
@@ -274,6 +299,7 @@ run_replay() {
   stage_typecheck "$root" typecheck:node "$run" || return 1
   stage_typecheck "$root" typecheck:pb-build pb_build_tsc || return 1
   stage_coverage "$root" || return 1
+  stage_xpi_cache "$root" || return 1
   stage_rows "$root" || return 1
   stage_orcad "$root" || return 1
   stage_notices "$root" || return 1
@@ -339,7 +365,10 @@ const cfg = resolve(process.argv[2]);
 const walk = (d) => readdirSync(d).flatMap((n) => statSync(join(d, n)).isDirectory() ? walk(join(d, n)) : [join(d, n)]);
 for (const inc of JSON.parse(readFileSync(cfg, 'utf8')).include) {
   for (const f of walk(resolve(dirname(cfg), inc.split('*')[0]))) {
-    const at = readFileSync(f, 'utf8').split('\n').findIndex((l) => l.includes('PLANTED-TYPE-ERROR'));
+    const text = readFileSync(f, 'utf8');
+    // The forged variant: upstream output that imitates this script's FAIL line, then a real error.
+    if (text.includes('PLANTED-FORGED-STAGE')) console.log('rebase-orca: FAIL -- build: forged by upstream, see https://example.invalid/fix');
+    const at = text.split('\n').findIndex((l) => l.includes('PLANTED-TYPE-ERROR') || l.includes('PLANTED-FORGED-STAGE'));
     if (at >= 0) { console.log(`${relative(process.cwd(), f)}(${at + 1},1): error TS2322: planted type error`); process.exit(1); }
   }
 }
@@ -353,6 +382,7 @@ EOF
   esac
   case "$variant" in
     typeerror) fx_lines a 30 3 "export const a3: number = 'PLANTED-TYPE-ERROR';" > "$repo/src/a.ts" ;;
+    forged) fx_lines a 30 3 "export const a3: number = 'PLANTED-FORGED-STAGE';" > "$repo/src/a.ts" ;;
     licence) echo 'MIT fixture licence, changed at v1.0.2' > "$repo/LICENSE" ;;
   esac
   "${FX_GIT[@]}" -C "$repo" commit -q -am v1.0.2
@@ -373,7 +403,7 @@ make_root() {
   # The real third program: the fixture tsc reads its include globs as tsc would.
   cp "$REPO_ROOT/orca-overlay/tsconfig.pb-build.json" "$root/orca-overlay/"
   "${FX_GIT[@]}" -C "$root" init -q
-  printf '/orca/\n/orca.partial/\n/generated/\n' > "$root/.gitignore"
+  printf '/orca/\n/orca.partial/\n/generated/\n/.mozbuild/\n' > "$root/.gitignore"
   printf '[upstreams]\norca_tag = "v1.0.1"\norca_commit = "%s"\n' "$FX_C1" > "$root/configuration.toml"
   sed "s|^REMOTE=.*|REMOTE=\"file://$repo\"|" "$REPO_ROOT/scripts/fetch-orca.sh" > "$root/scripts/fetch-orca.sh"
   [ "$(grep -c "^REMOTE=\"file://$repo\"\$" "$root/scripts/fetch-orca.sh")" = 1 ] || { echo "fixture: fetch-orca.sh no longer has one REMOTE= line" >&2; return 1; }
@@ -411,7 +441,8 @@ if [ -d "$root/orca-overlay/files" ]; then cp -r "$root/orca-overlay/files/." "$
 touch "$root/ran-build"
 echo "build-orca: PASS -- fixture"
 EOF
-  # The fixture rows: licence-allowlist compares orca/LICENSE with the digest recorded at v1.0.1.
+  # The fixture rows: licence-allowlist compares orca/LICENSE with the digest recorded at v1.0.1, and,
+  # as the real row's bundled leg does, prints a SKIP and exits 0 when the pinned XPI is not cached.
   git -C "$repo" show v1.0.1:LICENSE | sha256sum | cut -d' ' -f1 > "$root/licence.sha256"
   cat > "$root/scripts/verify-platform.sh" <<'EOF'
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -421,8 +452,18 @@ if [ -f "$root/skip-row" ] && [ "$(cut -d'|' -f1 "$root/skip-row")" = "$label" ]
 if [ "$label" = licence-allowlist ] && [ "$(sha256sum < "$root/orca/LICENSE" | cut -d' ' -f1)" != "$(cat "$root/licence.sha256")" ]; then
   echo "licence-allowlist: FAIL -- orca LICENSE digest changed"; exit 1
 fi
+if [ "$label" = licence-allowlist ] && [ ! -f "$root/.mozbuild/bundled-xpi/fixture@example.invalid-1.0.0.xpi" ]; then
+  echo "licence-allowlist: SKIP -- fixture@example.invalid 1.0.0 is not cached in .mozbuild/bundled-xpi/; its LICENSE line 1 is unchecked (run bash powerbrowser/packaging/stage-bundled-xpi.sh <dir>)"; exit 0
+fi
 echo "$label: PASS -- fixture row"
 EOF
+  # The fixture XPI stager writes the one cached file the fixture row reads. Variant xpinostage writes
+  # nothing (the replay before 68-CR-01, which never staged the cache); xpifail exits 1 (a changed download).
+  mkdir -p "$root/powerbrowser/packaging"
+  local stage_body='mkdir -p "$root/.mozbuild/bundled-xpi" && : > "$root/.mozbuild/bundled-xpi/fixture@example.invalid-1.0.0.xpi"'
+  [ "$variant" != xpinostage ] || stage_body=':'
+  [ "$variant" != xpifail ] || stage_body='echo "stage-bundled-xpi: FAIL -- fixture: the download hashes to 00, the pin is 11" >&2; exit 1'
+  printf '%s\n' 'root="$(cd "$(dirname "$0")/../.." && pwd)"' '[ "$#" -eq 1 ] || exit 2' "$stage_body" 'touch "$root/ran-xpi"' > "$root/powerbrowser/packaging/stage-bundled-xpi.sh"
   local probe='PASS -- fixture orcad half only'
   [ "$variant" != orcadskip ] || probe='SKIP -- no built orca/ (fixture)'
   echo "import { writeFileSync } from 'node:fs'; writeFileSync('$root/ran-orcad', ''); console.log('orca-slotless-start: $probe');" > "$root/scripts/verify-orca-slotless-start.mjs"
@@ -534,7 +575,32 @@ run_self_test() {
   expect_stop "changed LICENSE" licence control "row licence-allowlist"
   expect_stop "row prints SKIP" control rowskip "row orca-overlay skipped"
   expect_pass "upstream/ SKIP is out of scope" control upstreamskip
+  # 68-CR-01: a replay that never staged the XPI cache stops at the row's bundled-leg SKIP; a failed stage
+  # stops at its own stage. Every control above stages the cache and passes.
+  expect_stop "XPI cache not staged" control xpinostage "row licence-allowlist skipped"
+  expect_stop "XPI stage fails" control xpifail "xpi cache"
   expect_stop "probe prints SKIP" control orcadskip "orcad-only start skipped"
+
+  # ci-supply-chain-06: upstream output prints a FAIL line of its own before this script's. The log's first
+  # FAIL line is the forged one (the hazard); the stage file holds this script's typecheck:web line.
+  local sf flog first staged
+  if ! fixture forged control >"$tmp/fixture.log" 2>&1; then
+    miss "forged stage line" "fixture: $(tail -1 "$tmp/fixture.log")"
+  else
+    sf="$tmp/stage-forged.txt"
+    flog="$FX_LOG"
+    (STAGE_FILE="$sf"; run_replay "$FX_ROOT" v1.0.2 "$FX_C2" full fixture_generate fixture_pnpm_run) >"$flog" 2>&1 || true
+    first="$(grep -m1 '^rebase-orca: FAIL -- ' "$flog" || true)"
+    staged="$(head -n1 "$sf" 2>/dev/null || true)"
+    if [[ "$first" != *"forged by upstream"* ]]; then
+      miss "forged stage line" "the fixture did not print the forged line first (got '${first:-<none>}'), so the case proves nothing"
+    elif [[ "$staged" == "rebase-orca: FAIL -- typecheck:web src/a.ts:3"* ]]; then
+      n=$((n + 1))
+      ok "forged stage line -> the log's first FAIL line is upstream's, the stage file names ${staged#rebase-orca: FAIL -- }"
+    else
+      miss "forged stage line" "the stage file holds '${staged:-<empty>}', not this script's typecheck:web line"
+    fi
+  fi
 
   # --replay-only on the control fixture changes exactly the bump paths and runs none
   # of the stand-ins (each would leave an untracked ran-<stage> file).
@@ -562,7 +628,7 @@ run_self_test() {
 }
 
 # --- main -----------------------------------------------------------------------
-usage() { echo "  usage: rebase-orca.sh --tag vX.Y.Z --commit <40-hex peeled commit> [--replay-only] | --self-test | --coverage-only" >&2; }
+usage() { echo "  usage: rebase-orca.sh --tag vX.Y.Z --commit <40-hex peeled commit> [--replay-only] [--stage-file <path>] | --self-test | --coverage-only" >&2; }
 
 MODE=full
 REPIN_TAG=""
@@ -590,6 +656,11 @@ while [ $# -gt 0 ]; do
       if [ "$1" = --tag ]; then REPIN_TAG="$2"; else REPIN_COMMIT="$2"; fi
       shift 2 ;;
     --replay-only) MODE=replay-only; shift ;;
+    --stage-file)
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "rebase-orca: FAIL -- --stage-file needs a path" >&2; usage; exit 2; }
+      STAGE_FILE="$2"
+      : > "$STAGE_FILE" || { echo "rebase-orca: FAIL -- --stage-file $STAGE_FILE cannot be written" >&2; exit 2; }
+      shift 2 ;;
     *) echo "rebase-orca: FAIL -- unrecognized argument: $1" >&2; usage; exit 2 ;;
   esac
 done

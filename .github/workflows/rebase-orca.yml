@@ -7,7 +7,7 @@
 #
 # The stage output names the first FAIL line scripts/rebase-orca.sh printed
 # (pin-move, fetch, seam-apply <patch>, build, typecheck:web <file>:<line>,
-# typecheck:node, typecheck:pb-build <file>:<line>, typecheck coverage, row <label>,
+# typecheck:node, typecheck:pb-build <file>:<line>, typecheck coverage, xpi cache, row <label>,
 # orcad-only start, notices, brand scan), or replayed when it succeeded. The release train's report job
 # turns a FAIL stage into one tracking issue for the tag.
 #
@@ -20,7 +20,7 @@
 # nobody watching is the failure mode PITFALLS #8 warns about; the release
 # train's sweep-clock decides the weekly tick and calls this.
 #
-# This is the only job that runs Orca's code (pnpm install, build, typecheck,
+# In the release train this is the only job that runs Orca's code (pnpm install, build, typecheck,
 # orcad). It holds a read-only token that is not persisted; the bot job that
 # mints the App token runs only rebase-orca.sh --replay-only (P68-35).
 
@@ -54,6 +54,9 @@ on:
       notices:
         description: "changed when the replay rewrote THIRD-PARTY-NOTICES.txt (uploaded as rebase-orca-notices), else unchanged"
         value: ${{ jobs.rebase.outputs.notices }}
+      notices-sha256:
+        description: "The SHA-256 of the THIRD-PARTY-NOTICES.txt uploaded as rebase-orca-notices (empty when unchanged)"
+        value: ${{ jobs.rebase.outputs.notices-sha256 }}
 
 jobs:
   rebase:
@@ -61,6 +64,7 @@ jobs:
     outputs:
       stage: ${{ steps.stage.outputs.stage }}
       notices: ${{ steps.notices.outputs.notices }}
+      notices-sha256: ${{ steps.notices.outputs.notices-sha256 }}
     # WR-09 (plan 01-18). This job clones a third-party tree, installs its
     # packages, builds and typechecks it, and starts its daemon; it reads and
     # verifies, and pushes nothing. With no `permissions:` block it would
@@ -103,11 +107,14 @@ jobs:
         # pipefail: without it the step takes tee's status and a failed replay reads as success.
         run: |
           set -o pipefail
-          nix develop .#orca --command bash scripts/rebase-orca.sh --tag "$REBASE_TAG" --commit "$REBASE_COMMIT" 2>&1 | tee "$RUNNER_TEMP/rebase.log"
+          nix develop .#orca --command bash scripts/rebase-orca.sh --tag "$REBASE_TAG" --commit "$REBASE_COMMIT" --stage-file "$RUNNER_TEMP/stage.txt" 2>&1 | tee "$RUNNER_TEMP/rebase.log"
 
-      # Names the stage for the release train. The first FAIL line rebase-orca.sh
-      # printed is the stage (a composed script's own FAIL line can come first, so
-      # the match is on the rebase-orca prefix); a replay that succeeded reports
+      # Names the stage for the release train: the line rebase-orca.sh wrote to its
+      # --stage-file after the command it judged had exited, never the first FAIL line
+      # of the log, which carries everything Orca's build and typecheck print and so
+      # can open with a line upstream wrote (ci-supply-chain-06). The line is kept to
+      # a bounded length and a character set with no backtick, so it cannot leave the
+      # code span the report job prints it in. A replay that succeeded reports
       # replayed. Runs even on failure.
       - name: Name the stage the replay ended at
         id: stage
@@ -119,7 +126,9 @@ jobs:
             echo "stage=replayed" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          LINE=$(grep -m1 '^rebase-orca: FAIL -- ' "$RUNNER_TEMP/rebase.log" 2>/dev/null || true)
+          LINE=$(head -n1 "$RUNNER_TEMP/stage.txt" 2>/dev/null || true)
+          LINE=$(printf '%s' "$LINE" | tr -cd "A-Za-z0-9 _./:@()'*,=<>+-" | cut -c1-300)
+          case "$LINE" in "rebase-orca: FAIL -- "*) ;; *) LINE="" ;; esac
           echo "stage=${LINE:-FAIL -- rebase-orca.sh did not complete the replay}" >> "$GITHUB_OUTPUT"
 
       - name: Record whether the replay rewrote the notices
@@ -131,6 +140,7 @@ jobs:
             mkdir -p "$RUNNER_TEMP/notices"
             cp THIRD-PARTY-NOTICES.txt "$RUNNER_TEMP/notices/"
             echo "notices=changed" >> "$GITHUB_OUTPUT"
+            echo "notices-sha256=$(sha256sum < "$RUNNER_TEMP/notices/THIRD-PARTY-NOTICES.txt" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Upload the rewritten notices

@@ -69,7 +69,9 @@ export DO_NOT_TRACK=1
 
 # 3. Orca's own build environment (its rolldown thread limit and old-space option).
 cd "$ORCA"
-eval "$(node --input-type=module -e '
+# Captured first, evaluated second: the status of eval "$(cmd)" is the evaluated text's, so a node
+# step that failed (a moved config/scripts/*.mjs after a re-pin) would otherwise eval "" and pass.
+build_env="$(node --input-type=module -e '
 import { appendBuildOldSpaceOption } from "./config/scripts/node-old-space-limit.mjs";
 import { withRolldownThreadLimit } from "./config/scripts/rolldown-thread-limit.mjs";
 const env = withRolldownThreadLimit(process.env);
@@ -77,6 +79,7 @@ const q = (v) => "\x27" + String(v).replaceAll("\x27", "\x27\\\x27\x27") + "\x27
 for (const [k, v] of Object.entries(env)) if (process.env[k] !== v) console.log("export " + k + "=" + q(v));
 console.log("export NODE_OPTIONS=" + q(appendBuildOldSpaceOption(process.env.NODE_OPTIONS)));
 ')" || fail "could not read Orca's build environment (config/scripts)"
+eval "$build_env"
 
 # 4. The product bundle, on the host's React.
 tracked() { git -C "$ORCA" status --porcelain --untracked-files=no; }

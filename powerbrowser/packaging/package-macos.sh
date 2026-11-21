@@ -19,6 +19,8 @@
 # macos-orca-x64, admitted by the caller) into one universal <GreD>/orca at OUT; see orca_universal() below.
 # The per-architecture mode also stages the admitted macos-orca-<arch> artifact (PB_MAC_ORCA_DIR, its
 # SHA256SUMS digest in PB_MAC_ORCA_SUMS_SHA256) as Contents/Resources/orca, and universal merges both.
+# That artifact is tree.tar plus BUILD_ROOT (68-CR-03: an artifact keeps no file mode, a tar does); the tree is
+# unpacked with tar -xpf after the admission, so every executable keeps its mode through cp -a below.
 # Usage: bash powerbrowser/packaging/package-macos.sh aarch64|x86_64|universal
 #        bash powerbrowser/packaging/package-macos.sh orca-universal ARM X64 OUT
 # Run from the repo root in the firefox-macos dev shell (nix develop .#firefox-macos) after a Theia
@@ -349,6 +351,12 @@ ORCA_ART="macos-orca-${NODE_KEY#darwin-}"
 test -n "${PB_MAC_ORCA_DIR:-}" || fail "PB_MAC_ORCA_DIR is unset; download the $ORCA_ART artifact of the hosted job and set PB_MAC_ORCA_DIR to it, with PB_MAC_ORCA_SUMS_SHA256 set to that job's sums_sha256 output"
 bash "$ROOT/powerbrowser/packaging/check-win-sidecar.sh" check "$PB_MAC_ORCA_DIR" "${PB_MAC_ORCA_SUMS_SHA256:-}" \
     || fail "the $ORCA_ART artifact at $PB_MAC_ORCA_DIR was not admitted (its output is above)"
+# The admitted tar carries the tree with its modes; its own SHA256SUMS is re-checked once unpacked.
+test -f "$PB_MAC_ORCA_DIR/tree.tar" || fail "the $ORCA_ART artifact at $PB_MAC_ORCA_DIR holds no tree.tar; it predates 68-CR-03, so re-run the hosted job"
+ORCA_TREE="$(mktemp -d)"
+tar -xpf "$PB_MAC_ORCA_DIR/tree.tar" -C "$ORCA_TREE" || fail "the $ORCA_ART tree.tar could not be unpacked"
+bash "$ROOT/powerbrowser/packaging/check-win-sidecar.sh" check "$ORCA_TREE" "$(sha256sum "$ORCA_TREE/SHA256SUMS" | cut -d' ' -f1)" \
+    || fail "the unpacked $ORCA_ART tree does not agree with its own SHA256SUMS (its output is above)"
 fetch_pin "$NODE_KEY"
 
 # Release branding is the default, as in package-linux.sh: mozconfig.release falls back to the release branding
@@ -402,10 +410,11 @@ bash "$ROOT/powerbrowser/packaging/stage-bundled-xpi.sh" "$RES/distribution"
 # Orca: package.json, out/orcad and out/web of the admitted artifact, as <GreD>/orca. Its build root is purged.
 rm -rf "$RES/orca"
 mkdir -p "$RES/orca/out"
-cp -a "$PB_MAC_ORCA_DIR/package.json" "$RES/orca/package.json"
-cp -a "$PB_MAC_ORCA_DIR/out/orcad" "$PB_MAC_ORCA_DIR/out/web" "$RES/orca/out/"
-bash "$ROOT/powerbrowser/packaging/check-win-sidecar.sh" purge "$PB_MAC_ORCA_DIR" "$RES/orca" \
+cp -a "$ORCA_TREE/package.json" "$RES/orca/package.json"
+cp -a "$ORCA_TREE/out/orcad" "$ORCA_TREE/out/web" "$RES/orca/out/"
+bash "$ROOT/powerbrowser/packaging/check-win-sidecar.sh" purge "$ORCA_TREE" "$RES/orca" \
     || fail "the staged Orca tree names the hosted build root"
+rm -rf "$ORCA_TREE"
 
 # No payload carries a Linux name. The darwin pin and the darwin prebuild are the only natives staged. Orca's
 # tree is excluded: Orca's own sources name other platforms in file names, so its natives are judged by magic below.

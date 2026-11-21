@@ -828,6 +828,9 @@ jobs:
       BRANCH: chore/theia-theia
     outputs:
       head: ${{ steps.regen.outputs.head }}
+      # The digest of the two notice files this job uploaded (ci-supply-chain-04). A job output is set by this job
+      # alone, so the publish job can tell its artifact from one another job of the run deleted and re-uploaded.
+      notices-sha256: ${{ steps.regen.outputs.notices-sha256 }}
     steps:
       # The run's own ref (main), full history, so the base of Renovate's branch can be found locally.
       - name: Check out the trusted ref without persisting a token (skipped in dry-run)
@@ -886,6 +889,8 @@ jobs:
           if same THIRD-PARTY-NOTICES.txt && same LICENSING.md; then echo "release-train: NOTE -- the notices on ${BRANCH} are current; nothing to publish"; exit 0; fi
           mkdir -p "$RUNNER_TEMP/notices"
           cp THIRD-PARTY-NOTICES.txt LICENSING.md "$RUNNER_TEMP/notices/"
+          NOTICES_SHA256=$({ sha256sum < "$RUNNER_TEMP/notices/LICENSING.md"; sha256sum < "$RUNNER_TEMP/notices/THIRD-PARTY-NOTICES.txt"; } | sha256sum | cut -d' ' -f1)
+          echo "notices-sha256=${NOTICES_SHA256}" >> "$GITHUB_OUTPUT"
           echo "head=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Upload the regenerated notices (skipped in dry-run)
@@ -918,6 +923,7 @@ jobs:
     permissions: {}
     env:
       BRANCH: chore/theia-theia
+      NOTICES_SHA256: ${{ needs.renovate-licensing.outputs.notices-sha256 }}
       HEAD_SHA: ${{ needs.renovate-licensing.outputs.head }}
     steps:
       - name: Check out the trusted ref without persisting a token (skipped in dry-run)
@@ -946,6 +952,13 @@ jobs:
           T() { GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -c core.attributesFile=/dev/null -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"; }
           if [ "$(cd "$RUNNER_TEMP/notices" && ls -A | sort | tr '\n' ' ')" != "LICENSING.md THIRD-PARTY-NOTICES.txt " ]; then
             echo "release-train: FAIL -- the notices artifact holds more or other than LICENSING.md and THIRD-PARTY-NOTICES.txt. Next step: do not publish; re-run the sweep." >&2
+            exit 1
+          fi
+          # The artifact is this run's, but any job of the run (the Orca replay included) could have replaced it: only bytes
+          # whose digest equals the one renovate-licensing recorded as its job output are published (ci-supply-chain-04).
+          GOT_SHA256=$({ sha256sum < "$RUNNER_TEMP/notices/LICENSING.md"; sha256sum < "$RUNNER_TEMP/notices/THIRD-PARTY-NOTICES.txt"; } | sha256sum | cut -d' ' -f1)
+          if ! [[ $NOTICES_SHA256 =~ ^[0-9a-f]{64}$ ]] || [ "$GOT_SHA256" != "$NOTICES_SHA256" ]; then
+            echo "release-train: FAIL -- the notices artifact hashes to ${GOT_SHA256}, not the ${NOTICES_SHA256:-<no digest>} renovate-licensing recorded; it was replaced after that job. Next step: do not publish; re-run the sweep." >&2
             exit 1
           fi
           T fetch --no-tags origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
@@ -1068,6 +1081,7 @@ jobs:
       TAG: ${{ needs.detect-orca.outputs.orca-tag }}
       COMMIT: ${{ needs.detect-orca.outputs.orca-commit }}
       NOTICES: ${{ needs.rebase-orca.outputs.notices }}
+      NOTICES_SHA256: ${{ needs.rebase-orca.outputs.notices-sha256 }}
       BASE: ${{ github.sha }}
     steps:
       - name: Check out the repo without persisting a token
@@ -1098,6 +1112,24 @@ jobs:
           git switch -C "chore/orca-${TAG}" "$BASE"
           nix develop .#orca --command bash scripts/rebase-orca.sh --replay-only --tag "$TAG" --commit "$COMMIT"
 
+      # ci-supply-chain-03: the replay's green comes from the job that installed and ran the new Orca code, so it is a
+      # compatibility signal, never a security one. From git data alone (nothing of Orca's runs here): the pin range the
+      # PR moves across, its upstream compare link for the owner, and whether any lockfile changed in that range.
+      # Auto-merge is armed only when none did.
+      - name: Read the upstream range and whether an Orca lockfile changed in it (git data only)
+        id: range
+        run: |
+          set -euo pipefail
+          unset NODE_OPTIONS
+          OLD=$(git show "${BASE}:configuration.toml" | sed -n 's/^orca_commit = "\([0-9a-f]*\)"$/\1/p' | head -n 1)
+          [[ $OLD =~ ^[0-9a-f]{40}$ ]] || { echo "release-train: FAIL -- configuration.toml at ${BASE} names no 40-hex orca_commit. Next step: do not bump; restore the pin." >&2; exit 1; }
+          REMOTE=$(grep -m1 '^REMOTE=' scripts/fetch-orca.sh | cut -d= -f2- | tr -d '"')
+          [[ $REMOTE =~ ^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.git$ ]] || { echo "release-train: FAIL -- the Orca remote in scripts/fetch-orca.sh is not a github.com repository URL, so no compare link can be given. Next step: do not bump." >&2; exit 1; }
+          git -C orca fetch -q --depth 1 origin "$OLD"
+          if git -C orca diff --quiet "$OLD" "$COMMIT" -- ':(glob)**/*-lock.yaml'; then LOCKS=unchanged; else LOCKS=changed; fi
+          { echo "old=${OLD}"; echo "compare=${REMOTE%.git}/compare/${OLD}...${COMMIT}"; echo "locks=${LOCKS}"; } >> "$GITHUB_OUTPUT"
+          echo "release-train: orca range ${OLD}...${COMMIT}, lockfiles ${LOCKS}"
+
       # This run's artifact only: no run-id and no token input, so no other run's artifact can be named.
       - name: Download the rewritten Orca notices (skipped in dry-run)
         if: ${{ !inputs.dry-run && needs.rebase-orca.outputs.notices == 'changed' }}
@@ -1115,6 +1147,12 @@ jobs:
           if [ "$NOTICES" = "changed" ]; then
             if [ "$(cd "$RUNNER_TEMP/notices" && ls -A | sort | tr '\n' ' ')" != "THIRD-PARTY-NOTICES.txt " ]; then
               echo "release-train: FAIL -- the Orca notices artifact holds more or other than THIRD-PARTY-NOTICES.txt. Next step: do not publish; re-run the re-pin." >&2
+              exit 1
+            fi
+            # Only the bytes the replay job uploaded: another job of the run could have replaced the artifact.
+            GOT_SHA256=$(sha256sum < "$RUNNER_TEMP/notices/THIRD-PARTY-NOTICES.txt" | cut -d' ' -f1)
+            if ! [[ $NOTICES_SHA256 =~ ^[0-9a-f]{64}$ ]] || [ "$GOT_SHA256" != "$NOTICES_SHA256" ]; then
+              echo "release-train: FAIL -- the Orca notices artifact hashes to ${GOT_SHA256}, not the ${NOTICES_SHA256:-<no digest>} the replay job recorded. Next step: do not publish; re-run the re-pin." >&2
               exit 1
             fi
             cp --remove-destination "$RUNNER_TEMP/notices/THIRD-PARTY-NOTICES.txt" THIRD-PARTY-NOTICES.txt
@@ -1149,6 +1187,9 @@ jobs:
         if: ${{ !inputs.dry-run && steps.commit.outputs.committed == 'true' }}
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          OLD_COMMIT: ${{ steps.range.outputs.old }}
+          COMPARE_URL: ${{ steps.range.outputs.compare }}
+          LOCKS: ${{ steps.range.outputs.locks }}
         run: |
           set -euo pipefail
           unset NODE_OPTIONS
@@ -1160,7 +1201,10 @@ jobs:
             exit 0
           fi
           TITLE="chore(orca): move the Orca pin to ${TAG}"
-          BODY="Orca re-pin to ${TAG} (${COMMIT}), replayed through rebase-orca.yml: seams re-applied and regenerated, Orca's typecheck:web, typecheck:node and typecheck:pb-build, the Orca rows, orcad, notices and the brand scan. verify.yml runs on this PR; auto-merge is armed and the owner's approving review is the gate."
+          BODY="Orca re-pin to ${TAG} (${COMMIT}), replayed through rebase-orca.yml: seams re-applied and regenerated, Orca's typecheck:web, typecheck:node and typecheck:pb-build, the Orca rows, orcad, notices and the brand scan. verify.yml runs on this PR; the owner's approving review is the gate. Upstream range: ${OLD_COMMIT}...${COMMIT}, ${COMPARE_URL} . The replay's green result was produced by the job that installed and ran this Orca code, so it shows the overlay still applies and typechecks at the new tag; it is not a review of what changed upstream, which this PR's diff (a pin and the seam context) cannot show. Read the compare link before approving."
+          if [ "$LOCKS" != "unchanged" ]; then
+            BODY="${BODY} An Orca lockfile changed in this range (dependencies were added, removed or moved), so auto-merge is not armed for this PR."
+          fi
           # The notices file was written by the replay job, which ran Orca's build, so it is not trusted bytes: a bump
           # that carries it is labelled in the body and never auto-merged; the owner reads the notices diff.
           if [ "$NOTICES" = "changed" ]; then
@@ -1172,6 +1216,8 @@ jobs:
           [[ "$PR" =~ ^[0-9]+$ ]] || { echo "release-train: FAIL -- no open PR for ${BRANCH} after publishing. Next step: read the PR list and re-run." >&2; exit 1; }
           if [ "$NOTICES" = "changed" ]; then
             echo "release-train: NOTE -- ${BRANCH} carries replay-written notices; auto-merge is not armed, the owner reviews the notices diff"
+          elif [ "$LOCKS" != "unchanged" ]; then
+            echo "release-train: NOTE -- an Orca lockfile changed in ${OLD_COMMIT}...${COMMIT}; auto-merge is not armed, the owner reviews the upstream range"
           else
             gh pr merge "$PR" --auto --merge
           fi
@@ -1694,7 +1740,9 @@ jobs:
           TAG_RE='^v[0-9]+\.[0-9]+\.[0-9]+$'
           [[ $TAG =~ $TAG_RE ]] || { echo "release-train: FAIL -- Orca tag '$TAG' is not vX.Y.Z. Next step: check detect-orca." >&2; exit 1; }
           TITLE="release-train: orca ${TAG} stopped"
-          STAGE="$STAGE_OUT"
+          # The stage comes from the job that ran Orca's code, so it is untrusted text (ci-supply-chain-06): it is
+          # cut to 300 characters of a set with no backtick or newline before it enters the issue's code span.
+          STAGE=$(printf '%s' "$STAGE_OUT" | tr -cd "A-Za-z0-9 _./:@()'*,=<>+-" | cut -c1-300)
           if [ "$REPLAY" = "failure" ] && [ -z "$STAGE" ]; then STAGE="FAIL -- the Orca replay job ended failure with no stage line"; fi
           case "$STAGE" in *"FAIL -- "*) ;; *) echo "release-train: orca ${TAG} stage '${STAGE:-none}'; no stop issue"; exit 0 ;; esac
           printf 'The weekly Orca re-pin to %s stopped. No branch or PR was published and the pin stays.\n\nStage: `%s`\n\nRun: %s\n\nNext step: read the stage in docs/RELEASING.md "Orca re-pin (OVL-02)", fix it, then dispatch the release train with repin-orca=true.\n' "$TAG" "$STAGE" "$RUN_URL" > "$RUNNER_TEMP/orca-stop.md"
