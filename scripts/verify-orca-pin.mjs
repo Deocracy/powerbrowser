@@ -7,12 +7,14 @@
 // tag and commit from the manifest at check time via the vendored parser and
 // asserts agreement:
 //
-//  a. the manifest: both keys absent SKIPs the whole row (a downstream with no
-//     Orca); exactly one present FAILs naming the missing key; the tag must
+//  a. the manifest: both keys absent FAILs (Orca is integral to this tree, and
+//     the pin gate must not vanish with the keys; harness-static-structure-03);
+//     exactly one present FAILs naming the missing key; the tag must
 //     match ^v<n>.<n>.<n>$ and the commit ^[0-9a-f]{40}$.
 //  b. generated/upstream-pins.env carries exactly UPSTREAM_ORCA_TAG=<tag> and
-//     UPSTREAM_ORCA_COMMIT=<commit>. An absent fragment SKIPS this step only
-//     (generated/ is gitignored, so that is every fresh clone).
+//     UPSTREAM_ORCA_COMMIT=<commit>. An absent fragment skips this step only
+//     (generated/ is gitignored, so that is every fresh clone), and a skipped
+//     step makes the row exit 77 with a SKIP line.
 //  c. scripts/fetch-orca.sh sources the fragment (names upstream-pins.env,
 //     UPSTREAM_ORCA_TAG and UPSTREAM_ORCA_COMMIT) and carries neither the
 //     pinned tag nor the pinned commit as a literal.
@@ -23,7 +25,9 @@
 //  e. git ls-files -- orca is empty, orca/ is gitignored, and
 //     .planning/workstreams/orca/STATE.md is NOT ignored (the rule is anchored).
 //  f. when orca/ exists: its HEAD and refs/tags/<tag>^{commit} both equal the
-//     commit. An absent orca/ SKIPS this step only.
+//     commit, so a moved tag or a changed commit is red. An absent orca/ skips
+//     this step only; the row then exits 77 with a SKIP line and the driver
+//     records SKIP, not PASS (harness-static-structure-01, SKIP-PROTOCOL.md).
 //  g. flake.nix declares orca = pkgs.mkShell { ... } naming corepack_24 and
 //     nodejs.
 //
@@ -36,7 +40,7 @@
 //   node scripts/verify-orca-pin.mjs --self-test
 //
 // The self-test first proves this tree green (SKIPs allowed) and a synthetic
-// baseline green, then plants nine faults and requires each to go red naming
+// baseline green, then plants the faults and requires each to go red naming
 // the drift. A plant whose anchor is absent from its input is itself a FAIL.
 // Plants land in memory, except the two that need a real git checkout, which
 // use a mkdtemp fixture repo removed in finally. No tracked file is edited.
@@ -47,6 +51,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { fixtureGitEnv } from './lib/fixture-git.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 import { parse } from './lib/toml.cjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -114,10 +120,11 @@ function escapeRe(s) {
     return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Returns { skip: string|null, fails: string[], notes: string[], tag, commit }. */
+/** Returns { skip: string|null, fails: string[], notes: string[], skips: string[], tag, commit }. A skip is a step that did not run. */
 function check(io) {
     const fails = [];
     const notes = [];
+    const skips = [];
 
     // a. the manifest
     const manifestText = io.readText(MANIFEST_REL);
@@ -133,7 +140,7 @@ function check(io) {
     const tag = up.orca_tag;
     const commit = up.orca_commit;
     if (tag === undefined && commit === undefined) {
-        return { skip: `${MANIFEST_REL} states no [upstreams] orca_tag/orca_commit, so there is no Orca pin to agree with`, fails, notes };
+        return { skip: null, fails: [`${MANIFEST_REL} states neither [upstreams] orca_tag nor orca_commit, so the Orca pin is gone. Next step: restore both keys (this tree builds Orca), then run: ${RERUN_GENERATE}`], notes, skips };
     }
     if (tag === undefined || commit === undefined) {
         const missing = tag === undefined ? 'upstreams.orca_tag' : 'upstreams.orca_commit';
@@ -150,7 +157,7 @@ function check(io) {
     // b. the generated fragment
     const fragment = io.readText(FRAGMENT_REL);
     if (fragment === null) {
-        notes.push(`${FRAGMENT_REL} absent (fresh clone), fragment step skipped`);
+        skips.push(`${FRAGMENT_REL} is absent (fresh clone), so the fragment step did not run. Next step: ${RERUN_GENERATE}`);
     } else {
         const lines = fragment.split('\n');
         for (const [key, want] of [['UPSTREAM_ORCA_TAG', tag], ['UPSTREAM_ORCA_COMMIT', commit]]) {
@@ -189,7 +196,7 @@ function check(io) {
 
     // f. a fetched orca/ is at the pin
     if (!io.exists('orca')) {
-        notes.push('orca/ absent, checkout step skipped');
+        skips.push(`orca/ is absent, so the orca/ HEAD and tag step did not run. Next step: bash ${FETCH_REL}`);
     } else {
         const head = io.gitRevParse('orca', 'HEAD');
         const tagSha = io.gitRevParse('orca', `refs/tags/${tag}^{commit}`);
@@ -206,16 +213,16 @@ function check(io) {
         fails.push(`${FLAKE_REL} has no devShells orca = pkgs.mkShell block naming corepack_24 and nodejs. Next step: restore devShells.orca.`);
     }
 
-    return { skip: null, fails, notes, tag, commit };
+    return { skip: null, fails, notes, skips, tag, commit };
 }
 
+// FAIL wins over SKIP; a skipped step is exit 77 with the one SKIP line (SKIP-PROTOCOL.md).
 function render(result) {
-    if (result.skip) return { code: 0, lines: [`${NAME}: SKIP -- ${result.skip}`] };
     if (result.fails.length) {
         return { code: 1, lines: [`${NAME}: FAIL -- ${result.fails.length} problem(s)`, ...result.fails.map((f) => `  - ${f}`)] };
     }
-    const skipped = result.notes.length ? ` (${result.notes.join('; ')})` : '';
-    return { code: 0, lines: [`${NAME}: PASS -- ${result.tag} at ${result.commit} agrees across the manifest, fragment, fetch script, tracked tree, orca/ and flake.nix${skipped}`] };
+    if (result.skips?.length) return { code: SKIP_EXIT, lines: [skipLine(NAME, result.skips.join('; '))] };
+    return { code: 0, lines: [`${NAME}: PASS -- ${result.tag} at ${result.commit} agrees across the manifest, fragment, fetch script, tracked tree, orca/ and flake.nix`] };
 }
 
 // --- self-test ----------------------------------------------------------------
@@ -227,7 +234,7 @@ function runSelfTest() {
         for (const f of real.fails) console.error(`  - ${f}`);
         return 1;
     }
-    console.log(`${NAME} self-test: clean control (this tree) ${real.skip ? 'SKIP' : 'green'}`);
+    console.log(`${NAME} self-test: clean control (this tree) ${real.skips.length ? 'green, with skipped steps' : 'green'}`);
 
     const tmp = mkdtempSync(join(tmpdir(), 'orca-pin-selftest-'));
     try {
@@ -235,8 +242,8 @@ function runSelfTest() {
         const repo = join(tmp, 'orca');
         mkdirSync(repo);
         const git = (...a) => execFileSync('git', ['-c', 'user.email=test@example.invalid', '-c', 'user.name=Test',
-            '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', '-c', 'advice.detachedHead=false', '-C', repo, ...a],
-        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+            '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', '-c', 'core.hooksPath=/dev/null', '-c', 'advice.detachedHead=false', '-C', repo, ...a],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: fixtureGitEnv() }).trim();
         git('init', '-q');
         writeFileSync(join(repo, 'f'), 'one\n');
         git('add', 'f');
@@ -266,11 +273,25 @@ function runSelfTest() {
         });
 
         const base = check(makeIo(baseFiles));
-        if (base.skip || base.fails.length) {
-            console.error(`${NAME} self-test: FAIL -- the synthetic baseline is not green: ${base.skip ?? base.fails.join(' | ')}`);
+        if (base.skips.length || base.fails.length) {
+            console.error(`${NAME} self-test: FAIL -- the synthetic baseline is not green: ${[...base.fails, ...base.skips].join(' | ')}`);
             return 1;
         }
         console.log(`${NAME} self-test: clean control (synthetic baseline) green`);
+        // The skip controls: a step that did not run is exit 77 with the SKIP line, and a failure beside it stays 1.
+        const noOrca = check(makeIo(baseFiles, { exists: () => false }));
+        const noFragment = check(makeIo({ ...baseFiles, [FRAGMENT_REL]: undefined }, { readText: (rel) => (rel === FRAGMENT_REL ? null : baseFiles[rel] ?? null) }));
+        const skipOk = (r, what) => {
+            const v = render(r);
+            if (r.fails.length || v.code !== SKIP_EXIT || !v.lines[0].startsWith(`${NAME}: SKIP -- `) || !v.lines[0].includes(what)) {
+                console.error(`${NAME} self-test: FAIL -- ${what} did not render exit ${SKIP_EXIT} with a SKIP line: ${v.code} ${v.lines.join(' | ')}`);
+                return false;
+            }
+            console.log(`${NAME} self-test: control green -- ${what} -> exit ${SKIP_EXIT} with a SKIP line`);
+            return true;
+        };
+        if (!skipOk(noOrca, 'orca/ is absent') || !skipOk(noFragment, `${FRAGMENT_REL} is absent`)) return 1;
+        if (render({ ...noOrca, fails: ['x'] }).code !== 1) { console.error(`${NAME} self-test: FAIL -- a failure beside a skip did not stay exit 1`); return 1; }
 
         // Replace `anchor` in files[rel]; null when the anchor is absent (vacuous plant).
         const edit = (rel, anchor, repl) => (baseFiles[rel].includes(anchor)
@@ -293,6 +314,21 @@ function runSelfTest() {
                 before: () => git('checkout', '-q', 'v9.9.8'), after: () => git('checkout', '-q', COMMIT) },
             { name: 'tag-literal-in-fetch-script', naming: FETCH_REL,
                 io: () => { const f = edit(FETCH_REL, 'set -euo pipefail', `set -euo pipefail\nTAG=${TAG}`); return f && makeIo(f); } },
+            { name: 'moved-tag', naming: 'orca/ HEAD',
+                io: () => makeIo(baseFiles),
+                before: () => git('tag', '-f', '-a', '-m', 'moved', TAG, git('rev-parse', 'refs/tags/v9.9.8^{commit}')), after: () => git('tag', '-f', '-a', '-m', 'v9.9.9', TAG, COMMIT) },
+            { name: 'changed-commit', naming: 'orca/ HEAD',
+                io: () => {
+                    const older = git('rev-parse', 'refs/tags/v9.9.8^{commit}');
+                    const f = edit(MANIFEST_REL, `orca_commit = "${COMMIT}"`, `orca_commit = "${older}"`);
+                    if (!f) return null;
+                    f[FRAGMENT_REL] = f[FRAGMENT_REL].replace(COMMIT, older);
+                    return makeIo(f);
+                } },
+            { name: 'both-keys-removed', naming: 'states neither',
+                io: () => makeIo({ ...baseFiles, [MANIFEST_REL]: '[upstreams]\nfirefox_tag = "x"\n' }) },
+            { name: 'pin-block-removed', naming: 'states neither',
+                io: () => makeIo({ ...baseFiles, [MANIFEST_REL]: '[other]\nk = 1\n' }) },
             { name: 'tag-without-commit', naming: 'upstreams.orca_commit',
                 io: () => { const f = edit(MANIFEST_REL, `orca_commit = "${COMMIT}"\n`, ''); return f && makeIo(f); } },
             { name: 'tracked-path-under-orca', naming: 'orca/package.json',
