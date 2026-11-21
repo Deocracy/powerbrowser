@@ -134,7 +134,8 @@
       "host": "github.com",
       "disposition": "user-initiated",
       "manifest": "urls.release_notes",
-      "reason": "UPD-33: the About dialog's release-notes link (app.releaseNotesURL, app.releaseNotesURL.aboutDialog and app.update.url.details from configuration.toml [urls] release_notes, UPD-13) points at the GitHub Releases page (SEED-002 section 7), reached only by an explicit click. network.dns.disablePrefetch = true closes the speculative prefetch; an unattended resolution of this host is a failure exactly as for a `deny` entry. Owner ruling 2026-10-25 (46 review WR-07), amended 2026-10-29: the unattended MAR download must never touch github.com; the update descriptor's patchURL and servedMarUrl name the MAR origin row (downloads.powerbrowser.org, the mar_origin host of configuration.toml [urls], at /<tag>/<asset>) instead; the update-download-host row guards the github.com half."
+      "reason": "UPD-33: the About dialog's release-notes link (app.releaseNotesURL, app.releaseNotesURL.aboutDialog and app.update.url.details from configuration.toml [urls] release_notes, UPD-13) points at the GitHub Releases page (SEED-002 section 7), reached only by an explicit click. network.dns.disablePrefetch = true closes the speculative prefetch; an unattended resolution of this host is a failure exactly as for a `deny` entry. Owner ruling 2026-10-25 (46 review WR-07), amended 2026-10-29: the unattended MAR download must never touch github.com; the update descriptor's patchURL and servedMarUrl name the MAR origin row (downloads.powerbrowser.org, the mar_origin host of configuration.toml [urls], at /<tag>/<asset>) instead; the update-download-host row guards the github.com half. packaging-prefs-network-04 (audit-fix G5b, D-08): Orca's pull request views load reviewer pictures from https://github.com/<login>.png when the view is shown (orca/src/renderer/src/components/task-page/github/Avatars.tsx:16), and Orca's repository features name this host to recognise a remote, whose git fetches and pushes reach it. The disposition still requires a user action, which opening a pull request view is.",
+      "orca_source": "orca/src/renderer/src/components/task-page/github/Avatars.tsx"
     },
     {
       "host": "release-assets.githubusercontent.com",
@@ -489,6 +490,229 @@
       "host": "www.apple.com",
       "disposition": "deny",
       "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as the plist DOCTYPE identifier Orca's CLI writes into a launchd unit (orca/src/cli/runtime/serve-service-unit.ts:103); not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "uploads.linear.app",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/shared/linear/inline-media.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): Orca's Linear integration shows the images in a Linear issue's description from Linear's upload host, with signed URLs it requests for them (orca/src/main/linear/linear-description-images.ts:22-36), when the user opens the issue; the host constant is LINEAR_UPLOAD_HOST (orca/src/shared/linear/inline-media.ts:14). Reached through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "npmmirror.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/renderer/src/ssh/node-dist-mirror-recovery.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): Orca offers https://npmmirror.com/mirrors/node/ as a Node.js download mirror when installing Node on a remote host over SSH fails; it is used when the user accepts it (orca/src/renderer/src/ssh/node-dist-mirror-recovery.ts:21). Reached through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "support.atlassian.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/renderer/src/components/integrations/source-control/bitbucket-integration-card.tsx",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): Orca's Bitbucket settings link to Atlassian's API-token help page, opened when the user follows it (orca/src/renderer/src/components/integrations/source-control/bitbucket-integration-card.tsx:19). Reached through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "auth.openai.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/codex-accounts/codex-login-auth-url.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the sign-in page Orca opens in a browser tab when the user signs the Codex agent in to OpenAI (orca/src/main/codex-accounts/codex-login-auth-url.ts:4). Reached through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "claude.ai",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/claude-accounts/claude-sign-in-browser.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): a Claude sign-in page Orca opens when the user signs the Claude agent in (orca/src/main/claude-accounts/claude-sign-in-browser.ts:16). Reached through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "claude.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/claude-accounts/claude-sign-in-browser.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): a Claude sign-in page Orca opens when the user signs the Claude agent in (orca/src/main/claude-accounts/claude-sign-in-browser.ts:16). Reached through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "dev.bigmodel.cn",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/rate-limits/zcode-usage-credentials.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): Orca's rate-limit service accepts this BigModel host for a coding plan's usage when the user configures that plan (orca/src/main/rate-limits/zcode-usage-credentials.ts:11). Reached through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "gitlab.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/gitea/repository-ref.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): Orca names this git host to recognise a repository remote (the remote parser's host list); the git fetches and pushes Orca runs in the user's repository reach it when that repository's remote is on it (orca/src/main/gitea/repository-ref.ts:15). Reached through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "bitbucket.org",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/gitea/repository-ref.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): Orca names this git host to recognise a repository remote (the remote parser's host list); the git fetches and pushes Orca runs in the user's repository reach it when that repository's remote is on it (orca/src/main/gitea/repository-ref.ts:15). Reached through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "ssh.bitbucket.org",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/gitea/repository-ref.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): Orca names this git host to recognise a repository remote (the remote parser's host list); the git fetches and pushes Orca runs in the user's repository reach it when that repository's remote is on it (orca/src/main/gitea/repository-ref.ts:15). Reached through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "ssh.dev.azure.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/gitea/repository-ref.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): Orca names this git host to recognise a repository remote (the remote parser's host list); the git fetches and pushes Orca runs in the user's repository reach it when that repository's remote is on it (orca/src/main/gitea/repository-ref.ts:15). Reached through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "codeberg.org",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/shared/workspace-reference-identity.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): Orca names this git host to recognise a repository remote (the remote parser's host list); the git fetches and pushes Orca runs in the user's repository reach it when that repository's remote is on it (orca/src/shared/workspace-reference-identity.ts:12). Reached through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "ssh.github.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/shared/git-fork-sync.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): Orca names this git host to recognise a repository remote (the remote parser's host list); the git fetches and pushes Orca runs in the user's repository reach it when that repository's remote is on it (orca/src/shared/git-fork-sync.ts:33). Reached through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "registry.npmjs.org",
+      "disposition": "user-initiated",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the agent-browser tool Orca ships (orca/out/orcad/agent-browser-linux-x64) requests https://registry.npmjs.org/agent-browser/latest, its version check, when it runs; it runs when an Orca agent or the user drives a browser through it. Whether it checks on every start is not established. Reached through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "googlechromelabs.github.io",
+      "disposition": "user-initiated",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the agent-browser tool Orca ships (orca/out/orcad/agent-browser-linux-x64) reads the Chrome for Testing download index there when it installs a browser. Reached through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "ai-gateway.vercel.sh",
+      "disposition": "user-initiated",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the agent-browser tool Orca ships (orca/out/orcad/agent-browser-linux-x64) sends its AI requests to Vercel's AI Gateway when the user gives it access to that gateway. Reached through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "api.browserbase.com",
+      "disposition": "user-initiated",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the agent-browser tool Orca ships (orca/out/orcad/agent-browser-linux-x64) starts a cloud browser session at Browserbase when the user chooses that provider and sets its API key. Reached through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "api.browser-use.com",
+      "disposition": "user-initiated",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the agent-browser tool Orca ships (orca/out/orcad/agent-browser-linux-x64) starts a cloud browser session at Browser Use when the user chooses that provider and sets its API key. Reached through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "production-sfo.browserless.io",
+      "disposition": "user-initiated",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the agent-browser tool Orca ships (orca/out/orcad/agent-browser-linux-x64) starts a cloud browser session at Browserless when the user chooses that provider and sets its API key. Reached through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "api.onkernel.com",
+      "disposition": "user-initiated",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the agent-browser tool Orca ships (orca/out/orcad/agent-browser-linux-x64) starts a cloud browser session at Kernel when the user chooses that provider and sets its API key. Reached through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "svgl.app",
+      "disposition": "user-initiated",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the agent-browser tool Orca ships (orca/out/orcad/agent-browser-linux-x64) shows browser logos from https://svgl.app/library/ in its dashboard when the dashboard is opened. Reached through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "agent-browser.dev",
+      "disposition": "user-initiated",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the agent-browser tool Orca ships (orca/out/orcad/agent-browser-linux-x64) opens https://agent-browser.dev in a new session from its dashboard. Reached through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "www.github.com",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a website Orca skips when it looks for repository icons (orca/src/main/repository-icons/repo-icon-autodetect.ts:20); not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "www.gitlab.com",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a website Orca skips when it looks for repository icons (orca/src/main/repository-icons/repo-icon-autodetect.ts:20); not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "www.bitbucket.org",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a website Orca skips when it looks for repository icons (orca/src/main/repository-icons/repo-icon-autodetect.ts:20); not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "google.com",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as an example command in a tool description in orca/out/orcad/agent-browser-linux-x64; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "gmail.com",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as an example in the help text of orca/out/orcad/agent-browser-linux-x64; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "dequeuniversity.com",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as the rule help-link base of the accessibility engine inside orca/out/orcad/agent-browser-linux-x64; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "docs.rs",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as documentation links in error text inside orca/out/orcad/agent-browser-linux-x64; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "lightpanda.io",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as an installation link in an error message of orca/out/orcad/agent-browser-linux-x64; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "mozilla.org",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a licence header URL inside orca/out/orcad/agent-browser-linux-x64; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "nextjs.org",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as documentation links in Next.js error text inside orca/out/orcad/agent-browser-linux-x64; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "ns.adobe.com",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as an XMP namespace identifier inside orca/out/orcad/agent-browser-linux-x64; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "radix-ui.com",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a documentation link inside orca/out/orcad/agent-browser-linux-x64; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "ui.perfetto.dev",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a documentation link in the help text of orca/out/orcad/agent-browser-linux-x64; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "vercel.com",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a link to Vercel's API-key page in a message of orca/out/orcad/agent-browser-linux-x64; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "www.ibm.com",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a DTD identifier inside orca/out/orcad/agent-browser-linux-x64; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "encoding.spec.whatwg.org",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a documentation link in the help text of orca/out/orcad/ripgrep/linux-x64/rg; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "gist.github.com",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a documentation link in the help text of orca/out/orcad/ripgrep/linux-x64/rg; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "www.pcre.org",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a documentation link in the help text of orca/out/orcad/ripgrep/linux-x64/rg; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "zsh.sourceforge.net",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a documentation link in the help text of orca/out/orcad/ripgrep/linux-x64/rg; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "www.xfa.org",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as an XFA namespace identifier in the PDF viewer worker (orca/out/web/assets/pb-panes/assets/pdf.worker.min-*.mjs); not a request. Disposition deny: an observed contact is a failure."
     },
     {
       "host": "cloudflare-dns.com",
