@@ -122,12 +122,10 @@
 // built app is a FAIL. The PASS of this row is the coordinator's proof on the
 // merged, wired, built tree, after orca-pane-css-live (P64-15).
 //
-// The live lock: started without PB_LIVE_LOCK_HELD=1 (that is, not under
-// scripts/verify-platform.sh) the row takes <git common dir>/pb-live.lock
-// itself, before it launches anything (lib reexecUnderLiveLock). Run through flock on that file or with the driver's PB_LIVE_LOCK_HELD=1 and it goes on; a hand-set PB_LIVE_LOCK_HELD=1 with a free lock is an error. The row removes
-// this shell's ORCA_* from its own environment. No pairing value, cookie or
-// token is printed; what the row prints after its session is redacted with the
-// session's own list.
+// The live lock (scripts/lib/live-lock.mjs; SKIP-PROTOCOL.md, "The live lock"): the row calls holdLiveLock before it launches anything. It goes
+// on without taking the lock only when /proc/locks shows the lock held by the driver's holder (PB_LIVE_LOCK_HOLDER: pid and start ticks) or by an
+// ancestor (flock <git common dir>/pb-live.lock node <row>). An inherited PB_LIVE_LOCK_HELD=1 with neither is a FAIL by name. With nothing set it
+// takes the lock itself and waits, naming the holder. A run with nothing to launch (a prerequisite is absent) prints its SKIP without the lock.
 //
 // Tier: full. --self-test is quick and needs no browser: each verdict over a
 // passing fixture and one fixture per failure, the offer search over every
@@ -137,7 +135,6 @@
 // Usage:
 //   node scripts/verify-orca-tabs-live.mjs
 //   node scripts/verify-orca-tabs-live.mjs --self-test
-//   node scripts/verify-orca-tabs-live.mjs --lock-probe   (prints whether this process holds the live lock; launches nothing)
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -1316,7 +1313,7 @@ async function countedNothing() {
 }
 /** The real main on a tree with no built PowerBrowser: exit 77 and the one SKIP line (no browser is started). */
 function skipRun() {
-    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('ORCA_') && k !== 'PB_LIVE_LOCK_HELD'));
+    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('ORCA_') && k !== 'PB_LIVE_LOCK_HELD' && k !== 'PB_LIVE_LOCK_HOLDER'));
     const r = spawnSync(process.execPath, [SELF], { encoding: 'utf8', timeout: 30000, cwd: REPO_ROOT, env: { ...env, PB_FIREFOX_BIN: '/nonexistent/pb-self-test/powerbrowser' } });
     const fails = [];
     if (r.status !== SKIP_EXIT) fails.push(`exit ${r.status}, want ${SKIP_EXIT} (${String(r.stdout).trim().slice(0, 120)} ${String(r.stderr).trim().slice(0, 120)})`);
@@ -1338,6 +1335,7 @@ const reload = (o = {}) => ({ before: ['chat1', 'term2', 'term3'], after: ['chat
 
 async function runSelfTest() {
     const lib = await import('./lib/orca-tabs-live.mjs');
+    const liveLock = await import('./lib/live-lock.mjs');
     const { redact } = await import('./lib/orca-run.mjs');
     const { fixtureGit: paneGit } = await import('./lib/orca-pane-harness.mjs');
     const sources = [`<div data-tab-id={tab.id} data-tab-strip-slot={id} className="x" />`, `<section data-tab-group-strip-id={groupId} data-testid="g" />`];
@@ -1482,8 +1480,6 @@ async function runSelfTest() {
         ['close dialog titles are required when the dialog file is gone', 'the file is absent', () => withTempFiles({}, (dir) => { mkdirSync(join(dir, 'orca/src'), { recursive: true }); try { lib.closeDialogTitles(dir); return []; } catch (e) { return [String(e.message)]; } })],
         ['no orca checkout gives no titles, not an error', null, () => withTempFiles({}, (dir) => (lib.closeDialogTitles(dir).length === 0 ? [] : ['titles read from nothing']))],
         ['an unreadable generated frontend is not "not wired" (harness-live-tabs-11)', 'could not be read', () => withTempFiles({}, (dir) => { const c = lib.listenerCoverage({ wired: lib.appWiresOrcaPanes(join(dir, 'app', 'lib', 'backend', 'main.js')), bundleBuilt: true, booted: false }); return c.verdict === 'red' ? [c.reason] : []; })],
-        ['the live lock behaves (hand-set flag, ancestor flock, signals)', null, () => lib.lockBehaviourVerdict()],
-        ['an ancestor holder is found from /proc/locks, a stranger is not', null, () => withTempFiles({}, (dir) => { const f = join(dir, 'l'); writeFileSync(f, ''); return lib.lockHeldByAncestor(f) === false ? [] : ['a free lock was reported held by an ancestor']; })],
         ['a stray bridge-folder file holding the token is found', 'device token', () => withTempFiles({ 'stray.txt': `x ${NEEDLES[1].value}` }, (dir) => readFilesUnder(dir, () => true).flatMap((f) => placeMatches(f.bytes, NEEDLES)))],
         ['reloaded control', null, () => reloadedVerdict({ before: 1700000000000.5, after: { origin: 1700000009999.5, recorder: false, ready: true } })],
         ['a document that never reloaded (harness-live-tabs-04)', 'the Theia document did not reload', () => reloadedVerdict({ before: 1700000000000.5, after: null })],
@@ -1511,8 +1507,8 @@ async function runSelfTest() {
         ['output after the session without the retained list keeps the secret (the control for the case above)', null, () => (redact('evaluate failed: SECRET-pairing-value-1', []).includes('SECRET-pairing') ? [] : ['redact with an empty list removed the secret by itself'])],
         ['fixture git (the pane harness\'s) ignores a developer config with signing and hooks (harness-live-tabs-13)', null, () => lib.fixtureGitVerdict((repo, home) => paneGit(repo, home))],
         ['fixture git without the hygiene is hit by that config', 'the fixture commit failed under a developer config', () => lib.fixtureGitVerdict((repo, home) => (...a) => execFileSync('git', ['-C', repo, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', ...a], { env: { PATH: process.env.PATH ?? '', HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] }))],
-        ['the live lock is taken by a row started outside the driver (harness-live-tabs-14)', null, () => lib.lockProbeVerdict(SELF, NAME)],
-        ['a row that does not take the live lock is caught', 'did not take the live lock', () => withTempFiles({ 'row.mjs': 'console.log("x: lock-probe: held=0 locked=0");' }, (dir) => lib.lockProbeVerdict(join(dir, 'row.mjs'), 'x'))],
+        ['every live path awaits the shared live-lock helper (harness-live-tabs-14)', null, () => liveLock.lockWiringFails(NAME, import.meta.url)],
+        ['a script that no longer awaits holdLiveLock is caught', 'lock wiring', () => lib.lockWiringPlantFails(liveLock.lockWiringFails)],
         ['listener coverage: a booted bundle covers Orca\'s listeners', null, () => (lib.listenerCoverage({ wired: true, bundleBuilt: true, booted: true }).verdict === 'covered' ? [] : ['a booted bundle was not covered'])],
         ['listener coverage: an app with no orca-panes has none to cover', null, () => (lib.listenerCoverage({ wired: false, bundleBuilt: false, booted: false }).verdict === 'not-wired' ? [] : ['an unwired app was not not-wired'])],
         ['listener coverage: a built bundle that did not boot is red (harness-live-tabs-11)', 'did not boot in the Theia frame', () => { const c = lib.listenerCoverage({ wired: true, bundleBuilt: true, booted: false }); return c.verdict === 'red' ? [c.reason] : []; }],
@@ -1547,24 +1543,17 @@ const isEntryPoint = (() => {
 })();
 if (isEntryPoint) {
     const args = process.argv.slice(2);
-    const unknown = args.find((a) => a !== '--self-test' && a !== '--lock-probe');
+    const unknown = args.find((a) => a !== '--self-test');
     if (unknown !== undefined) {
-        console.error(`${NAME}: FAIL -- unknown argument '${unknown}' (usage: node ${SELF_REL} [--self-test | --lock-probe])`);
+        console.error(`${NAME}: FAIL -- unknown argument '${unknown}' (usage: node ${SELF_REL} [--self-test])`);
         process.exit(2);
     }
     if (args.includes('--self-test')) process.exit(await runSelfTest());
-    // A live row started outside the driver takes the live lock itself, before it launches anything.
+    // The live lock before anything launches (scripts/lib/live-lock.mjs). A run with nothing to launch needs none.
     const lib = await import('./lib/orca-tabs-live.mjs');
-    // Nothing to launch (a prerequisite is absent: the row only prints its SKIP or FAIL) needs no lock.
-    const mayLaunch = args.includes('--lock-probe') || (() => { const pre = lib.prerequisites({ needOrca: true }); return !pre.skip && !pre.fail; })();
-    let held = null;
-    if (mayLaunch) {
-        try { held = await lib.reexecUnderLiveLock(SELF, args); } catch (err) {
-            console.error(`${NAME}: FAIL -- ${err.message}`);
-            process.exit(1);
-        }
-    }
-    if (held !== null) process.exit(held);
-    if (args.includes('--lock-probe')) { console.log(lib.lockProbeLine(NAME)); process.exit(0); }
+    const { holdLiveLock } = await import('./lib/live-lock.mjs');
+    const mayLaunch = (() => { const pre = lib.prerequisites({ needOrca: true }); return !pre.skip && !pre.fail; })();
+    const locked = mayLaunch ? await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT }) : null;
+    if (locked !== null) process.exit(locked);
     process.exit(await main());
 }

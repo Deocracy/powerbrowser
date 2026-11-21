@@ -95,13 +95,10 @@
 // exit 77 when no built PowerBrowser or Theia app exists, and also when stage 2
 // did not run (a partial run) and nothing failed. A FAIL wins over a SKIP.
 //
-// The live lock: started without PB_LIVE_LOCK_HELD=1 (that is, not under
-// scripts/verify-platform.sh) the row takes <git common dir>/pb-live.lock
-// itself, before it launches anything. Run through flock on that file or with the driver's PB_LIVE_LOCK_HELD=1 and it goes on; a hand-set PB_LIVE_LOCK_HELD=1 with a free lock is an error.
-// This shell's ORCA_* are removed from the session. It signals only identities
-// it recorded; the Orca CLI gets an environment built from scratch. No pairing
-// value, env value or token is printed; what is printed after the session is
-// redacted with the session's own list.
+// The live lock (scripts/lib/live-lock.mjs; SKIP-PROTOCOL.md, "The live lock"): the row calls holdLiveLock before it launches anything. It goes
+// on without taking the lock only when /proc/locks shows the lock held by the driver's holder (PB_LIVE_LOCK_HOLDER: pid and start ticks) or by an
+// ancestor (flock <git common dir>/pb-live.lock node <row>). An inherited PB_LIVE_LOCK_HELD=1 with neither is a FAIL by name. With nothing set it
+// takes the lock itself and waits, naming the holder. A run with nothing to launch (a prerequisite is absent) prints its SKIP without the lock.
 //
 // Side effects on the desktop it is run on, and what is undone: the run writes
 // 100 KiB of text to the system clipboard and selection and puts sentinels on
@@ -120,7 +117,6 @@
 // Usage:
 //   node scripts/verify-orca-terminal-keys-live.mjs
 //   node scripts/verify-orca-terminal-keys-live.mjs --self-test
-//   node scripts/verify-orca-terminal-keys-live.mjs --lock-probe   (prints whether this process holds the live lock; launches nothing)
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -1150,7 +1146,7 @@ function recorderCase() {
 }
 /** The real main on a tree with no built PowerBrowser: exit 77 and the one SKIP line (no browser is started). */
 function skipRun() {
-    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('ORCA_') && k !== 'PB_LIVE_LOCK_HELD'));
+    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('ORCA_') && k !== 'PB_LIVE_LOCK_HELD' && k !== 'PB_LIVE_LOCK_HOLDER'));
     const r = spawnSync(process.execPath, [SELF], { encoding: 'utf8', timeout: 30000, cwd: REPO_ROOT, env: { ...env, PB_FIREFOX_BIN: '/nonexistent/pb-self-test/powerbrowser' } });
     const fails = [];
     if (r.status !== SKIP_EXIT) fails.push(`exit ${r.status}, want ${SKIP_EXIT} (${String(r.stdout).trim().slice(0, 120)} ${String(r.stderr).trim().slice(0, 120)})`);
@@ -1179,6 +1175,7 @@ async function runSelfTest() {
         return fails;
     };
     const lib = await import('./lib/orca-tabs-live.mjs');
+    const liveLock = await import('./lib/live-lock.mjs');
     const cases = [
         ['all stages control', null, () => all(fixtureObs())],
         ['passthrough equals the shell keys', null, () => passthroughVerdict(['ctrl+t', 'ctrl+w'], SHELL)],
@@ -1200,7 +1197,8 @@ async function runSelfTest() {
         ['stage 2 not run is a skip', null, () => (skipsOf({ stage2Skip: 'no built orca/' }).length === 1 && skipsOf({ stage2Skip: null }).length === 0 ? [] : ['skipsOf is wrong'])],
         ['stage 2 not run exits 77 when nothing failed', null, () => (lib.verdictExitQuiet(NAME, [], skipsOf({ stage2Skip: 'no built orca/' })) === SKIP_EXIT ? [] : ['a partial run did not exit 77'])],
         ['a failure wins over the skipped stage 2', null, () => (lib.verdictExitQuiet(NAME, ['control failed'], skipsOf({ stage2Skip: 'no built orca/' })) === 1 ? [] : ['a failure did not win over a skip'])],
-        ['the live lock is taken by a row started outside the driver (harness-live-tabs-14)', null, () => lib.lockProbeVerdict(SELF, NAME)],
+        ['every live path awaits the shared live-lock helper (harness-live-tabs-14)', null, () => liveLock.lockWiringFails(NAME, import.meta.url)],
+        ['a script that no longer awaits holdLiveLock is caught', 'lock wiring', () => lib.lockWiringPlantFails(liveLock.lockWiringFails)],
         ['the real main with no built PowerBrowser exits 77 with the one SKIP line', null, () => skipRun()],
         ['pre-merge run: stage 2 SKIP while orca-panes is absent', null, () => { const o = fixtureObs(); o.orca = null; return overallVerdict({ control: controlVerdict(o), stage2: [], stage2Skip: 'lane p64-02 not merged', panesPresent: false, repeat: repeatVerdict(o) }); }],
         ['derivations over fixture sources', null, derive],
@@ -1286,24 +1284,17 @@ const isEntryPoint = (() => {
 })();
 if (isEntryPoint) {
     const args = process.argv.slice(2);
-    const unknown = args.find((a) => a !== '--self-test' && a !== '--lock-probe');
+    const unknown = args.find((a) => a !== '--self-test');
     if (unknown !== undefined) {
-        console.error(`${NAME}: FAIL -- unknown argument '${unknown}' (usage: node ${SELF_REL} [--self-test | --lock-probe])`);
+        console.error(`${NAME}: FAIL -- unknown argument '${unknown}' (usage: node ${SELF_REL} [--self-test])`);
         process.exit(2);
     }
     if (args.includes('--self-test')) process.exit(await runSelfTest());
-    // A live row started outside the driver takes the live lock itself, before it launches anything.
+    // The live lock before anything launches (scripts/lib/live-lock.mjs). A run with nothing to launch needs none.
     const lib = await import('./lib/orca-tabs-live.mjs');
-    // Nothing to launch (a prerequisite is absent: the row only prints its SKIP or FAIL) needs no lock.
-    const mayLaunch = args.includes('--lock-probe') || (() => { const pre = lib.prerequisites({ needPanes: false }); return !pre.skip && !pre.fail; })();
-    let held = null;
-    if (mayLaunch) {
-        try { held = await lib.reexecUnderLiveLock(SELF, args); } catch (err) {
-            console.error(`${NAME}: FAIL -- ${err.message}`);
-            process.exit(1);
-        }
-    }
-    if (held !== null) process.exit(held);
-    if (args.includes('--lock-probe')) { console.log(lib.lockProbeLine(NAME)); process.exit(0); }
+    const { holdLiveLock } = await import('./lib/live-lock.mjs');
+    const mayLaunch = (() => { const pre = lib.prerequisites({ needPanes: false }); return !pre.skip && !pre.fail; })();
+    const locked = mayLaunch ? await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT }) : null;
+    if (locked !== null) process.exit(locked);
     process.exit(await main());
 }
