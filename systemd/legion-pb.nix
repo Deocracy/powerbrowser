@@ -85,8 +85,8 @@
     group = "pb-runner";
     autoSubUidGidRange = true; # rootless podman
     # packaging-prefs-network-01: no libvirtd group. Management access to qemu:///system is
-    # root-equivalent, and this user runs the release build's third-party build code (Orca's and
-    # Theia's npm closures) in the host shell. No workflow job uses libvirt: the Windows matrix
+    # root-equivalent, and this user runs the release build's third-party build code (the npm
+    # closures of the sidecar and the agent server) in the host shell. No workflow job uses libvirt: the Windows matrix
     # (scripts/matrix/win-matrix-run.sh) is run by the owner from the owner's own account.
   };
   users.groups.pb-runner = { };
