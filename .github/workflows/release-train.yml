@@ -1112,6 +1112,24 @@ jobs:
           git switch -C "chore/orca-${TAG}" "$BASE"
           nix develop .#orca --command bash scripts/rebase-orca.sh --replay-only --tag "$TAG" --commit "$COMMIT"
 
+      # ci-supply-chain-03: the replay's green comes from the job that installed and ran the new Orca code, so it is a
+      # compatibility signal, never a security one. From git data alone (nothing of Orca's runs here): the pin range the
+      # PR moves across, its upstream compare link for the owner, and whether any lockfile changed in that range.
+      # Auto-merge is armed only when none did.
+      - name: Read the upstream range and whether an Orca lockfile changed in it (git data only)
+        id: range
+        run: |
+          set -euo pipefail
+          unset NODE_OPTIONS
+          OLD=$(git show "${BASE}:configuration.toml" | sed -n 's/^orca_commit = "\([0-9a-f]*\)"$/\1/p' | head -n 1)
+          [[ $OLD =~ ^[0-9a-f]{40}$ ]] || { echo "release-train: FAIL -- configuration.toml at ${BASE} names no 40-hex orca_commit. Next step: do not bump; restore the pin." >&2; exit 1; }
+          REMOTE=$(grep -m1 '^REMOTE=' scripts/fetch-orca.sh | cut -d= -f2- | tr -d '"')
+          [[ $REMOTE =~ ^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.git$ ]] || { echo "release-train: FAIL -- the Orca remote in scripts/fetch-orca.sh is not a github.com repository URL, so no compare link can be given. Next step: do not bump." >&2; exit 1; }
+          git -C orca fetch -q --depth 1 origin "$OLD"
+          if git -C orca diff --quiet "$OLD" "$COMMIT" -- ':(glob)**/*-lock.yaml'; then LOCKS=unchanged; else LOCKS=changed; fi
+          { echo "old=${OLD}"; echo "compare=${REMOTE%.git}/compare/${OLD}...${COMMIT}"; echo "locks=${LOCKS}"; } >> "$GITHUB_OUTPUT"
+          echo "release-train: orca range ${OLD}...${COMMIT}, lockfiles ${LOCKS}"
+
       # This run's artifact only: no run-id and no token input, so no other run's artifact can be named.
       - name: Download the rewritten Orca notices (skipped in dry-run)
         if: ${{ !inputs.dry-run && needs.rebase-orca.outputs.notices == 'changed' }}
@@ -1169,6 +1187,9 @@ jobs:
         if: ${{ !inputs.dry-run && steps.commit.outputs.committed == 'true' }}
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          OLD_COMMIT: ${{ steps.range.outputs.old }}
+          COMPARE_URL: ${{ steps.range.outputs.compare }}
+          LOCKS: ${{ steps.range.outputs.locks }}
         run: |
           set -euo pipefail
           unset NODE_OPTIONS
@@ -1180,7 +1201,10 @@ jobs:
             exit 0
           fi
           TITLE="chore(orca): move the Orca pin to ${TAG}"
-          BODY="Orca re-pin to ${TAG} (${COMMIT}), replayed through rebase-orca.yml: seams re-applied and regenerated, Orca's typecheck:web, typecheck:node and typecheck:pb-build, the Orca rows, orcad, notices and the brand scan. verify.yml runs on this PR; auto-merge is armed and the owner's approving review is the gate."
+          BODY="Orca re-pin to ${TAG} (${COMMIT}), replayed through rebase-orca.yml: seams re-applied and regenerated, Orca's typecheck:web, typecheck:node and typecheck:pb-build, the Orca rows, orcad, notices and the brand scan. verify.yml runs on this PR; the owner's approving review is the gate. Upstream range: ${OLD_COMMIT}...${COMMIT}, ${COMPARE_URL} . The replay's green result was produced by the job that installed and ran this Orca code, so it shows the overlay still applies and typechecks at the new tag; it is not a review of what changed upstream, which this PR's diff (a pin and the seam context) cannot show. Read the compare link before approving."
+          if [ "$LOCKS" != "unchanged" ]; then
+            BODY="${BODY} An Orca lockfile changed in this range (dependencies were added, removed or moved), so auto-merge is not armed for this PR."
+          fi
           # The notices file was written by the replay job, which ran Orca's build, so it is not trusted bytes: a bump
           # that carries it is labelled in the body and never auto-merged; the owner reads the notices diff.
           if [ "$NOTICES" = "changed" ]; then
@@ -1192,6 +1216,8 @@ jobs:
           [[ "$PR" =~ ^[0-9]+$ ]] || { echo "release-train: FAIL -- no open PR for ${BRANCH} after publishing. Next step: read the PR list and re-run." >&2; exit 1; }
           if [ "$NOTICES" = "changed" ]; then
             echo "release-train: NOTE -- ${BRANCH} carries replay-written notices; auto-merge is not armed, the owner reviews the notices diff"
+          elif [ "$LOCKS" != "unchanged" ]; then
+            echo "release-train: NOTE -- an Orca lockfile changed in ${OLD_COMMIT}...${COMMIT}; auto-merge is not armed, the owner reviews the upstream range"
           else
             gh pr merge "$PR" --auto --merge
           fi

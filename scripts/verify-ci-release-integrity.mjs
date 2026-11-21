@@ -19,6 +19,10 @@
 //                  run step of that job writes a tar into (tar -c...f "<dir>/tree.tar"), every job downloading it
 //                  unpacks tree.tar with tar -x...p...f, and powerbrowser/packaging/package-macos.sh unpacks the
 //                  PB_MAC_ORCA_DIR artifact's tree.tar with -p before it stages from it.
+//   orca-automerge (ci-supply-chain-03) in release-train.yml's bump-pr-orca, the step that runs gh pr merge reaches it
+//                  only past a test that $LOCKS is unchanged, LOCKS comes from a step output computed by git -C orca
+//                  diff --quiet over a *-lock.yaml pathspec (git data, no Orca code), and the PR body carries the
+//                  upstream compare link ${COMPARE_URL} and says the replay's green is not a review of upstream.
 // Every clause derives what it compares from the parsed YAML (job and step lookups by what they run, not by
 // a list kept here), so a renamed step is still found.
 //
@@ -137,6 +141,29 @@ export function check(texts) {
         }
     }
 
+    // orca-automerge (ci-supply-chain-03)
+    {
+        const bump = docs['release-train.yml']?.jobs?.['bump-pr-orca'];
+        const steps = stepsOf(bump);
+        const pub = steps.find(st => /\bgh pr merge\b/.test(runOf(st)));
+        if (!bump) fail('release-train.yml', 'bump-pr-orca', 'orca-automerge', 'is absent. Next step: restore the Orca bump job.');
+        else if (!pub) fail('release-train.yml', 'bump-pr-orca', 'orca-automerge', 'runs no gh pr merge. Next step: restore the publish step.');
+        else {
+            const r = runOf(pub);
+            // The LOCKS test that governs the merge: the last one before it, after the PR number is read (the body's
+            // own LOCKS test, earlier in the step, decides only the wording).
+            const merge = r.search(/\bgh pr merge\b/);
+            const before = r.slice(0, merge);
+            const gate = before.lastIndexOf('[ "$LOCKS" != "unchanged" ]');
+            const prRead = before.search(/\bPR=\$\(gh pr list\b/);
+            if (gate === -1 || prRead === -1 || gate < prRead) fail('release-train.yml', 'bump-pr-orca', 'orca-automerge', 'arms gh pr merge --auto without first testing that no Orca lockfile changed in the pin range ([ "$LOCKS" != "unchanged" ]), so a re-pin that moves upstream dependencies is armed on the green of the job that ran them. Next step: arm auto-merge only when LOCKS is unchanged.');
+            const m = /^steps\.([\w-]+)\.outputs\.locks$/.exec(String(pub.env?.LOCKS ?? '').replace(/^\$\{\{\s*|\s*\}\}$/g, ''));
+            const src = m ? steps.find(st => st.id === m[1]) : undefined;
+            if (!src || !/git -C orca diff --quiet\b[^\n]*-lock\.yaml/.test(runOf(src))) fail('release-train.yml', 'bump-pr-orca', 'orca-automerge', 'takes LOCKS from no step that compares the Orca lockfiles across the pin range with git -C orca diff --quiet. Next step: compute it from git data in a step before the token mint.');
+            if (!/BODY="[^\n]*\$\{COMPARE_URL\}/.test(r) || !/not a review of what changed upstream/.test(r)) fail('release-train.yml', 'bump-pr-orca', 'orca-automerge', 'writes a PR body without the upstream compare link or without saying the green replay is not a review of upstream. Next step: put both in the body.');
+        }
+    }
+
     // mode-carry (68-CR-03)
     {
         const jobs = docs['release.yml']?.jobs ?? {};
@@ -208,6 +235,10 @@ function selfTest() {
         ['the notices digest not taken from the generate job', edit('release-train.yml', '      NOTICES_SHA256: ${{ needs.renovate-licensing.outputs.notices-sha256 }}\n', ''), 'artifact-digest', 'never takes a digest output of renovate-licensing'],
         ['bump-pr-orca carries unbound replay notices', edit('release-train.yml', '      NOTICES_SHA256: ${{ needs.rebase-orca.outputs.notices-sha256 }}\n', ''), 'artifact-digest', 'job bump-pr-orca [artifact-digest]: downloads rebase-orca-notices but never takes'],
         ['the reusable replay exports no notices digest', edit('rebase-orca.yml', '      notices-sha256:\n        description: "The SHA-256 of the THIRD-PARTY-NOTICES.txt uploaded as rebase-orca-notices (empty when unchanged)"\n        value: ${{ jobs.rebase.outputs.notices-sha256 }}\n', ''), 'artifact-digest', 'job rebase-orca [artifact-digest]: uploads rebase-orca-notices,'],
+        // ci-supply-chain-03, the pre-fix bump: auto-merge armed on the replay's green alone, no range for the owner.
+        ['auto-merge armed whatever the lockfiles', edit('release-train.yml', '          elif [ "$LOCKS" != "unchanged" ]; then\n', '          elif false; then\n'), 'orca-automerge', 'without first testing that no Orca lockfile changed'],
+        ['the PR body without the compare link', edit('release-train.yml', ' ${COMPARE_URL} .', ' .'), 'orca-automerge', 'without the upstream compare link'],
+        ['LOCKS from no lockfile comparison', edit('release-train.yml', "if git -C orca diff --quiet \"$OLD\" \"$COMMIT\" -- ':(glob)**/*-lock.yaml'; then", 'if true; then'), 'orca-automerge', 'takes LOCKS from no step'],
         // 68-CR-03, the pre-fix macOS round trip.
         ['a thin macOS job uploads the loose tree', edit('release.yml', '          path: ${{ runner.temp }}/macos-orca-arm64-artifact/', '          path: ${{ runner.temp }}/macos-orca-arm64/'), 'mode-carry', 'job macos-orca-arm64 [mode-carry]: uploads macos-orca-arm64 from'],
         ['the universal job unpacks without -p', edit('release.yml', 'tar -xpf "macos-orca-$A-artifact/tree.tar"', 'tar -xf "macos-orca-$A-artifact/tree.tar"'), 'mode-carry', 'job macos-orca-universal [mode-carry]: downloads macos-orca-arm64'],
@@ -239,4 +270,4 @@ if (fails.length) {
     for (const f of fails) console.error(`  ${f}`);
     process.exit(1);
 }
-console.log(`${NAME}: PASS -- clauses enforced: stage-line, artifact-digest, mode-carry`);
+console.log(`${NAME}: PASS -- clauses enforced: stage-line, artifact-digest, mode-carry, orca-automerge`);
