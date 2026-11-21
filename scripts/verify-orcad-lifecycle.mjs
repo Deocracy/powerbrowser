@@ -64,6 +64,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { liveEnv } from './lib/firefox-bidi.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orcad-lifecycle';
@@ -597,7 +598,7 @@ async function runFixture(env, dir, { accept, then, named = null }) {
     const main = join(dir, 'orcad.js');
     const child = spawn(process.execPath, [...env.buildOrcadWatchArgs({ orcadMain: main }), main], {
         cwd: dir,
-        env: { PATH: process.env.PATH ?? '', PB_FIXTURE_DAEMON: join(dir, 'daemon.mjs'), PB_FIXTURE_DIR: dir },
+        env: liveEnv({ PATH: process.env.PATH ?? '', PB_FIXTURE_DAEMON: join(dir, 'daemon.mjs'), PB_FIXTURE_DIR: dir }),
         stdio: ['pipe', 'pipe', 'pipe'],
     });
     const started = [];
@@ -731,7 +732,7 @@ async function watchOrcad(paths, env) {
         const orcadEnv = env.buildOrcadEnv((n) => inherited[n] ?? '', { dataRoot, orcaVersion: version, claudeAgentSdkDir: '' });
         const port = await freePort(env);
         const args = [...env.buildOrcadWatchArgs({ orcadMain: main }), ...env.buildOrcadArgs({ orcadMain: main, port, webClientRoot: join(paths.orcaDir, 'out', 'web') })];
-        const child = spawn(process.execPath, args, { cwd: dataRoot, env: orcadEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+        const child = spawn(process.execPath, args, { cwd: dataRoot, env: liveEnv(orcadEnv), stdio: ['pipe', 'pipe', 'pipe'] });
         const orcad = [child.pid, startTicks(child.pid)];
         started.push(orcad);
         const lines = [];
