@@ -663,7 +663,7 @@ function selfTestBody() {
     try {
         symlinkSync(dirname(SELF), join(linkDir, 'linked'));
         const viaLink = spawnSync(process.execPath, [join(linkDir, 'linked', 'verify-orca-pane-entry.mjs'), '--nope'], { encoding: 'utf8' });
-        ok('run through a symlinked directory the entry-point guard still fires (exit 2)', viaLink.status === 2);
+        ok('run through a symlinked directory the entry-point guard still reaches the usage check (exit 2 with the usage text, not the guard\'s mismatch message)', viaLink.status === 2 && viaLink.stderr.includes('usage: node scripts/verify-orca-pane-entry.mjs') && !viaLink.stderr.includes('entry-point guard'));
     } finally { rmSync(linkDir, { recursive: true, force: true }); }
     console.log(failed ? `${NAME} self-test: FAIL -- ${failed} case(s)` : `${NAME} self-test: PASS -- every planted fault went red naming it`);
     return failed ? 1 : 0;
