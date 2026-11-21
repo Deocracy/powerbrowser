@@ -358,6 +358,11 @@ export const OrcaService = {
    * signalled. Only this service's state file is removed; orcad's lock and sockets are orcad's to
    * reclaim. includeDaemon is false on a respawn after an orcad crash, so the surviving daemon and
    * its terminals are adopted by the new orcad; only a quit ends agents (D-07).
+   *
+   * Audit fix 62-WR-04: the daemon this session already supervises is never a leftover. Restart Orca from
+   * the failure page runs start()'s sequence, whose reap includes the daemon; a record naming the daemon
+   * this session adopted after an orcad crash keeps it and its agents for the new orcad. Only a record from
+   * a previous browser session (no daemon supervised yet) ends a daemon here.
    */
   async _reapLeftover({ includeDaemon }) {
     const graceMs = PowerBrowserAPI.getIntPref("powerbrowser.orca.killGraceMs", 16000);
@@ -369,7 +374,16 @@ export const OrcaService = {
     if (lock) {
       await this._endIdentity(lock.pid, lock.linuxStartTicks, graceMs, "Leftover orcad");
     }
-    if (own && includeDaemon) {
+    const adopted =
+      own &&
+      this._daemonPid !== null &&
+      own.daemonPid === this._daemonPid &&
+      String(own.daemonTicks) === String(this._daemonTicks) &&
+      (await this._sameIdentity(this._daemonPid, this._daemonTicks));
+    if (adopted && includeDaemon) {
+      this._pushLog(`Terminal daemon pid ${this._daemonPid} is this session's own; it and its terminals are kept for the new orcad (D-07).`);
+    }
+    if (own && includeDaemon && !adopted) {
       await this._endDaemon(own.daemonPid, own.daemonTicks);
       try {
         await PowerBrowserAPI.removeStateFile(this._stateFilePath);
