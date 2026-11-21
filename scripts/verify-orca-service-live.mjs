@@ -524,7 +524,7 @@ function runSelfTest() {
     const coverageFns = [envVerdict, survivors, crashVerdict, reapVerdict, allowlistVerdict];
     for (const m of uncoveredMessages(coverageFns, planted)) { console.error(`  FAIL coverage -> no case reaches ${m.fn}: "${m.text}"`); failures++; }
     // The coverage check itself: the two "still alive after the relaunch" messages share their longest words, so
-    // without the daemon case the daemon message must be uncovered although the orcad case remains.
+    // without the daemon case the daemon message must be uncovered although the other still-alive case remains.
     const withoutDaemon = cases.filter(([n]) => n !== 'old daemon still alive').map(([, , go]) => go());
     if (uncoveredMessages(coverageFns, withoutDaemon).some((m) => m.text.includes('the old terminal daemon pid'))) console.log('  ok coverage plant: without the daemon case its message is uncovered');
     else { console.error('  FAIL coverage plant: without the daemon case "the old terminal daemon pid … is still alive" still counts as covered'); failures++; }

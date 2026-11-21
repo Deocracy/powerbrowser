@@ -28,7 +28,7 @@
 // HOME is a per-run scratch folder (owner ruling 2026-11-15, Scratch HOME; lib/firefox-bidi.mjs liveEnv): orcad keeps its credential
 // key in <HOME>/.orca (orcadCredentialRoot), so step 2 writes a key file that is removed when the run exits.
 //
-// The live lock: run the row plainly (node scripts/verify-orca-credential-store-live.mjs). It takes
+// The live lock: run the row plainly, with node and no flock wrapper. It takes
 // <git common dir>/pb-live.lock itself through scripts/lib/live-lock.mjs, whose header states the rule: it runs at
 // once only when the gate driver's named holder or an ancestor holds the lock, FAILs when PB_LIVE_LOCK_HELD=1 is set
 // without either, and otherwise waits for the lock (bounded, naming the holder). It removes every ORCA_* name from
