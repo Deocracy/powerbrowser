@@ -24,7 +24,7 @@ import { createHash } from 'node:crypto';
 import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { basename, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { REPO_ROOT, resolveConfig } from './generate.mjs';
 
 const NAME = 'download-plugins';
@@ -124,7 +124,7 @@ for (const folder of bundled) {
         // npm ci verifies every tarball against the tracked lock's sha512; nothing from the
         // package runs (--ignore-scripts, and the inert script shell pack() uses).
         for (const f of ['package.json', 'package-lock.json']) copyFileSync(join(src, f), join(scratch, f));
-        const r = spawnSync('npm', ['ci', '--ignore-scripts', '--script-shell', 'true', '--omit=optional', '--legacy-peer-deps', '--no-audit', '--no-fund'],
+        const r = runNpm(['ci', '--ignore-scripts', '--script-shell', 'true', '--omit=optional', '--legacy-peer-deps', '--no-audit', '--no-fund'],
             { cwd: scratch, encoding: 'utf8' });
         if (r.status !== 0) throw new Error(`npm ci failed: ${r.stderr || r.error?.message}`);
         const lock = JSON.parse(readFileSync(join(src, 'package-lock.json'), 'utf8'));
@@ -232,13 +232,30 @@ function sha256Of(path) {
     }
 }
 
+// npm as [command, leading args] (68-CR-02). On Windows npm is npm.cmd / npm.ps1, which spawnSync without a shell cannot
+// start (libuv tries only .com and .exe, and Node refuses .cmd without shell since CVE-2024-27980), so npm's own JS entry
+// runs under this Node instead: npm_execpath when it is npm-cli.js, else the npm the Windows Node install ships beside
+// node.exe. Elsewhere `npm` on PATH is an executable script and is spawned as before.
+function npmCommand() {
+    if (process.platform !== 'win32') return ['npm', []];
+    const fromEnv = process.env.npm_execpath;
+    const cli = fromEnv && /npm-cli\.js$/.test(fromEnv) ? fromEnv : join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+    if (!existsSync(cli)) die(`npm's npm-cli.js is not at ${cli}, so npm cannot be run without a shell on Windows. Next step: run under the Node install that ships npm (setup-node does).`);
+    return [process.execPath, [cli]];
+}
+
+function runNpm(args, opts) {
+    const [cmd, lead] = npmCommand();
+    return spawnSync(cmd, [...lead, ...args], opts);
+}
+
 function pack(folder) {
     const out = mkdtempSync(join(tmpdir(), 'pb-pack-'));
     // None of the folder's scripts may run before its hash. --ignore-scripts stops prepack and
     // postpack, but npm 10's directory fetcher (pacote) runs `prepare` regardless, so the
     // script shell is `true`, which runs nothing. ponytail: POSIX `true`; on Windows a folder
     // with a prepare script fails the pack (fail-closed) until a no-op .cmd shell is added.
-    const r = spawnSync('npm', ['pack', folder, '--ignore-scripts', '--script-shell', 'true', '--pack-destination', out], { encoding: 'utf8' });
+    const r = runNpm(['pack', folder, '--ignore-scripts', '--script-shell', 'true', '--pack-destination', out], { encoding: 'utf8' });
     const file = r.status === 0 && readdirSync(out).find(n => n.endsWith('.tgz'));
     const bytes = file && readFileSync(join(out, file));
     rmSync(out, { recursive: true, force: true });
