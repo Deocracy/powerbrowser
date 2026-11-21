@@ -810,6 +810,8 @@ export const PowerBrowserAPI = Object.freeze({
     } catch {
       savedWebTabHistories = {};
     }
+    // agent-browser-02 (round 3): agent tabs saved before the agent row key are found by their kept history.
+    agentSweepLegacyHistories(savedWebTabHistories);
   },
 
   /**
@@ -3607,10 +3609,12 @@ export const PowerBrowserAPI = Object.freeze({
     // agent-browser-02: agent status belongs to the tab id and row key in chrome. A tab id (or row key) chrome once
     // created as an agent tab opens as one again (the crash recreate and the lost-view reopen close, then open), whatever
     // the frontend sends; the flag alone still never turns an open tab into one (the already-open return above).
-    // agent-browser-04: while the user has agents stopped, no new agent tab is made; a remembered one may reopen (it
-    // is stopped from creation).
+    // agent-browser-04: while the user has agents stopped, no agent tab chrome has not seen this session is made, by
+    // the flag or by an agent row key; one it has seen (a crash recreate) may reopen, stopped from creation.
+    // agent-browser-02 (round 3): the test reads the effective key, the one sent or the one webTabAttach derives from
+    // the tab id, so no user tab can be given an agent row key and reopen as an agent tab after a relaunch.
     const remembered = pending === null && agentTabRemembered(tabId, key);
-    if (agent === true && !agentTabIds.has(tabId) && agentOwnerStopped(actorRef)) {
+    if ((agent === true || remembered) && !agentTabIds.has(tabId) && agentOwnerStopped(actorRef)) {
       return "agent-stopped";
     }
     agent = agent === true || remembered;
@@ -3619,7 +3623,7 @@ export const PowerBrowserAPI = Object.freeze({
     // explicit key is refused; with no key, the key is derived the same way (webTabAttach keeps it).
     if (agent === true && pending === null) {
       key = key ?? `${AGENT_ROW_KEY_PREFIX}${tabId}`;
-      if (!AGENT_ROW_KEY_RE.test(key)) {
+      if (!AGENT_ROW_KEY_RE.test(key) && !agentLegacyRowKeys().has(key)) {
         return "unavailable";
       }
     }
@@ -7629,6 +7633,11 @@ function adoptPendingOverlay(kind, tabId, pcKey, actorRef) {
   if (webTabs.has(tabId)) {
     return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a tabId that is already open" };
   }
+  // agent-browser-02 (round 3): an adopted overlay is a user tab, and its row key is web:<tabId>; a tab id that would
+  // give it an agent row key is refused, so it can never reopen as an agent tab.
+  if (agentTabRemembered(tabId, undefined)) {
+    return { ok: false, reason: "validation", message: "handleWebTabAction: refusing an agent tab id for an adopted overlay" };
+  }
   const pending = pendingContent.get(pcKey);
   if (!pending || pending.theiaBrowser !== theiaBrowser) {
     sendWebTabPush(theiaBrowser, { kind: "dropAdoptedTab", tabId });
@@ -11379,8 +11388,61 @@ const agentTabIds = new Set();
 const AGENT_ROW_KEY_PREFIX = "web:agent-";
 const AGENT_ROW_KEY_RE = /^web:agent-[A-Za-z0-9_-]{1,54}$/;
 
+// agent-browser-02 (round 3): agent tabs saved by a v1.7 build before the agent row key carry ordinary web:wt- keys.
+// Their only trace is their kept history: an entry a page in the agent container started (a link, a form, a
+// redirect) carries a principal serialized with that container's userContextId suffix. Each launch,
+// loadWebTabHistories sweeps the saved histories; a key whose history carries the agent container becomes a legacy
+// agent row key (kept in a pref, newest AGENT_LEGACY_KEYS_MAX), which every open treats as an agent row, so its
+// session snapshot, Setup, closed-tab row and history reopen as an agent tab. A history whose every entry chrome
+// started (browser.goto loads with a null principal and no container), or a row with no kept history, carries no
+// trace; the record states that exposure.
+const AGENT_LEGACY_KEYS_PREF = "powerbrowser.orca.legacyAgentRowKeys";
+const AGENT_LEGACY_KEYS_MAX = 1000;
+let agentLegacyKeys = null;
+
+function agentLegacyRowKeys() {
+  if (agentLegacyKeys === null) {
+    try {
+      const value = JSON.parse(Services.prefs.getStringPref(AGENT_LEGACY_KEYS_PREF, "[]"));
+      agentLegacyKeys = new Set(Array.isArray(value) ? value.filter(k => typeof k === "string" && /^web:[A-Za-z0-9_-]{1,64}$/.test(k)) : []);
+    } catch {
+      agentLegacyKeys = new Set();
+    }
+  }
+  return agentLegacyKeys;
+}
+
+// Returns how many keys it added. Never throws.
+function agentSweepLegacyHistories(histories) {
+  try {
+    const id = Services.prefs.getIntPref(AGENT_CONTAINER_PREF, 0);
+    if (!(id > 0)) {
+      return 0;
+    }
+    const mark = new RegExp(`\\^(?:[^"\\\\]*&)?userContextId=${id}(?![0-9])`);
+    const keys = agentLegacyRowKeys();
+    let added = 0;
+    for (const [key, history] of Object.entries(histories)) {
+      if (AGENT_ROW_KEY_RE.test(key) || keys.has(key) || !mark.test(JSON.stringify(history))) {
+        continue;
+      }
+      keys.add(key);
+      added += 1;
+    }
+    if (added) {
+      const kept = [...keys].slice(-AGENT_LEGACY_KEYS_MAX);
+      agentLegacyKeys = new Set(kept);
+      Services.prefs.setStringPref(AGENT_LEGACY_KEYS_PREF, JSON.stringify(kept));
+      PowerBrowserAPI.log("info", `[orca-agent] ${added} agent tab(s) saved before the agent row key will reopen as agent tabs`);
+    }
+    return added;
+  } catch {
+    return 0;
+  }
+}
+
 function agentTabRemembered(tabId, key) {
-  return agentTabIds.has(tabId) || AGENT_ROW_KEY_RE.test(key ?? "");
+  return agentTabIds.has(tabId) || AGENT_ROW_KEY_RE.test(key ?? `web:${tabId}`) || agentLegacyRowKeys().has(key ?? `web:${tabId}`);
 }
 
 // webTabOpen's agent branch: the flag, the container the overlay was created in, the network log and the focus guard.
