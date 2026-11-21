@@ -42,6 +42,17 @@
 #   --build        Build the Theia app before running (ported from
 #                  verify-phase-02.sh, which owned that lifecycle).
 #
+# Verdicts (SKIP-PROTOCOL.md, v1.7 audit-fix folder under .planning/workstreams/). A row is PASS, FAIL or SKIP. A script
+# row SKIPs when it exits 77 after printing "<name>: SKIP -- <reason>", or (until every script is converted)
+# when it exits 0 and its last stdout line is such a SKIP line. A SKIP asserted nothing: --quick and the
+# full run list it and still exit 0; --gate fails on every SKIP that no open ledger exclusion excuses.
+#
+# Fixture mode (scripts/verify-platform-driver.mjs --self-test only). PB_VERIFY_FIXTURE_REGISTRY names a
+# file under the temp directory whose lines "quick|label|command" or "full|label|command" replace the
+# registry; PB_VERIFY_FIXTURE_EXCLUSIONS, PB_VERIFY_FIXTURE_WINDOWS and PB_VERIFY_FIXTURE_LOCK then replace
+# the gate exclusions, the ledger and the live lock. Every verdict line says FIXTURE, so a stray export can
+# never pass for a verification of this tree.
+#
 # Every external script invocation runs under `setsid`. This script is
 # non-interactive, so job control is off and a plain `cmd &` would share this
 # script's own process group with every descendant a check backgrounds --
@@ -92,7 +103,35 @@ if [ "$GATE" -eq 1 ] && { [ "$QUICK" -eq 1 ] || [ -n "$ONLY" ]; }; then
   exit 1
 fi
 
+# Fixture mode: see the header. Refused unless the registry file is under the temp directory, so a real
+# registry can never be swapped out by an inherited variable.
+FIXTURE_REGISTRY="${PB_VERIFY_FIXTURE_REGISTRY:-}"
+FIXTURE_WORD=""
+WINDOWS_MD="$REPO_ROOT/.planning/WINDOWS.md"
+if [ -n "$FIXTURE_REGISTRY" ]; then
+  case "$FIXTURE_REGISTRY" in
+    "${TMPDIR:-/tmp}"/*) ;;
+    *)
+      echo "verify-platform: FAIL -- PB_VERIFY_FIXTURE_REGISTRY must name a file under ${TMPDIR:-/tmp} (got '$FIXTURE_REGISTRY'); it is the driver self-test's fixture, never a real registry" >&2
+      exit 1
+      ;;
+  esac
+  if [ ! -f "$FIXTURE_REGISTRY" ]; then
+    echo "verify-platform: FAIL -- PB_VERIFY_FIXTURE_REGISTRY names no file ($FIXTURE_REGISTRY)" >&2
+    exit 1
+  fi
+  FIXTURE_WORD="FIXTURE "
+  [ -n "${PB_VERIFY_FIXTURE_WINDOWS:-}" ] && WINDOWS_MD="$PB_VERIFY_FIXTURE_WINDOWS"
+  echo "verify-platform: FIXTURE REGISTRY $FIXTURE_REGISTRY -- this run tests the driver, not the tree"
+fi
+
+# The exit status a row uses to say "did not run" (SKIP-PROTOCOL.md). 77 is the automake convention.
+SKIP_EXIT=77
+# "<name>: SKIP" or "<name>: SKIP -- <reason>", the one SKIP line a skipping row prints.
+SKIP_LINE_RE='^[[:space:]]*[A-Za-z0-9][A-Za-z0-9 ._/-]*: SKIP( -- (.*))?$'
+
 CURRENT_CHECK_PID=""
+CURRENT_ROW_TOKEN=""
 BACKEND_SPAWN_PID=""
 BROWSER_SPAWN_PID=""
 SERVER_PID=""
@@ -123,6 +162,12 @@ export XDG_CONFIG_HOME="$HARNESS_CONFIG_HOME"
 # still reaches the X server. live-scratch-home goes red on a launch line here without HOME=.
 HARNESS_HOME="$(mktemp -d)"; track_temp "$HARNESS_HOME"
 HARNESS_XAUTHORITY="${XAUTHORITY:-$HOME/.Xauthority}"
+# Each script row's stdout and stderr are teed here (SKIP-PROTOCOL.md: the verdict reads the row's last
+# stdout line). The fifo has no writer, so a read with a timeout on it is a sleep that forks nothing.
+ROW_LOG_DIR="$(mktemp -d)"; track_temp "$ROW_LOG_DIR"
+mkfifo "$ROW_LOG_DIR/idle"
+exec {IDLE_FD}<>"$ROW_LOG_DIR/idle"
+idle() { read -r -t "$1" -u "$IDLE_FD" _ 2>/dev/null || true; }
 # gh resolves its config (and so its auth) from XDG_CONFIG_HOME/gh, which the export above
 # points at an empty dir: every full-tier gh api row (repo-controls, descriptor-monotonic) would
 # fail as unauthenticated. Point gh at the caller's real config dir instead, only when it exists
@@ -4131,6 +4176,11 @@ run_own_checks() {
     # 2026-11-17: a planted row that opts out of withFirefoxPage's stray stop (keepStrays) and leaks must still go red;
     # the same row without the opt-out is green, its teardown having stopped the orcad.
     "orcad-leak-self-test|node $REPO_ROOT/scripts/verify-orcad-leak.mjs --self-test"
+    # NEW (audit-fix H1, harness-driver-01/-05/-08): this driver's own verdicts, by running a staged copy of it in
+    # fixture mode over planted rows: PASS, SKIP by exit 77, SKIP by a SKIP last line on exit 0, FAIL, and --gate's
+    # keyed exclusions (an unexcused SKIP, a different or second FAIL in an excluded row, a fixed entry). Each planted
+    # driver fault (the SKIP rule, exit 77, the gate's SKIP pass, the pattern, mode only, the ledger check) must go red.
+    "verify-platform-driver-self-test|node $REPO_ROOT/scripts/verify-platform-driver.mjs --self-test"
     # NEW (67-03, RUN-06/RUN-07, P67-01..P67-09, P67-32): orca-offer-file judges real lstat results of a temp folder
     # through orca-panes' offer-file-policy.ts (type-stripped): symlink, non-regular, other owner, group/other bits,
     # missing, non-loopback or mismatched endpoint, undecodable text; OFFER_REFUSAL_REASONS against the copy table's
@@ -6078,6 +6128,8 @@ run_own_checks() {
     "update-download-host|node $REPO_ROOT/scripts/verify-update-download-host.mjs"
     "update-download-host-self-test|node $REPO_ROOT/scripts/verify-update-download-host.mjs --self-test"
   )
+  # Every row appended below is full tier: it may launch a browser or a daemon, so it runs under the live lock.
+  local quick_rows=${#CHECKS[@]}
 
   if [ "$QUICK" -eq 0 ]; then
     CHECKS+=(
@@ -6925,11 +6977,35 @@ run_own_checks() {
       # still filtering after a relaunch with zero stock windows; disabled lets it through; removed stays removed after a
       # relaunch. Run under flock /home/chris/coding/Power-Browser/.git/pb-live.lock. --live --dev runs on the dev objdir.
       "bundled-xpi-live|node $REPO_ROOT/scripts/verify-bundled-xpi.mjs --live"
+      # bundled-xpi-live-dev: the same three launches on the dev objdir, so the uBlock Origin blocking assertion runs in
+      # every gate while bundled-xpi-live's exclusion (no release package, WINDOWS 30) stands (audit harness-driver-05).
+      "bundled-xpi-live-dev|node $REPO_ROOT/scripts/verify-bundled-xpi.mjs --live --dev"
       # NEW (68-05, OVL-06, P68-19/P68-37): orca-upstream-prs is red until the owner records an upstream PR URL for each D-27
       # class (browser-provider; D-45 ruled web-entry out) in its seams.json rows' upstream.pr. The coordinator keys its
       # GATE_KNOWN_OPEN_EXCLUSIONS row to the upstream-PRs WINDOWS.md entry. Reads seams.json only; no network.
       "orca-upstream-prs|node $REPO_ROOT/scripts/verify-orca-overlay.mjs --upstream-prs"
     )
+  fi
+
+  # Which rows are full tier (they run under the live lock): every row the QUICK=0 block appended.
+  local -A FULL_TIER=()
+  local i
+  for ((i = quick_rows; i < ${#CHECKS[@]}; i++)); do FULL_TIER["${CHECKS[i]%%|*}"]=1; done
+  # Fixture mode: the self-test's registry replaces the real one (header). "full" rows run only without --quick.
+  if [ -n "$FIXTURE_REGISTRY" ]; then
+    CHECKS=()
+    FULL_TIER=()
+    local fixture_line fixture_tier fixture_row
+    while IFS= read -r fixture_line || [ -n "$fixture_line" ]; do
+      case "$fixture_line" in ''|'#'*) continue ;; esac
+      fixture_tier="${fixture_line%%|*}"
+      fixture_row="${fixture_line#*|}"
+      case "$fixture_tier" in
+        quick) CHECKS+=("$fixture_row") ;;
+        full) if [ "$QUICK" -eq 0 ]; then CHECKS+=("$fixture_row"); FULL_TIER["${fixture_row%%|*}"]=1; fi ;;
+        *) echo "verify-platform: FAIL -- fixture registry line has tier '$fixture_tier', want quick or full: $fixture_line" >&2; return 1 ;;
+      esac
+    done < "$FIXTURE_REGISTRY"
   fi
 
   # A --quick run with an empty registry would print "all checks passed" having
@@ -6959,6 +7035,7 @@ run_own_checks() {
 
   local FAILED=0
   local -a SUMMARY=()
+  local -a SKIPPED=()
 
   for entry in "${CHECKS[@]}"; do
     local label="${entry%%|*}"
@@ -6972,23 +7049,7 @@ run_own_checks() {
     # whatever it spawns (start_shell/start_backend already do).
     case "$cmd" in
       bash\ */*|node\ */*)
-        setsid $cmd &
-        CURRENT_CHECK_PID=$!
-        local row_ok=1
-        wait "$CURRENT_CHECK_PID" || row_ok=0
-        # Leak leg: when anything of the row's process group outlives it (kill -0, a builtin, so a clean row costs no
-        # fork), an orcad still in the row's session is named, stopped and turns the row red (2026-11-16 gate).
-        if kill -0 -- "-$CURRENT_CHECK_PID" 2>/dev/null \
-          && ! node "$REPO_ROOT/scripts/verify-orcad-leak.mjs" --session "$CURRENT_CHECK_PID" --label "$label"; then
-          row_ok=0
-        fi
-        if [ "$row_ok" -eq 1 ]; then
-          SUMMARY+=("$label: PASS")
-        else
-          SUMMARY+=("$label: FAIL")
-          FAILED=1
-        fi
-        CURRENT_CHECK_PID=""
+        run_script_row "$label" "$cmd"
         ;;
       *)
         # Every entry reaching this branch must be a bare, argument-free shell
@@ -6996,17 +7057,24 @@ run_own_checks() {
         # statically-known function name). A future entry that needs arguments
         # must add a wrapper function, not smuggle a command string here --
         # guarded loudly rather than silently mis-invoked.
+        ROW_VERDICT=FAIL
+        ROW_REASON=""
         if [[ "$cmd" == *[[:space:]]* ]]; then
           echo "verify-platform: FAIL -- check '$label' has a non-function-name command ('$cmd'); add a wrapper function instead" >&2
-          SUMMARY+=("$label: FAIL")
-          FAILED=1
-        elif "$cmd"; then
-          SUMMARY+=("$label: PASS")
         else
-          SUMMARY+=("$label: FAIL")
-          FAILED=1
+          local fn_rc=0
+          "$cmd" || fn_rc=$?
+          # A function row's output is not captured, so only its status can say SKIP (SKIP-PROTOCOL.md).
+          if [ "$fn_rc" -eq 0 ]; then ROW_VERDICT=PASS
+          elif [ "$fn_rc" -eq "$SKIP_EXIT" ]; then ROW_VERDICT=SKIP; ROW_REASON="function row returned $SKIP_EXIT"
+          fi
         fi
         ;;
+    esac
+    SUMMARY+=("$label: $ROW_VERDICT")
+    case "$ROW_VERDICT" in
+      FAIL) FAILED=1 ;;
+      SKIP) SKIPPED+=("$label -- $ROW_REASON") ;;
     esac
   done
 
@@ -7015,13 +7083,92 @@ run_own_checks() {
   for line in "${SUMMARY[@]}"; do
     echo "  $line"
   done
+  if [ "${#SKIPPED[@]}" -gt 0 ]; then
+    echo "verify-platform: skipped (each asserted nothing; --gate fails on a SKIP no open ledger exclusion excuses)"
+    for line in "${SKIPPED[@]}"; do
+      echo "    $line"
+    done
+  fi
 
-  if [ "$FAILED" -eq 0 ]; then
-    echo "verify-platform: PASS -- all checks passed"
+  if [ "$FAILED" -eq 0 ] && [ "${#SKIPPED[@]}" -eq 0 ]; then
+    echo "verify-platform: ${FIXTURE_WORD}PASS -- all checks passed"
+    return 0
+  elif [ "$FAILED" -eq 0 ]; then
+    echo "verify-platform: ${FIXTURE_WORD}PASS -- every check that ran passed; ${#SKIPPED[@]} SKIPPED (listed above, not run)"
     return 0
   else
-    echo "verify-platform: FAIL -- see summary above" >&2
+    echo "verify-platform: ${FIXTURE_WORD}FAIL -- see summary above" >&2
     return 1
+  fi
+}
+
+# One script row: run it in its own session with its output teed to ROW_LOG_DIR, then decide PASS, FAIL or
+# SKIP into ROW_VERDICT and ROW_REASON (SKIP-PROTOCOL.md). Exit 0 is PASS unless the last stdout line is a
+# SKIP line (a script not yet converted to exit 77); exit 77 is SKIP and must print a SKIP line; any other
+# status is FAIL. The leak leg can turn any verdict into FAIL.
+ROW_SEQ=0
+ROW_VERDICT=""
+ROW_REASON=""
+run_script_row() {
+  local label="$1" cmd="$2"
+  ROW_SEQ=$((ROW_SEQ + 1))
+  local out="$ROW_LOG_DIR/$ROW_SEQ.out" err="$ROW_LOG_DIR/$ROW_SEQ.err"
+  local out_fd err_fd tee_out tee_err
+  exec {out_fd}> >(exec tee -- "$out"); tee_out=$!
+  exec {err_fd}> >(exec tee -- "$err" >&2); tee_err=$!
+  CURRENT_ROW_TOKEN="pbrow-$$-$ROW_SEQ-$RANDOM$RANDOM"
+  # shellcheck disable=SC2086 # $cmd is a registry command line and is split on purpose.
+  PB_VERIFY_ROW_TOKEN="$CURRENT_ROW_TOKEN" setsid $cmd >&"$out_fd" 2>&"$err_fd" {out_fd}>&- {err_fd}>&- {IDLE_FD}>&- &
+  CURRENT_CHECK_PID=$!
+  exec {out_fd}>&- {err_fd}>&-
+  local rc=0
+  wait "$CURRENT_CHECK_PID" || rc=$?
+  local leaked=0
+  # Leak leg: when anything of the row's process group outlives it (kill -0, a builtin, so a clean row costs no
+  # fork), an orcad still in the row's session is named, stopped and turns the row red (2026-11-16 gate).
+  if kill -0 -- "-$CURRENT_CHECK_PID" 2>/dev/null \
+    && ! node "$REPO_ROOT/scripts/verify-orcad-leak.mjs" --session "$CURRENT_CHECK_PID" --label "$label"; then
+    leaked=1
+  fi
+  CURRENT_CHECK_PID=""
+  CURRENT_ROW_TOKEN=""
+  # The tees end once every writer closed the pipe; a writer that outlived the row is bounded at 5 s.
+  local waited
+  for ((waited = 0; waited < 250; waited++)); do
+    kill -0 "$tee_out" 2>/dev/null || kill -0 "$tee_err" 2>/dev/null || break
+    idle 0.02
+  done
+  local tee_pid
+  for tee_pid in "$tee_out" "$tee_err"; do
+    kill -0 "$tee_pid" 2>/dev/null && kill "$tee_pid" 2>/dev/null
+  done
+
+  ROW_REASON=""
+  local last="" line
+  while IFS= read -r line; do
+    [[ "$line" =~ [^[:space:]] ]] && last="$line"
+  done < <(tail -n 40 -- "$out" 2>/dev/null)
+  if [ "$leaked" -eq 1 ]; then
+    ROW_VERDICT=FAIL
+  elif [ "$rc" -eq 0 ]; then
+    if [[ "$last" =~ $SKIP_LINE_RE ]]; then
+      ROW_VERDICT=SKIP
+      ROW_REASON="${BASH_REMATCH[2]:-(no reason given)} [exit 0 with a SKIP last line: convert the script to exit $SKIP_EXIT]"
+    else
+      ROW_VERDICT=PASS
+    fi
+  elif [ "$rc" -eq "$SKIP_EXIT" ]; then
+    local skip_line
+    skip_line="$(grep -hE -- ': SKIP( -- .*)?$' "$out" "$err" 2>/dev/null | tail -n 1)"
+    if [[ "$skip_line" =~ $SKIP_LINE_RE ]]; then
+      ROW_VERDICT=SKIP
+      ROW_REASON="${BASH_REMATCH[2]:-(no reason given)}"
+    else
+      echo "verify-platform: FAIL -- $label exited $SKIP_EXIT (SKIP) without printing a '<name>: SKIP -- <reason>' line; a SKIP must say what did not run" >&2
+      ROW_VERDICT=FAIL
+    fi
+  else
+    ROW_VERDICT=FAIL
   fi
 }
 
@@ -7035,7 +7182,7 @@ run_own_checks() {
 # all, so a malformed/missing ledger can never be silently read as "open".
 ledger_entry_status() {
   local id="$1"
-  local windows_md="$REPO_ROOT/.planning/WINDOWS.md"
+  local windows_md="$WINDOWS_MD"
   node -e '
     const fs = require("fs");
     const path = process.argv[1];
@@ -7061,15 +7208,75 @@ ledger_entry_is_open() {
   [ "$status" = "open" ]
 }
 
-# Failing-check labels are read off this run's OWN printed summary lines
-# ("  <label>: FAIL") rather than by re-deriving or re-running anything.
+# Failing and skipped labels are read off this run's OWN printed summary lines
+# ("  <label>: FAIL", "  <label>: SKIP") rather than by re-deriving or re-running anything.
 extract_failed_labels() {
   grep -E '^  [A-Za-z0-9_.-]+: FAIL$' "$1" | sed -E 's/^  ([A-Za-z0-9_.-]+): FAIL$/\1/'
 }
+extract_skipped_labels() {
+  grep -E '^  [A-Za-z0-9_.-]+: SKIP$' "$1" | sed -E 's/^  ([A-Za-z0-9_.-]+): SKIP$/\1/'
+}
+
+# The lines a row printed in this run's log: from its "running <label>..." line to the next row or the summary.
+row_output() {
+  local log="$1" label="$2"
+  awk -v start="verify-platform: running $label..." '
+    $0 == start { on = 1; next }
+    on && (index($0, "verify-platform: running ") == 1 || $0 == "verify-platform: summary") { exit }
+    on { print }
+  ' "$log"
+}
+
+# A tally line that only counts the failures printed under or above it ("FAIL -- 3 problem(s) ...",
+# "FAIL -- see surface(s) above", "FAIL (3)"). Mode "only" lets these through uncovered.
+TALLY_LINE_RE='FAIL -- [0-9]+ [A-Za-z -]*\(s\)|FAIL -- see surface\(s\) above|FAIL \([0-9]+\)$'
+
+# Does exclusion <mode> <patterns> cover a row's output (stdin)? Patterns are " ;; "-separated literal
+# substrings. Every mode needs one output line containing a pattern: the failure the ledger entry describes
+# must be the one that happened. Mode "only" also needs every line containing FAIL to contain a pattern or
+# be a tally line, so a second, different red in the same row stays red. Mode "any" is for self-test rows,
+# whose planted faults print FAIL lines of their own. Prints the first uncovered line on a miss.
+exclusion_covers() {
+  local mode="$1" patterns="$2"
+  local -a pats=()
+  local rest="$patterns"
+  while [ -n "$rest" ]; do
+    if [[ "$rest" == *" ;; "* ]]; then pats+=("${rest%% ;; *}"); rest="${rest#* ;; }"; else pats+=("$rest"); rest=""; fi
+  done
+  local line pat hit_any=0 uncovered="" covered
+  while IFS= read -r line; do
+    covered=0
+    for pat in "${pats[@]}"; do
+      if [[ "$line" == *"$pat"* ]]; then covered=1; hit_any=1; break; fi
+    done
+    if [ "$mode" = "only" ] && [ "$covered" -eq 0 ] && [ -z "$uncovered" ] && [[ "$line" == *FAIL* ]] \
+      && ! [[ "$line" =~ $TALLY_LINE_RE ]]; then
+      uncovered="$line"
+    fi
+  done
+  if [ "$hit_any" -eq 0 ]; then
+    echo "no output line contains: ${patterns}"
+    return 1
+  fi
+  if [ -n "$uncovered" ]; then
+    echo "a failure the exclusion does not describe: ${uncovered:0:300}"
+    return 1
+  fi
+  return 0
+}
 
 # The known-open exclusion list (D-127). Keyed on the broken-windows ledger id,
-# never on a bare assertion -- see ledger_entry_is_open above.
-# label|ledger_id|reason
+# never on a bare assertion -- see ledger_entry_is_open above -- AND on the output
+# the entry describes (audit harness-driver-05): a row is excused only while its
+# entry is open and its output shows the failure (or SKIP) that entry records.
+#
+# label|ledger_id|verdict|mode|patterns|reason
+#   verdict  FAIL or SKIP: the summary verdict this row excuses.
+#   mode     only: every FAIL line must be covered; any: one covered line is enough (self-test rows).
+#   patterns " ;; "-separated literal substrings of the row's output (exclusion_covers above).
+# The patterns were read off v1.7 gate run 5 (da97a4e9, .mozbuild/gate-run5/gate.log).
+REL_APP_INI="objdir-release/dist/bin/application.ini'"
+REL_NO_PKG=".en-US.linux-x86_64.tar.xz, found 0 -- run"
 declare -a GATE_KNOWN_OPEN_EXCLUSIONS=(
   # 39-19 (2026-11-07): every red of the v1.5 close-out full run that is not fixed is keyed to an open ledger
   # entry carrying repro, cause so far and source (scope item 7). The 01-era rows keyed to fixed ledger
@@ -7080,57 +7287,110 @@ declare -a GATE_KNOWN_OPEN_EXCLUSIONS=(
   # keyed to a fixed entry is dead weight because ledger_entry_is_open already stops excusing it.
   # Every remaining row is keyed to an entry still open in .planning/WINDOWS.md; D-09 re-dates them
   # in 59-07 without touching this list.
-  "ng063-packaged-launch|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
-  "portable-elf|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
-  "sidecar-no-symlinks|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
-  "package-target-natives|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
-  "packaged-identity|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
-  "install-matrix|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
-  "ng065-mar-signature-enforced|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
-  "ng072-policies-packaged-webextension|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
-  "search-engines-packaged|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
-  "mar-update-hop|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
-  "ng074-ci-green-on-main|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
-  "repo-controls|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
-  "channel-live|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
-  "codeberg-mirror-live|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
-  "upptime-sweep-live|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
-  "win-matrix-record|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
-  "win-download-copy|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
-  "macos-package-payload|32|macOS deferred to v1.7 (R4), needs Mac hardware"
-  "macos-install-matrix|32|macOS deferred to v1.7 (R4), needs Mac hardware"
-  "ng089-uat-sheets|35|49 pending results in the v1.2/v1.3 UAT sheets; the NG-084 live pass was deferred by the owner"
-  "address-bar-live-self-test|25|plant ctrl-d-everywhere stays green on bookmark-keys"
-  "page-tools-live|28|flaky: crash-navigate red 1 of 3 registry runs (2026-11-06)"
-  "extension-actions-live|29|private-access session 2: options page opens in the private stock window, matches stock; deferred to 999.17"
-  "extension-actions-live-self-test|29|private-access session 2: options page opens in the private stock window, matches stock; deferred to 999.17"
+  # Entry 30's rows are excused only while the release objdir or its package is absent: once a container
+  # tarball exists, any red in them (a MAR signature not enforced, a bundled XPI not blocking) is red.
+  "ng063-packaged-launch|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "portable-elf|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "sidecar-no-symlinks|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "package-target-natives|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "packaged-identity|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "install-matrix|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "ng065-mar-signature-enforced|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "ng072-policies-packaged-webextension|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "search-engines-packaged|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "mar-update-hop|30|FAIL|only|no MAR-hop proof evidence under .mozbuild/mar-hop: absent|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "ng074-ci-green-on-main|31|FAIL|only|no verify.yml run exists for main at ;; has not completed|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "repo-controls|31|FAIL|only|is undeclared and its repository list|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "channel-live|31|FAIL|only|found no published Release|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "codeberg-mirror-live|31|FAIL|only|the Codeberg mirror slug is not declared|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "upptime-sweep-live|31|FAIL|only|the Upptime status repository is not declared|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "win-matrix-record|31|FAIL|only|scripts/matrix/win-matrix-record.json is absent|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "win-download-copy|31|FAIL|only|scripts/matrix/win-matrix-record.json: is absent|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "macos-package-payload|32|FAIL|only|.mozbuild/macos-package is absent|macOS deferred to v1.7 (R4), needs Mac hardware"
+  "macos-install-matrix|32|FAIL|only|FAIL -- 0 problem(s) and|macOS deferred to v1.7 (R4), needs Mac hardware"
+  "ng089-uat-sheets|35|FAIL|only|: result pending ;; no recorded React 19 runtime test|49 pending results in the v1.2/v1.3 UAT sheets; the NG-084 live pass was deferred by the owner"
+  "address-bar-live-self-test|25|FAIL|any|'ctrl-d-everywhere' stayed green on bookmark-keys|plant ctrl-d-everywhere stays green on bookmark-keys"
+  "page-tools-live|28|FAIL|only|a URL sent to a crashed tab did not load it|flaky: crash-navigate red 1 of 3 registry runs (2026-11-06)"
+  "extension-actions-live|29|FAIL|only|private access rule not applied|private-access session 2: options page opens in the private stock window, matches stock; deferred to 999.17"
+  "extension-actions-live-self-test|29|FAIL|any|private access rule not applied|private-access session 2: options page opens in the private stock window, matches stock; deferred to 999.17"
   # 68-06 (2026-11-10)
-  "orca-packaged-tree|30|no container-built release tarball yet (68-06 Task 2 builds it)"
-  "orca-packaged-live|30|no container-built release tarball yet (68-06 Task 2 builds it)"
+  "orca-packaged-tree|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball yet (68-06 Task 2 builds it)"
+  "orca-packaged-live|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball yet (68-06 Task 2 builds it)"
   # 68-06 (2026-11-11): Task 2 built the package from the dev objdir (no Safe Browsing key directory here), so
   # the two rows above stay keyed to entry 30 until a container release tarball exists.
-  "orca-upstream-prs|51|owner opens the upstream issues and PRs (OVL-06, D-27)"
+  "orca-upstream-prs|51|FAIL|only|class browser-provider has no seams.json row with a non-null upstream pr|owner opens the upstream issues and PRs (OVL-06, D-27)"
   # 2026-11-18 (D-60): the row takes a real screen capture and fails while another window has focus, which a
   # 4.4 h gate on the owner's desktop cannot avoid (gate runs 4 and 5). It passed alone on 2026-11-18.
-  "real-input-gate-self-test|69|needs an unlocked desktop with no other window focused; run alone (PASS 2026-11-18)"
-  "branding-variant-divergence|30|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
-  "verify-branding-identity-release|30|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
-  "build-update-xml|30|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
-  "bundled-xpi-packaged|30|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
-  "bundled-xpi-live|30|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
+  "real-input-gate-self-test|69|FAIL|any|clean-capture -> spectacle wrote no file|needs an unlocked desktop with no other window focused; run alone (PASS 2026-11-18)"
+  # D-60 (2): the agent-status row's SKIP on a sign-in under 60 minutes from expiry stays counted, noted under
+  # WINDOWS 69; its alone PASS of 2026-11-18 is TERM-02's real-agent evidence. Any other SKIP of the row is red.
+  "orca-agent-status-live|69|SKIP|any|SKIP -- the Claude sign-in expires in|the Claude sign-in was under 60 minutes from expiry; the alone PASS of 2026-11-18 stands (D-60)"
+  # These five are not named in entry 30's description (audit harness-driver-05); each is excused only on its
+  # absent-release-build line. bundled-xpi-live-dev runs the blocking assertion on the dev objdir meanwhile.
+  "branding-variant-divergence|30|FAIL|only|objdir-release/dist/bin/browser/chrome/en-US/locale/branding/brand.properties does not exist|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
+  "verify-branding-identity-release|30|FAIL|only|objdir-release/dist/bin/application.ini does not exist ;; objdir-release/config.status does not exist ;; objdir-release/dist/bin/powerbrowser executable=false|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
+  "build-update-xml|30|FAIL|only|.mozbuild/mar-hop/nplus1.mar is absent|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
+  "bundled-xpi-packaged|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
+  "bundled-xpi-live|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
 )
+if [ -n "$FIXTURE_REGISTRY" ]; then
+  GATE_KNOWN_OPEN_EXCLUSIONS=()
+  if [ -n "${PB_VERIFY_FIXTURE_EXCLUSIONS:-}" ]; then
+    while IFS= read -r fixture_excl || [ -n "$fixture_excl" ]; do
+      case "$fixture_excl" in ''|'#'*) continue ;; esac
+      GATE_KNOWN_OPEN_EXCLUSIONS+=("$fixture_excl")
+    done < "$PB_VERIFY_FIXTURE_EXCLUSIONS"
+  fi
+fi
+
+# Judges one FAIL or SKIP row of the gate log against GATE_KNOWN_OPEN_EXCLUSIONS. Prints one EXCLUDED or
+# FAIL line; returns 0 when the row is excused.
+gate_judge_row() {
+  local log="$1" label="$2" verdict="$3"
+  local excl_entry matched=0 why=""
+  for excl_entry in "${GATE_KNOWN_OPEN_EXCLUSIONS[@]}"; do
+    local excl_label="${excl_entry%%|*}" rest="${excl_entry#*|}"
+    [ "$excl_label" = "$label" ] || continue
+    local excl_ledger_id="${rest%%|*}"; rest="${rest#*|}"
+    local excl_verdict="${rest%%|*}"; rest="${rest#*|}"
+    local excl_mode="${rest%%|*}"; rest="${rest#*|}"
+    local excl_patterns="${rest%%|*}"
+    local excl_reason="${rest#*|}"
+    [ "$excl_verdict" = "$verdict" ] || continue
+    matched=1
+    if ! ledger_entry_is_open "$excl_ledger_id"; then
+      why="WINDOWS.md ledger entry $excl_ledger_id is no longer 'open' (fixed or waived); this check must be green now, not silently excused"
+      continue
+    fi
+    local miss
+    if ! miss="$(row_output "$log" "$label" | exclusion_covers "$excl_mode" "$excl_patterns")"; then
+      why="the exclusion keyed to WINDOWS.md ledger entry $excl_ledger_id does not cover this $verdict: $miss"
+      continue
+    fi
+    echo "  EXCLUDED (known-open): $label -- $verdict -- WINDOWS.md ledger entry $excl_ledger_id -- $excl_reason"
+    return 0
+  done
+  if [ "$matched" -eq 0 ] && [ "$verdict" = "SKIP" ]; then
+    echo "  FAIL (unexcused SKIP): $label -- the row did not run, so it asserted nothing; give it what it needs or key a SKIP exclusion to an open ledger entry" >&2
+  elif [ "$matched" -eq 0 ]; then
+    echo "  FAIL (not excluded): $label" >&2
+  else
+    echo "  FAIL (exclusion does not apply): $label -- $why" >&2
+  fi
+  return 1
+}
 
 # Before consolidation, --gate ran this script's own set and then SHELLED OUT to
 # verify-phase-04.sh and verify-phase-03.sh, parsing their summaries back. With
 # one registry there is nothing to shell out to: --gate is the full set in one
 # process, and the only thing it adds over a plain full run is the ledger-backed
-# exclusion pass over the failures. That is a simplification the consolidation
-# paid for, not a capability lost.
+# exclusion pass over the failures and the skips. That is a simplification the
+# consolidation paid for, not a capability lost.
 run_gate_mode() {
   local gate_start="$SECONDS"
   local commit
   commit="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo "unknown")"
-  echo "verify-platform: --gate -- commit $commit"
+  echo "verify-platform: ${FIXTURE_WORD}--gate -- commit $commit"
   echo "verify-platform: --gate -- proving every registered check is green (or a named, still-open ledger exclusion) at this one commit (D-127)"
   echo ""
 
@@ -7158,49 +7418,37 @@ run_gate_mode() {
 
   local gate_failed=0
   local excluded_count=0
-  if [ "$rc" -ne 0 ]; then
-    while IFS= read -r label; do
-      [ -z "$label" ] && continue
-      local excused=0
-      local matched_known_exclusion=0
-      local excl_entry
-      for excl_entry in "${GATE_KNOWN_OPEN_EXCLUSIONS[@]}"; do
-        local excl_label="${excl_entry%%|*}"
-        local rest="${excl_entry#*|}"
-        local excl_ledger_id="${rest%%|*}"
-        local excl_reason="${rest#*|}"
-        if [ "$label" = "$excl_label" ]; then
-          matched_known_exclusion=1
-          if ledger_entry_is_open "$excl_ledger_id"; then
-            echo "  EXCLUDED (known-open): $label -- WINDOWS.md ledger entry $excl_ledger_id -- $excl_reason"
-            excused=1
-            excluded_count=$((excluded_count + 1))
-          else
-            echo "  FAIL (exclusion no longer applies): $label -- WINDOWS.md ledger entry $excl_ledger_id is no longer 'open' (fixed or waived); this check must be green now, not silently excused" >&2
-            gate_failed=1
-          fi
-          break
-        fi
-      done
-      if [ "$excused" -ne 1 ] && [ "$matched_known_exclusion" -ne 1 ]; then
-        echo "  FAIL (not excluded): $label" >&2
-        gate_failed=1
-      fi
-    done < <(extract_failed_labels "$log")
+  local label
+  local -a failed_labels=() skipped_labels=()
+  mapfile -t failed_labels < <(extract_failed_labels "$log")
+  mapfile -t skipped_labels < <(extract_skipped_labels "$log")
+  # A failed run with no FAIL row in its summary (an empty registry, an unknown label, a driver error) is
+  # never a pass.
+  if [ "$rc" -ne 0 ] && [ "${#failed_labels[@]}" -eq 0 ]; then
+    echo "  FAIL (no summary): the check run exited $rc without a FAIL row in its summary; see the output above" >&2
+    gate_failed=1
   fi
+  for label in "${failed_labels[@]}"; do
+    [ -z "$label" ] && continue
+    if gate_judge_row "$log" "$label" FAIL; then excluded_count=$((excluded_count + 1)); else gate_failed=1; fi
+  done
+  for label in "${skipped_labels[@]}"; do
+    [ -z "$label" ] && continue
+    if gate_judge_row "$log" "$label" SKIP; then excluded_count=$((excluded_count + 1)); else gate_failed=1; fi
+  done
 
   local gate_elapsed=$((SECONDS - gate_start))
   echo ""
   echo "verify-platform: --gate -- total runtime ${gate_elapsed}s"
 
   if [ "$gate_failed" -eq 0 ] && [ "$excluded_count" -gt 0 ]; then
-    echo "verify-platform: --gate PASS-WITH-EXCLUSIONS -- commit $commit -- $excluded_count named known-open exclusion(s)"
+    echo "verify-platform: ${FIXTURE_WORD}--gate PASS-WITH-EXCLUSIONS -- commit $commit -- $excluded_count named known-open exclusion(s)"
     return 0
   elif [ "$gate_failed" -eq 0 ]; then
-    echo "verify-platform: --gate PASS -- commit $commit -- every registered check is green at this commit"
+    echo "verify-platform: ${FIXTURE_WORD}--gate PASS -- commit $commit -- every registered check ran and is green at this commit"
     return 0
   else
-    echo "verify-platform: --gate FAIL -- commit $commit -- see output above" >&2
+    echo "verify-platform: ${FIXTURE_WORD}--gate FAIL -- commit $commit -- see output above" >&2
     return 1
   fi
 }
