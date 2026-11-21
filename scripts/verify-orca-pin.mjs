@@ -51,7 +51,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { fixtureGitEnv } from './lib/fixture-git.mjs';
+import { fixtureGitEnv, withHostileGitConfig } from './lib/fixture-git.mjs';
 import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 import { parse } from './lib/toml.cjs';
 
@@ -372,7 +372,7 @@ function runSelfTest() {
 }
 
 if (args.includes('--self-test')) {
-    process.exit(runSelfTest());
+    process.exit(withHostileGitConfig(runSelfTest));
 }
 const { code, lines } = render(check(gitIo(REPO_ROOT)));
 for (const l of lines) (code ? console.error : console.log)(l);
