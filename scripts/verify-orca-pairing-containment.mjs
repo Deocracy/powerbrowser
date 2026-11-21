@@ -52,10 +52,12 @@
 // Audit fixes: a collector whose read() fails is red "sink unreadable" even
 // when its control was found (harness-static-hosting-03); the logs sink's
 // control includes each captured stream, stdout carrying the shell's
-// POWERBROWSER_SHELL_READY dump line and stderr's capture file existing
-// (harness-static-hosting-05); the non-loopback-peer sink scans orcad, its
-// terminal daemon, the Theia backend and every descendant of them
-// (harness-static-hosting-08).
+// POWERBROWSER_SHELL_READY dump line and stderr a random marker the run
+// writes to it on purpose through Components.utils.printStderr
+// (harness-static-hosting-05 and its review follow-up); the non-loopback-peer
+// sink scans orcad, its terminal daemon, the Theia backend and every
+// descendant of them, and its control needs a LISTEN row of orcad's own, not
+// the daemon's (harness-static-hosting-08 and its review follow-up).
 //
 // Usage:
 //   node scripts/verify-orca-pairing-containment.mjs              (live; tier full)
@@ -83,6 +85,8 @@ const OFFER_FILE = 'web-pairing';
 const LOG_CONTROL = 'orcad ready on ';
 // The sentinel powerbrowser.js dump()s to stdout at every shell start: the stdout capture's own control.
 const STDOUT_CONTROL = 'POWERBROWSER_SHELL_READY';
+// The stderr capture's control: a marker the live run writes to PowerBrowser's stderr itself (a fresh one per run).
+const STDERR_MARKER_PREFIX = 'PB_CONTAINMENT_STDERR_MARKER_';
 
 // ---------------------------------------------------------------------------
 // Fixtures: synthetic offers only, never a real one.
@@ -157,10 +161,10 @@ function fixture(dir, offer, pin, marker) {
         marker, profileDir, dataRoot, bridgeDir, procRoot, offerFile: OFFER_FILE, holder5: registryFilesFromPin(pin),
         theiaOriginDir: 'http+++127.0.0.1+40404', setupName: 'P67 containment', logControl: LOG_CONTROL,
         logTexts: [`${LOG_CONTROL}127.0.0.1:26768, pid 111, terminal daemon pid 112.`],
-        captures: [{ stream: 'stdout', text: `${STDOUT_CONTROL} chrome://powerbrowser/content/powerbrowser.xhtml\n`, control: STDOUT_CONTROL }, { stream: 'stderr', text: '', control: null }],
+        captures: [{ stream: 'stdout', text: `${STDOUT_CONTROL} chrome://powerbrowser/content/powerbrowser.xhtml\n`, control: STDOUT_CONTROL }, { stream: 'stderr', text: `${STDERR_MARKER_PREFIX}fixture\n`, control: `${STDERR_MARKER_PREFIX}fixture` }],
         addressTexts: [{ kind: 'control', text: marker }, { kind: 'orca', text: 'pb-orca:chat1' }],
         copyable: { rows: ['Port: 3000', 'Orca port: 26768', 'Orca state: ready'], log: 'theia backend started', tabAddresses: ['pb-orca:chat1'] },
-        endpoint: offerEndpoint(offer.handOff), orcaPort: 26768, pids: { orcad: [111, 112], theia: [222] },
+        endpoint: offerEndpoint(offer.handOff), orcaPort: 26768, pids: { orcad: [111], daemon: [112], theia: [222] },
     };
 }
 
@@ -251,13 +255,15 @@ function runSelfTest() {
         check('a stdout capture file that was never written', logsCollector, (x) => { x.captures[0].text = null; }, `sink logs: FAIL -- ${blind}`);
         check('a stdout capture without the shell-ready line', logsCollector, (x) => { x.captures[0].text = 'something else\n'; }, `sink logs: FAIL -- ${blind}`);
         check('a stderr capture file that was never written', logsCollector, (x) => { x.captures[1].text = null; }, `sink logs: FAIL -- ${blind}`);
+        check('a stderr capture file that exists but never received the marker', logsCollector, (x) => { x.captures[1].text = ''; }, `sink logs: FAIL -- ${blind}`);
         check('no captured streams at all', logsCollector, (x) => { x.captures = []; }, `sink logs: FAIL -- ${blind}`);
-        check('a stderr capture holding the device token', logsCollector, (x) => { x.captures[1].text = `warn ${offer.token}\n`; }, 'sink logs: FAIL -- offer found');
+        check('a stderr capture holding the device token', logsCollector, (x) => { x.captures[1].text += `warn ${offer.token}\n`; }, 'sink logs: FAIL -- offer found');
         check('address texts without the control web tab', addressFieldCollector, (x) => { x.addressTexts = x.addressTexts.filter((a) => a.kind !== 'control'); }, `sink address field: FAIL -- ${blind}`);
         check('diagnostics rows without the Orca port row', copyableTextCollector, (x) => { x.copyable.rows = x.copyable.rows.filter((r) => !r.startsWith('Orca port')); }, `sink copyable text: FAIL -- ${blind}`);
         check('a profile without the marker bytes in places.sqlite', wholeProfileCollector, (x) => { rmSync(join(x.profileDir, 'places.sqlite')); writePlaces(x.profileDir, ['http://127.0.0.1:1/other']); }, `sink whole profile: FAIL -- ${blind}`);
         check('a bridge folder without the offer file', bridgeFolderCollector, (x) => rmSync(join(x.bridgeDir, OFFER_FILE)), `sink bridge folder: FAIL -- ${blind}`);
         check('no LISTEN row for orcad', nonLoopbackPeerCollector, (x) => { x.pids.orcad = [333]; }, `sink non-loopback peer: FAIL -- ${blind}`);
+        check("no LISTEN row of orcad's own, only the daemon's", nonLoopbackPeerCollector, (x) => { x.pids.orcad = [333]; rmSync(join(x.procRoot, '112', 'fd'), { recursive: true, force: true }); mkdirSync(join(x.procRoot, '112', 'fd'), { recursive: true }); symlinkSync('socket:[1001]', join(x.procRoot, '112', 'fd', '3')); }, `sink non-loopback peer: FAIL -- ${blind}`);
         // The output never carries a needle (the redaction is a second line of defence, not the proof).
         const leaked = secrets.filter((s) => printed.join('\n').includes(s));
         if (leaked.length) bad(`needle bytes in the check's output (${leaked.length} form(s))`); else ok('the output holds no needle');
@@ -300,6 +306,7 @@ async function main() {
     const pages = await servePages({ [markerPath]: { title: 'PowerBrowser containment marker', body: 'marker' } });
     const marker = markerPath; // the random path: what every control looks for, whether or not a surface trims the scheme
     const setupName = 'P67 containment';
+    const stderrMarker = `${STDERR_MARKER_PREFIX}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
     const secrets = [];
     const restoreOutput = installOutputRedaction(secrets); // withOrcaProfile's own redaction ends when it returns
     process.env.PB_LIVE_STDOUT_PATH = join(work, 'stdout.log');
@@ -321,7 +328,7 @@ async function main() {
                     needles, marker, setupName, holder5, logControl: LOG_CONTROL, offerFile: OFFER_FILE,
                     profileDir: session.profileDir, dataRoot: st.orca.dataRoot, bridgeDir: st.orca.bridgeDir,
                     theiaOriginDir: `http+++127.0.0.1+${s.app.port}`, endpoint: offerEndpoint(offer), orcaPort: st.orca.port,
-                    pids: { orcad: [st.orca.pid, st.orca.daemonPid].filter(Number.isInteger), theia: [st.theia.pid] }, procRoot: '/proc',
+                    pids: { orcad: [st.orca.pid], daemon: [st.orca.daemonPid].filter(Number.isInteger), theia: [st.theia.pid] }, procRoot: '/proc',
                 };
                 // While orcad runs: the offer file is removed on stop (P67-09).
                 results.push(runCollector(bridgeFolderCollector, ctx), runCollector(nonLoopbackPeerCollector, ctx));
@@ -362,6 +369,10 @@ async function main() {
                 const fragment = String(tabs.hash ?? '').replace(/^#/, '');
                 fragmentLine = `clause theia-fragment (recorded, 65-RESEARCH Q2): ${fragment ? (ctx.addressTexts.some((a) => a.text.includes(fragment)) ? 'PRESENT in an address text' : `absent from ${ctx.addressTexts.length} address text(s)`) : 'the Theia document has no fragment'}`;
                 if (!(await s.saveSetup(setupName))) throw new Error('the Setup was not saved through Setups\' own command');
+                // The stderr capture's own control: written to PowerBrowser's stderr on purpose, so a launch that stops
+                // piping stderr leaves the capture without it (harness-static-hosting-05 review follow-up).
+                const wrote = await chromeRead(s.app, `Components.utils.printStderr(${JSON.stringify(`${stderrMarker}\n`)}); return { ok: true };`);
+                if (wrote.chromeError) throw new Error(`writing the stderr marker: ${wrote.chromeError}`);
                 return s.quit();
             });
             if (quit !== 'exited') throw new Error(`PowerBrowser did not exit after its own quit (${quit})`);
@@ -369,7 +380,7 @@ async function main() {
             const captured = (f) => { try { return readFileSync(join(work, f), 'utf8'); } catch { return null; } };
             ctx.captures = [
                 { stream: 'stdout', text: captured('stdout.log'), control: STDOUT_CONTROL },
-                { stream: 'stderr', text: captured('stderr.log'), control: null },
+                { stream: 'stderr', text: captured('stderr.log'), control: stderrMarker },
             ];
             for (const c of COLLECTORS) if (c !== bridgeFolderCollector && c !== nonLoopbackPeerCollector) results.push(runCollector(c, ctx));
         });

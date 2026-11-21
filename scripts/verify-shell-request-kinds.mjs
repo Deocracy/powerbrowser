@@ -24,7 +24,10 @@
 // sits after it, and each handler a case calls is called nowhere in the file except inside handleShellMessage after
 // that wall. The handlers are derived from every case arm (the text from a case or default label to the next label),
 // whatever the arm's form or the handler's name: each function declared at the top level of the boundary file that an
-// arm calls (harness-static-hosting-12; the hosting kinds' handler since Phase 67). A hand-kept list of
+// arm calls (harness-static-hosting-12; the hosting kinds' handler since Phase 67). Every call site of such a handler
+// counts, a member call included. Limit: a handler that is a method (an arm calling this.x() or PowerBrowserAPI.x())
+// is not derived, because the arms call public PowerBrowserAPI methods that other callers use by design; such a
+// handler's other callers are not checked. A hand-kept list of
 // kinds can only ever agree with the tree it was copied from; these
 // comparisons go red on an ADDED kind on either side and a REMOVED kind on
 // either side. The default-case rule is static shape: its body must contain
@@ -177,7 +180,8 @@ function senderWallFirst(src, body) {
     }
     const bodyStart = src.indexOf(body);
     for (const handler of handlers) {
-        for (const m of src.matchAll(new RegExp(`(?<![\\w$.])${handler}\\s*\\(`, 'g'))) {
+        // Every call site counts, a member call (obj.<handler>(, this.<handler>() included (review follow-up).
+        for (const m of src.matchAll(new RegExp(`(?<![\\w$])${handler}\\s*\\(`, 'g'))) {
             if (/function\s*\*?\s*$/.test(src.slice(Math.max(0, m.index - 20), m.index))) continue;
             const at = m.index - bodyStart;
             if (at < wallEnd || at > body.length) {
@@ -456,6 +460,7 @@ function selfTest() {
         [`a second caller of ${routed.handler} outside the walled switch`, withBoundary(t => `${t}\nexport const plantedCaller = (data, actorRef) => ${routed.handler}(data, actorRef);\n`), "outside handleShellMessage's walled switch", 'wall'],
         ['the sender wall removed', withBoundary(t => t.replace('    if (!groupSenderIsTheia(actorRef)) {\n      PowerBrowserAPI.log("error", "[handleShellMessage] rejecting non-Theia-origin sender");\n      return { ok: false, reason: "validation", message: "handleShellMessage: rejecting non-Theia-origin sender" };\n    }\n', '')), 'does not open with the groupSenderIsTheia sender wall', 'wall'],
         ['a block-form case arm whose handler pairNowHandler has a second caller before handleShellMessage', withBoundary(t => blockArm(t).replace('  async handleShellMessage(data, actorRef) {\n', '  receiveEarly(data, actorRef) {\n    return pairNowHandler(data, actorRef);\n  },\n\n  async handleShellMessage(data, actorRef) {\n')), "calls pairNowHandler outside handleShellMessage's walled switch", 'wall'],
+        [`a member-call caller of ${routed.handler} outside the walled switch`, withBoundary(t => `${t}\nexport const viaObject = (api, data, actorRef) => api.${routed.handler}(data, actorRef);\n`), "outside handleShellMessage's walled switch", 'wall'],
         ['throwing default case', withBoundary(t => t.replace('return { ok: false, reason: "validation", message: `handleShellMessage: unknown kind ${String(kind)}` };', 'throw new Error(`unknown kind ${String(kind)}`);')), 'default', 'throw'],
     ];
 

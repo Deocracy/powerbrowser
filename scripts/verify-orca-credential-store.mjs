@@ -19,8 +19,11 @@
 //     src/main/orcad whose name says secret, keyring or credential, or that names the record
 //     (StoredKeyState, orcad-secret-key-record, 'host-file', 'os-keyring'); a record rebuilt inside
 //     the function that JSON.parses the stored text is the read side and is not a write
-//     (harness-static-hosting-07). Every keyring program a non-test orcad file runs (secret-tool,
-//     security) runs a read subcommand only, and no file imports keytar.
+//     (harness-static-hosting-07). The passthrough exemption is narrow: only a backend literal that is
+//     returned directly, under a guard testing `.backend === <that literal>`, by a function that
+//     JSON.parses and makes no write call. Every keyring program literal a non-test orcad file names
+//     (secret-tool, security), as an argv element, a call argument or a program: property, runs a read
+//     subcommand only, and no file names a keyring module (keytar and kin) in any form.
 //  7. Owner-only key file (harness-static-hosting-07). The sentence says only the user's account can
 //     read the key file. From the pin: restrictExistingRecord (orcad-secret-key-record.ts) requires
 //     (mode & 0o077) === 0; the key-record sources write files only through writeSecureFile; and
@@ -51,7 +54,7 @@
 //   node scripts/verify-orca-credential-store.mjs
 //   node scripts/verify-orca-credential-store.mjs --self-test
 
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire, stripTypeScriptTypes } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -69,6 +72,8 @@ const OWNER_ONLY_RED = 'owner-only key file';
 // The subcommands of the two keyring programs that only read (secret-tool(1), security(1)).
 const KEYRING_PROGRAMS = { 'secret-tool': ['lookup', 'search'], security: ['find-generic-password', 'find-internet-password'] };
 const FILE_WRITERS = ['writeFileSync', 'writeFile', 'appendFileSync', 'appendFile', 'createWriteStream'];
+// Keyring libraries, named as a module in any form (import, require, import(), export from).
+const KEYRING_MODULES = /^(?:keytar|node-keytar|@napi-rs\/keyring|@postman\/node-keytar)(?:\/|$)/;
 
 export function pathsFor(root) {
     const orcad = join(root, 'orca', 'src', 'main', 'orcad');
@@ -143,21 +148,18 @@ export function derivePinned(paths, ts) {
         const isRecord = recordFiles.has(file);
         walk(ts, parse(ts, read(file)), (n) => {
             // A written record: a property assignment in an object literal, never a type literal, outside the parser.
-            if (isRecord && ts.isPropertyAssignment(n) && n.name.getText() === 'backend' && ts.isObjectLiteralExpression(n.parent) && !insideParser(ts, n)) {
+            if (isRecord && ts.isPropertyAssignment(n) && n.name.getText() === 'backend' && ts.isObjectLiteralExpression(n.parent) && !parsedPassthrough(ts, n)) {
                 backends.add(ts.isStringLiteral(n.initializer) ? n.initializer.text : `<non-literal ${n.initializer.getText()}>`);
             }
             if (isRecord && ts.isCallExpression(n)) {
                 const callee = ts.isPropertyAccessExpression(n.expression) ? n.expression.name.text : n.expression.getText();
                 if (FILE_WRITERS.includes(callee)) writers.push(`${rel} calls ${callee}`);
             }
-            if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier) && /^keytar\b/.test(n.moduleSpecifier.text)) keyringRuns.push({ rel, program: 'keytar', sub: 'import' });
             if ((ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n))) {
+                // A keyring library named in any form: import, require(), import(), export from (review follow-up).
+                if (KEYRING_MODULES.test(n.text)) keyringRuns.push({ rel, program: n.text, sub: 'module' });
                 const program = /^(?:.*\/)?(secret-tool|security)$/.exec(n.text)?.[1];
-                if (program && ts.isArrayLiteralExpression(n.parent)) {
-                    const next = n.parent.elements[n.parent.elements.indexOf(n) + 1];
-                    const first = next && ts.isArrayLiteralExpression(next) ? next.elements[0] : next;
-                    keyringRuns.push({ rel, program, sub: first && ts.isStringLiteral(first) ? first.text : null });
-                }
+                if (program) keyringRuns.push({ rel, program, sub: keyringSubcommand(ts, n) });
             }
         });
     }
@@ -244,16 +246,62 @@ function orcadSources(dir, out = []) {
     return out.sort();
 }
 
-/** True when `node` sits in a function that JSON.parses: the record is rebuilt from what was read, not written. */
-function insideParser(ts, node) {
-    for (let f = node.parent; f; f = f.parent) {
-        if (ts.isFunctionLike(f)) {
-            let parses = false;
-            walk(ts, f, (m) => { if (ts.isCallExpression(m) && m.expression.getText() === 'JSON.parse') parses = true; });
-            return parses;
+/**
+ * The subcommand a keyring program literal runs with, wherever it stands (review follow-up): the next element of an
+ * argv array literal; the next argument of a call (execFile('secret-tool', ['store', ...])); or the args property
+ * beside a program/command property ({ program: 'secret-tool', args: ['lookup', ...] }). A following array gives its
+ * first element. null when the position or the subcommand cannot be read, which is red.
+ */
+function keyringSubcommand(ts, lit) {
+    const firstOf = (e) => {
+        const x = e && ts.isArrayLiteralExpression(e) ? e.elements[0] : e;
+        return x && (ts.isStringLiteral(x) || ts.isNoSubstitutionTemplateLiteral(x)) ? x.text : null;
+    };
+    const parent = lit.parent;
+    if (ts.isArrayLiteralExpression(parent)) return firstOf(parent.elements[parent.elements.indexOf(lit) + 1]);
+    if ((ts.isCallExpression(parent) || ts.isNewExpression(parent)) && parent.arguments?.includes(lit)) return firstOf(parent.arguments[parent.arguments.indexOf(lit) + 1]);
+    if (ts.isPropertyAssignment(parent) && parent.initializer === lit && ts.isObjectLiteralExpression(parent.parent)) {
+        const args = parent.parent.properties.find((p) => ts.isPropertyAssignment(p) && /^(args|argv|arguments)$/.test(p.name.getText()));
+        return args ? firstOf(args.initializer) : null;
+    }
+    return null;
+}
+
+/**
+ * True only for the read side's passthrough (review follow-up): the object literal holding `backend` is returned
+ * directly, under a guard that tests `<x>.backend === '<the same literal>'`, by a function that JSON.parses and makes
+ * no write call. A migration that parses an old record and writes a keyring backend is therefore not exempt.
+ */
+function parsedPassthrough(ts, prop) {
+    const literal = ts.isStringLiteral(prop.initializer) ? prop.initializer.text : null;
+    if (literal === null) return false;
+    let node = prop.parent;
+    while (ts.isParenthesizedExpression(node.parent)) node = node.parent;
+    if (!ts.isReturnStatement(node.parent)) return false;
+    let guarded = false;
+    let fn = null;
+    for (let a = node.parent.parent; a; a = a.parent) {
+        if (ts.isFunctionLike(a)) { fn = a; break; }
+        const cond = ts.isIfStatement(a) ? a.expression : ts.isConditionalExpression(a) ? a.condition : null;
+        if (cond) {
+            walk(ts, cond, (m) => {
+                if (ts.isBinaryExpression(m) && [ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.EqualsEqualsToken].includes(m.operatorToken.kind)) {
+                    const sides = [m.left, m.right];
+                    if (sides.some((x) => ts.isPropertyAccessExpression(x) && x.name.text === 'backend') && sides.some((x) => ts.isStringLiteral(x) && x.text === literal)) guarded = true;
+                }
+            });
         }
     }
-    return false;
+    if (!fn || !guarded) return false;
+    let parses = false;
+    let writes = false;
+    walk(ts, fn, (m) => {
+        if (!ts.isCallExpression(m)) return;
+        const callee = ts.isPropertyAccessExpression(m.expression) ? m.expression.name.text : m.expression.getText();
+        if (callee === 'parse' && m.expression.getText() === 'JSON.parse') parses = true;
+        if (FILE_WRITERS.includes(callee) || /write|publish|replace|store|save|persist|keep/i.test(callee)) writes = true;
+    });
+    return parses && !writes;
 }
 
 /** The text of every element carrying data-orca-credential-protection, entity-decoded and whitespace-collapsed. */
@@ -316,14 +364,16 @@ export async function check(paths) {
         counts.recordFiles = pin.recordFiles;
         for (const k of pin.keyringRuns) {
             const reads = KEYRING_PROGRAMS[k.program] ?? [];
-            if (!reads.includes(k.sub)) fails.push(`${KEYRING_WRITE_RED} (${k.rel} runs ${k.program} ${k.sub ?? '<a subcommand this check cannot read>'})`);
+            if (k.sub === 'module') fails.push(`${KEYRING_WRITE_RED} (${k.rel} names the keyring module ${k.program})`);
+            else if (!reads.includes(k.sub)) fails.push(`${KEYRING_WRITE_RED} (${k.rel} runs ${k.program} ${k.sub ?? '<a subcommand in a position this check cannot read>'})`);
         }
         counts.keyring = pin.keyringRuns.length;
         for (const o of pin.owner) fails.push(`${OWNER_ONLY_RED}: ${o}`);
     }
 
     // 4. Allowlist.
-    for (const list of ['ORCAD_ENV_ALLOWLIST', 'ORCAD_FIXED_ENV_NAMES']) {
+    // Every list orcad's environment is built from, the per-platform allowlists included (derived from the exports).
+    for (const list of Object.keys(env).filter((k) => /^ORCAD_(ENV_ALLOWLIST\w*|FIXED_ENV_NAMES)$/.test(k) && Array.isArray(env[k]))) {
         if ((env[list] ?? []).includes(override.name)) fails.push(`${override.name} is in OrcaEnv.${list}, so the override could reach orcad (allowlist)`);
     }
 
@@ -336,8 +386,9 @@ export async function check(paths) {
         else if (count !== 1 || texts.length !== 1) fails.push(`privacy.html has ${count} data-orca-credential-protection attributes and ${texts.length} closed elements, not exactly one`);
         else if (texts[0] !== env.ORCA_PROTECTION_SENTENCE) fails.push(`the privacy.html protection sentence differs from OrcaEnv.ORCA_PROTECTION_SENTENCE: ${JSON.stringify(texts[0])}`);
     }
+    // The copy table is tracked, so its absence is red, never a SKIP (harness-static-hosting-01 follow-up).
     if (!existsSync(paths.failureDir)) {
-        skips.push('the copy-table sentence comparison did not run: theia/extensions/orca-panes/src/browser/failure is absent (lane p67-03 not merged). Next step: merge it');
+        fails.push('source moved: theia/extensions/orca-panes/src/browser/failure is missing, so the copy table\'s protection sentence cannot be compared');
     } else {
         const src = read(paths.copyFile);
         if (src === null) fails.push(`${paths.copyFile} is missing while theia/extensions/orca-panes/src/browser/failure exists`);
@@ -442,6 +493,7 @@ async function runSelfTest() {
             { name: 'the override renamed in the pin', naming: 'renamed override', file: paths.gapFile, edit: swap("'ORCA_HEADLESS_SECRET_STORE'", "'ORCA_HEADLESS_SECRETS'") },
             { name: 'the trigger value changed in the pin', naming: 'renamed override value', file: paths.resolutionFile, edit: swap("=== 'plaintext'", "=== 'unencrypted'") },
             { name: 'an Orca temp root PB lacks', naming: 'Orca temp root PB lacks', file: paths.recordFile, edit: swap("'/var/tmp']", "'/var/tmp', '/dev/shm']") },
+            { name: 'the override name in the per-platform allowlist', naming: 'ORCA_HEADLESS_SECRET_STORE is in OrcaEnv.ORCAD_ENV_ALLOWLIST_WIN32', file: paths.orcaEnv, edit: swap('ORCAD_ENV_ALLOWLIST_WIN32 = Object.freeze(["SystemRoot",', 'ORCAD_ENV_ALLOWLIST_WIN32 = Object.freeze(["SystemRoot", "ORCA_HEADLESS_SECRET_STORE",') },
             { name: 'the override name in the allowlist', naming: 'allowlist', file: paths.orcaEnv, edit: swap('  "PATH",\n  "HOME",', '  "PATH",\n  "ORCA_HEADLESS_SECRET_STORE",\n  "HOME",') },
             { name: 'the privacy paragraph removed', naming: 'statement removed', file: paths.privacy, edit: (t) => t.replace(/\s*<p data-orca-credential-protection>[\s\S]*?<\/p>/, '') },
             { name: 'a keyring backend written', naming: 'keyring backend', file: paths.resolutionFile, edit: swap("? { version: 1, backend: 'host-file', key: 'k' }", "? { version: 1, backend: 'os-keyring', account: 'a' }") },
@@ -454,6 +506,16 @@ async function runSelfTest() {
             { name: 'secret-tool store in a new orcad file', naming: 'keyring write', ...newFile('orcad-secret-keyring-writer.ts', "export const argv = ['secret-tool', ['store', '--label', 'orca', 'service', 'svc']]\n") },
             { name: 'security add-generic-password next to the lookup', naming: 'keyring write', file: join(paths.orcadDir, 'orcad-legacy-keyring-key.ts'), edit: swap("['find-generic-password',", "['add-generic-password',") },
             { name: 'a keytar import in an orcad file', naming: 'keyring write', ...newFile('orcad-account-services.ts', "import keytar from 'keytar'\nexport const k = keytar\n") },
+            // Review follow-up: upstream's own spawn idiom, a direct exec, keytar by require and import(), a parsing migration.
+            { name: "secret-tool store as a program: property", naming: 'keyring write', ...newFile('orcad-keyring-writer.ts', "export function spec(account: string) { return { program: 'secret-tool', args: ['store', '--label', 'orca', 'account', account] } }\n") },
+            { name: 'secret-tool store through a direct execFile call', naming: 'keyring write', ...newFile('orcad-keyring-exec.ts', "import { execFileSync } from 'node:child_process'\nexport function keep(k: string) { execFileSync('secret-tool', ['store', '--label', 'orca', 'service', 'svc'], { input: k }) }\n") },
+            { name: 'a keyring program in a position the check cannot read', naming: 'in a position this check cannot read', ...newFile('orcad-keyring-name.ts', "export const KEYRING_PROGRAM = 'secret-tool'\n") },
+            { name: 'keytar by require', naming: 'names the keyring module keytar', ...newFile('orcad-keyring-require.ts', "const keytar = require('keytar')\nexport const k = keytar\n") },
+            { name: 'keytar by dynamic import', naming: 'names the keyring module keytar', ...newFile('orcad-keyring-dynamic.ts', "export async function k() { return import('keytar') }\n") },
+            { name: 'a migration that parses the old record and writes a keyring backend', naming: 'keyring backend', file: paths.recordFile, edit: (t) => `${t}\nexport function migrateLegacy(raw: string, path: string): void {\n  const old = JSON.parse(raw)\n  if (old.backend === 'os-keyring') { writeSecureFile(path, JSON.stringify({ version: 1, backend: 'os-keyring', account: old.account })) }\n}\n` },
+            { name: 'a parser that returns a keyring record it did not read', naming: 'keyring backend', file: paths.recordFile, edit: (t) => `${t}\nexport function parseNew(raw: string): StoredKeyState {\n  JSON.parse(raw)\n  return { version: 1, backend: 'os-keyring', account: 'a' }\n}\n` },
+            // harness-static-hosting-01 follow-up: the tracked copy table missing is red, not a SKIP.
+            { name: 'the failure directory removed', naming: 'source moved: theia/extensions/orca-panes/src/browser/failure is missing', dir: paths.failureDir },
             { name: 'the key file written 0644', naming: OWNER_ONLY_RED, file: paths.secureFile, edit: swap("chmodSync(tmpFile, 0o600)", "chmodSync(tmpFile, 0o644)") },
             { name: 'writeSecureFile no longer chmods what it writes', naming: OWNER_ONLY_RED, file: paths.secureFile, edit: swap("  return writeModeRestrictedFile(targetPath, contents)\n", "  writeFileSync(targetPath, contents)\n  return true\n") },
             { name: 'restrictExistingRecord accepting group-readable records', naming: OWNER_ONLY_RED, file: paths.recordFile, edit: swap('& 0o077) === 0', '& 0o002) === 0') },
@@ -461,10 +523,11 @@ async function runSelfTest() {
         ];
         let failures = 0;
         for (const p of plants) {
-            const existed = existsSync(p.file);
-            const original = existed ? readFileSync(p.file, 'utf8') : '';
+            const existed = p.dir ? true : existsSync(p.file);
+            const original = !p.dir && existed ? readFileSync(p.file, 'utf8') : '';
             try {
-                writeFileSync(p.file, p.edit(original));
+                if (p.dir) renameSync(p.dir, `${p.dir}.planted-away`);
+                else writeFileSync(p.file, p.edit(original));
                 const r = await check(paths);
                 const text = r.fails.join('\n');
                 if (!r.fails.length) { console.error(`  FAIL ${p.name} -> stayed green`); failures++; }
@@ -473,7 +536,8 @@ async function runSelfTest() {
             } catch (err) {
                 console.error(`  FAIL ${p.name} -> ${err.message}`); failures++;
             } finally {
-                if (existed) writeFileSync(p.file, original); else rmSync(p.file, { force: true });
+                if (p.dir) renameSync(`${p.dir}.planted-away`, p.dir);
+                else if (existed) writeFileSync(p.file, original); else rmSync(p.file, { force: true });
             }
             const after = await check(paths);
             if (after.fails.length) { console.error(`${NAME} self-test: FAIL -- plant '${p.name}' did not clean up: ${after.fails.join(' | ')}`); return 1; }
