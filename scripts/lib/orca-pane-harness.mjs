@@ -15,34 +15,39 @@
 // a free port and the PB Node), so the real orca-panes widgets get a hand-off: ctx.startPbOrcad()
 // waits for it, registers the throwaway repo there and returns its CLI as ctx.pbOrca(...argv).
 // The pairing offer stays in memory: it reaches a page only inside a BiDi expression and is never
-// printed, logged or written. Teardown stops only the processes this session started.
+// printed, logged or written. Teardown stops only the processes this session started and removes only the
+// directories it made, also when fn throws and when a signal ends the process (lib/live-teardown.mjs).
+//
+// One session owns one work directory (.mozbuild/orca-pane-harness-<random>) and one profile alias
+// (pb-orca-pane-<random>): two overlapping sessions cannot delete each other's repository or profile (audit
+// harness-live-panels-02). The rows still take pb-live.lock, because they share the host's display and ports.
 //
 // Node built-ins and the repo's lib modules only.
 
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
-import { dirname, extname, join, normalize, relative, sep } from 'node:path';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { basename, dirname, extname, join, normalize, relative, sep } from 'node:path';
 
 import { createRequire } from 'node:module';
 
 import { ORCA_PANES_MODULE_KEY } from './orca-tabs-live.mjs';
-import { REPO_ROOT, ensurePbNode, installOutputRedaction, orcaVersionFromPins, orcadEnv, redact, startOrcad, stopOrcad } from './orca-run.mjs';
+import { REPO_ROOT, ensurePbNode, installOutputRedaction, orcaVersionFromPins, orcadEnv, redact, startOrcad, stopOrcad, stopStartedDaemons } from './orca-run.mjs';
 import { openWebTab, pollFor, withProbeShell } from './pb-live-probe.mjs';
 import { liveEnv } from './firefox-bidi.mjs';
+import { registerTeardown } from './live-teardown.mjs';
 
 export const ORCA_DIR = join(REPO_ROOT, 'orca');
 export const PANES_DIR = join(ORCA_DIR, 'out', 'web', 'assets', 'pb-panes');
 export const STANDALONE_DIR = join(REPO_ROOT, '.mozbuild', 'orca-panes-standalone');
 export const CLI_JS = join(ORCA_DIR, 'out', 'cli', 'index.js');
 export const BUNDLE_KEY = 'powerbrowser.orca-panes.react';
-const WORK = join(REPO_ROOT, '.mozbuild', 'orca-pane-harness');
-const PROFILE_REAL = join(WORK, 'orca-profile');
+const WORK_PREFIX = 'orca-pane-harness-';
 // A short alias, so orcad's socket under it fits ORCAD_SOCKET_ROOT_BUDGET: under XDG_RUNTIME_DIR, else the scratch HOME's
 // .cache, never the real ~/.cache (68-11-REVIEW IN-01). shortcut: the scratch-HOME fallback is a long repo path that can
 // exceed the socket budget; a session without XDG_RUNTIME_DIR then fails at orcad start, not by writing the real home.
-const profileAlias = () => join(process.env.XDG_RUNTIME_DIR?.startsWith('/') ? process.env.XDG_RUNTIME_DIR : join(liveEnv().HOME, '.cache'), 'pb-orca-pane-harness');
-const REPO_DIR = join(WORK, 'repo');
+// The alias carries the work directory's random suffix, as long as the fixed name it replaces, so it is this session's own.
+const profileAlias = (work) => join(process.env.XDG_RUNTIME_DIR?.startsWith('/') ? process.env.XDG_RUNTIME_DIR : join(liveEnv().HOME, '.cache'), `pb-orca-pane-${basename(work).slice(-6)}`);
 const J = JSON.stringify;
 export const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -65,34 +70,46 @@ export function skipReasons({ needStandalone = false } = {}) {
     return out;
 }
 
-function git(...argv) {
-    const r = spawnSync('git', ['-c', 'user.name=pb-orca-pane', '-c', 'user.email=pb-orca-pane@invalid', ...argv], { cwd: REPO_DIR, encoding: 'utf8' });
-    if (r.status !== 0 && argv[0] !== 'merge') throw new Error(`git ${argv[0]}: ${r.stderr.trim().split('\n').pop()}`);
-    return r.stdout.trim();
+/**
+ * The fixture's git: the user's global and system config never apply (a global commit.gpgsign, core.hooksPath or hook
+ * would prompt, fail or run on the fixture's commits). Pure: the argv prefix and the environment for `home`.
+ */
+export function fixtureGitEnv(home, base = process.env) {
+    return { PATH: base.PATH ?? '', HOME: home, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' };
+}
+export const FIXTURE_GIT_ARGS = Object.freeze(['-c', 'user.name=pb-orca-pane', '-c', 'user.email=pb-orca-pane@invalid', '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', '-c', 'core.hooksPath=/dev/null']);
+
+/** A git runner for `repoDir`, with `home` as the (empty, scratch) HOME. */
+export function fixtureGit(repoDir, home) {
+    return (...argv) => {
+        const r = spawnSync('git', [...FIXTURE_GIT_ARGS, ...argv], { cwd: repoDir, encoding: 'utf8', env: fixtureGitEnv(home) });
+        if (r.status !== 0 && argv[0] !== 'merge') throw new Error(`git ${argv[0]}: ${r.stderr.trim().split('\n').pop()}`);
+        return r.stdout.trim();
+    };
 }
 
 /** A throwaway repo whose worktree holds one live merge conflict (README.md, both modified). */
-function makeRepo() {
-    rmSync(REPO_DIR, { recursive: true, force: true });
-    mkdirSync(REPO_DIR, { recursive: true });
+export function makeRepo(repoDir, home) {
+    const git = fixtureGit(repoDir, home);
+    rmSync(repoDir, { recursive: true, force: true });
+    mkdirSync(repoDir, { recursive: true });
     git('init', '-q', '-b', 'main');
-    writeFileSync(join(REPO_DIR, 'README.md'), 'orca pane harness\nline\n');
+    writeFileSync(join(repoDir, 'README.md'), 'orca pane harness\nline\n');
     git('add', 'README.md'); git('commit', '-q', '-m', 'base');
     git('checkout', '-q', '-b', 'side');
-    writeFileSync(join(REPO_DIR, 'README.md'), 'orca pane harness\nside\n'); git('commit', '-qam', 'side');
+    writeFileSync(join(repoDir, 'README.md'), 'orca pane harness\nside\n'); git('commit', '-qam', 'side');
     git('checkout', '-q', 'main');
-    writeFileSync(join(REPO_DIR, 'README.md'), 'orca pane harness\nmain\n'); git('commit', '-qam', 'main');
+    writeFileSync(join(repoDir, 'README.md'), 'orca pane harness\nmain\n'); git('commit', '-qam', 'main');
     git('merge', '-q', 'side');
     return git('status', '--porcelain');
 }
 
-function makeProfile() {
-    rmSync(PROFILE_REAL, { recursive: true, force: true });
-    mkdirSync(PROFILE_REAL, { recursive: true });
-    const alias = profileAlias();
+function makeProfile(profileReal, alias) {
+    rmSync(profileReal, { recursive: true, force: true });
+    mkdirSync(profileReal, { recursive: true });
     mkdirSync(dirname(alias), { recursive: true });
     try { if (lstatSync(alias).isSymbolicLink()) rmSync(alias); } catch { /* absent */ }
-    symlinkSync(PROFILE_REAL, alias);
+    symlinkSync(profileReal, alias);
 }
 
 /** The standalone page: each mount host carries data-pb-orca-pane (C4); window errors recorded. */
@@ -117,13 +134,20 @@ export const HOST_HELPER = `window.__pbHost = (kind, id, box) => {
     return root;
 };`;
 
-function serve(extraRoutes = {}) {
+/** The normalised request path, or null for a URL that does not parse or whose percent escapes are malformed (/%zz). */
+export function safePathname(rawUrl) {
+    try { return normalize(decodeURIComponent(new URL(rawUrl, 'http://x').pathname)); } catch { return null; }
+}
+
+/** The loopback server of the bundle, the standalone variant and the generated page; a bad request is a 400, never a throw. */
+export function serve(extraRoutes = {}) {
     const types = { '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf',
         '.wasm': 'application/wasm', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.html': 'text/html', '.webp': 'image/webp',
         '.bcmap': 'application/octet-stream', '.pfb': 'application/octet-stream' };
     const mounts = [['/pb-panes/', PANES_DIR], ['/standalone/', STANDALONE_DIR]];
-    const server = createServer((req, res) => {
-        const path = normalize(decodeURIComponent(new URL(req.url, 'http://x').pathname));
+    const handle = (req, res) => {
+        const path = safePathname(req.url ?? '');
+        if (path === null) { res.statusCode = 400; res.end(); return; }
         // Cross-origin module import from the Theia document (lane-build CSS mode).
         res.setHeader('Access-Control-Allow-Origin', '*');
         if (path === '/standalone.html') { res.setHeader('Content-Type', 'text/html'); res.end(STANDALONE_HTML); return; }
@@ -137,6 +161,10 @@ function serve(extraRoutes = {}) {
             return;
         }
         res.statusCode = 404; res.end();
+    };
+    // Any local process can reach this loopback port: no request, malformed or racing a file read, may end the row.
+    const server = createServer((req, res) => {
+        try { handle(req, res); } catch { try { res.statusCode = 500; res.end(); } catch { /* the socket is gone */ } }
     });
     return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve({ server, origin: `http://127.0.0.1:${server.address().port}` })));
 }
@@ -161,12 +189,25 @@ export async function withOrcaPaneSession({ log = () => {}, pbOrcad = false } = 
     process.env.PB_BACKEND_MAIN ??= join(REPO_ROOT, 'theia', 'applications', 'browser', 'lib', 'backend', 'main.js');
     let child = null, ready = null, web = null;
     const recorded = new Map();
+    const electron = await import('../verify-orca-hidden-electron.mjs');
+    // This session's own work directory and profile alias; the teardown also runs on a signal and at exit.
+    mkdirSync(join(REPO_ROOT, '.mozbuild'), { recursive: true });
+    const work = mkdtempSync(join(REPO_ROOT, '.mozbuild', WORK_PREFIX));
+    const profileReal = join(work, 'orca-profile');
+    const REPO_DIR = join(work, 'repo');
+    const alias = profileAlias(work);
+    const teardown = registerTeardown(() => {
+        stopStartedDaemons();
+        for (const [pid, ticks] of recorded) electron.signalIdentity(pid, ticks, 'SIGKILL');
+        try { if (lstatSync(alias).isSymbolicLink()) rmSync(alias); } catch { /* absent */ }
+        rmSync(work, { recursive: true, force: true });
+    });
     try {
         const node = await ensurePbNode();
-        makeProfile();
-        const repoStatus = makeRepo();
-        const env = orcadEnv(process.env, { profileDir: profileAlias(), orcaVersion: orcaVersionFromPins() });
-        ({ child, ready } = await startOrcad({ nodeBin: node.path, orcaDir: ORCA_DIR, profileDir: profileAlias(), env }));
+        makeProfile(profileReal, alias);
+        const repoStatus = makeRepo(REPO_DIR, work);
+        const env = orcadEnv(process.env, { profileDir: alias, orcaVersion: orcaVersionFromPins() });
+        ({ child, ready } = await startOrcad({ nodeBin: node.path, orcaDir: ORCA_DIR, profileDir: alias, env }));
         restoreOutput(); restoreOutput = installOutputRedaction(ready.secrets);
         if (!ready.webClientUrl) throw new Error('the ready line offers no web-client pairing');
         const client = new URL(ready.webClientUrl);
@@ -180,7 +221,6 @@ export async function withOrcaPaneSession({ log = () => {}, pbOrcad = false } = 
         };
         orca('repo', 'add', '--path', REPO_DIR);
         web = await serve();
-        const electron = await import('../verify-orca-hidden-electron.mjs');
         const extraPrefs = pbOrcad ? {
             'powerbrowser.orca.root': ORCA_DIR,
             'powerbrowser.orca.port': await electron.freePort(await import('../../powerbrowser/shell/OrcaEnv.sys.mjs')),
@@ -244,15 +284,18 @@ export async function withOrcaPaneSession({ log = () => {}, pbOrcad = false } = 
     } finally {
         if (recorded.size) {
             await sleep(500);
-            const { signalIdentity } = await import('../verify-orca-hidden-electron.mjs');
-            for (const [pid, ticks] of recorded) signalIdentity(pid, ticks, 'SIGKILL');
+            for (const [pid, ticks] of recorded) electron.signalIdentity(pid, ticks, 'SIGKILL');
         }
         web?.server.close();
-        if (child) {
-            const { survivors } = await stopOrcad(child, ready?.daemonPid ?? null);
-            if (survivors.length) log(`orca-pane-harness: ${survivors.length} orcad process(es) survived teardown`);
+        try {
+            if (child) {
+                const { survivors } = await stopOrcad(child, ready?.daemonPid ?? null);
+                if (survivors.length) log(`orca-pane-harness: ${survivors.length} orcad process(es) survived teardown`);
+            }
+        } finally {
+            teardown();
+            restoreOutput();
         }
-        restoreOutput();
     }
 }
 
@@ -264,29 +307,59 @@ export const ROUTE_ENTRY = Object.freeze({
     'route-a': `globalThis[Symbol.for(${J(ORCA_PANES_MODULE_KEY)})]`,
 });
 
-/** Kinds whose body Orca renders empty in a state the gate cannot set without writing Orca's settings (recorded, not hidden). */
+/** The key Orca's web client persists its settings under, read from orca/src; null when the source moved. */
+export function settingsStorageKey(orcaDir = ORCA_DIR) {
+    try { return /export const SETTINGS_STORAGE_KEY = '([^']+)'/.exec(readFileSync(join(orcaDir, 'src', 'renderer', 'src', 'web', 'preload-api', 'web-storage.ts'), 'utf8'))?.[1] ?? null; } catch { return null; }
+}
+
+/**
+ * Kinds whose body Orca renders empty in a state the gate cannot set without writing Orca's settings. An empty mount of
+ * such a kind is mounted only when `probe`, an expression read in the route's own document, returns true: the state that
+ * explains the emptiness holds. false (the state does not hold: the mount is broken) and null (the state could not be
+ * read) are red. A kind with `probe: null` has no readable state in the bundle's API: its empty mount is recorded as
+ * `unverified`, never as explained (audit harness-live-panels-09).
+ */
 export const EMPTY_BY_DESIGN = Object.freeze({
-    orchestration: 'Orca mounts no crew panel while experimentalOrchestrationPanel is off or nothing is focused',
-    'page:creation': 'Orca renders no creation surface while no worktree creation is pending',
+    orchestration: {
+        reason: 'Orca mounts no crew panel while experimentalOrchestrationPanel is off or nothing is focused',
+        condition: 'the experimentalOrchestrationPanel setting being off',
+        probe: key => (key ? `(() => { try { return JSON.parse(localStorage.getItem(${J(key)}) || '{}').experimentalOrchestrationPanel !== true; } catch (e) { return null; } })()` : 'null'),
+    },
+    'page:creation': {
+        reason: 'Orca renders no creation surface while no worktree creation is pending',
+        condition: 'no worktree creation pending',
+        // The pending-creation state lives in Orca's renderer store, which the bundle's state() does not expose.
+        probe: null,
+    },
 });
 
 /**
  * One gate row from a mount observation: mounted means no throw, no React error recorded by the root, no
- * window error, no Orca error-boundary fallback in the host and at least one element (or a recorded empty state).
+ * window error, no Orca error-boundary fallback in the host, not still in Orca's waiting state (a spinner or skeleton)
+ * and at least one element, or an empty mount of an EMPTY_BY_DESIGN kind whose explaining state was read and holds.
+ * o: { kind, route, descendantCount, waiting, emptyJustified (true, false or null), fallback, threw, reactErrors, windowErrors }.
  */
 export function gateRow(o, benign = /^ResizeObserver loop/) {
     const windowErrors = (o.windowErrors ?? []).filter(e => !benign.test(e));
     const reactErrors = o.reactErrors ?? [];
     const threw = o.threw ?? null;
     const first = threw ?? reactErrors[0]?.message ?? windowErrors[0] ?? (o.fallback ? 'Orca error-boundary fallback in the host' : null);
-    const empty = o.descendantCount === 0 && !first && EMPTY_BY_DESIGN[o.kind] ? EMPTY_BY_DESIGN[o.kind] : null;
-    const mounted = !first && (o.descendantCount > 0 || !!empty);
+    const spec = EMPTY_BY_DESIGN[o.kind];
+    let empty = null, unverified = false, unexplained = null;
+    if (o.descendantCount === 0 && !first && !o.waiting && spec) {
+        if (spec.probe === null) { empty = spec.reason; unverified = true; }
+        else if (o.emptyJustified === true) empty = spec.reason;
+        else unexplained = `nothing rendered, and ${spec.condition} ${o.emptyJustified === false ? 'does not hold' : 'could not be read'}, so the empty mount is not explained by Orca's state`;
+    }
+    const waiting = o.waiting === true && !first ? 'the mount is still in Orca\'s waiting state (a spinner or skeleton is not a mounted surface)' : null;
+    const message = first ?? waiting ?? unexplained;
+    const mounted = !message && (o.descendantCount > 0 || !!empty);
     return {
         kind: o.kind, route: o.route, attempt: o.attempt ?? 1, mounted, threw: threw !== null || reactErrors.length > 0,
         errorClass: first ? (/(\w*Error)\b/.exec(first)?.[1] ?? first.replace(/\s+/g, ' ').slice(0, 80)) : null,
-        message: first ? first.slice(0, 200) : null,
+        message: message ? message.slice(0, 200) : null,
         providersAdded: o.providersAdded ?? [], importsAdded: o.importsAdded ?? [], descendantCount: o.descendantCount ?? 0,
-        ...(empty ? { empty } : {}),
+        ...(empty ? { empty } : {}), ...(unverified ? { unverified: true } : {}),
     };
 }
 
@@ -307,6 +380,7 @@ export async function gateMount(ev, route, pick, { waitMs = 5000, box = [0, 0, 9
         try { window.__pbGateUnmount = m.mountPane(root, ${J(pick)}); return 'ok'; } catch (e) { return 'threw: ' + String(e && e.message || e).slice(0, 300); } })()`);
     const read = async () => JSON.parse(await ev(`JSON.stringify((() => { const host = document.getElementById(${J(id)}); const m = ${M};
         return { descendantCount: host ? host.querySelectorAll('[data-pb-orca-pane-root] *').length : 0,
+            waiting: !!(host && host.querySelector('[data-pb-orca-waiting]')),
             fallback: !!(host && host.querySelector('[role="alert"] .text-destructive')),
             reactErrors: m.state().mountErrors.slice(window.__pbGateBefore[0]), windowErrors: window.__pbGateErrors.slice(window.__pbGateBefore[1]) }; })())`));
     let obs = await read();
@@ -318,7 +392,11 @@ export async function gateMount(ev, route, pick, { waitMs = 5000, box = [0, 0, 9
         if (obs.descendantCount > 0 && obs.descendantCount === lastCount) break;
         lastCount = obs.descendantCount;
     }
-    return { ...obs, kind: pick.kind, route, hostId: id, threw: started === 'ok' ? null : started.slice('threw: '.length) };
+    // The state that would explain an empty mount, read from the same document, only when the mount is empty.
+    let emptyJustified = null;
+    const spec = EMPTY_BY_DESIGN[pick.kind];
+    if (obs.descendantCount === 0 && spec?.probe) emptyJustified = await ev(spec.probe(settingsStorageKey())).catch(() => null);
+    return { ...obs, emptyJustified, kind: pick.kind, route, hostId: id, threw: started === 'ok' ? null : started.slice('threw: '.length) };
 }
 
 /** Unmounts and removes a gate host. */
