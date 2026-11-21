@@ -22,6 +22,10 @@
 //     tree's copy -- itself hashing to the slot's sha256 -- with its DT_RPATH and DT_RUNPATH entries
 //     removed the way patchelf removes them. A universal macOS tree has no single slot, so --target macos refuses
 //     the flag (exit 2); each thin tree is checked with its own manifest before the merge.
+//  d'. LICENSE (packaging-prefs-network-02): every packaged Orca tree, on Linux, macOS and Windows, carries `LICENSE`
+//     (Orca's MIT notice, staged by the packaging scripts; the hosted built trees do not carry it, so the rule is not
+//     "present in the built tree"). A tree without it is red. When the upstream checkout is fetched (orca/LICENSE), the
+//     staged file must be byte-equal to it; otherwise only its presence is checked.
 //  e. file content (harness-static-structure-04): every staged file's sha256 equals the same path's sha256 in
 //     a built tree (any of them, for macos), so a modified orcad.js, a stale web chunk or a payload swapped
 //     between build and package is red under an unchanged name. The two documented differences: a staged ELF
@@ -265,7 +269,7 @@ function builtSet(builtDir) {
 }
 
 /** The verdict. builts: the built trees (union); manifest: parsed prebuild manifest or null. */
-export function check({ target, stage, builts, manifest = null, tables }) {
+export function check({ target, stage, builts, manifest = null, tables, licensePath = join(REPO_ROOT, 'orca', 'LICENSE') }) {
     const fails = [];
     const expected = new Set();
     for (const b of builts) {
@@ -278,7 +282,13 @@ export function check({ target, stage, builts, manifest = null, tables }) {
         return { fails, count: 0 };
     }
     for (const r of [...expected].sort()) if (!staged.has(r)) fails.push(`built but not staged: ${r}`);
-    for (const r of [...staged].sort()) if (!expected.has(r)) fails.push(`staged but not built: ${r}`);
+    for (const r of [...staged].sort()) if (!expected.has(r) && r !== 'LICENSE') fails.push(`staged but not built: ${r}`);
+
+    // d'. the licence notice every packaged Orca tree carries.
+    if (!staged.has('LICENSE')) fails.push('the packaged Orca tree carries no LICENSE: Orca\'s MIT copyright and permission notice must ship with it (the packaging scripts stage powerbrowser/packaging/stage-orca-licence.sh\'s copy at the root of <GreD>/orca)');
+    else if (existsSync(licensePath) && !readFileSync(join(stage, 'LICENSE')).equals(readFileSync(licensePath))) {
+        fails.push(`staged LICENSE differs from the upstream checkout's orca/LICENSE (staged sha256 ${sha256(join(stage, 'LICENSE'))}, orca/LICENSE ${sha256(licensePath)}); the notice was altered or is another file`);
+    }
 
     // e. content: the same path's bytes in a built tree, or the two documented differences.
     let pairs = [];
@@ -478,13 +488,16 @@ async function selfTest() {
         put(built, 'out/orcad/lib/libmach.dylib', mach(6));
         put(built, 'out/orcad/Hello.class', javaClass());
         const manifest = { slots: { 'linux-x64-glibc': { platform: 'linux', arch: 'x64', files: { 'pty.node': createHash('sha256').update(pty).digest('hex') } } } };
+        const LIC = join(tmp, 'upstream-LICENSE');
+        writeFileSync(LIC, 'MIT License\n\nCopyright (c) fixture\n');
         const freshStage = () => {
             const s = mkdtempSync(join(tmp, 'stage-'));
             writeFileSync(join(s, 'package.json'), readFileSync(join(built, 'package.json')));
+            writeFileSync(join(s, 'LICENSE'), readFileSync(LIC));
             for (const sub of ['out/orcad', 'out/web']) cpSync(join(built, sub), join(s, sub), { recursive: true });
             return s;
         };
-        const run = (stage, m = manifest) => check({ target: 'linux-x64', stage, builts: [built], manifest: m, tables });
+        const run = (stage, m = manifest) => check({ target: 'linux-x64', stage, builts: [built], manifest: m, tables, licensePath: LIC });
 
         const control = run(freshStage());
         if (control.fails.length) {
@@ -519,6 +532,8 @@ async function selfTest() {
         const modeOf = (rel, mode) => (s) => chmodSync(join(s, rel), mode);
         plants.push(
             { name: 'orcad.js modified in the stage, name unchanged', naming: 'staged content differs from the built tree: out/orcad/orcad.js', stage: (s) => writeFileSync(join(s, 'out/orcad/orcad.js'), '// swapped\n') },
+            { name: 'LICENSE missing from the packaged tree', naming: 'the packaged Orca tree carries no LICENSE', stage: (s) => rmSync(join(s, 'LICENSE')) },
+            { name: 'LICENSE altered (one byte)', naming: "staged LICENSE differs from the upstream checkout's orca/LICENSE", stage: (s) => writeFileSync(join(s, 'LICENSE'), 'MIT License\n\nCopyright (c) fixture!\n') },
             { name: 'a stale web chunk, same name', naming: 'staged content differs from the built tree: out/web/web-index.html', stage: (s) => writeFileSync(join(s, 'out/web/web-index.html'), '<!doctype html><!-- stale -->\n') },
             { name: 'an ELF executable named helper.dat with its executable bit cleared', naming: 'executable out/orcad/bin/helper.dat has mode 0644, not 0755', stage: modeOf('out/orcad/bin/helper.dat', 0o644) },
             { name: 'a PIE (ET_DYN with PT_INTERP) with its executable bit cleared', naming: 'executable out/orcad/bin/pie-helper has mode 0644, not 0755', stage: modeOf('out/orcad/bin/pie-helper', 0o644) },
@@ -547,10 +562,23 @@ async function selfTest() {
         // The windows target carries no unix mode: an executable at 0644 stays green there.
         const winStage = freshStage();
         modeOf('out/orcad/bin/helper.dat', 0o644)(winStage);
-        const win = check({ target: 'win64', stage: winStage, builts: [built], manifest: null, tables });
+        const win = check({ target: 'win64', stage: winStage, builts: [built], manifest: null, tables, licensePath: LIC });
         rmSync(winStage, { recursive: true, force: true });
         if (win.fails.length) { console.error(`  FAIL control: win64 with 0644 executables -> ${win.fails.join(' | ')}`); failures++; } else console.log('  ok control: win64 target, executables at 0644 -> green (no unix modes on NTFS)');
 
+        // LICENSE on Windows and macOS targets too: missing is red; the upstream checkout not fetched leaves only presence checked.
+        {
+            const w = freshStage();
+            rmSync(join(w, 'LICENSE'));
+            const rw = check({ target: 'win64', stage: w, builts: [built], manifest: null, tables, licensePath: LIC });
+            rmSync(w, { recursive: true, force: true });
+            if (rw.fails.some((f) => f.includes('the packaged Orca tree carries no LICENSE'))) console.log('  ok win64: LICENSE missing -> red'); else { console.error('  FAIL win64: LICENSE missing stayed green'); failures++; }
+            const u = freshStage();
+            writeFileSync(join(u, 'LICENSE'), 'anything');
+            const ru = check({ target: 'linux-x64', stage: u, builts: [built], manifest: null, tables, licensePath: join(tmp, 'no-such-checkout', 'LICENSE') });
+            rmSync(u, { recursive: true, force: true });
+            if (ru.fails.length === 0) console.log('  ok orca/ not fetched: LICENSE present -> green (presence only)'); else { console.error(`  FAIL orca/ not fetched: ${ru.fails.join(' | ')}`); failures++; }
+        }
         // macos (universal): a fat Mach-O is the lipo of the thin trees: one slice per tree, from the same path (a pair:
         // its two names), matching CPU types, zero padding.
         const [pairArm, pairX64] = archPairs(tables)[0];
@@ -580,6 +608,7 @@ async function selfTest() {
         const macStage = (files, modes = {}) => {
             const st = mkdtempSync(join(tmp, 'mac-stage-'));
             writeFileSync(join(st, 'package.json'), readFileSync(join(arm, 'package.json')));
+            writeFileSync(join(st, 'LICENSE'), readFileSync(LIC));
             for (const sub of ['out/orcad', 'out/web']) cpSync(join(arm, sub), join(st, sub), { recursive: true });
             for (const [rel, body] of Object.entries(files)) {
                 mkdirSync(dirname(join(st, 'out/orcad', rel)), { recursive: true });
@@ -588,7 +617,7 @@ async function selfTest() {
             }
             return st;
         };
-        const mac = (st) => check({ target: 'macos', stage: st, builts: [arm, x64], manifest: null, tables });
+        const mac = (st) => check({ target: 'macos', stage: st, builts: [arm, x64], manifest: null, tables, licensePath: LIC });
         const padded = goodFiles()['bin/tool'];
         padded[8 + 40 + 64 + 2] = 1;
         for (const [name, files, modes, naming] of [
@@ -601,8 +630,11 @@ async function selfTest() {
             ['a fat Mach-O with a non-zero byte in its padding', { 'bin/tool': padded }, {}, 'outside the header and the slices is not zero padding'],
             ["an arch-named pair file staged with another tool's binary", { [pairX64]: fat([thin(arm, pairArm), thin(x64, 'bin/other')]) }, {}, `staged content differs from the built tree: out/orcad/${pairX64}`],
             ['a fat Mach-O executable with its executable bit cleared', {}, { 'bin/tool': 0o644 }, 'executable out/orcad/bin/tool has mode 0644, not 0755'],
+            ['LICENSE missing from the universal tree', { __drop: null }, {}, 'the packaged Orca tree carries no LICENSE'],
         ]) {
-            const st = macStage({ ...goodFiles(), ...files }, modes);
+            const { __drop, ...rest } = files;
+            const st = macStage({ ...goodFiles(), ...rest }, modes);
+            if (__drop === null) rmSync(join(st, 'LICENSE'));
             const r = mac(st);
             rmSync(st, { recursive: true, force: true });
             const text = r.fails.join('\n');
