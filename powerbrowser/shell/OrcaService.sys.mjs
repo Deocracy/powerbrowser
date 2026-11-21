@@ -592,13 +592,20 @@ export const OrcaService = {
       await this._endFailedStart(proc, async () => {}, [...startRows.values()]);
       await Promise.race([stderrDone, PowerBrowserAPI.sleep(500)]);
       const text = stderrTail.join("\n");
-      const code = [OrcaEnv.ORCAD_PINNED_PORT_CODE, OrcaEnv.ORCAD_LOCK_HELD_CODE].find(c => text.includes(c));
+      // Every code ORCA_CODE_CLASSES maps (harness-static-hosting-10), not only the port and the held lock.
+      const code = Object.keys(OrcaEnv.ORCA_CODE_CLASSES).find(c => text.includes(c));
       const rows = [["Orca exit code", outcome.exitCode], ["Orca port", this._port]];
       if (code) {
-        // A busy port stays busy and a held lock survived the reap: another attempt changes nothing,
-        // and adopting whatever answers on the port is never an option.
+        // A busy port stays busy, a held lock survived the reap, and a refused data folder, bind address or
+        // profile state is the same on the next attempt: another attempt changes nothing, and adopting whatever
+        // answers on the port is never an option.
         const holder = code === OrcaEnv.ORCAD_PINNED_PORT_CODE ? await this._portHolderRows() : [];
         return { ok: false, recoverable: false, step: "starting orcad", rows: [["Orca failure code", code], ...rows, ...holder] };
+      }
+      // A configuration exit that printed no mapped code (the native preflight prints its reason's sentence, not
+      // the code) is just as final: no retry. It keeps the "starting orcad" step, so its class is could-not-start.
+      if (outcome.exitCode === OrcaEnv.ORCAD_EXIT_CONFIGURATION) {
+        return { ok: false, recoverable: false, step: "starting orcad", rows };
       }
       return { ok: false, recoverable: true, step: "starting orcad", rows };
     }

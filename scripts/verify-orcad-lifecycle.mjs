@@ -46,6 +46,8 @@
 //                      acceptance. watch-fixture f-j run the adopted line and the keeper in real processes.
 //   port-frozen        (67-WR-03 follow-up) a pref change during the session reaches neither a Theia respawn nor a
 //                      Restart: both keep the port orcad started on.
+//   mapped-codes       (harness-static-hosting-10, lane H2 handoff) every code ORCA_CODE_CLASSES maps ends a start
+//                      at once, in its class.
 //   start-tree         (62-WR-01 / orcad-hosting-08 follow-up) an orcad that dies by a signal before ready leaves
 //                      no daemon: the tree listed while the gate waited is ended.
 //   sidecar-orca-port  (67-WR-03, lane G3b handoff) TheiaService gives the Theia backend POWERBROWSER_ORCA_PORT
@@ -585,6 +587,40 @@ async function startTree(paths, env) {
     return fails;
 }
 
+/**
+ * harness-static-hosting-10 (from lane H2): every refusal code ORCA_CODE_CLASSES maps ends the start at once, in the
+ * code's class, instead of being retried as recoverable.
+ */
+async function mappedCodes(paths, env) {
+    const fails = [];
+    for (const [code, cls] of Object.entries(env.ORCA_CODE_CLASSES)) {
+        const b = makeBoundary({ prefs: { 'powerbrowser.orca.giveUpAttempts': 2 }, alive: [[5002, '222']], tree: tree3(5001), orcad: (n) => fakeProc(5000 + n, { stderr: [`[orcad] refused: ${code}\n`], exitCode: 1 }) });
+        const svc = await loadService(paths, b, env);
+        await svc.start();
+        const spawns = orcadSpawns(b.calls).length;
+        const got = svc.getState().failureClass;
+        if (spawns !== 1 || got !== cls) fails.push(`mapped-codes: orcad refusing with ${code} was started ${spawns} time(s) and ended in class ${got}, not once and ${cls}`);
+        await svc.stop();
+    }
+    // A configuration exit (EX_CONFIG) that printed no mapped code is final too; the native preflight prints sentences.
+    {
+        const b = makeBoundary({ prefs: { 'powerbrowser.orca.giveUpAttempts': 2 }, alive: [[5002, '222']], tree: tree3(5001), orcad: (n) => fakeProc(5000 + n, { stderr: ['orcad: Terminals are unavailable on this host: node-pty failed to load.\n'], exitCode: env.ORCAD_EXIT_CONFIGURATION }) });
+        const svc = await loadService(paths, b, env);
+        await svc.start();
+        if (orcadSpawns(b.calls).length !== 1 || svc.getState().failureClass !== 'could-not-start') fails.push(`mapped-codes: a configuration exit (status ${env.ORCAD_EXIT_CONFIGURATION}) with no code printed was started ${orcadSpawns(b.calls).length} time(s) and ended in ${svc.getState().failureClass}, not once and could-not-start`);
+        await svc.stop();
+    }
+    // The lock holder that cannot be verified is upstream's already-running exit: retried after the reap, not final.
+    {
+        const b = makeBoundary({ prefs: { 'powerbrowser.orca.giveUpAttempts': 2 }, alive: [[5002, '222']], tree: tree3(5001), orcad: (n) => fakeProc(5000 + n, { stderr: ['[orcad] orcad_instance_lock_holder_unverifiable\n'], exitCode: 3 }) });
+        const svc = await loadService(paths, b, env);
+        await svc.start();
+        if (orcadSpawns(b.calls).length !== 2) fails.push(`mapped-codes: orcad_instance_lock_holder_unverifiable (the already-running exit) was started ${orcadSpawns(b.calls).length} time(s); it must be retried after the reap, as for another orcad holding the profile`);
+        await svc.stop();
+    }
+    return fails;
+}
+
 /** 67-WR-03 (from lane G3b): the Theia backend is given the port OrcaService starts orcad on, from the one accessor. */
 async function sidecarOrcaPort(paths, env) {
     const fails = [];
@@ -943,7 +979,7 @@ export async function check(paths, { fixture = true } = {}) {
         ['watch-wired', watchWired], ['restart-keeps-daemon', restartKeepsDaemon], ['failed-start', failedStart],
         ['stop-during-ready', stopDuringReady], ['exit-handoff', exitHandOff], ['no-offer', noOffer],
         ['start-after-quit', startAfterQuit], ['crash-loop', crashLoop], ['theia-clears', theiaClears],
-        ['platform-alias', platformAlias], ['port-holder', portHolder], ['sidecar-orca-port', sidecarOrcaPort], ['status-generation', statusGeneration], ['client-recovered', clientRecovered], ['keeper-windows', keeperWindows], ['port-frozen', portFrozen], ['start-tree', startTree],
+        ['platform-alias', platformAlias], ['port-holder', portHolder], ['sidecar-orca-port', sidecarOrcaPort], ['status-generation', statusGeneration], ['client-recovered', clientRecovered], ['keeper-windows', keeperWindows], ['port-frozen', portFrozen], ['start-tree', startTree], ['mapped-codes', mappedCodes],
     ];
     for (const [label, fn] of clauses) {
         try { fails.push(...(await fn(paths, env))); } catch (err) { fails.push(`${label}: threw ${err && err.stack ? err.stack.split('\n').slice(0, 2).join(' ') : err}`); }
@@ -1010,6 +1046,9 @@ function plants() {
         { name: 'gate listing unused after an exit', naming: 'start-tree', file: S, edit: swap('      await this._endFailedStart(proc, async () => {}, [...startRows.values()]);\n', '') },
         { name: 'IPv6 table not read', naming: 'dual-stack', file: S, edit: swap('[table?.tcp, table?.tcp6]', 'table?.tcp') },
         { name: 'dual-stack address not matched', naming: 'dual-stack', file: E, edit: swap('  "00000000000000000000000000000000",\n', '') },
+        { name: 'only the port and lock codes searched', naming: 'mapped-codes', file: S, edit: swap('Object.keys(OrcaEnv.ORCA_CODE_CLASSES).find(c => text.includes(c))', '[OrcaEnv.ORCAD_PINNED_PORT_CODE, OrcaEnv.ORCAD_LOCK_HELD_CODE].find(c => text.includes(c))') },
+        { name: 'configuration exit retried', naming: 'configuration exit', file: S, edit: swap('      if (outcome.exitCode === OrcaEnv.ORCAD_EXIT_CONFIGURATION) {\n', '      if (false) {\n') },
+        { name: 'unverifiable lock holder made final', naming: 'already-running exit', file: E, edit: swap('  [ORCAD_LOCK_FOREIGN_IDENTITY_CODE]: "port-in-use",\n', '  [ORCAD_LOCK_FOREIGN_IDENTITY_CODE]: "port-in-use",\n  orcad_instance_lock_holder_unverifiable: "port-in-use",\n') },
         { name: 'port holder row dropped', naming: 'port-holder', file: S, edit: swap('...rows, ...holder]', '...rows]') },
     ];
 }

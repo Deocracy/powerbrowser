@@ -93,6 +93,33 @@ export const ORCAD_SOCKET_ROOT_BUDGET = 84;
 export const ORCAD_REAP_BLOCKER_NAME = "PowerBrowser: reap orcad";
 export const ORCAD_PINNED_PORT_CODE = "pinned_port_unavailable";
 export const ORCAD_LOCK_HELD_CODE = "orcad_instance_lock_held";
+// harness-static-hosting-10 (from lane H2): the other codes with which the pinned orcad refuses to start. Each is a
+// fact about this host that another attempt does not change, so OrcaService does not retry them.
+// OrcadInstanceLockError (orca/src/main/orcad/orcad-data-root-privacy.ts:5-13):
+export const ORCAD_DATA_ROOT_UNUSABLE_CODE = "orcad_data_root_unusable";
+export const ORCAD_DATA_ROOT_WRONG_OWNER_CODE = "orcad_data_root_wrong_owner";
+export const ORCAD_DATA_ROOT_SHARED_CODE = "orcad_data_root_shared";
+// orcad_instance_lock_holder_unverifiable is not one: resolveOrcadExitCode (orcad-exit-code.ts:12-17) exits with the
+// already-running status for it, because supervisors wait for the existing holder. PowerBrowser treats it as it treats
+// any start that fails without a mapped code: another attempt, after the reap that ends the lock's holder by pid and
+// start ticks (_reapLeftover), which is its path for another orcad holding the profile.
+export const ORCAD_LOCK_FOREIGN_IDENTITY_CODE = "orcad_instance_lock_foreign_identity";
+export const ORCAD_LOCK_UNREADABLE_CODE = "orcad_instance_lock_unreadable";
+// OrcadBindAddressError (orcad-bind-address.ts:9); PowerBrowser always passes 127.0.0.1, so only a broken build sees it.
+export const ORCAD_INVALID_BIND_ADDRESS_CODE = "orcad_invalid_bind_address";
+// ProfileStateAccessError (persistence/profile-state/profile-state-access-owner.ts:29).
+export const ORCAD_PROFILE_STATE_REFUSED_CODE = "profile-state-access-refused";
+// The native preflight's blocking node-pty verdicts (orcad-native-preflight.ts:59, node-pty-precondition.ts:94-248).
+// At the pin orcad prints the reason's sentence, not the code, so a start refused this way is recognised by its exit
+// status (ORCAD_EXIT_CONFIGURATION) as well; the codes are listed so that a build printing them is matched by name.
+export const ORCAD_PTY_LOAD_CRASHED_CODE = "load_crashed";
+export const ORCAD_PTY_DEPENDENCY_MISSING_CODE = "dependency_missing";
+export const ORCAD_PTY_LOAD_FAILED_CODE = "load_failed";
+export const ORCAD_PTY_SPAWN_HELPER_MISSING_CODE = "spawn_helper_missing";
+// The launcher's own configuration exit (launcher.ts:29), which carries no code: its fixed line is the marker.
+export const ORCAD_LAUNCH_FAILED_CODE = "orcad: failed to launch";
+/** orcad's exit status for every configuration refusal (orcad-configuration-exit.ts, EX_CONFIG): retrying cannot help. */
+export const ORCAD_EXIT_CONFIGURATION = 78;
 export const PORT_MIN = 1024;
 export const PORT_MAX = 32767;
 
@@ -442,6 +469,23 @@ export const ORCA_FAILURE_CLASSES = Object.freeze([
 export const ORCA_CODE_CLASSES = Object.freeze({
   [ORCAD_PINNED_PORT_CODE]: "port-in-use",
   [ORCAD_LOCK_HELD_CODE]: "port-in-use",
+  // Another copy of Orca, of another machine or account, holds the instance lock: the port-in-use copy ("Close other
+  // copies of Orca, then choose Restart Orca") is what the user can do about it.
+  [ORCAD_LOCK_FOREIGN_IDENTITY_CODE]: "port-in-use",
+  // The data folder's ownership or permissions, an unreadable lock, a bad bind address, unverifiable profile state,
+  // a node-pty that cannot load, a launcher that refuses its server: no existing copy names them, so could-not-start
+  // (Restart, and Details shows the code). The same class as a configuration exit with no code printed.
+  [ORCAD_DATA_ROOT_UNUSABLE_CODE]: "could-not-start",
+  [ORCAD_DATA_ROOT_WRONG_OWNER_CODE]: "could-not-start",
+  [ORCAD_DATA_ROOT_SHARED_CODE]: "could-not-start",
+  [ORCAD_LOCK_UNREADABLE_CODE]: "could-not-start",
+  [ORCAD_INVALID_BIND_ADDRESS_CODE]: "could-not-start",
+  [ORCAD_PROFILE_STATE_REFUSED_CODE]: "could-not-start",
+  [ORCAD_PTY_LOAD_CRASHED_CODE]: "could-not-start",
+  [ORCAD_PTY_DEPENDENCY_MISSING_CODE]: "could-not-start",
+  [ORCAD_PTY_LOAD_FAILED_CODE]: "could-not-start",
+  [ORCAD_PTY_SPAWN_HELPER_MISSING_CODE]: "could-not-start",
+  [ORCAD_LAUNCH_FAILED_CODE]: "could-not-start",
 });
 
 /**
