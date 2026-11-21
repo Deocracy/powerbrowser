@@ -384,7 +384,13 @@ rootless podman cannot start under the defaults; each relaxed setting carries it
 file. The price is stated in the file's header: build code on this runner can create unprivileged
 user, mount and network namespaces, run host setuid programs that keep those two capabilities,
 create setuid files, see host files and processes under their real uids and see the full `/dev`
-tree. That is why third-party build code should run inside the container or off this host. The
+tree. With `ProtectKernelTunables` off, `/proc/sys`, `/sys` and the other kernel-variable paths are
+no longer read-only and `/proc/kallsyms` and `/proc/kcore` are no longer hidden; a procfs sysctl
+write is checked against the writer's euid and the file's mode bits, not a capability, so a job that
+compromises a host setuid-root program gets euid 0 and can write the root-owned 0644 sysctls.
+`ProtectHostname` is `private` (the unit's own UTS namespace), and `syslog(2)` stays filtered. The
+file also enables `virtualisation.containers`, which writes the `/etc/containers` policy and
+registry files podman reads, with `docker.io` as the one search registry. That is why third-party build code should run inside the container or off this host. The
 runner user is not in the `libvirtd` group: management access to `qemu:///system` is
 root-equivalent, and this user runs the release build's third-party build code. The
 `legion-runner-unit` row derives the module's hardening defaults from its source and checks the

@@ -199,7 +199,7 @@ jobs:
       # does not outlive it); the comparison and the toolchain-container row are the same code.
       - name: Refuse a toolchain that drifted from toolchain-baseline.txt (before packaging)
         if: steps.key_gate.outputs.build == 'true'
-        run: nix develop .#theia --command node scripts/verify-toolchain-container.mjs --measured objdir-release/toolchain-measured.txt
+        run: bash scripts/run-no-skip.sh -- nix develop .#theia --command node scripts/verify-toolchain-container.mjs --measured objdir-release/toolchain-measured.txt
 
       - name: Package the tarball and the release manifest
         if: steps.key_gate.outputs.build == 'true'
@@ -1138,7 +1138,7 @@ jobs:
           DER=powerbrowser/packaging/mar/mar-primary.der
           certutil -A -d "sql:$V" -n powerbrowser-mar -t ",," -i "$DER"
           "$SIGNMAR" -d "$V" -n powerbrowser-mar -v "$SIGNED_MAR"
-          node scripts/verify-mar-signature.mjs "$SIGNED_MAR" "$DER"
+          bash scripts/run-no-skip.sh -- node scripts/verify-mar-signature.mjs "$SIGNED_MAR" "$DER"
 
       - name: Remove the signing scratch databases
         if: always()
@@ -1323,7 +1323,7 @@ jobs:
           certutil -N -d "sql:$V" --empty-password
           certutil -A -d "sql:$V" -n powerbrowser-mar -t ",," -i powerbrowser/packaging/mar/mar-primary.der
           "$SIGNMAR" -d "$V" -n powerbrowser-mar -v "$SIGNED"
-          node scripts/verify-mar-signature.mjs "$SIGNED" powerbrowser/packaging/mar/mar-primary.der
+          bash scripts/run-no-skip.sh -- node scripts/verify-mar-signature.mjs "$SIGNED" powerbrowser/packaging/mar/mar-primary.der
 
       - name: Remove the signing scratch databases
         if: always()
@@ -1915,7 +1915,7 @@ jobs:
           certutil -N -d "sql:$V" --empty-password
           certutil -A -d "sql:$V" -n powerbrowser-mar -t ",," -i powerbrowser/packaging/mar/mar-primary.der
           "$SIGNMAR" -d "$V" -n powerbrowser-mar -v "$SIGNED_MAR"
-          node scripts/verify-mar-signature.mjs "$SIGNED_MAR" powerbrowser/packaging/mar/mar-primary.der
+          bash scripts/run-no-skip.sh -- node scripts/verify-mar-signature.mjs "$SIGNED_MAR" powerbrowser/packaging/mar/mar-primary.der
 
       - name: Remove the signing scratch databases
         if: always()
@@ -2603,4 +2603,4 @@ jobs:
           bash powerbrowser/packaging/check-win-sidecar.sh purge macos-orca-arm64 "$OUT"
           bash powerbrowser/packaging/check-win-sidecar.sh purge macos-orca-x64 "$OUT"
           bash scripts/run-no-skip.sh -- node scripts/verify-orca-packaged-tree.mjs --target macos --built macos-orca-arm64 --also-built macos-orca-x64 --stage "$OUT"
-          node scripts/verify-package-target-natives.mjs --target macos --stage "$OUT"
+          bash scripts/run-no-skip.sh -- node scripts/verify-package-target-natives.mjs --target macos --stage "$OUT"

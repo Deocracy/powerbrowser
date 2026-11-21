@@ -19,6 +19,12 @@
 //                must block (an override nothing needs is red). The rules describe what the podman
 //                calls in .github/workflows/release.yml (podman build --pull=always, podman run -v ...,
 //                no --network: pasta) need, not a copy of the module.
+//                Every serviceOverrides statement must be one the parser classifies (a bare key and a
+//                literal or lib.mkForce <literal>); anything else is red, not skipped. Any assignment to
+//                systemd.services."github-runner-*" outside serviceOverrides is red.
+//  containers    when extraPackages carries podman: virtualisation.containers.enable is true (it writes
+//                /etc/containers/policy.json and registries.conf, which podman reads), and when the
+//                Containerfile's FROM is a short name, registries.search names exactly one registry.
 //  no-libvirt    the runner user is not in libvirtd and the runner sets no LIBVIRT_DEFAULT_URI.
 //
 // Usage: node scripts/verify-legion-runner-unit.mjs [--self-test]
@@ -34,6 +40,8 @@ import { verdictExit } from './lib/skip-verdict.mjs';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'legion-runner-unit';
 const UNIT_REL = 'systemd/legion-pb.nix';
+const CONTAINERFILE_REL = 'powerbrowser/packaging/Containerfile';
+const CONTAINERFILE = existsSync(join(REPO_ROOT, CONTAINERFILE_REL)) ? readFileSync(join(REPO_ROOT, CONTAINERFILE_REL), 'utf8') : null;
 const MODULE = process.env.PB_RUNNER_MODULE
     ?? ['/nix/var/nix/profiles/per-user/root/channels/nixos/nixos/modules/services/continuous-integration', 'github-runner', 'service.nix'].join('/');
 
@@ -47,7 +55,8 @@ export const BLOCKERS = {
     NoNewPrivileges: { why: 'newuidmap and newgidmap are setuid', blocks: (v) => v === true, ok: isFalse, want: 'false' },
     PrivateDevices: { why: 'the private /dev lacks /dev/fuse and /dev/net/tun', blocks: (v) => v === true, ok: isFalse, want: 'false' },
     RestrictSUIDSGID: { why: 'unpacking image layers recreates setuid files', blocks: (v) => v === true, ok: isFalse, want: 'false' },
-    ProtectHostname: { why: 'crun calls sethostname in the container UTS namespace', blocks: (v) => v === true, ok: isFalse, want: 'false' },
+    // "private" (systemd 260) allows sethostname inside the unit's own UTS namespace only; false would relax more.
+    ProtectHostname: { why: 'crun calls sethostname in the container UTS namespace', blocks: (v) => v === true, ok: (o) => o?.value === 'private', want: '"private"' },
     ProtectKernelTunables: { why: 'its locked /proc over-mounts make the kernel refuse the container procfs mount', blocks: (v) => v === true, ok: isFalse, want: 'false' },
     ProtectKernelLogs: { why: 'its /proc/kmsg over-mount makes the kernel refuse the container procfs mount', blocks: (v) => v === true, ok: isFalse, want: 'false' },
     CapabilityBoundingSet: {
@@ -66,11 +75,13 @@ export const BLOCKERS = {
         why: 'crun needs mount, pivot_root, capset and sethostname',
         drop: ['~@mount', '~capset', '~sethostname'],
         blocks(v) { return (v ?? []).some((e) => this.drop.includes(e)); },
-        ok(o, mod) {
-            const want = (mod.get('SystemCallFilter')?.value ?? []).filter((e) => !this.drop.includes(e));
+        ok(o, mod, overrides) {
+            // Turning ProtectKernelLogs off drops the syslog(2) filter it installs, so ~syslog is required back.
+            const readd = overrides?.get('ProtectKernelLogs')?.value === false ? ['~syslog'] : [];
+            const want = [...new Set([...(mod.get('SystemCallFilter')?.value ?? []).filter((e) => !this.drop.includes(e)), ...readd])];
             return o?.force && Array.isArray(o.value) && [...o.value].sort().join(',') === [...want].sort().join(',');
         },
-        want: 'lib.mkForce [ the module list minus ~@mount, ~capset and ~sethostname ]',
+        want: 'lib.mkForce [ the module list minus ~@mount, ~capset and ~sethostname, plus ~syslog when ProtectKernelLogs is off ]',
     },
 };
 
@@ -109,13 +120,31 @@ export function settings(body) {
     return out;
 }
 
+/**
+ * Every top-level `key = value;` statement of an attribute body (split at bracket depth 0), with the
+ * ones the parser cannot classify: a quoted or dotted key, or a value other than a literal or
+ * lib.mkForce <literal>. A setting the check cannot read is red, never skipped.
+ */
+export function unclassified(body) {
+    const inner = body.slice(body.indexOf('{') + 1, body.lastIndexOf('}'));
+    const out = [];
+    let depth = 0, cur = '';
+    for (const ch of inner) {
+        if (ch === '[' || ch === '{' || ch === '(') depth++;
+        if (ch === ']' || ch === '}' || ch === ')') depth--;
+        if (ch === ';' && depth === 0) { if (cur.trim()) out.push(cur.trim()); cur = ''; } else cur += ch;
+    }
+    if (cur.trim()) out.push(cur.trim());
+    return out.filter((st) => !/^[A-Z][A-Za-z]+\s*=\s*(lib\.mkForce\s+)?(\[[^\]]*\]|"[^"]*"|true|false)$/s.test(st));
+}
+
 /** The module's hardening values: the serviceConfig keys it sets with lib.mkDefault or lib.mkBefore. */
 export function moduleDefaults(moduleText) {
     const all = settings(stripComments(moduleText));
     return new Map([...all].filter(([, v]) => v.wrapper === 'mkDefault' || v.wrapper === 'mkBefore'));
 }
 
-export function drift(rawText, moduleText) {
+export function drift(rawText, moduleText, containerfileText = CONTAINERFILE) {
     const fails = [];
     const text = stripComments(rawText);
     const runner = block(text, 'services.github-runners.');
@@ -133,6 +162,10 @@ export function drift(rawText, moduleText) {
     const pkgs = runner.match(/extraPackages\s*=[^\[]*\[([^\]]*)\]/)?.[1]?.split(/\s+/).filter(Boolean) ?? [];
     const overridesBody = block(runner, 'serviceOverrides');
     const overrides = overridesBody ? settings(overridesBody) : new Map();
+    if (overridesBody) for (const st of unclassified(overridesBody)) fails.push(`sandbox: serviceOverrides holds a setting this check cannot classify: ${st.replace(/\s+/g, ' ').slice(0, 120)}`);
+    // The runner's unit may be changed only through serviceOverrides: an assignment to the generated
+    // unit anywhere else bypasses every rule here.
+    for (const m of text.matchAll(/systemd\.services\.\s*"?github-runner-[^\s"]*"?[^=;]*=/g)) fails.push(`sandbox: ${m[0].replace(/\s*=$/, '').trim()} is assigned outside serviceOverrides, so this check cannot see it`);
     if (pkgs.includes('podman')) {
         const data = str(runner, 'XDG_DATA_HOME');
         if (!data) fails.push('podman-store: the runner carries podman but sets no XDG_DATA_HOME, so its image store sits in the wiped workDir');
@@ -159,11 +192,24 @@ export function drift(rawText, moduleText) {
             if (!rule.blocks(mod.get(key)?.value, mod)) continue;
             const o = overrides.get(key);
             if (!o) fails.push(`sandbox: the module default ${key} = ${JSON.stringify(mod.get(key)?.value ?? null)} blocks rootless podman (${rule.why}) and serviceOverrides leaves it; want ${rule.want}`);
-            else if (!rule.ok(o, mod)) fails.push(`sandbox: serviceOverrides.${key} = ${JSON.stringify(o.value)}${o.force ? ' (mkForce)' : ''} does not give rootless podman what it needs (${rule.why}); want ${rule.want}`);
+            else if (!rule.ok(o, mod, overrides)) fails.push(`sandbox: serviceOverrides.${key} = ${JSON.stringify(o.value)}${o.force ? ' (mkForce)' : ''} does not give rootless podman what it needs (${rule.why}); want ${rule.want}`);
         }
     } else if (pkgs.includes('podman')) {
         // Without the module the merge rule can still be applied to the list-valued overrides.
         for (const [key, o] of overrides) if (Array.isArray(o.value) && key !== 'ReadWritePaths' && !o.force) fails.push(`merge: serviceOverrides.${key} is a list without lib.mkForce`);
+    }
+
+    // containers: podman reads /etc/containers/policy.json and registries.conf (HOME is the wiped
+    // workDir), which virtualisation.containers writes; a short-name FROM in the Containerfile needs
+    // exactly one search registry, or podman stops to prompt.
+    if (pkgs.includes('podman')) {
+        const cont = block(text, 'virtualisation.containers');
+        if (!cont || !/\benable\s*=\s*true\s*;/.test(cont)) fails.push('containers: the runner carries podman but virtualisation.containers.enable is not true, so /etc/containers/policy.json and registries.conf do not exist');
+        const from = /^FROM\s+(\S+)/m.exec(containerfileText ?? '')?.[1];
+        const first = from?.split('/')[0];
+        const shortName = from && !(from.includes('/') && /[.:]/.test(first ?? '')) && first !== 'localhost';
+        const search = cont?.match(/registries\.search\s*=\s*\[([^\]]*)\]/)?.[1]?.match(/"[^"]*"/g) ?? null;
+        if (shortName && (search === null || search.length !== 1)) fails.push(`containers: the Containerfile builds FROM the short name ${from}, so registries.search must name exactly one registry (it names ${search === null ? 'the module default, two' : search.length}); podman prompts otherwise`);
     }
 
     const userBlock = block(text, `users.users.${user}`);
@@ -182,6 +228,11 @@ function selfTest(real, moduleText) {
         ['no serviceOverrides (59-CR-02 pre-fix)', 'sets no serviceOverrides', (t) => t.replace('serviceOverrides = {', 'unusedOverrides = {')],
         ['runner in libvirtd (pre-fix)', 'is in the libvirtd group', (t) => t.replace('autoSubUidGidRange = true;', 'autoSubUidGidRange = true; extraGroups = [ "libvirtd" ];')],
         ['LIBVIRT_DEFAULT_URI back', 'sets LIBVIRT_DEFAULT_URI', (t) => t.replace('XDG_DATA_HOME =', 'LIBVIRT_DEFAULT_URI = "qemu:///system"; XDG_DATA_HOME =')],
+        ['unit assigned outside serviceOverrides (review 2a)', 'is assigned outside serviceOverrides', (t) => t.replace(/\n}\s*$/, '\n  systemd.services."github-runner-powerbrowser-release".serviceConfig.ProtectHome = lib.mkForce false;\n}\n')],
+        ['mkOverride inside serviceOverrides (review 2b)', 'cannot classify: ProtectHome = lib.mkOverride 50 false', (t) => t.replace('RestrictNamespaces = false;', 'RestrictNamespaces = false; ProtectHome = lib.mkOverride 50 false;')],
+        ['quoted key inside serviceOverrides (review 2b)', 'cannot classify: "PrivateTmp" = false', (t) => t.replace('RestrictNamespaces = false;', 'RestrictNamespaces = false; "PrivateTmp" = false;')],
+        ['no virtualisation.containers (review 1)', 'virtualisation.containers.enable is not true', (t) => t.replace(/virtualisation\.containers = \{[^}]*\};/, '')],
+        ['two search registries (review 1)', 'must name exactly one registry', (t) => t.replace('registries.search = [ "docker.io" ];', 'registries.search = [ "docker.io" "quay.io" ];')],
     ];
     const modulePlants = [
         ['RestrictNamespaces left true', 'RestrictNamespaces', (t) => t.replace('RestrictNamespaces = false;', 'RestrictNamespaces = true;')],
@@ -193,6 +244,8 @@ function selfTest(real, moduleText) {
         ['SystemCallFilter without mkForce (CR-02 verifier)', 'merge: serviceOverrides.SystemCallFilter', (t) => t.replace('SystemCallFilter = lib.mkForce [', 'SystemCallFilter = [')],
         ['~@mount kept', 'SystemCallFilter', (t) => t.replace('"~@clock"', '"~@clock" "~@mount"')],
         ['a module entry dropped from the filter', 'SystemCallFilter', (t) => t.replace('"~setdomainname"', '')],
+        ['ProtectHostname false (review 4)', 'ProtectHostname', (t) => t.replace('ProtectHostname = "private";', 'ProtectHostname = false;')],
+        ['~syslog not re-added (review 4)', 'SystemCallFilter', (t) => t.replace('"~syslog"', '')],
         ['an override nothing needs (PrivateMounts)', 'PrivateMounts relaxes a setting', (t) => t.replace('ProtectKernelLogs = false;', 'ProtectKernelLogs = false; PrivateMounts = false;')],
     ];
     let ok = true;

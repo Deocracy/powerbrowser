@@ -39,7 +39,11 @@
 # for kernel privilege-escalation exploits); run host setuid programs, which keep CAP_SETUID and
 # CAP_SETGID through the bounding set; create setuid files; see host files and processes under their
 # real uids (no PrivateUsers); and see the full /dev tree (opening a device is still limited to the
-# pseudo devices, /dev/fuse and /dev/net/tun by the device allow list). Nothing here opens a direct
+# pseudo devices, /dev/fuse and /dev/net/tun by the device allow list). With ProtectKernelTunables off,
+# /proc/sys, /sys, /proc/sysrq-trigger and the other kernel-variable paths are no longer read-only
+# and /proc/kallsyms and /proc/kcore are no longer hidden. A procfs sysctl write is checked against
+# the writer's euid and the file's mode bits, not against a capability, so a job that compromises a
+# host setuid-root program gets euid 0 and can write the root-owned 0644 sysctls. Nothing here opens a direct
 # path to the registration token (still InaccessiblePaths) or to /home (still ProtectHome). This is
 # the price of running rootless podman under this unit, and it is why third-party build code (the
 # agent server's npm closure in particular) should run inside the container or off this host.
@@ -81,20 +85,27 @@
       PrivateDevices = false; # the private /dev has no /dev/fuse (fuse-overlayfs) and no /dev/net/tun (pasta)
       # ProtectClock implies DeviceAllow=char-rtc r, and a non-empty allow list closes every other
       # device, so the two devices rootless podman opens are allowed explicitly ("" first resets).
+      # UNSURE, settled on first deployment: "/dev/fuse rw" is probably unneeded on kernel 6.18, where
+      # rootless podman uses native overlay, and it lets jobs mount FUSE file systems. Run
+      #   sudo -u pb-runner env XDG_DATA_HOME=/var/lib/pb-runner-data podman info --format '{{.Store.GraphDriverName}} {{.Store.GraphOptions}}'
+      # and drop the entry if no mount_program is reported.
       DeviceAllow = lib.mkForce [
         ""
         "/dev/fuse rw"
         "/dev/net/tun rw"
       ];
       RestrictSUIDSGID = false; # image layers carry setuid files, which unpacking must recreate
-      ProtectHostname = false; # crun calls sethostname inside the container's UTS namespace
+      # "private": sethostname is allowed but changes only the unit's own UTS namespace (systemd 260,
+      # systemd.exec(5)); crun calls it inside the container's UTS namespace.
+      ProtectHostname = "private";
       # Both leave locked read-only or inaccessible over-mounts under /proc (/proc/sys, /proc/kmsg and
       # others); the kernel refuses the fresh procfs mount crun makes in the container's user
       # namespace while the existing /proc is covered that way.
       ProtectKernelTunables = false;
       ProtectKernelLogs = false;
       # The module's mkBefore deny list minus ~@mount (mount, pivot_root), ~capset (crun drops
-      # capabilities) and ~sethostname (crun names the container); every other entry is kept.
+      # capabilities) and ~sethostname (crun names the container); every other entry is kept, and
+      # ~syslog is added back because ProtectKernelLogs=false drops the syslog(2) filter it installs.
       SystemCallFilter = lib.mkForce [
         "~@clock"
         "~@cpu-emulation"
@@ -103,10 +114,23 @@
         "~@raw-io"
         "~@reboot"
         "~setdomainname"
+        "~syslog"
       ];
+      # UNSURE, settled on first deployment: cgroups are not delegated to this unit (no Delegate=,
+      # ProtectControlGroups stays true, no user session), so podman falls back to cgroupfs. Confirm
+      # with a job step `podman run --rm docker.io/library/debian:bookworm true` on this runner.
       # ProtectSystem=strict leaves /var/lib read-only; the podman store must be writable.
       ReadWritePaths = [ "/var/lib/pb-runner-data" ];
     };
+  };
+  # podman reads /etc/containers/policy.json and registries.conf, and the runner's HOME is the wiped
+  # workDir, so they come from the system. This NixOS option writes /etc/containers/{containers.conf,
+  # storage.conf,registries.conf,policy.json} (nixos/modules/virtualisation/containers.nix; policy.json
+  # is skopeo's default policy). One search registry lets the Containerfile's short-name
+  # FROM debian:bookworm@sha256:... resolve without the prompt podman needs when there are several.
+  virtualisation.containers = {
+    enable = true;
+    registries.search = [ "docker.io" ];
   };
   users.users.pb-runner = {
     isSystemUser = true;
