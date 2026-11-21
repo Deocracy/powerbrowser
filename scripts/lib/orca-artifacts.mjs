@@ -19,7 +19,10 @@
 //            under both names. The names come only from ORCAD_RIPGREP_ARTIFACTS and
 //            orcadAgentBrowserNativeName('darwin', arm64|x64); a table that yields no pair is "source moved".
 //   inplace  a same-name file that is a thin Mach-O in both trees: merged in place.
-//   same     every other file: byte-identical in both trees, else red naming it.
+//   same     every other file: byte-identical in both trees, else red naming it. A symbolic link is a same
+//            line when both trees carry it with the same target inside the packaged root; a link in one
+//            tree only, with differing targets, or pointing outside the root is red naming it (audit
+//            harness-driver-11: cp -a took every link from the arm64 tree, unchecked).
 // An arch-named file without its partner, or a file present in one tree only, is red naming it.
 //
 // CLI:
@@ -28,9 +31,9 @@
 //   node scripts/lib/orca-artifacts.mjs --self-test                         synthetic trees, no lipo needed
 
 import { createHash } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, posix, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ARTIFACTS_REL = 'src/shared/orcad-artifacts.ts';
@@ -84,7 +87,12 @@ export function archPairs(tables) {
     return pairs;
 }
 
-function packagedFiles(root) {
+/**
+ * The packaged regular files, sorted. Symbolic links (to files or directories; readdir's Dirent is lstat-based, so
+ * a link is neither) go to `links` as rel -> target, so the plan can judge them instead of skipping them (audit
+ * harness-driver-11: cp -a took every link from the arm64 tree unchecked). Any other entry type goes to `others`.
+ */
+function packagedFiles(root, links = new Map(), others = []) {
     const out = [];
     if (existsSync(join(root, 'package.json'))) out.push('package.json');
     const walkDir = (dir) => {
@@ -92,12 +100,34 @@ function packagedFiles(root) {
         try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
         for (const e of entries) {
             const p = join(dir, e.name);
+            const rel = relative(root, p).split('\\').join('/');
             if (e.isDirectory()) walkDir(p);
-            else if (e.isFile()) out.push(relative(root, p).split('\\').join('/'));
+            else if (e.isFile()) out.push(rel);
+            else if (e.isSymbolicLink()) links.set(rel, readlinkSync(p));
+            else others.push(rel);
         }
     };
     for (const sub of ['out/orcad', 'out/web']) walkDir(join(root, sub));
     return out.sort();
+}
+
+/**
+ * Failure lines for the two trees' symbolic links: one only in one tree, a target that differs between them, or
+ * a target outside the packaged root (cp -a would ship it dangling). Pushes each agreeing link to `same`.
+ */
+function linkFails(armLinks, x64Links, same) {
+    const fails = [];
+    for (const rel of [...new Set([...armLinks.keys(), ...x64Links.keys()])].sort()) {
+        const a = armLinks.get(rel);
+        const x = x64Links.get(rel);
+        if (a === undefined || x === undefined) { fails.push(`symlink ${rel} is only in the ${a !== undefined ? 'arm64' : 'x64'} tree`); continue; }
+        if (a !== x) { fails.push(`symlink ${rel} points at ${a} in the arm64 tree and at ${x} in the x64 tree`); continue; }
+        const resolved = posix.normalize(posix.join(posix.dirname(rel), a));
+        const packaged = resolved === 'package.json' || ['out/orcad', 'out/web'].some((d) => resolved === d || resolved.startsWith(`${d}/`));
+        if (posix.isAbsolute(a) || !packaged) { fails.push(`symlink ${rel} points outside the packaged tree (${a})`); continue; }
+        same.push(rel);
+    }
+    return fails;
 }
 
 function head4(p) {
@@ -109,14 +139,19 @@ const THIN = new Set(['cffaedfe', 'cefaedfe', 'feedfacf', 'feedface']);
 const sha = (p) => createHash('sha256').update(readFileSync(p)).digest('hex');
 
 export function macosMergePlan({ armDir, x64Dir, tables }) {
-    const plan = { pairs: [], inPlace: [], identical: [], fails: [] };
+    const plan = { pairs: [], inPlace: [], identical: [], links: [], fails: [] };
     const pairs = archPairs(tables);
     if (pairs.length === 0) {
         plan.fails.push('zero arch-named pairs derived from ORCAD_RIPGREP_ARTIFACTS and orcadAgentBrowserNativeName: Orca\'s artifact tables moved (source moved); re-read orca/src/shared/orcad-artifacts.ts');
         return plan;
     }
-    const arm = packagedFiles(armDir);
-    const x64 = packagedFiles(x64Dir);
+    const armLinks = new Map();
+    const x64Links = new Map();
+    const others = [];
+    const arm = packagedFiles(armDir, armLinks, others);
+    const x64 = packagedFiles(x64Dir, x64Links, others);
+    plan.fails.push(...linkFails(armLinks, x64Links, plan.links));
+    for (const rel of [...new Set(others)].sort()) plan.fails.push(`${rel} is neither a regular file, a directory nor a symlink, so the merge cannot judge it`);
     const armSet = new Set(arm);
     const x64Set = new Set(x64);
     const consumed = new Set();
@@ -152,6 +187,8 @@ function planLines(plan) {
         ...plan.pairs.map((p) => `pair\t${p.arm}\t${p.x64}`),
         ...plan.inPlace.map((r) => `inplace\t${r}`),
         ...plan.identical.map((r) => `same\t${r}`),
+        // A link with the same in-tree target in both trees: cp -a of the arm64 tree carries it as is.
+        ...plan.links.map((r) => `same\t${r}`),
     ];
 }
 
@@ -189,19 +226,26 @@ async function selfTest() {
                 put(root, 'BUILD_ROOT', `/Users/runner/${tag}-${cpu}\n`); // outside the packaged root: ignored
             }
             for (const [pa, px] of pairs) { put(a, `out/orcad/${pa}`, macho(ARM)); put(x, `out/orcad/${px}`, macho(X86)); }
+            // One in-tree link in both trees, same target: a same line, not a skip.
+            for (const root of [a, x]) symlinkSync('build/Release/pty.node', join(root, 'out/orcad/node_modules/node-pty/pty.node'));
             return [a, x];
         };
+        const relink = (root, rel, target) => { rmSync(join(root, rel), { force: true }); symlinkSync(target, join(root, rel)); };
         const [ca, cx] = make('control');
         const control = macosMergePlan({ armDir: ca, x64Dir: cx, tables });
-        if (control.fails.length || control.pairs.length !== pairs.length || control.inPlace.length !== 1 || control.identical.length !== 2) {
-            console.error(`${NAME} self-test: FAIL -- the unplanted trees are not green with ${pairs.length} pair(s), 1 in-place and 2 identical: ${JSON.stringify(control)}`);
+        if (control.fails.length || control.pairs.length !== pairs.length || control.inPlace.length !== 1 || control.identical.length !== 2 || control.links.length !== 1) {
+            console.error(`${NAME} self-test: FAIL -- the unplanted trees are not green with ${pairs.length} pair(s), 1 in-place, 2 identical and 1 link: ${JSON.stringify(control)}`);
             return 1;
         }
-        console.log(`  ok control -> green: ${pairs.length} arch-named pair(s) from ${from} (${pairs.map(([a]) => a).join(', ')}), 1 in-place, 2 identical`);
+        console.log(`  ok control -> green: ${pairs.length} arch-named pair(s) from ${from} (${pairs.map(([a]) => a).join(', ')}), 1 in-place, 2 identical, 1 agreeing link`);
         const plants = [
             ['unpaired arch-named file', () => { const [a, x] = make('unpaired'); rmSync(join(x, 'out/orcad', pairs[0][1])); return macosMergePlan({ armDir: a, x64Dir: x, tables }); }, `has no partner out/orcad/${pairs[0][1]}`],
             ['differing non-native file', () => { const [a, x] = make('differ'); put(x, 'out/web/web-index.html', '<!doctype html><!-- x64 -->\n'); return macosMergePlan({ armDir: a, x64Dir: x, tables }); }, 'out/web/web-index.html differs'],
             ['file in one tree only', () => { const [a, x] = make('onlyone'); put(a, 'out/web/extra.js', ''); return macosMergePlan({ armDir: a, x64Dir: x, tables }); }, 'out/web/extra.js is only in the arm64 tree'],
+            ['symlink in the x64 tree only', () => { const [a, x] = make('linkx'); symlinkSync('web-index.html', join(x, 'out/web/alias.html')); return macosMergePlan({ armDir: a, x64Dir: x, tables }); }, 'symlink out/web/alias.html is only in the x64 tree'],
+            ['symlink targets differ', () => { const [a, x] = make('linkdiff'); relink(x, 'out/orcad/node_modules/node-pty/pty.node', 'build/Debug/pty.node'); return macosMergePlan({ armDir: a, x64Dir: x, tables }); }, 'points at build/Release/pty.node in the arm64 tree and at build/Debug/pty.node'],
+            ['symlink pointing outside the packaged tree', () => { const [a, x] = make('linkout'); for (const r of [a, x]) relink(r, 'out/orcad/node_modules/node-pty/pty.node', '../../../../BUILD_ROOT'); return macosMergePlan({ armDir: a, x64Dir: x, tables }); }, 'points outside the packaged tree'],
+            ['absolute symlink', () => { const [a, x] = make('linkabs'); for (const r of [a, x]) relink(r, 'out/orcad/node_modules/node-pty/pty.node', '/usr/lib/pty.node'); return macosMergePlan({ armDir: a, x64Dir: x, tables }); }, 'points outside the packaged tree (/usr/lib/pty.node)'],
             ['zero-pair table', () => macosMergePlan({ armDir: ca, x64Dir: cx, tables: { ...tables, ripgrepArtifacts: ['ripgrep/linux-x64/rg'], agentBrowserName: () => 'agent-browser' } }), 'source moved'],
         ];
         let failed = 0;
