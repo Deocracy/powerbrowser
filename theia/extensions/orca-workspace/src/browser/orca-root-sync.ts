@@ -35,9 +35,9 @@ export const ORCA_WORKSPACE_FILE = 'powerbrowser.theia-workspace';
 /** WorkspaceStorageService's prefix with no workspace open. */
 export const GLOBAL_PREFIX = '_global_';
 /**
- * Store events are applied once the store has been quiet this long, so a store
- * hydrating repository by repository is not read as worktrees leaving.
- * shortcut: a time bound, not a hydration signal (B-3 carries none); upgrade if the bundle reports hydration.
+ * Store events are applied once the store has been quiet this long (coalescing). 65-WR-03: a store hydrating
+ * repository by repository is not read as worktrees leaving: while the snapshot reports hydrated false, only
+ * additions are applied. A bundle that does not report hydration falls back to this time bound alone.
  */
 const SETTLE_MS = 750;
 
@@ -122,6 +122,10 @@ export class OrcaRootSync implements FrontendApplicationContribution {
     /** The wanted set applied last; undefined until the first sync of this session. */
     protected previousWanted: string[] | undefined;
     protected pending: string[] | undefined;
+    /** 65-WR-02: the wanted set of the latest store snapshot, trusted by the resolver before its sync applies. */
+    protected reported: string[] | undefined;
+    /** 65-WR-03: the latest snapshot's hydration flag; undefined when the bundle does not report one. */
+    protected hydrated: boolean | undefined;
     protected seenWorktree = false;
     protected applying = false;
     protected timer: number | undefined;
@@ -129,7 +133,7 @@ export class OrcaRootSync implements FrontendApplicationContribution {
 
     /** File-system paths of the store's current local roots (the resolver also trusts these, once the store has spoken). */
     liveRootPaths(): string[] {
-        return (this.previousWanted ?? []).map(u => new URI(u).path.fsPath());
+        return [...new Set([...(this.previousWanted ?? []), ...(this.reported ?? [])])].map(u => new URI(u).path.fsPath());
     }
 
     onStart(): void {
@@ -150,6 +154,8 @@ export class OrcaRootSync implements FrontendApplicationContribution {
 
     protected onSnapshot(snapshot: OrcaWorkspaceSnapshot): void {
         this.pending = wantedRootsOf(snapshot, path => URI.fromFilePath(path).toString());
+        this.reported = this.pending;
+        this.hydrated = typeof snapshot.hydrated === 'boolean' ? snapshot.hydrated : undefined;
         this.seenWorktree ||= this.pending.length > 0;
         window.clearTimeout(this.timer);
         this.timer = window.setTimeout(() => this.enqueue(() => this.sync()), SETTLE_MS);
@@ -188,7 +194,9 @@ export class OrcaRootSync implements FrontendApplicationContribution {
         // At session start the persisted owned roots still in the workspace stand for the last wanted set,
         // so a relaunch reconciles once; an owned root missing from a workspace the user switched to is added again.
         const previousWanted = this.previousWanted ?? owned.filter(o => roots.includes(o));
-        const plan = planRoots({ wanted, previousWanted, roots, owned, userRemoved });
+        // 65-WR-03: before Orca has listed every repository, a root missing from the snapshot is not yet a drop.
+        const effective = this.hydrated === false ? [...new Set([...previousWanted, ...wanted])] : wanted;
+        const plan = planRoots({ wanted: effective, previousWanted, roots, owned, userRemoved });
         this.applying = true;
         try {
             if (plan.add.length) {
@@ -205,8 +213,10 @@ export class OrcaRootSync implements FrontendApplicationContribution {
         for (const dropped of plan.dropped) {
             this.router.closeCleanUnder(new URI(dropped).path.fsPath());
         }
-        this.previousWanted = wanted;
+        this.previousWanted = effective;
         await this.writeSets(plan.owned, plan.userRemoved);
+        // 65-WR-02: records refused before these roots were trusted, and records under a returning root, open now.
+        this.router.retry(this.liveRootPaths());
     }
 
     /** CA-04, CA-05: copy the current prefix's keys, then save the fixed workspace file; a workspace file already open is kept. */
