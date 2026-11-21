@@ -55,8 +55,9 @@
       "host": "en.wikipedia.org",
       "disposition": "allow",
       "trigger": "user-feature",
-      "reason": "29-03 (BAR-01/BAR-03): the search-results and suggestions host of a configured search engine (configuration.toml [[search_engines]]). Contacted only when the user searches from the address bar or, with suggestions on, types text the chrome resolved as a search -- never for URL-shaped text, and never unattended. Deliberate egress promised in the REQUIREMENTS 'Inherited network egress' footer, not an inherited default.",
-      "manifest": "search_engines[1].url"
+      "reason": "29-03 (BAR-01/BAR-03): the search-results and suggestions host of a configured search engine (configuration.toml [[search_engines]]). Contacted only when the user searches from the address bar or, with suggestions on, types text the chrome resolved as a search -- never for URL-shaped text, and never unattended. Deliberate egress promised in the REQUIREMENTS 'Inherited network egress' footer, not an inherited default. packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only in a parser library's error text (orca/out/web, orca/out/orcad/out/mobile-web); Orca sends no request there.",
+      "manifest": "search_engines[1].url",
+      "orca_shared": "name-only"
     },
     {
       "host": "normandy.cdn.mozilla.net",
@@ -210,8 +211,8 @@
     {
       "host": "linear.app",
       "disposition": "user-initiated",
-      "orca_source": "orca/src/main/linear/linear-issue-comments.ts",
-      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's Linear integration builds issue and team links on this host after the user connects Linear (orca/src/main/linear/linear-issue-comments.ts:281). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+      "orca_source": "orca/src/main/linear/linear-project-models.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle names this host: Orca's Linear integration builds issue, project and view links on it (orca/src/main/linear/linear-project-models.ts:278) after the user connects Linear. Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
     },
     {
       "host": "api.atlassian.com",
@@ -398,6 +399,98 @@
       "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: a crawler user-agent substring in a bundled bot-detection list; not a request. Disposition deny: an observed contact is a failure."
     },
     {
+      "host": "api.linear.app",
+      "disposition": "user-initiated",
+      "orca_source": "orca/out/orcad/node_modules/@linear/sdk/index.js",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the Linear SDK that orcad ships (orca/out/orcad/node_modules/@linear/sdk/index.js, created at orca/src/main/linear/linear-sdk.ts:22-23) sends Orca's Linear integration requests to https://api.linear.app/graphql after the user connects Linear. Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "unpkg.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/shared/native-chat/native-chat-visual-shell.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): Orca's native chat visuals render HTML an agent writes in a sandboxed frame whose content policy allows scripts, styles, fonts and images from this host (orca/src/shared/native-chat/native-chat-visual-shell.ts:8, in NATIVE_CHAT_VISUAL_CDN_ORIGINS, :6-13; built into orca/out/web and orca/out/orcad/out/mobile-web), so an agent's visual can make the user's browser load from it, and a request can carry data the visual put in it. Reached after the user runs an agent that writes a visual. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "cdnjs.cloudflare.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/shared/native-chat/native-chat-visual-shell.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): Orca's native chat visuals render HTML an agent writes in a sandboxed frame whose content policy allows scripts, styles, fonts and images from this host (orca/src/shared/native-chat/native-chat-visual-shell.ts:9, in NATIVE_CHAT_VISUAL_CDN_ORIGINS, :6-13; built into orca/out/web and orca/out/orcad/out/mobile-web), so an agent's visual can make the user's browser load from it, and a request can carry data the visual put in it. Reached after the user runs an agent that writes a visual. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "esm.sh",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/shared/native-chat/native-chat-visual-shell.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): Orca's native chat visuals render HTML an agent writes in a sandboxed frame whose content policy allows scripts, styles, fonts and images from this host (orca/src/shared/native-chat/native-chat-visual-shell.ts:10, in NATIVE_CHAT_VISUAL_CDN_ORIGINS, :6-13; built into orca/out/web and orca/out/orcad/out/mobile-web), so an agent's visual can make the user's browser load from it, and a request can carry data the visual put in it. Reached after the user runs an agent that writes a visual. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "fonts.googleapis.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/shared/native-chat/native-chat-visual-shell.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): Orca's native chat visuals render HTML an agent writes in a sandboxed frame whose content policy allows scripts, styles, fonts and images from this host (orca/src/shared/native-chat/native-chat-visual-shell.ts:11, in NATIVE_CHAT_VISUAL_CDN_ORIGINS, :6-13; built into orca/out/web and orca/out/orcad/out/mobile-web), so an agent's visual can make the user's browser load from it, and a request can carry data the visual put in it. Reached after the user runs an agent that writes a visual. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "fonts.gstatic.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/shared/native-chat/native-chat-visual-shell.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): Orca's native chat visuals render HTML an agent writes in a sandboxed frame whose content policy allows scripts, styles, fonts and images from this host (orca/src/shared/native-chat/native-chat-visual-shell.ts:12, in NATIVE_CHAT_VISUAL_CDN_ORIGINS, :6-13; built into orca/out/web and orca/out/orcad/out/mobile-web), so an agent's visual can make the user's browser load from it, and a request can carry data the visual put in it. Reached after the user runs an agent that writes a visual. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "tailscale.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/shared/remote-runtime/remote-runtime-tailscale-hint.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): Orca's remote-runtime hint links to https://tailscale.com/download (orca/src/shared/remote-runtime/remote-runtime-tailscale-hint.ts:3), opened when the user follows it. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "chevrotain.io",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a documentation link in the error text of the chevrotain parser library bundled in orca/out/web and orca/out/orcad/out/mobile-web; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "langium.org",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a documentation link in the error text of the langium library bundled in orca/out/web and orca/out/orcad/out/mobile-web; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "react.dev",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as React's error-decoder link in its production error messages, in orca/out/web and orca/out/orcad/out/mobile-web; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "reactnavigation.org",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a documentation link in React Navigation error text in orca/out/orcad/out/mobile-web; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "docs.swmansion.com",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a documentation link in Reanimated warning text in orca/out/orcad/out/mobile-web; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "dev.to",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a documentation link in an Expo sensor warning in orca/out/orcad/out/mobile-web; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "docs.microsoft.com",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a comment in node-pty (orca/out/orcad/node_modules/node-pty/lib/windowsConoutConnection.js); not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "msdn.microsoft.com",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a comment in node-pty (orca/out/orcad/node_modules/node-pty/lib/index.js); not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "web.mit.edu",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a comment in node-pty (orca/out/orcad/node_modules/node-pty/lib/unixTerminal.js); not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "www.apple.com",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as the plist DOCTYPE identifier Orca's CLI writes into a launchd unit (orca/src/cli/runtime/serve-service-unit.ts:103); not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
       "host": "cloudflare-dns.com",
       "disposition": "deny",
       "reason": "TRR open item, resolved 03-03: NOT network.trr.mode (confirmed 0/off by default in modules/libpref/init/StaticPrefList.yaml:15642-15644 -- TRR is not active in this build). The real source is network.connectivity-service.DNS_HTTPS.domain (modules/libpref/init/all.js:3260), read by NetworkConnectivityService.cpp's own unattended-startup DNS-over-HTTPS-record probe. No DRM/security-parity rationale applies (unlike Remote Settings/Safe Browsing), so per D-85 this is turned off at the single master switch, network.connectivity-service.enabled = false, rather than waived. Not named in D-83..D-88; this entry and the two below are the explicit resolution the 03-02-SUMMARY.md open item asked for."
@@ -469,7 +562,7 @@
       "host": "api.anthropic.com",
       "disposition": "allow",
       "trigger": "user-feature",
-      "reason": "User-initiated (NG-069, R15): the AI chat and completion feature through @theia/ai-anthropic (the @anthropic-ai/sdk base URL). It is contacted only after the user configures an Anthropic API key and sends a request. With no key configured it is never contacted, and nothing is sent at startup. packaging-prefs-network-04 (audit-fix G5b, D-08): Orca's rate-limit service reads a Claude account's usage at https://api.anthropic.com/api/oauth/usage for a Claude sign-in, with no API key, and the Claude agent CLI Orca runs sends its requests here under the user's Claude sign-in (orca/src/main/rate-limits/claude-oauth-usage-request.ts:19).",
+      "reason": "User-initiated (NG-069, R15): the AI chat and completion feature through @theia/ai-anthropic (the @anthropic-ai/sdk base URL). That feature contacts it only after the user configures an Anthropic API key and sends a request; with no key configured that feature never contacts it, and it sends nothing at startup. Orca also contacts it (below). packaging-prefs-network-04 (audit-fix G5b, D-08): Orca's rate-limit service reads a Claude account's usage at https://api.anthropic.com/api/oauth/usage for a Claude sign-in, with no API key, and the Claude agent CLI Orca runs sends its requests here under the user's Claude sign-in (orca/src/main/rate-limits/claude-oauth-usage-request.ts:19).",
       "orca_source": "orca/src/main/rate-limits/claude-oauth-usage-request.ts",
       "orca_shared": true
     },
@@ -477,15 +570,16 @@
       "host": "api.openai.com",
       "disposition": "allow",
       "trigger": "user-feature",
-      "reason": "User-initiated (NG-069, R15): the AI chat and completion feature through @theia/ai-openai (the openai package base URL). It is contacted only after the user configures an OpenAI API key and sends a request. With no key configured it is never contacted, and nothing is sent at startup. packaging-prefs-network-04 (audit-fix G5b, D-08): Orca reads https://api.openai.com/auth and /profile only as claim names inside a Codex sign-in token (not a request), and the Codex agent CLI Orca runs sends its requests to OpenAI under the user's sign-in (orca/src/main/codex-accounts/codex-auth-identity.ts:168).",
-      "orca_source": "orca/src/main/codex-accounts/codex-auth-identity.ts",
+      "reason": "User-initiated (NG-069, R15): the AI chat and completion feature through @theia/ai-openai (the openai package base URL). That feature contacts it only after the user configures an OpenAI API key and sends a request; with no key configured that feature never contacts it, and it sends nothing at startup. Orca also contacts it (below). packaging-prefs-network-04 (audit-fix G5b, D-08): when the user picks an OpenAI transcription model for Orca's speech input, orcad posts the recorded audio to https://api.openai.com/v1/audio/transcriptions with the user's OpenAI API key (orca/src/main/speech/openai-transcription-client.ts:8, :125-129); Orca also reads https://api.openai.com/auth and /profile as claim names inside a Codex sign-in token (orca/src/main/codex-accounts/codex-auth-identity.ts:168-169), which is not a request, and the Codex agent Orca runs sends its requests to OpenAI under the user's sign-in. Because this row is allow, the transcription upload passes the verdict model whether or not it follows a user action (host-only verdict).",
+      "orca_source": "orca/src/main/speech/openai-transcription-client.ts",
       "orca_shared": true
     },
     {
       "host": "cdn.jsdelivr.net",
       "disposition": "allow",
-      "reason": "BEXT-02 (P68-39): uBlock Origin default-on filter list host, from the pinned XPI's assets.json packaging-prefs-network-04 (audit-fix G5b, D-08): Orca's web client also loads emoji images from https://cdn.jsdelivr.net/npm/emoji-datasource-*/ (the emoji-picker-react package in orca/out/web, used by the repository icon picker). Because this row is allow for uBlock Origin, that load passes the verdict model unattended (host-only verdict; open, audit packaging-prefs-network-04).",
-      "orca_shared": true
+      "reason": "BEXT-02 (P68-39): uBlock Origin default-on filter list host, from the pinned XPI's assets.json packaging-prefs-network-04 (audit-fix G5b, D-08): Orca's web client also loads emoji images from https://cdn.jsdelivr.net/npm/emoji-datasource-*/ (the emoji-picker-react package in orca/out/web, used by the repository icon picker), and Orca's native chat visuals allow agent-written HTML to load scripts, styles, fonts and images from this host (orca/src/shared/native-chat/native-chat-visual-shell.ts:7). Because this row is allow for uBlock Origin, those loads pass the verdict model unattended (host-only verdict; open, audit packaging-prefs-network-04).",
+      "orca_shared": true,
+      "orca_source": "orca/src/shared/native-chat/native-chat-visual-shell.ts"
     },
     {
       "host": "curbengh.github.io",
