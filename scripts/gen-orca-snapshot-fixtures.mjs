@@ -24,11 +24,19 @@
 // Re-run whenever orca/package.json's agent-browser range or the installed agent-browser version changes (a re-pin):
 // the orca-snapshot-fixtures row goes red until then. Developer host only: neither agent-browser nor Chromium ships.
 //
+// The child environment is an allowlist, not a copy of this process's (harness-other-11): agent-browser reads
+// AGENT_BROWSER_* variables (PROFILE, AUTO_CONNECT, INIT_SCRIPTS, EXTENSIONS, PROXY, CONFIG) and
+// ~/.agent-browser/config.json, any of which would change the committed fixtures or drive the developer's own
+// browser. It gets PATH and the locale, a scratch HOME and XDG directories (removed afterwards), a scratch working
+// directory, and the one AGENT_BROWSER_EXECUTABLE_PATH this script resolved. --self-test proves that (no live run).
+//
 // Usage: node scripts/gen-orca-snapshot-fixtures.mjs
+//        node scripts/gen-orca-snapshot-fixtures.mjs --self-test
 
 import { execFile, execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -57,6 +65,23 @@ function findChromium() {
     if (dir && existsSync(candidate)) return realpathSync(candidate);
   }
   return null;
+}
+
+// Names copied from the parent environment; nothing else is. A variable that selects a locale is harmless here.
+export const ENV_ALLOWLIST = ['PATH', 'LANG', 'LC_ALL'];
+
+/** The environment agent-browser runs in: the allowlist, a scratch home under `scratch`, and the one executable path. */
+export function agentBrowserEnv(parentEnv, chromium, scratch) {
+  const env = {};
+  for (const key of ENV_ALLOWLIST) if (parentEnv[key] !== undefined) env[key] = parentEnv[key];
+  env.HOME = join(scratch, 'home');
+  env.XDG_CONFIG_HOME = join(scratch, 'xdg-config');
+  env.XDG_CACHE_HOME = join(scratch, 'xdg-cache');
+  env.XDG_DATA_HOME = join(scratch, 'xdg-data');
+  env.XDG_RUNTIME_DIR = join(scratch, 'xdg-runtime');
+  env.TMPDIR = join(scratch, 'tmp');
+  env.AGENT_BROWSER_EXECUTABLE_PATH = chromium;
+  return env;
 }
 
 function main() {
@@ -90,11 +115,13 @@ function main() {
   server.listen(0, '127.0.0.1', async () => {
     const port = server.address().port;
     const session = `pb-snapshot-fixtures-${process.pid}`;
-    const env = { ...process.env, AGENT_BROWSER_EXECUTABLE_PATH: chromium };
+    const scratch = mkdtempSync(join(tmpdir(), 'pb-snapshot-fixtures-'));
+    for (const d of ['home', 'xdg-config', 'xdg-cache', 'xdg-data', 'xdg-runtime', 'tmp']) mkdirSync(join(scratch, d), { mode: 0o700 });
+    const env = agentBrowserEnv(process.env, chromium, scratch);
     const run = async (step, args) => {
       let out;
       try {
-        ({ stdout: out } = await promisify(execFile)(process.execPath, [AB_LAUNCHER, '--session', session, ...args, '--json'], { env, encoding: 'utf8', timeout: 120000 }));
+        ({ stdout: out } = await promisify(execFile)(process.execPath, [AB_LAUNCHER, '--session', session, ...args, '--json'], { env, cwd: scratch, encoding: 'utf8', timeout: 120000 }));
       } catch (err) {
         fail(step, `agent-browser ${args.join(' ')} exited ${err.status}: ${String(err.stderr || err.stdout || err.message).trim().slice(0, 300)}`);
       }
@@ -127,17 +154,69 @@ function main() {
       report(err);
     } finally {
       try {
-        await promisify(execFile)(process.execPath, [AB_LAUNCHER, '--session', session, 'close'], { env, timeout: 60000 });
+        await promisify(execFile)(process.execPath, [AB_LAUNCHER, '--session', session, 'close'], { env, cwd: scratch, timeout: 60000 });
       } catch {
         // the session may already be gone
       }
       server.close();
+      rmSync(scratch, { recursive: true, force: true });
     }
   });
 }
 
-try {
-  main();
-} catch (err) {
-  report(err);
+// The environment contract, checked against a hostile parent environment. The plant is the pre-fix construction
+// ({ ...process.env, ... }); the same assertions must go red on it, naming what leaked.
+function envFaults(env, scratch, chromium) {
+  const faults = [];
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('AGENT_BROWSER_') && key !== 'AGENT_BROWSER_EXECUTABLE_PATH') faults.push(`inherits ${key}`);
+  }
+  if (env.AGENT_BROWSER_EXECUTABLE_PATH !== chromium) faults.push('AGENT_BROWSER_EXECUTABLE_PATH is not the resolved Chromium');
+  for (const key of ['HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME']) {
+    if (!String(env[key] ?? '').startsWith(`${scratch}/`)) faults.push(`${key} is ${JSON.stringify(env[key])}, not under the scratch directory`);
+  }
+  for (const key of Object.keys(env)) if (!['PATH', 'LANG', 'LC_ALL', 'HOME', 'TMPDIR', 'AGENT_BROWSER_EXECUTABLE_PATH'].includes(key) && !key.startsWith('XDG_')) faults.push(`inherits ${key}`);
+  if (env.PATH !== '/usr/bin:/bin') faults.push('PATH was not carried over');
+  return faults;
+}
+
+function selfTest() {
+  const hostile = {
+    PATH: '/usr/bin:/bin', HOME: '/home/dev', LANG: 'C', XDG_CONFIG_HOME: '/home/dev/.config', SECRET_TOKEN: 'x',
+    AGENT_BROWSER_PROFILE: '/home/dev/profile', AGENT_BROWSER_AUTO_CONNECT: '1', AGENT_BROWSER_INIT_SCRIPTS: '/home/dev/inject.js',
+    AGENT_BROWSER_EXTENSIONS: '/home/dev/ext', AGENT_BROWSER_PROXY: 'http://proxy', AGENT_BROWSER_CONFIG: '/home/dev/ab.json',
+    AGENT_BROWSER_EXECUTABLE_PATH: '/home/dev/other-chromium',
+  };
+  const scratch = '/scratch/pb';
+  const chromium = '/usr/bin/chromium';
+  let failures = 0;
+  const control = envFaults(agentBrowserEnv(hostile, chromium, scratch), scratch, chromium);
+  if (control.length) {
+    console.error(`${NAME} self-test: FAIL -- the clean construction is not green (${control.join('; ')}), so the plant below proves nothing`);
+    return 1;
+  }
+  console.log(`${NAME} self-test: control -- a hostile parent environment (6 AGENT_BROWSER_* variables, HOME, XDG_CONFIG_HOME, a secret) reaches the child as PATH, locale, a scratch HOME and the resolved Chromium only`);
+  const planted = envFaults({ ...hostile, AGENT_BROWSER_EXECUTABLE_PATH: chromium }, scratch, chromium);
+  for (const want of ['inherits AGENT_BROWSER_AUTO_CONNECT', 'inherits AGENT_BROWSER_INIT_SCRIPTS', 'inherits AGENT_BROWSER_PROFILE', 'HOME is "/home/dev"', 'inherits SECRET_TOKEN']) {
+    if (planted.some((f) => f.includes(want))) console.log(`  ok pre-fix { ...process.env } construction -> red, naming '${want}'`);
+    else { console.error(`  FAIL pre-fix { ...process.env } construction -> stayed green on '${want}'`); failures++; }
+  }
+  const dropped = envFaults(agentBrowserEnv({ ...hostile, PATH: undefined }, chromium, scratch), scratch, chromium);
+  if (dropped.includes('PATH was not carried over')) console.log("  ok a dropped PATH -> red, naming 'PATH was not carried over'");
+  else { console.error('  FAIL a dropped PATH stayed green'); failures++; }
+  if (failures) { console.error(`${NAME} self-test: FAIL -- ${failures} plant(s) did not go red`); return 1; }
+  console.log(`${NAME} self-test: PASS -- the allowlisted environment is clean and the unfiltered one is refused on each leak`);
+  return 0;
+}
+
+const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMain) {
+  if (process.argv.includes('--self-test')) {
+    process.exit(selfTest());
+  }
+  try {
+    main();
+  } catch (err) {
+    report(err);
+  }
 }
