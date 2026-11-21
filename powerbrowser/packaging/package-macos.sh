@@ -48,6 +48,16 @@ MOZCONFIG_TRACKED="$ROOT/powerbrowser/packaging/mozconfig-macos-$ARCH"
 APP="$ROOT/theia/applications/browser"
 LIPO="${LIPO:-llvm-lipo}"
 fail() { echo "package-macos: FAIL -- $*" >&2; exit 1; }
+# 68-WR-02: no staged file may name the build checkout. grep exits 1 for no match and 2 for an error
+# (an unreadable file, a missing target such as a mistyped directory, an I/O error); an error is a
+# failure, not a pass, as check-win-sidecar.sh purge states. $1 names the tree in the message.
+checkout_grep() {
+    local what="$1" hits rc=0
+    shift
+    hits="$(grep -rlF -e "$ROOT/" -- "$@")" || rc=$?
+    [ "$rc" -le 1 ] || fail "grep could not read $what while looking for $ROOT/ (exit $rc)"
+    [ -z "$hits" ] || fail "$what still carries a checkout path: $(head -n1 <<<"$hits")"
+}
 command -v "$LIPO" >/dev/null || fail "$LIPO not found; enter nix develop .#firefox-macos (llvm supplies llvm-lipo), or set LIPO to a lipo that supports -archs"
 
 # --- orca-universal: one <GreD>/orca from two thin Orca trees (P68-31) ----------------------------
@@ -70,6 +80,7 @@ orca_universal() {
     mkdir -p "$out/out"
     cp -a "$arm/package.json" "$out/package.json"
     cp -a "$arm/out/orcad" "$arm/out/web" "$out/out/"
+    bash "$ROOT/powerbrowser/packaging/stage-orca-licence.sh" "$ROOT" "$out"
     while IFS=$'\t' read -r kind a x; do
         case "$kind" in
             pair)
@@ -267,9 +278,7 @@ universal() {
     if [ "$(uname -s)" = Darwin ]; then
         test "$("$A/node/bin/node" --version)" = "$NODE_VERSION" || fail "the merged node does not report $NODE_VERSION"
     fi
-    while IFS= read -r f; do
-        fail "the merged sidecar still carries a checkout path: $f"
-    done < <(grep -rlF "$ROOT/" "$A" "$WORK/orca-merged" 2>/dev/null || true)
+    checkout_grep "the merged sidecar" "$A" "$WORK/orca-merged"
 
     # 6: stage, refresh precomplete, sign ad hoc.
     mv "$A/theia" "$A/node" "$UNI/Contents/Resources/"
@@ -397,6 +406,8 @@ mkdir -p "$RES/theia/node_modules/better-sqlite3/lib" "$RES/theia/node_modules/b
 cp -a "$ROOT/theia/node_modules/better-sqlite3/lib/." "$RES/theia/node_modules/better-sqlite3/lib/"
 cp "$ROOT/theia/node_modules/better-sqlite3/package.json" "$RES/theia/node_modules/better-sqlite3/package.json"
 cp "$ROOT/theia/node_modules/better-sqlite3/prebuilds/$PREBUILD" "$RES/theia/node_modules/better-sqlite3/prebuilds/$PREBUILD"
+# 63-CR-01: the Claude Code process wrapper, where the orca-agents backend's require.resolve finds it.
+bash "$ROOT/powerbrowser/packaging/stage-orca-agents-wrapper.sh" "$ROOT" "$RES/theia"
 
 # Node for this architecture, from the pinned archive. The tar member names carry the version and
 # the os-arch; the staged binary must be a Mach-O of this architecture (checked below).
@@ -412,6 +423,8 @@ rm -rf "$RES/orca"
 mkdir -p "$RES/orca/out"
 cp -a "$ORCA_TREE/package.json" "$RES/orca/package.json"
 cp -a "$ORCA_TREE/out/orcad" "$ORCA_TREE/out/web" "$RES/orca/out/"
+# packaging-prefs-network-02: Orca's own MIT notice, verified against the licence allowlist.
+bash "$ROOT/powerbrowser/packaging/stage-orca-licence.sh" "$ROOT" "$RES/orca"
 bash "$ROOT/powerbrowser/packaging/check-win-sidecar.sh" purge "$ORCA_TREE" "$RES/orca" \
     || fail "the staged Orca tree names the hosted build root"
 rm -rf "$ORCA_TREE"
@@ -466,9 +479,7 @@ perl -pi -e 's{//\s*node-file:\S+}{// node-file:<buildhost>}; s{"node-file:[^"]+
 # A checkout path must not ship: the staged sidecar and node, and any RUNPATH or bundle map key that
 # names the build checkout, fail the run naming the file. RUNPATH rewriting for Mach-O needs the exact
 # rpath string from the binary, so it is not guessed here; a hit fails rather than being rewritten.
-while IFS= read -r hit; do
-    fail "the staged bundle still carries a checkout path: $hit"
-done < <(grep -rlF "$ROOT/" "$RES/theia" "$RES/node" "$RES/orca" 2>/dev/null || true)
+checkout_grep "the staged bundle" "$RES/theia" "$RES/node" "$RES/orca"
 
 # The bundle's precomplete must describe the staged files, because full MARs are made from it.
 # createprecomplete.py takes the Mac layout (Contents/Resources/precomplete, walked from the bundle
