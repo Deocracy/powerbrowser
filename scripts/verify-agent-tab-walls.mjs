@@ -72,6 +72,7 @@ const FILES = {
     chromeBar: 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx',
     setups: 'theia/extensions/modes/src/browser/setups-service.ts',
     catalogue: 'powerbrowser/INTERNAL-APIS.md',
+    orcaHost: 'orca/src/shared/browser-client-host-protocol.ts',
     dispatch: 'theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts',
     abilities: 'theia/extensions/orca-browser/src/common/orca-browser-abilities.ts',
     frontendModule: 'theia/extensions/orca-browser/src/browser/orca-browser-frontend-module.ts',
@@ -238,6 +239,16 @@ async function budgetClause(texts) {
     await run('a browser.snapshot result 2000 bytes under the budget', 'browser.snapshot', {}, { where: 'done', result: { snapshot: 'x'.repeat(max - 2000) } }, 'failed browser_error');
     await run('a small browser.snapshot result', 'browser.snapshot', {}, { where: 'done', result: { snapshot: 'x'.repeat(1000) } }, 'done');
     await run('a small browser.snapshot result on a page whose url is longer than the budget allows', 'browser.snapshot', {}, { where: 'done', result: { snapshot: 'x' } }, 'failed browser_error', `https://example.com/?q=${'a'.repeat(Math.ceil(max / 3))}`);
+    // Round 3: the page id the dispatcher adds is an Orca identity of up to N UTF-16 units (no byte bound), up to 6 JSON
+    // bytes each; N is read from Orca's schema when orca/ is present.
+    const idUnits = Number(/const Identity = z\.string\(\)\.min\(1\)\.max\((\d+)\)/.exec(texts.orcaHost ?? '')?.[1] ?? 256);
+    const idBytes = evalDeclarations(texts.api, ['AGENT_SNAPSHOT_ID_BYTES'], {}, ['AGENT_SNAPSHOT_ID_BYTES']).AGENT_SNAPSHOT_ID_BYTES;
+    if (!(idBytes >= idUnits * 6)) failures.push(`budget: the snapshot reserve keeps ${idBytes} bytes for the page id, below ${idUnits * 6} (${idUnits} UTF-16 units at 6 JSON bytes) (59-WR-03)`);
+    // 66-CR-04: a wait of more than the host's 10-minute cap is refused.
+    const waitCap = await (async () => { const w = worldOf(texts); w.addTab('a1', { agent: true }); return [await w.agent('a1', 'browser.wait', { timeout: 600001 }), await w.agent('a1', 'browser.wait', { timeout: 600000 })]; })();
+    if (waitCap[0]?.reason !== 'validation') failures.push(`budget: browser.wait with a timeout over 600000 ms answered ${JSON.stringify(waitCap[0])}; expected a validation refusal (66-CR-04)`);
+    if (waitCap[1]?.ok === false) failures.push('budget: broken instrument: browser.wait at exactly 600000 ms was refused');
+    if (!/Math\.min\(params\.timeout, 600000\)/.test(texts.child)) failures.push(`budget: ${FILES.child} browser.wait does not cap its timeout at 600000 ms (66-CR-04)`);
     await run('a browser.exec result over the budget in UTF-8 bytes only', 'browser.exec', { command: 'get html' }, { where: 'done', result: { value: '€'.repeat(Math.ceil(max / 2.5)) } }, 'failed browser_error');
     return failures;
 }
@@ -371,15 +382,20 @@ async function cookiesClause(texts) {
         { host: '.example.com', name: 'sid', value: 'SECRET-EXAMPLE', path: '/', isHttpOnly: true, isSession: true, sameSite: 1 },
         { host: 'app.example.com', name: 'theme', value: 'dark', path: '/', isHttpOnly: false, isSession: true, sameSite: 1 },
         { host: '.other.test', name: 'sid', value: 'SECRET-OTHER', path: '/', isHttpOnly: true, isSession: true, sameSite: 1 },
+        // A partitioned (CHIPS) httpOnly cookie: Gecko matches origin attributes exactly, so only a pattern read sees it.
+        { host: 'app.example.com', name: 'psid', value: 'SECRET-PARTITIONED', path: '/', isHttpOnly: true, isSession: true, sameSite: 1, partitionKey: '(https,example.com)' },
     ];
     const calls = [];
+    const added = [];
     const site = h => h.replace(/^\./, '').split('.').slice(-2).join('.');
     // The world's Services object is its vm context's global; the context's own Function constructor reaches it.
     const services = contextGlobal(w, 'Services');
     services.cookies = {
-        getCookiesFromHost: (host) => { calls.push(`getCookiesFromHost ${host}`); return jar.filter(c => site(c.host) === site(host)); },
-        getCookiesWithOriginAttributes: () => { calls.push('getCookiesWithOriginAttributes'); return jar; },
-        add: (host) => { calls.push(`add ${host.replace(/^\./, '')}`); return { result: 0 }; },
+        // Exact origin attributes, as Gecko matches them: the partitioned cookie is not in this read.
+        getCookiesFromHost: (host) => { calls.push(`getCookiesFromHost ${host}`); return jar.filter(c => site(c.host) === site(host) && !c.partitionKey); },
+        // A pattern: every partition of the container, for the host's site when a host is given.
+        getCookiesWithOriginAttributes: (pattern, host) => { calls.push(host ? `pattern ${host}` : 'getCookiesWithOriginAttributes'); return host ? jar.filter(c => site(c.host) === site(host)) : jar; },
+        add: (host, path, name, value, secure, httpOnly) => { calls.push(`add ${host.replace(/^\./, '')}`); added.push({ host, path, name, secure, httpOnly }); return { result: 0 }; },
     };
     // Gecko's eTLD service throws for an IP address and for a host with too few labels.
     services.eTLD = { getBaseDomainFromHost: h => { if (/^[\d.]+$/.test(h) || !h.includes('.')) throw new Error('NS_ERROR_HOST_IS_IP_ADDRESS'); return site(h); } };
@@ -406,7 +422,14 @@ async function cookiesClause(texts) {
     // The httpOnly wall: the agent picks the current site with browser.goto, so the site scope alone is no wall.
     for (const [label, method, params] of [
         ['cookie.set with httpOnly true', 'browser.cookie.set', { name: 'fresh', value: 'x', domain: 'app.example.com', httpOnly: true }],
-        ['cookie.set over a name the site holds as httpOnly', 'browser.cookie.set', { name: 'sid', value: 'attacker', domain: 'app.example.com', path: '/app' }],
+        ['cookie.set over a name the site holds as httpOnly', 'browser.cookie.set', { name: 'sid', value: 'attacker', domain: 'app.example.com' }],
+        ['cookie.set over a name the site holds as httpOnly in a partition', 'browser.cookie.set', { name: 'psid', value: 'attacker' }],
+        ['cookie.set with a path other than /', 'browser.cookie.set', { name: 'fresh', value: 'x', path: '/app' }],
+        ['cookie.set of a __Host- name', 'browser.cookie.set', { name: '__Host-sid', value: 'x', secure: true }],
+        ['cookie.set of a __Secure- name', 'browser.cookie.set', { name: '__secure-sid', value: 'x', secure: true }],
+        ['cookie.set for a sibling host', 'browser.cookie.set', { name: 'fresh', value: 'x', domain: 'api.example.com' }],
+        ['cookie.set as a domain cookie for the registrable domain', 'browser.cookie.set', { name: 'fresh', value: 'x', domain: '.example.com' }],
+        ['cookie.set of SameSite None without Secure', 'browser.cookie.set', { name: 'fresh', value: 'x', sameSite: 'None' }],
         ['cookie.delete of an httpOnly cookie', 'browser.cookie.delete', { name: 'sid', domain: 'example.com' }],
     ]) {
         calls.length = 0;
@@ -417,8 +440,17 @@ async function cookiesClause(texts) {
     const plain = await w.agent('a1', 'browser.cookie.delete', { name: 'theme', domain: 'app.example.com' });
     if (plain?.where !== 'done' || !calls.includes('add app.example.com')) failures.push(`cookies: cookie.delete of a plain cookie on the current site answered ${JSON.stringify(plain)}; expected done (positive control)`);
     calls.length = 0;
+    added.length = 0;
     const own = await w.agent('a1', 'browser.cookie.set', { name: 'theme', value: 'light', domain: 'app.example.com' });
     if (own?.where !== 'done' || !calls.includes('add app.example.com')) failures.push(`cookies: cookie.set on the current site answered ${JSON.stringify(own)}; expected done (positive control)`);
+    const made = added[0];
+    if (made && (made.host !== 'app.example.com' || made.path !== '/' || made.httpOnly !== false)) failures.push(`cookies: cookie.set made ${JSON.stringify(made)}; expected a host-only cookie on the current host, path /, not httpOnly, no more than page script makes (agent-browser-03)`);
+    // Secure only on an https page, as page script.
+    const plainPage = w.addTab('a2', { agent: true });
+    plainPage.browser.currentURI = { host: 'app.example.com', spec: 'http://app.example.com/' };
+    calls.length = 0;
+    const insecure = await w.agent('a2', 'browser.cookie.set', { name: 'fresh', value: 'x', secure: true });
+    if (insecure?.where === 'done' || calls.some(c => c.startsWith('add '))) failures.push(`cookies: cookie.set with Secure on an http page answered ${JSON.stringify(insecure?.where)}; page script there cannot set Secure (agent-browser-03)`);
     return failures;
 }
 
@@ -484,6 +516,45 @@ async function agentFlagClause(texts) {
     if (!/rowKey: tab\.rowKey, url: tab\.url/.test(setups)) failures.push(`agentFlag: session restore: ${FILES.setups} saveSession no longer saves each tab's row key, so an agent row cannot be recognised on the next launch`);
     if (!/const options: WebTabOptions = \{.*key: tab\.rowKey \};/.test(setups)) failures.push(`agentFlag: Setup and session restore: ${FILES.setups} restoreWebTab no longer opens a tab under its saved row key (agent-browser-02)`);
     if (!/openUrl\(tab\.url, tab\.key/.test(stripComments(texts.chromeBar))) failures.push(`agentFlag: Reopen Closed Tab: ${FILES.chromeBar} reopenClosedTabRow no longer opens the closed row under its key (agent-browser-02)`);
+    // Round 3: the agent-key form exactly (anchored, the dash, lower case, bounded), read from the source.
+    const keyRe = evalDeclarations(texts.api, ['AGENT_ROW_KEY_RE'], {}, ['AGENT_ROW_KEY_RE']).AGENT_ROW_KEY_RE;
+    if (typeof keyRe?.test !== 'function') {
+        failures.push('agentFlag: broken instrument: AGENT_ROW_KEY_RE not found');
+    } else {
+        if (!keyRe.test('web:agent-wt-abc123-1')) failures.push('agentFlag: AGENT_ROW_KEY_RE rejects a real agent row key');
+        for (const loose of ['web:agentwt-1', 'web:AGENT-wt-1', 'xweb:agent-wt-1', 'web:agent-wt-1/x', 'web:agent-', `web:agent-${'a'.repeat(55)}`]) {
+            if (keyRe.test(loose)) failures.push(`agentFlag: AGENT_ROW_KEY_RE accepts ${JSON.stringify(loose)}, a key no agent tab has (agent-browser-02)`);
+        }
+    }
+    // Round 3: the effective key. No key and a tab id of the agent form derive web:agent-<id>: that is an agent tab,
+    // never a user tab that would reopen as one after a relaunch with the user's history.
+    const derived = worldOf(texts);
+    derived.api.webTabOpen(derived.theiaBrowser, derived.frontend, 'agent-x', 'https://example.com/', undefined, undefined, null, false);
+    if (derived.webTabs.get('agent-x')?.agent !== true) failures.push('agentFlag: an open with tab id agent-x, no key and no flag made a user tab whose row key is web:agent-x; after a relaunch it reopens as an agent tab with the user\'s history (agent-browser-02)');
+    const adopt = contextGlobal(derived, 'adoptPendingOverlay');
+    const adopted = typeof adopt === 'function' ? adopt('webTabAdopt', 'agent-y', 'pc-1', derived.frontend) : null;
+    if (adopted?.ok !== false || adopted?.reason !== 'validation') failures.push(`agentFlag: an adopted overlay under tab id agent-y answered ${JSON.stringify(adopted)}; a user overlay must never get an agent row key (agent-browser-02)`);
+    // Round 3: agent tabs saved before the agent row key are found by their kept history and reopen as agent tabs.
+    const legacy = worldOf(texts);
+    const prefs = new Map();
+    const legacyServices = contextGlobal(legacy, 'Services');
+    legacyServices.prefs = {
+        getIntPref: (name, fallback) => (name === 'powerbrowser.orca.agentUserContextId' ? 7 : fallback),
+        setIntPref() {}, getBoolPref: (name, fallback) => fallback,
+        getStringPref: (name, fallback) => (prefs.has(name) ? prefs.get(name) : fallback),
+        setStringPref: (name, value) => prefs.set(name, value),
+    };
+    const sweep = contextGlobal(legacy, 'agentSweepLegacyHistories');
+    const added = typeof sweep === 'function' ? sweep({
+        'web:wt-old-1': { index: 1, entries: [{ url: 'https://a.example/', triggeringPrincipal_base64: '{"1":{"0":"https://a.example/^userContextId=7"}}' }] },
+        'web:wt-user-1': { index: 1, entries: [{ url: 'https://b.example/', triggeringPrincipal_base64: '{"1":{"0":"https://b.example/"}}' }] },
+        'web:wt-other-1': { index: 1, entries: [{ url: 'https://c.example/', triggeringPrincipal_base64: '{"1":{"0":"https://c.example/^userContextId=70"}}' }] },
+    }) : null;
+    legacy.api.webTabOpen(legacy.theiaBrowser, legacy.frontend, 'wt-new-1', 'https://a.example/', 'web:wt-old-1', undefined, null, false);
+    legacy.api.webTabOpen(legacy.theiaBrowser, legacy.frontend, 'wt-new-2', 'https://b.example/', 'web:wt-user-1', undefined, null, false);
+    legacy.api.webTabOpen(legacy.theiaBrowser, legacy.frontend, 'wt-new-3', 'https://c.example/', 'web:wt-other-1', undefined, null, false);
+    if (added !== 1 || legacy.webTabs.get('wt-new-1')?.agent !== true) failures.push(`agentFlag: a row saved before the agent row key whose history carries the agent container came back as agent ${JSON.stringify(legacy.webTabs.get('wt-new-1')?.agent)} (sweep added ${added}); expected an agent tab (agent-browser-02)`);
+    if (legacy.webTabs.get('wt-new-2')?.agent === true || legacy.webTabs.get('wt-new-3')?.agent === true) failures.push('agentFlag: the legacy sweep made a user row (or another container\'s) an agent tab');
     w.api.webTabOpen(w.theiaBrowser, w.frontend, 'u9', 'https://example.com/', undefined, undefined, null, false);
     if (w.webTabs.get('u9')?.agent === true) failures.push('agentFlag: a fresh user tab was made an agent tab');
 
@@ -521,7 +592,7 @@ async function stopClause(texts) {
     const w = worldOf(texts);
     w.addTab('a1', { agent: true });
     w.addTab('a2', { agent: true });
-    // A frontend in another shell window: Stop is the window's, so it is not stopped.
+    // A frontend in another shell window: orcad lets a caller place a page on any browser host, so Stop covers it too.
     const otherWindow = { browsingContext: { top: { embedderElement: { ownerDocument: { defaultView: {} } } } } };
     w.addTab('f1', { agent: true, owner: otherWindow });
     if (w.api.webTabOpen(w.theiaBrowser, w.frontend, 'r1', 'https://example.com/', undefined, undefined, null, true) !== 'opened') return ['stop: broken instrument: the agent open did not open'];
@@ -536,11 +607,14 @@ async function stopClause(texts) {
     const reopenCall = await w.agent('r1', 'browser.click', { element: '#e' });
     if (reopen !== 'opened' || reopenCall?.where !== 'agent-stopped') failures.push(`stop: a stopped frontend's crashed agent tab reopened ${reopen} and answered ${JSON.stringify(reopenCall?.where)}; expected opened and agent-stopped`);
     const foreign = await w.agent('f1', 'browser.click', { element: '#e' }, otherWindow);
-    if (foreign?.where !== 'done') failures.push(`stop: Stop in one shell window stopped another window's agent tab (${JSON.stringify(foreign?.where)})`);
+    if (foreign?.where !== 'agent-stopped') failures.push(`stop: Stop in one shell window left another window's agent tab working (${JSON.stringify(foreign?.where)}); orcad lets an agent place its next page on any browser host (agent-browser-04)`);
     // A reload of the Theia document is a new frontend actor in the same window: the stop holds for it.
     const reloaded = { browsingContext: { top: { embedderElement: w.theiaBrowser } } };
     const afterReload = w.api.webTabOpen(w.theiaBrowser, reloaded, 'n5', 'about:blank', 'web:agent-n5', undefined, null, true);
     if (afterReload !== 'agent-stopped' || w.webTabs.has('n5')) failures.push(`stop: after a reload of the Theia document a new agent tab answered ${afterReload}; Stop must survive a frontend reload, which an agent with a shell can force (agent-browser-04)`);
+    // An agent row key with no flag is an agent tab too: while stopped, no such tab is made either.
+    const keyOnly = w.api.webTabOpen(w.theiaBrowser, w.frontend, 'n6', 'about:blank', 'web:agent-n6', undefined, null, false);
+    if (keyOnly !== 'agent-stopped' || w.webTabs.has('n6')) failures.push(`stop: while stopped, an open under an agent row key with no flag answered ${keyOnly}; expected agent-stopped and no overlay (agent-browser-04)`);
     // Chrome tells the frontend which tabs are agent tabs, so the mark does not depend on the widget's own flag.
     const created = w.rec.pushes.filter(p => p.kind === 'agentControlChanged' && p.tabId === 'r1');
     if (!created.length || created.some(p => p.agent !== true)) failures.push(`stop: chrome's control pushes for agent tab r1 (${JSON.stringify(created)}) do not carry agent true, so a restored agent row with no widget flag has no mark, Stop or Resume (agent-browser-04)`);
@@ -550,6 +624,15 @@ async function stopClause(texts) {
     const after = await w.agent('a1', 'browser.click', { element: '#e' });
     const afterOpen = w.api.webTabOpen(w.theiaBrowser, w.frontend, 'n2', 'about:blank', undefined, undefined, null, true);
     if (resumed?.where !== 'resumed' || after?.where !== 'done' || afterOpen !== 'opened') failures.push(`stop: Resume answered ${JSON.stringify(resumed?.where)}, then a call ${JSON.stringify(after?.where)} and a new agent tab ${afterOpen}; expected resumed, done, opened`);
+    // Resume only from a stopped tab, where its button is drawn; chrome cannot tell a click from same-realm script.
+    const loose = await w.actionArms({ kind: 'webTabAgentStop', tabId: 'a1', resume: true }, w.frontend);
+    if (loose?.where !== 'not-stopped') failures.push(`stop: Resume on a tab that is not stopped answered ${JSON.stringify(loose?.where)}; expected not-stopped (agent-browser-04)`);
+    // The fullscreen cover: an agent page never takes the shell window over the mark and its Stop.
+    const enter = bodyOf(stripComments(texts.api), 'enterDomFullscreen(aBrowser, aActor) {') ?? '';
+    const guardAt = enter.search(/webTabs\.get\(tabIdOfBrowser\(aBrowser\)\)\?\.agent === true\) \{\s*abortEnterFullscreen\(window, aActor\);\s*return;/);
+    const enteredAt = enter.indexOf('DOMFullscreen:Entered');
+    if (!enter || enteredAt === -1) failures.push('stop: broken instrument: enterDomFullscreen or its DOMFullscreen:Entered send not found');
+    else if (guardAt === -1 || guardAt > enteredAt) failures.push('stop: enterDomFullscreen lets an agent page take the shell window, covering the mark and Stop (agent-browser-04)');
 
     // The dispatcher.
     const ts = loadTypescript(REPO_ROOT);
@@ -661,6 +744,13 @@ async function socketTableClause(texts) {
     const table = await hosting.readLoopbackSocketTable();
     if (table.tcp !== 'v4 table' || table.tcp6 !== 'v6 table' || table.uid !== 1000) failures.push(`socketTable: read ${JSON.stringify(table)}; expected both TCP tables (tcp6 holds a dual-stack listener) and uid 1000 (orcad-hosting-03)`);
     if (reads.some(r => !(r.maxBytes > 0))) failures.push('socketTable: a procfs read without an explicit maxBytes reads nothing (procfs reports size 0)');
+    if (table.truncated !== false) failures.push(`socketTable: a short table reported truncated ${JSON.stringify(table.truncated)}`);
+    const full = evalDeclarations(texts.api, ['PowerBrowserProcesses', 'PowerBrowserOrcaHosting'], {
+        TextDecoder,
+        IOUtils: { read: async (path, options) => new Uint8Array(path.includes('tcp') ? options.maxBytes : 4) },
+    }, ['PowerBrowserOrcaHosting']).PowerBrowserOrcaHosting;
+    const big = await full.readLoopbackSocketTable();
+    if (big.truncated !== true) failures.push('socketTable: a table that filled the read cap was not reported truncated, so a lost holder row reads as no holder (round 3)');
     let failed;
     try { failed = await make(true).readLoopbackSocketTable(); } catch (err) { failed = { threw: err.message }; }
     if (failed?.tcp !== '' || failed?.tcp6 !== '' || failed?.uid !== null) failures.push(`socketTable: a failed read resolved ${JSON.stringify(failed)}; expected empty tables and uid null, never a throw`);
@@ -712,6 +802,27 @@ function replaceOnce(text, from, to, what) {
 }
 
 const PLANTS = [
+    { name: 'round 3: the agent-key pattern unanchored', plant: t => ({ ...t, api: replaceOnce(t.api, 'const AGENT_ROW_KEY_RE = /^web:agent-', 'const AGENT_ROW_KEY_RE = /web:agent-', 'key anchor') }), expect: 'accepts "xweb:agent-wt-1"' },
+    { name: 'round 3: the agent-key pattern without its dash', plant: t => ({ ...t, api: replaceOnce(t.api, 'const AGENT_ROW_KEY_RE = /^web:agent-', 'const AGENT_ROW_KEY_RE = /^web:agent-?', 'key dash') }), expect: 'accepts "web:agentwt-1"' },
+    { name: 'round 3: the agent-key pattern case-insensitive', plant: t => ({ ...t, api: replaceOnce(t.api, 'const AGENT_ROW_KEY_RE = /^web:agent-[A-Za-z0-9_-]{1,54}$/;', 'const AGENT_ROW_KEY_RE = /^web:agent-[A-Za-z0-9_-]{1,54}$/i;', 'key case') }), expect: 'accepts "web:AGENT-wt-1"' },
+    { name: 'round 3: the agent-key test reads only the key sent', plant: t => ({ ...t, api: replaceOnce(t.api, 'AGENT_ROW_KEY_RE.test(key ?? `web:${tabId}`)', 'AGENT_ROW_KEY_RE.test(key ?? "")', 'effective key') }), expect: 'tab id agent-x, no key and no flag' },
+    { name: 'round 3: an adopted overlay may take an agent tab id', plant: t => ({ ...t, api: replaceOnce(t.api, '  if (agentTabRemembered(tabId, undefined)) {\n    return { ok: false, reason: "validation", message: "handleWebTabAction: refusing an agent tab id for an adopted overlay" };\n  }\n', '', 'adopt guard') }), expect: 'an adopted overlay under tab id agent-y' },
+    { name: 'round 3: no legacy sweep', plant: t => ({ ...t, api: replaceOnce(t.api, '      if (AGENT_ROW_KEY_RE.test(key) || keys.has(key) || !mark.test(JSON.stringify(history))) {', '      if (true) {', 'sweep') }), expect: 'a row saved before the agent row key' },
+    { name: 'round 3: the legacy mark matches any container id prefix', plant: t => ({ ...t, api: replaceOnce(t.api, 'userContextId=${id}(?![0-9])', 'userContextId=${id}', 'sweep bound') }), expect: 'made a user row (or another container' },
+    { name: 'round 3: an agent row key with no flag opens while stopped', plant: t => ({ ...t, api: replaceOnce(t.api, 'if ((agent === true || remembered) && !agentTabIds.has(tabId) && agentOwnerStopped(actorRef)) {', 'if (agent === true && !agentTabIds.has(tabId) && agentOwnerStopped(actorRef)) {', 'stopped key') }), expect: 'an open under an agent row key with no flag answered' },
+    { name: 'round 3: Stop scoped to one window', plant: t => ({ ...t, api: replaceOnce(t.api, 'function agentStopScope() {\n  return AGENT_STOP_SCOPE;\n}', 'function agentStopScope(actorRef) {\n  return actorRef?.browsingContext?.top?.embedderElement?.ownerDocument?.defaultView ?? actorRef ?? null;\n}', 'stop scope') }), expect: "left another window's agent tab working" },
+    { name: 'round 3: Resume on a tab that is not stopped', plant: t => ({ ...t, api: replaceOnce(t.api, '    if (!entry.agentControl?.stopped) {\n      return { ok: true, kind, where: "not-stopped" };\n    }\n', '', 'resume gate') }), expect: 'Resume on a tab that is not stopped' },
+    { name: 'round 3: an agent page may enter fullscreen', plant: t => ({ ...t, api: replaceOnce(t.api, '      if (webTabs.get(tabIdOfBrowser(aBrowser))?.agent === true) {\n        abortEnterFullscreen(window, aActor);\n        return;\n      }\n', '', 'fullscreen') }), expect: 'lets an agent page take the shell window' },
+    { name: 'round 3: the httpOnly name test reads the unpartitioned jar only', plant: t => ({ ...t, api: replaceOnce(t.api, 'return Services.cookies.getCookiesWithOriginAttributes(JSON.stringify(attrs), host).some(', 'return Services.cookies.getCookiesFromHost(host, attrs).some(', 'partition') }), expect: 'httpOnly in a partition' },
+    { name: 'round 3: cookie prefixes not refused', plant: t => ({ ...t, api: replaceOnce(t.api, '!/^__(host|secure)-/i.test(params.name)', 'true', 'prefixes') }), expect: 'cookie.set of a __Host- name' },
+    { name: 'round 3: cookie set for a sibling host', plant: t => ({ ...t, api: replaceOnce(t.api, 'const narrow = domain === host &&', 'const narrow = agentSiteOf(domain) === agentSiteOf(host) &&', 'sibling') }), expect: 'cookie.set for a sibling host' },
+    { name: 'round 3: cookie set at any path', plant: t => ({ ...t, api: replaceOnce(t.api, '(params.path === undefined || params.path === null || params.path === "/") &&', '', 'path') }), expect: 'cookie.set with a path other than /' },
+    { name: 'round 3: Secure on an http page', plant: t => ({ ...t, api: replaceOnce(t.api, '(params.secure !== true || securePage) &&', '', 'secure page') }), expect: 'cookie.set with Secure on an http page' },
+    { name: 'round 3: SameSite None without Secure', plant: t => ({ ...t, api: replaceOnce(t.api, ' && (sameSite !== 0 || params.secure === true);', ';', 'samesite') }), expect: 'SameSite None without Secure' },
+    { name: 'round 3 (59-WR-03): the page-id reserve below 1536', plant: t => ({ ...t, api: replaceOnce(t.api, 'const AGENT_SNAPSHOT_ID_BYTES = 256 * 6;', 'const AGENT_SNAPSHOT_ID_BYTES = 384;', 'id reserve') }), expect: 'bytes for the page id' },
+    { name: '66-CR-04: the wait validator has no cap', plant: t => ({ ...t, api: replaceOnce(t.api, ' && v <= AGENT_WAIT_MAX_MS)', ')', 'wait validator') }), expect: 'timeout over 600000 ms answered' },
+    { name: '66-CR-04: the child wait has no cap', plant: t => ({ ...t, child: replaceOnce(t.child, 'Math.min(params.timeout, 600000)', 'params.timeout', 'child wait') }), expect: 'does not cap its timeout' },
+    { name: 'round 3: no truncation flag on the socket table', plant: t => ({ ...t, api: replaceOnce(t.api, '        truncated ||= bytes.length >= cap;\n', '', 'truncated') }), expect: 'was not reported truncated' },
     {
         name: 'review item 6: the disableglobalhistory row removed',
         plant: t => ({ ...t, catalogue: t.catalogue.split('\n').filter(l => !l.startsWith('| `disableglobalhistory`')).join('\n') }),
@@ -724,7 +835,7 @@ const PLANTS = [
     },
     {
         name: 'agent-browser-04: Stop keyed on the frontend actor (a reload clears it)',
-        plant: t => ({ ...t, api: replaceOnce(t.api, 'return actorRef?.browsingContext?.top?.embedderElement?.ownerDocument?.defaultView ?? actorRef ?? null;', 'return actorRef ?? null;', 'stop scope') }),
+        plant: t => ({ ...t, api: replaceOnce(t.api, 'function agentStopScope() {\n  return AGENT_STOP_SCOPE;\n}', 'function agentStopScope(actorRef) {\n  return actorRef ?? null;\n}', 'stop scope') }),
         expect: 'Stop must survive a frontend reload',
     },
     {
@@ -744,7 +855,7 @@ const PLANTS = [
     },
     {
         name: 'agent-browser-02: chrome accepts an agent tab under a user row key',
-        plant: t => ({ ...t, api: replaceOnce(t.api, '      if (!AGENT_ROW_KEY_RE.test(key)) {', '      if (false) {', 'key refusal') }),
+        plant: t => ({ ...t, api: replaceOnce(t.api, '      if (!AGENT_ROW_KEY_RE.test(key) && !agentLegacyRowKeys().has(key)) {', '      if (false) {', 'key refusal') }),
         expect: 'an agent open under a user row key answered',
     },
     {
@@ -784,12 +895,12 @@ const PLANTS = [
     },
     {
         name: 'agent-browser-03: cookie.set makes an httpOnly cookie',
-        plant: t => ({ ...t, api: replaceOnce(t.api, 'if (!host || params.httpOnly === true || agentHttpOnlyNamed(', 'if (!host || agentHttpOnlyNamed(', 'httpOnly set') }),
+        plant: t => ({ ...t, api: replaceOnce(t.api, ' && params.httpOnly !== true &&', ' &&', 'httpOnly set') }),
         expect: 'cookie.set with httpOnly true answered',
     },
     {
         name: 'agent-browser-03: cookie.set overwrites or shadows an httpOnly name',
-        plant: t => ({ ...t, api: replaceOnce(t.api, 'if (!host || params.httpOnly === true || agentHttpOnlyNamed(host, params.name, agentOriginAttributes(entry))) {', 'if (!host || params.httpOnly === true) {', 'httpOnly name set') }),
+        plant: t => ({ ...t, api: replaceOnce(t.api, 'if (!narrow || agentHttpOnlyNamed(host, params.name, agentOriginAttributes(entry))) {', 'if (!narrow) {', 'httpOnly name set') }),
         expect: 'over a name the site holds as httpOnly',
     },
     {
@@ -829,7 +940,7 @@ const PLANTS = [
     },
     {
         name: 'agent-browser-04: chrome opens new agent tabs after Stop',
-        plant: t => ({ ...t, api: replaceOnce(t.api, 'if (agent === true && !agentTabIds.has(tabId) && agentOwnerStopped(actorRef)) {', 'if (false) {', 'open refusal') }),
+        plant: t => ({ ...t, api: replaceOnce(t.api, 'if ((agent === true || remembered) && !agentTabIds.has(tabId) && agentOwnerStopped(actorRef)) {', 'if (false) {', 'open refusal') }),
         expect: 'a new agent tab after Stop answered',
     },
     {
@@ -871,7 +982,7 @@ const PLANTS = [
     },
     {
         name: 'agent-browser-02: chrome forgets an agent tab row key',
-        plant: t => ({ ...t, api: replaceOnce(t.api, 'return agentTabIds.has(tabId) || AGENT_ROW_KEY_RE.test(key ?? "");', 'return agentTabIds.has(tabId);', 'remembered key') }),
+        plant: t => ({ ...t, api: replaceOnce(t.api, 'return agentTabIds.has(tabId) || AGENT_ROW_KEY_RE.test(key ?? `web:${tabId}`) || agentLegacyRowKeys().has(key ?? `web:${tabId}`);', 'return agentTabIds.has(tabId);', 'remembered key') }),
         expect: 'under an agent tab\'s row key',
     },
     {
@@ -992,7 +1103,7 @@ const PLANTS = [
     {
         name: 'agent-browser-03: the cookie rows act on any site',
         plant: t => ({ ...t, api: replaceOnce(t.api, 'return site && agentSiteOf(host) === site ? host : "";', 'return host;', 'site scope') }),
-        expect: 'cookie.set on another site answered',
+        expect: 'cookie.get for another site answered',
     },
     {
         name: 'chrome-actor-04: cookie.get with no url reads the whole agent container',
