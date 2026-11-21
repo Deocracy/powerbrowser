@@ -216,12 +216,10 @@ function selfTest() {
         failed += 1;
     };
 
-    // The plants copy both generated fragments from this tree; without them they cannot run (SKIP-PROTOCOL.md rule 4).
-    const absent = [FRONTEND_FRAGMENT_REL, BRANDING_FRAGMENT_REL].filter(rel => !existsSync(join(REPO_ROOT, rel)));
-    if (absent.length > 0) {
-        console.log(skipLine(`${NAME} --self-test`, `${absent.join(' and ')} absent, so the plants did not run. Next step: run ${RERUN_GENERATE}, then re-run this self-test`));
-        return SKIP_EXIT;
-    }
+    // Only the drifted-fragment plant needs a generated fragment; the fixtures copy the fragments this tree has. A plant
+    // whose input is absent does not run, every other case still runs and is judged, and the verdict comes at the end:
+    // FAIL wins, then a SKIP naming the plant (SKIP-PROTOCOL.md rule 4).
+    const selfSkips = [];
 
     // Green control first: the unmutated tree proves nothing if red.
     const control = runPinChecks(REPO_ROOT);
@@ -241,11 +239,14 @@ function selfTest() {
         { name: 'removed branding block', rel: APP_PKG_REL, drift: text => text.replace(/,\s*"powerbrowserBranding": \{[\s\S]*?\n {8}\}/, ''), expect: BRANDING_BLOCK_KEY },
     ];
     for (const plant of plants) {
+        if (!existsSync(join(REPO_ROOT, plant.rel))) {
+            selfSkips.push(`the '${plant.name}' plant did not run: ${plant.rel} is absent. Next step: run ${RERUN_GENERATE}, then re-run this self-test`);
+            continue;
+        }
         const dir = mkdtempSync(join(tmpdir(), 'theia-branding-selftest-'));
         try {
             copyInto(dir, MANIFEST_REL);
-            copyInto(dir, FRONTEND_FRAGMENT_REL);
-            copyInto(dir, BRANDING_FRAGMENT_REL);
+            for (const rel of [FRONTEND_FRAGMENT_REL, BRANDING_FRAGMENT_REL]) if (existsSync(join(REPO_ROOT, rel))) copyInto(dir, rel);
             copyInto(dir, APP_PKG_REL);
             // The mark read and the tsc step both reach back to the real
             // tree by construction (the fragment embeds brand/mark.svg; tsc
@@ -294,6 +295,10 @@ function selfTest() {
     if (failed > 0) {
         console.error(`${NAME}: --self-test FAIL -- ${failed} case(s) did not behave as required`);
         return 1;
+    }
+    if (selfSkips.length > 0) {
+        console.log(skipLine(`${NAME} --self-test`, selfSkips.join('; ')));
+        return SKIP_EXIT;
     }
     console.log(`${NAME}: --self-test PASS -- 3 planted faults all behaved as pinned, and a tree without the fragments or tsc exits 77`);
     return 0;

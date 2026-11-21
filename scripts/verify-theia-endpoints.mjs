@@ -214,11 +214,9 @@ function selfTest() {
         failed += 1;
     };
 
-    // Plant 2 copies the generated fragment from this tree; without it that plant cannot run (SKIP-PROTOCOL.md rule 4).
-    if (!existsSync(join(REPO_ROOT, FRAGMENT_REL))) {
-        console.log(skipLine(`${NAME} --self-test`, `${FRAGMENT_REL} is absent, so the plants did not run. Next step: run ${RERUN_GENERATE}, then re-run this self-test`));
-        return SKIP_EXIT;
-    }
+    // Plant 2 copies the generated fragment from this tree; without it that plant alone does not run. Every other case
+    // still runs and is judged; the verdict comes at the end: FAIL wins, then a SKIP naming it (SKIP-PROTOCOL.md rule 4).
+    const selfSkips = [];
 
     // Green control first: the unmutated tree proves nothing if red.
     const control = runChecks(REPO_ROOT);
@@ -266,7 +264,9 @@ function selfTest() {
     // Plant 2: a marked allowlist entry covering no manifest host must go
     // red NAMING the entry. The fixture manifest is the shipped one (no
     // crash_report), so the marked entry is stale by construction.
-    {
+    if (!existsSync(join(REPO_ROOT, FRAGMENT_REL))) {
+        selfSkips.push(`the 'stale marked entry' plant did not run: ${FRAGMENT_REL} is absent. Next step: run ${RERUN_GENERATE}, then re-run this self-test`);
+    } else {
         const dir = mkdtempSync(join(tmpdir(), 'theia-endpoints-selftest-'));
         try {
             copyInto(dir, MANIFEST_REL);
@@ -361,6 +361,10 @@ function selfTest() {
     if (failed > 0) {
         console.error(`${NAME}: --self-test FAIL -- ${failed} case(s) did not behave as required`);
         return 1;
+    }
+    if (selfSkips.length > 0) {
+        console.log(skipLine(`${NAME} --self-test`, selfSkips.join('; ')));
+        return SKIP_EXIT;
     }
     console.log(`${NAME}: --self-test PASS -- 4 planted faults all behaved as pinned, and a tree without the fragment exits 77`);
     return 0;

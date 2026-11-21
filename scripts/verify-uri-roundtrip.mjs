@@ -70,9 +70,10 @@
 // CommandRegistry by name) gives one hosted widget; pb-orca:<its name> through
 // the OpenerService round-trips under D-53 (a) and (b); pb-orca: then focuses
 // that widget and creates nothing; pb-orca:<word>99 opens and creates nothing.
-// The rows SKIP, named, only while theia/extensions/orca-panes, the built
-// orca/ or the pane bundle is absent, or the bundle has not booted (orcad not
-// ready); orca-panes present but the scheme unhandled is red.
+// The rows SKIP (exit 77), named, only while the built orca/ or the pane
+// bundle is absent. theia/extensions/orca-panes is tracked, so its absence is
+// red (source moved), as are a bundle that does not boot within 90 s with a
+// built tree and orca-panes present with the scheme unhandled.
 //
 // Phase 65 (P65-10, P65-27; interfaces N-1): the seven Orca page tabs
 // (ORCA_PAGE_ROWS). Each pb-orca:<view> opened twice through the OpenerService
@@ -104,8 +105,8 @@ Table-driven URI-01..URI-04 round-trip proof against @powerbrowser/tab-uris.
   --scheme <scheme>  Run only one scheme's rows: view, settings, terminal or
                        pb-orca (default: run everything, including the four
                        D-51 carve-outs). The pb-orca rows (Phase 64, TAB-02)
-                       SKIP, named, while theia/extensions/orca-panes, the
-                       built orca/ or the pane bundle is absent.
+                       SKIP, named, while the built orca/ or the pane bundle
+                       is absent; a missing theia/extensions/orca-panes is red.
   --help             Print this message and exit 0
 `;
 
@@ -390,11 +391,14 @@ const ORCA_PANES_REL = 'theia/extensions/orca-panes';
 const ORCA_PANE_FACTORY = 'powerbrowser.orca-pane';
 /** P65-10, N-1: Orca's page tabs, singletons opened by name (pb-orca:creating excluded). */
 const ORCA_PAGE_ROWS = ['pb-orca:tasks', 'pb-orca:activity', 'pb-orca:automations', 'pb-orca:space', 'pb-orca:skills', 'pb-orca:artifacts', 'pb-orca:mobile'];
-/** The pb-orca rows' named SKIP reason from the tree, or null. */
-function pbOrcaSkip() {
-    if (!existsSync(join(REPO_ROOT, ORCA_PANES_REL))) return 'lane p64-02 not merged (theia/extensions/orca-panes is absent)';
-    if (!existsSync(join(REPO_ROOT, 'orca/out/orcad/orcad.js'))) return 'no built orca/ (orca/out/orcad/orcad.js is absent)';
-    if (!existsSync(join(REPO_ROOT, 'orca/out/web/assets/pb-panes'))) return 'the pane bundle is not built (orca/out/web/assets/pb-panes is absent)';
+/**
+ * The pb-orca rows' inputs, judged from the tree with no browser: { fail } when a tracked source is missing (red,
+ * source moved), { skip } when an untracked build output is absent (SKIP-PROTOCOL.md), or null when they can run.
+ */
+export function pbOrcaInputs(root = REPO_ROOT) {
+    if (!existsSync(join(root, ORCA_PANES_REL))) return { fail: `${ORCA_PANES_REL} is absent, and it is tracked (source moved), so the pb-orca rows cannot run` };
+    if (!existsSync(join(root, 'orca/out/orcad/orcad.js'))) return { skip: 'no built orca/ (orca/out/orcad/orcad.js is absent)' };
+    if (!existsSync(join(root, 'orca/out/web/assets/pb-panes'))) return { skip: 'the pane bundle is not built (orca/out/web/assets/pb-panes is absent)' };
     return null;
 }
 
@@ -420,7 +424,8 @@ function buildPbOrcaExpression() {
         const deadline = Date.now() + 90000;
         let booted = false;
         while (Date.now() < deadline) { const n = globalThis[Symbol.for('powerbrowser.orca-panes.module')]; try { if (n && n.state().booted) { booted = true; break; } } catch (e) { /* not yet */ } await new Promise(r => setTimeout(r, 250)); }
-        if (!booted) return JSON.stringify({ skip: 'orcad not ready or the pane bundle did not boot within 90 s' });
+        // A built tree whose bundle does not boot is a failure, not an absent input.
+        if (!booted) return JSON.stringify({ rows: [{ label: 'pb-orca rows', ok: false, reason: 'orcad not ready or the pane bundle did not boot within 90 s, with a built orca/ and pane bundle' }] });
         const before = hosted().length;
         if (before !== 0) row('pb-orca: before any hosted tab', false, before + ' hosted widget(s) existed before the row ran (a restored layout); the empty-address row needs none');
         else {
@@ -467,9 +472,15 @@ function buildPbOrcaExpression() {
 
 async function main() {
     const results = [];
-    if (onlyScheme === 'pb-orca' && pbOrcaSkip()) {
+    const inputs = pbOrcaInputs();
+    if (onlyScheme === 'pb-orca' && inputs?.fail) {
+        // Nothing to drive: a tracked source is missing, so no browser is launched and the run is red.
+        console.error(`${NAME}: FAIL -- ${inputs.fail}. Next step: restore ${ORCA_PANES_REL} from version control`);
+        process.exit(1);
+    }
+    if (onlyScheme === 'pb-orca' && inputs?.skip) {
         // Nothing to drive: no browser is launched for rows that can only SKIP. Exit 77 (SKIP-PROTOCOL.md).
-        console.log(skipLine(NAME, `the pb-orca rows did not run: ${pbOrcaSkip()}. ${PB_ORCA_NEXT}`));
+        console.log(skipLine(NAME, `the pb-orca rows did not run: ${inputs.skip}. ${PB_ORCA_NEXT}`));
         process.exit(SKIP_EXIT);
     }
 
@@ -511,8 +522,8 @@ async function main() {
         }
 
         if (!onlyScheme || onlyScheme === 'pb-orca') {
-            const skip = pbOrcaSkip();
-            if (skip) results.push({ label: 'pb-orca', skip });
+            if (inputs?.fail) results.push({ label: 'pb-orca rows', carveOut: false, ok: false, reason: inputs.fail });
+            else if (inputs?.skip) results.push({ label: 'pb-orca', skip: inputs.skip });
             else runPbOrca = true; // in their own Orca session after this one
         }
 

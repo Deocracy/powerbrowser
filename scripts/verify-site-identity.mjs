@@ -30,9 +30,9 @@
  *      `openStockTab('about:…')` call site with a positive control (the
  *      existing `openStockTab` method is still found, so "removed
  *      everywhere" cannot pass);
- *   5. `MENU_ORDER` ids equal the hamburger `menuId`s rendered -- plan 04
- *      renders them, so before then this case is `SKIP menu-not-landed`,
- *      never pass, never silent; the sibling write-arm case asserts no
+ *   5. `MENU_ORDER` ids equal the hamburger `menuId`s rendered (plan 04
+ *      landed them; a case that returns anything but null is a failure,
+ *      never a pass and never a skip); the sibling write-arm case asserts no
  *      sender-supplied origin (the `data.origin` T-31-05 shape) with a
  *      positive control on the overlay-derived read;
  *   6. absence: `startsWith('https://')` appears nowhere in `address-bar.tsx`
@@ -1192,8 +1192,6 @@ async function runAt(tablePath, srcs, menuPath) {
         }
         if (got === null) {
             oks.push(name);
-        } else if (typeof got === 'string' && got.startsWith('SKIP ')) {
-            oks.push(`${name} (${got})`);
         } else {
             failures.push(`${name}: ${JSON.stringify(got)}`);
         }
@@ -1672,7 +1670,7 @@ async function selfTest() {
     let failed = 0;
     const sources = readSources();
     const clean = await runAt(join(REPO_ROOT, TABLE_REL), sources, join(REPO_ROOT, APP_MENU_REL));
-    const cleanRed = clean.failures.filter(f => !f.includes('SKIP'));
+    const cleanRed = clean.failures;
     if (cleanRed.length) {
         console.error(`${NAME} --self-test: FAIL -- the clean tree is not green: ${cleanRed.join(' | ')}`);
         return 1;

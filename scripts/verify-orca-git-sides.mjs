@@ -355,6 +355,26 @@ async function runSelfTest(texts) {
             } else console.log('  ok control: a tree without typescript -> exit 77, the SKIP line last, no PASS line');
         } finally { rmSync(empty, { recursive: true, force: true }); }
     }
+    // Partial-skip control (SKIP-PROTOCOL.md rule 2): the main mode, run as a child with its output captured, with a
+    // git on PATH that refuses every --filter clone. Clauses b and a2 do not run, every other clause runs green, so
+    // it must exit 77 with one SKIP line last naming b and a2, and no PASS line.
+    if (process.platform !== 'win32') {
+        const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
+        const wrapDir = mkdtempSync(join(tmpdir(), `${NAME}-nofilter-`));
+        try {
+            writeFileSync(join(wrapDir, 'git'), `#!/bin/sh\nfor a in "$@"; do case "$a" in --filter*) echo "fatal: --filter refused by the self-test" >&2; exit 128;; esac; done\nexec "${realGit}" "$@"\n`);
+            chmodSync(join(wrapDir, 'git'), 0o755);
+            const env = { ...process.env, PATH: `${wrapDir}:${process.env.PATH ?? ''}` };
+            const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], { encoding: 'utf8', env });
+            const lines = (r.stdout ?? '').split('\n').filter(l => l.trim() !== '');
+            const last = lines[lines.length - 1] ?? '';
+            if (!realGit || r.status !== SKIP_EXIT || !last.startsWith(`${NAME}: SKIP -- `) || !last.includes('b did not run') || !last.includes('a2 did not run')
+                || lines.some(l => l.includes(`${NAME}: PASS`)) || /: SKIP/.test(r.stderr ?? '')) {
+                console.error(`  FAIL control: a git that refuses --filter did not exit 77 with one SKIP line last naming b and a2 and no PASS line (status ${r.status}, last line ${JSON.stringify(last)}, stderr ${JSON.stringify((r.stderr ?? '').slice(0, 300))})`);
+                failures++;
+            } else console.log('  ok control: a git that refuses --filter -> exit 77, one SKIP line last naming b and a2, no PASS line');
+        } finally { rmSync(wrapDir, { recursive: true, force: true }); }
+    }
     if (failures) { console.error(`${NAME} self-test: FAIL -- ${failures} problem(s) across ${PLANTS.length} plants`); return 1; }
     console.log(`${NAME} self-test: PASS -- ${PLANTS.length} planted faults each went red naming the drift; the control re-ran green`);
     return 0;
