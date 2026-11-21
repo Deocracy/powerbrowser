@@ -3732,12 +3732,8 @@ run_own_checks() {
     # and requires this exact un-flagged invocation's decision function to
     # reject it, with a clean control proving the red is plant-caused.
     "scan-brand-residue-self-test|node $REPO_ROOT/scripts/scan-brand-residue.mjs --self-test"
-    # NEW (59-07prep): the D-09 re-date tool's self-test. It copies .planning/WINDOWS.md into a
-    # temp project, proves the dry run writes nothing, that a fixed or unknown id is refused before
-    # anything is written, and that the real run changes only the named entries' reason (status,
-    # counts and every other entry identical) through gsd-core's own WINDOWS.md parser, so gsd-tools
-    # still parses the result. The tool itself runs only in 59-07 with the date Chris names.
-    "redate-windows-self-test|node $REPO_ROOT/scripts/redate-windows.mjs --self-test"
+    # redate-windows-self-test moved to the full tier (audit harness-driver-06, 59-CR-03): it loads gsd-core's
+    # parser from the developer's home, which neither the commit gate nor CI may run.
     # NEW (deploy, 2026-10-31): two GitHub organisations each hold a powerbrowser repository,
     # so a hand-typed owner points at the wrong one without failing anything else. Every
     # github.com/<owner>/<repo> reference in tracked code, workflows and generated output must
@@ -6999,6 +6995,14 @@ run_own_checks() {
       # bundled-xpi-live-dev: the same three launches on the dev objdir, so the uBlock Origin blocking assertion runs in
       # every gate while bundled-xpi-live's exclusion (no release package, WINDOWS 30) stands (audit harness-driver-05).
       "bundled-xpi-live-dev|node $REPO_ROOT/scripts/verify-bundled-xpi.mjs --live --dev"
+      # NEW (59-07prep; full tier since audit harness-driver-06, 59-CR-03): the D-09 re-date tool's self-test. On a
+      # synthetic ledger built with gsd-core's own constructors (two open, one fixed, one waived; 59-WR-04) it proves
+      # the dry run writes nothing, that a fixed, waived or unknown id is refused before anything is written, and that
+      # the real run changes only the named entries' reason through gsd-core's own WINDOWS.md parser, so gsd-tools
+      # still parses the result. That parser lives in the developer's home, not this tree, so the row is not --quick;
+      # without it the self-test is a named SKIP (exit 77) and the tool a FAIL. The tool itself runs only with the date
+      # Chris names.
+      "redate-windows-self-test|node $REPO_ROOT/scripts/redate-windows.mjs --self-test"
       # NEW (68-05, OVL-06, P68-19/P68-37): orca-upstream-prs is red until the owner records an upstream PR URL for each D-27
       # class (browser-provider; D-45 ruled web-entry out) in its seams.json rows' upstream.pr. The coordinator keys its
       # GATE_KNOWN_OPEN_EXCLUSIONS row to the upstream-PRs WINDOWS.md entry. Reads seams.json only; no network.
