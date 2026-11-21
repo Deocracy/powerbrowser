@@ -27,11 +27,12 @@
 // and messages are returned, under the session's redaction.
 
 import { execFile } from 'node:child_process';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { liveEnv } from './firefox-bidi.mjs';
 
-import { ORCA_PANES_MODULE_KEY, PANES_BUNDLE_REL, REPO_ROOT, firefoxBin, prerequisites as tabsPrerequisites } from './orca-tabs-live.mjs';
+import { ORCAD_REL, ORCA_PANES_MODULE_KEY, ORCA_PANES_REL, PANES_BUNDLE_REL, REPO_ROOT, prerequisites as tabsPrerequisites } from './orca-tabs-live.mjs';
 
 export const API_REL = 'powerbrowser/shell/PowerBrowserAPI.sys.mjs';
 export const ORCA_BROWSER_REL = 'theia/extensions/orca-browser';
@@ -47,19 +48,56 @@ export const RED = [255, 0, 0];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** Where orca-failure-page-live moves the host bundle during its induction 5 (and restores it after). */
+export const HOST_BUNDLE_ASIDE_REL = `${HOST_BUNDLE_REL}.pb-aside`;
+
 /**
- * The SKIP rule both live rows share, unmerged lane first: { skip, fail }, at most one set.
+ * The rule both live rows share: { skip, fail }, at most one set. Audit harness-driver-02 / harness-live-security-02:
+ * lanes p64-01..p66-03 are merged, so an absent subject under test (the agent ability allowlist, the orca-browser or
+ * orca-panes extension) is a FAIL, as is an Orca build that is present but lacks its pane or host bundle. SKIP is left
+ * only for build outputs that are absent altogether: no PowerBrowser binary, no Theia build, no orcad build.
  */
 export function prerequisites(root = REPO_ROOT) {
     let api = '';
-    try { api = readFileSync(join(root, API_REL), 'utf8'); } catch { /* absent: skip below */ }
-    if (!/\bconst AGENT_METHODS\s*=/.test(api)) return { skip: `lane p66-03 not merged (no AGENT_METHODS in ${API_REL})`, fail: null };
-    if (!existsSync(join(root, ORCA_BROWSER_REL))) return { skip: `lane p66-02 not merged (${ORCA_BROWSER_REL} is absent)`, fail: null };
-    const bin = firefoxBin(root);
-    if (!existsSync(bin)) return { skip: `no built PowerBrowser (${bin} missing; see docs/BUILD.md "Firefox half")`, fail: null };
-    if (!existsSync(join(root, HOST_BUNDLE_REL))) return { skip: `lane p66-01 not merged or Orca not built (${HOST_BUNDLE_REL} is absent)`, fail: null };
+    try { api = readFileSync(join(root, API_REL), 'utf8'); } catch { /* absent: fail below */ }
+    if (!api) return { skip: null, fail: `${API_REL} is missing` };
+    if (!/\bAGENT_METHODS\s*=/.test(api)) return { skip: null, fail: `no AGENT_METHODS allowlist in ${API_REL}: the agent ability allowlist was renamed, moved or removed, so the agent rows have nothing to prove. Next step: point scripts/lib/orca-browser-live.mjs at its new name` };
+    for (const rel of [ORCA_BROWSER_REL, ORCA_PANES_REL]) {
+        if (!existsSync(join(root, rel))) return { skip: null, fail: `${rel} is absent from a tree where it is merged` };
+    }
+    if (existsSync(join(root, ORCAD_REL))) {
+        if (!existsSync(join(root, PANES_BUNDLE_REL))) return { skip: null, fail: `the Orca build is incomplete: ${ORCAD_REL} exists but ${PANES_BUNDLE_REL} does not. Next step: nix develop .#orca --command bash scripts/build-orca.sh` };
+        if (!existsSync(join(root, HOST_BUNDLE_REL))) {
+            return { skip: null, fail: existsSync(join(root, HOST_BUNDLE_ASIDE_REL))
+                ? `${HOST_BUNDLE_REL} is absent and ${HOST_BUNDLE_ASIDE_REL} exists: an interrupted orca-failure-page-live left the built host bundle moved aside. Next step: rename it back to ${HOST_BUNDLE_REL}`
+                : `the Orca build is incomplete: ${HOST_BUNDLE_REL} is absent. Next step: nix develop .#orca --command bash scripts/build-orca.sh` };
+        }
+    }
     const base = tabsPrerequisites({ root });
-    return { skip: base.skip, fail: base.fail };
+    return { skip: base.fail ? null : base.skip, fail: base.fail };
+}
+
+/** A decoy HOME for the agent row's clause (f): <tmp>/pb-agent-home-*, holding .local/bin/orca-ide -> target. */
+export function makeDecoyHome(target, base = tmpdir()) {
+    const home = mkdtempSync(join(base, 'pb-agent-home-'));
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+    symlinkSync(target, join(home, '.local', 'bin', 'orca-ide'));
+    return home;
+}
+
+/** The Orca CLI's environment, built from scratch (PATH, HOME, the data root names); withBrowserSession's cli uses it. */
+export function browserCliEnv(basePath, root, home = process.env.HOME ?? '') {
+    return { PATH: basePath, HOME: home, ORCA_USER_DATA: root, ORCA_USER_DATA_PATH: root };
+}
+
+/** HOME in /proc/<pid>/environ, or null when it cannot be read. */
+export function procHome(pid) {
+    try {
+        const entry = readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').find((e) => e.startsWith('HOME='));
+        return entry ? entry.slice(5) : null;
+    } catch {
+        return null;
+    }
 }
 
 /** 66-09: the external-protocol fixture: a scheme whose handler runs without asking, one that asks, and a probe word. */
@@ -185,7 +223,7 @@ export async function withBrowserSession({ log = () => {}, dpr = 1, home = null 
             const { app } = ctx;
             const state = await ctx.orcaState();
             const basePath = (process.env.PATH ?? '').split(':').filter((p) => p !== ctx.stubDir).join(':');
-            const cliEnv = { PATH: basePath, HOME: process.env.HOME ?? '', ORCA_USER_DATA: state.effectiveRoot, ORCA_USER_DATA_PATH: state.effectiveRoot };
+            const cliEnv = browserCliEnv(basePath, state.effectiveRoot);
             const cliBin = join(state.effectiveRoot, 'cli', 'bin', 'orca');
             Object.assign(ctx, {
                 state, url: (path) => pages.url(path), dpr,
@@ -253,10 +291,15 @@ export async function withBrowserSession({ log = () => {}, dpr = 1, home = null 
                     browserId: gBrowser.selectedBrowser.browserId,
                 })`)),
                 /** The chrome bar's agent mark and the agent widget's title class, read from the Theia DOM. */
+                // agent-browser-04 (G1a): the mark is on every agent tab; its label names the state and its one button is
+                // Stop, or Resume on a stopped tab. label and button are the chrome bar's text, read for the current tab.
                 markState: (widgetId) => ctx.probe(`const w = get('ApplicationShell').getWidgetById(${JSON.stringify(widgetId)});
-                    return { mark: !!document.querySelector('.pb-chrome-bar-agent'), titleClass: !!w && w.title.className.split(/\\s+/).includes('pb-agent-controlled'),
+                    const m = document.querySelector('.pb-chrome-bar-agent');
+                    return { mark: !!m, label: m ? (m.querySelector('.pb-chrome-bar-agent-label')?.textContent ?? null) : null, button: m ? (m.querySelector('.pb-chrome-bar-agent-stop')?.textContent ?? null) : null,
+                        titleClass: !!w && w.title.className.split(/\\s+/).includes('pb-agent-controlled'),
                         domTitleClass: !!document.querySelector('.lm-TabBar-tab.pb-agent-controlled'), control: w && w.agentControl ? { ...w.agentControl } : null };`),
-                clickStop: () => ctx.probe(`const b = document.querySelector('.pb-chrome-bar-agent-stop'); if (!b) return false; b.click(); return true;`),
+                /** Clicks the mark's one button (Stop, or Resume on a stopped tab); resolves its text, or null when absent. */
+                clickStop: () => ctx.probe(`const b = document.querySelector('.pb-chrome-bar-agent-stop'); if (!b) return null; const t = b.textContent; b.click(); return t;`),
                 /** Waits for a new web tab (an id not in `before`), resolving { tab, addT } with the addWidget clock. */
                 newWebTab: async (before, t0, ms = 5000) => {
                     try {
