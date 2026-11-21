@@ -9,6 +9,7 @@ import { useAppStore } from '../store'
 import { readStoredWebRuntimeEnvironment } from '../web/web-runtime-environment'
 import { LOCAL_EXECUTION_HOST_ID, toRuntimeExecutionHostId } from '../../../shared/execution-host'
 import { getFolderWorkspaceWorktree } from '../../../shared/folder-workspace-worktree'
+import { isFloatingWorkspaceId } from '../../../shared/floating-workspace-worktree'
 import {
   createRepoRowExecutionHostLookup,
   resolveWorktreeExecutionHost
@@ -137,7 +138,12 @@ function openFileRecords(state: State): OrcaOpenFile[] {
       mode: file.mode,
       isPreview: file.isPreview === true,
       active: state.activeFileIdByWorktree?.[file.worktreeId] === file.id,
-      local: !file.externalSshTargetId && ownerIsPaired(file.runtimeEnvironmentId, paired) && worktreeIsLocal(worktree, lookup, paired)
+      local:
+        !file.externalSshTargetId &&
+        ownerIsPaired(file.runtimeEnvironmentId, paired) &&
+        // Orca's floating workspace (a floating terminal's opens, Orca's own keybindings.json) has no worktree row and is
+        // Orca's local host by definition (resolved-worktree-execution-host.ts returns LOCAL_EXECUTION_HOST_ID for it).
+        (isFloatingWorkspaceId(file.worktreeId) || worktreeIsLocal(worktree, lookup, paired))
     }
     if (file.diffSource) record.diffSource = file.diffSource
     if (file.branchOldPath) record.oldPath = file.branchOldPath

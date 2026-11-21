@@ -460,12 +460,23 @@ function evaluate(text, names, stubs) {
  * the local one or the paired runtime, is not local; a folder workspace's file finds its worktree (Orca's synthetic row,
  * with its path) instead of an empty path; a file of a resolved local worktree stays local (control).
  */
-export function checkLocalPredicate(apiText) {
+const ORCA_SHARED_CONSTANTS = join(ORCA, 'src', 'shared', 'constants.ts');
+
+/** Orca's floating-workspace sentinel id, from its shared constants; a fixed stand-in when orca/src is absent. */
+function floatingWorktreeId() {
+    const m = existsSync(ORCA_SHARED_CONSTANTS) && /export const FLOATING_TERMINAL_WORKTREE_ID = '([^']+)'/.exec(readFileSync(ORCA_SHARED_CONSTANTS, 'utf8'));
+    return m ? m[1] : 'global-floating-terminal';
+}
+
+export function checkLocalPredicate(apiText, floatingId = floatingWorktreeId()) {
     const resolutions = new Map();
     const stubs = {
         LOCAL_EXECUTION_HOST_ID: 'local',
         toRuntimeExecutionHostId: id => `runtime:${encodeURIComponent(id)}`,
         readStoredWebRuntimeEnvironment: () => ({ id: 'env-1' }),
+        // Orca's own predicate (shared/floating-workspace-worktree.ts), over the id derived from its constants.
+        isFloatingWorkspaceId: id => id === floatingId,
+        FLOATING_TERMINAL_WORKTREE_ID: floatingId,
         createRepoRowExecutionHostLookup: () => ({}),
         resolveWorktreeExecutionHost: (_lookup, worktree) => resolutions.get(worktree.id) ?? { kind: 'unresolved', reason: 'unknown' },
         getFolderWorkspaceWorktree: f => ({ id: `folder:${f.id}`, repoId: `folder-workspace:${f.projectGroupId}`, path: f.folderPath, isArchived: false, hostId: f.executionHostId ?? 'local' }),
@@ -481,7 +492,7 @@ export function checkLocalPredicate(apiText) {
             { id: 'w-ssh', repoId: 'r', path: '/w/ssh', isArchived: false },
         ] },
         folderWorkspaces: [{ id: 'f1', projectGroupId: 'g', folderPath: '/folder/one', executionHostId: 'ssh:remote' }],
-        openFiles: [file('a', 'w-local'), file('b', 'w-hostless'), file('c', 'w-ssh'), file('d', 'w-unknown'), file('e', 'folder:f1')],
+        openFiles: [file('a', 'w-local'), file('b', 'w-hostless'), file('c', 'w-ssh'), file('d', 'w-unknown'), file('e', 'folder:f1'), file('g', floatingId)],
         unifiedTabsByWorktree: {},
         activeFileIdByWorktree: {},
     };
@@ -498,6 +509,7 @@ export function checkLocalPredicate(apiText) {
     if (by.d?.local !== false) fails.push('a file of an unknown worktree counts as local (fails open)');
     if (by.e?.worktreePath !== '/folder/one') fails.push(`a folder workspace's file gets worktreePath "${by.e?.worktreePath}" instead of its folder: its diff routes join against the filesystem root`);
     if (by.e?.local !== false) fails.push('a file of a remote folder workspace counts as local');
+    if (by.g?.local !== true) fails.push(`a file of Orca's floating workspace (${floatingId}: floating-terminal opens, keybindings.json) is not local, though Orca resolves it to its local host`);
     // The same rule in B-3 (subscribeWorktrees), through its own projection.
     const b3 = evaluate(apiText, ['subscribeWorktrees'], { ...stubs, useAppStore: { getState: () => state, subscribe: () => () => {} } });
     let projected = null;
@@ -656,6 +668,9 @@ async function selfTest() {
         const noResolver = api.replace(/const host = resolveWorktreeExecutionHost\(lookup, worktree\)\n\s*return host\.kind === 'resolved' && hostIsPaired\(host\.hostId, paired\)/, "return !worktree.hostId || worktree.hostId === 'local'");
         ok('f: the host-less plant applies', noResolver !== api);
         ok('f: a host-less worktree taken as local without Orca\'s resolver is red, naming it', checkLocalPredicate(noResolver).some(f => /no host of its own/.test(f)));
+        const noFloating = api.replace(/\(isFloatingWorkspaceId\(file\.worktreeId\) \|\| (worktreeIsLocal\(worktree, lookup, paired\))\)/, '$1');
+        ok('f: the floating-workspace plant applies', noFloating !== api);
+        ok('f: Orca\'s floating workspace failing closed (the first 65-WR-01 fix) is red, naming it', checkLocalPredicate(noFloating).some(f => /floating workspace .* is not local/.test(f)));
         // f2 (65-WR-03).
         if (existsSync(WORKTREE_HELPERS)) {
             const helpers = readFileSync(WORKTREE_HELPERS, 'utf8');
