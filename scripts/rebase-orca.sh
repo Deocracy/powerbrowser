@@ -602,11 +602,12 @@ run_self_test() {
   # the real registry, read from scripts/verify-platform.sh, so a misspelt label cannot pass by running nothing.
   local sec want_sec=(orca-credential-store orca-failure-classes orca-offer-file orca-service) reg lbl unreg=""
   for sec in "${want_sec[@]}"; do expect_stop "security row $sec fails at the new tag" control "rowfail-$sec" "row $sec exited 1"; done
-  missing_rows() { local r; for r in "${want_sec[@]}"; do printf '%s\n' "$@" | grep -qxF -- "$r" || echo "$r"; done; }
+  # Here-strings, not pipes: under pipefail a grep -q that stops early makes the printf into it fail (SIGPIPE).
+  missing_rows() { local r all; all="$(printf '%s\n' "$@")"; for r in "${want_sec[@]}"; do grep -qxF -- "$r" <<<"$all" || echo "$r"; done; }
   [ -z "$(missing_rows "${ROWS[@]}")" ] && ok "security rows -> all four are in ROWS" || miss "security rows" "ROWS lacks $(missing_rows "${ROWS[@]}" | tr '\n' ' ')"
   [ "$(missing_rows "${ROWS[@]/orca-service/}")" = orca-service ] && ok "a ROWS without orca-service -> red naming it" || miss "missing security row plant" "a ROWS without orca-service was not reported"
   reg="$(sed -nE 's/^[[:space:]]*"([a-z0-9-]+)\|.*/\1/p' "$REPO_ROOT/scripts/verify-platform.sh")"
-  for lbl in "${ROWS[@]}"; do printf '%s\n' "$reg" | grep -qxF -- "$lbl" || unreg+="$lbl "; done
+  for lbl in "${ROWS[@]}"; do grep -qxF -- "$lbl" <<<"$reg" || unreg+="$lbl "; done
   [ -z "$unreg" ] && ok "ROWS -> every label is a registered row" || miss "ROWS labels" "not registered in scripts/verify-platform.sh: $unreg"
 
   # ci-supply-chain-06: upstream output prints a FAIL line of its own before this script's. The log's first
@@ -654,7 +655,7 @@ run_self_test() {
   stray="$(cat "${logs[@]}" 2>/dev/null | grep -h '^rebase-orca: FAIL -- ' | sed 's/^rebase-orca: FAIL -- //' | while IFS= read -r l; do
     known=0; for st in "${STAGES[@]}"; do case "$l" in "$st" | "$st "*) known=1 ;; esac; done
     [ "$known" = 1 ] || printf '%s\n' "$l"
-  done | head -1)"
+  done | head -1 || true)"
   if [ -n "$stray" ]; then miss "stage keywords" "a FAIL line starts with no STAGES keyword: $stray"; else ok "stage keywords -> every FAIL line starts with a STAGES keyword"; fi
 
   if [ "$misses" -eq 0 ]; then
