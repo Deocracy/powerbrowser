@@ -1016,6 +1016,7 @@ export function mountPane(element: HTMLElement, pick: PanePick, activity: PaneAc
       <div
         key={`pb-orca-pane-${mountSequence}`}
         data-pb-orca-pane-root={pick.kind}
+        data-pb-orca-terminal-tab={pick.kind === 'terminal' ? pick.tabId : undefined}
         style={{ position: 'relative', display: 'flex', flexDirection: 'column', width: '100%', height: '100%', minHeight: 0 }}
       >
         <PaneBody pick={pick} activity={activity} />
@@ -1031,15 +1032,37 @@ export function mountPane(element: HTMLElement, pick: PanePick, activity: PaneAc
 // tab-wide active-pane close event reached every instance and each closed its own manager's active pane (a sibling,
 // or several). A leaf close is therefore addressed to the leaf itself: the running-process prompt is Orca's
 // store-driven one (RunningTerminalCloseDialog, hosted once by the services root), the close is the store and host
-// half of Orca's closePaneLocally, and every mounted instance drops exactly that leaf through Orca's leaf-addressed
-// lifecycle event (CLOSE_TERMINAL_PANE_EVENT, which resolves the leaf id in each manager and is idempotent).
+// half of Orca's closePaneLocally, and the mounted instances drop that leaf through Orca's leaf-addressed lifecycle
+// event (CLOSE_TERMINAL_PANE_EVENT). That event's handler (applyTerminalPaneCloseRequest) resolves the leaf id in each
+// instance's manager and ignores an instance without it, but closes the whole tab, unprompted, in an instance whose
+// manager holds that leaf as its only pane; so the event is sent only when no instance is in that state
+// (leafEventIsPaneScoped), and otherwise the close goes through Orca's tab close with its own prompt.
 const closingLeaves = new Set<string>()
 
-function closeTerminalLeaf(worktreeId: string, tabId: string, leafId: string): void {
+/**
+ * Audit overlay-renderer-01 follow-up: whether every mounted instance of `tabId` that holds `leafId` holds another pane
+ * too. A manager that has not yet reconciled a split which just arrived holds one pane. Read from each hosted terminal
+ * root's DOM: Orca's createPaneDOM marks every pane of a manager with data-pane-id and data-leaf-id, inside that root.
+ */
+function leafEventIsPaneScoped(tabId: string, leafId: string): boolean {
+  for (const root of document.querySelectorAll<HTMLElement>('[data-pb-orca-terminal-tab]')) {
+    if (root.getAttribute('data-pb-orca-terminal-tab') !== tabId) continue
+    const held = new Set([...root.querySelectorAll<HTMLElement>('.pane[data-pane-id][data-leaf-id]')].map((pane) => pane.dataset.leafId))
+    if (held.has(leafId) && held.size <= 1) return false
+  }
+  return true
+}
+
+function closeTerminalLeaf(worktreeId: string, tabId: string, leafId: string, closeTab: () => void): void {
   const paneKey = makePaneKey(tabId, leafId)
   const state = useAppStore.getState()
   // Stale (a second click, or a leaf Orca already removed): that pane is gone and nothing else closes.
   if (closingLeaves.has(paneKey) || !leavesOf(state.terminalLayoutsByTabId?.[tabId]?.root).includes(leafId)) return
+  // An instance would turn the leaf event into an unprompted whole-tab close: Orca's tab close, with its prompt.
+  if (!leafEventIsPaneScoped(tabId, leafId)) {
+    closeTab()
+    return
+  }
   closingLeaves.add(paneKey)
   queueMicrotask(() => closingLeaves.delete(paneKey))
   const ptyId = state.terminalLayoutsByTabId?.[tabId]?.ptyIdsByLeafId?.[leafId] ?? null
@@ -1055,8 +1078,13 @@ function closeTerminalLeaf(worktreeId: string, tabId: string, leafId: string): v
 
 /** Orca's split-close admission for one leaf (use-terminal-pane-close-actions handleRequestClosePane): no PTY or no
  * live work closes, live work asks, an unanswered probe asks; the opt-out setting closes. */
-function requestTerminalLeafClose(worktreeId: string, tabId: string, leafId: string, tabLabel: string): void {
-  const close = (): void => closeTerminalLeaf(worktreeId, tabId, leafId)
+function requestTerminalLeafClose(worktreeId: string, tabId: string, leafId: string, tabLabel: string, closeTab: () => void): void {
+  // Checked first as well, so the tab close's own prompt is the only one the user sees.
+  if (!leafEventIsPaneScoped(tabId, leafId)) {
+    closeTab()
+    return
+  }
+  const close = (): void => closeTerminalLeaf(worktreeId, tabId, leafId, closeTab)
   const state = useAppStore.getState()
   const ptyId = state.terminalLayoutsByTabId?.[tabId]?.ptyIdsByLeafId?.[leafId]
   if (!ptyId || state.settings?.skipCloseTerminalWithRunningProcessConfirm) {
@@ -1094,18 +1122,22 @@ export function closePane(pick: { worktreeId: string; tabId: string; paneKey: st
   const state = useAppStore.getState()
   const tab = unifiedTabFor(state, pick.worktreeId, pick.tabId)
   if (!tab) return
+  // Orca's tab close with its own confirmation, over the group as it is when the close runs.
+  const closeTab = (): void => {
+    const groupTabs = (useAppStore.getState().unifiedTabsByWorktree[pick.worktreeId] ?? []).filter((t) => t.groupId === tab.groupId)
+    createWorkspaceTabCloseCommands({ worktreeId: pick.worktreeId, groupTabs }).closeItem(tab.id)
+  }
   if (tab.contentType === 'terminal' && pick.paneKey) {
     const leaves = leavesOf(state.terminalLayoutsByTabId?.[tab.entityId]?.root)
     const leaf = pick.paneKey.slice(pick.paneKey.indexOf(':') + 1)
     // Audit 64-WR-02: a close scoped to one pane never escalates to the whole tab; a leaf already gone is closed.
     if (!leaves.includes(leaf)) return
     if (leaves.length > 1) {
-      requestTerminalLeafClose(pick.worktreeId, tab.entityId, leaf, tabTitle(state, tab, state.settings?.tabAutoGenerateTitle === true))
+      requestTerminalLeafClose(pick.worktreeId, tab.entityId, leaf, tabTitle(state, tab, state.settings?.tabAutoGenerateTitle === true), closeTab)
       return
     }
   }
-  const groupTabs = (state.unifiedTabsByWorktree[pick.worktreeId] ?? []).filter((t) => t.groupId === tab.groupId)
-  createWorkspaceTabCloseCommands({ worktreeId: pick.worktreeId, groupTabs }).closeItem(tab.id)
+  closeTab()
 }
 
 /** The host RPC the CLI uses (A4); the store mirrors the new tab. */

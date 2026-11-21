@@ -15,6 +15,9 @@
 //   b. (overlay-renderer-01, 64-WR-02) a terminal leaf close addresses its leaf: the entry never sends Orca's tab-wide
 //      active-pane close while its detail type carries no leaf, dispatches Orca's leaf-addressed close with a leafId,
 //      and closePane returns for a gone leaf before any whole-tab close.
+//   b2. (overlay-renderer-01 follow-up) run: Orca's leaf-close handler closes the whole tab, unprompted, in a manager
+//      holding that leaf as its only pane (derived from terminal-pane-lifecycle-close.ts); with a stub document whose
+//      hosted terminal root of the tab holds only that leaf, no leaf event is sent and Orca's prompted tab close runs.
 //   c. (64-WR-04) every call of subscribePanes' store listener runs inside a try block.
 //   d. (overlay-renderer-04) run: the entry's recordError, called 2N times, keeps a bounded list.
 //   e. (overlay-renderer-03) run: for each install step bootstrap calls after the session-only assertion (derived),
@@ -199,17 +202,74 @@ export function checkLeafClose(entryText, constantsText) {
     if (!dispatchesLeafClose) fails.push('no window.dispatchEvent of CLOSE_TERMINAL_PANE_EVENT with a leafId: nothing drops the closed leaf from the mounted instances');
     const close = fn(sf, 'closePane');
     if (!close) return [...fails, 'closePane is absent from the entry'];
-    const body = close.body.getText();
-    const stale = squashTs(body).search(/if\(!leaves\.includes\(leaf\)\)return/);
-    const whole = squashTs(body).indexOf('.closeItem(');
-    if (stale < 0 || (whole >= 0 && stale > whole)) fails.push('closePane does not return for a requested leaf that is gone before closing the whole tab (64-WR-02)');
+    // The whole-tab closes: a .closeItem( call, or a call of a local function of closePane whose body makes one.
+    const closers = new Set();
+    walk(close.body, n => {
+        if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && /\.closeItem\(/.test(n.initializer.getText())) closers.add(n.name.text);
+    });
+    let stale = -1;
+    walk(close.body, n => {
+        if (stale < 0 && ts.isIfStatement(n) && squashTs(n.getText()) === 'if(!leaves.includes(leaf))return') stale = n.getStart();
+    });
+    const insideCloser = n => { for (let p = n.parent; p && p !== close.body; p = p.parent) if (ts.isVariableDeclaration(p) && closers.has(p.name.getText?.())) return true; return false; };
+    const whole = calls(close.body)
+        .filter(c => (/\.closeItem$/.test(c.callee) && !insideCloser(c.node)) || closers.has(c.callee))
+        .map(c => c.node.getStart());
+    if (stale < 0 || whole.some(at => at < stale)) fails.push('closePane does not return for a requested leaf that is gone before closing the whole tab (64-WR-02)');
     return fails;
+}
+
+const LIFECYCLE_CLOSE = join(ORCA, 'src', 'renderer', 'src', 'components', 'terminal-pane', 'terminal-pane-lifecycle-close.ts');
+
+/**
+ * Clause b2 (overlay-renderer-01 follow-up), run: Orca's handler of the leaf-addressed close closes the whole tab,
+ * unprompted, in an instance whose manager holds the leaf as its only pane (derived: terminal-pane-lifecycle-close.ts
+ * has that branch). The entry's leaf close runs against a stub document of hosted terminal roots: while a root of the
+ * tab holds only that leaf, no leaf event may be sent and Orca's tab close (with its prompt) runs instead; when every
+ * root holding it holds another pane, exactly one leaf event for that leaf is sent and the tab is not closed.
+ */
+export function checkLeafEventScope(entryText, lifecycleText) {
+    if (!/getPanes\(\)\.length <= 1\)[\s\S]{0,200}closeTab\(\)/.test(lifecycleText)) return { fails: [], note: 'Orca\'s leaf close no longer closes the tab for a single-pane manager; b2 not needed' };
+    const run = rootsLeaves => {
+        const dispatched = [];
+        let tabCloses = 0;
+        const state = {
+            terminalLayoutsByTabId: { t: { root: { type: 'split', direction: 'vertical', first: { type: 'leaf', leafId: 'L1' }, second: { type: 'leaf', leafId: 'L2' } }, ptyIdsByLeafId: {} } },
+            tabsByWorktree: { w: [] }, settings: {}, setCacheTimerStartedAt() {}, dropAgentStatus() {},
+        };
+        const roots = rootsLeaves.map(leaves => ({
+            getAttribute: name => (name === 'data-pb-orca-terminal-tab' ? 't' : null),
+            querySelectorAll: () => leaves.map(leafId => ({ dataset: { leafId } })),
+        }));
+        const mod = evaluate(entryText, ['requestTerminalLeafClose'], {
+            useAppStore: { getState: () => state },
+            makePaneKey: (tab, leaf) => `${tab}:${leaf}`,
+            document: { querySelectorAll: () => roots },
+            window: { dispatchEvent: event => { dispatched.push(event); return true; } },
+            CLOSE_TERMINAL_PANE_EVENT: 'pb-check-leaf-close',
+        }, 'pb-pane-mount.tsx');
+        if (!mod) return null;
+        mod.requestTerminalLeafClose('w', 't', 'L1', 'label', () => { tabCloses += 1; });
+        return { leafEvents: dispatched.filter(e => e?.type === 'pb-check-leaf-close' && e.detail?.leafId === 'L1').length, tabCloses };
+    };
+    const behind = run([['L1'], ['L1', 'L2']]);
+    if (!behind) return { fails: ['requestTerminalLeafClose is absent from the entry (source moved)'] };
+    const fails = [];
+    if (behind.leafEvents) fails.push('the leaf close event is sent while a mounted instance holds that leaf as its only pane: Orca\'s handler closes the whole tab there, unprompted');
+    if (behind.tabCloses !== 1) fails.push(`with an instance behind, Orca's prompted tab close ran ${behind.tabCloses} time(s) (want 1)`);
+    const caughtUp = run([['L1', 'L2'], ['L1', 'L2'], ['L2']]);
+    if (caughtUp.leafEvents !== 1 || caughtUp.tabCloses) fails.push(`with every instance holding both leaves, ${caughtUp.leafEvents} leaf event(s) and ${caughtUp.tabCloses} tab close(s) (want 1 and 0)`);
+    return { fails };
 }
 
 async function clauseB() {
     if (!(await loadTs())) return { skip: 'theia/node_modules/typescript is absent (install Theia)' };
     if (!existsSync(ORCA_CONSTANTS)) return { skip: 'orca/src is absent (run scripts/fetch-orca.sh)' };
-    return { fails: checkLeafClose(readFileSync(ENTRY, 'utf8'), readFileSync(ORCA_CONSTANTS, 'utf8')) };
+    const entry = readFileSync(ENTRY, 'utf8');
+    const fails = checkLeafClose(entry, readFileSync(ORCA_CONSTANTS, 'utf8'));
+    if (!existsSync(LIFECYCLE_CLOSE)) return { fails: [...fails, 'Orca terminal-pane-lifecycle-close.ts is absent (source moved)'] };
+    const b2 = checkLeafEventScope(entry, readFileSync(LIFECYCLE_CLOSE, 'utf8'));
+    return { fails: [...fails, ...b2.fails], ...(b2.note ? { note: b2.note } : {}) };
 }
 
 // ---------------------------------------------------------------- c. no throw into Orca's setState
@@ -428,8 +488,8 @@ async function clauseE() {
  * Evaluates the named top-level functions of a TypeScript source, with the top-level declarations they reach, in an
  * environment where `stubs` stand for named free identifiers and anything else free is an inert stub.
  */
-function evaluate(text, names, stubs) {
-    const sf = parse(text, 'x.ts');
+function evaluate(text, names, stubs, fileName = 'x.ts') {
+    const sf = parse(text, fileName);
     const topFns = sf.statements.filter(ts.isFunctionDeclaration).map(f => f.name?.text).filter(Boolean);
     const topVars = sf.statements.filter(ts.isVariableStatement).flatMap(st => st.declarationList.declarations.map(d => d.name.getText()));
     const own = new Set(names);
@@ -444,7 +504,7 @@ function evaluate(text, names, stubs) {
         }
     }
     if (names.some(n => !fn(sf, n))) return null;
-    const js = ts.transpileModule(`${declarations(sf, [...own]).join('\n')}\nreturn { ${names.join(', ')} };`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    const js = ts.transpileModule(`${declarations(sf, [...own]).join('\n')}\nreturn { ${names.join(', ')} };`, { fileName, compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React } }).outputText;
     const env = new Proxy({}, {
         has: (_t, key) => typeof key === 'string' && !(key in globalThis),
         // A symbol (Symbol.unscopables above all) must read undefined, or `with` would hide every name.
@@ -624,6 +684,16 @@ async function selfTest() {
         ok('b: a gone leaf falling through to the whole-tab close (64-WR-02) is red, naming it', checkLeafClose(escalates, constants).some(f => /64-WR-02/.test(f)));
         const noLeaf = constants.replace(/(export type CloseTerminalPaneDetail = \{[^}]*?)\n\s*leafId\?: string/, '$1');
         ok('b: Orca\'s leaf close losing leafId is red "source moved"', noLeaf !== constants && checkLeafClose(entry, noLeaf).some(f => /no longer carries leafId/.test(f)));
+        // b2.
+        const lifecycle = readFileSync(LIFECYCLE_CLOSE, 'utf8');
+        ok('b2: derived: Orca\'s leaf close still closes the tab for a single-pane manager', !checkLeafEventScope(entry, lifecycle).note);
+        ok('b2: control green on the tree', checkLeafEventScope(entry, lifecycle).fails.length === 0);
+        const unguarded2 = entry.replace(/\n\s*if \(!leafEventIsPaneScoped\(tabId, leafId\)\) \{\n\s*closeTab\(\)\n\s*return\n\s*\}/g, '');
+        ok('b2: the unguarded-leaf-event plant applies', unguarded2 !== entry);
+        ok('b2: a leaf event sent while an instance holds only that leaf (the first overlay-renderer-01 fix) is red, naming it', checkLeafEventScope(unguarded2, lifecycle).fails.some(f => /closes the whole tab there, unprompted/.test(f)));
+        const alwaysTab = entry.replace(/function leafEventIsPaneScoped\(tabId: string, leafId: string\): boolean \{/, '$&\n  return false');
+        ok('b2: a leaf close that always falls back to the tab close is red, naming it', alwaysTab !== entry && checkLeafEventScope(alwaysTab, lifecycle).fails.some(f => /want 1 and 0/.test(f)));
+        ok('b2: Orca dropping the single-pane tab close turns b2 into a note', !!checkLeafEventScope(entry, lifecycle.replace(/getPanes\(\)\.length <= 1\)/g, 'getPanes().length < 1)')).note);
         }
         // c.
         ok('c: control green on the tree', checkStoreListeners(entry).length === 0);
