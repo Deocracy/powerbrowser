@@ -408,9 +408,104 @@ async function clauseE() {
     return { fails: await checkBootstrapRetry(readFileSync(ENTRY, 'utf8')) };
 }
 
+// ---------------------------------------------------------------- f. the local predicate fails closed
+
+/**
+ * Evaluates the named top-level functions of a TypeScript source, with the top-level declarations they reach, in an
+ * environment where `stubs` stand for named free identifiers and anything else free is an inert stub.
+ */
+function evaluate(text, names, stubs) {
+    const sf = parse(text, 'x.ts');
+    const topFns = sf.statements.filter(ts.isFunctionDeclaration).map(f => f.name?.text).filter(Boolean);
+    const topVars = sf.statements.filter(ts.isVariableStatement).flatMap(st => st.declarationList.declarations.map(d => d.name.getText()));
+    const own = new Set(names);
+    for (let changed = true; changed;) {
+        changed = false;
+        for (const name of [...own]) {
+            const node = fn(sf, name) ?? sf.statements.find(st => ts.isVariableStatement(st) && st.declarationList.declarations.some(d => d.name.getText() === name));
+            if (!node) continue;
+            walk(node, n => {
+                if (ts.isIdentifier(n) && !own.has(n.text) && !(n.text in stubs) && (topFns.includes(n.text) || topVars.includes(n.text))) { own.add(n.text); changed = true; }
+            });
+        }
+    }
+    if (names.some(n => !fn(sf, n))) return null;
+    const js = ts.transpileModule(`${declarations(sf, [...own]).join('\n')}\nreturn { ${names.join(', ')} };`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    const env = new Proxy({}, {
+        has: (_t, key) => typeof key === 'string' && !(key in globalThis),
+        // A symbol (Symbol.unscopables above all) must read undefined, or `with` would hide every name.
+        get: (_t, key) => (typeof key !== 'string' ? undefined : key in stubs ? stubs[key] : anything()),
+    });
+    // The overlay file is the tree's own source, evaluated only against stubs (no Orca module).
+    return new Function('env', `with (env) { ${js} }`)(env);
+}
+
+/**
+ * Clause f (65-WR-01), run, not read, over pb-workspace-api.ts with Orca's host resolver stubbed by the outcome under
+ * test: an open file whose worktree is unknown, or whose host Orca cannot resolve, or resolves to a host other than
+ * the local one or the paired runtime, is not local; a folder workspace's file finds its worktree (Orca's synthetic row,
+ * with its path) instead of an empty path; a file of a resolved local worktree stays local (control).
+ */
+export function checkLocalPredicate(apiText) {
+    const resolutions = new Map();
+    const stubs = {
+        LOCAL_EXECUTION_HOST_ID: 'local',
+        toRuntimeExecutionHostId: id => `runtime:${encodeURIComponent(id)}`,
+        readStoredWebRuntimeEnvironment: () => ({ id: 'env-1' }),
+        createRepoRowExecutionHostLookup: () => ({}),
+        resolveWorktreeExecutionHost: (_lookup, worktree) => resolutions.get(worktree.id) ?? { kind: 'unresolved', reason: 'unknown' },
+        getFolderWorkspaceWorktree: f => ({ id: `folder:${f.id}`, repoId: `folder-workspace:${f.projectGroupId}`, path: f.folderPath, isArchived: false, hostId: f.executionHostId ?? 'local' }),
+    };
+    const mod = evaluate(apiText, ['openFileRecords'], stubs);
+    if (!mod) return ['openFileRecords is absent from pb-workspace-api.ts (source moved)'];
+    const file = (id, worktreeId) => ({ id, worktreeId, filePath: `/x/${id}`, relativePath: id, mode: 'edit' });
+    const state = {
+        repos: [],
+        worktreesByRepo: { r: [
+            { id: 'w-local', repoId: 'r', path: '/w/local', isArchived: false, hostId: 'local' },
+            { id: 'w-hostless', repoId: 'r', path: '/w/hostless', isArchived: false },
+            { id: 'w-ssh', repoId: 'r', path: '/w/ssh', isArchived: false },
+        ] },
+        folderWorkspaces: [{ id: 'f1', projectGroupId: 'g', folderPath: '/folder/one', executionHostId: 'ssh:remote' }],
+        openFiles: [file('a', 'w-local'), file('b', 'w-hostless'), file('c', 'w-ssh'), file('d', 'w-unknown'), file('e', 'folder:f1')],
+        unifiedTabsByWorktree: {},
+        activeFileIdByWorktree: {},
+    };
+    resolutions.set('w-local', { kind: 'resolved', hostId: 'local' });
+    resolutions.set('w-ssh', { kind: 'resolved', hostId: 'ssh:remote' });
+    resolutions.set('folder:f1', { kind: 'resolved', hostId: 'ssh:remote' });
+    let records;
+    try { records = mod.openFileRecords(state); } catch (error) { return [`openFileRecords threw over the fixture state: ${error.message}`]; }
+    const by = Object.fromEntries(records.map(r => [r.id, r]));
+    const fails = [];
+    if (by.a?.local !== true) fails.push('control: a file of a resolved local worktree is not local');
+    if (by.b?.local !== false) fails.push('a file of a worktree with no host of its own and no resolvable repo row counts as local (fails open)');
+    if (by.c?.local !== false) fails.push('a file of a worktree whose host resolves to an SSH host counts as local');
+    if (by.d?.local !== false) fails.push('a file of an unknown worktree counts as local (fails open)');
+    if (by.e?.worktreePath !== '/folder/one') fails.push(`a folder workspace's file gets worktreePath "${by.e?.worktreePath}" instead of its folder: its diff routes join against the filesystem root`);
+    if (by.e?.local !== false) fails.push('a file of a remote folder workspace counts as local');
+    // The same rule in B-3 (subscribeWorktrees), through its own projection.
+    const b3 = evaluate(apiText, ['subscribeWorktrees'], { ...stubs, useAppStore: { getState: () => state, subscribe: () => () => {} } });
+    let projected = null;
+    try { b3?.subscribeWorktrees(value => { projected = value; }); } catch (error) { return [...fails, `subscribeWorktrees threw over the fixture state: ${error.message}`]; }
+    const w = Object.fromEntries((projected?.worktrees ?? []).map(x => [x.id, x]));
+    if (!projected) fails.push('subscribeWorktrees is absent or never called back (source moved)');
+    else {
+        if (w['w-local']?.local !== true) fails.push('control: subscribeWorktrees reports a resolved local worktree as not local');
+        if (w['w-hostless']?.local !== false || w['w-ssh']?.local !== false) fails.push('subscribeWorktrees reports a host-less or SSH-hosted worktree as local (fails open)');
+        if (projected.folders?.[0]?.local !== false) fails.push('subscribeWorktrees reports a remote folder workspace as local');
+    }
+    return fails;
+}
+
+async function clauseF() {
+    if (!(await loadTs())) return { skip: 'theia/node_modules/typescript is absent (install Theia)' };
+    return { fails: checkLocalPredicate(readFileSync(WORKSPACE_API, 'utf8')) };
+}
+
 // ---------------------------------------------------------------- driver
 
-const CLAUSES = [['a', clauseA], ['b', clauseB], ['c', clauseC], ['d', clauseD], ['e', clauseE]];
+const CLAUSES = [['a', clauseA], ['b', clauseB], ['c', clauseC], ['d', clauseD], ['e', clauseE], ['f', clauseF]];
 
 async function main() {
     let failed = 0;
@@ -489,6 +584,18 @@ async function selfTest() {
         ok('e: the install-twice plant applies', twice !== entry);
         ok('e: a retry that re-runs completed install steps is red, naming it', (await checkBootstrapRetry(twice)).some(f => /installed twice or skipped/.test(f)));
         ok('e: no install step is red "parser blind"', (await checkBootstrapRetry(entry.replace(/assertSessionOnly\(\)/g, 'assertSessionOnlyX()'))).some(f => /parser blind/.test(f)));
+        // f.
+        const api = readFileSync(WORKSPACE_API, 'utf8');
+        ok('f: control green on the tree', checkLocalPredicate(api).length === 0);
+        const openUnknown = api.replace(/if \(!worktree\) return false/, 'if (!worktree) return true');
+        ok('f: the unknown-worktree plant applies', openUnknown !== api);
+        ok('f: an unknown worktree counted local is red, naming it', checkLocalPredicate(openUnknown).some(f => /unknown worktree counts as local/.test(f)));
+        const noFolders = api.replace(/new Map\(allWorktreeRecords\(state\)/, 'new Map(worktreeRecords(state)');
+        ok('f: the folder-lookup plant applies', noFolders !== api);
+        ok('f: a folder file looked up only in worktreesByRepo is red, naming it', checkLocalPredicate(noFolders).some(f => /folder workspace's file gets worktreePath ""/.test(f)));
+        const noResolver = api.replace(/const host = resolveWorktreeExecutionHost\(lookup, worktree\)\n\s*return host\.kind === 'resolved' && hostIsPaired\(host\.hostId, paired\)/, "return !worktree.hostId || worktree.hostId === 'local'");
+        ok('f: the host-less plant applies', noResolver !== api);
+        ok('f: a host-less worktree taken as local without Orca\'s resolver is red, naming it', checkLocalPredicate(noResolver).some(f => /no host of its own/.test(f)));
         ok('c: no store listener is red "parser blind"', checkStoreListeners(entry.replace(/useAppStore\.subscribe\(\(state, prior\)/, 'useAppStore.subscribeTo((state, prior)')).some(f => /parser blind/.test(f)));
     }
     console.log(failed ? `${NAME} self-test: FAIL -- ${failed} case(s)` : `${NAME} self-test: PASS -- every planted fault went red naming it`);
