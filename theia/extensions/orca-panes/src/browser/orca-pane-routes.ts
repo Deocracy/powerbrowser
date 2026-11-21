@@ -72,6 +72,10 @@ export const ORCA_PAGE_ROUTES: { readonly [view: string]: OrcaPageRoute } = Obje
 export const PAGE_WORDS: { readonly [word: string]: string } = Object.freeze(Object.values(ORCA_PAGE_ROUTES).reduce((words, route) =>
     'word' in route ? { ...words, [route.word]: route.kind } : words, {} as { [word: string]: string }));
 
+/** The page words that open only while an Orca worktree creation is pending, derived from ORCA_PAGE_ROUTES. */
+export const PENDING_CREATION_WORDS: ReadonlySet<string> = new Set(Object.values(ORCA_PAGE_ROUTES).flatMap(route =>
+    'word' in route && route.whilePendingCreation ? [route.word] : []));
+
 export const ORCA_PANE_WIDGET_ID_PREFIX = 'orca-pane:';
 
 /** A widget's Orca key: the pane key for a terminal leaf, the tab id otherwise (C3). */

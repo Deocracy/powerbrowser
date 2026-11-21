@@ -32,6 +32,11 @@
  *     (judged from the active perspective's own view placements) changes
  *     neither side.
  * PB creates no Orca pane and writes no copy; failures are log lines.
+ *
+ * Audit fix: the creating page exists only while a creation is pending: the
+ * first report with none pending closes a restored one, and pendingCreation is
+ * public so that the restore opener refuses it once the store has reported
+ * (theia-pane-hosting-05).
  */
 import { inject, injectable } from '@theia/core/shared/inversify';
 import { Widget } from '@theia/core/shared/@lumino/widgets';
@@ -106,6 +111,8 @@ export class OrcaSidePanelSync implements FrontendApplicationContribution {
     /** The store's activeView, as last reported. */
     protected activeView: string | undefined;
     protected pendingCreation = false;
+    /** Whether the store has reported its view once; until then whether a creation is pending is not known. */
+    protected reported = false;
     protected orchestrationEnabled = false;
     protected readonly worktreePaths = new Map<string, string>();
     /** Main-area widgets, most recently active last. */
@@ -148,6 +155,11 @@ export class OrcaSidePanelSync implements FrontendApplicationContribution {
         }
         this.applyAgents();
         this.startRightSidebar(api);
+    }
+
+    /** theia-pane-hosting-05: whether an Orca worktree creation is pending; undefined until the store has reported. */
+    get creationPending(): boolean | undefined {
+        return this.reported ? this.pendingCreation : undefined;
     }
 
     // (f) Orca's right sidebar and the Theia right panel
@@ -219,12 +231,15 @@ export class OrcaSidePanelSync implements FrontendApplicationContribution {
     protected onActiveView({ view, pendingCreation }: { view: string; pendingCreation: boolean }): void {
         const changed = view !== this.activeView;
         const creationChanged = pendingCreation !== this.pendingCreation;
+        const first = !this.reported;
+        this.reported = true;
         this.activeView = view;
         this.pendingCreation = pendingCreation;
         if (view === 'terminal' && pendingCreation && (changed || creationChanged)) {
             this.openPage(ORCA_CREATING_NAME);
         }
-        if (!pendingCreation && creationChanged) {
+        // theia-pane-hosting-05: the first report closes a creating tab restored with no creation pending.
+        if (!pendingCreation && (creationChanged || first)) {
             this.pageWidget(ORCA_CREATING_NAME)?.close();
         }
         if (!changed) {

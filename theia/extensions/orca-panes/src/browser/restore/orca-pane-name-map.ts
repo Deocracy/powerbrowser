@@ -26,8 +26,9 @@ import { ORCA_PANE_FACTORY_ID } from '@powerbrowser/tab-uris/lib/browser/orca-sc
 import { ProfileStorageService } from '@powerbrowser/tab-uris/lib/browser/profile-storage';
 import { SetupsService } from '@powerbrowser/modes/lib/browser/setups-service';
 import { OrcaPaneOptions, OrcaPanePick } from '../../common/orca-panes-protocol';
-import { ORCA_PANE_WIDGET_ID_PREFIX, PAGE_WORDS, keyOfOptions } from '../orca-pane-routes';
+import { ORCA_PANE_WIDGET_ID_PREFIX, PAGE_WORDS, PENDING_CREATION_WORDS, keyOfOptions } from '../orca-pane-routes';
 import { OrcaPaneWidget } from '../orca-pane-widget';
+import { OrcaSidePanelSync } from '../side-panel/orca-side-panel-sync';
 
 const LOG_PREFIX = '[@powerbrowser/orca-panes]';
 
@@ -169,6 +170,9 @@ export class OrcaPaneRestoreOpenHandler implements OpenHandler {
     @inject(ApplicationShell)
     protected readonly shell: ApplicationShell;
 
+    @inject(OrcaSidePanelSync)
+    protected readonly sidePanel: OrcaSidePanelSync;
+
     /** Above Phase 64's 1000 for a named URI only; the empty path stays Phase 64's (focus the last active hosted tab). */
     canHandle(uri: URI): number {
         return uri.scheme === 'pb-orca' && orcaNameOf(uri) ? 1001 : 0;
@@ -190,6 +194,12 @@ export class OrcaPaneRestoreOpenHandler implements OpenHandler {
     protected async widgetFor(name: string): Promise<OrcaPaneWidget | undefined> {
         const pageKind = Object.prototype.hasOwnProperty.call(PAGE_WORDS, name) ? PAGE_WORDS[name] : undefined;
         if (pageKind) {
+            // theia-pane-hosting-05: the creation surface opens only while a creation is pending. Before the store has
+            // reported this is unknown, so the tab is created and the side panel's first report closes it if none is.
+            if (PENDING_CREATION_WORDS.has(name) && this.sidePanel.creationPending === false) {
+                console.info(`${LOG_PREFIX} pb-orca:${name} opens only while an Orca worktree creation is pending`);
+                return undefined;
+            }
             // N-1: a page tab is a singleton keyed by its options; no Orca tab backs it.
             const page: OrcaPaneOptions = { name, kind: pageKind, worktreeId: '', tabId: '', paneKey: null };
             return this.widgetManager.getOrCreateWidget<OrcaPaneWidget>(ORCA_PANE_FACTORY_ID, page);
