@@ -35,9 +35,10 @@
 // on create, folder 0700 again, stale .tmp removed, .tmp created empty and
 // exclusively, .tmp 0600, content written with overwrite, .tmp moved over the
 // target), and "umask window" when any content write precedes the 0600 call.
-// The data-root join alone is not run while theia/extensions/orca-agents is
-// absent (lane p63-03 not merged), and the row then exits 77 with a SKIP line; the
-// directory present with either file or export missing is red, never a SKIP.
+// theia/extensions/orca-agents is a tracked extension of this repository: an absent
+// directory, or either file or the export missing from it, is red, never a SKIP
+// (harness-static-structure-01; the lane that added it is long merged). Only a missing
+// typescript leaves the writePrivateFile order clause not run, and the row exits 77.
 //
 // Limit: path strings and source order only. The modes on disk and the
 // content are the live row's (orca-agent-status-live, lane p63-03), on Linux.
@@ -242,7 +243,7 @@ export function orderVerdict(source) {
  * { fails } (empty when the three literals agree).
  */
 export async function literalJoin(env, extDir) {
-    if (!existsSync(extDir)) return { skip: 'SKIP (lane p63-03 not merged)' };
+    if (!existsSync(extDir)) return { fails: ['theia/extensions/orca-agents is a tracked extension of this repository and is absent from the tree, so the data-root literal cannot be compared. Next step: restore it from version control.'] };
     const wrapper = join(extDir, 'bin', 'claude-wrapper.mjs');
     const protocol = join(extDir, 'src', 'common', 'orca-agents-protocol.ts');
     const fails = [];
@@ -266,10 +267,6 @@ export async function check({ env, extDir, apiFile }) {
     const fails = [...platformVerdict(env), ...(await folderVerdict(env)), ...joinVerdict(env), ...order.fails];
     const skips = order.skip ? [order.skip] : [];
     const lit = await literalJoin(env, extDir);
-    if (lit.skip) {
-        skips.push('the data-root literal join did not run: theia/extensions/orca-agents is absent (lane p63-03 not merged)');
-        return { fails, join: lit.skip, skips };
-    }
     return { fails: [...fails, ...lit.fails], join: 'compared', skips };
 }
 
@@ -325,6 +322,7 @@ async function runSelfTest() {
             { name: 'the protocol file deleted while the fixture extension directory exists (red, not SKIP)', naming: 'orca-agents-protocol.ts is missing', env: real, ...fileEdit(protocol, () => null) },
             { name: 'writeUTF8 moved before the 0o600 call', naming: 'umask window', env: real, ...fileEdit(apiFile, (t) => swap(CHMOD + WRITE, WRITE + CHMOD)(t)) },
             { name: 'the folder re-apply removed', naming: 'folder re-apply 0700', env: real, ...fileEdit(apiFile, swap('    if (posix) {\n      await IOUtils.setPermissions(dir, 0o700, false);\n    }\n', '')) },
+            { name: 'the orca-agents extension directory absent (red, not SKIP)', naming: 'theia/extensions/orca-agents is a tracked extension of this repository and is absent', env: real, extDir: join(tmp, 'no-such-extension') },
             { name: 'the exclusive create removed', naming: 'exclusive create', env: real, ...fileEdit(apiFile, swap('    await IOUtils.write(tmp, new Uint8Array(0), { mode: "create" });\n', '')) },
             // Harness-static-structure-12: text that survives but control flow that does not.
             { name: 'the 0600 call inside if (false)', naming: '.tmp set 0600 step that runs on every call', env: real, ...fileEdit(apiFile, swap(CHMOD, '    if (false) {\n      await IOUtils.setPermissions(tmp, 0o600, false);\n    }\n')) },
@@ -339,7 +337,7 @@ async function runSelfTest() {
         for (const p of plants) {
             try {
                 p.setup?.();
-                const r = await check({ ...base, env: p.env });
+                const r = await check({ ...base, env: p.env, ...(p.extDir ? { extDir: p.extDir } : {}) });
                 const text = r.fails.join('\n');
                 if (!r.fails.length) { console.error(`  FAIL ${p.name} -> stayed green (join ${r.join})`); failures++; }
                 else if (!text.includes(p.naming)) { console.error(`  FAIL ${p.name} -> red, but not naming '${p.naming}': ${text}`); failures++; }

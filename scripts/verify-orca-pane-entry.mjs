@@ -493,7 +493,7 @@ export function checkEntry({ orcaDir, overlayDir, standaloneDir, baselineFile, t
         // j. every consumer Orca*BundleApi member is a named export of the entry (P65-27).
         const consumers = consumerApiMembers(ts, theiaDir);
         if (got.length === 0) fails.push('parser blind: the entry parse yielded zero exports');
-        else if (consumers.size === 0) skips.push('the consumer-API clause did not run: no interface named Orca<letters>BundleApi under theia/extensions/*/src');
+        else if (consumers.size === 0) fails.push('no interface named Orca<letters>BundleApi under theia/extensions/*/src (OrcaPaneBundleApi is a tracked interface of orca-panes, so the consumer-API clause has lost its input; harness-static-structure-01). Next step: restore the interface from version control.');
         else {
             const exported = new Set(got);
             for (const [iface, members] of consumers) for (const m of members) if (!exported.has(m)) fails.push(`bundle API drift: ${m} (${iface}) is not a named export of the entry`);
@@ -627,6 +627,7 @@ function selfTestBody() {
     run('a renamed preset export is red', p => writeFileSync(join(p.orcaDir, DEVICE_KEY_SUPPORT), 'export function setWebDeviceKeySupportForTesting(support: string | null): void {}\n'), /^source moved: setWebDeviceKeySupportForTests \(P65-17\)/);
     run('a consumer interface member the entry lacks is red', p => writeFileSync(join(p.theiaDir, 'extensions', 'orca-panes', 'src', 'common', 'protocol.ts'), 'export interface OrcaSidePanelBundleApi {\n    subscribeLayout(cb: () => void): () => void;\n}\n'), /^bundle API drift: subscribeLayout \(OrcaSidePanelBundleApi/);
     run('a re-exported name counts as an export', p => { writeFileSync(entry(p), readFileSync(entry(p), 'utf8').replace('export const viewTitle = 1', "export { viewTitle } from './helper'")); writeFileSync(join(dirname(entry(p)), 'helper.ts'), 'export const a = 1\nexport const viewTitle = 1\n'); }, null);
+    run('the OrcaPaneBundleApi interface removed is red, not a skip', p => writeFileSync(join(p.theiaDir, 'extensions', 'orca-panes', 'src', 'common', 'protocol.ts'), 'export const none = 1;\n'), /^no interface named Orca<letters>BundleApi under theia\/extensions\/\*\/src/);
     run('an entry with no exports is red "parser blind"', p => writeFileSync(entry(p), "import '../assets/main.css'\n"), /^parser blind/);
     run('an extra value export is red', p => writeFileSync(entry(p), readFileSync(entry(p), 'utf8') + 'export function paneRecords() {}\n'), /exports name\(s\) outside C3: paneRecords/);
     run('an opened app-root dialog the overlay does not host is red', p => writeFileSync(entry(p), readFileSync(entry(p), 'utf8').replace("activeModal === 'delete-worktree'", "activeModal === 'add-repo'")), /^root dialog not hosted \(D-18\): delete-worktree, opened in src\/renderer\/src\/components\/sidebar\/delete-flow\.ts/);
