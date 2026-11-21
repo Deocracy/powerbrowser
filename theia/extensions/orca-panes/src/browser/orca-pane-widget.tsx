@@ -40,6 +40,7 @@ export class OrcaPaneWidget extends ReactWidget {
     protected shown = false;
     protected mounting = false;
     protected unmount: (() => void) | undefined;
+    protected mountGeneration = 0;
 
     @inject(OrcaPaneWidgetOptions)
     readonly options: OrcaPaneOptions;
@@ -139,8 +140,10 @@ export class OrcaPaneWidget extends ReactWidget {
         this.mounting = true;
         const host = this.host;
         const { kind, worktreeId, tabId, paneKey } = this.options;
+        const generation = this.mountGeneration;
         this.bundle.ready().then(api => {
-            if (!this.isDisposed) {
+            // A rekey since this mount began (64-WR-03) mounts with the new pane key instead.
+            if (!this.isDisposed && generation === this.mountGeneration) {
                 this.unmount = api.mountPane(host, { kind, worktreeId, tabId, paneKey }, this.activity);
             }
         }).catch(() => { /* the bundle logged its failed step once */ });
@@ -174,6 +177,23 @@ export class OrcaPaneWidget extends ReactWidget {
         const { worktreeId, tabId, paneKey } = this.options;
         this.bundle.ready().then(api => api.closePane({ worktreeId, tabId, paneKey }))
             .catch(() => { /* the bundle logged its failed step once */ });
+    }
+
+    /**
+     * 64-WR-03: the terminal tab this widget shows now has its first leaf. The widget keeps its id and name, takes the
+     * leaf's pane key and remounts Orca's pane with it (at the next show when it is not shown yet).
+     */
+    rekey(paneKey: string): void {
+        if (this.options.paneKey === paneKey) {
+            return;
+        }
+        this.options.paneKey = paneKey;
+        this.mountGeneration += 1;
+        const unmount = this.unmount;
+        this.unmount = undefined;
+        unmount?.();
+        this.mounting = false;
+        this.mountOnce();
     }
 
     /** The store dropped this pane: dispose for real. */

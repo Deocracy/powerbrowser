@@ -21,6 +21,9 @@
 //                   keeps one that did not; failed loads leave no loader script behind.
 //  close-unbooted   theia-pane-hosting-01 = 64-CR-02. A hosted tab closes in PowerBrowser while the
 //                   bundle has not booted; once booted the close goes to Orca and the tab stays.
+//  terminal-rekey   64-WR-03 (handed over by G3a). A terminal tab listed first with no leaf and then
+//                   with its first leaf keeps its widget and name (planPanes rekey, tracked or
+//                   layout-restored); the widget remounts with the leaf's pane key.
 //  handoff-both-files, handoff-orcad-port, handoff-orcad-port-unknown, handoff-folder-refused
 //                   pairing-credentials-01, 64-WR-01, 67-WR-03, 67-WR-01 on handOff over a real
 //                   private bridge folder in a mkdtemp directory.
@@ -385,6 +388,53 @@ async function clauseCloseUnbooted(sources, fail) {
     }
 }
 
+// ---------------------------------------------------------------- terminal leaf rekey
+
+async function clauseTerminalRekey(sources, fail) {
+    const { planPanes } = loadTs(REL.routes, { sources });
+    const leaf = { kind: 'terminal', key: 'tab-1:leaf-1', worktreeId: 'w1', worktreeLabel: 'w', tabId: 'tab-1', paneKey: 'tab-1:leaf-1', active: false, title: 'Terminal', neighbours: [] };
+    const fromKnown = planPanes({ known: new Map([['tab-1', { name: 'term1', title: 'Terminal', widgetId: 'orca-pane:term1' }]]), restored: [], reservedNames: ['term1'], hydrated: true }, [leaf]);
+    const fromRestored = planPanes({ known: new Map(), restored: [{ name: 'term1', kind: 'terminal', worktreeId: 'w1', tabId: 'tab-1', paneKey: null }], reservedNames: ['term1'], hydrated: true }, [leaf]);
+    for (const [label, plan] of [['a tracked', fromKnown], ['a layout-restored', fromRestored]]) {
+        const moved = (plan.rekey ?? []).some(r => r.from === 'tab-1' && r.to === 'tab-1:leaf-1' && r.paneKey === 'tab-1:leaf-1' && r.widgetId === 'orca-pane:term1');
+        if (!moved || plan.create.length || plan.dispose.length) {
+            fail('terminal-rekey', `${label} leaf-less terminal tab whose first leaf appeared was ${plan.dispose.length ? 'disposed' : 'not moved'}${plan.create.length ? ` and a new tab ${plan.create[0].name} was created` : ''}; want the same widget re-keyed (64-WR-03)`);
+        }
+    }
+    const second = { ...leaf, key: 'tab-1:leaf-2', paneKey: 'tab-1:leaf-2' };
+    const both = planPanes({ known: new Map([['tab-1', { name: 'term1', title: 'Terminal', widgetId: 'orca-pane:term1' }]]), restored: [], reservedNames: ['term1'], hydrated: true }, [leaf, second]);
+    if ((both.rekey ?? []).length !== 1 || both.create.length !== 1) {
+        fail('terminal-rekey', 'with two leaves listed, only the first takes the leaf-less widget over and the second is a new tab');
+    }
+
+    class ReactWidget { dispose() { /* inert */ } }
+    const { OrcaPaneWidget } = loadTs(REL.widget, {
+        sources,
+        overrides: {
+            '@theia/core/shared/react': { __esModule: true, createElement: () => null, Fragment: 'fragment', useEffect: () => undefined },
+            '@theia/core/lib/browser/widgets/react-widget': { __esModule: true, ReactWidget },
+        },
+    });
+    const widget = new OrcaPaneWidget();
+    const mounts = [];
+    let unmounted = 0;
+    widget.options = { name: 'term1', kind: 'terminal', worktreeId: 'w1', tabId: 'tab-1', paneKey: null };
+    widget.bundle = { isBooted: true, ready: async () => ({ mountPane: (_el, pick) => { mounts.push(pick.paneKey); return () => { unmounted += 1; }; } }) };
+    widget.shown = true;
+    widget.host = {};
+    widget.mountOnce();
+    await flush();
+    if (typeof widget.rekey !== 'function') {
+        fail('terminal-rekey', 'OrcaPaneWidget has no rekey(); the leaf-less widget cannot take the leaf\'s pane key (64-WR-03)');
+        return;
+    }
+    widget.rekey('tab-1:leaf-1');
+    await flush();
+    if (unmounted !== 1 || mounts[mounts.length - 1] !== 'tab-1:leaf-1' || widget.options.paneKey !== 'tab-1:leaf-1') {
+        fail('terminal-rekey', `a re-keyed widget did not remount with the leaf's pane key (mounts ${JSON.stringify(mounts)}, unmounts ${unmounted}) (64-WR-03)`);
+    }
+}
+
 // ---------------------------------------------------------------- backend hand-off
 
 function fixtureOffer(endpointPort, urlPort) {
@@ -565,7 +615,7 @@ async function clauseRestore(sources, fail) {
 
 const CLAUSES = [
     clauseRestartRepair, clauseBootFailedPage, clauseBootFinal, clauseStuckNoOffer, clauseReasonCleared, clauseBootRetry,
-    clauseRetryAssets, clauseCloseUnbooted, clauseHandOff, clauseRevealNoFocus, clauseSidePanel, clauseRestore,
+    clauseRetryAssets, clauseCloseUnbooted, clauseTerminalRekey, clauseHandOff, clauseRevealNoFocus, clauseSidePanel, clauseRestore,
 ];
 
 export async function check(sources = {}) {
@@ -634,6 +684,14 @@ export const PLANTS = [
     {
         name: 'a close before boot is dropped (pre-fix 64-CR-02)', naming: 'close-unbooted', file: REL.widget,
         edits: [['if (!this.bundle.isBooted) {', 'if (false) {']],
+    },
+    {
+        name: 'a terminal tab is disposed and renumbered when its first leaf appears (pre-fix 64-WR-03)', naming: 'terminal-rekey', file: REL.routes,
+        edits: [['} else if (record.paneKey !== null && record.tabId !== record.key', '} else if (false && record.paneKey !== null && record.tabId !== record.key']],
+    },
+    {
+        name: 'a re-keyed widget keeps its leaf-less mount (pre-fix 64-WR-03)', naming: 'terminal-rekey', file: REL.widget,
+        edits: [['        this.mounting = false;\n        this.mountOnce();\n    }', '    }']],
     },
     {
         name: 'handOff checks only web-pairing (pre-fix pairing-credentials-01)', naming: 'handoff-both-files', file: REL.backend,

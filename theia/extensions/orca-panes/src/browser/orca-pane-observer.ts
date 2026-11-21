@@ -200,6 +200,18 @@ export class OrcaPaneObserver implements FrontendApplicationContribution {
                 await this.names.record(widget.options.name, widget.options);
             }
         }
+        // 64-WR-03: a terminal tab's leaf-less record became its first leaf's: same widget, same name, new pane key.
+        for (const { from, to, paneKey, widgetId } of plan.rekey) {
+            const widget = this.widgets.get(from) ?? restored.find(w => w.id === widgetId);
+            const record = byKey.get(to);
+            this.known.delete(from);
+            this.widgets.delete(from);
+            if (widget && record && !widget.isDisposed) {
+                widget.rekey(paneKey);
+                this.track(to, widget, record);
+                await this.names.record(widget.options.name, widget.options); // the name follows; nothing is tombstoned
+            }
+        }
         for (const key of plan.dispose) {
             const tracked = this.widgets.get(key);
             const widget = tracked ?? restored.find(w => keyOfOptions(w.options) === key);
