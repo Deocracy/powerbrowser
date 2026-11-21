@@ -132,6 +132,8 @@ SKIP_LINE_RE='^[[:space:]]*[A-Za-z0-9][A-Za-z0-9 ._/-]*: SKIP( -- (.*))?$'
 
 CURRENT_CHECK_PID=""
 CURRENT_ROW_TOKEN=""
+LIVE_LOCK_STATE=0
+LIVE_LOCK_HOLDER_PID=""
 BACKEND_SPAWN_PID=""
 BROWSER_SPAWN_PID=""
 SERVER_PID=""
@@ -216,6 +218,12 @@ cleanup() {
     kill -- "-$SERVER_PID" 2>/dev/null || kill "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
     SERVER_PID=""
+  fi
+  # The live lock's holder (acquire_live_lock): its group is flock and its sleep, so the lock is released here.
+  if [ -n "$LIVE_LOCK_HOLDER_PID" ]; then
+    kill -- "-$LIVE_LOCK_HOLDER_PID" 2>/dev/null || kill "$LIVE_LOCK_HOLDER_PID" 2>/dev/null || true
+    wait "$LIVE_LOCK_HOLDER_PID" 2>/dev/null || true
+    LIVE_LOCK_HOLDER_PID=""
   fi
   # -rf (not -f): TEMP_PATHS also carries throwaway profile/config directories.
   for p in "${TEMP_PATHS[@]:-}"; do
@@ -4190,6 +4198,7 @@ run_own_checks() {
     # fixture mode over planted rows: PASS, SKIP by exit 77, SKIP by a SKIP last line on exit 0, FAIL, and --gate's
     # keyed exclusions (an unexcused SKIP, a different or second FAIL in an excluded row, a fixed entry). Each planted
     # driver fault (the SKIP rule, exit 77, the gate's SKIP pass, the pattern, mode only, the ledger check) must go red.
+    # Also the leak leg over a row's group and token, the survivor sweep, and the live lock (harness-live-tabs-14).
     "verify-platform-driver-self-test|node $REPO_ROOT/scripts/verify-platform-driver.mjs --self-test"
     # NEW (67-03, RUN-06/RUN-07, P67-01..P67-09, P67-32): orca-offer-file judges real lstat results of a temp folder
     # through orca-panes' offer-file-policy.ts (type-stripped): symlink, non-regular, other owner, group/other bits,
@@ -7051,6 +7060,11 @@ run_own_checks() {
     local label="${entry%%|*}"
     local cmd="${entry#*|}"
     echo "verify-platform: running $label..."
+    if [ -n "${FULL_TIER[$label]:-}" ] && ! acquire_live_lock; then
+      SUMMARY+=("$label: FAIL")
+      FAILED=1
+      continue
+    fi
     # External bash/node script invocations get their own process group via
     # setsid, so an interrupt's group-kill in cleanup() can reach whatever they
     # background (verify-endpoints.sh's own powerbrowser child, two layers
@@ -7116,6 +7130,70 @@ run_own_checks() {
 # SKIP into ROW_VERDICT and ROW_REASON (SKIP-PROTOCOL.md). Exit 0 is PASS unless the last stdout line is a
 # SKIP line (a script not yet converted to exit 77); exit 77 is SKIP and must print a SKIP line; any other
 # status is FAIL. The leak leg can turn any verdict into FAIL.
+# The live lock (audit harness-live-tabs-14). Every live row's header asks to run under flock on
+# <git common dir>/pb-live.lock, so two sessions never run live rows at once; nothing took it. The driver now
+# takes it before its first full-tier row and holds it to the end of the run, through a holder process of its
+# own (flock -o, so no row inherits the lock's descriptor), and exports PB_LIVE_LOCK_HELD=1, which the rows that
+# re-exec themselves under the lock already honour. A caller that holds it already (PB_LIVE_LOCK_HELD=1, or a
+# `flock <lock> scripts/verify-platform.sh` ancestor) is not waited for.
+live_lock_path() {
+  if [ -n "$FIXTURE_REGISTRY" ] && [ -n "${PB_VERIFY_FIXTURE_LOCK:-}" ]; then
+    echo "$PB_VERIFY_FIXTURE_LOCK"
+    return 0
+  fi
+  local common
+  common="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  echo "$common/pb-live.lock"
+}
+# True when a process holding a flock on $1 (/proc/locks, by inode) is this script or one of its ancestors.
+lock_held_by_ancestor() {
+  local ino holders pid
+  ino="$(stat -c %i -- "$1" 2>/dev/null)" || return 1
+  holders="$(awk -v ino="$ino" '$0 !~ /->/ && $2 == "FLOCK" { n = split($6, f, ":"); if (f[n] == ino) print $5 }' /proc/locks 2>/dev/null)"
+  [ -n "$holders" ] || return 1
+  pid=$$
+  while [ -n "$pid" ] && [ "$pid" -gt 1 ]; do
+    case " $(echo $holders) " in *" $pid "*) return 0 ;; esac
+    pid="$(awk '{ sub(/^.*\) /, ""); print $2 }' "/proc/$pid/stat" 2>/dev/null)"
+  done
+  return 1
+}
+acquire_live_lock() {
+  [ "$LIVE_LOCK_STATE" -eq 1 ] && return 0
+  if [ "${PB_LIVE_LOCK_HELD:-}" = "1" ]; then
+    LIVE_LOCK_STATE=1
+    echo "verify-platform: live lock held by the caller (PB_LIVE_LOCK_HELD=1)"
+    return 0
+  fi
+  local lock
+  if ! lock="$(live_lock_path)" || ! : >> "$lock" 2>/dev/null; then
+    echo "verify-platform: FAIL -- the live lock file could not be opened (${lock:-no git common dir}); full-tier rows run only under it" >&2
+    return 1
+  fi
+  if lock_held_by_ancestor "$lock"; then
+    export PB_LIVE_LOCK_HELD=1
+    LIVE_LOCK_STATE=1
+    echo "verify-platform: live lock $lock held by a caller of this run"
+    return 0
+  fi
+  local ready="$ROW_LOG_DIR/live-lock-held" waited=0
+  setsid flock -o "$lock" bash -c 'echo held > "$1"; exec sleep infinity' _ "$ready" < /dev/null > /dev/null 2>&1 {IDLE_FD}>&- &
+  LIVE_LOCK_HOLDER_PID=$!
+  until [ -e "$ready" ]; do
+    if ! kill -0 "$LIVE_LOCK_HOLDER_PID" 2>/dev/null; then
+      echo "verify-platform: FAIL -- flock on the live lock $lock ended without taking it" >&2
+      LIVE_LOCK_HOLDER_PID=""
+      return 1
+    fi
+    [ "$waited" -eq 10 ] && echo "verify-platform: waiting for the live lock $lock (another live run holds it; if this run's caller holds it, set PB_LIVE_LOCK_HELD=1)..."
+    idle 0.1
+    waited=$((waited + 1))
+  done
+  export PB_LIVE_LOCK_HELD=1
+  LIVE_LOCK_STATE=1
+  echo "verify-platform: live lock $lock taken for the full-tier rows"
+}
+
 ROW_SEQ=0
 ROW_VERDICT=""
 ROW_REASON=""
