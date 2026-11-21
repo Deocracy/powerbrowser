@@ -20,7 +20,7 @@
 # nobody watching is the failure mode PITFALLS #8 warns about; the release
 # train's sweep-clock decides the weekly tick and calls this.
 #
-# In the release train this is the only job that runs Orca's code (pnpm install, build, typecheck,
+# This is the only job that runs Orca's code (pnpm install, build, typecheck,
 # orcad). It holds a read-only token that is not persisted; the bot job that
 # mints the App token runs only rebase-orca.sh --replay-only (P68-35).
 

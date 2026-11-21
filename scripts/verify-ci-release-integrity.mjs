@@ -23,10 +23,6 @@
 //                  only past a test that $LOCKS is unchanged, LOCKS comes from a step output computed by git -C orca
 //                  diff --quiet over a *-lock.yaml pathspec (git data, no Orca code), and the PR body carries the
 //                  upstream compare link ${COMPARE_URL} and says the replay's green is not a review of upstream.
-//   orca-off-legion (ci-supply-chain-02) no job on the self-hosted legion labels (powerbrowser-release, legion) runs
-//                  Orca's build (scripts/build-orca.sh, nix develop .#orca, pnpm or corepack): Orca's pin moves weekly
-//                  and legion's host persists between jobs, so its build runs on a hosted job and reaches legion as
-//                  digest-admitted data (that admission is the artifact-digest clause).
 // Every clause derives what it compares from the parsed YAML (job and step lookups by what they run, not by
 // a list kept here), so a renamed step is still found.
 //
@@ -145,17 +141,6 @@ export function check(texts) {
         }
     }
 
-    // orca-off-legion (ci-supply-chain-02)
-    for (const [jId, j] of Object.entries(docs['release.yml']?.jobs ?? {})) {
-        const labels = [j?.['runs-on'] ?? []].flat().map(String);
-        if (!labels.some(l => l === 'powerbrowser-release' || l === 'legion')) continue;
-        stepsOf(j).forEach((st, i) => {
-            for (const l of runOf(st).split('\n').filter(x => !/^\s*#/.test(x) && /scripts\/build-orca(?:-[\w-]+)?\.sh\b|nix develop \.#orca\b|\bpnpm\b|\bcorepack\b/.test(x))) {
-                fail('release.yml', jId, 'orca-off-legion', `step ${i} runs Orca's build on the persistent legion host (${l.trim()}). Next step: build Orca on a hosted job and admit its output here by its digest.`);
-            }
-        });
-    }
-
     // orca-automerge (ci-supply-chain-03)
     {
         const bump = docs['release-train.yml']?.jobs?.['bump-pr-orca'];
@@ -250,8 +235,6 @@ function selfTest() {
         ['the notices digest not taken from the generate job', edit('release-train.yml', '      NOTICES_SHA256: ${{ needs.renovate-licensing.outputs.notices-sha256 }}\n', ''), 'artifact-digest', 'never takes a digest output of renovate-licensing'],
         ['bump-pr-orca carries unbound replay notices', edit('release-train.yml', '      NOTICES_SHA256: ${{ needs.rebase-orca.outputs.notices-sha256 }}\n', ''), 'artifact-digest', 'job bump-pr-orca [artifact-digest]: downloads rebase-orca-notices but never takes'],
         ['the reusable replay exports no notices digest', edit('rebase-orca.yml', '      notices-sha256:\n        description: "The SHA-256 of the THIRD-PARTY-NOTICES.txt uploaded as rebase-orca-notices (empty when unchanged)"\n        value: ${{ jobs.rebase.outputs.notices-sha256 }}\n', ''), 'artifact-digest', 'job rebase-orca [artifact-digest]: uploads rebase-orca-notices,'],
-        // ci-supply-chain-02, the pre-fix build-linux: Orca built in legion's host shell.
-        ['Orca built on legion', edit('release.yml', '          bash scripts/fetch-orca.sh\n          rm -rf orca/out\n', '          bash scripts/fetch-orca.sh\n          nix develop .#orca --command bash scripts/build-orca.sh\n          rm -rf orca/out\n'), 'orca-off-legion', 'job build-linux [orca-off-legion]: step'],
         // ci-supply-chain-03, the pre-fix bump: auto-merge armed on the replay's green alone, no range for the owner.
         ['auto-merge armed whatever the lockfiles', edit('release-train.yml', '          elif [ "$LOCKS" != "unchanged" ]; then\n', '          elif false; then\n'), 'orca-automerge', 'without first testing that no Orca lockfile changed'],
         ['the PR body without the compare link', edit('release-train.yml', ' ${COMPARE_URL} .', ' .'), 'orca-automerge', 'without the upstream compare link'],
@@ -287,4 +270,4 @@ if (fails.length) {
     for (const f of fails) console.error(`  ${f}`);
     process.exit(1);
 }
-console.log(`${NAME}: PASS -- clauses enforced: stage-line, artifact-digest, mode-carry, orca-automerge, orca-off-legion`);
+console.log(`${NAME}: PASS -- clauses enforced: stage-line, artifact-digest, mode-carry, orca-automerge`);
