@@ -4200,6 +4200,44 @@ run_own_checks() {
     # its --quick table, so the quick rows that read a pinned third-party checkout assert in CI instead of skipping.
     "ci-fetches|node $REPO_ROOT/scripts/verify-ci-fetches.mjs"
     "ci-fetches-self-test|node $REPO_ROOT/scripts/verify-ci-fetches.mjs --self-test"
+    # NEW (audit-fix integration, 2026-11-21): the static checks the v1.7 audit-fix lanes added with their fixes. Each
+    # derives its expectation from the tree, and its --self-test plants the pre-fix fault and requires red. The item
+    # ids each one covers are in .planning/workstreams/orca/audit-fix/results/<lane>.md.
+    # G1a chrome shell: agent tabs keep their agent status, cookie rows act on the current site, Stop covers the frontend,
+    # the loopback wall for agent pages, result budget, edit route in agent overlays.
+    "agent-tab-walls|node $REPO_ROOT/scripts/verify-agent-tab-walls.mjs"
+    "agent-tab-walls-self-test|node $REPO_ROOT/scripts/verify-agent-tab-walls.mjs --self-test"
+    # G2 orcad hosting: the lifetime tie, restart, quit ordering, hand-off file removal, the crash window. Its self-test
+    # runs about two minutes on real stand-in processes and is in the full tier below.
+    "orcad-lifecycle|node $REPO_ROOT/scripts/verify-orcad-lifecycle.mjs"
+    # G3a overlay renderer: CSS scope, leaf-addressed split close, guarded store listener, retryable bootstrap, hydration.
+    "orca-overlay-renderer|node $REPO_ROOT/scripts/verify-orca-overlay-renderer.mjs"
+    "orca-overlay-renderer-self-test|node $REPO_ROOT/scripts/verify-orca-overlay-renderer.mjs --self-test"
+    # G3b pane hosting: the boot and restart state machine, offer policy against orcad's own port, terminal re-key, and
+    # the custom-mode rename with its single write queue.
+    "orca-pane-hosting|node $REPO_ROOT/scripts/verify-orca-pane-hosting.mjs"
+    "orca-pane-hosting-self-test|node $REPO_ROOT/scripts/verify-orca-pane-hosting.mjs --self-test"
+    "mode-store-migration|node $REPO_ROOT/scripts/verify-mode-store-migration.mjs"
+    "mode-store-migration-self-test|node $REPO_ROOT/scripts/verify-mode-store-migration.mjs --self-test"
+    # G4 workspace and agents: absent diff sides and git reads that never fetch, the editor router, the crash-safe seeded
+    # upgrade, the claude wrapper's pane handling, the token cookie.
+    "orca-git-sides|node $REPO_ROOT/scripts/verify-orca-git-sides.mjs"
+    "orca-git-sides-self-test|node $REPO_ROOT/scripts/verify-orca-git-sides.mjs --self-test"
+    "orca-editor-router|node $REPO_ROOT/scripts/verify-orca-editor-router.mjs"
+    "orca-editor-router-self-test|node $REPO_ROOT/scripts/verify-orca-editor-router.mjs --self-test"
+    "bundled-extensions-upgrade|node $REPO_ROOT/scripts/verify-bundled-extensions-upgrade.mjs"
+    "bundled-extensions-upgrade-self-test|node $REPO_ROOT/scripts/verify-bundled-extensions-upgrade.mjs --self-test"
+    "claude-wrapper-pane|node $REPO_ROOT/scripts/verify-claude-wrapper-pane.mjs"
+    "claude-wrapper-pane-self-test|node $REPO_ROOT/scripts/verify-claude-wrapper-pane.mjs --self-test"
+    "token-cookie-shadow|node $REPO_ROOT/scripts/verify-token-cookie-shadow.mjs"
+    "token-cookie-shadow-self-test|node $REPO_ROOT/scripts/verify-token-cookie-shadow.mjs --self-test"
+    # G5a CI and release: build and fetch script order, same-run artifact digests for credential-holding jobs, npm on win32.
+    "orca-build-scripts|node $REPO_ROOT/scripts/verify-orca-build-scripts.mjs"
+    "orca-build-scripts-self-test|node $REPO_ROOT/scripts/verify-orca-build-scripts.mjs --self-test"
+    "ci-release-integrity|node $REPO_ROOT/scripts/verify-ci-release-integrity.mjs"
+    "ci-release-integrity-self-test|node $REPO_ROOT/scripts/verify-ci-release-integrity.mjs --self-test"
+    "win-spawn|node $REPO_ROOT/scripts/verify-win-spawn.mjs"
+    "win-spawn-self-test|node $REPO_ROOT/scripts/verify-win-spawn.mjs --self-test"
     # NEW (67-03, RUN-06/RUN-07, P67-01..P67-09, P67-32): orca-offer-file judges real lstat results of a temp folder
     # through orca-panes' offer-file-policy.ts (type-stripped): symlink, non-regular, other owner, group/other bits,
     # missing, non-loopback or mismatched endpoint, undecodable text; OFFER_REFUSAL_REASONS against the copy table's
@@ -6999,6 +7037,9 @@ run_own_checks() {
       # bundled-xpi-live-dev: the same three launches on the dev objdir, so the uBlock Origin blocking assertion runs in
       # every gate while bundled-xpi-live's exclusion (no release package, WINDOWS 30) stands (audit harness-driver-05).
       "bundled-xpi-live-dev|node $REPO_ROOT/scripts/verify-bundled-xpi.mjs --live --dev"
+      # NEW (audit-fix integration, 2026-11-21): orcad-lifecycle's self-test, 27 planted faults over real stand-in
+      # processes, about two minutes, so not --quick. The check itself is a quick row.
+      "orcad-lifecycle-self-test|node $REPO_ROOT/scripts/verify-orcad-lifecycle.mjs --self-test"
       # NEW (59-07prep; full tier since audit harness-driver-06, 59-CR-03): the D-09 re-date tool's self-test. On a
       # synthetic ledger built with gsd-core's own constructors (two open, one fixed, one waived; 59-WR-04) it proves
       # the dry run writes nothing, that a fixed, waived or unknown id is refused before anything is written, and that
