@@ -1398,7 +1398,7 @@
       "case_form": "lower",
       "class": "coincidental",
       "target": "orca",
-      "expected_count": 7250,
+      "expected_count": 7249,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md",
@@ -2132,7 +2132,7 @@
       "case_form": "lower",
       "class": "coincidental",
       "target": "orcad",
-      "expected_count": 2881,
+      "expected_count": 2882,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md",
