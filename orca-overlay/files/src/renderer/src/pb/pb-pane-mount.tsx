@@ -22,7 +22,14 @@ import { LinkRoutingPreferenceDialogProvider } from '../components/link-routing-
 import PinnedTabCloseDialog from '../components/terminal-pane/PinnedTabCloseDialog'
 import RunningTerminalCloseDialog from '../components/terminal-pane/RunningTerminalCloseDialog'
 import TerminalPane from '../components/terminal-pane/TerminalPane'
-import { requestActiveTerminalPaneClose } from '../components/terminal-pane/request-active-terminal-pane-close'
+import { CLOSE_TERMINAL_PANE_EVENT, type CloseTerminalPaneDetail } from '../constants/terminal'
+import { probePtyRunningWork } from '../components/terminal/pty-running-work-probe'
+import { RUNNING_CLOSE_PROBE_TIMEOUT_MS } from '../components/terminal/running-terminal-close-guard'
+import { resolveLeafCloseCopyKind } from '../components/terminal/terminal-close-copy-kind'
+import { useRunningTerminalCloseConfirmStore } from '../store/running-terminal-close-confirm'
+import { commitTerminalSurfaceClose } from '../store/terminals/terminal-surface-close-intent'
+import { closeWebRuntimeTerminal } from '../runtime/web-runtime-terminal-actions'
+import { noteAgentLaunchPaneClosedByUser } from '../lib/agent-launch-pane-closes'
 import NativeChatView from '../components/native-chat/NativeChatView'
 import EmulatorPane from '../components/emulator-pane/EmulatorPane'
 import { closeTerminalTab } from '../components/terminal/terminal-tab-actions'
@@ -187,13 +194,19 @@ export type PanePick = { kind: string; worktreeId: string; tabId: string; paneKe
 type MountError = { kind: string; phase: string; message: string }
 type State = ReturnType<typeof useAppStore.getState>
 
+// Audit overlay-renderer-04: the most recent errors only (a surface that throws on every store update would otherwise
+// grow this for the life of the document), with the total ever recorded beside them.
+const MOUNT_ERRORS_KEPT = 50
 const mountErrors: MountError[] = []
+let mountErrorsTotal = 0
 let isBooted = false
 let booting: Promise<void> | null = null
 
 function recordError(kind: string, phase: string) {
   return (error: unknown): void => {
+    mountErrorsTotal += 1
     mountErrors.push({ kind, phase, message: String((error as Error)?.message ?? error).slice(0, 400) })
+    if (mountErrors.length > MOUNT_ERRORS_KEPT) mountErrors.splice(0, mountErrors.length - MOUNT_ERRORS_KEPT)
   }
 }
 
@@ -654,6 +667,17 @@ async function step<T>(name: string, run: () => T | Promise<T>): Promise<T> {
   }
 }
 
+// Audit overlay-renderer-03: the steps that install something into this document (Orca's preload API, the wrappers
+// around it, the store subscription, the services root) run once; a bootstrap retried after a failed attempt skips
+// those that already completed, so nothing is wrapped or mounted twice.
+const installedSteps = new Set<string>()
+
+async function once(name: string, run: () => unknown): Promise<void> {
+  if (installedSteps.has(name)) return
+  await step(name, run)
+  installedSteps.add(name)
+}
+
 /**
  * Once per document: session-only pairing (the offer read from orcad's web-client URL, C64-5), the web preload
  * API, then the hidden services root. Orca's device-key support is preset to session-no-ed25519 immediately
@@ -666,35 +690,45 @@ export function bootstrap(options: {
   /** Records the user's write in PowerBrowser's profile. */
   rememberPrimarySelectionPaste?: (value: boolean) => void
 }): Promise<void> {
+  // A rejected attempt is not kept: a later call (the host's retry or Reconnect) runs bootstrap again.
   booting ??= (async () => {
     presetSessionOnly()
     await initWebDeviceKeySupport().catch(noop)
     await step('pairing', () => pairSessionOnly(options.pairing))
     if (!assertSessionOnly()) throw new Error('session-only pairing unavailable')
-    await step('installWebPreloadApi', () => installWebPreloadApi())
-    staleNavigationEchoes()
+    await once('installWebPreloadApi', () => installWebPreloadApi())
+    await once('navigation echoes', () => staleNavigationEchoes())
     rememberedPrimarySelectionPaste = options.rememberedPrimarySelectionPaste
-    observePrimarySelectionPasteChoice(options.rememberPrimarySelectionPaste)
-    hostedTerminalKeys()
-    await step('services root', () => {
+    // Installed once, with the first attempt's callback (the host passes the same one on every call).
+    await once('selection paste choice', () => observePrimarySelectionPasteChoice(options.rememberPrimarySelectionPaste))
+    await once('terminal keys', () => hostedTerminalKeys())
+    await once('services root', () => {
       const host = document.createElement('div')
       host.hidden = true
       host.setAttribute('data-pb-orca-services', '')
       document.body.appendChild(host)
-      ReactDOMClient.createRoot(host, rootOptions('services')).render(
-        <Providers>
-          <Services />
-          {/* A8: git-status polling and the editor watch (ActiveWorkspaceSyncGate is inside). */}
-          <AppBackgroundServices />
-          <PinnedTabCloseDialog />
-          <RunningTerminalCloseDialog />
-          <ResumeOffer />
-          <RootDialogs />
-        </Providers>
-      )
+      try {
+        ReactDOMClient.createRoot(host, rootOptions('services')).render(
+          <Providers>
+            <Services />
+            {/* A8: git-status polling and the editor watch (ActiveWorkspaceSyncGate is inside). */}
+            <AppBackgroundServices />
+            <PinnedTabCloseDialog />
+            <RunningTerminalCloseDialog />
+            <ResumeOffer />
+            <RootDialogs />
+          </Providers>
+        )
+      } catch (error) {
+        host.remove()
+        throw error
+      }
     })
     isBooted = true
-  })()
+  })().catch((error: unknown) => {
+    booting = null
+    throw error
+  })
   return booting
 }
 
@@ -873,12 +907,19 @@ export function subscribePanes(listener: (panes: OrcaPaneRecord[]) => void): () 
     ) {
       return
     }
-    const next = paneRecords(state)
-    const text = JSON.stringify(next)
-    if (text !== lastText) {
-      last = next
-      lastText = text
-      listener(last)
+    // Audit 64-WR-04: this runs inside Orca's setState (zustand calls listeners synchronously); a throw here (makePaneKey
+    // refuses a malformed id by contract, or the host's listener) would stop Orca's own update and skip its later
+    // listeners. The failure is recorded and the last list kept.
+    try {
+      const next = paneRecords(state)
+      const text = JSON.stringify(next)
+      if (text !== lastText) {
+        last = next
+        lastText = text
+        listener(last)
+      }
+    } catch (error) {
+      recordError('observation', 'subscribe')(error)
     }
   })
 }
@@ -986,19 +1027,80 @@ export function mountPane(element: HTMLElement, pick: PanePick, activity: PaneAc
 
 // ---------------------------------------------------------------- actions
 
+// Audit overlay-renderer-01: PowerBrowser mounts one TerminalPane per leaf widget, all with the same tabId, so Orca's
+// tab-wide active-pane close event reached every instance and each closed its own manager's active pane (a sibling,
+// or several). A leaf close is therefore addressed to the leaf itself: the running-process prompt is Orca's
+// store-driven one (RunningTerminalCloseDialog, hosted once by the services root), the close is the store and host
+// half of Orca's closePaneLocally, and every mounted instance drops exactly that leaf through Orca's leaf-addressed
+// lifecycle event (CLOSE_TERMINAL_PANE_EVENT, which resolves the leaf id in each manager and is idempotent).
+const closingLeaves = new Set<string>()
+
+function closeTerminalLeaf(worktreeId: string, tabId: string, leafId: string): void {
+  const paneKey = makePaneKey(tabId, leafId)
+  const state = useAppStore.getState()
+  // Stale (a second click, or a leaf Orca already removed): that pane is gone and nothing else closes.
+  if (closingLeaves.has(paneKey) || !leavesOf(state.terminalLayoutsByTabId?.[tabId]?.root).includes(leafId)) return
+  closingLeaves.add(paneKey)
+  queueMicrotask(() => closingLeaves.delete(paneKey))
+  const ptyId = state.terminalLayoutsByTabId?.[tabId]?.ptyIdsByLeafId?.[leafId] ?? null
+  // As closePaneLocally: the host terminal first, or a later authoritative snapshot resurrects the pane.
+  closeWebRuntimeTerminal(ptyId, worktreeId)
+  const launchPane = state.tabsByWorktree[worktreeId]?.find((t) => t.id === tabId)?.agentLaunchPane
+  if (launchPane?.leafId === leafId && !launchPane.outcome) noteAgentLaunchPaneClosedByUser(tabId, leafId)
+  commitTerminalSurfaceClose(worktreeId, { kind: 'pane', tabId, leafId })
+  state.setCacheTimerStartedAt(paneKey, null)
+  state.dropAgentStatus(paneKey, { paneRemoved: true })
+  window.dispatchEvent(new CustomEvent<CloseTerminalPaneDetail>(CLOSE_TERMINAL_PANE_EVENT, { detail: { tabId, leafId } }))
+}
+
+/** Orca's split-close admission for one leaf (use-terminal-pane-close-actions handleRequestClosePane): no PTY or no
+ * live work closes, live work asks, an unanswered probe asks; the opt-out setting closes. */
+function requestTerminalLeafClose(worktreeId: string, tabId: string, leafId: string, tabLabel: string): void {
+  const close = (): void => closeTerminalLeaf(worktreeId, tabId, leafId)
+  const state = useAppStore.getState()
+  const ptyId = state.terminalLayoutsByTabId?.[tabId]?.ptyIdsByLeafId?.[leafId]
+  if (!ptyId || state.settings?.skipCloseTerminalWithRunningProcessConfirm) {
+    close()
+    return
+  }
+  let decided = false
+  const decide = (act: () => void): void => {
+    if (decided) return
+    decided = true
+    act()
+  }
+  const confirm = (): void =>
+    useRunningTerminalCloseConfirmStore.getState().requestRunningTerminalCloseConfirm({
+      // The leaf's pane key: two leaves of one tab are two prompts, a double click on one leaf is one.
+      terminalTabId: makePaneKey(tabId, leafId),
+      tabLabel,
+      copyKind: resolveLeafCloseCopyKind(tabId, leafId),
+      onConfirm: close
+    })
+  const timeout = setTimeout(() => decide(confirm), RUNNING_CLOSE_PROBE_TIMEOUT_MS)
+  void probePtyRunningWork([ptyId], { timeoutMs: RUNNING_CLOSE_PROBE_TIMEOUT_MS })
+    .then((probes) => {
+      clearTimeout(timeout)
+      decide(probes[0]?.verdict === 'live' || probes[0]?.timedOut ? confirm : close)
+    })
+    .catch(() => {
+      clearTimeout(timeout)
+      decide(close)
+    })
+}
+
 /** Orca's own close with Orca's own confirmation (P64-11); never skips the running-process prompt. */
 export function closePane(pick: { worktreeId: string; tabId: string; paneKey: string | null }): void {
   const state = useAppStore.getState()
   const tab = unifiedTabFor(state, pick.worktreeId, pick.tabId)
   if (!tab) return
   if (tab.contentType === 'terminal' && pick.paneKey) {
-    const snapshot = state.terminalLayoutsByTabId?.[tab.entityId]
-    const leaves = leavesOf(snapshot?.root)
+    const leaves = leavesOf(state.terminalLayoutsByTabId?.[tab.entityId]?.root)
     const leaf = pick.paneKey.slice(pick.paneKey.indexOf(':') + 1)
-    if (leaves.length > 1 && leaves.includes(leaf)) {
-      // Orca's split close acts on the active leaf of the mounted pane; make this leaf active first.
-      state.setTabLayout?.(tab.entityId, { ...snapshot!, activeLeafId: leaf })
-      requestActiveTerminalPaneClose(tab.entityId)
+    // Audit 64-WR-02: a close scoped to one pane never escalates to the whole tab; a leaf already gone is closed.
+    if (!leaves.includes(leaf)) return
+    if (leaves.length > 1) {
+      requestTerminalLeafClose(pick.worktreeId, tab.entityId, leaf, tabTitle(state, tab, state.settings?.tabAutoGenerateTitle === true))
       return
     }
   }
@@ -1213,7 +1315,10 @@ export function state(): {
   booted: boolean
   worktrees: OrcaWorktree[]
   panes: number
+  /** The most recent MOUNT_ERRORS_KEPT errors, oldest first. */
   mountErrors: MountError[]
+  /** Every error recorded in this document, including those no longer kept. */
+  mountErrorsTotal: number
   pairing: { sessionOnly: boolean; deviceKeySupport: string | null }
 } {
   const store = useAppStore.getState()
@@ -1227,6 +1332,7 @@ export function state(): {
     worktrees: switchableWorktreesForRows.map((w) => ({ id: w.id, label: w.displayName || w.path, path: w.path })),
     panes: paneRecords(store).length,
     mountErrors: mountErrors.map((error) => ({ ...error })),
+    mountErrorsTotal,
     pairing: pairingState()
   }
 }
