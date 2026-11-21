@@ -64,6 +64,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
+
 import * as RealOrcaEnv from '../powerbrowser/shell/OrcaEnv.sys.mjs';
 import { BROWSER_PROVIDER_REL, descendants, ensurePbNode, installOutputRedaction, installedOrcaPaths } from './lib/orca-run.mjs';
 import { liveEnv } from './lib/firefox-bidi.mjs';
@@ -363,8 +365,7 @@ if (isEntryPoint) {
     let code = 0;
     try {
         const r = await run({ orcaDir: join(REPO_ROOT, 'orca'), overlayDir: join(REPO_ROOT, 'orca-overlay'), nodeBin: async () => (await ensurePbNode()).path });
-        if (r.skip) console.log(`${NAME}: SKIP -- ${r.skip}`);
-        else if (r.fails) { for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`); code = 1; }
+        if (r.skip) { console.log(skipLine(NAME, r.skip)); code = SKIP_EXIT; } else if (r.fails) { for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`); code = 1; }
         else console.log(`${NAME}: PASS -- stock orcad launched the decoy (${r.pass.recordFile} and the provider warning after ${r.pass.stockMs} ms); with ${RealOrcaEnv.ORCAD_HIDDEN_ELECTRON_SWITCH}=1 neither appeared in ${r.pass.switchedMs} ms and orcad kept running`);
     } catch (e) {
         console.error(`${NAME}: FAIL -- ${RealOrcaEnv.redact(e.message)}`);
