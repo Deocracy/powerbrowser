@@ -492,6 +492,7 @@ export const OrcaService = {
       dataRoot: this._effectiveRoot,
       orcaVersion: this._orcaVersion,
       claudeAgentSdkDir: OrcaEnv.claudeAgentSdkDir({ profileDir, backendSettings }),
+      platform: this._bridgePlatform,
     });
     this._pushLog(`Claude agent SDK extension: ${environment[OrcaEnv.ORCAD_CLAUDE_AGENT_SDK_DIR_ENV] ? "enabled" : "disabled"}`);
     // Audit fix orcad-hosting-01: the watch preloaded ahead of orcad's entry file ties orcad, its daemon and

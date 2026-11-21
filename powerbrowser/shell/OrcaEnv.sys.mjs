@@ -60,16 +60,14 @@ export const ORCAD_ENV_ALLOWLIST = Object.freeze([
   "http_proxy",
   "https_proxy",
   "no_proxy",
-  // Audit fix 62-WR-06: the Windows names a Node process and its shells need there. Unset on Linux and
-  // macOS, so they add nothing to orcad's environment on those platforms.
-  "SystemRoot",
-  "USERPROFILE",
-  "LOCALAPPDATA",
-  "ComSpec",
-  "PATHEXT",
-  "TEMP",
-  "TMP",
 ]);
+
+/**
+ * Audit fix 62-WR-06: names copied as well on win32 only, the ones a Node process and its shells need there.
+ * TEMP and TMP are temp-folder names on Linux and macOS too (ORCA_TEMP_ENV_NAMES), where TMPDIR alone is passed,
+ * so they are not added there: the temp folder of orcad, its daemon and the agents stays as it was.
+ */
+export const ORCAD_ENV_ALLOWLIST_WIN32 = Object.freeze(["SystemRoot", "USERPROFILE", "LOCALAPPDATA", "ComSpec", "PATHEXT", "TEMP", "TMP"]);
 
 export const ORCAD_BIND_HOST = "127.0.0.1";
 export const ORCAD_DATA_ROOT_NAME = "powerbrowser-orca";
@@ -107,7 +105,7 @@ const STDERR_LINE_MAX = 4096;
  * The whole child environment for orcad: each allowlisted name PowerBrowser has, then the fixed
  * names. Nothing else of the browser's environment reaches orcad or the agents under it.
  */
-export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion, claudeAgentSdkDir } = {}) {
+export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion, claudeAgentSdkDir, platform } = {}) {
   if (typeof dataRoot !== "string" || !dataRoot) {
     throw new Error("buildOrcadEnv: no data root");
   }
@@ -119,7 +117,7 @@ export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion, claudeAgentSdkDir
     throw new Error("buildOrcadEnv: no Claude agent SDK directory decision");
   }
   const env = {};
-  for (const name of ORCAD_ENV_ALLOWLIST) {
+  for (const name of [...ORCAD_ENV_ALLOWLIST, ...(platform === "win32" ? ORCAD_ENV_ALLOWLIST_WIN32 : [])]) {
     const value = getEnv(name);
     if (typeof value === "string" && value !== "") {
       env[name] = value;
