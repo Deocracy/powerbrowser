@@ -110,9 +110,101 @@ async function clauseA() {
     return { fails, note };
 }
 
+// ---------------------------------------------------------------- TypeScript helpers (b onwards)
+
+const ENTRY = join(OVERLAY, 'src', 'renderer', 'src', 'pb', 'pb-pane-mount.tsx');
+const WORKSPACE_API = join(OVERLAY, 'src', 'renderer', 'src', 'pb', 'pb-workspace-api.ts');
+const ORCA_CONSTANTS = join(ORCA, 'src', 'renderer', 'src', 'constants', 'terminal.ts');
+const TS_PATH = join(REPO_ROOT, 'theia', 'node_modules', 'typescript', 'lib', 'typescript.js');
+
+let ts = null;
+export async function loadTs() {
+    if (!ts && existsSync(TS_PATH)) ts = (await import(pathToFileURL(TS_PATH).href)).default;
+    return ts;
+}
+
+function parse(text, name = 'x.tsx') {
+    return ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true, name.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+}
+
+function walk(node, visit) { visit(node); ts.forEachChild(node, child => walk(child, visit)); }
+
+/** The function declaration named `name` (or a const arrow of that name), or null. */
+function fn(sf, name) {
+    let found = null;
+    walk(sf, n => {
+        if (found) return;
+        if (ts.isFunctionDeclaration(n) && n.name?.text === name) found = n;
+        else if (ts.isVariableDeclaration(n) && n.name.getText?.() === name && n.initializer && (ts.isArrowFunction(n.initializer) || ts.isFunctionExpression(n.initializer))) found = n.initializer;
+    });
+    return found;
+}
+
+/** Callee text of every call under `node` (property access spelled a.b.c). */
+function calls(node) {
+    const out = [];
+    walk(node, n => { if (ts.isCallExpression(n)) out.push({ callee: n.expression.getText(), node: n }); });
+    return out;
+}
+
+const squashTs = s => s.replace(/\s+/g, '');
+
+/** Member names of the exported type alias `name` in a TypeScript source, or null when absent. */
+function typeMembers(text, name) {
+    const sf = parse(text, 'c.ts');
+    let members = null;
+    walk(sf, n => {
+        if (members === null && ts.isTypeAliasDeclaration(n) && n.name.text === name && ts.isTypeLiteralNode(n.type)) {
+            members = n.type.members.map(m => m.name?.getText()).filter(Boolean);
+        }
+    });
+    return members;
+}
+
+// ---------------------------------------------------------------- b. a terminal leaf close addresses its leaf
+
+/**
+ * Clause b (overlay-renderer-01, 64-WR-02) over the entry text and Orca's terminal constants:
+ *   - Orca's tab-wide close request carries no leaf (derived from RequestActiveTerminalPaneCloseDetail), so with one
+ *     TerminalPane per leaf widget it reaches every instance: the entry never sends it;
+ *   - Orca's leaf-addressed close (CloseTerminalPaneDetail) carries leafId, and the entry dispatches it;
+ *   - closePane returns for a requested leaf that is no longer in the layout before any whole-tab close (closeItem).
+ */
+export function checkLeafClose(entryText, constantsText) {
+    const fails = [];
+    const tabWide = typeMembers(constantsText, 'RequestActiveTerminalPaneCloseDetail');
+    const leafWise = typeMembers(constantsText, 'CloseTerminalPaneDetail');
+    if (!tabWide || !leafWise) return ['RequestActiveTerminalPaneCloseDetail or CloseTerminalPaneDetail is absent from Orca constants/terminal.ts (source moved)'];
+    if (!leafWise.includes('leafId')) fails.push('Orca CloseTerminalPaneDetail no longer carries leafId (source moved): re-derive the leaf close');
+    const sf = parse(entryText, 'pb-pane-mount.tsx');
+    const all = calls(sf);
+    const addressesLeaf = tabWide.some(m => /leaf|pane/i.test(m));
+    if (!addressesLeaf && all.some(c => c.callee === 'requestActiveTerminalPaneClose')) {
+        fails.push('the entry sends Orca\'s tab-wide active-pane close (requestActiveTerminalPaneClose), which every leaf widget\'s TerminalPane handles');
+    }
+    if (!addressesLeaf && /REQUEST_ACTIVE_TERMINAL_PANE_CLOSE_EVENT/.test(entryText)) {
+        fails.push('the entry dispatches REQUEST_ACTIVE_TERMINAL_PANE_CLOSE_EVENT, which carries no leaf');
+    }
+    const dispatchesLeafClose = all.some(c => c.callee === 'window.dispatchEvent' && /CLOSE_TERMINAL_PANE_EVENT/.test(c.node.getText()) && /leafId/.test(c.node.getText()));
+    if (!dispatchesLeafClose) fails.push('no window.dispatchEvent of CLOSE_TERMINAL_PANE_EVENT with a leafId: nothing drops the closed leaf from the mounted instances');
+    const close = fn(sf, 'closePane');
+    if (!close) return [...fails, 'closePane is absent from the entry'];
+    const body = close.body.getText();
+    const stale = squashTs(body).search(/if\(!leaves\.includes\(leaf\)\)return/);
+    const whole = squashTs(body).indexOf('.closeItem(');
+    if (stale < 0 || (whole >= 0 && stale > whole)) fails.push('closePane does not return for a requested leaf that is gone before closing the whole tab (64-WR-02)');
+    return fails;
+}
+
+async function clauseB() {
+    if (!(await loadTs())) return { skip: 'theia/node_modules/typescript is absent (install Theia)' };
+    if (!existsSync(ORCA_CONSTANTS)) return { skip: 'orca/src is absent (run scripts/fetch-orca.sh)' };
+    return { fails: checkLeafClose(readFileSync(ENTRY, 'utf8'), readFileSync(ORCA_CONSTANTS, 'utf8')) };
+}
+
 // ---------------------------------------------------------------- driver
 
-const CLAUSES = [['a', clauseA]];
+const CLAUSES = [['a', clauseA], ['b', clauseB]];
 
 async function main() {
     let failed = 0;
@@ -150,6 +242,26 @@ async function selfTest() {
     ok('a: a built sheet from the pre-fix pass is red', checkBuiltSheet(planted, builtBad).length === 1);
     ok('a: a built sheet from the fixed pass is green', checkBuiltSheet(pass, pass.scopeCss(`.dark\\:invert:is(.dark *){filter:invert(1)}.dark .b{color:red}`)).length === 0);
     ok('a: no theme variant in main.css is red "source moved"', checkVariantScoping(pass, []).some(f => /source moved/.test(f)));
+    // b.
+    if (!(await loadTs()) || !existsSync(ORCA_CONSTANTS)) {
+        console.log('  skip b..: theia/node_modules/typescript or orca/src is absent');
+    } else {
+        const entry = readFileSync(ENTRY, 'utf8');
+        const constants = readFileSync(ORCA_CONSTANTS, 'utf8');
+        ok('b: control green on the tree', checkLeafClose(entry, constants).length === 0);
+        const dispatch = /window\.dispatchEvent\(new CustomEvent<CloseTerminalPaneDetail>\(CLOSE_TERMINAL_PANE_EVENT[^\n]*\n/;
+        const tabWide = entry.replace(dispatch, '  requestActiveTerminalPaneClose(tabId)\n');
+        ok('b: the tab-wide close plant applies', tabWide !== entry);
+        const tabWideFails = checkLeafClose(tabWide, constants);
+        ok('b: the tab-wide active-pane close (pre-fix) is red, naming it', tabWideFails.some(f => /requestActiveTerminalPaneClose/.test(f)) && tabWideFails.some(f => /nothing drops the closed leaf/.test(f)));
+        const leafAware = constants.replace(/(export type RequestActiveTerminalPaneCloseDetail = \{\s*tabId: string)/, '$1\n  leafId?: string');
+        ok('b: derived: once Orca\'s tab-wide request carries a leaf, sending it is no longer red', leafAware !== constants && !checkLeafClose(tabWide, leafAware).some(f => /requestActiveTerminalPaneClose/.test(f)));
+        const escalates = entry.replace(/\n\s*if \(!leaves\.includes\(leaf\)\) return\n/, '\n');
+        ok('b: the stale-leaf plant applies', escalates !== entry);
+        ok('b: a gone leaf falling through to the whole-tab close (64-WR-02) is red, naming it', checkLeafClose(escalates, constants).some(f => /64-WR-02/.test(f)));
+        const noLeaf = constants.replace(/(export type CloseTerminalPaneDetail = \{[^}]*?)\n\s*leafId\?: string/, '$1');
+        ok('b: Orca\'s leaf close losing leafId is red "source moved"', noLeaf !== constants && checkLeafClose(entry, noLeaf).some(f => /no longer carries leafId/.test(f)));
+    }
     console.log(failed ? `${NAME} self-test: FAIL -- ${failed} case(s)` : `${NAME} self-test: PASS -- every planted fault went red naming it`);
     return failed ? 1 : 0;
 }

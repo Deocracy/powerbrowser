@@ -22,7 +22,14 @@ import { LinkRoutingPreferenceDialogProvider } from '../components/link-routing-
 import PinnedTabCloseDialog from '../components/terminal-pane/PinnedTabCloseDialog'
 import RunningTerminalCloseDialog from '../components/terminal-pane/RunningTerminalCloseDialog'
 import TerminalPane from '../components/terminal-pane/TerminalPane'
-import { requestActiveTerminalPaneClose } from '../components/terminal-pane/request-active-terminal-pane-close'
+import { CLOSE_TERMINAL_PANE_EVENT, type CloseTerminalPaneDetail } from '../constants/terminal'
+import { probePtyRunningWork } from '../components/terminal/pty-running-work-probe'
+import { RUNNING_CLOSE_PROBE_TIMEOUT_MS } from '../components/terminal/running-terminal-close-guard'
+import { resolveLeafCloseCopyKind } from '../components/terminal/terminal-close-copy-kind'
+import { useRunningTerminalCloseConfirmStore } from '../store/running-terminal-close-confirm'
+import { commitTerminalSurfaceClose } from '../store/terminals/terminal-surface-close-intent'
+import { closeWebRuntimeTerminal } from '../runtime/web-runtime-terminal-actions'
+import { noteAgentLaunchPaneClosedByUser } from '../lib/agent-launch-pane-closes'
 import NativeChatView from '../components/native-chat/NativeChatView'
 import EmulatorPane from '../components/emulator-pane/EmulatorPane'
 import { closeTerminalTab } from '../components/terminal/terminal-tab-actions'
@@ -986,19 +993,80 @@ export function mountPane(element: HTMLElement, pick: PanePick, activity: PaneAc
 
 // ---------------------------------------------------------------- actions
 
+// Audit overlay-renderer-01: PowerBrowser mounts one TerminalPane per leaf widget, all with the same tabId, so Orca's
+// tab-wide active-pane close event reached every instance and each closed its own manager's active pane (a sibling,
+// or several). A leaf close is therefore addressed to the leaf itself: the running-process prompt is Orca's
+// store-driven one (RunningTerminalCloseDialog, hosted once by the services root), the close is the store and host
+// half of Orca's closePaneLocally, and every mounted instance drops exactly that leaf through Orca's leaf-addressed
+// lifecycle event (CLOSE_TERMINAL_PANE_EVENT, which resolves the leaf id in each manager and is idempotent).
+const closingLeaves = new Set<string>()
+
+function closeTerminalLeaf(worktreeId: string, tabId: string, leafId: string): void {
+  const paneKey = makePaneKey(tabId, leafId)
+  const state = useAppStore.getState()
+  // Stale (a second click, or a leaf Orca already removed): that pane is gone and nothing else closes.
+  if (closingLeaves.has(paneKey) || !leavesOf(state.terminalLayoutsByTabId?.[tabId]?.root).includes(leafId)) return
+  closingLeaves.add(paneKey)
+  queueMicrotask(() => closingLeaves.delete(paneKey))
+  const ptyId = state.terminalLayoutsByTabId?.[tabId]?.ptyIdsByLeafId?.[leafId] ?? null
+  // As closePaneLocally: the host terminal first, or a later authoritative snapshot resurrects the pane.
+  closeWebRuntimeTerminal(ptyId, worktreeId)
+  const launchPane = state.tabsByWorktree[worktreeId]?.find((t) => t.id === tabId)?.agentLaunchPane
+  if (launchPane?.leafId === leafId && !launchPane.outcome) noteAgentLaunchPaneClosedByUser(tabId, leafId)
+  commitTerminalSurfaceClose(worktreeId, { kind: 'pane', tabId, leafId })
+  state.setCacheTimerStartedAt(paneKey, null)
+  state.dropAgentStatus(paneKey, { paneRemoved: true })
+  window.dispatchEvent(new CustomEvent<CloseTerminalPaneDetail>(CLOSE_TERMINAL_PANE_EVENT, { detail: { tabId, leafId } }))
+}
+
+/** Orca's split-close admission for one leaf (use-terminal-pane-close-actions handleRequestClosePane): no PTY or no
+ * live work closes, live work asks, an unanswered probe asks; the opt-out setting closes. */
+function requestTerminalLeafClose(worktreeId: string, tabId: string, leafId: string, tabLabel: string): void {
+  const close = (): void => closeTerminalLeaf(worktreeId, tabId, leafId)
+  const state = useAppStore.getState()
+  const ptyId = state.terminalLayoutsByTabId?.[tabId]?.ptyIdsByLeafId?.[leafId]
+  if (!ptyId || state.settings?.skipCloseTerminalWithRunningProcessConfirm) {
+    close()
+    return
+  }
+  let decided = false
+  const decide = (act: () => void): void => {
+    if (decided) return
+    decided = true
+    act()
+  }
+  const confirm = (): void =>
+    useRunningTerminalCloseConfirmStore.getState().requestRunningTerminalCloseConfirm({
+      // The leaf's pane key: two leaves of one tab are two prompts, a double click on one leaf is one.
+      terminalTabId: makePaneKey(tabId, leafId),
+      tabLabel,
+      copyKind: resolveLeafCloseCopyKind(tabId, leafId),
+      onConfirm: close
+    })
+  const timeout = setTimeout(() => decide(confirm), RUNNING_CLOSE_PROBE_TIMEOUT_MS)
+  void probePtyRunningWork([ptyId], { timeoutMs: RUNNING_CLOSE_PROBE_TIMEOUT_MS })
+    .then((probes) => {
+      clearTimeout(timeout)
+      decide(probes[0]?.verdict === 'live' || probes[0]?.timedOut ? confirm : close)
+    })
+    .catch(() => {
+      clearTimeout(timeout)
+      decide(close)
+    })
+}
+
 /** Orca's own close with Orca's own confirmation (P64-11); never skips the running-process prompt. */
 export function closePane(pick: { worktreeId: string; tabId: string; paneKey: string | null }): void {
   const state = useAppStore.getState()
   const tab = unifiedTabFor(state, pick.worktreeId, pick.tabId)
   if (!tab) return
   if (tab.contentType === 'terminal' && pick.paneKey) {
-    const snapshot = state.terminalLayoutsByTabId?.[tab.entityId]
-    const leaves = leavesOf(snapshot?.root)
+    const leaves = leavesOf(state.terminalLayoutsByTabId?.[tab.entityId]?.root)
     const leaf = pick.paneKey.slice(pick.paneKey.indexOf(':') + 1)
-    if (leaves.length > 1 && leaves.includes(leaf)) {
-      // Orca's split close acts on the active leaf of the mounted pane; make this leaf active first.
-      state.setTabLayout?.(tab.entityId, { ...snapshot!, activeLeafId: leaf })
-      requestActiveTerminalPaneClose(tab.entityId)
+    // Audit 64-WR-02: a close scoped to one pane never escalates to the whole tab; a leaf already gone is closed.
+    if (!leaves.includes(leaf)) return
+    if (leaves.length > 1) {
+      requestTerminalLeafClose(pick.worktreeId, tab.entityId, leaf, tabTitle(state, tab, state.settings?.tabAutoGenerateTitle === true))
       return
     }
   }
