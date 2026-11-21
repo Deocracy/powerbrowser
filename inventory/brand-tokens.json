@@ -976,7 +976,7 @@
       "case_form": "title",
       "class": "coincidental",
       "target": "Orca",
-      "expected_count": 3847,
+      "expected_count": 3893,
       "expected_files": [
         ".claude/hooks/ledger-session-check.py",
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
@@ -1390,7 +1390,7 @@
       "case_form": "lower",
       "class": "coincidental",
       "target": "orca",
-      "expected_count": 6603,
+      "expected_count": 6686,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md",
@@ -1822,7 +1822,7 @@
       "case_form": "upper",
       "class": "coincidental",
       "target": "ORCA",
-      "expected_count": 1489,
+      "expected_count": 1506,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
@@ -2110,7 +2110,7 @@
       "case_form": "lower",
       "class": "coincidental",
       "target": "orcad",
-      "expected_count": 2552,
+      "expected_count": 2566,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md",
@@ -3072,11 +3072,12 @@
       "case_form": "literal",
       "class": "coincidental",
       "target": "PowerBrowserOrcaHosting",
-      "expected_count": 12,
+      "expected_count": 17,
       "expected_files": [
         "powerbrowser/INTERNAL-APIS.md",
         "powerbrowser/shell/OrcaService.sys.mjs",
         "powerbrowser/shell/PowerBrowserAPI.sys.mjs",
+        "scripts/verify-agent-tab-walls.mjs",
         "scripts/verify-orca-service.mjs",
         "scripts/verify-orcad-lifecycle.mjs"
       ],
@@ -3084,6 +3085,7 @@
         "powerbrowser/INTERNAL-APIS.md",
         "powerbrowser/shell/OrcaService.sys.mjs",
         "powerbrowser/shell/PowerBrowserAPI.sys.mjs",
+        "scripts/verify-agent-tab-walls.mjs",
         "scripts/verify-orca-service.mjs",
         "scripts/verify-orcad-lifecycle.mjs"
       ],
@@ -3366,6 +3368,20 @@
         "scripts/verify-orca-pin.mjs"
       ],
       "reason": "v1.7 audit fix (2026-11-21), 60-04 literal-row rule: the camelCase identifier noOrca, added by an audit-fix lane in .planning/workstreams/orca/phases/68-three-os-artifacts-weekly-re-pin-and-upstream-seams/68-06-SUMMARY.md, inventory/brand-tokens.json, scripts/verify-build-windows-shape.mjs, scripts/verify-orca-browser-snapshot-live.mjs, scripts/verify-orca-pin.mjs, which the boundary matcher rejects (a letter joins the Orca form). Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured over the tracked tree and then confirmed by the scan itself."
+    },
+    {
+      "token": "findOrcaFailureDir",
+      "case_form": "literal",
+      "class": "coincidental",
+      "target": "findOrcaFailureDir",
+      "expected_count": 2,
+      "expected_files": [
+        "scripts/verify-shell-error-copy.mjs"
+      ],
+      "only_in": [
+        "scripts/verify-shell-error-copy.mjs"
+      ],
+      "reason": "v1.7 audit fix (2026-11-21), 60-04 literal-row rule: the camelCase identifier findOrcaFailureDir, added by an audit-fix lane in scripts/verify-shell-error-copy.mjs, which the boundary matcher rejects (a letter joins the Orca form). Orca is a third-party name that stays, so the row is coincidental with target equal to token; it is scoped to the files where this form occurs and reconciles by exact count over the tracked tree, so another occurrence in these files or any occurrence elsewhere fails the scan (scope.tracked_residue_probes). Count measured over the tracked tree and then confirmed by the scan itself."
     }
   ]
 }

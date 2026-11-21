@@ -4254,6 +4254,9 @@ run_own_checks() {
     # H5 live security: the shared live-row libraries (launch environment, live lock, verdict coverage) proven by plants
     # without a browser, including the decoy-HOME clause that could not go red before.
     "live-harness-libs-self-test|node $REPO_ROOT/scripts/verify-live-harness-libs.mjs --self-test"
+    # H8 other checks: the snapshot-fixture generator builds its child environment only through its allowlist helper and
+    # gives every child the scratch working directory (source-text assertions over the generator itself, 8 plants).
+    "gen-orca-snapshot-fixtures-self-test|node $REPO_ROOT/scripts/gen-orca-snapshot-fixtures.mjs --self-test"
     # NEW (67-03, RUN-06/RUN-07, P67-01..P67-09, P67-32): orca-offer-file judges real lstat results of a temp folder
     # through orca-panes' offer-file-policy.ts (type-stripped): symlink, non-regular, other owner, group/other bits,
     # missing, non-loopback or mismatched endpoint, undecodable text; OFFER_REFUSAL_REASONS against the copy table's
