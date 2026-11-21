@@ -18,6 +18,9 @@
 //                refuses the sidecar and orcad ports on every loopback spelling and nothing else; browser.goto there
 //                navigates nothing; the observer cancels an agent request, redirect and loopback response on them,
 //                never a dev-server request or a user overlay's.
+//  cookies       [agent-browser-03, chrome-actor-04]  over a two-site jar, an agent tab on one site reads that site's
+//                cookies only, never an httpOnly value and never the whole container; another site's or a public
+//                suffix's get, set and delete are refused with no cookie-service call; its own site's set works.
 //
 // Tier: quick (text reads and node:vm). --self-test plants each pre-fix fault in an in-memory copy of the tree and
 // requires the clause to go red naming it.
@@ -168,6 +171,11 @@ function worldOf(texts) {
     return makeWorld(sliced);
 }
 
+/** A global of a stub world's vm context, read through that context's own Function constructor. */
+function contextGlobal(w, name) {
+    return w.AGENT_NATIVE_ROWS['browser.goto'].constructor(`return ${name};`)();
+}
+
 // The budget the shipped section declares; the plant-free measure is UTF-8 bytes of the result's JSON.
 function budgetOf(texts) {
     const m = /const AGENT_RESULT_MAX_BYTES = (\d+) \* (\d+);/.exec(texts.api);
@@ -267,7 +275,58 @@ async function servicesClause(texts) {
     return failures;
 }
 
-const CLAUSES = [scrollClause, editStateClause, budgetClause, historyClause, servicesClause];
+// agent-browser-03 / chrome-actor-04: over the stub world with a cookie jar holding two sites' cookies (one httpOnly
+// each), an agent tab on one site: cookie.get with no url and with that site's url returns that site's cookies only and
+// no httpOnly value; a url, set domain or delete domain on the other site is refused with no cookie-service call; the
+// whole-container read is never made. The stub's own cookie service is replaced, so the jar is this clause's.
+async function cookiesClause(texts) {
+    const failures = [];
+    const w = worldOf(texts);
+    const entry = w.addTab('a1', { agent: true });
+    entry.browser.currentURI = { host: 'app.example.com', spec: 'https://app.example.com/' };
+    const jar = [
+        { host: '.example.com', name: 'sid', value: 'SECRET-EXAMPLE', path: '/', isHttpOnly: true, isSession: true, sameSite: 1 },
+        { host: 'app.example.com', name: 'theme', value: 'dark', path: '/', isHttpOnly: false, isSession: true, sameSite: 1 },
+        { host: '.other.test', name: 'sid', value: 'SECRET-OTHER', path: '/', isHttpOnly: true, isSession: true, sameSite: 1 },
+    ];
+    const calls = [];
+    const site = h => h.replace(/^\./, '').split('.').slice(-2).join('.');
+    // The world's Services object is its vm context's global; the context's own Function constructor reaches it.
+    const services = contextGlobal(w, 'Services');
+    services.cookies = {
+        getCookiesFromHost: (host) => { calls.push(`getCookiesFromHost ${host}`); return jar.filter(c => site(c.host) === site(host)); },
+        getCookiesWithOriginAttributes: () => { calls.push('getCookiesWithOriginAttributes'); return jar; },
+        add: (host) => { calls.push(`add ${host}`); return { result: 0 }; },
+    };
+    // Gecko's eTLD service throws for an IP address and for a host with too few labels.
+    services.eTLD = { getBaseDomainFromHost: h => { if (/^[\d.]+$/.test(h) || !h.includes('.')) throw new Error('NS_ERROR_HOST_IS_IP_ADDRESS'); return site(h); } };
+    const valuesOf = reply => (reply?.result?.cookies ?? []).map(c => `${c.domain}:${c.name}=${c.value}`);
+    for (const [label, params] of [['cookie.get with no url', {}], ['cookie.get for the current site', { url: 'https://example.com/' }]]) {
+        const reply = await w.agent('a1', 'browser.cookie.get', params);
+        const got = valuesOf(reply);
+        if (reply?.where !== 'done') { failures.push(`cookies: ${label} answered ${JSON.stringify(reply)}; expected done`); continue; }
+        if (got.some(v => v.includes('other.test'))) failures.push(`cookies: ${label} returned another site's cookies (${got.join(', ')}) (agent-browser-03)`);
+        if (got.some(v => v.includes('SECRET'))) failures.push(`cookies: ${label} returned an httpOnly cookie's value (${got.join(', ')}) (agent-browser-03)`);
+        if (!got.some(v => v.includes('theme=dark'))) failures.push(`cookies: broken instrument: ${label} did not return the site's own cookie (${got.join(', ')})`);
+    }
+    if (calls.includes('getCookiesWithOriginAttributes')) failures.push('cookies: cookie.get read the whole agent container (getCookiesWithOriginAttributes), every site of every agent (chrome-actor-04)');
+    for (const [label, method, params] of [
+        ['cookie.get for another site', 'browser.cookie.get', { url: 'https://other.test/' }],
+        ['cookie.set on another site', 'browser.cookie.set', { name: 'sid', value: 'x', domain: '.other.test' }],
+        ['cookie.set on a public suffix', 'browser.cookie.set', { name: 'sid', value: 'x', domain: 'com' }],
+        ['cookie.delete on another site', 'browser.cookie.delete', { name: 'sid', domain: 'other.test' }],
+    ]) {
+        calls.length = 0;
+        const reply = await w.agent('a1', method, params);
+        if (reply?.where === 'done' || calls.length) failures.push(`cookies: ${label} answered ${JSON.stringify(reply?.where)} after cookie calls [${calls.join(', ')}]; expected a refusal with none (agent-browser-03)`);
+    }
+    calls.length = 0;
+    const own = await w.agent('a1', 'browser.cookie.set', { name: 'theme', value: 'light', domain: 'app.example.com' });
+    if (own?.where !== 'done' || !calls.includes('add app.example.com')) failures.push(`cookies: cookie.set on the current site answered ${JSON.stringify(own)}; expected done (positive control)`);
+    return failures;
+}
+
+const CLAUSES = [scrollClause, editStateClause, budgetClause, historyClause, servicesClause, cookiesClause];
 
 export async function checkTexts(texts) {
     const failures = [];
@@ -359,6 +418,21 @@ const PLANTS = [
         name: 'agent-browser-06: orcad\'s port pref drifts from OrcaService',
         plant: t => ({ ...t, api: replaceOnce(t.api, 'const AGENT_ORCA_PORT_DEFAULT = 26768;', 'const AGENT_ORCA_PORT_DEFAULT = 26769;', 'orcad default') }),
         expect: 'drifts out of the wall',
+    },
+    {
+        name: 'agent-browser-03: cookie.get returns httpOnly values',
+        plant: t => ({ ...t, api: replaceOnce(t.api, 'value: c.isHttpOnly ? "" : c.value', 'value: c.value', 'httpOnly value') }),
+        expect: 'returned an httpOnly cookie\'s value',
+    },
+    {
+        name: 'agent-browser-03: the cookie rows act on any site',
+        plant: t => ({ ...t, api: replaceOnce(t.api, 'return site && agentSiteOf(host) === site ? host : "";', 'return host;', 'site scope') }),
+        expect: 'cookie.set on another site answered',
+    },
+    {
+        name: 'chrome-actor-04: cookie.get with no url reads the whole agent container',
+        plant: t => ({ ...t, api: replaceOnce(t.api, 'cookies: Services.cookies.getCookiesFromHost(host, attrs).map(', 'cookies: (params.url ? Services.cookies.getCookiesFromHost(host, attrs) : Services.cookies.getCookiesWithOriginAttributes(JSON.stringify(attrs))).map(', 'whole container') }),
+        expect: 'read the whole agent container',
     },
 ];
 

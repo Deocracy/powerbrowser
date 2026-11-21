@@ -11609,22 +11609,56 @@ function agentHostOf(entry, url) {
 
 const AGENT_SAME_SITE = ["None", "Lax", "Strict"];
 
+// agent-browser-03 / chrome-actor-04: every agent of every worktree shares the one agent container, so a session that
+// the user or another agent made there would be readable and replaceable by any later agent. The cookie rows
+// therefore act only on the site the tab is on now (its registrable domain), and cookie.get never returns an httpOnly
+// cookie's value. Page script on that site already reads and writes its other cookies, so an agent on the site loses
+// nothing it could not do through the page.
+function agentSiteOf(host) {
+  const h = String(host ?? "").toLowerCase().replace(/^\.+/, "").replace(/\.$/, "");
+  if (!h) {
+    return "";
+  }
+  try {
+    return Services.eTLD.getBaseDomainFromHost(h);
+  } catch {
+    // an IP address, localhost or a bare public suffix is its own site
+    return h;
+  }
+}
+
+// The host a cookie row may act on: `host` when it is on the tab's current site, else "".
+function agentSiteHost(entry, host) {
+  const site = agentSiteOf(agentHostOf(entry, null));
+  return site && agentSiteOf(host) === site ? host : "";
+}
+
 function agentCookieGet(entry, params) {
   const attrs = agentOriginAttributes(entry);
-  const host = params.url ? agentHostOf(entry, params.url) : "";
-  if (params.url && !host) {
+  const named = params.url ? agentHostOf(entry, params.url) : agentHostOf(entry, null);
+  if (params.url && !named) {
     return agentFailed("browser_error");
   }
-  const cookies = host ? Services.cookies.getCookiesFromHost(host, attrs) : Services.cookies.getCookiesWithOriginAttributes(JSON.stringify(attrs));
+  if (!named) {
+    return agentDone({ cookies: [] }); // a page with no site (the empty page) has no cookies to read
+  }
+  const host = agentSiteHost(entry, named);
+  if (!host) {
+    return agentFailed("browser_command_unavailable");
+  }
   return agentDone({
-    cookies: cookies.map(c => ({ name: c.name, value: c.value, domain: c.host, path: c.path, expires: c.isSession ? -1 : Math.floor(c.expiry / 1000), httpOnly: c.isHttpOnly, secure: c.isSecure, sameSite: AGENT_SAME_SITE[c.sameSite] ?? "None" })),
+    cookies: Services.cookies.getCookiesFromHost(host, attrs).map(c => ({ name: c.name, value: c.isHttpOnly ? "" : c.value, domain: c.host, path: c.path, expires: c.isSession ? -1 : Math.floor(c.expiry / 1000), httpOnly: c.isHttpOnly, secure: c.isSecure, sameSite: AGENT_SAME_SITE[c.sameSite] ?? "None" })),
   });
 }
 
 function agentCookieSet(entry, params) {
-  const host = params.domain || agentHostOf(entry, null);
-  if (!host) {
+  const named = params.domain || agentHostOf(entry, null);
+  if (!named) {
     return agentFailed("browser_error");
+  }
+  const host = agentSiteHost(entry, named);
+  if (!host) {
+    return agentFailed("browser_command_unavailable");
   }
   const sameSite = { none: 0, lax: 1, strict: 2 }[String(params.sameSite ?? "lax").toLowerCase()] ?? 1;
   const session = !agentNumber(params.expires) || params.expires <= 0;
@@ -11635,9 +11669,13 @@ function agentCookieSet(entry, params) {
 }
 
 function agentCookieDelete(entry, params) {
-  const host = params.domain || agentHostOf(entry, params.url);
-  if (!host) {
+  const named = params.domain || agentHostOf(entry, params.url);
+  if (!named) {
     return agentFailed("browser_error");
+  }
+  const host = agentSiteHost(entry, named);
+  if (!host) {
+    return agentFailed("browser_command_unavailable");
   }
   const attrs = agentOriginAttributes(entry);
   let deleted = 0;
