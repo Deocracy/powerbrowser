@@ -1,16 +1,16 @@
 # Result: G1a-chrome-shell
 
-Branch: worktree-agent-a5092d30574b83066   Base: 0f9f2735401a08132a479c95c09c53f03015fa19 (round 2 on 1dd2cbfc)   Final: (this record's commit; code final ad5a5a7b)
+Branch: worktree-agent-a5092d30574b83066   Base: 0f9f2735401a08132a479c95c09c53f03015fa19 (round 2 on 1dd2cbfc, round 3 on f79672d7)   Final: (this record's commit; code final 1e26065d)
 
 | ID | Status | Commit | Check | Note |
 |---|---|---|---|---|
-| agent-browser-03 | fixed | 377f5449, c2ac1d12 | verify-agent-tab-walls.mjs::cookies | no cookie row reaches an httpOnly cookie: get withholds its value, set refuses httpOnly true and any name the site holds as httpOnly, delete refuses one; rows act on the current site only |
-| agent-browser-04 | fixed | 3f42d38c, f766f926, ddd629f5 | verify-agent-tab-walls.mjs::stop | Stop is per shell window and survives a frontend reload: every agent tab stopped, new agent tabs refused until Resume; the mark renders from chrome's agent status in the control push; Orca navigate goes through the agent wall |
+| agent-browser-03 | fixed | 377f5449, c2ac1d12, ce770626 | verify-agent-tab-walls.mjs::cookies | no cookie row reaches an httpOnly cookie: get withholds its value, set refuses httpOnly true and any name the site holds as httpOnly, delete refuses one; rows act on the current site only |
+| agent-browser-04 | fixed | 3f42d38c, f766f926, ddd629f5, 9cb09613 | verify-agent-tab-walls.mjs::stop | Stop is per shell window and survives a frontend reload: every agent tab stopped, new agent tabs refused until Resume; the mark renders from chrome's agent status in the control push; Orca navigate goes through the agent wall |
 | chrome-actor-03 | needs-owner | - | no-check: no code change | Orca's bundle shares the Theia realm; an in-realm nonce or MessagePort is readable by same-realm script, so only a separate origin or frame (Route B') is a boundary |
-| agent-browser-02 = chrome-actor-02 = 66-CR-01 | fixed | 9d2e4bd1, ddd629f5, ad5a5a7b | verify-agent-tab-walls.mjs::agentFlag | agent tabs live under a web:agent- row key; chrome makes any open under one an agent tab, after a relaunch too, and refuses an agent tab under any other key; tab ids are also remembered for the session; the widget sends the flag on every open |
+| agent-browser-02 = chrome-actor-02 = 66-CR-01 | fixed | 9d2e4bd1, ddd629f5, ad5a5a7b, 8b22489c | verify-agent-tab-walls.mjs::agentFlag | agent tabs live under a web:agent- row key; chrome makes any open under one an agent tab, after a relaunch too, and refuses an agent tab under any other key; tab ids are also remembered for the session; the widget sends the flag on every open |
 | 59-WR-02 | fixed | a20914da | verify-agent-tab-walls.mjs::scroll | scrollIntoView with behavior "instant" in agentCentre and the scrollIntoView row |
 | 59-WR-01 | fixed | 93122d51, fb31e37f | verify-agent-tab-walls.mjs::editState | text-field edit rows in agent overlays use the Controllers route |
-| 59-WR-03 | fixed | 30f12b86, 17f0683f | verify-agent-tab-walls.mjs::budget | every done result measured once in UTF-8 JSON bytes; a snapshot keeps room for the browserPageId, url and title the dispatcher adds |
+| 59-WR-03 | fixed | 30f12b86, 17f0683f, a26d2596 | verify-agent-tab-walls.mjs::budget | every done result measured once in UTF-8 JSON bytes; a snapshot keeps room for the browserPageId, url and title the dispatcher adds |
 | 59-WR-05 | fixed | 0467eafe | verify-agent-tab-walls.mjs::sideHeader | side header scrollbar built on X, icons do not shrink, comment corrected |
 | 66-WR-06 | fixed | 3f42d38c | verify-agent-tab-walls.mjs::stop | widget exposes `opened`; the host awaits it and fails createPage (and closes the tab) unless chrome answers opened or loading |
 | agent-browser-06 | fixed (in part) | a1726b47, 224a6612, fb31e37f | verify-agent-tab-walls.mjs::services | agent loads to the sidecar and orcad ports are refused before send, by container (workers included), on a normalised address; a DNS-rebinding name can still deliver one request (Needs owner) |
@@ -18,10 +18,11 @@ Branch: worktree-agent-a5092d30574b83066   Base: 0f9f2735401a08132a479c95c09c53f
 | chrome-actor-05 | fixed | c6bc56b7 | verify-agent-tab-walls.mjs::history | agent overlays carry disableglobalhistory from creation; tab-store rows unchanged |
 | chrome-actor-06 | fixed | 93122d51, fb31e37f | verify-agent-tab-walls.mjs::editState | pageEditTargetCommands and webTabEditEnabled do not ask for the edit-state pair in agent overlays |
 | 67-WR-04 (from G3b) | fixed | 35c83570 | verify-agent-tab-walls.mjs::orcaStatus | orcaStatus accepts the literal `{ clientReason: null }` and calls `OrcaService.clientRecovered?.()` |
-| orcad-hosting-03 (from G2) | fixed | 9a5226ef, ad5a5a7b | verify-agent-tab-walls.mjs::socketTable | `PowerBrowserOrcaHosting.readLoopbackSocketTable()` resolves `{ tcp, tcp6, uid }`, reading both tables; the body is on PowerBrowserProcesses so ng-027 sees its caller |
+| orcad-hosting-03 (from G2) | fixed | 9a5226ef, ad5a5a7b, dbbcbff0 | verify-agent-tab-walls.mjs::socketTable | `PowerBrowserOrcaHosting.readLoopbackSocketTable()` resolves `{ tcp, tcp6, uid }`, reading both tables; the body is on PowerBrowserProcesses so ng-027 sees its caller |
 | review item 6 (catalogue) | fixed | fd3d9a33 | verify-agent-tab-walls.mjs::catalogue | rows for disableglobalhistory, channel.suspend and resume, loadInfo.originAttributes and Components.isSuccessCode |
 | harness-other-08 (from H8) | applied | fd3d9a33 | no-check: H8's tightened internals-boundary check confirms it at integration | the three GroupActorChild Cc rows (294, 675, 676) name their contract IDs, in H8's exact text |
-| 66-CR-04 (from G1b) | applied | ad5a5a7b | verify-agent-tab-walls.mjs --self-test | the navigate plant derives its anchor from the host's own navigate line, so it fits both G1b's agentRequest wording and the older one |
+| 66-CR-04 (from G1b) | applied | ad5a5a7b, a26d2596, 1e26065d | verify-agent-tab-walls.mjs --self-test | the navigate plant derives its anchor from the host's own navigate line, so it fits both G1b's agentRequest wording and the older one; round 3: the agent wait is capped at 600000 ms in chrome's validator and the child |
+| review round 3, the check | fixed | ba2f97a1 | verify-agent-tab-walls.mjs --self-test | 78 plants, one for each round-3 gap the reviewer listed |
 
 Security-review follow-up on a1726b47 (coordinator, three points), all in 224a6612:
 1. Refusal after send: this applied only in part. a1726b47 already refused a spelled loopback host on a service port at http-on-modify-request, before send, because agentChannelRefused checked the URL on every topic before the examine-response branch. A name that resolves to loopback was caught only at http-on-examine-response. Now a service-port request with a host name is suspended at http-on-modify-request, its name is resolved in the channel's own DNS partition, and the request is cancelled before resume when any resolved address is loopback. The remote-address check stays as a second line.
@@ -46,11 +47,47 @@ Review round 2 (on 1dd2cbfc), per point:
 7. Behaviour changes: added below.
 8. orcad-hosting-03 (9a5226ef, ad5a5a7b): added; it reads both TCP tables.
 
+Review round 3 (on f79672d7), per point:
+1. agent-browser-02, the effective key (8b22489c): confirmed and fixed.
+   - agentTabRemembered now tests the key sent, or the `web:<tabId>` that webTabAttach derives.
+   - An open whose effective key has the agent form is an agent tab, never a user tab. I did not refuse it, because session restore, Setup restore and Reopen Closed Tab all open saved agent rows with no flag.
+   - adoptPendingOverlay refuses a tab id whose key would have the agent form.
+   - Extra: while agents are stopped, any agent open chrome has not seen this session is refused, by flag or by key. The record's "no new agent tab is made" now holds.
+2. Rows saved before the agent row key (8b22489c): the only trace those rows leave is in their kept history.
+   - An entry a page in the agent container started carries a principal serialized with `^userContextId=<agent id>`.
+   - loadWebTabHistories now sweeps the saved histories at every launch. A key whose history carries the agent container becomes a legacy agent row key (pref `powerbrowser.orca.legacyAgentRowKeys`, newest 1000).
+   - Every open treats a legacy key as an agent row, so its session snapshot, Setup, closed-tab row and history reopen as an agent tab: re-keyed, not dropped.
+   - What no store records is under Needs owner.
+3. agent-browser-03 (ce770626): (a), (b) and (c) confirmed.
+   - set is now host-only on the current host, path "/", never httpOnly, never a `__Host-` or `__Secure-` name (case-insensitive), Secure only on an https page, and SameSite None only with Secure.
+   - The httpOnly name test reads every partition of the container, using a pattern with the container id only.
+   - (b): pre-planting stays possible at page-script level (Needs owner). The comment is corrected.
+4. agent-browser-04 (9cb09613):
+   - Resume on a tab that is not stopped answers `not-stopped`.
+   - enterDomFullscreen aborts for an agent overlay before content enters fullscreen.
+   - Windows: orcad lets a `browser.tabCreate` caller name the browser host for the page (orca/src/shared/rpc-contract/browser-tab-create-params.ts:18, `placement` kind `client` with `browserHostClientId`, consumed at orca/src/main/runtime/browser/browser-tab-creation.ts:48). An agent can therefore place its next page on another window's host, so Stop is now process-wide.
+   - A chrome-drawn Resume is under Needs owner.
+5. 59-WR-03 (a26d2596):
+   - The page-id reserve is 256 UTF-16 units at 6 JSON bytes, 1536 bytes (orca/src/shared/browser-client-host-protocol.ts:14). The check derives the unit count from that file.
+   - Chrome cannot see the widget's own url and title. A bound in the dispatcher is a Handoff to G1b.
+6. 66-CR-04 (a26d2596): the child's wait is `Math.min(timeout, 600000)`, and the validator accepts only a positive timeout of at most 600000 ms (AGENT_WAIT_MAX_MS).
+7. The check (ba2f97a1): each listed gap has a clause and a plant: 78 plants, all red when planted.
+8. Socket table (dbbcbff0):
+   - Each table is read with a 4 MiB cap, and `truncated` is set when one fills it.
+   - The kernel lists listening sockets before established ones (net/ipv4/tcp_ipv4.c, tcp_get_idx tries the listening hash first), so the holder row is normally well inside the cap.
+
 ## Registry requests
 - scripts/verify-agent-tab-walls.mjs: quick, `"agent-tab-walls|node $REPO_ROOT/scripts/verify-agent-tab-walls.mjs"`
-- scripts/verify-agent-tab-walls.mjs --self-test: quick, `"agent-tab-walls-self-test|node $REPO_ROOT/scripts/verify-agent-tab-walls.mjs --self-test"` (57 plants)
+- scripts/verify-agent-tab-walls.mjs --self-test: quick, `"agent-tab-walls-self-test|node $REPO_ROOT/scripts/verify-agent-tab-walls.mjs --self-test"` (78 plants)
 
 ## Red by design
+- Round 3, orca-browser-tab-scope and orca-browser-tab-scope-self-test: on f79672d7 the fakeBrowser already has a currentURI (example.com). The new detector, at scripts/verify-orca-browser-tab-scope.mjs:517, expects a set for the subdomain www.example.com to be done.
+  - Agent-browser-03 round 3 makes cookie.set host-only on the current host, so that set is refused by design.
+  - Exact change: on line 517 use `domain: 'example.com'` (the current host) for the detector. The subdomain set can join the refused list above it.
+  - A temporary copy with only that line changed: PASS, self-test PASS (79 plants).
+- Round 3, scan-brand-residue and scan-brand-residue-self-test: the f79672d7 recount moved again with this round's comments and check.
+  - Observed against expected: Orca 3962 -> 3964, orca 6766 -> 6778, orcad 2812 -> 2815, PowerBrowserOrcaHosting 17 -> 20.
+  - Re-measure with the scanner after merge.
 - orca-browser-tab-scope and orca-browser-tab-scope-self-test: the stub world's fake overlay has no current page. Under agent-browser-03 a cookie row on a page with no site is refused, so the cookie scenario's get with a url, set and delete answer browser_command_unavailable. Exact change, in `scripts/verify-orca-browser-tab-scope.mjs` makeWorld/fakeBrowser (line 230): `const browser = { tabIdHint, appended: false, docShellIsActive: false, ownerDocument: doc, removed: false, attrs, currentURI: { host: 'example.com', spec: 'https://example.com/' } };`. I ran a temporary copy with that one change: the check is PASS and its self-test is PASS (64 plants).
 - shell-error-copy-no-internals and shell-error-copy-no-internals-self-test: the agent mark's copy changed for agent-browser-04. In `scripts/verify-shell-error-copy.mjs` EXPECTED_NAV_COPY (the "Phase 66 (P66-23)" block, about line 619):
   - Remove `"An Orca agent you started is controlling this tab in ${name}. Select Stop to end it."` and `"Stop the agent's control of this tab in ${name}. The tab stays open."`.
@@ -77,6 +114,8 @@ Review round 2 (on 1dd2cbfc), per point:
 - G1b-agent-browser: I edited `theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts`, which gains `DispatchFailure`, the optional `agentsStopped` dep, the navigate reply mapping and the catch mapping. I also edited `theia/extensions/orca-browser/src/browser/orca-browser-frontend-module.ts`: openAgentTab awaits `widget.opened`, navigate is sent as webTabAgent browser.goto, and the `agentsStopped` dep is added. Both were needed for agent-browser-04 and 66-WR-06. Rebase onto 3f42d38c.
 - G2-orcad-hosting: 67-WR-04 calls `OrcaService.clientRecovered?.()`. The guard makes it a no-op until G2's method merges.
 - integration: `inventory/brand-tokens.json` counts, as under Red by design.
+- G1b-agent-browser (round 3): in `orca-browser-frontend-module.ts` `pageInfo`, cap the url at 8192 and the title at 4096 UTF-16 units (Orca's own bounds, browser-client-page-metadata-protocol.ts:14-15) before the dispatcher adds them to a snapshot. Chrome's reserve covers those bounds exactly, but it cannot see the widget's values.
+- G2-orcad-hosting (round 3): `readLoopbackSocketTable()` now also resolves `truncated`. When it is true and no holder is found, `_portHolderRows` should give no row rather than imply no holder.
 - integration: the three actor-child catalogue rows (harness-other-08) wait for H8's tightened `scripts/check-internals-boundary.sh` to confirm them. That check is not in this worktree.
 
 ## Behaviour changes
@@ -104,6 +143,16 @@ Review round 2 (on 1dd2cbfc), per point:
   - After a relaunch, a saved session, Setup or closed-tab row of an agent tab reopens as an agent tab: in the agent container, with the mark, without login autofill.
   - Agent tabs saved before this change have web:wt- keys, and they still reopen as user tabs once.
   - Revert with ddd629f5.
+- agent-browser-03 (round 3): browser.cookie.set makes only a host-only cookie on the current host at path "/". A domain, a path other than "/", a `__Host-` or `__Secure-` name, Secure on an http page, SameSite None without Secure, or a name the site holds as httpOnly in any partition now answers browser_command_unavailable. Revert with ce770626.
+- agent-browser-04 (round 3): Stop now stops agent tabs in every shell window and refuses new ones everywhere until Resume. Resume on a tab that is not stopped is refused. An agent page can no longer enter fullscreen. Revert with 9cb09613.
+- agent-browser-02 (round 3):
+  - An open whose derived row key has the agent form is an agent tab.
+  - An adopted overlay with such a tab id is refused.
+  - While stopped, no unseen agent row key opens.
+  - Agent rows saved before the agent row key are found by their history and reopen as agent tabs.
+  - Revert with 8b22489c.
+- 66-CR-04: an agent wait longer than 10 minutes is refused by chrome, and the child caps it. Revert with a26d2596.
+- orcad-hosting-03: the socket-table read now reports `truncated`. Revert with dbbcbff0.
 - agent-browser-03 (round 2): browser.cookie.set with httpOnly true, a set of a name the site holds as httpOnly, and a delete of an httpOnly cookie now answer browser_command_unavailable. Revert with c2ac1d12.
 
 ## Needs owner
@@ -114,7 +163,15 @@ Review round 2 (on 1dd2cbfc), per point:
   - clearing the agent jar at each launch.
   - telling the user that sign-ins made in agent tabs are kept and shared across agents.
 - agent-browser-04: Resume is reachable only on an open agent tab. Stop now survives a frontend reload. If no agent tab is open (the user closed them, or a reload dropped them), only closing the window or restarting clears it. A host-level Resume control, for example in the Orca pane, is an owner UI call.
-- agent-browser-02: agent tabs saved before ddd629f5 carry web:wt- keys, and a restore reopens them once as user tabs. The owner can accept that, or ask for a one-time sweep of the saved Setups and the closed-tab list.
+- agent-browser-02 (round 3): the sweep re-keys every old agent row whose kept history carries the agent container. Two kinds of row carry nothing that identifies them as agent rows:
+  - a row with no kept history. The closed-tab rows of earlier sessions and Setups not open at the last quit have none, because only open tabs' histories are written at quit.
+  - a row whose every history entry chrome started. browser.goto loads with a null principal that has no container.
+  - Exposure: such a row reopens once as a user tab in the user's container and loads its saved URL with the user's cookies. It has no back and forward history, since there is none kept, or the swept history has gone back to an agent row.
+  - The owner can accept that, or clear Setups and closed-tab rows saved before ddd629f5 in development profiles. No release shipped agent tabs.
+- agent-browser-04 (round 3): Resume is a chrome message the Theia document sends, and the mark is Theia DOM, so same-realm script can send Resume and hide or cover the mark. Chrome now refuses Resume for a tab that is not stopped; nothing more is possible inside the realm. The two options, which belong with chrome-actor-03:
+  - (a) chrome draws the Stop and Resume control itself, in the shell window outside the Theia document.
+  - (b) chrome confirms Resume with its own dialog, which needs a real user gesture.
+- agent-browser-03 (round 3), pre-planting: an agent can visit a site and set a plain cookie, the same as page script can (and as the agent itself can through browser.eval and document.cookie). A later sign-in in the shared agent container that sets the same name httpOnly then sends both, the older first. Only separate containers per agent or per worktree remove this (the container question above).
 - agent-browser-06: two parts are not done.
   - The suggested "user-confirmed allow list for private addresses" (LAN) was not built.
   - The network observer installs with the session's first agent tab, so an agent-container service-worker load before any agent tab exists in a session is not judged.
@@ -130,6 +187,16 @@ Live verification still owed (nothing here was run in a browser):
 - These items need a purged startup cache: the Stop/Resume flow and the mark, crash recreate as an agent tab, the cookie scope, disableglobalhistory, the edit rows in agent tabs, the DNS pre-send suspend and cancel, and the side header scroll.
 
 ## Quick gate
+Round 3 run (after ba2f97a1, on f79672d7 plus this lane), inside `nix develop .#theia`: 438 PASS, 11 FAIL. The log is at .quick-gate-G1a-round3.log in this worktree, untracked.
+- scan-brand-residue, scan-brand-residue-self-test: red by design (recount, above).
+- orca-browser-tab-scope, orca-browser-tab-scope-self-test: red by design (the detector line, above).
+- orca-browser-host-wire, orca-browser-host-wire-self-test: caused by a26d2596, which moved the literal G1b's check derives the default wait from. Fixed in 1e26065d; both now PASS when run alone.
+- orca-failure-classes, orca-failure-classes-self-test: not caused by this lane. ORCA_CODE_CLASSES (OrcaEnv, G2) has no class for the pinned orcad_instance_lock_holder_unverifiable.
+- orca-service-self-test: not caused by this lane. A plant target in OrcaEnv's buildOrcadEnv is gone (G2).
+- orca-pane-css-self-test: not caused by this lane (stale orca/ build artifact, as in round 2).
+- build-windows-shape-self-test: not caused by this lane; it touches none of these files. Run alone after the gate it passes, so the gate failure was transient.
+
+Round 2:
 Round 2 final run (after ad5a5a7b, on 1dd2cbfc plus this lane), inside `nix develop .#theia`: 436 PASS, 9 FAIL.
 - scan-brand-residue, scan-brand-residue-self-test: red by design (inventory counts, above).
 - orca-browser-tab-scope, orca-browser-tab-scope-self-test: red by design (the fakeBrowser currentURI change, above). A temporary copy with that one change is PASS, self-test PASS (64 plants), on this code.
