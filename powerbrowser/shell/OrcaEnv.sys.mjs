@@ -60,16 +60,14 @@ export const ORCAD_ENV_ALLOWLIST = Object.freeze([
   "http_proxy",
   "https_proxy",
   "no_proxy",
-  // Audit fix 62-WR-06: the Windows names a Node process and its shells need there. Unset on Linux and
-  // macOS, so they add nothing to orcad's environment on those platforms.
-  "SystemRoot",
-  "USERPROFILE",
-  "LOCALAPPDATA",
-  "ComSpec",
-  "PATHEXT",
-  "TEMP",
-  "TMP",
 ]);
+
+/**
+ * Audit fix 62-WR-06: names copied as well on win32 only, the ones a Node process and its shells need there.
+ * TEMP and TMP are temp-folder names on Linux and macOS too (ORCA_TEMP_ENV_NAMES), where TMPDIR alone is passed,
+ * so they are not added there: the temp folder of orcad, its daemon and the agents stays as it was.
+ */
+export const ORCAD_ENV_ALLOWLIST_WIN32 = Object.freeze(["SystemRoot", "USERPROFILE", "LOCALAPPDATA", "ComSpec", "PATHEXT", "TEMP", "TMP"]);
 
 export const ORCAD_BIND_HOST = "127.0.0.1";
 export const ORCAD_DATA_ROOT_NAME = "powerbrowser-orca";
@@ -95,6 +93,33 @@ export const ORCAD_SOCKET_ROOT_BUDGET = 84;
 export const ORCAD_REAP_BLOCKER_NAME = "PowerBrowser: reap orcad";
 export const ORCAD_PINNED_PORT_CODE = "pinned_port_unavailable";
 export const ORCAD_LOCK_HELD_CODE = "orcad_instance_lock_held";
+// harness-static-hosting-10 (from lane H2): the other codes with which the pinned orcad refuses to start. Each is a
+// fact about this host that another attempt does not change, so OrcaService does not retry them.
+// OrcadInstanceLockError (orca/src/main/orcad/orcad-data-root-privacy.ts:5-13):
+export const ORCAD_DATA_ROOT_UNUSABLE_CODE = "orcad_data_root_unusable";
+export const ORCAD_DATA_ROOT_WRONG_OWNER_CODE = "orcad_data_root_wrong_owner";
+export const ORCAD_DATA_ROOT_SHARED_CODE = "orcad_data_root_shared";
+// orcad_instance_lock_holder_unverifiable is not one: resolveOrcadExitCode (orcad-exit-code.ts:12-17) exits with the
+// already-running status for it, because supervisors wait for the existing holder. PowerBrowser treats it as it treats
+// any start that fails without a mapped code: another attempt, after the reap that ends the lock's holder by pid and
+// start ticks (_reapLeftover), which is its path for another orcad holding the profile.
+export const ORCAD_LOCK_FOREIGN_IDENTITY_CODE = "orcad_instance_lock_foreign_identity";
+export const ORCAD_LOCK_UNREADABLE_CODE = "orcad_instance_lock_unreadable";
+// OrcadBindAddressError (orcad-bind-address.ts:9); PowerBrowser always passes 127.0.0.1, so only a broken build sees it.
+export const ORCAD_INVALID_BIND_ADDRESS_CODE = "orcad_invalid_bind_address";
+// ProfileStateAccessError (persistence/profile-state/profile-state-access-owner.ts:29).
+export const ORCAD_PROFILE_STATE_REFUSED_CODE = "profile-state-access-refused";
+// The native preflight's blocking node-pty verdicts (orcad-native-preflight.ts:59, node-pty-precondition.ts:94-248).
+// At the pin orcad prints the reason's sentence, not the code, so a start refused this way is recognised by its exit
+// status (ORCAD_EXIT_CONFIGURATION) as well; the codes are listed so that a build printing them is matched by name.
+export const ORCAD_PTY_LOAD_CRASHED_CODE = "load_crashed";
+export const ORCAD_PTY_DEPENDENCY_MISSING_CODE = "dependency_missing";
+export const ORCAD_PTY_LOAD_FAILED_CODE = "load_failed";
+export const ORCAD_PTY_SPAWN_HELPER_MISSING_CODE = "spawn_helper_missing";
+// The launcher's own configuration exit (launcher.ts:29), which carries no code: its fixed line is the marker.
+export const ORCAD_LAUNCH_FAILED_CODE = "orcad: failed to launch";
+/** orcad's exit status for every configuration refusal (orcad-configuration-exit.ts, EX_CONFIG): retrying cannot help. */
+export const ORCAD_EXIT_CONFIGURATION = 78;
 export const PORT_MIN = 1024;
 export const PORT_MAX = 32767;
 
@@ -107,7 +132,7 @@ const STDERR_LINE_MAX = 4096;
  * The whole child environment for orcad: each allowlisted name PowerBrowser has, then the fixed
  * names. Nothing else of the browser's environment reaches orcad or the agents under it.
  */
-export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion, claudeAgentSdkDir } = {}) {
+export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion, claudeAgentSdkDir, platform } = {}) {
   if (typeof dataRoot !== "string" || !dataRoot) {
     throw new Error("buildOrcadEnv: no data root");
   }
@@ -119,7 +144,7 @@ export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion, claudeAgentSdkDir
     throw new Error("buildOrcadEnv: no Claude agent SDK directory decision");
   }
   const env = {};
-  for (const name of ORCAD_ENV_ALLOWLIST) {
+  for (const name of [...ORCAD_ENV_ALLOWLIST, ...(platform === "win32" ? ORCAD_ENV_ALLOWLIST_WIN32 : [])]) {
     const value = getEnv(name);
     if (typeof value === "string" && value !== "") {
       env[name] = value;
@@ -444,6 +469,23 @@ export const ORCA_FAILURE_CLASSES = Object.freeze([
 export const ORCA_CODE_CLASSES = Object.freeze({
   [ORCAD_PINNED_PORT_CODE]: "port-in-use",
   [ORCAD_LOCK_HELD_CODE]: "port-in-use",
+  // Another copy of Orca, of another machine or account, holds the instance lock: the port-in-use copy ("Close other
+  // copies of Orca, then choose Restart Orca") is what the user can do about it.
+  [ORCAD_LOCK_FOREIGN_IDENTITY_CODE]: "port-in-use",
+  // The data folder's ownership or permissions, an unreadable lock, a bad bind address, unverifiable profile state,
+  // a node-pty that cannot load, a launcher that refuses its server: no existing copy names them, so could-not-start
+  // (Restart, and Details shows the code). The same class as a configuration exit with no code printed.
+  [ORCAD_DATA_ROOT_UNUSABLE_CODE]: "could-not-start",
+  [ORCAD_DATA_ROOT_WRONG_OWNER_CODE]: "could-not-start",
+  [ORCAD_DATA_ROOT_SHARED_CODE]: "could-not-start",
+  [ORCAD_LOCK_UNREADABLE_CODE]: "could-not-start",
+  [ORCAD_INVALID_BIND_ADDRESS_CODE]: "could-not-start",
+  [ORCAD_PROFILE_STATE_REFUSED_CODE]: "could-not-start",
+  [ORCAD_PTY_LOAD_CRASHED_CODE]: "could-not-start",
+  [ORCAD_PTY_DEPENDENCY_MISSING_CODE]: "could-not-start",
+  [ORCAD_PTY_LOAD_FAILED_CODE]: "could-not-start",
+  [ORCAD_PTY_SPAWN_HELPER_MISSING_CODE]: "could-not-start",
+  [ORCAD_LAUNCH_FAILED_CODE]: "could-not-start",
 });
 
 /**
@@ -655,37 +697,156 @@ export function logoAnswerFor({ senderPort, orcaPort, orcaState, embeddedByShell
 // OrcaService ends orcad, its terminal daemon and the agents under it on a granted quit. A crash, a SIGKILL or an
 // OOM kill of PowerBrowser runs none of that code, so the tie must hold without PowerBrowser running anything at
 // exit. Subprocess always gives a child a stdin pipe whose only writer is PowerBrowser (the pipe is close-on-exec,
-// so no other child holds it): when PowerBrowser ends for any reason the kernel closes that writer and orcad reads
-// end-of-file. The Theia backend's parent-death watchdog rests on the same fact. orcad itself has no such watch,
-// and its own shutdown only disconnects from the detached daemon, so a module preloaded into orcad's Node (--import,
-// no change to Orca's source) carries it:
+// so no other child holds it): when PowerBrowser ends for any reason the kernel closes that writer and the child
+// reads end-of-file. The Theia backend's parent-death watchdog rests on the same fact. Two PowerBrowser-owned
+// readers of such a pipe carry the tie, neither needing a change to Orca's source:
+//
+// The orcad watch, a module preloaded into orcad's Node (--import). orcad has no parent watch of its own, and its
+// shutdown only disconnects from the detached daemon.
 //  - end-of-file on stdin: PowerBrowser is gone. orcad is asked to stop (SIGTERM, its own graceful shutdown), and
-//    as it exits the module ends its descendants and the terminal daemon OrcaService named, snapshot first,
-//    SIGTERM to the roots, then SIGKILL for what is left after the grace, each by pid plus start ticks.
+//    as it exits the module ends its descendants and the daemon OrcaService named, snapshot first, SIGTERM to the
+//    roots, then SIGKILL for what is left after the grace, each by pid plus start ticks.
 //  - orcad exiting before OrcaService accepted its ready line (a failed start): the same end, for its own
-//    descendants, so a failed start leaves no daemon behind. After acceptance an orcad exit ends nothing: an orcad
-//    crash leaves the daemon and its agents for the next orcad to adopt, and only a quit ends agents (D-07).
+//    descendants only, so a failed start leaves no daemon of its own behind. After acceptance an orcad exit ends
+//    nothing: an orcad crash leaves the daemon and its agents for the next orcad to adopt, and only a quit ends
+//    agents (D-07).
+//  - two lines name the daemon: the adopted line, written right after a spawn while this session already keeps a
+//    daemon, and the accepted line, written once the ready line is accepted. Only the accepted line marks the
+//    start accepted; either way the named daemon is ended only when PowerBrowser is gone, never on orcad's exit.
 // The module arms only in the process whose entry file is orcad's and whose stdin is a pipe (Subprocess) or a
-// socket (a Node parent, as in the repo checks), never /dev/null or a terminal: orcad starts its daemon
-// with its own Node flags (daemon-launched-child-spawn.ts), and that daemon must load the module inertly.
+// socket (a Node parent, as in the repo checks), never /dev/null or a terminal: orcad starts its daemon with its
+// own Node flags (daemon-launched-child-spawn.ts), and that daemon must load the module inertly.
+//
+// The keeper, a small Node process of its own (audit follow-up to orcad-hosting-01), for the windows in which a kept
+// daemon has no accepted orcad: the backoff before a respawn, a respawn before its ready line, and the failed
+// states that keep the daemon while the failure page is up. OrcaService starts it when orcad exits unexpectedly,
+// names the kept daemon to it by pid and start ticks, and releases it once a new orcad is accepted or the stop has
+// ended the daemon. On end-of-file it ends the named daemon and everything under it, as the watch does.
 
-/** The kind of the one line OrcaService writes to orcad's stdin once it accepts a ready line. */
+/** The kind of the line OrcaService writes to orcad's stdin once it accepts a ready line. */
 export const ORCAD_ACCEPTED_KIND = "pb-orcad-accepted";
+/** The kind of the line naming a daemon this session already keeps, to a new orcad or to the keeper; not an acceptance. */
+export const ORCAD_ADOPTED_KIND = "pb-orcad-adopted";
+/** The kind of the line that lets the keeper exit without ending anything. */
+export const ORCAD_KEEPER_RELEASE_KIND = "pb-orcad-release";
 /** How long the watch waits for SIGTERMed descendants before it kills what is left (OrcaService's DAEMON_GRACE_MS). */
 export const ORCAD_WATCH_GRACE_MS = 3000;
 /** The latest the watch lets orcad's own shutdown run after end-of-file before it exits orcad itself. */
 export const ORCAD_WATCH_EXIT_DEADLINE_MS = 20000;
+
+// Shared by both sources: the /proc table, the tree under some roots, the identity test, and the end of a tree
+// (SIGTERM to the given roots, the grace, SIGKILL for every row still the process it was). Plain text.
+const PROC_HELPERS = `const statOf = pid => {
+  try {
+    const text = readFileSync("/proc/" + pid + "/stat", "utf8");
+    const fields = text.slice(text.lastIndexOf(")") + 2).split(" ");
+    return { pid, ppid: Number(fields[1]), ticks: fields[19] ?? null };
+  } catch {
+    return null;
+  }
+};
+const table = () => {
+  const rows = new Map();
+  let names = [];
+  try {
+    names = readdirSync("/proc");
+  } catch {
+    names = [];
+  }
+  for (const name of names) {
+    const pid = Number(name);
+    const row = Number.isInteger(pid) && pid > 0 ? statOf(pid) : null;
+    if (row) {
+      rows.set(pid, row);
+    }
+  }
+  return rows;
+};
+const treeOf = (roots, rows) => {
+  const children = new Map();
+  for (const row of rows.values()) {
+    if (!children.has(row.ppid)) {
+      children.set(row.ppid, []);
+    }
+    children.get(row.ppid).push(row.pid);
+  }
+  const seen = new Set();
+  const stack = roots.filter(pid => rows.has(pid));
+  while (stack.length) {
+    const pid = stack.pop();
+    if (!seen.has(pid)) {
+      seen.add(pid);
+      stack.push(...(children.get(pid) ?? []));
+    }
+  }
+  return [...seen].map(pid => rows.get(pid));
+};
+const same = row => {
+  const now = statOf(row.pid);
+  return now !== null && row.ticks !== null && now.ticks === row.ticks;
+};
+const signal = (row, name) => {
+  if (same(row)) {
+    try {
+      process.kill(row.pid, name);
+    } catch {
+      // Gone between the check and the signal.
+    }
+  }
+};
+const pause = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const endRows = (tree, isRoot) => {
+  for (const row of tree) {
+    if (isRoot(row)) {
+      signal(row, "SIGTERM");
+    }
+  }
+  for (let waited = 0; waited < GRACE_MS && tree.some(same); waited += 100) {
+    pause(100);
+  }
+  for (const row of tree) {
+    signal(row, "SIGKILL");
+  }
+};
+const namedFrom = record => {
+  const pid = record.daemonPid;
+  return Number.isInteger(pid) && pid > 0 && record.daemonTicks != null ? { pid, ticks: String(record.daemonTicks) } : null;
+};
+const readLines = onLine => {
+  let pending = "";
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", chunk => {
+    pending += chunk;
+    for (let at = pending.indexOf("\\n"); at >= 0; at = pending.indexOf("\\n")) {
+      const line = pending.slice(0, at);
+      pending = pending.slice(at + 1);
+      let record = null;
+      try {
+        record = JSON.parse(line);
+      } catch {
+        record = null;
+      }
+      if (record) {
+        onLine(record);
+      }
+    }
+  });
+};
+`;
+
+const PROC_IMPORTS = `import { fstatSync, readdirSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { isMainThread } from "node:worker_threads";
+`;
 
 /** The watch module's source for one orcad entry file. Pure text; OrcaService never evaluates it. */
 export function orcadParentWatchSource({ orcadMain } = {}) {
   if (typeof orcadMain !== "string" || !orcadMain) {
     throw new Error("orcadParentWatchSource: no orcad entry file");
   }
-  return `import { fstatSync, readdirSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { isMainThread } from "node:worker_threads";
-const MAIN = ${JSON.stringify(orcadMain)};
-const KIND = ${JSON.stringify(ORCAD_ACCEPTED_KIND)};
+  return `${PROC_IMPORTS}const MAIN = ${JSON.stringify(orcadMain)};
+const ACCEPTED = ${JSON.stringify(ORCAD_ACCEPTED_KIND)};
+const ADOPTED = ${JSON.stringify(ORCAD_ADOPTED_KIND)};
 const GRACE_MS = ${ORCAD_WATCH_GRACE_MS};
 const DEADLINE_MS = ${ORCAD_WATCH_EXIT_DEADLINE_MS};
 const isArmed = () => {
@@ -697,106 +858,24 @@ const isArmed = () => {
   }
 };
 if (isArmed()) {
-  const statOf = pid => {
-    try {
-      const text = readFileSync("/proc/" + pid + "/stat", "utf8");
-      const fields = text.slice(text.lastIndexOf(")") + 2).split(" ");
-      return { pid, ppid: Number(fields[1]), ticks: fields[19] ?? null };
-    } catch {
-      return null;
-    }
-  };
-  const table = () => {
-    const rows = new Map();
-    let names = [];
-    try {
-      names = readdirSync("/proc");
-    } catch {
-      names = [];
-    }
-    for (const name of names) {
-      const pid = Number(name);
-      const row = Number.isInteger(pid) && pid > 0 ? statOf(pid) : null;
-      if (row) {
-        rows.set(pid, row);
-      }
-    }
-    return rows;
-  };
-  const treeOf = (roots, rows) => {
-    const children = new Map();
-    for (const row of rows.values()) {
-      if (!children.has(row.ppid)) {
-        children.set(row.ppid, []);
-      }
-      children.get(row.ppid).push(row.pid);
-    }
-    const seen = new Set();
-    const stack = roots.filter(pid => rows.has(pid));
-    while (stack.length) {
-      const pid = stack.pop();
-      if (!seen.has(pid)) {
-        seen.add(pid);
-        stack.push(...(children.get(pid) ?? []));
-      }
-    }
-    return [...seen].map(pid => rows.get(pid));
-  };
-  const same = row => {
-    const now = statOf(row.pid);
-    return now !== null && row.ticks !== null && now.ticks === row.ticks;
-  };
-  const signal = (row, name) => {
-    if (same(row)) {
-      try {
-        process.kill(row.pid, name);
-      } catch {
-        // Gone between the check and the signal.
-      }
-    }
-  };
-  const pause = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-  let accepted = false;
+${PROC_HELPERS}  let accepted = false;
   let parentGone = false;
   let daemon = null;
-  let pending = "";
   const endTree = () => {
     const rows = table();
     const roots = [process.pid];
-    if (daemon && rows.get(daemon.pid)?.ticks === daemon.ticks) {
+    // The named daemon only when PowerBrowser is gone; a failed start ends only what this orcad started.
+    if (parentGone && daemon && rows.get(daemon.pid)?.ticks === daemon.ticks) {
       roots.push(daemon.pid);
     }
     const tree = treeOf(roots, rows).filter(row => row.pid !== process.pid);
-    for (const row of tree) {
-      if (row.ppid === process.pid || (daemon && row.pid === daemon.pid)) {
-        signal(row, "SIGTERM");
-      }
-    }
-    for (let waited = 0; waited < GRACE_MS && tree.some(same); waited += 100) {
-      pause(100);
-    }
-    for (const row of tree) {
-      signal(row, "SIGKILL");
-    }
+    endRows(tree, row => row.ppid === process.pid || (daemon && row.pid === daemon.pid));
   };
   process.on("exit", () => {
     if (parentGone || !accepted) {
       endTree();
     }
   });
-  const onLine = line => {
-    let record = null;
-    try {
-      record = JSON.parse(line);
-    } catch {
-      return;
-    }
-    if (record && record.kind === KIND) {
-      accepted = true;
-      const pid = record.daemonPid;
-      daemon = Number.isInteger(pid) && pid > 0 && record.daemonTicks != null ? { pid, ticks: String(record.daemonTicks) } : null;
-    }
-  };
   const gone = () => {
     if (parentGone) {
       return;
@@ -809,12 +888,12 @@ if (isArmed()) {
       process.exit(1);
     }
   };
-  process.stdin.setEncoding("utf8");
-  process.stdin.on("data", chunk => {
-    pending += chunk;
-    for (let at = pending.indexOf("\\n"); at >= 0; at = pending.indexOf("\\n")) {
-      onLine(pending.slice(0, at));
-      pending = pending.slice(at + 1);
+  readLines(record => {
+    if (record.kind === ACCEPTED || record.kind === ADOPTED) {
+      daemon = namedFrom(record) ?? (record.kind === ACCEPTED ? null : daemon);
+    }
+    if (record.kind === ACCEPTED) {
+      accepted = true;
     }
   });
   process.stdin.on("end", gone);
@@ -827,9 +906,51 @@ if (isArmed()) {
 `;
 }
 
+/** The keeper's source: holds a kept daemon by pid and start ticks, and ends its tree when PowerBrowser is gone. */
+export function orcadKeeperSource() {
+  return `import { readdirSync, readFileSync } from "node:fs";
+const ADOPTED = ${JSON.stringify(ORCAD_ADOPTED_KIND)};
+const RELEASE = ${JSON.stringify(ORCAD_KEEPER_RELEASE_KIND)};
+const GRACE_MS = ${ORCAD_WATCH_GRACE_MS};
+${PROC_HELPERS}let daemon = null;
+let done = false;
+// A hangup or an interrupt aimed at PowerBrowser's terminal is not PowerBrowser ending: end-of-file follows if it is.
+process.on("SIGHUP", () => {});
+process.on("SIGINT", () => {});
+const gone = () => {
+  if (done) {
+    return;
+  }
+  done = true;
+  const rows = table();
+  if (daemon && rows.get(daemon.pid)?.ticks === daemon.ticks) {
+    endRows(treeOf([daemon.pid], rows), row => row.pid === daemon.pid);
+  }
+  process.exit(0);
+};
+readLines(record => {
+  if (record.kind === ADOPTED) {
+    daemon = namedFrom(record);
+  }
+  if (record.kind === RELEASE) {
+    done = true;
+    process.exit(0);
+  }
+});
+process.stdin.on("end", gone);
+process.stdin.on("error", gone);
+process.stdin.resume();
+`;
+}
+
 /** The Node flags that preload the watch into orcad, placed before orcad's entry file. */
 export function buildOrcadWatchArgs({ orcadMain } = {}) {
   return ["--import", `data:text/javascript,${encodeURIComponent(orcadParentWatchSource({ orcadMain }))}`];
+}
+
+/** The keeper's whole argument list: an ES module from the command line, nothing on disk. */
+export function buildOrcadKeeperArgs() {
+  return ["--input-type=module", "--eval", orcadKeeperSource()];
 }
 
 /** The line OrcaService writes to orcad's stdin once it accepts the ready line: the daemon the watch may end. */
@@ -838,26 +959,55 @@ export function orcadAcceptedLine({ daemonPid, daemonTicks } = {}) {
   return JSON.stringify({ kind: ORCAD_ACCEPTED_KIND, daemonPid: pid, daemonTicks: pid !== null && daemonTicks != null ? String(daemonTicks) : null });
 }
 
+/** The line naming a daemon this session keeps, to a new orcad before acceptance or to the keeper. */
+export function orcadAdoptedLine({ daemonPid, daemonTicks } = {}) {
+  const pid = Number.isInteger(daemonPid) && daemonPid > 0 ? daemonPid : null;
+  return JSON.stringify({ kind: ORCAD_ADOPTED_KIND, daemonPid: pid, daemonTicks: pid !== null && daemonTicks != null ? String(daemonTicks) : null });
+}
+
+/** The line that releases the keeper. */
+export function orcadKeeperReleaseLine() {
+  return JSON.stringify({ kind: ORCAD_KEEPER_RELEASE_KIND });
+}
+
 // ---- Who holds orcad's port (audit fix orcad-hosting-03, diagnostics part) ----
 
 /**
- * The uid of the listener on 127.0.0.1:<port> or 0.0.0.0:<port>, from the text of /proc/net/tcp, or null. A row
- * is "sl local_address rem_address st tx:rx tr:tm retrnsmt uid ...", the address in hex with the IPv4 address
- * little-endian, and st 0A is LISTEN.
+ * Local addresses, as /proc/net/tcp and /proc/net/tcp6 spell them (each 32-bit word in host order, little-endian),
+ * whose listener blocks orcad's bind on 127.0.0.1: 127.0.0.1 and 0.0.0.0, and in the IPv6 table :: (dual-stack,
+ * Node's default, listed in the IPv6 table only) and the IPv4-mapped ::ffff:127.0.0.1 and ::ffff:0.0.0.0. ::1 is
+ * not listed: it does not hold the IPv4 address (audit follow-up to orcad-hosting-03).
  */
-export function portHolderUidOf(tcpText, port) {
-  if (typeof tcpText !== "string" || !Number.isInteger(port)) {
+const LOOPBACK_BLOCKING_ADDRESSES = Object.freeze([
+  "0100007F",
+  "00000000",
+  "00000000000000000000000000000000",
+  "0000000000000000FFFF00000100007F",
+  "0000000000000000FFFF000000000000",
+]);
+
+/**
+ * The uid of a listener whose address blocks 127.0.0.1:<port>, from the text of /proc/net/tcp and /proc/net/tcp6
+ * (a string or an array of them), or null. A row is "sl local_address rem_address st tx:rx tr:tm retrnsmt uid ...",
+ * and st 0A is LISTEN.
+ */
+export function portHolderUidOf(tables, port) {
+  const texts = (Array.isArray(tables) ? tables : [tables]).filter(text => typeof text === "string");
+  if (!texts.length || !Number.isInteger(port)) {
     return null;
   }
   const hexPort = port.toString(16).toUpperCase().padStart(4, "0");
-  for (const line of tcpText.split("\n").slice(1)) {
-    const fields = line.trim().split(/\s+/);
-    if (fields.length < 8 || fields[3] !== "0A") {
-      continue;
-    }
-    if (fields[1] === `0100007F:${hexPort}` || fields[1] === `00000000:${hexPort}`) {
-      const uid = Number(fields[7]);
-      return Number.isInteger(uid) ? uid : null;
+  for (const text of texts) {
+    for (const line of text.split("\n").slice(1)) {
+      const fields = line.trim().split(/\s+/);
+      if (fields.length < 8 || fields[3] !== "0A") {
+        continue;
+      }
+      const [address, rowPort] = fields[1].toUpperCase().split(":");
+      if (rowPort === hexPort && LOOPBACK_BLOCKING_ADDRESSES.includes(address)) {
+        const uid = Number(fields[7]);
+        return Number.isInteger(uid) ? uid : null;
+      }
     }
   }
   return null;
