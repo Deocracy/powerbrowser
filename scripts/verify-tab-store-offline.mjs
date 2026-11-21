@@ -28,6 +28,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSyn
 import { join } from 'node:path';
 import { REPO_ROOT, buildStore, columnsOf, newStage, readStore, schemaHead, setUserVersion, tamperBodyPage } from './lib/tab-store-fixtures.mjs';
 import { LIKE_SQL_REGEX, SessionStore, closeAll, env, freshApi, report } from './lib/tab-store-fakes.mjs';
+import { SKIP_EXIT, verdictExit } from './lib/skip-verdict.mjs';
 
 const NAME = 'verify-tab-store-offline';
 const API = join(REPO_ROOT, 'powerbrowser/shell/PowerBrowserAPI.sys.mjs');
@@ -39,6 +40,7 @@ const KEY = 'powerbrowser-tab-key';
 
 const failures = [];
 const notes = [];
+const skips = [];
 const expect = (ok, message) => {
     if (!ok) {
         failures.push(message);
@@ -96,7 +98,8 @@ try {
         expect(m && m[1] === LIKE_SQL_REGEX.source && m[2] === LIKE_SQL_REGEX.flags,
             `the pinned LIKE rule ${LIKE_SQL_REGEX} is not upstream Sqlite.sys.mjs's likeSqlRegex (${m ? `/${m[1]}/${m[2]}` : 'not found'})`);
     } else {
-        notes.push('upstream/ is absent, so the pinned LIKE rule was not compared with Sqlite.sys.mjs');
+        // A clause not run for an absent input: the run is a SKIP (SKIP-PROTOCOL.md rule 2).
+        skips.push('upstream/ is absent, so the pinned LIKE rule was not compared with Sqlite.sys.mjs. Next step: run scripts/fetch-upstream.sh');
     }
 
     // ---- A. migration from every shipped version (NG-015's own expectations) ------
@@ -414,4 +417,6 @@ if (failures.length) {
     failures.forEach(f => report(`  ${f}`));
     process.exit(1);
 }
+// FAIL wins; a clause not run makes the run exit 77 with one SKIP line printed last (SKIP-PROTOCOL.md).
+if (verdictExit(NAME, failures, skips) === SKIP_EXIT) process.exit(SKIP_EXIT);
 console.log(`${NAME}: PASS -- the writer's migration, key rule, lifecycle, quarantine and shutdown close hold offline under Sqlite.sys.mjs's rules`);
