@@ -37,9 +37,16 @@ export const GLOBAL_PREFIX = '_global_';
 /**
  * Store events are applied once the store has been quiet this long (coalescing). 65-WR-03: a store hydrating
  * repository by repository is not read as worktrees leaving: while the snapshot reports hydrated false, only
- * additions are applied. A bundle that does not report hydration falls back to this time bound alone.
+ * additions are applied. A bundle that does not report hydration (an older overlay) falls back to this time bound alone.
  */
 const SETTLE_MS = 750;
+/**
+ * 65-WR-03: Orca's hasHydratedWorktreePurge never turns true when it has no repository or detects no worktree, so
+ * hydrated false is trusted for this long after the session's first snapshot and no longer: then the snapshot is
+ * taken as complete (an empty worktree list included) and drops apply. Orca lists each repository's worktrees with a
+ * local git call, so a hydrating store reports within seconds; the bound only has to outlast a slow start.
+ */
+export const HYDRATION_WAIT_MS = 15_000;
 
 export interface RootPlanInput {
     wanted: readonly string[];
@@ -126,6 +133,10 @@ export class OrcaRootSync implements FrontendApplicationContribution {
     protected reported: string[] | undefined;
     /** 65-WR-03: the latest snapshot's hydration flag; undefined when the bundle does not report one. */
     protected hydrated: boolean | undefined;
+    /** When this session's first snapshot arrived; the hydration wait counts from it. */
+    protected firstSnapshotAt: number | undefined;
+    protected hydrationWaitMs = HYDRATION_WAIT_MS;
+    protected hydrationTimer: number | undefined;
     protected seenWorktree = false;
     protected applying = false;
     protected timer: number | undefined;
@@ -156,6 +167,7 @@ export class OrcaRootSync implements FrontendApplicationContribution {
         this.pending = wantedRootsOf(snapshot, path => URI.fromFilePath(path).toString());
         this.reported = this.pending;
         this.hydrated = typeof snapshot.hydrated === 'boolean' ? snapshot.hydrated : undefined;
+        this.firstSnapshotAt ??= Date.now();
         this.seenWorktree ||= this.pending.length > 0;
         window.clearTimeout(this.timer);
         this.timer = window.setTimeout(() => this.enqueue(() => this.sync()), SETTLE_MS);
@@ -181,10 +193,36 @@ export class OrcaRootSync implements FrontendApplicationContribution {
         return (await this.workspace.roots).map(root => root.resource.toString());
     }
 
+    /**
+     * 65-WR-03: 'complete' once the store reports hydration, or once hydrated false has been reported for longer than
+     * the wait; 'hydrating' before that (a sync after the wait is armed); 'unreported' from a bundle with no flag.
+     */
+    protected hydration(): 'complete' | 'hydrating' | 'unreported' {
+        if (this.hydrated === undefined) {
+            return 'unreported';
+        }
+        if (this.hydrated) {
+            return 'complete';
+        }
+        const left = (this.firstSnapshotAt ?? Date.now()) + this.hydrationWaitMs - Date.now();
+        if (left <= 0) {
+            return 'complete';
+        }
+        if (this.hydrationTimer === undefined) {
+            this.hydrationTimer = window.setTimeout(() => {
+                this.pending ??= this.reported;
+                this.enqueue(() => this.sync());
+            }, left);
+        }
+        return 'hydrating';
+    }
+
     protected async sync(): Promise<void> {
         const wanted = this.pending;
-        // An empty list before any worktree was ever reported is the store before hydration, not a drop.
-        if (!wanted || (!wanted.length && !this.seenWorktree)) {
+        const hydration = this.hydration();
+        // An empty list before any worktree was ever reported is the store before hydration, not a drop, unless the
+        // store has said (or the wait has shown) that its listing is complete.
+        if (!wanted || (!wanted.length && !this.seenWorktree && hydration !== 'complete')) {
             return;
         }
         this.pending = undefined;
@@ -195,7 +233,7 @@ export class OrcaRootSync implements FrontendApplicationContribution {
         // so a relaunch reconciles once; an owned root missing from a workspace the user switched to is added again.
         const previousWanted = this.previousWanted ?? owned.filter(o => roots.includes(o));
         // 65-WR-03: before Orca has listed every repository, a root missing from the snapshot is not yet a drop.
-        const effective = this.hydrated === false ? [...new Set([...previousWanted, ...wanted])] : wanted;
+        const effective = hydration === 'hydrating' ? [...new Set([...previousWanted, ...wanted])] : wanted;
         const plan = planRoots({ wanted: effective, previousWanted, roots, owned, userRemoved });
         this.applying = true;
         try {

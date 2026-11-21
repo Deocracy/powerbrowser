@@ -22,6 +22,10 @@
 //     retry that does.
 //  d. 65-WR-03: while the snapshot reports hydrated false, a persisted owned root missing from
 //     the snapshot is neither removed nor has its editors closed; once hydrated is true it is.
+//  d2. 65-WR-03: hydrated false is trusted only for the root sync's hydration wait: past it the
+//     snapshot is complete (an empty worktree list included, since Orca never sets the flag with
+//     no repository or no worktree), and the wait's own timer applies a held drop with no new
+//     snapshot. A snapshot with no flag (an older overlay) keeps the settle timer alone.
 //  e. 65-WR-02: the resolver's trusted roots include the latest snapshot's roots before its sync
 //     runs, and the sync hands the router the roots it applied (retry).
 //
@@ -253,6 +257,31 @@ async function check(texts) {
         legacy.sync.onSnapshot(snap(['/a']));
         await legacy.sync.sync();
         if (!legacy.removed.includes('file:///b')) fails.push('a bundle that reports no hydration flag no longer applies drops (the fallback changed)');
+
+        // d2. hydrated may never turn true (Orca with no repository or no detected worktree): once the wait has run
+        // out, the snapshot is complete, an empty worktree list included, and with no new snapshot the wait's own
+        // timer applies it.
+        const stuck = make();
+        stuck.sync.hydrationWaitMs = 0;
+        stuck.sync.onSnapshot(snap(['/a'], false));
+        await stuck.sync.sync();
+        if (!stuck.removed.includes('file:///b')) fails.push('d2: with hydrated stuck at false past the wait, a dropped root was never removed (the sync waits for a flag Orca never sets)');
+        const empty = make();
+        empty.sync.hydrationWaitMs = 0;
+        empty.sync.onSnapshot(snap([], false));
+        await empty.sync.sync();
+        if (!empty.removed.includes('file:///a') || !empty.removed.includes('file:///b')) fails.push(`d2: an empty worktree list with hydrated false past the wait was not taken as complete (removed ${empty.removed.join(',') || 'nothing'})`);
+        globalThis.window = { setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (h) => clearTimeout(h) };
+        const timed = make();
+        timed.sync.hydrationWaitMs = 60;
+        timed.sync.onSnapshot(snap(['/a'], false));
+        clearTimeout(timed.sync.timer);
+        await timed.sync.sync();
+        const heldEarly = !timed.removed.includes('file:///b');
+        await new Promise((d) => setTimeout(d, 200));
+        await timed.sync.queue;
+        if (!heldEarly) fails.push('d2: a drop applied before the hydration wait ran out');
+        else if (!timed.removed.includes('file:///b')) fails.push('d2: after the hydration wait ran out with no new snapshot, the held drop was never applied');
     } catch (e) {
         fails.push(`the check could not run: ${e?.stack ?? e}`);
     } finally {
@@ -270,7 +299,10 @@ const PLANTS = [
     { name: 'failed-open-cached', naming: 'never opened again after the roots arrive', file: 'routes', edit: (s) => s.replace('this.known.set(file.id, failed ? { signature, uri, failed } : { signature, uri });', 'this.known.set(file.id, { signature, uri });') },
     { name: 'released-forgotten', naming: 'did not open again when its root returned', file: 'routes', edit: (s) => s.replace("this.known.set(id, { signature: this.known.get(id)?.signature ?? '', uri: undefined, released: true });", 'void id;') },
     { name: 'released-reopens-at-once', naming: 'opened again before its root returned', file: 'routes', edit: (s) => s.replace("this.known.set(id, { signature: this.known.get(id)?.signature ?? '', uri: undefined, released: true });", 'this.known.delete(id);') },
-    { name: 'drops-before-hydration', naming: 'removed a root before hydration', file: 'rootSync', edit: (s) => s.replace('const effective = this.hydrated === false ?', 'const effective = false ?') },
+    { name: 'drops-before-hydration', naming: 'removed a root before hydration', file: 'rootSync', edit: (s) => s.replace("const effective = hydration === 'hydrating' ?", 'const effective = false ?') },
+    { name: 'hydration-waits-forever', naming: 'd2: with hydrated stuck at false past the wait, a dropped root was never removed', file: 'rootSync', edit: (s) => s.replace("        if (left <= 0) {\n            return 'complete';\n        }\n", '') },
+    { name: 'empty-list-never-complete', naming: 'd2: an empty worktree list with hydrated false past the wait was not taken as complete', file: 'rootSync', edit: (s) => s.replace("if (!wanted || (!wanted.length && !this.seenWorktree && hydration !== 'complete')) {", 'if (!wanted || (!wanted.length && !this.seenWorktree)) {') },
+    { name: 'no-sync-after-wait', naming: 'd2: after the hydration wait ran out with no new snapshot, the held drop was never applied', file: 'rootSync', edit: (s) => s.replace('        if (this.hydrationTimer === undefined) {', '        if (false) {') },
     { name: 'no-retry-after-sync', naming: 'did not hand the router the roots it applied', file: 'rootSync', edit: (s) => s.replace('this.router.retry(this.liveRootPaths());', '') },
     { name: 'resolver-waits-for-sync', naming: "do not include the latest snapshot's roots", file: 'rootSync', edit: (s) => s.replace('...(this.reported ?? [])', '') },
 ];
