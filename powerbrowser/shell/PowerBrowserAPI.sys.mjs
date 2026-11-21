@@ -9546,6 +9546,12 @@ function installFullscreen(window) {
         aActor.requestOrigin = null;
         return;
       }
+      // agent-browser-04 (round 3): an agent page never takes the shell window, where it would cover the agent mark
+      // and its Stop; an agent click is a trusted event, so a page's fullscreen button would otherwise pass.
+      if (webTabs.get(tabIdOfBrowser(aBrowser))?.agent === true) {
+        abortEnterFullscreen(window, aActor);
+        return;
+      }
       // A pointer-lock warning still set would be reused by showWarning for the fullscreen text; it closes first (:580-582).
       closeWarning("pointerlock-warning");
       // A remote browser's content enters fullscreen state first, through any OOP ancestor frames (:586-623).
@@ -12338,15 +12344,18 @@ async function handleWebTabAgent(data, actorRef) {
   return outcome.where === "done" ? { ok: true, kind, where: "done", result: outcome.result } : { ok: true, kind, where: "failed", code: outcome.code };
 }
 
-// agent-browser-04: Stop is the shell window's, not one tab's. A Stop pressed on any agent tab stops every agent tab
-// of that window, and while it lasts chrome refuses every agent call (agentWallVerdict) and every new agent tab
-// (webTabOpen answers agent-stopped), so an agent cannot carry on through a new background tab. The key is the shell
-// window, not the frontend's actor, so a reload of the Theia document (which an agent with a shell can force) does not
-// clear it; only Resume on a stopped agent tab's mark, or the window closing, does.
+// agent-browser-04: Stop is the browser's, not one tab's or one window's. A Stop pressed on any agent tab stops every
+// agent tab in every shell window, and while it lasts chrome refuses every agent call (agentWallVerdict) and every new
+// agent tab (webTabOpen answers agent-stopped), so an agent cannot carry on through a new background tab. Round 3:
+// one scope for the process, because orcad lets the caller of browser.tabCreate name the browser host a page goes
+// to (orca/src/shared/rpc-contract/browser-tab-create-params.ts:18, placement kind client with browserHostClientId;
+// orca/src/main/runtime/browser/browser-tab-creation.ts:48), so an agent can place its next page on another window's
+// host. The key is not a frontend actor, so a reload of the Theia document does not clear it; only Resume does.
 const agentStoppedScopes = new WeakSet();
+const AGENT_STOP_SCOPE = Object.freeze({});
 
-function agentStopScope(actorRef) {
-  return actorRef?.browsingContext?.top?.embedderElement?.ownerDocument?.defaultView ?? actorRef ?? null;
+function agentStopScope() {
+  return AGENT_STOP_SCOPE;
 }
 
 function agentOwnerStopped(actorRef) {
@@ -12394,6 +12403,10 @@ function handleWebTabAgentStop(data, actorRef) {
   const scope = agentStopScope(actorRef);
   const owned = [...webTabs].filter(([, other]) => other.agent === true && agentStopScope(other.owner) === scope);
   if (data.resume === true) {
+    // Round 3: Resume only from a stopped agent tab, the one place its button is drawn.
+    if (!entry.agentControl?.stopped) {
+      return { ok: true, kind, where: "not-stopped" };
+    }
     agentStoppedScopes.delete(scope);
     for (const [tabId, other] of owned) {
       if (other.agentControl?.stopped) {
