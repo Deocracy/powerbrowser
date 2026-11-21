@@ -11808,6 +11808,32 @@ async function agentSettleOpens(entry, control, opensRefused) {
   }
 }
 
+// 59-WR-03: true when a done result, as the JSON orcad receives, is within AGENT_RESULT_MAX_BYTES in UTF-8 bytes with
+// the same 64-byte envelope margin agentEncodeImage keeps. A result that cannot be serialised does not fit.
+function agentResultFits(result) {
+  let json;
+  try {
+    json = JSON.stringify(result ?? null) ?? "null";
+  } catch {
+    return false;
+  }
+  let bytes = 64;
+  for (let i = 0; i < json.length && bytes <= AGENT_RESULT_MAX_BYTES; i += 1) {
+    const code = json.charCodeAt(i);
+    if (code < 0x80) {
+      bytes += 1;
+    } else if (code < 0x800) {
+      bytes += 2;
+    } else if (code >= 0xd800 && code <= 0xdbff && i + 1 < json.length) {
+      bytes += 4;
+      i += 1;
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes <= AGENT_RESULT_MAX_BYTES;
+}
+
 async function handleWebTabAgent(data, actorRef) {
   const kind = "webTabAgent";
   if (!webTabIdIsValid(data.tabId)) {
@@ -11842,6 +11868,11 @@ async function handleWebTabAgent(data, actorRef) {
     }
   } catch (err) {
     PowerBrowserAPI.log("error", `[orca-agent] ${data.method} failed (${err && err.name ? err.name : "error"})`);
+    outcome = agentFailed("browser_error");
+  }
+  // 59-WR-03: the result budget holds for every row (eval, exec get html, console, network, cookies), not only the
+  // images, PDF and snapshot that check it themselves.
+  if (outcome.where === "done" && !agentResultFits(outcome.result)) {
     outcome = agentFailed("browser_error");
   }
   // D-35: the command opened a window or tab that chrome refused, so it did not do what it was asked.

@@ -11,6 +11,8 @@
 //  editState     [59-WR-01, chrome-actor-06]  run over the groups registerEditStateActor registers: a text-field edit
 //                row in an overlay outside them (the agent group) goes through Controllers and answers done, and the
 //                target-state read never asks for the pair there; a "browsers" field row still reaches the pair.
+//  budget        [59-WR-03]  over the stub world: a child row's done result over AGENT_RESULT_MAX_BYTES (read from the
+//                section) answers failed browser_error, measured in UTF-8 bytes; a small one stays done.
 //
 // Tier: quick (text reads and node:vm). --self-test plants each pre-fix fault in an in-memory copy of the tree and
 // requires the clause to go red naming it.
@@ -24,6 +26,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
+import { makeWorld, sliceSource } from './verify-orca-browser-tab-scope.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'agent-tab-walls';
@@ -152,7 +155,40 @@ async function editStateClause(texts) {
     return failures;
 }
 
-const CLAUSES = [scrollClause, editStateClause];
+/** A fresh stub world over the shipped chrome source (verify-orca-browser-tab-scope's boundary), or throws. */
+function worldOf(texts) {
+    const sliced = sliceSource(texts.api);
+    if (sliced.error) throw new Error(sliced.error);
+    return makeWorld(sliced);
+}
+
+// The budget the shipped section declares; the plant-free measure is UTF-8 bytes of the result's JSON.
+function budgetOf(texts) {
+    const m = /const AGENT_RESULT_MAX_BYTES = (\d+) \* (\d+);/.exec(texts.api);
+    return m ? Number(m[1]) * Number(m[2]) : null;
+}
+
+// 59-WR-03: every row's done result is held to the budget, measured in UTF-8 bytes, child rows and native rows alike.
+async function budgetClause(texts) {
+    const failures = [];
+    const max = budgetOf(texts);
+    if (!max) return ['budget: broken instrument: AGENT_RESULT_MAX_BYTES not found'];
+    const run = async (label, method, params, reply, want) => {
+        const w = worldOf(texts);
+        w.addTab('a1', { agent: true });
+        if (reply) w.childReplies.set(method, () => Promise.resolve(reply));
+        const answer = await w.agent('a1', method, params);
+        const got = answer?.where === 'done' ? 'done' : `${answer?.where} ${answer?.code ?? ''}`.trim();
+        if (got !== want) failures.push(`budget: ${label} answered ${got}; expected ${want} (59-WR-03)`);
+    };
+    await run('a small browser.eval result', 'browser.eval', { expression: '1' }, { where: 'done', result: { value: 'x' } }, 'done');
+    await run('a browser.eval result over the budget', 'browser.eval', { expression: '1' }, { where: 'done', result: { value: 'x'.repeat(max) } }, 'failed browser_error');
+    // Under the budget in UTF-16 code units, over it in UTF-8 bytes: the measure must be bytes.
+    await run('a browser.exec result over the budget in UTF-8 bytes only', 'browser.exec', { command: 'get html' }, { where: 'done', result: { value: '€'.repeat(Math.ceil(max / 2.5)) } }, 'failed browser_error');
+    return failures;
+}
+
+const CLAUSES = [scrollClause, editStateClause, budgetClause];
 
 export async function checkTexts(texts) {
     const failures = [];
@@ -199,6 +235,16 @@ const PLANTS = [
         name: 'chrome-actor-06: pageEditTargetCommands asks the pair in any overlay',
         plant: t => ({ ...t, api: replaceOnce(t.api, 'async function pageEditTargetCommands(data, cached) {\n  if (!editStateReaches(data.browser)) {\n    return cached;\n  }\n', 'async function pageEditTargetCommands(data, cached) {\n', 'pageEditTargetCommands guard') }),
         expect: 'asked the edit-state pair in an agent overlay',
+    },
+    {
+        name: '59-WR-03: handleWebTabAgent replies with any done result unmeasured',
+        plant: t => ({ ...t, api: replaceOnce(t.api, 'if (outcome.where === "done" && !agentResultFits(outcome.result)) {', 'if (false) {', 'budget measure') }),
+        expect: 'over the budget answered done',
+    },
+    {
+        name: '59-WR-03: the budget measured in UTF-16 code units',
+        plant: t => ({ ...t, api: replaceOnce(t.api, '    if (code < 0x80) {\n      bytes += 1;', '    if (code < 0x10000) {\n      bytes += 1;', 'budget bytes') }),
+        expect: 'in UTF-8 bytes only answered done',
     },
 ];
 
