@@ -311,6 +311,8 @@ export class ModeService implements FrontendApplicationContribution {
     protected droppedCustomIds = new Set<string>();
     /** theia-pane-hosting-04: the id a renamed custom mode had -> the id it has now. */
     protected readonly renamedCustomIds = new Map<string, string>();
+    /** The tail of the modes.json write queue (writeStore). */
+    protected storeWrites: Promise<void> = Promise.resolve();
     protected customModesLoadedPromise: Promise<void> | undefined;
     protected persistedModeReapplied = false;
     /** Bumped by every activateMode; an earlier call that sees a newer value stops applying its rules. */
@@ -533,6 +535,17 @@ export class ModeService implements FrontendApplicationContribution {
     }
 
     /**
+     * theia-pane-hosting-04: every write of modes.json goes through one queue, in call order, so the load-time
+     * write-back of a renamed row can never land after (and overwrite) a later save. A failed write rejects its own
+     * caller only; the queue goes on.
+     */
+    protected writeStore(text: string): Promise<void> {
+        const write = this.storeWrites.then(() => this.fileService.write(this.modesUri, text)).then(() => undefined);
+        this.storeWrites = write.catch(() => undefined);
+        return write;
+    }
+
+    /**
      * theia-pane-hosting-04: the id a stored mode id stands for now. A custom mode renamed because a shipped mode
      * took its name keeps its old id in saved Setups, the session snapshot and the persisted layout; this maps it to
      * the renamed mode's id. Any other id is returned unchanged.
@@ -575,7 +588,7 @@ export class ModeService implements FrontendApplicationContribution {
         };
         const customs = [...this.lastGoodCustoms, row];
         try {
-            await this.fileService.write(this.modesUri, JSON.stringify({ version: MODES_STORE_VERSION, customs }, undefined, 2));
+            await this.writeStore(JSON.stringify({ version: MODES_STORE_VERSION, customs }, undefined, 2));
         } catch {
             void this.flash('PowerBrowser could not save this mode. Your panels are unchanged — try again.');
             return;
@@ -752,7 +765,7 @@ export class ModeService implements FrontendApplicationContribution {
             void this.flash(`PowerBrowser now has its own "${from}" mode, so your "${from}" mode is now called "${to}".`);
         }
         if (parsed.migrated !== undefined) {
-            this.fileService.write(this.modesUri, parsed.migrated).catch(() => {
+            this.writeStore(parsed.migrated).catch(() => {
                 console.info('[@powerbrowser/modes] a renamed custom mode was not written back; it is renamed again at the next launch');
             });
         }

@@ -9,6 +9,8 @@
 //                         name changed; a persisted active id of the old name follows it.
 //  snapshot-follows-rename theia-pane-hosting-04. A session snapshot or named Setup carrying the old
 //                         id activates the renamed mode, and the Setup list names it.
+//  write-order            theia-pane-hosting-04. The load-time write-back and every save share one
+//                         queue, so a later save is never overwritten by the slower write-back.
 //  references-unknown     theia-pane-hosting-03. SetupsService.referencedTabUris gives undefined
 //                         (unknown) for an unreadable or unparsable setups.json and for an
 //                         unreadable session, and a set for an absent or valid file.
@@ -147,6 +149,42 @@ async function clauseSnapshotFollowsRename(sources, fail) {
     }
 }
 
+async function clauseWriteOrder(sources, fail) {
+    const { module, descriptors } = modeService(sources);
+    const label = (descriptors.SHIPPED_MODES ?? []).map(d => d.label).filter(l => typeof l === 'string').pop();
+    const service = new module.ModeService();
+    let stored = null;
+    let calls = 0;
+    // The first write (the load-time write-back) is slow; a later save is fast. The later one must win.
+    service.fileService = {
+        write: (_uri, text) => {
+            calls += 1;
+            const wait = calls === 1 ? 40 : 0;
+            return new Promise(resolve => setTimeout(() => { stored = text; resolve(); }, wait));
+        },
+    };
+    service.storage = { getData: async () => undefined };
+    service.perspectives = { registerPerspective: () => undefined, getActivePerspectiveId: () => 'browsing' };
+    service.flash = async () => undefined;
+    service.activateMode = async () => undefined;
+    service.applyStoreText(JSON.stringify({ version: 1, customs: [{ name: label, leftVisible: true, rightVisible: false, bottomVisible: false }] }));
+    if (typeof service.writeStore !== 'function') {
+        fail('write-order', 'mode-service.ts has no writeStore queue; the load-time write-back races a later save (theia-pane-hosting-04)');
+        return;
+    }
+    await service.writeStore('LATER-SAVE');
+    await new Promise(resolve => setTimeout(resolve, 80));
+    if (stored !== 'LATER-SAVE') {
+        fail('write-order', 'the load-time write-back of a renamed mode landed after a later save and overwrote it (theia-pane-hosting-04)');
+    }
+    // Derived from the tree: every modes.json write in mode-service.ts goes through writeStore.
+    const text = Object.prototype.hasOwnProperty.call(sources, REL.service) ? sources[REL.service] : readFileSync(join(REPO_ROOT, REL.service), 'utf8');
+    const direct = text.split('this.fileService.write(this.modesUri').length - 1;
+    if (direct !== 1) {
+        fail('write-order', `mode-service.ts writes modes.json directly ${direct} time(s); want exactly once, inside writeStore, so every write is queued`);
+    }
+}
+
 async function clauseReferences(sources, fail) {
     const descriptors = loadTs(REL.descriptors, { sources });
     const { SetupsService } = loadTs(REL.setups, { sources, overrides: { [REL.descriptors]: descriptors } });
@@ -179,7 +217,7 @@ async function clauseReferences(sources, fail) {
     }
 }
 
-const CLAUSES = [clauseShippedName, clauseSnapshotFollowsRename, clauseReferences];
+const CLAUSES = [clauseShippedName, clauseSnapshotFollowsRename, clauseWriteOrder, clauseReferences];
 
 export async function check(sources = {}) {
     const failures = [];
@@ -208,6 +246,14 @@ export const PLANTS = [
     {
         name: 'the persisted id does not follow the rename', naming: 'shipped-name-renamed', file: REL.service,
         edits: [['await this.reapplyMode(this.resolveModeId(persistedId));', 'await this.reapplyMode(persistedId);']],
+    },
+    {
+        name: 'the write-back is fire-and-forget beside later saves', naming: 'write-order', file: REL.service,
+        edits: [['this.writeStore(parsed.migrated).catch(', 'this.fileService.write(this.modesUri, parsed.migrated).catch(']],
+    },
+    {
+        name: 'a save bypasses the write queue', naming: 'write-order', file: REL.service,
+        edits: [['await this.writeStore(JSON.stringify(', 'await this.fileService.write(this.modesUri, JSON.stringify(']],
     },
     {
         name: 'a snapshot carrying the old mode id opens Browsing', naming: 'snapshot-follows-rename', file: REL.setups,
