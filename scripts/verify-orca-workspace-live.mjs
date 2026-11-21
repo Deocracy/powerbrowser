@@ -6,13 +6,16 @@
 // and merge editor, never in Orca's own editor, and every local Orca worktree is a Theia
 // workspace folder kept in sync with Orca's store.
 //
-// Live, tier full, coordinator-run on the merged, wired and built tree after orca-pane-css-live.
-// Run it under the shared live lock with every inherited ORCA_* unset:
-//   env $(compgen -e | grep '^ORCA_' | sed 's/^/-u /') flock /home/chris/coding/Power-Browser/.git/pb-live.lock \
-//     node scripts/verify-orca-workspace-live.mjs
-// A named SKIP (exit 0) when no built PowerBrowser, no built orca/ (orcad and the pane bundle), no
-// built Theia app, or lane p65-01's bundle API is absent; a FAIL when the built app does not carry
-// @powerbrowser/orca-workspace.
+// Live, tier full, run on the merged, wired and built tree after orca-pane-css-live. A row started without
+// PB_LIVE_LOCK_HELD=1 takes <git common dir>/pb-live.lock itself (lib/live-lock-reexec.mjs) before it launches
+// anything; every inherited ORCA_* is unset. Exit 77 with one "SKIP -- <reason>" line (SKIP-PROTOCOL.md) when no
+// built PowerBrowser, no built orca/ (orcad and the pane bundle), no built Theia app, or lane p65-01's bundle API is
+// absent; a FAIL when the built app does not carry @powerbrowser/orca-workspace.
+//
+// Cleanup: every process this row started (PowerBrowser's orcad and its terminal daemon) is killed, and every
+// directory it made is removed, when a clause throws and when a signal ends the run (lib/live-teardown.mjs). The
+// worktrees it creates through Orca go to Orca's workspaceDir under the scratch HOME the launched programs run
+// with (firefox-bidi.mjs liveEnv), never the real home: each one's path is checked against that HOME and removed.
 //
 // One PowerBrowser session on a fresh scratch profile with its own orcad, built as
 // scripts/lib/orca-tabs-live.mjs's withOrcaTabsSession builds it (the three prefs, the built CLI
@@ -47,13 +50,17 @@
 //   node scripts/verify-orca-workspace-live.mjs
 //   node scripts/verify-orca-workspace-live.mjs --self-test
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { liveEnv } from './lib/firefox-bidi.mjs';
+import { FIXTURE_GIT_ARGS, fixtureGitEnv } from './lib/orca-pane-harness.mjs';
+import { takeLiveLock } from './lib/live-lock-reexec.mjs';
+import { registerTeardown } from './lib/live-teardown.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-workspace-live';
@@ -100,6 +107,41 @@ export const untitledVerdict = (files) => files.filter((f) => f.startsWith('Unti
 /** The first root fires no reload: the page marker set before it survives. */
 export const reloadVerdict = (markerKept) => (markerKept ? [] : ['the first root reloaded the Theia frontend']);
 
+/**
+ * Orca creates a worktree under its workspaceDir, `<HOME>/orca/workspaces/<repo>/<name>`, and the launched programs
+ * run with the scratch HOME (liveEnv). A created worktree outside that folder is a worktree somewhere a row must never
+ * write (the developer's real home); red names the clause, never the path.
+ */
+export function worktreeHomeVerdict(path, home) {
+    const base = join(home, 'orca', 'workspaces') + sep;
+    return String(path).startsWith(base) ? [] : [`a created worktree is outside the scratch HOME's Orca workspace folder (${basename(String(path))})`];
+}
+
+/** Absolute paths in a CLI result whose last segment starts with `prefix`, in order, without repeats. */
+export function worktreePathsIn(value, prefix = 'ws-live') {
+    const out = [];
+    const walk = (v) => {
+        if (typeof v === 'string') { if (v.startsWith('/') && basename(v).startsWith(prefix) && !out.includes(v)) out.push(v); } else if (Array.isArray(v)) v.forEach(walk); else if (v && typeof v === 'object') Object.values(v).forEach(walk);
+    };
+    walk(value);
+    return out;
+}
+
+/**
+ * Removes the worktree directories this row created through Orca (each one's last segment starts with ws-live) and then
+ * each now-empty parent (non-recursive: never anything else under Orca's workspace folder). Returns the paths removed.
+ */
+export function removeCreatedWorktrees(paths) {
+    const removed = [];
+    for (const p of paths) {
+        if (!p || !basename(p).startsWith('ws-live') || !existsSync(p)) continue;
+        rmSync(p, { recursive: true, force: true });
+        removed.push(p);
+        try { rmdirSync(dirname(p)); } catch { /* not empty or absent */ }
+    }
+    return removed;
+}
+
 /** The 1 s bound of clause (a). */
 export const timingVerdict = (ms) => (ms !== null && ms <= 1000 ? [] : [`no Theia editor within 1 s (${ms === null ? 'none' : `${ms} ms`})`]);
 
@@ -143,8 +185,66 @@ async function runSelfTest() {
     expect('timing control', timingVerdict(400), null);
     expect('timing', timingVerdict(1500), 'no Theia editor within 1 s');
 
+    // harness-live-panels-10: worktrees stay under the scratch HOME, and the cleanup removes only what the row created.
+    expect('worktree under the scratch HOME control', worktreeHomeVerdict('/tmp/pb-home-x/orca/workspaces/repo/ws-live', '/tmp/pb-home-x'), null);
+    expect('a worktree under the real home', worktreeHomeVerdict('/home/dev/orca/workspaces/repo/ws-live', '/tmp/pb-home-x'), 'outside the scratch HOME');
+    expect('a sibling folder that only shares the prefix', worktreeHomeVerdict('/tmp/pb-home-x2/orca/workspaces/repo/ws-live', '/tmp/pb-home-x'), 'outside the scratch HOME');
+    {
+        const root = mkdtempSync(join(tmpdir(), 'pb-ws-cleanup-'));
+        try {
+            const repoDir = join(root, 'orca', 'workspaces', 'repo');
+            const a = join(repoDir, 'ws-live'), b = join(repoDir, 'ws-live-2'), other = join(repoDir, 'keep-me');
+            for (const d of [a, b, other]) { mkdirSync(d, { recursive: true }); writeFileSync(join(d, 'f'), 'x'); }
+            const removed = removeCreatedWorktrees([a, b, other, join(repoDir, 'never-existed')]);
+            const left = readdirSync(repoDir).sort().join();
+            const fails = [...(removed.length === 2 ? [] : [`removed ${removed.length} paths, expected 2`]), ...(left === 'keep-me' ? [] : [`left ${left}`]), ...(existsSync(join(other, 'f')) ? [] : ['an unrelated worktree was removed'])];
+            expect('cleanup removes the created worktrees, keeps everything else', fails, null);
+            const again = removeCreatedWorktrees([other]);
+            expect('cleanup refuses a directory that is not a ws-live worktree', again.length ? ['removed a non-ws-live directory'] : [], null);
+            removeCreatedWorktrees([]);
+            const empty = join(root, 'orca', 'workspaces', 'solo'); mkdirSync(join(empty, 'ws-live'), { recursive: true });
+            removeCreatedWorktrees([join(empty, 'ws-live')]);
+            expect('cleanup removes the parent folder once it is empty', existsSync(empty) ? ['the empty parent stayed'] : [], null);
+        } finally { rmSync(root, { recursive: true, force: true }); }
+    }
+    expect('worktree paths found in a CLI result', JSON.stringify(worktreePathsIn({ result: { worktree: { path: '/h/orca/workspaces/repo/ws-live', other: '/h/x' }, list: ['/h/orca/workspaces/repo/ws-live-2'] } })) === JSON.stringify(['/h/orca/workspaces/repo/ws-live', '/h/orca/workspaces/repo/ws-live-2']) ? [] : ['wrong paths'], null);
+    expect('no path in a CLI result with none', worktreePathsIn({ result: { ok: true } }).length ? ['found a path'] : [], null);
+    {
+        // The teardown runs once on a throw, once on exit and once on SIGTERM; the cleanup also runs when the process is signalled.
+        const home = mkdtempSync(join(tmpdir(), 'pb-teardown-'));
+        try {
+            const marker = join(home, 'marker');
+            const lib = join(REPO_ROOT, 'scripts', 'lib', 'live-teardown.mjs');
+            const run = (body) => spawnSync(process.execPath, ['--input-type=module', '-e', `import { registerTeardown } from ${JSON.stringify(lib)}; import { appendFileSync } from 'node:fs'; const t = registerTeardown(() => appendFileSync(${JSON.stringify(marker)}, 'x')); ${body}`], { encoding: 'utf8', timeout: 20000 });
+            const count = () => (existsSync(marker) ? readFileSync(marker, 'utf8').length : 0);
+            rmSync(marker, { force: true });
+            run('throw new Error("boom");');
+            expect('teardown runs after an uncaught throw', count() === 1 ? [] : [`ran ${count()} times`], null);
+            rmSync(marker, { force: true });
+            run('t(); t(); process.exit(0);');
+            expect('teardown runs once however often it is called, and not again at exit', count() === 1 ? [] : [`ran ${count()} times`], null);
+            rmSync(marker, { force: true });
+            const sig = run('setTimeout(() => process.kill(process.pid, "SIGTERM"), 50); setInterval(() => {}, 1000);');
+            expect('teardown runs when SIGTERM ends the process, which then still ends by the signal', count() === 1 && sig.signal === 'SIGTERM' ? [] : [`ran ${count()} times, ended by ${sig.signal ?? `exit ${sig.status}`}`], null);
+        } finally { rmSync(home, { recursive: true, force: true }); }
+    }
+    {
+        // The fixture repository builds under a user's hostile global git config (commit signing, hooks) without prompting or failing.
+        const home = mkdtempSync(join(tmpdir(), 'pb-ws-fixture-'));
+        try {
+            writeFileSync(join(home, '.gitconfig'), '[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = /nonexistent/gpg\n');
+            let status = 'none';
+            try { const { git } = buildFixtureRepo(join(home, 'repo'), home); status = git('status', '--porcelain'); } catch (e) { status = `threw: ${String(e.message).split('\n')[0]}`; }
+            expect("the fixture repository ignores the user's global git config and holds its merge conflicts", /UU conflict\.txt/.test(status) && /DU gone\.txt|UD gone\.txt/.test(status) ? [] : [`status: ${status}`], null);
+        } finally { rmSync(home, { recursive: true, force: true }); }
+    }
     // The plan's behaviour list through the real pure functions.
-    if (!existsSync(TS_DIR)) { console.error(`${NAME} self-test: FAIL -- theia/node_modules/typescript is absent, so planRoots and planMigration are unproven. Next step: run the audited Theia install.`); return 1; }
+    if (!existsSync(TS_DIR)) {
+        // The comparators above ran: a failure there is a FAIL; otherwise the part that needs typescript did not run, which is a SKIP.
+        if (failures) { console.error(`${NAME} self-test: FAIL -- ${failures} case(s) wrong`); return 1; }
+        console.log(skipLine(NAME, 'theia/node_modules/typescript is absent, so planRoots, noteUserRemovals and planMigration were not run; run the audited Theia install in theia/'));
+        return SKIP_EXIT;
+    }
     if (!existsSync(join(REPO_ROOT, ROOT_SYNC_REL))) { console.error(`${NAME} self-test: FAIL -- ${ROOT_SYNC_REL} is absent`); return 1; }
     const m = await loadRootSync();
     const behave = (name, good) => { if (good) console.log(`  ok ${name}`); else { console.error(`  FAIL ${name}`); failures++; } };
@@ -192,8 +292,10 @@ async function readiness() {
 }
 
 /** The scratch repository: a base, a feature branch, a commit to compare, a staged and an unstaged change, and a merge left with UU and UD. */
-function buildFixtureRepo(repo, env) {
-    const git = (...a) => execFileSync('git', ['-C', repo, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', '-c', 'init.defaultBranch=main', ...a], { env, stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
+function buildFixtureRepo(repo, home) {
+    // The user's global and system git config never apply (a global commit.gpgsign or core.hooksPath would prompt, fail or run).
+    const env = fixtureGitEnv(home);
+    const git = (...a) => execFileSync('git', ['-C', repo, ...FIXTURE_GIT_ARGS, '-c', 'init.defaultBranch=main', ...a], { env, stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
     mkdirSync(repo, { recursive: true });
     const put = (f, t) => writeFileSync(join(repo, f), t);
     git('init', '-q');
@@ -251,8 +353,11 @@ function expectedDiffSides(rec, headOid) {
 
 async function runLive() {
     const ready = await readiness();
-    if (ready.skip) { console.log(`${NAME}: SKIP -- ${ready.skip}`); return 0; }
+    if (ready.skip) { console.log(skipLine(NAME, ready.skip)); return SKIP_EXIT; }
     if (ready.fail) { console.error(`${NAME}: FAIL -- ${ready.fail}`); return 1; }
+    // Nothing is launched before this: a row started by hand takes the live lock itself (harness-live-panels-02).
+    const held = takeLiveLock(import.meta.url, NAME);
+    if (held !== null) return held;
     const lib = await import('./lib/orca-tabs-live.mjs');
     const { installOutputRedaction, ensurePbNode, redact } = await import('./lib/orca-run.mjs');
     const secrets = [];
@@ -266,16 +371,29 @@ async function runLive() {
     const userFolder = join(scratch, 'user-folder');
     const stubDir = lib.writeStubAgentDir();
     const recorded = new Map();
-    const createdParents = new Set();
+    const createdWorktrees = new Set();
+    const electron = await import('./verify-orca-hidden-electron.mjs');
+    // The teardown runs in the finally below, and also at exit and on SIGINT, SIGTERM and SIGHUP; it is synchronous.
+    // Whatever the run threw: the orcad and terminal daemon PowerBrowser started are killed, the worktrees Orca
+    // created are removed, then the scratch folders (harness-live-panels-10).
+    const teardown = registerTeardown(() => {
+        for (const [pid, ticks] of recorded) electron.signalIdentity(pid, ticks, 'SIGKILL');
+        removeCreatedWorktrees([...createdWorktrees]);
+        rmSync(scratch, { recursive: true, force: true });
+        rmSync(stubDir, { recursive: true, force: true });
+    });
     try {
         for (const k of lib.scrubbedNames()) delete process.env[k];
         const live = await import('./lib/pb-live-probe.mjs');
         const { pollFor, probe } = await import('./lib/pb-relaunch.mjs');
-        const { freePort, signalIdentity, startTicks } = await import('./verify-orca-hidden-electron.mjs');
+        const { freePort, startTicks } = electron;
         const OrcaEnv = await import('../powerbrowser/shell/OrcaEnv.sys.mjs');
         const basePath = savedEnv.PATH ?? '';
-        const gitEnv = { PATH: basePath, HOME: savedEnv.HOME ?? process.env.HOME ?? '' };
-        const { git } = buildFixtureRepo(repo, gitEnv);
+        const cliHome = savedEnv.HOME ?? process.env.HOME ?? '';
+        // The fixture's git runs with the scratch folder as HOME and no global config; the worktrees Orca creates are checked against liveEnv's HOME.
+        const gitEnv = fixtureGitEnv(scratch);
+        const orcaHome = liveEnv().HOME;
+        const { git } = buildFixtureRepo(repo, scratch);
         mkdirSync(userFolder);
         process.env.PATH = `${stubDir}:${basePath}`;
         const prefs = { 'powerbrowser.orca.root': join(REPO_ROOT, 'orca'), 'powerbrowser.orca.port': await freePort(OrcaEnv), 'powerbrowser.sidecar.nodePath': (await ensurePbNode()).path };
@@ -297,7 +415,7 @@ async function runLive() {
             if (!boot?.booted) throw new Error(`the Orca pane bundle did not boot: ${JSON.stringify(boot?.error ?? 'not booted')}`);
             const paired = await pollFor(async () => ((await bundle(`m.state()`))?.pairing?.sessionOnly === true) || null, 60000, 'the hosted client to pair session-only').catch(() => false);
             if (!paired) fails.push('the hosted client is not paired session-only (state().pairing.sessionOnly)');
-            const cliEnv = { PATH: basePath, HOME: gitEnv.HOME, ORCA_USER_DATA: state.effectiveRoot, ORCA_USER_DATA_PATH: state.effectiveRoot };
+            const cliEnv = { PATH: basePath, HOME: cliHome, ORCA_USER_DATA: state.effectiveRoot, ORCA_USER_DATA_PATH: state.effectiveRoot };
             const cli = join(state.effectiveRoot, 'cli', 'bin', 'orca');
             const orca = (...a) => {
                 try { return JSON.parse(execFileSync(cli, [...a, '--json'], { env: liveEnv(cliEnv), cwd: repo, timeout: 60000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })); } catch (e) {
@@ -403,10 +521,12 @@ async function runLive() {
             fails.push(...rootsVerdict(owned0, await storeLocal()).map((f) => `(d) ${f}`));
             notes.push(`(d) ${owned0.length} PB-owned root(s) compared with the store's local worktrees`);
             const created = orca('worktree', 'create', '--repo', `path:${repo}`, '--name', 'ws-live', '--setup', 'skip');
-            void created;
+            for (const made of worktreePathsIn(created)) createdWorktrees.add(made);
             const wt = await pollFor(async () => (await storeLocal()).find((x) => x !== repo && x.includes('ws-live')) ?? null, 30000, 'the created worktree in the store').catch(() => null);
             if (!wt) fails.push('(d) the created worktree never reached the store');
             else {
+                createdWorktrees.add(wt);
+                fails.push(...worktreeHomeVerdict(wt, orcaHome).map((f) => `(d) ${f}`));
                 const added = await pollFor(async () => (await rootsNow()).includes(wt) || null, 15000, 'the created worktree as a root').catch(() => false);
                 if (!added) fails.push('(d) a created worktree did not become a root');
                 writeFileSync(join(wt, 'clean.txt'), 'clean\n'); writeFileSync(join(wt, 'dirty.txt'), 'dirty\n');
@@ -431,19 +551,21 @@ async function runLive() {
             // A root added through Theia survives store events; a PB root removed through Theia stays removed.
             await p(`const ws = get('WorkspaceService'); const r = (await ws.roots)[0]; await ws.addRoot(new r.resource.constructor('file://${userFolder}')); return true;`);
             await p(`const ws = get('WorkspaceService'); await ws.removeRoots((await ws.roots).filter(r => r.resource.path.fsPath() === ${JSON.stringify(repo)}).map(r => r.resource)); return true;`);
-            orca('worktree', 'create', '--repo', `path:${repo}`, '--name', 'ws-live-2', '--setup', 'skip');
+            for (const made of worktreePathsIn(orca('worktree', 'create', '--repo', `path:${repo}`, '--name', 'ws-live-2', '--setup', 'skip'))) createdWorktrees.add(made);
             await sleep(4000);
             const finalRoots = await rootsNow();
             if (!finalRoots.includes(userFolder)) fails.push('(d) a root added through Theia was removed by a sync');
             if (finalRoots.includes(repo)) fails.push('(d) a PB-owned root removed through Theia came back after the next store event');
-            // Orca creates worktrees under its workspaceDir (the host's ~/orca/workspaces/<repo>/): remove both through Orca.
+            // Orca creates worktrees under its workspaceDir, <HOME>/orca/workspaces/<repo>/ with the scratch HOME the launched
+            // programs run with: remove both through Orca here; the teardown removes whatever is left, also after a throw.
             const second = await pollFor(async () => (await storeLocal()).find((x) => x.includes('ws-live-2')) ?? null, 15000, 'the second created worktree').catch(() => null);
             if (second) {
+                createdWorktrees.add(second);
+                fails.push(...worktreeHomeVerdict(second, orcaHome).map((f) => `(d) ${f}`));
                 orca('worktree', 'rm', '--worktree', `path:${second}`, '--force');
                 const gone = await pollFor(async () => !(await storeLocal()).includes(second) || null, 30000, 'the second worktree to go').catch(() => false);
                 if (!gone || existsSync(second)) notes.push('cleanup: the second created worktree is still on disk under Orca\'s workspace directory');
             }
-            createdParents.add(dirname(second ?? wt ?? ''));
             // The dirty fixture's editor is reverted, so nothing saves it back into the removed worktree at quit.
             if (wt) await p(`for (const w of get('EditorManager').all) if (w.getResourceUri().toString() === ${JSON.stringify(`file://${wt}/dirty.txt`)}) { await w.editor.document.revert(); w.close(); } return true;`);
 
@@ -453,14 +575,12 @@ async function runLive() {
             fails.push(...untitledVerdict(listWorkspaces()).map((f) => `(f) ${f}`));
             return true;
         }, { extraPrefs: prefs });
-        for (const [pid, ticks] of recorded) signalIdentity(pid, ticks, 'SIGKILL');
     } catch (e) {
         fails.push(`harness: ${redact(String(e?.message ?? e), secrets)}`);
     } finally {
-        rmSync(scratch, { recursive: true, force: true });
-        rmSync(stubDir, { recursive: true, force: true });
-        // Only an empty directory goes (non-recursive): never anything else under Orca's workspace directory.
-        for (const d of createdParents) if (d && d !== '.') try { rmdirSync(d); } catch { /* not empty or absent */ }
+        // After a throw too: the orcad and daemon are killed and the worktrees and scratch folders removed (once; it also runs on a signal).
+        await sleep(500);
+        teardown();
         for (const [k, v] of Object.entries(savedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
         restoreOutput();
     }
