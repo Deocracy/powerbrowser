@@ -54,10 +54,21 @@ export function withoutGitVars<T extends Record<string, string | undefined>>(env
 /**
  * sidecar-gate-backends-02: the environment of every pb-orca-git git run. No GIT_* name is inherited; then a read
  * never fetches (a partial clone's lazy fetch would run the repository's configured upload-pack, ssh command and
- * credential helpers), never prompts and never starts an askpass dialog. protocol.allow=never goes through the
- * environment form of `-c`, so it reaches the fetch child git would spawn and the argv stays as catFileArgs builds it.
+ * credential helpers), never prompts and never starts an askpass dialog. Every transport is set to never through the
+ * environment form of `-c`: command-line scope outranks the repository's own config, so a hostile
+ * protocol.<name>.allow=always in .git/config (git reads it before protocol.allow) cannot re-open one; it reaches the
+ * fetch child git would spawn, and it still holds on a git older than 2.44, which ignores GIT_NO_LAZY_FETCH. The argv
+ * stays as catFileArgs builds it.
  */
+export const ORCA_GIT_NEVER_PROTOCOLS: readonly string[] = Object.freeze(['file', 'ext', 'ssh', 'http', 'https', 'git']);
+
 export function gitReadEnv<T extends Record<string, string | undefined>>(env: T): Record<string, string | undefined> {
+    const keys = ['protocol.allow', ...ORCA_GIT_NEVER_PROTOCOLS.map(p => `protocol.${p}.allow`)];
+    const config: Record<string, string> = { GIT_CONFIG_COUNT: String(keys.length) };
+    keys.forEach((key, i) => {
+        config[`GIT_CONFIG_KEY_${i}`] = key;
+        config[`GIT_CONFIG_VALUE_${i}`] = 'never';
+    });
     return {
         ...withoutGitVars(env),
         GIT_NO_LAZY_FETCH: '1',
@@ -65,9 +76,7 @@ export function gitReadEnv<T extends Record<string, string | undefined>>(env: T)
         GIT_ASKPASS: '',
         SSH_ASKPASS: '',
         SSH_ASKPASS_REQUIRE: 'never',
-        GIT_CONFIG_COUNT: '1',
-        GIT_CONFIG_KEY_0: 'protocol.allow',
-        GIT_CONFIG_VALUE_0: 'never',
+        ...config,
     };
 }
 
