@@ -83,28 +83,46 @@ export function gitReadEnv<T extends Record<string, string | undefined>>(env: T)
 /** 65-CR-01: the reason a read reports when the path is absent at an existing rev or index stage (an added, deleted or untracked file). */
 export const ORCA_GIT_MISSING = 'missing';
 
-/** git rev-parse of one spec: resolves only when it names an object, and reads no blob. Throws on an option-shaped spec or a NUL. */
-export function resolveArgs(root: string, spec: string): string[] {
-    if (spec.startsWith('-') || /[\0\n\r]/.test(spec)) {
-        throw new Error('refused pb-orca-git spec: rev-parse');
+/**
+ * 65-CR-01: the argv that lists one path at a side without reading its blob: ls-tree of the rev's tree, or the index
+ * entries (ls-files --stage), with literal pathspecs. Throws on a refused spec (a leading '-', a NUL) and the empty side.
+ */
+export function presenceArgs(root: string, rev: string, relativePath: string): string[] {
+    const refusal = specRefusal(relativePath, rev);
+    if (refusal || rev === '') {
+        throw new Error(`refused pb-orca-git spec: ${refusal ?? 'empty-side'}`);
     }
-    return ['-c', 'core.fsmonitor=false', '-C', root, 'rev-parse', '--verify', '--quiet', spec];
+    const head = ['-c', 'core.fsmonitor=false', '--literal-pathspecs', '-C', root];
+    return STAGE.test(rev)
+        ? [...head, 'ls-files', '-z', '--stage', '--', relativePath]
+        : [...head, 'ls-tree', '-z', rev, '--', relativePath];
 }
 
 /**
  * 65-CR-01: after a blob read failed, whether the path is absent at its side (that side is then empty) rather than the
- * read having failed. Absent means the path names nothing at the rev while the rev itself exists; an index stage
- * always exists. A path present in the tree whose blob cannot be read (a partial clone with no fetch) stays a failure.
- * resolves(args) runs git and resolves whether it exited 0.
+ * read having failed. Absent is only git's own answer "no such entry": the listing exited 0 over a tree or index it
+ * could read and named no entry for the path at that stage. A listing that failed (a timeout, a rev that does not
+ * exist, a tree object a treeless partial clone does not hold, an unreadable index) is never absent, so that side
+ * fails with a plain error rather than showing the file as wholly added or deleted. run(args) is one git run.
  */
-export async function sideIsMissing(resolves: (args: string[]) => Promise<boolean>, root: string, rev: string, relativePath: string): Promise<boolean> {
+export async function sideIsMissing(run: (args: string[]) => Promise<{ out: Buffer } | { reason: string }>, root: string, rev: string, relativePath: string): Promise<boolean> {
     if (specRefusal(relativePath, rev) || rev === '') {
         return false;
     }
-    if (await resolves(resolveArgs(root, `${rev}:${relativePath}`))) {
+    const r = await run(presenceArgs(root, rev, relativePath));
+    if (!('out' in r)) {
         return false;
     }
-    return STAGE.test(rev) || await resolves(resolveArgs(root, `${rev}^{object}`));
+    const stage = STAGE.test(rev) ? rev.slice(1) : undefined;
+    const named = r.out.toString('utf8').split('\0').some(entry => {
+        const tab = entry.indexOf('\t');
+        if (tab === -1 || entry.slice(tab + 1) !== relativePath) {
+            return false;
+        }
+        // ls-files --stage: "<mode> <object> <stage>\t<path>"; ls-tree: "<mode> <type> <object>\t<path>".
+        return stage === undefined || entry.slice(0, tab).split(' ')[2] === stage;
+    });
+    return !named;
 }
 
 export interface RootDeps {

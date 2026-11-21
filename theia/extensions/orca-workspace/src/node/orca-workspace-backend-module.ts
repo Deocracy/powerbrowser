@@ -68,8 +68,6 @@ function runGit(args: string[]): Promise<{ out: Buffer } | { reason: string }> {
     });
 }
 
-const exitsZero = async (args: string[]): Promise<boolean> => 'out' in await runGit(args);
-
 const ROOT_DEPS: RootDeps = {
     realpath: path => fs.realpath(path),
     toplevel: async root => {
@@ -94,7 +92,7 @@ export class OrcaGitServiceImpl implements OrcaGitService {
             return { ok: true, text: r.out.toString('utf8') };
         }
         // 65-CR-01: an added, deleted or untracked file has no blob on one side; that side is empty, not a failed diff.
-        if (r.reason === 'git-failed' && await sideIsMissing(exitsZero, root, rev, relativePath)) {
+        if (r.reason === 'git-failed' && await sideIsMissing(runGit, root, rev, relativePath)) {
             return { ok: false, reason: ORCA_GIT_MISSING };
         }
         return this.refuse(r.reason);
