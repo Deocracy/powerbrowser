@@ -38,7 +38,8 @@ A row has one of three verdicts.
 4. **Until a script is converted**, the driver also records SKIP when a script exits 0 and its **last**
    non-blank stdout line is a SKIP line. The summary marks those rows
    `[exit 0 with a SKIP last line: convert the script to exit 77]`. A SKIP note printed earlier and followed
-   by a PASS line is not caught by this rule, which is why partial skips must be converted.
+   by a PASS line is not caught by this rule, which is why partial skips must be converted. A last line with
+   no trailing newline is read like any other (fixed after review, abb798b6).
 5. **Function rows** (a bare shell function name in the registry) are not captured. They signal SKIP only by
    `return 77`.
 
@@ -57,10 +58,19 @@ What the driver does with a SKIP:
 
 Gate exclusions now have the form `label|ledger_id|verdict|mode|patterns|reason` (harness-driver-05).
 `verdict` is FAIL or SKIP. `patterns` are ` ;; `-separated literal substrings of the row's output, and one
-of them must appear. Mode `only` also requires every line containing `FAIL` to contain a pattern or to be a
-tally line, so a second, different red in the same row stays red. Mode `any` is for self-test rows, whose
-planted faults print FAIL lines of their own. To request an exclusion, give the integration step the exact
-row in this form. Never add one keyed to an entry whose description does not name the row.
+of them must appear. A tally line is a line that only counts (`FAIL -- 3 failure(s): ...`, `FAIL -- see
+surface(s) above`, `FAIL (3)`). Then each mode names the lines that must each contain a pattern:
+- **`only`** judges every line containing `FAIL` that is not a tally line. It also judges every item line
+  under a tally: the indented lines after the tally, up to the next unindented line. Those carry the failures
+  without the word FAIL. An item starting with `Next step:` is guidance and is not judged.
+- **`any`**, for self-test rows (whose planted faults print FAIL lines of their own), judges every line of the
+  self-test's own verdict, meaning a line containing both `self-test` and `FAIL`, that is not a tally line.
+  A control or plant that the self-test reports as failed is judged; a planted fault's own red output is not.
+  If the output has no such line, only the pattern's presence is checked. That is why a self-test must print
+  its own verdict line naming each failed case (rule 4 under "What a lane changes").
+
+To request an exclusion, give the integration step the exact row in this form. Never add one keyed to an
+entry whose description does not name the row.
 
 ## What a lane changes in a script
 
