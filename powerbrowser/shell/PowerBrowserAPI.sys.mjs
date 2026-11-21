@@ -3604,6 +3604,10 @@ export const PowerBrowserAPI = Object.freeze({
       resendWebTabSharing(tabId);
       return "already-open";
     }
+    // agent-browser-02: agent status belongs to the tab id and row key in chrome. A tab id (or row key) chrome once
+    // created as an agent tab opens as one again (the crash recreate and the lost-view reopen close, then open), whatever
+    // the frontend sends; the flag alone still never turns an open tab into one (the already-open return above).
+    agent = agent === true || (pending === null && agentTabRemembered(tabId, key));
     // Phase 66 (P66-26): an agent overlay loads in the Orca-agent container, never the user's; no container, no tab.
     const userContextId = agent === true ? agentContainerId() : 0;
     if (agent === true && !userContextId) {
@@ -3675,7 +3679,7 @@ export const PowerBrowserAPI = Object.freeze({
     const entry = PowerBrowserAPI.webTabAttach(theiaBrowser, actorRef, tabId, browser, key, spec, grant);
     // Phase 66 (P66-06): an agent tab only from its creation; the already-open return above never reaches this.
     if (agent === true) {
-      agentTabCreated(entry, userContextId);
+      agentTabCreated(entry, userContextId, tabId);
     }
     tabHostAddTab(win, tabId, browser);
     // NG-034: a tab the frontend reopened from last session's snapshot, with
@@ -11331,10 +11335,21 @@ function agentContainerId() {
   }
 }
 
+// agent-browser-02: every tab id and row key chrome created an agent tab under, for the session. webTabClose does not
+// clear them, so an overlay re-created under either is an agent overlay again (webTabOpen).
+const agentTabIds = new Set();
+const agentRowKeys = new Set();
+
+function agentTabRemembered(tabId, key) {
+  return agentTabIds.has(tabId) || agentRowKeys.has(key || `web:${tabId}`);
+}
+
 // webTabOpen's agent branch: the flag, the container the overlay was created in, the network log and the focus guard.
-function agentTabCreated(entry, userContextId) {
+function agentTabCreated(entry, userContextId, tabId) {
   entry.agent = true;
   entry.agentUserContextId = userContextId;
+  agentTabIds.add(tabId);
+  agentRowKeys.add(entry.rowKey);
   agentContainerIds.add(userContextId);
   // D-35, the content wall: set before the first load, so every document of the overlay carries it. D-37 adds the
   // download wall to the same write.

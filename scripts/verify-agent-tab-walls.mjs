@@ -24,6 +24,10 @@
 //  cookies       [agent-browser-03, chrome-actor-04]  over a two-site jar, an agent tab on one site reads that site's
 //                cookies only, never an httpOnly value and never the whole container; another site's or a public
 //                suffix's get, set and delete are refused with no cookie-service call; its own site's set works.
+//  agentFlag     [agent-browser-02 = chrome-actor-02 = 66-CR-01]  an agent tab closed and opened again under its id
+//                or row key without the flag is an agent overlay (container and group before append); a fresh user
+//                tab is not; every webTabOpen request in web-tab.ts spreads this.agentFlag(), which is { agent: true }
+//                for every agent widget.
 //
 // Tier: quick (text reads and node:vm). --self-test plants each pre-fix fault in an in-memory copy of the tree and
 // requires the clause to go red naming it.
@@ -52,6 +56,7 @@ const FILES = {
     api: 'powerbrowser/shell/PowerBrowserAPI.sys.mjs',
     child: 'powerbrowser/shell/GroupActorChild.sys.mjs',
     orcaService: 'powerbrowser/shell/OrcaService.sys.mjs',
+    webTab: 'theia/extensions/tab-uris/src/browser/web-tab.ts',
 };
 
 function stripComments(text) {
@@ -374,7 +379,60 @@ async function cookiesClause(texts) {
     return failures;
 }
 
-const CLAUSES = [scrollClause, editStateClause, budgetClause, historyClause, servicesClause, cookiesClause];
+/** The object literal of every `request({ kind: '<kind>', ... })` call in code. */
+function requestLiterals(code, kind) {
+    const out = [];
+    const re = new RegExp(`request\\(\\{ kind: '${kind}'`, 'g');
+    for (let m = re.exec(code); m; m = re.exec(code)) {
+        let depth = 0;
+        let i = m.index + 'request('.length;
+        const start = i;
+        for (; i < code.length; i += 1) {
+            if (code[i] === '{') depth += 1;
+            if (code[i] === '}') { depth -= 1; if (depth === 0) break; }
+        }
+        out.push(code.slice(start, i + 1));
+    }
+    return out;
+}
+
+// agent-browser-02 / 66-CR-01: agent status is chrome's, per tab id and row key. Over the stub world: an agent tab
+// closed and opened again under its id without the flag (the crash recreate, the lost-view reopen) is an agent overlay
+// in the agent container and group before append; so is a new id opened under the agent tab's row key; a fresh user
+// tab is not. In the frontend, every webTabOpen request of web-tab.ts carries the widget's agent flag.
+async function agentFlagClause(texts) {
+    const failures = [];
+    const w = worldOf(texts);
+    if (w.api.webTabOpen(w.theiaBrowser, w.frontend, 'a1', 'https://example.com/', undefined, undefined, null, true) !== 'opened') {
+        return ['agentFlag: broken instrument: the first agent open did not open'];
+    }
+    w.api.webTabClose('a1');
+    if (w.webTabs.has('a1')) return ['agentFlag: broken instrument: webTabClose left the entry'];
+    const before = w.rec.attrs.length;
+    w.api.webTabOpen(w.theiaBrowser, w.frontend, 'a1', 'https://example.com/', 'web:a1', undefined, null, false);
+    const reopened = w.webTabs.get('a1');
+    const attrs = w.rec.attrs.slice(before).filter(a => a.browser === reopened?.browser && !a.appended);
+    const value = name => attrs.filter(a => a.name === name).at(-1)?.value;
+    if (reopened?.agent !== true || !Number(value('usercontextid')) || value('messagemanagergroup') !== w.AGENT_MESSAGE_MANAGER_GROUP) {
+        failures.push(`agentFlag: an agent tab re-opened under its id without the flag became agent ${JSON.stringify(reopened?.agent)}, container ${JSON.stringify(value('usercontextid'))}, group ${JSON.stringify(value('messagemanagergroup'))}; it reopened as a user tab in the user's container (agent-browser-02)`);
+    }
+    w.api.webTabOpen(w.theiaBrowser, w.frontend, 'k1', 'https://example.com/', 'web:a1', undefined, null, false);
+    if (w.webTabs.get('k1')?.agent !== true) failures.push('agentFlag: a tab opened under an agent tab\'s row key (its kept history) was not an agent tab (agent-browser-02)');
+    w.api.webTabOpen(w.theiaBrowser, w.frontend, 'u9', 'https://example.com/', undefined, undefined, null, false);
+    if (w.webTabs.get('u9')?.agent === true) failures.push('agentFlag: a fresh user tab was made an agent tab');
+
+    const literals = requestLiterals(stripComments(texts.webTab), 'webTabOpen');
+    if (!literals.length) return [...failures, `agentFlag: broken instrument: no webTabOpen request in ${FILES.webTab}`];
+    for (const literal of literals) {
+        if (!/\.\.\.this\.agentFlag\(\)/.test(literal)) failures.push(`agentFlag: ${FILES.webTab} sends ${literal.replace(/\s+/g, ' ').slice(0, 140)} without the widget's agent flag (66-CR-01)`);
+    }
+    if (!/protected agentFlag\(\): \{ agent\?: true \} \{\s*return this\.agent \? \{ agent: true as const \} : \{\};/.test(stripComments(texts.webTab))) {
+        failures.push(`agentFlag: ${FILES.webTab}'s agentFlag() does not return { agent: true } for every agent widget (66-CR-01)`);
+    }
+    return failures;
+}
+
+const CLAUSES = [scrollClause, editStateClause, budgetClause, historyClause, servicesClause, cookiesClause, agentFlagClause];
 
 export async function checkTexts(texts) {
     const failures = [];
@@ -402,6 +460,26 @@ function replaceOnce(text, from, to, what) {
 }
 
 const PLANTS = [
+    {
+        name: 'agent-browser-02: chrome forgets an agent tab id at close',
+        plant: t => ({ ...t, api: replaceOnce(t.api, 'agent = agent === true || (pending === null && agentTabRemembered(tabId, key));', 'agent = agent === true;', 'remembered id') }),
+        expect: 'reopened as a user tab',
+    },
+    {
+        name: 'agent-browser-02: chrome forgets an agent tab row key',
+        plant: t => ({ ...t, api: replaceOnce(t.api, 'agentRowKeys.has(key || `web:${tabId}`)', 'false', 'remembered key') }),
+        expect: 'under an agent tab\'s row key',
+    },
+    {
+        name: '66-CR-01: reopen() sends webTabOpen without the agent flag',
+        plant: t => ({ ...t, webTab: replaceOnce(t.webTab, "url: this.url, key: this.rowKey, ...this.agentFlag() });", "url: this.url, key: this.rowKey });", 'reopen') }),
+        expect: 'without the widget\'s agent flag',
+    },
+    {
+        name: '66-CR-01: the flag on the first open only',
+        plant: t => ({ ...t, webTab: replaceOnce(t.webTab, 'return this.agent ? { agent: true as const } : {};', 'return this.agent && !this.isAttached ? { agent: true as const } : {};', 'agentFlag') }),
+        expect: 'does not return { agent: true }',
+    },
     {
         name: '59-WR-02: agentCentre scrolls with the default behavior',
         plant: t => ({ ...t, child: replaceOnce(t.child, 'element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" })', 'element.scrollIntoView({ block: "center", inline: "center" })', 'agentCentre scroll') }),
