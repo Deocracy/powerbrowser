@@ -1099,9 +1099,13 @@ function runChecks(root, overrides = {}) {
         const detectJobs = Object.entries(jobs).filter(([id, j]) => !bumpIds.has(id) && /scripts\/fetch-orca\.sh|--orca-select/.test(jobText(j)) && !mintsToken(j));
         // The Orca re-pin exists while scripts/fetch-orca.sh does (the remote it names is the one thing the re-pin detects against).
         // A rename of either job, or a move of its steps into a job these predicates do not find, is then a red, not a silent skip.
-        if ((overrides.orcaTracked ?? existsSync(join(root, ORCA_FETCH_REL))) && docs[DRY_RUN_FILE] !== undefined) {
-            if (bumpJobs.length === 0) failO('(workflow)', `has no job that mints an App token and names Orca (rebase-orca.sh, fetch-orca.sh, build-orca.sh or an orca-tag/orca-commit output), while ${ORCA_FETCH_REL} is in the tree, so the P68-35 ordering and the no-Orca-code rule of the re-pin bump are asserted on nothing. Next step: restore the bump job, or update this rule if the Orca re-pin was removed on purpose.`);
-            if (detectJobs.length === 0) failO('(workflow)', `has no job that reads the Orca remote from ${ORCA_FETCH_REL} or runs --orca-select, while ${ORCA_FETCH_REL} is in the tree, so no job is checked for a literal Orca remote. Next step: restore the detect job, or update this rule if the Orca re-pin was removed on purpose.`);
+        if (overrides.orcaTracked ?? existsSync(join(root, ORCA_FETCH_REL))) {
+            if (docs[DRY_RUN_FILE] === undefined) {
+                failO('(workflow)', `${WF_DIR}/${DRY_RUN_FILE} is absent or does not parse while ${ORCA_FETCH_REL} is in the tree, so the Orca re-pin rule has nothing to read and would assert nothing. Next step: restore ${DRY_RUN_FILE}, or update this rule if the Orca re-pin was removed on purpose.`);
+            } else {
+                if (bumpJobs.length === 0) failO('(workflow)', `has no job that mints an App token and names Orca (rebase-orca.sh, fetch-orca.sh, build-orca.sh or an orca-tag/orca-commit output), while ${ORCA_FETCH_REL} is in the tree, so the P68-35 ordering and the no-Orca-code rule of the re-pin bump are asserted on nothing. Next step: restore the bump job, or update this rule if the Orca re-pin was removed on purpose.`);
+                if (detectJobs.length === 0) failO('(workflow)', `has no job that reads the Orca remote from ${ORCA_FETCH_REL} or runs --orca-select, while ${ORCA_FETCH_REL} is in the tree, so no job is checked for a literal Orca remote. Next step: restore the detect job, or update this rule if the Orca re-pin was removed on purpose.`);
+            }
         }
         // No other token-holding job of the file runs Orca code either: the fetched tree must not sit beside a minted token.
         for (const [id, job] of Object.entries(jobs)) {
@@ -1856,6 +1860,7 @@ function selfTest() {
             d.jobs['find-orca-tags'] = job;
             delete d.jobs['detect-orca'];
         }), rel('release-train.yml'), 'find-orca-tags', 'orca-repin', 'names a literal remote'],
+        ['orca-repin: release-train.yml absent while fetch-orca.sh is in the tree', (() => { const f = { ...files }; delete f['release-train.yml']; return { files: f }; })(), rel('release-train.yml'), '(workflow)', 'orca-repin', 'is absent or does not parse'],
         ['orca-repin: no job reads the Orca remote', withRt(d => { delete d.jobs['detect-orca']; }), rel('release-train.yml'), '(workflow)', 'orca-repin', 'has no job that reads the Orca remote'],
     );
 
