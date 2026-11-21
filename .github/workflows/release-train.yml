@@ -1114,7 +1114,7 @@ jobs:
 
       # ci-supply-chain-03: the replay's green comes from the job that installed and ran the new Orca code, so it is a
       # compatibility signal, never a security one. From git data alone (nothing of Orca's runs here): the pin range the
-      # PR moves across, its upstream compare link for the owner, and whether any lockfile changed in that range.
+      # PR moves across, its upstream compare link for the owner, and whether any lockfile of any kind changed in it.
       # Auto-merge is armed only when none did.
       - name: Read the upstream range and whether an Orca lockfile changed in it (git data only)
         id: range
@@ -1126,7 +1126,17 @@ jobs:
           REMOTE=$(grep -m1 '^REMOTE=' scripts/fetch-orca.sh | cut -d= -f2- | tr -d '"')
           [[ $REMOTE =~ ^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.git$ ]] || { echo "release-train: FAIL -- the Orca remote in scripts/fetch-orca.sh is not a github.com repository URL, so no compare link can be given. Next step: do not bump." >&2; exit 1; }
           git -C orca fetch -q --depth 1 origin "$OLD"
-          if git -C orca diff --quiet "$OLD" "$COMMIT" -- ':(glob)**/*-lock.yaml'; then LOCKS=unchanged; else LOCKS=changed; fi
+          # Every lockfile either commit tracks, whatever its ecosystem (the JS workspaces, the Cargo crates of the
+          # Windows launcher and the agent hook, Ruby, and any added later): a data file whose name ends in a dot-, dash-
+          # or underscore-separated "lock" or "lockb", alone or before a yaml, json or toml extension (the JS workspace
+          # lockfiles, Cargo.lock, Gemfile.lock, yarn.lock, bun.lockb...), so source files named *-lock.ts are not
+          # lockfiles. The list comes from the two trees, never from names kept here; none found counts as changed.
+          LOCKFILES=$( { git -C orca ls-tree -r --name-only "$OLD"; git -C orca ls-tree -r --name-only "$COMMIT"; } | grep -E '(^|/)[^/]+[-_.]lockb?(\.(ya?ml|json|toml))?$' | LC_ALL=C sort -u || true)
+          LOCKS=changed
+          if [ -n "$LOCKFILES" ]; then
+            mapfile -t LF <<< "$LOCKFILES"
+            if git -C orca diff --quiet "$OLD" "$COMMIT" -- "${LF[@]}"; then LOCKS=unchanged; fi
+          fi
           { echo "old=${OLD}"; echo "compare=${REMOTE%.git}/compare/${OLD}...${COMMIT}"; echo "locks=${LOCKS}"; } >> "$GITHUB_OUTPUT"
           echo "release-train: orca range ${OLD}...${COMMIT}, lockfiles ${LOCKS}"
 
@@ -1740,12 +1750,17 @@ jobs:
           TAG_RE='^v[0-9]+\.[0-9]+\.[0-9]+$'
           [[ $TAG =~ $TAG_RE ]] || { echo "release-train: FAIL -- Orca tag '$TAG' is not vX.Y.Z. Next step: check detect-orca." >&2; exit 1; }
           TITLE="release-train: orca ${TAG} stopped"
-          # The stage comes from the job that ran Orca's code, so it is untrusted text (ci-supply-chain-06): it is
-          # cut to 300 characters of a set with no backtick or newline before it enters the issue's code span.
+          # The stage comes from the job that ran Orca's code, and a process that job left behind can rewrite its stage
+          # file, so the text is untrusted (ci-supply-chain-06). Only a keyword from the STAGES set this checkout's
+          # scripts/rebase-orca.sh defines names the stage; the rest of the line is published apart from it, cut to 300
+          # characters of a set with no backtick or newline, inside its own code span.
           STAGE=$(printf '%s' "$STAGE_OUT" | tr -cd "A-Za-z0-9 _./:@()'*,=<>+-" | cut -c1-300)
           if [ "$REPLAY" = "failure" ] && [ -z "$STAGE" ]; then STAGE="FAIL -- the Orca replay job ended failure with no stage line"; fi
           case "$STAGE" in *"FAIL -- "*) ;; *) echo "release-train: orca ${TAG} stage '${STAGE:-none}'; no stop issue"; exit 0 ;; esac
-          printf 'The weekly Orca re-pin to %s stopped. No branch or PR was published and the pin stays.\n\nStage: `%s`\n\nRun: %s\n\nNext step: read the stage in docs/RELEASING.md "Orca re-pin (OVL-02)", fix it, then dispatch the release train with repin-orca=true.\n' "$TAG" "$STAGE" "$RUN_URL" > "$RUNNER_TEMP/orca-stop.md"
+          node scripts/release-train.mjs --orca-stage "$STAGE" > "$RUNNER_TEMP/orca-stage.txt"
+          KEYWORD=$(sed -n 's/^stage=//p' "$RUNNER_TEMP/orca-stage.txt")
+          DETAIL=$(sed -n 's/^detail=//p' "$RUNNER_TEMP/orca-stage.txt")
+          printf 'The weekly Orca re-pin to %s stopped. No branch or PR was published and the pin stays.\n\nStage: `%s`\n\nDetail, as the replay job reported it (unverified): `%s`\n\nRun: %s\n\nNext step: read the stage in docs/RELEASING.md "Orca re-pin (OVL-02)", fix it, then dispatch the release train with repin-orca=true.\n' "$TAG" "$KEYWORD" "${DETAIL:-none}" "$RUN_URL" > "$RUNNER_TEMP/orca-stop.md"
           N=$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --limit 20 --label release-train --search "in:title \"${TITLE}\"" --json number,title,author --jq "[.[] | select(.title == \"${TITLE}\" and (.author.login == \"app/github-actions\" or .author.login == \"github-actions\" or .author.login == \"${OWNER_LOGIN}\"))][0].number // empty")
           if [ -z "$N" ]; then
             gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --label release-train --body-file "$RUNNER_TEMP/orca-stop.md"

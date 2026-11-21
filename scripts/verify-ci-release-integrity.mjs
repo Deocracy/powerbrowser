@@ -6,13 +6,19 @@
 //   stage-line     (ci-supply-chain-06) rebase-orca.yml's replay step passes --stage-file, its stage step
 //                  reads that file and never takes the stage from the log, and both the stage step and the
 //                  release train's stop-issue step cut the stage to a bounded length of a character set with
-//                  no backtick before it is published.
+//                  no backtick before it is published, and the stop issue names the stage only by a keyword of the
+//                  STAGES set scripts/rebase-orca.sh defines (release-train.mjs --orca-stage), the rest apart.
 //   artifact-digest (ci-supply-chain-01, ci-supply-chain-04) every artifact of this run that a job holding a
-//                  credential (a secrets. reference, an App-token step, github.token or GITHUB_TOKEN) downloads is
+//                  credential downloads is bound to its producer. A job holds a credential when a step references
+//                  secrets., github.token or GITHUB_TOKEN or mints an App token, or, for the whole job, when its
+//                  effective permissions (the job's, else the workflow's) grant any write scope (id-token: write
+//                  included, and the default token every action can use implicitly) or are unset at both levels
+//                  (the repository default), or when it runs on a self-hosted runner (a persistent host). The
+//                  artifact is
 //                  bound to its producer: the producer (a job of the same file, or the job of a reusable workflow it
 //                  calls) exports a *sha256* output from a step, the consumer takes it through needs into an env
-//                  variable, and a run step after the download and before the next credential step compares the bytes
-//                  with it (check-win-sidecar.sh check, a != "$VAR" test, or a powerbrowser/packaging script whose
+//                  variable, and a run step after the download, before the next credential step and before any other
+//                  step that reads the downloaded directory, compares the bytes with it (check-win-sidecar.sh check, a != "$VAR" test, or a powerbrowser/packaging script whose
 //                  text runs check-win-sidecar.sh check on that variable). The set of consumers and artifacts is
 //                  derived from the files. A download with run-id (another run's artifact) is out of this clause.
 //   mode-carry     (68-CR-03) an artifact keeps no file mode, so every artifact a macOS job uploads is a directory a
@@ -21,8 +27,11 @@
 //                  PB_MAC_ORCA_DIR artifact's tree.tar with -p before it stages from it.
 //   orca-automerge (ci-supply-chain-03) in release-train.yml's bump-pr-orca, the step that runs gh pr merge reaches it
 //                  only past a test that $LOCKS is unchanged, LOCKS comes from a step output computed by git -C orca
-//                  diff --quiet over a *-lock.yaml pathspec (git data, no Orca code), and the PR body carries the
-//                  upstream compare link ${COMPARE_URL} and says the replay's green is not a review of upstream.
+//                  diff --quiet over the lockfiles both trees track (git data, no Orca code), and the PR body carries
+//                  the upstream compare link ${COMPARE_URL} and says the replay's green is not a review of upstream.
+//                  The lockfile lines of that step are run on a two-commit fixture repository: a change to only a
+//                  Cargo.lock, only a Gemfile.lock or only a JS lockfile must read changed, and a change to source
+//                  files alone (including one named *-lock.ts) must read unchanged.
 // Every clause derives what it compares from the parsed YAML (job and step lookups by what they run, not by
 // a list kept here), so a renamed step is still found.
 //
@@ -33,7 +42,9 @@
 //   node scripts/verify-ci-release-integrity.mjs
 //   node scripts/verify-ci-release-integrity.mjs --self-test
 
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -84,6 +95,9 @@ export function check(texts) {
             const r = runOf(stop);
             const filt = r.search(/STAGE=\$\(printf '%s' "\$STAGE_OUT" \| tr -cd /);
             const printed = r.search(/Stage: /);
+            const keyword = r.search(/node scripts\/release-train\.mjs --orca-stage "\$STAGE"/);
+            const printLine = r.split('\n').find(l => /Stage: /.test(l)) ?? '';
+            if (keyword === -1 || keyword > printed || /"\$STAGE"/.test(printLine) || !/"\$KEYWORD"/.test(printLine)) fail('release-train.yml', 'report', 'stage-line', 'publishes the stage without reducing it to a keyword of the STAGES set scripts/rebase-orca.sh defines (release-train.mjs --orca-stage), so a stage file rewritten by a process the replay left behind names any stage it likes. Next step: print "$KEYWORD" from --orca-stage as the stage and the filtered detail apart from it.');
             if (filt === -1 || !boundedFilter(r.slice(filt)) || filt > printed) fail('release-train.yml', 'report', 'stage-line', 'prints the rebase-orca stage into the issue without first cutting it to a bounded set with no backtick; the stage comes from the job that ran Orca\'s code. Next step: STAGE=$(printf \'%s\' "$STAGE_OUT" | tr -cd ... | cut -c1-300) before the printf.');
         }
     }
@@ -91,6 +105,14 @@ export function check(texts) {
     // artifact-digest (ci-supply-chain-01, ci-supply-chain-04)
     const uploadsOf = j => stepsOf(j).filter(st => /^actions\/upload-artifact@/.test(String(st?.uses ?? '')));
     const holdsCred = st => /\bsecrets\.|\bgithub\.token\b|\bGITHUB_TOKEN\b/.test(JSON.stringify(st)) || /^actions\/create-github-app-token@/.test(String(st?.uses ?? ''));
+    // A credential the whole job holds, with no step naming it.
+    const jobCred = (job, wf) => {
+        if ([job?.['runs-on'] ?? []].flat().map(String).includes('self-hosted')) return true;
+        const perms = job?.permissions ?? wf?.permissions;
+        if (perms === undefined || perms === null) return true;
+        if (typeof perms === 'string') return perms !== 'read-all' && perms !== '{}';
+        return Object.values(perms).some(v => String(v) === 'write');
+    };
     const readPkg = name => { try { return (texts.packaging ?? {})[name] ?? readFileSync(join(REPO_ROOT, 'powerbrowser', 'packaging', name), 'utf8'); } catch { return ''; } };
     for (const f of FILES) {
         const jobs = docs[f]?.jobs ?? {};
@@ -112,7 +134,7 @@ export function check(texts) {
         });
         for (const [cId, c] of Object.entries(jobs)) {
             const steps = stepsOf(c);
-            if (!steps.some(holdsCred) && !holdsCred({ env: c.env })) continue;
+            if (!steps.some(holdsCred) && !holdsCred({ env: c.env }) && !jobCred(c, docs[f])) continue;
             steps.forEach((d, di) => {
                 if (!/^actions\/download-artifact@/.test(String(d?.uses ?? '')) || d.with?.['run-id'] !== undefined) return;
                 const name = d.with?.name;
@@ -127,6 +149,11 @@ export function check(texts) {
                 // The comparison names the downloaded directory, so a digest is checked against the artifact it belongs to.
                 const dir = String(d.with?.path ?? name).replace(/\$\{\{\s*runner\.temp\s*\}\}/g, '$RUNNER_TEMP');
                 const nextCred = steps.findIndex((st, i) => i > di && holdsCred(st));
+                // The first later step that reads the downloaded directory (a download step aside): the comparison must
+                // be that step or come before it, whatever credential the job holds.
+                const dirRe = new RegExp(`(^|[\\s"'=:(])${dir.replace(/[$.*+?^{}()|[\]\\]/g, '\\$&')}(?=[/\\s"')]|$)`, 'm');
+                const reads = st => !/^actions\/download-artifact@/.test(String(st?.uses ?? '')) && (dirRe.test(runOf(st)) || dirRe.test(Object.values(st.env ?? {}).map(x => String(x).replace(/\$\{\{\s*runner\.temp\s*\}\}/g, '$RUNNER_TEMP')).join('\n')) || dirRe.test(Object.values(st.with ?? {}).map(String).join('\n')));
+                const firstReader = steps.findIndex((st, i) => i > di && reads(st));
                 const compares = (st, v) => {
                     const r = runOf(st);
                     const stepEnv = Object.values(st.env ?? {}).map(x => String(x).replace(/\$\{\{\s*runner\.temp\s*\}\}/g, '$RUNNER_TEMP')).join('\n');
@@ -135,7 +162,7 @@ export function check(texts) {
                     if (!new RegExp(`\\b${v}\\b`).test(r)) return false;
                     return [...r.matchAll(/powerbrowser\/packaging\/([\w.-]+\.sh)\b/g)].some(([, n]) => new RegExp(`check-win-sidecar\\.sh"? check [^\\n]*"\\$\\{?${v}\\b`).test(readPkg(n)));
                 };
-                const cmp = steps.findIndex((st, i) => i > di && (nextCred === -1 || i < nextCred) && vars.some(v => compares(st, v)));
+                const cmp = steps.findIndex((st, i) => i > di && (nextCred === -1 || i < nextCred) && (firstReader === -1 || i <= firstReader) && vars.some(v => compares(st, v)));
                 if (cmp === -1) fail(f, cId, 'artifact-digest', `downloads ${name} into ${dir} (step ${di}) and has no run step before its next credential step (step ${nextCred}) that compares ${dir} with ${vars.map(v => '$' + v).join(' or ')} (a digest output of ${pId}). Next step: admit it with check-win-sidecar.sh check, or compare its digest, right after the download.`);
             });
         }
@@ -159,7 +186,8 @@ export function check(texts) {
             if (gate === -1 || prRead === -1 || gate < prRead) fail('release-train.yml', 'bump-pr-orca', 'orca-automerge', 'arms gh pr merge --auto without first testing that no Orca lockfile changed in the pin range ([ "$LOCKS" != "unchanged" ]), so a re-pin that moves upstream dependencies is armed on the green of the job that ran them. Next step: arm auto-merge only when LOCKS is unchanged.');
             const m = /^steps\.([\w-]+)\.outputs\.locks$/.exec(String(pub.env?.LOCKS ?? '').replace(/^\$\{\{\s*|\s*\}\}$/g, ''));
             const src = m ? steps.find(st => st.id === m[1]) : undefined;
-            if (!src || !/git -C orca diff --quiet\b[^\n]*-lock\.yaml/.test(runOf(src))) fail('release-train.yml', 'bump-pr-orca', 'orca-automerge', 'takes LOCKS from no step that compares the Orca lockfiles across the pin range with git -C orca diff --quiet. Next step: compute it from git data in a step before the token mint.');
+            if (!src || !/git -C orca diff --quiet\b/.test(runOf(src))) fail('release-train.yml', 'bump-pr-orca', 'orca-automerge', 'takes LOCKS from no step that compares the Orca lockfiles across the pin range with git -C orca diff --quiet. Next step: compute it from git data in a step before the token mint.');
+            else for (const f of lockfileBehaviour(runOf(src))) fail('release-train.yml', 'bump-pr-orca', 'orca-automerge', f);
             if (!/BODY="[^\n]*\$\{COMPARE_URL\}/.test(r) || !/not a review of what changed upstream/.test(r)) fail('release-train.yml', 'bump-pr-orca', 'orca-automerge', 'writes a PR body without the upstream compare link or without saying the green replay is not a review of upstream. Next step: put both in the body.');
         }
     }
@@ -192,6 +220,53 @@ export function check(texts) {
     return fails;
 }
 
+// The lockfile lines of the range step (after its git fetch, before its GITHUB_OUTPUT write), run with bash on a
+// fixture Orca repository: base, then one branch per case. Returns the failures, [] when every case reads right.
+const LOCK_CASES = [
+    ['native/windows-cli-launcher/Cargo.lock', 'changed'],
+    ['mobile/Gemfile.lock', 'changed'],
+    ['cloud/pnpm-lock.yaml', 'changed'],
+    ['src/main/x.ts src/main/run-lock.ts', 'unchanged'],
+];
+let lockFixture = null;
+function lockFixtureRepo() {
+    if (lockFixture) return lockFixture;
+    const dir = mkdtempSync(join(tmpdir(), 'ci-release-integrity-locks-'));
+    const orca = join(dir, 'orca');
+    const g = (...a) => { const r = spawnSync('git', ['-C', orca, '-c', 'user.email=t@example.invalid', '-c', 'user.name=T', '-c', 'commit.gpgsign=false', ...a], { encoding: 'utf8' }); if (r.status !== 0) throw new Error(`fixture git ${a.join(' ')}: ${r.stderr}`); return r.stdout.trim(); };
+    mkdirSync(orca, { recursive: true });
+    g('init', '-q', '-b', 'main');
+    const files = ['pnpm-lock.yaml', 'cloud/pnpm-lock.yaml', 'mobile/Gemfile.lock', 'native/windows-cli-launcher/Cargo.lock', 'src/main/x.ts', 'src/main/run-lock.ts'];
+    for (const f of files) { mkdirSync(dirname(join(orca, f)), { recursive: true }); writeFileSync(join(orca, f), `${f} v1\n`); }
+    g('add', '-A'); g('commit', '-q', '-m', 'base');
+    const base = g('rev-parse', 'HEAD');
+    const heads = LOCK_CASES.map(([changed]) => {
+        g('checkout', '-q', '--detach', base);
+        for (const f of changed.split(' ')) writeFileSync(join(orca, f), `${f} v2\n`);
+        g('commit', '-q', '-am', `change ${changed}`);
+        return g('rev-parse', 'HEAD');
+    });
+    g('checkout', '-q', '--detach', base);
+    lockFixture = { dir, base, heads };
+    process.on('exit', () => rmSync(dir, { recursive: true, force: true }));
+    return lockFixture;
+}
+export function lockfileBehaviour(run) {
+    const lines = run.split('\n');
+    const from = lines.findIndex(l => /git -C orca fetch\b/.test(l));
+    const to = lines.findIndex(l => /GITHUB_OUTPUT/.test(l));
+    if (from === -1 || to === -1 || to <= from) return ['the range step has no git -C orca fetch line before its GITHUB_OUTPUT write, so its lockfile lines cannot be found. Next step: keep the fetch, the lockfile comparison and the output write in that order.'];
+    const snippet = lines.slice(from + 1, to).join('\n');
+    const fx = lockFixtureRepo();
+    const out = [];
+    LOCK_CASES.forEach(([changed, want], i) => {
+        const r = spawnSync('bash', ['-c', `set -euo pipefail\n${snippet}\necho "LOCKS=$LOCKS"`], { cwd: fx.dir, encoding: 'utf8', env: { PATH: process.env.PATH, OLD: fx.base, COMMIT: fx.heads[i], LC_ALL: 'C' } });
+        const got = /LOCKS=(\w+)/.exec(r.stdout ?? '')?.[1] ?? `<exit ${r.status}: ${(r.stderr ?? '').trim().split('\n').pop()}>`;
+        if (got !== want) out.push(`reads LOCKS=${got}, not ${want}, for a range that changes only ${changed}, so ${want === 'changed' ? 'a re-pin that moves that lockfile arms auto-merge' : 'auto-merge is withheld for a source-only change'}. Next step: compare every lockfile both trees track (git ls-tree of $OLD and $COMMIT), whatever its ecosystem.`);
+    });
+    return out;
+}
+
 export function readTexts(root = REPO_ROOT) {
     return Object.fromEntries(FILES.map(f => [f, readFileSync(join(root, WF, f), 'utf8')]));
 }
@@ -220,6 +295,17 @@ function selfTest() {
         ['replay without --stage-file', edit('rebase-orca.yml', ' --stage-file "$RUNNER_TEMP/stage.txt"', ''), 'stage-line', 'without --stage-file'],
         ['stage published unfiltered', edit('rebase-orca.yml', `          LINE=$(printf '%s' "$LINE" | tr -cd "A-Za-z0-9 _./:@()'*,=<>+-" | cut -c1-300)\n`, ''), 'stage-line', 'without tr -cd'],
         ['stop issue prints the raw stage', edit('release-train.yml', `STAGE=$(printf '%s' "$STAGE_OUT" | tr -cd "A-Za-z0-9 _./:@()'*,=<>+-" | cut -c1-300)`, 'STAGE="$STAGE_OUT"'), 'stage-line', 'without first cutting it'],
+        // ci-supply-chain-06 review: the stage file can be rewritten after the script's last word, so the keyword is the control.
+        // Review follow-up: job-level credentials. Each plant appends a job that downloads release-linux and reads it
+        // with no admission; its only credential is the one the plant names.
+        ...[['id-token: write only', '    permissions:\n      contents: read\n      id-token: write\n    runs-on: ubuntu-latest\n'],
+            ['a write-scoped default token used implicitly', '    permissions:\n      contents: write\n    runs-on: ubuntu-latest\n'],
+            ['the self-hosted runner itself', '    permissions:\n      contents: read\n    runs-on: [self-hosted, powerbrowser-release]\n']].map(([what, head]) => [
+            `an unadmitted download in a job whose only credential is ${what}`,
+            { ...real, 'release.yml': `${real['release.yml'].replace(/\n*$/, '\n')}\n  planted-reader:\n    needs: build-linux\n${head}    steps:\n      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n          name: release-linux\n          path: release\n      - run: cat release/release-manifest.json\n` },
+            'artifact-digest', 'job planted-reader [artifact-digest]: downloads release-linux but never takes']),
+        ['a reader of the artifact before its admission', edit('release.yml', '      - name: Admit release-linux by the SHA256SUMS digest build-linux recorded (before anything reads it)\n', '      - name: Read the manifest first\n        run: cat release/release-manifest.json\n\n      - name: Admit release-linux by the SHA256SUMS digest build-linux recorded (before anything reads it)\n'), 'artifact-digest', 'job sign-publish [artifact-digest]: downloads release-linux into release'],
+        ['the stop issue prints the stage line as the stage', edit('release-train.yml', '"$TAG" "$KEYWORD" "${DETAIL:-none}" "$RUN_URL"', '"$TAG" "$STAGE" "${DETAIL:-none}" "$RUN_URL"'), 'stage-line', 'without reducing it to a keyword'],
         ['a backtick admitted', edit('release-train.yml', `STAGE=$(printf '%s' "$STAGE_OUT" | tr -cd "A-Za-z0-9 _./:@()'*,=<>+-" | cut -c1-300)`, `STAGE=$(printf '%s' "$STAGE_OUT" | tr -cd "A-Za-z0-9 _./:@()'*,=<>+\`-" | cut -c1-300)`), 'stage-line', 'without first cutting it'],
         // ci-supply-chain-01, the pre-fix sign-publish: no admission of release-linux by build-linux's digest.
         ['sign-publish signs an unbound release-linux', edit('release.yml', '          bash powerbrowser/packaging/check-win-sidecar.sh check release "$SUMS_SHA256"\n', '          echo admitted\n'), 'artifact-digest', 'job sign-publish [artifact-digest]: downloads release-linux into'],
@@ -238,7 +324,10 @@ function selfTest() {
         // ci-supply-chain-03, the pre-fix bump: auto-merge armed on the replay's green alone, no range for the owner.
         ['auto-merge armed whatever the lockfiles', edit('release-train.yml', '          elif [ "$LOCKS" != "unchanged" ]; then\n', '          elif false; then\n'), 'orca-automerge', 'without first testing that no Orca lockfile changed'],
         ['the PR body without the compare link', edit('release-train.yml', ' ${COMPARE_URL} .', ' .'), 'orca-automerge', 'without the upstream compare link'],
-        ['LOCKS from no lockfile comparison', edit('release-train.yml', "if git -C orca diff --quiet \"$OLD\" \"$COMMIT\" -- ':(glob)**/*-lock.yaml'; then", 'if true; then'), 'orca-automerge', 'takes LOCKS from no step'],
+        ['LOCKS from no lockfile comparison', edit('release-train.yml', 'if git -C orca diff --quiet "$OLD" "$COMMIT" -- "${LF[@]}"; then LOCKS=unchanged; fi', 'LOCKS=unchanged'), 'orca-automerge', 'takes LOCKS from no step'],
+        // ci-supply-chain-03 review: the first fix compared *-lock.yaml only, so a Cargo.lock-only range armed auto-merge.
+        ['only *-lock.yaml compared (a Cargo.lock change missed)', edit('release-train.yml', 'if git -C orca diff --quiet "$OLD" "$COMMIT" -- "${LF[@]}"; then LOCKS=unchanged; fi', "if git -C orca diff --quiet \"$OLD\" \"$COMMIT\" -- ':(glob)**/*-lock.yaml'; then LOCKS=unchanged; fi"), 'orca-automerge', 'changes only native/windows-cli-launcher/Cargo.lock'],
+        ['source files taken for lockfiles', edit('release-train.yml', "grep -E '(^|/)[^/]+[-_.]lockb?(\\.(ya?ml|json|toml))?$'", "grep -E 'lock'"), 'orca-automerge', 'changes only src/main/x.ts src/main/run-lock.ts'],
         // 68-CR-03, the pre-fix macOS round trip.
         ['a thin macOS job uploads the loose tree', edit('release.yml', '          path: ${{ runner.temp }}/macos-orca-arm64-artifact/', '          path: ${{ runner.temp }}/macos-orca-arm64/'), 'mode-carry', 'job macos-orca-arm64 [mode-carry]: uploads macos-orca-arm64 from'],
         ['the universal job unpacks without -p', edit('release.yml', 'tar -xpf "macos-orca-$A-artifact/tree.tar"', 'tar -xf "macos-orca-$A-artifact/tree.tar"'), 'mode-carry', 'job macos-orca-universal [mode-carry]: downloads macos-orca-arm64'],

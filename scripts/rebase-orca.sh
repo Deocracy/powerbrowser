@@ -68,6 +68,9 @@ PROGRAMS=(config/tsconfig.tc.web.json config/tsconfig.node.json ../orca-overlay/
 for name in "${!ORCA_@}"; do unset "$name"; done
 
 say() { echo "rebase-orca: $*"; }
+# The stage keywords, the first word or words of every FAIL line this script prints. The release train's stop issue
+# publishes a stage only when it is one of these (scripts/release-train.mjs --orca-stage reads this line).
+STAGES=(pin-move fetch seam-apply build typecheck:web typecheck:node typecheck:pb-build "typecheck coverage" "xpi cache" row "orcad-only start" notices "brand scan")
 STAGE_FILE=""
 red() {
   echo "rebase-orca: FAIL -- $*" >&2
@@ -618,6 +621,16 @@ run_self_test() {
       miss replay-only "changed $(echo $got), not exactly $(echo $want)"
     fi
   fi
+
+  # Every FAIL line the fixtures produced starts with a keyword of STAGES, so the stop issue can name each stage. The
+  # forged case's log is left out: its first FAIL line is upstream's on purpose.
+  local stray lf logs=()
+  for lf in "$tmp"/run*.log; do [ "$lf" = "${flog:-}" ] || logs+=("$lf"); done
+  stray="$(cat "${logs[@]}" 2>/dev/null | grep -h '^rebase-orca: FAIL -- ' | sed 's/^rebase-orca: FAIL -- //' | while IFS= read -r l; do
+    known=0; for st in "${STAGES[@]}"; do case "$l" in "$st" | "$st "*) known=1 ;; esac; done
+    [ "$known" = 1 ] || printf '%s\n' "$l"
+  done | head -1)"
+  if [ -n "$stray" ]; then miss "stage keywords" "a FAIL line starts with no STAGES keyword: $stray"; else ok "stage keywords -> every FAIL line starts with a STAGES keyword"; fi
 
   if [ "$misses" -eq 0 ]; then
     echo "rebase-orca self-test: PASS -- $n planted faults each stopped at its named stage"
