@@ -228,6 +228,32 @@ async function runSelfTest() {
             expect('teardown runs when SIGTERM ends the process, which then still ends by the signal', count() === 1 && sig.signal === 'SIGTERM' ? [] : [`ran ${count()} times, ended by ${sig.signal ?? `exit ${sig.status}`}`], null);
         } finally { rmSync(home, { recursive: true, force: true }); }
     }
+    if (spawnSync('flock', ['--version']).error) {
+        console.log('  skip the live-lock helper test: flock is not installed');
+    } else {
+        // lib/live-lock-reexec.mjs: a row started without PB_LIVE_LOCK_HELD=1 runs again under flock on the checkout's
+        // pb-live.lock and passes the exit status on; one started with it (by the driver) does not take the lock again.
+        const root = mkdtempSync(join(tmpdir(), 'pb-lock-helper-'));
+        try {
+            const clean = { PATH: process.env.PATH ?? '', HOME: root, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+            spawnSync('git', ['init', '-q', root], { env: clean });
+            mkdirSync(join(root, 'scripts'));
+            const lib = join(REPO_ROOT, 'scripts', 'lib', 'live-lock-reexec.mjs');
+            const lock = join(realpathSync(root), '.git', 'pb-live.lock');
+            writeFileSync(join(root, 'scripts', 'probe.mjs'), `import { takeLiveLock } from ${JSON.stringify(lib)};
+                import { spawnSync } from 'node:child_process';
+                const held = takeLiveLock(import.meta.url, 'probe');
+                if (held !== null) process.exit(held);
+                const busy = spawnSync('flock', ['-n', ${JSON.stringify(lock)}, 'true']).status === 1;
+                console.log('inner: PB_LIVE_LOCK_HELD=' + process.env.PB_LIVE_LOCK_HELD + ' lockBusy=' + busy);
+                process.exit(busy ? 7 : 8);`);
+            const run = (extra) => { const env = { ...clean }; Object.assign(env, extra); return spawnSync(process.execPath, [join(root, 'scripts', 'probe.mjs')], { env, encoding: 'utf8', timeout: 20000 }); };
+            const started = run({});
+            expect('a row started by hand takes the live lock itself and its exit status comes back', started.status === 7 && /PB_LIVE_LOCK_HELD=1 lockBusy=true/.test(started.stdout) ? [] : [`status ${started.status}: ${started.stdout}${started.stderr}`], null);
+            const driven = run({ PB_LIVE_LOCK_HELD: '1' });
+            expect('a row the driver started (PB_LIVE_LOCK_HELD=1) does not take the lock again', driven.status === 8 && /lockBusy=false/.test(driven.stdout) ? [] : [`status ${driven.status}: ${driven.stdout}${driven.stderr}`], null);
+        } finally { rmSync(root, { recursive: true, force: true }); }
+    }
     {
         // The fixture repository builds under a user's hostile global git config (commit signing, hooks) without prompting or failing.
         const home = mkdtempSync(join(tmpdir(), 'pb-ws-fixture-'));
