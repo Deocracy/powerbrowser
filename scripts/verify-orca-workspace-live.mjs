@@ -32,6 +32,9 @@
 //     openPane's JSON detail): each diff side's text equals git cat-file blob of its CA-03 spec
 //     (the working file for the unstaged right side), the merge editor's sides equal stages 1, 2
 //     and 3, and deleted_by_them opens the working file in the editor;
+//     (harness-live-panels-12, 65-CR-01) the ids Orca's records carry (merge base, head, commit and its parent) equal what
+//     git computes on the fixture; and an added, a deleted and an untracked file each open with exactly one empty side
+//     (the file's one absent side reads '' in the Theia diff editor, the other side holds its text);
 //  c. positive control first: Orca's Monaco root selector (Monaco's own root class; Orca's editor
 //     imports @monaco-editor/react, checked in the source) matches inside the Theia editor of (a);
 //     then it matches nothing inside any Orca pane root ([data-pb-orca-pane]);
@@ -50,7 +53,7 @@
 //   node scripts/verify-orca-workspace-live.mjs
 //   node scripts/verify-orca-workspace-live.mjs --self-test
 
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -142,6 +145,51 @@ export function removeCreatedWorktrees(paths) {
     return removed;
 }
 
+/**
+ * b: the ids Orca's record carries against what git computes on the fixture (merge base of HEAD and the compared branch,
+ * HEAD, the commit and its first parent); a wrong merge base Orca chose would otherwise be read back from git at that same
+ * wrong revision. ids: { mergeBase, head, parent }.
+ */
+export function refIdsVerdict(rec, ids) {
+    const fails = [];
+    const check = (what, got, want) => { if (got !== want) fails.push(`diff:${rec.diffSource} ${what} is ${String(got).slice(0, 12)}, git computes ${String(want).slice(0, 12)} on the fixture`); };
+    if (rec.diffSource === 'branch' || rec.diffSource === 'combined-branch') { check('merge base', rec.branch?.mergeBase, ids.mergeBase); check('head', rec.branch?.headOid, ids.head); }
+    if (rec.diffSource === 'commit' || rec.diffSource === 'combined-commit') { check('commit', rec.commit?.commitOid, ids.head); check('parent', rec.commit?.parentOid, ids.parent); }
+    return fails;
+}
+
+/** The files the fixture adds, deletes and leaves untracked, each with the side that must be empty (65-CR-01). */
+export const EMPTY_SIDE_FILES = Object.freeze({ 'added.txt': 'left', 'del.txt': 'right', 'untracked.txt': 'left' });
+
+/**
+ * b: one diff of an added, deleted or untracked file: git has the file on exactly the other side (`absent` names the
+ * sides git has no blob for), and the Theia editor shows '' on the empty side and the text on the other. Red names the file.
+ */
+export function emptySideVerdict(file, { leftText, rightText, leftAbsent, rightAbsent }) {
+    const want = EMPTY_SIDE_FILES[file];
+    const fails = [];
+    const gitEmpty = leftAbsent && !rightAbsent ? 'left' : rightAbsent && !leftAbsent ? 'right' : null;
+    if (gitEmpty !== want) return [`${file}: the fixture does not give git one absent ${want} side (absent: ${leftAbsent ? 'left ' : ''}${rightAbsent ? 'right' : ''}), so the check is blind`];
+    const [emptyText, otherText] = want === 'left' ? [leftText, rightText] : [rightText, leftText];
+    if (emptyText !== '') fails.push(`${file}: the ${want} side should be empty and reads ${JSON.stringify(String(emptyText).slice(0, 20))}`);
+    if (!otherText) fails.push(`${file}: the ${want === 'left' ? 'right' : 'left'} side is empty too; exactly one side must be`);
+    return fails;
+}
+
+/** c: the Monaco scan over every [data-pb-orca-pane] root: roots exist, the opened terminal's is among them, none holds Monaco. */
+export function monacoScanVerdict(roots, selector = MONACO_SELECTOR) {
+    const fails = roots.filter((x) => x.n > 0).map((pane) => `Orca's editor DOM (${selector}) inside an Orca ${pane.kind} pane`);
+    if (roots.length === 0) fails.push("no Orca pane root to scan, so the absence of Orca's editor in pane roots proves nothing");
+    else if (!roots.some((x) => x.kind === 'terminal')) fails.push('the hosted terminal this scan opened is not among the pane roots, so the scan did not cover a pane it created');
+    return fails;
+}
+
+/** The readiness FAIL for a pane entry that no longer exports the two subscriptions this row reads through (it is not a SKIP). */
+export function entryFails(text, rel = ENTRY_REL) {
+    const missing = ['subscribeOpenFiles', 'subscribeWorktrees'].filter((n) => !new RegExp(`\\b${n}\\b`).test(text));
+    return missing.length ? [`source moved: ${rel} no longer exports ${missing.join(' and ')}, which this row reads Orca's open files and worktrees through. Next step: point the row at the module that exports them.`] : [];
+}
+
 /** The 1 s bound of clause (a). */
 export const timingVerdict = (ms) => (ms !== null && ms <= 1000 ? [] : [`no Theia editor within 1 s (${ms === null ? 'none' : `${ms} ms`})`]);
 
@@ -185,6 +233,34 @@ async function runSelfTest() {
     expect('timing control', timingVerdict(400), null);
     expect('timing', timingVerdict(1500), 'no Theia editor within 1 s');
 
+    // harness-live-panels-12 and 65-CR-01: ids from git, one empty side, the Monaco scan set, a moved entry file.
+    {
+        const ids = { head: 'a'.repeat(40), mergeBase: 'b'.repeat(40), parent: 'c'.repeat(40) };
+        expect('ids control: Orca ids equal git ids', refIdsVerdict({ diffSource: 'branch', branch: { mergeBase: ids.mergeBase, headOid: ids.head } }, ids), null);
+        expect('ids control: a commit diff', refIdsVerdict({ diffSource: 'commit', commit: { commitOid: ids.head, parentOid: ids.parent } }, ids), null);
+        expect('a merge base Orca chose wrongly (read back from git at that rev it would agree)', refIdsVerdict({ diffSource: 'branch', branch: { mergeBase: 'd'.repeat(40), headOid: ids.head } }, ids), 'merge base is dddddddddddd, git computes bbbbbbbbbbbb');
+        expect('a wrong parent on a commit diff', refIdsVerdict({ diffSource: 'commit', commit: { commitOid: ids.head, parentOid: ids.mergeBase } }, ids), 'parent is bbbbbbbbbbbb');
+        expect('empty side control: an added file, empty left', emptySideVerdict('added.txt', { leftText: '', rightText: 'added\n', leftAbsent: true, rightAbsent: false }), null);
+        expect('empty side control: a deleted file, empty right', emptySideVerdict('del.txt', { leftText: 'del base\n', rightText: '', leftAbsent: false, rightAbsent: true }), null);
+        expect('an added file whose left side shows text (the pre-fix failure)', emptySideVerdict('added.txt', { leftText: 'junk', rightText: 'added\n', leftAbsent: true, rightAbsent: false }), 'the left side should be empty');
+        expect('a deleted file with both sides empty', emptySideVerdict('del.txt', { leftText: '', rightText: '', leftAbsent: false, rightAbsent: true }), 'the left side is empty too');
+        expect('a fixture where git has both sides', emptySideVerdict('untracked.txt', { leftText: 'x', rightText: 'y', leftAbsent: false, rightAbsent: false }), 'the check is blind');
+        expect('scan control: a terminal root without Monaco', monacoScanVerdict([{ kind: 'terminal', n: 0 }, { kind: 'conflict-review', n: 0 }]), null);
+        expect('a hosted editor DOM inside a conflict-review root', monacoScanVerdict([{ kind: 'terminal', n: 0 }, { kind: 'conflict-review', n: 2 }]), 'inside an Orca conflict-review pane');
+        expect('no root at all', monacoScanVerdict([]), 'no Orca pane root to scan');
+        expect('roots without the terminal the scan opened', monacoScanVerdict([{ kind: 'chat', n: 0 }]), 'hosted terminal this scan opened is not among the pane roots');
+        expect('entry control: both subscriptions exported', entryFails('export function subscribeOpenFiles() {}\nexport function subscribeWorktrees() {}'), null);
+        expect('an entry that lost subscribeOpenFiles is a FAIL, not a SKIP', entryFails('export function subscribeWorktrees() {}'), 'no longer exports subscribeOpenFiles');
+        {
+            // The fixture really holds the added, deleted and untracked files the live row opens.
+            const home = mkdtempSync(join(tmpdir(), 'pb-ws-fixture2-'));
+            try {
+                const { git } = buildFixtureRepo(join(home, 'repo'), home);
+                const status = git('status', '--porcelain');
+                expect('the fixture holds an added, a deleted and an untracked file', /^A {2}added\.txt/m.test(status) && /^D {2}del\.txt/m.test(status) && /^\?\? untracked\.txt/m.test(status) ? [] : [`status: ${status}`], null);
+            } finally { rmSync(home, { recursive: true, force: true }); }
+        }
+    }
     // harness-live-panels-10: worktrees stay under the scratch HOME, and the cleanup removes only what the row created.
     expect('worktree under the scratch HOME control', worktreeHomeVerdict('/tmp/pb-home-x/orca/workspaces/repo/ws-live', '/tmp/pb-home-x'), null);
     expect('a worktree under the real home', worktreeHomeVerdict('/home/dev/orca/workspaces/repo/ws-live', '/tmp/pb-home-x'), 'outside the scratch HOME');
@@ -228,31 +304,106 @@ async function runSelfTest() {
             expect('teardown runs when SIGTERM ends the process, which then still ends by the signal', count() === 1 && sig.signal === 'SIGTERM' ? [] : [`ran ${count()} times, ended by ${sig.signal ?? `exit ${sig.status}`}`], null);
         } finally { rmSync(home, { recursive: true, force: true }); }
     }
+    // lib/live-lock-reexec.mjs (review of the lock helpers): the decision is pure and each fault it fixes is planted.
+    {
+        const { lockDecision, holdersOf, parentOfStat, ancestorsOf, parentAlive } = await import('./lib/live-lock-reexec.mjs');
+        const base = { lock: '/x/pb-live.lock', holders: [], ancestors: [50, 40], envHeld: false, driverRow: false };
+        const dec = (o) => lockDecision({ ...base, ...o });
+        const is = (name, got, want) => expect(name, got === want ? [] : [`${got}, wanted ${want}`], null);
+        is('decision: a free lock is taken', dec({}), 'take');
+        is('decision: a hand-set PB_LIVE_LOCK_HELD=1 on a free lock is not trusted (the lock is taken)', dec({ envHeld: true }), 'take');
+        is('decision: a hand-set PB_LIVE_LOCK_HELD=1 on a lock another session holds is not trusted (it waits)', dec({ envHeld: true, holders: [999] }), 'take');
+        is('decision: a lock held by an ancestor (started under flock <lock> node <row>) proceeds, never waiting on itself', dec({ holders: [40] }), 'proceed');
+        is('decision: the driver\'s row (token, env, lock held by its non-ancestor holder) proceeds', dec({ envHeld: true, driverRow: true, holders: [999] }), 'proceed');
+        is('decision: the driver\'s token with the lock free is not enough', dec({ envHeld: true, driverRow: true }), 'take');
+        is('decision: no lock path is a FAIL', dec({ lock: null }), 'fail');
+        is('decision: an unreadable /proc/locks is a FAIL', dec({ holders: null }), 'fail');
+        // The pre-fix rules, planted: each must differ from the decision above in the case it got wrong.
+        const trustEnv = ({ envHeld, holders }) => (envHeld && holders.length ? 'proceed' : 'take');
+        is('plant: trusting PB_LIVE_LOCK_HELD=1 whenever the lock is held differs on the other session\'s lock', trustEnv({ envHeld: true, holders: [999] }) !== dec({ envHeld: true, holders: [999] }) ? 'differs' : 'same', 'differs');
+        const noAncestor = ({ envHeld, holders }) => (envHeld && holders.length ? 'proceed' : 'take');
+        is('plant: no ancestor check differs on a run started under flock <lock> node <row>', noAncestor({ envHeld: false, holders: [40] }) !== dec({ holders: [40] }) ? 'differs' : 'same', 'differs');
+        is('proc: holders of an inode from /proc/locks text', JSON.stringify(holdersOf('1: FLOCK  ADVISORY  WRITE 321 08:01:777 0 EOF\n2: FLOCK  ADVISORY  WRITE 322 08:01:888 0 EOF\n3: -> FLOCK  ADVISORY  WRITE 323 08:01:777 0 EOF', 777)), '[321]');
+        is('proc: the parent in a stat line whose command holds spaces and parentheses', parentOfStat('77 (node (a b)) S 55 77 77 0 -1 4194560'), 55);
+        const stats = { 100: '100 (n) S 90 1 1 0', 90: '90 (flock) S 80 1 1 0', 80: '80 (bash) S 1 1 1 0' };
+        is('proc: ancestors walk to pid 1', JSON.stringify(ancestorsOf(100, (p) => stats[p] ?? null)), '[90,80]');
+        is('proc: a parent that is gone (no stat) reads dead', parentAlive('4242:99', () => null) ? 'alive' : 'dead', 'dead');
+        is('proc: a parent whose pid was reused (another start time) reads dead', parentAlive('90:5', (p) => `${p} (x) S 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 7 0`) ? 'alive' : 'dead', 'dead');
+    }
     if (spawnSync('flock', ['--version']).error) {
-        console.log('  skip the live-lock helper test: flock is not installed');
+        console.log('  skip the live-lock process tests: flock is not installed');
     } else {
-        // lib/live-lock-reexec.mjs: a row started without PB_LIVE_LOCK_HELD=1 runs again under flock on the checkout's
-        // pb-live.lock and passes the exit status on; one started with it (by the driver) does not take the lock again.
+        // Real processes in a scratch git checkout (its own pb-live.lock): the three behaviours the pure decision cannot show.
         const root = mkdtempSync(join(tmpdir(), 'pb-lock-helper-'));
+        const holders = [];
         try {
             const clean = { PATH: process.env.PATH ?? '', HOME: root, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
             spawnSync('git', ['init', '-q', root], { env: clean });
             mkdirSync(join(root, 'scripts'));
             const lib = join(REPO_ROOT, 'scripts', 'lib', 'live-lock-reexec.mjs');
             const lock = join(realpathSync(root), '.git', 'pb-live.lock');
-            writeFileSync(join(root, 'scripts', 'probe.mjs'), `import { takeLiveLock } from ${JSON.stringify(lib)};
+            const pidFile = join(root, 'inner.pid');
+            const probe = join(root, 'scripts', 'probe.mjs');
+            writeFileSync(probe, `import { takeLiveLock } from ${JSON.stringify(lib)};
                 import { spawnSync } from 'node:child_process';
-                const held = takeLiveLock(import.meta.url, 'probe');
+                import { writeFileSync } from 'node:fs';
+                const held = await takeLiveLock(import.meta.url, 'probe');
                 if (held !== null) process.exit(held);
+                writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
                 const busy = spawnSync('flock', ['-n', ${JSON.stringify(lock)}, 'true']).status === 1;
-                console.log('inner: PB_LIVE_LOCK_HELD=' + process.env.PB_LIVE_LOCK_HELD + ' lockBusy=' + busy);
-                process.exit(busy ? 7 : 8);`);
-            const run = (extra) => { const env = { ...clean }; Object.assign(env, extra); return spawnSync(process.execPath, [join(root, 'scripts', 'probe.mjs')], { env, encoding: 'utf8', timeout: 20000 }); };
-            const started = run({});
-            expect('a row started by hand takes the live lock itself and its exit status comes back', started.status === 7 && /PB_LIVE_LOCK_HELD=1 lockBusy=true/.test(started.stdout) ? [] : [`status ${started.status}: ${started.stdout}${started.stderr}`], null);
-            const driven = run({ PB_LIVE_LOCK_HELD: '1' });
-            expect('a row the driver started (PB_LIVE_LOCK_HELD=1) does not take the lock again', driven.status === 8 && /lockBusy=false/.test(driven.stdout) ? [] : [`status ${driven.status}: ${driven.stdout}${driven.stderr}`], null);
-        } finally { rmSync(root, { recursive: true, force: true }); }
+                console.log('inner: PB_LIVE_LOCK_HELD=' + process.env.PB_LIVE_LOCK_HELD + ' lockBusy=' + busy + ' rerun=' + Boolean(process.env.PB_LIVE_LOCK_PARENT));
+                if (process.env.PROBE_HANG) setInterval(() => {}, 1000); else process.exit(busy ? 7 : 8);`);
+            const envOf = (extra) => ({ ...clean, ...extra });
+            const run = (extra, { cmd = [process.execPath, probe], timeout = 20000 } = {}) => spawnSync(cmd[0], cmd.slice(1), { env: envOf(extra), encoding: 'utf8', timeout });
+            const holdLock = async () => {
+                const h = spawn('flock', ['-o', lock, 'sleep', '60'], { stdio: 'ignore' });
+                holders.push(h);
+                for (let i = 0; i < 50 && spawnSync('flock', ['-n', lock, 'true']).status === 0; i++) await new Promise((r) => setTimeout(r, 100));
+                return h;
+            };
+            const lockFree = () => spawnSync('flock', ['-n', lock, 'true']).status === 0;
+            const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+            const until = async (f, ms) => { const end = Date.now() + ms; while (Date.now() < end) { if (await f()) return true; await new Promise((r) => setTimeout(r, 100)); } return false; };
+            const res = (name, ok, detail) => expect(name, ok ? [] : [detail], null);
+
+            let r = run({});
+            res('a row started by hand takes the live lock itself and its exit status comes back', r.status === 7 && /PB_LIVE_LOCK_HELD=1 lockBusy=true rerun=true/.test(r.stdout), `status ${r.status}: ${r.stdout}${r.stderr}`);
+            r = run({ PB_LIVE_LOCK_HELD: '1' });
+            res('a hand-set PB_LIVE_LOCK_HELD=1 on a free lock is not trusted: the row takes the lock', r.status === 7 && /rerun=true/.test(r.stdout), `status ${r.status}: ${r.stdout}${r.stderr}`);
+            r = run({}, { cmd: ['flock', lock, process.execPath, probe], timeout: 10000 });
+            res('a row started under flock <lock> node <row> goes on at once (no wait on its own ancestor), in this process', r.status === 7 && /PB_LIVE_LOCK_HELD=undefined lockBusy=true rerun=false/.test(r.stdout), `status ${r.status}${r.error ? ` (${r.error.code})` : ''}: ${r.stdout}${r.stderr}`);
+
+            let h = await holdLock();
+            r = run({ PB_LIVE_LOCK_HELD: '1', PB_VERIFY_ROW_TOKEN: 'row-token' }, { timeout: 10000 });
+            res('the driver\'s row (token and PB_LIVE_LOCK_HELD=1 with the lock held) goes on in this process', r.status === 7 && /PB_LIVE_LOCK_HELD=1 lockBusy=true rerun=false/.test(r.stdout), `status ${r.status}: ${r.stdout}${r.stderr}`);
+            r = run({ PB_LIVE_LOCK_HELD: '1' }, { timeout: 2500 });
+            res('a hand-set PB_LIVE_LOCK_HELD=1 on a lock another session holds waits for it (nothing ran in 2.5 s)', r.error?.code === 'ETIMEDOUT' && !/inner:/.test(r.stdout), `status ${r.status}: ${r.stdout}${r.stderr}`);
+            h.kill('SIGKILL');
+            await until(lockFree, 5000);
+
+            // Termination: the outer run forwards a signal to the re-run, and a re-run whose parent is killed ends itself.
+            const hang = (signal) => new Promise((resolve) => {
+                rmSync(pidFile, { force: true });
+                const outer = spawn(process.execPath, [probe], { env: envOf({ PROBE_HANG: '1' }), stdio: 'ignore' });
+                (async () => {
+                    const up = await until(() => existsSync(pidFile), 10000);
+                    const inner = up ? Number(readFileSync(pidFile, 'utf8')) : 0;
+                    const heldNow = up && !lockFree();
+                    outer.kill(signal);
+                    const gone = up && await until(() => !alive(inner), 8000);
+                    const freed = await until(lockFree, 8000);
+                    if (!gone && inner) { try { process.kill(inner, 'SIGKILL'); } catch { /* gone */ } }
+                    resolve({ up, heldNow, gone, freed });
+                })();
+            });
+            let t = await hang('SIGTERM');
+            res('SIGTERM to the parent is forwarded: the re-run (and its lock) are gone within 8 s', t.up && t.heldNow && t.gone && t.freed, JSON.stringify(t));
+            t = await hang('SIGKILL');
+            res('SIGKILL of the parent cannot be forwarded: the re-run notices and ends itself within 8 s, releasing the lock', t.up && t.heldNow && t.gone && t.freed, JSON.stringify(t));
+        } finally {
+            for (const h of holders) h.kill('SIGKILL');
+            rmSync(root, { recursive: true, force: true });
+        }
     }
     {
         // The fixture repository builds under a user's hostile global git config (commit signing, hooks) without prompting or failing.
@@ -306,8 +457,10 @@ async function readiness() {
     const { prerequisites } = await import('./lib/orca-tabs-live.mjs');
     const pre = prerequisites({ needOrca: true, needPanes: true });
     if (pre.skip || pre.fail) return pre;
+    // The lane that added these exports is merged: a missing name is a moved source, a FAIL, never a SKIP.
     const entry = existsSync(join(REPO_ROOT, ENTRY_REL)) ? readFileSync(join(REPO_ROOT, ENTRY_REL), 'utf8') : '';
-    if (!/\bsubscribeOpenFiles\b/.test(entry) || !/\bsubscribeWorktrees\b/.test(entry)) return { skip: 'lane p65-01 not merged (the pane entry exports no subscribeOpenFiles or subscribeWorktrees)', fail: null };
+    const moved = existsSync(join(REPO_ROOT, ENTRY_REL)) ? entryFails(entry) : [`source moved: ${ENTRY_REL} is absent`];
+    if (moved.length) return { skip: null, fail: moved[0] };
     if (!/@powerbrowser\/orca-workspace\//.test(existsSync(join(REPO_ROOT, SERVER_REL)) ? readFileSync(join(REPO_ROOT, SERVER_REL), 'utf8') : '')) {
         return { skip: null, fail: `orca-workspace not wired into the built app (${SERVER_REL} names no @powerbrowser/orca-workspace module; rebuild the app)` };
     }
@@ -317,7 +470,7 @@ async function readiness() {
     return { skip: null, fail: null };
 }
 
-/** The scratch repository: a base, a feature branch, a commit to compare, a staged and an unstaged change, and a merge left with UU and UD. */
+/** The scratch repository: a base, a feature branch, a commit to compare, a staged and an unstaged change, an added, a deleted and an untracked file, and a merge left with UU and UD. */
 function buildFixtureRepo(repo, home) {
     // The user's global and system git config never apply (a global commit.gpgsign or core.hooksPath would prompt, fail or run).
     const env = fixtureGitEnv(home);
@@ -325,7 +478,7 @@ function buildFixtureRepo(repo, home) {
     mkdirSync(repo, { recursive: true });
     const put = (f, t) => writeFileSync(join(repo, f), t);
     git('init', '-q');
-    put('a.txt', 'a base\n'); put('b.txt', 'b base\n'); put('conflict.txt', 'conflict base\n'); put('gone.txt', 'gone base\n'); put('s.txt', 's base\n');
+    put('a.txt', 'a base\n'); put('b.txt', 'b base\n'); put('conflict.txt', 'conflict base\n'); put('gone.txt', 'gone base\n'); put('s.txt', 's base\n'); put('del.txt', 'del base\n');
     git('add', '.'); git('commit', '-q', '-m', 'base');
     git('checkout', '-q', '-b', 'feature'); put('b.txt', 'b on feature\n'); git('commit', '-q', '-am', 'feature');
     git('checkout', '-q', 'main');
@@ -333,6 +486,10 @@ function buildFixtureRepo(repo, home) {
     git('checkout', '-q', 'main'); put('conflict.txt', 'conflict on main\n'); put('gone.txt', 'gone on main\n'); git('commit', '-q', '-am', 'main');
     try { git('merge', '-q', 'side'); } catch { /* the conflicts are the fixture */ }
     put('s.txt', 's staged\n'); git('add', 's.txt'); put('a.txt', 'a unstaged\n');
+    // 65-CR-01: a staged added file (empty HEAD side), a staged deleted file (empty index side) and an untracked file (empty index side).
+    put('added.txt', 'added\n'); git('add', 'added.txt');
+    git('rm', '-q', 'del.txt');
+    put('untracked.txt', 'untracked\n');
     return { git, mainCommit: git('rev-parse', 'HEAD') };
 }
 
@@ -382,7 +539,7 @@ async function runLive() {
     if (ready.skip) { console.log(skipLine(NAME, ready.skip)); return SKIP_EXIT; }
     if (ready.fail) { console.error(`${NAME}: FAIL -- ${ready.fail}`); return 1; }
     // Nothing is launched before this: a row started by hand takes the live lock itself (harness-live-panels-02).
-    const held = takeLiveLock(import.meta.url, NAME);
+    const held = await takeLiveLock(import.meta.url, NAME);
     if (held !== null) return held;
     const lib = await import('./lib/orca-tabs-live.mjs');
     const { installOutputRedaction, ensurePbNode, redact } = await import('./lib/orca-run.mjs');
@@ -494,6 +651,9 @@ async function runLive() {
                 ['diff', JSON.stringify({ source: 'branch', relativePath: 'b.txt', baseRef: 'feature' })],
                 ['diff', JSON.stringify({ source: 'commit', relativePath: 'conflict.txt', commitOid: head })],
                 ['diff', JSON.stringify({ source: 'combined-uncommitted', relativePath: 's.txt' })],
+                ['diff', JSON.stringify({ source: 'staged', relativePath: 'added.txt' })],
+                ['diff', JSON.stringify({ source: 'staged', relativePath: 'del.txt' })],
+                ['diff', JSON.stringify({ source: 'unstaged', relativePath: 'untracked.txt' })],
                 ['conflict-review', JSON.stringify({ relativePath: 'conflict.txt', conflictKind: 'both_modified' })],
                 ['conflict-review', JSON.stringify({ relativePath: 'gone.txt', conflictKind: 'deleted_by_them' })],
             ]) {
@@ -507,8 +667,15 @@ async function runLive() {
             await sleep(3000);
             const records = (await openFiles()) ?? [];
             const view = await p(EDITORS);
-            const blob = (rev, rel) => (rev === '' ? '' : execFileSync('git', ['-C', repo, 'cat-file', 'blob', `${rev}:${rel}`], { env: gitEnv }).toString('utf8'));
+            // A blob that git does not have at that revision is an absent side (an added or deleted file): '' for the comparison,
+            // and recorded as absent so the one-empty-side clause can tell it from a side whose text is empty.
+            const present = (rev, rel) => spawnSync('git', ['-C', repo, 'cat-file', '-e', `${rev}:${rel}`], { env: gitEnv }).status === 0;
+            const blob = (rev, rel) => (rev === '' || !present(rev, rel) ? '' : execFileSync('git', ['-C', repo, 'cat-file', 'blob', `${rev}:${rel}`], { env: gitEnv }).toString('utf8'));
+            const absentSide = (side) => (side.rev === undefined ? !existsSync(join(repo, side.rel)) : side.rev === '' || !present(side.rev, side.rel));
             const textOf = (side) => (side.rev === undefined ? readFileSync(join(repo, side.rel), 'utf8') : blob(side.rev, side.rel));
+            // The ids git computes on the fixture: never read back from Orca's own record (harness-live-panels-12).
+            const ids = { head: git('rev-parse', 'HEAD'), mergeBase: git('merge-base', 'HEAD', 'feature'), parent: git('rev-parse', 'HEAD^') };
+            const emptySeen = new Set();
             const diffSources = new Set();
             for (const rec of records.filter((r) => r.mode === 'diff' && r.worktreePath === repo)) {
                 diffSources.add(rec.diffSource);
@@ -518,7 +685,13 @@ async function runLive() {
                 if (!w) { fails.push(`(b) diff:${rec.diffSource} ${want.rel}: no Theia diff editor with the CA-03 sides`); continue; }
                 fails.push(...blobVerdict(`diff:${rec.diffSource} ${want.rel} left`, w.leftText, textOf(want.left)).map((f) => `(b) ${f}`));
                 fails.push(...blobVerdict(`diff:${rec.diffSource} ${want.rel} right`, w.rightText, textOf(want.right)).map((f) => `(b) ${f}`));
+                fails.push(...refIdsVerdict(rec, ids).map((f) => `(b) ${f}`));
+                if (want.rel in EMPTY_SIDE_FILES) {
+                    emptySeen.add(want.rel);
+                    fails.push(...emptySideVerdict(want.rel, { leftText: w.leftText, rightText: w.rightText, leftAbsent: absentSide(want.left), rightAbsent: absentSide(want.right) }).map((f) => `(b) ${f}`));
+                }
             }
+            for (const f of Object.keys(EMPTY_SIDE_FILES)) if (!emptySeen.has(f)) fails.push(`(b) no Orca diff tab of ${f} was observed, so its empty side was not checked`);
             for (const s of REQUIRED_SOURCES) if (!diffSources.has(s)) fails.push(`(b) no Orca diff tab of source ${s} was observed`);
             const merge = mergeSeen;
             if (!merge) fails.push('(b) both_modified conflict.txt opened no Theia merge editor');
@@ -534,9 +707,10 @@ async function runLive() {
                 // A hosted Orca terminal gives the scan a pane root; a scan over zero roots would prove nothing.
                 await p(`await get('CommandService').executeCommand('powerbrowser.orca.newTerminal'); return await until(() => document.querySelectorAll('[data-pb-orca-pane]').length > 0, 20000);`, 30000);
                 const inPanes = await p(`return [...document.querySelectorAll('[data-pb-orca-pane]')].map(n => ({ kind: n.getAttribute('data-pb-orca-pane'), n: n.querySelectorAll(${JSON.stringify(MONACO_SELECTOR)}).length }));`);
-                for (const pane of inPanes.filter((x) => x.n > 0)) fails.push(`(c) Orca's editor DOM (${MONACO_SELECTOR}) inside an Orca ${pane.kind} pane`);
-                if (inPanes.length === 0) fails.push('(c) no Orca pane root to scan, so the absence of Orca\'s editor in pane roots proves nothing');
-                notes.push(`(c) ${inPanes.length} Orca pane root(s) scanned`);
+                // Every root present is scanned, the diff and conflict tabs of clause (b) included (a hosted editor, diff or
+                // conflict pane would be among them); the terminal this clause opened must be one of them.
+                fails.push(...monacoScanVerdict(inPanes).map((f) => `(c) ${f}`));
+                notes.push(`(c) ${inPanes.length} Orca pane root(s) scanned [${[...new Set(inPanes.map((x) => x.kind))].join(', ')}]`);
             }
 
             // (d) roots against the store, create, delete, clean and dirty close, a user root, a user removal.

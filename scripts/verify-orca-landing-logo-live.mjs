@@ -165,7 +165,7 @@ async function live() {
     if (pre.skip) { console.log(skipLine(LABEL, pre.skip)); return SKIP_EXIT; }
     if (pre.fail) { console.log(`${LABEL}: FAIL -- ${pre.fail}`); return 1; }
     // Nothing is launched before this: a row started by hand takes the live lock itself (harness-live-panels-02).
-    const held = takeLiveLock(import.meta.url, LABEL);
+    const held = await takeLiveLock(import.meta.url, LABEL);
     if (held !== null) return held;
     const OrcaEnv = await import(pathToFileURL(join(REPO, 'powerbrowser/shell/OrcaEnv.sys.mjs')).href);
     const { sourceConst } = await import(join(REPO, 'scripts/lib/pb-relaunch.mjs'));
