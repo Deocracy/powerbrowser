@@ -9,6 +9,8 @@
 //                   with no page shown; chrome 'ready': the re-pair runs once and the page clears.
 //  boot-failed-page 67-WR-02. A failed boot of the pane bundle while chrome is ready shows
 //                   pairing-lost, and Reconnect retries the boot instead of reporting success.
+//  boot-final       review of 67-WR-02. A boot that failed at the final step shows a class whose
+//                   page offers no Reconnect or Restart (they cannot help), and polling stops.
 //  stuck-no-offer   67-WR-01. A boot still waiting after six ready polls, with no offer at all,
 //                   reports offer-missing and shows pairing-lost.
 //  reason-cleared   67-WR-04. A pairing reason reported to chrome is cleared there with
@@ -88,11 +90,16 @@ function installWindow() {
 
 // ---------------------------------------------------------------- hosting status
 
-function hostingStatus(sources, { booted, bundleState = booted ? 'booted' : 'booting', retry = async () => false }) {
+function bundleModule(sources) {
+    const protocol = loadTs(REL.protocol, { sources });
+    return loadTs(REL.bundle, { sources, overrides: { '@theia/core/shared/react': { __esModule: true }, [REL.protocol]: protocol } });
+}
+
+function hostingStatus(sources, { booted, bundleState = booted ? 'booted' : 'booting', retry = async () => false, rejects = false }) {
     const copy = loadTs(REL.copy, { sources });
     const { OrcaHostingStatus } = loadTs(REL.status, {
         sources,
-        overrides: { [REL.copy]: copy },
+        overrides: { [REL.copy]: copy, [REL.bundle]: bundleModule(sources) },
     });
     const status = new OrcaHostingStatus();
     const api = { repairs: 0, repair: async () => { api.repairs += 1; } };
@@ -101,7 +108,8 @@ function hostingStatus(sources, { booted, bundleState = booted ? 'booted' : 'boo
         state: bundleState,
         retries: 0,
         onDidChangeState: bundleEmitter.event,
-        ready: () => (booted ? Promise.resolve(api) : new Promise(() => undefined)),
+        failed: undefined,
+        ready: () => (booted ? Promise.resolve(api) : rejects ? Promise.reject(new Error('final')) : new Promise(() => undefined)),
         retry: async () => { bundle.retries += 1; return retry(); },
         emit: state => { bundle.state = state; bundleEmitter.fire(state); },
     };
@@ -176,6 +184,30 @@ async function clauseBootFailedPage(sources, fail) {
     }
     if (status.failureClass !== 'pairing-lost') {
         fail('boot-failed-page', `Reconnect whose retried boot failed removed the page (got ${status.failureClass ?? 'no page'}) (67-WR-02)`);
+    }
+}
+
+async function clauseBootFinal(sources, fail) {
+    const { ORCA_PANES_FINAL_STEP } = bundleModule(sources);
+    const copy = loadTs(REL.copy, { sources });
+    const { status, bundle, chrome } = hostingStatus(sources, { booted: false, bundleState: 'failed', rejects: true });
+    bundle.failed = ORCA_PANES_FINAL_STEP;
+    chrome.state = 'ready';
+    status.onStart();
+    await flush();
+    await status.poll();
+    bundle.emit('failed');
+    await flush();
+    const cls = status.failureClass;
+    const buttons = cls ? copy.ORCA_FAILURE_BUTTONS[cls] ?? [] : [];
+    if (!cls) {
+        fail('boot-final', 'a boot that failed at the final step shows no page over empty Orca tabs');
+    } else if (buttons.includes('reconnect') || buttons.includes('restart')) {
+        fail('boot-final', `a boot that failed at the final step (no retry can pass it) shows ${cls}, whose page offers ${buttons.join(', ')}, a step that cannot help`);
+    }
+    status.show({});
+    if (status.timer !== undefined) {
+        fail('boot-final', 'after a final boot failure the status still polls chrome once a second, though nothing it reports can change the page');
     }
 }
 
@@ -468,7 +500,7 @@ async function clauseRestore(sources, fail) {
 // ---------------------------------------------------------------- driver
 
 const CLAUSES = [
-    clauseRestartRepair, clauseBootFailedPage, clauseStuckNoOffer, clauseReasonCleared, clauseBootRetry,
+    clauseRestartRepair, clauseBootFailedPage, clauseBootFinal, clauseStuckNoOffer, clauseReasonCleared, clauseBootRetry,
     clauseCloseUnbooted, clauseHandOff, clauseRevealNoFocus, clauseSidePanel, clauseRestore,
 ];
 
@@ -510,6 +542,10 @@ export const PLANTS = [
     {
         name: 'a failed boot shows no page (pre-fix 67-WR-02)', naming: 'boot-failed-page', file: REL.status,
         edits: [["const boot: OrcaFailureClass | null = this.bootFailed && !this.api && this.chrome.state === 'ready' ? 'pairing-lost' : null;", 'const boot: OrcaFailureClass | null = null;']],
+    },
+    {
+        name: 'a final boot failure shows pairing-lost and keeps polling (review of 67-WR-02)', naming: 'boot-final', file: REL.status,
+        edits: [['this.bootFinal = this.bundle.failed === ORCA_PANES_FINAL_STEP;', 'this.bootFinal = false;']],
     },
     {
         name: 'a stuck boot with no offer does nothing (pre-fix 67-WR-01)', naming: 'stuck-no-offer', file: REL.status,

@@ -36,7 +36,10 @@
  * A stuck boot with no offer at all reports offer-missing. A reason this
  * frontend reported to chrome is cleared there with { clientReason: null }
  * when the client recovers. A numeric generation in the reply (a count of
- * orcad starts, no identifier) is a restart too when it changes.
+ * orcad starts, no identifier) is a restart too when it changes. A boot that
+ * failed at the final step (the bundle runs a React other than Theia's) shows
+ * files-missing, whose step is to reinstall, and stops the poll: no Reconnect
+ * and no state chrome reports can change it.
  */
 import { inject, injectable } from '@theia/core/shared/inversify';
 import { Emitter, Event as TheiaEvent } from '@theia/core/lib/common/event';
@@ -44,7 +47,7 @@ import { FrontendApplicationContribution } from '@theia/core/lib/browser';
 import { OrcaBrowserHost } from '@powerbrowser/orca-browser/lib/browser/orca-browser-frontend-module';
 import { OrcaPanesService } from '../../common/orca-panes-protocol';
 import type { OfferHandOff } from '../../node/offer-file-policy';
-import { OrcaPaneBundle } from '../orca-pane-bundle';
+import { ORCA_PANES_FINAL_STEP, OrcaPaneBundle } from '../orca-pane-bundle';
 import { ORCA_CLIENT_REASON_CLASS, ORCA_FAILURE_COPY, OrcaFailureClass } from './orca-failure-copy';
 
 const LOG_PREFIX = '[@powerbrowser/orca-panes]';
@@ -142,6 +145,8 @@ export class OrcaHostingStatus implements FrontendApplicationContribution {
     protected clientLost = false;
     /** A boot of the pane bundle failed and none has succeeded since (67-WR-02). */
     protected bootFailed = false;
+    /** The boot failed at a step no retry can pass (the bundle runs another React): Reconnect cannot help. */
+    protected bootFinal = false;
     /** The client reason held now was sent to chrome, so recovering sends the clearing form (67-WR-04). */
     protected reasonReported = false;
     protected api: RepairApi | undefined;
@@ -176,7 +181,10 @@ export class OrcaHostingStatus implements FrontendApplicationContribution {
     /** A boot attempt failed: the page shows from now until a boot succeeds, through the bundle's own retries. */
     protected onBundleState(state: string): void {
         if (state === 'failed' && !this.api) {
-            this.change(() => { this.bootFailed = true; });
+            this.change(() => {
+                this.bootFailed = true;
+                this.bootFinal = this.bundle.failed === ORCA_PANES_FINAL_STEP;
+            });
         }
         this.schedule();
     }
@@ -189,6 +197,11 @@ export class OrcaHostingStatus implements FrontendApplicationContribution {
      * the fresher one.
      */
     get failureClass(): OrcaFailureClass | null {
+        if (this.bootFinal) {
+            // The pane bundle does not match this build (its React is not Theia's): no Reconnect or restart of orcad
+            // changes that, so the page names the step that can, reinstalling, with Details.
+            return 'files-missing';
+        }
         let chrome = this.chrome.failureClass;
         if (chrome === 'browser-not-attached' && this.browserHost.state === 'attached') {
             chrome = null;
@@ -352,7 +365,8 @@ export class OrcaHostingStatus implements FrontendApplicationContribution {
     }
 
     protected schedule(): void {
-        const wanted = this.pages.size > 0 || !this.api || this.restartPending || this.clientLost;
+        // Nothing chrome reports can change a final boot failure, so polling ends there.
+        const wanted = !this.bootFinal && (this.pages.size > 0 || !this.api || this.restartPending || this.clientLost);
         if (wanted && this.timer === undefined) {
             this.timer = window.setInterval(() => void this.poll(), ORCA_STATUS_POLL_MS);
         } else if (!wanted && this.timer !== undefined) {
