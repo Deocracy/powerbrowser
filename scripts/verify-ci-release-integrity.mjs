@@ -21,8 +21,11 @@
 //                  PB_MAC_ORCA_DIR artifact's tree.tar with -p before it stages from it.
 //   orca-automerge (ci-supply-chain-03) in release-train.yml's bump-pr-orca, the step that runs gh pr merge reaches it
 //                  only past a test that $LOCKS is unchanged, LOCKS comes from a step output computed by git -C orca
-//                  diff --quiet over a *-lock.yaml pathspec (git data, no Orca code), and the PR body carries the
-//                  upstream compare link ${COMPARE_URL} and says the replay's green is not a review of upstream.
+//                  diff --quiet over the lockfiles both trees track (git data, no Orca code), and the PR body carries
+//                  the upstream compare link ${COMPARE_URL} and says the replay's green is not a review of upstream.
+//                  The lockfile lines of that step are run on a two-commit fixture repository: a change to only a
+//                  Cargo.lock, only a Gemfile.lock or only a JS lockfile must read changed, and a change to source
+//                  files alone (including one named *-lock.ts) must read unchanged.
 // Every clause derives what it compares from the parsed YAML (job and step lookups by what they run, not by
 // a list kept here), so a renamed step is still found.
 //
@@ -33,7 +36,9 @@
 //   node scripts/verify-ci-release-integrity.mjs
 //   node scripts/verify-ci-release-integrity.mjs --self-test
 
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -159,7 +164,8 @@ export function check(texts) {
             if (gate === -1 || prRead === -1 || gate < prRead) fail('release-train.yml', 'bump-pr-orca', 'orca-automerge', 'arms gh pr merge --auto without first testing that no Orca lockfile changed in the pin range ([ "$LOCKS" != "unchanged" ]), so a re-pin that moves upstream dependencies is armed on the green of the job that ran them. Next step: arm auto-merge only when LOCKS is unchanged.');
             const m = /^steps\.([\w-]+)\.outputs\.locks$/.exec(String(pub.env?.LOCKS ?? '').replace(/^\$\{\{\s*|\s*\}\}$/g, ''));
             const src = m ? steps.find(st => st.id === m[1]) : undefined;
-            if (!src || !/git -C orca diff --quiet\b[^\n]*-lock\.yaml/.test(runOf(src))) fail('release-train.yml', 'bump-pr-orca', 'orca-automerge', 'takes LOCKS from no step that compares the Orca lockfiles across the pin range with git -C orca diff --quiet. Next step: compute it from git data in a step before the token mint.');
+            if (!src || !/git -C orca diff --quiet\b/.test(runOf(src))) fail('release-train.yml', 'bump-pr-orca', 'orca-automerge', 'takes LOCKS from no step that compares the Orca lockfiles across the pin range with git -C orca diff --quiet. Next step: compute it from git data in a step before the token mint.');
+            else for (const f of lockfileBehaviour(runOf(src))) fail('release-train.yml', 'bump-pr-orca', 'orca-automerge', f);
             if (!/BODY="[^\n]*\$\{COMPARE_URL\}/.test(r) || !/not a review of what changed upstream/.test(r)) fail('release-train.yml', 'bump-pr-orca', 'orca-automerge', 'writes a PR body without the upstream compare link or without saying the green replay is not a review of upstream. Next step: put both in the body.');
         }
     }
@@ -190,6 +196,53 @@ export function check(texts) {
     }
 
     return fails;
+}
+
+// The lockfile lines of the range step (after its git fetch, before its GITHUB_OUTPUT write), run with bash on a
+// fixture Orca repository: base, then one branch per case. Returns the failures, [] when every case reads right.
+const LOCK_CASES = [
+    ['native/windows-cli-launcher/Cargo.lock', 'changed'],
+    ['mobile/Gemfile.lock', 'changed'],
+    ['cloud/pnpm-lock.yaml', 'changed'],
+    ['src/main/x.ts src/main/run-lock.ts', 'unchanged'],
+];
+let lockFixture = null;
+function lockFixtureRepo() {
+    if (lockFixture) return lockFixture;
+    const dir = mkdtempSync(join(tmpdir(), 'ci-release-integrity-locks-'));
+    const orca = join(dir, 'orca');
+    const g = (...a) => { const r = spawnSync('git', ['-C', orca, '-c', 'user.email=t@example.invalid', '-c', 'user.name=T', '-c', 'commit.gpgsign=false', ...a], { encoding: 'utf8' }); if (r.status !== 0) throw new Error(`fixture git ${a.join(' ')}: ${r.stderr}`); return r.stdout.trim(); };
+    mkdirSync(orca, { recursive: true });
+    g('init', '-q', '-b', 'main');
+    const files = ['pnpm-lock.yaml', 'cloud/pnpm-lock.yaml', 'mobile/Gemfile.lock', 'native/windows-cli-launcher/Cargo.lock', 'src/main/x.ts', 'src/main/run-lock.ts'];
+    for (const f of files) { mkdirSync(dirname(join(orca, f)), { recursive: true }); writeFileSync(join(orca, f), `${f} v1\n`); }
+    g('add', '-A'); g('commit', '-q', '-m', 'base');
+    const base = g('rev-parse', 'HEAD');
+    const heads = LOCK_CASES.map(([changed]) => {
+        g('checkout', '-q', '--detach', base);
+        for (const f of changed.split(' ')) writeFileSync(join(orca, f), `${f} v2\n`);
+        g('commit', '-q', '-am', `change ${changed}`);
+        return g('rev-parse', 'HEAD');
+    });
+    g('checkout', '-q', '--detach', base);
+    lockFixture = { dir, base, heads };
+    process.on('exit', () => rmSync(dir, { recursive: true, force: true }));
+    return lockFixture;
+}
+export function lockfileBehaviour(run) {
+    const lines = run.split('\n');
+    const from = lines.findIndex(l => /git -C orca fetch\b/.test(l));
+    const to = lines.findIndex(l => /GITHUB_OUTPUT/.test(l));
+    if (from === -1 || to === -1 || to <= from) return ['the range step has no git -C orca fetch line before its GITHUB_OUTPUT write, so its lockfile lines cannot be found. Next step: keep the fetch, the lockfile comparison and the output write in that order.'];
+    const snippet = lines.slice(from + 1, to).join('\n');
+    const fx = lockFixtureRepo();
+    const out = [];
+    LOCK_CASES.forEach(([changed, want], i) => {
+        const r = spawnSync('bash', ['-c', `set -euo pipefail\n${snippet}\necho "LOCKS=$LOCKS"`], { cwd: fx.dir, encoding: 'utf8', env: { PATH: process.env.PATH, OLD: fx.base, COMMIT: fx.heads[i], LC_ALL: 'C' } });
+        const got = /LOCKS=(\w+)/.exec(r.stdout ?? '')?.[1] ?? `<exit ${r.status}: ${(r.stderr ?? '').trim().split('\n').pop()}>`;
+        if (got !== want) out.push(`reads LOCKS=${got}, not ${want}, for a range that changes only ${changed}, so ${want === 'changed' ? 'a re-pin that moves that lockfile arms auto-merge' : 'auto-merge is withheld for a source-only change'}. Next step: compare every lockfile both trees track (git ls-tree of $OLD and $COMMIT), whatever its ecosystem.`);
+    });
+    return out;
 }
 
 export function readTexts(root = REPO_ROOT) {
@@ -238,7 +291,10 @@ function selfTest() {
         // ci-supply-chain-03, the pre-fix bump: auto-merge armed on the replay's green alone, no range for the owner.
         ['auto-merge armed whatever the lockfiles', edit('release-train.yml', '          elif [ "$LOCKS" != "unchanged" ]; then\n', '          elif false; then\n'), 'orca-automerge', 'without first testing that no Orca lockfile changed'],
         ['the PR body without the compare link', edit('release-train.yml', ' ${COMPARE_URL} .', ' .'), 'orca-automerge', 'without the upstream compare link'],
-        ['LOCKS from no lockfile comparison', edit('release-train.yml', "if git -C orca diff --quiet \"$OLD\" \"$COMMIT\" -- ':(glob)**/*-lock.yaml'; then", 'if true; then'), 'orca-automerge', 'takes LOCKS from no step'],
+        ['LOCKS from no lockfile comparison', edit('release-train.yml', 'if git -C orca diff --quiet "$OLD" "$COMMIT" -- "${LF[@]}"; then LOCKS=unchanged; fi', 'LOCKS=unchanged'), 'orca-automerge', 'takes LOCKS from no step'],
+        // ci-supply-chain-03 review: the first fix compared *-lock.yaml only, so a Cargo.lock-only range armed auto-merge.
+        ['only *-lock.yaml compared (a Cargo.lock change missed)', edit('release-train.yml', 'if git -C orca diff --quiet "$OLD" "$COMMIT" -- "${LF[@]}"; then LOCKS=unchanged; fi', "if git -C orca diff --quiet \"$OLD\" \"$COMMIT\" -- ':(glob)**/*-lock.yaml'; then LOCKS=unchanged; fi"), 'orca-automerge', 'changes only native/windows-cli-launcher/Cargo.lock'],
+        ['source files taken for lockfiles', edit('release-train.yml', "grep -E '(^|/)[^/]+[-_.]lockb?(\\.(ya?ml|json|toml))?$'", "grep -E 'lock'"), 'orca-automerge', 'changes only src/main/x.ts src/main/run-lock.ts'],
         // 68-CR-03, the pre-fix macOS round trip.
         ['a thin macOS job uploads the loose tree', edit('release.yml', '          path: ${{ runner.temp }}/macos-orca-arm64-artifact/', '          path: ${{ runner.temp }}/macos-orca-arm64/'), 'mode-carry', 'job macos-orca-arm64 [mode-carry]: uploads macos-orca-arm64 from'],
         ['the universal job unpacks without -p', edit('release.yml', 'tar -xpf "macos-orca-$A-artifact/tree.tar"', 'tar -xf "macos-orca-$A-artifact/tree.tar"'), 'mode-carry', 'job macos-orca-universal [mode-carry]: downloads macos-orca-arm64'],

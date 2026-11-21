@@ -1114,7 +1114,7 @@ jobs:
 
       # ci-supply-chain-03: the replay's green comes from the job that installed and ran the new Orca code, so it is a
       # compatibility signal, never a security one. From git data alone (nothing of Orca's runs here): the pin range the
-      # PR moves across, its upstream compare link for the owner, and whether any lockfile changed in that range.
+      # PR moves across, its upstream compare link for the owner, and whether any lockfile of any kind changed in it.
       # Auto-merge is armed only when none did.
       - name: Read the upstream range and whether an Orca lockfile changed in it (git data only)
         id: range
@@ -1126,7 +1126,17 @@ jobs:
           REMOTE=$(grep -m1 '^REMOTE=' scripts/fetch-orca.sh | cut -d= -f2- | tr -d '"')
           [[ $REMOTE =~ ^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.git$ ]] || { echo "release-train: FAIL -- the Orca remote in scripts/fetch-orca.sh is not a github.com repository URL, so no compare link can be given. Next step: do not bump." >&2; exit 1; }
           git -C orca fetch -q --depth 1 origin "$OLD"
-          if git -C orca diff --quiet "$OLD" "$COMMIT" -- ':(glob)**/*-lock.yaml'; then LOCKS=unchanged; else LOCKS=changed; fi
+          # Every lockfile either commit tracks, whatever its ecosystem (the JS workspaces, the Cargo crates of the
+          # Windows launcher and the agent hook, Ruby, and any added later): a data file whose name ends in a dot-, dash-
+          # or underscore-separated "lock" or "lockb", alone or before a yaml, json or toml extension (the JS workspace
+          # lockfiles, Cargo.lock, Gemfile.lock, yarn.lock, bun.lockb...), so source files named *-lock.ts are not
+          # lockfiles. The list comes from the two trees, never from names kept here; none found counts as changed.
+          LOCKFILES=$( { git -C orca ls-tree -r --name-only "$OLD"; git -C orca ls-tree -r --name-only "$COMMIT"; } | grep -E '(^|/)[^/]+[-_.]lockb?(\.(ya?ml|json|toml))?$' | LC_ALL=C sort -u || true)
+          LOCKS=changed
+          if [ -n "$LOCKFILES" ]; then
+            mapfile -t LF <<< "$LOCKFILES"
+            if git -C orca diff --quiet "$OLD" "$COMMIT" -- "${LF[@]}"; then LOCKS=unchanged; fi
+          fi
           { echo "old=${OLD}"; echo "compare=${REMOTE%.git}/compare/${OLD}...${COMMIT}"; echo "locks=${LOCKS}"; } >> "$GITHUB_OUTPUT"
           echo "release-train: orca range ${OLD}...${COMMIT}, lockfiles ${LOCKS}"
 
