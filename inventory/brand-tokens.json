@@ -976,7 +976,7 @@
       "case_form": "title",
       "class": "coincidental",
       "target": "Orca",
-      "expected_count": 3951,
+      "expected_count": 3962,
       "expected_files": [
         ".claude/hooks/ledger-session-check.py",
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
@@ -1390,7 +1390,7 @@
       "case_form": "lower",
       "class": "coincidental",
       "target": "orca",
-      "expected_count": 6760,
+      "expected_count": 6766,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md",
@@ -2110,7 +2110,7 @@
       "case_form": "lower",
       "class": "coincidental",
       "target": "orcad",
-      "expected_count": 2729,
+      "expected_count": 2812,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md",
