@@ -37,7 +37,7 @@ import {
     AgentReply, BrowserRecord, CommandEvent, DispatchDeps, DispatchFailure, Outcome, PageTable, createPageTable, createRevealTracker, dispatchCommand
 } from '../common/orca-browser-dispatch';
 import {
-    BoundEvent, PageMetadata, START_STEP_DEADLINE_MS, agentCallTimeoutMs, agentParams, boundedOutcome, inventoryOf, pageMetadataOf, reboundEvent, withDeadline
+    BoundEvent, PageMetadata, START_STEP_DEADLINE_MS, agentCallTimeoutMs, agentParams, boundedOutcome, inventoryOf, pageInfoOf, pageMetadataOf, reboundEvent, withDeadline
 } from '../common/orca-browser-host-wire';
 
 /** Host bundle interface and link global (66-01-PLAN interfaces); orca-browser-entry-points compares these with lane p66-01's sources. */
@@ -490,9 +490,10 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
                 // Stop is kept per shell window across a reload of this document (G1a round 2).
                 .some(widget => !widget.isDisposed && widget.agentControl.agent && widget.agentControl.stopped),
             agentCall: (tabId, method, params) => this.agentRequest({ kind: 'webTabAgent', tabId, method, params: agentParams(params) }),
+            // 59-WR-03 (round 3): the page identity a snapshot result carries is capped as chrome's reserve assumes.
             pageInfo: tabId => {
                 const widget = this.channel.widgetOf(tabId);
-                return { url: widget?.url ?? '', title: widget?.pageTitle ?? '' };
+                return pageInfoOf(widget?.url, widget?.pageTitle);
             },
         };
     }
