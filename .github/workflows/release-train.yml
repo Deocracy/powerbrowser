@@ -531,8 +531,8 @@ jobs:
             exit 1
           fi
           nix develop .#theia --command node scripts/generate.mjs
-          nix develop .#theia --command node scripts/verify-release-identity.mjs
-          nix develop .#theia --command node scripts/verify-upstream-pins.mjs
+          bash scripts/run-no-skip.sh -- nix develop .#theia --command node scripts/verify-release-identity.mjs
+          bash scripts/run-no-skip.sh -- nix develop .#theia --command node scripts/verify-upstream-pins.mjs
           nix develop .#theia --command bash scripts/regenerate-patches.sh --check
           # Only the manifest, the powerbrowser tree (tracked and new files) and the patch stack
           # are staged, by explicit path. The App cannot push a commit that touches workflows.
