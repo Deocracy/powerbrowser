@@ -26,6 +26,7 @@
 //
 // Usage: node scripts/verify-packaging-staging.mjs [--self-test]
 // --self-test plants each pre-fix fault (in text copies and fixture trees) and requires red naming it.
+// A clause whose input is absent (orca/ not fetched) makes the row exit 77 after one SKIP line.
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -35,6 +36,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { verdictExit } from './lib/skip-verdict.mjs';
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'packaging-staging';
 const PKG_DIR = 'powerbrowser/packaging';
@@ -43,6 +46,8 @@ const WRAPPER_HELPER = 'stage-orca-agents-wrapper.sh';
 const LICENCE_HELPER = 'stage-orca-licence.sh';
 const SWALLOW = /grep\s+-r\S*\s[^\n]*2>\/dev\/null\s*\|\|\s*true/;
 
+// Clauses that did not run because an input is absent (SKIP-PROTOCOL.md: the row then exits 77).
+const SKIPS = new Set();
 const sha = (p) => createHash('sha256').update(readFileSync(p)).digest('hex');
 
 function scripts(root) {
@@ -133,7 +138,7 @@ export function licenceDrift(root, tmp) {
         const r = spawnSync('bash', [helper, root, stage], { encoding: 'utf8' });
         if (r.status !== 0) fails.push(`orca-licence: ${LICENCE_HELPER} failed on the fetched orca/: ${r.stderr.trim()}`);
         else if (sha(join(stage, 'LICENSE')) !== sha(join(root, 'orca', row.licence_file))) fails.push('orca-licence: the staged LICENSE differs from orca/LICENSE');
-    } else console.log(`${NAME}: SKIP -- orca-licence on the real tree: orca/${row.licence_file} is not fetched (bash scripts/fetch-orca.sh)`);
+    } else SKIPS.add(`orca-licence did not run on the real tree: orca/${row.licence_file} is not fetched. Next step: bash scripts/fetch-orca.sh`);
     const fx = join(tmp, 'licence-fixture');
     mkdirSync(join(fx, 'orca'), { recursive: true });
     mkdirSync(join(fx, 'inventory'), { recursive: true });
@@ -190,18 +195,16 @@ function selfTest() {
     return ok;
 }
 
-let ok;
-if (process.argv.includes('--self-test')) ok = selfTest();
+let code;
+if (process.argv.includes('--self-test')) code = selfTest() ? verdictExit(`${NAME} self-test`, [], [...SKIPS]) : 1;
 else {
     const fails = withTmp((t) => drift(REPO_ROOT, scripts(REPO_ROOT), readFileSync(join(REPO_ROOT, BACKEND_REL), 'utf8'), t));
     if (fails.length) {
         console.error(`${NAME}: FAIL`);
         for (const f of fails) console.error(`  ${f}`);
         console.error(`  Next step: correct the named script in ${PKG_DIR}/, then rerun node scripts/verify-packaging-staging.mjs.`);
-        ok = false;
-    } else {
-        console.log(`${NAME}: PASS -- the claude wrapper resolves from a staged sidecar, Orca's LICENSE is staged by every Orca-staging script, and the checkout-path greps fail on a grep error`);
-        ok = true;
     }
+    code = verdictExit(NAME, fails, [...SKIPS]);
+    if (code === 0) console.log(`${NAME}: PASS -- the claude wrapper resolves from a staged sidecar, Orca's LICENSE is staged by every Orca-staging script, and the checkout-path greps fail on a grep error`);
 }
-process.exit(ok ? 0 : 1);
+process.exit(code);

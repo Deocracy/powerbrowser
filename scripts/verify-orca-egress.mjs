@@ -29,7 +29,8 @@
 //            data-orca-agent-provider paragraph (what an agent reads goes to its AI provider).
 //            This clause runs even when orca/ is not built.
 //
-// The bundle clauses print one SKIP line when orca/ is not built (no orca/out/orcad/orcad.js).
+// Without a built orca/ (no orca/out/orcad/orcad.js) the bundle clauses do not run and the row exits 77
+// after one SKIP line (SKIP-PROTOCOL.md); the privacy clause still runs and a failure there exits 1.
 // Usage: node scripts/verify-orca-egress.mjs [--self-test]
 // --self-test plants each fault in memory (a new bundle host, an untagged allow row, a stale row, a
 // moved source) and requires red naming it.
@@ -39,6 +40,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { entryFor } from './lib/endpoint-verdict.mjs';
+import { verdictExit } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-egress';
@@ -153,20 +155,22 @@ const orcaDir = join(REPO_ROOT, 'orca');
 const allowlist = JSON.parse(readFileSync(join(REPO_ROOT, ALLOWLIST_REL), 'utf8'));
 const html = readFileSync(join(REPO_ROOT, PAGE_REL), 'utf8');
 const built = existsSync(join(orcaDir, 'out/orcad/orcad.js'));
-if (!built) console.log(`${NAME}: SKIP -- the bundle clauses: no built orca/ (run nix develop .#orca --command bash scripts/build-orca.sh); the privacy clause runs`);
 const bundles = built ? bundleHosts(orcaDir) : null;
-let ok;
-if (process.argv.includes('--self-test')) ok = selfTest(allowlist, bundles, orcaDir, html);
-else {
+// SKIP-PROTOCOL.md: the privacy clause always runs; without a built orca/ the bundle clauses did not, so the
+// row is a SKIP (exit 77) unless something failed.
+const skips = built ? [] : ['the bundle clauses did not run: no built orca/. Next step: nix develop .#orca --command bash scripts/build-orca.sh'];
+let code;
+if (process.argv.includes('--self-test')) {
+    const ok = selfTest(allowlist, bundles, orcaDir, html);
+    code = ok ? verdictExit(`${NAME} self-test`, [], skips) : 1;
+} else {
     const fails = [...(bundles ? drift(allowlist, bundles, orcaDir) : []), ...privacyDrift(allowlist, html)];
     if (fails.length) {
         console.error(`${NAME}: FAIL -- ${fails.length} problem(s)`);
         for (const f of fails) console.error(`  ${f}`);
         console.error(`  Next step: add or correct the named row in ${ALLOWLIST_REL}, citing the Orca source that makes the request, then rerun.`);
-        ok = false;
-    } else {
-        console.log(`${NAME}: PASS -- ${bundles ? `${bundles.daemon.size} daemon and ${bundles.web.size} web-builder host(s) in the shipped Orca bundles each have an allowlist row; shared allow rows say so; no stale Orca row; ` : ''}the privacy page lists the ${orcaPageHosts(allowlist).size} derived Orca host(s) and the agent-provider statement`);
-        ok = true;
     }
+    code = verdictExit(NAME, fails, skips);
+    if (code === 0) console.log(`${NAME}: PASS -- ${bundles.daemon.size} daemon and ${bundles.web.size} web-builder host(s) in the shipped Orca bundles each have an allowlist row; shared allow rows say so; no stale Orca row; the privacy page lists the ${orcaPageHosts(allowlist).size} derived Orca host(s) and the agent-provider statement`);
 }
-process.exit(ok ? 0 : 1);
+process.exit(code);
