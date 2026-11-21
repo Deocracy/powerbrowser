@@ -172,6 +172,9 @@ export function subscribeOpenFiles(cb: (files: OrcaOpenFile[]) => void): () => v
 export type OrcaWorkspaces = {
   worktrees: Array<{ id: string; path: string; isArchived: boolean; local: boolean }>
   folders: Array<{ id: string; path: string; local: boolean }>
+  /** Audit 65-WR-03: Orca's hasHydratedWorktreePurge, set once every repo's first authoritative worktree listing has
+   * arrived; until then the list may be partial, so the host removes no root. Optional for an older host. */
+  hydrated?: boolean
 }
 
 /** B-3: Orca's worktrees and folder workspaces with the CA-12 predicate. */
@@ -185,7 +188,8 @@ export function subscribeWorktrees(cb: (workspaces: OrcaWorkspaces) => void): ()
         id: f.id,
         path: f.folderPath,
         local: !f.connectionId && worktreeIsLocal(getFolderWorkspaceWorktree(f) as WorktreeRecord, lookup, paired)
-      }))
+      })),
+      hydrated: state.hasHydratedWorktreePurge === true
     }
   }, cb)
 }

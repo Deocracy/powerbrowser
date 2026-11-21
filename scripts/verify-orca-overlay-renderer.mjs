@@ -512,9 +512,40 @@ export function checkLocalPredicate(apiText) {
     return fails;
 }
 
+const WORKTREE_HELPERS = join(ORCA, 'src', 'renderer', 'src', 'store', 'slices', 'worktree-helpers.ts');
+const HYDRATED_FIELD = 'hasHydratedWorktreePurge';
+
+/**
+ * Clause f2 (65-WR-03), run: B-3 (subscribeWorktrees) reports `hydrated` exactly as Orca's store flag that the first
+ * authoritative worktree listing is complete (HYDRATED_FIELD, which Orca's worktree slice must still declare as a
+ * boolean): false while the store's flag is false, true once it is. A projection without the flag, or one that
+ * reports hydrated before the store does, is red.
+ */
+export function checkHydratedFlag(apiText, helpersText) {
+    if (!new RegExp(`\\b${HYDRATED_FIELD}: boolean\\b`).test(helpersText)) return [`Orca's worktree slice no longer declares ${HYDRATED_FIELD}: boolean (source moved): find the field that means "the first full worktree list has arrived"`];
+    const fails = [];
+    for (const flag of [false, true]) {
+        const state = { repos: [], worktreesByRepo: {}, folderWorkspaces: [], [HYDRATED_FIELD]: flag };
+        const mod = evaluate(apiText, ['subscribeWorktrees'], {
+            LOCAL_EXECUTION_HOST_ID: 'local', toRuntimeExecutionHostId: id => `runtime:${id}`, readStoredWebRuntimeEnvironment: () => null,
+            useAppStore: { getState: () => state, subscribe: () => () => {} },
+        });
+        let projected = null;
+        try { mod?.subscribeWorktrees(v => { projected = v; }); } catch (error) { return [`subscribeWorktrees threw: ${error.message}`]; }
+        if (!projected) return ['subscribeWorktrees is absent or never called back (source moved)'];
+        if (!('hydrated' in projected)) { fails.push('subscribeWorktrees sends no hydrated flag: the host still guesses when the worktree list is complete'); break; }
+        if (projected.hydrated !== flag) fails.push(`subscribeWorktrees reports hydrated=${projected.hydrated} while Orca's ${HYDRATED_FIELD} is ${flag}`);
+    }
+    return fails;
+}
+
 async function clauseF() {
     if (!(await loadTs())) return { skip: 'theia/node_modules/typescript is absent (install Theia)' };
-    return { fails: checkLocalPredicate(readFileSync(WORKSPACE_API, 'utf8')) };
+    const api = readFileSync(WORKSPACE_API, 'utf8');
+    const fails = checkLocalPredicate(api);
+    if (existsSync(WORKTREE_HELPERS)) fails.push(...checkHydratedFlag(api, readFileSync(WORKTREE_HELPERS, 'utf8')));
+    else return { fails, note: 'hydrated flag not checked (orca/src is absent)' };
+    return { fails };
 }
 
 // ---------------------------------------------------------------- driver
@@ -625,6 +656,17 @@ async function selfTest() {
         const noResolver = api.replace(/const host = resolveWorktreeExecutionHost\(lookup, worktree\)\n\s*return host\.kind === 'resolved' && hostIsPaired\(host\.hostId, paired\)/, "return !worktree.hostId || worktree.hostId === 'local'");
         ok('f: the host-less plant applies', noResolver !== api);
         ok('f: a host-less worktree taken as local without Orca\'s resolver is red, naming it', checkLocalPredicate(noResolver).some(f => /no host of its own/.test(f)));
+        // f2 (65-WR-03).
+        if (existsSync(WORKTREE_HELPERS)) {
+            const helpers = readFileSync(WORKTREE_HELPERS, 'utf8');
+            ok('f2: control green on the tree', checkHydratedFlag(api, helpers).length === 0);
+            const noFlag = api.replace(/,\n\s*hydrated: state\.hasHydratedWorktreePurge === true\n/, '\n');
+            ok('f2: the no-flag plant applies', noFlag !== api);
+            ok('f2: a projection without the hydrated flag is red, naming it', checkHydratedFlag(noFlag, helpers).some(f => /sends no hydrated flag/.test(f)));
+            const early = api.replace(/hydrated: state\.hasHydratedWorktreePurge === true/, 'hydrated: true');
+            ok('f2: a projection that reports hydrated before the store does is red, naming it', early !== api && checkHydratedFlag(early, helpers).some(f => /reports hydrated=true while/.test(f)));
+            ok('f2: Orca dropping the field is red "source moved"', checkHydratedFlag(api, helpers.replace(/hasHydratedWorktreePurge: boolean/g, 'hydratedPurge: boolean')).some(f => /source moved/.test(f)));
+        } else console.log('  skip f2: orca/src is absent');
         ok('c: no store listener is red "parser blind"', checkStoreListeners(entry.replace(/useAppStore\.subscribe\(\(state, prior\)/, 'useAppStore.subscribeTo((state, prior)')).some(f => /parser blind/.test(f)));
     }
     if (!ran) { console.log(`${NAME} self-test: SKIP -- neither Orca's postcss nor Theia's typescript is installed`); return 0; }
