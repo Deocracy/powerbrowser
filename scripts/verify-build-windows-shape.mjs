@@ -340,6 +340,28 @@ function runChecks(root, overrides = {}) {
     if (shaAt < 0 || keyAt < 0 || buildAt < 0 || !(shaAt < keyAt && keyAt < buildAt)) {
         fail('(job)', 'gates', `does not run sha_gate, then key_gate, then the first build step, in that order. Next step: reorder the steps.`);
     }
+    // 6a. rulings (P68-21, harness-other-04): no Windows release carries Orca's shipped closure while an owner licence
+    // ruling is pending. The step must exist, run once the key gate has passed, and come before the first build step; it is
+    // a step after key_gate, so the fail-open loop below also refuses continue-on-error, `|| true` and `set +e` on it.
+    const rulingsAt = steps.map((st, i) => [st, i]).filter(([st]) => /\bscripts\/verify-licence-allowlist\.mjs --rulings\b/.test(String(st.run ?? ''))).map(([, i]) => i);
+    if (rulingsAt.length === 0) {
+        fail('(job)', 'rulings', `has no step running scripts/verify-licence-allowlist.mjs --rulings, so a Windows release could carry Orca's closure while an owner licence ruling is pending (P68-21). Next step: restore the guard before the first build step, the way ${REF_JOB} has it.`);
+    } else if (keyAt >= 0 && rulingsAt[0] < keyAt) {
+        fail(steps[rulingsAt[0]].name ?? '(step)', 'rulings', `runs the --rulings guard before key_gate, so it runs on a commit the key gate has not admitted. Next step: move it after key_gate.`);
+    } else if (buildAt >= 0 && rulingsAt[0] > buildAt) {
+        fail(steps[rulingsAt[0]].name ?? '(step)', 'rulings', `runs the --rulings guard after the first build step (step ${buildAt}), so the build has already started while a licence ruling may be pending. Next step: move it before the first build step.`);
+    }
+    // The guard may be called through scripts/run-no-skip.sh (a check that did not run is a failure there). The wrapper is not
+    // a way to hide one: --allow-skip names a pattern for a documented normal skip, and --rulings has none (it exits 0 or 1),
+    // so any --allow-skip on this call is red, whatever its pattern; `|| true` and continue-on-error are refused by the
+    // fail-open loop below like for every step.
+    if (rulingsAt.length > 0) {
+        for (const line of String(steps[rulingsAt[0]].run ?? '').split('\n').filter(l => /\bverify-licence-allowlist\.mjs --rulings\b/.test(l))) {
+            if (/\brun-no-skip\.sh\b/.test(line) && /--allow-skip\b/.test(line)) {
+                fail(steps[rulingsAt[0]].name ?? '(step)', 'rulings', `calls the --rulings guard through run-no-skip.sh with --allow-skip (${line.trim()}), which lets a skipped guard pass. The guard has no normal skip. Next step: remove --allow-skip.`);
+            }
+        }
+    }
     steps.forEach((st, i) => {
         if (keyAt >= 0 && i > keyAt && String(st.if ?? '') !== KEY_IF) {
             fail(st.name ?? '(step)', 'gates', `step '${st.name ?? st.uses}' after key_gate has if: ${JSON.stringify(st.if ?? null)}, not ${KEY_IF}. Next step: restore the if:.`);
@@ -504,6 +526,41 @@ function selfTest() {
     const NEEDS = `    needs: [${SIDECAR.name}, ${ORCA.name}]\n`;
     const EXACT = `not exactly [${SIDECAR.name}, ${ORCA.name}]`;
     const download = p => `      - name: Download the hosted Windows ${p === SIDECAR ? 'sidecar into windows-sidecar/' : 'Orca tree into windows-orca/'} (data, admitted by its digest before staging)\n        if: steps.key_gate.outputs.build == 'true'\n        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n          name: ${p.name}\n          path: ${p.name}\n`;
+    // The Orca rulings guard step, found by what it is (the step of this job that runs the licence-allowlist rulings check, through
+    // run-no-skip.sh or directly), never by a quoted line: a rewording of the step or its call must not break the plants.
+    const stepStarts = [...slice.matchAll(/^ {6}- /gm)].map(m => m.index);
+    const stepBlocks = stepStarts.map((at, i) => ({ at, end: i + 1 < stepStarts.length ? stepStarts[i + 1] : slice.length }));
+    const blockOf = re => {
+        const hit = stepBlocks.filter(b => re.test(slice.slice(b.at, b.end)));
+        if (hit.length === 0) throw new Error(`self-test: no step of the ${JOB} job matches ${re}`);
+        return hit[0];
+    };
+    const RULINGS_LINE = /^( *)[^\n]*\bverify-licence-allowlist\.mjs --rulings\b[^\n]*$/m;
+    const RULINGS_CMD = 'nix develop .#theia --command node scripts/verify-licence-allowlist.mjs --rulings';
+    const rulingsBlock = () => blockOf(/\bverify-licence-allowlist\.mjs --rulings\b/);
+    const withRulings = (mutate, allowSame = false) => {
+        const blk = rulingsBlock();
+        const text = slice.slice(blk.at, blk.end);
+        const out = mutate(text);
+        if (out === text && !allowSame) throw new Error('self-test: a rulings-guard plant changed nothing');
+        return real.slice(0, h) + slice.slice(0, blk.at) + out + slice.slice(blk.end) + real.slice(t);
+    };
+    // Rewrites the one command line of the step. The line plants use a fixed wrapped call, so they do not depend on how the
+    // step is written today.
+    const rulingsLine = (to, allowSame = false) => withRulings(text => text.replace(RULINGS_LINE, (_m, indent) => `${indent}${to}`), allowSame);
+    const WRAPPED = `bash scripts/run-no-skip.sh -- ${RULINGS_CMD}`;
+    const rulingsMoved = () => {
+        const blk = rulingsBlock();
+        const text = slice.slice(blk.at, blk.end);
+        const without = slice.slice(0, blk.at) + slice.slice(blk.end);
+        const build = (() => {
+            const hit = [...without.matchAll(/^ {6}- /gm)].map(m => m.index);
+            const idx = hit.findIndex((at, i) => /\.\/mach build/.test(without.slice(at, i + 1 < hit.length ? hit[i + 1] : without.length)));
+            if (idx < 0) throw new Error('self-test: no build step found');
+            return idx + 1 < hit.length ? hit[idx + 1] : without.length;
+        })();
+        return real.slice(0, h) + without.slice(0, build) + text + without.slice(build) + real.slice(t);
+    };
     const plants = [
         ['runner moved to a hosted label', sliceEdit('    runs-on: [self-hosted, powerbrowser-release]', '    runs-on: ubuntu-latest'), 'runner', 'runs-on'],
         ['secrets reference added', sliceEdit('    env:\n      RELEASE_SHA: ${{ inputs.sha }}\n', '    env:\n      RELEASE_SHA: ${{ inputs.sha }}\n      PROBE: ${{ secrets.PROBE }}\n'), 'secrets', 'secrets'],
@@ -523,6 +580,15 @@ function selfTest() {
         ['pipefail removed from the cross-build step', sliceEdit('          set -euo pipefail\n          podman run --rm', '          podman run --rm'), 'gates', 'pipefail'],
         ['identity upload carrying the MAR', sliceEdit('            objdir-windows-x86_64/dist/bin/application.ini\n', '            objdir-windows-x86_64/dist/bin/application.ini\n            objdir-windows-x86_64/dist/release-windows/*.complete.mar\n'), 'retention', 'retention-days 7'],
         ['upload retention raised', sliceEdit('          retention-days: 1\n          overwrite: true', '          retention-days: 5\n          overwrite: true'), 'retention', 'retention-days 5'],
+        // harness-other-04: the licence-rulings guard (P68-21), found structurally; the wrapped plants use run-no-skip.sh whatever the step says today
+        ['rulings guard removed', rulingsLine('true'), 'rulings', 'no step running scripts/verify-licence-allowlist.mjs --rulings'],
+        ['rulings guard moved after the first build step', rulingsMoved(), 'rulings', 'after the first build step'],
+        ['rulings guard fails open (continue-on-error)', withRulings(text => text.replace(/^( *if: [^\n]*)$/m, '$1\n        continue-on-error: true')), 'gates', 'continue-on-error'],
+        ['rulings guard swallows a failure (|| true)', rulingsLine(`${RULINGS_CMD} || true`), 'gates', '|| true'],
+        ['rulings guard gated by another if:', withRulings(text => text.replace(/^( *if: [^\n]*)$/m, '$1 && false')), 'gates', 'has if:'],
+        ['rulings guard through run-no-skip.sh with an allow-skip pattern that matches everything', rulingsLine(`bash scripts/run-no-skip.sh --allow-skip '.*' -- ${RULINGS_CMD}`), 'rulings', '--allow-skip'],
+        ['rulings guard through run-no-skip.sh followed by || true', rulingsLine(`${WRAPPED} || true`), 'gates', '|| true'],
+        ['rulings guard through run-no-skip.sh with continue-on-error', withRulings(text => text.replace(RULINGS_LINE, (_m, indent) => `${indent}${WRAPPED}`).replace(/^( *if: [^\n]*)$/m, '$1\n        continue-on-error: true')), 'gates', 'continue-on-error'],
         ['image build without --no-cache', sliceEdit('--pull=always --no-cache -t pb-gecko-build', '--pull=always -t pb-gecko-build'), 'image', '--no-cache'],
         // rule 11 (G-54a, P68-03): the needs edges are exactly the hosted producers
         ['a third needs edge', sliceEdit(NEEDS, `    needs: [${SIDECAR.name}, ${ORCA.name}, build-linux]\n`), 'independent', EXACT],
@@ -582,6 +648,12 @@ function selfTest() {
     scriptPlants.push(['package-windows.sh never copies from the Orca directory (vacuous admission order)', { script: noOrcaCopy, text: real }, ORCA.name, 'never copies']);
 
     let failed = 0;
+    // Control: the guard through run-no-skip.sh, written as the plants write it, is green (the wrapper is accepted).
+    {
+        const { failures } = runChecks(REPO_ROOT, { text: rulingsLine(WRAPPED, true) });
+        if (failures.length === 0) console.log('  ok  control: the rulings guard through run-no-skip.sh is green');
+        else { console.error(`${NAME}: --self-test FAIL -- the wrapped rulings guard went red: ${failures.map(fmt).join(' | ')}`); failed += 1; }
+    }
     for (const [name, text, rule, value] of plants) {
         const { failures } = runChecks(REPO_ROOT, { text });
         const hit = failures.some(f => f.file === RELEASE_REL && f.job === JOB && f.rule === rule && (f.msg.includes(value) || f.step.includes(value)));

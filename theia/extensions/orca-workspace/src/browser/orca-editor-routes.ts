@@ -46,6 +46,17 @@ export const ORCA_EDITOR_ROUTES: { readonly [key: string]: OrcaEditorTarget } = 
     'check-details': 'hosted:check-details',
 });
 
+/**
+ * 65-WR-05: the words a diff tab title shows for each diff rule, Orca's own strings where it has them. A combined
+ * diff opens its first entry by that entry's rule, so the title names the rule, never Orca's diff-source identifier.
+ */
+export const ORCA_DIFF_RULE_LABELS: { readonly [rule: string]: string } = Object.freeze({
+    'unstaged': 'Unstaged',
+    'staged': 'Staged',
+    'branch': 'Branch',
+    'commit': 'Commit',
+});
+
 /** B-2: one editor-type Orca tab, as the bundle's subscribeOpenFiles reports it. Object ids are 40 or 64 lower-case hex, or null. */
 export interface OrcaOpenFile {
     id: string;
@@ -70,6 +81,8 @@ export interface OrcaOpenFile {
 export interface OrcaWorkspaceSnapshot {
     worktrees: Array<{ id: string; path: string; isArchived: boolean; local: boolean }>;
     folders: Array<{ id: string; path: string; local: boolean }>;
+    /** 65-WR-03: the store's hasHydratedWorktreePurge; false while Orca is still listing repositories, absent from an older bundle. */
+    hydrated?: boolean;
 }
 
 /** The bundle exports this extension calls (B-2, B-3, C64-1); orca-pane-entry's consumer clause compares them with the entry's exports. */
@@ -132,7 +145,8 @@ export function needsHead(file: OrcaOpenFile): boolean {
         || ((file.diffSource === 'combined-uncommitted' || file.diffSource === 'combined-all') && file.combinedFirst?.area === 'staged'));
 }
 
-const joinPath = (root: string, rel: string): string => `${root.replace(/\/+$/, '')}/${rel}`;
+const trimSlash = (path: string): string => path.replace(/\/+$/, '');
+const joinPath = (root: string, rel: string): string => `${trimSlash(root)}/${rel}`;
 const blob = (id: string | null | undefined): string => id ?? '';
 
 /** CA-03: the sides of one diff rule; a null object id is an empty side. */
@@ -187,7 +201,7 @@ export function routeOpenFile(file: OrcaOpenFile, helpers: OrcaRouteHelpers = {}
         const rel = combined ? first!.relativePath : file.relativePath;
         const oldRel = combined ? first!.oldPath : file.oldPath;
         const [left, right] = diffSides(file, rule, rel, oldRel, combined ? first!.area : undefined, helpers);
-        return { open: 'diff', left, right, label: `${rel.split('/').pop()} (${source})` };
+        return { open: 'diff', left, right, label: `${rel.split('/').pop()} (${ORCA_DIFF_RULE_LABELS[rule] ?? 'Changes'})` };
     }
     // conflict-review (CA-02): the merge editor needs stages 2 and 3; the one-sided kinds open the working file.
     const conflict = selectedConflict(file)!;
@@ -244,8 +258,13 @@ export class OrcaEditorRouter implements FrontendApplicationContribution {
     protected api: OrcaWorkspaceBundleApi | undefined;
     /** Opened URI (string) -> its widget and the Orca records naming it. */
     protected readonly byUri = new Map<string, Mapping>();
-    /** Orca record id -> [routing signature, opened URI or undefined when nothing opened]. */
-    protected readonly known = new Map<string, { signature: string; uri: string | undefined }>();
+    /**
+     * Orca record id -> [routing signature, opened URI or undefined when nothing opened]. failed: the open threw;
+     * released: PB closed its widget because the store dropped its root (closeCleanUnder).
+     */
+    protected readonly known = new Map<string, { signature: string; uri: string | undefined; failed?: boolean; released?: boolean }>();
+    /** The last snapshot applied, replayed by retry(). */
+    protected lastFiles: OrcaOpenFile[] | undefined;
     protected readonly logged = new Set<string>();
     protected firstSnapshot = true;
     protected queue: Promise<void> = Promise.resolve();
@@ -279,7 +298,34 @@ export class OrcaEditorRouter implements FrontendApplicationContribution {
         }
     }
 
+    /**
+     * 65-WR-02, 65-WR-03: OrcaRootSync calls this after it applied the roots (rootPaths: the store's local roots, as
+     * file-system paths). A record whose open failed (its worktree was not yet a trusted root) is opened again from the
+     * last snapshot, so a failed open is never cached for good under an unchanged signature; a record whose widget
+     * closeCleanUnder disposed is opened again once its worktree is a root again.
+     */
+    retry(rootPaths: readonly string[]): void {
+        const roots = new Set(rootPaths.map(trimSlash));
+        const byId = new Map((this.lastFiles ?? []).map(f => [f.id, f]));
+        let replay = false;
+        for (const [id, entry] of [...this.known]) {
+            const file = byId.get(id);
+            if (entry.failed || (entry.released && file !== undefined && roots.has(trimSlash(file.worktreePath)))) {
+                this.known.delete(id);
+                replay = true;
+            }
+        }
+        // A newer snapshot already waiting is the one to apply; the last applied one never replaces it.
+        if (replay && this.latest === undefined && this.lastFiles) {
+            this.schedule(this.lastFiles);
+        }
+    }
+
+    /** Records that failed in the first snapshot: their retry opens them the way that snapshot would, without focus. */
+    protected readonly openQuietly = new Set<string>();
+
     protected async apply(files: OrcaOpenFile[]): Promise<void> {
+        this.lastFiles = files;
         const first = this.firstSnapshot;
         this.firstSnapshot = false;
         const activeWorktree = this.api?.activeWorktree() ?? null;
@@ -292,13 +338,21 @@ export class OrcaEditorRouter implements FrontendApplicationContribution {
                 continue;
             }
             this.detach(file.id);
-            const mode = first ? 'open' : file.active && file.worktreeId === activeWorktree ? 'activate' : file.active ? 'reveal' : 'open';
+            const quiet = first || this.openQuietly.has(file.id);
+            const mode = quiet ? 'open' : file.active && file.worktreeId === activeWorktree ? 'activate' : file.active ? 'reveal' : 'open';
             // One record that cannot open (a refused read, a missing file) never holds up the rest of the snapshot.
+            let failed = false;
             const uri = await this.openRecord(file, mode).catch(err => {
+                failed = true;
                 this.logOnce(file.id, `${routeKeyOf(file)} did not open in Theia: ${(err as Error)?.message ?? 'unknown error'}`);
                 return undefined;
             });
-            this.known.set(file.id, { signature, uri });
+            this.known.set(file.id, failed ? { signature, uri, failed } : { signature, uri });
+            if (failed && first) {
+                this.openQuietly.add(file.id);
+            } else if (!failed) {
+                this.openQuietly.delete(file.id);
+            }
             if (uri) {
                 this.byUri.get(uri)?.records.set(file.id, { worktreeId: file.worktreeId, tabId: file.tabId });
             }
@@ -309,6 +363,7 @@ export class OrcaEditorRouter implements FrontendApplicationContribution {
         for (const id of [...this.known.keys()]) {
             if (!seen.has(id)) {
                 // P65-02: an Orca-side close.
+                this.openQuietly.delete(id);
                 const uri = this.detach(id);
                 if (uri) {
                     this.releaseIfOrphan(uri);
@@ -348,6 +403,10 @@ export class OrcaEditorRouter implements FrontendApplicationContribution {
             }
             this.byUri.delete(uri);
             if (this.pbDisposing.has(widget)) {
+                // 65-WR-03: PB closed it for a dropped root; its records stay closed until retry() sees the root again.
+                for (const id of mapping.records.keys()) {
+                    this.known.set(id, { signature: this.known.get(id)?.signature ?? '', uri: undefined, released: true });
+                }
                 return;
             }
             for (const [id, pick] of mapping.records) {

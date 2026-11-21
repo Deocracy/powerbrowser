@@ -29,36 +29,44 @@
 //                     deviceToken; that row is kept so Reconnect can recover), never deleted or corrupted; orcad
 //                     stopped (SIGSTOP) for longer than the client's liveness timeout read from the pinned client
 //                     source, then SIGCONT; the pairing-lost sentence with Reconnect; Reconnect brings content
-//                     back. No refusal within 60 s is the note "auth-refusal induction not achieved at the pin:
-//                     <what was seen>", not a red: induction 4 proves the class.
+//                     back. No refusal within 60 s makes the row a named SKIP (exit 77; audit
+//                     harness-live-security-12): a revoked device keeping its session would look the same, so the
+//                     row cannot PASS, and --gate fails it unless a ledger exclusion names it.
 //   4 pairing-lost    (offer refusal, P67-09) the offer file chmod 0644, the Theia frontend reloaded: pairing-lost
 //                     and the chrome row "Orca pairing failure" reading offer-mode; chmod 0600, Reconnect, content.
-//   5 browser-not-attached (P67-36) the built pb-browser-host.js moved aside (restored in finally), relaunch: the
+//   5 browser-not-attached (P67-36) the built pb-browser-host.js moved aside (restored in finally, on exit and on
+//                     SIGINT, SIGTERM or SIGHUP; a copy left aside by a SIGKILLed run is restored at start), relaunch: the
 //                     sentence with Reconnect and Details and the chrome row labelled "Orca browser host"; the
 //                     file restored, Reconnect: the page gone and OrcaBrowserHost attached.
 // Every page text read must equal a table value; the expected texts come from orca-failure-copy.ts by type
 // stripping, never spelled here.
 //
-// Runs under flock /home/chris/coding/Power-Browser/.git/pb-live.lock (re-execs itself under
-// <git common dir>/pb-live.lock unless PB_LIVE_LOCK_HELD=1), removes every ORCA_* name from its own environment
+// Takes the live lock itself (scripts/lib/live-lock.mjs; the rule is in that file's header), removes every ORCA_*
+// name from its own environment
 // first, sets MOZ_PURGE_CACHES=1, prints through installOutputRedaction, signals only recorded identities, and
 // reads the offer into memory only to find registry rows; the offer is never printed.
 //
-// SKIP (one named line, exit 0): no built PowerBrowser (objdir/dist/bin/powerbrowser or PB_FIREFOX_BIN), no built
-// orca/ (orca/out/orcad/orcad.js or orca/out/web/assets/pb-panes), or no orca-panes failure folder.
+// SKIP (one named line, exit 77): no built PowerBrowser (objdir/dist/bin/powerbrowser or PB_FIREFOX_BIN) or no built
+// orcad (orca/out/orcad/orcad.js), or induction 3 not reached. FAIL: no failure copy table, or an orcad build
+// without orca/out/web/assets/pb-panes. A recovery judged over no hosted view is red ("collector blind").
 //
-// Tier: full. --self-test is quick and pure: pageVerdict, controlVerdict and recoveryVerdict over fixtures.
+// Tier: full. --self-test is quick and pure: pageVerdict, controlVerdict and recoveryVerdict over fixtures, the
+// signal restore of the moved host bundle on a fake process, and the lock wiring.
 //
 // Usage:
 //   node scripts/verify-orca-failure-page-live.mjs
 //   node scripts/verify-orca-failure-page-live.mjs --self-test
 
-import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { stripTypeScriptTypes } from 'node:module';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { liveEnv } from './lib/firefox-bidi.mjs';
+import { LIVE_HOME_SIGNALS, liveEnv } from './lib/firefox-bidi.mjs';
+import { holdLiveLock, lockWiringFails } from './lib/live-lock.mjs';
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
 
 const NAME = 'orca-failure-page-live';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -137,8 +145,12 @@ export function controlVerdict(views, ids) {
   return fails;
 }
 
-/** Recovery: every named view lost its page and shows content again within boundMs of startedAt. */
-export function recoveryVerdict({ label, startedAt, recoveredAt, boundMs }) {
+/**
+ * Recovery: every named view lost its page and shows content again within boundMs of startedAt. harness-live-security-12:
+ * an empty id list is red, since every() over it is true at once and no pane was looked at.
+ */
+export function recoveryVerdict({ label, startedAt, recoveredAt, boundMs, ids }) {
+  if (!ids?.length) return [`recovery: ${label} -- collector blind: no hosted view to judge (the views read after the induction share no id with the hosted tabs)`];
   if (!Number.isFinite(recoveredAt)) return [`recovery: ${label} -- no recovery within ${boundMs} ms`];
   if (recoveredAt - startedAt > boundMs) return [`recovery: ${label} -- recovered after ${recoveredAt - startedAt} ms, over ${boundMs} ms`];
   return [];
@@ -187,9 +199,16 @@ function runSelfTest(table) {
     ['a blind control', controlVerdict([content({ content: false })], ['orca-pane:chat1']), 'collector blind'],
     ['a control that never found its view', controlVerdict([], ['orca-pane:term1']), 'collector blind'],
     ['a page up before the induction', controlVerdict([content({ page: 'restarting' })], ['orca-pane:chat1']), 'already shows'],
-    ['recovery within the bound is green', recoveryVerdict({ label: 'x', startedAt: 0, recoveredAt: 1000, boundMs: 60000 }), null],
-    ['no recovery within the bound', recoveryVerdict({ label: 'x', startedAt: 0, recoveredAt: NaN, boundMs: 60000 }), 'no recovery'],
-    ['a recovery after the bound', recoveryVerdict({ label: 'x', startedAt: 0, recoveredAt: 61000, boundMs: 60000 }), 'over 60000 ms'],
+    ['recovery within the bound is green', recoveryVerdict({ label: 'x', startedAt: 0, recoveredAt: 1000, boundMs: 60000, ids: ['orca-pane:chat1'] }), null],
+    ['no recovery within the bound', recoveryVerdict({ label: 'x', startedAt: 0, recoveredAt: NaN, boundMs: 60000, ids: ['orca-pane:chat1'] }), 'no recovery'],
+    ['a recovery after the bound', recoveryVerdict({ label: 'x', startedAt: 0, recoveredAt: 61000, boundMs: 60000, ids: ['orca-pane:chat1'] }), 'over 60000 ms'],
+    // harness-live-security-12: the restored views carry other ids, so the filtered list is empty.
+    ['a recovery judged over no view', recoveryVerdict({ label: 'x', startedAt: 0, recoveredAt: 10, boundMs: 60000, ids: [] }), 'collector blind'],
+    // harness-live-security-04: a SIGTERM during induction 5 restores the moved host bundle and still ends the run.
+    ['a SIGTERM restores the host bundle', asideSignalFails(guardAside), null],
+    ['no signal guard (the finally block only)', asideSignalFails(() => undefined), 'left the host bundle moved aside'],
+    ['a missing copy table is a FAIL, not a SKIP', (() => { const dir = mkdtempSync(join(tmpdir(), 'pb-failure-page-pre-')); try { const p = prerequisite(dir); return p.fail ? [p.fail] : []; } finally { rmSync(dir, { recursive: true, force: true }); } })(), 'failure copy table moved'],
+    ['the live path takes the live lock', lockWiringFails(NAME, import.meta.url), null],
   ];
   let bad = 0;
   for (const [label, fails, naming] of cases) {
@@ -242,11 +261,20 @@ async function live(table) {
   const { installOutputRedaction, ensurePbNode } = await import('./lib/orca-run.mjs');
   const secrets = [];
   const restoreOutput = installOutputRedaction(secrets);
+  let code = 1;
   const fails = [];
   const notes = [];
+  const skips = [];
   const fail = list => fails.push(...list);
   const hostAside = join(REPO_ROOT, `${HOST_BUNDLE_REL}.pb-aside`);
   let releasePort = null;
+  let asideGuard = null;
+  // harness-live-security-04: an earlier run ended by SIGKILL can leave the bundle aside; this run holds the live lock,
+  // so no other run is inside its induction 5 now.
+  if (!existsSync(join(REPO_ROOT, HOST_BUNDLE_REL)) && existsSync(hostAside)) {
+    renameSync(hostAside, join(REPO_ROOT, HOST_BUNDLE_REL));
+    notes.push(`restored ${HOST_BUNDLE_REL}, which an interrupted earlier run had left moved aside`);
+  }
   try {
     const OrcaEnv = await import('../powerbrowser/shell/OrcaEnv.sys.mjs');
     const policy = await importTs(POLICY_REL);
@@ -287,10 +315,12 @@ async function live(table) {
         const recovered = async (label, ids, startedAt) => {
           let at = NaN;
           try {
-            await pollFor(async () => { await showEach(ids); const v = await views(); return ids.every(id => v.some(x => x.id === id && !x.page && x.content)); }, RECOVER_MS, label);
-            at = Date.now();
+            if (ids.length) {
+              await pollFor(async () => { await showEach(ids); const v = await views(); return ids.every(id => v.some(x => x.id === id && !x.page && x.content)); }, RECOVER_MS, label);
+              at = Date.now();
+            }
           } catch { /* judged below */ }
-          return recoveryVerdict({ label, startedAt, recoveredAt: at, boundMs: RECOVER_MS });
+          return recoveryVerdict({ label, startedAt, recoveredAt: at, boundMs: RECOVER_MS, ids });
         };
         const ctx = { app, orcaState, views, click, diagnosticsRow, pagesShow, recovered, showEach };
         try {
@@ -411,7 +441,9 @@ async function live(table) {
             signalIdentity(st.pid, st.ticks, 'SIGCONT');
             const seen = await ctx.pagesShow('pairing-lost', hostedIds(), RECOVER_MS);
             if (!seen.every(v => v.page === 'pairing-lost') || !seen.length) {
-              notes.push(`auth-refusal induction not achieved at the pin: ${seen.map(v => `${v.id}=${v.page ?? (v.content ? 'content' : 'empty')}`).join(', ') || 'no view read'} (rows removed: ${drop.size})`);
+              // harness-live-security-12: not a note. A revoked device that keeps its session looks exactly like this, so
+              // the row cannot PASS: it is a named SKIP (exit 77), which --gate fails unless a ledger exclusion names it.
+              skips.push(`induction 3 (auth refusal through a revoked device, A-7) did not reach the pairing-lost page within ${RECOVER_MS} ms: ${seen.map(v => `${v.id}=${v.page ?? (v.content ? 'content' : 'empty')}`).join(', ') || 'no view read'} (rows removed: ${drop.size}); a revoked device keeping its session would look the same. Next step: induce it by hand, or record an owner ruling`);
               // The pause past the liveness bound can leave another class up (the browser host detached while orcad
               // was stopped): its own Reconnect must bring content back before the next induction's control.
               const shown = seen.find(v => v.page);
@@ -482,7 +514,8 @@ async function live(table) {
         fail(await ctx.recovered('port-in-use Restart Orca', ids, t0));
       });
 
-      // 5 browser-not-attached (launch 3, the host bundle moved aside)
+      // 5 browser-not-attached (launch 3, the host bundle moved aside; put back on exit and on an ending signal too)
+      asideGuard = guardAside(hostAside, join(REPO_ROOT, HOST_BUNDLE_REL));
       renameSync(join(REPO_ROOT, HOST_BUNDLE_REL), hostAside);
       await session(async ctx => {
         await readyOrca(ctx);
@@ -494,6 +527,7 @@ async function live(table) {
         await ctx.app.evaluateIn(ctx.app.chrome, 'window.powerbrowserHideDiagnostics(); true');
         renameSync(hostAside, join(REPO_ROOT, HOST_BUNDLE_REL));
         const t0 = Date.now();
+        if (!ids.length) fail(['browser-not-attached: collector blind -- no hosted view was read after the relaunch']);
         if (ids.length) await ctx.click(ids[0], 'reconnect');
         fail(await ctx.recovered('browser-not-attached Reconnect', ids.filter(id => hostedIds().includes(id)), t0));
         const host = await probe(ctx.app, `return get('OrcaBrowserHost').state;`);
@@ -507,20 +541,74 @@ async function live(table) {
   } finally {
     if (releasePort) await releasePort();
     if (existsSync(hostAside)) renameSync(hostAside, join(REPO_ROOT, HOST_BUNDLE_REL));
+    asideGuard?.dispose();
     for (const n of notes) console.log(`${NAME}: note -- ${n}`);
     for (const f of fails) console.log(`${NAME}: FAIL -- ${f}`);
-    console.log(fails.length ? `${NAME}: FAIL -- ${fails.length} failure(s)` : `${NAME}: PASS -- every hosted view showed the PowerBrowser page for each induced class and recovered; after the restart the client kept its environment id, logged no stranded-environment line and a CLI terminal became a hosted tab`);
+    if (fails.length) console.log(`${NAME}: FAIL -- ${fails.length} failure(s)`);
+    code = verdictExit(NAME, fails, skips);
+    if (code === 0) console.log(`${NAME}: PASS -- every hosted view showed the PowerBrowser page for each induced class and recovered; after the restart the client kept its environment id, logged no stranded-environment line and a CLI terminal became a hosted tab`);
     restoreOutput();
   }
-  return fails.length ? 1 : 0;
+  return code;
 }
 
-function skipReason() {
-  const bin = process.env.PB_FIREFOX_BIN || join(REPO_ROOT, 'objdir', 'dist', 'bin', 'powerbrowser');
-  if (!existsSync(bin)) return 'no built PowerBrowser (objdir/dist/bin/powerbrowser or PB_FIREFOX_BIN)';
-  if (!existsSync(join(REPO_ROOT, 'orca/out/orcad/orcad.js')) || !existsSync(join(REPO_ROOT, 'orca/out/web/assets/pb-panes'))) return 'no built orca/ (orca/out/orcad/orcad.js, orca/out/web/assets/pb-panes)';
-  if (!existsSync(join(REPO_ROOT, COPY_REL))) return `no ${COPY_REL}`;
-  return null;
+/**
+ * harness-live-security-04: while `aside` holds the moved build output, puts it back at `target` on process exit and on
+ * each LIVE_HOME_SIGNALS signal. liveHome's own handler ends the process by re-raising its signal with the default
+ * disposition, which skips every finally block; this handler restores first, then re-raises when no other listener (a
+ * session's SIGINT unwinding) remains to end the run. Returns { dispose }.
+ */
+export function guardAside(aside, target, proc = process, signals = LIVE_HOME_SIGNALS) {
+  const restore = () => { try { if (existsSync(aside) && !existsSync(target)) renameSync(aside, target); } catch { /* best effort */ } };
+  const handlers = signals.map(sig => {
+    const onSignal = () => {
+      restore();
+      proc.off(sig, onSignal);
+      if (proc.listenerCount(sig) <= 1) proc.kill(proc.pid, sig);
+    };
+    proc.on(sig, onSignal);
+    return [sig, onSignal];
+  });
+  proc.once('exit', restore);
+  return { dispose: () => { for (const [sig, h] of handlers) proc.off(sig, h); proc.off('exit', restore); } };
+}
+
+/**
+ * Red reasons when `install(aside, target, proc)` does not restore a moved file on SIGTERM: a fake process with a
+ * liveHome-like listener registered first (it yields while another listener exists, else ends the run), as in a run.
+ */
+export function asideSignalFails(install) {
+  const dir = mkdtempSync(join(tmpdir(), 'pb-failure-page-aside-'));
+  try {
+    const target = join(dir, 'pb-browser-host.js');
+    const aside = `${target}.pb-aside`;
+    writeFileSync(aside, 'bundle');
+    const proc = new EventEmitter();
+    proc.pid = 4242;
+    const raised = [];
+    proc.kill = (pid, sig) => { raised.push(sig); proc.emit(sig); };
+    let ended = null;
+    const liveHomeLike = () => { if (proc.listenerCount('SIGTERM') > 1) return; proc.off('SIGTERM', liveHomeLike); ended = 'SIGTERM'; };
+    proc.on('SIGTERM', liveHomeLike);
+    install(aside, target, proc);
+    proc.emit('SIGTERM');
+    const fails = [];
+    if (!existsSync(target)) fails.push('a SIGTERM during induction 5 left the host bundle moved aside');
+    if (ended !== 'SIGTERM') fails.push(`the run did not end by SIGTERM (re-raised ${raised.join(', ') || 'nothing'})`);
+    return fails;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** { skip, fail }: a missing build output is a SKIP; a missing tracked source (the copy table) is a FAIL. */
+export function prerequisite(root = REPO_ROOT) {
+  if (!existsSync(join(root, COPY_REL))) return { fail: `${COPY_REL} is missing: the failure copy table moved. Next step: point COPY_REL at it` };
+  const bin = process.env.PB_FIREFOX_BIN || join(root, 'objdir', 'dist', 'bin', 'powerbrowser');
+  if (!existsSync(bin)) return { skip: 'no built PowerBrowser (objdir/dist/bin/powerbrowser or PB_FIREFOX_BIN). Next step: the Firefox build in docs/BUILD.md' };
+  if (!existsSync(join(root, 'orca/out/orcad/orcad.js'))) return { skip: 'no built orca/ (orca/out/orcad/orcad.js). Next step: nix develop .#orca --command bash scripts/build-orca.sh' };
+  if (!existsSync(join(root, 'orca/out/web/assets/pb-panes'))) return { fail: 'the Orca build is incomplete: orca/out/orcad/orcad.js exists but orca/out/web/assets/pb-panes does not. Next step: nix develop .#orca --command bash scripts/build-orca.sh' };
+  return {};
 }
 
 const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
@@ -531,16 +619,16 @@ if (isMain) {
     process.exit(2);
   }
   if (args.includes('--self-test')) process.exit(runSelfTest(await importTs(COPY_REL)));
-  const skip = skipReason();
-  if (skip) {
-    console.log(`${NAME}: SKIP -- ${skip}`);
-    process.exit(0);
+  const locked = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
+  if (locked !== null) process.exit(locked);
+  const pre = prerequisite();
+  if (pre.fail) {
+    console.log(`${NAME}: FAIL -- ${pre.fail}`);
+    process.exit(1);
   }
-  if (process.env.PB_LIVE_LOCK_HELD !== '1') {
-    const common = execFileSync('git', ['-C', REPO_ROOT, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim();
-    const r = spawnSync('flock', [join(common, 'pb-live.lock'), process.execPath, fileURLToPath(import.meta.url), ...args],
-      { stdio: 'inherit', env: { ...process.env, PB_LIVE_LOCK_HELD: '1' } });
-    process.exit(r.status ?? 1);
+  if (pre.skip) {
+    console.log(skipLine(NAME, pre.skip));
+    process.exit(SKIP_EXIT);
   }
   for (const key of Object.keys(process.env)) if (key.startsWith('ORCA_')) delete process.env[key];
   process.exit(await live(await importTs(COPY_REL)));

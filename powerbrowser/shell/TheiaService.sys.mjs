@@ -97,6 +97,8 @@ export const TheiaService = {
   _port: null,
   _pid: null,
   _proc: null,
+  // The handle stop() signalled, kept after stop() clears _proc so stopAndReap can still wait on it.
+  _signalledProc: null,
   _browserElement: null,
   _nodePath: null,
   _backendMain: null,
@@ -105,6 +107,8 @@ export const TheiaService = {
   // <app>/lib) and passed to the sidecar in _spawnAndGate. Null until resolved.
   _pluginsDir: null,
   _configDir: null,
+  // Audit fix 67-WR-03: OrcaService.orcadPort, handed in by powerbrowser.js.
+  _orcaPortSource: null,
   _swapped: false,
   _shuttingDown: false,
 
@@ -153,6 +157,7 @@ export const TheiaService = {
   _errorShown: false,
   _restartInFlight: false,
   _recoveryProbeActive: false,
+  _recoveryProbeGeneration: 0,
 
   // 01-13: the classification of the error state CURRENTLY on screen -- true,
   // false, or null when there is no error state at all. Written and cleared at
@@ -323,6 +328,13 @@ export const TheiaService = {
       this._reapLog(`Leftover reap failed: ${err.message} -- best-effort cleanup of a previous launch, continuing to this launch's own spawn.`);
     }
 
+    // Audit fix orcad-hosting-06: Orca's hand-off files left by a previous session that never stopped
+    // (a crash, a kill), removed before this launch's first backend spawn. The frontend boots before
+    // OrcaService runs (powerbrowser.js starts Orca once this start settles), and the backend would hand it
+    // the old pairing offer as this session's. Here is before any orcad of this session exists, so nothing
+    // removed is current.
+    await this._clearStaleOrcaHandOff();
+
     // SQL-01 (12-CODE-REVIEW.md CR-04): start the chrome-side tab-store
     // writer. ensureTabStore opens (migrating), tripwires, and rebuilds from
     // sessionstore when tripped -- resolving ready/rebuilt/degraded, never
@@ -406,6 +418,8 @@ export const TheiaService = {
     }
 
     if (this._proc && this._proc.exitCode == null) {
+      // stopAndReap waits on this handle: on a normal quit it runs after this method, which clears _proc below.
+      this._signalledProc = this._proc;
       const graceMs = PowerBrowserAPI.getIntPref("powerbrowser.sidecar.killGraceMs", 3000);
       try {
         void PowerBrowserAPI.killProcess(this._proc, graceMs).catch(() => {});
@@ -471,16 +485,23 @@ export const TheiaService = {
    * UPD-30 (Phase 54): the reap the quit and restart blocker awaits. stop() is idempotent and already
    * signals the sidecar; this waits on the Subprocess handle stop() signals (the same on every
    * platform, no pid probe), bounded by powerbrowser.sidecar.killGraceMs (the same default as stop())
-   * plus 500 ms. A handle that was never live is not waited on, so a stale pid is never touched. On
+   * plus 500 ms. That handle is the live one when this method is what calls stop() first, and the one
+   * stop() recorded when stop() already ran as the quit-application-granted observer, which is the
+   * order of every normal quit. A handle that was never live is not waited on, so a stale pid is never touched. On
    * timeout it logs the live pid loudly and resolves, and any failure resolves too, so an unkillable
    * child can never hold shutdown open or reject the blocker.
    */
   async stopAndReap() {
-    const proc = this._proc && this._proc.exitCode == null ? this._proc : null;
+    const live = this._proc && this._proc.exitCode == null ? this._proc : null;
     const pid = this._pid;
     const graceMs = PowerBrowserAPI.getIntPref("powerbrowser.sidecar.killGraceMs", 3000);
     try {
       this.stop();
+      // quit-application-granted comes before the quit-application phase this blocker runs in (nsAppStartup.cpp),
+      // so on a normal quit stop() has already signalled the sidecar and cleared _proc. The handle it signalled
+      // is the one to wait on; without it this method returned at once and no quit waited on the reap.
+      const signalled = this._signalledProc;
+      const proc = live || (signalled && signalled.exitCode == null ? signalled : null);
       if (proc === null) {
         return;
       }
@@ -797,6 +818,37 @@ export const TheiaService = {
   },
 
   /**
+   * Audit fix 67-WR-03: where orcad's port comes from. powerbrowser.js sets it to OrcaService.orcadPort before
+   * this service starts; this file imports nothing but the boundary and OrcaEnv (D-96), so it is handed in.
+   */
+  setOrcaPortSource(source) {
+    this._orcaPortSource = typeof source === "function" ? source : null;
+  },
+
+  /** orcad's port from the source powerbrowser.js set, or null (the backend then refuses every offer). Never throws. */
+  _orcaPort() {
+    try {
+      const port = this._orcaPortSource ? this._orcaPortSource() : null;
+      return Number.isInteger(port) && port > 0 ? port : null;
+    } catch {
+      return null;
+    }
+  },
+
+  /** Audit fix orcad-hosting-06: the three hand-off files OrcaService writes after a ready line, removed. Never throws. */
+  async _clearStaleOrcaHandOff() {
+    try {
+      const dir = await this._orcaBridgeDir();
+      const platform = OrcaEnv.nodePlatform(PowerBrowserProcesses.platform());
+      for (const name of dir ? [OrcaEnv.ORCAD_DATA_ROOT_FILE, OrcaEnv.ORCA_WEB_PAIRING_FILE, OrcaEnv.ORCA_PANES_DIR_FILE] : []) {
+        await PowerBrowserAPI.removeStateFile(OrcaEnv.bridgeFileFor(dir, name, platform));
+      }
+    } catch (err) {
+      this._pushLog(`Stale Orca hand-off files not removed: ${err && err.message ? err.message : err}`);
+    }
+  },
+
+  /**
    * Spawns the backend and waits for it to become healthy. Returns
    * `{ ok, recoverable, message, details }` (SHELL-03/D-113) instead of a bare
    * boolean, so `_restart()`/`start()` can tell an unrecoverable failure
@@ -837,6 +889,7 @@ export const TheiaService = {
     const port = beforeFirstSwap ? 0 : this._port;
     const args = [this._backendMain, "--hostname", "127.0.0.1", "--port", String(port)];
     const orcaBridgeDir = await this._orcaBridgeDir();
+    const orcaPort = this._orcaPort();
     // NO SECRET GOES IN HERE. `environment` becomes the child's
     // /proc/<pid>/environ, which is the exec-time snapshot: it is readable by
     // every same-uid process for the whole life of the backend, and nothing
@@ -909,6 +962,10 @@ export const TheiaService = {
       // OrcaService writes to. A path, never a credential. The backend captures and deletes it at module
       // load with every other POWERBROWSER_* key; null leaves the key out.
       ...(orcaBridgeDir ? { POWERBROWSER_ORCA_BRIDGE_DIR: orcaBridgeDir } : {}),
+      // Audit fix 67-WR-03 (lane G3b): orcad's port, from OrcaService's own accessor, so the backend judges a
+      // pairing offer's endpoint against the port orcad really runs on. A port number, never a credential;
+      // a pref read, so it is known before OrcaService has started. Absent, the backend refuses every offer.
+      ...(orcaPort ? { POWERBROWSER_ORCA_PORT: String(orcaPort) } : {}),
     };
 
     let proc;
@@ -1366,11 +1423,14 @@ export const TheiaService = {
    * squatter exiting, a transient condition resolving) is noticed and the
    * error layer auto-dismisses with no user action.
    */
-  async _recoveryProbeLoop() {
-    while (this._recoveryProbeActive && !this._shuttingDown) {
+  async _recoveryProbeLoop(generation) {
+    // The generation ends a loop that a stop and a later start have replaced. The flag alone cannot: a loop
+    // suspended in sleep or in _restart() across a stop-then-start sees it true again and would run beside the new one.
+    const live = () => this._recoveryProbeActive && this._recoveryProbeGeneration === generation && !this._shuttingDown;
+    while (live()) {
       const intervalMs = PowerBrowserAPI.getIntPref("powerbrowser.sidecar.recoveryProbeIntervalMs", 15000);
       await PowerBrowserAPI.sleep(intervalMs);
-      if (!this._recoveryProbeActive || this._shuttingDown) {
+      if (!live()) {
         return;
       }
       await this._restart();
@@ -1382,10 +1442,11 @@ export const TheiaService = {
       return;
     }
     this._recoveryProbeActive = true;
+    this._recoveryProbeGeneration += 1;
     // Fire-and-forget, same convention as _healthLoop() -- lives for as
     // long as _recoveryProbeActive stays true, checked at every await point --
     // and, 01-10, carrying the same one terminal handler for the same reason.
-    this._recoveryProbeLoop().catch(err => this.reportUnexpectedFailure(err));
+    this._recoveryProbeLoop(this._recoveryProbeGeneration).catch(err => this.reportUnexpectedFailure(err));
   },
 
   _stopRecoveryProbe() {

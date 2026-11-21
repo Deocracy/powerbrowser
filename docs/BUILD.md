@@ -48,6 +48,18 @@ invocations written as `node scripts/generate.mjs` below are all inside
 that shell. `verify.yml` runs them the same way; `rebase-upstream.yml` does
 not (see the **CI story** note under the rebase section).
 
+**Check exit statuses.** A check script run by `scripts/verify-platform.sh`
+exits 0 when every clause ran and passed, and 1 (any status other than 0 and
+77) when a clause failed. Exit 77 means skipped: at least one clause did not
+run because an input is absent (for example `orca/` not fetched or no built
+tree) and no clause failed, and the script prints one line
+`<name>: SKIP -- <reason>` first. The driver records such a row as SKIP, not
+PASS: `--quick`, `--only` and the full run list the skipped rows and still
+exit 0 if nothing failed, `--gate` fails on every SKIP that no open ledger
+exclusion excuses, and an exit 77 without the SKIP line is recorded as a
+FAIL. The rule is written out in
+`.planning/workstreams/orca/audit-fix/SKIP-PROTOCOL.md`.
+
 ## Theia half
 
 The app composes the frozen 49-`@theia/*`-package daily-drivable set
@@ -539,8 +551,19 @@ to equal the declared seams.
 
 Every package carries Orca at `<GreD>/orca` (beside `theia/` and `node/`; on macOS under
 `Contents/Resources/orca`): exactly `package.json`, `out/orcad/**` and `out/web/**` of the built
-`orca/` tree. No root `node_modules`, no `out/orcad-prebuilds`, no `out/runtimes`. orcad runs on
-the package's own staged Node.
+`orca/` tree, plus Orca's own `LICENSE` (its MIT copyright and permission notice, which every copy
+must carry). `powerbrowser/packaging/stage-orca-licence.sh` copies that file from the fetched
+`orca/` only when it hashes to the digest `inventory/licence-allowlist.json` records, and each
+packaging script calls it. No root `node_modules`, no `out/orcad-prebuilds`, no `out/runtimes`.
+orcad runs on the package's own staged Node.
+
+The sidecar also carries `theia/node_modules/@powerbrowser/orca-agents/` (its `package.json` and
+`bin/claude-wrapper.mjs`), staged by `powerbrowser/packaging/stage-orca-agents-wrapper.sh` in
+`package-linux.sh` and `package-macos.sh`. The orca-agents backend finds the Claude Code process
+wrapper with `require.resolve`, which Node answers by searching `node_modules` upward from
+`theia/lib/backend/`; without that file no Claude Code session gets an Orca pane (63-CR-01). The
+`packaging-staging` row resolves the specifier from a stage the helper wrote. Windows has no
+launcher yet (WINDOWS 53), so its sidecar does not carry it.
 
 node-pty is built on each target's own runner, never cross-built: on legion for Linux (build-linux),
 on hosted runners for the others. Orca's prebuild manifest
@@ -553,11 +576,16 @@ Hosted Orca jobs in `.github/workflows/release.yml`, each with the `windows-side
 `node-runtime.json`):
 - `macos-orca-arm64` (macos-15) and `macos-orca-x64` (macos-15-intel): two named jobs, never a
   matrix. Each runs `fetch-orca.sh` and `build-orca.sh`, checks its staged tree with
-  `orca-packaged-tree --target macos-<arch>`, and uploads the hosted artifact layout
-  (`package.json`, `out/orcad`, `out/web`, `orcad-prebuilds-manifest.json`, `BUILD_ROOT`,
-  `SHA256SUMS`). The SHA-256 of `SHA256SUMS` leaves the job as the output `sums_sha256`.
-- `macos-orca-universal` (ubuntu-latest) admits both with `check-win-sidecar.sh check` against
-  those outputs, merges them with `package-macos.sh orca-universal`, purges both build roots, and
+  `orca-packaged-tree --target macos-<arch>`, and uploads the artifact as three files:
+  `tree.tar`, `BUILD_ROOT` and `SHA256SUMS` (68-CR-03). `actions/upload-artifact` keeps no file
+  mode, so the staged tree (`package.json`, `out/orcad`, `out/web`, `orcad-prebuilds-manifest.json`,
+  `BUILD_ROOT` and the tree's own `SHA256SUMS`) travels as one tar, which keeps the executable bit
+  of node-pty's `spawn-helper`, the ripgrep binaries and agent-browser. The artifact's `SHA256SUMS`
+  lists `tree.tar` and `BUILD_ROOT`, and its SHA-256 leaves the job as the output `sums_sha256`.
+- `macos-orca-universal` (ubuntu-latest) admits both artifacts with `check-win-sidecar.sh check`
+  against those outputs, and only then unpacks each `tree.tar` with `tar -xpf` (modes kept) and
+  checks the unpacked tree against the `SHA256SUMS` the tar carried. It merges the two trees with
+  `package-macos.sh orca-universal`, purges both build roots, and
   runs `orca-packaged-tree --target macos` and `package-target-natives --target macos`.
 - `windows-orca` (lane p68-10) builds the win64 tree the same way; `build-windows` admits it with
   `PB_WIN_ORCA_SUMS_SHA256`, and `package-windows.sh` runs `orca-packaged-tree --target win64`.
@@ -1517,8 +1545,11 @@ Procedure, in `nix develop .#firefox-macos` with `MOZ_FETCHES_DIR` set as above:
    per Darwin target through `buildUpdateXml`, replaces `.mozbuild/macos-package/`, and runs the
    `macos-package-payload` row.
 
-Orca (P68-31): each per-architecture run stages the admitted `macos-orca-<arch>` artifact
-(`PB_MAC_ORCA_DIR`, admitted against `PB_MAC_ORCA_SUMS_SHA256`) as `Contents/Resources/orca`, and
+Orca (P68-31): each per-architecture run admits the `macos-orca-<arch>` artifact
+(`PB_MAC_ORCA_DIR`, against `PB_MAC_ORCA_SUMS_SHA256`), unpacks its `tree.tar` with `tar -xpf`,
+re-checks the unpacked tree against its own `SHA256SUMS` (an artifact without `tree.tar` predates
+68-CR-03 and is refused), stages that tree as `Contents/Resources/orca` with Orca's own `LICENSE`
+from the fetched `orca/` (`stage-orca-licence.sh`, checked against `inventory/licence-allowlist.json`), and
 judges its files by magic: every Mach-O must be a thin slice of the target, an ELF or a PE is red.
 `universal` lifts both `orca/` trees out before `unify.py` and merges them with `orca-universal`.
 The standalone mode is `bash powerbrowser/packaging/package-macos.sh orca-universal ARM X64 OUT`.

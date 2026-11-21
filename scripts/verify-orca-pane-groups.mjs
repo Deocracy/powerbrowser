@@ -18,13 +18,16 @@
 // layout to PB's store (orca-tabs-live stage g3, WINDOWS 55, owner pass).
 //
 // --self-test plants faults in copies of the two sources and requires each to
-// go red naming the drift. SKIP when theia/node_modules/typescript or the
-// overlay source is absent.
+// go red naming the drift. When theia/node_modules/typescript is absent the row
+// (self-test included) exits 77 with the one SKIP line (SKIP-PROTOCOL.md); an
+// absent overlay source is a red, not a skip.
 
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-pane-groups';
@@ -153,7 +156,7 @@ if (isEntryPoint) {
         console.error(`${NAME}: unknown argument ${args[0]} (usage: node scripts/verify-orca-pane-groups.mjs [--self-test])`);
         process.exit(2);
     }
-    if (!existsSync(TS_DIR) || !statSync(TS_DIR).isDirectory()) { console.log(`${NAME}: SKIP -- theia/node_modules/typescript is absent; run the audited Theia install`); process.exit(0); }
+    if (!existsSync(TS_DIR) || !statSync(TS_DIR).isDirectory()) { console.log(skipLine(NAME, 'theia/node_modules/typescript is absent, so neither the check nor its self-test ran. Next step: run the audited Theia install')); process.exit(SKIP_EXIT); }
     ts = createRequire(import.meta.url)(TS_DIR);
     if (args[0] === '--self-test') process.exit(runSelfTest());
     const fails = check(readFileSync(join(REPO_ROOT, MOUNT), 'utf8'), readFileSync(join(REPO_ROOT, ROUTES), 'utf8'));

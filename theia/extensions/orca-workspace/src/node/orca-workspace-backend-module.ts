@@ -5,39 +5,66 @@
  *
  * Every input is validated here, whatever the frontend checked: the root is an
  * absolute, realpath-stable repository toplevel; the path and rev follow the
- * shared grammar. The read is git cat-file blob through execFile (no shell, no
+ * shared grammar. The read is git cat-file blob through spawn (no shell, no
  * textconv or filter, '--' before the spec, fsmonitor off), with every GIT_*
- * name removed from the environment, a 50 MB cap and a 10 s bound. A refusal
- * or failure logs one line naming the reason, never the blob or the spec.
+ * name removed from the environment, no fetch and no prompt (gitReadEnv), a
+ * 50 MB cap and a 10 s bound that kills git's whole process group. A path
+ * absent at its side reads as 'missing' (an empty side), not as a failure. A
+ * refusal or failure logs one line naming the reason, never the blob or the spec.
  */
-import { execFile } from 'child_process';
+import { ChildProcess, spawn } from 'child_process';
 import { promises as fs } from 'fs';
 import { ContainerModule, injectable } from '@theia/core/shared/inversify';
 import { ConnectionHandler, JsonRpcConnectionHandler } from '@theia/core/lib/common';
 import {
-    ORCA_GIT_MAX_BYTES, ORCA_GIT_SERVICE_PATH, ORCA_GIT_TIMEOUT_MS, OrcaGitRead, OrcaGitService, RootDeps,
-    catFileArgs, specRefusal, validateRoot, withoutGitVars
+    ORCA_GIT_MAX_BYTES, ORCA_GIT_MISSING, ORCA_GIT_SERVICE_PATH, ORCA_GIT_TIMEOUT_MS, OrcaGitRead, OrcaGitService, RootDeps,
+    catFileArgs, gitReadEnv, sideIsMissing, specRefusal, validateRoot
 } from '../common/orca-git-protocol';
 
 const LOG_PREFIX = '[@powerbrowser/orca-workspace]';
+const POSIX = process.platform !== 'win32';
 
-/** One git run; resolves stdout bytes or a reason word. */
+/** sidecar-gate-backends-02: git is its own process-group leader on POSIX, so a timeout also ends any child it started. */
+function killTree(child: ChildProcess): void {
+    try {
+        if (POSIX && child.pid) {
+            process.kill(-child.pid, 'SIGKILL');
+        } else {
+            child.kill('SIGKILL');
+        }
+    } catch { /* already gone */ }
+}
+
+/** One git run (argv array, no shell); resolves stdout bytes or a reason word. */
 function runGit(args: string[]): Promise<{ out: Buffer } | { reason: string }> {
     return new Promise(resolve => {
-        execFile('git', args, {
-            env: withoutGitVars(process.env),
-            encoding: 'buffer',
-            maxBuffer: ORCA_GIT_MAX_BYTES,
-            timeout: ORCA_GIT_TIMEOUT_MS,
-            windowsHide: true,
-        }, (err, stdout) => {
-            if (!err) {
-                resolve({ out: stdout });
-                return;
+        let settled = false;
+        let failure: string | undefined;
+        const chunks: Buffer[] = [];
+        let size = 0;
+        const child = spawn('git', args, { env: gitReadEnv(process.env), stdio: ['ignore', 'pipe', 'ignore'], detached: POSIX, windowsHide: true });
+        const finish = (r: { out: Buffer } | { reason: string }) => {
+            if (!settled) {
+                settled = true;
+                clearTimeout(timer);
+                resolve(r);
             }
-            const e = err as NodeJS.ErrnoException & { killed?: boolean };
-            resolve({ reason: e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? 'too-large' : e.killed ? 'timeout' : 'git-failed' });
+        };
+        const stop = (reason: string) => {
+            failure ??= reason;
+            killTree(child);
+        };
+        const timer = setTimeout(() => stop('timeout'), ORCA_GIT_TIMEOUT_MS);
+        child.stdout!.on('data', (chunk: Buffer) => {
+            size += chunk.length;
+            if (size > ORCA_GIT_MAX_BYTES) {
+                stop('too-large');
+            } else if (failure === undefined) {
+                chunks.push(chunk);
+            }
         });
+        child.on('error', () => finish({ reason: failure ?? 'git-failed' }));
+        child.on('close', code => finish(failure === undefined && code === 0 ? { out: Buffer.concat(chunks) } : { reason: failure ?? 'git-failed' }));
     });
 }
 
@@ -61,7 +88,14 @@ export class OrcaGitServiceImpl implements OrcaGitService {
             return { ok: true, text: '' };
         }
         const r = await runGit(catFileArgs(root, rev, relativePath));
-        return 'out' in r ? { ok: true, text: r.out.toString('utf8') } : this.refuse(r.reason);
+        if ('out' in r) {
+            return { ok: true, text: r.out.toString('utf8') };
+        }
+        // 65-CR-01: an added, deleted or untracked file has no blob on one side; that side is empty, not a failed diff.
+        if (r.reason === 'git-failed' && await sideIsMissing(runGit, root, rev, relativePath)) {
+            return { ok: false, reason: ORCA_GIT_MISSING };
+        }
+        return this.refuse(r.reason);
     }
 
     async resolveHead(root: string): Promise<string | null> {

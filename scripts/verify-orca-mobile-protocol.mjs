@@ -39,10 +39,14 @@
 // src/shared/protocol-version.ts, and Orca's own evaluateCompat imported from
 // the pinned src/shared/protocol-compat.ts by Node type stripping (never a
 // copy). Red on any verdict that refuses the pairing; the lags are reported.
+// The tag is not commit-pinned, so its constants file is never executed
+// (harness-static-hosting-02): the two integers are read as text, each from
+// exactly one `export const NAME = <integer literal>` line, and any other
+// shape is "constants file moved". Only the pinned, reviewed tree is imported.
 //
-// Tiers: default quick (one printed SKIP line and exit 0 when orca/ is absent);
-// --skew full (network read; SKIP without orca/); --self-test and
-// --skew-self-test quick, hermetic (mkdtemp fixtures, no network).
+// Tiers: default quick (SKIP, exit 77 with one SKIP line, when orca/ is absent;
+// SKIP-PROTOCOL.md); --skew full (network read; SKIP without orca/); --self-test
+// and --skew-self-test quick, hermetic (mkdtemp fixtures, no network).
 //
 // Usage:
 //   node scripts/verify-orca-mobile-protocol.mjs
@@ -50,7 +54,7 @@
 //   node scripts/verify-orca-mobile-protocol.mjs --self-test
 //   node scripts/verify-orca-mobile-protocol.mjs --skew-self-test
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire, registerHooks } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -58,6 +62,7 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { parse } from './lib/toml.cjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-mobile-protocol';
@@ -183,7 +188,7 @@ export function check({ orcaDir = join(REPO_ROOT, 'orca'), overlayDir = join(REP
 }
 
 function render(r) {
-    if (r.skip) return { code: 0, lines: [`${NAME}: SKIP -- ${r.skip}`] };
+    if (r.skip) return { code: SKIP_EXIT, lines: [skipLine(NAME, r.skip)] };
     if (r.fails.length) return { code: 1, lines: r.fails.map((f) => `${NAME}: FAIL -- ${f}`) };
     const { set } = r;
     const lines = [`${NAME}: PASS -- ${set.files.size} protected files (${set.roots.mobile} from ${ROOT1_LABEL}, ${set.roots.rpc} runtime-rpc and ipc/mobile.ts), ${r.seamPaths.length} seam(s) and ${r.overlayFiles.length} overlay file(s) outside it, ${set.unresolved.length} unresolved specifier(s) [${r.method}]`];
@@ -244,9 +249,14 @@ function runSelfTest() {
         const far = run({ ...base(), seams: ['src/main/far.ts'] });
         if (far.fails.length) { console.error(`${NAME} self-test: FAIL -- a seam on far.ts went red (root 2 expanded): ${far.fails.join(' | ')}`); return 1; }
         console.log(`${NAME} self-test: control green -- a seam on src/main/far.ts`);
-        const away = check({ orcaDir: join(tmp, 'absent'), overlayDir: overlay, extractor });
-        if (!away.skip) { console.error(`${NAME} self-test: FAIL -- no orca/ did not SKIP`); return 1; }
-        console.log(`${NAME} self-test: control -- no orca/ SKIPs by a line`);
+        // The main mode over an absent orca/, as a child with captured output: exit 77 and the SKIP line last.
+        const away = spawnSync(process.execPath, [fileURLToPath(import.meta.url), `--orca-dir=${join(tmp, 'absent')}`], { encoding: 'utf8' });
+        const awayLast = away.stdout.trim().split('\n').pop();
+        if (away.status !== 77 || !awayLast.startsWith(`${NAME}: SKIP -- orca/ is not fetched`) || away.stderr.includes(': SKIP')) {
+            console.error(`${NAME} self-test: FAIL -- no orca/ did not exit 77 with the SKIP line last on stdout (status ${away.status}, last line ${JSON.stringify(awayLast)})`);
+            return 1;
+        }
+        console.log(`${NAME} self-test: control -- no orca/ exits 77 with the SKIP line last`);
 
         const plants = [
             { name: 'seam-on-protocol-version', naming: 'protected protocol file src/shared/protocol-version.ts', apply: (s) => { s.seams.push('src/shared/protocol-version.ts'); } },
@@ -334,34 +344,41 @@ function hookOrcaResolution() {
     process.on('warning', (w) => { if (w.code !== 'MODULE_TYPELESS_PACKAGE_JSON' && w.name !== 'ExperimentalWarning') console.error(`${w.name}: ${w.message}`); });
 }
 
-let imports = 0;
-// The stock app's constants file, imported by Node type stripping; label names it in a red.
-export async function importAppConstants(text, label, scratch) {
-    const file = join(scratch, `app-constants-${imports++}.mts`);
-    writeFileSync(file, text);
-    let m = {};
-    try { m = await import(pathToFileURL(file).href); } catch { /* reported as moved */ }
-    if (!Number.isInteger(m.MOBILE_PROTOCOL_VERSION) || !Number.isInteger(m.MIN_COMPATIBLE_DESKTOP_VERSION)) {
-        throw new Error(`the stock app's constants file moved (${label}: no MOBILE_PROTOCOL_VERSION and MIN_COMPATIBLE_DESKTOP_VERSION exports)`);
+// The one integer literal of `export const <name> = <n>` (an optional `: number`, `as const` and `;`, a trailing line
+// comment), or null when the file declares it in no such line or in more than one.
+function integerConst(text, name) {
+    const lines = String(text).split('\n').filter((l) => new RegExp(`\\b${name}\\b`).test(l) && /^\s*export\s/.test(l));
+    if (lines.length !== 1) return null;
+    const m = new RegExp(`^\\s*export\\s+const\\s+${name}\\s*(?::\\s*number\\s*)?=\\s*(0|[1-9]\\d*)(?:\\s+as\\s+const)?\\s*;?\\s*(?://.*)?$`).exec(lines[0]);
+    return m ? Number(m[1]) : null;
+}
+
+// The stock app's constants file, read as text and never executed (harness-static-hosting-02): the file comes from a
+// tag nothing ties to a reviewed commit. label names it in a red.
+export function readAppConstants(text, label) {
+    const mobileProtocolVersion = integerConst(text, 'MOBILE_PROTOCOL_VERSION');
+    const minCompatibleDesktopVersion = integerConst(text, 'MIN_COMPATIBLE_DESKTOP_VERSION');
+    if (!Number.isSafeInteger(mobileProtocolVersion) || !Number.isSafeInteger(minCompatibleDesktopVersion)) {
+        throw new Error(`the stock app's constants file moved (${label}: no MOBILE_PROTOCOL_VERSION and MIN_COMPATIBLE_DESKTOP_VERSION exports, each one export const line of an integer literal)`);
     }
-    return { mobileProtocolVersion: m.MOBILE_PROTOCOL_VERSION, minCompatibleDesktopVersion: m.MIN_COMPATIBLE_DESKTOP_VERSION };
+    return { mobileProtocolVersion, minCompatibleDesktopVersion };
 }
 
 // The constants at whichever known layout holds them; read(rel) returns the file's text or throws when absent.
-export async function constantsAt(read, tag, scratch) {
+export async function constantsAt(read, tag) {
     for (const rel of APP_CONSTANTS_RELS) {
         let text = '';
         try { text = read(rel); } catch { continue; }
-        try { return await importAppConstants(text, `${rel} at ${tag}`, scratch); } catch { /* try the next layout */ }
+        try { return readAppConstants(text, `${rel} at ${tag}`); } catch { /* try the next layout */ }
     }
-    return importAppConstants('', `${APP_CONSTANTS_REL} at ${tag}`, scratch);
+    return readAppConstants('', `${APP_CONSTANTS_REL} at ${tag}`);
 }
 
 // One-blob partial clone of <remote> at <tag>, then the constants file at HEAD.
 export async function appConstants(remote, tag, scratch) {
     const dir = mkdtempSync(join(scratch, 'app-'));
     execFileSync('git', ['-c', 'advice.detachedHead=false', 'clone', '-q', '--filter=blob:none', '--no-checkout', '--depth', '1', '--branch', tag, remote, dir], { stdio: ['ignore', 'pipe', 'pipe'] });
-    return constantsAt((rel) => execFileSync('git', ['-C', dir, 'show', `HEAD:${rel}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }), tag, scratch);
+    return constantsAt((rel) => execFileSync('git', ['-C', dir, 'show', `HEAD:${rel}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }), tag);
 }
 
 export async function pinConstants(orcaDir) {
@@ -389,7 +406,7 @@ export function verdictOf(compat, app, pin) {
 }
 
 async function runSkew({ repoRoot = REPO_ROOT, orcaDir = join(repoRoot, 'orca') } = {}) {
-    if (!existsSync(join(orcaDir, COMPAT_REL))) return { code: 0, lines: [`${SKEW}: SKIP -- orca/ is not fetched, so the pinned evaluateCompat and constants cannot be read (bash scripts/fetch-orca.sh)`] };
+    if (!existsSync(join(orcaDir, COMPAT_REL))) return { code: SKIP_EXIT, lines: [skipLine(SKEW, 'orca/ is not fetched, so the pinned evaluateCompat and constants cannot be read. Next step: bash scripts/fetch-orca.sh')] };
     const scratch = mkdtempSync(join(tmpdir(), `${SKEW}-`));
     try {
         const remote = readRemote(repoRoot);
@@ -419,7 +436,7 @@ async function runSkew({ repoRoot = REPO_ROOT, orcaDir = join(repoRoot, 'orca') 
 
 // No network: fixture listings and constants text; evaluateCompat and the pin's constants come from the real pinned tree.
 async function runSkewSelfTest({ orcaDir = join(REPO_ROOT, 'orca') } = {}) {
-    if (!existsSync(join(orcaDir, COMPAT_REL))) { console.log(`${SKEW} self-test: SKIP -- orca/ is not fetched, so Orca's own evaluateCompat cannot be imported (bash scripts/fetch-orca.sh)`); return 0; }
+    if (!existsSync(join(orcaDir, COMPAT_REL))) { console.log(skipLine(`${SKEW} self-test`, "orca/ is not fetched, so Orca's own evaluateCompat cannot be imported. Next step: bash scripts/fetch-orca.sh")); return SKIP_EXIT; }
     const scratch = mkdtempSync(join(tmpdir(), `${SKEW}-self-`));
     const constants = (mobile, minDesktop) => `// fixture\nexport const MOBILE_PROTOCOL_VERSION = ${mobile}\nexport const MIN_COMPATIBLE_DESKTOP_VERSION = ${minDesktop}\n`;
     const listing = ['refs/tags/v1.0.9', 'refs/tags/v1.0.10', 'refs/tags/v1.0.10-rc.1', 'refs/tags/mobile-android-v0.0.9', 'refs/tags/mobile-android-v0.0.10'];
@@ -431,7 +448,7 @@ async function runSkewSelfTest({ orcaDir = join(REPO_ROOT, 'orca') } = {}) {
         const evaluate = async (refs, files) => {
             const app = newestAppTag(refs);
             const tree = typeof files === 'string' ? { [APP_CONSTANTS_RELS[0]]: files } : files;
-            const v = verdictOf(compat, await constantsAt((rel) => { if (!(rel in tree)) throw new Error('absent'); return tree[rel]; }, app.tag, scratch), pin);
+            const v = verdictOf(compat, await constantsAt((rel) => { if (!(rel in tree)) throw new Error('absent'); return tree[rel]; }, app.tag), pin);
             if (v.refuses) throw new Error(`verdict ${v.kind}`);
             return { app, v };
         };
@@ -444,6 +461,12 @@ async function runSkewSelfTest({ orcaDir = join(REPO_ROOT, 'orca') } = {}) {
         const moved = await evaluate(listing, { [APP_CONSTANTS_RELS[1]]: constants(pin.desktopProtocolVersion, pin.desktopMinCompatibleMobileVersion) });
         console.log(`${SKEW} self-test: new layout green -- ${APP_CONSTANTS_RELS[1]} found, verdict ${moved.v.kind}`);
         console.log(`${SKEW} self-test: control green -- the pin's constants against an app of the same versions: verdict ${ctl.v.kind}; newest app tag ${ctl.app.tag}; 1 tag behind v1.0.10`);
+        // harness-static-hosting-02: a constants file with top-level code is read, never run.
+        const canary = join(scratch, 'executed');
+        const hostile = `import { writeFileSync } from 'node:fs'\nwriteFileSync(${JSON.stringify(canary)}, 'x')\n${constants(pin.desktopProtocolVersion, pin.desktopMinCompatibleMobileVersion)}`;
+        const read = await evaluate(listing, hostile);
+        if (existsSync(canary)) { console.error(`${SKEW} self-test: FAIL -- the fetched constants file was executed (its top-level code wrote ${canary})`); return 1; }
+        console.log(`${SKEW} self-test: control green -- a constants file with top-level code is read as text, not executed (verdict ${read.v.kind})`);
         const plants = [
             { name: 'app-needs-newer-desktop', naming: 'desktop-too-old', run: () => evaluate(listing, constants(pin.desktopProtocolVersion, pin.desktopProtocolVersion + 1)) },
             { name: 'app-older-than-pin-minimum', naming: 'mobile-too-old', run: () => evaluate(listing, constants(pin.desktopMinCompatibleMobileVersion - 1, 0)) },
@@ -451,6 +474,8 @@ async function runSkewSelfTest({ orcaDir = join(REPO_ROOT, 'orca') } = {}) {
             { name: 'new-layout-needs-newer-desktop', naming: 'desktop-too-old', run: () => evaluate(listing, { [APP_CONSTANTS_RELS[1]]: constants(pin.desktopProtocolVersion, pin.desktopProtocolVersion + 1) }) },
             { name: 'constants-in-neither-layout', naming: 'constants file moved', run: () => evaluate(listing, { 'mobile/src/transport/elsewhere/protocol-version.ts': constants(pin.desktopProtocolVersion, 0) }) },
             { name: 'constants-file-moved', naming: 'constants file moved', run: () => evaluate(listing, 'export const SOMETHING_ELSE = 1\n') },
+            { name: 'constant-computed-at-run-time', naming: 'constants file moved', run: () => evaluate(listing, `export const MOBILE_PROTOCOL_VERSION = Number(process.env.V ?? ${pin.desktopProtocolVersion})\nexport const MIN_COMPATIBLE_DESKTOP_VERSION = 0\n`) },
+            { name: 'constant-declared-twice', naming: 'constants file moved', run: () => evaluate(listing, `${constants(pin.desktopProtocolVersion, 0)}export const MOBILE_PROTOCOL_VERSION = 99\n`) },
         ];
         let failures = 0;
         for (const p of plants) {
@@ -474,20 +499,23 @@ async function runSkewSelfTest({ orcaDir = join(REPO_ROOT, 'orca') } = {}) {
 }
 
 const MODES = new Set(['--self-test', '--skew', '--skew-self-test']);
+// --orca-dir=<path> runs the default mode over another Orca checkout (the self-test's SKIP control).
+const ORCA_DIR_ARG = process.argv.find((a) => a.startsWith('--orca-dir='));
 const isEntryPoint = (() => {
     try { return realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; }
 })();
 if (isEntryPoint) {
     const args = process.argv.slice(2);
-    const bad = args.find((a) => !MODES.has(a)) ?? (args.length > 1 ? args[1] : undefined);
+    const modeArgs = args.filter((a) => !a.startsWith('--orca-dir='));
+    const bad = modeArgs.find((a) => !MODES.has(a)) ?? (modeArgs.length > 1 ? modeArgs[1] : undefined) ?? (ORCA_DIR_ARG && modeArgs.length ? ORCA_DIR_ARG : undefined);
     if (bad !== undefined) {
         console.error(`${NAME}: unknown argument ${bad} (usage: node ${SELF_REL} [--self-test | --skew | --skew-self-test])`);
         console.error(`  Next step: run: node ${SELF_REL}, or add --self-test to prove the check discriminates.`);
         process.exit(2);
     }
-    if (args[0] === '--self-test') process.exit(runSelfTest());
-    if (args[0] === '--skew-self-test') process.exit(await runSkewSelfTest());
-    const { code, lines } = args[0] === '--skew' ? await runSkew() : render(check());
-    for (const l of lines) (code ? console.error : console.log)(l);
+    if (modeArgs[0] === '--self-test') process.exit(runSelfTest());
+    if (modeArgs[0] === '--skew-self-test') process.exit(await runSkewSelfTest());
+    const { code, lines } = modeArgs[0] === '--skew' ? await runSkew() : render(check(ORCA_DIR_ARG ? { orcaDir: resolve(ORCA_DIR_ARG.slice('--orca-dir='.length)) } : {}));
+    for (const l of lines) (code === 0 || code === SKIP_EXIT ? console.log : console.error)(l);
     process.exit(code);
 }

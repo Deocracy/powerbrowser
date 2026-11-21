@@ -205,12 +205,38 @@ export async function runtimeVerdict(mod) {
 }
 
 /**
- * Runs `body` in a child node that imports the helper source `src` as `m` (written next to the helper, so its relative
- * imports resolve), with HOME=`home`. Resolves { lines, done }: the child's first stdout line, and its { code, signal }.
+ * `src` (the helper or a planted variant) made loadable from any folder: its relative import specifiers and its
+ * import.meta.url resolve as if it sat at the real helper's path, so REPO_ROOT and every import are unchanged.
+ */
+export function relocateHelper(src, helperUrl = HELPER_URL) {
+    return src
+        .replace(/(\bfrom\s+|\bimport\(\s*)(['"])(\.{1,2}\/[^'"]+)\2/g, (m, pre, q, spec) => `${pre}${JSON.stringify(new URL(spec, helperUrl).href)}`)
+        .split('import.meta.url').join(JSON.stringify(helperUrl));
+}
+const HELPER_URL = pathToFileURL(join(SCRIPTS, 'lib', 'firefox-bidi.mjs')).href;
+// Probes live in one temp folder per run, never in scripts/lib (audit harness-driver-09: a run killed before a probe's
+// child exited left an untracked, unignored copy of the helper in a source folder, which `git add -A` would stage).
+let probeDir = null;
+/** Red when `dir` is inside this repository, where an interrupted run's probe would be an untracked source file. */
+export function probeLocationFails(dir) {
+    const rel = relative(REPO_ROOT, dir);
+    return rel === '' || !(rel === '..' || rel.startsWith('../') || rel.startsWith('/')) ? [`the probe folder ${dir} is inside the tracked tree`] : [];
+}
+function probeFolder() {
+    if (probeDir) return probeDir;
+    probeDir = mkdtempSync(join(tmpdir(), 'scratch-home-probe-'));
+    process.once('exit', () => rmSync(probeDir, { recursive: true, force: true }));
+    return probeDir;
+}
+
+/**
+ * Runs `body` in a child node that imports the helper source `src` as `m` (written to a temp folder with its imports
+ * relocated to the real helper's path), with HOME=`home`. Resolves { lines, done }: the child's first stdout line, and
+ * its { code, signal }.
  */
 function runHelperChild(src, body, home) {
-    const probe = join(SCRIPTS, 'lib', `.scratch-home-probe-${process.pid}-${probeSeq++}.mjs`);
-    writeFileSync(probe, src);
+    const probe = join(probeFolder(), `probe-${process.pid}-${probeSeq++}.mjs`);
+    writeFileSync(probe, relocateHelper(src));
     const code = `const m = await import(${JSON.stringify(pathToFileURL(probe).href)});\n${body}`;
     const child = spawn(process.execPath, ['--input-type=module', '-e', code], { env: { PATH: process.env.PATH, HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
@@ -370,6 +396,18 @@ async function selfTest() {
     red('a rotated refresh token deleted, not written back', await helperPlant('if (sha256(rotated.refreshToken) === seeded) return true;', 'return true;'), 'so it is lost');
     red('a seed into a HOME the launch does not get', await helperPlant(/    if \(launchHome !== home\) return [^\n]*\n/, ''), 'claude never sees the sign-in');
     red('a write-back with no compare-and-swap', await helperPlant('if (seeded && realToken && sha256(realToken) === seeded) {', 'if (realFile) {'), 'overwrote a real sign-in');
+    // harness-driver-09: probes are written outside the tree, and a relocated probe still resolves as the helper does.
+    const probeHome = mkdtempSync(join(tmpdir(), 'pb-fixture-home-'));
+    try {
+        const run = runHelperChild(helperSrc, 'console.log(m.LIVE_PROFILE_BASE); process.exit(0);', probeHome);
+        const [base] = await Promise.all([run.line, run.done]);
+        const relocated = base === mod.LIVE_PROFILE_BASE ? [] : [`a relocated probe resolved LIVE_PROFILE_BASE to ${base}, the helper to ${mod.LIVE_PROFILE_BASE}`];
+        rows.push(['control: a probe in the temp folder resolves the helper\'s own paths and imports', relocated.length === 0, relocated]);
+    } finally {
+        rmSync(probeHome, { recursive: true, force: true });
+    }
+    rows.push(['control: the probe folder is outside the tracked tree', probeLocationFails(probeFolder()).length === 0, probeLocationFails(probeFolder())]);
+    red('a probe folder inside scripts/lib', probeLocationFails(join(SCRIPTS, 'lib')), 'is inside the tracked tree');
     let bad = 0;
     for (const [name, pass, fails] of rows) {
         console.log(`verify-live-scratch-home --self-test: ${pass ? 'PASS' : 'FAIL'} -- ${name}${pass ? '' : `: ${fails.join(' | ') || 'nothing went red'}`}`);

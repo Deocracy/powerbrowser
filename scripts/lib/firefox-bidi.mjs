@@ -63,12 +63,21 @@ export async function liveProfileDir(prefix) {
 export const LIVE_HOME_VARS = Object.freeze({ HOME: '', XDG_CONFIG_HOME: '.config', XDG_DATA_HOME: '.local/share', XDG_STATE_HOME: '.local/state', XDG_CACHE_HOME: '.cache' });
 const HARNESS_SCRATCH = join(REPO_ROOT, '.mozbuild');
 const within = (p, root) => { const r = relative(root, p); return r === '' || (!r.startsWith('..') && !isAbsolute(r)); };
-/** The developer's real home folders: os.homedir() (HOME) and the passwd entry, which differ when the harness itself runs under a scratch HOME. */
+/**
+ * The developer's real home folders: os.homedir() (HOME) and the passwd entry, which differ when the harness itself
+ * runs under a scratch HOME. Read once, when this module is first evaluated (the call below the function), so a row
+ * that later sets process.env.HOME to a scratch folder of its own (the agent row's decoy HOME) does not make that folder
+ * count as the real home and have liveEnv replace it (audit harness-live-security-01).
+ */
+let homesAtLoad = null;
 export function realHomes() {
+    if (homesAtLoad) return homesAtLoad;
     let pw = '';
     try { pw = userInfo().homedir; } catch { /* no passwd entry */ }
-    return [...new Set([homedir(), pw].filter(Boolean).map(h => resolve(h)))];
+    homesAtLoad = Object.freeze([...new Set([homedir(), pw].filter(Boolean).map(h => resolve(h)))]);
+    return homesAtLoad;
 }
+realHomes();
 /** True when `path` is unset, a real home or inside one, unless it is harness scratch under <repo>/.mozbuild. */
 export function inRealHome(path, homes = realHomes()) {
     if (typeof path !== 'string' || path === '') return true;
@@ -95,6 +104,41 @@ function homeInUse(dir) {
 }
 
 /**
+ * Writes refreshed sign-in `rotated` back into the real credentials file `realFile` when that file still holds the
+ * seeded refresh token (`seeded` is its SHA-256): a 0600 temp file with the file's other keys, renamed over it.
+ * Returns 'written', 'current' (the real file already holds `rotated`) or 'changed' (it holds another sign-in, or it
+ * could not be read or written). Audit harness-live-security-13: the owner's own claude writes the same file (a token
+ * refresh, an MCP server sign-in) without a lock, so the file is read again just before the rename, and a change since
+ * the first read restarts the merge from the new content instead of overwriting it. onTempWritten is a test hook.
+ */
+export function writeBackSignIn(realFile, rotated, seeded, onTempWritten = () => {}) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+        let bytes;
+        let real;
+        try { bytes = readFileSync(realFile, 'utf8'); real = JSON.parse(bytes); } catch { return 'changed'; }
+        const realToken = real.claudeAiOauth?.refreshToken;
+        if (realToken === rotated.refreshToken) return 'current';
+        if (seeded && realToken && sha256(realToken) === seeded) {
+            const tmp = `${realFile}.pb-${process.pid}.tmp`;
+            try {
+                rmSync(tmp, { force: true });
+                writeFileSync(tmp, JSON.stringify({ ...real, claudeAiOauth: rotated }), { mode: 0o600, flag: 'wx' });
+                onTempWritten();
+                if (readFileSync(realFile, 'utf8') !== bytes) { rmSync(tmp, { force: true }); continue; } // written meanwhile: merge again
+                renameSync(tmp, realFile);
+                return 'written';
+            } catch (e) {
+                rmSync(tmp, { force: true });
+                console.error(`firefox-bidi: could not write the refreshed sign-in back to ${realFile} (${e.code ?? 'error'})`);
+                return 'changed';
+            }
+        }
+        return 'changed';
+    }
+    return 'changed';
+}
+
+/**
  * 68-11-REVIEW CR-02: true when scratch HOME `dir` holds no Claude sign-in that exists nowhere else. When claude rotated
  * the seeded refresh token inside it, the rotated one is the only valid one, so it is written back to the real
  * credentials file if that still holds the seeded token (compare-and-swap; a 0600 temp file renamed over it, the file's
@@ -108,22 +152,9 @@ function scratchSignInSettled(dir) {
     try { seeded = readFileSync(join(dir, HOME_SEED_FILE), 'utf8').trim(); } catch { /* seeded before .seeded existed */ }
     if (sha256(rotated.refreshToken) === seeded) return true;
     const realFile = realClaudeCredentials();
-    const real = realFile ? readJson(realFile) : {};
-    const realToken = real.claudeAiOauth?.refreshToken;
-    if (realToken === rotated.refreshToken) return true;
-    if (seeded && realToken && sha256(realToken) === seeded) {
-        const tmp = `${realFile}.pb-${process.pid}.tmp`;
-        try {
-            rmSync(tmp, { force: true });
-            writeFileSync(tmp, JSON.stringify({ ...real, claudeAiOauth: rotated }), { mode: 0o600, flag: 'wx' });
-            renameSync(tmp, realFile);
-            console.error(`firefox-bidi: claude refreshed its sign-in inside the scratch HOME; the new sign-in was written back to ${realFile}`);
-            return true;
-        } catch (e) {
-            rmSync(tmp, { force: true });
-            console.error(`firefox-bidi: could not write the refreshed sign-in back to ${realFile} (${e.code ?? 'error'})`);
-        }
-    }
+    const outcome = realFile ? writeBackSignIn(realFile, rotated, seeded) : 'changed';
+    if (outcome === 'written') console.error(`firefox-bidi: claude refreshed its sign-in inside the scratch HOME; the new sign-in was written back to ${realFile}`);
+    if (outcome === 'written' || outcome === 'current') return true;
     const target = realFile ?? '~/.claude/.credentials.json';
     console.error(`firefox-bidi: FAIL -- claude refreshed its sign-in inside a scratch HOME, and it was not written back because ${target} changed during the run. The refreshed sign-in is kept in ${scratchFile}. If claude asks you to sign in again, replace the claudeAiOauth entry in ${target} with the one in that file; otherwise delete the folder ${dir}`);
     return false;

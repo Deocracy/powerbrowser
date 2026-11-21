@@ -53,6 +53,7 @@ import {
     setOpenDownloadsPanel,
     setOpenFindBar,
     setOpenStockPage,
+    setRepaintChromeBar,
     setReopenLastClosedTab,
     setToggleBookmarksToolbar,
     setToggleFullScreen,
@@ -520,6 +521,7 @@ export class ChromeBarWidget extends ReactWidget {
         setOpenClearHistory(() => this.openClearHistoryPicker());
         setToggleFullScreen(() => void this.toggleFullScreenRow());
         setOpenStockPage(page => void this.openStockPageRow(page));
+        setRepaintChromeBar(() => this.update());
         this.toDispose.push(this.webTabs.onDidChangeDownloads(rows => {
             this.downloadRows = rows;
             this.update();
@@ -532,10 +534,12 @@ export class ChromeBarWidget extends ReactWidget {
         }));
         // PROMPT-08: chrome pushes a hovered link only for an overlay; a tab this frontend no longer has is ignored.
         this.toDispose.push(this.webTabs.onPush('overLink', detail => {
-            if (typeof detail.tabId !== 'string' || !this.webTabs.widgetOf(detail.tabId)) {
+            const url = typeof detail.url === 'string' ? detail.url : '';
+            // A clear always applies: chrome names the tab whose link it showed, which may be a tab just closed.
+            if (url && (typeof detail.tabId !== 'string' || !this.webTabs.widgetOf(detail.tabId))) {
                 return;
             }
-            this.pageStatus = typeof detail.url === 'string' ? detail.url : '';
+            this.pageStatus = url;
             this.update();
         }));
         // NAV-04: toggling either Home setting updates the bar live, with no reload.
@@ -798,7 +802,8 @@ export class ChromeBarWidget extends ReactWidget {
                 tab.focusPage();
                 return;
             }
-            const ref = tab ?? this.shell.currentWidget;
+            // The main area's current tab, never the focus tracker's widget: a side or bottom widget would take the new tab into its area.
+            const ref = tab ?? this.shell.mainPanel.currentTitle?.owner;
             const widget = ref ? await this.webTabOpener.openInBackground(url, ref) : await this.webTabOpener.openUrl(url);
             await this.addressBar.joinActiveGroup(widget);
             if (target !== 'background') {
@@ -1355,6 +1360,10 @@ export class ChromeBarWidget extends ReactWidget {
         this.stateSubscription = undefined;
         // The find bar belongs to the tab it was opened on; the query stays in that tab.
         this.setFindOpen(false);
+        // The Downloads button and command need a web tab; without one an open panel could not be closed.
+        if (!(widget instanceof WebTabWidget)) {
+            this.downloadsOpen = false;
+        }
         if (widget instanceof WebTabWidget) {
             let wasLoading = widget.loading;
             this.stateSubscription = widget.onDidChangeState(state => {
@@ -1680,21 +1689,28 @@ export class ChromeBarWidget extends ReactWidget {
 
     /**
      * Phase 66 (P66-21, P66-22, D-19): the agent mark for the current web tab, read only from chrome's agentControlChanged
-     * push. Hidden unless an agent is driving the tab. Its Stop button is the only caller of agentStop(), which ends agent
-     * control of this tab for the tab's lifetime; no command, keybinding or menu reaches it.
+     * push. agent-browser-04: shown on every tab chrome reports as an agent tab, not only while an agent drives it and
+     * not by the widget's own flag (a restored agent row carries none), so the user can stop an agent
+     * before it acts. Its Stop button and, on a stopped agent tab, its Resume button are the only callers of agentStop();
+     * Stop ends agent control of every agent tab and refuses new ones until Resume. No command, keybinding or menu
+     * reaches either.
      */
     protected renderAgentControl(): React.ReactNode {
-        if (!currentWebTab()?.agentControl.active) {
+        const tab = currentWebTab();
+        if (!tab?.agentControl.agent) {
             return undefined;
         }
-        const label = CHROME_BAR_COPY.agentControlLabel;
-        const stop = CHROME_BAR_COPY.agentStopTooltip(appSubject());
+        const subject = appSubject();
+        const { active, stopped } = tab.agentControl;
+        const label = stopped ? CHROME_BAR_COPY.agentStoppedLabel : active ? CHROME_BAR_COPY.agentControlLabel : CHROME_BAR_COPY.agentIdleLabel;
+        const tooltip = stopped ? CHROME_BAR_COPY.agentStoppedTooltip(subject) : active ? CHROME_BAR_COPY.agentControlTooltip(subject) : CHROME_BAR_COPY.agentIdleTooltip(subject);
+        const action = stopped ? CHROME_BAR_COPY.agentResumeTooltip(subject) : CHROME_BAR_COPY.agentStopTooltip(subject);
         return <span className='pb-chrome-bar-agent'>
-            <span className='codicon codicon-robot' role='img' aria-label={label} title={CHROME_BAR_COPY.agentControlTooltip(appSubject())} />
+            <span className='codicon codicon-robot' role='img' aria-label={label} title={tooltip} />
             <span className='pb-chrome-bar-agent-label'>{label}</span>
-            <button type='button' className='pb-chrome-bar-button pb-chrome-bar-agent-stop' title={stop} aria-label={stop}
-                onClick={() => void currentWebTab()?.agentStop()}>
-                {CHROME_BAR_COPY.agentStopLabel}
+            <button type='button' className='pb-chrome-bar-button pb-chrome-bar-agent-stop' title={action} aria-label={action}
+                onClick={() => void currentWebTab()?.agentStop(stopped)}>
+                {stopped ? CHROME_BAR_COPY.agentResumeLabel : CHROME_BAR_COPY.agentStopLabel}
             </button>
         </span>;
     }
@@ -2355,6 +2371,9 @@ export class ChromeBarContribution implements FrontendApplicationContribution {
         window.addEventListener('resize', () => this.scheduleDragRegions());
         new MutationObserver(() => this.scheduleDragRegions())
             .observe(this.tabStrip.node, { childList: true, subtree: true, characterData: true, attributes: true });
+        // A control appearing or leaving in the bar moves its gaps, which are drag handles too.
+        new MutationObserver(() => this.scheduleDragRegions())
+            .observe(this.barWidget.node, { childList: true, subtree: true });
         // TAB-04 (34-02): an overflowing row scrolls its tabs under the handles; scroll does not bubble, so capture.
         this.tabStrip.node.addEventListener('scroll', () => this.scheduleDragRegions(), true);
         void this.webTabs.request({ kind: 'windowChrome' }).then(reply => {

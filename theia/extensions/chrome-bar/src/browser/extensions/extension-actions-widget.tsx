@@ -314,6 +314,8 @@ export class ExtensionActionsWidget {
     /** D-08: the confirm row's Remove; chrome uninstalls and the extension's shutdown pushes the set without it. */
     protected async remove(row: ExtensionActionRow): Promise<void> {
         this.confirm = undefined;
+        // Close the confirm row now, so a second click cannot send a second uninstall while this one runs.
+        this.update();
         try {
             const where = await this.store.extensionRemove(row.extensionId);
             this.notice = where === 'refused' ? CHROME_BAR_COPY.extensionRemoveRefused(row.title) : undefined;

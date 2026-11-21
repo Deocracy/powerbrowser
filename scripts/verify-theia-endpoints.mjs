@@ -53,20 +53,25 @@
 // allowlist entry covering no manifest host (naming the entry). Each runs
 // with the unmutated control green first, so a red is plant-caused.
 
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, copyFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { emitEndpointHosts, manifestEndpointHosts, manifestEndpointSources, mozillaEndpointPrefs, resolveConfig } from './generate.mjs';
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const SELF = fileURLToPath(import.meta.url);
+const REPO_ROOT = resolve(dirname(SELF), '..');
 const NAME = 'verify-theia-endpoints';
 
 const args = process.argv.slice(2);
 const SELF_TEST = args.includes('--self-test');
+// --root=<dir> runs the main mode over another tree (the self-test's SKIP control uses it).
+const ROOT_ARG = args.find(a => a.startsWith('--root='));
 for (const a of args) {
-    if (a !== '--self-test') {
+    if (a !== '--self-test' && !a.startsWith('--root=')) {
         console.error(`${NAME}: FAIL -- unknown argument '${a}'`);
         process.exit(2);
     }
@@ -184,15 +189,16 @@ function runChecks(root) {
     return { failures, skipped };
 }
 
+// A step skipped for an absent input makes the run exit 77 with one SKIP line, printed last (SKIP-PROTOCOL.md).
 function main() {
-    const { failures, skipped } = runChecks(REPO_ROOT);
-    for (const s of skipped) console.log(`${NAME}: SKIP -- ${s}`);
+    const { failures, skipped } = runChecks(ROOT_ARG ? resolve(ROOT_ARG.slice('--root='.length)) : REPO_ROOT);
     if (failures.length > 0) {
         console.error(`${NAME}: FAIL -- ${failures.length} problem(s)`);
         for (const f of failures) console.error(`  - ${f}`);
-        process.exit(1);
     }
-    console.log(`${NAME}: PASS -- every manifest host is allowlisted and the driven prefs agree`);
+    const code = verdictExit(NAME, failures, skipped);
+    if (code === 0) console.log(`${NAME}: PASS -- every manifest host is allowlisted and the driven prefs agree`);
+    return code;
 }
 
 function copyInto(root, rel) {
@@ -207,6 +213,10 @@ function selfTest() {
         console.error(`${NAME}: --self-test FAIL -- '${name}' ${why}`);
         failed += 1;
     };
+
+    // Plant 2 copies the generated fragment from this tree; without it that plant alone does not run. Every other case
+    // still runs and is judged; the verdict comes at the end: FAIL wins, then a SKIP naming it (SKIP-PROTOCOL.md rule 4).
+    const selfSkips = [];
 
     // Green control first: the unmutated tree proves nothing if red.
     const control = runChecks(REPO_ROOT);
@@ -254,7 +264,9 @@ function selfTest() {
     // Plant 2: a marked allowlist entry covering no manifest host must go
     // red NAMING the entry. The fixture manifest is the shipped one (no
     // crash_report), so the marked entry is stale by construction.
-    {
+    if (!existsSync(join(REPO_ROOT, FRAGMENT_REL))) {
+        selfSkips.push(`the 'stale marked entry' plant did not run: ${FRAGMENT_REL} is absent. Next step: run ${RERUN_GENERATE}, then re-run this self-test`);
+    } else {
         const dir = mkdtempSync(join(tmpdir(), 'theia-endpoints-selftest-'));
         try {
             copyInto(dir, MANIFEST_REL);
@@ -324,13 +336,42 @@ function selfTest() {
     crashPlant('unattended crash host', 'crash.example.org', false);
     crashPlant('stated crash_report disagrees with breakpad.reportURL expect', 'breakpad.reportURL', true);
 
-    if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- 4 planted faults all behaved as pinned`);
+    // SKIP control (SKIP-PROTOCOL.md rule 2): the main mode, run as a child with its output captured, over the
+    // manifest and allowlist with no generated fragment. Steps 2 to 4 run green, step 1 does not run, so it exits
+    // 77 with the SKIP line last and no PASS line.
+    {
+        const dir = mkdtempSync(join(tmpdir(), 'theia-endpoints-selftest-'));
+        try {
+            copyInto(dir, MANIFEST_REL);
+            copyInto(dir, ALLOWLIST_REL);
+            const r = spawnSync(process.execPath, [SELF, `--root=${dir}`], { encoding: 'utf8' });
+            const lines = (r.stdout ?? '').split('\n').filter(l => l.trim() !== '');
+            const last = lines[lines.length - 1] ?? '';
+            if (r.status !== SKIP_EXIT || !last.startsWith(`${NAME}: SKIP -- ${FRAGMENT_REL} is absent`)
+                || lines.some(l => l.includes(`${NAME}: PASS`)) || /: SKIP/.test(r.stderr ?? '')) {
+                complain('control: no fragment', `did not exit 77 with the fragment SKIP line last and no PASS line (status ${r.status}, last line ${JSON.stringify(last)}, stderr ${JSON.stringify((r.stderr ?? '').slice(0, 300))})`);
+            } else {
+                console.log('  ok  control: no fragment -> exit 77, the fragment SKIP line last, no PASS line');
+            }
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    }
+
+    if (failed > 0) {
+        console.error(`${NAME}: --self-test FAIL -- ${failed} case(s) did not behave as required`);
+        return 1;
+    }
+    if (selfSkips.length > 0) {
+        console.log(skipLine(`${NAME} --self-test`, selfSkips.join('; ')));
+        return SKIP_EXIT;
+    }
+    console.log(`${NAME}: --self-test PASS -- 4 planted faults all behaved as pinned, and a tree without the fragment exits 77`);
     return 0;
 }
 
 if (SELF_TEST) {
     process.exit(selfTest());
-} else if (args.length === 0) {
-    main();
+} else {
+    process.exit(main());
 }

@@ -22,9 +22,8 @@
 // tokens never reach the output: startOrcad redacts, and installOutputRedaction covers the pairing step.
 //
 // Tier: full. Needs the container-built tarball (packagePath in lib/built-tree.mjs); without it the row FAILs
-// naming the container build, never SKIPs. Run under the live lock, headless, with ORCA_* unset (the script also
-// removes every ORCA_* name from its own environment before the launch):
-//   flock /home/chris/coding/Power-Browser/.git/pb-live.lock node scripts/verify-orca-packaged-live.mjs
+// naming the container build, never SKIPs. Headless, with ORCA_* unset (the script also removes every ORCA_* name
+// from its own environment before the launch); the row takes the live lock itself (scripts/lib/live-lock.mjs).
 // Runs in 68-06, after the merges that bring pairWebTab's export and the container tarball.
 //
 // --self-test is quick and pure: the four verdicts over fixtures (a Node from elsewhere, a web root outside
@@ -38,6 +37,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { holdLiveLock, lockWiringFails } from './lib/live-lock.mjs';
 // lib/firefox-bidi.mjs is imported only dynamically: it fixes its launch binary from PB_FIREFOX_BIN when it is first
 // evaluated, and runPackaged sets that name to the extracted binary. A static import here made the live run launch
 // the dev objdir binary (0ea32a1a, found 2026-11-18); runPackaged now compares the module's binary with the package's.
@@ -131,6 +131,7 @@ async function selfTest() {
         const dev = (pid, cwd) => ({ pid, ticks: '100', argv: ['node', join(REPO_ROOT, 'upstream/../orca/out/orcad/orcad.js')], cwd });
         check('control an orcad working in a sibling run\'s profile is left alone', strayUnder(profile, [dev(401, `${profile}9/powerbrowser-orca`)], '50').map((p) => `stray ${p.pid}`), null);
         check('stray orcad working in the run\'s deleted profile', strayUnder(profile, [dev(402, `${profile}/powerbrowser-orca (deleted)`)], '50').map((p) => `stray ${p.pid}`), 'stray 402');
+        check('the live path takes the live lock', lockWiringFails(NAME, import.meta.url), null);
     } finally {
         rmSync(tmp, { recursive: true, force: true });
     }
@@ -261,4 +262,8 @@ for (const a of args) {
         process.exit(2);
     }
 }
-process.exit(args.includes('--self-test') ? await selfTest() : await live());
+if (args.includes('--self-test')) process.exit(await selfTest());
+// harness-live-security-05: the row takes the live lock itself before it extracts and launches the package.
+const locked = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT, args });
+if (locked !== null) process.exit(locked);
+process.exit(await live());

@@ -28,8 +28,10 @@
 // HOME is a per-run scratch folder (owner ruling 2026-11-15, Scratch HOME; lib/firefox-bidi.mjs liveEnv): orcad keeps its credential
 // key in <HOME>/.orca (orcadCredentialRoot), so step 2 writes a key file that is removed when the run exits.
 //
-// Run under flock /home/chris/coding/Power-Browser/.git/pb-live.lock: the script re-execs itself
-// under <git common dir>/pb-live.lock unless PB_LIVE_LOCK_HELD=1. It removes every ORCA_* name from
+// The live lock: run the row plainly, with node and no flock wrapper. It takes
+// <git common dir>/pb-live.lock itself through scripts/lib/live-lock.mjs, whose header states the rule: it runs at
+// once only when the gate driver's named holder or an ancestor holds the lock, FAILs when PB_LIVE_LOCK_HELD=1 is set
+// without either, and otherwise waits for the lock (bounded, naming the holder). It removes every ORCA_* name from
 // its own environment first, sets MOZ_PURGE_CACHES=1 so edited chrome JS is what runs, prints through
 // installOutputRedaction, signals only identities it recorded (pid plus start ticks), and never
 // prints a pairing value.
@@ -43,13 +45,14 @@
 //   node scripts/verify-orca-credential-store-live.mjs
 //   node scripts/verify-orca-credential-store-live.mjs --self-test
 
-import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import * as OrcaEnv from '../powerbrowser/shell/OrcaEnv.sys.mjs';
+import { holdLiveLock, lockWiringFails } from './lib/live-lock.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-credential-store-live';
@@ -71,13 +74,33 @@ export function reportVerdict(what, report, expected) {
     return [];
 }
 
-/** A refusal: the class, the row (labels only) and no orcad in PowerBrowser's tree. Returns red reasons. */
-export function refusalVerdict(what, { failureClass, rowLabels, orcadPids }, { wantClass, wantRow }) {
+/**
+ * A refusal: the class, the row (labels only) and no trace of an orcad. Returns red reasons. Audit
+ * harness-live-security-10: orcadPids is every orcad the walker sampled under PowerBrowser across the whole launch (every
+ * 100 ms, not one walk at the end), and an orcad that started and was stopped between samples still leaves its
+ * protection report in the profile's data root (reportWritten) or a key under the launch HOME's .orca (keyFolderChanged).
+ */
+export function refusalVerdict(what, { failureClass, rowLabels, orcadPids, reportWritten, keyFolderChanged }, { wantClass, wantRow }) {
     const fails = [];
     if (failureClass !== wantClass) fails.push(`${what}: failureClass is ${JSON.stringify(failureClass)}, not ${wantClass}`);
     if (!rowLabels.includes(wantRow)) fails.push(`${what}: refusal without its row -- no "${wantRow}" diagnostics row`);
-    if (orcadPids.length) fails.push(`${what}: an orcad process (${orcadPids.length}) runs under PowerBrowser although the start was refused`);
+    if (orcadPids.length) fails.push(`${what}: an orcad process (${orcadPids.length}) ran under PowerBrowser although the start was refused`);
+    if (reportWritten) fails.push(`${what}: orcad wrote its ${REPORT_FILE} report in the refused profile's data root, so it ran`);
+    if (keyFolderChanged) fails.push(`${what}: the credential key folder under the launch HOME changed during the refused start, so an orcad ran`);
     return fails;
+}
+
+/** name -> "size mtime" for every file under `dir` (recursive), or {} when it is absent: the key folder's state. */
+export function folderState(dir) {
+    const out = {};
+    try {
+        for (const ent of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+            if (!ent.isFile()) continue;
+            const p = join(ent.parentPath ?? ent.path, ent.name);
+            try { const st = statSync(p); out[p.slice(dir.length + 1)] = `${st.size} ${st.mtimeMs}`; } catch { /* gone */ }
+        }
+    } catch { /* absent */ }
+    return out;
 }
 
 /** The absence claims of steps 3 and 4 count only after step 2's walker saw orcad. */
@@ -110,14 +133,14 @@ async function chromeJson(app, expr) {
 const service = (member) => `ChromeUtils.importESModule(${JSON.stringify(SERVICE_URL)}).OrcaService.${member}`;
 
 async function live() {
-    const { FIREFOX_BIN, launchedBrowserPids } = await import('./lib/firefox-bidi.mjs');
+    const { FIREFOX_BIN, launchedBrowserPids, liveEnv } = await import('./lib/firefox-bidi.mjs');
     const orcaDir = join(REPO_ROOT, 'orca');
     const orcadEntry = join(orcaDir, 'out', 'orcad', 'orcad.js');
-    if (!existsSync(FIREFOX_BIN)) { console.log(`${NAME}: SKIP -- no built PowerBrowser (${FIREFOX_BIN} missing; see docs/BUILD.md "Firefox half")`); return 0; }
-    if (!existsSync(orcadEntry)) { console.log(`${NAME}: SKIP -- no built orca/ (orca/out/orcad/orcad.js missing; run: nix develop .#orca --command bash scripts/build-orca.sh)`); return 0; }
+    if (!existsSync(FIREFOX_BIN)) { console.log(skipLine(NAME, `no built PowerBrowser (${FIREFOX_BIN} missing). Next step: the Firefox build in docs/BUILD.md`)); return SKIP_EXIT; }
+    if (!existsSync(orcadEntry)) { console.log(skipLine(NAME, 'no built orca/ (orca/out/orcad/orcad.js missing). Next step: nix develop .#orca --command bash scripts/build-orca.sh')); return SKIP_EXIT; }
     const { loadTypescript, derivePinned, pathsFor } = await import('./verify-orca-credential-store.mjs');
     const ts = loadTypescript();
-    if (!ts) { console.log(`${NAME}: SKIP -- theia/node_modules/typescript is not installed`); return 0; }
+    if (!ts) { console.log(skipLine(NAME, 'theia/node_modules/typescript is not installed. Next step: yarn install in theia/ inside nix develop .#theia')); return SKIP_EXIT; }
     if (process.env.PB_LIVE_HEADED === '1' || process.env.PB_REAL_INPUT === '1') {
         console.error(`${NAME}: FAIL -- this row runs headless only; unset PB_LIVE_HEADED and PB_REAL_INPUT`);
         return 1;
@@ -205,13 +228,27 @@ async function live() {
         });
         fails.push(...walkerVerdict({ sawOrcad }));
 
-        // ---- Steps 3 and 4: refusals, judged with the same walker.
+        // ---- Steps 3 and 4: refusals, judged with the same walker, sampled across the whole launch, plus the traces an
+        // orcad leaves (its report, a key file) in case it ran and was stopped between two samples.
+        const keyFolder = () => OrcaEnv.credentialKeyFolderFor((n) => liveEnv()[n], 'linux');
         const refusal = async (parent, label, wantClass, wantRow) => {
-            await launch(parent, label, async (app, { pbPid }) => {
-                let last = null;
-                await pollFor(async () => { last = await stateOf(app); return last.failureClass === wantClass ? last : null; }, 30000, `${label}: failureClass ${wantClass}`).catch(() => null);
-                fails.push(...refusalVerdict(label, { failureClass: last?.failureClass ?? null, rowLabels: await rowLabels(app), orcadPids: orcadInTree(pbPid) }, { wantClass, wantRow }));
-            });
+            const seen = new Set();
+            const sample = () => { for (const pb of launchedBrowserPids()) for (const pid of orcadInTree(pb)) seen.add(pid); };
+            const keysBefore = JSON.stringify(folderState(keyFolder()));
+            const timer = setInterval(sample, 100);
+            try {
+                await launch(parent, label, async (app, { dataRoot }) => {
+                    let last = null;
+                    await pollFor(async () => { last = await stateOf(app); return last.failureClass === wantClass ? last : null; }, 30000, `${label}: failureClass ${wantClass}`).catch(() => null);
+                    sample();
+                    fails.push(...refusalVerdict(label, {
+                        failureClass: last?.failureClass ?? null, rowLabels: await rowLabels(app), orcadPids: [...seen],
+                        reportWritten: existsSync(join(dataRoot, REPORT_FILE)), keyFolderChanged: JSON.stringify(folderState(keyFolder())) !== keysBefore,
+                    }, { wantClass, wantRow }));
+                });
+            } finally {
+                clearInterval(timer);
+            }
         };
         await refusal(tmpdir(), 'step 3 (profile under the temporary folder)', 'temporary-profile', 'Orca temporary folder');
         process.env[pin.name] = pin.value;
@@ -257,6 +294,18 @@ function runSelfTest() {
         ['a refusal without its row', 'refusal without its row', () => refusalVerdict('s', { ...refused, rowLabels: ['Orca state'] }, want)],
         ['a refusal with the wrong class', 'not temporary-profile', () => refusalVerdict('s', { ...refused, failureClass: 'could-not-start' }, want)],
         ['an orcad under a refused start', 'although the start was refused', () => refusalVerdict('s', { ...refused, orcadPids: [4242] }, want)],
+        // harness-live-security-10: an orcad started and stopped between two samples still leaves its traces.
+        ['a report written under a refused start', 'report in the refused profile', () => refusalVerdict('s', { ...refused, reportWritten: true }, want)],
+        ['a key written under a refused start', 'credential key folder under the launch HOME changed', () => refusalVerdict('s', { ...refused, keyFolderChanged: true }, want)],
+        ['the key folder reader sees a new key', 'changed', () => {
+            const dir = mkdtempSync(join(tmpdir(), 'pb-credential-keys-'));
+            try {
+                const before = JSON.stringify(folderState(dir));
+                writeFileSync(join(dir, 'orcad-credential.key'), 'k');
+                return JSON.stringify(folderState(dir)) === before ? [] : ['changed'];
+            } finally { rmSync(dir, { recursive: true, force: true }); }
+        }],
+        ['the live path takes the live lock', null, () => lockWiringFails(NAME, import.meta.url)],
         ['walker control', null, () => walkerVerdict({ sawOrcad: true })],
         ['a no-orcad claim with a blind walker', 'walker blind', () => walkerVerdict({ sawOrcad: false })],
     ];
@@ -290,12 +339,8 @@ if (isEntryPoint) {
         process.exit(2);
     }
     if (args.includes('--self-test')) process.exit(runSelfTest());
-    if (process.env.PB_LIVE_LOCK_HELD !== '1') {
-        const common = execFileSync('git', ['-C', REPO_ROOT, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim();
-        const r = spawnSync('flock', [join(common, 'pb-live.lock'), process.execPath, fileURLToPath(import.meta.url), ...args],
-            { stdio: 'inherit', env: { ...process.env, PB_LIVE_LOCK_HELD: '1' } });
-        process.exit(r.status ?? 1);
-    }
+    const locked = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT, args });
+    if (locked !== null) process.exit(locked);
     for (const key of Object.keys(process.env)) if (key.startsWith('ORCA_')) delete process.env[key];
     process.exit(await live());
 }

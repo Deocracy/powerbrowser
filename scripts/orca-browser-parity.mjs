@@ -8,8 +8,9 @@
 //
 // Derived at check time, by regex over source text, never hand-kept:
 //  a. the RPC ability set: every name: 'browser.<name>' in the files under
-//     orca/src/main/runtime/rpc/methods/, except *.test.ts and
-//     *.test-fixture.ts.
+//     orca/src/main/runtime/rpc/methods/, except test support (NOT_SOURCE and
+//     NOT_SOURCE_DIR below: *.test.ts, *-test-harness.ts, *-fixture.ts,
+//     test-fixtures.ts, *-test-double.ts, files under __mocks__ and the like).
 //  b. the automation set: the 'browser.*' strings inside the
 //     BROWSER_CLIENT_AUTOMATION_METHODS array (the client-host protocol, S2).
 //  c. the provider members: the readonly browser<Name> fields of
@@ -34,9 +35,10 @@
 // actor, native, impossible. Counts and set differences are printed, never
 // asserted as literals; member-to-RPC spelling mismatches are notes.
 //
-// Tier: the self-test is quick and hermetic (mkdtemp fixtures, no orca/). The
-// main run is full tier and needs a fetched orca/; with no orca/src it prints
-// one SKIP line and exits 0.
+// Tier: the self-test is quick and hermetic (mkdtemp fixtures, no orca/, and a
+// fixture overlay root of its own, so no file of the live repository is read).
+// The main run is full tier and needs a fetched orca/; with no orca/src it
+// prints one SKIP line and exits 77 (SKIP-PROTOCOL.md).
 // Limit: it proves the table covers the abilities the pin defines. It does not
 // prove a disposition is right: rows whose mechanism no run has shown carry
 // [ASSUMED] in their note.
@@ -51,10 +53,11 @@
 // red naming the drift. A plant whose anchor is absent from its input is itself
 // a FAIL. The fixture is removed and its removal is checked.
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { verdictExit } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-browser-parity';
@@ -68,13 +71,18 @@ const CLI_SPECS_REL = ['src/cli/specs/browser-basic.ts', 'src/cli/specs/browser-
 export const DISPOSITIONS = ['BiDi', 'BiDi+', 'actor', 'native', 'impossible'];
 export const HEADER = '| ability | users | disposition | Gecko mechanism | tier | note |';
 const ABILITY = String.raw`browser\.[A-Za-z0-9.]+`;
-const NOT_SOURCE = /\.(test|test-fixture)\.tsx?$/;
+// Test support, by purpose and not by one spelling (61-WR-03). Orca names it three ways: a dotted test suffix
+// (x.test.ts, x.test-fixture.ts, x.spec.ts), a hyphenated one (x-test-harness.ts, x-test-rig.ts,
+// x-test-double.ts, x-fixture.ts, test-fixtures.ts) and a directory (__mocks__/, __fixtures__/, __tests__/).
+// A name such as x-harness-core.ts is not excluded: the word must end the name.
+export const NOT_SOURCE = /(?:[.-](?:test|spec)(?:-[a-z]+)*|[.-](?:test-)?(?:fixtures?|harness|rig|double|fake|mock)s?)\.tsx?$/;
+export const NOT_SOURCE_DIR = /(^|\/)(__mocks__|__fixtures__|__tests__)(\/|$)/;
 
 /** Non-test .ts/.tsx files under dir, recursive. A missing dir yields []. */
 function sourceFiles(dir) {
     if (!existsSync(dir)) return [];
     return readdirSync(dir, { recursive: true, withFileTypes: true })
-        .filter((e) => e.isFile() && /\.tsx?$/.test(e.name) && !NOT_SOURCE.test(e.name))
+        .filter((e) => e.isFile() && /\.tsx?$/.test(e.name) && !NOT_SOURCE.test(e.name) && !NOT_SOURCE_DIR.test(relative(dir, e.parentPath)))
         .map((e) => join(e.parentPath, e.name));
 }
 
@@ -90,17 +98,18 @@ export function deriveRpc(orcaRoot) {
     return out;
 }
 
-const OVERLAY_FILES = join(REPO_ROOT, 'orca-overlay', 'files');
+/** The PowerBrowser overlay root; an input of deriveAll and check, so a fixture run never reads the live repository (61-WR-02). */
+export const OVERLAY_FILES = join(REPO_ROOT, 'orca-overlay', 'files');
 
 /**
  * Quoted 'browser.<name>' literals in the non-test sources under orcaRoot/rel. A file whose Orca-relative path is a
  * PowerBrowser overlay copy (the same path under orca-overlay/files/, which build-orca.sh copies in) is PB's own code,
  * not Orca's, and adds no user (66-06: the Phase 66 browser host is a renderer-tree overlay; P66-19 keeps the table).
  */
-function quotedNames(orcaRoot, rel) {
+function quotedNames(orcaRoot, rel, overlayRoot) {
     const out = new Set();
     for (const f of sourceFiles(join(orcaRoot, rel))) {
-        if (existsSync(join(OVERLAY_FILES, relative(orcaRoot, f)))) continue;
+        if (existsSync(join(overlayRoot, relative(orcaRoot, f)))) continue;
         for (const m of readFileSync(f, 'utf8').matchAll(new RegExp(`['"\`](${ABILITY})['"\`]`, 'g'))) out.add(m[1]);
     }
     return out;
@@ -118,7 +127,7 @@ const memberOf = (ability) => ability.split('.').map((p, i) => (i ? p[0].toUpper
  * has moved or the set is empty, so a re-pin can never pass on nothing.
  * users maps each RPC name to its sorted component list.
  */
-export function deriveAll(orcaRoot) {
+export function deriveAll(orcaRoot, overlayRoot = OVERLAY_FILES) {
     const rpc = deriveRpc(orcaRoot);
 
     const autoText = readOrThrow(orcaRoot, AUTOMATION_REL, 'automation');
@@ -135,7 +144,7 @@ export function deriveAll(orcaRoot) {
 
     let specs = 0;
     for (const rel of CLI_SPECS_REL) specs += (readOrThrow(orcaRoot, rel, 'cli').match(/\bpath:\s*\[/g) ?? []).length;
-    const cliNames = quotedNames(orcaRoot, 'src/cli');
+    const cliNames = quotedNames(orcaRoot, 'src/cli', overlayRoot);
     if (specs === 0 || cliNames.size === 0) throw new Error(`cli: ${specs === 0 ? `no path: [ spec in ${CLI_SPECS_REL.join(' or ')}` : "no quoted 'browser.*' name under src/cli/"} (empty)`);
 
     // Intersected with rpc below, so renderer translation keys that share the
@@ -143,9 +152,9 @@ export function deriveAll(orcaRoot) {
     const where = {
         agent: cliNames,
         CLI: cliNames,
-        renderer: quotedNames(orcaRoot, 'src/renderer'),
-        orcad: quotedNames(orcaRoot, 'src/main/orcad'),
-        main: quotedNames(orcaRoot, 'src/main/browser'),
+        renderer: quotedNames(orcaRoot, 'src/renderer', overlayRoot),
+        orcad: quotedNames(orcaRoot, 'src/main/orcad', overlayRoot),
+        main: quotedNames(orcaRoot, 'src/main/browser', overlayRoot),
     };
     const users = new Map();
     for (const a of rpc) users.set(a, Object.keys(where).filter((c) => where[c].has(a)).sort());
@@ -172,15 +181,15 @@ export function parseDispositions(text) {
     return rows;
 }
 
-/** Pure over its inputs so the self-test can plant faults. Returns { fails, skips, lines, notes, summary, derived }. */
-export function check(orcaRoot, dispositionsText) {
+/** Pure over its inputs (the Orca tree, the table text and the overlay root) so the self-test can plant faults. Returns { fails, skips, lines, notes, summary, derived }. */
+export function check(orcaRoot, dispositionsText, overlayRoot = OVERLAY_FILES) {
     const fails = [];
     const lines = [];
     const notes = [];
     if (!existsSync(join(orcaRoot, 'src'))) return { fails, skips: ['no fetched Orca tree (orca/src absent); run scripts/fetch-orca.sh'], lines, notes };
     let d;
     let rows;
-    try { d = deriveAll(orcaRoot); } catch (err) { fails.push(err.message); }
+    try { d = deriveAll(orcaRoot, overlayRoot); } catch (err) { fails.push(err.message); }
     try { rows = parseDispositions(dispositionsText); } catch (err) { fails.push(err.message); }
     if (!d || !rows) return { fails, skips: [], lines, notes };
     for (const a of [...d.rpc].sort()) {
@@ -216,13 +225,19 @@ export function check(orcaRoot, dispositionsText) {
 function runSelfTest() {
     const tmp = mkdtempSync(join(tmpdir(), `${NAME}-`));
     const root = join(tmp, 'orca');
+    // The fixture's own overlay root: the self-test reads nothing of the live repository (61-WR-02).
+    const overlay = join(tmp, 'overlay');
+    const emptyOverlay = join(tmp, 'overlay-empty');
     const put = (rel, body) => { mkdirSync(dirname(join(root, rel)), { recursive: true }); writeFileSync(join(root, rel), body); };
     const row = (ability, users) => `| ${ability} | ${users} | BiDi | fixture | 1 | fixture |`;
     const beta = row('browser.fixtureBeta.gamma', 'renderer');
     const table = [HEADER, '|---|---|---|---|---|---|', row('browser.fixtureAlpha', 'CLI, agent, orcad'), beta, ''].join('\n');
     let passed = 0;
     try {
-        const skip = check(root, table);
+        mkdirSync(join(overlay, 'src/renderer/src/pb/browser-host'), { recursive: true });
+        mkdirSync(emptyOverlay, { recursive: true });
+        writeFileSync(join(overlay, 'src/renderer/src/pb/browser-host/pb-browser-host.ts'), '');
+        const skip = check(root, table, overlay);
         if (skip.fails.length || skip.skips.length !== 1) {
             console.error(`${NAME} self-test: FAIL -- a fixture with no orca/src did not produce exactly one SKIP and no FAIL`);
             return 1;
@@ -238,15 +253,15 @@ function runSelfTest() {
         put('src/main/orcad/fixture.ts', "route('browser.fixtureAlpha')\n");
         // The second name is a translation key, not an ability: it must add no renderer user.
         put('src/renderer/src/fixture.tsx', "call('browser.fixtureBeta.gamma'); t('browser.fixtureI18n.title')\n");
-        // A PB overlay copy (a path that exists under orca-overlay/files/) is not Orca's code: it must add no renderer user.
+        // A PB overlay copy (a path that exists under the overlay root) is not Orca's code: it must add no renderer user.
         put('src/renderer/src/pb/browser-host/pb-browser-host.ts', "call('browser.fixtureAlpha')\n");
-        const control = check(root, table);
+        const control = check(root, table, overlay);
         const i18nUser = control.derived?.users.has('browser.fixtureI18n.title');
         if (control.fails.length || control.lines.length !== 2 || i18nUser) {
             console.error(`${NAME} self-test: FAIL -- the clean fixture is not green (${control.fails.join(' | ') || (i18nUser ? 'a translation key became an ability user' : `${control.lines.length} abilities, expected 2`)}), so the plant results below would be meaningless`);
             return 1;
         }
-        console.log(`${NAME} self-test: clean control green (2 synthetic abilities derived with their users; the test-file name, the renderer translation key and a PB overlay copy ignored)`);
+        console.log(`${NAME} self-test: clean control green (2 synthetic abilities derived with their users; the test-file name, the renderer translation key and a PB overlay copy ignored; overlay root = the fixture's own)`);
         console.log(`${NAME} self-test: SKIP case -> a fixture with no orca/src gives one SKIP and no FAIL`);
 
         // A tree plant rewrites one fixture file and returns its undo; null means the anchor was absent.
@@ -262,6 +277,14 @@ function runSelfTest() {
             rmSync(join(root, rel));
             return () => writeFileSync(join(root, rel), before);
         };
+        const add = (rel, body) => () => {
+            put(rel, body);
+            return () => rmSync(join(root, rel), { recursive: true, force: true });
+        };
+        const renameDir = (rel) => () => {
+            renameSync(join(root, rel), join(root, `${rel}-moved`));
+            return () => renameSync(join(root, `${rel}-moved`), join(root, rel));
+        };
         const plants = [
             { name: 'orphan-row', naming: ['row browser.fixtureGhost'], table: (t) => t.replace(/\n$/, `\n${row('browser.fixtureGhost', 'renderer')}\n`) },
             { name: 'missing-row', naming: ['ability browser.fixtureBeta.gamma'], table: (t) => t.replace(`${beta}\n`, '') },
@@ -272,6 +295,20 @@ function runSelfTest() {
             { name: 'empty-cli-specs', naming: ['cli', 'empty'], tree: edit(CLI_SPECS_REL[0], /path:/g, 'x:') },
             { name: 'wrong-component-set', naming: ['browser.fixtureBeta.gamma', '[orcad]', '[renderer]'], table: (t) => t.replace(beta, row('browser.fixtureBeta.gamma', 'orcad')) },
             { name: 'i18n-key-row', naming: ['row browser.fixtureI18n.title'], table: (t) => t.replace(/\n$/, `\n${row('browser.fixtureI18n.title', 'renderer')}\n`) },
+            // 61-WR-01: the table-refusal branches and the derivation throws the header advertises.
+            { name: 'bad-header', naming: ['table', 'header not found'], table: (t) => t.replace('| tier |', '| level |') },
+            { name: 'duplicate-row', naming: ['duplicate row for browser.fixtureAlpha'], table: (t) => t.replace(/\n$/, `\n${row('browser.fixtureAlpha', 'CLI, agent, orcad')}\n`) },
+            { name: 'bad-disposition', naming: ['browser.fixtureBeta.gamma', 'disposition "CDP"'], table: (t) => t.replace(beta, beta.replace('| BiDi |', '| CDP |')) },
+            { name: 'short-row', naming: ['does not have 6 cells'], table: (t) => t.replace(beta, beta.replace(' fixture |', '')) },
+            { name: 'moved-methods-dir', naming: ['rpc', `${METHODS_REL}/ not found`], tree: renameDir(METHODS_REL) },
+            { name: 'empty-rpc', naming: ['rpc', 'empty'], tree: edit(`${METHODS_REL}/fixture-core.ts`, /name:/g, 'x:') },
+            { name: 'empty-members', naming: ['members', 'empty'], tree: edit(MEMBERS_REL, /readonly /g, '') },
+            { name: 'no-cli-names', naming: ['cli', "no quoted 'browser.*' name"], tree: edit('src/cli/browser/fixture.ts', 'browser.fixtureAlpha', 'fixtureAlpha') },
+            // 61-WR-02: the overlay root is an input. An overlay root without the PB host file lets its renderer reference count as a user.
+            { name: 'overlay-root-is-an-input', naming: ['browser.fixtureAlpha', '[CLI, agent, orcad, renderer]'], overlay: emptyOverlay },
+            // 61-WR-03: test support is excluded by purpose, so a product file whose name only contains a test word is still derived.
+            { name: 'product-file-named-harness-core', naming: ['ability browser.fixtureProductOnly'], tree: add(`${METHODS_REL}/x-harness-core.ts`, "export const P = { name: 'browser.fixtureProductOnly' }\n") },
+            { name: 'product-dir-named-mocks-core', naming: ['ability browser.fixtureProductDir'], tree: add(`${METHODS_REL}/mocks-core/y.ts`, "export const P = { name: 'browser.fixtureProductDir' }\n") },
         ];
         let failures = 0;
         for (const p of plants) {
@@ -279,7 +316,7 @@ function runSelfTest() {
             const undo = p.tree ? p.tree() : undefined;
             try {
                 if ((p.table && planted === table) || undo === null) { console.error(`  FAIL ${p.name} -> the plant's anchor is absent from its input`); failures++; continue; }
-                const text = check(root, planted).fails.join('\n');
+                const text = check(root, planted, p.overlay ?? overlay).fails.join('\n');
                 const unnamed = p.naming.filter((n) => !text.includes(n));
                 if (!text) { console.error(`  FAIL ${p.name} -> stayed green`); failures++; }
                 else if (unnamed.length) { console.error(`  FAIL ${p.name} -> red, but not naming '${unnamed.join("', '")}': ${text}`); failures++; }
@@ -287,14 +324,46 @@ function runSelfTest() {
             } finally {
                 undo?.();
             }
-            const after = check(root, table);
+            const after = check(root, table, overlay);
             if (after.fails.length) { console.error(`${NAME} self-test: FAIL -- plant ${p.name} did not clean up: ${after.fails.join(' | ')}`); return 1; }
         }
+        // 61-WR-03: every spelling of test support must add no ability and no user. Each file is added to the clean fixture
+        // on its own; the clean control (two abilities, no extra user) must still hold.
+        const harnessOnly = "export const H = { name: 'browser.fixtureHarnessOnly' }\n";
+        const alphaCall = "call('browser.fixtureAlpha')\n";
+        const ignored = [
+            [`${METHODS_REL}/x-test-fixture.ts`, harnessOnly],
+            [`${METHODS_REL}/x-test-harness.ts`, harnessOnly],
+            [`${METHODS_REL}/x-contract-test-fixture.ts`, harnessOnly],
+            [`${METHODS_REL}/sub/rpc-test-harness.ts`, harnessOnly],
+            [`${METHODS_REL}/x.spec.ts`, harnessOnly],
+            [`${METHODS_REL}/x-test-double.ts`, harnessOnly],
+            [`${METHODS_REL}/__mocks__/persistence.ts`, harnessOnly],
+            ['src/renderer/src/x-test-harness.ts', alphaCall],
+            ['src/renderer/src/x-test-rig.tsx', alphaCall],
+            ['src/main/browser/x-fixture.ts', alphaCall],
+            ['src/main/browser/__fixtures__/z.ts', alphaCall],
+            // The CLI tree cannot add an ability, only users: Beta has no CLI user, so reading this file as source would add CLI and agent to it.
+            ['src/cli/test-fixtures.ts', "call('browser.fixtureBeta.gamma')\n"],
+            ['src/main/orcad/x-fixture.ts', "call('browser.fixtureBeta.gamma')\n"],
+        ];
+        for (const [rel, body] of ignored) {
+            put(rel, body);
+            try {
+                const r = check(root, table, overlay);
+                if (r.fails.length || r.lines.length !== 2 || r.derived.rpc.has('browser.fixtureHarnessOnly')) {
+                    console.error(`  FAIL test-support ${rel} -> was read as source (${r.fails.join(' | ') || `${r.lines.length} abilities`})`);
+                    failures++;
+                } else console.log(`  ok test-support ${rel} -> adds no ability and no user`);
+            } finally {
+                rmSync(join(root, rel), { force: true });
+            }
+        }
         if (failures) {
-            console.error(`${NAME} self-test: FAIL -- ${failures} of ${plants.length} plant(s) did not go red naming the drift`);
+            console.error(`${NAME} self-test: FAIL -- ${failures} of ${plants.length + ignored.length} plant(s) did not go red naming the drift`);
             return 1;
         }
-        passed = plants.length;
+        passed = plants.length + ignored.length;
     } finally {
         rmSync(tmp, { recursive: true, force: true });
     }
@@ -317,7 +386,8 @@ if (isMain) {
     const r = check(join(REPO_ROOT, 'orca'), text);
     for (const l of r.lines) console.log(l);
     for (const l of r.notes) console.log(l);
-    if (r.skips.length) { for (const s of r.skips) console.log(`${NAME}: SKIP -- ${s}`); process.exit(0); }
-    if (r.fails.length) { for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`); process.exit(1); }
+    for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`);
+    const code = verdictExit(NAME, r.fails, r.skips);
+    if (code !== 0) process.exit(code);
     console.log(`${NAME}: PASS -- ${r.summary}; abilities and users compared both ways (${TABLE_REL})`);
 }

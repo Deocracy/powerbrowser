@@ -81,7 +81,9 @@
  * below, and it runs only when the seeds do). Both must be main-area tabs before the walk,
  * so the set-equality and isAttached assertions cover them on every hop,
  * the Orca mode's included. While theia/extensions/orca-panes is absent the
- * seeds print "Orca seeds: SKIP -- lane p64-02 not merged"; present but a
+ * seeds are skipped: the run still walks the modes, and, if nothing failed,
+ * ends with the one line "verify-mode-switch-tabs-live: SKIP -- Orca seeds did
+ * not run ..." and exit 77 (SKIP-PROTOCOL.md), never a PASS; present but a
  * command unregistered or no hosted widget within 5000 ms is red. The plant
  * 'orca-vanish' disposes an Orca seed (the welcome seed stands in while there
  * is none) after the first hop, and the next hop must name it LOST.
@@ -120,6 +122,12 @@
  * some, and nothing about what a human sees -- a widget can be attached and
  * still be painted wrong.
  *
+ * THE LIVE LOCK (scripts/lib/live-lock.mjs; SKIP-PROTOCOL.md, "The live lock"). The row and its --self-test, which both boot browsers, call
+ * holdLiveLock before they launch anything. They go on without taking the lock only when /proc/locks shows it held by the driver's holder
+ * (PB_LIVE_LOCK_HOLDER: pid and start ticks) or by an ancestor (flock <git common dir>/pb-live.lock node <row>); an inherited
+ * PB_LIVE_LOCK_HELD=1 with neither is a FAIL by name; with nothing set they take the lock themselves and wait, naming the holder.
+ * --self-test is a full-tier row.
+ *
  * Usage:
  *   node scripts/verify-mode-switch-tabs-live.mjs
  *   node scripts/verify-mode-switch-tabs-live.mjs --self-test
@@ -133,6 +141,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { withFirefoxPage } from './lib/firefox-bidi.mjs';
+import { verdictExit } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'verify-mode-switch-tabs-live';
@@ -378,7 +387,7 @@ function protocolExpression(derived, plant) {
     });
     return `(async () => { ${GET_BY_NAME}
     const cfg = ${cfg};
-    const report = { failures: [], notes: [], steps: [], consoleErrors: [] };
+    const report = { failures: [], notes: [], steps: [], consoleErrors: [], skips: [] };
     const fail = message => report.failures.push(message);
     try {
         const container = window.theia.container;
@@ -488,7 +497,7 @@ function protocolExpression(derived, plant) {
         // --- Orca seeds (Phase 64): one hosted chat, one hosted terminal ----
         const orcaSeeds = [];
         if (!cfg.orcaSeeds) {
-            report.notes.push('Orca seeds: SKIP -- lane p64-02 not merged');
+            report.skips.push('Orca seeds did not run (lane p64-02 not merged: theia/extensions/orca-panes is absent). Next step: merge that lane, then run scripts/verify-platform.sh --only gui07-mode-switch-tabs-live');
         } else {
             for (const id of cfg.orcaSeedCommands) {
                 report.steps.push('seed ' + id);
@@ -603,7 +612,7 @@ async function runProtocol(derived, plant) {
     try {
         return await drive(derived, plant);
     } catch (error) {
-        return { driveError: String(error), failures: [], notes: [], steps: [] };
+        return { driveError: String(error), failures: [], notes: [], steps: [], skips: [] };
     }
 }
 
@@ -725,8 +734,12 @@ async function main() {
         console.error(`${NAME}: FAIL -- ${failures.length} assertion(s) failed`);
         return 1;
     }
-    console.log(`${NAME}: PASS -- ${(report.baselineMain ?? []).length} main-area and ${(report.baselineBottom ?? []).length} bottom-area tab(s) survived every second-visit mode switch, attached`);
-    return 0;
+    // A part of the run that did not run because an input is absent is a partial run: SKIP, never PASS (SKIP-PROTOCOL.md).
+    const code = verdictExit(NAME, [], report.skips ?? []);
+    if (code === 0) {
+        console.log(`${NAME}: PASS -- ${(report.baselineMain ?? []).length} main-area and ${(report.baselineBottom ?? []).length} bottom-area tab(s) survived every second-visit mode switch, attached`);
+    }
+    return code;
 }
 
 /**
@@ -792,8 +805,19 @@ async function selfTest() {
     ];
 
     let failed = 0;
+    const skipped = [];
+    {
+        // The shared live-lock helper is still awaited on this row's live path (no browser).
+        const lib = await import('./lib/orca-tabs-live.mjs');
+        const liveLock = await import('./lib/live-lock.mjs');
+        for (const message of [...liveLock.lockWiringFails(NAME, import.meta.url), ...(lib.lockWiringPlantFails(liveLock.lockWiringFails).length ? [] : ['a script without the lock call was not caught'])]) {
+            console.error(`${NAME} --self-test: FAIL -- ${message}`);
+            failed++;
+        }
+    }
     for (const testCase of cases) {
         const report = await runProtocol(derived, testCase.plant);
+        for (const reason of report.skips ?? []) if (!skipped.includes(reason)) skipped.push(reason);
         const failures = assertReport(derived, report);
         if (report.driveError) {
             // Distinct from a plant that failed to go red: the session never
@@ -834,13 +858,23 @@ async function selfTest() {
         console.error(`${NAME} --self-test: FAIL -- ${failed} case(s) did not behave as required`);
         return 1;
     }
-    console.log(`${NAME} --self-test: PASS -- the clean control is green and all ${cases.length - 1} planted faults went red`);
-    return 0;
+    // A self-test that ran with a skipped input (no Orca seeds) did not cover the seed path: SKIP, not PASS.
+    const code = verdictExit(NAME, [], skipped);
+    if (code === 0) {
+        console.log(`${NAME} --self-test: PASS -- the clean control is green and all ${cases.length - 1} planted faults went red`);
+    }
+    return code;
 }
 
 const args = process.argv.slice(2);
 if (args.includes('--help')) {
     console.log(HELP.trimEnd());
     process.exit(0);
+}
+{
+    // Both modes launch a browser: the live lock first (scripts/lib/live-lock.mjs).
+    const { holdLiveLock } = await import('./lib/live-lock.mjs');
+    const locked = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
+    if (locked !== null) process.exit(locked);
 }
 process.exit(args.includes('--self-test') ? await selfTest() : await main());

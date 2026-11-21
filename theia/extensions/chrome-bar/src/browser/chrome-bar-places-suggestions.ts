@@ -29,7 +29,11 @@ export class ChromeBarPlacesSuggestions implements ChromeBarSuggestionService {
     async searchByPrefix(prefix: string, limit: number): Promise<SourcedRow[]> {
         const cap = Number.isFinite(limit) ? Math.min(Math.max(Math.floor(limit), 1), CHROME_SUGGESTION_LIMIT) : CHROME_SUGGESTION_LIMIT;
         const [tabRows, places] = await Promise.all([
-            this.tabs.searchByPrefix(prefix, cap),
+            // The reverse holds too: an unreadable tab store (NG-012 rejects) must not drop chrome's history and bookmark rows.
+            this.tabs.searchByPrefix(prefix, cap).catch((err: unknown): TabQueryRow[] => {
+                console.warn('[@powerbrowser/chrome-bar] open-tab suggestions unavailable:', err);
+                return [];
+            }),
             // History and bookmarks are an addition: when chrome cannot answer, the open tabs still show.
             this.store.searchPlaces(prefix, cap).catch((err: unknown): PlaceMatch[] => {
                 console.warn('[@powerbrowser/chrome-bar] history and bookmark suggestions unavailable:', err);

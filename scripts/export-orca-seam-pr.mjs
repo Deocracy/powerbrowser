@@ -78,7 +78,7 @@ export function checkHeadings(body, headings) {
 export function testCommand(agentsText) {
     const line = agentsText.split('\n').find((l) => /\*\*Test\*\*/.test(l));
     const m = line?.match(/`([^`]+)`/);
-    if (!m) throw new Error(`orca/${AGENTS_REL} names no **Test** command (the source moved)`);
+    if (!m) throw new Error(`Orca main's ${AGENTS_REL} names no **Test** command (the source moved)`);
     return m[1];
 }
 
@@ -128,12 +128,14 @@ export function exportSeams({ overlayDir, orcaDir, remote, outRoot, id, cls }) {
         if (!existsSync(f)) throw new Error(`no upstream description for ${sid}; 68-05 writes orca-overlay/upstream/${sid}/upstream.json`);
         return { sid, row: r, doc: JSON.parse(readFileSync(f, 'utf8')) };
     });
-    const headings = templateHeadings(readFileSync(join(orcaDir, TEMPLATE_REL), 'utf8'));
-    if (!headings.length) throw new Error(`orca/${TEMPLATE_REL} has no "## " heading (the source moved)`);
-    const cmd = testCommand(readFileSync(join(orcaDir, AGENTS_REL), 'utf8'));
-
+    // 68-WR-03: the PR template and the Test command are read from Orca's main, the branch the PR targets, never from
+    // the pinned orca/ (orcaDir), which trails main by a week or more; a stale template's headings would pass
+    // checkHeadings while the PR missed one main's maintainers enforce.
     const main = join(outRoot, '.main');
     fetchMain(remote, main);
+    const headings = templateHeadings(readFileSync(join(main, TEMPLATE_REL), 'utf8'));
+    if (!headings.length) throw new Error(`Orca main's ${TEMPLATE_REL} has no "## " heading (the source moved)`);
+    const cmd = testCommand(readFileSync(join(main, AGENTS_REL), 'utf8'));
     const tracked = new Set(git(main, 'ls-files').split('\n').filter(Boolean));
     const filesDir = join(overlayDir, 'files');
     const carried = {};
@@ -186,6 +188,8 @@ export function exportSeams({ overlayDir, orcaDir, remote, outRoot, id, cls }) {
 function runSelfTest() {
     const tmp = mkdtempSync(join(tmpdir(), `${NAME}-`));
     const up = join(tmp, 'upstream-main');
+    // The pinned tree trails main: its template lacks main's Visual Proof heading and names an older Test command.
+    const pinned = join(tmp, 'orca-pinned');
     const overlay = join(tmp, 'orca-overlay');
     const HELPER = 'src/extra/helper.ts';
     const HELPER_TEXT = `// helper for the example switch\nexport const HELPER_ID = 'pb-overlay:${HELPER}'\nexport const enabled = process.env.ORCA_EXAMPLE_SWITCH === '1'\n`;
@@ -201,6 +205,8 @@ function runSelfTest() {
         put(up, AGENTS_REL, '# Commands\n\n- **Test**: `pnpm test [file] --maxWorkers=2`; more\n');
         git(up, 'add', '-A');
         git(up, ...GIT_ID, 'commit', '-q', '-m', 'fixture main');
+        put(pinned, TEMPLATE_REL, '## Summary\n\n<!-- x -->\n\n## Linked Issue\n\nFixes #\n\n## Testing\n\n- [ ] tested\n');
+        put(pinned, AGENTS_REL, '# Commands\n\n- **Test**: `pnpm test-stale [file]`; more\n');
         // A patch is git's own diff of an edited fixture tree, never typed.
         const makePatch = (rel, body) => {
             const before = readFileSync(join(up, rel), 'utf8');
@@ -231,7 +237,7 @@ function runSelfTest() {
             for (const [f, b] of Object.entries(spec.patches)) put(overlay, `patches/${f}`, b);
             for (const [f, b] of Object.entries(spec.files)) put(overlay, `files/${f}`, b);
             for (const [f, b] of Object.entries(spec.upstream)) put(overlay, `upstream/${f}`, b);
-            return exportSeams({ overlayDir: overlay, orcaDir: up, remote: `file://${up}`, outRoot: join(tmp, 'out'), ...sel });
+            return exportSeams({ overlayDir: overlay, orcaDir: pinned, remote: `file://${up}`, outRoot: join(tmp, 'out'), ...sel });
         };
         const fail = (m) => { console.error(`${NAME} self-test: FAIL -- ${m}`); return 1; };
 
@@ -241,6 +247,12 @@ function runSelfTest() {
             return fail(`control 010-a wrote ${wrote.join(', ')}; headings ${one.headings.join(', ')}; test file in patch: ${one.patch.includes('b/src/a.test.ts')}`);
         }
         console.log(`${NAME} self-test: control green -- 010-a wrote ${wrote.join(', ')} with every template heading and its new test file`);
+        // 68-WR-03: main's heading the pinned template lacks is in pr.md, and the Test command is main's.
+        const cmdOut = readFileSync(join(one.out, 'test-command.txt'), 'utf8').trim();
+        if (!one.pr.includes('## Visual Proof') || cmdOut !== 'pnpm test [file] --maxWorkers=2') {
+            return fail(`pr.md or test-command.txt came from the pinned tree, not Orca main: Visual Proof heading ${one.pr.includes('## Visual Proof')}, test command '${cmdOut}'`);
+        }
+        console.log("  ok template-from-main -> pr.md carries main's Visual Proof heading the pinned template lacks, and main's Test command");
         const src = HELPER_TEXT.split('\n');
         const got = (one.carried[HELPER] ?? '').split('\n');
         const diffs = src.map((l, i) => (l === got[i] ? -1 : i)).filter((i) => i >= 0);

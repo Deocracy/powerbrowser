@@ -77,12 +77,15 @@ test -f "$STAGE/node/node.exe" || fail "the staged Windows node.exe is absent"
 cp "$ROOT/powerbrowser/distribution/policies.json" "$STAGE/distribution/policies.json"
 bash "$ROOT/powerbrowser/packaging/stage-bundled-xpi.sh" "$STAGE/distribution"
 
-# <GreD>/orca: the packaged root only (package.json, out/orcad, out/web), never the provenance files.
+# <GreD>/orca: the packaged root only (package.json, out/orcad, out/web, and Orca's own LICENSE), never the
+# provenance files.
 rm -rf "$STAGE/orca"
 mkdir -p "$STAGE/orca/out"
 cp -a "$ORCA_DIR/package.json" "$STAGE/orca/package.json"
 cp -a "$ORCA_DIR/out/orcad" "$ORCA_DIR/out/web" "$STAGE/orca/out/"
-node "$ROOT/scripts/verify-orca-packaged-tree.mjs" --target win64 --built "$ORCA_DIR" --stage "$STAGE/orca" \
+# packaging-prefs-network-02: Orca's own MIT notice, from the fetched orca/ and verified against the licence allowlist.
+bash "$ROOT/powerbrowser/packaging/stage-orca-licence.sh" "$ROOT" "$STAGE/orca"
+bash "$ROOT/scripts/run-no-skip.sh" -- node "$ROOT/scripts/verify-orca-packaged-tree.mjs" --target win64 --built "$ORCA_DIR" --stage "$STAGE/orca" \
     --prebuild-manifest "$ORCA_DIR/orcad-prebuilds-manifest.json" || fail "the staged Orca tree is not the admitted windows-orca tree for win64"
 
 # Checkout-path purge, as package-linux.sh does for its backend bundles: no staged text file may name a
@@ -96,7 +99,7 @@ bash "$ROOT/powerbrowser/packaging/check-win-sidecar.sh" purge "$ORCA_DIR" "$STA
 
 # PKG-13 native gate, before precomplete is refreshed: every .node, rg and node binary in the
 # Windows stage must be PE32+ x86-64. A Linux or Mach-O native here stops the stage naming the file.
-node "$ROOT/scripts/verify-package-target-natives.mjs" --target win64 --stage "$STAGE" \
+bash "$ROOT/scripts/run-no-skip.sh" -- node "$ROOT/scripts/verify-package-target-natives.mjs" --target win64 --stage "$STAGE" \
     || fail "a staged native is not PE32+ x86-64; the Windows stage is not assembled"
 
 ( cd "$STAGE" && python3 "$ROOT/upstream/config/createprecomplete.py" )

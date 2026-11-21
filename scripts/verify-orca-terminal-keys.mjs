@@ -62,13 +62,16 @@
 // cannot, and those are printed as owner items). The remaining active chords are
 // printed as a note for the owner review.
 //
-// SKIP rules: the orca-panes half prints a named SKIP only while
-// theia/extensions/orca-panes is absent; the Orca half only while orca/ is absent
-// (P62-10). The directory present but a needed file missing is red.
+// SKIP rules: only the Orca half is not run, and only while the fetched orca/ is absent
+// (P62-10). theia/extensions/orca-panes is a tracked extension: absent, or present with a
+// needed file missing, is red (harness-static-structure-01). A half that
+// did not run makes the row exit 77 with the one SKIP line (SKIP-PROTOCOL.md); the
+// self-test, which copies the pinned Orca sources into its fixture, is a SKIP too
+// while orca/ is absent (harness-static-structure-14) and never an ENOENT crash.
 //
 // The live half is orca-terminal-keys-live.
 //
-// Tier: quick (static; one named SKIP when typescript is absent). --self-test
+// Tier: quick (static; exit 77 with a SKIP line when typescript is absent). --self-test
 // copies the tree's files into a mkdtemp directory, adds a fixture orca-panes tree
 // in C10's shape and plants faults.
 //
@@ -81,6 +84,8 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-terminal-keys';
@@ -635,8 +640,10 @@ export function check(root) {
     }
 
     // The orca-panes half: the passthrough set is the shell keys, and its rows stay scoped.
-    if (!panesPresent) out.panes = 'SKIP -- theia/extensions/orca-panes is absent';
-    else {
+    if (!panesPresent) {
+        out.panes = 'absent';
+        fails.push(`${REL.panes} is a tracked extension of this repository and is absent from the tree (the lane that added it is merged, so this is a deletion). Next step: restore it from version control.`);
+    } else {
         for (const rel of [REL.protocol, REL.frontend, REL.widget]) if (!has(rel)) fails.push(`${rel} is missing while ${REL.panes} is present`);
         if (!fails.length) panesHalf(root, k, d32, fails);
     }
@@ -858,19 +865,28 @@ export const PLANTS = [
 ];
 
 function runSelfTest() {
+    // The Orca half of the fixture is copied from the pinned Orca sources. Without orca/ the self-test cannot run: a named
+    // SKIP, as in the sibling pane-routes and editor-routes self-tests. A tree file outside orca/ that is missing is a red.
+    const absent = COPIED.filter((rel) => !existsSync(join(REPO_ROOT, rel)));
+    const lost = absent.filter((rel) => !rel.startsWith('orca/'));
+    if (lost.length) { console.error(`${NAME} self-test: FAIL -- ${lost.join(', ')} is absent from the tree (the self-test copies it into its fixture)`); return 1; }
+    if (absent.length) {
+        console.log(skipLine(`${NAME} self-test`, `orca/ is absent (${absent.length} pinned Orca source(s) the fixture copies are missing), so the planted faults did not run. Next step: bash scripts/fetch-orca.sh`));
+        return SKIP_EXIT;
+    }
     const tmp = mkdtempSync(join(tmpdir(), `${NAME}-`));
     try {
         for (const rel of COPIED) {
             mkdirSync(dirname(join(tmp, rel)), { recursive: true });
             cpSync(join(REPO_ROOT, rel), join(tmp, rel), { recursive: true, filter: (src) => !/\.(test|spec)\.tsx?$/.test(src) });
         }
-        // The SKIP half first: no orca-panes directory, the rest green with a named SKIP.
-        const skipRun = check(tmp);
-        if (skipRun.fails.length || !skipRun.panes.startsWith('SKIP')) {
-            console.error(`${NAME} self-test: FAIL -- the run without orca-panes is not green with a named SKIP: ${skipRun.fails.join(' | ') || skipRun.panes}`);
+        // No orca-panes directory: red, naming the absent tracked extension, and nothing else red (harness-static-structure-01).
+        const absentRun = check(tmp);
+        if (absentRun.fails.length !== 1 || !absentRun.fails[0].includes(`${REL.panes} is a tracked extension of this repository and is absent`)) {
+            console.error(`${NAME} self-test: FAIL -- the run without orca-panes is not red for exactly that reason: ${absentRun.fails.join(' | ') || 'green'}`);
             return 1;
         }
-        console.log(`${NAME} self-test: control without orca-panes green -- orca-panes ${skipRun.panes}`);
+        console.log(`${NAME} self-test: orca-panes removed -> red, naming '${REL.panes} is a tracked extension of this repository and is absent'`);
         for (const [rel, text] of Object.entries(FIXTURE)) { mkdirSync(dirname(join(tmp, rel)), { recursive: true }); writeFileSync(join(tmp, rel), text); }
         for (const rel of PANES_COPIED) { mkdirSync(dirname(join(tmp, rel)), { recursive: true }); cpSync(join(REPO_ROOT, rel), join(tmp, rel)); }
         const control = check(tmp);
@@ -908,7 +924,7 @@ if (isEntryPoint) {
         console.error(`${NAME}: unknown argument ${args[0] === '--self-test' ? args[1] : args[0]} (usage: node ${SELF_REL} [--self-test])`);
         process.exit(2);
     }
-    if (!loadTypeScript()) { console.log(`${NAME}: SKIP -- theia/node_modules/typescript is absent; run the audited Theia install`); process.exit(0); }
+    if (!loadTypeScript()) { console.log(skipLine(NAME, 'theia/node_modules/typescript is absent, so neither the check nor its self-test ran. Next step: run the audited Theia install')); process.exit(SKIP_EXIT); }
     if (args[0] === '--self-test') process.exit(runSelfTest());
     const r = check(REPO_ROOT);
     if (r.fails.length) { for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`); process.exit(1); }
@@ -916,6 +932,9 @@ if (isEntryPoint) {
         console.log(`${NAME}: note -- Orca chords still active in hosted terminals under '${r.orcaPolicy}' (released in memory: ${r.released.join(', ')}): ${r.note || 'none'}`);
         for (const o of r.ownerItems) console.log(`${NAME}: note -- owner item: ${o.key} stays ${o.id} (Orca's xterm bypass policy hard-codes it; no in-memory release)`);
     }
+    const skips = [];
+    if (r.orca.startsWith('SKIP')) skips.push('the Orca half did not run: orca/ is absent (P62-10). Next step: bash scripts/fetch-orca.sh');
+    if (skips.length) { console.log(skipLine(NAME, skips.join('; '))); process.exit(SKIP_EXIT); }
     console.log(`${NAME}: PASS -- shell keys ${r.d32.shell.join(', ')}; switch keys ${r.d32.switch.join(', ')}; close key ${r.d32.close}; derived from PAGE_KEYS reserved rows; orca-panes rows ${r.panes}; switch and close bindings, twins and collisions compared; Orca terminal-first half and the Linux selection-paste preset ${r.orca}`);
     process.exit(0);
 }

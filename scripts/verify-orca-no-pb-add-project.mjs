@@ -26,9 +26,25 @@
 // Orca Terminal are registered ("parser blind"). P65-16: those two commands
 // create panes, not projects, and stay.
 //
-// Tier: quick (static). A named SKIP, exit 0, when typescript or orca/ is
-// absent (P62-10). --self-test runs a fixture tree in mkdtemp: a green control,
-// then plants, each undone after its run, each required to go red naming it.
+// Beyond the exact match (harness-static-structure-07):
+//  c. the vocabulary also holds every translate default of Orca's add-repo dialog
+//     files (sidebar/AddRepo*, add-repo-*, useAddRepo*) that names a project, folder,
+//     repository or workspace;
+//  d. a PB label, tooltip or text that pairs an add/open/new/choose/select/pick/
+//     create/clone/import verb with that noun is red even when no Orca string equals
+//     it ('Open Folder', 'New Project', 'Add Workspace', 'Choose Repository');
+//  e. a label built from a same-file or imported constant, a template literal, a
+//     concatenation or a localize/translate call is resolved to its string before
+//     either comparison; a label, tooltip or text of a register call that cannot be
+//     resolved is red ("unresolved"), never skipped. (A command-shaped object literal
+//     outside a register call is a runtime menu row whose label is data; it is
+//     compared when it resolves and is not required to.)
+//
+// Tier: quick (static). With typescript or orca/ absent the row exits 77 with the
+// one SKIP line (P62-10; SKIP-PROTOCOL.md): the parser the fixture needs is typescript
+// itself, so the self-test cannot run without it either. --self-test runs a fixture
+// tree in mkdtemp: a green control, then plants, each undone after its run, each
+// required to go red naming it.
 //
 // Usage:
 //   node scripts/verify-orca-no-pb-add-project.mjs
@@ -39,6 +55,8 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-no-pb-add-project';
@@ -53,6 +71,11 @@ const REL = {
     chromeCopy: 'theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts',
 };
 const ADD_PROJECT = /add (a )?project/i;
+// What a project control names, and the verbs that make a string a control (clauses c and d).
+const PROJECT_NOUN = /\b(project|folder|directory|repo|repository|workspace)s?\b/i;
+const PROJECT_VERB = /\b(add|open|new|choose|select|pick|create|clone|import|browse)\b/i;
+const DIALOG_FILE = /^(AddRepo|add-repo|useAddRepo|use-add-repo)/;
+const UNRESOLVED_KEYS = new Set(['label', 'tooltip', 'text']);
 const REGISTER_CALLS = new Set(['registerCommand', 'registerMenuAction', 'registerItem', 'registerKeybinding']);
 const STRING_KEYS = new Set(['id', 'label', 'category', 'commandId', 'command', 'tooltip', 'text']);
 const BAR_ATTRS = new Set(['title', 'aria-label']);
@@ -95,16 +118,104 @@ const calleeName = call => ts.isPropertyAccessExpression(call.expression) ? call
     : ts.isIdentifier(call.expression) ? call.expression.text : undefined;
 const propName = prop => prop.name && (ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name)) ? prop.name.text : undefined;
 
-/** The string-valued properties of an object literal whose key is one a contribution shows or names. */
-function objectStrings(obj) {
-    const out = [];
-    for (const prop of obj.properties) {
-        if (!ts.isPropertyAssignment(prop)) continue;
-        const key = propName(prop);
-        const value = stringOf(prop.initializer);
-        if (key && STRING_KEYS.has(key) && value !== undefined) out.push({ key, value });
+// ---- string resolution (clause e) ----
+
+const fileCtx = new Map();
+function contextOf(path) {
+    if (fileCtx.has(path)) return fileCtx.get(path);
+    const sf = parse(path);
+    const ctx = { path, sf, consts: new Map(), imports: new Map() };
+    fileCtx.set(path, ctx);
+    visit(sf, node => {
+        if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) ctx.consts.set(node.name.text, node.initializer);
+        if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && node.importClause?.namedBindings && ts.isNamedImports(node.importClause.namedBindings)) {
+            for (const el of node.importClause.namedBindings.elements) ctx.imports.set(el.name.text, { module: node.moduleSpecifier.text, name: (el.propertyName ?? el.name).text });
+        }
+    });
+    return ctx;
+}
+
+function moduleFile(fromPath, spec) {
+    if (!spec.startsWith('.')) return undefined;
+    const base = resolve(dirname(fromPath), spec);
+    for (const c of [`${base}.ts`, `${base}.tsx`, join(base, 'index.ts'), join(base, 'index.tsx')]) if (existsSync(c)) return c;
+    return undefined;
+}
+
+const unwrap = node => {
+    let n = node;
+    while (n && (ts.isParenthesizedExpression(n) || ts.isAsExpression(n) || ts.isNonNullExpression(n) || (ts.isSatisfiesExpression && ts.isSatisfiesExpression(n))
+        || (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.expression.getText() === 'Object' && n.expression.name.text === 'freeze' && n.arguments.length === 1))) {
+        n = ts.isCallExpression(n) ? n.arguments[0] : n.expression;
     }
-    return out;
+    return n;
+};
+
+// The initializer node, and the file context it lives in, that an identifier names (a const of this file or an imported one).
+function lookup(name, ctx, depth) {
+    if (depth > 8) return undefined;
+    if (ctx.consts.has(name)) return { node: ctx.consts.get(name), ctx };
+    const imp = ctx.imports.get(name);
+    if (!imp) return undefined;
+    const file = moduleFile(ctx.path, imp.module);
+    return file ? lookup(imp.name, contextOf(file), depth + 1) : undefined;
+}
+
+function objectOf(node, ctx, depth) {
+    const n = unwrap(node);
+    if (!n || depth > 8) return undefined;
+    if (ts.isObjectLiteralExpression(n)) return { node: n, ctx };
+    if (ts.isIdentifier(n)) { const hit = lookup(n.text, ctx, depth); return hit && objectOf(hit.node, hit.ctx, depth + 1); }
+    return undefined;
+}
+
+const LOCALIZE = new Set(['localize', 'localizeByDefault', 'translate', 'localizeWithDefault']);
+/** The string a node evaluates to, through constants, imports, templates, concatenation and localize calls; undefined when it cannot be known. */
+function resolveString(node, ctx, depth = 0) {
+    const n = unwrap(node);
+    if (!n || depth > 8) return undefined;
+    const lit = stringOf(n);
+    if (lit !== undefined) return lit;
+    if (ts.isTemplateExpression(n)) {
+        let out = n.head.text;
+        for (const span of n.templateSpans) {
+            const v = resolveString(span.expression, ctx, depth + 1);
+            if (v === undefined) return undefined;
+            out += v + span.literal.text;
+        }
+        return out;
+    }
+    if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+        const a = resolveString(n.left, ctx, depth + 1);
+        const b = resolveString(n.right, ctx, depth + 1);
+        return a === undefined || b === undefined ? undefined : a + b;
+    }
+    if (ts.isIdentifier(n)) { const hit = lookup(n.text, ctx, depth); return hit && resolveString(hit.node, hit.ctx, depth + 1); }
+    if (ts.isPropertyAccessExpression(n) || ts.isElementAccessExpression(n)) {
+        const key = ts.isPropertyAccessExpression(n) ? n.name.text : stringOf(n.argumentExpression);
+        const obj = key === undefined ? undefined : objectOf(n.expression, ctx, depth + 1);
+        if (!obj) return undefined;
+        const prop = obj.node.properties.find(pr => ts.isPropertyAssignment(pr) && propName(pr) === key);
+        return prop ? resolveString(prop.initializer, obj.ctx, depth + 1) : undefined;
+    }
+    if (ts.isCallExpression(n) && LOCALIZE.has(calleeName(n) ?? '')) {
+        for (let i = n.arguments.length - 1; i >= 0; i--) { const v = resolveString(n.arguments[i], ctx, depth + 1); if (v !== undefined) return v; }
+    }
+    return undefined;
+}
+
+/** The string-valued properties of an object literal whose key is one a contribution shows or names, resolved; and the ones that cannot be. */
+function objectStrings(obj, ctx) {
+    const out = [];
+    const unresolved = [];
+    for (const prop of obj.properties) {
+        const key = ts.isPropertyAssignment(prop) || ts.isShorthandPropertyAssignment(prop) ? propName(prop) : undefined;
+        if (!key || !STRING_KEYS.has(key)) continue;
+        const value = resolveString(ts.isShorthandPropertyAssignment(prop) ? prop.name : prop.initializer, ctx);
+        if (value !== undefined) out.push({ key, value });
+        else if (UNRESOLVED_KEYS.has(key)) unresolved.push({ key, node: prop });
+    }
+    return { out, unresolved };
 }
 
 /** a. Orca's Add-project vocabulary from its sidebar source. */
@@ -113,6 +224,7 @@ export function deriveVocabulary(root) {
     for (const file of walkFiles(join(root, REL.sidebar))) {
         const sf = parse(file);
         const rel = relative(root, file);
+        const dialogFile = DIALOG_FILE.test(file.split('/').pop());
         const entryFns = new Set();
         visit(sf, node => {
             if (ts.isCallExpression(node) && calleeName(node) === 'openModal' && stringOf(node.arguments[0]) === 'add-repo') {
@@ -127,7 +239,7 @@ export function deriveVocabulary(root) {
             if (text === undefined) return;
             let inEntry = false;
             for (let p = node.parent; p; p = p.parent) if (entryFns.has(p)) { inEntry = true; break; }
-            if (ADD_PROJECT.test(text) || inEntry) vocab.push({ text, where: `${rel}:${sf.getLineAndCharacterOfPosition(node.getStart()).line + 1}` });
+            if (ADD_PROJECT.test(text) || inEntry || (dialogFile && PROJECT_NOUN.test(text))) vocab.push({ text, where: `${rel}:${sf.getLineAndCharacterOfPosition(node.getStart()).line + 1}` });
         });
     }
     return vocab;
@@ -151,11 +263,15 @@ function chromeCopy(root) {
 /** b. Every PB contribution string. */
 export function derivePbSet(root) {
     const pb = [];
+    pb.unresolved = [];
+    fileCtx.clear();
     const extRoot = join(root, REL.extensions);
     const srcDirs = existsSync(extRoot) ? readdirSync(extRoot).map(name => join(extRoot, name, 'src')).filter(existsSync) : [];
     for (const file of srcDirs.flatMap(dir => walkFiles(dir))) {
-        const sf = parse(file);
+        const ctx = contextOf(file);
+        const sf = ctx.sf;
         const rel = relative(root, file);
+        const lineOf = node => sf.getLineAndCharacterOfPosition(node.getStart()).line + 1;
         const add = (node, kind, key, value) => pb.push({ text: value, kind, key, where: `${rel}:${sf.getLineAndCharacterOfPosition(node.getStart()).line + 1}` });
         const seen = new Set();
         visit(sf, node => {
@@ -163,14 +279,17 @@ export function derivePbSet(root) {
                 for (const arg of node.arguments) {
                     if (ts.isObjectLiteralExpression(arg)) {
                         seen.add(arg);
-                        for (const { key, value } of objectStrings(arg)) add(arg, calleeName(node), key, value);
+                        const got = objectStrings(arg, ctx);
+                        for (const { key, value } of got.out) add(arg, calleeName(node), key, value);
+                        for (const u of got.unresolved) pb.unresolved.push({ kind: calleeName(node), key: u.key, where: `${rel}:${lineOf(u.node)}` });
                     }
                 }
             }
         });
         visit(sf, node => {
             if (!ts.isObjectLiteralExpression(node) || seen.has(node)) return;
-            const strings = objectStrings(node);
+            const got = objectStrings(node, ctx);
+            const strings = got.out;
             if (strings.some(s => s.key === 'id') && strings.some(s => s.key === 'label')) {
                 for (const { key, value } of strings.filter(s => ['id', 'label', 'category'].includes(s.key))) add(node, 'command', key, value);
             }
@@ -208,6 +327,12 @@ export function check(root) {
     for (const p of pb) {
         const v = vocabByNorm.get(normalise(p.text));
         if (v) fails.push(`PB ${p.kind} ${p.key} '${p.text}' at ${p.where} matches Orca's Add-project string at ${v.where}. Next step: remove the PB control; Orca's own Add-project flow is the only one (D-18).`);
+        else if (['label', 'tooltip', 'text'].includes(p.key) && PROJECT_VERB.test(p.text) && PROJECT_NOUN.test(p.text)) {
+            fails.push(`PB ${p.kind} ${p.key} '${p.text}' at ${p.where} is a project, folder or repository control (it pairs an add, open, new, choose, select, create, clone or import verb with a project noun). Next step: remove the PB control; Orca's own Add-project flow is the only one (D-18).`);
+        }
+    }
+    for (const u of pb.unresolved ?? []) {
+        fails.push(`PB ${u.kind} ${u.key} at ${u.where} is unresolved: its string could not be derived from a literal, a constant, a template, a concatenation or a localize call, so it cannot be checked against Orca's Add-project strings. Next step: give the contribution a string the check can resolve.`);
     }
     return { fails, vocab, pb, panesLabels };
 }
@@ -228,6 +353,11 @@ const FIXTURE = {
     ].join('\n'),
     'orca/src/renderer/src/components/sidebar/AddRepoStartSteps.tsx': [
         "export const Heading = () => <h2>{translate('auto.components.sidebar.AddRepoStartSteps.d13757911c', 'Add a project')}</h2>",
+        '',
+    ].join('\n'),
+    'orca/src/renderer/src/components/sidebar/AddRepoDialog.tsx': [
+        "export const Location = () => <label>{translate('auto.components.sidebar.AddRepoDialog.loc', 'Project location')}</label>",
+        "export const Cancel = () => <button>{translate('auto.components.sidebar.AddRepoDialog.cancel', 'Cancel')}</button>",
         '',
     ].join('\n'),
     'theia/extensions/orca-panes/src/browser/orca-panes-frontend-module.ts': [
@@ -272,10 +402,78 @@ const PLANTS = [
         naming: "chrome-bar title 'Add project'",
     },
     {
+        name: "a PB command labelled Open Folder (no Orca string equals it)",
+        file: 'theia/extensions/planted/src/browser/planted-open.ts',
+        edit: () => "commands.registerCommand({ id: 'powerbrowser.planted.open', label: 'Open Folder...' }, { execute: () => undefined });\n",
+        naming: "label 'Open Folder...'",
+    },
+    {
+        name: "a PB command labelled New Project",
+        file: 'theia/extensions/planted/src/browser/planted-new.ts',
+        edit: () => "commands.registerCommand({ id: 'powerbrowser.planted.new', label: 'New Project' }, { execute: () => undefined });\n",
+        naming: "label 'New Project'",
+    },
+    {
+        name: "a menu action labelled Add Workspace",
+        file: 'theia/extensions/planted/src/browser/planted-ws.ts',
+        edit: () => "menus.registerMenuAction(['menubar'], { commandId: 'powerbrowser.planted.run', label: 'Add Workspace' });\n",
+        naming: "label 'Add Workspace'",
+    },
+    {
+        name: "a toolbar item with the tooltip Choose Repository",
+        file: 'theia/extensions/planted/src/browser/planted-repo.ts',
+        edit: () => "registry.registerItem({ id: 'powerbrowser.planted.item', command: 'powerbrowser.planted.run', tooltip: 'Choose Repository' });\n",
+        naming: "tooltip 'Choose Repository'",
+    },
+    {
+        name: "a label held in a same-file constant",
+        file: 'theia/extensions/planted/src/browser/planted-const.ts',
+        edit: () => "const LABEL = 'Add Project';\ncommands.registerCommand({ id: 'powerbrowser.planted.const', label: LABEL }, { execute: () => undefined });\n",
+        naming: "label 'Add Project'",
+    },
+    {
+        name: "a label built by a template literal over constants",
+        file: 'theia/extensions/planted/src/browser/planted-template.ts',
+        edit: () => "const NOUN = 'Folder';\ncommands.registerCommand({ id: 'powerbrowser.planted.tpl', label: `Open ${NOUN}` }, { execute: () => undefined });\n",
+        naming: "label 'Open Folder'",
+    },
+    {
+        name: "a label from a constants object (property access)",
+        file: 'theia/extensions/planted/src/browser/planted-copy.ts',
+        edit: () => "const COPY = Object.freeze({ add: 'Add Project' });\ncommands.registerCommand({ id: 'powerbrowser.planted.copy', label: COPY.add }, { execute: () => undefined });\n",
+        naming: "label 'Add Project'",
+    },
+    {
+        name: "a label imported from another file",
+        file: 'theia/extensions/planted/src/browser/planted-import.ts',
+        edit: () => "import { IMPORTED } from './planted-labels';\ncommands.registerCommand({ id: 'powerbrowser.planted.imp', label: IMPORTED }, { execute: () => undefined });\n",
+        extra: { file: 'theia/extensions/planted/src/browser/planted-labels.ts', edit: () => "export const IMPORTED = 'New Project';\n" },
+        naming: "label 'New Project'",
+    },
+    {
+        name: "a label through a localize call",
+        file: 'theia/extensions/planted/src/browser/planted-nls.ts',
+        edit: () => "commands.registerCommand({ id: 'powerbrowser.planted.nls', label: nls.localizeByDefault('Add Project') }, { execute: () => undefined });\n",
+        naming: "label 'Add Project'",
+    },
+    {
+        name: "a label that cannot be resolved",
+        file: 'theia/extensions/planted/src/browser/planted-dynamic.ts',
+        edit: () => "commands.registerCommand({ id: 'powerbrowser.planted.dyn', label: computeLabel() }, { execute: () => undefined });\n",
+        naming: "is unresolved",
+    },
+    {
+        name: "a PB label equal to a string of Orca's add-repo dialog",
+        file: 'theia/extensions/planted/src/browser/planted-dialog.ts',
+        edit: () => "commands.registerCommand({ id: 'powerbrowser.planted.dlg', label: 'Project location' }, { execute: () => undefined });\n",
+        naming: "label 'Project location'",
+    },
+    {
         name: 'source moved: an empty vocabulary',
         file: 'orca/src/renderer/src/components/sidebar/sidebar-header-actions.tsx',
         edit: text => text.replace("'Add project'", "'Open folder'").replace("openModal('add-repo')", "openModal('open-folder')"),
         extra: { file: 'orca/src/renderer/src/components/sidebar/AddRepoStartSteps.tsx', edit: text => text.replace("'Add a project'", "'Get started'") },
+        extra2: { file: 'orca/src/renderer/src/components/sidebar/AddRepoDialog.tsx', edit: text => text.replace("'Project location'", "'Where to save'") },
         naming: 'source moved',
     },
     {
@@ -295,7 +493,7 @@ function runSelfTest() {
         console.log(`${NAME} self-test: control green -- vocabulary ${control.vocab.length}, PB set ${control.pb.length}, orca-panes labels ${control.panesLabels.length}`);
         let failures = 0;
         for (const p of PLANTS) {
-            const edits = [{ file: p.file, edit: p.edit }, ...(p.extra ? [p.extra] : [])];
+            const edits = [{ file: p.file, edit: p.edit }, ...(p.extra ? [p.extra] : []), ...(p.extra2 ? [p.extra2] : [])];
             const originals = edits.map(({ file, edit }) => {
                 const path = join(tmp, file);
                 const original = existsSync(path) ? readFileSync(path, 'utf8') : null;
@@ -336,9 +534,9 @@ if (isEntryPoint) {
         console.error('Next step: run it with no argument, or with --self-test.');
         process.exit(2);
     }
-    if (!loadTypeScript()) { console.log(`${NAME}: SKIP -- theia/node_modules/typescript is absent; run the audited Theia install`); process.exit(0); }
+    if (!loadTypeScript()) { console.log(skipLine(NAME, 'theia/node_modules/typescript is absent, so neither the check nor its self-test ran. Next step: run the audited Theia install')); process.exit(SKIP_EXIT); }
     if (args[0] === '--self-test') process.exit(runSelfTest());
-    if (!existsSync(join(REPO_ROOT, REL.sidebar))) { console.log(`${NAME}: SKIP -- orca/ is absent (P62-10); run bash scripts/fetch-orca.sh`); process.exit(0); }
+    if (!existsSync(join(REPO_ROOT, REL.sidebar))) { console.log(skipLine(NAME, 'orca/ is absent (P62-10), so the check did not run. Next step: bash scripts/fetch-orca.sh')); process.exit(SKIP_EXIT); }
     const r = check(REPO_ROOT);
     if (r.fails.length) { for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`); process.exit(1); }
     console.log(`${NAME}: PASS -- vocabulary ${new Set(r.vocab.map(v => normalise(v.text))).size} Add-project strings from Orca's sidebar; PB set ${new Set(r.pb.map(p => normalise(p.text))).size} contribution strings (orca-panes labels: ${r.panesLabels.map(p => p.text).join(', ')}); intersection empty`);

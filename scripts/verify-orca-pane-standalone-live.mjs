@@ -12,7 +12,9 @@
 // keys and a neighbour relation; two React roots each mount TerminalPane with one leaf's pane key.
 // Each root must show exactly one xterm (visible; the total is recorded), a marker typed into each
 // root must reach its own leaf's PTY (orca terminal read) and not the other's, the CLI's terminal
-// handle count must not change, and mountErrors must stay empty. One retry after a fresh split.
+// handle count must not change, and mountErrors must stay empty. A failed first attempt is rerun once after a fresh
+// split, to say whether the failure is flaky or constant; either way the clause is red (a mount that fails one run in
+// two is a defect, not a pass on the second try).
 //
 // Stage 1: a planted throwing child mounted through mountPane's own error capture must be recorded
 // (the detector moves first), then each hosted type mounts: terminal (one leaf, created through the
@@ -33,9 +35,13 @@
 // first. A kind in MOUNT_KINDS with no mounted row on either route is red naming it and the route.
 // API clauses (Phase 65, B-2..B-10, P65-17, CA-07, CA-12, P65-22): after pairing, state().pairing reads
 // session-only with session-no-ed25519; a marker localStorage key written by the page reads back (the
-// control) and then orca.web.runtimeEnvironment.v1 is absent; subscribeWorktrees reports the scratch
+// control) and then orca.web.runtimeEnvironment.v1 is absent; the pairing offer itself (held in this process only)
+// is searched for in every localStorage, sessionStorage and IndexedDB name and value of the page's origin, after a
+// planted copy in each store was found first (a store that persists it under another key is red naming the store);
+// subscribeWorktrees reports the scratch
 // worktree with local true; the built CLI's file open of a scratch file yields an edit record within 1 s
-// (else "files.open: unreachable from the paired client" and openPane('editor') is the driver, named);
+// (else red "files.open: unreachable from the paired client"; the openPane('editor') fallback still runs, to say
+// whether the paired client can open the file at all, but it never makes the clause pass);
 // openPane('diff') with a branch source yields a branch diff record with both compare ids; setActiveView
 // round-trips through subscribeActiveView; the services root shows no error fallback (a planted alert in
 // it is detected first).
@@ -45,18 +51,25 @@
 // Every judgment is an exported pure verdict; --self-test feeds fixture observations to them and
 // checks that importing this module prints and starts nothing.
 //
-// Tier: full (live); run under flock /home/chris/coding/Power-Browser/.git/pb-live.lock with every
-// inherited ORCA_* unset. --self-test is quick and hermetic. Prints a named SKIP when no built
-// PowerBrowser, no orca/out/web/assets/pb-panes or no Orca CLI exists.
+// Tier: full (live). A row started without PB_LIVE_LOCK_HELD=1 takes <git common dir>/pb-live.lock itself
+// (lib/live-lock.mjs) before it builds or launches anything; every inherited ORCA_* is unset. --self-test is
+// quick and hermetic (it serves on a loopback port and runs git in a scratch folder, nothing else). Exit 77 with one
+// "SKIP -- <reason>" line when no built PowerBrowser, no orca/out/web/assets/pb-panes or no Orca CLI exists.
 //
 // Usage:
 //   node scripts/verify-orca-pane-standalone-live.mjs
 //   node scripts/verify-orca-pane-standalone-live.mjs --self-test
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { request as httpRequest } from 'node:http';
+import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { NO_CURSOR_MESSAGE, mountCursorExpr, newMountErrorsExpr } from './lib/orca-pane-harness.mjs';
+import { holdLiveLock, lockWiringFails } from './lib/live-lock.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-pane-standalone-live';
@@ -144,12 +157,16 @@ export function apiVerdict(obs) {
     if (obs.services?.controlDetected !== true) return 'collector blind: a planted alert in the services root was not detected';
     if (obs.pairing?.sessionOnly !== true || obs.pairing?.deviceKeySupport !== 'session-no-ed25519') return `pairing is not session-only (sessionOnly ${obs.pairing?.sessionOnly}, deviceKeySupport ${obs.pairing?.deviceKeySupport})`;
     if (obs.envKeyPresent !== false) return 'the runtime-environment key orca.web.runtimeEnvironment.v1 is present in localStorage';
+    const stored = pairingScanVerdict(obs.pairingScan);
+    if (stored) return stored;
     if (!obs.worktree?.found) return 'subscribeWorktrees: no record for the scratch worktree path';
     if (obs.worktree.local !== true) return 'subscribeWorktrees: the scratch worktree is not local';
     const f = obs.openFile;
+    // The fallback driver (openPane('editor')) proves the client can open a file, not that the CLI's file open reaches it.
+    if (f?.driver !== 'files.open') return `files.open: unreachable from the paired client (no record within 5 s; driver ${f?.driver ?? 'none'}${f?.record ? ', the fallback opened the file' : ''})`;
     if (!f?.record) return `subscribeOpenFiles: no edit record for the opened file (driver ${f?.driver ?? 'none'})`;
     if (f.record.mode !== 'edit' || f.record.pathMatches !== true || f.record.local !== true) return `subscribeOpenFiles: the opened file's record is ${JSON.stringify(f.record)}`;
-    if (f.driver === 'files.open' && !(f.ms <= OPEN_LIMIT_MS)) return `files.open: the record came after ${f.ms} ms, over ${OPEN_LIMIT_MS} ms`;
+    if (!(f.ms <= OPEN_LIMIT_MS)) return `files.open: the record came after ${f.ms} ms, over ${OPEN_LIMIT_MS} ms`;
     const d = obs.diff;
     if (!d?.record) return `openPane('diff'): no diff record${d?.error ? ` (${d.error})` : ''}`;
     if (d.record.mode !== 'diff' || d.record.diffSource !== 'branch' || !HEX_ID.test(d.record.branch?.mergeBase ?? '') || !HEX_ID.test(d.record.branch?.headOid ?? '')) return `openPane('diff'): the record is ${JSON.stringify(d.record)}`;
@@ -158,6 +175,107 @@ export function apiVerdict(obs) {
     if (obs.services.fallback) return 'the services root shows an Orca error fallback (resume-modal boundary)';
     if ((obs.services.errors ?? []).length) return `services root: ${obs.services.errors[0].phase} ${obs.services.errors[0].message}`;
     return null;
+}
+
+/** The stores the pairing scan reads, in the page's own origin. */
+export const SCAN_STORES = Object.freeze(['localStorage', 'sessionStorage', 'indexedDB']);
+
+/**
+ * The page-origin storage scan, run inside the page (its source is sent as text, so it names nothing outside itself).
+ * env: { localStorage, sessionStorage, indexedDB }; needles: the strings that are the pairing material (the offer,
+ * its URL-encoded form, its code). Plants a copy of the first needle in each store (a localStorage item, a
+ * sessionStorage item, an IndexedDB database) and scans every store's names and values: `control` must find it in
+ * all three. It removes the plants and scans again: `found` must find it in none. Returns only booleans and counts,
+ * never a needle or a stored value.
+ */
+export async function runStorageScan(env, needles) {
+    const wrap = req => new Promise((resolve, reject) => { req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
+    const safe = v => { try { return JSON.stringify(v) ?? ''; } catch (e) { return String(v); } };
+    const KEY = 'pb-pairing-scan-control', DB = 'pb-pairing-scan-control';
+    // The control plants a random synthetic value, never the pairing offer: localStorage, sessionStorage and IndexedDB are
+    // disk-backed in the profile, so an offer written there would stay on disk if the run were killed before the removal.
+    const synthetic = 'pb-scan-control-' + Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+    const scan = async (look) => {
+        const has = text => look.some(n => String(text).includes(n));
+        const out = { localStorage: { scanned: 0, found: false }, sessionStorage: { scanned: 0, found: false }, indexedDB: { scanned: 0, found: false, error: null } };
+        for (const name of ['localStorage', 'sessionStorage']) {
+            const st = env[name];
+            for (let i = 0; i < st.length; i += 1) {
+                const k = st.key(i);
+                out[name].scanned += 1;
+                if (has(k) || has(st.getItem(k) ?? '')) out[name].found = true;
+            }
+        }
+        try {
+            for (const info of await env.indexedDB.databases()) {
+                out.indexedDB.scanned += 1;
+                if (has(info.name ?? '')) out.indexedDB.found = true;
+                const db = await wrap(env.indexedDB.open(info.name));
+                try {
+                    const names = [...db.objectStoreNames];
+                    if (!names.length) continue;
+                    const tx = db.transaction(names, 'readonly');
+                    for (const n of names) {
+                        const store = tx.objectStore(n);
+                        const [keys, values] = await Promise.all([wrap(store.getAllKeys()), wrap(store.getAll())]);
+                        if (has(safe(keys)) || has(safe(values))) out.indexedDB.found = true;
+                    }
+                } finally { db.close(); }
+            }
+        } catch (e) { out.indexedDB.error = String((e && e.message) || e).slice(0, 120); }
+        return out;
+    };
+    const plant = synthetic;
+    env.localStorage.setItem(KEY, plant);
+    env.sessionStorage.setItem(KEY, plant);
+    try {
+        const open = env.indexedDB.open(DB, 1);
+        open.onupgradeneeded = () => { open.result.createObjectStore('s').put({ v: plant }, 'k'); };
+        (await wrap(open)).close();
+    } catch (e) { /* the control's scan reports it as undetected */ }
+    const control = await scan([synthetic]);
+    env.localStorage.removeItem(KEY);
+    env.sessionStorage.removeItem(KEY);
+    try { await wrap(env.indexedDB.deleteDatabase(DB)); } catch (e) { /* the real scan then finds the control copy and is red */ }
+    const found = await scan(needles);
+    return { control, found, needles: needles.length };
+}
+
+/** The values a fake environment saw written (the harness must never write a needle): red names the store. */
+export function writesVerdict(writes, needles) {
+    const fails = [];
+    if (!writes.length) fails.push('the control wrote nothing, so there is nothing to check (blind)');
+    for (const w of writes) if (needles.some(n => String(w.value).includes(n))) fails.push(`the harness wrote the pairing material into ${w.store}`);
+    return fails;
+}
+
+/** The strings that are the pairing material: the offer, its URL-encoded form and its code (all at least 8 characters). */
+export function pairingNeedles(pairing) {
+    const out = new Set([pairing, encodeURIComponent(pairing)]);
+    const code = /[?&]code=([^&#]+)/.exec(pairing)?.[1];
+    if (code) { out.add(code); try { out.add(decodeURIComponent(code)); } catch { /* keep the raw form */ } }
+    return [...out].filter(n => typeof n === 'string' && n.length >= 8);
+}
+
+/** The scan's clause: the controls first (a store whose planted copy was not found proves nothing), then the real scan. */
+export function pairingScanVerdict(scan) {
+    if (!scan?.control || !scan?.found) return 'collector blind: the pairing storage scan did not run';
+    if (!(scan.needles >= 1)) return 'collector blind: the pairing storage scan had nothing to look for';
+    for (const store of SCAN_STORES) {
+        if (scan.control[store]?.error) return `collector blind: the ${store} scan failed (${scan.control[store].error})`;
+        if (scan.control[store]?.found !== true) return `collector blind: the planted pairing copy in ${store} was not detected`;
+    }
+    for (const store of SCAN_STORES) {
+        if (scan.found[store]?.error) return `collector blind: the ${store} scan failed (${scan.found[store].error})`;
+        if (scan.found[store]?.found !== false) return `the pairing material is persisted in the page origin's ${store} (session-only pairing must leave no copy)`;
+    }
+    return null;
+}
+
+/** The stage 0 clause after a first-attempt failure and one rerun: red either way, naming whether it is flaky. */
+export function isolatedRetryVerdict(first, second) {
+    if (!first) return second ?? null;
+    return `first attempt failed (${first}); ${second ? `second attempt also failed (${second})` : 'the second attempt passed, so the mount is flaky, which is a defect (the pass on a rerun does not count)'}`;
 }
 
 /** The width probe's clause: null when a width without horizontal overflow was found. */
@@ -176,7 +294,7 @@ export function lateVerdict(ms) {
 }
 
 /** The output lines and exit code for both stages and the late clause (undefined = not reached). */
-export function render({ isolated, isolatedDetail, mounts, kinds, chatSource, harness, late, lateMs, gate, gateDetail, width, widthDetail, api }) {
+export function render({ isolated, isolatedDetail, mounts, kinds, chatSource, harness, late, lateMs, gate, gateDetail, width, widthDetail, api, unverified = [] }) {
     const lines = [];
     if (isolated !== undefined) lines.push(isolated === null ? `${NAME}: isolated per-leaf mount PASS -- ${isolatedDetail}` : `${NAME}: isolated per-leaf mount FAIL -- ${isolated}`);
     if (mounts !== undefined) lines.push(mounts === null ? `${NAME}: mounts PASS -- ${kinds.join(', ')} (agent-session from ${chatSource})` : `${NAME}: mounts FAIL -- ${mounts}`);
@@ -190,6 +308,13 @@ export function render({ isolated, isolatedDetail, mounts, kinds, chatSource, ha
     const ok = !failed.length && !missing && !harness;
     if (harness) lines.push(`${NAME}: FAIL -- harness: ${harness}`);
     else lines.push(ok ? `${NAME}: PASS -- isolated per-leaf mount, ${kinds.length} hosted type(s) mounted, late CLI terminal in ${lateMs} ms${gate === null ? `, mount gate ${gateDetail}` : ''}` : `${NAME}: FAIL -- ${failed[0] ?? 'not reached'}`);
+    // A gate row whose explaining state cannot be read (an empty mount of a kind with no probe) is a clause that did not run: with no
+    // failure anywhere the run is a SKIP (exit 77, the SKIP line last), never a PASS; a failure wins (audit harness-live-panels-09).
+    if (ok && unverified.length) {
+        lines[lines.length - 1] = `${NAME}: ran -- every clause that could run passed; ${unverified.length} gate row(s) are empty with no readable state to explain them`;
+        lines.push(skipLine(NAME, `the empty ${[...new Set(unverified.map(r => r.kind))].join(', ')} mount is not explained by Orca's own state, which the bundle's state() does not expose; expose that state in the overlay's state() and give the kind a probe so the gate can read it`));
+        return { code: SKIP_EXIT, lines };
+    }
     return { code: ok ? 0 : 1, lines };
 }
 
@@ -205,6 +330,14 @@ const READ_ROOT = id => `JSON.stringify((() => {
         waiting: !!host.querySelector('[data-pb-orca-waiting]'), text: (host.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 160),
         children: root ? root.querySelectorAll('[data-pb-orca-pane-root] > *').length : 0 };
 })())`;
+
+/** The mount-error cursor of the page (G3a: state().mountErrors keeps only 50, its length stops moving); a build without it is a FAIL. */
+async function mountCursor(ev) {
+    const cursor = await ev(mountCursorExpr('window.PbPanes'));
+    if (typeof cursor !== 'number') throw new Error(NO_CURSOR_MESSAGE);
+    return cursor;
+}
+const NEW_ERRORS = newMountErrorsExpr('window.PbPanes', 'window.__pbErrorsBefore');
 
 const handleIn = result => /"(term_[A-Za-z0-9_-]+)"/.exec(J(result))?.[1] ?? null;
 const tailText = result => J(result?.result?.terminal?.tail ?? result?.terminal?.tail ?? result ?? '');
@@ -234,9 +367,10 @@ async function stage0(s, ctxId, worktreeIdOut) {
     await sleep(1500);
     obs.handlesBefore = handlesOf(orca('terminal', 'list', '--worktree', `path:${repoDir}`));
     const tag = Date.now().toString(36);
+    const cursor0 = await mountCursor(ev);
     await ev(`(() => { for (const id of ['a' + ${J(tag)}, 'b' + ${J(tag)}]) document.getElementById('pb-host-' + id)?.remove();
         const a = window.__pbHost('terminal', 'a' + ${J(tag)}, [0, 0, 560, 420]); const b = window.__pbHost('terminal', 'b' + ${J(tag)}, [580, 0, 560, 420]);
-        window.__pbErrorsBefore = window.PbPanes.state().mountErrors.length;
+        window.__pbErrorsBefore = ${cursor0};
         window.__pbUnmount0 = [window.PbPanes.mountPane(a, ${J({ kind: 'terminal', worktreeId: pair[0].worktreeId, tabId: pair[0].tabId, paneKey: pair[0].paneKey })}),
             window.PbPanes.mountPane(b, ${J({ kind: 'terminal', worktreeId: pair[1].worktreeId, tabId: pair[1].tabId, paneKey: pair[1].paneKey })})]; return true; })()`);
     const ids = ['a' + tag, 'b' + tag];
@@ -257,7 +391,7 @@ async function stage0(s, ctxId, worktreeIdOut) {
         obs.roots.push({ xtermsTotal: root?.xtermsTotal ?? 0, xtermsVisible: root?.xtermsVisible ?? 0, focused, ownMarker: own === true, otherMarker: other });
     }
     obs.handlesAfter = handlesOf(orca('terminal', 'list', '--worktree', `path:${repoDir}`));
-    obs.mountErrors = JSON.parse(await ev('JSON.stringify(window.PbPanes.state().mountErrors.slice(window.__pbErrorsBefore))'));
+    obs.mountErrors = JSON.parse(await ev(`JSON.stringify(${NEW_ERRORS})`));
     await ev('(() => { for (const u of window.__pbUnmount0 || []) u(); return true; })()');
     return obs;
 }
@@ -296,12 +430,13 @@ async function lateCliTerminal(s, ctxId) {
 async function mountOne(s, ctxId, pick, slot, settleMs = 7000) {
     const ev = expr => s.evalIn(ctxId, expr);
     const id = `k${slot}`;
-    await ev(`(() => { window.__pbWinErrBefore = window.__pbErrors.length; window.__pbErrorsBefore = window.PbPanes.state().mountErrors.length;
+    const cursor = await mountCursor(ev);
+    await ev(`(() => { window.__pbWinErrBefore = window.__pbErrors.length; window.__pbErrorsBefore = ${cursor};
         const root = window.__pbHost(${J(pick.kind)}, ${J(id)}, [0, 440, 1100, 520]);
         window.__pbUnmountK = window.PbPanes.mountPane(root, ${J(pick)}); return true; })()`);
     await s.lib.sleep(settleMs);
     const read = JSON.parse(await ev(READ_ROOT(id)));
-    const reactErrors = JSON.parse(await ev('JSON.stringify(window.PbPanes.state().mountErrors.slice(window.__pbErrorsBefore))'));
+    const reactErrors = JSON.parse(await ev(`JSON.stringify(${NEW_ERRORS})`));
     const windowErrors = JSON.parse(await ev('JSON.stringify(window.__pbErrors.slice(window.__pbWinErrBefore))'));
     await ev(`(() => { window.__pbUnmountK(); document.getElementById('pb-host-' + ${J(id)}).remove(); return true; })()`);
     const rendered = !!read && !read.waiting && read.children > 0 && read.elements > 2;
@@ -362,6 +497,8 @@ async function apiClauses(s, ctxId, harness) {
     const marker = `pb-orca-pane-marker-${Date.now().toString(36)}`;
     obs.markerReadBack = await ev(`(() => { localStorage.setItem(${J(marker)}, 'x'); const ok = localStorage.getItem(${J(marker)}) === 'x'; localStorage.removeItem(${J(marker)}); return ok; })()`);
     obs.envKeyPresent = await ev(`localStorage.getItem('orca.web.runtimeEnvironment.v1') !== null`);
+    // The pairing offer stays in this process: it reaches the page only inside this expression, and only booleans come back.
+    obs.pairingScan = await s.withPairing(async pairing => JSON.parse(await ev(`(async () => JSON.stringify(await (${runStorageScan.toString()})({ localStorage, sessionStorage, indexedDB }, ${J(pairingNeedles(pairing))})))()`)));
     await ev(`(() => { window.__pbWs = null; window.__pbFiles = []; window.__pbView = null;
         window.PbPanes.subscribeWorktrees(w => { window.__pbWs = w; }); window.PbPanes.subscribeOpenFiles(f => { window.__pbFiles = f; });
         window.PbPanes.subscribeActiveView(v => { window.__pbView = v; }); return true; })()`);
@@ -436,7 +573,10 @@ async function gateRoute(s, harness, route, ev, kinds, worktreeId, imports) {
 async function live(opts = {}) {
     const harness = await import('./lib/orca-pane-harness.mjs');
     const skips = harness.skipReasons();
-    if (skips.length) { console.log(`${NAME}: SKIP -- ${skips.join('; ')}`); return 0; }
+    if (skips.length) { console.log(skipLine(NAME, skips.join('; '))); return SKIP_EXIT; }
+    // Nothing is built or launched before this: a row started by hand takes the live lock itself (harness-live-panels-02).
+    const held = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
+    if (held !== null) return held;
     if (!existsSync(join(harness.STANDALONE_DIR, 'pb-panes.js'))) {
         const b = spawnSync('bash', [join(REPO_ROOT, 'scripts', 'build-orca-panes.sh'), '--standalone'], { encoding: 'utf8' });
         if (b.status !== 0) { console.log(`${NAME}: FAIL -- harness: build-orca-panes.sh --standalone: ${(b.stdout ?? '').trim().split('\n').pop()}`); return 1; }
@@ -458,10 +598,11 @@ async function live(opts = {}) {
             let obs = await stage0(s, ctxId, wt);
             let verdict = isolatedVerdict(obs);
             if (verdict) {
+                // A rerun says whether the failure is constant or flaky; it never turns the clause green.
                 const first = verdict;
                 obs = await stage0(s, ctxId, wt);
-                verdict = isolatedVerdict(obs);
-                if (verdict) verdict = `${verdict} (first attempt: ${first}); measured ${J({ roots: obs.roots, records: obs.records, handles: [obs.handlesBefore?.length, obs.handlesAfter?.length] })}`;
+                verdict = isolatedRetryVerdict(first, isolatedVerdict(obs));
+                verdict = `${verdict}; measured ${J({ roots: obs.roots, records: obs.records, handles: [obs.handlesBefore?.length, obs.handlesAfter?.length] })}`;
             }
             result.isolated = verdict;
             result.isolatedDetail = `2 leaf records (${(obs.modes ?? []).join('/')}), 1 visible xterm per root (totals ${(obs.roots ?? []).map(r => r.xtermsTotal).join('/')}), markers own-leaf only, ${obs.handlesAfter?.length ?? '?'} handle(s) unchanged`;
@@ -510,8 +651,9 @@ async function live(opts = {}) {
             }
             result.gate = gateVerdict({ kinds: mountKinds, rows: report.rows, controls, routes: report.routes });
             const mounted = report.rows.filter(r => r.mounted).length;
-            result.gateDetail = `${gateKinds.length} gate kind(s) x ${report.routes.length} route(s) [${report.routes.join(', ')}], ${mounted} row(s) mounted, ${report.rows.filter(r => r.empty).length} empty by Orca's own state, controls recorded`;
-            for (const r of report.rows) console.log(`${NAME}: gate ${r.route} ${r.kind} -- ${r.mounted ? 'mounted' : 'NOT mounted'}, ${r.descendantCount} element(s)${r.empty ? ', empty: ' + r.empty : ''}${r.message ? ', ' + r.message.slice(0, 120) : ''}`);
+            const explained = report.rows.filter(r => r.empty && !r.unverified).length, unverified = report.rows.filter(r => r.unverified).length;
+            result.gateDetail = `${gateKinds.length} gate kind(s) x ${report.routes.length} route(s) [${report.routes.join(', ')}], ${mounted} row(s) mounted, ${explained} empty and explained by Orca's own state (read and holding), ${unverified} empty with no readable state (recorded as unverified), controls recorded`;
+            for (const r of report.rows) console.log(`${NAME}: gate ${r.route} ${r.kind} -- ${r.mounted ? 'mounted' : 'NOT mounted'}, ${r.descendantCount} element(s)${r.empty ? `, empty${r.unverified ? ' (unverified: Orca\'s state is not readable)' : ''}: ${r.empty}` : ''}${r.message ? ', ' + r.message.slice(0, 120) : ''}`);
         });
     } catch (error) {
         result.harness = String(error?.message ?? error).slice(0, 500);
@@ -521,7 +663,7 @@ async function live(opts = {}) {
         writeFileSync(opts.report, `${J({ ...report, verdict: result.gate ?? null }, null, 2)}\n`);
         console.log(`${NAME}: report -- ${relative(REPO_ROOT, opts.report)}`);
     }
-    const out = render(result);
+    const out = render({ ...result, unverified: report.rows.filter(r => r.unverified) });
     if (result.conflictText) console.log(`${NAME}: note -- hosted conflict review reads: ${result.conflictText.slice(0, 120)}`);
     for (const line of out.lines.slice(result.isolated !== undefined ? 1 : 0)) console.log(line);
     return out.code;
@@ -530,7 +672,7 @@ async function live(opts = {}) {
 // ---------------------------------------------------------------- self-test
 
 async function selfTest() {
-    const { gateRow: gateRowOf } = await import('./lib/orca-pane-harness.mjs');
+    const { gateRow: gateRowOf, safePathname, serve, makeRepo, EMPTY_BY_DESIGN, ROUTE_ENTRY } = await import('./lib/orca-pane-harness.mjs');
     let failed = 0;
     const ok = (name, cond) => { console.log(`  ${cond ? 'ok ' : 'NOT OK '} ${name}`); if (!cond) failed += 1; };
     const root = (o = {}) => ({ xtermsTotal: 2, xtermsVisible: 1, ownMarker: true, otherMarker: false, ...o });
@@ -554,7 +696,7 @@ async function selfTest() {
     ok('a window error is red', /^terminal: window error x/.test(mountsVerdict(mo({ mounts: STAGE1_KINDS.map(k => mount(k, k === 'terminal' ? { windowErrors: ['x'] } : {})) })) ?? ''));
     // The mount gate (P65-04): rows through the harness's own gateRow, so the row rule is tested too.
     const kinds = [...STAGE1_KINDS, 'sidebar', 'orchestration', 'check-details'];
-    const raw = (kind, route, o = {}) => ({ kind, route, descendantCount: 12, reactErrors: [], windowErrors: [], fallback: false, threw: null, ...o });
+    const raw = (kind, route, o = {}) => ({ kind, route, descendantCount: 12, waiting: false, emptyJustified: null, reactErrors: [], windowErrors: [], fallback: false, threw: null, ...o });
     const rowsOf = (over = {}) => GATE_ROUTES.flatMap(route => ['sidebar', 'orchestration', 'check-details'].map(k => gateRowOf(raw(k, route, over[`${k}@${route}`] ?? {}))));
     const ctl = { standalone: true, 'route-a': true };
     ok('gate control green', gateVerdict({ kinds, rows: rowsOf(), controls: ctl }) === null);
@@ -564,18 +706,73 @@ async function selfTest() {
     ok('a thrown gate mount is red naming kind, route and message', /^sidebar \(route-a\): no provider Q/.test(gateVerdict({ kinds, rows: rowsOf({ 'sidebar@route-a': { reactErrors: [{ kind: 'sidebar', phase: 'uncaught', message: 'no provider Q' }] } }), controls: ctl }) ?? ''));
     ok("an Orca error-boundary fallback is red", /^check-details \(standalone\): Orca error-boundary fallback/.test(gateVerdict({ kinds, rows: rowsOf({ 'check-details@standalone': { fallback: true } }), controls: ctl }) ?? ''));
     ok('an empty sidebar is red', /^sidebar \(standalone\): nothing rendered \(0 element/.test(gateVerdict({ kinds, rows: rowsOf({ 'sidebar@standalone': { descendantCount: 0 } }), controls: ctl }) ?? ''));
-    ok("an empty orchestration mount is green and recorded as Orca's own state", gateVerdict({ kinds, rows: rowsOf({ 'orchestration@standalone': { descendantCount: 0 } }), controls: ctl }) === null
-        && /experimentalOrchestrationPanel/.test(gateRowOf(raw('orchestration', 'standalone', { descendantCount: 0 })).empty ?? ''));
+    // harness-live-panels-09: an empty mount of a hand-listed kind is mounted only when Orca's own state, read from the page, explains it.
+    const emptyOrch = j => ({ 'orchestration@standalone': { descendantCount: 0, emptyJustified: j } });
+    ok("an empty orchestration mount with its setting read as off is green and recorded as Orca's own state", gateVerdict({ kinds, rows: rowsOf(emptyOrch(true)), controls: ctl }) === null
+        && /experimentalOrchestrationPanel/.test(gateRowOf(raw('orchestration', 'standalone', { descendantCount: 0, emptyJustified: true })).empty ?? ''));
+    ok('an empty orchestration mount whose setting is on is red (the mount is broken, not empty by design)', /^orchestration \(standalone\): nothing rendered, and the experimentalOrchestrationPanel setting being off does not hold/.test(gateVerdict({ kinds, rows: rowsOf(emptyOrch(false)), controls: ctl }) ?? ''));
+    ok('an empty orchestration mount whose setting could not be read is red', /could not be read, so the empty mount is not explained/.test(gateVerdict({ kinds, rows: rowsOf(emptyOrch(null)), controls: ctl }) ?? ''));
+    ok('a mount that holds only the waiting marker is red even though it has elements', /^sidebar \(standalone\): the mount is still in Orca's waiting state/.test(gateVerdict({ kinds, rows: rowsOf({ 'sidebar@standalone': { descendantCount: 3, waiting: true } }), controls: ctl }) ?? ''));
+    // page:creation reads state().pendingCreation (the H7 handoff on harness-live-panels-09): its empty mount is explained only
+    // when no creation is pending, read from the bundle; a pending creation with nothing rendered, or an unreadable state, is red.
+    {
+        const emptyCreation = j => gateRowOf(raw('page:creation', 'standalone', { descendantCount: 0, emptyJustified: j }));
+        ok('an empty page:creation mount with no creation pending is mounted, explained and not unverified', emptyCreation(true).mounted === true && /no worktree creation is pending/.test(emptyCreation(true).empty ?? '') && emptyCreation(true).unverified === undefined);
+        ok('an empty page:creation mount while a creation is pending is red', emptyCreation(false).mounted === false && /no worktree creation pending does not hold/.test(emptyCreation(false).message ?? ''));
+        ok('an empty page:creation mount whose state could not be read is red', emptyCreation(null).mounted === false && /could not be read/.test(emptyCreation(null).message ?? ''));
+        // The page-side expression itself, over fake bundles, for each route's entry expression.
+        const probe = EMPTY_BY_DESIGN['page:creation'].probe;
+        const read = (bundle) => new Function('PbPanes', `return ${probe(null, 'PbPanes')};`)(bundle);
+        ok('probe: no creation pending reads true', read({ state: () => ({ pendingCreation: false }) }) === true);
+        ok('probe: a pending creation reads false', read({ state: () => ({ pendingCreation: true }) }) === false);
+        ok('probe: a bundle without the field reads null (the build predates it)', read({ state: () => ({}) }) === null);
+        ok('probe: a state() that throws reads null', read({ state: () => { throw new Error('not booted'); } }) === null);
+        ok('probe: no bundle at all reads null', read(undefined) === null);
+        ok('probe: every route entry is named in the expression it is given', Object.values(ROUTE_ENTRY).every(entry => probe(null, entry).includes(`${entry}.state().pendingCreation`)));
+        // The field must be the selector the overlay's CreationMount renders on, so the probe and the surface cannot disagree.
+        // Both are read from the tracked overlay sources and compared after the receiver name and whitespace are removed.
+        const norm = (text, receiver) => text.replace(new RegExp(`\\b${receiver}\\.`, 'g'), '$.').replace(/\s+/g, '');
+        // The returned value, not the type declaration above it: an expression holds no brace or semicolon, so a match that
+        // starts at the declaration cannot reach the returned `pairing: pairingState()`.
+        const FIELD = /(\n\s*pendingCreation:\s*)([^{};]*?)(,\n\s*pairing: pairingState\(\))/;
+        const selectorsOf = (mountText, sideText) => {
+            const field = FIELD.exec(mountText)?.[2] ?? null;
+            const surface = /function CreationMount\(\)[\s\S]*?useAppStore\(\(s\) =>\s*([\s\S]*?)\?\s*s\.activePendingCreationId\s*:\s*null/.exec(sideText)?.[1] ?? null;
+            if (field === null) return 'source moved: pb-pane-mount.tsx state() returns no pendingCreation value before pairing';
+            if (surface === null) return 'source moved: pb-side-mounts.tsx CreationMount no longer selects the active pending creation in the form read here';
+            return norm(field, 'store') === norm(surface, 's') ? null : `drift: state().pendingCreation is \`${norm(field, 'store')}\` but CreationMount renders on \`${norm(surface, 's')}\``;
+        };
+        const pbDir = join(REPO_ROOT, 'orca-overlay', 'files', 'src', 'renderer', 'src', 'pb');
+        const mountText = readFileSync(join(pbDir, 'pb-pane-mount.tsx'), 'utf8'), sideText = readFileSync(join(pbDir, 'pb-side-mounts.tsx'), 'utf8');
+        const real = selectorsOf(mountText, sideText);
+        ok(`state().pendingCreation is the selector CreationMount renders on${real ? ` -- ${real}` : ''}`, real === null);
+        const weaker = mountText.replace(FIELD, '$1store.activePendingCreationId !== null$3');
+        ok('plant: a state() field weaker than the surface selector is red naming the drift', weaker !== mountText && /^drift: /.test(selectorsOf(weaker, sideText) ?? ''));
+        ok('plant: the field removed from state() is red', /^source moved: pb-pane-mount/.test(selectorsOf(mountText.replace(FIELD, (m, a, b, c) => c.slice(1)), sideText) ?? ''));
+        ok('plant: CreationMount rewritten is red', /^source moved: pb-side-mounts/.test(selectorsOf(mountText, sideText.replace('function CreationMount()', 'function CreationSurface()')) ?? ''));
+    }
+    // A kind with no readable state (probe: null) stays possible in the table; its empty mount is unverified, never explained.
+    {
+        const table = { 'page:future': { reason: 'a state the bundle does not expose', condition: 'that state holding', probe: null } };
+        const row = gateRowOf(raw('page:future', 'standalone', { descendantCount: 0 }), undefined, table);
+        ok('an empty mount of a kind with no readable state is mounted but recorded as unverified', row.unverified === true && row.mounted === true);
+    }
+    ok('an empty kind outside the hand-kept list is red', gateRowOf(raw('sidebar', 'standalone', { descendantCount: 0 })).mounted === false);
     ok('a window error in a gate mount is red', /^sidebar \(standalone\): boom/.test(gateVerdict({ kinds, rows: rowsOf({ 'sidebar@standalone': { windowErrors: ['boom'] } }), controls: ctl }) ?? ''));
     ok('width probe: a width found is green, none is red', widthVerdict({ narrowest: 380, steps: [[640, false]] }) === null && /overflows horizontally at every width probed, last 1600 px/.test(widthVerdict({ narrowest: null, steps: [[640, true], [1600, true]] }) ?? ''));
     ok('CA-12: hostId values are collected from any depth', J(hostIdValues({ result: { worktrees: [{ hostId: 'local', x: { executionHostId: 'local' } }, { hostId: null }] } })) === J({ hostId: ['local', null], executionHostId: ['local'] }));
     // API clauses (B-2..B-10, P65-17, CA-07, CA-12, P65-22).
     const H = 'a'.repeat(40);
-    const api = (o = {}) => ({ pairing: { sessionOnly: true, deviceKeySupport: 'session-no-ed25519' }, markerReadBack: true, envKeyPresent: false, worktree: { found: true, local: true },
+    const scanOk = () => ({ needles: 3, control: Object.fromEntries(SCAN_STORES.map(k => [k, { scanned: 2, found: true, error: null }])), found: Object.fromEntries(SCAN_STORES.map(k => [k, { scanned: 1, found: false, error: null }])) });
+    const api = (o = {}) => ({ pairing: { sessionOnly: true, deviceKeySupport: 'session-no-ed25519' }, markerReadBack: true, envKeyPresent: false, pairingScan: scanOk(), worktree: { found: true, local: true },
         openFile: { driver: 'files.open', ms: 120, record: { mode: 'edit', pathMatches: true, local: true } }, diff: { record: { mode: 'diff', diffSource: 'branch', branch: { mergeBase: H, headOid: H } } },
         view: { set: 'tasks', restored: 'terminal' }, services: { controlDetected: true, fallback: false, errors: [] }, ...o });
     ok('API control green', apiVerdict(api()) === null);
-    ok('API: the openPane editor fallback driver is green', apiVerdict(api({ openFile: { driver: "openPane('editor')", ms: null, record: { mode: 'edit', pathMatches: true, local: true } } })) === null);
+    // harness-live-panels-13: a files.open miss is red even when the openPane('editor') fallback then opened the file.
+    ok('API: the openPane editor fallback driver is red naming files.open', /^files\.open: unreachable from the paired client .*the fallback opened the file/.test(apiVerdict(api({ openFile: { driver: "openPane('editor')", ms: null, record: { mode: 'edit', pathMatches: true, local: true } } })) ?? ''));
+    ok('API: files.open with no record and no fallback record is red', /^files\.open: unreachable/.test(apiVerdict(api({ openFile: { driver: "openPane('editor')", ms: null, record: null } })) ?? ''));
+    ok('stage 0: a failed first attempt and a green rerun is red, naming it flaky', /second attempt passed, so the mount is flaky/.test(isolatedRetryVerdict('root A shows 2 xterm(s)', null) ?? ''));
+    ok('stage 0: a failed first attempt and a failed rerun is red', /second attempt also failed \(x\)/.test(isolatedRetryVerdict('y', 'x') ?? '') && isolatedRetryVerdict(null, null) === null);
     ok('API: a marker that did not read back is red "collector blind"', /^collector blind: the marker/.test(apiVerdict(api({ markerReadBack: false })) ?? ''));
     ok('API: an undetected planted services alert is red', /^collector blind: a planted alert/.test(apiVerdict(api({ services: { controlDetected: false, fallback: false, errors: [] } })) ?? ''));
     ok('API: a persistent device key is red', /pairing is not session-only/.test(apiVerdict(api({ pairing: { sessionOnly: true, deviceKeySupport: 'persistent' } })) ?? ''));
@@ -591,11 +788,108 @@ async function selfTest() {
     ok('late CLI terminal never recorded is red naming the freeze', /within 15 s \(the mirror freeze/.test(lateVerdict(null) ?? ''));
     const r = render({ isolated: null, isolatedDetail: 'd', mounts: 'simulator: x', kinds: STAGE1_KINDS, chatSource: 'createChat', late: null, lateMs: 172 });
     ok('render: isolated line precedes mounts line, last line FAIL', r.code === 1 && /isolated per-leaf mount PASS/.test(r.lines[0]) && /mounts FAIL/.test(r.lines[1]) && /: FAIL -- mounts$/.test(r.lines[3]));
+    // review point 6: an unverified empty row is a SKIP, a failure still wins.
+    const clean = { isolated: null, isolatedDetail: 'd', mounts: null, kinds: STAGE1_KINDS, chatSource: 'createChat', late: null, lateMs: 172, api: null, gate: null, gateDetail: 'g' };
+    const unv = [{ kind: 'page:creation', route: 'standalone', unverified: true }];
+    const sk = render({ ...clean, unverified: unv });
+    ok('render: an unverified empty page:creation row ends SKIP (77) with the SKIP line last, not PASS', sk.code === SKIP_EXIT && /^orca-pane-standalone-live: SKIP -- /.test(sk.lines.at(-1)) && !sk.lines.some(l => /: PASS -- isolated/.test(l)));
+    ok('render: a failing clause wins over an unverified row', render({ ...clean, api: 'x', unverified: unv }).code === 1);
+    ok('render: no unverified row is still a PASS', render({ ...clean, unverified: [] }).code === 0);
     const g = render({ isolated: null, isolatedDetail: 'd', mounts: null, kinds: STAGE1_KINDS, chatSource: 'createChat', late: null, lateMs: 172, api: null });
     ok('render: an API clause never reached is red', render({ isolated: null, isolatedDetail: 'd', mounts: null, kinds: STAGE1_KINDS, chatSource: 'createChat', late: null, lateMs: 172 }).code === 1);
     ok('render: all clauses green gives PASS naming the late time', g.code === 0 && /late CLI terminal in 172 ms$/.test(g.lines.at(-1)));
     const f = render({ isolated: null, isolatedDetail: 'd', mounts: null, kinds: STAGE1_KINDS, chatSource: 'createChat', late: lateVerdict(null), lateMs: null, api: null });
     ok('render: a late CLI terminal miss alone is red', f.code === 1 && /late CLI terminal FAIL/.test(f.lines[2]) && /: FAIL -- late CLI terminal$/.test(f.lines.at(-1)));
+    ok('the live path awaits holdLiveLock before it launches anything', lockWiringFails(NAME, import.meta.url).length === 0);
+    // overlay-renderer-04 (G3a): the mount-error cursor is the total, not the length of the 50 kept. The page-side expressions
+    // run over a fake bundle that kept 50 of 60 errors: the new-errors expression returns the 50 kept, the length-based
+    // slice it replaces returns none (the fault the cursor fixes), and a build without the total is a FAIL.
+    {
+        const bundle = (total, kept) => ({ state: () => ({ mountErrorsTotal: total, mountErrors: Array.from({ length: kept }, (_, i) => ({ message: `e${total - kept + i}` })) }) });
+        const run = (expr, window, PbPanes) => new Function('window', 'PbPanes', `return ${expr.replace(/window\.PbPanes/g, 'PbPanes')};`)(window, PbPanes);
+        const full = bundle(60, 50);
+        const got = run(newMountErrorsExpr('window.PbPanes', 'window.__pbErrorsBefore'), { __pbErrorsBefore: 0 }, full);
+        const oldWay = full.state().mountErrors.slice(50);
+        ok('cursor: 60 errors since a cursor of 0 return the 50 kept, newest last', got.length === 50 && got.at(-1).message === 'e59');
+        ok('cursor: the length-based slice it replaces returns none at 50 (the fault)', oldWay.length === 0);
+        ok('cursor: no new error since the cursor is an empty list', run(newMountErrorsExpr('window.PbPanes', 'window.__pbErrorsBefore'), { __pbErrorsBefore: 60 }, full).length === 0);
+        ok('cursor: three new errors are the last three', run(newMountErrorsExpr('window.PbPanes', 'window.__pbErrorsBefore'), { __pbErrorsBefore: 57 }, full).map(e => e.message).join() === 'e57,e58,e59');
+        ok('cursor: the cursor expression reads the total', run(mountCursorExpr('window.PbPanes'), {}, full) === 60);
+        ok('cursor: a build without mountErrorsTotal reads null, which mountCursor turns into a FAIL', run(mountCursorExpr('window.PbPanes'), {}, { state: () => ({ mountErrors: [] }) }) === null
+            && await mountCursor(async () => null).then(() => false, e => e.message === NO_CURSOR_MESSAGE));
+    }
+    // harness-live-panels-08: the storage scan, run for real over fake stores (the page-realm function itself, not a copy).
+    const OFFER = 'orca://pair?code=ZZ9-unit-test-offer-0123456789&host=127.0.0.1';
+    const needles = pairingNeedles(OFFER);
+    ok('pairing needles: the offer, its encoded form and its code, none shorter than 8', needles.includes(OFFER) && needles.includes(encodeURIComponent(OFFER)) && needles.includes('ZZ9-unit-test-offer-0123456789') && needles.every(n => n.length >= 8));
+    const writes = [];
+    const store = (init = {}, label = 'storage') => { const m = new Map(Object.entries(init)); return { get length() { return m.size; }, key: i => [...m.keys()][i] ?? null, getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { writes.push({ store: label, value: `${k}=${v}` }); m.set(k, String(v)); }, removeItem: k => m.delete(k) }; };
+    const fakeEnv = ({ local = {}, session = {}, idb = {}, idbFails = false } = {}) => {
+        const dbs = new Map(Object.entries(idb).map(([name, rows]) => [name, new Map([['rows', Object.entries(rows)]])]));
+        const later = fn => { const r = {}; queueMicrotask(() => { try { r.result = fn(r); r.onsuccess?.(); } catch (e) { r.error = e; r.onerror?.(); } }); return r; };
+        return {
+            localStorage: store(local, 'localStorage'), sessionStorage: store(session, 'sessionStorage'),
+            indexedDB: {
+                databases: async () => { if (idbFails) throw new Error('SecurityError'); return [...dbs.keys()].map(name => ({ name })); },
+                deleteDatabase: name => later(() => { dbs.delete(name); }),
+                open: name => later(r => {
+                    const fresh = !dbs.has(name);
+                    if (fresh) dbs.set(name, new Map());
+                    const stores = dbs.get(name);
+                    const db = {
+                        get objectStoreNames() { return [...stores.keys()]; },
+                        createObjectStore: n => { stores.set(n, []); return { put: (v, k) => { writes.push({ store: 'indexedDB', value: JSON.stringify(v) }); stores.get(n).push([k, v]); } }; },
+                        transaction: () => ({ objectStore: n => ({ getAllKeys: () => later(() => stores.get(n).map(e => e[0])), getAll: () => later(() => stores.get(n).map(e => e[1])) }) }),
+                        close() {},
+                    };
+                    r.result = db;
+                    if (fresh) r.onupgradeneeded?.();
+                    return db;
+                }),
+            },
+        };
+    };
+    const scanOf = env => runStorageScan(env, needles);
+    ok('scan control: clean stores read green, every planted copy detected', pairingScanVerdict(await scanOf(fakeEnv({ local: { theme: 'dark' }, idb: { prefs: { a: 'b' } } }))) === null);
+    // review point 4: the control plants a synthetic value; the real offer is never written by the harness.
+    ok('scan: the control wrote to all three stores, and none of what it wrote holds a pairing needle', writes.some(w => w.store === 'localStorage') && writes.some(w => w.store === 'sessionStorage') && writes.some(w => w.store === 'indexedDB') && writesVerdict(writes, needles).length === 0);
+    ok('plant: a control that wrote the offer is red naming the store', /wrote the pairing material into sessionStorage/.test(writesVerdict([{ store: 'sessionStorage', value: `k=${OFFER}` }], needles)[0] ?? ''));
+    ok('plant: a control that wrote nothing is blind', /blind/.test(writesVerdict([], needles)[0] ?? ''));
+    ok('scan: the offer persisted under another localStorage key is red naming localStorage', /persisted in the page origin's localStorage/.test(pairingScanVerdict(await scanOf(fakeEnv({ local: { 'orca.other.key': `x${OFFER}y` } }))) ?? ''));
+    ok('scan: the offer persisted in sessionStorage is red naming sessionStorage', /persisted in the page origin's sessionStorage/.test(pairingScanVerdict(await scanOf(fakeEnv({ session: { k: encodeURIComponent(OFFER) } }))) ?? ''));
+    ok('scan: the offer persisted in IndexedDB is red naming indexedDB', /persisted in the page origin's indexedDB/.test(pairingScanVerdict(await scanOf(fakeEnv({ idb: { orca: { device: { pairing: OFFER } } } }))) ?? ''));
+    ok("scan: the pairing code alone in a store's key is found", /persisted in the page origin's localStorage/.test(pairingScanVerdict(await scanOf(fakeEnv({ local: { 'ZZ9-unit-test-offer-0123456789': '1' } }))) ?? ''));
+    ok('scan: an IndexedDB that cannot be read is a blind collector, not a pass', /^collector blind: the indexedDB scan failed/.test(pairingScanVerdict(await scanOf(fakeEnv({ idbFails: true }))) ?? ''));
+    ok('scan: a scanner that cannot see a planted copy is blind', /^collector blind: the planted pairing copy in sessionStorage was not detected/.test(pairingScanVerdict({ ...scanOk(), control: { ...scanOk().control, sessionStorage: { scanned: 0, found: false, error: null } } }) ?? ''));
+    ok('scan: no scan at all is blind', /^collector blind: the pairing storage scan did not run/.test(pairingScanVerdict(undefined) ?? ''));
+    ok('scan: no needle to look for is blind', /nothing to look for/.test(pairingScanVerdict({ ...scanOk(), needles: 0 }) ?? ''));
+    ok('API: a persisted pairing copy turns the whole API clause red', /persisted in the page origin's localStorage/.test(apiVerdict(api({ pairingScan: { ...scanOk(), found: { ...scanOk().found, localStorage: { scanned: 4, found: true, error: null } } } })) ?? ''));
+    // harness-live-panels-16: a malformed request path is a 400 and the server stays up; the fixture's git ignores the user's global config.
+    ok('server: /%zz does not parse', safePathname('/%zz') === null && safePathname('/standalone.html') === '/standalone.html');
+    {
+        const { server, origin } = await serve();
+        const get = path => new Promise(resolveGet => { const r = httpRequest({ host: '127.0.0.1', port: Number(new URL(origin).port), path, method: 'GET' }, res => { res.resume(); res.on('end', () => resolveGet(res.statusCode)); }); r.on('error', () => resolveGet('error')); r.end(); });
+        const bad = await get('/%zz');
+        const after = await get('/standalone.html');
+        server.close();
+        ok('server: a request to /%zz answers 400 and the next request is still served', bad === 400 && after === 200);
+    }
+    {
+        const home = mkdtempSync(join(tmpdir(), 'pb-fixture-git-'));
+        try {
+            writeFileSync(join(home, '.gitconfig'), '[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = /nonexistent/gpg\n');
+            const probe = join(home, 'probe');
+            mkdirSync(probe);
+            const plain = { PATH: process.env.PATH ?? '', HOME: home };
+            const run = (env, ...a) => spawnSync('git', ['-C', probe, '-c', 'user.name=t', '-c', 'user.email=t@invalid', ...a], { env, encoding: 'utf8' });
+            run(plain, 'init', '-q');
+            const control = run(plain, 'commit', '--allow-empty', '-m', 'x');
+            ok("fixture git control: the user's global commit.gpgsign really breaks a plain commit (else the plant below proves nothing)", control.status !== 0);
+            let status = 'none';
+            try { status = makeRepo(join(home, 'fixture'), home); } catch (e) { status = `threw: ${String(e.message).slice(0, 100)}`; }
+            ok("fixture git: makeRepo ignores the user's global config and leaves the merge conflict", /^UU README\.md/m.test(status));
+        } finally { rmSync(home, { recursive: true, force: true }); }
+    }
     const child = spawnSync(process.execPath, ['--input-type=module', '-e', `await import(${J(SELF)})`], { encoding: 'utf8', timeout: 30000 });
     ok('importing the module prints and starts nothing', child.status === 0 && child.stdout === '' && child.stderr === '');
     console.log(failed ? `${NAME} self-test: FAIL -- ${failed} case(s)` : `${NAME} self-test: PASS -- every planted fault went red naming it`);

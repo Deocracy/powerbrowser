@@ -373,6 +373,20 @@ document.addEventListener(
     // before it.
     const { TheiaService } = ChromeUtils.importESModule("chrome://powerbrowser/content/TheiaService.sys.mjs");
     const { OrcaService } = ChromeUtils.importESModule("chrome://powerbrowser/content/OrcaService.sys.mjs");
+    // Audit fix 62-WR-02: Orca's quit hooks go in before Theia starts. OrcaService.start() runs only once
+    // Theia's start has settled, and a quit granted in between would otherwise never reach it. Never
+    // allowed to stop the shell's start: OrcaService.start() arms them itself if this did not.
+    try {
+      OrcaService.armQuitHooks();
+    } catch {
+      // Best-effort, as the hooks' own registration is.
+    }
+    // Audit fix 67-WR-03: the Theia backend gets orcad's port from OrcaService's one accessor.
+    try {
+      TheiaService.setOrcaPortSource(() => OrcaService.orcadPort());
+    } catch {
+      // Without it the backend refuses Orca's pairing offer; the shell itself still starts.
+    }
     // Announce shell readiness the way Firefox's own chrome does, so WebDriver
     // will create a session against the shell window.
     PowerBrowserAPI.notifyStartupFinished(window);

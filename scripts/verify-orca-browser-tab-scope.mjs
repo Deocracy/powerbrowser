@@ -14,12 +14,28 @@
 //  a. the method list, from the shipped AGENT_METHODS (an empty list is a broken instrument, never a pass);
 //  b. the mechanism of each method, from the section's AGENT_NATIVE_ROWS and the child's AGENT_RUN keys
 //     (GroupActorChild.sys.mjs): every method in exactly one, nothing served outside the list;
-//  c. the visibility reads, from the comment-stripped source: every `style.visibility ===` or `!==` comparison
-//     must sit inside overlayShownToUser, whose own comparison is the positive control.
+//  c. the visibility reads, from the acorn AST of the whole source: every `visibility` member read whatever object it is
+//     taken from (dot or bracket, any comparison, a switch, a bare read, through an alias of a style; plain assignments
+//     excluded), every getPropertyValue("visibility") call and every destructured `visibility` key, nested or not, must
+//     sit inside overlayShownToUser, whose own read is the positive control;
+//  d. the page-work callers, from the same AST: the section's top-level functions, consts and classes that do page work
+//     on an overlay (getActor, getExistingActor, sendQuery, drawSnapshot, print, Services.cookies, Services.wm, the
+//     webTab navigation calls), closed over references (a class in the set is red: Gecko enters it directly); every
+//     reference to that set anywhere in the file must sit in handleWebTabAgent (the wall the scenarios prove) or in
+//     RATIFIED_PAGE_WORK, whose one entry (webTabClose) may only run RATIFIED_CLOSE_USE on the entry it closes. Outside
+//     the section, every reference to an agent name constant (actor, message, group, container pref), an alias of one,
+//     the container functions or the agentUserContextId field, every literal carrying an agent name, and every actor
+//     lookup by a name that is not a literal or a string constant must equal RATIFIED_AGENT_NAMES; every page-work
+//     primitive but a non-agent actor lookup must equal OUTSIDE_PAGE_WORK. On the child side, GroupActorChild's AGENT_RUN
+//     is referenced only from PowerBrowserAgentChild.receiveMessage. All as set equality both ways.
+//     Not derived: navigation calls outside the section (frontend arms navigate user tabs by design); page work that is
+//     not one of those primitives (a contentWindow or document read through a browsing context); the child's row
+//     helpers (agentPress and the like) called from another child actor without AGENT_RUN; reads of the entry's agent
+//     flag (the walls of G1a's verify-agent-tab-walls cover those).
 //
 // Red on: any of the 40 methods doing page work (actor, drawSnapshot, cookie, navigation, dialog or print calls) for
 // a user tab, an unknown id, another frontend's tab, an agent tab whose page is not in the agent container, or a
-// stopped tab; a click not reaching the actor once or a screenshot not drawn once at the device pixel ratio; a method
+// stopped tab; a second entry point into agent page work (d); a click not reaching the actor once or a screenshot not drawn once at the device pixel ratio; a method
 // outside AGENT_METHODS or bad params accepted; the flag honoured on an already-open tab or a malformed flag accepted;
 // the usercontextid attribute missing, set after appendChild or set on a user overlay; a cookie-service call without
 // the agent userContextId; Stop not aborting an in-flight call or not pushing active false and stopped true; the mark
@@ -57,13 +73,23 @@
 //    of AGENT_METHODS but browser.goto answers failed browser_command_unavailable with no page work, and browser.goto
 //    still navigates.
 //
-// Page-table clause: when lane p66-02's theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts exists, it
-// (and ./orca-browser-abilities) is transpiled with theia/node_modules/typescript and its createPageTable must refuse
-// a duplicate page and a second page for a tab; while it is absent the PASS line says "page-table clause SKIP (lane
-// p66-02 not merged)"; present but missing an export is red, never a SKIP.
+// Page-table clause: theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts (and ./orca-browser-abilities)
+// is transpiled with theia/node_modules/typescript and its createPageTable must refuse a duplicate page and a second
+// page for a tab. The module absent, or present but missing an export, is red, never a SKIP (lane p66-02 merged long
+// ago, so an absence can only be a missing table).
 //
-// Tier: quick (text reads and node:vm; acorn and typescript from theia/node_modules). --self-test is quick and
-// hermetic: mutated copies of the shipped source in memory and a fixture dispatch module.
+// Cookie clause (agent-browser-03, G1a round 3): a get or delete for a host on another site is refused before any
+// cookie-service call; cookie.get lists an httpOnly cookie with its value withheld. cookie.set writes only what page
+// script on the current page could: the detector is a plain host-only cookie on the current host at "/" (one write);
+// each of these is refused with no write: another host, a subdomain, a sibling host, a parent domain attribute, a path
+// other than "/", httpOnly, a __Host- or __Secure- name, Secure on http, SameSite None without Secure, and a name the
+// site holds as httpOnly in the unpartitioned or the partitioned jar (the fake jar models origin attributes). A delete
+// of an httpOnly name in either jar is refused; deleting the plain cookie writes.
+//
+// Tier: quick (text reads and node:vm; acorn and typescript from theia/node_modules). SKIP (exit 77, one line) when
+// upstream/ is not fetched: the clauses derived from the pinned Gecko source then ran against the agent section's own
+// constants, or did not run. --self-test is quick and hermetic: mutated copies of the shipped source in memory and a
+// fixture dispatch module; without upstream/ its pin plants do not run and it exits 77.
 //
 // Usage:
 //   node scripts/verify-orca-browser-tab-scope.mjs
@@ -74,6 +100,8 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
+
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-browser-tab-scope';
@@ -208,6 +236,7 @@ export function makeWorld(sliced, { dpr = 2 } = {}) {
         devicePixelRatio: dpr, innerWidth: 1600, innerHeight: 1000,
         setTimeout: (fn, ms) => clock.setTimeout(fn, ms), clearTimeout: id => clock.clearTimeout(id),
         addEventListener: (type, fn) => { if (type === 'focus') focusListeners.push(fn); },
+        getComputedStyle: el => el.style,
         DOMRect: class { constructor(x, y, w, h) { Object.assign(this, { x, y, width: w, height: h }); } },
     };
     const doc = {
@@ -227,8 +256,10 @@ export function makeWorld(sliced, { dpr = 2 } = {}) {
 
     function fakeBrowser(tabIdHint) {
         const attrs = new Map();
-        const browser = { tabIdHint, appended: false, docShellIsActive: false, ownerDocument: doc, removed: false, attrs };
-        browser.style = {};
+        // The page the overlay shows: the cookie rows act only on its site (agent-browser-03).
+        const browser = { tabIdHint, appended: false, docShellIsActive: false, ownerDocument: doc, removed: false, attrs, currentURI: { host: 'example.com', spec: 'https://example.com/' } };
+        // A style declaration: plain properties plus getPropertyValue, so a planted read of any form runs.
+        browser.style = Object.defineProperty({}, 'getPropertyValue', { value(name) { return this[name] ?? ''; } });
         browser.setAttribute = (name, value) => { attrs.set(name, value); rec.attrs.push({ browser, name, value, appended: browser.appended }); };
         browser.getAttribute = name => (attrs.has(name) ? attrs.get(name) : null);
         browser.remove = () => { browser.removed = true; };
@@ -286,12 +317,37 @@ export function makeWorld(sliced, { dpr = 2 } = {}) {
         removeTabRow: () => Promise.resolve(),
         webTabNavigate: navigate('navigate'), webTabBack: navigate('back'), webTabForward: navigate('forward'), webTabReload: navigate('reload'),
     };
-    const cookieCall = name => (...args) => { rec.cookies.push({ name, args }); return name === 'add' ? { result: 0 } : name.startsWith('get') ? [{ host: 'example.com', name: 'a', path: '/', value: 'b', expiry: 0, isSession: true, sameSite: 1 }] : undefined; };
+    // The agent container's jar, with origin attributes: a plain cookie, an httpOnly one, and an httpOnly one in the
+    // site's partitioned jar (CHIPS). getCookiesFromHost matches the attributes exactly (no partitionKey means the
+    // unpartitioned jar); getCookiesWithOriginAttributes matches only the fields its pattern names, as Gecko does.
+    const cookieJar = [
+        { host: 'example.com', name: 'a', path: '/', value: 'b', expiry: 0, isSession: true, sameSite: 1, isHttpOnly: false, originAttributes: { userContextId: CONTAINER, partitionKey: '' } },
+        { host: 'example.com', name: 'sid', path: '/', value: 'planted-session-secret', expiry: 0, isSession: true, sameSite: 1, isHttpOnly: true, originAttributes: { userContextId: CONTAINER, partitionKey: '' } },
+        { host: 'example.com', name: 'psid', path: '/', value: 'planted-partitioned-secret', expiry: 0, isSession: true, sameSite: 1, isHttpOnly: true, isPartitioned: true, originAttributes: { userContextId: CONTAINER, partitionKey: '(https,example.com)' } },
+    ];
+    const siteOfHost = h => String(h).replace(/^\./, '').split('.').slice(-2).join('.');
+    const oaValue = (oa, k) => oa[k] ?? (k === 'partitionKey' ? '' : 0);
+    const onHost = host => cookieJar.filter(c => siteOfHost(c.host) === siteOfHost(host));
+    const cookieCall = name => (...args) => {
+        rec.cookies.push({ name, args });
+        if (name === 'add') return { result: 0 };
+        if (name === 'getCookiesFromHost') {
+            const attrs = { partitionKey: '', ...(args[1] ?? {}) };
+            return onHost(args[0]).filter(c => Object.entries(attrs).every(([k, v]) => oaValue(c.originAttributes, k) === v));
+        }
+        if (name === 'getCookiesWithOriginAttributes') {
+            const pattern = JSON.parse(args[0] ?? '{}');
+            return onHost(args[1]).filter(c => Object.entries(pattern).every(([k, v]) => oaValue(c.originAttributes, k) === v));
+        }
+        return undefined;
+    };
     const prefs = new Map();
     const Services = {
         prefs: { getIntPref: (name, fallback) => (prefs.has(name) ? prefs.get(name) : fallback), setIntPref: (name, value) => prefs.set(name, value), getBoolPref: (name, fallback) => fallback },
         io: { newURI: spec => ({ spec }) },
         scriptSecurityManager: { createNullPrincipal: () => ({ isSystemPrincipal: false }) },
+        // Gecko's registrable domain, reduced to the last two labels; a bare suffix throws as getBaseDomainFromHost does.
+        eTLD: { getBaseDomainFromHost: host => { const labels = String(host).split('.'); if (labels.length < 2) throw new Error('insufficient domain levels'); return labels.slice(-2).join('.'); } },
         cookies: { getCookiesFromHost: cookieCall('getCookiesFromHost'), getCookiesWithOriginAttributes: cookieCall('getCookiesWithOriginAttributes'), add: cookieCall('add'), remove: cookieCall('remove') },
         obs: { addObserver: (observer, topic) => rec.observers.push({ observer, topic }) },
         uuid: { generateUUID: () => `{fake-${rec.factories.length}}` },
@@ -467,6 +523,82 @@ export async function runScenarios(sliced, childText, dpr = 2) {
         if (attrs?.userContextId !== CONTAINER) {
             failures.push(`cookies: Services.cookies.${call.name} ran without the agent userContextId (${JSON.stringify(attrs)})`);
         }
+    }
+
+    // Cookies act only on the tab's current site (agent-browser-03): a get or a delete for a host on another site is
+    // refused before any cookie-service call; cookie.get lists an httpOnly cookie with its value withheld.
+    w = fresh();
+    w.addTab('a1', { agent: true });
+    for (const [method, params, what] of [
+        ['browser.cookie.get', { url: 'https://other.test/' }, 'a get for another site'],
+        ['browser.cookie.delete', { name: 'a', domain: 'other.test' }, 'a delete for another site'],
+    ]) {
+        const calls = w.rec.cookies.length;
+        reply = await w.agent('a1', method, params);
+        if (reply?.where !== 'failed' || reply?.code !== 'browser_command_unavailable' || w.rec.cookies.length !== calls) {
+            failures.push(`cookies: ${what} answered ${JSON.stringify(reply)} after ${w.rec.cookies.length - calls} cookie-service call(s); expected failed browser_command_unavailable and none`);
+        }
+    }
+    reply = await w.agent('a1', 'browser.cookie.get', {});
+    const jar = Array.isArray(reply?.result?.cookies) ? reply.result.cookies : [];
+    const plain = jar.find(c => c.name === 'a');
+    const httpOnly = jar.find(c => c.name === 'sid');
+    if (plain?.value !== 'b') failures.push(`cookies: detector blind: cookie.get on the current site answered ${JSON.stringify(reply)}; expected the plain cookie with its value`);
+    if (!httpOnly || httpOnly.value !== '' || httpOnly.httpOnly !== true) {
+        failures.push(`cookies: cookie.get returned an httpOnly cookie as ${JSON.stringify(httpOnly ?? null)}; expected it listed with httpOnly true and its value withheld`);
+    }
+
+    // cookie.set (agent-browser-03, G1a round 3): an agent's cookie is no stronger than page script on the current page
+    // could set: host-only on the current host, path "/", never httpOnly, never a __Host- or __Secure- name, Secure only
+    // on https, SameSite None only with Secure, and never a name the site holds as httpOnly in either jar. The detector:
+    // a plain host-only cookie on the current host at "/" writes, host-only at "/" and not httpOnly. Each refusal: no
+    // cookie write. Tabs: a1 on https://example.com/, sub on https://app.example.com/, plainHttp on http://example.com/.
+    const writes = () => w.rec.cookies.filter(c => c.name === 'add' || c.name === 'remove');
+    const tabOn = (tabId, host, scheme = 'https') => {
+        w.addTab(tabId, { agent: true });
+        w.webTabs.get(tabId).browser.currentURI = { host, spec: `${scheme}://${host}/` };
+    };
+    tabOn('sub', 'app.example.com');
+    tabOn('plainHttp', 'example.com', 'http');
+    const setBefore = writes().length;
+    reply = await w.agent('a1', 'browser.cookie.set', { name: 'fresh', value: 'v' });
+    const wrote = writes().slice(setBefore);
+    const [wHost, wPath, , , , wHttpOnly] = wrote[0]?.args ?? [];
+    if (reply?.where !== 'done' || wrote.length !== 1 || wHost !== 'example.com' || wPath !== '/' || wHttpOnly !== false) {
+        failures.push(`cookies: detector blind: a plain host-only set on the current host answered ${JSON.stringify(reply)} with writes ${JSON.stringify(wrote.map(c => c.args.slice(0, 6)))}; expected done and one write for example.com at / without httpOnly`);
+    }
+    for (const [tab, params, what] of [
+        ['a1', { name: 'x', value: 'v', domain: 'other.test' }, 'a set for another host'],
+        ['a1', { name: 'x', value: 'v', domain: 'www.example.com' }, 'a set for a subdomain of the current host'],
+        ['sub', { name: 'x', value: 'v', domain: 'api.example.com' }, 'a set for a sibling host'],
+        ['sub', { name: 'x', value: 'v', domain: '.example.com' }, 'a set with a domain attribute (the parent domain)'],
+        ['a1', { name: 'x', value: 'v', path: '/account' }, 'a set with a path other than /'],
+        ['a1', { name: 'x', value: 'v', httpOnly: true }, 'a set with httpOnly true'],
+        ['a1', { name: '__Host-x', value: 'v', secure: true }, 'a set of a __Host- name'],
+        ['a1', { name: '__Secure-x', value: 'v', secure: true }, 'a set of a __Secure- name'],
+        ['plainHttp', { name: 'x', value: 'v', secure: true }, 'a Secure set on an http page'],
+        ['a1', { name: 'x', value: 'v', sameSite: 'None' }, 'a SameSite None set without Secure'],
+        ['a1', { name: 'sid', value: 'agent-value' }, 'a set over a name held as httpOnly'],
+        ['a1', { name: 'psid', value: 'agent-value' }, 'a set over a name held as httpOnly in the partitioned jar'],
+    ]) {
+        const n = writes().length;
+        reply = await w.agent(tab, 'browser.cookie.set', params);
+        if (reply?.where !== 'failed' || reply?.code !== 'browser_command_unavailable' || writes().length !== n) {
+            failures.push(`cookies: ${what} answered ${JSON.stringify(reply)} after ${writes().length - n} cookie write(s); expected failed browser_command_unavailable and none`);
+        }
+    }
+    // Delete: an httpOnly name (either jar) is refused with no write; deleting the plain cookie writes (the detector).
+    for (const [name, what] of [['sid', 'a delete of the httpOnly cookie'], ['psid', 'a delete of the partitioned httpOnly cookie']]) {
+        const n = writes().length;
+        reply = await w.agent('a1', 'browser.cookie.delete', { name, domain: 'example.com' });
+        if (reply?.where !== 'failed' || reply?.code !== 'browser_command_unavailable' || writes().length !== n) {
+            failures.push(`cookies: ${what} answered ${JSON.stringify(reply)} after ${writes().length - n} cookie write(s); expected failed browser_command_unavailable and none`);
+        }
+    }
+    const plainBefore = writes().length;
+    reply = await w.agent('a1', 'browser.cookie.delete', { name: 'a', domain: 'example.com' });
+    if (reply?.where !== 'done' || writes().length === plainBefore) {
+        failures.push(`cookies: detector blind: deleting the plain cookie answered ${JSON.stringify(reply)} with ${writes().length - plainBefore} cookie write(s); expected done and a write`);
     }
 
     // Mark state: a served call lights it; 20000 ms without one clears it with one push.
@@ -875,23 +1007,305 @@ export function receiverPlants(text) {
     return plants;
 }
 
-/** Structural clause (A1): no raw `style.visibility` comparison outside overlayShownToUser. */
+/** walk with the ancestor chain: visit(node, ancestors), ancestors[0] the root. */
+function walkAncestors(node, visit, ancestors = []) {
+    if (node === null || typeof node !== 'object') return;
+    if (Array.isArray(node)) { node.forEach(n => walkAncestors(n, visit, ancestors)); return; }
+    if (typeof node.type === 'string') visit(node, ancestors);
+    const next = typeof node.type === 'string' ? [...ancestors, node] : ancestors;
+    for (const key of Object.keys(node)) {
+        if (key !== 'loc') walkAncestors(node[key], visit, next);
+    }
+}
+
+const propName = m => (m.computed ? (m.property.type === 'Literal' ? String(m.property.value) : null) : m.property.name);
+const calleeProp = call => (call.callee.type === 'MemberExpression' ? propName(call.callee) : call.callee.type === 'Identifier' ? call.callee.name : null);
+
+/**
+ * Structural clause (A1): every read of an overlay's visibility sits inside overlayShownToUser. A read is, on the
+ * acorn AST of the whole source, whatever object it is taken from (so an alias of `.style` or of a computed style, and
+ * a destructured style, count too): any member `visibility` (dot or bracket, optional chain included) that is not the
+ * left side of a plain assignment; any getPropertyValue("visibility") call; and any `visibility` key in a destructuring
+ * pattern, nested or not, in a declaration, a parameter or an assignment. The predicate's own read is the positive
+ * control. An object literal key (a write of a style table) is not a read.
+ */
 export function visibilityReads(text) {
-    const src = stripComments(text);
-    const predicate = /function overlayShownToUser\([^)]*\)\s*\{[\s\S]*?\n\}/.exec(src);
-    if (!predicate) {
-        return ['broken instrument: function overlayShownToUser was not found, so the raw-read count has no positive control'];
+    let ast;
+    try {
+        ast = acorn.parse(text, { ecmaVersion: 'latest', sourceType: 'module', locations: true });
+    } catch (err) {
+        return [`broken instrument: ${API} does not parse (${err.message})`];
     }
-    if (!/\.style\.visibility\s*[!=]==/.test(predicate[0])) {
-        return ['broken instrument: overlayShownToUser carries no style.visibility comparison, so the count has no positive control'];
+    let predicate = null;
+    walk(ast, n => { if (!predicate && n.type === 'FunctionDeclaration' && n.id?.name === 'overlayShownToUser') predicate = n; });
+    if (!predicate) return ['broken instrument: function overlayShownToUser was not found, so the raw-read count has no positive control'];
+    const reads = [];
+    walkAncestors(ast, (n, anc) => {
+        const parent = anc.at(-1);
+        if (n.type === 'MemberExpression' && propName(n) === 'visibility') {
+            if (parent?.type === 'AssignmentExpression' && parent.operator === '=' && parent.left === n) return;
+            reads.push(n);
+        } else if (n.type === 'CallExpression' && calleeProp(n) === 'getPropertyValue' && n.arguments[0]?.type === 'Literal' && n.arguments[0].value === 'visibility') {
+            reads.push(n);
+        } else if (n.type === 'ObjectPattern') {
+            for (const p of n.properties) if (p.type === 'Property' && (p.key.name === 'visibility' || p.key.value === 'visibility')) reads.push(p);
+        }
+    });
+    const inside = r => r.start >= predicate.start && r.end <= predicate.end;
+    if (!reads.some(inside)) return ['broken instrument: overlayShownToUser carries no visibility read, so the count has no positive control'];
+    const lines = text.split('\n');
+    return reads.filter(r => !inside(r)).map(r => `visibility: a raw visibility read outside overlayShownToUser at ${API}:${r.loc.start.line}: ${lines[r.loc.start.line - 1].trim().slice(0, 120)}`);
+}
+
+// ---------------------------------------------------------------------------
+// The page-work caller clause (harness-static-browser-02): the wall is proven through handleWebTabAgent's arm, so
+// nothing else may reach agent page work. Derived from the source, compared as set equality.
+
+const AGENT_WALL = 'handleWebTabAgent';
+// The agent section's constants that name the agent actors, their messages, the agent group and the container pref.
+const AGENT_NAME_CONST = /^AGENT_(\w+_NAME|\w+_MESSAGE|MESSAGE_MANAGER_GROUP|CONTAINER_PREF)$/;
+// The agent section's functions and entry fields that hold the agent container id.
+const AGENT_CONTAINER_NAMES = ['agentContainerId', 'agentContainerIds'];
+const AGENT_CONTAINER_FIELDS = ['agentUserContextId'];
+// The page-work calls, on any receiver.
+const PAGE_WORK_CALLS = ['getActor', 'getExistingActor', 'sendQuery', 'drawSnapshot', 'print'];
+const ACTOR_LOOKUPS = ['getActor', 'getExistingActor'];
+// Ratified entry points into the section's page work outside the wall, each a precise use (see ratifiedCloseUse).
+const RATIFIED_PAGE_WORK = new Map([
+    // 66-06: a window-modal page prompt outlives its removed overlay, so closing any tab cancels the prompt it opened.
+    ['PowerBrowserAPI.webTabClose', ['agentDialogWindow']],
+]);
+// Ratified references to the agent names outside the section, compared as set equality: the creation path the flag
+// and container scenarios prove (webTabOpen puts an agent overlay in the agent container and group before append).
+const RATIFIED_AGENT_NAMES = new Map([
+    ['PowerBrowserAPI.webTabOpen', ['AGENT_MESSAGE_MANAGER_GROUP', 'agentContainerId']],
+]);
+// Page work outside the section, by context and primitive, compared as set equality: the user-tab features that draw,
+// print, query a non-agent actor, or read the cookie service or the window mediator. A new context or primitive (a
+// case arm doing page work inline) is red until it is ratified here.
+const OUTSIDE_PAGE_WORK = new Map([
+    ['PowerBrowserAPI.setSessionCookie', ['Services.cookies']],
+    ['PowerBrowserAPI.findShellWindow', ['Services.wm']],
+    ['PowerBrowserAPI.openStockTab', ['Services.wm']],
+    ['PowerBrowserAPI.stockKeyHeldByAnotherTab', ['Services.wm']],
+    ['PowerBrowserAPI.findStockTabBrowser', ['Services.wm']],
+    ['PowerBrowserAPI.captureShellRegion', ['drawSnapshot']],
+    ['PowerBrowserAPI.startTabStoreTriggers', ['Services.wm']],
+    ['webTabPrintReply', ['print']],
+    ['webTabPrintHasSelection', ['sendQuery']],
+    ['webTabClearSiteData', ['Services.cookies']],
+    ['openStockPageFromMenu', ['Services.wm']],
+    ['shellBrowsersPermitUnload', ['Services.wm']],
+    ['pageMenuStill', ['drawSnapshot']],
+    ['webTabEditEnabled', ['sendQuery']],
+    ['extensionOpenTabPage', ['Services.wm']],
+    ['pageEditTargetCommands', ['sendQuery']],
+]);
+const RATIFIED_CLOSE_USE = 'agentDialogWindow(entry)?.document.getElementById("commonDialog")?.cancelDialog();';
+
+/** The page-work primitive a node is, or null: a PAGE_WORK_CALLS call on a member, or a Services.cookies or .wm read. */
+function primitiveOf(n) {
+    if (n.type === 'CallExpression' && n.callee.type === 'MemberExpression' && PAGE_WORK_CALLS.includes(propName(n.callee))) return propName(n.callee);
+    if (n.type === 'MemberExpression' && n.object.type === 'Identifier' && n.object.name === 'Services' && ['cookies', 'wm'].includes(propName(n))) return `Services.${propName(n)}`;
+    return null;
+}
+
+/** The enclosing top-level declaration of a node: a function, class or const by name, a const's object-literal method by `name.key`. */
+function contextOf(anc, decls = new Map()) {
+    const top = anc[1];
+    if (!top) return '(module)';
+    const d = top.type === 'ExportNamedDeclaration' ? top.declaration : top;
+    if (d?.type === 'FunctionDeclaration' || d?.type === 'ClassDeclaration') {
+        const method = d.type === 'ClassDeclaration' ? anc.find(x => x.type === 'MethodDefinition' && x.key?.type === 'Identifier') : null;
+        return method ? `${d.id.name}.${method.key.name}` : d.id.name;
     }
+    if (d?.type === 'VariableDeclaration') {
+        const v = d.declarations.find(x => anc.includes(x));
+        const name = v?.id?.name ?? '(module)';
+        const prop = anc.find(x => x.type === 'Property' && anc.indexOf(x) > anc.indexOf(v) && !x.computed && x.key?.type === 'Identifier');
+        return prop && !decls.has(name) ? `${name}.${prop.key.name}` : name;
+    }
+    return '(module)';
+}
+
+/** The string a Literal or a TemplateLiteral evaluates to as far as it can be read: its quasis joined, or null. */
+function stringOfNode(n) {
+    if (n?.type === 'Literal' && typeof n.value === 'string') return n.value;
+    if (n?.type === 'TemplateLiteral') return n.quasis.map(q => q.value.cooked ?? '').join(n.expressions.length ? '\u0000' : '');
+    return null;
+}
+
+/** Red unless the given sites ({ context, ref, line }) equal the ratified map as set equality, context by context. */
+function ratifiedFailures(sites, ratified, what, outside) {
     const failures = [];
-    for (const m of src.matchAll(/\.style\.visibility\s*[!=]==/g)) {
-        if (m.index < predicate.index || m.index > predicate.index + predicate[0].length) {
-            const line = src.slice(0, m.index).split('\n').length;
-            failures.push(`visibility: a raw style.visibility comparison outside overlayShownToUser at stripped line ${line}: ${src.split('\n')[line - 1].trim().slice(0, 120)}`);
+    const byContext = new Map();
+    for (const s of sites) {
+        if (!byContext.has(s.context)) byContext.set(s.context, []);
+        byContext.get(s.context).push(s);
+    }
+    for (const [context, list] of byContext) {
+        const allowed = ratified.get(context) ?? [];
+        const seen = new Set();
+        for (const s of list) {
+            if (!allowed.includes(s.ref)) { if (!seen.has(s.ref)) failures.push(`page-work callers: ${context} ${what} (${s.ref} at ${API}:${s.line}) ${outside}`); seen.add(s.ref); }
+        }
+        for (const ref of allowed.filter(r => !list.some(x => x.ref === r))) failures.push(`page-work callers: stale ratified entry: ${context} no longer has ${ref}`);
+    }
+    for (const context of [...ratified.keys()].filter(c => !byContext.has(c))) failures.push(`page-work callers: stale ratified entry: ${context} has none of ${ratified.get(context).join(', ')}`);
+    return failures;
+}
+
+/**
+ * The page-work set and its entry points, derived from the acorn AST of the whole source:
+ *  - seeds: each top-level function, class or const of the agent section whose body does page work on an overlay (a
+ *    getActor, getExistingActor, sendQuery, drawSnapshot or print call; a Services.cookies or Services.wm read; a
+ *    PowerBrowserAPI webTabNavigate, webTabBack, webTabForward or webTabReload call);
+ *  - closure: every other top-level declaration of the section that references a member, except the wall, until
+ *    nothing changes; a class in the set is red outright (Gecko enters an actor class, never the wall);
+ *  - references: every identifier reference to a member anywhere in the file, attributed to its enclosing top-level
+ *    declaration; the contexts that are not members must equal { handleWebTabAgent } plus RATIFIED_PAGE_WORK, and the
+ *    ratified close must use the dialog window only as RATIFIED_CLOSE_USE on the entry it closes;
+ *  - agent names: outside the section, every reference to an agent name constant (AGENT_NAME_CONST), an alias of one,
+ *    the container functions or the container field, every string or template literal carrying an agent name value, and
+ *    every actor lookup whose name is neither a literal nor a top-level string constant, must equal RATIFIED_AGENT_NAMES;
+ *  - outside page work: every page-work primitive outside the section must equal OUTSIDE_PAGE_WORK, so a case arm
+ *    doing page work inline is red until ratified.
+ */
+export function pageWorkCallers(text) {
+    let ast;
+    try {
+        ast = acorn.parse(text, { ecmaVersion: 'latest', sourceType: 'module', locations: true });
+    } catch (err) {
+        return { failures: [`broken instrument: ${API} does not parse (${err.message})`] };
+    }
+    const start = text.indexOf(SECTION_START);
+    const end = text.indexOf(SECTION_END);
+    const inSection = n => n.start >= start && n.end <= end;
+    const decls = new Map();
+    const stringConsts = new Map();
+    for (const st of ast.body) {
+        const d = st.type === 'ExportNamedDeclaration' ? st.declaration : st;
+        if (!d) continue;
+        if (d.type === 'VariableDeclaration') {
+            for (const v of d.declarations) {
+                const value = v.id.type === 'Identifier' ? stringOfNode(v.init) : null;
+                if (value !== null && v.init.type === 'Literal') stringConsts.set(v.id.name, value);
+            }
+        }
+        if (!inSection(d)) continue;
+        if (d.type === 'FunctionDeclaration' || d.type === 'ClassDeclaration') decls.set(d.id.name, d);
+        if (d.type === 'VariableDeclaration') for (const v of d.declarations) if (v.id.type === 'Identifier' && v.init) decls.set(v.id.name, v);
+    }
+    const agentConsts = [...decls.keys()].filter(n => AGENT_NAME_CONST.test(n) && stringConsts.has(n));
+    if (!agentConsts.length) return { failures: ['broken instrument: no agent name constant was derived from the agent section'] };
+    const agentValues = agentConsts.map(n => stringConsts.get(n));
+    const doesPageWork = node => {
+        let found = false;
+        walk(node, n => {
+            if (found) return;
+            if (primitiveOf(n)) found = true;
+            if (n.type === 'MemberExpression' && n.object.type === 'Identifier' && n.object.name === 'PowerBrowserAPI' && /^webTab(Navigate|Back|Forward|Reload)$/.test(propName(n) ?? '')) found = true;
+        });
+        return found;
+    };
+    const isReference = (n, parent) => !(parent?.type === 'MemberExpression' && parent.property === n && !parent.computed)
+        && !(parent?.type === 'Property' && parent.key === n && !parent.computed && !parent.shorthand)
+        && !(parent?.type === 'MethodDefinition' && parent.key === n)
+        && !((parent?.type === 'FunctionDeclaration' || parent?.type === 'ClassDeclaration' || parent?.type === 'VariableDeclarator') && parent.id === n);
+    const references = node => {
+        const names = new Set();
+        walkAncestors(node, (n, anc) => { if (n.type === 'Identifier' && isReference(n, anc.at(-1))) names.add(n.name); });
+        return names;
+    };
+    const work = new Set([...decls].filter(([name, d]) => name !== AGENT_WALL && doesPageWork(d)).map(([name]) => name));
+    if (!work.size) return { failures: ['broken instrument: no function of the agent section does page work, so no caller set is derived'] };
+    for (let grew = true; grew;) {
+        grew = false;
+        for (const [name, d] of decls) {
+            if (name === AGENT_WALL || work.has(name)) continue;
+            if ([...references(d)].some(r => work.has(r))) { work.add(name); grew = true; }
         }
     }
+    const failures = [];
+    for (const name of work) if (decls.get(name).type === 'ClassDeclaration') failures.push(`page-work callers: class ${name} in the agent section does agent page work; Gecko enters an actor class directly, never through ${AGENT_WALL}`);
+
+    // Page-work references, aliases of the agent names, agent-name sites and outside primitives, in one walk.
+    const workSites = [];
+    const nameSites = [];
+    const outsideSites = [];
+    const aliases = new Set();
+    walkAncestors(ast, (n, anc) => {
+        const parent = anc.at(-1);
+        if (n.type === 'VariableDeclarator' && n.id.type === 'Identifier' && !inSection(n)
+            && ((n.init?.type === 'Identifier' && agentConsts.includes(n.init.name)) || agentValues.includes(stringOfNode(n.init)))) aliases.add(n.id.name);
+    });
+    walkAncestors(ast, (n, anc) => {
+        const parent = anc.at(-1);
+        const at = () => ({ context: contextOf(anc, decls), line: n.loc.start.line });
+        if (n.type === 'Identifier' && isReference(n, parent)) {
+            if (work.has(n.name)) workSites.push({ ...at(), ref: n.name, node: n, anc });
+            if (!inSection(n) && (agentConsts.includes(n.name) || AGENT_CONTAINER_NAMES.includes(n.name) || aliases.has(n.name))) nameSites.push({ ...at(), ref: n.name });
+        }
+        if (inSection(n)) return;
+        if (n.type === 'MemberExpression' && AGENT_CONTAINER_FIELDS.includes(propName(n))) nameSites.push({ ...at(), ref: `.${propName(n)}` });
+        const value = (n.type === 'Literal' || n.type === 'TemplateLiteral') && !(parent?.type === 'TemplateLiteral') ? stringOfNode(n) : null;
+        if (value !== null && agentValues.some(v => value.includes(v))) nameSites.push({ ...at(), ref: JSON.stringify(value.replace(/\u0000/g, '${...}')) });
+        if (n.type === 'CallExpression' && ACTOR_LOOKUPS.includes(calleeProp(n)) && n.callee.type === 'MemberExpression') {
+            const arg = n.arguments[0];
+            const known = arg?.type === 'Literal' || (arg?.type === 'Identifier' && stringConsts.has(arg.name));
+            if (!known) nameSites.push({ ...at(), ref: `${calleeProp(n)}(<not a literal or a string constant>)` });
+        }
+        const prim = primitiveOf(n);
+        // A lookup of a non-agent actor is not page work by itself; an agent-named lookup is an agent-name site above.
+        if (prim && !ACTOR_LOOKUPS.includes(prim)) outsideSites.push({ ...at(), ref: prim });
+    });
+
+    // Entry points into the section's page work.
+    const entries = workSites.filter(s => !work.has(s.context));
+    if (!entries.some(s => s.context === AGENT_WALL)) failures.push(`page-work callers: ${AGENT_WALL} reaches no agent page work, so the wall the scenarios prove guards nothing (derived page work: ${[...work].join(', ')})`);
+    const outsideWall = entries.filter(s => s.context !== AGENT_WALL);
+    failures.push(...ratifiedFailures(outsideWall, RATIFIED_PAGE_WORK, 'reaches agent page work', `outside ${AGENT_WALL}, the walled handler`));
+    // The ratified close: each use is exactly RATIFIED_CLOSE_USE, on the entry the method closes.
+    for (const s of outsideWall.filter(x => RATIFIED_PAGE_WORK.get(x.context)?.includes(x.ref))) {
+        const statement = [...s.anc].reverse().find(x => x.type === 'ExpressionStatement');
+        const used = statement ? text.slice(statement.start, statement.end).replace(/\s+/g, ' ') : '(not a statement)';
+        const method = s.anc.find(x => x.type === 'Property' && x.value?.type === 'FunctionExpression' && x.key?.name === s.context.split('.').pop())?.value;
+        const param = method?.params[0]?.name;
+        let entryIsClosed = false;
+        if (method && param) walk(method.body, x => {
+            if (x.type === 'VariableDeclarator' && x.id.type === 'Identifier' && x.id.name === 'entry' && x.init?.type === 'CallExpression' && text.slice(x.init.start, x.init.end) === `webTabs.get(${param})`) entryIsClosed = true;
+        });
+        if (used !== RATIFIED_CLOSE_USE || !entryIsClosed) {
+            failures.push(`page-work callers: ${s.context} uses ${s.ref} other than ratified (at ${API}:${s.line}: ${used.slice(0, 120)}); the ratified use is ${RATIFIED_CLOSE_USE} on the entry it closes`);
+        }
+    }
+    failures.push(...ratifiedFailures(nameSites, RATIFIED_AGENT_NAMES, 'names an agent actor, message, group or container', 'outside the agent section'));
+    failures.push(...ratifiedFailures(outsideSites, OUTSIDE_PAGE_WORK, 'does page work', 'outside the agent section, not ratified in OUTSIDE_PAGE_WORK'));
+    return { failures, work: [...work].sort(), entries: [...new Set(entries.map(s => s.context))] };
+}
+
+/**
+ * The child side (harness-static-browser-02 (d)): GroupActorChild.sys.mjs's AGENT_RUN table is referenced only from
+ * PowerBrowserAgentChild.receiveMessage, as set equality, so no other actor's message reaches an agent row.
+ */
+export function childRunCallers(childText) {
+    let ast;
+    try {
+        ast = acorn.parse(childText, { ecmaVersion: 'latest', sourceType: 'module', locations: true });
+    } catch (err) {
+        return [`broken instrument: ${CHILD} does not parse (${err.message})`];
+    }
+    const want = 'PowerBrowserAgentChild.receiveMessage';
+    const sites = [];
+    walkAncestors(ast, (n, anc) => {
+        const parent = anc.at(-1);
+        if (n.type !== 'Identifier' || n.name !== 'AGENT_RUN') return;
+        if (parent?.type === 'VariableDeclarator' && parent.id === n) return;
+        if (parent?.type === 'MemberExpression' && parent.property === n && !parent.computed) return;
+        sites.push({ context: contextOf(anc), line: n.loc.start.line });
+    });
+    const failures = sites.filter(s => s.context !== want).map(s => `child run table: ${s.context} references AGENT_RUN (${CHILD}:${s.line}); only ${want} may dispatch an agent row`);
+    if (!sites.some(s => s.context === want)) failures.push(`child run table: ${want} does not reference AGENT_RUN, so the derived entry is gone`);
     return failures;
 }
 
@@ -1104,7 +1518,6 @@ export function permissionsClause(upstream = {}, branding = {}) {
 const DISPATCH = 'theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts';
 const LOGIN_REGISTRY = 'upstream/toolkit/modules/ActorManagerParent.sys.mjs';
 const ABILITIES = 'theia/extensions/orca-browser/src/common/orca-browser-abilities.ts';
-export const PAGE_TABLE_SKIP = 'page-table clause SKIP (lane p66-02 not merged)';
 
 function loadTs(files) {
     let ts;
@@ -1129,9 +1542,9 @@ function loadTs(files) {
     return load('dispatch');
 }
 
-/** files: { dispatch, abilities } source texts, or null when the dispatch module is absent. */
+/** files: { dispatch, abilities } source texts, or null when the dispatch module is absent (red). */
 export function pageTableClause(files) {
-    if (!files) return { skip: true, failures: [] };
+    if (!files) return { failures: [`page-table: ${DISPATCH} is absent, so the page table is unchecked`] };
     let mod;
     try {
         mod = loadTs(files);
@@ -1196,9 +1609,10 @@ export async function checkSource(text, childText, dispatchFiles, registry = nul
     const walls = await wallsClause(sliced, upstream);
     const clipboard = await clipboardClause(sliced, text, childText, upstream);
     const permissions = permissionsClause(upstream, branding);
-    const failures = [...clipboard.failures, ...permissions.failures, ...await runScenarios(sliced, childText, 2), ...await runScenarios(sliced, childText, 1), ...visibilityReads(text), ...table.failures, ...login.failures, ...openFailures, ...walls.failures];
+    const callers = pageWorkCallers(text);
+    const failures = [...clipboard.failures, ...permissions.failures, ...await runScenarios(sliced, childText, 2), ...await runScenarios(sliced, childText, 1), ...visibilityReads(text), ...callers.failures, ...childRunCallers(childText), ...table.failures, ...login.failures, ...openFailures, ...walls.failures];
     const native = (() => { try { return Object.keys(makeWorld(sliced).AGENT_NATIVE_ROWS ?? {}).length; } catch { return 0; } })();
-    return { failures: [...new Set(failures)], native, skip: !!table.skip, loginSkip: !!login.skip, paths: opens.paths ?? [], wheres: opens.wheres ?? 0, walls, clipboard, permissions };
+    return { failures: [...new Set(failures)], native, loginSkip: !!login.skip, paths: opens.paths ?? [], wheres: opens.wheres ?? 0, walls, clipboard, permissions, callers };
 }
 
 // ---------------------------------------------------------------------------
@@ -1228,6 +1642,7 @@ export function outcomeOf() { return null; }
 const FIXTURE_ABILITIES = 'export const ORCA_BROWSER_ABILITIES = [];\n';
 
 async function selfTest() {
+    const selfSkips = [];
     const text = readFileSync(join(REPO_ROOT, API), 'utf8');
     const child = readFileSync(join(REPO_ROOT, CHILD), 'utf8');
     const fixture = { dispatch: FIXTURE_DISPATCH, abilities: FIXTURE_ABILITIES };
@@ -1250,7 +1665,18 @@ async function selfTest() {
         ['a method arm without the wall', { api: swap('  if (verdict) {\n    return { ok: true, kind, where: verdict };\n  }\n', '') }, 'wall: browser.click on a user tab'],
         ['the flag honoured on an existing tab', { api: swap('    if (webTabs.has(tabId)) {\n', '    if (webTabs.has(tabId)) {\n      if (agent === true) { webTabs.get(tabId).agent = true; }\n') }, 'flag: webTabOpen with agent on an already-open user tab'],
         ['a user tab parked', { api: swap('  const parked = !visible && entry.agent === true;', '  const parked = !visible;') }, 'parking: a user tab was parked'],
-        ['a raw style.visibility read added', { api: swap('    const wasVisible = overlayShownToUser(entry.browser);', '    const wasVisible = entry.browser.style.visibility === "visible";') }, 'visibility: a raw style.visibility comparison outside overlayShownToUser'],
+        ['a raw style.visibility read added', { api: swap('    const wasVisible = overlayShownToUser(entry.browser);', '    const wasVisible = entry.browser.style.visibility === "visible";') }, 'visibility: a raw visibility read outside overlayShownToUser'],
+        // harness-static-browser-09: every read form, not only === and !==.
+        ['a loose == visibility read added', { api: swap('    const wasVisible = overlayShownToUser(entry.browser);', '    const wasVisible = entry.browser.style.visibility == "visible";') }, 'visibility: a raw visibility read outside overlayShownToUser'],
+        ['a switch over visibility added', { api: swap('    const wasVisible = overlayShownToUser(entry.browser);', '    let wasVisible;\n    switch (entry.browser.style.visibility) { case "visible": wasVisible = true; break; default: wasVisible = false; }') }, 'visibility: a raw visibility read outside overlayShownToUser'],
+        ['a bracket visibility read added', { api: swap('    const wasVisible = overlayShownToUser(entry.browser);', '    const wasVisible = entry.browser.style["visibility"] !== "hidden";') }, 'visibility: a raw visibility read outside overlayShownToUser'],
+        ['a computed-style visibility read added', { api: swap('    const wasVisible = overlayShownToUser(entry.browser);', '    const wasVisible = entry.browser.ownerDocument.defaultView.getComputedStyle(entry.browser).visibility === "visible";') }, 'visibility: a raw visibility read outside overlayShownToUser'],
+        ['a getPropertyValue visibility read added', { api: swap('    const wasVisible = overlayShownToUser(entry.browser);', '    const wasVisible = entry.browser.style.getPropertyValue("visibility") === "visible";') }, 'visibility: a raw visibility read outside overlayShownToUser'],
+        // Second review: reads through an alias of .style or of a computed style, and nested destructuring.
+        ['a visibility read through a style alias', { api: swap('    const wasVisible = overlayShownToUser(entry.browser);', '    const st = entry.browser.style;\n    const wasVisible = st.visibility === "visible";') }, 'visibility: a raw visibility read outside overlayShownToUser'],
+        ['a visibility read through a computed-style alias', { api: swap('    const wasVisible = overlayShownToUser(entry.browser);', '    const computed = entry.browser.ownerDocument.defaultView.getComputedStyle(entry.browser);\n    const wasVisible = computed.visibility === "visible";') }, 'visibility: a raw visibility read outside overlayShownToUser'],
+        ['a nested destructured visibility read', { api: swap('    const wasVisible = overlayShownToUser(entry.browser);', '    const { style: { visibility: shown } } = entry.browser;\n    const wasVisible = shown === "visible";') }, 'visibility: a raw visibility read outside overlayShownToUser'],
+        ['a destructured visibility read added', { api: swap('    const wasVisible = overlayShownToUser(entry.browser);', '    const { visibility: shownNow } = entry.browser.style;\n    const wasVisible = shownNow === "visible";') }, 'visibility: a raw visibility read outside overlayShownToUser'],
         ['Stop not aborting an in-flight call', { api: swap('    call.abort(agentFailed("browser_owner_unavailable"));\n', '') }, 'stop: Stop did not abort an in-flight call'],
         ['the idle timer not clearing', { api: swap('    control.idleTimer = null;\n    agentSetActive(tabId, entry, false);\n  }, AGENT_IDLE_MS);', '    control.idleTimer = null;\n  }, AGENT_IDLE_MS);') }, 'mark: 20000 ms without a call did not clear active'],
         ['the container attribute set after append', { api: s => swap('    doc.body.appendChild(browser);\n', '    doc.body.appendChild(browser);\n    if (agent === true) { browser.setAttribute("usercontextid", String(userContextId)); }\n')(swap('{ "usercontextid": String(userContextId), messagemanagergroup', '{ messagemanagergroup')(s)) }, 'the usercontextid attribute was set after appendChild'],
@@ -1259,6 +1685,41 @@ async function selfTest() {
         ['the parked-focus guard removed', { api: swap('  back?.focus();\n', '') }, 'focus: focus landing on a parked agent overlay was not returned'],
         ['a table accepting a duplicate page', { dispatch: swap("            if (byPage.has(pageId)) return 'duplicate-page';\n", '') }, 'page-table: the table accepted a duplicate page'],
         ['a table accepting a second page for a tab', { dispatch: swap("            if (byTab.has(tabId)) return 'duplicate-tab';\n", '') }, 'page-table: the table accepted a second page for a tab'],
+        // harness-static-browser-02: a second way into agent page work, past the wall.
+        ['a privileged arm calling a native row directly', { api: swap('    case "webTabAgent": {\n      return handleWebTabAgent(data, actorRef);\n    }\n', '    case "webTabAgentScreenshot": {\n      return AGENT_NATIVE_ROWS["browser.screenshot"](webTabs.get(data.tabId), {}, data.tabId);\n    }\n    case "webTabAgent": {\n      return handleWebTabAgent(data, actorRef);\n    }\n') }, 'page-work callers: handleWebTabAction reaches agent page work (AGENT_NATIVE_ROWS'],
+        ['a section helper that runs a child row, called from outside the wall', { api: s => swap('    case "webTabAgent": {\n      return handleWebTabAgent(data, actorRef);\n    }\n', '    case "webTabAgentPeek": {\n      return agentPeek(webTabs.get(data.tabId));\n    }\n    case "webTabAgent": {\n      return handleWebTabAgent(data, actorRef);\n    }\n')(swap('async function handleWebTabAgent(data, actorRef) {', 'function agentPeek(entry) {\n  return agentRunInChild(entry, "browser.snapshot", {});\n}\n\nasync function handleWebTabAgent(data, actorRef) {')(s)) }, 'page-work callers: handleWebTabAction reaches agent page work (agentPeek'],
+        ['a raw agent actor query outside the section', { api: swap('    case "webTabAgent": {\n      return handleWebTabAgent(data, actorRef);\n    }\n', '    case "webTabAgentRaw": {\n      return webTabs.get(data.tabId).browser.browsingContext.currentWindowGlobal.getActor("PowerBrowserAgent").sendQuery("PowerBrowserAgent:Run", data);\n    }\n    case "webTabAgent": {\n      return handleWebTabAgent(data, actorRef);\n    }\n') }, 'page-work callers: handleWebTabAction names an agent actor, message, group or container ("PowerBrowserAgent" at'],
+        ['the ratified close reaching a second page-work name', { api: swap('      agentDialogWindow(entry)?.document.getElementById("commonDialog")?.cancelDialog();', '      agentDialogWindow(entry)?.document.getElementById("commonDialog")?.cancelDialog();\n      agentScreenshot(entry, {}, false);') }, 'page-work callers: PowerBrowserAPI.webTabClose reaches agent page work (agentScreenshot'],
+        ['the ratified close no longer cancelling the prompt', { api: swap('      agentDialogWindow(entry)?.document.getElementById("commonDialog")?.cancelDialog();', '      void entry;') }, 'page-work callers: stale ratified entry: PowerBrowserAPI.webTabClose'],
+        // Second review: inline page work, other lookup forms, an actor class, the child side, the close's precise use.
+        ['an arm drawing a snapshot inline', { api: swap('    case "webTabAgent": {\n      return handleWebTabAgent(data, actorRef);\n    }\n', '    case "webTabPeek": {\n      return webTabs.get(data.tabId).browser.browsingContext.currentWindowGlobal.drawSnapshot(null, 1, "white");\n    }\n    case "webTabAgent": {\n      return handleWebTabAgent(data, actorRef);\n    }\n') }, 'page-work callers: handleWebTabAction does page work (drawSnapshot'],
+        ['an arm using getExistingActor on the agent actor', { api: swap('    case "webTabAgent": {\n      return handleWebTabAgent(data, actorRef);\n    }\n', '    case "webTabPeek": {\n      return webTabs.get(data.tabId).browser.browsingContext.currentWindowGlobal.getExistingActor(AGENT_ACTOR_NAME)?.sendQuery("PowerBrowserAgent:Size", {});\n    }\n    case "webTabAgent": {\n      return handleWebTabAgent(data, actorRef);\n    }\n') }, 'page-work callers: handleWebTabAction names an agent actor, message, group or container (AGENT_ACTOR_NAME'],
+        ['an arm naming the actor by a template literal', { api: swap('    case "webTabAgent": {\n      return handleWebTabAgent(data, actorRef);\n    }\n', '    case "webTabPeek": {\n      return webTabs.get(data.tabId).browser.browsingContext.currentWindowGlobal.getActor(`PowerBrowser${"Agent"}`);\n    }\n    case "webTabAgent": {\n      return handleWebTabAgent(data, actorRef);\n    }\n') }, 'page-work callers: handleWebTabAction names an agent actor, message, group or container (getActor(<not a literal or a string constant>)'],
+        ['an arm using an alias of the actor name', { api: s => swap('async function handleWebTabAction(', 'const AGENT_ALIAS = AGENT_ACTOR_NAME;\nasync function handleWebTabAction(')(swap('    case "webTabAgent": {\n      return handleWebTabAgent(data, actorRef);\n    }\n', '    case "webTabPeek": {\n      return webTabs.get(data.tabId).browser.browsingContext.currentWindowGlobal.getActor(AGENT_ALIAS);\n    }\n    case "webTabAgent": {\n      return handleWebTabAgent(data, actorRef);\n    }\n')(s)) }, 'page-work callers: handleWebTabAction names an agent actor, message, group or container (AGENT_ALIAS'],
+        ['a section actor class doing page work', { api: swap('export class PowerBrowserAgentParent extends GroupActorBase {}\n', 'export class PowerBrowserAgentParent extends GroupActorBase {}\nexport class PowerBrowserAgentPeekParent extends GroupActorBase {\n  receiveMessage(message) {\n    return agentScreenshot(webTabs.get(message.data.tabId), {}, false);\n  }\n}\n') }, 'page-work callers: class PowerBrowserAgentPeekParent in the agent section does agent page work'],
+        ['another child actor dispatching an agent row', { child: c => { const at = c.indexOf('  receiveMessage(message) {\n', c.indexOf('export class PowerBrowserGroupChild')); if (at < 0) throw new Error('plant anchor not found: PowerBrowserGroupChild.receiveMessage'); const head = '  receiveMessage(message) {\n'; return c.slice(0, at + head.length) + '    if (message.name === "PowerBrowserGroup:AgentRun") {\n      return AGENT_RUN[message.data.method](this, message.data.params);\n    }\n' + c.slice(at + head.length); } }, 'child run table: PowerBrowserGroupChild.receiveMessage references AGENT_RUN'],
+        ['the ratified close accepting the prompt', { api: swap('      agentDialogWindow(entry)?.document.getElementById("commonDialog")?.cancelDialog();', '      agentDialogWindow(entry)?.document.getElementById("commonDialog")?.acceptDialog();') }, 'page-work callers: PowerBrowserAPI.webTabClose uses agentDialogWindow other than ratified'],
+        ['the ratified close reading the prompt', { api: swap('      agentDialogWindow(entry)?.document.getElementById("commonDialog")?.cancelDialog();', '      const prompt = agentDialogWindow(entry);\n      PowerBrowserAPI.log("info", String(prompt?.document.getElementById("loginTextbox")?.value));') }, 'page-work callers: PowerBrowserAPI.webTabClose uses agentDialogWindow other than ratified'],
+        ['the ratified close on another tab', { api: swap('      agentDialogWindow(entry)?.document.getElementById("commonDialog")?.cancelDialog();', '      for (const other of webTabs.values()) agentDialogWindow(other)?.document.getElementById("commonDialog")?.cancelDialog();') }, 'page-work callers: PowerBrowserAPI.webTabClose uses agentDialogWindow other than ratified'],
+        ['the wall reaching no page work', { api: swap('    const native = AGENT_NATIVE_ROWS[data.method];\n    outcome = native ? await native(entry, data.params, data.tabId) : await agentRunInChild(entry, data.method, data.params);', '    const native = null;\n    outcome = agentFailed("browser_error");') }, 'page-work callers: handleWebTabAgent reaches no agent page work'],
+        ['the dispatch module absent', { files: () => null }, 'page-table: theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts is absent'],
+        // agent-browser-03: cookie rows act only on the current site and withhold httpOnly values.
+        ['cookie rows not limited to the current site', { api: swap('  return site && agentSiteOf(host) === site ? host : "";', '  return host;') }, 'cookies: a get for another site answered'],
+        // G1a round 3: one re-allowed case per part of the cookie.set rule.
+        ['cookie.set re-allowing any host', { api: swap('domain === host && (params.path', 'true && (params.path') }, 'cookies: a set for another host answered'],
+        ['cookie.set re-allowing a subdomain', { api: swap('domain === host && (params.path', '(domain === host || domain.endsWith("." + host)) && (params.path') }, 'cookies: a set for a subdomain of the current host answered'],
+        ['cookie.set re-allowing the whole site', { api: swap('domain === host && (params.path', 'agentSiteOf(domain) === agentSiteOf(host) && (params.path') }, 'cookies: a set for a sibling host answered'],
+        ['cookie.set re-allowing a parent domain attribute', { api: swap('domain === host && (params.path', '(domain === host || host.endsWith("." + domain)) && (params.path') }, 'cookies: a set with a domain attribute (the parent domain) answered'],
+        ['cookie.set re-allowing any path', { api: swap('(params.path === undefined || params.path === null || params.path === "/")', 'true') }, 'cookies: a set with a path other than / answered'],
+        ['cookie.set re-allowing httpOnly', { api: swap('&& params.httpOnly !== true &&', '&&') }, 'cookies: a set with httpOnly true answered'],
+        ['cookie.set re-allowing __Host- names', { api: swap('!/^__(host|secure)-/i.test(params.name)', '!/^__secure-/i.test(params.name)') }, 'cookies: a set of a __Host- name answered'],
+        ['cookie.set re-allowing __Secure- names', { api: swap('!/^__(host|secure)-/i.test(params.name)', '!/^__host-/i.test(params.name)') }, 'cookies: a set of a __Secure- name answered'],
+        ['cookie.set re-allowing Secure on http', { api: swap('(params.secure !== true || securePage)', 'true') }, 'cookies: a Secure set on an http page answered'],
+        ['cookie.set re-allowing SameSite None without Secure', { api: swap('(sameSite !== 0 || params.secure === true)', 'true') }, 'cookies: a SameSite None set without Secure answered'],
+        ['cookie.set re-allowing an overwrite of an httpOnly name', { api: swap('  if (!narrow || agentHttpOnlyNamed(host, params.name, agentOriginAttributes(entry))) {', '  if (!narrow) {') }, 'cookies: a set over a name held as httpOnly answered'],
+        ['the httpOnly-name test blind to the partitioned jar', { api: swap('  return Services.cookies.getCookiesWithOriginAttributes(JSON.stringify(attrs), host).some(c => c.name === name && c.isHttpOnly);', '  return Services.cookies.getCookiesFromHost(host, attrs).some(c => c.name === name && c.isHttpOnly);') }, 'cookies: a set over a name held as httpOnly in the partitioned jar answered'],
+        ['an httpOnly cookie delete re-allowed', { api: swap('  if (agentHttpOnlyNamed(host, params.name, attrs)) {\n    return agentFailed("browser_command_unavailable");\n  }\n', '') }, 'cookies: a delete of the httpOnly cookie answered'],
+        ['an httpOnly cookie value returned', { api: swap('value: c.isHttpOnly ? "" : c.value', 'value: c.value') }, "cookies: cookie.get returned an httpOnly cookie"],
         ['the dispatch file present without createPageTable', { dispatch: swap('export function createPageTable()', 'export function createPageTableGone()') }, 'page-table: orca-browser-dispatch.ts has no createPageTable export'],
         ['the agent overlay left in the browsers group', { api: swap('"usercontextid": String(userContextId), messagemanagergroup: AGENT_MESSAGE_MANAGER_GROUP, ', '"usercontextid": String(userContextId), ') }, "isolation: the agent overlay's message manager group"],
         ['the dialog type filter removed', { api: swap('  if (!AGENT_DIALOG_TYPES.has(win.args?.promptType) || win.args?.inPermitUnload) {\n    return agentFailed("browser_command_unavailable");\n  }\n', '') }, 'dialogs: an HTTP auth dialog in an agent tab'],
@@ -1272,7 +1733,6 @@ async function selfTest() {
         ['the content wall removed', { api: swap('  entry.browser.browsingContext.sandboxFlags |= SANDBOXED_AUXILIARY_NAVIGATION | SANDBOXED_DOWNLOADS;\n', '') }, 'started without SANDBOXED_AUXILIARY_NAVIGATION'],
         // D-37 (66-09): the download wall, its detector, the protocol chooser and the initial-document guard.
         ['the download wall dropped from the flag write', { api: swap('sandboxFlags |= SANDBOXED_AUXILIARY_NAVIGATION | SANDBOXED_DOWNLOADS;', 'sandboxFlags |= SANDBOXED_AUXILIARY_NAVIGATION;') }, "downloads: the agent overlay's first load started without SANDBOXED_DOWNLOADS"],
-        ['the download wall on a different bit', { api: swap('const SANDBOXED_DOWNLOADS = 0x10000;', 'const SANDBOXED_DOWNLOADS = 0x20000;') }, "downloads: the agent overlay's first load started without SANDBOXED_DOWNLOADS"],
         ['the cancelled-download observer not registered', { api: swap('  Services.obs.addObserver(agentNetworkObserver, "http-on-stop-request");\n', '') }, "downloads: a command during which the wall cancelled the agent overlay's download answered"],
         ['every cancelled agent channel counted as a download', { api: swap('channel.isDocument && channel.status === Cr.NS_ERROR_ABORT', 'channel.status === Cr.NS_ERROR_ABORT') }, 'downloads: an agent subresource that was cancelled failed the agent command'],
         ['the settle after a child-run command dropped', { api: swap('      await agentSettleOpens(entry, control, opensRefused);\n', '') }, "downloads: a command whose download the wall cancelled after the child's reply answered"],
@@ -1286,12 +1746,9 @@ async function selfTest() {
         // D-38 (66-10): the key refusal, its table, the page wall and its registration.
         ['the clipboard key refusal dropped', { child: swap('  if (agentClipboardKey(parts, key)) {', '  if (false) {') }, "clipboard: the agent's Control+c answered done"],
         ['every key refused', { child: swap('  if (agentClipboardKey(parts, key)) {', '  if (true) {') }, 'clipboard: detector blind: the control Control+a'],
-        ['Shift+Insert missing from the child table', { child: swap('"control+Insert", "shift+Insert",', '"control+Insert",') }, 'bind shift+Insert to a clipboard command, and the child\'s AGENT_CLIPBOARD_KEYS lacks it'],
-        ['a stale binding in the child table', { child: swap('"accel+c", "accel+x",', '"accel+c", "accel+q", "accel+x",') }, 'has accel+q, which no pinned clipboard binding has'],
         ['accel matched by Control only', { child: swap('words.has("control") || words.has("meta")', 'words.has("control")') }, "clipboard: the agent's Meta+c answered done"],
         ['the Clipboard methods not replaced', { child: swap('      Object.defineProperty(proto, name, { value: refuse, writable: false, configurable: false });\n', '') }, "clipboard: an agent page's navigator.clipboard.writeText answered original"],
         ['the replaced methods left writable', { child: swap('{ value: refuse, writable: false, configurable: false }', '{ value: refuse, writable: true, configurable: true }') }, 'stays writable or configurable'],
-        ['readText left to the page', { child: swap('["read", "readText", "write", "writeText"]', '["read", "write", "writeText"]') }, 'the pinned Clipboard interface has readText, which the page wall leaves to the page'],
         ['clipboard events not cancelled', { child: swap("function agentClipboardCancel(event) {\n  event.preventDefault();\n", "function agentClipboardCancel(event) {\n") }, 'clipboard: a trusted copy in an agent page was stop'],
         ['the page pair not registered', { api: s => s.replace(/  ChromeUtils\.registerWindowActor\(AGENT_PAGE_ACTOR_NAME, \{[\s\S]*?\n  \}\);\n/, '') }, 'no PowerBrowserAgentPage pair is registered'],
         ['the page pair top-frame only', { api: swap('messageManagerGroups: [AGENT_MESSAGE_MANAGER_GROUP],\n    allFrames: true,', 'messageManagerGroups: [AGENT_MESSAGE_MANAGER_GROUP],\n    allFrames: false,') }, 'pair is top-frame only'],
@@ -1307,10 +1764,15 @@ async function selfTest() {
         ['the pref overridden later in dev', { branding: b => ({ ...b, dev: `${b.dev}pref("permissions.isolateBy.userContext", false);\n` }) }, 'sets permissions.isolateBy.userContext to [true, false]'],
         ['the opens detector blinded (no receivers installed)', { api: swap('    win.openLinkIn = (url, where, params) => adoptLinkIn(url, where, params);\n', '') }, 'broken instrument: derived'],
     ];
-    // D-38/D-39 pin plants (66-10): drift in a pinned table must name it. Only with upstream/.
+    // Pin plants (66-09, 66-10): drift against a pinned table must name it. Only with upstream/.
     if (upstream.shortcuts && upstream.clipboardIdl && upstream.eventNames && upstream.permissionManager && upstream.staticPrefs) {
         const pin = (key, from, to) => u => { if (!u[key].includes(from)) throw new Error(`plant anchor not found: ${from.slice(0, 70)}`); return { ...u, [key]: u[key].replace(from, to) }; };
         plants.push(
+            // Compared with the pin, so only with upstream/ (without it the section's or child's own table is the expectation).
+            ['the download wall on a different bit', { api: swap('const SANDBOXED_DOWNLOADS = 0x10000;', 'const SANDBOXED_DOWNLOADS = 0x20000;') }, "downloads: the agent overlay's first load started without SANDBOXED_DOWNLOADS"],
+            ['Shift+Insert missing from the child table', { child: swap('"control+Insert", "shift+Insert",', '"control+Insert",') }, 'bind shift+Insert to a clipboard command, and the child\'s AGENT_CLIPBOARD_KEYS lacks it'],
+            ['a stale binding in the child table', { child: swap('"accel+c", "accel+x",', '"accel+c", "accel+q", "accel+x",') }, 'has accel+q, which no pinned clipboard binding has'],
+            ['readText left to the page', { child: swap('["read", "readText", "write", "writeText"]', '["read", "write", "writeText"]') }, 'the pinned Clipboard interface has readText, which the page wall leaves to the page'],
             ['a new pinned clipboard binding', { upstream: pin('shortcuts', 'ShortcutKeyData ShortcutKeys::sInputHandlers[] = {\n', 'ShortcutKeyData ShortcutKeys::sInputHandlers[] = {\n    {u"keypress", nullptr, u"y", u"accel", u"cmd_paste"},\n') }, 'bind accel+y to a clipboard command'],
             ['a new pinned Clipboard method', { upstream: pin('clipboardIdl', 'Promise<DOMString> readText();', 'Promise<DOMString> readText();\n  Promise<undefined> writeImage();') }, 'has writeImage, which the page wall leaves to the page'],
             ['a new pinned clipboard event', { upstream: pin('eventNames', 'EVENT(copy, eCopy,', 'EVENT(beforecopy, eBeforeCopy, EventNameType_HTMLXUL, eClipboardEventClass)\nEVENT(copy, eCopy,') }, 'does not catch beforecopy capturing'],
@@ -1318,7 +1780,7 @@ async function selfTest() {
             ['the pinned isolation accessor renamed', { upstream: pin('permissionManager', 'StaticPrefs::permissions_isolateBy_userContext()', 'StaticPrefs::permissions_isolateBy_userContextRenamed()') }, 'names no pref in'],
         );
     } else {
-        console.log('  note: the D-38/D-39 pin plants need upstream/; skipped');
+        selfSkips.push('upstream/ is not fetched, so the nine pin plants (D-37 download bit, D-38, D-39) did not run. Next step: bash scripts/fetch-upstream.sh');
     }
     // One plant per derived open path, generated from installNewWindowReceivers: the receiver put back to its
     // pre-D-35 answer must go red naming that path.
@@ -1340,7 +1802,7 @@ async function selfTest() {
             kid = mutate.child ? mutate.child(child) : child;
             brand = mutate.branding ? mutate.branding(branding) : branding;
             up = mutate.upstream ? mutate.upstream(upstream) : upstream;
-            files = mutate.dispatch ? { ...fixture, dispatch: mutate.dispatch(fixture.dispatch) } : fixture;
+            files = mutate.files ? mutate.files() : mutate.dispatch ? { ...fixture, dispatch: mutate.dispatch(fixture.dispatch) } : fixture;
             var reg = mutate.registry ? mutate.registry(registry) : registry;
         } catch (err) {
             console.error(`${NAME} self-test: FAIL -- '${name}': ${err.message}`);
@@ -1360,9 +1822,11 @@ async function selfTest() {
             failed++;
         }
     }
-    if (failed) return 1;
-    console.log(`${NAME} self-test: PASS -- ${plants.length} planted faults each went red naming the drift`);
-    return 0;
+    const code = verdictExit(`${NAME} self-test`, failed ? ['planted fault(s) above did not go red'] : [], selfSkips);
+    if (code === 0) console.log(`${NAME} self-test: PASS -- ${plants.length} planted faults each went red naming the drift`);
+    // The self-test's own verdict is its last line on every path (SKIP-PROTOCOL rule 4).
+    if (code === 1) console.log(`${NAME} self-test: FAIL -- ${failed} of ${plants.length} planted fault(s) did not go red naming the drift (named above)`);
+    return code;
 }
 
 async function main() {
@@ -1371,24 +1835,36 @@ async function main() {
     const child = readFileSync(join(REPO_ROOT, CHILD), 'utf8');
     const dispatch = readOptional(DISPATCH);
     const files = dispatch === null ? null : { dispatch, abilities: readOptional(ABILITIES) ?? undefined };
-    const { failures, native, skip, loginSkip, paths, wheres, walls, clipboard, permissions } = await checkSource(text, child, files, readOptional(LOGIN_REGISTRY), readOptional(IDL), readUpstream(), readBranding());
+    const upstream = readUpstream();
+    const registry = readOptional(LOGIN_REGISTRY);
+    const idl = readOptional(IDL);
+    const { failures, native, loginSkip, paths, wheres, walls, clipboard, permissions, callers } = await checkSource(text, child, files, registry, idl, upstream, readBranding());
     if (failures.length) {
         console.error(`${NAME}: FAIL -- the chrome side of the Orca agent bridge can reach a tab it did not create as an agent tab, or the drift below.`);
         failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
+    // A pinned Gecko text that is absent leaves its clause on the section's own constant (or, for the LoginManager
+    // groups, not run at all): a partial run, so SKIP rather than PASS.
+    const unpinned = [[LOGIN_REGISTRY, registry], [IDL, idl], ...[SANDBOX_H, CLASSIFY, EXTHANDLER, SHORTCUTS, CLIPBOARD_IDL, EVENT_NAMES, PERMISSION_MANAGER, STATIC_PREFS].map(rel => [rel, readOptional(rel)])]
+        .filter(([, t]) => t === null).map(([rel]) => rel);
+    if (unpinned.length) {
+        console.log(skipLine(NAME, `every clause that ran passed, but ${unpinned.length} pinned Gecko source(s) are absent (${unpinned.join(', ')}), so the clauses derived from them ran against the agent section's own constants or did not run. Next step: bash scripts/fetch-upstream.sh`));
+        return SKIP_EXIT;
+    }
     const total = /const AGENT_METHODS = Object\.freeze\(\[([^\]]*)\]\)/.exec(text)[1].match(/"browser\.[A-Za-z.]+"/g).length;
     console.log(`${NAME}: PASS -- ${total} methods (${native} native, ${total - native} actor): every one refused before page work for a user, unknown, foreign, wrong-container or stopped tab; ` +
-        'the flag and the container are set only at creation and before append; cookies stay in the agent container; Stop aborts and lasts; the mark clears after 20000 ms; ' +
+        'the flag and the container are set only at creation and before append; cookies stay in the agent container, act only on the current site and withhold httpOnly values; Stop aborts and lasts; the mark clears after 20000 ms; ' +
         'agent overlays sit in their own message manager group with no autocomplete popup and answer only alert/confirm/prompt dialogs; ' +
         `unshown agent tabs are parked, never hold the focus, and user tabs never park; every visibility read goes through overlayShownToUser; ` +
+        `the ${callers.work.length} page-work functions derived from the section are reached only from ${AGENT_WALL} (the wall) and ${[...RATIFIED_PAGE_WORK.keys()].join(', ')} (ratified); ` +
         `D-35: ${paths.length} open paths derived (${paths.join(', ')}) open nothing for an agent opener at any of ${wheres} OPEN_* locations or ${LINK_WHERES.length} link wheres, ` +
         `refusals log once without the URL and fail the command in flight, and agent overlays load with SANDBOXED_AUXILIARY_NAVIGATION; ` +
         `D-37: agent overlays load with ${walls.dl.names.join(', ')} (from ${walls.dl.from}) and a cancelled agent download fails the command, ` +
         `the ${walls.chooser.contract} chooser (from ${walls.chooser.from}) refuses agent external loads and passes user ones, and only browser.goto runs on the initial about:blank; ` +
         `D-38: ${clipboard.bindings} clipboard key bindings (from ${clipboard.from}) refused to the agent with Control and Meta, the Clipboard methods [${clipboard.methods.join(', ')}] reject and [${clipboard.events.join(', ')}] are cancelled in every agent document; ` +
-        `D-39: ${permissions.pref} (from ${permissions.from}) set opposite the pinned default in [${permissions.variants.join(', ')}]${skip ? `; ${PAGE_TABLE_SKIP}` : '; page table compared'}` +
-        (loginSkip ? '; login-manager group clause SKIP (no upstream/)' : '; the pinned LoginManager actor groups exclude the agent group'));
+        `D-39: ${permissions.pref} (from ${permissions.from}) set opposite the pinned default in [${permissions.variants.join(', ')}]; page table compared` +
+        (loginSkip ? '' : '; the pinned LoginManager actor groups exclude the agent group'));
     return 0;
 }
 

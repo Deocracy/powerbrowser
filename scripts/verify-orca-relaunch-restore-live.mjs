@@ -18,12 +18,22 @@
 // Setup through Setups' own command; quit normally; count orca-devices.json
 // rows by credentialKind, ephemeral and lastSeenAt only.
 // Launch 2, same profile: before any harness input, wait for the bundle's
-// state().booted and state().pairing.sessionOnly; then restore the Setup
-// through Setups' own command. Named clauses:
+// state().booted and state().pairing.sessionOnly; then, in the Coding mode,
+// close every Theia editor and diff tab (the restore's positive control: Theia's
+// own layout restore cannot bring back what was just closed), and restore the
+// Setup through Setups' own command, which must report that it ran. Named clauses:
+//   restore-effect  the editors closed before the restore are back after it, and
+//                the restore and mode commands each reported that they ran (a
+//                moved command id or a restore that threw is a harness failure,
+//                never a pass on Theia's own restored layout)
 //   dock         the main-area dock equals the saved one node by node (split
 //                orientation and order; tab URIs as sets per tab area)
 //   modes        each mode's tabs equal the saved sets
 //   chat         the chat widget is in the new store and shows Orca's composer
+//   terminal-keeps-tab  (launch 1) the terminal New Orca Terminal made keeps its
+//                widget and name when the CLI's split gives its layout its
+//                first leaf (the leaf-less key is re-keyed, not closed and
+//                reopened; 64-WR-03)
 //   terminals    each restored pb-orca:term<n> echoes a typed marker on a new
 //                PTY (read back with the built CLI's terminal read)
 //   identity     each pb-orca: name addresses the pane key it addressed before
@@ -51,27 +61,33 @@
 //
 // The launch helpers are exported for scripts/verify-orca-offer-scan.mjs.
 //
-// SKIP (exit 0, one named line) while a prerequisite is absent: no built
-// PowerBrowser, Theia app or orca/, or lane p65-01 not merged (the pane
-// entry's state() reports no pairing). The coordinator runs it on the merged
-// tree, after lanes p65-01, p65-02 and p65-04 merge.
+// SKIP (SKIP-PROTOCOL.md): one line "orca-relaunch-restore-live: SKIP -- <reason>"
+// and exit 77 while a prerequisite is absent: no built PowerBrowser, Theia app or
+// orca/, or lane p65-01 not merged (the pane entry's state() reports no
+// pairing). The coordinator runs it on the merged tree, after lanes p65-01,
+// p65-02 and p65-04 merge.
 //
-// Run under the live lock with every inherited ORCA_* unset:
-//   flock /home/chris/coding/Power-Browser/.git/pb-live.lock node scripts/verify-orca-relaunch-restore-live.mjs
+// The live lock (scripts/lib/live-lock.mjs; SKIP-PROTOCOL.md, "The live lock"): the row calls holdLiveLock before it launches anything. It goes
+// on without taking the lock only when /proc/locks shows the lock held by the driver's holder (PB_LIVE_LOCK_HOLDER: pid and start ticks) or by an
+// ancestor (flock <git common dir>/pb-live.lock node <row>). An inherited PB_LIVE_LOCK_HELD=1 with neither is a FAIL by name. With nothing set it
+// takes the lock itself and waits, naming the holder. A run with nothing to launch (a prerequisite is absent) prints its SKIP without the lock.
 //
-// Tier: full. --self-test is quick: each comparator over a passing fixture and
-// one fixture per failure, each red naming its clause.
+// Tier: full. --self-test is quick and needs no browser: each comparator over a
+// passing fixture and one fixture per failure, each red naming its clause, the
+// source ids and command results the live run depends on, the fixture git over
+// a hostile developer config, and the lock probe.
 //
 // Usage:
 //   node scripts/verify-orca-relaunch-restore-live.mjs
 //   node scripts/verify-orca-relaunch-restore-live.mjs --self-test
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { liveEnv } from './lib/firefox-bidi.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SELF = fileURLToPath(import.meta.url);
@@ -185,6 +201,53 @@ export function deviceRowsVerdict(before, after) {
     return fails;
 }
 
+/** The three command ids this row's own run uses, read from Theia's sources (null when one moved). */
+export function rowCommandIds() {
+    return {
+        SETUPS_SAVE_COMMAND_ID: sourceConst(SETUPS_COMMANDS_REL, 'SETUPS_SAVE_COMMAND_ID'),
+        SETUPS_RESTORE_COMMAND_ID: sourceConst(SETUPS_COMMANDS_REL, 'SETUPS_RESTORE_COMMAND_ID'),
+        MODES_ACTIVATE_COMMAND_ID: sourceConst(MODES_COMMANDS_REL, 'MODES_ACTIVATE_COMMAND_ID'),
+    };
+}
+
+/** The command ids the live run reads from Theia's sources (a regex over the const); null when the source moved. */
+export function sourceIdsVerdict(ids) {
+    const missing = Object.entries(ids).filter(([, id]) => !id).map(([name]) => name);
+    return missing.length ? [`source moved: no ${missing.join(', ')} found (${SETUPS_COMMANDS_REL}, ${MODES_COMMANDS_REL}), so the Setup and mode commands cannot be run and a pass would rest on Theia's own layout restore`] : [];
+}
+
+/** A Theia command or mode switch must report that it ran: the page returns true, anything else (false, an error object, nothing) is a failure. */
+export function commandResultVerdict(what, result) {
+    return result === true ? [] : [`${what} did not run (the command reported ${JSON.stringify(result ?? null)}), so the clauses after it would judge Theia's own restored layout`];
+}
+
+/** The restore-hold bound the not-gone wait uses: it must be a number (a renamed constant reads NaN and the wait would end at once). */
+export function holdMsVerdict(holdMs) {
+    return Number.isFinite(holdMs) && holdMs > 0 ? [] : [`source moved: ORCA_RESTORE_HOLD_MS is ${holdMs} (read from ${OBSERVER_REL}), so not-gone would be judged before the observer's restore bound passed`];
+}
+
+/**
+ * The restore's positive control. obs: { saved: [editor URI] (the editors saved in the Coding mode), closed: [editor URI] still open
+ * after they were closed, after: [editor URI] open after the Setup restore }. The editors are closed first and proven closed; the
+ * restore must bring each back, which Theia's own layout restore cannot do for a tab closed after it ran.
+ */
+export function restoreEffectVerdict(obs) {
+    const saved = obs.saved ?? [];
+    if (!saved.length) return ['restore-effect: no editor or diff tab was saved in the Coding mode, so the restore has nothing to bring back'];
+    const stillOpen = saved.filter((u) => (obs.closed ?? []).includes(u));
+    if (stillOpen.length) return [`restore-effect: NOT SCORED -- ${stillOpen.length} saved editor(s) were still open after the close, so a restore proves nothing`];
+    const missing = saved.filter((u) => !(obs.after ?? []).includes(u));
+    return missing.length ? [`restore-effect: the Setup restore did not bring back ${missing.length} of ${saved.length} closed editor(s)`] : [];
+}
+
+/** (launch 1) The terminal New Orca Terminal made keeps its widget and name when its layout first has a leaf. obs: { id, hosted: [id], paneKey }. */
+export function terminalKeptVerdict(obs) {
+    const fails = [];
+    if (!(obs.hosted ?? []).includes(obs.id)) fails.push(`terminal-keeps-tab: ${obs.id} was closed when the CLI split gave its layout a first leaf (the tab must keep its widget and name)`);
+    else if (!obs.paneKey) fails.push(`terminal-keeps-tab: ${obs.id} addresses no leaf pane key after the split (its widget was not re-keyed)`);
+    return fails;
+}
+
 /** Names present before the quit, and names still open after the restore bound passed. */
 export function notGoneVerdict(names, afterBound) {
     return (names ?? []).filter((n) => !(afterBound ?? []).includes(n)).map((n) => `not-gone: pb-orca:${n} was disposed as gone after the relaunch`);
@@ -231,6 +294,7 @@ export async function withOrcaProfile(fn) {
     const { installOutputRedaction, ensurePbNode, redact } = await import('./lib/orca-run.mjs');
     const secrets = [];
     const restoreOutput = installOutputRedaction(secrets);
+    lib.retainForOutput(redact, secrets); // the verdict is printed after both launches, through lib.redactAfterSession
     const savedEnv = {};
     for (const k of [...lib.scrubbedNames(), 'MOZ_PURGE_CACHES', 'XDG_CONFIG_HOME']) savedEnv[k] = process.env[k];
     const recorded = new Map();
@@ -275,6 +339,9 @@ function launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, rec
     const SAVE = sourceConst(SETUPS_COMMANDS_REL, 'SETUPS_SAVE_COMMAND_ID');
     const RESTORE = sourceConst(SETUPS_COMMANDS_REL, 'SETUPS_RESTORE_COMMAND_ID');
     const ACTIVATE = sourceConst(MODES_COMMANDS_REL, 'MODES_ACTIVATE_COMMAND_ID');
+    // Each caller needs only the ids it uses (verify-orca-offer-scan and verify-orca-pairing-containment share this context and only
+    // save a Setup): an id is required where it is used, and this row's own run requires all three up front (rowCommandIds).
+    const needId = (name, id) => { const f = sourceIdsVerdict({ [name]: id }); if (f.length) throw new Error(f.join('; ')); return id; };
     let state = null;
     const s = {
         app, probe, pollFor,
@@ -307,7 +374,7 @@ function launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, rec
         },
         /** The built CLI against this launch's orcad, never this process's ORCA_* values. */
         orca(...a) {
-            const env = { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ORCA_USER_DATA: state.effectiveRoot, ORCA_USER_DATA_PATH: state.effectiveRoot };
+            const env = { PATH: process.env.PATH ?? '', HOME: dirname(repo), ORCA_USER_DATA: state.effectiveRoot, ORCA_USER_DATA_PATH: state.effectiveRoot };
             try { return JSON.parse(execFileSync(join(state.effectiveRoot, 'cli', 'bin', 'orca'), [...a, '--json'], { env: liveEnv(env), cwd: repo, timeout: 60000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })); } catch (e) {
                 let said = [e.stderr, e.stdout, e.message].map((x) => String(x ?? '').trim()).find(Boolean) ?? '';
                 try { const reply = JSON.parse(String(e.stdout ?? '')); said = reply?.error?.message ?? reply?.error?.code ?? said; } catch { /* not a JSON reply */ }
@@ -319,7 +386,9 @@ function launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, rec
             if (!existsSync(repo)) {
                 mkdirSync(repo, { recursive: true });
                 writeFileSync(join(repo, 'README'), 'orca relaunch scratch repository\n');
-                const git = (...a) => execFileSync('git', ['-C', repo, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', ...a], { stdio: ['ignore', 'pipe', 'pipe'] });
+                // No developer config reaches the fixture's version control: no signing, no hooks (harness-live-tabs-13).
+                const { fixtureGit } = await import('./lib/orca-pane-harness.mjs'); // the pane harness's hardened runner, scratch HOME
+                const git = fixtureGit(repo, dirname(repo));
                 git('init', '-q');
                 git('add', '.');
                 git('commit', '-q', '-m', 'fixture');
@@ -332,10 +401,18 @@ function launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, rec
             await s.bundle(`(m.setActiveWorktree(${JSON.stringify(id)}), true)`);
             return id;
         },
+        /** true only when the command ran and returned; false for a throw or a probe error. */
         async command(id, ...args) {
-            return probe(`try { await get('CommandService').executeCommand(${[JSON.stringify(id), ...args.map((x) => JSON.stringify(x))].join(', ')}); return true; } catch (e) { return false; }`);
+            return (await probe(`try { await get('CommandService').executeCommand(${[JSON.stringify(id), ...args.map((x) => JSON.stringify(x))].join(', ')}); return true; } catch (e) { return false; }`)) === true;
         },
-        async mode(id) { await s.command(ACTIVATE, id); await sleep(800); },
+        /** Activates a mode and proves it took: the command ran and the body names the mode (a no-op switch would leave both tab lists under one name). */
+        async mode(id) {
+            const ran = commandResultVerdict(`switching to the ${id} mode`, await s.command(needId('MODES_ACTIVATE_COMMAND_ID', ACTIVATE), id));
+            if (ran.length) throw new Error(ran.join('; '));
+            const took = await pollFor(async () => ((await probe(`return document.body.getAttribute('data-pb-mode');`)) === id ? true : null), 10000, `the body to name the ${id} mode`).catch(() => false);
+            if (!took) throw new Error(`switching to the ${id} mode did not take (the body never named it)`);
+            await sleep(800);
+        },
         /** Runs an Orca command and resolves the new hosted widget of `kind`, or null after 10 s. */
         async newHosted(commandId, kind) {
             const before = (await s.hostedWidgets()).map((w) => w.id);
@@ -345,7 +422,7 @@ function launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, rec
         /** Setups' own Save Setup command, its capped name field answered as ng-036 answers it. */
         async saveSetup(name) {
             return probe(`const field = () => [...document.querySelectorAll('.quick-input-widget .quick-input-box input')].find(e => e.offsetParent !== null) || null;
-                const saving = get('CommandService').executeCommand(${JSON.stringify(SAVE)});
+                const saving = get('CommandService').executeCommand(${JSON.stringify(needId('SETUPS_SAVE_COMMAND_ID', SAVE))});
                 if (!(await until(() => field() !== null, 10000))) return false;
                 field().value = ${JSON.stringify(name)};
                 field().dispatchEvent(new Event('input', { bubbles: true }));
@@ -356,7 +433,17 @@ function launchContext({ app, lib, live, relaunch, OrcaEnv, redact, secrets, rec
                 const stored = JSON.parse((await get('FileService').read(setups.setupsUri)).value);
                 return (stored.setups || []).some(row => row.name === ${JSON.stringify(name)});`);
         },
-        async restoreSetup(name) { return s.command(RESTORE, name); },
+        /** Setups' own restore command; throws unless it ran. */
+        async restoreSetup(name) {
+            const ran = commandResultVerdict(`restoring the Setup '${name}'`, await s.command(needId('SETUPS_RESTORE_COMMAND_ID', RESTORE), name));
+            if (ran.length) throw new Error(ran.join('; '));
+        },
+        /** The own URI of every Theia editor widget in the main area (file: for an editor, diff: for a diff editor). */
+        editorUris: async () => (await probe(`return get('ApplicationShell').getWidgets('main').map(w => w.editor && w.editor.uri ? w.editor.uri.toString(true) : null).filter(Boolean);`)) ?? [],
+        /** Closes every Theia editor widget in the main area; resolves how many were closed. */
+        closeEditors: () => probe(`const shell = get('ApplicationShell'); let n = 0;
+            for (const w of shell.getWidgets('main')) { if (w.editor && w.editor.uri) { try { w.close(); n++; } catch (e) { /* counted by what remains */ } } }
+            await sleep(500); return n;`),
         savedDock: (name) => probe(`const setups = get('SetupsService');
             const stored = JSON.parse((await get('FileService').read(setups.setupsUri)).value);
             const row = (stored.setups || []).find(r => r.name === ${JSON.stringify(name)});
@@ -403,11 +490,15 @@ function deviceRows(profileDir) {
 }
 
 async function runLive() {
+    const idFails = sourceIdsVerdict(rowCommandIds());
+    if (idFails.length) throw new Error(idFails.join('; '));
     const clauses = {};
     const offers = [];
     const scan = await import('./lib/orca-offer-scan.mjs');
     const selectors = pairingSelectors(read(join(REPO_ROOT, WEB_CONNECT_REL)));
     const holdMs = sourceNumber(OBSERVER_REL, 'ORCA_RESTORE_HOLD_MS');
+    const holdFails = holdMsVerdict(holdMs);
+    if (holdFails.length) throw new Error(holdFails.join('; ')); // a NaN bound would end the not-gone wait at once
     const keys = await import('./verify-orca-terminal-keys-live.mjs');
     const live = await import('./lib/pb-live-probe.mjs');
     // The shape orca-terminal-keys-live's paste helpers read.
@@ -436,6 +527,9 @@ async function runLive() {
             s.orca('terminal', 'split', '--terminal', handle, '--direction', 'horizontal');
             const leaf = await s.pollFor(async () => (await s.hostedWidgets()).find((w) => w.kind === 'terminal' && !before.includes(w.id)) ?? null, 10000, 'the split terminal tab').catch(() => null);
             if (!leaf) throw new Error('launch 1: the terminal split gave no second hosted terminal tab');
+            // 64-WR-03: the terminal New Orca Terminal made keeps its widget and name when the split gave its layout a first leaf.
+            const termNow = await s.pollFor(async () => { const w = (await s.hostedWidgets()).find((x) => x.id === term.id); return w?.options?.paneKey ? w : null; }, 10000, 'the split terminal re-keyed to its first leaf').catch(() => null);
+            clauses['terminal-keeps-tab'] = terminalKeptVerdict({ id: term.id, hosted: (await s.hostedWidgets()).map((w) => w.id), paneKey: termNow?.options?.paneKey ?? null });
             await s.mode('coding');
             writeFileSync(join(session.repo, 'README'), 'orca relaunch scratch repository, changed\n');
             s.orca('file', 'open', 'README', '--worktree', session.worktree);
@@ -449,7 +543,7 @@ async function runLive() {
             const modes = await s.modeTabs(['orca', 'coding']);
             const identity = await s.identity();
             if (!(await s.saveSetup(SETUP_NAME))) throw new Error('launch 1: the Setup was not saved through Setups\' own command');
-            saved = { dock: await s.savedDock(SETUP_NAME), modes, identity, terminals: Object.keys(identity).filter((n) => /^term\d+$/.test(n)) };
+            saved = { dock: await s.savedDock(SETUP_NAME), modes, identity, editors, terminals: Object.keys(identity).filter((n) => /^term\d+$/.test(n)) };
             if ((await s.quit()) !== 'exited') throw new Error('launch 1 did not quit normally');
         });
         const devicesBefore = deviceRows(session.profileDir);
@@ -459,7 +553,14 @@ async function runLive() {
             offers.push(await s.offer());
             await s.writeMarker(MARKER_KEY);
             const theia = await s.probe(`return ${JSON.stringify(selectors)}.reduce((n, sel) => n + document.querySelectorAll(sel).length, 0);`);
+            // The restore's positive control: in the Coding mode every Theia editor is closed and proven closed, so only the Setup's own
+            // restore (which must run: it throws otherwise) can bring them back; Theia's layout restore has already finished.
+            await s.mode('coding');
+            await s.closeEditors();
+            const closedLeft = await s.editorUris();
             await s.restoreSetup(SETUP_NAME);
+            const editorsAfter = await s.pollFor(async () => { const u = await s.editorUris(); return saved.editors.every((x) => u.includes(x)) ? u : null; }, 15000, 'the restored editors').catch(() => s.editorUris());
+            clauses['restore-effect'] = restoreEffectVerdict({ saved: saved.editors, closed: closedLeft, after: editorsAfter });
             await s.pollFor(async () => ((await s.storeKeys()).length ? true : null), 30000, 'the new store').catch(() => false);
             await sleep(1500);
             clauses.dock = compareDocks(saved.dock, await s.liveDock());
@@ -531,24 +632,27 @@ async function runLive() {
 }
 
 async function main() {
+    const lib = await import('./lib/orca-tabs-live.mjs');
     const pre = await livePrerequisites();
     if (pre.fail) { console.error(`${NAME}: FAIL -- ${pre.fail}`); return 1; }
-    if (pre.skip) { console.log(`${NAME}: SKIP -- ${pre.skip}`); return 0; }
+    if (pre.skip) { console.log(skipLine(NAME, `${pre.skip}. Next step: build what that names, then run scripts/verify-platform.sh --only orca-relaunch-restore-live`)); return SKIP_EXIT; }
+    // What is printed after the launches ended goes through their redaction list.
+    const out = (line) => console.log(lib.redactAfterSession(line));
     let clauses;
     try { clauses = await runLive(); } catch (err) {
-        console.error(`${NAME}: FAIL -- harness: ${err.message}`);
+        console.error(lib.redactAfterSession(`${NAME}: FAIL -- harness: ${err.message}`));
         return 1;
     }
-    const order = ['dock', 'modes', 'chat', 'terminals', 'identity', 'pairing-ui', 'not-gone', 'paste-choice', 'devices', 'offer-scan'];
+    const order = ['dock', 'modes', 'restore-effect', 'terminal-keeps-tab', 'chat', 'terminals', 'identity', 'pairing-ui', 'not-gone', 'paste-choice', 'devices', 'offer-scan'];
     const failed = [];
     for (const c of order) {
         const reasons = clauses[c];
-        if (reasons === undefined) { failed.push(c); console.log(`${NAME}: ${c}: FAIL -- not reached`); continue; }
+        if (reasons === undefined) { failed.push(c); out(`${NAME}: ${c}: FAIL -- not reached`); continue; }
         if (reasons.length) failed.push(c);
-        console.log(`${NAME}: ${c}: ${reasons.length ? `FAIL -- ${reasons.join('; ')}` : 'PASS'}`);
+        out(`${NAME}: ${c}: ${reasons.length ? `FAIL -- ${reasons.join('; ')}` : 'PASS'}`);
     }
-    for (const line of clauses.scanLines ?? []) console.log(`${NAME}: scan -- ${line}`);
-    console.log(failed.length ? `${NAME}: FAIL -- ${failed.join(', ')}` : `${NAME}: PASS -- ${order.join(', ')}`);
+    for (const line of clauses.scanLines ?? []) out(`${NAME}: scan -- ${line}`);
+    out(failed.length ? `${NAME}: FAIL -- ${failed.join(', ')}` : `${NAME}: PASS -- ${order.join(', ')}`);
     return failed.length ? 1 : 0;
 }
 
@@ -561,7 +665,10 @@ const DOCK = split('horizontal', tabs('pb-orca:chat1', 'pb-orca:term1'), split('
 
 const PASTE_CHOICE = { platform: 'linux', fresh: { checked: true }, off: { before: true, checked: false }, relaunch: { checked: false }, tab: 'orca-pane:term3', printed: 1, offCount: 1, on: { before: false, checked: true }, onCount: 2 };
 
-function runSelfTest() {
+async function runSelfTest() {
+    const lib = await import('./lib/orca-tabs-live.mjs');
+    const liveLock = await import('./lib/live-lock.mjs');
+    const { fixtureGit: paneGit } = await import('./lib/orca-pane-harness.mjs');
     const rows = (...r) => r.map(([credentialKind, ephemeral, lastSeenAt]) => ({ credentialKind, ephemeral, lastSeenAt }));
     const before = rows([undefined, undefined, 5]);
     const cases = [
@@ -595,12 +702,38 @@ function runSelfTest() {
         ['the off never set', 'NOT SCORED -- the user could not turn the switch off', () => pasteChoiceVerdict({ ...PASTE_CHOICE, off: { error: 'switch not found' } })],
         ['no paste terminal', 'NOT SCORED -- the paste terminal produced no hosted widget', () => pasteChoiceVerdict({ ...PASTE_CHOICE, tab: null })],
         ['the clause not reached', 'paste-choice: not measured', () => pasteChoiceVerdict(undefined)],
+        ['source ids control', null, () => sourceIdsVerdict({ SETUPS_SAVE_COMMAND_ID: 'a.b', SETUPS_RESTORE_COMMAND_ID: 'a.c', MODES_ACTIVATE_COMMAND_ID: 'a.d' })],
+        ['a moved restore command id (harness-live-tabs-05)', 'source moved: no SETUPS_RESTORE_COMMAND_ID found', () => sourceIdsVerdict({ SETUPS_SAVE_COMMAND_ID: 'a.b', SETUPS_RESTORE_COMMAND_ID: null, MODES_ACTIVATE_COMMAND_ID: 'a.d' })],
+        ['a moved activate command id', 'no MODES_ACTIVATE_COMMAND_ID found', () => sourceIdsVerdict({ SETUPS_SAVE_COMMAND_ID: 'a.b', SETUPS_RESTORE_COMMAND_ID: 'a.c', MODES_ACTIVATE_COMMAND_ID: null })],
+        ['the real source ids are found in the tree', null, () => sourceIdsVerdict({ SETUPS_SAVE_COMMAND_ID: sourceConst(SETUPS_COMMANDS_REL, 'SETUPS_SAVE_COMMAND_ID'), SETUPS_RESTORE_COMMAND_ID: sourceConst(SETUPS_COMMANDS_REL, 'SETUPS_RESTORE_COMMAND_ID'), MODES_ACTIVATE_COMMAND_ID: sourceConst(MODES_COMMANDS_REL, 'MODES_ACTIVATE_COMMAND_ID') })],
+        ['a command that ran', null, () => commandResultVerdict('restoring the Setup', true)],
+        ['a restore command that returned false', 'restoring the Setup did not run (the command reported false)', () => commandResultVerdict('restoring the Setup', false)],
+        ['a command that returned a probe error', 'did not run (the command reported {"error":"probe threw: x"})', () => commandResultVerdict('switching to the orca mode', { error: 'probe threw: x' })],
+        ['a command that returned nothing', 'did not run (the command reported null)', () => commandResultVerdict('switching to the orca mode', undefined)],
+        ['a hold bound that reads NaN (harness-live-tabs-06)', 'ORCA_RESTORE_HOLD_MS is NaN', () => holdMsVerdict(sourceNumber(OBSERVER_REL, 'ORCA_RESTORE_HOLD_MS_RENAMED'))],
+        ['a hold bound of zero', 'ORCA_RESTORE_HOLD_MS is 0', () => holdMsVerdict(0)],
+        ['the real hold bound is a number', null, () => holdMsVerdict(sourceNumber(OBSERVER_REL, 'ORCA_RESTORE_HOLD_MS'))],
+        ['restore-effect control', null, () => restoreEffectVerdict({ saved: ['file:///r/README', 'diff:x'], closed: [], after: ['diff:x', 'file:///r/README'] })],
+        ['a restore that brought nothing back', 'the Setup restore did not bring back 2 of 2 closed editor(s)', () => restoreEffectVerdict({ saved: ['file:///r/README', 'diff:x'], closed: [], after: [] })],
+        ['a close that left an editor open (the control is blind)', 'NOT SCORED -- 1 saved editor(s) were still open after the close', () => restoreEffectVerdict({ saved: ['file:///r/README', 'diff:x'], closed: ['diff:x'], after: ['file:///r/README', 'diff:x'] })],
+        ['no editor saved', 'no editor or diff tab was saved in the Coding mode', () => restoreEffectVerdict({ saved: [], closed: [], after: [] })],
+        ['terminal-keeps-tab control', null, () => terminalKeptVerdict({ id: 'orca-pane:term1', hosted: ['orca-pane:term1', 'orca-pane:term2'], paneKey: 'tab:leaf1' })],
+        ['a terminal closed and reopened under the next name (64-WR-03)', 'orca-pane:term1 was closed when the CLI split', () => terminalKeptVerdict({ id: 'orca-pane:term1', hosted: ['orca-pane:term2', 'orca-pane:term3'], paneKey: null })],
+        ['a terminal that kept its widget but no leaf key', 'addresses no leaf pane key after the split', () => terminalKeptVerdict({ id: 'orca-pane:term1', hosted: ['orca-pane:term1'], paneKey: null })],
+        ['fixture git (the pane harness\'s) ignores a developer config with signing and hooks (harness-live-tabs-13)', null, () => lib.fixtureGitVerdict((repo, home) => paneGit(repo, home))],
+        ['the save id alone is enough for a caller that only saves a Setup', null, () => sourceIdsVerdict({ SETUPS_SAVE_COMMAND_ID: 'a.b' })],
+        ['this row requires all three ids up front', 'no SETUPS_RESTORE_COMMAND_ID, MODES_ACTIVATE_COMMAND_ID found', () => sourceIdsVerdict({ SETUPS_SAVE_COMMAND_ID: 'a.b', SETUPS_RESTORE_COMMAND_ID: null, MODES_ACTIVATE_COMMAND_ID: undefined })],
+        ['the row\'s three ids are all found in the tree', null, () => sourceIdsVerdict(rowCommandIds())],
+        ['every live path awaits the shared live-lock helper (harness-live-tabs-14)', null, () => liveLock.lockWiringFails(NAME, import.meta.url)],
+        ['a script that no longer awaits holdLiveLock is caught', 'lock wiring', () => lib.lockWiringPlantFails(liveLock.lockWiringFails)],
+        ['the real main with no built PowerBrowser exits 77 with the one SKIP line', null, () => skipRun()],
+        ['a skip alone exits 77, a failure wins over it', null, () => (lib.verdictExitQuiet(NAME, [], ['x']) === SKIP_EXIT && lib.verdictExitQuiet(NAME, ['f'], ['x']) === 1 ? [] : ['the exit status for a skip or a failure is wrong'])],
     ];
     let failures = 0;
     let ok = 0;
     for (const [label, naming, runCase] of cases) {
         let fails;
-        try { fails = runCase(); } catch (err) { fails = [`threw ${err.message}`]; }
+        try { fails = await runCase(); } catch (err) { fails = [`threw ${err.message}`]; }
         const text = fails.join('\n');
         if (naming === null) {
             if (fails.length) { console.error(`  FAIL ${label} -> not green: ${text}`); failures++; } else console.log(`  control ${label} -> green`);
@@ -614,6 +747,16 @@ function runSelfTest() {
     return 0;
 }
 
+/** The real main on a tree with no built PowerBrowser: exit 77 and the one SKIP line (no browser is started). */
+function skipRun() {
+    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('ORCA_') && k !== 'PB_LIVE_LOCK_HELD' && k !== 'PB_LIVE_LOCK_HOLDER'));
+    const r = spawnSync(process.execPath, [SELF], { encoding: 'utf8', timeout: 30000, cwd: REPO_ROOT, env: { ...env, PB_FIREFOX_BIN: '/nonexistent/pb-self-test/powerbrowser' } });
+    const fails = [];
+    if (r.status !== SKIP_EXIT) fails.push(`exit ${r.status}, want ${SKIP_EXIT} (${String(r.stdout).trim().slice(0, 120)} ${String(r.stderr).trim().slice(0, 120)})`);
+    if (!new RegExp(`^${NAME}: SKIP -- .+`, 'm').test(r.stdout ?? '')) fails.push('no "<name>: SKIP -- <reason>" line on stdout');
+    return fails;
+}
+
 const isEntryPoint = (() => {
     try { return realpathSync(resolve(process.argv[1])) === realpathSync(SELF); } catch { return false; }
 })();
@@ -624,5 +767,12 @@ if (isEntryPoint) {
         console.error(`${NAME}: FAIL -- unknown argument '${unknown}' (usage: node ${SELF_REL} [--self-test])`);
         process.exit(2);
     }
-    process.exit(args.includes('--self-test') ? runSelfTest() : await main());
+    if (args.includes('--self-test')) process.exit(await runSelfTest());
+    // The live lock before anything launches (scripts/lib/live-lock.mjs). A run with nothing to launch needs none.
+    const lib = await import('./lib/orca-tabs-live.mjs');
+    const { holdLiveLock } = await import('./lib/live-lock.mjs');
+    const mayLaunch = await (async () => { const pre = await livePrerequisites(); return !pre.skip && !pre.fail; })();
+    const locked = mayLaunch ? await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT }) : null;
+    if (locked !== null) process.exit(locked);
+    process.exit(await main());
 }

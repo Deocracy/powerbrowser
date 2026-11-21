@@ -810,6 +810,8 @@ export const PowerBrowserAPI = Object.freeze({
     } catch {
       savedWebTabHistories = {};
     }
+    // agent-browser-02 (round 3): agent tabs saved before the agent row key are found by their kept history.
+    agentSweepLegacyHistories(savedWebTabHistories);
   },
 
   /**
@@ -2481,8 +2483,13 @@ export const PowerBrowserAPI = Object.freeze({
    * UPD-18 (46-01): one update topic notification mapped to the contracted
    * appUpdate status. An explicit table (46 review WR-04): update-available
    * with show-prompt to available, with cant-apply or unsupported to
-   * cant-apply; staged and downloaded to ready; everything else, update-error
-   * and any unnamed status included, to error. The subject may be null (cant-apply notifies with a
+   * cant-apply; staged and downloaded to ready for the statuses upstream's
+   * own listener treats as ready (UpdateListener.sys.mjs:395-402) and to null
+   * for any other, which pushes nothing: both topics carry update.state, which
+   * after a failed staging is "failed" or, once the service falls back to a
+   * complete update, "downloading" (UpdateService.sys.mjs:5181), and neither
+   * is an update the user can restart into. Everything else, update-error and
+   * any unnamed status included, to error. The subject may be null (cant-apply notifies with a
    * null subject): the null guard runs before any QueryInterface, and the
    * version read never throws. The returned triple is primitives only.
    */
@@ -2494,7 +2501,7 @@ export const PowerBrowserAPI = Object.freeze({
       return status === "cant-apply" || status === "unsupported" ? "cant-apply" : "error";
     }
     if (topic === "update-staged" || topic === "update-downloaded") {
-      return "ready";
+      return ["applied", "pending", "applied-service", "pending-service", "pending-elevate", "success"].includes(status) ? "ready" : null;
     }
     return "error";
   },
@@ -2526,7 +2533,10 @@ export const PowerBrowserAPI = Object.freeze({
     const observer = {
       observe: (subject, topic, status) => {
         try {
-          PowerBrowserAPI.pushAppUpdate(theiaBrowser, PowerBrowserAPI.mapUpdateNotification(topic, status), PowerBrowserAPI.updateVersionFromSubject(subject));
+          const mapped = PowerBrowserAPI.mapUpdateNotification(topic, status);
+          if (mapped !== null) {
+            PowerBrowserAPI.pushAppUpdate(theiaBrowser, mapped, PowerBrowserAPI.updateVersionFromSubject(subject));
+          }
         } catch (err) {
           PowerBrowserAPI.log("error", `[update-observer] push failed (${err && err.name ? err.name : "error"})`);
         }
@@ -2601,8 +2611,8 @@ export const PowerBrowserAPI = Object.freeze({
       if (cancelQuit.data) {
         return false;
       }
-      Services.startup.quit(Ci.nsIAppStartup.eAttemptQuit | Ci.nsIAppStartup.eRestart);
-      return true;
+      // quit() returns false when a window's CanClose vetoes it (nsIAppStartup.idl:152-156): that is a cancelled restart too.
+      return Services.startup.quit(Ci.nsIAppStartup.eAttemptQuit | Ci.nsIAppStartup.eRestart) !== false;
     } catch {
       return false;
     }
@@ -2883,7 +2893,8 @@ export const PowerBrowserAPI = Object.freeze({
         case "windowDragRegions": {
           const rects = Array.isArray(data.rects) ? data.rects : null;
           const finite = r => r && [r.x, r.y, r.w, r.h].every(Number.isFinite);
-          if (!rects || !rects.every(finite) || !Number.isFinite(data.height)) {
+          // Each rect becomes a chrome-document element; the frontend sends one per gap in two top rows, far below this bound.
+          if (!rects || rects.length > 64 || !rects.every(finite) || !Number.isFinite(data.height)) {
             return { ok: false, reason: "validation", message: "handleGroupMutation: refusing malformed drag regions" };
           }
           const win = actorRef.browsingContext.top.embedderElement.ownerDocument.defaultView;
@@ -3450,9 +3461,20 @@ export const PowerBrowserAPI = Object.freeze({
       if (!container) {
         return;
       }
-      for (const name of TAB_STORE_EVENTS) {
-        container.addEventListener(name, onTabEvent);
-        attached.push([container, name]);
+      // A window enumerated above and then announced by delayed-startup is attached once. A closed
+      // window's container leaves `attached`, which would otherwise keep its document alive until quit.
+      if (!attached.some(([held]) => held === container)) {
+        for (const name of TAB_STORE_EVENTS) {
+          container.addEventListener(name, onTabEvent);
+          attached.push([container, name]);
+        }
+        win.addEventListener("unload", () => {
+          for (let i = attached.length - 1; i >= 0; i -= 1) {
+            if (attached[i][0] === container) {
+              attached.splice(i, 1);
+            }
+          }
+        }, { once: true });
       }
       // NG-001: tabs already in the window (a new window's first tab, a
       // restored session) may have no event left to fire, and the sweep only
@@ -3584,6 +3606,27 @@ export const PowerBrowserAPI = Object.freeze({
       resendWebTabSharing(tabId);
       return "already-open";
     }
+    // agent-browser-02: agent status belongs to the tab id and row key in chrome. A tab id (or row key) chrome once
+    // created as an agent tab opens as one again (the crash recreate and the lost-view reopen close, then open), whatever
+    // the frontend sends; the flag alone still never turns an open tab into one (the already-open return above).
+    // agent-browser-04: while the user has agents stopped, no agent tab chrome has not seen this session is made, by
+    // the flag or by an agent row key; one it has seen (a crash recreate) may reopen, stopped from creation.
+    // agent-browser-02 (round 3): the test reads the effective key, the one sent or the one webTabAttach derives from
+    // the tab id, so no user tab can be given an agent row key and reopen as an agent tab after a relaunch.
+    const remembered = pending === null && agentTabRemembered(tabId, key);
+    if ((agent === true || remembered) && !agentTabIds.has(tabId) && agentOwnerStopped(actorRef)) {
+      return "agent-stopped";
+    }
+    agent = agent === true || remembered;
+    // agent-browser-02, across a relaunch: an agent tab lives under an agent row key, so its snapshot, Setup,
+    // closed-tab row and kept history all carry the key and reopen as an agent tab. An agent open under any other
+    // explicit key is refused; with no key, the key is derived the same way (webTabAttach keeps it).
+    if (agent === true && pending === null) {
+      key = key ?? `${AGENT_ROW_KEY_PREFIX}${tabId}`;
+      if (!AGENT_ROW_KEY_RE.test(key) && !agentLegacyRowKeys().has(key)) {
+        return "unavailable";
+      }
+    }
     // Phase 66 (P66-26): an agent overlay loads in the Orca-agent container, never the user's; no container, no tab.
     const userContextId = agent === true ? agentContainerId() : 0;
     if (agent === true && !userContextId) {
@@ -3617,7 +3660,9 @@ export const PowerBrowserAPI = Object.freeze({
       // the login manager (autofill and capture of saved passwords), the user's WebExtensions tab host and every
       // saved-entry dropdown never attach to a page an agent drives (coordinator finding 3).
       // Quoted keys: the bridge check's attribute rule reads the stock (unquoted) keys above.
-      ...(agent === true ? { "usercontextid": String(userContextId), messagemanagergroup: AGENT_MESSAGE_MANAGER_GROUP, "autocompletepopup": "" } : {}),
+      // chrome-actor-05: disableglobalhistory keeps an agent's visits and page-chosen titles out of Places, which is
+      // not partitioned by container and feeds the user's address-bar suggestions (BrowsingContext.cpp UseGlobalHistory).
+      ...(agent === true ? { "usercontextid": String(userContextId), messagemanagergroup: AGENT_MESSAGE_MANAGER_GROUP, "autocompletepopup": "", "disableglobalhistory": "true" } : {}),
     })) {
       browser.setAttribute(name, value);
     }
@@ -3653,7 +3698,7 @@ export const PowerBrowserAPI = Object.freeze({
     const entry = PowerBrowserAPI.webTabAttach(theiaBrowser, actorRef, tabId, browser, key, spec, grant);
     // Phase 66 (P66-06): an agent tab only from its creation; the already-open return above never reaches this.
     if (agent === true) {
-      agentTabCreated(entry, userContextId);
+      agentTabCreated(entry, userContextId, tabId);
     }
     tabHostAddTab(win, tabId, browser);
     // NG-034: a tab the frontend reopened from last session's snapshot, with
@@ -5010,7 +5055,8 @@ async function savePageCopy(uri) {
     // separators, so ".." segments and Windows separators cannot escape the
     // check, and the filename shape matches the minted id above.
     if (previous && previous !== dir && isMintedSavedPageDir(previous, root)) {
-      await IOUtils.remove(previous, { recursive: true, ignoreAbsent: true });
+      // The new row is committed: a failed removal of the old copy must not reach the catch below, which deletes `dir`.
+      await IOUtils.remove(previous, { recursive: true, ignoreAbsent: true }).catch(() => PowerBrowserAPI.log("warn", "[savePageCopy] the previous copy was not removed"));
     }
     return { dir, bytes };
   } catch (err) {
@@ -6025,7 +6071,25 @@ async function webTabSaveCopyOut(dir, path) {
   await IOUtils.writeUTF8(path, html.replace(/(["'(=\s])page_files\//g, (_match, lead) => `${lead}${filesName}/`));
   const sourceFiles = PathUtils.join(dir, "page_files");
   if (await IOUtils.exists(sourceFiles)) {
-    await IOUtils.copy(sourceFiles, PathUtils.join(PathUtils.parent(path), filesName), { recursive: true });
+    await webTabSaveCopyTree(sourceFiles, PathUtils.join(PathUtils.parent(path), filesName));
+  }
+}
+
+// IOUtils.copy into an EXISTING directory puts the source inside it (IOUtils.cpp CopyOrMoveSync, case 1). A save over an
+// earlier save of the same name would land its files in <stem>_files/page_files while the page links <stem>_files, so
+// an existing folder is filled entry by entry instead.
+async function webTabSaveCopyTree(source, dest) {
+  if (!(await IOUtils.exists(dest))) {
+    await IOUtils.copy(source, dest, { recursive: true });
+    return;
+  }
+  for (const child of await IOUtils.getChildren(source)) {
+    const target = PathUtils.join(dest, PathUtils.filename(child));
+    if ((await IOUtils.stat(child)).type === "directory") {
+      await webTabSaveCopyTree(child, target);
+    } else {
+      await IOUtils.copy(child, target);
+    }
   }
 }
 
@@ -6667,7 +6731,9 @@ async function openStockPageFromMenu(page) {
 // window with no nsIBrowserDOMWindow. The shell has none, so the Theia <browser> was never asked.
 const shellQuitVeto = {
   observe(subject) {
-    if (!subject || typeof subject.data !== "boolean" || subject.data) {
+    // instanceof does the QueryInterface: a cancel flag created natively (a session-manager logout, the macOS dock's Quit)
+    // arrives as a bare nsISupports with no `data` until then (BrowserGlue.sys.mjs's own observer does the same).
+    if (!subject || !(subject instanceof Ci.nsISupportsPRBool) || subject.data) {
       return;
     }
     if (!shellBrowsersPermitUnload()) {
@@ -7228,7 +7294,11 @@ function webTabDownloadsSubscribe(frame) {
       downloadsState.list = list;
       list.addView(downloadsView);
       Services.obs.addObserver(downloadsQuitObserver, "quit-application-granted");
-    })();
+    })().catch(err => {
+      // A failed install is not kept: the next subscribe tries again instead of answering from this rejection.
+      downloadsState.installed = null;
+      throw err;
+    });
   }
   return downloadsState.installed;
 }
@@ -7562,6 +7632,11 @@ function adoptPendingOverlay(kind, tabId, pcKey, actorRef) {
   const theiaBrowser = actorRef.browsingContext.top.embedderElement;
   if (webTabs.has(tabId)) {
     return { ok: false, reason: "validation", message: "handleWebTabAction: refusing a tabId that is already open" };
+  }
+  // agent-browser-02 (round 3): an adopted overlay is a user tab, and its row key is web:<tabId>; a tab id that would
+  // give it an agent row key is refused, so it can never reopen as an agent tab.
+  if (agentTabRemembered(tabId, undefined)) {
+    return { ok: false, reason: "validation", message: "handleWebTabAction: refusing an agent tab id for an adopted overlay" };
   }
   const pending = pendingContent.get(pcKey);
   if (!pending || pending.theiaBrowser !== theiaBrowser) {
@@ -7976,10 +8051,10 @@ async function showBlockedPopupBar(host, browser) {
       setBar(browser, "blocked-popup", null, null);
       return;
     }
-    const opened = openedPopups.get(browser) ?? new Set();
+    // The opened set is read after the await: an Allow answered meanwhile stores a new set, and its popup must not be offered again.
     const popups = (await blocker.getBlockedPopups())
       .map(p => ({ key: `${p.innerWindowId}:${p.reportIndex}`, spec: String(p.popupWindowURISpec || ""), browsingContext: p.browsingContext, innerWindowId: p.innerWindowId, reportIndex: p.reportIndex }))
-      .filter(p => !opened.has(p.key));
+      .filter(p => !openedPopups.get(browser)?.has(p.key));
     if (!popups.length && !redirectBlocked) {
       setBar(browser, "blocked-popup", null, null);
       return;
@@ -9058,7 +9133,9 @@ function pageMenuEdit(data, cmd) {
   if (!global) {
     return { where: "refused" };
   }
-  data.context.onTextInput ? global.getActor(EDIT_STATE_ACTOR_NAME).sendAsyncMessage("PowerBrowserEditState:Do", { cmd }) : global.getActor("Controllers").doCommand(cmd); // WINDOWS 43: a field's row runs on that field (GroupActorChild)
+  // WINDOWS 43: a field's row runs on that field (GroupActorChild). 59-WR-01: only where the edit-state pair exists; an
+  // agent overlay's field keeps the group-agnostic Controllers route it had before 59-09.
+  data.context.onTextInput && editStateReaches(data.browser) ? global.getActor(EDIT_STATE_ACTOR_NAME).sendAsyncMessage("PowerBrowserEditState:Do", { cmd }) : global.getActor("Controllers").doCommand(cmd);
   return { where: "done" };
 }
 
@@ -9083,7 +9160,8 @@ function pageMenuSavePick(id, pending) {
   const { data, facts } = pending;
   const link = id === "context-savelink";
   const url = link ? data.context.linkURL : facts.mediaURL;
-  if (!pageMenuTargetAllowed(data.principal, url)) {
+  // pageMenuSave builds a non-private download on the public list, so a private tab is refused, as the other save kinds refuse it.
+  if (lazy.PrivateBrowsingUtils.isBrowserPrivate(data.browser) || !pageMenuTargetAllowed(data.principal, url)) {
     return { where: "refused" };
   }
   pending.save = { url, referrerInfo: link && data.context.onLink ? data.linkReferrerInfo : data.referrerInfo, principal: data.principal, cookieJarSettings: data.cookieJarSettings };
@@ -9468,6 +9546,14 @@ function installFullscreen(window) {
         aActor.requestOrigin = null;
         return;
       }
+      // agent-browser-04 (round 3): an agent page never takes the shell window, where it would cover the agent mark
+      // and its Stop; an agent click is a trusted event, so a page's fullscreen button would otherwise pass.
+      if (webTabs.get(tabIdOfBrowser(aBrowser))?.agent === true) {
+        abortEnterFullscreen(window, aActor);
+        return;
+      }
+      // A pointer-lock warning still set would be reused by showWarning for the fullscreen text; it closes first (:580-582).
+      closeWarning("pointerlock-warning");
       // A remote browser's content enters fullscreen state first, through any OOP ancestor frames (:586-623).
       if (aBrowser?.hasAttribute("remote")) {
         const [targetActor, inProcessBC] = fullscreenNextRecipient(aActor, false);
@@ -10028,11 +10114,22 @@ const EDIT_STATE_QUERY = "PowerBrowserEditState:Query";
 
 export class PowerBrowserEditStateParent extends GroupActorBase {}
 
+// 59-WR-01 / chrome-actor-06: the message manager groups the pair is registered for. An overlay outside them (an agent
+// overlay, AGENT_MESSAGE_MANAGER_GROUP) has no edit-state child, and getActor throws NotSupportedError there, so every
+// edit-state read and write asks editStateReaches first.
+const EDIT_STATE_GROUPS = Object.freeze(["browsers"]);
+
+// Read from the overlay's entry, not its attribute: an agent overlay is the only one webTabOpen puts outside
+// EDIT_STATE_GROUPS, and the group attribute is named only at the host sites (verify-extension-actions.mjs).
+function editStateReaches(browser) {
+  return webTabs.get(tabIdOfBrowser(browser))?.agent !== true;
+}
+
 function registerEditStateActor() {
   ChromeUtils.registerWindowActor(EDIT_STATE_ACTOR_NAME, {
     parent: { esModuleURI: GROUP_ACTOR_PARENT_MODULE },
     child: { esModuleURI: GROUP_ACTOR_CHILD_MODULE },
-    messageManagerGroups: ["browsers"],
+    messageManagerGroups: [...EDIT_STATE_GROUPS],
     allFrames: true, // CR-02 (35-REVIEW): a focused subframe answers for itself, as its Controllers actor does
   });
 }
@@ -10042,6 +10139,9 @@ function registerEditStateActor() {
 // falls back to the cached flag, so the row stays usable rather than greyed by an error.
 const EDIT_STATE_BUDGET_MS = 250;
 async function webTabEditEnabled(entry, cmd, cached) {
+  if (!editStateReaches(entry.browser)) {
+    return cached;
+  }
   try {
     const actor = webTabEditContext(entry.browser).currentWindowGlobal.getActor(EDIT_STATE_ACTOR_NAME);
     const query = actor.sendQuery(EDIT_STATE_QUERY, { cmd }).then(answer => answer === true);
@@ -10974,6 +11074,9 @@ Services.obs.addObserver(function extensionLateStartup(win) {
 // PowerBrowserEditState child answers from the ContextMenu actor's target, the field pageMenuEdit runs the row on;
 // no answer, a target with no controllers, or EDIT_STATE_BUDGET_MS without a reply keeps the cached state.
 async function pageEditTargetCommands(data, cached) {
+  if (!editStateReaches(data.browser)) {
+    return cached;
+  }
   try {
     const actor = webTabEditContext(data.browser, data.frameBrowsingContext).currentWindowGlobal.getActor(EDIT_STATE_ACTOR_NAME);
     const query = actor.sendQuery("PowerBrowserEditState:Target", { cmds: WEB_TAB_EDIT_CMDS }).then(states => states ?? cached);
@@ -11095,6 +11198,32 @@ export const PowerBrowserProcesses = Object.freeze({
   platform() {
     return lazy.AppConstants.platform;
   },
+
+  //
+  // orcad-hosting-03 (lane G2's handover): the kernel's TCP socket tables and this process's uid, so OrcaService can
+  // say whose program holds orcad's busy port. Both tables: a dual-stack listener, the most common holder, appears in
+  // /proc/net/tcp6 only. procfs reports size 0, so IOUtils.read with an explicit maxBytes (readProcessStartTicks).
+  // Resolves { tcp, tcp6, uid, truncated }; off Linux or on any failure the text is "" and uid null. Never throws.
+  // Round 3: the kernel lists listening sockets before established ones (net/ipv4/tcp_ipv4.c tcp_get_idx tries the
+  // listening hash first), so the listener a port-holder row needs is near the start; a table that fills the read cap
+  // sets truncated, and the caller must then not report "no holder".
+  //
+  async readLoopbackSocketTable() {
+    const cap = 1 << 22;
+    let truncated = false;
+    const text = async path => {
+      try {
+        const bytes = await IOUtils.read(path, { maxBytes: cap });
+        truncated ||= bytes.length >= cap;
+        return new TextDecoder().decode(bytes);
+      } catch {
+        return "";
+      }
+    };
+    const [tcp, tcp6, status] = await Promise.all([text("/proc/net/tcp"), text("/proc/net/tcp6"), text("/proc/self/status")]);
+    const uid = Number(/^Uid:\s+(\d+)/m.exec(status)?.[1]);
+    return { tcp, tcp6, uid: Number.isInteger(uid) ? uid : null, truncated };
+  },
 });
 
 // ---- Orca agent bridge (66-03, BRW-03/BRW-04) ----
@@ -11129,6 +11258,8 @@ const AGENT_RUN_MESSAGE = "PowerBrowserAgent:Run";
 const AGENT_ABORT_MESSAGE = "PowerBrowserAgent:Abort";
 // Orca's own ACTIVITY_IDLE_MS (browser-agent-activity.ts): the mark clears after this long with no served call.
 const AGENT_IDLE_MS = 20000;
+// 66-CR-04 (lane G1b): the longest agent wait, the host's cap (10 minutes); GroupActorChild applies the same bound.
+const AGENT_WAIT_MAX_MS = 600000;
 
 const agentDone = result => ({ where: "done", result });
 const agentFailed = code => ({ where: "failed", code });
@@ -11187,7 +11318,8 @@ const AGENT_PARAMS = {
   "browser.mouseWheel": params => agentTarget(params) && agentNumber(params.dy) && agentOptional(params.dx, agentNumber),
   "browser.scroll": params => agentTarget(params) && (params.direction === "up" || params.direction === "down") && agentOptional(params.amount, v => agentNumber(v) && v > 0),
   // A wait names at least one condition or a positive timeout.
-  "browser.wait": params => agentTarget(params) && agentOptional(params.timeout, v => agentNumber(v) && v > 0) && agentWaitFields.every(f => agentOptional(params[f], agentText)) && (agentWaitFields.some(f => agentText(params[f])) || agentNumber(params.timeout)),
+  // 66-CR-04 (lane G1b): a wait is at most AGENT_WAIT_MAX_MS, the host's own cap.
+  "browser.wait": params => agentTarget(params) && agentOptional(params.timeout, v => agentNumber(v) && v > 0 && v <= AGENT_WAIT_MAX_MS) && agentWaitFields.every(f => agentOptional(params[f], agentText)) && (agentWaitFields.some(f => agentText(params[f])) || agentNumber(params.timeout)),
   // Lane p66-04 owns the snapshot options; the target fields are what this lane checks.
   "browser.snapshot": agentTarget,
 };
@@ -11206,7 +11338,7 @@ function agentWallVerdict(entry, actorRef) {
   if (entry.agent !== true || !agentInOwnContainer(entry)) {
     return "not-agent-tab";
   }
-  if (entry.agentControl?.stopped) {
+  if (entry.agentControl?.stopped || agentOwnerStopped(actorRef)) {
     return "agent-stopped";
   }
   return null;
@@ -11264,10 +11396,77 @@ function agentContainerId() {
   }
 }
 
+// agent-browser-02: every tab id chrome created an agent tab under, for the session (webTabClose does not clear it),
+// and the agent row-key form, for good: an agent tab's row key is web:agent-<...> (the frontend's
+// AGENT_ROW_KEY_PREFIX), stored with its session snapshot, Setup, closed-tab row and kept history, so a restore after
+// a relaunch, when this set is empty, is an agent tab again. A user tab's key never has the form.
+const agentTabIds = new Set();
+const AGENT_ROW_KEY_PREFIX = "web:agent-";
+const AGENT_ROW_KEY_RE = /^web:agent-[A-Za-z0-9_-]{1,54}$/;
+
+// agent-browser-02 (round 3): agent tabs saved by a v1.7 build before the agent row key carry ordinary web:wt- keys.
+// Their only trace is their kept history: an entry a page in the agent container started (a link, a form, a
+// redirect) carries a principal serialized with that container's userContextId suffix. Each launch,
+// loadWebTabHistories sweeps the saved histories; a key whose history carries the agent container becomes a legacy
+// agent row key (kept in a pref, newest AGENT_LEGACY_KEYS_MAX), which every open treats as an agent row, so its
+// session snapshot, Setup, closed-tab row and history reopen as an agent tab. A history whose every entry chrome
+// started (browser.goto loads with a null principal and no container), or a row with no kept history, carries no
+// trace; the record states that exposure.
+const AGENT_LEGACY_KEYS_PREF = "powerbrowser.orca.legacyAgentRowKeys";
+const AGENT_LEGACY_KEYS_MAX = 1000;
+let agentLegacyKeys = null;
+
+function agentLegacyRowKeys() {
+  if (agentLegacyKeys === null) {
+    try {
+      const value = JSON.parse(Services.prefs.getStringPref(AGENT_LEGACY_KEYS_PREF, "[]"));
+      agentLegacyKeys = new Set(Array.isArray(value) ? value.filter(k => typeof k === "string" && /^web:[A-Za-z0-9_-]{1,64}$/.test(k)) : []);
+    } catch {
+      agentLegacyKeys = new Set();
+    }
+  }
+  return agentLegacyKeys;
+}
+
+// Returns how many keys it added. Never throws.
+function agentSweepLegacyHistories(histories) {
+  try {
+    const id = Services.prefs.getIntPref(AGENT_CONTAINER_PREF, 0);
+    if (!(id > 0)) {
+      return 0;
+    }
+    const mark = new RegExp(`\\^(?:[^"\\\\]*&)?userContextId=${id}(?![0-9])`);
+    const keys = agentLegacyRowKeys();
+    let added = 0;
+    for (const [key, history] of Object.entries(histories)) {
+      if (AGENT_ROW_KEY_RE.test(key) || keys.has(key) || !mark.test(JSON.stringify(history))) {
+        continue;
+      }
+      keys.add(key);
+      added += 1;
+    }
+    if (added) {
+      const kept = [...keys].slice(-AGENT_LEGACY_KEYS_MAX);
+      agentLegacyKeys = new Set(kept);
+      Services.prefs.setStringPref(AGENT_LEGACY_KEYS_PREF, JSON.stringify(kept));
+      PowerBrowserAPI.log("info", `[orca-agent] ${added} agent tab(s) saved before the agent row key will reopen as agent tabs`);
+    }
+    return added;
+  } catch {
+    return 0;
+  }
+}
+
+function agentTabRemembered(tabId, key) {
+  return agentTabIds.has(tabId) || AGENT_ROW_KEY_RE.test(key ?? `web:${tabId}`) || agentLegacyRowKeys().has(key ?? `web:${tabId}`);
+}
+
 // webTabOpen's agent branch: the flag, the container the overlay was created in, the network log and the focus guard.
-function agentTabCreated(entry, userContextId) {
+function agentTabCreated(entry, userContextId, tabId) {
   entry.agent = true;
   entry.agentUserContextId = userContextId;
+  agentTabIds.add(tabId);
+  agentContainerIds.add(userContextId);
   // D-35, the content wall: set before the first load, so every document of the overlay carries it. D-37 adds the
   // download wall to the same write.
   entry.browser.browsingContext.sandboxFlags |= SANDBOXED_AUXILIARY_NAVIGATION | SANDBOXED_DOWNLOADS;
@@ -11275,6 +11474,12 @@ function agentTabCreated(entry, userContextId) {
   agentNetworkInstall();
   agentProtocolWallInstall();
   agentFocusGuardInstall(entry.browser.ownerDocument.defaultView);
+  // agent-browser-04: a tab re-created while its window has agents stopped is stopped from the start; either way
+  // the frontend learns from chrome that this is an agent tab (a restored widget may carry no flag of its own).
+  if (agentOwnerStopped(entry.owner)) {
+    agentControlOf(entry).stopped = true;
+  }
+  agentPush(tabId, entry);
 }
 
 // D-35 (66-08): a new window, tab or popup whose opener is an agent overlay is refused on every path; the agent's own
@@ -11464,6 +11669,250 @@ async function agentNavigate(entry, tabId, outcome) {
 
 const agentUrl = url => (/^[a-z][a-z0-9+.-]*:/i.test(url) ? url : `https://${url}`);
 
+// agent-browser-06: an agent overlay never reaches PowerBrowser's own loopback services, by navigation, redirect or
+// subresource: the Theia sidecar (the sender port) and orcad (the port pref OrcaService binds, same name and default).
+// Other loopback and LAN hosts stay reachable, because agents test local development servers.
+const AGENT_ORCA_PORT_PREF = "powerbrowser.orca.port";
+const AGENT_ORCA_PORT_DEFAULT = 26768;
+
+function agentOwnServicePorts() {
+  const ports = [];
+  try {
+    if (Number.isInteger(groupSenderPort)) {
+      ports.push(groupSenderPort);
+    }
+  } catch {
+    // no sender port yet: the sidecar has not been wired
+  }
+  try {
+    ports.push(Services.prefs.getIntPref(AGENT_ORCA_PORT_PREF, AGENT_ORCA_PORT_DEFAULT));
+  } catch {
+    ports.push(AGENT_ORCA_PORT_DEFAULT);
+  }
+  return ports;
+}
+
+// One parse of an address literal, as the socket layer reads it: { v4 } (a 32-bit number) or { v6 } (eight 16-bit
+// groups), else null for a name. IPv4 takes the forms a URL parser or a resolver accepts (one to four parts, each
+// decimal, 0-prefixed octal or 0x hex, the last filling the remaining bytes); IPv6 takes brackets, a zone, "::" and a
+// dotted IPv4 tail.
+function agentParseV4(text) {
+  const parts = text.split(".");
+  if (parts.length < 1 || parts.length > 4) {
+    return null;
+  }
+  const values = [];
+  for (const part of parts) {
+    let value;
+    if (/^0x[0-9a-f]*$/.test(part)) {
+      value = part.length === 2 ? 0 : parseInt(part.slice(2), 16);
+    } else if (/^0[0-7]*$/.test(part)) {
+      value = parseInt(part, 8);
+    } else if (/^[1-9][0-9]*$/.test(part)) {
+      value = parseInt(part, 10);
+    } else {
+      return null;
+    }
+    values.push(value);
+  }
+  const last = values.pop();
+  if (values.some(v => v > 255) || last >= 256 ** (4 - values.length)) {
+    return null;
+  }
+  return values.reduce((n, v, i) => n + v * 256 ** (3 - i), 0) + last;
+}
+
+function agentParseV6(text) {
+  let h = text.replace(/%.*$/, "");
+  const dotted = /^(.*:)([^:]*\.[^:]*)$/.exec(h);
+  if (dotted) {
+    const v4 = /^\d+\.\d+\.\d+\.\d+$/.test(dotted[2]) ? agentParseV4(dotted[2]) : null;
+    if (v4 === null) {
+      return null;
+    }
+    h = `${dotted[1]}${(v4 >>> 16).toString(16)}:${(v4 & 0xffff).toString(16)}`;
+  }
+  const halves = h.split("::");
+  if (halves.length > 2) {
+    return null;
+  }
+  const groupsOf = s => (s === "" ? [] : s.split(":"));
+  const head = groupsOf(halves[0]);
+  const tail = halves.length === 2 ? groupsOf(halves[1]) : [];
+  const fill = 8 - head.length - tail.length;
+  if ((halves.length === 2 ? fill < 1 : fill !== 0) || ![...head, ...tail].every(g => /^[0-9a-f]{1,4}$/.test(g))) {
+    return null;
+  }
+  return [...head, ...new Array(halves.length === 2 ? fill : 0).fill("0"), ...tail].map(g => parseInt(g, 16));
+}
+
+function agentParseAddress(host) {
+  const h = String(host ?? "").toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "");
+  if (h.includes(":")) {
+    const v6 = agentParseV6(h);
+    return v6 ? { v6 } : null;
+  }
+  const v4 = agentParseV4(h);
+  return v4 === null ? null : { v4 };
+}
+
+// Loopback as a connect reaches it, classified on the normalised address: localhost and its subdomains, 127/8, 0/8
+// (a connect to 0.0.0.0 lands on loopback), ::1, ::, and IPv4-mapped or IPv4-compatible forms of those.
+function agentLoopbackV4(n) {
+  const top = Math.floor(n / 2 ** 24);
+  return top === 127 || top === 0;
+}
+
+function agentLoopbackHost(host) {
+  const name = String(host ?? "").toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "");
+  if (/^(?:.+\.)?localhost$/.test(name)) {
+    return true;
+  }
+  const address = agentParseAddress(name);
+  if (!address) {
+    return false;
+  }
+  if (address.v4 !== undefined) {
+    return agentLoopbackV4(address.v4);
+  }
+  const g = address.v6;
+  const zeroTo = k => g.slice(0, k).every(x => x === 0);
+  if (zeroTo(7) && (g[7] === 0 || g[7] === 1)) {
+    return true;
+  }
+  // ::ffff:a.b.c.d (mapped) and ::a.b.c.d (compatible) reach the IPv4 address in the low 32 bits.
+  if (zeroTo(5) && (g[5] === 0xffff || g[5] === 0)) {
+    return agentLoopbackV4(g[6] * 65536 + g[7]);
+  }
+  return false;
+}
+
+function agentServiceRefused(host, port) {
+  return agentLoopbackHost(host) && agentOwnServicePorts().includes(port);
+}
+
+function agentUrlParts(spec) {
+  try {
+    const url = new URL(spec);
+    return { host: url.hostname, port: url.port ? Number(url.port) : url.protocol === "https:" || url.protocol === "wss:" ? 443 : 80 };
+  } catch {
+    return null;
+  }
+}
+
+function agentUrlRefused(spec) {
+  const parts = agentUrlParts(spec);
+  return !!parts && agentServiceRefused(parts.host, parts.port);
+}
+
+// The agent containers chrome created agent overlays in (agentTabCreated adds each). The service wall judges a request
+// by the container it is made in, not by its browsing context, so a worker, shared worker or service worker of an
+// agent page (which has no embedder) is judged as its page is.
+const agentContainerIds = new Set();
+
+function agentChannelInContainer(channel) {
+  try {
+    const id = channel.loadInfo?.originAttributes?.userContextId;
+    return Number.isInteger(id) && id > 0 && agentContainerIds.has(id);
+  } catch {
+    return false;
+  }
+}
+
+function agentServiceCancel(channel, entry) {
+  try {
+    channel.cancel(Cr.NS_ERROR_CONNECTION_REFUSED);
+  } catch {
+    // already finished
+  }
+  const logged = entry ?? agentServiceLog;
+  if (!logged.agentServiceLogged) {
+    logged.agentServiceLogged = true;
+    PowerBrowserAPI.log("warn", "[orca-agent] refused a request from an agent page to a PowerBrowser service (agent-browser-06)");
+  }
+}
+const agentServiceLog = { agentServiceLogged: false };
+
+// The wall, before anything is sent (http-on-modify-request; a redirect is a new channel and comes here again): a
+// spelled loopback host on a service port is cancelled at once; a name on a service port is suspended, resolved in the
+// channel's own DNS partition (the cache entry its connect then uses), and cancelled before resume when any address it
+// resolves to is loopback. The response's remote address (http-on-examine-response) is a second line only.
+function agentServiceWall(channel, topic, entry) {
+  if (topic === "http-on-examine-response") {
+    try {
+      const internal = channel.QueryInterface(Ci.nsIHttpChannelInternal);
+      if (agentServiceRefused(internal.remoteAddress, internal.remotePort)) {
+        agentServiceCancel(channel, entry);
+        return true;
+      }
+    } catch {
+      // not connected: nothing to judge
+    }
+    return false;
+  }
+  if (topic !== "http-on-modify-request") {
+    return false;
+  }
+  const parts = agentUrlParts(channel.URI?.spec);
+  if (!parts || !agentOwnServicePorts().includes(parts.port)) {
+    return false;
+  }
+  if (agentLoopbackHost(parts.host)) {
+    agentServiceCancel(channel, entry);
+    return true;
+  }
+  if (agentParseAddress(parts.host)) {
+    return false; // an address literal that is not loopback: nothing to resolve
+  }
+  agentResolveBeforeSend(channel, parts.host, entry);
+  return false;
+}
+
+function agentResolveBeforeSend(channel, host, entry) {
+  try {
+    channel.suspend();
+  } catch {
+    return;
+  }
+  let done = false;
+  const finish = refused => {
+    if (done) {
+      return;
+    }
+    done = true;
+    if (refused) {
+      agentServiceCancel(channel, entry);
+    }
+    try {
+      channel.resume();
+    } catch {
+      // cancelled elsewhere meanwhile
+    }
+  };
+  const listener = {
+    onLookupComplete(request, record, status) {
+      let refused = false;
+      try {
+        if (Components.isSuccessCode(status)) {
+          const addresses = record.QueryInterface(Ci.nsIDNSAddrRecord);
+          while (addresses.hasMore()) {
+            refused = agentLoopbackHost(addresses.getNextAddrAsString()) || refused;
+          }
+        }
+      } catch {
+        // a record that cannot be read refuses nothing; the channel's own lookup decides
+      }
+      finish(refused);
+    },
+    QueryInterface: ChromeUtils.generateQI(["nsIDNSListener"]),
+  };
+  try {
+    Services.dns.asyncResolve(host, Ci.nsIDNSService.RESOLVE_TYPE_DEFAULT, Ci.nsIDNSService.RESOLVE_DEFAULT_FLAGS, null, listener, Services.tm.mainThread, channel.loadInfo?.originAttributes);
+  } catch {
+    finish(false);
+  }
+}
+
 // Cookie rows (P66-26): only ever in the agent container, never the user's jar.
 function agentOriginAttributes(entry) {
   return { userContextId: entry.agentUserContextId };
@@ -11479,37 +11928,94 @@ function agentHostOf(entry, url) {
 
 const AGENT_SAME_SITE = ["None", "Lax", "Strict"];
 
+// agent-browser-03 / chrome-actor-04: every agent of every worktree shares the one agent container, so a session that
+// the user or another agent made there would be readable and replaceable by any later agent. The cookie rows
+// therefore act only on the site the tab is on now (its registrable domain), and no row reaches an httpOnly cookie:
+// cookie.get never returns its value and cookie.delete never ends one. The agent picks the current site with
+// browser.goto, so the site scope alone restricts little.
+// cookie.set (round 3) makes only the narrowest cookie page script on the current page could make: host-only on the
+// current host, path "/", never httpOnly, never a __Host- or __Secure- name, Secure only on an https page, SameSite
+// None only with Secure, and never a name the site holds as httpOnly in any partition (agentHttpOnlyNamed).
+// Services.cookies.add runs none of the checks a page's cookie meets, which is why each is checked here.
+// Residual (Needs owner): page script, and so the agent through browser.eval, can still plant a plain cookie before
+// a later sign-in in the shared container sets the same name httpOnly, and the older one is sent first.
+function agentSiteOf(host) {
+  const h = String(host ?? "").toLowerCase().replace(/^\.+/, "").replace(/\.$/, "");
+  if (!h) {
+    return "";
+  }
+  try {
+    return Services.eTLD.getBaseDomainFromHost(h);
+  } catch {
+    // an IP address, localhost or a bare public suffix is its own site
+    return h;
+  }
+}
+
+// agent-browser-03: true when the site holds an httpOnly cookie of this name, under any host or path of the site and in
+// any partition (the pattern names the container only, so every partitionKey matches), so a set cannot shadow it and
+// a delete cannot end it.
+function agentHttpOnlyNamed(host, name, attrs) {
+  return Services.cookies.getCookiesWithOriginAttributes(JSON.stringify(attrs), host).some(c => c.name === name && c.isHttpOnly);
+}
+
+// The host a cookie row may act on: `host` when it is on the tab's current site, else "".
+function agentSiteHost(entry, host) {
+  const site = agentSiteOf(agentHostOf(entry, null));
+  return site && agentSiteOf(host) === site ? host : "";
+}
+
 function agentCookieGet(entry, params) {
   const attrs = agentOriginAttributes(entry);
-  const host = params.url ? agentHostOf(entry, params.url) : "";
-  if (params.url && !host) {
+  const named = params.url ? agentHostOf(entry, params.url) : agentHostOf(entry, null);
+  if (params.url && !named) {
     return agentFailed("browser_error");
   }
-  const cookies = host ? Services.cookies.getCookiesFromHost(host, attrs) : Services.cookies.getCookiesWithOriginAttributes(JSON.stringify(attrs));
+  if (!named) {
+    return agentDone({ cookies: [] }); // a page with no site (the empty page) has no cookies to read
+  }
+  const host = agentSiteHost(entry, named);
+  if (!host) {
+    return agentFailed("browser_command_unavailable");
+  }
   return agentDone({
-    cookies: cookies.map(c => ({ name: c.name, value: c.value, domain: c.host, path: c.path, expires: c.isSession ? -1 : Math.floor(c.expiry / 1000), httpOnly: c.isHttpOnly, secure: c.isSecure, sameSite: AGENT_SAME_SITE[c.sameSite] ?? "None" })),
+    cookies: Services.cookies.getCookiesFromHost(host, attrs).map(c => ({ name: c.name, value: c.isHttpOnly ? "" : c.value, domain: c.host, path: c.path, expires: c.isSession ? -1 : Math.floor(c.expiry / 1000), httpOnly: c.isHttpOnly, secure: c.isSecure, sameSite: AGENT_SAME_SITE[c.sameSite] ?? "None" })),
   });
 }
 
 function agentCookieSet(entry, params) {
-  const host = params.domain || agentHostOf(entry, null);
+  const host = agentHostOf(entry, null).toLowerCase();
   if (!host) {
     return agentFailed("browser_error");
   }
+  const domain = String(params.domain ?? host).toLowerCase().replace(/^\./, "");
+  const securePage = /^https:/i.test(entry.browser.currentURI?.spec ?? "");
   const sameSite = { none: 0, lax: 1, strict: 2 }[String(params.sameSite ?? "lax").toLowerCase()] ?? 1;
+  const narrow = domain === host && (params.path === undefined || params.path === null || params.path === "/") && params.httpOnly !== true &&
+    !/^__(host|secure)-/i.test(params.name) && (params.secure !== true || securePage) && (sameSite !== 0 || params.secure === true);
+  if (!narrow || agentHttpOnlyNamed(host, params.name, agentOriginAttributes(entry))) {
+    return agentFailed("browser_command_unavailable");
+  }
   const session = !agentNumber(params.expires) || params.expires <= 0;
   const expiry = session ? Date.now() + 24 * 60 * 60 * 1000 : Math.floor(params.expires * 1000);
   const scheme = params.secure ? Ci.nsICookie.SCHEME_HTTPS : Ci.nsICookie.SCHEME_HTTP;
-  const validation = Services.cookies.add(host, params.path || "/", params.name, params.value, !!params.secure, !!params.httpOnly, session, expiry, agentOriginAttributes(entry), sameSite, scheme, false);
+  const validation = Services.cookies.add(host, "/", params.name, params.value, !!params.secure, false, session, expiry, agentOriginAttributes(entry), sameSite, scheme, false);
   return agentDone({ success: !validation || validation.result === Ci.nsICookieValidation.eOK });
 }
 
 function agentCookieDelete(entry, params) {
-  const host = params.domain || agentHostOf(entry, params.url);
-  if (!host) {
+  const named = params.domain || agentHostOf(entry, params.url);
+  if (!named) {
     return agentFailed("browser_error");
   }
+  const host = agentSiteHost(entry, named);
+  if (!host) {
+    return agentFailed("browser_command_unavailable");
+  }
   const attrs = agentOriginAttributes(entry);
+  if (agentHttpOnlyNamed(host, params.name, attrs)) {
+    return agentFailed("browser_command_unavailable");
+  }
   let deleted = 0;
   // Deleted the way a Set-Cookie with a past expiry deletes (CookieStorage::AddCookie, "the intent was simply to delete
   // the old cookie"), in the agent container only. Services.cookies.remove stays the token-guarded clear helper's
@@ -11541,8 +12047,14 @@ const agentNetworkObserver = {
   observe(subject, topic) {
     try {
       const channel = subject.QueryInterface(Ci.nsIHttpChannel);
-      const entry = webTabs.get(tabIdOfBrowser(channel.loadInfo?.browsingContext?.top?.embedderElement));
-      if (entry?.agent !== true) {
+      const found = webTabs.get(tabIdOfBrowser(channel.loadInfo?.browsingContext?.top?.embedderElement));
+      const entry = found?.agent === true ? found : null;
+      // agent-browser-06: a request to PowerBrowser's own services ends here, for any load in an agent container
+      // (workers included) as well as any load of an agent overlay; logged once without the URL.
+      if ((entry || agentChannelInContainer(channel)) && agentServiceWall(channel, topic, entry)) {
+        return;
+      }
+      if (!entry) {
         return;
       }
       // D-37: a document load the download wall cancelled (SANDBOXED_DOWNLOADS, NS_ERROR_ABORT) was a download.
@@ -11621,7 +12133,7 @@ function agentAnswerDialog(entry, accept, text) {
 // Native rows (P66-11, 15): each takes (entry, params, tabId) and answers { where: "done", result } or
 // { where: "failed", code }. The other 25 methods are the PowerBrowserAgent child's run table.
 const AGENT_NATIVE_ROWS = {
-  "browser.goto": (entry, params, tabId) => agentNavigate(entry, tabId, PowerBrowserAPI.webTabNavigate(tabId, agentUrl(params.url))),
+  "browser.goto": (entry, params, tabId) => (agentUrlRefused(agentUrl(params.url)) ? agentFailed("browser_navigation_failed") : agentNavigate(entry, tabId, PowerBrowserAPI.webTabNavigate(tabId, agentUrl(params.url)))),
   "browser.back": (entry, params, tabId) => agentNavigate(entry, tabId, PowerBrowserAPI.webTabBack(tabId)),
   "browser.forward": (entry, params, tabId) => agentNavigate(entry, tabId, PowerBrowserAPI.webTabForward(tabId)),
   "browser.reload": (entry, params, tabId) => agentNavigate(entry, tabId, PowerBrowserAPI.webTabReload(tabId)),
@@ -11664,7 +12176,8 @@ function agentPush(tabId, entry) {
   const control = agentControlOf(entry);
   const theiaBrowser = entry.owner?.browsingContext?.top?.embedderElement;
   if (theiaBrowser) {
-    sendWebTabPush(theiaBrowser, { kind: "agentControlChanged", tabId, active: control.active, stopped: control.stopped });
+    // agent-browser-04: the push carries chrome's agent status, so the mark follows chrome, not the widget's own flag.
+    sendWebTabPush(theiaBrowser, { kind: "agentControlChanged", tabId, active: control.active, stopped: control.stopped, agent: entry.agent === true });
   }
 }
 
@@ -11743,6 +12256,50 @@ async function agentSettleOpens(entry, control, opensRefused) {
   }
 }
 
+// 59-WR-03: true when a done result, as the JSON orcad receives, is within AGENT_RESULT_MAX_BYTES in UTF-8 bytes with
+// the same 64-byte envelope margin agentEncodeImage keeps, plus `reserve` bytes for what is added after chrome (the
+// snapshot's page identity, agentSnapshotReserve). A result that cannot be serialised does not fit.
+function agentResultFits(result, reserve = 0) {
+  let json;
+  try {
+    json = JSON.stringify(result ?? null) ?? "null";
+  } catch {
+    return false;
+  }
+  let bytes = 64 + reserve;
+  for (let i = 0; i < json.length && bytes <= AGENT_RESULT_MAX_BYTES; i += 1) {
+    const code = json.charCodeAt(i);
+    if (code < 0x80) {
+      bytes += 1;
+    } else if (code < 0x800) {
+      bytes += 2;
+    } else if (code >= 0xd800 && code <= 0xdbff && i + 1 < json.length) {
+      bytes += 4;
+      i += 1;
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes <= AGENT_RESULT_MAX_BYTES;
+}
+
+// 59-WR-03: the orca-browser dispatcher adds browserPageId, url and title to a browser.snapshot result after chrome
+// measured it (A5). Room is kept for the most it can add: Orca's bounds (browser-client-page-metadata-protocol.ts: url
+// 8192, title 4096 UTF-16 units; browser-client-host-protocol.ts:14: a page id of up to 256 UTF-16 units, so 1536 JSON
+// bytes at 6 bytes an escaped unit; round 3) at the worst JSON
+// cost per unit (3 bytes for a URL, 6 for a title's escaped control character), or the tab's own url and title when
+// those are longer, since the dispatcher sends what the tab shows, not a bounded copy.
+const AGENT_SNAPSHOT_URL_UNITS = 8192;
+const AGENT_SNAPSHOT_TITLE_UNITS = 4096;
+const AGENT_SNAPSHOT_ID_BYTES = 256 * 6;
+
+function agentSnapshotReserve(entry) {
+  const url = webTabPushedSpec(entry.browser.currentURI?.spec ?? "");
+  const title = String(entry.browser.contentTitle ?? "");
+  const keys = 64; // ,"browserPageId":"","url":"","title":"" and margin
+  return keys + AGENT_SNAPSHOT_ID_BYTES + Math.max(AGENT_SNAPSHOT_URL_UNITS * 3, url.length * 3) + Math.max(AGENT_SNAPSHOT_TITLE_UNITS * 6, title.length * 6);
+}
+
 async function handleWebTabAgent(data, actorRef) {
   const kind = "webTabAgent";
   if (!webTabIdIsValid(data.tabId)) {
@@ -11779,6 +12336,11 @@ async function handleWebTabAgent(data, actorRef) {
     PowerBrowserAPI.log("error", `[orca-agent] ${data.method} failed (${err && err.name ? err.name : "error"})`);
     outcome = agentFailed("browser_error");
   }
+  // 59-WR-03: the result budget holds for every row (eval, exec get html, console, network, cookies), not only the
+  // images, PDF and snapshot that check it themselves.
+  if (outcome.where === "done" && !agentResultFits(outcome.result, data.method === "browser.snapshot" ? agentSnapshotReserve(entry) : 0)) {
+    outcome = agentFailed("browser_error");
+  }
   // D-35: the command opened a window or tab that chrome refused, so it did not do what it was asked.
   if ((control.openRefusals ?? 0) !== opensRefused && outcome.where === "done") {
     outcome = agentFailed("browser_command_unavailable");
@@ -11793,19 +12355,26 @@ async function handleWebTabAgent(data, actorRef) {
   return outcome.where === "done" ? { ok: true, kind, where: "done", result: outcome.result } : { ok: true, kind, where: "failed", code: outcome.code };
 }
 
-// Stop (P66-22): sent only from the chrome bar's Stop button. Lasts for the tab's lifetime and aborts an in-flight call.
-function handleWebTabAgentStop(data, actorRef) {
-  const kind = "webTabAgentStop";
-  if (!webTabIdIsValid(data.tabId)) {
-    return { ok: false, reason: "validation", message: "handleWebTabAgentStop: refusing malformed tabId" };
-  }
-  const entry = webTabs.get(data.tabId);
-  if (!entry || entry.owner !== actorRef) {
-    return { ok: true, kind, where: "unknown-tab" };
-  }
-  if (entry.agent !== true) {
-    return { ok: true, kind, where: "not-agent-tab" };
-  }
+// agent-browser-04: Stop is the browser's, not one tab's or one window's. A Stop pressed on any agent tab stops every
+// agent tab in every shell window, and while it lasts chrome refuses every agent call (agentWallVerdict) and every new
+// agent tab (webTabOpen answers agent-stopped), so an agent cannot carry on through a new background tab. Round 3:
+// one scope for the process, because orcad lets the caller of browser.tabCreate name the browser host a page goes
+// to (orca/src/shared/rpc-contract/browser-tab-create-params.ts:18, placement kind client with browserHostClientId;
+// orca/src/main/runtime/browser/browser-tab-creation.ts:48), so an agent can place its next page on another window's
+// host. The key is not a frontend actor, so a reload of the Theia document does not clear it; only Resume does.
+const agentStoppedScopes = new WeakSet();
+const AGENT_STOP_SCOPE = Object.freeze({});
+
+function agentStopScope() {
+  return AGENT_STOP_SCOPE;
+}
+
+function agentOwnerStopped(actorRef) {
+  const scope = agentStopScope(actorRef);
+  return !!scope && agentStoppedScopes.has(scope);
+}
+
+function agentStopEntry(tabId, entry) {
   const control = agentControlOf(entry);
   const wasStopped = control.stopped;
   control.stopped = true;
@@ -11819,9 +12388,49 @@ function handleWebTabAgentStop(data, actorRef) {
   }
   // One push per change: agentSetActive pushes when the mark was lit, else the stopped flag alone changed.
   if (control.active) {
-    agentSetActive(data.tabId, entry, false);
+    agentSetActive(tabId, entry, false);
   } else if (!wasStopped) {
-    agentPush(data.tabId, entry);
+    agentPush(tabId, entry);
+  }
+}
+
+// Stop (P66-22): sent only from the chrome bar's agent mark. `resume: true` is the mark's Resume button on a stopped
+// agent tab. Both act on every agent tab of the sender's shell window (agent-browser-04).
+function handleWebTabAgentStop(data, actorRef) {
+  const kind = "webTabAgentStop";
+  if (!webTabIdIsValid(data.tabId)) {
+    return { ok: false, reason: "validation", message: "handleWebTabAgentStop: refusing malformed tabId" };
+  }
+  if (data.resume !== undefined && data.resume !== true) {
+    return { ok: false, reason: "validation", message: "handleWebTabAgentStop: refusing a resume flag that is not true" };
+  }
+  const entry = webTabs.get(data.tabId);
+  if (!entry || entry.owner !== actorRef) {
+    return { ok: true, kind, where: "unknown-tab" };
+  }
+  if (entry.agent !== true) {
+    return { ok: true, kind, where: "not-agent-tab" };
+  }
+  const scope = agentStopScope(actorRef);
+  const owned = [...webTabs].filter(([, other]) => other.agent === true && agentStopScope(other.owner) === scope);
+  if (data.resume === true) {
+    // Round 3: Resume only from a stopped agent tab, the one place its button is drawn.
+    if (!entry.agentControl?.stopped) {
+      return { ok: true, kind, where: "not-stopped" };
+    }
+    agentStoppedScopes.delete(scope);
+    for (const [tabId, other] of owned) {
+      if (other.agentControl?.stopped) {
+        other.agentControl.stopped = false;
+        agentPush(tabId, other);
+      }
+    }
+    return { ok: true, kind, where: "resumed" };
+  }
+  agentStoppedScopes.add(scope);
+  // The tab the user pressed Stop on goes last, so its push is the last one the frontend sees.
+  for (const [tabId, other] of [...owned.filter(([id]) => id !== data.tabId), [data.tabId, entry]]) {
+    agentStopEntry(tabId, other);
   }
   return { ok: true, kind, where: "stopped" };
 }
@@ -11877,6 +12486,10 @@ async function handleOrcaShellMessage(data, actorRef) {
             return { ok: false, reason: "validation", message: "handleShellMessage: unknown Orca browser host state" };
           }
           OrcaService.browserHostAttached();
+        } else if (data.clientReason === null) {
+          // 67-WR-04: { clientReason: null } is the clearing form a successful Reconnect sends, so a stale pairing
+          // failure leaves diagnostics. Only the literal null; clientRecovered may be absent until lane G2 merges.
+          OrcaService.clientRecovered?.();
         } else if (data.clientReason !== undefined) {
           if (!OrcaEnv.isClientReason(data.clientReason)) {
             return { ok: false, reason: "validation", message: "handleShellMessage: unknown Orca client reason" };
@@ -11931,6 +12544,9 @@ export const PowerBrowserOrcaHosting = Object.freeze({
       return path;
     }
   },
+  // orcad-hosting-03: the socket-table read lives on PowerBrowserProcesses, the namespace OrcaService's process reads
+  // use; this is the name lane G2 calls.
+  readLoopbackSocketTable: () => PowerBrowserProcesses.readLoopbackSocketTable(),
 });
 
 // Phase 67 (INJ-01, P67-22..P67-26): the PowerBrowserOrcaLogo pair, registered from registerGroupActor (the one

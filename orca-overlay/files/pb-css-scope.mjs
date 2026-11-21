@@ -8,7 +8,8 @@
 //   a qualified root (:root.dark, html[x],
 //     body[data-modal-overlay-open])      -> <that root> S     (Orca's own html/body state stays an
 //                                                              ancestor condition)
-//   a leading .dark / .light compound     -> .dark S ...       (the theme class Orca sets on <html>)
+//   a leading .dark / .light compound     -> .dark S ...       (the theme class Orca sets on <html>;
+//                                                              not .dark\:x, a variant utility, which is X)
 //   any other selector X                  -> S X, X:where(P)   (descendants, plus the portal root
 //                                                              itself; a pseudo-element stays last)
 //   custom properties of root and theme rules stay on their original selector: Orca's appearance
@@ -29,7 +30,9 @@ export const SCOPE = `:where(${PANE_ROOT}, ${PORTAL_ROOTS})`
 export const KEYFRAME_PREFIX = 'pb-orca-'
 
 const ROOT_RE = /^(html|:root|body|:host)(?![\w-])/
-const THEME_RE = /^\.(dark|light)(?![\w-])/
+// The theme class only as a whole class token: an escaped character continues the class name, so a Tailwind
+// variant utility such as .dark\:bg-input\/30 (Orca's @custom-variant dark) is an ordinary selector, not the root.
+const THEME_RE = /^\.(dark|light)(?![\w\\-])/
 // Custom-property namespaces the Theia document owns; Orca never writes them on <html>.
 export const HOST_OWNED_PROPERTY = /^--(vscode|theia)-/
 

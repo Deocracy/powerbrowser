@@ -43,10 +43,20 @@ export type BrowserHostPageMetadata = {
   canGoForward: boolean
 }
 
+/** A page's own placement generations, as its last committed command event gave them (66-CR-02). */
+export type BrowserHostPageGenerations = { browserHostGeneration: number; pageHostGeneration: number }
+
+/** T-66-04: the link's placement capability for this attach (pb-browser-host-link.ts). */
+export type BrowserHostPlacement = { attached: (browserHostClientId: string) => void; detached: () => void }
+
 export type BrowserHostSession = {
   browserHostClientId: string
   commandResult: (event: BrowserClientHostCommandEvent, outcome: BrowserHostOutcome) => Promise<unknown>
-  pageMetadata: (browserPageId: string, metadata: BrowserHostPageMetadata) => Promise<unknown>
+  pageMetadata: (
+    browserPageId: string,
+    metadata: BrowserHostPageMetadata,
+    page?: BrowserHostPageGenerations
+  ) => Promise<unknown>
   userClosedPage: (worktreeSelector: string, browserPageId: string) => Promise<unknown>
   detach: () => void
 }
@@ -58,6 +68,7 @@ export type AttachBrowserHostOptions = {
   inventory?: () => unknown[]
   onCommand: (event: BrowserClientHostCommandEvent) => void
   onDetached?: (reason: string) => void
+  placement?: BrowserHostPlacement
 }
 
 type Frame = {
@@ -81,7 +92,8 @@ function paneRows(): PaneRows | undefined {
 function followRow(event: BrowserClientHostCommandEvent, outcome: BrowserHostOutcome): void {
   if (outcome.status !== 'completed') return
   try {
-    if (event.command.type === 'createPage' && event.command.workspaceId) {
+    // A restorePage completes with a new tab after orcad's close-then-restore (66-CR-03 review), so its row returns too.
+    if ((event.command.type === 'createPage' || event.command.type === 'restorePage') && event.command.workspaceId) {
       paneRows()?.addBrowserPage?.(event.command.workspaceId, event.browserPageId)
     } else if (event.command.type === 'closePage') {
       paneRows()?.removeBrowserPage?.(event.browserPageId)
@@ -93,6 +105,9 @@ function followRow(event: BrowserClientHostCommandEvent, outcome: BrowserHostOut
 
 const ATTACH_TIMEOUT_MS = 15_000
 const CALL_TIMEOUT_MS = 20_000
+// BrowserClientPageMetadataParams' url and title caps (browser-client-page-metadata-protocol.ts).
+const PAGE_METADATA_URL_MAX = 8192
+const PAGE_METADATA_TITLE_MAX = 4096
 const CLIENT_CAPABILITIES = [
   BROWSER_CLIENT_HOST_RUNTIME_CAPABILITY,
   BROWSER_CLIENT_PAGE_METADATA_RUNTIME_CAPABILITY
@@ -104,7 +119,7 @@ const CLIENT_CAPABILITIES = [
  * calls onDetached once with a code (and rejects the promise with that code if it is still pending).
  */
 export function attachBrowserHost(options: AttachBrowserHostOptions): Promise<BrowserHostSession> {
-  const { connection, credential, browserHostClientId, onCommand, onDetached } = options
+  const { connection, credential, browserHostClientId, onCommand, onDetached, placement } = options
   if (typeof browserHostClientId !== 'string' || !browserHostClientId) {
     return Promise.reject(new Error('invalid_host_id'))
   }
@@ -134,6 +149,7 @@ export function attachBrowserHost(options: AttachBrowserHostOptions): Promise<Br
   let state: 'hello' | 'auth' | 'open' = 'hello'
   let attachId: string | null = null
   let ended = false
+  let placed = false
   let seq = 0
 
   return new Promise<BrowserHostSession>((resolve, reject) => {
@@ -146,6 +162,14 @@ export function attachBrowserHost(options: AttachBrowserHostOptions): Promise<Br
       clearTimeout(timer)
       for (const done of pending.values()) done({ ok: false, error: { code: reason } })
       pending.clear()
+      if (placed) {
+        placed = false
+        try {
+          placement?.detached()
+        } catch {
+          // the link is gone with the pane bundle
+        }
+      }
       try {
         ws.close()
       } catch {
@@ -198,22 +222,29 @@ export function attachBrowserHost(options: AttachBrowserHostOptions): Promise<Br
           result: result === undefined ? rest : { ...rest, value: result }
         })
       },
-      pageMetadata: (browserPageId, metadata) => {
-        const pageHostGeneration = pageGenerations.get(browserPageId)
-        if (!lease || pageHostGeneration === undefined) return Promise.reject(new Error('unknown_page'))
+      // 66-CR-02: a page bound before a re-attach gets no new command event when orcad keeps it, so the caller passes
+      // the page's own generations (its last committed command event's); orcad checks both against the page's placement.
+      pageMetadata: (browserPageId, metadata, page) => {
+        const pageHostGeneration = page?.pageHostGeneration ?? pageGenerations.get(browserPageId)
+        const browserHostGeneration = page?.browserHostGeneration ?? lease?.browserHostGeneration
+        if (!lease || pageHostGeneration === undefined || browserHostGeneration === undefined) {
+          return Promise.reject(new Error('unknown_page'))
+        }
         const revision = (revisions.get(browserPageId) ?? 0) + 1
         revisions.set(browserPageId, revision)
+        // 66-CR-02: Orca's schema requires every field, the three flags as booleans, url and title within their caps;
+        // a missing flag would drop out of the JSON and the whole update would be refused.
         return call('browser.clientHost.pageMetadata', {
           browserHostClientId,
-          browserHostGeneration: lease.browserHostGeneration,
+          browserHostGeneration,
           browserPageId,
           pageHostGeneration,
           revision,
-          url: metadata.url,
-          title: metadata.title,
-          loading: metadata.loading,
-          canGoBack: metadata.canGoBack,
-          canGoForward: metadata.canGoForward
+          url: String(metadata.url ?? '').slice(0, PAGE_METADATA_URL_MAX),
+          title: String(metadata.title ?? '').slice(0, PAGE_METADATA_TITLE_MAX),
+          loading: metadata.loading === true,
+          canGoBack: metadata.canGoBack === true,
+          canGoForward: metadata.canGoForward === true
         })
       },
       // A7: the user's close, on this connection; orcad then sends closePage, which the caller answers completed.
@@ -236,6 +267,14 @@ export function attachBrowserHost(options: AttachBrowserHostOptions): Promise<Br
       const event = parsed.data
       if (event.type === 'ready') {
         lease = { authorityEpoch: event.authorityEpoch, browserHostGeneration: event.browserHostGeneration }
+        // T-66-04: orcad has made this id's lease; place new pages on it before the session is published, so no
+        // placement failure can leave a published session behind.
+        try {
+          placement?.attached(browserHostClientId)
+          placed = placement !== undefined
+        } catch {
+          return end('placement_refused')
+        }
         if (!settled) {
           settled = true
           clearTimeout(timer)
@@ -271,6 +310,9 @@ export function attachBrowserHost(options: AttachBrowserHostOptions): Promise<Br
           pageCommandProtocolVersion: 1,
           pageInventoryProtocolVersion: 1,
           pageInventory: options.inventory?.() ?? [],
+          // 66-CR-02/03: a socket drop then keeps the lease (same generation) through orcad's reconnect grace, as
+          // Orca's desktop host negotiates it, so bound pages keep their placement and their metadata path.
+          leaseReconnectProtocolVersion: 1,
           pageReconciliationProtocolVersion: 1
         }
       })

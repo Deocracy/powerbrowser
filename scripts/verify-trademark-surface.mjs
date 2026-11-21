@@ -69,7 +69,7 @@
 // comparison with the compared values named; nothing asserts on the
 // absence of a log line.
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -86,6 +86,7 @@ import { fileURLToPath } from 'node:url';
 
 import { resolveConfig, MOZILLA_NON_ASSOCIATION_TAIL } from './generate.mjs';
 import { findMatches } from './scan-brand-residue.mjs';
+import { SKIP_EXIT, verdictExit } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'verify-trademark-surface';
@@ -161,7 +162,7 @@ const DISPLAY_LINE_EXCLUSIONS = [
 ];
 
 // Generated theia fragments: the generator's documented fragment names.
-// Checked when present on disk, skipped with a note when absent (fresh
+// Checked when present on disk; absent, the run exits 77 with a SKIP line naming them (fresh
 // clones carry no generated/ tree at all).
 const THEIA_FRAGMENTS = ['generated/theia-branding.json', 'generated/theia-frontend-config.json'];
 
@@ -356,14 +357,16 @@ export function checkTree({ root, files, manifestRel, reviewRel, brandDirRel }) 
   return { failures, scanned: files.length, surfaces: surfaceCount, skipped };
 }
 
-function listTrackedFiles() {
-  return execFileSync('git', ['ls-files', '-z'], { cwd: REPO_ROOT, encoding: 'utf8' }).split('\0').filter(Boolean);
+function listTrackedFiles(root) {
+  return execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean);
 }
 
-function main() {
+// An emitted surface not scanned because the tree was never generated is a skip: the run exits 77 with one SKIP
+// line printed last (SKIP-PROTOCOL.md rule 2). Exit 0 means every surface was scanned.
+function main(root = REPO_ROOT) {
   const { failures, scanned, surfaces, skipped } = checkTree({
-    root: REPO_ROOT,
-    files: listTrackedFiles(),
+    root,
+    files: listTrackedFiles(root),
     manifestRel: MANIFEST_REL,
     reviewRel: REVIEW_REL,
     brandDirRel: BRAND_DIR_REL,
@@ -373,8 +376,9 @@ function main() {
     for (const f of failures) console.error(`  - ${f}`);
     process.exit(1);
   }
-  const skipNote = skipped.length > 0 ? `, ${skipped.length} emitted surface(s) skipped (never generated: ${skipped.join(', ')})` : '';
-  console.log(`${NAME}: PASS -- ${scanned} tracked file(s) carry no trademark asset, ${surfaces} display surface(s) clean, legal keys present, brand/ reviewed list agrees${skipNote}`);
+  const skips = skipped.length > 0 ? [`${skipped.length} emitted surface(s) not scanned (never generated: ${skipped.join(', ')}); the ${scanned} tracked file(s) scanned are clean. Next step: run node scripts/generate.mjs`] : [];
+  if (verdictExit(NAME, failures, skips) === SKIP_EXIT) process.exit(SKIP_EXIT);
+  console.log(`${NAME}: PASS -- ${scanned} tracked file(s) carry no trademark asset, ${surfaces} display surface(s) clean, legal keys present, brand/ reviewed list agrees`);
 }
 
 // ---------------------------------------------------------------------------
@@ -614,17 +618,42 @@ function selfTest() {
     }
   }
 
+  // SKIP control (SKIP-PROTOCOL.md rule 2): the main mode, run as a child with its output captured, over the green
+  // control fixture as a git repository with no generated/ tree. Every tracked file is scanned green and the emitted
+  // twins are not, so it must exit 77 with the SKIP line last and no PASS line.
+  {
+    const { dir, files } = fixtureRoot({});
+    dirs.push(dir);
+    const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+    execFileSync('git', ['init', '-q'], { cwd: dir, env, stdio: 'ignore' });
+    execFileSync('git', ['add', '--', ...files], { cwd: dir, env, stdio: 'ignore' });
+    const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url), `--root=${dir}`], { encoding: 'utf8' });
+    const lines = (r.stdout ?? '').split('\n').filter((l) => l.trim() !== '');
+    const last = lines[lines.length - 1] ?? '';
+    if (r.status !== SKIP_EXIT || !last.startsWith(`${NAME}: SKIP -- `) || !last.includes('never generated')
+      || lines.some((l) => l.includes(`${NAME}: PASS`)) || /: SKIP/.test(r.stderr ?? '')) {
+      complain('control: a never-generated fixture', `did not exit 77 with the SKIP line last and no PASS line (status ${r.status}, last line ${JSON.stringify(last)}, stderr ${JSON.stringify((r.stderr ?? '').slice(0, 300))})`);
+    } else {
+      console.log('  ok  control: a never-generated fixture -> exit 77, the SKIP line last, no PASS line');
+    }
+  }
+
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
 
-  if (failed > 0) return 1;
-  console.log(`${NAME}: --self-test PASS -- 5 planted faults all behaved as pinned`);
+  if (failed > 0) {
+    console.error(`${NAME}: --self-test FAIL -- ${failed} case(s) did not behave as required`);
+    return 1;
+  }
+  console.log(`${NAME}: --self-test PASS -- 5 planted faults all behaved as pinned, and a never-generated tree exits 77`);
   return 0;
 }
 
 const args = process.argv.slice(2);
 const SELF_TEST = args.includes('--self-test');
+// --root=<dir> runs the main mode over another git tree (the self-test's SKIP control uses it).
+const ROOT_ARG = args.find((a) => a.startsWith('--root='));
 for (const a of args) {
-  if (a !== '--self-test') {
+  if (a !== '--self-test' && !a.startsWith('--root=')) {
     console.error(`${NAME}: FAIL -- unknown argument '${a}'`);
     process.exit(2);
   }
@@ -633,5 +662,5 @@ for (const a of args) {
 if (SELF_TEST) {
   process.exit(selfTest());
 } else {
-  main();
+  main(ROOT_ARG ? resolve(ROOT_ARG.slice('--root='.length)) : REPO_ROOT);
 }

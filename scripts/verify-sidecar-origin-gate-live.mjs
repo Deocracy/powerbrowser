@@ -20,24 +20,23 @@
 // the status the sidecar itself answered for each probe-tagged request. Every leg asserts a recorded row is
 // present, never an absence. Uploads target a fresh scratch folder only; GETs target /powerbrowser/health.
 //
-// Runs under flock <git common dir>/pb-live.lock (re-execs itself under it). PB_FIREFOX_BIN and PB_BACKEND_MAIN
+// Takes the live lock itself (scripts/lib/live-lock.mjs; the rule is in that file's header). PB_FIREFOX_BIN and PB_BACKEND_MAIN
 // point a tree without an objdir at another checkout's binary and this tree's Theia build (firefox-bidi.mjs).
 
-import { spawnSync, execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { holdLiveLock } from './lib/live-lock.mjs';
 
 const LABEL = 'sidecar-origin-gate-live';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '..');
 
-if (process.env.PB_LIVE_LOCK_HELD !== '1') {
-    const common = execFileSync('git', ['-C', REPO, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim();
-    const r = spawnSync('flock', [join(common, 'pb-live.lock'), process.execPath, fileURLToPath(import.meta.url), ...process.argv.slice(2)],
-        { stdio: 'inherit', env: { ...process.env, PB_LIVE_LOCK_HELD: '1' } });
-    process.exit(r.status ?? 1);
+// harness-live-security-05: the shared rule (scripts/lib/live-lock.mjs), which never trusts PB_LIVE_LOCK_HELD=1 alone.
+{
+    const locked = await holdLiveLock({ name: LABEL, scriptUrl: import.meta.url, root: REPO });
+    if (locked !== null) process.exit(locked);
 }
 
 const scratch = mkdtempSync(join(tmpdir(), 'pb-origin-gate-'));

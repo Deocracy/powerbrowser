@@ -47,14 +47,18 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { emitTheiaBranding, emitTheiaFrontendConfig, resolveConfig } from './generate.mjs';
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const SELF = fileURLToPath(import.meta.url);
+const REPO_ROOT = resolve(dirname(SELF), '..');
 const NAME = 'verify-theia-branding';
 
 const args = process.argv.slice(2);
 const SELF_TEST = args.includes('--self-test');
+// --root=<dir> runs the main mode over another tree (the self-test's SKIP control uses it).
+const ROOT_ARG = args.find(a => a.startsWith('--root='));
 for (const a of args) {
-    if (a !== '--self-test') {
+    if (a !== '--self-test' && !a.startsWith('--root=')) {
         console.error(`${NAME}: FAIL -- unknown argument '${a}'`);
         process.exit(2);
     }
@@ -167,14 +171,14 @@ function runPinChecks(root) {
     return { failures, skipped };
 }
 
-function runBuildChecks() {
+function runBuildChecks(root) {
     const failures = [];
     const skipped = [];
 
-    if (!existsSync(join(REPO_ROOT, TSC_REL))) {
+    if (!existsSync(join(root, TSC_REL))) {
         skipped.push(`the theia install is absent (${TSC_REL} not found) -- tsc proof unchecked; run the audited theia install, then re-run this check.`);
     } else {
-        const child = spawnSync(process.execPath, [TSC_REL, '-b', EXT_REL], { cwd: REPO_ROOT, encoding: 'utf8' });
+        const child = spawnSync(process.execPath, [TSC_REL, '-b', EXT_REL], { cwd: root, encoding: 'utf8' });
         if ((child.status ?? 1) !== 0) {
             const output = `${child.stdout ?? ''}${child.stderr ?? ''}`;
             failures.push(`${EXT_REL} does not compile cleanly:\n${output.split('\n').filter(l => l.trim() !== '').slice(0, 20).join('\n')}`);
@@ -184,17 +188,19 @@ function runBuildChecks() {
     return { failures, skipped };
 }
 
+// A step skipped for an absent input makes the run exit 77 with one SKIP line, printed last (SKIP-PROTOCOL.md).
 function main() {
-    const { failures: pinFailures, skipped: pinSkipped } = runPinChecks(REPO_ROOT);
-    const { failures: buildFailures, skipped: buildSkipped } = runBuildChecks();
-    for (const s of [...pinSkipped, ...buildSkipped]) console.log(`${NAME}: SKIP -- ${s}`);
+    const root = ROOT_ARG ? resolve(ROOT_ARG.slice('--root='.length)) : REPO_ROOT;
+    const { failures: pinFailures, skipped: pinSkipped } = runPinChecks(root);
+    const { failures: buildFailures, skipped: buildSkipped } = runBuildChecks(root);
     const failures = [...pinFailures, ...buildFailures];
     if (failures.length > 0) {
         console.error(`${NAME}: FAIL -- ${failures.length} problem(s)`);
         for (const f of failures) console.error(`  - ${f}`);
-        process.exit(1);
     }
-    console.log(`${NAME}: PASS -- branding fragments, block and compile all green`);
+    const code = verdictExit(NAME, failures, [...pinSkipped, ...buildSkipped]);
+    if (code === 0) console.log(`${NAME}: PASS -- branding fragments, block and compile all green`);
+    return code;
 }
 
 function copyInto(root, rel) {
@@ -209,6 +215,11 @@ function selfTest() {
         console.error(`${NAME}: --self-test FAIL -- '${name}' ${why}`);
         failed += 1;
     };
+
+    // Only the drifted-fragment plant needs a generated fragment; the fixtures copy the fragments this tree has. A plant
+    // whose input is absent does not run, every other case still runs and is judged, and the verdict comes at the end:
+    // FAIL wins, then a SKIP naming the plant (SKIP-PROTOCOL.md rule 4).
+    const selfSkips = [];
 
     // Green control first: the unmutated tree proves nothing if red.
     const control = runPinChecks(REPO_ROOT);
@@ -228,11 +239,14 @@ function selfTest() {
         { name: 'removed branding block', rel: APP_PKG_REL, drift: text => text.replace(/,\s*"powerbrowserBranding": \{[\s\S]*?\n {8}\}/, ''), expect: BRANDING_BLOCK_KEY },
     ];
     for (const plant of plants) {
+        if (!existsSync(join(REPO_ROOT, plant.rel))) {
+            selfSkips.push(`the '${plant.name}' plant did not run: ${plant.rel} is absent. Next step: run ${RERUN_GENERATE}, then re-run this self-test`);
+            continue;
+        }
         const dir = mkdtempSync(join(tmpdir(), 'theia-branding-selftest-'));
         try {
             copyInto(dir, MANIFEST_REL);
-            copyInto(dir, FRONTEND_FRAGMENT_REL);
-            copyInto(dir, BRANDING_FRAGMENT_REL);
+            for (const rel of [FRONTEND_FRAGMENT_REL, BRANDING_FRAGMENT_REL]) if (existsSync(join(REPO_ROOT, rel))) copyInto(dir, rel);
             copyInto(dir, APP_PKG_REL);
             // The mark read and the tsc step both reach back to the real
             // tree by construction (the fragment embeds brand/mark.svg; tsc
@@ -256,13 +270,42 @@ function selfTest() {
         }
     }
 
-    if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- 3 planted faults all behaved as pinned`);
+    // SKIP control (SKIP-PROTOCOL.md rule 2): the main mode, run as a child with its output captured, over a
+    // fixture with the manifest and the application package and neither fragment nor a theia install. The block
+    // check runs green, the fragment and tsc steps do not run, so it exits 77 with the SKIP line last and no PASS.
+    {
+        const dir = mkdtempSync(join(tmpdir(), 'theia-branding-selftest-'));
+        try {
+            copyInto(dir, MANIFEST_REL);
+            copyInto(dir, APP_PKG_REL);
+            const r = spawnSync(process.execPath, [SELF, `--root=${dir}`], { encoding: 'utf8' });
+            const lines = (r.stdout ?? '').split('\n').filter(l => l.trim() !== '');
+            const last = lines[lines.length - 1] ?? '';
+            if (r.status !== SKIP_EXIT || !last.startsWith(`${NAME}: SKIP -- `) || !last.includes(BRANDING_FRAGMENT_REL) || !last.includes(TSC_REL)
+                || lines.some(l => l.includes(`${NAME}: PASS`)) || /: SKIP/.test(r.stderr ?? '')) {
+                complain('control: no fragments, no theia install', `did not exit 77 with one SKIP line last naming the fragment and tsc and no PASS line (status ${r.status}, last line ${JSON.stringify(last)}, stderr ${JSON.stringify((r.stderr ?? '').slice(0, 300))})`);
+            } else {
+                console.log('  ok  control: no fragments, no theia install -> exit 77, one SKIP line last, no PASS line');
+            }
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    }
+
+    if (failed > 0) {
+        console.error(`${NAME}: --self-test FAIL -- ${failed} case(s) did not behave as required`);
+        return 1;
+    }
+    if (selfSkips.length > 0) {
+        console.log(skipLine(`${NAME} --self-test`, selfSkips.join('; ')));
+        return SKIP_EXIT;
+    }
+    console.log(`${NAME}: --self-test PASS -- 3 planted faults all behaved as pinned, and a tree without the fragments or tsc exits 77`);
     return 0;
 }
 
 if (SELF_TEST) {
     process.exit(selfTest());
-} else if (args.length === 0) {
-    main();
+} else {
+    process.exit(main());
 }

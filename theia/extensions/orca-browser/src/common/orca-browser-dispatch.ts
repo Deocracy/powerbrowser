@@ -78,7 +78,8 @@ const failed = (errorCode: string): Outcome => ({ status: 'failed', errorCode })
 /** The client outcome mapping (A8): every reply chrome can give, and anything else as browser_error. */
 export function outcomeOf(reply: AgentReply | undefined): Outcome {
     if (!reply || reply.ok !== true) {
-        return failed('browser_error'); // a validation refusal, a timeout or a malformed reply
+        // 66-CR-04: the host's own deadline for chrome's reply passed; anything else is a validation refusal or a malformed reply
+        return failed(reply?.reason === 'timeout' ? 'browser_timeout' : 'browser_error');
     }
     switch (reply.where) {
         case 'done': return completed(reply.result);
@@ -103,13 +104,43 @@ export interface CommandEvent {
     };
 }
 
+/**
+ * 66-WR-06: thrown by a dep to answer the command with this error code, as openAgentTab does when chrome made no
+ * overlay (browser_error) or the user has agents stopped (browser_owner_unavailable).
+ */
+export class DispatchFailure extends Error {
+    constructor(readonly errorCode: string) {
+        super(errorCode);
+    }
+}
+
 export interface DispatchDeps {
     table: PageTable;
-    /** Opens one new background agent web tab for a createPage event; resolves to its tab id. */
+    /**
+     * Opens one new background agent web tab for a createPage event; resolves to its tab id once chrome has made its
+     * overlay, else throws a DispatchFailure (66-WR-06).
+     */
     openAgentTab(event: CommandEvent): Promise<string>;
+    /**
+     * 66-WR-05: called once the table has bound the createPage's id to the new tab, never for a tab that lost the
+     * bind, so the host writes a page's records only for the tab that holds it. Returns false when the tab closed before
+     * the bind; createPage then fails and the pair is dropped. Must not throw.
+     */
+    recordBound?(tabId: string): boolean;
+    /**
+     * 66-WR-03 review: true for a page the user closed in this frontend (its close may still be pending), so a createPage
+     * for it (orcad's recovery after a restart, racing the replayed close) opens nothing.
+     */
+    closedByUser?(pageId: string): boolean;
     closeTab(tabId: string): void;
-    /** The web tab's own navigate (webTabNavigate); its reply decides the outcome. */
+    /**
+     * The bound tab's navigate. agent-browser-04 / 66-CR-01: the host sends it as the agent's browser.goto, so chrome's
+     * agent wall (agent tab, agent container, not stopped) applies and the mark lights; the reply is chrome's
+     * webTabAgent reply. A reply that is only { ok: true } counts as done.
+     */
     navigate(tabId: string, url: string): Promise<unknown>;
+    /** agent-browser-04: true while the user has agents stopped, so createPage opens nothing (chrome refuses it too). */
+    agentsStopped?(): boolean;
     agentCall(tabId: string, method: string, params: Record<string, unknown>): Promise<AgentReply>;
     pageInfo(tabId: string): { url: string; title: string };
 }
@@ -120,16 +151,43 @@ export async function dispatchCommand(event: CommandEvent, deps: DispatchDeps): 
     const command = event.command;
     const pageId = event.browserPageId;
     try {
+        /** Opens one new background agent tab for the page and binds it (createPage, and restorePage of an unbound id). */
+        const openBound = async (): Promise<Outcome> => {
+            if (deps.agentsStopped?.()) {
+                return failed('browser_owner_unavailable'); // agent-browser-04: Stop refuses new pages until Resume
+            }
+            if (deps.closedByUser?.(pageId)) {
+                return failed('browser_tab_not_found'); // the user closed this page; its close is or was sent
+            }
+            const tabId = await deps.openAgentTab(event);
+            const bound = table.bind(pageId, tabId);
+            if (bound === 'bound') {
+                if (deps.recordBound && deps.recordBound(tabId) === false) {
+                    table.drop(pageId); // 66-WR-05 review: the tab closed before the bind; no page exists to report
+                    return failed('browser_error');
+                }
+                return completed();
+            }
+            if (bound === 'duplicate-page') {
+                deps.closeTab(tabId); // a concurrent createPage bound the id first; this new tab is unbound
+            }
+            return failed('browser_error');
+        };
         if (command.type === 'createPage') {
             if (table.tabOf(pageId) !== undefined) {
                 return failed('browser_error'); // a bound id never gets a second tab
             }
-            const tabId = await deps.openAgentTab(event);
-            const bound = table.bind(pageId, tabId);
-            if (bound === 'duplicate-page') {
-                deps.closeTab(tabId); // a concurrent createPage bound the id first; this new tab is unbound
+            return await openBound();
+        }
+        if (command.type === 'restorePage' && table.tabOf(pageId) === undefined) {
+            // 66-CR-03 review: after an orcad restart, Orca's reconciliation closes the page's old guest and restores the
+            // page (close then restore). The host opens a new agent tab for it, never an existing tab, and loads its url.
+            const restored = await openBound();
+            const restoredTab = table.tabOf(pageId);
+            if (restored.status === 'completed' && restoredTab !== undefined && command.url) {
+                await deps.navigate(restoredTab, command.url);
             }
-            return bound === 'bound' ? completed() : failed('browser_error');
+            return restored;
         }
         if (command.type === 'closePage') {
             const target = command.targetAuthority?.browserPageId ?? pageId;
@@ -146,8 +204,9 @@ export async function dispatchCommand(event: CommandEvent, deps: DispatchDeps): 
             return failed('browser_tab_not_found');
         }
         if (command.type === 'navigate') {
-            const reply = await deps.navigate(tabId, command.url ?? '') as AgentReply | undefined;
-            return reply?.ok === true ? completed() : failed('browser_error');
+            const reply = await deps.navigate(tabId, command.url || 'about:blank') as AgentReply | undefined;
+            const outcome = reply?.ok === true && reply.where === undefined ? completed() : outcomeOf(reply);
+            return outcome.status === 'completed' ? completed() : outcome;
         }
         if (command.type === 'reclaimPage' || command.type === 'restorePage') {
             return completed(); // the id is bound to a tab this host created; nothing is adopted
@@ -166,8 +225,8 @@ export async function dispatchCommand(event: CommandEvent, deps: DispatchDeps): 
             return outcome;
         }
         return failed('browser_command_unavailable');
-    } catch {
-        return failed('browser_error');
+    } catch (error) {
+        return failed(error instanceof DispatchFailure ? error.errorCode : 'browser_error');
     }
 }
 

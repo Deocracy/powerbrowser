@@ -27,8 +27,11 @@
 //  (l) saved logins (66-06, coordinator finding 3): a login saved in the scratch profile for the
 //      fixture origin is autofilled in a user web tab (the positive read, and chrome finds the
 //      LoginManager actor on the user tab's window global); in an agent tab the same form stays
-//      empty, the window global has no LoginManager actor, and an agent-typed submit adds no
-//      login. The saved password is generated in memory, compared by length only, never printed.
+//      empty, the window global has no LoginManager actor, and an agent-typed submit raises no
+//      passwordmgr-form-submission-detected notification, after a user tab's submit raised one (the
+//      capture detector; audit harness-live-security-08: a stored-login count could not go red, since Gecko
+//      stores a submitted login only from an accepted doorhanger). The saved password is generated in
+//      memory, compared by length only, never printed.
 //  (m) HTTP auth (66-06): an agent tab loads a loopback page answering 401 Basic; chrome must
 //      find the auth commonDialog the page opened (the detector), then the agent's
 //      browser.dialogAccept is refused with browser_command_unavailable and the prompt stays;
@@ -40,7 +43,10 @@
 //  (f) decoy (P66-29): verify-orca-hidden-electron's exported run proves both orcad-emitted
 //      detectors fire on stock orcad in this invocation; then, with the decoy at
 //      ~/.local/bin/orca-ide in this session's scratch HOME, tab create and goto through PB's
-//      orcad give the expected title and no decoy record file in orcad's data root.
+//      orcad give the expected title and no decoy record file in orcad's data root. Audit
+//      harness-live-security-01: before the launch, the environment liveEnv would pass must carry the
+//      decoy folder as HOME (for PowerBrowser and the CLI); at judgment, /proc/<orcad>/environ HOME must
+//      equal the decoy folder with the decoy still in it, else "detector blind".
 //  (g) renderer path (A3): in the Theia document, Orca's own window.api placement call
 //      answers the client host, and browser.tabCreate through the pane client's own
 //      connection arrives as createPage (bound in the page table), with no
@@ -95,21 +101,28 @@
 // Agent documents are read through the bridge's own browser.eval (ctx.inAgent): agent tabs are
 // not WebDriver BiDi contexts, because their message manager group has no BiDi frame actor.
 //
-// Tier: full, under flock /home/chris/coding/Power-Browser/.git/pb-live.lock. A named SKIP
-// (exit 0) without lane p66-03's AGENT_METHODS, lane p66-02's extension, a built PowerBrowser
-// or lane p66-01's built host bundle. --self-test is quick and hermetic: the verdicts over a
-// control observation set and one planted fault each.
+// Tier: full. The row takes the live lock itself (scripts/lib/live-lock.mjs) and runs headless only.
+// FAIL without AGENT_METHODS, the orca-browser or orca-panes extension, or an Orca build's pane or
+// host bundle; a named SKIP (exit 77) only without a built PowerBrowser, Theia app or orcad, or when
+// clause (f) skipped on a host with an installed Orca. A failed CLI read is "instrument failed", never
+// "not listed" or "not visible" (harness-live-security-06). --self-test is quick and hermetic: the
+// verdicts over a control observation set and one planted fault per fail message (derived from the
+// verdicts' source), the decoy-launch environment over the real liveEnv, and the lock wiring.
 //
 // Usage:
 //   node scripts/verify-orca-browser-agent-live.mjs
 //   node scripts/verify-orca-browser-agent-live.mjs --self-test
 
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { CLIP_MARKERS, INSIDE, OUTSIDE, PROTOCOL_ASK, PROTOCOL_PROBE, PROTOCOL_RUN, RED, SLOW_HEADERS_MS, prerequisites } from './lib/orca-browser-live.mjs';
+import { CLIP_MARKERS, INSIDE, OUTSIDE, PROTOCOL_ASK, PROTOCOL_PROBE, PROTOCOL_RUN, RED, SLOW_HEADERS_MS, browserCliEnv, makeDecoyHome, prerequisites, procHome } from './lib/orca-browser-live.mjs';
+import { inRealHome, liveEnv, realHomes } from './lib/firefox-bidi.mjs';
+import { holdLiveLock, lockWiringFails } from './lib/live-lock.mjs';
+import { verdictExit } from './lib/skip-verdict.mjs';
+import { uncoveredMessages } from './lib/verdict-coverage.mjs';
 
 const NAME = 'orca-browser-agent-live';
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), '..', '..');
@@ -182,6 +195,8 @@ export function verdictRefusals(o) {
 export function verdictContainer(o) {
     if (!o.ownRead) return ['detector blind: the agent tab did not read the cookie it set itself'];
     if (!o.userCookieSet) return ['detector blind: the user tab did not hold its own cookie'];
+    // harness-live-security-06: a failed cookie get is not "not visible".
+    if (o.userVisible === null) return ["instrument failed: the agent tab's second cookie get failed, so whether it sees the user cookie was not read"];
     return o.userVisible ? ['the user cookie is visible to the agent tab'] : [];
 }
 
@@ -200,7 +215,11 @@ export function verdictLogins(o) {
     if (o.agentFilled) f.push('the saved login was autofilled in the agent tab');
     if (o.agentActor) f.push("the agent tab's window global has a LoginManager actor");
     if (!o.agentSubmitted) f.push('detector blind: the agent submit did not leave the login page');
-    if (o.capturedAfter > 0) f.push(`the agent submit stored ${o.capturedAfter} login(s)`);
+    // harness-live-security-08: Gecko stores a submitted login only from the save doorhanger's accept, so a stored-login
+    // count could never go red. The capture attempt itself is observed: LoginManagerParent's form-submission topic,
+    // proven to fire for a user tab's submit first.
+    if (!(o.userSubmitSeen > 0)) f.push("detector blind: a user tab's login submit raised no passwordmgr-form-submission-detected notification");
+    else if (o.agentSubmitSeen > 0) f.push(`the agent submit reached the password manager's form capture (${o.agentSubmitSeen} submission notification(s))`);
     return f;
 }
 
@@ -225,8 +244,23 @@ export function verdictTyping(o) {
     return f;
 }
 
+/**
+ * harness-live-security-01: the environment the launcher passes must carry the decoy folder as HOME, for PowerBrowser
+ * (whose orcad inherits HOME) and for the Orca CLI. liveEnv used to treat a row's scratch HOME as the real home and
+ * replace it, so the decoy never reached orcad.
+ */
+export function decoyLaunchVerdict({ decoyHome, launchHome, cliHome, decoyInLaunchHome }) {
+    const f = [];
+    if (launchHome !== decoyHome) f.push(`the launch environment's HOME is ${launchHome}, not the decoy folder ${decoyHome}, so PowerBrowser's orcad would never see the decoy`);
+    if (cliHome !== decoyHome) f.push(`the Orca CLI environment's HOME is ${cliHome}, not the decoy folder ${decoyHome}`);
+    if (!decoyInLaunchHome) f.push("the launch environment's HOME holds no .local/bin/orca-ide decoy");
+    return f;
+}
+
 export function verdictDecoy(o) {
     if (!o.stock?.pass) return [`detector blind: the stock decoy run did not prove both detectors (${(o.stock?.fails ?? []).join('; ') || 'no result'})`];
+    // The positive read: PB's orcad really ran with the decoy folder as HOME, with the decoy still in it.
+    if (o.orcadHome !== o.decoyHome || !o.decoyInPlace) return [`detector blind: PB's orcad ran with HOME ${o.orcadHome ?? '(unread)'}, not the decoy folder ${o.decoyHome}${o.decoyInPlace ? '' : ' (the decoy is gone)'}, so no decoy was on its search path`];
     const f = [];
     if (!o.createOk) f.push(`tab create through PB's orcad failed: ${o.code}`);
     if (o.title !== o.expectedTitle) f.push(`goto through PB's orcad gave ${JSON.stringify(o.title)}, not ${JSON.stringify(o.expectedTitle)}${o.gotoCode ? ` (${o.gotoCode})` : ''}`);
@@ -245,16 +279,22 @@ export function verdictRenderer(o) {
     return f;
 }
 
+// harness-live-security-06: tab list reads are null when the CLI call failed, never [] ("not listed").
 export function verdictUserClose(o) {
+    if (!o.listedBefore) return ['detector blind: tab list did not list the page before the user close'];
     if (!o.closed) return ['the Lumino close found no agent widget'];
+    if (o.listedAfter === null) return ['instrument failed: no tab list read succeeded after the user close'];
     return o.listedAfter ? ['the page is still listed after a user close'] : [];
 }
 
 export function verdictReload(o) {
+    if (o.oldPages === null) return ['instrument failed: tab list before the reload failed, so no old page was judged'];
+    if (!o.oldPages.includes(o.mustList)) return [`detector blind: tab list before the reload did not list the (j) page (${o.oldPages.length} listed)`];
     const f = [];
     if (o.agentWidgetsAfter > 0) f.push(`an agent widget survived a reload (${o.agentWidgetsAfter})`);
     if (!o.reattached) f.push(`the host did not re-attach after the reload${o.diag ? ` (${o.diag})` : ''}`);
-    if (o.oldListed.length) f.push(`old pages are still listed after the reload (${o.oldListed.length})`);
+    if (!(o.afterReads > 0)) f.push('instrument failed: no tab list read succeeded after the reload');
+    else if (o.oldListed.length) f.push(`old pages are still listed after the reload (${o.oldListed.length})`);
     return f;
 }
 
@@ -392,8 +432,9 @@ export function judgeAll(obs) {
 
 // ---------------------------------------------------------------- live run
 
-const listIds = (r) => (r.ok ? (r.result?.tabs ?? []).map((t) => t.browserPageId) : []);
-const cookieNames = (r) => (r.ok ? (r.result?.cookies ?? []).map((c) => c.name) : []);
+// null when the CLI call failed: a failed read is never "not listed" or "not visible" (harness-live-security-06).
+const listIds = (r) => (r.ok && Array.isArray(r.result?.tabs) ? r.result.tabs.map((t) => t.browserPageId) : null);
+const cookieNames = (r) => (r.ok && Array.isArray(r.result?.cookies) ? r.result.cookies.map((c) => c.name) : null);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** tab create with the addWidget clock; resolves the (a) observation plus pageId. */
@@ -421,7 +462,11 @@ async function screenshotObserved(ctx, pageId) {
 const userFocus = (ctx) => ctx.inPage('/user', '({ hasFocus: document.hasFocus(), active: document.activeElement && (document.activeElement.id || document.activeElement.nodeName), blurs: __log.filter(e => e.type === "blur").map(e => e.target) })');
 
 const LOGIN_USER = 'pbuser';
-const countLogins = (ctx, username) => ctx.inChrome(`return Services.logins.getAllLogins().then(all => all.filter(l => l.username === ${JSON.stringify(username)}).length);`);
+// LoginManagerParent notifies this topic (data: the form's origin) for every PasswordManager:onFormSubmit its child
+// sends, which happens only where a LoginManager actor watches the form. Chrome counts the notifications.
+const SUBMIT_TOPIC = 'passwordmgr-form-submission-detected';
+const submitCount = (ctx) => ctx.inChrome(`if (!window.__pbFormSubmits) { const log = window.__pbFormSubmits = []; window.__pbFormSubmitObserver = { observe: (s, t, d) => log.push(String(d)) };
+    Services.obs.addObserver(window.__pbFormSubmitObserver, ${JSON.stringify(SUBMIT_TOPIC)}); } return window.__pbFormSubmits.length;`);
 const loginActor = (ctx, tabId) => ctx.inChrome(`const o = overlayOf(${JSON.stringify(tabId)}); const wg = o && o.browsingContext && o.browsingContext.currentWindowGlobal;
     if (!wg) return null; try { return !!wg.getExistingActor('LoginManager'); } catch (e) { return false; }`);
 
@@ -439,10 +484,15 @@ async function loginsObserved(ctx, agentTabId, page) {
     const userTab = await ctx.openWebTab(ctx.url('/login'));
     const userFilled = await ctx.pollFor(() => ctx.inPage('/login', `document.getElementById('u').value === ${JSON.stringify(LOGIN_USER)} && document.getElementById('p').value.length === ${secret.length}`).then((v) => v || null), 10000, 'the user tab autofill').catch(() => false);
     const userActor = await loginActor(ctx, userTab);
+    // The capture detector: the user tab's own submit must raise the form-submission notification.
+    const submitsBeforeUser = await submitCount(ctx);
+    await ctx.inPage('/login', '(document.getElementById("go").click(), true)');
+    const userSubmitSeen = (await ctx.pollFor(async () => { const n = (await submitCount(ctx)) - submitsBeforeUser; return n > 0 ? n : null; }, 10000, 'the user submit notification').catch(() => 0));
     await ctx.cli('goto', '--url', ctx.url('/login'), '--page', page);
     await sleep(2000);
     const agentFilled = (await ctx.inAgent(agentTabId, `document.getElementById('u').value.length + document.getElementById('p').value.length`)) !== 0;
     const agentActor = await loginActor(ctx, agentTabId);
+    const submitsBeforeAgent = await submitCount(ctx);
     await ctx.cli('focus', '--element', '#u', '--page', page);
     await ctx.cli('type', '--input', 'pbagent', '--page', page);
     await ctx.cli('focus', '--element', '#p', '--page', page);
@@ -450,9 +500,10 @@ async function loginsObserved(ctx, agentTabId, page) {
     await ctx.cli('click', '--element', '#go', '--page', page);
     const agentSubmitted = await ctx.pollFor(() => ctx.inAgent(agentTabId, 'location.pathname === "/agent2"').then((v) => v || null), 10000, 'the agent submit').catch(() => false);
     await sleep(1500);
+    const agentSubmitSeen = (await submitCount(ctx)) - submitsBeforeAgent;
     const closed = (await ctx.webTabs()).find((w) => w.tabId === userTab)?.id;
     if (closed) await ctx.luminoClose(closed);
-    return { saved: saved === true, userFilled: userFilled === true, userActor: userActor === true, agentFilled, agentActor: agentActor === true, agentSubmitted: agentSubmitted === true, capturedAfter: await countLogins(ctx, 'pbagent') };
+    return { saved: saved === true, userFilled: userFilled === true, userActor: userActor === true, agentFilled, agentActor: agentActor === true, agentSubmitted: agentSubmitted === true, userSubmitSeen, agentSubmitSeen };
 }
 
 /** (m): an agent page that answers 401 Basic; the auth dialog must be found, and the agent's accept refused. */
@@ -806,6 +857,22 @@ export async function permissionsObserved(ctx, agentTabId, page) {
     }
 }
 
+/**
+ * The environment the launcher would pass with HOME set to the decoy folder `home`, as withBrowserSession sets it:
+ * withFirefoxPage's liveEnv over process.env, and the Orca CLI's liveEnv over browserCliEnv. Nothing launches.
+ */
+export function decoyLaunchObserved(home) {
+    const saved = process.env.HOME;
+    process.env.HOME = home;
+    try {
+        const launch = liveEnv({ ...process.env });
+        const cli = liveEnv(browserCliEnv(process.env.PATH ?? '', '/nonexistent-orca-root'));
+        return { decoyHome: home, launchHome: launch.HOME, cliHome: cli.HOME, decoyInLaunchHome: existsSync(join(launch.HOME, '.local', 'bin', 'orca-ide')) };
+    } finally {
+        if (saved === undefined) delete process.env.HOME; else process.env.HOME = saved;
+    }
+}
+
 async function liveRun(log) {
     const { withBrowserSession, decoyRecordFile } = await import('./lib/orca-browser-live.mjs');
     const { ensurePbNode } = await import('./lib/orca-run.mjs');
@@ -817,9 +884,10 @@ async function liveRun(log) {
     const stock = await hiddenElectronRun({ orcaDir: join(REPO_ROOT, 'orca'), overlayDir: join(REPO_ROOT, 'orca-overlay'), nodeBin });
     log(`(f) stock decoy half: ${stock.pass ? `detectors proven (${stock.pass.stockMs} ms)` : stock.skip ? `SKIP ${stock.skip}` : stock.fails.join('; ')}`);
     const recordFile = decoyRecordFile(REPO_ROOT);
-    const home = mkdtempSync(join(tmpdir(), 'pb-agent-home-'));
-    mkdirSync(join(home, '.local', 'bin'), { recursive: true });
-    symlinkSync(nodeBin, join(home, '.local', 'bin', 'orca-ide'));
+    const home = makeDecoyHome(nodeBin);
+    // harness-live-security-01: the launcher must pass the decoy folder as HOME; judged before anything launches.
+    const launchFails = decoyLaunchVerdict(decoyLaunchObserved(home));
+    if (launchFails.length) { rmSync(home, { recursive: true, force: true }); throw new Error(`(f) ${launchFails.join('; ')}`); }
     try {
         await withBrowserSession({ log, home }, async (ctx) => {
             const W = ctx.worktree;
@@ -875,11 +943,12 @@ async function liveRun(log) {
 
             // (e) container: own cookie first, then the user's.
             await ctx.cli('cookie', 'set', '--name', 'pbagent', '--value', '1', '--page', page);
-            const ownRead = cookieNames(await ctx.cli('cookie', 'get', '--page', page)).includes('pbagent');
+            const ownRead = cookieNames(await ctx.cli('cookie', 'get', '--page', page))?.includes('pbagent') === true;
             await ctx.probe(`return await get('WebTabChannel').widgetOf(${JSON.stringify(userTab)}).navigate(${JSON.stringify(ctx.url('/cookie'))});`);
             await ctx.pollFor(() => ctx.inPage('/cookie', 'document.readyState === "complete"'), 10000, 'the cookie page').catch(() => null);
             const userCookieSet = String(await ctx.inPage('/cookie', 'document.cookie')).includes('pbuser=1');
-            obs.e = { ownRead, userCookieSet, userVisible: cookieNames(await ctx.cli('cookie', 'get', '--page', page)).includes('pbuser') };
+            const seen = cookieNames(await ctx.cli('cookie', 'get', '--page', page));
+            obs.e = { ownRead, userCookieSet, userVisible: seen === null ? null : seen.includes('pbuser') };
 
             // (e2) the agent tab's container, read in chrome; the user overlay at 0 first.
             obs.e2 = JSON.parse(await ctx.inChrome(`const u = overlayOf(${JSON.stringify(userTab)}); const g = overlayOf(${JSON.stringify(agentTabId)});
@@ -917,7 +986,8 @@ async function liveRun(log) {
                 const waited = Date.now() - readyAt;
                 if (waited < minQuietMs) await sleep(minQuietMs - waited);
                 const roots = [ctx.state.dataRoot, ctx.state.effectiveRoot].filter(Boolean);
-                obs.f = { stock, createOk: fCreate.ok, code: fCreate.error?.code, gotoCode: fGoto.error ? `${fGoto.error.code}: ${String(fGoto.error.message).slice(0, 80)}` : null, title: fGoto.result?.title ?? null, expectedTitle: 'PB agent fixture two', quietMs: Date.now() - readyAt, minQuietMs, markerPresent: roots.some((r) => existsSync(join(r, recordFile))) };
+                const orcadPid = (await ctx.orcaState()).pid ?? ctx.state.pid;
+                obs.f = { stock, decoyHome: home, orcadHome: Number.isInteger(orcadPid) ? procHome(orcadPid) : null, decoyInPlace: existsSync(join(home, '.local', 'bin', 'orca-ide')), createOk: fCreate.ok, code: fCreate.error?.code, gotoCode: fGoto.error ? `${fGoto.error.code}: ${String(fGoto.error.message).slice(0, 80)}` : null, title: fGoto.result?.title ?? null, expectedTitle: 'PB agent fixture two', quietMs: Date.now() - readyAt, minQuietMs, markerPresent: roots.some((r) => existsSync(join(r, recordFile))) };
             }
 
             // (g) the renderer path through the pane client's own connection.
@@ -933,10 +1003,15 @@ async function liveRun(log) {
                 return { placement: { kind: placement.kind }, reply: { ok: !!(r && r.ok), code: r && r.error ? r.error.code : null }, createPageArrived: arrived, credential };`, 60000);
 
             // (h) user close of the (a) tab.
+            const listedBefore = listIds(await ctx.cli('tab', 'list', '--worktree', W))?.includes(page) === true;
             const closed = a.widgetId ? await ctx.luminoClose(a.widgetId) : false;
-            let listedAfter = true;
-            for (let i = 0; i < 20 && listedAfter; i++) { await sleep(250); listedAfter = listIds(await ctx.cli('tab', 'list', '--worktree', W)).includes(page); }
-            obs.h = { closed, listedAfter };
+            let listedAfter = null; // null until a tab list read succeeds; a failed read never counts as "not listed"
+            for (let i = 0; i < 20 && listedAfter !== false; i++) {
+                await sleep(250);
+                const ids = listIds(await ctx.cli('tab', 'list', '--worktree', W));
+                if (ids !== null) listedAfter = ids.includes(page);
+            }
+            obs.h = { listedBefore, closed, listedAfter };
 
             // (j) activation: create with the user tab current, then a store activation.
             await ctx.activate(userWidget);
@@ -944,7 +1019,7 @@ async function liveRun(log) {
             const currentBefore = await ctx.currentId();
             const userFocusBefore = JSON.stringify(await ctx.inPage('/cookie', 'document.hasFocus()'));
             const j = await createObserved(ctx);
-            const listed = listIds(await ctx.cli('tab', 'list', '--worktree', W)).includes(j.pageId);
+            const listed = listIds(await ctx.cli('tab', 'list', '--worktree', W))?.includes(j.pageId) === true;
             const currentAfterCreate = await ctx.currentId();
             const userFocusAfter = JSON.stringify(await ctx.inPage('/cookie', 'document.hasFocus()'));
             // D-34: the pane entry's row for the page, read from the pane list (positive read before the activation).
@@ -971,8 +1046,15 @@ async function liveRun(log) {
             await sleep(2000);
             // A probe started while the new frontend has no container yet answers { error } (truthy): only true counts.
             const reattached = await ctx.pollFor(async () => { try { return (await ctx.hostAttached()) === true || null; } catch { return null; } }, 180000, 'the host to re-attach').catch(() => false);
-            let oldListed = oldPages;
-            for (let i = 0; i < 40 && oldListed.length; i++) { await sleep(250); const now = listIds(await ctx.cli('tab', 'list', '--worktree', W)); oldListed = oldPages.filter((p) => now.includes(p)); }
+            let oldListed = oldPages ?? [];
+            let afterReads = 0; // tab list reads after the reload that succeeded; a failed one leaves oldListed as it was
+            for (let i = 0; i < 40 && (oldListed.length || !afterReads); i++) {
+                await sleep(250);
+                const now = listIds(await ctx.cli('tab', 'list', '--worktree', W));
+                if (now === null) continue;
+                afterReads++;
+                oldListed = (oldPages ?? []).filter((p) => now.includes(p));
+            }
             const diag = reattached === true ? null : await ctx.probe(`const l = globalThis[Symbol.for('powerbrowser.orca-browser.link')]; let c = 'no link';
                 if (l) { try { c = 'connection ' + (await l.connection()).credential.kind; } catch (e) { c = 'connection ' + String(e && e.message).slice(0, 40); } }
                 let attach = 'not tried';
@@ -982,7 +1064,7 @@ async function liveRun(log) {
                     catch (e) { attach = 'a second attach fails: ' + String(e && e.message).slice(0, 60); }
                 }
                 return c + ', host module ' + !!host + ', bundle booted ' + !!(globalThis[Symbol.for('powerbrowser.orca-panes.module')] && globalThis[Symbol.for('powerbrowser.orca-panes.module')].state().booted) + ', ' + attach;`, 60000).catch((e) => `probe: ${String(e?.message ?? e).slice(0, 80)}`);
-            obs.i = { agentWidgetsAfter: (await ctx.webTabs()).filter((w) => w.agent).length, reattached: reattached === true, oldListed, diag };
+            obs.i = { agentWidgetsAfter: (await ctx.webTabs()).filter((w) => w.agent).length, reattached: reattached === true, oldPages, mustList: j.pageId, oldListed, afterReads, diag };
         });
         // (b2) the screenshot half in a second launch at DPR 2.
         await withBrowserSession({ log, dpr: 2 }, async (ctx) => {
@@ -998,8 +1080,13 @@ async function liveRun(log) {
 
 async function main() {
     const pre = prerequisites(REPO_ROOT);
-    if (pre.skip) { console.log(`${NAME}: SKIP -- ${pre.skip}`); return 0; }
     if (pre.fail) { console.error(`${NAME}: FAIL -- ${pre.fail}`); return 1; }
+    if (pre.skip) return verdictExit(NAME, [], [`${pre.skip}. Next step: build it, then re-run`]);
+    // harness-live-security-14: a headed or real-input session's clipboard is the desktop's, which clause (r) overwrites.
+    if (process.env.PB_LIVE_HEADED === '1' || process.env.PB_REAL_INPUT === '1') {
+        console.error(`${NAME}: FAIL -- this row runs headless only (clause (r) writes the clipboard); unset PB_LIVE_HEADED and PB_REAL_INPUT`);
+        return 1;
+    }
     const log = (s) => console.log(`${NAME}: ${s}`);
     let obs;
     try { obs = await liveRun(log); } catch (e) { console.error(`${NAME}: FAIL -- harness: ${String(e?.message ?? e).split('\n')[0]}`); return 1; }
@@ -1009,10 +1096,12 @@ async function main() {
         const own = fails.filter((f) => f.startsWith(`(${k}) `));
         console.log(`${NAME}: clause (${k}) ${obs[k]?.skip ? 'SKIP' : own.length ? 'FAIL' : 'ok'}${k === 'g' && obs.g ? ` (credential ${obs.g.credential}, placement ${obs.g.placement?.kind})` : ''}${['k', 'a'].includes(k) && obs[k] ? ` (${obs[k].ms} ms)` : ''}${k === 'j' && obs.j?.revealMs != null ? ` (reveal ${obs.j.revealMs} ms)` : ''}${k === 'm' && obs.m?.promptType ? ` (${obs.m.promptType})` : ''}${k === 'e2' && obs.e2 ? ` (userContextId ${obs.e2.agentContext})` : ''}${k === 'n' && obs.n?.agent ? ` (user: link ${obs.n.user.linkTabs} tab, window.open ${obs.n.user.openTabs} tab, popup ${obs.n.user.popupWindows} window; agent: ${obs.n.agent.newTabs} tabs, ${obs.n.agent.newWindows} windows, ${obs.n.agent.loads} loads, window.open ${obs.n.agent.openReturned}, with features ${obs.n.agent.popupReturned}, middle-click ${obs.n.agent.middleReply}, Control+Enter ${obs.n.agent.enterReply}, sandboxFlags ${obs.n.agent.sandboxFlags})` : ''}${(k === 'b1' || k === 'b2') && obs[k] ? ` (DPR ${obs[k].deviceDpr}, ${obs[k].size?.join('x')} px)` : ''}${k === 'o' && obs.o?.agent ? ` (user: saved ${obs.o.user.saved}, ${obs.o.user.rowsAdded} row, ${obs.o.user.windows} window; agent: ${obs.o.agent.requests} requests, folder ${obs.o.agent.filesBefore.length} -> ${obs.o.agent.filesAfter.length} file(s), rows ${obs.o.agent.rowsBefore} -> ${obs.o.agent.rowsAfter}, ${obs.o.agent.newWindows} windows, click ${obs.o.agent.clickReply}, goto ${obs.o.agent.gotoReply})` : ''}${k === 'p' && obs.p?.agent ? ` (user: mailto launched ${obs.p.user.mailtoLaunched}, ${PROTOCOL_RUN} launched ${obs.p.user.runLaunched}, ${PROTOCOL_ASK} ${obs.p.user.askWindows} dialog; agent: ${obs.p.agent.launches} launches, ${obs.p.agent.newWindows} windows, ${Object.entries(obs.p.agent.replies).map(([s, r]) => `${s} ${r}`).join(', ')})` : ''}${k === 'q' && obs.q?.created ? ` (initial ${obs.q.initialBefore}; mouseClick ${obs.q.clickReply}, popup ${obs.q.popupReply}, ${obs.q.newWindows} windows, ${obs.q.loads} loads; after the first load: ${obs.q.evalAfter})` : ''}${k === 'r' && obs.r?.agent ? ` (user: copy ${obs.r.user.copy}, frame ${obs.r.user.frame}, write ${obs.r.user.write}, paste ${obs.r.user.pasted}; agent: click ${obs.r.agent.clickReply}, activation ${obs.r.agent.rec?.active}, execCommand ${obs.r.agent.rec?.execCopy}, writeText ${obs.r.agent.rec?.writeText}, frame ${obs.r.agent.rec?.frameWrite}, readText ${obs.r.agent.rec?.readText}, clipboard ${obs.r.agent.afterClick}; Control+v ${obs.r.agent.ctrlV}, Shift+Insert ${obs.r.agent.shiftInsert}, Control+c ${obs.r.agent.ctrlC}, Control+a ${obs.r.agent.controlReply}, input ${obs.r.agent.input}, clipboard ${obs.r.agent.afterKeys})` : ''}${k === 's' && obs.s ? ` (pref ${obs.s.pref}; user tab ${obs.s.user}, agent tab ${obs.s.agent}, agent's own grant ${obs.s.agentOwn})` : ''}`);
     }
-    for (const s of skips) console.log(`${NAME}: SKIP ${s}`);
-    if (fails.length) { for (const f of fails) console.error(`${NAME}: FAIL -- ${f}`); return 1; }
+    for (const f of fails) console.error(`${NAME}: FAIL -- ${f}`);
+    // A skipped clause (f, on a host with an installed Orca) makes the row a SKIP (exit 77), never a PASS.
+    const code = verdictExit(NAME, fails, skips.map((s) => `${s}; the other clauses ran${fails.length ? '' : ' and passed'}`));
+    if (code !== 0) return code;
     const g = obs.g.credential;
-    console.log(`${NAME}: PASS -- (k) no-pane create one tab in ${obs.k.ms} ms; (a) one background agent tab in ${obs.a.ms} ms; (b) goto, click, type, screenshot at DPR 1 and 2; (c) parked focus held; (d) refusals; (e) container; (e2) agent container ${obs.e2.agentContext}; (l) saved login filled for the user only, no LoginManager actor or capture in the agent tab; (m) HTTP auth (${obs.m.promptType}) refused to the agent; (c2) typing kept while the parked page called focus(); (n) agent opens refused after user opens adopted; (o) agent downloads refused after a user download saved; (p) agent protocol links refused after user launches and a dialog; (q) commands refused on the initial about:blank; (r) agent clipboard writes, reads and keys refused after user writes and a paste; (s) a default-container grant not effective in the agent tab; (f) ${obs.f.skip ? 'SKIP' : 'no decoy'}; (g) renderer createPage over ${g}; (h) user close; (j) reveal in ${obs.j.revealMs} ms after store activation; (i) reload`);
+    console.log(`${NAME}: PASS -- (k) no-pane create one tab in ${obs.k.ms} ms; (a) one background agent tab in ${obs.a.ms} ms; (b) goto, click, type, screenshot at DPR 1 and 2; (c) parked focus held; (d) refusals; (e) container; (e2) agent container ${obs.e2.agentContext}; (l) saved login filled for the user only, no LoginManager actor or form capture in the agent tab after a user submit was captured; (m) HTTP auth (${obs.m.promptType}) refused to the agent; (c2) typing kept while the parked page called focus(); (n) agent opens refused after user opens adopted; (o) agent downloads refused after a user download saved; (p) agent protocol links refused after user launches and a dialog; (q) commands refused on the initial about:blank; (r) agent clipboard writes, reads and keys refused after user writes and a paste; (s) a default-container grant not effective in the agent tab; (f) no decoy from PB's orcad, which ran with the decoy HOME; (g) renderer createPage over ${g}; (h) user close; (j) reveal in ${obs.j.revealMs} ms after store activation; (i) reload`);
     return 0;
 }
 
@@ -1028,7 +1117,7 @@ const CONTROL = {
     d: { invented: { ok: false, code: 'browser_unavailable' }, userTab: 'not-agent-tab', stockTab: 'unknown-tab' },
     e: { ownRead: true, userCookieSet: true, userVisible: false },
     e2: { userContext: 0, agentContext: 7, containerPref: 7 },
-    l: { saved: true, userFilled: true, userActor: true, agentFilled: false, agentActor: false, agentSubmitted: true, capturedAfter: 0 },
+    l: { saved: true, userFilled: true, userActor: true, agentFilled: false, agentActor: false, agentSubmitted: true, userSubmitSeen: 1, agentSubmitSeen: 0 },
     m: { promptSeen: true, promptType: 'promptUserAndPass', reply: { where: 'failed', code: 'browser_command_unavailable' }, promptAfter: true, promptAfterClose: false, authorized: false },
     c2: { controlTyped: 'ab', controlExpected: 'ab', agentSelfActive: 'in', userTyped: 'abcdefgh', userExpected: 'abcdefgh', agentValue: '', userBlurs: [], chromeBefore: 'u', chromeAfter: 'u' },
     n: {
@@ -1052,11 +1141,11 @@ const CONTROL = {
         },
     },
     s: { pref: true, user: 'granted', agent: 'default', agentOwn: 'granted' },
-    f: { stock: { pass: { stockMs: 900 } }, createOk: true, title: 'PB agent fixture two', expectedTitle: 'PB agent fixture two', quietMs: 30000, minQuietMs: 10000, markerPresent: false },
+    f: { stock: { pass: { stockMs: 900 } }, decoyHome: '/tmp/pb-agent-home-x', orcadHome: '/tmp/pb-agent-home-x', decoyInPlace: true, createOk: true, title: 'PB agent fixture two', expectedTitle: 'PB agent fixture two', quietMs: 30000, minQuietMs: 10000, markerPresent: false },
     g: { placement: { kind: 'client' }, reply: { ok: true, code: null }, createPageArrived: true, credential: 'device-key' },
-    h: { closed: true, listedAfter: false },
+    h: { listedBefore: true, closed: true, listedAfter: false },
     j: { bound: true, listed: true, userWidget: 'u', currentBefore: 'u', currentAfterCreate: 'u', userFocusBefore: 'true', userFocusAfter: 'true', rowListed: true, rowActive: false, activationSeen: true, boundWidget: 'w2', currentAfterActivation: 'w2', revealMs: 140, webTabsBefore: 3, webTabsAfter: 3 },
-    i: { agentWidgetsAfter: 0, reattached: true, oldListed: [] },
+    i: { agentWidgetsAfter: 0, reattached: true, oldPages: ['pf', 'pj'], mustList: 'pj', oldListed: [], afterReads: 2 },
 };
 
 const set = (clause, patch) => (o) => ({ ...o, [clause]: { ...o[clause], ...patch } });
@@ -1096,7 +1185,54 @@ const PLANTS = [
     ['container-detector-blind', set('e2', { userContext: null }), 'detector blind'],
     ['login-autofilled-in-agent-tab', set('l', { agentFilled: true }), 'autofilled in the agent tab'],
     ['login-actor-on-agent-tab', set('l', { agentActor: true }), 'has a LoginManager actor'],
-    ['agent-submit-captured', set('l', { capturedAfter: 1 }), 'the agent submit stored 1 login'],
+    ['agent-submit-captured', set('l', { agentSubmitSeen: 1 }), "the agent submit reached the password manager's form capture"],
+    ['capture-detector-blind', set('l', { userSubmitSeen: 0 }), 'raised no passwordmgr-form-submission-detected notification'],
+    // harness-live-security-06: a failed CLI read is an instrument failure, never "not listed" or "not visible".
+    ['cookie-read-failed', set('e', { userVisible: null }), "instrument failed: the agent tab's second cookie get failed"],
+    ['close-list-read-failed', set('h', { listedAfter: null }), 'instrument failed: no tab list read succeeded after the user close'],
+    ['close-page-never-listed', set('h', { listedBefore: false }), 'tab list did not list the page before the user close'],
+    ['reload-list-read-failed', set('i', { oldPages: null }), 'instrument failed: tab list before the reload failed'],
+    ['reload-page-never-listed', set('i', { oldPages: ['pf'] }), 'did not list the (j) page'],
+    ['reload-after-reads-failed', set('i', { afterReads: 0 }), 'instrument failed: no tab list read succeeded after the reload'],
+    // harness-live-security-07: one plant per fail message the list above did not reach (the coverage check names any gap).
+    ['no-pane-two-tabs', set('k', { newTabs: 2 }), 'two tabs for one page from the no-pane create'],
+    ['no-pane-slow', set('k', { ms: 1400 }), 'the no-pane create was slower than'],
+    ['create-failed', set('a', { ok: false, code: 'browser_error' }), 'tab create failed: browser_error'],
+    ['create-no-tab', set('a', { newTabs: [] }), 'no web tab from tab create'],
+    ['created-not-agent', set('a', { newTabs: [{ tabId: 't1', agent: false, current: false }] }), 'the created tab is not an agent tab'],
+    ['created-unbound', set('a', { boundTab: null }), 'the page table does not bind the new tab'],
+    ['goto-wrong-title', set('b', { title: 'Problem loading page' }), 'goto gave title'],
+    ['click-not-counted', set('b', { clickCount: '0' }), 'click left the counter at'],
+    ['type-not-landed', set('b', { typed: '' }), 'type gave input value'],
+    ['screenshot-device-mismatch', set('b1', { deviceDpr: 2 }), "device check: the page's devicePixelRatio is"],
+    ['screenshot-failed', set('b1', { ok: false, code: 'browser_error' }), 'screenshot failed: browser_error'],
+    ['screenshot-outside-red', set('b1', { outside: [255, 0, 0] }), 'outside the target is red'],
+    ['user-focus-changed', set('c', { after: { chrome: 'u', userHasFocus: false, userActive: 'in' } }), 'user focus changed while the agent typed'],
+    ['agent-overlay-unparked', set('c', { chromeHitIsAgent: true }), 'the agent overlay is under the pointer'],
+    ['invented-refusal-uncoded', set('d', { invented: { ok: false, code: null } }), 'the invented page refusal carries no error.code'],
+    ['user-cookie-unset', set('e', { userCookieSet: false }), 'the user tab did not hold its own cookie'],
+    ['login-not-saved', set('l', { saved: false }), 'the scratch login was not saved'],
+    ['agent-submit-stayed', set('l', { agentSubmitted: false }), 'the agent submit did not leave the login page'],
+    ['auth-credentials-sent', set('m', { authorized: true }), 'the server received credentials from the agent tab'],
+    ['typing-chrome-focus-moved', set('c2', { chromeAfter: 'a' }), 'chrome focus moved while typing'],
+    ['opens-agent-among-user-tabs', setN('user', { agentAmong: true }), 'a tab a user page opened is an agent tab'],
+    ['opens-no-current-tab', setN('agent', { currentBefore: null, currentAfter: null }), 'no main-area current tab before the agent opens'],
+    ['first-document-not-created', set('q', { created: false }), 'the agent tab for the held first load was not created'],
+    ['decoy-create-failed', set('f', { createOk: false, code: 'browser_error' }), "tab create through PB's orcad failed"],
+    ['decoy-goto-wrong-title', set('f', { title: null }), "goto through PB's orcad gave"],
+    ['decoy-judged-early', set('f', { quietMs: 500 }), 'before the 10000 ms quiet window'],
+    ['renderer-placement-not-client', set('g', { placement: { kind: 'none' } }), "the renderer's placement is none"],
+    ['renderer-create-failed', set('g', { reply: { ok: false, code: 'browser_error' } }), "the renderer's browser.tabCreate failed"],
+    ['renderer-page-not-arrived', set('g', { createPageArrived: false }), 'the renderer page did not arrive as createPage'],
+    ['renderer-credential-unrecorded', set('g', { credential: null }), 'the credential path was not recorded'],
+    ['close-found-no-widget', set('h', { closed: false }), 'the Lumino close found no agent widget'],
+    ['activation-unbound', set('j', { bound: false }), 'the new page was not bound and listed'],
+    ['activation-user-focus-changed', set('j', { userFocusAfter: 'false' }), 'the user focus changed at create'],
+    ['reload-host-not-reattached', set('i', { reattached: false }), 'the host did not re-attach after the reload'],
+    ['reload-old-pages-listed', set('i', { oldListed: ['pj'] }), 'old pages are still listed after the reload'],
+    // harness-live-security-01: orcad must really have run with the decoy HOME.
+    ['decoy-home-replaced', set('f', { orcadHome: '/repo/.mozbuild/pb-live-profiles/pb-home-x' }), "PB's orcad ran with HOME"],
+    ['decoy-gone', set('f', { decoyInPlace: false }), 'the decoy is gone'],
     ['login-detector-blind', set('l', { userFilled: false }), 'detector blind'],
     ['auth-prompt-answered', set('m', { reply: { where: 'done', code: null }, promptAfter: false }), 'not failed browser_command_unavailable'],
     ['auth-detector-blind', set('m', { promptSeen: false }), 'detector blind'],
@@ -1164,25 +1300,72 @@ const PLANTS = [
     ['permission-agent-detector-blind', set('s', { agentOwn: 'default' }), 'detector blind'],
 ];
 
+/** The decoy-launch wiring over the real liveEnv (no browser): the decoy HOME kept, the real home still replaced. */
+function decoyWiringFails() {
+    const home = makeDecoyHome(process.execPath, mkdtempSync(join(tmpdir(), 'pb-agent-decoy-test-')));
+    try {
+        const fails = decoyLaunchVerdict(decoyLaunchObserved(home));
+        // The other half of the rule: the developer's real home stays out of reach of a launch.
+        for (const h of realHomes()) if (!inRealHome(h)) fails.push(`the real home ${h} is no longer treated as the real home, so a launch could run in it`);
+        if (realHomes().includes(resolve(home))) fails.push('the decoy folder counts as a real home after HOME was set to it');
+        return fails;
+    } finally {
+        rmSync(join(home, '..'), { recursive: true, force: true });
+    }
+}
+
 export function runSelfTest() {
     const control = judgeAll(CONTROL);
     if (control.fails.length || control.skips.length) { console.error(`${NAME} self-test: FAIL -- control is not green: ${[...control.fails, ...control.skips].join(' | ')}`); return 1; }
     console.log(`${NAME} self-test: control green -- ${Object.keys(VERDICTS).length} clause observations`);
     let failures = 0;
+    const planted = [];
     for (const [name, plant, naming] of PLANTS) {
         const r = judgeAll(plant(CONTROL));
+        planted.push(r.fails);
         if (!r.fails.some((s) => s.includes(naming))) { console.error(`  FAIL ${name} -> ${r.fails.join(' | ') || 'green'} (expected '${naming}')`); failures++; } else console.log(`  ok ${name} -> red, naming '${naming}'`);
     }
     // The (f) clause with a skipped stock half is a named SKIP, never a PASS of the absence.
     const skipped = judgeAll({ ...CONTROL, f: { skip: 'an installed Orca exists' } });
     if (skipped.fails.length || skipped.skips.length !== 1) { console.error('  FAIL decoy-skip -> the skipped decoy clause was not reported as a SKIP'); failures++; } else console.log('  ok decoy-skip -> (f) reported as a named SKIP');
+    // harness-live-security-07: every fail message of every verdict is reached by a plant (derived from their source).
+    const missing = uncoveredMessages([...new Set([...Object.values(VERDICTS), decoyLaunchVerdict])], [...planted, ...DECOY_LAUNCH_PLANTS.map(([, o]) => decoyLaunchVerdict(o))]);
+    for (const m of missing) { console.error(`  FAIL coverage -> no plant reaches ${m.fn}: "${m.text}"`); failures++; }
+    if (!missing.length) console.log('  ok coverage -> every fail message of every verdict is reached by a plant');
+    // The coverage check itself (review of harness-live-security-07): a deleted plant must show its message uncovered,
+    // even where another message shares its longest words (the inside and outside pixel, the dialog-window count).
+    const coverageFns = [...new Set([...Object.values(VERDICTS), decoyLaunchVerdict])];
+    for (const [removed, skeleton] of [['screenshot-off-by-dpr', 'not the planted red'], ['protocol-dialog-detector-blind', 'dialog window(s), not one']]) {
+        const left = PLANTS.filter(([n]) => n !== removed).map(([, p]) => judgeAll(p(CONTROL)).fails);
+        if (uncoveredMessages(coverageFns, left).some((m) => m.text.includes(skeleton))) console.log(`  ok coverage plant: without ${removed} the message "…${skeleton}" is uncovered`);
+        else { console.error(`  FAIL coverage plant: without ${removed} the message "…${skeleton}" still counts as planted`); failures++; }
+    }
+    // harness-live-security-01: the launcher keeps the decoy HOME (red on the old liveEnv, which replaced it).
+    const launchControl = decoyLaunchVerdict({ decoyHome: '/tmp/d', launchHome: '/tmp/d', cliHome: '/tmp/d', decoyInLaunchHome: true });
+    if (launchControl.length) { console.error(`  FAIL decoy-launch control -> ${launchControl.join(' | ')}`); failures++; }
+    for (const [name, o, naming] of DECOY_LAUNCH_PLANTS) {
+        if (!decoyLaunchVerdict(o).some((s) => s.includes(naming))) { console.error(`  FAIL ${name} -> stayed green (expected '${naming}')`); failures++; } else console.log(`  ok ${name} -> red, naming '${naming}'`);
+    }
+    const wiring = decoyWiringFails();
+    if (wiring.length) { for (const w of wiring) console.error(`  FAIL decoy-launch wiring -> ${w}`); failures++; } else console.log('  ok decoy-launch wiring -> liveEnv passes the decoy folder as HOME to PowerBrowser and the CLI, and the real home stays out of reach');
+    for (const f of lockWiringFails(NAME, import.meta.url)) { console.error(`  FAIL ${f}`); failures++; }
     if (failures) { console.error(`${NAME} self-test: FAIL -- ${failures} case(s) did not behave`); return 1; }
-    console.log(`${NAME} self-test: PASS -- ${PLANTS.length} planted faults each went red naming the drift`);
+    console.log(`${NAME} self-test: PASS -- ${PLANTS.length + DECOY_LAUNCH_PLANTS.length} planted faults each went red naming the drift; every fail message is planted; the decoy reaches the launch; the live path takes the live lock`);
     return 0;
 }
+
+const DECOY_LAUNCH_PLANTS = [
+    // The old liveEnv: HOME replaced by the run's scratch pb-home-* folder, which holds no decoy.
+    ['decoy-home-replaced-at-launch', { decoyHome: '/tmp/d', launchHome: '/repo/.mozbuild/pb-live-profiles/pb-home-x', cliHome: '/tmp/d', decoyInLaunchHome: false }, "the launch environment's HOME is"],
+    ['decoy-home-replaced-for-the-cli', { decoyHome: '/tmp/d', launchHome: '/tmp/d', cliHome: '/repo/.mozbuild/pb-live-profiles/pb-home-x', decoyInLaunchHome: true }, "the Orca CLI environment's HOME is"],
+    ['decoy-missing-from-the-launch-home', { decoyHome: '/tmp/d', launchHome: '/tmp/d', cliHome: '/tmp/d', decoyInLaunchHome: false }, 'holds no .local/bin/orca-ide decoy'],
+];
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
     const arg = process.argv[2];
     if (arg && arg !== '--self-test') { console.error('usage: node scripts/verify-orca-browser-agent-live.mjs [--self-test]'); process.exit(2); }
-    process.exit(arg === '--self-test' ? runSelfTest() : await main());
+    if (arg === '--self-test') process.exit(runSelfTest());
+    const locked = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
+    if (locked !== null) process.exit(locked);
+    process.exit(await main());
 }

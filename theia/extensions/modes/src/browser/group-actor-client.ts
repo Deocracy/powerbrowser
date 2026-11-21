@@ -71,6 +71,16 @@ export class GroupActorClient {
     mutate(msg: GroupMutation): Promise<GroupReply> {
         this.ensureListening();
         const requestId = `group-${Date.now().toString(36)}-${(this.seq += 1)}`;
+        // The waiter is registered before the dispatch: when sendQuery throws,
+        // the actor child answers inside this dispatch (IN-10), and a reply that
+        // finds no waiter is dropped, leaving the caller to wait out the timeout.
+        const reply = new Promise<GroupReply>((resolve, reject) => {
+            const timer = window.setTimeout(() => {
+                this.pending.delete(requestId);
+                reject(new GroupWriteError(`GroupActorClient: ack timeout for ${msg.kind}`, 'timeout'));
+            }, GROUP_ACTOR_ACK_TIMEOUT_MS);
+            this.pending.set(requestId, { resolve, reject, timer });
+        });
         // Dispatch on `document`, bubbling. Both halves are load-bearing and
         // 15-01 had neither, which is why this channel never once worked.
         //
@@ -90,13 +100,7 @@ export class GroupActorClient {
         document.dispatchEvent(
             new CustomEvent(GROUP_REQUEST_EVENT, { detail: { requestId, msg }, bubbles: true })
         );
-        return new Promise<GroupReply>((resolve, reject) => {
-            const timer = window.setTimeout(() => {
-                this.pending.delete(requestId);
-                reject(new GroupWriteError(`GroupActorClient: ack timeout for ${msg.kind}`, 'timeout'));
-            }, GROUP_ACTOR_ACK_TIMEOUT_MS);
-            this.pending.set(requestId, { resolve, reject, timer });
-        });
+        return reply;
     }
 
     private ensureListening(): void {

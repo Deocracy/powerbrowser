@@ -53,6 +53,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { orcaShippedPackages } from './lib/orca-shipped-packages.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'licence-allowlist';
@@ -112,7 +113,7 @@ export function check(repoRoot, allowList, lsFiles) {
         let isDir = false;
         try { isDir = statSync(treeDir).isDirectory(); } catch { /* absent */ }
         if (!isDir) {
-            skips.push(`${NAME}: SKIP -- ${row.path}/ absent; its LICENSE digest is unchecked (run ${row.fetch_script})`);
+            skips.push(`${row.path}/ absent; its LICENSE digest is unchecked (run ${row.fetch_script})`);
             continue;
         }
         const licence = join(treeDir, row.licence_file);
@@ -300,7 +301,7 @@ export function bundledCheck(allowList, { pins, manifests }, firstLine) {
         const pin = pins[row.id];
         if (row.spdx !== pin.licence) fails.push(`${label}: spdx ${row.spdx} differs from the pin's licence ${pin.licence} in ${XPI_PIN_REL}`);
         const got = firstLine(row.id, pin, row.licence_file);
-        if (got === null) skips.push(`${NAME}: SKIP -- ${row.id} ${pin.version} is not cached in .mozbuild/bundled-xpi/; its ${row.licence_file} line 1 is unchecked (run bash powerbrowser/packaging/stage-bundled-xpi.sh <dir>)`);
+        if (got === null) skips.push(`${row.id} ${pin.version} is not cached in .mozbuild/bundled-xpi/; its ${row.licence_file} line 1 is unchecked (run bash powerbrowser/packaging/stage-bundled-xpi.sh <dir>)`);
         else if (got !== row.licence_first_line) fails.push(`licence text changed for ${row.id} ${pin.version}: ${row.licence_file} line 1 is ${JSON.stringify(got)}, the row records ${JSON.stringify(row.licence_first_line)}; re-read it and update the row`);
     }
     for (const [id, kind] of want) {
@@ -309,8 +310,11 @@ export function bundledCheck(allowList, { pins, manifests }, firstLine) {
     return { fails, skips, count: seen.size };
 }
 
+// A failure wins. Any leg that did not run (an absent tree, no built orca/, no cached XPI) makes the run a SKIP, exit 77, with
+// one SKIP line that names each leg (SKIP-PROTOCOL.md, harness-other-05); the clauses that did run are listed, never as PASS.
 function render(r, pr) {
-    const lines = [...r.skips, ...pr.skips, ...(pr.bundled?.skips ?? [])];
+    const skips = [...r.skips, ...pr.skips, ...(pr.bundled?.skips ?? [])];
+    const lines = skips.map((s) => `${NAME}: SKIP -- ${s}`);
     const fails = [...r.fails, ...pr.fails, ...(pr.bundled?.fails ?? [])];
     if (fails.length) {
         for (const f of fails) lines.push(`${NAME}: FAIL -- ${f}`);
@@ -318,10 +322,14 @@ function render(r, pr) {
         lines.push(`${NAME}: ${fails.length} problem(s) above. Next step: fix the row in ${INVENTORY_REL} or the tree or package it names.`);
         return { code: 1, lines: [...lines, ...pr.pending] };
     }
-    lines.push(`${NAME}: PASS -- ${r.trees.length} fetched tree(s) [${r.trees.join(', ')}] each have a row; ${r.checked.length} LICENSE digest(s) checked [${r.checked.join(', ')}]; allowed ids [${r.allowed.join(', ')}]`);
-    if (pr.bundled) lines.push(`${NAME}: PASS -- ${pr.bundled.count} bundled_extensions row(s) equal the pinned XPIs and ${BUNDLED_EXT_DIR}/*/ as a set`);
-    if (pr.passCount !== null) lines.push(`${NAME}: PASS -- ${pr.passCount} shipped Orca package(s) pass by allowed_package_spdx; the rest are named by package_exceptions or package_rulings rows`);
-    return { code: 0, lines: [...lines, ...pr.pending] };
+    const ran = [];
+    ran.push(`${NAME}: PASS -- ${r.trees.length} fetched tree(s) [${r.trees.join(', ')}] each have a row; ${r.checked.length} LICENSE digest(s) checked [${r.checked.join(', ')}]; allowed ids [${r.allowed.join(', ')}]`);
+    if (pr.bundled) ran.push(`${NAME}: PASS -- ${pr.bundled.count} bundled_extensions row(s) equal the pinned XPIs and ${BUNDLED_EXT_DIR}/*/ as a set`);
+    if (pr.passCount !== null) ran.push(`${NAME}: PASS -- ${pr.passCount} shipped Orca package(s) pass by allowed_package_spdx; the rest are named by package_exceptions or package_rulings rows`);
+    if (skips.length) {
+        return { code: SKIP_EXIT, lines: [...ran.map((l) => l.replace(': PASS -- ', ': ran green -- ')), ...pr.pending, skipLine(NAME, skips.join('; '))] };
+    }
+    return { code: 0, lines: [...ran, ...pr.pending] };
 }
 
 function runSelfTest() {
@@ -354,6 +362,25 @@ function runSelfTest() {
             return 1;
         }
         console.log(`${NAME} self-test: clean control green (one digest checked); absent tree SKIPs that row only`);
+        // The verdict of the run (harness-other-05): a skipped leg is exit 77 with the one SKIP line and no PASS; a failure next to it is exit 1.
+        const ranOnly = { trees: ['alpha'], checked: ['alpha'], allowed: ['MIT'] };
+        const quiet = { skips: [], fails: [], pending: [], passCount: null };
+        const skipped = render({ ...ranOnly, fails: [], skips: ['alpha/ absent; its LICENSE digest is unchecked (run scripts/fetch-alpha.sh)'] }, quiet);
+        const last = skipped.lines[skipped.lines.length - 1];
+        if (skipped.code !== 77 || last !== `${NAME}: SKIP -- alpha/ absent; its LICENSE digest is unchecked (run scripts/fetch-alpha.sh)` || skipped.lines.some((l) => l.includes(': PASS --'))) {
+            console.error(`${NAME} self-test: FAIL -- a skipped leg did not give exit 77 with one SKIP line and no PASS line (code ${skipped.code}; ${skipped.lines.join(' | ')})`);
+            return 1;
+        }
+        const both = render({ ...ranOnly, fails: ['alpha: broken'], skips: ['beta/ absent'] }, quiet);
+        if (both.code !== 1) {
+            console.error(`${NAME} self-test: FAIL -- a failure next to a skipped leg did not give exit 1 (code ${both.code})`);
+            return 1;
+        }
+        if (render({ ...ranOnly, fails: [], skips: [] }, quiet).code !== 0) {
+            console.error(`${NAME} self-test: FAIL -- a run with nothing skipped and nothing failed did not give exit 0`);
+            return 1;
+        }
+        console.log(`${NAME} self-test: verdict -- a skipped leg exits 77 with one SKIP line and no PASS; a failure next to it exits 1; nothing skipped exits 0`);
 
         const plants = [
             { name: 'altered-licence-text', naming: 'alpha/LICENSE sha256',
@@ -499,7 +526,7 @@ const pr = { skips: [], fails: [] };
 let packages = null;
 try {
     const d = await orcaShippedPackages({ repoRoot: REPO_ROOT, log: (l) => console.log(`${NAME}: ${l}`) });
-    if (d.skip) pr.skips.push(`${NAME}: SKIP -- per-package rule not run: ${d.skip}`);
+    if (d.skip) pr.skips.push(`per-package rule not run: ${d.skip}`);
     else packages = d.packages;
 } catch (err) {
     pr.fails.push(`the Orca shipped package set could not be derived: ${err.message}`);
@@ -507,5 +534,5 @@ try {
 const p = packageCheck(REPO_ROOT, allowList, packages);
 const bundled = bundledCheck(allowList, bundledInputs(REPO_ROOT), (id, pin, member) => cachedXpiFirstLine(REPO_ROOT, id, pin, member));
 const { code, lines } = render(check(REPO_ROOT, allowList, lsFiles), { ...p, skips: pr.skips, fails: [...pr.fails, ...p.fails], bundled });
-for (const l of lines) (code && !l.startsWith('PENDING') ? console.error : console.log)(l);
+for (const l of lines) (code === 1 && !l.startsWith('PENDING') ? console.error : console.log)(l);
 process.exit(code);

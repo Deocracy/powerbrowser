@@ -458,6 +458,8 @@
     right: auto;
     width: 320px;
     padding: 4px;
+    /* The panel is portalled to the body; without this its text takes the Theia theme ink over the fixed dark ground. */
+    color: var(--color-text, #fbfbfe);
 }
 
 .pb-site-panel-empty {
@@ -538,7 +540,7 @@
     align-items: center;
     font-size: 13px;
     line-height: 1.4;
-    color: var(--theia-descriptionForeground);
+    color: var(--color-text-muted, #9a99a8);
 }
 
 .pb-site-panel-empty-row {
@@ -548,7 +550,7 @@
     align-items: center;
     font-size: 13px;
     line-height: 1.4;
-    color: var(--theia-descriptionForeground);
+    color: var(--color-text-muted, #9a99a8);
 }
 
 .pb-site-panel-cert-row {
@@ -558,7 +560,7 @@
     align-items: center;
     font-size: 12px;
     line-height: 1.5;
-    color: var(--theia-descriptionForeground);
+    color: var(--color-text-muted, #9a99a8);
     overflow-wrap: anywhere;
 }
 
@@ -581,7 +583,7 @@
 }
 
 .pb-site-panel-row:hover {
-    background: var(--theia-list-hoverBackground);
+    background: var(--color-surface-raised, #35343f);
 }
 
 .pb-site-panel-row:focus-visible {
@@ -607,7 +609,7 @@
 .pb-site-panel-row-state {
     flex: none;
     font-size: 13px;
-    color: var(--theia-descriptionForeground);
+    color: var(--color-text-muted, #9a99a8);
 }
 
 /* Phase 31 plan 03: the one-line notice for a refused or failed action (UI-SPEC Label role). */
@@ -626,7 +628,7 @@
     padding: 0 12px;
     font-size: 13px;
     line-height: 1.4;
-    color: var(--theia-descriptionForeground);
+    color: var(--color-text-muted, #9a99a8);
 }
 
 .pb-chrome-bar-input {
@@ -1343,6 +1345,26 @@ body[data-pb-mode="browsing"] .pb-tab-strip {
     right: 0;
     bottom: 2px;
     margin: 0;
+    font-size: 10px;
+    line-height: 1;
+}
+
+/* The icon's 6px trailing margin would push the centred icon 3px left; the attention dot and the pending-prompt
+   mark go out of the flow like the audio mark, so they neither shift the icon nor overflow the 30px tab. */
+.pb-tab.is-pinned .pb-tab-favicon,
+.pb-tab.is-pinned .pb-tab-crashed {
+    margin-right: 0;
+}
+
+.pb-tab.is-pinned .pb-tab-attention,
+.pb-tab.is-pinned .pb-tab-prompt-pending {
+    position: absolute;
+    top: 3px;
+    right: 1px;
+    margin: 0;
+}
+
+.pb-tab.is-pinned .pb-tab-prompt-pending {
     font-size: 10px;
     line-height: 1;
 }

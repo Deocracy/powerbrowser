@@ -73,20 +73,26 @@
 // read). Each runs with the unmutated control green first, so a red is
 // plant-caused.
 
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, copyFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { emitWebExtensionSettings, resolveConfig } from './generate.mjs';
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const SELF = fileURLToPath(import.meta.url);
+const REPO_ROOT = resolve(dirname(SELF), '..');
 const NAME = 'verify-webextensions';
 
 const args = process.argv.slice(2);
 const SELF_TEST = args.includes('--self-test');
+// --root=<dir> runs the main mode over another tree (the self-test's SKIP control uses it). Step 4 still reads
+// upstream/ from this checkout.
+const ROOT_ARG = args.find(a => a.startsWith('--root='));
 for (const a of args) {
-    if (a !== '--self-test') {
+    if (a !== '--self-test' && !a.startsWith('--root=')) {
         console.error(`${NAME}: FAIL -- unknown argument '${a}'`);
         process.exit(2);
     }
@@ -329,15 +335,16 @@ function runChecks(root) {
     return { failures, skipped };
 }
 
+// A step skipped for an absent input makes the run exit 77 with one SKIP line, printed last (SKIP-PROTOCOL.md).
 function main() {
-    const { failures, skipped } = runChecks(REPO_ROOT);
-    for (const s of skipped) console.log(`${NAME}: SKIP -- ${s}`);
+    const { failures, skipped } = runChecks(ROOT_ARG ? resolve(ROOT_ARG.slice('--root='.length)) : REPO_ROOT);
     if (failures.length > 0) {
         console.error(`${NAME}: FAIL -- ${failures.length} problem(s)`);
         for (const f of failures) console.error(`  - ${f}`);
-        process.exit(1);
     }
-    console.log(`${NAME}: PASS -- tracked key, derived fragment, and origin coverage agree`);
+    const code = verdictExit(NAME, failures, skipped);
+    if (code === 0) console.log(`${NAME}: PASS -- tracked key, derived fragment, and origin coverage agree`);
+    return code;
 }
 
 function copyInto(root, rel) {
@@ -609,8 +616,12 @@ function selfTest() {
         edit(allow);
         writeFileSync(target, `${JSON.stringify(allow, null, 2)}\n`, 'utf8');
     };
-    if (derivedAmo.length === 0) {
-        complain('add-ons site leg', 'derived no add-ons site host from the real tree (upstream/ absent?), so its plants would prove nothing');
+    const selfSkips = [];
+    if (amoHosts(REPO_ROOT) === null) {
+        // An absent input, not a broken instrument: the plants did not run (SKIP-PROTOCOL.md rule 4).
+        selfSkips.push(`${UPSTREAM_PREFS_REL} is absent, so the add-ons site plants 7 to 9 did not run. Next step: run scripts/fetch-upstream.sh, then re-run this self-test`);
+    } else if (derivedAmo.length === 0) {
+        complain('add-ons site leg', 'derived no add-ons site host from the real tree, so its plants would prove nothing');
     } else {
         // Plant 7: a derived host's allow row removed must go red naming the host.
         const dropped = derivedAmo[derivedAmo.length - 1];
@@ -632,13 +643,41 @@ function selfTest() {
         }, bgHost, 'stale egress');
     }
 
-    if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- 9 planted faults all behaved as pinned`);
+    // SKIP control (SKIP-PROTOCOL.md rule 2): the main mode, run as a child with its output captured, over the
+    // manifest, policy, allowlist and branding prefs with no generated fragment. Steps 2 to 4 run green, step 1
+    // does not run, so it exits 77 with the SKIP line last and no PASS line.
+    {
+        const dir = mkdtempSync(join(tmpdir(), 'webextensions-selftest-'));
+        try {
+            for (const rel of [MANIFEST_REL, POLICY_REL, ALLOWLIST_REL, BRANDING_PREFS_REL('release'), BRANDING_PREFS_REL('dev')]) copyInto(dir, rel);
+            const r = spawnSync(process.execPath, [SELF, `--root=${dir}`], { encoding: 'utf8' });
+            const lines = (r.stdout ?? '').split('\n').filter(l => l.trim() !== '');
+            const last = lines[lines.length - 1] ?? '';
+            if (r.status !== SKIP_EXIT || !last.startsWith(`${NAME}: SKIP -- ${FRAGMENT_REL} is absent`)
+                || lines.some(l => l.includes(`${NAME}: PASS`)) || /: SKIP/.test(r.stderr ?? '')) {
+                complain('control: no fragment', `did not exit 77 with the fragment SKIP line last and no PASS line (status ${r.status}, last line ${JSON.stringify(last)}, stderr ${JSON.stringify((r.stderr ?? '').slice(0, 300))})`);
+            } else {
+                console.log('  ok  control: no fragment -> exit 77, the fragment SKIP line last, no PASS line');
+            }
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    }
+
+    if (failed > 0) {
+        console.error(`${NAME}: --self-test FAIL -- ${failed} case(s) did not behave as required`);
+        return 1;
+    }
+    if (selfSkips.length > 0) {
+        console.log(skipLine(`${NAME} --self-test`, selfSkips.join('; ')));
+        return SKIP_EXIT;
+    }
+    console.log(`${NAME}: --self-test PASS -- 9 planted faults all behaved as pinned, and a tree without the fragment exits 77`);
     return 0;
 }
 
 if (SELF_TEST) {
     process.exit(selfTest());
-} else if (args.length === 0) {
-    main();
+} else {
+    process.exit(main());
 }

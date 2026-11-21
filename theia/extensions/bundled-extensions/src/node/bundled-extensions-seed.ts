@@ -53,7 +53,10 @@ export async function seedBundledExtensions(input: SeedInput): Promise<{ record:
     const fs = input.fs ?? nodeFs.promises;
     const record = parseRecord(input.record);
     const actions: SeedAction[] = [];
-    for (const { id, version, dir } of await shippedExtensions(fs, input.sources)) {
+    const shipped = await shippedExtensions(fs, input.sources);
+    // 68-WR-04: an upgrade the backend did not finish is put back before the rules read the folder.
+    for (const { id } of shipped) await recoverParked(fs, input.deploymentDir, id);
+    for (const { id, version, dir } of shipped) {
         // Recorded at this version: nothing to do, whether or not the user removed it.
         if (record[id] === version) continue;
         // Recorded at another version: upgrade a present copy only, so an uninstall sticks.
@@ -145,18 +148,69 @@ async function readVersion(fs: typeof nodeFs.promises, dir: string): Promise<str
     }
 }
 
-/** Copy into a temporary sibling, then rename, so a failure never leaves a half-built plugin. */
+/** The hidden sibling an upgrade parks the old copy in: <deploymentDir>/.<id>-old-<random>/<id>. */
+const parkedPrefix = (id: string): string => `.${id}-old-`;
+
+/**
+ * Copy into a temporary sibling, then rename, so a failure never leaves a half-built plugin.
+ * 68-WR-04: an upgrade parks the old copy in a hidden sibling (a rename: atomic, and a link is
+ * moved as a link, never followed), renames the new copy in, and only then deletes the old one.
+ * At no step is <id> absent with nothing to restore it from, so a crash is never read as an uninstall.
+ */
 async function copyInto(fs: typeof nodeFs.promises, from: string, deploymentDir: string, id: string): Promise<void> {
     await fs.mkdir(deploymentDir, { recursive: true });
+    const dest = path.join(deploymentDir, id);
     const tmp = await fs.mkdtemp(path.join(deploymentDir, `.${id}-`));
+    let park: string | undefined;
     try {
         // Links are refused, so nothing outside the shipped folder is ever copied.
         await fs.cp(from, tmp, { recursive: true, force: true, filter: src => !nodeFs.lstatSync(src).isSymbolicLink() });
-        await fs.rm(path.join(deploymentDir, id), { recursive: true, force: true });
-        await fs.rename(tmp, path.join(deploymentDir, id));
+        if (await exists(fs, dest)) {
+            park = await fs.mkdtemp(path.join(deploymentDir, parkedPrefix(id)));
+            await fs.rename(dest, path.join(park, id));
+        }
+        await fs.rename(tmp, dest);
     } catch (err) {
         await fs.rm(tmp, { recursive: true, force: true });
+        if (park) await recoverParked(fs, deploymentDir, id);
         throw err;
+    }
+    if (park) await fs.rm(park, { recursive: true, force: true });
+}
+
+/**
+ * 68-WR-04: finishes an upgrade that stopped part way. While <id> is absent, a parked old copy
+ * that is a real directory (a link is never restored) is renamed back; every parked sibling of
+ * <id> is then removed. A folder counts as <id>'s park by its layout, not its name: it holds
+ * exactly <id> (or nothing, a park the crash left before the move). The name alone also matches
+ * another id's temporary copy, for an id ending in "-old" (.x-old-AbC123 is x-old's copy).
+ */
+async function recoverParked(fs: typeof nodeFs.promises, deploymentDir: string, id: string): Promise<void> {
+    let names: string[];
+    try {
+        names = await fs.readdir(deploymentDir);
+    } catch {
+        return; // no deployment folder yet
+    }
+    const dest = path.join(deploymentDir, id);
+    const named = (n: string) => n.startsWith(parkedPrefix(id)) && /^[A-Za-z0-9]{6}$/.test(n.slice(parkedPrefix(id).length));
+    for (const name of names.filter(named).sort()) {
+        const park = path.join(deploymentDir, name);
+        const parked = path.join(park, id);
+        let inside: string[];
+        try {
+            if (!(await fs.lstat(park)).isDirectory()) continue;
+            inside = await fs.readdir(park);
+        } catch {
+            continue;
+        }
+        if (inside.length > 1 || (inside.length === 1 && inside[0] !== id)) continue; // not this id's park
+        try {
+            if (!await exists(fs, dest) && (await fs.lstat(parked)).isDirectory()) {
+                await fs.rename(parked, dest);
+            }
+        } catch { /* nothing parked in it */ }
+        await fs.rm(park, { recursive: true, force: true });
     }
 }
 

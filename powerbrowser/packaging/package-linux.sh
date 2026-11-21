@@ -20,8 +20,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 fail() { echo "package-linux: FAIL -- $*" >&2; exit 1; }
 
-# P68-01: the packaged Orca root is exactly orca/'s package.json, out/orcad and out/web
-# (orca-packaged-tree compares it with the built tree as a set). Nothing else from orca/ ships:
+# P68-01: the packaged Orca root is exactly orca/'s package.json, out/orcad and out/web, plus Orca's
+# own LICENSE (packaging-prefs-network-02) (orca-packaged-tree compares it with the built tree as a set). Nothing else from orca/ ships:
 # no root node_modules, no out/orcad-prebuilds, no out/runtimes (build-orca.sh de-slots, D-14).
 need_orca() {
     test -f "$1/out/orcad/orcad.js" || fail "orca/out/orcad/orcad.js is absent; run bash scripts/fetch-orca.sh and nix develop .#orca --command bash scripts/build-orca.sh first (docs/BUILD.md Orca half)"
@@ -32,6 +32,8 @@ stage_orca() {
     cp -a "$1/package.json" "$2/package.json"
     cp -a "$1/out/orcad" "$2/out/orcad"
     cp -a "$1/out/web" "$2/out/web"
+    # packaging-prefs-network-02: Orca's own MIT notice, verified against the licence allowlist.
+    bash "$ROOT/powerbrowser/packaging/stage-orca-licence.sh" "$ROOT" "$2"
 }
 # PKG-22 / research Pitfall 7: native files carry a RUNPATH naming the build host (node-pty's pty.node
 # carries a Nix one). Per-file `|| true`: --remove-rpath on a non-ELF fails harmlessly; the portable-elf
@@ -46,11 +48,13 @@ strip_runpaths() {
 # a string Theia's bundle and Orca's output legitimately carry (node_modules/.../src/...), so the search
 # is for the host build root release.yml passes in as PB_HOST_ROOT, as package-windows.sh searches for
 # the hosted sidecar's BUILD_ROOT. Unset, the grep would look for nothing, so that is a failure.
+# 68-WR-02: grep exits 1 for no match and 2 for an error (an unreadable file, a missing target, an
+# I/O error). An error is a failure, not a pass, as check-win-sidecar.sh purge states.
 host_root_grep() {
-    local hit
-    while IFS= read -r hit; do
-        fail "the staged tree still carries the host checkout path $PB_HOST_ROOT/: $hit"
-    done < <(grep -rlF "$PB_HOST_ROOT/" "$@" 2>/dev/null || true)
+    local hits rc=0
+    hits="$(grep -rlF -e "$PB_HOST_ROOT/" -- "$@")" || rc=$?
+    [ "$rc" -le 1 ] || fail "grep could not read the stage while looking for $PB_HOST_ROOT/ (exit $rc)"
+    [ -z "$hits" ] || fail "the staged tree still carries the host checkout path $PB_HOST_ROOT/: $(head -n1 <<<"$hits")"
 }
 if [ "$#" -gt 0 ] && ! { [ "$1" = "--orca-stage-only" ] && [ "$#" -eq 2 ]; }; then
     echo "usage: bash powerbrowser/packaging/package-linux.sh [--orca-stage-only DIR]" >&2
@@ -115,6 +119,8 @@ mkdir -p "$STAGE/theia/node_modules/better-sqlite3/lib" "$STAGE/theia/node_modul
 cp -a "$ROOT/theia/node_modules/better-sqlite3/lib/." "$STAGE/theia/node_modules/better-sqlite3/lib/"
 cp "$ROOT/theia/node_modules/better-sqlite3/package.json" "$STAGE/theia/node_modules/better-sqlite3/package.json"
 cp "$ROOT/theia/node_modules/better-sqlite3/prebuilds/linux-x64.node" "$STAGE/theia/node_modules/better-sqlite3/prebuilds/linux-x64.node"
+# 63-CR-01: the Claude Code process wrapper, where the orca-agents backend's require.resolve finds it.
+bash "$ROOT/powerbrowser/packaging/stage-orca-agents-wrapper.sh" "$ROOT" "$STAGE/theia"
 tar -xJf "$ARCHIVE" -C "$STAGE/node" --strip-components=1 "node-$NODE_VERSION-linux-x64/bin/node" "node-$NODE_VERSION-linux-x64/LICENSE"
 test "$("$STAGE/node/bin/node" --version)" = "$NODE_VERSION" || fail "the staged node does not report $NODE_VERSION"
 cp "$ROOT/powerbrowser/distribution/policies.json" "$STAGE/distribution/policies.json"

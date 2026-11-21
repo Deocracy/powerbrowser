@@ -167,7 +167,12 @@
  *
  * A self-test plant is a runtime mutation in its own session (a chrome-scope
  * or Theia-frame evaluate), never a file edit, and notes `PLANT <name>
- * applied` only after reading the mutation back.
+ * applied` only after reading the mutation back. Both modes launch a real
+ * PowerBrowser (the plants are faults injected into the running product, so there
+ * is no hermetic form of this self-test): each takes <git common dir>/pb-live.lock
+ * itself when started without PB_LIVE_LOCK_HELD=1 (lib/live-lock.mjs), and
+ * exits 77 with one "SKIP -- <reason>" line when no built PowerBrowser exists
+ * (SKIP-PROTOCOL.md).
  *
  * PB_CAPTURE_DIR=<dir> (39-07, 35 T12-T15): the session runs headed and
  * captureShell (scripts/lib/pb-kwin.mjs) writes 35-T12-menu.png (context-menu,
@@ -178,7 +183,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -204,6 +209,9 @@ import {
 } from './lib/pb-live-probe.mjs';
 import { REPO_ROOT, pollFor, probe, sourceConst } from './lib/pb-relaunch.mjs';
 import { captureShell } from './lib/pb-kwin.mjs';
+import { FIREFOX_BIN } from './lib/firefox-bidi.mjs';
+import { holdLiveLock, lockWiringFails } from './lib/live-lock.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const MODES_ACTIVATE_COMMAND_ID = sourceConst('theia/extensions/modes/src/browser/modes-commands.ts', 'MODES_ACTIVATE_COMMAND_ID');
 
@@ -918,6 +926,19 @@ async function pickRow(app, theia, label, level = 0) {
     return true;
 }
 
+/**
+ * What a failure message may say about the clipboard (audit harness-live-panels-15): a headed run reads the desktop
+ * clipboard, which holds whatever the user last copied, so the content is never printed. Only its length and whether it is
+ * this check's own test value, a URL on the check's own server, or neither.
+ */
+export function describeClipboard(value, own = []) {
+    if (value === null || value === undefined) return 'could not be read';
+    const text = String(value);
+    if (text === '') return 'is empty';
+    const known = ['pb-sentinel', 'alpha', 'gamma', ...own].includes(text) ? "one of this check's own test values" : /^https?:\/\/127\.0\.0\.1:\d+\//.test(text) ? "a URL on this check's own server" : "not one of this check's values (not printed)";
+    return `holds ${text.length} character(s), ${known}`;
+}
+
 const clipboardText = app => inChrome(app, `try {
     const trans = Cc['@mozilla.org/widget/transferable;1'].createInstance(Ci.nsITransferable);
     trans.init(null);
@@ -1374,7 +1395,7 @@ async function contextMenu({ app, pages, plant, fail, note }) {
     }
     const copied = await settle(() => clipboardText(app), t => t === assets.url('/pixel.png'), 3000);
     if (copied !== assets.url('/pixel.png')) {
-        return fail(`Copy Image Link did not put the image URL on the clipboard (it holds ${JSON.stringify(String(copied).slice(0, 80))})`);
+        return fail(`Copy Image Link did not put the image URL on the clipboard (it ${describeClipboard(copied)})`);
     }
     mark = (await pushes(app)).length;
     await openMenuAt(app, page, tabId, await centreOf(app, page, '#img'));
@@ -3152,9 +3173,39 @@ async function main(args) {
     }
 }
 
+/** --redaction-self-test: the clipboard description over fixtures; hermetic, no browser. */
+function redactionSelfTest() {
+    const secret = 'hunter2-PASSWORD-0123456789-abcdefghijklmnopqrstuvwxyz-0123456789-abcdefghijklmnopqrstuvwxyz-tail';
+    const cases = [
+        ['a secret the user copied is described by length only', describeClipboard(secret), s => /^holds 97 character\(s\), not one of this check's values \(not printed\)$/.test(s) && !s.includes('hunter2') && !s.includes('tail')],
+        ["the check's own sentinel is named", describeClipboard('pb-sentinel'), s => /own test values/.test(s)],
+        ["a URL on the check's own server is named", describeClipboard('http://127.0.0.1:41234/pixel.png'), s => /this check's own server/.test(s)],
+        ['an empty clipboard', describeClipboard(''), s => s === 'is empty'],
+        ['an unreadable clipboard', describeClipboard(null), s => s === 'could not be read'],
+        ["a lookalike host is not the check's own server", describeClipboard('http://127.0.0.1.evil.example/pixel.png'), s => /not one of this check's values/.test(s)],
+    ];
+    let bad = 0;
+    for (const [name, got, test] of cases) { if (test(got)) console.log(`  ok ${name} -> ${got}`); else { console.error(`  FAIL ${name} -> ${got}`); bad += 1; } }
+    const wiring = lockWiringFails(NAME, import.meta.url);
+    if (wiring.length) { console.error(`  FAIL ${wiring.join('; ')}`); bad += 1; } else console.log('  ok the live path awaits holdLiveLock before it launches anything');
+    // The failure message built from the call site's template must carry no clipboard content.
+    const msg = `Copy Image Link did not put the image URL on the clipboard (it ${describeClipboard(secret)})`;
+    if (msg.includes('hunter2')) { console.error('  FAIL the failure message prints clipboard content'); bad += 1; } else console.log('  ok the failure message prints no clipboard content');
+    console.log(bad ? `${NAME} --redaction-self-test: FAIL -- ${bad} case(s)` : `${NAME} --redaction-self-test: PASS -- ${cases.length} cases; no clipboard content reaches a failure line`);
+    return bad ? 1 : 0;
+}
+
 const args = process.argv.slice(2);
+if (args.includes('--redaction-self-test')) process.exit(redactionSelfTest());
 if (args.includes('--help')) {
     console.log(`Usage: node scripts/${NAME}.mjs [--scenario ${Object.keys(SCENARIOS).join(',')}] | --self-test [--scenario a,b]`);
     process.exit(0);
 }
+// Both modes launch a browser. Nothing is launched before the next two steps.
+if (!existsSync(FIREFOX_BIN)) {
+    console.log(skipLine(NAME, `no built PowerBrowser (${FIREFOX_BIN} is absent); build the Firefox half as docs/BUILD.md says, or point PB_FIREFOX_BIN at a build`));
+    process.exit(SKIP_EXIT);
+}
+const held = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
+if (held !== null) process.exit(held);
 process.exit(args.includes('--self-test') ? await selfTest(args) : await main(args));

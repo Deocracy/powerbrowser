@@ -26,6 +26,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync 
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { liveEnv } from './firefox-bidi.mjs';
+import { signalGroupIdentity, signalIdentity, startTicks } from './proc-identity.mjs';
 import { fileURLToPath } from 'node:url';
 
 import { NODE_ARCHIVE_DIR, fetchArchive, readNodePin, verifyArchive } from '../generate-licensing.mjs';
@@ -168,27 +169,69 @@ export function installOutputRedaction(secrets) {
     return () => { for (const [stream, write] of saved) stream.write = write; };
 }
 
+// Every orcad this module spawned and has not stopped yet: pid -> terminal daemon pid (null until the ready
+// line names it). orcad runs in its own session (detached), so neither the driver's group kill nor the row's exit
+// reaches it; this module stops what it started when its process exits or is signalled (audit harness-driver-04).
+const started = new Map();
+let exitHooked = false;
+// pid -> start ticks, recorded when the process is started (orcad at spawn, its terminal daemon when the ready line
+// names it). Every signal this module sends goes through scripts/lib/proc-identity.mjs against these, so a pid or a
+// process group whose number was reused after a teardown window is never signalled (audit harness-live-panels-10).
+const ticksOf = new Map();
+const record = (pid) => { if (Number.isInteger(pid) && pid > 0 && !ticksOf.has(pid)) ticksOf.set(pid, startTicks(pid)); return ticksOf.get(pid) ?? null; };
+
+/** SIGKILLs every orcad (its process group) and terminal daemon still in `started`, by identity. Synchronous, for 'exit'. */
+export function stopStartedDaemons() {
+    for (const [pid, daemonPid] of started) {
+        signalGroupIdentity(pid, ticksOf.get(pid) ?? null, 'SIGKILL');
+        if (daemonPid) signalIdentity(daemonPid, ticksOf.get(daemonPid) ?? null, 'SIGKILL');
+    }
+    started.clear();
+}
+
+function hookExit() {
+    if (exitHooked) return;
+    exitHooked = true;
+    process.on('exit', stopStartedDaemons);
+    // Prepended and one-shot: it stops those processes, removes itself, and re-raises only when no other listener is
+    // left, so firefox-bidi.mjs's liveHome handler (which re-raises when it is the last) still ends the process.
+    for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+        const onSignal = () => {
+            stopStartedDaemons();
+            process.off(sig, onSignal);
+            if (process.listenerCount(sig) === 0) process.kill(process.pid, sig);
+        };
+        process.prependListener(sig, onSignal);
+    }
+}
+
 /**
  * Spawns orcad.js on nodeBin, loopback only, in its own process group. stdout and stderr stay in
  * memory. Resolves { child, ready } once the ready line parses; rejects with a redacted Error on
- * exit or timeout.
+ * exit or timeout, after killing orcad's process group (error.child stays for the caller to stop).
  */
 export function startOrcad({ nodeBin, orcaDir, profileDir, env, timeoutMs = 60000 }) {
     const args = [join(orcaDir, 'out', 'orcad', 'orcad.js'), '--bind', '127.0.0.1', '--port', '0', '--json',
         '--web-client-root', join(orcaDir, 'out', 'web')];
     const child = spawn(nodeBin, args, { cwd: profileDir, env: liveEnv(env), detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    if (child.pid) { record(child.pid); started.set(child.pid, null); hookExit(); }
     let out = '';
     let err = '';
     return new Promise((resolveP, rejectP) => {
         let done = false;
         const tail = () => err.trim().split('\n').slice(-6).join(' | ').slice(-600);
         const finish = (fn, v) => { if (!done) { done = true; clearTimeout(timer); fn(v); } };
-        const fail = (msg) => finish(rejectP, Object.assign(new Error(redact(msg)), { child, stderrTail: redact(tail()) }));
+        const fail = (msg) => {
+            if (done) return;
+            if (child.pid) { signalGroupIdentity(child.pid, ticksOf.get(child.pid) ?? null, 'SIGKILL'); started.delete(child.pid); }
+            finish(rejectP, Object.assign(new Error(redact(msg)), { child, stderrTail: redact(tail()) }));
+        };
         const timer = setTimeout(() => fail(`orcad printed no orca_server_ready line within ${timeoutMs} ms; stderr: ${tail()}`), timeoutMs);
         child.stdout.on('data', (d) => {
             out += d;
             try {
                 const ready = parseReady(out);
+                if (ready && !done && started.has(child.pid)) { record(ready.daemonPid); started.set(child.pid, ready.daemonPid); }
                 if (ready) finish(resolveP, { child, ready, stderr: () => err });
             } catch (e) { fail(e.message); }
         });
@@ -241,31 +284,24 @@ export function nodeExesInTree(rootPids) {
     return exes;
 }
 
-const alive = (pid) => Number.isInteger(pid) && pid > 0 && existsSync(`/proc/${pid}`) && !isZombie(pid);
-function isZombie(pid) {
-    try {
-        const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
-        return stat.slice(stat.lastIndexOf(')') + 2).startsWith('Z');
-    } catch { return false; }
-}
-function signal(pid, sig, group = false) {
-    try { process.kill(group ? -pid : pid, sig); } catch { /* already gone */ }
-}
-
-/** SIGTERM orcad's process group and the terminal daemon, SIGKILL leftovers after 10 s; returns { survivors }. */
+/**
+ * SIGTERM orcad's process group and the terminal daemon, SIGKILL leftovers after 10 s; returns { survivors }. Each is
+ * signalled only while it is still the process recorded when it started (a daemon pid this module never recorded is
+ * recorded now, the best that can be done for it).
+ */
 export async function stopOrcad(child, daemonPid, { graceMs = 10000 } = {}) {
-    const pids = [child?.pid, daemonPid].filter((p) => Number.isInteger(p) && p > 0);
-    if (child?.pid) signal(child.pid, 'SIGTERM', true);
-    if (daemonPid) signal(daemonPid, 'SIGTERM');
+    if (child?.pid) started.delete(child.pid);
+    const ids = [child?.pid, daemonPid].filter((p) => Number.isInteger(p) && p > 0).map((pid) => ({ pid, ticks: record(pid) }));
+    const same = (id) => id.ticks !== null && startTicks(id.pid) === id.ticks;
+    const kill = (id, sig) => (id.pid === child?.pid ? signalGroupIdentity(id.pid, id.ticks, sig) : signalIdentity(id.pid, id.ticks, sig));
+    for (const id of ids) kill(id, 'SIGTERM');
     const until = Date.now() + graceMs;
-    while (Date.now() < until && pids.some(alive)) await new Promise((r) => setTimeout(r, 200));
-    for (const p of pids.filter(alive)) {
-        if (p === child?.pid) signal(p, 'SIGKILL', true);
-        signal(p, 'SIGKILL');
-    }
+    while (Date.now() < until && ids.some(same)) await new Promise((r) => setTimeout(r, 200));
+    for (const id of ids.filter(same)) kill(id, 'SIGKILL');
     const settle = Date.now() + 2000;
-    while (Date.now() < settle && pids.some(alive)) await new Promise((r) => setTimeout(r, 100));
-    return { survivors: pids.filter(alive) };
+    while (Date.now() < settle && ids.some(same)) await new Promise((r) => setTimeout(r, 100));
+    for (const id of ids) if (!same(id)) ticksOf.delete(id.pid);
+    return { survivors: ids.filter(same).map((id) => id.pid) };
 }
 
 /**

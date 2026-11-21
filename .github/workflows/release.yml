@@ -76,6 +76,13 @@ jobs:
       contents: read
     outputs:
       build: ${{ steps.key_gate.outputs.build }}
+      # The SHA-256 of the SHA256SUMS that release-linux carries (ci-supply-chain-01). A job output is set by this
+      # job alone, so sign-publish can refuse a release-linux that another job of the run replaced after the upload.
+      sums_sha256: ${{ steps.release_sums.outputs.sha256 }}
+      # The same for release-linux-identity and release-linux-manifest, which descriptor (bot key) and channel-live
+      # (job token) read: every artifact a later secret- or token-holding job consumes is bound to this job.
+      identity_sums_sha256: ${{ steps.release_sums.outputs.identity_sha256 }}
+      manifest_sums_sha256: ${{ steps.release_sums.outputs.manifest_sha256 }}
     env:
       RELEASE_SHA: ${{ inputs.sha }}
     steps:
@@ -150,7 +157,7 @@ jobs:
         if: steps.key_gate.outputs.build == 'true'
         run: |
           set -euo pipefail
-          nix develop .#theia --command node scripts/verify-licence-allowlist.mjs --rulings
+          bash scripts/run-no-skip.sh -- nix develop .#theia --command node scripts/verify-licence-allowlist.mjs --rulings
 
       - name: Fetch the pinned Firefox source and apply the patch stack
         if: steps.key_gate.outputs.build == 'true'
@@ -192,7 +199,7 @@ jobs:
       # does not outlive it); the comparison and the toolchain-container row are the same code.
       - name: Refuse a toolchain that drifted from toolchain-baseline.txt (before packaging)
         if: steps.key_gate.outputs.build == 'true'
-        run: nix develop .#theia --command node scripts/verify-toolchain-container.mjs --measured objdir-release/toolchain-measured.txt
+        run: bash scripts/run-no-skip.sh -- nix develop .#theia --command node scripts/verify-toolchain-container.mjs --measured objdir-release/toolchain-measured.txt
 
       - name: Package the tarball and the release manifest
         if: steps.key_gate.outputs.build == 'true'
@@ -203,6 +210,8 @@ jobs:
       # G-49b (ROADMAP Phase 49 criterion 2): the packaged rows and the install matrix judge the built package
       # before anything is uploaded. Each label is one registry row (the release-shape row checks they are
       # registered); the stock browser for the alongside cell comes from the flake's pinned nixpkgs.
+      # run-no-skip.sh: verify-platform.sh --only exits 0 for a row that SKIPped and prints "  <label>: SKIP" in its
+      # summary; before an upload every packaged row must have run, so that line is red (SKIP-PROTOCOL.md).
       - name: Run the packaged rows and the install matrix over the built package (before any upload)
         if: steps.key_gate.outputs.build == 'true'
         run: |
@@ -210,8 +219,40 @@ jobs:
           PB_STOCK_FIREFOX="$(nix build --no-link --print-out-paths --inputs-from . nixpkgs#firefox)/bin/firefox"
           export PB_STOCK_FIREFOX
           for LABEL in ng063-packaged-launch portable-elf sidecar-no-symlinks package-target-natives packaged-identity install-matrix orca-packaged-tree; do
-            nix develop .#theia --command scripts/verify-platform.sh --only "$LABEL"
+            bash scripts/run-no-skip.sh -- nix develop .#theia --command scripts/verify-platform.sh --only "$LABEL"
           done
+
+      # ci-supply-chain-01: the hosted jobs of this run build upstream code, and any of them that obtains the run's
+      # artifact token could replace release-linux after the upload below. SHA256SUMS lists the three uploaded files
+      # (BUILD_ROOT is listed too: check-win-sidecar.sh, the admission sign-publish runs, requires it; it is data,
+      # never an asset), and its SHA-256 leaves as the job output sums_sha256, outside the artifact.
+      # release-linux-identity and release-linux-manifest are staged in their own directories under RUNNER_TEMP, each
+      # with BUILD_ROOT and its own SHA256SUMS, in the layout the descriptor and channel-live jobs read.
+      - name: Write SHA256SUMS over the release-linux, identity and manifest files and record each digest as a job output
+        id: release_sums
+        if: steps.key_gate.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          DIST=objdir-release/dist
+          rm -f "$DIST/SHA256SUMS" "$DIST/BUILD_ROOT"
+          printf '%s\n' "$GITHUB_WORKSPACE" > "$DIST/BUILD_ROOT"
+          (cd "$DIST" && shopt -s nullglob && FILES=(*.tar.xz *.complete.mar release-manifest.json BUILD_ROOT) && [ "${#FILES[@]}" -ge 4 ] && sha256sum "${FILES[@]}" > SHA256SUMS)
+          SUMS="$(sha256sum "$DIST/SHA256SUMS" | cut -d' ' -f1)"
+          echo "sha256=$SUMS" >> "$GITHUB_OUTPUT"
+          echo "release-linux SHA256SUMS sha256 $SUMS"
+          sums_dir() { printf '%s\n' "$GITHUB_WORKSPACE" > "$1/BUILD_ROOT"; (cd "$1" && find . -type f ! -path ./SHA256SUMS -print | sed 's|^\./||' | LC_ALL=C sort | xargs -d '\n' sha256sum > SHA256SUMS); sha256sum "$1/SHA256SUMS" | cut -d' ' -f1; }
+          # The identity artifact keeps its two objdir paths (the descriptor emitter's layout); its digest is the
+          # SHA-256 of their sha256sum listing, which the consumer recomputes over exactly those two files.
+          IDS="$(cd objdir-release && sha256sum config.status dist/bin/application.ini | sha256sum | cut -d' ' -f1)"
+          MF="${RUNNER_TEMP:?}/release-linux-manifest"
+          rm -rf "$MF"
+          mkdir -p "$MF"
+          cp "$DIST/release-manifest.json" "$MF/release-manifest.json"
+          MFS="$(sums_dir "$MF")"
+          [[ "$IDS" =~ ^[0-9a-f]{64}$ && "$MFS" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::the identity or manifest SHA256SUMS digest is not 64 hex; nothing is uploaded" >&2; exit 1; }
+          echo "identity_sha256=$IDS" >> "$GITHUB_OUTPUT"
+          echo "manifest_sha256=$MFS" >> "$GITHUB_OUTPUT"
+          echo "release-linux-identity SHA256SUMS sha256 $IDS; release-linux-manifest SHA256SUMS sha256 $MFS"
 
       # Data only: the signer is built on a hosted runner from the pinned source, never taken from here.
       - name: Upload the tarball, the complete MAR and the release manifest
@@ -223,6 +264,8 @@ jobs:
             objdir-release/dist/*.tar.xz
             objdir-release/dist/*.complete.mar
             objdir-release/dist/release-manifest.json
+            objdir-release/dist/SHA256SUMS
+            objdir-release/dist/BUILD_ROOT
           if-no-files-found: error
           retention-days: 1
           overwrite: true
@@ -250,7 +293,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-linux-manifest
-          path: objdir-release/dist/release-manifest.json
+          path: ${{ runner.temp }}/release-linux-manifest/
           if-no-files-found: error
           retention-days: 7
           overwrite: true
@@ -506,6 +549,10 @@ jobs:
       contents: read
     outputs:
       build: ${{ steps.key_gate.outputs.build }}
+      # The SHA-256 of the SHA256SUMS release-windows carries (ci-supply-chain-01), set by this job alone.
+      sums_sha256: ${{ steps.release_sums.outputs.sha256 }}
+      # The same for release-windows-identity, which descriptor-windows (bot key) reads.
+      identity_sums_sha256: ${{ steps.release_sums.outputs.identity_sha256 }}
     env:
       RELEASE_SHA: ${{ inputs.sha }}
     steps:
@@ -579,7 +626,7 @@ jobs:
         if: steps.key_gate.outputs.build == 'true'
         run: |
           set -euo pipefail
-          nix develop .#theia --command node scripts/verify-licence-allowlist.mjs --rulings
+          bash scripts/run-no-skip.sh -- nix develop .#theia --command node scripts/verify-licence-allowlist.mjs --rulings
 
       - name: Check the win32-x64 Node pin before any staging reads it
         if: steps.key_gate.outputs.build == 'true'
@@ -653,6 +700,28 @@ jobs:
             -e PB_WIN_ORCA_DIR=/src/windows-orca -e PB_WIN_ORCA_SUMS_SHA256 \
             pb-gecko-build bash powerbrowser/packaging/package-windows.sh
 
+      # ci-supply-chain-01, as for release-linux: SHA256SUMS over the uploaded files (BUILD_ROOT listed for the
+      # admission tool), its SHA-256 the job output sums_sha256, so sign-windows and publish-windows sign only the
+      # bytes this job uploaded.
+      - name: Write SHA256SUMS over the release-windows and identity files and record each digest as a job output
+        id: release_sums
+        if: steps.key_gate.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          DIST=objdir-windows-x86_64/dist/release-windows
+          rm -f "$DIST/SHA256SUMS" "$DIST/BUILD_ROOT"
+          printf '%s\n' "$GITHUB_WORKSPACE" > "$DIST/BUILD_ROOT"
+          (cd "$DIST" && shopt -s nullglob && FILES=(*.installer.exe *.complete.mar *.zip setup.exe BUILD_ROOT) && [ "${#FILES[@]}" -ge 5 ] && sha256sum "${FILES[@]}" > SHA256SUMS)
+          SUMS="$(sha256sum "$DIST/SHA256SUMS" | cut -d' ' -f1)"
+          echo "sha256=$SUMS" >> "$GITHUB_OUTPUT"
+          echo "release-windows SHA256SUMS sha256 $SUMS"
+          # The identity artifact keeps its two objdir paths (build-windows-shape requires exactly them); its digest is
+          # the SHA-256 of their sha256sum listing, which descriptor-windows recomputes over exactly those two files.
+          IDS="$(cd objdir-windows-x86_64 && sha256sum config.status dist/bin/application.ini | sha256sum | cut -d' ' -f1)"
+          [[ "$IDS" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::the identity SHA256SUMS digest is not 64 hex; nothing is uploaded" >&2; exit 1; }
+          echo "identity_sha256=$IDS" >> "$GITHUB_OUTPUT"
+          echo "release-windows-identity SHA256SUMS sha256 $IDS"
+
       # Data only: no later job executes anything here. sign-windows signs the inner PE files of the zip and the
       # setup.exe stub, then repackages the installer and the complete MAR itself (SEC-12 order); the unsigned
       # installer and MAR stay as the unsigned-first (SEC-03) build of the same tree.
@@ -667,6 +736,8 @@ jobs:
             objdir-windows-x86_64/dist/release-windows/*.complete.mar
             objdir-windows-x86_64/dist/release-windows/*.zip
             objdir-windows-x86_64/dist/release-windows/setup.exe
+            objdir-windows-x86_64/dist/release-windows/SHA256SUMS
+            objdir-windows-x86_64/dist/release-windows/BUILD_ROOT
           if-no-files-found: error
           retention-days: 1
           overwrite: true
@@ -808,6 +879,15 @@ jobs:
           name: release-windows
           path: windows
 
+      # ci-supply-chain-01: only the bytes build-windows uploaded are signed (its SHA256SUMS digest job output).
+      - name: Admit release-windows by the SHA256SUMS digest build-windows recorded (before anything reads it)
+        if: steps.azure_config.outputs.signing == 'true'
+        env:
+          SUMS_SHA256: ${{ needs.build-windows.outputs.sums_sha256 }}
+        run: |
+          set -euo pipefail
+          bash powerbrowser/packaging/check-win-sidecar.sh check windows "$SUMS_SHA256"
+
       # The zip name and its top directory are DERIVED from this tree (scripts/win-sign-list.mjs --expected-base:
       # configuration.toml's app basename and ESR version) and the artifact must match them; nothing the artifact
       # names reaches GITHUB_OUTPUT. Zip entries are refused unless every name matches ^[A-Za-z0-9@._/-]+$ with no
@@ -909,7 +989,7 @@ jobs:
           set -euo pipefail
           bash powerbrowser/packaging/check-win-sidecar.sh check windows-orca "$PB_WIN_ORCA_SUMS_SHA256"
           node scripts/win-sign-list.mjs --list --pkg "$PKG/$TOP" --manifest upstream/browser/installer/package-manifest.in \
-            --orca-sums windows-orca/SHA256SUMS > "$RUNNER_TEMP/sign-list.txt"
+            --orca-sums windows-orca/SHA256SUMS --orca-dir windows-orca > "$RUNNER_TEMP/sign-list.txt"
           wc -l < "$RUNNER_TEMP/sign-list.txt"
 
       # Directly before the first signature, after every gate above has passed.
@@ -1058,7 +1138,7 @@ jobs:
           DER=powerbrowser/packaging/mar/mar-primary.der
           certutil -A -d "sql:$V" -n powerbrowser-mar -t ",," -i "$DER"
           "$SIGNMAR" -d "$V" -n powerbrowser-mar -v "$SIGNED_MAR"
-          node scripts/verify-mar-signature.mjs "$SIGNED_MAR" "$DER"
+          bash scripts/run-no-skip.sh -- node scripts/verify-mar-signature.mjs "$SIGNED_MAR" "$DER"
 
       - name: Remove the signing scratch databases
         if: always()
@@ -1140,6 +1220,16 @@ jobs:
         with:
           name: release-linux
           path: release
+
+      # ci-supply-chain-01: the bytes signed are the bytes build-linux uploaded. SHA256SUMS must hash to the digest
+      # build-linux recorded as its job output, list exactly the files present, and agree with every one of them;
+      # an artifact another job of the run replaced after the upload stops here, before anything reads it.
+      - name: Admit release-linux by the SHA256SUMS digest build-linux recorded (before anything reads it)
+        env:
+          SUMS_SHA256: ${{ needs.build-linux.outputs.sums_sha256 }}
+        run: |
+          set -euo pipefail
+          bash powerbrowser/packaging/check-win-sidecar.sh check release "$SUMS_SHA256"
 
       # The tag and every asset name come from the tree, never from the manifest legion wrote.
       - name: Derive the release key from this tree and require the manifest to agree
@@ -1233,7 +1323,7 @@ jobs:
           certutil -N -d "sql:$V" --empty-password
           certutil -A -d "sql:$V" -n powerbrowser-mar -t ",," -i powerbrowser/packaging/mar/mar-primary.der
           "$SIGNMAR" -d "$V" -n powerbrowser-mar -v "$SIGNED"
-          node scripts/verify-mar-signature.mjs "$SIGNED" powerbrowser/packaging/mar/mar-primary.der
+          bash scripts/run-no-skip.sh -- node scripts/verify-mar-signature.mjs "$SIGNED" powerbrowser/packaging/mar/mar-primary.der
 
       - name: Remove the signing scratch databases
         if: always()
@@ -1441,7 +1531,7 @@ jobs:
   # the updates repo unless every gate before the mint passes, and an unchanged descriptor is never
   # re-committed, so a rerun over the same inputs changes nothing.
   descriptor:
-    needs: sign-publish
+    needs: [build-linux, sign-publish]
     if: needs.sign-publish.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -1474,6 +1564,22 @@ jobs:
           name: release-linux-identity
           path: identity
 
+      # ci-supply-chain-01: the manifest and identity this job emits and commits from are the bytes build-linux uploaded.
+      - name: Admit the manifest and the identity files by the SHA256SUMS digests build-linux recorded (before anything reads them)
+        env:
+          MANIFEST_SUMS_SHA256: ${{ needs.build-linux.outputs.manifest_sums_sha256 }}
+          IDENTITY_SUMS_SHA256: ${{ needs.build-linux.outputs.identity_sums_sha256 }}
+        run: |
+          set -euo pipefail
+          bash powerbrowser/packaging/check-win-sidecar.sh check release "$MANIFEST_SUMS_SHA256"
+          [ "$(cd identity && find . -type f -o -type l | LC_ALL=C sort | tr '\n' ' ')" = "./config.status ./dist/bin/application.ini " ] \
+            || { echo "::error::the identity artifact holds more or other than config.status and dist/bin/application.ini; nothing is emitted" >&2; exit 1; }
+          GOT="$(cd identity && sha256sum config.status dist/bin/application.ini | sha256sum | cut -d' ' -f1)"
+          if ! [[ $IDENTITY_SUMS_SHA256 =~ ^[0-9a-f]{64}$ ]] || [ "$GOT" != "$IDENTITY_SUMS_SHA256" ]; then
+            echo "::error::the identity files in identity/ hash to $GOT, not the ${IDENTITY_SUMS_SHA256:-<no digest>} their build job recorded; they were replaced after that job, and nothing is emitted" >&2
+            exit 1
+          fi
+
       - name: Derive the release key from this tree and require the manifest to agree
         id: derive_key
         run: |
@@ -1487,7 +1593,7 @@ jobs:
       # The manifest is build output (data): the tree decides the MAR origin, the update channel and the update
       # URL, as derive_key decides the release key. verify-channel-live.mjs holds the one comparison (IN-03).
       - name: Require the manifest's MAR origin, update channel and update URL to equal this tree's
-        run: node scripts/verify-channel-live.mjs --manifest-agrees --manifest release/release-manifest.json
+        run: bash scripts/run-no-skip.sh -- node scripts/verify-channel-live.mjs --manifest-agrees --manifest release/release-manifest.json
 
       # The descriptor pins the signed bytes the Release published, never the unsigned MAR legion built.
       - name: Download the signed versioned MAR from the published Release
@@ -1513,15 +1619,19 @@ jobs:
           node scripts/build-update-xml.mjs --emit --outdir "$RUNNER_TEMP/descriptors" "${INPUTS[@]}"
           node scripts/build-update-xml.mjs --check --outdir "$RUNNER_TEMP/descriptors" "${INPUTS[@]}"
 
+      # Exit 77 is red here. The documented normal case before the first release is zero published Releases, and the
+      # script reports that as a PASS that names the count, not as a SKIP (verify-descriptor-monotonic.mjs header,
+      # points 2 and 4). Its only SKIP is zero candidates under the default tree, and with --descriptors an absent or
+      # empty directory is a FAIL. So no SKIP line is allowed: a skip here means the descriptors were not judged.
       - name: Refuse a buildID that is not newer than every published one (descriptor-monotonic)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/verify-descriptor-monotonic.mjs --descriptors "$RUNNER_TEMP/descriptors"
+        run: bash scripts/run-no-skip.sh -- node scripts/verify-descriptor-monotonic.mjs --descriptors "$RUNNER_TEMP/descriptors"
 
       # DIST-08. Every patchURL and servedMarUrl must be https on the tree's mar_origin with path
       # /<tag>/<asset>; any other form fails here, naming the descriptor and the value, before any commit.
       - name: Refuse any patch URL that is not the MAR origin at /<tag>/<asset> (the pre-commit form gate)
-        run: node scripts/verify-channel-live.mjs --form-only --manifest release/release-manifest.json --descriptors "$RUNNER_TEMP/descriptors"
+        run: bash scripts/run-no-skip.sh -- node scripts/verify-channel-live.mjs --form-only --manifest release/release-manifest.json --descriptors "$RUNNER_TEMP/descriptors"
 
       # One derivation of the updates repo (<owner>/<repo>-updates, today powerbrowser-updates), read by the
       # token scope and the commit target alike, so a rename or a fork cannot split them.
@@ -1593,7 +1703,7 @@ jobs:
   # UPD-17. Runs last and only reads: contents read, no environment, no secret, no App token. The sweep
   # runs the same row daily. Until the first public release it fails closed, never green.
   channel-live:
-    needs: descriptor
+    needs: [build-linux, descriptor]
     if: needs.descriptor.result == 'success'
     runs-on: ubuntu-latest
     # Ten attempts 60 s apart (the deploy wait below) plus one row run per attempt.
@@ -1613,10 +1723,17 @@ jobs:
           name: release-linux-manifest
           path: release
 
+      - name: Admit the manifest by the SHA256SUMS digest build-linux recorded (before anything reads it)
+        env:
+          MANIFEST_SUMS_SHA256: ${{ needs.build-linux.outputs.manifest_sums_sha256 }}
+        run: |
+          set -euo pipefail
+          bash powerbrowser/packaging/check-win-sidecar.sh check release "$MANIFEST_SUMS_SHA256"
+
       # The manifest is build output (data): the tree decides the MAR origin, the update channel and the update
       # URL, as derive_key decides the release key. verify-channel-live.mjs holds the one comparison (IN-03).
       - name: Require the manifest's MAR origin, update channel and update URL to equal this tree's
-        run: node scripts/verify-channel-live.mjs --manifest-agrees --manifest release/release-manifest.json
+        run: bash scripts/run-no-skip.sh -- node scripts/verify-channel-live.mjs --manifest-agrees --manifest release/release-manifest.json
 
       # The updates host deploys from the push the descriptor job just made, and its edge can serve the
       # previous update.xml for a while, so a red verdict is retried here; the row itself stays one pure
@@ -1629,7 +1746,7 @@ jobs:
           ATTEMPTS=10
           for ATTEMPT in $(seq 1 "$ATTEMPTS"); do
             RC=0
-            node scripts/verify-channel-live.mjs --manifest release/release-manifest.json || RC=$?
+            bash scripts/run-no-skip.sh -- node scripts/verify-channel-live.mjs --manifest release/release-manifest.json || RC=$?
             [ "$RC" -eq 1 ] || exit "$RC"
             [ "$ATTEMPT" -eq "$ATTEMPTS" ] && break
             echo "channel-live attempt $ATTEMPT of $ATTEMPTS is red; the updates host may still be deploying, so it is read again in 60 s"
@@ -1718,6 +1835,14 @@ jobs:
           name: release-windows
           path: windows
 
+      # ci-supply-chain-01: only the bytes build-windows uploaded are signed and published (its SHA256SUMS digest).
+      - name: Admit release-windows by the SHA256SUMS digest build-windows recorded (before anything reads it)
+        env:
+          SUMS_SHA256: ${{ needs.build-windows.outputs.sums_sha256 }}
+        run: |
+          set -euo pipefail
+          bash powerbrowser/packaging/check-win-sidecar.sh check windows "$SUMS_SHA256"
+
       # The local base name is DERIVED from this tree (scripts/win-sign-list.mjs --expected-base) and the artifact must
       # hold exactly that installer and MAR; nothing the artifact names reaches GITHUB_OUTPUT.
       - name: Admit the unsigned installer and the complete MAR against the tree-derived base name
@@ -1790,7 +1915,7 @@ jobs:
           certutil -N -d "sql:$V" --empty-password
           certutil -A -d "sql:$V" -n powerbrowser-mar -t ",," -i powerbrowser/packaging/mar/mar-primary.der
           "$SIGNMAR" -d "$V" -n powerbrowser-mar -v "$SIGNED_MAR"
-          node scripts/verify-mar-signature.mjs "$SIGNED_MAR" powerbrowser/packaging/mar/mar-primary.der
+          bash scripts/run-no-skip.sh -- node scripts/verify-mar-signature.mjs "$SIGNED_MAR" powerbrowser/packaging/mar/mar-primary.der
 
       - name: Remove the signing scratch databases
         if: always()
@@ -1890,13 +2015,16 @@ jobs:
   # descriptor-monotonic cannot order a Windows build; the commit step instead refuses a buildID that is not
   # newer than the Windows descriptor already committed.
   descriptor-windows:
-    needs: publish-windows
+    needs: [build-windows, publish-windows]
     if: needs.publish-windows.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: descriptor
     permissions:
       contents: read
+    outputs:
+      # The digest of the release-windows-manifest SHA256SUMS, which channel-live-windows admits (ci-supply-chain-01).
+      manifest_sums_sha256: ${{ steps.manifest_sums.outputs.sha256 }}
     steps:
       - name: Refuse any ref but main and any event but a dispatch
         run: |
@@ -1915,6 +2043,19 @@ jobs:
         with:
           name: release-windows-identity
           path: identity
+
+      - name: Admit the identity files by the SHA256SUMS digest build-windows recorded (before anything reads them)
+        env:
+          IDENTITY_SUMS_SHA256: ${{ needs.build-windows.outputs.identity_sums_sha256 }}
+        run: |
+          set -euo pipefail
+          [ "$(cd identity && find . -type f -o -type l | LC_ALL=C sort | tr '\n' ' ')" = "./config.status ./dist/bin/application.ini " ] \
+            || { echo "::error::the identity artifact holds more or other than config.status and dist/bin/application.ini; nothing is emitted" >&2; exit 1; }
+          GOT="$(cd identity && sha256sum config.status dist/bin/application.ini | sha256sum | cut -d' ' -f1)"
+          if ! [[ $IDENTITY_SUMS_SHA256 =~ ^[0-9a-f]{64}$ ]] || [ "$GOT" != "$IDENTITY_SUMS_SHA256" ]; then
+            echo "::error::the identity files in identity/ hash to $GOT, not the ${IDENTITY_SUMS_SHA256:-<no digest>} their build job recorded; they were replaced after that job, and nothing is emitted" >&2
+            exit 1
+          fi
 
       - name: Read the release key from this tree
         id: derive_key
@@ -1948,14 +2089,28 @@ jobs:
           node scripts/build-update-xml.mjs --check --outdir "$RUNNER_TEMP/descriptors" "${INPUTS[@]}"
 
       - name: Refuse any patch URL that is not the MAR origin at /<tag>/<asset> (the pre-commit form gate)
-        run: node scripts/verify-channel-live.mjs --form-only --manifest "$RUNNER_TEMP/windows-manifest/release-manifest.json" --descriptors "$RUNNER_TEMP/descriptors"
+        run: bash scripts/run-no-skip.sh -- node scripts/verify-channel-live.mjs --form-only --manifest "$RUNNER_TEMP/windows-manifest/release-manifest.json" --descriptors "$RUNNER_TEMP/descriptors"
+
+      - name: Write SHA256SUMS over the Windows manifest and record its digest as a job output
+        id: manifest_sums
+        run: |
+          set -euo pipefail
+          D="$RUNNER_TEMP/windows-manifest"
+          printf '%s\n' "$GITHUB_WORKSPACE" > "$D/BUILD_ROOT"
+          (cd "$D" && sha256sum BUILD_ROOT release-manifest.json > SHA256SUMS)
+          SUMS="$(sha256sum "$D/SHA256SUMS" | cut -d' ' -f1)"
+          echo "sha256=$SUMS" >> "$GITHUB_OUTPUT"
+          echo "release-windows-manifest SHA256SUMS sha256 $SUMS"
 
       # Data only, for channel-live-windows: the build values of the Windows descriptor, no installer and no MAR.
       - name: Upload the Windows manifest channel-live-windows reads
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-windows-manifest
-          path: ${{ runner.temp }}/windows-manifest/release-manifest.json
+          path: |
+            ${{ runner.temp }}/windows-manifest/release-manifest.json
+            ${{ runner.temp }}/windows-manifest/BUILD_ROOT
+            ${{ runner.temp }}/windows-manifest/SHA256SUMS
           if-no-files-found: error
           retention-days: 7
           overwrite: true
@@ -2053,8 +2208,15 @@ jobs:
           name: release-windows-manifest
           path: release
 
+      - name: Admit the Windows manifest by the SHA256SUMS digest descriptor-windows recorded (before anything reads it)
+        env:
+          MANIFEST_SUMS_SHA256: ${{ needs.descriptor-windows.outputs.manifest_sums_sha256 }}
+        run: |
+          set -euo pipefail
+          bash powerbrowser/packaging/check-win-sidecar.sh check release "$MANIFEST_SUMS_SHA256"
+
       - name: Require the Windows manifest's MAR origin, update channel and update URL to equal this tree's
-        run: node scripts/verify-channel-live.mjs --manifest-agrees --manifest release/release-manifest.json
+        run: bash scripts/run-no-skip.sh -- node scripts/verify-channel-live.mjs --manifest-agrees --manifest release/release-manifest.json
 
       - name: Prove the public Windows channel equals the MAR origin (byte-equal descriptor, MAR-origin form, HEAD size, GET sha512, latest version)
         env:
@@ -2064,7 +2226,7 @@ jobs:
           ATTEMPTS=10
           for ATTEMPT in $(seq 1 "$ATTEMPTS"); do
             RC=0
-            node scripts/verify-channel-live.mjs --manifest release/release-manifest.json || RC=$?
+            bash scripts/run-no-skip.sh -- node scripts/verify-channel-live.mjs --manifest release/release-manifest.json || RC=$?
             [ "$RC" -eq 1 ] || exit "$RC"
             [ "$ATTEMPT" -eq "$ATTEMPTS" ] && break
             echo "channel-live-windows attempt $ATTEMPT of $ATTEMPTS is red; the updates host may still be deploying, so it is read again in 60 s"
@@ -2164,16 +2326,31 @@ jobs:
           test -f orca/out/orcad/orcad.js || { echo "::error::orca/out/orcad/orcad.js is absent after build-orca.sh; nothing is staged" >&2; exit 1; }
           cp -a orca/package.json "$OUT/package.json"
           cp -a orca/out/orcad orca/out/web "$OUT/out/"
-          node scripts/verify-orca-packaged-tree.mjs --target macos-arm64 --stage "$OUT" --prebuild-manifest orca/out/orcad-prebuilds/manifest.json
+          bash scripts/run-no-skip.sh -- node scripts/verify-orca-packaged-tree.mjs --target macos-arm64 --stage "$OUT" --prebuild-manifest orca/out/orcad-prebuilds/manifest.json
           cp orca/out/orcad-prebuilds/manifest.json "$OUT/orcad-prebuilds-manifest.json"
           printf '%s\n' "$GITHUB_WORKSPACE" > "$OUT/BUILD_ROOT"
           (cd "$OUT" && find . -type f ! -path ./SHA256SUMS -print | sed 's|^\./||' | LC_ALL=C sort | while IFS= read -r f; do shasum -a 256 "$f"; done > SHA256SUMS)
+
+      # 68-CR-03: actions/upload-artifact keeps no file mode, so a loose tree would reach macos-orca-universal with
+      # node-pty's spawn-helper, the ripgrep binaries and agent-browser at 0644. The tree travels as one tar, which
+      # keeps every mode, beside BUILD_ROOT; the artifact's SHA256SUMS lists the two, so the digest covers the tar.
+      # COPYFILE_DISABLE keeps macOS tar from adding ._ AppleDouble members, which the inner SHA256SUMS would refuse.
+      - name: Archive the staged tree as one tar (modes kept), then write the artifact's SHA256SUMS
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/macos-orca-arm64"
+          ART="$RUNNER_TEMP/macos-orca-arm64-artifact"
+          rm -rf "$ART"
+          mkdir -p "$ART"
+          COPYFILE_DISABLE=1 tar -cf "$ART/tree.tar" -C "$OUT" .
+          cp "$OUT/BUILD_ROOT" "$ART/BUILD_ROOT"
+          (cd "$ART" && for f in BUILD_ROOT tree.tar; do shasum -a 256 "$f"; done > SHA256SUMS)
 
       - name: Record the SHA256SUMS digest outside the artifact
         id: sums
         run: |
           set -euo pipefail
-          SUMS="$(shasum -a 256 "$RUNNER_TEMP/macos-orca-arm64/SHA256SUMS" | cut -d' ' -f1)"
+          SUMS="$(shasum -a 256 "$RUNNER_TEMP/macos-orca-arm64-artifact/SHA256SUMS" | cut -d' ' -f1)"
           [[ "$SUMS" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::shasum printed no SHA-256 for SHA256SUMS ('$SUMS')" >&2; exit 1; }
           echo "sha256=$SUMS" >> "$GITHUB_OUTPUT"
           echo "macos-orca-arm64 SHA256SUMS sha256 $SUMS"
@@ -2182,7 +2359,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-orca-arm64
-          path: ${{ runner.temp }}/macos-orca-arm64/
+          path: ${{ runner.temp }}/macos-orca-arm64-artifact/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
@@ -2279,16 +2456,31 @@ jobs:
           test -f orca/out/orcad/orcad.js || { echo "::error::orca/out/orcad/orcad.js is absent after build-orca.sh; nothing is staged" >&2; exit 1; }
           cp -a orca/package.json "$OUT/package.json"
           cp -a orca/out/orcad orca/out/web "$OUT/out/"
-          node scripts/verify-orca-packaged-tree.mjs --target macos-x64 --stage "$OUT" --prebuild-manifest orca/out/orcad-prebuilds/manifest.json
+          bash scripts/run-no-skip.sh -- node scripts/verify-orca-packaged-tree.mjs --target macos-x64 --stage "$OUT" --prebuild-manifest orca/out/orcad-prebuilds/manifest.json
           cp orca/out/orcad-prebuilds/manifest.json "$OUT/orcad-prebuilds-manifest.json"
           printf '%s\n' "$GITHUB_WORKSPACE" > "$OUT/BUILD_ROOT"
           (cd "$OUT" && find . -type f ! -path ./SHA256SUMS -print | sed 's|^\./||' | LC_ALL=C sort | while IFS= read -r f; do shasum -a 256 "$f"; done > SHA256SUMS)
+
+      # 68-CR-03: actions/upload-artifact keeps no file mode, so a loose tree would reach macos-orca-universal with
+      # node-pty's spawn-helper, the ripgrep binaries and agent-browser at 0644. The tree travels as one tar, which
+      # keeps every mode, beside BUILD_ROOT; the artifact's SHA256SUMS lists the two, so the digest covers the tar.
+      # COPYFILE_DISABLE keeps macOS tar from adding ._ AppleDouble members, which the inner SHA256SUMS would refuse.
+      - name: Archive the staged tree as one tar (modes kept), then write the artifact's SHA256SUMS
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/macos-orca-x64"
+          ART="$RUNNER_TEMP/macos-orca-x64-artifact"
+          rm -rf "$ART"
+          mkdir -p "$ART"
+          COPYFILE_DISABLE=1 tar -cf "$ART/tree.tar" -C "$OUT" .
+          cp "$OUT/BUILD_ROOT" "$ART/BUILD_ROOT"
+          (cd "$ART" && for f in BUILD_ROOT tree.tar; do shasum -a 256 "$f"; done > SHA256SUMS)
 
       - name: Record the SHA256SUMS digest outside the artifact
         id: sums
         run: |
           set -euo pipefail
-          SUMS="$(shasum -a 256 "$RUNNER_TEMP/macos-orca-x64/SHA256SUMS" | cut -d' ' -f1)"
+          SUMS="$(shasum -a 256 "$RUNNER_TEMP/macos-orca-x64-artifact/SHA256SUMS" | cut -d' ' -f1)"
           [[ "$SUMS" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::shasum printed no SHA-256 for SHA256SUMS ('$SUMS')" >&2; exit 1; }
           echo "sha256=$SUMS" >> "$GITHUB_OUTPUT"
           echo "macos-orca-x64 SHA256SUMS sha256 $SUMS"
@@ -2297,7 +2489,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-orca-x64
-          path: ${{ runner.temp }}/macos-orca-x64/
+          path: ${{ runner.temp }}/macos-orca-x64-artifact/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
@@ -2380,19 +2572,28 @@ jobs:
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: macos-orca-arm64
-          path: macos-orca-arm64
+          path: macos-orca-arm64-artifact
 
       - name: Download the macOS x64 Orca tree (data, admitted below)
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: macos-orca-x64
-          path: macos-orca-x64
+          path: macos-orca-x64-artifact
 
-      - name: Admit both thin trees against their producing jobs' digests
+      # Each artifact (tree.tar and BUILD_ROOT) is admitted against its producing job's digest first; only then is the
+      # tar unpacked with its modes (-p, 68-CR-03), and the unpacked tree re-checked against its own SHA256SUMS, which
+      # the admitted tar carried: no symlink, no unlisted or missing file, every listed file agreeing.
+      - name: Admit both thin artifacts against their producing jobs' digests, then unpack each tree with its modes
         run: |
           set -euo pipefail
-          bash powerbrowser/packaging/check-win-sidecar.sh check macos-orca-arm64 "$ARM_SUMS"
-          bash powerbrowser/packaging/check-win-sidecar.sh check macos-orca-x64 "$X64_SUMS"
+          bash powerbrowser/packaging/check-win-sidecar.sh check macos-orca-arm64-artifact "$ARM_SUMS"
+          bash powerbrowser/packaging/check-win-sidecar.sh check macos-orca-x64-artifact "$X64_SUMS"
+          for A in arm64 x64; do
+            rm -rf "macos-orca-$A"
+            mkdir -p "macos-orca-$A"
+            tar -xpf "macos-orca-$A-artifact/tree.tar" -C "macos-orca-$A"
+            bash powerbrowser/packaging/check-win-sidecar.sh check "macos-orca-$A" "$(sha256sum "macos-orca-$A/SHA256SUMS" | cut -d' ' -f1)"
+          done
 
       - name: Merge the universal Orca tree, purge both build roots, and check it
         run: |
@@ -2401,5 +2602,5 @@ jobs:
           LIPO=llvm-lipo bash powerbrowser/packaging/package-macos.sh orca-universal macos-orca-arm64 macos-orca-x64 "$OUT"
           bash powerbrowser/packaging/check-win-sidecar.sh purge macos-orca-arm64 "$OUT"
           bash powerbrowser/packaging/check-win-sidecar.sh purge macos-orca-x64 "$OUT"
-          node scripts/verify-orca-packaged-tree.mjs --target macos --built macos-orca-arm64 --also-built macos-orca-x64 --stage "$OUT"
-          node scripts/verify-package-target-natives.mjs --target macos --stage "$OUT"
+          bash scripts/run-no-skip.sh -- node scripts/verify-orca-packaged-tree.mjs --target macos --built macos-orca-arm64 --also-built macos-orca-x64 --stage "$OUT"
+          bash scripts/run-no-skip.sh -- node scripts/verify-package-target-natives.mjs --target macos --stage "$OUT"

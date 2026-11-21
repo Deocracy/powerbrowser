@@ -46,7 +46,7 @@
  *    the stock source at check time and required.
  *
  * Reading `theia/node_modules` from a --quick check is precedented
- * (verify-theia-branding.mjs:68) and is the entire point here: the upstream
+ * (verify-theia-branding.mjs:72) and is the entire point here: the upstream
  * re-pin is the event these two derivations exist to catch.
  *
  * The last part derives the two mode command ids from the commands source

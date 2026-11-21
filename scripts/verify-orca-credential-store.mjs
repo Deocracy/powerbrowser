@@ -13,9 +13,22 @@
 //     with tmpdir() read as the TMPDIR, TMP, TEMP family Node's os.tmpdir() consults on POSIX, are
 //     a subset of PowerBrowser's Linux roots (ORCA_FIXED_TEMP_ROOTS.linux plus
 //     ORCA_TEMP_ENV_NAMES.linux).
-//  3. Backends. The backend values of every object literal written in the key-resolution and
-//     plaintext-migration sources are exactly host-file; anything else means orcad can keep the key
-//     in a keyring and the protection sentence is no longer true.
+//  3. Backends. The backend values of every object literal written in the key-record sources are
+//     exactly host-file; anything else means orcad can keep the key in a keyring and the protection
+//     sentence is no longer true. The key-record sources are every non-test file under
+//     src/main/orcad whose name says secret, keyring or credential, or that names the record
+//     (StoredKeyState, orcad-secret-key-record, 'host-file', 'os-keyring'); a record rebuilt inside
+//     the function that JSON.parses the stored text is the read side and is not a write
+//     (harness-static-hosting-07). The passthrough exemption is narrow: only a backend literal that is
+//     returned directly, under a guard testing `.backend === <that literal>`, by a function that
+//     JSON.parses and makes no write call. Every keyring program literal a non-test orcad file names
+//     (secret-tool, security), as an argv element, a call argument or a program: property, runs a read
+//     subcommand only, and no file names a keyring module (keytar and kin) in any form.
+//  7. Owner-only key file (harness-static-hosting-07). The sentence says only the user's account can
+//     read the key file. From the pin: restrictExistingRecord (orcad-secret-key-record.ts) requires
+//     (mode & 0o077) === 0; the key-record sources write files only through writeSecureFile; and
+//     src/shared/secure-file.ts's writeSecureFile calls a function that chmods what it writes, every
+//     chmodSync and mode: literal in that file leaving no group or other bit.
 //  4. Allowlist. The override name is in neither ORCAD_ENV_ALLOWLIST nor ORCAD_FIXED_ENV_NAMES, so it
 //     can never reach orcad (P67-17).
 //  5. The sentence. privacy.html has exactly one element carrying data-orca-credential-protection and
@@ -25,7 +38,8 @@
 //  6. tempRootOf, over cases derived from PB's own roots: a data root under each Linux root matches
 //     it, the same root reached through its realpath matches, a sibling sharing the root as a string
 //     prefix (/tmpfoo) does not, and a win32 path differing only in case matches.
-// Clauses 1-3 print one SKIP when orca/ or typescript is absent; 4-6 always run.
+// Clauses 1-3 and 7 are skipped when orca/ or typescript is absent; 4-6 always run. A skipped clause
+// makes the row SKIP (exit 77, one SKIP line, SKIP-PROTOCOL.md), never PASS (harness-static-hosting-01).
 //
 // Limit: this proves PB's constants and statement agree with the pinned source. That a refusal
 // really spawns nothing, and that orcad reports what the sentence says, is orca-service scenario L
@@ -40,11 +54,12 @@
 //   node scripts/verify-orca-credential-store.mjs
 //   node scripts/verify-orca-credential-store.mjs --self-test
 
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire, stripTypeScriptTypes } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-credential-store';
@@ -52,6 +67,13 @@ const SELF_REL = 'scripts/verify-orca-credential-store.mjs';
 // Node's os.tmpdir() on POSIX reads TMPDIR, then TMP, then TEMP (A-4, verified for Node and Gecko's TmpD).
 const NODE_TMPDIR_FAMILY = ['TMPDIR', 'TMP', 'TEMP'];
 const KEYRING_RED = 'Orca writes a keyring backend: the protection sentence is no longer true';
+const KEYRING_WRITE_RED = 'keyring write: an orcad file runs a keyring program to store, not look up';
+const OWNER_ONLY_RED = 'owner-only key file';
+// The subcommands of the two keyring programs that only read (secret-tool(1), security(1)).
+const KEYRING_PROGRAMS = { 'secret-tool': ['lookup', 'search'], security: ['find-generic-password', 'find-internet-password'] };
+const FILE_WRITERS = ['writeFileSync', 'writeFile', 'appendFileSync', 'appendFile', 'createWriteStream'];
+// Keyring libraries, named as a module in any form (import, require, import(), export from).
+const KEYRING_MODULES = /^(?:keytar|node-keytar|@napi-rs\/keyring|@postman\/node-keytar)(?:\/|$)/;
 
 export function pathsFor(root) {
     const orcad = join(root, 'orca', 'src', 'main', 'orcad');
@@ -60,6 +82,8 @@ export function pathsFor(root) {
         orcaEnv: join(root, 'powerbrowser', 'shell', 'OrcaEnv.sys.mjs'),
         privacy: join(root, 'website-staging', 'privacy.html'),
         orcaDir: join(root, 'orca'),
+        orcadDir: orcad,
+        secureFile: join(root, 'orca', 'src', 'shared', 'secure-file.ts'),
         gapFile: join(orcad, 'orcad-secret-protection-gap.ts'),
         resolutionFile: join(orcad, 'orcad-secret-key-resolution.ts'),
         recordFile: join(orcad, 'orcad-secret-key-record.ts'),
@@ -97,7 +121,6 @@ export function derivePinned(paths, ts) {
     if (!name) problems.push(`source moved: no string ORCAD_PLAINTEXT_SECRETS_ENV in ${paths.gapFile}`);
 
     let value = null;
-    const backends = new Set();
     for (const file of [paths.resolutionFile, paths.migrationFile]) {
         walk(ts, parse(ts, read(file)), (n) => {
             if (ts.isBinaryExpression(n) && [ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.EqualsEqualsToken].includes(n.operatorToken.kind)) {
@@ -106,14 +129,96 @@ export function derivePinned(paths, ts) {
                 const lit = sides.find((s) => ts.isStringLiteral(s));
                 if (access && lit) value = lit.text;
             }
-            // A written record: a property assignment in an object literal, never a type literal.
-            if (ts.isPropertyAssignment(n) && n.name.getText() === 'backend' && ts.isObjectLiteralExpression(n.parent)) {
-                backends.add(ts.isStringLiteral(n.initializer) ? n.initializer.text : `<non-literal ${n.initializer.getText()}>`);
-            }
         });
     }
     if (!value) problems.push(`source moved: no comparison of ORCAD_PLAINTEXT_SECRETS_ENV with a string in ${paths.resolutionFile}`);
-    if (!backends.size) problems.push(`source moved: no written backend: property in ${paths.resolutionFile} or ${paths.migrationFile}`);
+
+    // 3. Backends over every key-record source, and keyring programs over every orcad file.
+    const backends = new Set();
+    const keyringRuns = [];
+    const writers = [];
+    const orcadFiles = orcadSources(paths.orcadDir);
+    const recordFiles = new Set([paths.resolutionFile, paths.migrationFile, paths.recordFile]);
+    for (const file of orcadFiles) {
+        const text = read(file);
+        if (/secret|keyring|credential/i.test(file.slice(paths.orcadDir.length)) || /\bStoredKeyState\b|orcad-secret-key-record|'host-file'|'os-keyring'/.test(text ?? '')) recordFiles.add(file);
+    }
+    for (const file of orcadFiles) {
+        const rel = file.slice(paths.orcadDir.length + 1);
+        const isRecord = recordFiles.has(file);
+        walk(ts, parse(ts, read(file)), (n) => {
+            // A written record: a property assignment in an object literal, never a type literal, outside the parser.
+            if (isRecord && ts.isPropertyAssignment(n) && n.name.getText() === 'backend' && ts.isObjectLiteralExpression(n.parent) && !parsedPassthrough(ts, n)) {
+                backends.add(ts.isStringLiteral(n.initializer) ? n.initializer.text : `<non-literal ${n.initializer.getText()}>`);
+            }
+            if (isRecord && ts.isCallExpression(n)) {
+                const callee = ts.isPropertyAccessExpression(n.expression) ? n.expression.name.text : n.expression.getText();
+                if (FILE_WRITERS.includes(callee)) writers.push(`${rel} calls ${callee}`);
+            }
+            if ((ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n))) {
+                // A keyring library named in any form: import, require(), import(), export from (review follow-up).
+                if (KEYRING_MODULES.test(n.text)) keyringRuns.push({ rel, program: n.text, sub: 'module' });
+                const program = /^(?:.*\/)?(secret-tool|security)$/.exec(n.text)?.[1];
+                if (program) keyringRuns.push({ rel, program, sub: keyringSubcommand(ts, n) });
+            }
+        });
+    }
+    if (!backends.size) problems.push(`source moved: no written backend: property in the key-record sources under ${paths.orcadDir}`);
+
+    // 7. Owner-only key file.
+    const owner = [];
+    let mask = null;
+    walk(ts, parse(ts, read(paths.recordFile)), (n) => {
+        if (ts.isFunctionDeclaration(n) && n.name?.text === 'restrictExistingRecord') {
+            walk(ts, n, (m) => {
+                if (ts.isBinaryExpression(m) && [ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.EqualsEqualsToken].includes(m.operatorToken.kind)) {
+                    const [l, r] = [m.left, m.right].map((x) => (ts.isParenthesizedExpression(x) ? x.expression : x));
+                    const and = [l, r].find((x) => ts.isBinaryExpression(x) && x.operatorToken.kind === ts.SyntaxKind.AmpersandToken && /\.mode$/.test(x.left.getText()) && ts.isNumericLiteral(x.right));
+                    const zero = [l, r].find((x) => ts.isNumericLiteral(x) && Number(x.text) === 0);
+                    if (and && zero) mask = Number(and.right.text);
+                }
+            });
+        }
+    });
+    if (mask === null) owner.push(`restrictExistingRecord in ${paths.recordFile} no longer tests (mode & <mask>) === 0`);
+    else if ((mask & 0o077) !== 0o077) owner.push(`restrictExistingRecord accepts a record with group or other bits (mask 0o${mask.toString(8)}, not 0o077)`);
+    let secureWrites = 0;
+    walk(ts, parse(ts, read(paths.recordFile)), (n) => { if (ts.isCallExpression(n) && n.expression.getText() === 'writeSecureFile') secureWrites++; });
+    if (!secureWrites) owner.push(`${paths.recordFile} no longer writes the record through writeSecureFile`);
+    for (const w of writers) owner.push(`a key-record source writes a file outside writeSecureFile (${w})`);
+    const secure = parse(ts, read(paths.secureFile));
+    // A writer is a function that calls writeFileSync; each must also chmod what it writes, and writeSecureFile
+    // must write through one of them (or be one).
+    const writerFns = new Set();
+    let writeSecureBody = null;
+    walk(ts, secure, (n) => {
+        if (ts.isFunctionDeclaration(n) && n.name) {
+            if (n.name.text === 'writeSecureFile') writeSecureBody = n;
+            let writes = false;
+            let chmods = false;
+            walk(ts, n, (m) => {
+                if (!ts.isCallExpression(m)) return;
+                if (m.expression.getText() === 'writeFileSync') writes = true;
+                if (m.expression.getText() === 'chmodSync') chmods = true;
+            });
+            if (writes) writerFns.add(n.name.text);
+            if (writes && !chmods) owner.push(`${n.name.text} in ${paths.secureFile} writes a file without chmodSync, so the umask decides its mode`);
+        }
+        const modeExpr = ts.isCallExpression(n) && n.expression.getText() === 'chmodSync' ? n.arguments[1]
+            : ts.isPropertyAssignment(n) && n.name.getText() === 'mode' ? n.initializer : null;
+        if (modeExpr) {
+            const lits = [];
+            walk(ts, modeExpr, (m) => { if (ts.isNumericLiteral(m)) lits.push(Number(m.text)); });
+            if (!lits.length) owner.push(`source moved: ${paths.secureFile} sets a mode this check cannot read (${modeExpr.getText()})`);
+            for (const l of lits) if (l & 0o077) owner.push(`${paths.secureFile} sets mode 0o${l.toString(8)}, which leaves group or other bits`);
+        }
+    });
+    if (!writeSecureBody) owner.push(`source moved: ${paths.secureFile} no longer declares writeSecureFile`);
+    else {
+        let restricts = writerFns.has('writeSecureFile');
+        walk(ts, writeSecureBody, (m) => { if (ts.isCallExpression(m) && writerFns.has(m.expression.getText())) restricts = true; });
+        if (!restricts) owner.push(`writeSecureFile in ${paths.secureFile} no longer writes through a function that chmods what it writes`);
+    }
 
     let roots = null;
     walk(ts, parse(ts, read(paths.recordFile)), (n) => {
@@ -126,7 +231,77 @@ export function derivePinned(paths, ts) {
         }
     });
     if (!roots?.length) problems.push(`source moved: no root list in isTemporaryKeyDir in ${paths.recordFile}`);
-    return { name, value, roots: roots ?? [], backends, problems };
+    return { name, value, roots: roots ?? [], backends, keyringRuns, owner, recordFiles: recordFiles.size, problems };
+}
+
+/** Every non-test TypeScript source under `dir` (no *.test.ts, *-fixture.ts, *.test-fixture.ts or __fixtures__). */
+function orcadSources(dir, out = []) {
+    let names = [];
+    try { names = readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+    for (const d of names) {
+        const full = join(dir, d.name);
+        if (d.isDirectory()) { if (d.name !== '__fixtures__' && d.name !== 'node_modules') orcadSources(full, out); continue; }
+        if (/\.ts$/.test(d.name) && !/\.d\.ts$|\.test\.ts$|-fixture\.ts$|\.test-fixture\.ts$/.test(d.name)) out.push(full);
+    }
+    return out.sort();
+}
+
+/**
+ * The subcommand a keyring program literal runs with, wherever it stands (review follow-up): the next element of an
+ * argv array literal; the next argument of a call (execFile('secret-tool', ['store', ...])); or the args property
+ * beside a program/command property ({ program: 'secret-tool', args: ['lookup', ...] }). A following array gives its
+ * first element. null when the position or the subcommand cannot be read, which is red.
+ */
+function keyringSubcommand(ts, lit) {
+    const firstOf = (e) => {
+        const x = e && ts.isArrayLiteralExpression(e) ? e.elements[0] : e;
+        return x && (ts.isStringLiteral(x) || ts.isNoSubstitutionTemplateLiteral(x)) ? x.text : null;
+    };
+    const parent = lit.parent;
+    if (ts.isArrayLiteralExpression(parent)) return firstOf(parent.elements[parent.elements.indexOf(lit) + 1]);
+    if ((ts.isCallExpression(parent) || ts.isNewExpression(parent)) && parent.arguments?.includes(lit)) return firstOf(parent.arguments[parent.arguments.indexOf(lit) + 1]);
+    if (ts.isPropertyAssignment(parent) && parent.initializer === lit && ts.isObjectLiteralExpression(parent.parent)) {
+        const args = parent.parent.properties.find((p) => ts.isPropertyAssignment(p) && /^(args|argv|arguments)$/.test(p.name.getText()));
+        return args ? firstOf(args.initializer) : null;
+    }
+    return null;
+}
+
+/**
+ * True only for the read side's passthrough (review follow-up): the object literal holding `backend` is returned
+ * directly, under a guard that tests `<x>.backend === '<the same literal>'`, by a function that JSON.parses and makes
+ * no write call. A migration that parses an old record and writes a keyring backend is therefore not exempt.
+ */
+function parsedPassthrough(ts, prop) {
+    const literal = ts.isStringLiteral(prop.initializer) ? prop.initializer.text : null;
+    if (literal === null) return false;
+    let node = prop.parent;
+    while (ts.isParenthesizedExpression(node.parent)) node = node.parent;
+    if (!ts.isReturnStatement(node.parent)) return false;
+    let guarded = false;
+    let fn = null;
+    for (let a = node.parent.parent; a; a = a.parent) {
+        if (ts.isFunctionLike(a)) { fn = a; break; }
+        const cond = ts.isIfStatement(a) ? a.expression : ts.isConditionalExpression(a) ? a.condition : null;
+        if (cond) {
+            walk(ts, cond, (m) => {
+                if (ts.isBinaryExpression(m) && [ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.EqualsEqualsToken].includes(m.operatorToken.kind)) {
+                    const sides = [m.left, m.right];
+                    if (sides.some((x) => ts.isPropertyAccessExpression(x) && x.name.text === 'backend') && sides.some((x) => ts.isStringLiteral(x) && x.text === literal)) guarded = true;
+                }
+            });
+        }
+    }
+    if (!fn || !guarded) return false;
+    let parses = false;
+    let writes = false;
+    walk(ts, fn, (m) => {
+        if (!ts.isCallExpression(m)) return;
+        const callee = ts.isPropertyAccessExpression(m.expression) ? m.expression.name.text : m.expression.getText();
+        if (callee === 'parse' && m.expression.getText() === 'JSON.parse') parses = true;
+        if (FILE_WRITERS.includes(callee) || /write|publish|replace|store|save|persist|keep/i.test(callee)) writes = true;
+    });
+    return parses && !writes;
 }
 
 /** The text of every element carrying data-orca-credential-protection, entity-decoded and whitespace-collapsed. */
@@ -149,25 +324,25 @@ async function importTs(src) {
     }
 }
 
-/** Runs every clause over `paths`. Resolves { fails, notes, counts }. */
+/** Runs every clause over `paths`. Resolves { fails, skips, counts }; skips name the clauses that did not run. */
 export async function check(paths) {
     const fails = [];
-    const notes = [];
+    const skips = [];
     let env;
-    try { env = await freshImport(paths.orcaEnv); } catch (err) { return { fails: [`OrcaEnv.sys.mjs does not import in Node: ${err.message}`], notes, counts: {} }; }
+    try { env = await freshImport(paths.orcaEnv); } catch (err) { return { fails: [`OrcaEnv.sys.mjs does not import in Node: ${err.message}`], skips, counts: {} }; }
     for (const n of ['ORCA_PLAINTEXT_OVERRIDE', 'ORCA_TEMP_ENV_NAMES', 'ORCA_FIXED_TEMP_ROOTS', 'tempRootOf', 'ORCA_PROTECTION_SENTENCE']) {
         if (env[n] === undefined) fails.push(`OrcaEnv.sys.mjs exports no ${n}`);
     }
-    if (fails.length) return { fails, notes, counts: {} };
+    if (fails.length) return { fails, skips, counts: {} };
     const override = env.ORCA_PLAINTEXT_OVERRIDE;
     const linuxNames = env.ORCA_TEMP_ENV_NAMES.linux ?? [];
     const linuxFixed = env.ORCA_FIXED_TEMP_ROOTS.linux ?? [];
-    const counts = { roots: 0, backends: 'SKIP', copy: 'SKIP', cases: 0 };
+    const counts = { roots: 0, backends: 'SKIP', copy: 'SKIP', cases: 0, keyring: 0, recordFiles: 0 };
 
-    // 1-3. The pin.
+    // 1-3 and 7. The pin.
     const ts = loadTypescript(paths.typescriptFrom);
     if (!existsSync(paths.orcaDir) || !ts) {
-        notes.push(`SKIP of the pinned-source clauses only -- ${!ts ? 'theia/node_modules/typescript is not installed' : 'orca/ is not fetched (bash scripts/fetch-orca.sh)'}`);
+        skips.push(`the pinned-source clauses (1-3, 7) did not run: ${!ts ? 'theia/node_modules/typescript is not installed. Next step: run yarn install in theia/ inside nix develop .#theia' : 'orca/ is not fetched. Next step: bash scripts/fetch-orca.sh'}`);
     } else {
         const pin = derivePinned(paths, ts);
         fails.push(...pin.problems);
@@ -186,10 +361,19 @@ export async function check(paths) {
         const others = [...pin.backends].filter((b) => b !== 'host-file');
         if (others.length || !pin.backends.has('host-file')) fails.push(`${KEYRING_RED} (written backends: ${[...pin.backends].join(', ') || 'none'})`);
         counts.backends = [...pin.backends].join(', ');
+        counts.recordFiles = pin.recordFiles;
+        for (const k of pin.keyringRuns) {
+            const reads = KEYRING_PROGRAMS[k.program] ?? [];
+            if (k.sub === 'module') fails.push(`${KEYRING_WRITE_RED} (${k.rel} names the keyring module ${k.program})`);
+            else if (!reads.includes(k.sub)) fails.push(`${KEYRING_WRITE_RED} (${k.rel} runs ${k.program} ${k.sub ?? '<a subcommand in a position this check cannot read>'})`);
+        }
+        counts.keyring = pin.keyringRuns.length;
+        for (const o of pin.owner) fails.push(`${OWNER_ONLY_RED}: ${o}`);
     }
 
     // 4. Allowlist.
-    for (const list of ['ORCAD_ENV_ALLOWLIST', 'ORCAD_FIXED_ENV_NAMES']) {
+    // Every list orcad's environment is built from, the per-platform allowlists included (derived from the exports).
+    for (const list of Object.keys(env).filter((k) => /^ORCAD_(ENV_ALLOWLIST\w*|FIXED_ENV_NAMES)$/.test(k) && Array.isArray(env[k]))) {
         if ((env[list] ?? []).includes(override.name)) fails.push(`${override.name} is in OrcaEnv.${list}, so the override could reach orcad (allowlist)`);
     }
 
@@ -202,8 +386,9 @@ export async function check(paths) {
         else if (count !== 1 || texts.length !== 1) fails.push(`privacy.html has ${count} data-orca-credential-protection attributes and ${texts.length} closed elements, not exactly one`);
         else if (texts[0] !== env.ORCA_PROTECTION_SENTENCE) fails.push(`the privacy.html protection sentence differs from OrcaEnv.ORCA_PROTECTION_SENTENCE: ${JSON.stringify(texts[0])}`);
     }
+    // The copy table is tracked, so its absence is red, never a SKIP (harness-static-hosting-01 follow-up).
     if (!existsSync(paths.failureDir)) {
-        notes.push('SKIP of the copy-table sentence comparison only -- lane p67-03 not merged (theia/extensions/orca-panes/src/browser/failure is absent)');
+        fails.push('source moved: theia/extensions/orca-panes/src/browser/failure is missing, so the copy table\'s protection sentence cannot be compared');
     } else {
         const src = read(paths.copyFile);
         if (src === null) fails.push(`${paths.copyFile} is missing while theia/extensions/orca-panes/src/browser/failure exists`);
@@ -231,7 +416,7 @@ export async function check(paths) {
         if (got !== c.want) fails.push(`tempRootOf: ${c.what} gives ${JSON.stringify(got)}, not ${JSON.stringify(c.want)}`);
     }
     counts.cases = cases.length;
-    return { fails, notes, counts };
+    return { fails, skips, counts };
 }
 
 // ---------------------------------------------------------------------------
@@ -246,12 +431,27 @@ const FIXTURE = {
         "export function resolveState(env: Record<string, string>) { if (env[ORCAD_PLAINTEXT_SECRETS_ENV] === 'plaintext') { return 'plaintext' } return 'ready' }",
         '',
     ].join('\n'),
-    record: "export function isTemporaryKeyDir(keyDir: string): boolean {\n  const roots = [tmpdir(), '/tmp', '/var/tmp'].flatMap((root) => [root])\n  return roots.some((r) => keyDir.startsWith(r))\n}\n",
+    record: [
+        "import { hardenExistingSecureFile, writeSecureFile } from '../../shared/secure-file'",
+        "export function isTemporaryKeyDir(keyDir: string): boolean {\n  const roots = [tmpdir(), '/tmp', '/var/tmp'].flatMap((root) => [root])\n  return roots.some((r) => keyDir.startsWith(r))\n}",
+        "function parseStoredState(raw: string): StoredKeyState | null {\n  const record = JSON.parse(raw)\n  if (record.backend === 'os-keyring') { return { version: 1, backend: 'os-keyring', account: record.account } }\n  return null\n}",
+        "export function publishRecordExclusively(path: string, record: StoredKeyState): string {\n  if (!writeSecureFile(path, JSON.stringify(record), { durable: true })) { return 'unrestricted' }\n  return 'published'\n}",
+        "export async function restrictExistingRecord(path: string): Promise<boolean> {\n  hardenExistingSecureFile(path)\n  return (statSync(path).mode & 0o077) === 0\n}",
+        '',
+    ].join('\n'),
     migration: "export function orcadCredentialRoot(): string { return join(homedir(), '.orca') }\n",
+    store: "import { readStoredRecord } from './orcad-secret-key-record'\nexport function openStore(path: string) { return readStoredRecord(path) }\n",
+    legacy: "function lookupArgv(platform: string): [string, string[]] | null {\n  if (platform === 'darwin') { return ['/usr/bin/security', ['find-generic-password', '-s', 'svc', '-w', '-a']] }\n  return platform === 'linux' ? ['secret-tool', ['lookup', 'service', 'svc', 'account']] : null\n}\n",
+    secure: [
+        "function hardenSecurePathOnce(targetPath: string, isDirectory: boolean): boolean {\n  chmodSync(targetPath, isDirectory ? 0o700 : 0o600)\n  return true\n}",
+        "export function writeSecureFile(targetPath: string, contents: string): boolean {\n  mkdirSync(dirname(targetPath), { recursive: true, mode: 0o700 })\n  hardenSecurePathOnce(dirname(targetPath), true)\n  return writeModeRestrictedFile(targetPath, contents)\n}",
+        "function writeModeRestrictedFile(tmpFile: string, contents: string): boolean {\n  writeFileSync(tmpFile, contents, { encoding: 'utf-8', mode: 0o600 })\n  chmodSync(tmpFile, 0o600)\n  return true\n}",
+        '',
+    ].join('\n'),
 };
 
 async function runSelfTest() {
-    if (!loadTypescript()) { console.log(`${NAME} self-test: SKIP -- theia/node_modules/typescript is not installed`); return 0; }
+    if (!loadTypescript()) { console.log(skipLine(`${NAME} self-test`, 'theia/node_modules/typescript is not installed, so no plant can run. Next step: run yarn install in theia/ inside nix develop .#theia')); return SKIP_EXIT; }
     const tmp = mkdtempSync(join(tmpdir(), `${NAME}-`));
     try {
         const paths = pathsFor(tmp);
@@ -264,22 +464,36 @@ async function runSelfTest() {
         writeFileSync(paths.resolutionFile, FIXTURE.resolution);
         writeFileSync(paths.recordFile, FIXTURE.record);
         writeFileSync(paths.migrationFile, FIXTURE.migration);
+        writeFileSync(join(paths.orcadDir, 'orcad-secret-store.ts'), FIXTURE.store);
+        writeFileSync(join(paths.orcadDir, 'orcad-legacy-keyring-key.ts'), FIXTURE.legacy);
+        writeFileSync(join(paths.orcadDir, 'orcad-profile-state-telemetry.ts'), "export const selection = { backend: 'sqlite' }\n"); // not a key record: ignored
+        mkdirSync(dirname(paths.secureFile), { recursive: true });
+        writeFileSync(paths.secureFile, FIXTURE.secure);
         const sentence = (await freshImport(paths.orcaEnv)).ORCA_PROTECTION_SENTENCE;
         mkdirSync(paths.failureDir, { recursive: true });
         writeFileSync(paths.copyFile, `export const ORCA_PROTECTION_SENTENCE: string = ${JSON.stringify(sentence)};\n`);
 
         const control = await check(paths);
-        if (control.fails.length || control.notes.length) {
-            console.error(`${NAME} self-test: FAIL -- the unmodified copies are not green: ${[...control.fails, ...control.notes].join(' | ')}`);
+        if (control.fails.length || control.skips.length) {
+            console.error(`${NAME} self-test: FAIL -- the unmodified copies are not green: ${[...control.fails, ...control.skips].join(' | ')}`);
             return 1;
         }
-        console.log(`${NAME} self-test: control green on copies (${control.counts.roots} pinned roots, backends ${control.counts.backends}, copy ${control.counts.copy}, ${control.counts.cases} tempRootOf cases)`);
+        console.log(`${NAME} self-test: control green on copies (${control.counts.roots} pinned roots, backends ${control.counts.backends} over ${control.counts.recordFiles} key-record files, ${control.counts.keyring} keyring lookups, copy ${control.counts.copy}, ${control.counts.cases} tempRootOf cases)`);
+        // SKIP control (harness-static-hosting-01): with no orcad sources the pinned clauses do not run, and the row is SKIP.
+        {
+            const noPin = { ...paths, orcaDir: join(tmp, 'no-orca') };
+            const r = await check(noPin);
+            if (r.fails.length || !r.skips.some((x) => x.includes('pinned-source clauses'))) { console.error(`${NAME} self-test: FAIL -- a tree without orca/ did not skip the pinned clauses: ${[...r.fails, ...r.skips].join(' | ') || 'green'}`); return 1; }
+            console.log('  ok a tree without orca/ -> the pinned clauses are a SKIP, not a PASS');
+        }
+        const newFile = (rel, text) => ({ file: join(paths.orcadDir, rel), edit: () => text });
 
         const swap = (a, b) => (text) => { if (!text.includes(a)) throw new Error(`plant target not found: ${a.slice(0, 60)}`); return text.replace(a, b); };
         const plants = [
             { name: 'the override renamed in the pin', naming: 'renamed override', file: paths.gapFile, edit: swap("'ORCA_HEADLESS_SECRET_STORE'", "'ORCA_HEADLESS_SECRETS'") },
             { name: 'the trigger value changed in the pin', naming: 'renamed override value', file: paths.resolutionFile, edit: swap("=== 'plaintext'", "=== 'unencrypted'") },
             { name: 'an Orca temp root PB lacks', naming: 'Orca temp root PB lacks', file: paths.recordFile, edit: swap("'/var/tmp']", "'/var/tmp', '/dev/shm']") },
+            { name: 'the override name in the per-platform allowlist', naming: 'ORCA_HEADLESS_SECRET_STORE is in OrcaEnv.ORCAD_ENV_ALLOWLIST_WIN32', file: paths.orcaEnv, edit: swap('ORCAD_ENV_ALLOWLIST_WIN32 = Object.freeze(["SystemRoot",', 'ORCAD_ENV_ALLOWLIST_WIN32 = Object.freeze(["SystemRoot", "ORCA_HEADLESS_SECRET_STORE",') },
             { name: 'the override name in the allowlist', naming: 'allowlist', file: paths.orcaEnv, edit: swap('  "PATH",\n  "HOME",', '  "PATH",\n  "ORCA_HEADLESS_SECRET_STORE",\n  "HOME",') },
             { name: 'the privacy paragraph removed', naming: 'statement removed', file: paths.privacy, edit: (t) => t.replace(/\s*<p data-orca-credential-protection>[\s\S]*?<\/p>/, '') },
             { name: 'a keyring backend written', naming: 'keyring backend', file: paths.resolutionFile, edit: swap("? { version: 1, backend: 'host-file', key: 'k' }", "? { version: 1, backend: 'os-keyring', account: 'a' }") },
@@ -287,12 +501,33 @@ async function runSelfTest() {
             { name: 'tempRootOf matching /tmpfoo', naming: 'prefix is not a path segment', file: paths.orcaEnv, edit: swap('t.startsWith(`${r}${sep}`)', 't.startsWith(r)') },
             { name: 'the copy-table sentence differs', naming: "copy table's protection sentence differs", file: paths.copyFile, edit: swap("your system's keyring", 'the system keyring') },
             { name: 'the privacy sentence differs', naming: 'privacy.html protection sentence differs', file: paths.privacy, edit: swap("not with your system's keyring.</p>", 'not with a keyring.</p>') },
+            // harness-static-hosting-07: writes outside the two files the clause used to read, and the key file's mode.
+            { name: 'a keyring backend written in a third key-record file', naming: 'keyring backend', file: join(paths.orcadDir, 'orcad-secret-store.ts'), edit: (t) => `${t}export function keep(): StoredKeyState { return { version: 1, backend: 'os-keyring', account: 'a' } }\n` },
+            { name: 'secret-tool store in a new orcad file', naming: 'keyring write', ...newFile('orcad-secret-keyring-writer.ts', "export const argv = ['secret-tool', ['store', '--label', 'orca', 'service', 'svc']]\n") },
+            { name: 'security add-generic-password next to the lookup', naming: 'keyring write', file: join(paths.orcadDir, 'orcad-legacy-keyring-key.ts'), edit: swap("['find-generic-password',", "['add-generic-password',") },
+            { name: 'a keytar import in an orcad file', naming: 'keyring write', ...newFile('orcad-account-services.ts', "import keytar from 'keytar'\nexport const k = keytar\n") },
+            // Review follow-up: upstream's own spawn idiom, a direct exec, keytar by require and import(), a parsing migration.
+            { name: "secret-tool store as a program: property", naming: 'keyring write', ...newFile('orcad-keyring-writer.ts', "export function spec(account: string) { return { program: 'secret-tool', args: ['store', '--label', 'orca', 'account', account] } }\n") },
+            { name: 'secret-tool store through a direct execFile call', naming: 'keyring write', ...newFile('orcad-keyring-exec.ts', "import { execFileSync } from 'node:child_process'\nexport function keep(k: string) { execFileSync('secret-tool', ['store', '--label', 'orca', 'service', 'svc'], { input: k }) }\n") },
+            { name: 'a keyring program in a position the check cannot read', naming: 'in a position this check cannot read', ...newFile('orcad-keyring-name.ts', "export const KEYRING_PROGRAM = 'secret-tool'\n") },
+            { name: 'keytar by require', naming: 'names the keyring module keytar', ...newFile('orcad-keyring-require.ts', "const keytar = require('keytar')\nexport const k = keytar\n") },
+            { name: 'keytar by dynamic import', naming: 'names the keyring module keytar', ...newFile('orcad-keyring-dynamic.ts', "export async function k() { return import('keytar') }\n") },
+            { name: 'a migration that parses the old record and writes a keyring backend', naming: 'keyring backend', file: paths.recordFile, edit: (t) => `${t}\nexport function migrateLegacy(raw: string, path: string): void {\n  const old = JSON.parse(raw)\n  if (old.backend === 'os-keyring') { writeSecureFile(path, JSON.stringify({ version: 1, backend: 'os-keyring', account: old.account })) }\n}\n` },
+            { name: 'a parser that returns a keyring record it did not read', naming: 'keyring backend', file: paths.recordFile, edit: (t) => `${t}\nexport function parseNew(raw: string): StoredKeyState {\n  JSON.parse(raw)\n  return { version: 1, backend: 'os-keyring', account: 'a' }\n}\n` },
+            // harness-static-hosting-01 follow-up: the tracked copy table missing is red, not a SKIP.
+            { name: 'the failure directory removed', naming: 'source moved: theia/extensions/orca-panes/src/browser/failure is missing', dir: paths.failureDir },
+            { name: 'the key file written 0644', naming: OWNER_ONLY_RED, file: paths.secureFile, edit: swap("chmodSync(tmpFile, 0o600)", "chmodSync(tmpFile, 0o644)") },
+            { name: 'writeSecureFile no longer chmods what it writes', naming: OWNER_ONLY_RED, file: paths.secureFile, edit: swap("  return writeModeRestrictedFile(targetPath, contents)\n", "  writeFileSync(targetPath, contents)\n  return true\n") },
+            { name: 'restrictExistingRecord accepting group-readable records', naming: OWNER_ONLY_RED, file: paths.recordFile, edit: swap('& 0o077) === 0', '& 0o002) === 0') },
+            { name: 'the record written with writeFileSync', naming: OWNER_ONLY_RED, file: paths.recordFile, edit: swap("if (!writeSecureFile(path, JSON.stringify(record), { durable: true })) { return 'unrestricted' }", "writeFileSync(path, JSON.stringify(record))") },
         ];
         let failures = 0;
         for (const p of plants) {
-            const original = readFileSync(p.file, 'utf8');
+            const existed = p.dir ? true : existsSync(p.file);
+            const original = !p.dir && existed ? readFileSync(p.file, 'utf8') : '';
             try {
-                writeFileSync(p.file, p.edit(original));
+                if (p.dir) renameSync(p.dir, `${p.dir}.planted-away`);
+                else writeFileSync(p.file, p.edit(original));
                 const r = await check(paths);
                 const text = r.fails.join('\n');
                 if (!r.fails.length) { console.error(`  FAIL ${p.name} -> stayed green`); failures++; }
@@ -301,7 +536,8 @@ async function runSelfTest() {
             } catch (err) {
                 console.error(`  FAIL ${p.name} -> ${err.message}`); failures++;
             } finally {
-                writeFileSync(p.file, original);
+                if (p.dir) renameSync(`${p.dir}.planted-away`, p.dir);
+                else if (existed) writeFileSync(p.file, original); else rmSync(p.file, { force: true });
             }
             const after = await check(paths);
             if (after.fails.length) { console.error(`${NAME} self-test: FAIL -- plant '${p.name}' did not clean up: ${after.fails.join(' | ')}`); return 1; }
@@ -330,11 +566,8 @@ if (isEntryPoint) {
     }
     if (args.includes('--self-test')) process.exit(await runSelfTest());
     const r = await check(pathsFor(REPO_ROOT));
-    for (const n of r.notes) console.log(`${NAME}: ${n}`);
-    if (r.fails.length) {
-        for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`);
-        process.exit(1);
-    }
-    console.log(`${NAME}: PASS -- the override pair equals the pin, Orca's ${r.counts.roots} temp roots are within PB's, written backends ${r.counts.backends}, the name stays off orcad's allowlist, the privacy sentence equals OrcaEnv's (copy table ${r.counts.copy}), ${r.counts.cases} tempRootOf cases`);
-    process.exit(0);
+    for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`);
+    const code = verdictExit(NAME, r.fails, r.skips);
+    if (code === 0) console.log(`${NAME}: PASS -- the override pair equals the pin, Orca's ${r.counts.roots} temp roots are within PB's, written backends ${r.counts.backends} over ${r.counts.recordFiles} key-record files, ${r.counts.keyring} keyring program run(s) all lookups, the key file owner-only, the name stays off orcad's allowlist, the privacy sentence equals OrcaEnv's (copy table ${r.counts.copy}), ${r.counts.cases} tempRootOf cases`);
+    process.exit(code);
 }

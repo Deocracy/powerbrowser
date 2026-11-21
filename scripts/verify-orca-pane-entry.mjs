@@ -6,7 +6,10 @@
 // time from the tree and compared, never from a hand-kept list:
 //   a. the build ran (orca/out/web/assets/pb-panes/pb-panes.js), else one SKIP naming build-orca.sh;
 //   b. orca/'s tracked status equals the baseline build-orca-panes.sh recorded before it built
-//      (.mozbuild/orca-panes/tracked-baseline.txt: the staged seam paths, not an empty status);
+//      (.mozbuild/orca-panes/tracked-baseline.txt: the staged seam paths, not an empty status), and
+//      each seam file holds the patch result: `git hash-object` equals the blob that applying the seam's
+//      patch to the recorded upstream_blob gives, derived at check time (harness-static-structure-05;
+//      the baseline is the build's own record, so it alone cannot prove a seam's content);
 //   c. React: the marker rendererPackageName is in 1 or more .js files of the React-bundled
 //      standalone variant (the detector, built on demand, judged first) and in none under pb-panes/;
 //   d. when theia/node_modules/react exists, Orca's React resolved by orca/pnpm-lock.yaml has its
@@ -44,6 +47,10 @@
 //      is red until it is scoped or classified, a classification nothing installs is red. A missing Orca function or zero
 //      derived calls, types or listeners is red "source moved" or "parser blind".
 //
+// A clause that did not run (no built bundle, Theia not installed, orca/ absent, no consumer interface) makes the row
+// exit 77 with the one SKIP line; the driver records SKIP, not PASS (SKIP-PROTOCOL.md). The entry-point guard
+// resolves symlinks (harness-static-structure-08).
+//
 // Tier: full; --self-test quick (mkdtemp fixtures: a tracked edit, a planted React copy, a version
 // skew, an inlined font, a tab-bar import, a missing C3 export, each red naming it).
 //
@@ -52,11 +59,16 @@
 //   node scripts/verify-orca-pane-entry.mjs --self-test
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { entryPoint, mismatchMessage } from './lib/entry-point.mjs';
+import { fixtureGitArgs, fixtureGitEnv, withHostileGitConfig } from './lib/fixture-git.mjs';
+import { seamContentFails } from './lib/orca-seams.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 import { moduleGraph, overlayOverrides, resolveOrcaImport } from './lib/orca-pane-harness.mjs';
 
@@ -295,9 +307,9 @@ export function appWideListeners(ts, file, name, read, rendererSrc, depth = 6) {
 export function checkEntry({ orcaDir, overlayDir, standaloneDir, baselineFile, theiaDir, listenerTable = APP_WIDE_LISTENERS }) {
     const panesDir = join(orcaDir, 'out', 'web', 'assets', 'pb-panes');
     if (!existsSync(join(panesDir, 'pb-panes.js'))) {
-        return { skip: 'no built pane bundle (orca/out/web/assets/pb-panes/pb-panes.js; run nix develop .#orca --command bash scripts/build-orca.sh)', fails: [], notes: [] };
+        return { skip: 'no built pane bundle (orca/out/web/assets/pb-panes/pb-panes.js). Next step: nix develop .#orca --command bash scripts/build-orca.sh', fails: [], notes: [], skips: [] };
     }
-    const fails = [], notes = [], counts = {};
+    const fails = [], notes = [], skips = [], counts = {};
 
     // b. tracked status against the pre-build baseline.
     if (!existsSync(baselineFile)) fails.push(`no pre-build baseline ${relative(dirname(orcaDir), baselineFile)} (build-orca-panes.sh writes it; rerun scripts/build-orca.sh --panes-only)`);
@@ -306,6 +318,8 @@ export function checkEntry({ orcaDir, overlayDir, standaloneDir, baselineFile, t
         const was = readFileSync(baselineFile, 'utf8').replace(/\n+$/, '');
         if (now !== was) fails.push(`orca/ tracked status differs from the pre-build baseline (A1): now [${now.split('\n').join(', ')}], baseline [${was.split('\n').join(', ')}]`);
     }
+    // The seams hold the patch result, not merely the same status line (harness-static-structure-05).
+    fails.push(...seamContentFails({ orcaDir, overlayDir }));
 
     // c. React copies: the detector first.
     const markerFiles = dir => listFiles(dir).filter(f => f.endsWith('.js') && readFileSync(f, 'latin1').includes(REACT_MARKER));
@@ -323,7 +337,7 @@ export function checkEntry({ orcaDir, overlayDir, standaloneDir, baselineFile, t
     const lock = join(orcaDir, 'pnpm-lock.yaml');
     const orcaReact = existsSync(lock) ? lockReactVersion(readFileSync(lock, 'utf8')) : null;
     if (!orcaReact) fails.push('orca/pnpm-lock.yaml resolves no react version for the root importer');
-    if (!existsSync(theiaReact)) notes.push(`${NAME}: SKIP -- React version clause: Theia not installed (theia/node_modules/react); the orca-panes loader checks reactIdentity at run time`);
+    if (!existsSync(theiaReact)) skips.push('the React version clause did not run: Theia is not installed (theia/node_modules/react); the orca-panes loader checks reactIdentity at run time. Next step: run the audited Theia install');
     else if (orcaReact) {
         const t = JSON.parse(readFileSync(theiaReact, 'utf8')).version;
         counts.react = `${orcaReact}/${t}`;
@@ -349,7 +363,7 @@ export function checkEntry({ orcaDir, overlayDir, standaloneDir, baselineFile, t
     // f, g. imports and exports, through the TypeScript API.
     const tsPath = join(theiaDir, 'node_modules', 'typescript');
     const entry = join(overlayDir, 'files', ENTRY_REL);
-    if (!existsSync(tsPath)) notes.push(`${NAME}: SKIP -- import and export clauses: Theia not installed (theia/node_modules/typescript)`);
+    if (!existsSync(tsPath)) skips.push('the import, export, graph, hook and listener clauses did not run: Theia is not installed (theia/node_modules/typescript). Next step: run the audited Theia install');
     else if (!existsSync(entry)) fails.push(`the entry orca-overlay/files/${ENTRY_REL} is missing`);
     else {
         const ts = createRequire(join(theiaDir, 'package.json'))('typescript');
@@ -472,26 +486,28 @@ export function checkEntry({ orcaDir, overlayDir, standaloneDir, baselineFile, t
 
         // i. the preset export Orca's session-only pairing relies on (P65-17, CA-07).
         const support = join(orcaDir, DEVICE_KEY_SUPPORT);
-        if (!existsSync(support)) notes.push(`${NAME}: SKIP -- preset-export clause: orca/${DEVICE_KEY_SUPPORT} is absent (run scripts/fetch-orca.sh)`);
+        if (!existsSync(support)) skips.push(`the preset-export clause did not run: orca/${DEVICE_KEY_SUPPORT} is absent. Next step: bash scripts/fetch-orca.sh`);
         else if (!exportsFunction(ts, support, PRESET_EXPORT)) fails.push(`source moved: ${PRESET_EXPORT} (P65-17) is no longer an exported function of orca/${DEVICE_KEY_SUPPORT}`);
         else counts.preset = true;
 
         // j. every consumer Orca*BundleApi member is a named export of the entry (P65-27).
         const consumers = consumerApiMembers(ts, theiaDir);
         if (got.length === 0) fails.push('parser blind: the entry parse yielded zero exports');
-        else if (consumers.size === 0) notes.push(`${NAME}: SKIP -- consumer-API clause: no interface named Orca<letters>BundleApi under theia/extensions/*/src`);
+        else if (consumers.size === 0) fails.push('no interface named Orca<letters>BundleApi under theia/extensions/*/src (OrcaPaneBundleApi is a tracked interface of orca-panes, so the consumer-API clause has lost its input; harness-static-structure-01). Next step: restore the interface from version control.');
         else {
             const exported = new Set(got);
             for (const [iface, members] of consumers) for (const m of members) if (!exported.has(m)) fails.push(`bundle API drift: ${m} (${iface}) is not a named export of the entry`);
             counts.consumers = [...consumers.keys()].map(k => k.split(' ')[0]);
         }
     }
-    return { skip: null, fails, notes, counts };
+    return { skip: null, fails, notes, skips, counts };
 }
 
+// FAIL wins over SKIP; a clause that did not run is exit 77 with the one SKIP line.
 function render(r) {
-    if (r.skip) return { code: 0, lines: [`${NAME}: SKIP -- ${r.skip}`] };
     if (r.fails.length) return { code: 1, lines: [...r.notes, ...r.fails.map(f => `${NAME}: FAIL -- ${f}`)] };
+    if (r.skip) return { code: SKIP_EXIT, lines: [skipLine(NAME, r.skip)] };
+    if (r.skips.length) return { code: SKIP_EXIT, lines: [...r.notes, skipLine(NAME, r.skips.join('; '))] };
     const c = r.counts;
     return { code: 0, lines: [...r.notes, `${NAME}: PASS -- tracked status at baseline; React marker ${c.reactMarkerStandalone} file(s) in the standalone variant, ${c.reactMarkerPanes} in pb-panes/${c.react ? `; React ${c.react}` : ''}; ${c.assets} build:web asset(s), none newly inlined${c.overlaySources ? `; ${c.overlaySources} overlay source(s) import no tab bar, TabGroupPanel or client-side terminal creation; C3 exports exact (C3-65 included)` : ''}${c.modules ? `; ${c.modules} module(s) in the bundle graph, no EditorPanel or EditorContent` : ''}${c.rootDialogs ? `; ${c.rootDialogs} app-root dialog(s) the bundle opens all hosted` : ''}${c.hostedServices ? `; no unscoped app-wide hook, ${c.hostedServices} app-shell call(s) and ${c.paneListeners} selection listener type(s) equal to Orca's` : ''}${c.hostedPersistence ? `; ${c.hostedPersistence} session-persistence call(s) equal to Orca's less its unload veto` : ''}${c.appWideListeners ? `; ${c.appWideListeners} app-wide listener(s) of the services root all classified` : ''}${c.preset ? `; ${PRESET_EXPORT} exported at the pin` : ''}${c.consumers ? `; consumer API ${c.consumers.join(', ')} covered` : ''}`] };
 }
@@ -508,7 +524,7 @@ function fixture(dir, theiaTs) {
     const w = (p, t) => { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, t); };
     w(join(orca, 'tracked.txt'), 'pinned\n');
     w(join(orca, 'pnpm-lock.yaml'), "---\nimporters:\n\n  .:\n    packageManagerDependencies:\n      pnpm:\n        version: 12.14.0\n\npackages: {}\n---\nlockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies:\n      react:\n        specifier: ~19.2.8\n        version: 19.2.8\n");
-    const g = (...a) => execFileSync('git', ['-C', orca, '-c', 'user.name=t', '-c', 'user.email=t@invalid', ...a]);
+    const g = (...a) => execFileSync('git', [...fixtureGitArgs(), '-C', orca, '-c', 'user.name=t', '-c', 'user.email=t@invalid', ...a], { env: fixtureGitEnv() });
     g('init', '-q'); g('add', '-A'); g('commit', '-qm', 'pin');
     const font = Buffer.alloc(9000, 7); font.write('FONTHEADER-unique-bytes-for-this-fixture-0123456789', 0);
     w(join(orca, 'out', 'web', 'assets', 'font-abc.ttf'), font);
@@ -544,8 +560,13 @@ function fixture(dir, theiaTs) {
 }
 
 function selfTest() {
+    // Every fixture commit runs under a global git config that fails signing and hooks (harness-static-structure-11).
+    return withHostileGitConfig(selfTestBody);
+}
+
+function selfTestBody() {
     const theiaTs = join(REPO_ROOT, 'theia', 'node_modules', 'typescript');
-    if (!existsSync(theiaTs)) { console.log(`${NAME} self-test: SKIP -- theia/node_modules/typescript is absent (the audited Theia install)`); return 0; }
+    if (!existsSync(theiaTs)) { console.log(skipLine(`${NAME} self-test`, 'theia/node_modules/typescript is absent, so the planted faults did not run. Next step: run the audited Theia install')); return SKIP_EXIT; }
     let failed = 0;
     const ok = (name, cond) => { console.log(`  ${cond ? 'ok ' : 'NOT OK '} ${name}`); if (!cond) failed += 1; };
     const run = (name, plant, want) => {
@@ -554,13 +575,44 @@ function selfTest() {
             const p = fixture(dir, theiaTs);
             plant?.(p);
             const r = checkEntry(p);
-            if (want === null) ok(name, r.skip === null && r.fails.length === 0);
+            if (want === null) ok(name, r.skip === null && r.fails.length === 0 && r.skips.length === 0);
             else ok(name, r.fails.some(f => want.test(f)));
         } finally { rmSync(dir, { recursive: true, force: true }); }
     };
     const panes = p => join(p.orcaDir, 'out', 'web', 'assets', 'pb-panes');
     const entry = p => join(p.overlayDir, 'files', ENTRY_REL);
     run('control green', null, null);
+    // Clause b over seam content: the baseline records " M tracked.txt", so the status text agrees in every case below.
+    const gitIn = (dir, ...a) => execFileSync('git', [...fixtureGitArgs(), '-C', dir, ...a], { encoding: 'utf8', env: fixtureGitEnv() });
+    const withSeam = (final) => (p) => {
+        const SEAMED = 'seamed\n';
+        const blob = gitIn(p.orcaDir, 'rev-parse', 'HEAD:tracked.txt').trim();
+        writeFileSync(join(p.orcaDir, 'tracked.txt'), SEAMED);
+        const patch = gitIn(p.orcaDir, 'diff', '--no-color', '--', 'tracked.txt');
+        writeFileSync(join(p.orcaDir, 'tracked.txt'), final ?? SEAMED);
+        mkdirSync(join(p.overlayDir, 'patches'), { recursive: true });
+        writeFileSync(join(p.overlayDir, 'patches', '010-seam.patch'), patch);
+        writeFileSync(join(p.overlayDir, 'seams.json'), `${JSON.stringify({ seams: [{ path: 'tracked.txt', patch: 'patches/010-seam.patch', upstream_blob: blob, reason: 'fixture', upstream: { class: 'pb-only', pr: null } }] })}\n`);
+        writeFileSync(p.baselineFile, ' M tracked.txt\n');
+    };
+    run('a seam holding its patch result is green', withSeam(null), null);
+    run('a seam rewritten to other content under the same status line is red', withSeam('rewritten by a postinstall\n'), /^seam tracked\.txt holds blob [0-9a-f]{40}, but applying patches\/010-seam\.patch/);
+    run('a seam reverted to the pinned content while the baseline says modified is red', withSeam('pinned\n'), /^seam tracked\.txt holds blob/);
+    run('a missing seam patch is red', p => { withSeam(null)(p); rmSync(join(p.overlayDir, 'patches', '010-seam.patch')); }, /^the patch patches\/010-seam\.patch of seam tracked\.txt is absent/);
+    {
+        // A clause that did not run is exit 77 with a SKIP line, and a failure beside it stays 1.
+        const dir = mkdtempSync(join(tmpdir(), `${NAME}-skip-`));
+        try {
+            const p = fixture(dir, theiaTs);
+            rmSync(join(p.theiaDir, 'node_modules', 'react'), { recursive: true, force: true });
+            const r = checkEntry(p);
+            const v = render(r);
+            ok('Theia without react: no failure, exit 77, one SKIP line naming the clause', r.fails.length === 0 && v.code === SKIP_EXIT && v.lines.at(-1).startsWith(`${NAME}: SKIP -- the React version clause did not run`));
+            ok('a failure beside a skipped clause stays exit 1', render({ ...r, fails: ['x'] }).code === 1);
+        } finally { rmSync(dir, { recursive: true, force: true }); }
+        const none = render({ skip: 'no built pane bundle (x)', fails: [], notes: [], skips: [] });
+        ok('no built bundle is exit 77 with a SKIP line', none.code === SKIP_EXIT && none.lines[0].startsWith(`${NAME}: SKIP -- `));
+    }
     run('a tracked edit is red', p => writeFileSync(join(p.orcaDir, 'tracked.txt'), 'edited\n'), /tracked status differs from the pre-build baseline/);
     run('a planted React copy is red', p => writeFileSync(join(panes(p), 'chunk.js'), `x.${REACT_MARKER}='react-dom'`), /a React copy is in pb-panes\/: rendererPackageName in chunk\.js/);
     run('a blind React detector is red', p => writeFileSync(join(p.standaloneDir, 'pb-panes.js'), 'export {}'), /React detector blind/);
@@ -575,6 +627,7 @@ function selfTest() {
     run('a renamed preset export is red', p => writeFileSync(join(p.orcaDir, DEVICE_KEY_SUPPORT), 'export function setWebDeviceKeySupportForTesting(support: string | null): void {}\n'), /^source moved: setWebDeviceKeySupportForTests \(P65-17\)/);
     run('a consumer interface member the entry lacks is red', p => writeFileSync(join(p.theiaDir, 'extensions', 'orca-panes', 'src', 'common', 'protocol.ts'), 'export interface OrcaSidePanelBundleApi {\n    subscribeLayout(cb: () => void): () => void;\n}\n'), /^bundle API drift: subscribeLayout \(OrcaSidePanelBundleApi/);
     run('a re-exported name counts as an export', p => { writeFileSync(entry(p), readFileSync(entry(p), 'utf8').replace('export const viewTitle = 1', "export { viewTitle } from './helper'")); writeFileSync(join(dirname(entry(p)), 'helper.ts'), 'export const a = 1\nexport const viewTitle = 1\n'); }, null);
+    run('the OrcaPaneBundleApi interface removed is red, not a skip', p => writeFileSync(join(p.theiaDir, 'extensions', 'orca-panes', 'src', 'common', 'protocol.ts'), 'export const none = 1;\n'), /^no interface named Orca<letters>BundleApi under theia\/extensions\/\*\/src/);
     run('an entry with no exports is red "parser blind"', p => writeFileSync(entry(p), "import '../assets/main.css'\n"), /^parser blind/);
     run('an extra value export is red', p => writeFileSync(entry(p), readFileSync(entry(p), 'utf8') + 'export function paneRecords() {}\n'), /exports name\(s\) outside C3: paneRecords/);
     run('an opened app-root dialog the overlay does not host is red', p => writeFileSync(entry(p), readFileSync(entry(p), 'utf8').replace("activeModal === 'delete-worktree'", "activeModal === 'add-repo'")), /^root dialog not hosted \(D-18\): delete-worktree, opened in src\/renderer\/src\/components\/sidebar\/delete-flow\.ts/);
@@ -605,12 +658,23 @@ function selfTest() {
     run('Orca\'s persistence without its veto is red "source moved"', p => editFile(join(p.orcaDir, SESSION_PERSISTENCE), 'createShutdownCheckpointBeforeUnloadHandler(guard, ', 'makeHandler(guard, '), /^source moved: orca\/src\/renderer\/src\/app-shell\/use-app-session-persistence\.ts has no function useAppSessionPersistence/);
     const bad = spawnSync(process.execPath, [SELF, '--nope'], { encoding: 'utf8' });
     ok('an unknown argument exits 2', bad.status === 2);
+    // The guard: through a symlinked directory the argument check must still answer (exit 2, never a silent exit 0).
+    const linkDir = mkdtempSync(join(tmpdir(), `${NAME}-link-`));
+    try {
+        symlinkSync(dirname(SELF), join(linkDir, 'linked'));
+        const viaLink = spawnSync(process.execPath, [join(linkDir, 'linked', 'verify-orca-pane-entry.mjs'), '--nope'], { encoding: 'utf8' });
+        ok('run through a symlinked directory the entry-point guard still reaches the usage check (exit 2 with the usage text, not the guard\'s mismatch message)', viaLink.status === 2 && viaLink.stderr.includes('usage: node scripts/verify-orca-pane-entry.mjs') && !viaLink.stderr.includes('entry-point guard'));
+    } finally { rmSync(linkDir, { recursive: true, force: true }); }
     console.log(failed ? `${NAME} self-test: FAIL -- ${failed} case(s)` : `${NAME} self-test: PASS -- every planted fault went red naming it`);
     return failed ? 1 : 0;
 }
 
-const INVOKED = process.argv[1] && resolve(process.argv[1]) === SELF;
-if (INVOKED) {
+const how = entryPoint(import.meta.url);
+if (how === 'mismatch') {
+    console.error(mismatchMessage(NAME, import.meta.url));
+    process.exit(2);
+}
+if (how === 'entry') {
     const args = process.argv.slice(2);
     if (args.some(a => a !== '--self-test')) { console.error('usage: node scripts/verify-orca-pane-entry.mjs [--self-test]'); process.exit(2); }
     if (args.includes('--self-test')) process.exit(selfTest());

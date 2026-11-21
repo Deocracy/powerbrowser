@@ -50,12 +50,13 @@
 // Usage:
 //   node scripts/verify-bundled-extensions.mjs [--seed | --live | --self-test]
 //   flock /home/chris/coding/Power-Browser/.git/pb-live.lock node scripts/verify-bundled-extensions.mjs --live
-import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
 
 const NAME = 'verify-bundled-extensions';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -701,6 +702,16 @@ async function selfTest() {
             lines.push(`${red ? 'PASS' : 'FAIL'} plant "${svcName}" -> ${red ? `red: ${r.name}: ${r.detail}` : `control ${svcControl.map(x => `${x.name}: ${x.ok ? 'ok' : x.detail}`).join(' | ')}; plant stayed green`}`);
             if (!red) ok = false;
         }
+        // The verdict of the real entry point (harness-other-05): a copy of this script in a fixture repository with no compiled
+        // seed. --seed must exit 77 with the one SKIP line and no PASS; before the SKIP protocol it printed the line and exited 0.
+        const vroot = join(t, 'verdict-fixture');
+        mkdirSync(join(vroot, 'scripts', 'lib'), { recursive: true });
+        copyFileSync(fileURLToPath(import.meta.url), join(vroot, 'scripts', 'verify-bundled-extensions.mjs'));
+        copyFileSync(join(dirname(fileURLToPath(import.meta.url)), 'lib', 'skip-verdict.mjs'), join(vroot, 'scripts', 'lib', 'skip-verdict.mjs'));
+        const seedRun = spawnSync(process.execPath, [join(vroot, 'scripts', 'verify-bundled-extensions.mjs'), '--seed'], { encoding: 'utf8' });
+        const skipped = seedRun.status === 77 && /^verify-bundled-extensions: SKIP -- the seed is not compiled/m.test(seedRun.stdout) && !/PASS/.test(seedRun.stdout);
+        lines.push(`${skipped ? 'PASS' : 'FAIL'} entry point --seed with no compiled seed -> ${skipped ? 'exit 77, one SKIP line, no PASS' : `exit ${seedRun.status}: ${seedRun.stdout}${seedRun.stderr}`}`);
+        if (!skipped) ok = false;
     } finally {
         rmSync(t, { recursive: true, force: true });
     }
@@ -717,13 +728,12 @@ function readText(p) {
     try { return readFileSync(p, 'utf8'); } catch { return null; }
 }
 
+// A failure wins. A leg that did not run (no Orca lock, no compiled seed) is a SKIP, exit 77 (SKIP-PROTOCOL.md), not a PASS (harness-other-05).
 function report(failures, skips, passes, what) {
-    for (const s of skips) console.log(`${NAME}: SKIP -- ${s}`);
     for (const p of passes) console.log(`  ok  ${p}`);
-    if (failures.length) {
-        for (const f of failures) console.error(`${NAME}: FAIL -- ${f}`);
-        process.exit(1);
-    }
+    for (const f of failures) console.error(`${NAME}: FAIL -- ${f}`);
+    const code = verdictExit(NAME, failures, skips);
+    if (code !== 0) process.exit(code);
     console.log(`${NAME}: PASS -- ${what}`);
 }
 
@@ -740,7 +750,8 @@ if (mode === '') {
 } else if (mode === '--seed') {
     const seed = loadSeed();
     if (!seed) {
-        console.log(`${NAME}: SKIP -- the seed is not compiled (theia/extensions/bundled-extensions/lib); run yarn build in theia/`);
+        console.log(skipLine(NAME, 'the seed is not compiled (theia/extensions/bundled-extensions/lib); run yarn build in theia/'));
+        process.exit(SKIP_EXIT);
     } else {
         const make = loadServiceMaker();
         const results = [
@@ -753,12 +764,20 @@ if (mode === '') {
     }
 } else if (mode === '--live') {
     const r = await live();
-    if (r.skip) console.log(`${NAME}: SKIP -- ${r.skip}`);
-    else report(r.failures, [], r.shipped.map(s => `${s.id}@${s.version} deployed as a user plugin; removal sticks`), 'Theia deploys each bundled extension as a user plugin, never a built-in, and an uninstall is not undone automatically');
+    if (r.skip) {
+        console.log(skipLine(NAME, r.skip));
+        process.exit(SKIP_EXIT);
+    } else report(r.failures, [], r.shipped.map(s => `${s.id}@${s.version} deployed as a user plugin; removal sticks`), 'Theia deploys each bundled extension as a user plugin, never a built-in, and an uninstall is not undone automatically');
 } else if (mode === '--self-test') {
     const r = await selfTest();
     for (const l of r.lines) console.log(`  ${l}`);
     if (!r.ok) { console.error(`${NAME} --self-test: FAIL`); process.exit(1); }
+    // A plant that needs the compiled seed or service did not run: the self-test ran only part of its plants, so it is a SKIP.
+    const notRun = r.lines.filter(l => l.startsWith('SKIP '));
+    if (notRun.length) {
+        console.log(skipLine(`${NAME} --self-test`, `${notRun.length} plant(s) did not run (${notRun.map(l => l.replace(/^SKIP /, '')).join('; ')}). Next step: run yarn build in theia/`));
+        process.exit(SKIP_EXIT);
+    }
     console.log(`${NAME} --self-test: PASS -- control green, every plant red naming it`);
 } else {
     console.error(`usage: node scripts/verify-bundled-extensions.mjs [--seed | --live | --self-test]`);

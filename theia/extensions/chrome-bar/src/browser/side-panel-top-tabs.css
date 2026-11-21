@@ -28,6 +28,8 @@
 /* The renderer writes each tab's height inline from the padding and icon
    size measured here, so these set the row's 32px tab height. */
 .pb-side-header .lm-TabBar.theia-app-sides .lm-TabBar-tab {
+    /* 59-WR-05: icons keep their width, so a narrow row overflows and scrolls (side-panel-top-tabs.ts) rather than squeezing them. */
+    flex-shrink: 0;
     flex-direction: row;
     padding: 0;
     min-width: 32px;

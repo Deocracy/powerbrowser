@@ -366,6 +366,11 @@ export class TabStripWidget extends ReactWidget {
     };
 
     protected readonly onDragLeave = (event: Event): void => {
+        // Lumino sends the new element's lm-dragenter before the old one's lm-dragleave; only leaving the strip clears the ring.
+        const next = (event as Drag.Event).relatedTarget;
+        if (next instanceof Node && this.node.contains(next)) {
+            return;
+        }
         event.preventDefault();
         event.stopPropagation();
         this.removeClass('is-drop-target');
@@ -533,7 +538,8 @@ export class TabStripWidget extends ReactWidget {
     /** The stack's tabs, on screen or folded, in dock order. */
     protected stackWidgets(): Widget[] {
         if (this.collapsed) {
-            return this.collapsed.widgets.filter(widget => !widget.isDisposed);
+            // Folded tabs are detached; one with a parent again was dragged out of the folded stack and is free.
+            return this.collapsed.widgets.filter(widget => !widget.isDisposed && !widget.parent);
         }
         const home = this.homeWidgets();
         return [...this.shell.mainPanel.widgets()]
@@ -592,8 +598,9 @@ export class TabStripWidget extends ReactWidget {
             return;
         }
         this.collapsed = undefined;
+        const freed = new Set(folded.widgets.filter(widget => !widget.isDisposed && widget.parent));
         const kept = new Set<Widget>();
-        const layout = { main: folded.layout.main ? prune(folded.layout.main, kept) : null };
+        const layout = { main: folded.layout.main ? prune(folded.layout.main, kept, freed) : null };
         const extra = [...this.shell.mainPanel.widgets()].filter(widget => !kept.has(widget));
         this.shell.mainPanel.restoreLayout(layout);
         const bars = [...this.shell.mainPanel.tabBars()];
@@ -880,7 +887,7 @@ export class TabStripWidget extends ReactWidget {
 
     /** Every open main-area tab, including those folded into a collapsed stack (detached, not closed). */
     protected openTabs(): Widget[] {
-        const folded = this.collapsed?.widgets.filter(widget => !widget.isDisposed) ?? [];
+        const folded = this.collapsed?.widgets.filter(widget => !widget.isDisposed && !widget.parent) ?? [];
         return [...this.shell.mainPanel.widgets(), ...folded]
             .filter(widget => !TabStripWidget.MODE_SURFACES.includes(widget.id));
     }
@@ -1700,12 +1707,12 @@ export class TabStripWidget extends ReactWidget {
  * A saved dock arrangement minus the tabs closed since it was saved, with the
  * survivors collected. Restore would otherwise be handed disposed widgets.
  */
-function prune(area: DockPanel.ILayoutConfig['main'], kept: Set<Widget>): DockPanel.ILayoutConfig['main'] {
+function prune(area: DockPanel.ILayoutConfig['main'], kept: Set<Widget>, freed: ReadonlySet<Widget>): DockPanel.ILayoutConfig['main'] {
     if (!area) {
         return null;  // eslint-disable-line no-null/no-null
     }
     if (area.type === 'tab-area') {
-        const widgets = area.widgets.filter(widget => !widget.isDisposed);
+        const widgets = area.widgets.filter(widget => !widget.isDisposed && !freed.has(widget));
         if (!widgets.length) {
             return null;  // eslint-disable-line no-null/no-null
         }
@@ -1713,7 +1720,7 @@ function prune(area: DockPanel.ILayoutConfig['main'], kept: Set<Widget>): DockPa
         return { ...area, widgets, currentIndex: Math.min(area.currentIndex, widgets.length - 1) };
     }
     const pairs = area.children
-        .map((child, index) => ({ child: prune(child, kept), size: area.sizes[index] }))
+        .map((child, index) => ({ child: prune(child, kept, freed), size: area.sizes[index] }))
         .filter(pair => pair.child);
     if (!pairs.length) {
         return null;  // eslint-disable-line no-null/no-null

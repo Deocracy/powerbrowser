@@ -190,6 +190,37 @@ export function offerPortOf(text: string): number | undefined {
     return match ? Number(match[1]) : undefined;
 }
 
+/**
+ * Audit fix 67-WR-03: the key of the sidecar environment (POWERBROWSER_ENV) that carries the port PowerBrowser
+ * started orcad on. The supervisor sets it at sidecar start, so the offer file cannot supply it.
+ */
+export const ORCAD_PORT_ENV = 'POWERBROWSER_ORCA_PORT';
+
+/** A port from the supervisor's environment: a decimal integer from 1024 to 32767, else undefined. */
+export function orcadPortOf(value: unknown): number | undefined {
+    if (typeof value !== 'string' || !/^[1-9][0-9]*$/.test(value)) {
+        return undefined;
+    }
+    const port = Number(value);
+    return port >= 1024 && port <= 32767 ? port : undefined;
+}
+
+/**
+ * The port the offer's endpoint must name (P67-09, T-67-13): orcad's own, never a port read from the same file as
+ * the endpoint. On linux and darwin an unknown orcad port refuses the offer; a web-client URL whose port differs from
+ * orcad's refuses it too. On win32, where the supervisor may not pass the port yet, the text's port is the fallback.
+ */
+export function expectedOfferPort(text: string, orcadPort: number | undefined, platform: string): { ok: true; port: number | undefined } | { ok: false; reason: OfferRefusalReason } {
+    const stated = offerPortOf(text);
+    if (orcadPort === undefined) {
+        return platform === 'linux' || platform === 'darwin' ? { ok: false, reason: 'offer-endpoint' } : { ok: true, port: stated };
+    }
+    if (stated !== undefined && stated !== orcadPort) {
+        return { ok: false, reason: 'offer-endpoint' };
+    }
+    return { ok: true, port: orcadPort };
+}
+
 /** OrcaEnv.isLoopbackEndpoint's rule: ws://127.0.0.1:<n>[/], n an integer from 1024 to 32767, equal to port when known. */
 export function offerEndpointVerdict(offer: { endpoint?: unknown } | null, port?: number): OfferVerdict {
     const match = typeof offer?.endpoint === 'string' ? /^ws:\/\/127\.0\.0\.1:([1-9][0-9]*)\/?$/.exec(offer.endpoint) : null;

@@ -37,11 +37,18 @@
 //     under the daemon is required. app.quit() must return 'exited', and
 //     within 25 s none of the recorded identities may be alive.
 //
-//  Launch 2 and 3, reap (P62-08).
-//   - Launch 2 reaches ready; PowerBrowser is then SIGKILLed. After 2 s the
-//     orcad identity must still be alive (else "vacuous: nothing to reap").
+//  Launch 2 and 3, crash and relaunch (P62-08 as changed by the v1.7 audit fix
+//  orcad-hosting-01, lane G2, 013fa4bd: orcad's preloaded watch ends orcad, the
+//  terminal daemon and every agent when PowerBrowser dies).
+//   - Launch 2 reaches ready and starts an agent session as launch 1 does; orcad,
+//     the daemon and every descendant are recorded with their start ticks, and
+//     PowerBrowser is SIGKILLed. Within 25 s none of those identities may be alive
+//     (each survivor is red by name); no orcad or no agent recorded is "vacuous".
 //   - Launch 3, same profile: ready within 90 s, the old orcad and daemon
 //     identities gone, the same port, and a new pid in orcad's lock.
+//   - Environment (harness-live-security-11): no credential-shaped name (TOKEN,
+//     SECRET, PASSWORD, API_KEY and the like) in orcad's environment, judged apart
+//     from the allowlist; the self-test also requires the allowlist to hold none.
 //
 // Signals: this script signals only identities it recorded (pid plus start
 // ticks), never by name or group; a real Orca desktop on the host is never
@@ -49,11 +56,11 @@
 // shell's ORCA_* variables. Output passes through redaction, and orcad's
 // stdout never reaches this script at all.
 //
-// Run under the live lock, headless only:
-//   flock /home/chris/coding/Power-Browser/.git/pb-live.lock node scripts/verify-orca-service-live.mjs
-// The script sets MOZ_PURGE_CACHES=1 itself, so edited chrome JS is what runs.
+// Headless only. The row takes the live lock itself (scripts/lib/live-lock.mjs). The
+// script sets MOZ_PURGE_CACHES=1 itself, so edited chrome JS is what runs. Scratch
+// repositories are mkdtemp folders, so two runs never remove each other's.
 //
-// SKIP (one named line, exit 0): no built PowerBrowser (objdir/dist/bin/powerbrowser
+// SKIP (one named line, exit 77): no built PowerBrowser (objdir/dist/bin/powerbrowser
 // or PB_FIREFOX_BIN) or no built orca/ (orca/out/orcad/orcad.js).
 //
 // Tier: full. --self-test is quick and pure: the verdict functions over fixtures.
@@ -72,6 +79,9 @@ import * as OrcaEnv from '../powerbrowser/shell/OrcaEnv.sys.mjs';
 import { descendants, ensurePbNode, installOutputRedaction, orcaVersionFromPins } from './lib/orca-run.mjs';
 import { freePort, ppidMap, signalIdentity, startTicks } from './verify-orca-hidden-electron.mjs';
 import { liveEnv, stopStrays } from './lib/firefox-bidi.mjs';
+import { holdLiveLock, lockWiringFails } from './lib/live-lock.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
+import { uncoveredMessages } from './lib/verdict-coverage.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-service-live';
@@ -82,6 +92,9 @@ const SERVICE_URL = 'chrome://powerbrowser/content/OrcaService.sys.mjs';
 const THEIA_URL = 'chrome://powerbrowser/content/TheiaService.sys.mjs';
 const FASTER_NEXT = 'Next step: MOZCONFIG=../.mozconfig ./mach build faster in upstream/ inside nix develop .#firefox';
 const AGENT_ARGV = ['sleep', '900'];
+/** The bound on orcad's crash stop after PowerBrowser is killed: G2's watch grace (3 s) plus orcad's own stop, with margin. */
+const CRASH_MS = 25000;
+const repos = []; // the scratch repositories this run made, removed at the end
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
@@ -89,15 +102,29 @@ const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { retu
 // --- pure verdicts (the self-test's subject) ---------------------------------
 
 /**
+ * Audit harness-live-security-11: a statement of what orcad's environment may never carry that is independent of
+ * ORCAD_ENV_ALLOWLIST (which builds orcad's environment and the expected set alike): a credential-shaped name.
+ * SSH_AUTH_SOCK, a socket path the allowlist passes on purpose, does not match.
+ */
+export const CREDENTIAL_NAME = /TOKEN|SECRET|PASSW(?:OR)?D|CREDENTIAL|COOKIE|BEARER|(?:^|_)(?:API_?|ACCESS_?|PRIVATE_?|SESSION_?)?KEY(?:_|$)/i;
+
+/** Red reasons for every name orcad may receive (the fixed names and the allowlist) that looks like a credential. */
+export function allowlistVerdict(names = [...OrcaEnv.ORCAD_FIXED_ENV_NAMES, ...OrcaEnv.ORCAD_ENV_ALLOWLIST]) {
+    return names.filter((n) => CREDENTIAL_NAME.test(n)).map((n) => `the names orcad receives include ${n}, a credential-shaped name, so every agent under orcad would inherit it`);
+}
+
+/**
  * The environment verdict. pb and orcad are { name: value } from /proc/<pid>/environ; real holds the
  * two resolved data-root paths; aliasPrefixes the allowed alias path prefixes. Returns red reasons.
+ * expectedNames defaults to OrcaEnv.expectedEnvNames over PowerBrowser's names (the self-test plants an allowlist).
  */
-export function envVerdict({ pb, orcad, real, aliasPrefixes, orcaVersion, sdkDir }) {
+export function envVerdict({ pb, orcad, real, aliasPrefixes, orcaVersion, sdkDir, expectedNames = OrcaEnv.expectedEnvNames(Object.keys(pb)) }) {
     if (!(PLANT in pb)) {
         return [`instrument blind: the planted ${PLANT} is not in PowerBrowser's own environment, so its absence from orcad's would prove nothing`];
     }
     const fails = [];
-    const diff = OrcaEnv.compareEnvNames(Object.keys(orcad), OrcaEnv.expectedEnvNames(Object.keys(pb)));
+    for (const name of Object.keys(orcad).filter((n) => CREDENTIAL_NAME.test(n)).sort()) fails.push(`orcad's environment carries ${name}, a credential-shaped name, whatever the allowlist says`);
+    const diff = OrcaEnv.compareEnvNames(Object.keys(orcad), expectedNames);
     for (const name of diff.extra) {
         fails.push(`orcad's environment carries ${name}, ${name in pb ? 'inherited from PowerBrowser' : 'which PowerBrowser does not even have'}; it is neither a fixed name nor on the allowlist`);
     }
@@ -126,9 +153,19 @@ export function survivors(before, now) {
     return before.filter((p) => now.get(p.pid) === p.ticks).map((p) => `${p.what} pid ${p.pid} survived the quit`);
 }
 
-/** The reap verdict after a SIGKILL of PowerBrowser and a relaunch on the same profile. */
-export function reapVerdict({ survivedKill, oldOrcad, oldDaemon, now, state, prefPort, newLockPid }) {
-    if (!survivedKill) return ['vacuous: nothing to reap (orcad did not outlive the SIGKILL of PowerBrowser)'];
+/**
+ * The crash verdict (G2 orcad-hosting-01, which reverses the old expectation that orcad outlives a killed PowerBrowser):
+ * before: [{ pid, ticks, what, agent }] recorded while PowerBrowser ran (orcad, the terminal daemon, an agent session);
+ * now: Map of pid to current start ticks after the bounded wait that followed the SIGKILL. Returns red reasons.
+ */
+export function crashVerdict(before, now, boundMs) {
+    if (!before.some((p) => p.what === 'orcad')) return ['vacuous: no orcad was recorded before PowerBrowser was killed'];
+    if (!before.some((p) => p.agent)) return [`vacuous: no agent session (no ${AGENT_ARGV.join(' ')} under the terminal daemon) when PowerBrowser was killed`];
+    return before.filter((p) => now.get(p.pid) === p.ticks).map((p) => `${p.what} pid ${p.pid} outlived the SIGKILL of PowerBrowser by more than ${boundMs} ms`);
+}
+
+/** The relaunch verdict after the crash: a new orcad on the same profile and port, none of the old identities alive. */
+export function reapVerdict({ oldOrcad, oldDaemon, now, state, prefPort, newLockPid }) {
     const fails = [];
     if (now.get(oldOrcad.pid) === oldOrcad.ticks) fails.push(`the old orcad pid ${oldOrcad.pid} is still alive after the relaunch`);
     if (oldDaemon.pid && now.get(oldDaemon.pid) === oldDaemon.ticks) fails.push(`the old terminal daemon pid ${oldDaemon.pid} is still alive after the relaunch`);
@@ -205,8 +242,8 @@ async function waitReady(app, pollFor, what) {
 async function live() {
     const { FIREFOX_BIN, launchedBrowserPids } = await import('./lib/firefox-bidi.mjs');
     const orcaDir = join(REPO_ROOT, 'orca');
-    if (!existsSync(FIREFOX_BIN)) { console.log(`${NAME}: SKIP -- no built PowerBrowser (${FIREFOX_BIN} missing; see docs/BUILD.md "Firefox half")`); return 0; }
-    if (!existsSync(join(orcaDir, 'out', 'orcad', 'orcad.js'))) { console.log(`${NAME}: SKIP -- no built orca/ (orca/out/orcad/orcad.js missing; run: nix develop .#orca --command bash scripts/build-orca.sh)`); return 0; }
+    if (!existsSync(FIREFOX_BIN)) { console.log(skipLine(NAME, `no built PowerBrowser (${FIREFOX_BIN} missing). Next step: the Firefox build in docs/BUILD.md`)); return SKIP_EXIT; }
+    if (!existsSync(join(orcaDir, 'out', 'orcad', 'orcad.js'))) { console.log(skipLine(NAME, 'no built orca/ (orca/out/orcad/orcad.js missing). Next step: nix develop .#orca --command bash scripts/build-orca.sh')); return SKIP_EXIT; }
     if (process.env.PB_LIVE_HEADED === '1' || process.env.PB_REAL_INPUT === '1') {
         console.error(`${NAME}: FAIL -- this row runs headless only; unset PB_LIVE_HEADED and PB_REAL_INPUT`);
         return 1;
@@ -247,6 +284,39 @@ async function live() {
         if (OrcaEnv.socketPathFits(profileDataRoot)) throw new Error(`harness: the profile data root ${profileDataRoot} is short enough for orcad's socket, so the alias would not be exercised`);
         const lockPid = () => { try { return JSON.parse(readFileSync(join(profileDataRoot, OrcaEnv.ORCAD_LOCK_FILE_NAME), 'utf8')).pid; } catch { return null; } };
         const onePbPid = () => { const p = launchedBrowserPids(); if (p.length !== 1) throw new Error(`harness: expected one launched PowerBrowser, found ${p.length}`); return p[0]; };
+
+        // A real agent session through orcad's own CLI (sleep 900 in a terminal of a scratch repository, made with mkdtemp
+        // so two runs never share it), with an environment built from scratch. Resolves orcad's tree, every identity
+        // recorded with its start ticks; an idle terminal daemon retires by itself, so a live agent keeps the check honest.
+        const agentTree = async (app, state, orcad, what) => {
+            const cliEnv = { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ORCA_USER_DATA: orcad.ORCA_USER_DATA, ORCA_USER_DATA_PATH: orcad.ORCA_USER_DATA_PATH };
+            const repo = mkdtempSync(join(work, 'repo-'));
+            repos.push(repo);
+            writeFileSync(join(repo, 'README'), 'orca-service-live scratch repository\n');
+            const git = (...a) => execFileSync('git', ['-C', repo, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', ...a], { env: { PATH: cliEnv.PATH, HOME: cliEnv.HOME }, stdio: ['ignore', 'pipe', 'pipe'] });
+            git('init', '-q');
+            git('add', '.');
+            git('commit', '-q', '-m', 'fixture');
+            const cli = join(orcad.ORCA_USER_DATA, 'cli', 'bin', 'orca');
+            const orca = (...a) => {
+                try { execFileSync(cli, a, { env: liveEnv(cliEnv), cwd: repo, timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e) {
+                    throw new Error(`${what}: the Orca CLI call '${a.slice(0, 2).join(' ')}' failed: ${OrcaEnv.redact(String(e.stderr ?? e.message)).trim().split('\n').pop()}`);
+                }
+            };
+            orca('repo', 'add', '--path', repo, '--json');
+            orca('terminal', 'create', '--worktree', `path:${repo}`, '--command', AGENT_ARGV.join(' '), '--json');
+            // The daemon named at ready may have been replaced; take the tree under orcad as well.
+            const daemonNow = (await orcaState(app)).daemonPid;
+            const isAgent = (pid) => { const a = argvOf(pid); return a.length === AGENT_ARGV.length && a.every((x, i) => x === AGENT_ARGV[i]); };
+            const treeOf = () => [...descendants(ppidMap(), [state.pid, state.daemonPid, daemonNow].filter(Number.isInteger))];
+            for (let i = 0; i < 80 && !treeOf().some(isAgent); i++) await sleep(250);
+            return treeOf().map((pid) => ({
+                pid,
+                ticks: record(pid),
+                agent: isAgent(pid),
+                what: pid === state.pid ? 'orcad' : pid === daemonNow || pid === state.daemonPid ? 'terminal daemon' : `descendant (${argvOf(pid)[0] ?? '?'})`,
+            })).filter((p) => p.ticks !== null);
+        };
 
         // ---- Launch 1: environment, endpoint, Node, then quit with a live agent session.
         let before = [];
@@ -291,35 +361,7 @@ async function live() {
             notes.idlePeers = [...new Set(idleTree.flatMap((pid) => tcpOf(pid, '01')).filter((r) => !r.remoteLoopback).map((r) => r.remote))];
 
             // A real session, through orcad's own CLI, with an environment built from scratch.
-            const cliEnv = { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ORCA_USER_DATA: orcad.ORCA_USER_DATA, ORCA_USER_DATA_PATH: orcad.ORCA_USER_DATA_PATH };
-            const repo = join(work, 'repo');
-            rmSync(repo, { recursive: true, force: true });
-            mkdirSync(repo, { recursive: true });
-            writeFileSync(join(repo, 'README'), 'orca-service-live scratch repository\n');
-            const git = (...a) => execFileSync('git', ['-C', repo, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', ...a], { env: { PATH: cliEnv.PATH, HOME: cliEnv.HOME }, stdio: ['ignore', 'pipe', 'pipe'] });
-            git('init', '-q');
-            git('add', '.');
-            git('commit', '-q', '-m', 'fixture');
-            const cli = join(orcad.ORCA_USER_DATA, 'cli', 'bin', 'orca');
-            const orca = (...a) => {
-                try { execFileSync(cli, a, { env: liveEnv(cliEnv), cwd: repo, timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e) {
-                    throw new Error(`the Orca CLI call '${a.slice(0, 2).join(' ')}' failed: ${OrcaEnv.redact(String(e.stderr ?? e.message)).trim().split('\n').pop()}`);
-                }
-            };
-            orca('repo', 'add', '--path', repo, '--json');
-            orca('terminal', 'create', '--worktree', `path:${repo}`, '--command', AGENT_ARGV.join(' '), '--json');
-
-            // The daemon named at ready may have been replaced; take the tree under orcad as well.
-            const daemonNow = (await orcaState(app)).daemonPid;
-            const isAgent = (pid) => { const a = argvOf(pid); return a.length === AGENT_ARGV.length && a.every((x, i) => x === AGENT_ARGV[i]); };
-            const treeOf = () => [...descendants(ppidMap(), [orcadPid, state.daemonPid, daemonNow])];
-            for (let i = 0; i < 80 && !treeOf().some(isAgent); i++) await sleep(250);
-            before = treeOf().map((pid) => ({
-                pid,
-                ticks: record(pid),
-                agent: isAgent(pid),
-                what: pid === orcadPid ? 'orcad' : pid === daemonNow || pid === state.daemonPid ? 'terminal daemon' : `descendant (${argvOf(pid)[0] ?? '?'})`,
-            })).filter((p) => p.ticks !== null);
+            before = await agentTree(app, state, orcad, 'launch 1');
             notes.tree = before.length;
             quitResult = await app.quit();
         }, { keepStrays: true }); // the quit verdict below judges what outlives this launch; the harness must not stop it first
@@ -332,45 +374,52 @@ async function live() {
         }
         fails.push(...quitFails);
 
-        // ---- Launch 2: SIGKILL PowerBrowser; orcad must survive it, or there is nothing to reap. keepStrays: the
-        // harness would otherwise stop the orphan before launch 3, the product's reap, could (gate at 2788eb05).
+        // ---- Launch 2: an agent session, then SIGKILL of PowerBrowser. G2 (orcad-hosting-01, 013fa4bd) reversed the old
+        // expectation: orcad's preloaded watch sees PowerBrowser's end on its stdin and ends orcad, the terminal daemon
+        // and every agent, so within CRASH_MS none of the recorded identities may be alive. keepStrays: the harness must
+        // not stop them first, or a survivor would never be seen.
         if (!fails.length) {
+            let crashTree = [];
             let oldOrcad = null;
             let oldDaemon = null;
             await withShell(profile, async (app) => {
                 const state = await waitReady(app, pollFor, 'launch 2');
                 oldOrcad = { pid: state.pid, ticks: record(state.pid) };
                 oldDaemon = { pid: state.daemonPid, ticks: record(state.daemonPid) };
+                crashTree = await agentTree(app, state, environOf(state.pid), 'launch 2');
                 process.kill(onePbPid(), 'SIGKILL');
-            }, { keepStrays: true }).catch((e) => { if (!oldOrcad) throw e; /* the session died with the browser, as intended */ });
-            await sleep(2000);
-            const survivedKill = startTicks(oldOrcad.pid) === oldOrcad.ticks;
+            }, { keepStrays: true }).catch((e) => { if (!crashTree.length) throw e; /* the session died with the browser, as intended */ });
+            let crashFails = [];
+            const until = Date.now() + CRASH_MS;
+            do {
+                crashFails = crashVerdict(crashTree, nowTicks(crashTree.map((p) => p.pid)), CRASH_MS);
+                if (!crashFails.length || crashFails[0].startsWith('vacuous')) break;
+                await sleep(250);
+            } while (Date.now() < until);
+            fails.push(...crashFails);
+            notes.crash = `a tree of ${crashTree.length} processes (orcad, the terminal daemon, an agent session) ended with the killed PowerBrowser`;
 
-            // ---- Launch 3: the same profile reaps the leftovers and starts a new orcad on the same port.
-            let state3 = { state: 'not launched' };
-            let newLockPid = null;
-            if (survivedKill) {
+            // ---- Launch 3: the same profile starts a new orcad on the same port, with none of the old identities alive.
+            if (!crashFails.length) {
                 await withShell(profile, async (app) => {
-                    state3 = await waitReady(app, pollFor, 'launch 3');
+                    const state3 = await waitReady(app, pollFor, 'launch 3');
                     record(state3.pid);
                     record(state3.daemonPid);
-                    newLockPid = lockPid();
+                    const newLockPid = lockPid();
                     const reapNow = nowTicks([oldOrcad.pid, oldDaemon.pid].filter(Number.isInteger));
-                    fails.push(...reapVerdict({ survivedKill, oldOrcad, oldDaemon, now: reapNow, state: state3, prefPort: port, newLockPid }));
+                    fails.push(...reapVerdict({ oldOrcad, oldDaemon, now: reapNow, state: state3, prefPort: port, newLockPid }));
+                    notes.reap = `the relaunch started orcad pid ${newLockPid} on port ${port}`;
                     const how = await app.quit();
                     if (how !== 'exited') fails.push(`the final app.quit() returned '${how}', not exited`);
                 });
-            } else {
-                fails.push(...reapVerdict({ survivedKill, oldOrcad, oldDaemon, now: new Map(), state: state3, prefPort: port, newLockPid }));
             }
-            notes.reap = `orcad pid ${oldOrcad.pid} survived the SIGKILL and was replaced by pid ${newLockPid} on port ${port}`;
         }
 
         if (fails.length) {
             for (const f of fails) console.error(`${NAME}: FAIL -- ${OrcaEnv.redact(f)}`);
             return 1;
         }
-        console.log(`${NAME}: PASS -- ${notes.names} environment names equal the expected set (planted ${PLANT} absent), data root through the alias, ws://127.0.0.1:${port}, Node ${notes.node} shared with the Theia backend; quit ended a tree of ${notes.tree} processes including an agent session; ${notes.reap}. Recorded: orcad ${notes.sharedGroup ? 'shares' : 'does not share'} PowerBrowser's process group; idle non-loopback peers: ${notes.idlePeers.length ? notes.idlePeers.join(', ') : 'none'}`);
+        console.log(`${NAME}: PASS -- ${notes.names} environment names equal the expected set (planted ${PLANT} absent), data root through the alias, ws://127.0.0.1:${port}, Node ${notes.node} shared with the Theia backend; quit ended a tree of ${notes.tree} processes including an agent session; after a SIGKILL of PowerBrowser ${notes.crash}; ${notes.reap}. Recorded: orcad ${notes.sharedGroup ? 'shares' : 'does not share'} PowerBrowser's process group; idle non-loopback peers: ${notes.idlePeers.length ? notes.idlePeers.join(', ') : 'none'}`);
         return 0;
     } catch (e) {
         for (const f of fails) console.error(`${NAME}: FAIL -- ${OrcaEnv.redact(f)}`);
@@ -385,6 +434,7 @@ async function live() {
         try { if (aliasPath && lstatSync(aliasPath).isSymbolicLink()) unlinkSync(aliasPath); } catch { /* already gone */ }
         if (profileDir) rmSync(profileDir, { recursive: true, force: true });
         if (configHome) rmSync(configHome, { recursive: true, force: true });
+        for (const repo of repos) rmSync(repo, { recursive: true, force: true });
         for (const [k, v] of Object.entries(savedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
         restoreOutput();
     }
@@ -408,7 +458,7 @@ function runSelfTest() {
         { pid: 11, ticks: '2', what: 'terminal daemon', agent: false },
         { pid: 12, ticks: '3', what: 'descendant (sleep)', agent: true },
     ];
-    const reap = { survivedKill: true, oldOrcad: { pid: 10, ticks: '1' }, oldDaemon: { pid: 11, ticks: '2' }, now: new Map(), state: { state: 'ready', port: 26768, boundEndpoint: 'ws://127.0.0.1:26768' }, prefPort: 26768, newLockPid: 20 };
+    const reap = { oldOrcad: { pid: 10, ticks: '1' }, oldDaemon: { pid: 11, ticks: '2' }, now: new Map(), state: { state: 'ready', port: 26768, boundEndpoint: 'ws://127.0.0.1:26768' }, prefPort: 26768, newLockPid: 20 };
     const tcp = (rows) => `  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n${rows.map(([l, r, st, inode], i) => `   ${i}: ${l} ${r} ${st} 00000000:00000000 00:00000000 00000000  1000        0 ${inode} 1 0000000000000000 100 0 0 10 0`).join('\n')}\n`;
     const inodes = new Set(['777']);
     const nonLoopback = (text, state) => tcpRows(text, inodes, state).filter((r) => !(state === '0A' ? r.localLoopback : r.remoteLoopback)).map((r) => `not loopback: ${state === '0A' ? r.local : r.remote}`);
@@ -433,7 +483,24 @@ function runSelfTest() {
         ['empty before-set', 'vacuous', () => survivors([], new Map())],
         ['no agent session', 'vacuous: no agent session', () => survivors(tree.map((p) => ({ ...p, agent: false })), new Map())],
         ['reap control', null, () => reapVerdict(reap)],
-        ['orcad did not survive the kill', 'vacuous: nothing to reap', () => reapVerdict({ ...reap, survivedKill: false })],
+        ['old daemon still alive', 'old terminal daemon pid 11 is still alive', () => reapVerdict({ ...reap, now: new Map([[11, '2']]) })],
+        ['relaunch not ready', "is 'failed' after the relaunch", () => reapVerdict({ ...reap, state: { ...reap.state, state: 'failed' } })],
+        // G2 orcad-hosting-01: after a SIGKILL of PowerBrowser, orcad, the daemon and the agent must be gone.
+        ['crash control (the whole tree gone)', null, () => crashVerdict(tree, new Map(), 25000)],
+        ['orcad outlives the killed PowerBrowser', 'orcad pid 10 outlived the SIGKILL', () => crashVerdict(tree, new Map([[10, '1']]), 25000)],
+        ['the terminal daemon outlives it', 'terminal daemon pid 11 outlived the SIGKILL', () => crashVerdict(tree, new Map([[11, '2']]), 25000)],
+        ['an agent outlives it', 'descendant (sleep) pid 12 outlived the SIGKILL', () => crashVerdict(tree, new Map([[12, '3']]), 25000)],
+        ['a crash with no orcad recorded', 'vacuous: no orcad was recorded', () => crashVerdict(tree.slice(1), new Map(), 25000)],
+        ['a crash with no agent session', 'vacuous: no agent session', () => crashVerdict(tree.map((t) => ({ ...t, agent: false })), new Map(), 25000)],
+        // harness-live-security-11: a credential-shaped name on the allowlist moves the subject and the expectation
+        // together, so only the independent name rule can catch it.
+        ['GH_TOKEN added to the allowlist and so to orcad', 'GH_TOKEN, a credential-shaped name', () => envVerdict({ ...base, orcad: { ...orcad, GH_TOKEN: 't' }, expectedNames: [...OrcaEnv.expectedEnvNames(Object.keys(pb)), 'GH_TOKEN'] })],
+        ['the shipped allowlist and fixed names hold no credential-shaped name', null, () => allowlistVerdict()],
+        ['ANTHROPIC_API_KEY on a planted allowlist', 'ANTHROPIC_API_KEY, a credential-shaped name', () => allowlistVerdict([...OrcaEnv.ORCAD_ENV_ALLOWLIST, 'ANTHROPIC_API_KEY'])],
+        ['AWS_SECRET_ACCESS_KEY on a planted allowlist', 'AWS_SECRET_ACCESS_KEY', () => allowlistVerdict([...OrcaEnv.ORCAD_ENV_ALLOWLIST, 'AWS_SECRET_ACCESS_KEY'])],
+        ['a name orcad has that PowerBrowser does not', 'which PowerBrowser does not even have', () => envVerdict({ ...base, orcad: { ...orcad, PB_STRAY_NAME: '1' } })],
+        ['a data root that is not the short alias', 'is not a short alias', () => envVerdict({ ...base, orcad: { ...orcad, ORCA_USER_DATA: '/var/x', ORCA_USER_DATA_PATH: '/var/x' } })],
+        ['the live path takes the live lock', null, () => lockWiringFails(NAME, import.meta.url)],
         ['old orcad still alive', 'old orcad pid 10 is still alive', () => reapVerdict({ ...reap, now: new Map([[10, '1']]) })],
         ['port changed', 'port changed', () => reapVerdict({ ...reap, state: { state: 'ready', port: 26769, boundEndpoint: 'ws://127.0.0.1:26769' } })],
         ['lock still names the old pid', "lock names pid 10", () => reapVerdict({ ...reap, newLockPid: 10 })],
@@ -442,8 +509,10 @@ function runSelfTest() {
         ['established peer off loopback', 'not loopback: 08080808:01BB', () => nonLoopback(tcp([['0A00000F:C000', '08080808:01BB', '01', '777']]), '01')],
     ];
     let failures = 0;
+    const planted = [];
     for (const [name, naming, go] of cases) {
         const fails = go();
+        planted.push(fails);
         const text = fails.join('\n');
         if (naming === null) {
             if (fails.length) { console.error(`  FAIL ${name} -> red: ${text}`); failures++; } else console.log(`  ok ${name} -> green`);
@@ -451,6 +520,14 @@ function runSelfTest() {
         else if (!text.includes(naming)) { console.error(`  FAIL ${name} -> red, but not naming '${naming}': ${text}`); failures++; }
         else console.log(`  ok ${name} -> red, naming '${naming}'`);
     }
+    // harness-live-security-07: every fail message of the verdicts is reached by a case (derived from their source).
+    const coverageFns = [envVerdict, survivors, crashVerdict, reapVerdict, allowlistVerdict];
+    for (const m of uncoveredMessages(coverageFns, planted)) { console.error(`  FAIL coverage -> no case reaches ${m.fn}: "${m.text}"`); failures++; }
+    // The coverage check itself: the two "still alive after the relaunch" messages share their longest words, so
+    // without the daemon case the daemon message must be uncovered although the other still-alive case remains.
+    const withoutDaemon = cases.filter(([n]) => n !== 'old daemon still alive').map(([, , go]) => go());
+    if (uncoveredMessages(coverageFns, withoutDaemon).some((m) => m.text.includes('the old terminal daemon pid'))) console.log('  ok coverage plant: without the daemon case its message is uncovered');
+    else { console.error('  FAIL coverage plant: without the daemon case "the old terminal daemon pid … is still alive" still counts as covered'); failures++; }
     if (failures) {
         console.error(`${NAME} self-test: FAIL -- ${failures} of ${cases.length} case(s) did not behave`);
         return 1;
@@ -470,5 +547,8 @@ if (isEntryPoint) {
         console.error(`  Next step: run: node ${SELF_REL}, or add --self-test to prove the verdicts discriminate.`);
         process.exit(2);
     }
-    process.exit(args.includes('--self-test') ? runSelfTest() : await live());
+    if (args.includes('--self-test')) process.exit(runSelfTest());
+    const locked = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT, args });
+    if (locked !== null) process.exit(locked);
+    process.exit(await live());
 }

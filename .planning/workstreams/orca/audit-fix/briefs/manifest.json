@@ -1,0 +1,955 @@
+[
+ {
+  "name": "H1-harness-driver",
+  "group": "H1-harness-driver",
+  "lane": "harness",
+  "model": "opus",
+  "after": [],
+  "part": 1,
+  "parts": 1,
+  "items": [
+   [
+    "harness-driver-03"
+   ],
+   [
+    "harness-driver-06",
+    "59-CR-03"
+   ],
+   [
+    "harness-driver-01"
+   ],
+   [
+    "harness-driver-05"
+   ],
+   [
+    "harness-static-structure-02"
+   ],
+   [
+    "59-WR-04"
+   ],
+   [
+    "harness-driver-11"
+   ],
+   [
+    "harness-driver-04"
+   ],
+   [
+    "harness-driver-09"
+   ],
+   [
+    "harness-driver-10"
+   ],
+   [
+    "harness-driver-08"
+   ],
+   [
+    "harness-driver-07"
+   ],
+   [
+    "harness-live-tabs-14"
+   ],
+   [
+    "harness-static-browser-06"
+   ]
+  ],
+  "files": [
+   ".github/workflows/verify.yml",
+   "scripts/redate-windows.mjs",
+   "scripts/verify-platform.sh",
+   "scripts/lib/orca-artifacts.mjs",
+   "scripts/lib/orca-run.mjs",
+   "scripts/verify-live-scratch-home.mjs",
+   "scripts/verify-ng-027-reader-callers.mjs",
+   "scripts/verify-orcad-leak.mjs"
+  ]
+ },
+ {
+  "name": "H2-harness-static-hosting",
+  "group": "H2-harness-static-hosting",
+  "lane": "harness",
+  "model": "opus",
+  "after": [
+   "H1-harness-driver"
+  ],
+  "part": 1,
+  "parts": 1,
+  "items": [
+   [
+    "harness-static-hosting-03"
+   ],
+   [
+    "harness-static-hosting-01"
+   ],
+   [
+    "harness-static-hosting-02"
+   ],
+   [
+    "harness-static-hosting-04"
+   ],
+   [
+    "harness-static-hosting-08"
+   ],
+   [
+    "harness-static-hosting-07"
+   ],
+   [
+    "harness-static-hosting-06"
+   ],
+   [
+    "harness-static-hosting-05"
+   ],
+   [
+    "harness-static-hosting-10"
+   ],
+   [
+    "harness-static-hosting-11"
+   ],
+   [
+    "harness-static-hosting-12"
+   ]
+  ],
+  "files": [
+   "scripts/lib/orca-offer-scan.mjs",
+   "scripts/verify-orca-credential-store.mjs",
+   "scripts/verify-orca-mobile-protocol.mjs",
+   "scripts/verify-orca-offer-file.mjs",
+   "scripts/verify-orca-pairing-containment.mjs",
+   "scripts/verify-orca-service.mjs",
+   "scripts/verify-shell-request-kinds.mjs"
+  ]
+ },
+ {
+  "name": "H3-harness-static-browser",
+  "group": "H3-harness-static-browser",
+  "lane": "harness",
+  "model": "opus",
+  "after": [
+   "H1-harness-driver"
+  ],
+  "part": 1,
+  "parts": 1,
+  "items": [
+   [
+    "harness-static-browser-01"
+   ],
+   [
+    "harness-static-browser-03"
+   ],
+   [
+    "harness-static-browser-02"
+   ],
+   [
+    "harness-static-browser-04"
+   ],
+   [
+    "harness-static-browser-05"
+   ],
+   [
+    "harness-static-browser-07"
+   ],
+   [
+    "harness-static-browser-09"
+   ],
+   [
+    "harness-static-browser-08"
+   ]
+  ],
+  "files": [
+   "scripts/verify-orca-agent-hooks.mjs",
+   "scripts/verify-orca-browser-entry-points.mjs",
+   "scripts/verify-orca-browser-tab-scope.mjs",
+   "scripts/verify-orca-browser-host-bundle.mjs",
+   "scripts/verify-orca-browser-tools.mjs"
+  ]
+ },
+ {
+  "name": "H4-harness-static-structure",
+  "group": "H4-harness-static-structure",
+  "lane": "harness",
+  "model": "sonnet",
+  "after": [
+   "H1-harness-driver"
+  ],
+  "part": 1,
+  "parts": 1,
+  "items": [
+   [
+    "harness-static-structure-01"
+   ],
+   [
+    "harness-static-structure-12"
+   ],
+   [
+    "harness-static-structure-05"
+   ],
+   [
+    "harness-static-structure-08"
+   ],
+   [
+    "harness-static-structure-07"
+   ],
+   [
+    "harness-static-structure-06"
+   ],
+   [
+    "harness-static-structure-11"
+   ],
+   [
+    "harness-static-structure-04"
+   ],
+   [
+    "harness-static-structure-13"
+   ],
+   [
+    "harness-static-structure-03"
+   ],
+   [
+    "harness-static-structure-09"
+   ],
+   [
+    "harness-static-structure-14"
+   ],
+   [
+    "harness-static-structure-10"
+   ]
+  ],
+  "files": [
+   "scripts/verify-orca-overlay.mjs",
+   "scripts/verify-orca-bridge-dir.mjs",
+   "scripts/verify-orca-build-shape.mjs",
+   "scripts/verify-orca-landing-selectors.mjs",
+   "scripts/verify-orca-no-pb-add-project.mjs",
+   "scripts/verify-orca-packaged-tree.mjs",
+   "scripts/verify-orca-pane-css.mjs",
+   "scripts/verify-orca-pin.mjs",
+   "scripts/verify-orca-slotless-start.mjs",
+   "scripts/verify-orca-terminal-keys.mjs",
+   "scripts/verify-upstream-pins.mjs"
+  ]
+ },
+ {
+  "name": "H5-harness-live-security",
+  "group": "H5-harness-live-security",
+  "lane": "harness",
+  "model": "opus",
+  "after": [
+   "H1-harness-driver"
+  ],
+  "part": 1,
+  "parts": 1,
+  "items": [
+   [
+    "harness-live-security-01"
+   ],
+   [
+    "harness-driver-02"
+   ],
+   [
+    "harness-live-security-02"
+   ],
+   [
+    "harness-live-security-05"
+   ],
+   [
+    "harness-live-security-06"
+   ],
+   [
+    "harness-live-security-03"
+   ],
+   [
+    "harness-live-security-04"
+   ],
+   [
+    "harness-live-security-13"
+   ],
+   [
+    "harness-live-security-09"
+   ],
+   [
+    "harness-live-security-07"
+   ],
+   [
+    "harness-live-security-08"
+   ],
+   [
+    "harness-live-security-14"
+   ],
+   [
+    "harness-live-security-10"
+   ],
+   [
+    "harness-live-security-12"
+   ],
+   [
+    "harness-live-security-11"
+   ]
+  ],
+  "files": [
+   "scripts/lib/firefox-bidi.mjs",
+   "scripts/lib/orca-browser-live.mjs",
+   "scripts/verify-orca-browser-agent-live.mjs",
+   "scripts/verify-orca-credential-store-live.mjs",
+   "scripts/verify-orca-failure-page-live.mjs",
+   "scripts/verify-no-remote-agent-port-live.mjs",
+   "scripts/verify-orca-service-live.mjs"
+  ]
+ },
+ {
+  "name": "H6-harness-live-tabs",
+  "group": "H6-harness-live-tabs",
+  "lane": "harness",
+  "model": "sonnet",
+  "after": [
+   "H1-harness-driver"
+  ],
+  "part": 1,
+  "parts": 1,
+  "items": [
+   [
+    "harness-live-tabs-05"
+   ],
+   [
+    "harness-live-tabs-01"
+   ],
+   [
+    "harness-live-tabs-02"
+   ],
+   [
+    "harness-live-tabs-03"
+   ],
+   [
+    "harness-live-tabs-13"
+   ],
+   [
+    "harness-live-tabs-06"
+   ],
+   [
+    "harness-live-tabs-04"
+   ],
+   [
+    "harness-live-tabs-07"
+   ],
+   [
+    "harness-live-tabs-08"
+   ],
+   [
+    "harness-live-tabs-09"
+   ],
+   [
+    "harness-live-tabs-12"
+   ],
+   [
+    "harness-live-tabs-10"
+   ],
+   [
+    "harness-live-tabs-11"
+   ]
+  ],
+  "files": [
+   "scripts/verify-orca-relaunch-restore-live.mjs",
+   "scripts/verify-orca-tabs-live.mjs",
+   "scripts/lib/orca-tabs-live.mjs",
+   "scripts/verify-orca-terminal-keys-live.mjs",
+   "scripts/verify-tab-strip-live.mjs"
+  ]
+ },
+ {
+  "name": "H7-harness-live-panels-part1",
+  "group": "H7-harness-live-panels",
+  "lane": "harness",
+  "model": "sonnet",
+  "after": [
+   "H1-harness-driver"
+  ],
+  "part": 1,
+  "parts": 2,
+  "items": [
+   [
+    "harness-live-panels-01"
+   ],
+   [
+    "harness-live-panels-03"
+   ],
+   [
+    "harness-live-panels-04"
+   ],
+   [
+    "harness-live-panels-10"
+   ],
+   [
+    "harness-live-panels-02"
+   ],
+   [
+    "harness-live-panels-09"
+   ],
+   [
+    "harness-live-panels-16"
+   ],
+   [
+    "harness-live-panels-17"
+   ],
+   [
+    "harness-live-panels-07"
+   ],
+   [
+    "harness-live-panels-08"
+   ],
+   [
+    "harness-live-panels-13"
+   ],
+   [
+    "harness-live-panels-05"
+   ]
+  ],
+  "files": [
+   "scripts/verify-orca-pane-css-live.mjs",
+   "scripts/verify-orca-side-panel-live.mjs",
+   "scripts/verify-orca-workspace-live.mjs",
+   "scripts/lib/orca-pane-harness.mjs",
+   "scripts/verify-orca-add-project-live.mjs",
+   "scripts/verify-orca-pane-standalone-live.mjs"
+  ]
+ },
+ {
+  "name": "H7-harness-live-panels-part2",
+  "group": "H7-harness-live-panels",
+  "lane": "harness",
+  "model": "sonnet",
+  "after": [
+   "H1-harness-driver"
+  ],
+  "part": 2,
+  "parts": 2,
+  "items": [
+   [
+    "harness-live-panels-06"
+   ],
+   [
+    "harness-live-panels-14"
+   ],
+   [
+    "harness-live-panels-11"
+   ],
+   [
+    "harness-live-panels-12"
+   ],
+   [
+    "harness-live-panels-15"
+   ]
+  ],
+  "files": [
+   "scripts/verify-orca-side-panel-live.mjs",
+   "scripts/verify-orca-workspace-live.mjs",
+   "scripts/verify-page-furniture-live.mjs"
+  ]
+ },
+ {
+  "name": "G5a-ci-release",
+  "group": "G5a-ci-release",
+  "lane": "product",
+  "model": "opus",
+  "after": [],
+  "part": 1,
+  "parts": 1,
+  "items": [
+   [
+    "ci-supply-chain-04"
+   ],
+   [
+    "68-CR-03"
+   ],
+   [
+    "ci-supply-chain-01"
+   ],
+   [
+    "ci-supply-chain-02"
+   ],
+   [
+    "68-CR-02"
+   ],
+   [
+    "68-CR-01"
+   ],
+   [
+    "64-WR-05"
+   ],
+   [
+    "60-WR-01"
+   ],
+   [
+    "60-WR-03"
+   ],
+   [
+    "68-WR-03"
+   ],
+   [
+    "68-WR-01"
+   ],
+   [
+    "ci-supply-chain-06"
+   ],
+   [
+    "ci-supply-chain-03"
+   ]
+  ],
+  "files": [
+   ".github/workflows/release-train.yml",
+   ".github/workflows/release.yml",
+   "scripts/download-plugins.mjs",
+   "scripts/rebase-orca.sh",
+   "scripts/build-orca-panes.sh",
+   "scripts/build-orca.sh",
+   "scripts/export-orca-seam-pr.mjs",
+   "scripts/win-sign-list.mjs",
+   ".github/workflows/rebase-orca.yml"
+  ]
+ },
+ {
+  "name": "G5b-packaging-docs",
+  "group": "G5b-packaging-docs",
+  "lane": "product",
+  "model": "opus",
+  "after": [
+   "G5a-ci-release"
+  ],
+  "part": 1,
+  "parts": 1,
+  "items": [
+   [
+    "packaging-prefs-network-04"
+   ],
+   [
+    "packaging-prefs-network-02"
+   ],
+   [
+    "59-CR-01"
+   ],
+   [
+    "59-CR-02"
+   ],
+   [
+    "packaging-prefs-network-01"
+   ],
+   [
+    "63-CR-01"
+   ],
+   [
+    "packaging-prefs-network-03"
+   ],
+   [
+    "68-WR-02"
+   ],
+   [
+    "60-WR-02"
+   ],
+   [
+    "packaging-prefs-network-06"
+   ],
+   [
+    "packaging-prefs-network-05"
+   ]
+  ],
+  "files": [
+   "powerbrowser/endpoint-allowlist.json",
+   "scripts/generate-licensing.mjs",
+   "systemd/legion-pb.nix",
+   "theia/extensions/orca-agents/src/node/orca-agents-backend-module.ts",
+   "website-staging/privacy.html",
+   "powerbrowser/packaging/package-linux.sh",
+   "powerbrowser/packaging/bundled-xpi.json",
+   "scripts/lib/orca-shipped-packages.mjs"
+  ]
+ },
+ {
+  "name": "H8-harness-other",
+  "group": "H8-harness-other",
+  "lane": "harness",
+  "model": "sonnet",
+  "after": [
+   "H1-harness-driver"
+  ],
+  "part": 1,
+  "parts": 1,
+  "items": [
+   [
+    "harness-other-03"
+   ],
+   [
+    "61-WR-01"
+   ],
+   [
+    "61-WR-02"
+   ],
+   [
+    "61-WR-03"
+   ],
+   [
+    "harness-other-08"
+   ],
+   [
+    "harness-other-11"
+   ],
+   [
+    "harness-other-05"
+   ],
+   [
+    "harness-other-09"
+   ],
+   [
+    "harness-other-04"
+   ],
+   [
+    "harness-other-06"
+   ],
+   [
+    "harness-other-01"
+   ],
+   [
+    "harness-other-07"
+   ]
+  ],
+  "files": [
+   "scripts/verify-workflows.mjs",
+   "scripts/orca-browser-parity.mjs",
+   "scripts/check-internals-boundary.sh",
+   "scripts/gen-orca-snapshot-fixtures.mjs",
+   "scripts/verify-bundled-xpi.mjs",
+   "scripts/verify-package-target-natives.mjs",
+   "scripts/verify-release-shape.mjs",
+   "scripts/verify-shell-error-copy.mjs",
+   "scripts/verify-web-tab-bridge.mjs"
+  ]
+ },
+ {
+  "name": "G1a-chrome-shell",
+  "group": "G1a-chrome-shell",
+  "lane": "product",
+  "model": "opus",
+  "after": [],
+  "part": 1,
+  "parts": 1,
+  "items": [
+   [
+    "agent-browser-03"
+   ],
+   [
+    "agent-browser-04"
+   ],
+   [
+    "chrome-actor-03"
+   ],
+   [
+    "agent-browser-02",
+    "chrome-actor-02",
+    "66-CR-01"
+   ],
+   [
+    "59-WR-02"
+   ],
+   [
+    "59-WR-01"
+   ],
+   [
+    "59-WR-03"
+   ],
+   [
+    "59-WR-05"
+   ],
+   [
+    "66-WR-06"
+   ],
+   [
+    "agent-browser-06"
+   ],
+   [
+    "chrome-actor-04"
+   ],
+   [
+    "chrome-actor-05"
+   ],
+   [
+    "chrome-actor-06"
+   ]
+  ],
+  "files": [
+   "powerbrowser/shell/PowerBrowserAPI.sys.mjs",
+   "theia/extensions/tab-uris/src/browser/web-tab.ts",
+   "powerbrowser/shell/GroupActorChild.sys.mjs",
+   "theia/extensions/chrome-bar/src/browser/side-panel-top-tabs.ts"
+  ]
+ },
+ {
+  "name": "G1b-agent-browser",
+  "group": "G1b-agent-browser",
+  "lane": "product",
+  "model": "opus",
+  "after": [
+   "G1a-chrome-shell"
+  ],
+  "part": 1,
+  "parts": 1,
+  "items": [
+   [
+    "T-66-04"
+   ],
+   [
+    "66-CR-02"
+   ],
+   [
+    "66-CR-03"
+   ],
+   [
+    "66-CR-04"
+   ],
+   [
+    "66-WR-01"
+   ],
+   [
+    "66-WR-02"
+   ],
+   [
+    "66-WR-03"
+   ],
+   [
+    "66-WR-04"
+   ],
+   [
+    "66-WR-07"
+   ],
+   [
+    "66-WR-05"
+   ]
+  ],
+  "files": [
+   "orca-overlay/files/src/renderer/src/pb/browser-host/pb-browser-host-link.ts",
+   "theia/extensions/orca-browser/src/browser/orca-browser-frontend-module.ts",
+   "theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts"
+  ]
+ },
+ {
+  "name": "G2-orcad-hosting",
+  "group": "G2-orcad-hosting",
+  "lane": "product",
+  "model": "opus",
+  "after": [],
+  "part": 1,
+  "parts": 1,
+  "items": [
+   [
+    "orcad-hosting-01"
+   ],
+   [
+    "orcad-hosting-02",
+    "62-WR-04"
+   ],
+   [
+    "62-WR-01"
+   ],
+   [
+    "62-WR-03"
+   ],
+   [
+    "62-WR-05"
+   ],
+   [
+    "62-WR-06"
+   ],
+   [
+    "62-WR-02"
+   ],
+   [
+    "orcad-hosting-05"
+   ],
+   [
+    "orcad-hosting-06"
+   ],
+   [
+    "orcad-hosting-07"
+   ],
+   [
+    "orcad-hosting-08"
+   ],
+   [
+    "pairing-credentials-03"
+   ],
+   [
+    "orcad-hosting-03"
+   ]
+  ],
+  "files": [
+   "powerbrowser/shell/OrcaService.sys.mjs",
+   "powerbrowser/shell/powerbrowser.js",
+   "powerbrowser/shell/powerbrowser-sidecar.js"
+  ]
+ },
+ {
+  "name": "G3a-overlay-renderer",
+  "group": "G3a-overlay-renderer",
+  "lane": "product",
+  "model": "opus",
+  "after": [],
+  "part": 1,
+  "parts": 1,
+  "items": [
+   [
+    "overlay-renderer-02",
+    "64-CR-01"
+   ],
+   [
+    "overlay-renderer-01"
+   ],
+   [
+    "64-WR-02"
+   ],
+   [
+    "64-WR-03"
+   ],
+   [
+    "64-WR-04"
+   ],
+   [
+    "65-WR-01"
+   ],
+   [
+    "overlay-renderer-03"
+   ],
+   [
+    "overlay-renderer-04"
+   ]
+  ],
+  "files": [
+   "orca-overlay/files/pb-css-scope.mjs",
+   "orca-overlay/files/src/renderer/src/pb/pb-pane-mount.tsx",
+   "orca-overlay/files/src/renderer/src/pb/pb-workspace-api.ts"
+  ]
+ },
+ {
+  "name": "G3b-pane-hosting",
+  "group": "G3b-pane-hosting",
+  "lane": "product",
+  "model": "opus",
+  "after": [],
+  "part": 1,
+  "parts": 1,
+  "items": [
+   [
+    "67-CR-01"
+   ],
+   [
+    "theia-pane-hosting-02"
+   ],
+   [
+    "theia-pane-hosting-01",
+    "64-CR-02"
+   ],
+   [
+    "pairing-credentials-01"
+   ],
+   [
+    "67-WR-01"
+   ],
+   [
+    "67-WR-02"
+   ],
+   [
+    "67-WR-04"
+   ],
+   [
+    "65-WR-04"
+   ],
+   [
+    "67-WR-03"
+   ],
+   [
+    "64-WR-01"
+   ],
+   [
+    "theia-pane-hosting-04"
+   ],
+   [
+    "theia-pane-hosting-03"
+   ],
+   [
+    "pairing-credentials-04"
+   ],
+   [
+    "sidecar-gate-backends-01"
+   ],
+   [
+    "theia-pane-hosting-05"
+   ]
+  ],
+  "files": [
+   "theia/extensions/orca-panes/src/browser/failure/orca-hosting-status.ts",
+   "theia/extensions/orca-panes/src/browser/orca-pane-observer.ts",
+   "theia/extensions/orca-panes/src/browser/orca-pane-widget.tsx",
+   "theia/extensions/orca-panes/src/node/orca-panes-backend-module.ts",
+   "theia/extensions/orca-panes/src/browser/side-panel/orca-side-panel-sync.ts",
+   "theia/extensions/orca-panes/src/node/offer-file-policy.ts",
+   "theia/extensions/modes/src/browser/mode-service.ts",
+   "theia/extensions/modes/src/browser/setups-service.ts",
+   "theia/extensions/orca-panes/src/browser/orca-pane-bundle.ts",
+   "theia/extensions/orca-panes/src/browser/restore/orca-pane-name-map.ts"
+  ]
+ },
+ {
+  "name": "G4-workspace-agents",
+  "group": "G4-workspace-agents",
+  "lane": "product",
+  "model": "opus",
+  "after": [],
+  "part": 1,
+  "parts": 1,
+  "items": [
+   [
+    "65-CR-01"
+   ],
+   [
+    "68-WR-04"
+   ],
+   [
+    "63-WR-01"
+   ],
+   [
+    "63-WR-02"
+   ],
+   [
+    "63-WR-03"
+   ],
+   [
+    "65-WR-02"
+   ],
+   [
+    "65-WR-05"
+   ],
+   [
+    "65-WR-03"
+   ],
+   [
+    "agents-extensions-01"
+   ],
+   [
+    "agents-extensions-02"
+   ],
+   [
+    "agents-extensions-03"
+   ],
+   [
+    "sidecar-gate-backends-02"
+   ],
+   [
+    "sidecar-gate-backends-03"
+   ]
+  ],
+  "files": [
+   "theia/extensions/orca-workspace/src/browser/orca-editor-routes.ts",
+   "theia/extensions/bundled-extensions/src/node/bundled-extensions-seed.ts",
+   "theia/extensions/orca-agents/bin/claude-wrapper.mjs",
+   "theia/extensions/orca-agents/src/node/claude-wrapper-launcher.ts",
+   "theia/extensions/orca-workspace/src/browser/orca-root-sync.ts",
+   "theia/extensions/orca-agents/src/node/orca-agents-backend-module.ts",
+   "theia/extensions/orca-workspace/src/node/orca-workspace-backend-module.ts",
+   "theia/extensions/token-gate/src/node/token-gate-backend-contribution.ts"
+  ]
+ }
+]

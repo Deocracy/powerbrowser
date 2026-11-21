@@ -7,7 +7,13 @@
 import { translate } from '@/i18n/i18n'
 import { useAppStore } from '../store'
 import { readStoredWebRuntimeEnvironment } from '../web/web-runtime-environment'
-import { toRuntimeExecutionHostId } from '../../../shared/execution-host'
+import { LOCAL_EXECUTION_HOST_ID, toRuntimeExecutionHostId } from '../../../shared/execution-host'
+import { getFolderWorkspaceWorktree } from '../../../shared/folder-workspace-worktree'
+import { isFloatingWorkspaceId } from '../../../shared/floating-workspace-worktree'
+import {
+  createRepoRowExecutionHostLookup,
+  resolveWorktreeExecutionHost
+} from '../../../shared/worktree-execution-host-resolution'
 import type { OpenFile } from '../store/slices/editor/types/open-file'
 import type { TopLevelView } from '../../../shared/ui-chrome-types'
 
@@ -42,19 +48,33 @@ function ownerIsPaired(environmentId: string | null | undefined, paired: string 
   return !environmentId || environmentId === paired
 }
 
-function hostIsPaired(hostId: string | null | undefined, paired: string | null): boolean {
-  return !hostId || hostId === 'local' || (paired !== null && hostId === toRuntimeExecutionHostId(paired))
+/** A resolved execution host this document may read from its own disk: Orca's local host or the paired runtime's. */
+function hostIsPaired(hostId: string, paired: string | null): boolean {
+  return hostId === LOCAL_EXECUTION_HOST_ID || (paired !== null && hostId === toRuntimeExecutionHostId(paired))
 }
 
-type WorktreeRecord = { id: string; path: string; isArchived: boolean; hostId?: string; runtimeOwnerEnvironmentId?: string }
+type WorktreeRecord = { id: string; repoId: string; path: string; isArchived: boolean; hostId?: string; runtimeOwnerEnvironmentId?: string }
 
 function worktreeRecords(state: State): WorktreeRecord[] {
   return Object.values(state.worktreesByRepo ?? {}).flat() as WorktreeRecord[]
 }
 
-function worktreeIsLocal(worktree: WorktreeRecord | undefined, paired: string | null): boolean {
-  if (!worktree) return true
-  return ownerIsPaired(worktree.runtimeOwnerEnvironmentId, paired) && hostIsPaired(worktree.hostId, paired)
+/** Git worktrees and Orca's synthetic rows for folder workspaces (which live in folderWorkspaces, not worktreesByRepo). */
+function allWorktreeRecords(state: State): WorktreeRecord[] {
+  return [...worktreeRecords(state), ...(state.folderWorkspaces ?? []).map((f) => getFolderWorkspaceWorktree(f) as WorktreeRecord)]
+}
+
+// Audit 65-WR-01: Orca's own rule (worktree-execution-host-resolution.ts): unresolved ownership never authorizes a local
+// read of a remote path. An unknown worktree is not local; a host-less worktree takes its repo row's host, as Orca does.
+function worktreeIsLocal(
+  worktree: WorktreeRecord | undefined,
+  lookup: ReturnType<typeof createRepoRowExecutionHostLookup>,
+  paired: string | null
+): boolean {
+  if (!worktree) return false
+  if (!ownerIsPaired(worktree.runtimeOwnerEnvironmentId, paired)) return false
+  const host = resolveWorktreeExecutionHost(lookup, worktree)
+  return host.kind === 'resolved' && hostIsPaired(host.hostId, paired)
 }
 
 // ---------------------------------------------------------------- B-2 open files
@@ -103,7 +123,8 @@ function combinedFirstOf(file: OpenFile): OrcaOpenFile['combinedFirst'] {
 
 function openFileRecords(state: State): OrcaOpenFile[] {
   const paired = pairedEnvironmentId()
-  const worktrees = new Map(worktreeRecords(state).map((w) => [w.id, w]))
+  const lookup = createRepoRowExecutionHostLookup(state.repos ?? [])
+  const worktrees = new Map(allWorktreeRecords(state).map((w) => [w.id, w]))
   return (state.openFiles ?? []).map((file) => {
     const worktree = worktrees.get(file.worktreeId)
     const tab = (state.unifiedTabsByWorktree?.[file.worktreeId] ?? []).find((t) => t.entityId === file.id)
@@ -117,7 +138,12 @@ function openFileRecords(state: State): OrcaOpenFile[] {
       mode: file.mode,
       isPreview: file.isPreview === true,
       active: state.activeFileIdByWorktree?.[file.worktreeId] === file.id,
-      local: !file.externalSshTargetId && ownerIsPaired(file.runtimeEnvironmentId, paired) && worktreeIsLocal(worktree, paired)
+      local:
+        !file.externalSshTargetId &&
+        ownerIsPaired(file.runtimeEnvironmentId, paired) &&
+        // Orca's floating workspace (a floating terminal's opens, Orca's own keybindings.json) has no worktree row and is
+        // Orca's local host by definition (resolved-worktree-execution-host.ts returns LOCAL_EXECUTION_HOST_ID for it).
+        (isFloatingWorkspaceId(file.worktreeId) || worktreeIsLocal(worktree, lookup, paired))
     }
     if (file.diffSource) record.diffSource = file.diffSource
     if (file.branchOldPath) record.oldPath = file.branchOldPath
@@ -152,19 +178,24 @@ export function subscribeOpenFiles(cb: (files: OrcaOpenFile[]) => void): () => v
 export type OrcaWorkspaces = {
   worktrees: Array<{ id: string; path: string; isArchived: boolean; local: boolean }>
   folders: Array<{ id: string; path: string; local: boolean }>
+  /** Audit 65-WR-03: Orca's hasHydratedWorktreePurge, set once every repo's first authoritative worktree listing has
+   * arrived; until then the list may be partial, so the host removes no root. Optional for an older host. */
+  hydrated?: boolean
 }
 
 /** B-3: Orca's worktrees and folder workspaces with the CA-12 predicate. */
 export function subscribeWorktrees(cb: (workspaces: OrcaWorkspaces) => void): () => void {
   return subscribeProjection((state) => {
     const paired = pairedEnvironmentId()
+    const lookup = createRepoRowExecutionHostLookup(state.repos ?? [])
     return {
-      worktrees: worktreeRecords(state).map((w) => ({ id: w.id, path: w.path, isArchived: w.isArchived === true, local: worktreeIsLocal(w, paired) })),
+      worktrees: worktreeRecords(state).map((w) => ({ id: w.id, path: w.path, isArchived: w.isArchived === true, local: worktreeIsLocal(w, lookup, paired) })),
       folders: (state.folderWorkspaces ?? []).map((f) => ({
         id: f.id,
         path: f.folderPath,
-        local: !f.connectionId && hostIsPaired(f.executionHostId, paired)
-      }))
+        local: !f.connectionId && worktreeIsLocal(getFolderWorkspaceWorktree(f) as WorktreeRecord, lookup, paired)
+      })),
+      hydrated: state.hasHydratedWorktreePurge === true
     }
   }, cb)
 }

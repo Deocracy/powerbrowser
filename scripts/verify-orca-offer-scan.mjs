@@ -11,12 +11,15 @@
 // scripts/lib/orca-offer-scan.mjs scans the profile for every needle form of
 // that launch's offer: setups.json and powerbrowser-shell-state.json by bytes,
 // and each 127.0.0.1 origin's localStorage key column, where the marker must
-// be found and orca.web.runtimeEnvironment.v1 must be absent.
+// be found and the web client's stored-environment key must be absent. That
+// key is read from the pin at check time (ENVIRONMENT_STORAGE_KEY in
+// orca/src/renderer/src/web/web-runtime-environment.ts, harness-static-hosting-04);
+// a pin that no longer declares and writes it is red "source moved".
 //
 // Output names sinks, origins and counts only; no offer, needle or token is
 // printed, logged or written. The offer stays in this process's memory.
 //
-// SKIP (exit 0, one named line) while a prerequisite is absent: no built
+// SKIP (exit 77, one named line, SKIP-PROTOCOL.md) while a prerequisite is absent: no built
 // PowerBrowser, no built Theia app, no built orca/, or lane p65-01 not merged
 // (the pane entry's state() reports no pairing).
 //
@@ -33,19 +36,34 @@
 //   node scripts/verify-orca-offer-scan.mjs
 //   node scripts/verify-orca-offer-scan.mjs --self-test
 
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import {
-    RUNTIME_ENV_KEY, SINKS, formatScan, needlesFromOffer, scanProfile,
+    RUNTIME_ENV_SOURCE_REL, SINKS, formatScan, needlesFromOffer, runtimeEnvKeyFromPin, scanProfile,
 } from './lib/orca-offer-scan.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const SELF = fileURLToPath(import.meta.url);
 const NAME = 'orca-offer-scan';
 const SELF_REL = 'scripts/verify-orca-offer-scan.mjs';
 const MARKER_KEY = 'powerbrowser.orca-offer-scan.marker';
+const REPO_ROOT = resolve(dirname(SELF), '..');
+// The self-test's stand-in for the pinned key; the clean control derives it from a fixture pin, never from this name.
+const FIXTURE_ENV_KEY = 'orca.web.runtimeEnvironment.v1';
+
+/** A fixture pin holding web-runtime-environment.ts in the pin's own shape, declaring `key` (or nothing when null). */
+function fixturePin(root, key, { writes = true } = {}) {
+    const dir = mkdtempSync(join(root, 'pin-'));
+    const file = join(dir, RUNTIME_ENV_SOURCE_REL);
+    mkdirSync(dirname(file), { recursive: true });
+    const decl = key === null ? '' : `const ENVIRONMENT_STORAGE_KEY = '${key}'\n`;
+    const write = writes ? "  window.localStorage.setItem(\n    ENVIRONMENT_STORAGE_KEY,\n    JSON.stringify(environment)\n  )\n" : '';
+    writeFileSync(file, `${decl}\nexport function saveEnvironment(environment: unknown): void {\n${write}}\n`);
+    return dir;
+}
 
 // ---------------------------------------------------------------------------
 // Fixtures (no real token: a fixture offer in the shape web-pairing.ts parses).
@@ -92,9 +110,10 @@ function runSelfTest() {
     let failures = 0;
     let planted = 0;
     const outputs = [];
-    const run = (label, { profile, naming, offers = [offer.handOff], count }) => {
+    const cleanPin = fixturePin(tmp, FIXTURE_ENV_KEY);
+    const run = (label, { profile, naming, offers = [offer.handOff], count, pin = cleanPin }) => {
         let r;
-        try { r = scanProfile({ profileDir: profile, offers, markerKey: MARKER_KEY }); } catch (err) { r = { verdicts: [`threw ${err.message}`], sinks: [] }; }
+        try { r = scanProfile({ profileDir: profile, offers, markerKey: MARKER_KEY, runtimeEnvKey: runtimeEnvKeyFromPin(pin) }); } catch (err) { r = { verdicts: [`threw ${err.message}`], sinks: [] }; }
         const text = formatScan(r).join('\n');
         outputs.push(text, ...(r.verdicts ?? []));
         if (naming === null) {
@@ -134,7 +153,15 @@ function runSelfTest() {
         { const profile = fixtureProfile(tmp); plant(profile, 'powerbrowser-shell-state.json', encodeURIComponent(offer.token)); run('percent-encoded deviceToken in the shell state', { profile, naming: 'offer found in powerbrowser-shell-state.json' }); }
         // The key probe.
         run('an origin without the marker', { profile: fixtureProfile(tmp, { keys: ['other.key'] }), naming: 'collector blind' });
-        run('the runtime-environment key present', { profile: fixtureProfile(tmp, { keys: [MARKER_KEY, RUNTIME_ENV_KEY] }), naming: `${RUNTIME_ENV_KEY} present in http://127.0.0.1:40404` });
+        run('the runtime-environment key present', { profile: fixtureProfile(tmp, { keys: [MARKER_KEY, FIXTURE_ENV_KEY] }), naming: `${FIXTURE_ENV_KEY} present in http://127.0.0.1:40404` });
+        // harness-static-hosting-04: the key is the pin's, not a copied literal.
+        const bumped = 'orca.web.runtimeEnvironment.v2';
+        run('a re-pin that bumps the key to v2 and persists it', { profile: fixtureProfile(tmp, { keys: [MARKER_KEY, bumped] }), pin: fixturePin(tmp, bumped), naming: `${bumped} present in http://127.0.0.1:40404` });
+        run('a pin that no longer declares ENVIRONMENT_STORAGE_KEY', { profile: fixtureProfile(tmp), pin: fixturePin(tmp, null), naming: 'source moved' });
+        run('a pin that declares the key but no longer writes localStorage under it', { profile: fixtureProfile(tmp), pin: fixturePin(tmp, FIXTURE_ENV_KEY, { writes: false }), naming: 'source moved' });
+        if (existsSync(join(REPO_ROOT, 'orca', 'src'))) {
+            try { console.log(`  control the key derives from orca/ at the pin (${runtimeEnvKeyFromPin().length} characters)`); } catch (err) { console.error(`  FAIL the key does not derive from orca/ at the pin: ${err.message}`); failures++; }
+        } else console.log('  control the key at the pin not derived: no orca/ (the fixture pin stands in)');
         run('no origin storage at all', { profile: fixtureProfile(tmp, { keys: null }), naming: 'collector blind' });
         run('a profile with no readable sink', { profile: fixtureProfile(tmp, { sinks: false }), naming: 'zero sinks read' });
         // The output never carries a needle.
@@ -156,7 +183,9 @@ async function main() {
     const live = await import('./verify-orca-relaunch-restore-live.mjs');
     const pre = await live.livePrerequisites();
     if (pre.fail) { console.error(`${NAME}: FAIL -- ${pre.fail}`); return 1; }
-    if (pre.skip) { console.log(`${NAME}: SKIP -- ${pre.skip}`); return 0; }
+    if (pre.skip) { console.log(skipLine(NAME, pre.skip)); return SKIP_EXIT; }
+    let runtimeEnvKey;
+    try { runtimeEnvKey = runtimeEnvKeyFromPin(); } catch (err) { console.error(`${NAME}: FAIL -- ${err.message}`); return 1; }
     const offers = [];
     let result;
     try {
@@ -172,7 +201,7 @@ async function main() {
                 if (!saved) throw new Error('the Setup was not saved through Setups\' own command');
                 return s.quit();
             });
-            return scanProfile({ profileDir: session.profileDir, offers, markerKey: MARKER_KEY });
+            return scanProfile({ profileDir: session.profileDir, offers, markerKey: MARKER_KEY, runtimeEnvKey });
         });
     } catch (err) {
         console.error(`${NAME}: FAIL -- harness: ${err.message}`);
@@ -182,7 +211,7 @@ async function main() {
     const missing = SINKS.filter((sink) => !result.sinks.some((r) => r.name === sink.name && r.read)).map((sink) => `sink ${sink.name} not read`);
     const verdicts = [...result.verdicts, ...missing];
     if (verdicts.length) { for (const v of verdicts) console.error(`${NAME}: FAIL -- ${v}`); return 1; }
-    console.log(`${NAME}: PASS -- ${result.sinks.filter((s) => s.read).length} sinks and ${result.origins.length} origin(s) read; no needle of the launch's offer found; marker found; no ${RUNTIME_ENV_KEY}`);
+    console.log(`${NAME}: PASS -- ${result.sinks.filter((s) => s.read).length} sinks and ${result.origins.length} origin(s) read; no needle of the launch's offer found; marker found; no ${runtimeEnvKey}`);
     return 0;
 }
 

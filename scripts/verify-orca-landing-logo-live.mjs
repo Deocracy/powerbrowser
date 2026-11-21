@@ -28,14 +28,19 @@
 // Every absence follows a positive read by the same query (CLAUDE.md verification rule 1).
 //
 // --self-test: the pure verdicts over planted observations (quick).
-// Runs under flock <git common dir>/pb-live.lock (re-execs itself under it unless PB_LIVE_LOCK_HELD=1).
+// Runs under <git common dir>/pb-live.lock: a row started without PB_LIVE_LOCK_HELD=1 re-runs itself under flock
+// (lib/live-lock.mjs) before it launches anything. Exit 77 with one "SKIP -- <reason>" line when an input is
+// absent (SKIP-PROTOCOL.md). The gh stub folder is removed on every way out, signals included.
 
-import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, request as httpRequest } from 'node:http';
 import { connect } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { holdLiveLock, lockWiringFails } from './lib/live-lock.mjs';
+import { registerTeardown } from './lib/live-teardown.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const LABEL = 'orca-landing-logo-live';
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -84,6 +89,14 @@ export function remountVerdict({ unmounted, after }, markText) {
     return markVerdict(after, markText, 'remount').map((f) => f.replace(/^remount: /, 'remount: after Landing mounted again, '));
 }
 
+/** The legs the row must have run, in order; a leg that did not run is red, so an early exit cannot read as a pass. */
+export const LEGS = Object.freeze(['proxy control', 'orcad web tab', 'stock window', 'Theia document', 'remount']);
+
+/** `done`: the legs that ran to a verdict (each leg's name from LEGS, in any order). */
+export function legsVerdict(done) {
+    return LEGS.filter((leg) => !(done ?? []).includes(leg)).map((leg) => `leg not run: ${leg} (nothing was measured there, so the row cannot pass)`);
+}
+
 function selfTest() {
     const mark = '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h1"/></svg>';
     const ours = `data:image/svg+xml,${encodeURIComponent(mark)}`;
@@ -104,6 +117,13 @@ function selfTest() {
         ['a blind Theia query', 'proves nothing', () => theiaVerdict({ theia: 0, orcad: 0 })],
         ['a remount showing Orca\'s logo', 'foreign src', () => remountVerdict({ unmounted: true, after: { count: 1, src: foreign, alt: 'Orca logo' } }, mark)],
         ['Landing never unmounted', 'did not unmount', () => remountVerdict({ unmounted: false, after: good }, mark)],
+        // harness-live-panels-17: a run that ends early, or whose collector measures nothing, must not read as green.
+        ['the live path awaits holdLiveLock before it launches anything', null, () => lockWiringFails(LABEL, import.meta.url)],
+        ['control: every leg ran', null, () => legsVerdict(LEGS)],
+        ['the remount leg never ran', 'leg not run: remount', () => legsVerdict(LEGS.filter((l) => l !== 'remount'))],
+        ['no leg ran', 'leg not run: proxy control', () => legsVerdict([])],
+        ['a tile read that timed out (count 0 with no src) on the orcad page', 'not applied', () => markVerdict({ count: 0, src: null, alt: null }, mark, 'orcad web tab')],
+        ['a tile whose src is missing', 'foreign src', () => markVerdict({ count: 1, src: null, alt: ORCA_LOGO_ALT }, mark, 'orcad web tab')],
     ];
     let bad = 0;
     for (const [label, naming, run] of cases) {
@@ -140,17 +160,14 @@ async function startProxy(targetPort) {
 }
 
 async function live() {
-    if (process.env.PB_LIVE_LOCK_HELD !== '1') {
-        const common = execFileSync('git', ['-C', REPO, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim();
-        const r = spawnSync('flock', [join(common, 'pb-live.lock'), process.execPath, fileURLToPath(import.meta.url), ...process.argv.slice(2)],
-            { stdio: 'inherit', env: { ...process.env, PB_LIVE_LOCK_HELD: '1' } });
-        return r.status ?? 1;
-    }
     for (const key of Object.keys(process.env)) if (key.startsWith('ORCA_')) delete process.env[key];
     const { prerequisites, withOrcaTabsSession } = await import(join(REPO, 'scripts/lib/orca-tabs-live.mjs'));
     const pre = prerequisites({ root: REPO });
-    if (pre.skip) { console.log(`${LABEL}: SKIP -- ${pre.skip}`); return 0; }
+    if (pre.skip) { console.log(skipLine(LABEL, pre.skip)); return SKIP_EXIT; }
     if (pre.fail) { console.log(`${LABEL}: FAIL -- ${pre.fail}`); return 1; }
+    // Nothing is launched before this: a row started by hand takes the live lock itself (harness-live-panels-02).
+    const held = await holdLiveLock({ name: LABEL, scriptUrl: import.meta.url, root: REPO });
+    if (held !== null) return held;
     const OrcaEnv = await import(pathToFileURL(join(REPO, 'powerbrowser/shell/OrcaEnv.sys.mjs')).href);
     const { sourceConst } = await import(join(REPO, 'scripts/lib/pb-relaunch.mjs'));
     const OPEN_BROWSER_WINDOW = sourceConst('theia/extensions/tab-uris/src/browser/browser-window-command.ts', 'OPEN_BROWSER_WINDOW_COMMAND_ID');
@@ -164,9 +181,12 @@ async function live() {
     chmodSync(join(ghDir, 'gh'), 0o755);
     const savedPath = process.env.PATH;
     process.env.PATH = `${ghDir}:${savedPath ?? ''}`;
+    // The gh stub folder goes on every way out, a signal included.
+    const teardown = registerTeardown(() => { process.env.PATH = savedPath; rmSync(ghDir, { recursive: true, force: true }); });
 
     const failures = [];
     const passes = [];
+    const done = [];
     let proxy = null;
     try {
         await withOrcaTabsSession({ log: (l) => console.log(l) }, async (ctx) => {
@@ -217,6 +237,7 @@ async function live() {
             const control = await tile(proxyPage, 'the proxy web tab', false, 30000);
             const c = controlVerdict(control, markText);
             if (c.length) { failures.push(...c); return; }
+            done.push('proxy control');
             passes.push(`ok  proxy control: Orca's own logo on port ${proxy.port} (1 element matched, src not the PB mark)`);
 
             // 2. orcad's own address in a PB web tab.
@@ -227,6 +248,7 @@ async function live() {
             const inTab = await tile(tabPage, 'the orcad web tab', true, 30000);
             const t = markVerdict(inTab, markText, 'orcad web tab');
             failures.push(...t);
+            done.push('orcad web tab');
             if (!t.length) passes.push(`ok  orcad web tab: the PB mark (brand/mark.svg bytes) and alt '${ORCA_LOGO_ALT}' on port ${state.port}`);
 
             // 3. A stock window on orcad's address.
@@ -236,6 +258,7 @@ async function live() {
             const inStock = await tile(stockPage, 'the stock window', true, 30000);
             const s = markVerdict(inStock, markText, 'stock window');
             failures.push(...s);
+            done.push('stock window');
             if (!s.length) passes.push('ok  stock window: the PB mark and its alt on orcad\'s address');
 
             // 4. The Theia document untouched, after the same query found the mark in the orcad page.
@@ -244,6 +267,7 @@ async function live() {
             const theia = await app.evaluate(injectedCount(markSrc));
             const th = theiaVerdict({ theia, orcad });
             failures.push(...th);
+            done.push('Theia document');
             if (!th.length) passes.push(`ok  Theia document: 0 injected attributes (the same query found ${orcad} in the orcad page)`);
 
             // 5. Remount (A-9): a worktree activated, then removed.
@@ -272,17 +296,19 @@ async function live() {
             }
             const r = remountVerdict({ unmounted, after }, markText);
             failures.push(...r);
+            done.push('remount');
             if (!r.length) passes.push('ok  remount: Landing unmounted on activation and mounted again carrying the PB mark');
         });
     } catch (e) {
         failures.push(`harness: ${e.message}`);
     } finally {
         if (proxy) await proxy.close();
-        process.env.PATH = savedPath;
         const calls = existsSync(ghCount) ? readFileSync(ghCount, 'utf8').split('\n').filter(Boolean).length : 0;
         passes.push(`recorded: Landing's GitHub star query called gh ${calls} time(s) (stub answered nothing)`);
-        rmSync(ghDir, { recursive: true, force: true });
+        teardown();
     }
+    // A leg that did not run (an early return, a throw before it) is red even when no clause recorded a failure.
+    if (!failures.length) failures.push(...legsVerdict(done));
     for (const p of passes) console.log(`  ${p}`);
     for (const f of failures) console.log(`${LABEL}: FAIL -- ${f}`);
     console.log(failures.length

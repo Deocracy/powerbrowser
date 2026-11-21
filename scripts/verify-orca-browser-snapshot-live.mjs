@@ -24,19 +24,19 @@
 //     as the message of runtime_error).
 //
 // Modes:
-//   (none)        full tier, live, under the caller's flock on /home/chris/coding/Power-Browser/.git/pb-live.lock.
+//   (none)        full tier, live; the row takes the live lock itself (scripts/lib/live-lock.mjs).
 //                 Launches PowerBrowser with caches purged, waits for OrcaService ready, builds the Orca CLI's
 //                 environment from scratch (this shell's ORCA_* never reach Orca), adds a scratch repository and
-//                 drives one tab per fixture. SKIP (exit 0) without objdir/dist/bin/powerbrowser, a built orca/ or
-//                 the fixtures.
+//                 drives one tab per fixture in a mkdtemp scratch repository. SKIP (exit 77) without
+//                 objdir/dist/bin/powerbrowser or a built orcad; FAIL without the fixtures (tracked files).
 //   --fixtures    quick, the orca-snapshot-fixtures row: the fixtures' recorded agent-browser version equals the
 //                 installed one and satisfies orca/package.json's tilde range; every manifest page has its html and a
-//                 json with full, interactive and afterChange. SKIP without orca/.
+//                 json with full, interactive and afterChange. SKIP (77) without orca/; FAIL without it in CI.
 //   --self-test   quick, hermetic: every verdict over fixtures built in memory; each planted fault must go red
 //                 naming it.
 //
 // Usage:
-//   flock /home/chris/coding/Power-Browser/.git/pb-live.lock node scripts/verify-orca-browser-snapshot-live.mjs
+//   node scripts/verify-orca-browser-snapshot-live.mjs
 //   node scripts/verify-orca-browser-snapshot-live.mjs --fixtures
 //   node scripts/verify-orca-browser-snapshot-live.mjs --self-test
 
@@ -47,6 +47,8 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { liveEnv } from './lib/firefox-bidi.mjs';
+import { holdLiveLock, lockWiringFails } from './lib/live-lock.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-browser-snapshot-live';
@@ -234,8 +236,17 @@ function fixturesObs(root = REPO_ROOT) {
     return { manifest, installed: readJson(join(root, 'orca', 'node_modules', 'agent-browser', 'package.json'))?.version ?? null, range, pages };
 }
 
+/**
+ * harness-live-security-03: without orca/ the fixtures clause cannot run. On a developer tree that is a SKIP; in CI,
+ * which fetches orca/ before the quick table (lane H1), an absent orca/ is a FAIL.
+ */
+export function noOrcaOutcome(env = process.env) {
+    const why = 'no orca/package.json, so the fixture versions were not compared. Next step: bash scripts/fetch-orca.sh';
+    return env.CI === 'true' || env.GITHUB_ACTIONS === 'true' ? { fails: [`${why} (CI fetches orca/ before this row)`] } : { skip: why };
+}
+
 function runFixtures() {
-    if (!existsSync(join(REPO_ROOT, 'orca', 'package.json'))) return { skip: 'no orca/ (run scripts/fetch-orca.sh and scripts/build-orca.sh)' };
+    if (!existsSync(join(REPO_ROOT, 'orca', 'package.json'))) return noOrcaOutcome();
     const obs = fixturesObs();
     const fails = fixturesVerdict(obs);
     return fails.length ? { fails } : { pass: `the fixtures record agent-browser ${obs.installed}, the installed version, inside ${obs.range}; ${obs.manifest.pages.length} pages each have html and full, interactive and afterChange` };
@@ -315,10 +326,11 @@ async function livePage(cli, page, url, ref) {
 async function live() {
     const { FIREFOX_BIN } = await import('./lib/firefox-bidi.mjs');
     const orcaDir = join(REPO_ROOT, 'orca');
-    if (!existsSync(FIREFOX_BIN)) return { skip: `no built PowerBrowser (${FIREFOX_BIN} missing; see docs/BUILD.md "Firefox half")` };
-    if (!existsSync(join(orcaDir, 'out', 'orcad', 'orcad.js'))) return { skip: 'no built orca/ (orca/out/orcad/orcad.js missing; run: nix develop .#orca --command bash scripts/build-orca.sh)' };
+    // The fixtures are tracked files: their absence is a FAIL. Only absent build outputs are a SKIP.
     const fix = fixturesObs();
-    if (!fix.manifest?.pages?.length) return { skip: `no fixtures (${FIX_REL}/manifest.json; run node scripts/gen-orca-snapshot-fixtures.mjs)` };
+    if (!fix.manifest?.pages?.length) return { fails: [`no fixtures (${FIX_REL}/manifest.json is missing or lists no page). Next step: node scripts/gen-orca-snapshot-fixtures.mjs`] };
+    if (!existsSync(FIREFOX_BIN)) return { skip: `no built PowerBrowser (${FIREFOX_BIN} missing). Next step: the Firefox build in docs/BUILD.md` };
+    if (!existsSync(join(orcaDir, 'out', 'orcad', 'orcad.js'))) return { skip: 'no built orca/ (orca/out/orcad/orcad.js missing). Next step: nix develop .#orca --command bash scripts/build-orca.sh' };
     const fixFails = fixturesVerdict(fix);
     if (fixFails.length) return { fails: fixFails };
 
@@ -330,10 +342,10 @@ async function live() {
     const OrcaEnv = await import('../powerbrowser/shell/OrcaEnv.sys.mjs');
     const node = await ensurePbNode();
     const port = await freePort(OrcaEnv);
+    // harness-live-security-05: a mkdtemp repository, never a wipe of a fixed folder another run may be using.
     const work = join(REPO_ROOT, WORK_REL);
-    const repo = join(work, 'repo');
-    rmSync(work, { recursive: true, force: true });
-    mkdirSync(repo, { recursive: true });
+    mkdirSync(work, { recursive: true });
+    const repo = mkdtempSync(join(work, 'repo-'));
     writeFileSync(join(repo, 'README'), `${NAME} scratch repository\n`);
     const git = (...a) => execFileSync('git', ['-C', repo, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', ...a], { env: { PATH: process.env.PATH ?? '', HOME: homedir() }, stdio: 'ignore' });
     git('init', '-q'); git('add', '.'); git('commit', '-q', '-m', 'fixture');
@@ -372,6 +384,7 @@ async function live() {
         }, { extraPrefs: { 'powerbrowser.sidecar.nodePath': node.path, 'powerbrowser.orca.port': port, 'powerbrowser.orca.root': orcaDir } });
     } finally {
         server.close();
+        rmSync(repo, { recursive: true, force: true });
     }
     if (!fails.length && !clicked) fails.push('vacuous: no button or tab ref was clicked');
     if (!fails.length && !stale) fails.push('vacuous: no fixture removed a ref\'d node, so browser_stale_ref was never exercised');
@@ -460,6 +473,10 @@ export function selfTest() {
         rmSync(tmp, { recursive: true, force: true });
     }
     if (existsSync(tmp)) { failures++; lines.push(`  FAIL the fixture directory ${tmp} was not removed`); }
+    // harness-live-security-03: no orca/ is a SKIP on a developer tree and a FAIL in CI.
+    expectRed('no orca/ in CI', noOrcaOutcome({ CI: 'true' }).fails ?? [], 'CI fetches orca/');
+    if (!noOrcaOutcome({}).skip) { failures++; lines.push('  FAIL no orca/ on a developer tree is not a SKIP'); }
+    for (const f of lockWiringFails(NAME, import.meta.url)) { failures++; lines.push(`  FAIL ${f}`); }
     return { lines, failures, planted };
 }
 
@@ -481,10 +498,14 @@ if (isEntryPoint) {
         console.error(`${NAME}: FAIL -- unknown argument '${args[0]}' (usage: node scripts/verify-orca-browser-snapshot-live.mjs [--fixtures | --self-test])`);
         process.exit(2);
     }
+    if (!fixturesMode) {
+        const locked = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT, args });
+        if (locked !== null) process.exit(locked);
+    }
     let code = 0;
     try {
         const r = fixturesMode ? runFixtures() : await live();
-        if (r.skip) console.log(`${label}: SKIP -- ${r.skip}`);
+        if (r.skip) { console.log(skipLine(label, r.skip)); code = SKIP_EXIT; }
         else if (r.fails) { for (const f of r.fails) console.error(`${label}: FAIL -- ${f}`); code = 1; }
         else console.log(`${label}: PASS -- ${r.pass}`);
     } catch (e) {

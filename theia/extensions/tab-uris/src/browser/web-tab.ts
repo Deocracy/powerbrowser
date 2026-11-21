@@ -178,8 +178,9 @@ export interface WebTabOptions {
      */
     grant?: string;
     /**
-     * Phase 66 (P66-06, P66-07): an Orca agent's page. Set only by @powerbrowser/orca-browser; the first webTabOpen
-     * carries it, and chrome records it only when it creates the overlay, so no request turns a user's tab into one.
+     * Phase 66 (P66-06, P66-07): an Orca agent's page. Set only by @powerbrowser/orca-browser; every webTabOpen of the
+     * widget carries it (agent-browser-02), and chrome records it only when it creates the overlay, so no request turns
+     * a user's tab into one. Chrome also keeps the tab id as an agent tab's for the session, flag or no flag.
      */
     agent?: boolean;
 }
@@ -266,6 +267,8 @@ export interface NotificationBarText {
 export interface WebTabAgentControl {
     active: boolean;
     stopped: boolean;
+    /** agent-browser-04: chrome's own word that this is an agent tab (a restored agent row's widget carries no flag). */
+    agent: boolean;
 }
 
 /** Phase 66 (P66-21): the title class of a tab an agent controls, so a background tab an agent drives is identifiable in the dock. */
@@ -407,8 +410,9 @@ export type WebTabMessage =
     // Phase 66 (P66-12): one Orca automation method on an agent tab, sent only by @powerbrowser/orca-browser's dispatcher;
     // method is the Orca name itself (chrome's AGENT_METHODS), params the command's params as orcad sent them.
     | { kind: 'webTabAgent'; tabId: string; method: string; params: Record<string, unknown> }
-    // Phase 66 (P66-21, P66-22): ends agent control of the tab for its lifetime; sent only by WebTabWidget.agentStop().
-    | { kind: 'webTabAgentStop'; tabId: string };
+    // Phase 66 (P66-21, P66-22): ends agent control of every agent tab of this frontend and refuses new ones
+    // (agent-browser-04); `resume` is the mark's Resume on a stopped agent tab. Sent only by WebTabWidget.agentStop().
+    | { kind: 'webTabAgentStop'; tabId: string; resume?: true };
 
 /**
  * Window-frame messages the same channel carries for the custom title bar:
@@ -609,7 +613,7 @@ export class WebTabChannel {
             if (!widget) {
                 return;
             }
-            widget.setAgentControl({ active: detail.active === true, stopped: detail.stopped === true });
+            widget.setAgentControl({ active: detail.active === true, stopped: detail.stopped === true, agent: detail.agent === true });
             this.tabStatusEmitter.fire(widget);
         });
         // Phase 37 plan 04 (D-08): a tab's notification bar appears, changes or goes. Only a known bar kind is kept, and
@@ -770,8 +774,12 @@ export class WebTabWidget extends BaseWidget {
     protected grant: string | undefined;
     /** Phase 66 (P66-06): an Orca agent's tab (WebTabOptions.agent); fixed for the widget's life. */
     agent = false;
-    /** Phase 66: the agent flag goes on the first webTabOpen only. */
-    protected agentOpenSent = false;
+    protected resolveOpened: ((reply: WebTabReply) => void) | undefined;
+    /**
+     * 66-WR-06: the first webTabOpen's reply. openAgentTab's caller awaits it, so an Orca createPage fails (and the tab
+     * closes) when chrome made no overlay: no agent container, a refusal, agents stopped, or a timeout.
+     */
+    readonly opened: Promise<WebTabReply> = new Promise<WebTabReply>(resolve => { this.resolveOpened = resolve; });
     url: string;
     pageTitle = '';
     loading = false;
@@ -833,7 +841,7 @@ export class WebTabWidget extends BaseWidget {
     sharing: WebTabSharing = { camera: false, microphone: false, screen: false };
 
     /** Phase 66 (P66-20): whether an Orca agent controls this tab and whether the user stopped it, only from chrome's agentControlChanged push. */
-    agentControl: WebTabAgentControl = { active: false, stopped: false };
+    agentControl: WebTabAgentControl = { active: false, stopped: false, agent: false };
 
     /** Phase 37 plan 04 (D-08): this tab's notification bars, one per kind, from chrome's notificationBar push. */
     readonly notificationBars = new Map<NotificationBarKind, NotificationBar>();
@@ -911,6 +919,7 @@ export class WebTabWidget extends BaseWidget {
         this.channel.register(this.tabId, this);
         this.refreshTitle();
         this.renderState();
+        this.setAgentControl(this.agentControl);
     }
 
     /** The body text state. Fixed literals; the tab counter, empty-page URL, kinds and error text never reach it. */
@@ -953,6 +962,15 @@ export class WebTabWidget extends BaseWidget {
         this.stateNode.classList.add('is-crashed');
     }
 
+    /**
+     * agent-browser-02 (66-CR-01): every webTabOpen of an agent widget carries the flag (the first open, a re-attach,
+     * the crash recreate and the lost-view reopen). Chrome honours it only when it creates the overlay, and it also
+     * remembers agent tab ids itself, so this is the second of two walls, not the only one.
+     */
+    protected agentFlag(): { agent?: true } {
+        return this.agent ? { agent: true as const } : {};
+    }
+
     protected setLostView(lost: boolean): void {
         if (this.lostView === lost) {
             return;
@@ -981,10 +999,12 @@ export class WebTabWidget extends BaseWidget {
         // refusal, a nack or silence (timeout included) marks the view lost.
         const grant = this.grant;
         this.grant = undefined;
-        const agent = this.agent && !this.agentOpenSent;
-        this.agentOpenSent = true;
-        void this.channel.request({ kind: 'webTabOpen', tabId: this.tabId, url: this.url, key: this.rowKey, ...(grant ? { grant } : {}), ...(agent ? { agent: true as const } : {}) })
-            .then(reply => this.setLostView(WebTabWidget.lostReply(reply)));
+        void this.channel.request({ kind: 'webTabOpen', tabId: this.tabId, url: this.url, key: this.rowKey, ...(grant ? { grant } : {}), ...this.agentFlag() })
+            .then(reply => {
+                this.setLostView(WebTabWidget.lostReply(reply));
+                this.resolveOpened?.(reply);
+                this.resolveOpened = undefined;
+            });
         this.publish();
         if (!this.listening) {
             this.listening = true;
@@ -1302,7 +1322,7 @@ export class WebTabWidget extends BaseWidget {
      * otherwise have skipped. Both Reload arms above end here.
      */
     protected async reopen(): Promise<WebTabReply> {
-        const reply = await this.channel.request({ kind: 'webTabOpen', tabId: this.tabId, url: this.url, key: this.rowKey });
+        const reply = await this.channel.request({ kind: 'webTabOpen', tabId: this.tabId, url: this.url, key: this.rowKey, ...this.agentFlag() });
         // One reading of "chrome no longer renders this tab" (G-14.1.1-48):
         // every site that folds an open-or-navigate reply -- onAfterAttach,
         // this reopen, and settle() -- reaches lost-view state through
@@ -1502,19 +1522,24 @@ export class WebTabWidget extends BaseWidget {
             }) as Promise<WebTabSiteInfo>;
     }
 
-    /** Phase 66 (P66-21): stores chrome's agent state and marks the tab's title while an agent controls it. */
+    /**
+     * Phase 66 (P66-21): stores chrome's agent state and marks the tab's title. agent-browser-04: an agent tab, as
+     * chrome reports it, is marked for its whole life, so a background tab an agent opened is identifiable before the
+     * agent acts in it, a restored one included.
+     */
     setAgentControl(control: WebTabAgentControl): void {
         this.agentControl = control;
         const classes = this.title.className.split(' ').filter(c => c && c !== AGENT_CONTROLLED_CLASS);
-        this.title.className = (control.active ? [...classes, AGENT_CONTROLLED_CLASS] : classes).join(' ');
+        this.title.className = (control.agent || control.active ? [...classes, AGENT_CONTROLLED_CLASS] : classes).join(' ');
     }
 
     /**
-     * Phase 66 (P66-21, P66-22): ends agent control of this tab for its lifetime. Called only from the chrome bar's
-     * Stop click handler; chrome answers every later webTabAgent call for the tab agent-stopped.
+     * Phase 66 (P66-21, P66-22), agent-browser-04: Stop ends agent control of every agent tab of this frontend, and
+     * chrome refuses new agent tabs, until `resume` (the mark's Resume on a stopped agent tab). Called only from the
+     * chrome bar's agent-mark click handlers.
      */
-    agentStop(): Promise<WebTabReply> {
-        return this.channel.request({ kind: 'webTabAgentStop', tabId: this.tabId });
+    agentStop(resume = false): Promise<WebTabReply> {
+        return this.channel.request({ kind: 'webTabAgentStop', tabId: this.tabId, ...(resume ? { resume: true as const } : {}) });
     }
 
     /**
@@ -1667,6 +1692,9 @@ let nextTabSeq = 0;
  */
 export const WEB_TAB_SESSION = Math.random().toString(36).slice(2, 8);
 
+/** agent-browser-02: the row-key prefix of every agent tab; chrome's AGENT_ROW_KEY_RE is the same prefix. */
+export const AGENT_ROW_KEY_PREFIX = 'web:agent-';
+
 /** True only for an id minted by THIS frontend session. The factory's admission test. */
 export function isCurrentSessionTabId(id: string): boolean {
     return typeof id === 'string' && id.startsWith(`wt-${WEB_TAB_SESSION}-`);
@@ -1675,6 +1703,8 @@ export function isCurrentSessionTabId(id: string): boolean {
 /** NG-008: opener options a Panorama card passes to reopen a web tab on the row it already has. */
 export interface WebTabOpenerOptions extends OpenerOptions {
     rowKey?: string;
+    /** The page URL verbatim: a Theia URI percent-decodes on parse, so uri.toString(true) can differ from it. */
+    url?: string;
 }
 
 /**
@@ -1785,7 +1815,7 @@ export class WebTabOpenHandler implements OpenHandler, FrontendApplicationContri
     }
 
     async open(uri: URI, options?: WebTabOpenerOptions): Promise<WebTabWidget> {
-        return this.openUrl(uri.toString(true), options?.rowKey);
+        return this.openUrl(options?.url ?? uri.toString(true), options?.rowKey);
     }
 
     async openUrl(url: string, rowKey?: string): Promise<WebTabWidget> {
@@ -1822,6 +1852,12 @@ export class WebTabOpenHandler implements OpenHandler, FrontendApplicationContri
 
     protected createWidget(url: string, rowKey?: string, grant?: string, asAgent?: boolean): Promise<WebTabWidget> {
         const options: WebTabOptions = { id: `wt-${WEB_TAB_SESSION}-${++nextTabSeq}`, url, ...(rowKey ? { key: rowKey } : {}), ...(grant ? { grant } : {}), ...(asAgent ? { agent: true } : {}) };
+        // agent-browser-02: an agent tab's row key is web:agent-<id>. The key travels with its session snapshot, Setup,
+        // closed-tab row and kept history, and chrome makes every open under such a key an agent tab, after a
+        // relaunch too; chrome refuses an agent open under any other key.
+        if (asAgent) {
+            options.key = `${AGENT_ROW_KEY_PREFIX}${options.id}`;
+        }
         return this.widgetManager.getOrCreateWidget<WebTabWidget>(WEB_TAB_FACTORY_ID, options);
     }
 }

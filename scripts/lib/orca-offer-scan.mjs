@@ -19,20 +19,39 @@
 // through node:sqlite on a copy: values are not scanned, because Gecko may
 // compress them (P67-11). The marker key a live run writes through the page
 // is the key probe's positive control: an absence of the runtime-environment
-// key counts only in a run that found the marker.
+// key counts only in a run that found the marker. The runtime-environment key
+// is derived from the pin at check time (harness-static-hosting-04): a pin that
+// no longer declares and writes it is red "source moved".
 //
 // Nothing here prints, logs or writes a needle. Results carry sink names,
 // form names, origins and counts.
 
 import { copyFileSync, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { decodeMozLz4 } from './mozlz4.mjs';
 import { isLoopbackEndpoint } from '../../powerbrowser/shell/OrcaEnv.sys.mjs';
 
-/** P65-17: the web client's stored-environment key, which session-only pairing removes. */
-export const RUNTIME_ENV_KEY = 'orca.web.runtimeEnvironment.v1';
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+/** The pinned web client source that names the stored-environment key, relative to the Orca checkout. */
+export const RUNTIME_ENV_SOURCE_REL = 'src/renderer/src/web/web-runtime-environment.ts';
+
+/**
+ * P65-17: the web client's stored-environment key, which session-only pairing removes, read from the pin under
+ * `orcaRoot` (ENVIRONMENT_STORAGE_KEY in web-runtime-environment.ts, which must also be the key the file writes to
+ * localStorage). Throws "source moved: ..." when the pin no longer reads as expected (harness-static-hosting-04).
+ */
+export function runtimeEnvKeyFromPin(orcaRoot = join(REPO_ROOT, 'orca')) {
+    let text;
+    try { text = readFileSync(join(orcaRoot, RUNTIME_ENV_SOURCE_REL), 'utf8'); } catch { throw new Error(`source moved: ${RUNTIME_ENV_SOURCE_REL} is absent at the pin`); }
+    const m = /\bconst\s+ENVIRONMENT_STORAGE_KEY\s*=\s*(['"])([^'"]+)\1/.exec(text);
+    if (!m) throw new Error(`source moved: ${RUNTIME_ENV_SOURCE_REL} no longer declares ENVIRONMENT_STORAGE_KEY as a string`);
+    if (!/\blocalStorage\.setItem\(\s*ENVIRONMENT_STORAGE_KEY\b/.test(text)) throw new Error(`source moved: ${RUNTIME_ENV_SOURCE_REL} no longer writes localStorage under ENVIRONMENT_STORAGE_KEY`);
+    return m[2];
+}
 
 /**
  * The byte sinks of Phase 65 (P65-23), relative to the profile directory: setups.json in Theia's user storage
@@ -132,8 +151,9 @@ function occurrences(bytes, needle) {
 /**
  * Each 127.0.0.1 origin's localStorage keys, read from storage/default/http+++127.0.0.1+<port>/ls/data.sqlite through
  * node:sqlite on a temporary copy (with its -wal file when present): [{ origin, read, hasMarker, hasRuntimeKey }].
+ * `runtimeEnvKey` defaults to the key derived from the pin.
  */
-export function readOriginKeys(profileDir, markerKey) {
+export function readOriginKeys(profileDir, markerKey, runtimeEnvKey = runtimeEnvKeyFromPin()) {
     const base = join(profileDir, 'storage', 'default');
     const dirs = existsSync(base) ? readdirSync(base).filter((d) => /^https?\+\+\+127\.0\.0\.1(\+\d+)?$/.test(d)) : [];
     const out = [];
@@ -148,7 +168,7 @@ export function readOriginKeys(profileDir, markerKey) {
             const conn = new DatabaseSync(join(tmp, 'data.sqlite'));
             let keys;
             try { keys = conn.prepare('SELECT key FROM data').all().map((row) => (typeof row.key === 'string' ? row.key : Buffer.from(row.key ?? '').toString('utf8'))); } finally { conn.close(); }
-            out.push({ origin, read: true, hasMarker: !!markerKey && keys.includes(markerKey), hasRuntimeKey: keys.includes(RUNTIME_ENV_KEY) });
+            out.push({ origin, read: true, hasMarker: !!markerKey && keys.includes(markerKey), hasRuntimeKey: keys.includes(runtimeEnvKey) });
         } catch {
             out.push({ origin, read: false, hasMarker: false, hasRuntimeKey: false });
         } finally {
@@ -160,10 +180,11 @@ export function readOriginKeys(profileDir, markerKey) {
 
 /**
  * One scan of a profile against the offers of one or more launches. Returns { sinks: [{ name, read, matches, forms }],
- * origins: [{ origin, read, hasMarker, hasRuntimeKey }], verdicts: [red reason] }; no needle anywhere in it.
- * With markerKey, an origin storage that never shows the marker is red "collector blind".
+ * origins: [{ origin, read, hasMarker, hasRuntimeKey }], runtimeEnvKey, verdicts: [red reason] }; no needle anywhere
+ * in it. With markerKey, an origin storage that never shows the marker is red "collector blind". `runtimeEnvKey`
+ * defaults to the key derived from orca/ at the pin; a pin it cannot be derived from throws "source moved".
  */
-export function scanProfile({ profileDir, offers, markerKey }) {
+export function scanProfile({ profileDir, offers, markerKey, runtimeEnvKey = runtimeEnvKeyFromPin() }) {
     const needles = (offers ?? []).flatMap((offer) => needlesFromOffer(offer));
     if (!needles.length) throw notDerivable('every form', 'no offer given');
     const sinks = collectSinks(profileDir).map(({ name, read, bytes }) => {
@@ -177,22 +198,23 @@ export function scanProfile({ profileDir, offers, markerKey }) {
         }
         return { name, read, matches, forms };
     });
-    const origins = readOriginKeys(profileDir, markerKey);
+    const origins = readOriginKeys(profileDir, markerKey, runtimeEnvKey);
     const verdicts = [];
     if (!sinks.some((s) => s.read)) verdicts.push('zero sinks read: no byte sink was readable in the profile, so an absence proves nothing');
     for (const s of sinks.filter((x) => x.matches)) {
         verdicts.push(`offer found in ${s.name} (${s.matches} match${s.matches === 1 ? '' : 'es'}: ${Object.entries(s.forms).map(([f, n]) => `${f} ${n}`).join(', ')})`);
     }
     if (markerKey && !origins.some((o) => o.hasMarker)) verdicts.push(`collector blind: no 127.0.0.1 origin's localStorage holds the marker key (${origins.length} origin(s) read)`);
-    for (const o of origins.filter((x) => x.hasRuntimeKey)) verdicts.push(`${RUNTIME_ENV_KEY} present in ${o.origin}'s localStorage`);
-    return { sinks, origins, verdicts };
+    for (const o of origins.filter((x) => x.hasRuntimeKey)) verdicts.push(`${runtimeEnvKey} present in ${o.origin}'s localStorage`);
+    return { sinks, origins, runtimeEnvKey, verdicts };
 }
 
 /** Output lines for a scan: sink names, counts and origin verdicts only. */
 export function formatScan(result) {
     const lines = [];
     for (const s of result.sinks ?? []) lines.push(`sink ${s.name}: ${s.read ? `${s.matches} match(es)` : 'not read'}`);
-    for (const o of result.origins ?? []) lines.push(`origin ${o.origin}: ${o.read ? `marker ${o.hasMarker ? 'found' : 'absent'}, ${RUNTIME_ENV_KEY} ${o.hasRuntimeKey ? 'present' : 'absent'}` : 'not read'}`);
+    const key = result.runtimeEnvKey ?? 'the runtime-environment key';
+    for (const o of result.origins ?? []) lines.push(`origin ${o.origin}: ${o.read ? `marker ${o.hasMarker ? 'found' : 'absent'}, ${key} ${o.hasRuntimeKey ? 'present' : 'absent'}` : 'not read'}`);
     return lines;
 }
 
@@ -227,7 +249,10 @@ export function runCollector(collector, ctx) {
 /** One output line per collector result and whether it is red. */
 export function collectorLine(r) {
     const reasons = [];
+    // An unread sink is never green (harness-static-hosting-03): a read() that threw discarded every needle and
+    // fault it was building, so it is red even when the control was found.
     if (r.blind) reasons.push(`collector blind (control not found${r.unreadable ? ', sink unreadable' : ''})`);
+    else if (r.unreadable) reasons.push('sink unreadable (the collector could not read the sink, so an absence proves nothing)');
     if (r.matches) reasons.push(`offer found (${r.matches} match${r.matches === 1 ? '' : 'es'})`);
     for (const f of r.faults) reasons.push(f);
     return reasons.length
@@ -336,6 +361,33 @@ export function isLoopbackProcAddress(hex) {
     return h.length === 32 && h.startsWith('0000000000000000FFFF0000') && h.endsWith('7F');
 }
 
+/**
+ * `roots` and every live descendant of them (harness-static-hosting-08), from a ppid walk over <procRoot>/<pid>/stat:
+ * the stat line's fourth field, read after the last ')' so a command name holding spaces or parentheses parses.
+ */
+export function withDescendants(roots, procRoot = '/proc') {
+    const children = new Map();
+    let entries = [];
+    try { entries = readdirSync(procRoot).filter((d) => /^\d+$/.test(d)); } catch { /* no proc tree: the roots only */ }
+    for (const d of entries) {
+        const stat = readOrNull(join(procRoot, d, 'stat'))?.toString('utf8');
+        if (!stat) continue;
+        const ppid = Number(stat.slice(stat.lastIndexOf(')') + 1).trim().split(/\s+/)[1]);
+        if (!Number.isInteger(ppid)) continue;
+        if (!children.has(ppid)) children.set(ppid, []);
+        children.get(ppid).push(Number(d));
+    }
+    const out = new Set();
+    const queue = roots.filter((p) => Number.isInteger(p) && p > 0);
+    while (queue.length) {
+        const pid = queue.shift();
+        if (out.has(pid)) continue;
+        out.add(pid);
+        queue.push(...(children.get(pid) ?? []));
+    }
+    return [...out];
+}
+
 /** LISTEN sockets owned by `pids`: [{ pid, address, loopback }], joining <procRoot>/net/tcp{,6} with each pid's fd inodes. */
 export function listenSockets(pids, procRoot = '/proc') {
     const listening = new Map();
@@ -392,11 +444,25 @@ export const setupsCollector = Object.freeze({
     read: (ctx) => ({ chunks: collectSinks(ctx.profileDir).map((s) => s.bytes), faults: [] }),
 });
 
-/** Logs: PB stdout and stderr, the OrcaService and TheiaService log lines, orcad's data root minus holder 5; control: the ready line. */
+/**
+ * Each captured output stream travelled its own path and was read (harness-static-hosting-05): ctx.captures is
+ * [{ stream, text, control }], text null when the capture file is absent or unreadable, control a line the stream
+ * always carries (null: the file's existence is the control). An empty list, a missing file or a stream without
+ * its control leaves the collector blind.
+ */
+export function capturesControlled(captures) {
+    return Array.isArray(captures) && captures.length > 0
+        && captures.every((c) => typeof c?.text === 'string' && (!c.control || c.text.includes(c.control)));
+}
+
+/**
+ * Logs: PB stdout and stderr, the OrcaService and TheiaService log lines, orcad's data root minus holder 5; control:
+ * the ready line in the service log texts, and each captured stream's own control (capturesControlled).
+ */
 export const logsCollector = Object.freeze({
     sink: 'logs',
-    control: (ctx) => !!ctx.logControl && textsOf(ctx.logTexts).some((t) => t.includes(ctx.logControl)),
-    read: (ctx) => ({ chunks: [...textsOf(ctx.logTexts), ...walkFiles(ctx.dataRoot, (rel) => ctx.holder5.isHolder(rel)).map(([, abs]) => readOrNull(abs))], faults: [] }),
+    control: (ctx) => !!ctx.logControl && textsOf(ctx.logTexts).some((t) => t.includes(ctx.logControl)) && capturesControlled(ctx.captures),
+    read: (ctx) => ({ chunks: [...textsOf(ctx.logTexts), ...textsOf(ctx.captures), ...walkFiles(ctx.dataRoot, (rel) => ctx.holder5.isHolder(rel)).map(([, abs]) => readOrNull(abs))], faults: [] }),
 });
 
 /** Address field: every Orca tab's and the control web tab's address text; control: the marker in a control text. */
@@ -433,30 +499,43 @@ export const bridgeFolderCollector = Object.freeze({
         const st = lstatSync(ctx.bridgeDir);
         let badModes = st.isDirectory() && (st.mode & 0o777) === 0o700 && st.uid === uid ? 0 : 1;
         const strays = [];
+        // harness-static-hosting-03: an entry that vanishes between readdir and lstat, or a stray this user cannot
+        // read (0200 passes the mode test), is a named fault; it never throws away the faults already found.
+        let unreadEntries = 0;
         for (const name of readdirSync(ctx.bridgeDir)) {
-            const f = lstatSync(join(ctx.bridgeDir, name));
+            let f;
+            try { f = lstatSync(join(ctx.bridgeDir, name)); } catch { unreadEntries++; continue; }
             // The offer file exactly 0600; every other entry a private regular file (Phase 63's claude-wrapper launcher
             // is 0700 because it is executed): owned by this user, no group or other bits.
             const mode = f.mode & 0o777;
             if (!(f.isFile() && f.uid === uid && (name === offerFile ? mode === 0o600 : (mode & 0o077) === 0))) badModes++;
-            if (name !== offerFile && f.isFile()) strays.push(readFileSync(join(ctx.bridgeDir, name)));
+            if (name !== offerFile && f.isFile()) {
+                try { strays.push(readFileSync(join(ctx.bridgeDir, name))); } catch { unreadEntries++; }
+            }
         }
         const strayHits = strays.filter((b) => countMatches([b], ctx.needles) > 0).length;
         const faults = [];
         if (badModes) faults.push(`bridge folder mode (${badModes} entr${badModes === 1 ? 'y is' : 'ies are'} not 0700/0600 or not owned by this user)`);
         if (strayHits) faults.push(`stray copy (${strayHits} file${strayHits === 1 ? '' : 's'} other than ${offerFile} hold${strayHits === 1 ? 's' : ''} a needle)`);
+        if (unreadEntries) faults.push(`bridge folder entry unreadable (${unreadEntries} entr${unreadEntries === 1 ? 'y' : 'ies'} could not be listed or read, so a copy in ${unreadEntries === 1 ? 'it' : 'them'} is not ruled out)`);
         return { chunks: strays, faults };
     },
 });
 
-/** Non-loopback peer: the decoded endpoint is ws://127.0.0.1:<orca port>, every LISTEN socket of orcad and the Theia backend on loopback; control: one orcad LISTEN row. */
+/**
+ * Non-loopback peer: the decoded endpoint is ws://127.0.0.1:<orca port>, and every LISTEN socket of orcad, the terminal
+ * daemon, the Theia backend and every descendant of them (plugin hosts, helpers) is on loopback; control: one orcad
+ * LISTEN row of orcad's own (ctx.pids.orcad), never the terminal daemon's (ctx.pids.daemon), so the daemon cannot stand in
+ * for an orcad that listens nowhere.
+ */
 export const nonLoopbackPeerCollector = Object.freeze({
     sink: 'non-loopback peer',
     control: (ctx) => listenSockets(ctx.pids?.orcad ?? [], ctx.procRoot).length > 0,
     read: (ctx) => {
         const faults = [];
         if (!isLoopbackEndpoint(ctx.endpoint, ctx.orcaPort)) faults.push('non-loopback peer: the decoded endpoint is not ws://127.0.0.1:<orca port>');
-        const off = listenSockets([...(ctx.pids?.orcad ?? []), ...(ctx.pids?.theia ?? [])], ctx.procRoot).filter((s) => !s.loopback).length;
+        const scanned = withDescendants([...(ctx.pids?.orcad ?? []), ...(ctx.pids?.daemon ?? []), ...(ctx.pids?.theia ?? [])], ctx.procRoot ?? '/proc');
+        const off = listenSockets(scanned, ctx.procRoot).filter((s) => !s.loopback).length;
         if (off) faults.push(`non-loopback peer: ${off} listening socket(s) off loopback`);
         return { chunks: [], faults };
     },

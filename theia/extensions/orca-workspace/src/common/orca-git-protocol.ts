@@ -51,6 +51,80 @@ export function withoutGitVars<T extends Record<string, string | undefined>>(env
     return Object.fromEntries(Object.entries(env).filter(([name]) => !/^GIT_/i.test(name)));
 }
 
+/**
+ * sidecar-gate-backends-02: the environment of every pb-orca-git git run. No GIT_* name is inherited; then a read
+ * never fetches (a partial clone's lazy fetch would run the repository's configured upload-pack, ssh command and
+ * credential helpers), never prompts and never starts an askpass dialog. Every transport is set to never through the
+ * environment form of `-c`: command-line scope outranks the repository's own config, so a hostile
+ * protocol.<name>.allow=always in .git/config (git reads it before protocol.allow) cannot re-open one; it reaches the
+ * fetch child git would spawn, and it still holds on a git older than 2.44, which ignores GIT_NO_LAZY_FETCH. The argv
+ * stays as catFileArgs builds it.
+ */
+export const ORCA_GIT_NEVER_PROTOCOLS: readonly string[] = Object.freeze(['file', 'ext', 'ssh', 'http', 'https', 'git']);
+
+export function gitReadEnv<T extends Record<string, string | undefined>>(env: T): Record<string, string | undefined> {
+    const keys = ['protocol.allow', ...ORCA_GIT_NEVER_PROTOCOLS.map(p => `protocol.${p}.allow`)];
+    const config: Record<string, string> = { GIT_CONFIG_COUNT: String(keys.length) };
+    keys.forEach((key, i) => {
+        config[`GIT_CONFIG_KEY_${i}`] = key;
+        config[`GIT_CONFIG_VALUE_${i}`] = 'never';
+    });
+    return {
+        ...withoutGitVars(env),
+        GIT_NO_LAZY_FETCH: '1',
+        GIT_TERMINAL_PROMPT: '0',
+        GIT_ASKPASS: '',
+        SSH_ASKPASS: '',
+        SSH_ASKPASS_REQUIRE: 'never',
+        ...config,
+    };
+}
+
+/** 65-CR-01: the reason a read reports when the path is absent at an existing rev or index stage (an added, deleted or untracked file). */
+export const ORCA_GIT_MISSING = 'missing';
+
+/**
+ * 65-CR-01: the argv that lists one path at a side without reading its blob: ls-tree of the rev's tree, or the index
+ * entries (ls-files --stage), with literal pathspecs. Throws on a refused spec (a leading '-', a NUL) and the empty side.
+ */
+export function presenceArgs(root: string, rev: string, relativePath: string): string[] {
+    const refusal = specRefusal(relativePath, rev);
+    if (refusal || rev === '') {
+        throw new Error(`refused pb-orca-git spec: ${refusal ?? 'empty-side'}`);
+    }
+    const head = ['-c', 'core.fsmonitor=false', '--literal-pathspecs', '-C', root];
+    return STAGE.test(rev)
+        ? [...head, 'ls-files', '-z', '--stage', '--', relativePath]
+        : [...head, 'ls-tree', '-z', rev, '--', relativePath];
+}
+
+/**
+ * 65-CR-01: after a blob read failed, whether the path is absent at its side (that side is then empty) rather than the
+ * read having failed. Absent is only git's own answer "no such entry": the listing exited 0 over a tree or index it
+ * could read and named no entry for the path at that stage. A listing that failed (a timeout, a rev that does not
+ * exist, a tree object a treeless partial clone does not hold, an unreadable index) is never absent, so that side
+ * fails with a plain error rather than showing the file as wholly added or deleted. run(args) is one git run.
+ */
+export async function sideIsMissing(run: (args: string[]) => Promise<{ out: Buffer } | { reason: string }>, root: string, rev: string, relativePath: string): Promise<boolean> {
+    if (specRefusal(relativePath, rev) || rev === '') {
+        return false;
+    }
+    const r = await run(presenceArgs(root, rev, relativePath));
+    if (!('out' in r)) {
+        return false;
+    }
+    const stage = STAGE.test(rev) ? rev.slice(1) : undefined;
+    const named = r.out.toString('utf8').split('\0').some(entry => {
+        const tab = entry.indexOf('\t');
+        if (tab === -1 || entry.slice(tab + 1) !== relativePath) {
+            return false;
+        }
+        // ls-files --stage: "<mode> <object> <stage>\t<path>"; ls-tree: "<mode> <type> <object>\t<path>".
+        return stage === undefined || entry.slice(0, tab).split(' ')[2] === stage;
+    });
+    return !named;
+}
+
 export interface RootDeps {
     realpath(path: string): Promise<string>;
     /** git -C <root> rev-parse --show-toplevel, trimmed; undefined when git fails. */

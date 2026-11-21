@@ -13,9 +13,9 @@
 // plus every file named like a native (.node, rg, node, rg.exe, node.exe) whatever
 // its bytes. So Orca's agent-browser-<platform>-<arch>, node-pty's spawn-helper and
 // any helper without an extension are judged too. One exception, outside orca/
-// only: in a win64 stage an i386 .exe other than node.exe and rg.exe is the NSIS
-// installer's helper.exe, 32-bit by design, and is not examined; under orca/ every
-// PE must be PE32+ x86-64.
+// only: in a win64 stage uninstall/helper.exe (the one path the Mozilla package manifest
+// gives the NSIS uninstaller) is 32-bit by design and is not examined; every other PE, an
+// i386 .exe included, and every PE under orca/ must be PE32+ x86-64.
 //
 // Native paths are sorted before comparing, so output order is stable across
 // runs and filesystems. A staged package with zero natives is red naming the
@@ -79,9 +79,13 @@ function hasNativeMagic(head) {
     return head.length >= 4 && (head.subarray(0, 4).equals(ELF) || head.subarray(0, 2).equals(MZ) || MACHO.includes(head.subarray(0, 4).toString('hex')));
 }
 
-// The NSIS installer helper (uninstall/helper.exe) is i386 by design; only outside orca/ in a win64 stage.
+// The NSIS uninstaller (uninstall/helper.exe) is i386 by design; only that path, outside orca/, in a win64 stage. The path is
+// upstream/browser/installer/package-manifest.in's own line, @BINPATH@/uninstall/helper.exe, and the stage this check reads is
+// the application directory itself (package-windows.sh stages into it), so the path is anchored at the stage root. Any other
+// i386 .exe (a tool under the sidecar, a renamed helper, an uninstall/helper.exe in a nested directory) is examined and is red.
+export const INSTALLER_HELPER_PATH = /^uninstall\/helper\.exe$/;
 function isInstallerHelper(rel, head) {
-    if (rel.startsWith('orca/') || !rel.endsWith('.exe') || ['node.exe', 'rg.exe'].includes(basename(rel))) return false;
+    if (rel.startsWith('orca/') || !INSTALLER_HELPER_PATH.test(rel)) return false;
     if (head.length < 0x40 || !head.subarray(0, 2).equals(MZ)) return false;
     const e = head.readUInt32LE(0x3c);
     return e + 6 <= head.length && head.subarray(e, e + 4).equals(Buffer.from([0x50, 0x45, 0x00, 0x00])) && head.readUInt16LE(e + 4) === 0x014c;
@@ -329,15 +333,29 @@ function selfTest() {
                     console.log(`${NAME}: --self-test -- ${file} REJECTED: ${hit}`);
                 }
             }
+            // Positive control: the NSIS uninstaller at its own path is the one i386 .exe that is not examined.
             const exeDir = join(dir, 'exe-names');
-            mkdirSync(exeDir, { recursive: true });
-            writeFileSync(join(exeDir, 'uninstall-helper.exe'), mkPe({ machine: 0x014c }));
+            mkdirSync(join(exeDir, 'uninstall'), { recursive: true });
+            writeFileSync(join(exeDir, 'uninstall', 'helper.exe'), mkPe({ machine: 0x014c }));
             const exeRes = checkTree(exeDir, 'win64');
-            if (exeRes.failures.some((f) => f.includes('uninstall-helper.exe')) || !exeRes.failures.some((f) => f.includes('EMPTY native universe'))) {
-                console.error(`${NAME}: --self-test FAIL -- a 32-bit NSIS-style .exe was examined; only node.exe and rg.exe are Windows natives here (the installer's helper.exe is PE32 by design)`);
+            if (exeRes.failures.some((f) => f.includes('helper.exe')) || !exeRes.failures.some((f) => f.includes('EMPTY native universe'))) {
+                console.error(`${NAME}: --self-test FAIL -- uninstall/helper.exe (PE32 by design) was examined: ${exeRes.failures.join(' | ') || 'no failure at all'}`);
                 ok = false;
             } else {
-                console.log(`${NAME}: --self-test -- a 32-bit NSIS-style .exe is deliberately not examined (EMPTY universe reported)`);
+                console.log(`${NAME}: --self-test -- uninstall/helper.exe, 32-bit by design, is deliberately not examined (EMPTY universe reported)`);
+            }
+            // Negative controls (harness-other-09): an i386 .exe anywhere else outside orca/ is examined and red.
+            for (const rel of ['sidecar/lib/foo.exe', 'uninstall-helper.exe', 'uninstall/other.exe', 'extras/uninstall/helper.exe.bak.exe', 'helper.exe', 'theia/node_modules/x/uninstall/helper.exe', 'extras/uninstall/helper.exe']) {
+                const negDir = join(dir, `exe-neg-${rel.replace(/[^a-z0-9]/gi, '-')}`);
+                mkdirSync(dirname(join(negDir, rel)), { recursive: true });
+                writeFileSync(join(negDir, rel), mkPe({ machine: 0x014c }));
+                const neg = checkTree(negDir, 'win64');
+                if (neg.failures.some((f) => f.startsWith(`${rel}:`) && f.includes('is not x86-64'))) {
+                    console.log(`${NAME}: --self-test -- an i386 ${rel} outside orca/ is REJECTED (only uninstall/helper.exe at the stage root is exempt)`);
+                } else {
+                    console.error(`${NAME}: --self-test FAIL -- an i386 ${rel} outside orca/ was NOT rejected naming 'is not x86-64': ${neg.failures.join(' | ') || 'no failure at all'}`);
+                    ok = false;
+                }
             }
         }
 

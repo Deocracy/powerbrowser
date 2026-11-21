@@ -29,14 +29,21 @@
 // stdout and stderr write goes through orca-run.mjs's redact, which also
 // replaces the offer itself once it has been read.
 //
+// The live lock is scripts/lib/live-lock.mjs (holdLiveLock); the rows call it before anything launches.
+//
+// Fixture git: the scratch repository's git is the pane harness's fixtureGit (no global or
+// system config, no signing, no hooks, a scratch HOME), and the Orca CLI gets the scratch HOME
+// too (harness-live-tabs-13).
+//
 // Node built-ins and the repo's lib modules only.
 
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { liveEnv, seedClaudeLogin } from './firefox-bidi.mjs';
+import { verdictExit } from './skip-verdict.mjs';
 
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -61,10 +68,151 @@ const SERVICE_URL = 'chrome://powerbrowser/content/OrcaService.sys.mjs';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
 
+// ---------------------------------------------------------------------------
+// The live lock lives in scripts/lib/live-lock.mjs (holdLiveLock, lockWiringFails); only the self-test's plant is here.
+
+/** lockWiringFails over a script that never calls holdLiveLock: it must be red. Resolves lockWiringFails' reasons (non-empty when it works). */
+export function lockWiringPlantFails(lockWiringFails) {
+    const dir = mkdtempSync(join(tmpdir(), 'pb-lock-wiring-'));
+    try {
+        const file = join(dir, 'row.mjs');
+        writeFileSync(file, "console.log('a live row that never takes the lock');\n");
+        return lockWiringFails('x', pathToFileURL(file).href);
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+}
+
+/** verdictExit with its SKIP line suppressed: the self-tests ask what the exit status is without printing a SKIP line of their own. */
+export function verdictExitQuiet(name, failures, skips) {
+    const log = console.log;
+    console.log = () => {};
+    try {
+        return verdictExit(name, failures, skips);
+    } finally {
+        console.log = log;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Redaction after the session.
+
+let retained = null;
+/** Keeps a session's redact function and secret list so output printed after the session is redacted too. */
+export function retainForOutput(redact, secrets) {
+    retained = { redact, secrets };
+}
+/** Redacts text printed after a session ended (a verdict reason, a note, a harness error); unchanged before any session. */
+export function redactAfterSession(text) {
+    return retained ? retained.redact(String(text), retained.secrets) : String(text);
+}
+
+// ---------------------------------------------------------------------------
+// Orca's confirmation dialog, judged against a baseline.
+
+/** Orca's confirmation dialog, as the live rows detect it. */
+export const CONFIRMATION_SELECTOR = 'body > [data-radix-popper-content-wrapper] [role="dialog"], body > [data-radix-popper-content-wrapper] [role="alertdialog"], body > [role="dialog"], body > [role="alertdialog"], body > div [role="alertdialog"]';
+const ORCA_CLOSE_DIALOG_REL = 'orca/src/renderer/src/components/terminal-pane/CloseTerminalDialog.tsx';
+
+/**
+ * The dialog titles of Orca's close-terminal confirmation, read from the pinned source: [] only when orca/ is not fetched. With the
+ * checkout present and no title read (the file moved or its copy keys changed) it throws: an empty list would accept any new dialog.
+ */
+export function closeDialogTitles(root = REPO_ROOT) {
+    if (!existsSync(join(root, 'orca', 'src'))) return [];
+    const text = read(join(root, ORCA_CLOSE_DIALOG_REL));
+    const titles = [...(text ?? '').matchAll(/stop_(?:command|agent)_title',\s*'([^']+)'/g)].map((m) => m[1]);
+    if (!titles.length) throw new Error(`source moved: no close-terminal dialog title read from ${ORCA_CLOSE_DIALOG_REL}${text === null ? ' (the file is absent)' : ''}, so the confirmation could not be told from another dialog`);
+    return titles;
+}
+
+/** Page source: marks every confirmation dialog already present, so a later one is told from them. Resolves their count. */
+export const DIALOG_BASELINE = `const found = document.querySelectorAll(${JSON.stringify(CONFIRMATION_SELECTOR)});
+    for (const d of found) d.setAttribute('data-pb-dialog-baseline', '1');
+    return found.length;`;
+/** Page source: the dialogs that appeared since the baseline: { count, text } or null. */
+export const DIALOG_NEW = `const d = [...document.querySelectorAll(${JSON.stringify(CONFIRMATION_SELECTOR)})].filter((e) => !e.hasAttribute('data-pb-dialog-baseline'));
+    return d.length ? { count: d.length, text: d.map((e) => (e.textContent || '').replace(/\\s+/g, ' ').trim()).join(' | ') } : null;`;
+/** Page source: clicks Cancel inside a dialog that appeared since the baseline only. */
+export const DIALOG_CANCEL_NEW = `const d = [...document.querySelectorAll(${JSON.stringify(CONFIRMATION_SELECTOR)})].find((e) => !e.hasAttribute('data-pb-dialog-baseline'));
+    const btn = d && [...d.querySelectorAll('button')].find((b) => /cancel/i.test(b.textContent));
+    if (btn) btn.click();
+    await sleep(500);
+    return !!btn;`;
+
+/**
+ * Whether a dialog that appeared since the baseline is Orca's close-terminal confirmation: one appeared, and (when the
+ * pinned source names its titles) its text carries one of them. A dialog that was already open, or another one, is not.
+ */
+export function confirmationAppeared(found, titles) {
+    if (!found || !found.count) return false;
+    return titles.length === 0 || titles.some((t) => String(found.text).includes(t));
+}
+
+// ---------------------------------------------------------------------------
+// Fixture git.
+
+/**
+ * The self-test's control for a fixture git runner (no browser): a HOME whose .gitconfig demands signing with a program that does
+ * not exist and names a hooks folder whose pre-commit hook records itself and fails. The raw invocation (that HOME, no
+ * flags) must be hit by it (a commit that fails or a hook that ran: the detector), and makeGit(repo, home) (the pane harness's
+ * fixtureGit) must then commit cleanly with no hook run. Resolves red reasons.
+ */
+export function fixtureGitVerdict(makeGit) {
+    const dir = mkdtempSync(join(tmpdir(), 'pb-fixture-git-'));
+    try {
+        const home = join(dir, 'home');
+        const hooks = join(dir, 'hooks');
+        mkdirSync(home, { recursive: true });
+        mkdirSync(hooks, { recursive: true });
+        const marker = join(dir, 'hook-ran');
+        writeFileSync(join(hooks, 'pre-commit'), `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexit 1\n`);
+        chmodSync(join(hooks, 'pre-commit'), 0o755);
+        writeFileSync(join(home, '.gitconfig'), `[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = /nonexistent/pb-gpg\n[core]\n\thooksPath = ${hooks}\n`);
+        const path = process.env.PATH ?? '';
+        const prepare = (name) => { const r = join(dir, name); mkdirSync(r, { recursive: true }); writeFileSync(join(r, 'README'), 'x\n'); return r; };
+        const commitWith = (run) => { try { run('init', '-q'); run('add', '.'); run('commit', '-q', '-m', 'fixture'); return null; } catch (e) { return String(e.stderr ?? e.message).trim().split('\n').pop(); } };
+        const fails = [];
+        const rawRepo = prepare('raw');
+        const rawGit = (...a) => execFileSync('git', ['-C', rawRepo, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', ...a], { env: { PATH: path, HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
+        if (commitWith(rawGit) === null && !existsSync(marker)) fails.push('fixture git: the hostile HOME config blocked nothing on the raw invocation, so the control proves nothing');
+        rmSync(marker, { force: true });
+        const error = commitWith(makeGit(prepare('fixture'), home));
+        if (error !== null) fails.push(`fixture git: the fixture commit failed under a developer config with signing and hooks (${error})`);
+        if (existsSync(marker)) fails.push('fixture git: a global pre-commit hook ran for the fixture commit');
+        return fails;
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+}
+
 /** The built PowerBrowser this run launches. */
 export const firefoxBin = (root = REPO_ROOT) => process.env.PB_FIREFOX_BIN || join(root, 'objdir', 'dist', 'bin', 'powerbrowser');
 /** The Theia backend this run launches: PB_BACKEND_MAIN, else this tree's. */
 export const backendMain = (root = REPO_ROOT) => process.env.PB_BACKEND_MAIN || join(root, BACKEND_MAIN_REL);
+
+/**
+ * Whether the app under test (PB_BACKEND_MAIN, else this tree's) has orca-panes in its generated frontend: its document then holds Orca's
+ * listeners once the bundle boots. null when the generated frontend index cannot be read (the app is not built as expected).
+ */
+export function appWiresOrcaPanes(main = backendMain()) {
+    const text = read(join(dirname(main), '..', '..', 'src-gen', 'frontend', 'index.js'));
+    return text === null ? null : /@powerbrowser\/orca-panes\//.test(text);
+}
+
+/**
+ * What a paste control in the Theia frame may claim about Orca's document listeners (WINDOWS 62), decided from the frontend under
+ * test: wired (the app names orca-panes), bundleBuilt (the pane bundle this tree serves exists), booted (the bundle booted in the
+ * frame). 'covered': booted. 'not-wired': the app has no Orca listeners to cover. 'red': built but never booted (a blind control).
+ * 'skip': wired but the bundle is not built, so Orca's listeners were not in the frame and the control did not cover them.
+ */
+export function listenerCoverage({ wired, bundleBuilt, booted }) {
+    if (wired === null || wired === undefined) return { verdict: 'red', reason: 'NOT SCORED -- the generated frontend index of the app under test (src-gen/frontend/index.js beside PB_BACKEND_MAIN) could not be read, so whether Orca\'s document listeners are in the Theia frame is unknown' };
+    if (!wired) return { verdict: 'not-wired', note: 'the app under test wires no orca-panes module, so no Orca document listeners are in the Theia frame' };
+    if (booted) return { verdict: 'covered' };
+    if (bundleBuilt) return { verdict: 'red', reason: 'NOT SCORED -- the Orca pane bundle is built but did not boot in the Theia frame, so the paste control does not cover its document listeners' };
+    return { verdict: 'skip', reason: `Orca listeners not covered: the app under test wires orca-panes but ${PANES_BUNDLE_REL} is not built, so the paste control ran without Orca's document listeners. Next step: nix develop .#orca --command bash scripts/build-orca.sh` };
+}
 
 /**
  * Phase 65 (C64-7, P65-01): the clause-level prerequisite of orca-tabs-live stage (g)'s merge-editor half. A named
@@ -202,6 +350,9 @@ export async function withOrcaTabsSession({ log = () => {}, needOrca = true, age
     const secrets = [];
     // Redaction first: nothing below may print before it is in place. The offer joins the list once read.
     const restoreOutput = installOutputRedaction(secrets);
+    // The caller prints its verdict after this session has ended and the stream hook is gone: it redacts through
+    // redactAfterSession, which keeps this session's list (harness-live-tabs-12).
+    retainForOutput(redact, secrets);
     const savedEnv = {};
     for (const k of [...scrubbedNames(), 'PATH', 'MOZ_PURGE_CACHES', 'XDG_CONFIG_HOME']) savedEnv[k] = process.env[k];
     const recorded = new Map();
@@ -273,6 +424,8 @@ export async function withOrcaTabsSession({ log = () => {}, needOrca = true, age
                 w.sendText(${JSON.stringify(text)});
                 return true;`);
             ctx.typeInto = async (id, text) => { await ctx.focusTheiaFrame(); await ctx.activate(id); await ctx.typeText(text); };
+            /** Adds a value (a needle form of the offer) to the redaction list. */
+            ctx.addSecret = (value) => { if (value && !secrets.includes(value)) secrets.push(value); };
             ctx.offerFromFile = async () => {
                 const s = await orcaState();
                 const dir = s.dataRoot ? await OrcaEnv.bridgeDirFor(s.dataRoot, (n) => liveEnv()[n], 'linux') : null;
@@ -305,10 +458,13 @@ export async function withOrcaTabsSession({ log = () => {}, needOrca = true, age
                 const boot = await ctx.probe(BOOT_WAIT, 200000);
                 if (!boot?.booted) throw new Error(`the Orca pane bundle did not boot: ${JSON.stringify(boot?.error ?? boot?.state ?? boot)}`);
                 // The Orca CLI's environment, built from scratch: never this session's ORCA_* values, never the stub.
-                const cliEnv = { PATH: basePath, HOME: savedEnv.HOME ?? process.env.HOME ?? '', ORCA_USER_DATA: state.effectiveRoot, ORCA_USER_DATA_PATH: state.effectiveRoot };
+                // The CLI reads its endpoint from ORCA_USER_DATA, so it gets the scratch HOME too; the developer's HOME is never handed to a fixture process.
+                const cliEnv = { PATH: basePath, HOME: scratch, ORCA_USER_DATA: state.effectiveRoot, ORCA_USER_DATA_PATH: state.effectiveRoot };
                 mkdirSync(repo, { recursive: true });
                 writeFileSync(join(repo, 'README'), 'orca-tabs-live scratch repository\n');
-                const git = (...a) => execFileSync('git', ['-C', repo, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', ...a], { env: { PATH: basePath, HOME: cliEnv.HOME }, stdio: ['ignore', 'pipe', 'pipe'] });
+                // The fixture's git is the pane harness's: no developer config, no signing, no hooks, a scratch HOME (harness-live-tabs-13).
+                const { fixtureGit } = await import('./orca-pane-harness.mjs');
+                const git = fixtureGit(repo, scratch);
                 git('init', '-q');
                 git('add', '.');
                 git('commit', '-q', '-m', 'fixture');

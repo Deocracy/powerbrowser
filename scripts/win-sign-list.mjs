@@ -9,7 +9,7 @@
 //                    and the mach package tokens en-US.win64 (upstream browser/locales AB_CD default and
 //                    toolkit/mozapps/installer/package-name.mk MOZ_PKG_PLATFORM for win64). The same tokens
 //                    are the zip glob of powerbrowser/packaging/package-windows.sh; the self-test compares them.
-//  --list --pkg <dir> [--manifest <package-manifest.in>] [--orca-sums <SHA256SUMS>]
+//  --list --pkg <dir> [--manifest <package-manifest.in>] [--orca-sums <SHA256SUMS> --orca-dir <admitted dir>]
 //                    the PE files (.exe, .dll) under <dir>, the unpacked top directory, compared with the
 //                    upstream package manifest (default upstream/browser/installer/package-manifest.in):
 //                      allowed   every manifest entry naming a .exe or .dll, under any condition, with
@@ -23,12 +23,16 @@
 //                    Not signed and not listed: node/ (the vendor-signed Node runtime) and theia/ (the
 //                    sidecar, built on windows-latest; BLOCKED.md item 8 owns its file list).
 //                    orca/ (Phase 68, P68-03, P68-30) is judged against the windows-orca artifact's SHA256SUMS,
-//                    which sign-windows admits by its out-of-band digest before passing it as --orca-sums:
-//                      required  every SUMS path ending .exe or .dll, plus every SUMS path whose staged file
-//                                starts with the PE magic MZ (orcad's .node addons are PE DLLs);
+//                    which sign-windows admits by its out-of-band digest before passing it as --orca-sums, with
+//                    the admitted artifact directory itself as --orca-dir (68-WR-01):
+//                      required  every SUMS path ending .exe or .dll, plus every SUMS path whose ADMITTED copy
+//                                starts with the PE magic MZ (orcad's .node addons are PE DLLs), whether or not
+//                                the staged tree holds it;
 //                      actual    every file under orca/ named .exe or .dll or starting with MZ.
 //                    The two are compared as sets: an extra and a missing file are each red naming it, and PE
-//                    files under orca/ with no --orca-sums are red. Names may carry @ (Orca's
+//                    files under orca/ with no --orca-sums are red. Each staged PE file must also hash to the
+//                    SUMS entry for its path (package-windows.sh copies the admitted bytes as they are), so a
+//                    same-name file with other bytes is red naming it, and --orca-sums without --orca-dir is red. Names may carry @ (Orca's
 //                    node_modules/@parcel/watcher and @linear/sdk); a .. segment and a leading slash stay red.
 //  --self-test       mkdtemp fixtures over the real manifest; writes nothing in the repo.
 //
@@ -36,7 +40,8 @@
 // in legion's config.status, which this job does not trust. Upgrade to exact set equality when the
 // hosted job evaluates the manifest with defines it derives itself.
 
-import { closeSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { closeSync, cpSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -133,8 +138,10 @@ function filesUnder(dir) {
     return out.sort();
 }
 
-/** orca/ against the admitted Orca SHA256SUMS (null when none was given). Returns { failures, list }. */
-export function orcaChecks(pkgDir, sumsText) {
+const sha256Of = path => createHash('sha256').update(readFileSync(path)).digest('hex');
+
+/** orca/ against the admitted Orca SHA256SUMS (null when none was given) and the admitted directory. Returns { failures, list }. */
+export function orcaChecks(pkgDir, sumsText, orcaDir = null) {
     const failures = [];
     const root = join(pkgDir, ORCA);
     let present = [];
@@ -149,19 +156,24 @@ export function orcaChecks(pkgDir, sumsText) {
         if (actual.length > 0) failures.push(`${ORCA} holds ${actual.length} PE file(s) (${ORCA}${actual[0]} first) but no admitted Orca SHA256SUMS was given, so none can be allowed. Next step: admit the windows-orca artifact and pass its SHA256SUMS with --orca-sums.`);
         return { failures, list: [] };
     }
-    const listed = [];
+    if (orcaDir === null) {
+        failures.push('the admitted Orca SHA256SUMS was given without the admitted windows-orca directory (--orca-dir), so the PE set and the bytes cannot be judged from the admitted copy. Next step: pass --orca-dir windows-orca.');
+        return { failures, list: [] };
+    }
+    const want = new Map();
     for (const line of sumsText.split('\n')) {
         if (line === '') continue;
-        const m = /^[0-9a-f]{64} [ *](.+)$/.exec(line);
+        const m = /^([0-9a-f]{64}) [ *](.+)$/.exec(line);
         if (m === null) { failures.push(`the Orca SHA256SUMS has a malformed line ${JSON.stringify(line)}. Next step: re-admit the windows-orca artifact.`); continue; }
-        if (!safeName(m[1])) { failures.push(`unsafe file name ${JSON.stringify(m[1])} in the Orca SHA256SUMS. Next step: rebuild windows-orca; nothing is signed.`); continue; }
-        listed.push(m[1]);
+        if (!safeName(m[2])) { failures.push(`unsafe file name ${JSON.stringify(m[2])} in the Orca SHA256SUMS. Next step: rebuild windows-orca; nothing is signed.`); continue; }
+        want.set(m[2], m[1]);
     }
-    const presentSet = new Set(present);
-    const required = new Set(listed.filter(r => PE.test(r) || (presentSet.has(r) && startsMz(join(root, r)))));
+    // Classified from the admitted copy, never from the staged file legion wrote.
+    const required = new Set([...want.keys()].filter(r => PE.test(r) || startsMz(join(orcaDir, r))));
     for (const f of actual) {
         if (!safeName(`${ORCA}${f}`)) failures.push(`unsafe file name ${JSON.stringify(`${ORCA}${f}`)} in the staged tree. Next step: rebuild; nothing is signed.`);
         else if (!required.has(f)) failures.push(`extra: ${ORCA}${f} is a PE file the admitted Orca SHA256SUMS does not name, so it is not signed. Next step: find out what put it in the staged tree.`);
+        else if (sha256Of(join(root, f)) !== want.get(f)) failures.push(`changed: ${ORCA}${f} differs from the admitted windows-orca bytes its SHA256SUMS names, so it is not signed. Next step: rebuild the package from the admitted artifact.`);
     }
     const have = new Set(actual);
     for (const r of [...required].sort()) if (!have.has(r)) failures.push(`missing: ${ORCA}${r} is a PE file the admitted Orca SHA256SUMS names and it is absent from the staged tree. Next step: rebuild the package from the admitted artifact.`);
@@ -169,7 +181,7 @@ export function orcaChecks(pkgDir, sumsText) {
 }
 
 /** Returns { failures, list }. */
-export function listChecks(pkgDir, manifestText, app, orcaSums = null) {
+export function listChecks(pkgDir, manifestText, app, orcaSums = null, orcaDir = null) {
     const failures = [];
     if (manifestText === null) return { failures: [`${MANIFEST_REL} is unreadable, so nothing can be allowed. Next step: fetch the pinned source first.`], list: [] };
     const { allowed, required } = manifestPe(manifestText, app);
@@ -187,7 +199,7 @@ export function listChecks(pkgDir, manifestText, app, orcaSums = null) {
     }
     const have = new Set(list.map(f => f.toLowerCase()));
     for (const r of required) if (!have.has(r.toLowerCase())) failures.push(`missing: ${r} is a PE file every build ships (unconditional in the package manifest) and it is absent. Next step: rebuild the package.`);
-    const orca = orcaChecks(pkgDir, orcaSums);
+    const orca = orcaChecks(pkgDir, orcaSums, orcaDir);
     failures.push(...orca.failures);
     return { failures, list: failures.length > 0 ? [] : [...list, ...orca.list].sort() };
 }
@@ -238,28 +250,44 @@ function selfTest() {
         }
         // orca/: the PE set comes from the admitted SHA256SUMS. Files are 'MZ fixture' (PE magic) unless named .js.
         const orcaFiles = ['orca/package.json', 'orca/out/orcad/orcad.js', 'orca/out/orcad/node_modules/node-pty/build/Release/pty.node', 'orca/out/orcad/node_modules/@parcel/watcher/watcher.node', 'orca/out/orcad/bin/orca.exe'];
+        // The admitted copy is the whole fixture Orca tree (orcaFiles, before any plant removes or adds a staged file),
+        // and the SUMS lines carry its real hashes; a name that cannot be hashed (the .. plant) carries zeros.
         const makeOrca = (files, peNames) => {
             const d = make(files);
             for (const f of files) if (/\.(js|json)$/.test(f)) writeFileSync(join(d, f), '{}\n');
-            return [d, peNames.map(n => `${'0'.repeat(64)}  ${n}`).concat(`${'1'.repeat(64)}  out/orcad/orcad.js`, `${'2'.repeat(64)}  BUILD_ROOT`).join('\n') + '\n'];
+            const adm = make(orcaFiles.map(f => f.slice(ORCA.length)));
+            for (const f of orcaFiles) if (/\.(js|json)$/.test(f)) writeFileSync(join(adm, f.slice(ORCA.length)), '{}\n');
+            writeFileSync(join(adm, 'BUILD_ROOT'), 'D:\\a\n');
+            const line = n => { try { return `${sha256Of(join(adm, n))}  ${n}`; } catch { return `${'0'.repeat(64)}  ${n}`; } };
+            return [d, [...peNames, 'out/orcad/orcad.js', 'BUILD_ROOT'].map(line).join('\n') + '\n', adm];
         };
         const orcaPe = ['out/orcad/node_modules/node-pty/build/Release/pty.node', 'out/orcad/node_modules/@parcel/watcher/watcher.node', 'out/orcad/bin/orca.exe'];
-        const [okDir, okSums] = makeOrca([...required, ...orcaFiles], orcaPe);
-        const okOrca = listChecks(okDir, manifest, want.top, okSums);
+        const [okDir, okSums, okAdm] = makeOrca([...required, ...orcaFiles], orcaPe);
+        const okOrca = listChecks(okDir, manifest, want.top, okSums, okAdm);
         if (okOrca.failures.length > 0 || !okOrca.list.includes('orca/out/orcad/node_modules/@parcel/watcher/watcher.node')) { console.error(`${NAME}: --self-test FAIL -- an Orca tree equal to its SHA256SUMS, with an @ scoped name, went red: ${okOrca.failures.join(' | ')}`); failed += 1; }
         else console.log(`  ok  orca/ PE files equal to the admitted SHA256SUMS, including the @ name orca/out/orcad/node_modules/@parcel/watcher/watcher.node (refused by the old ^[A-Za-z0-9._/-]+$) -> listed`);
-        const [extraDir, extraSums] = makeOrca([...required, ...orcaFiles, 'orca/out/orcad/implant.dll'], orcaPe);
-        const [missDir, missSums] = makeOrca([...required, ...orcaFiles.filter(f => !f.endsWith('orca.exe'))], orcaPe);
-        const [dotDir, dotSums] = makeOrca([...required, ...orcaFiles], [...orcaPe, '../escape.dll']);
+        const [extraDir, extraSums, extraAdm] = makeOrca([...required, ...orcaFiles, 'orca/out/orcad/implant.dll'], orcaPe);
+        const [missDir, missSums, missAdm] = makeOrca([...required, ...orcaFiles.filter(f => !f.endsWith('orca.exe'))], orcaPe);
+        const [dotDir, dotSums, dotAdm] = makeOrca([...required, ...orcaFiles], [...orcaPe, '../escape.dll']);
         const [noSumsDir] = makeOrca([...required, ...orcaFiles], orcaPe);
+        // 68-WR-01: a same-name PE file with other bytes, and a .node PE addon the SUMS names but the staged tree lacks.
+        const PTY = 'orca/out/orcad/node_modules/node-pty/build/Release/pty.node';
+        const WATCHER = 'orca/out/orcad/node_modules/@parcel/watcher/watcher.node';
+        const [swapDir, swapSums, swapAdm] = makeOrca([...required, ...orcaFiles], orcaPe);
+        writeFileSync(join(swapDir, PTY), 'MZ another PE of the same name\n');
+        const [nodeGoneDir, nodeGoneSums, nodeGoneAdm] = makeOrca([...required, ...orcaFiles.filter(f => f !== WATCHER)], orcaPe);
+        const [noDirDir, noDirSums] = makeOrca([...required, ...orcaFiles], orcaPe);
         const orcaPlants = [
-            ['an Orca PE file the SHA256SUMS does not name', extraDir, extraSums, 'extra: orca/out/orcad/implant.dll'],
-            ['an Orca PE file in the SHA256SUMS that is absent from the staged tree', missDir, missSums, 'missing: orca/out/orcad/bin/orca.exe'],
-            ['a .. segment in the Orca SHA256SUMS', dotDir, dotSums, 'unsafe file name "../escape.dll"'],
-            ['Orca PE files with no admitted SHA256SUMS', noSumsDir, null, 'no admitted Orca SHA256SUMS'],
+            ['an Orca PE file the SHA256SUMS does not name', extraDir, extraSums, 'extra: orca/out/orcad/implant.dll', extraAdm],
+            ['an Orca PE file in the SHA256SUMS that is absent from the staged tree', missDir, missSums, 'missing: orca/out/orcad/bin/orca.exe', missAdm],
+            ['a .. segment in the Orca SHA256SUMS', dotDir, dotSums, 'unsafe file name "../escape.dll"', dotAdm],
+            ['Orca PE files with no admitted SHA256SUMS', noSumsDir, null, 'no admitted Orca SHA256SUMS', null],
+            ['a same-name Orca PE file with other bytes', swapDir, swapSums, `changed: ${PTY}`, swapAdm],
+            ['a .node PE addon in the SHA256SUMS that is absent from the staged tree', nodeGoneDir, nodeGoneSums, `missing: ${WATCHER}`, nodeGoneAdm],
+            ['the Orca SHA256SUMS without the admitted directory', noDirDir, noDirSums, 'without the admitted windows-orca directory', null],
         ];
-        for (const [name, dir, sums, value] of orcaPlants) {
-            const { failures } = listChecks(dir, manifest, want.top, sums);
+        for (const [name, dir, sums, value, adm] of orcaPlants) {
+            const { failures } = listChecks(dir, manifest, want.top, sums, adm);
             if (failures.some(f => f.includes(value))) console.log(`  ok  ${name} -> red, naming '${value}'`);
             else { console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming '${value}'; got: ${failures.join(' | ') || '(no failures)'}`); failed += 1; }
         }
@@ -295,7 +323,7 @@ function main(argv) {
     if (argv[0] !== '--list') refuse(`unknown arguments ${JSON.stringify(argv)}`);
     const opts = {};
     for (let i = 1; i < argv.length; i += 2) {
-        if (!['--pkg', '--manifest', '--orca-sums'].includes(argv[i]) || argv[i + 1] === undefined) refuse(`unknown or valueless argument '${argv[i]}'`);
+        if (!['--pkg', '--manifest', '--orca-sums', '--orca-dir'].includes(argv[i]) || argv[i + 1] === undefined) refuse(`unknown or valueless argument '${argv[i]}'`);
         opts[argv[i]] = argv[i + 1];
     }
     if (opts['--pkg'] === undefined) refuse('--list needs --pkg <dir>');
@@ -308,7 +336,8 @@ function main(argv) {
     if (opts['--orca-sums'] !== undefined) {
         try { orcaSums = readFileSync(resolve(opts['--orca-sums']), 'utf8'); } catch (e) { refuse(`--orca-sums ${opts['--orca-sums']} cannot be read (${e.message})`); }
     }
-    const { failures, list } = listChecks(resolve(opts['--pkg']), text, want.top, orcaSums);
+    const orcaDir = opts['--orca-dir'] === undefined ? null : resolve(opts['--orca-dir']);
+    const { failures, list } = listChecks(resolve(opts['--pkg']), text, want.top, orcaSums, orcaDir);
     if (failures.length > 0) {
         console.error(`${NAME}: FAIL -- ${failures.length} problem(s); nothing is signed.`);
         failures.forEach(f => console.error(`  - ${f}`));

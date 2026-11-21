@@ -70,4 +70,7 @@ pref("powerbrowser.orca.port", 26768);
 pref("powerbrowser.orca.startupTimeoutMs", 60000);
 pref("powerbrowser.orca.killGraceMs", 16000);
 pref("powerbrowser.orca.giveUpAttempts", 5);
+// Audit fix orcad-hosting-07: giveUpAttempts exits after ready within this window end in the
+// failed state (with its Restart) instead of restarting orcad without limit.
+pref("powerbrowser.orca.crashWindowMs", 300000);
 pref("powerbrowser.orca.logBufferLines", 200);
