@@ -6,11 +6,14 @@
 // source; the allowlist is compared to them.
 //
 // The universe, derived from the built tree:
-//   daemon  every host of an http:// or https:// literal in the top-level orca/out/orcad/*.js files
-//           (orcad, orcad-server and their worker entries: the code orcad runs);
-//   web     every host of a template literal in orca/out/web that interpolates into a URL
-//           (`https://host/...${...}`): the request and link builders. The web client's plain URL
-//           strings are dominated by documentation and agent homepage links and are not derived.
+//   daemon  every host of an http:// or https:// literal in every shipped script or HTML file under
+//           orca/out/orcad, recursively: orcad, orcad-server, their worker entries, the staged
+//           node_modules, out/cli and out/mobile-web (stage_orca ships all of out/orcad);
+//   web     in every script or HTML file under orca/out/web, recursively: the host of each template
+//           literal that interpolates into a URL (`https://host/...${...}`, the request and link
+//           builders), and of each string in an array of two or more URL strings (origin lists such
+//           as the native chat visuals' allowed CDNs). The web client's other plain URL strings are
+//           dominated by documentation and agent homepage links and are not derived.
 // Names reserved by RFC 2606 and RFC 6761 (example.com/.net/.org and their subdomains, .example,
 // .invalid, .test, .localhost) are excluded by that rule.
 //
@@ -18,14 +21,16 @@
 //  coverage  every universe host has an allowlist row (scripts/lib/endpoint-verdict.mjs entryFor, the
 //            one matching rule). A host with no row is red, naming it.
 //  shared    a universe host whose row is `allow` (contacted unattended without failing) carries
-//            orca_shared: true and the Orca tag in its reason, so an allow row written for another
+//            orca_shared (true, or "name-only" when Orca only names the host and sends nothing) and the Orca tag in its reason, so an allow row written for another
 //            feature cannot admit Orca's request without saying so. Red names the row.
 //  stale     every row whose reason carries the Orca tag, or that sets orca_shared, names a host the
 //            shipped bundles (orcad top-level *.js or any out/web *.js) still contain. Red names it.
-//  source    a row's orca_source names a file under orca/ that exists and contains the row's host.
+//  source    a row's orca_source names a file under orca/ that exists and contains the row's host on a
+//            line that is not a comment (a line whose text starts with //, /*, * or #); a cite that
+//            lands only on comments is red.
 //  privacy   packaging-prefs-network-03: website-staging/privacy.html marks with data-orca-host exactly
 //            the hosts the allowlist derives as Orca's (user-initiated rows whose reason names Orca,
-//            plus orca_shared rows), compared as a set both ways, and carries one
+//            plus rows with orca_shared true; a name-only row is not listed), compared as a set both ways, and carries one
 //            data-orca-agent-provider paragraph (what an agent reads goes to its AI provider).
 //            This clause runs even when orca/ is not built.
 //
@@ -35,7 +40,8 @@
 // --self-test plants each fault in memory (a new bundle host, an untagged allow row, a stale row, a
 // moved source) and requires red naming it.
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -54,6 +60,9 @@ export function reserved(host) {
 
 const URL_HOST = /https?:\/\/([A-Za-z0-9.-]+\.[A-Za-z]{2,})/g;
 const TEMPLATE_HOST = /`https?:\/\/([A-Za-z0-9.-]+\.[A-Za-z]{2,})[^`]*?\$\{/g;
+const Q = '["\'`]';
+const URL_STR = `${Q}https?:\\/\\/[A-Za-z0-9.-]+\\.[A-Za-z]{2,}[^"'\`]*${Q}`;
+const URL_ARRAY = new RegExp(`\\[\\s*${URL_STR}(?:\\s*,\\s*${URL_STR})+\\s*,?\\s*\\]`, 'g');
 
 function jsFiles(dir, recurse) {
     const out = [];
@@ -61,9 +70,21 @@ function jsFiles(dir, recurse) {
     for (const n of readdirSync(dir).sort()) {
         const p = join(dir, n);
         const st = statSync(p);
-        if (st.isDirectory()) { if (recurse) out.push(...jsFiles(p, true)); } else if (/\.(c|m)?js$/.test(n)) out.push(p);
+        if (st.isDirectory()) { if (recurse) out.push(...jsFiles(p, true)); } else if (/\.((c|m)?js|html)$/.test(n)) out.push(p);
     }
     return out;
+}
+
+/** The host of every URL in an array of two or more URL strings. */
+export function arrayHosts(text) {
+    const out = [];
+    for (const a of text.matchAll(URL_ARRAY)) for (const m of a[0].matchAll(URL_HOST)) out.push(m[1]);
+    return out;
+}
+
+/** True when some line naming host is code, not a comment. */
+export function namedInCode(text, host) {
+    return text.split('\n').some((l) => l.includes(host) && !/^\s*(\/\/|\/\*|\*|#)/.test(l));
 }
 
 /** { daemon: Map host->file, web: Map host->file, all: text blob } from the built tree. */
@@ -71,7 +92,7 @@ export function bundleHosts(orcaDir) {
     const daemon = new Map();
     const web = new Map();
     const texts = [];
-    for (const f of jsFiles(join(orcaDir, 'out/orcad'), false)) {
+    for (const f of jsFiles(join(orcaDir, 'out/orcad'), true)) {
         const t = readFileSync(f, 'utf8');
         texts.push(t);
         for (const m of t.matchAll(URL_HOST)) if (!daemon.has(m[1])) daemon.set(m[1], f.slice(orcaDir.length + 1));
@@ -80,6 +101,7 @@ export function bundleHosts(orcaDir) {
         const t = readFileSync(f, 'utf8');
         texts.push(t);
         for (const m of t.matchAll(TEMPLATE_HOST)) if (!web.has(m[1])) web.set(m[1], f.slice(orcaDir.length + 1));
+        for (const h of arrayHosts(t)) if (!web.has(h)) web.set(h, f.slice(orcaDir.length + 1));
     }
     return { daemon, web, contains: (host) => texts.some((t) => t.includes(host)) };
 }
@@ -92,17 +114,18 @@ export function drift(allowlist, bundles, orcaDir) {
         if (reserved(host)) continue;
         const row = entryFor(hosts, host);
         if (!row) { fails.push(`coverage: orca/${file} names ${host}, which has no ${ALLOWLIST_REL} row`); continue; }
-        if (row.disposition === 'allow' && !(row.orca_shared === true && String(row.reason).includes(ORCA_TAG))) {
+        if (row.disposition === 'allow' && !((row.orca_shared === true || row.orca_shared === 'name-only') && String(row.reason).includes(ORCA_TAG))) {
             fails.push(`shared: orca/${file} names ${host}, whose row ${row.host} is allow for another feature and does not say it also admits Orca (orca_shared and the ${ORCA_TAG} tag)`);
         }
     }
     for (const row of hosts) {
-        const orcaRow = String(row.reason ?? '').includes(ORCA_TAG) || row.orca_shared === true;
+        const orcaRow = String(row.reason ?? '').includes(ORCA_TAG) || row.orca_shared !== undefined;
         if (orcaRow && !bundles.contains(row.host.replace(/^\./, ''))) fails.push(`stale: the ${row.host} row is an Orca row, but no shipped Orca bundle names that host`);
         if (row.orca_source) {
             const p = join(orcaDir, '..', row.orca_source);
             if (!row.orca_source.startsWith('orca/') || !existsSync(p)) fails.push(`source: the ${row.host} row's orca_source ${row.orca_source} does not exist`);
             else if (!readFileSync(p, 'utf8').includes(row.host)) fails.push(`source: ${row.orca_source} no longer contains ${row.host} (the ${row.host} row's orca_source)`);
+            else if (!namedInCode(readFileSync(p, 'utf8'), row.host)) fails.push(`source: ${row.orca_source} names ${row.host} only on comment lines (the ${row.host} row's orca_source); cite the code that makes the request`);
         }
     }
     return fails;
@@ -124,6 +147,15 @@ export function privacyDrift(allowlist, html) {
     return fails;
 }
 
+/** Runs fn on a temp orca-shaped directory holding files ({ rel: text }), then removes it. */
+function withFixture(files, fn) {
+    const d = mkdtempSync(join(tmpdir(), 'orca-egress-'));
+    try {
+        for (const [rel, text] of Object.entries(files)) { mkdirSync(dirname(join(d, rel)), { recursive: true }); writeFileSync(join(d, rel), text); }
+        return fn(d);
+    } finally { rmSync(d, { recursive: true, force: true }); }
+}
+
 function selfTest(allowlist, bundles, orcaDir, html) {
     const clone = () => JSON.parse(JSON.stringify(allowlist));
     const plants = [
@@ -133,6 +165,10 @@ function selfTest(allowlist, bundles, orcaDir, html) {
         { name: 'stale Orca row', naming: 'stale: the gone.pb-selftest.dev row', run: () => { const a = clone(); a.hosts.push({ host: 'gone.pb-selftest.dev', disposition: 'user-initiated', reason: `${ORCA_TAG}: fixture` }); return drift(a, bundles, orcaDir); } },
         { name: 'source moved', naming: 'source: the huggingface.co row', run: () => { const a = clone(); a.hosts.find((h) => h.host === 'huggingface.co').orca_source = 'orca/src/main/speech/no-such-file.ts'; return drift(a, bundles, orcaDir); } },
         { name: 'web builder host', naming: 'coverage: orca/out/web/x.js names web-new.pb-selftest.dev', run: () => drift(allowlist, { ...bundles, web: new Map([...bundles.web, ['web-new.pb-selftest.dev', 'out/web/x.js']]) }, orcaDir) },
+        { name: 'cite on a comment line (review: linear.app)', naming: 'only on comment lines', run: () => { const a = clone(); a.hosts.find((h) => h.host === 'linear.app').orca_source = 'orca/src/main/linear/linear-issue-comments.ts'; return drift(a, bundles, orcaDir); } },
+        { name: 'host only in a nested bundle (scanned, not hand-fed)', naming: 'names nested-egress.pb-selftest.dev', run: () => withFixture({ 'out/orcad/orcad.js': '//\n', 'out/orcad/node_modules/pkg/lib/deep.js': 'fetch("https://nested-egress.pb-selftest.dev/x")\n' }, (d) => drift(allowlist, bundleHosts(d), orcaDir)) },
+        { name: 'host only in a web URL array (review: chat-visual CDNs)', naming: 'names array-b.pb-selftest.dev', run: () => withFixture({ 'out/orcad/orcad.js': '//\n', 'out/web/assets/v.js': 'var o=["https://array-a.pb-selftest.dev","https://array-b.pb-selftest.dev"];\n' }, (d) => drift(allowlist, bundleHosts(d), orcaDir)) },
+        { name: 'Linear API row removed (review)', naming: 'names api.linear.app, which has no', run: () => { const a = clone(); a.hosts = a.hosts.filter((h) => h.host !== 'api.linear.app'); return drift(a, bundles, orcaDir); } },
     ].filter(() => bundles !== null);
     plants.push(
         { name: 'privacy page misses a host (pre-fix)', naming: 'does not list huggingface.co', run: () => privacyDrift(allowlist, html.replace('data-orca-host="huggingface.co"', 'data-x="huggingface.co"')) },

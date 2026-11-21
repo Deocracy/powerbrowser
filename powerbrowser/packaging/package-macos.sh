@@ -267,13 +267,13 @@ universal() {
             *) fail "$f is named as a native but is not Mach-O universal ($want)" ;;
         esac
     done < <(find "$A" -type f \( -name '*.node' -o -name '*.dylib' -o -name rg -o -name node \))
-    node "$ROOT/scripts/verify-package-target-natives.mjs" --target macos --stage "$A" \
+    bash "$ROOT/scripts/run-no-skip.sh" -- node "$ROOT/scripts/verify-package-target-natives.mjs" --target macos --stage "$A" \
         || fail "the package-target-natives row refused the merged sidecar (its output is above)"
     # Orca: lifted out before unify.py (its arch-named files exist in one tree each), merged by its own plan.
     orca_universal "$WORK/orca-aarch64" "$WORK/orca-x86_64" "$WORK/orca-merged"
-    node "$ROOT/scripts/verify-orca-packaged-tree.mjs" --target macos --built "$WORK/orca-aarch64" --also-built "$WORK/orca-x86_64" --stage "$WORK/orca-merged" \
+    bash "$ROOT/scripts/run-no-skip.sh" -- node "$ROOT/scripts/verify-orca-packaged-tree.mjs" --target macos --built "$WORK/orca-aarch64" --also-built "$WORK/orca-x86_64" --stage "$WORK/orca-merged" \
         || fail "the orca-packaged-tree row refused the merged Orca tree (its output is above)"
-    node "$ROOT/scripts/verify-package-target-natives.mjs" --target macos --stage "$WORK/orca-merged" \
+    bash "$ROOT/scripts/run-no-skip.sh" -- node "$ROOT/scripts/verify-package-target-natives.mjs" --target macos --stage "$WORK/orca-merged" \
         || fail "the package-target-natives row refused the merged Orca tree (its output is above)"
     if [ "$(uname -s)" = Darwin ]; then
         test "$("$A/node/bin/node" --version)" = "$NODE_VERSION" || fail "the merged node does not report $NODE_VERSION"
@@ -343,7 +343,7 @@ sys.exit(make_dmg.main(shlex.split(buildconfig.substs.get("MOZ_PACKAGE_EXTRA_ARG
     # 8: replace the evidence, then let the row judge it.
     rm -rf "${ROOT:?}/.mozbuild/macos-package"
     mv "$EV" "$ROOT/.mozbuild/macos-package"
-    node "$ROOT/scripts/verify-macos-package-payload.mjs" || fail "the macos-package-payload row refused the new evidence (its output is above)"
+    bash "$ROOT/scripts/run-no-skip.sh" -- node "$ROOT/scripts/verify-macos-package-payload.mjs" || fail "the macos-package-payload row refused the new evidence (its output is above)"
     echo "package-macos: wrote .mozbuild/macos-package/ ($appname, $DMG_NAME, $MAR_NAME, BuildID $id_x); signed ad hoc, not notarized"
 }
 
