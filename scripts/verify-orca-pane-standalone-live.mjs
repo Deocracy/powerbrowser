@@ -67,6 +67,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { NO_CURSOR_MESSAGE, mountCursorExpr, newMountErrorsExpr } from './lib/orca-pane-harness.mjs';
 import { takeLiveLock } from './lib/live-lock-reexec.mjs';
 import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
@@ -312,6 +313,14 @@ const READ_ROOT = id => `JSON.stringify((() => {
         children: root ? root.querySelectorAll('[data-pb-orca-pane-root] > *').length : 0 };
 })())`;
 
+/** The mount-error cursor of the page (G3a: state().mountErrors keeps only 50, its length stops moving); a build without it is a FAIL. */
+async function mountCursor(ev) {
+    const cursor = await ev(mountCursorExpr('window.PbPanes'));
+    if (typeof cursor !== 'number') throw new Error(NO_CURSOR_MESSAGE);
+    return cursor;
+}
+const NEW_ERRORS = newMountErrorsExpr('window.PbPanes', 'window.__pbErrorsBefore');
+
 const handleIn = result => /"(term_[A-Za-z0-9_-]+)"/.exec(J(result))?.[1] ?? null;
 const tailText = result => J(result?.result?.terminal?.tail ?? result?.terminal?.tail ?? result ?? '');
 
@@ -340,9 +349,10 @@ async function stage0(s, ctxId, worktreeIdOut) {
     await sleep(1500);
     obs.handlesBefore = handlesOf(orca('terminal', 'list', '--worktree', `path:${repoDir}`));
     const tag = Date.now().toString(36);
+    const cursor0 = await mountCursor(ev);
     await ev(`(() => { for (const id of ['a' + ${J(tag)}, 'b' + ${J(tag)}]) document.getElementById('pb-host-' + id)?.remove();
         const a = window.__pbHost('terminal', 'a' + ${J(tag)}, [0, 0, 560, 420]); const b = window.__pbHost('terminal', 'b' + ${J(tag)}, [580, 0, 560, 420]);
-        window.__pbErrorsBefore = window.PbPanes.state().mountErrors.length;
+        window.__pbErrorsBefore = ${cursor0};
         window.__pbUnmount0 = [window.PbPanes.mountPane(a, ${J({ kind: 'terminal', worktreeId: pair[0].worktreeId, tabId: pair[0].tabId, paneKey: pair[0].paneKey })}),
             window.PbPanes.mountPane(b, ${J({ kind: 'terminal', worktreeId: pair[1].worktreeId, tabId: pair[1].tabId, paneKey: pair[1].paneKey })})]; return true; })()`);
     const ids = ['a' + tag, 'b' + tag];
@@ -363,7 +373,7 @@ async function stage0(s, ctxId, worktreeIdOut) {
         obs.roots.push({ xtermsTotal: root?.xtermsTotal ?? 0, xtermsVisible: root?.xtermsVisible ?? 0, focused, ownMarker: own === true, otherMarker: other });
     }
     obs.handlesAfter = handlesOf(orca('terminal', 'list', '--worktree', `path:${repoDir}`));
-    obs.mountErrors = JSON.parse(await ev('JSON.stringify(window.PbPanes.state().mountErrors.slice(window.__pbErrorsBefore))'));
+    obs.mountErrors = JSON.parse(await ev(`JSON.stringify(${NEW_ERRORS})`));
     await ev('(() => { for (const u of window.__pbUnmount0 || []) u(); return true; })()');
     return obs;
 }
@@ -402,12 +412,13 @@ async function lateCliTerminal(s, ctxId) {
 async function mountOne(s, ctxId, pick, slot, settleMs = 7000) {
     const ev = expr => s.evalIn(ctxId, expr);
     const id = `k${slot}`;
-    await ev(`(() => { window.__pbWinErrBefore = window.__pbErrors.length; window.__pbErrorsBefore = window.PbPanes.state().mountErrors.length;
+    const cursor = await mountCursor(ev);
+    await ev(`(() => { window.__pbWinErrBefore = window.__pbErrors.length; window.__pbErrorsBefore = ${cursor};
         const root = window.__pbHost(${J(pick.kind)}, ${J(id)}, [0, 440, 1100, 520]);
         window.__pbUnmountK = window.PbPanes.mountPane(root, ${J(pick)}); return true; })()`);
     await s.lib.sleep(settleMs);
     const read = JSON.parse(await ev(READ_ROOT(id)));
-    const reactErrors = JSON.parse(await ev('JSON.stringify(window.PbPanes.state().mountErrors.slice(window.__pbErrorsBefore))'));
+    const reactErrors = JSON.parse(await ev(`JSON.stringify(${NEW_ERRORS})`));
     const windowErrors = JSON.parse(await ev('JSON.stringify(window.__pbErrors.slice(window.__pbWinErrBefore))'));
     await ev(`(() => { window.__pbUnmountK(); document.getElementById('pb-host-' + ${J(id)}).remove(); return true; })()`);
     const rendered = !!read && !read.waiting && read.children > 0 && read.elements > 2;
@@ -546,7 +557,7 @@ async function live(opts = {}) {
     const skips = harness.skipReasons();
     if (skips.length) { console.log(skipLine(NAME, skips.join('; '))); return SKIP_EXIT; }
     // Nothing is built or launched before this: a row started by hand takes the live lock itself (harness-live-panels-02).
-    const held = takeLiveLock(import.meta.url, NAME, process.argv.slice(2));
+    const held = await takeLiveLock(import.meta.url, NAME, process.argv.slice(2));
     if (held !== null) return held;
     if (!existsSync(join(harness.STANDALONE_DIR, 'pb-panes.js'))) {
         const b = spawnSync('bash', [join(REPO_ROOT, 'scripts', 'build-orca-panes.sh'), '--standalone'], { encoding: 'utf8' });
@@ -721,6 +732,23 @@ async function selfTest() {
     ok('render: all clauses green gives PASS naming the late time', g.code === 0 && /late CLI terminal in 172 ms$/.test(g.lines.at(-1)));
     const f = render({ isolated: null, isolatedDetail: 'd', mounts: null, kinds: STAGE1_KINDS, chatSource: 'createChat', late: lateVerdict(null), lateMs: null, api: null });
     ok('render: a late CLI terminal miss alone is red', f.code === 1 && /late CLI terminal FAIL/.test(f.lines[2]) && /: FAIL -- late CLI terminal$/.test(f.lines.at(-1)));
+    // overlay-renderer-04 (G3a): the mount-error cursor is the total, not the length of the 50 kept. The page-side expressions
+    // run over a fake bundle that kept 50 of 60 errors: the new-errors expression returns the 50 kept, the length-based
+    // slice it replaces returns none (the fault the cursor fixes), and a build without the total is a FAIL.
+    {
+        const bundle = (total, kept) => ({ state: () => ({ mountErrorsTotal: total, mountErrors: Array.from({ length: kept }, (_, i) => ({ message: `e${total - kept + i}` })) }) });
+        const run = (expr, window, PbPanes) => new Function('window', 'PbPanes', `return ${expr.replace(/window\.PbPanes/g, 'PbPanes')};`)(window, PbPanes);
+        const full = bundle(60, 50);
+        const got = run(newMountErrorsExpr('window.PbPanes', 'window.__pbErrorsBefore'), { __pbErrorsBefore: 0 }, full);
+        const oldWay = full.state().mountErrors.slice(50);
+        ok('cursor: 60 errors since a cursor of 0 return the 50 kept, newest last', got.length === 50 && got.at(-1).message === 'e59');
+        ok('cursor: the length-based slice it replaces returns none at 50 (the fault)', oldWay.length === 0);
+        ok('cursor: no new error since the cursor is an empty list', run(newMountErrorsExpr('window.PbPanes', 'window.__pbErrorsBefore'), { __pbErrorsBefore: 60 }, full).length === 0);
+        ok('cursor: three new errors are the last three', run(newMountErrorsExpr('window.PbPanes', 'window.__pbErrorsBefore'), { __pbErrorsBefore: 57 }, full).map(e => e.message).join() === 'e57,e58,e59');
+        ok('cursor: the cursor expression reads the total', run(mountCursorExpr('window.PbPanes'), {}, full) === 60);
+        ok('cursor: a build without mountErrorsTotal reads null, which mountCursor turns into a FAIL', run(mountCursorExpr('window.PbPanes'), {}, { state: () => ({ mountErrors: [] }) }) === null
+            && await mountCursor(async () => null).then(() => false, e => e.message === NO_CURSOR_MESSAGE));
+    }
     // harness-live-panels-08: the storage scan, run for real over fake stores (the page-realm function itself, not a copy).
     const OFFER = 'orca://pair?code=ZZ9-unit-test-offer-0123456789&host=127.0.0.1';
     const needles = pairingNeedles(OFFER);
