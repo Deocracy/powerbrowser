@@ -19,10 +19,10 @@
  * the probe harness) is not judged by the default mode, which judges the
  * whole static half and claims nothing more. It is evaluated only under
  * --live, where it cites the standing probe record's verdict line rather
- * than re-running a browser; that mode is its own registry row
- * (gui09-dependent-window-content-live). The default mode prints a note
- * naming that row, not a SKIP line: no clause of the default row is left
- * unrun (SKIP-PROTOCOL.md). No build, no browser, no display, no network
+ * than re-running a browser. No registry row runs that mode: one was
+ * requested in the v1.7 audit remediation and is the owner's to add. The
+ * default mode prints a note saying so, not a SKIP line: no clause of the
+ * default row is left unrun (SKIP-PROTOCOL.md). No build, no browser, no display, no network
  * either way.
  *
  * Usage:
@@ -202,7 +202,7 @@ function checkContent(sources, options = {}) {
     return failures;
 }
 
-/** The live half: the --live mode (row gui09-dependent-window-content-live); cites the standing probe record. */
+/** The live half: the --live mode, which no registry row runs; cites the standing probe record. */
 function checkLive() {
     let record = '';
     try {
@@ -237,7 +237,7 @@ function main() {
         failures.push(...checkLive());
     } else {
         // A note, not a SKIP line: this row judges the static half only and its PASS line claims nothing more.
-        console.log(`${NAME}: note -- the live half (extraction, geometry, close-matrix observation) is not judged by this row; the --live mode cites the standing probe record, as the gui09-dependent-window-content-live row`);
+        console.log(`${NAME}: note -- the live half (extraction, geometry, close-matrix observation) is not judged by this row; the --live mode cites the standing probe record, and no registry row runs that mode`);
     }
     if (failures.length) {
         console.error(`${NAME}: FAIL -- the dependent-window surface drifted from the declared contract.`);

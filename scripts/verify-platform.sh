@@ -4646,9 +4646,10 @@ run_own_checks() {
 
     # NEW (14-03): GUI-09's dependent-window content gate. The static half
     # derives the built secondary asset, the membership pins, and the
-    # closed-state copy at check time; the live half (extraction, geometry,
-    # close-matrix through the probe harness) runs in the full suite only,
-    # so this row is honestly --quick while its live counterpart is not.
+    # closed-state copy at check time. The live half (extraction, geometry,
+    # close-matrix through the probe harness) is not run by any row: the
+    # script's --live mode cites a recorded probe verdict, and a row for it
+    # is the owner's to add (v1.7 audit remediation, lane H9).
     # The self-test rides alongside for the reason every other self-test
     # row in this array gives.
     "gui09-dependent-window-content|node $REPO_ROOT/scripts/verify-dependent-window-content.mjs"
