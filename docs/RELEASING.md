@@ -1064,6 +1064,14 @@ location, the same launch from `/Applications` with what the updater does there,
 uninstall, and a residue check against real per-user paths. The macOS asset joins a
 Release only after that record exists and its gate is green.
 
+The session's Orca input is the two hosted `macos-orca-arm64` and `macos-orca-x64` artifacts.
+Each holds `tree.tar`, `BUILD_ROOT` and `SHA256SUMS` (68-CR-03): the staged Orca tree travels as
+one tar because an uploaded artifact keeps no file mode, and the executables inside it
+(node-pty's `spawn-helper`, the ripgrep binaries, agent-browser) need their executable bit.
+`package-macos.sh` admits an artifact against its job's `sums_sha256` output before it unpacks
+`tree.tar` with `tar -xpf`, and refuses an artifact without `tree.tar`. `docs/BUILD.md` ("Packaged Orca"
+and "macOS universal package") gives the full layout.
+
 ## Release tag pattern
 
 A release tag is `v<ESR>-<revision>`, for example `v153.2.0-1`. The literal pattern
@@ -1608,6 +1616,7 @@ licence row's SKIP for the absent Gecko tree `upstream/`, which this replay neve
 | `build` | `build-orca.sh` failed (its log names the step) | fix the build step or the overlay it names |
 | `typecheck:web <file>:<line>`, `typecheck:node <file>:<line>` | Orca's own typecheck failed | fix the overlay file or seam at that location |
 | `typecheck coverage <path>` | an `orca-overlay/files` file is in neither typecheck program | place the file where Orca's program includes it |
+| `xpi cache` | `stage-bundled-xpi.sh` failed: the pinned add-on download no longer hashes to its pin (the stage downloads the pinned XPIs, sha256-checked and never executed, into `.mozbuild/bundled-xpi/` for the licence row's bundled leg) | read its `FAIL` line; a changed download needs a re-pin of `powerbrowser/packaging/bundled-xpi.json` |
 | `row orca-build-shape` / `row orca-overlay` / `row orca-overlay-built` | the build shape, or a seam over its line bound or cap | shrink or split the seam; rebuild |
 | `row licence-allowlist` | Orca's LICENSE changed, or a new package licence | add the row or ruling the licence needs |
 | `row orca-mobile-protocol` | an overlay path entered the protected mobile set | move the change out of the protected paths |
