@@ -1,6 +1,6 @@
 # Result: H3-harness-static-browser
 
-Branch: worktree-agent-a4d378a590aea5194   Base: b5c4b182 (round 1), f8d798e4 (round 2, fast-forward)   Final: 51b09480 (code; this record is the commit after it)
+Branch: worktree-agent-a4d378a590aea5194   Base: b5c4b182 (round 1), f8d798e4 (round 2), 10b970e1 (round 3), each a fast-forward   Final: 94803c8d (code; this record is the commit after it)
 
 | ID | Status | Commit | Check | Note |
 |---|---|---|---|---|
@@ -12,7 +12,7 @@ Branch: worktree-agent-a4d378a590aea5194   Base: b5c4b182 (round 1), f8d798e4 (r
 | harness-static-browser-07 | fixed | 0c626c09, 51b09480 | verify-orca-browser-host-bundle.mjs::stopAndSweep, ::attachVerdict | Record, stop and sweep are now one function. The self-test runs it on a detached stand-in that ignores SIGTERM and requires one survivor that is killed and gone. An empty record is a blind-instrument FAIL. |
 | harness-static-browser-09 | fixed | 2c799a6e, da996f80 | verify-orca-browser-tab-scope.mjs::visibilityReads | Counts every non-assignment `visibility` member read whatever its object, every getPropertyValue("visibility") call, and every destructured `visibility` key, nested or not. New plants: a style alias, a computed-style alias, nested destructuring. |
 | harness-static-browser-08 | fixed | 7eebd0f2, 48354eb1 | verify-orca-browser-tools.mjs::toolSources, ::sourceFailures | The derived set now includes non-test .ts modules and assemble-chrome subdirectories (103 sources, classified). Coverage is checked both ways: every U-row is carried by a source or is in UNSOURCED_ROWS (empty today). Plants: a .ts prompt module, a chrome subdirectory, a row losing its source, a stale unsourced row. Limit: the classification is hand-kept; the check proves it complete and consistent with the table, not correct. A control added inside an existing module is not detected. |
-| handover G1a (cookie site and httpOnly) | fixed | 58a0b480, da996f80 | verify-orca-browser-tab-scope.mjs::runScenarios (cookies) | Round 2: on the current site, a set or delete of a name the jar holds as httpOnly, and a set with httpOnly true, are refused with zero writes. Detector: deleting a plain cookie writes. Plants: re-allowed overwrite, re-allowed delete. |
+| handover G1a (cookie site and httpOnly) | fixed | 58a0b480, da996f80, 94803c8d | verify-orca-browser-tab-scope.mjs::runScenarios (cookies) | Round 3 asserts G1a's narrowed cookie.set rule as the product implements it.<br>- Detector: a plain host-only cookie on the current host at "/" writes exactly once, at "/", without httpOnly.<br>- 12 refusals, each with zero writes: another host, a subdomain, a sibling host, a parent domain attribute, a path other than "/", httpOnly true, a `__Host-` name, a `__Secure-` name, Secure on http, SameSite None without Secure, a name held as httpOnly, and one held as httpOnly in the partitioned jar.<br>- The fake jar now models origin attributes. getCookiesFromHost matches them exactly; getCookiesWithOriginAttributes matches only the fields its pattern names.<br>- Deleting an httpOnly name is refused in either jar; deleting the plain cookie writes.<br>One re-allowing plant per refusal (12). |
 | handover H1 (page-table SKIP) | fixed | 58a0b480 | verify-orca-browser-tab-scope.mjs::pageTableClause | Unchanged. |
 | review extra 8 (killed probe leak) | fixed | 51b09480 | verify-orca-browser-host-bundle.mjs::captureChild (fd 4), ::sweepIdentities | The probe names orcad's and the daemon's identities on fd 4 once orcad is ready. When the probe ends, or the row is signalled, the parent ends survivors by identity and fails the row. Self-test: a probe killed at its time limit leaves a detached process, which the parent ends. Not covered: a SIGKILL of the row itself. |
 | review extra 9 (last FAIL line) | fixed | da996f80 | tab-scope --self-test | The tab-scope self-test prints its own FAIL line last. The other self-tests already did. |
@@ -56,6 +56,13 @@ None. Every change is to a check; no product file was edited.
 - harness-static-browser-08: the U-row classification of the 103 Orca tool sources is mine. The owner may want it reviewed against spike 005.
 
 ## Quick gate
+Round 3 log: `H3-quick-r3.log` at the worktree root, untracked. Result: 4 rows FAIL, 0 SKIP, 451 PASS. The brand scan, orca-browser-tab-scope and its self-test, and agent-tab-walls all pass. None of the four reds reads a file this lane changed in round 3:
+- orca-service-self-test: 1 of 53 plants did not go red. This check is H2's / product's.
+- orca-failure-classes, orca-failure-classes-self-test: not mine, the same cause as in round 2. The provisioned orca/ pin has orcad start-refusal codes that ORCA_CODE_CLASSES does not map; its self-test reports 4 of 16 plants.
+- build-windows-shape-self-test: not mine; this lane did not touch it.
+
+Round 2 (below) is kept for the record.
+
 Log: `H3-quick.log` at the worktree root, untracked. Result: `nix develop .#theia --command scripts/verify-platform.sh --quick` reports 3 rows FAIL, 0 SKIP, and 444 PASS.
 - scan-brand-residue, scan-brand-residue-self-test: red by design (token counts, above).
 - orca-failure-classes: not caused by this lane. It reports eight orcad start-refusal codes in the pinned orca/ (OrcadBindAddressError, OrcadInstanceLockError, ProfileStateAccessError) with no class in ORCA_CODE_CLASSES. This lane touched neither OrcaService nor the check. The orca/ tree is the provisioned copy from the integration worktree, so its pin is likely ahead of the class table on this branch.
