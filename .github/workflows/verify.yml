@@ -79,6 +79,15 @@ jobs:
       - name: Fetch the pinned upstream and apply patches/
         run: nix develop .#theia --command bash -c 'bash scripts/fetch-upstream.sh && bash scripts/apply-patches.sh'
 
+      # Audit harness-driver-03: several quick rows derive their expectation from the pinned
+      # third-party checkout orca/ and SKIP those clauses without it, so a fork PR that broke one of
+      # them went green. The fetch script clones the tag named in generated/upstream-pins.env and
+      # refuses any HEAD but the pinned commit: a pinned, read-only third-party tree like upstream/.
+      # It runs after generate (the pins fragment) and before the table; ci-fetches checks that
+      # every scripts/fetch-*.sh runs here before the table.
+      - name: Fetch the second pinned third-party checkout
+        run: nix develop .#theia --command bash scripts/fetch-orca.sh
+
       - name: Install and build the Theia workspace
         run: nix develop .#theia --command bash -c 'cd theia && yarn install --ignore-scripts --frozen-lockfile && { if [ -d node_modules/drivelist ]; then (cd node_modules/drivelist && node-gyp rebuild); else echo "theia install - node_modules/drivelist is absent, the pinned workspace changed its native deps" >&2; exit 1; fi; } && yarn build'
 

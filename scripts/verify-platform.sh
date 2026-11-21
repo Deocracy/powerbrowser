@@ -4196,6 +4196,10 @@ run_own_checks() {
     # driver fault (the SKIP rule, exit 77, the gate's SKIP pass, the pattern, mode only, the ledger check) must go red.
     # Also the leak leg over a row's group and token, the survivor sweep, and the live lock (harness-live-tabs-14).
     "verify-platform-driver-self-test|node $REPO_ROOT/scripts/verify-platform-driver.mjs --self-test"
+    # NEW (audit-fix H1, harness-driver-03): hosted CI runs every scripts/fetch-*.sh (derived from the tree) before
+    # its --quick table, so the quick rows that read a pinned third-party checkout assert in CI instead of skipping.
+    "ci-fetches|node $REPO_ROOT/scripts/verify-ci-fetches.mjs"
+    "ci-fetches-self-test|node $REPO_ROOT/scripts/verify-ci-fetches.mjs --self-test"
     # NEW (67-03, RUN-06/RUN-07, P67-01..P67-09, P67-32): orca-offer-file judges real lstat results of a temp folder
     # through orca-panes' offer-file-policy.ts (type-stripped): symlink, non-regular, other owner, group/other bits,
     # missing, non-loopback or mismatched endpoint, undecodable text; OFFER_REFUSAL_REASONS against the copy table's
