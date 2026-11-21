@@ -469,7 +469,11 @@ async function driveUsage(root) {
 
 // Copies the four producer-side files the checks read, so a plant can mutate one and leave the rest as written.
 function stageControlTree(dir) {
-    for (const rel of [MANIFEST_REL, FRAGMENT_REL, APP_PKG_REL, ENRICH_REL, PREFS_REL]) copyInto(dir, rel);
+    // The generated fragment is copied when this tree has one; only the drifted-fragment plant needs it.
+    for (const rel of [MANIFEST_REL, FRAGMENT_REL, APP_PKG_REL, ENRICH_REL, PREFS_REL]) {
+        if (rel === FRAGMENT_REL && !existsSync(join(REPO_ROOT, rel))) continue;
+        copyInto(dir, rel);
+    }
 }
 
 async function selfTest() {
@@ -479,11 +483,10 @@ async function selfTest() {
         failed += 1;
     };
 
-    // Plants 2 to 5 copy the generated fragment from this tree; without it they cannot run (SKIP-PROTOCOL.md rule 4).
-    if (!existsSync(join(REPO_ROOT, FRAGMENT_REL))) {
-        console.log(skipLine(`${NAME} --self-test`, `${FRAGMENT_REL} is absent, so the plants did not run. Next step: run ${RERUN_GENERATE}, then re-run this self-test`));
-        return SKIP_EXIT;
-    }
+    // A plant whose input is absent does not run; every other case still runs and is judged, and the verdict comes
+    // at the end: FAIL wins, then a SKIP naming the plants not run (SKIP-PROTOCOL.md rule 4).
+    const selfSkips = [];
+    const fragmentPresent = existsSync(join(REPO_ROOT, FRAGMENT_REL));
 
     // Green control first: the unmutated tree proves nothing if red.
     const control = await runAllPinChecks(REPO_ROOT);
@@ -544,6 +547,10 @@ async function selfTest() {
             expect: PREFS_REL,
         },
     ]) {
+        if (plant.rel === FRAGMENT_REL && !fragmentPresent) {
+            selfSkips.push(`the '${plant.name}' plant did not run: ${FRAGMENT_REL} is absent. Next step: run ${RERUN_GENERATE}, then re-run this self-test`);
+            continue;
+        }
         const dir = mkdtempSync(join(tmpdir(), 'telemetry-selftest-'));
         try {
             stageControlTree(dir);
@@ -672,6 +679,10 @@ async function selfTest() {
     if (failed > 0) {
         console.error(`${NAME}: --self-test FAIL -- ${failed} case(s) did not behave as required`);
         return 1;
+    }
+    if (selfSkips.length > 0) {
+        console.log(skipLine(`${NAME} --self-test`, selfSkips.join('; ')));
+        return SKIP_EXIT;
     }
     console.log(`${NAME}: --self-test PASS -- 10 planted faults, the error-report case and the usage-path case all behaved as pinned, and a tree without the fragment or tsc exits 77`);
     return 0;
