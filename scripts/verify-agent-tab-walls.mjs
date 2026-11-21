@@ -71,6 +71,7 @@ const FILES = {
     webTab: 'theia/extensions/tab-uris/src/browser/web-tab.ts',
     chromeBar: 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx',
     setups: 'theia/extensions/modes/src/browser/setups-service.ts',
+    catalogue: 'powerbrowser/INTERNAL-APIS.md',
     dispatch: 'theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts',
     abilities: 'theia/extensions/orca-browser/src/common/orca-browser-abilities.ts',
     frontendModule: 'theia/extensions/orca-browser/src/browser/orca-browser-frontend-module.ts',
@@ -666,7 +667,24 @@ async function socketTableClause(texts) {
     return failures;
 }
 
-const CLAUSES = [scrollClause, editStateClause, budgetClause, historyClause, servicesClause, cookiesClause, agentFlagClause, stopClause, sideHeaderClause, orcaStatusClause, socketTableClause];
+// Review item 6: the touchpoints these fixes added that the forbidden-pattern scan cannot see (they are not Services.,
+// Ci. or Cc-shaped) each have a catalogue row naming them at their line. Every code line carrying one is found here.
+const UNSCANNED_TOUCHPOINTS = [['"disableglobalhistory"', 'disableglobalhistory'], ['channel.suspend()', 'channel.suspend'], ['channel.resume()', 'channel.resume'], ['loadInfo?.originAttributes?.userContextId', 'channel.loadInfo.originAttributes'], ['Components.isSuccessCode(', 'Components.isSuccessCode']];
+function catalogueClause(texts) {
+    const failures = [];
+    const lines = texts.api.split('\n');
+    const rows = texts.catalogue.split('\n').filter(l => l.startsWith('|'));
+    for (const [needle, token] of UNSCANNED_TOUCHPOINTS) {
+        const at = lines.flatMap((line, i) => (line.includes(needle) && !/^\s*(\/\/|\*)/.test(line) ? [i + 1] : []));
+        if (!at.length) { failures.push(`catalogue: broken instrument: no code line carries ${needle}`); continue; }
+        for (const n of at) {
+            if (!rows.some(l => l.includes(`PowerBrowserAPI.sys.mjs:${n}`) && l.includes(token))) failures.push(`catalogue: PowerBrowserAPI.sys.mjs:${n} uses ${token} with no INTERNAL-APIS.md row naming it there`);
+        }
+    }
+    return failures;
+}
+
+const CLAUSES = [scrollClause, editStateClause, budgetClause, historyClause, servicesClause, cookiesClause, agentFlagClause, stopClause, sideHeaderClause, orcaStatusClause, socketTableClause, catalogueClause];
 
 export async function checkTexts(texts) {
     const failures = [];
@@ -694,6 +712,16 @@ function replaceOnce(text, from, to, what) {
 }
 
 const PLANTS = [
+    {
+        name: 'review item 6: the disableglobalhistory row removed',
+        plant: t => ({ ...t, catalogue: t.catalogue.split('\n').filter(l => !l.startsWith('| `disableglobalhistory`')).join('\n') }),
+        expect: 'uses disableglobalhistory with no INTERNAL-APIS.md row',
+    },
+    {
+        name: 'review item 6: the channel.suspend row removed',
+        plant: t => ({ ...t, catalogue: t.catalogue.split('\n').filter(l => !l.startsWith('| `channel.suspend`')).join('\n') }),
+        expect: 'uses channel.suspend with no INTERNAL-APIS.md row',
+    },
     {
         name: 'agent-browser-04: Stop keyed on the frontend actor (a reload clears it)',
         plant: t => ({ ...t, api: replaceOnce(t.api, 'return actorRef?.browsingContext?.top?.embedderElement?.ownerDocument?.defaultView ?? actorRef ?? null;', 'return actorRef ?? null;', 'stop scope') }),
