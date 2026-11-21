@@ -84,6 +84,9 @@ const THEIA_INSTALL = "nix develop .#theia --command bash -c 'cd theia && yarn i
 const NO_LICENCE_FILE = 'no licence file shipped in the package';
 const RULE = '-'.repeat(79);
 const XPI_PIN_REL = 'powerbrowser/packaging/bundled-xpi.json';
+const LICENCE_ALLOWLIST_REL = 'inventory/licence-allowlist.json';
+// packaging-prefs-network-02: the line that introduces Orca's own MIT notice in the Orca section.
+export const ORCA_LICENCE_LEAD = "Orca's own copyright and permission notice (orca/LICENSE at the pin), quoted byte for byte:";
 const XPI_CACHE_DIR = '.mozbuild/bundled-xpi';
 const BUNDLED_EXT_DIR = 'bundled-extensions';
 const USER_PLUGINS_REL = 'theia/applications/browser/plugins/.user';
@@ -305,13 +308,34 @@ function trackedNodeText(trackedText) {
 
 export const ORCA_HEADING = '== Orca (orcad, web client, mobile-web) ==';
 
+/**
+ * Orca's own licence text: the trees row for orca/ in inventory/licence-allowlist.json names the
+ * file and its sha256, and a text that does not hash to that digest is a Fail (a re-pin that
+ * changes the notice must be reviewed there first). null when orca/ is not fetched.
+ */
+export function orcaLicence(root) {
+    const row = readJson(join(root, LICENCE_ALLOWLIST_REL))?.trees?.find((t) => t.path === 'orca');
+    if (!row?.licence_file || !row?.licence_file_sha256) throw new Fail(`${LICENCE_ALLOWLIST_REL} has no trees row for orca with licence_file and licence_file_sha256. Next step: restore that row.`);
+    const path = join(root, 'orca', row.licence_file);
+    if (!existsSync(path)) return null;
+    const got = sha256(path);
+    if (got !== row.licence_file_sha256) throw new Fail(`orca/${row.licence_file} hashes to ${got}, but ${LICENCE_ALLOWLIST_REL} records ${row.licence_file_sha256}. Next step: review the changed notice, update that row, then run: ${RERUN}`);
+    return readFileSync(path, 'utf8').replace(/\r\n?/g, '\n').trimEnd();
+}
+
 /** The Orca section from its heading up to (not including) the Node heading. */
-export function renderOrcaSection(packages) {
+export function renderOrcaSection(packages, licence) {
+    if (typeof licence !== 'string' || licence.trim() === '') throw new Fail(`the Orca section needs Orca's own licence text (orca/LICENSE). Next step: fetch orca/ with scripts/fetch-orca.sh, then run: ${RERUN}`);
     const out = [
         ORCA_HEADING,
         '',
         'Orca source: the pin in configuration.toml [upstreams] orca_tag and orca_commit. Packages are derived from what the orcad, web client and mobile-web bundles contain.',
-        'Packages whose licence text is byte-identical share one block.',
+        '',
+        ORCA_LICENCE_LEAD,
+        '',
+        licence,
+        '',
+        'The third-party packages those bundles contain follow. Packages whose licence text is byte-identical share one block.',
         '',
     ];
     for (const g of licenceGroups(packages)) out.push(RULE, ...g.names, '', g.body, '');
@@ -413,15 +437,20 @@ export function bundledItems(root, trackedNotices) {
             const entry = lock?.packages?.[`node_modules/${dep}`];
             if (!entry?.version || !entry?.resolved) throw new Fail(`${BUNDLED_EXT_DIR}/${folder}/package-lock.json pins no version and resolved url for ${dep}. Next step: regenerate that lock.`);
             const it = { name: dep, version: entry.version, licence: entry.license ?? 'no licence field', carrier: `pre-installed Theia extension ${extId}`, source: entry.resolved, kind: 'theia-preinstalled', bundle: extId };
-            it.text = [join(root, USER_PLUGINS_REL, extId, 'extension', 'node_modules', dep, 'LICENSE.md'), join(root, 'orca', 'node_modules', dep, 'LICENSE.md')]
-                .map(readIf).find((t) => t !== null) ?? null;
+            // 60-WR-02: a copy is read only when its own package.json carries the version the lock pins
+            // (orca/node_modules moves with every Orca re-pin, and plugins/.user can be left from an
+            // earlier build), through the shared licence-file reader rather than a fixed LICENSE.md name.
+            it.text = [join(root, USER_PLUGINS_REL, extId, 'extension', 'node_modules', dep), join(root, 'orca', 'node_modules', dep)]
+                .filter((d) => readIf(join(d, 'package.json')) !== null && readJson(join(d, 'package.json')).version === entry.version)
+                .map((d) => licenceText(d)).find((t) => t !== null) ?? null;
+            if (it.text !== null) it.text = `${it.text}\n`;
             if (it.text === null) {
                 const own = readIf(join(extRoot, folder, 'LICENSE.md')) ?? '';
                 const at = own.indexOf(`${EXT_QUOTE_HEADING}\n\n`);
                 const end = at < 0 ? -1 : own.indexOf('\n\n## ', at + EXT_QUOTE_HEADING.length + 2);
                 if (end < 0) throw new Fail(`no built or Orca copy of ${dep}'s LICENSE.md, and ${BUNDLED_EXT_DIR}/${folder}/LICENSE.md has no "${EXT_QUOTE_HEADING}" quote. Next step: run yarn build in theia/, then ${RERUN}`);
                 it.text = own.slice(at + EXT_QUOTE_HEADING.length + 2, end + 1);
-                console.log(`${NAME}: SKIP -- ${dep} licence text read from the quote in ${BUNDLED_EXT_DIR}/${folder}/LICENSE.md: no built plugins/.user or orca/node_modules copy`);
+                console.log(`${NAME}: SKIP -- ${dep} licence text read from the quote in ${BUNDLED_EXT_DIR}/${folder}/LICENSE.md: no built plugins/.user or orca/node_modules copy at the locked version ${entry.version}`);
             }
             items.push(it);
         }
@@ -525,7 +554,7 @@ function renderLicensing(config, bundled = []) {
         '',
         '## Orca',
         '',
-        `The npm packages that Orca's orcad server, web client and mobile-web bundle ship are listed with their licence texts in the "Orca (orcad, web client, mobile-web)" section of [${NOTICES_REL}](${NOTICES_REL}). The Orca source is the pin named by the \`configuration.toml\` keys \`upstreams.orca_tag\` and \`upstreams.orca_commit\`; Orca's own licence is checked by \`inventory/licence-allowlist.json\`.`,
+        `The npm packages that Orca's orcad server, web client and mobile-web bundle ship are listed with their licence texts in the "Orca (orcad, web client, mobile-web)" section of [${NOTICES_REL}](${NOTICES_REL}). The Orca source is the pin named by the \`configuration.toml\` keys \`upstreams.orca_tag\` and \`upstreams.orca_commit\`. Orca's own copyright and permission notice (MIT) is quoted at the head of that section and ships in the package as \`orca/LICENSE\`; its text is pinned by digest in \`${LICENCE_ALLOWLIST_REL}\`.`,
         '',
         ...(bundled.length ? ['## Bundled extensions', '', bundledParagraph(product, bundled), ''] : []),
         '## Node.js runtime',
@@ -559,10 +588,13 @@ async function orcaPart(trackedNotices, derive) {
         console.log(`${NAME}: SKIP -- Orca section not re-derived: ${r.skip}`);
         return { text: orcaSectionOf(trackedNotices ?? '')?.text };
     }
-    return { text: renderOrcaSection(r.packages), packages: r.packages };
+    return { text: renderOrcaSection(r.packages, r.licence), packages: r.packages };
 }
 
-const deriveOrca = () => orcaShippedPackages({ repoRoot: REPO_ROOT, log: (l) => console.log(`${NAME}: ${l}`) });
+const deriveOrca = async () => {
+    const r = await orcaShippedPackages({ repoRoot: REPO_ROOT, log: (l) => console.log(`${NAME}: ${l}`) });
+    return r.skip ? r : { ...r, licence: orcaLicence(REPO_ROOT) };
+};
 const orcaSummary = (pk) => `${pk.length} packages in ${licenceGroups(pk).length} licence groups`;
 
 /** --check-orca (write false) and --write-orca (write true): only the Orca section, only orca/. */
@@ -573,7 +605,7 @@ export async function runOrca(write, { noticesText, derive = deriveOrca } = {}) 
         console.log(`${NAME}: SKIP -- Orca section not re-derived: ${r.skip}`);
         return { failures: [] };
     }
-    const text = renderOrcaSection(r.packages);
+    const text = renderOrcaSection(r.packages, r.licence);
     if (write) {
         const next = replaceOrcaSection(tracked, text);
         if (noticesText === undefined && next !== tracked) writeAtomic(NOTICES_REL, next);
@@ -740,12 +772,28 @@ async function selfTest() {
         // Orca: fixture package sets stand in for the bundle derivation.
         const op = (name, version, text = MIT) => ({ name, version, license: 'MIT', text, dir: `orca/node_modules/${name}`, shippedIn: ['orcad'] });
         const shipped = [op('o-one', '1.0.0'), op('o-two', '2.0.0', 'Other licence\n')];
-        const withOrca = renderNotices({ gecko, packages: theiaClosure(nm, baseApp), orca: renderOrcaSection(shipped), node });
+        const ORCA_LIC = 'MIT License\n\nCopyright (c) 2026 Fixture Holder\n\nPermission fixture.';
+        const withOrca = renderNotices({ gecko, packages: theiaClosure(nm, baseApp), orca: renderOrcaSection(shipped, ORCA_LIC), node });
+        // packaging-prefs-network-02: Orca's own notice heads the section, and its absence is red.
+        report(orcaSectionOf(withOrca).text.includes(`${ORCA_LICENCE_LEAD}\n\n${ORCA_LIC}\n\n`), "control: Orca's own licence is quoted after its lead line at the head of the Orca section");
+        report(failOf(() => renderOrcaSection(shipped)).includes('orca/LICENSE'), "plant: an Orca section rendered without Orca's own licence is a Fail naming orca/LICENSE");
+        const noNotice = withOrca.replace(`${ORCA_LIC}\n`, '');
+        const noNoticeRed = (await runOrca(false, { noticesText: noNotice, derive: async () => ({ packages: shipped, licence: ORCA_LIC }) })).failures.join(' ');
+        report(noNoticeRed.includes('Orca section'), `plant: tracked notices without Orca's own licence go red under --check-orca: ${noNoticeRed}`);
+        const lroot = join(tmp, 'orca-licence-root');
+        mkdirSync(join(lroot, 'orca'), { recursive: true });
+        mkdirSync(join(lroot, 'inventory'), { recursive: true });
+        writeFileSync(join(lroot, 'orca/LICENSE'), `${ORCA_LIC}\n`);
+        const rowFor = (digest) => writeFileSync(join(lroot, LICENCE_ALLOWLIST_REL), JSON.stringify({ trees: [{ path: 'orca', licence_file: 'LICENSE', licence_file_sha256: digest }] }));
+        rowFor(sha256(join(lroot, 'orca/LICENSE')));
+        report(orcaLicence(lroot) === ORCA_LIC, 'control: orcaLicence reads orca/LICENSE when it hashes to the allowlist row');
+        rowFor('0'.repeat(64));
+        report(failOf(() => orcaLicence(lroot)).includes('hashes to'), 'plant: an orca/LICENSE that does not hash to the allowlist row is a Fail');
         const extra = compareOrcaSets([...shipped, op('o-new', '3.0.0')], orcaSectionOf(withOrca).text).join(' ');
         report(extra.includes('shipped but missing from the notices: o-new@3.0.0'), `plant: a shipped package absent from the Orca notices goes red naming it: ${extra}`);
         const gone = compareOrcaSets(shipped.slice(1), orcaSectionOf(withOrca).text).join(' ');
         report(gone.includes('in the Orca notices but not shipped: o-one@1.0.0'), `plant: an Orca notice for a package that does not ship goes red naming it: ${gone}`);
-        const written = (await runOrca(true, { noticesText: withOrca, derive: async () => ({ packages: [...shipped, op('o-new', '3.0.0')] }) })).text;
+        const written = (await runOrca(true, { noticesText: withOrca, derive: async () => ({ packages: [...shipped, op('o-new', '3.0.0')], licence: ORCA_LIC }) })).text;
         const before = orcaSectionOf(withOrca);
         const after = orcaSectionOf(written);
         report(written.slice(0, after.start) === withOrca.slice(0, before.start) && written.slice(after.end) === withOrca.slice(before.end)
@@ -761,16 +809,30 @@ async function selfTest() {
             { name: 'Fixture Add-on', version: '1.0.0', licence: 'GPL-3.0-or-later', carrier: 'Gecko distribution add-on fx@example.invalid, unmodified', source: 'https://example.invalid/fx/1.0.0', text: 'GPL fixture\n\nsecond paragraph\n' },
             { name: '@fixture/sdk', version: '2.0.0', licence: 'SEE LICENSE IN README.md', carrier: 'pre-installed Theia extension fixture.sdk', source: 'https://example.invalid/sdk-2.0.0.tgz', text: 'Fixture terms.\n' },
         ];
-        const withBundled = renderNotices({ gecko, packages: theiaClosure(nm, baseApp), orca: renderOrcaSection(shipped), bundled: renderBundledSection(items), node });
+        const withBundled = renderNotices({ gecko, packages: theiaClosure(nm, baseApp), orca: renderOrcaSection(shipped, ORCA_LIC), bundled: renderBundledSection(items), node });
         const b = bundledSectionOf(withBundled);
         report(b && withBundled.indexOf(BUNDLED_HEADING) > withBundled.indexOf(ORCA_HEADING) && withBundled.slice(b.end).startsWith('== Node.js runtime'),
             'the Bundled extensions section sits after the Orca section and before the Node.js runtime section');
         report(!orcaSectionOf(withBundled).text.includes(BUNDLED_HEADING), 'the Orca section ends at the Bundled extensions heading');
-        const rewritten = (await runOrca(true, { noticesText: withBundled, derive: async () => ({ packages: [...shipped, op('o-new', '3.0.0')] }) })).text;
+        const rewritten = (await runOrca(true, { noticesText: withBundled, derive: async () => ({ packages: [...shipped, op('o-new', '3.0.0')], licence: ORCA_LIC }) })).text;
         report(bundledSectionOf(rewritten)?.text === b.text && rewritten.includes('o-new@3.0.0'), 'control: --write-orca leaves the Bundled extensions section byte-identical');
         report(items.every((it) => keptBundledText(withBundled, it) === it.text), 'control: each bundled item\'s kept text round-trips byte for byte');
         const bumped = keptBundledText(withBundled, { ...items[0], version: '1.0.1' });
         report(bumped === null, 'a bumped pin with no cached XPI finds no kept text (so the run fails naming it)');
+
+        // 60-WR-02: a carried package's licence copy is read only at the version its lock pins.
+        const broot = join(tmp, 'bundled-root');
+        const ext = join(broot, BUNDLED_EXT_DIR, 'fx');
+        mkdirSync(ext, { recursive: true });
+        writeFileSync(join(ext, 'package.json'), JSON.stringify({ publisher: 'fixture', name: 'fx', dependencies: { dep: '1.0.0' } }));
+        writeFileSync(join(ext, 'package-lock.json'), JSON.stringify({ packages: { 'node_modules/dep': { version: '1.0.0', resolved: 'https://example.invalid/dep-1.0.0.tgz', license: 'MIT' } } }));
+        writeFileSync(join(ext, 'LICENSE.md'), `# fx\n\n${EXT_QUOTE_HEADING}\n\nQuoted 1.0.0 terms.\n\n## End\n`);
+        writePkg(join(broot, 'orca/node_modules'), 'dep', { name: 'dep', version: '2.0.0' });
+        writeFileSync(join(broot, 'orca/node_modules/dep/LICENSE'), 'Newer 2.0.0 terms.\n');
+        const depText = () => bundledItems(broot, '').find((it) => it.name === 'dep')?.text;
+        report(depText() === 'Quoted 1.0.0 terms.\n', `plant: an orca/node_modules copy at another version than the lock is not read (got ${JSON.stringify(depText())})`);
+        writePkg(join(broot, 'orca/node_modules'), 'dep', { name: 'dep', version: '1.0.0' });
+        report(depText() === 'Newer 2.0.0 terms.\n', `control: a copy at the locked version is read, from a file named LICENSE as well as LICENSE.md (got ${JSON.stringify(depText())})`);
     } finally {
         rmSync(tmp, { recursive: true, force: true });
     }
