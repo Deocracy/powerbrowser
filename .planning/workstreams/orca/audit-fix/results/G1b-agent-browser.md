@@ -1,6 +1,6 @@
 # Result: G1b-agent-browser
 
-Branch: worktree-agent-a4ef5675032920d7e   Base: b5c4b182 (round 2 on f8d798e4)   Final: (this record's commit; code final 7c7d87c3)
+Branch: worktree-agent-a4ef5675032920d7e   Base: b5c4b182 (round 2 on f8d798e4, round 3 on 10b970e1)   Final: (this record's commit; code final 1351bdb7)
 
 | ID | Status | Commit | Check | Note |
 |---|---|---|---|---|
@@ -23,6 +23,24 @@ Round 2 (independent review), per point:
 4. 66-CR-03 ordering: confirmed and fixed. The new check runs the pinned BROWSER_CLIENT_HOST_METHODS handlers with the real lease and page registries, adoption, recovery and reconciliation; nothing is transcribed. That showed reclaimPage is used only across epochs of one runtime (browser-host-page-reconciliation-plan.ts canReclaimPage). After an orcad restart, Orca closes the old guest and restores the page instead. Before this round the host answered that restorePage with browser_tab_not_found, so the page was lost. The ordering clause (lostResult) injects a reclaim, because the pinned orcad does not produce one in these flows.
 5. 66-WR-03: (a) confirmed and fixed. (b) applied to pages the user closed, but not to every id the table dropped. orcad's own recovery closes a page and then creates or restores it under the same id (runtime-browser-client-page-recovery.ts recoverPage: closeUnavailablePage then createClientPage), so refusing dropped ids would break that.
 6. Confirmed, fixed. 7. Confirmed, fixed; the budget comes from the pinned BROWSER_CLIENT_HOST_PAGE_INVENTORY_MAX_BYTES. The host is not put into a failed state when pages are left out: a failed state with a live session would wedge Reconnect, which is point 1's fault. The pages left out are ended instead (log line and tab closed). 8. Both closed: the real link and placement path run in every frontend world, and real orcad checks each page's generations against its placement. 9. Header comments and Behaviour changes corrected.
+
+## Round 3 (59-WR-03, handed over by G1a), on 10b970e1
+
+| ID | Status | Commit | Check | Note |
+|---|---|---|---|---|
+| 59-WR-03 (host half) | fixed | c04a8388, 1351bdb7 | verify-orca-browser-host-wire.mjs::snapshotIdentity | the host's pageInfo (pageInfoOf) caps the url at 8192 and the title at 4096 units before the dispatcher adds them to a snapshot result |
+
+- Agreement with chrome's reserve: agentSnapshotReserve (PowerBrowserAPI.sys.mjs, after agentResultFits) reserves 64 key bytes, the 1536-byte page id, 8192 url units at 3 bytes and 4096 title units at 6 bytes, or more for a longer tab url or title. The host caps are those same unit counts, so the two agree and no handoff is needed. With the cap in place, chrome's `Math.max(..., url.length * 3)` and `Math.max(..., title.length * 6)` branches only over-reserve; G1a may drop them as an optional cleanup.
+- The check reads the caps from the pinned `BrowserClientPageMetadataParams` (`shape.url.maxLength`, `shape.title.maxLength`) and requires the host's constants to equal them. It evaluates AGENT_RESULT_MAX_BYTES, the AGENT_SNAPSHOT_* bounds, agentResultFits and agentSnapshotReserve from chrome's source, and finds the largest snapshot chrome passes for a url and title at the caps. That snapshot must then reach the pinned orcad completed in two cases: with the tab's url and title at the caps, and with a tab url longer than the cap chrome measured. The planted fault, an uncapped url, makes the second case fail as browser_error. The self-test now has 26 plants.
+- Behaviour change: an agent snapshot reports a tab url longer than 8192 or a title longer than 4096 units truncated to those lengths. Before this, such a snapshot could fail as over budget. Revert with c04a8388.
+- Red by design: scan-brand-residue and its self-test. Round 3's comments move two counts: Orca expected 4188, observed 4190; orcad 2881, 2885. Integration should set those expected_count values in `inventory/brand-tokens.json` after re-measuring.
+- Quick gate after 1351bdb7 (log at `.mozbuild/g1b/quick-round3.txt` in this worktree): 455 rows, 447 PASS, 8 FAIL.
+  - scan-brand-residue and its self-test: red by design, as above.
+  - Not caused by this lane:
+    - orca-failure-classes and its self-test: H2's recorded red by design.
+    - orca-service-self-test: a plant target in buildOrcadEnv is not found; that file is not mine.
+    - build-windows-shape-self-test: does not read this lane's files.
+    - orca-browser-tab-scope and its self-test: the cookies clause, "detector blind: a set for a subdomain of the current site". It reads chrome's cookie rows and orca-browser-dispatch.ts, and the dispatcher is unchanged this round.
 
 ## Registry requests
 None. Both rows are registered (scripts/verify-platform.sh:4252-4253); the self-test now has 25 plants.
