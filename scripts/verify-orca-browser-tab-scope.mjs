@@ -57,13 +57,19 @@
 //    of AGENT_METHODS but browser.goto answers failed browser_command_unavailable with no page work, and browser.goto
 //    still navigates.
 //
-// Page-table clause: when lane p66-02's theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts exists, it
-// (and ./orca-browser-abilities) is transpiled with theia/node_modules/typescript and its createPageTable must refuse
-// a duplicate page and a second page for a tab; while it is absent the PASS line says "page-table clause SKIP (lane
-// p66-02 not merged)"; present but missing an export is red, never a SKIP.
+// Page-table clause: theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts (and ./orca-browser-abilities)
+// is transpiled with theia/node_modules/typescript and its createPageTable must refuse a duplicate page and a second
+// page for a tab. The module absent, or present but missing an export, is red, never a SKIP (lane p66-02 merged long
+// ago, so an absence can only be a missing table).
 //
-// Tier: quick (text reads and node:vm; acorn and typescript from theia/node_modules). --self-test is quick and
-// hermetic: mutated copies of the shipped source in memory and a fixture dispatch module.
+// Cookie site clause (agent-browser-03): a cookie row for a host on another site, or a bare public suffix, is refused
+// before any cookie-service call; a subdomain of the current site is served (the detector); cookie.get lists an
+// httpOnly cookie with its value withheld.
+//
+// Tier: quick (text reads and node:vm; acorn and typescript from theia/node_modules). SKIP (exit 77, one line) when
+// upstream/ is not fetched: the clauses derived from the pinned Gecko source then ran against the agent section's own
+// constants, or did not run. --self-test is quick and hermetic: mutated copies of the shipped source in memory and a
+// fixture dispatch module; without upstream/ its pin plants do not run and it exits 77.
 //
 // Usage:
 //   node scripts/verify-orca-browser-tab-scope.mjs
@@ -74,6 +80,8 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
+
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-browser-tab-scope';
@@ -227,7 +235,8 @@ export function makeWorld(sliced, { dpr = 2 } = {}) {
 
     function fakeBrowser(tabIdHint) {
         const attrs = new Map();
-        const browser = { tabIdHint, appended: false, docShellIsActive: false, ownerDocument: doc, removed: false, attrs };
+        // The page the overlay shows: the cookie rows act only on its site (agent-browser-03).
+        const browser = { tabIdHint, appended: false, docShellIsActive: false, ownerDocument: doc, removed: false, attrs, currentURI: { host: 'example.com', spec: 'https://example.com/' } };
         browser.style = {};
         browser.setAttribute = (name, value) => { attrs.set(name, value); rec.attrs.push({ browser, name, value, appended: browser.appended }); };
         browser.getAttribute = name => (attrs.has(name) ? attrs.get(name) : null);
@@ -286,12 +295,21 @@ export function makeWorld(sliced, { dpr = 2 } = {}) {
         removeTabRow: () => Promise.resolve(),
         webTabNavigate: navigate('navigate'), webTabBack: navigate('back'), webTabForward: navigate('forward'), webTabReload: navigate('reload'),
     };
-    const cookieCall = name => (...args) => { rec.cookies.push({ name, args }); return name === 'add' ? { result: 0 } : name.startsWith('get') ? [{ host: 'example.com', name: 'a', path: '/', value: 'b', expiry: 0, isSession: true, sameSite: 1 }] : undefined; };
+    const cookieCall = name => (...args) => {
+        rec.cookies.push({ name, args });
+        if (name === 'add') return { result: 0 };
+        return name.startsWith('get') ? [
+            { host: 'example.com', name: 'a', path: '/', value: 'b', expiry: 0, isSession: true, sameSite: 1, isHttpOnly: false },
+            { host: 'example.com', name: 'sid', path: '/', value: 'planted-session-secret', expiry: 0, isSession: true, sameSite: 1, isHttpOnly: true },
+        ] : undefined;
+    };
     const prefs = new Map();
     const Services = {
         prefs: { getIntPref: (name, fallback) => (prefs.has(name) ? prefs.get(name) : fallback), setIntPref: (name, value) => prefs.set(name, value), getBoolPref: (name, fallback) => fallback },
         io: { newURI: spec => ({ spec }) },
         scriptSecurityManager: { createNullPrincipal: () => ({ isSystemPrincipal: false }) },
+        // Gecko's registrable domain, reduced to the last two labels; a bare suffix throws as getBaseDomainFromHost does.
+        eTLD: { getBaseDomainFromHost: host => { const labels = String(host).split('.'); if (labels.length < 2) throw new Error('insufficient domain levels'); return labels.slice(-2).join('.'); } },
         cookies: { getCookiesFromHost: cookieCall('getCookiesFromHost'), getCookiesWithOriginAttributes: cookieCall('getCookiesWithOriginAttributes'), add: cookieCall('add'), remove: cookieCall('remove') },
         obs: { addObserver: (observer, topic) => rec.observers.push({ observer, topic }) },
         uuid: { generateUUID: () => `{fake-${rec.factories.length}}` },
@@ -467,6 +485,37 @@ export async function runScenarios(sliced, childText, dpr = 2) {
         if (attrs?.userContextId !== CONTAINER) {
             failures.push(`cookies: Services.cookies.${call.name} ran without the agent userContextId (${JSON.stringify(attrs)})`);
         }
+    }
+
+    // Cookies act only on the tab's current site (agent-browser-03): a host on another site, or a bare public suffix,
+    // is refused before any cookie-service call; a subdomain of the current site is the same site (the detector); an
+    // httpOnly cookie's value never leaves chrome.
+    w = fresh();
+    w.addTab('a1', { agent: true });
+    for (const [method, params, what] of [
+        ['browser.cookie.get', { url: 'https://other.test/' }, 'a get for another site'],
+        ['browser.cookie.set', { name: 'a', value: 'b', domain: 'other.test' }, 'a set for another site'],
+        ['browser.cookie.delete', { name: 'a', domain: 'other.test' }, 'a delete for another site'],
+        ['browser.cookie.set', { name: 'a', value: 'b', domain: 'com' }, 'a set for a bare public suffix'],
+    ]) {
+        const calls = w.rec.cookies.length;
+        reply = await w.agent('a1', method, params);
+        if (reply?.where !== 'failed' || reply?.code !== 'browser_command_unavailable' || w.rec.cookies.length !== calls) {
+            failures.push(`cookies: ${what} answered ${JSON.stringify(reply)} after ${w.rec.cookies.length - calls} cookie-service call(s); expected failed browser_command_unavailable and none`);
+        }
+    }
+    const setCalls = w.rec.cookies.length;
+    reply = await w.agent('a1', 'browser.cookie.set', { name: 'a', value: 'b', domain: 'www.example.com' });
+    if (reply?.where !== 'done' || w.rec.cookies.length === setCalls) {
+        failures.push(`cookies: detector blind: a set for a subdomain of the current site answered ${JSON.stringify(reply)} with ${w.rec.cookies.length - setCalls} cookie-service call(s); expected done and a call`);
+    }
+    reply = await w.agent('a1', 'browser.cookie.get', {});
+    const jar = Array.isArray(reply?.result?.cookies) ? reply.result.cookies : [];
+    const plain = jar.find(c => c.name === 'a');
+    const httpOnly = jar.find(c => c.name === 'sid');
+    if (plain?.value !== 'b') failures.push(`cookies: detector blind: cookie.get on the current site answered ${JSON.stringify(reply)}; expected the plain cookie with its value`);
+    if (!httpOnly || httpOnly.value !== '' || httpOnly.httpOnly !== true) {
+        failures.push(`cookies: cookie.get returned an httpOnly cookie as ${JSON.stringify(httpOnly ?? null)}; expected it listed with httpOnly true and its value withheld`);
     }
 
     // Mark state: a served call lights it; 20000 ms without one clears it with one push.
@@ -1104,7 +1153,6 @@ export function permissionsClause(upstream = {}, branding = {}) {
 const DISPATCH = 'theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts';
 const LOGIN_REGISTRY = 'upstream/toolkit/modules/ActorManagerParent.sys.mjs';
 const ABILITIES = 'theia/extensions/orca-browser/src/common/orca-browser-abilities.ts';
-export const PAGE_TABLE_SKIP = 'page-table clause SKIP (lane p66-02 not merged)';
 
 function loadTs(files) {
     let ts;
@@ -1129,9 +1177,9 @@ function loadTs(files) {
     return load('dispatch');
 }
 
-/** files: { dispatch, abilities } source texts, or null when the dispatch module is absent. */
+/** files: { dispatch, abilities } source texts, or null when the dispatch module is absent (red). */
 export function pageTableClause(files) {
-    if (!files) return { skip: true, failures: [] };
+    if (!files) return { failures: [`page-table: ${DISPATCH} is absent, so the page table is unchecked`] };
     let mod;
     try {
         mod = loadTs(files);
@@ -1198,7 +1246,7 @@ export async function checkSource(text, childText, dispatchFiles, registry = nul
     const permissions = permissionsClause(upstream, branding);
     const failures = [...clipboard.failures, ...permissions.failures, ...await runScenarios(sliced, childText, 2), ...await runScenarios(sliced, childText, 1), ...visibilityReads(text), ...table.failures, ...login.failures, ...openFailures, ...walls.failures];
     const native = (() => { try { return Object.keys(makeWorld(sliced).AGENT_NATIVE_ROWS ?? {}).length; } catch { return 0; } })();
-    return { failures: [...new Set(failures)], native, skip: !!table.skip, loginSkip: !!login.skip, paths: opens.paths ?? [], wheres: opens.wheres ?? 0, walls, clipboard, permissions };
+    return { failures: [...new Set(failures)], native, loginSkip: !!login.skip, paths: opens.paths ?? [], wheres: opens.wheres ?? 0, walls, clipboard, permissions };
 }
 
 // ---------------------------------------------------------------------------
@@ -1228,6 +1276,7 @@ export function outcomeOf() { return null; }
 const FIXTURE_ABILITIES = 'export const ORCA_BROWSER_ABILITIES = [];\n';
 
 async function selfTest() {
+    const selfSkips = [];
     const text = readFileSync(join(REPO_ROOT, API), 'utf8');
     const child = readFileSync(join(REPO_ROOT, CHILD), 'utf8');
     const fixture = { dispatch: FIXTURE_DISPATCH, abilities: FIXTURE_ABILITIES };
@@ -1259,6 +1308,10 @@ async function selfTest() {
         ['the parked-focus guard removed', { api: swap('  back?.focus();\n', '') }, 'focus: focus landing on a parked agent overlay was not returned'],
         ['a table accepting a duplicate page', { dispatch: swap("            if (byPage.has(pageId)) return 'duplicate-page';\n", '') }, 'page-table: the table accepted a duplicate page'],
         ['a table accepting a second page for a tab', { dispatch: swap("            if (byTab.has(tabId)) return 'duplicate-tab';\n", '') }, 'page-table: the table accepted a second page for a tab'],
+        ['the dispatch module absent', { files: () => null }, 'page-table: theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts is absent'],
+        // agent-browser-03: cookie rows act only on the current site and withhold httpOnly values.
+        ['cookie rows not limited to the current site', { api: swap('  return site && agentSiteOf(host) === site ? host : "";', '  return host;') }, 'cookies: a get for another site answered'],
+        ['an httpOnly cookie value returned', { api: swap('value: c.isHttpOnly ? "" : c.value', 'value: c.value') }, "cookies: cookie.get returned an httpOnly cookie"],
         ['the dispatch file present without createPageTable', { dispatch: swap('export function createPageTable()', 'export function createPageTableGone()') }, 'page-table: orca-browser-dispatch.ts has no createPageTable export'],
         ['the agent overlay left in the browsers group', { api: swap('"usercontextid": String(userContextId), messagemanagergroup: AGENT_MESSAGE_MANAGER_GROUP, ', '"usercontextid": String(userContextId), ') }, "isolation: the agent overlay's message manager group"],
         ['the dialog type filter removed', { api: swap('  if (!AGENT_DIALOG_TYPES.has(win.args?.promptType) || win.args?.inPermitUnload) {\n    return agentFailed("browser_command_unavailable");\n  }\n', '') }, 'dialogs: an HTTP auth dialog in an agent tab'],
@@ -1272,7 +1325,6 @@ async function selfTest() {
         ['the content wall removed', { api: swap('  entry.browser.browsingContext.sandboxFlags |= SANDBOXED_AUXILIARY_NAVIGATION | SANDBOXED_DOWNLOADS;\n', '') }, 'started without SANDBOXED_AUXILIARY_NAVIGATION'],
         // D-37 (66-09): the download wall, its detector, the protocol chooser and the initial-document guard.
         ['the download wall dropped from the flag write', { api: swap('sandboxFlags |= SANDBOXED_AUXILIARY_NAVIGATION | SANDBOXED_DOWNLOADS;', 'sandboxFlags |= SANDBOXED_AUXILIARY_NAVIGATION;') }, "downloads: the agent overlay's first load started without SANDBOXED_DOWNLOADS"],
-        ['the download wall on a different bit', { api: swap('const SANDBOXED_DOWNLOADS = 0x10000;', 'const SANDBOXED_DOWNLOADS = 0x20000;') }, "downloads: the agent overlay's first load started without SANDBOXED_DOWNLOADS"],
         ['the cancelled-download observer not registered', { api: swap('  Services.obs.addObserver(agentNetworkObserver, "http-on-stop-request");\n', '') }, "downloads: a command during which the wall cancelled the agent overlay's download answered"],
         ['every cancelled agent channel counted as a download', { api: swap('channel.isDocument && channel.status === Cr.NS_ERROR_ABORT', 'channel.status === Cr.NS_ERROR_ABORT') }, 'downloads: an agent subresource that was cancelled failed the agent command'],
         ['the settle after a child-run command dropped', { api: swap('      await agentSettleOpens(entry, control, opensRefused);\n', '') }, "downloads: a command whose download the wall cancelled after the child's reply answered"],
@@ -1286,12 +1338,9 @@ async function selfTest() {
         // D-38 (66-10): the key refusal, its table, the page wall and its registration.
         ['the clipboard key refusal dropped', { child: swap('  if (agentClipboardKey(parts, key)) {', '  if (false) {') }, "clipboard: the agent's Control+c answered done"],
         ['every key refused', { child: swap('  if (agentClipboardKey(parts, key)) {', '  if (true) {') }, 'clipboard: detector blind: the control Control+a'],
-        ['Shift+Insert missing from the child table', { child: swap('"control+Insert", "shift+Insert",', '"control+Insert",') }, 'bind shift+Insert to a clipboard command, and the child\'s AGENT_CLIPBOARD_KEYS lacks it'],
-        ['a stale binding in the child table', { child: swap('"accel+c", "accel+x",', '"accel+c", "accel+q", "accel+x",') }, 'has accel+q, which no pinned clipboard binding has'],
         ['accel matched by Control only', { child: swap('words.has("control") || words.has("meta")', 'words.has("control")') }, "clipboard: the agent's Meta+c answered done"],
         ['the Clipboard methods not replaced', { child: swap('      Object.defineProperty(proto, name, { value: refuse, writable: false, configurable: false });\n', '') }, "clipboard: an agent page's navigator.clipboard.writeText answered original"],
         ['the replaced methods left writable', { child: swap('{ value: refuse, writable: false, configurable: false }', '{ value: refuse, writable: true, configurable: true }') }, 'stays writable or configurable'],
-        ['readText left to the page', { child: swap('["read", "readText", "write", "writeText"]', '["read", "write", "writeText"]') }, 'the pinned Clipboard interface has readText, which the page wall leaves to the page'],
         ['clipboard events not cancelled', { child: swap("function agentClipboardCancel(event) {\n  event.preventDefault();\n", "function agentClipboardCancel(event) {\n") }, 'clipboard: a trusted copy in an agent page was stop'],
         ['the page pair not registered', { api: s => s.replace(/  ChromeUtils\.registerWindowActor\(AGENT_PAGE_ACTOR_NAME, \{[\s\S]*?\n  \}\);\n/, '') }, 'no PowerBrowserAgentPage pair is registered'],
         ['the page pair top-frame only', { api: swap('messageManagerGroups: [AGENT_MESSAGE_MANAGER_GROUP],\n    allFrames: true,', 'messageManagerGroups: [AGENT_MESSAGE_MANAGER_GROUP],\n    allFrames: false,') }, 'pair is top-frame only'],
@@ -1307,10 +1356,15 @@ async function selfTest() {
         ['the pref overridden later in dev', { branding: b => ({ ...b, dev: `${b.dev}pref("permissions.isolateBy.userContext", false);\n` }) }, 'sets permissions.isolateBy.userContext to [true, false]'],
         ['the opens detector blinded (no receivers installed)', { api: swap('    win.openLinkIn = (url, where, params) => adoptLinkIn(url, where, params);\n', '') }, 'broken instrument: derived'],
     ];
-    // D-38/D-39 pin plants (66-10): drift in a pinned table must name it. Only with upstream/.
+    // Pin plants (66-09, 66-10): drift against a pinned table must name it. Only with upstream/.
     if (upstream.shortcuts && upstream.clipboardIdl && upstream.eventNames && upstream.permissionManager && upstream.staticPrefs) {
         const pin = (key, from, to) => u => { if (!u[key].includes(from)) throw new Error(`plant anchor not found: ${from.slice(0, 70)}`); return { ...u, [key]: u[key].replace(from, to) }; };
         plants.push(
+            // Compared with the pin, so only with upstream/ (without it the section's or child's own table is the expectation).
+            ['the download wall on a different bit', { api: swap('const SANDBOXED_DOWNLOADS = 0x10000;', 'const SANDBOXED_DOWNLOADS = 0x20000;') }, "downloads: the agent overlay's first load started without SANDBOXED_DOWNLOADS"],
+            ['Shift+Insert missing from the child table', { child: swap('"control+Insert", "shift+Insert",', '"control+Insert",') }, 'bind shift+Insert to a clipboard command, and the child\'s AGENT_CLIPBOARD_KEYS lacks it'],
+            ['a stale binding in the child table', { child: swap('"accel+c", "accel+x",', '"accel+c", "accel+q", "accel+x",') }, 'has accel+q, which no pinned clipboard binding has'],
+            ['readText left to the page', { child: swap('["read", "readText", "write", "writeText"]', '["read", "write", "writeText"]') }, 'the pinned Clipboard interface has readText, which the page wall leaves to the page'],
             ['a new pinned clipboard binding', { upstream: pin('shortcuts', 'ShortcutKeyData ShortcutKeys::sInputHandlers[] = {\n', 'ShortcutKeyData ShortcutKeys::sInputHandlers[] = {\n    {u"keypress", nullptr, u"y", u"accel", u"cmd_paste"},\n') }, 'bind accel+y to a clipboard command'],
             ['a new pinned Clipboard method', { upstream: pin('clipboardIdl', 'Promise<DOMString> readText();', 'Promise<DOMString> readText();\n  Promise<undefined> writeImage();') }, 'has writeImage, which the page wall leaves to the page'],
             ['a new pinned clipboard event', { upstream: pin('eventNames', 'EVENT(copy, eCopy,', 'EVENT(beforecopy, eBeforeCopy, EventNameType_HTMLXUL, eClipboardEventClass)\nEVENT(copy, eCopy,') }, 'does not catch beforecopy capturing'],
@@ -1318,7 +1372,7 @@ async function selfTest() {
             ['the pinned isolation accessor renamed', { upstream: pin('permissionManager', 'StaticPrefs::permissions_isolateBy_userContext()', 'StaticPrefs::permissions_isolateBy_userContextRenamed()') }, 'names no pref in'],
         );
     } else {
-        console.log('  note: the D-38/D-39 pin plants need upstream/; skipped');
+        selfSkips.push('upstream/ is not fetched, so the nine pin plants (D-37 download bit, D-38, D-39) did not run. Next step: bash scripts/fetch-upstream.sh');
     }
     // One plant per derived open path, generated from installNewWindowReceivers: the receiver put back to its
     // pre-D-35 answer must go red naming that path.
@@ -1340,7 +1394,7 @@ async function selfTest() {
             kid = mutate.child ? mutate.child(child) : child;
             brand = mutate.branding ? mutate.branding(branding) : branding;
             up = mutate.upstream ? mutate.upstream(upstream) : upstream;
-            files = mutate.dispatch ? { ...fixture, dispatch: mutate.dispatch(fixture.dispatch) } : fixture;
+            files = mutate.files ? mutate.files() : mutate.dispatch ? { ...fixture, dispatch: mutate.dispatch(fixture.dispatch) } : fixture;
             var reg = mutate.registry ? mutate.registry(registry) : registry;
         } catch (err) {
             console.error(`${NAME} self-test: FAIL -- '${name}': ${err.message}`);
@@ -1360,9 +1414,9 @@ async function selfTest() {
             failed++;
         }
     }
-    if (failed) return 1;
-    console.log(`${NAME} self-test: PASS -- ${plants.length} planted faults each went red naming the drift`);
-    return 0;
+    const code = verdictExit(`${NAME} self-test`, failed ? ['planted fault(s) above did not go red'] : [], selfSkips);
+    if (code === 0) console.log(`${NAME} self-test: PASS -- ${plants.length} planted faults each went red naming the drift`);
+    return code;
 }
 
 async function main() {
@@ -1371,15 +1425,26 @@ async function main() {
     const child = readFileSync(join(REPO_ROOT, CHILD), 'utf8');
     const dispatch = readOptional(DISPATCH);
     const files = dispatch === null ? null : { dispatch, abilities: readOptional(ABILITIES) ?? undefined };
-    const { failures, native, skip, loginSkip, paths, wheres, walls, clipboard, permissions } = await checkSource(text, child, files, readOptional(LOGIN_REGISTRY), readOptional(IDL), readUpstream(), readBranding());
+    const upstream = readUpstream();
+    const registry = readOptional(LOGIN_REGISTRY);
+    const idl = readOptional(IDL);
+    const { failures, native, loginSkip, paths, wheres, walls, clipboard, permissions } = await checkSource(text, child, files, registry, idl, upstream, readBranding());
     if (failures.length) {
         console.error(`${NAME}: FAIL -- the chrome side of the Orca agent bridge can reach a tab it did not create as an agent tab, or the drift below.`);
         failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
+    // A pinned Gecko text that is absent leaves its clause on the section's own constant (or, for the LoginManager
+    // groups, not run at all): a partial run, so SKIP rather than PASS.
+    const unpinned = [[LOGIN_REGISTRY, registry], [IDL, idl], ...[SANDBOX_H, CLASSIFY, EXTHANDLER, SHORTCUTS, CLIPBOARD_IDL, EVENT_NAMES, PERMISSION_MANAGER, STATIC_PREFS].map(rel => [rel, readOptional(rel)])]
+        .filter(([, t]) => t === null).map(([rel]) => rel);
+    if (unpinned.length) {
+        console.log(skipLine(NAME, `every clause that ran passed, but ${unpinned.length} pinned Gecko source(s) are absent (${unpinned.join(', ')}), so the clauses derived from them ran against the agent section's own constants or did not run. Next step: bash scripts/fetch-upstream.sh`));
+        return SKIP_EXIT;
+    }
     const total = /const AGENT_METHODS = Object\.freeze\(\[([^\]]*)\]\)/.exec(text)[1].match(/"browser\.[A-Za-z.]+"/g).length;
     console.log(`${NAME}: PASS -- ${total} methods (${native} native, ${total - native} actor): every one refused before page work for a user, unknown, foreign, wrong-container or stopped tab; ` +
-        'the flag and the container are set only at creation and before append; cookies stay in the agent container; Stop aborts and lasts; the mark clears after 20000 ms; ' +
+        'the flag and the container are set only at creation and before append; cookies stay in the agent container, act only on the current site and withhold httpOnly values; Stop aborts and lasts; the mark clears after 20000 ms; ' +
         'agent overlays sit in their own message manager group with no autocomplete popup and answer only alert/confirm/prompt dialogs; ' +
         `unshown agent tabs are parked, never hold the focus, and user tabs never park; every visibility read goes through overlayShownToUser; ` +
         `D-35: ${paths.length} open paths derived (${paths.join(', ')}) open nothing for an agent opener at any of ${wheres} OPEN_* locations or ${LINK_WHERES.length} link wheres, ` +
@@ -1387,8 +1452,8 @@ async function main() {
         `D-37: agent overlays load with ${walls.dl.names.join(', ')} (from ${walls.dl.from}) and a cancelled agent download fails the command, ` +
         `the ${walls.chooser.contract} chooser (from ${walls.chooser.from}) refuses agent external loads and passes user ones, and only browser.goto runs on the initial about:blank; ` +
         `D-38: ${clipboard.bindings} clipboard key bindings (from ${clipboard.from}) refused to the agent with Control and Meta, the Clipboard methods [${clipboard.methods.join(', ')}] reject and [${clipboard.events.join(', ')}] are cancelled in every agent document; ` +
-        `D-39: ${permissions.pref} (from ${permissions.from}) set opposite the pinned default in [${permissions.variants.join(', ')}]${skip ? `; ${PAGE_TABLE_SKIP}` : '; page table compared'}` +
-        (loginSkip ? '; login-manager group clause SKIP (no upstream/)' : '; the pinned LoginManager actor groups exclude the agent group'));
+        `D-39: ${permissions.pref} (from ${permissions.from}) set opposite the pinned default in [${permissions.variants.join(', ')}]; page table compared` +
+        (loginSkip ? '' : '; the pinned LoginManager actor groups exclude the agent group'));
     return 0;
 }
 
