@@ -1,7 +1,7 @@
 // scripts/lib/live-lock.mjs
 //
 // The live lock (audit harness-live-security-05): every live row runs under flock on <git common dir>/pb-live.lock,
-// so two sessions never launch PowerBrowser, orcad or the Orca CLI against one checkout at once. The rule for the rows
+// so two sessions never launch PowerBrowser and its services against one checkout at once. The rule for the rows
 // lane H5 owns, and the one the other live lanes can follow:
 //
 //   A live row takes the lock itself. At entry, before anything else runs, it calls holdLiveLock(). That returns null
