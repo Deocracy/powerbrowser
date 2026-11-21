@@ -70,6 +70,7 @@ const FILES = {
     orcaService: 'powerbrowser/shell/OrcaService.sys.mjs',
     webTab: 'theia/extensions/tab-uris/src/browser/web-tab.ts',
     chromeBar: 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx',
+    setups: 'theia/extensions/modes/src/browser/setups-service.ts',
     dispatch: 'theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts',
     abilities: 'theia/extensions/orca-browser/src/common/orca-browser-abilities.ts',
     frontendModule: 'theia/extensions/orca-browser/src/browser/orca-browser-frontend-module.ts',
@@ -450,15 +451,38 @@ async function agentFlagClause(texts) {
     w.api.webTabClose('a1');
     if (w.webTabs.has('a1')) return ['agentFlag: broken instrument: webTabClose left the entry'];
     const before = w.rec.attrs.length;
-    w.api.webTabOpen(w.theiaBrowser, w.frontend, 'a1', 'https://example.com/', 'web:a1', undefined, null, false);
+    w.api.webTabOpen(w.theiaBrowser, w.frontend, 'a1', 'https://example.com/', 'web:agent-a1', undefined, null, false);
     const reopened = w.webTabs.get('a1');
     const attrs = w.rec.attrs.slice(before).filter(a => a.browser === reopened?.browser && !a.appended);
     const value = name => attrs.filter(a => a.name === name).at(-1)?.value;
     if (reopened?.agent !== true || !Number(value('usercontextid')) || value('messagemanagergroup') !== w.AGENT_MESSAGE_MANAGER_GROUP) {
         failures.push(`agentFlag: an agent tab re-opened under its id without the flag became agent ${JSON.stringify(reopened?.agent)}, container ${JSON.stringify(value('usercontextid'))}, group ${JSON.stringify(value('messagemanagergroup'))}; it reopened as a user tab in the user's container (agent-browser-02)`);
     }
-    w.api.webTabOpen(w.theiaBrowser, w.frontend, 'k1', 'https://example.com/', 'web:a1', undefined, null, false);
+    w.api.webTabOpen(w.theiaBrowser, w.frontend, 'k1', 'https://example.com/', 'web:agent-a1', undefined, null, false);
     if (w.webTabs.get('k1')?.agent !== true) failures.push('agentFlag: a tab opened under an agent tab\'s row key (its kept history) was not an agent tab (agent-browser-02)');
+    // Across a relaunch chrome remembers nothing: a fresh world opens a saved agent row (session restore, Setup
+    // restore and Reopen Closed Tab all open it under its saved key, with no flag; the source clause below).
+    const relaunched = worldOf(texts);
+    relaunched.api.webTabOpen(relaunched.theiaBrowser, relaunched.frontend, 'wt-new-1', 'https://hostile.example/', 'web:agent-wt-old-7', undefined, null, false);
+    const restored = relaunched.webTabs.get('wt-new-1');
+    const restoredGroup = relaunched.rec.attrs.filter(a => a.browser === restored?.browser && a.name === 'messagemanagergroup').at(-1)?.value;
+    if (restored?.agent !== true || restoredGroup !== relaunched.AGENT_MESSAGE_MANAGER_GROUP) {
+        failures.push(`agentFlag: after a relaunch, a saved agent row reopened with agent ${JSON.stringify(restored?.agent)} in group ${JSON.stringify(restoredGroup)}; it came back as a user tab with login autofill and the agent page in the user's cookie jar (agent-browser-02)`);
+    }
+    // An agent tab under any other key could not be recognised after a relaunch, so chrome refuses it.
+    const userKeyed = w.api.webTabOpen(w.theiaBrowser, w.frontend, 'q1', 'about:blank', 'web:wt-plain-1', undefined, null, true);
+    if (userKeyed !== 'unavailable' || w.webTabs.has('q1')) failures.push(`agentFlag: an agent open under a user row key answered ${userKeyed}; expected unavailable and no overlay, since no relaunch could tell it from a user tab (agent-browser-02)`);
+    w.api.webTabOpen(w.theiaBrowser, w.frontend, 'u8', 'https://example.com/', 'web:wt-plain-2', undefined, null, false);
+    if (w.webTabs.get('u8')?.agent === true) failures.push('agentFlag: a user tab under a user row key was made an agent tab');
+    // The frontend keys agent tabs with the prefix chrome recognises; the restore paths keep the saved key.
+    const prefix = /export const AGENT_ROW_KEY_PREFIX = '([^']+)';/.exec(texts.webTab)?.[1];
+    const chromeRe = /const AGENT_ROW_KEY_RE = \/(.+)\/;/.exec(texts.api)?.[1];
+    if (!prefix || !chromeRe || !new RegExp(chromeRe).test(`${prefix}wt-abcdef-1`)) failures.push(`agentFlag: the frontend agent row-key prefix ${JSON.stringify(prefix)} is not the form chrome recognises (${chromeRe}), so a restored agent row reopens as a user tab (agent-browser-02)`);
+    if (!/const key = asAgent \? `\$\{AGENT_ROW_KEY_PREFIX\}\$\{id\}` : rowKey;/.test(texts.webTab)) failures.push(`agentFlag: ${FILES.webTab} createWidget does not key an agent tab with AGENT_ROW_KEY_PREFIX (agent-browser-02)`);
+    const setups = stripComments(texts.setups);
+    if (!/rowKey: tab\.rowKey, url: tab\.url/.test(setups)) failures.push(`agentFlag: session restore: ${FILES.setups} saveSession no longer saves each tab's row key, so an agent row cannot be recognised on the next launch`);
+    if (!/const options: WebTabOptions = \{.*key: tab\.rowKey \};/.test(setups)) failures.push(`agentFlag: Setup and session restore: ${FILES.setups} restoreWebTab no longer opens a tab under its saved row key (agent-browser-02)`);
+    if (!/openUrl\(tab\.url, tab\.key/.test(stripComments(texts.chromeBar))) failures.push(`agentFlag: Reopen Closed Tab: ${FILES.chromeBar} reopenClosedTabRow no longer opens the closed row under its key (agent-browser-02)`);
     w.api.webTabOpen(w.theiaBrowser, w.frontend, 'u9', 'https://example.com/', undefined, undefined, null, false);
     if (w.webTabs.get('u9')?.agent === true) failures.push('agentFlag: a fresh user tab was made an agent tab');
 
@@ -496,7 +520,9 @@ async function stopClause(texts) {
     const w = worldOf(texts);
     w.addTab('a1', { agent: true });
     w.addTab('a2', { agent: true });
-    w.addTab('f1', { agent: true, owner: w.otherFrontend });
+    // A frontend in another shell window: Stop is the window's, so it is not stopped.
+    const otherWindow = { browsingContext: { top: { embedderElement: { ownerDocument: { defaultView: {} } } } } };
+    w.addTab('f1', { agent: true, owner: otherWindow });
     if (w.api.webTabOpen(w.theiaBrowser, w.frontend, 'r1', 'https://example.com/', undefined, undefined, null, true) !== 'opened') return ['stop: broken instrument: the agent open did not open'];
     w.api.webTabClose('r1');
     const stopped = await w.stop('a1');
@@ -508,8 +534,15 @@ async function stopClause(texts) {
     const reopen = w.api.webTabOpen(w.theiaBrowser, w.frontend, 'r1', 'https://example.com/', undefined, undefined, null, true);
     const reopenCall = await w.agent('r1', 'browser.click', { element: '#e' });
     if (reopen !== 'opened' || reopenCall?.where !== 'agent-stopped') failures.push(`stop: a stopped frontend's crashed agent tab reopened ${reopen} and answered ${JSON.stringify(reopenCall?.where)}; expected opened and agent-stopped`);
-    const foreign = await w.agent('f1', 'browser.click', { element: '#e' }, w.otherFrontend);
-    if (foreign?.where !== 'done') failures.push(`stop: Stop in one frontend stopped another frontend's agent tab (${JSON.stringify(foreign?.where)})`);
+    const foreign = await w.agent('f1', 'browser.click', { element: '#e' }, otherWindow);
+    if (foreign?.where !== 'done') failures.push(`stop: Stop in one shell window stopped another window's agent tab (${JSON.stringify(foreign?.where)})`);
+    // A reload of the Theia document is a new frontend actor in the same window: the stop holds for it.
+    const reloaded = { browsingContext: { top: { embedderElement: w.theiaBrowser } } };
+    const afterReload = w.api.webTabOpen(w.theiaBrowser, reloaded, 'n5', 'about:blank', 'web:agent-n5', undefined, null, true);
+    if (afterReload !== 'agent-stopped' || w.webTabs.has('n5')) failures.push(`stop: after a reload of the Theia document a new agent tab answered ${afterReload}; Stop must survive a frontend reload, which an agent with a shell can force (agent-browser-04)`);
+    // Chrome tells the frontend which tabs are agent tabs, so the mark does not depend on the widget's own flag.
+    const created = w.rec.pushes.filter(p => p.kind === 'agentControlChanged' && p.tabId === 'r1');
+    if (!created.length || created.some(p => p.agent !== true)) failures.push(`stop: chrome's control pushes for agent tab r1 (${JSON.stringify(created)}) do not carry agent true, so a restored agent row with no widget flag has no mark, Stop or Resume (agent-browser-04)`);
     const lastPush = w.rec.pushes.filter(p => p.kind === 'agentControlChanged' && p.tabId === 'a2').at(-1);
     if (lastPush?.stopped !== true) failures.push(`stop: the other agent tab's mark was not told it is stopped (${JSON.stringify(lastPush)})`);
     const resumed = await w.actionArms({ kind: 'webTabAgentStop', tabId: 'a2', resume: true }, w.frontend);
@@ -555,9 +588,10 @@ async function stopClause(texts) {
     }
     const mark = bodyOf(stripComments(texts.chromeBar), 'protected renderAgentControl(): React.ReactNode {') ?? '';
     const guard = /if \(([^)]*)\) \{\s*return undefined;/.exec(mark)?.[1] ?? '';
-    if (!/\.agent\b/.test(guard) || /agentControl\.active/.test(guard)) {
+    if (!/agentControl\.agent\b/.test(guard) || /agentControl\.active/.test(guard)) {
         failures.push(`stop: the chrome-bar mark is shown on "${guard}", not on every agent tab, so the user cannot stop an agent before it acts (agent-browser-04)`);
     }
+    if (!/agent: detail\.agent === true/.test(texts.webTab)) failures.push(`stop: ${FILES.webTab} does not keep chrome's agent status from the agentControlChanged push (agent-browser-04)`);
     if (!/agentStop\(stopped\)/.test(mark)) failures.push('stop: the chrome-bar mark has no Resume on a stopped agent tab');
     return failures;
 }
@@ -661,6 +695,51 @@ function replaceOnce(text, from, to, what) {
 
 const PLANTS = [
     {
+        name: 'agent-browser-04: Stop keyed on the frontend actor (a reload clears it)',
+        plant: t => ({ ...t, api: replaceOnce(t.api, 'return actorRef?.browsingContext?.top?.embedderElement?.ownerDocument?.defaultView ?? actorRef ?? null;', 'return actorRef ?? null;', 'stop scope') }),
+        expect: 'Stop must survive a frontend reload',
+    },
+    {
+        name: 'agent-browser-04: the control push carries no agent status',
+        plant: t => ({ ...t, api: replaceOnce(t.api, 'stopped: control.stopped, agent: entry.agent === true });', 'stopped: control.stopped });', 'push agent') }),
+        expect: 'do not carry agent true',
+    },
+    {
+        name: 'agent-browser-04: the mark keyed on the widget flag',
+        plant: t => ({ ...t, chromeBar: replaceOnce(t.chromeBar, 'if (!tab?.agentControl.agent) {', 'if (!tab?.agent) {', 'mark widget flag') }),
+        expect: 'not on every agent tab',
+    },
+    {
+        name: 'agent-browser-04: the widget drops the chrome agent status',
+        plant: t => ({ ...t, webTab: replaceOnce(t.webTab, 'agent: detail.agent === true', 'agent: false', 'push read') }),
+        expect: 'does not keep chrome' + "'s agent status",
+    },
+    {
+        name: 'agent-browser-02: chrome accepts an agent tab under a user row key',
+        plant: t => ({ ...t, api: replaceOnce(t.api, '      if (!AGENT_ROW_KEY_RE.test(key)) {', '      if (false) {', 'key refusal') }),
+        expect: 'an agent open under a user row key answered',
+    },
+    {
+        name: 'agent-browser-02: the frontend keys agent tabs like user tabs',
+        plant: t => ({ ...t, webTab: replaceOnce(t.webTab, "export const AGENT_ROW_KEY_PREFIX = 'web:agent-';", "export const AGENT_ROW_KEY_PREFIX = 'web:wt-';", 'prefix') }),
+        expect: 'is not the form chrome recognises',
+    },
+    {
+        name: 'agent-browser-02 (session and Setup restore): restoreWebTab opens a fresh row key',
+        plant: t => ({ ...t, setups: replaceOnce(t.setups, 'url: tab.url, key: tab.rowKey };', 'url: tab.url };', 'restore key') }),
+        expect: 'restoreWebTab no longer opens a tab under its saved row key',
+    },
+    {
+        name: 'agent-browser-02 (session restore): saveSession drops the row key',
+        plant: t => ({ ...t, setups: replaceOnce(t.setups, '.map(tab => ({ rowKey: tab.rowKey, url: tab.url,', '.map(tab => ({ url: tab.url,', 'snapshot key') }),
+        expect: 'saveSession no longer saves',
+    },
+    {
+        name: 'agent-browser-02 (Reopen Closed Tab): the closed row reopens under a fresh key',
+        plant: t => ({ ...t, chromeBar: replaceOnce(t.chromeBar, 'openUrl(tab.url, tab.key ?? undefined)', 'openUrl(tab.url)', 'reopen key') }),
+        expect: 'reopenClosedTabRow no longer opens',
+    },
+    {
         name: 'orcad-hosting-03: the IPv6 table is not read',
         plant: t => ({ ...t, api: replaceOnce(t.api, 'text("/proc/net/tcp6")', 'Promise.resolve("")', 'tcp6') }),
         expect: 'tcp6 holds a dual-stack listener',
@@ -717,12 +796,12 @@ const PLANTS = [
     },
     {
         name: 'agent-browser-04: Stop ends control of the one tab only',
-        plant: t => ({ ...t, api: replaceOnce(replaceOnce(t.api, 'for (const [tabId, other] of [...owned.filter(([id]) => id !== data.tabId), [data.tabId, entry]]) {', 'for (const [tabId, other] of [[data.tabId, entry]]) {', 'stop loop'), 'agentStoppedOwners.add(actorRef);', 'void 0;', 'owner stop') }),
+        plant: t => ({ ...t, api: replaceOnce(replaceOnce(t.api, 'for (const [tabId, other] of [...owned.filter(([id]) => id !== data.tabId), [data.tabId, entry]]) {', 'for (const [tabId, other] of [[data.tabId, entry]]) {', 'stop loop'), 'agentStoppedScopes.add(scope);', 'void 0;', 'owner stop') }),
         expect: 'another agent tab of the same frontend answered',
     },
     {
         name: 'agent-browser-04: chrome opens new agent tabs after Stop',
-        plant: t => ({ ...t, api: replaceOnce(t.api, 'if (agent === true && !remembered && agentOwnerStopped(actorRef)) {', 'if (false) {', 'open refusal') }),
+        plant: t => ({ ...t, api: replaceOnce(t.api, 'if (agent === true && !agentTabIds.has(tabId) && agentOwnerStopped(actorRef)) {', 'if (false) {', 'open refusal') }),
         expect: 'a new agent tab after Stop answered',
     },
     {
@@ -762,7 +841,7 @@ const PLANTS = [
     },
     {
         name: 'agent-browser-02: chrome forgets an agent tab row key',
-        plant: t => ({ ...t, api: replaceOnce(t.api, 'agentRowKeys.has(key || `web:${tabId}`)', 'false', 'remembered key') }),
+        plant: t => ({ ...t, api: replaceOnce(t.api, 'return agentTabIds.has(tabId) || AGENT_ROW_KEY_RE.test(key ?? "");', 'return agentTabIds.has(tabId);', 'remembered key') }),
         expect: 'under an agent tab\'s row key',
     },
     {

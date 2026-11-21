@@ -3610,10 +3610,19 @@ export const PowerBrowserAPI = Object.freeze({
     // agent-browser-04: while the user has agents stopped, no new agent tab is made; a remembered one may reopen (it
     // is stopped from creation).
     const remembered = pending === null && agentTabRemembered(tabId, key);
-    if (agent === true && !remembered && agentOwnerStopped(actorRef)) {
+    if (agent === true && !agentTabIds.has(tabId) && agentOwnerStopped(actorRef)) {
       return "agent-stopped";
     }
     agent = agent === true || remembered;
+    // agent-browser-02, across a relaunch: an agent tab lives under an agent row key, so its snapshot, Setup,
+    // closed-tab row and kept history all carry the key and reopen as an agent tab. An agent open under any other
+    // explicit key is refused; with no key, the key is derived the same way (webTabAttach keeps it).
+    if (agent === true && pending === null) {
+      key = key ?? `${AGENT_ROW_KEY_PREFIX}${tabId}`;
+      if (!AGENT_ROW_KEY_RE.test(key)) {
+        return "unavailable";
+      }
+    }
     // Phase 66 (P66-26): an agent overlay loads in the Orca-agent container, never the user's; no container, no tab.
     const userContextId = agent === true ? agentContainerId() : 0;
     if (agent === true && !userContextId) {
@@ -11343,13 +11352,16 @@ function agentContainerId() {
   }
 }
 
-// agent-browser-02: every tab id and row key chrome created an agent tab under, for the session. webTabClose does not
-// clear them, so an overlay re-created under either is an agent overlay again (webTabOpen).
+// agent-browser-02: every tab id chrome created an agent tab under, for the session (webTabClose does not clear it),
+// and the agent row-key form, for good: an agent tab's row key is web:agent-<...> (the frontend's
+// AGENT_ROW_KEY_PREFIX), stored with its session snapshot, Setup, closed-tab row and kept history, so a restore after
+// a relaunch, when this set is empty, is an agent tab again. A user tab's key never has the form.
 const agentTabIds = new Set();
-const agentRowKeys = new Set();
+const AGENT_ROW_KEY_PREFIX = "web:agent-";
+const AGENT_ROW_KEY_RE = /^web:agent-[A-Za-z0-9_-]{1,54}$/;
 
 function agentTabRemembered(tabId, key) {
-  return agentTabIds.has(tabId) || agentRowKeys.has(key || `web:${tabId}`);
+  return agentTabIds.has(tabId) || AGENT_ROW_KEY_RE.test(key ?? "");
 }
 
 // webTabOpen's agent branch: the flag, the container the overlay was created in, the network log and the focus guard.
@@ -11357,7 +11369,6 @@ function agentTabCreated(entry, userContextId, tabId) {
   entry.agent = true;
   entry.agentUserContextId = userContextId;
   agentTabIds.add(tabId);
-  agentRowKeys.add(entry.rowKey);
   agentContainerIds.add(userContextId);
   // D-35, the content wall: set before the first load, so every document of the overlay carries it. D-37 adds the
   // download wall to the same write.
@@ -11366,11 +11377,12 @@ function agentTabCreated(entry, userContextId, tabId) {
   agentNetworkInstall();
   agentProtocolWallInstall();
   agentFocusGuardInstall(entry.browser.ownerDocument.defaultView);
-  // agent-browser-04: a tab re-created while its frontend has agents stopped is stopped from the start.
+  // agent-browser-04: a tab re-created while its window has agents stopped is stopped from the start; either way
+  // the frontend learns from chrome that this is an agent tab (a restored widget may carry no flag of its own).
   if (agentOwnerStopped(entry.owner)) {
     agentControlOf(entry).stopped = true;
-    agentPush(tabId, entry);
   }
+  agentPush(tabId, entry);
 }
 
 // D-35 (66-08): a new window, tab or popup whose opener is an agent overlay is refused on every path; the agent's own
@@ -12060,7 +12072,8 @@ function agentPush(tabId, entry) {
   const control = agentControlOf(entry);
   const theiaBrowser = entry.owner?.browsingContext?.top?.embedderElement;
   if (theiaBrowser) {
-    sendWebTabPush(theiaBrowser, { kind: "agentControlChanged", tabId, active: control.active, stopped: control.stopped });
+    // agent-browser-04: the push carries chrome's agent status, so the mark follows chrome, not the widget's own flag.
+    sendWebTabPush(theiaBrowser, { kind: "agentControlChanged", tabId, active: control.active, stopped: control.stopped, agent: entry.agent === true });
   }
 }
 
@@ -12237,14 +12250,20 @@ async function handleWebTabAgent(data, actorRef) {
   return outcome.where === "done" ? { ok: true, kind, where: "done", result: outcome.result } : { ok: true, kind, where: "failed", code: outcome.code };
 }
 
-// agent-browser-04: Stop is the frontend's, not one tab's. A Stop pressed on any agent tab stops every agent tab that
-// frontend owns, and while it lasts chrome refuses every agent call (agentWallVerdict) and every new agent tab
-// (webTabOpen answers agent-stopped), so an agent cannot carry on through a new background tab. It lasts until the
-// user presses Resume on a stopped agent tab's mark, or the frontend goes (its actor is the key).
-const agentStoppedOwners = new WeakSet();
+// agent-browser-04: Stop is the shell window's, not one tab's. A Stop pressed on any agent tab stops every agent tab
+// of that window, and while it lasts chrome refuses every agent call (agentWallVerdict) and every new agent tab
+// (webTabOpen answers agent-stopped), so an agent cannot carry on through a new background tab. The key is the shell
+// window, not the frontend's actor, so a reload of the Theia document (which an agent with a shell can force) does not
+// clear it; only Resume on a stopped agent tab's mark, or the window closing, does.
+const agentStoppedScopes = new WeakSet();
+
+function agentStopScope(actorRef) {
+  return actorRef?.browsingContext?.top?.embedderElement?.ownerDocument?.defaultView ?? actorRef ?? null;
+}
 
 function agentOwnerStopped(actorRef) {
-  return !!actorRef && agentStoppedOwners.has(actorRef);
+  const scope = agentStopScope(actorRef);
+  return !!scope && agentStoppedScopes.has(scope);
 }
 
 function agentStopEntry(tabId, entry) {
@@ -12268,7 +12287,7 @@ function agentStopEntry(tabId, entry) {
 }
 
 // Stop (P66-22): sent only from the chrome bar's agent mark. `resume: true` is the mark's Resume button on a stopped
-// agent tab. Both act on every agent tab of the sender's frontend (agent-browser-04).
+// agent tab. Both act on every agent tab of the sender's shell window (agent-browser-04).
 function handleWebTabAgentStop(data, actorRef) {
   const kind = "webTabAgentStop";
   if (!webTabIdIsValid(data.tabId)) {
@@ -12284,9 +12303,10 @@ function handleWebTabAgentStop(data, actorRef) {
   if (entry.agent !== true) {
     return { ok: true, kind, where: "not-agent-tab" };
   }
-  const owned = [...webTabs].filter(([, other]) => other.owner === actorRef && other.agent === true);
+  const scope = agentStopScope(actorRef);
+  const owned = [...webTabs].filter(([, other]) => other.agent === true && agentStopScope(other.owner) === scope);
   if (data.resume === true) {
-    agentStoppedOwners.delete(actorRef);
+    agentStoppedScopes.delete(scope);
     for (const [tabId, other] of owned) {
       if (other.agentControl?.stopped) {
         other.agentControl.stopped = false;
@@ -12295,7 +12315,7 @@ function handleWebTabAgentStop(data, actorRef) {
     }
     return { ok: true, kind, where: "resumed" };
   }
-  agentStoppedOwners.add(actorRef);
+  agentStoppedScopes.add(scope);
   // The tab the user pressed Stop on goes last, so its push is the last one the frontend sees.
   for (const [tabId, other] of [...owned.filter(([id]) => id !== data.tabId), [data.tabId, entry]]) {
     agentStopEntry(tabId, other);

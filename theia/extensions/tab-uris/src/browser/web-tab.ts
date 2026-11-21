@@ -267,6 +267,8 @@ export interface NotificationBarText {
 export interface WebTabAgentControl {
     active: boolean;
     stopped: boolean;
+    /** agent-browser-04: chrome's own word that this is an agent tab (a restored agent row's widget carries no flag). */
+    agent: boolean;
 }
 
 /** Phase 66 (P66-21): the title class of a tab an agent controls, so a background tab an agent drives is identifiable in the dock. */
@@ -611,7 +613,7 @@ export class WebTabChannel {
             if (!widget) {
                 return;
             }
-            widget.setAgentControl({ active: detail.active === true, stopped: detail.stopped === true });
+            widget.setAgentControl({ active: detail.active === true, stopped: detail.stopped === true, agent: detail.agent === true });
             this.tabStatusEmitter.fire(widget);
         });
         // Phase 37 plan 04 (D-08): a tab's notification bar appears, changes or goes. Only a known bar kind is kept, and
@@ -839,7 +841,7 @@ export class WebTabWidget extends BaseWidget {
     sharing: WebTabSharing = { camera: false, microphone: false, screen: false };
 
     /** Phase 66 (P66-20): whether an Orca agent controls this tab and whether the user stopped it, only from chrome's agentControlChanged push. */
-    agentControl: WebTabAgentControl = { active: false, stopped: false };
+    agentControl: WebTabAgentControl = { active: false, stopped: false, agent: false };
 
     /** Phase 37 plan 04 (D-08): this tab's notification bars, one per kind, from chrome's notificationBar push. */
     readonly notificationBars = new Map<NotificationBarKind, NotificationBar>();
@@ -1521,13 +1523,14 @@ export class WebTabWidget extends BaseWidget {
     }
 
     /**
-     * Phase 66 (P66-21): stores chrome's agent state and marks the tab's title. agent-browser-04: an agent tab is
-     * marked for its whole life, so a background tab an agent opened is identifiable before the agent acts in it.
+     * Phase 66 (P66-21): stores chrome's agent state and marks the tab's title. agent-browser-04: an agent tab, as
+     * chrome reports it, is marked for its whole life, so a background tab an agent opened is identifiable before the
+     * agent acts in it, a restored one included.
      */
     setAgentControl(control: WebTabAgentControl): void {
         this.agentControl = control;
         const classes = this.title.className.split(' ').filter(c => c && c !== AGENT_CONTROLLED_CLASS);
-        this.title.className = (this.agent || control.active ? [...classes, AGENT_CONTROLLED_CLASS] : classes).join(' ');
+        this.title.className = (control.agent || control.active ? [...classes, AGENT_CONTROLLED_CLASS] : classes).join(' ');
     }
 
     /**
@@ -1689,6 +1692,9 @@ let nextTabSeq = 0;
  */
 export const WEB_TAB_SESSION = Math.random().toString(36).slice(2, 8);
 
+/** agent-browser-02: the row-key prefix of every agent tab; chrome's AGENT_ROW_KEY_RE is the same prefix. */
+export const AGENT_ROW_KEY_PREFIX = 'web:agent-';
+
 /** True only for an id minted by THIS frontend session. The factory's admission test. */
 export function isCurrentSessionTabId(id: string): boolean {
     return typeof id === 'string' && id.startsWith(`wt-${WEB_TAB_SESSION}-`);
@@ -1845,7 +1851,12 @@ export class WebTabOpenHandler implements OpenHandler, FrontendApplicationContri
     }
 
     protected createWidget(url: string, rowKey?: string, grant?: string, asAgent?: boolean): Promise<WebTabWidget> {
-        const options: WebTabOptions = { id: `wt-${WEB_TAB_SESSION}-${++nextTabSeq}`, url, ...(rowKey ? { key: rowKey } : {}), ...(grant ? { grant } : {}), ...(asAgent ? { agent: true } : {}) };
+        const id = `wt-${WEB_TAB_SESSION}-${++nextTabSeq}`;
+        // agent-browser-02: an agent tab's row key is web:agent-<id>. The key travels with its session snapshot, Setup,
+        // closed-tab row and kept history, and chrome makes every open under such a key an agent tab, after a
+        // relaunch too; chrome refuses an agent open under any other key.
+        const key = asAgent ? `${AGENT_ROW_KEY_PREFIX}${id}` : rowKey;
+        const options: WebTabOptions = { id, url, ...(key ? { key } : {}), ...(grant ? { grant } : {}), ...(asAgent ? { agent: true } : {}) };
         return this.widgetManager.getOrCreateWidget<WebTabWidget>(WEB_TAB_FACTORY_ID, options);
     }
 }
