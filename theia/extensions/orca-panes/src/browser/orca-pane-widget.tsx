@@ -155,17 +155,23 @@ export class OrcaPaneWidget extends ReactWidget {
         (focusable ?? this.node).focus();
     }
 
-    /** P64-11: ask Orca's own close (with its confirmation); never dispose here. */
+    /**
+     * P64-11: ask Orca's own close (with its confirmation); never dispose here while Orca can receive it.
+     * Audit fix (64-CR-02, theia-pane-hosting-01): until the pane bundle has booted, Orca cannot receive a close (the
+     * boot failed or is still waiting for orcad), so the tab closes here: only the restored record is behind it. An
+     * Orca pane that does exist comes back by key on the first list after the boot (P64-28).
+     */
     protected override onCloseRequest(_msg: Message): void {
         if (this.tabless) {
             this.dispose(); // no Orca tab backs a page tab, so there is no Orca close to ask
             return;
         }
-        const { worktreeId, tabId, paneKey } = this.options;
-        if (this.bundle.failed) {
-            console.info(`${LOG_PREFIX} Orca ${this.options.kind} pane close not sent: the pane bundle did not boot`);
+        if (!this.bundle.isBooted) {
+            console.info(`${LOG_PREFIX} Orca ${this.options.kind} tab closed in PowerBrowser only: the pane bundle has not booted`);
+            this.dispose();
             return;
         }
+        const { worktreeId, tabId, paneKey } = this.options;
         this.bundle.ready().then(api => api.closePane({ worktreeId, tabId, paneKey }))
             .catch(() => { /* the bundle logged its failed step once */ });
     }
