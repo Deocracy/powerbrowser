@@ -545,9 +545,13 @@ export function failureClassOf({ state, restarting, step, code, offerUnavailable
   return null;
 }
 
-/** The orcaStatus reply body: the state and the class, and nothing else of getState() (P67-04). */
+/**
+ * The orcaStatus reply body: the state, the class and the start generation, and nothing else of getState()
+ * (P67-04). Audit fix 67-CR-01 (lane G3b): the generation is a count of orcad starts that reached ready in this
+ * session, a plain integer that names no process, port or path; the frontend re-pairs when it changes.
+ */
 export function orcaStatusReply(state) {
-  return { state: state.state, failureClass: state.failureClass };
+  return { state: state.state, failureClass: state.failureClass, generation: Number.isInteger(state.generation) && state.generation >= 0 ? state.generation : 0 };
 }
 
 // ---------------------------------------------------------------------------

@@ -43,6 +43,8 @@
 //   sidecar-orca-port  (67-WR-03, lane G3b handoff) TheiaService gives the Theia backend POWERBROWSER_ORCA_PORT
 //                      from OrcaService.orcadPort, the accessor orcad's own start reads, wired in powerbrowser.js
 //                      before Theia starts.
+//   status-generation  (67-CR-01, lane G3b handoff) the status reply carries the count of starts that reached
+//                      ready, and nothing beyond the state, the class and that count.
 //
 // --self-test copies powerbrowser/shell into a mkdtemp tree, requires it green (watch-orcad skipped), then
 // plants each pre-fix fault and requires red naming the clause.
@@ -436,6 +438,24 @@ async function theiaClears(paths, env) {
     return fails;
 }
 
+/** 67-CR-01 (lane G3b handoff): the status reply counts orcad starts that reached ready, and carries no identifier. */
+async function statusGeneration(paths, env) {
+    const fails = [];
+    let first;
+    const b = makeBoundary({ alive: [[5002, '222']], tree: tree3(5001), orcad: (n) => (n === 1 ? (first = readyOrcad(5001)) : readyOrcad(6001)) });
+    const svc = await loadService(paths, b, env);
+    await svc.start();
+    const one = env.orcaStatusReply(svc.getState());
+    first.exit(1);
+    await until(() => orcadSpawns(b.calls).length === 2 && svc.getState().state === 'ready');
+    const two = env.orcaStatusReply(svc.getState());
+    if (one.generation !== 1 || two.generation !== 2) fails.push(`status-generation: the status reply's generation is ${one.generation} after the first ready and ${two.generation} after the respawn's, not 1 and 2, so the frontend cannot tell that orcad restarted`);
+    const keys = Object.keys(two).sort().join();
+    if (keys !== 'failureClass,generation,state') fails.push(`status-generation: the status reply carries ${keys}, not the state, the class and the generation`);
+    await svc.stop();
+    return fails;
+}
+
 /** 67-WR-03 (from lane G3b): the Theia backend is given the port OrcaService starts orcad on, from the one accessor. */
 async function sidecarOrcaPort(paths, env) {
     const fails = [];
@@ -728,7 +748,7 @@ export async function check(paths, { fixture = true } = {}) {
         ['watch-wired', watchWired], ['restart-keeps-daemon', restartKeepsDaemon], ['failed-start', failedStart],
         ['stop-during-ready', stopDuringReady], ['exit-handoff', exitHandOff], ['no-offer', noOffer],
         ['start-after-quit', startAfterQuit], ['crash-loop', crashLoop], ['theia-clears', theiaClears],
-        ['platform-alias', platformAlias], ['port-holder', portHolder], ['sidecar-orca-port', sidecarOrcaPort],
+        ['platform-alias', platformAlias], ['port-holder', portHolder], ['sidecar-orca-port', sidecarOrcaPort], ['status-generation', statusGeneration],
     ];
     for (const [label, fn] of clauses) {
         try { fails.push(...(await fn(paths, env))); } catch (err) { fails.push(`${label}: threw ${err && err.stack ? err.stack.split('\n').slice(0, 2).join(' ') : err}`); }
@@ -779,6 +799,8 @@ function plants() {
         { name: 'Theia backend not given the orcad port', naming: 'sidecar-orca-port', file: 'TheiaService.sys.mjs', edit: swap('      ...(orcaPort ? { POWERBROWSER_ORCA_PORT: String(orcaPort) } : {}),\n', '') },
         { name: 'Theia reads its own port default', naming: 'sidecar-orca-port', file: 'TheiaService.sys.mjs', edit: swap('const port = this._orcaPortSource ? this._orcaPortSource() : null;', 'const port = 26768;') },
         { name: 'port source not wired before Theia starts', naming: 'sidecar-orca-port', file: 'powerbrowser.js', edit: swap('      TheiaService.setOrcaPortSource(() => OrcaService.orcadPort());\n', '') },
+        { name: 'generation not counted', naming: 'status-generation', file: S, edit: swap('    this._generation += 1;\n', '') },
+        { name: 'generation left out of the reply', naming: 'status-generation', file: E, edit: swap(', generation: Number.isInteger(state.generation) && state.generation >= 0 ? state.generation : 0 };', ' };') },
         { name: 'port holder row dropped', naming: 'port-holder', file: S, edit: swap('...rows, ...holder]', '...rows]') },
     ];
 }

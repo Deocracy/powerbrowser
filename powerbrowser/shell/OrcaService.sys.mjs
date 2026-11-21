@@ -71,6 +71,8 @@ export const OrcaService = {
   // Audit fixes 62-WR-02 and orcad-hosting-07.
   _quitHooksArmed: false,
   _exitTimes: [],
+  // Audit fix 67-CR-01: orcad starts that reached ready in this session.
+  _generation: 0,
 
   /**
    * Starts orcad once per browser session: resolve paths, reap a previous session, spawn, wait for the
@@ -615,6 +617,7 @@ export const OrcaService = {
       return { ok: false, recoverable: false, step: "stopping", rows: [] };
     }
     this._state = "ready";
+    this._generation += 1;
     this._failureRows = [];
     this._restarting = false;
     // A new orcad start is a new pairing: a client failure reported against the old one is over.
@@ -882,6 +885,7 @@ export const OrcaService = {
       bridgeDir: this._bridgeDir,
       orcaVersion: this._orcaVersion,
       failureClass: this._failureClass(),
+      generation: this._generation,
     };
   },
 
