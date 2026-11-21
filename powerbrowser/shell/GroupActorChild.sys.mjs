@@ -246,9 +246,10 @@ function agentEnabled(actor, selector) {
 }
 
 // The element's centre in CSS pixels of the viewport, scrolled into view first; the hit at that point must be the
-// element or inside it, else the element is covered or has no box.
+// element or inside it, else the element is covered or has no box. behavior "instant" (59-WR-02): the default "auto"
+// honours a page's CSS scroll-behavior: smooth, which scrolls asynchronously and leaves the rect read below pre-scroll.
 function agentCentre(actor, element) {
-  element.scrollIntoView({ block: "center", inline: "center" });
+  element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
   const rect = element.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) {
     throw new AgentRowError("browser_element_not_interactable");
@@ -532,7 +533,7 @@ const AGENT_RUN = {
     return { scrolled: params.direction };
   },
   "browser.scrollIntoView": (actor, params) => {
-    agentElement(actor, params.element).scrollIntoView({ block: "center", inline: "center" });
+    agentElement(actor, params.element).scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
     return { scrolled: params.element };
   },
   "browser.keypress": (actor, params) => {
