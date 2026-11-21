@@ -89,9 +89,14 @@ function main() {
   const agentBrowserVersion = JSON.parse(readFileSync(join(AB_DIR, 'package.json'), 'utf8')).version;
   const chromium = findChromium();
   if (!chromium) fail('chromium', 'no Chromium: set AGENT_BROWSER_EXECUTABLE_PATH or put chromium on PATH');
+  // One scratch directory and one environment for every child process this run starts, Chromium's version probe included.
+  const scratch = mkdtempSync(join(tmpdir(), 'pb-snapshot-fixtures-'));
+  process.on('exit', () => rmSync(scratch, { recursive: true, force: true }));
+  for (const d of ['home', 'xdg-config', 'xdg-cache', 'xdg-data', 'xdg-runtime', 'tmp']) mkdirSync(join(scratch, d), { mode: 0o700 });
+  const env = agentBrowserEnv(process.env, chromium, scratch);
   let chromiumVersion;
   try {
-    chromiumVersion = execFileSync(chromium, ['--version'], { encoding: 'utf8' }).trim().replace(/^\D+/, '');
+    chromiumVersion = execFileSync(chromium, ['--version'], { env, cwd: scratch, encoding: 'utf8' }).trim().replace(/^\D+/, '');
   } catch (err) {
     fail('chromium', `${chromium} --version failed: ${err.message}`);
   }
@@ -115,9 +120,6 @@ function main() {
   server.listen(0, '127.0.0.1', async () => {
     const port = server.address().port;
     const session = `pb-snapshot-fixtures-${process.pid}`;
-    const scratch = mkdtempSync(join(tmpdir(), 'pb-snapshot-fixtures-'));
-    for (const d of ['home', 'xdg-config', 'xdg-cache', 'xdg-data', 'xdg-runtime', 'tmp']) mkdirSync(join(scratch, d), { mode: 0o700 });
-    const env = agentBrowserEnv(process.env, chromium, scratch);
     const run = async (step, args) => {
       let out;
       try {
@@ -159,7 +161,6 @@ function main() {
         // the session may already be gone
       }
       server.close();
-      rmSync(scratch, { recursive: true, force: true });
     }
   });
 }
@@ -177,6 +178,40 @@ function envFaults(env, scratch, chromium) {
   }
   for (const key of Object.keys(env)) if (!['PATH', 'LANG', 'LC_ALL', 'HOME', 'TMPDIR', 'AGENT_BROWSER_EXECUTABLE_PATH'].includes(key) && !key.startsWith('XDG_')) faults.push(`inherits ${key}`);
   if (env.PATH !== '/usr/bin:/bin') faults.push('PATH was not carried over');
+  return faults;
+}
+
+/** The text of the braced body that starts at `open` (the index of its `{`), or null when unbalanced. */
+function balanced(text, open, openCh, closeCh) {
+  let depth = 0;
+  for (let i = open; i < text.length; i += 1) {
+    if (text[i] === openCh) depth += 1;
+    else if (text[i] === closeCh && --depth === 0) return text.slice(open, i + 1);
+  }
+  return null;
+}
+
+/**
+ * What main() must do, read from this file's own source text: its environment comes only from agentBrowserEnv, and every
+ * child process it starts (the Chromium version probe, each agent-browser run, the session close) is given that environment
+ * and the scratch working directory. Returns the faults found, empty when main() is as required.
+ */
+export function mainFaults(src) {
+  const faults = [];
+  const at = src.indexOf('function main() {');
+  const body = at < 0 ? null : balanced(src, src.indexOf('{', at), '{', '}');
+  if (body === null) return ['main() was not found in the source'];
+  if (/\.\.\.\s*process\.env/.test(body)) faults.push('main() spreads process.env');
+  if ((body.match(/const env = agentBrowserEnv\(process\.env, chromium, scratch\);/g) ?? []).length !== 1) faults.push('main() does not build its environment with exactly one agentBrowserEnv(process.env, chromium, scratch)');
+  if (/\benv\s*[:=]\s*(?!agentBrowserEnv)\{/.test(body.replace(/\{ env[,\s]/g, ''))) faults.push('main() builds an environment object by hand');
+  const calls = [...body.matchAll(/(?:promisify\(execFile\)|\bexecFileSync|\bexecFile)\(/g)];
+  if (calls.length < 3) faults.push(`main() starts ${calls.length} child process call(s), fewer than the 3 it must (version probe, run, close), so this proof would cover nothing`);
+  for (const m of calls) {
+    const text = balanced(body, m.index + m[0].length - 1, '(', ')') ?? '';
+    const shown = text.replace(/\s+/g, ' ').slice(0, 60);
+    if (!/\{[^{}]*\benv\b[^{}]*\}/.test(text)) faults.push(`the child process call ${shown}... is not given env`);
+    if (!/\bcwd:\s*scratch\b/.test(text)) faults.push(`the child process call ${shown}... is not given cwd: scratch`);
+  }
   return faults;
 }
 
@@ -200,6 +235,31 @@ function selfTest() {
   for (const want of ['inherits AGENT_BROWSER_AUTO_CONNECT', 'inherits AGENT_BROWSER_INIT_SCRIPTS', 'inherits AGENT_BROWSER_PROFILE', 'HOME is "/home/dev"', 'inherits SECRET_TOKEN']) {
     if (planted.some((f) => f.includes(want))) console.log(`  ok pre-fix { ...process.env } construction -> red, naming '${want}'`);
     else { console.error(`  FAIL pre-fix { ...process.env } construction -> stayed green on '${want}'`); failures++; }
+  }
+  // main() itself, from this file's source text: control, then one plant per way it could stop using the helper.
+  const source = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+  const mainControl = mainFaults(source);
+  if (mainControl.length) {
+    console.error(`${NAME} self-test: FAIL -- main() is not as required (${mainControl.join('; ')}), so the main() plants below prove nothing`);
+    return 1;
+  }
+  console.log(`${NAME} self-test: control -- main() builds its environment only through agentBrowserEnv and gives every child process env and cwd: scratch`);
+  const mainPlants = [
+    ['main() spreads process.env again', (t) => t.replace('const env = agentBrowserEnv(process.env, chromium, scratch);', 'const env = { ...process.env, AGENT_BROWSER_EXECUTABLE_PATH: chromium };'), 'spreads process.env'],
+    ['main() builds no helper environment', (t) => t.replace('const env = agentBrowserEnv(process.env, chromium, scratch);', 'const env = {};'), 'does not build its environment'],
+    ['the version probe loses env', (t) => t.replace("execFileSync(chromium, ['--version'], { env, cwd: scratch,", "execFileSync(chromium, ['--version'], { cwd: scratch,"), 'is not given env'],
+    ['the version probe loses cwd', (t) => t.replace("execFileSync(chromium, ['--version'], { env, cwd: scratch,", "execFileSync(chromium, ['--version'], { env,"), 'is not given cwd: scratch'],
+    ['the agent-browser run loses env', (t) => t.replace("{ env, cwd: scratch, encoding: 'utf8', timeout: 120000 }", "{ cwd: scratch, encoding: 'utf8', timeout: 120000 }"), 'is not given env'],
+    ['the agent-browser run loses cwd', (t) => t.replace("{ env, cwd: scratch, encoding: 'utf8', timeout: 120000 }", "{ env, encoding: 'utf8', timeout: 120000 }"), 'is not given cwd: scratch'],
+    ['the session close loses env', (t) => t.replace("{ env, cwd: scratch, timeout: 60000 }", "{ cwd: scratch, timeout: 60000 }"), 'is not given env'],
+    ['the session close loses cwd', (t) => t.replace("{ env, cwd: scratch, timeout: 60000 }", "{ env, timeout: 60000 }"), 'is not given cwd: scratch'],
+  ];
+  for (const [name, mutate, want] of mainPlants) {
+    const mutated = mutate(source);
+    if (mutated === source) { console.error(`  FAIL ${name} -> the plant's anchor is absent from main()`); failures++; continue; }
+    const found = mainFaults(mutated);
+    if (found.some((f) => f.includes(want))) console.log(`  ok ${name} -> red, naming '${want}'`);
+    else { console.error(`  FAIL ${name} -> stayed green on '${want}': ${found.join('; ') || 'no fault'}`); failures++; }
   }
   const dropped = envFaults(agentBrowserEnv({ ...hostile, PATH: undefined }, chromium, scratch), scratch, chromium);
   if (dropped.includes('PATH was not carried over')) console.log("  ok a dropped PATH -> red, naming 'PATH was not carried over'");
