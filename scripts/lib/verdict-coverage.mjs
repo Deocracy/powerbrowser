@@ -6,7 +6,7 @@
 // new assertion with no plant, or a plant deleted, turns the self-test red naming the message.
 //
 // A message is a literal whose longest static run (the text between ${...} holes) is at least MIN_TEXT characters and
-// holds a space; short tokens (state words, codes, selectors) are not messages. No top-level side effects.
+// holds two words; short tokens (state words, codes, selectors, flags) are not messages. No top-level side effects.
 
 const MIN_TEXT = 12;
 
@@ -63,7 +63,9 @@ export function failMessages(fns) {
     for (const fn of fns) {
         for (const { longest } of literalsOf(fn.toString())) {
             const text = longest.trim();
-            if (text.length < MIN_TEXT || !text.includes(' ') || seen.has(text)) continue;
+            // A message holds at least two words (a token starting with a letter); `--bridge-dir '` and the like do not.
+            const words = text.split(/\s+/).filter((w) => /^[A-Za-z]/.test(w)).length;
+            if (text.length < MIN_TEXT || words < 2 || seen.has(text)) continue;
             seen.add(text);
             out.push({ fn: fn.name, text });
         }

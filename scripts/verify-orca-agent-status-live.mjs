@@ -42,11 +42,12 @@
 // from scratch (PATH, HOME, the data root); this shell's ORCA_* names never
 // reach Orca. MOZ_PURGE_CACHES=1 is set by the script.
 //
-// Run under the live lock, headless only:
-//   flock /home/chris/coding/Power-Browser/.git/pb-live.lock node scripts/verify-orca-agent-status-live.mjs
+// Headless only. The row takes the live lock itself (scripts/lib/live-lock.mjs); the
+// scratch repository is a mkdtemp folder, so two runs never remove each other's.
 //
-// SKIP (exit 0, last line "orca-agent-status-live: SKIP -- <cause>"): no built
-// PowerBrowser, no built orca/, or no claude on PATH. A passing run's last line
+// SKIP (exit 77, last line "orca-agent-status-live: SKIP -- <cause>"): no built
+// PowerBrowser, no built orca/, no claude on PATH, or a sign-in seedClaudeLogin
+// refuses (none, an API-key setup, under 60 min to expiry). A passing run's last line
 // starts "orca-agent-status-live: PASS -- " (63-04 reads it for TERM-02).
 //
 // Tier: full. --self-test is quick and pure: the verdicts over fixtures.
@@ -56,7 +57,7 @@
 //   node scripts/verify-orca-agent-status-live.mjs --self-test
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -66,6 +67,9 @@ import { descendants, ensurePbNode, installOutputRedaction } from './lib/orca-ru
 import { freePort, ppidMap, signalIdentity, startTicks } from './verify-orca-hidden-electron.mjs';
 import { deriveClaudeHookEvents, deriveStatusMap, readAgentStatus, scrubOwnOrcaEnv } from './verify-orca-agent-hooks.mjs';
 import { liveEnv, seedClaudeLogin, stopStrays } from './lib/firefox-bidi.mjs';
+import { holdLiveLock, lockWiringFails } from './lib/live-lock.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
+import { uncoveredMessages } from './lib/verdict-coverage.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-agent-status-live';
@@ -110,7 +114,7 @@ export function bridgeVerdict(obs) {
 
 /**
  * obs: { sequence: [statuses in order of change], statusMap: { working, waiting, done }, derivedWaitingEvent,
- * waitingNotDerivable, promptsSent, recordsBefore, recordsAfter }.
+ * promptsSent, recordsBefore, recordsAfter }.
  */
 export function agentVerdict(obs) {
     const fails = [];
@@ -120,9 +124,10 @@ export function agentVerdict(obs) {
     const iD = iW >= 0 ? obs.sequence.indexOf(m.done, iW) : -1;
     if (iW < 0) fails.push(`no working: the agent's status never read ${m.working} (read ${obs.sequence.join(' -> ') || 'nothing'})`);
     else if (iD < 0) fails.push(at(m.done) >= 0 ? `done before working: ${m.done} was read only before ${m.working}` : `no done: the agent's status never read ${m.done} after ${m.working}`);
+    // harness-live-security-08: the "waiting not derivable" note is taken exactly when the derivation names no waiting
+    // event, so an assertion that the note was not taken while one is named could never fire; it is gone.
     if (obs.derivedWaitingEvent) {
-        if (obs.waitingNotDerivable) fails.push(`"waiting not derivable" was recorded although the derivation names ${obs.derivedWaitingEvent} as the event Orca maps to waiting`);
-        else if (iW < 0 || obs.sequence.indexOf(m.waiting, iW) < 0) fails.push(`waiting required but absent: the derivation names ${obs.derivedWaitingEvent}, and ${m.waiting} was never read after ${m.working}`);
+        if (iW < 0 || obs.sequence.indexOf(m.waiting, iW) < 0) fails.push(`waiting required but absent: the derivation names ${obs.derivedWaitingEvent}, and ${m.waiting} was never read after ${m.working}`);
     }
     if (obs.promptsSent > PROMPT_CAP) fails.push(`model-turn cap exceeded: ${obs.promptsSent} prompts sent (the cap is ${PROMPT_CAP})`);
     if (!(obs.recordsAfter > obs.recordsBefore)) fails.push(`vacuous: Claude's session records for the repository did not grow (${obs.recordsBefore} before, ${obs.recordsAfter} after)`);
@@ -212,7 +217,7 @@ async function live() {
     const port = await freePort(OrcaEnv);
     const profile = await makeProfile({ 'powerbrowser.sidecar.nodePath': node.path, 'powerbrowser.orca.port': port, 'powerbrowser.orca.root': orcaDir });
     const work = join(REPO_ROOT, WORK_REL);
-    const repo = join(work, 'repo'); // a fixed path, so Claude's folder trust carries across runs
+    let repo = null; // a mkdtemp folder under work (harness-live-security-05: a fixed path let two runs remove each other's)
     const fails = [];
     const notes = [];
     const recordedForQuit = [];
@@ -223,9 +228,8 @@ async function live() {
     let promptsSent = 0;
     try {
         mkdirSync(work, { recursive: true });
-        if (!existsSync(join(repo, '.git'))) {
-            rmSync(repo, { recursive: true, force: true });
-            mkdirSync(repo, { recursive: true });
+        repo = mkdtempSync(join(work, 'repo-'));
+        {
             writeFileSync(join(repo, 'README'), 'orca-agent-status-live scratch repository\n');
             const git = (...a) => execFileSync('git', ['-C', repo, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', ...a], { env: { PATH: process.env.PATH ?? '', HOME: homedir() }, stdio: 'ignore' });
             git('init', '-q'); git('add', '.'); git('commit', '-q', '-m', 'fixture');
@@ -278,7 +282,7 @@ async function live() {
             }
             await sleep(3000); // the turn's trailing records
             const after = sessionRecords(repo);
-            fails.push(...agentVerdict({ sequence, statusMap: sm.map, derivedWaitingEvent, waitingNotDerivable: !derivedWaitingEvent, promptsSent, recordsBefore, recordsAfter: after.records }));
+            fails.push(...agentVerdict({ sequence, statusMap: sm.map, derivedWaitingEvent, promptsSent, recordsBefore, recordsAfter: after.records }));
             if (!derivedWaitingEvent) notes.push('waiting not derivable: the derivation names no Claude event Orca maps to waiting (orca-agent-hooks is red "source moved")');
             notes.push(`status sequence: ${sequence.join(' -> ') || 'none'}; session records ${recordsBefore} -> ${after.records}`);
             notes.push(`session id (P63-16): ${after.newest ? `the newest session file names ${after.newest}` : 'no session file'}; resume comes from Claude's side`);
@@ -314,7 +318,7 @@ async function live() {
         for (const [pid, ticks] of cleanup) signalIdentity(pid, ticks, 'SIGKILL');
         await stopStrays(profile.profileDir, { label: NAME }); // keepStrays: what the launch left is this row's to stop
         await profile.dispose();
-        rmSync(repo, { recursive: true, force: true });
+        if (repo) rmSync(repo, { recursive: true, force: true });
     }
     return fails.length ? { fails, notes } : { pass: true, notes, promptsSent };
 }
@@ -327,7 +331,7 @@ function control() {
         bridge: { bridgeDir, dataRootFile: { isFile: true, mode: 0o100600, content: '/run/user/1000/pb-orca-x\n' }, orcadUserData: '/run/user/1000/pb-orca-x',
             launcher: { mode: 0o100700, text: `#!/bin/sh\nexec '/n' '/w.mjs' --bridge-dir '${bridgeDir}' "$@"\n` }, wrapperExists: true },
         agent: { sequence: ['working', 'permission', 'working', 'idle'], statusMap: { working: 'working', waiting: 'permission', done: 'idle' },
-            derivedWaitingEvent: 'PermissionRequest', waitingNotDerivable: false, promptsSent: 1, recordsBefore: 4, recordsAfter: 31 },
+            derivedWaitingEvent: 'PermissionRequest', promptsSent: 1, recordsBefore: 4, recordsAfter: 31 },
         engine: { agentPid: 300, ancestors: [299, 200, 100, 1], daemonPid: 200, theiaPid: 150 },
         quit: { recorded: [{ pid: 300, ticks: '9', what: 'agent process' }, { pid: 200, ticks: '8', what: 'terminal daemon' }], alive: new Map([[300, null], [200, null]]) },
     };
@@ -347,7 +351,14 @@ const PLANTS = [
     ['orcad-data-root content differs', (o) => { o.bridge.dataRootFile.content = '/elsewhere\n'; }],
     ['launcher missing', (o) => { o.bridge.launcher = null; }],
     ['launcher mode 0644', (o) => { o.bridge.launcher.mode = 0o100644; }],
-    ['"waiting not derivable" was recorded although', (o) => { o.agent.waitingNotDerivable = true; }],
+    // harness-live-security-07: one plant per fail message (the coverage check below names any gap).
+    ['bridge folder not available', (o) => { o.bridge.bridgeDir = null; }],
+    ['orcad-data-root missing or not a regular file', (o) => { o.bridge.dataRootFile = null; }],
+    ['the launcher names a wrapper file that does not exist', (o) => { o.bridge.wrapperExists = false; }],
+    ['the launcher does not name the bridge folder', (o) => { o.bridge.launcher.text = "#!/bin/sh\nexec '/n' '/w.mjs' --bridge-dir '/elsewhere' \"$@\"\n"; }],
+    ['does not descend from the terminal daemon', (o) => { o.engine.ancestors = [299, 100, 1]; }],
+    ['no agent process', (o) => { o.engine.agentPid = null; }],
+    ['vacuous: no agent or terminal daemon was recorded', (o) => { o.quit.recorded = []; }],
 ];
 
 function selfTest() {
@@ -356,16 +367,20 @@ function selfTest() {
     const c = verdicts(control());
     if (c.length) { failures++; lines.push(`  FAIL control went red: ${c.join(' | ')}`); } else lines.push('  ok control: fixture observations green');
     const nd = control();
-    nd.agent.derivedWaitingEvent = null; nd.agent.waitingNotDerivable = true; nd.agent.sequence = ['working', 'idle'];
+    nd.agent.derivedWaitingEvent = null; nd.agent.sequence = ['working', 'idle'];
     const ndf = verdicts(nd);
     if (ndf.length) { failures++; lines.push(`  FAIL control (no waiting event derivable, a note only) went red: ${ndf.join(' | ')}`); } else lines.push('  ok control: no derivable waiting event is a note, not red');
+    const planted = [];
     for (const [needle, plant] of PLANTS) {
         const o = control();
         plant(o);
         const f = verdicts(o);
+        planted.push(...f);
         if (f.some((x) => x.includes(needle))) lines.push(`  ok plant: ${needle}`);
         else { failures++; lines.push(`  FAIL plant: ${needle}: stayed green or did not name it (${f.join(' | ') || 'no fails'})`); }
     }
+    for (const m of uncoveredMessages([bridgeVerdict, agentVerdict, engineVerdict, quitVerdict], planted)) { failures++; lines.push(`  FAIL coverage: no plant reaches ${m.fn}: "${m.text}"`); }
+    for (const f of lockWiringFails(NAME, import.meta.url)) { failures++; lines.push(`  FAIL ${f}`); }
     return { lines, failures, planted: PLANTS.length };
 }
 
@@ -387,12 +402,14 @@ if (isEntryPoint) {
         console.error(`${NAME}: FAIL -- unknown argument '${args[0]}' (usage: node ${SELF_REL} [--self-test])`);
         process.exit(2);
     }
+    const locked = holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT, args });
+    if (locked !== null) process.exit(locked);
     const restore = installOutputRedaction([]);
     let code = 0;
     try {
         const r = await live();
         for (const n of r.notes ?? []) console.log(`${NAME}: note -- ${n}`);
-        if (r.skip) console.log(`${NAME}: SKIP -- ${r.skip}`);
+        if (r.skip) { console.log(skipLine(NAME, r.skip)); code = SKIP_EXIT; }
         else if (r.fails) { for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`); code = 1; }
         else console.log(`${NAME}: PASS -- a real claude in an Orca terminal under Orca's terminal daemon read working, waiting and done through Orca's hooks with ${r.promptsSent} prompt; session records grew; the bridge folder holds orcad-data-root (0600, orcad's data root) and the claude-wrapper launcher (0700); the agent and the terminal daemon ended on quit`);
     } catch (e) {
