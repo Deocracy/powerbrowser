@@ -46,27 +46,60 @@ export interface BoundPage {
     url?: string;
 }
 
-/** Orca's page inventory limits (browser-client-host-protocol.ts). */
+/**
+ * Orca's page inventory limits (browser-client-host-protocol.ts): pages, the whole list's UTF-8 JSON bytes, one
+ * identity's JSON bytes, and a current URL's length. Orca refuses the whole attach when any one is exceeded.
+ */
 export const PAGE_INVENTORY_MAX_PAGES = 256;
+export const PAGE_INVENTORY_MAX_BYTES = 768 * 1024;
+export const PAGE_INVENTORY_IDENTITY_MAX_JSON_BYTES = 384;
 export const PAGE_INVENTORY_URL_MAX = 8192;
+
+const jsonBytes = (value: unknown): number => new TextEncoder().encode(JSON.stringify(value)).byteLength;
+
+export interface PageInventory {
+    entries: Record<string, unknown>[];
+    /** Bound pages of this host left out because an entry would break one of Orca's limits (66-CR-03 review). */
+    dropped: string[];
+}
 
 /**
  * Orca's page inventory entries for the bound pages of the attaching host. Orca refuses the whole attach when one entry
- * names another browserHostClientId, so an entry kept from another id is left out (66-CR-03).
+ * names another browserHostClientId, so an entry kept from another id is left out (66-CR-03). The list stays inside
+ * Orca's page count and byte budget: an entry that does not fit is first tried without its current URL, then left out
+ * and named in dropped, so the caller can end that page rather than lose it silently.
  */
-export function inventoryOf(pages: readonly BoundPage[], browserHostClientId: string): Record<string, unknown>[] {
-    return pages.filter(({ event }) => event.browserHostClientId === browserHostClientId).slice(0, PAGE_INVENTORY_MAX_PAGES).map(({ pageId, event, url }) => {
+export function inventoryOf(pages: readonly BoundPage[], browserHostClientId: string): PageInventory {
+    const entries: Record<string, unknown>[] = [];
+    const dropped: string[] = [];
+    let bytes = 2; // the brackets of the JSON array
+    for (const { pageId, event, url } of pages) {
+        if (event.browserHostClientId !== browserHostClientId) {
+            continue;
+        }
         const command = event.command as Record<string, unknown>;
-        return {
+        const entry: Record<string, unknown> = {
             authorityRuntimeId: event.authorityRuntimeId, authorityEpoch: event.authorityEpoch,
             browserHostClientId: event.browserHostClientId, browserHostGeneration: event.browserHostGeneration,
             browserPageId: pageId, pageHostGeneration: event.pageHostGeneration,
             browserProfileId: command.browserProfileId, executionHostKey: command.executionHostKey,
             state: 'active',
-            ...(url && url.length <= PAGE_INVENTORY_URL_MAX ? { currentUrl: url } : {}),
             ...(typeof command.workspaceId === 'string' ? { workspaceId: command.workspaceId } : {}),
         };
-    });
+        const identities = ['authorityRuntimeId', 'authorityEpoch', 'browserHostClientId', 'browserPageId', 'browserProfileId', 'executionHostKey', 'workspaceId'];
+        const separator = entries.length ? 1 : 0;
+        const withUrl = url && url.length <= PAGE_INVENTORY_URL_MAX ? { ...entry, currentUrl: url } : entry;
+        const fits = (candidate: Record<string, unknown>) => bytes + separator + jsonBytes(candidate) <= PAGE_INVENTORY_MAX_BYTES;
+        const chosen = fits(withUrl) ? withUrl : fits(entry) ? entry : undefined;
+        if (!chosen || entries.length >= PAGE_INVENTORY_MAX_PAGES
+            || identities.some(key => typeof entry[key] === 'string' && jsonBytes(entry[key]) > PAGE_INVENTORY_IDENTITY_MAX_JSON_BYTES)) {
+            dropped.push(pageId);
+            continue;
+        }
+        bytes += separator + jsonBytes(chosen);
+        entries.push(chosen);
+    }
+    return { entries, dropped };
 }
 
 /**
@@ -104,9 +137,21 @@ export function boundedOutcome(outcome: Outcome): Outcome {
  */
 export const AGENT_CALL_MIN_TIMEOUT_MS = 35_000;
 export const AGENT_CALL_MARGIN_MS = 5_000;
+/**
+ * 66-CR-04 review: the longest timeout an agent command may ask chrome for, 10 minutes. The agent supplies the value,
+ * so without a cap a value past the 32-bit timer limit (2^31 - 1 ms) makes the deadline timer fire at once, and a value
+ * just below it holds a listener and orcad's command open for weeks. agentParams lowers a larger timeout to this one
+ * before chrome sees it, so chrome's own wait ends at it too.
+ */
+export const AGENT_CALL_MAX_TIMEOUT_MS = 600_000;
+const timeoutOf = (params: Record<string, unknown> | undefined): number =>
+    typeof params?.timeout === 'number' && Number.isFinite(params.timeout) && params.timeout > 0 ? Math.min(params.timeout, AGENT_CALL_MAX_TIMEOUT_MS) : 0;
 export function agentCallTimeoutMs(params: Record<string, unknown> | undefined): number {
-    const timeout = typeof params?.timeout === 'number' && Number.isFinite(params.timeout) && params.timeout > 0 ? params.timeout : 0;
-    return Math.max(AGENT_CALL_MIN_TIMEOUT_MS, timeout + AGENT_CALL_MARGIN_MS);
+    return Math.max(AGENT_CALL_MIN_TIMEOUT_MS, timeoutOf(params) + AGENT_CALL_MARGIN_MS);
+}
+/** The params sent to chrome: a timeout above AGENT_CALL_MAX_TIMEOUT_MS is lowered to it; anything else is unchanged. */
+export function agentParams(params: Record<string, unknown>): Record<string, unknown> {
+    return typeof params.timeout === 'number' && params.timeout > AGENT_CALL_MAX_TIMEOUT_MS ? { ...params, timeout: AGENT_CALL_MAX_TIMEOUT_MS } : params;
 }
 
 /** 66-WR-02: how long one start step (the link, its connection) may take before the attach is logged as failed. */
