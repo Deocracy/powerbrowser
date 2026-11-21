@@ -12196,7 +12196,7 @@ async function handleWebTabAgent(data, actorRef) {
   if ((control.openRefusals ?? 0) !== opensRefused && outcome.where === "done") {
     outcome = agentFailed("browser_command_unavailable");
   }
-  if (control.stopped || agentOwnerStopped(actorRef)) {
+  if (control.stopped) {
     return { ok: true, kind, where: "agent-stopped" };
   }
   if (!webTabs.has(data.tabId)) {
