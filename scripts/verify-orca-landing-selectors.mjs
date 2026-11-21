@@ -14,16 +14,24 @@
  *      mark, and refuses the sidecar's port, the shell-embedded sender, an unknown version, a non-data mark and every
  *      other OrcaService state (derived from the state literals OrcaService.sys.mjs assigns; D-37: while Orca is
  *      failed with port-in-use, another program holds orcad's port).
- * Clauses 2 and 3 print one SKIP line while orca/out/web/assets is absent (no Orca build). A re-pin that moves Orca's
- * landing markup turns this row red before a user sees Orca's logo come back.
+ * Clauses 2 and 3 are not run while orca/out/web/assets is absent (no Orca build): the row then exits 77 with one SKIP
+ * line, and the driver records SKIP, not PASS (SKIP-PROTOCOL.md). A re-pin that moves Orca's landing markup turns this
+ * row red before a user sees Orca's logo come back.
+ *
+ * The entry-point guard resolves symlinks on both sides (harness-static-structure-08); the self-test runs the script
+ * through a symlinked directory and requires its argument check to answer.
  *
  * --self-test runs the check on mkdtemp copies (OrcaEnv, OrcaService, the pins file, the sidecar prefs, a fixture assets folder
  * with a synthetic Landing chunk and a second asset): the copies green, then each planted fault red by name.
  */
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { entryPoint, mismatchMessage } from './lib/entry-point.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const NAME = 'orca-landing-selectors';
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -51,13 +59,14 @@ export function selectorParts(selector) {
 export async function check(paths) {
     const passes = [];
     const failures = [];
+    const skips = [];
     const fail = (rule, text) => failures.push({ rule, text });
 
     const pins = existsSync(paths.pins) ? readFileSync(paths.pins, 'utf8') : '';
     const version = pins.match(/^UPSTREAM_ORCA_TAG=v?(\S+)$/m)?.[1];
     if (!version) {
         fail('pins', `${paths.pins} has no UPSTREAM_ORCA_TAG. Next step: run node scripts/generate.mjs`);
-        return { passes, failures, version };
+        return { passes, failures, skips, version };
     }
     // A cache-busting query keeps a planted copy from being served by an earlier import.
     const env = await import(`${pathToFileURL(paths.orcaEnv).href}?t=${Date.now()}${Math.random()}`);
@@ -70,7 +79,7 @@ export async function check(paths) {
 
     // Clauses 2 and 3: the built client.
     if (!existsSync(paths.assets)) {
-        passes.push(`SKIP of the bundle clauses only -- ${paths.assets} is absent (no Orca build; nix develop .#orca --command bash scripts/build-orca.sh)`);
+        skips.push(`the bundle clauses (2 and 3) did not run: ${paths.assets} is absent (no Orca build). Next step: nix develop .#orca --command bash scripts/build-orca.sh`);
     } else if (selectors?.length) {
         const files = readdirSync(paths.assets).filter((f) => f.endsWith('.js'));
         const landing = files.filter((f) => /^Landing-[^/]+\.js$/.test(f));
@@ -143,7 +152,7 @@ export async function check(paths) {
         }
         if (!failures.some((f) => f.rule === 'gate')) passes.push(`ok gate: only orcad's port ${orcaPort} while Orca is ready, not shell-embedded, ${version}, a data: mark is answered (${cases.length} cases; states ${states.join(', ')})`);
     }
-    return { passes, failures, version };
+    return { passes, failures, skips, version };
 }
 
 const FIXTURE_LANDING = 'import{C}from"./App-x.js";const L=()=>(0,F.jsx)(`div`,{className:`flex flex-col items-center gap-4 py-8`,children:[(0,F.jsx)(`div`,{className:`flex items-center justify-center size-20 rounded-2xl border border-border/80`,children:(0,F.jsx)(`img`,{src:C,alt:`Orca logo`,className:`size-12`})}),(0,F.jsx)(`h1`,{className:`text-4xl font-bold`})]});export{L as default};\n';
@@ -182,6 +191,23 @@ async function selfTest() {
             return 1;
         }
         console.log(`  ok  control: the copies are green (${clean.passes.length} clauses)`);
+        // No built assets: the bundle clauses did not run, which is a skip and not a pass.
+        rmSync(paths.assets, { recursive: true, force: true });
+        const away = await check(paths);
+        if (away.failures.length || away.skips.length !== 1) {
+            console.log(`${NAME} self-test: FAIL -- with no assets the bundle clauses were not reported skipped: ${[...away.failures.map((f) => f.text), ...away.skips].join('; ') || 'nothing'}`);
+            return 1;
+        }
+        console.log('  ok  control: no built assets -> the bundle clauses are skipped, nothing fails');
+        // The guard: run through a symlinked directory, the argument check must still answer (exit 2, not a silent exit 0).
+        const linked = join(dir, 'linked-scripts');
+        symlinkSync(dirname(fileURLToPath(import.meta.url)), linked);
+        const viaLink = spawnSync(process.execPath, [join(linked, 'verify-orca-landing-selectors.mjs'), '--bogus'], { encoding: 'utf8' });
+        if (viaLink.status !== 2 || !`${viaLink.stdout}${viaLink.stderr}`.includes('unknown argument')) {
+            console.log(`${NAME} self-test: FAIL -- run through a symlinked directory the script did not reach its argument check (exit ${viaLink.status}); the entry-point guard is symlink-sensitive`);
+            return 1;
+        }
+        console.log('  ok  control: run through a symlinked directory, the entry-point guard still fires');
         const plants = [
             ['the version entry removed', 'no selector entry', swap(paths.orcaEnv, '"1.4.248": Object.freeze(', '"0.0.1": Object.freeze(')],
             ['a token absent from the Landing chunk', 'token not in bundle', swap(join(paths.assets, 'Landing-fixture.js'), 'className:`size-12`', 'className:`size-14`')],
@@ -212,7 +238,12 @@ async function selfTest() {
     }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+const how = entryPoint(import.meta.url);
+if (how === 'mismatch') {
+    console.error(mismatchMessage(NAME, import.meta.url));
+    process.exit(2);
+}
+if (how === 'entry') {
     const args = process.argv.slice(2);
     if (args.some((a) => a !== '--self-test')) {
         console.log(`${NAME}: FAIL -- unknown argument ${args.find((a) => a !== '--self-test')}. Usage: node scripts/verify-orca-landing-selectors.mjs [--self-test]`);
@@ -223,8 +254,14 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     for (const p of res.passes) console.log(`  ${p}`);
     for (const f of res.failures) console.log(`  FAIL ${f.rule} -- ${f.text}`);
     const landing = existsSync(defaultPaths().assets) ? readdirSync(defaultPaths().assets).find((f) => /^Landing-.*\.js$/.test(f)) : null;
-    console.log(res.failures.length
-        ? `${NAME}: FAIL -- ${res.failures.length} rule failure(s)`
-        : `${NAME}: PASS -- Orca ${res.version}'s landing logo selector matches ${landing ?? 'no built chunk (SKIP)'} and the gate answers orcad's origin only`);
-    process.exit(res.failures.length ? 1 : 0);
+    if (res.failures.length) {
+        console.log(`${NAME}: FAIL -- ${res.failures.length} rule failure(s)`);
+        process.exit(1);
+    }
+    if (res.skips.length) {
+        console.log(skipLine(NAME, res.skips.join('; ')));
+        process.exit(SKIP_EXIT);
+    }
+    console.log(`${NAME}: PASS -- Orca ${res.version}'s landing logo selector matches ${landing} and the gate answers orcad's origin only`);
+    process.exit(0);
 }
