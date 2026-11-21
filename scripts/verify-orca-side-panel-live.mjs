@@ -57,8 +57,13 @@
 //                  right sidebar's lies inside it), widens the panel by DRAG px. A
 //                  drag from the edge far toward the window side stops at Orca's
 //                  own minimum (MIN_WIDTH in components/sidebar/index.tsx,
-//                  RIGHT_SIDEBAR_MIN_WIDTH in right-sidebar-width.ts), and must
-//                  have narrowed the panel (else red "instrument blind"). The
+//                  RIGHT_SIDEBAR_MIN_WIDTH in right-sidebar-width.ts): the drag
+//                  travels to the window edge, so the panel must end within
+//                  WIDTH_TOLERANCE of that minimum, neither below it nor above
+//                  it, and must have narrowed (else red "instrument blind").
+//                  The web tabs must really be added: the main area's widget
+//                  count must grow by WEB_TABS, else red "instrument blind"
+//                  (a width kept through zero tabs proves nothing). The
 //                  pointer is WebDriver BiDi input.performActions on the Theia
 //                  document: hit-tested and dispatched as trusted events by Gecko
 //                  in that document, not OS input (a Gecko web-page overlay over
@@ -97,22 +102,26 @@
 //                  verification rule 1).
 //  i  egress       the Theia document first fetches http://pb-egress-control.invalid/
 //                  and the resolver log must name that host (else "collector
-//                  blind"). Immediately before the Orca mode is selected (the
-//                  user action that shows the panels) it fetches
-//                  http://pb-egress-user-action.invalid/, which the log must
-//                  also name. A host first resolved in the parent log after
-//                  that marker passes endpoint-verdict.mjs's user-action
-//                  verdict; every other host, loopback excluded (and any seen
-//                  only in a child log, which cannot be ordered), must pass the
-//                  unattended verdict, else red naming the host (P65-24; 65-05).
+//                  blind"). Two more markers bracket the one real user action, the
+//                  Orca mode selection: http://pb-egress-user-action.invalid/ just
+//                  before it and http://pb-egress-settled.invalid/ once it has
+//                  returned and the frame is focused; the log must name both, in
+//                  that order. Only a host first resolved in the parent log between
+//                  the two markers passes endpoint-verdict.mjs's user-action
+//                  verdict. Every other host, loopback excluded (the boot-time
+//                  hosts, everything the panels resolve while they render and
+//                  everything resolved in the rest of the run, and any host seen
+//                  only in a child log, which cannot be ordered) must pass the
+//                  unattended verdict, else red naming the host (P65-24; 65-05;
+//                  audit harness-live-panels-03).
 // Output names clauses, counts and host names only; never a path, the ready
 // line, a pairing URL, an offer or a token.
 //
-// Tier: full. Runs under flock /home/chris/coding/Power-Browser/.git/pb-live.lock
-// with inherited ORCA_* unset. SKIP (exit 0, one named line) while a built
-// PowerBrowser, a built Theia app, orca/out or the pane bundle is absent
-// (orca-tabs-live.mjs prerequisites). --self-test runs the pure comparators on
-// fixtures (hermetic).
+// Tier: full. A row started without PB_LIVE_LOCK_HELD=1 takes <git common dir>/pb-live.lock itself
+// (lib/live-lock-reexec.mjs) before it launches anything; inherited ORCA_* are unset. Exit 77 with one
+// "SKIP -- <reason>" line (SKIP-PROTOCOL.md) while a built PowerBrowser, a built Theia app, orca/out, the pane
+// bundle or typescript is absent (orca-tabs-live.mjs prerequisites). --self-test runs the pure comparators on
+// fixtures and the tab-adding collector against fake pages (hermetic: no browser).
 //
 // Usage:
 //   node scripts/verify-orca-side-panel-live.mjs
@@ -125,6 +134,8 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { violations } from './lib/endpoint-verdict.mjs';
+import { takeLiveLock } from './lib/live-lock-reexec.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-side-panel-live';
@@ -134,13 +145,21 @@ export const LEFT = 'powerbrowser-orca-view-container';
 export const RIGHT = 'powerbrowser-orca-right-view-container';
 export const PARTS = { 'powerbrowser-orca-sidebar-view': 'sidebar', 'powerbrowser-orca-settings-view': 'settings', 'powerbrowser-orca-right-sidebar-view': 'right-sidebar' };
 export const AGENTS = 'powerbrowser-orca-agents-view';
-/** j: a surface edge may differ from the part body's by sub-pixel rounding only. */
+/**
+ * j: a surface edge may differ from the part body's by sub-pixel rounding only. A broken layout measures whole pixels:
+ * the 2026-11-18 reproduction had a surface 106 px wider than its part (Orca's stored 350 px against a 244 px part),
+ * and the self-test plants that value, a 120 px shortfall and a 271 px height shortfall.
+ */
 export const FILL_TOLERANCE = 1;
 /** j: the side-area width of the wide pass, above Orca's stored sidebar (280) and right-sidebar (350) defaults. */
 export const PART_WIDE = 460;
-/** l: how far the closed-state toggle's right edge may sit from the main area's right edge (Orca: the button plus its mr-2). */
+/**
+ * l: how far the closed-state toggle's right edge may sit from the main area's right edge (Orca: the button plus its
+ * mr-2). A misplaced toggle measures hundreds of pixels away (the self-test plants one at x=600, y=300, 640 px from the
+ * edge), never 48 or 49.
+ */
 export const TOGGLE_CORNER = 48;
-/** l: the main area's first tab row, Theia's --theia-private-horizontal-tab-height. */
+/** l: the main area's first tab row, Theia's --theia-private-horizontal-tab-height; a toggle below it is out of the row (planted at 300 px). */
 export const TAB_ROW = 35;
 /** m: the side width each run starts from, above Orca's minimum so a squeeze has room to show. */
 export const SIDE_START = 320;
@@ -148,12 +167,18 @@ export const SIDE_START = 320;
 export const WEB_TABS = 3;
 /** m: the drag distance toward the main area. */
 export const DRAG = 60;
-/** m: a side width may differ from its expectation by sub-pixel rounding and a handle's half pixel only. */
+/**
+ * m: a side width may differ from its expectation by sub-pixel rounding and a handle's half pixel only. A broken layout
+ * measures tens of pixels: Lumino's 100 px after a round trip (220 px off), 244 px after the web tabs (76 px off), a
+ * dead handle's 0 px drag (60 px off), a half drag's 30 px, a squeeze clamped at 300 px (80 px above Orca's 220 px minimum).
+ * The self-test plants each of these values.
+ */
 export const WIDTH_TOLERANCE = 2;
 /** m: Tailwind's spacing step (0.25rem at Orca's 16 px root), to read a handle's offset and width from its classes. */
 export const TW_SPACING = 4;
 export const CONTROL_HOST = 'pb-egress-control.invalid';
 export const ACTION_HOST = 'pb-egress-user-action.invalid';
+export const SETTLED_HOST = 'pb-egress-settled.invalid';
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
 const SRC = {
@@ -294,15 +319,17 @@ export function bandSamples([from, to]) {
 }
 
 /**
- * m: one width run. obs: { keep: [{ when, before: { left, right }, after: { left, right } }], drags: [{ side, offset,
- * before, after }], squeeze: [{ side, before, after }] }; expect: { min: { left, right }, drag }. Red names the side,
- * the step and the measured width.
+ * m: one width run. obs: { keep: [{ when, before: { left, right }, after: { left, right }, tabs?: { added, expected } }],
+ * drags: [{ side, offset, before, after }], squeeze: [{ side, before, after }] }; expect: { min: { left, right }, drag }.
+ * A keep pass with `tabs` is the web-tab pass: fewer tabs added than expected is red "instrument blind" (the width
+ * before and after zero tabs is the same number). Red names the side, the step and the measured width.
  */
 export function widthVerdict(obs, expect) {
     const fails = [];
     const tol = WIDTH_TOLERANCE;
     if (!obs?.keep?.length) fails.push('no width was read around the web tabs or a mode round trip, so the comparison is blind');
     for (const pass of obs?.keep ?? []) {
+        if (pass.tabs && !(pass.tabs.added >= pass.tabs.expected)) fails.push(`instrument blind: only ${pass.tabs.added ?? 0} of ${pass.tabs.expected} web tabs were added ${pass.when}, so the widths read around them prove nothing`);
         for (const side of ['left', 'right']) {
             const b = pass.before?.[side];
             const a = pass.after?.[side];
@@ -323,6 +350,9 @@ export function widthVerdict(obs, expect) {
         else if (!sq) fails.push(`${side}: no squeeze was measured, so the comparison is blind`);
         else if (!(sq.after < sq.before - tol)) fails.push(`instrument blind: the squeeze drag did not narrow the ${side} panel (${Math.round(sq.before)}px -> ${Math.round(sq.after)}px)`);
         else if (sq.after < min - tol) fails.push(`${side} panel squeezed to ${Math.round(sq.after)}px, below Orca's minimum ${min}px`);
+        // The squeeze drag travels to the window edge, so the panel must reach the minimum; a clamp above it (a wrong
+        // Lumino or Theia limit) stopped the drag early.
+        else if (sq.after > min + tol) fails.push(`${side} panel squeezed only to ${Math.round(sq.after)}px, above Orca's minimum ${min}px, although the drag went to the window edge`);
     }
     return fails;
 }
@@ -339,28 +369,48 @@ export function leakVerdict(areasByMode) {
 }
 
 /**
- * i: the control first, then each non-loopback host under its verdict. `afterAction` (when given) lists the hosts
- * first resolved after the user-action marker; those take the user-action verdict, every other host the unattended one.
+ * i: the control first, then each non-loopback host under its verdict. `duringAction` (when given) lists the hosts first
+ * resolved between the user-action marker and the settled marker, that is, while the one user action (the Orca mode
+ * selection) ran; those take the user-action verdict. Every other host, whenever it resolved, takes the unattended
+ * one. Both markers must be in the resolver log, in that order (duringAction null), else the collector is blind.
  */
-export function egressVerdict({ resolved, allowlist, afterAction }) {
+export function egressVerdict({ resolved, allowlist, duringAction }) {
     if (!resolved.includes(CONTROL_HOST)) return [`collector blind: the control host ${CONTROL_HOST} is not in the resolver log`];
-    if (afterAction !== undefined && !resolved.includes(ACTION_HOST)) return [`collector blind: the user-action marker ${ACTION_HOST} is not in the resolver log`];
-    const observed = resolved.filter(h => h !== CONTROL_HOST && h !== ACTION_HOST && !LOOPBACK.has(h));
-    const after = new Set(afterAction ?? []);
+    if (duringAction === null) return [`collector blind: ${ACTION_HOST} and ${SETTLED_HOST} are not both in the parent resolver log in that order`];
+    if (duringAction !== undefined) {
+        for (const marker of [ACTION_HOST, SETTLED_HOST]) if (!resolved.includes(marker)) return [`collector blind: the marker ${marker} is not in the resolver log`];
+    }
+    const observed = resolved.filter(h => ![CONTROL_HOST, ACTION_HOST, SETTLED_HOST].includes(h) && !LOOPBACK.has(h));
+    const during = new Set(duringAction ?? []);
     return [
-        ...violations(allowlist, observed.filter(h => !after.has(h)), { userAction: false }).map(h => `unlisted host ${h} resolved while the Orca side panels rendered (unattended verdict)`),
-        ...violations(allowlist, observed.filter(h => after.has(h)), { userAction: true }).map(h => `unlisted host ${h} resolved after the Orca mode was selected (user-action verdict)`),
+        ...violations(allowlist, observed.filter(h => !during.has(h)), { userAction: false }).map(h => `unlisted host ${h} resolved outside the Orca mode selection (unattended verdict)`),
+        ...violations(allowlist, observed.filter(h => during.has(h)), { userAction: true }).map(h => `unlisted host ${h} resolved while the Orca mode was selected (user-action verdict)`),
     ];
 }
 
-/** The hosts whose first `Resolving host` line in the parent log <base>.moz_log comes after the marker's first line. */
-export function hostsAfterMarker(base, marker) {
-    const file = `${base}.moz_log`;
-    if (!existsSync(file)) return [];
+/** The hosts of a resolver log's text in the order of their first `Resolving host [...]` line. */
+export function hostOrder(text) {
     const order = [];
-    for (const m of readFileSync(file, 'latin1').matchAll(/Resolving host \[([^\]]+)\]/g)) if (!order.includes(m[1])) order.push(m[1]);
-    const at = order.indexOf(marker);
-    return at < 0 ? [] : order.slice(at + 1);
+    for (const m of String(text).matchAll(/Resolving host \[([^\]]+)\]/g)) if (!order.includes(m[1])) order.push(m[1]);
+    return order;
+}
+
+/**
+ * The hosts first resolved after `from` and before `to` in an ordered host list; null when either marker is absent or
+ * `to` does not come after `from` (a settled marker that precedes the action marker is a blind collector).
+ */
+export function hostsBetween(order, from, to) {
+    const a = order.indexOf(from);
+    const b = order.indexOf(to);
+    if (a < 0 || b < 0 || b < a) return null;
+    return order.slice(a + 1, b);
+}
+
+/** hostsBetween over the parent log <base>.moz_log; null when the log or a marker is absent. */
+export function hostsBetweenMarkers(base, from, to) {
+    const file = `${base}.moz_log`;
+    if (!existsSync(file)) return null;
+    return hostsBetween(hostOrder(readFileSync(file, 'latin1')), from, to);
 }
 
 /** The anchored `Resolving host [...]` names of <base>.moz_log and its .child-N.moz_log siblings (verify-endpoints.sh layer 3). */
@@ -480,6 +530,28 @@ export function deriveWidthRules() {
     return { fails, min, band, newTabLabel };
 }
 
+/**
+ * m: adds `count` web tabs with the "+" button and returns how many the main area really gained. `probe(body)` runs a
+ * page-realm body, `click({ x, y })` presses at a point. A button that is not found, a click that adds no widget and a
+ * main-area count that does not grow within 5 s each leave the count short; the caller's verdict then goes red, so a
+ * layout read around zero tabs cannot pass (audit harness-live-panels-04).
+ */
+export async function addWebTabs({ probe, click, label, count }) {
+    const mainCount = () => probe(`return get('ApplicationShell').getWidgets('main').length;`);
+    const start = Number(await mainCount());
+    for (let i = 0; i < count; i++) {
+        const at = await probe(`const b = [...document.querySelectorAll('button')].find(x => x.getAttribute('aria-label') === ${JSON.stringify(label)} && x.getBoundingClientRect().width > 0);
+            if (!b) return null; const r = b.getBoundingClientRect(); window.__pbMainCount = get('ApplicationShell').getWidgets('main').length; return { x: r.x + r.width / 2, y: r.y + r.height / 2 };`);
+        if (!at) break;
+        await click(at);
+        const grew = await probe(`return await until(() => get('ApplicationShell').getWidgets('main').length > window.__pbMainCount, 5000);`);
+        if (grew !== true) break;
+        await probe(`await sleep(300); return true;`);
+    }
+    const gained = Number(await mainCount()) - start;
+    return Number.isFinite(gained) ? Math.max(0, gained) : 0;
+}
+
 // ---- the live run ----
 
 const ids = (list, key) => {
@@ -490,9 +562,12 @@ const ids = (list, key) => {
 async function live() {
     const lib = await import('./lib/orca-tabs-live.mjs');
     const pre = lib.prerequisites({ needOrca: true });
-    if (pre.skip) { console.log(`${NAME}: SKIP -- ${pre.skip}`); return 0; }
+    if (pre.skip) { console.log(skipLine(NAME, pre.skip)); return SKIP_EXIT; }
     if (pre.fail) { console.error(`${NAME}: FAIL -- ${pre.fail}`); return 1; }
-    if (!loadTypeScript()) { console.log(`${NAME}: SKIP -- theia/node_modules/typescript is absent; run the audited Theia install`); return 0; }
+    if (!loadTypeScript()) { console.log(skipLine(NAME, 'theia/node_modules/typescript is absent; run the audited Theia install in theia/')); return SKIP_EXIT; }
+    // Nothing is launched before this: a row started by hand takes the live lock itself (harness-live-panels-02).
+    const held = takeLiveLock(import.meta.url, NAME);
+    if (held !== null) return held;
     const sel = deriveSelectors();
     if (sel.fails.length) { for (const f of sel.fails) console.error(`${NAME}: FAIL -- ${f}`); return 1; }
     const widthRules = deriveWidthRules();
@@ -514,11 +589,14 @@ async function live() {
             await ctx.probe(`try { await fetch('http://${CONTROL_HOST}/', { mode: 'no-cors' }); } catch (e) { /* NXDOMAIN expected */ } return true;`);
             const pairing = await ctx.bundle('m.state().pairing');
             if (!pairing?.sessionOnly) throw new Error('the bundle is not paired session-only (C3-65 state().pairing)');
-            // i (user-action marker): hosts first resolved after this follow the user selecting the Orca mode.
-            await ctx.probe(`try { await fetch('http://${ACTION_HOST}/', { mode: 'no-cors' }); } catch (e) { /* NXDOMAIN expected */ } return true;`);
+            // i (the one user action): only hosts first resolved between these two markers take the user-action verdict.
+            // The panels' own rendering after the settled marker, and the whole run after it, is judged unattended.
+            const marker = (host) => ctx.probe(`try { await fetch('http://${host}/', { mode: 'no-cors' }); } catch (e) { /* NXDOMAIN expected */ } return true;`);
+            await marker(ACTION_HOST);
             await ctx.probe(`await get('ModeService').activateMode('orca'); return true;`);
             // The shell's active widget follows document focus; the automated window starts without it.
             await ctx.focusTheiaFrame();
+            await marker(SETTLED_HOST);
 
             // k: Theia's status bar and the row it would reserve, measured per pass.
             const kPasses = [];
@@ -541,7 +619,8 @@ async function live() {
             const fill = async (when) => {
                 const boxes = await ctx.probe(`const wm = get('WidgetManager');
                     const box = e => { if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; };
-                    await until(() => ${J([...Object.keys(PARTS)].filter(id => PARTS[id] !== 'settings'))}.every(id => { const w = wm.tryGetWidget(id); return w && w.node.querySelector('[data-pb-orca-pane-root] > *'); }), 20000);
+                    const mounted = await until(() => ${J([...Object.keys(PARTS)].filter(id => PARTS[id] !== 'settings'))}.every(id => { const w = wm.tryGetWidget(id); return w && w.node.querySelector('[data-pb-orca-pane-root] > *'); }), 20000);
+                    if (!mounted) return { timedOut: true };
                     await sleep(500);
                     const out = {};
                     for (const [id, kind] of Object.entries(${J({ ...PARTS, [AGENTS]: 'orchestration' })})) {
@@ -551,6 +630,7 @@ async function live() {
                         out[kind] = { body: box(w.node.parentElement), node: box(w.node), surface: box(root && root.firstElementChild) };
                     }
                     return out;`);
+                if (boxes?.timedOut) { jFails.push(`${when}: the sidebar and right sidebar did not mount within 20 s, so the comparison is blind`); jCounts.push(`${when}: 0 part(s)`); return; }
                 const kinds = Object.keys(boxes ?? {});
                 if (!kinds.includes('sidebar') || !kinds.includes('right-sidebar')) jFails.push(`${when}: ${['sidebar', 'right-sidebar'].filter(k => !kinds.includes(k)).join(' and ')} not shown, so the comparison is blind`);
                 for (const kind of kinds) jFails.push(...fillVerdict(`${when} ${kind}`, boxes[kind]));
@@ -768,15 +848,14 @@ async function live() {
                 shell.resize(${SIDE_START}, 'left'); shell.resize(${SIDE_START}, 'right'); await sleep(600); return true;`);
             const mObs = { keep: [], drags: [], squeeze: [] };
             await setStart();
-            let mBefore = sizesOf(await widths());
-            for (let i = 0; i < WEB_TABS; i++) {
-                const at = await ctx.probe(`const b = [...document.querySelectorAll('button')].find(x => x.getAttribute('aria-label') === ${J(widthRules.newTabLabel)} && x.getBoundingClientRect().width > 0);
-                    if (!b) return null; const r = b.getBoundingClientRect(); window.__pbMainCount = get('ApplicationShell').getWidgets('main').length; return { x: r.x + r.width / 2, y: r.y + r.height / 2 };`);
-                if (!at) break;
-                await pointer([{ type: 'pointerMove', x: Math.round(at.x), y: Math.round(at.y) }, { type: 'pointerDown', button: 0 }, { type: 'pointerUp', button: 0 }]);
-                await ctx.probe(`await until(() => get('ApplicationShell').getWidgets('main').length > window.__pbMainCount, 5000); await sleep(300); return true;`);
-            }
-            mObs.keep.push({ when: `after ${WEB_TABS} web tabs from the "+" button`, before: mBefore, after: sizesOf(await widths()) });
+            const mBefore0 = sizesOf(await widths());
+            const tabsAdded = await addWebTabs({
+                probe: (body) => ctx.probe(body),
+                click: (at) => pointer([{ type: 'pointerMove', x: Math.round(at.x), y: Math.round(at.y) }, { type: 'pointerDown', button: 0 }, { type: 'pointerUp', button: 0 }]),
+                label: widthRules.newTabLabel, count: WEB_TABS,
+            });
+            mObs.keep.push({ when: `after ${WEB_TABS} web tabs from the "+" button`, before: mBefore0, after: sizesOf(await widths()), tabs: { added: tabsAdded, expected: WEB_TABS } });
+            let mBefore;
             for (const [away, when] of [['browsing', 'after a Browsing round trip'], ['organising', 'after an Organising round trip']]) {
                 await setStart();
                 mBefore = sizesOf(await widths());
@@ -817,10 +896,10 @@ async function live() {
     // i, after the browser has exited and flushed its logs.
     const { hosts } = JSON.parse(readFileSync(join(REPO_ROOT, 'powerbrowser', 'endpoint-allowlist.json'), 'utf8'));
     const resolved = resolvedHosts(logBase);
-    const afterAction = hostsAfterMarker(logBase, ACTION_HOST);
-    const others = resolved.filter(h => h !== CONTROL_HOST && h !== ACTION_HOST && !LOOPBACK.has(h));
-    const nAfter = others.filter(h => afterAction.includes(h)).length;
-    clause('i egress', egressVerdict({ resolved, allowlist: hosts, afterAction }), `control and user-action marker seen; ${others.length - nAfter} host(s) pass the unattended verdict, ${nAfter} first resolved after the Orca mode was selected pass the user-action verdict`);
+    const duringAction = hostsBetweenMarkers(logBase, ACTION_HOST, SETTLED_HOST);
+    const others = resolved.filter(h => ![CONTROL_HOST, ACTION_HOST, SETTLED_HOST].includes(h) && !LOOPBACK.has(h));
+    const nDuring = others.filter(h => (duringAction ?? []).includes(h)).length;
+    clause('i egress', egressVerdict({ resolved, allowlist: hosts, duringAction }), `control and both markers seen; ${others.length - nDuring} host(s) pass the unattended verdict, ${nDuring} first resolved during the Orca mode selection pass the user-action verdict`);
     const failed = results.filter(r => r.fails.length).map(r => r.name);
     if (failed.length) { console.error(`${NAME}: FAIL -- ${failed.join(', ')}`); return 1; }
     console.log(`${NAME}: PASS -- ${results.length} clauses`);
@@ -861,7 +940,7 @@ function lFixture(over = {}) {
 function mFixture(over = {}) {
     const s = { left: SIDE_START, right: SIDE_START };
     const keep = over.keep ?? [
-        { when: `after ${WEB_TABS} web tabs from the "+" button`, before: s, after: s },
+        { when: `after ${WEB_TABS} web tabs from the "+" button`, before: s, after: s, tabs: { added: WEB_TABS, expected: WEB_TABS } },
         { when: 'after a Browsing round trip', before: s, after: s },
         { when: 'after an Organising round trip', before: s, after: s },
     ];
@@ -875,7 +954,27 @@ function mFixture(over = {}) {
 }
 const mRun = (over) => { const { obs, expect } = mFixture(over); return widthVerdict(obs, expect); };
 
-function selfTest() {
+/**
+ * A fake Theia page for addWebTabs: a main-area widget count, a "+" button that is present or not, and clicks that add a
+ * widget or not (`addUntil`: the click count after which clicks stop adding one).
+ */
+function fakeTabPage({ button = true, addUntil = Infinity }) {
+    const page = { main: 2, mark: 0, clicks: 0 };
+    return {
+        probe: async (body) => {
+            if (/aria-label/.test(body)) { if (!button) return null; page.mark = page.main; return { x: 10, y: 10 }; }
+            if (/until\(/.test(body)) return page.main > page.mark;
+            if (/sleep\(/.test(body)) return true;
+            return page.main;
+        },
+        click: async () => { page.clicks += 1; if (page.clicks <= addUntil) page.main += 1; },
+        label: 'New Tab', count: WEB_TABS,
+    };
+}
+/** The m verdict for a run whose tab-adding collector ran against `fake`. */
+const tabRun = async (fake) => mRun({ keep: [{ when: `after ${WEB_TABS} web tabs from the "+" button`, before: { left: 320, right: 320 }, after: { left: 320, right: 320 }, tabs: { added: await addWebTabs(fake), expected: WEB_TABS } }] });
+
+async function selfTest() {
     const allow = [{ host: 'api.github.com', disposition: 'allow' }, { host: 'example.org', disposition: 'user-initiated' }];
     const cases = [
         ['control: rows equal', () => setVerdict('worktrees', ['a', 'b'], ['b', 'a']), null],
@@ -889,10 +988,24 @@ function selfTest() {
         ['a control host absent', () => egressVerdict({ resolved: ['api.github.com'], allowlist: allow }), 'collector blind'],
         ['an unlisted host', () => egressVerdict({ resolved: [CONTROL_HOST, 'tracker.example.net'], allowlist: allow }), 'unlisted host tracker.example.net'],
         ['a user-initiated host resolved unattended', () => egressVerdict({ resolved: [CONTROL_HOST, 'example.org'], allowlist: allow }), 'unlisted host example.org'],
-        ['control: a user-initiated host after the user-action marker', () => egressVerdict({ resolved: [CONTROL_HOST, ACTION_HOST, 'example.org'], allowlist: allow, afterAction: ['example.org'] }), null],
-        ['a user-initiated host before the user-action marker', () => egressVerdict({ resolved: [CONTROL_HOST, ACTION_HOST, 'example.org'], allowlist: allow, afterAction: [] }), 'unlisted host example.org resolved while'],
-        ['an unlisted host after the user-action marker', () => egressVerdict({ resolved: [CONTROL_HOST, ACTION_HOST, 'tracker.example.net'], allowlist: allow, afterAction: ['tracker.example.net'] }), 'unlisted host tracker.example.net resolved after'],
-        ['the user-action marker absent', () => egressVerdict({ resolved: [CONTROL_HOST, 'example.org'], allowlist: allow, afterAction: [] }), 'collector blind: the user-action marker'],
+        // i (harness-live-panels-03): only the hosts resolved between the two markers, during the Orca mode selection, take the
+        // user-action verdict; a user-initiated host the panels resolve while they render, after the settled marker, is red.
+        ['control: a user-initiated host while the Orca mode was selected', () => egressVerdict({ resolved: [CONTROL_HOST, ACTION_HOST, 'example.org', SETTLED_HOST], allowlist: allow, duringAction: ['example.org'] }), null],
+        ['a user-initiated host resolved after the settled marker (the panels rendering)', () => egressVerdict({ resolved: [CONTROL_HOST, ACTION_HOST, SETTLED_HOST, 'example.org'], allowlist: allow, duringAction: [] }), 'unlisted host example.org resolved outside the Orca mode selection (unattended verdict)'],
+        ['an unlisted host while the Orca mode was selected', () => egressVerdict({ resolved: [CONTROL_HOST, ACTION_HOST, 'tracker.example.net', SETTLED_HOST], allowlist: allow, duringAction: ['tracker.example.net'] }), 'unlisted host tracker.example.net resolved while the Orca mode was selected'],
+        ['the user-action marker absent', () => egressVerdict({ resolved: [CONTROL_HOST, SETTLED_HOST, 'example.org'], allowlist: allow, duringAction: [] }), `collector blind: the marker ${ACTION_HOST}`],
+        ['the settled marker absent', () => egressVerdict({ resolved: [CONTROL_HOST, ACTION_HOST, 'example.org'], allowlist: allow, duringAction: [] }), `collector blind: the marker ${SETTLED_HOST}`],
+        ['the markers out of order', () => egressVerdict({ resolved: [CONTROL_HOST, ACTION_HOST, SETTLED_HOST], allowlist: allow, duringAction: hostsBetween([SETTLED_HOST, 'example.org', ACTION_HOST], ACTION_HOST, SETTLED_HOST) }), 'not both in the parent resolver log in that order'],
+        ['a resolver log whose panel host follows the settled marker', () => {
+            const log = [CONTROL_HOST, 'api.github.com', ACTION_HOST, SETTLED_HOST, 'example.org'].map(h => `D/nsHostResolver Resolving host [${h}]<>`).join('\n');
+            const order = hostOrder(log);
+            return egressVerdict({ resolved: order, allowlist: allow, duringAction: hostsBetween(order, ACTION_HOST, SETTLED_HOST) });
+        }, 'unlisted host example.org resolved outside the Orca mode selection'],
+        ['control: a resolver log whose only user-initiated host sits between the markers', () => {
+            const log = [CONTROL_HOST, 'api.github.com', ACTION_HOST, 'example.org', SETTLED_HOST].map(h => `D/nsHostResolver Resolving host [${h}]<>`).join('\n');
+            const order = hostOrder(log);
+            return egressVerdict({ resolved: order, allowlist: allow, duringAction: hostsBetween(order, ACTION_HOST, SETTLED_HOST) });
+        }, null],
         // j, the boxes measured in the 2026-11-18 reproduction (a 244 px part at 1280x768, the owner's wider part).
         ['control: node and surface fill the part body', () => fillVerdict('sidebar', { body: { x: 0, y: 131, w: 244, h: 591 }, node: { x: 0, y: 131, w: 244, h: 591.4 }, surface: { x: 0, y: 131, w: 244, h: 591 } }), null],
         ['a surface wider than the part (Orca\'s stored width)', () => fillVerdict('right-sidebar', { body: { x: 1036, y: 107, w: 244, h: 615 }, node: { x: 1036, y: 107, w: 244, h: 615 }, surface: { x: 1036, y: 107, w: 350, h: 615 } }), 'surface right edge +106px'],
@@ -931,11 +1044,23 @@ function selfTest() {
         ['no right drag measured', () => mRun({ drag: d => (d.side === 'right' ? null : d) }), 'right: no drag was measured'],
         ['a squeeze to Lumino\'s 100 px', () => mRun({ squeeze: q => (q.side === 'left' ? { ...q, after: 100 } : q) }), 'left panel squeezed to 100px, below Orca\'s minimum 220px'],
         ['a squeeze that never moved the edge', () => mRun({ squeeze: q => (q.side === 'right' ? { ...q, after: q.before } : q) }), 'instrument blind: the squeeze drag did not narrow the right panel'],
+        // m (harness-live-panels-04): the tab-adding collector run against fake pages; zero or short tab counts are red.
+        ['control: three web tabs added', () => mRun(), null],
+        ['no web tab added (the "+" button not found)', () => mRun({ keep: [{ when: 'after 3 web tabs from the "+" button', before: { left: 320, right: 320 }, after: { left: 320, right: 320 }, tabs: { added: 0, expected: WEB_TABS } }] }), 'instrument blind: only 0 of 3 web tabs were added after 3 web tabs'],
+        ['two of three web tabs added', () => mRun({ keep: [{ when: 'after 3 web tabs from the "+" button', before: { left: 320, right: 320 }, after: { left: 320, right: 320 }, tabs: { added: 2, expected: WEB_TABS } }] }), 'only 2 of 3 web tabs'],
+        // m (harness-live-panels-05): a squeeze clamped above Orca's minimum.
+        ['a squeeze clamped at 300 px (Orca\'s minimum is 220)', () => mRun({ squeeze: q => (q.side === 'left' ? { ...q, after: 300 } : q) }), 'left panel squeezed only to 300px, above Orca\'s minimum 220px'],
+        ['control: a squeeze within the tolerance of the minimum', () => mRun({ squeeze: q => (q.side === 'left' ? { ...q, after: 220 + WIDTH_TOLERANCE } : q) }), null],
+        // The collector itself: a "+" button that is missing, or clicks that add nothing, must read as zero tabs and go red.
+        ['control: the tab collector counts three added tabs', () => tabRun(fakeTabPage({})), null],
+        ['the tab collector against a page with no "+" button', () => tabRun(fakeTabPage({ button: false })), 'only 0 of 3 web tabs'],
+        ['the tab collector against clicks that add no tab', () => tabRun(fakeTabPage({ addUntil: 0 })), 'only 0 of 3 web tabs'],
+        ['the tab collector against clicks that stop adding after one', () => tabRun(fakeTabPage({ addUntil: 1 })), 'only 1 of 3 web tabs'],
         ['Orca\'s minimum not derived', () => mRun({ min: { left: 220, right: null } }), 'right: Orca\'s minimum width was not derived'],
     ];
     let failures = 0;
     for (const [name, run, naming] of cases) {
-        const fails = run();
+        const fails = await run();
         const text = fails.join('\n');
         if (naming === null ? fails.length : !text.includes(naming)) {
             console.error(`  FAIL ${name} -> ${naming === null ? `control red: ${text}` : fails.length ? `red, but not naming '${naming}': ${text}` : 'stayed green'}`);
@@ -959,5 +1084,5 @@ if (isEntryPoint) {
         console.error('Next step: run it with no argument, or with --self-test.');
         process.exit(2);
     }
-    process.exit(args[0] === '--self-test' ? selfTest() : await live());
+    process.exit(args[0] === '--self-test' ? await selfTest() : await live());
 }

@@ -167,7 +167,12 @@
  *
  * A self-test plant is a runtime mutation in its own session (a chrome-scope
  * or Theia-frame evaluate), never a file edit, and notes `PLANT <name>
- * applied` only after reading the mutation back.
+ * applied` only after reading the mutation back. Both modes launch a real
+ * PowerBrowser (the plants are faults injected into the running product, so there
+ * is no hermetic form of this self-test): each takes <git common dir>/pb-live.lock
+ * itself when started without PB_LIVE_LOCK_HELD=1 (lib/live-lock-reexec.mjs), and
+ * exits 77 with one "SKIP -- <reason>" line when no built PowerBrowser exists
+ * (SKIP-PROTOCOL.md).
  *
  * PB_CAPTURE_DIR=<dir> (39-07, 35 T12-T15): the session runs headed and
  * captureShell (scripts/lib/pb-kwin.mjs) writes 35-T12-menu.png (context-menu,
@@ -178,7 +183,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -204,6 +209,9 @@ import {
 } from './lib/pb-live-probe.mjs';
 import { REPO_ROOT, pollFor, probe, sourceConst } from './lib/pb-relaunch.mjs';
 import { captureShell } from './lib/pb-kwin.mjs';
+import { FIREFOX_BIN } from './lib/firefox-bidi.mjs';
+import { takeLiveLock } from './lib/live-lock-reexec.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const MODES_ACTIVATE_COMMAND_ID = sourceConst('theia/extensions/modes/src/browser/modes-commands.ts', 'MODES_ACTIVATE_COMMAND_ID');
 
@@ -3157,4 +3165,11 @@ if (args.includes('--help')) {
     console.log(`Usage: node scripts/${NAME}.mjs [--scenario ${Object.keys(SCENARIOS).join(',')}] | --self-test [--scenario a,b]`);
     process.exit(0);
 }
+// Both modes launch a browser. Nothing is launched before the next two steps.
+if (!existsSync(FIREFOX_BIN)) {
+    console.log(skipLine(NAME, `no built PowerBrowser (${FIREFOX_BIN} is absent); build the Firefox half as docs/BUILD.md says, or point PB_FIREFOX_BIN at a build`));
+    process.exit(SKIP_EXIT);
+}
+const held = takeLiveLock(import.meta.url, NAME, args);
+if (held !== null) process.exit(held);
 process.exit(args.includes('--self-test') ? await selfTest(args) : await main(args));
