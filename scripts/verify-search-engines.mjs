@@ -45,20 +45,25 @@
 // {searchTerms} (refused by generate's own validation, naming the entry),
 // and an extra key in the tracked policy.
 
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, copyFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { emitSearchEngines, resolveConfig } from './generate.mjs';
+import { SKIP_EXIT, verdictExit } from './lib/skip-verdict.mjs';
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const SELF = fileURLToPath(import.meta.url);
+const REPO_ROOT = resolve(dirname(SELF), '..');
 const NAME = 'verify-search-engines';
 
 const args = process.argv.slice(2);
 const SELF_TEST = args.includes('--self-test');
+// --root=<dir> runs the main mode over another tree (the self-test's SKIP control uses it).
+const ROOT_ARG = args.find(a => a.startsWith('--root='));
 for (const a of args) {
-    if (a !== '--self-test') {
+    if (a !== '--self-test' && !a.startsWith('--root=')) {
         console.error(`${NAME}: FAIL -- unknown argument '${a}'`);
         process.exit(2);
     }
@@ -230,15 +235,16 @@ function runChecks(root) {
     return { failures, skipped };
 }
 
+// A step skipped for an absent input makes the run exit 77 with one SKIP line, printed last (SKIP-PROTOCOL.md).
 function main() {
-    const { failures, skipped } = runChecks(REPO_ROOT);
-    for (const s of skipped) console.log(`${NAME}: SKIP -- ${s}`);
+    const { failures, skipped } = runChecks(ROOT_ARG ? resolve(ROOT_ARG.slice('--root='.length)) : REPO_ROOT);
     if (failures.length > 0) {
         console.error(`${NAME}: FAIL -- ${failures.length} problem(s)`);
         for (const f of failures) console.error(`  - ${f}`);
-        process.exit(1);
     }
-    console.log(`${NAME}: PASS -- tracked key, derived fragment, shipped-name collision and templates agree`);
+    const code = verdictExit(NAME, failures, skipped);
+    if (code === 0) console.log(`${NAME}: PASS -- tracked key, derived fragment, shipped-name collision and templates agree`);
+    return code;
 }
 
 // ---------------------------------------------------------------- self-test
@@ -345,13 +351,39 @@ function selfTest() {
     withFixture('extra policy key', [ENGINE_A, ENGINE_B], dir => mutatePolicy(dir, se => { se.Remove = ['Acme Other']; }),
         '"Remove"', f => f.includes(POLICY_REL));
 
-    if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- 4 planted faults all went red, controls green`);
+    // SKIP control (SKIP-PROTOCOL.md rule 2): the main mode, run as a child with its output captured, over the
+    // fixture with the generated fragment and the shipped-engine dump removed. Steps 0, 2 and 4 run green, steps
+    // 1 and 3 do not run, so it exits 77 with the SKIP line last and no PASS line.
+    {
+        const dir = mkdtempSync(join(tmpdir(), 'search-engines-selftest-'));
+        try {
+            setupFixture(dir, [ENGINE_A, ENGINE_B]);
+            rmSync(join(dir, FRAGMENT_REL));
+            rmSync(join(dir, DUMP_REL));
+            const r = spawnSync(process.execPath, [SELF, `--root=${dir}`], { encoding: 'utf8' });
+            const lines = (r.stdout ?? '').split('\n').filter(l => l.trim() !== '');
+            const last = lines[lines.length - 1] ?? '';
+            if (r.status !== SKIP_EXIT || !last.startsWith(`${NAME}: SKIP -- ${FRAGMENT_REL} is absent`) || !last.includes(DUMP_REL)
+                || lines.some(l => l.includes(`${NAME}: PASS`)) || /: SKIP/.test(r.stderr ?? '')) {
+                complain('control: no fragment and no dump', `did not exit 77 with one SKIP line last naming both and no PASS line (status ${r.status}, last line ${JSON.stringify(last)})`);
+            } else {
+                console.log('  ok  control: no fragment and no dump -> exit 77, one SKIP line last naming both, no PASS line');
+            }
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    }
+
+    if (failed > 0) {
+        console.error(`${NAME}: --self-test FAIL -- ${failed} case(s) did not behave as required`);
+        return 1;
+    }
+    console.log(`${NAME}: --self-test PASS -- 4 planted faults all went red, controls green, and a tree without the fragment or dump exits 77`);
     return 0;
 }
 
 if (SELF_TEST) {
     process.exit(selfTest());
 } else {
-    main();
+    process.exit(main());
 }
