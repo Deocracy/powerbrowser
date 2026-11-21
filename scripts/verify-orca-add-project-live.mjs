@@ -24,25 +24,31 @@
 // repository; the two after-remove lists are equal and do not; PowerBrowser's
 // owned roots (ProfileStorageService powerbrowser.orca.ownedRoots, read through
 // the Theia frame) gain the repository after the add and lose it after the
-// remove. That half is a named SKIP only while theia/extensions/orca-workspace
-// is absent. Output names steps and counts only; never a path, the ready line,
-// a pairing URL, an offer or a token.
+// remove. That half is skipped only while theia/extensions/orca-workspace
+// is absent, which makes the whole row a SKIP (exit 77), not a PASS. Both remove
+// steps must have run and no wait may have timed out. Output names steps and
+// counts only; never a path, the ready line, a pairing URL, an offer or a token.
 //
-// Tier: full. Runs under flock /home/chris/coding/Power-Browser/.git/pb-live.lock
-// with inherited ORCA_* unset. SKIP (exit 0, one named line) while a built
-// PowerBrowser, orca/out, the pane bundle or its standalone variant is absent
-// (orca-pane-harness.mjs skipReasons). --self-test runs the list comparator on
-// fixtures (hermetic).
+// Tier: full. A row started without PB_LIVE_LOCK_HELD=1 takes
+// <git common dir>/pb-live.lock itself (lib/live-lock-reexec.mjs) before it
+// launches anything; inherited ORCA_* are unset. Exit 77 with one
+// "SKIP -- <reason>" line (SKIP-PROTOCOL.md) while a built PowerBrowser,
+// orca/out, the pane bundle or its standalone variant is absent
+// (orca-pane-harness.mjs skipReasons), or the PB-owned roots half cannot run.
+// --self-test runs the list comparator on fixtures (hermetic).
 //
 // Usage:
 //   node scripts/verify-orca-add-project-live.mjs
 //   node scripts/verify-orca-add-project-live.mjs --self-test
 
-import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { registerTeardown } from './lib/live-teardown.mjs';
+import { takeLiveLock } from './lib/live-lock-reexec.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-add-project-live';
@@ -66,10 +72,14 @@ const same = (a, b) => a.length === b.length && a.every(x => b.includes(x));
 
 /**
  * Lists are arrays of repository paths; owned* are true/false, or null while the PB-owned roots half is skipped.
- * Never prints a path: the repository is named "the scratch repository".
+ * removes: how many of the two remove steps ran (a remove skipped because the repository had no id leaves both
+ * after-remove lists trivially equal); timeouts: the names of the waits that timed out. Never prints a path: the
+ * repository is named "the scratch repository".
  */
-export function addProjectVerdict({ addedStandalone, addedPb, removedStandalone, removedPb, repo, ownedAfterAdd, ownedAfterRemove }) {
+export function addProjectVerdict({ addedStandalone, addedPb, removedStandalone, removedPb, repo, ownedAfterAdd, ownedAfterRemove, removes = 2, timeouts = [] }) {
     const fails = [];
+    for (const what of timeouts) fails.push(`a wait timed out: ${what}`);
+    if (removes !== 2) fails.push(`only ${removes} of 2 remove steps ran (the repository had no id in a list), so the after-remove comparison proves nothing`);
     if (!same([...new Set(addedStandalone)], [...new Set(addedPb)])) fails.push(`unequal after-add lists (standalone ${new Set(addedStandalone).size}, PowerBrowser ${new Set(addedPb).size} repositories)`);
     if (!addedStandalone.includes(repo)) fails.push('repository missing from the standalone after-add list (the control did not add it)');
     if (!addedPb.includes(repo)) fails.push('repository missing from PowerBrowser\'s after-add list');
@@ -207,19 +217,31 @@ const repoIdOf = (listed, path) => (listed?.result?.repos ?? listed?.repos ?? []
 async function live() {
     const harness = await import('./lib/orca-pane-harness.mjs');
     const skips = harness.skipReasons({ needStandalone: true });
-    if (skips.length) { console.log(`${NAME}: SKIP -- ${skips[0]}`); return 0; }
-    if (!loadTypeScript()) { console.log(`${NAME}: SKIP -- theia/node_modules/typescript is absent; run the audited Theia install`); return 0; }
-    if (!existsSync(join(REPO_ROOT, 'orca', 'src'))) { console.log(`${NAME}: SKIP -- orca/ is absent (P62-10)`); return 0; }
+    if (skips.length) { console.log(skipLine(NAME, skips[0])); return SKIP_EXIT; }
+    if (!loadTypeScript()) { console.log(skipLine(NAME, 'theia/node_modules/typescript is absent; run the audited Theia install in theia/')); return SKIP_EXIT; }
+    if (!existsSync(join(REPO_ROOT, 'orca', 'src'))) { console.log(skipLine(NAME, 'orca/ is absent (P62-10); run scripts/fetch-orca.sh')); return SKIP_EXIT; }
     const { steps, fails: derived } = deriveSteps();
     if (derived.length) { for (const f of derived) console.error(`${NAME}: FAIL -- ${f}`); return 1; }
     const ownedHalf = existsSync(join(REPO_ROOT, WORKSPACE_EXT));
+    // The PB-owned roots half cannot run without orca-workspace: that is a partial run, so the row's verdict is SKIP.
+    const partialSkip = ownedHalf ? null : 'the PB-owned roots half did not run (theia/extensions/orca-workspace is absent)';
+    // Nothing is launched before this: a row started by hand takes the live lock itself (harness-live-panels-02).
+    const held = takeLiveLock(import.meta.url, NAME);
+    if (held !== null) return held;
     const { probe, pollFor } = await import('./lib/pb-relaunch.mjs');
-    const scratch = join(REPO_ROOT, '.mozbuild', NAME, 'repo');
-    rmSync(scratch, { recursive: true, force: true });
+    // One scratch folder per run (never a fixed path two runs could share), removed on every way out, signals included.
+    mkdirSync(join(REPO_ROOT, '.mozbuild'), { recursive: true });
+    const work = mkdtempSync(join(REPO_ROOT, '.mozbuild', `${NAME}-`));
+    const teardown = registerTeardown(() => rmSync(work, { recursive: true, force: true }));
+    const scratch = join(work, 'repo');
     mkdirSync(scratch, { recursive: true });
-    execFileSync('git', ['-C', scratch, 'init', '-q']);
-    execFileSync('git', ['-C', scratch, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', 'commit', '-q', '--allow-empty', '-m', 'fixture']);
-    const record = {};
+    // The fixture's git ignores the user's global config (signing, hooks), as the harness's does.
+    const fx = harness.fixtureGit(scratch, work);
+    fx('init', '-q');
+    fx('commit', '-q', '--allow-empty', '-m', 'fixture');
+    const record = { removes: 0, timeouts: [] };
+    // A wait that times out is a failure, recorded by name (the verdict reports it), never swallowed.
+    const waited = (fn, ms, what) => pollFor(fn, ms, what).then(() => true, () => { record.timeouts.push(what); return false; });
     const stepFail = (where, what) => { throw new Error(`${where}: ${what}`); };
     try {
         await harness.withOrcaPaneSession({ pbOrcad: true }, async (ctx) => {
@@ -229,13 +251,14 @@ async function live() {
             const inPage = async body => ctx.evalIn(page, `(async () => { ${body} })()`);
             let r = await inPage(addBody(steps, 'window.__pbSidebar', scratch));
             if (r !== 'ok') stepFail('standalone add', r);
-            await pollFor(async () => repoPaths(ctx.orca('repo', 'list')).includes(scratch), 20000, 'the standalone add').catch(() => undefined);
+            await waited(async () => repoPaths(ctx.orca('repo', 'list')).includes(scratch), 20000, 'the standalone add');
             record.addedStandalone = repoPaths(ctx.orca('repo', 'list'));
             const sid = repoIdOf(ctx.orca('repo', 'list'), scratch);
             if (sid) {
                 r = await inPage(removeBody(steps, 'window.__pbSidebar', sid));
                 if (r !== 'ok') stepFail('standalone remove', r);
-                await pollFor(async () => !repoPaths(ctx.orca('repo', 'list')).includes(scratch), 20000, 'the standalone remove').catch(() => undefined);
+                record.removes += 1;
+                await waited(async () => !repoPaths(ctx.orca('repo', 'list')).includes(scratch), 20000, 'the standalone remove');
             }
             record.removedStandalone = repoPaths(ctx.orca('repo', 'list'));
 
@@ -252,14 +275,15 @@ async function live() {
                 return await (async () => { ${body} })();`);
             r = await inTheia(addBody(steps, 'await sidebarRoot()', scratch));
             if (r !== 'ok') stepFail('PowerBrowser add', r);
-            await pollFor(async () => repoPaths(ctx.pbOrca('repo', 'list')).includes(scratch), 20000, 'the PowerBrowser add').catch(() => undefined);
+            await waited(async () => repoPaths(ctx.pbOrca('repo', 'list')).includes(scratch), 20000, 'the PowerBrowser add');
             record.addedPb = repoPaths(ctx.pbOrca('repo', 'list'));
             record.ownedAfterAdd = ownedHalf ? await pollFor(async () => (await owned()) || null, 10000, 'the owned root').then(() => true, () => false) : null;
             const pid = repoIdOf(ctx.pbOrca('repo', 'list'), scratch);
             if (pid) {
                 r = await inTheia(removeBody(steps, 'await sidebarRoot()', pid));
                 if (r !== 'ok') stepFail('PowerBrowser remove', r);
-                await pollFor(async () => !repoPaths(ctx.pbOrca('repo', 'list')).includes(scratch), 20000, 'the PowerBrowser remove').catch(() => undefined);
+                record.removes += 1;
+                await waited(async () => !repoPaths(ctx.pbOrca('repo', 'list')).includes(scratch), 20000, 'the PowerBrowser remove');
             }
             record.removedPb = repoPaths(ctx.pbOrca('repo', 'list'));
             record.ownedAfterRemove = ownedHalf ? !(await pollFor(async () => (await owned()) === false || null, 10000, 'the owned root to go').then(() => true, () => false)) : null;
@@ -268,11 +292,12 @@ async function live() {
         console.error(`${NAME}: FAIL -- the session did not complete: ${String(err?.message ?? err).split('\n')[0]}`);
         return 1;
     } finally {
-        rmSync(scratch, { recursive: true, force: true });
+        teardown();
     }
     const fails = addProjectVerdict({ ...record, repo: scratch });
     if (fails.length) { for (const f of fails) console.error(`${NAME}: FAIL -- ${f}`); return 1; }
-    console.log(`${NAME}: PASS -- after-add lists equal (${new Set(record.addedPb).size} repositories, scratch repository present), after-remove lists equal (${new Set(record.removedPb).size}, scratch repository gone); PB-owned root ${ownedHalf ? 'added and removed' : 'SKIP (theia/extensions/orca-workspace is absent)'}`);
+    console.log(`${NAME}: ${partialSkip ? 'ran' : 'PASS'} -- after-add lists equal (${new Set(record.addedPb).size} repositories, scratch repository present), after-remove lists equal (${new Set(record.removedPb).size}, scratch repository gone); PB-owned root ${ownedHalf ? 'added and removed' : 'not measured'}`);
+    if (partialSkip) { console.log(skipLine(NAME, partialSkip)); return SKIP_EXIT; }
     return 0;
 }
 
@@ -289,6 +314,10 @@ function selfTest() {
         ['remove left a row', { ...good, removedPb: ['/a', repo] }, 'remove left a row'],
         ['root not removed', { ...good, ownedAfterRemove: true }, 'PB-owned root not removed'],
         ['root not added', { ...good, ownedAfterAdd: false }, 'PB-owned root not added'],
+        // harness-live-panels-17: a collector that drives nothing returns plausible lists; the counters make that red.
+        ['a remove step that never ran (both after-remove lists trivially equal)', { ...good, removes: 1 }, 'only 1 of 2 remove steps ran'],
+        ['no remove step ran at all', { ...good, removes: 0 }, 'only 0 of 2 remove steps ran'],
+        ['a wait that timed out', { ...good, timeouts: ['the PowerBrowser add'] }, 'a wait timed out: the PowerBrowser add'],
     ];
     let failures = 0;
     for (const [name, input, naming] of cases) {
