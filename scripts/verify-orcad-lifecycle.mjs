@@ -58,7 +58,7 @@
 //   client-recovered   (67-WR-04, lane G3b handoff) clientRecovered() clears a pairing-failure reason and keeps
 //                      the browser-host reason.
 //
-// --self-test copies powerbrowser/shell into a mkdtemp tree, requires it green (watch-orcad skipped), then
+// --self-test copies powerbrowser/shell into a mkdtemp tree, requires it green (watch-orcad left out, a control), then
 // plants each pre-fix fault and requires red naming the clause.
 //
 // Tier: quick. No build, no browser, no display, no network. The fixture clause starts short-lived Node
@@ -68,13 +68,14 @@
 //   node scripts/verify-orcad-lifecycle.mjs
 //   node scripts/verify-orcad-lifecycle.mjs --self-test
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { liveEnv } from './lib/firefox-bidi.mjs';
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orcad-lifecycle';
@@ -807,7 +808,7 @@ async function runFixture(env, dir, { accept, then, named = null, adopt = false 
 }
 
 async function watchFixture(env) {
-    if (process.platform !== 'linux') return { skip: 'watch-fixture: SKIP -- not Linux; the watch reads /proc' };
+    if (process.platform !== 'linux') return { skip: 'watch-fixture not run: this host is not Linux and the watch reads /proc. Next step: run this check on Linux' };
     const fails = [];
     const dir = mkdtempSync(join(process.env.XDG_RUNTIME_DIR && existsSync(process.env.XDG_RUNTIME_DIR) ? process.env.XDG_RUNTIME_DIR : tmpdir(), 'pb-g2-'));
     try {
@@ -941,11 +942,12 @@ async function freePort(env) {
 
 async function watchOrcad(paths, env) {
     const main = join(paths.orcaDir, 'out', 'orcad', 'orcad.js');
-    if (!paths.realOrcad) return { skip: 'watch-orcad: SKIP -- not run by the self-test' };
-    if (process.platform !== 'linux') return { skip: 'watch-orcad: SKIP -- not Linux' };
-    if (!existsSync(main)) return { skip: `watch-orcad: SKIP -- no built orca/ (${main} missing)` };
+    // Deliberately left out by the self-test, which judges the plants over a copied shell: a control, not a SKIP.
+    if (!paths.realOrcad) return { excluded: 'watch-orcad left out: the self-test does not start the pinned orcad' };
+    if (process.platform !== 'linux') return { skip: 'watch-orcad not run: this host is not Linux. Next step: run this check on Linux' };
+    if (!existsSync(main)) return { skip: `watch-orcad not run: no built orca/ (${main} missing). Next step: bash scripts/fetch-orca.sh and bash scripts/build-orca.sh` };
     const major = Number(/^v(\d+)/.exec(process.version)?.[1]);
-    if (!(major >= 24)) return { skip: `watch-orcad: SKIP -- this Node is ${process.version}; orcad needs 24 or newer` };
+    if (!(major >= 24)) return { skip: `watch-orcad not run: this Node is ${process.version} and orcad needs 24 or newer. Next step: run this check inside nix develop .#theia` };
     const base = mkdtempSync(join(process.env.XDG_RUNTIME_DIR && existsSync(process.env.XDG_RUNTIME_DIR) ? process.env.XDG_RUNTIME_DIR : tmpdir(), 'pb-g2o-'));
     const started = [];
     try {
@@ -953,7 +955,7 @@ async function watchOrcad(paths, env) {
         const dataRoot = join(base, 'd');
         mkdirSync(home, { recursive: true });
         mkdirSync(dataRoot, { recursive: true, mode: 0o700 });
-        if (!env.socketPathFits(dataRoot)) return { skip: `watch-orcad: SKIP -- scratch data root ${dataRoot} is too long for orcad's socket path` };
+        if (!env.socketPathFits(dataRoot)) return { skip: `watch-orcad not run: the scratch data root ${dataRoot} is too long for orcad's socket path. Next step: set XDG_RUNTIME_DIR or TMPDIR to a shorter directory` };
         const version = JSON.parse(read(join(paths.orcaDir, 'package.json')) ?? '{}').version || '0.0.0';
         const inherited = { PATH: process.env.PATH ?? '', HOME: home };
         const orcadEnv = env.buildOrcadEnv((n) => inherited[n] ?? '', { dataRoot, orcaVersion: version, claudeAgentSdkDir: '' });
@@ -969,7 +971,7 @@ async function watchOrcad(paths, env) {
         const exited = new Promise((r) => child.once('exit', (c, s) => r(s ?? `code ${c}`)));
         const ready = await Promise.race([sink.ready(), exited.then(() => null), sleep(60000).then(() => null)]);
         if (!ready) return { fails: [`watch-orcad: orcad with the watch preloaded printed no ready line (stderr: ${lines.slice(-4).join(' | ').slice(-400)})`] };
-        if (!ready.daemonPid) return { skip: 'watch-orcad: SKIP -- orcad reported no terminal daemon on this host, so the daemon half cannot be observed' };
+        if (!ready.daemonPid) return { skip: 'watch-orcad not run in full: orcad reported no terminal daemon on this host, so the daemon half cannot be observed. Next step: run this check on a host where orcad starts its terminal daemon' };
         const daemon = [ready.daemonPid, startTicks(ready.daemonPid)];
         started.push(daemon);
         child.stdin.write(`${env.orcadAcceptedLine({ daemonPid: daemon[0], daemonTicks: daemon[1] })}\n`);
@@ -992,6 +994,7 @@ export async function check(paths, { fixture = true } = {}) {
     const env = await freshImport(paths.orcaEnv);
     const fails = [];
     const notes = [];
+    const skips = [];
     const clauses = [
         ['watch-wired', watchWired], ['restart-keeps-daemon', restartKeepsDaemon], ['failed-start', failedStart],
         ['stop-during-ready', stopDuringReady], ['exit-handoff', exitHandOff], ['no-offer', noOffer],
@@ -1004,12 +1007,15 @@ export async function check(paths, { fixture = true } = {}) {
     for (const fn of fixture ? [() => watchFixture(env), () => watchOrcad(paths, env)] : []) {
         try {
             const r = await fn();
-            if (r.skip) notes.push(r.skip);
+            // A watch clause not run for an absent input is a skip (SKIP-PROTOCOL.md rule 2); a deliberate
+            // exclusion and a pass are notes.
+            if (r.skip) skips.push(r.skip);
+            if (r.excluded) notes.push(r.excluded);
             if (r.pass) notes.push(r.pass);
             fails.push(...(r.fails ?? []));
         } catch (err) { fails.push(`watch: threw ${err && err.message ? err.message : err}`); }
     }
-    return { fails, notes };
+    return { fails, notes, skips };
 }
 
 // ---------------------------------------------------------------------------
@@ -1082,7 +1088,26 @@ async function runSelfTest() {
             for (const f of clean.fails) console.error(`${NAME} self-test: control FAIL -- ${f}`);
             return 1;
         }
+        // Every fixture plant needs watch-fixture to run; without it they cannot (SKIP-PROTOCOL.md rule 4).
+        if (clean.skips.length) {
+            console.log(skipLine(`${NAME} self-test`, `the control did not run every clause, so the plants did not run: ${clean.skips.join('; ')}`));
+            return SKIP_EXIT;
+        }
         console.log(`  ok control is green${clean.notes.length ? ` (${clean.notes.join('; ')})` : ''}`);
+        // SKIP control (SKIP-PROTOCOL.md rule 2): the main mode, run as a child with its output captured, over the
+        // copied shell with no orca/ beside it. Every clause but watch-orcad runs green and watch-orcad does not run,
+        // so it must exit 77 with the SKIP line last and no PASS line.
+        {
+            const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url), `--root=${tmp}`], { encoding: 'utf8' });
+            const lines = (r.stdout ?? '').split('\n').filter((l) => l.trim() !== '');
+            const last = lines[lines.length - 1] ?? '';
+            if (r.status !== SKIP_EXIT || !last.startsWith(`${NAME}: SKIP -- watch-orcad not run: no built orca/`)
+                || lines.some((l) => l.includes(`${NAME}: PASS`)) || /: SKIP/.test(r.stderr ?? '')) {
+                console.error(`${NAME} self-test: FAIL -- control: a tree without orca/ did not exit 77 with the watch-orcad SKIP line last and no PASS line (status ${r.status}, last line ${JSON.stringify(last)}, stderr ${JSON.stringify((r.stderr ?? '').slice(0, 300))})`);
+                return 1;
+            }
+            console.log('  ok control: a tree without orca/ -> exit 77, the watch-orcad SKIP line last, no PASS line');
+        }
         let bad = 0;
         for (const plant of plants()) {
             const file = join(paths.shellDir, plant.file);
@@ -1111,18 +1136,20 @@ async function runSelfTest() {
 const isEntryPoint = (() => { try { return realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })();
 if (isEntryPoint) {
     const args = process.argv.slice(2);
-    const unknown = args.find((a) => a !== '--self-test');
+    const unknown = args.find((a) => a !== '--self-test' && !a.startsWith('--root='));
     if (unknown !== undefined) {
         console.error(`${NAME}: FAIL -- unknown argument '${unknown}' (usage: node ${SELF_REL} [--self-test])`);
         process.exit(2);
     }
     if (args.includes('--self-test')) process.exit(await runSelfTest());
-    const r = await check(pathsFor(REPO_ROOT));
+    // --root=<dir> runs the main mode over another tree (the self-test's SKIP control uses it).
+    const rootArg = args.find((a) => a.startsWith('--root='));
+    const r = await check(pathsFor(rootArg ? resolve(rootArg.slice('--root='.length)) : REPO_ROOT));
     for (const n of r.notes) console.log(`${NAME}: ${n}`);
-    if (r.fails.length) {
-        for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`);
-        process.exit(1);
-    }
+    for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`);
+    // FAIL wins; a watch clause not run makes the run exit 77 with one SKIP line printed last (SKIP-PROTOCOL.md).
+    const code = verdictExit(NAME, r.fails, r.skips);
+    if (code !== 0) process.exit(code);
     console.log(`${NAME}: PASS -- orcad carries the parent watch and is told when its start is accepted; the watch ends orcad, its daemon and the agents when PowerBrowser is gone and after a failed start, keeps them after an accepted orcad's exit, ends a named daemon and never a pid whose start ticks differ; Restart keeps the adopted daemon; a failed start ends the daemon under it; no hand-off file outlives a stop, an unexpected exit or a ready line with no offer, and Theia's start clears a crashed session's; a start after quit spawns nothing; exits after ready end in failed with a backoff; darwin and win32 aliasing; the port holder row`);
     process.exit(0);
 }
