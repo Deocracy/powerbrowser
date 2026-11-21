@@ -242,7 +242,7 @@ export function runSelfTest() {
     const planted = [];
     for (const [name, plant, naming] of PLANTS) {
         const r = verdictMark(plant(CONTROL));
-        planted.push(...r);
+        planted.push(r);
         if (!r.some((s) => s.includes(naming))) { console.error(`  FAIL ${name} -> ${r.join(' | ') || 'green'} (expected '${naming}')`); failures++; } else console.log(`  ok ${name} -> red, naming '${naming}'`);
     }
     // Every fail message of the verdict is reached by a plant (derived from the verdict's own source).

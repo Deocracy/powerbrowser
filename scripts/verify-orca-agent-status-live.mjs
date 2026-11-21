@@ -375,7 +375,7 @@ function selfTest() {
         const o = control();
         plant(o);
         const f = verdicts(o);
-        planted.push(...f);
+        planted.push(f);
         if (f.some((x) => x.includes(needle))) lines.push(`  ok plant: ${needle}`);
         else { failures++; lines.push(`  FAIL plant: ${needle}: stayed green or did not name it (${f.join(' | ') || 'no fails'})`); }
     }
