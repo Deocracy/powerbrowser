@@ -3170,6 +3170,6 @@ if (!existsSync(FIREFOX_BIN)) {
     console.log(skipLine(NAME, `no built PowerBrowser (${FIREFOX_BIN} is absent); build the Firefox half as docs/BUILD.md says, or point PB_FIREFOX_BIN at a build`));
     process.exit(SKIP_EXIT);
 }
-const held = takeLiveLock(import.meta.url, NAME, args);
+const held = await takeLiveLock(import.meta.url, NAME, args);
 if (held !== null) process.exit(held);
 process.exit(args.includes('--self-test') ? await selfTest(args) : await main(args));

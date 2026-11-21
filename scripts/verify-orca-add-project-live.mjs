@@ -226,7 +226,7 @@ async function live() {
     // The PB-owned roots half cannot run without orca-workspace: that is a partial run, so the row's verdict is SKIP.
     const partialSkip = ownedHalf ? null : 'the PB-owned roots half did not run (theia/extensions/orca-workspace is absent)';
     // Nothing is launched before this: a row started by hand takes the live lock itself (harness-live-panels-02).
-    const held = takeLiveLock(import.meta.url, NAME);
+    const held = await takeLiveLock(import.meta.url, NAME);
     if (held !== null) return held;
     const { probe, pollFor } = await import('./lib/pb-relaunch.mjs');
     // One scratch folder per run (never a fixed path two runs could share), removed on every way out, signals included.
