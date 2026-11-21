@@ -4272,6 +4272,10 @@ run_own_checks() {
     "packaging-staging-self-test|node $REPO_ROOT/scripts/verify-packaging-staging.mjs --self-test"
     "orca-egress|node $REPO_ROOT/scripts/verify-orca-egress.mjs"
     "orca-egress-self-test|node $REPO_ROOT/scripts/verify-orca-egress.mjs --self-test"
+    # NEW (v1.7 audit fix, lane H9, harness-static-structure-02): the reporter of the ext-tab-host-live row, hermetic.
+    # A leg that was not reached exits 77 with the SKIP line last, a failure wins, and the pre-fix reporter (PASS with a
+    # skipped leg) goes red. Runs before the row creates its server; no browser, no display, no network.
+    "ext-tab-host-live-verdict-self-test|node $REPO_ROOT/scripts/verify-ext-tab-host-live.mjs --verdict-self-test"
     # NEW (67-03, RUN-06/RUN-07, P67-01..P67-09, P67-32): orca-offer-file judges real lstat results of a temp folder
     # through orca-panes' offer-file-policy.ts (type-stripped): symlink, non-regular, other owner, group/other bits,
     # missing, non-loopback or mismatched endpoint, undecodable text; OFFER_REFUSAL_REASONS against the copy table's

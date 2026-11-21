@@ -1398,7 +1398,7 @@
       "case_form": "lower",
       "class": "coincidental",
       "target": "orca",
-      "expected_count": 7557,
+      "expected_count": 7561,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md",
@@ -1838,7 +1838,7 @@
       "case_form": "upper",
       "class": "coincidental",
       "target": "ORCA",
-      "expected_count": 1581,
+      "expected_count": 1583,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",
@@ -2132,7 +2132,7 @@
       "case_form": "lower",
       "class": "coincidental",
       "target": "orcad",
-      "expected_count": 3013,
+      "expected_count": 3012,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md",
@@ -2974,7 +2974,7 @@
       "case_form": "literal",
       "class": "coincidental",
       "target": "pbOrca",
-      "expected_count": 24,
+      "expected_count": 22,
       "expected_files": [
         "scripts/lib/orca-pane-harness.mjs",
         "scripts/verify-orca-add-project-live.mjs",
