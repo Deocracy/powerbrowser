@@ -27,9 +27,11 @@
 //       a. every error class resolveOrcadExitCode (src/main/orcad/orcad-exit-code.ts) tests, followed
 //          through imports and re-exports, gives its code (a `readonly code = '<literal>'` field, or
 //          the union type of a `readonly code` constructor parameter). A code that a branch of the
-//          resolver sends to another exit status (the instance-lock "holder unverifiable" code,
-//          returned as the already-running status so that supervisors wait for the holder) is not a
-//          configuration refusal and is not required;
+//          resolver sends to another exit status is not a configuration refusal and is not required.
+//          At the pin that is the one exemption: orca/src/main/orcad/orcad-exit-code.ts:11-17 returns
+//          SINGLE_INSTANCE_ALREADY_RUNNING_EXIT_CODE for OrcadInstanceLockError with code
+//          'orcad_instance_lock_holder_unverifiable', under the comment "Supervisors wait for an
+//          existing holder instead of abandoning the host", so it is retried, as upstream intends;
 //       b. every direct exit(ORCAD_EXIT_CONFIGURATION) call in a non-test orcad file (the native
 //          preflight, the launcher, the bundled-runtime hand-off), which prints no code.
 //     Each code of (a) must be a key of ORCA_CODE_CLASSES, red naming it otherwise, because
@@ -511,7 +513,7 @@ async function runSelfTest() {
         writeFileSync(join(orcadDir, 'orcad-bundled-runtime.ts'), 'export class OrcadBundledRuntimeError extends Error {}\n');
         // A re-exported class, as the pin's profile-state-access.ts re-exports ProfileStateAccessError.
         writeFileSync(join(orcadDir, 'orcad-bind-address.ts'), "export { OrcadBindAddressError } from './orcad-bind-address-error'\n");
-        writeFileSync(join(orcadDir, 'orcad-bind-address-error.ts'), "export class OrcadBindAddressError extends Error {\n  readonly code = 'orcad_invalid_bind_address' as const\n}\n");
+        writeFileSync(join(orcadDir, 'orcad-bind-address-error.ts'), "export class OrcadBindAddressError extends Error {\n  readonly code = 'orcad_planted_bind_refusal' as const\n}\n");
         mkdirSync(paths.failureDir, { recursive: true });
         mkdirSync(dirname(paths.policyFile), { recursive: true });
         writeFileSync(paths.policyFile, FIXTURE_POLICY);
@@ -530,6 +532,16 @@ async function runSelfTest() {
         }
 
         const swap = (a, b) => (text) => { if (!text.includes(a)) throw new Error(`plant target not found: ${a.slice(0, 60)}`); return text.replace(a, b); };
+        // A codeless refusal is covered when PowerBrowser treats the configuration exit status as final; the codeless
+        // plants move the pinned status to 79, which no product constant equals, so they hold on either product tree.
+        const statusMoved = [{ file: paths.configExitFile, edit: swap('ORCAD_EXIT_CONFIGURATION = 78', 'ORCAD_EXIT_CONFIGURATION = 79') }];
+        // OrcaService's search, in the table form (Object.keys over ORCA_CODE_CLASSES) or the earlier literal list.
+        const SEARCH_FORMS = ['Object.keys(OrcaEnv.ORCA_CODE_CLASSES).find(', '[OrcaEnv.ORCAD_PINNED_PORT_CODE, OrcaEnv.ORCAD_LOCK_HELD_CODE].find('];
+        const swapSearch = (to) => (text) => {
+            const form = SEARCH_FORMS.find((f) => text.includes(f));
+            if (!form) throw new Error("plant target not found: OrcaService's unrecoverable code search");
+            return text.replace(form, to);
+        };
         const plants = [
             { name: 'an added Orca auth reason', naming: 'added Orca reason', file: paths.authFile, edit: swap("  | 'insecure-origin'\n", "  | 'insecure-origin'\n  | 'session-expired'\n") },
             { name: 'an added Orca offer-unavailable reason', naming: 'added Orca reason', file: paths.pairingFile, edit: swap("  | 'network_exposure_failed'\n", "  | 'network_exposure_failed'\n  | 'quota_exhausted'\n") },
@@ -543,20 +555,21 @@ async function runSelfTest() {
             { name: 'the browser-host reason mapped to pairing-lost in the copy table', naming: 'not browser-not-attached', file: paths.copyFile, edit: swap("    'browser-host-attach-failed': 'browser-not-attached',", "    'browser-host-attach-failed': 'pairing-lost',") },
             { name: 'the copy directory present without the copy file', naming: 'is missing while', file: paths.copyFile, edit: () => null },
             // harness-static-hosting-10
-            { name: 'a new fatal code in the pinned lock-error union', naming: "unmapped orcad code: the pinned OrcadInstanceLockError refuses orcad's start with 'orcad_data_root_shared'", file: join(orcadDir, 'orcad-data-root-privacy.ts'), edit: swap("  | 'orcad_instance_lock_held'\n", "  | 'orcad_instance_lock_held'\n  | 'orcad_data_root_shared'\n") },
-            { name: 'a new re-exported refusal class tested by resolveOrcadExitCode', naming: "unmapped orcad code: the pinned OrcadBindAddressError refuses orcad's start with 'orcad_invalid_bind_address'", file: paths.exitFile, edit: (t) => `import { OrcadBindAddressError } from './orcad-bind-address'\n${swap('return error instanceof OrcadInstanceLockError ?', 'return error instanceof OrcadInstanceLockError || error instanceof OrcadBindAddressError ?')(t)}` },
+            // Planted codes no OrcaEnv maps, so the plants hold whatever the product's table holds (review follow-up).
+            { name: 'a new fatal code in the pinned lock-error union', naming: "unmapped orcad code: the pinned OrcadInstanceLockError refuses orcad's start with 'orcad_data_root_planted'", file: join(orcadDir, 'orcad-data-root-privacy.ts'), edit: swap("  | 'orcad_instance_lock_held'\n", "  | 'orcad_instance_lock_held'\n  | 'orcad_data_root_planted'\n") },
+            { name: 'a new re-exported refusal class tested by resolveOrcadExitCode', naming: "unmapped orcad code: the pinned OrcadBindAddressError refuses orcad's start with 'orcad_planted_bind_refusal'", file: paths.exitFile, edit: (t) => `import { OrcadBindAddressError } from './orcad-bind-address'\n${swap('return error instanceof OrcadInstanceLockError ?', 'return error instanceof OrcadInstanceLockError || error instanceof OrcadBindAddressError ?')(t)}` },
             // Review follow-up: the resolver's other-status branch, codeless refusals, direct exits, the transport.
             { name: "the holder-unverifiable branch removed from the resolver", naming: "unmapped orcad code: the pinned OrcadInstanceLockError refuses orcad's start with 'orcad_instance_lock_holder_unverifiable'", file: paths.exitFile, edit: swap("  if (\n    error instanceof OrcadInstanceLockError &&\n    error.code === 'orcad_instance_lock_holder_unverifiable'\n  ) {\n    return SINGLE_INSTANCE_ALREADY_RUNNING_EXIT_CODE\n  }\n", '') },
-            { name: 'a codeless refusal class tested by the resolver', naming: 'codeless orcad refusal: the error class OrcadBundledRuntimeError', file: paths.exitFile, edit: (t) => `import { OrcadBundledRuntimeError } from './orcad-bundled-runtime'\n${swap('return error instanceof OrcadInstanceLockError ?', 'return error instanceof OrcadInstanceLockError || error instanceof OrcadBundledRuntimeError ?')(t)}` },
-            { name: 'a refusal code moved into the constructor body', naming: 'codeless orcad refusal: the error class OrcadInstanceLockError', file: join(orcadDir, 'orcad-data-root-privacy.ts'), edit: swap('    readonly code: OrcadInstanceLockCode,\n', '    code: string,\n') },
-            { name: 'a direct configuration exit in a new orcad file', naming: 'codeless orcad refusal: the direct configuration exit at orcad-new-preflight.ts:3', file: join(orcadDir, 'orcad-new-preflight.ts'), edit: () => "import { ORCAD_EXIT_CONFIGURATION } from './orcad-configuration-exit'\nexport function preflight(ok: boolean): void {\n  if (!ok) process.exit(ORCAD_EXIT_CONFIGURATION)\n}\n" },
+            { name: 'a codeless refusal class tested by the resolver', also: statusMoved, naming: 'codeless orcad refusal: the error class OrcadBundledRuntimeError', file: paths.exitFile, edit: (t) => `import { OrcadBundledRuntimeError } from './orcad-bundled-runtime'\n${swap('return error instanceof OrcadInstanceLockError ?', 'return error instanceof OrcadInstanceLockError || error instanceof OrcadBundledRuntimeError ?')(t)}` },
+            { name: 'a refusal code moved into the constructor body', also: statusMoved, naming: 'codeless orcad refusal: the error class OrcadInstanceLockError', file: join(orcadDir, 'orcad-data-root-privacy.ts'), edit: swap('    readonly code: OrcadInstanceLockCode,\n', '    code: string,\n') },
+            { name: 'a direct configuration exit in a new orcad file', also: statusMoved, naming: 'codeless orcad refusal: the direct configuration exit at orcad-new-preflight.ts:3', file: join(orcadDir, 'orcad-new-preflight.ts'), edit: () => "import { ORCAD_EXIT_CONFIGURATION } from './orcad-configuration-exit'\nexport function preflight(ok: boolean): void {\n  if (!ok) process.exit(ORCAD_EXIT_CONFIGURATION)\n}\n" },
             { name: "the transport's bind-error code renamed", naming: "unmapped orcad code: the pinned PinnedPortUnavailableError", file: paths.transportFile, edit: swap("'pinned_port_unavailable'", "'pinned_port_busy'") },
             { name: 'the configuration exit constant moved', naming: 'source moved: src/main/orcad/orcad-configuration-exit.ts no longer exports ORCAD_EXIT_CONFIGURATION', file: paths.configExitFile, edit: swap('export const ORCAD_EXIT_CONFIGURATION = 78', 'export const ORCAD_EXIT_CONFIG = 78') },
             // harness-static-hosting-01 follow-up: the tracked failure directory missing is red.
             { name: 'the failure directory removed', naming: 'source moved: theia/extensions/orca-panes/src/browser/failure is missing', dir: paths.failureDir },
             { name: 'resolveOrcadExitCode renamed in the pin', naming: 'source moved: src/main/orcad/orcad-exit-code.ts no longer declares resolveOrcadExitCode', file: paths.exitFile, edit: swap('function resolveOrcadExitCode(', 'function resolveExitCode(') },
-            { name: "OrcaService's unrecoverable list dropping the lock-held code", naming: 'retried mapped code', file: paths.orcaService, edit: swap('[OrcaEnv.ORCAD_PINNED_PORT_CODE, OrcaEnv.ORCAD_LOCK_HELD_CODE].find(', '[OrcaEnv.ORCAD_PINNED_PORT_CODE].find(') },
-            { name: "OrcaService's unrecoverable list rewritten out of recognition", naming: 'source moved: OrcaService.sys.mjs has no', file: paths.orcaService, edit: swap('[OrcaEnv.ORCAD_PINNED_PORT_CODE, OrcaEnv.ORCAD_LOCK_HELD_CODE].find(c => text.includes(c))', 'FATAL.find(c => text.includes(c))') },
+            { name: "OrcaService's unrecoverable search narrowed to the port code", naming: 'retried mapped code', file: paths.orcaService, edit: swapSearch('[OrcaEnv.ORCAD_PINNED_PORT_CODE].find(') },
+            { name: "OrcaService's unrecoverable search rewritten out of recognition", naming: 'source moved: OrcaService.sys.mjs has no', file: paths.orcaService, edit: swapSearch('FATAL.find(') },
         ];
 
         // Control: the codeless refusals are covered once OrcaService treats the configuration exit status as unrecoverable.
@@ -587,6 +600,7 @@ async function runSelfTest() {
             const original = !p.dir && existed ? readFileSync(p.file, 'utf8') : null;
             try {
                 const edited = p.dir ? undefined : p.edit(original ?? '');
+                for (const a of p.also ?? []) { a.original = readFileSync(a.file, 'utf8'); writeFileSync(a.file, a.edit(a.original)); }
                 if (p.dir) renameSync(p.dir, `${p.dir}.planted-away`);
                 else if (edited === null) rmSync(p.file); else writeFileSync(p.file, edited);
                 const r = await check(paths);
@@ -597,6 +611,7 @@ async function runSelfTest() {
             } catch (err) {
                 console.error(`  FAIL ${p.name} -> ${err.message}`); failures++;
             } finally {
+                for (const a of p.also ?? []) if (a.original !== undefined) { writeFileSync(a.file, a.original); a.original = undefined; }
                 if (p.dir) renameSync(`${p.dir}.planted-away`, p.dir);
                 else if (original !== null) writeFileSync(p.file, original);
                 else rmSync(p.file, { force: true });
