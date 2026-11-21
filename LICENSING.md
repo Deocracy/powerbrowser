@@ -22,7 +22,7 @@ The Eclipse Theia framework and the other npm packages the application ships are
 
 ## Orca
 
-The npm packages that Orca's orcad server, web client and mobile-web bundle ship are listed with their licence texts in the "Orca (orcad, web client, mobile-web)" section of [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt). The Orca source is the pin named by the `configuration.toml` keys `upstreams.orca_tag` and `upstreams.orca_commit`; Orca's own licence is checked by `inventory/licence-allowlist.json`.
+The npm packages that Orca's orcad server, web client and mobile-web bundle ship are listed with their licence texts in the "Orca (orcad, web client, mobile-web)" section of [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt). The Orca source is the pin named by the `configuration.toml` keys `upstreams.orca_tag` and `upstreams.orca_commit`. Orca's own copyright and permission notice (MIT) is quoted at the head of that section and ships in the package as `orca/LICENSE`; its text is pinned by digest in `inventory/licence-allowlist.json`.
 
 ## Bundled extensions
 

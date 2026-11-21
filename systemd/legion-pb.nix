@@ -24,8 +24,11 @@
 # legion's own 26.05 channel; the list is in
 # .planning/workstreams/orca/phases/59-carry-forward-from-v1-5-and-v1-6/59-02-SUMMARY.md.
 #
-# Not verified until the first job (54 BLOCKED.md item 6): the runner unit's sandboxing may block the
-# libvirt socket. If virsh fails only inside a job, set the runner's serviceOverrides and record it.
+# The runner's sandbox (59-CR-02) was read from the github-runner module of legion's nixos-26.05
+# channel (service.nix), not tested: the first deployment of this file is the proof. If a podman step
+# still fails inside a job, the options the module keeps at its defaults and that are the next
+# candidates are ProtectControlGroups (cgroup writes) and ProtectKernelTunables (sysfs inside the
+# container); relax one at a time and record which one was needed.
 { config, pkgs, lib, ... }:
 {
   # --- 1. The release runner (docs/RELEASING.md "Runner registration through the /etc/nixos flow") ---
@@ -39,20 +42,52 @@
     name = "legion";
     user = "pb-runner";
     group = "pb-runner";
+    # The module bind-mounts and chdirs into this path without a "-" prefix and never creates it, and
+    # it deletes everything inside it on every start; the tmpfiles rule in section 3 creates it.
     workDir = "/var/lib/pb-runner";
     extraLabels = [ "powerbrowser-release" ];
     extraPackages = with pkgs; [ git gh nix podman ];
     extraEnvironment = {
       ACTIONS_RUNNER_HOOK_JOB_STARTED = "/etc/pb-runner/legion-pre-job-hook.sh";
-      # win-matrix-run.sh calls virsh without -c; for a non-root user that would reach qemu:///session.
-      LIBVIRT_DEFAULT_URI = "qemu:///system";
+      # The module sets HOME to workDir, which it wipes on every start. Rootless podman keeps its image
+      # store under XDG_DATA_HOME, so the store lives outside workDir and survives a restart.
+      XDG_DATA_HOME = "/var/lib/pb-runner-data";
+    };
+    # 59-CR-02: release.yml runs rootless `podman build` and `podman run` on this runner. The module's
+    # mkDefault hardening forbids what rootless podman needs, so each setting below is relaxed for
+    # this runner only, with the reason.
+    serviceOverrides = {
+      RestrictNamespaces = false; # podman creates user, mount, UTS, IPC and PID namespaces
+      PrivateUsers = false; # newuidmap must map pb-runner's subordinate uid and gid ranges
+      NoNewPrivileges = false; # newuidmap and newgidmap are setuid wrappers in /run/wrappers
+      PrivateMounts = false; # the container's mounts are made in its own mount namespace
+      PrivateDevices = false; # fuse-overlayfs needs /dev/fuse when native rootless overlay is absent
+      RestrictSUIDSGID = false; # image layers carry setuid files, which unpacking must recreate
+      ProtectHostname = false; # crun sets the container's hostname inside its UTS namespace
+      ProtectProc = "default"; # a fresh /proc in the container is refused while /proc is hidepid
+      # serviceOverrides is merged into the module's serviceConfig, so a plain list would be appended
+      # to the module's mkBefore deny list and leave ~@mount, ~capset and ~sethostname in force.
+      # mkForce replaces that list; this keeps every other entry of it.
+      SystemCallFilter = lib.mkForce [
+        "~@clock"
+        "~@cpu-emulation"
+        "~@module"
+        "~@obsolete"
+        "~@raw-io"
+        "~@reboot"
+      ];
+      # ProtectSystem=strict leaves /var/lib read-only; the podman store must be writable.
+      ReadWritePaths = [ "/var/lib/pb-runner-data" ];
     };
   };
   users.users.pb-runner = {
     isSystemUser = true;
     group = "pb-runner";
     autoSubUidGidRange = true; # rootless podman
-    extraGroups = [ "libvirtd" ];
+    # packaging-prefs-network-01: no libvirtd group. Management access to qemu:///system is
+    # root-equivalent, and this user runs the release build's third-party build code (the npm
+    # closures of the sidecar and the agent server) in the host shell. No workflow job uses libvirt: the Windows matrix
+    # (scripts/matrix/win-matrix-run.sh) is run by the owner from the owner's own account.
   };
   users.groups.pb-runner = { };
   environment.etc."pb-runner/legion-pre-job-hook.sh" = {
@@ -60,15 +95,22 @@
     mode = "0555"; # a copy, not a store symlink
   };
 
-  # --- 2. libvirt on legion for pb-runner (54 BLOCKED.md item 6) ---
+  # --- 2. libvirt on legion for the owner's Windows matrix run (54 BLOCKED.md item 6) ---
+  # The owner runs the matrix as their own account, which is in the libvirtd group, with
+  # LIBVIRT_DEFAULT_URI=qemu:///system (virsh without -c reaches qemu:///session for a non-root user).
   virtualisation.libvirtd = {
     enable = true;
     qemu.swtpm.enable = true; # TPM 2.0 for the Windows 11 guest
   };
 
-  # --- 3. Safe Browsing key directory (OWNER-PASS.md section 5 step 3) ---
-  # The owner places the key file sb-gapi.data (mode 0440) inside; the runner and chris read it.
-  systemd.tmpfiles.rules = [ "d /var/lib/powerbrowser-release 0750 root pb-runner -" ];
+  # --- 3. Directories: the Safe Browsing key directory (OWNER-PASS.md section 5 step 3), and the
+  # runner's work directory and podman store (59-CR-01, 59-CR-02) ---
+  # The owner places the key file sb-gapi.data (mode 0440) in the first; the runner and chris read it.
+  systemd.tmpfiles.rules = [
+    "d /var/lib/powerbrowser-release 0750 root pb-runner -"
+    "d /var/lib/pb-runner 0750 pb-runner pb-runner -"
+    "d /var/lib/pb-runner-data 0700 pb-runner pb-runner -"
+  ];
   users.users.chris.extraGroups = [ "pb-runner" ];
 
   # --- 4. Codeberg mirror: systemd/codeberg-mirror.service and .timer, directive for directive ---
