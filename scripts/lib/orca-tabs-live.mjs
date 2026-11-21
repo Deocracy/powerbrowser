@@ -29,21 +29,23 @@
 // stdout and stderr write goes through orca-run.mjs's redact, which also
 // replaces the offer itself once it has been read.
 //
-// The live lock: a live row started on its own (PB_LIVE_LOCK_HELD is not "1") takes
-// <git common dir>/pb-live.lock itself, before it launches anything, through
-// reexecUnderLiveLock (harness-live-tabs-14, lane H1: the driver takes it and exports
-// PB_LIVE_LOCK_HELD=1 for the rows it runs). A row wrapped in flock on that same file by
-// its caller must also export PB_LIVE_LOCK_HELD=1, or it waits on its own parent.
+// The live lock (reexecUnderLiveLock): a live row takes <git common dir>/pb-live.lock itself,
+// before it launches anything. It goes on in this process when an ancestor holds the lock
+// (flock <lock> node <row>, or this function's own re-exec) or when PB_LIVE_LOCK_HELD=1 is set
+// and the lock is in fact held (the driver's holder); PB_LIVE_LOCK_HELD=1 with a free lock is
+// an error, never trusted. Otherwise it re-runs the row under flock -o in its own process group,
+// forwards SIGINT, SIGTERM and SIGHUP to that group and exits with the re-run's status.
+// The lock file is never overridable by a live run (PB_LIVE_LOCK_FILE counts only with --lock-probe).
 //
-// Fixture git: the scratch repository's git runs with no global or system config, no
-// signing and no hooks (fixtureGit), so a developer's ~/.gitconfig cannot block or alter
-// the fixture commits (harness-live-tabs-13).
+// Fixture git: the scratch repository's git is the pane harness's fixtureGit (no global or
+// system config, no signing, no hooks, a scratch HOME), and the Orca CLI gets the scratch HOME
+// too (harness-live-tabs-13).
 //
 // Node built-ins and the repo's lib modules only.
 
-import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { constants as osConstants, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { liveEnv, seedClaudeLogin } from './firefox-bidi.mjs';
@@ -75,25 +77,73 @@ const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { retu
 // ---------------------------------------------------------------------------
 // The live lock.
 
-/** The lock file every live run shares: <git common dir>/pb-live.lock, or PB_LIVE_LOCK_FILE (the self-test's own file). */
-export function liveLockFile(root = REPO_ROOT, env = process.env) {
-    if (env.PB_LIVE_LOCK_FILE) return env.PB_LIVE_LOCK_FILE;
+/**
+ * The lock file every live run shares: <git common dir>/pb-live.lock. PB_LIVE_LOCK_FILE names another file only for the
+ * self-test's --lock-probe (probe true); a live run ignores it, so it cannot point the lock at a file nobody else takes.
+ */
+export function liveLockFile(root = REPO_ROOT, env = process.env, probe = false) {
+    if (probe && env.PB_LIVE_LOCK_FILE) return env.PB_LIVE_LOCK_FILE;
     const common = execFileSync('git', ['-C', root, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim();
     return join(common, 'pb-live.lock');
 }
 
+/** 'held' when some process holds `lock` (a non-blocking flock cannot take it), 'free' when it can, 'error' when flock did not run. */
+export function lockState(lock) {
+    const r = spawnSync('flock', ['-n', lock, 'true'], { stdio: 'ignore' });
+    if (r.error) return 'error';
+    return r.status === 0 ? 'free' : r.status === 1 ? 'held' : 'error';
+}
+
 /**
- * Takes the live lock for a live row started outside the driver. Returns null when PB_LIVE_LOCK_HELD is "1" (the
- * driver, or a caller that holds the lock, already did: the row goes on in this process). Otherwise runs
- * `node <self> <args>` under flock -o on the lock file (-o: the row's own children, a detached orcad among them, do not inherit the
- * lock descriptor and so cannot keep it after the row ends) with PB_LIVE_LOCK_HELD=1 and returns that run's exit status (77
- * and every other status pass through); the caller exits with it and launches nothing itself.
+ * Whether this process or one of its ancestors holds a flock on `lock` (mirrors lock_held_by_ancestor in scripts/verify-platform.sh):
+ * the holders are read from /proc/locks by the lock file's inode, then the parent chain of `pid` is walked.
  */
-export function reexecUnderLiveLock(self, args, { root = REPO_ROOT, env = process.env } = {}) {
-    if (env.PB_LIVE_LOCK_HELD === '1') return null;
-    const r = spawnSync('flock', ['-o', liveLockFile(root, env), process.execPath, self, ...args], { stdio: 'inherit', env: { ...env, PB_LIVE_LOCK_HELD: '1' } });
-    if (r.error) throw new Error(`could not take the live lock with flock (${r.error.code ?? r.error.message}); install util-linux or run through scripts/verify-platform.sh`);
-    return r.status ?? 1;
+export function lockHeldByAncestor(lock, pid = process.pid, procRoot = '/proc') {
+    let ino;
+    try { ino = String(statSync(lock).ino); } catch { return false; }
+    const holders = new Set();
+    for (const line of (read(join(procRoot, 'locks')) ?? '').split('\n')) {
+        const f = line.trim().split(/\s+/);
+        if (f.includes('->') || f[1] !== 'FLOCK') continue;
+        if (String(f[5] ?? '').split(':').pop() === ino) holders.add(f[4]);
+    }
+    if (!holders.size) return false;
+    for (let at = pid; at > 1;) {
+        if (holders.has(String(at))) return true;
+        const stat = read(join(procRoot, String(at), 'stat'));
+        if (stat === null) return false;
+        at = Number(stat.replace(/^.*\) /, '').split(' ')[1]);
+    }
+    return false;
+}
+
+/**
+ * Takes the live lock. Resolves null when this process may go on: an ancestor holds the lock, or PB_LIVE_LOCK_HELD=1 is set and the
+ * lock is held (the driver's holder is not an ancestor). Throws when PB_LIVE_LOCK_HELD=1 is set and the lock is free (a hand-set flag
+ * would run the row with no lock). Otherwise runs `node <self> <args>` under flock -o (the row's children, a detached orcad among
+ * them, do not inherit the descriptor and cannot keep the lock after the row ends) in its own process group, forwards termination
+ * signals to that group, and resolves with the run's exit status (77 and every other status pass through). The caller exits with it.
+ * Options for the self-test only: lockFile, ancestorCheck, forward.
+ */
+export async function reexecUnderLiveLock(self, args, { root = REPO_ROOT, env = process.env, lockFile, ancestorCheck = true, forward = true } = {}) {
+    const lock = lockFile ?? liveLockFile(root, env, args.includes('--lock-probe'));
+    if (ancestorCheck && lockHeldByAncestor(lock)) return null;
+    if (env.PB_LIVE_LOCK_HELD === '1') {
+        const state = lockState(lock);
+        if (state === 'held') return null;
+        throw new Error(`PB_LIVE_LOCK_HELD=1 is set but ${state === 'free' ? 'nothing holds' : 'the state could not be read of'} the live lock (${lock}), so this run would be unlocked. Next step: unset PB_LIVE_LOCK_HELD, or run through scripts/verify-platform.sh`);
+    }
+    return new Promise((resolveRun, reject) => {
+        const child = spawn('flock', ['-o', lock, process.execPath, self, ...args], { stdio: 'inherit', detached: true, env: { ...env, PB_LIVE_LOCK_HELD: '1' } });
+        const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+        const send = (sig) => { try { process.kill(-child.pid, sig); } catch { /* already gone */ } };
+        const handlers = signals.map((sig) => [sig, () => send(sig)]);
+        const onExit = () => send('SIGTERM');
+        if (forward) { for (const [sig, h] of handlers) process.on(sig, h); process.on('exit', onExit); }
+        const done = () => { for (const [sig, h] of handlers) process.off(sig, h); process.off('exit', onExit); };
+        child.on('error', (err) => { done(); reject(new Error(`could not take the live lock with flock (${err.code ?? err.message}); install util-linux or run through scripts/verify-platform.sh`)); });
+        child.on('close', (code, signal) => { done(); resolveRun(code ?? (signal ? 128 + (osConstants.signals[signal] ?? 0) : 1)); });
+    });
 }
 
 /**
@@ -120,10 +170,84 @@ export function lockProbeVerdict(self, name) {
 
 /** What a row prints for --lock-probe once it is running: whether this process holds the live lock. Never launches anything. */
 export function lockProbeLine(name, env = process.env) {
-    const lockFile = liveLockFile(REPO_ROOT, env);
-    // A second, non-blocking flock fails (status 1) exactly while another open file description holds the lock.
-    const taken = spawnSync('flock', ['-n', lockFile, 'true']);
-    return `${name}: lock-probe: held=${env.PB_LIVE_LOCK_HELD === '1' ? 1 : 0} locked=${taken.status === 1 ? 1 : 0}`;
+    return `${name}: lock-probe: held=${env.PB_LIVE_LOCK_HELD === '1' ? 1 : 0} locked=${lockState(liveLockFile(REPO_ROOT, env, true)) === 'held' ? 1 : 0}`;
+}
+
+/**
+ * The lock helper's own plants (no browser, a private lock file, real flock): each case runs a fixture row that calls
+ * reexecUnderLiveLock and prints "ran held=<flag>". Resolves red reasons.
+ */
+export async function lockBehaviourVerdict() {
+    const dir = mkdtempSync(join(tmpdir(), 'pb-lock-behaviour-'));
+    const fails = [];
+    const stragglers = [];
+    try {
+        const lock = join(dir, 'pb-live.lock');
+        writeFileSync(lock, '');
+        const pids = join(dir, 'pids');
+        const row = join(dir, 'row.mjs');
+        writeFileSync(row, `import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import { reexecUnderLiveLock } from ${JSON.stringify(import.meta.url)};
+const opts = { lockFile: process.env.FX_LOCK, ancestorCheck: process.env.FX_NO_ANCESTOR !== '1', forward: process.env.FX_NO_FORWARD !== '1' };
+let held;
+try { held = await reexecUnderLiveLock(import.meta.filename, process.argv.slice(2), opts); } catch (e) { console.error(String(e.message)); process.exit(1); }
+if (held !== null) process.exit(held);
+console.log('ran held=' + process.env.PB_LIVE_LOCK_HELD);
+if (process.env.FX_SLEEP === '1') {
+    const child = spawn('sleep', ['60'], { stdio: 'ignore' });
+    writeFileSync(process.env.FX_PIDS, process.pid + ' ' + child.pid);
+    await new Promise((r) => setTimeout(r, 60000));
+}
+`);
+        const base = Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'PB_LIVE_LOCK_HELD' && !k.startsWith('ORCA_')));
+        const run = (cmd, args, extra = {}, timeout = 15000) => spawnSync(cmd, args, { encoding: 'utf8', timeout, env: { ...base, FX_LOCK: lock, ...extra } });
+        // (a) a hand-set flag with the lock free is not trusted.
+        const free = run(process.execPath, [row], { PB_LIVE_LOCK_HELD: '1' });
+        if (free.status === 0 || !/PB_LIVE_LOCK_HELD=1 is set but nothing holds the live lock/.test(free.stderr)) fails.push(`lock: PB_LIVE_LOCK_HELD=1 with the lock free was trusted (exit ${free.status}, ${String(free.stderr).trim().slice(0, 100)})`);
+        // (a, control) the same flag with the lock held by the driver's kind of holder (not an ancestor) is accepted.
+        const holder = spawn('flock', ['-o', lock, 'sleep', '30'], { stdio: 'ignore', detached: true });
+        stragglers.push(-holder.pid);
+        for (let i = 0; i < 50 && lockState(lock) !== 'held'; i++) await sleep(100);
+        const held = run(process.execPath, [row], { PB_LIVE_LOCK_HELD: '1' });
+        if (held.status !== 0 || !/ran held=1/.test(held.stdout)) fails.push(`lock: PB_LIVE_LOCK_HELD=1 with the lock held was refused (exit ${held.status}, ${String(held.stderr).trim().slice(0, 100)})`);
+        try { process.kill(-holder.pid, 'SIGKILL'); } catch { /* gone */ }
+        for (let i = 0; i < 50 && lockState(lock) !== 'free'; i++) await sleep(100);
+        // (b) flock <lock> node <row>: an ancestor holds the lock, the row goes on instead of waiting on it.
+        const wrapped = run('flock', [lock, process.execPath, row], {}, 8000);
+        if (wrapped.status !== 0 || !/ran held=undefined/.test(wrapped.stdout)) fails.push(`lock: a row under flock <lock> did not run (exit ${wrapped.status}${wrapped.error ? `, ${wrapped.error.code}` : ''}): it waited on its own ancestor`);
+        // (b, plant) without the ancestor check the same invocation hangs: the detector can see the deadlock.
+        const hung = spawn('flock', [lock, process.execPath, row], { stdio: 'ignore', detached: true, env: { ...base, FX_LOCK: lock, FX_NO_ANCESTOR: '1' } });
+        stragglers.push(-hung.pid);
+        await sleep(3000);
+        const hungAlive = hung.exitCode === null && hung.signalCode === null;
+        try { process.kill(-hung.pid, 'SIGKILL'); } catch { /* gone */ }
+        await sleep(500);
+        for (let i = 0; i < 50 && lockState(lock) !== 'free'; i++) await sleep(100);
+        if (!hungAlive) fails.push('lock: the ancestor-wait plant did not hang, so the ancestor control proves nothing');
+        // plain run: re-executed under the lock.
+        const plain = run(process.execPath, [row]);
+        if (plain.status !== 0 || !/ran held=1/.test(plain.stdout)) fails.push(`lock: a plain run was not re-run under the lock (exit ${plain.status}, ${String(plain.stderr).trim().slice(0, 100)})`);
+        // (c) a SIGTERM to the row's first process reaches the re-run, its children and releases the lock.
+        for (const forward of [true, false]) {
+            rmSync(pids, { force: true });
+            const parent = spawn(process.execPath, [row], { stdio: 'ignore', env: { ...base, FX_LOCK: lock, FX_SLEEP: '1', FX_PIDS: pids, FX_NO_FORWARD: forward ? '0' : '1' }, detached: true });
+            for (let i = 0; i < 100 && !existsSync(pids); i++) await sleep(100);
+            const [rowPid, kidPid] = (read(pids) ?? '0 0').split(' ').map(Number);
+            if (!(rowPid > 1)) { fails.push('lock: the signal fixture row never started'); stragglers.push(parent.pid); continue; }
+            for (const pid of [rowPid, kidPid]) if (Number.isInteger(pid) && pid > 1) stragglers.push(pid);
+            process.kill(parent.pid, 'SIGTERM');
+            await sleep(2500);
+            const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+            if (forward && (alive(rowPid) || alive(kidPid) || lockState(lock) !== 'free')) fails.push('lock: SIGTERM to the parent left the re-run, its child or the lock behind');
+            if (!forward && !alive(rowPid)) fails.push('lock: the no-forward plant did not leave the re-run running, so the signal control proves nothing');
+            for (const pid of [rowPid, kidPid]) if (Number.isInteger(pid) && pid > 1) try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
+        }
+        return fails;
+    } finally {
+        for (const pid of stragglers) { if (pid === 0 || Math.abs(pid) <= 1) continue; try { process.kill(pid, "SIGKILL"); } catch { /* gone */ } }
+        rmSync(dir, { recursive: true, force: true });
+    }
 }
 
 /** verdictExit with its SKIP line suppressed: the self-tests ask what the exit status is without printing a SKIP line of their own. */
@@ -157,10 +281,16 @@ export function redactAfterSession(text) {
 export const CONFIRMATION_SELECTOR = 'body > [data-radix-popper-content-wrapper] [role="dialog"], body > [data-radix-popper-content-wrapper] [role="alertdialog"], body > [role="dialog"], body > [role="alertdialog"], body > div [role="alertdialog"]';
 const ORCA_CLOSE_DIALOG_REL = 'orca/src/renderer/src/components/terminal-pane/CloseTerminalDialog.tsx';
 
-/** The dialog titles of Orca's close-terminal confirmation, read from the pinned source: [] when orca/ is absent. */
+/**
+ * The dialog titles of Orca's close-terminal confirmation, read from the pinned source: [] only when orca/ is not fetched. With the
+ * checkout present and no title read (the file moved or its copy keys changed) it throws: an empty list would accept any new dialog.
+ */
 export function closeDialogTitles(root = REPO_ROOT) {
-    const text = read(join(root, ORCA_CLOSE_DIALOG_REL)) ?? '';
-    return [...text.matchAll(/stop_(?:command|agent)_title',\s*'([^']+)'/g)].map((m) => m[1]);
+    if (!existsSync(join(root, 'orca', 'src'))) return [];
+    const text = read(join(root, ORCA_CLOSE_DIALOG_REL));
+    const titles = [...(text ?? '').matchAll(/stop_(?:command|agent)_title',\s*'([^']+)'/g)].map((m) => m[1]);
+    if (!titles.length) throw new Error(`source moved: no close-terminal dialog title read from ${ORCA_CLOSE_DIALOG_REL}${text === null ? ' (the file is absent)' : ''}, so the confirmation could not be told from another dialog`);
+    return titles;
 }
 
 /** Page source: marks every confirmation dialog already present, so a later one is told from them. Resolves their count. */
@@ -189,26 +319,13 @@ export function confirmationAppeared(found, titles) {
 // ---------------------------------------------------------------------------
 // Fixture git.
 
-/** The environment fixture git runs in: no global or system config; HOME a scratch folder, never the developer's. */
-export function fixtureGitEnv(basePath, home) {
-    return { PATH: basePath, HOME: home, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' };
-}
-
-/** Arguments that keep a fixture commit free of signing and hooks, whatever the repository's own config says. */
-export const FIXTURE_GIT_ARGS = ['-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', '-c', 'core.hooksPath=/dev/null'];
-
-/** A git runner for the scratch repository `repo`: git(...args) runs `git -C repo` under fixtureGitEnv. */
-export function fixtureGit(repo, basePath, home = dirname(repo)) {
-    return (...a) => execFileSync('git', ['-C', repo, ...FIXTURE_GIT_ARGS, ...a], { env: fixtureGitEnv(basePath, home), stdio: ['ignore', 'pipe', 'pipe'] });
-}
-
 /**
- * The self-test's control for fixtureGit (no browser): a HOME whose .gitconfig demands signing with a program that does
+ * The self-test's control for a fixture git runner (no browser): a HOME whose .gitconfig demands signing with a program that does
  * not exist and names a hooks folder whose pre-commit hook records itself and fails. The raw invocation (that HOME, no
- * flags) must be hit by it (a commit that fails or a hook that ran: the detector), and fixtureGit must then commit
- * cleanly with no hook run. Resolves red reasons.
+ * flags) must be hit by it (a commit that fails or a hook that ran: the detector), and makeGit(repo, home) (the pane harness's
+ * fixtureGit) must then commit cleanly with no hook run. Resolves red reasons.
  */
-export function fixtureGitVerdict(makeGit = fixtureGit) {
+export function fixtureGitVerdict(makeGit) {
     const dir = mkdtempSync(join(tmpdir(), 'pb-fixture-git-'));
     try {
         const home = join(dir, 'home');
@@ -227,7 +344,7 @@ export function fixtureGitVerdict(makeGit = fixtureGit) {
         const rawGit = (...a) => execFileSync('git', ['-C', rawRepo, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', ...a], { env: { PATH: path, HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
         if (commitWith(rawGit) === null && !existsSync(marker)) fails.push('fixture git: the hostile HOME config blocked nothing on the raw invocation, so the control proves nothing');
         rmSync(marker, { force: true });
-        const error = commitWith(makeGit(prepare('fixture'), path, home));
+        const error = commitWith(makeGit(prepare('fixture'), home));
         if (error !== null) fails.push(`fixture git: the fixture commit failed under a developer config with signing and hooks (${error})`);
         if (existsSync(marker)) fails.push('fixture git: a global pre-commit hook ran for the fixture commit');
         return fails;
@@ -241,10 +358,13 @@ export const firefoxBin = (root = REPO_ROOT) => process.env.PB_FIREFOX_BIN || jo
 /** The Theia backend this run launches: PB_BACKEND_MAIN, else this tree's. */
 export const backendMain = (root = REPO_ROOT) => process.env.PB_BACKEND_MAIN || join(root, BACKEND_MAIN_REL);
 
-/** Whether the app under test (PB_BACKEND_MAIN, else this tree's) has orca-panes in its generated frontend: its document then holds Orca's listeners once the bundle boots. */
+/**
+ * Whether the app under test (PB_BACKEND_MAIN, else this tree's) has orca-panes in its generated frontend: its document then holds Orca's
+ * listeners once the bundle boots. null when the generated frontend index cannot be read (the app is not built as expected).
+ */
 export function appWiresOrcaPanes(main = backendMain()) {
-    const frontend = join(dirname(main), '..', '..', 'src-gen', 'frontend', 'index.js');
-    return /@powerbrowser\/orca-panes\//.test(read(frontend) ?? '');
+    const text = read(join(dirname(main), '..', '..', 'src-gen', 'frontend', 'index.js'));
+    return text === null ? null : /@powerbrowser\/orca-panes\//.test(text);
 }
 
 /**
@@ -254,6 +374,7 @@ export function appWiresOrcaPanes(main = backendMain()) {
  * 'skip': wired but the bundle is not built, so Orca's listeners were not in the frame and the control did not cover them.
  */
 export function listenerCoverage({ wired, bundleBuilt, booted }) {
+    if (wired === null || wired === undefined) return { verdict: 'red', reason: 'NOT SCORED -- the generated frontend index of the app under test (src-gen/frontend/index.js beside PB_BACKEND_MAIN) could not be read, so whether Orca\'s document listeners are in the Theia frame is unknown' };
     if (!wired) return { verdict: 'not-wired', note: 'the app under test wires no orca-panes module, so no Orca document listeners are in the Theia frame' };
     if (booted) return { verdict: 'covered' };
     if (bundleBuilt) return { verdict: 'red', reason: 'NOT SCORED -- the Orca pane bundle is built but did not boot in the Theia frame, so the paste control does not cover its document listeners' };
@@ -504,11 +625,13 @@ export async function withOrcaTabsSession({ log = () => {}, needOrca = true, age
                 const boot = await ctx.probe(BOOT_WAIT, 200000);
                 if (!boot?.booted) throw new Error(`the Orca pane bundle did not boot: ${JSON.stringify(boot?.error ?? boot?.state ?? boot)}`);
                 // The Orca CLI's environment, built from scratch: never this session's ORCA_* values, never the stub.
-                const cliEnv = { PATH: basePath, HOME: savedEnv.HOME ?? process.env.HOME ?? '', ORCA_USER_DATA: state.effectiveRoot, ORCA_USER_DATA_PATH: state.effectiveRoot };
+                // The CLI reads its endpoint from ORCA_USER_DATA, so it gets the scratch HOME too; the developer's HOME is never handed to a fixture process.
+                const cliEnv = { PATH: basePath, HOME: scratch, ORCA_USER_DATA: state.effectiveRoot, ORCA_USER_DATA_PATH: state.effectiveRoot };
                 mkdirSync(repo, { recursive: true });
                 writeFileSync(join(repo, 'README'), 'orca-tabs-live scratch repository\n');
-                // The fixture's git sees no developer config: no signing, no hooks (harness-live-tabs-13). The Orca CLI keeps the real HOME above.
-                const git = fixtureGit(repo, basePath, scratch);
+                // The fixture's git is the pane harness's: no developer config, no signing, no hooks, a scratch HOME (harness-live-tabs-13).
+                const { fixtureGit } = await import('./orca-pane-harness.mjs');
+                const git = fixtureGit(repo, scratch);
                 git('init', '-q');
                 git('add', '.');
                 git('commit', '-q', '-m', 'fixture');
