@@ -242,9 +242,51 @@ async function clauseC() {
     return { fails: checkStoreListeners(readFileSync(ENTRY, 'utf8')) };
 }
 
+// ---------------------------------------------------------------- d. mountErrors is bounded
+
+/** The top-level statements of `sf` that declare one of `names` (variables or functions), as source text. */
+function declarations(sf, names) {
+    const out = [];
+    for (const st of sf.statements) {
+        if (ts.isVariableStatement(st) && st.declarationList.declarations.some(d => names.includes(d.name.getText()))) out.push(st.getText());
+        else if (ts.isFunctionDeclaration(st) && names.includes(st.name?.text)) out.push(st.getText());
+    }
+    return out;
+}
+
+/**
+ * Clause d (overlay-renderer-04), run, not read: the entry's own recordError, with every top-level variable it reads,
+ * is transpiled and called 2N times; the kept list must stop growing (its length after N calls equals its length
+ * after 2N) and keep the newest entry. Missing recordError or mountErrors is red "source moved".
+ */
+export function checkMountErrorsBounded(entryText, n = 5000) {
+    const sf = parse(entryText, 'pb-pane-mount.tsx');
+    const record = fn(sf, 'recordError');
+    if (!record) return ['recordError is absent from the entry (source moved)'];
+    const read = new Set();
+    walk(record, node => { if (ts.isIdentifier(node)) read.add(node.text); });
+    const topVars = sf.statements.filter(ts.isVariableStatement).flatMap(st => st.declarationList.declarations.map(d => d.name.getText()));
+    const names = ['recordError', ...topVars.filter(v => read.has(v))];
+    if (!names.includes('mountErrors')) return ['recordError no longer writes mountErrors (source moved)'];
+    const js = ts.transpileModule(`${declarations(sf, names).join('\n')}\nreturn { recordError, mountErrors };`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    const mod = new Function(js)();
+    for (let i = 0; i < n; i += 1) mod.recordError('k', 'p')(new Error(`e${i}`));
+    const after = mod.mountErrors.length;
+    for (let i = n; i < 2 * n; i += 1) mod.recordError('k', 'p')(new Error(`e${i}`));
+    const fails = [];
+    if (mod.mountErrors.length !== after || after >= n) fails.push(`mountErrors grows without bound: ${after} kept after ${n} errors, ${mod.mountErrors.length} after ${2 * n}`);
+    if (mod.mountErrors.at(-1)?.message !== `e${2 * n - 1}`) fails.push('mountErrors does not keep the newest error last');
+    return fails;
+}
+
+async function clauseD() {
+    if (!(await loadTs())) return { skip: 'theia/node_modules/typescript is absent (install Theia)' };
+    return { fails: checkMountErrorsBounded(readFileSync(ENTRY, 'utf8')) };
+}
+
 // ---------------------------------------------------------------- driver
 
-const CLAUSES = [['a', clauseA], ['b', clauseB], ['c', clauseC]];
+const CLAUSES = [['a', clauseA], ['b', clauseB], ['c', clauseC], ['d', clauseD]];
 
 async function main() {
     let failed = 0;
@@ -306,6 +348,12 @@ async function selfTest() {
         const unguarded = entry.replace(/\n(\s*)try \{\n(\s*const next = paneRecords\(state\)[\s\S]*?\n)\s*\} catch \(error\) \{\n\s*recordError\('observation', 'subscribe'\)\(error\)\n\s*\}\n/, '\n$2');
         ok('c: the unguarded-listener plant applies', unguarded !== entry);
         ok('c: paneRecords outside a try in the store listener (pre-fix) is red, naming it', checkStoreListeners(unguarded).some(f => /calls paneRecords\(\) outside a try/.test(f)));
+        // d.
+        ok('d: control green on the tree', checkMountErrorsBounded(entry).length === 0);
+        const unbounded = entry.replace(/\n\s*if \(mountErrors\.length > MOUNT_ERRORS_KEPT\)[^\n]*\n/, '\n');
+        ok('d: the unbounded plant applies', unbounded !== entry);
+        ok('d: recordError that only pushes (pre-fix) is red, naming it', checkMountErrorsBounded(unbounded).some(f => /grows without bound/.test(f)));
+        ok('d: a missing recordError is red "source moved"', checkMountErrorsBounded(entry.replace(/function recordError\(/g, 'function recordFailure(')).some(f => /source moved/.test(f)));
         ok('c: no store listener is red "parser blind"', checkStoreListeners(entry.replace(/useAppStore\.subscribe\(\(state, prior\)/, 'useAppStore.subscribeTo((state, prior)')).some(f => /parser blind/.test(f)));
     }
     console.log(failed ? `${NAME} self-test: FAIL -- ${failed} case(s)` : `${NAME} self-test: PASS -- every planted fault went red naming it`);

@@ -194,13 +194,19 @@ export type PanePick = { kind: string; worktreeId: string; tabId: string; paneKe
 type MountError = { kind: string; phase: string; message: string }
 type State = ReturnType<typeof useAppStore.getState>
 
+// Audit overlay-renderer-04: the most recent errors only (a surface that throws on every store update would otherwise
+// grow this for the life of the document), with the total ever recorded beside them.
+const MOUNT_ERRORS_KEPT = 50
 const mountErrors: MountError[] = []
+let mountErrorsTotal = 0
 let isBooted = false
 let booting: Promise<void> | null = null
 
 function recordError(kind: string, phase: string) {
   return (error: unknown): void => {
+    mountErrorsTotal += 1
     mountErrors.push({ kind, phase, message: String((error as Error)?.message ?? error).slice(0, 400) })
+    if (mountErrors.length > MOUNT_ERRORS_KEPT) mountErrors.splice(0, mountErrors.length - MOUNT_ERRORS_KEPT)
   }
 }
 
@@ -1288,7 +1294,10 @@ export function state(): {
   booted: boolean
   worktrees: OrcaWorktree[]
   panes: number
+  /** The most recent MOUNT_ERRORS_KEPT errors, oldest first. */
   mountErrors: MountError[]
+  /** Every error recorded in this document, including those no longer kept. */
+  mountErrorsTotal: number
   pairing: { sessionOnly: boolean; deviceKeySupport: string | null }
 } {
   const store = useAppStore.getState()
@@ -1302,6 +1311,7 @@ export function state(): {
     worktrees: switchableWorktreesForRows.map((w) => ({ id: w.id, label: w.displayName || w.path, path: w.path })),
     panes: paneRecords(store).length,
     mountErrors: mountErrors.map((error) => ({ ...error })),
+    mountErrorsTotal,
     pairing: pairingState()
   }
 }
