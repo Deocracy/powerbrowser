@@ -227,7 +227,10 @@ export function runCollector(collector, ctx) {
 /** One output line per collector result and whether it is red. */
 export function collectorLine(r) {
     const reasons = [];
+    // An unread sink is never green (harness-static-hosting-03): a read() that threw discarded every needle and
+    // fault it was building, so it is red even when the control was found.
     if (r.blind) reasons.push(`collector blind (control not found${r.unreadable ? ', sink unreadable' : ''})`);
+    else if (r.unreadable) reasons.push('sink unreadable (the collector could not read the sink, so an absence proves nothing)');
     if (r.matches) reasons.push(`offer found (${r.matches} match${r.matches === 1 ? '' : 'es'})`);
     for (const f of r.faults) reasons.push(f);
     return reasons.length
@@ -336,6 +339,33 @@ export function isLoopbackProcAddress(hex) {
     return h.length === 32 && h.startsWith('0000000000000000FFFF0000') && h.endsWith('7F');
 }
 
+/**
+ * `roots` and every live descendant of them (harness-static-hosting-08), from a ppid walk over <procRoot>/<pid>/stat:
+ * the stat line's fourth field, read after the last ')' so a command name holding spaces or parentheses parses.
+ */
+export function withDescendants(roots, procRoot = '/proc') {
+    const children = new Map();
+    let entries = [];
+    try { entries = readdirSync(procRoot).filter((d) => /^\d+$/.test(d)); } catch { /* no proc tree: the roots only */ }
+    for (const d of entries) {
+        const stat = readOrNull(join(procRoot, d, 'stat'))?.toString('utf8');
+        if (!stat) continue;
+        const ppid = Number(stat.slice(stat.lastIndexOf(')') + 1).trim().split(/\s+/)[1]);
+        if (!Number.isInteger(ppid)) continue;
+        if (!children.has(ppid)) children.set(ppid, []);
+        children.get(ppid).push(Number(d));
+    }
+    const out = new Set();
+    const queue = roots.filter((p) => Number.isInteger(p) && p > 0);
+    while (queue.length) {
+        const pid = queue.shift();
+        if (out.has(pid)) continue;
+        out.add(pid);
+        queue.push(...(children.get(pid) ?? []));
+    }
+    return [...out];
+}
+
 /** LISTEN sockets owned by `pids`: [{ pid, address, loopback }], joining <procRoot>/net/tcp{,6} with each pid's fd inodes. */
 export function listenSockets(pids, procRoot = '/proc') {
     const listening = new Map();
@@ -392,11 +422,25 @@ export const setupsCollector = Object.freeze({
     read: (ctx) => ({ chunks: collectSinks(ctx.profileDir).map((s) => s.bytes), faults: [] }),
 });
 
-/** Logs: PB stdout and stderr, the OrcaService and TheiaService log lines, orcad's data root minus holder 5; control: the ready line. */
+/**
+ * Each captured output stream travelled its own path and was read (harness-static-hosting-05): ctx.captures is
+ * [{ stream, text, control }], text null when the capture file is absent or unreadable, control a line the stream
+ * always carries (null: the file's existence is the control). An empty list, a missing file or a stream without
+ * its control leaves the collector blind.
+ */
+export function capturesControlled(captures) {
+    return Array.isArray(captures) && captures.length > 0
+        && captures.every((c) => typeof c?.text === 'string' && (!c.control || c.text.includes(c.control)));
+}
+
+/**
+ * Logs: PB stdout and stderr, the OrcaService and TheiaService log lines, orcad's data root minus holder 5; control:
+ * the ready line in the service log texts, and each captured stream's own control (capturesControlled).
+ */
 export const logsCollector = Object.freeze({
     sink: 'logs',
-    control: (ctx) => !!ctx.logControl && textsOf(ctx.logTexts).some((t) => t.includes(ctx.logControl)),
-    read: (ctx) => ({ chunks: [...textsOf(ctx.logTexts), ...walkFiles(ctx.dataRoot, (rel) => ctx.holder5.isHolder(rel)).map(([, abs]) => readOrNull(abs))], faults: [] }),
+    control: (ctx) => !!ctx.logControl && textsOf(ctx.logTexts).some((t) => t.includes(ctx.logControl)) && capturesControlled(ctx.captures),
+    read: (ctx) => ({ chunks: [...textsOf(ctx.logTexts), ...textsOf(ctx.captures), ...walkFiles(ctx.dataRoot, (rel) => ctx.holder5.isHolder(rel)).map(([, abs]) => readOrNull(abs))], faults: [] }),
 });
 
 /** Address field: every Orca tab's and the control web tab's address text; control: the marker in a control text. */
@@ -433,30 +477,42 @@ export const bridgeFolderCollector = Object.freeze({
         const st = lstatSync(ctx.bridgeDir);
         let badModes = st.isDirectory() && (st.mode & 0o777) === 0o700 && st.uid === uid ? 0 : 1;
         const strays = [];
+        // harness-static-hosting-03: an entry that vanishes between readdir and lstat, or a stray this user cannot
+        // read (0200 passes the mode test), is a named fault; it never throws away the faults already found.
+        let unreadEntries = 0;
         for (const name of readdirSync(ctx.bridgeDir)) {
-            const f = lstatSync(join(ctx.bridgeDir, name));
+            let f;
+            try { f = lstatSync(join(ctx.bridgeDir, name)); } catch { unreadEntries++; continue; }
             // The offer file exactly 0600; every other entry a private regular file (Phase 63's claude-wrapper launcher
             // is 0700 because it is executed): owned by this user, no group or other bits.
             const mode = f.mode & 0o777;
             if (!(f.isFile() && f.uid === uid && (name === offerFile ? mode === 0o600 : (mode & 0o077) === 0))) badModes++;
-            if (name !== offerFile && f.isFile()) strays.push(readFileSync(join(ctx.bridgeDir, name)));
+            if (name !== offerFile && f.isFile()) {
+                try { strays.push(readFileSync(join(ctx.bridgeDir, name))); } catch { unreadEntries++; }
+            }
         }
         const strayHits = strays.filter((b) => countMatches([b], ctx.needles) > 0).length;
         const faults = [];
         if (badModes) faults.push(`bridge folder mode (${badModes} entr${badModes === 1 ? 'y is' : 'ies are'} not 0700/0600 or not owned by this user)`);
         if (strayHits) faults.push(`stray copy (${strayHits} file${strayHits === 1 ? '' : 's'} other than ${offerFile} hold${strayHits === 1 ? 's' : ''} a needle)`);
+        if (unreadEntries) faults.push(`bridge folder entry unreadable (${unreadEntries} entr${unreadEntries === 1 ? 'y' : 'ies'} could not be listed or read, so a copy in ${unreadEntries === 1 ? 'it' : 'them'} is not ruled out)`);
         return { chunks: strays, faults };
     },
 });
 
-/** Non-loopback peer: the decoded endpoint is ws://127.0.0.1:<orca port>, every LISTEN socket of orcad and the Theia backend on loopback; control: one orcad LISTEN row. */
+/**
+ * Non-loopback peer: the decoded endpoint is ws://127.0.0.1:<orca port>, and every LISTEN socket of orcad, the terminal
+ * daemon, the Theia backend and every descendant of them (plugin hosts, helpers) is on loopback; control: one orcad
+ * LISTEN row. ctx.pids.orcad lists orcad and its terminal daemon.
+ */
 export const nonLoopbackPeerCollector = Object.freeze({
     sink: 'non-loopback peer',
     control: (ctx) => listenSockets(ctx.pids?.orcad ?? [], ctx.procRoot).length > 0,
     read: (ctx) => {
         const faults = [];
         if (!isLoopbackEndpoint(ctx.endpoint, ctx.orcaPort)) faults.push('non-loopback peer: the decoded endpoint is not ws://127.0.0.1:<orca port>');
-        const off = listenSockets([...(ctx.pids?.orcad ?? []), ...(ctx.pids?.theia ?? [])], ctx.procRoot).filter((s) => !s.loopback).length;
+        const scanned = withDescendants([...(ctx.pids?.orcad ?? []), ...(ctx.pids?.theia ?? [])], ctx.procRoot ?? '/proc');
+        const off = listenSockets(scanned, ctx.procRoot).filter((s) => !s.loopback).length;
         if (off) faults.push(`non-loopback peer: ${off} listening socket(s) off loopback`);
         return { chunks: [], faults };
     },

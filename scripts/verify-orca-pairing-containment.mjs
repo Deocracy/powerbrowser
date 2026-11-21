@@ -46,8 +46,16 @@
 // Setups' own command; stdout (devtools.console.stdout.content in user.js) and
 // stderr are captured to a .mozbuild work folder removed after the run;
 // PowerBrowser quits; then every collector runs. A run that read zero sinks
-// is red. SKIP (exit 0, one named line) without a built PowerBrowser, Theia
-// app or orca/, as Phase 65's livePrerequisites decides.
+// is red. SKIP (exit 77, one named line, SKIP-PROTOCOL.md) without a built
+// PowerBrowser, Theia app or orca/, as Phase 65's livePrerequisites decides.
+//
+// Audit fixes: a collector whose read() fails is red "sink unreadable" even
+// when its control was found (harness-static-hosting-03); the logs sink's
+// control includes each captured stream, stdout carrying the shell's
+// POWERBROWSER_SHELL_READY dump line and stderr's capture file existing
+// (harness-static-hosting-05); the non-loopback-peer sink scans orcad, its
+// terminal daemon, the Theia backend and every descendant of them
+// (harness-static-hosting-08).
 //
 // Usage:
 //   node scripts/verify-orca-pairing-containment.mjs              (live; tier full)
@@ -59,6 +67,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { installOutputRedaction } from './lib/orca-run.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 import { decodeMozLz4, encodeMozLz4Literal } from './lib/mozlz4.mjs';
 import {
     COLLECTORS, addressFieldCollector, bridgeFolderCollector, collectorLine, copyableTextCollector, historyCollector,
@@ -72,6 +81,8 @@ const NAME = 'orca-pairing-containment';
 const SELF_REL = 'scripts/verify-orca-pairing-containment.mjs';
 const OFFER_FILE = 'web-pairing';
 const LOG_CONTROL = 'orcad ready on ';
+// The sentinel powerbrowser.js dump()s to stdout at every shell start: the stdout capture's own control.
+const STDOUT_CONTROL = 'POWERBROWSER_SHELL_READY';
 
 // ---------------------------------------------------------------------------
 // Fixtures: synthetic offers only, never a real one.
@@ -139,14 +150,17 @@ function fixture(dir, offer, pin, marker) {
     for (const [pid, inode] of [[111, 1001], [222, 1002]]) {
         mkdirSync(join(procRoot, String(pid), 'fd'), { recursive: true });
         symlinkSync(`socket:[${inode}]`, join(procRoot, String(pid), 'fd', '3'));
+        put(join(procRoot, String(pid), 'stat'), `${pid} (${pid === 111 ? 'orcad' : 'node'}) S 1 ${pid} ${pid} 0 -1 4194304\n`);
     }
+    put(join(procRoot, '112', 'stat'), '112 (terminal daemon) S 111 112 112 0 -1 4194304\n'); // a child with no LISTEN socket
     return {
         marker, profileDir, dataRoot, bridgeDir, procRoot, offerFile: OFFER_FILE, holder5: registryFilesFromPin(pin),
         theiaOriginDir: 'http+++127.0.0.1+40404', setupName: 'P67 containment', logControl: LOG_CONTROL,
-        logTexts: [`${LOG_CONTROL}127.0.0.1:26768, pid 111, terminal daemon pid 112.`, 'POWERBROWSER_SHELL_READY'],
+        logTexts: [`${LOG_CONTROL}127.0.0.1:26768, pid 111, terminal daemon pid 112.`],
+        captures: [{ stream: 'stdout', text: `${STDOUT_CONTROL} chrome://powerbrowser/content/powerbrowser.xhtml\n`, control: STDOUT_CONTROL }, { stream: 'stderr', text: '', control: null }],
         addressTexts: [{ kind: 'control', text: marker }, { kind: 'orca', text: 'pb-orca:chat1' }],
         copyable: { rows: ['Port: 3000', 'Orca port: 26768', 'Orca state: ready'], log: 'theia backend started', tabAddresses: ['pb-orca:chat1'] },
-        endpoint: offerEndpoint(offer.handOff), orcaPort: 26768, pids: { orcad: [111], theia: [222] },
+        endpoint: offerEndpoint(offer.handOff), orcaPort: 26768, pids: { orcad: [111, 112], theia: [222] },
     };
 }
 
@@ -210,6 +224,21 @@ function runSelfTest() {
         check('a 0750 launcher in the bridge folder', bridgeFolderCollector, (x) => put(join(x.bridgeDir, 'claude-wrapper'), '#!/bin/sh\n', 0o750), 'sink bridge folder: FAIL -- bridge folder mode');
         check('a 0640 offer file', bridgeFolderCollector, (x) => chmodSync(join(x.bridgeDir, OFFER_FILE), 0o640), 'sink bridge folder: FAIL -- bridge folder mode');
         check('a stray copy web-pairing.bak in the bridge folder', bridgeFolderCollector, (x) => put(join(x.bridgeDir, `${OFFER_FILE}.bak`), offer.handOff, 0o600), 'stray copy (1 file other than web-pairing holds a needle)');
+        // harness-static-hosting-03: an unread sink is red even when its control was found.
+        check('a collector whose control is found and whose read() throws', { ...historyCollector, read: () => { throw new Error('EACCES'); } }, null, 'sink history: FAIL -- sink unreadable');
+        check('a 0200 stray in the bridge folder (the read throws EACCES), next to a 0644 offer file', bridgeFolderCollector, (x) => { put(join(x.bridgeDir, 'unreadable-stray'), offer.handOff, 0o200); chmodSync(join(x.bridgeDir, OFFER_FILE), 0o644); }, 'bridge folder mode (1 entry is');
+        check('a 0200 stray in the bridge folder is named unreadable', bridgeFolderCollector, (x) => put(join(x.bridgeDir, 'unreadable-stray'), offer.handOff, 0o200), 'sink bridge folder: FAIL -- bridge folder entry unreadable (1 entry');
+        // harness-static-hosting-08: a descendant of the Theia backend or orcad listening off loopback, and the daemon.
+        const offLoopListener = (pid, ppid, inode) => (x) => {
+            appendFileSync(join(x.procRoot, 'net/tcp'), `   9: 00000000:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000 0 ${inode} 1\n`);
+            mkdirSync(join(x.procRoot, String(pid), 'fd'), { recursive: true });
+            symlinkSync(`socket:[${inode}]`, join(x.procRoot, String(pid), 'fd', '7'));
+            if (ppid !== null) put(join(x.procRoot, String(pid), 'stat'), `${pid} (plugin host (node)) S ${ppid} ${pid} ${pid} 0 -1 4194304\n`);
+        };
+        check('a Theia plugin-host child listening on 0.0.0.0', nonLoopbackPeerCollector, offLoopListener(333, 222, 3003), 'sink non-loopback peer: FAIL -- non-loopback peer: 1 listening socket(s) off loopback');
+        check('an orcad grandchild listening on 0.0.0.0', nonLoopbackPeerCollector, offLoopListener(444, 112, 3004), 'sink non-loopback peer: FAIL -- non-loopback peer: 1 listening socket(s) off loopback');
+        check('the terminal daemon itself listening on 0.0.0.0', nonLoopbackPeerCollector, offLoopListener(112, 111, 3005), 'sink non-loopback peer: FAIL -- non-loopback peer: 1 listening socket(s) off loopback');
+        check('an unrelated process listening on 0.0.0.0 (not ours, allowed)', nonLoopbackPeerCollector, offLoopListener(555, 1, 3006), null);
         check('an offer whose endpoint is ws://192.168.1.5:26768', nonLoopbackPeerCollector, (x) => { x.endpoint = offerEndpoint(nonLoop.handOff); }, 'sink non-loopback peer: FAIL -- non-loopback peer: the decoded endpoint');
         check('a Theia backend LISTEN socket on 0.0.0.0', nonLoopbackPeerCollector, (x) => put(join(x.procRoot, 'net/tcp'), `header\n   0: 0100007F:0BB8 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000 0 1001 1\n   1: 00000000:0BB8 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000 0 1002 1\n`), 'sink non-loopback peer: FAIL -- non-loopback peer: 1 listening socket(s) off loopback');
         // A blind collector for each control kind.
@@ -217,7 +246,13 @@ function runSelfTest() {
         check('history without its marker row', historyCollector, (x) => { rmSync(join(x.profileDir, 'places.sqlite')); writePlaces(x.profileDir, ['http://127.0.0.1:1/other']); }, `sink history: FAIL -- ${blind}`);
         check('session files without the marker', sessionRestoreCollector, (x) => { put(join(x.profileDir, 'sessionstore.jsonlz4'), sessionFile('about:blank')); put(join(x.profileDir, 'sessionstore-backups/recovery.jsonlz4'), sessionFile('about:blank')); }, `sink session restore: FAIL -- ${blind}`);
         check('setups.json without the saved Setup', setupsCollector, (x) => put(join(x.profileDir, 'powerbrowser-theia/setups.json'), '{"setups":[]}'), `sink setups and shell state: FAIL -- ${blind}`);
-        check('logs without the orcad ready line', logsCollector, (x) => { x.logTexts = ['POWERBROWSER_SHELL_READY']; }, `sink logs: FAIL -- ${blind}`);
+        check('logs without the orcad ready line', logsCollector, (x) => { x.logTexts = ['theia backend started']; }, `sink logs: FAIL -- ${blind}`);
+        // harness-static-hosting-05: each captured stream is its own control.
+        check('a stdout capture file that was never written', logsCollector, (x) => { x.captures[0].text = null; }, `sink logs: FAIL -- ${blind}`);
+        check('a stdout capture without the shell-ready line', logsCollector, (x) => { x.captures[0].text = 'something else\n'; }, `sink logs: FAIL -- ${blind}`);
+        check('a stderr capture file that was never written', logsCollector, (x) => { x.captures[1].text = null; }, `sink logs: FAIL -- ${blind}`);
+        check('no captured streams at all', logsCollector, (x) => { x.captures = []; }, `sink logs: FAIL -- ${blind}`);
+        check('a stderr capture holding the device token', logsCollector, (x) => { x.captures[1].text = `warn ${offer.token}\n`; }, 'sink logs: FAIL -- offer found');
         check('address texts without the control web tab', addressFieldCollector, (x) => { x.addressTexts = x.addressTexts.filter((a) => a.kind !== 'control'); }, `sink address field: FAIL -- ${blind}`);
         check('diagnostics rows without the Orca port row', copyableTextCollector, (x) => { x.copyable.rows = x.copyable.rows.filter((r) => !r.startsWith('Orca port')); }, `sink copyable text: FAIL -- ${blind}`);
         check('a profile without the marker bytes in places.sqlite', wholeProfileCollector, (x) => { rmSync(join(x.profileDir, 'places.sqlite')); writePlaces(x.profileDir, ['http://127.0.0.1:1/other']); }, `sink whole profile: FAIL -- ${blind}`);
@@ -254,7 +289,7 @@ async function main() {
     const live = await import('./verify-orca-relaunch-restore-live.mjs');
     const pre = await live.livePrerequisites();
     if (pre.fail) { console.error(`${NAME}: FAIL -- ${pre.fail}`); return 1; }
-    if (pre.skip) { console.log(`${NAME}: SKIP -- ${pre.skip}`); return 0; }
+    if (pre.skip) { console.log(skipLine(NAME, pre.skip)); return SKIP_EXIT; }
     for (const k of Object.keys(process.env)) if (k.startsWith('ORCA_')) delete process.env[k];
     const { servePages, probe, pollFor, sourceConst } = await import('./lib/pb-relaunch.mjs');
     const OPEN_BROWSER_WINDOW = sourceConst('theia/extensions/tab-uris/src/browser/browser-window-command.ts', 'OPEN_BROWSER_WINDOW_COMMAND_ID');
@@ -286,7 +321,7 @@ async function main() {
                     needles, marker, setupName, holder5, logControl: LOG_CONTROL, offerFile: OFFER_FILE,
                     profileDir: session.profileDir, dataRoot: st.orca.dataRoot, bridgeDir: st.orca.bridgeDir,
                     theiaOriginDir: `http+++127.0.0.1+${s.app.port}`, endpoint: offerEndpoint(offer), orcaPort: st.orca.port,
-                    pids: { orcad: [st.orca.pid], theia: [st.theia.pid] }, procRoot: '/proc',
+                    pids: { orcad: [st.orca.pid, st.orca.daemonPid].filter(Number.isInteger), theia: [st.theia.pid] }, procRoot: '/proc',
                 };
                 // While orcad runs: the offer file is removed on stop (P67-09).
                 results.push(runCollector(bridgeFolderCollector, ctx), runCollector(nonLoopbackPeerCollector, ctx));
@@ -330,8 +365,12 @@ async function main() {
                 return s.quit();
             });
             if (quit !== 'exited') throw new Error(`PowerBrowser did not exit after its own quit (${quit})`);
-            const captured = (f) => { try { return readFileSync(join(work, f), 'utf8'); } catch { return ''; } };
-            ctx.logTexts.push(captured('stdout.log'), captured('stderr.log'));
+            // A missing or unreadable capture file is null, which leaves the logs collector blind (harness-static-hosting-05).
+            const captured = (f) => { try { return readFileSync(join(work, f), 'utf8'); } catch { return null; } };
+            ctx.captures = [
+                { stream: 'stdout', text: captured('stdout.log'), control: STDOUT_CONTROL },
+                { stream: 'stderr', text: captured('stderr.log'), control: null },
+            ];
             for (const c of COLLECTORS) if (c !== bridgeFolderCollector && c !== nonLoopbackPeerCollector) results.push(runCollector(c, ctx));
         });
     } catch (err) {
