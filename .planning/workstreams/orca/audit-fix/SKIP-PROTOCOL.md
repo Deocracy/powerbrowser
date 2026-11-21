@@ -148,7 +148,14 @@ helper (`scripts/lib/live-lock.mjs`, lane H5). Both are written against these wo
 
 Terms:
 - **The lock** is `flock` on `<git common dir>/pb-live.lock`, one per checkout and shared by all its worktrees.
-- **Holding** it is what `/proc/locks` shows: a `FLOCK` line on that file's inode, whose pid is the holder.
+- **Holding** it is what `/proc/locks` shows: a `FLOCK` line whose `maj:min:inode` field equals that file's
+  device **and** inode, whose pid is the holder. An inode number alone also matches a file with the same number
+  on another filesystem.
+
+  The device is the one `/proc/locks` prints: the superblock's `maj:min`, in two-digit lowercase hex each.
+  Take it from `/proc/self/mountinfo` field 3, on the line whose mount point is the longest prefix of the lock
+  file's real path. Do not take it from `stat`'s `st_dev`: on btrfs that is a per-subvolume number (48 for
+  /home on the owner's host) while `/proc/locks` prints the superblock's (`00:22`).
 - **Start ticks** are `/proc/<pid>/stat` field 22, so a reused pid number is told apart from the process it
   once was.
 
@@ -181,6 +188,8 @@ The driver's plants are in `scripts/verify-platform-driver.mjs --self-test`:
 - a `PB_LIVE_LOCK_HOLDER` naming the real holder with wrong start ticks is a FAIL;
 - one with the right pid and start ticks proceeds;
 - an ancestor `flock`, even with a forged `PB_LIVE_LOCK_HELD=1`, proceeds;
+- the holder's own `/proc/locks` line, recorded and given back as fixture text, matches, and the same line with
+  the same inode number on another device does not;
 - every full-tier row sees a `PB_LIVE_LOCK_HOLDER` that names a live process.
 
 ## Before and after
