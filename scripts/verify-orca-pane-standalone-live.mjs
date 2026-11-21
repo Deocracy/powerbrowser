@@ -294,7 +294,7 @@ export function lateVerdict(ms) {
 }
 
 /** The output lines and exit code for both stages and the late clause (undefined = not reached). */
-export function render({ isolated, isolatedDetail, mounts, kinds, chatSource, harness, late, lateMs, gate, gateDetail, width, widthDetail, api }) {
+export function render({ isolated, isolatedDetail, mounts, kinds, chatSource, harness, late, lateMs, gate, gateDetail, width, widthDetail, api, unverified = [] }) {
     const lines = [];
     if (isolated !== undefined) lines.push(isolated === null ? `${NAME}: isolated per-leaf mount PASS -- ${isolatedDetail}` : `${NAME}: isolated per-leaf mount FAIL -- ${isolated}`);
     if (mounts !== undefined) lines.push(mounts === null ? `${NAME}: mounts PASS -- ${kinds.join(', ')} (agent-session from ${chatSource})` : `${NAME}: mounts FAIL -- ${mounts}`);
@@ -308,6 +308,13 @@ export function render({ isolated, isolatedDetail, mounts, kinds, chatSource, ha
     const ok = !failed.length && !missing && !harness;
     if (harness) lines.push(`${NAME}: FAIL -- harness: ${harness}`);
     else lines.push(ok ? `${NAME}: PASS -- isolated per-leaf mount, ${kinds.length} hosted type(s) mounted, late CLI terminal in ${lateMs} ms${gate === null ? `, mount gate ${gateDetail}` : ''}` : `${NAME}: FAIL -- ${failed[0] ?? 'not reached'}`);
+    // A gate row whose explaining state cannot be read (an empty page:creation mount) is a clause that did not run: with no failure
+    // anywhere the run is a SKIP (exit 77, the SKIP line last), never a PASS; a failure wins (audit harness-live-panels-09).
+    if (ok && unverified.length) {
+        lines[lines.length - 1] = `${NAME}: ran -- every clause that could run passed; ${unverified.length} gate row(s) are empty with no readable state to explain them`;
+        lines.push(skipLine(NAME, `the empty ${[...new Set(unverified.map(r => r.kind))].join(', ')} mount is not explained by Orca's own state, which the bundle's state() does not expose; expose the pending creation in the overlay's state() so the gate can read it`));
+        return { code: SKIP_EXIT, lines };
+    }
     return { code: ok ? 0 : 1, lines };
 }
 
@@ -656,7 +663,7 @@ async function live(opts = {}) {
         writeFileSync(opts.report, `${J({ ...report, verdict: result.gate ?? null }, null, 2)}\n`);
         console.log(`${NAME}: report -- ${relative(REPO_ROOT, opts.report)}`);
     }
-    const out = render(result);
+    const out = render({ ...result, unverified: report.rows.filter(r => r.unverified) });
     if (result.conflictText) console.log(`${NAME}: note -- hosted conflict review reads: ${result.conflictText.slice(0, 120)}`);
     for (const line of out.lines.slice(result.isolated !== undefined ? 1 : 0)) console.log(line);
     return out.code;
@@ -738,6 +745,13 @@ async function selfTest() {
     ok('late CLI terminal never recorded is red naming the freeze', /within 15 s \(the mirror freeze/.test(lateVerdict(null) ?? ''));
     const r = render({ isolated: null, isolatedDetail: 'd', mounts: 'simulator: x', kinds: STAGE1_KINDS, chatSource: 'createChat', late: null, lateMs: 172 });
     ok('render: isolated line precedes mounts line, last line FAIL', r.code === 1 && /isolated per-leaf mount PASS/.test(r.lines[0]) && /mounts FAIL/.test(r.lines[1]) && /: FAIL -- mounts$/.test(r.lines[3]));
+    // review point 6: an unverified empty row is a SKIP, a failure still wins.
+    const clean = { isolated: null, isolatedDetail: 'd', mounts: null, kinds: STAGE1_KINDS, chatSource: 'createChat', late: null, lateMs: 172, api: null, gate: null, gateDetail: 'g' };
+    const unv = [{ kind: 'page:creation', route: 'standalone', unverified: true }];
+    const sk = render({ ...clean, unverified: unv });
+    ok('render: an unverified empty page:creation row ends SKIP (77) with the SKIP line last, not PASS', sk.code === SKIP_EXIT && /^orca-pane-standalone-live: SKIP -- /.test(sk.lines.at(-1)) && !sk.lines.some(l => /: PASS -- isolated/.test(l)));
+    ok('render: a failing clause wins over an unverified row', render({ ...clean, api: 'x', unverified: unv }).code === 1);
+    ok('render: no unverified row is still a PASS', render({ ...clean, unverified: [] }).code === 0);
     const g = render({ isolated: null, isolatedDetail: 'd', mounts: null, kinds: STAGE1_KINDS, chatSource: 'createChat', late: null, lateMs: 172, api: null });
     ok('render: an API clause never reached is red', render({ isolated: null, isolatedDetail: 'd', mounts: null, kinds: STAGE1_KINDS, chatSource: 'createChat', late: null, lateMs: 172 }).code === 1);
     ok('render: all clauses green gives PASS naming the late time', g.code === 0 && /late CLI terminal in 172 ms$/.test(g.lines.at(-1)));
