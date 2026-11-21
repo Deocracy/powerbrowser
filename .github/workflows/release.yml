@@ -2238,11 +2238,26 @@ jobs:
           printf '%s\n' "$GITHUB_WORKSPACE" > "$OUT/BUILD_ROOT"
           (cd "$OUT" && find . -type f ! -path ./SHA256SUMS -print | sed 's|^\./||' | LC_ALL=C sort | while IFS= read -r f; do shasum -a 256 "$f"; done > SHA256SUMS)
 
+      # 68-CR-03: actions/upload-artifact keeps no file mode, so a loose tree would reach macos-orca-universal with
+      # node-pty's spawn-helper, the ripgrep binaries and agent-browser at 0644. The tree travels as one tar, which
+      # keeps every mode, beside BUILD_ROOT; the artifact's SHA256SUMS lists the two, so the digest covers the tar.
+      # COPYFILE_DISABLE keeps macOS tar from adding ._ AppleDouble members, which the inner SHA256SUMS would refuse.
+      - name: Archive the staged tree as one tar (modes kept), then write the artifact's SHA256SUMS
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/macos-orca-arm64"
+          ART="$RUNNER_TEMP/macos-orca-arm64-artifact"
+          rm -rf "$ART"
+          mkdir -p "$ART"
+          COPYFILE_DISABLE=1 tar -cf "$ART/tree.tar" -C "$OUT" .
+          cp "$OUT/BUILD_ROOT" "$ART/BUILD_ROOT"
+          (cd "$ART" && for f in BUILD_ROOT tree.tar; do shasum -a 256 "$f"; done > SHA256SUMS)
+
       - name: Record the SHA256SUMS digest outside the artifact
         id: sums
         run: |
           set -euo pipefail
-          SUMS="$(shasum -a 256 "$RUNNER_TEMP/macos-orca-arm64/SHA256SUMS" | cut -d' ' -f1)"
+          SUMS="$(shasum -a 256 "$RUNNER_TEMP/macos-orca-arm64-artifact/SHA256SUMS" | cut -d' ' -f1)"
           [[ "$SUMS" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::shasum printed no SHA-256 for SHA256SUMS ('$SUMS')" >&2; exit 1; }
           echo "sha256=$SUMS" >> "$GITHUB_OUTPUT"
           echo "macos-orca-arm64 SHA256SUMS sha256 $SUMS"
@@ -2251,7 +2266,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-orca-arm64
-          path: ${{ runner.temp }}/macos-orca-arm64/
+          path: ${{ runner.temp }}/macos-orca-arm64-artifact/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
@@ -2353,11 +2368,26 @@ jobs:
           printf '%s\n' "$GITHUB_WORKSPACE" > "$OUT/BUILD_ROOT"
           (cd "$OUT" && find . -type f ! -path ./SHA256SUMS -print | sed 's|^\./||' | LC_ALL=C sort | while IFS= read -r f; do shasum -a 256 "$f"; done > SHA256SUMS)
 
+      # 68-CR-03: actions/upload-artifact keeps no file mode, so a loose tree would reach macos-orca-universal with
+      # node-pty's spawn-helper, the ripgrep binaries and agent-browser at 0644. The tree travels as one tar, which
+      # keeps every mode, beside BUILD_ROOT; the artifact's SHA256SUMS lists the two, so the digest covers the tar.
+      # COPYFILE_DISABLE keeps macOS tar from adding ._ AppleDouble members, which the inner SHA256SUMS would refuse.
+      - name: Archive the staged tree as one tar (modes kept), then write the artifact's SHA256SUMS
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/macos-orca-x64"
+          ART="$RUNNER_TEMP/macos-orca-x64-artifact"
+          rm -rf "$ART"
+          mkdir -p "$ART"
+          COPYFILE_DISABLE=1 tar -cf "$ART/tree.tar" -C "$OUT" .
+          cp "$OUT/BUILD_ROOT" "$ART/BUILD_ROOT"
+          (cd "$ART" && for f in BUILD_ROOT tree.tar; do shasum -a 256 "$f"; done > SHA256SUMS)
+
       - name: Record the SHA256SUMS digest outside the artifact
         id: sums
         run: |
           set -euo pipefail
-          SUMS="$(shasum -a 256 "$RUNNER_TEMP/macos-orca-x64/SHA256SUMS" | cut -d' ' -f1)"
+          SUMS="$(shasum -a 256 "$RUNNER_TEMP/macos-orca-x64-artifact/SHA256SUMS" | cut -d' ' -f1)"
           [[ "$SUMS" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::shasum printed no SHA-256 for SHA256SUMS ('$SUMS')" >&2; exit 1; }
           echo "sha256=$SUMS" >> "$GITHUB_OUTPUT"
           echo "macos-orca-x64 SHA256SUMS sha256 $SUMS"
@@ -2366,7 +2396,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-orca-x64
-          path: ${{ runner.temp }}/macos-orca-x64/
+          path: ${{ runner.temp }}/macos-orca-x64-artifact/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
@@ -2449,19 +2479,28 @@ jobs:
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: macos-orca-arm64
-          path: macos-orca-arm64
+          path: macos-orca-arm64-artifact
 
       - name: Download the macOS x64 Orca tree (data, admitted below)
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: macos-orca-x64
-          path: macos-orca-x64
+          path: macos-orca-x64-artifact
 
-      - name: Admit both thin trees against their producing jobs' digests
+      # Each artifact (tree.tar and BUILD_ROOT) is admitted against its producing job's digest first; only then is the
+      # tar unpacked with its modes (-p, 68-CR-03), and the unpacked tree re-checked against its own SHA256SUMS, which
+      # the admitted tar carried: no symlink, no unlisted or missing file, every listed file agreeing.
+      - name: Admit both thin artifacts against their producing jobs' digests, then unpack each tree with its modes
         run: |
           set -euo pipefail
-          bash powerbrowser/packaging/check-win-sidecar.sh check macos-orca-arm64 "$ARM_SUMS"
-          bash powerbrowser/packaging/check-win-sidecar.sh check macos-orca-x64 "$X64_SUMS"
+          bash powerbrowser/packaging/check-win-sidecar.sh check macos-orca-arm64-artifact "$ARM_SUMS"
+          bash powerbrowser/packaging/check-win-sidecar.sh check macos-orca-x64-artifact "$X64_SUMS"
+          for A in arm64 x64; do
+            rm -rf "macos-orca-$A"
+            mkdir -p "macos-orca-$A"
+            tar -xpf "macos-orca-$A-artifact/tree.tar" -C "macos-orca-$A"
+            bash powerbrowser/packaging/check-win-sidecar.sh check "macos-orca-$A" "$(sha256sum "macos-orca-$A/SHA256SUMS" | cut -d' ' -f1)"
+          done
 
       - name: Merge the universal Orca tree, purge both build roots, and check it
         run: |
