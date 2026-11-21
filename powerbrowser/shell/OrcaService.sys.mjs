@@ -187,6 +187,10 @@ export const OrcaService = {
     // Audit fix orcad-hosting-07: a Restart is a fresh count of exits after ready.
     this._exitTimes = [];
     this._pushLog("Restart requested from the Orca failure page.");
+    // Audit follow-up to 67-WR-03: the Theia backend holds this session's port, so a Restart keeps it.
+    if (this._port !== null && this._prefPort() !== this._port) {
+      this._pushLog(`The Orca port setting is now ${this._prefPort()}; Orca restarts on ${this._port}, and the new port applies at the next start of PowerBrowser.`);
+    }
     // Audit fix pairing-credentials-03: no hand-off file outlives the start it was written for.
     this._restartRun = this._removeHandOff()
       .then(() => this._startSequence())
@@ -195,13 +199,25 @@ export const OrcaService = {
   },
 
   /**
-   * The port orcad is started on, read once per start. The one accessor: TheiaService hands the same value
-   * to the Theia backend (POWERBROWSER_ORCA_PORT), which judges the pairing offer's endpoint against it
-   * (audit fix 67-WR-03, from lane G3b), so the two can never disagree. A package carries no
-   * powerbrowser-sidecar.js (a dev-tree prefs file, not in the package manifest), so the fallback is the
-   * default, as for every other Orca and sidecar pref (68-06).
+   * The port orcad runs on for this whole browser session. The one accessor: TheiaService hands the same
+   * value to the Theia backend (POWERBROWSER_ORCA_PORT), which judges the pairing offer's endpoint against it
+   * (audit fix 67-WR-03, from lane G3b). The pref is read once, by whichever side asks first (the Theia
+   * backend's first spawn, which comes before orcad's), and the value is kept: a Theia respawn, an orcad
+   * respawn and a Restart all get the same port, and a pref changed meanwhile applies at the next start of
+   * PowerBrowser (audit follow-up to 67-WR-03).
    */
   orcadPort() {
+    if (this._port === null) {
+      this._port = this._prefPort();
+    }
+    return this._port;
+  },
+
+  /**
+   * The pref itself. A package carries no powerbrowser-sidecar.js (a dev-tree prefs file, not in the package
+   * manifest), so the fallback is the default, as for every other Orca and sidecar pref (68-06).
+   */
+  _prefPort() {
     return PowerBrowserAPI.getIntPref("powerbrowser.orca.port", 26768);
   },
 
