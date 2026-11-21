@@ -21,8 +21,10 @@
 //
 // and then compares those derived sets as equality. Clause 3 (D-37, 67-VERIFICATION): the sender wall comes first.
 // handleShellMessage's first statement is `if (!groupSenderIsTheia(actorRef))` returning a refusal, every case label
-// sits after it, and each handler a case returns into (derived from the case bodies; the hosting kinds' handler since
-// Phase 67) is called nowhere in the file except inside handleShellMessage after that wall. A hand-kept list of
+// sits after it, and each handler a case calls is called nowhere in the file except inside handleShellMessage after
+// that wall. The handlers are derived from every case arm (the text from a case or default label to the next label),
+// whatever the arm's form or the handler's name: each function declared at the top level of the boundary file that an
+// arm calls (harness-static-hosting-12; the hosting kinds' handler since Phase 67). A hand-kept list of
 // kinds can only ever agree with the tree it was copied from; these
 // comparisons go red on an ADDED kind on either side and a REMOVED kind on
 // either side. The default-case rule is static shape: its body must contain
@@ -133,6 +135,29 @@ function defaultCaseReturnsOkFalse(body) {
     return /ok\s*:\s*false/.test(seg);
 }
 
+/** Names of the functions declared at the top level of `src`: function declarations and const arrow or function bindings. */
+function topLevelFunctions(src) {
+    const names = new Set();
+    for (const m of src.matchAll(/^(?:export\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*\(/gm)) names.add(m[1]);
+    for (const m of src.matchAll(/^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)/gm)) names.add(m[1]);
+    return names;
+}
+
+/**
+ * The handlers handleShellMessage's cases dispatch to (harness-static-hosting-12): every top-level function of the
+ * boundary file called, not as a member, anywhere in a case arm. An arm runs from a case or default label to the next.
+ */
+export function armHandlers(src, body) {
+    const labels = [...body.matchAll(/\bcase\s+"[^"]+"\s*:|\bdefault\s*:/g)];
+    const declared = topLevelFunctions(src);
+    const handlers = new Set();
+    labels.forEach((m, i) => {
+        const arm = body.slice(m.index + m[0].length, i + 1 < labels.length ? labels[i + 1].index : body.length);
+        for (const c of arm.matchAll(/(^|[^\w$.])([A-Za-z_$][\w$]*)\s*\(/g)) if (declared.has(c[2])) handlers.add(c[2]);
+    });
+    return [...handlers];
+}
+
 /** Clause 3: the sender wall precedes every dispatch. Failure strings; empty when it holds. */
 function senderWallFirst(src, body) {
     const failures = [];
@@ -145,15 +170,15 @@ function senderWallFirst(src, body) {
     const wallEnd = wall.index + wall[0].length;
     const firstCase = body.search(/case\s+"[^"]+"\s*:/);
     if (firstCase !== -1 && firstCase < wallEnd) failures.push(`${BOUNDARY_REL} handleShellMessage has a case label ahead of the sender wall. Next step: move it after the wall.`);
-    // The handlers the cases return into, derived from the case bodies.
-    const handlers = [...new Set([...body.matchAll(/case\s+"[^"]+"\s*:[^\n]*?return\s+(handle[A-Za-z]+)\s*\(/g)].map(m => m[1]))];
+    // The handlers the case arms call, derived from every arm whatever its form.
+    const handlers = armHandlers(src, body);
     if (!handlers.length) {
-        failures.push(`broken instrument: no case of handleShellMessage returns into a handler function, so no handler's wall is checked. Next step: check the instrument (${SELF_REL}: its handler matcher).`);
+        failures.push(`broken instrument: no case of handleShellMessage calls a function of ${BOUNDARY_REL}, so no handler's wall is checked. Next step: check the instrument (${SELF_REL}: its handler matcher).`);
     }
     const bodyStart = src.indexOf(body);
     for (const handler of handlers) {
-        for (const m of src.matchAll(new RegExp(`\\b${handler}\\s*\\(`, 'g'))) {
-            if (/function\s+$/.test(src.slice(Math.max(0, m.index - 20), m.index))) continue;
+        for (const m of src.matchAll(new RegExp(`(?<![\\w$.])${handler}\\s*\\(`, 'g'))) {
+            if (/function\s*\*?\s*$/.test(src.slice(Math.max(0, m.index - 20), m.index))) continue;
             const at = m.index - bodyStart;
             if (at < wallEnd || at > body.length) {
                 const line = src.slice(0, m.index).split('\n').length;
@@ -401,12 +426,24 @@ function selfTest() {
     });
 
     // The routed kind and its handler, derived (the hosting kinds and their handler since Phase 67).
-    const routedMatch = /case\s+"([^"]+)"\s*:[^\n]*?return\s+(handle[A-Za-z]+)\s*\(/.exec(handleShellMessageBody(realRead(BOUNDARY_REL)) ?? '');
-    if (!routedMatch) {
-        console.error(`${NAME}: --self-test FAIL -- broken instrument: no case of handleShellMessage returns into a handler, so the sender-wall plants have no target`);
+    const realBody = handleShellMessageBody(realRead(BOUNDARY_REL)) ?? '';
+    const routedHandler = armHandlers(realRead(BOUNDARY_REL), realBody)[0];
+    const routedKind = routedHandler ? new RegExp(`case\\s+"([^"]+)"\\s*:[^\\n]*?\\b${routedHandler}\\s*\\(`).exec(realBody)?.[1] : undefined;
+    if (!routedHandler || !routedKind) {
+        console.error(`${NAME}: --self-test FAIL -- broken instrument: no case of handleShellMessage calls a handler, so the sender-wall plants have no target`);
         return 1;
     }
-    const routed = { kind: routedMatch[1], handler: routedMatch[2] };
+    const routed = { kind: routedKind, handler: routedHandler };
+    // harness-static-hosting-12: a block-form case arm whose handler has another name and its return on the next line.
+    const blockArm = (t) => t.replace('        case "checkForUpdates": {\n', '        case "checkForUpdates": {\n          return pairNowHandler(data, actorRef);\n').replace('async function handleOrcaShellMessage(', 'async function pairNowHandler(data, actorRef) {\n  return { ok: true, kind: data.kind };\n}\n\nasync function handleOrcaShellMessage(');
+    {
+        const { failures } = runChecks(REPO_ROOT, { files, ...withBoundary(blockArm) });
+        if (failures.length) {
+            console.error(`${NAME}: --self-test FAIL -- a block-form case arm calling pairNowHandler only after the wall went red: ${failures.join(' | ')}`);
+            return 1;
+        }
+        console.log('  ok  a block-form case arm calling pairNowHandler, called nowhere else -> green (control)');
+    }
     const strayAccepted = 'shellStrayAccepted';
     const strayDispatched = 'shellStrayDispatched';
     const victim = baseline.dispatched[baseline.dispatched.length - 1];
@@ -418,6 +455,7 @@ function selfTest() {
         [`a request of kind ${routed.kind} dispatched to ${routed.handler} ahead of the sender wall`, withBoundary(t => t.replace('  async handleShellMessage(data, actorRef) {\n', `  async handleShellMessage(data, actorRef) {\n    if (data?.kind === "${routed.kind}") return ${routed.handler}(data, actorRef);\n`)), 'ahead of the sender wall', 'wall'],
         [`a second caller of ${routed.handler} outside the walled switch`, withBoundary(t => `${t}\nexport const plantedCaller = (data, actorRef) => ${routed.handler}(data, actorRef);\n`), "outside handleShellMessage's walled switch", 'wall'],
         ['the sender wall removed', withBoundary(t => t.replace('    if (!groupSenderIsTheia(actorRef)) {\n      PowerBrowserAPI.log("error", "[handleShellMessage] rejecting non-Theia-origin sender");\n      return { ok: false, reason: "validation", message: "handleShellMessage: rejecting non-Theia-origin sender" };\n    }\n', '')), 'does not open with the groupSenderIsTheia sender wall', 'wall'],
+        ['a block-form case arm whose handler pairNowHandler has a second caller before handleShellMessage', withBoundary(t => blockArm(t).replace('  async handleShellMessage(data, actorRef) {\n', '  receiveEarly(data, actorRef) {\n    return pairNowHandler(data, actorRef);\n  },\n\n  async handleShellMessage(data, actorRef) {\n')), "calls pairNowHandler outside handleShellMessage's walled switch", 'wall'],
         ['throwing default case', withBoundary(t => t.replace('return { ok: false, reason: "validation", message: `handleShellMessage: unknown kind ${String(kind)}` };', 'throw new Error(`unknown kind ${String(kind)}`);')), 'default', 'throw'],
     ];
 

@@ -25,6 +25,12 @@
 //            no stat() call is made; offerFileVerdict is called before the first read; decodeOffer and
 //            offerEndpointVerdict are called before the offer is returned; no return or log line in handOff or
 //            refuse names the path, the bridge folder, an error message, the stat or the content.
+//            The first read is readNoFollow(<path>, <the lstat result>), and readNoFollow opens with O_NOFOLLOW and
+//            compares the opened file's ino and dev with the judged stat before it reads, which closes the window
+//            between the lstat and the read (harness-static-hosting-06).
+//
+// A clause that cannot run (no mkfifo, OrcaEnv without ORCA_CLIENT_REASONS, no orca/ or typescript for the
+// decode agreement) makes the row SKIP: exit 77 with one SKIP line (SKIP-PROTOCOL.md, harness-static-hosting-01).
 //
 // --quick: text reads, a temp folder and an in-memory type strip. --self-test requires the clean tree green,
 // then plants faults in memory and requires each to go red naming its rule.
@@ -35,6 +41,7 @@ import { createRequire, stripTypeScriptTypes } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { verdictExit } from './lib/skip-verdict.mjs';
 
 const NAME = 'orca-offer-file';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -107,12 +114,13 @@ function loadOrcaParser() {
 async function check(inp) {
   const passes = [];
   const failures = [];
+  const skips = [];
   const fail = (rule, text) => failures.push({ rule, text });
   const policy = await importTs(inp.policySrc ?? '');
   for (const name of ['OFFER_REFUSAL_REASONS', 'offerFileVerdict', 'offerEndpointVerdict', 'decodeOffer', 'offerPortOf']) {
     if (!policy[name]) fail('cases', `${POLICY_REL} exports no ${name}${policy.loadError ? ` (${policy.loadError})` : ''}`);
   }
-  if (failures.length) return { passes, failures };
+  if (failures.length) return { passes, failures, skips };
 
   // cases: real lstat on a temp folder.
   const uid = process.getuid();
@@ -140,7 +148,7 @@ async function check(inp) {
       execFileSync('mkfifo', [fifo]);
       fileCase('fifo', lst(fifo), 'offer-not-regular');
     } catch {
-      passes.push('SKIP fifo case (no mkfifo on this host)');
+      skips.push('the fifo case did not run: no mkfifo on this host. Next step: run it where coreutils mkfifo exists');
     }
     for (const mode of [0o640, 0o604]) {
       const p = join(dir, `mode-${mode.toString(8)}`);
@@ -189,7 +197,7 @@ async function check(inp) {
   else fail('reasons', `${COPY_REL} exports no ORCA_CLIENT_REASON_CLASS`);
   const envReasons = /export const ORCA_CLIENT_REASONS = Object\.freeze\(\[([\s\S]*?)\]\)/.exec(inp.envSrc ?? '');
   if (envReasons) compare(`${ORCA_ENV_REL} ORCA_CLIENT_REASONS`, new Set([...envReasons[1].matchAll(/"(offer-[a-z-]+)"/g)].map(m => m[1])));
-  else passes.push(`SKIP ${ORCA_ENV_REL} has no ORCA_CLIENT_REASONS (lane p67-01 not merged)`);
+  else skips.push(`the OrcaEnv half of the reasons rule did not run: ${ORCA_ENV_REL} has no ORCA_CLIENT_REASONS (lane p67-01 not merged). Next step: merge it`);
 
   // decode agreement with Orca's own parser
   let orca = null;
@@ -212,7 +220,7 @@ async function check(inp) {
       else fail('decode', `decodeOffer disagrees with Orca's parser for the ${label} sample`);
     }
   } else if (!failures.some(f => f.rule === 'decode')) {
-    passes.push(`SKIP decode agreement (${WEB_PAIRING_REL} or ${TS_REL} absent)`);
+    skips.push(`the decode agreement did not run: ${WEB_PAIRING_REL} or ${TS_REL} is absent. Next step: bash scripts/fetch-orca.sh, and yarn install in theia/`);
   }
 
   // backend
@@ -222,7 +230,8 @@ async function check(inp) {
   if (!body) {
     fail('backend', `${BACKEND_REL} has no async handOff(`);
   } else {
-    const firstRead = body.search(/\b(readNoFollow|readFile|readFileSync|createReadStream)\(|\.open\(/);
+    const readRe = /\b(readNoFollow|readFile|readFileSync|createReadStream)\(|\.(open)\(/;
+    const firstRead = body.search(readRe);
     const lstatAt = body.search(/\blstat(Sync)?\(/);
     const verdictAt = body.indexOf('offerFileVerdict(');
     const returnAt = body.indexOf('return { pairing }');
@@ -231,6 +240,28 @@ async function check(inp) {
     else {
       if (lstatAt < 0 || lstatAt > firstRead) fail('backend', 'handOff reads the offer before any lstat call');
       if (verdictAt < 0 || verdictAt > firstRead) fail('backend', 'handOff reads the offer before offerFileVerdict');
+      // harness-static-hosting-06: the first read is the no-follow, same-inode reader, given the judged lstat.
+      const m = readRe.exec(body);
+      const reader = m[1] ?? m[2];
+      if (reader !== 'readNoFollow') fail('backend', `handOff reads the offer with ${reader}(), not readNoFollow: a symlink or another file swapped in after the lstat would be read`);
+      else {
+        const judged = /\b(\w+)\s*=\s*await\s+fs\.promises\.lstat\(\s*(\w+)\s*\)/.exec(body);
+        const call = /\breadNoFollow\(\s*(\w+)\s*,\s*(\w+)\b/.exec(body);
+        if (!judged || !call || call[1] !== judged[2] || call[2] !== judged[1]) fail('backend', `handOff does not pass readNoFollow the path and the stat it judged (${call ? `readNoFollow(${call[1]}, ${call[2]})` : 'no readNoFollow call'}${judged ? `, lstat result ${judged[1]} of ${judged[2]}` : ', no lstat result'})`);
+      }
+      const reader2 = methodBody(backend, 'function readNoFollow(');
+      const param = /function readNoFollow\(\s*\w+\s*:[^,]+,\s*(\w+)/.exec(backend)?.[1];
+      if (!reader2 || !param) fail('backend', `${BACKEND_REL} declares no readNoFollow(path, judged) this check can read`);
+      else {
+        const readAt = reader2.search(/\.readFile\(|\.read\(/);
+        if (!/\.open\([^;]*\bO_NOFOLLOW\b/.test(reader2)) fail('backend', 'readNoFollow opens the offer without O_NOFOLLOW, so a symlink swapped in after the lstat is followed');
+        for (const field of ['ino', 'dev']) {
+          const at = reader2.search(new RegExp(`\\.${field}\\s*!==\\s*${param}\\.${field}\\b|\\b${param}\\.${field}\\s*!==\\s*\\w+\\.${field}\\b`));
+          if (at < 0) fail('backend', `readNoFollow no longer compares the opened file's ${field} with the judged stat, so another file renamed over the offer after the lstat is read`);
+          else if (readAt >= 0 && at > readAt) fail('backend', `readNoFollow reads the offer before it compares ${field} with the judged stat`);
+        }
+        if (readAt < 0) fail('backend', 'readNoFollow reads no bytes that this check can find');
+      }
     }
     for (const fn of ['decodeOffer(', 'offerEndpointVerdict(']) {
       const at = body.indexOf(fn);
@@ -246,7 +277,7 @@ async function check(inp) {
     }
     if (!failures.some(f => f.rule === 'backend')) passes.push('ok handOff: lstat and offerFileVerdict before the read, decode and endpoint verdicts before the return, no value in a return or log line');
   }
-  return { passes, failures };
+  return { passes, failures, skips };
 }
 
 const inputs = {
@@ -270,6 +301,12 @@ async function selfTest(base) {
     ['the RPC reading before the verdict', 'backend', sub('backendSrc', '        const verdict = offerFileVerdict(', '        await readNoFollow(full, stat as fs.Stats);\n        const verdict = offerFileVerdict(')],
     ['a returned error naming the path', 'backend', sub('backendSrc', "            return this.refuse('offer-unreadable');\n        }\n        const verdict", "            return { refused: 'offer-unreadable', at: full } as never;\n        }\n        const verdict")],
     ['a refusal reason renamed', 'reasons', sub('policySrc', "'offer-owner', 'offer-mode', 'offer-endpoint',", "'offer-owner', 'offer-perms', 'offer-endpoint',")],
+    // harness-static-hosting-06
+    ['a plain readFile after the verdict', 'backend', sub('backendSrc', 'text = await readNoFollow(full, stat);', "text = await fs.promises.readFile(full, 'utf8');")],
+    ['the inode comparison removed', 'backend', sub('backendSrc', ' || opened.ino !== judged.ino', '')],
+    ['the device comparison removed', 'backend', sub('backendSrc', ' || opened.dev !== judged.dev', '')],
+    ['the no-follow flag removed', 'backend', sub('backendSrc', 'fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0)', 'fs.constants.O_RDONLY')],
+    ['readNoFollow given a fresh stat, not the judged one', 'backend', sub('backendSrc', 'text = await readNoFollow(full, stat);', 'text = await readNoFollow(full, await fs.promises.lstat(full));')],
   ];
   let bad = 0;
   for (const [label, rule, plant] of plants) {
@@ -307,7 +344,7 @@ if (!inputs.policySrc || !inputs.backendSrc) {
 const res = await check(inputs);
 for (const p of res.passes) console.log(`  ${p}`);
 for (const f of res.failures) console.log(`  FAIL ${f.rule} -- ${f.text}`);
-console.log(res.failures.length
-  ? `${NAME}: FAIL -- ${res.failures.length} rule failure(s)`
-  : `${NAME}: PASS -- the offer reader refuses a non-private or non-loopback offer before reading or returning it`);
-process.exit(res.failures.length ? 1 : 0);
+if (res.failures.length) console.log(`${NAME}: FAIL -- ${res.failures.length} rule failure(s)`);
+const code = verdictExit(NAME, res.failures, res.skips);
+if (code === 0) console.log(`${NAME}: PASS -- the offer reader refuses a non-private or non-loopback offer before reading or returning it, through a no-follow, same-inode read`);
+process.exit(code);
