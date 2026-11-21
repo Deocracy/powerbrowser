@@ -12140,15 +12140,16 @@ async function agentSettleOpens(entry, control, opensRefused) {
 }
 
 // 59-WR-03: true when a done result, as the JSON orcad receives, is within AGENT_RESULT_MAX_BYTES in UTF-8 bytes with
-// the same 64-byte envelope margin agentEncodeImage keeps. A result that cannot be serialised does not fit.
-function agentResultFits(result) {
+// the same 64-byte envelope margin agentEncodeImage keeps, plus `reserve` bytes for what is added after chrome (the
+// snapshot's page identity, agentSnapshotReserve). A result that cannot be serialised does not fit.
+function agentResultFits(result, reserve = 0) {
   let json;
   try {
     json = JSON.stringify(result ?? null) ?? "null";
   } catch {
     return false;
   }
-  let bytes = 64;
+  let bytes = 64 + reserve;
   for (let i = 0; i < json.length && bytes <= AGENT_RESULT_MAX_BYTES; i += 1) {
     const code = json.charCodeAt(i);
     if (code < 0x80) {
@@ -12163,6 +12164,22 @@ function agentResultFits(result) {
     }
   }
   return bytes <= AGENT_RESULT_MAX_BYTES;
+}
+
+// 59-WR-03: the orca-browser dispatcher adds browserPageId, url and title to a browser.snapshot result after chrome
+// measured it (A5). Room is kept for the most it can add: Orca's bounds (browser-client-page-metadata-protocol.ts: url
+// 8192, title 4096 UTF-16 units; browser-client-host-protocol.ts: 384 JSON bytes of page identity) at the worst JSON
+// cost per unit (3 bytes for a URL, 6 for a title's escaped control character), or the tab's own url and title when
+// those are longer, since the dispatcher sends what the tab shows, not a bounded copy.
+const AGENT_SNAPSHOT_URL_UNITS = 8192;
+const AGENT_SNAPSHOT_TITLE_UNITS = 4096;
+const AGENT_SNAPSHOT_ID_BYTES = 384;
+
+function agentSnapshotReserve(entry) {
+  const url = webTabPushedSpec(entry.browser.currentURI?.spec ?? "");
+  const title = String(entry.browser.contentTitle ?? "");
+  const keys = 64; // ,"browserPageId":"","url":"","title":"" and margin
+  return keys + AGENT_SNAPSHOT_ID_BYTES + Math.max(AGENT_SNAPSHOT_URL_UNITS * 3, url.length * 3) + Math.max(AGENT_SNAPSHOT_TITLE_UNITS * 6, title.length * 6);
 }
 
 async function handleWebTabAgent(data, actorRef) {
@@ -12203,7 +12220,7 @@ async function handleWebTabAgent(data, actorRef) {
   }
   // 59-WR-03: the result budget holds for every row (eval, exec get html, console, network, cookies), not only the
   // images, PDF and snapshot that check it themselves.
-  if (outcome.where === "done" && !agentResultFits(outcome.result)) {
+  if (outcome.where === "done" && !agentResultFits(outcome.result, data.method === "browser.snapshot" ? agentSnapshotReserve(entry) : 0)) {
     outcome = agentFailed("browser_error");
   }
   // D-35: the command opened a window or tab that chrome refused, so it did not do what it was asked.

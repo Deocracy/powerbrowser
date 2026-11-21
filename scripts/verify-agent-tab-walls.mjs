@@ -218,9 +218,9 @@ async function budgetClause(texts) {
     const failures = [];
     const max = budgetOf(texts);
     if (!max) return ['budget: broken instrument: AGENT_RESULT_MAX_BYTES not found'];
-    const run = async (label, method, params, reply, want) => {
+    const run = async (label, method, params, reply, want, url = 'https://example.com/') => {
         const w = worldOf(texts);
-        w.addTab('a1', { agent: true });
+        w.addTab('a1', { agent: true }).browser.currentURI = { spec: url, host: 'example.com' };
         if (reply) w.childReplies.set(method, () => Promise.resolve(reply));
         const answer = await w.agent('a1', method, params);
         const got = answer?.where === 'done' ? 'done' : `${answer?.where} ${answer?.code ?? ''}`.trim();
@@ -229,6 +229,11 @@ async function budgetClause(texts) {
     await run('a small browser.eval result', 'browser.eval', { expression: '1' }, { where: 'done', result: { value: 'x' } }, 'done');
     await run('a browser.eval result over the budget', 'browser.eval', { expression: '1' }, { where: 'done', result: { value: 'x'.repeat(max) } }, 'failed browser_error');
     // Under the budget in UTF-16 code units, over it in UTF-8 bytes: the measure must be bytes.
+    // The dispatcher adds browserPageId, url and title to a snapshot after chrome measured it: room is kept for them.
+    await run('a browser.eval result 2000 bytes under the budget', 'browser.eval', { expression: '1' }, { where: 'done', result: { value: 'x'.repeat(max - 2000) } }, 'done');
+    await run('a browser.snapshot result 2000 bytes under the budget', 'browser.snapshot', {}, { where: 'done', result: { snapshot: 'x'.repeat(max - 2000) } }, 'failed browser_error');
+    await run('a small browser.snapshot result', 'browser.snapshot', {}, { where: 'done', result: { snapshot: 'x'.repeat(1000) } }, 'done');
+    await run('a small browser.snapshot result on a page whose url is longer than the budget allows', 'browser.snapshot', {}, { where: 'done', result: { snapshot: 'x' } }, 'failed browser_error', `https://example.com/?q=${'a'.repeat(Math.ceil(max / 3))}`);
     await run('a browser.exec result over the budget in UTF-8 bytes only', 'browser.exec', { command: 'get html' }, { where: 'done', result: { value: '€'.repeat(Math.ceil(max / 2.5)) } }, 'failed browser_error');
     return failures;
 }
@@ -633,6 +638,16 @@ function replaceOnce(text, from, to, what) {
 
 const PLANTS = [
     {
+        name: '59-WR-03: no room kept for what the dispatcher adds to a snapshot',
+        plant: t => ({ ...t, api: replaceOnce(t.api, 'data.method === "browser.snapshot" ? agentSnapshotReserve(entry) : 0', '0', 'snapshot reserve') }),
+        expect: '2000 bytes under the budget answered done',
+    },
+    {
+        name: '59-WR-03: the reserve ignores a url longer than the Orca bound',
+        plant: t => ({ ...t, api: replaceOnce(t.api, 'Math.max(AGENT_SNAPSHOT_URL_UNITS * 3, url.length * 3)', 'AGENT_SNAPSHOT_URL_UNITS * 3', 'long url') }),
+        expect: 'whose url is longer than the budget allows answered done',
+    },
+    {
         name: 'agent-browser-03: cookie.set makes an httpOnly cookie',
         plant: t => ({ ...t, api: replaceOnce(t.api, 'if (!host || params.httpOnly === true || agentHttpOnlyNamed(', 'if (!host || agentHttpOnlyNamed(', 'httpOnly set') }),
         expect: 'cookie.set with httpOnly true answered',
@@ -754,7 +769,7 @@ const PLANTS = [
     },
     {
         name: '59-WR-03: handleWebTabAgent replies with any done result unmeasured',
-        plant: t => ({ ...t, api: replaceOnce(t.api, 'if (outcome.where === "done" && !agentResultFits(outcome.result)) {', 'if (false) {', 'budget measure') }),
+        plant: t => ({ ...t, api: replaceOnce(t.api, 'if (outcome.where === "done" && !agentResultFits(outcome.result, data.method === "browser.snapshot" ? agentSnapshotReserve(entry) : 0)) {', 'if (false) {', 'budget measure') }),
         expect: 'over the budget answered done',
     },
     {
