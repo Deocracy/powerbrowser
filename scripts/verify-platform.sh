@@ -4260,6 +4260,9 @@ run_own_checks() {
     # G5a CI and release: the wrapper every workflow and script uses to call a check that can skip. A check that did
     # not run (exit 77, or exit 0 with a SKIP line) is red there unless the call names the documented case.
     "run-no-skip-self-test|bash $REPO_ROOT/scripts/run-no-skip.sh --self-test"
+    # H7 live panels: the page-furniture row prints only the length and a known-value classification of a clipboard it
+    # read, never its text (the redaction, proven without a browser; the row itself is full-tier).
+    "page-furniture-live-redaction-self-test|node $REPO_ROOT/scripts/verify-page-furniture-live.mjs --redaction-self-test"
     # NEW (67-03, RUN-06/RUN-07, P67-01..P67-09, P67-32): orca-offer-file judges real lstat results of a temp folder
     # through orca-panes' offer-file-policy.ts (type-stripped): symlink, non-regular, other owner, group/other bits,
     # missing, non-loopback or mismatched endpoint, undecodable text; OFFER_REFUSAL_REASONS against the copy table's
