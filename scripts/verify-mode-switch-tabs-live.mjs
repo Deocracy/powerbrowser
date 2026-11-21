@@ -81,7 +81,9 @@
  * below, and it runs only when the seeds do). Both must be main-area tabs before the walk,
  * so the set-equality and isAttached assertions cover them on every hop,
  * the Orca mode's included. While theia/extensions/orca-panes is absent the
- * seeds print "Orca seeds: SKIP -- lane p64-02 not merged"; present but a
+ * seeds are skipped: the run still walks the modes, and, if nothing failed,
+ * ends with the one line "verify-mode-switch-tabs-live: SKIP -- Orca seeds did
+ * not run ..." and exit 77 (SKIP-PROTOCOL.md), never a PASS; present but a
  * command unregistered or no hosted widget within 5000 ms is red. The plant
  * 'orca-vanish' disposes an Orca seed (the welcome seed stands in while there
  * is none) after the first hop, and the next hop must name it LOST.
@@ -120,9 +122,16 @@
  * some, and nothing about what a human sees -- a widget can be attached and
  * still be painted wrong.
  *
+ * THE LIVE LOCK. Started without PB_LIVE_LOCK_HELD=1 (that is, not under
+ * scripts/verify-platform.sh) the row, and its --self-test, take
+ * <git common dir>/pb-live.lock themselves before they launch anything. Do not
+ * wrap them in flock on that file. --lock-probe prints whether the process holds
+ * it and launches nothing. --self-test boots browsers, so it is a full-tier row.
+ *
  * Usage:
  *   node scripts/verify-mode-switch-tabs-live.mjs
  *   node scripts/verify-mode-switch-tabs-live.mjs --self-test
+ *   node scripts/verify-mode-switch-tabs-live.mjs --lock-probe
  *   node scripts/verify-mode-switch-tabs-live.mjs --help
  *
  * No import of any package name -- Node built-ins and scripts/lib/firefox-bidi.mjs
@@ -133,9 +142,11 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { withFirefoxPage } from './lib/firefox-bidi.mjs';
+import { verdictExit } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'verify-mode-switch-tabs-live';
+const SELF = fileURLToPath(import.meta.url);
 
 const DESCRIPTORS_REL = 'theia/extensions/modes/src/browser/mode-descriptors.ts';
 const ORGANISING_REL = 'theia/extensions/modes/src/browser/organising-widget.ts';
@@ -159,6 +170,7 @@ GUI-07: drives the live Theia frontend through a mode walk in which every
 measured hop is a SECOND visit, and asserts that no main-area or bottom-area
 tab is lost, gained or detached. Needs the built browser; not a --quick check.
 
+  --lock-probe Print whether this process holds the live lock; launch nothing
   --self-test  Re-run the protocol with planted faults; each must go red
   --help       Print this message and exit 0
 `;
@@ -378,7 +390,7 @@ function protocolExpression(derived, plant) {
     });
     return `(async () => { ${GET_BY_NAME}
     const cfg = ${cfg};
-    const report = { failures: [], notes: [], steps: [], consoleErrors: [] };
+    const report = { failures: [], notes: [], steps: [], consoleErrors: [], skips: [] };
     const fail = message => report.failures.push(message);
     try {
         const container = window.theia.container;
@@ -488,7 +500,7 @@ function protocolExpression(derived, plant) {
         // --- Orca seeds (Phase 64): one hosted chat, one hosted terminal ----
         const orcaSeeds = [];
         if (!cfg.orcaSeeds) {
-            report.notes.push('Orca seeds: SKIP -- lane p64-02 not merged');
+            report.skips.push('Orca seeds did not run (lane p64-02 not merged: theia/extensions/orca-panes is absent). Next step: merge that lane, then run scripts/verify-platform.sh --only gui07-mode-switch-tabs-live');
         } else {
             for (const id of cfg.orcaSeedCommands) {
                 report.steps.push('seed ' + id);
@@ -603,7 +615,7 @@ async function runProtocol(derived, plant) {
     try {
         return await drive(derived, plant);
     } catch (error) {
-        return { driveError: String(error), failures: [], notes: [], steps: [] };
+        return { driveError: String(error), failures: [], notes: [], steps: [], skips: [] };
     }
 }
 
@@ -725,8 +737,12 @@ async function main() {
         console.error(`${NAME}: FAIL -- ${failures.length} assertion(s) failed`);
         return 1;
     }
-    console.log(`${NAME}: PASS -- ${(report.baselineMain ?? []).length} main-area and ${(report.baselineBottom ?? []).length} bottom-area tab(s) survived every second-visit mode switch, attached`);
-    return 0;
+    // A part of the run that did not run because an input is absent is a partial run: SKIP, never PASS (SKIP-PROTOCOL.md).
+    const code = verdictExit(NAME, [], report.skips ?? []);
+    if (code === 0) {
+        console.log(`${NAME}: PASS -- ${(report.baselineMain ?? []).length} main-area and ${(report.baselineBottom ?? []).length} bottom-area tab(s) survived every second-visit mode switch, attached`);
+    }
+    return code;
 }
 
 /**
@@ -792,8 +808,18 @@ async function selfTest() {
     ];
 
     let failed = 0;
+    const skipped = [];
+    {
+        // The live lock is taken by a row started outside the driver (no browser): the same lib function every live row uses.
+        const lib = await import('./lib/orca-tabs-live.mjs');
+        for (const message of lib.lockProbeVerdict(SELF, NAME)) {
+            console.error(`${NAME} --self-test: FAIL -- ${message}`);
+            failed++;
+        }
+    }
     for (const testCase of cases) {
         const report = await runProtocol(derived, testCase.plant);
+        for (const reason of report.skips ?? []) if (!skipped.includes(reason)) skipped.push(reason);
         const failures = assertReport(derived, report);
         if (report.driveError) {
             // Distinct from a plant that failed to go red: the session never
@@ -834,13 +860,28 @@ async function selfTest() {
         console.error(`${NAME} --self-test: FAIL -- ${failed} case(s) did not behave as required`);
         return 1;
     }
-    console.log(`${NAME} --self-test: PASS -- the clean control is green and all ${cases.length - 1} planted faults went red`);
-    return 0;
+    // A self-test that ran with a skipped input (no Orca seeds) did not cover the seed path: SKIP, not PASS.
+    const code = verdictExit(NAME, [], skipped);
+    if (code === 0) {
+        console.log(`${NAME} --self-test: PASS -- the clean control is green and all ${cases.length - 1} planted faults went red`);
+    }
+    return code;
 }
 
 const args = process.argv.slice(2);
 if (args.includes('--help')) {
     console.log(HELP.trimEnd());
     process.exit(0);
+}
+{
+    // Both modes launch a browser: a run started outside the driver takes the live lock first.
+    const lib = await import('./lib/orca-tabs-live.mjs');
+    let held;
+    try { held = lib.reexecUnderLiveLock(SELF, args); } catch (err) {
+        console.error(`${NAME}: FAIL -- ${err.message}`);
+        process.exit(1);
+    }
+    if (held !== null) process.exit(held);
+    if (args.includes('--lock-probe')) { console.log(lib.lockProbeLine(NAME)); process.exit(0); }
 }
 process.exit(args.includes('--self-test') ? await selfTest() : await main());
