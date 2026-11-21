@@ -14,10 +14,13 @@
 //  budget        [59-WR-03]  over the stub world: a child row's done result over AGENT_RESULT_MAX_BYTES (read from the
 //                section) answers failed browser_error, measured in UTF-8 bytes; a small one stays done.
 //  history       [chrome-actor-05]  an agent overlay gets disableglobalhistory before append; a user overlay never.
-//  services      [agent-browser-06]  orcad's port pref and default equal what OrcaService.sys.mjs binds; the URL wall
-//                refuses the sidecar and orcad ports on every loopback spelling and nothing else; browser.goto there
-//                navigates nothing; the observer cancels an agent request, redirect and loopback response on them,
-//                never a dev-server request or a user overlay's.
+//  services      [agent-browser-06]  orcad's port pref and default equal what OrcaService.sys.mjs binds; the loopback
+//                recogniser classifies raw spellings (numeric, octal and hex IPv4, mapped and compatible IPv6 in hex
+//                and dotted form, unspecified addresses, zones, brackets, a trailing dot, *.localhost); browser.goto
+//                there navigates nothing; the observer cancels before send (a spelled host at once, a name after its
+//                suspended lookup, cancel before resume), judges agent-container worker loads by origin attributes,
+//                keeps the response address as a second line, and never touches a dev server, a user overlay or a
+//                user-container worker.
 //  cookies       [agent-browser-03, chrome-actor-04]  over a two-site jar, an agent tab on one site reads that site's
 //                cookies only, never an httpOnly value and never the whole container; another site's or a public
 //                suffix's get, set and delete are refused with no cookie-service call; its own site's set works.
@@ -171,6 +174,8 @@ function worldOf(texts) {
     return makeWorld(sliced);
 }
 
+const realTick = ms => new Promise(resolve => setTimeout(resolve, ms));
+
 /** A global of a stub world's vm context, read through that context's own Function constructor. */
 function contextGlobal(w, name) {
     return w.AGENT_NATIVE_ROWS['browser.goto'].constructor(`return ${name};`)();
@@ -218,9 +223,11 @@ async function historyClause(texts) {
     return failures;
 }
 
-// agent-browser-06: the orcad port pref and default are what OrcaService binds (derived from its source); the URL wall
-// refuses both PowerBrowser service ports on every loopback spelling and nothing else; goto refuses before any
-// navigation; the network observer cancels a request, a redirect and a response from a loopback address on those ports.
+// agent-browser-06: the orcad port pref and default are what OrcaService binds (derived from its source); the loopback
+// recogniser classifies every spelling a URL parser, a resolver or a socket address can give; browser.goto refuses
+// before any navigation; the network observer refuses before anything is sent: a spelled loopback host at once, a
+// name on a service port after its pre-send lookup (suspended, cancelled before resume), a worker load in the agent
+// container by its origin attributes, and a loopback response address as a second line.
 async function servicesClause(texts) {
     const failures = [];
     const orca = /getIntPref\("([\w.]+)", (\d+)\)/.exec(texts.orcaService);
@@ -231,11 +238,17 @@ async function servicesClause(texts) {
     }
     const sidecar = 4123;
     const orcad = Number(orca[2]);
-    const out = evalDeclarations(texts.api, ['AGENT_ORCA_PORT_PREF', 'AGENT_ORCA_PORT_DEFAULT', 'agentOwnServicePorts', 'agentLoopbackHost', 'agentServiceRefused', 'agentUrlRefused'],
-        { URL, groupSenderPort: sidecar, Services: { prefs: { getIntPref: (name, fallback) => fallback } } }, ['agentUrlRefused']);
-    if (typeof out.agentUrlRefused !== 'function') return [...failures, 'services: broken instrument: agentUrlRefused not found in the agent section'];
-    const refused = [`http://127.0.0.1:${sidecar}/`, `http://localhost:${orcad}/x`, `http://[::1]:${sidecar}/`, `http://0.0.0.0:${orcad}/`, `http://127.1.2.3:${orcad}/`,
-        `http://pane.webview.localhost:${sidecar}/`, `http://[::ffff:127.0.0.1]:${orcad}/`, `http://LOCALHOST.:${orcad}/`];
+    const out = evalDeclarations(texts.api,
+        ['AGENT_ORCA_PORT_PREF', 'AGENT_ORCA_PORT_DEFAULT', 'agentOwnServicePorts', 'agentParseV4', 'agentParseV6', 'agentParseAddress', 'agentLoopbackV4', 'agentLoopbackHost', 'agentServiceRefused', 'agentUrlParts', 'agentUrlRefused'],
+        { URL, groupSenderPort: sidecar, Services: { prefs: { getIntPref: (name, fallback) => fallback } } }, ['agentUrlRefused', 'agentLoopbackHost']);
+    if (typeof out.agentUrlRefused !== 'function' || typeof out.agentLoopbackHost !== 'function') return [...failures, 'services: broken instrument: agentUrlRefused or agentLoopbackHost not found in the agent section'];
+    // Raw spellings, as a socket address, a DNS record or an un-normalised URI host can carry them.
+    const loopback = ['127.0.0.1', '127.1', '0177.0.0.1', '0x7f000001', '0x7f.1', '2130706433', '0.0.0.0', '0', '::1', '[::1]', '::1%lo', '0:0:0:0:0:0:0:1', '::',
+        '::ffff:127.0.0.1', '::ffff:7f00:1', '[::ffff:7f00:1]', '::ffff:0.0.0.0', '::ffff:0:0', '::127.0.0.1', 'localhost', 'localhost.', 'LOCALHOST', 'a.b.localhost', 'pane.webview.localhost.'];
+    const notLoopback = ['10.0.0.1', '192.168.1.1', '128.0.0.1', '::ffff:192.168.1.1', 'fe80::1%lo', '2001:db8::1', 'example.com', 'localhost.example.com', '127.example', ''];
+    for (const host of loopback) if (out.agentLoopbackHost(host) !== true) failures.push(`services: the loopback recogniser misses ${JSON.stringify(host)} (agent-browser-06)`);
+    for (const host of notLoopback) if (out.agentLoopbackHost(host) !== false) failures.push(`services: the loopback recogniser calls ${JSON.stringify(host)} loopback`);
+    const refused = [`http://127.0.0.1:${sidecar}/`, `http://localhost:${orcad}/x`, `http://[::1]:${sidecar}/`, `http://0.0.0.0:${orcad}/`, `http://[::ffff:0:0]:${orcad}/`, `http://[::]:${orcad}/`, `http://pane.webview.localhost:${sidecar}/`, `http://LOCALHOST.:${orcad}/`];
     const allowed = ['http://127.0.0.1:3000/', `https://example.com:${orcad}/`, 'http://192.168.1.1/', 'https://example.com/'];
     for (const spec of refused) if (out.agentUrlRefused(spec) !== true) failures.push(`services: ${spec} is not refused to an agent page (agent-browser-06)`);
     for (const spec of allowed) if (out.agentUrlRefused(spec) !== false) failures.push(`services: ${spec} is refused to an agent page, though it is not a PowerBrowser service`);
@@ -249,10 +262,24 @@ async function servicesClause(texts) {
     }
     w.api.webTabOpen(w.theiaBrowser, w.frontend, 'n1', 'https://example.com/', undefined, undefined, null, true);
     w.api.webTabOpen(w.theiaBrowser, w.frontend, 'u1', 'https://example.com/', undefined, undefined, null, false);
+    const container = Number(w.webTabs.get('n1')?.agentUserContextId);
+    // A stub resolver: each name resolves to the addresses given; the listener is called on a later tick.
+    const dnsAnswers = new Map([['rebind.example', ['93.184.216.34', '127.0.0.1']], ['public.example', ['93.184.216.34']]]);
+    const services = contextGlobal(w, 'Services');
+    services.tm = { mainThread: {} };
+    services.dns = {
+        asyncResolve(host, type, flags, info, listener) {
+            const addresses = [...(dnsAnswers.get(host) ?? [])];
+            setTimeout(() => listener.onLookupComplete(null, { QueryInterface() { return this; }, hasMore: () => addresses.length > 0, getNextAddrAsString: () => addresses.shift() }, 0), 0);
+        },
+    };
+    contextGlobal(w, 'Components').isSuccessCode = status => status === 0;
     const channel = (browser, spec, extra = {}) => ({
-        URI: { spec }, isDocument: true, status: 0, requestMethod: 'GET', cancelled: null, ...extra,
-        loadInfo: { browsingContext: { top: { embedderElement: browser } } },
-        cancel(status) { this.cancelled = status ?? 'cancelled'; },
+        URI: { spec }, isDocument: true, status: 0, requestMethod: 'GET', cancelled: null, suspended: 0, resumed: 0, events: [], ...extra,
+        loadInfo: { browsingContext: browser ? { top: { embedderElement: browser } } : null, originAttributes: { userContextId: browser === null ? (extra.userContextId ?? 0) : 0 } },
+        cancel(status) { this.cancelled = status ?? 'cancelled'; this.events.push('cancel'); },
+        suspend() { this.suspended += 1; this.events.push('suspend'); },
+        resume() { this.resumed += 1; this.events.push('resume'); },
         QueryInterface() { return this; },
     });
     const fire = (ch, topic) => w.rec.observers.filter(o => o.topic === topic).forEach(o => o.observer.observe(ch, topic));
@@ -261,17 +288,38 @@ async function servicesClause(texts) {
     const userBrowser = w.webTabs.get('u1').browser;
     const toOrcad = channel(agentBrowser, `http://127.0.0.1:${orcad}/`);
     fire(toOrcad, 'http-on-modify-request');
-    if (toOrcad.cancelled === null) failures.push('services: an agent overlay\'s request (or redirect) to orcad\'s port was not cancelled by the network observer (agent-browser-06)');
-    const rebound = channel(agentBrowser, 'http://rebind.example/', { remoteAddress: '127.0.0.1', remotePort: orcad });
+    if (toOrcad.cancelled === null) failures.push('services: an agent overlay\'s request (or redirect) to orcad\'s port was not cancelled before it was sent (agent-browser-06)');
+    // A name on a service port resolving to loopback: cancelled before the suspended request is resumed.
+    const rebound = channel(agentBrowser, `http://rebind.example:${orcad}/`);
     fire(rebound, 'http-on-modify-request');
-    fire(rebound, 'http-on-examine-response');
-    if (rebound.cancelled === null) failures.push('services: an agent overlay\'s response from 127.0.0.1 on orcad\'s port, under a name resolving there, was not cancelled (agent-browser-06)');
+    await realTick(5);
+    const cancelAt = rebound.events.indexOf('cancel');
+    if (rebound.suspended !== 1 || cancelAt === -1 || cancelAt > rebound.events.indexOf('resume')) {
+        failures.push(`services: a name on orcad's port resolving to loopback was sent (events ${rebound.events.join(', ') || 'none'}); expected suspend, cancel, resume before anything is written (agent-browser-06)`);
+    }
+    const publicName = channel(agentBrowser, `http://public.example:${orcad}/`);
+    fire(publicName, 'http-on-modify-request');
+    await realTick(5);
+    if (publicName.cancelled !== null || publicName.resumed !== publicName.suspended) failures.push(`services: a name resolving to a public address on orcad's port was cancelled or left suspended (events ${publicName.events.join(', ')})`);
+    // Second line: a response that came from loopback on a service port.
+    const late = channel(agentBrowser, `http://public.example:${orcad}/`, { remoteAddress: '::ffff:127.0.0.1', remotePort: orcad });
+    fire(late, 'http-on-examine-response');
+    if (late.cancelled === null) failures.push('services: an agent response from a loopback address on orcad\'s port was not cancelled (the response-time second line)');
+    // A worker of an agent page has no embedder; its load is judged by the agent container in its origin attributes.
+    const worker = channel(null, `http://127.0.0.1:${orcad}/`, { userContextId: container });
+    fire(worker, 'http-on-modify-request');
+    if (!Number.isInteger(container) || container <= 0) failures.push('services: broken instrument: the agent overlay recorded no container id');
+    else if (worker.cancelled === null) failures.push('services: a worker load in the agent container to orcad\'s port was not cancelled (no embedder; agent-browser-06)');
+    const userWorker = channel(null, `http://127.0.0.1:${orcad}/`, { userContextId: 0 });
+    fire(userWorker, 'http-on-modify-request');
     const devServer = channel(agentBrowser, 'http://127.0.0.1:3000/', { remoteAddress: '127.0.0.1', remotePort: 3000 });
     fire(devServer, 'http-on-modify-request');
     fire(devServer, 'http-on-examine-response');
     const userToOrcad = channel(userBrowser, `http://127.0.0.1:${orcad}/`);
     fire(userToOrcad, 'http-on-modify-request');
-    if (devServer.cancelled !== null || userToOrcad.cancelled !== null) failures.push('services: the observer cancelled a request to a local development server or a user overlay\'s request');
+    if (devServer.cancelled !== null || userToOrcad.cancelled !== null || userWorker.cancelled !== null || devServer.suspended) {
+        failures.push('services: the observer cancelled or suspended a request to a local development server, a user overlay\'s request or a user-container worker\'s');
+    }
     return failures;
 }
 
@@ -395,24 +443,59 @@ const PLANTS = [
         expect: 'browser.goto to orcad\'s port answered',
     },
     {
-        name: 'agent-browser-06: the observer lets agent requests to PowerBrowser services through',
-        plant: t => ({ ...t, api: replaceOnce(t.api, 'if (agentChannelRefused(channel, topic)) {', 'if (false) {', 'observer wall') }),
-        expect: 'was not cancelled by the network observer',
-    },
-    {
-        name: 'agent-browser-06: the response address is not checked',
-        plant: t => ({ ...t, api: replaceOnce(t.api, 'return agentServiceRefused(internal.remoteAddress, internal.remotePort);', 'return false && internal;', 'remote address') }),
-        expect: 'under a name resolving there',
-    },
-    {
         name: 'agent-browser-06: the sidecar port is left out of the wall',
         plant: t => ({ ...t, api: replaceOnce(t.api, 'ports.push(groupSenderPort);', 'void groupSenderPort;', 'sidecar port') }),
         expect: 'http://127.0.0.1:4123/ is not refused',
     },
     {
-        name: 'agent-browser-06: IPv4-mapped loopback is not recognised',
-        plant: t => ({ ...t, api: replaceOnce(t.api, '(mapped !== null && (', '(false && (', 'mapped loopback') }),
-        expect: '[::ffff:127.0.0.1]',
+        name: "agent-browser-06: a spelled loopback host on a service port is not cancelled before send",
+        plant: t => ({ ...t, api: replaceOnce(t.api, "if (agentLoopbackHost(parts.host)) {\n    agentServiceCancel(channel, entry);", "if (false) {\n    agentServiceCancel(channel, entry);", "pre-send spelled") }),
+        expect: "was not cancelled before it was sent",
+    },
+    {
+        name: "agent-browser-06 (review 1): a name on a service port is sent without the pre-send lookup",
+        plant: t => ({ ...t, api: replaceOnce(t.api, "agentResolveBeforeSend(channel, parts.host, entry);\n  return false;", "return false;", "pre-send lookup") }),
+        expect: "resolving to loopback was sent",
+    },
+    {
+        name: "agent-browser-06 (review 1): the lookup resumes before it cancels",
+        plant: t => ({ ...t, api: replaceOnce(t.api, "    if (refused) {\n      agentServiceCancel(channel, entry);\n    }\n    try {\n      channel.resume();\n    } catch {\n      // cancelled elsewhere meanwhile\n    }", "    try {\n      channel.resume();\n    } catch {\n      // cancelled elsewhere meanwhile\n    }\n    if (refused) {\n      agentServiceCancel(channel, entry);\n    }", "cancel order") }),
+        expect: "resolving to loopback was sent",
+    },
+    {
+        name: "agent-browser-06: the response address is not checked",
+        plant: t => ({ ...t, api: replaceOnce(t.api, "if (agentServiceRefused(internal.remoteAddress, internal.remotePort)) {", "if (false && internal) {", "remote address") }),
+        expect: "response-time second line",
+    },
+    {
+        name: "agent-browser-06 (review 2): an agent-container worker load is judged by its browsing context only",
+        plant: t => ({ ...t, api: replaceOnce(t.api, "if ((entry || agentChannelInContainer(channel)) && agentServiceWall(channel, topic, entry)) {", "if (entry && agentServiceWall(channel, topic, entry)) {", "container judge") }),
+        expect: "worker load in the agent container",
+    },
+    {
+        name: "agent-browser-06 (review 3): single-number and hex IPv4 forms are not parsed",
+        plant: t => ({ ...t, api: replaceOnce(t.api, "if (/^0x[0-9a-f]*$/.test(part)) {", "if (false) {", "hex v4") }),
+        expect: "misses \"0x7f000001\"",
+    },
+    {
+        name: "agent-browser-06 (review 3): mapped unspecified addresses are not loopback",
+        plant: t => ({ ...t, api: replaceOnce(t.api, "(g[5] === 0xffff || g[5] === 0)", "(g[5] === 0xffff && g[6] !== 0)", "mapped unspecified") }),
+        expect: "misses \"::ffff:0:0\"",
+    },
+    {
+        name: "agent-browser-06 (review 3): 0.0.0.0 is not loopback",
+        plant: t => ({ ...t, api: replaceOnce(t.api, "return top === 127 || top === 0;", "return top === 127;", "zero net") }),
+        expect: "misses \"0.0.0.0\"",
+    },
+    {
+        name: "agent-browser-06 (review 3): a trailing dot on localhost is not stripped",
+        plant: t => ({ ...t, api: replaceOnce(t.api, "const name = String(host ?? \"\").toLowerCase().replace(/^\\[|\\]$/g, \"\").replace(/\\.+$/, \"\");", "const name = String(host ?? \"\").toLowerCase().replace(/^\\[|\\]$/g, \"\");", "trailing dot") }),
+        expect: "misses \"localhost.\"",
+    },
+    {
+        name: "agent-browser-06 (review 3): an IPv6 zone is not stripped",
+        plant: t => ({ ...t, api: replaceOnce(t.api, "let h = text.replace(/%.*$/, \"\");", "let h = text;", "zone") }),
+        expect: "misses \"::1%lo\"",
     },
     {
         name: 'agent-browser-06: orcad\'s port pref drifts from OrcaService',

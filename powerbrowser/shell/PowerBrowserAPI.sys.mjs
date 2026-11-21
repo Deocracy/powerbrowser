@@ -11335,6 +11335,7 @@ function agentContainerId() {
 function agentTabCreated(entry, userContextId) {
   entry.agent = true;
   entry.agentUserContextId = userContextId;
+  agentContainerIds.add(userContextId);
   // D-35, the content wall: set before the first load, so every document of the overlay carries it. D-37 adds the
   // download wall to the same write.
   entry.browser.browsingContext.sandboxFlags |= SANDBOXED_AUXILIARY_NAVIGATION | SANDBOXED_DOWNLOADS;
@@ -11554,43 +11555,224 @@ function agentOwnServicePorts() {
   return ports;
 }
 
-// Loopback as the socket layer reaches it: localhost and its subdomains, 127/8, ::1, the unspecified addresses (a
-// connect to them lands on loopback) and IPv4-mapped loopback in either spelling.
+// One parse of an address literal, as the socket layer reads it: { v4 } (a 32-bit number) or { v6 } (eight 16-bit
+// groups), else null for a name. IPv4 takes the forms a URL parser or a resolver accepts (one to four parts, each
+// decimal, 0-prefixed octal or 0x hex, the last filling the remaining bytes); IPv6 takes brackets, a zone, "::" and a
+// dotted IPv4 tail.
+function agentParseV4(text) {
+  const parts = text.split(".");
+  if (parts.length < 1 || parts.length > 4) {
+    return null;
+  }
+  const values = [];
+  for (const part of parts) {
+    let value;
+    if (/^0x[0-9a-f]*$/.test(part)) {
+      value = part.length === 2 ? 0 : parseInt(part.slice(2), 16);
+    } else if (/^0[0-7]*$/.test(part)) {
+      value = parseInt(part, 8);
+    } else if (/^[1-9][0-9]*$/.test(part)) {
+      value = parseInt(part, 10);
+    } else {
+      return null;
+    }
+    values.push(value);
+  }
+  const last = values.pop();
+  if (values.some(v => v > 255) || last >= 256 ** (4 - values.length)) {
+    return null;
+  }
+  return values.reduce((n, v, i) => n + v * 256 ** (3 - i), 0) + last;
+}
+
+function agentParseV6(text) {
+  let h = text.replace(/%.*$/, "");
+  const dotted = /^(.*:)([^:]*\.[^:]*)$/.exec(h);
+  if (dotted) {
+    const v4 = /^\d+\.\d+\.\d+\.\d+$/.test(dotted[2]) ? agentParseV4(dotted[2]) : null;
+    if (v4 === null) {
+      return null;
+    }
+    h = `${dotted[1]}${(v4 >>> 16).toString(16)}:${(v4 & 0xffff).toString(16)}`;
+  }
+  const halves = h.split("::");
+  if (halves.length > 2) {
+    return null;
+  }
+  const groupsOf = s => (s === "" ? [] : s.split(":"));
+  const head = groupsOf(halves[0]);
+  const tail = halves.length === 2 ? groupsOf(halves[1]) : [];
+  const fill = 8 - head.length - tail.length;
+  if ((halves.length === 2 ? fill < 1 : fill !== 0) || ![...head, ...tail].every(g => /^[0-9a-f]{1,4}$/.test(g))) {
+    return null;
+  }
+  return [...head, ...new Array(halves.length === 2 ? fill : 0).fill("0"), ...tail].map(g => parseInt(g, 16));
+}
+
+function agentParseAddress(host) {
+  const h = String(host ?? "").toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "");
+  if (h.includes(":")) {
+    const v6 = agentParseV6(h);
+    return v6 ? { v6 } : null;
+  }
+  const v4 = agentParseV4(h);
+  return v4 === null ? null : { v4 };
+}
+
+// Loopback as a connect reaches it, classified on the normalised address: localhost and its subdomains, 127/8, 0/8
+// (a connect to 0.0.0.0 lands on loopback), ::1, ::, and IPv4-mapped or IPv4-compatible forms of those.
+function agentLoopbackV4(n) {
+  const top = Math.floor(n / 2 ** 24);
+  return top === 127 || top === 0;
+}
+
 function agentLoopbackHost(host) {
-  const h = String(host ?? "").toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
-  const mapped = h.startsWith("::ffff:") ? h.slice(7) : null;
-  return h === "localhost" || h.endsWith(".localhost") || h === "::1" || h === "::" || h === "0.0.0.0" ||
-    /^127\.\d+\.\d+\.\d+$/.test(h) || (mapped !== null && (/^127\.\d+\.\d+\.\d+$/.test(mapped) || /^7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(mapped)));
+  const name = String(host ?? "").toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "");
+  if (name === "localhost" || name.endsWith(".localhost")) {
+    return true;
+  }
+  const address = agentParseAddress(name);
+  if (!address) {
+    return false;
+  }
+  if (address.v4 !== undefined) {
+    return agentLoopbackV4(address.v4);
+  }
+  const g = address.v6;
+  const zeroTo = k => g.slice(0, k).every(x => x === 0);
+  if (zeroTo(7) && (g[7] === 0 || g[7] === 1)) {
+    return true;
+  }
+  // ::ffff:a.b.c.d (mapped) and ::a.b.c.d (compatible) reach the IPv4 address in the low 32 bits.
+  if (zeroTo(5) && (g[5] === 0xffff || g[5] === 0)) {
+    return agentLoopbackV4(g[6] * 65536 + g[7]);
+  }
+  return false;
 }
 
 function agentServiceRefused(host, port) {
   return agentLoopbackHost(host) && agentOwnServicePorts().includes(port);
 }
 
-function agentUrlRefused(spec) {
+function agentUrlParts(spec) {
   try {
     const url = new URL(spec);
-    const port = url.port ? Number(url.port) : url.protocol === "https:" || url.protocol === "wss:" ? 443 : 80;
-    return agentServiceRefused(url.hostname, port);
+    return { host: url.hostname, port: url.port ? Number(url.port) : url.protocol === "https:" || url.protocol === "wss:" ? 443 : 80 };
+  } catch {
+    return null;
+  }
+}
+
+function agentUrlRefused(spec) {
+  const parts = agentUrlParts(spec);
+  return !!parts && agentServiceRefused(parts.host, parts.port);
+}
+
+// The agent containers chrome created agent overlays in (agentTabCreated adds each). The service wall judges a request
+// by the container it is made in, not by its browsing context, so a worker, shared worker or service worker of an
+// agent page (which has no embedder) is judged as its page is.
+const agentContainerIds = new Set();
+
+function agentChannelInContainer(channel) {
+  try {
+    const id = channel.loadInfo?.originAttributes?.userContextId;
+    return Number.isInteger(id) && id > 0 && agentContainerIds.has(id);
   } catch {
     return false;
   }
 }
 
-// The channel half: the URL before the request (a redirect is a new channel and is checked again), and the address
-// the connection reached once a response arrives, which a name resolving to loopback cannot hide.
-function agentChannelRefused(channel, topic) {
-  if (agentUrlRefused(channel.URI?.spec)) {
+function agentServiceCancel(channel, entry) {
+  try {
+    channel.cancel(Cr.NS_ERROR_CONNECTION_REFUSED);
+  } catch {
+    // already finished
+  }
+  const logged = entry ?? agentServiceLog;
+  if (!logged.agentServiceLogged) {
+    logged.agentServiceLogged = true;
+    PowerBrowserAPI.log("warn", "[orca-agent] refused a request from an agent page to a PowerBrowser service (agent-browser-06)");
+  }
+}
+const agentServiceLog = { agentServiceLogged: false };
+
+// The wall, before anything is sent (http-on-modify-request; a redirect is a new channel and comes here again): a
+// spelled loopback host on a service port is cancelled at once; a name on a service port is suspended, resolved in the
+// channel's own DNS partition (the cache entry its connect then uses), and cancelled before resume when any address it
+// resolves to is loopback. The response's remote address (http-on-examine-response) is a second line only.
+function agentServiceWall(channel, topic, entry) {
+  if (topic === "http-on-examine-response") {
+    try {
+      const internal = channel.QueryInterface(Ci.nsIHttpChannelInternal);
+      if (agentServiceRefused(internal.remoteAddress, internal.remotePort)) {
+        agentServiceCancel(channel, entry);
+        return true;
+      }
+    } catch {
+      // not connected: nothing to judge
+    }
+    return false;
+  }
+  if (topic !== "http-on-modify-request") {
+    return false;
+  }
+  const parts = agentUrlParts(channel.URI?.spec);
+  if (!parts || !agentOwnServicePorts().includes(parts.port)) {
+    return false;
+  }
+  if (agentLoopbackHost(parts.host)) {
+    agentServiceCancel(channel, entry);
     return true;
   }
-  if (topic !== "http-on-examine-response") {
-    return false;
+  if (agentParseAddress(parts.host)) {
+    return false; // an address literal that is not loopback: nothing to resolve
   }
+  agentResolveBeforeSend(channel, parts.host, entry);
+  return false;
+}
+
+function agentResolveBeforeSend(channel, host, entry) {
   try {
-    const internal = channel.QueryInterface(Ci.nsIHttpChannelInternal);
-    return agentServiceRefused(internal.remoteAddress, internal.remotePort);
+    channel.suspend();
   } catch {
-    return false;
+    return;
+  }
+  let done = false;
+  const finish = refused => {
+    if (done) {
+      return;
+    }
+    done = true;
+    if (refused) {
+      agentServiceCancel(channel, entry);
+    }
+    try {
+      channel.resume();
+    } catch {
+      // cancelled elsewhere meanwhile
+    }
+  };
+  const listener = {
+    onLookupComplete(request, record, status) {
+      let refused = false;
+      try {
+        if (Components.isSuccessCode(status)) {
+          const addresses = record.QueryInterface(Ci.nsIDNSAddrRecord);
+          while (addresses.hasMore()) {
+            refused = agentLoopbackHost(addresses.getNextAddrAsString()) || refused;
+          }
+        }
+      } catch {
+        // a record that cannot be read refuses nothing; the channel's own lookup decides
+      }
+      finish(refused);
+    },
+    QueryInterface: ChromeUtils.generateQI(["nsIDNSListener"]),
+  };
+  try {
+    Services.dns.asyncResolve(host, Ci.nsIDNSService.RESOLVE_TYPE_DEFAULT, Ci.nsIDNSService.RESOLVE_DEFAULT_FLAGS, null, listener, Services.tm.mainThread, channel.loadInfo?.originAttributes);
+  } catch {
+    finish(false);
   }
 }
 
@@ -11709,23 +11891,20 @@ const agentNetworkObserver = {
   observe(subject, topic) {
     try {
       const channel = subject.QueryInterface(Ci.nsIHttpChannel);
-      const entry = webTabs.get(tabIdOfBrowser(channel.loadInfo?.browsingContext?.top?.embedderElement));
-      if (entry?.agent !== true) {
+      const found = webTabs.get(tabIdOfBrowser(channel.loadInfo?.browsingContext?.top?.embedderElement));
+      const entry = found?.agent === true ? found : null;
+      // agent-browser-06: a request to PowerBrowser's own services ends here, for any load in an agent container
+      // (workers included) as well as any load of an agent overlay; logged once without the URL.
+      if ((entry || agentChannelInContainer(channel)) && agentServiceWall(channel, topic, entry)) {
+        return;
+      }
+      if (!entry) {
         return;
       }
       // D-37: a document load the download wall cancelled (SANDBOXED_DOWNLOADS, NS_ERROR_ABORT) was a download.
       if (topic === "http-on-stop-request") {
         if (channel.isDocument && channel.status === Cr.NS_ERROR_ABORT) {
           agentOpenRefused(entry.browser, "download");
-        }
-        return;
-      }
-      // agent-browser-06: a request to PowerBrowser's own services ends here, logged once per tab without the URL.
-      if (agentChannelRefused(channel, topic)) {
-        channel.cancel(Cr.NS_ERROR_CONNECTION_REFUSED);
-        if (!entry.agentServiceLogged) {
-          entry.agentServiceLogged = true;
-          PowerBrowserAPI.log("warn", "[orca-agent] refused a request from an agent page to a PowerBrowser service (agent-browser-06)");
         }
         return;
       }
