@@ -31,6 +31,8 @@ const POLL_MS = 100;
 const SIGTERM = 15;
 const SIGKILL = 9;
 const MIN_NODE_MAJOR = 24;
+// How often the tree under a starting orcad is listed while its ready line is awaited (audit follow-up to 62-WR-01).
+const START_TREE_POLL_MS = 250;
 
 const messageOf = err => OrcaEnv.redact(err && err.message ? err.message : String(err));
 
@@ -551,6 +553,23 @@ export const OrcaService = {
     void this._pump(proc, "stdout", chunk => sink.onStdout(chunk));
     const stderrDone = this._pump(proc, "stderr", chunk => sink.onStderr(chunk));
 
+    // Audit follow-up to 62-WR-01 and orcad-hosting-08: orcad starts its daemon well before its ready line. The
+    // tree under orcad is listed while the gate waits, so an orcad that dies by a signal before ready (an OOM
+    // kill, a segfault: its watch's exit handler never runs) leaves a daemon this process still knows by pid and
+    // start ticks, though the daemon has been reparented and is no longer under orcad.
+    const startRows = new Map();
+    let gating = true;
+    const listing = (async () => {
+      while (gating) {
+        for (const row of await PowerBrowserProcesses.listProcessTree([proc.pid])) {
+          if (row.pid !== proc.pid && !startRows.has(row.pid)) {
+            startRows.set(row.pid, row);
+          }
+        }
+        await PowerBrowserAPI.sleep(START_TREE_POLL_MS);
+      }
+    })().catch(() => {});
+
     const startupTimeoutMs = PowerBrowserAPI.getIntPref("powerbrowser.orca.startupTimeoutMs", 60000);
     const outcome = await Promise.race([
       sink.ready().then(ready => ({ ready })),
@@ -560,12 +579,16 @@ export const OrcaService = {
       ),
       PowerBrowserAPI.sleep(startupTimeoutMs).then(() => ({ timeout: true })),
     ]);
+    gating = false;
+    void listing;
 
     if (outcome.timeout) {
-      await this._endFailedStart(proc, endOwn);
+      await this._endFailedStart(proc, endOwn, [...startRows.values()]);
       return { ok: false, recoverable: true, step: "waiting for orcad to report ready", rows: [["Orca startup timeout", `${startupTimeoutMs} ms`]] };
     }
     if (!outcome.ready) {
+      // orcad is gone; what it started is ended from the listing (its watch has already done so after a plain exit).
+      await this._endFailedStart(proc, async () => {}, [...startRows.values()]);
       await Promise.race([stderrDone, PowerBrowserAPI.sleep(500)]);
       const text = stderrTail.join("\n");
       const code = [OrcaEnv.ORCAD_PINNED_PORT_CODE, OrcaEnv.ORCAD_LOCK_HELD_CODE].find(c => text.includes(c));
@@ -582,11 +605,11 @@ export const OrcaService = {
     const ready = outcome.ready;
     const nodeMajor = Number(/^v?(\d+)\./.exec(ready.nodeVersion ?? "")?.[1]);
     if (!OrcaEnv.isLoopbackEndpoint(ready.boundEndpoint, this._port)) {
-      await this._endFailedStart(proc, endOwn);
+      await this._endFailedStart(proc, endOwn, [...startRows.values()]);
       return { ok: false, recoverable: false, step: "checking that orcad is bound to loopback", rows: [["Orca bound address", String(ready.boundEndpoint)], ["Orca port", this._port]] };
     }
     if (!(nodeMajor >= MIN_NODE_MAJOR)) {
-      await this._endFailedStart(proc, endOwn);
+      await this._endFailedStart(proc, endOwn, [...startRows.values()]);
       return { ok: false, recoverable: false, step: "checking the Node.js version orcad runs on", rows: [["Orca Node.js version", String(ready.nodeVersion)]] };
     }
     // Audit fixes 62-WR-03 and orcad-hosting-05: a stop that began while orcad was starting has already
@@ -795,10 +818,16 @@ export const OrcaService = {
    * daemon. Ending orcad by its handle alone left that daemon running with no record, through quit. The
    * tree under orcad is listed first, orcad is ended, then its children get SIGTERM and every listed row
    * still alive after the grace gets SIGKILL, each by pid plus start ticks. A daemon this session already
-   * supervises, and everything under it, is kept (D-07): only a quit ends agents.
+   * supervises, and everything under it, is kept (D-07): only a quit ends agents. `startRows` are the rows
+   * listed while the gate waited, which still name a daemon orcad started and then lost by dying.
    */
-  async _endFailedStart(proc, endOwn) {
-    const listed = await PowerBrowserProcesses.listProcessTree([proc.pid]);
+  async _endFailedStart(proc, endOwn, startRows = []) {
+    const listed = [...(await PowerBrowserProcesses.listProcessTree([proc.pid]))];
+    for (const row of startRows) {
+      if (!listed.some(other => other.pid === row.pid)) {
+        listed.push(row);
+      }
+    }
     const kept = new Set((await this._sameIdentity(this._daemonPid, this._daemonTicks)) ? [this._daemonPid] : []);
     for (let grew = kept.size > 0; grew; ) {
       grew = false;
