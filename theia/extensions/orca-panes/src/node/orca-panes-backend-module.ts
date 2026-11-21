@@ -24,6 +24,15 @@
  * A refusal is { refused: <one reason code> }, with no path, mode or content;
  * the log line names the code only. undefined keeps its meaning: the files are
  * not written yet.
+ *
+ * Audit fixes: handOff returns undefined until orca-panes-dir is written and
+ * private too, as C6 states, so a frontend can never load the bundle before its
+ * directory is known (64-WR-01, pairing-credentials-01). A bridge folder that is
+ * not private, or cannot be read, is a refusal (offer-unreadable), not "not
+ * written yet", so the page shows instead of an endless wait (67-WR-01). The
+ * endpoint must name the port PowerBrowser started orcad on, which the
+ * supervisor passes as POWERBROWSER_ENV.POWERBROWSER_ORCA_PORT; the offer file's
+ * own web-client port is no longer the reference (67-WR-03).
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -35,7 +44,9 @@ import { POWERBROWSER_ENV } from '@powerbrowser/token-gate/lib/node/powerbrowser
 import {
     ORCA_PANES_ROUTE_PREFIX, ORCA_PANES_SERVICE_PATH, OrcaPanesService, PANES_DIR_FILE, WEB_PAIRING_FILE
 } from '../common/orca-panes-protocol';
-import { OfferHandOff, OfferRefusalReason, decodeOffer, offerEndpointVerdict, offerFileVerdict, offerPortOf } from './offer-file-policy';
+import {
+    ORCAD_PORT_ENV, OfferHandOff, OfferRefusalReason, decodeOffer, expectedOfferPort, offerEndpointVerdict, offerFileVerdict, orcadPortOf
+} from './offer-file-policy';
 
 const LOG_PREFIX = '[@powerbrowser/orca-panes]';
 
@@ -139,6 +150,8 @@ function failureOf(err: unknown, file: string): string {
 export class OrcaPanesServiceImpl implements OrcaPanesService, BackendApplicationContribution {
 
     protected readonly bridgeDir = POWERBROWSER_ENV.POWERBROWSER_ORCA_BRIDGE_DIR;
+    /** 67-WR-03: the port PowerBrowser started orcad on, from the supervisor; undefined when it was not passed. */
+    protected readonly orcadPort = orcadPortOf(POWERBROWSER_ENV[ORCAD_PORT_ENV]);
     protected readonly logged = new Set<string>();
     protected bundleRoot: { mtimeMs: number; real: string } | undefined;
 
@@ -159,11 +172,21 @@ export class OrcaPanesServiceImpl implements OrcaPanesService, BackendApplicatio
         try {
             const dirVerdict = privateDirVerdict(await fs.promises.lstat(this.bridgeDir), currentUid(), process.platform);
             if (!dirVerdict.ok) {
+                // 67-WR-01: a folder another user could write is a refusal the page shows, not "not written yet".
                 this.logOnce(`no pairing hand-off: ${dirVerdict.reason}`);
-                return undefined;
+                return this.refuse('offer-unreadable');
             }
         } catch (err) {
-            this.logOnce(`no pairing hand-off: the bridge folder is not readable (${(err as NodeJS.ErrnoException).code ?? 'error'})`);
+            const code = (err as NodeJS.ErrnoException).code;
+            if (code === 'ENOENT') {
+                return undefined; // chrome has not created the folder yet
+            }
+            this.logOnce(`no pairing hand-off: the bridge folder is not readable (${code ?? 'error'})`);
+            return this.refuse('offer-unreadable');
+        }
+        // 64-WR-01, pairing-credentials-01 (C6): undefined until both bridge files are written. OrcaService writes the
+        // offer first, so an offer returned before orca-panes-dir would load a bundle the route cannot serve yet.
+        if (this.bundleRootReal() === undefined) {
             return undefined;
         }
         const full = path.join(this.bridgeDir, WEB_PAIRING_FILE);
@@ -191,7 +214,13 @@ export class OrcaPanesServiceImpl implements OrcaPanesService, BackendApplicatio
         if (!offer) {
             return this.refuse('offer-unreadable');
         }
-        const endpoint = offerEndpointVerdict(offer, offerPortOf(pairing));
+        // 67-WR-03: the endpoint is judged against orcad's port from the supervisor, never the file's own URL port.
+        const expected = expectedOfferPort(pairing, this.orcadPort, process.platform);
+        if (!expected.ok) {
+            this.logOnce('the pairing hand-off names a port other than the one PowerBrowser started Orca on, or that port is not known');
+            return this.refuse(expected.reason);
+        }
+        const endpoint = offerEndpointVerdict(offer, expected.port);
         if (!endpoint.ok) {
             return this.refuse(endpoint.reason);
         }
