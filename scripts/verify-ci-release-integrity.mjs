@@ -6,7 +6,8 @@
 //   stage-line     (ci-supply-chain-06) rebase-orca.yml's replay step passes --stage-file, its stage step
 //                  reads that file and never takes the stage from the log, and both the stage step and the
 //                  release train's stop-issue step cut the stage to a bounded length of a character set with
-//                  no backtick before it is published.
+//                  no backtick before it is published, and the stop issue names the stage only by a keyword of the
+//                  STAGES set scripts/rebase-orca.sh defines (release-train.mjs --orca-stage), the rest apart.
 //   artifact-digest (ci-supply-chain-01, ci-supply-chain-04) every artifact of this run that a job holding a
 //                  credential (a secrets. reference, an App-token step, github.token or GITHUB_TOKEN) downloads is
 //                  bound to its producer: the producer (a job of the same file, or the job of a reusable workflow it
@@ -89,6 +90,9 @@ export function check(texts) {
             const r = runOf(stop);
             const filt = r.search(/STAGE=\$\(printf '%s' "\$STAGE_OUT" \| tr -cd /);
             const printed = r.search(/Stage: /);
+            const keyword = r.search(/node scripts\/release-train\.mjs --orca-stage "\$STAGE"/);
+            const printLine = r.split('\n').find(l => /Stage: /.test(l)) ?? '';
+            if (keyword === -1 || keyword > printed || /"\$STAGE"/.test(printLine) || !/"\$KEYWORD"/.test(printLine)) fail('release-train.yml', 'report', 'stage-line', 'publishes the stage without reducing it to a keyword of the STAGES set scripts/rebase-orca.sh defines (release-train.mjs --orca-stage), so a stage file rewritten by a process the replay left behind names any stage it likes. Next step: print "$KEYWORD" from --orca-stage as the stage and the filtered detail apart from it.');
             if (filt === -1 || !boundedFilter(r.slice(filt)) || filt > printed) fail('release-train.yml', 'report', 'stage-line', 'prints the rebase-orca stage into the issue without first cutting it to a bounded set with no backtick; the stage comes from the job that ran Orca\'s code. Next step: STAGE=$(printf \'%s\' "$STAGE_OUT" | tr -cd ... | cut -c1-300) before the printf.');
         }
     }
@@ -273,6 +277,8 @@ function selfTest() {
         ['replay without --stage-file', edit('rebase-orca.yml', ' --stage-file "$RUNNER_TEMP/stage.txt"', ''), 'stage-line', 'without --stage-file'],
         ['stage published unfiltered', edit('rebase-orca.yml', `          LINE=$(printf '%s' "$LINE" | tr -cd "A-Za-z0-9 _./:@()'*,=<>+-" | cut -c1-300)\n`, ''), 'stage-line', 'without tr -cd'],
         ['stop issue prints the raw stage', edit('release-train.yml', `STAGE=$(printf '%s' "$STAGE_OUT" | tr -cd "A-Za-z0-9 _./:@()'*,=<>+-" | cut -c1-300)`, 'STAGE="$STAGE_OUT"'), 'stage-line', 'without first cutting it'],
+        // ci-supply-chain-06 review: the stage file can be rewritten after the script's last word, so the keyword is the control.
+        ['the stop issue prints the stage line as the stage', edit('release-train.yml', '"$TAG" "$KEYWORD" "${DETAIL:-none}" "$RUN_URL"', '"$TAG" "$STAGE" "${DETAIL:-none}" "$RUN_URL"'), 'stage-line', 'without reducing it to a keyword'],
         ['a backtick admitted', edit('release-train.yml', `STAGE=$(printf '%s' "$STAGE_OUT" | tr -cd "A-Za-z0-9 _./:@()'*,=<>+-" | cut -c1-300)`, `STAGE=$(printf '%s' "$STAGE_OUT" | tr -cd "A-Za-z0-9 _./:@()'*,=<>+\`-" | cut -c1-300)`), 'stage-line', 'without first cutting it'],
         // ci-supply-chain-01, the pre-fix sign-publish: no admission of release-linux by build-linux's digest.
         ['sign-publish signs an unbound release-linux', edit('release.yml', '          bash powerbrowser/packaging/check-win-sidecar.sh check release "$SUMS_SHA256"\n', '          echo admitted\n'), 'artifact-digest', 'job sign-publish [artifact-digest]: downloads release-linux into'],
