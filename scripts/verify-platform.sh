@@ -7255,11 +7255,27 @@ live_lock_path() {
   common="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
   echo "$common/pb-live.lock"
 }
-# The pids /proc/locks shows holding a flock on file $1 (matched by inode), one per line.
+# The device /proc/locks prints for file $1, as "maj:min" in its own form (two-digit lowercase hex each). It is the
+# device of the superblock, from /proc/self/mountinfo (the longest mount point containing the file's real path), not
+# stat's st_dev: btrfs reports a per-subvolume st_dev (48 for /home here) while /proc/locks prints the superblock's
+# (00:22), so st_dev would never match.
+lock_file_dev() {
+  local path dev
+  path="$(realpath -- "$1" 2>/dev/null)" || return 1
+  dev="$(awk -v p="$path" '{ mp = $5; gsub(/\\040/, " ", mp); pre = (mp == "/") ? "/" : mp "/"; if ((p == mp || index(p, pre) == 1) && length(mp) >= best) { best = length(mp); dev = $3 } } END { print dev }' /proc/self/mountinfo 2>/dev/null)"
+  [[ "$dev" =~ ^([0-9]+):([0-9]+)$ ]] || return 1
+  printf '%02x:%02x\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+}
+# The pids /proc/locks shows holding a flock on file $1, matched by device AND inode (review of the live lock: an
+# inode number alone also matches a file with the same number on another filesystem), one per line. In fixture mode
+# PB_VERIFY_FIXTURE_PROC_LOCKS replaces /proc/locks with recorded text, so the self-test can plant a lock on another
+# device.
 lock_holders() {
-  local ino
+  local ino dev locks=/proc/locks
+  [ -n "$FIXTURE_REGISTRY" ] && [ -n "${PB_VERIFY_FIXTURE_PROC_LOCKS:-}" ] && locks="$PB_VERIFY_FIXTURE_PROC_LOCKS"
   ino="$(stat -c %i -- "$1" 2>/dev/null)" || return 0
-  awk -v ino="$ino" '$0 !~ /->/ && $2 == "FLOCK" { n = split($6, f, ":"); if (f[n] == ino) print $5 }' /proc/locks 2>/dev/null
+  dev="$(lock_file_dev "$1")" || return 0
+  awk -v ino="$ino" -v dev="$dev" '$0 !~ /->/ && $2 == "FLOCK" { n = split($6, f, ":"); if (n == 3 && f[3] == ino && tolower(f[1] ":" f[2]) == dev) print $5 }' "$locks" 2>/dev/null
 }
 # True when a process holding a flock on $1 is this script or one of its ancestors; LOCK_ANCESTOR_PID names it.
 LOCK_ANCESTOR_PID=""
