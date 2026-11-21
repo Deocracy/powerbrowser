@@ -33,6 +33,7 @@
 //                the transpiled dispatcher refuses createPage while stopped and maps a DispatchFailure and an agent-wall
 //                navigate refusal to their codes; the host sends navigate as browser.goto through webTabAgent and
 //                awaits the first open's reply; the chrome-bar mark shows on every agent tab and offers Resume.
+//  sideHeader    [59-WR-05]  the top-tabs side header builds its scrollbar on X and its icons do not shrink.
 //
 // Tier: quick (text reads and node:vm). --self-test plants each pre-fix fault in an in-memory copy of the tree and
 // requires the clause to go red naming it.
@@ -67,6 +68,8 @@ const FILES = {
     dispatch: 'theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts',
     abilities: 'theia/extensions/orca-browser/src/common/orca-browser-abilities.ts',
     frontendModule: 'theia/extensions/orca-browser/src/browser/orca-browser-frontend-module.ts',
+    sideTopTabs: 'theia/extensions/chrome-bar/src/browser/side-panel-top-tabs.ts',
+    sideTopTabsCss: 'theia/extensions/chrome-bar/src/browser/side-panel-top-tabs.css',
 };
 
 function stripComments(text) {
@@ -531,7 +534,22 @@ async function stopClause(texts) {
     return failures;
 }
 
-const CLAUSES = [scrollClause, editStateClause, budgetClause, historyClause, servicesClause, cookiesClause, agentFlagClause, stopClause];
+// 59-WR-05: the side header row scrolls on X when its icons do not fit: createSideBar builds the bar's scrollbar with
+// suppressScrollX false (stock suppresses it for a vertical rail), and the icons keep their width.
+function sideHeaderClause(texts) {
+    const failures = [];
+    const body = bodyOf(stripComments(texts.sideTopTabs), 'protected override createSideBar(): SideTabBar {');
+    if (!body) return ['sideHeader: broken instrument: createSideBar not found'];
+    if (!/scrollbarOptions:[^\n]*suppressScrollX: false/.test(body)) {
+        failures.push(`sideHeader: ${FILES.sideTopTabs} keeps the stock suppressScrollX, so a side header narrower than its icons clips the trailing views with no way to reach them (59-WR-05)`);
+    }
+    if (!/\.pb-side-header \.lm-TabBar\.theia-app-sides \.lm-TabBar-tab \{[^}]*flex-shrink: 0;/.test(texts.sideTopTabsCss)) {
+        failures.push(`sideHeader: ${FILES.sideTopTabsCss} lets the header icons shrink, so the row never overflows into its scroll (59-WR-05)`);
+    }
+    return failures;
+}
+
+const CLAUSES = [scrollClause, editStateClause, budgetClause, historyClause, servicesClause, cookiesClause, agentFlagClause, stopClause, sideHeaderClause];
 
 export async function checkTexts(texts) {
     const failures = [];
@@ -559,6 +577,16 @@ function replaceOnce(text, from, to, what) {
 }
 
 const PLANTS = [
+    {
+        name: '59-WR-05: the side header keeps stock suppressScrollX',
+        plant: t => ({ ...t, sideTopTabs: replaceOnce(t.sideTopTabs, 'suppressScrollX: false', 'suppressScrollX: true', 'side scroll') }),
+        expect: 'keeps the stock suppressScrollX',
+    },
+    {
+        name: '59-WR-05: the header icons shrink',
+        plant: t => ({ ...t, sideTopTabsCss: replaceOnce(t.sideTopTabsCss, '    flex-shrink: 0;\n', '', 'icon shrink') }),
+        expect: 'lets the header icons shrink',
+    },
     {
         name: 'agent-browser-04: Stop ends control of the one tab only',
         plant: t => ({ ...t, api: replaceOnce(replaceOnce(t.api, 'for (const [tabId, other] of [...owned.filter(([id]) => id !== data.tabId), [data.tabId, entry]]) {', 'for (const [tabId, other] of [[data.tabId, entry]]) {', 'stop loop'), 'agentStoppedOwners.add(actorRef);', 'void 0;', 'owner stop') }),

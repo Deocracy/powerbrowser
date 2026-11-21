@@ -27,8 +27,14 @@ export class TopTabsSidePanelHandler extends SidePanelHandler {
     protected override createSideBar(): SideTabBar {
         const bar = super.createSideBar();
         bar.orientation = 'horizontal';
-        // Stock overflow measures a vertical rail and reads a menu this row lacks (WINDOWS 41); a row never overflows.
-        Object.assign(bar, { hideOverflowingTabs: (): number => -1 });
+        // Stock overflow measures a vertical rail and reads a menu this row lacks (WINDOWS 41), so no tab is hidden.
+        // 59-WR-05: a row narrower than its icons (a side dragged down to Lumino's minimum) scrolls horizontally
+        // instead of clipping the trailing views: the bar's perfect-scrollbar, which stock builds for a vertical rail
+        // with suppressScrollX, is built for this row on the X axis, and a vertical wheel scrolls it.
+        Object.assign(bar, {
+            hideOverflowingTabs: (): number => -1,
+            scrollbarOptions: { ...(bar as unknown as { scrollbarOptions?: object }).scrollbarOptions, suppressScrollX: false, suppressScrollY: true, useBothWheelAxes: true },
+        });
         return bar;
     }
 
