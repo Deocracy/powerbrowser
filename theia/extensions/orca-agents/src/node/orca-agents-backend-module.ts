@@ -29,6 +29,12 @@ export class OrcaAgentsBackend implements BackendApplicationContribution, OrcaAg
             console.info(`${LOG_PREFIX} no bridge directory; the claude wrapper is not offered`);
             return;
         }
+        // 63-WR-03, agents-extensions-03: the launcher is a POSIX sh script that Windows cannot run, so registering it
+        // would make every Claude Code session fail to start. Inert on win32 until a Windows launcher exists (WINDOWS 53).
+        if (process.platform === 'win32') {
+            console.info(`${LOG_PREFIX} the claude wrapper has no Windows launcher yet; Claude Code runs without an Orca pane`);
+            return;
+        }
         try {
             if (!fs.existsSync(dir)) {
                 fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -37,7 +43,6 @@ export class OrcaAgentsBackend implements BackendApplicationContribution, OrcaAg
             if (!st.isDirectory()) {
                 throw new Error('the bridge directory is not a directory');
             }
-            // win32: the directory sits under LOCALAPPDATA and POSIX mode checks do not apply (P63-30).
             if (POSIX && (st.uid !== process.getuid!() || (st.mode & 0o077) !== 0)) {
                 throw new Error('the bridge directory is owned by another user or grants group or other access');
             }
