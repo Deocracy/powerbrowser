@@ -105,6 +105,7 @@ export interface OrcaPaneBundleApi {
     activeWorktree(): string | null;
     setActiveWorktree(worktreeId: string): void;
     /** C3': worktrees in Orca's own recency order; no credential. */
-    state(): { booted: boolean; worktrees: OrcaWorktree[]; panes: number; mountErrors: Array<{ kind: string; phase: string; message: string }> };
+    /** mountErrorsTotal (overlay-renderer-04): the overlay's count of mount errors since boot; absent from an older overlay. */
+    state(): { booted: boolean; worktrees: OrcaWorktree[]; panes: number; mountErrors: Array<{ kind: string; phase: string; message: string }>; mountErrorsTotal?: number };
     reactIdentity: unknown;
 }
