@@ -38,12 +38,20 @@
 //   node scripts/verify-orca-editor-router.mjs
 //   node scripts/verify-orca-editor-router.mjs --self-test
 
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
+
+// --root=<dir> runs the main mode over another tree (the self-test's SKIP control uses it); only as the entry point.
+const ROOT_ARG = process.argv.slice(2).find(a => a.startsWith('--root='));
+const REPO_ROOT = ROOT_ARG && process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+    ? resolve(ROOT_ARG.slice('--root='.length))
+    : resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-editor-router';
 const SELF_REL = 'scripts/verify-orca-editor-router.mjs';
 const TS_DIR = join(REPO_ROOT, 'theia', 'node_modules', 'typescript');
@@ -137,12 +145,13 @@ function fakeRouter(Router, { activeWorktree = null, gates = new Map() } = {}) {
 async function check(texts) {
     const fails = [];
     const notes = [];
+    const skips = [];
     const savedWindow = globalThis.window;
     try {
         const { routes, rootSync } = load(texts);
         const table = routes.ORCA_EDITOR_ROUTES;
         const labels = routes.ORCA_DIFF_RULE_LABELS;
-        if (!table || !labels) { fails.push(`${REL.routes} exports no ${!table ? 'ORCA_EDITOR_ROUTES' : 'ORCA_DIFF_RULE_LABELS'}`); return { fails, notes }; }
+        if (!table || !labels) { fails.push(`${REL.routes} exports no ${!table ? 'ORCA_EDITOR_ROUTES' : 'ORCA_DIFF_RULE_LABELS'}`); return { fails, notes, skips }; }
 
         // a. labels.
         const values = Object.values(labels);
@@ -285,7 +294,7 @@ async function check(texts) {
     } finally {
         globalThis.window = savedWindow;
     }
-    return { fails, notes };
+    return { fails, notes, skips };
 }
 
 // ---------------------------------------------------------------- self-test
@@ -308,6 +317,8 @@ const PLANTS = [
 async function runSelfTest(texts) {
     const control = await check(texts);
     if (control.fails.length) { console.error(`${NAME} self-test: FAIL -- the control is not green: ${control.fails.join(' | ')}`); return 1; }
+    // Plants on a clause the control skipped cannot run (SKIP-PROTOCOL.md rule 4).
+    if (control.skips.length) { console.log(skipLine(`${NAME} self-test`, `the control did not run every clause, so the plants did not run: ${control.skips.join('; ')}`)); return SKIP_EXIT; }
     console.log(`${NAME} self-test: control green (${control.notes.join('; ')})`);
     let failures = 0;
     for (const p of PLANTS) {
@@ -321,6 +332,21 @@ async function runSelfTest(texts) {
     }
     const again = await check(texts);
     if (again.fails.length) { console.error(`  FAIL the control did not re-run green: ${again.fails.join(' | ')}`); failures++; }
+    // SKIP control (SKIP-PROTOCOL.md): the main mode, run as a child with its output captured, over a tree with no
+    // Theia install must exit 77 with the SKIP line last and no PASS line.
+    {
+        const empty = mkdtempSync(join(tmpdir(), `${NAME}-root-`));
+        try {
+            const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url), `--root=${empty}`], { encoding: 'utf8' });
+            const lines = (r.stdout ?? '').split('\n').filter(l => l.trim() !== '');
+            const last = lines[lines.length - 1] ?? '';
+            if (r.status !== SKIP_EXIT || !last.startsWith(`${NAME}: SKIP -- theia/node_modules/typescript is absent`)
+                || lines.some(l => l.includes(`${NAME}: PASS`)) || /: SKIP/.test(r.stderr ?? '')) {
+                console.error(`  FAIL control: a tree without typescript did not exit 77 with the SKIP line last and no PASS line (status ${r.status}, last line ${JSON.stringify(last)})`);
+                failures++;
+            } else console.log('  ok control: a tree without typescript -> exit 77, the SKIP line last, no PASS line');
+        } finally { rmSync(empty, { recursive: true, force: true }); }
+    }
     if (failures) { console.error(`${NAME} self-test: FAIL -- ${failures} problem(s) across ${PLANTS.length} plants`); return 1; }
     console.log(`${NAME} self-test: PASS -- ${PLANTS.length} planted faults each went red naming the drift; the control re-ran green`);
     return 0;
@@ -333,17 +359,21 @@ const isEntryPoint = (() => {
 })();
 if (isEntryPoint) {
     const args = process.argv.slice(2);
-    if (args.length > 1 || (args.length === 1 && args[0] !== '--self-test')) {
+    if (args.length > 1 || (args.length === 1 && args[0] !== '--self-test' && !args[0].startsWith('--root='))) {
         console.error(`${NAME}: unknown argument ${args[0]} (usage: node ${SELF_REL} [--self-test])`);
         console.error(`Next step: run node ${SELF_REL} for the check or add --self-test for the planted-fault run.`);
         process.exit(2);
     }
-    if (!existsSync(TS_DIR) || !statSync(TS_DIR).isDirectory()) { console.log(`${NAME}: SKIP -- theia/node_modules/typescript is absent; run the audited Theia install (docs/BUILD.md "Theia half")`); process.exit(0); }
+    // An absent input: nothing ran, so exit 77 with the SKIP line (SKIP-PROTOCOL.md); a self-test cannot run its plants.
+    const who = args[0] === '--self-test' ? `${NAME} self-test` : NAME;
+    if (!existsSync(TS_DIR) || !statSync(TS_DIR).isDirectory()) { console.log(skipLine(who, 'theia/node_modules/typescript is absent. Next step: run the audited Theia install (docs/BUILD.md "Theia half")')); process.exit(SKIP_EXIT); }
     ts = createRequire(import.meta.url)(TS_DIR);
     const texts = Object.fromEntries(Object.entries(REL).map(([k, rel]) => [k, readFileSync(join(REPO_ROOT, rel), 'utf8')]));
     if (args[0] === '--self-test') process.exit(await runSelfTest(texts));
     const r = await check(texts);
-    if (r.fails.length) { for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`); process.exit(1); }
+    for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`);
+    const code = verdictExit(NAME, r.fails, r.skips);
+    if (code !== 0) process.exit(code);
     console.log(`${NAME}: PASS -- diff titles use plain words; a failed open is retried after the root sync; a released record reopens only with its root; drops wait for hydration; the resolver trusts the latest snapshot (${r.notes.join('; ')})`);
     process.exit(0);
 }
