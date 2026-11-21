@@ -78,9 +78,13 @@
 // page for a tab. The module absent, or present but missing an export, is red, never a SKIP (lane p66-02 merged long
 // ago, so an absence can only be a missing table).
 //
-// Cookie site clause (agent-browser-03): a cookie row for a host on another site, or a bare public suffix, is refused
-// before any cookie-service call; a subdomain of the current site is served (the detector); cookie.get lists an
-// httpOnly cookie with its value withheld.
+// Cookie clause (agent-browser-03, G1a round 3): a get or delete for a host on another site is refused before any
+// cookie-service call; cookie.get lists an httpOnly cookie with its value withheld. cookie.set writes only what page
+// script on the current page could: the detector is a plain host-only cookie on the current host at "/" (one write);
+// each of these is refused with no write: another host, a subdomain, a sibling host, a parent domain attribute, a path
+// other than "/", httpOnly, a __Host- or __Secure- name, Secure on http, SameSite None without Secure, and a name the
+// site holds as httpOnly in the unpartitioned or the partitioned jar (the fake jar models origin attributes). A delete
+// of an httpOnly name in either jar is refused; deleting the plain cookie writes.
 //
 // Tier: quick (text reads and node:vm; acorn and typescript from theia/node_modules). SKIP (exit 77, one line) when
 // upstream/ is not fetched: the clauses derived from the pinned Gecko source then ran against the agent section's own
@@ -313,13 +317,29 @@ export function makeWorld(sliced, { dpr = 2 } = {}) {
         removeTabRow: () => Promise.resolve(),
         webTabNavigate: navigate('navigate'), webTabBack: navigate('back'), webTabForward: navigate('forward'), webTabReload: navigate('reload'),
     };
+    // The agent container's jar, with origin attributes: a plain cookie, an httpOnly one, and an httpOnly one in the
+    // site's partitioned jar (CHIPS). getCookiesFromHost matches the attributes exactly (no partitionKey means the
+    // unpartitioned jar); getCookiesWithOriginAttributes matches only the fields its pattern names, as Gecko does.
+    const cookieJar = [
+        { host: 'example.com', name: 'a', path: '/', value: 'b', expiry: 0, isSession: true, sameSite: 1, isHttpOnly: false, originAttributes: { userContextId: CONTAINER, partitionKey: '' } },
+        { host: 'example.com', name: 'sid', path: '/', value: 'planted-session-secret', expiry: 0, isSession: true, sameSite: 1, isHttpOnly: true, originAttributes: { userContextId: CONTAINER, partitionKey: '' } },
+        { host: 'example.com', name: 'psid', path: '/', value: 'planted-partitioned-secret', expiry: 0, isSession: true, sameSite: 1, isHttpOnly: true, isPartitioned: true, originAttributes: { userContextId: CONTAINER, partitionKey: '(https,example.com)' } },
+    ];
+    const siteOfHost = h => String(h).replace(/^\./, '').split('.').slice(-2).join('.');
+    const oaValue = (oa, k) => oa[k] ?? (k === 'partitionKey' ? '' : 0);
+    const onHost = host => cookieJar.filter(c => siteOfHost(c.host) === siteOfHost(host));
     const cookieCall = name => (...args) => {
         rec.cookies.push({ name, args });
         if (name === 'add') return { result: 0 };
-        return name.startsWith('get') ? [
-            { host: 'example.com', name: 'a', path: '/', value: 'b', expiry: 0, isSession: true, sameSite: 1, isHttpOnly: false },
-            { host: 'example.com', name: 'sid', path: '/', value: 'planted-session-secret', expiry: 0, isSession: true, sameSite: 1, isHttpOnly: true },
-        ] : undefined;
+        if (name === 'getCookiesFromHost') {
+            const attrs = { partitionKey: '', ...(args[1] ?? {}) };
+            return onHost(args[0]).filter(c => Object.entries(attrs).every(([k, v]) => oaValue(c.originAttributes, k) === v));
+        }
+        if (name === 'getCookiesWithOriginAttributes') {
+            const pattern = JSON.parse(args[0] ?? '{}');
+            return onHost(args[1]).filter(c => Object.entries(pattern).every(([k, v]) => oaValue(c.originAttributes, k) === v));
+        }
+        return undefined;
     };
     const prefs = new Map();
     const Services = {
@@ -505,27 +525,19 @@ export async function runScenarios(sliced, childText, dpr = 2) {
         }
     }
 
-    // Cookies act only on the tab's current site (agent-browser-03): a host on another site, or a bare public suffix,
-    // is refused before any cookie-service call; a subdomain of the current site is the same site (the detector); an
-    // httpOnly cookie's value never leaves chrome.
+    // Cookies act only on the tab's current site (agent-browser-03): a get or a delete for a host on another site is
+    // refused before any cookie-service call; cookie.get lists an httpOnly cookie with its value withheld.
     w = fresh();
     w.addTab('a1', { agent: true });
     for (const [method, params, what] of [
         ['browser.cookie.get', { url: 'https://other.test/' }, 'a get for another site'],
-        ['browser.cookie.set', { name: 'a', value: 'b', domain: 'other.test' }, 'a set for another site'],
         ['browser.cookie.delete', { name: 'a', domain: 'other.test' }, 'a delete for another site'],
-        ['browser.cookie.set', { name: 'a', value: 'b', domain: 'com' }, 'a set for a bare public suffix'],
     ]) {
         const calls = w.rec.cookies.length;
         reply = await w.agent('a1', method, params);
         if (reply?.where !== 'failed' || reply?.code !== 'browser_command_unavailable' || w.rec.cookies.length !== calls) {
             failures.push(`cookies: ${what} answered ${JSON.stringify(reply)} after ${w.rec.cookies.length - calls} cookie-service call(s); expected failed browser_command_unavailable and none`);
         }
-    }
-    const setCalls = w.rec.cookies.length;
-    reply = await w.agent('a1', 'browser.cookie.set', { name: 'a', value: 'b', domain: 'www.example.com' });
-    if (reply?.where !== 'done' || w.rec.cookies.length === setCalls) {
-        failures.push(`cookies: detector blind: a set for a subdomain of the current site answered ${JSON.stringify(reply)} with ${w.rec.cookies.length - setCalls} cookie-service call(s); expected done and a call`);
     }
     reply = await w.agent('a1', 'browser.cookie.get', {});
     const jar = Array.isArray(reply?.result?.cookies) ? reply.result.cookies : [];
@@ -535,25 +547,58 @@ export async function runScenarios(sliced, childText, dpr = 2) {
     if (!httpOnly || httpOnly.value !== '' || httpOnly.httpOnly !== true) {
         failures.push(`cookies: cookie.get returned an httpOnly cookie as ${JSON.stringify(httpOnly ?? null)}; expected it listed with httpOnly true and its value withheld`);
     }
-    // No row writes an httpOnly cookie (agent-browser-03, G1a round 2): on the current site, a set or a delete of a name
-    // the jar holds as httpOnly, and a set with httpOnly true, are refused with no cookie write; deleting a plain cookie
-    // does write (the detector).
-    const writes = () => w.rec.cookies.filter(c => c.name === 'add' || c.name === 'remove').length;
-    for (const [method, params, what] of [
-        ['browser.cookie.set', { name: 'sid', value: 'agent-value', domain: 'example.com' }, 'a set that overwrites the httpOnly cookie'],
-        ['browser.cookie.delete', { name: 'sid', domain: 'example.com' }, 'a delete of the httpOnly cookie'],
-        ['browser.cookie.set', { name: 'fresh', value: 'v', domain: 'example.com', httpOnly: true }, 'a set with httpOnly true'],
+
+    // cookie.set (agent-browser-03, G1a round 3): an agent's cookie is no stronger than page script on the current page
+    // could set: host-only on the current host, path "/", never httpOnly, never a __Host- or __Secure- name, Secure only
+    // on https, SameSite None only with Secure, and never a name the site holds as httpOnly in either jar. The detector:
+    // a plain host-only cookie on the current host at "/" writes, host-only at "/" and not httpOnly. Each refusal: no
+    // cookie write. Tabs: a1 on https://example.com/, sub on https://app.example.com/, plainHttp on http://example.com/.
+    const writes = () => w.rec.cookies.filter(c => c.name === 'add' || c.name === 'remove');
+    const tabOn = (tabId, host, scheme = 'https') => {
+        w.addTab(tabId, { agent: true });
+        w.webTabs.get(tabId).browser.currentURI = { host, spec: `${scheme}://${host}/` };
+    };
+    tabOn('sub', 'app.example.com');
+    tabOn('plainHttp', 'example.com', 'http');
+    const setBefore = writes().length;
+    reply = await w.agent('a1', 'browser.cookie.set', { name: 'fresh', value: 'v' });
+    const wrote = writes().slice(setBefore);
+    const [wHost, wPath, , , , wHttpOnly] = wrote[0]?.args ?? [];
+    if (reply?.where !== 'done' || wrote.length !== 1 || wHost !== 'example.com' || wPath !== '/' || wHttpOnly !== false) {
+        failures.push(`cookies: detector blind: a plain host-only set on the current host answered ${JSON.stringify(reply)} with writes ${JSON.stringify(wrote.map(c => c.args.slice(0, 6)))}; expected done and one write for example.com at / without httpOnly`);
+    }
+    for (const [tab, params, what] of [
+        ['a1', { name: 'x', value: 'v', domain: 'other.test' }, 'a set for another host'],
+        ['a1', { name: 'x', value: 'v', domain: 'www.example.com' }, 'a set for a subdomain of the current host'],
+        ['sub', { name: 'x', value: 'v', domain: 'api.example.com' }, 'a set for a sibling host'],
+        ['sub', { name: 'x', value: 'v', domain: '.example.com' }, 'a set with a domain attribute (the parent domain)'],
+        ['a1', { name: 'x', value: 'v', path: '/account' }, 'a set with a path other than /'],
+        ['a1', { name: 'x', value: 'v', httpOnly: true }, 'a set with httpOnly true'],
+        ['a1', { name: '__Host-x', value: 'v', secure: true }, 'a set of a __Host- name'],
+        ['a1', { name: '__Secure-x', value: 'v', secure: true }, 'a set of a __Secure- name'],
+        ['plainHttp', { name: 'x', value: 'v', secure: true }, 'a Secure set on an http page'],
+        ['a1', { name: 'x', value: 'v', sameSite: 'None' }, 'a SameSite None set without Secure'],
+        ['a1', { name: 'sid', value: 'agent-value' }, 'a set over a name held as httpOnly'],
+        ['a1', { name: 'psid', value: 'agent-value' }, 'a set over a name held as httpOnly in the partitioned jar'],
     ]) {
-        const before = writes();
-        reply = await w.agent('a1', method, params);
-        if (reply?.where !== 'failed' || reply?.code !== 'browser_command_unavailable' || writes() !== before) {
-            failures.push(`cookies: ${what} answered ${JSON.stringify(reply)} after ${writes() - before} cookie write(s); expected failed browser_command_unavailable and none`);
+        const n = writes().length;
+        reply = await w.agent(tab, 'browser.cookie.set', params);
+        if (reply?.where !== 'failed' || reply?.code !== 'browser_command_unavailable' || writes().length !== n) {
+            failures.push(`cookies: ${what} answered ${JSON.stringify(reply)} after ${writes().length - n} cookie write(s); expected failed browser_command_unavailable and none`);
         }
     }
-    const plainBefore = writes();
+    // Delete: an httpOnly name (either jar) is refused with no write; deleting the plain cookie writes (the detector).
+    for (const [name, what] of [['sid', 'a delete of the httpOnly cookie'], ['psid', 'a delete of the partitioned httpOnly cookie']]) {
+        const n = writes().length;
+        reply = await w.agent('a1', 'browser.cookie.delete', { name, domain: 'example.com' });
+        if (reply?.where !== 'failed' || reply?.code !== 'browser_command_unavailable' || writes().length !== n) {
+            failures.push(`cookies: ${what} answered ${JSON.stringify(reply)} after ${writes().length - n} cookie write(s); expected failed browser_command_unavailable and none`);
+        }
+    }
+    const plainBefore = writes().length;
     reply = await w.agent('a1', 'browser.cookie.delete', { name: 'a', domain: 'example.com' });
-    if (reply?.where !== 'done' || writes() === plainBefore) {
-        failures.push(`cookies: detector blind: deleting the plain cookie answered ${JSON.stringify(reply)} with ${writes() - plainBefore} cookie write(s); expected done and a write`);
+    if (reply?.where !== 'done' || writes().length === plainBefore) {
+        failures.push(`cookies: detector blind: deleting the plain cookie answered ${JSON.stringify(reply)} with ${writes().length - plainBefore} cookie write(s); expected done and a write`);
     }
 
     // Mark state: a served call lights it; 20000 ms without one clears it with one push.
@@ -1660,7 +1705,19 @@ async function selfTest() {
         ['the dispatch module absent', { files: () => null }, 'page-table: theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts is absent'],
         // agent-browser-03: cookie rows act only on the current site and withhold httpOnly values.
         ['cookie rows not limited to the current site', { api: swap('  return site && agentSiteOf(host) === site ? host : "";', '  return host;') }, 'cookies: a get for another site answered'],
-        ['an httpOnly cookie overwrite re-allowed', { api: swap('  if (!host || params.httpOnly === true || agentHttpOnlyNamed(host, params.name, agentOriginAttributes(entry))) {', '  if (!host) {') }, 'cookies: a set that overwrites the httpOnly cookie answered'],
+        // G1a round 3: one re-allowed case per part of the cookie.set rule.
+        ['cookie.set re-allowing any host', { api: swap('domain === host && (params.path', 'true && (params.path') }, 'cookies: a set for another host answered'],
+        ['cookie.set re-allowing a subdomain', { api: swap('domain === host && (params.path', '(domain === host || domain.endsWith("." + host)) && (params.path') }, 'cookies: a set for a subdomain of the current host answered'],
+        ['cookie.set re-allowing the whole site', { api: swap('domain === host && (params.path', 'agentSiteOf(domain) === agentSiteOf(host) && (params.path') }, 'cookies: a set for a sibling host answered'],
+        ['cookie.set re-allowing a parent domain attribute', { api: swap('domain === host && (params.path', '(domain === host || host.endsWith("." + domain)) && (params.path') }, 'cookies: a set with a domain attribute (the parent domain) answered'],
+        ['cookie.set re-allowing any path', { api: swap('(params.path === undefined || params.path === null || params.path === "/")', 'true') }, 'cookies: a set with a path other than / answered'],
+        ['cookie.set re-allowing httpOnly', { api: swap('&& params.httpOnly !== true &&', '&&') }, 'cookies: a set with httpOnly true answered'],
+        ['cookie.set re-allowing __Host- names', { api: swap('!/^__(host|secure)-/i.test(params.name)', '!/^__secure-/i.test(params.name)') }, 'cookies: a set of a __Host- name answered'],
+        ['cookie.set re-allowing __Secure- names', { api: swap('!/^__(host|secure)-/i.test(params.name)', '!/^__host-/i.test(params.name)') }, 'cookies: a set of a __Secure- name answered'],
+        ['cookie.set re-allowing Secure on http', { api: swap('(params.secure !== true || securePage)', 'true') }, 'cookies: a Secure set on an http page answered'],
+        ['cookie.set re-allowing SameSite None without Secure', { api: swap('(sameSite !== 0 || params.secure === true)', 'true') }, 'cookies: a SameSite None set without Secure answered'],
+        ['cookie.set re-allowing an overwrite of an httpOnly name', { api: swap('  if (!narrow || agentHttpOnlyNamed(host, params.name, agentOriginAttributes(entry))) {', '  if (!narrow) {') }, 'cookies: a set over a name held as httpOnly answered'],
+        ['the httpOnly-name test blind to the partitioned jar', { api: swap('  return Services.cookies.getCookiesWithOriginAttributes(JSON.stringify(attrs), host).some(c => c.name === name && c.isHttpOnly);', '  return Services.cookies.getCookiesFromHost(host, attrs).some(c => c.name === name && c.isHttpOnly);') }, 'cookies: a set over a name held as httpOnly in the partitioned jar answered'],
         ['an httpOnly cookie delete re-allowed', { api: swap('  if (agentHttpOnlyNamed(host, params.name, attrs)) {\n    return agentFailed("browser_command_unavailable");\n  }\n', '') }, 'cookies: a delete of the httpOnly cookie answered'],
         ['an httpOnly cookie value returned', { api: swap('value: c.isHttpOnly ? "" : c.value', 'value: c.value') }, "cookies: cookie.get returned an httpOnly cookie"],
         ['the dispatch file present without createPageTable', { dispatch: swap('export function createPageTable()', 'export function createPageTableGone()') }, 'page-table: orca-browser-dispatch.ts has no createPageTable export'],
