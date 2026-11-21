@@ -54,6 +54,9 @@ on:
       notices:
         description: "changed when the replay rewrote THIRD-PARTY-NOTICES.txt (uploaded as rebase-orca-notices), else unchanged"
         value: ${{ jobs.rebase.outputs.notices }}
+      notices-sha256:
+        description: "The SHA-256 of the THIRD-PARTY-NOTICES.txt uploaded as rebase-orca-notices (empty when unchanged)"
+        value: ${{ jobs.rebase.outputs.notices-sha256 }}
 
 jobs:
   rebase:
@@ -61,6 +64,7 @@ jobs:
     outputs:
       stage: ${{ steps.stage.outputs.stage }}
       notices: ${{ steps.notices.outputs.notices }}
+      notices-sha256: ${{ steps.notices.outputs.notices-sha256 }}
     # WR-09 (plan 01-18). This job clones a third-party tree, installs its
     # packages, builds and typechecks it, and starts its daemon; it reads and
     # verifies, and pushes nothing. With no `permissions:` block it would
@@ -136,6 +140,7 @@ jobs:
             mkdir -p "$RUNNER_TEMP/notices"
             cp THIRD-PARTY-NOTICES.txt "$RUNNER_TEMP/notices/"
             echo "notices=changed" >> "$GITHUB_OUTPUT"
+            echo "notices-sha256=$(sha256sum < "$RUNNER_TEMP/notices/THIRD-PARTY-NOTICES.txt" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Upload the rewritten notices

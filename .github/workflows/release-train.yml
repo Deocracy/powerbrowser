@@ -1081,6 +1081,7 @@ jobs:
       TAG: ${{ needs.detect-orca.outputs.orca-tag }}
       COMMIT: ${{ needs.detect-orca.outputs.orca-commit }}
       NOTICES: ${{ needs.rebase-orca.outputs.notices }}
+      NOTICES_SHA256: ${{ needs.rebase-orca.outputs.notices-sha256 }}
       BASE: ${{ github.sha }}
     steps:
       - name: Check out the repo without persisting a token
@@ -1128,6 +1129,12 @@ jobs:
           if [ "$NOTICES" = "changed" ]; then
             if [ "$(cd "$RUNNER_TEMP/notices" && ls -A | sort | tr '\n' ' ')" != "THIRD-PARTY-NOTICES.txt " ]; then
               echo "release-train: FAIL -- the Orca notices artifact holds more or other than THIRD-PARTY-NOTICES.txt. Next step: do not publish; re-run the re-pin." >&2
+              exit 1
+            fi
+            # Only the bytes the replay job uploaded: another job of the run could have replaced the artifact.
+            GOT_SHA256=$(sha256sum < "$RUNNER_TEMP/notices/THIRD-PARTY-NOTICES.txt" | cut -d' ' -f1)
+            if ! [[ $NOTICES_SHA256 =~ ^[0-9a-f]{64}$ ]] || [ "$GOT_SHA256" != "$NOTICES_SHA256" ]; then
+              echo "release-train: FAIL -- the Orca notices artifact hashes to ${GOT_SHA256}, not the ${NOTICES_SHA256:-<no digest>} the replay job recorded. Next step: do not publish; re-run the re-pin." >&2
               exit 1
             fi
             cp --remove-destination "$RUNNER_TEMP/notices/THIRD-PARTY-NOTICES.txt" THIRD-PARTY-NOTICES.txt

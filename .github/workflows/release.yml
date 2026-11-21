@@ -79,6 +79,10 @@ jobs:
       # The SHA-256 of the SHA256SUMS that release-linux carries (ci-supply-chain-01). A job output is set by this
       # job alone, so sign-publish can refuse a release-linux that another job of the run replaced after the upload.
       sums_sha256: ${{ steps.release_sums.outputs.sha256 }}
+      # The same for release-linux-identity and release-linux-manifest, which descriptor (bot key) and channel-live
+      # (job token) read: every artifact a later secret- or token-holding job consumes is bound to this job.
+      identity_sums_sha256: ${{ steps.release_sums.outputs.identity_sha256 }}
+      manifest_sums_sha256: ${{ steps.release_sums.outputs.manifest_sha256 }}
     env:
       RELEASE_SHA: ${{ inputs.sha }}
     steps:
@@ -220,7 +224,9 @@ jobs:
       # artifact token could replace release-linux after the upload below. SHA256SUMS lists the three uploaded files
       # (BUILD_ROOT is listed too: check-win-sidecar.sh, the admission sign-publish runs, requires it; it is data,
       # never an asset), and its SHA-256 leaves as the job output sums_sha256, outside the artifact.
-      - name: Write SHA256SUMS over the release-linux files and record its digest as a job output
+      # release-linux-identity and release-linux-manifest are staged in their own directories under RUNNER_TEMP, each
+      # with BUILD_ROOT and its own SHA256SUMS, in the layout the descriptor and channel-live jobs read.
+      - name: Write SHA256SUMS over the release-linux, identity and manifest files and record each digest as a job output
         id: release_sums
         if: steps.key_gate.outputs.build == 'true'
         run: |
@@ -232,6 +238,19 @@ jobs:
           SUMS="$(sha256sum "$DIST/SHA256SUMS" | cut -d' ' -f1)"
           echo "sha256=$SUMS" >> "$GITHUB_OUTPUT"
           echo "release-linux SHA256SUMS sha256 $SUMS"
+          sums_dir() { printf '%s\n' "$GITHUB_WORKSPACE" > "$1/BUILD_ROOT"; (cd "$1" && find . -type f ! -path ./SHA256SUMS -print | sed 's|^\./||' | LC_ALL=C sort | xargs -d '\n' sha256sum > SHA256SUMS); sha256sum "$1/SHA256SUMS" | cut -d' ' -f1; }
+          # The identity artifact keeps its two objdir paths (the descriptor emitter's layout); its digest is the
+          # SHA-256 of their sha256sum listing, which the consumer recomputes over exactly those two files.
+          IDS="$(cd objdir-release && sha256sum config.status dist/bin/application.ini | sha256sum | cut -d' ' -f1)"
+          MF="${RUNNER_TEMP:?}/release-linux-manifest"
+          rm -rf "$MF"
+          mkdir -p "$MF"
+          cp "$DIST/release-manifest.json" "$MF/release-manifest.json"
+          MFS="$(sums_dir "$MF")"
+          [[ "$IDS" =~ ^[0-9a-f]{64}$ && "$MFS" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::the identity or manifest SHA256SUMS digest is not 64 hex; nothing is uploaded" >&2; exit 1; }
+          echo "identity_sha256=$IDS" >> "$GITHUB_OUTPUT"
+          echo "manifest_sha256=$MFS" >> "$GITHUB_OUTPUT"
+          echo "release-linux-identity SHA256SUMS sha256 $IDS; release-linux-manifest SHA256SUMS sha256 $MFS"
 
       # Data only: the signer is built on a hosted runner from the pinned source, never taken from here.
       - name: Upload the tarball, the complete MAR and the release manifest
@@ -272,7 +291,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-linux-manifest
-          path: objdir-release/dist/release-manifest.json
+          path: ${{ runner.temp }}/release-linux-manifest/
           if-no-files-found: error
           retention-days: 7
           overwrite: true
@@ -530,6 +549,8 @@ jobs:
       build: ${{ steps.key_gate.outputs.build }}
       # The SHA-256 of the SHA256SUMS release-windows carries (ci-supply-chain-01), set by this job alone.
       sums_sha256: ${{ steps.release_sums.outputs.sha256 }}
+      # The same for release-windows-identity, which descriptor-windows (bot key) reads.
+      identity_sums_sha256: ${{ steps.release_sums.outputs.identity_sha256 }}
     env:
       RELEASE_SHA: ${{ inputs.sha }}
     steps:
@@ -680,7 +701,7 @@ jobs:
       # ci-supply-chain-01, as for release-linux: SHA256SUMS over the uploaded files (BUILD_ROOT listed for the
       # admission tool), its SHA-256 the job output sums_sha256, so sign-windows and publish-windows sign only the
       # bytes this job uploaded.
-      - name: Write SHA256SUMS over the release-windows files and record its digest as a job output
+      - name: Write SHA256SUMS over the release-windows and identity files and record each digest as a job output
         id: release_sums
         if: steps.key_gate.outputs.build == 'true'
         run: |
@@ -692,6 +713,12 @@ jobs:
           SUMS="$(sha256sum "$DIST/SHA256SUMS" | cut -d' ' -f1)"
           echo "sha256=$SUMS" >> "$GITHUB_OUTPUT"
           echo "release-windows SHA256SUMS sha256 $SUMS"
+          # The identity artifact keeps its two objdir paths (build-windows-shape requires exactly them); its digest is
+          # the SHA-256 of their sha256sum listing, which descriptor-windows recomputes over exactly those two files.
+          IDS="$(cd objdir-windows-x86_64 && sha256sum config.status dist/bin/application.ini | sha256sum | cut -d' ' -f1)"
+          [[ "$IDS" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::the identity SHA256SUMS digest is not 64 hex; nothing is uploaded" >&2; exit 1; }
+          echo "identity_sha256=$IDS" >> "$GITHUB_OUTPUT"
+          echo "release-windows-identity SHA256SUMS sha256 $IDS"
 
       # Data only: no later job executes anything here. sign-windows signs the inner PE files of the zip and the
       # setup.exe stub, then repackages the installer and the complete MAR itself (SEC-12 order); the unsigned
@@ -1502,7 +1529,7 @@ jobs:
   # the updates repo unless every gate before the mint passes, and an unchanged descriptor is never
   # re-committed, so a rerun over the same inputs changes nothing.
   descriptor:
-    needs: sign-publish
+    needs: [build-linux, sign-publish]
     if: needs.sign-publish.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -1534,6 +1561,22 @@ jobs:
         with:
           name: release-linux-identity
           path: identity
+
+      # ci-supply-chain-01: the manifest and identity this job emits and commits from are the bytes build-linux uploaded.
+      - name: Admit the manifest and the identity files by the SHA256SUMS digests build-linux recorded (before anything reads them)
+        env:
+          MANIFEST_SUMS_SHA256: ${{ needs.build-linux.outputs.manifest_sums_sha256 }}
+          IDENTITY_SUMS_SHA256: ${{ needs.build-linux.outputs.identity_sums_sha256 }}
+        run: |
+          set -euo pipefail
+          bash powerbrowser/packaging/check-win-sidecar.sh check release "$MANIFEST_SUMS_SHA256"
+          [ "$(cd identity && find . -type f -o -type l | LC_ALL=C sort | tr '\n' ' ')" = "./config.status ./dist/bin/application.ini " ] \
+            || { echo "::error::the identity artifact holds more or other than config.status and dist/bin/application.ini; nothing is emitted" >&2; exit 1; }
+          GOT="$(cd identity && sha256sum config.status dist/bin/application.ini | sha256sum | cut -d' ' -f1)"
+          if ! [[ $IDENTITY_SUMS_SHA256 =~ ^[0-9a-f]{64}$ ]] || [ "$GOT" != "$IDENTITY_SUMS_SHA256" ]; then
+            echo "::error::the identity files in identity/ hash to $GOT, not the ${IDENTITY_SUMS_SHA256:-<no digest>} their build job recorded; they were replaced after that job, and nothing is emitted" >&2
+            exit 1
+          fi
 
       - name: Derive the release key from this tree and require the manifest to agree
         id: derive_key
@@ -1654,7 +1697,7 @@ jobs:
   # UPD-17. Runs last and only reads: contents read, no environment, no secret, no App token. The sweep
   # runs the same row daily. Until the first public release it fails closed, never green.
   channel-live:
-    needs: descriptor
+    needs: [build-linux, descriptor]
     if: needs.descriptor.result == 'success'
     runs-on: ubuntu-latest
     # Ten attempts 60 s apart (the deploy wait below) plus one row run per attempt.
@@ -1673,6 +1716,13 @@ jobs:
         with:
           name: release-linux-manifest
           path: release
+
+      - name: Admit the manifest by the SHA256SUMS digest build-linux recorded (before anything reads it)
+        env:
+          MANIFEST_SUMS_SHA256: ${{ needs.build-linux.outputs.manifest_sums_sha256 }}
+        run: |
+          set -euo pipefail
+          bash powerbrowser/packaging/check-win-sidecar.sh check release "$MANIFEST_SUMS_SHA256"
 
       # The manifest is build output (data): the tree decides the MAR origin, the update channel and the update
       # URL, as derive_key decides the release key. verify-channel-live.mjs holds the one comparison (IN-03).
@@ -1959,13 +2009,16 @@ jobs:
   # descriptor-monotonic cannot order a Windows build; the commit step instead refuses a buildID that is not
   # newer than the Windows descriptor already committed.
   descriptor-windows:
-    needs: publish-windows
+    needs: [build-windows, publish-windows]
     if: needs.publish-windows.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: descriptor
     permissions:
       contents: read
+    outputs:
+      # The digest of the release-windows-manifest SHA256SUMS, which channel-live-windows admits (ci-supply-chain-01).
+      manifest_sums_sha256: ${{ steps.manifest_sums.outputs.sha256 }}
     steps:
       - name: Refuse any ref but main and any event but a dispatch
         run: |
@@ -1984,6 +2037,19 @@ jobs:
         with:
           name: release-windows-identity
           path: identity
+
+      - name: Admit the identity files by the SHA256SUMS digest build-windows recorded (before anything reads them)
+        env:
+          IDENTITY_SUMS_SHA256: ${{ needs.build-windows.outputs.identity_sums_sha256 }}
+        run: |
+          set -euo pipefail
+          [ "$(cd identity && find . -type f -o -type l | LC_ALL=C sort | tr '\n' ' ')" = "./config.status ./dist/bin/application.ini " ] \
+            || { echo "::error::the identity artifact holds more or other than config.status and dist/bin/application.ini; nothing is emitted" >&2; exit 1; }
+          GOT="$(cd identity && sha256sum config.status dist/bin/application.ini | sha256sum | cut -d' ' -f1)"
+          if ! [[ $IDENTITY_SUMS_SHA256 =~ ^[0-9a-f]{64}$ ]] || [ "$GOT" != "$IDENTITY_SUMS_SHA256" ]; then
+            echo "::error::the identity files in identity/ hash to $GOT, not the ${IDENTITY_SUMS_SHA256:-<no digest>} their build job recorded; they were replaced after that job, and nothing is emitted" >&2
+            exit 1
+          fi
 
       - name: Read the release key from this tree
         id: derive_key
@@ -2019,12 +2085,26 @@ jobs:
       - name: Refuse any patch URL that is not the MAR origin at /<tag>/<asset> (the pre-commit form gate)
         run: node scripts/verify-channel-live.mjs --form-only --manifest "$RUNNER_TEMP/windows-manifest/release-manifest.json" --descriptors "$RUNNER_TEMP/descriptors"
 
+      - name: Write SHA256SUMS over the Windows manifest and record its digest as a job output
+        id: manifest_sums
+        run: |
+          set -euo pipefail
+          D="$RUNNER_TEMP/windows-manifest"
+          printf '%s\n' "$GITHUB_WORKSPACE" > "$D/BUILD_ROOT"
+          (cd "$D" && sha256sum BUILD_ROOT release-manifest.json > SHA256SUMS)
+          SUMS="$(sha256sum "$D/SHA256SUMS" | cut -d' ' -f1)"
+          echo "sha256=$SUMS" >> "$GITHUB_OUTPUT"
+          echo "release-windows-manifest SHA256SUMS sha256 $SUMS"
+
       # Data only, for channel-live-windows: the build values of the Windows descriptor, no installer and no MAR.
       - name: Upload the Windows manifest channel-live-windows reads
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-windows-manifest
-          path: ${{ runner.temp }}/windows-manifest/release-manifest.json
+          path: |
+            ${{ runner.temp }}/windows-manifest/release-manifest.json
+            ${{ runner.temp }}/windows-manifest/BUILD_ROOT
+            ${{ runner.temp }}/windows-manifest/SHA256SUMS
           if-no-files-found: error
           retention-days: 7
           overwrite: true
@@ -2121,6 +2201,13 @@ jobs:
         with:
           name: release-windows-manifest
           path: release
+
+      - name: Admit the Windows manifest by the SHA256SUMS digest descriptor-windows recorded (before anything reads it)
+        env:
+          MANIFEST_SUMS_SHA256: ${{ needs.descriptor-windows.outputs.manifest_sums_sha256 }}
+        run: |
+          set -euo pipefail
+          bash powerbrowser/packaging/check-win-sidecar.sh check release "$MANIFEST_SUMS_SHA256"
 
       - name: Require the Windows manifest's MAR origin, update channel and update URL to equal this tree's
         run: node scripts/verify-channel-live.mjs --manifest-agrees --manifest release/release-manifest.json
