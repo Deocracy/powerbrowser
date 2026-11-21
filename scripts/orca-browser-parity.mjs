@@ -343,7 +343,8 @@ function runSelfTest() {
             ['src/renderer/src/x-test-rig.tsx', alphaCall],
             ['src/main/browser/x-fixture.ts', alphaCall],
             ['src/main/browser/__fixtures__/z.ts', alphaCall],
-            ['src/cli/test-fixtures.ts', alphaCall],
+            // The CLI tree cannot add an ability, only users: Beta has no CLI user, so reading this file as source would add CLI and agent to it.
+            ['src/cli/test-fixtures.ts', "call('browser.fixtureBeta.gamma')\n"],
             ['src/main/orcad/x-fixture.ts', "call('browser.fixtureBeta.gamma')\n"],
         ];
         for (const [rel, body] of ignored) {
