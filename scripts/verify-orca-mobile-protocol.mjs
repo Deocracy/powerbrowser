@@ -54,7 +54,7 @@
 //   node scripts/verify-orca-mobile-protocol.mjs --self-test
 //   node scripts/verify-orca-mobile-protocol.mjs --skew-self-test
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire, registerHooks } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -249,9 +249,14 @@ function runSelfTest() {
         const far = run({ ...base(), seams: ['src/main/far.ts'] });
         if (far.fails.length) { console.error(`${NAME} self-test: FAIL -- a seam on far.ts went red (root 2 expanded): ${far.fails.join(' | ')}`); return 1; }
         console.log(`${NAME} self-test: control green -- a seam on src/main/far.ts`);
-        const away = check({ orcaDir: join(tmp, 'absent'), overlayDir: overlay, extractor });
-        if (!away.skip) { console.error(`${NAME} self-test: FAIL -- no orca/ did not SKIP`); return 1; }
-        console.log(`${NAME} self-test: control -- no orca/ SKIPs by a line`);
+        // The main mode over an absent orca/, as a child with captured output: exit 77 and the SKIP line last.
+        const away = spawnSync(process.execPath, [fileURLToPath(import.meta.url), `--orca-dir=${join(tmp, 'absent')}`], { encoding: 'utf8' });
+        const awayLast = away.stdout.trim().split('\n').pop();
+        if (away.status !== 77 || !awayLast.startsWith(`${NAME}: SKIP -- orca/ is not fetched`) || away.stderr.includes(': SKIP')) {
+            console.error(`${NAME} self-test: FAIL -- no orca/ did not exit 77 with the SKIP line last on stdout (status ${away.status}, last line ${JSON.stringify(awayLast)})`);
+            return 1;
+        }
+        console.log(`${NAME} self-test: control -- no orca/ exits 77 with the SKIP line last`);
 
         const plants = [
             { name: 'seam-on-protocol-version', naming: 'protected protocol file src/shared/protocol-version.ts', apply: (s) => { s.seams.push('src/shared/protocol-version.ts'); } },
@@ -494,20 +499,23 @@ async function runSkewSelfTest({ orcaDir = join(REPO_ROOT, 'orca') } = {}) {
 }
 
 const MODES = new Set(['--self-test', '--skew', '--skew-self-test']);
+// --orca-dir=<path> runs the default mode over another Orca checkout (the self-test's SKIP control).
+const ORCA_DIR_ARG = process.argv.find((a) => a.startsWith('--orca-dir='));
 const isEntryPoint = (() => {
     try { return realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; }
 })();
 if (isEntryPoint) {
     const args = process.argv.slice(2);
-    const bad = args.find((a) => !MODES.has(a)) ?? (args.length > 1 ? args[1] : undefined);
+    const modeArgs = args.filter((a) => !a.startsWith('--orca-dir='));
+    const bad = modeArgs.find((a) => !MODES.has(a)) ?? (modeArgs.length > 1 ? modeArgs[1] : undefined) ?? (ORCA_DIR_ARG && modeArgs.length ? ORCA_DIR_ARG : undefined);
     if (bad !== undefined) {
         console.error(`${NAME}: unknown argument ${bad} (usage: node ${SELF_REL} [--self-test | --skew | --skew-self-test])`);
         console.error(`  Next step: run: node ${SELF_REL}, or add --self-test to prove the check discriminates.`);
         process.exit(2);
     }
-    if (args[0] === '--self-test') process.exit(runSelfTest());
-    if (args[0] === '--skew-self-test') process.exit(await runSkewSelfTest());
-    const { code, lines } = args[0] === '--skew' ? await runSkew() : render(check());
+    if (modeArgs[0] === '--self-test') process.exit(runSelfTest());
+    if (modeArgs[0] === '--skew-self-test') process.exit(await runSkewSelfTest());
+    const { code, lines } = modeArgs[0] === '--skew' ? await runSkew() : render(check(ORCA_DIR_ARG ? { orcaDir: resolve(ORCA_DIR_ARG.slice('--orca-dir='.length)) } : {}));
     for (const l of lines) (code === 0 || code === SKIP_EXIT ? console.log : console.error)(l);
     process.exit(code);
 }
