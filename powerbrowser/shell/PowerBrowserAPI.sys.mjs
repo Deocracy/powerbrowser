@@ -11203,19 +11203,26 @@ export const PowerBrowserProcesses = Object.freeze({
   // orcad-hosting-03 (lane G2's handover): the kernel's TCP socket tables and this process's uid, so OrcaService can
   // say whose program holds orcad's busy port. Both tables: a dual-stack listener, the most common holder, appears in
   // /proc/net/tcp6 only. procfs reports size 0, so IOUtils.read with an explicit maxBytes (readProcessStartTicks).
-  // Resolves { tcp, tcp6, uid }; off Linux or on any failure the text is "" and uid null. Never throws.
+  // Resolves { tcp, tcp6, uid, truncated }; off Linux or on any failure the text is "" and uid null. Never throws.
+  // Round 3: the kernel lists listening sockets before established ones (net/ipv4/tcp_ipv4.c tcp_get_idx tries the
+  // listening hash first), so the listener a port-holder row needs is near the start; a table that fills the read cap
+  // sets truncated, and the caller must then not report "no holder".
   //
   async readLoopbackSocketTable() {
+    const cap = 1 << 22;
+    let truncated = false;
     const text = async path => {
       try {
-        return new TextDecoder().decode(await IOUtils.read(path, { maxBytes: 1 << 20 }));
+        const bytes = await IOUtils.read(path, { maxBytes: cap });
+        truncated ||= bytes.length >= cap;
+        return new TextDecoder().decode(bytes);
       } catch {
         return "";
       }
     };
     const [tcp, tcp6, status] = await Promise.all([text("/proc/net/tcp"), text("/proc/net/tcp6"), text("/proc/self/status")]);
     const uid = Number(/^Uid:\s+(\d+)/m.exec(status)?.[1]);
-    return { tcp, tcp6, uid: Number.isInteger(uid) ? uid : null };
+    return { tcp, tcp6, uid: Number.isInteger(uid) ? uid : null, truncated };
   },
 });
 
