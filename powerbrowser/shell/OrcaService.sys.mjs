@@ -68,6 +68,9 @@ export const OrcaService = {
   _offerUnavailableReason: null,
   _clientReason: null,
   _restartRun: null,
+  // Audit fixes 62-WR-02 and orcad-hosting-07.
+  _quitHooksArmed: false,
+  _exitTimes: [],
 
   /**
    * Starts orcad once per browser session: resolve paths, reap a previous session, spawn, wait for the
@@ -80,10 +83,28 @@ export const OrcaService = {
       return;
     }
     this._started = true;
+    // Audit fix 62-WR-02: powerbrowser.js arms the quit hooks before Theia starts, so a quit granted
+    // while Theia was starting has already run stop(). orcad started now would have no stop path.
+    if (this._shuttingDown) {
+      this._pushLog("start() called after the quit began; orcad is not started.");
+      return;
+    }
     this._state = "starting";
+    this.armQuitHooks();
+    await this._startSequence();
+  },
 
-    // Both quit hooks are registered before any branch that can spawn (TheiaService 01-12): a launch
-    // that reaches a spawn must always have a stop path, or orcad and its agents outlive the browser.
+  /**
+   * Both quit hooks, registered once and before any branch that can spawn (TheiaService 01-12): a launch
+   * that reaches a spawn must always have a stop path, or orcad and its agents outlive the browser.
+   * powerbrowser.js calls this before Theia's start (audit fix 62-WR-02): a hook registered once quit is
+   * granted never fires, and start() runs only after Theia's start has settled.
+   */
+  armQuitHooks() {
+    if (this._quitHooksArmed || this._shuttingDown) {
+      return;
+    }
+    this._quitHooksArmed = true;
     try {
       this._quitObserverOff = PowerBrowserAPI.onQuitGranted(() => this.stop());
     } catch (err) {
@@ -98,8 +119,6 @@ export const OrcaService = {
         this._pushLog(`Reap blocker not registered: ${messageOf(err)}`);
       }
     }
-
-    await this._startSequence();
   },
 
   /** Resolve, reap, launch: start()'s sequence, which restart() runs again (P67-06). */
