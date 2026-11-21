@@ -54,7 +54,11 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TAG_RE='^v[0-9]+\.[0-9]+\.[0-9]+$'
 COMMIT_RE='^[0-9a-f]{40}$'
-ROWS=(orca-build-shape orca-overlay orca-overlay-built orca-mobile-protocol licence-allowlist orca-mobile-skew)
+# The rows the replay runs. The last four (lane H2, harness-static-hosting-01) hold security clauses derived from the
+# pinned checkout (the credential store, the failure classes, the offer file, OrcaService), so a new pin is checked
+# against them before it is proposed. orca-failure-classes stays red until upstream's refusal codes are mapped (G2).
+ROWS=(orca-build-shape orca-overlay orca-overlay-built orca-mobile-protocol licence-allowlist orca-mobile-skew
+  orca-credential-store orca-failure-classes orca-offer-file orca-service)
 # The paths a bump stages (P68-11). THIRD-PARTY-NOTICES.txt reaches the bump job as
 # the rebase-orca-notices artifact, never from --replay-only (A-P1).
 BUMP_PATHS=(configuration.toml orca-overlay/patches orca-overlay/seams.json)
@@ -243,6 +247,9 @@ stage_xpi_cache() {
   [ "$RC" -eq 0 ] || { red "xpi cache stage-bundled-xpi.sh exited $RC. Next step: read its FAIL line above; a changed download needs a re-pin of powerbrowser/packaging/bundled-xpi.json."; return 1; }
 }
 
+# verify-platform.sh --only exits 0 for a row that SKIPped (exit 77, or a SKIP last line) and prints "  <label>: SKIP"
+# in its summary (SKIP-PROTOCOL.md), so the exit status alone cannot tell a skip from a pass: skip_line turns that
+# summary line, like any SKIP line, red here. A row's 77 never reaches this script as a status.
 stage_rows() {
   local root="$1" label line
   for label in "${ROWS[@]}"; do
@@ -258,8 +265,11 @@ stage_orcad() {
   local root="$1" line
   say "orcad-only start"
   capture node "$root/scripts/verify-orca-slotless-start.mjs" --orcad-only
-  [ "$RC" -eq 0 ] || { red "orcad-only start exited $RC. Next step: run node scripts/verify-orca-slotless-start.mjs --orcad-only."; return 1; }
   line="$(skip_line "$OUT")"
+  # 77 is the probe's "did not run" (SKIP-PROTOCOL.md): in the replay a probe that did not run proves nothing, so it is
+  # red, named as a skip rather than as a failed exit status.
+  [ "$RC" -ne 77 ] || { red "orcad-only start skipped: ${line:-the probe exited 77 with no SKIP line}. Next step: provide what the probe needs (a built orca/, no installed Orca on the runner)."; return 1; }
+  [ "$RC" -eq 0 ] || { red "orcad-only start exited $RC. Next step: run node scripts/verify-orca-slotless-start.mjs --orcad-only."; return 1; }
   [ -z "$line" ] || { red "orcad-only start skipped: $line"; return 1; }
 }
 
@@ -452,6 +462,7 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 label="$2"
 touch "$root/ran-row-$label"
 if [ -f "$root/skip-row" ] && [ "$(cut -d'|' -f1 "$root/skip-row")" = "$label" ]; then cut -d'|' -f2- "$root/skip-row"; exit 0; fi
+if [ -f "$root/fail-row" ] && [ "$(cat "$root/fail-row")" = "$label" ]; then echo "$label: FAIL -- fixture: a planted fault at the new tag"; exit 1; fi
 if [ "$label" = licence-allowlist ] && [ "$(sha256sum < "$root/orca/LICENSE" | cut -d' ' -f1)" != "$(cat "$root/licence.sha256")" ]; then
   echo "licence-allowlist: FAIL -- orca LICENSE digest changed"; exit 1
 fi
@@ -468,8 +479,9 @@ EOF
   [ "$variant" != xpifail ] || stage_body='echo "stage-bundled-xpi: FAIL -- fixture: the download hashes to 00, the pin is 11" >&2; exit 1'
   printf '%s\n' 'root="$(cd "$(dirname "$0")/../.." && pwd)"' '[ "$#" -eq 1 ] || exit 2' "$stage_body" 'touch "$root/ran-xpi"' > "$root/powerbrowser/packaging/stage-bundled-xpi.sh"
   local probe='PASS -- fixture orcad half only'
-  [ "$variant" != orcadskip ] || probe='SKIP -- no built orca/ (fixture)'
-  echo "import { writeFileSync } from 'node:fs'; writeFileSync('$root/ran-orcad', ''); console.log('orca-slotless-start: $probe');" > "$root/scripts/verify-orca-slotless-start.mjs"
+  local probe_exit=0
+  if [ "$variant" = orcadskip ]; then probe='SKIP -- no built orca/ (fixture)'; probe_exit=77; fi
+  echo "import { writeFileSync } from 'node:fs'; writeFileSync('$root/ran-orcad', ''); console.log('orca-slotless-start: $probe'); process.exitCode = $probe_exit;" > "$root/scripts/verify-orca-slotless-start.mjs"
   echo "import { writeFileSync } from 'node:fs'; writeFileSync('$root/ran-notices', ''); console.log('licensing: wrote the Orca section (0 packages, fixture)');" > "$root/scripts/generate-licensing.mjs"
   cat > "$root/scripts/scan-brand-residue.mjs" <<'EOF'
 import { execFileSync } from 'node:child_process';
@@ -504,6 +516,7 @@ EOF
     brand) printf 'notes: %s%s\n' FIXTURE BRAND > "$root/notes.txt" ;;
     rowskip) echo 'orca-overlay|orca-overlay: SKIP -- no built thing' > "$root/skip-row" ;;
     upstreamskip) echo 'licence-allowlist|licence-allowlist: SKIP -- upstream/ absent; its LICENSE digest is unchecked' > "$root/skip-row" ;;
+    rowfail-*) echo "${variant#rowfail-}" > "$root/fail-row" ;;
   esac
   "${FX_GIT[@]}" -C "$root" add -A
   "${FX_GIT[@]}" -C "$root" commit -q -m fixture
@@ -582,7 +595,19 @@ run_self_test() {
   # stops at its own stage. Every control above stages the cache and passes.
   expect_stop "XPI cache not staged" control xpinostage "row licence-allowlist skipped"
   expect_stop "XPI stage fails" control xpifail "xpi cache"
-  expect_stop "probe prints SKIP" control orcadskip "orcad-only start skipped"
+  expect_stop "probe exits 77 with its SKIP line" control orcadskip "orcad-only start skipped: orca-slotless-start: SKIP"
+
+  # Lane H2 (harness-static-hosting-01): the pin-derived security rows run in every replay. Each one failing at the new
+  # tag stops the replay at its row, and a ROWS that lacks one of them is red naming it. Every ROWS label is a row of
+  # the real registry, read from scripts/verify-platform.sh, so a misspelt label cannot pass by running nothing.
+  local sec want_sec=(orca-credential-store orca-failure-classes orca-offer-file orca-service) reg lbl unreg=""
+  for sec in "${want_sec[@]}"; do expect_stop "security row $sec fails at the new tag" control "rowfail-$sec" "row $sec exited 1"; done
+  missing_rows() { local r; for r in "${want_sec[@]}"; do printf '%s\n' "$@" | grep -qxF -- "$r" || echo "$r"; done; }
+  [ -z "$(missing_rows "${ROWS[@]}")" ] && ok "security rows -> all four are in ROWS" || miss "security rows" "ROWS lacks $(missing_rows "${ROWS[@]}" | tr '\n' ' ')"
+  [ "$(missing_rows "${ROWS[@]/orca-service/}")" = orca-service ] && ok "a ROWS without orca-service -> red naming it" || miss "missing security row plant" "a ROWS without orca-service was not reported"
+  reg="$(sed -nE 's/^[[:space:]]*"([a-z0-9-]+)\|.*/\1/p' "$REPO_ROOT/scripts/verify-platform.sh")"
+  for lbl in "${ROWS[@]}"; do printf '%s\n' "$reg" | grep -qxF -- "$lbl" || unreg+="$lbl "; done
+  [ -z "$unreg" ] && ok "ROWS -> every label is a registered row" || miss "ROWS labels" "not registered in scripts/verify-platform.sh: $unreg"
 
   # ci-supply-chain-06: upstream output prints a FAIL line of its own before this script's. The log's first
   # FAIL line is the forged one (the hazard); the stage file holds this script's typecheck:web line.
