@@ -52,7 +52,7 @@
 // checks that importing this module prints and starts nothing.
 //
 // Tier: full (live). A row started without PB_LIVE_LOCK_HELD=1 takes <git common dir>/pb-live.lock itself
-// (lib/live-lock-reexec.mjs) before it builds or launches anything; every inherited ORCA_* is unset. --self-test is
+// (lib/live-lock.mjs) before it builds or launches anything; every inherited ORCA_* is unset. --self-test is
 // quick and hermetic (it serves on a loopback port and runs git in a scratch folder, nothing else). Exit 77 with one
 // "SKIP -- <reason>" line when no built PowerBrowser, no orca/out/web/assets/pb-panes or no Orca CLI exists.
 //
@@ -68,7 +68,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { NO_CURSOR_MESSAGE, mountCursorExpr, newMountErrorsExpr } from './lib/orca-pane-harness.mjs';
-import { takeLiveLock } from './lib/live-lock-reexec.mjs';
+import { holdLiveLock, lockWiringFails } from './lib/live-lock.mjs';
 import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -557,7 +557,7 @@ async function live(opts = {}) {
     const skips = harness.skipReasons();
     if (skips.length) { console.log(skipLine(NAME, skips.join('; '))); return SKIP_EXIT; }
     // Nothing is built or launched before this: a row started by hand takes the live lock itself (harness-live-panels-02).
-    const held = await takeLiveLock(import.meta.url, NAME, process.argv.slice(2));
+    const held = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
     if (held !== null) return held;
     if (!existsSync(join(harness.STANDALONE_DIR, 'pb-panes.js'))) {
         const b = spawnSync('bash', [join(REPO_ROOT, 'scripts', 'build-orca-panes.sh'), '--standalone'], { encoding: 'utf8' });
@@ -732,6 +732,7 @@ async function selfTest() {
     ok('render: all clauses green gives PASS naming the late time', g.code === 0 && /late CLI terminal in 172 ms$/.test(g.lines.at(-1)));
     const f = render({ isolated: null, isolatedDetail: 'd', mounts: null, kinds: STAGE1_KINDS, chatSource: 'createChat', late: lateVerdict(null), lateMs: null, api: null });
     ok('render: a late CLI terminal miss alone is red', f.code === 1 && /late CLI terminal FAIL/.test(f.lines[2]) && /: FAIL -- late CLI terminal$/.test(f.lines.at(-1)));
+    ok('the live path awaits holdLiveLock before it launches anything', lockWiringFails(NAME, import.meta.url).length === 0);
     // overlay-renderer-04 (G3a): the mount-error cursor is the total, not the length of the 50 kept. The page-side expressions
     // run over a fake bundle that kept 50 of 60 errors: the new-errors expression returns the 50 kept, the length-based
     // slice it replaces returns none (the fault the cursor fixes), and a build without the total is a FAIL.

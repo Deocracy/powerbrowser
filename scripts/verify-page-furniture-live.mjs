@@ -170,7 +170,7 @@
  * applied` only after reading the mutation back. Both modes launch a real
  * PowerBrowser (the plants are faults injected into the running product, so there
  * is no hermetic form of this self-test): each takes <git common dir>/pb-live.lock
- * itself when started without PB_LIVE_LOCK_HELD=1 (lib/live-lock-reexec.mjs), and
+ * itself when started without PB_LIVE_LOCK_HELD=1 (lib/live-lock.mjs), and
  * exits 77 with one "SKIP -- <reason>" line when no built PowerBrowser exists
  * (SKIP-PROTOCOL.md).
  *
@@ -210,7 +210,7 @@ import {
 import { REPO_ROOT, pollFor, probe, sourceConst } from './lib/pb-relaunch.mjs';
 import { captureShell } from './lib/pb-kwin.mjs';
 import { FIREFOX_BIN } from './lib/firefox-bidi.mjs';
-import { takeLiveLock } from './lib/live-lock-reexec.mjs';
+import { holdLiveLock, lockWiringFails } from './lib/live-lock.mjs';
 import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const MODES_ACTIVATE_COMMAND_ID = sourceConst('theia/extensions/modes/src/browser/modes-commands.ts', 'MODES_ACTIVATE_COMMAND_ID');
@@ -3186,6 +3186,8 @@ function redactionSelfTest() {
     ];
     let bad = 0;
     for (const [name, got, test] of cases) { if (test(got)) console.log(`  ok ${name} -> ${got}`); else { console.error(`  FAIL ${name} -> ${got}`); bad += 1; } }
+    const wiring = lockWiringFails(NAME, import.meta.url);
+    if (wiring.length) { console.error(`  FAIL ${wiring.join('; ')}`); bad += 1; } else console.log('  ok the live path awaits holdLiveLock before it launches anything');
     // The failure message built from the call site's template must carry no clipboard content.
     const msg = `Copy Image Link did not put the image URL on the clipboard (it ${describeClipboard(secret)})`;
     if (msg.includes('hunter2')) { console.error('  FAIL the failure message prints clipboard content'); bad += 1; } else console.log('  ok the failure message prints no clipboard content');
@@ -3204,6 +3206,6 @@ if (!existsSync(FIREFOX_BIN)) {
     console.log(skipLine(NAME, `no built PowerBrowser (${FIREFOX_BIN} is absent); build the Firefox half as docs/BUILD.md says, or point PB_FIREFOX_BIN at a build`));
     process.exit(SKIP_EXIT);
 }
-const held = await takeLiveLock(import.meta.url, NAME, args);
+const held = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
 if (held !== null) process.exit(held);
 process.exit(args.includes('--self-test') ? await selfTest(args) : await main(args));

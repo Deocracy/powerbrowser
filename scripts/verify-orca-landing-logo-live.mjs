@@ -29,7 +29,7 @@
 //
 // --self-test: the pure verdicts over planted observations (quick).
 // Runs under <git common dir>/pb-live.lock: a row started without PB_LIVE_LOCK_HELD=1 re-runs itself under flock
-// (lib/live-lock-reexec.mjs) before it launches anything. Exit 77 with one "SKIP -- <reason>" line when an input is
+// (lib/live-lock.mjs) before it launches anything. Exit 77 with one "SKIP -- <reason>" line when an input is
 // absent (SKIP-PROTOCOL.md). The gh stub folder is removed on every way out, signals included.
 
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -38,7 +38,7 @@ import { connect } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { takeLiveLock } from './lib/live-lock-reexec.mjs';
+import { holdLiveLock, lockWiringFails } from './lib/live-lock.mjs';
 import { registerTeardown } from './lib/live-teardown.mjs';
 import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
@@ -118,6 +118,7 @@ function selfTest() {
         ['a remount showing Orca\'s logo', 'foreign src', () => remountVerdict({ unmounted: true, after: { count: 1, src: foreign, alt: 'Orca logo' } }, mark)],
         ['Landing never unmounted', 'did not unmount', () => remountVerdict({ unmounted: false, after: good }, mark)],
         // harness-live-panels-17: a run that ends early, or whose collector measures nothing, must not read as green.
+        ['the live path awaits holdLiveLock before it launches anything', null, () => lockWiringFails(LABEL, import.meta.url)],
         ['control: every leg ran', null, () => legsVerdict(LEGS)],
         ['the remount leg never ran', 'leg not run: remount', () => legsVerdict(LEGS.filter((l) => l !== 'remount'))],
         ['no leg ran', 'leg not run: proxy control', () => legsVerdict([])],
@@ -165,7 +166,7 @@ async function live() {
     if (pre.skip) { console.log(skipLine(LABEL, pre.skip)); return SKIP_EXIT; }
     if (pre.fail) { console.log(`${LABEL}: FAIL -- ${pre.fail}`); return 1; }
     // Nothing is launched before this: a row started by hand takes the live lock itself (harness-live-panels-02).
-    const held = await takeLiveLock(import.meta.url, LABEL);
+    const held = await holdLiveLock({ name: LABEL, scriptUrl: import.meta.url, root: REPO });
     if (held !== null) return held;
     const OrcaEnv = await import(pathToFileURL(join(REPO, 'powerbrowser/shell/OrcaEnv.sys.mjs')).href);
     const { sourceConst } = await import(join(REPO, 'scripts/lib/pb-relaunch.mjs'));

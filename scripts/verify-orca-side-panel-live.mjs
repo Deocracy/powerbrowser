@@ -130,7 +130,7 @@
 // line, a pairing URL, an offer or a token.
 //
 // Tier: full. A row started without PB_LIVE_LOCK_HELD=1 takes <git common dir>/pb-live.lock itself
-// (lib/live-lock-reexec.mjs) before it launches anything; inherited ORCA_* are unset. Exit 77 with one
+// (lib/live-lock.mjs) before it launches anything; inherited ORCA_* are unset. Exit 77 with one
 // "SKIP -- <reason>" line (SKIP-PROTOCOL.md) while a built PowerBrowser, a built Theia app, orca/out, the pane
 // bundle or typescript is absent (orca-tabs-live.mjs prerequisites). --self-test runs the pure comparators on
 // fixtures and the tab-adding collector against fake pages (hermetic: no browser).
@@ -146,7 +146,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { violations } from './lib/endpoint-verdict.mjs';
-import { takeLiveLock } from './lib/live-lock-reexec.mjs';
+import { holdLiveLock, lockWiringFails } from './lib/live-lock.mjs';
 import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -643,7 +643,7 @@ async function live() {
     if (pre.fail) { console.error(`${NAME}: FAIL -- ${pre.fail}`); return 1; }
     if (!loadTypeScript()) { console.log(skipLine(NAME, 'theia/node_modules/typescript is absent; run the audited Theia install in theia/')); return SKIP_EXIT; }
     // Nothing is launched before this: a row started by hand takes the live lock itself (harness-live-panels-02).
-    const held = await takeLiveLock(import.meta.url, NAME);
+    const held = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
     if (held !== null) return held;
     const sel = deriveSelectors();
     if (sel.fails.length) { for (const f of sel.fails) console.error(`${NAME}: FAIL -- ${f}`); return 1; }
@@ -1144,6 +1144,7 @@ async function selfTest() {
         ['no right drag measured', () => mRun({ drag: d => (d.side === 'right' ? null : d) }), 'right: no drag was measured'],
         ['a squeeze to Lumino\'s 100 px', () => mRun({ squeeze: q => (q.side === 'left' ? { ...q, after: 100 } : q) }), 'left panel squeezed to 100px, below Orca\'s minimum 220px'],
         ['a squeeze that never moved the edge', () => mRun({ squeeze: q => (q.side === 'right' ? { ...q, after: q.before } : q) }), 'instrument blind: the squeeze drag did not narrow the right panel'],
+        ['the live path awaits holdLiveLock before it launches anything', () => lockWiringFails(NAME, import.meta.url), null],
         // f (harness-live-panels-06): the shown set is compared with the derived set.
         ['control: every derived entry shown', () => pagesVerdict({ derived: PAGES6, shown: PAGES6.map(p => p.view) }), null],
         ['one of six derived entries shown', () => pagesVerdict({ derived: PAGES6, shown: ['tasks'] }), 'automations: the page entry "Automations" that Orca\'s sidebar source derives is not shown'],

@@ -43,7 +43,7 @@
 //     while it is open. Both probes run after the Theia and pane controls registered.
 //
 // Tier: full (live). A row started without PB_LIVE_LOCK_HELD=1 takes <git common dir>/pb-live.lock
-// itself (lib/live-lock-reexec.mjs) before anything is launched; every inherited ORCA_* is unset.
+// itself (lib/live-lock.mjs) before anything is launched; every inherited ORCA_* is unset.
 // --self-test quick (pure verdicts over fixtures). Exit 77 with one "SKIP -- <reason>" line when nothing
 // is built (SKIP-PROTOCOL.md).
 //
@@ -57,7 +57,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { GET_BY_NAME as harness_GET } from './lib/pb-relaunch.mjs';
-import { takeLiveLock } from './lib/live-lock-reexec.mjs';
+import { holdLiveLock, lockWiringFails } from './lib/live-lock.mjs';
 import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -463,7 +463,7 @@ async function live() {
     const skips = harness.skipReasons();
     if (skips.length) { console.log(skipLine(NAME, skips.join('; '))); return SKIP_EXIT; }
     // Nothing is built or launched before this: a row started by hand takes the live lock itself (harness-live-panels-02).
-    const held = await takeLiveLock(import.meta.url, NAME);
+    const held = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
     if (held !== null) return held;
     if (!existsSync(join(harness.STANDALONE_DIR, 'pb-panes.js'))) {
         const b = spawnSync('bash', [join(REPO_ROOT, 'scripts', 'build-orca-panes.sh'), '--standalone'], { encoding: 'utf8' });
@@ -660,6 +660,7 @@ function selfTest() {
     ok('Add-project dialog: a control that did not register is red naming the probe', /^Add-project dialog probe: its planted control did not register/.test(cssVerdict(good({ addProject: probe({ portalCompared: 8, controlDelta: 0 }) })) ?? ''));
     ok('Add-project dialog: not reached is red', /^Add-project dialog probe not measured/.test(cssVerdict(good({ addProject: undefined })) ?? ''));
     ok('the probes are judged only after the Theia control registered', /^Theia control/.test(cssVerdict(good({ theia: { ...good().theia, controlDelta: 0 }, side: sideProbe({ paneChanged: [d] }) })) ?? ''));
+    ok('the live path awaits holdLiveLock before it launches anything', lockWiringFails(NAME, import.meta.url).length === 0);
     ok('diffMaps counts additions and removals', diffMaps({ a: '1', b: '2' }, { a: '1', c: '3' }).length === 2);
     const child = spawnSync(process.execPath, ['--input-type=module', '-e', `await import(${J(SELF)})`], { encoding: 'utf8', timeout: 30000 });
     ok('importing the module prints and starts nothing', child.status === 0 && child.stdout === '' && child.stderr === '');
