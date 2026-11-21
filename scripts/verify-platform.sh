@@ -4263,6 +4263,15 @@ run_own_checks() {
     # H7 live panels: the page-furniture row prints only the length and a known-value classification of a clipboard it
     # read, never its text (the redaction, proven without a browser; the row itself is full-tier).
     "page-furniture-live-redaction-self-test|node $REPO_ROOT/scripts/verify-page-furniture-live.mjs --redaction-self-test"
+    # G5b packaging and docs: the release runner unit (work directory, sandbox overrides for rootless podman, no libvirtd
+    # group), the packaged tree carrying the claude wrapper and Orca's licence where the backend resolves them, and the
+    # endpoint allowlist against the hosts Orca hosting contacts, compared as a set with the privacy page.
+    "legion-runner-unit|node $REPO_ROOT/scripts/verify-legion-runner-unit.mjs"
+    "legion-runner-unit-self-test|node $REPO_ROOT/scripts/verify-legion-runner-unit.mjs --self-test"
+    "packaging-staging|node $REPO_ROOT/scripts/verify-packaging-staging.mjs"
+    "packaging-staging-self-test|node $REPO_ROOT/scripts/verify-packaging-staging.mjs --self-test"
+    "orca-egress|node $REPO_ROOT/scripts/verify-orca-egress.mjs"
+    "orca-egress-self-test|node $REPO_ROOT/scripts/verify-orca-egress.mjs --self-test"
     # NEW (67-03, RUN-06/RUN-07, P67-01..P67-09, P67-32): orca-offer-file judges real lstat results of a temp folder
     # through orca-panes' offer-file-policy.ts (type-stripped): symlink, non-regular, other owner, group/other bits,
     # missing, non-loopback or mismatched endpoint, undecodable text; OFFER_REFUSAL_REASONS against the copy table's
