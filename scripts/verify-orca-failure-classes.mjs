@@ -6,7 +6,9 @@
 // Everything is derived at check time and compared as sets, so an addition and a removal both go red:
 //
 //  1. Codes. Every ORCAD_*_CODE export of powerbrowser/shell/OrcaEnv.sys.mjs maps through
-//     ORCA_CODE_CLASSES.
+//     ORCA_CODE_CLASSES, and the code list OrcaService.sys.mjs treats as unrecoverable (the array it
+//     searches orcad's stderr with) equals the keys of ORCA_CODE_CLASSES as a set
+//     (harness-static-hosting-10).
 //  2. Steps. OrcaService.sys.mjs is scanned for the first argument of every this._fail( call and
 //     every step: property. Each must be a string literal; a this._fail(<x>.step) call forwards a
 //     step: value and is accepted; anything else is red "step not derivable". The derived step set
@@ -17,7 +19,16 @@
 //     (src/renderer/src/web/web-runtime-client-error.ts) plus lane p67-03's OFFER_REFUSAL_REASONS
 //     (theia/extensions/orca-panes/src/node/offer-file-policy.ts, type-stripped) plus the
 //     browser-host reason (P67-36) equals ORCA_CLIENT_REASONS. A union with no member is red
-//     "source moved". With orca/ or typescript absent these clauses print one SKIP.
+//     "source moved".
+//     Orca's fatal codes (harness-static-hosting-10): every error class resolveOrcadExitCode
+//     (src/main/orcad/orcad-exit-code.ts) tests, followed through imports and re-exports, gives its
+//     code (a `readonly code = '<literal>'` field, or the union type of a `readonly code` constructor
+//     parameter). Each such code is a configuration refusal orcad exits on, so each must be a key of
+//     ORCA_CODE_CLASSES; an unmapped one is red naming it, because OrcaService would retry it as
+//     recoverable. A class with no code is listed, not judged. (That each key of ORCA_CODE_CLASSES
+//     is still in the pin is orca-service clause 9.)
+//     With orca/ or typescript absent these clauses do not run and the row is SKIP (exit 77, one
+//     SKIP line, SKIP-PROTOCOL.md; harness-static-hosting-01).
 //  4. Classes. Every value of ORCA_STEP_CLASSES and ORCA_CODE_CLASSES, and failureClassOf for each
 //     offer-unavailable reason, the browser-host reason and a restart, is a member of
 //     ORCA_FAILURE_CLASSES; every class is reached by at least one of them.
@@ -47,12 +58,14 @@ import { createRequire, stripTypeScriptTypes } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-failure-classes';
 const SELF_REL = 'scripts/verify-orca-failure-classes.mjs';
 const AUTH_REL = 'src/renderer/src/web/web-runtime-client-error.ts';
 const PAIRING_REL = 'src/main/runtime/runtime-rpc/runtime-rpc-pairing-types.ts';
+const EXIT_CODE_REL = 'src/main/orcad/orcad-exit-code.ts';
 
 /** Every input path of the check, for a tree rooted at `root`; typescript always comes from the repo. */
 export function pathsFor(root) {
@@ -63,6 +76,7 @@ export function pathsFor(root) {
         orcaDir: join(root, 'orca'),
         authFile: join(root, 'orca', AUTH_REL),
         pairingFile: join(root, 'orca', PAIRING_REL),
+        exitFile: join(root, 'orca', EXIT_CODE_REL),
         failureDir,
         copyFile: join(failureDir, 'orca-failure-copy.ts'),
         policyFile: join(root, 'theia', 'extensions', 'orca-panes', 'src', 'node', 'offer-file-policy.ts'),
@@ -124,18 +138,111 @@ export function deriveSteps(source) {
 
 const diff = (a, b) => [...a].filter((x) => !b.has(x)).sort();
 
-/** Runs every clause over `paths`. Resolves { fails, notes, counts }. */
+/**
+ * The codes OrcaService treats as unrecoverable: the OrcaEnv names in `[OrcaEnv.A, ...].find(c => text.includes(c))`,
+ * or every key of ORCA_CODE_CLASSES when it searches Object.keys(OrcaEnv.ORCA_CODE_CLASSES). null when neither form
+ * is in the source.
+ */
+export function serviceFatalCodes(source, env) {
+    if (/Object\.keys\(\s*OrcaEnv\.ORCA_CODE_CLASSES\s*\)\s*\.find\(\s*\(?\s*(\w+)\s*\)?\s*=>\s*\w+\.includes\(\s*\1\s*\)/.test(source)) return new Set(Object.keys(env.ORCA_CODE_CLASSES));
+    const m = /\[((?:\s*OrcaEnv\.\w+\s*,?)+)\]\s*\.find\(\s*\(?\s*(\w+)\s*\)?\s*=>\s*\w+\.includes\(\s*\2\s*\)/.exec(source);
+    if (!m) return null;
+    return new Set([...m[1].matchAll(/OrcaEnv\.(\w+)/g)].map((x) => env[x[1]] ?? `<OrcaEnv.${x[1]} is not exported>`));
+}
+
+/**
+ * The pinned configuration refusals: [{ cls, codes: [..] }] for each error class resolveOrcadExitCode tests with
+ * instanceof, followed through imports and `export { X } from` re-exports. Throws "source moved: ..." when a site
+ * no longer reads as expected.
+ */
+export function pinnedFatalCodes(ts, exitFile) {
+    const parseFile = (file) => {
+        const text = read(file);
+        return text === null ? null : ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+    };
+    const resolveSpec = (from, spec) => {
+        if (!spec.startsWith('.')) return null;
+        const base = resolve(dirname(from), spec);
+        return [`${base}.ts`, join(base, 'index.ts')].find((f) => existsSync(f)) ?? `${base}.ts`;
+    };
+    const sf = parseFile(exitFile);
+    if (!sf) throw new Error(`source moved: ${EXIT_CODE_REL} is absent at the pin`);
+    let fn = null;
+    ts.forEachChild(sf, (n) => { if (ts.isFunctionDeclaration(n) && n.name?.text === 'resolveOrcadExitCode') fn = n; });
+    if (!fn) throw new Error(`source moved: ${EXIT_CODE_REL} no longer declares resolveOrcadExitCode`);
+    const classNames = new Set();
+    const visit = (n) => {
+        if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.InstanceOfKeyword && ts.isIdentifier(n.right)) classNames.add(n.right.text);
+        ts.forEachChild(n, visit);
+    };
+    visit(fn);
+    if (!classNames.size) throw new Error(`source moved: resolveOrcadExitCode in ${EXIT_CODE_REL} tests no error class with instanceof`);
+    const importOf = (file, src, name) => {
+        for (const st of src.statements) {
+            if (ts.isImportDeclaration(st) && st.importClause?.namedBindings && ts.isNamedImports(st.importClause.namedBindings)) {
+                const el = st.importClause.namedBindings.elements.find((e) => e.name.text === name);
+                if (el) return { file: resolveSpec(file, st.moduleSpecifier.text), name: (el.propertyName ?? el.name).text };
+            }
+        }
+        return null;
+    };
+    const findClass = (file, name, depth = 0) => {
+        const src = parseFile(file);
+        if (!src || depth > 5) return null;
+        for (const st of src.statements) {
+            if (ts.isClassDeclaration(st) && st.name?.text === name) return { file, src, node: st };
+            if (ts.isExportDeclaration(st) && st.moduleSpecifier && st.exportClause && ts.isNamedExports(st.exportClause)) {
+                const el = st.exportClause.elements.find((e) => e.name.text === name);
+                if (el) return findClass(resolveSpec(file, st.moduleSpecifier.text), (el.propertyName ?? el.name).text, depth + 1);
+            }
+        }
+        const imp = importOf(file, src, name);
+        return imp && imp.file ? findClass(imp.file, imp.name, depth + 1) : null;
+    };
+    const literalOf = (e) => {
+        let x = e;
+        while (x && (ts.isAsExpression(x) || ts.isParenthesizedExpression(x) || ts.isSatisfiesExpression?.(x))) x = x.expression;
+        return x && (ts.isStringLiteral(x) || ts.isNoSubstitutionTemplateLiteral(x)) ? x.text : null;
+    };
+    const out = [];
+    for (const name of [...classNames].sort()) {
+        const found = findClass(exitFile, name);
+        if (!found) throw new Error(`source moved: the error class ${name} resolveOrcadExitCode tests cannot be found from ${EXIT_CODE_REL}`);
+        const codes = new Set();
+        for (const m of found.node.members) {
+            if (ts.isPropertyDeclaration(m) && m.name.getText() === 'code') {
+                const lit = literalOf(m.initializer);
+                if (lit) codes.add(lit);
+                else if (m.type) for (const c of unionMembers(ts, found.src.getFullText(), m.type.getText())) codes.add(c);
+            }
+            if (ts.isConstructorDeclaration(m)) {
+                for (const p of m.parameters) {
+                    if (p.name.getText() === 'code' && p.type) {
+                        const members = ts.isTypeReferenceNode(p.type) ? unionMembers(ts, found.src.getFullText(), p.type.typeName.getText())
+                            : ts.isUnionTypeNode(p.type) || ts.isLiteralTypeNode(p.type) ? unionMembers(ts, `type T = ${p.type.getText()}`, 'T') : [];
+                        if (!members.length) throw new Error(`source moved: ${name}'s code parameter has a type this check cannot read (${p.type.getText()})`);
+                        for (const c of members) codes.add(c);
+                    }
+                }
+            }
+        }
+        out.push({ cls: name, codes: [...codes].sort() });
+    }
+    return out;
+}
+
+/** Runs every clause over `paths`. Resolves { fails, skips, counts }; skips name the clauses that did not run. */
 export async function check(paths) {
     const fails = [];
-    const notes = [];
+    const skips = [];
     let env;
-    try { env = await freshImport(paths.orcaEnv); } catch (err) { return { fails: [`OrcaEnv.sys.mjs does not import in Node: ${err.message}`], notes, counts: {} }; }
+    try { env = await freshImport(paths.orcaEnv); } catch (err) { return { fails: [`OrcaEnv.sys.mjs does not import in Node: ${err.message}`], skips, counts: {} }; }
     const service = read(paths.orcaService);
-    if (service === null) return { fails: [`${paths.orcaService} is missing`], notes, counts: {} };
+    if (service === null) return { fails: [`${paths.orcaService} is missing`], skips, counts: {} };
     for (const name of ['ORCA_FAILURE_CLASSES', 'ORCA_STEP_CLASSES', 'ORCA_CODE_CLASSES', 'ORCA_OFFER_UNAVAILABLE_REASONS', 'ORCA_CLIENT_REASONS', 'ORCA_BROWSER_HOST_REASON', 'failureClassOf']) {
         if (env[name] === undefined) fails.push(`OrcaEnv.sys.mjs exports no ${name}`);
     }
-    if (fails.length) return { fails, notes, counts: {} };
+    if (fails.length) return { fails, skips, counts: {} };
     const classes = new Set(env.ORCA_FAILURE_CLASSES);
     const own = (map, key) => (Object.hasOwn(map, key) ? map[key] : undefined);
     const reached = new Map(); // class -> first cause naming it
@@ -151,6 +258,14 @@ export async function check(paths) {
         const cls = own(env.ORCA_CODE_CLASSES, v);
         if (cls === undefined) fails.push(`unmapped code: OrcaEnv.${k} '${v}' has no ORCA_CODE_CLASSES entry`);
         else reach(cls, `ORCA_CODE_CLASSES['${v}']`);
+    }
+    // harness-static-hosting-10: the list OrcaService treats as unrecoverable is the mapped code set.
+    const fatal = serviceFatalCodes(service, env);
+    const mapped = new Set(Object.keys(env.ORCA_CODE_CLASSES));
+    if (!fatal) fails.push("source moved: OrcaService.sys.mjs has no [OrcaEnv.<code>, ...].find(c => text.includes(c)) list of unrecoverable orcad codes");
+    else {
+        for (const c of diff(mapped, fatal)) fails.push(`retried mapped code: ORCA_CODE_CLASSES maps '${c}', but OrcaService's unrecoverable code list lacks it, so it is retried`);
+        for (const c of diff(fatal, mapped)) fails.push(`OrcaService treats '${c}' as unrecoverable, but ORCA_CODE_CLASSES has no class for it`);
     }
 
     // 2. Steps.
@@ -178,9 +293,23 @@ export async function check(paths) {
     // 3. Orca's reasons.
     const ts = loadTypescript(paths.typescriptFrom);
     let authSet = null;
+    let pinnedFatal = 'SKIP';
     if (!existsSync(paths.orcaDir) || !ts) {
-        notes.push(`SKIP of the pinned-source clauses only -- ${!ts ? 'theia/node_modules/typescript is not installed' : 'orca/ is not fetched (bash scripts/fetch-orca.sh)'}`);
+        skips.push(`the pinned-source clauses (3) did not run: ${!ts ? 'theia/node_modules/typescript is not installed. Next step: run yarn install in theia/ inside nix develop .#theia' : 'orca/ is not fetched. Next step: bash scripts/fetch-orca.sh'}`);
     } else {
+        // harness-static-hosting-10: orcad's configuration refusals, from the pin.
+        try {
+            const refusals = pinnedFatalCodes(ts, paths.exitFile);
+            let n = 0;
+            for (const { cls, codes } of refusals) {
+                for (const c of codes) {
+                    n++;
+                    if (!Object.hasOwn(env.ORCA_CODE_CLASSES, c)) fails.push(`unmapped orcad code: the pinned ${cls} refuses orcad's start with '${c}' (resolveOrcadExitCode), and ORCA_CODE_CLASSES has no class for it, so OrcaService retries it as recoverable`);
+                }
+            }
+            const codeless = refusals.filter((r) => !r.codes.length).map((r) => r.cls);
+            pinnedFatal = `${n} pinned configuration-refusal code(s)${codeless.length ? ` (codeless: ${codeless.join(', ')})` : ''}`;
+        } catch (err) { fails.push(err.message); }
         const pinned = (file, type) => {
             const members = unionMembers(ts, read(file) ?? '', type);
             if (!members.length) fails.push(`source moved: ${type} has no string-literal member in ${file}`);
@@ -200,7 +329,7 @@ export async function check(paths) {
     // 5 and the offer-refusal half of 3: lane p67-03's files.
     let copy = 'SKIP';
     if (!existsSync(paths.failureDir)) {
-        notes.push('SKIP of the copy-table and offer-refusal clauses only -- lane p67-03 not merged (theia/extensions/orca-panes/src/browser/failure is absent)');
+        skips.push('the copy-table and offer-refusal clauses did not run: theia/extensions/orca-panes/src/browser/failure is absent (lane p67-03 not merged). Next step: merge it');
     } else {
         copy = 'compared';
         const load = async (file, names) => {
@@ -238,7 +367,7 @@ export async function check(paths) {
     }
 
     for (const c of classes) if (!reached.has(c)) fails.push(`class '${c}' is reached by no cause`);
-    return { fails, notes, counts: { steps: steps.size, codes: codes.length, classes: classes.size, copy } };
+    return { fails, skips, counts: { steps: steps.size, codes: codes.length, classes: classes.size, copy, pinnedFatal, serviceFatal: fatal?.size ?? 0 } };
 }
 
 // ---------------------------------------------------------------------------
@@ -246,6 +375,8 @@ export async function check(paths) {
 
 const FIXTURE_AUTH = "export type WebRuntimeAuthFailureReason =\n  | 'unauthorized'\n  | 'device-revoked'\n  | 'device-downgraded'\n  | 'insecure-origin'\n";
 const FIXTURE_PAIRING = "export type PairingOfferUnavailableReason =\n  | 'websocket_unavailable'\n  | 'device_registry_unavailable'\n  | 'e2ee_key_unavailable'\n  | 'invalid_advertised_endpoint'\n  | 'relay_mint_failed'\n  | 'network_exposure_failed'\n";
+const FIXTURE_EXIT = "import { OrcadInstanceLockError } from './orcad-data-root-privacy'\nimport { OrcadBundledRuntimeError } from './orcad-bundled-runtime'\nexport function resolveOrcadExitCode(error: unknown): number {\n  return error instanceof OrcadInstanceLockError || error instanceof OrcadBundledRuntimeError ? 78 : 1\n}\n";
+const FIXTURE_LOCK = "type OrcadInstanceLockCode =\n  | 'orcad_instance_lock_held'\n\nexport class OrcadInstanceLockError extends Error {\n  constructor(\n    readonly code: OrcadInstanceLockCode,\n    message: string\n  ) {\n    super(message)\n  }\n}\n";
 const FIXTURE_POLICY = "export const OFFER_REFUSAL_REASONS = ['offer-missing', 'offer-unreadable', 'offer-symlink', 'offer-not-regular', 'offer-owner', 'offer-mode', 'offer-endpoint'] as const;\n";
 
 function fixtureCopy(env) {
@@ -264,7 +395,7 @@ function fixtureCopy(env) {
 
 async function runSelfTest() {
     const ts = loadTypescript(pathsFor(REPO_ROOT).typescriptFrom);
-    if (!ts) { console.log(`${NAME} self-test: SKIP -- theia/node_modules/typescript is not installed`); return 0; }
+    if (!ts) { console.log(skipLine(`${NAME} self-test`, 'theia/node_modules/typescript is not installed, so no plant can run. Next step: run yarn install in theia/ inside nix develop .#theia')); return SKIP_EXIT; }
     const tmp = mkdtempSync(join(tmpdir(), `${NAME}-`));
     try {
         const paths = pathsFor(tmp);
@@ -275,17 +406,30 @@ async function runSelfTest() {
         mkdirSync(dirname(paths.pairingFile), { recursive: true });
         writeFileSync(paths.authFile, FIXTURE_AUTH);
         writeFileSync(paths.pairingFile, FIXTURE_PAIRING);
+        const orcadDir = dirname(paths.exitFile);
+        mkdirSync(orcadDir, { recursive: true });
+        writeFileSync(paths.exitFile, FIXTURE_EXIT);
+        writeFileSync(join(orcadDir, 'orcad-data-root-privacy.ts'), FIXTURE_LOCK);
+        writeFileSync(join(orcadDir, 'orcad-bundled-runtime.ts'), 'export class OrcadBundledRuntimeError extends Error {}\n');
+        // A re-exported class, as the pin's profile-state-access.ts re-exports ProfileStateAccessError.
+        writeFileSync(join(orcadDir, 'orcad-bind-address.ts'), "export { OrcadBindAddressError } from './orcad-bind-address-error'\n");
+        writeFileSync(join(orcadDir, 'orcad-bind-address-error.ts'), "export class OrcadBindAddressError extends Error {\n  readonly code = 'orcad_invalid_bind_address' as const\n}\n");
         mkdirSync(paths.failureDir, { recursive: true });
         mkdirSync(dirname(paths.policyFile), { recursive: true });
         writeFileSync(paths.policyFile, FIXTURE_POLICY);
         writeFileSync(paths.copyFile, fixtureCopy(await freshImport(paths.orcaEnv)));
 
         const control = await check(paths);
-        if (control.fails.length || control.notes.length) {
-            console.error(`${NAME} self-test: FAIL -- the unmodified copies are not green: ${[...control.fails, ...control.notes].join(' | ')}`);
+        if (control.fails.length || control.skips.length) {
+            console.error(`${NAME} self-test: FAIL -- the unmodified copies are not green: ${[...control.fails, ...control.skips].join(' | ')}`);
             return 1;
         }
-        console.log(`${NAME} self-test: control green on copies (${control.counts.steps} steps, ${control.counts.codes} codes, ${control.counts.classes} classes, copy ${control.counts.copy})`);
+        console.log(`${NAME} self-test: control green on copies (${control.counts.steps} steps, ${control.counts.codes} codes, ${control.counts.classes} classes, copy ${control.counts.copy}, ${control.counts.pinnedFatal})`);
+        {
+            const r = await check({ ...paths, orcaDir: join(tmp, 'no-orca') });
+            if (r.fails.length || !r.skips.some((x) => x.includes('pinned-source clauses'))) { console.error(`${NAME} self-test: FAIL -- a tree without orca/ did not skip the pinned clauses: ${[...r.fails, ...r.skips].join(' | ') || 'green'}`); return 1; }
+            console.log('  ok a tree without orca/ -> the pinned clauses are a SKIP, not a PASS');
+        }
 
         const swap = (a, b) => (text) => { if (!text.includes(a)) throw new Error(`plant target not found: ${a.slice(0, 60)}`); return text.replace(a, b); };
         const plants = [
@@ -300,6 +444,12 @@ async function runSelfTest() {
             { name: 'a refusal reason missing from ORCA_CLIENT_REASONS', naming: 'refusal reason', file: paths.orcaEnv, edit: swap('  "offer-mode",\n', '') },
             { name: 'the browser-host reason mapped to pairing-lost in the copy table', naming: 'not browser-not-attached', file: paths.copyFile, edit: swap("    'browser-host-attach-failed': 'browser-not-attached',", "    'browser-host-attach-failed': 'pairing-lost',") },
             { name: 'the copy directory present without the copy file', naming: 'is missing while', file: paths.copyFile, edit: () => null },
+            // harness-static-hosting-10
+            { name: 'a new fatal code in the pinned lock-error union', naming: "unmapped orcad code: the pinned OrcadInstanceLockError refuses orcad's start with 'orcad_data_root_shared'", file: join(orcadDir, 'orcad-data-root-privacy.ts'), edit: swap("  | 'orcad_instance_lock_held'\n", "  | 'orcad_instance_lock_held'\n  | 'orcad_data_root_shared'\n") },
+            { name: 'a new re-exported refusal class tested by resolveOrcadExitCode', naming: "unmapped orcad code: the pinned OrcadBindAddressError refuses orcad's start with 'orcad_invalid_bind_address'", file: paths.exitFile, edit: (t) => `import { OrcadBindAddressError } from './orcad-bind-address'\n${t.replace('error instanceof OrcadBundledRuntimeError', 'error instanceof OrcadBundledRuntimeError || error instanceof OrcadBindAddressError')}` },
+            { name: 'resolveOrcadExitCode renamed in the pin', naming: 'source moved: src/main/orcad/orcad-exit-code.ts no longer declares resolveOrcadExitCode', file: paths.exitFile, edit: swap('function resolveOrcadExitCode(', 'function resolveExitCode(') },
+            { name: "OrcaService's unrecoverable list dropping the lock-held code", naming: 'retried mapped code', file: paths.orcaService, edit: swap('[OrcaEnv.ORCAD_PINNED_PORT_CODE, OrcaEnv.ORCAD_LOCK_HELD_CODE].find(', '[OrcaEnv.ORCAD_PINNED_PORT_CODE].find(') },
+            { name: "OrcaService's unrecoverable list rewritten out of recognition", naming: 'source moved: OrcaService.sys.mjs has no', file: paths.orcaService, edit: swap('[OrcaEnv.ORCAD_PINNED_PORT_CODE, OrcaEnv.ORCAD_LOCK_HELD_CODE].find(c => text.includes(c))', 'FATAL.find(c => text.includes(c))') },
         ];
 
         let failures = 0;
@@ -345,11 +495,8 @@ if (isEntryPoint) {
     }
     if (args.includes('--self-test')) process.exit(await runSelfTest());
     const r = await check(pathsFor(REPO_ROOT));
-    for (const n of r.notes) console.log(`${NAME}: ${n}`);
-    if (r.fails.length) {
-        for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`);
-        process.exit(1);
-    }
-    console.log(`${NAME}: PASS -- ${r.counts.steps} failed steps and ${r.counts.codes} codes each map to one of ${r.counts.classes} classes, every class is reached, Orca's offer-unavailable and auth reasons match the pin; copy tables ${r.counts.copy}`);
-    process.exit(0);
+    for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`);
+    const code = verdictExit(NAME, r.fails, r.skips);
+    if (code === 0) console.log(`${NAME}: PASS -- ${r.counts.steps} failed steps and ${r.counts.codes} codes each map to one of ${r.counts.classes} classes, every class is reached, OrcaService's ${r.counts.serviceFatal} unrecoverable codes are the mapped set, ${r.counts.pinnedFatal} all mapped, Orca's offer-unavailable and auth reasons match the pin; copy tables ${r.counts.copy}`);
+    process.exit(code);
 }
