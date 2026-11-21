@@ -1014,9 +1014,20 @@ export function portHolderUidOf(tables, port) {
 }
 
 /** The diagnostics value for the port holder: whose program holds the port, or null when that is not known. */
-export function portHolderRowValue(holderUid, ownUid) {
-  if (!Number.isInteger(holderUid) || !Number.isInteger(ownUid)) {
-    return null;
+export function portHolderRowValue(holderUid, ownUid, { truncated = false } = {}) {
+  if (!Number.isInteger(holderUid)) {
+    // A table read only in part may hold the listener in the part not read: no row would say the port is free.
+    return truncated ? PORT_HOLDER_UNDETERMINED : null;
+  }
+  if (!Number.isInteger(ownUid)) {
+    return PORT_HOLDER_UNDETERMINED;
   }
   return holderUid === ownUid ? "a program of this user" : `another user (uid ${holderUid})`;
 }
+
+/**
+ * Audit follow-up to orcad-hosting-03 (from lane G1a): the row's value when the holder cannot be told, either
+ * because the socket table was too large to read whole and the part read names no holder, or because this
+ * process's own account is unknown. Plain words, no identifier.
+ */
+export const PORT_HOLDER_UNDETERMINED = "could not be determined";

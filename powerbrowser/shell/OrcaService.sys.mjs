@@ -915,11 +915,13 @@ export const OrcaService = {
   async _portHolderRows() {
     try {
       const table = await PowerBrowserOrcaHosting.readLoopbackSocketTable();
-      // Both tables: a dual-stack listener, Node's default, is listed in tcp6 only (audit follow-up).
-      const value = OrcaEnv.portHolderRowValue(OrcaEnv.portHolderUidOf([table?.tcp, table?.tcp6], this._port), table?.uid);
+      // Both tables: a dual-stack listener, Node's default, is listed in tcp6 only (audit follow-up). A table read
+      // only in part (G1a's truncated flag) with no holder in it is "could not be determined", never no row.
+      const holder = OrcaEnv.portHolderUidOf([table?.tcp, table?.tcp6], this._port);
+      const value = OrcaEnv.portHolderRowValue(holder, table?.uid, { truncated: table?.truncated === true });
       return value ? [["Orca port holder", value]] : [];
     } catch {
-      return [];
+      return [["Orca port holder", OrcaEnv.PORT_HOLDER_UNDETERMINED]];
     }
   },
 

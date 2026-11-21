@@ -714,6 +714,23 @@ async function portHolder(paths, env) {
     const value = svc.getDiagnosticRows().find(([l]) => l === 'Orca port holder')?.[1];
     if (value !== 'another user (uid 1002)') fails.push(`port-holder: a port held by a dual-stack listener of uid 1002 shows the port-holder row ${JSON.stringify(value)}, so a squatter cannot be told from a leftover`);
     await svc.stop();
+    // ::1 does not hold the IPv4 port orcad binds, so a listener there alone is no holder.
+    const loopback6Only = [head, row('00000000000000000000000001000000', '0A', 4444), ''].join('\n');
+    if (env.portHolderUidOf?.([head, loopback6Only], 26768) !== null) fails.push(`port-holder: a listener on ::1 alone was read as the holder (uid ${env.portHolderUidOf?.([head, loopback6Only], 26768)}), but it does not hold 127.0.0.1`);
+    // G1a's reader marks a table it could not read whole; with no holder in the part read, the row must not imply a free port.
+    {
+        const b2 = makeBoundary({
+            alive: [[5002, '222']],
+            tree: tree3(5001),
+            hosting: { readLoopbackSocketTable: async () => ({ tcp: [head, row('0100007F', '01', 4321)].join('\n'), tcp6: head, uid: 1000, truncated: true }) },
+            orcad: () => portBusy(5001),
+        });
+        const svc2 = await loadService(paths, b2, env);
+        await svc2.start();
+        const shown = svc2.getDiagnosticRows().find(([l]) => l === 'Orca port holder')?.[1];
+        if (shown !== env.PORT_HOLDER_UNDETERMINED) fails.push(`port-holder: a truncated socket table with no holder row shows ${shown === undefined ? 'no port-holder row, as if nothing held the port' : JSON.stringify(shown)}, not that the holder could not be determined`);
+        await svc2.stop();
+    }
     return fails;
 }
 
@@ -1049,6 +1066,8 @@ function plants() {
         { name: 'only the port and lock codes searched', naming: 'mapped-codes', file: S, edit: swap('Object.keys(OrcaEnv.ORCA_CODE_CLASSES).find(c => text.includes(c))', '[OrcaEnv.ORCAD_PINNED_PORT_CODE, OrcaEnv.ORCAD_LOCK_HELD_CODE].find(c => text.includes(c))') },
         { name: 'configuration exit retried', naming: 'configuration exit', file: S, edit: swap('      if (outcome.exitCode === OrcaEnv.ORCAD_EXIT_CONFIGURATION) {\n', '      if (false) {\n') },
         { name: 'unverifiable lock holder made final', naming: 'already-running exit', file: E, edit: swap('  [ORCAD_LOCK_FOREIGN_IDENTITY_CODE]: "port-in-use",\n', '  [ORCAD_LOCK_FOREIGN_IDENTITY_CODE]: "port-in-use",\n  orcad_instance_lock_holder_unverifiable: "port-in-use",\n') },
+        { fixture: false, name: 'truncated table read as complete', naming: 'truncated socket table', file: S, edit: swap('{ truncated: table?.truncated === true }', '{}') },
+        { name: '::1 counted as a holder', naming: 'listener on ::1', file: E, edit: swap('  "00000000000000000000000000000000",\n', '  "00000000000000000000000000000000",\n  "00000000000000000000000001000000",\n') },
         { name: 'port holder row dropped', naming: 'port-holder', file: S, edit: swap('...rows, ...holder]', '...rows]') },
     ];
 }
