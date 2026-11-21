@@ -315,10 +315,14 @@ export class OrcaEditorRouter implements FrontendApplicationContribution {
                 replay = true;
             }
         }
-        if (replay && this.lastFiles) {
+        // A newer snapshot already waiting is the one to apply; the last applied one never replaces it.
+        if (replay && this.latest === undefined && this.lastFiles) {
             this.schedule(this.lastFiles);
         }
     }
+
+    /** Records that failed in the first snapshot: their retry opens them the way that snapshot would, without focus. */
+    protected readonly openQuietly = new Set<string>();
 
     protected async apply(files: OrcaOpenFile[]): Promise<void> {
         this.lastFiles = files;
@@ -334,7 +338,8 @@ export class OrcaEditorRouter implements FrontendApplicationContribution {
                 continue;
             }
             this.detach(file.id);
-            const mode = first ? 'open' : file.active && file.worktreeId === activeWorktree ? 'activate' : file.active ? 'reveal' : 'open';
+            const quiet = first || this.openQuietly.has(file.id);
+            const mode = quiet ? 'open' : file.active && file.worktreeId === activeWorktree ? 'activate' : file.active ? 'reveal' : 'open';
             // One record that cannot open (a refused read, a missing file) never holds up the rest of the snapshot.
             let failed = false;
             const uri = await this.openRecord(file, mode).catch(err => {
@@ -343,6 +348,11 @@ export class OrcaEditorRouter implements FrontendApplicationContribution {
                 return undefined;
             });
             this.known.set(file.id, failed ? { signature, uri, failed } : { signature, uri });
+            if (failed && first) {
+                this.openQuietly.add(file.id);
+            } else if (!failed) {
+                this.openQuietly.delete(file.id);
+            }
             if (uri) {
                 this.byUri.get(uri)?.records.set(file.id, { worktreeId: file.worktreeId, tabId: file.tabId });
             }
@@ -353,6 +363,7 @@ export class OrcaEditorRouter implements FrontendApplicationContribution {
         for (const id of [...this.known.keys()]) {
             if (!seen.has(id)) {
                 // P65-02: an Orca-side close.
+                this.openQuietly.delete(id);
                 const uri = this.detach(id);
                 if (uri) {
                     this.releaseIfOrphan(uri);

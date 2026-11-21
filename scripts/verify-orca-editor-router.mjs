@@ -14,6 +14,9 @@
 //     not carry the key's diff-source identifier.
 //  b. 65-WR-02: a record whose open threw is not cached under its signature: after the root
 //     sync applies (retry), it is opened again and maps to its URI.
+//  b2. 65-WR-02: a retry while a snapshot is still being applied never replaces the newer
+//     snapshot waiting behind it, and a record that failed in the first snapshot reopens with
+//     that snapshot's open mode (no activate, so it takes no focus from the restored layout).
 //  c. 65-WR-03: a record whose widget PB disposed for a dropped root stays closed on an
 //     unchanged snapshot and on a retry that does not name its root, and opens again on the
 //     retry that does.
@@ -105,13 +108,16 @@ const FILE = { tabId: 't', worktreeId: 'w1', worktreePath: '/w', filePath: '/w/s
 const OID = 'a'.repeat(40);
 
 /** A router whose openRecord is a fake: ids in failing throw, the rest map to a fresh widget. */
-function fakeRouter(Router) {
+function fakeRouter(Router, { activeWorktree = null, gates = new Map() } = {}) {
     const router = new Router();
-    router.api = { activeWorktree: () => null, closePane: () => undefined };
+    router.api = { activeWorktree: () => activeWorktree, closePane: () => undefined };
     const failing = new Set();
     const opened = [];
-    router.openRecord = async (file) => {
+    const modes = [];
+    router.openRecord = async (file, mode) => {
         opened.push(file.id);
+        modes.push([file.id, mode]);
+        if (gates.has(file.id)) await gates.get(file.id);
         if (failing.has(file.id)) throw new Error('pb-orca-git URI outside the Orca worktree roots');
         const uri = `uri:${file.id}`;
         const widget = { id: file.id };
@@ -120,7 +126,7 @@ function fakeRouter(Router) {
     };
     router.logOnce = () => undefined;
     const settle = async () => { await router.queue; await router.queue; };
-    return { router, failing, opened, settle };
+    return { router, failing, opened, modes, settle };
 }
 
 async function check(texts) {
@@ -188,6 +194,29 @@ async function check(texts) {
             }
         }
 
+        // b2. A retry while a snapshot is still being applied never replaces the newer snapshot waiting behind it,
+        // and a record that failed in the first snapshot reopens the way that snapshot opens (no focus).
+        if (typeof routes.OrcaEditorRouter?.prototype?.retry === 'function') {
+            let release;
+            const gate = new Promise((done) => { release = done; });
+            const { router, failing, opened, modes, settle } = fakeRouter(routes.OrcaEditorRouter, { activeWorktree: 'w1', gates: new Map([['g', gate]]) });
+            const a = { ...FILE, id: 'a', mode: 'edit', active: true };
+            const g = { ...FILE, id: 'g', mode: 'edit', filePath: '/w/g.ts' };
+            const n = { ...FILE, id: 'n', mode: 'edit', filePath: '/w/n.ts' };
+            failing.add('a');
+            router.schedule([a, g]);
+            await new Promise((d) => setTimeout(d, 0));
+            router.schedule([a, g, n]);
+            failing.delete('a');
+            router.retry(['/w']);
+            release();
+            await settle();
+            await settle();
+            if (!opened.includes('n')) fails.push('b2: a retry during an apply replaced the newer snapshot waiting behind it, so a tab Orca opened meanwhile never opened in Theia');
+            const reopen = modes.filter(([id]) => id === 'a')[1]?.[1];
+            if (reopen !== 'open') fails.push(`b2: a record that failed in the first snapshot reopened with mode ${reopen ?? 'none'}, not the first snapshot's open (it would take focus from the restored layout)`);
+        }
+
         // d, e. hydration gating and the retry hand-off.
         globalThis.window = { setTimeout: () => 0, clearTimeout: () => undefined };
         const Sync = rootSync.OrcaRootSync;
@@ -235,6 +264,8 @@ async function check(texts) {
 // ---------------------------------------------------------------- self-test
 
 const PLANTS = [
+    { name: 'retry-replaces-pending-snapshot', naming: 'b2: a retry during an apply replaced the newer snapshot', file: 'routes', edit: (s) => s.replace('if (replay && this.latest === undefined && this.lastFiles) {', 'if (replay && this.lastFiles) {') },
+    { name: 'first-snapshot-retry-takes-focus', naming: 'b2: a record that failed in the first snapshot reopened with mode activate', file: 'routes', edit: (s) => s.replace('const quiet = first || this.openQuietly.has(file.id);', 'const quiet = first;') },
     { name: 'label-shows-source', naming: "shows Orca's diff-source identifier", file: 'routes', edit: (s) => s.replace('(${ORCA_DIFF_RULE_LABELS[rule] ?? \'Changes\'})', '(${source})') },
     { name: 'failed-open-cached', naming: 'never opened again after the roots arrive', file: 'routes', edit: (s) => s.replace('this.known.set(file.id, failed ? { signature, uri, failed } : { signature, uri });', 'this.known.set(file.id, { signature, uri });') },
     { name: 'released-forgotten', naming: 'did not open again when its root returned', file: 'routes', edit: (s) => s.replace("this.known.set(id, { signature: this.known.get(id)?.signature ?? '', uri: undefined, released: true });", 'void id;') },
