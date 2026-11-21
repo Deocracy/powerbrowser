@@ -372,7 +372,8 @@ export async function check(paths) {
     }
 
     // 4. Allowlist.
-    for (const list of ['ORCAD_ENV_ALLOWLIST', 'ORCAD_FIXED_ENV_NAMES']) {
+    // Every list orcad's environment is built from, the per-platform allowlists included (derived from the exports).
+    for (const list of Object.keys(env).filter((k) => /^ORCAD_(ENV_ALLOWLIST\w*|FIXED_ENV_NAMES)$/.test(k) && Array.isArray(env[k]))) {
         if ((env[list] ?? []).includes(override.name)) fails.push(`${override.name} is in OrcaEnv.${list}, so the override could reach orcad (allowlist)`);
     }
 
@@ -492,6 +493,7 @@ async function runSelfTest() {
             { name: 'the override renamed in the pin', naming: 'renamed override', file: paths.gapFile, edit: swap("'ORCA_HEADLESS_SECRET_STORE'", "'ORCA_HEADLESS_SECRETS'") },
             { name: 'the trigger value changed in the pin', naming: 'renamed override value', file: paths.resolutionFile, edit: swap("=== 'plaintext'", "=== 'unencrypted'") },
             { name: 'an Orca temp root PB lacks', naming: 'Orca temp root PB lacks', file: paths.recordFile, edit: swap("'/var/tmp']", "'/var/tmp', '/dev/shm']") },
+            { name: 'the override name in the per-platform allowlist', naming: 'ORCA_HEADLESS_SECRET_STORE is in OrcaEnv.ORCAD_ENV_ALLOWLIST_WIN32', file: paths.orcaEnv, edit: swap('ORCAD_ENV_ALLOWLIST_WIN32 = Object.freeze(["SystemRoot",', 'ORCAD_ENV_ALLOWLIST_WIN32 = Object.freeze(["SystemRoot", "ORCA_HEADLESS_SECRET_STORE",') },
             { name: 'the override name in the allowlist', naming: 'allowlist', file: paths.orcaEnv, edit: swap('  "PATH",\n  "HOME",', '  "PATH",\n  "ORCA_HEADLESS_SECRET_STORE",\n  "HOME",') },
             { name: 'the privacy paragraph removed', naming: 'statement removed', file: paths.privacy, edit: (t) => t.replace(/\s*<p data-orca-credential-protection>[\s\S]*?<\/p>/, '') },
             { name: 'a keyring backend written', naming: 'keyring backend', file: paths.resolutionFile, edit: swap("? { version: 1, backend: 'host-file', key: 'k' }", "? { version: 1, backend: 'os-keyring', account: 'a' }") },
