@@ -378,11 +378,17 @@ github-runner module does not create the work directory, sets `HOME` to it and d
 on every start, so `systemd/legion-pb.nix` creates it with a tmpfiles rule and keeps the rootless
 podman image store outside it, in `/var/lib/pb-runner-data` (`XDG_DATA_HOME`). The file also relaxes
 the module's default sandbox for this runner only (`serviceOverrides`: user namespaces, the setuid
-`newuidmap` helpers, mount and `capset` system calls), because rootless podman cannot start under
-the defaults; each relaxed setting carries its reason in the file. The runner user is not in the
-`libvirtd` group: management access to `qemu:///system` is root-equivalent, and this user runs the
-release build's third-party build code. The `legion-runner-unit` row checks these rules on the file;
-the first deployment is what proves the unit starts and podman runs. The runner
+`newuidmap` helpers with `CAP_SETUID` and `CAP_SETGID` in the bounding set, `/dev/fuse` and
+`/dev/net/tun`, the `/proc` over-mounts, mount, `capset` and `sethostname` system calls), because
+rootless podman cannot start under the defaults; each relaxed setting carries its reason in the
+file. The price is stated in the file's header: build code on this runner can create unprivileged
+user, mount and network namespaces, run host setuid programs that keep those two capabilities,
+create setuid files, see host files and processes under their real uids and see the full `/dev`
+tree. That is why third-party build code should run inside the container or off this host. The
+runner user is not in the `libvirtd` group: management access to `qemu:///system` is
+root-equivalent, and this user runs the release build's third-party build code. The
+`legion-runner-unit` row derives the module's hardening defaults from its source and checks the
+overrides against them; the first deployment is what proves the unit starts and podman runs. The runner
 user has **no read access** to `~/.config/powerbrowser-release/` (the MAR key store on `legion`)
 or to the registration file. The owner verifies both with `sudo -u pb-runner test -r <path>`, and
 each check must fail.
@@ -1043,8 +1049,9 @@ Owner steps, at the 54-04 checkpoint (none of them is an agent's):
 `win11` with a 200704-byte stub qcow2 already exists on `legion`; leave it and its
 disk alone. The packaging capability record in `docs/BUILD.md` that says
 `virsh list --all` shows zero defined domains is stale: `win11` is defined and shut
-off on `legion`. The runner user has no libvirt access: the owner runs the matrix from the
-owner's own account, which is in the `libvirtd` group, with `LIBVIRT_DEFAULT_URI=qemu:///system`. The guest is a test target, never a build host: the Windows build is a
+off on `legion`. `systemd/legion-pb.nix` enables libvirtd and does not put the runner user `pb-runner` in the
+`libvirtd` group, so no runner job reaches `qemu:///system`; `win-matrix-run.sh` calls `virsh`
+without `-c`, so whoever runs it sets `LIBVIRT_DEFAULT_URI=qemu:///system`. The guest is a test target, never a build host: the Windows build is a
 Linux cross-compile. Give the nvram `format='qcow2'` rather than raw, because
 libvirt refuses an internal snapshot for a pflash domain whose nvram is not qcow2,
 and the `clean-baseline` snapshot the matrix reverts to depends on it. The matrix reverts **once** and runs the
