@@ -14,12 +14,19 @@
 //  a. the method list, from the shipped AGENT_METHODS (an empty list is a broken instrument, never a pass);
 //  b. the mechanism of each method, from the section's AGENT_NATIVE_ROWS and the child's AGENT_RUN keys
 //     (GroupActorChild.sys.mjs): every method in exactly one, nothing served outside the list;
-//  c. the visibility reads, from the comment-stripped source: every `style.visibility ===` or `!==` comparison
-//     must sit inside overlayShownToUser, whose own comparison is the positive control.
+//  c. the visibility reads, from the acorn AST of the whole source: every read of `visibility` on a `.style` member or a
+//     getComputedStyle(...) result (dot or bracket, any comparison, a switch, a bare read; plain assignments excluded),
+//     every getPropertyValue("visibility") call and every destructured `visibility` must sit inside
+//     overlayShownToUser, whose own read is the positive control;
+//  d. the page-work callers, from the same AST: the section's functions that do page work on an overlay (getActor,
+//     sendQuery, drawSnapshot, print, Services.cookies, Services.wm, the webTab navigation calls) and every section
+//     function that reaches them, closed over references; every reference to that set, and every agent-actor query by
+//     name, anywhere in the file, must sit in handleWebTabAgent (the wall the scenarios prove) or in a ratified entry
+//     with exactly its listed names (RATIFIED_PAGE_WORK), compared as set equality both ways.
 //
 // Red on: any of the 40 methods doing page work (actor, drawSnapshot, cookie, navigation, dialog or print calls) for
 // a user tab, an unknown id, another frontend's tab, an agent tab whose page is not in the agent container, or a
-// stopped tab; a click not reaching the actor once or a screenshot not drawn once at the device pixel ratio; a method
+// stopped tab; a second entry point into agent page work (d); a click not reaching the actor once or a screenshot not drawn once at the device pixel ratio; a method
 // outside AGENT_METHODS or bad params accepted; the flag honoured on an already-open tab or a malformed flag accepted;
 // the usercontextid attribute missing, set after appendChild or set on a user overlay; a cookie-service call without
 // the agent userContextId; Stop not aborting an in-flight call or not pushing active false and stopped true; the mark
@@ -216,6 +223,7 @@ export function makeWorld(sliced, { dpr = 2 } = {}) {
         devicePixelRatio: dpr, innerWidth: 1600, innerHeight: 1000,
         setTimeout: (fn, ms) => clock.setTimeout(fn, ms), clearTimeout: id => clock.clearTimeout(id),
         addEventListener: (type, fn) => { if (type === 'focus') focusListeners.push(fn); },
+        getComputedStyle: el => el.style,
         DOMRect: class { constructor(x, y, w, h) { Object.assign(this, { x, y, width: w, height: h }); } },
     };
     const doc = {
@@ -237,7 +245,8 @@ export function makeWorld(sliced, { dpr = 2 } = {}) {
         const attrs = new Map();
         // The page the overlay shows: the cookie rows act only on its site (agent-browser-03).
         const browser = { tabIdHint, appended: false, docShellIsActive: false, ownerDocument: doc, removed: false, attrs, currentURI: { host: 'example.com', spec: 'https://example.com/' } };
-        browser.style = {};
+        // A style declaration: plain properties plus getPropertyValue, so a planted read of any form runs.
+        browser.style = Object.defineProperty({}, 'getPropertyValue', { value(name) { return this[name] ?? ''; } });
         browser.setAttribute = (name, value) => { attrs.set(name, value); rec.attrs.push({ browser, name, value, appended: browser.appended }); };
         browser.getAttribute = name => (attrs.has(name) ? attrs.get(name) : null);
         browser.remove = () => { browser.removed = true; };
@@ -924,24 +933,179 @@ export function receiverPlants(text) {
     return plants;
 }
 
-/** Structural clause (A1): no raw `style.visibility` comparison outside overlayShownToUser. */
+/** walk with the ancestor chain: visit(node, ancestors), ancestors[0] the root. */
+function walkAncestors(node, visit, ancestors = []) {
+    if (node === null || typeof node !== 'object') return;
+    if (Array.isArray(node)) { node.forEach(n => walkAncestors(n, visit, ancestors)); return; }
+    if (typeof node.type === 'string') visit(node, ancestors);
+    const next = typeof node.type === 'string' ? [...ancestors, node] : ancestors;
+    for (const key of Object.keys(node)) {
+        if (key !== 'loc') walkAncestors(node[key], visit, next);
+    }
+}
+
+const propName = m => (m.computed ? (m.property.type === 'Literal' ? String(m.property.value) : null) : m.property.name);
+const calleeProp = call => (call.callee.type === 'MemberExpression' ? propName(call.callee) : call.callee.type === 'Identifier' ? call.callee.name : null);
+
+/**
+ * Structural clause (A1): every read of an overlay's visibility sits inside overlayShownToUser. A read is, on the
+ * acorn AST of the whole source: a member `visibility` (dot or bracket, optional chain included) of a `.style` member
+ * or of a getComputedStyle(...) result, anywhere but the left side of a plain assignment (a comparison of any
+ * strength, a switch discriminant, a truthiness test, a bare read); a getPropertyValue("visibility") call; and a
+ * `visibility` key destructured from such an object. The predicate's own read is the positive control.
+ */
 export function visibilityReads(text) {
-    const src = stripComments(text);
-    const predicate = /function overlayShownToUser\([^)]*\)\s*\{[\s\S]*?\n\}/.exec(src);
-    if (!predicate) {
-        return ['broken instrument: function overlayShownToUser was not found, so the raw-read count has no positive control'];
+    let ast;
+    try {
+        ast = acorn.parse(text, { ecmaVersion: 'latest', sourceType: 'module', locations: true });
+    } catch (err) {
+        return [`broken instrument: ${API} does not parse (${err.message})`];
     }
-    if (!/\.style\.visibility\s*[!=]==/.test(predicate[0])) {
-        return ['broken instrument: overlayShownToUser carries no style.visibility comparison, so the count has no positive control'];
+    let predicate = null;
+    walk(ast, n => { if (!predicate && n.type === 'FunctionDeclaration' && n.id?.name === 'overlayShownToUser') predicate = n; });
+    if (!predicate) return ['broken instrument: function overlayShownToUser was not found, so the raw-read count has no positive control'];
+    const styleLike = o => o && ((o.type === 'MemberExpression' && propName(o) === 'style') || (o.type === 'CallExpression' && calleeProp(o) === 'getComputedStyle'));
+    const reads = [];
+    walkAncestors(ast, (n, anc) => {
+        const parent = anc.at(-1);
+        if (n.type === 'MemberExpression' && propName(n) === 'visibility' && styleLike(n.object)) {
+            if (parent?.type === 'AssignmentExpression' && parent.operator === '=' && parent.left === n) return;
+            reads.push(n);
+        } else if (n.type === 'CallExpression' && calleeProp(n) === 'getPropertyValue' && n.arguments[0]?.type === 'Literal' && n.arguments[0].value === 'visibility') {
+            reads.push(n);
+        } else if (n.type === 'ObjectPattern' && n.properties.some(p => p.type === 'Property' && (p.key.name === 'visibility' || p.key.value === 'visibility'))) {
+            const init = parent?.type === 'VariableDeclarator' ? parent.init : parent?.type === 'AssignmentExpression' ? parent.right : null;
+            if (styleLike(init)) reads.push(n);
+        }
+    });
+    const inside = r => r.start >= predicate.start && r.end <= predicate.end;
+    if (!reads.some(inside)) return ['broken instrument: overlayShownToUser carries no visibility read, so the count has no positive control'];
+    const lines = text.split('\n');
+    return reads.filter(r => !inside(r)).map(r => `visibility: a raw visibility read outside overlayShownToUser at ${API}:${r.loc.start.line}: ${lines[r.loc.start.line - 1].trim().slice(0, 120)}`);
+}
+
+// ---------------------------------------------------------------------------
+// The page-work caller clause (harness-static-browser-02): the wall is proven through handleWebTabAgent's arm, so
+// nothing else may reach agent page work. Derived from the source, compared as set equality.
+
+const AGENT_WALL = 'handleWebTabAgent';
+const AGENT_ACTOR_LITERALS = ['PowerBrowserAgent', 'PowerBrowserAgent:Run'];
+// Ratified entry points outside the wall, each with the exact page-work names it may reach, compared as set equality
+// (an entry or a name added is red, one gone is stale and red). Not an agent request: chrome's own teardown.
+const RATIFIED_PAGE_WORK = new Map([
+    // 66-06: a window-modal page prompt outlives its removed overlay, so closing any tab cancels the prompt it opened.
+    ['PowerBrowserAPI.webTabClose', ['agentDialogWindow']],
+]);
+
+/**
+ * The page-work set and its entry points, derived from the acorn AST of the whole source:
+ *  - seeds: each top-level function or const of the agent section whose own body does page work on an overlay (a
+ *    getActor, sendQuery, drawSnapshot or print call; a Services.cookies or Services.wm read; a PowerBrowserAPI
+ *    webTabNavigate, webTabBack, webTabForward or webTabReload call);
+ *  - closure: every other top-level function or const of the section that references a member of the set, except the
+ *    wall (handleWebTabAgent), until nothing changes; the native-row table is a member like any function;
+ *  - references: every identifier reference to a member anywhere in the file, and every getActor or sendQuery call
+ *    anywhere that names the agent actor or its run message (by constant or by literal), attributed to its enclosing
+ *    top-level declaration (a PowerBrowserAPI method by its key).
+ * Red unless the entry points (the contexts of those references that are not themselves members) equal
+ * { handleWebTabAgent } plus RATIFIED_PAGE_WORK, each ratified one reaching exactly its listed names: a second caller
+ * is an entry point outside the wall, a ratified one gone is stale, and none at the wall means it reaches nothing.
+ */
+export function pageWorkCallers(text) {
+    let ast;
+    try {
+        ast = acorn.parse(text, { ecmaVersion: 'latest', sourceType: 'module', locations: true });
+    } catch (err) {
+        return { failures: [`broken instrument: ${API} does not parse (${err.message})`] };
     }
-    const failures = [];
-    for (const m of src.matchAll(/\.style\.visibility\s*[!=]==/g)) {
-        if (m.index < predicate.index || m.index > predicate.index + predicate[0].length) {
-            const line = src.slice(0, m.index).split('\n').length;
-            failures.push(`visibility: a raw style.visibility comparison outside overlayShownToUser at stripped line ${line}: ${src.split('\n')[line - 1].trim().slice(0, 120)}`);
+    const start = text.indexOf(SECTION_START);
+    const end = text.indexOf(SECTION_END);
+    const decls = new Map();
+    for (const st of ast.body) {
+        const d = st.type === 'ExportNamedDeclaration' ? st.declaration : st;
+        if (!d || d.start < start || d.end > end) continue;
+        if (d.type === 'FunctionDeclaration') decls.set(d.id.name, d);
+        if (d.type === 'VariableDeclaration') for (const v of d.declarations) if (v.id.type === 'Identifier' && v.init) decls.set(v.id.name, v);
+    }
+    const member = (n, object, prop) => n.type === 'MemberExpression' && n.object.type === 'Identifier' && n.object.name === object && propName(n) === prop;
+    const doesPageWork = node => {
+        let found = false;
+        walk(node, n => {
+            if (found) return;
+            if (n.type === 'CallExpression' && ['getActor', 'sendQuery', 'drawSnapshot', 'print'].includes(calleeProp(n)) && n.callee.type === 'MemberExpression') found = true;
+            if (member(n, 'Services', 'cookies') || member(n, 'Services', 'wm')) found = true;
+            if (n.type === 'MemberExpression' && n.object.type === 'Identifier' && n.object.name === 'PowerBrowserAPI' && /^webTab(Navigate|Back|Forward|Reload)$/.test(propName(n) ?? '')) found = true;
+        });
+        return found;
+    };
+    const references = node => {
+        const names = new Set();
+        walkAncestors(node, (n, anc) => {
+            const parent = anc.at(-1);
+            if (n.type !== 'Identifier') return;
+            if (parent?.type === 'MemberExpression' && parent.property === n && !parent.computed) return;
+            if (parent?.type === 'Property' && parent.key === n && !parent.computed && !parent.shorthand) return;
+            names.add(n.name);
+        });
+        return names;
+    };
+    const work = new Set([...decls].filter(([name, d]) => name !== AGENT_WALL && doesPageWork(d)).map(([name]) => name));
+    if (!work.size) return { failures: ['broken instrument: no function of the agent section does page work, so no caller set is derived'] };
+    for (let grew = true; grew;) {
+        grew = false;
+        for (const [name, d] of decls) {
+            if (name === AGENT_WALL || work.has(name)) continue;
+            if ([...references(d)].some(r => work.has(r))) { work.add(name); grew = true; }
         }
     }
-    return failures;
+    // The enclosing top-level declaration of a node: a function or const by name, a PowerBrowserAPI method by its key.
+    const contextOf = anc => {
+        const top = anc[1];
+        if (!top) return '(module)';
+        const d = top.type === 'ExportNamedDeclaration' ? top.declaration : top;
+        if (d?.type === 'FunctionDeclaration' || d?.type === 'ClassDeclaration') return d.id.name;
+        if (d?.type === 'VariableDeclaration') {
+            const v = d.declarations.find(x => anc.includes(x));
+            const name = v?.id?.name ?? '(module)';
+            const prop = anc.find(x => x.type === 'Property' && anc.indexOf(x) > anc.indexOf(v) && !x.computed && x.key?.type === 'Identifier');
+            return prop && !decls.has(name) ? `${name}.${prop.key.name}` : name;
+        }
+        return '(module)';
+    };
+    const sites = [];
+    walkAncestors(ast, (n, anc) => {
+        const parent = anc.at(-1);
+        if (n.type === 'Identifier' && work.has(n.name)) {
+            if (parent?.type === 'MemberExpression' && parent.property === n && !parent.computed) return;
+            if (parent?.type === 'Property' && parent.key === n && !parent.computed && !parent.shorthand) return;
+            if ((parent?.type === 'FunctionDeclaration' || parent?.type === 'VariableDeclarator') && parent.id === n) return;
+            sites.push({ ref: n.name, context: contextOf(anc), line: n.loc.start.line });
+        }
+        if (n.type === 'CallExpression' && ['getActor', 'sendQuery'].includes(calleeProp(n))) {
+            const arg = n.arguments[0];
+            if ((arg?.type === 'Identifier' && ['AGENT_ACTOR_NAME', 'AGENT_RUN_MESSAGE'].includes(arg.name)) || (arg?.type === 'Literal' && AGENT_ACTOR_LITERALS.includes(arg.value))) {
+                sites.push({ ref: `${calleeProp(n)}(${arg.name ?? JSON.stringify(arg.value)})`, context: contextOf(anc), line: n.loc.start.line });
+            }
+        }
+    });
+    const failures = [];
+    const entries = new Map();
+    for (const s of sites) {
+        if (work.has(s.context)) continue;
+        if (!entries.has(s.context)) entries.set(s.context, []);
+        entries.get(s.context).push(s);
+    }
+    for (const [context, list] of entries) {
+        if (context === AGENT_WALL) continue;
+        const allowed = RATIFIED_PAGE_WORK.get(context) ?? [];
+        for (const s of list.filter(x => !allowed.includes(x.ref))) {
+            failures.push(`page-work callers: ${context} reaches agent page work (${s.ref} at ${API}:${s.line}) outside ${AGENT_WALL}, the walled handler`);
+        }
+        for (const ref of allowed.filter(r => !list.some(x => x.ref === r))) failures.push(`page-work callers: stale ratified entry: ${context} no longer reaches ${ref}`);
+    }
+    for (const context of [...RATIFIED_PAGE_WORK.keys()].filter(c => !entries.has(c))) failures.push(`page-work callers: stale ratified entry: ${context} reaches no agent page work`);
+    if (!entries.has(AGENT_WALL)) failures.push(`page-work callers: ${AGENT_WALL} reaches no agent page work, so the wall the scenarios prove guards nothing (derived page work: ${[...work].join(', ')})`);
+    return { failures, work: [...work].sort(), entries: [...entries.keys()] };
 }
 
 // ---------------------------------------------------------------------------
@@ -1244,9 +1408,10 @@ export async function checkSource(text, childText, dispatchFiles, registry = nul
     const walls = await wallsClause(sliced, upstream);
     const clipboard = await clipboardClause(sliced, text, childText, upstream);
     const permissions = permissionsClause(upstream, branding);
-    const failures = [...clipboard.failures, ...permissions.failures, ...await runScenarios(sliced, childText, 2), ...await runScenarios(sliced, childText, 1), ...visibilityReads(text), ...table.failures, ...login.failures, ...openFailures, ...walls.failures];
+    const callers = pageWorkCallers(text);
+    const failures = [...clipboard.failures, ...permissions.failures, ...await runScenarios(sliced, childText, 2), ...await runScenarios(sliced, childText, 1), ...visibilityReads(text), ...callers.failures, ...table.failures, ...login.failures, ...openFailures, ...walls.failures];
     const native = (() => { try { return Object.keys(makeWorld(sliced).AGENT_NATIVE_ROWS ?? {}).length; } catch { return 0; } })();
-    return { failures: [...new Set(failures)], native, loginSkip: !!login.skip, paths: opens.paths ?? [], wheres: opens.wheres ?? 0, walls, clipboard, permissions };
+    return { failures: [...new Set(failures)], native, loginSkip: !!login.skip, paths: opens.paths ?? [], wheres: opens.wheres ?? 0, walls, clipboard, permissions, callers };
 }
 
 // ---------------------------------------------------------------------------
@@ -1299,7 +1464,14 @@ async function selfTest() {
         ['a method arm without the wall', { api: swap('  if (verdict) {\n    return { ok: true, kind, where: verdict };\n  }\n', '') }, 'wall: browser.click on a user tab'],
         ['the flag honoured on an existing tab', { api: swap('    if (webTabs.has(tabId)) {\n', '    if (webTabs.has(tabId)) {\n      if (agent === true) { webTabs.get(tabId).agent = true; }\n') }, 'flag: webTabOpen with agent on an already-open user tab'],
         ['a user tab parked', { api: swap('  const parked = !visible && entry.agent === true;', '  const parked = !visible;') }, 'parking: a user tab was parked'],
-        ['a raw style.visibility read added', { api: swap('    const wasVisible = overlayShownToUser(entry.browser);', '    const wasVisible = entry.browser.style.visibility === "visible";') }, 'visibility: a raw style.visibility comparison outside overlayShownToUser'],
+        ['a raw style.visibility read added', { api: swap('    const wasVisible = overlayShownToUser(entry.browser);', '    const wasVisible = entry.browser.style.visibility === "visible";') }, 'visibility: a raw visibility read outside overlayShownToUser'],
+        // harness-static-browser-09: every read form, not only === and !==.
+        ['a loose == visibility read added', { api: swap('    const wasVisible = overlayShownToUser(entry.browser);', '    const wasVisible = entry.browser.style.visibility == "visible";') }, 'visibility: a raw visibility read outside overlayShownToUser'],
+        ['a switch over visibility added', { api: swap('    const wasVisible = overlayShownToUser(entry.browser);', '    let wasVisible;\n    switch (entry.browser.style.visibility) { case "visible": wasVisible = true; break; default: wasVisible = false; }') }, 'visibility: a raw visibility read outside overlayShownToUser'],
+        ['a bracket visibility read added', { api: swap('    const wasVisible = overlayShownToUser(entry.browser);', '    const wasVisible = entry.browser.style["visibility"] !== "hidden";') }, 'visibility: a raw visibility read outside overlayShownToUser'],
+        ['a computed-style visibility read added', { api: swap('    const wasVisible = overlayShownToUser(entry.browser);', '    const wasVisible = entry.browser.ownerDocument.defaultView.getComputedStyle(entry.browser).visibility === "visible";') }, 'visibility: a raw visibility read outside overlayShownToUser'],
+        ['a getPropertyValue visibility read added', { api: swap('    const wasVisible = overlayShownToUser(entry.browser);', '    const wasVisible = entry.browser.style.getPropertyValue("visibility") === "visible";') }, 'visibility: a raw visibility read outside overlayShownToUser'],
+        ['a destructured visibility read added', { api: swap('    const wasVisible = overlayShownToUser(entry.browser);', '    const { visibility: shownNow } = entry.browser.style;\n    const wasVisible = shownNow === "visible";') }, 'visibility: a raw visibility read outside overlayShownToUser'],
         ['Stop not aborting an in-flight call', { api: swap('    call.abort(agentFailed("browser_owner_unavailable"));\n', '') }, 'stop: Stop did not abort an in-flight call'],
         ['the idle timer not clearing', { api: swap('    control.idleTimer = null;\n    agentSetActive(tabId, entry, false);\n  }, AGENT_IDLE_MS);', '    control.idleTimer = null;\n  }, AGENT_IDLE_MS);') }, 'mark: 20000 ms without a call did not clear active'],
         ['the container attribute set after append', { api: s => swap('    doc.body.appendChild(browser);\n', '    doc.body.appendChild(browser);\n    if (agent === true) { browser.setAttribute("usercontextid", String(userContextId)); }\n')(swap('{ "usercontextid": String(userContextId), messagemanagergroup', '{ messagemanagergroup')(s)) }, 'the usercontextid attribute was set after appendChild'],
@@ -1308,6 +1480,13 @@ async function selfTest() {
         ['the parked-focus guard removed', { api: swap('  back?.focus();\n', '') }, 'focus: focus landing on a parked agent overlay was not returned'],
         ['a table accepting a duplicate page', { dispatch: swap("            if (byPage.has(pageId)) return 'duplicate-page';\n", '') }, 'page-table: the table accepted a duplicate page'],
         ['a table accepting a second page for a tab', { dispatch: swap("            if (byTab.has(tabId)) return 'duplicate-tab';\n", '') }, 'page-table: the table accepted a second page for a tab'],
+        // harness-static-browser-02: a second way into agent page work, past the wall.
+        ['a privileged arm calling a native row directly', { api: swap('    case "webTabAgent": {\n      return handleWebTabAgent(data, actorRef);\n    }\n', '    case "webTabAgentScreenshot": {\n      return AGENT_NATIVE_ROWS["browser.screenshot"](webTabs.get(data.tabId), {}, data.tabId);\n    }\n    case "webTabAgent": {\n      return handleWebTabAgent(data, actorRef);\n    }\n') }, 'page-work callers: handleWebTabAction reaches agent page work (AGENT_NATIVE_ROWS'],
+        ['a section helper that runs a child row, called from outside the wall', { api: s => swap('    case "webTabAgent": {\n      return handleWebTabAgent(data, actorRef);\n    }\n', '    case "webTabAgentPeek": {\n      return agentPeek(webTabs.get(data.tabId));\n    }\n    case "webTabAgent": {\n      return handleWebTabAgent(data, actorRef);\n    }\n')(swap('async function handleWebTabAgent(data, actorRef) {', 'function agentPeek(entry) {\n  return agentRunInChild(entry, "browser.snapshot", {});\n}\n\nasync function handleWebTabAgent(data, actorRef) {')(s)) }, 'page-work callers: handleWebTabAction reaches agent page work (agentPeek'],
+        ['a raw agent actor query outside the section', { api: swap('    case "webTabAgent": {\n      return handleWebTabAgent(data, actorRef);\n    }\n', '    case "webTabAgentRaw": {\n      return webTabs.get(data.tabId).browser.browsingContext.currentWindowGlobal.getActor("PowerBrowserAgent").sendQuery("PowerBrowserAgent:Run", data);\n    }\n    case "webTabAgent": {\n      return handleWebTabAgent(data, actorRef);\n    }\n') }, 'page-work callers: handleWebTabAction reaches agent page work (getActor("PowerBrowserAgent")'],
+        ['the ratified close reaching a second page-work name', { api: swap('      agentDialogWindow(entry)?.document.getElementById("commonDialog")?.cancelDialog();', '      agentDialogWindow(entry)?.document.getElementById("commonDialog")?.cancelDialog();\n      agentScreenshot(entry, {}, false);') }, 'page-work callers: PowerBrowserAPI.webTabClose reaches agent page work (agentScreenshot'],
+        ['the ratified close no longer cancelling the prompt', { api: swap('      agentDialogWindow(entry)?.document.getElementById("commonDialog")?.cancelDialog();', '      void entry;') }, 'page-work callers: stale ratified entry: PowerBrowserAPI.webTabClose'],
+        ['the wall reaching no page work', { api: swap('    const native = AGENT_NATIVE_ROWS[data.method];\n    outcome = native ? await native(entry, data.params, data.tabId) : await agentRunInChild(entry, data.method, data.params);', '    const native = null;\n    outcome = agentFailed("browser_error");') }, 'page-work callers: handleWebTabAgent reaches no agent page work'],
         ['the dispatch module absent', { files: () => null }, 'page-table: theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts is absent'],
         // agent-browser-03: cookie rows act only on the current site and withhold httpOnly values.
         ['cookie rows not limited to the current site', { api: swap('  return site && agentSiteOf(host) === site ? host : "";', '  return host;') }, 'cookies: a get for another site answered'],
@@ -1428,7 +1607,7 @@ async function main() {
     const upstream = readUpstream();
     const registry = readOptional(LOGIN_REGISTRY);
     const idl = readOptional(IDL);
-    const { failures, native, loginSkip, paths, wheres, walls, clipboard, permissions } = await checkSource(text, child, files, registry, idl, upstream, readBranding());
+    const { failures, native, loginSkip, paths, wheres, walls, clipboard, permissions, callers } = await checkSource(text, child, files, registry, idl, upstream, readBranding());
     if (failures.length) {
         console.error(`${NAME}: FAIL -- the chrome side of the Orca agent bridge can reach a tab it did not create as an agent tab, or the drift below.`);
         failures.forEach(f => console.error(`  ${f}`));
@@ -1447,6 +1626,7 @@ async function main() {
         'the flag and the container are set only at creation and before append; cookies stay in the agent container, act only on the current site and withhold httpOnly values; Stop aborts and lasts; the mark clears after 20000 ms; ' +
         'agent overlays sit in their own message manager group with no autocomplete popup and answer only alert/confirm/prompt dialogs; ' +
         `unshown agent tabs are parked, never hold the focus, and user tabs never park; every visibility read goes through overlayShownToUser; ` +
+        `the ${callers.work.length} page-work functions derived from the section are reached only from ${AGENT_WALL} (the wall) and ${[...RATIFIED_PAGE_WORK.keys()].join(', ')} (ratified); ` +
         `D-35: ${paths.length} open paths derived (${paths.join(', ')}) open nothing for an agent opener at any of ${wheres} OPEN_* locations or ${LINK_WHERES.length} link wheres, ` +
         `refusals log once without the URL and fail the command in flight, and agent overlays load with SANDBOXED_AUXILIARY_NAVIGATION; ` +
         `D-37: agent overlays load with ${walls.dl.names.join(', ')} (from ${walls.dl.from}) and a cancelled agent download fails the command, ` +
