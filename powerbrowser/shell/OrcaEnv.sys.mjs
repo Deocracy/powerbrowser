@@ -619,3 +619,222 @@ export function logoAnswerFor({ senderPort, orcaPort, orcaState, embeddedByShell
   }
   return { src: markDataUri, alt: ORCA_LOGO_ALT, selectors: [...selectors] };
 }
+
+// ---- orcad's tie to PowerBrowser's lifetime (audit fixes orcad-hosting-01, orcad-hosting-08, 62-WR-01) ----
+// OrcaService ends orcad, its terminal daemon and the agents under it on a granted quit. A crash, a SIGKILL or an
+// OOM kill of PowerBrowser runs none of that code, so the tie must hold without PowerBrowser running anything at
+// exit. Subprocess always gives a child a stdin pipe whose only writer is PowerBrowser (the pipe is close-on-exec,
+// so no other child holds it): when PowerBrowser ends for any reason the kernel closes that writer and orcad reads
+// end-of-file. The Theia backend's parent-death watchdog rests on the same fact. orcad itself has no such watch,
+// and its own shutdown only disconnects from the detached daemon, so a module preloaded into orcad's Node (--import,
+// no change to Orca's source) carries it:
+//  - end-of-file on stdin: PowerBrowser is gone. orcad is asked to stop (SIGTERM, its own graceful shutdown), and
+//    as it exits the module ends its descendants and the terminal daemon OrcaService named, snapshot first,
+//    SIGTERM to the roots, then SIGKILL for what is left after the grace, each by pid plus start ticks.
+//  - orcad exiting before OrcaService accepted its ready line (a failed start): the same end, for its own
+//    descendants, so a failed start leaves no daemon behind. After acceptance an orcad exit ends nothing: an orcad
+//    crash leaves the daemon and its agents for the next orcad to adopt, and only a quit ends agents (D-07).
+// The module arms only in the process whose entry file is orcad's and whose stdin is a pipe: orcad starts its daemon
+// with its own Node flags (daemon-launched-child-spawn.ts), and that daemon must load the module inertly.
+
+/** The kind of the one line OrcaService writes to orcad's stdin once it accepts a ready line. */
+export const ORCAD_ACCEPTED_KIND = "pb-orcad-accepted";
+/** How long the watch waits for SIGTERMed descendants before it kills what is left (OrcaService's DAEMON_GRACE_MS). */
+export const ORCAD_WATCH_GRACE_MS = 3000;
+/** The latest the watch lets orcad's own shutdown run after end-of-file before it exits orcad itself. */
+export const ORCAD_WATCH_EXIT_DEADLINE_MS = 20000;
+
+/** The watch module's source for one orcad entry file. Pure text; OrcaService never evaluates it. */
+export function orcadParentWatchSource({ orcadMain } = {}) {
+  if (typeof orcadMain !== "string" || !orcadMain) {
+    throw new Error("orcadParentWatchSource: no orcad entry file");
+  }
+  return `import { fstatSync, readdirSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { isMainThread } from "node:worker_threads";
+const MAIN = ${JSON.stringify(orcadMain)};
+const KIND = ${JSON.stringify(ORCAD_ACCEPTED_KIND)};
+const GRACE_MS = ${ORCAD_WATCH_GRACE_MS};
+const DEADLINE_MS = ${ORCAD_WATCH_EXIT_DEADLINE_MS};
+const isArmed = () => {
+  try {
+    const stdin = fstatSync(0);
+    return isMainThread && process.argv[1] === resolve(MAIN) && (stdin.isFIFO() || stdin.isSocket());
+  } catch {
+    return false;
+  }
+};
+if (isArmed()) {
+  const statOf = pid => {
+    try {
+      const text = readFileSync("/proc/" + pid + "/stat", "utf8");
+      const fields = text.slice(text.lastIndexOf(")") + 2).split(" ");
+      return { pid, ppid: Number(fields[1]), ticks: fields[19] ?? null };
+    } catch {
+      return null;
+    }
+  };
+  const table = () => {
+    const rows = new Map();
+    let names = [];
+    try {
+      names = readdirSync("/proc");
+    } catch {
+      names = [];
+    }
+    for (const name of names) {
+      const pid = Number(name);
+      const row = Number.isInteger(pid) && pid > 0 ? statOf(pid) : null;
+      if (row) {
+        rows.set(pid, row);
+      }
+    }
+    return rows;
+  };
+  const treeOf = (roots, rows) => {
+    const children = new Map();
+    for (const row of rows.values()) {
+      if (!children.has(row.ppid)) {
+        children.set(row.ppid, []);
+      }
+      children.get(row.ppid).push(row.pid);
+    }
+    const seen = new Set();
+    const stack = roots.filter(pid => rows.has(pid));
+    while (stack.length) {
+      const pid = stack.pop();
+      if (!seen.has(pid)) {
+        seen.add(pid);
+        stack.push(...(children.get(pid) ?? []));
+      }
+    }
+    return [...seen].map(pid => rows.get(pid));
+  };
+  const same = row => {
+    const now = statOf(row.pid);
+    return now !== null && row.ticks !== null && now.ticks === row.ticks;
+  };
+  const signal = (row, name) => {
+    if (same(row)) {
+      try {
+        process.kill(row.pid, name);
+      } catch {
+        // Gone between the check and the signal.
+      }
+    }
+  };
+  const pause = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  let accepted = false;
+  let parentGone = false;
+  let daemon = null;
+  let pending = "";
+  const endTree = () => {
+    const rows = table();
+    const roots = [process.pid];
+    if (daemon && rows.get(daemon.pid)?.ticks === daemon.ticks) {
+      roots.push(daemon.pid);
+    }
+    const tree = treeOf(roots, rows).filter(row => row.pid !== process.pid);
+    for (const row of tree) {
+      if (row.ppid === process.pid || (daemon && row.pid === daemon.pid)) {
+        signal(row, "SIGTERM");
+      }
+    }
+    for (let waited = 0; waited < GRACE_MS && tree.some(same); waited += 100) {
+      pause(100);
+    }
+    for (const row of tree) {
+      signal(row, "SIGKILL");
+    }
+  };
+  process.on("exit", () => {
+    if (parentGone || !accepted) {
+      endTree();
+    }
+  });
+  const onLine = line => {
+    let record = null;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      return;
+    }
+    if (record && record.kind === KIND) {
+      accepted = true;
+      const pid = record.daemonPid;
+      daemon = Number.isInteger(pid) && pid > 0 && record.daemonTicks != null ? { pid, ticks: String(record.daemonTicks) } : null;
+    }
+  };
+  const gone = () => {
+    if (parentGone) {
+      return;
+    }
+    parentGone = true;
+    setTimeout(() => process.exit(1), DEADLINE_MS).unref();
+    if (process.listenerCount("SIGTERM") > 0) {
+      process.kill(process.pid, "SIGTERM");
+    } else {
+      process.exit(1);
+    }
+  };
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", chunk => {
+    pending += chunk;
+    for (let at = pending.indexOf("\\n"); at >= 0; at = pending.indexOf("\\n")) {
+      onLine(pending.slice(0, at));
+      pending = pending.slice(at + 1);
+    }
+  });
+  process.stdin.on("end", gone);
+  process.stdin.on("error", gone);
+  process.stdin.resume();
+  if (typeof process.stdin.unref === "function") {
+    process.stdin.unref();
+  }
+}
+`;
+}
+
+/** The Node flags that preload the watch into orcad, placed before orcad's entry file. */
+export function buildOrcadWatchArgs({ orcadMain } = {}) {
+  return ["--import", `data:text/javascript,${encodeURIComponent(orcadParentWatchSource({ orcadMain }))}`];
+}
+
+/** The line OrcaService writes to orcad's stdin once it accepts the ready line: the daemon the watch may end. */
+export function orcadAcceptedLine({ daemonPid, daemonTicks } = {}) {
+  const pid = Number.isInteger(daemonPid) && daemonPid > 0 ? daemonPid : null;
+  return JSON.stringify({ kind: ORCAD_ACCEPTED_KIND, daemonPid: pid, daemonTicks: pid !== null && daemonTicks != null ? String(daemonTicks) : null });
+}
+
+// ---- Who holds orcad's port (audit fix orcad-hosting-03, diagnostics part) ----
+
+/**
+ * The uid of the listener on 127.0.0.1:<port> or 0.0.0.0:<port>, from the text of /proc/net/tcp, or null. A row
+ * is "sl local_address rem_address st tx:rx tr:tm retrnsmt uid ...", the address in hex with the IPv4 address
+ * little-endian, and st 0A is LISTEN.
+ */
+export function portHolderUidOf(tcpText, port) {
+  if (typeof tcpText !== "string" || !Number.isInteger(port)) {
+    return null;
+  }
+  const hexPort = port.toString(16).toUpperCase().padStart(4, "0");
+  for (const line of tcpText.split("\n").slice(1)) {
+    const fields = line.trim().split(/\s+/);
+    if (fields.length < 8 || fields[3] !== "0A") {
+      continue;
+    }
+    if (fields[1] === `0100007F:${hexPort}` || fields[1] === `00000000:${hexPort}`) {
+      const uid = Number(fields[7]);
+      return Number.isInteger(uid) ? uid : null;
+    }
+  }
+  return null;
+}
+
+/** The diagnostics value for the port holder: whose program holds the port, or null when that is not known. */
+export function portHolderRowValue(holderUid, ownUid) {
+  if (!Number.isInteger(holderUid) || !Number.isInteger(ownUid)) {
+    return null;
+  }
+  return holderUid === ownUid ? "a program of this user" : `another user (uid ${holderUid})`;
+}

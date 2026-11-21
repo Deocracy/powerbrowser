@@ -415,7 +415,12 @@ export const OrcaService = {
       claudeAgentSdkDir: OrcaEnv.claudeAgentSdkDir({ profileDir, backendSettings }),
     });
     this._pushLog(`Claude agent SDK extension: ${environment[OrcaEnv.ORCAD_CLAUDE_AGENT_SDK_DIR_ENV] ? "enabled" : "disabled"}`);
-    const args = OrcaEnv.buildOrcadArgs({ orcadMain: this._orcadMain, port: this._port, webClientRoot: this._webClientRoot });
+    // Audit fix orcad-hosting-01: the watch preloaded ahead of orcad's entry file ties orcad, its daemon and
+    // the agents to this process's lifetime through the stdin pipe, a crash included (OrcaEnv).
+    const args = [
+      ...OrcaEnv.buildOrcadWatchArgs({ orcadMain: this._orcadMain }),
+      ...OrcaEnv.buildOrcadArgs({ orcadMain: this._orcadMain, port: this._port, webClientRoot: this._webClientRoot }),
+    ];
 
     let proc;
     try {
@@ -471,7 +476,7 @@ export const OrcaService = {
     ]);
 
     if (outcome.timeout) {
-      await endOwn();
+      await this._endFailedStart(proc, endOwn);
       return { ok: false, recoverable: true, step: "waiting for orcad to report ready", rows: [["Orca startup timeout", `${startupTimeoutMs} ms`]] };
     }
     if (!outcome.ready) {
@@ -490,11 +495,11 @@ export const OrcaService = {
     const ready = outcome.ready;
     const nodeMajor = Number(/^v?(\d+)\./.exec(ready.nodeVersion ?? "")?.[1]);
     if (!OrcaEnv.isLoopbackEndpoint(ready.boundEndpoint, this._port)) {
-      await endOwn();
+      await this._endFailedStart(proc, endOwn);
       return { ok: false, recoverable: false, step: "checking that orcad is bound to loopback", rows: [["Orca bound address", String(ready.boundEndpoint)], ["Orca port", this._port]] };
     }
     if (!(nodeMajor >= MIN_NODE_MAJOR)) {
-      await endOwn();
+      await this._endFailedStart(proc, endOwn);
       return { ok: false, recoverable: false, step: "checking the Node.js version orcad runs on", rows: [["Orca Node.js version", String(ready.nodeVersion)]] };
     }
 
@@ -516,6 +521,17 @@ export const OrcaService = {
     } catch (err) {
       // The next launch still finds orcad through its own lock; only the daemon record is lost.
       this._pushLog(`State file not written: ${messageOf(err)}`);
+    }
+    // Audit fix orcad-hosting-01: accepted. From here an orcad exit leaves the daemon for the next orcad to
+    // adopt, and the watch knows which daemon to end if this process dies (OrcaEnv.orcadParentWatchSource).
+    try {
+      await PowerBrowserAPI.writeStdinLine(proc, OrcaEnv.orcadAcceptedLine({ daemonPid: this._daemonPid, daemonTicks: this._daemonTicks }));
+    } catch (err) {
+      this._pushLog(`orcad's start was not confirmed to it: ${messageOf(err)}; an orcad exit now also ends its terminal daemon.`);
+    }
+    if (this._shuttingDown) {
+      await endOwn();
+      return { ok: false, recoverable: false, step: "stopping", rows: [] };
     }
     // Phase 63 (P63-26): after ready, so the EXT-02 wrapper never finds a data root no orcad serves yet.
     if (this._bridgeDir) {
@@ -624,16 +640,77 @@ export const OrcaService = {
     return this._stopPromise;
   },
 
+  /**
+   * The data-root, pairing and bundle files of the bridge folder (Phase 64, P64-34, 64-06), removed. Called
+   * first in a stop, on an unexpected orcad exit and before a Restart (audit fixes 62-WR-05,
+   * pairing-credentials-03), and again at the end of a stop (62-WR-03): a ready line that resolved while the
+   * stop ran may have written them after the first removal.
+   */
+  async _removeHandOff() {
+    for (const name of this._bridgeDir ? [OrcaEnv.ORCAD_DATA_ROOT_FILE, OrcaEnv.ORCA_WEB_PAIRING_FILE, OrcaEnv.ORCA_PANES_DIR_FILE] : []) {
+      await this._removeBridgeFile(name);
+    }
+  },
+
+  async _removeBridgeFile(name) {
+    if (!this._bridgeDir) {
+      return;
+    }
+    try {
+      await PowerBrowserAPI.removeStateFile(OrcaEnv.bridgeFileFor(this._bridgeDir, name, this._bridgePlatform));
+    } catch {
+      // Best-effort; the next ready overwrites them.
+    }
+  },
+
+  /**
+   * Audit fixes 62-WR-01 and orcad-hosting-08: a start refused after orcad may have started its terminal
+   * daemon. Ending orcad by its handle alone left that daemon running with no record, through quit. The
+   * tree under orcad is listed first, orcad is ended, then its children get SIGTERM and every listed row
+   * still alive after the grace gets SIGKILL, each by pid plus start ticks. A daemon this session already
+   * supervises, and everything under it, is kept (D-07): only a quit ends agents.
+   */
+  async _endFailedStart(proc, endOwn) {
+    const listed = await PowerBrowserProcesses.listProcessTree([proc.pid]);
+    const kept = new Set((await this._sameIdentity(this._daemonPid, this._daemonTicks)) ? [this._daemonPid] : []);
+    for (let grew = kept.size > 0; grew; ) {
+      grew = false;
+      for (const row of listed) {
+        if (!kept.has(row.pid) && kept.has(row.ppid)) {
+          kept.add(row.pid);
+          grew = true;
+        }
+      }
+    }
+    const rows = listed.filter(row => row.pid !== proc.pid && !kept.has(row.pid));
+    await endOwn();
+    for (const row of rows) {
+      if (row.ppid === proc.pid && (await this._sameIdentity(row.pid, row.startTicks))) {
+        PowerBrowserAPI.signalBarePid(row.pid, SIGTERM);
+      }
+    }
+    await this._endDaemon(null, null, rows);
+  },
+
+  /**
+   * Audit fix orcad-hosting-03 (diagnostics part): whose program holds orcad's port, as a diagnostics row, so
+   * a leftover of this user can be told from another account's listener. The socket table comes from
+   * PowerBrowserOrcaHosting.readLoopbackSocketTable (G1a handoff); without it there is no row.
+   */
+  async _portHolderRows() {
+    try {
+      const table = await PowerBrowserOrcaHosting.readLoopbackSocketTable();
+      const value = OrcaEnv.portHolderRowValue(OrcaEnv.portHolderUidOf(table?.tcp, this._port), table?.uid);
+      return value ? [["Orca port holder", value]] : [];
+    } catch {
+      return [];
+    }
+  },
+
   async _stopTree() {
     // Phase 64 (P64-34, 64-06): the data-root, pairing and bundle files go first. Nothing in them is needed once
     // stop begins, and a quit may end the process before the kill waits below return, which left them behind.
-    for (const name of this._bridgeDir ? [OrcaEnv.ORCAD_DATA_ROOT_FILE, OrcaEnv.ORCA_WEB_PAIRING_FILE, OrcaEnv.ORCA_PANES_DIR_FILE] : []) {
-      try {
-        await PowerBrowserAPI.removeStateFile(OrcaEnv.bridgeFileFor(this._bridgeDir, name, this._bridgePlatform));
-      } catch {
-        // Best-effort; the next ready overwrites them.
-      }
-    }
+    await this._removeHandOff();
     const graceMs = PowerBrowserAPI.getIntPref("powerbrowser.orca.killGraceMs", 16000);
     const proc = this._proc && this._proc.exitCode == null ? this._proc : null;
     const orcadPid = proc ? proc.pid : null;
