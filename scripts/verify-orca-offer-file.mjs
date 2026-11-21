@@ -16,8 +16,9 @@
 //            a port other than the web-client URL's are offer-endpoint; garbage text does not decode.
 //            Every fixture offer is synthetic.
 //   reasons  OFFER_REFUSAL_REASONS equals, as a set, the refusal half (offer-*) of the client reasons in
-//            orca-failure-copy.ts's ORCA_CLIENT_REASON_CLASS and, once lane p67-01 is merged, of OrcaEnv's
-//            ORCA_CLIENT_REASONS (a named SKIP of that half before).
+//            orca-failure-copy.ts's ORCA_CLIENT_REASON_CLASS and of OrcaEnv's ORCA_CLIENT_REASONS, read by
+//            importing OrcaEnv (never by its layout). Both files are tracked: either one missing, or OrcaEnv
+//            without ORCA_CLIENT_REASONS, is red "source moved".
 //   decode   When orca/ and theia/node_modules/typescript exist: Orca's parseWebPairingInput and
 //            readPairingInputFromLocation (src/renderer/src/web/web-pairing.ts, transpiled, P63-27) and
 //            decodeOffer return the same object for three synthetic hand-off texts. A named SKIP otherwise.
@@ -29,22 +30,26 @@
 //            compares the opened file's ino and dev with the judged stat before it reads, which closes the window
 //            between the lstat and the read (harness-static-hosting-06).
 //
-// A clause that cannot run (no mkfifo, OrcaEnv without ORCA_CLIENT_REASONS, no orca/ or typescript for the
+// A clause that cannot run because an untracked input is absent (no mkfifo; no orca/ or typescript for the
 // decode agreement) makes the row SKIP: exit 77 with one SKIP line (SKIP-PROTOCOL.md, harness-static-hosting-01).
+// A tracked input that is missing is red, never a SKIP. --root=<dir> runs the check over another tree (the
+// self-test's SKIP control uses it).
 //
 // --quick: text reads, a temp folder and an in-memory type strip. --self-test requires the clean tree green,
 // then plants faults in memory and requires each to go red naming its rule.
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createRequire, stripTypeScriptTypes } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { verdictExit } from './lib/skip-verdict.mjs';
+import { SKIP_EXIT, verdictExit } from './lib/skip-verdict.mjs';
 
 const NAME = 'orca-offer-file';
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const ROOT_ARG = process.argv.find(a => a.startsWith('--root='));
+const ROOT = ROOT_ARG ? resolve(ROOT_ARG.slice('--root='.length)) : resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const SELF = fileURLToPath(import.meta.url);
 const POLICY_REL = 'theia/extensions/orca-panes/src/node/offer-file-policy.ts';
 const BACKEND_REL = 'theia/extensions/orca-panes/src/node/orca-panes-backend-module.ts';
 const COPY_REL = 'theia/extensions/orca-panes/src/browser/failure/orca-failure-copy.ts';
@@ -72,6 +77,65 @@ function fixtureText({ endpoint = 'ws://127.0.0.1:26768/', urlPort = 26768, form
   const code = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   if (form === 'code') return code;
   return `http://127.0.0.1:${urlPort}/web-index.html#pairing=${encodeURIComponent(`orca://pair?code=${code}`)}`;
+}
+
+/**
+ * harness-static-hosting-06, follow-up: readNoFollow's no-follow read, judged on its body. The file is opened once with
+ * O_NOFOLLOW into a handle; the stat compared is that handle's own; a mismatch of the ino or of the dev refuses (an
+ * "or" of the two at the top level of the condition, whose branch throws); and the bytes are read through the same
+ * handle after the comparison, never by path. Returns fault texts.
+ */
+export function readerFaults(body, judged) {
+  const faults = [];
+  const open = /\b(?:const|let)\s+(\w+)\s*=\s*await\s+fs\.promises\.open\(([^;]*)\)\s*;/.exec(body);
+  if (!open) return ['readNoFollow opens no file handle this check can read (const <handle> = await fs.promises.open(...))'];
+  const handle = open[1];
+  if (!/\bO_NOFOLLOW\b/.test(open[2])) faults.push('readNoFollow opens the offer without O_NOFOLLOW, so a symlink swapped in after the lstat is followed');
+  const statM = new RegExp(`\\b(?:const|let)\\s+(\\w+)\\s*=\\s*await\\s+${handle}\\.stat\\(\\s*\\)`).exec(body);
+  if (!statM) faults.push(`readNoFollow does not stat the opened handle (${handle}.stat()), so the stat it compares can be of another file than the one it reads`);
+  const opened = statM?.[1];
+  const statAt = statM ? statM.index : -1;
+  if (/\bfs\.(?:promises\.)?(?:l?stat|fstat)(?:Sync)?\(/.test(body)) faults.push('readNoFollow stats by path or descriptor beside the handle, so the compared stat can be of another file');
+  // The guard: the if whose condition names <opened>.ino.
+  let guard = null;
+  for (const m of body.matchAll(/\bif\s*\(/g)) {
+    let depth = 0;
+    let i = m.index + m[0].length - 1;
+    for (; i < body.length; i += 1) {
+      if (body[i] === '(') depth += 1;
+      else if (body[i] === ')' && (depth -= 1) === 0) break;
+    }
+    const cond = body.slice(m.index + m[0].length, i);
+    if (opened && new RegExp(`\\b${opened}\\.ino\\b`).test(cond)) { guard = { cond, at: m.index, end: i }; break; }
+  }
+  const readM = new RegExp(`\\b${handle}\\.(?:readFile|read)\\(`).exec(body);
+  if (opened) {
+    if (!guard) faults.push(`readNoFollow no longer compares the opened file's ino with the judged stat, so another file renamed over the offer after the lstat is read`);
+    else {
+      // Top-level disjuncts of the condition.
+      const parts = [];
+      let depth = 0;
+      let from = 0;
+      const c = guard.cond;
+      for (let i = 0; i < c.length; i += 1) {
+        if (c[i] === '(') depth += 1;
+        else if (c[i] === ')') depth -= 1;
+        else if (depth === 0 && c.startsWith('||', i)) { parts.push(c.slice(from, i)); from = i + 2; i += 1; }
+      }
+      parts.push(c.slice(from));
+      for (const field of ['ino', 'dev']) {
+        const re = new RegExp(`^\\s*(?:${opened}\\.${field}\\s*!==?\\s*${judged}\\.${field}|${judged}\\.${field}\\s*!==?\\s*${opened}\\.${field})\\s*$`);
+        if (!parts.some(p => re.test(p))) faults.push(`readNoFollow does not refuse on a ${field} mismatch alone (the condition must be an "or" with ${opened}.${field} !== ${judged}.${field} as one term), so a rename on the same filesystem can pass`);
+      }
+      const after = body.slice(guard.end + 1).replace(/^\s*/, '');
+      if (!/^\{?\s*throw\b/.test(after)) faults.push('readNoFollow does not throw when the opened file differs from the judged one');
+      if (statAt >= 0 && statAt > guard.at) faults.push('readNoFollow compares before it stats the handle');
+    }
+  }
+  if (!readM) faults.push(`readNoFollow does not read through the opened handle (${handle}.readFile or ${handle}.read), so the bytes can come from another file than the one it compared`);
+  else if (guard && readM.index < guard.at) faults.push('readNoFollow reads the offer before it compares ino and dev with the judged stat');
+  if (/(?<![\w$])(?:fs\.(?:promises\.)?)?(?:readFile|readFileSync|createReadStream)\(/.test(body.replace(new RegExp(`\\b${handle}\\.readFile\\(`, 'g'), ''))) faults.push('readNoFollow reads by path beside the handle, so the bytes can come from another file than the one it compared');
+  return faults;
 }
 
 function methodBody(src, signature) {
@@ -195,9 +259,10 @@ async function check(inp) {
   const copy = await importTs(inp.copySrc ?? '');
   if (copy.ORCA_CLIENT_REASON_CLASS) compare(COPY_REL, new Set(Object.keys(copy.ORCA_CLIENT_REASON_CLASS).filter(r => r.startsWith('offer-'))));
   else fail('reasons', `${COPY_REL} exports no ORCA_CLIENT_REASON_CLASS`);
-  const envReasons = /export const ORCA_CLIENT_REASONS = Object\.freeze\(\[([\s\S]*?)\]\)/.exec(inp.envSrc ?? '');
-  if (envReasons) compare(`${ORCA_ENV_REL} ORCA_CLIENT_REASONS`, new Set([...envReasons[1].matchAll(/"(offer-[a-z-]+)"/g)].map(m => m[1])));
-  else skips.push(`the OrcaEnv half of the reasons rule did not run: ${ORCA_ENV_REL} has no ORCA_CLIENT_REASONS (lane p67-01 not merged). Next step: merge it`);
+  // OrcaEnv is imported, so a reformatted table reads the same (harness-static-hosting-01 follow-up).
+  const env = inp.envSrc ? await importTs(inp.envSrc) : { loadError: 'the file is missing' };
+  if (Array.isArray(env.ORCA_CLIENT_REASONS)) compare(`${ORCA_ENV_REL} ORCA_CLIENT_REASONS`, new Set(env.ORCA_CLIENT_REASONS.filter(r => typeof r === 'string' && r.startsWith('offer-'))));
+  else fail('reasons', `source moved: ${ORCA_ENV_REL} exports no ORCA_CLIENT_REASONS array${env.loadError ? ` (${env.loadError})` : ''}`);
 
   // decode agreement with Orca's own parser
   let orca = null;
@@ -252,16 +317,7 @@ async function check(inp) {
       const reader2 = methodBody(backend, 'function readNoFollow(');
       const param = /function readNoFollow\(\s*\w+\s*:[^,]+,\s*(\w+)/.exec(backend)?.[1];
       if (!reader2 || !param) fail('backend', `${BACKEND_REL} declares no readNoFollow(path, judged) this check can read`);
-      else {
-        const readAt = reader2.search(/\.readFile\(|\.read\(/);
-        if (!/\.open\([^;]*\bO_NOFOLLOW\b/.test(reader2)) fail('backend', 'readNoFollow opens the offer without O_NOFOLLOW, so a symlink swapped in after the lstat is followed');
-        for (const field of ['ino', 'dev']) {
-          const at = reader2.search(new RegExp(`\\.${field}\\s*!==\\s*${param}\\.${field}\\b|\\b${param}\\.${field}\\s*!==\\s*\\w+\\.${field}\\b`));
-          if (at < 0) fail('backend', `readNoFollow no longer compares the opened file's ${field} with the judged stat, so another file renamed over the offer after the lstat is read`);
-          else if (readAt >= 0 && at > readAt) fail('backend', `readNoFollow reads the offer before it compares ${field} with the judged stat`);
-        }
-        if (readAt < 0) fail('backend', 'readNoFollow reads no bytes that this check can find');
-      }
+      else readerFaults(reader2, param).forEach(t => fail('backend', t));
     }
     for (const fn of ['decodeOffer(', 'offerEndpointVerdict(']) {
       const at = body.indexOf(fn);
@@ -293,6 +349,33 @@ async function selfTest(base) {
     console.log(`${NAME} self-test: FAIL -- the clean tree is not green: ${clean.failures.map(f => f.text).join('; ')}`);
     return 1;
   }
+  // SKIP control (harness-static-hosting-01): the main mode over a tree with the four tracked inputs and no orca/
+  // or typescript exits 77 with one SKIP line naming the decode agreement. Run as a child, output captured.
+  {
+    const tmp = mkdtempSync(join(tmpdir(), 'pb-orca-offer-file-root-'));
+    try {
+      for (const rel of [POLICY_REL, BACKEND_REL, COPY_REL, ORCA_ENV_REL]) {
+        mkdirSync(dirname(join(tmp, rel)), { recursive: true });
+        writeFileSync(join(tmp, rel), readFileSync(join(ROOT, rel)));
+      }
+      const r = spawnSync(process.execPath, [SELF, `--root=${tmp}`], { encoding: 'utf8' });
+      const last = r.stdout.trim().split('\n').pop();
+      if (r.status !== 77 || !/^orca-offer-file: SKIP -- .*decode agreement did not run/.test(last)) {
+        console.log(`${NAME} self-test: FAIL -- a tree without orca/ did not exit 77 with the decode SKIP line last (status ${r.status}, last line ${JSON.stringify(last)})`);
+        return 1;
+      }
+      console.log('  ok  a tree without orca/ or typescript -> exit 77, SKIP line naming the decode agreement');
+      rmSync(join(tmp, ORCA_ENV_REL));
+      const red = spawnSync(process.execPath, [SELF, `--root=${tmp}`], { encoding: 'utf8' });
+      if (red.status !== 1 || !red.stdout.includes('source moved')) {
+        console.log(`${NAME} self-test: FAIL -- a tree missing tracked OrcaEnv was not red (status ${red.status})`);
+        return 1;
+      }
+      console.log('  ok  a tree missing the tracked OrcaEnv -> exit 1 (red, not SKIP)');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }
   const sub = (key, from, to) => inp => ({ ...inp, [key]: inp[key].replace(from, to) });
   const plants = [
     ['the mode check removed', 'cases', sub('policySrc', /\n\s*if \(\(stat\.mode & 0o077\) !== 0\) \{\n\s*return refuse\('offer-mode'\);\n\s*\}/, '')],
@@ -307,7 +390,23 @@ async function selfTest(base) {
     ['the device comparison removed', 'backend', sub('backendSrc', ' || opened.dev !== judged.dev', '')],
     ['the no-follow flag removed', 'backend', sub('backendSrc', 'fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0)', 'fs.constants.O_RDONLY')],
     ['readNoFollow given a fresh stat, not the judged one', 'backend', sub('backendSrc', 'text = await readNoFollow(full, stat);', 'text = await readNoFollow(full, await fs.promises.lstat(full));')],
+    // harness-static-hosting-06 follow-up: the review's three edits of the real reader.
+    ['the compared stat taken by path after the open', 'backend', sub('backendSrc', 'const opened = await handle.stat();', 'const opened = await fs.promises.stat(full);')],
+    ['the ino and dev mismatches joined with and', 'backend', sub('backendSrc', 'opened.ino !== judged.ino || opened.dev !== judged.dev', '(opened.ino !== judged.ino && opened.dev !== judged.dev)')],
+    ['the bytes read by path after the comparison', 'backend', sub('backendSrc', "return await handle.readFile('utf8');", "return await fs.promises.readFile(full, 'utf8');")],
+    // harness-static-hosting-01 follow-up: OrcaEnv's table is read by import, so its layout does not matter.
+    ['the reasons table without ORCA_CLIENT_REASONS', 'reasons', sub('envSrc', 'export const ORCA_CLIENT_REASONS =', 'export const ORCA_CLIENT_REASON_LIST =')],
   ];
+  // Control: the reasons table reformatted stays green.
+  {
+    const reformatted = sub('envSrc', 'export const ORCA_CLIENT_REASONS = Object.freeze([', 'export const ORCA_CLIENT_REASONS = Object.freeze(\n  [')(base);
+    const r = await check(reformatted);
+    if (reformatted.envSrc === base.envSrc || r.failures.length) {
+      console.log(`${NAME} self-test: FAIL -- the reasons table reformatted is not green: ${r.failures.map(f => f.text).join('; ') || 'plant did not land'}`);
+      return 1;
+    }
+    console.log('  ok  the reasons table reformatted -> green (control)');
+  }
   let bad = 0;
   for (const [label, rule, plant] of plants) {
     const planted = plant(base);
@@ -323,16 +422,23 @@ async function selfTest(base) {
       bad += 1;
     }
   }
-  console.log(bad
-    ? `${NAME} self-test: FAIL -- ${bad} of ${plants.length} plant(s)`
-    : `${NAME} self-test: PASS -- the clean tree is green and all ${plants.length} plants went red naming their rule`);
-  return bad ? 1 : 0;
+  if (bad) {
+    console.log(`${NAME} self-test: FAIL -- ${bad} of ${plants.length} plant(s)`);
+    return 1;
+  }
+  // A clean run that skipped a clause did not prove those plants could run (SKIP-PROTOCOL.md rule 2).
+  if (clean.skips.length) {
+    console.log(`${NAME} self-test: SKIP -- ${plants.length} plants went red, but the clean run skipped: ${clean.skips.join('; ')}`);
+    return SKIP_EXIT;
+  }
+  console.log(`${NAME} self-test: PASS -- the clean tree is green and all ${plants.length} plants went red naming their rule`);
+  return 0;
 }
 
 if (process.argv.includes('--self-test')) {
   process.exit(await selfTest(inputs));
 }
-const unknown = process.argv.slice(2).filter(a => a !== '--self-test');
+const unknown = process.argv.slice(2).filter(a => a !== '--self-test' && !a.startsWith('--root='));
 if (unknown.length) {
   console.log(`${NAME}: FAIL -- unknown argument ${unknown[0]}`);
   process.exit(2);
