@@ -479,7 +479,7 @@ async function agentFlagClause(texts) {
     const prefix = /export const AGENT_ROW_KEY_PREFIX = '([^']+)';/.exec(texts.webTab)?.[1];
     const chromeRe = /const AGENT_ROW_KEY_RE = \/(.+)\/;/.exec(texts.api)?.[1];
     if (!prefix || !chromeRe || !new RegExp(chromeRe).test(`${prefix}wt-abcdef-1`)) failures.push(`agentFlag: the frontend agent row-key prefix ${JSON.stringify(prefix)} is not the form chrome recognises (${chromeRe}), so a restored agent row reopens as a user tab (agent-browser-02)`);
-    if (!/const key = asAgent \? `\$\{AGENT_ROW_KEY_PREFIX\}\$\{id\}` : rowKey;/.test(texts.webTab)) failures.push(`agentFlag: ${FILES.webTab} createWidget does not key an agent tab with AGENT_ROW_KEY_PREFIX (agent-browser-02)`);
+    if (!/if \(asAgent\) \{\s*options\.key = `\$\{AGENT_ROW_KEY_PREFIX\}\$\{options\.id\}`;/.test(texts.webTab)) failures.push(`agentFlag: ${FILES.webTab} createWidget does not key an agent tab with AGENT_ROW_KEY_PREFIX (agent-browser-02)`);
     const setups = stripComments(texts.setups);
     if (!/rowKey: tab\.rowKey, url: tab\.url/.test(setups)) failures.push(`agentFlag: session restore: ${FILES.setups} saveSession no longer saves each tab's row key, so an agent row cannot be recognised on the next launch`);
     if (!/const options: WebTabOptions = \{.*key: tab\.rowKey \};/.test(setups)) failures.push(`agentFlag: Setup and session restore: ${FILES.setups} restoreWebTab no longer opens a tab under its saved row key (agent-browser-02)`);
@@ -652,7 +652,7 @@ async function socketTableClause(texts) {
     const failures = [];
     const files = { '/proc/net/tcp': 'v4 table', '/proc/net/tcp6': 'v6 table', '/proc/self/status': 'Name:\tpb\nUid:\t1000\t1000\t1000\t1000\n' };
     const reads = [];
-    const make = failing => evalDeclarations(texts.api, ['PowerBrowserOrcaHosting'], {
+    const make = failing => evalDeclarations(texts.api, ['PowerBrowserProcesses', 'PowerBrowserOrcaHosting'], {
         TextDecoder,
         IOUtils: { read: async (path, options) => { reads.push({ path, maxBytes: options?.maxBytes }); if (failing || !(path in files)) throw new Error('NotFoundError'); return new TextEncoder().encode(files[path]); } },
     }, ['PowerBrowserOrcaHosting']).PowerBrowserOrcaHosting;
@@ -849,7 +849,9 @@ const PLANTS = [
     },
     {
         name: '66-CR-01: the host navigates through the widget, outside the agent wall',
-        plant: t => ({ ...t, frontendModule: replaceOnce(t.frontendModule, "navigate: (tabId, url) => this.channel.request({ kind: 'webTabAgent', tabId, method: 'browser.goto', params: { url } }),", 'navigate: (tabId, url) => this.channel.widgetOf(tabId)?.navigate(url) ?? Promise.resolve(undefined),', 'navigate dep') }),
+        // The anchor is the host's own navigate dep line, read from its source, so a rewording there (lane G1b's
+        // agentRequest, 66-CR-04) does not break the plant.
+        plant: t => ({ ...t, frontendModule: replaceOnce(t.frontendModule, /navigate: \(tabId, url\) => [^\n]*/.exec(t.frontendModule)?.[0] ?? '(no navigate dep line)', 'navigate: (tabId, url) => this.channel.widgetOf(tabId)?.navigate(url) ?? Promise.resolve(undefined),', 'navigate dep') }),
         expect: 'does not go through chrome\'s agent wall',
     },
     {

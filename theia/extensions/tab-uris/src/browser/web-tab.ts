@@ -1851,12 +1851,13 @@ export class WebTabOpenHandler implements OpenHandler, FrontendApplicationContri
     }
 
     protected createWidget(url: string, rowKey?: string, grant?: string, asAgent?: boolean): Promise<WebTabWidget> {
-        const id = `wt-${WEB_TAB_SESSION}-${++nextTabSeq}`;
+        const options: WebTabOptions = { id: `wt-${WEB_TAB_SESSION}-${++nextTabSeq}`, url, ...(rowKey ? { key: rowKey } : {}), ...(grant ? { grant } : {}), ...(asAgent ? { agent: true } : {}) };
         // agent-browser-02: an agent tab's row key is web:agent-<id>. The key travels with its session snapshot, Setup,
         // closed-tab row and kept history, and chrome makes every open under such a key an agent tab, after a
         // relaunch too; chrome refuses an agent open under any other key.
-        const key = asAgent ? `${AGENT_ROW_KEY_PREFIX}${id}` : rowKey;
-        const options: WebTabOptions = { id, url, ...(key ? { key } : {}), ...(grant ? { grant } : {}), ...(asAgent ? { agent: true } : {}) };
+        if (asAgent) {
+            options.key = `${AGENT_ROW_KEY_PREFIX}${options.id}`;
+        }
         return this.widgetManager.getOrCreateWidget<WebTabWidget>(WEB_TAB_FACTORY_ID, options);
     }
 }
