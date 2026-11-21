@@ -4237,6 +4237,13 @@ run_own_checks() {
     "ci-release-integrity-self-test|node $REPO_ROOT/scripts/verify-ci-release-integrity.mjs --self-test"
     "win-spawn|node $REPO_ROOT/scripts/verify-win-spawn.mjs"
     "win-spawn-self-test|node $REPO_ROOT/scripts/verify-win-spawn.mjs --self-test"
+    # G1b agent browser: the browser host, the host bundle and the link run against a fake orcad that checks every
+    # request against the params schema the pinned orcad declares (pageMetadata fields, re-attach, call timeouts).
+    "orca-browser-host-wire|node $REPO_ROOT/scripts/verify-orca-browser-host-wire.mjs"
+    "orca-browser-host-wire-self-test|node $REPO_ROOT/scripts/verify-orca-browser-host-wire.mjs --self-test"
+    # H5 live security: the shared live-row libraries (launch environment, live lock, verdict coverage) proven by plants
+    # without a browser, including the decoy-HOME clause that could not go red before.
+    "live-harness-libs-self-test|node $REPO_ROOT/scripts/verify-live-harness-libs.mjs --self-test"
     # NEW (67-03, RUN-06/RUN-07, P67-01..P67-09, P67-32): orca-offer-file judges real lstat results of a temp folder
     # through orca-panes' offer-file-policy.ts (type-stripped): symlink, non-regular, other owner, group/other bits,
     # missing, non-loopback or mismatched endpoint, undecodable text; OFFER_REFUSAL_REASONS against the copy table's
