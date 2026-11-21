@@ -48,7 +48,7 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
 import { REPO_ROOT, StubEmitter, flush, loadTs, typescript } from './lib/ts-unit-loader.mjs';
 
@@ -775,10 +775,36 @@ function skipControl() {
     }
 }
 
+/**
+ * Partial-skip control (SKIP-PROTOCOL.md rule 2): the main mode, run as a child with its output captured and a preload
+ * that makes process.platform read 'win32'. The handoff-* clauses do not run off POSIX and every other clause runs, so
+ * it must exit 77 with the handoff-* SKIP line last and no PASS line. Returns a problem, or null.
+ */
+function offPosixControl() {
+    const dir = mkdtempSync(join(tmpdir(), `${NAME}-win32-`));
+    try {
+        const preload = join(dir, 'win32.mjs');
+        writeFileSync(preload, "Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });\n");
+        const r = spawnSync(process.execPath, ['--import', pathToFileURL(preload).href, SELF], { encoding: 'utf8' });
+        const lines = (r.stdout ?? '').split('\n').filter(l => l.trim() !== '');
+        const last = lines[lines.length - 1] ?? '';
+        if (r.status !== SKIP_EXIT || !last.startsWith(`${NAME}: SKIP -- the handoff-* clauses did not run`)
+            || lines.some(l => l.includes(`${NAME}: PASS`)) || /: SKIP/.test(r.stderr ?? '')) {
+            return `control: a win32 platform did not exit 77 with the handoff-* SKIP line last and no PASS line (status ${r.status}, last line ${JSON.stringify(last)}, stderr ${JSON.stringify((r.stderr ?? '').slice(0, 300))})`;
+        }
+        console.log(`${NAME}: self-test ok -- control: a win32 platform exits 77 with the handoff-* SKIP line last`);
+        return null;
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+}
+
 async function selfTest() {
     const problems = [];
     const skipProblem = skipControl();
     if (skipProblem) problems.push(skipProblem);
+    const offPosixProblem = offPosixControl();
+    if (offPosixProblem) problems.push(offPosixProblem);
     const control = await check();
     if (control.failures.length) {
         problems.push(`control run is red: ${control.failures.map(f => `${f.clause}: ${f.message}`).join('; ')}`);
