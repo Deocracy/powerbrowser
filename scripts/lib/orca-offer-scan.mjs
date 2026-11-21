@@ -19,20 +19,39 @@
 // through node:sqlite on a copy: values are not scanned, because Gecko may
 // compress them (P67-11). The marker key a live run writes through the page
 // is the key probe's positive control: an absence of the runtime-environment
-// key counts only in a run that found the marker.
+// key counts only in a run that found the marker. The runtime-environment key
+// is derived from the pin at check time (harness-static-hosting-04): a pin that
+// no longer declares and writes it is red "source moved".
 //
 // Nothing here prints, logs or writes a needle. Results carry sink names,
 // form names, origins and counts.
 
 import { copyFileSync, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { decodeMozLz4 } from './mozlz4.mjs';
 import { isLoopbackEndpoint } from '../../powerbrowser/shell/OrcaEnv.sys.mjs';
 
-/** P65-17: the web client's stored-environment key, which session-only pairing removes. */
-export const RUNTIME_ENV_KEY = 'orca.web.runtimeEnvironment.v1';
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+/** The pinned web client source that names the stored-environment key, relative to the Orca checkout. */
+export const RUNTIME_ENV_SOURCE_REL = 'src/renderer/src/web/web-runtime-environment.ts';
+
+/**
+ * P65-17: the web client's stored-environment key, which session-only pairing removes, read from the pin under
+ * `orcaRoot` (ENVIRONMENT_STORAGE_KEY in web-runtime-environment.ts, which must also be the key the file writes to
+ * localStorage). Throws "source moved: ..." when the pin no longer reads as expected (harness-static-hosting-04).
+ */
+export function runtimeEnvKeyFromPin(orcaRoot = join(REPO_ROOT, 'orca')) {
+    let text;
+    try { text = readFileSync(join(orcaRoot, RUNTIME_ENV_SOURCE_REL), 'utf8'); } catch { throw new Error(`source moved: ${RUNTIME_ENV_SOURCE_REL} is absent at the pin`); }
+    const m = /\bconst\s+ENVIRONMENT_STORAGE_KEY\s*=\s*(['"])([^'"]+)\1/.exec(text);
+    if (!m) throw new Error(`source moved: ${RUNTIME_ENV_SOURCE_REL} no longer declares ENVIRONMENT_STORAGE_KEY as a string`);
+    if (!/\blocalStorage\.setItem\(\s*ENVIRONMENT_STORAGE_KEY\b/.test(text)) throw new Error(`source moved: ${RUNTIME_ENV_SOURCE_REL} no longer writes localStorage under ENVIRONMENT_STORAGE_KEY`);
+    return m[2];
+}
 
 /**
  * The byte sinks of Phase 65 (P65-23), relative to the profile directory: setups.json in Theia's user storage
@@ -132,8 +151,9 @@ function occurrences(bytes, needle) {
 /**
  * Each 127.0.0.1 origin's localStorage keys, read from storage/default/http+++127.0.0.1+<port>/ls/data.sqlite through
  * node:sqlite on a temporary copy (with its -wal file when present): [{ origin, read, hasMarker, hasRuntimeKey }].
+ * `runtimeEnvKey` defaults to the key derived from the pin.
  */
-export function readOriginKeys(profileDir, markerKey) {
+export function readOriginKeys(profileDir, markerKey, runtimeEnvKey = runtimeEnvKeyFromPin()) {
     const base = join(profileDir, 'storage', 'default');
     const dirs = existsSync(base) ? readdirSync(base).filter((d) => /^https?\+\+\+127\.0\.0\.1(\+\d+)?$/.test(d)) : [];
     const out = [];
@@ -148,7 +168,7 @@ export function readOriginKeys(profileDir, markerKey) {
             const conn = new DatabaseSync(join(tmp, 'data.sqlite'));
             let keys;
             try { keys = conn.prepare('SELECT key FROM data').all().map((row) => (typeof row.key === 'string' ? row.key : Buffer.from(row.key ?? '').toString('utf8'))); } finally { conn.close(); }
-            out.push({ origin, read: true, hasMarker: !!markerKey && keys.includes(markerKey), hasRuntimeKey: keys.includes(RUNTIME_ENV_KEY) });
+            out.push({ origin, read: true, hasMarker: !!markerKey && keys.includes(markerKey), hasRuntimeKey: keys.includes(runtimeEnvKey) });
         } catch {
             out.push({ origin, read: false, hasMarker: false, hasRuntimeKey: false });
         } finally {
@@ -160,10 +180,11 @@ export function readOriginKeys(profileDir, markerKey) {
 
 /**
  * One scan of a profile against the offers of one or more launches. Returns { sinks: [{ name, read, matches, forms }],
- * origins: [{ origin, read, hasMarker, hasRuntimeKey }], verdicts: [red reason] }; no needle anywhere in it.
- * With markerKey, an origin storage that never shows the marker is red "collector blind".
+ * origins: [{ origin, read, hasMarker, hasRuntimeKey }], runtimeEnvKey, verdicts: [red reason] }; no needle anywhere
+ * in it. With markerKey, an origin storage that never shows the marker is red "collector blind". `runtimeEnvKey`
+ * defaults to the key derived from orca/ at the pin; a pin it cannot be derived from throws "source moved".
  */
-export function scanProfile({ profileDir, offers, markerKey }) {
+export function scanProfile({ profileDir, offers, markerKey, runtimeEnvKey = runtimeEnvKeyFromPin() }) {
     const needles = (offers ?? []).flatMap((offer) => needlesFromOffer(offer));
     if (!needles.length) throw notDerivable('every form', 'no offer given');
     const sinks = collectSinks(profileDir).map(({ name, read, bytes }) => {
@@ -177,22 +198,23 @@ export function scanProfile({ profileDir, offers, markerKey }) {
         }
         return { name, read, matches, forms };
     });
-    const origins = readOriginKeys(profileDir, markerKey);
+    const origins = readOriginKeys(profileDir, markerKey, runtimeEnvKey);
     const verdicts = [];
     if (!sinks.some((s) => s.read)) verdicts.push('zero sinks read: no byte sink was readable in the profile, so an absence proves nothing');
     for (const s of sinks.filter((x) => x.matches)) {
         verdicts.push(`offer found in ${s.name} (${s.matches} match${s.matches === 1 ? '' : 'es'}: ${Object.entries(s.forms).map(([f, n]) => `${f} ${n}`).join(', ')})`);
     }
     if (markerKey && !origins.some((o) => o.hasMarker)) verdicts.push(`collector blind: no 127.0.0.1 origin's localStorage holds the marker key (${origins.length} origin(s) read)`);
-    for (const o of origins.filter((x) => x.hasRuntimeKey)) verdicts.push(`${RUNTIME_ENV_KEY} present in ${o.origin}'s localStorage`);
-    return { sinks, origins, verdicts };
+    for (const o of origins.filter((x) => x.hasRuntimeKey)) verdicts.push(`${runtimeEnvKey} present in ${o.origin}'s localStorage`);
+    return { sinks, origins, runtimeEnvKey, verdicts };
 }
 
 /** Output lines for a scan: sink names, counts and origin verdicts only. */
 export function formatScan(result) {
     const lines = [];
     for (const s of result.sinks ?? []) lines.push(`sink ${s.name}: ${s.read ? `${s.matches} match(es)` : 'not read'}`);
-    for (const o of result.origins ?? []) lines.push(`origin ${o.origin}: ${o.read ? `marker ${o.hasMarker ? 'found' : 'absent'}, ${RUNTIME_ENV_KEY} ${o.hasRuntimeKey ? 'present' : 'absent'}` : 'not read'}`);
+    const key = result.runtimeEnvKey ?? 'the runtime-environment key';
+    for (const o of result.origins ?? []) lines.push(`origin ${o.origin}: ${o.read ? `marker ${o.hasMarker ? 'found' : 'absent'}, ${key} ${o.hasRuntimeKey ? 'present' : 'absent'}` : 'not read'}`);
     return lines;
 }
 
