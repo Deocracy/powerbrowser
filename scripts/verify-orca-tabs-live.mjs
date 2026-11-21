@@ -24,8 +24,11 @@
 //                     hosted terminal widget term<n> is added within 1000 ms of
 //                     the Enter; a typed marker appears in orcad's terminal read.
 //  b  terminal-cli    orca terminal create: the same within 1000 ms of the CLI's exit.
-//  c  terminal-agent  orca agent launch --agent claude --surface terminal: the
-//                     real claude's TUI starts in it; no prompt is sent.
+//  c  terminal-agent  orca agent launch --agent claude --surface terminal: one
+//                     hosted terminal widget is added and orcad's read of that
+//                     terminal shows output (the agent started and did not exit
+//                     at once); the check does not judge the TUI's own content;
+//                     no prompt is sent.
 //  d  freeze-guard    after (a) and after each PB-side chat creation, a CLI
 //                     terminal still becomes a tab within 1000 ms (A4).
 //  e  split           orca terminal split on (b): two hosted terminal widgets of
@@ -70,12 +73,21 @@
 //                     to the reference's right.
 //  h  organising      every hosted widget's Organising key is pb-orca:<name>.
 //  i  no-tab-chrome   selectors derived from Orca's tab-bar and TabGroupPanel
-//                     sources must match in Orca's own web client (the
-//                     detector) and match nothing in the Theia document.
+//                     sources: each is counted in Orca's own web client (its
+//                     detector) and in the Theia document. Any selector that
+//                     matches in the Theia document is red. An absence counts
+//                     as judged only for a selector its own detector matched in
+//                     the client; the others are listed as unproven. A probe that
+//                     returned an error object instead of counts is red.
 //  j  close           a Lumino close of a hosted terminal running sleep 600
-//                     shows Orca's confirmation; cancel keeps widget and store
-//                     row; orca terminal close disposes the widget within 1000 ms.
-//  k  reload          after a frontend reload every hosted widget is back under
+//                     shows Orca's confirmation (a dialog that was not there
+//                     before the close, carrying a title read from Orca's
+//                     CloseTerminalDialog source); cancel (in that dialog) keeps
+//                     widget and store row; orca terminal close disposes the
+//                     widget within 1000 ms.
+//  k  reload          the document is proven reloaded (its time origin changed
+//                     and the add recorder is gone), then every hosted widget is
+//                     back under
 //                     its pb-orca: name within 5000 ms, none duplicated, and no
 //                     orca.web.runtimeEnvironment.v1 key in localStorage; once
 //                     the store lists the worktree again, every name addresses
@@ -85,37 +97,56 @@
 //  l  route           /orca-panes/ refuses a request without the token cookie;
 //                     with it, an encoded parent path and an absolute path 404,
 //                     pb-panes.js answers 200.
-//  m  offer           the offer is first found in the web-pairing file (the
-//                     detector), then in none of the services' logs, state,
-//                     diagnostics rows or the Theia document's storage.
+//  m  offer           the offer's every form (Orca's own encoders, derived from
+//                     the web-pairing file's text, with its pairing input and
+//                     parts) is first found by the same search in the
+//                     web-pairing file (the detector), then in none of the
+//                     services' logs, state, diagnostics rows, the Theia
+//                     document's storage, the bridge folder's other files or
+//                     orcad's log files. Each place carries its own control: the
+//                     storage dumps must show a planted marker, the log buffers
+//                     must be non-empty and below their cap, the state and rows
+//                     must show their known fields, and the file search must
+//                     find a needle in a fixture file.
 // Every absence is judged only after its detector found the same thing on a
 // control (CLAUDE.md verification rule 1). Every judgment is an exported pure
 // verdict over an observation object.
 //
-// SKIP: one line "orca-tabs-live: SKIP -- <reason>" (exit 0) while a
-// prerequisite is absent: no built PowerBrowser or Theia app, lane p64-02 not
-// merged (theia/extensions/orca-panes absent), no built orca/, lane p64-01 not
-// merged (orca/out/web/assets/pb-panes absent). orca-panes present but not in
-// the built app is a FAIL. The PASS of this row is the coordinator's proof on
-// the merged, wired, built tree, after orca-pane-css-live (P64-15).
+// SKIP (SKIP-PROTOCOL.md): one line "orca-tabs-live: SKIP -- <reason>" and exit 77
+// while a prerequisite is absent: no built PowerBrowser or Theia app, lane
+// p64-02 not merged (theia/extensions/orca-panes absent), no built orca/, lane
+// p64-01 not merged (orca/out/web/assets/pb-panes absent). A run that went
+// through but could not run stage g's merge-editor half (theia/extensions/
+// orca-workspace absent) is a partial run: it also exits 77 once every other
+// stage is green. A FAIL wins over a SKIP. orca-panes present but not in the
+// built app is a FAIL. The PASS of this row is the coordinator's proof on the
+// merged, wired, built tree, after orca-pane-css-live (P64-15).
 //
-// Run under the live lock with this shell's ORCA_* unset:
-//   flock /home/chris/coding/Power-Browser/.git/pb-live.lock node scripts/verify-orca-tabs-live.mjs
-// No pairing value, cookie or token is printed.
+// The live lock: started without PB_LIVE_LOCK_HELD=1 (that is, not under
+// scripts/verify-platform.sh) the row takes <git common dir>/pb-live.lock
+// itself, before it launches anything (lib reexecUnderLiveLock). Do not wrap it
+// in flock on that file; the row would wait on its own parent. The row removes
+// this shell's ORCA_* from its own environment. No pairing value, cookie or
+// token is printed; what the row prints after its session is redacted with the
+// session's own list.
 //
-// Tier: full. --self-test is quick: each verdict over a passing fixture and one
-// fixture per failure, plus a child Node that imports this module and must stay
-// silent.
+// Tier: full. --self-test is quick and needs no browser: each verdict over a
+// passing fixture and one fixture per failure, the offer search over every
+// place, the fixture git over a hostile developer config, the lock probe, plus a
+// child Node that imports this module and must stay silent.
 //
 // Usage:
 //   node scripts/verify-orca-tabs-live.mjs
 //   node scripts/verify-orca-tabs-live.mjs --self-test
+//   node scripts/verify-orca-tabs-live.mjs --lock-probe   (prints whether this process holds the live lock; launches nothing)
 
-import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { request } from 'node:http';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SELF = fileURLToPath(import.meta.url);
@@ -196,6 +227,25 @@ export function creationVerdict(obs) {
 }
 
 /**
+ * A hosted terminal keeps its tab, name and place when its layout first appears (64-WR-03: the leaf-less record is re-keyed,
+ * the widget is not closed and reopened under the next name). obs: { label, id, hostedAfter: [id], addsAfter: [id] (hosted
+ * adds since the start, read after the terminal was shown and typed into) }.
+ */
+export function keptVerdict(obs) {
+    const fails = [];
+    if (!(obs.hostedAfter ?? []).includes(obs.id)) fails.push(`${obs.label}: ${obs.id} was closed once its layout appeared (the tab must keep its widget and name)`);
+    if ((obs.addsAfter ?? []).length > 1) fails.push(`${obs.label}: ${obs.addsAfter.length} hosted widgets were added by the time its layout appeared (${obs.addsAfter.join(', ')}), want 1: the tab was reopened`);
+    return fails;
+}
+
+/** Stage c: the agent's terminal. obs: { handle, text } (orcad's read of that terminal once the widget was added). */
+export function agentTuiVerdict(obs) {
+    if (!obs.handle) return ['terminal-agent: the CLI returned no terminal handle to read'];
+    if (!String(obs.text ?? '').trim()) return ['terminal-agent: orcad\'s read of the agent terminal stayed empty (the agent did not start, or exited at once)'];
+    return [];
+}
+
+/**
  * Stage a's pick (P64-37). obs: { pre: { activeWorktree, hosted }, picker: { rows: [label], focused } | null,
  * expected: [label] (state().worktrees' labels in order) }.
  */
@@ -220,9 +270,18 @@ export function agentVerdict(stage, pre) {
     return fails;
 }
 
-/** At most one model prompt per run. */
+/** At most one model prompt per run. promptsSent counts writes to the composer (countComposerWrites), not guard passes. */
 export function promptBudgetVerdict(promptsSent) {
     return promptsSent > 1 ? [`chat: more than one prompt sent in one run (${promptsSent}; the budget is 1)`] : [];
+}
+
+/** Wraps the page's composer write so every call that wrote counts, whichever code path made it. budget: { writes }. */
+export function countComposerWrites(prompt, budget) {
+    return async (text) => {
+        const wrote = await prompt(text);
+        if (wrote) budget.writes += 1;
+        return wrote;
+    };
 }
 
 /** obs: [{ after, ms }] with ms null when no tab came. */
@@ -230,11 +289,18 @@ export function freezeVerdict(obs) {
     return obs.filter((o) => o.ms === null || o.ms > LIMIT_MS).map((o) => `freeze guard after ${o.after}: a CLI terminal became a tab ${o.ms === null ? 'never' : `in ${o.ms} ms`} (limit ${LIMIT_MS} ms)`);
 }
 
-/** obs: { ownerItem, mode, widgets: [{ id, tabBar, rect, xterms, ownEcho, otherEcho }] } (widgets[0] the neighbour). */
+/**
+ * obs: { ownerItem, mode, widgets: [{ id, tabBar, rect, xterms, ownEcho, otherEcho }] (widgets[0] the neighbour),
+ * original: { id, hosted, rekeyed } (the tab that was split keeps its widget and name; its widget now addresses a leaf),
+ * splitAdds: [id] (hosted adds by the split: only the new leaf's) }.
+ */
 export function splitVerdict(obs) {
     if (obs.ownerItem) return [`split: FAIL by owner item ${obs.ownerItem} (lane p64-01's SUMMARY), never a fallback`];
     const fails = [];
     if (obs.widgets?.length !== 2) return [`split: ${obs.widgets?.length ?? 0} hosted terminal widgets for the split Orca tab, want 2`];
+    if (obs.original && !obs.original.hosted) fails.push(`split: ${obs.original.id} was closed by the split (the tab that was split must keep its widget and name)`);
+    else if (obs.original && !obs.original.rekeyed) fails.push(`split: ${obs.original.id} addresses no leaf pane key after the split (its widget was not re-keyed to its first leaf)`);
+    if (obs.splitAdds && obs.splitAdds.length !== 1) fails.push(`split: ${obs.splitAdds.length} hosted widgets were added by the split (${obs.splitAdds.join(', ')}), want only the new leaf's`);
     const [a, b] = obs.widgets;
     if (a.tabBar === b.tabBar) fails.push('split: both leaves sit in one Lumino tab bar');
     else if (!liesInDirection(a.rect, b.rect, obs.mode)) fails.push(`split: split bars in the wrong direction, the store records ${obs.mode}`);
@@ -338,11 +404,33 @@ export function organisingVerdict(obs) {
     return obs.filter((w) => w.organising !== `pb-orca:${nameOf(w.id)}`).map((w) => `organising: missing Organising key pb-orca:${nameOf(w.id)} for ${w.id} (found ${w.organising})`);
 }
 
-/** obs: { selectors, detectorMatches, theiaMatches: { selector: count } }. */
+const isCount = (n) => typeof n === 'number' && Number.isFinite(n);
+/** The selectors a probe reply gave no count for (an error object, a null, a string): all of them when the reply is not a map. */
+function uncounted(selectors, reply) {
+    if (!reply || typeof reply !== 'object' || reply.error !== undefined) return [...selectors];
+    return selectors.filter((s) => !isCount(reply[s]));
+}
+
+/**
+ * obs: { selectors, detectorMatches: { selector: count } (Orca's own client), detectorError, theiaMatches: { selector: count } }.
+ * A reply that is not a count for every selector is red (an error object read as "no match" would pass); a selector that
+ * matches in Theia is red whether or not it was detected; an absence is proven for the selectors the client matched.
+ */
 export function chromeVerdict(obs) {
     if (!obs.selectors?.length) return ['no-tab-chrome: no selector derived from Orca\'s tab-bar sources'];
-    if (!obs.detectorMatches) return ['no-tab-chrome: the detector matched nothing in Orca\'s own web client, so an absence in Theia proves nothing'];
-    return Object.entries(obs.theiaMatches ?? {}).filter(([, n]) => n > 0).map(([s, n]) => `no-tab-chrome: tab-bar selector ${s} matched ${n} element(s) in the Theia document`);
+    const fails = [];
+    const noTheia = uncounted(obs.selectors, obs.theiaMatches);
+    if (noTheia.length) fails.push(`no-tab-chrome: the Theia document probe returned no count for ${noTheia.join(', ')} (${obs.theiaMatches?.error ?? 'not a count map'}), so their absence there proves nothing`);
+    const noDetector = uncounted(obs.selectors, obs.detectorMatches);
+    if (noDetector.length) fails.push(`no-tab-chrome: the detector probe in Orca's own web client returned no count for ${noDetector.length === obs.selectors.length ? 'any selector' : noDetector.join(', ')} (${obs.detectorError ?? obs.detectorMatches?.error ?? 'not a count map'}), so an absence in Theia proves nothing`);
+    else if (!chromeProven(obs).length) fails.push('no-tab-chrome: the detector matched nothing in Orca\'s own web client, so an absence in Theia proves nothing');
+    for (const s of obs.selectors) if (isCount(obs.theiaMatches?.[s]) && obs.theiaMatches[s] > 0) fails.push(`no-tab-chrome: tab-bar selector ${s} matched ${obs.theiaMatches[s]} element(s) in the Theia document`);
+    return fails;
+}
+
+/** The selectors whose absence in Theia is proven: their own detector matched in Orca's client. */
+export function chromeProven(obs) {
+    return (obs.selectors ?? []).filter((s) => isCount(obs.detectorMatches?.[s]) && obs.detectorMatches[s] > 0);
 }
 
 /** obs: { dialog, afterCancel: { widget, storeRow }, disposedMs }. */
@@ -351,6 +439,16 @@ export function closeVerdict(obs) {
     if (!obs.dialog) fails.push('close: Orca\'s confirmation did not render on a Lumino close of a busy terminal');
     if (!obs.afterCancel?.widget || !obs.afterCancel?.storeRow) fails.push(`close: a close that disposed on cancel (widget ${!!obs.afterCancel?.widget}, store row ${!!obs.afterCancel?.storeRow})`);
     if (obs.disposedMs === null || obs.disposedMs > LIMIT_MS) fails.push(`close: the Orca-side close disposed the widget ${obs.disposedMs === null ? 'never' : `in ${obs.disposedMs} ms`} (limit ${LIMIT_MS} ms)`);
+    return fails;
+}
+
+/** The frontend really reloaded: obs: { before: time origin, after: { origin, recorder, ready } | null }. */
+export function reloadedVerdict(obs) {
+    if (!obs.after) return [`reload: the Theia document did not reload (its time origin stayed ${obs.before} and its add recorder stayed in place), so the stages after it would compare the old document with itself`];
+    const fails = [];
+    if (obs.after.origin === obs.before) fails.push('reload: the document time origin did not change');
+    if (obs.after.recorder) fails.push('reload: the add recorder of the old document is still in place');
+    if (!obs.after.ready) fails.push('reload: the reloaded frontend never reached ready');
     return fails;
 }
 
@@ -393,10 +491,76 @@ export function routeVerdict(obs) {
     return fails;
 }
 
-/** obs: { detector, foundIn: [place] }. Never carries the value. */
+/**
+ * obs: { detector, places: [{ name, control: true | string (why blind), forms: [form names] }] }. Never carries a value: only
+ * the names of the forms Orca's encoders build. foundIn: [place] still names a place without forms.
+ */
 export function offerVerdict(obs) {
     if (!obs.detector) return ['offer: the search did not find the offer in the web-pairing file itself, so its absence elsewhere proves nothing'];
-    return obs.foundIn.map((p) => `offer: the offer found in ${p}`);
+    const fails = [];
+    for (const p of obs.places ?? []) {
+        if (p.control !== true) fails.push(`offer: the search of ${p.name} is blind (${p.control || 'no control'}), so an absence there proves nothing`);
+        if (p.forms?.length) fails.push(`offer: the offer found in ${p.name} (${p.forms.join(', ')})`);
+    }
+    for (const p of obs.foundIn ?? []) fails.push(`offer: the offer found in ${p}`);
+    return fails;
+}
+
+/** The forms of the offer to search for: [{ form, value }], from Orca's own encoders (needlesFromOffer) plus the pairing input. */
+export function offerNeedles(needles, input) {
+    const out = needles.map((n) => ({ form: n.form, value: n.value }));
+    if (input && !out.some((n) => n.value === input)) out.push({ form: 'pairing input', value: input });
+    return out.filter((n) => typeof n.value === 'string' && n.value.length >= 8);
+}
+
+/** The forms found in a place's text (a string or a Buffer); form names only. */
+export function placeMatches(text, needles) {
+    const t = Buffer.isBuffer(text) ? text.toString('latin1') : String(text ?? '');
+    return needles.filter((n) => t.includes(n.value)).map((n) => n.form);
+}
+
+/** Every file under `root` (at most 400, none over 8 MB, depth 6) whose relative path `accept` takes: [{ rel, bytes }]. */
+export function readFilesUnder(root, accept, depth = 6) {
+    const out = [];
+    const walk = (dir, d) => {
+        let names;
+        try { names = readdirSync(dir); } catch { return; }
+        for (const name of names) {
+            if (out.length >= 400) return;
+            const abs = join(dir, name);
+            let st;
+            try { st = statSync(abs); } catch { continue; }
+            if (st.isDirectory()) { if (d < depth) walk(abs, d + 1); continue; }
+            const rel = abs.slice(root.length + 1);
+            if (!st.isFile() || st.size > 8 * 1024 * 1024 || !accept(rel)) continue;
+            try { out.push({ rel, bytes: readFileSync(abs) }); } catch { /* unreadable: not a place we can search */ }
+        }
+    };
+    walk(root, 0);
+    return out;
+}
+
+/**
+ * The file search's own control (no browser): a fixture folder holding a needle in a file the accept rule takes is
+ * searched by the same routine; the routine must find it there and must not read a file the rule leaves out.
+ * Resolves red reasons.
+ */
+export function fileSearchControl(needles) {
+    const dir = mkdtempSync(join(tmpdir(), 'pb-offer-files-'));
+    try {
+        mkdirSync(join(dir, 'logs'), { recursive: true });
+        writeFileSync(join(dir, 'logs', 'orcad.log'), `x ${needles[0].value} y
+`);
+        writeFileSync(join(dir, 'other.bin'), needles[0].value);
+        const files = readFilesUnder(dir, (rel) => rel.endsWith('.log'));
+        const hit = files.flatMap((f) => placeMatches(f.bytes, needles));
+        const fails = [];
+        if (!hit.length) fails.push('the file search did not find a needle in a fixture log file');
+        if (files.some((f) => f.rel.endsWith('other.bin'))) fails.push('the file search read a file its accept rule excludes');
+        return fails;
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
 }
 
 /** obs: { exitCode, stdout, stderr, timedOut, startedProcess } of a child Node that only imported this module. */
@@ -436,9 +600,11 @@ async function runLive(lib, pre = {}) {
     const stages = {};
     const fail = (stage, reasons) => { stages[stage] = reasons; };
     const halfSkips = {};
+    const halfNotes = [];
     stages.halfSkips = halfSkips;
     const ownerItem = ownerItemOf(read(join(REPO_ROOT, P64_01_SUMMARY_REL)));
-    let promptsSent = 0;
+    // Writes to a chat composer, counted where the composer is written (countComposerWrites), not where a guard lets one pass.
+    const budget = { writes: 0 };
     await lib.withOrcaTabsSession({ log: () => {}, agent: 'real' }, async (ctx) => {
         const handles = () => handlesIn(ctx.orca('terminal', 'list', '--worktree', ctx.worktree));
         const echoes = async (id, handle) => {
@@ -457,8 +623,11 @@ async function runLive(lib, pre = {}) {
             const add = await lib.waitForHostedAdd(ctx, tStart, before, 5000);
             const added = add ? (await ctx.addedSince(tStart)).filter((e) => e.id.startsWith(lib.ORCA_PANE_WIDGET_PREFIX) && !before.includes(e.id)) : [];
             const handle = [...handlesIn(r)].find((h) => !known.has(h)) ?? [...handles()].find((h) => !known.has(h)) ?? null;
-            return { t0, added, widget: add ? await widgetOf(add.id) : null, handle };
+            return { t0, tStart, before, added, widget: add ? await widgetOf(add.id) : null, handle };
         };
+        // A hosted terminal keeps its tab and name when its layout first appears (64-WR-03): read after it was shown and typed into.
+        const keptCheck = async (label, id, since, except) => keptVerdict({ label, id, hostedAfter: await lib.hostedIds(ctx), addsAfter: (await ctx.addedSince(since)).filter((e) => e.id.startsWith(lib.ORCA_PANE_WIDGET_PREFIX) && !except.includes(e.id)).map((e) => e.id) });
+        const readAgentTerminal = async (handle) => (handle ? ctx.pollFor(async () => { try { return lib.terminalText(ctx, handle).trim() ? lib.terminalText(ctx, handle) : null; } catch { return null; } }, 30000, 'the agent terminal read').catch(() => '') : '');
         const freeze = [];
         const freezeProbe = async (after) => {
             const c = await viaCli(['terminal', 'create', '--worktree', ctx.worktree]);
@@ -491,24 +660,30 @@ async function runLive(lib, pre = {}) {
         const hA = [...handles()].find((h) => !known.has(h)) ?? null;
         const a = { label: 'terminal-user', kind: 'terminal', t0: tEnter, added: addA ? (await ctx.addedSince(tEnter)).filter((e) => e.id.startsWith(lib.ORCA_PANE_WIDGET_PREFIX) && !before.includes(e.id)) : [], widget: wA, echo: wA && hA ? await echoes(wA.id, hA) : false };
         const pickFails = pickVerdict({ pre, picker, expected });
-        fail('terminal-user', pickFails.length ? pickFails : creationVerdict(a));
+        fail('terminal-user', pickFails.length ? pickFails : [...creationVerdict(a), ...(wA ? await keptCheck('terminal-user', wA.id, tEnter, before) : [])]);
         await freezeProbe('New Orca Terminal');
 
         // b. CLI terminal.
         const b = await viaCli(['terminal', 'create', '--worktree', ctx.worktree]);
-        fail('terminal-cli', creationVerdict({ label: 'terminal-cli', kind: 'terminal', ...b, echo: b.widget && b.handle ? await echoes(b.widget.id, b.handle) : false }));
+        fail('terminal-cli', [...creationVerdict({ label: 'terminal-cli', kind: 'terminal', ...b, echo: b.widget && b.handle ? await echoes(b.widget.id, b.handle) : false }), ...(b.widget ? await keptCheck('terminal-cli', b.widget.id, b.tStart, b.before) : [])]);
 
-        // c. Agent-opened terminal: the real claude's TUI starts in it; nothing is typed, so no prompt is sent.
+        // c. Agent-opened terminal: a hosted widget, and orcad's read of the terminal shows output (the agent did not exit at once);
+        // nothing is typed, so no prompt is sent.
         const c = await viaCli(['agent', 'launch', '--agent', 'claude', '--surface', 'terminal', '--worktree', ctx.worktree]);
-        fail('terminal-agent', creationVerdict({ label: 'terminal-agent', kind: 'terminal', ...c }));
+        fail('terminal-agent', [...creationVerdict({ label: 'terminal-agent', kind: 'terminal', ...c }), ...agentTuiVerdict({ handle: c.handle, text: await readAgentTerminal(c.handle) })]);
 
         // e. Orca in-tab split of (b).
         if (ownerItem) fail('split', splitVerdict({ ownerItem }));
         else if (b.widget && b.handle) {
             const s = await viaCli(['terminal', 'split', '--terminal', b.handle, '--direction', 'horizontal']);
+            // 64-WR-03: the tab that was split keeps its widget and name; its widget takes its first leaf's pane key (re-keyed, not
+            // reopened). Its options are read again now: the copy taken when it was created predates the leaf.
+            const bNow = await ctx.pollFor(async () => { const w = await widgetOf(b.widget.id); return w?.options?.paneKey ? w : null; }, 15000, 'the split tab re-keyed to its first leaf').catch(() => null);
             const panes = (await ctx.probe(PANES)) ?? [];
-            const rec = panes.find((p) => p.kind === 'terminal' && p.tabId === b.widget.options?.tabId && p.key !== b.widget.options?.paneKey);
-            const mode = rec?.neighbours?.find((n) => n.key === b.widget.options?.paneKey)?.mode ?? 'unrecorded';
+            const bOptions = bNow?.options ?? b.widget.options;
+            const rec = panes.find((p) => p.kind === 'terminal' && p.tabId === bOptions?.tabId && p.key !== bOptions?.paneKey);
+            const mode = rec?.neighbours?.find((n) => n.key === bOptions?.paneKey)?.mode ?? 'unrecorded';
+            const original = { id: b.widget.id, hosted: !!(await widgetOf(b.widget.id)), rekeyed: !!bNow && panes.some((p) => p.key === bNow.options.paneKey) };
             // Each leaf widget's xterm renders after its mount; read the widgets once each shows one (or after 10 s).
             for (const id of [b.widget.id, s.widget?.id].filter(Boolean)) await ctx.pollFor(async () => ((await widgetOf(id))?.xterms ?? 0) >= 1, 10000, 'a leaf xterm').catch(() => false);
             const pair = [await widgetOf(b.widget.id), s.widget ? await widgetOf(s.widget.id) : null].filter(Boolean);
@@ -520,7 +695,7 @@ async function runLive(lib, pre = {}) {
                 const ownEcho = !!(await ctx.pollFor(async () => lib.terminalText(ctx, own).includes(marker), 10000, 'the leaf marker').catch(() => false));
                 widgets.push({ ...w, ownEcho, otherEcho: other ? lib.terminalText(ctx, other).includes(marker) : false });
             }
-            fail('split', splitVerdict({ ownerItem: null, mode, widgets }));
+            fail('split', splitVerdict({ ownerItem: null, mode, widgets, original, splitAdds: s.added.map((e) => e.id) }));
         } else fail('split', ['split: no CLI terminal from (b) to split']);
 
         // e2. PB-side split of (a): move it beside another main-area tab.
@@ -553,11 +728,13 @@ async function runLive(lib, pre = {}) {
         const chatFails = [...agentFails, ...chatVerdict({ storeTab, provider: 'claude', creation: { label: 'chat', kind: 'agent-session', t0: chatCmd.t0, added: chatAdded, widget: addF ? await widgetOf(addF.id) : null } })];
         const chat1Id = addF?.id ?? null;
         await freezeProbe('New Orca Chat');
-        const second = await openSecondClient(ctx);
-        // Sends the one fixed prompt into the second client's chat composer, once per run.
+        const second = await openSecondClient(ctx, budget);
+        // Sends the one fixed prompt into the second client's chat composer, once per run. The guard only decides whether to try;
+        // the budget verdict reads the composer writes second.prompt counted.
+        let promptTried = false;
         const promptOnce = async () => {
-            if (promptsSent >= 1) return false;
-            promptsSent += 1;
+            if (promptTried) return false;
+            promptTried = true;
             return second.prompt(MINIMAL_PROMPT);
         };
         if (second.error) chatFails.push(`chat: second client: ${second.error}`);
@@ -573,7 +750,7 @@ async function runLive(lib, pre = {}) {
             if (made?.t) chatFails.push(...creationVerdict({ label: 'chat (second client)', kind: 'agent-session', t0: made.t, added, widget: add ? await widgetOf(add.id) : null }));
             await freezeProbe('a second-client chat');
         }
-        fail('chat', [...chatFails, ...promptBudgetVerdict(promptsSent)]);
+        fail('chat', [...chatFails, ...promptBudgetVerdict(budget.writes)]);
         fail('freeze-guard', freezeVerdict(freeze));
 
         // g. other views through Orca's own openers; conflict-review now opens Theia's merge editor (P65-01).
@@ -593,7 +770,7 @@ async function runLive(lib, pre = {}) {
             }
             const half = pre.mergeEditor ?? { skip: null, fail: null };
             if (half.fail) otherFails.push(`other-views: conflict-review: ${half.fail}`);
-            else if (half.skip) halfSkips['other-views'] = `conflict-review merge-editor half SKIP -- ${half.skip}`;
+            else if (half.skip) halfSkips['other-views'] = `the conflict-review merge-editor half did not run (${half.skip})`;
             else {
                 const file = join(ctx.repo, 'README');
                 const opened = await ctx.bundle(`m.openPane('conflict-review', ${JSON.stringify(worktreeId)}, 'README').then(id => ({ id }), e => ({ error: String(e && e.message || e) }))`);
@@ -660,7 +837,7 @@ async function runLive(lib, pre = {}) {
             const chat1 = await shown(chat1Id);
             const second2 = await shown(secondW?.id);
             groupDiag = { button, added: add?.id ?? null, record: rec ? { key: rec.key, neighbours: rec.neighbours } : null, reference: refId };
-            fail('tab-groups', [...groupAgentFails, ...splitChatVerdict({ button, added: !!add, detected, second: second2, ref, chat1 }), ...promptBudgetVerdict(promptsSent)]);
+            fail('tab-groups', [...groupAgentFails, ...splitChatVerdict({ button, added: !!add, detected, second: second2, ref, chat1 }), ...promptBudgetVerdict(budget.writes)]);
         }
 
         // h. Organising rows.
@@ -668,24 +845,30 @@ async function runLive(lib, pre = {}) {
 
         // i. No Orca tab chrome: detector in the second client, then the Theia document.
         const selectors = deriveTabChromeSelectors(tabChromeSources());
-        const detectorMatches = second.error ? 0 : await second.count(selectors);
+        const detectorMatches = second.error ? { error: `second client: ${second.error}` } : await second.count(selectors);
         const theiaMatches = await ctx.probe(`const out = {}; for (const s of ${JSON.stringify(selectors)}) out[s] = document.querySelectorAll(s).length; return out;`);
-        fail('no-tab-chrome', chromeVerdict({ selectors, detectorMatches, theiaMatches }));
+        const chromeObs = { selectors, detectorMatches, detectorError: second.error ?? null, theiaMatches };
+        fail('no-tab-chrome', chromeVerdict(chromeObs));
+        const unproven = selectors.filter((x) => !chromeProven(chromeObs).includes(x));
+        if (unproven.length) halfNotes.push(`no-tab-chrome: ${unproven.length} of ${selectors.length} selector(s) never matched in Orca's own client (${unproven.join(', ')}); their absence in Theia is not proven by this run`);
 
         // j. Close semantics on a busy hosted terminal.
         const busy = await viaCli(['terminal', 'create', '--worktree', ctx.worktree, '--command', 'sleep 600']);
         if (!busy.widget || !busy.handle) fail('close', ['close: no hosted terminal for the busy close']);
         else {
+            // Any dialog already open is marked first, so only one the close raised counts, and only a close-terminal one (its title read from Orca's source).
+            await ctx.probe(lib.DIALOG_BASELINE);
             await ctx.luminoClose(busy.widget.id);
-            const dialog = !!(await ctx.pollFor(() => ctx.probe('return !!document.querySelector(\'body > [data-radix-popper-content-wrapper] [role="dialog"], body > [data-radix-popper-content-wrapper] [role="alertdialog"], body > [role="dialog"], body > [role="alertdialog"], body > div [role="alertdialog"]\');'), 5000, 'Orca\'s confirmation').catch(() => false));
-            await ctx.probe(`const d = document.querySelector('[role="dialog"], [role="alertdialog"]'); const btn = d && [...d.querySelectorAll('button')].find(b => /cancel/i.test(b.textContent)); if (btn) btn.click(); await sleep(500); return !!btn;`);
+            const found = await ctx.pollFor(() => ctx.probe(lib.DIALOG_NEW), 5000, 'Orca\'s confirmation').catch(() => null);
+            const dialog = lib.confirmationAppeared(found, lib.closeDialogTitles());
+            await ctx.probe(lib.DIALOG_CANCEL_NEW);
             const afterCancel = { widget: (await lib.hostedIds(ctx)).includes(busy.widget.id), storeRow: handles().has(busy.handle) };
             ctx.orca('terminal', 'close', '--terminal', busy.handle);
             const t0 = Date.now();
             const gone = await ctx.pollFor(async () => !(await lib.hostedIds(ctx)).includes(busy.widget.id), 5000, 'the widget disposed').then(() => Date.now() - t0, () => null);
             fail('close', [...closeVerdict({ dialog, afterCancel, disposedMs: gone })]);
         }
-        const notes = ['busy-chat close not exercised: no prompt keeps a chat busy; end-of-milestone pass', `prompts sent: ${promptsSent} (budget 1)`];
+        const notes = ['busy-chat close not exercised: no prompt keeps a chat busy; end-of-milestone pass', `prompts sent: ${budget.writes} (budget 1)`, ...halfNotes];
         if (stages['tab-groups']?.length && groupDiag) notes.push(`tab-groups observation (button, added id, record, reference) ${JSON.stringify(groupDiag)}`);
 
         // k. Reload, with name identity (P65-35) and g3's post-reload half.
@@ -697,9 +880,16 @@ async function runLive(lib, pre = {}) {
         const identityBefore = identityOf(hostedNow);
         const barsBefore = barsOf(hostedNow);
         cross.peersBefore = peersOf(hostedNow);
+        // The document must be proven new: its time origin changes and the add recorder installed on the old one is gone.
+        // A fixed sleep and a 'ready' poll alone would read the old document if its unload were slow.
+        const originBefore = await ctx.probe('return performance.timeOrigin;');
         await ctx.app.evaluate('setTimeout(() => location.reload(), 0), true').catch(() => undefined);
         await sleep(1000);
-        await ctx.pollFor(() => ctx.probe(`return get('FrontendApplicationStateService').state === 'ready';`, 5000).catch(() => false), 120000, 'the reloaded frontend');
+        const reloadedDoc = await ctx.pollFor(async () => {
+            const r = await ctx.probe(`return { origin: performance.timeOrigin, recorder: !!window.__pbAddWidgetLog, ready: get('FrontendApplicationStateService').state === 'ready' };`, 5000).catch(() => null);
+            return r && isCount(r.origin) && r.origin !== originBefore && r.ready ? r : null;
+        }, 120000, 'the reloaded frontend').catch(() => null);
+        const reloadedFails = reloadedVerdict({ before: originBefore, after: reloadedDoc });
         const tReady = Date.now();
         const backMs = await ctx.pollFor(async () => { const now = (await lib.hostedIds(ctx)).map(nameOf); return names.every((n) => now.includes(n)) ? Date.now() - tReady : null; }, RELOAD_MS + 5000, 'the hosted tabs after reload').catch(() => null);
         const after = (await lib.hostedIds(ctx)).map(nameOf).sort();
@@ -712,7 +902,7 @@ async function runLive(lib, pre = {}) {
         const keptNames = Object.entries(identityBefore).filter(([, key]) => storeKeySet.has(key)).map(([name]) => name);
         const droppedByStore = Object.keys(identityBefore).filter((n) => !keptNames.includes(n));
         if (droppedByStore.length) notes.push(`reload: Orca's store no longer holds ${droppedByStore.map((n) => `pb-orca:${n}`).join(', ')} after the reload, and PowerBrowser closed ${droppedByStore.length === 1 ? 'its tab' : 'their tabs'}`);
-        fail('reload', reloadVerdict({ before: names, after, ms: backMs, storedEnvKey, identityBefore, identityAfter: identityOf(hostedAfter), storeKeysAfter: storeAfter.map((r) => r.key), barsBefore, barsAfter: barsOf(hostedAfter), keptNames }));
+        fail('reload', [...reloadedFails, ...reloadVerdict({ before: names, after, ms: backMs, storedEnvKey, identityBefore, identityAfter: identityOf(hostedAfter), storeKeysAfter: storeAfter.map((r) => r.key), barsBefore, barsAfter: barsOf(hostedAfter), keptNames })]);
         if (!cross.error && cross.stripsAfter === cross.stripsBefore + 1) {
             cross.detectedAfterReload = !!(await ctx.pollFor(async () => ((await tRecord())?.neighbours?.some((n) => n.mode === 'split-right') ? true : null), 5000, 'T split-right after the reload').catch(() => false));
             cross.peersAfter = peersOf(await ctx.hostedWidgets());
@@ -731,18 +921,53 @@ async function runLive(lib, pre = {}) {
             entry: await httpStatus(ctx.app.port, '/orca-panes/pb-panes.js', cookie),
         }));
 
-        // m. Offer containment; the value stays in this frame.
+        // m. Offer containment; the value stays in this frame. Every form Orca's encoders build is searched in every place, and each
+        // place carries a control that its search can see something (never an absence judged from a dump that failed).
         const offer = await ctx.offerFromFile();
+        const input = await ctx.pairingInputFromFile();
         const state = await ctx.orcaState();
-        const bridgeFile = state.bridgeDir ? read(join(state.bridgeDir, lib.WEB_PAIRING_FILE)) : null;
+        const bridgeDir = state.bridgeDir ?? null;
+        const { needlesFromOffer } = await import('./lib/orca-offer-scan.mjs');
+        let needles = [];
+        let needleError = null;
+        try { needles = offerNeedles(needlesFromOffer(offer).map((n) => ({ form: n.form, value: n.bytes.toString('utf8') })), input); } catch (e) { needleError = String(e.message ?? e); }
+        for (const n of needles) ctx.addSecret(n.value);
+        const places = [];
+        const addPlace = (name, text, control) => places.push({ name, control, forms: needles.length ? placeMatches(text, needles) : [] });
+        const bridgeFileBytes = bridgeDir ? (() => { try { return readFileSync(join(bridgeDir, lib.WEB_PAIRING_FILE)); } catch { return null; } })() : null;
+        const planted = `pb-offer-control-${Date.now()}`;
         const chromeDump = await ctx.app.evaluateIn(ctx.app.chrome, `(() => { try {
             const O = ChromeUtils.importESModule('chrome://powerbrowser/content/OrcaService.sys.mjs').OrcaService;
             const T = ChromeUtils.importESModule('chrome://powerbrowser/content/TheiaService.sys.mjs').TheiaService;
-            return JSON.stringify({ orcaLog: O.getRecentLog(), theiaLog: T.getRecentLog(), state: O.getState(), rows: O.getDiagnosticRows() });
+            return JSON.stringify({ orcaLog: O.getRecentLog(), theiaLog: T.getRecentLog(), state: O.getState(), rows: O.getDiagnosticRows(),
+                orcaCap: Services.prefs.getIntPref('powerbrowser.orca.logBufferLines', 200), theiaCap: Services.prefs.getIntPref('powerbrowser.sidecar.logBufferLines', 500) });
         } catch (e) { return JSON.stringify({ chromeError: String(e) }); } })()`);
-        const storage = await ctx.probe('return { local: JSON.stringify({ ...localStorage }), session: JSON.stringify({ ...sessionStorage }) };');
-        const places = { 'PowerBrowser\'s session log': JSON.stringify([JSON.parse(chromeDump).orcaLog, JSON.parse(chromeDump).theiaLog]), 'OrcaService.getState()': JSON.stringify(JSON.parse(chromeDump).state), 'the diagnostics rows': JSON.stringify(JSON.parse(chromeDump).rows), 'the Theia document\'s localStorage': storage?.local ?? '', 'the Theia document\'s sessionStorage': storage?.session ?? '' };
-        fail('offer', offerVerdict({ detector: !!offer && !!bridgeFile && bridgeFile.includes(offer), foundIn: offer ? Object.entries(places).filter(([, text]) => text.includes(offer)).map(([p]) => p) : [] }));
+        const dump = (() => { try { return JSON.parse(chromeDump); } catch { return { chromeError: 'the chrome dump was not JSON' }; } })();
+        const blind = dump.chromeError ? `the chrome dump failed: ${dump.chromeError}` : null;
+        // Storage: a marker is planted through the same probe, so the dump must show it; then removed.
+        const storage = await ctx.probe(`const key = 'pb-offer-control'; const value = ${JSON.stringify(planted)};
+            localStorage.setItem(key, value); sessionStorage.setItem(key, value);
+            const out = { local: JSON.stringify({ ...localStorage }), session: JSON.stringify({ ...sessionStorage }) };
+            localStorage.removeItem(key); sessionStorage.removeItem(key); return out;`);
+        const storageOk = (k) => (storage && !storage.error && typeof storage[k] === 'string' ? (storage[k].includes(planted) ? true : 'the dump did not show a planted marker') : `the storage probe returned ${storage?.error ?? 'no object'}`);
+        const logControl = (lines, cap, what) => (!Array.isArray(lines) || !lines.length ? `${what} holds no line` : lines.length >= cap ? `${what} is at its cap of ${cap} lines, so earlier lines were dropped` : true);
+        addPlace("PowerBrowser's session log", blind ? '' : JSON.stringify([dump.orcaLog, dump.theiaLog]), blind ?? (logControl(dump.orcaLog, dump.orcaCap, "OrcaService's log") === true ? logControl(dump.theiaLog, dump.theiaCap, "TheiaService's log") : logControl(dump.orcaLog, dump.orcaCap, "OrcaService's log")));
+        addPlace('OrcaService.getState()', blind ? '' : JSON.stringify(dump.state), blind ?? (dump.state?.state === 'ready' ? true : 'the state does not read ready'));
+        addPlace('the diagnostics rows', blind ? '' : JSON.stringify(dump.rows), blind ?? (Array.isArray(dump.rows) && dump.rows.some((r) => r?.[0] === 'Orca port') ? true : 'no Orca port row'));
+        addPlace("the Theia document's localStorage", storage?.local ?? '', storageOk('local'));
+        addPlace("the Theia document's sessionStorage", storage?.session ?? '', storageOk('session'));
+        // Files: the bridge folder's other files and orcad's log files; the search routine's own control is a fixture folder.
+        const fileControl = needles.length ? fileSearchControl(needles) : ['no needle form was derived'];
+        const bridgeFiles = bridgeDir ? readFilesUnder(bridgeDir, (rel) => rel !== lib.WEB_PAIRING_FILE) : [];
+        const logFiles = state.effectiveRoot ? readFilesUnder(state.effectiveRoot, (rel) => /(^|\/)[^/]*\.log$/.test(rel)) : [];
+        addPlace("the bridge folder's other files", Buffer.concat(bridgeFiles.map((f) => f.bytes)), fileControl.length ? fileControl.join('; ') : (bridgeDir ? true : 'no bridge folder'));
+        addPlace("orcad's log files", Buffer.concat(logFiles.map((f) => f.bytes)), fileControl.length ? fileControl.join('; ') : true);
+        notes.push(`offer: ${needles.length} form(s) searched in ${places.length} places; ${bridgeFiles.length} other bridge-folder file(s) and ${logFiles.length} orcad log file(s) read`);
+        fail('offer', needleError ? [`offer: no needle form could be derived (${needleError})`] : offerVerdict({
+            // The detector: the same search finds the offer's forms in the web-pairing file itself.
+            detector: !!offer && !!bridgeFileBytes && placeMatches(bridgeFileBytes, needles).length > 0,
+            places,
+        }));
         stages.notes = notes;
         await second.close?.();
     });
@@ -768,7 +993,7 @@ function makeConflict(ctx) {
  * Orca's own web client in a PB web tab: loaded from orcad's address without the pairing fragment, paired in page
  * memory by filling Orca's own pairing field and pressing its own connect button with the offer (never a URL).
  */
-async function openSecondClient(ctx) {
+async function openSecondClient(ctx, budget) {
     const offer = await ctx.offerFromFile();
     if (!offer) return { error: 'no offer in the bridge folder' };
     let base;
@@ -790,11 +1015,16 @@ async function openSecondClient(ctx) {
          * first adoption of a new load. A stored pairing reconnects by itself; the pairing field is filled only if it shows.
          */
         reload: async () => {
+            // The page must be proven new (its time origin changes), as the Theia document's reload is: a slow unload would
+            // otherwise leave this reading the old page, and T would reach it only through a live frame.
+            const originBefore = await evalIn('performance.timeOrigin').catch(() => null);
             await evalIn('setTimeout(() => location.reload(), 0), true').catch(() => undefined);
             await sleep(1000);
+            const reloaded = await ctx.pollFor(async () => { const o = await evalIn('performance.timeOrigin').catch(() => null); return isCount(o) && o !== originBefore ? true : null; }, 30000, 'the second client to reload').catch(() => null);
+            if (!reloaded) return `the second client page did not reload (its time origin stayed ${originBefore})`;
             return connect(ctx, evalIn, input);
         },
-        ...secondClientControls(ctx, base, evalIn),
+        ...secondClientControls(ctx, base, evalIn, budget),
     };
 }
 
@@ -845,7 +1075,7 @@ async function connect(ctx, evalIn, input) {
 }
 
 /** The second client's page controls. */
-function secondClientControls(ctx, base, evalIn) {
+function secondClientControls(ctx, base, evalIn, budget) {
     return {
         /** Brings the second client's web tab to the front (a background tab runs no animation frames, so Orca's tab
          * strip does not render new tabs) and resolves the id of the widget that was active before, to restore. */
@@ -889,7 +1119,7 @@ function secondClientControls(ctx, base, evalIn) {
             const t = Date.now(); item.click(); return { t };
         })()`).catch(() => null),
         /** Types `text` into the visible chat composer and submits it; resolves whether a composer took it. */
-        prompt: (text) => evalIn(`(async () => {
+        prompt: countComposerWrites((text) => evalIn(`(async () => {
             const box = [...document.querySelectorAll('textarea, [contenteditable="true"]')].find(e => e.getClientRects().length > 0 && !e.closest('[data-terminal-search-root]') && !e.classList.contains('xterm-helper-textarea'));
             if (!box) return false;
             box.focus();
@@ -898,7 +1128,7 @@ function secondClientControls(ctx, base, evalIn) {
             await new Promise(r => setTimeout(r, 300));
             box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
             return true;
-        })()`).catch(() => false),
+        })()`).catch(() => false), budget),
         /**
          * P65-34: Orca's own tab context menu on tab `tabId`, its "Move Tab to Split" sub-trigger, then the direction's
          * item (paneColumnDirectionLabel's fallback). Resolves { stripsBefore, stripsAfter } ([data-tab-group-strip-id]
@@ -932,7 +1162,14 @@ function secondClientControls(ctx, base, evalIn) {
             await sleep(800);
             return { stripsBefore, stripsAfter: strips() };
         })()`).catch(() => null),
-        count: (selectors) => evalIn(`(${JSON.stringify(selectors)}).reduce((n, s) => n + document.querySelectorAll(s).length, 0)`).catch(() => 0),
+        /** Each selector's match count in the client's document: { selector: count }, or { error } when the page could not answer. */
+        count: async (selectors) => {
+            try {
+                return JSON.parse(await evalIn(`(() => { try { const out = {}; for (const s of ${JSON.stringify(selectors)}) out[s] = document.querySelectorAll(s).length; return JSON.stringify(out); } catch (e) { return JSON.stringify({ error: String(e) }); } })()`));
+            } catch (e) {
+                return { error: `evaluate failed: ${String(e?.message ?? e).slice(0, 120)}` };
+            }
+        },
     };
 }
 
@@ -940,24 +1177,31 @@ async function main() {
     const lib = await import('./lib/orca-tabs-live.mjs');
     const pre = lib.prerequisites({ needOrca: true });
     if (pre.fail) { console.error(`${NAME}: FAIL -- ${pre.fail}`); return 1; }
-    if (pre.skip) { console.log(`${NAME}: SKIP -- ${pre.skip}`); return 0; }
+    if (pre.skip) { console.log(skipLine(NAME, `${pre.skip}. Next step: build what that names, then run scripts/verify-platform.sh --only orca-tabs-live`)); return SKIP_EXIT; }
+    // What is printed after the session ended goes through the session's own redaction (harness-live-tabs-12).
+    const out = (line) => console.log(lib.redactAfterSession(line));
+    const err = (line) => console.error(lib.redactAfterSession(line));
     let stages;
-    try { stages = await runLive(lib, pre); } catch (err) {
-        console.error(`${NAME}: FAIL -- harness: ${err.message}`);
+    try { stages = await runLive(lib, pre); } catch (e) {
+        err(`${NAME}: FAIL -- harness: ${e.message}`);
         return 1;
     }
     const order = ['terminal-user', 'terminal-cli', 'terminal-agent', 'freeze-guard', 'split', 'pb-split', 'chat', 'other-views', 'tab-groups', 'tab-groups-cross-client', 'organising', 'no-tab-chrome', 'close', 'reload', 'route', 'offer'];
     const failed = [];
     for (const s of order) {
         const reasons = stages[s];
-        if (reasons === undefined) { failed.push(s); console.log(`${NAME}: ${s}: FAIL -- not reached`); continue; }
+        if (reasons === undefined) { failed.push(s); out(`${NAME}: ${s}: FAIL -- not reached`); continue; }
         if (reasons.length) failed.push(s);
         const half = stages.halfSkips?.[s];
-        console.log(`${NAME}: ${s}: ${reasons.length ? `FAIL -- ${reasons.join('; ')}` : `PASS${half ? ` -- ${half}` : ''}`}`);
+        out(`${NAME}: ${s}: ${reasons.length ? `FAIL -- ${reasons.join('; ')}` : `PASS${half ? ` -- ${half}` : ''}`}`);
     }
-    for (const n of stages.notes ?? []) console.log(`${NAME}: note -- ${n}`);
-    console.log(failed.length ? `${NAME}: FAIL -- ${failed.join(', ')}` : `${NAME}: PASS -- ${order.join(', ')}`);
-    return failed.length ? 1 : 0;
+    for (const n of stages.notes ?? []) out(`${NAME}: note -- ${n}`);
+    // A stage half that did not run (an absent input) is a partial run: SKIP unless something failed (SKIP-PROTOCOL.md).
+    const skips = Object.entries(stages.halfSkips ?? {}).map(([stage, reason]) => `stage ${stage}: ${reason}`);
+    if (failed.length) { out(`${NAME}: FAIL -- ${failed.join(', ')}`); return 1; }
+    const code = verdictExit(NAME, [], skips.map((r) => `${r}. Next step: supply that input and run scripts/verify-platform.sh --only orca-tabs-live`));
+    if (code === 0) out(`${NAME}: PASS -- ${order.join(', ')}`);
+    return code;
 }
 
 // ---------------------------------------------------------------------------
@@ -976,6 +1220,47 @@ process.exit(kids ? 3 : 0);`;
 }
 
 const R = (x, y, w = 400, h = 300) => ({ x, y, w, h });
+const chrome = (o = {}) => ({ selectors: ['[data-tab-group-strip-id]', '[data-tab-id]', '[data-tab-strip-slot]'], detectorMatches: { '[data-tab-group-strip-id]': 2, '[data-tab-id]': 5, '[data-tab-strip-slot]': 3 }, detectorError: null, theiaMatches: { '[data-tab-group-strip-id]': 0, '[data-tab-id]': 0, '[data-tab-strip-slot]': 0 }, ...o });
+const NEEDLES = [{ form: 'web-client URL', value: 'http://127.0.0.1:26768/#pairing=orca%3A%2F%2Fpair%3Fcode%3DAAAAAAAAAAAA' }, { form: 'device token', value: 'tok-aaaaaaaaaaaaaaaa' }, { form: 'pairing input', value: 'orca://pair?code=AAAAAAAAAAAA' }];
+const offerObs = (o = {}) => ({ detector: true, places: ['PowerBrowser\'s session log', 'OrcaService.getState()', 'the diagnostics rows'].map((name) => ({ name, control: true, forms: [] })), ...o });
+const withTempFiles = (files, fn) => {
+    const dir = mkdtempSync(join(tmpdir(), 'pb-tabs-selftest-'));
+    try {
+        for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
+        return fn(dir);
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+};
+/** A fixture app tree whose generated frontend holds `line`; resolves the backend main.js path inside it. */
+const appFixture = (dir, line) => {
+    mkdirSync(join(dir, 'app', 'lib', 'backend'), { recursive: true });
+    mkdirSync(join(dir, 'app', 'src-gen', 'frontend'), { recursive: true });
+    writeFileSync(join(dir, 'app', 'src-gen', 'frontend', 'index.js'), `${line}\n`);
+    return join(dir, 'app', 'lib', 'backend', 'main.js');
+};
+/** Two calls of the wrapped prompt that both wrote: the budget reads 2 whatever guard sat in front of them. */
+async function countedTwice() {
+    const budget = { writes: 0 };
+    const wrapped = countComposerWrites(async () => true, budget);
+    await wrapped('a');
+    await wrapped('b');
+    return promptBudgetVerdict(budget.writes);
+}
+async function countedNothing() {
+    const budget = { writes: 0 };
+    await countComposerWrites(async () => false, budget)('a');
+    return budget.writes === 0 ? [] : ['a prompt that wrote nothing was counted'];
+}
+/** The real main on a tree with no built PowerBrowser: exit 77 and the one SKIP line (no browser is started). */
+function skipRun() {
+    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('ORCA_')));
+    const r = spawnSync(process.execPath, [SELF], { encoding: 'utf8', timeout: 30000, cwd: REPO_ROOT, env: { ...env, PB_LIVE_LOCK_HELD: '1', PB_FIREFOX_BIN: '/nonexistent/pb-self-test/powerbrowser' } });
+    const fails = [];
+    if (r.status !== SKIP_EXIT) fails.push(`exit ${r.status}, want ${SKIP_EXIT} (${String(r.stdout).trim().slice(0, 120)} ${String(r.stderr).trim().slice(0, 120)})`);
+    if (!new RegExp(`^${NAME}: SKIP -- .+`, 'm').test(r.stdout ?? '')) fails.push('no "<name>: SKIP -- <reason>" line on stdout');
+    return fails;
+}
 const creation = (o = {}) => ({ label: 'terminal-user', kind: 'terminal', t0: 1000, added: [{ id: 'orca-pane:term1', t: 1400 }], widget: { id: 'orca-pane:term1', kind: 'terminal' }, echo: true, ...o });
 const split = (o = {}) => ({ ownerItem: null, mode: 'split-right', widgets: [{ id: 'orca-pane:term2', tabBar: 0, rect: R(0, 0), xterms: 1, ownEcho: true, otherEcho: false }, { id: 'orca-pane:term3', tabBar: 1, rect: R(400, 0), xterms: 1, ownEcho: true, otherEcho: false }], ...o });
 const group = (o = {}) => ({ detected: true, direction: 'right', second: { tabBar: 2, rect: R(400, 0) }, first: [{ tabBar: 0, rect: R(0, 0) }], ...o });
@@ -989,7 +1274,9 @@ const reload = (o = {}) => ({ before: ['chat1', 'term2', 'term3'], after: ['chat
     identityBefore: { chat1: 'c1', term2: 'k2', term3: 'k3' }, identityAfter: { chat1: 'c1', term2: 'k2', term3: 'k3' }, storeKeysAfter: ['c1', 'k2', 'k3'],
     barsBefore: [['term2', 'term3'], ['chat1']], barsAfter: [['chat1'], ['term3', 'term2']], ...o });
 
-function runSelfTest() {
+async function runSelfTest() {
+    const lib = await import('./lib/orca-tabs-live.mjs');
+    const { redact } = await import('./lib/orca-run.mjs');
     const sources = [`<div data-tab-id={tab.id} data-tab-strip-slot={id} className="x" />`, `<section data-tab-group-strip-id={groupId} data-testid="g" />`];
     const cases = [
         ['creation control', null, () => creationVerdict(creation())],
@@ -1000,7 +1287,7 @@ function runSelfTest() {
         ['chat control', null, () => chatVerdict({ storeTab: true, creation: creation({ label: 'chat', kind: 'agent-session', added: [{ id: 'orca-pane:chat1', t: 1200 }], widget: { id: 'orca-pane:chat1', kind: 'agent-session' } }) })],
         ['tab-groups control', null, () => groupVerdict(group())],
         ['organising control', null, () => organisingVerdict([{ id: 'orca-pane:term1', organising: 'pb-orca:term1' }])],
-        ['no-tab-chrome control', null, () => chromeVerdict({ selectors: deriveTabChromeSelectors(sources), detectorMatches: 5, theiaMatches: { '[data-tab-id]': 0 } })],
+        ['no-tab-chrome control', null, () => chromeVerdict(chrome())],
         ['close control', null, () => closeVerdict({ dialog: true, afterCancel: { widget: true, storeRow: true }, disposedMs: 300 })],
         ['reload control', null, () => reloadVerdict(reload())],
         ['merge-editor result decoding', null, () => (mergeEditorResultPath(JSON.stringify(['pb-orca-git:/scratch/repo/README?:1', 'pb-orca-git:/scratch/repo/README?:2', 'pb-orca-git:/scratch/repo/README?:3', 'file:///scratch/repo/README'])) === '/scratch/repo/README' ? [] : ['the result side did not decode to the working file'])],
@@ -1030,7 +1317,7 @@ function runSelfTest() {
         ['a kept pane moved while another was dropped', 'reload: the Lumino tab bars changed across the reload', () => reloadVerdict(reload({ barsAfter: [['chat1', 'term2']], keptNames: ['chat1', 'term2'] }))],
         ['a dropped pane re-created under a new name', 'reload: the Lumino tab bars changed across the reload', () => reloadVerdict(reload({ barsAfter: [['term2', 'term4'], ['chat1']], keptNames: ['chat1', 'term2'] }))],
         ['route control', null, () => routeVerdict({ noCookie: 403, traversal: 404, absolute: 404, entry: 200 })],
-        ['offer control', null, () => offerVerdict({ detector: true, foundIn: [] })],
+        ['offer control', null, () => offerVerdict(offerObs())],
         ['selector derivation', null, () => (JSON.stringify(deriveTabChromeSelectors(sources)) === JSON.stringify(['[data-tab-group-strip-id]', '[data-tab-id]', '[data-tab-strip-slot]']) ? [] : [`derived ${JSON.stringify(deriveTabChromeSelectors(sources))}`])],
         ['owner item absent', null, () => (ownerItemOf('# 64-01\nno owner items\n') === null ? [] : ['an OWNER-ITEM was read from a summary without one'])],
         ['real module import (child Node, 10 s)', null, () => importSilenceVerdict(observeImport())],
@@ -1065,23 +1352,96 @@ function runSelfTest() {
         ['a second-group tab placed in the wrong direction', 'placed in the wrong direction', () => groupVerdict(group({ direction: 'down' }))],
         ['a tab-group split the detector did not observe', 'tab-group split not observed', () => groupVerdict(group({ detected: false }))],
         ['a missing Organising key', 'missing Organising key pb-orca:term1', () => organisingVerdict([{ id: 'orca-pane:term1', organising: 'widget:orca-pane:term1' }])],
-        ['a tab-bar selector matching in Theia', 'tab-bar selector [data-tab-id] matched 1', () => chromeVerdict({ selectors: ['[data-tab-id]'], detectorMatches: 4, theiaMatches: { '[data-tab-id]': 1 } })],
-        ['a detector that matched nothing', 'detector matched nothing', () => chromeVerdict({ selectors: ['[data-tab-id]'], detectorMatches: 0, theiaMatches: { '[data-tab-id]': 0 } })],
+        ['a tab-bar selector matching in Theia', 'tab-bar selector [data-tab-id] matched 1', () => chromeVerdict(chrome({ theiaMatches: { ...chrome().theiaMatches, '[data-tab-id]': 1 } }))],
+        ['a detector that matched nothing', 'detector matched nothing', () => chromeVerdict(chrome({ detectorMatches: { '[data-tab-id]': 0, '[data-tab-strip-slot]': 0, '[data-tab-group-strip-id]': 0 } }))],
+        ['no selector derived', 'no selector derived from Orca', () => chromeVerdict({ selectors: [], detectorMatches: {}, theiaMatches: {} })],
+        ['the Theia probe returning an error object (harness-live-tabs-02)', 'the Theia document probe returned no count for', () => chromeVerdict(chrome({ theiaMatches: { error: 'probe threw: SyntaxError' } }))],
+        ['the Theia probe returning null', 'the Theia document probe returned no count for', () => chromeVerdict(chrome({ theiaMatches: null }))],
+        ['the Theia probe missing one selector', 'no count for [data-tab-group-strip-id]', () => chromeVerdict(chrome({ theiaMatches: { '[data-tab-id]': 0, '[data-tab-strip-slot]': 0 } }))],
+        ['a Theia count that is a string', 'no count for [data-tab-id]', () => chromeVerdict(chrome({ theiaMatches: { ...chrome().theiaMatches, '[data-tab-id]': '3' } }))],
+        ['the detector probe returning an error object', 'the detector probe in Orca\'s own web client returned no count for any selector', () => chromeVerdict(chrome({ detectorMatches: { error: 'evaluate failed: x' } }))],
+        ['no second client for the detector', 'second client: the page did not load', () => chromeVerdict(chrome({ detectorMatches: { error: 'second client: the page did not load' }, detectorError: 'second client: the page did not load' }))],
+        ['one selector never matched in the client is listed as unproven, not judged', null, () => (JSON.stringify(chromeProven(chrome({ detectorMatches: { '[data-tab-id]': 4, '[data-tab-strip-slot]': 0, '[data-tab-group-strip-id]': 2 } }))) === JSON.stringify(['[data-tab-group-strip-id]', '[data-tab-id]']) ? [] : ['chromeProven did not list exactly the detected selectors'])],
+        ['an undetected selector present in Theia is still red', 'tab-bar selector [data-tab-strip-slot] matched 2', () => chromeVerdict(chrome({ detectorMatches: { '[data-tab-id]': 4, '[data-tab-strip-slot]': 0, '[data-tab-group-strip-id]': 2 }, theiaMatches: { '[data-tab-id]': 0, '[data-tab-strip-slot]': 2, '[data-tab-group-strip-id]': 0 } }))],
         ['a close that disposed on cancel', 'a close that disposed on cancel', () => closeVerdict({ dialog: true, afterCancel: { widget: false, storeRow: true }, disposedMs: 300 })],
         ['a close with no confirmation', 'confirmation did not render', () => closeVerdict({ dialog: false, afterCancel: { widget: true, storeRow: true }, disposedMs: 300 })],
         ['a reload duplicate', 'a reload duplicate (term1)', () => reloadVerdict({ before: ['term1'], after: ['term1', 'term1'], ms: 900, storedEnvKey: false })],
         ['a stored environment key', 'a stored environment key', () => reloadVerdict({ before: ['term1'], after: ['term1'], ms: 900, storedEnvKey: true })],
+        ['an absolute path served (a security boundary)', 'an absolute path answered 200, want 404', () => routeVerdict({ noCookie: 403, traversal: 404, absolute: 200, entry: 200 })],
+        ['the entry not served with the cookie', 'pb-panes.js answered 404 with the cookie, want 200', () => routeVerdict({ noCookie: 403, traversal: 404, absolute: 404, entry: 404 })],
+        ['a route probe that got no answer', 'an encoded parent-directory path answered null', () => routeVerdict({ noCookie: 403, traversal: null, absolute: 404, entry: 200 })],
+        ['a reload that lost a hosted name', 'reload: term1 not back after the reload', () => reloadVerdict({ before: ['term1'], after: [], ms: 900, storedEnvKey: false })],
+        ['a reload that took too long', 'the hosted tabs took 6000 ms (limit 5000 ms)', () => reloadVerdict({ before: ['term1'], after: ['term1'], ms: 6000, storedEnvKey: false })],
+        ['a reload that never brought the tabs back', 'took forever', () => reloadVerdict({ before: ['term1'], after: ['term1'], ms: null, storedEnvKey: false })],
+        ['a close whose disposal never came', 'disposed the widget never', () => closeVerdict({ dialog: true, afterCancel: { widget: true, storeRow: true }, disposedMs: null })],
+        ['a close whose disposal was late', 'disposed the widget in 2500 ms (limit 1000 ms)', () => closeVerdict({ dialog: true, afterCancel: { widget: true, storeRow: true }, disposedMs: 2500 })],
+        ['a close that left no store row on cancel', 'a close that disposed on cancel (widget true, store row false)', () => closeVerdict({ dialog: true, afterCancel: { widget: true, storeRow: false }, disposedMs: 300 })],
+        ['a creation with no widget', 'no hosted terminal widget was added', () => creationVerdict(creation({ widget: null }))],
+        ['a creation of the wrong kind', "data-pb-orca-pane is 'agent-session', want 'terminal'", () => creationVerdict(creation({ widget: { id: 'orca-pane:term1', kind: 'agent-session' } }))],
+        ['a creation under the wrong name', "name 'chat1' is not term<n>", () => creationVerdict(creation({ added: [{ id: 'orca-pane:chat1', t: 1400 }], widget: { id: 'orca-pane:chat1', kind: 'terminal' } }))],
+        ['a PB-side move that did not move', 'the widget did not move to a new Lumino tab bar', () => pbSplitVerdict({ moved: false, remounts: 0, newStoreTabs: 0, xterms: 1, echo: true })],
+        ['a PB-side move that made a store tab', '1 new store tab(s) after a PB-side move', () => pbSplitVerdict({ moved: true, remounts: 0, newStoreTabs: 1, xterms: 1, echo: true })],
+        ['a PB-side move that left two xterms', '2 visible xterm elements after the move, want 1', () => pbSplitVerdict({ moved: true, remounts: 0, newStoreTabs: 0, xterms: 2, echo: true })],
+        ['a PB-side move that stopped echoing', 'the moved terminal no longer echoes', () => pbSplitVerdict({ moved: true, remounts: 0, newStoreTabs: 0, xterms: 1, echo: false })],
+        ['an organising check with no widget', 'organising: no hosted widget to check', () => organisingVerdict([])],
         ['a route served without the cookie', 'served without the cookie', () => routeVerdict({ noCookie: 200, traversal: 404, absolute: 404, entry: 200 })],
         ['a traversal served', 'encoded parent-directory path answered 200', () => routeVerdict({ noCookie: 403, traversal: 200, absolute: 404, entry: 200 })],
         ['the offer found in a log', 'the offer found in PowerBrowser\'s session log', () => offerVerdict({ detector: true, foundIn: ['PowerBrowser\'s session log'] })],
-        ['an offer search with a blind detector', 'did not find the offer in the web-pairing file', () => offerVerdict({ detector: false, foundIn: [] })],
+        ['an offer search with a blind detector', 'did not find the offer in the web-pairing file', () => offerVerdict(offerObs({ detector: false }))],
+        ['a place found with a form name (harness-live-tabs-03)', 'the offer found in the diagnostics rows (device token)', () => offerVerdict(offerObs({ places: [{ name: 'the diagnostics rows', control: true, forms: ['device token'] }] }))],
+        ['a place whose control did not show (a blind dump)', 'the search of the Theia document\'s localStorage is blind (the dump did not show a planted marker)', () => offerVerdict(offerObs({ places: [{ name: 'the Theia document\'s localStorage', control: 'the dump did not show a planted marker', forms: [] }] }))],
+        ['a place with no control at all', 'the search of orcad\'s log files is blind (no control)', () => offerVerdict(offerObs({ places: [{ name: 'orcad\'s log files', control: false, forms: [] }] }))],
+        ['the token alone leaked into a log (a form other than the full offer)', 'the offer found in PowerBrowser\'s session log (device token)', () => offerVerdict(offerObs({ places: [{ name: 'PowerBrowser\'s session log', control: true, forms: placeMatches(`pairing=${NEEDLES[1].value} ok`, NEEDLES) }] }))],
+        ['the pairing input alone leaked into the state', 'the offer found in OrcaService.getState() (pairing input)', () => offerVerdict(offerObs({ places: [{ name: 'OrcaService.getState()', control: true, forms: placeMatches(JSON.stringify({ x: NEEDLES[2].value }), NEEDLES) }] }))],
+        ['the search finds nothing in a clean place', null, () => (placeMatches('[1700000000] Orca ready on port 26768', NEEDLES).length ? ['a clean text matched a needle'] : [])],
+        ['needle forms shorter than 8 characters are dropped', null, () => (offerNeedles([{ form: 'x', value: 'short' }, { form: 'y', value: 'long-enough-value' }], 'tiny').map((n) => n.form).join() === 'y' ? [] : ['a short needle was kept'])],
+        ['the file search sees a needle in a fixture log file and skips an excluded file', null, () => fileSearchControl(NEEDLES)],
+        ['a stray bridge-folder file holding the token is found', 'device token', () => withTempFiles({ 'stray.txt': `x ${NEEDLES[1].value}` }, (dir) => readFilesUnder(dir, () => true).flatMap((f) => placeMatches(f.bytes, NEEDLES)))],
+        ['reloaded control', null, () => reloadedVerdict({ before: 1700000000000.5, after: { origin: 1700000009999.5, recorder: false, ready: true } })],
+        ['a document that never reloaded (harness-live-tabs-04)', 'the Theia document did not reload', () => reloadedVerdict({ before: 1700000000000.5, after: null })],
+        ['a reload that left the same time origin', 'the document time origin did not change', () => reloadedVerdict({ before: 5, after: { origin: 5, recorder: false, ready: true } })],
+        ['a reload that left the old recorder', 'the add recorder of the old document is still in place', () => reloadedVerdict({ before: 5, after: { origin: 6, recorder: true, ready: true } })],
+        ['a reloaded frontend that never reached ready', 'never reached ready', () => reloadedVerdict({ before: 5, after: { origin: 6, recorder: false, ready: false } })],
+        ['kept control', null, () => keptVerdict({ label: 'terminal-user', id: 'orca-pane:term1', hostedAfter: ['orca-pane:term1'], addsAfter: ['orca-pane:term1'] })],
+        ['a terminal closed when its layout appeared (64-WR-03)', 'orca-pane:term1 was closed once its layout appeared', () => keptVerdict({ label: 'terminal-user', id: 'orca-pane:term1', hostedAfter: ['orca-pane:term2'], addsAfter: ['orca-pane:term1', 'orca-pane:term2'] })],
+        ['a terminal reopened under the next name', '2 hosted widgets were added by the time its layout appeared', () => keptVerdict({ label: 'terminal-cli', id: 'orca-pane:term2', hostedAfter: ['orca-pane:term2', 'orca-pane:term3'], addsAfter: ['orca-pane:term2', 'orca-pane:term3'] })],
+        ['split original closed by the split', 'orca-pane:term2 was closed by the split', () => splitVerdict(split({ original: { id: 'orca-pane:term2', hosted: false, rekeyed: false }, splitAdds: ['orca-pane:term3'] }))],
+        ['split original not re-keyed to a leaf', 'addresses no leaf pane key after the split', () => splitVerdict(split({ original: { id: 'orca-pane:term2', hosted: true, rekeyed: false }, splitAdds: ['orca-pane:term3'] }))],
+        ['a split that added two widgets (the tab reopened)', '2 hosted widgets were added by the split', () => splitVerdict(split({ original: { id: 'orca-pane:term2', hosted: true, rekeyed: true }, splitAdds: ['orca-pane:term3', 'orca-pane:term4'] }))],
+        ['split control with the kept original', null, () => splitVerdict(split({ original: { id: 'orca-pane:term2', hosted: true, rekeyed: true }, splitAdds: ['orca-pane:term3'] }))],
+        ['a split with one widget', '1 hosted terminal widgets for the split Orca tab, want 2', () => splitVerdict(split({ widgets: [split().widgets[0]] }))],
+        ['agent terminal control', null, () => agentTuiVerdict({ handle: 'term_h1', text: 'Welcome to Claude Code' })],
+        ['an agent terminal that read empty (harness-live-tabs-07)', 'stayed empty', () => agentTuiVerdict({ handle: 'term_h1', text: '  \n ' })],
+        ['an agent terminal with no handle', 'returned no terminal handle', () => agentTuiVerdict({ handle: null, text: 'x' })],
+        ['prompt budget counts composer writes, not guard passes (harness-live-tabs-08)', 'more than one prompt sent in one run (2; the budget is 1)', () => countedTwice()],
+        ['a prompt that wrote nothing is not counted', null, () => countedNothing()],
+        ['confirmation control', null, () => (lib.confirmationAppeared({ count: 1, text: 'Stop running command? Closing this terminal will stop the command running inside it. Cancel Stop and Close' }, ['Stop this agent?', 'Stop running command?']) ? [] : ['a close-terminal dialog was not accepted'])],
+        ['no new dialog (an old one only)', 'confirmation not seen', () => (lib.confirmationAppeared(null, ['Stop running command?']) ? [] : ['confirmation not seen'])],
+        ['another dialog that is not the close confirmation', 'confirmation not seen', () => (lib.confirmationAppeared({ count: 1, text: 'Rename file? OK Cancel' }, ['Stop running command?']) ? [] : ['confirmation not seen'])],
+        ['the close dialog titles read from Orca\'s source', null, () => (!existsSync(join(REPO_ROOT, 'orca/src')) || lib.closeDialogTitles().includes('Stop running command?') ? [] : ['the close dialog titles were not read from the pinned source'])],
+        ['output after the session is redacted (harness-live-tabs-12)', null, () => { lib.retainForOutput(redact, ['SECRET-pairing-value-1']); const out = lib.redactAfterSession('evaluate failed: SECRET-pairing-value-1 in the page'); return out.includes('SECRET-pairing') ? ['the secret survived redactAfterSession'] : []; }],
+        ['output after the session without the retained list keeps the secret (the control for the case above)', null, () => (redact('evaluate failed: SECRET-pairing-value-1', []).includes('SECRET-pairing') ? [] : ['redact with an empty list removed the secret by itself'])],
+        ['fixture git ignores a developer config with signing and hooks (harness-live-tabs-13)', null, () => lib.fixtureGitVerdict()],
+        ['fixture git without the hygiene is hit by that config', 'the fixture commit failed under a developer config', () => lib.fixtureGitVerdict((repo, path, home) => (...a) => execFileSync('git', ['-C', repo, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', ...a], { env: { PATH: path, HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] }))],
+        ['the live lock is taken by a row started outside the driver (harness-live-tabs-14)', null, () => lib.lockProbeVerdict(SELF, NAME)],
+        ['a row that does not take the live lock is caught', 'did not take the live lock', () => withTempFiles({ 'row.mjs': 'console.log("x: lock-probe: held=0 locked=0");' }, (dir) => lib.lockProbeVerdict(join(dir, 'row.mjs'), 'x'))],
+        ['listener coverage: a booted bundle covers Orca\'s listeners', null, () => (lib.listenerCoverage({ wired: true, bundleBuilt: true, booted: true }).verdict === 'covered' ? [] : ['a booted bundle was not covered'])],
+        ['listener coverage: an app with no orca-panes has none to cover', null, () => (lib.listenerCoverage({ wired: false, bundleBuilt: false, booted: false }).verdict === 'not-wired' ? [] : ['an unwired app was not not-wired'])],
+        ['listener coverage: a built bundle that did not boot is red (harness-live-tabs-11)', 'did not boot in the Theia frame', () => { const c = lib.listenerCoverage({ wired: true, bundleBuilt: true, booted: false }); return c.verdict === 'red' ? [c.reason] : []; }],
+        ['listener coverage: a wired app with no built bundle is a named skip, not a silent pass', 'Orca listeners not covered', () => { const c = lib.listenerCoverage({ wired: true, bundleBuilt: false, booted: false }); return c.verdict === 'skip' ? [c.reason] : []; }],
+        ['an app wiring orca-panes is read from its generated frontend', null, () => withTempFiles({}, (dir) => { const main = appFixture(dir, "import '@powerbrowser/orca-panes/lib/browser/orca-panes-frontend-module';"); return lib.appWiresOrcaPanes(main) ? [] : ['a frontend naming orca-panes read as unwired']; })],
+        ['an app that does not wire orca-panes reads as unwired', null, () => withTempFiles({}, (dir) => { const main = appFixture(dir, "import '@powerbrowser/modes/lib/browser/x';"); return lib.appWiresOrcaPanes(main) ? ['a frontend with no orca-panes read as wired'] : []; })],
+        ['a skip alone exits 77', null, () => (lib.verdictExitQuiet(NAME, [], ['stage g half did not run']) === SKIP_EXIT ? [] : ['a skip did not exit 77'])],
+        ['a failure wins over a skip', null, () => (lib.verdictExitQuiet(NAME, ['a stage failed'], ['stage g half did not run']) === 1 ? [] : ['a failure did not win'])],
+        ['no skip and no failure exits 0', null, () => (lib.verdictExitQuiet(NAME, [], []) === 0 ? [] : ['a clean run did not exit 0'])],
+        ['the real main with no built PowerBrowser exits 77 with the one SKIP line', null, () => skipRun()],
         ['an import that printed a line', 'side effect on import', () => importSilenceVerdict({ exitCode: 0, stdout: 'orca-tabs-live: SKIP\n', stderr: '', timedOut: false, startedProcess: false })],
     ];
     let failures = 0;
     let ok = 0;
     for (const [label, naming, runCase] of cases) {
         let fails;
-        try { fails = runCase(); } catch (err) { fails = [`threw ${err.message}`]; }
+        try { fails = await runCase(); } catch (err) { fails = [`threw ${err.message}`]; }
         const text = fails.join('\n');
         if (naming === null) {
             if (fails.length) { console.error(`  FAIL ${label} -> not green: ${text}`); failures++; } else console.log(`  control ${label} -> green`);
@@ -1099,10 +1459,20 @@ const isEntryPoint = (() => {
 })();
 if (isEntryPoint) {
     const args = process.argv.slice(2);
-    const unknown = args.find((a) => a !== '--self-test');
+    const unknown = args.find((a) => a !== '--self-test' && a !== '--lock-probe');
     if (unknown !== undefined) {
-        console.error(`${NAME}: FAIL -- unknown argument '${unknown}' (usage: node ${SELF_REL} [--self-test])`);
+        console.error(`${NAME}: FAIL -- unknown argument '${unknown}' (usage: node ${SELF_REL} [--self-test | --lock-probe])`);
         process.exit(2);
     }
-    process.exit(args.includes('--self-test') ? runSelfTest() : await main());
+    if (args.includes('--self-test')) process.exit(await runSelfTest());
+    // A live row started outside the driver takes the live lock itself, before it launches anything.
+    const lib = await import('./lib/orca-tabs-live.mjs');
+    let held;
+    try { held = lib.reexecUnderLiveLock(SELF, args); } catch (err) {
+        console.error(`${NAME}: FAIL -- ${err.message}`);
+        process.exit(1);
+    }
+    if (held !== null) process.exit(held);
+    if (args.includes('--lock-probe')) { console.log(lib.lockProbeLine(NAME)); process.exit(0); }
+    process.exit(await main());
 }

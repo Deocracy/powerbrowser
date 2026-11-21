@@ -31,10 +31,11 @@
 //     widget with an empty segment, judged only when every shell-key segment was
 //     read (the PTY read proven first, CLAUDE.md verification rule 1). The close
 //     key, pressed last, must dispose the hosted widget or open Orca's
-//     running-terminal confirmation (detected positively, as orca-tabs-live
-//     stage j does); the check then cancels and closes the terminal through the
-//     CLI. While theia/extensions/orca-panes is absent this stage prints its
-//     named SKIP.
+//     running-terminal confirmation (a dialog that was not there before the
+//     key, titled as Orca's close-terminal dialog, as orca-tabs-live stage j
+//     judges it); the check then cancels it (in that dialog) and closes the
+//     terminal through the CLI. While theia/extensions/orca-panes is absent this
+//     stage does not run: the row exits 77 (SKIP) once everything else is green.
 //  2b. Paste (owner rulings 2026-11-17, "Limit the hook to Orca panes" and "Preset
 //     it ON on Linux, in memory"). With a sentinel on the system selection, a
 //     trusted middle-click into a contenteditable in the Theia document must insert
@@ -90,23 +91,42 @@
 // keys. Each key's visible form from its name. TERMINAL_NAME_PATTERN from
 // tab-uris' terminal-naming-contribution.ts.
 //
-// Run under the live lock with this shell's ORCA_* unset:
-//   flock /home/chris/coding/Power-Browser/.git/pb-live.lock node scripts/verify-orca-terminal-keys-live.mjs
-// It signals only identities it recorded; the Orca CLI gets an environment built
-// from scratch. No pairing value, env value or token is printed.
+// SKIP (SKIP-PROTOCOL.md): one line "orca-terminal-keys-live: SKIP -- <reason>" and
+// exit 77 when no built PowerBrowser or Theia app exists, and also when stage 2
+// did not run (a partial run) and nothing failed. A FAIL wins over a SKIP.
 //
-// Tier: full. --self-test is quick: the pure verdicts over fixture
-// observations, the derivations over fixture sources, plus a child Node that
+// The live lock: started without PB_LIVE_LOCK_HELD=1 (that is, not under
+// scripts/verify-platform.sh) the row takes <git common dir>/pb-live.lock
+// itself, before it launches anything. Do not wrap it in flock on that file.
+// This shell's ORCA_* are removed from the session. It signals only identities
+// it recorded; the Orca CLI gets an environment built from scratch. No pairing
+// value, env value or token is printed; what is printed after the session is
+// redacted with the session's own list.
+//
+// Side effects on the desktop it is run on, and what is undone: the run writes
+// 100 KiB of text to the system clipboard and selection and puts sentinels on
+// the selection. Both clipboards are read before the first write and written
+// back at the end when they held text (a headed run is the case that matters);
+// a clipboard that could not be read, or that held something other than text,
+// is named in a note and not restored. The cat -v recorder files under
+// .mozbuild/orca-terminal-keys-live are removed when the run ends.
+//
+// Tier: full. --self-test is quick and needs no browser: the pure verdicts over
+// fixture observations, the derivations over fixture sources, the clipboard
+// restore over an in-memory clipboard, the lock probe, plus a child Node that
 // imports this module and must stay silent.
 //
 // Usage:
 //   node scripts/verify-orca-terminal-keys-live.mjs
 //   node scripts/verify-orca-terminal-keys-live.mjs --self-test
+//   node scripts/verify-orca-terminal-keys-live.mjs --lock-probe   (prints whether this process holds the live lock; launches nothing)
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SELF = fileURLToPath(import.meta.url);
@@ -125,8 +145,6 @@ const WORK_REL = '.mozbuild/orca-terminal-keys-live';
 export const PROBE_COMMAND = 'stty -icanon -echo -isig -iexten; exec cat -v';
 const sep = (i) => `@K${i}@`;
 const READY_MARK = '@READY@';
-/** Orca's confirmation dialog, as orca-tabs-live stage j detects it. */
-const CONFIRMATION_SELECTOR = 'body > [data-radix-popper-content-wrapper] [role="dialog"], body > [data-radix-popper-content-wrapper] [role="alertdialog"], body > [role="dialog"], body > [role="alertdialog"], body > div [role="alertdialog"]';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
 
@@ -177,6 +195,11 @@ export function segmentsOf(text, keys) {
     });
 }
 
+/** With orca-panes present its passthrough list must equal the shell keys. */
+export function passthroughVerdict(passthrough, shell) {
+    return [...passthrough].sort().join() === [...shell].sort().join() ? [] : [`ORCA_TERMINAL_PASSTHROUGH_KEYS (${passthrough.join(', ')}) differs from the shell keys (${shell.join(', ')}); orca-terminal-keys is red`];
+}
+
 /**
  * D-32's keys from the static check's derivation; with orca-panes present its passthrough list must equal the shell
  * keys. Resolves { keys (shell, switch, close in that order), shell, switch, close, userName }.
@@ -191,7 +214,8 @@ export async function readKeys(root = REPO_ROOT) {
     if (existsSync(join(root, ORCA_PANES_REL))) {
         const passthrough = readPassthroughKeys(read(join(root, PROTOCOL_REL)));
         if (!passthrough) throw new Error(`${PROTOCOL_REL} exports no ORCA_TERMINAL_PASSTHROUGH_KEYS while ${ORCA_PANES_REL} is present`);
-        if ([...passthrough].sort().join() !== [...d.shell].sort().join()) throw new Error(`ORCA_TERMINAL_PASSTHROUGH_KEYS (${passthrough.join(', ')}) differs from the shell keys (${d.shell.join(', ')}); orca-terminal-keys is red`);
+        const differs = passthroughVerdict(passthrough, d.shell);
+        if (differs.length) throw new Error(differs.join('; '));
     }
     const keys = [...d.shell, ...d.switch, d.close];
     const unmapped = keys.filter((k) => !keySpecFor(k));
@@ -437,6 +461,60 @@ async function pointer(app, context, actions) {
 }
 const moveTo = (x, y) => ({ type: 'pointerMove', x: Math.round(x), y: Math.round(y) });
 const middleClick = (x, y) => [moveTo(x, y), { type: 'pointerDown', button: 1 }, { type: 'pointerUp', button: 1 }, { type: 'pause', duration: 300 }];
+
+/**
+ * The two system clipboards through chrome scope: port.get(which) resolves { ok: true, text } (text null when the clipboard
+ * holds no text) or { ok: false, error }; port.set(which, text) writes it. which: 'global' | 'selection'.
+ */
+export function clipboardPort(app) {
+    const kind = (which) => (which === 'selection' ? 'kSelectionClipboard' : 'kGlobalClipboard');
+    return {
+        get: async (which) => JSON.parse(await app.evaluateIn(app.chrome, `(() => { try {
+            const type = Ci.nsIClipboard.${kind(which)};
+            if (!Services.clipboard.hasDataMatchingFlavors(['text/plain'], type)) return JSON.stringify({ ok: true, text: null });
+            const t = Cc['@mozilla.org/widget/transferable;1'].createInstance(Ci.nsITransferable);
+            t.init(null); t.addDataFlavor('text/plain');
+            Services.clipboard.getData(t, type, null);
+            const v = {}; t.getTransferData('text/plain', v);
+            return JSON.stringify({ ok: true, text: v.value.QueryInterface(Ci.nsISupportsString).data });
+        } catch (e) { return JSON.stringify({ ok: false, error: String(e) }); } })()`)),
+        set: async (which, text) => {
+            const r = await app.evaluateIn(app.chrome, `(() => { try { const h = Cc['@mozilla.org/widget/clipboardhelper;1'].getService(Ci.nsIClipboardHelper);
+                ${which === 'selection' ? `h.copyStringToClipboard(${JSON.stringify(text)}, Ci.nsIClipboard.kSelectionClipboard);` : `h.copyString(${JSON.stringify(text)});`} return 'ok'; } catch (e) { return 'error: ' + e; } })()`);
+            if (r !== 'ok') throw new Error(r);
+        },
+    };
+}
+
+/**
+ * Runs fn with both clipboards read first and written back after (also when fn throws): a headed run must not leave its
+ * 100 KiB of test text on the developer's clipboard. A clipboard that cannot be read is named in a note and left; one that held
+ * no text is set to empty (the test text must not stay). log(line) takes the notes.
+ */
+export async function withClipboardsRestored(port, fn, log = () => {}) {
+    const saved = {};
+    for (const which of ['global', 'selection']) {
+        try { saved[which] = await port.get(which); } catch (err) { saved[which] = { ok: false, error: String(err?.message ?? err) }; }
+    }
+    try {
+        return await fn();
+    } finally {
+        for (const which of ['global', 'selection']) {
+            const was = saved[which];
+            if (!was?.ok) { log(`note -- the ${which} clipboard could not be read before the run (${was?.error ?? 'unreadable'}), so it was not restored`); continue; }
+            try {
+                await port.set(which, was.text ?? '');
+                if (was.text === null) log(`note -- the ${which} clipboard held no text before the run; it was emptied of the run's text`);
+            } catch (err) { log(`note -- the ${which} clipboard could not be written back (${String(err?.message ?? err)})`); }
+        }
+    }
+}
+
+/** Removes the recorder folder the run made; resolves whether it is gone. */
+export function removeWorkDir(dir) {
+    rmSync(dir, { recursive: true, force: true });
+    return !existsSync(dir);
+}
 
 /** Chrome scope: puts `text` on the system selection, the source of a native middle-click paste; 'ok' or 'error: ...'. */
 const setSelection = (app, text) => app.evaluateIn(app.chrome, `(() => {
@@ -816,7 +894,7 @@ async function run({ log }) {
     mkdirSync(work, { recursive: true });
     let stage2Skip = orcaPrereq.skip;
     let stage2Fail = orcaPrereq.fail;
-    await lib.withOrcaTabsSession({ log, needOrca: !orcaPrereq.skip && !orcaPrereq.fail }, async (ctx) => {
+    const body = async (ctx) => {
         const pages = await ctx.serveNavPages({ '/k': { title: 'keys control', body: '<p>keys control page</p>' }, '/type': { title: 'typing', body: '<input id="i">' } });
         try {
             let term = null;
@@ -898,15 +976,19 @@ async function run({ log }) {
                     await ctx.pollFor(async () => lib.terminalText(ctx, handle).includes(sep(ptyKeys.length)), 15000, 'the last separator in orcad\'s terminal read').catch(() => false);
                     obs.orca.text = lib.terminalText(ctx, handle);
                     // The close key last: the recorder keeps the terminal busy, so Orca's own close asks first.
+                    // Dialogs already open are marked first: only one the key raised counts, and only a close-terminal one (its title
+                    // read from Orca's source), so another dialog in the document cannot stand in for Orca's confirmation.
+                    await ctx.probe(lib.DIALOG_BASELINE);
+                    const titles = lib.closeDialogTitles();
                     await ctx.pressKey(keySpecFor(sets.close));
                     obs.orca.closed = await ctx.pollFor(async () => {
                         const disposed = !(await lib.hostedIds(ctx)).includes(hosted);
-                        const dialog = await ctx.probe(`return !!document.querySelector(${JSON.stringify(CONFIRMATION_SELECTOR)});`);
+                        const dialog = lib.confirmationAppeared(await ctx.probe(lib.DIALOG_NEW), titles);
                         return disposed || dialog ? { disposed, dialog } : null;
                     }, 5000, 'the close key\'s effect').catch(() => ({ disposed: false, dialog: false }));
                     log(`note -- the close key in the hosted terminal ${obs.orca.closed.dialog ? 'opened Orca\'s running-terminal confirmation' : obs.orca.closed.disposed ? 'disposed the hosted widget' : 'had no observed effect'}`);
                     if (obs.orca.closed.dialog) {
-                        await ctx.probe(`const d = document.querySelector('[role="dialog"], [role="alertdialog"]'); const btn = d && [...d.querySelectorAll('button')].find(b => /cancel/i.test(b.textContent)); if (btn) btn.click(); await sleep(500); return !!btn;`);
+                        await ctx.probe(lib.DIALOG_CANCEL_NEW);
                     }
                     try { ctx.orca('terminal', 'close', '--terminal', handle); } catch (err) { log(`note -- the CLI close of the probe terminal failed: ${err.message}`); }
                     hosted = null;
@@ -924,30 +1006,45 @@ async function run({ log }) {
         } finally {
             await pages.close();
         }
-    });
+    };
+    try {
+        // Both clipboards are read first and written back at the end; the recorder folder is removed when the run ends.
+        await lib.withOrcaTabsSession({ log, needOrca: !orcaPrereq.skip && !orcaPrereq.fail }, (ctx) => withClipboardsRestored(clipboardPort(ctx.app), () => body(ctx), log));
+    } finally {
+        removeWorkDir(work);
+    }
     if (stage2Fail) return { obs, panesPresent, stage2Skip: null, stage2: [stage2Fail] };
     return { obs, panesPresent, stage2Skip, stage2: stage2Skip ? [] : [...orcaStageVerdict(obs), ...pasteVerdict(obs), ...listenersVerdict(obs), ...focusGateVerdict(obs)] };
 }
 
 async function main() {
-    const say = (line) => console.log(`${NAME}: ${line}`);
+    const lib = await import('./lib/orca-tabs-live.mjs');
+    // What is printed after the session ended goes through the session's own redaction (a recorder read or page text could carry a value).
+    const say = (line) => console.log(lib.redactAfterSession(`${NAME}: ${line}`));
     let r;
     try { r = await run({ log: say }); } catch (err) {
-        console.error(`${NAME}: FAIL -- harness: ${err.message}`);
+        console.error(lib.redactAfterSession(`${NAME}: FAIL -- harness: ${err.message}`));
         return 1;
     }
-    if (r.skip) { say(`SKIP -- ${r.skip}`); return 0; }
+    if (r.skip) { console.log(skipLine(NAME, `${r.skip}. Next step: build what that names, then run scripts/verify-platform.sh --only orca-terminal-keys-live`)); return SKIP_EXIT; }
     const control = controlVerdict(r.obs);
     const repeat = repeatVerdict(r.obs);
     say(control.length ? `control: FAIL -- ${control.join('; ')}` : 'control: PASS -- in t<n> the shell keys reached the shell, the switch keys switched with no PTY bytes and the close key closed the tab; in the web tab the switch keys switched');
-    if (r.stage2Skip) say(`stage 2: SKIP -- ${r.stage2Skip}`);
+    if (r.stage2Skip) say(`stage 2: not run -- ${r.stage2Skip}`);
     else say(r.stage2.length ? `stage 2: FAIL -- ${r.stage2.join('; ')}` : 'stage 2: PASS -- the shell keys reached the hosted terminal\'s PTY with nothing switched; the switch keys switched the tab and reached no PTY; the close key requested Orca\'s close; a terminal selection pasted once into that terminal at PowerBrowser\'s default and not after the user turned it off, and a Theia editable got the system selection; Orca\'s checkpoint held no leave check, Theia\'s large pastes stayed Theia\'s and Orca\'s activation focus took no keys');
     say(repeat.length ? `stage 3: FAIL -- ${repeat.join('; ')}` : 'stage 3: equal to the control');
     say(`note -- control effects t<n> ${JSON.stringify(r.obs.control.term)}, web ${JSON.stringify(r.obs.control.web)}`);
     const fails = overallVerdict({ control, stage2: r.stage2, stage2Skip: r.stage2Skip, panesPresent: r.panesPresent, repeat });
-    if (fails.length) { for (const f of fails) console.error(`${NAME}: FAIL -- ${f}`); console.log(`${NAME}: FAIL`); return 1; }
-    say(`PASS -- D-32 control in t<n> and the web tab; stage 2 ${r.stage2Skip ? 'SKIP (orca-panes absent)' : 'PASS'}; the t<n> and web tab effects equal the in-session control`);
-    return 0;
+    // Stage 2 not run is a partial run: SKIP unless something failed (SKIP-PROTOCOL.md).
+    const code = verdictExit(NAME, fails, skipsOf(r));
+    if (fails.length) { for (const f of fails) console.error(lib.redactAfterSession(`${NAME}: FAIL -- ${f}`)); console.log(`${NAME}: FAIL`); return 1; }
+    if (code === 0) say('PASS -- D-32 control in t<n> and the web tab; stage 2 PASS; the t<n> and web tab effects equal the in-session control');
+    return code;
+}
+
+/** The parts of the run that did not run because an input is absent. */
+export function skipsOf(r) {
+    return r.stage2Skip ? [`stage 2 (the hosted Orca terminal, paste, listener and focus legs) did not run: ${r.stage2Skip}. Next step: build what that names, then run scripts/verify-platform.sh --only orca-terminal-keys-live`] : [];
 }
 
 // ---------------------------------------------------------------------------
@@ -1012,7 +1109,54 @@ const withTheia = (state, patch) => { const o = fixtureObs(); Object.assign(o.pa
 const both = (o, f) => { f(o.control); f(o.after); return o; };
 const withListeners = (f) => { const o = fixtureObs(); f(o.listeners); return all(o); };
 
-function runSelfTest() {
+/** An in-memory clipboard pair behind the port the run uses. */
+function memoryPort(initial, failRead = false) {
+    const state = { global: initial.global, selection: initial.selection };
+    return { state, get: async (w) => { if (failRead) throw new Error('denied'); return { ok: true, text: state[w] }; }, set: async (w, t) => { state[w] = t; } };
+}
+async function clipboardRestoreCase() {
+    const port = memoryPort({ global: 'my copy', selection: 'my selection' });
+    await withClipboardsRestored(port, async () => { await port.set('global', 'x'.repeat(100 * 1024)); await port.set('selection', 'pb-paste-default-1'); });
+    return port.state.global === 'my copy' && port.state.selection === 'my selection' ? [] : [`the clipboards were left as ${JSON.stringify(port.state).slice(0, 80)}`];
+}
+async function clipboardRestoreThrowCase() {
+    const port = memoryPort({ global: 'my copy', selection: 'my selection' });
+    try { await withClipboardsRestored(port, async () => { await port.set('global', 'run text'); throw new Error('run failed'); }); } catch { /* the run's own failure */ }
+    return port.state.global === 'my copy' ? [] : ['the clipboard was not restored after a failed run'];
+}
+async function clipboardUnreadableCase() {
+    const port = memoryPort({ global: 'a', selection: 'b' }, true);
+    const notes = [];
+    await withClipboardsRestored(port, async () => { await port.set('global', 'run text'); }, (n) => notes.push(n));
+    return notes.filter((n) => /could not be read before the run \(denied\), so it was not restored/.test(n)).map((n) => n.replace(/^note -- /, ''));
+}
+async function clipboardUnreadableLeftCase() {
+    const port = memoryPort({ global: 'a', selection: 'b' }, true);
+    await withClipboardsRestored(port, async () => { await port.set('global', 'run text'); });
+    return port.state.global === 'run text' ? [] : ['an unreadable clipboard was written to by the restore'];
+}
+async function clipboardEmptyCase() {
+    const port = memoryPort({ global: null, selection: null });
+    await withClipboardsRestored(port, async () => { await port.set('global', 'run text'); });
+    return port.state.global === '' ? [] : [`a clipboard that held no text kept ${JSON.stringify(port.state.global)}`];
+}
+function recorderCase() {
+    const dir = mkdtempSync(join(tmpdir(), 'pb-keys-work-'));
+    writeFileSync(join(dir, 't1-1.bytes'), '^W');
+    if (!existsSync(dir)) return ['the control folder was not created'];
+    return removeWorkDir(dir) ? [] : ['the recorder folder is still there'];
+}
+/** The real main on a tree with no built PowerBrowser: exit 77 and the one SKIP line (no browser is started). */
+function skipRun() {
+    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('ORCA_')));
+    const r = spawnSync(process.execPath, [SELF], { encoding: 'utf8', timeout: 30000, cwd: REPO_ROOT, env: { ...env, PB_LIVE_LOCK_HELD: '1', PB_FIREFOX_BIN: '/nonexistent/pb-self-test/powerbrowser' } });
+    const fails = [];
+    if (r.status !== SKIP_EXIT) fails.push(`exit ${r.status}, want ${SKIP_EXIT} (${String(r.stdout).trim().slice(0, 120)} ${String(r.stderr).trim().slice(0, 120)})`);
+    if (!new RegExp(`^${NAME}: SKIP -- .+`, 'm').test(r.stdout ?? '')) fails.push('no "<name>: SKIP -- <reason>" line on stdout');
+    return fails;
+}
+
+async function runSelfTest() {
     const keysTs = `export const ORCA_TERMINAL_PASSTHROUGH_KEYS: readonly string[] = Object.freeze([\n    'ctrl+w', 'ctrl+t',\n]);\n`;
     const namingTs = 'export const TERMINAL_NAME_PATTERN = /^t(\\d+)$/;\n';
     const derive = () => {
@@ -1032,8 +1176,30 @@ function runSelfTest() {
         if (existsSync(join(REPO_ROOT, SHUTDOWN_EVENTS_REL)) && (!readCheckpointFailedEvent(read(join(REPO_ROOT, SHUTDOWN_EVENTS_REL))) || !readPaletteLabel(read(join(REPO_ROOT, SIDEBAR_NAV_REL))))) fails.push('the failed-event name or the palette label reads nothing from the pinned sources');
         return fails;
     };
+    const lib = await import('./lib/orca-tabs-live.mjs');
     const cases = [
         ['all stages control', null, () => all(fixtureObs())],
+        ['passthrough equals the shell keys', null, () => passthroughVerdict(['ctrl+t', 'ctrl+w'], SHELL)],
+        ['a passthrough list differing from the shell keys', 'ORCA_TERMINAL_PASSTHROUGH_KEYS (ctrl+w) differs from the shell keys (ctrl+w, ctrl+t)', () => passthroughVerdict(['ctrl+w'], SHELL)],
+        ['a click on a tab that was not found', "click NOT SCORED -- the terminal's tab was not found to click", () => withGate((g) => { g.click.tab = false; })],
+        ['a restored layout that put keys into the PTY', "restore: keys typed in the Theia editor reached the Orca terminal's PTY", () => withGate((g) => { g.restore.pty = 'x'; })],
+        ['a restored layout whose editor text changed', 'restore: keys typed in the Theia editor landed there as "ab"', () => withGate((g) => { g.restore.text = 'ab'; })],
+        ['a restore leg whose terminal never mounted', 'restore NOT SCORED -- the terminal never showed its xterm', () => withGate((g) => { g.restore.mounted = false; })],
+        ['the focus gate leg whose command reports an error', 'New Orca Terminal produced no hosted terminal', () => withGate((g) => { g.command.error = 'x'; })],
+        ['a New Orca Terminal whose keys did not reach the PTY', 'keys typed after New Orca Terminal did not reach its PTY', () => withGate((g) => { g.command.reached = false; })],
+        ['clipboards restored over an in-memory clipboard (harness-live-tabs-13)', null, () => clipboardRestoreCase()],
+        ['a clipboard restored even when the run throws', null, () => clipboardRestoreThrowCase()],
+        ['a clipboard that cannot be read is named and left', 'the global clipboard could not be read before the run (denied)', () => clipboardUnreadableCase()],
+        ['an unreadable clipboard is not written by the restore', null, () => clipboardUnreadableLeftCase()],
+        ['a clipboard that held no text is emptied of the run\'s text', null, () => clipboardEmptyCase()],
+        ['the recorder folder is removed', null, () => recorderCase()],
+        ['the confirmation judged against a baseline (a dialog that was already open is not the close key\'s)', null, () => (lib.confirmationAppeared(null, ['Stop running command?']) === false && lib.confirmationAppeared({ count: 1, text: 'Stop running command? x' }, ['Stop running command?']) === true ? [] : ['the baseline rule is wrong'])],
+        ['another dialog is not Orca\'s close confirmation', 'not the close confirmation', () => (lib.confirmationAppeared({ count: 1, text: 'Delete file?' }, ['Stop running command?']) ? [] : ['not the close confirmation'])],
+        ['stage 2 not run is a skip', null, () => (skipsOf({ stage2Skip: 'no built orca/' }).length === 1 && skipsOf({ stage2Skip: null }).length === 0 ? [] : ['skipsOf is wrong'])],
+        ['stage 2 not run exits 77 when nothing failed', null, () => (lib.verdictExitQuiet(NAME, [], skipsOf({ stage2Skip: 'no built orca/' })) === SKIP_EXIT ? [] : ['a partial run did not exit 77'])],
+        ['a failure wins over the skipped stage 2', null, () => (lib.verdictExitQuiet(NAME, ['control failed'], skipsOf({ stage2Skip: 'no built orca/' })) === 1 ? [] : ['a failure did not win over a skip'])],
+        ['the live lock is taken by a row started outside the driver (harness-live-tabs-14)', null, () => lib.lockProbeVerdict(SELF, NAME)],
+        ['the real main with no built PowerBrowser exits 77 with the one SKIP line', null, () => skipRun()],
         ['pre-merge run: stage 2 SKIP while orca-panes is absent', null, () => { const o = fixtureObs(); o.orca = null; return overallVerdict({ control: controlVerdict(o), stage2: [], stage2Skip: 'lane p64-02 not merged', panesPresent: false, repeat: repeatVerdict(o) }); }],
         ['derivations over fixture sources', null, derive],
         ['real module import (child Node, 10 s)', null, () => importSilenceVerdict(observeImport())],
@@ -1100,7 +1266,7 @@ function runSelfTest() {
     let ok = 0;
     for (const [label, naming, runCase] of cases) {
         let fails;
-        try { fails = runCase(); } catch (err) { fails = [`threw ${err.message}`]; }
+        try { fails = await runCase(); } catch (err) { fails = [`threw ${err.message}`]; }
         const text = fails.join('\n');
         if (naming === null) {
             if (fails.length) { console.error(`  FAIL ${label} -> not green: ${text}`); failures++; } else console.log(`  control ${label} -> green`);
@@ -1118,10 +1284,20 @@ const isEntryPoint = (() => {
 })();
 if (isEntryPoint) {
     const args = process.argv.slice(2);
-    const unknown = args.find((a) => a !== '--self-test');
+    const unknown = args.find((a) => a !== '--self-test' && a !== '--lock-probe');
     if (unknown !== undefined) {
-        console.error(`${NAME}: FAIL -- unknown argument '${unknown}' (usage: node ${SELF_REL} [--self-test])`);
+        console.error(`${NAME}: FAIL -- unknown argument '${unknown}' (usage: node ${SELF_REL} [--self-test | --lock-probe])`);
         process.exit(2);
     }
-    process.exit(args.includes('--self-test') ? runSelfTest() : await main());
+    if (args.includes('--self-test')) process.exit(await runSelfTest());
+    // A live row started outside the driver takes the live lock itself, before it launches anything.
+    const lib = await import('./lib/orca-tabs-live.mjs');
+    let held;
+    try { held = lib.reexecUnderLiveLock(SELF, args); } catch (err) {
+        console.error(`${NAME}: FAIL -- ${err.message}`);
+        process.exit(1);
+    }
+    if (held !== null) process.exit(held);
+    if (args.includes('--lock-probe')) { console.log(lib.lockProbeLine(NAME)); process.exit(0); }
+    process.exit(await main());
 }

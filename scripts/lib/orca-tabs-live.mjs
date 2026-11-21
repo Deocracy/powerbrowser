@@ -29,14 +29,25 @@
 // stdout and stderr write goes through orca-run.mjs's redact, which also
 // replaces the offer itself once it has been read.
 //
+// The live lock: a live row started on its own (PB_LIVE_LOCK_HELD is not "1") takes
+// <git common dir>/pb-live.lock itself, before it launches anything, through
+// reexecUnderLiveLock (harness-live-tabs-14, lane H1: the driver takes it and exports
+// PB_LIVE_LOCK_HELD=1 for the rows it runs). A row wrapped in flock on that same file by
+// its caller must also export PB_LIVE_LOCK_HELD=1, or it waits on its own parent.
+//
+// Fixture git: the scratch repository's git runs with no global or system config, no
+// signing and no hooks (fixtureGit), so a developer's ~/.gitconfig cannot block or alter
+// the fixture commits (harness-live-tabs-13).
+//
 // Node built-ins and the repo's lib modules only.
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { liveEnv, seedClaudeLogin } from './firefox-bidi.mjs';
+import { verdictExit } from './skip-verdict.mjs';
 
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -61,10 +72,193 @@ const SERVICE_URL = 'chrome://powerbrowser/content/OrcaService.sys.mjs';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
 
+// ---------------------------------------------------------------------------
+// The live lock.
+
+/** The lock file every live run shares: <git common dir>/pb-live.lock, or PB_LIVE_LOCK_FILE (the self-test's own file). */
+export function liveLockFile(root = REPO_ROOT, env = process.env) {
+    if (env.PB_LIVE_LOCK_FILE) return env.PB_LIVE_LOCK_FILE;
+    const common = execFileSync('git', ['-C', root, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim();
+    return join(common, 'pb-live.lock');
+}
+
+/**
+ * Takes the live lock for a live row started outside the driver. Returns null when PB_LIVE_LOCK_HELD is "1" (the
+ * driver, or a caller that holds the lock, already did: the row goes on in this process). Otherwise runs
+ * `node <self> <args>` under flock -o on the lock file (-o: the row's own children, a detached orcad among them, do not inherit the
+ * lock descriptor and so cannot keep it after the row ends) with PB_LIVE_LOCK_HELD=1 and returns that run's exit status (77
+ * and every other status pass through); the caller exits with it and launches nothing itself.
+ */
+export function reexecUnderLiveLock(self, args, { root = REPO_ROOT, env = process.env } = {}) {
+    if (env.PB_LIVE_LOCK_HELD === '1') return null;
+    const r = spawnSync('flock', ['-o', liveLockFile(root, env), process.execPath, self, ...args], { stdio: 'inherit', env: { ...env, PB_LIVE_LOCK_HELD: '1' } });
+    if (r.error) throw new Error(`could not take the live lock with flock (${r.error.code ?? r.error.message}); install util-linux or run through scripts/verify-platform.sh`);
+    return r.status ?? 1;
+}
+
+/**
+ * The self-test's control for a live row's lock (no browser): runs `node <self> --lock-probe` with PB_LIVE_LOCK_HELD
+ * unset and its own lock file, and requires the row to report that it holds the lock (the env flag set and a lock that a
+ * second flock -n cannot take). Resolves red reasons.
+ */
+export function lockProbeVerdict(self, name) {
+    const dir = mkdtempSync(join(tmpdir(), 'pb-lock-probe-'));
+    try {
+        const lockFile = join(dir, 'pb-live.lock');
+        writeFileSync(lockFile, '');
+        const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'PB_LIVE_LOCK_HELD' && !k.startsWith('ORCA_')));
+        const r = spawnSync(process.execPath, [self, '--lock-probe'], { encoding: 'utf8', timeout: 20000, env: { ...env, PB_LIVE_LOCK_FILE: lockFile } });
+        const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+        const fails = [];
+        if (r.status !== 0) fails.push(`${name} --lock-probe exited ${r.status} (${out.trim().slice(0, 120)})`);
+        if (!/lock-probe: held=1 locked=1\b/.test(out)) fails.push(`${name} started without PB_LIVE_LOCK_HELD did not take the live lock before running (${out.trim().slice(0, 120)})`);
+        return fails;
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+}
+
+/** What a row prints for --lock-probe once it is running: whether this process holds the live lock. Never launches anything. */
+export function lockProbeLine(name, env = process.env) {
+    const lockFile = liveLockFile(REPO_ROOT, env);
+    // A second, non-blocking flock fails (status 1) exactly while another open file description holds the lock.
+    const taken = spawnSync('flock', ['-n', lockFile, 'true']);
+    return `${name}: lock-probe: held=${env.PB_LIVE_LOCK_HELD === '1' ? 1 : 0} locked=${taken.status === 1 ? 1 : 0}`;
+}
+
+/** verdictExit with its SKIP line suppressed: the self-tests ask what the exit status is without printing a SKIP line of their own. */
+export function verdictExitQuiet(name, failures, skips) {
+    const log = console.log;
+    console.log = () => {};
+    try {
+        return verdictExit(name, failures, skips);
+    } finally {
+        console.log = log;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Redaction after the session.
+
+let retained = null;
+/** Keeps a session's redact function and secret list so output printed after the session is redacted too. */
+export function retainForOutput(redact, secrets) {
+    retained = { redact, secrets };
+}
+/** Redacts text printed after a session ended (a verdict reason, a note, a harness error); unchanged before any session. */
+export function redactAfterSession(text) {
+    return retained ? retained.redact(String(text), retained.secrets) : String(text);
+}
+
+// ---------------------------------------------------------------------------
+// Orca's confirmation dialog, judged against a baseline.
+
+/** Orca's confirmation dialog, as the live rows detect it. */
+export const CONFIRMATION_SELECTOR = 'body > [data-radix-popper-content-wrapper] [role="dialog"], body > [data-radix-popper-content-wrapper] [role="alertdialog"], body > [role="dialog"], body > [role="alertdialog"], body > div [role="alertdialog"]';
+const ORCA_CLOSE_DIALOG_REL = 'orca/src/renderer/src/components/terminal-pane/CloseTerminalDialog.tsx';
+
+/** The dialog titles of Orca's close-terminal confirmation, read from the pinned source: [] when orca/ is absent. */
+export function closeDialogTitles(root = REPO_ROOT) {
+    const text = read(join(root, ORCA_CLOSE_DIALOG_REL)) ?? '';
+    return [...text.matchAll(/stop_(?:command|agent)_title',\s*'([^']+)'/g)].map((m) => m[1]);
+}
+
+/** Page source: marks every confirmation dialog already present, so a later one is told from them. Resolves their count. */
+export const DIALOG_BASELINE = `const found = document.querySelectorAll(${JSON.stringify(CONFIRMATION_SELECTOR)});
+    for (const d of found) d.setAttribute('data-pb-dialog-baseline', '1');
+    return found.length;`;
+/** Page source: the dialogs that appeared since the baseline: { count, text } or null. */
+export const DIALOG_NEW = `const d = [...document.querySelectorAll(${JSON.stringify(CONFIRMATION_SELECTOR)})].filter((e) => !e.hasAttribute('data-pb-dialog-baseline'));
+    return d.length ? { count: d.length, text: d.map((e) => (e.textContent || '').replace(/\\s+/g, ' ').trim()).join(' | ') } : null;`;
+/** Page source: clicks Cancel inside a dialog that appeared since the baseline only. */
+export const DIALOG_CANCEL_NEW = `const d = [...document.querySelectorAll(${JSON.stringify(CONFIRMATION_SELECTOR)})].find((e) => !e.hasAttribute('data-pb-dialog-baseline'));
+    const btn = d && [...d.querySelectorAll('button')].find((b) => /cancel/i.test(b.textContent));
+    if (btn) btn.click();
+    await sleep(500);
+    return !!btn;`;
+
+/**
+ * Whether a dialog that appeared since the baseline is Orca's close-terminal confirmation: one appeared, and (when the
+ * pinned source names its titles) its text carries one of them. A dialog that was already open, or another one, is not.
+ */
+export function confirmationAppeared(found, titles) {
+    if (!found || !found.count) return false;
+    return titles.length === 0 || titles.some((t) => String(found.text).includes(t));
+}
+
+// ---------------------------------------------------------------------------
+// Fixture git.
+
+/** The environment fixture git runs in: no global or system config; HOME a scratch folder, never the developer's. */
+export function fixtureGitEnv(basePath, home) {
+    return { PATH: basePath, HOME: home, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' };
+}
+
+/** Arguments that keep a fixture commit free of signing and hooks, whatever the repository's own config says. */
+export const FIXTURE_GIT_ARGS = ['-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', '-c', 'core.hooksPath=/dev/null'];
+
+/** A git runner for the scratch repository `repo`: git(...args) runs `git -C repo` under fixtureGitEnv. */
+export function fixtureGit(repo, basePath, home = dirname(repo)) {
+    return (...a) => execFileSync('git', ['-C', repo, ...FIXTURE_GIT_ARGS, ...a], { env: fixtureGitEnv(basePath, home), stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
+/**
+ * The self-test's control for fixtureGit (no browser): a HOME whose .gitconfig demands signing with a program that does
+ * not exist and names a hooks folder whose pre-commit hook records itself and fails. The raw invocation (that HOME, no
+ * flags) must be hit by it (a commit that fails or a hook that ran: the detector), and fixtureGit must then commit
+ * cleanly with no hook run. Resolves red reasons.
+ */
+export function fixtureGitVerdict(makeGit = fixtureGit) {
+    const dir = mkdtempSync(join(tmpdir(), 'pb-fixture-git-'));
+    try {
+        const home = join(dir, 'home');
+        const hooks = join(dir, 'hooks');
+        mkdirSync(home, { recursive: true });
+        mkdirSync(hooks, { recursive: true });
+        const marker = join(dir, 'hook-ran');
+        writeFileSync(join(hooks, 'pre-commit'), `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexit 1\n`);
+        chmodSync(join(hooks, 'pre-commit'), 0o755);
+        writeFileSync(join(home, '.gitconfig'), `[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = /nonexistent/pb-gpg\n[core]\n\thooksPath = ${hooks}\n`);
+        const path = process.env.PATH ?? '';
+        const prepare = (name) => { const r = join(dir, name); mkdirSync(r, { recursive: true }); writeFileSync(join(r, 'README'), 'x\n'); return r; };
+        const commitWith = (run) => { try { run('init', '-q'); run('add', '.'); run('commit', '-q', '-m', 'fixture'); return null; } catch (e) { return String(e.stderr ?? e.message).trim().split('\n').pop(); } };
+        const fails = [];
+        const rawRepo = prepare('raw');
+        const rawGit = (...a) => execFileSync('git', ['-C', rawRepo, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', ...a], { env: { PATH: path, HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
+        if (commitWith(rawGit) === null && !existsSync(marker)) fails.push('fixture git: the hostile HOME config blocked nothing on the raw invocation, so the control proves nothing');
+        rmSync(marker, { force: true });
+        const error = commitWith(makeGit(prepare('fixture'), path, home));
+        if (error !== null) fails.push(`fixture git: the fixture commit failed under a developer config with signing and hooks (${error})`);
+        if (existsSync(marker)) fails.push('fixture git: a global pre-commit hook ran for the fixture commit');
+        return fails;
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+}
+
 /** The built PowerBrowser this run launches. */
 export const firefoxBin = (root = REPO_ROOT) => process.env.PB_FIREFOX_BIN || join(root, 'objdir', 'dist', 'bin', 'powerbrowser');
 /** The Theia backend this run launches: PB_BACKEND_MAIN, else this tree's. */
 export const backendMain = (root = REPO_ROOT) => process.env.PB_BACKEND_MAIN || join(root, BACKEND_MAIN_REL);
+
+/** Whether the app under test (PB_BACKEND_MAIN, else this tree's) has orca-panes in its generated frontend: its document then holds Orca's listeners once the bundle boots. */
+export function appWiresOrcaPanes(main = backendMain()) {
+    const frontend = join(dirname(main), '..', '..', 'src-gen', 'frontend', 'index.js');
+    return /@powerbrowser\/orca-panes\//.test(read(frontend) ?? '');
+}
+
+/**
+ * What a paste control in the Theia frame may claim about Orca's document listeners (WINDOWS 62), decided from the frontend under
+ * test: wired (the app names orca-panes), bundleBuilt (the pane bundle this tree serves exists), booted (the bundle booted in the
+ * frame). 'covered': booted. 'not-wired': the app has no Orca listeners to cover. 'red': built but never booted (a blind control).
+ * 'skip': wired but the bundle is not built, so Orca's listeners were not in the frame and the control did not cover them.
+ */
+export function listenerCoverage({ wired, bundleBuilt, booted }) {
+    if (!wired) return { verdict: 'not-wired', note: 'the app under test wires no orca-panes module, so no Orca document listeners are in the Theia frame' };
+    if (booted) return { verdict: 'covered' };
+    if (bundleBuilt) return { verdict: 'red', reason: 'NOT SCORED -- the Orca pane bundle is built but did not boot in the Theia frame, so the paste control does not cover its document listeners' };
+    return { verdict: 'skip', reason: `Orca listeners not covered: the app under test wires orca-panes but ${PANES_BUNDLE_REL} is not built, so the paste control ran without Orca's document listeners. Next step: nix develop .#orca --command bash scripts/build-orca.sh` };
+}
 
 /**
  * Phase 65 (C64-7, P65-01): the clause-level prerequisite of orca-tabs-live stage (g)'s merge-editor half. A named
@@ -202,6 +396,9 @@ export async function withOrcaTabsSession({ log = () => {}, needOrca = true, age
     const secrets = [];
     // Redaction first: nothing below may print before it is in place. The offer joins the list once read.
     const restoreOutput = installOutputRedaction(secrets);
+    // The caller prints its verdict after this session has ended and the stream hook is gone: it redacts through
+    // redactAfterSession, which keeps this session's list (harness-live-tabs-12).
+    retainForOutput(redact, secrets);
     const savedEnv = {};
     for (const k of [...scrubbedNames(), 'PATH', 'MOZ_PURGE_CACHES', 'XDG_CONFIG_HOME']) savedEnv[k] = process.env[k];
     const recorded = new Map();
@@ -273,6 +470,8 @@ export async function withOrcaTabsSession({ log = () => {}, needOrca = true, age
                 w.sendText(${JSON.stringify(text)});
                 return true;`);
             ctx.typeInto = async (id, text) => { await ctx.focusTheiaFrame(); await ctx.activate(id); await ctx.typeText(text); };
+            /** Adds a value (a needle form of the offer) to the redaction list. */
+            ctx.addSecret = (value) => { if (value && !secrets.includes(value)) secrets.push(value); };
             ctx.offerFromFile = async () => {
                 const s = await orcaState();
                 const dir = s.dataRoot ? await OrcaEnv.bridgeDirFor(s.dataRoot, (n) => liveEnv()[n], 'linux') : null;
@@ -308,7 +507,8 @@ export async function withOrcaTabsSession({ log = () => {}, needOrca = true, age
                 const cliEnv = { PATH: basePath, HOME: savedEnv.HOME ?? process.env.HOME ?? '', ORCA_USER_DATA: state.effectiveRoot, ORCA_USER_DATA_PATH: state.effectiveRoot };
                 mkdirSync(repo, { recursive: true });
                 writeFileSync(join(repo, 'README'), 'orca-tabs-live scratch repository\n');
-                const git = (...a) => execFileSync('git', ['-C', repo, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', ...a], { env: { PATH: basePath, HOME: cliEnv.HOME }, stdio: ['ignore', 'pipe', 'pipe'] });
+                // The fixture's git sees no developer config: no signing, no hooks (harness-live-tabs-13). The Orca CLI keeps the real HOME above.
+                const git = fixtureGit(repo, basePath, scratch);
                 git('init', '-q');
                 git('add', '.');
                 git('commit', '-q', '-m', 'fixture');
