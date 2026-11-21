@@ -11821,9 +11821,11 @@ const AGENT_SAME_SITE = ["None", "Lax", "Strict"];
 
 // agent-browser-03 / chrome-actor-04: every agent of every worktree shares the one agent container, so a session that
 // the user or another agent made there would be readable and replaceable by any later agent. The cookie rows
-// therefore act only on the site the tab is on now (its registrable domain), and cookie.get never returns an httpOnly
-// cookie's value. Page script on that site already reads and writes its other cookies, so an agent on the site loses
-// nothing it could not do through the page.
+// therefore act only on the site the tab is on now (its registrable domain), and no row reaches an httpOnly cookie:
+// cookie.get never returns its value, cookie.set never makes one and never writes a name the site holds as one, and
+// cookie.delete never ends one. The agent picks the current site with browser.goto, so the site scope alone restricts
+// little; the httpOnly rule is the wall. Page script on the site reads and writes only its non-httpOnly cookies, and
+// those are all the rows still reach.
 function agentSiteOf(host) {
   const h = String(host ?? "").toLowerCase().replace(/^\.+/, "").replace(/\.$/, "");
   if (!h) {
@@ -11835,6 +11837,13 @@ function agentSiteOf(host) {
     // an IP address, localhost or a bare public suffix is its own site
     return h;
   }
+}
+
+// agent-browser-03: true when the site holds an httpOnly cookie of this name, under any host or path of the site, so a
+// set cannot shadow it with a longer path or a domain cookie (the server may read the agent's value first) and a
+// delete cannot end it.
+function agentHttpOnlyNamed(host, name, attrs) {
+  return Services.cookies.getCookiesFromHost(host, attrs).some(c => c.name === name && c.isHttpOnly);
 }
 
 // The host a cookie row may act on: `host` when it is on the tab's current site, else "".
@@ -11867,7 +11876,7 @@ function agentCookieSet(entry, params) {
     return agentFailed("browser_error");
   }
   const host = agentSiteHost(entry, named);
-  if (!host) {
+  if (!host || params.httpOnly === true || agentHttpOnlyNamed(host, params.name, agentOriginAttributes(entry))) {
     return agentFailed("browser_command_unavailable");
   }
   const sameSite = { none: 0, lax: 1, strict: 2 }[String(params.sameSite ?? "lax").toLowerCase()] ?? 1;
@@ -11888,6 +11897,9 @@ function agentCookieDelete(entry, params) {
     return agentFailed("browser_command_unavailable");
   }
   const attrs = agentOriginAttributes(entry);
+  if (agentHttpOnlyNamed(host, params.name, attrs)) {
+    return agentFailed("browser_command_unavailable");
+  }
   let deleted = 0;
   // Deleted the way a Set-Cookie with a past expiry deletes (CookieStorage::AddCookie, "the intent was simply to delete
   // the old cookie"), in the agent container only. Services.cookies.remove stays the token-guarded clear helper's

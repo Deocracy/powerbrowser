@@ -370,7 +370,7 @@ async function cookiesClause(texts) {
     services.cookies = {
         getCookiesFromHost: (host) => { calls.push(`getCookiesFromHost ${host}`); return jar.filter(c => site(c.host) === site(host)); },
         getCookiesWithOriginAttributes: () => { calls.push('getCookiesWithOriginAttributes'); return jar; },
-        add: (host) => { calls.push(`add ${host}`); return { result: 0 }; },
+        add: (host) => { calls.push(`add ${host.replace(/^\./, '')}`); return { result: 0 }; },
     };
     // Gecko's eTLD service throws for an IP address and for a host with too few labels.
     services.eTLD = { getBaseDomainFromHost: h => { if (/^[\d.]+$/.test(h) || !h.includes('.')) throw new Error('NS_ERROR_HOST_IS_IP_ADDRESS'); return site(h); } };
@@ -394,6 +394,19 @@ async function cookiesClause(texts) {
         const reply = await w.agent('a1', method, params);
         if (reply?.where === 'done' || calls.length) failures.push(`cookies: ${label} answered ${JSON.stringify(reply?.where)} after cookie calls [${calls.join(', ')}]; expected a refusal with none (agent-browser-03)`);
     }
+    // The httpOnly wall: the agent picks the current site with browser.goto, so the site scope alone is no wall.
+    for (const [label, method, params] of [
+        ['cookie.set with httpOnly true', 'browser.cookie.set', { name: 'fresh', value: 'x', domain: 'app.example.com', httpOnly: true }],
+        ['cookie.set over a name the site holds as httpOnly', 'browser.cookie.set', { name: 'sid', value: 'attacker', domain: 'app.example.com', path: '/app' }],
+        ['cookie.delete of an httpOnly cookie', 'browser.cookie.delete', { name: 'sid', domain: 'example.com' }],
+    ]) {
+        calls.length = 0;
+        const reply = await w.agent('a1', method, params);
+        if (reply?.where === 'done' || calls.some(c => c.startsWith('add '))) failures.push(`cookies: ${label} answered ${JSON.stringify(reply?.where)} after cookie calls [${calls.join(', ')}]; page script cannot touch an httpOnly cookie, so an agent may not swap or end one (agent-browser-03)`);
+    }
+    calls.length = 0;
+    const plain = await w.agent('a1', 'browser.cookie.delete', { name: 'theme', domain: 'app.example.com' });
+    if (plain?.where !== 'done' || !calls.includes('add app.example.com')) failures.push(`cookies: cookie.delete of a plain cookie on the current site answered ${JSON.stringify(plain)}; expected done (positive control)`);
     calls.length = 0;
     const own = await w.agent('a1', 'browser.cookie.set', { name: 'theme', value: 'light', domain: 'app.example.com' });
     if (own?.where !== 'done' || !calls.includes('add app.example.com')) failures.push(`cookies: cookie.set on the current site answered ${JSON.stringify(own)}; expected done (positive control)`);
@@ -620,6 +633,21 @@ function replaceOnce(text, from, to, what) {
 
 const PLANTS = [
     {
+        name: 'agent-browser-03: cookie.set makes an httpOnly cookie',
+        plant: t => ({ ...t, api: replaceOnce(t.api, 'if (!host || params.httpOnly === true || agentHttpOnlyNamed(', 'if (!host || agentHttpOnlyNamed(', 'httpOnly set') }),
+        expect: 'cookie.set with httpOnly true answered',
+    },
+    {
+        name: 'agent-browser-03: cookie.set overwrites or shadows an httpOnly name',
+        plant: t => ({ ...t, api: replaceOnce(t.api, 'if (!host || params.httpOnly === true || agentHttpOnlyNamed(host, params.name, agentOriginAttributes(entry))) {', 'if (!host || params.httpOnly === true) {', 'httpOnly name set') }),
+        expect: 'over a name the site holds as httpOnly',
+    },
+    {
+        name: 'agent-browser-03: cookie.delete ends an httpOnly cookie',
+        plant: t => ({ ...t, api: replaceOnce(t.api, '  if (agentHttpOnlyNamed(host, params.name, attrs)) {\n    return agentFailed("browser_command_unavailable");\n  }\n  let deleted = 0;', '  let deleted = 0;', 'httpOnly delete') }),
+        expect: 'cookie.delete of an httpOnly cookie',
+    },
+    {
         name: '67-WR-04: orcaStatus rejects { clientReason: null }',
         plant: t => ({ ...t, api: replaceOnce(t.api, '} else if (data.clientReason === null) {', '} else if (false) {', 'null branch') }),
         expect: 'rejected the clearing form',
@@ -681,7 +709,7 @@ const PLANTS = [
     },
     {
         name: 'agent-browser-04: the mark shows only while an agent is active',
-        plant: t => ({ ...t, chromeBar: replaceOnce(t.chromeBar, 'if (!tab?.agent) {', 'if (!tab?.agentControl.active) {', 'mark guard') }),
+        plant: t => ({ ...t, chromeBar: replaceOnce(t.chromeBar, 'if (!tab?.agentControl.agent) {', 'if (!tab?.agentControl.active) {', 'mark guard') }),
         expect: 'not on every agent tab',
     },
     {
