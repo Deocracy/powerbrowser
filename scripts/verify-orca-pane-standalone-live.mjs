@@ -61,7 +61,7 @@
 //   node scripts/verify-orca-pane-standalone-live.mjs --self-test
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -308,11 +308,11 @@ export function render({ isolated, isolatedDetail, mounts, kinds, chatSource, ha
     const ok = !failed.length && !missing && !harness;
     if (harness) lines.push(`${NAME}: FAIL -- harness: ${harness}`);
     else lines.push(ok ? `${NAME}: PASS -- isolated per-leaf mount, ${kinds.length} hosted type(s) mounted, late CLI terminal in ${lateMs} ms${gate === null ? `, mount gate ${gateDetail}` : ''}` : `${NAME}: FAIL -- ${failed[0] ?? 'not reached'}`);
-    // A gate row whose explaining state cannot be read (an empty page:creation mount) is a clause that did not run: with no failure
-    // anywhere the run is a SKIP (exit 77, the SKIP line last), never a PASS; a failure wins (audit harness-live-panels-09).
+    // A gate row whose explaining state cannot be read (an empty mount of a kind with no probe) is a clause that did not run: with no
+    // failure anywhere the run is a SKIP (exit 77, the SKIP line last), never a PASS; a failure wins (audit harness-live-panels-09).
     if (ok && unverified.length) {
         lines[lines.length - 1] = `${NAME}: ran -- every clause that could run passed; ${unverified.length} gate row(s) are empty with no readable state to explain them`;
-        lines.push(skipLine(NAME, `the empty ${[...new Set(unverified.map(r => r.kind))].join(', ')} mount is not explained by Orca's own state, which the bundle's state() does not expose; expose the pending creation in the overlay's state() so the gate can read it`));
+        lines.push(skipLine(NAME, `the empty ${[...new Set(unverified.map(r => r.kind))].join(', ')} mount is not explained by Orca's own state, which the bundle's state() does not expose; expose that state in the overlay's state() and give the kind a probe so the gate can read it`));
         return { code: SKIP_EXIT, lines };
     }
     return { code: ok ? 0 : 1, lines };
@@ -672,7 +672,7 @@ async function live(opts = {}) {
 // ---------------------------------------------------------------- self-test
 
 async function selfTest() {
-    const { gateRow: gateRowOf, safePathname, serve, makeRepo } = await import('./lib/orca-pane-harness.mjs');
+    const { gateRow: gateRowOf, safePathname, serve, makeRepo, EMPTY_BY_DESIGN, ROUTE_ENTRY } = await import('./lib/orca-pane-harness.mjs');
     let failed = 0;
     const ok = (name, cond) => { console.log(`  ${cond ? 'ok ' : 'NOT OK '} ${name}`); if (!cond) failed += 1; };
     const root = (o = {}) => ({ xtermsTotal: 2, xtermsVisible: 1, ownMarker: true, otherMarker: false, ...o });
@@ -713,7 +713,50 @@ async function selfTest() {
     ok('an empty orchestration mount whose setting is on is red (the mount is broken, not empty by design)', /^orchestration \(standalone\): nothing rendered, and the experimentalOrchestrationPanel setting being off does not hold/.test(gateVerdict({ kinds, rows: rowsOf(emptyOrch(false)), controls: ctl }) ?? ''));
     ok('an empty orchestration mount whose setting could not be read is red', /could not be read, so the empty mount is not explained/.test(gateVerdict({ kinds, rows: rowsOf(emptyOrch(null)), controls: ctl }) ?? ''));
     ok('a mount that holds only the waiting marker is red even though it has elements', /^sidebar \(standalone\): the mount is still in Orca's waiting state/.test(gateVerdict({ kinds, rows: rowsOf({ 'sidebar@standalone': { descendantCount: 3, waiting: true } }), controls: ctl }) ?? ''));
-    ok('an empty page:creation mount (no readable state) is mounted but recorded as unverified', gateRowOf(raw('page:creation', 'standalone', { descendantCount: 0 })).unverified === true && gateRowOf(raw('page:creation', 'standalone', { descendantCount: 0 })).mounted === true);
+    // page:creation reads state().pendingCreation (the H7 handoff on harness-live-panels-09): its empty mount is explained only
+    // when no creation is pending, read from the bundle; a pending creation with nothing rendered, or an unreadable state, is red.
+    {
+        const emptyCreation = j => gateRowOf(raw('page:creation', 'standalone', { descendantCount: 0, emptyJustified: j }));
+        ok('an empty page:creation mount with no creation pending is mounted, explained and not unverified', emptyCreation(true).mounted === true && /no worktree creation is pending/.test(emptyCreation(true).empty ?? '') && emptyCreation(true).unverified === undefined);
+        ok('an empty page:creation mount while a creation is pending is red', emptyCreation(false).mounted === false && /no worktree creation pending does not hold/.test(emptyCreation(false).message ?? ''));
+        ok('an empty page:creation mount whose state could not be read is red', emptyCreation(null).mounted === false && /could not be read/.test(emptyCreation(null).message ?? ''));
+        // The page-side expression itself, over fake bundles, for each route's entry expression.
+        const probe = EMPTY_BY_DESIGN['page:creation'].probe;
+        const read = (bundle) => new Function('PbPanes', `return ${probe(null, 'PbPanes')};`)(bundle);
+        ok('probe: no creation pending reads true', read({ state: () => ({ pendingCreation: false }) }) === true);
+        ok('probe: a pending creation reads false', read({ state: () => ({ pendingCreation: true }) }) === false);
+        ok('probe: a bundle without the field reads null (the build predates it)', read({ state: () => ({}) }) === null);
+        ok('probe: a state() that throws reads null', read({ state: () => { throw new Error('not booted'); } }) === null);
+        ok('probe: no bundle at all reads null', read(undefined) === null);
+        ok('probe: every route entry is named in the expression it is given', Object.values(ROUTE_ENTRY).every(entry => probe(null, entry).includes(`${entry}.state().pendingCreation`)));
+        // The field must be the selector the overlay's CreationMount renders on, so the probe and the surface cannot disagree.
+        // Both are read from the tracked overlay sources and compared after the receiver name and whitespace are removed.
+        const norm = (text, receiver) => text.replace(new RegExp(`\\b${receiver}\\.`, 'g'), '$.').replace(/\s+/g, '');
+        // The returned value, not the type declaration above it: an expression holds no brace or semicolon, so a match that
+        // starts at the declaration cannot reach the returned `pairing: pairingState()`.
+        const FIELD = /(\n\s*pendingCreation:\s*)([^{};]*?)(,\n\s*pairing: pairingState\(\))/;
+        const selectorsOf = (mountText, sideText) => {
+            const field = FIELD.exec(mountText)?.[2] ?? null;
+            const surface = /function CreationMount\(\)[\s\S]*?useAppStore\(\(s\) =>\s*([\s\S]*?)\?\s*s\.activePendingCreationId\s*:\s*null/.exec(sideText)?.[1] ?? null;
+            if (field === null) return 'source moved: pb-pane-mount.tsx state() returns no pendingCreation value before pairing';
+            if (surface === null) return 'source moved: pb-side-mounts.tsx CreationMount no longer selects the active pending creation in the form read here';
+            return norm(field, 'store') === norm(surface, 's') ? null : `drift: state().pendingCreation is \`${norm(field, 'store')}\` but CreationMount renders on \`${norm(surface, 's')}\``;
+        };
+        const pbDir = join(REPO_ROOT, 'orca-overlay', 'files', 'src', 'renderer', 'src', 'pb');
+        const mountText = readFileSync(join(pbDir, 'pb-pane-mount.tsx'), 'utf8'), sideText = readFileSync(join(pbDir, 'pb-side-mounts.tsx'), 'utf8');
+        const real = selectorsOf(mountText, sideText);
+        ok(`state().pendingCreation is the selector CreationMount renders on${real ? ` -- ${real}` : ''}`, real === null);
+        const weaker = mountText.replace(FIELD, '$1store.activePendingCreationId !== null$3');
+        ok('plant: a state() field weaker than the surface selector is red naming the drift', weaker !== mountText && /^drift: /.test(selectorsOf(weaker, sideText) ?? ''));
+        ok('plant: the field removed from state() is red', /^source moved: pb-pane-mount/.test(selectorsOf(mountText.replace(FIELD, (m, a, b, c) => c.slice(1)), sideText) ?? ''));
+        ok('plant: CreationMount rewritten is red', /^source moved: pb-side-mounts/.test(selectorsOf(mountText, sideText.replace('function CreationMount()', 'function CreationSurface()')) ?? ''));
+    }
+    // A kind with no readable state (probe: null) stays possible in the table; its empty mount is unverified, never explained.
+    {
+        const table = { 'page:future': { reason: 'a state the bundle does not expose', condition: 'that state holding', probe: null } };
+        const row = gateRowOf(raw('page:future', 'standalone', { descendantCount: 0 }), undefined, table);
+        ok('an empty mount of a kind with no readable state is mounted but recorded as unverified', row.unverified === true && row.mounted === true);
+    }
     ok('an empty kind outside the hand-kept list is red', gateRowOf(raw('sidebar', 'standalone', { descendantCount: 0 })).mounted === false);
     ok('a window error in a gate mount is red', /^sidebar \(standalone\): boom/.test(gateVerdict({ kinds, rows: rowsOf({ 'sidebar@standalone': { windowErrors: ['boom'] } }), controls: ctl }) ?? ''));
     ok('width probe: a width found is green, none is red', widthVerdict({ narrowest: 380, steps: [[640, false]] }) === null && /overflows horizontally at every width probed, last 1600 px/.test(widthVerdict({ narrowest: null, steps: [[640, true], [1600, true]] }) ?? ''));

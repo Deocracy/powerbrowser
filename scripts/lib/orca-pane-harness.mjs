@@ -319,7 +319,9 @@ export function settingsStorageKey(orcaDir = ORCA_DIR) {
  * such a kind is mounted only when `probe`, an expression read in the route's own document, returns true: the state that
  * explains the emptiness holds. false (the state does not hold: the mount is broken) and null (the state could not be
  * read) are red. A kind with `probe: null` has no readable state in the bundle's API: its empty mount is recorded as
- * `unverified`, never as explained (audit harness-live-panels-09).
+ * `unverified`, never as explained (audit harness-live-panels-09). No kind is in that case now: page:creation reads
+ * state().pendingCreation. `probe(settingsKey, mounts)` receives the settings storage key and the expression that names
+ * the bundle's entry in the route's document.
  */
 export const EMPTY_BY_DESIGN = Object.freeze({
     orchestration: {
@@ -330,8 +332,9 @@ export const EMPTY_BY_DESIGN = Object.freeze({
     'page:creation': {
         reason: 'Orca renders no creation surface while no worktree creation is pending',
         condition: 'no worktree creation pending',
-        // The pending-creation state lives in Orca's renderer store, which the bundle's state() does not expose.
-        probe: null,
+        // state().pendingCreation is the overlay's reading of the store selector its CreationMount renders on. A bundle
+        // without the field, or one whose state() throws, reads null (could not be read), which is red.
+        probe: (_key, mounts) => `(() => { try { const p = ${mounts}.state().pendingCreation; return typeof p === 'boolean' ? p === false : null; } catch (e) { return null; } })()`,
     },
 });
 
@@ -341,12 +344,12 @@ export const EMPTY_BY_DESIGN = Object.freeze({
  * and at least one element, or an empty mount of an EMPTY_BY_DESIGN kind whose explaining state was read and holds.
  * o: { kind, route, descendantCount, waiting, emptyJustified (true, false or null), fallback, threw, reactErrors, windowErrors }.
  */
-export function gateRow(o, benign = /^ResizeObserver loop/) {
+export function gateRow(o, benign = /^ResizeObserver loop/, table = EMPTY_BY_DESIGN) {
     const windowErrors = (o.windowErrors ?? []).filter(e => !benign.test(e));
     const reactErrors = o.reactErrors ?? [];
     const threw = o.threw ?? null;
     const first = threw ?? reactErrors[0]?.message ?? windowErrors[0] ?? (o.fallback ? 'Orca error-boundary fallback in the host' : null);
-    const spec = EMPTY_BY_DESIGN[o.kind];
+    const spec = table[o.kind];
     let empty = null, unverified = false, unexplained = null;
     if (o.descendantCount === 0 && !first && !o.waiting && spec) {
         if (spec.probe === null) { empty = spec.reason; unverified = true; }
@@ -409,7 +412,7 @@ export async function gateMount(ev, route, pick, { waitMs = 5000, box = [0, 0, 9
     // The state that would explain an empty mount, read from the same document, only when the mount is empty.
     let emptyJustified = null;
     const spec = EMPTY_BY_DESIGN[pick.kind];
-    if (obs.descendantCount === 0 && spec?.probe) emptyJustified = await ev(spec.probe(settingsStorageKey())).catch(() => null);
+    if (obs.descendantCount === 0 && spec?.probe) emptyJustified = await ev(spec.probe(settingsStorageKey(), M)).catch(() => null);
     return { ...obs, emptyJustified, kind: pick.kind, route, hostId: id, threw: started === 'ok' ? null : started.slice('threw: '.length) };
 }
 

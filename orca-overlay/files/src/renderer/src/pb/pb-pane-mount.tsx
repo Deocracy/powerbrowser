@@ -1351,6 +1351,8 @@ export function state(): {
   mountErrors: MountError[]
   /** Every error recorded in this document, including those no longer kept. */
   mountErrorsTotal: number
+  /** Whether the store holds an active pending worktree creation: the selector CreationMount renders on (pb-side-mounts.tsx). */
+  pendingCreation: boolean
   pairing: { sessionOnly: boolean; deviceKeySupport: string | null }
 } {
   const store = useAppStore.getState()
@@ -1365,6 +1367,9 @@ export function state(): {
     panes: paneRecords(store).length,
     mountErrors: mountErrors.map((error) => ({ ...error })),
     mountErrorsTotal,
+    pendingCreation:
+      store.activePendingCreationId !== null &&
+      store.pendingWorktreeCreations[store.activePendingCreationId] !== undefined,
     pairing: pairingState()
   }
 }
