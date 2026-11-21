@@ -40,8 +40,14 @@
 // pr (D-31 removed the terminal-provider class, D-45 the web-entry class);
 // 68-05 registers that row.
 //
-// Tier: default quick (steps that need orca/ print one SKIP line when it is
-// not fetched); --built full; --self-test quick (hermetic mkdtemp fixtures).
+// Tier: default quick (steps that need orca/ are not run when it is not fetched: the row then exits 77 with
+// one SKIP line, and the driver records SKIP, never PASS; harness-static-structure-01 and SKIP-PROTOCOL.md);
+// --built full; --self-test quick (hermetic mkdtemp fixtures).
+//
+// The overlay itself is required (harness-static-structure-06): an absent orca-overlay/seams.json is red, not
+// zero seams, and every overlay file that the build scripts name (scripts/build-orca*.sh: a vite.pb-*.config.ts,
+// pb-css-scope.mjs or src/renderer/src/pb/ path) must exist under orca-overlay/files/. The list is read from
+// those scripts at check time.
 //
 // Usage:
 //   node scripts/verify-orca-overlay.mjs
@@ -55,6 +61,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { fixtureGitArgs, fixtureGitEnv, withHostileGitConfig } from './lib/fixture-git.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 import { parse } from './lib/toml.cjs';
 import { readRemote } from './verify-orca-mobile-protocol.mjs';
 
@@ -84,6 +92,11 @@ export function validPath(p) {
 
 function git(dir, ...a) {
     return execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 256 * 1024 * 1024 });
+}
+
+// Fixture repositories only: no signing, no hooks, no global or system config (harness-static-structure-11).
+function fgit(dir, ...a) {
+    return execFileSync('git', [...fixtureGitArgs(), '-C', dir, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: fixtureGitEnv(), maxBuffer: 256 * 1024 * 1024 });
 }
 
 function isGitTop(dir) {
@@ -144,6 +157,18 @@ export function missingPrClasses(rows) {
     return PR_CLASSES.filter((c) => !rows.some((r) => r?.upstream?.class === c && r.upstream.pr !== null && r.upstream.pr !== undefined));
 }
 
+// The overlay files the build scripts name, derived from scripts/build-orca*.sh: a Vite config at the Orca root,
+// the CSS scoping pass, or a path under src/renderer/src/pb/. Each must be a file of orca-overlay/files/.
+const NAMED_OVERLAY = /(?<![A-Za-z0-9._-])(vite\.pb-[a-z-]+\.config\.ts|pb-css-scope\.mjs|src\/renderer\/src\/pb\/[A-Za-z0-9._/-]+\.(?:tsx?|mjs))(?![A-Za-z0-9._-])/g;
+export function namedOverlayFiles(repoRoot) {
+    const dir = join(repoRoot, 'scripts');
+    const out = new Set();
+    let names = [];
+    try { names = readdirSync(dir).filter((f) => /^build-orca[A-Za-z0-9-]*\.sh$/.test(f)); } catch { /* none */ }
+    for (const f of names) for (const m of readFileSync(join(dir, f), 'utf8').matchAll(NAMED_OVERLAY)) out.add(m[1]);
+    return [...out].sort();
+}
+
 function lastLine(r) {
     return `${r.stdout ?? ''}\n${r.stderr ?? ''}`.split('\n').map((l) => l.trim()).filter(Boolean).find((l) => l.includes('FAIL')) ?? `exit ${r.status}`;
 }
@@ -151,12 +176,16 @@ function lastLine(r) {
 export function check({ repoRoot = REPO_ROOT, overlayDir = join(repoRoot, 'orca-overlay'), orcaDir = join(repoRoot, 'orca'), cap } = {}) {
     const fails = [];
     const notes = [];
+    const skips = [];
     const seamsFile = join(overlayDir, 'seams.json');
     const patchesDir = join(overlayDir, 'patches');
 
-    // a. seams.json, in the shape lane p62-02 also reads. An absent file is zero seams.
+    // a. seams.json, in the shape lane p62-02 also reads. An absent file is red: an overlay that vanished is not
+    // "zero seams" (harness-static-structure-06).
     let rows = [];
-    if (existsSync(seamsFile)) {
+    if (!existsSync(seamsFile)) {
+        fails.push('orca-overlay/seams.json is absent (an overlay that vanished is not zero seams; restore it from git)');
+    } else {
         let doc;
         try { doc = JSON.parse(readFileSync(seamsFile, 'utf8')); } catch (err) { fails.push(`seams.json does not parse: ${err.message}`); }
         if (doc !== undefined) {
@@ -244,6 +273,9 @@ export function check({ repoRoot = REPO_ROOT, overlayDir = join(repoRoot, 'orca-
     // f. PB-added files, tracked half: path, kind and marker literal.
     const filesDir = join(overlayDir, 'files');
     const files = listFiles(filesDir);
+    for (const need of namedOverlayFiles(repoRoot)) {
+        if (!files.includes(need)) fails.push(`overlay file ${need} is named by scripts/build-orca*.sh but is not a file of orca-overlay/files/ (the overlay lost it; restore it from git)`);
+    }
     const owned = {};
     for (const p of files) {
         if (!validPath(p)) { fails.push(`overlay file path '${p}' is not a plain relative path`); continue; }
@@ -257,7 +289,7 @@ export function check({ repoRoot = REPO_ROOT, overlayDir = join(repoRoot, 'orca-
 
     // b. steps that need the fetched tree.
     if (!isGitTop(orcaDir)) {
-        notes.push(`${NAME}: SKIP -- orca/ is not a fetched git checkout, so the pinned-blob, half-file, replay and shadowing steps did not run (bash scripts/fetch-orca.sh)`);
+        skips.push('orca/ is not a fetched git checkout, so the pinned-blob, half-file, replay, shadowing and recorded-pin steps did not run. Next step: bash scripts/fetch-orca.sh');
     } else {
         // e. shadowing: a PB-added file never takes an upstream path, on any file system.
         if (files.length) {
@@ -296,15 +328,15 @@ export function check({ repoRoot = REPO_ROOT, overlayDir = join(repoRoot, 'orca-
         if (patchFiles.length && Object.keys(content).length === rows.length) {
             const replay = mkdtempSync(join(tmpdir(), `${NAME}-replay-`));
             try {
-                git(replay, 'init', '-q');
+                fgit(replay, 'init', '-q');
                 for (const [p, body] of Object.entries(content)) { mkdirSync(dirname(join(replay, p)), { recursive: true }); writeFileSync(join(replay, p), body); }
-                git(replay, 'add', '-A');
-                git(replay, '-c', 'user.name=replay', '-c', 'user.email=replay@invalid', 'commit', '-q', '--allow-empty', '-m', 'pinned content of the declared seam paths');
-                const ap = spawnSync('bash', [APPLY, '--upstream', replay, '--patches', patchesDir], { encoding: 'utf8' });
+                fgit(replay, 'add', '-A');
+                fgit(replay, '-c', 'user.name=replay', '-c', 'user.email=replay@invalid', 'commit', '-q', '--allow-empty', '-m', 'pinned content of the declared seam paths');
+                const ap = spawnSync('bash', [APPLY, '--upstream', replay, '--patches', patchesDir], { encoding: 'utf8', env: fixtureGitEnv() });
                 if (ap.status !== 0) {
                     fails.push(`hermetic replay: apply-patches.sh did not apply the overlay onto the pinned content: ${lastLine(ap)}`);
                 } else {
-                    const ck = spawnSync('bash', [REGENERATE, '--check', '--upstream', replay, '--patches', patchesDir], { encoding: 'utf8' });
+                    const ck = spawnSync('bash', [REGENERATE, '--check', '--upstream', replay, '--patches', patchesDir], { encoding: 'utf8', env: fixtureGitEnv() });
                     if (ck.status !== 0) fails.push(`hermetic replay: regenerate-patches.sh --check is red (a hunk was edited by hand; patches are regenerated, never text-edited): ${lastLine(ck)}`);
                 }
             } finally {
@@ -317,7 +349,7 @@ export function check({ repoRoot = REPO_ROOT, overlayDir = join(repoRoot, 'orca-
         const s = stat[r.path] ?? { added: 0, deleted: 0 };
         return `${r.path} +${s.added}/-${s.deleted}, blob ${r.upstream_blob.slice(0, 10)}`;
     });
-    return { skip: null, fails, notes, counts: { seams: rows.length, files: files.length }, seams };
+    return { skip: null, fails, notes, skips, counts: { seams: rows.length, files: files.length }, seams };
 }
 
 // --built (criterion 5): each PB-added source file's marker literal is in a .js file that build:web or
@@ -327,6 +359,7 @@ export function checkBuilt({ repoRoot = REPO_ROOT, overlayDir = join(repoRoot, '
     if (!outs.length) return { skip: 'no built orca/ (out/web and out/orcad are both absent; run nix develop .#orca --command bash scripts/build-orca.sh)', fails: [], notes: [] };
     const files = listFiles(join(overlayDir, 'files'));
     const fails = [];
+    if (!files.length && namedOverlayFiles(repoRoot).length) fails.push('orca-overlay/files/ is empty but scripts/build-orca*.sh name overlay files to build (the overlay lost its files; restore them from git)');
     if (files.length) {
         const compiled = new Set();
         for (const d of outs) {
@@ -339,21 +372,23 @@ export function checkBuilt({ repoRoot = REPO_ROOT, overlayDir = join(repoRoot, '
     return { skip: null, fails, notes: [], files: files.length, outs };
 }
 
+// SKIP is exit 77 with the one SKIP line (SKIP-PROTOCOL.md); a failure wins over a skip.
 function render(r) {
     if (r.fails.length) return { code: 1, lines: [...r.notes, ...r.fails.map((f) => `${NAME}: FAIL -- ${f}`)] };
+    if (r.skips.length) return { code: SKIP_EXIT, lines: [...r.notes, skipLine(NAME, r.skips.join('; '))] };
     const c = r.counts;
     return { code: 0, lines: [...r.notes, `${NAME}: PASS -- ${c.seams} seam(s)${r.seams.length ? ` (${r.seams.join('; ')})` : ''}, ${c.files} overlay file(s)`] };
 }
 
 function renderBuilt(r) {
     const name = `${NAME}-built`;
-    if (r.skip) return { code: 0, lines: [`${name}: SKIP -- ${r.skip}`] };
     if (r.fails.length) return { code: 1, lines: r.fails.map((f) => `${name}: FAIL -- ${f}`) };
+    if (r.skip) return { code: SKIP_EXIT, lines: [skipLine(name, r.skip)] };
     return {
         code: 0,
         lines: [r.files
             ? `${name}: PASS -- ${r.files} overlay file(s), each with its marker literal in a .js file under ${r.outs.join(' or ')}`
-            : `${name}: PASS -- 0 overlay file(s): vacuous until the first PB-added file lands (P62-20); the self-test fixtures carry the proof`],
+            : `${name}: PASS -- 0 overlay file(s), and none named by scripts/build-orca*.sh`],
     };
 }
 
@@ -361,6 +396,11 @@ function renderBuilt(r) {
 // regenerate-patches.sh write mode (seed header, then regenerate), a fixture manifest cap and a fixture
 // out/ tree. Every state is written from a spec object, so undoing a plant is writing the base again.
 function runSelfTest() {
+    // Every fixture commit runs under a global git config that fails signing and hooks (harness-static-structure-11).
+    return withHostileGitConfig(runSelfTestBody);
+}
+
+function runSelfTestBody() {
     const tmp = mkdtempSync(join(tmpdir(), `${NAME}-`));
     const orca = join(tmp, 'orca');
     const overlay = join(tmp, 'orca-overlay');
@@ -370,25 +410,25 @@ function runSelfTest() {
         const A = lines(60, (i) => `export const line${i} = ${i}`);
         const TINY = lines(6, (i) => `export const tiny${i} = ${i}`);
         mkdirSync(orca, { recursive: true });
-        git(orca, 'init', '-q');
+        fgit(orca, 'init', '-q');
         put(orca, 'src/a.ts', A);
         put(orca, 'src/tiny.ts', TINY);
         put(orca, 'src/dir/x.ts', 'export const x = 1\n');
         put(orca, 'src/.fixture-file.ts', 'export const y = 1\n');
-        git(orca, 'add', '-A');
-        git(orca, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', 'commit', '-q', '-m', 'fixture');
-        const blob = (p) => git(orca, 'rev-parse', `HEAD:${p}`).trim();
+        fgit(orca, 'add', '-A');
+        fgit(orca, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', 'commit', '-q', '-m', 'fixture');
+        const blob = (p) => fgit(orca, 'rev-parse', `HEAD:${p}`).trim();
 
         // A patch is never typed: edit the fixture tree, seed the header, regenerate, read the bytes back.
         let gen = 0;
         const makePatch = (edits) => {
             const dir = join(tmp, `gen-${gen++}`);
             for (const [p, body] of Object.entries(edits)) { if (body === null) rmSync(join(orca, p)); else put(orca, p, body); }
-            git(orca, 'add', '-A');
+            fgit(orca, 'add', '-A');
             put(dir, 'x.patch', Object.keys(edits).map((p) => `diff --git a/${p} b/${p}\n`).join(''));
-            const r = spawnSync('bash', [REGENERATE, '--upstream', orca, '--patches', dir], { encoding: 'utf8' });
+            const r = spawnSync('bash', [REGENERATE, '--upstream', orca, '--patches', dir], { encoding: 'utf8', env: fixtureGitEnv() });
             if (r.status !== 0 || !r.stdout.includes('rewrote x.patch')) throw new Error(`fixture patch was not regenerated: ${lastLine(r)}`);
-            git(orca, 'reset', '-q', '--hard');
+            fgit(orca, 'reset', '-q', '--hard');
             return readFileSync(join(dir, 'x.patch'), 'utf8');
         };
         const insert = (n) => A.replace('export const line11 ', `${lines(n, (i) => `// .fixture seam line ${i}`)}export const line11 `);
@@ -428,15 +468,16 @@ function runSelfTest() {
             for (const [f, body] of Object.entries(spec.upstream ?? {})) put(overlay, `upstream/${f}`, body);
             for (const [f, body] of Object.entries(spec.out)) put(orca, f, body);
             put(tmp, 'scripts/fetch-orca.sh', 'REMOTE="https://github.com/fixture-owner/fixture-repo.git"\n');
+            rmSync(join(tmp, 'scripts', 'build-orca-fixture.sh'), { force: true });
+            if (spec.buildScript) put(tmp, 'scripts/build-orca-fixture.sh', spec.buildScript);
             put(tmp, MANIFEST_REL, spec.cap === null ? '[other]\nkey = 1\n' : `[orca]\nseam_cap = ${spec.cap}\n`);
             const r = check({ repoRoot: tmp, overlayDir: overlay, orcaDir, cap: readCap(tmp) });
             const b = checkBuilt({ repoRoot: tmp, overlayDir: overlay, orcaDir });
-            return { fails: [...r.fails, ...b.fails], notes: r.notes, skipBuilt: b.skip };
+            return { fails: [...r.fails, ...b.fails], notes: r.notes, skips: r.skips, skipBuilt: b.skip };
         };
 
         const controls = [
             ['zero seams, zero files', { ...base(), seams: [], patches: {}, files: {}, upstream: {}, out: { 'out/web/a.js': '1' } }],
-            ['zero seams, no seams.json', { ...base(), seams: null, patches: {}, files: {}, upstream: {} }],
             ['one 3-line seam', { ...base(), files: {} }],
             ['one overlay file, marker compiled into out/web only', { ...base(), seams: [], patches: {}, upstream: {} }],
             ['one seam and one overlay file and its upstream/ material (the base of every plant)', base()],
@@ -447,11 +488,18 @@ function runSelfTest() {
             console.log(`${NAME} self-test: control green -- ${name}`);
         }
         const away = run(base(), join(tmp, 'absent'));
-        if (away.fails.length || !away.notes.some((n) => n.includes('SKIP')) || !away.skipBuilt) {
-            console.error(`${NAME} self-test: FAIL -- with no orca/ the tracked rules did not stay green behind a printed SKIP: ${away.fails.join(' | ')}`);
+        if (away.fails.length || !away.skips.length || !away.skipBuilt) {
+            console.error(`${NAME} self-test: FAIL -- with no orca/ the tracked rules did not stay green behind a SKIP verdict: ${away.fails.join(' | ')}`);
             return 1;
         }
-        console.log(`${NAME} self-test: control green -- no orca/: tracked rules pass, the orca/ steps and the built row SKIP by a line`);
+        // The verdict of the main mode on that run is exit 77 with the one SKIP line, and a failure beside the skip stays 1.
+        const verdict = render({ fails: [], notes: [], skips: away.skips, counts: { seams: 0, files: 0 }, seams: [] });
+        const withFail = render({ fails: ['x'], notes: [], skips: away.skips, counts: { seams: 0, files: 0 }, seams: [] });
+        if (verdict.code !== SKIP_EXIT || !verdict.lines.some((l) => l.startsWith(`${NAME}: SKIP -- `)) || withFail.code !== 1) {
+            console.error(`${NAME} self-test: FAIL -- a skipped orca/ step did not render exit ${SKIP_EXIT} with a SKIP line (or a failure did not win): ${verdict.code}, ${withFail.code}`);
+            return 1;
+        }
+        console.log(`${NAME} self-test: control green -- no orca/: tracked rules pass, the orca/ steps and the built row SKIP (exit ${SKIP_EXIT}), a failure still wins`);
 
         const two = (s) => { s.seams.push(structuredClone(rowTiny)); s.patches['020-tiny.patch'] = P.tiny1; };
         const plants = [
@@ -483,6 +531,10 @@ function runSelfTest() {
             { name: 'upstream-pr-not-a-pull-url', naming: 'is not null or a pull URL', apply: (s) => { s.seams[0].upstream.pr = PR(1).replace('/pull/', '/issues/'); } },
             { name: 'upstream-dir-for-unknown-seam', naming: 'upstream material for unknown seam 099-gone', apply: (s) => { s.upstream['099-gone/upstream.json'] = DOC; } },
             { name: 'upstream-json-missing-key', naming: 'upstream/010-a/upstream.json is not an object with exactly', apply: (s) => { s.upstream['010-a/upstream.json'] = '{ "title": "t" }\n'; } },
+            { name: 'seams-json-absent', naming: 'orca-overlay/seams.json is absent', apply: (s) => { s.seams = null; } },
+            { name: 'overlay-vanished', naming: 'orca-overlay/seams.json is absent', apply: (s) => { s.seams = null; s.patches = {}; s.files = {}; s.upstream = {}; } },
+            { name: 'overlay-file-named-by-build-script-lost', naming: 'overlay file vite.pb-lost.config.ts is named by scripts/build-orca*.sh', apply: (s) => { s.buildScript = 'cmp orca-overlay/files/vite.pb-lost.config.ts orca/vite.pb-lost.config.ts\n'; } },
+            { name: 'overlay-files-emptied-while-build-scripts-name-them', naming: 'orca-overlay/files/ is empty but scripts/build-orca*.sh name overlay files', apply: (s) => { s.files = {}; s.out = { 'out/web/a.js': '1' }; s.buildScript = 'cp src/renderer/src/pb/pb-gone.tsx x\n'; } },
             { name: 'built-marker-only-in-node_modules', naming: `not compiled by build:web or build:orcad: ${ADDED}`, apply: (s) => { s.out = { 'out/web/node_modules/x/index.js': `const a="pb-overlay:${ADDED}";`, 'out/orcad/orcad.js': '1' }; } },
         ];
         let failures = 0;

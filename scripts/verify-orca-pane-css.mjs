@@ -10,24 +10,34 @@
 // keyframes with an animation, a root custom property, a host-owned --vscode-* property), compared with the expected output; then
 // planted faults (a pseudo-element moved before the scope, an unprefixed keyframe, a scoped custom
 // property, a dropped portal variant, an unscoped rule, a colliding keyframe, a Theia var() read of
-// a root property), each red naming it. SKIP when orca/ has not been built with the overlay.
+// a root property), each red naming it; then the pass itself mutated (a scope wrapped in :not(), a descendant
+// rule left unscoped), its sheet run through clause c, each red. When orca/ has not been built with the overlay
+// the row exits 77 with the one SKIP line (SKIP-PROTOCOL.md).
 //
 // Default (full): over the built sheet orca/out/web/assets/pb-panes/pb-panes.css and Theia's built
 // frontend CSS (theia/applications/browser/lib/frontend/*.css), derived at check time:
 //   a. Orca's keyframe names and Theia's are disjoint;
 //   b. no custom property declared on an unscoped root or theme rule of pb-panes.css is read
 //      through var() by any Theia sheet;
-//   c. every other rule of pb-panes.css carries the scope.
-// SKIP named when the bundle or the Theia frontend is not built.
+//   c. every other rule of pb-panes.css carries the scope in a position that constrains it
+//      (harness-static-structure-13): the scope pseudo, :where(<pane root>, <portal roots>) or :where(<portal roots>),
+//      or the bare pane root, at the top level of the selector. The scope inside :not(), :is() or
+//      another :where() argument list, or in a longer :where() list, does not constrain the subject.
+// The row exits 77 with the one SKIP line when the bundle or the Theia frontend is not built.
 //
 // Usage:
 //   node scripts/verify-orca-pane-css.mjs
 //   node scripts/verify-orca-pane-css.mjs --self-test
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { entryPoint, mismatchMessage } from './lib/entry-point.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-pane-css';
@@ -78,6 +88,27 @@ export function compareFixtures(results, expected) {
     return expected.filter(([name, , want]) => squash(want) !== results[name]).map(([name]) => name);
 }
 
+/**
+ * Does the scope constrain this selector? True when, at the top level of the selector (outside every parenthesis and
+ * bracket), the pass's own scope appears: pass.SCOPE, :where(<portal roots>) or the bare pane root. The scope as an
+ * argument of :not(), :is() or another :where() does not constrain the subject, so it is not found there.
+ */
+export function scopeConstrains(selector, pass) {
+    const forms = [pass.SCOPE, `:where(${pass.PORTAL_ROOTS})`, pass.PANE_ROOT];
+    let depth = 0;
+    let quote = null;
+    for (let i = 0; i < selector.length; i++) {
+        const c = selector[i];
+        if (c === '\\') { i++; continue; } // a CSS escape: the next character is part of an identifier
+        if (quote) { if (c === quote) quote = null; continue; }
+        if (depth === 0 && forms.some(f => selector.startsWith(f, i))) return true;
+        if (c === '"' || c === "'") quote = c;
+        else if (c === '(' || c === '[') depth++;
+        else if (c === ')' || c === ']') depth--;
+    }
+    return false;
+}
+
 const keyframesOf = (postcss, text) => { const out = new Set(); postcss.parse(text).walkAtRules(/keyframes$/i, at => out.add(at.params.trim())); return out; };
 
 /** Clauses a-c over one pb-panes sheet and the Theia sheets' texts. */
@@ -97,7 +128,7 @@ export function checkSheets(pass, postcss, sheetText, theiaTexts) {
             const decls = rule.nodes.filter(n => n.type === 'decl');
             if (decls.length && decls.every(d => d.prop.startsWith('--'))) { decls.forEach(d => rootProps.add(d.prop)); return; }
         }
-        const bad = rule.selectors.filter(s => !s.includes(pass.PANE_ROOT) && !s.includes(pass.PORTAL_ROOTS));
+        const bad = rule.selectors.filter(s => !scopeConstrains(s, pass));
         if (bad.length) unscoped.push(bad[0]);
     });
     if (unscoped.length) fails.push(`${unscoped.length} rule selector(s) of the pane sheet carry no scope, first: ${unscoped[0].slice(0, 120)}`);
@@ -107,9 +138,23 @@ export function checkSheets(pass, postcss, sheetText, theiaTexts) {
     return { fails, counts: { orcaFrames: orcaFrames.size, theiaFrames: theiaFrames.size, rootProps: rootProps.size, rules } };
 }
 
+/** The pass with one source edit applied, loaded from a scratch directory beside a link to orca/node_modules (never written under orca/). */
+async function mutatedPass(from, to) {
+    const text = readFileSync(PASS_COPY, 'utf8');
+    if (!text.includes(from)) throw new Error(`the mutation anchor is absent from orca/pb-css-scope.mjs: ${from}`);
+    const dir = mkdtempSync(join(tmpdir(), `${NAME}-mut-`));
+    try {
+        symlinkSync(join(ORCA, 'node_modules'), join(dir, 'node_modules'));
+        writeFileSync(join(dir, 'pb-css-scope.mjs'), text.replace(from, to));
+        return await import(`${pathToFileURL(join(dir, 'pb-css-scope.mjs')).href}?t=${Date.now()}${Math.random()}`);
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+}
+
 async function selfTest() {
     const loaded = await loadPass();
-    if (loaded.skip) { console.log(`${NAME} self-test: SKIP -- ${loaded.skip}`); return 0; }
+    if (loaded.skip) { console.log(skipLine(`${NAME} self-test`, `${loaded.skip}, so the planted faults did not run`)); return SKIP_EXIT; }
     if (loaded.fail) { console.log(`${NAME} self-test: FAIL -- ${loaded.fail}`); return 1; }
     const { pass, postcss } = loaded;
     let failed = 0;
@@ -131,16 +176,51 @@ async function selfTest() {
     ok('an unscoped rule is red', checkSheets(pass, postcss, `${sheet}.leak{color:red}`, []).fails.some(f => /carry no scope, first: \.leak/.test(f)));
     ok('a keyframe colliding with Theia is red', checkSheets(pass, postcss, sheet, ['@keyframes pb-orca-spin{to{opacity:1}}']).fails.some(f => /both Orca's pane sheet and Theia: pb-orca-spin/.test(f)));
     ok('a Theia var() read of a root property is red', checkSheets(pass, postcss, sheet, ['.t{color:var(--pb-k)}']).fails.some(f => /read by a Theia sheet through var\(\): --pb-k/.test(f)));
+    // Clause c over selectors that carry the scope without being constrained by it (harness-static-structure-13).
+    const scopeArg = pass.SCOPE;
+    for (const [what, selector] of [
+        ['the scope inside :not()', `.leak:not(${scopeArg}) .btn`],
+        ['the scope inside :is()', `.leak :is(${scopeArg}, .other)`],
+        ['the pane root inside a longer :where() list', `.leak:where(.other, ${pass.PANE_ROOT})`],
+        ['the pane root as an attribute value', `.leak[title="${pass.PANE_ROOT}"]`],
+    ]) {
+        ok(`${what} is red`, checkSheets(pass, postcss, `${selector}{color:red}`, []).fails.some(f => /carry no scope, first: /.test(f)));
+    }
+    for (const [what, selector] of [
+        ['the scope as an ancestor', `${scopeArg} .btn`],
+        ['the portal self variant', `.btn:where(${pass.PORTAL_ROOTS})`],
+        ['a qualified root before the scope', `:root.dark ${scopeArg} .btn`],
+        ['the portal self variant before a pseudo-element', `.a:where(${pass.PORTAL_ROOTS})::before`],
+        ['an escaped class name with brackets and a quote before the portal variant', `.before\\:content-\\[\\'\\'\\]:before:where(${pass.PORTAL_ROOTS})`],
+    ]) {
+        ok(`${what} stays green`, checkSheets(pass, postcss, `${selector}{color:red}`, []).fails.length === 0);
+    }
+    // The pass itself mutated: its sheet, not a result string, goes through clause c.
+    const input = '.a{color:red}';
+    const notWrapped = await mutatedPass('return [`${SCOPE} ${sel}`, self]', 'return [`:not(${SCOPE}) ${sel}`, self]');
+    ok('a pass that wraps the scope in :not() yields a sheet clause c rejects', checkSheets(notWrapped, postcss, notWrapped.scopeCss(input), []).fails.some(f => /carry no scope, first: :not\(/.test(f)));
+    const unscoped = await mutatedPass('return [`${SCOPE} ${sel}`, self]', 'return [sel]');
+    ok('a pass that leaves a descendant rule unscoped yields a sheet clause c rejects', checkSheets(unscoped, postcss, unscoped.scopeCss(input), []).fails.some(f => /carry no scope, first: \.a/.test(f)));
+    ok('the real pass yields a sheet clause c accepts', checkSheets(pass, postcss, pass.scopeCss(input), []).fails.length === 0);
+    // The guard: through a symlinked directory the argument check must still answer (exit 2, never a silent exit 0).
+    const scratch = mkdtempSync(join(tmpdir(), `${NAME}-link-`));
+    try {
+        symlinkSync(dirname(fileURLToPath(import.meta.url)), join(scratch, 'linked'));
+        const viaLink = spawnSync(process.execPath, [join(scratch, 'linked', 'verify-orca-pane-css.mjs'), '--bogus'], { encoding: 'utf8' });
+        ok('run through a symlinked directory the entry-point guard still fires (exit 2)', viaLink.status === 2);
+    } finally {
+        rmSync(scratch, { recursive: true, force: true });
+    }
     console.log(failed ? `${NAME} self-test: FAIL -- ${failed} case(s)` : `${NAME} self-test: PASS -- ${fx.length} fixtures, every planted fault went red naming it`);
     return failed ? 1 : 0;
 }
 
 async function main() {
-    if (!existsSync(SHEET)) { console.log(`${NAME}: SKIP -- no built pane sheet (orca/out/web/assets/pb-panes/pb-panes.css; run scripts/build-orca.sh)`); return 0; }
+    if (!existsSync(SHEET)) { console.log(skipLine(NAME, 'no built pane sheet (orca/out/web/assets/pb-panes/pb-panes.css). Next step: run scripts/build-orca.sh')); return SKIP_EXIT; }
     const theiaFiles = existsSync(THEIA_CSS_DIR) ? readdirSync(THEIA_CSS_DIR).filter(f => f.endsWith('.css')).map(f => join(THEIA_CSS_DIR, f)) : [];
-    if (!theiaFiles.length) { console.log(`${NAME}: SKIP -- no built Theia frontend CSS (theia/applications/browser/lib/frontend/*.css; yarn build in theia/)`); return 0; }
+    if (!theiaFiles.length) { console.log(skipLine(NAME, 'no built Theia frontend CSS (theia/applications/browser/lib/frontend/*.css). Next step: yarn build in theia/')); return SKIP_EXIT; }
     const loaded = await loadPass();
-    if (loaded.skip) { console.log(`${NAME}: SKIP -- ${loaded.skip}`); return 0; }
+    if (loaded.skip) { console.log(skipLine(NAME, loaded.skip)); return SKIP_EXIT; }
     if (loaded.fail) { console.log(`${NAME}: FAIL -- ${loaded.fail}`); return 1; }
     const r = checkSheets(loaded.pass, loaded.postcss, readFileSync(SHEET, 'utf8'), theiaFiles.map(f => readFileSync(f, 'utf8')));
     if (r.fails.length) { for (const f of r.fails) console.log(`${NAME}: FAIL -- ${f}`); return 1; }
@@ -149,8 +229,12 @@ async function main() {
     return 0;
 }
 
-const SELF = fileURLToPath(import.meta.url);
-if (process.argv[1] && resolve(process.argv[1]) === SELF) {
+const how = entryPoint(import.meta.url);
+if (how === 'mismatch') {
+    console.error(mismatchMessage(NAME, import.meta.url));
+    process.exit(2);
+}
+if (how === 'entry') {
     const args = process.argv.slice(2);
     if (args.some(a => a !== '--self-test')) { console.error('usage: node scripts/verify-orca-pane-css.mjs [--self-test]'); process.exit(2); }
     process.exit(args.includes('--self-test') ? await selfTest() : await main());

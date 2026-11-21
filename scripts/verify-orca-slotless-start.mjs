@@ -19,12 +19,19 @@
 //     and DO_NOT_TRACK=1 set (D-08).
 //  4. The ready line (orca/src/main/server/serve-readiness.ts): boundEndpoint must start
 //     ws://127.0.0.1:, health.nodeVersion must equal step 1's version. If health is
-//     absent, the version is established from /proc/<orcad pid>/exe instead.
+//     absent, the version is established from /proc/<orcad pid>/exe instead. The loopback
+//     bind is also proven without orcad's word (harness-static-structure-09): every TCP
+//     LISTEN socket held by orcad, its descendants and the terminal daemon, read from
+//     /proc/<pid>/fd and /proc/net/tcp{,6}, must be on 127.0.0.0/8 or ::1, and one of them
+//     must be on the reported port (else the instrument is blind and the row is red).
 //  5. The Node runtime set: realpath(step 1's binary), every node executable in orcad's
 //     process tree and the terminal daemon's (/proc), and every node or node.exe file
 //     under orca/out (verify-orca-build-shape.mjs walk), distinct by sha256. Exactly one.
 //  6. Teardown: orcad's process group and health.terminalDaemon.pid get SIGTERM, then
-//     SIGKILL after 10 s; either pid still in /proc is a FAIL.
+//     SIGKILL after 10 s; either pid still in /proc is a FAIL. The process tree is read before
+//     teardown, so a daemon orcad started and then failed before its ready line (no daemon pid
+//     known) is found among the descendants and reaped too; a descendant that outlives the
+//     teardown is a FAIL.
 //  7. The installed-Orca paths orcad probes for a hidden Electron, from the orca-ide
 //     literals in orca/src/main/orcad/orcad-browser-provider.ts.
 //  8. The web-tab half (P59-04): pairing.webClientUrl opened in a PB web tab
@@ -43,9 +50,11 @@
 // message is redacted before it is built into a FAIL line. The self-test proves a
 // sentinel pairing code reaches the capture unredacted and is removed when redacted.
 //
-// SKIP (one named line, exit 0, never a pass): no built orca/ (orca/out/orcad/orcad.js
+// SKIP (one named line, exit 77, never a pass; SKIP-PROTOCOL.md): no built orca/ (orca/out/orcad/orcad.js
 // or orca/out/web/web-index.html missing), no built PowerBrowser (objdir/dist/bin/powerbrowser,
-// or PB_FIREFOX_BIN), or any step-7 path exists on this host.
+// or PB_FIREFOX_BIN), or any step-7 path exists on this host. Step 7 is evaluated against the HOME
+// orcad runs under (the scratch HOME of liveEnv), not the real one: an Orca installed in the real
+// ~/.local/bin does not skip the row, an Orca at an absolute path still does.
 //
 // Limit: the row proves start, version, bind, runtime count and teardown on linux-x64
 // only; the other node-runtime.json platforms are not exercised here.
@@ -68,9 +77,10 @@
 //   node scripts/verify-orca-slotless-start.mjs --orcad-only
 //   node scripts/verify-orca-slotless-start.mjs --self-test
 
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -79,7 +89,9 @@ import {
     orcaVersionFromPins, orcadEnv, parseReady, redact, REDACTED as REDACTED_TOKEN, startOrcad, stopOrcad,
 } from './lib/orca-run.mjs';
 import { NODE_NAMES, walk } from './verify-orca-build-shape.mjs';
-import { FIREFOX_BIN } from './lib/firefox-bidi.mjs';
+import { FIREFOX_BIN, liveEnv } from './lib/firefox-bidi.mjs';
+import { decodeAddress, isLoopback, listeningTcp, nonLoopback, parseListening, pidAlive, processTree, reapPids } from './lib/proc-tree.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const NAME = 'orca-slotless-start';
 const SELF_REL = 'scripts/verify-orca-slotless-start.mjs';
@@ -101,6 +113,23 @@ function checkReady(ready, pinnedVersion) {
         fails.push(`orcad reports Node ${ready.nodeVersion ?? '(unknown)'}, but node-runtime.json pins ${pinnedVersion} (D-14: a hand-off to Orca's bundled runtime or a wrong binary). Next step: run node scripts/verify-orca-build-shape.mjs and rebuild with scripts/build-orca.sh.`);
     }
     return fails;
+}
+
+/**
+ * Pure: red for every TCP LISTEN socket of the orcad tree that is not loopback, and for a tree that holds no listener on
+ * the port orcad reported (a blind instrument proves nothing). listeners: [{ pid, address, port }].
+ */
+export function checkListeners(listeners, reportedPort) {
+    const fails = nonLoopback(listeners).map((l) => `process ${l.pid} listens on ${l.address}:${l.port}, which is not loopback, whatever orcad's ready line says (D-14). Next step: check orcad's --bind handling at the pin; never bind off loopback.`);
+    if (!listeners.some((l) => String(l.port) === String(reportedPort))) {
+        fails.push(`no listening TCP socket on the reported port ${reportedPort} was found in /proc for orcad or its descendants, so the loopback bind could not be verified independently. Next step: check that /proc/net/tcp and /proc/<pid>/fd are readable on this host.`);
+    }
+    return fails;
+}
+
+/** The HOME orcad runs under: the scratch HOME that startOrcad's liveEnv gives it, never the real one. */
+export function orcadHome(env = process.env) {
+    return liveEnv(env).HOME;
 }
 
 /** entries: [{ path, sha256 }]. Red unless exactly one distinct runtime. */
@@ -172,11 +201,11 @@ function checkClient(result, text, secrets) {
 async function live({ orcadOnly = false } = {}) {
     const started = Date.now();
     let skip;
-    try { skip = skipReason({ orcaDir: ORCA_DIR, pbBin: FIREFOX_BIN, orcadOnly }); } catch (e) {
+    try { skip = skipReason({ orcaDir: ORCA_DIR, home: orcadHome(), pbBin: FIREFOX_BIN, orcadOnly }); } catch (e) {
         console.error(`${NAME}: FAIL -- ${e.message}. Next step: update installedOrcaPaths in scripts/lib/orca-run.mjs to the new source.`);
         return 1;
     }
-    if (skip) { console.log(`${NAME}: SKIP -- ${skip}`); return 0; }
+    if (skip) { console.log(skipLine(NAME, skip)); return SKIP_EXIT; }
 
     let node, orcaVersion, marker;
     try {
@@ -197,8 +226,12 @@ async function live({ orcadOnly = false } = {}) {
     } finally {
         if (run.child) {
             const daemonPid = run.ready?.daemonPid ?? null;
+            // Read the tree before teardown: a failure before the ready line leaves daemonPid null, and a daemon orcad
+            // started would otherwise be orphaned and invisible.
+            const tree = [...processTree([run.child.pid, daemonPid])].filter((p) => p !== run.child.pid && p !== daemonPid);
             const { survivors } = await stopOrcad(run.child, daemonPid);
             fails.push(...checkSurvivors(survivors, { orcadPid: run.child.pid, daemonPid }));
+            fails.push(...await descendantSurvivors(tree));
         }
         rmSync(profileDir, { recursive: true, force: true });
     }
@@ -214,6 +247,16 @@ async function live({ orcadOnly = false } = {}) {
     } finally {
         run.restore();
     }
+}
+
+/** The descendants of orcad that outlive its teardown: given a short time to exit on their own, then reaped and reported. */
+export async function descendantSurvivors(pids, { settleMs = 2000 } = {}) {
+    const until = Date.now() + settleMs;
+    while (Date.now() < until && pids.some(pidAlive)) await new Promise((r) => setTimeout(r, 100));
+    const left = pids.filter(pidAlive);
+    if (!left.length) return [];
+    await reapPids(left);
+    return left.map((pid) => `process ${pid}, a descendant of orcad, survived teardown and was killed by the row. Next step: check which process orcad started and why its teardown did not stop it.`);
 }
 
 // Steps 3-5 while orcad runs; every red reason goes to `fails`, teardown is the caller's.
@@ -236,6 +279,8 @@ async function probeOrcad(run, { node, env, profileDir, orcaVersion, marker, fai
         if (exe.size === 1 && [...exe][0] === realpathSync(node.path)) ready.nodeVersion = node.version;
     }
     fails.push(...checkReady(ready, node.version));
+    // The bind, independently of orcad's own report.
+    fails.push(...checkListeners(listeningTcp([...processTree([child.pid, ready.daemonPid])]), run.port));
     if (!fails.length) await webTabHalf(run, { marker, fails, orcadOnly });
 
     const paths = new Set([realpathSync(node.path), ...nodeExesInTree([child.pid, ready.daemonPid]), ...nodeFilesUnder(join(ORCA_DIR, 'out'))]);
@@ -372,6 +417,56 @@ async function selfTest() {
         const on = captureReport(leak, good.secrets) + redact(`orca://pair?code=${SENTINEL.toLowerCase()}`, []);
         if (!on.toUpperCase().includes(SENTINEL) && on.includes(REDACTED_TOKEN)) ok(`leak, redaction on -> red, naming '${REDACTED_TOKEN}'`);
         else miss('leak, redaction on', 'the sentinel survived redaction');
+
+        // The bind, proven from /proc and not from orcad's word (harness-static-structure-09).
+        const row = (hexAddr, port, state = '0A', inode = '1') => `   0: ${hexAddr}:${port.toString(16).toUpperCase().padStart(4, '0')} 00000000:0000 ${state} 00000000:00000000 00:00000000 00000000  1000        0 ${inode} 1 0000000000000000 100 0 0 10 0`;
+        const header = '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode';
+        const parsed = parseListening([header, row('0100007F', 8080, '0A', '11'), row('00000000', 9090, '0A', '12'), row('0100007F', 7070, '01', '13')].join('\n'));
+        if (parsed.length === 2 && parsed[0].address === '127.0.0.1' && parsed[0].port === 8080 && parsed[1].address === '0.0.0.0') ok('/proc/net/tcp parse -> LISTEN rows only, little-endian addresses decoded');
+        else miss('/proc/net/tcp parse', JSON.stringify(parsed));
+        const v6 = parseListening([header, row('00000000000000000000000001000000', 8081, '0A', '21'), row('00000000000000000000000000000000', 8082, '0A', '22'), row('0000000000000000FFFF00000100007F', 8083, '0A', '23')].join('\n'));
+        if (v6.map((r) => r.address).join() === '::1,::,::ffff:127.0.0.1' && decodeAddress('7F000001') === '1.0.0.127' && isLoopback('::1') && isLoopback('::ffff:127.0.0.1') && !isLoopback('::') && !isLoopback('0.0.0.0')) ok('/proc/net/tcp6 parse -> ::1, :: and a mapped 127.0.0.1 told apart');
+        else miss('/proc/net/tcp6 parse', JSON.stringify(v6));
+        const serve = (host) => new Promise((resolveP, rejectP) => {
+            const c = spawn(process.execPath, ['-e', `require('node:net').createServer().listen(0, ${JSON.stringify(host)}, () => console.log('up'))`], { stdio: ['ignore', 'pipe', 'ignore'] });
+            c.stdout.once('data', () => resolveP(c));
+            c.once('error', rejectP);
+            c.once('exit', () => rejectP(new Error(`fixture server on ${host} exited`)));
+        });
+        for (const [host, wantRed] of [['127.0.0.1', false], ['0.0.0.0', true]]) {
+            const server = await serve(host);
+            try {
+                const listeners = listeningTcp([server.pid]);
+                const port = listeners[0]?.port;
+                // The ready line claims loopback in both cases: only the sockets differ.
+                const verdict = checkListeners(listeners, port);
+                if (!wantRed && verdict.length === 0 && listeners.length === 1) ok('a fixture server on 127.0.0.1 -> green from /proc');
+                else if (wantRed && verdict.some((f) => f.includes('0.0.0.0'))) ok("a fixture server on 0.0.0.0 whose ready line says 127.0.0.1 -> red, naming '0.0.0.0'");
+                else miss(`fixture server on ${host}`, `listeners ${JSON.stringify(listeners)}, verdict ${verdict.join(' | ') || 'green'}`);
+            } finally {
+                server.kill('SIGKILL');
+            }
+        }
+        red('no listener on the reported port (blind instrument)', checkListeners([], 41000), 'could not be verified independently');
+        // A daemon started by an orcad that failed before its ready line: found in the tree before teardown, reaped, reported.
+        const parent = spawn('bash', ['-c', 'setsid sleep 300 & echo $!; wait'], { stdio: ['ignore', 'pipe', 'ignore'] });
+        try {
+            const leaked = await new Promise((resolveP) => parent.stdout.once('data', (d) => resolveP(Number(String(d).trim()))));
+            const tree = [...processTree([parent.pid])].filter((p) => p !== parent.pid);
+            parent.kill('SIGKILL');
+            if (!tree.includes(leaked)) miss('descendant capture', `the tree ${tree.join(',')} lacks the leaked pid ${leaked}`);
+            else {
+                const verdict = await descendantSurvivors(tree, { settleMs: 300 });
+                if (verdict.some((f) => f.includes(`process ${leaked}`)) && !pidAlive(leaked)) ok('a daemon that outlived orcad (no daemon pid known) -> found in the tree, reaped and red');
+                else miss('descendant reap', `${verdict.join(' | ') || 'no failure'}; alive ${pidAlive(leaked)}`);
+            }
+        } finally {
+            parent.kill('SIGKILL');
+        }
+        // Step 7 is evaluated against the HOME orcad runs under, not the real one.
+        const realHome = homedir();
+        if (orcadHome({ ...process.env, HOME: realHome }) !== realHome) ok("the installed-Orca probe uses orcad's scratch HOME, not the real one");
+        else miss('installed-Orca HOME', "orcadHome returned the real home, so an Orca in ~/.local/bin would skip a row whose orcad never sees it");
 
         // --orcad-only: a missing PowerBrowser is no SKIP, and step 8 is never reached.
         const noPb = join(tmp, 'no-powerbrowser');

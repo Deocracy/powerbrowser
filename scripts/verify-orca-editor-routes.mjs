@@ -42,6 +42,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { fixtureGitArgs, fixtureGitEnv, withHostileGitConfigAsync } from './lib/fixture-git.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-editor-routes';
 const SELF_REL = 'scripts/verify-orca-editor-routes.mjs';
@@ -425,8 +428,9 @@ async function runGitSpecSelfTest() {
     const tmp = realpathSync(mkdtempSync(join(tmpdir(), `${NAME}-git-`)));
     const link = `${tmp}-link`;
     try {
-        const env = p.withoutGitVars(process.env);
-        const git = (...a) => execFileSync('git', ['-C', tmp, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', ...a], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+        // No signing, no hooks, no global or system config for the fixture repository (harness-static-structure-11).
+        const env = fixtureGitEnv(p.withoutGitVars(process.env));
+        const git = (...a) => execFileSync('git', [...fixtureGitArgs(), '-C', tmp, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', ...a], { env, stdio: ['ignore', 'pipe', 'pipe'] });
         git('init', '-q');
         mkdirSync(join(tmp, 'sub'));
         writeFileSync(join(tmp, 'sub', 'a.txt'), 'committed bytes\né\n');
@@ -476,14 +480,16 @@ if (isEntryPoint) {
         process.exit(2);
     }
     const mode = MODES[args[0]] ?? 'check';
-    if (!existsSync(TS_DIR) || !statSync(TS_DIR).isDirectory()) { console.log(`${NAME}: SKIP -- theia/node_modules/typescript is absent; run the audited Theia install (docs/BUILD.md "Theia half")`); process.exit(0); }
+    // Not run is SKIP (exit 77 with the one SKIP line), never a pass (SKIP-PROTOCOL.md).
+    if (!existsSync(TS_DIR) || !statSync(TS_DIR).isDirectory()) { console.log(skipLine(NAME, 'theia/node_modules/typescript is absent. Next step: run the audited Theia install (docs/BUILD.md "Theia half")')); process.exit(SKIP_EXIT); }
     ts = createRequire(import.meta.url)(TS_DIR);
-    if (mode !== 'git-spec' && !existsSync(join(REPO_ROOT, REL.openFile))) { console.log(`${NAME}: SKIP -- orca/ is not fetched (${REL.openFile} absent); run bash scripts/fetch-orca.sh`); process.exit(0); }
+    if (mode !== 'git-spec' && !existsSync(join(REPO_ROOT, REL.openFile))) { console.log(skipLine(NAME, `orca/ is not fetched (${REL.openFile} absent), so neither the check nor its self-test ran. Next step: bash scripts/fetch-orca.sh`)); process.exit(SKIP_EXIT); }
     if (mode === 'self-test') process.exit(await runSelfTest());
-    if (mode === 'git-spec') process.exit(await runGitSpecSelfTest());
+    if (mode === 'git-spec') process.exit(await withHostileGitConfigAsync(runGitSpecSelfTest));
     const r = check(REPO_ROOT);
     if (r.fails.length) { for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`); process.exit(1); }
     const n = r.notes;
-    console.log(`${NAME}: PASS -- ${n.modes.length} modes (${n.modes.join(', ')}), ${n.sources.length} diff sources and ${n.kinds.length} conflict kinds equal ORCA_EDITOR_ROUTES' keys; editor-type content types ${n.editorTypes.join(', ')} each covered; every value a Theia kind except the named row ${HOSTED_ROW.key}; (f) TopLevelView ${n.f === 'compared' ? 'compared with ORCA_PAGE_ROUTES' : 'SKIP (lane p65-04 restore directory absent)'}`);
+    if (n.f !== 'compared') { console.log(skipLine(NAME, `clause f (TopLevelView against ORCA_PAGE_ROUTES) did not run: ${REL.restoreDir} is absent`)); process.exit(SKIP_EXIT); }
+    console.log(`${NAME}: PASS -- ${n.modes.length} modes (${n.modes.join(', ')}), ${n.sources.length} diff sources and ${n.kinds.length} conflict kinds equal ORCA_EDITOR_ROUTES' keys; editor-type content types ${n.editorTypes.join(', ')} each covered; every value a Theia kind except the named row ${HOSTED_ROW.key}; (f) TopLevelView compared with ORCA_PAGE_ROUTES`);
     process.exit(0);
 }

@@ -22,7 +22,18 @@
 //     tree's copy -- itself hashing to the slot's sha256 -- with its DT_RPATH and DT_RUNPATH entries
 //     removed the way patchelf removes them. A universal macOS tree has no single slot, so --target macos refuses
 //     the flag (exit 2); each thin tree is checked with its own manifest before the merge.
-// Red on: a built file not staged, a staged file not built, a Node executable, a slot marker, an Electron
+//  e. file content (harness-static-structure-04): every staged file's sha256 equals the same path's sha256 in
+//     a built tree (any of them, for macos), so a modified orcad.js, a stale web chunk or a payload swapped
+//     between build and package is red under an unchanged name. The two documented differences: a staged ELF
+//     equal to the built ELF with its DT_RPATH and DT_RUNPATH entries removed (package-linux.sh's patchelf
+//     pass), and, for macos, a fat Mach-O whose every slice is byte-equal to a Mach-O file of one of the thin
+//     trees (the lipo merge; the pair of arch-named files is staged under both names).
+//  f. executable modes (linux and macos targets; the macOS trees lost their executable bits in an artifact
+//     round trip): every staged Mach-O and ELF executable has mode 0755. An executable is identified by its
+//     magic bytes and header, never by name: a Mach-O of file type MH_EXECUTE (thin or any slice of a fat
+//     file), an ELF of type ET_EXEC, or an ELF ET_DYN with a PT_INTERP program header (a PIE). Shared
+//     libraries and .node modules are not executables by this rule.
+// Red on: a built file not staged, a staged file not built, a changed file, an executable not 0755, a Node executable, a slot marker, an Electron
 // binary (basename electron, electron.exe or Electron, or a node_modules/electron/ path segment), an empty
 // stage (vacuous), a manifest with other than one slot, a slot for another platform or arch, and a
 // node-pty file whose sha256 differs from the slot's. Symlinks are not followed (sidecar-no-symlinks
@@ -41,7 +52,7 @@
 //   node scripts/verify-orca-packaged-tree.mjs --self-test
 
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -95,6 +106,78 @@ export function withoutRunpath(buf) {
     return null;
 }
 
+const u16 = (b, o, le) => (le ? b.readUInt16LE(o) : b.readUInt16BE(o));
+const u32 = (b, o, le) => (le ? b.readUInt32LE(o) : b.readUInt32BE(o));
+
+// Is this ELF an executable (ET_EXEC, or ET_DYN with a PT_INTERP program header)? null when the bytes are not an ELF.
+function elfExecutable(buf) {
+    if (buf.length < 52 || buf.readUInt32BE(0) !== 0x7f454c46) return null;
+    const is64 = buf[4] === 2;
+    const le = buf[5] !== 2;
+    const type = u16(buf, 16, le);
+    if (type === 2) return true;
+    if (type !== 3) return false;
+    const phoff = is64 ? Number(le ? buf.readBigUInt64LE(0x20) : buf.readBigUInt64BE(0x20)) : u32(buf, 0x1c, le);
+    const phentsize = u16(buf, is64 ? 0x36 : 0x2a, le);
+    const phnum = u16(buf, is64 ? 0x38 : 0x2c, le);
+    for (let i = 0; i < phnum; i++) {
+        const at = phoff + i * phentsize;
+        if (at + 4 > buf.length) break;
+        if (u32(buf, at, le) === 3) return true;
+    }
+    return false;
+}
+
+// The thin Mach-O file types of a buffer's header: { executable } or null when it is not a thin Mach-O.
+function thinMachO(buf) {
+    if (buf.length < 16) return null;
+    const m = buf.readUInt32BE(0);
+    const le = m === 0xcefaedfe || m === 0xcffaedfe;
+    if (!le && m !== 0xfeedface && m !== 0xfeedfacf) return null;
+    return { executable: u32(buf, 12, le) === 2 };
+}
+
+/** The slices of a fat Mach-O (fat32 or fat64), validated against the file length; null when it is not one (a Java class has the same magic). */
+export function fatSlices(buf) {
+    if (buf.length < 8) return null;
+    const m = buf.readUInt32BE(0);
+    if (m !== 0xcafebabe && m !== 0xcafebabf) return null;
+    const wide = m === 0xcafebabf;
+    const n = buf.readUInt32BE(4);
+    const entry = wide ? 32 : 20;
+    if (n < 1 || n > 32 || 8 + n * entry > buf.length) return null;
+    const slices = [];
+    for (let i = 0; i < n; i++) {
+        const at = 8 + i * entry;
+        const off = wide ? Number(buf.readBigUInt64BE(at + 8)) : buf.readUInt32BE(at + 8);
+        const size = wide ? Number(buf.readBigUInt64BE(at + 16)) : buf.readUInt32BE(at + 12);
+        if (off < 8 + n * entry || size < 16 || off + size > buf.length) return null;
+        const bytes = buf.subarray(off, off + size);
+        if (!thinMachO(bytes)) return null;
+        slices.push(bytes);
+    }
+    return slices;
+}
+
+/** Is this file's content a Mach-O or ELF executable? Decided by the bytes alone. */
+export function isExecutableBinary(buf) {
+    const elf = elfExecutable(buf);
+    if (elf !== null) return elf;
+    const thin = thinMachO(buf);
+    if (thin) return thin.executable;
+    const fat = fatSlices(buf);
+    return fat ? fat.some((sl) => thinMachO(sl).executable) : false;
+}
+
+function readHead(path, n) {
+    const buf = Buffer.alloc(n);
+    let fd;
+    try { fd = openSync(path, 'r'); return buf.subarray(0, readSync(fd, buf, 0, n, 0)); } catch { return Buffer.alloc(0); } finally { if (fd !== undefined) closeSync(fd); }
+}
+
+const MAGIC_HEADS = new Set([0x7f454c46, 0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xcafebabf]);
+const MODE_TARGETS = /^(linux|macos)/;
+
 function filesUnder(root, sub = '') {
     const base = join(root, sub);
     const out = [];
@@ -125,6 +208,44 @@ export function check({ target, stage, builts, manifest = null, tables }) {
     }
     for (const r of [...expected].sort()) if (!staged.has(r)) fails.push(`built but not staged: ${r}`);
     for (const r of [...staged].sort()) if (!expected.has(r)) fails.push(`staged but not built: ${r}`);
+
+    // e. content: the same path's bytes in a built tree, or the two documented differences.
+    let allBuilt = null;
+    const allBuiltShas = () => {
+        if (allBuilt === null) {
+            allBuilt = new Set();
+            for (const b of builts) for (const r of builtSet(b)) allBuilt.add(sha256(join(b, r)));
+        }
+        return allBuilt;
+    };
+    for (const r of [...staged].filter((x) => expected.has(x)).sort()) {
+        const got = readFileSync(join(stage, r));
+        const gotSha = shaOf(got);
+        const candidates = new Set();
+        for (const b of builts) {
+            const bp = join(b, r);
+            if (!existsSync(bp)) continue;
+            const buf = readFileSync(bp);
+            candidates.add(shaOf(buf));
+            const stripped = withoutRunpath(buf);
+            if (stripped !== null) candidates.add(shaOf(stripped));
+        }
+        if (candidates.has(gotSha)) continue;
+        const slices = target === 'macos' ? fatSlices(got) : null;
+        if (slices && slices.every((sl) => allBuiltShas().has(shaOf(sl)))) continue;
+        fails.push(`staged content differs from the built tree: ${r} (staged sha256 ${gotSha}, built ${[...candidates].join(' or ') || 'absent'}); the file was modified or swapped between build and package`);
+    }
+
+    // f. executable modes on the unix targets.
+    if (MODE_TARGETS.test(target)) {
+        for (const r of [...staged].sort()) {
+            const head = readHead(join(stage, r), 4);
+            if (head.length < 4 || !MAGIC_HEADS.has(head.readUInt32BE(0))) continue;
+            if (!isExecutableBinary(readFileSync(join(stage, r)))) continue;
+            const mode = statSync(join(stage, r)).mode & 0o777;
+            if (mode !== 0o755) fails.push(`executable ${r} has mode ${mode.toString(8).padStart(4, '0')}, not 0755 (a Mach-O or ELF executable by its magic bytes; its executable bit was lost, for example in an artifact round trip)`);
+        }
+    }
     const markers = new Set(tables.markerNames);
     for (const r of [...staged].sort()) {
         const name = basename(r);
@@ -252,6 +373,28 @@ async function selfTest() {
         // Present in the built tree but never staged: these must not enter the expected set.
         put(built, 'out/orcad-prebuilds/linux-x64-glibc/pty.node', pty);
         put(built, 'node_modules/left-pad/index.js', '');
+        // Binaries for the executable-mode clause, built by hand from their headers. None carries a telling name:
+        // the clause must find them by magic bytes alone.
+        const elfExec = () => { const b = Buffer.alloc(128); b.writeUInt32BE(0x7f454c46, 0); b[4] = 2; b[5] = 1; b.writeUInt16LE(2, 16); return b; };
+        const elfPie = () => { const b = Buffer.alloc(256); b.writeUInt32BE(0x7f454c46, 0); b[4] = 2; b[5] = 1; b.writeUInt16LE(3, 16); b.writeBigUInt64LE(64n, 0x20); b.writeUInt16LE(56, 0x36); b.writeUInt16LE(2, 0x38); b.writeUInt32LE(1, 64); b.writeUInt32LE(3, 64 + 56); return b; };
+        const elfSharedLib = () => { const b = Buffer.alloc(256); b.writeUInt32BE(0x7f454c46, 0); b[4] = 2; b[5] = 1; b.writeUInt16LE(3, 16); b.writeBigUInt64LE(64n, 0x20); b.writeUInt16LE(56, 0x36); b.writeUInt16LE(1, 0x38); b.writeUInt32LE(1, 64); return b; };
+        const mach = (fileType, cpu = 0x0100000c) => { const b = Buffer.alloc(64); b.writeUInt32BE(0xcffaedfe, 0); b.writeUInt32LE(cpu, 4); b.writeUInt32LE(fileType, 12); return b; };
+        const fat = (slices) => {
+            const head = 8 + 20 * slices.length;
+            const out = Buffer.alloc(head + slices.reduce((n, sl) => n + sl.length + 16, 0));
+            out.writeUInt32BE(0xcafebabe, 0); out.writeUInt32BE(slices.length, 4);
+            let off = head;
+            slices.forEach((sl, i) => { const at = 8 + 20 * i; out.writeUInt32BE(0x0100000c + i, at); out.writeUInt32BE(off, at + 8); out.writeUInt32BE(sl.length, at + 12); sl.copy(out, off); off += sl.length + 16; });
+            return out;
+        };
+        const javaClass = () => { const b = Buffer.alloc(64); b.writeUInt32BE(0xcafebabe, 0); b.writeUInt16BE(0, 4); b.writeUInt16BE(52, 6); return b; };
+        const exec755 = (root, rel, body) => { put(root, rel, body); chmodSync(join(root, rel), 0o755); };
+        exec755(built, 'out/orcad/bin/helper.dat', elfExec());
+        exec755(built, 'out/orcad/bin/pie-helper', elfPie());
+        exec755(built, 'out/orcad/bin/mach-helper', mach(2));
+        put(built, 'out/orcad/lib/libshared.bin', elfSharedLib());
+        put(built, 'out/orcad/lib/libmach.dylib', mach(6));
+        put(built, 'out/orcad/Hello.class', javaClass());
         const manifest = { slots: { 'linux-x64-glibc': { platform: 'linux', arch: 'x64', files: { 'pty.node': createHash('sha256').update(pty).digest('hex') } } } };
         const freshStage = () => {
             const s = mkdtempSync(join(tmp, 'stage-'));
@@ -291,6 +434,15 @@ async function selfTest() {
             { name: 'two slots (merged manifest)', naming: 'has 2 slots', manifest: { slots: { ...manifest.slots, 'darwin-x64': { platform: 'darwin', arch: 'x64', files: {} } } } },
             { name: 'empty stage', naming: 'empty stage: vacuous', stage: (s) => { rmSync(s, { recursive: true }); mkdirSync(s); } },
         ];
+        const modeOf = (rel, mode) => (s) => chmodSync(join(s, rel), mode);
+        plants.push(
+            { name: 'orcad.js modified in the stage, name unchanged', naming: 'staged content differs from the built tree: out/orcad/orcad.js', stage: (s) => writeFileSync(join(s, 'out/orcad/orcad.js'), '// swapped\n') },
+            { name: 'a stale web chunk, same name', naming: 'staged content differs from the built tree: out/web/web-index.html', stage: (s) => writeFileSync(join(s, 'out/web/web-index.html'), '<!doctype html><!-- stale -->\n') },
+            { name: 'an ELF executable named helper.dat with its executable bit cleared', naming: 'executable out/orcad/bin/helper.dat has mode 0644, not 0755', stage: modeOf('out/orcad/bin/helper.dat', 0o644) },
+            { name: 'a PIE (ET_DYN with PT_INTERP) with its executable bit cleared', naming: 'executable out/orcad/bin/pie-helper has mode 0644, not 0755', stage: modeOf('out/orcad/bin/pie-helper', 0o644) },
+            { name: 'a Mach-O executable with its executable bit cleared', naming: 'executable out/orcad/bin/mach-helper has mode 0644, not 0755', stage: modeOf('out/orcad/bin/mach-helper', 0o644) },
+            { name: 'a Mach-O executable made group-writable', naming: 'executable out/orcad/bin/mach-helper has mode 0775, not 0755', stage: modeOf('out/orcad/bin/mach-helper', 0o775) },
+        );
         let failures = 0;
         for (const p of plants) {
             const s = freshStage();
@@ -302,8 +454,53 @@ async function selfTest() {
             else console.log(`  ok ${p.name} -> red, naming '${p.naming}'`);
             rmSync(s, { recursive: true, force: true });
         }
+        // Shared libraries, modules and a Java class (the fat Mach-O magic) are not executables: mode 0644 stays green.
+        const libStage = freshStage();
+        const libs = run(libStage);
+        rmSync(libStage, { recursive: true, force: true });
+        if (libs.fails.length) { console.error(`  FAIL control: a shared library, a dylib and a Java class at mode 0644 -> ${libs.fails.join(' | ')}`); failures++; } else console.log('  ok control: ELF shared object, dylib and a Java class at mode 0644 are not executables -> green');
+        // The windows target carries no unix mode: an executable at 0644 stays green there.
+        const winStage = freshStage();
+        modeOf('out/orcad/bin/helper.dat', 0o644)(winStage);
+        const win = check({ target: 'win64', stage: winStage, builts: [built], manifest: null, tables });
+        rmSync(winStage, { recursive: true, force: true });
+        if (win.fails.length) { console.error(`  FAIL control: win64 with 0644 executables -> ${win.fails.join(' | ')}`); failures++; } else console.log('  ok control: win64 target, executables at 0644 -> green (no unix modes on NTFS)');
+
+        // macos (universal): a fat Mach-O whose slices are the two thin trees' files.
+        const thinTree = (name, cpu) => {
+            const t = join(tmp, name);
+            put(t, 'package.json', '{ "name": "fixture" }\n');
+            put(t, 'out/orcad/orcad.js', '// fixture\n');
+            put(t, 'out/web/web-index.html', '<!doctype html>\n');
+            exec755(t, 'out/orcad/bin/tool', mach(2, cpu));
+            return t;
+        };
+        const arm = thinTree('thin-arm', 0x0100000c);
+        const x64 = thinTree('thin-x64', 0x01000007);
+        const macStage = (tool, mode = 0o755) => {
+            const st = mkdtempSync(join(tmp, 'mac-stage-'));
+            writeFileSync(join(st, 'package.json'), readFileSync(join(arm, 'package.json')));
+            for (const sub of ['out/orcad', 'out/web']) cpSync(join(arm, sub), join(st, sub), { recursive: true });
+            writeFileSync(join(st, 'out/orcad/bin/tool'), tool);
+            chmodSync(join(st, 'out/orcad/bin/tool'), mode);
+            return st;
+        };
+        const mac = (st) => check({ target: 'macos', stage: st, builts: [arm, x64], manifest: null, tables });
+        const goodFat = fat([readFileSync(join(arm, 'out/orcad/bin/tool')), readFileSync(join(x64, 'out/orcad/bin/tool'))]);
+        for (const [name, tool, mode, naming] of [
+            ['a fat Mach-O that is the lipo of the two thin trees', goodFat, 0o755, null],
+            ['a fat Mach-O with a slice that is in neither thin tree', fat([readFileSync(join(arm, 'out/orcad/bin/tool')), mach(2, 0x01000018)]), 0o755, 'staged content differs from the built tree: out/orcad/bin/tool'],
+            ['a fat Mach-O executable with its executable bit cleared', goodFat, 0o644, 'executable out/orcad/bin/tool has mode 0644, not 0755'],
+        ]) {
+            const st = macStage(tool, mode);
+            const r = mac(st);
+            rmSync(st, { recursive: true, force: true });
+            const text = r.fails.join('\n');
+            if (naming === null ? r.fails.length === 0 : text.includes(naming)) console.log(`  ok macos: ${name} -> ${naming === null ? 'green' : `red, naming '${naming}'`}`);
+            else { console.error(`  FAIL macos: ${name} -> ${text || 'stayed green'}`); failures++; }
+        }
         if (failures) {
-            console.error(`${NAME} self-test: FAIL -- ${failures} of ${plants.length} plant(s) did not go red naming the drift`);
+            console.error(`${NAME} self-test: FAIL -- ${failures} case(s) did not behave (${plants.length} planted faults)`);
             return 1;
         }
         console.log(`${NAME} self-test: PASS -- ${plants.length} planted faults each went red naming the drift`);
