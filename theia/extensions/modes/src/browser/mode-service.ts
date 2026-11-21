@@ -532,6 +532,15 @@ export class ModeService implements FrontendApplicationContribution {
         return this.customModesLoadedPromise ?? Promise.resolve();
     }
 
+    /**
+     * theia-pane-hosting-04: the id a stored mode id stands for now. A custom mode renamed because a shipped mode
+     * took its name keeps its old id in saved Setups, the session snapshot and the persisted layout; this maps it to
+     * the renamed mode's id. Any other id is returned unchanged.
+     */
+    resolveModeId(id: string): string {
+        return this.renamedCustomIds.get(id) ?? id;
+    }
+
     hasCustomMode(id: string): boolean {
         return this.lastGoodCustoms.some(row => customModeIdFor(row.name) === id);
     }
@@ -821,7 +830,7 @@ export class ModeService implements FrontendApplicationContribution {
         if (typeof persistedId !== 'string') {
             return;
         }
-        await this.reapplyMode(this.renamedCustomIds.get(persistedId) ?? persistedId);
+        await this.reapplyMode(this.resolveModeId(persistedId));
     }
 
     protected async reapplyMode(persistedId: string): Promise<void> {

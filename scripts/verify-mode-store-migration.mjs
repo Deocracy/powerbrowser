@@ -7,6 +7,8 @@
 //                         now has (every shipped label is tried, read from mode-descriptors.ts) is
 //                         kept under "<name> (custom)", reported, and written back with only its
 //                         name changed; a persisted active id of the old name follows it.
+//  snapshot-follows-rename theia-pane-hosting-04. A session snapshot or named Setup carrying the old
+//                         id activates the renamed mode, and the Setup list names it.
 //  references-unknown     theia-pane-hosting-03. SetupsService.referencedTabUris gives undefined
 //                         (unknown) for an unreadable or unparsable setups.json and for an
 //                         unreadable session, and a set for an absent or valid file.
@@ -98,6 +100,53 @@ async function clauseShippedName(sources, fail) {
     }
 }
 
+/** A ModeService that has loaded a store whose custom mode carries the given shipped label (renamed on load). */
+async function renamedModeService(sources, label) {
+    const { module } = modeService(sources);
+    const service = new module.ModeService();
+    const activated = [];
+    service.fileService = { write: async () => undefined };
+    service.storage = { getData: async () => undefined };
+    service.perspectives = { registerPerspective: () => undefined, getActivePerspectiveId: () => 'browsing' };
+    service.flash = async () => undefined;
+    service.activateMode = async id => { activated.push(id); };
+    service.applyStoreText(JSON.stringify({ version: 1, customs: [{ name: label, leftVisible: true, rightVisible: false, bottomVisible: false }] }));
+    await flush();
+    activated.length = 0;
+    return { module, service, activated };
+}
+
+async function clauseSnapshotFollowsRename(sources, fail) {
+    const descriptors = loadTs(REL.descriptors, { sources });
+    const label = (descriptors.SHIPPED_MODES ?? []).map(d => d.label).filter(l => typeof l === 'string').pop();
+    if (!label) {
+        fail('snapshot-follows-rename', `no shipped mode label read from ${REL.descriptors}`);
+        return;
+    }
+    const { module, service, activated } = await renamedModeService(sources, label);
+    const oldId = module.customModeIdFor(label);
+    const newId = service.getCustomModes()[0]?.id;
+    const { SetupsService } = loadTs(REL.setups, { sources, overrides: { [REL.descriptors]: descriptors } });
+    const setups = new SetupsService();
+    setups.modes = service;
+    setups.applyGeometry = () => undefined;
+    setups.placeTabs = async () => 0;
+    setups.reassertDockSizes = () => undefined;
+    setups.flash = async () => undefined;
+    setups.waitForCustomModes = async () => undefined;
+    for (const notify of [false, true]) {
+        activated.length = 0;
+        await setups.applySnapshot({ modeId: oldId, windows: [{ modeId: oldId, tabs: [], activeTab: null, x: 0, y: 0, width: 1, height: 1 }] }, notify);
+        if (!activated.includes(newId)) {
+            fail('snapshot-follows-rename', `a ${notify ? 'named Setup' : 'session snapshot'} saved in the "${label}" custom mode activated ${JSON.stringify(activated)}, want the renamed mode ${newId} (theia-pane-hosting-04)`);
+        }
+    }
+    const shown = setups.modeLabelFor(oldId);
+    if (shown !== service.getCustomModes()[0]?.name) {
+        fail('snapshot-follows-rename', `a Setup saved in the "${label}" custom mode is listed with mode "${shown}", want the renamed mode's name (theia-pane-hosting-04)`);
+    }
+}
+
 async function clauseReferences(sources, fail) {
     const descriptors = loadTs(REL.descriptors, { sources });
     const { SetupsService } = loadTs(REL.setups, { sources, overrides: { [REL.descriptors]: descriptors } });
@@ -130,7 +179,7 @@ async function clauseReferences(sources, fail) {
     }
 }
 
-const CLAUSES = [clauseShippedName, clauseReferences];
+const CLAUSES = [clauseShippedName, clauseSnapshotFollowsRename, clauseReferences];
 
 export async function check(sources = {}) {
     const failures = [];
@@ -158,7 +207,15 @@ export const PLANTS = [
     },
     {
         name: 'the persisted id does not follow the rename', naming: 'shipped-name-renamed', file: REL.service,
-        edits: [['await this.reapplyMode(this.renamedCustomIds.get(persistedId) ?? persistedId);', 'await this.reapplyMode(persistedId);']],
+        edits: [['await this.reapplyMode(this.resolveModeId(persistedId));', 'await this.reapplyMode(persistedId);']],
+    },
+    {
+        name: 'a snapshot carrying the old mode id opens Browsing', naming: 'snapshot-follows-rename', file: REL.setups,
+        edits: [['const modeId = shippedKnown ? storedModeId : this.modes.resolveModeId(storedModeId);', 'const modeId = storedModeId;']],
+    },
+    {
+        name: 'a Setup saved in the old mode is listed as Browsing', naming: 'snapshot-follows-rename', file: REL.setups,
+        edits: [['const resolved = this.modes.resolveModeId(modeId);', 'const resolved = modeId;']],
     },
     {
         name: 'an unparsable setups.json names nothing (pre-fix theia-pane-hosting-03)', naming: 'references-unknown', file: REL.setups,
