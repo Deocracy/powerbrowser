@@ -107,6 +107,8 @@ export const TheiaService = {
   // <app>/lib) and passed to the sidecar in _spawnAndGate. Null until resolved.
   _pluginsDir: null,
   _configDir: null,
+  // Audit fix 67-WR-03: OrcaService.orcadPort, handed in by powerbrowser.js.
+  _orcaPortSource: null,
   _swapped: false,
   _shuttingDown: false,
 
@@ -325,6 +327,13 @@ export const TheiaService = {
     } catch (err) {
       this._reapLog(`Leftover reap failed: ${err.message} -- best-effort cleanup of a previous launch, continuing to this launch's own spawn.`);
     }
+
+    // Audit fix orcad-hosting-06: Orca's hand-off files left by a previous session that never stopped
+    // (a crash, a kill), removed before this launch's first backend spawn. The frontend boots before
+    // OrcaService runs (powerbrowser.js starts Orca once this start settles), and the backend would hand it
+    // the old pairing offer as this session's. Here is before any orcad of this session exists, so nothing
+    // removed is current.
+    await this._clearStaleOrcaHandOff();
 
     // SQL-01 (12-CODE-REVIEW.md CR-04): start the chrome-side tab-store
     // writer. ensureTabStore opens (migrating), tripwires, and rebuilds from
@@ -809,6 +818,37 @@ export const TheiaService = {
   },
 
   /**
+   * Audit fix 67-WR-03: where orcad's port comes from. powerbrowser.js sets it to OrcaService.orcadPort before
+   * this service starts; this file imports nothing but the boundary and OrcaEnv (D-96), so it is handed in.
+   */
+  setOrcaPortSource(source) {
+    this._orcaPortSource = typeof source === "function" ? source : null;
+  },
+
+  /** orcad's port from the source powerbrowser.js set, or null (the backend then refuses every offer). Never throws. */
+  _orcaPort() {
+    try {
+      const port = this._orcaPortSource ? this._orcaPortSource() : null;
+      return Number.isInteger(port) && port > 0 ? port : null;
+    } catch {
+      return null;
+    }
+  },
+
+  /** Audit fix orcad-hosting-06: the three hand-off files OrcaService writes after a ready line, removed. Never throws. */
+  async _clearStaleOrcaHandOff() {
+    try {
+      const dir = await this._orcaBridgeDir();
+      const platform = OrcaEnv.nodePlatform(PowerBrowserProcesses.platform());
+      for (const name of dir ? [OrcaEnv.ORCAD_DATA_ROOT_FILE, OrcaEnv.ORCA_WEB_PAIRING_FILE, OrcaEnv.ORCA_PANES_DIR_FILE] : []) {
+        await PowerBrowserAPI.removeStateFile(OrcaEnv.bridgeFileFor(dir, name, platform));
+      }
+    } catch (err) {
+      this._pushLog(`Stale Orca hand-off files not removed: ${err && err.message ? err.message : err}`);
+    }
+  },
+
+  /**
    * Spawns the backend and waits for it to become healthy. Returns
    * `{ ok, recoverable, message, details }` (SHELL-03/D-113) instead of a bare
    * boolean, so `_restart()`/`start()` can tell an unrecoverable failure
@@ -849,6 +889,7 @@ export const TheiaService = {
     const port = beforeFirstSwap ? 0 : this._port;
     const args = [this._backendMain, "--hostname", "127.0.0.1", "--port", String(port)];
     const orcaBridgeDir = await this._orcaBridgeDir();
+    const orcaPort = this._orcaPort();
     // NO SECRET GOES IN HERE. `environment` becomes the child's
     // /proc/<pid>/environ, which is the exec-time snapshot: it is readable by
     // every same-uid process for the whole life of the backend, and nothing
@@ -921,6 +962,10 @@ export const TheiaService = {
       // OrcaService writes to. A path, never a credential. The backend captures and deletes it at module
       // load with every other POWERBROWSER_* key; null leaves the key out.
       ...(orcaBridgeDir ? { POWERBROWSER_ORCA_BRIDGE_DIR: orcaBridgeDir } : {}),
+      // Audit fix 67-WR-03 (lane G3b): orcad's port, from OrcaService's own accessor, so the backend judges a
+      // pairing offer's endpoint against the port orcad really runs on. A port number, never a credential;
+      // a pref read, so it is known before OrcaService has started. Absent, the backend refuses every offer.
+      ...(orcaPort ? { POWERBROWSER_ORCA_PORT: String(orcaPort) } : {}),
     };
 
     let proc;
