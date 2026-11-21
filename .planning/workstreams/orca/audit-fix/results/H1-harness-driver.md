@@ -1,6 +1,6 @@
 # Result: H1-harness-driver
 
-Branch: worktree-agent-af1e134a3e7cb0ea4   Base: 0f9f2735401a08132a479c95c09c53f03015fa19, fast-forwarded to 1dd2cbfc for the review round and to f8d798e4 for the lock round   Final: c1e214a2 (last fix; this record is the commit after it)
+Branch: worktree-agent-af1e134a3e7cb0ea4   Base: 0f9f2735401a08132a479c95c09c53f03015fa19, fast-forwarded to 1dd2cbfc for the review round to f8d798e4 for the lock round, and to e25aac93 for the identity round   Final: e7eca2ce (last fix; this record is the commit after it)
 
 The SKIP protocol the other harness lanes follow is `.planning/workstreams/orca/audit-fix/SKIP-PROTOCOL.md`. It was corrected in 834bd116, committed on its own, and updated for the new exclusion modes after abb798b6.
 
@@ -22,12 +22,14 @@ Review round, 2026-11-21:
 | G5a handoff: orca-artifacts runs pinned code | fixed | 406c2087 | scripts/lib/orca-artifacts.mjs --self-test::reading the tables ran nothing; plant: the old loader (import) runs the side effect | Confirmed: the loader imported orca/src/shared/*.ts. The tables are now parsed from the source text: string literals, literal lists, and the agent-browser template with its two alias forms. Values are equal on the pinned source. |
 | harness-driver-04 | fixed | e7f8f3d1 | scripts/verify-orcad-leak.mjs --self-test::orca-run plants; scripts/verify-platform-driver.mjs --self-test::a row that leaves a daemon in a session of its own is FAIL; an interrupted run stops what its row left in a session of its own | orca-run kills orcad on a failed start, on exit and on a signal. Every row carries PB_VERIFY_ROW_TOKEN, and cleanup() sweeps by that token on interrupt, now planted (review point 4). |
 | H1-review-7: sweep reaches older processes | fixed | abb798b6 | scripts/verify-orcad-leak.mjs --self-test::a process older than the row is not of the row | Confirmed at verify-orcad-leak.mjs:62: there was no lower bound. The driver now passes the row leader's start ticks as `--since`, and no process older than the row is judged or swept. |
+| harness-live-panels-10 (from H7) | fixed | 16ed75be | scripts/verify-orcad-leak.mjs --self-test::identity: a pid whose ticks no longer match is not signalled; a group whose leader's ticks no longer match is not signalled; scripts/lib/orca-run.mjs signals only through proc-identity | Confirmed: stopStartedDaemons, the exit and signal hooks, a failed start and stopOrcad signalled by bare pid and by group. Start ticks are now recorded at spawn and on the ready line, and every signal goes through the new scripts/lib/proc-identity.mjs (orca-run cannot import verify-orca-hidden-electron.mjs, which imports it back). A group kill first checks the leader. If the leader exited, the group's remaining members are signalled one by one by identity; if the leader's pid names another process, nothing is signalled. verify-orcad-leak.mjs uses the same lib. |
 | harness-driver-09 | fixed | 142669a9, e7f8f3d1 | scripts/verify-live-scratch-home.mjs --self-test::a probe folder inside scripts/lib | Probes go to a temp folder with imports relocated to the real helper; orcad-leak plants are stopped on exit and signal. |
 | harness-driver-10 | needs-owner | - | (proposed) verify-ng-027-reader-callers.mjs self-test plant: a dead PowerBrowserAPI reader named like a called PowerBrowserProcesses method | Ledger-locked file; diff under Needs owner. Latent today (no shared name). |
 | harness-driver-08 | fixed | 3a67fd9a, e7f8f3d1, 336fe4ae, abb798b6 | scripts/verify-platform-driver.mjs --self-test (41 cases, 21 planted driver faults) | Review point 4 confirmed: seven faults were unplanted. All seven are now planted. |
 | H1-review-6: stray fixture variable | fixed | abb798b6 | scripts/verify-platform-driver.mjs --self-test::the tracked driver refuses a stray fixture variable; a driver copy outside the staged path refuses it too | Confirmed at verify-platform.sh:108-123 (before the fix). Fixture mode is now honoured only when the driver is the self-test's staged copy; otherwise PB_VERIFY_FIXTURE_REGISTRY is a FAIL with exit 1. |
 | harness-driver-07 | fixed | e7f8f3d1 | scripts/verify-platform-driver.mjs --self-test::--gate fails a row that leaves a process behind; nothing a row left is still running | --sweep stops every other survivor of the row's group or token (2 s grace, TERM, KILL) and names it on a NOTE; FAIL under --gate. |
 | harness-live-tabs-14 | fixed | 336fe4ae, abb798b6, c1e214a2 | scripts/verify-platform-driver.mjs --self-test::a driver killed by SIGKILL releases the live lock; a lock wait is bounded and names the holder; a forged PB_LIVE_LOCK_HELD=1 while another process holds the lock is a FAIL; a PB_LIVE_LOCK_HOLDER naming the holder with wrong start ticks is a FAIL; an ancestor holder goes on | Review point 3: the holder now ends with the driver, and the wait is bounded and names the holder. Lock round (c1e214a2), confirmed: the driver trusted an inherited PB_LIVE_LOCK_HELD=1, and its wait message told the user to set it. It now follows the live-lock contract in SKIP-PROTOCOL.md: it exports PB_LIVE_LOCK_HOLDER=<pid>:<start ticks>, goes on only for that holder or an ancestor flock shown in /proc/locks, and FAILs a forged variable by name. The two row comments on `flock <lock> node <row>` now say that form is the contract's ancestor case. |
+| H5 handoff: live-lock holder matched on inode alone | fixed | e7eca2ce | scripts/verify-platform-driver.mjs --self-test::the same inode number on another device is not a match; the holder's recorded /proc/locks line is a match | Confirmed: lock_holders compared the inode only. It now compares device and inode. The device comes from /proc/self/mountinfo, because stat's st_dev on btrfs (48) differs from the superblock device /proc/locks prints (00:22); it was checked on btrfs and tmpfs. The plant feeds the holder's recorded /proc/locks line back through fixture-only PB_VERIFY_FIXTURE_PROC_LOCKS, with the device changed. |
 | harness-static-browser-06 | partial | 3a67fd9a | scripts/verify-platform-driver.mjs --self-test::exit 0 with a SKIP last line is SKIP | Status corrected (review point 5). The driver half is done; the per-script exit-77 conversion and the page-table SKIP branch deletion remain: Handoffs. |
 
 ## Registry requests
@@ -70,6 +72,8 @@ None.
   - Revert with 3a67fd9a and abb798b6.
 - harness-driver-07: a row that leaves any process behind has it stopped. That is a NOTE in --quick and the full run, and FAIL under --gate. Revert with e7f8f3d1.
 - harness-driver-04: lib/orca-run.mjs now SIGKILLs an orcad whose start rejected, and every orcad still running when its process exits or gets SIGINT, SIGTERM or SIGHUP. Revert with e7f8f3d1.
+- harness-live-panels-10: lib/orca-run.mjs no longer signals a recorded orcad, group or daemon whose pid no longer has the start ticks recorded when it started. A daemon pid passed to stopOrcad that the module never recorded is recorded at stop time. Revert with 16ed75be.
+- H5 handoff: a lock on a file with the same inode number on another filesystem no longer counts as the live-lock holder. Revert with e7eca2ce.
 - harness-live-tabs-14 (lock round): an inherited PB_LIVE_LOCK_HELD=1 or PB_LIVE_LOCK_HOLDER that /proc/locks does not confirm now makes the first full-tier row FAIL by name. It no longer skips the lock. Full-tier rows also see PB_LIVE_LOCK_HOLDER=<pid>:<start ticks>, and the wait message no longer suggests setting a variable. Revert with c1e214a2.
 - harness-live-tabs-14: a run with a full-tier row now takes pb-live.lock and holds it to the end.
   - A second session's live run waits for it, at most PB_LIVE_LOCK_WAIT_S (default 21600 s). Past that bound it is a FAIL naming the holder.
@@ -121,6 +125,16 @@ None.
   - Re-run the gate after a push whose verify.yml run is green, so that ng074-ci-green-on-main returns to entry 31's "no run" state or passes.
 
 ## Quick gate
+Identity round: `nix develop .#theia --command scripts/verify-platform.sh --quick` at e7eca2ce exited 1 in 10 min 4 s. The log is in the worktree at .mozbuild/quick-H1.log (git-ignored).
+
+Counts: 450 PASS, 5 FAIL, 0 SKIP. None reads a file this round touched (lib/orca-run.mjs, lib/proc-identity.mjs, verify-orcad-leak.mjs, the driver's lock functions):
+- orca-service-self-test: "plant target not found: export function buildOrcadEnv(...)". Its plant text no longer matches OrcaService; that is the owner of verify-orca-service.mjs.
+- orca-failure-classes and orca-failure-classes-self-test: unmapped orcad codes, now including orcad_instance_lock_holder_unverifiable, between the provisioned orca/ and ORCA_CODE_CLASSES. That is product mapping.
+- build-windows-shape-self-test: "self-test anchor for the rulings guard step is absent from the build-windows job". That is release.yml against its owner's self-test.
+- orca-pane-css-self-test: the provisioned orca/ predates the overlay, as before.
+
+verify-platform-driver-self-test (48 cases, 24 plants) is PASS in 15.2 s, and orcad-leak-self-test is PASS in 8.4 s.
+
 Lock round: `nix develop .#theia --command scripts/verify-platform.sh --quick` at c1e214a2 exited 1 in 10 min 23 s. The log is in the worktree at .mozbuild/quick-H1.log (git-ignored).
 
 Counts: 444 PASS, 3 FAIL, 0 SKIP. None of the three is caused by this round, which touched only the driver's full-tier lock path, its self-test and the protocol:
