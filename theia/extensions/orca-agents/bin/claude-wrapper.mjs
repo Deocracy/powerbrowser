@@ -31,7 +31,12 @@
 // create returned a handle carries the pane, so it is closed (63-WR-01,
 // agents-extensions-01). A create still running at the deadline is not killed:
 // claude starts unwrapped, and the pane that create returns is closed before
-// the wrapper exits. The signal handlers are installed before the CLI phase: a
+// the wrapper exits. A create that never returns a handle (killed at the CLI's
+// hard cap, or failed after orcad made the pane) is followed by a best-effort
+// sweep: the worktree's "Claude Code" panes that were not listed just before
+// the create are closed. The sweep can also catch a pane another session
+// created in this worktree in that same window; it runs only on this failure
+// path. The signal handlers are installed before the CLI phase: a
 // signal before claude starts closes what was created and exits 128 plus the
 // signal number. The CLI and the hook endpoint carry Orca's win32 names there
 // (orca.exe, endpoint.cmd; 63-WR-03).
@@ -59,6 +64,8 @@ export const PANE_BUDGET_MS = 5000;
 /** The hard cap of any one CLI process (a late create runs on to this in the background). */
 const CLI_TIMEOUT_MS = 20000;
 const CLOSE_TIMEOUT_MS = 10000;
+/** The listing taken before create, so a sweep knows which panes are new; part of the pane budget. */
+const BEFORE_LIST_MS = 1500;
 const FORWARDED_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 const POSIX = process.platform === 'linux' || process.platform === 'darwin';
 
@@ -174,18 +181,26 @@ export function firstString(objects, names) {
 }
 
 const handleOf = (created) => firstString([created, created?.terminal], ['handle']);
+const listArgs = (cwd) => ['terminal', 'list', '--worktree', `path:${cwd}`];
+const listRows = (listed) => (Array.isArray(listed) ? listed : listed?.terminals ?? []);
 
 /**
  * Creates the pane; resolves its identity, reading the pane key from show or list when create omits it.
  * Rejects with { pane } once a handle is known, and with { late } (the create still running) at the deadline.
  */
 export async function createPane(dataRoot, cwd, env, deadline = Date.now() + PANE_BUDGET_MS) {
+    // 63-WR-02: the worktree's panes before the create, for the sweep; null (no sweep) when the listing fails.
+    let before = null;
+    try {
+        before = new Set(listRows(await runCli(dataRoot, listArgs(cwd), env, Math.min(BEFORE_LIST_MS, deadline - Date.now()))).map((r) => r?.handle).filter(Boolean));
+    } catch { /* the create still runs; a sweep is not possible */ }
     const creating = runCli(dataRoot, ['terminal', 'create', '--worktree', `path:${cwd}`, '--title', PANE_TITLE, '--command', PLACEHOLDER_COMMAND], env);
+    const sweep = { cwd, before };
     let created;
     try {
         created = await beforeDeadline(creating, deadline);
     } catch (e) {
-        if (e?.budget) throw refuse('terminal create timed out', { late: creating });
+        if (e?.budget) throw refuse('terminal create timed out', { late: creating, sweep });
         throw e;
     }
     const handle = handleOf(created);
@@ -230,14 +245,38 @@ async function closePane(dataRoot, pane, env, bridgeDir) {
     try { await runCli(dataRoot, ['terminal', 'close', '--terminal', pane.handle], env, CLOSE_TIMEOUT_MS); } catch { logStep(bridgeDir, 'terminal close failed'); }
 }
 
-/** Closes whatever a failed or abandoned createPane left in orcad: a known pane now, a late create once it returns. */
+/**
+ * 63-WR-02: after a create that outlived the deadline and then gave no handle (killed at the CLI's cap, or failed after
+ * orcad made the pane), closes the worktree's "Claude Code" panes that the listing before the create did not hold.
+ * Best effort: nothing is swept without that listing, and a failure is one log line.
+ */
+async function sweepOrphans(dataRoot, cli, bridgeDir, sweep) {
+    if (!sweep?.before) {
+        logStep(bridgeDir, 'terminal create gave no handle and no earlier pane list exists; nothing swept');
+        return;
+    }
+    let rows;
+    try {
+        rows = listRows(await runCli(dataRoot, listArgs(sweep.cwd), cli, CLOSE_TIMEOUT_MS));
+    } catch {
+        logStep(bridgeDir, 'terminal list for the orphan sweep failed');
+        return;
+    }
+    for (const row of rows) {
+        if (row && typeof row.handle === 'string' && row.title === PANE_TITLE && !sweep.before.has(row.handle)) {
+            await closePane(dataRoot, { handle: row.handle }, cli, bridgeDir);
+        }
+    }
+}
+
+/** Closes whatever a failed or abandoned createPane left in orcad: a known pane now, a late create once it settles. */
 function cleanupAfter(e, dataRoot, cli, bridgeDir) {
     if (e?.pane?.handle) return closePane(dataRoot, e.pane, cli, bridgeDir);
     if (e?.late) {
         return e.late.then((created) => {
             const handle = handleOf(created);
-            return handle ? closePane(dataRoot, { handle }, cli, bridgeDir) : undefined;
-        }, () => undefined);
+            return handle ? closePane(dataRoot, { handle }, cli, bridgeDir) : sweepOrphans(dataRoot, cli, bridgeDir, e.sweep);
+        }, () => sweepOrphans(dataRoot, cli, bridgeDir, e.sweep));
     }
     return Promise.resolve();
 }

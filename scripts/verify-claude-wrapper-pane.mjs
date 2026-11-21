@@ -20,6 +20,10 @@
 //     and the pane that create made is closed before the wrapper exits.
 //  S4 agents-extensions-01: SIGTERM while create is still running: claude never starts, the pane
 //     is closed and the wrapper exits 143.
+//  S6 63-WR-02: orcad makes the pane but the create CLI never hands back a handle (it fails after
+//     the deadline, as when killed at its cap): claude starts within MAX_START_DELAY_MS, the sweep
+//     closes the new "Claude Code" pane, and a pane listed before the create (another session's)
+//     is left alone.
 //  S5 control: a create with the full identity: claude gets ORCA_PANE_KEY and the endpoint, and
 //     the pane is closed after claude exits.
 //  W  63-WR-03: the wrapper's CLI and endpoint names on win32 equal the names Orca's own source
@@ -76,12 +80,17 @@ setTimeout(() => {
         fs.appendFileSync(path.join(root, 'created.log'), handle + '\\n');
         const terminal = { handle, tabId: 'tab-1', worktreeId: 'wt-1' };
         if (c.paneKey !== false) terminal.paneKey = 'tab-1:leaf-1';
+        // failAfterMs: orcad made the pane, but the CLI never hands its handle back (killed at its cap, or failed).
+        if (c.failAfterMs) { setTimeout(() => process.exit(1), c.failAfterMs); return; }
         setTimeout(() => reply({ terminal }), c.replyDelayMs || 0);
         return;
     }
     if (cmd === 'close') { fs.appendFileSync(path.join(root, 'closed.log'), args[args.indexOf('--terminal') + 1] + '\\n'); reply({ closed: true }); return; }
     if (cmd === 'show') { reply({ terminal: {} }); return; }
-    reply({ terminals: [] });
+    const read = (f) => { try { return fs.readFileSync(path.join(root, f), 'utf8').split('\\n').filter(Boolean); } catch { return []; } };
+    const closed = read('closed.log');
+    const rows = [...(cfg.existing || []), ...read('created.log').map((handle) => ({ handle, title: 'Claude Code' }))];
+    reply({ terminals: rows.filter((r) => !closed.includes(r.handle)) });
 }, c.hangMs || 0);
 `;
 
@@ -162,12 +171,13 @@ async function check(texts) {
         writeFileSync(wrapperFile, texts.wrapper);
         const wrapper = await import(`${pathToFileURL(wrapperFile).href}?t=${Date.now()}`);
 
-        const [s1, s2, s3, s4, s5] = await Promise.all([
+        const [s1, s2, s3, s4, s5, s6] = await Promise.all([
             runScenario(wrapperFile, base, 's1', { create: { paneKey: false }, list: { fail: true } }),
             runScenario(wrapperFile, base, 's2', { create: { paneKey: false }, list: { hangMs: 12000 } }),
             runScenario(wrapperFile, base, 's3', { create: { replyDelayMs: 7000 } }),
             runScenario(wrapperFile, base, 's4', { create: { replyDelayMs: 2500 } }, { signalAfterMs: 700 }),
             runScenario(wrapperFile, base, 's5', {}),
+            runScenario(wrapperFile, base, 's6', { create: { failAfterMs: 6500 }, existing: [{ handle: 'h-other-session', title: 'Claude Code' }] }),
         ]);
         const closedAll = (r) => r.created.length > 0 && r.created.every((h) => r.closed.includes(h));
         if (!s1.created.length) fails.push('S1: the fake CLI saw no create (the scenario did not run)');
@@ -190,6 +200,13 @@ async function check(texts) {
 
         if (!s5.claude || s5.claude.pane !== 'tab-1:leaf-1' || !String(s5.claude.endpoint).endsWith(join('agent-hooks', 'endpoint.env'))) fails.push(`S5: a healthy create did not hand claude its pane identity and endpoint (${JSON.stringify(s5.claude)})`);
         if (!closedAll(s5) || s5.code !== 7) fails.push(`S5: the healthy pane was not closed after claude, or the exit code was lost (exit ${s5.code})`);
+
+        if (!s6.claude) fails.push('S6: claude never started while create hung');
+        else if (s6.claude.at - s6.startedAt > MAX_START_DELAY_MS) fails.push(`S6: claude started after ${s6.claude.at - s6.startedAt} ms while create hung, more than ${MAX_START_DELAY_MS} ms`);
+        if (!s6.created.length) fails.push('S6: the fake CLI saw no create');
+        else if (!closedAll(s6)) fails.push(`S6: a create that orcad completed but whose CLI never returned a handle left its pane open in Orca (created ${s6.created.join(',')}, closed ${s6.closed.join(',') || 'none'})`);
+        if (s6.closed.includes('h-other-session')) fails.push('S6: the orphan sweep closed a pane that existed before the create (another session\'s pane)');
+        if (s6.code !== 7) fails.push(`S6: the wrapper exited ${s6.code}, not claude's 7`);
 
         // W. platform names.
         if (typeof wrapper.cliPath !== 'function' || typeof wrapper.hookEndpointPath !== 'function') fails.push('W: the wrapper exports no cliPath or hookEndpointPath');
@@ -234,6 +251,8 @@ async function check(texts) {
 // ---------------------------------------------------------------- self-test
 
 const PLANTS = [
+    { name: 'no-orphan-sweep', naming: 'S6: a create that orcad completed but whose CLI never returned a handle left its pane open', file: 'wrapper', edit: (s) => s.replace("}, () => sweepOrphans(dataRoot, cli, bridgeDir, e.sweep));", '}, () => undefined);') },
+    { name: 'sweep-ignores-earlier-list', naming: "S6: the orphan sweep closed a pane that existed before the create", file: 'wrapper', edit: (s) => s.replace('row.title === PANE_TITLE && !sweep.before.has(row.handle)', 'row.title === PANE_TITLE') },
     { name: 'list-error-without-pane', naming: 'S1: a pane created before a failed list was left open', file: 'wrapper', edit: (s) => s.replace("throw Object.assign(e && typeof e === 'object' ? e : refuse('pane lookup failed'), { pane });", 'throw e;') },
     { name: 'twenty-second-budget', naming: 'S2: claude started after', file: 'wrapper', edit: (s) => s.replace('export const PANE_BUDGET_MS = 5000;', 'export const PANE_BUDGET_MS = 20000;') },
     { name: 'late-create-forgotten', naming: 'S3: a create that replied after the deadline left its pane open', file: 'wrapper', edit: (s) => s.replace('    if (e?.late) {', '    if (false) {') },
