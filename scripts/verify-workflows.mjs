@@ -138,13 +138,18 @@
 //                 refusal of a diff outside the two notice files, one git add of exactly those two, and publishes with
 //                 "$GITHUB_WORKSPACE/scripts/publish-bump-branch.sh" "$BRANCH" "$BASE" "$HEAD_SHA", with BASE derived in the
 //                 publish job by git merge-base, never read from the generate job's outputs.
-//  orca-repin     In release-train.yml (Phase 68, OVL-02, P68-11/P68-12/P68-35), when bump-pr-orca exists: its App-token
+//  orca-repin     In release-train.yml (Phase 68, OVL-02, P68-11/P68-12/P68-35), while scripts/fetch-orca.sh is in the tree, at least one
+//                 bump job and one detect job must exist (harness-other-03: a rename or a move of their steps used to leave the
+//                 rule silent). Jobs are found by what they do, not by their id: a bump job is a job that mints an App token
+//                 and names Orca (rebase-orca.sh, fetch-orca.sh, build-orca.sh or an orca-* output of another job); a detect
+//                 job is any other job that names scripts/fetch-orca.sh or --orca-select. For every bump job (bump-pr-orca today): its App-token
 //                 mint step comes after the step running scripts/rebase-orca.sh --replay-only and after the git add step;
 //                 its one git add line is exactly git add -A -- configuration.toml orca-overlay/patches
 //                 orca-overlay/seams.json THIRD-PARTY-NOTICES.txt; no run line names build-orca.sh, pnpm, corepack, tsc or
 //                 rebase-orca.sh without --replay-only; every gh pr merge carries --auto; and the step that re-checks TAG and
-//                 COMMIT by regex comes before the first step using either. When detect-orca exists, it names no literal
-//                 remote URL and reads REMOTE with grep -m1 '^REMOTE=' scripts/fetch-orca.sh.
+//                 COMMIT by regex comes before the first step using either. Every other job of release-train.yml that mints an App
+//                 token runs no Orca code either (the same no pnpm, corepack, tsc, build-orca.sh scan). Every detect job (detect-orca
+//                 today) names no literal remote URL and reads REMOTE with grep -m1 '^REMOTE=' scripts/fetch-orca.sh.
 //  fixer-spend    The fix job (release-train.yml) carries timeout-minutes: 90 and the
 //                 claude-fixer concurrency group, so one attempt is time-bounded and the
 //                 attempts for every release key are serialized (FIX-05). The Console
@@ -186,7 +191,7 @@
 // tree print identical output. This script and its --self-test only read the
 // tree; every plant is applied in memory through runChecks' overrides.
 
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -266,6 +271,7 @@ const PIN = /^([^/@]+)\/([^@/]+)(\/[^@]*)?@([0-9a-f]{40})$/;
 const PATTERN = /^([^/@]+\/[^/@]+)@(\*|[0-9a-f]{40})$/;
 const WF_LEVEL = '(workflow)';
 const DRY_RUN_FILE = 'release-train.yml';
+const ORCA_FETCH_REL = 'scripts/fetch-orca.sh';
 const DRY_RUN_GATE = 'inputs.dry-run';
 // A run: body that commits, pushes, opens, comments, edits, dispatches, releases or labels on
 // GitHub, or writes through the API by method or implicit POST (-f, -F, --field, --input).
@@ -1083,38 +1089,60 @@ function runChecks(root, overrides = {}) {
         const failO = (job, msg) => fail(`${WF_DIR}/${DRY_RUN_FILE}`, job, 'orca-repin', msg);
         const jobs = docs[DRY_RUN_FILE]?.jobs ?? {};
         const runOf = st => String(st?.run ?? '');
-        const bump = jobs['bump-pr-orca'];
-        if (bump !== undefined && bump !== null) {
+        const mintsToken = job => (job?.steps ?? []).some(st => String(st?.uses ?? '').split('@')[0] === APP_TOKEN.replace(/@$/, ''));
+        // A job that mints a token and names Orca: the Orca script it runs or an orca-* output of another job it reads.
+        const NAMES_ORCA = /\b(?:rebase-orca|fetch-orca|build-orca)\.sh\b|\bneeds\.(?:detect|rebase)-orca\b|\b(?:orca)-(?:tag|commit)\b/;
+        const ORCA_CODE = /\b(?:build-orca\.sh|pnpm|corepack|tsc)\b|scripts\/rebase-orca\.sh(?![^\n]*--replay-only)/;
+        const jobText = job => JSON.stringify(job ?? {});
+        const bumpJobs = Object.entries(jobs).filter(([, j]) => mintsToken(j) && NAMES_ORCA.test(jobText(j)));
+        const bumpIds = new Set(bumpJobs.map(([id]) => id));
+        const detectJobs = Object.entries(jobs).filter(([id, j]) => !bumpIds.has(id) && /scripts\/fetch-orca\.sh|--orca-select/.test(jobText(j)) && !mintsToken(j));
+        // The Orca re-pin exists while scripts/fetch-orca.sh does (the remote it names is the one thing the re-pin detects against).
+        // A rename of either job, or a move of its steps into a job these predicates do not find, is then a red, not a silent skip.
+        if (overrides.orcaTracked ?? existsSync(join(root, ORCA_FETCH_REL))) {
+            if (docs[DRY_RUN_FILE] === undefined) {
+                failO('(workflow)', `${WF_DIR}/${DRY_RUN_FILE} is absent or does not parse while ${ORCA_FETCH_REL} is in the tree, so the Orca re-pin rule has nothing to read and would assert nothing. Next step: restore ${DRY_RUN_FILE}, or update this rule if the Orca re-pin was removed on purpose.`);
+            } else {
+                if (bumpJobs.length === 0) failO('(workflow)', `has no job that mints an App token and names Orca (rebase-orca.sh, fetch-orca.sh, build-orca.sh or an orca-tag/orca-commit output), while ${ORCA_FETCH_REL} is in the tree, so the P68-35 ordering and the no-Orca-code rule of the re-pin bump are asserted on nothing. Next step: restore the bump job, or update this rule if the Orca re-pin was removed on purpose.`);
+                if (detectJobs.length === 0) failO('(workflow)', `has no job that reads the Orca remote from ${ORCA_FETCH_REL} or runs --orca-select, while ${ORCA_FETCH_REL} is in the tree, so no job is checked for a literal Orca remote. Next step: restore the detect job, or update this rule if the Orca re-pin was removed on purpose.`);
+            }
+        }
+        // No other token-holding job of the file runs Orca code either: the fetched tree must not sit beside a minted token.
+        for (const [id, job] of Object.entries(jobs)) {
+            if (bumpIds.has(id) || !mintsToken(job)) continue;
+            (job.steps ?? []).forEach((st, i) => {
+                for (const l of runOf(st).split('\n').filter(x => ORCA_CODE.test(x))) failO(id, `step ${i} runs Orca code (${l.trim()}) in a job that mints an App token. Next step: run it in rebase-orca.yml's read-only job.`);
+            });
+        }
+        for (const [bumpId, bump] of bumpJobs) {
             const steps = bump.steps ?? [];
             const at = pred => steps.findIndex(pred);
             const mint = at(st => String(st?.uses ?? '').split('@')[0] === APP_TOKEN.replace(/@$/, ''));
             const replay = at(st => /scripts\/rebase-orca\.sh\b[^\n]*--replay-only/.test(runOf(st)));
             const add = at(st => /^\s*git add\b/m.test(runOf(st)));
-            if (mint === -1) failO('bump-pr-orca', 'mints no App token, so it cannot publish the bump. Next step: restore the mint step after the staging.');
-            if (replay === -1) failO('bump-pr-orca', 'no step runs scripts/rebase-orca.sh --replay-only, so the branch does not carry the replayed pin and seams. Next step: restore the replay step.');
+            if (mint === -1) failO(bumpId, 'mints no App token, so it cannot publish the bump. Next step: restore the mint step after the staging.');
+            if (replay === -1) failO(bumpId, 'no step runs scripts/rebase-orca.sh --replay-only, so the branch does not carry the replayed pin and seams. Next step: restore the replay step.');
             if (mint !== -1 && (replay === -1 || add === -1 || mint < replay || mint < add)) {
-                failO('bump-pr-orca', `mints the App token at step ${mint}, before the --replay-only replay (step ${replay}) or the git add (step ${add}), so the token exists while the tagged Orca tree is fetched and staged (P68-35). Next step: move the mint step after the staging.`);
+                failO(bumpId, `mints the App token at step ${mint}, before the --replay-only replay (step ${replay}) or the git add (step ${add}), so the token exists while the tagged Orca tree is fetched and staged (P68-35). Next step: move the mint step after the staging.`);
             }
             const BUMP_ADD = 'git add -A -- configuration.toml orca-overlay/patches orca-overlay/seams.json THIRD-PARTY-NOTICES.txt';
             const adds = steps.flatMap(st => runOf(st).split('\n')).map(l => l.trim()).filter(l => /^git add\b/.test(l));
-            if (adds.length !== 1 || adds[0] !== BUMP_ADD) failO('bump-pr-orca', `stages [${adds.join(' | ')}], not exactly '${BUMP_ADD}', so the bump could carry a path outside the explicit set. Next step: stage those four paths only.`);
-            const ORCA_CODE = /\b(?:build-orca\.sh|pnpm|corepack|tsc)\b|scripts\/rebase-orca\.sh(?![^\n]*--replay-only)/;
+            if (adds.length !== 1 || adds[0] !== BUMP_ADD) failO(bumpId, `stages [${adds.join(' | ')}], not exactly '${BUMP_ADD}', so the bump could carry a path outside the explicit set. Next step: stage those four paths only.`);
             steps.forEach((st, i) => {
-                for (const l of runOf(st).split('\n').filter(x => ORCA_CODE.test(x))) failO('bump-pr-orca', `step ${i} runs Orca code (${l.trim()}) in the job that mints the App token. Next step: run it in rebase-orca.yml's read-only job; this job runs rebase-orca.sh --replay-only alone.`);
+                for (const l of runOf(st).split('\n').filter(x => ORCA_CODE.test(x))) failO(bumpId, `step ${i} runs Orca code (${l.trim()}) in the job that mints the App token. Next step: run it in rebase-orca.yml's read-only job; this job runs rebase-orca.sh --replay-only alone.`);
             });
             const merges = steps.flatMap(st => runOf(st).split('\n')).filter(l => /\bgh pr merge\b/.test(l));
-            if (merges.length === 0) failO('bump-pr-orca', 'arms no auto-merge (no gh pr merge --auto). Next step: restore gh pr merge "$PR" --auto --merge.');
-            for (const l of merges.filter(x => !/\s--auto\b/.test(x))) failO('bump-pr-orca', `merges without --auto (${l.trim()}), so the bot would merge instead of waiting on main-review. Next step: add --auto.`);
+            if (merges.length === 0) failO(bumpId, 'arms no auto-merge (no gh pr merge --auto). Next step: restore gh pr merge "$PR" --auto --merge.');
+            for (const l of merges.filter(x => !/\s--auto\b/.test(x))) failO(bumpId, `merges without --auto (${l.trim()}), so the bot would merge instead of waiting on main-review. Next step: add --auto.`);
             const recheck = at(st => /\[\[ \$TAG =~ \$TAG_RE \]\]/.test(runOf(st)) && /\[\[ \$COMMIT =~ \$COMMIT_RE \]\]/.test(runOf(st)));
             const firstUse = at(st => /\$\{?(?:TAG|COMMIT)\b/.test(runOf(st)));
-            if (recheck === -1 || firstUse < recheck) failO('bump-pr-orca', `uses TAG or COMMIT at step ${firstUse} before a step re-checks both against their regexes (step ${recheck}). Next step: put the regex re-check first.`);
+            if (recheck === -1 || firstUse < recheck) failO(bumpId, `uses TAG or COMMIT at step ${firstUse} before a step re-checks both against their regexes (step ${recheck}). Next step: put the regex re-check first.`);
         }
-        const det = jobs['detect-orca'];
-        if (det !== undefined && det !== null) {
+        for (const [detId, det] of detectJobs) {
             const text = (det.steps ?? []).map(runOf).join('\n');
             const literal = text.match(/(?:https?|git|ssh):\/\/\S+|git@\S+:\S+/);
-            if (literal !== null) failO('detect-orca', `names a literal remote ${literal[0]}, so the tags listed may not be the tags fetch-orca.sh clones. Next step: read REMOTE from scripts/fetch-orca.sh with grep -m1 '^REMOTE='.`);
-            if (!text.includes("grep -m1 '^REMOTE=' scripts/fetch-orca.sh")) failO('detect-orca', `does not read the Orca remote from scripts/fetch-orca.sh's REMOTE= line. Next step: REMOTE=$(grep -m1 '^REMOTE=' scripts/fetch-orca.sh | cut -d= -f2- | tr -d '"').`);
+            if (literal !== null) failO(detId, `names a literal remote ${literal[0]}, so the tags listed may not be the tags fetch-orca.sh clones. Next step: read REMOTE from scripts/fetch-orca.sh with grep -m1 '^REMOTE='.`);
+            if (!text.includes("grep -m1 '^REMOTE=' scripts/fetch-orca.sh")) failO(detId, `does not read the Orca remote from scripts/fetch-orca.sh's REMOTE= line. Next step: REMOTE=$(grep -m1 '^REMOTE=' scripts/fetch-orca.sh | cut -d= -f2- | tr -d '"').`);
         }
     }
 
@@ -1810,6 +1838,30 @@ function selfTest() {
         ['orca-repin: gh pr merge without --auto', trainEdit('gh pr merge "$PR" --auto --merge', 'gh pr merge "$PR" --merge'), ...OB, 'merges without --auto'],
         ['orca-repin: pnpm run in the bump job', trainEdit('          git switch -C "chore/orca-${TAG}" "$BASE"\n', '          git switch -C "chore/orca-${TAG}" "$BASE"\n          (cd orca && pnpm install)\n'), ...OB, 'runs Orca code'],
         ['orca-repin: a literal Orca URL in detect-orca', trainEdit("          REMOTE=$(grep -m1 '^REMOTE=' scripts/fetch-orca.sh | cut -d= -f2- | tr -d '\"')\n", '          REMOTE=https://example.invalid/orca.git\n'), rel('release-train.yml'), 'detect-orca', 'orca-repin', 'names a literal remote'],
+        // harness-other-03: the jobs are found by what they do, so a rename or a removal is a red, not a silent skip.
+        ['orca-repin: bump job renamed and the App token minted first', withRt(d => {
+            const job = d.jobs['bump-pr-orca'];
+            const mintAt = job.steps.findIndex(st => String(st.uses ?? '').startsWith(APP_TOKEN));
+            job.steps.unshift(...job.steps.splice(mintAt, 1));
+            d.jobs['bump-orca'] = job;
+            delete d.jobs['bump-pr-orca'];
+        }), rel('release-train.yml'), 'bump-orca', 'orca-repin', 'before the --replay-only replay'],
+        ['orca-repin: bump job renamed and pnpm run in it', withRt(d => {
+            const job = d.jobs['bump-pr-orca'];
+            job.steps.splice(1, 0, { run: '(cd orca && pnpm install)' });
+            d.jobs['orca-bump-pr'] = job;
+            delete d.jobs['bump-pr-orca'];
+        }), rel('release-train.yml'), 'orca-bump-pr', 'orca-repin', 'runs Orca code'],
+        ['orca-repin: no job mints a token and names Orca', withRt(d => { delete d.jobs['bump-pr-orca']; }), rel('release-train.yml'), '(workflow)', 'orca-repin', 'has no job that mints an App token and names Orca'],
+        ['orca-repin: a new token-holding job runs pnpm', withRt(d => { d.jobs['publish-extra'] = { 'runs-on': 'ubuntu-latest', steps: [{ uses: `${APP_TOKEN}${H40}` }, { run: 'pnpm install' }] }; }), rel('release-train.yml'), 'publish-extra', 'orca-repin', 'runs Orca code'],
+        ['orca-repin: detect job renamed and a literal remote added', withRt(d => {
+            const job = d.jobs['detect-orca'];
+            job.steps.forEach(st => { if (typeof st.run === 'string') st.run = st.run.replace(/REMOTE=\$\(grep[^\n]*\n/, 'REMOTE=https://example.invalid/orca.git\n'); });
+            d.jobs['find-orca-tags'] = job;
+            delete d.jobs['detect-orca'];
+        }), rel('release-train.yml'), 'find-orca-tags', 'orca-repin', 'names a literal remote'],
+        ['orca-repin: release-train.yml absent while fetch-orca.sh is in the tree', (() => { const f = { ...files }; delete f['release-train.yml']; return { files: f }; })(), rel('release-train.yml'), '(workflow)', 'orca-repin', 'is absent or does not parse'],
+        ['orca-repin: no job reads the Orca remote', withRt(d => { delete d.jobs['detect-orca']; }), rel('release-train.yml'), '(workflow)', 'orca-repin', 'has no job that reads the Orca remote'],
     );
 
     // dependabot.yml (AUTO-03, BL-02, WR-04, WR-05, WR-06): each plant edits the real file text in memory.
@@ -1841,7 +1893,8 @@ function selfTest() {
     // claude-code-action, and read-all over a write repository default.
     const controls = [
         ['good release.yml: build-linux on legion, sign-publish with the write trio', { files: base }],
-        ['issues write on release-train.yml job report', { ...with_({ 'release-train.yml': issuesJob('Release train', 'report') }), selected: noRenovate(selected) }],
+        // These two swap in a synthetic release-train.yml that has no Orca jobs, so the tree's own fetch-orca.sh must not demand them.
+        ['issues write on release-train.yml job report', { ...with_({ 'release-train.yml': issuesJob('Release train', 'report') }), selected: noRenovate(selected), orcaTracked: false }],
         ['issues write on triage.yml job apply', { ...with_({ 'triage.yml': issuesJob('Triage', 'apply') }), selected: withClaude }],
         ['guarded workflow_run', with_({ 'after.yml': wfRun('After verify', 'Verify static layers', true) })],
         ['claude-code-action hosted with contents read', { files: { ...base, 'assist.yml': assist('read') }, selected: withClaude }],
@@ -1850,7 +1903,8 @@ function selfTest() {
         ['a negated == false gate on a git commit', withRt(d => d.jobs['bump-pr'].steps.push({ if: `\${{ ${DRY_RUN_GATE} == false }}`, run: 'git commit -m "x"' }))],
         ['a read gh api GET stays ungated', withRt(d => d.jobs.report.steps.push({ run: 'gh api repos/o/r/branches/x --jq .commit.sha' }))],
         ['the unmodified release-train.yml under the new rule', { files }],
-        ['good fixer triple: fix, fix-gate and fix-pr', { files: { ...base, [T]: GOOD_TRAIN }, selected: noRenovate(withClaude) }],
+        ['good fixer triple: fix, fix-gate and fix-pr', { files: { ...base, [T]: GOOD_TRAIN }, selected: noRenovate(withClaude), orcaTracked: false }],
+        ['no Orca re-pin jobs while scripts/fetch-orca.sh is absent from the tree', { ...withRt(d => { delete d.jobs['bump-pr-orca']; delete d.jobs['detect-orca']; }), orcaTracked: false }],
     ];
 
     let failed = 0;

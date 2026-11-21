@@ -89,7 +89,7 @@
 // into a temporary copy and requires each to go red naming the drift; a check
 // that can only go green is not a check.
 
-import { readFileSync, readdirSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -558,6 +558,9 @@ const EXPECTED_MODES_COPY = new Set([
   "PowerBrowser could not save this mode. Your panels are unchanged — try again.",
   'Mode "${name}" saved.',
   "PowerBrowser couldn't load the \"${name}\" mode. Browsing is shown instead.",
+  // theia-pane-hosting-04 (lane G3b): the status-bar notice when a custom mode takes the name a shipped mode now has. It reports
+  // a change already made (the renamed mode keeps its layout and is in the mode list); it is a notice, not an error.
+  'PowerBrowser now has its own "${name}" mode, so your "${name}" mode is now called "${name}".',
 ]);
 
 /**
@@ -617,9 +620,17 @@ const EXPECTED_NAV_COPY = new Set([
   "${name} is sharing your screen with this tab.",
   // Phase 66 (P66-23): the agent mark and its Stop button.
   "Agent in control",
-  "An Orca agent you started is controlling this tab in ${name}. Select Stop to end it.",
+  // agent-browser-04 (lane G1a): the mark shows on every agent tab; Stop stops every agent's tabs until Resume. Every
+  // "Select <X> to ..." sentence names a control the same object labels (checkNavCopy derives that).
+  "An Orca agent you started is controlling this tab in ${name}. Select Stop to stop every agent's tabs.",
+  "Agent tab",
+  "An Orca agent you started opened this tab in ${name}. Select Stop to stop every agent's tabs.",
   "Stop",
-  "Stop the agent's control of this tab in ${name}. The tab stays open.",
+  "Stop every Orca agent's control of its tabs in ${name}, and stop agents opening new ones. The tabs stay open.",
+  "Agents stopped",
+  "You stopped Orca agents in ${name}. Select Resume to let them control their tabs again.",
+  "Resume",
+  "Let Orca agents control their tabs in ${name} again.",
   "${name} blocked a popup from this page.",
   "${name} blocked ${name} popups from this page.",
   "${name} stopped this page from sending you to another page.",
@@ -1112,11 +1123,19 @@ function checkNavCopy(src) {
       out.push(`nav copy: EXPECTED_NAV_COPY string is GONE (drifted or reworded copy): ${JSON.stringify(value)}`);
     }
   }
+  const labels = new Set(raw);
   for (const value of new Set(raw)) {
     if (value.includes(NAV_BRAND_LITERAL)) {
       out.push(`nav copy ${JSON.stringify(value)} spells the product name as a literal -- chrome-bar copy names the configured application name, interpolated`);
     }
     out.push(...leakFailures("nav copy", value));
+    // The next step is a real control: a sentence that says "Select <X> to ..." must name a label this object also defines
+    // (a button's text), so the step it gives is something on screen. Derived from the object, not listed here.
+    for (const m of value.matchAll(/\bSelect ([A-Z][A-Za-z]*(?: [A-Za-z]+)*?) to\b/g)) {
+      if (!labels.has(m[1])) {
+        out.push(`nav copy ${JSON.stringify(value)} tells the user to select "${m[1]}", which no CHROME_BAR_COPY label names -- the next step is not a control on screen`);
+      }
+    }
   }
   return out;
 }
@@ -1314,6 +1333,22 @@ const MODES_COPY_FAULTS = [
     expect: "${error.message}",
   },
   {
+    name: "a nav sentence tells the user to select a control that no label names",
+    apply: (sources) => ({
+      ...sources,
+      [NAV_COPY_REL]: sources[NAV_COPY_REL].replace("Select Resume to let them control", "Select Continue to let them control"),
+    }),
+    expect: 'tells the user to select "Continue"',
+  },
+  {
+    name: "an agent sentence names Stop after its label was renamed in the table",
+    apply: (sources) => ({
+      ...sources,
+      [NAV_COPY_REL]: sources[NAV_COPY_REL].replace("agentStopLabel: 'Stop',", "agentStopLabel: 'Halt',"),
+    }),
+    expect: 'tells the user to select "Stop"',
+  },
+  {
     name: "chrome-bar history sentence drifted",
     apply: (sources) => ({
       ...sources,
@@ -1372,24 +1407,67 @@ function runModesCopySelfTest() {
 //   - every render site under failure/ resolves to the tables: a JSX text node, a string-literal JSX
 //     child or a literal title/aria-label/placeholder/alt attribute in a .tsx there is red naming the file,
 //     and some .tsx there must index ORCA_FAILURE_COPY and ORCA_BUTTON_LABELS.
-// A zero derivation is red. When failure/ is absent the scope prints one named SKIP line.
+// A zero derivation is red. The scope finds the failure-copy folder by what it holds, the file that exports
+// ORCA_FAILURE_COPY under any theia/extensions/*/src, so a moved folder is still checked; when no file exports it the scope
+// is RED, never a SKIP (harness-other-06): the orca-panes extension is in every tree of this branch, so its absence is drift.
 
+// Where the folder is today. Only the self-test plants below address it by name; the scope itself derives it.
 const ORCA_FAILURE_DIR_REL = "theia/extensions/orca-panes/src/browser/failure/";
 const ORCA_COPY_REL = `${ORCA_FAILURE_DIR_REL}orca-failure-copy.ts`;
 
-/** rel -> source for every .ts/.tsx under failure/, or null when the directory is absent. */
-function readOrcaSources() {
-  let names;
+/** The folder (repo-relative, trailing slash) of the file that exports ORCA_FAILURE_COPY under root's theia/extensions/<name>/src, or null. */
+function findOrcaFailureDir(root) {
+  const extRoot = join(root, "theia", "extensions");
+  let exts;
   try {
-    names = readdirSync(join(REPO_ROOT, ORCA_FAILURE_DIR_REL));
+    exts = readdirSync(extRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
   } catch {
     return null;
   }
+  for (const ext of exts) {
+    let files;
+    try {
+      files = readdirSync(join(extRoot, ext, "src"), { recursive: true });
+    } catch {
+      continue;
+    }
+    for (const file of files.map(String).sort()) {
+      if (!/\.ts$/.test(file) || /\.(?:spec|test)\.ts$/.test(file)) continue;
+      let text;
+      try {
+        text = readFileSync(join(extRoot, ext, "src", file), "utf8");
+      } catch {
+        continue;
+      }
+      if (/export const ORCA_FAILURE_COPY\b/.test(text)) {
+        const folder = dirname(file);
+        return `theia/extensions/${ext}/src/${folder === "." ? "" : `${folder}/`}`;
+      }
+    }
+  }
+  return null;
+}
+
+/** rel -> source for every .ts/.tsx in the failure-copy folder, or null when no folder exports ORCA_FAILURE_COPY. */
+function readOrcaSources(root = REPO_ROOT) {
+  const dir = findOrcaFailureDir(root);
+  if (dir === null) return null;
   const out = {};
-  for (const name of names.filter((n) => /\.tsx?$/.test(n)).sort()) {
-    out[`${ORCA_FAILURE_DIR_REL}${name}`] = readFileSync(join(REPO_ROOT, ORCA_FAILURE_DIR_REL, name), "utf8");
+  for (const name of readdirSync(join(root, dir)).filter((n) => /\.tsx?$/.test(n)).sort()) {
+    out[`${dir}${name}`] = readFileSync(join(root, dir, name), "utf8");
   }
   return out;
+}
+
+const ORCA_ABSENT = "Orca copy: no file under theia/extensions/*/src exports ORCA_FAILURE_COPY, so the failure page's copy is not being checked -- the orca-panes extension or its failure-copy folder moved, was renamed or was deleted. Next step: restore it, or update this check if the Orca failure page was removed on purpose.";
+
+/** The whole Orca scope over root: the one function the main run and the self-test both call. */
+async function orcaScope(root = REPO_ROOT) {
+  const sources = readOrcaSources(root);
+  if (sources === null) return { failures: [ORCA_ABSENT], messages: 0, count: 0, dir: null };
+  const checked = await checkOrcaCopy(sources);
+  const copyRel = Object.keys(sources).find((rel) => /export const ORCA_FAILURE_COPY\b/.test(sources[rel]));
+  return { failures: checked.failures, messages: checked.messages, count: Object.keys(sources).length, dir: dirname(copyRel) };
 }
 
 async function loadOrcaCopy(src) {
@@ -1413,10 +1491,11 @@ async function importStripped(src) {
 /** @returns {{ failures: string[], messages: number }} */
 async function checkOrcaCopy(sources) {
   const out = [];
-  const mod = await loadOrcaCopy(sources[ORCA_COPY_REL] ?? "");
+  const copyRel = Object.keys(sources).find((rel) => /export const ORCA_FAILURE_COPY\b/.test(sources[rel])) ?? ORCA_COPY_REL;
+  const mod = await loadOrcaCopy(sources[copyRel] ?? "");
   const { ORCA_FAILURE_COPY: copy, ORCA_FAILURE_BUTTONS: buttons, ORCA_BUTTON_LABELS: labels, ORCA_PROTECTION_SENTENCE: protection } = mod;
   if (mod.loadError || !copy || !buttons || !labels || typeof protection !== "string") {
-    out.push(`Orca copy: ${ORCA_COPY_REL} did not yield ORCA_FAILURE_COPY, ORCA_FAILURE_BUTTONS, ORCA_BUTTON_LABELS and ORCA_PROTECTION_SENTENCE${mod.loadError ? ` (${mod.loadError})` : ""}`);
+    out.push(`Orca copy: ${copyRel} did not yield ORCA_FAILURE_COPY, ORCA_FAILURE_BUTTONS, ORCA_BUTTON_LABELS and ORCA_PROTECTION_SENTENCE${mod.loadError ? ` (${mod.loadError})` : ""}`);
     return { failures: out, messages: 0 };
   }
   const messages = Object.entries(copy).map(([cls, entry]) => [cls, entry?.message]);
@@ -1468,7 +1547,7 @@ async function checkOrcaCopy(sources) {
     }
   }
   if (!tsx.some((rel) => /ORCA_FAILURE_COPY\[/.test(sources[rel]) && /ORCA_BUTTON_LABELS\[/.test(sources[rel]))) {
-    out.push(`Orca copy: no .tsx under ${ORCA_FAILURE_DIR_REL} indexes ORCA_FAILURE_COPY and ORCA_BUTTON_LABELS -- the page's render site does not resolve to the tables`);
+    out.push(`Orca copy: no .tsx under ${dirname(copyRel)}/ indexes ORCA_FAILURE_COPY and ORCA_BUTTON_LABELS -- the page's render site does not resolve to the tables`);
   }
   return { failures: out, messages: messages.length };
 }
@@ -1498,16 +1577,57 @@ const ORCA_COPY_FAULTS = [
 ];
 
 async function runOrcaCopySelfTest() {
+  // harness-other-06: the scope is exercised through the same function the main run uses (orcaScope), over fixture roots.
   const clean = readOrcaSources();
   if (!clean) {
-    console.log(`  SKIP  Orca copy faults -- ${ORCA_FAILURE_DIR_REL} is absent`);
-    return true;
+    console.error(`  FAIL  Orca copy faults cannot run -- ${ORCA_ABSENT}`);
+    return { ok: false };
+  }
+  {
+    const fixtures = mkdtempSync(join(tmpdir(), "orca-scope-"));
+    try {
+      const copyDir = (root, dir) => {
+        mkdirSync(join(root, dir), { recursive: true });
+        for (const [rel, text] of Object.entries(clean)) writeFileSync(join(root, dir, rel.slice(rel.lastIndexOf("/") + 1)), text);
+      };
+      const cases = [
+        ["the folder in place", "theia/extensions/orca-panes/src/browser/failure/", (f) => f.length === 0 && true],
+        ["the folder moved within the extension", "theia/extensions/orca-panes/src/browser/errors/", (f) => f.length === 0],
+        ["the extension renamed", "theia/extensions/orca-pane-host/src/browser/failure/", (f) => f.length === 0],
+      ];
+      for (const [name, dir, green] of cases) {
+        const root = join(fixtures, name.replace(/\W+/g, "-"));
+        copyDir(root, dir);
+        const r = await orcaScope(root);
+        if (!green(r.failures) || r.messages === 0) {
+          console.error(`  FAIL  Orca scope, ${name}: expected the copy still checked and green, got ${r.failures.join(" | ") || `${r.messages} messages`}`);
+          return { ok: false };
+        }
+        console.log(`  ok    Orca scope, ${name} -- still found by its export and checked (${r.messages} messages)`);
+      }
+      const gone = join(fixtures, "gone");
+      mkdirSync(join(gone, "theia", "extensions", "orca-panes", "src", "browser"), { recursive: true });
+      writeFileSync(join(gone, "theia", "extensions", "orca-panes", "src", "browser", "other.ts"), "export const X = 1;\n");
+      const absent = await orcaScope(gone);
+      if (!absent.failures.some((f) => f.includes("no file under theia/extensions/*/src exports ORCA_FAILURE_COPY"))) {
+        console.error(`  FAIL  Orca scope with the failure-copy folder gone from an extension that still exists did not go red: ${absent.failures.join(" | ") || "(no failures)"}`);
+        return { ok: false };
+      }
+      const noExt = await orcaScope(join(fixtures, "does-not-exist"));
+      if (!noExt.failures.some((f) => f.includes("no file under theia/extensions/*/src exports ORCA_FAILURE_COPY"))) {
+        console.error("  FAIL  Orca scope in a tree with no extensions at all did not go red");
+        return { ok: false };
+      }
+      console.log("  ok    Orca scope, the failure-copy folder gone, or the whole extension gone -- red, never a SKIP");
+    } finally {
+      rmSync(fixtures, { recursive: true, force: true });
+    }
   }
   const baseline = await checkOrcaCopy(clean);
   if (baseline.failures.length !== 0) {
     console.error("verify-shell-error-copy --self-test: FAIL -- the Orca-copy baseline is already red:");
     baseline.failures.forEach((f) => console.error(`  ${f}`));
-    return false;
+    return { ok: false };
   }
   let allOk = true;
   for (const fault of ORCA_COPY_FAULTS) {
@@ -1525,7 +1645,7 @@ async function runOrcaCopySelfTest() {
       console.log(`  ok    ${fault.name} -- red, naming the drift`);
     }
   }
-  return allOk;
+  return { ok: allOk };
 }
 
 // ---------------------------------------------------------------------------
@@ -1902,7 +2022,8 @@ if (selfTest) {
     console.log(`verify-shell-error-copy: PASS -- all ${MODES_COPY_FAULTS.length} planted modes-copy faults went red naming the drift`);
   }
   console.log(`verify-shell-error-copy --self-test: planting ${ORCA_COPY_FAULTS.length} Orca-copy fault(s)`);
-  const orcaOk = await runOrcaCopySelfTest();
+  const orcaRun = await runOrcaCopySelfTest();
+  const orcaOk = orcaRun.ok;
   if (orcaOk) {
     console.log(`verify-shell-error-copy: PASS -- all ${ORCA_COPY_FAULTS.length} planted Orca-copy faults went red naming the drift`);
   }
@@ -1925,13 +2046,10 @@ if (!argv.includes("--file")) {
     fail(f);
   }
   console.log(`verify-shell-error-copy: widget copy derived from ${widgetCopySourceRels(modesSources).length} chrome-bar source(s)`);
-  const orcaSources = readOrcaSources();
-  if (!orcaSources) {
-    console.log(`verify-shell-error-copy: Orca scope SKIP -- ${ORCA_FAILURE_DIR_REL} is absent`);
-  } else {
-    const orca = await checkOrcaCopy(orcaSources);
-    orca.failures.forEach((f) => fail(f));
-    console.log(`verify-shell-error-copy: Orca scope -- ${orca.messages} messages checked from ${Object.keys(orcaSources).length} source(s) under ${ORCA_FAILURE_DIR_REL}`);
+  const orca = await orcaScope();
+  orca.failures.forEach((f) => fail(f));
+  if (orca.dir) {
+    console.log(`verify-shell-error-copy: Orca scope -- ${orca.messages} messages checked from ${orca.count} source(s) under ${orca.dir}/`);
   }
   const bundledSources = readBundledSources();
   if (!bundledSources) {

@@ -115,6 +115,11 @@ ACTOR_CHILD_BASENAME="GroupActorChild.sys.mjs"
 # Phase 66 (A2, P66-13): the PowerBrowserAgent child's key input (nsITextInputProcessor) and console capture
 # (nsIConsoleAPIStorage, a system principal) need XPCOM constructors and interfaces, so the allowance gains exactly
 # Cc[ and Ci., each occurrence catalogued; Services., Cu. and nodePrincipal stay forbidden in the child.
+# The waiver is as wide as that reason and no wider (harness-other-08): a row at the right line is not enough, the row's
+# first cell must name every contract ID (Cc["@mozilla.org/..."]) and every interface (Ci.nsI...) the line carries, so
+# swapping the component on a catalogued line, with the line number unchanged, goes red. A Cc[ with no literal contract
+# ID cannot be compared and is refused. Services. is not in this list, so it is refused on any line whatever the
+# catalogue holds (the --self-test plants a catalogued Services. line to prove it).
 ACTOR_CHILD_PATTERNS=('wrappedJSObject' 'JSWindowActorChild' 'Cc[' 'Ci.')
 
 is_actor_child_pattern() {
@@ -130,6 +135,45 @@ is_actor_child_pattern() {
 # count: after a --fix renumbering it can name a new, uncatalogued line.
 catalogue_has_row() {
   grep -Eq "^\|[^|]*\| \`${2//./\\.}:${3}\` \|" "$1"
+}
+
+# Prints, for the actor-child line <text> catalogued as <base>:<line> in <catalogue>, each contract ID and interface the
+# line carries that the row's first cell does not name; prints nothing when the row names them all. A Cc[ with no
+# literal "..." contract is printed as 'a literal Cc["..."] contract ID' because it has nothing to compare.
+actor_child_unnamed_tokens() {
+  local catalogue="$1" base="$2" line_no="$3" text="$4"
+  local cell token uses literals
+  cell="$(grep -E "^\|[^|]*\| \`${base//./\\.}:${line_no}\` \|" "$catalogue" | head -n 1 | cut -d'|' -f2 || true)"
+  # Every Cc[ on the line must be a literal Cc["..."] contract: a second, dynamic or template-literal use beside a
+  # catalogued literal is not covered by the row, so the counts must be equal (the escape of any one contract never
+  # waives another use on the line).
+  uses="$(printf '%s\n' "$text" | grep -oF 'Cc[' | wc -l)"
+  literals="$(printf '%s\n' "$text" | grep -oE 'Cc\["[^"]*"\]' | wc -l)"
+  if [ "$uses" -ne "$literals" ]; then
+    echo 'a literal Cc["..."] contract ID for every Cc[ use'
+  fi
+  while IFS= read -r token; do
+    [ -n "$token" ] || continue
+    if ! cell_names_token "$cell" "$token"; then
+      echo "$token"
+    fi
+  done < <(printf '%s\n' "$text" | grep -oE 'Cc\["[^"]*"\]|Ci\.[A-Za-z0-9_]+' || true)
+}
+
+# True when <cell> holds <token> as a fixed string (no pattern characters are live) with no identifier character directly
+# before or after it, so Ci.nsIPrincipal is not found inside Ci.nsIPrincipalX and a contract with ? + ( ) { } matches itself only.
+cell_names_token() {
+  awk -v cell="$1" -v tok="$2" 'BEGIN {
+    off = 0; rest = cell
+    while ((i = index(rest, tok)) > 0) {
+      at = off + i
+      pre = (at > 1) ? substr(cell, at - 1, 1) : ""
+      post = substr(cell, at + length(tok), 1)
+      if (pre !~ /[A-Za-z0-9_]/ && post !~ /[A-Za-z0-9_]/) exit 0
+      off = at; rest = substr(cell, off + 1)
+    }
+    exit 1
+  }'
 }
 
 # The shell's gBrowser stand-in (powerbrowser.js) is a plain object that
@@ -186,7 +230,7 @@ scan_internals_boundary() {
     return 1
   fi
 
-  local line_no line pattern offense
+  local line_no line pattern offense unnamed
   for f in "${scanned[@]}"; do
     line_no=0
     while IFS= read -r line || [ -n "$line" ]; do
@@ -196,6 +240,7 @@ scan_internals_boundary() {
         case "$line" in
           *"$pattern"*)
             offense=1
+            unnamed=""
             if is_conditional_pattern "$pattern"; then
               case "$line" in
                 *'chrome://powerbrowser/'*) offense=0 ;;
@@ -205,13 +250,20 @@ scan_internals_boundary() {
               && is_actor_child_pattern "$pattern" \
               && catalogue_has_row "$CATALOGUE_PATH" "$ACTOR_CHILD_BASENAME" "$line_no"; then
               offense=0
+              unnamed=""
+              case "$pattern" in
+                'Cc['|'Ci.')
+                  unnamed="$(actor_child_unnamed_tokens "$CATALOGUE_PATH" "$ACTOR_CHILD_BASENAME" "$line_no" "$line" | paste -sd' ' -)"
+                  [ -n "$unnamed" ] && offense=1
+                  ;;
+              esac
             fi
             if [ "$offense" -eq 1 ] && is_gbrowser_standin_definition "$f" "$pattern" "$line"; then
               offense=0
             fi
             if [ "$offense" -eq 1 ]; then
               count=$((count + 1))
-              echo "  $f:$line_no: $pattern" >&2
+              echo "  $f:$line_no: $pattern${unnamed:+ (catalogue row names no $unnamed)}" >&2
             fi
             ;;
         esac
@@ -297,15 +349,19 @@ check_catalogue_consistency() {
   fi
 
   local -a missing=()
-  local line_no
+  local line_no unnamed
   while IFS= read -r line_no; do
     if ! catalogue_has_row "$catalogue" "$base" "$line_no"; then
       missing+=("$base:$line_no")
+    elif [ -n "$only_actor_child" ]; then
+      # The row must name the contract IDs and interfaces the line carries (harness-other-08).
+      unnamed="$(actor_child_unnamed_tokens "$catalogue" "$base" "$line_no" "$(sed -n "${line_no}p" "$target")" | paste -sd' ' -)"
+      [ -n "$unnamed" ] && missing+=("$base:$line_no (row names no $unnamed)")
     fi
   done < <(catalogue_occurrence_lines "$target" "$only_actor_child")
 
   if [ "${#missing[@]}" -ne 0 ]; then
-    echo "internals-catalogue: FAIL -- ${#missing[@]} occurrence(s) with no catalogue row: ${missing[*]}" >&2
+    echo "internals-catalogue: FAIL -- ${#missing[@]} occurrence(s) with no catalogue row, or a row that does not name its contract ID or interface: ${missing[*]}" >&2
     return 1
   fi
 
@@ -473,6 +529,86 @@ EOF2
       overall=1
     fi
   done
+  # harness-other-08: a catalogued line is waived only while its row names the contract ID and the interface the line
+  # carries. Each plant keeps the catalogued line number and changes what the line does; a Services. line is refused
+  # although it is catalogued, which is the claim the comment on ACTOR_CHILD_PATTERNS makes.
+  local fixture_cat="$tmp/fixture-catalogue.md" contract_line cp_name cp_body cp_want cp_cell
+  local default_cell='`Cc["@mozilla.org/consoleAPI-storage;1"]` / `Ci.nsIConsoleAPIStorage`'
+  write_fixture_cat() {
+    printf '%s\n' '| Pattern | File:Line | Function | Why | Risk |' '|---|---|---|---|---|' \
+      "| $1 | \`$ACTOR_CHILD_BASENAME:2\` | \`actorCreated\` | fixture | fixture |" \
+      "| \`Services.prefs\` | \`$ACTOR_CHILD_BASENAME:3\` | \`actorCreated\` | fixture | fixture |" > "$fixture_cat"
+  }
+  write_fixture_cat "$default_cell"
+  contract_line='  this.s = Cc["@mozilla.org/consoleAPI-storage;1"].getService(Ci.nsIConsoleAPIStorage);'
+  printf '// control\n%s\n' "$contract_line" > "$tmp/child/$ACTOR_CHILD_BASENAME"
+  if CATALOGUE_PATH="$fixture_cat" ACTOR_CHILD_TARGET="$tmp/child/$ACTOR_CHILD_BASENAME" scan_internals_boundary "$tmp/child" >/dev/null 2>"$tmp/self-test-contract.err"; then
+    echo "check-internals-boundary: --self-test PASS -- control: a catalogued actor-child line whose row names its contract ID and interface is waived"
+  else
+    echo "check-internals-boundary: --self-test FAIL -- control: the catalogued contract line was rejected, so the contract plants below prove nothing" >&2
+    cat "$tmp/self-test-contract.err" >&2
+    overall=1
+  fi
+  # A contract with pattern characters in it (? + ( ) { }) matches its own row: no false red from an unescaped metacharacter.
+  write_fixture_cat '`Cc["@mozilla.org/x+y(1){2}?;1"]` / `Ci.nsIConsoleAPIStorage`'
+  printf '// control\n  this.s = Cc["@mozilla.org/x+y(1){2}?;1"].getService(Ci.nsIConsoleAPIStorage);\n' > "$tmp/child/$ACTOR_CHILD_BASENAME"
+  if CATALOGUE_PATH="$fixture_cat" ACTOR_CHILD_TARGET="$tmp/child/$ACTOR_CHILD_BASENAME" scan_internals_boundary "$tmp/child" >/dev/null 2>"$tmp/self-test-contract.err"; then
+    echo "check-internals-boundary: --self-test PASS -- control: a contract with pattern characters matches its own row"
+  else
+    echo "check-internals-boundary: --self-test FAIL -- control: a contract with pattern characters was rejected against its own row (a false red)" >&2
+    cat "$tmp/self-test-contract.err" >&2
+    overall=1
+  fi
+  write_fixture_cat "$default_cell"
+  for child_plant in \
+    'swapped-contract|  this.s = Cc["@mozilla.org/file/local;1"].getService(Ci.nsIConsoleAPIStorage);|Cc["@mozilla.org/file/local;1"]' \
+    'swapped-interface|  this.s = Cc["@mozilla.org/consoleAPI-storage;1"].getService(Ci.nsIFile);|Ci.nsIFile' \
+    'dynamic-contract|  this.s = Cc[name].getService(Ci.nsIConsoleAPIStorage);|a literal Cc["..."] contract ID' \
+    'extra-interface|  this.s = Cc["@mozilla.org/consoleAPI-storage;1"].getService(Ci.nsIConsoleAPIStorage); Ci.nsIProcess;|Ci.nsIProcess' \
+    'literal-plus-dynamic-use|  this.s = Cc["@mozilla.org/consoleAPI-storage;1"].getService(Ci.nsIConsoleAPIStorage); this.t = Cc[name].getService(Ci.nsIConsoleAPIStorage);|a literal Cc["..."] contract ID for every Cc[ use' \
+    'literal-plus-template-use|  this.s = Cc["@mozilla.org/consoleAPI-storage;1"].getService(Ci.nsIConsoleAPIStorage); this.t = Cc[`@mozilla.org/file/local;1`].createInstance(Ci.nsIConsoleAPIStorage);|a literal Cc["..."] contract ID for every Cc[ use' \
+    'literal-plus-single-quote-use|  this.s = Cc["@mozilla.org/consoleAPI-storage;1"].getService(Ci.nsIConsoleAPIStorage); this.t = Cc['"'"'@mozilla.org/file/local;1'"'"'].createInstance(Ci.nsIConsoleAPIStorage);|a literal Cc["..."] contract ID for every Cc[ use' \
+    'near-miss-spelling|  this.s = Cc["@mozilla.org/x+y;1"].getService(Ci.nsIConsoleAPIStorage);|Cc["@mozilla.org/x+y;1"]|`Cc["@mozilla.org/xxy;1"]` / `Ci.nsIConsoleAPIStorage`'; do
+    cp_name="${child_plant%%|*}"; cp_body="${child_plant#*|}"
+    cp_cell="$default_cell"
+    case "$cp_body" in
+      *'|'*'|'*) cp_cell="${cp_body##*|}"; cp_body="${cp_body%|*}" ;;
+    esac
+    cp_want="${cp_body#*|}"; cp_body="${cp_body%|*}"
+    write_fixture_cat "$cp_cell"
+    printf '// planted %s\n%s\n' "$cp_name" "$cp_body" > "$tmp/child/$ACTOR_CHILD_BASENAME"
+    if CATALOGUE_PATH="$fixture_cat" ACTOR_CHILD_TARGET="$tmp/child/$ACTOR_CHILD_BASENAME" scan_internals_boundary "$tmp/child" >/dev/null 2>"$tmp/self-test-contract.err"; then
+      echo "check-internals-boundary: --self-test FAIL -- a catalogued actor-child line with a $cp_name was NOT rejected" >&2
+      overall=1
+    elif grep -qF "$ACTOR_CHILD_BASENAME:2: " "$tmp/self-test-contract.err" && grep -qF "$cp_want" "$tmp/self-test-contract.err"; then
+      echo "check-internals-boundary: --self-test PASS -- a catalogued actor-child line with a $cp_name was correctly rejected, naming $cp_want"
+    else
+      echo "check-internals-boundary: --self-test FAIL -- the $cp_name rejection doesn't name $cp_want" >&2
+      cat "$tmp/self-test-contract.err" >&2
+      overall=1
+    fi
+    # The same plants through the catalogue mode must name the line too.
+    if CATALOGUE_PATH="$fixture_cat" check_catalogue_consistency "$fixture_cat" "$tmp/child/$ACTOR_CHILD_BASENAME" actor-child >/dev/null 2>"$tmp/self-test-contract.err"; then
+      echo "check-internals-boundary: --self-test FAIL -- the catalogue mode accepted a catalogued actor-child line with a $cp_name" >&2
+      overall=1
+    elif ! grep -qF "$ACTOR_CHILD_BASENAME:2 (row names no $cp_want" "$tmp/self-test-contract.err"; then
+      echo "check-internals-boundary: --self-test FAIL -- the catalogue mode's $cp_name rejection doesn't name $cp_want" >&2
+      cat "$tmp/self-test-contract.err" >&2
+      overall=1
+    fi
+  done
+  write_fixture_cat "$default_cell"
+  printf '// planted catalogued Services. line\n// (line 2 left empty)\n  const prefs = Services.prefs;\n' > "$tmp/child/$ACTOR_CHILD_BASENAME"
+  if CATALOGUE_PATH="$fixture_cat" ACTOR_CHILD_TARGET="$tmp/child/$ACTOR_CHILD_BASENAME" scan_internals_boundary "$tmp/child" >/dev/null 2>"$tmp/self-test-contract.err"; then
+    echo "check-internals-boundary: --self-test FAIL -- a catalogued Services. line in the actor child was NOT rejected" >&2
+    overall=1
+  elif grep -qF "$ACTOR_CHILD_BASENAME:3: Services." "$tmp/self-test-contract.err"; then
+    echo "check-internals-boundary: --self-test PASS -- a catalogued Services. line in the actor child was correctly rejected"
+  else
+    echo "check-internals-boundary: --self-test FAIL -- the catalogued Services. rejection doesn't name $ACTOR_CHILD_BASENAME:3: Services." >&2
+    cat "$tmp/self-test-contract.err" >&2
+    overall=1
+  fi
   # A byte-identical copy of the real actor child anywhere else gets no
   # waiver, although every one of its lines has a row.
   mkdir -p "$tmp/elsewhere"

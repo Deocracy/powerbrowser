@@ -340,6 +340,17 @@ function runChecks(root, overrides = {}) {
     if (shaAt < 0 || keyAt < 0 || buildAt < 0 || !(shaAt < keyAt && keyAt < buildAt)) {
         fail('(job)', 'gates', `does not run sha_gate, then key_gate, then the first build step, in that order. Next step: reorder the steps.`);
     }
+    // 6a. rulings (P68-21, harness-other-04): no Windows release carries Orca's shipped closure while an owner licence
+    // ruling is pending. The step must exist, run once the key gate has passed, and come before the first build step; it is
+    // a step after key_gate, so the fail-open loop below also refuses continue-on-error, `|| true` and `set +e` on it.
+    const rulingsAt = steps.map((st, i) => [st, i]).filter(([st]) => /\bscripts\/verify-licence-allowlist\.mjs --rulings\b/.test(String(st.run ?? ''))).map(([, i]) => i);
+    if (rulingsAt.length === 0) {
+        fail('(job)', 'rulings', `has no step running scripts/verify-licence-allowlist.mjs --rulings, so a Windows release could carry Orca's closure while an owner licence ruling is pending (P68-21). Next step: restore the guard before the first build step, the way ${REF_JOB} has it.`);
+    } else if (keyAt >= 0 && rulingsAt[0] < keyAt) {
+        fail(steps[rulingsAt[0]].name ?? '(step)', 'rulings', `runs the --rulings guard before key_gate, so it runs on a commit the key gate has not admitted. Next step: move it after key_gate.`);
+    } else if (buildAt >= 0 && rulingsAt[0] > buildAt) {
+        fail(steps[rulingsAt[0]].name ?? '(step)', 'rulings', `runs the --rulings guard after the first build step (step ${buildAt}), so the build has already started while a licence ruling may be pending. Next step: move it before the first build step.`);
+    }
     steps.forEach((st, i) => {
         if (keyAt >= 0 && i > keyAt && String(st.if ?? '') !== KEY_IF) {
             fail(st.name ?? '(step)', 'gates', `step '${st.name ?? st.uses}' after key_gate has if: ${JSON.stringify(st.if ?? null)}, not ${KEY_IF}. Next step: restore the if:.`);
@@ -504,6 +515,16 @@ function selfTest() {
     const NEEDS = `    needs: [${SIDECAR.name}, ${ORCA.name}]\n`;
     const EXACT = `not exactly [${SIDECAR.name}, ${ORCA.name}]`;
     const download = p => `      - name: Download the hosted Windows ${p === SIDECAR ? 'sidecar into windows-sidecar/' : 'Orca tree into windows-orca/'} (data, admitted by its digest before staging)\n        if: steps.key_gate.outputs.build == 'true'\n        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n          name: ${p.name}\n          path: ${p.name}\n`;
+    // The rulings guard step, for the plants: its header lines up to the run, and the step moved after the first build step.
+    const RULINGS_STEP_HEAD = "      - name: Refuse to build while an Orca licence ruling is pending (P68-21)\n        if: steps.key_gate.outputs.build == 'true'\n";
+    const RULINGS_RUN = "        run: |\n          set -euo pipefail\n          nix develop .#theia --command node scripts/verify-licence-allowlist.mjs --rulings\n\n";
+    const rulingsMoved = () => {
+        if (!slice.includes(RULINGS_STEP_HEAD + RULINGS_RUN)) throw new Error(`self-test anchor for the rulings guard step is absent from the ${JOB} job`);
+        const anchor = '      - name: Download the hosted Windows sidecar into windows-sidecar/';
+        if (!slice.includes(anchor)) throw new Error(`self-test anchor '${anchor}' is absent from the ${JOB} job`);
+        const without = slice.replace(RULINGS_STEP_HEAD + RULINGS_RUN, '');
+        return real.slice(0, h) + without.replace(anchor, `${RULINGS_STEP_HEAD}${RULINGS_RUN}${anchor}`) + real.slice(t);
+    };
     const plants = [
         ['runner moved to a hosted label', sliceEdit('    runs-on: [self-hosted, powerbrowser-release]', '    runs-on: ubuntu-latest'), 'runner', 'runs-on'],
         ['secrets reference added', sliceEdit('    env:\n      RELEASE_SHA: ${{ inputs.sha }}\n', '    env:\n      RELEASE_SHA: ${{ inputs.sha }}\n      PROBE: ${{ secrets.PROBE }}\n'), 'secrets', 'secrets'],
@@ -523,6 +544,12 @@ function selfTest() {
         ['pipefail removed from the cross-build step', sliceEdit('          set -euo pipefail\n          podman run --rm', '          podman run --rm'), 'gates', 'pipefail'],
         ['identity upload carrying the MAR', sliceEdit('            objdir-windows-x86_64/dist/bin/application.ini\n', '            objdir-windows-x86_64/dist/bin/application.ini\n            objdir-windows-x86_64/dist/release-windows/*.complete.mar\n'), 'retention', 'retention-days 7'],
         ['upload retention raised', sliceEdit('          retention-days: 1\n          overwrite: true', '          retention-days: 5\n          overwrite: true'), 'retention', 'retention-days 5'],
+        // harness-other-04: the licence-rulings guard (P68-21)
+        ['rulings guard removed', sliceEdit('nix develop .#theia --command node scripts/verify-licence-allowlist.mjs --rulings', 'true'), 'rulings', 'no step running scripts/verify-licence-allowlist.mjs --rulings'],
+        ['rulings guard moved after the first build step', rulingsMoved(), 'rulings', 'after the first build step'],
+        ['rulings guard fails open (continue-on-error)', sliceEdit(RULINGS_STEP_HEAD, `${RULINGS_STEP_HEAD}        continue-on-error: true\n`), 'gates', 'continue-on-error'],
+        ['rulings guard swallows a failure (|| true)', sliceEdit('node scripts/verify-licence-allowlist.mjs --rulings\n', 'node scripts/verify-licence-allowlist.mjs --rulings || true\n'), 'gates', '|| true'],
+        ['rulings guard gated by another if:', sliceEdit(RULINGS_STEP_HEAD, RULINGS_STEP_HEAD.replace("steps.key_gate.outputs.build == 'true'", "steps.key_gate.outputs.build == 'true' && false")), 'gates', 'has if:'],
         ['image build without --no-cache', sliceEdit('--pull=always --no-cache -t pb-gecko-build', '--pull=always -t pb-gecko-build'), 'image', '--no-cache'],
         // rule 11 (G-54a, P68-03): the needs edges are exactly the hosted producers
         ['a third needs edge', sliceEdit(NEEDS, `    needs: [${SIDECAR.name}, ${ORCA.name}, build-linux]\n`), 'independent', EXACT],
