@@ -1,15 +1,15 @@
 # Result: G3a-overlay-renderer
 
-Branch: worktree-agent-a6a65559ea0c91e48   Base: 0f9f2735401a08132a479c95c09c53f03015fa19   Final: 2d232bbd (last code commit; this record is committed on top of it)
+Branch: worktree-agent-a6a65559ea0c91e48   Base: 0f9f2735401a08132a479c95c09c53f03015fa19   Final: 986012e4 (last code commit; this record is committed on top of it). Review follow-ups: 36c97880, 986012e4
 
 | ID | Status | Commit | Check | Note |
 |---|---|---|---|---|
 | overlay-renderer-02 = 64-CR-01 | fixed | 09a7d1f2 | verify-orca-overlay-renderer.mjs::a | THEME_RE lookahead excludes `\`; Orca's theme variants derived from main.css; built sheet had 99 bad heads, now 0 |
-| overlay-renderer-01 | fixed | b07771b7 | verify-orca-overlay-renderer.mjs::b | leaf close no longer uses Orca's tab-wide active-pane event; Orca's split admission + closePaneLocally's store/host half + leaf-addressed CLOSE_TERMINAL_PANE_EVENT |
+| overlay-renderer-01 | fixed | b07771b7, 986012e4 | verify-orca-overlay-renderer.mjs::b, ::b2 | leaf close no longer uses Orca's tab-wide active-pane event; Orca's split admission + closePaneLocally's store/host half + leaf-addressed CLOSE_TERMINAL_PANE_EVENT. Correction: that event does not reach "exactly that leaf" in every instance; upstream applyTerminalPaneCloseRequest closes the whole tab unprompted in a manager holding the leaf as its only pane (a mounted instance that has not reconciled a new split). 986012e4 reads each hosted terminal root's pane DOM (`data-pb-orca-terminal-tab` + Orca's `.pane[data-leaf-id]`) first and, in that case, closes through Orca's prompted tab close instead |
 | 64-WR-02 | fixed | b07771b7 | verify-orca-overlay-renderer.mjs::b | a pane-scoped close for a leaf already gone returns, never closes the tab |
 | 64-WR-03 | not-fixed | - | - | needs planPanes adoption on the Theia side (G3b files); omitting the leaf-less record would stop TerminalPane from ever writing the first layout; see Handoffs |
 | 64-WR-04 | fixed | 48a680c9 | verify-orca-overlay-renderer.mjs::c | store listener work (paneRecords and the host listener) inside try; failure recorded, last list kept |
-| 65-WR-01 | fixed | 2daa4e37 | verify-orca-overlay-renderer.mjs::f | unknown worktree not local; host resolved by Orca's resolveWorktreeExecutionHost; folder workspaces through getFolderWorkspaceWorktree (also fixes worktreePath '') |
+| 65-WR-01 | fixed | 2daa4e37, 36c97880 | verify-orca-overlay-renderer.mjs::f | unknown worktree not local; host resolved by Orca's resolveWorktreeExecutionHost; folder workspaces through getFolderWorkspaceWorktree (also fixes worktreePath ''). 36c97880: Orca's floating workspace id (FLOATING_TERMINAL_WORKTREE_ID, via Orca's isFloatingWorkspaceId) is local again; upstream resolves it to LOCAL_EXECUTION_HOST_ID unconditionally (resolved-worktree-execution-host.ts:60-61, sleeping-record-execution-host-scope.ts:67-68), so it never denotes an SSH or remote host; every other unknown id stays closed |
 | overlay-renderer-03 | fixed (overlay half) | 130206c9 | verify-orca-overlay-renderer.mjs::e | rejected bootstrap cleared; install steps run once across attempts; Theia half handed to G3b |
 | overlay-renderer-04 | fixed | e25f62fa | verify-orca-overlay-renderer.mjs::d | last 50 mount errors kept, state() adds mountErrorsTotal |
 | 64-WR-01, pairing-credentials-01, 67-WR-02 (G3b handoff) | not-applicable | f4b2fe09 (check only) | verify-orca-overlay-renderer.mjs::e | already true since 130206c9: pb-pane-mount.tsx:728-731 `.catch(() => { booting = null; throw })`, :675-679 `once()`, :705 `once('services root')`; check now also fails pairing once and plants a second services root |
@@ -23,10 +23,10 @@ versions of the two files and goes red there. seams.json is unchanged (no patch 
 
 ## Registry requests
 - orca-overlay-renderer: quick, `"orca-overlay-renderer|node $REPO_ROOT/scripts/verify-orca-overlay-renderer.mjs"` (under 1 s; SKIPs each clause whose input is absent)
-- orca-overlay-renderer-self-test: quick, `"orca-overlay-renderer-self-test|node $REPO_ROOT/scripts/verify-orca-overlay-renderer.mjs --self-test"` (about 1 s, 45 cases)
+- orca-overlay-renderer-self-test: quick, `"orca-overlay-renderer-self-test|node $REPO_ROOT/scripts/verify-orca-overlay-renderer.mjs --self-test"` (about 1 s, 53 cases)
 
 ## Red by design
-- scan-brand-residue and scan-brand-residue-self-test: the new check names Orca's tree, and the overlay comments add the word. Exact change in `inventory/brand-tokens.json` on the final tree: row "Orca" (title) expected_count 3281 -> 3333; row "orca" (lower) 5679 -> 5704; row "ORCA" (upper) 1270 -> 1282; add `scripts/verify-orca-overlay-renderer.mjs` to the expected_files of those three rows (sorted position). Recount at integration if other lanes also changed these counts.
+- scan-brand-residue and scan-brand-residue-self-test: the new check names Orca's tree, and the overlay comments add the word. Exact change in `inventory/brand-tokens.json` on the final tree: row "Orca" (title) expected_count 3281 -> 3355; row "orca" (lower) 5679 -> 5709; row "ORCA" (upper) 1270 -> 1287; add `scripts/verify-orca-overlay-renderer.mjs` to the expected_files of those three rows (sorted position). Recount at integration if other lanes also changed these counts.
 
 ## Handoffs
 - G3b: `theia/extensions/orca-panes/src/browser/orca-pane-routes.ts` planPanes (+ `orca-pane-widget.tsx`, `orca-pane-observer.ts`), for 64-WR-03: when a new terminal record has key `${record.tabId}:<leaf>` and `state.known` holds the key `record.tabId` (the same tab's leaf-less record) that is absent from this list, emit an adoption (re-key from `tabId` to the pane key, keep the widget, its name and its Lumino position) instead of dispose + create; the widget updates its key and `pick.paneKey` and remounts its body with `mountPane(element, newPick, activity)`; markGone must not tombstone the adopted name.
@@ -37,9 +37,9 @@ versions of the two files and goes red there. seams.json is unchanged (no patch 
 
 ## Behaviour changes
 - overlay-renderer-02 (64-CR-01): in Orca's dark theme, hosted panes and portals now apply every `dark:` Tailwind utility (input backgrounds, `dark:invert` icons, accent rings and borders); before, none applied. Revert with 09a7d1f2.
-- overlay-renderer-01 (D-15 kept: one leaf stays one tab): closing a split's PowerBrowser tab closes that leaf's shell only; before, it closed each mounted instance's active leaf (often the sibling, or several). The running-process prompt is now Orca's store-driven dialog (same CloseTerminalDialog copy, hosted once by the services root) instead of the per-instance one, and a probe that times out asks instead of closing. Revert with b07771b7.
+- overlay-renderer-01 (D-15 kept: one leaf stays one tab): closing a split's PowerBrowser tab closes that leaf's shell only; before, it closed each mounted instance's active leaf (often the sibling, or several). The running-process prompt is now Orca's store-driven dialog (same CloseTerminalDialog copy, hosted once by the services root) instead of the per-instance one, and a probe that times out asks instead of closing. Revert with b07771b7. Follow-up 986012e4: if a split has just arrived and some hosted view of that tab has not taken it in yet (its terminal still shows one pane), closing a split closes the whole terminal tab through Orca's tab close with its running-process prompt, as before the first fix, instead of an unprompted whole-tab close; the hosted terminal root also carries `data-pb-orca-terminal-tab`. Revert with 986012e4.
 - 64-WR-02: a second close click on a split leaf that is already gone does nothing; before, it closed the whole terminal tab. Revert with b07771b7.
-- 65-WR-01: a file whose worktree is unknown, has no host and no resolvable repo row, or resolves to an SSH host now opens through Orca's editor routes instead of a local `file:` editor, and is not added as a local workspace root; a folder workspace's diff and conflict routes now join against the folder path instead of `/`. Revert with 2daa4e37.
+- 65-WR-01: a file whose worktree is unknown, has no host and no resolvable repo row, or resolves to an SSH host now opens through Orca's editor routes instead of a local `file:` editor, and is not added as a local workspace root; a folder workspace's diff and conflict routes now join against the folder path instead of `/`. Revert with 2daa4e37. Follow-up 36c97880: files of Orca's floating workspace (opened from a floating terminal, and Orca's own keybindings.json) open as local editors again, as before 2daa4e37. Revert with 36c97880.
 - overlay-renderer-03: after a failed pane-bundle boot, a later bootstrap call (Reconnect) boots instead of returning the old failure. Revert with 130206c9.
 - 65-WR-03: G4's root sync can now wait for Orca's own hydration flag instead of a 750 ms timer. Revert with 2d232bbd.
 
@@ -47,6 +47,8 @@ versions of the two files and goes red there. seams.json is unchanged (no patch 
 None.
 
 ## Quick gate
+Final run (tree at 986012e4, after repairing `.mozbuild/corepack/bin/pnpm` and `pnpx` to absolute links as instructed): summary 416 PASS, 2 FAIL. licence-allowlist and licensing now PASS. The two FAILs are scan-brand-residue and scan-brand-residue-self-test, both Red by design (above).
+
 First full run (`nix develop .#theia --command bash scripts/verify-platform.sh --quick`, tree at 9c9657b1): summary 414 PASS, 4 FAIL (base: 419 PASS, 0 FAIL). The rows touched after that run were re-run with `--only` on the final tree.
 - scan-brand-residue: FAIL, Red by design (inventory counts, above).
 - scan-brand-residue-self-test: FAIL, Red by design: its clean-root control fails while the whole-tree scan is red; green once the inventory rows are updated.
