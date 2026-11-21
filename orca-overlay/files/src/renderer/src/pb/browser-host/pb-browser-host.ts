@@ -93,6 +93,9 @@ function followRow(event: BrowserClientHostCommandEvent, outcome: BrowserHostOut
 
 const ATTACH_TIMEOUT_MS = 15_000
 const CALL_TIMEOUT_MS = 20_000
+// BrowserClientPageMetadataParams' url and title caps (browser-client-page-metadata-protocol.ts).
+const PAGE_METADATA_URL_MAX = 8192
+const PAGE_METADATA_TITLE_MAX = 4096
 const CLIENT_CAPABILITIES = [
   BROWSER_CLIENT_HOST_RUNTIME_CAPABILITY,
   BROWSER_CLIENT_PAGE_METADATA_RUNTIME_CAPABILITY
@@ -203,17 +206,19 @@ export function attachBrowserHost(options: AttachBrowserHostOptions): Promise<Br
         if (!lease || pageHostGeneration === undefined) return Promise.reject(new Error('unknown_page'))
         const revision = (revisions.get(browserPageId) ?? 0) + 1
         revisions.set(browserPageId, revision)
+        // 66-CR-02: Orca's schema requires every field, the three flags as booleans, url and title within their caps;
+        // a missing flag would drop out of the JSON and the whole update would be refused.
         return call('browser.clientHost.pageMetadata', {
           browserHostClientId,
           browserHostGeneration: lease.browserHostGeneration,
           browserPageId,
           pageHostGeneration,
           revision,
-          url: metadata.url,
-          title: metadata.title,
-          loading: metadata.loading,
-          canGoBack: metadata.canGoBack,
-          canGoForward: metadata.canGoForward
+          url: String(metadata.url ?? '').slice(0, PAGE_METADATA_URL_MAX),
+          title: String(metadata.title ?? '').slice(0, PAGE_METADATA_TITLE_MAX),
+          loading: metadata.loading === true,
+          canGoBack: metadata.canGoBack === true,
+          canGoForward: metadata.canGoForward === true
         })
       },
       // A7: the user's close, on this connection; orcad then sends closePage, which the caller answers completed.

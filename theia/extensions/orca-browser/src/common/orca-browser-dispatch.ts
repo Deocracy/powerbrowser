@@ -78,7 +78,8 @@ const failed = (errorCode: string): Outcome => ({ status: 'failed', errorCode })
 /** The client outcome mapping (A8): every reply chrome can give, and anything else as browser_error. */
 export function outcomeOf(reply: AgentReply | undefined): Outcome {
     if (!reply || reply.ok !== true) {
-        return failed('browser_error'); // a validation refusal, a timeout or a malformed reply
+        // 66-CR-04: the host's own deadline for chrome's reply passed; anything else is a validation refusal or a malformed reply
+        return failed(reply?.reason === 'timeout' ? 'browser_timeout' : 'browser_error');
     }
     switch (reply.where) {
         case 'done': return completed(reply.result);
@@ -120,6 +121,11 @@ export interface DispatchDeps {
      * overlay, else throws a DispatchFailure (66-WR-06).
      */
     openAgentTab(event: CommandEvent): Promise<string>;
+    /**
+     * 66-WR-05: called once the table has bound the createPage's id to the new tab, never for a tab that lost the
+     * bind, so the host writes a page's records only for the tab that holds it. Must not throw.
+     */
+    recordBound?(tabId: string): void;
     closeTab(tabId: string): void;
     /**
      * The bound tab's navigate. agent-browser-04 / 66-CR-01: the host sends it as the agent's browser.goto, so chrome's
@@ -148,10 +154,14 @@ export async function dispatchCommand(event: CommandEvent, deps: DispatchDeps): 
             }
             const tabId = await deps.openAgentTab(event);
             const bound = table.bind(pageId, tabId);
+            if (bound === 'bound') {
+                deps.recordBound?.(tabId);
+                return completed();
+            }
             if (bound === 'duplicate-page') {
                 deps.closeTab(tabId); // a concurrent createPage bound the id first; this new tab is unbound
             }
-            return bound === 'bound' ? completed() : failed('browser_error');
+            return failed('browser_error');
         }
         if (command.type === 'closePage') {
             const target = command.targetAuthority?.browserPageId ?? pageId;
