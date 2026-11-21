@@ -82,6 +82,10 @@ export class OrcaPaneBundle implements FrontendApplicationContribution {
     /** The entry module's namespace once it has loaded; a later attempt does not import it again. */
     protected entry: OrcaPaneBundleApi | undefined;
     protected loadFailures = 0;
+    protected styleLink: HTMLLinkElement | undefined;
+    protected styleFailed = false;
+    protected styleRetries = 0;
+    protected loaderScript: HTMLScriptElement | undefined;
     protected readonly loggedSteps = new Set<string>();
 
     protected readonly onDidChangeStateEmitter = new Emitter<OrcaPaneBundleState>();
@@ -217,25 +221,52 @@ export class OrcaPaneBundle implements FrontendApplicationContribution {
         }
     }
 
+    /**
+     * The bundle's stylesheet, linked once. Audit fix (64-WR-01 follow-up): a link whose fetch failed is replaced on
+     * the next attempt, under a new query, so a boot that succeeds later does not run Orca's panes without their CSS.
+     */
     protected linkStyle(): void {
-        const href = new URL(ORCA_PANES_ROUTE_PREFIX + ORCA_PANES_STYLE, document.baseURI).href;
-        if (!document.querySelector(`link[rel="stylesheet"][href="${href}"]`)) {
-            const link = document.createElement('link');
-            link.rel = 'stylesheet';
-            link.href = href;
-            document.head.appendChild(link);
+        if (this.styleLink && !this.styleFailed) {
+            return;
         }
+        const style = new URL(ORCA_PANES_ROUTE_PREFIX + ORCA_PANES_STYLE, document.baseURI);
+        if (!this.styleLink) {
+            const present = document.querySelector<HTMLLinkElement>(`link[rel="stylesheet"][href="${style.href}"]`);
+            if (present) {
+                this.styleLink = present;
+                return;
+            }
+        } else {
+            this.styleLink.remove();
+            this.styleRetries += 1;
+            style.searchParams.set('attempt', String(this.styleRetries));
+        }
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = style.href;
+        this.styleFailed = false;
+        link.addEventListener('error', () => {
+            if (this.styleLink === link) {
+                this.styleFailed = true;
+            }
+        }, { once: true });
+        this.styleLink = link;
+        document.head.appendChild(link);
     }
 
     protected loadEntry(): Promise<OrcaPaneBundleApi> {
         const key = Symbol.for(ORCA_PANES_MODULE_KEY);
+        // A previous attempt's loader script has done its work; only one is ever left in the document.
+        this.loaderScript?.remove();
         return new Promise<OrcaPaneBundleApi>((resolve, reject) => {
             const onLoaded = () => {
                 window.removeEventListener(LOAD_FAILED_EVENT, onFailed);
+                script.remove();
                 resolve((globalThis as Record<symbol, unknown>)[key] as OrcaPaneBundleApi);
             };
             const onFailed = () => {
                 window.removeEventListener(ORCA_PANES_BOOT_EVENT, onLoaded);
+                script.remove();
                 reject(new Error('the pane bundle entry did not load'));
             };
             window.addEventListener(ORCA_PANES_BOOT_EVENT, onLoaded, { once: true });
@@ -255,6 +286,7 @@ export class OrcaPaneBundle implements FrontendApplicationContribution {
                 `  window.dispatchEvent(new Event(${JSON.stringify(ORCA_PANES_BOOT_EVENT)}));`,
                 `}, () => window.dispatchEvent(new Event(${JSON.stringify(LOAD_FAILED_EVENT)})));`,
             ].join('\n');
+            this.loaderScript = script;
             document.head.appendChild(script);
         });
     }

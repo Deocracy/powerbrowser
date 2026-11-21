@@ -17,6 +17,8 @@
 //                   { kind: 'orcaStatus', clientReason: null } when the client verifies again.
 //  boot-retry       64-WR-01, pairing-credentials-01. A boot that failed at the load step is tried
 //                   again: retry() boots and ready() resolves with the bundle API.
+//  retry-assets     review of 64-WR-01. A retry replaces a stylesheet link that failed to load and
+//                   keeps one that did not; failed loads leave no loader script behind.
 //  close-unbooted   theia-pane-hosting-01 = 64-CR-02. A hosted tab closes in PowerBrowser while the
 //                   bundle has not booted; once booted the close goes to Orca and the tab stays.
 //  handoff-both-files, handoff-orcad-port, handoff-orcad-port-unknown, handoff-folder-refused
@@ -284,6 +286,68 @@ async function clauseBootRetry(sources, fail) {
     if (bundle.retryTimer !== undefined) clearTimeout(bundle.retryTimer);
 }
 
+// ---------------------------------------------------------------- stylesheet and loader script on a retry
+
+/** A minimal document: a head that holds elements, elements that fire events and can be removed. */
+function fakeDocument() {
+    const head = [];
+    const element = tag => {
+        const el = new EventTarget();
+        Object.assign(el, {
+            tagName: tag.toUpperCase(), rel: '', href: '', type: '', textContent: '',
+            remove() { const at = head.indexOf(el); if (at >= 0) head.splice(at, 1); },
+        });
+        return el;
+    };
+    return {
+        head: { children: head, appendChild: el => { head.push(el); return el; } },
+        baseURI: 'http://127.0.0.1:4000/',
+        createElement: element,
+        querySelector: () => null,
+    };
+}
+
+async function clauseRetryAssets(sources, fail) {
+    const React = { __esModule: true };
+    const protocol = loadTs(REL.protocol, { sources });
+    const module = loadTs(REL.bundle, { sources, overrides: { '@theia/core/shared/react': React, [REL.protocol]: protocol } });
+    const doc = fakeDocument();
+    const win = new EventTarget();
+    const savedDocument = globalThis.document;
+    const savedWindow = globalThis.window;
+    globalThis.document = doc;
+    globalThis.window = win;
+    try {
+        const bundle = new module.OrcaPaneBundle();
+        const links = () => doc.head.children.filter(el => el.tagName === 'LINK');
+        const scripts = () => doc.head.children.filter(el => el.tagName === 'SCRIPT');
+        bundle.linkStyle();
+        const first = links()[0];
+        first?.dispatchEvent(new Event('error'));
+        bundle.linkStyle();
+        if (links().length !== 1 || links()[0] === first || links()[0]?.href === first?.href) {
+            fail('retry-assets', `after the stylesheet failed to load, a retry left ${links().length} link(s)${links()[0] === first ? ', the failed one kept' : ''}; a later boot would run Orca panes without CSS`);
+        }
+        const second = links()[0];
+        bundle.linkStyle();
+        if (links()[0] !== second || links().length !== 1) {
+            fail('retry-assets', 'a stylesheet that did not fail was replaced or duplicated on the next attempt');
+        }
+        const failed = `${module.ORCA_PANES_BOOT_EVENT}-failed`;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+            const loading = bundle.loadEntry().catch(() => undefined);
+            win.dispatchEvent(new Event(failed));
+            await loading;
+        }
+        if (scripts().length > 0) {
+            fail('retry-assets', `three failed loads left ${scripts().length} loader script(s) in the document head`);
+        }
+    } finally {
+        globalThis.document = savedDocument;
+        globalThis.window = savedWindow;
+    }
+}
+
 // ---------------------------------------------------------------- widget close
 
 async function clauseCloseUnbooted(sources, fail) {
@@ -501,7 +565,7 @@ async function clauseRestore(sources, fail) {
 
 const CLAUSES = [
     clauseRestartRepair, clauseBootFailedPage, clauseBootFinal, clauseStuckNoOffer, clauseReasonCleared, clauseBootRetry,
-    clauseCloseUnbooted, clauseHandOff, clauseRevealNoFocus, clauseSidePanel, clauseRestore,
+    clauseRetryAssets, clauseCloseUnbooted, clauseHandOff, clauseRevealNoFocus, clauseSidePanel, clauseRestore,
 ];
 
 export async function check(sources = {}) {
@@ -558,6 +622,14 @@ export const PLANTS = [
     {
         name: 'a failed boot is cached for the document (pre-fix 64-WR-01)', naming: 'boot-retry', file: REL.bundle,
         edits: [[/ready\(\): Promise<OrcaPaneBundleApi> \{[\s\S]*?\n {4}\}\n/, 'ready(): Promise<OrcaPaneBundleApi> {\n        return this.booted ??= this.boot();\n    }\n']],
+    },
+    {
+        name: 'a failed stylesheet link is kept on a retry (review of 64-WR-01)', naming: 'retry-assets', file: REL.bundle,
+        edits: [['        if (this.styleLink && !this.styleFailed) {\n            return;\n        }', '        if (this.styleLink) {\n            return;\n        }']],
+    },
+    {
+        name: 'each failed load leaves its loader script (review of 64-WR-01)', naming: 'retry-assets', file: REL.bundle,
+        edits: [['                window.removeEventListener(ORCA_PANES_BOOT_EVENT, onLoaded);\n                script.remove();', '                window.removeEventListener(ORCA_PANES_BOOT_EVENT, onLoaded);'], ['        this.loaderScript?.remove();\n', '']],
     },
     {
         name: 'a close before boot is dropped (pre-fix 64-CR-02)', naming: 'close-unbooted', file: REL.widget,
