@@ -665,7 +665,8 @@ export function logoAnswerFor({ senderPort, orcaPort, orcaState, embeddedByShell
 //  - orcad exiting before OrcaService accepted its ready line (a failed start): the same end, for its own
 //    descendants, so a failed start leaves no daemon behind. After acceptance an orcad exit ends nothing: an orcad
 //    crash leaves the daemon and its agents for the next orcad to adopt, and only a quit ends agents (D-07).
-// The module arms only in the process whose entry file is orcad's and whose stdin is a pipe: orcad starts its daemon
+// The module arms only in the process whose entry file is orcad's and whose stdin is a pipe (Subprocess) or a
+// socket (a Node parent, as in the repo checks), never /dev/null or a terminal: orcad starts its daemon
 // with its own Node flags (daemon-launched-child-spawn.ts), and that daemon must load the module inertly.
 
 /** The kind of the one line OrcaService writes to orcad's stdin once it accepts a ready line. */
