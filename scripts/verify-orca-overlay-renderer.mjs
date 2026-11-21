@@ -32,12 +32,19 @@
 //   node scripts/verify-orca-overlay-renderer.mjs
 //   node scripts/verify-orca-overlay-renderer.mjs --self-test
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
+
+const SELF = fileURLToPath(import.meta.url);
+const IS_MAIN = !!process.argv[1] && resolve(process.argv[1]) === SELF;
+// --root=<dir> runs the main mode over another tree (the self-test's SKIP control uses it); never when imported.
+const ROOT_ARG = IS_MAIN ? process.argv.slice(2).find(a => a.startsWith('--root=')) : undefined;
+const REPO_ROOT = ROOT_ARG ? resolve(ROOT_ARG.slice('--root='.length)) : resolve(dirname(SELF), '..');
 const NAME = 'orca-overlay-renderer';
 const ORCA = join(REPO_ROOT, 'orca');
 const OVERLAY = join(REPO_ROOT, 'orca-overlay', 'files');
@@ -110,17 +117,18 @@ async function clauseA() {
     if (!existsSync(POSTCSS_ESM) || !existsSync(MAIN_CSS)) return { skip: 'orca/node_modules/postcss or orca main.css is absent (run scripts/build-orca.sh)' };
     const pass = await loadPassFrom(readFileSync(CSS_PASS, 'utf8'));
     const fails = checkVariantScoping(pass, themeVariants(readFileSync(MAIN_CSS, 'utf8')));
-    let note = 'built sheet not checked (no build)';
+    // The built-sheet half not run for an absent or stale build is a partial skip (SKIP-PROTOCOL.md rule 2).
+    let partial = 'built sheet not checked: the pane sheet is not built (run scripts/build-orca.sh --panes-only)';
     if (existsSync(SHEET) && existsSync(CSS_PASS_COPY)) {
         if (readFileSync(CSS_PASS_COPY, 'utf8') !== readFileSync(CSS_PASS, 'utf8')) {
-            note = 'built sheet not checked (orca/pb-css-scope.mjs is stale; run scripts/build-orca.sh --panes-only)';
+            partial = 'built sheet not checked: orca/pb-css-scope.mjs is stale (run scripts/build-orca.sh --panes-only)';
         } else {
             const bad = checkBuiltSheet(pass, readFileSync(SHEET, 'utf8'));
             if (bad.length) fails.push(`${bad.length} variant utility selector(s) of the built sheet rewritten as a theme root, first: ${bad[0].slice(0, 140)}`);
-            note = 'built sheet checked';
+            return { fails, note: 'built sheet checked' };
         }
     }
-    return { fails, note };
+    return { fails, partial };
 }
 
 // ---------------------------------------------------------------- TypeScript helpers (b onwards)
@@ -616,7 +624,7 @@ async function clauseF() {
     const api = readFileSync(WORKSPACE_API, 'utf8');
     const fails = checkLocalPredicate(api);
     if (existsSync(WORKTREE_HELPERS)) fails.push(...checkHydratedFlag(api, readFileSync(WORKTREE_HELPERS, 'utf8')));
-    else return { fails, note: 'hydrated flag not checked (orca/src is absent)' };
+    else return { fails, partial: 'hydrated flag not checked: orca/src is absent (run scripts/fetch-orca.sh)' };
     return { fails };
 }
 
@@ -624,29 +632,64 @@ async function clauseF() {
 
 const CLAUSES = [['a', clauseA], ['b', clauseB], ['c', clauseC], ['d', clauseD], ['e', clauseE], ['f', clauseF]];
 
+// FAIL wins; a clause, or half of one, not run for an absent input makes the run exit 77 with one SKIP line
+// printed last (SKIP-PROTOCOL.md); exit 0 means every clause ran.
 async function main() {
     let failed = 0;
     const notes = [];
+    const skips = [];
     for (const [id, run] of CLAUSES) {
         const r = await run();
-        if (r.skip) { console.log(`${NAME}: SKIP (clause ${id}) -- ${r.skip}`); continue; }
+        if (r.skip) { skips.push(`clause ${id} not run: ${r.skip}`); continue; }
         for (const f of r.fails) { console.log(`${NAME}: FAIL (clause ${id}) -- ${f}`); failed += 1; }
+        if (r.partial) skips.push(`clause ${id} ${r.partial}`);
         if (r.note) notes.push(`${id}: ${r.note}`);
     }
-    if (failed) return 1;
-    console.log(`${NAME}: PASS -- ${CLAUSES.length} clause(s)${notes.length ? `; ${notes.join('; ')}` : ''}`);
-    return 0;
+    const code = verdictExit(NAME, failed ? [`${failed} failure(s)`] : [], skips);
+    if (code === 0) console.log(`${NAME}: PASS -- ${CLAUSES.length} clause(s)${notes.length ? `; ${notes.join('; ')}` : ''}`);
+    return code;
+}
+
+/**
+ * SKIP control (SKIP-PROTOCOL.md rule 2): the main mode, run as a child with its output captured, over a tree holding
+ * the overlay sources and Theia's typescript but no orca/. Clauses c to e run green; a and b do not run and f's
+ * hydrated half does not, so it must exit 77 with the SKIP line last and no PASS line.
+ */
+function skipControl() {
+    const dir = mkdtempSync(join(tmpdir(), 'pb-overlay-renderer-root-'));
+    try {
+        for (const file of [CSS_PASS, ENTRY, WORKSPACE_API]) {
+            const dest = join(dir, file.slice(REPO_ROOT.length + 1));
+            mkdirSync(dirname(dest), { recursive: true });
+            copyFileSync(file, dest);
+        }
+        const tsDir = join(REPO_ROOT, 'theia', 'node_modules', 'typescript');
+        if (existsSync(tsDir)) {
+            mkdirSync(join(dir, 'theia', 'node_modules'), { recursive: true });
+            symlinkSync(tsDir, join(dir, 'theia', 'node_modules', 'typescript'));
+        }
+        const r = spawnSync(process.execPath, [SELF, `--root=${dir}`], { encoding: 'utf8' });
+        const lines = (r.stdout ?? '').split('\n').filter(l => l.trim() !== '');
+        const last = lines[lines.length - 1] ?? '';
+        const good = r.status === SKIP_EXIT && last.startsWith(`${NAME}: SKIP -- clause a not run`)
+            && !lines.some(l => l.includes(`${NAME}: PASS`) || l.includes(`${NAME}: FAIL`)) && !/: SKIP/.test(r.stderr ?? '');
+        return { good, detail: `status ${r.status}, last line ${JSON.stringify(last.slice(0, 200))}${r.stderr ? `, stderr ${JSON.stringify(r.stderr.slice(0, 200))}` : ''}` };
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
 }
 
 async function selfTest() {
     let failed = 0;
     const ok = (name, cond) => { console.log(`  ${cond ? 'ok ' : 'NOT OK '} ${name}`); if (!cond) failed += 1; };
-    let ran = 0;
+    const selfSkips = [];
+    const control = skipControl();
+    ok(`control: a tree without orca/ exits 77 with the SKIP line last and no PASS line (${control.detail})`, control.good);
     // a.
     if (!existsSync(POSTCSS_ESM) || !existsSync(MAIN_CSS)) {
         console.log('  skip a: orca/node_modules/postcss or orca main.css is absent (run scripts/build-orca.sh)');
+        selfSkips.push('the clause a plants did not run: orca/node_modules/postcss or orca main.css is absent (run scripts/build-orca.sh)');
     } else {
-    ran += 1;
     const source = readFileSync(CSS_PASS, 'utf8');
     const variants = themeVariants(readFileSync(MAIN_CSS, 'utf8'));
     ok('a: Orca main.css yields at least one theme variant (derived)', variants.length > 0);
@@ -664,12 +707,14 @@ async function selfTest() {
     }
     if (!(await loadTs())) {
         console.log('  skip b..f: theia/node_modules/typescript is absent (install Theia)');
+        selfSkips.push('the clause b to f plants did not run: theia/node_modules/typescript is absent (install Theia)');
     } else {
-        ran += 1;
         const entry = readFileSync(ENTRY, 'utf8');
         // b.
-        if (!existsSync(ORCA_CONSTANTS)) console.log('  skip b: orca/src is absent (run scripts/fetch-orca.sh)');
-        else {
+        if (!existsSync(ORCA_CONSTANTS)) {
+            console.log('  skip b: orca/src is absent (run scripts/fetch-orca.sh)');
+            selfSkips.push('the clause b plants did not run: orca/src is absent (run scripts/fetch-orca.sh)');
+        } else {
         const constants = readFileSync(ORCA_CONSTANTS, 'utf8');
         ok('b: control green on the tree', checkLeafClose(entry, constants).length === 0);
         const dispatch = /window\.dispatchEvent\(new CustomEvent<CloseTerminalPaneDetail>\(CLOSE_TERMINAL_PANE_EVENT[^\n]*\n/;
@@ -751,17 +796,21 @@ async function selfTest() {
             const early = api.replace(/hydrated: state\.hasHydratedWorktreePurge === true/, 'hydrated: true');
             ok('f2: a projection that reports hydrated before the store does is red, naming it', early !== api && checkHydratedFlag(early, helpers).some(f => /reports hydrated=true while/.test(f)));
             ok('f2: Orca dropping the field is red "source moved"', checkHydratedFlag(api, helpers.replace(/hasHydratedWorktreePurge: boolean/g, 'hydratedPurge: boolean')).some(f => /source moved/.test(f)));
-        } else console.log('  skip f2: orca/src is absent');
+        } else {
+            console.log('  skip f2: orca/src is absent');
+            selfSkips.push('the f2 plants did not run: orca/src is absent (run scripts/fetch-orca.sh)');
+        }
         ok('c: no store listener is red "parser blind"', checkStoreListeners(entry.replace(/useAppStore\.subscribe\(\(state, prior\)/, 'useAppStore.subscribeTo((state, prior)')).some(f => /parser blind/.test(f)));
     }
-    if (!ran) { console.log(`${NAME} self-test: SKIP -- neither Orca's postcss nor Theia's typescript is installed`); return 0; }
-    console.log(failed ? `${NAME} self-test: FAIL -- ${failed} case(s)` : `${NAME} self-test: PASS -- every planted fault went red naming it`);
-    return failed ? 1 : 0;
+    // The self-test's own verdict is its last line: FAIL wins, then a SKIP naming the plants that did not run.
+    if (failed) { console.log(`${NAME} self-test: FAIL -- ${failed} case(s)`); return 1; }
+    if (selfSkips.length) { console.log(skipLine(`${NAME} self-test`, selfSkips.join('; '))); return SKIP_EXIT; }
+    console.log(`${NAME} self-test: PASS -- every planted fault went red naming it, and a tree without orca/ exits 77`);
+    return 0;
 }
 
-const SELF = fileURLToPath(import.meta.url);
-if (process.argv[1] && resolve(process.argv[1]) === SELF) {
+if (IS_MAIN) {
     const args = process.argv.slice(2);
-    if (args.some(a => a !== '--self-test')) { console.error('usage: node scripts/verify-orca-overlay-renderer.mjs [--self-test]'); process.exit(2); }
+    if (args.some(a => a !== '--self-test' && !a.startsWith('--root='))) { console.error('usage: node scripts/verify-orca-overlay-renderer.mjs [--self-test]'); process.exit(2); }
     process.exit(args.includes('--self-test') ? await selfTest() : await main());
 }
