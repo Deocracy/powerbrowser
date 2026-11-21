@@ -51,6 +51,53 @@ export function withoutGitVars<T extends Record<string, string | undefined>>(env
     return Object.fromEntries(Object.entries(env).filter(([name]) => !/^GIT_/i.test(name)));
 }
 
+/**
+ * sidecar-gate-backends-02: the environment of every pb-orca-git git run. No GIT_* name is inherited; then a read
+ * never fetches (a partial clone's lazy fetch would run the repository's configured upload-pack, ssh command and
+ * credential helpers), never prompts and never starts an askpass dialog. protocol.allow=never goes through the
+ * environment form of `-c`, so it reaches the fetch child git would spawn and the argv stays as catFileArgs builds it.
+ */
+export function gitReadEnv<T extends Record<string, string | undefined>>(env: T): Record<string, string | undefined> {
+    return {
+        ...withoutGitVars(env),
+        GIT_NO_LAZY_FETCH: '1',
+        GIT_TERMINAL_PROMPT: '0',
+        GIT_ASKPASS: '',
+        SSH_ASKPASS: '',
+        SSH_ASKPASS_REQUIRE: 'never',
+        GIT_CONFIG_COUNT: '1',
+        GIT_CONFIG_KEY_0: 'protocol.allow',
+        GIT_CONFIG_VALUE_0: 'never',
+    };
+}
+
+/** 65-CR-01: the reason a read reports when the path is absent at an existing rev or index stage (an added, deleted or untracked file). */
+export const ORCA_GIT_MISSING = 'missing';
+
+/** git rev-parse of one spec: resolves only when it names an object, and reads no blob. Throws on an option-shaped spec or a NUL. */
+export function resolveArgs(root: string, spec: string): string[] {
+    if (spec.startsWith('-') || /[\0\n\r]/.test(spec)) {
+        throw new Error('refused pb-orca-git spec: rev-parse');
+    }
+    return ['-c', 'core.fsmonitor=false', '-C', root, 'rev-parse', '--verify', '--quiet', spec];
+}
+
+/**
+ * 65-CR-01: after a blob read failed, whether the path is absent at its side (that side is then empty) rather than the
+ * read having failed. Absent means the path names nothing at the rev while the rev itself exists; an index stage
+ * always exists. A path present in the tree whose blob cannot be read (a partial clone with no fetch) stays a failure.
+ * resolves(args) runs git and resolves whether it exited 0.
+ */
+export async function sideIsMissing(resolves: (args: string[]) => Promise<boolean>, root: string, rev: string, relativePath: string): Promise<boolean> {
+    if (specRefusal(relativePath, rev) || rev === '') {
+        return false;
+    }
+    if (await resolves(resolveArgs(root, `${rev}:${relativePath}`))) {
+        return false;
+    }
+    return STAGE.test(rev) || await resolves(resolveArgs(root, `${rev}^{object}`));
+}
+
 export interface RootDeps {
     realpath(path: string): Promise<string>;
     /** git -C <root> rev-parse --show-toplevel, trimmed; undefined when git fails. */

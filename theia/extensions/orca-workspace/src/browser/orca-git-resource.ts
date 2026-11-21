@@ -11,7 +11,7 @@ import { inject, injectable } from '@theia/core/shared/inversify';
 import { Resource, ResourceResolver } from '@theia/core/lib/common/resource';
 import URI from '@theia/core/lib/common/uri';
 import { ProfileStorageService } from '@powerbrowser/tab-uris/lib/browser/profile-storage';
-import { ORCA_GIT_SCHEME, OrcaGitService, specRefusal } from '../common/orca-git-protocol';
+import { ORCA_GIT_MISSING, ORCA_GIT_SCHEME, OrcaGitService, specRefusal } from '../common/orca-git-protocol';
 import { ORCA_OWNED_ROOTS_KEY, OrcaRootSync } from './orca-root-sync';
 
 /** The longest root (a filesystem path) containing path, with path relative to it; undefined when none does. */
@@ -28,6 +28,11 @@ export class OrcaGitResource implements Resource {
     async readContents(): Promise<string> {
         const r = await this.read();
         if (!r.ok) {
+            // 65-CR-01: a path absent at this side (an added, deleted or untracked file) is an empty side. Not NotFound:
+            // Theia's monaco model would stay invalid and the whole diff would still fail to open.
+            if (r.reason === ORCA_GIT_MISSING) {
+                return '';
+            }
             throw new Error(`pb-orca-git read refused: ${r.reason}`);
         }
         return r.text;
