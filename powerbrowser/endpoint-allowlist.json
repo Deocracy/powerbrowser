@@ -187,7 +187,7 @@
       "host": "unofficial-builds.nodejs.org",
       "disposition": "user-initiated",
       "orca_source": "orca/src/shared/node-runtime-pin.ts",
-      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca downloads an unofficial Node.js build from here for a remote host whose platform has no official build, when the user connects to it over SSH (orca/src/shared/node-runtime-pin.ts:45). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca downloads an unofficial Node.js build from here for a remote host whose platform has no official build, when the user connects to it over SSH (orca/src/shared/node-runtime-pin.ts:179). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
     },
     {
       "host": "avatars.githubusercontent.com",
