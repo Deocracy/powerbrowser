@@ -48,6 +48,18 @@ invocations written as `node scripts/generate.mjs` below are all inside
 that shell. `verify.yml` runs them the same way; `rebase-upstream.yml` does
 not (see the **CI story** note under the rebase section).
 
+**Check exit statuses.** A check script run by `scripts/verify-platform.sh`
+exits 0 when every clause ran and passed, and 1 (any status other than 0 and
+77) when a clause failed. Exit 77 means skipped: at least one clause did not
+run because an input is absent (for example `orca/` not fetched or no built
+tree) and no clause failed, and the script prints one line
+`<name>: SKIP -- <reason>` first. The driver records such a row as SKIP, not
+PASS: `--quick`, `--only` and the full run list the skipped rows and still
+exit 0 if nothing failed, `--gate` fails on every SKIP that no open ledger
+exclusion excuses, and an exit 77 without the SKIP line is recorded as a
+FAIL. The rule is written out in
+`.planning/workstreams/orca/audit-fix/SKIP-PROTOCOL.md`.
+
 ## Theia half
 
 The app composes the frozen 49-`@theia/*`-package daily-drivable set
