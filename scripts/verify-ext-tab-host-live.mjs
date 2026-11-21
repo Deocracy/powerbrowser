@@ -34,6 +34,7 @@
 // file into temporary directories, and removed when the session ends.
 //
 //   node scripts/verify-ext-tab-host-live.mjs [--scenario a,b] [--self-test]
+//   node scripts/verify-ext-tab-host-live.mjs --verdict-self-test   (hermetic: the reporter only, no server or browser)
 //
 // Node built-ins plus ./lib/pb-relaunch.mjs and ./lib/pb-live-probe.mjs only.
 
@@ -45,6 +46,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { withProbeShell, openWebTab, makeCurrent, focusOverlay, focusTheiaFrame, installPushRecorder, pushes, waitForPush } from './lib/pb-live-probe.mjs';
 import { GET_BY_NAME, REPO_ROOT, probe, stockTabOn } from './lib/pb-relaunch.mjs';
+import { SKIP_EXIT, verdictExit } from './lib/skip-verdict.mjs';
 
 const NAME = 'verify-ext-tab-host-live';
 const EXT_ID = 'pb-ext-tab-host-probe@powerbrowser.test';
@@ -155,6 +157,81 @@ browser.runtime.onMessage.addListener(msg => (msg === 'ping' ? Promise.resolve(l
 // ---------------------------------------------------------------------------
 // The served origin: /a, /b, /c and /d are pages with an icon link; /cmd and /log are the probe channel.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// The reporter. A scenario result is { ok, detail, fail } plus an optional skip: a leg that did not run. FAIL wins;
+// a result with a skip makes the run exit 77 with one SKIP line printed last (SKIP-PROTOCOL.md); exit 0 means every
+// leg ran. `emit` receives each line, so the hermetic control below captures them.
+// ---------------------------------------------------------------------------
+
+function reportRuns(runs, emit) {
+  let failed = 0;
+  const skips = [];
+  for (const { name, r } of runs) {
+    if (!r.ok) {
+      failed++;
+      emit(`${name}: FAIL -- ${r.fail}`);
+    } else if (r.skip) {
+      skips.push(`${name}: ${r.skip}`);
+      emit(`${name}: partial -- ${r.detail}`);
+    } else {
+      emit(`${name}: PASS -- ${r.detail}`);
+    }
+  }
+  const log = console.log;
+  console.log = emit;
+  try {
+    return verdictExit(NAME, failed ? [`${failed} scenario(s) red`] : [], skips);
+  } finally {
+    console.log = log;
+  }
+}
+
+// The pre-fix reporter, planted into the hermetic control: a leg that did not run still read PASS with exit 0.
+function reportRunsPreFix(runs, emit) {
+  let failed = 0;
+  for (const { name, r } of runs) {
+    if (r.ok) emit(`${name}: PASS -- ${r.detail}${r.skip ? `; ${r.skip}` : ''}`);
+    else { failed++; emit(`${name}: FAIL -- ${r.fail}`); }
+  }
+  return failed ? 1 : 0;
+}
+
+/** The hermetic control's cases over one reporter; returns the cases it got wrong. */
+function reporterProblems(reporter) {
+  const leg1 = 'leg 1 SKIPPED: the stock window had finished starting at the second call';
+  const cases = [
+    { name: 'every leg ran', runs: [{ name: 'a', r: { ok: true, detail: 'green' } }], code: 0, last: /^a: PASS -- green$/ },
+    { name: 'leg 1 not reached', runs: [{ name: 'options-page-switch', r: { ok: true, detail: 'a third call switched', skip: leg1 } }],
+      code: SKIP_EXIT, last: new RegExp(`^${NAME}: SKIP -- options-page-switch: leg 1 SKIPPED`), noPass: true },
+    { name: 'FAIL wins over a skip', runs: [{ name: 'a', r: { ok: false, fail: 'red' } }, { name: 'options-page-switch', r: { ok: true, detail: 'x', skip: leg1 } }], code: 1 },
+  ];
+  const wrong = [];
+  for (const c of cases) {
+    const lines = [];
+    const code = reporter(c.runs, l => lines.push(String(l)));
+    const last = lines[lines.length - 1] ?? '';
+    if (code !== c.code || (c.last && !c.last.test(last)) || (c.noPass && lines.some(l => / PASS -- /.test(l)))) {
+      wrong.push(`${c.name}: exit ${code}, want ${c.code}; last line ${JSON.stringify(last)}`);
+    }
+  }
+  return wrong;
+}
+
+// Checked before the fixture server is created: the reporter alone, no server, no browser, no display.
+if (process.argv.includes('--verdict-self-test')) {
+  const real = reporterProblems(reportRuns);
+  const planted = reporterProblems(reportRunsPreFix);
+  for (const w of real) console.log(`  NOT OK  reporter: ${w}`);
+  if (planted.length) console.log(`  ok  planted pre-fix reporter -> red (${planted[0]})`);
+  else console.log('  NOT OK  planted pre-fix reporter stayed green');
+  if (real.length || !planted.length) {
+    console.log(`${NAME} --verdict-self-test: FAIL -- ${real.length} reporter case(s) wrong${planted.length ? '' : '; the pre-fix plant stayed green'}`);
+    process.exit(1);
+  }
+  console.log(`${NAME} --verdict-self-test: PASS -- a leg not reached exits 77 with the SKIP line last, FAIL wins, and the pre-fix reporter goes red`);
+  process.exit(0);
+}
 
 let session = { logs: [], queue: [], fuQueue: [] };
 let opSeq = 0;
@@ -1930,6 +2007,8 @@ async function scenarioOptionsPageSwitch({ app, plant }) {
   if (startingFail) {
     return verdict(false, null, `${startingFail}; the started-window leg passed (a third call switched to the options tab and added none)`);
   }
+  // A leg not reached is a skip, never a pass (SKIP-PROTOCOL.md rule 2).
+  if (wasStarting !== true) return { ...verdict(true, 'a third call switched to it and added none', null), skip: leg1 };
   return verdict(true, `${leg1}; a third call switched to it and added none`, null);
 }
 
@@ -2141,18 +2220,17 @@ async function main() {
   await stampCheck();
   let failed = 0;
   if (!selfTest) {
+    const runs = [];
     for (const name of selected) {
       const r = await runSession(name);
-      if (r.ok) {
-        console.log(`${name}: PASS -- ${r.detail}`);
-      } else {
-        failed++;
-        console.log(`${name}: FAIL -- ${r.fail}`);
-        if (r.broken) break;
-      }
+      runs.push({ name, r });
+      if (!r.ok && r.broken) break;
     }
+    server.close();
+    process.exit(reportRuns(runs, line => console.log(line)));
   } else {
     // A clean control for each plant's scenario, then one session per plant.
+    const selfSkips = [];
     for (const [plantName, plant] of Object.entries(PLANTS)) {
       if (!selected.includes(plant.scenario)) continue;
       const control = await runSession(plant.scenario);
@@ -2161,7 +2239,9 @@ async function main() {
         console.log(`${NAME} --self-test: control ${plant.scenario} FAIL -- ${control.fail}`);
         continue;
       }
-      console.log(`  control ${plant.scenario}: PASS -- the clean run is green before the plant`);
+      // A control whose leg was not reached did not prove that leg's plant can go red: the self-test is a SKIP then.
+      if (control.skip) selfSkips.push(`control ${plant.scenario}: ${control.skip}`);
+      console.log(`  control ${plant.scenario}: ${control.skip ? 'partial' : 'PASS'} -- the clean run is green before the plant`);
       const red = await runSession(plant.scenario, plantName);
       if (!red.ok && red.fail && red.fail.includes(plant.expect)) {
         console.log(`  ok  plant ${plantName} -> red, naming '${plant.expect}': ${red.fail}`);
@@ -2170,10 +2250,14 @@ async function main() {
         console.log(`${NAME} --self-test: FAIL -- plant ${plantName} did not go red naming '${plant.expect}': ${red.fail}`);
       }
     }
+    server.close();
+    if (!failed && selfSkips.length) {
+      console.log(`${NAME} --self-test: SKIP -- ${selfSkips.join('; ')}. Next step: re-run this self-test`);
+      process.exit(SKIP_EXIT);
+    }
     if (!failed) console.log(`${NAME} --self-test: PASS -- every control was green and every plant went red naming its drift`);
+    process.exit(failed ? 1 : 0);
   }
-  server.close();
-  process.exit(failed ? 1 : 0);
 }
 
 await main();
