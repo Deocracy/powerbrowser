@@ -12,6 +12,16 @@
 //      stays on an unscoped selector. Control: the bare theme class (.dark .btn) is still an ancestor condition.
 //      Over the built sheet (orca/out/web/assets/pb-panes/pb-panes.css, when orca/pb-css-scope.mjs equals the
 //      overlay file, i.e. the sheet was built by this pass): no rule head is a variant utility followed by the scope.
+//   b. (overlay-renderer-01, 64-WR-02) a terminal leaf close addresses its leaf: the entry never sends Orca's tab-wide
+//      active-pane close while its detail type carries no leaf, dispatches Orca's leaf-addressed close with a leafId,
+//      and closePane returns for a gone leaf before any whole-tab close.
+//   c. (64-WR-04) every call of subscribePanes' store listener runs inside a try block.
+//   d. (overlay-renderer-04) run: the entry's recordError, called 2N times, keeps a bounded list.
+//   e. (overlay-renderer-03) run: for each install step bootstrap calls after the session-only assertion (derived),
+//      one throw rejects the first bootstrap, a second call runs again and resolves, nothing is installed twice.
+//   f. (65-WR-01) run: pb-workspace-api's openFileRecords and subscribeWorktrees, with Orca's host resolver stubbed,
+//      fail closed for an unknown, host-less or SSH-hosted worktree and find a folder workspace's own row.
+//   b..f parse with theia/node_modules/typescript; a run clause evaluates the tree's own source against stubs.
 //
 // --self-test plants each pre-fix fault into a copy of the source and requires red naming it.
 //
@@ -524,11 +534,12 @@ async function main() {
 async function selfTest() {
     let failed = 0;
     const ok = (name, cond) => { console.log(`  ${cond ? 'ok ' : 'NOT OK '} ${name}`); if (!cond) failed += 1; };
-    if (!existsSync(POSTCSS_ESM) || !existsSync(MAIN_CSS)) {
-        console.log(`${NAME} self-test: SKIP -- orca/node_modules/postcss or orca main.css is absent (run scripts/build-orca.sh)`);
-        return 0;
-    }
+    let ran = 0;
     // a.
+    if (!existsSync(POSTCSS_ESM) || !existsSync(MAIN_CSS)) {
+        console.log('  skip a: orca/node_modules/postcss or orca main.css is absent (run scripts/build-orca.sh)');
+    } else {
+    ran += 1;
     const source = readFileSync(CSS_PASS, 'utf8');
     const variants = themeVariants(readFileSync(MAIN_CSS, 'utf8'));
     ok('a: Orca main.css yields at least one theme variant (derived)', variants.length > 0);
@@ -543,11 +554,15 @@ async function selfTest() {
     ok('a: a built sheet from the pre-fix pass is red', checkBuiltSheet(planted, builtBad).length === 1);
     ok('a: a built sheet from the fixed pass is green', checkBuiltSheet(pass, pass.scopeCss(`.dark\\:invert:is(.dark *){filter:invert(1)}.dark .b{color:red}`)).length === 0);
     ok('a: no theme variant in main.css is red "source moved"', checkVariantScoping(pass, []).some(f => /source moved/.test(f)));
-    // b.
-    if (!(await loadTs()) || !existsSync(ORCA_CONSTANTS)) {
-        console.log('  skip b..: theia/node_modules/typescript or orca/src is absent');
+    }
+    if (!(await loadTs())) {
+        console.log('  skip b..f: theia/node_modules/typescript is absent (install Theia)');
     } else {
+        ran += 1;
         const entry = readFileSync(ENTRY, 'utf8');
+        // b.
+        if (!existsSync(ORCA_CONSTANTS)) console.log('  skip b: orca/src is absent (run scripts/fetch-orca.sh)');
+        else {
         const constants = readFileSync(ORCA_CONSTANTS, 'utf8');
         ok('b: control green on the tree', checkLeafClose(entry, constants).length === 0);
         const dispatch = /window\.dispatchEvent\(new CustomEvent<CloseTerminalPaneDetail>\(CLOSE_TERMINAL_PANE_EVENT[^\n]*\n/;
@@ -562,6 +577,7 @@ async function selfTest() {
         ok('b: a gone leaf falling through to the whole-tab close (64-WR-02) is red, naming it', checkLeafClose(escalates, constants).some(f => /64-WR-02/.test(f)));
         const noLeaf = constants.replace(/(export type CloseTerminalPaneDetail = \{[^}]*?)\n\s*leafId\?: string/, '$1');
         ok('b: Orca\'s leaf close losing leafId is red "source moved"', noLeaf !== constants && checkLeafClose(entry, noLeaf).some(f => /no longer carries leafId/.test(f)));
+        }
         // c.
         ok('c: control green on the tree', checkStoreListeners(entry).length === 0);
         const unguarded = entry.replace(/\n(\s*)try \{\n(\s*const next = paneRecords\(state\)[\s\S]*?\n)\s*\} catch \(error\) \{\n\s*recordError\('observation', 'subscribe'\)\(error\)\n\s*\}\n/, '\n$2');
@@ -598,6 +614,7 @@ async function selfTest() {
         ok('f: a host-less worktree taken as local without Orca\'s resolver is red, naming it', checkLocalPredicate(noResolver).some(f => /no host of its own/.test(f)));
         ok('c: no store listener is red "parser blind"', checkStoreListeners(entry.replace(/useAppStore\.subscribe\(\(state, prior\)/, 'useAppStore.subscribeTo((state, prior)')).some(f => /parser blind/.test(f)));
     }
+    if (!ran) { console.log(`${NAME} self-test: SKIP -- neither Orca's postcss nor Theia's typescript is installed`); return 0; }
     console.log(failed ? `${NAME} self-test: FAIL -- ${failed} case(s)` : `${NAME} self-test: PASS -- every planted fault went red naming it`);
     return failed ? 1 : 0;
 }
