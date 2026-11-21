@@ -11915,10 +11915,14 @@ const AGENT_SAME_SITE = ["None", "Lax", "Strict"];
 // agent-browser-03 / chrome-actor-04: every agent of every worktree shares the one agent container, so a session that
 // the user or another agent made there would be readable and replaceable by any later agent. The cookie rows
 // therefore act only on the site the tab is on now (its registrable domain), and no row reaches an httpOnly cookie:
-// cookie.get never returns its value, cookie.set never makes one and never writes a name the site holds as one, and
-// cookie.delete never ends one. The agent picks the current site with browser.goto, so the site scope alone restricts
-// little; the httpOnly rule is the wall. Page script on the site reads and writes only its non-httpOnly cookies, and
-// those are all the rows still reach.
+// cookie.get never returns its value and cookie.delete never ends one. The agent picks the current site with
+// browser.goto, so the site scope alone restricts little.
+// cookie.set (round 3) makes only the narrowest cookie page script on the current page could make: host-only on the
+// current host, path "/", never httpOnly, never a __Host- or __Secure- name, Secure only on an https page, SameSite
+// None only with Secure, and never a name the site holds as httpOnly in any partition (agentHttpOnlyNamed).
+// Services.cookies.add runs none of the checks a page's cookie meets, which is why each is checked here.
+// Residual (Needs owner): page script, and so the agent through browser.eval, can still plant a plain cookie before
+// a later sign-in in the shared container sets the same name httpOnly, and the older one is sent first.
 function agentSiteOf(host) {
   const h = String(host ?? "").toLowerCase().replace(/^\.+/, "").replace(/\.$/, "");
   if (!h) {
@@ -11932,11 +11936,11 @@ function agentSiteOf(host) {
   }
 }
 
-// agent-browser-03: true when the site holds an httpOnly cookie of this name, under any host or path of the site, so a
-// set cannot shadow it with a longer path or a domain cookie (the server may read the agent's value first) and a
-// delete cannot end it.
+// agent-browser-03: true when the site holds an httpOnly cookie of this name, under any host or path of the site and in
+// any partition (the pattern names the container only, so every partitionKey matches), so a set cannot shadow it and
+// a delete cannot end it.
 function agentHttpOnlyNamed(host, name, attrs) {
-  return Services.cookies.getCookiesFromHost(host, attrs).some(c => c.name === name && c.isHttpOnly);
+  return Services.cookies.getCookiesWithOriginAttributes(JSON.stringify(attrs), host).some(c => c.name === name && c.isHttpOnly);
 }
 
 // The host a cookie row may act on: `host` when it is on the tab's current site, else "".
@@ -11964,19 +11968,22 @@ function agentCookieGet(entry, params) {
 }
 
 function agentCookieSet(entry, params) {
-  const named = params.domain || agentHostOf(entry, null);
-  if (!named) {
+  const host = agentHostOf(entry, null).toLowerCase();
+  if (!host) {
     return agentFailed("browser_error");
   }
-  const host = agentSiteHost(entry, named);
-  if (!host || params.httpOnly === true || agentHttpOnlyNamed(host, params.name, agentOriginAttributes(entry))) {
+  const domain = String(params.domain ?? host).toLowerCase().replace(/^\./, "");
+  const securePage = /^https:/i.test(entry.browser.currentURI?.spec ?? "");
+  const sameSite = { none: 0, lax: 1, strict: 2 }[String(params.sameSite ?? "lax").toLowerCase()] ?? 1;
+  const narrow = domain === host && (params.path === undefined || params.path === null || params.path === "/") && params.httpOnly !== true &&
+    !/^__(host|secure)-/i.test(params.name) && (params.secure !== true || securePage) && (sameSite !== 0 || params.secure === true);
+  if (!narrow || agentHttpOnlyNamed(host, params.name, agentOriginAttributes(entry))) {
     return agentFailed("browser_command_unavailable");
   }
-  const sameSite = { none: 0, lax: 1, strict: 2 }[String(params.sameSite ?? "lax").toLowerCase()] ?? 1;
   const session = !agentNumber(params.expires) || params.expires <= 0;
   const expiry = session ? Date.now() + 24 * 60 * 60 * 1000 : Math.floor(params.expires * 1000);
   const scheme = params.secure ? Ci.nsICookie.SCHEME_HTTPS : Ci.nsICookie.SCHEME_HTTP;
-  const validation = Services.cookies.add(host, params.path || "/", params.name, params.value, !!params.secure, !!params.httpOnly, session, expiry, agentOriginAttributes(entry), sameSite, scheme, false);
+  const validation = Services.cookies.add(host, "/", params.name, params.value, !!params.secure, false, session, expiry, agentOriginAttributes(entry), sameSite, scheme, false);
   return agentDone({ success: !validation || validation.result === Ci.nsICookieValidation.eOK });
 }
 
