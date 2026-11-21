@@ -16,6 +16,8 @@
 //     run, so a reshaped copy is still covered.
 //  b. Links. A parked old copy that is a link is never restored as <id>; a link at <id> is
 //     replaced by a real copy and the folder it pointed to is left untouched.
+//  b2. A folder that only looks parked by name (id x-old's temporary copy .x-old-AbC123 for id x)
+//     is not x's park and is left alone.
 //  c. The rules still hold: a removed folder with the record at the shipped version stays removed.
 //
 // Tier: quick. SKIP when theia/node_modules/typescript is absent. --self-test plants each pre-fix
@@ -167,6 +169,20 @@ async function check(text) {
         } finally { rmSync(f.t, { recursive: true, force: true }); }
     }
 
+    // b2. Another id's folder whose name looks parked (id x-old's temporary copy .x-old-AbC123 matches x's park
+    // prefix) is left alone by x's recovery: a park is recognised by its layout, not its name.
+    {
+        const f = fixture();
+        try {
+            f.ship('1.0.0');
+            const foreign = join(f.deploy, `.${ID}-old-AbC123`);
+            mkdirSync(join(foreign, 'extension'), { recursive: true });
+            writeFileSync(join(foreign, 'extension', 'package.json'), JSON.stringify({ name: 'bundled-old', version: '3.0.0' }));
+            await seed({ sources: [f.src], deploymentDir: f.deploy, record: rec('1.0.0') });
+            if (!existsSync(join(foreign, 'extension', 'package.json'))) fails.push(`b2: recovery for ${ID} deleted .${ID}-old-AbC123, the temporary copy of the id ${ID}-old`);
+        } finally { rmSync(f.t, { recursive: true, force: true }); }
+    }
+
     // c. an uninstall still sticks.
     {
         const f = fixture();
@@ -190,6 +206,7 @@ const PLANTS = [
     },
     { name: 'no-recovery-at-start', naming: 'left the extension uninstalled for good', edit: (s) => s.replace('for (const { id } of shipped) await recoverParked(fs, input.deploymentDir, id);', '') },
     { name: 'parked-link-restored', naming: 'a parked old copy that is a link was restored', edit: (s) => s.replace('(await fs.lstat(parked)).isDirectory()', '(await fs.stat(parked)).isDirectory()') },
+    { name: 'park-by-name-only', naming: 'b2: recovery for', edit: (s) => s.replace("        if (inside.length > 1 || (inside.length === 1 && inside[0] !== id)) continue; // not this id's park\n", '') },
     { name: 'parked-copy-kept', naming: 'left a parked copy behind', edit: (s) => s.replace('        await fs.rm(park, { recursive: true, force: true });\n    }\n}', '    }\n}') },
 ];
 
