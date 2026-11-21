@@ -610,7 +610,8 @@ const AGENT_RUN = {
     return { selected: params.element };
   },
   "browser.wait": async (actor, params) => {
-    const timeout = params.timeout > 0 ? params.timeout : 30000;
+    // 66-CR-04 (lane G1b): at most 10 minutes, the host's and chrome's cap (AGENT_WAIT_MAX_MS).
+    const timeout = params.timeout > 0 ? Math.min(params.timeout, 600000) : 30000;
     const doc = actor.document;
     const tests = [];
     if (params.selector) {

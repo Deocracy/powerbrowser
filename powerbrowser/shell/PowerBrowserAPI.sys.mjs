@@ -11251,6 +11251,8 @@ const AGENT_RUN_MESSAGE = "PowerBrowserAgent:Run";
 const AGENT_ABORT_MESSAGE = "PowerBrowserAgent:Abort";
 // Orca's own ACTIVITY_IDLE_MS (browser-agent-activity.ts): the mark clears after this long with no served call.
 const AGENT_IDLE_MS = 20000;
+// 66-CR-04 (lane G1b): the longest agent wait, the host's cap (10 minutes); GroupActorChild applies the same bound.
+const AGENT_WAIT_MAX_MS = 600000;
 
 const agentDone = result => ({ where: "done", result });
 const agentFailed = code => ({ where: "failed", code });
@@ -11309,7 +11311,8 @@ const AGENT_PARAMS = {
   "browser.mouseWheel": params => agentTarget(params) && agentNumber(params.dy) && agentOptional(params.dx, agentNumber),
   "browser.scroll": params => agentTarget(params) && (params.direction === "up" || params.direction === "down") && agentOptional(params.amount, v => agentNumber(v) && v > 0),
   // A wait names at least one condition or a positive timeout.
-  "browser.wait": params => agentTarget(params) && agentOptional(params.timeout, v => agentNumber(v) && v > 0) && agentWaitFields.every(f => agentOptional(params[f], agentText)) && (agentWaitFields.some(f => agentText(params[f])) || agentNumber(params.timeout)),
+  // 66-CR-04 (lane G1b): a wait is at most AGENT_WAIT_MAX_MS, the host's own cap.
+  "browser.wait": params => agentTarget(params) && agentOptional(params.timeout, v => agentNumber(v) && v > 0 && v <= AGENT_WAIT_MAX_MS) && agentWaitFields.every(f => agentOptional(params[f], agentText)) && (agentWaitFields.some(f => agentText(params[f])) || agentNumber(params.timeout)),
   // Lane p66-04 owns the snapshot options; the target fields are what this lane checks.
   "browser.snapshot": agentTarget,
 };
@@ -12275,12 +12278,13 @@ function agentResultFits(result, reserve = 0) {
 
 // 59-WR-03: the orca-browser dispatcher adds browserPageId, url and title to a browser.snapshot result after chrome
 // measured it (A5). Room is kept for the most it can add: Orca's bounds (browser-client-page-metadata-protocol.ts: url
-// 8192, title 4096 UTF-16 units; browser-client-host-protocol.ts: 384 JSON bytes of page identity) at the worst JSON
+// 8192, title 4096 UTF-16 units; browser-client-host-protocol.ts:14: a page id of up to 256 UTF-16 units, so 1536 JSON
+// bytes at 6 bytes an escaped unit; round 3) at the worst JSON
 // cost per unit (3 bytes for a URL, 6 for a title's escaped control character), or the tab's own url and title when
 // those are longer, since the dispatcher sends what the tab shows, not a bounded copy.
 const AGENT_SNAPSHOT_URL_UNITS = 8192;
 const AGENT_SNAPSHOT_TITLE_UNITS = 4096;
-const AGENT_SNAPSHOT_ID_BYTES = 384;
+const AGENT_SNAPSHOT_ID_BYTES = 256 * 6;
 
 function agentSnapshotReserve(entry) {
   const url = webTabPushedSpec(entry.browser.currentURI?.spec ?? "");
