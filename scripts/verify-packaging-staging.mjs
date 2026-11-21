@@ -19,9 +19,11 @@
 //                 Run on a temp stage, the helper writes LICENSE equal to orca/<licence_file> (SKIP of
 //                 this half when orca/ is not fetched), and refuses a licence that does not hash to the
 //                 allowlist digest (a fixture root).
-//  no-skip        G5a handoff (SKIP-PROTOCOL.md). Every line of a packaging script that runs a check
-//                 (node "$ROOT/scripts/verify-*.mjs") runs it through scripts/run-no-skip.sh, so a check
-//                 that did not run (exit 77, or exit 0 with a SKIP line) fails the packaging run.
+//  no-skip        G5a handoff (SKIP-PROTOCOL.md). In every powerbrowser/packaging/*.sh (stage-*.sh
+//                 included), every invocation of a scripts/verify-*.mjs check, however its path is quoted,
+//                 runs through scripts/run-no-skip.sh as its own statement, ending with `|| fail ...` or
+//                 nothing under set -e, so a check that did not run (exit 77, or exit 0 with a SKIP line)
+//                 fails the packaging run. `|| true`, `;`, `&&`, a pipe, `if`, `!` and subshells are red.
 //  checkout-grep  68-WR-02. No packaging script swallows a grep error with `2>/dev/null || true` on a
 //                 recursive grep. The host_root_grep (package-linux.sh) and checkout_grep
 //                 (package-macos.sh) functions, extracted from the scripts and run, pass a clean tree,
@@ -54,13 +56,49 @@ const SKIPS = new Set();
 const sha = (p) => createHash('sha256').update(readFileSync(p)).digest('hex');
 
 function scripts(root) {
-    return readdirSync(join(root, PKG_DIR)).filter((f) => f.endsWith('.sh') && !f.startsWith('stage-')).sort()
+    return readdirSync(join(root, PKG_DIR)).filter((f) => f.endsWith('.sh')).sort()
         .map((f) => ({ name: f, text: readFileSync(join(root, PKG_DIR, f), 'utf8') }));
 }
 
 /** The specifier the backend resolves the wrapper by. */
 export function wrapperSpecifier(backendText) {
     return /require\.resolve\(\s*'([^']+claude-wrapper[^']*)'\s*\)/.exec(backendText)?.[1] ?? null;
+}
+
+/** Logical lines (backslash continuations joined) with their first line number. */
+function logicalLines(text) {
+    const out = [];
+    let cur = null;
+    text.split('\n').forEach((l, i) => {
+        if (cur) cur.text += ` ${l.trim()}`; else cur = { line: i + 1, text: l };
+        if (/\\\s*$/.test(l)) cur.text = cur.text.replace(/\\\s*$/, ''); else { out.push(cur); cur = null; }
+    });
+    if (cur) out.push(cur);
+    return out;
+}
+
+const WRAP = 'bash "$ROOT/scripts/run-no-skip.sh" -- node "$ROOT/scripts/verify-';
+/**
+ * no-skip: every invocation of a scripts/verify-*.mjs check, however its path is quoted, goes through
+ * scripts/run-no-skip.sh as a statement of its own, and its status is not discarded: the logical line
+ * starts with the wrapper and ends with `|| fail ...` or nothing (the script runs under set -e).
+ * `|| true`, any other `||`, `&&`, `;`, a pipe, `if`, `!`, a subshell or a command substitution is red.
+ */
+export function noSkipDrift(name, text) {
+    const fails = [];
+    const setE = /^\s*set -[a-z]*e[a-z]*\b/m.test(text);
+    for (const { line, text: l } of logicalLines(text)) {
+        const code = l.replace(/(^|\s)#.*$/, '');
+        if (!/scripts\/verify-[A-Za-z0-9_-]+\.mjs/.test(code) || /\bimport\b[^\n]*\bfrom\b/.test(code)) continue;
+        const at = `${PKG_DIR}/${name}:${line}`;
+        const t = code.trim();
+        if (!t.includes(WRAP)) { fails.push(`no-skip: ${at} runs a check without scripts/run-no-skip.sh, so a skipped check passes the packaging run`); continue; }
+        if (!t.startsWith(WRAP)) { fails.push(`no-skip: ${at} wraps the check inside another construct (${t.slice(0, t.indexOf(WRAP)).trim() || 'prefix'}), which discards or inverts its status`); continue; }
+        const tail = t.replace(/^bash "\$ROOT\/scripts\/run-no-skip\.sh" -- node "\$ROOT\/scripts\/verify-[A-Za-z0-9_-]+\.mjs"(?:\s+(?:"[^"]*"|'[^']*'|[^\s;|&"']+))*/, '').trim();
+        if (tail === '') { if (!setE) fails.push(`no-skip: ${at} runs the wrapper as a plain command in a script without set -e, so its failure is ignored`); continue; }
+        if (!/^\|\|\s*fail\b/.test(tail)) fails.push(`no-skip: ${at} follows the wrapper with '${tail.slice(0, 20)}', which discards its status; end it with || fail or nothing`);
+    }
+    return fails;
 }
 
 /** Static rules over the packaging scripts' text. */
@@ -75,9 +113,7 @@ export function staticDrift(list) {
             const stage = m[1];
             if (!text.includes(`${LICENCE_HELPER}" "$ROOT" "${stage}"`)) fails.push(`orca-licence: ${PKG_DIR}/${name} stages Orca's out/web under ${stage} but never runs ${LICENCE_HELPER} on it, so Orca's MIT notice does not ship`);
         }
-        text.split('\n').forEach((l, i) => {
-            if (/^\s*[^#]*\bnode "\$ROOT\/scripts\/verify-[A-Za-z0-9-]+\.mjs"/.test(l) && !/run-no-skip\.sh" -- node "\$ROOT\/scripts\/verify-/.test(l)) fails.push(`no-skip: ${PKG_DIR}/${name}:${i + 1} runs a check without scripts/run-no-skip.sh, so a skipped check passes the packaging run`);
-        });
+        fails.push(...noSkipDrift(name, text));
         text.split('\n').forEach((l, i) => { if (SWALLOW.test(l)) fails.push(`checkout-grep: ${PKG_DIR}/${name}:${i + 1} swallows a grep error with 2>/dev/null || true`); });
     }
     return fails;
@@ -188,6 +224,14 @@ function selfTest() {
         { name: 'macOS universal licence staging removed', naming: 'package-macos.sh stages Orca', run: (t) => drift(REPO_ROOT, edit('package-macos.sh', (x) => x.replace(/\n {4}bash "\$ROOT\/powerbrowser\/packaging\/stage-orca-licence\.sh" "\$ROOT" "\$out"/, '')), backend, t) },
         { name: 'linux grep swallows errors (68-WR-02 pre-fix)', naming: 'passed a missing target', run: (t) => drift(REPO_ROOT, edit('package-linux.sh', (x) => x.replace(fnText(x, 'host_root_grep'), `${PRE_FIX_GREP}\n`)), backend, t) },
         { name: 'orca-packaged-tree called directly (G5a handoff pre-fix)', naming: 'no-skip: powerbrowser/packaging/package-macos.sh', run: (t) => drift(REPO_ROOT, edit('package-macos.sh', (x) => x.replace('bash "$ROOT/scripts/run-no-skip.sh" -- node "$ROOT/scripts/verify-orca-packaged-tree.mjs"', 'node "$ROOT/scripts/verify-orca-packaged-tree.mjs"')), backend, t) },
+        { name: 'wrapper status discarded with || true (review 7)', naming: 'follows the wrapper with \'|| true', run: (t) => drift(REPO_ROOT, edit('package-windows.sh', (x) => `${x}\nbash "$ROOT/scripts/run-no-skip.sh" -- node "$ROOT/scripts/verify-x.mjs" || true\n`), backend, t) },
+        { name: 'wrapper inside if (review 7)', naming: 'wraps the check inside another construct (if)', run: (t) => drift(REPO_ROOT, edit('package-windows.sh', (x) => `${x}\nif bash "$ROOT/scripts/run-no-skip.sh" -- node "$ROOT/scripts/verify-x.mjs"; then :; fi\n`), backend, t) },
+        { name: 'wrapper negated (review 7)', naming: 'wraps the check inside another construct (!)', run: (t) => drift(REPO_ROOT, edit('package-windows.sh', (x) => `${x}\n! bash "$ROOT/scripts/run-no-skip.sh" -- node "$ROOT/scripts/verify-x.mjs"\n`), backend, t) },
+        { name: 'wrapper followed by ; (review 7)', naming: "follows the wrapper with ';", run: (t) => drift(REPO_ROOT, edit('package-windows.sh', (x) => `${x}\nbash "$ROOT/scripts/run-no-skip.sh" -- node "$ROOT/scripts/verify-x.mjs"; echo done\n`), backend, t) },
+        { name: 'braced ROOT, unwrapped (review 7)', naming: 'runs a check without scripts/run-no-skip.sh', run: (t) => drift(REPO_ROOT, edit('package-linux.sh', (x) => `${x}\nnode "\${ROOT}/scripts/verify-x.mjs"\n`), backend, t) },
+        { name: 'quote closed before the path (review 7)', naming: 'runs a check without scripts/run-no-skip.sh', run: (t) => drift(REPO_ROOT, edit('package-linux.sh', (x) => `${x}\nnode "$ROOT"/scripts/verify-x.mjs\n`), backend, t) },
+        { name: 'subshell relative path (review 7)', naming: 'runs a check without scripts/run-no-skip.sh', run: (t) => drift(REPO_ROOT, edit('package-linux.sh', (x) => `${x}\n(cd "$ROOT" && node scripts/verify-x.mjs)\n`), backend, t) },
+        { name: 'direct call in a stage-*.sh helper (review 7)', naming: 'no-skip: powerbrowser/packaging/stage-orca-licence.sh', run: (t) => drift(REPO_ROOT, edit('stage-orca-licence.sh', (x) => `${x}\nnode "$ROOT/scripts/verify-x.mjs"\n`), backend, t) },
         { name: 'windows check called directly', naming: 'no-skip: powerbrowser/packaging/package-windows.sh', run: (t) => drift(REPO_ROOT, edit('package-windows.sh', (x) => x.replace('bash "$ROOT/scripts/run-no-skip.sh" -- node "$ROOT/scripts/verify-orca-packaged-tree.mjs"', 'node "$ROOT/scripts/verify-orca-packaged-tree.mjs"')), backend, t) },
         { name: 'swallowing grep form anywhere', naming: 'swallows a grep error', run: (t) => drift(REPO_ROOT, edit('package-macos.sh', (x) => `${x}\nx="$(grep -rlF "$ROOT/" "$RES" 2>/dev/null || true)"\n`), backend, t) },
     ];
