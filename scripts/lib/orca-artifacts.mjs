@@ -45,36 +45,79 @@ function moved(rel, why) {
     return new Error(`Orca's artifact tables moved (orca/${rel}: ${why}); re-read orca/src/shared/orcad-artifacts.ts`);
 }
 
-async function importTs(orcaRoot, rel) {
+function readTs(orcaRoot, rel) {
     const file = join(orcaRoot, rel);
     if (!existsSync(file)) throw moved(rel, 'file absent');
-    // orca/package.json declares no "type", so Node warns that it re-parses the file as ESM; only that warning is muted.
-    const emit = process.emitWarning;
-    process.emitWarning = function (w, ...a) {
-        if ((typeof a[0] === 'object' ? a[0]?.code : a[1]) === 'MODULE_TYPELESS_PACKAGE_JSON') return undefined;
-        return emit.call(process, w, ...a);
-    };
-    try {
-        return await import(pathToFileURL(file).href);
-    } catch (err) {
-        throw moved(rel, `import failed: ${String(err.message).split('\n')[0]}`);
-    } finally {
-        process.emitWarning = emit;
-    }
+    return readFileSync(file, 'utf8');
 }
 
-/** { markerNames, ripgrepArtifacts, agentBrowserName(platform, arch) } read from orcaRoot's source. */
+// One single- or double-quoted string literal with no escape and no newline.
+const STR = String.raw`'([^'\\\n]*)'|"([^"\\\n]*)"`;
+
+/**
+ * The value of `export const NAME = '<literal>'`, or of a [...] list of string literals (`as const` allowed), read
+ * from pinned source text. Nothing in orca/ is imported or executed (review point 9, handed over by lane G5a: the old
+ * loader imported the pinned .ts files, so the check ran third-party code on every machine that ran it, the
+ * persistent self-hosted runner included). Any other form returns undefined, which the caller reports as moved.
+ */
+export function exportedLiteral(source, name) {
+    const scalar = new RegExp(String.raw`^export const ${name}\s*=\s*(?:${STR})\s*;?\s*$`, 'm').exec(source);
+    if (scalar) return scalar[1] ?? scalar[2];
+    const list = new RegExp(String.raw`^export const ${name}\s*=\s*\[([^\]]*)\](?:\s*as const)?\s*;?\s*$`, 'm').exec(source);
+    if (!list) return undefined;
+    const items = list[1].split(',').map((s) => s.trim()).filter(Boolean).map((s) => new RegExp(String.raw`^(?:${STR})$`).exec(s));
+    return items.length && items.every(Boolean) ? items.map((m) => m[1] ?? m[2]) : undefined;
+}
+
+/**
+ * orcadAgentBrowserNativeName, read as text and evaluated by this file, never run: its first two parameters
+ * (platform, architecture), the template literal it returns, and the `const` aliases that template uses. An alias
+ * must have one of the two forms Orca writes, else the name is null (moved):
+ *   const X = <platform> === '<lit>' ? '<a>' : '<b>'        evaluated for the platform asked
+ *   const X = <platform> === 'linux' && ... ? '<lit>' : <platform>   the platform itself off Linux
+ */
+export function agentBrowserNameFrom(source) {
+    const fn = /export function orcadAgentBrowserNativeName\s*\(([\s\S]*?)\)\s*:\s*string\s*\{([\s\S]*?)\}\s*$/m.exec(source);
+    if (!fn) return null;
+    const params = fn[1].split(',').map((p) => p.trim().split(/[\s:=?]/)[0]).filter(Boolean);
+    if (params.length < 2) return null;
+    const [plat, arch] = params;
+    const tpl = /return\s+`([^`]*)`/.exec(fn[2]);
+    if (!tpl) return null;
+    const aliases = {};
+    for (const m of fn[2].matchAll(/const\s+(\w+)\s*=\s*([\s\S]*?)(?:\n\s*(?=const\b|return\b)|$)/g)) aliases[m[1]] = m[2].replace(/\s+/g, ' ').trim();
+    const value = (id, platform, a) => {
+        if (id === plat) return platform;
+        if (id === arch) return a;
+        const expr = aliases[id];
+        if (expr === undefined) return null;
+        const eq = new RegExp(String.raw`^${plat} === '([^']*)' \? '([^']*)' : '([^']*)'$`).exec(expr);
+        if (eq) return platform === eq[1] ? eq[2] : eq[3];
+        const offLinux = new RegExp(String.raw`^${plat} === 'linux' && [^?]* \? '[^']*' : ${plat}$`).exec(expr);
+        if (offLinux && platform !== 'linux') return platform;
+        return null;
+    };
+    return (platform, a) => {
+        let ok = true;
+        const name = tpl[1].replace(/\$\{(\w+)\}/g, (_, id) => { const v = value(id, platform, a); if (v === null) ok = false; return v ?? ''; });
+        return ok ? name : null;
+    };
+}
+
+/** { markerNames, ripgrepArtifacts, agentBrowserName(platform, arch) } read from orcaRoot's source text. */
 export async function orcaArtifactTables(orcaRoot) {
-    const artifacts = await importTs(orcaRoot, ARTIFACTS_REL);
-    const browser = await importTs(orcaRoot, AGENT_BROWSER_REL);
-    const markerNames = MARKER_CONSTANTS.map((c) => artifacts[c]).filter((v) => typeof v === 'string' && v !== '');
+    const artifacts = readTs(orcaRoot, ARTIFACTS_REL);
+    const browser = readTs(orcaRoot, AGENT_BROWSER_REL);
+    const markerNames = MARKER_CONSTANTS.map((c) => exportedLiteral(artifacts, c)).filter((v) => typeof v === 'string' && v !== '');
     if (markerNames.length !== MARKER_CONSTANTS.length) {
         throw moved(ARTIFACTS_REL, `derived ${markerNames.length} of ${MARKER_CONSTANTS.length} slot-marker names (${MARKER_CONSTANTS.join(', ')})`);
     }
-    const ripgrepArtifacts = Array.isArray(artifacts.ORCAD_RIPGREP_ARTIFACTS) ? [...artifacts.ORCAD_RIPGREP_ARTIFACTS] : [];
-    if (ripgrepArtifacts.length === 0) throw moved(ARTIFACTS_REL, 'ORCAD_RIPGREP_ARTIFACTS is absent or empty');
-    if (typeof browser.orcadAgentBrowserNativeName !== 'function') throw moved(AGENT_BROWSER_REL, 'orcadAgentBrowserNativeName is not exported');
-    return { markerNames, ripgrepArtifacts, agentBrowserName: (platform, arch) => browser.orcadAgentBrowserNativeName(platform, arch) };
+    const rg = exportedLiteral(artifacts, 'ORCAD_RIPGREP_ARTIFACTS');
+    const ripgrepArtifacts = Array.isArray(rg) ? [...rg] : [];
+    if (ripgrepArtifacts.length === 0) throw moved(ARTIFACTS_REL, 'ORCAD_RIPGREP_ARTIFACTS is absent, empty or not a list of string literals');
+    const name = agentBrowserNameFrom(browser);
+    if (!name || name('darwin', 'arm64') === null) throw moved(AGENT_BROWSER_REL, 'orcadAgentBrowserNativeName is absent or not in a shape this check reads');
+    return { markerNames, ripgrepArtifacts, agentBrowserName: name };
 }
 
 /** [armSuffix, x64Suffix] pairs from Orca's tables; empty means the source moved. */
@@ -256,8 +299,31 @@ async function selfTest() {
             else if (!text.includes(naming)) { console.error(`  FAIL ${name} -> red, but not naming '${naming}': ${text}`); failed++; }
             else console.log(`  ok ${name} -> red, naming '${naming}'`);
         }
-        if (failed) { console.error(`${NAME} self-test: FAIL -- ${failed} of ${plants.length} plant(s) did not go red naming the drift`); return 1; }
-        console.log(`${NAME} self-test: PASS -- ${plants.length} planted faults each went red naming the drift`);
+        // Review point 9: the tables are read as text. A source with a top-level side effect (it writes a file when
+        // run) must yield the same tables and leave no file; and the same source imported, as the old loader did,
+        // must write it, which proves the plant can fire. Both function shapes Orca and the fixtures use are read.
+        const se = join(tmp, 'side-effect-src');
+        const ran = join(tmp, 'side-effect-ran');
+        mkdirSync(join(se, 'src', 'shared'), { recursive: true });
+        const effect = `import { writeFileSync } from 'node:fs'\nwriteFileSync(${JSON.stringify(ran)}, 'ran')\n`;
+        writeFileSync(join(se, 'src', 'shared', 'orcad-artifacts.ts'), `${effect}${MARKER_CONSTANTS.map((c, i) => `export const ${c} = '.se-${i}'`).join('\n')}\nexport const ORCAD_RIPGREP_ARTIFACTS = [\n  'ripgrep/darwin-x64/rg',\n  'ripgrep/darwin-arm64/rg'\n]\n`);
+        writeFileSync(join(se, 'src', 'shared', 'orcad-agent-browser-name.ts'), `${effect}export function orcadAgentBrowserNativeName(\n  platformName: NodeJS.Platform,\n  architecture: string,\n  linuxLibc: 'glibc' | 'musl' = 'glibc'\n): string {\n  const ext = platformName === 'win32' ? '.exe' : ''\n  const platformToken =\n    platformName === 'linux' && linuxLibc === 'musl' ? 'linux-musl' : platformName\n  return \`agent-browser-\${platformToken}-\${architecture}\${ext}\`\n}\n`);
+        writeFileSync(join(se, 'package.json'), '{ "type": "module" }\n');
+        const seTables = await orcaArtifactTables(se);
+        const seGot = `${seTables.markerNames.join(',')} | ${seTables.ripgrepArtifacts.join(',')} | ${seTables.agentBrowserName('darwin', 'x64')} | ${seTables.agentBrowserName('win32', 'arm64')}`;
+        const seWant = '.se-0,.se-1,.se-2,.se-3 | ripgrep/darwin-x64/rg,ripgrep/darwin-arm64/rg | agent-browser-darwin-x64 | agent-browser-win32-arm64.exe';
+        if (seGot !== seWant) { console.error(`  FAIL text parse -> got '${seGot}', want '${seWant}'`); failed++; }
+        else console.log('  ok text parse of a multi-line source -> the same tables a run would give');
+        if (existsSync(ran)) { console.error('  FAIL reading the tables ran the pinned source (its side effect wrote a file)'); failed++; }
+        else console.log('  ok reading the tables ran nothing (the planted side effect did not fire)');
+        const ts = join(se, 'src', 'shared', 'orcad-artifacts.ts');
+        const asJs = join(se, 'probe.mjs');
+        writeFileSync(asJs, readFileSync(ts, 'utf8'));
+        await import(pathToFileURL(asJs).href);
+        if (!existsSync(ran)) { console.error('  FAIL plant: importing the source did not fire its side effect, so the control above proves nothing'); failed++; }
+        else console.log('  ok plant: the old loader (import) runs the side effect -> red, a file was written');
+        if (failed) { console.error(`${NAME} self-test: FAIL -- ${failed} of ${plants.length + 3} case(s) did not behave`); return 1; }
+        console.log(`${NAME} self-test: PASS -- ${plants.length} planted faults each went red naming the drift; the tables are read as text and a planted side effect did not run`);
         return 0;
     } finally {
         rmSync(tmp, { recursive: true, force: true });
