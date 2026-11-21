@@ -97,7 +97,7 @@
 //
 // The live lock: started without PB_LIVE_LOCK_HELD=1 (that is, not under
 // scripts/verify-platform.sh) the row takes <git common dir>/pb-live.lock
-// itself, before it launches anything. Do not wrap it in flock on that file.
+// itself, before it launches anything. Run through flock on that file or with the driver's PB_LIVE_LOCK_HELD=1 and it goes on; a hand-set PB_LIVE_LOCK_HELD=1 with a free lock is an error.
 // This shell's ORCA_* are removed from the session. It signals only identities
 // it recorded; the Orca CLI gets an environment built from scratch. No pairing
 // value, env value or token is printed; what is printed after the session is
@@ -107,8 +107,9 @@
 // 100 KiB of text to the system clipboard and selection and puts sentinels on
 // the selection. Both clipboards are read before the first write and written
 // back at the end when they held text (a headed run is the case that matters);
-// a clipboard that could not be read, or that held something other than text,
-// is named in a note and not restored. The cat -v recorder files under
+// a clipboard that could not be read, or that held no text (empty or something
+// other than text, which cannot be told apart here), is named in a note and left
+// as the run set it: the row never overwrites what it could not read. The cat -v recorder files under
 // .mozbuild/orca-terminal-keys-live are removed when the run ends.
 //
 // Tier: full. --self-test is quick and needs no browser: the pure verdicts over
@@ -488,8 +489,8 @@ export function clipboardPort(app) {
 
 /**
  * Runs fn with both clipboards read first and written back after (also when fn throws): a headed run must not leave its
- * 100 KiB of test text on the developer's clipboard. A clipboard that cannot be read is named in a note and left; one that held
- * no text is set to empty (the test text must not stay). log(line) takes the notes.
+ * 100 KiB of test text on the developer's clipboard. A clipboard that cannot be read, or held no text, is named in a note and left
+ * (never overwritten with a guess). log(line) takes the notes.
  */
 export async function withClipboardsRestored(port, fn, log = () => {}) {
     const saved = {};
@@ -502,9 +503,9 @@ export async function withClipboardsRestored(port, fn, log = () => {}) {
         for (const which of ['global', 'selection']) {
             const was = saved[which];
             if (!was?.ok) { log(`note -- the ${which} clipboard could not be read before the run (${was?.error ?? 'unreadable'}), so it was not restored`); continue; }
+            if (was.text === null) { log(`note -- the ${which} clipboard held no text before the run (empty or not text), so it was not restored and still holds the run's text`); continue; }
             try {
-                await port.set(which, was.text ?? '');
-                if (was.text === null) log(`note -- the ${which} clipboard held no text before the run; it was emptied of the run's text`);
+                await port.set(which, was.text);
             } catch (err) { log(`note -- the ${which} clipboard could not be written back (${String(err?.message ?? err)})`); }
         }
     }
@@ -1137,8 +1138,9 @@ async function clipboardUnreadableLeftCase() {
 }
 async function clipboardEmptyCase() {
     const port = memoryPort({ global: null, selection: null });
-    await withClipboardsRestored(port, async () => { await port.set('global', 'run text'); });
-    return port.state.global === '' ? [] : [`a clipboard that held no text kept ${JSON.stringify(port.state.global)}`];
+    const notes = [];
+    await withClipboardsRestored(port, async () => { await port.set('global', 'run text'); }, (n) => notes.push(n));
+    return port.state.global === 'run text' && notes.some((n) => /held no text before the run/.test(n)) ? [] : [`a clipboard that held no text was ${port.state.global === 'run text' ? 'left without a note' : `overwritten with ${JSON.stringify(port.state.global)}`}`];
 }
 function recorderCase() {
     const dir = mkdtempSync(join(tmpdir(), 'pb-keys-work-'));
@@ -1148,8 +1150,8 @@ function recorderCase() {
 }
 /** The real main on a tree with no built PowerBrowser: exit 77 and the one SKIP line (no browser is started). */
 function skipRun() {
-    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('ORCA_')));
-    const r = spawnSync(process.execPath, [SELF], { encoding: 'utf8', timeout: 30000, cwd: REPO_ROOT, env: { ...env, PB_LIVE_LOCK_HELD: '1', PB_FIREFOX_BIN: '/nonexistent/pb-self-test/powerbrowser' } });
+    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('ORCA_') && k !== 'PB_LIVE_LOCK_HELD'));
+    const r = spawnSync(process.execPath, [SELF], { encoding: 'utf8', timeout: 30000, cwd: REPO_ROOT, env: { ...env, PB_FIREFOX_BIN: '/nonexistent/pb-self-test/powerbrowser' } });
     const fails = [];
     if (r.status !== SKIP_EXIT) fails.push(`exit ${r.status}, want ${SKIP_EXIT} (${String(r.stdout).trim().slice(0, 120)} ${String(r.stderr).trim().slice(0, 120)})`);
     if (!new RegExp(`^${NAME}: SKIP -- .+`, 'm').test(r.stdout ?? '')) fails.push('no "<name>: SKIP -- <reason>" line on stdout');
@@ -1191,7 +1193,7 @@ async function runSelfTest() {
         ['a clipboard restored even when the run throws', null, () => clipboardRestoreThrowCase()],
         ['a clipboard that cannot be read is named and left', 'the global clipboard could not be read before the run (denied)', () => clipboardUnreadableCase()],
         ['an unreadable clipboard is not written by the restore', null, () => clipboardUnreadableLeftCase()],
-        ['a clipboard that held no text is emptied of the run\'s text', null, () => clipboardEmptyCase()],
+        ['a clipboard that held no text is named and left as the run set it, never overwritten', null, () => clipboardEmptyCase()],
         ['the recorder folder is removed', null, () => recorderCase()],
         ['the confirmation judged against a baseline (a dialog that was already open is not the close key\'s)', null, () => (lib.confirmationAppeared(null, ['Stop running command?']) === false && lib.confirmationAppeared({ count: 1, text: 'Stop running command? x' }, ['Stop running command?']) === true ? [] : ['the baseline rule is wrong'])],
         ['another dialog is not Orca\'s close confirmation', 'not the close confirmation', () => (lib.confirmationAppeared({ count: 1, text: 'Delete file?' }, ['Stop running command?']) ? [] : ['not the close confirmation'])],
@@ -1292,10 +1294,14 @@ if (isEntryPoint) {
     if (args.includes('--self-test')) process.exit(await runSelfTest());
     // A live row started outside the driver takes the live lock itself, before it launches anything.
     const lib = await import('./lib/orca-tabs-live.mjs');
-    let held;
-    try { held = lib.reexecUnderLiveLock(SELF, args); } catch (err) {
-        console.error(`${NAME}: FAIL -- ${err.message}`);
-        process.exit(1);
+    // Nothing to launch (a prerequisite is absent: the row only prints its SKIP or FAIL) needs no lock.
+    const mayLaunch = args.includes('--lock-probe') || (() => { const pre = lib.prerequisites({ needPanes: false }); return !pre.skip && !pre.fail; })();
+    let held = null;
+    if (mayLaunch) {
+        try { held = await lib.reexecUnderLiveLock(SELF, args); } catch (err) {
+            console.error(`${NAME}: FAIL -- ${err.message}`);
+            process.exit(1);
+        }
     }
     if (held !== null) process.exit(held);
     if (args.includes('--lock-probe')) { console.log(lib.lockProbeLine(NAME)); process.exit(0); }

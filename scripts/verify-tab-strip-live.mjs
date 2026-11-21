@@ -600,7 +600,7 @@ async function middle({ app, pages, expect, plant }) {
     const orcaLib = await import('./lib/orca-tabs-live.mjs');
     const wired = orcaLib.appWiresOrcaPanes();
     const bundleBuilt = existsSync(PANE_BUNDLE_ENTRY);
-    const booted = wired
+    const booted = wired === true
         ? (await step(app, 'middle: Orca pane bundle', `return await until(() => { const m = globalThis[Symbol.for('powerbrowser.orca-panes.module')]; return !!m && m.state().booted; }, ${bundleBuilt ? 120000 : 20000});`)) === true
         : false;
     const coverage = orcaLib.listenerCoverage({ wired, bundleBuilt, booted });
@@ -1595,7 +1595,7 @@ if (unknown.length || chosen.length === 0) {
 {
     const lib = await import('./lib/orca-tabs-live.mjs');
     let held;
-    try { held = lib.reexecUnderLiveLock(SELF, args); } catch (err) {
+    try { held = await lib.reexecUnderLiveLock(SELF, args); } catch (err) {
         console.error(`verify-${NAME}: FAIL -- ${err.message}`);
         process.exit(1);
     }
