@@ -16,14 +16,24 @@
 //  e. KIND_CLASSES' keys in scripts/verify-web-tab-bridge.mjs;
 //  f. the v2 requirement ids (bold **ID** rows under "## v2 Requirements") in
 //     .planning/workstreams/orca/REQUIREMENTS.md.
+//  g. the user-facing tool sources of Orca's browser at the pin
+//     (harness-static-browser-08): each subdirectory of
+//     orca/src/renderer/src/components/browser-pane except assemble-chrome, and each
+//     non-test .tsx module directly in it or in assemble-chrome (the toolbar, menus
+//     and chrome controls).
 // Compared: the U-row set equals the map's keys (both ways); a command entry is a
 // registered id, a render entry a defined and called method, a kind entry a
 // classified kind, a deferral a v2 id, a skip a non-empty reason; every entry has
 // exactly one of the five shapes. An empty U-row parse is red ("broken instrument").
+// The derived tool sources equal ORCA_TOOL_SOURCES' keys (both ways), so a re-pin
+// that adds a browser tool module is red until it is classified; each source names
+// U-rows of the table, or is internal with a reason. Limit: a control added inside an
+// existing module is not a new source.
 //
-// Tier: quick. Named SKIP when theia/node_modules/typescript is absent. --self-test
-// runs the verdict over in-memory fixture sources: the control must be green, then
-// each planted fault must go red naming its drift.
+// Tier: quick. SKIP (exit 77, one line) when theia/node_modules/typescript is absent,
+// and when orca/src is absent (then clause g did not run). --self-test runs the
+// verdict over in-memory fixture sources: the control must be green, then each
+// planted fault must go red naming its drift.
 //
 // Usage:
 //   node scripts/verify-orca-browser-tools.mjs
@@ -34,6 +44,8 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-browser-tools';
 export const REL = {
@@ -43,7 +55,105 @@ export const REL = {
     bridge: 'scripts/verify-web-tab-bridge.mjs',
     requirements: '.planning/workstreams/orca/REQUIREMENTS.md',
     extensions: 'theia/extensions',
+    browserPane: 'orca/src/renderer/src/components/browser-pane',
 };
+
+const internal = (reason) => ({ internal: reason });
+/**
+ * Each user-facing tool source of Orca's browser (clause g) classified onto the U-rows of the spike table, or internal
+ * with a reason. The keys are compared with the derived set as set equality; a new upstream module is red until it is
+ * added here.
+ */
+export const ORCA_TOOL_SOURCES = Object.freeze({
+    'agent-cursor/': ['U-09'],
+    'annotate/': ['U-06', 'U-07', 'U-08'],
+    'describe-page/': internal('page description helpers (types, URL display, favicon, annotation geometry); no control of its own'),
+    'devtools-dock/': ['U-05'],
+    'history/': ['U-11'],
+    'host-guest/': ['U-10'],
+    'navigate/': ['U-02', 'U-13'],
+    'new-tab/': ['U-12'],
+    'stream-remote/': ['U-29'],
+    'workspace-doc/': ['U-26'],
+    'BrowserPane.tsx': internal('the pane container that composes the chrome and the page'),
+    'ClientHostedBrowserPagePane.tsx': internal('the client-hosted page container of the chrome and the page'),
+    'ReopenBrowserPageOnServerButton.tsx': ['U-29'],
+    'browser-page-prompts.tsx': ['U-15'],
+    'client-hosted-browser-host-row-pane.tsx': internal('the client-hosted host row container'),
+    'client-hosted-browser-load-failure.tsx': ['U-16'],
+    'client-hosted-browser-unavailable-notice.tsx': ['U-29'],
+    'assemble-chrome/BrowserAddressBar.tsx': ['U-01'],
+    'assemble-chrome/BrowserAddressBarSuggestionList.tsx': ['U-01'],
+    'assemble-chrome/BrowserFind.tsx': ['U-03'],
+    'assemble-chrome/BrowserImportHintButton.tsx': ['U-20'],
+    'assemble-chrome/BrowserMobileDriverOverlay.tsx': ['U-28'],
+    'assemble-chrome/BrowserPaneOverlayLayer.tsx': internal('the overlay layer that positions the page views'),
+    'assemble-chrome/BrowserToolbarMenu.tsx': ['U-04', 'U-19', 'U-20'],
+    'assemble-chrome/DeferredBrowserContent.tsx': internal('deferred mounting of the page content'),
+    'assemble-chrome/browser-chrome-element-tool-buttons.tsx': ['U-06', 'U-08'],
+    'assemble-chrome/browser-chrome-folded-tools.tsx': ['U-06', 'U-08'],
+    'assemble-chrome/browser-chrome-toolbar.tsx': ['U-06', 'U-08'],
+    'assemble-chrome/browser-egress-indicator.tsx': ['U-25'],
+    'assemble-chrome/browser-extension-action-menu.tsx': ['U-21'],
+    'assemble-chrome/browser-extension-toolbar.tsx': ['U-21'],
+    'assemble-chrome/browser-link-status-bubble.tsx': ['U-23'],
+    'assemble-chrome/browser-load-progress.tsx': ['U-02'],
+    'assemble-chrome/browser-navigation-control-row.tsx': ['U-02'],
+    'assemble-chrome/browser-page-chrome-banners.tsx': ['U-07'],
+    'assemble-chrome/browser-page-chrome-header.tsx': internal('the chrome header container (toolbar, download list, banners)'),
+    'assemble-chrome/browser-page-context-menu-items.tsx': ['U-18', 'U-27'],
+    'assemble-chrome/browser-page-context-menu.tsx': ['U-18'],
+    'assemble-chrome/browser-page-extension-menu-items.tsx': ['U-21'],
+    'assemble-chrome/browser-page-feedback-badge.tsx': ['U-06'],
+    'assemble-chrome/browser-page-pane.tsx': internal('the page pane container'),
+    'assemble-chrome/browser-page-toolbar.tsx': internal('the toolbar container that composes the tool modules'),
+    'assemble-chrome/browser-page-viewport-overlays.tsx': internal('the viewport overlay container'),
+    'assemble-chrome/browser-reload-control.tsx': ['U-02'],
+    'assemble-chrome/browser-toolbar-menu-dropdown.tsx': ['U-20', 'U-22'],
+    'assemble-chrome/browser-toolbar-page-display-items.tsx': ['U-04'],
+    'assemble-chrome/browser-toolbar-profile-dialogs.tsx': ['U-19'],
+    'assemble-chrome/browser-workspace-pane.tsx': internal('the workspace pane container'),
+    'assemble-chrome/managed-browser-profile-hold.tsx': ['U-19'],
+    'assemble-chrome/ssh-routed-browser-page-gate.tsx': ['U-24'],
+});
+
+const NOT_TOOL_SOURCE = /\.(test|spec)\.tsx$/;
+
+/** Clause g's derived set from a list of browser-pane entries: { name, dir } at the top and under assemble-chrome. */
+export function toolSources(top, chrome) {
+    const out = [];
+    for (const e of top) {
+        if (e.dir && e.name !== 'assemble-chrome') out.push(`${e.name}/`);
+        else if (!e.dir && /\.tsx$/.test(e.name) && !NOT_TOOL_SOURCE.test(e.name)) out.push(e.name);
+    }
+    for (const e of chrome) if (!e.dir && /\.tsx$/.test(e.name) && !NOT_TOOL_SOURCE.test(e.name)) out.push(`assemble-chrome/${e.name}`);
+    return out.sort();
+}
+
+/** Clause g's verdict: the derived sources against the classification and the U-rows. */
+export function sourceFailures(derived, classified, rows) {
+    if (!derived.length) return ['broken instrument: no Orca browser tool source was derived under the pinned browser-pane directory'];
+    const fails = [];
+    const keys = Object.keys(classified);
+    for (const d of derived) if (!keys.includes(d)) fails.push(`unclassified Orca browser source: ${d} is at the pin and not in ORCA_TOOL_SOURCES (map it to its U-rows, or to internal with a reason)`);
+    for (const k of keys) if (!derived.includes(k)) fails.push(`stale tool source: ${k} is in ORCA_TOOL_SOURCES and not at the pin`);
+    for (const [k, v] of Object.entries(classified)) {
+        if (Array.isArray(v)) {
+            if (!v.length) fails.push(`tool source ${k} names no U-row`);
+            for (const id of v) if (!rows.includes(id)) fails.push(`tool source ${k} names ${id}, which is not a U-row of the spike table`);
+        } else if (typeof v?.internal !== 'string' || !v.internal.trim()) fails.push(`tool source ${k} is neither U-rows nor internal with a reason`);
+    }
+    return fails;
+}
+
+/** The browser-pane entries at the pin, or null when orca/src is absent. */
+export function readToolSources(root = REPO_ROOT) {
+    const dir = join(root, REL.browserPane);
+    if (!existsSync(join(root, 'orca', 'src'))) return null;
+    if (!existsSync(dir)) return [];
+    const list = (d) => readdirSync(d, { withFileTypes: true }).map((e) => ({ name: e.name, dir: e.isDirectory() }));
+    return toolSources(list(dir), existsSync(join(dir, 'assemble-chrome')) ? list(join(dir, 'assemble-chrome')) : []);
+}
 export const SHAPES = ['command', 'render', 'webTabKind', 'skip', 'deferred'];
 
 /** theia/node_modules/typescript, or undefined when it is not installed. */
@@ -210,6 +320,25 @@ const PLANTS = [
     ['stale-map-entry', (f) => ({ ...f, readme: f.readme.replace('| U-05 | Profiles | skip | x |\n', '') }), 'stale map entry: U-05'],
 ];
 
+const FIX_SOURCES = {
+    top: [{ name: 'annotate', dir: true }, { name: 'assemble-chrome', dir: true }, { name: 'BrowserPane.tsx', dir: false }, { name: 'BrowserPane.test.tsx', dir: false }, { name: 'helpers.ts', dir: false }],
+    chrome: [{ name: 'BrowserFind.tsx', dir: false }, { name: 'BrowserFind.test.tsx', dir: false }],
+    classified: { 'annotate/': ['U-04'], 'BrowserPane.tsx': { internal: 'the container' }, 'assemble-chrome/BrowserFind.tsx': ['U-01'] },
+};
+
+const SOURCE_PLANTS = [
+    ['new-tool-module-at-re-pin', (f) => ({ ...f, chrome: [...f.chrome, { name: 'BrowserRecordPage.tsx', dir: false }] }), 'unclassified Orca browser source: assemble-chrome/BrowserRecordPage.tsx'],
+    ['new-tool-directory-at-re-pin', (f) => ({ ...f, top: [...f.top, { name: 'record', dir: true }] }), 'unclassified Orca browser source: record/'],
+    ['tool-module-gone', (f) => ({ ...f, chrome: [] }), 'stale tool source: assemble-chrome/BrowserFind.tsx'],
+    ['source-names-unknown-row', (f) => ({ ...f, classified: { ...f.classified, 'annotate/': ['U-99'] } }), 'names U-99, which is not a U-row'],
+    ['internal-without-reason', (f) => ({ ...f, classified: { ...f.classified, 'BrowserPane.tsx': { internal: ' ' } } }), 'neither U-rows nor internal with a reason'],
+    ['nothing-derived', (f) => ({ ...f, top: [], chrome: [] }), 'broken instrument: no Orca browser tool source'],
+];
+
+function judgeSources(f) {
+    return sourceFailures(toolSources(f.top, f.chrome), f.classified, parseURows(FIX.readme));
+}
+
 function judgeFixture(ts, f) {
     return judge({
         rows: parseURows(f.readme), tools: loadTools(ts, f.tools), commands: registeredCommands([f.commands]),
@@ -219,8 +348,10 @@ function judgeFixture(ts, f) {
 
 export function runSelfTest() {
     const ts = loadTypescript();
-    if (!ts) { console.log(`${NAME} self-test: SKIP -- theia/node_modules/typescript is not installed`); return 0; }
+    if (!ts) { console.log(skipLine(`${NAME} self-test`, 'theia/node_modules/typescript is not installed. Next step: run the audited yarn install in theia/')); return SKIP_EXIT; }
     const control = judgeFixture(ts, FIX);
+    const sourceControl = judgeSources(FIX_SOURCES);
+    if (sourceControl.length) { console.error(`${NAME} self-test: FAIL -- the tool-source control is not green: ${sourceControl.join(' | ')}`); return 1; }
     if (control.fails.length) { console.error(`${NAME} self-test: FAIL -- control is not green: ${control.fails.join(' | ')}`); return 1; }
     console.log(`${NAME} self-test: control green -- 5 fixture rows, one of each shape`);
     let failures = 0;
@@ -228,19 +359,28 @@ export function runSelfTest() {
         const r = judgeFixture(ts, plant(FIX));
         if (!r.fails.some((s) => s.includes(naming))) { console.error(`  FAIL ${name} -> ${r.fails.join(' | ') || 'green'} (expected '${naming}')`); failures++; } else console.log(`  ok ${name} -> red, naming '${naming}'`);
     }
+    for (const [name, plant, naming] of SOURCE_PLANTS) {
+        const r = judgeSources(plant(FIX_SOURCES));
+        if (!r.some((x) => x.includes(naming))) { console.error(`  FAIL ${name} -> ${r.join(' | ') || 'green'} (expected '${naming}')`); failures++; } else console.log(`  ok ${name} -> red, naming '${naming}'`);
+    }
     if (failures) { console.error(`${NAME} self-test: FAIL -- ${failures} plant(s) did not go red naming the drift`); return 1; }
-    console.log(`${NAME} self-test: PASS -- ${PLANTS.length} planted faults each went red naming the drift`);
+    console.log(`${NAME} self-test: PASS -- ${PLANTS.length + SOURCE_PLANTS.length} planted faults each went red naming the drift`);
     return 0;
 }
 
 export function main() {
     const ts = loadTypescript();
-    if (!ts) { console.log(`${NAME}: SKIP -- theia/node_modules/typescript is not installed`); return 0; }
+    if (!ts) { console.log(skipLine(NAME, 'theia/node_modules/typescript is not installed. Next step: run the audited yarn install in theia/')); return SKIP_EXIT; }
     const g = gather(ts);
     const { fails, counts } = judge(g);
-    if (fails.length) { for (const f of fails) console.error(`${NAME}: FAIL -- ${f}`); return 1; }
-    console.log(`${NAME}: PASS -- ${g.rows.length} U-rows equal the map's ${Object.keys(g.tools).length} entries: ${counts.contributions} existing contributions, ${counts.mark} mark, ${counts.skips} skips, ${counts.deferrals} deferrals; ${g.commands.size} registered command ids over ${g.files} extension sources, ${g.kinds.size} classified kinds, v2 ids ${[...g.v2].join(', ')}`);
-    return 0;
+    const sources = readToolSources();
+    const skips = [];
+    if (sources === null) skips.push('no fetched Orca tree (orca/src absent), so the pinned tool sources were not compared with ORCA_TOOL_SOURCES. Next step: bash scripts/fetch-orca.sh');
+    else fails.push(...sourceFailures(sources, ORCA_TOOL_SOURCES, g.rows));
+    for (const f of fails) console.error(`${NAME}: FAIL -- ${f}`);
+    const code = verdictExit(NAME, fails, skips);
+    if (code === 0) console.log(`${NAME}: PASS -- ${g.rows.length} U-rows equal the map's ${Object.keys(g.tools).length} entries: ${counts.contributions} existing contributions, ${counts.mark} mark, ${counts.skips} skips, ${counts.deferrals} deferrals; ${g.commands.size} registered command ids over ${g.files} extension sources, ${g.kinds.size} classified kinds, v2 ids ${[...g.v2].join(', ')}; the ${sources.length} tool sources at the pin equal ORCA_TOOL_SOURCES, each on U-rows or internal`);
+    return code;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
