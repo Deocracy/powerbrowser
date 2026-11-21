@@ -70,6 +70,8 @@ concurrency:
 
 jobs:
   build-linux:
+    # ci-supply-chain-02 (D-26): Orca's build code runs on the hosted linux-orca job, never on legion's persistent host.
+    needs: linux-orca
     runs-on: [self-hosted, powerbrowser-release]
     timeout-minutes: 240
     permissions:
@@ -170,15 +172,38 @@ jobs:
         if: steps.key_gate.outputs.build == 'true'
         run: nix develop .#theia --command bash -c 'set -euo pipefail; cd theia; yarn install --ignore-scripts --frozen-lockfile; (cd node_modules/drivelist && node-gyp rebuild); yarn build'
 
-      # P68-02: the dev procedure, once: fetch-orca.sh verifies orca/ at the pinned tag and commit, build-orca.sh
-      # applies the overlay, builds orcad and the web client with scripts off and de-slots. package-linux.sh stages
-      # package.json, out/orcad and out/web as <GreD>/orca; node-pty is built here, on the Linux target itself (P68-05).
-      - name: Build Orca from source at the pin (orcad, web client)
+      # ci-supply-chain-02 (D-26): legion is a persistent self-hosted runner, and Orca's build runs code from a pin
+      # that moves weekly, so it no longer runs here. linux-orca builds it on a GitHub-hosted ubuntu runner with the
+      # same nix develop .#orca toolchain (node-pty is still built on a Linux x86_64 target, P68-05), and this job
+      # takes the result as data: the artifact (tree.tar, modes kept, plus BUILD_ROOT) is admitted against the
+      # SHA256SUMS digest linux-orca recorded as its job output, the tree inside against its own SHA256SUMS, and its
+      # hosted build root is purged. fetch-orca.sh still verifies orca/ at the pin, for the source orca-packaged-tree
+      # reads; package-linux.sh stages package.json, out/orcad and out/web from orca/ as <GreD>/orca.
+      - name: Download the hosted Linux Orca build (data, admitted by its digest before anything reads it)
         if: steps.key_gate.outputs.build == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: linux-orca
+          path: linux-orca-artifact
+
+      - name: Admit the hosted Linux Orca build, then place it in the pinned orca/ checkout
+        if: steps.key_gate.outputs.build == 'true'
+        env:
+          LINUX_ORCA_SUMS_SHA256: ${{ needs.linux-orca.outputs.sums_sha256 }}
         run: |
           set -euo pipefail
+          bash powerbrowser/packaging/check-win-sidecar.sh check linux-orca-artifact "$LINUX_ORCA_SUMS_SHA256"
+          rm -rf linux-orca
+          mkdir -p linux-orca
+          tar -xpf linux-orca-artifact/tree.tar -C linux-orca
+          bash powerbrowser/packaging/check-win-sidecar.sh check linux-orca "$(sha256sum linux-orca/SHA256SUMS | cut -d' ' -f1)"
+          bash powerbrowser/packaging/check-win-sidecar.sh purge linux-orca linux-orca/package.json linux-orca/out
           bash scripts/fetch-orca.sh
-          nix develop .#orca --command bash scripts/build-orca.sh
+          rm -rf orca/out
+          mkdir -p orca/out/orcad-prebuilds
+          cp -a linux-orca/package.json orca/package.json
+          cp -a linux-orca/out/orcad linux-orca/out/web orca/out/
+          cp linux-orca/orcad-prebuilds-manifest.json orca/out/orcad-prebuilds/manifest.json
 
       - name: Build the release container image
         if: steps.key_gate.outputs.build == 'true'
@@ -294,6 +319,94 @@ jobs:
           path: ${{ runner.temp }}/release-linux-manifest/
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
+
+  # ci-supply-chain-02 (D-26): Orca for Linux, built on a GitHub-hosted ubuntu runner rather than on legion, whose
+  # host persists between jobs. The toolchain is the flake's nix develop .#orca, as it was on legion, so node-pty is
+  # still a Linux x86_64 native built on its own target (P68-05). It stages the hosted Orca artifact layout
+  # (package.json, out/orcad, out/web, the prebuild manifest copy, BUILD_ROOT and SHA256SUMS), admits and purges its
+  # own output, and uploads it as one tar (file modes kept, 68-CR-03) beside BUILD_ROOT; the SHA-256 of that
+  # artifact's SHA256SUMS leaves as the output sums_sha256, which build-linux admits it against. No secret, no
+  # environment, no write token; a read-only token that is not persisted.
+  linux-orca:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    outputs:
+      sums_sha256: ${{ steps.sums.outputs.sha256 }}
+    env:
+      RELEASE_SHA: ${{ inputs.sha }}
+    steps:
+      - name: Refuse any ref but main and any event but a dispatch
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF" = "refs/heads/main" ] \
+            || { echo "::error::the release runs only from a workflow_dispatch on refs/heads/main (event $GITHUB_EVENT_NAME, ref $GITHUB_REF)" >&2; exit 1; }
+
+      - name: Require a full 40-hex commit SHA
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a full 40-character lowercase commit SHA" >&2; exit 1; }
+
+      - name: Check out the requested commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+          df -h
+
+      # Pinned by SHA, the same action and SHA rebase-orca.yml uses.
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+
+      - name: Write the upstream pins fragment through the generator
+        run: |
+          set -euo pipefail
+          mkdir -p generated
+          nix develop .#orca --command node --input-type=module -e "import { resolveConfig, emitUpstreamPins } from './scripts/generate.mjs'; import { writeFileSync } from 'node:fs'; const { config } = resolveConfig('./configuration.toml'); writeFileSync('generated/upstream-pins.env', emitUpstreamPins(config, 'release'));"
+
+      - name: Build Orca from source at the pin (orcad, web client)
+        run: |
+          set -euo pipefail
+          bash scripts/fetch-orca.sh
+          nix develop .#orca --command bash scripts/build-orca.sh
+
+      - name: Stage the Orca tree in the hosted artifact layout, admit and purge it, then archive it with its modes
+        id: sums
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/linux-orca"
+          ART="$RUNNER_TEMP/linux-orca-artifact"
+          rm -rf "$OUT" "$ART"
+          mkdir -p "$OUT/out" "$ART"
+          test -f orca/out/orcad/orcad.js || { echo "::error::orca/out/orcad/orcad.js is absent after build-orca.sh; nothing is staged" >&2; exit 1; }
+          test -f orca/out/orcad-prebuilds/manifest.json || { echo "::error::orca/out/orcad-prebuilds/manifest.json is absent after build-orca.sh; nothing is staged" >&2; exit 1; }
+          cp -a orca/package.json "$OUT/package.json"
+          cp -a orca/out/orcad orca/out/web "$OUT/out/"
+          cp orca/out/orcad-prebuilds/manifest.json "$OUT/orcad-prebuilds-manifest.json"
+          printf '%s\n' "$GITHUB_WORKSPACE" > "$OUT/BUILD_ROOT"
+          (cd "$OUT" && find . -type f ! -path ./SHA256SUMS -print | sed 's|^\./||' | LC_ALL=C sort | xargs -d '\n' sha256sum > SHA256SUMS)
+          bash powerbrowser/packaging/check-win-sidecar.sh check "$OUT" "$(sha256sum "$OUT/SHA256SUMS" | cut -d' ' -f1)"
+          bash powerbrowser/packaging/check-win-sidecar.sh purge "$OUT" "$OUT/package.json" "$OUT/out"
+          tar -cf "$ART/tree.tar" -C "$OUT" .
+          cp "$OUT/BUILD_ROOT" "$ART/BUILD_ROOT"
+          (cd "$ART" && sha256sum BUILD_ROOT tree.tar > SHA256SUMS)
+          SUMS="$(sha256sum "$ART/SHA256SUMS" | cut -d' ' -f1)"
+          echo "sha256=$SUMS" >> "$GITHUB_OUTPUT"
+          echo "linux-orca SHA256SUMS sha256 $SUMS"
+
+      - name: Upload the Linux Orca build (data for build-linux, admitted there by the digest output)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-orca
+          path: ${{ runner.temp }}/linux-orca-artifact/
+          if-no-files-found: error
+          retention-days: 1
           overwrite: true
 
   # Phase 54 (PKG-13, G-54a): the Windows sidecar, built on a GitHub-hosted windows-latest runner so that every
