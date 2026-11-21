@@ -1091,7 +1091,7 @@ function runChecks(root, overrides = {}) {
         const runOf = st => String(st?.run ?? '');
         const mintsToken = job => (job?.steps ?? []).some(st => String(st?.uses ?? '').split('@')[0] === APP_TOKEN.replace(/@$/, ''));
         // A job that mints a token and names Orca: the Orca script it runs or an orca-* output of another job it reads.
-        const NAMES_ORCA = /\b(?:rebase-orca|fetch-orca|build-orca)\.sh\b|\bneeds\.(?:detect|rebase)-orca\b|\borca-(?:tag|commit)\b/;
+        const NAMES_ORCA = /\b(?:rebase-orca|fetch-orca|build-orca)\.sh\b|\bneeds\.(?:detect|rebase)-orca\b|\b(?:orca)-(?:tag|commit)\b/;
         const ORCA_CODE = /\b(?:build-orca\.sh|pnpm|corepack|tsc)\b|scripts\/rebase-orca\.sh(?![^\n]*--replay-only)/;
         const jobText = job => JSON.stringify(job ?? {});
         const bumpJobs = Object.entries(jobs).filter(([, j]) => mintsToken(j) && NAMES_ORCA.test(jobText(j)));
