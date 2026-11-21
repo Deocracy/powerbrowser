@@ -61,14 +61,18 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { emitTheiaTelemetry, mozillaEndpointPrefs, resolveConfig } from './generate.mjs';
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const SELF = fileURLToPath(import.meta.url);
+const REPO_ROOT = resolve(dirname(SELF), '..');
 const NAME = 'verify-telemetry';
 
 const args = process.argv.slice(2);
 const SELF_TEST = args.includes('--self-test');
+// --root=<dir> runs the main mode over another tree (the self-test's SKIP control uses it).
+const ROOT_ARG = args.find(a => a.startsWith('--root='));
 for (const a of args) {
-    if (a !== '--self-test') {
+    if (a !== '--self-test' && !a.startsWith('--root=')) {
         console.error(`${NAME}: FAIL -- unknown argument '${a}'`);
         process.exit(2);
     }
@@ -267,21 +271,21 @@ async function runAllPinChecks(root) {
     return { failures, skipped };
 }
 
-function runChild(label, cmd, argv, env) {
-    const child = spawnSync(cmd, argv, { cwd: REPO_ROOT, encoding: 'utf8', env: env ?? process.env });
+function runChild(label, cmd, argv, env, root = REPO_ROOT) {
+    const child = spawnSync(cmd, argv, { cwd: root, encoding: 'utf8', env: env ?? process.env });
     const output = `${child.stdout ?? ''}${child.stderr ?? ''}`;
     return { status: child.status ?? 1, output, label };
 }
 
-function runBuildChecks() {
+function runBuildChecks(root) {
     const failures = [];
     const skipped = [];
 
     // --- 6. the extension compiles ------------------------------------------
-    if (!existsSync(join(REPO_ROOT, TSC_REL))) {
+    if (!existsSync(join(root, TSC_REL))) {
         skipped.push(`the theia install is absent (${TSC_REL} not found) -- tsc proof unchecked; run the audited theia install, then re-run this check.`);
     } else {
-        const tsc = runChild('tsc', process.execPath, [TSC_REL, '-b', EXT_REL]);
+        const tsc = runChild('tsc', process.execPath, [TSC_REL, '-b', EXT_REL], undefined, root);
         if (tsc.status !== 0) {
             failures.push(`${EXT_REL} does not compile cleanly:\n${tsc.output.split('\n').filter(l => l.trim() !== '').slice(0, 20).join('\n')}`);
         }
@@ -290,7 +294,7 @@ function runBuildChecks() {
     // --- 7. the unit suite ----------------------------------------------------
     // Dependency-free: the sender imports nothing, so this runs on a bare
     // node with no install and no build.
-    const suite = runChild('suite', process.execPath, [TEST_REL]);
+    const suite = runChild('suite', process.execPath, [TEST_REL], undefined, root);
     if (suite.status !== 0) {
         failures.push(`the telemetry unit suite is red:\n${suite.output.split('\n').filter(l => l.trim() !== '' && !l.includes('MODULE_TYPELESS_PACKAGE_JSON') && !l.includes('trace-warnings')).join('\n')}`);
     }
@@ -298,17 +302,19 @@ function runBuildChecks() {
     return { failures, skipped };
 }
 
+// A step skipped for an absent input makes the run exit 77 with one SKIP line, printed last (SKIP-PROTOCOL.md).
 async function main() {
-    const { failures: pinFailures, skipped: pinSkipped } = await runAllPinChecks(REPO_ROOT);
-    const { failures: buildFailures, skipped: buildSkipped } = runBuildChecks();
-    for (const s of [...pinSkipped, ...buildSkipped]) console.log(`${NAME}: SKIP -- ${s}`);
+    const root = ROOT_ARG ? resolve(ROOT_ARG.slice('--root='.length)) : REPO_ROOT;
+    const { failures: pinFailures, skipped: pinSkipped } = await runAllPinChecks(root);
+    const { failures: buildFailures, skipped: buildSkipped } = runBuildChecks(root);
     const failures = [...pinFailures, ...buildFailures];
     if (failures.length > 0) {
         console.error(`${NAME}: FAIL -- ${failures.length} problem(s)`);
         for (const f of failures) console.error(`  - ${f}`);
-        process.exit(1);
     }
-    console.log(`${NAME}: PASS -- telemetry fragment, block, admitted set, description, compile and suite all green`);
+    const code = verdictExit(NAME, failures, [...pinSkipped, ...buildSkipped]);
+    if (code === 0) console.log(`${NAME}: PASS -- telemetry fragment, block, admitted set, description, compile and suite all green`);
+    return code;
 }
 
 function copyInto(root, rel) {
@@ -473,6 +479,12 @@ async function selfTest() {
         failed += 1;
     };
 
+    // Plants 2 to 5 copy the generated fragment from this tree; without it they cannot run (SKIP-PROTOCOL.md rule 4).
+    if (!existsSync(join(REPO_ROOT, FRAGMENT_REL))) {
+        console.log(skipLine(`${NAME} --self-test`, `${FRAGMENT_REL} is absent, so the plants did not run. Next step: run ${RERUN_GENERATE}, then re-run this self-test`));
+        return SKIP_EXIT;
+    }
+
     // Green control first: the unmutated tree proves nothing if red.
     const control = await runAllPinChecks(REPO_ROOT);
     if (control.failures.length > 0) {
@@ -635,13 +647,38 @@ async function selfTest() {
         }
     }
 
-    if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- 10 planted faults, the error-report case and the usage-path case all behaved as pinned`);
+    // SKIP control (SKIP-PROTOCOL.md rule 2): the main mode, run as a child with its output captured, over a
+    // fixture holding every source the pin, source and suite steps read but no generated fragment and no theia
+    // install. Those steps run green, the fragment and tsc steps do not run, so it exits 77 with the SKIP line
+    // last and no PASS line.
+    {
+        const dir = mkdtempSync(join(tmpdir(), 'telemetry-selftest-'));
+        try {
+            for (const rel of [MANIFEST_REL, APP_PKG_REL, ENRICH_REL, PREFS_REL, REPORT_REL, SENDER_REL, TEST_REL, 'scripts/crash-collector.mjs']) copyInto(dir, rel);
+            const r = spawnSync(process.execPath, [SELF, `--root=${dir}`], { encoding: 'utf8' });
+            const lines = (r.stdout ?? '').split('\n').filter(l => l.trim() !== '');
+            const last = lines[lines.length - 1] ?? '';
+            if (r.status !== SKIP_EXIT || !last.startsWith(`${NAME}: SKIP -- `) || !last.includes(FRAGMENT_REL) || !last.includes(TSC_REL)
+                || lines.some(l => l.includes(`${NAME}: PASS`)) || /: SKIP/.test(r.stderr ?? '')) {
+                complain('control: no fragment, no theia install', `did not exit 77 with one SKIP line last naming the fragment and tsc and no PASS line (status ${r.status}, last line ${JSON.stringify(last)}, stderr ${JSON.stringify((r.stderr ?? '').slice(0, 400))})`);
+            } else {
+                console.log('  ok  control: no fragment, no theia install -> exit 77, one SKIP line last, no PASS line');
+            }
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    }
+
+    if (failed > 0) {
+        console.error(`${NAME}: --self-test FAIL -- ${failed} case(s) did not behave as required`);
+        return 1;
+    }
+    console.log(`${NAME}: --self-test PASS -- 10 planted faults, the error-report case and the usage-path case all behaved as pinned, and a tree without the fragment or tsc exits 77`);
     return 0;
 }
 
 if (SELF_TEST) {
     process.exit(await selfTest());
-} else if (args.length === 0) {
-    await main();
+} else {
+    process.exit(await main());
 }

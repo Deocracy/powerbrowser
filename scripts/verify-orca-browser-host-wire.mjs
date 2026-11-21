@@ -62,16 +62,21 @@
 // --self-test plants each pre-fix fault in an in-memory copy and requires its clause red, naming the drift.
 // Tier: quick. Hermetic (no network, no display, no browser). One named SKIP when orca/src, orca/node_modules/zod or
 // theia/node_modules/typescript is absent.
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import * as nodeCrypto from 'node:crypto';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import { setMaxListeners } from 'node:events';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const NAME = 'orca-browser-host-wire';
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+// --root=<dir> runs the main mode over another tree (the self-test's SKIP control uses it).
+const ROOT_ARG = process.argv.slice(2).find(a => a.startsWith('--root='));
+const REPO_ROOT = ROOT_ARG ? resolve(ROOT_ARG.slice('--root='.length)) : resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const OVERLAY = 'orca-overlay/files/';
 const REL = {
     frontend: 'theia/extensions/orca-browser/src/browser/orca-browser-frontend-module.ts',
@@ -1089,9 +1094,9 @@ async function evaluate(files, only) {
 }
 
 function skipReason() {
-    if (!existsSync(join(REPO_ROOT, 'orca', 'src'))) return 'no fetched Orca tree (orca/src absent); run scripts/fetch-orca.sh';
-    if (!loadZod()) return 'orca/node_modules/zod is not installed';
-    if (!loadTypescript()) return 'theia/node_modules/typescript is not installed';
+    if (!existsSync(join(REPO_ROOT, 'orca', 'src'))) return 'no fetched Orca tree (orca/src absent). Next step: bash scripts/fetch-orca.sh';
+    if (!loadZod()) return 'orca/node_modules/zod is not installed. Next step: bash scripts/build-orca.sh';
+    if (!loadTypescript()) return 'theia/node_modules/typescript is not installed. Next step: run the audited Theia install (docs/BUILD.md "Theia half")';
     return null;
 }
 
@@ -1197,7 +1202,8 @@ async function main() {
     const selfTest = process.argv.includes('--self-test');
     const only = process.argv.find(a => a.startsWith('--only='))?.slice('--only='.length);
     const skip = skipReason();
-    if (skip) { console.log(`${NAME}${selfTest ? ' self-test' : ''}: SKIP -- ${skip}`); return 0; }
+    // An absent input: nothing ran, so exit 77 with the SKIP line (SKIP-PROTOCOL.md).
+    if (skip) { console.log(skipLine(`${NAME}${selfTest ? ' self-test' : ''}`, skip)); return SKIP_EXIT; }
     if (!selfTest) {
         const { fails, methods } = await evaluate(readAll(), only);
         if (fails.length) {
@@ -1209,6 +1215,21 @@ async function main() {
         return 0;
     }
     let failed = 0;
+    // SKIP control (SKIP-PROTOCOL.md): the main mode, run as a child with its output captured, over a tree with no
+    // fetched Orca must exit 77 with the SKIP line last and no PASS line.
+    {
+        const empty = mkdtempSync(join(tmpdir(), 'orca-browser-host-wire-root-'));
+        try {
+            const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url), `--root=${empty}`], { encoding: 'utf8' });
+            const lines = (r.stdout ?? '').split('\n').filter(l => l.trim() !== '');
+            const last = lines[lines.length - 1] ?? '';
+            if (r.status !== SKIP_EXIT || !last.startsWith(`${NAME}: SKIP -- no fetched Orca tree`)
+                || lines.some(l => l.includes(`${NAME}: PASS`)) || /: SKIP/.test(r.stderr ?? '')) {
+                console.error(`  FAIL control: a tree without orca/ did not exit 77 with the SKIP line last and no PASS line (status ${r.status}, last line ${JSON.stringify(last)})`);
+                failed += 1;
+            } else console.log('  ok control: a tree without orca/ -> exit 77, the SKIP line last, no PASS line');
+        } finally { rmSync(empty, { recursive: true, force: true }); }
+    }
     const control = await evaluate(readAll());
     if (control.fails.length) {
         console.error(`${NAME} self-test: FAIL -- the unmodified tree is already red, so the plants prove nothing:`);
@@ -1230,7 +1251,7 @@ async function main() {
         if (named.length) console.log(`  red as required: ${plant.name} -> ${named[0].slice(0, 160)}`);
         else { console.error(`  FAIL ${plant.name}: clause ${plant.clause} stayed green${fails.length ? ` (other reds: ${fails.join(' | ').slice(0, 200)})` : ''}`); failed += 1; }
     }
-    if (failed) { console.error(`${NAME} self-test: FAIL -- ${failed} of ${PLANTS.length} plants`); return 1; }
+    if (failed) { console.error(`${NAME} self-test: FAIL -- ${failed} case(s) across the control and ${PLANTS.length} plants`); return 1; }
     console.log(`${NAME} self-test: PASS -- ${PLANTS.length} plants each red on their clause`);
     return 0;
 }

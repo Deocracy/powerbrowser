@@ -44,10 +44,15 @@
 //   node scripts/verify-orca-pane-hosting.mjs
 //   node scripts/verify-orca-pane-hosting.mjs --self-test
 
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
 import { REPO_ROOT, StubEmitter, flush, loadTs, typescript } from './lib/ts-unit-loader.mjs';
+
+const SELF = fileURLToPath(import.meta.url);
 
 const NAME = 'orca-pane-hosting';
 const PANES = 'theia/extensions/orca-panes/src';
@@ -443,9 +448,10 @@ function fixtureOffer(endpointPort, urlPort) {
     return `http://127.0.0.1:${urlPort}/web-index.html#pairing=${encodeURIComponent(`orca://pair?code=${code}`)}`;
 }
 
-async function clauseHandOff(sources, fail, passes) {
+async function clauseHandOff(sources, fail, passes, skips) {
+    // Not run off POSIX: a skip (SKIP-PROTOCOL.md rule 2), never a pass.
     if (process.platform !== 'linux' && process.platform !== 'darwin') {
-        passes.push('SKIP handoff-* (POSIX folder and file modes)');
+        skips.push('the handoff-* clauses did not run: they read POSIX folder and file modes. Next step: run this check on Linux or macOS');
         return;
     }
     const root = mkdtempSync(join(tmpdir(), 'pb-pane-hosting-'));
@@ -621,13 +627,14 @@ const CLAUSES = [
 export async function check(sources = {}) {
     const failures = [];
     const passes = [];
+    const skips = [];
     const fail = (clause, message) => failures.push({ clause, message });
     const uninstall = installWindow();
     try {
         await quiet(async () => {
             for (const clause of CLAUSES) {
                 try {
-                    await clause(sources, fail, passes);
+                    await clause(sources, fail, passes, skips);
                 } catch (err) {
                     fail(clause.name, `threw: ${err?.message ?? err}`);
                 }
@@ -636,7 +643,7 @@ export async function check(sources = {}) {
     } finally {
         uninstall();
     }
-    return { failures, passes };
+    return { failures, passes, skips };
 }
 
 /** Each plant restores the pre-fix behaviour of one item, in memory; `naming` is the clause it must turn red. */
@@ -743,11 +750,43 @@ function planted(plant) {
     return { sources: { [plant.file]: text } };
 }
 
+/**
+ * SKIP control (SKIP-PROTOCOL.md): the main mode, run as a child with its output captured, from a copy of this script
+ * and its two helpers in a tree with no theia/ (the loader resolves typescript from the tree it sits in), must exit 77
+ * with the SKIP line last and no PASS line. Returns a problem, or null.
+ */
+function skipControl() {
+    const root = mkdtempSync(join(tmpdir(), `${NAME}-root-`));
+    try {
+        mkdirSync(join(root, 'scripts', 'lib'), { recursive: true });
+        copyFileSync(SELF, join(root, 'scripts', 'verify-orca-pane-hosting.mjs'));
+        for (const lib of ['ts-unit-loader.mjs', 'skip-verdict.mjs']) copyFileSync(join(REPO_ROOT, 'scripts', 'lib', lib), join(root, 'scripts', 'lib', lib));
+        const r = spawnSync(process.execPath, [join(root, 'scripts', 'verify-orca-pane-hosting.mjs')], { encoding: 'utf8' });
+        const lines = (r.stdout ?? '').split('\n').filter(l => l.trim() !== '');
+        const last = lines[lines.length - 1] ?? '';
+        if (r.status !== SKIP_EXIT || !last.startsWith(`${NAME}: SKIP -- theia/node_modules/typescript is not installed`)
+            || lines.some(l => l.includes(`${NAME}: PASS`)) || /: SKIP/.test(r.stderr ?? '')) {
+            return `control: a tree without typescript did not exit 77 with the SKIP line last and no PASS line (status ${r.status}, last line ${JSON.stringify(last)}, stderr ${JSON.stringify((r.stderr ?? '').slice(0, 300))})`;
+        }
+        console.log(`${NAME}: self-test ok -- control: a tree without typescript exits 77 with the SKIP line last`);
+        return null;
+    } finally {
+        rmSync(root, { recursive: true, force: true });
+    }
+}
+
 async function selfTest() {
     const problems = [];
+    const skipProblem = skipControl();
+    if (skipProblem) problems.push(skipProblem);
     const control = await check();
     if (control.failures.length) {
         problems.push(`control run is red: ${control.failures.map(f => `${f.clause}: ${f.message}`).join('; ')}`);
+    }
+    // Plants on a clause the control skipped cannot run (SKIP-PROTOCOL.md rule 4).
+    if (!problems.length && control.skips.length) {
+        console.log(skipLine(`${NAME} self-test`, `the control did not run every clause, so the plants did not run: ${control.skips.join('; ')}`));
+        process.exit(SKIP_EXIT);
     }
     for (const plant of PLANTS) {
         const { sources, error } = planted(plant);
@@ -770,20 +809,22 @@ async function selfTest() {
 }
 
 async function main() {
+    // No typescript: nothing ran, so exit 77 with the SKIP line (SKIP-PROTOCOL.md); a self-test cannot run its plants.
     if (!typescript()) {
-        console.log(`${NAME}: SKIP -- theia/node_modules/typescript is not installed`);
-        return;
+        const who = process.argv.includes('--self-test') ? `${NAME} self-test` : NAME;
+        console.log(skipLine(who, 'theia/node_modules/typescript is not installed. Next step: run the audited Theia install (docs/BUILD.md "Theia half")'));
+        process.exit(SKIP_EXIT);
     }
     if (process.argv.includes('--self-test')) {
         await selfTest();
         return;
     }
-    const { failures, passes } = await check();
+    const { failures, passes, skips } = await check();
     for (const p of passes) console.log(`${NAME}: ${p}`);
-    if (failures.length) {
-        for (const f of failures) console.log(`${NAME}: FAIL -- ${f.clause}: ${f.message}`);
-        process.exit(1);
-    }
+    for (const f of failures) console.log(`${NAME}: FAIL -- ${f.clause}: ${f.message}`);
+    // FAIL wins; a clause not run makes the run exit 77 with one SKIP line printed last (SKIP-PROTOCOL.md).
+    const code = verdictExit(NAME, failures, skips);
+    if (code !== 0) process.exit(code);
     console.log(`${NAME}: PASS (${CLAUSES.length} clause groups)`);
 }
 

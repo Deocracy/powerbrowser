@@ -48,7 +48,13 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
+
+// --root=<dir> runs the main mode over another tree (the self-test's SKIP control uses it); only as the entry point.
+const ROOT_ARG = process.argv.slice(2).find(a => a.startsWith('--root='));
+const REPO_ROOT = ROOT_ARG && process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+    ? resolve(ROOT_ARG.slice('--root='.length))
+    : resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-git-sides';
 const SELF_REL = 'scripts/verify-orca-git-sides.mjs';
 const TS_DIR = join(REPO_ROOT, 'theia', 'node_modules', 'typescript');
@@ -159,12 +165,13 @@ const quiet = async (fn) => {
 async function check(texts) {
     const fails = [];
     const notes = [];
+    const skips = [];
     const base = realpathSync(mkdtempSync(join(tmpdir(), `${NAME}-`)));
     const savedPath = process.env.PATH;
     try {
         const { protocol, Service, Resource } = load(texts);
-        if (typeof Service !== 'function') { fails.push(`OrcaGitServiceImpl is not exported by ${REL.backend}`); return { fails, notes }; }
-        if (typeof Resource !== 'function') { fails.push(`OrcaGitResource is not exported by ${REL.resource}`); return { fails, notes }; }
+        if (typeof Service !== 'function') { fails.push(`OrcaGitServiceImpl is not exported by ${REL.backend}`); return { fails, notes, skips }; }
+        if (typeof Resource !== 'function') { fails.push(`OrcaGitResource is not exported by ${REL.resource}`); return { fails, notes, skips }; }
         const svc = new Service();
         const repo = buildRepo(base);
         const read = (root, rel, rev) => quiet(() => svc.readBlob(root, rel, rev));
@@ -199,7 +206,8 @@ async function check(texts) {
 
         // b. no lazy fetch, no inherited GIT_*.
         const clone = buildPartialClone(base, repo);
-        if (!clone) notes.push('b SKIP (this git cannot make a blob:none clone)');
+        // A clause not run for an absent input (a capable git, a POSIX host) is a skip (SKIP-PROTOCOL.md rule 2).
+        if (!clone) skips.push('b did not run: this git cannot make a blob:none clone. Next step: run this check with a git that supports partial clones (2.19 or newer)');
         else {
             process.env.GIT_DIR = join(base, 'nowhere');
             const lazy = await read(clone.root, 'hist.txt', repo.parent);
@@ -221,7 +229,7 @@ async function check(texts) {
         // listed, so it is a failure, never an absent (empty) side.
         const treeless = join(base, 'treeless');
         const tl = spawnSync('git', ['clone', '-q', '--filter=tree:0', `file://${repo.root}`, treeless], { encoding: 'utf8', env: Object.fromEntries(Object.entries(process.env).filter(([n]) => !/^GIT_/i.test(n))) });
-        if (tl.status !== 0) notes.push('a2 SKIP (this git cannot make a tree:0 clone)');
+        if (tl.status !== 0) skips.push('a2 did not run: this git cannot make a tree:0 clone. Next step: run this check with a git that supports tree:0 filters');
         else {
             for (const [what, rel] of [['a file the commit adds', 'added.txt'], ['a file present at the parent', 'hist.txt']]) {
                 const r = await read(realpathSync(treeless), rel, repo.parent);
@@ -265,7 +273,7 @@ async function check(texts) {
                 if (alive) { fails.push('a timed-out git run left the process it started running (only git itself was killed)'); try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
             }
             if (r !== null) fails.push(`a timed-out HEAD lookup resolved ${JSON.stringify(r)}, not null`);
-        } else notes.push('c SKIP (win32)');
+        } else skips.push('c did not run: the time-bound clause needs a POSIX host. Next step: run this check on Linux or macOS');
 
         // d. argument safety.
         const REFUSED = [
@@ -296,7 +304,7 @@ async function check(texts) {
         delete process.env.GIT_DIR;
         rmSync(base, { recursive: true, force: true });
     }
-    return { fails, notes };
+    return { fails, notes, skips };
 }
 
 // ---------------------------------------------------------------- self-test
@@ -317,6 +325,8 @@ const PLANTS = [
 async function runSelfTest(texts) {
     const control = await check(texts);
     if (control.fails.length) { console.error(`${NAME} self-test: FAIL -- the control is not green: ${control.fails.join(' | ')}`); return 1; }
+    // Plants on a clause the control skipped cannot run (SKIP-PROTOCOL.md rule 4).
+    if (control.skips.length) { console.log(skipLine(`${NAME} self-test`, `the control did not run every clause, so the plants did not run: ${control.skips.join('; ')}`)); return SKIP_EXIT; }
     console.log(`${NAME} self-test: control green (${control.notes.join('; ')})`);
     let failures = 0;
     for (const p of PLANTS) {
@@ -330,6 +340,21 @@ async function runSelfTest(texts) {
     }
     const again = await check(texts);
     if (again.fails.length) { console.error(`  FAIL the control did not re-run green: ${again.fails.join(' | ')}`); failures++; }
+    // SKIP control (SKIP-PROTOCOL.md): the main mode, run as a child with its output captured, over a tree with no
+    // Theia install must exit 77 with the SKIP line last and no PASS line.
+    {
+        const empty = mkdtempSync(join(tmpdir(), `${NAME}-root-`));
+        try {
+            const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url), `--root=${empty}`], { encoding: 'utf8' });
+            const lines = (r.stdout ?? '').split('\n').filter(l => l.trim() !== '');
+            const last = lines[lines.length - 1] ?? '';
+            if (r.status !== SKIP_EXIT || !last.startsWith(`${NAME}: SKIP -- theia/node_modules/typescript is absent`)
+                || lines.some(l => l.includes(`${NAME}: PASS`)) || /: SKIP/.test(r.stderr ?? '')) {
+                console.error(`  FAIL control: a tree without typescript did not exit 77 with the SKIP line last and no PASS line (status ${r.status}, last line ${JSON.stringify(last)})`);
+                failures++;
+            } else console.log('  ok control: a tree without typescript -> exit 77, the SKIP line last, no PASS line');
+        } finally { rmSync(empty, { recursive: true, force: true }); }
+    }
     if (failures) { console.error(`${NAME} self-test: FAIL -- ${failures} problem(s) across ${PLANTS.length} plants`); return 1; }
     console.log(`${NAME} self-test: PASS -- ${PLANTS.length} planted faults each went red naming the drift; the control re-ran green`);
     return 0;
@@ -342,18 +367,22 @@ const isEntryPoint = (() => {
 })();
 if (isEntryPoint) {
     const args = process.argv.slice(2);
-    if (args.length > 1 || (args.length === 1 && args[0] !== '--self-test')) {
+    if (args.length > 1 || (args.length === 1 && args[0] !== '--self-test' && !args[0].startsWith('--root='))) {
         console.error(`${NAME}: unknown argument ${args[0]} (usage: node ${SELF_REL} [--self-test])`);
         console.error(`Next step: run node ${SELF_REL} for the check or add --self-test for the planted-fault run.`);
         process.exit(2);
     }
-    if (!existsSync(TS_DIR) || !statSync(TS_DIR).isDirectory()) { console.log(`${NAME}: SKIP -- theia/node_modules/typescript is absent; run the audited Theia install (docs/BUILD.md "Theia half")`); process.exit(0); }
-    if (spawnSync('git', ['--version']).status !== 0) { console.log(`${NAME}: SKIP -- git is not on PATH`); process.exit(0); }
+    // An absent input: nothing ran, so exit 77 with the SKIP line (SKIP-PROTOCOL.md); a self-test cannot run its plants.
+    const who = args[0] === '--self-test' ? `${NAME} self-test` : NAME;
+    if (!existsSync(TS_DIR) || !statSync(TS_DIR).isDirectory()) { console.log(skipLine(who, 'theia/node_modules/typescript is absent. Next step: run the audited Theia install (docs/BUILD.md "Theia half")')); process.exit(SKIP_EXIT); }
+    if (spawnSync('git', ['--version']).status !== 0) { console.log(skipLine(who, 'git is not on PATH. Next step: install git, or run this check inside nix develop .#theia')); process.exit(SKIP_EXIT); }
     ts = createRequire(import.meta.url)(TS_DIR);
     const texts = { protocol: source(REL.protocol), backend: source(REL.backend), resource: source(REL.resource) };
     if (args[0] === '--self-test') process.exit(await runSelfTest(texts));
     const r = await check(texts);
-    if (r.fails.length) { for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`); process.exit(1); }
+    for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`);
+    const code = verdictExit(NAME, r.fails, r.skips);
+    if (code !== 0) process.exit(code);
     console.log(`${NAME}: PASS -- added, deleted and untracked sides read as empty sides; present, absent-rev and non-local reads behave; no lazy fetch; the time bound ends git's children; dash and NUL specs refused (${r.notes.join('; ')})`);
     process.exit(0);
 }

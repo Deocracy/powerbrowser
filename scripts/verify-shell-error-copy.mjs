@@ -1760,8 +1760,10 @@ const BUNDLED_COPY_FAULTS = [
 async function runBundledCopySelfTest() {
   const clean = readBundledSources();
   if (!clean) {
-    console.log(`  SKIP  reinstall copy faults -- ${BUNDLED_SRC_REL} is absent`);
-    return true;
+    // Tracked sources the main mode reads (it is red without them), so plants that cannot run are red, never a
+    // pass or a SKIP (SKIP-PROTOCOL.md: a missing tracked input is red).
+    console.error(`verify-shell-error-copy --self-test: FAIL -- the reinstall-copy faults did not run: ${BUNDLED_COPY_REL} or ${BUNDLED_CMD_REL} is missing. Next step: restore them from version control`);
+    return false;
   }
   const baseline = await checkBundledCopy(clean);
   if (baseline.failures.length !== 0) {

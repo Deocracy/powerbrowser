@@ -26,17 +26,21 @@
 //  6. vacuity       an unreadable file, an unparsable file or an absent method is FAIL, never green.
 //
 // Honestly --quick: it reads three tree files and evaluates method source in a vm sandbox with stubs.
-// Its self-test plants each fault in memory and writes nothing. It does not build, open a browser or
+// Its self-test plants each fault in memory; its SKIP control writes one temporary fixture tree (no upstream/) and
+// requires exit 77. Without upstream/ the phase clause does not run and the row exits 77. It does not build, open a browser or
 // display, or reach the network. The live reap (the version flip with the sidecar running at apply
 // time) is the matrix's update cell, not this row.
 
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 
 import { asyncShutdownPhases } from './verify-orca-service.mjs';
+import { SKIP_EXIT, verdictExit } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'sidecar-reap-blocker';
@@ -51,8 +55,12 @@ const API_BASE = API_REL.split('/').pop();
 const ASYNC_SHUTDOWN_REL = 'upstream/toolkit/components/asyncshutdown/AsyncShutdown.sys.mjs';
 
 const args = process.argv.slice(2);
+// --root=<dir> runs the main mode over another tree (the self-test's SKIP control uses it); acorn still comes from
+// this checkout's theia/.
+const ROOT_ARG = args.find(a => a.startsWith('--root='));
+const CHECK_ROOT = ROOT_ARG ? resolve(ROOT_ARG.slice('--root='.length)) : REPO_ROOT;
 for (const a of args) {
-    if (a !== '--self-test') {
+    if (a !== '--self-test' && !a.startsWith('--root=')) {
         console.error(`${NAME}: FAIL -- unknown argument '${a}'`);
         console.error(`  Next step: run: node ${SELF_REL}, or add --self-test to prove the rule discriminates.`);
         process.exit(2);
@@ -235,7 +243,7 @@ async function runChecks(root, overrides = {}) {
         theia: overrides.theia !== undefined ? overrides.theia : readText(root, THEIA_REL),
         catalogue: overrides.catalogue !== undefined ? overrides.catalogue : readText(root, CATALOGUE_REL),
     };
-    // null (upstream/ not fetched): the phase clause alone is skipped, said in the PASS line.
+    // null (upstream/ not fetched): the phase clause alone does not run, so the run is a SKIP (SKIP-PROTOCOL.md rule 2).
     const asyncShutdownText = readText(root, ASYNC_SHUTDOWN_REL);
     const phases = asyncShutdownText === null ? null : asyncShutdownPhases(asyncShutdownText);
     if (phases !== null && phases.size === 0) fail(ASYNC_SHUTDOWN_REL, 'vacuity', 'no AsyncShutdown.<phase> = getPhase(...) line parsed. Next step: re-derive the phase pattern from upstream.');
@@ -367,20 +375,50 @@ async function selfTest() {
             failed += 1;
         }
     }
-    if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- the unmodified blocker is green and ${plants.length} planted faults each went red naming the rule and the value. It writes nothing.`);
+    // SKIP control (SKIP-PROTOCOL.md rule 2): the main mode, run as a child with its output captured, over a tree
+    // with the three tracked inputs and no upstream/. Every clause but the phase clause runs green, so it must exit 77
+    // with the SKIP line last and no PASS line.
+    {
+        const fixture = mkdtempSync(join(tmpdir(), 'sidecar-reap-blocker-root-'));
+        try {
+            for (const [rel, text] of [[API_REL, api], [THEIA_REL, theia], [CATALOGUE_REL, cat]]) {
+                mkdirSync(dirname(join(fixture, rel)), { recursive: true });
+                writeFileSync(join(fixture, rel), text);
+            }
+            const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url), `--root=${fixture}`], { encoding: 'utf8' });
+            const lines = (r.stdout ?? '').split('\n').filter(l => l.trim() !== '');
+            const last = lines[lines.length - 1] ?? '';
+            if (r.status !== SKIP_EXIT || !last.startsWith(`${NAME}: SKIP -- the phase-exists clause did not run`)
+                || lines.some(l => l.includes(`${NAME}: PASS`)) || /: SKIP/.test(r.stderr ?? '')) {
+                console.error(`${NAME}: --self-test FAIL -- control: a tree without upstream/ did not exit 77 with the SKIP line last and no PASS line (status ${r.status}, last line ${JSON.stringify(last)}, stderr ${JSON.stringify((r.stderr ?? '').slice(0, 300))})`);
+                failed += 1;
+            } else {
+                console.log('  ok  control: a tree without upstream/ -> exit 77, the phase-clause SKIP line last, no PASS line');
+            }
+        } finally {
+            rmSync(fixture, { recursive: true, force: true });
+        }
+    }
+    if (failed > 0) {
+        console.error(`${NAME}: --self-test FAIL -- ${failed} case(s) did not behave as required`);
+        return 1;
+    }
+    console.log(`${NAME}: --self-test PASS -- the unmodified blocker is green, ${plants.length} planted faults each went red naming the rule and the value, and a tree without upstream/ exits 77. It writes only a temporary fixture.`);
     return 0;
 }
 
 async function main() {
     if (args.includes('--self-test')) return selfTest();
-    const { failures, line, phases } = await runChecks(REPO_ROOT);
+    const { failures, line, phases } = await runChecks(CHECK_ROOT);
     if (failures.length > 0) {
         console.error(`${NAME}: FAIL -- ${failures.length} problem(s) with the sidecar reap blocker.`);
         failures.forEach(f => console.error(`  ${fmt(f)}`));
-        return 1;
     }
-    console.log(`${NAME}: PASS -- ${REGISTER_FN} registers '${BLOCKER_NAME}' at ${API_REL}:${line} on ${phases === null ? 'an AsyncShutdown phase (SKIP of the phase-exists clause only: upstream/ is not fetched)' : 'an AsyncShutdown phase upstream defines'}, which quit and restart both reach; TheiaService.start() registers it; stopAndReap (evaluated against stubs) waits on the live Subprocess handle for the kill grace plus 500 ms, never waits on a stale one and never rejects; waitForExit and signalBarePid keep their contracts; ${CATALOGUE_REL} cites the registration.`);
+    // FAIL wins; the phase clause not run makes the run exit 77 with one SKIP line printed last (SKIP-PROTOCOL.md).
+    const skips = phases === null ? [`the phase-exists clause did not run: ${ASYNC_SHUTDOWN_REL} is absent (upstream/ is not fetched). Next step: run scripts/fetch-upstream.sh`] : [];
+    const code = verdictExit(NAME, failures, skips);
+    if (code !== 0) return code;
+    console.log(`${NAME}: PASS -- ${REGISTER_FN} registers '${BLOCKER_NAME}' at ${API_REL}:${line} on an AsyncShutdown phase upstream defines, which quit and restart both reach; TheiaService.start() registers it; stopAndReap (evaluated against stubs) waits on the live Subprocess handle for the kill grace plus 500 ms, never waits on a stale one and never rejects; waitForExit and signalBarePid keep their contracts; ${CATALOGUE_REL} cites the registration.`);
     return 0;
 }
 
