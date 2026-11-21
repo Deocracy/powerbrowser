@@ -181,7 +181,9 @@ async function copyInto(fs: typeof nodeFs.promises, from: string, deploymentDir:
 /**
  * 68-WR-04: finishes an upgrade that stopped part way. While <id> is absent, a parked old copy
  * that is a real directory (a link is never restored) is renamed back; every parked sibling of
- * <id> is then removed.
+ * <id> is then removed. A folder counts as <id>'s park by its layout, not its name: it holds
+ * exactly <id> (or nothing, a park the crash left before the move). The name alone also matches
+ * another id's temporary copy, for an id ending in "-old" (.x-old-AbC123 is x-old's copy).
  */
 async function recoverParked(fs: typeof nodeFs.promises, deploymentDir: string, id: string): Promise<void> {
     let names: string[];
@@ -191,11 +193,18 @@ async function recoverParked(fs: typeof nodeFs.promises, deploymentDir: string, 
         return; // no deployment folder yet
     }
     const dest = path.join(deploymentDir, id);
-    // mkdtemp's suffix is six letters or digits, so another id's folders never match.
-    const mine = (n: string) => n.startsWith(parkedPrefix(id)) && /^[A-Za-z0-9]{6}$/.test(n.slice(parkedPrefix(id).length));
-    for (const name of names.filter(mine).sort()) {
+    const named = (n: string) => n.startsWith(parkedPrefix(id)) && /^[A-Za-z0-9]{6}$/.test(n.slice(parkedPrefix(id).length));
+    for (const name of names.filter(named).sort()) {
         const park = path.join(deploymentDir, name);
         const parked = path.join(park, id);
+        let inside: string[];
+        try {
+            if (!(await fs.lstat(park)).isDirectory()) continue;
+            inside = await fs.readdir(park);
+        } catch {
+            continue;
+        }
+        if (inside.length > 1 || (inside.length === 1 && inside[0] !== id)) continue; // not this id's park
         try {
             if (!await exists(fs, dest) && (await fs.lstat(parked)).isDirectory()) {
                 await fs.rename(parked, dest);

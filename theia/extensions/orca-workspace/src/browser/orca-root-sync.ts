@@ -35,9 +35,16 @@ export const ORCA_WORKSPACE_FILE = 'powerbrowser.theia-workspace';
 /** WorkspaceStorageService's prefix with no workspace open. */
 export const GLOBAL_PREFIX = '_global_';
 /**
- * Store events are applied once the store has been quiet this long (coalescing). 65-WR-03: a store hydrating
- * repository by repository is not read as worktrees leaving: while the snapshot reports hydrated false, only
- * additions are applied. A bundle that does not report hydration falls back to this time bound alone.
+ * Store events are applied once the store has been quiet this long (coalescing). A bundle that does not report
+ * hydration (an older overlay) falls back to this time bound alone.
+ *
+ * 65-WR-03: Orca sets hasHydratedWorktreePurge only after every repository's authoritative listing was applied, so it
+ * may never turn true (no repository, no worktree detected, a repository whose folder is gone or whose listing failed,
+ * an SSH repository with no direct authority). The sync therefore never waits for it: additions always apply at once.
+ * While hydrated is false, a root is removed only on the store's own word: it was reported in this session and is no
+ * longer (Orca does not purge worktrees before hydration, so that is a removal or an archive in the store). A persisted
+ * root the store has not reported this session is kept, because a list that is not authoritative proves nothing.
+ * Once hydrated is true, every root missing from the list is a drop.
  */
 const SETTLE_MS = 750;
 
@@ -126,6 +133,8 @@ export class OrcaRootSync implements FrontendApplicationContribution {
     protected reported: string[] | undefined;
     /** 65-WR-03: the latest snapshot's hydration flag; undefined when the bundle does not report one. */
     protected hydrated: boolean | undefined;
+    /** 65-WR-03: every root the store reported in this session. */
+    protected readonly everReported = new Set<string>();
     protected seenWorktree = false;
     protected applying = false;
     protected timer: number | undefined;
@@ -156,6 +165,7 @@ export class OrcaRootSync implements FrontendApplicationContribution {
         this.pending = wantedRootsOf(snapshot, path => URI.fromFilePath(path).toString());
         this.reported = this.pending;
         this.hydrated = typeof snapshot.hydrated === 'boolean' ? snapshot.hydrated : undefined;
+        this.pending.forEach(root => this.everReported.add(root));
         this.seenWorktree ||= this.pending.length > 0;
         window.clearTimeout(this.timer);
         this.timer = window.setTimeout(() => this.enqueue(() => this.sync()), SETTLE_MS);
@@ -183,8 +193,9 @@ export class OrcaRootSync implements FrontendApplicationContribution {
 
     protected async sync(): Promise<void> {
         const wanted = this.pending;
-        // An empty list before any worktree was ever reported is the store before hydration, not a drop.
-        if (!wanted || (!wanted.length && !this.seenWorktree)) {
+        // An empty list before any worktree was ever reported is the store before hydration, not a drop, unless the
+        // store has said its listing is complete (with no flag, an older overlay, the settle timer alone decides).
+        if (!wanted || (!wanted.length && !this.seenWorktree && this.hydrated !== true)) {
             return;
         }
         this.pending = undefined;
@@ -194,8 +205,10 @@ export class OrcaRootSync implements FrontendApplicationContribution {
         // At session start the persisted owned roots still in the workspace stand for the last wanted set,
         // so a relaunch reconciles once; an owned root missing from a workspace the user switched to is added again.
         const previousWanted = this.previousWanted ?? owned.filter(o => roots.includes(o));
-        // 65-WR-03: before Orca has listed every repository, a root missing from the snapshot is not yet a drop.
-        const effective = this.hydrated === false ? [...new Set([...previousWanted, ...wanted])] : wanted;
+        // 65-WR-03: while the listing is not authoritative, a root the store has not reported this session is held;
+        // a root it reported and then stopped reporting is the store's own removal and drops.
+        const held = this.hydrated === false ? previousWanted.filter(p => !this.everReported.has(p)) : [];
+        const effective = [...new Set([...wanted, ...held])];
         const plan = planRoots({ wanted: effective, previousWanted, roots, owned, userRemoved });
         this.applying = true;
         try {

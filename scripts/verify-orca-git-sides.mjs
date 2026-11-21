@@ -16,13 +16,18 @@
 //     commit that adds or deletes a file (parent or commit side). A modified file still reads
 //     its bytes. A rev that does not exist, and a path present in the tree whose blob is not
 //     local, stay failures (never an empty side), and the resource rejects on them.
+//  a2. In a treeless clone (--filter=tree:0), a path at a commit whose tree is not local is a
+//     failure, never an empty side (it would read as wholly added or deleted).
+//  a3. A side listing that timed out or failed is never absent.
 //  b. sidecar-gate-backends-02: in a partial clone whose configured upload-pack writes a marker
 //     file, reading a historical blob does not fetch (the marker is never written) and fails;
-//     the environment carries no inherited GIT_* name.
+//     the environment carries no inherited GIT_* name. b2: the clone's .git/config also sets
+//     protocol.file.allow=always, and with GIT_NO_LAZY_FETCH removed (a git older than 2.44) the
+//     injected per-transport protocol.<name>.allow=never alone must still stop the fetch.
 //  c. sidecar-gate-backends-02: a git run that outlives the time bound is ended with every
 //     process it started (a planted git that forks a sleeper; the sleeper must be gone).
-//  d. Argument safety: a rev or path that starts with '-' or carries a NUL is refused by the
-//     spec grammar and by the rev-parse argv builder; the read is refused, never run, and
+//  d. Argument safety: a rev or path that starts with - or carries a NUL is refused by the
+//     spec grammar and by the listing argv builder (presenceArgs); the read is refused, never run, and
 //     never reported as 'missing'.
 //
 // Tier: quick. SKIP when theia/node_modules/typescript is absent or git is not on PATH, or (b
@@ -138,6 +143,8 @@ function buildPartialClone(base, repo) {
     if (r.status !== 0) return undefined;
     const marker = join(base, 'LAZY-FETCH-RAN');
     gitIn(clone, ['config', 'remote.origin.uploadpack', `sh -c 'touch "${marker}"; exec git-upload-pack "$@"' upload-pack`]);
+    // A hostile per-protocol override: git reads protocol.file.allow before protocol.allow.
+    gitIn(clone, ['config', 'protocol.file.allow', 'always']);
     return { root: realpathSync(clone), marker };
 }
 
@@ -201,7 +208,30 @@ async function check(texts) {
             if (lazy.ok || lazy.reason === missing) fails.push(`a blob that is not local read as ${JSON.stringify(lazy)}, not a failure (a present path is never an empty side)`);
             const local = await read(clone.root, 'm.txt', ':0');
             if (!local.ok) fails.push(`a local read in the partial clone failed with GIT_DIR planted in the environment: ${JSON.stringify(local)}`);
+            // b2. A git older than 2.44 ignores GIT_NO_LAZY_FETCH: the transport lockout alone must stop the fetch,
+            // against the repository's protocol.file.allow=always.
+            const oldGitEnv = { ...protocol.gitReadEnv(process.env) };
+            delete oldGitEnv.GIT_NO_LAZY_FETCH;
+            spawnSync('git', ['-c', 'core.fsmonitor=false', '-C', clone.root, 'cat-file', 'blob', '--', `${repo.parent}:hist.txt`], { env: oldGitEnv, stdio: 'ignore', timeout: 10000 });
+            if (existsSync(clone.marker)) fails.push('b2: with lazy fetch left on (a git older than 2.44), the repository\'s protocol.file.allow=always re-opened the transport and the configured upload-pack ran');
             notes.push('b compared');
+        }
+
+        // a2. A treeless clone (--filter=tree:0) holds no tree of an older commit: with no fetch, a path there cannot be
+        // listed, so it is a failure, never an absent (empty) side.
+        const treeless = join(base, 'treeless');
+        const tl = spawnSync('git', ['clone', '-q', '--filter=tree:0', `file://${repo.root}`, treeless], { encoding: 'utf8', env: Object.fromEntries(Object.entries(process.env).filter(([n]) => !/^GIT_/i.test(n))) });
+        if (tl.status !== 0) notes.push('a2 SKIP (this git cannot make a tree:0 clone)');
+        else {
+            for (const [what, rel] of [['a file the commit adds', 'added.txt'], ['a file present at the parent', 'hist.txt']]) {
+                const r = await read(realpathSync(treeless), rel, repo.parent);
+                if (r.ok || r.reason === missing) fails.push(`a2: in a treeless clone, ${what} at a commit whose tree is not local read as ${JSON.stringify(r)}, not a failure (it would show as wholly added or deleted)`);
+            }
+            notes.push('a2 compared');
+        }
+        // a3. A listing that timed out or failed is never absent.
+        for (const reason of ['timeout', 'git-failed']) {
+            if (await protocol.sideIsMissing(async () => ({ reason }), repo.root, ':0', 'm.txt')) fails.push(`a3: a side listing that ended in ${reason} reads as absent`);
         }
         const env = protocol.gitReadEnv?.({ PATH: '/bin', GIT_DIR: '/x', git_exec_path: '/y' });
         if (!env) fails.push(`${REL.protocol} exports no gitReadEnv`);
@@ -249,13 +279,16 @@ async function check(texts) {
             const r = await read(repo.root, rel, rev);
             if (r.ok || r.reason === missing) fails.push(`the read of ${what} was not refused: ${JSON.stringify(r)}`);
         }
-        for (const [what, spec] of [['an option-shaped spec', '--output=/tmp/x'], ['a spec carrying a NUL', ':0:a\0b']]) {
+        for (const [what, rel, rev] of [...REFUSED, ['the empty side', 'm.txt', '']]) {
             let threw = false;
-            try { protocol.resolveArgs('/r', spec); } catch { threw = true; }
-            if (!threw) fails.push(`resolveArgs builds an argv for ${what}`);
+            try { protocol.presenceArgs('/r', rev, rel); } catch { threw = true; }
+            if (!threw) fails.push(`presenceArgs builds an argv for ${what}`);
         }
-        const argv = protocol.resolveArgs('/r', ':0:a.txt');
-        if (!Array.isArray(argv) || argv[argv.length - 1] !== ':0:a.txt' || !argv.includes('rev-parse')) fails.push(`resolveArgs is not an argv array ending in the spec: ${JSON.stringify(argv)}`);
+        for (const [rev, sub] of [[':0', 'ls-files'], [repo.commit, 'ls-tree']]) {
+            const argv = protocol.presenceArgs('/r', rev, 'a.txt');
+            const at = argv.indexOf('--');
+            if (!argv.includes(sub) || !argv.includes('--literal-pathspecs') || at === -1 || argv.slice(at + 1).join() !== 'a.txt') fails.push(`presenceArgs for ${rev} is not a literal-pathspec ${sub} argv ending in -- <path>: ${JSON.stringify(argv)}`);
+        }
     } catch (e) {
         fails.push(`the check could not run: ${e?.stack ?? e}`);
     } finally {
@@ -269,12 +302,15 @@ async function check(texts) {
 // ---------------------------------------------------------------- self-test
 
 const PLANTS = [
-    { name: 'backend-without-missing-side', naming: 'absent side not reported as missing', file: 'backend', edit: (s) => s.replace("if (r.reason === 'git-failed' && await sideIsMissing(exitsZero, root, rev, relativePath)) {", 'if (false) {') },
+    { name: 'backend-without-missing-side', naming: 'absent side not reported as missing', file: 'backend', edit: (s) => s.replace("if (r.reason === 'git-failed' && await sideIsMissing(runGit, root, rev, relativePath)) {", 'if (false) {') },
     { name: 'resource-throws-on-missing', naming: 'absent side is not an empty side in the resource', file: 'resource', edit: (s) => s.replace('if (r.reason === ORCA_GIT_MISSING) {', 'if (false) {') },
-    { name: 'missing-for-any-failure', naming: 'a rev that does not exist read as', file: 'protocol', edit: (s) => s.replace("return STAGE.test(rev) || await resolves(resolveArgs(root, `${rev}^{object}`));", 'return true;') },
+    { name: 'missing-for-any-failure', naming: 'a rev that does not exist read as', file: 'protocol', edit: (s) => s.replace("if (!('out' in r)) {\n        return false;\n    }\n    const stage", "if (!('out' in r)) {\n        return true;\n    }\n    const stage") },
+    { name: 'treeless-reads-absent', naming: 'a2: in a treeless clone, a file the commit adds', file: 'protocol', edit: (s) => s.replace("if (!('out' in r)) {\n        return false;\n    }\n    const stage", "if (!('out' in r)) {\n        return !r.reason.startsWith('time');\n    }\n    const stage") },
+    { name: 'timeout-reads-absent', naming: 'a3: a side listing that ended in timeout reads as absent', file: 'protocol', edit: (s) => s.replace("if (!('out' in r)) {\n        return false;\n    }\n    const stage", "if (!('out' in r)) {\n        return r.reason === 'timeout';\n    }\n    const stage") },
     { name: 'pre-fix-environment', naming: 'ran a lazy fetch', file: 'backend', edit: (s) => s.replace('env: gitReadEnv(process.env)', 'env: Object.fromEntries(Object.entries(process.env).filter(([n]) => !/^GIT_/i.test(n)))') },
+    { name: 'protocol-allow-only', naming: "b2: with lazy fetch left on (a git older than 2.44), the repository's protocol.file.allow=always re-opened the transport", file: 'protocol', edit: (s) => s.replace("const keys = ['protocol.allow', ...ORCA_GIT_NEVER_PROTOCOLS.map(p => `protocol.${p}.allow`)];", "const keys = ['protocol.allow'];") },
     { name: 'kill-git-only', naming: 'left the process it started running', file: 'backend', edit: (s) => s.replace("process.kill(-child.pid, 'SIGKILL');", "child.kill('SIGKILL');") },
-    { name: 'rev-parse-accepts-dash', naming: 'resolveArgs builds an argv for an option-shaped spec', file: 'protocol', edit: (s) => s.replace("if (spec.startsWith('-') || /[\\0\\n\\r]/.test(spec)) {", 'if (false) {') },
+    { name: 'listing-accepts-dash', naming: 'presenceArgs builds an argv for a rev starting with "-"', file: 'protocol', edit: (s) => s.replace('export function presenceArgs(root: string, rev: string, relativePath: string): string[] {\n    const refusal = specRefusal(relativePath, rev);', "export function presenceArgs(root: string, rev: string, relativePath: string): string[] {\n    const refusal = rev.startsWith('-') ? undefined : specRefusal(relativePath, rev);") },
     { name: 'rev-grammar-accepts-dash', naming: 'the spec grammar accepts a rev starting with "-"', file: 'protocol', edit: (s) => s.replace("if (typeof rev !== 'string' || !(rev === '' || OBJECT_ID.test(rev) || STAGE.test(rev))) {", "if (typeof rev !== 'string' || !(rev === '' || rev.startsWith('-') || OBJECT_ID.test(rev) || STAGE.test(rev))) {") },
 ];
 
