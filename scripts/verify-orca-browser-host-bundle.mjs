@@ -102,6 +102,7 @@ export function offerOf(pairingInput) {
 export function attachVerdict(o) {
     const fails = [];
     if (o.survivors) fails.push(`${o.survivors} orcad or terminal-daemon process(es) survived teardown (killed by identity now; the next live row would find them)`);
+    if (o.teardownRecorded === 0) fails.push('broken instrument: the teardown recorded no orcad process before the stop, so a survivor would pass unseen');
     if (o.attach !== 'accepted') return [...fails, `attach not accepted: ${o.attach ?? 'no outcome'}`];
     if (!o.cliTabCreateOk) fails.push('CLI tab create failed or returned no browserPageId');
     if (o.createPageCount !== 1) fails.push(`expected exactly one createPage event, saw ${o.createPageCount}`);
@@ -137,19 +138,33 @@ export function redactionVerdict({ output, secrets, control }) {
     return n ? [`redaction: ${n} offer field occurrence(s) in the probe's raw stdout and stderr`] : [];
 }
 
-/** Runs node with `args`, capturing fds 1, 2 and 3 raw; resolves { status, stdout, stderr, report } (report: fd 3's JSON lines). */
-export function captureChild(args, { env = process.env, timeoutMs = 600000 } = {}) {
+/**
+ * Runs node with `args`, capturing fds 1, 2 and 3 raw; resolves { status, stdout, stderr, report, identities }. report:
+ * fd 3's JSON lines. identities: [pid, startTicks] pairs the child named on fd 4 as it started them (review extra 8),
+ * pushed into `identities` as they arrive, so a caller can end them even if the child is killed.
+ */
+export function captureChild(args, { env = process.env, timeoutMs = 600000, identities = [], onSpawn = () => {} } = {}) {
     return new Promise((resolveP) => {
-        const child = spawn(process.execPath, args, { env, stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
+        const child = spawn(process.execPath, args, { env, stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'] });
+        onSpawn(child);
         const chunks = { 1: [], 2: [], 3: [] };
         for (const fd of [1, 2, 3]) child.stdio[fd].on('data', (d) => chunks[fd].push(d));
+        let idText = '';
+        child.stdio[4].on('data', (d) => {
+            idText += d;
+            const lines = idText.split('\n');
+            idText = lines.pop();
+            for (const line of lines) {
+                try { for (const [pid, ticks] of JSON.parse(line)) if (Number.isInteger(pid) && ticks !== null) identities.push([pid, String(ticks)]); } catch { /* not an identity line */ }
+            }
+        });
         const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
         child.on('close', (code, signal) => {
             clearTimeout(timer);
             const text = (fd) => Buffer.concat(chunks[fd]).toString('utf8');
             const report = {};
             for (const line of text(3).split('\n').filter(Boolean)) { try { Object.assign(report, JSON.parse(line)); } catch { /* not a report line */ } }
-            resolveP({ status: signal ? `signal ${signal}` : code, stdout: text(1), stderr: text(2), report });
+            resolveP({ status: signal ? `signal ${signal}` : code, stdout: text(1), stderr: text(2), report, identities });
         });
     });
 }
@@ -318,6 +333,35 @@ export function staticClauses(ctx) {
     return { fails, modules: ids.length, assets: assets.size };
 }
 
+// ---------------------------------------------------------------- teardown by identity (harness-static-browser-07)
+
+/** [pid, startTicks] of the roots and every descendant, recorded while they run. */
+export function recordTree(rootPids) {
+    return [...descendants(ppidMap(), rootPids.filter((x) => Number.isInteger(x) && x > 0))].map((pid) => [pid, startTicks(pid)]).filter(([, t]) => t !== null);
+}
+
+/**
+ * Records the trees of `rootPids`, runs `stop`, waits `settleMs`, then kills by identity every recorded process still
+ * running with its recorded start ticks. Resolves { recorded, survivors }: an empty record is a blind instrument.
+ */
+export async function stopAndSweep(rootPids, stop, { settleMs = 500 } = {}) {
+    const tree = recordTree(rootPids);
+    await stop();
+    await sleep(settleMs);
+    const survivors = tree.filter(([pid, ticks]) => startTicks(pid) === ticks);
+    for (const [pid, ticks] of survivors) signalIdentity(pid, ticks, 'SIGKILL');
+    return { recorded: tree.length, survivors: survivors.map(([pid]) => pid) };
+}
+
+/** Kills by identity every process in `identities` (and its descendants) that still runs; resolves how many were. */
+export async function sweepIdentities(identities) {
+    const alive = identities.filter(([pid, ticks]) => startTicks(pid) === ticks);
+    const tree = recordTree(alive.map(([pid]) => pid));
+    for (const [pid, ticks] of [...alive, ...tree]) signalIdentity(pid, ticks, 'SIGKILL');
+    await sleep(200);
+    return new Set([...alive, ...tree].map(([pid]) => pid)).size;
+}
+
 // ---------------------------------------------------------------- self-test (quick, hermetic)
 
 export async function selfTest() {
@@ -408,7 +452,25 @@ export async function selfTest() {
             if (red.some((f) => f.includes(naming))) lines.push(`  ok ${name} went red naming the drift`);
             else { failed++; lines.push(`  FAIL ${name} did not go red naming "${naming}" (got: ${red.join('; ') || 'green'})`); }
         }
-        const planted = plants.length + attachPlants.length + redactionCases.length;
+        // harness-static-browser-07: the real record, stop and sweep over a detached stand-in that ignores SIGTERM.
+        const standIn = `process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);`;
+        const stubborn = spawn(process.execPath, ['-e', standIn], { detached: true, stdio: 'ignore' });
+        const gone = new Promise((r) => stubborn.once('exit', r));
+        await sleep(300);
+        const swept = await stopAndSweep([stubborn.pid], async () => { try { process.kill(stubborn.pid, 'SIGTERM'); } catch { /* gone */ } });
+        const reaped = await Promise.race([gone.then(() => true), sleep(3000).then(() => false)]);
+        if (swept.recorded >= 1 && swept.survivors.length === 1 && reaped) lines.push('  ok teardown-survivor: a detached stand-in ignoring SIGTERM was recorded, counted as one survivor and killed by identity');
+        else { failed++; lines.push(`  FAIL teardown-survivor: recorded ${swept.recorded}, survivors ${swept.survivors.length}, gone ${reaped}`); try { process.kill(stubborn.pid, 'SIGKILL'); } catch { /* gone */ } }
+        const blind = attachVerdict({ ...green, teardownRecorded: 0 });
+        if (blind.some((f) => f.includes('recorded no orcad process'))) lines.push('  ok teardown-empty-record went red naming the drift'); else { failed++; lines.push('  FAIL teardown-empty-record stayed green'); }
+        // Review extra 8: a probe killed at its time limit leaves a detached process; the parent ends it from fd 4.
+        const leakSrc = `const fs = require('fs'); const { spawn } = require('child_process'); const c = spawn(process.execPath, ['-e', ${JSON.stringify(standIn)}], { detached: true, stdio: 'ignore' }); c.unref(); setTimeout(() => { const st = fs.readFileSync('/proc/' + c.pid + '/stat', 'utf8'); fs.writeSync(4, JSON.stringify([[c.pid, st.slice(st.lastIndexOf(')') + 2).split(' ')[19]]]) + '\\n'); }, 300); setInterval(() => {}, 1000);`;
+        const killed = await captureChild(['-e', leakSrc], { timeoutMs: 1500 });
+        const leakedPid = killed.identities[0]?.[0];
+        const ended = await sweepIdentities(killed.identities);
+        if (String(killed.status).startsWith('signal') && ended === 1 && leakedPid && startTicks(leakedPid) === null) lines.push('  ok probe-killed-leak: the probe was killed at its limit, its detached process was named on fd 4 and ended by identity');
+        else { failed++; lines.push(`  FAIL probe-killed-leak: status ${killed.status}, identities ${JSON.stringify(killed.identities)}, ended ${ended}`); if (leakedPid) try { process.kill(leakedPid, 'SIGKILL'); } catch { /* gone */ } }
+        const planted = plants.length + attachPlants.length + redactionCases.length + 3;
         lines.push(failed ? `${NAME} self-test: FAIL -- ${failed} expectation(s) unmet` : `${NAME} self-test: PASS -- ${planted} planted faults each went red naming the drift`);
     } finally {
         rmSync(dir, { recursive: true, force: true });
@@ -445,7 +507,7 @@ function scratchDir() {
     return mkdtempSync(join(base, 'pb-hb-'));
 }
 
-async function attachClause(bundlePath, notes, report = () => {}) {
+async function attachClause(bundlePath, notes, report = () => {}, reportIds = () => {}) {
     const obs = { attach: null };
     let restore = installOutputRedaction([]);
     const work = scratchDir();
@@ -470,6 +532,9 @@ async function attachClause(bundlePath, notes, report = () => {}) {
     try {
         run = await startOrcad({ nodeBin: node.path, orcaDir: ORCA_DIR, profileDir: profile, env });
         const { ready } = run;
+        // Review extra 8: orcad and its daemon setsid; the parent learns their identities now, so it can end them if
+        // this probe is killed before its teardown runs.
+        reportIds(recordTree([run.child?.pid, ready.daemonPid]));
         if (!ready.boundEndpoint?.startsWith('ws://127.0.0.1:')) throw new Error('orcad did not bind loopback');
         if (!ready.webClientUrl) throw new Error('the ready line offers no web-client pairing');
         const hash = new URL(ready.webClientUrl).hash.replace(/^#/, '').replace(/^pairing=/, '');
@@ -566,14 +631,9 @@ async function attachClause(bundlePath, notes, report = () => {}) {
         try { session?.detach(); } catch { /* closed */ }
         if (run) {
             // orcad and the daemon setsid (outside the row's session), so their trees are recorded by identity first.
-            const roots = [run.child?.pid, run.ready?.daemonPid].filter((x) => Number.isInteger(x) && x > 0);
-            const tree = [...descendants(ppidMap(), roots)].map((pid) => [pid, startTicks(pid)]).filter(([, t]) => t !== null);
-            const { survivors } = await stopOrcad(run.child, run.ready?.daemonPid);
-            await sleep(500);
-            const left = new Set(survivors ?? []);
-            for (const [pid, ticks] of tree) if (startTicks(pid) === ticks) left.add(pid);
-            for (const [pid, ticks] of tree) if (left.has(pid)) signalIdentity(pid, ticks, 'SIGKILL');
-            if (left.size) { obs.survivors = left.size; notes.survivors = left.size; }
+            const swept = await stopAndSweep([run.child?.pid, run.ready?.daemonPid], () => stopOrcad(run.child, run.ready?.daemonPid));
+            obs.teardownRecorded = swept.recorded;
+            if (swept.survivors.length) { obs.survivors = swept.survivors.length; notes.survivors = swept.survivors.length; }
         }
         restore();
         obs.secrets = secrets;
@@ -599,6 +659,7 @@ async function probe() {
     if (!inp.bundle) { console.log(`${NAME}: FAIL -- the probe was started without its inputs (${inp.fail ?? inp.skip})`); return 1; }
     const { outRel, bundle } = inp;
     const report = (o) => { try { writeSync(3, `${JSON.stringify(o)}\n`); } catch { /* the parent reads fd 3; run alone, nothing listens */ } };
+    const reportIds = (ids) => { try { writeSync(4, `${JSON.stringify(ids)}\n`); } catch { /* the parent reads fd 4; run alone, nothing listens */ } };
     const bytes = statSync(bundle).size;
     const stat = staticClauses({
         overlayFiles: join(REPO_ROOT, 'orca-overlay', 'files'), bundle, assetsDir: join(ORCA_DIR, 'out', 'web', 'assets'),
@@ -608,7 +669,7 @@ async function probe() {
     const notes = {};
     let obs;
     try {
-        obs = await attachClause(bundle, notes, report);
+        obs = await attachClause(bundle, notes, report, reportIds);
     } catch (e) {
         console.log(`${NAME}: FAIL -- attach probe: ${redact(String(e?.message ?? e)).slice(0, 200)}`);
         return 1;
@@ -625,7 +686,15 @@ async function main() {
     const inp = inputs();
     if (inp.fail) { console.log(`${NAME}: FAIL -- ${inp.fail}`); return 1; }
     if (inp.skip) { console.log(skipLine(NAME, inp.skip)); return SKIP_EXIT; }
-    const r = await captureChild([fileURLToPath(import.meta.url), '--attach-probe']);
+    // Review extra 8: the probe names orcad's and the daemon's identities on fd 4; whatever ends the probe (its time
+    // limit, a signal to this row), they are ended by identity here and a leftover fails the row. A SIGKILL of this
+    // process itself cannot be handled; the driver's leak leg and orca-run's exit hook are the only cover then.
+    const identities = [];
+    let probeChild = null;
+    const onSignal = async (sig) => { probeChild?.kill('SIGKILL'); await sweepIdentities(identities); process.exit(sig === 'SIGINT' ? 130 : 143); };
+    for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(sig, onSignal);
+    const r = await captureChild([fileURLToPath(import.meta.url), '--attach-probe'], { identities, onSpawn: (c) => { probeChild = c; } });
+    const leaked = await sweepIdentities(identities);
     const secrets = r.report.secrets ?? [];
     const red = redactionVerdict({ output: r.stdout + r.stderr, secrets, control: r.report.control });
     // The probe's output is printed only after the count, and redacted with the secrets it reported.
@@ -633,8 +702,11 @@ async function main() {
     if (r.stderr) process.stderr.write(redact(r.stderr, secrets));
     const probeFailed = r.status !== 0;
     // A probe that failed before orcad gave it an offer has no secrets; its own FAIL line is the verdict then.
-    if (probeFailed && !secrets.length) { console.log(`${NAME}: FAIL -- the probe exited ${r.status} before it reported the offer`); return 1; }
+    if (probeFailed && !secrets.length) { if (leaked) console.log(`${NAME}: FAIL -- ${leaked} orcad or terminal-daemon process(es) outlived the probe (killed by identity now)`); console.log(`${NAME}: FAIL -- the probe exited ${r.status} before it reported the offer`); return 1; }
     for (const f of red) console.log(`${NAME}: FAIL -- ${f}`);
+    if (leaked) console.log(`${NAME}: FAIL -- ${leaked} orcad or terminal-daemon process(es) outlived the probe (killed by identity now)`);
+    if (!identities.length && !probeFailed) console.log(`${NAME}: FAIL -- broken instrument: the probe named no orcad identity on fd 4, so a leak would pass unseen`);
+    if (leaked || (!identities.length && !probeFailed)) return 1;
     if (probeFailed || red.length) { if (probeFailed) console.log(`${NAME}: FAIL -- the probe exited ${r.status}`); return 1; }
     const details = /: probe green -- (.*)$/m.exec(r.stdout)?.[1] ?? 'the probe reported green';
     console.log(`${NAME}: PASS -- ${details}; redaction: 0 offer field occurrences in the probe's raw stdout and stderr (the detector found the secrets in the raw ready line first)`);
