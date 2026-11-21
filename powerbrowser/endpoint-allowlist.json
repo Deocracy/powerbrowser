@@ -55,8 +55,9 @@
       "host": "en.wikipedia.org",
       "disposition": "allow",
       "trigger": "user-feature",
-      "reason": "29-03 (BAR-01/BAR-03): the search-results and suggestions host of a configured search engine (configuration.toml [[search_engines]]). Contacted only when the user searches from the address bar or, with suggestions on, types text the chrome resolved as a search -- never for URL-shaped text, and never unattended. Deliberate egress promised in the REQUIREMENTS 'Inherited network egress' footer, not an inherited default.",
-      "manifest": "search_engines[1].url"
+      "reason": "29-03 (BAR-01/BAR-03): the search-results and suggestions host of a configured search engine (configuration.toml [[search_engines]]). Contacted only when the user searches from the address bar or, with suggestions on, types text the chrome resolved as a search -- never for URL-shaped text, and never unattended. Deliberate egress promised in the REQUIREMENTS 'Inherited network egress' footer, not an inherited default. packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only in a parser library's error text (orca/out/web, orca/out/orcad/out/mobile-web); Orca sends no request there.",
+      "manifest": "search_engines[1].url",
+      "orca_shared": "name-only"
     },
     {
       "host": "normandy.cdn.mozilla.net",
@@ -166,6 +167,330 @@
       "reason": "P65-24 (Phase 65, measured by orca-side-panel-live in 65-05): Orca's side panel (its hosted sidebar and Settings) renders agent and repository icons from https://www.google.com/s2/favicons (orca/src/renderer/src/lib/agent-catalog.tsx, orca/src/shared/repo-icon.ts), which redirects here (to t1, t2 or t3 in the measured runs; one row per measured host). First resolved in the measured run only after the user selected the Orca mode; an unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs). Whether launching straight into the Orca mode may contact it is an open owner item (65-05-SUMMARY.md)."
     },
     {
+      "host": "huggingface.co",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/speech/model-download-catalog.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's speech input downloads its speech-recognition model files from here when the user installs a speech model (orca/src/main/speech/model-download-catalog.ts:12). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "storage.googleapis.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/runtime/runtime-skill-install-commands.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's skill install and skill transfer fetch skill bundles from this origin when the user installs a skill (orca/src/main/runtime/runtime-skill-install-commands.ts:84). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "nodejs.org",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/shared/node-runtime-pin.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca downloads an official Node.js release from here to install orcad on a remote host the user connects over SSH (orca/src/shared/node-runtime-pin.ts:178). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "unofficial-builds.nodejs.org",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/shared/node-runtime-pin.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca downloads an unofficial Node.js build from here for a remote host whose platform has no official build, when the user connects to it over SSH (orca/src/shared/node-runtime-pin.ts:179). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "avatars.githubusercontent.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/github/client/map/work-item-field-coercion.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's GitHub integration shows account avatars from here for the issues and pull requests the user opens (orca/src/main/github/client/map/work-item-field-coercion.ts:95). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "app.orca.dev",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/shared/skill-share-link.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's skill share links name this host (it is not under .onorca.dev); a share link the user opens or publishes reaches it (orca/src/shared/skill-share-link.ts:2). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "x.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/renderer/src/components/stats/ShareUsageButton.tsx",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's usage-stats Share button opens a post composer at https://x.com/intent/post with the usage summary as its text (orca/src/renderer/src/components/stats/ShareUsageButton.tsx:114). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "linear.app",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/linear/linear-project-models.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle names this host: Orca's Linear integration builds issue, project and view links on it (orca/src/main/linear/linear-project-models.ts:278) after the user connects Linear. Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "api.atlassian.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/jira/gateway-base-url.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's Jira integration calls the Atlassian cloud gateway here after the user connects a Jira site (orca/src/main/jira/gateway-base-url.ts:8). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "api.bitbucket.org",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/bitbucket/bitbucket-auth-config.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's Bitbucket integration calls this API after the user adds Bitbucket credentials (orca/src/main/bitbucket/bitbucket-auth-config.ts:3). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "dev.azure.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/azure-devops/repository-ref.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's Azure DevOps integration calls this API for a repository the user adds (orca/src/main/azure-devops/repository-ref.ts:86). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "duckduckgo.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/shared/browser-url.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: a search typed into an Orca browser tab with the DuckDuckGo engine selected in Orca's settings opens this host (orca/src/shared/browser-url.ts:27). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "www.bing.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/shared/browser-url.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: a search typed into an Orca browser tab with the Bing engine selected in Orca's settings opens this host (orca/src/shared/browser-url.ts:28). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "kagi.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/shared/browser-url.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: a search typed into an Orca browser tab with the Kagi engine selected in Orca's settings opens this host (orca/src/shared/browser-url.ts:29). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "chatgpt.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/rate-limits/codex-backend-usage-client.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's rate-limit service reads the Codex account's usage and reset credits here for a Codex sign-in (orca/src/main/rate-limits/codex-backend-usage-client.ts:69). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "cli-chat-proxy.grok.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/rate-limits/grok-fetcher.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's rate-limit service reads the Grok account's usage here for a Grok sign-in (orca/src/main/rate-limits/grok-fetcher.ts:19). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "auth.x.ai",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/rate-limits/grok-auth.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's Grok account handling names this issuer for a Grok sign-in (orca/src/main/rate-limits/grok-auth.ts:66). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "cloudcode-pa.googleapis.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/rate-limits/gemini-usage-fetcher.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's rate-limit service reads the Gemini account's quota here for a Gemini sign-in (orca/src/main/rate-limits/gemini-usage-fetcher.ts:20). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "oauth2.googleapis.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/rate-limits/gemini-oauth-sources.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca refreshes a Gemini sign-in's OAuth token here before reading its quota (orca/src/main/rate-limits/gemini-oauth-sources.ts:10). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "accounts.google.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/antigravity/antigravity-sign-in-url.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's Antigravity sign-in opens Google's sign-in page here when the user signs in (orca/src/main/antigravity/antigravity-sign-in-url.ts:22). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "openidconnect.googleapis.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/antigravity/google-userinfo-identity.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca reads the signed-in Google account's identity here after an Antigravity sign-in (orca/src/main/antigravity/google-userinfo-identity.ts:9). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "api.kimi.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/kimi/kimi-code-runtime-auth.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's Kimi Code account handling calls this API for a Kimi sign-in (orca/src/main/kimi/kimi-code-runtime-auth.ts:6). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "auth.kimi.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/kimi/kimi-code-runtime-auth.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's Kimi Code account handling uses this OAuth host for a Kimi sign-in (orca/src/main/kimi/kimi-code-runtime-auth.ts:5). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "api.z.ai",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/shared/zcode-plan-sites.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's rate-limit service reads a Z.ai coding plan's usage here when the user configures that plan (orca/src/shared/zcode-plan-sites.ts:7). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "open.bigmodel.cn",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/shared/zcode-plan-sites.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's rate-limit service reads a BigModel coding plan's usage here when the user configures that plan (orca/src/shared/zcode-plan-sites.ts:8). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "platform.minimax.io",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/rate-limits/minimax/minimax-request-context.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's rate-limit service reads a MiniMax account's usage here for a MiniMax sign-in (orca/src/main/rate-limits/minimax/minimax-request-context.ts:6). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "platform.minimaxi.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/rate-limits/minimax/minimax-request-context.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's rate-limit service reads a MiniMax (China) account's usage here for a MiniMax sign-in (orca/src/main/rate-limits/minimax/minimax-request-context.ts:29). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "www.minimaxi.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/rate-limits/minimax/minimax-request-context.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's rate-limit service uses this MiniMax (China) base for a MiniMax sign-in (orca/src/main/rate-limits/minimax/minimax-request-context.ts:7). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "opencode.ai",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/rate-limits/opencode-go-usage-api.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's rate-limit service reads an OpenCode Go account's usage here for an OpenCode sign-in (orca/src/main/rate-limits/opencode-go-usage-api.ts:11). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "cursor.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/main/rate-limits/cursor-fetcher.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's rate-limit service reads a Cursor account's usage here for a Cursor sign-in (orca/src/main/rate-limits/cursor-fetcher.ts:21). Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "us.i.posthog.com",
+      "disposition": "deny",
+      "orca_source": "orca/src/main/telemetry/posthog-transport.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: Orca's product telemetry (PostHog) upload host. PowerBrowser starts orcad with ORCA_TELEMETRY_DISABLED=1 (powerbrowser/shell/OrcaEnv.sys.mjs), which orca/src/main/telemetry/consent.ts and orca/src/main/observability/index.ts read to disable uploads, so this host is never contacted (orca/src/main/telemetry/posthog-transport.ts:82). Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "eu.i.posthog.com",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: a PostHog region host inside the bundled @posthog/core client (orca/node_modules/@posthog/core); Orca's telemetry is disabled by ORCA_TELEMETRY_DISABLED=1 (powerbrowser/shell/OrcaEnv.sys.mjs), so it is never contacted. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "us-assets.i.posthog.com",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: a PostHog assets host inside the bundled @posthog/core client (orca/node_modules/@posthog/core); Orca's telemetry is disabled by ORCA_TELEMETRY_DISABLED=1 (powerbrowser/shell/OrcaEnv.sys.mjs), so it is never contacted. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "eu-assets.i.posthog.com",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: a PostHog assets host inside the bundled @posthog/core client (orca/node_modules/@posthog/core); Orca's telemetry is disabled by ORCA_TELEMETRY_DISABLED=1 (powerbrowser/shell/OrcaEnv.sys.mjs), so it is never contacted. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "posthog.com",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: documentation links in the bundled PostHog client's warning messages (orca/node_modules/@posthog/core); not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "sentry.io",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: an issue-link prefix the bundled posthog-node Sentry integration builds into event properties (orca/node_modules/posthog-node/dist/extensions/sentry-integration.js); not a request, and Orca's telemetry is disabled. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "json-schema.org",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: JSON Schema $schema identifiers a bundled schema library writes into generated schemas; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "agent-plugins.org",
+      "disposition": "deny",
+      "orca_source": "orca/src/shared/skill-bundle-manifest.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: the $schema identifier of a skill bundle manifest; not a request (orca/src/shared/skill-bundle-manifest.ts:13). Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "www.w3.org",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: XML and SVG namespace and DTD identifiers in bundled libraries; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "yandex.com",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca bundle (orca/out/orcad or orca/out/web) names this host: a crawler user-agent substring in a bundled bot-detection list; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "api.linear.app",
+      "disposition": "user-initiated",
+      "orca_source": "orca/out/orcad/node_modules/@linear/sdk/index.js",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the Linear SDK that orcad ships (orca/out/orcad/node_modules/@linear/sdk/index.js, created at orca/src/main/linear/linear-sdk.ts:22-23) sends Orca's Linear integration requests to https://api.linear.app/graphql after the user connects Linear. Reached only through that Orca feature. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "unpkg.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/shared/native-chat/native-chat-visual-shell.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): Orca's native chat visuals render HTML an agent writes in a sandboxed frame whose content policy allows scripts, styles, fonts and images from this host (orca/src/shared/native-chat/native-chat-visual-shell.ts:8, in NATIVE_CHAT_VISUAL_CDN_ORIGINS, :6-13; built into orca/out/web and orca/out/orcad/out/mobile-web), so an agent's visual can make the user's browser load from it, and a request can carry data the visual put in it. Reached after the user runs an agent that writes a visual. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "cdnjs.cloudflare.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/shared/native-chat/native-chat-visual-shell.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): Orca's native chat visuals render HTML an agent writes in a sandboxed frame whose content policy allows scripts, styles, fonts and images from this host (orca/src/shared/native-chat/native-chat-visual-shell.ts:9, in NATIVE_CHAT_VISUAL_CDN_ORIGINS, :6-13; built into orca/out/web and orca/out/orcad/out/mobile-web), so an agent's visual can make the user's browser load from it, and a request can carry data the visual put in it. Reached after the user runs an agent that writes a visual. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "esm.sh",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/shared/native-chat/native-chat-visual-shell.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): Orca's native chat visuals render HTML an agent writes in a sandboxed frame whose content policy allows scripts, styles, fonts and images from this host (orca/src/shared/native-chat/native-chat-visual-shell.ts:10, in NATIVE_CHAT_VISUAL_CDN_ORIGINS, :6-13; built into orca/out/web and orca/out/orcad/out/mobile-web), so an agent's visual can make the user's browser load from it, and a request can carry data the visual put in it. Reached after the user runs an agent that writes a visual. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "fonts.googleapis.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/shared/native-chat/native-chat-visual-shell.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): Orca's native chat visuals render HTML an agent writes in a sandboxed frame whose content policy allows scripts, styles, fonts and images from this host (orca/src/shared/native-chat/native-chat-visual-shell.ts:11, in NATIVE_CHAT_VISUAL_CDN_ORIGINS, :6-13; built into orca/out/web and orca/out/orcad/out/mobile-web), so an agent's visual can make the user's browser load from it, and a request can carry data the visual put in it. Reached after the user runs an agent that writes a visual. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "fonts.gstatic.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/shared/native-chat/native-chat-visual-shell.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): Orca's native chat visuals render HTML an agent writes in a sandboxed frame whose content policy allows scripts, styles, fonts and images from this host (orca/src/shared/native-chat/native-chat-visual-shell.ts:12, in NATIVE_CHAT_VISUAL_CDN_ORIGINS, :6-13; built into orca/out/web and orca/out/orcad/out/mobile-web), so an agent's visual can make the user's browser load from it, and a request can carry data the visual put in it. Reached after the user runs an agent that writes a visual. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "tailscale.com",
+      "disposition": "user-initiated",
+      "orca_source": "orca/src/shared/remote-runtime/remote-runtime-tailscale-hint.ts",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): Orca's remote-runtime hint links to https://tailscale.com/download (orca/src/shared/remote-runtime/remote-runtime-tailscale-hint.ts:3), opened when the user follows it. An unattended request fails the verdict model (scripts/lib/endpoint-verdict.mjs)."
+    },
+    {
+      "host": "chevrotain.io",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a documentation link in the error text of the chevrotain parser library bundled in orca/out/web and orca/out/orcad/out/mobile-web; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "langium.org",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a documentation link in the error text of the langium library bundled in orca/out/web and orca/out/orcad/out/mobile-web; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "react.dev",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as React's error-decoder link in its production error messages, in orca/out/web and orca/out/orcad/out/mobile-web; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "reactnavigation.org",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a documentation link in React Navigation error text in orca/out/orcad/out/mobile-web; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "docs.swmansion.com",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a documentation link in Reanimated warning text in orca/out/orcad/out/mobile-web; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "dev.to",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a documentation link in an Expo sensor warning in orca/out/orcad/out/mobile-web; not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "docs.microsoft.com",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a comment in node-pty (orca/out/orcad/node_modules/node-pty/lib/windowsConoutConnection.js); not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "msdn.microsoft.com",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a comment in node-pty (orca/out/orcad/node_modules/node-pty/lib/index.js); not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "web.mit.edu",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as a comment in node-pty (orca/out/orcad/node_modules/node-pty/lib/unixTerminal.js); not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
+      "host": "www.apple.com",
+      "disposition": "deny",
+      "reason": "packaging-prefs-network-04 (audit-fix G5b, D-08): the shipped Orca tree names this host only as the plist DOCTYPE identifier Orca's CLI writes into a launchd unit (orca/src/cli/runtime/serve-service-unit.ts:103); not a request. Disposition deny: an observed contact is a failure."
+    },
+    {
       "host": "cloudflare-dns.com",
       "disposition": "deny",
       "reason": "TRR open item, resolved 03-03: NOT network.trr.mode (confirmed 0/off by default in modules/libpref/init/StaticPrefList.yaml:15642-15644 -- TRR is not active in this build). The real source is network.connectivity-service.DNS_HTTPS.domain (modules/libpref/init/all.js:3260), read by NetworkConnectivityService.cpp's own unattended-startup DNS-over-HTTPS-record probe. No DRM/security-parity rationale applies (unlike Remote Settings/Safe Browsing), so per D-85 this is turned off at the single master switch, network.connectivity-service.enabled = false, rather than waived. Not named in D-83..D-88; this entry and the two below are the explicit resolution the 03-02-SUMMARY.md open item asked for."
@@ -210,12 +535,16 @@
     {
       "host": "www.google.com",
       "disposition": "allow",
-      "reason": "D-86 extension: observed resolving in the same 35-second window alongside update.googleapis.com, immediately after it -- media.gmp-manager.chromium-update-url's own query string (`response=redirect`) means a successful Omaha check redirects to a Google-hosted download location; this is that redirect target, part of the same Widevine update-check flow, not an independent concern."
+      "reason": "D-86 extension: observed resolving in the same 35-second window alongside update.googleapis.com, immediately after it -- media.gmp-manager.chromium-update-url's own query string (`response=redirect`) means a successful Omaha check redirects to a Google-hosted download location; this is that redirect target, part of the same Widevine update-check flow, not an independent concern. packaging-prefs-network-04 (audit-fix G5b, D-08): Orca's sidebar, Settings and repository list load agent, app and repository icons from https://www.google.com/s2/favicons?domain=<host> (also orca/src/renderer/src/lib/agent-catalog.tsx, orca/src/renderer/src/lib/open-in-app-catalog.tsx), which sends Google the agent and repository host names, and Orca browser tabs search here with the Google engine (orca/src/shared/browser-url.ts). Because this row is allow for Widevine, an unattended Orca favicon request passes the verdict model, which matches on host only; requiring a user action for the Orca use needs a path- or initiator-aware verdict or a local favicon placeholder in the overlay (open, audit packaging-prefs-network-04) (orca/src/shared/repo-icon.ts:28).",
+      "orca_source": "orca/src/shared/repo-icon.ts",
+      "orca_shared": true
     },
     {
       "host": "dl.google.com",
       "disposition": "allow",
-      "reason": "D-86 extension, discovered during 03-06's phase-gate close-out run: a second real redirect target in the same Widevine Chromium-Omaha update-check flow as www.google.com above -- media.gmp-manager.chromium-update-url's redirect response varies which Google-owned download host it names between runs (both are Google's own public download-serving domains for this exact protocol, no Mozilla host involved), so this is the same D-86 waiver category, not a new concern. No tree reference names this host by pref; it is a live protocol redirect target, exactly like www.google.com's own entry above."
+      "reason": "D-86 extension, discovered during 03-06's phase-gate close-out run: a second real redirect target in the same Widevine Chromium-Omaha update-check flow as www.google.com above -- media.gmp-manager.chromium-update-url's redirect response varies which Google-owned download host it names between runs (both are Google's own public download-serving domains for this exact protocol, no Mozilla host involved), so this is the same D-86 waiver category, not a new concern. No tree reference names this host by pref; it is a live protocol redirect target, exactly like www.google.com's own entry above. packaging-prefs-network-04 (audit-fix G5b, D-08): Orca downloads the Antigravity agent runtime from https://dl.google.com/agy-extensions/releases when the user sets up the Antigravity agent. Because this row is allow for Widevine, that request passes the verdict model unattended (host-only verdict; open, audit packaging-prefs-network-04) (orca/src/main/antigravity/antigravity-acp-runtime.ts:10).",
+      "orca_source": "orca/src/main/antigravity/antigravity-acp-runtime.ts",
+      "orca_shared": true
     },
     {
       "host": "open-vsx.org",
@@ -233,18 +562,24 @@
       "host": "api.anthropic.com",
       "disposition": "allow",
       "trigger": "user-feature",
-      "reason": "User-initiated (NG-069, R15): the AI chat and completion feature through @theia/ai-anthropic (the @anthropic-ai/sdk base URL). It is contacted only after the user configures an Anthropic API key and sends a request. With no key configured it is never contacted, and nothing is sent at startup."
+      "reason": "User-initiated (NG-069, R15): the AI chat and completion feature through @theia/ai-anthropic (the @anthropic-ai/sdk base URL). That feature contacts it only after the user configures an Anthropic API key and sends a request; with no key configured that feature never contacts it, and it sends nothing at startup. Orca also contacts it (below). packaging-prefs-network-04 (audit-fix G5b, D-08): Orca's rate-limit service reads a Claude account's usage at https://api.anthropic.com/api/oauth/usage for a Claude sign-in, with no API key, and the Claude agent CLI Orca runs sends its requests here under the user's Claude sign-in (orca/src/main/rate-limits/claude-oauth-usage-request.ts:19).",
+      "orca_source": "orca/src/main/rate-limits/claude-oauth-usage-request.ts",
+      "orca_shared": true
     },
     {
       "host": "api.openai.com",
       "disposition": "allow",
       "trigger": "user-feature",
-      "reason": "User-initiated (NG-069, R15): the AI chat and completion feature through @theia/ai-openai (the openai package base URL). It is contacted only after the user configures an OpenAI API key and sends a request. With no key configured it is never contacted, and nothing is sent at startup."
+      "reason": "User-initiated (NG-069, R15): the AI chat and completion feature through @theia/ai-openai (the openai package base URL). That feature contacts it only after the user configures an OpenAI API key and sends a request; with no key configured that feature never contacts it, and it sends nothing at startup. Orca also contacts it (below). packaging-prefs-network-04 (audit-fix G5b, D-08): when the user picks an OpenAI transcription model for Orca's speech input, orcad posts the recorded audio to https://api.openai.com/v1/audio/transcriptions with the user's OpenAI API key (orca/src/main/speech/openai-transcription-client.ts:8, :125-129); Orca also reads https://api.openai.com/auth and /profile as claim names inside a Codex sign-in token (orca/src/main/codex-accounts/codex-auth-identity.ts:168-169), which is not a request, and the Codex agent Orca runs sends its requests to OpenAI under the user's sign-in. Because this row is allow, the transcription upload passes the verdict model whether or not it follows a user action (host-only verdict).",
+      "orca_source": "orca/src/main/speech/openai-transcription-client.ts",
+      "orca_shared": true
     },
     {
       "host": "cdn.jsdelivr.net",
       "disposition": "allow",
-      "reason": "BEXT-02 (P68-39): uBlock Origin default-on filter list host, from the pinned XPI's assets.json"
+      "reason": "BEXT-02 (P68-39): uBlock Origin default-on filter list host, from the pinned XPI's assets.json packaging-prefs-network-04 (audit-fix G5b, D-08): Orca's web client also loads emoji images from https://cdn.jsdelivr.net/npm/emoji-datasource-*/ (the emoji-picker-react package in orca/out/web, used by the repository icon picker), and Orca's native chat visuals allow agent-written HTML to load scripts, styles, fonts and images from this host (orca/src/shared/native-chat/native-chat-visual-shell.ts:7). Because this row is allow for uBlock Origin, those loads pass the verdict model unattended (host-only verdict; open, audit packaging-prefs-network-04).",
+      "orca_shared": true,
+      "orca_source": "orca/src/shared/native-chat/native-chat-visual-shell.ts"
     },
     {
       "host": "curbengh.github.io",

@@ -62,7 +62,7 @@ const ROWS = {
     // The live lock (harness-live-tabs-14): free during a quick-tier row, held (and PB_LIVE_LOCK_HELD=1) during a
     // full-tier one. flock -n on the fixture lock is the probe.
     lockFree: `import { spawnSync } from 'node:child_process'; const r = spawnSync('flock', ['-n', process.env.PB_VERIFY_FIXTURE_LOCK, 'true']); if (r.status === 0) console.log('fx: PASS -- lock free'); else { console.error('fx-lock-free: FAIL -- the live lock is held during a quick-tier row'); process.exit(1); }`,
-    lockHeld: `import { spawnSync } from 'node:child_process'; const r = spawnSync('flock', ['-n', process.env.PB_VERIFY_FIXTURE_LOCK, 'true']); if (r.status === 1 && process.env.PB_LIVE_LOCK_HELD === '1') console.log('fx: PASS -- lock held'); else { console.error(\`fx-lock-held: FAIL -- flock -n exit \${r.status}, PB_LIVE_LOCK_HELD=\${process.env.PB_LIVE_LOCK_HELD}: a full-tier row ran outside the live lock\`); process.exit(1); }`,
+    lockHeld: `import { spawnSync } from 'node:child_process'; import { readFileSync } from 'node:fs'; const r = spawnSync('flock', ['-n', process.env.PB_VERIFY_FIXTURE_LOCK, 'true']); const h = /^(\\d+):(\\d+)$/.exec(process.env.PB_LIVE_LOCK_HOLDER ?? ''); let ticks = null; try { const s = readFileSync('/proc/' + h[1] + '/stat', 'utf8'); ticks = s.slice(s.lastIndexOf(')') + 2).split(' ')[19]; } catch {} if (r.status === 1 && process.env.PB_LIVE_LOCK_HELD === '1' && h && ticks === h[2]) console.log('fx: PASS -- lock held'); else { console.error(\`fx-lock-held: FAIL -- flock -n exit \${r.status}, PB_LIVE_LOCK_HELD=\${process.env.PB_LIVE_LOCK_HELD}, PB_LIVE_LOCK_HOLDER=\${process.env.PB_LIVE_LOCK_HOLDER}: a full-tier row ran outside the live lock, or without a holder that names a live process\`); process.exit(1); }`,
 };
 
 // Rows that leave a process behind: in the row's own group, in a session of its own (found only by the row token),
@@ -117,6 +117,15 @@ const RUNS = {
     lock: { args: [], rows: [['quick', 'fx-lock-free', 'lockFree'], ['full', 'fx-lock-held', 'lockHeld']] },
     lockWait: { args: [], hold: 1.5, rows: [['full', 'fx-lock-held', 'lockHeld']] },
     lockAncestor: { args: [], wrap: true, rows: [['full', 'fx-lock-held', 'lockHeld']] },
+    // The live-lock contract (SKIP-PROTOCOL.md, "The live lock"): another process holds the lock throughout.
+    lockForged: { args: [], hold: 6, env: { PB_LIVE_LOCK_HELD: '1' }, rows: [['full', 'fx-lock-held', 'lockHeld']] },
+    lockWrongTicks: { args: [], hold: 6, holderEnv: 'wrong-ticks', rows: [['full', 'fx-lock-held', 'lockHeld']] },
+    lockNamed: { args: [], hold: 6, holderEnv: 'right', rows: [['full', 'fx-lock-held', 'lockHeld']] },
+    // The holder's real /proc/locks line, recorded and given to the driver as its /proc/locks (fixture mode): as is,
+    // and with the same inode number on another device (review of the live lock: inode alone is not a match).
+    lockRecorded: { args: [], hold: 6, holderEnv: 'right', procLocks: 'as-recorded', rows: [['full', 'fx-lock-held', 'lockHeld']] },
+    lockOtherDevice: { args: [], hold: 6, holderEnv: 'right', procLocks: 'other-device', rows: [['full', 'fx-lock-held', 'lockHeld']] },
+    lockAncestorForged: { args: [], wrap: true, env: { PB_LIVE_LOCK_HELD: '1' }, rows: [['full', 'fx-lock-held', 'lockHeld']] },
     quickExtra: { args: ['--quick'], rows: [['quick', 'fx-legacy-nonl', 'legacyNoNl'], ['quick', 'fx-pass-nonl', 'passNoNl'], ['quick', 'fx-fn', 'FN:check_fixture_function_skip']] },
     gateModes: { args: ['--gate'], rows: [['quick', 'fx-items', 'items'], ['quick', 'fx-items-ok', 'itemsOk'], ['quick', 'fx-any-ok', 'anyOk'], ['quick', 'fx-any-two', 'anyTwo']] },
     gateNoSummary: { args: ['--gate'], rows: [['quick', 'fx-pass', 'pass'], ['bogus', 'fx-bogus', 'pass']] },
@@ -172,6 +181,13 @@ const CASES = {
     'an interrupted run stops what its row left in a session of its own': ['interrupt', (r) => { const left = strays(r.marker); return want(r.interrupted && left.length === 0, r.interrupted ? `pid(s) ${left.join(', ')} still running after the interrupt` : 'the row never started its detached process'); }],
     'the tracked driver refuses a stray fixture variable': ['strayTracked', (r) => want(r.status === 1 && has(r, "is not the driver self-test's staged copy") && !has(r, 'fx-pass'), `exit ${r.status}; the tracked driver ran the fixture registry`)],
     'a driver copy outside the staged path refuses it too': ['strayElsewhere', (r) => want(r.status === 1 && has(r, "is not the driver self-test's staged copy") && !has(r, 'fx-pass'), `exit ${r.status}; a copy outside the staged path ran the fixture registry`)],
+    'a forged PB_LIVE_LOCK_HELD=1 while another process holds the lock is a FAIL': ['lockForged', (r) => want(has(r, 'A variable cannot stand in for the lock') && has(r, '  fx-lock-held: FAIL\n') && !has(r, 'fx: PASS -- lock held') && !has(r, 'fx-lock-held: FAIL -- flock -n exit'), 'the driver went on (its row ran) under a forged PB_LIVE_LOCK_HELD=1')],
+    'a PB_LIVE_LOCK_HOLDER naming the holder with wrong start ticks is a FAIL': ['lockWrongTicks', (r) => want(has(r, 'A variable cannot stand in for the lock') && has(r, '  fx-lock-held: FAIL\n') && !has(r, 'fx: PASS -- lock held') && !has(r, 'fx-lock-held: FAIL -- flock -n exit'), 'the driver went on (its row ran) under a holder variable with the wrong start ticks')],
+    'the holder\'s recorded /proc/locks line is a match': ['lockRecorded', (r) => want(r.recorded && has(r, 'confirmed in /proc/locks') && has(r, '  fx-lock-held: PASS\n'), r.recorded ? 'the driver did not go on under its holder\'s own recorded line' : 'no /proc/locks line was recorded for the holder')],
+    'the same inode number on another device is not a match': ['lockOtherDevice', (r) => want(r.recorded && has(r, 'A variable cannot stand in for the lock') && !has(r, 'fx: PASS -- lock held') && !has(r, 'fx-lock-held: FAIL -- flock -n exit'), r.recorded ? 'the driver went on (its row ran) under a lock on another device with the same inode number' : 'no /proc/locks line was recorded for the holder')],
+    'a PB_LIVE_LOCK_HOLDER naming the holder with its start ticks goes on': ['lockNamed', (r) => want(has(r, 'confirmed in /proc/locks') && has(r, '  fx-lock-held: PASS\n'), 'the driver did not go on under the real holder')],
+    'an ancestor holder goes on, even beside a forged PB_LIVE_LOCK_HELD=1': ['lockAncestorForged', (r) => want(r.status === 0 && has(r, 'held by a caller of this run') && has(r, '  fx-lock-held: PASS\n'), `exit ${r.status}${r.timedOut ? ' (timed out)' : ''}; an ancestor flock did not let the driver go on`)],
+    'the waiting message names the holder and suggests no variable': ['lockWait', (r) => want(has(r, 'waiting for the live lock') && /held by: pid \d+ /.test(r.text) && !/set PB_LIVE_LOCK/.test(r.text), 'the wait message does not name the holder pid, or still suggests setting a variable')],
     'a run under flock <lock> by its caller does not wait for itself': ['lockAncestor', (r) => want(r.status === 0 && has(r, 'held by a caller of this run'), `exit ${r.status}${r.timedOut ? ' (timed out: the run waited for its own caller)' : ''}`)],
 };
 
@@ -197,6 +213,9 @@ const PLANTS = [
     { name: 'the leak leg run without --sweep', from: '--label "$label" --sweep || leg_rc=$?', to: '--label "$label" || leg_rc=$?', kase: 'nothing a row left is still running after the run' },
     { name: 'a survivor not red under --gate', from: 'elif [ "$survivors" -eq 1 ] && [ "$GATE" -eq 1 ]; then', to: 'elif false; then', kase: '--gate fails a row that leaves a process behind' },
     { name: 'the live lock not taken', from: 'if [ -n "${FULL_TIER[$label]:-}" ] && ! acquire_live_lock; then', to: 'if false; then', kase: 'a full-tier row runs under the live lock' },
+    { name: 'the named holder\'s start ticks not compared', from: '[ "$(start_ticks_of "$pid")" = "$ticks" ] || return 1', to: 'true', kase: 'a PB_LIVE_LOCK_HOLDER naming the holder with wrong start ticks is a FAIL' },
+    { name: 'the lock matched on its inode alone', from: 'tolower(f[1] ":" f[2]) == dev', to: '1', kase: 'the same inode number on another device is not a match' },
+    { name: 'an inherited PB_LIVE_LOCK_HELD trusted', from: '    return 1 # forged-lock-variable', to: '    LIVE_LOCK_STATE=1; return 0 # forged-lock-variable', kase: 'a forged PB_LIVE_LOCK_HELD=1 while another process holds the lock is a FAIL' },
     { name: 'no check for a caller holding the lock', from: '  if lock_held_by_ancestor "$lock"; then', to: '  if false; then', kase: 'a run under flock <lock> by its caller does not wait for itself' },
 ];
 
@@ -244,7 +263,7 @@ async function runDriver(trees, fx, runName) {
     writeFileSync(registry, run.rows.map(([tier, label, key]) => `${tier}|${label}|${key.startsWith('FN:') ? key.slice(3) : `node ${join(fx, `${key}.mjs`)}`}`).join('\n') + '\n');
     writeFileSync(lock, '');
     const env = { ...process.env };
-    for (const k of Object.keys(env)) if (k.startsWith('PB_VERIFY_') || k === 'PB_LIVE_LOCK_HELD') delete env[k];
+    for (const k of Object.keys(env)) if (k.startsWith('PB_VERIFY_') || k.startsWith('PB_LIVE_LOCK_')) delete env[k];
     Object.assign(env, {
         PB_VERIFY_FIXTURE_REGISTRY: registry,
         PB_VERIFY_FIXTURE_EXCLUSIONS: join(fx, 'exclusions.txt'),
@@ -254,10 +273,29 @@ async function runDriver(trees, fx, runName) {
         ...(run.env ?? {}),
     });
     let holder = null;
+    let recorded = false;
     if (run.hold) {
         // Another live run: it holds the lock for run.hold seconds, taken before the driver starts.
         holder = spawn('flock', [lock, 'sleep', String(run.hold)], { stdio: 'ignore' });
         for (let i = 0; i < 100 && flockFree(lock); i++) await settle(20);
+        if (run.holderEnv) {
+            // flock itself holds the lock (/proc/locks names its pid); 'wrong-ticks' names that pid with other ticks.
+            const stat = readFileSync(`/proc/${holder.pid}/stat`, 'utf8');
+            const ticks = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]);
+            env.PB_LIVE_LOCK_HELD = '1';
+            env.PB_LIVE_LOCK_HOLDER = `${holder.pid}:${run.holderEnv === 'right' ? ticks : ticks + 1}`;
+        }
+        if (run.procLocks) {
+            const line = readFileSync('/proc/locks', 'utf8').split('\n').find((l) => !l.includes('->') && l.split(/\s+/)[4] === String(holder.pid));
+            if (line) {
+                recorded = true;
+                // Another device: flip the device field to one no mount here has, keep the inode number.
+                const text = run.procLocks === 'other-device' ? line.replace(/ ([0-9a-f]+):([0-9a-f]+):(\d+) /, ' ff:fe:$3 ') : line;
+                const file = join(fx, `proc-locks-${id}`);
+                writeFileSync(file, text + '\n');
+                env.PB_VERIFY_FIXTURE_PROC_LOCKS = file;
+            }
+        }
     }
     const [bin, argv] = run.wrap ? ['flock', [lock, 'bash', tree.driver, ...run.args]] : ['bash', [tree.driver, ...run.args]];
     // A process group of its own, so a timed-out run (the driver waiting on a lock its own caller holds: flock hands
@@ -295,7 +333,7 @@ async function runDriver(trees, fx, runName) {
     c.stdout.destroy();
     c.stderr.destroy();
     if (holder) holder.kill('SIGKILL');
-    return { status, timedOut, text: `${out}\n${err}`, marker, lockFreeAfter: !timedOut && flockFree(lock), lockFreeAfterKill, interrupted };
+    return { status, timedOut, text: `${out}\n${err}`, marker, lockFreeAfter: !timedOut && flockFree(lock), lockFreeAfterKill, interrupted, recorded };
 }
 
 /** Runs fn over items, at most PARALLEL at once; resolves the results in order. */

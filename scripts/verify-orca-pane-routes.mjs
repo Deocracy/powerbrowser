@@ -385,6 +385,9 @@ export function check(root) {
     const protocol = read(REL.protocol);
     const apiMembers = deriveInterfaceMembers(protocol, 'OrcaPaneBundleApi');
     if (!apiMembers?.length) fails.push(`OrcaPaneBundleApi not found in ${REL.protocol}`);
+    const gone = (rel) => `${rel} is a tracked file of this repository and is absent from the tree (harness-static-structure-01: the lane that added it is merged, so this is a deletion, not an unmerged lane). Next step: restore it from version control.`;
+    if (!has(REL.entry)) fails.push(gone(REL.entry));
+    if (!has(REL.viteConfig)) fails.push(gone(REL.viteConfig));
     if (has(REL.entry)) {
         notes.d = 'compared';
         const exports = new Set(deriveNamedExports(read(REL.entry), REL.entry));
@@ -420,7 +423,8 @@ export function check(root) {
     const moduleKey = stringOf(constInitializer(loaderSf, 'ORCA_PANES_MODULE_KEY'));
     const bootEvent = stringOf(constInitializer(loaderSf, 'ORCA_PANES_BOOT_EVENT'));
     if (moduleKey === undefined || bootEvent === undefined) fails.push(`ORCA_PANES_MODULE_KEY or ORCA_PANES_BOOT_EVENT not found in ${REL.loader}`);
-    else if (has(REL.tabsLive)) {
+    else if (!has(REL.tabsLive)) fails.push(gone(REL.tabsLive));
+    else {
         notes.g = 'compared';
         const literals = deriveStringLiterals(read(REL.tabsLive), REL.tabsLive);
         if (!literals.has(moduleKey)) fails.push(`module key '${moduleKey}' of the loader is not a literal of ${REL.tabsLive}`);
@@ -467,9 +471,15 @@ function fixtureTabsLive(root) {
         + `export const BOOT_EVENT = ${JSON.stringify(stringOf(constInitializer(sf, 'ORCA_PANES_BOOT_EVENT')))};\n`;
 }
 
+// A tracked input removed from the tree is red, never a SKIP (harness-static-structure-01).
+const REMOVED = [
+    ['bundle entry removed', REL.entry], ['vite config removed', REL.viteConfig], ['orca-tabs-live removed', REL.tabsLive],
+].map(([name, file]) => ({ name, naming: `${file} is a tracked file of this repository and is absent`, file, edit: () => null }));
+
 const PLANT_FILE = 'orca-overlay/files/src/renderer/src/pb/pb-plant.ts';
 
 export const PLANTS = [
+    ...REMOVED,
     { name: 'content-type-added', naming: 'added content type planted-kind', file: REL.tabTypes, edit: (s) => s.replace("export type TabContentType =\n  | 'terminal'", "export type TabContentType =\n  | 'planted-kind'\n  | 'terminal'") },
     { name: 'content-type-removed', naming: 'removed content type simulator', file: REL.tabTypes, edit: (s) => s.replace(/(export type TabContentType =[\s\S]*?)\n {2}\| 'simulator'/, '$1') },
     { name: 'unknown-target', naming: 'unknown target kind pb-window', file: REL.routes, edit: (s) => s.replace("'browser': { target: 'pb-web-tab' }", "'browser': { target: 'pb-window', requirement: 'BRW-02' }") },
@@ -519,10 +529,10 @@ function runSelfTest() {
             const file = join(tmp, p.file);
             const original = existsSync(file) ? readFileSync(file, 'utf8') : undefined;
             const planted = p.edit(original ?? '');
-            if (planted === original) { console.error(`  FAIL ${p.name} -> the plant did not apply (its anchor text moved)`); failures++; continue; }
-            put(p.file, planted);
+            if (planted === original || (planted === null && original === undefined)) { console.error(`  FAIL ${p.name} -> the plant did not apply (its anchor text moved)`); failures++; continue; }
+            if (planted === null) rmSync(file); else put(p.file, planted);
             const r = check(tmp);
-            if (original === undefined) rmSync(file); else writeFileSync(file, original);
+            if (original === undefined) rmSync(file); else { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, original); }
             const text = r.fails.join('\n');
             if (!r.fails.length) { console.error(`  FAIL ${p.name} -> stayed green`); failures++; } else if (!text.includes(p.naming)) {
                 console.error(`  FAIL ${p.name} -> red, but not naming '${p.naming}': ${text}`); failures++;
@@ -554,10 +564,6 @@ if (isEntryPoint) {
     const r = check(REPO_ROOT);
     if (r.fails.length) { for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`); process.exit(1); }
     const n = r.notes;
-    const skips = [];
-    if (n.d !== 'compared') skips.push(`clause d (bundle API and hand-off key) did not run: ${REL.entry} is absent. Next step: scripts/build-orca.sh`);
-    if (n.g !== 'compared') skips.push(`clause g (module key and boot event) did not run: ${REL.tabsLive} is absent`);
-    if (skips.length) { console.log(skipLine(NAME, skips.join('; '))); process.exit(SKIP_EXIT); }
     console.log(`${NAME}: PASS -- ${n.members.length} TabContentType members (${n.members.join(', ')}) equal ORCA_PANE_ROUTES' keys; targets ${n.targets.join(', ')}, each with an observer branch; words ${n.words.join(', ')} equal the doc's; page words ${n.pageWords.join(', ')} equal the doc's page table; placement ${n.placement}/${n.placementOf}; worktree guard ${n.guards}/${n.guardsOf}; no client-side terminal creation; (d) bundle API and hand-off key compared; (g) module key and boot event compared`);
     process.exit(0);
 }

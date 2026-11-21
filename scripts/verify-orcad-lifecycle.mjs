@@ -39,7 +39,17 @@
 //                      (the name set derived from OrcaService's _removeHandOff) before its first spawn.
 //   platform-alias     (62-WR-06) darwin links with ln -sfn and refuses a real folder; win32 makes no alias;
 //                      the names OrcaEnv itself reads on win32 reach orcad's environment.
-//   port-holder        (orcad-hosting-03) the holder of a busy port is a diagnostics row, from /proc/net/tcp.
+//   port-holder        (orcad-hosting-03) the holder of a busy port is a diagnostics row, from /proc/net/tcp and
+//                      /proc/net/tcp6 (a dual-stack listener is listed in tcp6 only).
+//   keeper-windows     (orcad-hosting-01 follow-up) after an orcad crash a keeper process holds the kept daemon until
+//                      a new orcad is accepted, through a failed respawn; a respawned orcad is told the daemon before
+//                      acceptance. watch-fixture f-j run the adopted line and the keeper in real processes.
+//   port-frozen        (67-WR-03 follow-up) a pref change during the session reaches neither a Theia respawn nor a
+//                      Restart: both keep the port orcad started on.
+//   mapped-codes       (harness-static-hosting-10, lane H2 handoff) every code ORCA_CODE_CLASSES maps ends a start
+//                      at once, in its class.
+//   start-tree         (62-WR-01 / orcad-hosting-08 follow-up) an orcad that dies by a signal before ready leaves
+//                      no daemon: the tree listed while the gate waited is ended.
 //   sidecar-orca-port  (67-WR-03, lane G3b handoff) TheiaService gives the Theia backend POWERBROWSER_ORCA_PORT
 //                      from OrcaService.orcadPort, the accessor orcad's own start reads, wired in powerbrowser.js
 //                      before Theia starts.
@@ -179,6 +189,7 @@ function makeBoundary(world) {
         spawnProcessExact: async (spec) => {
             rec('spawnProcessExact', spec);
             if (spec.command.endsWith('/ln')) return fakeProc(7000, { exitCode: 0 });
+            if (spec.args[0] === '--input-type=module') { const k = fakeProc(8000 + calls.length); k.keeper = true; return k; }
             spawned += 1;
             const proc = world.orcad(spawned, spec);
             if (proc.exitCode === null) alive.set(proc.pid, world.ticksFor?.(proc.pid) ?? '111');
@@ -194,7 +205,7 @@ function makeBoundary(world) {
         realPath: (path) => world.realPaths?.[path] ?? path,
         ...(world.hosting ?? {}),
     };
-    return { api, processes, hosting, calls, alive, files, bridge, spawnedCount: () => spawned };
+    return { api, processes, hosting, calls, alive, files, bridge, prefs, spawnedCount: () => spawned };
 }
 
 async function loadService(paths, b, env) {
@@ -208,7 +219,9 @@ async function loadService(paths, b, env) {
     return (await freshImport(paths.orcaService)).OrcaService;
 }
 
-const orcadSpawns = (calls) => calls.filter((c) => c.name === 'spawnProcessExact' && !c.args[0].command.endsWith('/ln'));
+const isKeeperSpec = (spec) => spec.args[0] === '--input-type=module';
+const orcadSpawns = (calls) => calls.filter((c) => c.name === 'spawnProcessExact' && !c.args[0].command.endsWith('/ln') && !isKeeperSpec(c.args[0]));
+const keeperSpawns = (calls) => calls.filter((c) => c.name === 'spawnProcessExact' && isKeeperSpec(c.args[0]));
 const signalled = (calls, pid) => calls.some((c) => c.name === 'signalBarePid' && c.args[0] === pid);
 const readyOrcad = (pid, opts = {}) => fakeProc(pid, { stdout: [readyLine(26768, opts)], ...opts });
 const portBusy = (pid) => fakeProc(pid, { stderr: ['[orcad] pinned_port_unavailable 127.0.0.1:26768\n'], exitCode: 1 });
@@ -477,6 +490,137 @@ async function statusGeneration(paths, env) {
     return fails;
 }
 
+/**
+ * Audit follow-up to orcad-hosting-01: every window in which a kept daemon has no accepted orcad is covered. After
+ * an orcad crash the keeper is started and told the daemon; a respawned orcad is told it before acceptance; the
+ * keeper stays through a failed respawn and is let go only once a new orcad is accepted.
+ */
+async function keeperWindows(paths, env) {
+    const fails = [];
+    let first;
+    const b = makeBoundary({
+        alive: [[5002, '222'], [5003, '333']],
+        tree: tree3(5001),
+        orcad: (n) => (n === 1 ? (first = readyOrcad(5001)) : n === 2 ? portBusy(6001) : readyOrcad(7001)),
+    });
+    const svc = await loadService(paths, b, env);
+    await svc.start();
+    if (keeperSpawns(b.calls).length) fails.push('keeper-windows: a keeper started while an accepted orcad watched the daemon');
+    first.exit(1);
+    await until(() => svc.getState().state === 'failed');
+    const named = env.orcadAdoptedLine({ daemonPid: 5002, daemonTicks: '222' });
+    const keeperSpawn = keeperSpawns(b.calls)[0];
+    if (!keeperSpawn) fails.push('keeper-windows: after an orcad crash no keeper holds the kept daemon, so a PowerBrowser crash in the backoff, before the respawn is accepted or on the failure page leaves the daemon and its agents running');
+    else if (JSON.stringify(keeperSpawn.args[0].args) !== JSON.stringify(env.buildOrcadKeeperArgs())) fails.push('keeper-windows: the keeper was not started with OrcaEnv.buildOrcadKeeperArgs()');
+    const toKeeper = b.calls.filter((c) => c.name === 'writeStdinLine' && c.args[0] >= 8000);
+    if (keeperSpawn && !toKeeper.some((c) => c.args[1] === named)) fails.push(`keeper-windows: the keeper was never told the kept daemon (${named})`);
+    if (toKeeper.some((c) => c.args[1] === env.orcadKeeperReleaseLine())) fails.push('keeper-windows: the keeper was let go while the failure page keeps the daemon');
+    const respawnPid = 6001;
+    if (!b.calls.some((c) => c.name === 'writeStdinLine' && c.args[0] === respawnPid && c.args[1] === named)) fails.push('keeper-windows: the respawned orcad was not told the kept daemon before acceptance');
+    await svc.restart();
+    await svc._restartRun;
+    await until(() => b.calls.some((c) => c.name === 'writeStdinLine' && c.args[0] >= 8000 && c.args[1] === env.orcadKeeperReleaseLine()), 1000);
+    if (svc.getState().state === 'ready' && !b.calls.some((c) => c.name === 'writeStdinLine' && c.args[0] >= 8000 && c.args[1] === env.orcadKeeperReleaseLine())) fails.push('keeper-windows: the keeper was not let go after a new orcad was accepted');
+    await svc.stop();
+    return fails;
+}
+
+/**
+ * Audit follow-up to 67-WR-03: the port is the one the session started with. A: the pref changes, then the Theia
+ * backend respawns; B: the pref changes, then Restart from the failed state. Both sides keep the first port.
+ */
+async function portFrozen(paths, env) {
+    const fails = [];
+    let first;
+    const b = makeBoundary({
+        prefs: { 'powerbrowser.orca.port': 23456 },
+        alive: [[5002, '222']],
+        tree: tree3(5001),
+        orcad: (n) => (n === 1 ? (first = fakeProc(5001, { stdout: [readyLine(23456)] })) : n === 2 ? portBusy(6001) : fakeProc(7001, { stdout: [readyLine(23456)] })),
+    });
+    const svc = await loadService(paths, b, env);
+    globalThis.ChromeUtils = {
+        importESModule: (url) => (url === 'chrome://powerbrowser/content/OrcaEnv.sys.mjs' ? env : { PowerBrowserAPI: { log: () => {} }, PowerBrowserProcesses: {} }),
+    };
+    const { TheiaService } = await freshImport(paths.theiaService);
+    TheiaService.setOrcaPortSource?.(() => svc.orcadPort());
+    const theiaFirst = TheiaService._orcaPort?.();
+    await svc.start();
+    b.prefs['powerbrowser.orca.port'] = 24000;
+    if (TheiaService._orcaPort?.() !== theiaFirst || theiaFirst !== 23456) fails.push(`port-frozen (A): after the pref changed, a Theia backend respawn is given port ${TheiaService._orcaPort?.()} while orcad runs on 23456`);
+    first.exit(1);
+    await until(() => svc.getState().state === 'failed');
+    await svc.restart();
+    await svc._restartRun;
+    const portOf = (c) => Number(c.args[0].args[c.args[0].args.indexOf('--port') + 1]);
+    const ports = orcadSpawns(b.calls).map(portOf);
+    if (ports.some((p) => p !== 23456)) fails.push(`port-frozen (B): after the pref changed, Restart started orcad on ${ports.join(', ')}, while the Theia backend holds 23456`);
+    if (svc.orcadPort() !== 23456) fails.push(`port-frozen: orcadPort() answers ${svc.orcadPort()} after the pref changed, not the port orcad was started on`);
+    await svc.stop();
+    return fails;
+}
+
+/**
+ * Audit follow-up to 62-WR-01 and orcad-hosting-08: orcad starts its daemon, then dies by a signal before ready (its
+ * watch's exit handler never runs) and the daemon is reparented out of orcad's tree. The listing taken while the
+ * gate waited still names it, and the failed start ends it.
+ */
+async function startTree(paths, env) {
+    const fails = [];
+    const world = {
+        prefs: { 'powerbrowser.orca.giveUpAttempts': 1 },
+        alive: [[5002, '222'], [5003, '333']],
+        immortal: [5003],
+        tree: (roots) => (world.reparented ? (roots.includes(5002) ? tree3(5001)(roots).slice(1) : []) : tree3(5001)(roots)),
+        orcad: () => {
+            const p = fakeProc(5001, { stdout: [] });
+            p.hang = true;
+            setTimeout(() => { world.reparented = true; p.exit(null); }, 40);
+            return p;
+        },
+    };
+    const b = makeBoundary(world);
+    const svc = await loadService(paths, b, env);
+    await svc.start();
+    await svc.stop();
+    if (b.alive.has(5002) || b.alive.has(5003)) fails.push(`start-tree: orcad died by a signal before its ready line, and ${[b.alive.has(5002) && 'its daemon (pid 5002)', b.alive.has(5003) && 'the agent under it (pid 5003)'].filter(Boolean).join(' and ')} outlived quit, untracked`);
+    return fails;
+}
+
+/**
+ * harness-static-hosting-10 (from lane H2): every refusal code ORCA_CODE_CLASSES maps ends the start at once, in the
+ * code's class, instead of being retried as recoverable.
+ */
+async function mappedCodes(paths, env) {
+    const fails = [];
+    for (const [code, cls] of Object.entries(env.ORCA_CODE_CLASSES)) {
+        const b = makeBoundary({ prefs: { 'powerbrowser.orca.giveUpAttempts': 2 }, alive: [[5002, '222']], tree: tree3(5001), orcad: (n) => fakeProc(5000 + n, { stderr: [`[orcad] refused: ${code}\n`], exitCode: 1 }) });
+        const svc = await loadService(paths, b, env);
+        await svc.start();
+        const spawns = orcadSpawns(b.calls).length;
+        const got = svc.getState().failureClass;
+        if (spawns !== 1 || got !== cls) fails.push(`mapped-codes: orcad refusing with ${code} was started ${spawns} time(s) and ended in class ${got}, not once and ${cls}`);
+        await svc.stop();
+    }
+    // A configuration exit (EX_CONFIG) that printed no mapped code is final too; the native preflight prints sentences.
+    {
+        const b = makeBoundary({ prefs: { 'powerbrowser.orca.giveUpAttempts': 2 }, alive: [[5002, '222']], tree: tree3(5001), orcad: (n) => fakeProc(5000 + n, { stderr: ['orcad: Terminals are unavailable on this host: node-pty failed to load.\n'], exitCode: env.ORCAD_EXIT_CONFIGURATION }) });
+        const svc = await loadService(paths, b, env);
+        await svc.start();
+        if (orcadSpawns(b.calls).length !== 1 || svc.getState().failureClass !== 'could-not-start') fails.push(`mapped-codes: a configuration exit (status ${env.ORCAD_EXIT_CONFIGURATION}) with no code printed was started ${orcadSpawns(b.calls).length} time(s) and ended in ${svc.getState().failureClass}, not once and could-not-start`);
+        await svc.stop();
+    }
+    // The lock holder that cannot be verified is upstream's already-running exit: retried after the reap, not final.
+    {
+        const b = makeBoundary({ prefs: { 'powerbrowser.orca.giveUpAttempts': 2 }, alive: [[5002, '222']], tree: tree3(5001), orcad: (n) => fakeProc(5000 + n, { stderr: ['[orcad] orcad_instance_lock_holder_unverifiable\n'], exitCode: 3 }) });
+        const svc = await loadService(paths, b, env);
+        await svc.start();
+        if (orcadSpawns(b.calls).length !== 2) fails.push(`mapped-codes: orcad_instance_lock_holder_unverifiable (the already-running exit) was started ${orcadSpawns(b.calls).length} time(s); it must be retried after the reap, as for another orcad holding the profile`);
+        await svc.stop();
+    }
+    return fails;
+}
+
 /** 67-WR-03 (from lane G3b): the Theia backend is given the port OrcaService starts orcad on, from the one accessor. */
 async function sidecarOrcaPort(paths, env) {
     const fails = [];
@@ -540,8 +684,13 @@ async function platformAlias(paths, env) {
     env.credentialKeyFolderFor(recorder, 'win32');
     await env.bridgeDirFor(DATA_ROOT, recorder, 'win32');
     for (const n of env.ORCA_TEMP_ENV_NAMES.win32) readNames.add(n);
-    const missing = [...readNames].filter((n) => !env.ORCAD_ENV_ALLOWLIST.includes(n));
-    if (missing.length) fails.push(`platform-alias: ${missing.join(', ')}, read by OrcaEnv on win32, never reach orcad's environment (ORCAD_ENV_ALLOWLIST)`);
+    const win = env.buildOrcadEnv(() => 'C:\\x', { dataRoot: 'C:\\d', orcaVersion: '9.9.9', claudeAgentSdkDir: '', platform: 'win32' });
+    const missing = [...readNames].filter((n) => !(n in win));
+    if (missing.length) fails.push(`platform-alias: ${missing.join(', ')}, read by OrcaEnv on win32, never reach orcad's environment there`);
+    // Off win32 the temp names stay as they were: only TMPDIR of ORCA_TEMP_ENV_NAMES.linux was ever passed.
+    const linux = env.buildOrcadEnv(() => '/x', { dataRoot: '/d', orcaVersion: '9.9.9', claudeAgentSdkDir: '', platform: 'linux' });
+    const added = env.ORCA_TEMP_ENV_NAMES.linux.filter((n) => n !== 'TMPDIR' && n in linux);
+    if (added.length) fails.push(`platform-alias: ${added.join(', ')} now reach orcad on Linux, which changes the temp folder of orcad, its daemon and the agents`);
     return fails;
 }
 
@@ -551,18 +700,37 @@ async function portHolder(paths, env) {
     const head = '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode';
     const row = (addr, st, uid) => `   0: ${addr}:${hex} 00000000:0000 ${st} 00000000:00000000 00:00000000 00000000  ${uid}        0 1 1 0000000000000000 100 0 0 10 0`;
     const tcp = [head, row('0100007F', '01', 4321), row('0100007F', '0A', 1001), ''].join('\n');
+    const tcp6 = [head, row('00000000000000000000000001000000', '0A', 4444), row('00000000000000000000000000000000', '0A', 1002), ''].join('\n');
+    if (env.portHolderUidOf?.([head, tcp6], 26768) !== 1002) fails.push(`port-holder: a dual-stack listener (:: in /proc/net/tcp6, uid 1002) read as ${env.portHolderUidOf?.([head, tcp6], 26768)}; the most common holder leaves the row empty`);
     if (env.portHolderUidOf?.(tcp, 26768) !== 1001) fails.push(`port-holder: portHolderUidOf read uid ${env.portHolderUidOf?.(tcp, 26768)} from a /proc/net/tcp LISTEN row of uid 1001`);
     const b = makeBoundary({
         alive: [[5002, '222']],
         tree: tree3(5001),
-        hosting: { readLoopbackSocketTable: async () => ({ tcp, uid: 1000 }) },
+        hosting: { readLoopbackSocketTable: async () => ({ tcp: head, tcp6, uid: 1000 }) },
         orcad: () => portBusy(5001),
     });
     const svc = await loadService(paths, b, env);
     await svc.start();
     const value = svc.getDiagnosticRows().find(([l]) => l === 'Orca port holder')?.[1];
-    if (value !== 'another user (uid 1001)') fails.push(`port-holder: a port held by uid 1001 shows the port-holder row ${JSON.stringify(value)}, so a squatter cannot be told from a leftover`);
+    if (value !== 'another user (uid 1002)') fails.push(`port-holder: a port held by a dual-stack listener of uid 1002 shows the port-holder row ${JSON.stringify(value)}, so a squatter cannot be told from a leftover`);
     await svc.stop();
+    // ::1 does not hold the IPv4 port orcad binds, so a listener there alone is no holder.
+    const loopback6Only = [head, row('00000000000000000000000001000000', '0A', 4444), ''].join('\n');
+    if (env.portHolderUidOf?.([head, loopback6Only], 26768) !== null) fails.push(`port-holder: a listener on ::1 alone was read as the holder (uid ${env.portHolderUidOf?.([head, loopback6Only], 26768)}), but it does not hold 127.0.0.1`);
+    // G1a's reader marks a table it could not read whole; with no holder in the part read, the row must not imply a free port.
+    {
+        const b2 = makeBoundary({
+            alive: [[5002, '222']],
+            tree: tree3(5001),
+            hosting: { readLoopbackSocketTable: async () => ({ tcp: [head, row('0100007F', '01', 4321)].join('\n'), tcp6: head, uid: 1000, truncated: true }) },
+            orcad: () => portBusy(5001),
+        });
+        const svc2 = await loadService(paths, b2, env);
+        await svc2.start();
+        const shown = svc2.getDiagnosticRows().find(([l]) => l === 'Orca port holder')?.[1];
+        if (shown !== env.PORT_HOLDER_UNDETERMINED) fails.push(`port-holder: a truncated socket table with no holder row shows ${shown === undefined ? 'no port-holder row, as if nothing held the port' : JSON.stringify(shown)}, not that the holder could not be determined`);
+        await svc2.stop();
+    }
     return fails;
 }
 
@@ -575,6 +743,7 @@ function startTicks(pid) {
     const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
     return fields[0] === 'Z' ? null : fields[19] ?? null;
 }
+const ppidOf = (pid) => { const stat = read(`/proc/${pid}/stat`); return stat ? Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]) : null; };
 const isAlive = (pid, ticks) => Number.isInteger(pid) && ticks !== null && startTicks(pid) === ticks;
 function killIdentity(pid, ticks) { if (isAlive(pid, ticks)) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } } }
 const waitGone = async (ids, ms) => { for (let t = 0; t < ms; t += 50) { if (ids.every(([p, k]) => !isAlive(p, k))) return true; await sleep(50); } return ids.every(([p, k]) => !isAlive(p, k)); };
@@ -594,7 +763,7 @@ writeFileSync(process.env.PB_FIXTURE_DIR + '/agent-' + process.pid, String(agent
 setInterval(() => {}, 1000);
 `;
 
-async function runFixture(env, dir, { accept, then, named = null }) {
+async function runFixture(env, dir, { accept, then, named = null, adopt = false }) {
     const main = join(dir, 'orcad.js');
     const child = spawn(process.execPath, [...env.buildOrcadWatchArgs({ orcadMain: main }), main], {
         cwd: dir,
@@ -621,6 +790,10 @@ async function runFixture(env, dir, { accept, then, named = null }) {
         started.push(agent);
         if (named) started.push(named.identity);
         if (!isAlive(...daemon) || !isAlive(...agent)) return { fail: `the stand-in daemon or agent was not running before the case began (the daemon's copy of the watch may have armed); stderr: ${err.slice(-300)}` };
+        if (adopt && named) {
+            child.stdin.write(`${env.orcadAdoptedLine({ daemonPid: named.identity[0], daemonTicks: named.ticks })}\n`);
+            await sleep(150);
+        }
         if (accept) {
             const line = env.orcadAcceptedLine(named ? { daemonPid: named.identity[0], daemonTicks: named.ticks } : { daemonPid: daemon[0], daemonTicks: daemon[1] });
             child.stdin.write(`${line}\n`);
@@ -696,6 +869,60 @@ async function watchFixture(env) {
             killIdentity(...identity);
             void name;
         }
+        // f/g. A daemon this session keeps, named by the adopted line before any acceptance (audit follow-up).
+        for (const [label, how] of [['f. kept daemon named before acceptance, PowerBrowser gone', 'eof'], ['g. kept daemon named before acceptance, orcad exits', 'exit']]) {
+            const other = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+            await sleep(100);
+            const identity = [other.pid, startTicks(other.pid)];
+            record(label, await runFixture(env, dir, {
+                accept: false,
+                adopt: true,
+                named: { identity, ticks: identity[1] },
+                then: async ({ child, orcad }) => {
+                    if (how === 'eof') {
+                        child.stdin.end();
+                        if (!(await waitGone([identity], bound))) return { fail: `the kept daemon named to a respawned orcad before acceptance (pid ${identity[0]}) survived PowerBrowser's end` };
+                        return null;
+                    }
+                    process.kill(orcad[0], 'SIGUSR2');
+                    await waitGone([orcad], bound);
+                    await sleep(800);
+                    if (!isAlive(...identity)) return { fail: `a respawned orcad that failed before acceptance ended the kept daemon (pid ${identity[0]}); only a quit or PowerBrowser's end may (D-07)` };
+                    return null;
+                },
+            }));
+            killIdentity(...identity);
+        }
+        // h/i/j. The keeper, for the windows with no accepted orcad.
+        for (const [label, how] of [['h. keeper, PowerBrowser gone', 'eof'], ['i. keeper released', 'release'], ['j. keeper, wrong start ticks', 'ticks']]) {
+            const daemonProc = spawn(process.execPath, ['-e', "require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }); setInterval(() => {}, 1000)"], { stdio: 'ignore' });
+            await sleep(400);
+            const daemonId = [daemonProc.pid, startTicks(daemonProc.pid)];
+            const agentPid = readdirSync('/proc').map(Number).find((p) => Number.isInteger(p) && p > 0 && ppidOf(p) === daemonProc.pid);
+            const agentId = [agentPid, agentPid ? startTicks(agentPid) : null];
+            const keeper = spawn(process.execPath, env.buildOrcadKeeperArgs(), { env: liveEnv({ PATH: process.env.PATH ?? '' }), stdio: ['pipe', 'ignore', 'pipe'] });
+            let kerr = '';
+            keeper.stderr.on('data', (d) => { kerr += d; });
+            try {
+                if (!agentPid) { fails.push(`watch-fixture (${label}): setup: the stand-in daemon started no agent`); continue; }
+                await sleep(300);
+                keeper.stdin.write(`${env.orcadAdoptedLine({ daemonPid: daemonId[0], daemonTicks: how === 'ticks' ? '1' : daemonId[1] })}\n`);
+                await sleep(150);
+                if (how === 'release') keeper.stdin.write(`${env.orcadKeeperReleaseLine()}\n`);
+                else keeper.stdin.end();
+                if (how === 'eof' && !(await waitGone([daemonId, agentId], bound))) {
+                    fails.push(`watch-fixture (${label}): the keeper's end-of-file left ${[isAlive(...daemonId) && `the kept daemon (pid ${daemonId[0]})`, isAlive(...agentId) && `the agent under it (pid ${agentId[0]})`].filter(Boolean).join(' and ')} running; a PowerBrowser crash while no accepted orcad exists leaves them (stderr: ${kerr.slice(-200)})`);
+                }
+                if (how !== 'eof') {
+                    await sleep(800);
+                    if (!isAlive(...daemonId)) fails.push(`watch-fixture (${label}): the keeper ended the daemon (pid ${daemonId[0]}) ${how === 'release' ? 'after it was released' : 'named with start ticks that are not its own'}`);
+                }
+            } finally {
+                killIdentity(...agentId);
+                killIdentity(...daemonId);
+                try { keeper.kill('SIGKILL'); } catch { /* gone */ }
+            }
+        }
     } finally {
         rmSync(dir, { recursive: true, force: true });
     }
@@ -769,7 +996,7 @@ export async function check(paths, { fixture = true } = {}) {
         ['watch-wired', watchWired], ['restart-keeps-daemon', restartKeepsDaemon], ['failed-start', failedStart],
         ['stop-during-ready', stopDuringReady], ['exit-handoff', exitHandOff], ['no-offer', noOffer],
         ['start-after-quit', startAfterQuit], ['crash-loop', crashLoop], ['theia-clears', theiaClears],
-        ['platform-alias', platformAlias], ['port-holder', portHolder], ['sidecar-orca-port', sidecarOrcaPort], ['status-generation', statusGeneration], ['client-recovered', clientRecovered],
+        ['platform-alias', platformAlias], ['port-holder', portHolder], ['sidecar-orca-port', sidecarOrcaPort], ['status-generation', statusGeneration], ['client-recovered', clientRecovered], ['keeper-windows', keeperWindows], ['port-frozen', portFrozen], ['start-tree', startTree], ['mapped-codes', mappedCodes],
     ];
     for (const [label, fn] of clauses) {
         try { fails.push(...(await fn(paths, env))); } catch (err) { fails.push(`${label}: threw ${err && err.stack ? err.stack.split('\n').slice(0, 2).join(' ') : err}`); }
@@ -799,9 +1026,10 @@ function plants() {
         { fixture: true, name: 'watch arms in every process', naming: 'b. orcad exit after acceptance', file: E, edit: swap('isMainThread && process.argv[1] === resolve(MAIN) && (stdin.isFIFO() || stdin.isSocket())', 'isMainThread') },
         { fixture: true, name: 'watch ends nothing on a failed start', naming: 'c. orcad exit before acceptance', file: E, edit: swap('if (parentGone || !accepted) {', 'if (parentGone) {') },
         { fixture: true, name: 'watch ignores the named daemon', naming: 'd. adopted daemon', file: E, edit: swap('      roots.push(daemon.pid);\n', '') },
-        { fixture: true, name: 'watch takes the named daemon without its start ticks', naming: 'e. wrong start ticks', file: E, edit: swap('if (daemon && rows.get(daemon.pid)?.ticks === daemon.ticks) {', 'if (daemon && rows.has(daemon.pid)) {') },
+        { fixture: true, name: 'watch takes the named daemon without its start ticks', naming: 'e. wrong start ticks', file: E, edit: swap('parentGone && daemon && rows.get(daemon.pid)?.ticks === daemon.ticks', 'parentGone && daemon && rows.has(daemon.pid)') },
+        { fixture: true, name: 'keeper takes the daemon without its start ticks', naming: 'j. keeper, wrong start ticks', file: E, edit: swap('if (daemon && rows.get(daemon.pid)?.ticks === daemon.ticks) {', 'if (daemon && rows.has(daemon.pid)) {') },
         { name: 'restart reaps the adopted daemon', naming: 'restart-keeps-daemon', file: S, edit: swap('if (own && includeDaemon && !adopted) {', 'if (own && includeDaemon) {') },
-        { name: 'timeout ends orcad by its handle only', naming: 'failed-start', file: S, edit: swap('    if (outcome.timeout) {\n      await this._endFailedStart(proc, endOwn);', '    if (outcome.timeout) {\n      await endOwn();') },
+        { name: 'timeout ends orcad by its handle only', naming: 'failed-start', file: S, edit: swap('    if (outcome.timeout) {\n      await this._endFailedStart(proc, endOwn, [...startRows.values()]);', '    if (outcome.timeout) {\n      await endOwn();') },
         { name: 'failed start ends the adopted daemon', naming: 'failed-start', file: S, edit: swap('const kept = new Set((await this._sameIdentity(this._daemonPid, this._daemonTicks)) ? [this._daemonPid] : []);', 'const kept = new Set();') },
         {
             name: 'writes after ready ignore a stop', naming: 'stop-during-ready', file: S,
@@ -816,7 +1044,8 @@ function plants() {
         { name: 'Theia start keeps stale hand-off files', naming: 'theia-clears', file: 'TheiaService.sys.mjs', edit: swap('    await this._clearStaleOrcaHandOff();\n', '') },
         { name: 'darwin ln with -T', naming: 'platform-alias', file: E, edit: swap('platform === "darwin" ? "-sfn" : "-sfnT"', '"-sfnT"') },
         { name: 'alias made on win32', naming: 'platform-alias', file: E, edit: swap('return platform !== "win32" && !socketPathFits(root);', 'return !socketPathFits(root);') },
-        { name: 'USERPROFILE not passed to orcad', naming: 'USERPROFILE', file: E, edit: swap('  "USERPROFILE",\n', '') },
+        { name: 'USERPROFILE not passed to orcad', naming: 'USERPROFILE', file: E, edit: swap('"USERPROFILE", ', '') },
+        { name: 'Windows names passed on every platform', naming: 'now reach orcad on Linux', file: E, edit: swap('...(platform === "win32" ? ORCAD_ENV_ALLOWLIST_WIN32 : [])', '...ORCAD_ENV_ALLOWLIST_WIN32') },
         { name: 'Theia backend not given the orcad port', naming: 'sidecar-orca-port', file: 'TheiaService.sys.mjs', edit: swap('      ...(orcaPort ? { POWERBROWSER_ORCA_PORT: String(orcaPort) } : {}),\n', '') },
         { name: 'Theia reads its own port default', naming: 'sidecar-orca-port', file: 'TheiaService.sys.mjs', edit: swap('const port = this._orcaPortSource ? this._orcaPortSource() : null;', 'const port = 26768;') },
         { name: 'port source not wired before Theia starts', naming: 'sidecar-orca-port', file: 'powerbrowser.js', edit: swap('      TheiaService.setOrcaPortSource(() => OrcaService.orcadPort());\n', '') },
@@ -824,6 +1053,21 @@ function plants() {
         { name: 'generation left out of the reply', naming: 'status-generation', file: E, edit: swap(', generation: Number.isInteger(state.generation) && state.generation >= 0 ? state.generation : 0 };', ' };') },
         { name: 'clientRecovered clears nothing', naming: 'client-recovered', file: S, edit: swap('    this._clientReason = null;\n    this._pushLog("Orca client recovered.");', '    this._pushLog("Orca client recovered.");') },
         { name: 'clientRecovered clears the browser-host reason', naming: 'client-recovered', file: S, edit: swap('if (this._clientReason === null || this._clientReason === OrcaEnv.ORCA_BROWSER_HOST_REASON) {', 'if (this._clientReason === null) {') },
+        { name: 'no keeper after an orcad crash', naming: 'keeper-windows', file: S, edit: swap('      await this._keepDaemon();\n', '') },
+        { name: 'keeper never let go', naming: 'keeper-windows', file: S, edit: swap('      void this._releaseKeeper();\n', '') },
+        { name: 'respawn not told the kept daemon', naming: 'keeper-windows', file: S, edit: swap('await PowerBrowserAPI.writeStdinLine(proc, OrcaEnv.orcadAdoptedLine(', 'void (proc, OrcaEnv.orcadAdoptedLine(') },
+        { fixture: true, name: 'watch ignores the adopted line', naming: 'f. kept daemon named before acceptance', file: E, edit: swap('if (record.kind === ACCEPTED || record.kind === ADOPTED) {', 'if (record.kind === ACCEPTED) {') },
+        { fixture: true, name: 'watch ends the kept daemon on a failed start', naming: 'g. kept daemon named before acceptance', file: E, edit: swap('if (parentGone && daemon && rows.get(daemon.pid)?.ticks === daemon.ticks) {', 'if (daemon && rows.get(daemon.pid)?.ticks === daemon.ticks) {') },
+        { fixture: true, name: 'keeper ignores end-of-file', naming: 'h. keeper, PowerBrowser gone', file: E, edit: swap('\nprocess.stdin.on("end", gone);\n', '\n') },
+        { name: 'port read from the pref every time', naming: 'port-frozen', file: S, edit: swap('    if (this._port === null) {\n      this._port = this._prefPort();\n    }\n    return this._port;', '    return this._prefPort();') },
+        { name: 'gate listing unused after an exit', naming: 'start-tree', file: S, edit: swap('      await this._endFailedStart(proc, async () => {}, [...startRows.values()]);\n', '') },
+        { name: 'IPv6 table not read', naming: 'dual-stack', file: S, edit: swap('[table?.tcp, table?.tcp6]', 'table?.tcp') },
+        { name: 'dual-stack address not matched', naming: 'dual-stack', file: E, edit: swap('  "00000000000000000000000000000000",\n', '') },
+        { name: 'only the port and lock codes searched', naming: 'mapped-codes', file: S, edit: swap('Object.keys(OrcaEnv.ORCA_CODE_CLASSES).find(c => text.includes(c))', '[OrcaEnv.ORCAD_PINNED_PORT_CODE, OrcaEnv.ORCAD_LOCK_HELD_CODE].find(c => text.includes(c))') },
+        { name: 'configuration exit retried', naming: 'configuration exit', file: S, edit: swap('      if (outcome.exitCode === OrcaEnv.ORCAD_EXIT_CONFIGURATION) {\n', '      if (false) {\n') },
+        { name: 'unverifiable lock holder made final', naming: 'already-running exit', file: E, edit: swap('  [ORCAD_LOCK_FOREIGN_IDENTITY_CODE]: "port-in-use",\n', '  [ORCAD_LOCK_FOREIGN_IDENTITY_CODE]: "port-in-use",\n  orcad_instance_lock_holder_unverifiable: "port-in-use",\n') },
+        { fixture: false, name: 'truncated table read as complete', naming: 'truncated socket table', file: S, edit: swap('{ truncated: table?.truncated === true }', '{}') },
+        { name: '::1 counted as a holder', naming: 'listener on ::1', file: E, edit: swap('  "00000000000000000000000000000000",\n', '  "00000000000000000000000000000000",\n  "00000000000000000000000001000000",\n') },
         { name: 'port holder row dropped', naming: 'port-holder', file: S, edit: swap('...rows, ...holder]', '...rows]') },
     ];
 }

@@ -65,6 +65,7 @@ export const REL = {
     dispatch: 'theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts',
     dispositions: '.planning/spikes/005-orca-browser-parity/DISPOSITIONS.md',
     api: 'powerbrowser/shell/PowerBrowserAPI.sys.mjs',
+    overlay: 'orca-overlay/files',
     orca: 'orca',
 };
 export const MECHANISMS = ['native', 'actor', 'client', 'orcad', 'unavailable'];
@@ -305,7 +306,8 @@ export async function check(root = REPO_ROOT) {
         return { fails, skips: ['no fetched Orca tree (orca/src absent), so the derived ability set, tier-1 automation and their comparison with the served set and AGENT_METHODS did not run. Next step: bash scripts/fetch-orca.sh'], notes };
     }
     let derived;
-    try { derived = deriveAll(join(root, REL.orca)); } catch (err) { fails.push(`derivation: ${err.message}`); }
+    // The overlay under `root` (H8 61-WR-02): the fixture's own in the self-test, never the live repository's.
+    try { derived = deriveAll(join(root, REL.orca), join(root, REL.overlay)); } catch (err) { fails.push(`derivation: ${err.message}`); }
     if (!derived || !rows) return { fails, skips: [], notes };
     const r = pinFailures({ derived, rows, table, served, chrome });
     for (const f of r.fails) if (!fails.includes(f)) fails.push(f);
@@ -361,6 +363,8 @@ function buildFixture(tmp) {
         ...FIXTURE_ABILITIES.map(([a, tier]) => `| ${a} | none | native | fixture | ${tier} | fixture |`), '',
     ].join('\n'));
     put(REL.abilities, fixtureAbilitiesSource());
+    // The fixture's own overlay tree beside its Orca tree, so the derivation never reads the live repository's overlay.
+    put(`${REL.overlay}/src/renderer/src/pb/browser-host/pb-browser-host.ts`, '');
     put(REL.dispatch, readFileSync(join(REPO_ROOT, REL.dispatch), 'utf8'));
     put(REL.api, `// fixture boundary\nconst AGENT_METHODS = Object.freeze([\n${FIXTURE_SERVED.map((m) => `  "${m}",`).join('\n')}\n]);\n`);
 }

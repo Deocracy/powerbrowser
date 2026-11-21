@@ -25,7 +25,7 @@ Also converted to the SKIP protocol with no item of their own: verify-orca-pane-
 None. The three new files are libraries under scripts/lib/ (fixture-git.mjs, entry-point.mjs, orca-seams.mjs, proc-tree.mjs), not checks.
 
 ## Red by design
-- scan-brand-residue and scan-brand-residue-self-test: new files and lines carry the third-party name, which inventory/brand-tokens.json counts per file. Integration must set the held-back rows to the observed values after merging: "Orca" 3617 to 3625, "orca" 6188 to 6193, "orcad" 2220 to 2264, "Orcad" 152 to 153 (on this branch alone), and add expected_files entries for scripts/lib/fixture-git.mjs, scripts/lib/orca-seams.mjs and scripts/lib/proc-tree.mjs. Then run `node scripts/scan-brand-residue.mjs`.
+- scan-brand-residue and scan-brand-residue-self-test: the follow-up commits add third-party-name occurrences. On top of 7a266476 the held-back rows read "Orca" 3847 to 3856, "orca" 6603 to 6620, "orcad" 2552 to 2569, "Orcad" 166 to 168 (this lane's follow-up only: +9, +17, +17, +2). Integration sets each count to the observed value after merging, then runs `node scripts/scan-brand-residue.mjs`. No unclaimed file remains (condition 4 is clean).
 
 ## Handoffs
 - CI group: .github/workflows/verify.yml, add `bash scripts/fetch-orca.sh` before the `verify-platform.sh --quick` step, and correct the comment that says no row is silently skipped, for harness-static-structure-01. Until then the hosted job records orca-overlay, orca-pin, orca-pane-routes, orca-editor-routes, orca-no-pb-add-project, orca-landing-selectors and orca-terminal-keys as SKIP, not PASS.
@@ -39,8 +39,34 @@ None. The three new files are libraries under scripts/lib/ (fixture-git.mjs, ent
 ## Needs owner
 None.
 
+## Follow-up after independent review (twelve points)
+
+Base for this round: 7a266476 (fast-forwarded). Each point was confirmed against the code first; all applied.
+
+| Point | Item | Status | Commit | Check | Note |
+|---|---|---|---|---|---|
+| 1 | harness-static-structure-01 | fixed | c69783b1 | pane-routes (entry, vite config, orca-tabs-live), editor-routes (restore dir), bridge-dir (orca-agents), terminal-keys (orca-panes), pane-entry (OrcaPaneBundleApi) self-tests, each with a removal plant | A missing tracked input is a FAIL. Stricter than the brief's "decide by git ls-files": these inputs exist in every tree, so absence is unconditionally red (a `git rm`-then-commit would otherwise pass as untracked). Only the fetched orca/, builds, typescript, Theia install and the generated fragment stay optional. |
+| 2 | harness-static-structure-05 | fixed | c94b096b | build-shape self-test: ignored x.js beside x.ts, missing declared file, edited declared file | Clause f uses `--ignored` and no global excludes file and tests set equality plus byte equality with the overlay. Exempt by explicit rule: out/, node_modules/ (any depth), .cache/, *.tsbuildinfo, src/packages/*/dist/, *.generated.ts (the real built tree's ignored outputs, measured: 80 dist files and four generated sources). |
+| 3 | harness-static-structure-04 | fixed | d7b2d782 | packaged-tree self-test (macos): foreign slice, only an arm slice, two arm slices, swapped header CPU types, non-zero padding, wrong pair file | A fat file must be one slice per thin tree from the same path (or the pair's two names from archPairs), header CPU type equal to the slice's, zero bytes outside header and slices. |
+| 4 | G5a mode handover | fixed | d7b2d782 | packaged-tree self-test: static-pie ELF, shared object with an executable built counterpart, #! script | ET_DYN with DF_1_PIE is an executable (the shipped ripgrep, checked on the real tree); Mach-O/ELF/#! files whose built counterpart has an executable bit must be 0755. Decision for shebang scripts: required only when the built counterpart is executable. |
+| 5 | harness-static-structure-13 | fixed | 6fa654bf | pane-css self-test: `[scope] ~ .btn`, `[scope] + *`, spaced form; green controls for >, a sibling after a descendant step, :nth-child(2n+1) | Only a descendant or child combinator may follow the scope compound. |
+| 6 | harness-static-structure-09 | fixed | 91ed316d | slotless-start self-test: failed start after a real group kill, pid reuse, foreign daemon pid, normal path | Row processes carry PB_SLOTLESS_ROW (the daemon is spawned from process.env, orca daemon-launched-child-spawn.ts:94); a sampler records identities; signals re-check the start time; a reported daemon pid outside the set is reported and not signalled; stopOrcad no longer gets a daemon pid. |
+| 7 | harness-static-structure-10 | fixed | 078bd530 | upstream-pins self-test: env indirection, format(), inputs['tag'], (inputs.tag), toJSON(inputs), Inputs.tag, run: \|2, for both workflows | Any `${{ }}` in a run body except steps.*.outcome/conclusion and runner.* is red, case-insensitive. |
+| 8 | harness-static-structure-12 | fixed | 63e72d32 | bridge-dir self-test: posix redefined as === "win", constant true, let plus reassignment, defined after use, top-level throw | posix must be a const, defined before use, the not-Windows comparison, never reassigned; throw is treated like return. |
+| 9 | harness-static-structure-06 | fixed | bfda0237 | overlay self-test: imported file deleted, file two imports deep deleted, emptied seams.json with patches deleted, a required class with no row | Required files are derived from the relative-import graph of the named entries (all nine of nine now). Required seam classes are the UPSTREAM_CLASSES vocabulary of the script itself (browser-provider, pb-only), each needing a row: the tree has no other source for "the seams the product needs". |
+| 10 | harness-static-structure-08 | fixed | 6fa654bf | pane-entry and pane-css symlink plants require the usage text and not the guard's message | |
+| 11 | extra | fixed | d7b2d782 | packaged-tree self-test: import runs nothing, symlinked run reaches the usage check | Entry guard added. |
+| 12 | extra | fixed | 20385632 | build-shape self-test: seam reverted to the pin with TMPDIR inside a work tree | The scratch directory is its own repository; inside another work tree git apply silently skipped the patch (reproduced). Without the fix the plant fails. |
+
+Handoffs, red by design and behaviour changes: unchanged from above, plus: the stricter point-1 rule means a tree with orca-panes, orca-agents or the overlay entry removed is now red on --quick (intended).
+
+## Third round: LICENSE handoff from G5b (packaging-prefs-network-02)
+
+| Item | Status | Commit | Check | Note |
+|---|---|---|---|---|
+| packaging-prefs-network-02 (handoff) | fixed | 3ba162f6 | verify-orca-packaged-tree.mjs --self-test: LICENSE missing (linux, win64, macos), LICENSE altered; controls: orca/ not fetched leaves presence only | `LICENSE` is required in every packaged Orca tree on all targets (not "present in the built tree", which the hosted artifacts lack) and, when orca/LICENSE exists, must be byte-equal to it. Verified on a real stage copy that carries orca/LICENSE. |
+
 ## Quick gate
-`scripts/verify-platform.sh --quick` inside `nix develop .#theia` on the final tree: 437 PASS, 8 FAIL, 0 SKIP. Rows that were PASS on the base and are not now:
-- scan-brand-residue, scan-brand-residue-self-test: caused by this lane, red by design (see Red by design).
-- orca-service, orca-service-self-test, orca-browser-tab-scope, orca-browser-tab-scope-self-test, shell-error-copy-no-internals, shell-error-copy-no-internals-self-test: not caused by this lane; they belong to lanes H2, H3 and H8 as the lane brief states.
-Every row this lane owns passes, including its self-tests. With orca/ moved aside the owned rows exit 77 with a SKIP line (verified), and each self-test prints its own PASS line last.
+Third round, `scripts/verify-platform.sh --quick` inside `nix develop .#theia` on the final tree (log: .mozbuild/h4-quick-3.txt in this worktree): 449 PASS, 6 FAIL, 0 SKIP. The packaged-tree row is full-tier, so the quick gate does not run it; its self-test passes. Non-PASS rows, none caused by this round:
+- scan-brand-residue, scan-brand-residue-self-test: this lane's earlier additions plus other lanes; on the current merge the held-back rows read "Orca" 4177 to 4185 and "orca" 7220 to 7229. Integration re-measures after merging.
+- orca-service-self-test, orca-failure-classes and its self-test, build-windows-shape-self-test: not this lane's files. build-windows-shape-self-test throws "self-test anchor for the rulings guard step is absent from the build-windows job" (release.yml changed by another lane; scripts/verify-build-windows-shape.mjs needs its anchor updated).

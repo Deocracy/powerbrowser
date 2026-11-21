@@ -123,9 +123,15 @@ export interface DispatchDeps {
     openAgentTab(event: CommandEvent): Promise<string>;
     /**
      * 66-WR-05: called once the table has bound the createPage's id to the new tab, never for a tab that lost the
-     * bind, so the host writes a page's records only for the tab that holds it. Must not throw.
+     * bind, so the host writes a page's records only for the tab that holds it. Returns false when the tab closed before
+     * the bind; createPage then fails and the pair is dropped. Must not throw.
      */
-    recordBound?(tabId: string): void;
+    recordBound?(tabId: string): boolean;
+    /**
+     * 66-WR-03 review: true for a page the user closed in this frontend (its close may still be pending), so a createPage
+     * for it (orcad's recovery after a restart, racing the replayed close) opens nothing.
+     */
+    closedByUser?(pageId: string): boolean;
     closeTab(tabId: string): void;
     /**
      * The bound tab's navigate. agent-browser-04 / 66-CR-01: the host sends it as the agent's browser.goto, so chrome's
@@ -145,23 +151,43 @@ export async function dispatchCommand(event: CommandEvent, deps: DispatchDeps): 
     const command = event.command;
     const pageId = event.browserPageId;
     try {
-        if (command.type === 'createPage') {
-            if (table.tabOf(pageId) !== undefined) {
-                return failed('browser_error'); // a bound id never gets a second tab
-            }
+        /** Opens one new background agent tab for the page and binds it (createPage, and restorePage of an unbound id). */
+        const openBound = async (): Promise<Outcome> => {
             if (deps.agentsStopped?.()) {
                 return failed('browser_owner_unavailable'); // agent-browser-04: Stop refuses new pages until Resume
+            }
+            if (deps.closedByUser?.(pageId)) {
+                return failed('browser_tab_not_found'); // the user closed this page; its close is or was sent
             }
             const tabId = await deps.openAgentTab(event);
             const bound = table.bind(pageId, tabId);
             if (bound === 'bound') {
-                deps.recordBound?.(tabId);
+                if (deps.recordBound && deps.recordBound(tabId) === false) {
+                    table.drop(pageId); // 66-WR-05 review: the tab closed before the bind; no page exists to report
+                    return failed('browser_error');
+                }
                 return completed();
             }
             if (bound === 'duplicate-page') {
                 deps.closeTab(tabId); // a concurrent createPage bound the id first; this new tab is unbound
             }
             return failed('browser_error');
+        };
+        if (command.type === 'createPage') {
+            if (table.tabOf(pageId) !== undefined) {
+                return failed('browser_error'); // a bound id never gets a second tab
+            }
+            return await openBound();
+        }
+        if (command.type === 'restorePage' && table.tabOf(pageId) === undefined) {
+            // 66-CR-03 review: after an orcad restart, Orca's reconciliation closes the page's old guest and restores the
+            // page (close then restore). The host opens a new agent tab for it, never an existing tab, and loads its url.
+            const restored = await openBound();
+            const restoredTab = table.tabOf(pageId);
+            if (restored.status === 'completed' && restoredTab !== undefined && command.url) {
+                await deps.navigate(restoredTab, command.url);
+            }
+            return restored;
         }
         if (command.type === 'closePage') {
             const target = command.targetAuthority?.browserPageId ?? pageId;

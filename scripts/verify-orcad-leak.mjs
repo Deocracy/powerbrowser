@@ -5,7 +5,7 @@
 // a per-row PB_VERIFY_ROW_TOKEN in its environment and, when a process of that row's process group outlives it or
 // any process still carries the token, runs this over the row: a process in the row's session, or carrying its
 // token, whose arguments name the orcad entry OrcaService spawns is a leak. It is named, stopped by identity (pid
-// and start ticks, scripts/verify-orca-hidden-electron.mjs signalIdentity), and the row goes red.
+// and start ticks, scripts/lib/proc-identity.mjs signalIdentity), and the row goes red.
 //
 // orcad stays in the session of the PowerBrowser that spawned it (Subprocess does not setsid). scripts/lib/orca-run.mjs
 // starts orcad detached, in a session of its own, which the session match cannot see; the token, inherited through
@@ -37,7 +37,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { signalIdentity, startTicks } from './verify-orca-hidden-electron.mjs';
+import { signalGroupIdentity, signalIdentity, startTicks } from './lib/proc-identity.mjs';
 
 const NAME = 'verify-orcad-leak';
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -155,7 +155,7 @@ function hookPlants() {
 // orca-run.mjs fixes, each with the edit that removes it from a copy of the module.
 const RUN_LIB = 'scripts/lib/orca-run.mjs';
 const RUN_LIB_PLANTS = [
-    ['reject', 'the start no longer kills orcad when it rejects', "if (child.pid) { signal(child.pid, 'SIGKILL', true); started.delete(child.pid); }", ''],
+    ['reject', 'the start no longer kills orcad when it rejects', "if (child.pid) { signalGroupIdentity(child.pid, ticksOf.get(child.pid) ?? null, 'SIGKILL'); started.delete(child.pid); }", ''],
     ['exit', 'no exit hook', "process.on('exit', stopStartedDaemons);", ''],
     ['signal', 'no signal hook', 'process.prependListener(sig, onSignal);', ''],
 ];
@@ -174,6 +174,7 @@ async function runLibCases() {
     const ready = fake('ready', `console.log(JSON.stringify({ type: 'orca_server_ready', boundEndpoint: '127.0.0.1:1', health: { nodeVersion: process.versions.node, terminalDaemon: { pid: null } } })); setInterval(() => {}, 1e9);\n`);
     const libSource = readFileSync(join(REPO_ROOT, RUN_LIB), 'utf8')
         .replace("from './firefox-bidi.mjs'", `from ${JSON.stringify(pathToFileURL(join(REPO_ROOT, 'scripts/lib/firefox-bidi.mjs')).href)}`)
+        .replace("from './proc-identity.mjs'", `from ${JSON.stringify(pathToFileURL(join(REPO_ROOT, 'scripts/lib/proc-identity.mjs')).href)}`)
         .replace("from '../generate-licensing.mjs'", `from ${JSON.stringify(pathToFileURL(join(REPO_ROOT, 'scripts/generate-licensing.mjs')).href)}`);
     const copy = (edit) => {
         const file = join(dir, `lib-${Math.random().toString(36).slice(2)}.mjs`);
@@ -230,6 +231,46 @@ async function runLibCases() {
         rmSync(dir, { recursive: true, force: true });
     }
     return results;
+}
+
+/** [name, got lines, want]: the proc-identity rules, live, plus orca-run's source using only them. */
+async function identityCases() {
+    const out = [];
+    // keep: the caller waits on its exit, so the event loop must not drop it.
+    const spawnIdle = (code = 'setInterval(() => {}, 1e9)', keep = false) => {
+        const c = spawn(process.execPath, ['-e', code], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
+        if (!keep) { c.unref(); c.stdout.unref?.(); }
+        const p = { pid: c.pid, ticks: null, child: c };
+        planted.push(p);
+        return p;
+    };
+    const settleTicks = async (p) => { for (let i = 0; i < 40 && !(p.ticks = startTicks(p.pid)); i++) await pause(25); return p; };
+    const reused = await settleTicks(spawnIdle());
+    const wrong = String(Number(reused.ticks) + 1);
+    out.push(['identity: a pid whose ticks no longer match is not signalled', signalIdentity(reused.pid, wrong, 'SIGKILL') || startTicks(reused.pid) !== reused.ticks ? [`pid ${reused.pid} was signalled`] : [], null]);
+    out.push(['identity: a group whose leader\'s ticks no longer match is not signalled', signalGroupIdentity(reused.pid, wrong, 'SIGKILL') || startTicks(reused.pid) !== reused.ticks ? [`group ${reused.pid} was signalled`] : [], null]);
+    out.push(['identity: no recorded ticks, nothing signalled', signalIdentity(reused.pid, null, 'SIGKILL') || signalGroupIdentity(reused.pid, null, 'SIGKILL') || startTicks(reused.pid) !== reused.ticks ? [`pid ${reused.pid} was signalled`] : [], null]);
+    signalGroupIdentity(reused.pid, reused.ticks, 'SIGKILL');
+    for (let i = 0; i < 40 && startTicks(reused.pid) === reused.ticks; i++) await pause(25);
+    out.push(['identity: the recorded group with matching ticks', startTicks(reused.pid) === null ? ['signalled and gone'] : [`pid ${reused.pid} still running`], 'signalled and gone']);
+    // The leader exits and leaves a member in its group: the member is signalled one by one, by its own identity.
+    const leader = spawnIdle("const { spawn } = require('node:child_process'); const m = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1e9)'], { stdio: 'ignore' }); m.unref(); console.log(m.pid); setTimeout(() => process.exit(0), 300);", true);
+    await settleTicks(leader);
+    let line = '';
+    leader.child.stdout.on('data', (d) => { line += d; });
+    await new Promise((r) => leader.child.once('exit', r));
+    const member = { pid: Number(line.trim()), ticks: null };
+    await settleTicks(member);
+    planted.push(member);
+    const sent = signalGroupIdentity(leader.pid, leader.ticks, 'SIGKILL');
+    for (let i = 0; i < 40 && member.ticks !== null && startTicks(member.pid) === member.ticks; i++) await pause(25);
+    out.push(['identity: a group whose leader exited still reaches its own member', member.ticks !== null && sent === 1 && startTicks(member.pid) === null ? ['member signalled'] : [`sent ${sent}, member pid ${member.pid} ${startTicks(member.pid) ? 'still running' : 'never seen'}`], 'member signalled']);
+    // orca-run sends no bare signal: its only process.kill is the re-raise of a signal to itself.
+    const src = readFileSync(join(REPO_ROOT, RUN_LIB), 'utf8');
+    const bare = (text) => text.split('\n').filter((l) => /process\.kill\(/.test(l) && !/process\.kill\(process\.pid, sig\)/.test(l)).map((l) => `bare signal in ${RUN_LIB}: ${l.trim()}`);
+    out.push([`identity: ${RUN_LIB} signals only through proc-identity`, bare(src), null]);
+    out.push([`identity: ${RUN_LIB} with a planted bare group kill`, bare(`${src}\n    try { process.kill(-pid, 'SIGKILL'); } catch {}\n`), 'bare signal in']);
+    return out;
 }
 
 async function selfTest() {
@@ -305,6 +346,10 @@ async function selfTest() {
     // (its relative imports made absolute) and its case must go red.
     for (const [name, why] of await runLibCases()) check(name, why ? [why] : [], name.startsWith('orca-run plant') ? 'survived' : null);
 
+    // Audit harness-live-panels-10 (from lane H7): a recorded pid or group whose start ticks no longer match is never
+    // signalled. A live process in a group of its own stands in for a pid number reused after a teardown window.
+    for (const [name, got, want] of await identityCases()) check(name, got, want);
+
     // The harness's named opt-out (withFirefoxPage keepStrays) must not blind the leg. A planted row in a session of its
     // own (as the driver's setsid) leaves an orcad-shaped child working under its profile, runs withFirefoxPage's own
     // teardown step with or without the opt-out, and exits; the leg then judges its session as the driver runs it.
@@ -319,7 +364,7 @@ async function selfTest() {
         const body = [
             `import { spawn } from 'node:child_process';`,
             `import { stopRunStrays } from ${lib(BIDI)};`,
-            `import { startTicks } from ${lib('scripts/verify-orca-hidden-electron.mjs')};`,
+            `import { startTicks } from ${lib('scripts/lib/proc-identity.mjs')};`,
             `const since = startTicks(process.pid);`,
             `const c = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1e9)', ${JSON.stringify(join(REPO_ROOT, `upstream/../orca${entry}`))}], { cwd: ${JSON.stringify(join(profile, 'powerbrowser-orca'))}, stdio: 'ignore' });`,
             `await new Promise((r) => setTimeout(r, 300));`,

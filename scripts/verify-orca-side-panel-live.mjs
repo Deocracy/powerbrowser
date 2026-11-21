@@ -93,7 +93,12 @@
 //  f  pages        each page entry Orca's sidebar shows (derived from
 //                  SidebarNav.tsx and SidebarTaskNavButton.tsx) opens
 //                  pb-orca:<view> as the active tab; closed, a second click
-//                  reopens it. Zero entries shown is red (blind).
+//                  reopens it. Every derived entry must be shown, except those
+//                  Orca's own source hides by default (a shouldShow<Name>Button
+//                  that returns settings?.<x> === true, read from SidebarNav.tsx
+//                  at check time; a fresh profile has none of them on): an entry
+//                  that is neither shown nor so allowed is red, named. Zero
+//                  entries shown is red (blind).
 //  g  modes        after switching to Coding and to Browsing neither container
 //                  is in the left or right area (A5).
 //  h  registry     TabUriRegistry resolves both container ids to a view
@@ -113,12 +118,19 @@
 //                  everything resolved in the rest of the run, and any host seen
 //                  only in a child log, which cannot be ordered) must pass the
 //                  unattended verdict, else red naming the host (P65-24; 65-05;
-//                  audit harness-live-panels-03).
+//                  audit harness-live-panels-03). The resolver log cannot see a
+//                  fetch to an IP literal (no name is resolved), so socket connects
+//                  are read too (MOZ_LOG nsSocketTransport, its "trying address"
+//                  lines): a connection to a non-loopback address that no name's
+//                  "CompleteLookup ... has <address>" line explains is red, naming
+//                  the address; a control fetch to 192.0.2.1 (TEST-NET-1) must
+//                  show up as such a connection first, else "collector blind"
+//                  (audit harness-live-panels-14).
 // Output names clauses, counts and host names only; never a path, the ready
 // line, a pairing URL, an offer or a token.
 //
 // Tier: full. A row started without PB_LIVE_LOCK_HELD=1 takes <git common dir>/pb-live.lock itself
-// (lib/live-lock-reexec.mjs) before it launches anything; inherited ORCA_* are unset. Exit 77 with one
+// (lib/live-lock.mjs) before it launches anything; inherited ORCA_* are unset. Exit 77 with one
 // "SKIP -- <reason>" line (SKIP-PROTOCOL.md) while a built PowerBrowser, a built Theia app, orca/out, the pane
 // bundle or typescript is absent (orca-tabs-live.mjs prerequisites). --self-test runs the pure comparators on
 // fixtures and the tab-adding collector against fake pages (hermetic: no browser).
@@ -134,7 +146,8 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { violations } from './lib/endpoint-verdict.mjs';
-import { takeLiveLock } from './lib/live-lock-reexec.mjs';
+import { holdLiveLock, lockWiringFails } from './lib/live-lock.mjs';
+import { FIXTURE_GIT_ARGS, fixtureGitEnv } from './lib/orca-pane-harness.mjs';
 import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -179,6 +192,26 @@ export const TW_SPACING = 4;
 export const CONTROL_HOST = 'pb-egress-control.invalid';
 export const ACTION_HOST = 'pb-egress-user-action.invalid';
 export const SETTLED_HOST = 'pb-egress-settled.invalid';
+/** i: the IP-literal control, an address in TEST-NET-1 (RFC 5737): never routable, never explained by a name. */
+export const LITERAL_CONTROL = '192.0.2.1';
+/**
+ * i: the control's port. Gecko refuses a fetch to a port on its banned list (gBadPortList in nsIOService.cpp) before any
+ * socket opens, so port 9 (discard) never produced the "trying address" line the control waits for. 8081 is allowed; the
+ * self-test derives that from the upstream list.
+ */
+export const LITERAL_PORT = 8081;
+export const BANNED_PORTS_REL = 'upstream/netwerk/base/nsIOService.cpp';
+
+/** i: the control port against the banned list; red names it. */
+export function portVerdict(port, banned) {
+    return banned.includes(port) ? [`the control fetches port ${port}, which Gecko bans: the fetch is refused before a socket opens, so the control line never appears`] : [];
+}
+
+/** The ports of gBadPortList in nsIOService.cpp's source text (pure). */
+export function bannedPorts(text) {
+    const body = /gBadPortList\[\]\s*=\s*\{([^}]*)\}/.exec(String(text))?.[1] ?? '';
+    return [...body.matchAll(/^\s*(\d+)\s*,/gm)].map(m => Number(m[1]));
+}
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
 const SRC = {
@@ -216,6 +249,35 @@ export function agentsVerdict({ presentWhenOn, presentWhenOff }) {
     const fails = [];
     if (!presentWhenOn) fails.push('agents part absent with the orchestration setting on');
     if (presentWhenOff) fails.push('agents part stayed with the orchestration setting off');
+    return fails;
+}
+
+/**
+ * f: the views Orca's own sidebar source hides by default: each `export function shouldShow<Name>Button(settings)` of
+ * SidebarNav.tsx whose body returns `settings?.<x> === true` (shown only when a setting is on; a fresh profile has it off)
+ * and whose name matches a derived page view (Artifacts -> artifacts). Pure over the source text.
+ */
+export function hiddenByDefaultViews(navText, views) {
+    const out = [];
+    const re = /export function shouldShow(\w+)Button\([^)]*\)[^{]*\{\s*return [^;\n]*?===\s*true/g;
+    for (const m of String(navText).matchAll(re)) {
+        const name = m[1].toLowerCase();
+        const view = views.find(v => v === name || v === `${name}s` || `${v}s` === name);
+        if (view) out.push(view);
+    }
+    return out;
+}
+
+/**
+ * f: derived: [{ view, label }] page entries; shown: views whose button was found in the hosted sidebar; allowed: views
+ * Orca hides by default. Every derived entry must be shown or allowed; zero shown is blind.
+ */
+export function pagesVerdict({ derived, shown, allowed = [] }) {
+    const fails = [];
+    if (!shown.length) fails.push(`blind: none of the ${derived.length} derived page entries is shown in the hosted sidebar`);
+    for (const { view, label } of derived) {
+        if (!shown.includes(view) && !allowed.includes(view)) fails.push(`${view}: the page entry "${label}" that Orca's sidebar source derives is not shown in the hosted sidebar (shown ${shown.length} of ${derived.length}${allowed.length ? `, ${allowed.length} hidden by default by Orca's own setting` : ''})`);
+    }
     return fails;
 }
 
@@ -423,6 +485,38 @@ export function resolvedHosts(base) {
     return [...hosts].sort();
 }
 
+/** The text of <base>.moz_log and its .child-N.moz_log siblings, joined (resolution and sockets may log in a child). */
+export function allLogText(base) {
+    const dir = dirname(base);
+    const stem = basename(base);
+    const files = existsSync(dir) ? readdirSync(dir).filter(f => f === `${stem}.moz_log` || (f.startsWith(`${stem}.child-`) && f.endsWith('.moz_log'))) : [];
+    return files.map(f => readFileSync(join(dir, f), 'latin1')).join('\n');
+}
+
+const isLoopbackAddress = a => a === '::1' || a === '0:0:0:0:0:0:0:1' || /^127\./.test(a) || /^::ffff:127\./i.test(a);
+
+/**
+ * The addresses the log shows connections to ("trying address: <ip>") that no name's "CompleteLookup: <host> has <ip>"
+ * line explains, loopback excluded: the destinations of a fetch that skipped name resolution (an IP literal) or went
+ * through a proxy. Pure over the log text.
+ */
+export function literalDestinations(text) {
+    const explained = new Set();
+    for (const m of String(text).matchAll(/CompleteLookup: \S+ has (\S+)/g)) explained.add(m[1]);
+    const out = new Set();
+    for (const m of String(text).matchAll(/trying address: (\S+)/g)) {
+        const a = m[1].replace(/^\[|\]$/g, '');
+        if (!isLoopbackAddress(a) && !explained.has(m[1]) && !explained.has(a)) out.add(a);
+    }
+    return [...out].sort();
+}
+
+/** i: the socket half. The control address must be among the destinations; every other one is red, naming the address. */
+export function literalVerdict(destinations, control = LITERAL_CONTROL) {
+    if (!destinations.includes(control)) return [`collector blind: the control connection to ${control} (an IP literal) is not in the socket log, so a call to an IP literal would go unseen`];
+    return destinations.filter(a => a !== control).map(a => `a connection to the IP-literal address ${a} was made (no resolved name explains it; a hard-coded or proxied destination)`);
+}
+
 // ---- derivations from the pinned Orca source (typescript) ----
 
 let ts;
@@ -485,7 +579,9 @@ export function deriveSelectors() {
     visit(parse(SRC.titlebarStrip), n => { if (!reopenLabel && ts.isFunctionDeclaration(n) && n.name?.text === 'RightSidebarToggle') reopenLabel = ariaDefault(n); });
     if (!closeLabel) fails.push(`source moved: no aria-label translate default in ${SRC.rightSidebar}`);
     if (!reopenLabel) fails.push(`source moved: no RightSidebarToggle with an aria-label translate default in ${SRC.titlebarStrip}`);
-    return { fails, worktreeAttr, repoAttr, pages, toggleLabel, closeLabel, reopenLabel };
+    const navText = readFileSync(join(REPO_ROOT, SRC.nav[0]), 'utf8');
+    const hiddenByDefault = hiddenByDefaultViews(navText, pages.map(p => p.view));
+    return { fails, worktreeAttr, repoAttr, pages, hiddenByDefault, toggleLabel, closeLabel, reopenLabel };
 }
 
 /**
@@ -566,7 +662,7 @@ async function live() {
     if (pre.fail) { console.error(`${NAME}: FAIL -- ${pre.fail}`); return 1; }
     if (!loadTypeScript()) { console.log(skipLine(NAME, 'theia/node_modules/typescript is absent; run the audited Theia install in theia/')); return SKIP_EXIT; }
     // Nothing is launched before this: a row started by hand takes the live lock itself (harness-live-panels-02).
-    const held = takeLiveLock(import.meta.url, NAME);
+    const held = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
     if (held !== null) return held;
     const sel = deriveSelectors();
     if (sel.fails.length) { for (const f of sel.fails) console.error(`${NAME}: FAIL -- ${f}`); return 1; }
@@ -578,7 +674,7 @@ async function live() {
     const logDir = join(REPO_ROOT, '.mozbuild', NAME);
     mkdirSync(logDir, { recursive: true });
     const logBase = join(logDir, `resolver-${process.pid}`);
-    process.env.MOZ_LOG = 'nsHostResolver:5';
+    process.env.MOZ_LOG = 'nsHostResolver:5,nsSocketTransport:5';
     process.env.MOZ_LOG_FILE = logBase;
     const results = [];
     const clause = (name, fails, counts) => { results.push({ name, fails }); console.log(`${NAME}: ${name}: ${fails.length ? 'FAIL' : 'PASS'} -- ${fails.length ? fails.join('; ') : counts}`); };
@@ -591,6 +687,8 @@ async function live() {
             if (!pairing?.sessionOnly) throw new Error('the bundle is not paired session-only (C3-65 state().pairing)');
             // i (the one user action): only hosts first resolved between these two markers take the user-action verdict.
             // The panels' own rendering after the settled marker, and the whole run after it, is judged unattended.
+            // i (IP-literal control): a connection to an address no name resolved to must show up in the socket log.
+            await ctx.probe(`try { await fetch('http://${LITERAL_CONTROL}:${LITERAL_PORT}/', { mode: 'no-cors', signal: AbortSignal.timeout(1500) }); } catch (e) { /* unroutable: expected */ } return true;`);
             const marker = (host) => ctx.probe(`try { await fetch('http://${host}/', { mode: 'no-cors' }); } catch (e) { /* NXDOMAIN expected */ } return true;`);
             await marker(ACTION_HOST);
             await ctx.probe(`await get('ModeService').activateMode('orca'); return true;`);
@@ -644,7 +742,8 @@ async function live() {
             ctx.orca('repo', 'add', '--path', ctx.repo);
             const repo2 = join(ctx.scratch, 'repo-two');
             mkdirSync(repo2, { recursive: true });
-            const git = (...a) => execFileSync('git', ['-C', repo2, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', ...a], { stdio: ['ignore', 'pipe', 'pipe'] });
+            // No global or system git config, no hooks, no signing, and the scratch folder as HOME (as the harness's fixtures).
+            const git = (...a) => execFileSync('git', ['-C', repo2, ...FIXTURE_GIT_ARGS, ...a], { env: fixtureGitEnv(ctx.scratch), stdio: ['ignore', 'pipe', 'pipe'] });
             git('init', '-q');
             git('commit', '-q', '--allow-empty', '-m', 'fixture');
             ctx.orca('repo', 'add', '--path', repo2);
@@ -656,8 +755,13 @@ async function live() {
                 const area = id => { const w = wm.tryGetWidget(id); return w && w.isAttached ? shell.getAreaFor(w) : null; };
                 const parts = Object.fromEntries(${J(Object.keys(PARTS))}.map(id => { const w = wm.tryGetWidget(id); return [id, !!(w && w.node.querySelector('.pb-orca-pane-host *'))]; }));
                 return { left: area(${J(LEFT)}), right: area(${J(RIGHT)}), parts };`);
-            const mountErrors = (await ctx.bundle('m.state().mountErrors')) ?? [];
+            const mountState = (await ctx.bundle('m.state()')) ?? {};
+            const mountErrors = mountState.mountErrors ?? [];
             const aFails = [];
+            // G3a: state() keeps the newest 50 errors and counts them all in mountErrorsTotal; a build without it, or errors
+            // that fell out of the 50, mean the list below is not the whole record.
+            if (typeof mountState.mountErrorsTotal !== 'number') aFails.push('state() has no mountErrorsTotal (the bundle build predates the cursor)');
+            else if (mountState.mountErrorsTotal > mountErrors.length) aFails.push(`${mountState.mountErrorsTotal - mountErrors.length} mount error(s) fell out of the ${mountErrors.length} state() keeps, so they were not read`);
             if (panel.left !== 'left') aFails.push(`left container in ${panel.left ?? 'no'} area`);
             if (panel.right !== 'right') aFails.push(`right container in ${panel.right ?? 'no'} area`);
             for (const [id, mounted] of Object.entries(panel.parts)) if (!mounted) aFails.push(`${PARTS[id]} part has no mounted content`);
@@ -775,14 +879,14 @@ async function live() {
 
             // f
             const fFails = [];
-            let shown = 0;
+            const shownViews = [];
             for (const { view, label } of sel.pages) {
                 const click = () => ctx.probe(`const node = get('WidgetManager').tryGetWidget('powerbrowser-orca-sidebar-view').node;
                     const buttons = [...node.querySelectorAll('button')];
                     const b = buttons.find(x => x.textContent.trim() === ${J(label)}) || buttons.find(x => x.textContent.trim().startsWith(${J(label)}));
                     if (!b) return false; b.click(); return true;`);
                 if (!(await click())) continue;
-                shown++;
+                shownViews.push(view);
                 const want = `pb-orca:${view}`;
                 const activeUri = () => ctx.probe(`const shell = get('ApplicationShell');
                     const at = () => { const a = shell.activeWidget; const u = a && get('TabUriRegistry').uriOf(a); return u && u.toString(true) === ${J(want)} ? a.id : null; };
@@ -793,8 +897,8 @@ async function live() {
                 await click();
                 if (!(await activeUri())) fFails.push(`${view}: after closing, a second click did not reopen ${want}`);
             }
-            if (!shown) fFails.push(`blind: none of the ${sel.pages.length} derived page entries is shown in the hosted sidebar`);
-            clause('f pages', fFails, `${shown} page entr${shown === 1 ? 'y' : 'ies'} opened, closed and reopened their pb-orca: tab`);
+            fFails.push(...pagesVerdict({ derived: sel.pages, shown: shownViews, allowed: sel.hiddenByDefault }));
+            clause('f pages', fFails, `${shownViews.length} page entr${shownViews.length === 1 ? 'y' : 'ies'} opened, closed and reopened their pb-orca: tab (all ${sel.pages.length} derived entries shown${sel.hiddenByDefault.length ? ` but ${sel.hiddenByDefault.length} that Orca hides by default` : ''})`);
 
             // g
             const areasByMode = {};
@@ -899,7 +1003,8 @@ async function live() {
     const duringAction = hostsBetweenMarkers(logBase, ACTION_HOST, SETTLED_HOST);
     const others = resolved.filter(h => ![CONTROL_HOST, ACTION_HOST, SETTLED_HOST].includes(h) && !LOOPBACK.has(h));
     const nDuring = others.filter(h => (duringAction ?? []).includes(h)).length;
-    clause('i egress', egressVerdict({ resolved, allowlist: hosts, duringAction }), `control and both markers seen; ${others.length - nDuring} host(s) pass the unattended verdict, ${nDuring} first resolved during the Orca mode selection pass the user-action verdict`);
+    const literal = literalVerdict(literalDestinations(allLogText(logBase)));
+    clause('i egress', [...egressVerdict({ resolved, allowlist: hosts, duringAction }), ...literal], `control and both markers seen; ${others.length - nDuring} host(s) pass the unattended verdict, ${nDuring} first resolved during the Orca mode selection pass the user-action verdict`);
     const failed = results.filter(r => r.fails.length).map(r => r.name);
     if (failed.length) { console.error(`${NAME}: FAIL -- ${failed.join(', ')}`); return 1; }
     console.log(`${NAME}: PASS -- ${results.length} clauses`);
@@ -971,8 +1076,26 @@ function fakeTabPage({ button = true, addUntil = Infinity }) {
         label: 'New Tab', count: WEB_TABS,
     };
 }
+const PAGES6 = ['tasks', 'automations', 'mobile', 'artifacts', 'skills', 'plugins'].map(view => ({ view, label: view[0].toUpperCase() + view.slice(1) }));
+const NAV_FIXTURE = `export function shouldShowMobileButton(settings: Partial<Pick<GlobalSettings, 'showMobileButton'>> | null | undefined): boolean {
+  return settings?.showMobileButton !== false
+}
+export function shouldShowArtifactsButton(settings: Partial<Pick<GlobalSettings, 'showArtifactsButton'>> | null | undefined): boolean {
+  return settings?.showArtifactsButton === true
+}
+export function shouldShowSkillsButton(settings: Partial<Pick<GlobalSettings, 'showSkillsButton'>> | null | undefined): boolean {
+  return settings?.showSkillsButton === true
+}
+export function shouldShowAgentDashboardButton(settings: Partial<Pick<GlobalSettings, 'x'>> | null | undefined): boolean {
+  return settings?.experimentalAgentDashboardPopout === true
+}`;
+/** A resolver-and-socket log fixture: each address is connected to; 104.18.1.1 is the address a name resolved to. */
+const SOCKET_LOG = (addrs) => ['D/nsHostResolver CompleteLookup: api.github.com has 104.18.1.1', ...addrs.map(a => `D/nsSocketTransport   trying address: ${a}`)].join('\n');
 /** The m verdict for a run whose tab-adding collector ran against `fake`. */
 const tabRun = async (fake) => mRun({ keep: [{ when: `after ${WEB_TABS} web tabs from the "+" button`, before: { left: 320, right: 320 }, after: { left: 320, right: 320 }, tabs: { added: await addWebTabs(fake), expected: WEB_TABS } }] });
+
+/** Self-test cases that could not run because a fetched checkout is absent (the self-test then ends SKIP, 77). */
+const selfTestSkips = [];
 
 async function selfTest() {
     const allow = [{ host: 'api.github.com', disposition: 'allow' }, { host: 'example.org', disposition: 'user-initiated' }];
@@ -1044,6 +1167,38 @@ async function selfTest() {
         ['no right drag measured', () => mRun({ drag: d => (d.side === 'right' ? null : d) }), 'right: no drag was measured'],
         ['a squeeze to Lumino\'s 100 px', () => mRun({ squeeze: q => (q.side === 'left' ? { ...q, after: 100 } : q) }), 'left panel squeezed to 100px, below Orca\'s minimum 220px'],
         ['a squeeze that never moved the edge', () => mRun({ squeeze: q => (q.side === 'right' ? { ...q, after: q.before } : q) }), 'instrument blind: the squeeze drag did not narrow the right panel'],
+        ['the live path awaits holdLiveLock before it launches anything', () => lockWiringFails(NAME, import.meta.url), null],
+        // f (harness-live-panels-06): the shown set is compared with the derived set.
+        ['control: every derived entry shown', () => pagesVerdict({ derived: PAGES6, shown: PAGES6.map(p => p.view) }), null],
+        ['one of six derived entries shown', () => pagesVerdict({ derived: PAGES6, shown: ['tasks'] }), 'automations: the page entry "Automations" that Orca\'s sidebar source derives is not shown'],
+        ['control: the entries Orca hides by default may be absent', () => pagesVerdict({ derived: PAGES6, shown: ['tasks', 'automations', 'mobile', 'plugins'], allowed: ['artifacts', 'skills'] }), null],
+        ['an entry hidden although Orca shows it by default', () => pagesVerdict({ derived: PAGES6, shown: ['tasks', 'mobile', 'plugins'], allowed: ['artifacts', 'skills'] }), 'automations: the page entry'],
+        ['no entry shown', () => pagesVerdict({ derived: PAGES6, shown: [] }), 'blind: none of the 6 derived page entries'],
+        ['control: the default-hidden views are read from the source text', () => (hiddenByDefaultViews(NAV_FIXTURE, PAGES6.map(p => p.view)).sort().join() === 'artifacts,skills' ? [] : ['wrong set']), null],
+        ['the default-hidden views of the real SidebarNav.tsx include the opt-in entries', () => {
+            const rel = join(REPO_ROOT, SRC.nav[0]);
+            // The fetched checkout absent is a SKIP (the self-test ends 77); present without this file it is a FAIL, not a pass.
+            if (!existsSync(join(REPO_ROOT, 'orca', 'src'))) { selfTestSkips.push('the orca/ checkout is absent, so the real SidebarNav.tsx case did not run; run scripts/fetch-orca.sh'); return []; }
+            if (!existsSync(rel)) return [`source moved: ${SRC.nav[0]} is absent from the orca/ checkout`];
+            const got = hiddenByDefaultViews(readFileSync(rel, 'utf8'), PAGES6.map(p => p.view));
+            return got.includes('artifacts') && got.includes('skills') && !got.includes('automations') ? [] : [`got ${got.join()}`];
+        }, null],
+        // i (harness-live-panels-14): the control's port must be one Gecko allows; derived from upstream's own list.
+        ['control: the banned-port parser reads a gBadPortList', () => (bannedPorts('int16_t gBadPortList[] = {\n    1,      // tcpmux\n    9,      // discard\n    0};').join() === '1,9' ? [] : ['wrong ports']), null],
+        ['the old control port 9 against a banned list that holds it', () => portVerdict(9, [1, 7, 9, 11]), 'the control fetches port 9, which Gecko bans'],
+        ['control: port 8081 against that list', () => portVerdict(8081, [1, 7, 9, 11]), null],
+        ['the control port is not on Gecko\'s banned list (upstream/netwerk/base/nsIOService.cpp)', () => {
+            const f = join(REPO_ROOT, BANNED_PORTS_REL);
+            if (!existsSync(f)) { selfTestSkips.push(`${BANNED_PORTS_REL} is absent, so the control port was not checked against Gecko's banned list; run scripts/fetch-upstream.sh`); return []; }
+            const ports = bannedPorts(readFileSync(f, 'utf8'));
+            if (!ports.includes(9) || ports.length < 20) return [`the banned list could not be read from ${BANNED_PORTS_REL} (${ports.length} ports)`];
+            return portVerdict(LITERAL_PORT, ports);
+        }, null],
+        // i (harness-live-panels-14): an IP-literal or proxied destination is seen through the socket log.
+        ['control: the literal control connection seen, loopback and a name-explained address ignored', () => literalVerdict(literalDestinations(SOCKET_LOG(['192.0.2.1', '127.0.0.1', '104.18.1.1', '::1']))), null],
+        ['a hard-coded callout to 203.0.113.9', () => literalVerdict(literalDestinations(SOCKET_LOG(['192.0.2.1', '203.0.113.9']))), 'a connection to the IP-literal address 203.0.113.9'],
+        ['the control connection absent from the socket log', () => literalVerdict(literalDestinations(SOCKET_LOG(['104.18.1.1']))), 'collector blind: the control connection to 192.0.2.1'],
+        ['an IPv6 literal callout', () => literalVerdict(literalDestinations(SOCKET_LOG(['192.0.2.1', '2001:db8::1']))), 'IP-literal address 2001:db8::1'],
         // m (harness-live-panels-04): the tab-adding collector run against fake pages; zero or short tab counts are red.
         ['control: three web tabs added', () => mRun(), null],
         ['no web tab added (the "+" button not found)', () => mRun({ keep: [{ when: 'after 3 web tabs from the "+" button', before: { left: 320, right: 320 }, after: { left: 320, right: 320 }, tabs: { added: 0, expected: WEB_TABS } }] }), 'instrument blind: only 0 of 3 web tabs were added after 3 web tabs'],
@@ -1069,6 +1224,11 @@ async function selfTest() {
     }
     const plants = cases.filter(c => c[2] !== null).length;
     if (failures) { console.error(`${NAME} self-test: FAIL -- ${failures} case(s) wrong`); return 1; }
+    if (selfTestSkips.length) {
+        console.log(`${NAME} self-test: ${plants} planted faults each went red naming the drift; ${cases.length - plants} controls green; ${selfTestSkips.length} case(s) did not run`);
+        console.log(skipLine(NAME, selfTestSkips.join('; ')));
+        return SKIP_EXIT;
+    }
     console.log(`${NAME} self-test: PASS -- ${plants} planted faults each went red naming the drift; ${cases.length - plants} controls green`);
     return 0;
 }

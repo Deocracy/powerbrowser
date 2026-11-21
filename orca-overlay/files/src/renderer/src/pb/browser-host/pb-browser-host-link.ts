@@ -5,8 +5,9 @@
 // client's, and the thin host authenticates as the same paired device (orcad refuses a client placement from another
 // device with browser_host_lease_stale).
 //
-// On evaluation it defines globalThis[Symbol.for('powerbrowser.orca-browser.link')] = { connection, setPlacement }
-// (non-writable, not configurable). Once the pane client's first runtime call has completed (a status.get through
+// On evaluation it defines globalThis[Symbol.for('powerbrowser.orca-browser.link')] = { connection }
+// (non-writable, not configurable). Each connection() result carries a placement capability for that one attach
+// (T-66-04): the thin host calls its attached(id) when orcad's lease is ready and detached() when it ends. Once the pane client's first runtime call has completed (a status.get through
 // window.api, so a device-key migration has already happened), it dispatches the window event
 // 'powerbrowser-orca-browser-link'; connection() rejects with link_not_ready before that, and again after a re-pair
 // until the pane client has made a status call under the new pairing (66-WR-01). Nothing here logs, and
@@ -36,8 +37,11 @@ let ready = false
 // none (a stored token would never be forgotten and a revoked device would never drop its pairing).
 let readyKey: string | null = null
 let polling = false
-// T-66-04: the host id placements are bound to, the first one placed (the Theia host places its own id once attached).
-let placedHostId: string | null = null
+// T-66-04: the placement capability whose attach is live, and the id it attached with.
+let livePlacement: { capability: BrowserHostPlacement; browserHostClientId: string } | null = null
+
+/** One attach's placement: bound to the first id it is given, which the thin host gives at its lease's ready event. */
+export type BrowserHostPlacement = Readonly<{ attached: (browserHostClientId: string) => void; detached: () => void }>
 
 type StoredEnvironment = NonNullable<ReturnType<typeof readStoredWebRuntimeEnvironment>>
 
@@ -56,7 +60,12 @@ function runtimeEnvironments(): RuntimeEnvironmentsApi | null {
 }
 
 /** The pane client's endpoint and its current credential: legacy-token -> token, device-key -> device-key (A3 b). */
-async function connection(): Promise<{ endpoint: string; hostPublicKeyB64: string; credential: BrowserHostLinkCredential }> {
+async function connection(): Promise<{
+  endpoint: string
+  hostPublicKeyB64: string
+  credential: BrowserHostLinkCredential
+  placement: BrowserHostPlacement
+}> {
   if (!ready) throw new Error('link_not_ready')
   const environment = readStoredWebRuntimeEnvironment()
   if (!environment) throw new Error('no_environment')
@@ -73,7 +82,7 @@ async function connection(): Promise<{ endpoint: string; hostPublicKeyB64: strin
     forgetStoredToken: () => {},
     forgetPairing: () => {}
   }).nextPlan(false)
-  const base = { endpoint: endpoint.endpoint, hostPublicKeyB64: endpoint.publicKeyB64 }
+  const base = { endpoint: endpoint.endpoint, hostPublicKeyB64: endpoint.publicKeyB64, placement: placementCapability() }
   if (plan.kind === 'legacy-token') return { ...base, credential: { kind: 'token', deviceToken: plan.deviceToken } }
   if (plan.kind === 'device-key') {
     const { key } = plan
@@ -82,25 +91,43 @@ async function connection(): Promise<{ endpoint: string; hostPublicKeyB64: strin
   throw new Error(`unsupported_plan:${plan.kind}`)
 }
 
-/**
- * A3 (a): Orca's renderer creates browser pages on the thin host (id) or, with null, back on the server. T-66-04: the
- * first id placed binds the link; a later call naming another id is refused and leaves the placement as it was. The
- * Theia host keeps one id for the frontend's life, so its own re-attach places the same id again.
- */
-function setPlacement(browserHostClientId: string | null): void {
-  if (browserHostClientId !== null && (typeof browserHostClientId !== 'string' || !browserHostClientId)) {
-    throw new TypeError('invalid_host_id')
-  }
-  if (browserHostClientId !== null && placedHostId !== null && browserHostClientId !== placedHostId) {
-    throw new Error('placement_refused')
-  }
+/** A3 (a): Orca's renderer creates browser pages on the thin host (an id) or, with none, back on the server. */
+function applyPlacement(placement: Placement): void {
   const api = runtimeEnvironments()
   if (!api) throw new Error('link_not_ready')
-  if (browserHostClientId !== null) placedHostId = browserHostClientId
-  const placement: Placement =
-    browserHostClientId === null ? { kind: 'server' } : { kind: 'client', browserHostClientId }
   // window.api is Orca's withFallback proxy with no set trap, so this lands on the underlying object.
   api.prepareBrowserClientHostPlacement = async () => ({ ...placement })
+}
+
+/**
+ * T-66-04: placement is set only through the capability of one connection() result, which the thin host holds for one
+ * attach. It names the id that attach sent, only once orcad has made the lease (ready), and only that id; the last
+ * attach to become ready holds the placement, and its end puts placement back on the server unless a later attach holds
+ * it. A script that places an id before the host attaches is therefore replaced by the host's own attach, and nothing
+ * here can refuse the host's attach. Same-realm script that calls connection() itself can still place an id, as it can
+ * still assign prepareBrowserClientHostPlacement directly (T-66-01); this binds placement to an attach, it is not a wall.
+ */
+function placementCapability(): BrowserHostPlacement {
+  let boundId: string | null = null
+  const capability: BrowserHostPlacement = Object.freeze({
+    attached: (browserHostClientId: string) => {
+      if (typeof browserHostClientId !== 'string' || !browserHostClientId) throw new TypeError('invalid_host_id')
+      if (boundId !== null && browserHostClientId !== boundId) throw new Error('placement_refused')
+      applyPlacement({ kind: 'client', browserHostClientId })
+      boundId = browserHostClientId
+      livePlacement = { capability, browserHostClientId }
+    },
+    detached: () => {
+      if (livePlacement?.capability !== capability) return
+      livePlacement = null
+      try {
+        applyPlacement({ kind: 'server' })
+      } catch {
+        // window.api is gone with the document
+      }
+    }
+  })
+  return capability
 }
 
 /** Arms readiness once the pane client has completed a status call; one poll at a time. */
@@ -136,7 +163,7 @@ function pollPaneClient(): void {
 
 if (!Object.prototype.hasOwnProperty.call(globalThis, LINK_KEY)) {
   Object.defineProperty(globalThis, LINK_KEY, {
-    value: Object.freeze({ connection, setPlacement, build: Object.freeze([LINK_MARKER]) }),
+    value: Object.freeze({ connection, build: Object.freeze([LINK_MARKER]) }),
     writable: false,
     configurable: false,
     enumerable: false

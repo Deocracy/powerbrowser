@@ -168,11 +168,13 @@
 // SKIP (SKIP-PROTOCOL.md): a run that skipped that clause prints one line "tab-strip-live: SKIP -- <reason>" and exits 77 once every
 // scenario passed; a failure wins.
 //
-// The live lock: started without PB_LIVE_LOCK_HELD=1 (that is, not under scripts/verify-platform.sh) the row takes
-// <git common dir>/pb-live.lock itself, before it launches anything (--lock-probe prints whether it holds it and launches nothing).
+// The live lock (scripts/lib/live-lock.mjs; SKIP-PROTOCOL.md, "The live lock"): the row calls holdLiveLock before it launches anything (--self-test too: it
+// boots browsers). It goes on without taking the lock only when /proc/locks shows the lock held by the driver's holder (PB_LIVE_LOCK_HOLDER: pid and
+// start ticks) or by an ancestor (flock <git common dir>/pb-live.lock node <row>); an inherited PB_LIVE_LOCK_HELD=1 with neither is a FAIL by name; with
+// nothing set it takes the lock itself and waits, naming the holder.
 //
 // Usage:
-//   node scripts/verify-tab-strip-live.mjs [--scenario menu,keyboard-menu,reorder,middle,double,drop,overflow,pin-restore,multi,preview,attention,bookmark-all,modes[,..]] [--self-test | --lock-probe]
+//   node scripts/verify-tab-strip-live.mjs [--scenario menu,keyboard-menu,reorder,middle,double,drop,overflow,pin-restore,multi,preview,attention,bookmark-all,modes[,..]] [--self-test]
 //
 // Full tier only: the built binary, a fresh Theia build, a headless browser. --self-test also launches the browser (it plants each
 // fault in the running page), so it is a full-tier row, not a quick one.
@@ -189,7 +191,6 @@ import { activeWindow, captureShell } from './lib/pb-kwin.mjs';
 import { appNameExpr, focusTheiaFrame, keyRoute, osClientPointer, overlayVisibility, pointerRoute, pressKey, probe, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
 
 const NAME = 'tab-strip-live';
-const SELF = fileURLToPath(import.meta.url);
 const PANE_BUNDLE_ENTRY = join(REPO_ROOT, 'orca/out/web/assets/pb-panes/pb-panes.js');
 /** Clauses that did not run because an input is absent: { scenario, reason } (SKIP-PROTOCOL.md). */
 const skips = [];
@@ -600,7 +601,7 @@ async function middle({ app, pages, expect, plant }) {
     const orcaLib = await import('./lib/orca-tabs-live.mjs');
     const wired = orcaLib.appWiresOrcaPanes();
     const bundleBuilt = existsSync(PANE_BUNDLE_ENTRY);
-    const booted = wired
+    const booted = wired === true
         ? (await step(app, 'middle: Orca pane bundle', `return await until(() => { const m = globalThis[Symbol.for('powerbrowser.orca-panes.module')]; return !!m && m.state().booted; }, ${bundleBuilt ? 120000 : 20000});`)) === true
         : false;
     const coverage = orcaLib.listenerCoverage({ wired, bundleBuilt, booted });
@@ -1591,16 +1592,11 @@ if (unknown.length || chosen.length === 0) {
     process.exit(2);
 }
 
-// A live row started outside the driver takes the live lock itself, before it launches anything (this file also starts a browser for --self-test).
+// The live lock before anything launches (scripts/lib/live-lock.mjs); --self-test launches browsers too.
 {
-    const lib = await import('./lib/orca-tabs-live.mjs');
-    let held;
-    try { held = lib.reexecUnderLiveLock(SELF, args); } catch (err) {
-        console.error(`verify-${NAME}: FAIL -- ${err.message}`);
-        process.exit(1);
-    }
-    if (held !== null) process.exit(held);
-    if (args.includes('--lock-probe')) { console.log(lib.lockProbeLine(NAME)); process.exit(0); }
+    const { holdLiveLock } = await import('./lib/live-lock.mjs');
+    const locked = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
+    if (locked !== null) process.exit(locked);
 }
 
 const checkName = `verify-${NAME}${selfTest ? ' --self-test' : ''}`;
@@ -1610,7 +1606,9 @@ console.log = (...a) => { if (skips.length && a.length === 1 && a[0] === `${chec
 await runCheck(checkName, async ({ pages, expect, failures }) => {
     if (selfTest) {
         const lib = await import('./lib/orca-tabs-live.mjs');
-        for (const f of lib.lockProbeVerdict(SELF, NAME)) expect(false, f);
+        const liveLock = await import('./lib/live-lock.mjs');
+        for (const f of liveLock.lockWiringFails(NAME, import.meta.url)) expect(false, f);
+        expect(lib.lockWiringPlantFails(liveLock.lockWiringFails).length > 0, 'a script without the lock call was not caught by lockWiringFails');
     }
     for (const name of chosen) {
         const scenario = SCENARIOS[name];

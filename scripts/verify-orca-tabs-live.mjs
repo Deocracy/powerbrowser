@@ -122,13 +122,10 @@
 // built app is a FAIL. The PASS of this row is the coordinator's proof on the
 // merged, wired, built tree, after orca-pane-css-live (P64-15).
 //
-// The live lock: started without PB_LIVE_LOCK_HELD=1 (that is, not under
-// scripts/verify-platform.sh) the row takes <git common dir>/pb-live.lock
-// itself, before it launches anything (lib reexecUnderLiveLock). Do not wrap it
-// in flock on that file; the row would wait on its own parent. The row removes
-// this shell's ORCA_* from its own environment. No pairing value, cookie or
-// token is printed; what the row prints after its session is redacted with the
-// session's own list.
+// The live lock (scripts/lib/live-lock.mjs; SKIP-PROTOCOL.md, "The live lock"): the row calls holdLiveLock before it launches anything. It goes
+// on without taking the lock only when /proc/locks shows the lock held by the driver's holder (PB_LIVE_LOCK_HOLDER: pid and start ticks) or by an
+// ancestor (flock <git common dir>/pb-live.lock node <row>). An inherited PB_LIVE_LOCK_HELD=1 with neither is a FAIL by name. With nothing set it
+// takes the lock itself and waits, naming the holder. A run with nothing to launch (a prerequisite is absent) prints its SKIP without the lock.
 //
 // Tier: full. --self-test is quick and needs no browser: each verdict over a
 // passing fixture and one fixture per failure, the offer search over every
@@ -138,7 +135,6 @@
 // Usage:
 //   node scripts/verify-orca-tabs-live.mjs
 //   node scripts/verify-orca-tabs-live.mjs --self-test
-//   node scripts/verify-orca-tabs-live.mjs --lock-probe   (prints whether this process holds the live lock; launches nothing)
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -238,11 +234,33 @@ export function keptVerdict(obs) {
     return fails;
 }
 
-/** Stage c: the agent's terminal. obs: { handle, text } (orcad's read of that terminal once the widget was added). */
+/** The terminal summary object with `handle` in an `orca terminal list` reply, or null. */
+export function terminalEntryOf(reply, handle) {
+    let found = null;
+    const walk = (o) => { if (found || !o || typeof o !== 'object') return; if (o.handle === handle && typeof o.handle === 'string') { found = o; return; } for (const v of Object.values(o)) walk(v); };
+    walk(reply);
+    return found;
+}
+
+/** What a terminal that failed to start an agent prints: a shell or the OS saying the program is not there or died. */
+const AGENT_FAILURE_TEXT = /command not found|No such file or directory|not recognized as|Permission denied|cannot execute|ENOENT|Segmentation fault|core dumped|Traceback \(most recent|panic:/i;
+
+/**
+ * Stage c: the agent's terminal. obs: { handle, text, early, late } where text is orcad's read of that terminal and early/late are the
+ * terminal's entry in orcad's terminal list right after the widget was added and again a few seconds later (null when absent). A
+ * running process shows no exitCause and stays connected; a read alone would pass a shell prompt, the echoed launch command, or a
+ * "command not found" from an agent that exited at once.
+ */
 export function agentTuiVerdict(obs) {
     if (!obs.handle) return ['terminal-agent: the CLI returned no terminal handle to read'];
-    if (!String(obs.text ?? '').trim()) return ['terminal-agent: orcad\'s read of the agent terminal stayed empty (the agent did not start, or exited at once)'];
-    return [];
+    const fails = [];
+    for (const [when, e] of [['when its widget appeared', obs.early], ['a few seconds later', obs.late]]) {
+        if (!e) fails.push(`terminal-agent: the agent terminal is not in orcad's terminal list ${when}`);
+        else if (e.exitCause !== undefined || e.connected === false) fails.push(`terminal-agent: the agent's process had exited ${when} (exitCause ${JSON.stringify(e.exitCause ?? null)}, connected ${JSON.stringify(e.connected ?? null)})`);
+    }
+    if (!String(obs.text ?? '').trim()) fails.push('terminal-agent: orcad\'s read of the agent terminal stayed empty (the agent did not start)');
+    else if (AGENT_FAILURE_TEXT.test(String(obs.text))) fails.push('terminal-agent: the agent terminal shows an error from the shell or the OS instead of the agent');
+    return fails;
 }
 
 /**
@@ -428,6 +446,17 @@ export function chromeVerdict(obs) {
     return fails;
 }
 
+/**
+ * The partial-run reason when some selector's own detector never matched in Orca's client (its absence in Theia has no control), else
+ * null. An absence clause that did not get its control did not fully run: the row exits 77 (SKIP-PROTOCOL.md) if nothing failed.
+ */
+export function unprovenSelectorsSkip(obs) {
+    const proven = chromeProven(obs);
+    const unproven = (obs.selectors ?? []).filter((x) => !proven.includes(x));
+    if (!unproven.length || !proven.length) return null; // none proven: chromeVerdict is already red
+    return `${unproven.length} of ${obs.selectors.length} selector(s) never matched in Orca's own client (${unproven.join(', ')}), so their absence in Theia has no control (the other selectors were judged)`;
+}
+
 /** The selectors whose absence in Theia is proven: their own detector matched in Orca's client. */
 export function chromeProven(obs) {
     return (obs.selectors ?? []).filter((s) => isCount(obs.detectorMatches?.[s]) && obs.detectorMatches[s] > 0);
@@ -541,19 +570,18 @@ export function readFilesUnder(root, accept, depth = 6) {
 }
 
 /**
- * The file search's own control (no browser): a fixture folder holding a needle in a file the accept rule takes is
- * searched by the same routine; the routine must find it there and must not read a file the rule leaves out.
- * Resolves red reasons.
+ * The file search's own control (no browser): a fixture folder holding a SYNTHETIC needle in a file the accept rule takes is
+ * searched by the same routine; the routine must find it there and must not read a file the rule leaves out. The harness never
+ * writes the real offer or any form of it: needle and write are parameters only for the self-test's recorder. Resolves red reasons.
  */
-export function fileSearchControl(needles) {
+export function fileSearchControl(needle = { form: 'control', value: `pb-offer-control-${process.pid}-${Date.now()}-0123456789` }, write = writeFileSync) {
     const dir = mkdtempSync(join(tmpdir(), 'pb-offer-files-'));
     try {
         mkdirSync(join(dir, 'logs'), { recursive: true });
-        writeFileSync(join(dir, 'logs', 'orcad.log'), `x ${needles[0].value} y
-`);
-        writeFileSync(join(dir, 'other.bin'), needles[0].value);
+        write(join(dir, 'logs', 'orcad.log'), `x ${needle.value} y\n`);
+        write(join(dir, 'other.bin'), needle.value);
         const files = readFilesUnder(dir, (rel) => rel.endsWith('.log'));
-        const hit = files.flatMap((f) => placeMatches(f.bytes, needles));
+        const hit = files.flatMap((f) => placeMatches(f.bytes, [needle]));
         const fails = [];
         if (!hit.length) fails.push('the file search did not find a needle in a fixture log file');
         if (files.some((f) => f.rel.endsWith('other.bin'))) fails.push('the file search read a file its accept rule excludes');
@@ -561,6 +589,30 @@ export function fileSearchControl(needles) {
     } finally {
         rmSync(dir, { recursive: true, force: true });
     }
+}
+
+/** The one orcad log file Orca's terminal daemon writes under orcad's data root (daemon-file-log), relative to it. */
+export const ORCAD_KNOWN_LOG = 'logs/daemon.log';
+
+/**
+ * The control for the orcad-log-files place: a place over no file proves nothing, so the known log file must be among those read
+ * (rels: relative paths read under the data root). true, or the reason the place is blind.
+ */
+export function orcadLogControl(rels) {
+    return (rels ?? []).includes(ORCAD_KNOWN_LOG) ? true : `no ${ORCAD_KNOWN_LOG} exists under orcad's data root (${(rels ?? []).length} log file(s) read), so the search covers no log`;
+}
+
+/**
+ * The control for the session-log place. OrcaService's ring (cap 200) must be non-empty and below its cap (it logs the hand-off
+ * events, so lines dropped at the cap could hold what the search looks for). TheiaService's ring (cap 500) carries the sidecar's
+ * stdout, which never carries the offer (it is written to the bridge folder only): it must be non-empty, and at its cap only the
+ * retained tail is searched, which is a note and not a red. Resolves { control: true | reason, note: string | null }.
+ */
+export function sessionLogControl({ orcaLog, orcaCap, theiaLog, theiaCap }) {
+    if (!Array.isArray(orcaLog) || !orcaLog.length) return { control: "OrcaService's log holds no line", note: null };
+    if (orcaLog.length >= orcaCap) return { control: `OrcaService's log is at its cap of ${orcaCap} lines, so earlier lines were dropped`, note: null };
+    if (!Array.isArray(theiaLog) || !theiaLog.length) return { control: "TheiaService's log holds no line", note: null };
+    return { control: true, note: theiaLog.length >= theiaCap ? `TheiaService's log is at its cap of ${theiaCap} lines: its retained tail was searched` : null };
 }
 
 /** obs: { exitCode, stdout, stderr, timedOut, startedProcess } of a child Node that only imported this module. */
@@ -628,6 +680,7 @@ async function runLive(lib, pre = {}) {
         // A hosted terminal keeps its tab and name when its layout first appears (64-WR-03): read after it was shown and typed into.
         const keptCheck = async (label, id, since, except) => keptVerdict({ label, id, hostedAfter: await lib.hostedIds(ctx), addsAfter: (await ctx.addedSince(since)).filter((e) => e.id.startsWith(lib.ORCA_PANE_WIDGET_PREFIX) && !except.includes(e.id)).map((e) => e.id) });
         const readAgentTerminal = async (handle) => (handle ? ctx.pollFor(async () => { try { return lib.terminalText(ctx, handle).trim() ? lib.terminalText(ctx, handle) : null; } catch { return null; } }, 30000, 'the agent terminal read').catch(() => '') : '');
+        const listedTerminal = (handle) => { try { return terminalEntryOf(ctx.orca('terminal', 'list', '--worktree', ctx.worktree), handle); } catch { return null; } };
         const freeze = [];
         const freezeProbe = async (after) => {
             const c = await viaCli(['terminal', 'create', '--worktree', ctx.worktree]);
@@ -670,7 +723,10 @@ async function runLive(lib, pre = {}) {
         // c. Agent-opened terminal: a hosted widget, and orcad's read of the terminal shows output (the agent did not exit at once);
         // nothing is typed, so no prompt is sent.
         const c = await viaCli(['agent', 'launch', '--agent', 'claude', '--surface', 'terminal', '--worktree', ctx.worktree]);
-        fail('terminal-agent', [...creationVerdict({ label: 'terminal-agent', kind: 'terminal', ...c }), ...agentTuiVerdict({ handle: c.handle, text: await readAgentTerminal(c.handle) })]);
+        const agentEarly = c.handle ? listedTerminal(c.handle) : null;
+        const agentText = await readAgentTerminal(c.handle);
+        await sleep(4000); // the process must still be running a bounded time after it started
+        fail('terminal-agent', [...creationVerdict({ label: 'terminal-agent', kind: 'terminal', ...c }), ...agentTuiVerdict({ handle: c.handle, text: agentText, early: agentEarly, late: c.handle ? listedTerminal(c.handle) : null })]);
 
         // e. Orca in-tab split of (b).
         if (ownerItem) fail('split', splitVerdict({ ownerItem }));
@@ -849,8 +905,8 @@ async function runLive(lib, pre = {}) {
         const theiaMatches = await ctx.probe(`const out = {}; for (const s of ${JSON.stringify(selectors)}) out[s] = document.querySelectorAll(s).length; return out;`);
         const chromeObs = { selectors, detectorMatches, detectorError: second.error ?? null, theiaMatches };
         fail('no-tab-chrome', chromeVerdict(chromeObs));
-        const unproven = selectors.filter((x) => !chromeProven(chromeObs).includes(x));
-        if (unproven.length) halfNotes.push(`no-tab-chrome: ${unproven.length} of ${selectors.length} selector(s) never matched in Orca's own client (${unproven.join(', ')}); their absence in Theia is not proven by this run`);
+        const unprovenSkip = unprovenSelectorsSkip(chromeObs);
+        if (unprovenSkip) halfSkips['no-tab-chrome'] = unprovenSkip;
 
         // j. Close semantics on a busy hosted terminal.
         const busy = await viaCli(['terminal', 'create', '--worktree', ctx.worktree, '--command', 'sleep 600']);
@@ -950,18 +1006,21 @@ async function runLive(lib, pre = {}) {
             const out = { local: JSON.stringify({ ...localStorage }), session: JSON.stringify({ ...sessionStorage }) };
             localStorage.removeItem(key); sessionStorage.removeItem(key); return out;`);
         const storageOk = (k) => (storage && !storage.error && typeof storage[k] === 'string' ? (storage[k].includes(planted) ? true : 'the dump did not show a planted marker') : `the storage probe returned ${storage?.error ?? 'no object'}`);
-        const logControl = (lines, cap, what) => (!Array.isArray(lines) || !lines.length ? `${what} holds no line` : lines.length >= cap ? `${what} is at its cap of ${cap} lines, so earlier lines were dropped` : true);
-        addPlace("PowerBrowser's session log", blind ? '' : JSON.stringify([dump.orcaLog, dump.theiaLog]), blind ?? (logControl(dump.orcaLog, dump.orcaCap, "OrcaService's log") === true ? logControl(dump.theiaLog, dump.theiaCap, "TheiaService's log") : logControl(dump.orcaLog, dump.orcaCap, "OrcaService's log")));
+        const logs = blind ? null : sessionLogControl(dump);
+        if (logs?.note) notes.push(`offer: ${logs.note}`);
+        addPlace("PowerBrowser's session log", blind ? '' : JSON.stringify([dump.orcaLog, dump.theiaLog]), blind ?? logs.control);
         addPlace('OrcaService.getState()', blind ? '' : JSON.stringify(dump.state), blind ?? (dump.state?.state === 'ready' ? true : 'the state does not read ready'));
         addPlace('the diagnostics rows', blind ? '' : JSON.stringify(dump.rows), blind ?? (Array.isArray(dump.rows) && dump.rows.some((r) => r?.[0] === 'Orca port') ? true : 'no Orca port row'));
         addPlace("the Theia document's localStorage", storage?.local ?? '', storageOk('local'));
         addPlace("the Theia document's sessionStorage", storage?.session ?? '', storageOk('session'));
         // Files: the bridge folder's other files and orcad's log files; the search routine's own control is a fixture folder.
-        const fileControl = needles.length ? fileSearchControl(needles) : ['no needle form was derived'];
+        // Not scanned here: the whole profile. orca-offer-scan and orca-pairing-containment scan it with the holder exclusions (the token
+        // store legitimately holds the device token, session-only state), which a plain byte scan here would report as a leak.
+        const fileControl = fileSearchControl(); // a synthetic needle: the real offer is never written by the harness
         const bridgeFiles = bridgeDir ? readFilesUnder(bridgeDir, (rel) => rel !== lib.WEB_PAIRING_FILE) : [];
         const logFiles = state.effectiveRoot ? readFilesUnder(state.effectiveRoot, (rel) => /(^|\/)[^/]*\.log$/.test(rel)) : [];
         addPlace("the bridge folder's other files", Buffer.concat(bridgeFiles.map((f) => f.bytes)), fileControl.length ? fileControl.join('; ') : (bridgeDir ? true : 'no bridge folder'));
-        addPlace("orcad's log files", Buffer.concat(logFiles.map((f) => f.bytes)), fileControl.length ? fileControl.join('; ') : true);
+        addPlace("orcad's log files", Buffer.concat(logFiles.map((f) => f.bytes)), fileControl.length ? fileControl.join('; ') : orcadLogControl(logFiles.map((f) => f.rel)));
         notes.push(`offer: ${needles.length} form(s) searched in ${places.length} places; ${bridgeFiles.length} other bridge-folder file(s) and ${logFiles.length} orcad log file(s) read`);
         fail('offer', needleError ? [`offer: no needle form could be derived (${needleError})`] : offerVerdict({
             // The detector: the same search finds the offer's forms in the web-pairing file itself.
@@ -1254,8 +1313,8 @@ async function countedNothing() {
 }
 /** The real main on a tree with no built PowerBrowser: exit 77 and the one SKIP line (no browser is started). */
 function skipRun() {
-    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('ORCA_')));
-    const r = spawnSync(process.execPath, [SELF], { encoding: 'utf8', timeout: 30000, cwd: REPO_ROOT, env: { ...env, PB_LIVE_LOCK_HELD: '1', PB_FIREFOX_BIN: '/nonexistent/pb-self-test/powerbrowser' } });
+    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('ORCA_') && k !== 'PB_LIVE_LOCK_HELD' && k !== 'PB_LIVE_LOCK_HOLDER'));
+    const r = spawnSync(process.execPath, [SELF], { encoding: 'utf8', timeout: 30000, cwd: REPO_ROOT, env: { ...env, PB_FIREFOX_BIN: '/nonexistent/pb-self-test/powerbrowser' } });
     const fails = [];
     if (r.status !== SKIP_EXIT) fails.push(`exit ${r.status}, want ${SKIP_EXIT} (${String(r.stdout).trim().slice(0, 120)} ${String(r.stderr).trim().slice(0, 120)})`);
     if (!new RegExp(`^${NAME}: SKIP -- .+`, 'm').test(r.stdout ?? '')) fails.push('no "<name>: SKIP -- <reason>" line on stdout');
@@ -1276,7 +1335,9 @@ const reload = (o = {}) => ({ before: ['chat1', 'term2', 'term3'], after: ['chat
 
 async function runSelfTest() {
     const lib = await import('./lib/orca-tabs-live.mjs');
+    const liveLock = await import('./lib/live-lock.mjs');
     const { redact } = await import('./lib/orca-run.mjs');
+    const { fixtureGit: paneGit } = await import('./lib/orca-pane-harness.mjs');
     const sources = [`<div data-tab-id={tab.id} data-tab-strip-slot={id} className="x" />`, `<section data-tab-group-strip-id={groupId} data-testid="g" />`];
     const cases = [
         ['creation control', null, () => creationVerdict(creation())],
@@ -1395,7 +1456,30 @@ async function runSelfTest() {
         ['the pairing input alone leaked into the state', 'the offer found in OrcaService.getState() (pairing input)', () => offerVerdict(offerObs({ places: [{ name: 'OrcaService.getState()', control: true, forms: placeMatches(JSON.stringify({ x: NEEDLES[2].value }), NEEDLES) }] }))],
         ['the search finds nothing in a clean place', null, () => (placeMatches('[1700000000] Orca ready on port 26768', NEEDLES).length ? ['a clean text matched a needle'] : [])],
         ['needle forms shorter than 8 characters are dropped', null, () => (offerNeedles([{ form: 'x', value: 'short' }, { form: 'y', value: 'long-enough-value' }], 'tiny').map((n) => n.form).join() === 'y' ? [] : ['a short needle was kept'])],
-        ['the file search sees a needle in a fixture log file and skips an excluded file', null, () => fileSearchControl(NEEDLES)],
+        ['the file search sees a needle in a fixture log file and skips an excluded file', null, () => fileSearchControl()],
+        ['the file search control writes only its own synthetic needle (the real offer is never written)', null, () => { const written = []; const r = fileSearchControl(undefined, (path, text) => { written.push(String(text)); writeFileSync(path, text); }); return [...r, ...written.filter((t) => NEEDLES.some((n) => t.includes(n.value))).map(() => 'the control wrote a real needle form')]; }],
+        ['a control handed a real needle is caught by the recorder (the control for the case above)', 'the control wrote a real needle form', () => { const written = []; const r = fileSearchControl(NEEDLES[1], (path, text) => { written.push(String(text)); writeFileSync(path, text); }); return [...r, ...written.filter((t) => NEEDLES.some((n) => t.includes(n.value))).map(() => 'the control wrote a real needle form')]; }],
+        ['orcad log control: the known daemon log was read', null, () => (orcadLogControl(['logs/daemon.log', 'logs/other.log']) === true ? [] : ['a known log was not accepted'])],
+        ['no orcad log file exists (harness-live-tabs-03)', 'the search covers no log', () => { const c = orcadLogControl([]); return c === true ? [] : [c]; }],
+        ['only an unrelated log file exists', 'the search covers no log', () => { const c = orcadLogControl(['cache/x.log']); return c === true ? [] : [c]; }],
+        ['session log control with both rings below their caps', null, () => (sessionLogControl({ orcaLog: ['a'], orcaCap: 200, theiaLog: ['b'], theiaCap: 500 }).control === true ? [] : ['a healthy pair of rings was refused'])],
+        ['an OrcaService ring at its cap is blind', 'is at its cap of 200 lines', () => { const c = sessionLogControl({ orcaLog: new Array(200).fill('x'), orcaCap: 200, theiaLog: ['b'], theiaCap: 500 }).control; return c === true ? [] : [c]; }],
+        ['an empty OrcaService ring is blind', "OrcaService's log holds no line", () => { const c = sessionLogControl({ orcaLog: [], orcaCap: 200, theiaLog: ['b'], theiaCap: 500 }).control; return c === true ? [] : [c]; }],
+        ['a TheiaService ring at its cap is a note, not a blind place', null, () => { const r = sessionLogControl({ orcaLog: ['a'], orcaCap: 200, theiaLog: new Array(500).fill('x'), theiaCap: 500 }); return r.control === true && /retained tail/.test(r.note ?? '') ? [] : ['a full sidecar ring was refused or unnoted']; }],
+        ['an empty TheiaService ring is blind', "TheiaService's log holds no line", () => { const c = sessionLogControl({ orcaLog: ['a'], orcaCap: 200, theiaLog: [], theiaCap: 500 }).control; return c === true ? [] : [c]; }],
+        ['unproven selectors: a partial run when some were never detected (harness-live-tabs-08)', 'their absence in Theia has no control', () => { const r = unprovenSelectorsSkip(chrome({ detectorMatches: { '[data-tab-id]': 4, '[data-tab-strip-slot]': 0, '[data-tab-group-strip-id]': 2 } })); return r ? [r] : []; }],
+        ['unproven selectors: none when every selector was detected', null, () => (unprovenSelectorsSkip(chrome()) === null ? [] : ['a fully detected set was reported partial'])],
+        ['unproven selectors make the row exit 77 and a failure still wins', null, () => { const r = unprovenSelectorsSkip(chrome({ detectorMatches: { '[data-tab-id]': 4, '[data-tab-strip-slot]': 0, '[data-tab-group-strip-id]': 2 } })); return lib.verdictExitQuiet(NAME, [], [r]) === SKIP_EXIT && lib.verdictExitQuiet(NAME, ['x'], [r]) === 1 ? [] : ['the exit status for an unproven selector is wrong']; }],
+        ['the terminal list entry is found by handle', null, () => (terminalEntryOf({ result: { terminals: [{ handle: 'a' }, { handle: 'b', connected: true }] } }, 'b')?.connected === true ? [] : ['terminalEntryOf missed the handle'])],
+        ['agent liveness control', null, () => agentTuiVerdict({ handle: 'h', text: 'Welcome to Claude Code', early: { handle: 'h', connected: true }, late: { handle: 'h', connected: true } })],
+        ['an agent that exited at once with output on screen (harness-live-tabs-07)', "the agent's process had exited when its widget appeared", () => agentTuiVerdict({ handle: 'h', text: '$ claude\nbye', early: { handle: 'h', exitCause: 'exited' }, late: { handle: 'h', exitCause: 'exited' } })],
+        ['an agent that died after its widget appeared', "the agent's process had exited a few seconds later", () => agentTuiVerdict({ handle: 'h', text: 'Welcome', early: { handle: 'h', connected: true }, late: { handle: 'h', connected: false } })],
+        ['an agent terminal missing from the list', "not in orcad's terminal list a few seconds later", () => agentTuiVerdict({ handle: 'h', text: 'Welcome', early: { handle: 'h' }, late: null })],
+        ['a shell that stayed alive but could not find the agent', 'shows an error from the shell or the OS instead of the agent', () => agentTuiVerdict({ handle: 'h', text: 'bash: claude: command not found\n$ ', early: { handle: 'h', connected: true }, late: { handle: 'h', connected: true } })],
+        ['close dialog titles are required when the checkout is present (harness-live-tabs-10)', 'no close-terminal dialog title read', () => withTempFiles({}, (dir) => { mkdirSync(join(dir, 'orca/src/renderer/src/components/terminal-pane'), { recursive: true }); writeFileSync(join(dir, 'orca/src/renderer/src/components/terminal-pane/CloseTerminalDialog.tsx'), 'export default function X() { return null }\n'); try { lib.closeDialogTitles(dir); return []; } catch (e) { return [String(e.message)]; } })],
+        ['close dialog titles are required when the dialog file is gone', 'the file is absent', () => withTempFiles({}, (dir) => { mkdirSync(join(dir, 'orca/src'), { recursive: true }); try { lib.closeDialogTitles(dir); return []; } catch (e) { return [String(e.message)]; } })],
+        ['no orca checkout gives no titles, not an error', null, () => withTempFiles({}, (dir) => (lib.closeDialogTitles(dir).length === 0 ? [] : ['titles read from nothing']))],
+        ['an unreadable generated frontend is not "not wired" (harness-live-tabs-11)', 'could not be read', () => withTempFiles({}, (dir) => { const c = lib.listenerCoverage({ wired: lib.appWiresOrcaPanes(join(dir, 'app', 'lib', 'backend', 'main.js')), bundleBuilt: true, booted: false }); return c.verdict === 'red' ? [c.reason] : []; })],
         ['a stray bridge-folder file holding the token is found', 'device token', () => withTempFiles({ 'stray.txt': `x ${NEEDLES[1].value}` }, (dir) => readFilesUnder(dir, () => true).flatMap((f) => placeMatches(f.bytes, NEEDLES)))],
         ['reloaded control', null, () => reloadedVerdict({ before: 1700000000000.5, after: { origin: 1700000009999.5, recorder: false, ready: true } })],
         ['a document that never reloaded (harness-live-tabs-04)', 'the Theia document did not reload', () => reloadedVerdict({ before: 1700000000000.5, after: null })],
@@ -1410,8 +1494,8 @@ async function runSelfTest() {
         ['a split that added two widgets (the tab reopened)', '2 hosted widgets were added by the split', () => splitVerdict(split({ original: { id: 'orca-pane:term2', hosted: true, rekeyed: true }, splitAdds: ['orca-pane:term3', 'orca-pane:term4'] }))],
         ['split control with the kept original', null, () => splitVerdict(split({ original: { id: 'orca-pane:term2', hosted: true, rekeyed: true }, splitAdds: ['orca-pane:term3'] }))],
         ['a split with one widget', '1 hosted terminal widgets for the split Orca tab, want 2', () => splitVerdict(split({ widgets: [split().widgets[0]] }))],
-        ['agent terminal control', null, () => agentTuiVerdict({ handle: 'term_h1', text: 'Welcome to Claude Code' })],
-        ['an agent terminal that read empty (harness-live-tabs-07)', 'stayed empty', () => agentTuiVerdict({ handle: 'term_h1', text: '  \n ' })],
+        ['agent terminal control', null, () => agentTuiVerdict({ handle: 'term_h1', text: 'Welcome to Claude Code', early: { handle: 'term_h1', connected: true }, late: { handle: 'term_h1', connected: true } })],
+        ['an agent terminal that read empty (harness-live-tabs-07)', 'stayed empty', () => agentTuiVerdict({ handle: 'term_h1', text: '  \n ', early: { handle: 'term_h1', connected: true }, late: { handle: 'term_h1', connected: true } })],
         ['an agent terminal with no handle', 'returned no terminal handle', () => agentTuiVerdict({ handle: null, text: 'x' })],
         ['prompt budget counts composer writes, not guard passes (harness-live-tabs-08)', 'more than one prompt sent in one run (2; the budget is 1)', () => countedTwice()],
         ['a prompt that wrote nothing is not counted', null, () => countedNothing()],
@@ -1421,10 +1505,10 @@ async function runSelfTest() {
         ['the close dialog titles read from Orca\'s source', null, () => (!existsSync(join(REPO_ROOT, 'orca/src')) || lib.closeDialogTitles().includes('Stop running command?') ? [] : ['the close dialog titles were not read from the pinned source'])],
         ['output after the session is redacted (harness-live-tabs-12)', null, () => { lib.retainForOutput(redact, ['SECRET-pairing-value-1']); const out = lib.redactAfterSession('evaluate failed: SECRET-pairing-value-1 in the page'); return out.includes('SECRET-pairing') ? ['the secret survived redactAfterSession'] : []; }],
         ['output after the session without the retained list keeps the secret (the control for the case above)', null, () => (redact('evaluate failed: SECRET-pairing-value-1', []).includes('SECRET-pairing') ? [] : ['redact with an empty list removed the secret by itself'])],
-        ['fixture git ignores a developer config with signing and hooks (harness-live-tabs-13)', null, () => lib.fixtureGitVerdict()],
-        ['fixture git without the hygiene is hit by that config', 'the fixture commit failed under a developer config', () => lib.fixtureGitVerdict((repo, path, home) => (...a) => execFileSync('git', ['-C', repo, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', ...a], { env: { PATH: path, HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] }))],
-        ['the live lock is taken by a row started outside the driver (harness-live-tabs-14)', null, () => lib.lockProbeVerdict(SELF, NAME)],
-        ['a row that does not take the live lock is caught', 'did not take the live lock', () => withTempFiles({ 'row.mjs': 'console.log("x: lock-probe: held=0 locked=0");' }, (dir) => lib.lockProbeVerdict(join(dir, 'row.mjs'), 'x'))],
+        ['fixture git (the pane harness\'s) ignores a developer config with signing and hooks (harness-live-tabs-13)', null, () => lib.fixtureGitVerdict((repo, home) => paneGit(repo, home))],
+        ['fixture git without the hygiene is hit by that config', 'the fixture commit failed under a developer config', () => lib.fixtureGitVerdict((repo, home) => (...a) => execFileSync('git', ['-C', repo, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', ...a], { env: { PATH: process.env.PATH ?? '', HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] }))],
+        ['every live path awaits the shared live-lock helper (harness-live-tabs-14)', null, () => liveLock.lockWiringFails(NAME, import.meta.url)],
+        ['a script that no longer awaits holdLiveLock is caught', 'lock wiring', () => lib.lockWiringPlantFails(liveLock.lockWiringFails)],
         ['listener coverage: a booted bundle covers Orca\'s listeners', null, () => (lib.listenerCoverage({ wired: true, bundleBuilt: true, booted: true }).verdict === 'covered' ? [] : ['a booted bundle was not covered'])],
         ['listener coverage: an app with no orca-panes has none to cover', null, () => (lib.listenerCoverage({ wired: false, bundleBuilt: false, booted: false }).verdict === 'not-wired' ? [] : ['an unwired app was not not-wired'])],
         ['listener coverage: a built bundle that did not boot is red (harness-live-tabs-11)', 'did not boot in the Theia frame', () => { const c = lib.listenerCoverage({ wired: true, bundleBuilt: true, booted: false }); return c.verdict === 'red' ? [c.reason] : []; }],
@@ -1459,20 +1543,17 @@ const isEntryPoint = (() => {
 })();
 if (isEntryPoint) {
     const args = process.argv.slice(2);
-    const unknown = args.find((a) => a !== '--self-test' && a !== '--lock-probe');
+    const unknown = args.find((a) => a !== '--self-test');
     if (unknown !== undefined) {
-        console.error(`${NAME}: FAIL -- unknown argument '${unknown}' (usage: node ${SELF_REL} [--self-test | --lock-probe])`);
+        console.error(`${NAME}: FAIL -- unknown argument '${unknown}' (usage: node ${SELF_REL} [--self-test])`);
         process.exit(2);
     }
     if (args.includes('--self-test')) process.exit(await runSelfTest());
-    // A live row started outside the driver takes the live lock itself, before it launches anything.
+    // The live lock before anything launches (scripts/lib/live-lock.mjs). A run with nothing to launch needs none.
     const lib = await import('./lib/orca-tabs-live.mjs');
-    let held;
-    try { held = lib.reexecUnderLiveLock(SELF, args); } catch (err) {
-        console.error(`${NAME}: FAIL -- ${err.message}`);
-        process.exit(1);
-    }
-    if (held !== null) process.exit(held);
-    if (args.includes('--lock-probe')) { console.log(lib.lockProbeLine(NAME)); process.exit(0); }
+    const { holdLiveLock } = await import('./lib/live-lock.mjs');
+    const mayLaunch = (() => { const pre = lib.prerequisites({ needOrca: true }); return !pre.skip && !pre.fail; })();
+    const locked = mayLaunch ? await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT }) : null;
+    if (locked !== null) process.exit(locked);
     process.exit(await main());
 }

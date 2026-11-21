@@ -4257,6 +4257,21 @@ run_own_checks() {
     # H8 other checks: the snapshot-fixture generator builds its child environment only through its allowlist helper and
     # gives every child the scratch working directory (source-text assertions over the generator itself, 8 plants).
     "gen-orca-snapshot-fixtures-self-test|node $REPO_ROOT/scripts/gen-orca-snapshot-fixtures.mjs --self-test"
+    # G5a CI and release: the wrapper every workflow and script uses to call a check that can skip. A check that did
+    # not run (exit 77, or exit 0 with a SKIP line) is red there unless the call names the documented case.
+    "run-no-skip-self-test|bash $REPO_ROOT/scripts/run-no-skip.sh --self-test"
+    # H7 live panels: the page-furniture row prints only the length and a known-value classification of a clipboard it
+    # read, never its text (the redaction, proven without a browser; the row itself is full-tier).
+    "page-furniture-live-redaction-self-test|node $REPO_ROOT/scripts/verify-page-furniture-live.mjs --redaction-self-test"
+    # G5b packaging and docs: the release runner unit (work directory, sandbox overrides for rootless podman, no libvirtd
+    # group), the packaged tree carrying the claude wrapper and Orca's licence where the backend resolves them, and the
+    # endpoint allowlist against the hosts Orca hosting contacts, compared as a set with the privacy page.
+    "legion-runner-unit|node $REPO_ROOT/scripts/verify-legion-runner-unit.mjs"
+    "legion-runner-unit-self-test|node $REPO_ROOT/scripts/verify-legion-runner-unit.mjs --self-test"
+    "packaging-staging|node $REPO_ROOT/scripts/verify-packaging-staging.mjs"
+    "packaging-staging-self-test|node $REPO_ROOT/scripts/verify-packaging-staging.mjs --self-test"
+    "orca-egress|node $REPO_ROOT/scripts/verify-orca-egress.mjs"
+    "orca-egress-self-test|node $REPO_ROOT/scripts/verify-orca-egress.mjs --self-test"
     # NEW (67-03, RUN-06/RUN-07, P67-01..P67-09, P67-32): orca-offer-file judges real lstat results of a temp folder
     # through orca-panes' offer-file-policy.ts (type-stripped): symlink, non-regular, other owner, group/other bits,
     # missing, non-loopback or mismatched endpoint, undecodable text; OFFER_REFUSAL_REASONS against the copy table's
@@ -6208,6 +6223,10 @@ run_own_checks() {
   local quick_rows=${#CHECKS[@]}
 
   if [ "$QUICK" -eq 0 ]; then
+    # "Run under flock .../pb-live.lock" in a row comment below means the live-lock contract (SKIP-PROTOCOL.md,
+    # "The live lock"): the driver takes the lock before the first of these rows and exports PB_LIVE_LOCK_HELD=1 and
+    # PB_LIVE_LOCK_HOLDER. Run by hand, `flock <git common dir>/pb-live.lock node <row>` is the ancestor case; never
+    # set PB_LIVE_LOCK_HELD by hand, since /proc/locks, not the variable, is what the driver and the rows trust.
     CHECKS+=(
       # NEW (Phase 48, TEL-06): the live loopback delivery drill. Full tier: it needs the nix theia shell
       # (a frontend rebuild), the built binary through the BiDi harness, and a free loopback port. It binds
@@ -6932,9 +6951,10 @@ run_own_checks() {
       # hooks' calls, is classified in APP_WIDE_LISTENERS both ways, so a re-pin's new one is red). SKIP when
       # the bundle is not built. orca-pane-standalone-live: the bundle on a standalone page in a PowerBrowser web
       # tab with a scratch orcad; the isolated per-leaf terminal mount (P64-32) is measured first, then every
-      # hosted type mounts after the planted throwing child registers. Run under
-      # flock /home/chris/coding/Power-Browser/.git/pb-live.lock with every inherited ORCA_* unset; SKIP when not
-      # built. Phase 68's re-pin job runs both rows.
+      # hosted type mounts after the planted throwing child registers. The live row runs under the live lock (the
+      # driver takes it; by hand, `flock <git common dir>/pb-live.lock node <row>` is valid: that flock is the row's
+      # ancestor, the contract's ancestor case), with every inherited ORCA_* unset; SKIP when not built. Phase 68's
+      # re-pin job runs both rows.
       "orca-pane-entry|node $REPO_ROOT/scripts/verify-orca-pane-entry.mjs"
       "orca-pane-standalone-live|node $REPO_ROOT/scripts/verify-orca-pane-standalone-live.mjs"
       # orca-pane-css: the built pane sheet against Theia's built frontend CSS (keyframe names disjoint, no root
@@ -6942,7 +6962,8 @@ run_own_checks() {
       # document, both directions, controls first, the portal probe and the derived <html> clause; lane-build mode
       # only while theia/extensions/orca-panes is absent, real-widget mode when it exists. P64-15 makes the
       # coordinator run orca-pane-css-live first on the merged tree in real-widget mode, before any widget live row
-      # is judged. Live: flock /home/chris/coding/Power-Browser/.git/pb-live.lock, every inherited ORCA_* unset.
+      # is judged. Live: under the live lock (taken by the driver; `flock <git common dir>/pb-live.lock node <row>` by
+      # hand is the contract's ancestor case), every inherited ORCA_* unset.
       "orca-pane-css|node $REPO_ROOT/scripts/verify-orca-pane-css.mjs"
       "orca-pane-css-live|node $REPO_ROOT/scripts/verify-orca-pane-css-live.mjs"
       # NEW (64-04, TERM-04, P64-33; D-32 since 64-06): orca-terminal-keys-live. One session: the in-session control
@@ -7219,9 +7240,12 @@ check_fixture_function_skip() {
 # The live lock (audit harness-live-tabs-14). Every live row's header asks to run under flock on
 # <git common dir>/pb-live.lock, so two sessions never run live rows at once; nothing took it. The driver now
 # takes it before its first full-tier row and holds it to the end of the run, through a holder process of its
-# own (flock -o, so no row inherits the lock's descriptor), and exports PB_LIVE_LOCK_HELD=1, which the rows that
-# re-exec themselves under the lock already honour. A caller that holds it already (PB_LIVE_LOCK_HELD=1, or a
-# `flock <lock> scripts/verify-platform.sh` ancestor) is not waited for.
+# own (flock -o, so no row inherits the lock's descriptor). The handshake with the rows is the live-lock contract
+# in SKIP-PROTOCOL.md ("The live lock"): the driver exports PB_LIVE_LOCK_HELD=1 and PB_LIVE_LOCK_HOLDER=<pid>:<start
+# ticks> of the process /proc/locks shows holding the lock, and it never trusts an inherited PB_LIVE_LOCK_HELD. It
+# goes on without taking the lock only when /proc/locks shows the lock held by the process an inherited
+# PB_LIVE_LOCK_HOLDER names, with matching start ticks, or by one of its own ancestors (`flock <lock>
+# scripts/verify-platform.sh`). An inherited PB_LIVE_LOCK_HELD=1 or PB_LIVE_LOCK_HOLDER with neither is a FAIL.
 live_lock_path() {
   if [ -n "$FIXTURE_REGISTRY" ] && [ -n "${PB_VERIFY_FIXTURE_LOCK:-}" ]; then
     echo "$PB_VERIFY_FIXTURE_LOCK"
@@ -7231,36 +7255,85 @@ live_lock_path() {
   common="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
   echo "$common/pb-live.lock"
 }
-# True when a process holding a flock on $1 (/proc/locks, by inode) is this script or one of its ancestors.
+# The device /proc/locks prints for file $1, as "maj:min" in its own form (two-digit lowercase hex each). It is the
+# device of the superblock, from /proc/self/mountinfo (the longest mount point containing the file's real path), not
+# stat's st_dev: btrfs reports a per-subvolume st_dev (48 for /home here) while /proc/locks prints the superblock's
+# (00:22), so st_dev would never match.
+lock_file_dev() {
+  local path dev
+  path="$(realpath -- "$1" 2>/dev/null)" || return 1
+  dev="$(awk -v p="$path" '{ mp = $5; gsub(/\\040/, " ", mp); pre = (mp == "/") ? "/" : mp "/"; if ((p == mp || index(p, pre) == 1) && length(mp) >= best) { best = length(mp); dev = $3 } } END { print dev }' /proc/self/mountinfo 2>/dev/null)"
+  [[ "$dev" =~ ^([0-9]+):([0-9]+)$ ]] || return 1
+  printf '%02x:%02x\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+}
+# The pids /proc/locks shows holding a flock on file $1, matched by device AND inode (review of the live lock: an
+# inode number alone also matches a file with the same number on another filesystem), one per line. In fixture mode
+# PB_VERIFY_FIXTURE_PROC_LOCKS replaces /proc/locks with recorded text, so the self-test can plant a lock on another
+# device.
+lock_holders() {
+  local ino dev locks=/proc/locks
+  [ -n "$FIXTURE_REGISTRY" ] && [ -n "${PB_VERIFY_FIXTURE_PROC_LOCKS:-}" ] && locks="$PB_VERIFY_FIXTURE_PROC_LOCKS"
+  ino="$(stat -c %i -- "$1" 2>/dev/null)" || return 0
+  dev="$(lock_file_dev "$1")" || return 0
+  awk -v ino="$ino" -v dev="$dev" '$0 !~ /->/ && $2 == "FLOCK" { n = split($6, f, ":"); if (n == 3 && f[3] == ino && tolower(f[1] ":" f[2]) == dev) print $5 }' "$locks" 2>/dev/null
+}
+# True when a process holding a flock on $1 is this script or one of its ancestors; LOCK_ANCESTOR_PID names it.
+LOCK_ANCESTOR_PID=""
 lock_held_by_ancestor() {
-  local ino holders pid
-  ino="$(stat -c %i -- "$1" 2>/dev/null)" || return 1
-  holders="$(awk -v ino="$ino" '$0 !~ /->/ && $2 == "FLOCK" { n = split($6, f, ":"); if (f[n] == ino) print $5 }' /proc/locks 2>/dev/null)"
+  local holders pid
+  LOCK_ANCESTOR_PID=""
+  holders="$(lock_holders "$1")"
   [ -n "$holders" ] || return 1
   pid=$$
   while [ -n "$pid" ] && [ "$pid" -gt 1 ]; do
-    case " $(echo $holders) " in *" $pid "*) return 0 ;; esac
+    case " $(echo $holders) " in *" $pid "*) LOCK_ANCESTOR_PID="$pid"; return 0 ;; esac
     pid="$(awk '{ sub(/^.*\) /, ""); print $2 }' "/proc/$pid/stat" 2>/dev/null)"
   done
   return 1
 }
+# True when $2 is "<pid>:<start ticks>" and /proc/locks shows that pid holding a flock on $1, with those start ticks
+# (so a reused pid number is not the holder it names).
+lock_held_by_named() {
+  local lock="$1" named="$2" pid ticks
+  [[ "$named" =~ ^([0-9]+):([0-9]+)$ ]] || return 1
+  pid="${BASH_REMATCH[1]}"
+  ticks="${BASH_REMATCH[2]}"
+  [ "$(start_ticks_of "$pid")" = "$ticks" ] || return 1
+  case " $(echo $(lock_holders "$lock")) " in *" $pid "*) return 0 ;; esac
+  return 1
+}
+# "pid (command)" for each holder of lock $1, for messages.
+describe_lock_holders() {
+  local pid out=""
+  for pid in $(lock_holders "$1"); do
+    out+=" pid $pid ($(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | cut -c1-160))"
+  done
+  echo "${out:- (no holder found in /proc/locks)}"
+}
 acquire_live_lock() {
   [ "$LIVE_LOCK_STATE" -eq 1 ] && return 0
-  if [ "${PB_LIVE_LOCK_HELD:-}" = "1" ]; then
-    LIVE_LOCK_STATE=1
-    echo "verify-platform: live lock held by the caller (PB_LIVE_LOCK_HELD=1)"
-    return 0
-  fi
   local lock
   if ! lock="$(live_lock_path)" || ! : >> "$lock" 2>/dev/null; then
     echo "verify-platform: FAIL -- the live lock file could not be opened (${lock:-no git common dir}); full-tier rows run only under it" >&2
     return 1
   fi
-  if lock_held_by_ancestor "$lock"; then
+  # The contract (SKIP-PROTOCOL.md, "The live lock"): an inherited variable is never proof; /proc/locks is.
+  if [ -n "${PB_LIVE_LOCK_HOLDER:-}" ] && lock_held_by_named "$lock" "$PB_LIVE_LOCK_HOLDER"; then
     export PB_LIVE_LOCK_HELD=1
     LIVE_LOCK_STATE=1
-    echo "verify-platform: live lock $lock held by a caller of this run"
+    echo "verify-platform: live lock $lock held by the run that started this one (PB_LIVE_LOCK_HOLDER=$PB_LIVE_LOCK_HOLDER, confirmed in /proc/locks)"
     return 0
+  fi
+  if lock_held_by_ancestor "$lock"; then
+    export PB_LIVE_LOCK_HELD=1
+    export PB_LIVE_LOCK_HOLDER="$LOCK_ANCESTOR_PID:$(start_ticks_of "$LOCK_ANCESTOR_PID")"
+    LIVE_LOCK_STATE=1
+    echo "verify-platform: live lock $lock held by a caller of this run (pid $LOCK_ANCESTOR_PID)"
+    return 0
+  fi
+  if [ "${PB_LIVE_LOCK_HELD:-}" = "1" ] || [ -n "${PB_LIVE_LOCK_HOLDER:-}" ]; then
+    echo "verify-platform: FAIL -- PB_LIVE_LOCK_HELD=${PB_LIVE_LOCK_HELD:-(unset)} and PB_LIVE_LOCK_HOLDER=${PB_LIVE_LOCK_HOLDER:-(unset)} are inherited, but /proc/locks shows the live lock $lock held neither by the process PB_LIVE_LOCK_HOLDER names (with its start ticks) nor by an ancestor of this run; it is held by:$(describe_lock_holders "$lock"). A variable cannot stand in for the lock. Next step: unset PB_LIVE_LOCK_HELD and PB_LIVE_LOCK_HOLDER and run again; the run then waits for the lock" >&2
+    return 1 # forged-lock-variable
   fi
   local ready="$ROW_LOG_DIR/live-lock-held" waited=0 since
   # The holder lives only as long as this driver (review point 3): once it holds the lock it polls this
@@ -7285,25 +7358,24 @@ acquire_live_lock() {
       return 1
     fi
     if [ "$waited" -eq 10 ] || [ "$waited" -ge "$limit" ]; then
-      local holders="" pid
-      for pid in $(awk -v ino="$(stat -c %i -- "$lock" 2>/dev/null)" '$0 !~ /->/ && $2 == "FLOCK" { n = split($6, f, ":"); if (f[n] == ino) print $5 }' /proc/locks 2>/dev/null); do
-        holders+=" pid $pid ($(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | cut -c1-160))"
-      done
+      local holders
+      holders="$(describe_lock_holders "$lock")"
       if [ "$waited" -ge "$limit" ]; then
-        echo "verify-platform: FAIL -- the live lock $lock is still held after ${PB_LIVE_LOCK_WAIT_S:-21600} s by:${holders:- (no holder found in /proc/locks)}. Next step: wait for that run to end, or stop it" >&2
+        echo "verify-platform: FAIL -- the live lock $lock is still held after ${PB_LIVE_LOCK_WAIT_S:-21600} s by:$holders. Next step: wait for that run to end, or stop it" >&2
         kill -- "-$LIVE_LOCK_HOLDER_PID" 2>/dev/null || true
         wait "$LIVE_LOCK_HOLDER_PID" 2>/dev/null || true
         LIVE_LOCK_HOLDER_PID=""
         return 1
       fi
-      echo "verify-platform: waiting for the live lock $lock, held by:${holders:- (no holder found in /proc/locks)} (if this run's caller holds it, set PB_LIVE_LOCK_HELD=1)..."
+      echo "verify-platform: waiting for the live lock $lock, held by:$holders. Another live run holds it; this run waits until it ends (at most ${PB_LIVE_LOCK_WAIT_S:-21600} s). To find that run: ps -o pid,ppid,etime,args -p <pid>, then ps -o pid,args --ppid <pid>..."
     fi
     idle 0.1
     waited=$((waited + 1))
   done
   export PB_LIVE_LOCK_HELD=1
+  export PB_LIVE_LOCK_HOLDER="$LIVE_LOCK_HOLDER_PID:$(start_ticks_of "$LIVE_LOCK_HOLDER_PID")"
   LIVE_LOCK_STATE=1
-  echo "verify-platform: live lock $lock taken for the full-tier rows"
+  echo "verify-platform: live lock $lock taken for the full-tier rows (holder pid $LIVE_LOCK_HOLDER_PID)"
 }
 
 # The start time of pid $1 in clock ticks since boot (/proc/<pid>/stat field 22); empty when it is gone.

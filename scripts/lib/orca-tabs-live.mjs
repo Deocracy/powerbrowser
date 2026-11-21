@@ -29,23 +29,19 @@
 // stdout and stderr write goes through orca-run.mjs's redact, which also
 // replaces the offer itself once it has been read.
 //
-// The live lock: a live row started on its own (PB_LIVE_LOCK_HELD is not "1") takes
-// <git common dir>/pb-live.lock itself, before it launches anything, through
-// reexecUnderLiveLock (harness-live-tabs-14, lane H1: the driver takes it and exports
-// PB_LIVE_LOCK_HELD=1 for the rows it runs). A row wrapped in flock on that same file by
-// its caller must also export PB_LIVE_LOCK_HELD=1, or it waits on its own parent.
+// The live lock is scripts/lib/live-lock.mjs (holdLiveLock); the rows call it before anything launches.
 //
-// Fixture git: the scratch repository's git runs with no global or system config, no
-// signing and no hooks (fixtureGit), so a developer's ~/.gitconfig cannot block or alter
-// the fixture commits (harness-live-tabs-13).
+// Fixture git: the scratch repository's git is the pane harness's fixtureGit (no global or
+// system config, no signing, no hooks, a scratch HOME), and the Orca CLI gets the scratch HOME
+// too (harness-live-tabs-13).
 //
 // Node built-ins and the repo's lib modules only.
 
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { liveEnv, seedClaudeLogin } from './firefox-bidi.mjs';
 import { verdictExit } from './skip-verdict.mjs';
 
@@ -73,57 +69,18 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
 
 // ---------------------------------------------------------------------------
-// The live lock.
+// The live lock lives in scripts/lib/live-lock.mjs (holdLiveLock, lockWiringFails); only the self-test's plant is here.
 
-/** The lock file every live run shares: <git common dir>/pb-live.lock, or PB_LIVE_LOCK_FILE (the self-test's own file). */
-export function liveLockFile(root = REPO_ROOT, env = process.env) {
-    if (env.PB_LIVE_LOCK_FILE) return env.PB_LIVE_LOCK_FILE;
-    const common = execFileSync('git', ['-C', root, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim();
-    return join(common, 'pb-live.lock');
-}
-
-/**
- * Takes the live lock for a live row started outside the driver. Returns null when PB_LIVE_LOCK_HELD is "1" (the
- * driver, or a caller that holds the lock, already did: the row goes on in this process). Otherwise runs
- * `node <self> <args>` under flock -o on the lock file (-o: the row's own children, a detached orcad among them, do not inherit the
- * lock descriptor and so cannot keep it after the row ends) with PB_LIVE_LOCK_HELD=1 and returns that run's exit status (77
- * and every other status pass through); the caller exits with it and launches nothing itself.
- */
-export function reexecUnderLiveLock(self, args, { root = REPO_ROOT, env = process.env } = {}) {
-    if (env.PB_LIVE_LOCK_HELD === '1') return null;
-    const r = spawnSync('flock', ['-o', liveLockFile(root, env), process.execPath, self, ...args], { stdio: 'inherit', env: { ...env, PB_LIVE_LOCK_HELD: '1' } });
-    if (r.error) throw new Error(`could not take the live lock with flock (${r.error.code ?? r.error.message}); install util-linux or run through scripts/verify-platform.sh`);
-    return r.status ?? 1;
-}
-
-/**
- * The self-test's control for a live row's lock (no browser): runs `node <self> --lock-probe` with PB_LIVE_LOCK_HELD
- * unset and its own lock file, and requires the row to report that it holds the lock (the env flag set and a lock that a
- * second flock -n cannot take). Resolves red reasons.
- */
-export function lockProbeVerdict(self, name) {
-    const dir = mkdtempSync(join(tmpdir(), 'pb-lock-probe-'));
+/** lockWiringFails over a script that never calls holdLiveLock: it must be red. Resolves lockWiringFails' reasons (non-empty when it works). */
+export function lockWiringPlantFails(lockWiringFails) {
+    const dir = mkdtempSync(join(tmpdir(), 'pb-lock-wiring-'));
     try {
-        const lockFile = join(dir, 'pb-live.lock');
-        writeFileSync(lockFile, '');
-        const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'PB_LIVE_LOCK_HELD' && !k.startsWith('ORCA_')));
-        const r = spawnSync(process.execPath, [self, '--lock-probe'], { encoding: 'utf8', timeout: 20000, env: { ...env, PB_LIVE_LOCK_FILE: lockFile } });
-        const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
-        const fails = [];
-        if (r.status !== 0) fails.push(`${name} --lock-probe exited ${r.status} (${out.trim().slice(0, 120)})`);
-        if (!/lock-probe: held=1 locked=1\b/.test(out)) fails.push(`${name} started without PB_LIVE_LOCK_HELD did not take the live lock before running (${out.trim().slice(0, 120)})`);
-        return fails;
+        const file = join(dir, 'row.mjs');
+        writeFileSync(file, "console.log('a live row that never takes the lock');\n");
+        return lockWiringFails('x', pathToFileURL(file).href);
     } finally {
         rmSync(dir, { recursive: true, force: true });
     }
-}
-
-/** What a row prints for --lock-probe once it is running: whether this process holds the live lock. Never launches anything. */
-export function lockProbeLine(name, env = process.env) {
-    const lockFile = liveLockFile(REPO_ROOT, env);
-    // A second, non-blocking flock fails (status 1) exactly while another open file description holds the lock.
-    const taken = spawnSync('flock', ['-n', lockFile, 'true']);
-    return `${name}: lock-probe: held=${env.PB_LIVE_LOCK_HELD === '1' ? 1 : 0} locked=${taken.status === 1 ? 1 : 0}`;
 }
 
 /** verdictExit with its SKIP line suppressed: the self-tests ask what the exit status is without printing a SKIP line of their own. */
@@ -157,10 +114,16 @@ export function redactAfterSession(text) {
 export const CONFIRMATION_SELECTOR = 'body > [data-radix-popper-content-wrapper] [role="dialog"], body > [data-radix-popper-content-wrapper] [role="alertdialog"], body > [role="dialog"], body > [role="alertdialog"], body > div [role="alertdialog"]';
 const ORCA_CLOSE_DIALOG_REL = 'orca/src/renderer/src/components/terminal-pane/CloseTerminalDialog.tsx';
 
-/** The dialog titles of Orca's close-terminal confirmation, read from the pinned source: [] when orca/ is absent. */
+/**
+ * The dialog titles of Orca's close-terminal confirmation, read from the pinned source: [] only when orca/ is not fetched. With the
+ * checkout present and no title read (the file moved or its copy keys changed) it throws: an empty list would accept any new dialog.
+ */
 export function closeDialogTitles(root = REPO_ROOT) {
-    const text = read(join(root, ORCA_CLOSE_DIALOG_REL)) ?? '';
-    return [...text.matchAll(/stop_(?:command|agent)_title',\s*'([^']+)'/g)].map((m) => m[1]);
+    if (!existsSync(join(root, 'orca', 'src'))) return [];
+    const text = read(join(root, ORCA_CLOSE_DIALOG_REL));
+    const titles = [...(text ?? '').matchAll(/stop_(?:command|agent)_title',\s*'([^']+)'/g)].map((m) => m[1]);
+    if (!titles.length) throw new Error(`source moved: no close-terminal dialog title read from ${ORCA_CLOSE_DIALOG_REL}${text === null ? ' (the file is absent)' : ''}, so the confirmation could not be told from another dialog`);
+    return titles;
 }
 
 /** Page source: marks every confirmation dialog already present, so a later one is told from them. Resolves their count. */
@@ -189,26 +152,13 @@ export function confirmationAppeared(found, titles) {
 // ---------------------------------------------------------------------------
 // Fixture git.
 
-/** The environment fixture git runs in: no global or system config; HOME a scratch folder, never the developer's. */
-export function fixtureGitEnv(basePath, home) {
-    return { PATH: basePath, HOME: home, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' };
-}
-
-/** Arguments that keep a fixture commit free of signing and hooks, whatever the repository's own config says. */
-export const FIXTURE_GIT_ARGS = ['-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', '-c', 'core.hooksPath=/dev/null'];
-
-/** A git runner for the scratch repository `repo`: git(...args) runs `git -C repo` under fixtureGitEnv. */
-export function fixtureGit(repo, basePath, home = dirname(repo)) {
-    return (...a) => execFileSync('git', ['-C', repo, ...FIXTURE_GIT_ARGS, ...a], { env: fixtureGitEnv(basePath, home), stdio: ['ignore', 'pipe', 'pipe'] });
-}
-
 /**
- * The self-test's control for fixtureGit (no browser): a HOME whose .gitconfig demands signing with a program that does
+ * The self-test's control for a fixture git runner (no browser): a HOME whose .gitconfig demands signing with a program that does
  * not exist and names a hooks folder whose pre-commit hook records itself and fails. The raw invocation (that HOME, no
- * flags) must be hit by it (a commit that fails or a hook that ran: the detector), and fixtureGit must then commit
- * cleanly with no hook run. Resolves red reasons.
+ * flags) must be hit by it (a commit that fails or a hook that ran: the detector), and makeGit(repo, home) (the pane harness's
+ * fixtureGit) must then commit cleanly with no hook run. Resolves red reasons.
  */
-export function fixtureGitVerdict(makeGit = fixtureGit) {
+export function fixtureGitVerdict(makeGit) {
     const dir = mkdtempSync(join(tmpdir(), 'pb-fixture-git-'));
     try {
         const home = join(dir, 'home');
@@ -227,7 +177,7 @@ export function fixtureGitVerdict(makeGit = fixtureGit) {
         const rawGit = (...a) => execFileSync('git', ['-C', rawRepo, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', ...a], { env: { PATH: path, HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
         if (commitWith(rawGit) === null && !existsSync(marker)) fails.push('fixture git: the hostile HOME config blocked nothing on the raw invocation, so the control proves nothing');
         rmSync(marker, { force: true });
-        const error = commitWith(makeGit(prepare('fixture'), path, home));
+        const error = commitWith(makeGit(prepare('fixture'), home));
         if (error !== null) fails.push(`fixture git: the fixture commit failed under a developer config with signing and hooks (${error})`);
         if (existsSync(marker)) fails.push('fixture git: a global pre-commit hook ran for the fixture commit');
         return fails;
@@ -241,10 +191,13 @@ export const firefoxBin = (root = REPO_ROOT) => process.env.PB_FIREFOX_BIN || jo
 /** The Theia backend this run launches: PB_BACKEND_MAIN, else this tree's. */
 export const backendMain = (root = REPO_ROOT) => process.env.PB_BACKEND_MAIN || join(root, BACKEND_MAIN_REL);
 
-/** Whether the app under test (PB_BACKEND_MAIN, else this tree's) has orca-panes in its generated frontend: its document then holds Orca's listeners once the bundle boots. */
+/**
+ * Whether the app under test (PB_BACKEND_MAIN, else this tree's) has orca-panes in its generated frontend: its document then holds Orca's
+ * listeners once the bundle boots. null when the generated frontend index cannot be read (the app is not built as expected).
+ */
 export function appWiresOrcaPanes(main = backendMain()) {
-    const frontend = join(dirname(main), '..', '..', 'src-gen', 'frontend', 'index.js');
-    return /@powerbrowser\/orca-panes\//.test(read(frontend) ?? '');
+    const text = read(join(dirname(main), '..', '..', 'src-gen', 'frontend', 'index.js'));
+    return text === null ? null : /@powerbrowser\/orca-panes\//.test(text);
 }
 
 /**
@@ -254,6 +207,7 @@ export function appWiresOrcaPanes(main = backendMain()) {
  * 'skip': wired but the bundle is not built, so Orca's listeners were not in the frame and the control did not cover them.
  */
 export function listenerCoverage({ wired, bundleBuilt, booted }) {
+    if (wired === null || wired === undefined) return { verdict: 'red', reason: 'NOT SCORED -- the generated frontend index of the app under test (src-gen/frontend/index.js beside PB_BACKEND_MAIN) could not be read, so whether Orca\'s document listeners are in the Theia frame is unknown' };
     if (!wired) return { verdict: 'not-wired', note: 'the app under test wires no orca-panes module, so no Orca document listeners are in the Theia frame' };
     if (booted) return { verdict: 'covered' };
     if (bundleBuilt) return { verdict: 'red', reason: 'NOT SCORED -- the Orca pane bundle is built but did not boot in the Theia frame, so the paste control does not cover its document listeners' };
@@ -504,11 +458,13 @@ export async function withOrcaTabsSession({ log = () => {}, needOrca = true, age
                 const boot = await ctx.probe(BOOT_WAIT, 200000);
                 if (!boot?.booted) throw new Error(`the Orca pane bundle did not boot: ${JSON.stringify(boot?.error ?? boot?.state ?? boot)}`);
                 // The Orca CLI's environment, built from scratch: never this session's ORCA_* values, never the stub.
-                const cliEnv = { PATH: basePath, HOME: savedEnv.HOME ?? process.env.HOME ?? '', ORCA_USER_DATA: state.effectiveRoot, ORCA_USER_DATA_PATH: state.effectiveRoot };
+                // The CLI reads its endpoint from ORCA_USER_DATA, so it gets the scratch HOME too; the developer's HOME is never handed to a fixture process.
+                const cliEnv = { PATH: basePath, HOME: scratch, ORCA_USER_DATA: state.effectiveRoot, ORCA_USER_DATA_PATH: state.effectiveRoot };
                 mkdirSync(repo, { recursive: true });
                 writeFileSync(join(repo, 'README'), 'orca-tabs-live scratch repository\n');
-                // The fixture's git sees no developer config: no signing, no hooks (harness-live-tabs-13). The Orca CLI keeps the real HOME above.
-                const git = fixtureGit(repo, basePath, scratch);
+                // The fixture's git is the pane harness's: no developer config, no signing, no hooks, a scratch HOME (harness-live-tabs-13).
+                const { fixtureGit } = await import('./orca-pane-harness.mjs');
+                const git = fixtureGit(repo, scratch);
                 git('init', '-q');
                 git('add', '.');
                 git('commit', '-q', '-m', 'fixture');

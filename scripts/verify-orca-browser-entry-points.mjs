@@ -19,8 +19,9 @@
 //     either name; each name must have at least one caller.
 //  c. the TabContentType members of orca/src/shared/tab-types.ts; browser must
 //     be one of them.
-//  d. the PB pane entry's import graph: a breadth-first walk from
-//     orca-overlay/files/src/renderer/src/pb/pb-pane-mount.tsx over static imports,
+//  d. the pane bundle's import graph: a breadth-first walk from every build input of
+//     orca-overlay/files/vite.pb-panes.config.ts (rollupOptions.input, derived; the pane
+//     entry pb-pane-mount.tsx must be one of them) over static imports,
 //     re-exports and import() calls (type-only imports excluded), resolved with
 //     ts.resolveModuleName and the paths of Orca's config/tsconfig.web.json; an
 //     overlay file resolves at its in-tree path (orca-overlay/files/<p> stands in
@@ -29,12 +30,15 @@
 //  1. the graph reaches no page-mounting component;
 //  2. the orca-panes route table's browser row is { target: 'pb-web-tab' };
 //  3. each caller is dead with its derived reason (no import path from the entry
-//     reaches it; its importers are named), or reachable with its creator's derived
-//     reason, else red (harness-static-browser-04): createBrowserTab must call, before
-//     it builds its page, a gate that tests isPairedWebClientWindow and throws (D-34);
-//     createWebRuntimeSessionBrowserTab must ask prepareBrowserClientHostPlacement,
-//     the placement PowerBrowser's link answers ("arrives as createPage, proven live
-//     by orca-browser-agent-live");
+//     reaches it; its importers are named), or reachable and judged call by call
+//     (harness-static-browser-04): a createBrowserTab call is refused when
+//     createBrowserTab's gate returns unless isPairedWebClientWindow() and throws
+//     without the runtime environment id it is passed (D-34), and the call's own
+//     options provably pass none; a createWebRuntimeSessionBrowserTab call arrives as
+//     createPage when the creator asks prepareBrowserClientHostPlacement behind a
+//     placementPreference !== 'server' test and the call provably passes no server
+//     preference. A reachable caller not proven so (a spread, a variable id) is red
+//     unless it is in RATIFIED_UNPROVEN_CALLERS, compared as set equality;
 //  4. the component set, each caller set and the TabContentType set are non-empty
 //     ("source moved" otherwise);
 //  5. the served prefix the host bundle is imported from (HOST_PREFIX in
@@ -432,34 +436,148 @@ function declarationOf(root, name) {
 }
 
 /**
- * Why a reachable caller of each creator cannot mount a page in the pane client, derived from the pin (clause 3,
- * harness-static-browser-04); a creator whose reason no longer holds maps to { fail }.
- *  - createBrowserTab: before it builds its page it calls a gate that tests isPairedWebClientWindow and throws (D-34).
- *  - createWebRuntimeSessionBrowserTab: it asks prepareBrowserClientHostPlacement, the placement PowerBrowser's link
- *    answers, so the page arrives as createPage (proven live by orca-browser-agent-live).
+ * Reachable callers whose options the static judgement cannot prove refused, ratified with the reason they are
+ * harmless, compared as set equality (a new one is red, one now proven refused or gone is stale). Each only stages a
+ * store row: no page-mounting component is reachable from the pane bundle's inputs (clause 1), so an admitted call
+ * renders no page.
  */
-export function deriveCreatorReasons(root, read) {
+export const RATIFIED_UNPROVEN_CALLERS = Object.freeze({
+    createBrowserTab: [
+        'orca/src/renderer/src/lib/browser-link-open.ts',
+        'orca/src/renderer/src/lib/browser-page-tab-opening.ts',
+        'orca/src/renderer/src/lib/file-preview.ts',
+        'orca/src/renderer/src/lib/http-link-browser-placement.ts',
+        'orca/src/renderer/src/lib/workspace-browser-tab-open.ts',
+        'orca/src/renderer/src/lib/workspace-ports/workspace-port-actions.ts',
+        'orca/src/renderer/src/runtime/web-runtime-browser-tab-staging.ts',
+        'orca/src/renderer/src/store/slices/browser/browser-tab-focus-actions.ts',
+    ],
+    createWebRuntimeSessionBrowserTab: [
+        'orca/src/renderer/src/lib/workspace-browser-tab-open.ts',
+    ],
+});
+const RATIFIED_REASON = 'its options are not provably refused (named below); ratified: it stages a store row only, and no page-mounting component is reachable from the pane bundle (clause 1)';
+
+/**
+ * The gate createBrowserTab calls before it builds its page, with its strength proven from its body: it returns early
+ * unless isPairedWebClientWindow(), and throws when the runtime environment id it is passed (its second parameter,
+ * from options.browserRuntimeEnvironmentId) is absent. { name, file } or { fail }.
+ */
+export function deriveCreateGate(root, read) {
     const rel = (p) => relative(root, p);
-    const reasons = {};
     const create = functionNamed(read(REL.tabActions), REL.tabActions, CREATORS[0]);
     let pageAt;
     if (create) walk(create, (n) => { if (pageAt === undefined && ts.isVariableDeclaration(n) && n.name.getText() === 'page') pageAt = n.getStart(); });
-    let gate;
     for (const c of create && pageAt !== undefined ? callsUnder(create).filter((x) => x.call.getStart() < pageAt) : []) {
+        if (!/\.browserRuntimeEnvironmentId$/.test(c.call.arguments[1]?.getText() ?? '')) continue;
         const d = declarationOf(root, c.name);
-        if (!d) continue;
-        let throws = false;
-        walk(d.node, (n) => { if (ts.isThrowStatement(n)) throws = true; });
-        if (throws && callsUnder(d.node).some((x) => x.name === 'isPairedWebClientWindow')) { gate = `${c.name} (${rel(d.file)})`; break; }
+        const param = d?.node.parameters[1]?.name.getText();
+        if (!d || !param) continue;
+        // Locals derived from the parameter (const id = param?.trim()), and the parameter itself.
+        const ids = new Set([param]);
+        walk(d.node, (n) => { if (ts.isVariableDeclaration(n) && n.initializer && new RegExp(`\\b${param}\\b`).test(n.initializer.getText())) ids.add(n.name.getText()); });
+        let pairedReturn = false;
+        let throwsWithoutId = false;
+        walk(d.node, (n) => {
+            if (!ts.isIfStatement(n)) return;
+            const t = n.expression.getText().replace(/\s+/g, '');
+            const body = n.thenStatement;
+            if (t === '!isPairedWebClientWindow()' && (ts.isReturnStatement(body) || (ts.isBlock(body) && body.statements.length === 1 && ts.isReturnStatement(body.statements[0])))) pairedReturn = true;
+            const negated = /^!([A-Za-z_$][\w$]*)$/.exec(t)?.[1];
+            if (negated && ids.has(negated) && (ts.isThrowStatement(body) || (ts.isBlock(body) && body.statements.some(ts.isThrowStatement)))) throwsWithoutId = true;
+        });
+        if (pairedReturn && throwsWithoutId) return { name: c.name, file: rel(d.file) };
     }
-    reasons[CREATORS[0]] = gate
-        ? { why: `refused in a paired web client: createBrowserTab calls ${gate} before it builds a page, a gate that throws in a paired web client without a managed runtime browser (D-34)` }
-        : { fail: 'createBrowserTab calls no gate that tests isPairedWebClientWindow and throws before it builds a page (D-34), so the caller can mount a page in the pane client' };
+    return { fail: 'createBrowserTab calls no gate, before it builds a page, that returns unless isPairedWebClientWindow() and throws without the runtime environment id it is passed (D-34)' };
+}
+
+const short = (n) => n.getText().replace(/\s+/g, ' ').slice(0, 70);
+
+/** Whether a property name is `name` (identifier or string key). */
+const keyIs = (p, name) => p.name && (stringOf(p.name) ?? p.name.getText()) === name;
+
+/**
+ * One options object judged: { ok } when `key` is provably absent or allowed by `allowed` (a predicate over the
+ * initializer), else { why }. A spread of a conditional whose branches are object literals is judged branch by branch;
+ * any other spread, a shorthand or a non-literal options value is unproven.
+ */
+function judgeOptions(node, key, allowed) {
+    if (!node) return { ok: true };
+    if (ts.isParenthesizedExpression(node)) return judgeOptions(node.expression, key, allowed);
+    if (ts.isConditionalExpression(node)) {
+        const a = judgeOptions(node.whenTrue, key, allowed);
+        return a.why ? a : judgeOptions(node.whenFalse, key, allowed);
+    }
+    if (!ts.isObjectLiteralExpression(node)) return { why: `its options are ${short(node)}, not an object literal` };
+    for (const p of node.properties) {
+        if (ts.isSpreadAssignment(p)) {
+            const r = judgeOptions(p.expression, key, allowed);
+            if (r.why) return { why: ts.isObjectLiteralExpression(p.expression) || ts.isConditionalExpression(p.expression) || ts.isParenthesizedExpression(p.expression) ? r.why : `a spread of ${short(p.expression)} can carry ${key}` };
+        } else if (ts.isShorthandPropertyAssignment(p) && p.name.text === key) return { why: `${key} is passed by shorthand` };
+        else if (ts.isPropertyAssignment(p) && keyIs(p, key) && !allowed(p.initializer)) return { why: `${key} is ${short(p.initializer)}` };
+    }
+    return { ok: true };
+}
+
+const nullish = (e) => e.kind === ts.SyntaxKind.NullKeyword || e.getText() === 'undefined';
+
+/**
+ * Each creator call in a caller file judged (harness-static-browser-04, second review): a createBrowserTab call is
+ * refused when no runtime environment id can reach the gate (options absent, or browserRuntimeEnvironmentId provably
+ * null or absent); a createWebRuntimeSessionBrowserTab call arrives as createPage when its placementPreference is
+ * provably absent or a string other than 'server'. Returns { ok } or { why } for the file's first unproven call.
+ */
+export function judgeCaller(text, file, creator) {
+    let verdict = { ok: true };
+    walk(parse(file, text), (n) => {
+        if (verdict.why || !ts.isCallExpression(n) || calleeName(n) !== creator) return;
+        const r = creator === CREATORS[0]
+            ? judgeOptions(n.arguments[2], 'browserRuntimeEnvironmentId', nullish)
+            : judgeOptions(n.arguments[0], 'placementPreference', (e) => stringOf(e) !== undefined && stringOf(e) !== 'server');
+        if (r.why) verdict = { why: `${r.why} (line ${parse(file, text).getLineAndCharacterOfPosition(n.getStart()).line + 1})` };
+    });
+    return verdict;
+}
+
+/**
+ * Why a reachable caller of each creator cannot mount a page in the pane client, derived from the pin (clause 3,
+ * harness-static-browser-04); a creator whose reason no longer holds maps to { fail }.
+ *  - createBrowserTab: before it builds its page it calls a gate (deriveCreateGate) that refuses a paired web client
+ *    without a runtime environment id, and the caller's own options pass none (judgeCaller);
+ *  - createWebRuntimeSessionBrowserTab: it asks prepareBrowserClientHostPlacement unless its placementPreference is
+ *    'server', and the caller's own options pass no server preference, so the page arrives as createPage through
+ *    PowerBrowser's link (proven live by orca-browser-agent-live).
+ */
+export function deriveCreatorReasons(root, read) {
+    const reasons = {};
+    const gate = deriveCreateGate(root, read);
+    reasons[CREATORS[0]] = gate.fail ? { fail: gate.fail } : { why: `refused in a paired web client: createBrowserTab calls ${gate.name} (${gate.file}) before it builds a page, which throws without a runtime environment id, and this caller passes none (D-34)` };
     const session = declarationOf(root, CREATORS[1]);
-    reasons[CREATORS[1]] = session && callsUnder(session.node).some((x) => x.name === 'prepareBrowserClientHostPlacement')
-        ? { why: "asks prepareBrowserClientHostPlacement, which PowerBrowser's link answers, so the page arrives as createPage (proven live by orca-browser-agent-live)" }
-        : { fail: `${CREATORS[1]} ${session ? 'no longer asks prepareBrowserClientHostPlacement' : 'is not declared under the renderer'}, so the caller does not arrive as createPage through PowerBrowser's placement` };
+    let guarded = false;
+    if (session) walk(session.node, (n) => {
+        if (ts.isIfStatement(n) && /!==\s*'server'/.test(n.expression.getText()) && callsUnder(n.thenStatement).some((x) => x.name === 'prepareBrowserClientHostPlacement')) guarded = true;
+    });
+    reasons[CREATORS[1]] = guarded
+        ? { why: "asks prepareBrowserClientHostPlacement, which PowerBrowser's link answers, and this caller passes no server placement, so the page arrives as createPage (proven live by orca-browser-agent-live)" }
+        : { fail: `${CREATORS[1]} ${session ? "no longer asks prepareBrowserClientHostPlacement behind a placementPreference !== 'server' test" : 'is not declared under the renderer'}, so the caller does not arrive as createPage through PowerBrowser's placement` };
     return reasons;
+}
+
+/** The pane bundle's build inputs (rollupOptions.input of vite.pb-panes.config.ts), as tree paths; [] when none parse. */
+export function derivePaneInputs(root, read) {
+    const rel = 'orca-overlay/files/vite.pb-panes.config.ts';
+    if (!existsSync(join(root, rel))) return [];
+    const out = [];
+    walk(parse(rel, read(rel)), (n) => {
+        if (!ts.isPropertyAssignment(n) || n.name.getText() !== 'input') return;
+        walk(n.initializer, (m) => {
+            if (ts.isCallExpression(m) && calleeName(m) === 'resolve' && stringOf(m.arguments[0]) !== undefined) {
+                const p = stringOf(m.arguments[0]).replace(/^\.\//, '');
+                out.push(existsSync(join(root, REL.overlay, p)) ? `${REL.overlay}/${p}` : `${REL.orca}/${p}`);
+            }
+        });
+    });
+    return out;
 }
 
 /** Clauses 2, 5, 7, 8 and 9: they read only PowerBrowser files and the overlay, so they run with or without orca/. */
@@ -493,7 +611,7 @@ function localClauses(read, has, fails, notes) {
     }
 }
 
-export function check(root = REPO_ROOT) {
+export function check(root = REPO_ROOT, { ratifiedCallers = RATIFIED_UNPROVEN_CALLERS } = {}) {
     const fails = [];
     const skips = [];
     const lines = [];
@@ -513,7 +631,13 @@ export function check(root = REPO_ROOT) {
     const { mounting } = derivePageMounting(root, resolver);
     if (!mounting.length) fails.push(`source moved: no page-mounting component derived under ${REL.browserPane}/`);
     if (!has(REL.entry)) return { fails: [...fails, `the pane entry ${REL.entry} is absent`], skips, lines, notes };
-    const graph = walkGraph(root, resolver, REL.entry);
+    // Clause 1 walks from every input of the pane bundle's build, derived (second review), not one fixed file.
+    const inputs = derivePaneInputs(root, read);
+    if (!inputs.length) fails.push('broken instrument: no build input derived from orca-overlay/files/vite.pb-panes.config.ts (rollupOptions.input)');
+    if (inputs.length && !inputs.includes(REL.entry)) fails.push(`the pane bundle's inputs [${inputs.join(', ')}] do not include the pane entry ${REL.entry}`);
+    const graph = new Map();
+    for (const input of inputs.length ? inputs : [REL.entry]) for (const [k, v] of walkGraph(root, resolver, input)) if (!graph.has(k)) graph.set(k, v);
+    notes.inputs = inputs;
     const chain = (f) => { const out = []; for (let p = f; p; p = graph.get(p)) out.unshift(rel(p)); return out.join(' -> '); };
     for (const m of mounting) if (graph.has(m)) fails.push(`the pane entry reaches page-mounting component ${rel(m)} (${chain(m)})`);
     notes.graph = graph.size;
@@ -531,10 +655,16 @@ export function check(root = REPO_ROOT) {
     for (const c of CREATORS) {
         if (!callers[c].length) fails.push(`source moved: no caller of ${c} under ${REL.renderer}/`);
         notes.callers[c] = callers[c].length;
+        const ratified = ratifiedCallers[c] ?? [];
+        for (const r of ratified) if (!callers[c].some((f) => rel(f) === r && graph.has(f))) fails.push(`${c}: stale ratified caller ${r}: it is no longer a reachable caller`);
         for (const f of callers[c]) {
             if (graph.has(f)) {
+                const judged = judgeCaller(readFileSync(f, 'utf8'), f, c);
                 if (reasons[c].fail) fails.push(`${c}: reachable caller ${rel(f)} (${chain(f)}): ${reasons[c].fail}`);
-                else lines.push(`${c}: reachable ${rel(f)} -- ${reasons[c].why}`);
+                else if (judged.ok && ratified.includes(rel(f))) fails.push(`${c}: stale ratified caller ${rel(f)}: its options are now proven, so it must leave RATIFIED_UNPROVEN_CALLERS`);
+                else if (judged.ok) lines.push(`${c}: reachable ${rel(f)} -- ${reasons[c].why}`);
+                else if (ratified.includes(rel(f))) lines.push(`${c}: reachable ${rel(f)} -- ${RATIFIED_REASON}: ${judged.why}`);
+                else fails.push(`${c}: reachable caller ${rel(f)} (${chain(f)}) is not proven refused: ${judged.why}; the derived reason (${reasons[c].why}) does not hold for it`);
             } else {
                 const importers = importersOf(root, resolver, f).map(rel);
                 lines.push(`${c}: dead ${rel(f)} -- no import path from the pane entry reaches it; importers ${importers.length ? importers.slice(0, 3).join(', ') + (importers.length > 3 ? `, +${importers.length - 3}` : '') : 'none'}, none in the graph`);
@@ -635,9 +765,10 @@ function buildFixture(tmp) {
     pane('BrowserAddressBar.tsx', 'export function Bar() { return <input /> }\n');
     put(`${REL.renderer}/src/store/browser-tab-actions.ts`, 'export const createBrowserTab = (url: string) => url\n');
     put(`${REL.renderer}/src/components/tab-bar/new-browser-tab.ts`, "import { createBrowserTab } from '@/store/browser-tab-actions'\nexport const plus = () => createBrowserTab('about:blank')\n");
-    put(`${REL.renderer}/src/runtime/web-runtime-browser-creation.ts`, 'export async function createWebRuntimeSessionBrowserTab(url: string) {\n  await (window as any).api.runtimeEnvironments.prepareBrowserClientHostPlacement({ selector: url })\n  return url\n}\n');
+    put(`${REL.renderer}/src/runtime/web-runtime-browser-creation.ts`, "export async function createWebRuntimeSessionBrowserTab(args: any) {\n  const placementPreference = args.placementPreference ?? 'auto'\n  if (placementPreference !== 'server') {\n    await (window as any).api.runtimeEnvironments.prepareBrowserClientHostPlacement({ selector: args.url })\n  }\n  return args.url\n}\n");
+    put('orca-overlay/files/vite.pb-panes.config.ts', "export default { build: { rollupOptions: { input: { 'pb-panes': resolve('src/renderer/src/pb/pb-pane-mount.tsx') } } } }\n");
     put(`${REL.renderer}/src/lib/client-creation-action-policy.ts`, "export function assertManagedBrowserMaterializationAllowed(state: any, id: string | undefined): void {\n  if (!isPairedWebClientWindow()) {\n    return\n  }\n  if (!id) {\n    throw new Error('local browser unavailable')\n  }\n}\n");
-    put(`${REL.renderer}/src/runtime/open-browser.ts`, "import { createWebRuntimeSessionBrowserTab } from './web-runtime-browser-creation'\nexport const openBrowser = () => createWebRuntimeSessionBrowserTab('https://x.test')\n");
+    put(`${REL.renderer}/src/runtime/open-browser.ts`, "import { createWebRuntimeSessionBrowserTab } from './web-runtime-browser-creation'\nexport const openBrowser = () => createWebRuntimeSessionBrowserTab({ url: 'https://x.test' })\n");
     put(REL.entry, `${FIX.entryImports.join('\n')}\nexport const PANE = [openBrowser, Bar]\n${FIX_STORE_ROW.entry}`);
     put(REL.link, "const LINK = Symbol.for('powerbrowser.orca-browser.link')\nexport function link(id: string) {\n  ;(window as any).api.runtimeEnvironments.prepareBrowserClientHostPlacement = () => ({ kind: 'client', browserHostClientId: id })\n  window.dispatchEvent(new Event('powerbrowser-orca-browser-link'))\n  return LINK\n}\n");
     put(REL.host, `export const PB_BROWSER_HOST_API = 1\nexport async function attachBrowserHost() { return undefined }\n${FIX_STORE_ROW.host}`);
@@ -674,8 +805,17 @@ export const PLANTS = [
     { name: 'link-event-differs', naming: 'link event', file: REL.link, edit: sub("new Event('powerbrowser-orca-browser-link')", "new Event('powerbrowser-orca-browser-planted')") },
     // harness-static-browser-04: a reachable creator caller whose derived reason no longer holds.
     { name: 'reachable-create-without-gate', naming: 'createBrowserTab: reachable caller orca/src/renderer/src/components/tab-bar/new-browser-tab.ts', file: REL.entry, edit: (s) => `import { plus } from '@/components/tab-bar/new-browser-tab'\n${s}`, more: [{ file: REL.tabActions, edit: sub('      assertManagedBrowserMaterializationAllowed(get(), options?.browserRuntimeEnvironmentId)\n', '') }] },
-    { name: 'reachable-create-gate-not-refusing', naming: 'calls no gate that tests isPairedWebClientWindow and throws', file: REL.entry, edit: (s) => `import { plus } from '@/components/tab-bar/new-browser-tab'\n${s}`, more: [{ file: `${REL.renderer}/src/lib/client-creation-action-policy.ts`, edit: sub("    throw new Error('local browser unavailable')\n", '    return\n') }] },
-    { name: 'session-creator-without-placement', naming: 'createWebRuntimeSessionBrowserTab: reachable caller orca/src/renderer/src/runtime/open-browser.ts', file: `${REL.renderer}/src/runtime/web-runtime-browser-creation.ts`, edit: sub('  await (window as any).api.runtimeEnvironments.prepareBrowserClientHostPlacement({ selector: url })\n', '') },
+    { name: 'reachable-create-gate-not-refusing', naming: 'calls no gate, before it builds a page, that returns unless isPairedWebClientWindow() and throws', file: REL.entry, edit: (s) => `import { plus } from '@/components/tab-bar/new-browser-tab'\n${s}`, more: [{ file: `${REL.renderer}/src/lib/client-creation-action-policy.ts`, edit: sub("    throw new Error('local browser unavailable')\n", '    return\n') }] },
+    { name: 'session-creator-without-placement', naming: 'createWebRuntimeSessionBrowserTab: reachable caller orca/src/renderer/src/runtime/open-browser.ts', file: `${REL.renderer}/src/runtime/web-runtime-browser-creation.ts`, edit: sub('    await (window as any).api.runtimeEnvironments.prepareBrowserClientHostPlacement({ selector: args.url })\n', '') },
+    // Second review: each caller's own options are judged, and the gate's shape, not any throw.
+    { name: 'create-caller-passing-a-runtime-id', naming: "is not proven refused: browserRuntimeEnvironmentId is 'env-1'", file: REL.entry, edit: (s) => `import { plus } from '@/components/tab-bar/new-browser-tab'\n${s}`, more: [{ file: `${REL.renderer}/src/components/tab-bar/new-browser-tab.ts`, edit: sub("createBrowserTab('about:blank')", "createBrowserTab('w', 'about:blank', { browserRuntimeEnvironmentId: 'env-1' })") }] },
+    { name: 'create-caller-spreading-its-options', naming: 'can carry browserRuntimeEnvironmentId', file: REL.entry, edit: (s) => `import { plus } from '@/components/tab-bar/new-browser-tab'\n${s}`, more: [{ file: `${REL.renderer}/src/components/tab-bar/new-browser-tab.ts`, edit: sub("createBrowserTab('about:blank')", "createBrowserTab('w', 'about:blank', { ...placement })") }] },
+    { name: 'session-caller-with-server-placement', naming: "is not proven refused: placementPreference is 'server'", file: `${REL.renderer}/src/runtime/open-browser.ts`, edit: sub("{ url: 'https://x.test' }", "{ url: 'https://x.test', placementPreference: 'server' }") },
+    { name: 'gate-throw-unrelated-to-the-runtime-id', naming: 'calls no gate, before it builds a page, that returns unless isPairedWebClientWindow()', file: REL.entry, edit: (s) => `import { plus } from '@/components/tab-bar/new-browser-tab'\n${s}`, more: [{ file: `${REL.renderer}/src/lib/client-creation-action-policy.ts`, edit: sub('  if (!id) {\n', '  if (!state.ready) {\n') }] },
+    { name: 'gate-paired-test-inverted', naming: 'calls no gate, before it builds a page, that returns unless isPairedWebClientWindow()', file: REL.entry, edit: (s) => `import { plus } from '@/components/tab-bar/new-browser-tab'\n${s}`, more: [{ file: `${REL.renderer}/src/lib/client-creation-action-policy.ts`, edit: sub('  if (!isPairedWebClientWindow()) {\n', '  if (isPairedWebClientWindow()) {\n') }] },
+    { name: 'stale-ratified-caller', naming: 'createWebRuntimeSessionBrowserTab: stale ratified caller orca/src/renderer/src/runtime/open-browser.ts', file: `${REL.renderer}/src/runtime/open-browser.ts`, edit: (s) => `${s}// planted: ratified while proven\n`, ratified: { createWebRuntimeSessionBrowserTab: ['orca/src/renderer/src/runtime/open-browser.ts'] } },
+    // Extra point 10: a second build input of the pane bundle that mounts a browser page.
+    { name: 'second-pane-input-mounting-a-page', naming: 'reaches page-mounting component orca/src/renderer/src/components/browser-pane/BrowserPane.tsx', file: 'orca-overlay/files/vite.pb-panes.config.ts', edit: sub("resolve('src/renderer/src/pb/pb-pane-mount.tsx') }", "resolve('src/renderer/src/pb/pb-pane-mount.tsx'), extra: resolve('src/renderer/src/pb/pb-extra.tsx') }"), extra: { rel: 'orca-overlay/files/src/renderer/src/pb/pb-extra.tsx', body: "import BrowserPane from '@/components/browser-pane/BrowserPane'\nexport const X = BrowserPane\n" } },
     { name: 'link-absent', naming: 'the browser host link orca-overlay/files/src/renderer/src/pb/browser-host/pb-browser-host-link.ts is absent', file: REL.link, remove: true },
 ];
 // The plants over PowerBrowser files only: each must go red with the fixture's orca/ removed too.
@@ -686,7 +826,7 @@ function runSelfTest() {
     const tmp = mkdtempSync(join(tmpdir(), `${NAME}-`));
     try {
         buildFixture(tmp);
-        const control = check(tmp);
+        const control = check(tmp, { ratifiedCallers: {} });
         const deadOk = control.lines.some((l) => l.includes('createBrowserTab: dead'));
         const liveOk = control.lines.some((l) => l.includes('createWebRuntimeSessionBrowserTab: reachable'));
         if (control.fails.length || control.skips.length || control.notes.crossLane !== 'compared' || !deadOk || !liveOk) {
@@ -698,7 +838,7 @@ function runSelfTest() {
         // A reachable createBrowserTab caller behind the derived gate is green, carrying that reason (the detector).
         const entryText = readFileSync(join(tmp, REL.entry), 'utf8');
         writeFileSync(join(tmp, REL.entry), `import { plus } from '@/components/tab-bar/new-browser-tab'\n${entryText}`);
-        const gated = check(tmp);
+        const gated = check(tmp, { ratifiedCallers: {} });
         writeFileSync(join(tmp, REL.entry), entryText);
         if (gated.fails.length || !gated.lines.some((l) => l.startsWith('createBrowserTab: reachable') && l.includes('assertManagedBrowserMaterializationAllowed'))) {
             console.error(`  FAIL gated-create-reachable -> ${[...gated.fails, ...gated.lines].join(' | ')}`); failures++;
@@ -716,7 +856,7 @@ function runSelfTest() {
                 writeFileSync(file, planted);
             }
             if (p.extra) { mkdirSync(dirname(join(tmp, p.extra.rel)), { recursive: true }); writeFileSync(join(tmp, p.extra.rel), p.extra.body); }
-            const r = check(tmp);
+            const r = check(tmp, p.ratified ? { ratifiedCallers: p.ratified } : { ratifiedCallers: {} });
             for (const [f, t] of saved) writeFileSync(f, t);
             if (p.extra) rmSync(join(tmp, p.extra.rel));
             const text = r.fails.join('\n');
@@ -732,7 +872,7 @@ function runSelfTest() {
         // harness-static-browser-03: without orca/ the PowerBrowser-only clauses still run. The control is a SKIP with no
         // failure; each local plant must still go red.
         rmSync(join(tmp, REL.orca), { recursive: true, force: true });
-        const skipped = check(tmp);
+        const skipped = check(tmp, { ratifiedCallers: {} });
         if (skipped.fails.length || !skipped.skips.some((x) => x.startsWith('no fetched Orca tree'))) { console.error(`  FAIL no-orca-control -> ${[...skipped.fails, ...skipped.skips].join(' | ') || 'no SKIP'}`); failures++; } else console.log('  ok no-orca-control -> SKIP of the orca/ clauses only, no failure');
         const local = PLANTS.filter((p) => LOCAL_PLANTS.includes(p.name));
         for (const p of local) {

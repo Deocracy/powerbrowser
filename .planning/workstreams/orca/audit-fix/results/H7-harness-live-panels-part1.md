@@ -51,3 +51,11 @@ None.
 
 Callers of the converted scripts (SKIP-PROTOCOL correction 1): `grep -rnE` over `.github/workflows`, `scripts`, `docs`, `.claude/hooks` finds only the registry rows in `scripts/verify-platform.sh` (the driver reads 77 as SKIP) and a comment in `scripts/verify-extension-actions.mjs:72` that names verify-page-furniture-live.mjs; no workflow, hook or script runs any of them. Nothing needs a handoff.
 Self-tests (correction 2): none calls its main mode in-process or spawns it with inherited output; every child a self-test starts has its output captured, and each self-test prints its own PASS or FAIL line last. The one self-test that can end SKIP is orca-workspace-live's, when typescript is absent, deliberately (partial run). Every SKIP name part is a script NAME of letters and hyphens.
+
+## Follow-up after the independent review
+Corrections to the table above (details and checks in `H7-harness-live-panels-part2.md`, "Follow-up after the independent review"):
+- harness-live-panels-02: `scripts/lib/live-lock-reexec.mjs` no longer exists; every row awaits `holdLiveLock` from `scripts/lib/live-lock.mjs` (f3d40b87). The "New shared files" note and the lock self-test cases above are superseded.
+- harness-live-panels-10: the teardown removes a created worktree only when its real path is `<scratch HOME>/orca/workspaces/<repo>/<ws-live...>`, refuses and FAILs otherwise and never removes a parent; the pane harness no longer kills orcad by bare pid (f70b0256).
+- harness-live-panels-08: the control plants a synthetic value, never the offer (52b43fe5).
+- harness-live-panels-07: each Theia target must be present and the main portal probe has a planted control (1483a2ee).
+- harness-live-panels-09: an empty page:creation row makes standalone-live a SKIP (exit 77) until `state()` exposes the pending creation (c20e30ae); the "still mounted" wording in the table is superseded.

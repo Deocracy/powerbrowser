@@ -32,7 +32,7 @@ import { basename, dirname, extname, join, normalize, relative, sep } from 'node
 import { createRequire } from 'node:module';
 
 import { ORCA_PANES_MODULE_KEY } from './orca-tabs-live.mjs';
-import { REPO_ROOT, ensurePbNode, installOutputRedaction, orcaVersionFromPins, orcadEnv, redact, startOrcad, stopOrcad, stopStartedDaemons } from './orca-run.mjs';
+import { REPO_ROOT, ensurePbNode, installOutputRedaction, orcaVersionFromPins, orcadEnv, redact, startOrcad, stopOrcad } from './orca-run.mjs';
 import { openWebTab, pollFor, withProbeShell } from './pb-live-probe.mjs';
 import { liveEnv } from './firefox-bidi.mjs';
 import { registerTeardown } from './live-teardown.mjs';
@@ -196,8 +196,10 @@ export async function withOrcaPaneSession({ log = () => {}, pbOrcad = false } = 
     const profileReal = join(work, 'orca-profile');
     const REPO_DIR = join(work, 'repo');
     const alias = profileAlias(work);
+    // Only identity-checked kills here: the pid and start ticks recorded when PowerBrowser's own orcad was seen. The scratch
+    // orcad this session started is stopped by stopOrcad below and, at exit or on a signal, by orca-run.mjs's own hooks (which
+    // record no start time: handoff to lane H1), so this teardown does not signal it by bare pid.
     const teardown = registerTeardown(() => {
-        stopStartedDaemons();
         for (const [pid, ticks] of recorded) electron.signalIdentity(pid, ticks, 'SIGKILL');
         try { if (lstatSync(alias).isSymbolicLink()) rmSync(alias); } catch { /* absent */ }
         rmSync(work, { recursive: true, force: true });
@@ -364,6 +366,16 @@ export function gateRow(o, benign = /^ResizeObserver loop/) {
 }
 
 /**
+ * The mount-error cursor (lane G3a, overlay-renderer-04): state().mountErrors keeps only the newest 50, so its length stops
+ * moving at 50; state().mountErrorsTotal counts every error. `mountsExpr` names the bundle's entry in the page. The cursor
+ * expression is the total, or null when the build has no such field (the caller FAILs: every current build has it); the
+ * new-errors expression is the errors recorded since a cursor taken earlier, capped at what is kept.
+ */
+export const mountCursorExpr = (mountsExpr) => `(typeof ${mountsExpr}.state().mountErrorsTotal === 'number' ? ${mountsExpr}.state().mountErrorsTotal : null)`;
+export const newMountErrorsExpr = (mountsExpr, beforeExpr) => `(() => { const st = ${mountsExpr}.state(); const n = st.mountErrorsTotal - (${beforeExpr}); return n > 0 ? st.mountErrors.slice(-Math.min(n, st.mountErrors.length)) : []; })()`;
+export const NO_CURSOR_MESSAGE = 'state() has no mountErrorsTotal, so mount errors cannot be counted past the 50 it keeps (the bundle build predates the cursor)';
+
+/**
  * Mounts `pick` through the route's entry into a fresh host (data-pb-orca-pane=kind) and observes it for up to
  * waitMs (early when elements appear and the count holds). Returns the raw observation for gateRow.
  */
@@ -373,7 +385,9 @@ export async function gateMount(ev, route, pick, { waitMs = 5000, box = [0, 0, 9
     const started = await ev(`(() => { const m = ${M};
         if (!window.__pbGateErrors) { window.__pbGateErrors = []; addEventListener('error', e => window.__pbGateErrors.push(String(e.error && e.error.message || e.message).slice(0, 300)));
             addEventListener('unhandledrejection', e => window.__pbGateErrors.push('rejection: ' + String(e.reason && e.reason.message || e.reason).slice(0, 300))); }
-        window.__pbGateBefore = [m.state().mountErrors.length, window.__pbGateErrors.length];
+        const cursor = ${mountCursorExpr('m')};
+        if (cursor === null) return ${J(`threw: ${NO_CURSOR_MESSAGE}`)};
+        window.__pbGateBefore = [cursor, window.__pbGateErrors.length];
         const host = document.createElement('div'); host.setAttribute('data-pb-orca-pane', ${J(pick.kind)}); host.id = ${J(id)};
         host.style.cssText = 'position:fixed;overflow:hidden;display:flex;z-index:2147483000;left:${box[0]}px;top:${box[1]}px;width:${box[2]}px;height:${box[3]}px';
         const root = document.createElement('div'); root.style.cssText = 'display:flex;flex:1;min-width:0;min-height:0'; host.appendChild(root); document.body.appendChild(host);
@@ -382,7 +396,7 @@ export async function gateMount(ev, route, pick, { waitMs = 5000, box = [0, 0, 9
         return { descendantCount: host ? host.querySelectorAll('[data-pb-orca-pane-root] *').length : 0,
             waiting: !!(host && host.querySelector('[data-pb-orca-waiting]')),
             fallback: !!(host && host.querySelector('[role="alert"] .text-destructive')),
-            reactErrors: m.state().mountErrors.slice(window.__pbGateBefore[0]), windowErrors: window.__pbGateErrors.slice(window.__pbGateBefore[1]) }; })())`));
+            reactErrors: ${newMountErrorsExpr('m', 'window.__pbGateBefore[0]')}, windowErrors: window.__pbGateErrors.slice(window.__pbGateBefore[1]) }; })())`));
     let obs = await read();
     const t0 = Date.now();
     let lastCount = -1;

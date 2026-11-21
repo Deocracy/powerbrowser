@@ -264,6 +264,6 @@ for (const a of args) {
 }
 if (args.includes('--self-test')) process.exit(await selfTest());
 // harness-live-security-05: the row takes the live lock itself before it extracts and launches the package.
-const locked = holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT, args });
+const locked = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT, args });
 if (locked !== null) process.exit(locked);
 process.exit(await live());

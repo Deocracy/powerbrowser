@@ -122,16 +122,15 @@
  * some, and nothing about what a human sees -- a widget can be attached and
  * still be painted wrong.
  *
- * THE LIVE LOCK. Started without PB_LIVE_LOCK_HELD=1 (that is, not under
- * scripts/verify-platform.sh) the row, and its --self-test, take
- * <git common dir>/pb-live.lock themselves before they launch anything. Do not
- * wrap them in flock on that file. --lock-probe prints whether the process holds
- * it and launches nothing. --self-test boots browsers, so it is a full-tier row.
+ * THE LIVE LOCK (scripts/lib/live-lock.mjs; SKIP-PROTOCOL.md, "The live lock"). The row and its --self-test, which both boot browsers, call
+ * holdLiveLock before they launch anything. They go on without taking the lock only when /proc/locks shows it held by the driver's holder
+ * (PB_LIVE_LOCK_HOLDER: pid and start ticks) or by an ancestor (flock <git common dir>/pb-live.lock node <row>); an inherited
+ * PB_LIVE_LOCK_HELD=1 with neither is a FAIL by name; with nothing set they take the lock themselves and wait, naming the holder.
+ * --self-test is a full-tier row.
  *
  * Usage:
  *   node scripts/verify-mode-switch-tabs-live.mjs
  *   node scripts/verify-mode-switch-tabs-live.mjs --self-test
- *   node scripts/verify-mode-switch-tabs-live.mjs --lock-probe
  *   node scripts/verify-mode-switch-tabs-live.mjs --help
  *
  * No import of any package name -- Node built-ins and scripts/lib/firefox-bidi.mjs
@@ -146,7 +145,6 @@ import { verdictExit } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'verify-mode-switch-tabs-live';
-const SELF = fileURLToPath(import.meta.url);
 
 const DESCRIPTORS_REL = 'theia/extensions/modes/src/browser/mode-descriptors.ts';
 const ORGANISING_REL = 'theia/extensions/modes/src/browser/organising-widget.ts';
@@ -170,7 +168,6 @@ GUI-07: drives the live Theia frontend through a mode walk in which every
 measured hop is a SECOND visit, and asserts that no main-area or bottom-area
 tab is lost, gained or detached. Needs the built browser; not a --quick check.
 
-  --lock-probe Print whether this process holds the live lock; launch nothing
   --self-test  Re-run the protocol with planted faults; each must go red
   --help       Print this message and exit 0
 `;
@@ -810,9 +807,10 @@ async function selfTest() {
     let failed = 0;
     const skipped = [];
     {
-        // The live lock is taken by a row started outside the driver (no browser): the same lib function every live row uses.
+        // The shared live-lock helper is still awaited on this row's live path (no browser).
         const lib = await import('./lib/orca-tabs-live.mjs');
-        for (const message of lib.lockProbeVerdict(SELF, NAME)) {
+        const liveLock = await import('./lib/live-lock.mjs');
+        for (const message of [...liveLock.lockWiringFails(NAME, import.meta.url), ...(lib.lockWiringPlantFails(liveLock.lockWiringFails).length ? [] : ['a script without the lock call was not caught'])]) {
             console.error(`${NAME} --self-test: FAIL -- ${message}`);
             failed++;
         }
@@ -874,14 +872,9 @@ if (args.includes('--help')) {
     process.exit(0);
 }
 {
-    // Both modes launch a browser: a run started outside the driver takes the live lock first.
-    const lib = await import('./lib/orca-tabs-live.mjs');
-    let held;
-    try { held = lib.reexecUnderLiveLock(SELF, args); } catch (err) {
-        console.error(`${NAME}: FAIL -- ${err.message}`);
-        process.exit(1);
-    }
-    if (held !== null) process.exit(held);
-    if (args.includes('--lock-probe')) { console.log(lib.lockProbeLine(NAME)); process.exit(0); }
+    // Both modes launch a browser: the live lock first (scripts/lib/live-lock.mjs).
+    const { holdLiveLock } = await import('./lib/live-lock.mjs');
+    const locked = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
+    if (locked !== null) process.exit(locked);
 }
 process.exit(args.includes('--self-test') ? await selfTest() : await main());

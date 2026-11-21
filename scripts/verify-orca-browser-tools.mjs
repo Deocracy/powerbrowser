@@ -18,17 +18,21 @@
 //     .planning/workstreams/orca/REQUIREMENTS.md.
 //  g. the user-facing tool sources of Orca's browser at the pin
 //     (harness-static-browser-08): each subdirectory of
-//     orca/src/renderer/src/components/browser-pane except assemble-chrome, and each
-//     non-test .tsx module directly in it or in assemble-chrome (the toolbar, menus
-//     and chrome controls).
+//     orca/src/renderer/src/components/browser-pane except assemble-chrome, each
+//     subdirectory of assemble-chrome, and each non-test .ts or .tsx module directly in
+//     browser-pane or in assemble-chrome (the toolbar, menus, chrome controls, prompts
+//     and notices).
 // Compared: the U-row set equals the map's keys (both ways); a command entry is a
 // registered id, a render entry a defined and called method, a kind entry a
 // classified kind, a deferral a v2 id, a skip a non-empty reason; every entry has
 // exactly one of the five shapes. An empty U-row parse is red ("broken instrument").
 // The derived tool sources equal ORCA_TOOL_SOURCES' keys (both ways), so a re-pin
 // that adds a browser tool module is red until it is classified; each source names
-// U-rows of the table, or is internal with a reason. Limit: a control added inside an
-// existing module is not a new source.
+// U-rows of the table, or is internal with a reason; and every U-row is carried by a
+// source or is in UNSOURCED_ROWS with a reason (set equality). Limits: a control added
+// inside an existing module is not a new source, and the classification itself (which
+// U-rows a module carries, or that it is internal) is hand-kept: the check proves it
+// complete and consistent with the table, not correct.
 //
 // Tier: quick. SKIP (exit 77, one line) when theia/node_modules/typescript is absent,
 // and when orca/src is absent (then clause g did not run). --self-test runs the
@@ -115,23 +119,91 @@ export const ORCA_TOOL_SOURCES = Object.freeze({
     'assemble-chrome/browser-workspace-pane.tsx': internal('the workspace pane container'),
     'assemble-chrome/managed-browser-profile-hold.tsx': ['U-19'],
     'assemble-chrome/ssh-routed-browser-page-gate.tsx': ['U-24'],
+    // Second review: the .ts modules (prompts and notices live in .ts files too).
+    'browser-client-hosted-download-notices.ts': ['U-13'],
+    'browser-client-hosted-permission-notices.ts': ['U-17'],
+    'browser-client-hosted-popup-notices.ts': ['U-14'],
+    'browser-client-page-guest-metadata.ts': internal('client-hosted page plumbing: guest metadata'),
+    'browser-client-page-metadata-publish-e2e-fault.ts': internal("fault injection for Orca's own end-to-end suite"),
+    'browser-client-page-metadata-publisher.ts': internal('client-hosted page plumbing: metadata publishing'),
+    'browser-client-page-metadata-reporting.ts': internal('client-hosted page plumbing: metadata reporting'),
+    'browser-client-page-paint-retention.ts': internal('client-hosted page plumbing: paint retention'),
+    'browser-client-page-position-driver.ts': internal('client-hosted page plumbing: page positioning'),
+    'browser-client-page-renderer-installation.ts': internal('client-hosted page plumbing: renderer installation'),
+    'browser-client-page-retained-elements.ts': internal('client-hosted page plumbing: retained elements'),
+    'browser-client-page-retained-host-fixture.ts': internal("a test fixture of Orca's own suite"),
+    'browser-client-page-retained-key.ts': internal('client-hosted page plumbing: retention keys'),
+    'browser-client-page-retained-memory-profile.ts': internal('client-hosted page plumbing: retention memory profile'),
+    'browser-client-page-retained-registry.ts': internal('client-hosted page plumbing: retention registry'),
+    'browser-client-page-retained-rekey.ts': internal('client-hosted page plumbing: retention rekeying'),
+    'browser-client-page-retained-state.ts': internal('client-hosted page plumbing: retention state'),
+    'browser-client-page-visible-attachment.ts': internal('client-hosted page plumbing: visible attachment'),
+    'browser-download-destination-toast.ts': ['U-13'],
+    'browser-external-app-prompt.ts': ['U-23'],
+    'browser-http-auth-prompt.ts': ['U-15'],
+    'browser-javascript-dialog-prompt.ts': ['U-15'],
+    'browser-reopen-on-server.ts': ['U-29'],
+    'browser-site-permission-copy.ts': ['U-17'],
+    'browser-site-permission-prompt.ts': ['U-17'],
+    'browser-user-agent-migration-notice.ts': ['U-22'],
+    'client-hosted-browser-pane-test-rig.ts': internal("a test rig of Orca's own suite"),
+    'restored-client-hosted-recovery-window.ts': internal('client-hosted page plumbing: recovery after a restore'),
+    'use-client-hosted-browser-intro-tour.ts': internal("an onboarding tour of Orca's own pane, not a browser tool"),
+    'use-ssh-workspace-browser-route.ts': ['U-24'],
+    'assemble-chrome/browser-address-bar-edit-session.ts': ['U-01'],
+    'assemble-chrome/browser-address-bar-expansion.ts': ['U-01'],
+    'assemble-chrome/browser-address-bar-suggestions.ts': ['U-01'],
+    'assemble-chrome/browser-chrome-address-slot.ts': ['U-01'],
+    'assemble-chrome/browser-detected-browsers-summary.ts': ['U-20'],
+    'assemble-chrome/browser-extension-action-context-items.ts': ['U-21'],
+    'assemble-chrome/browser-import-hint-visibility.ts': ['U-20'],
+    'assemble-chrome/browser-page-guest-focus.ts': internal('focus plumbing between the chrome and the page'),
+    'assemble-chrome/browser-pane-page-selection.ts': internal('page selection plumbing of the pane'),
+    'assemble-chrome/browser-viewport-preset-label.ts': ['U-22'],
+    'assemble-chrome/use-browser-address-bar-click-select.ts': ['U-01'],
+    'assemble-chrome/use-browser-address-bar-dismissal.ts': ['U-01'],
+    'assemble-chrome/use-browser-address-bar-edit-handoff.ts': ['U-01'],
+    'assemble-chrome/use-browser-address-bar-edit-session.ts': ['U-01'],
+    'assemble-chrome/use-browser-address-bar-escape.ts': ['U-01'],
+    'assemble-chrome/use-browser-address-bar-inline-completion.ts': ['U-01'],
+    'assemble-chrome/use-browser-address-bar-row-removal.ts': ['U-01'],
+    'assemble-chrome/use-browser-address-bar-suggestion-preview.ts': ['U-01'],
+    'assemble-chrome/use-browser-address-bar-switch-to-tab.ts': ['U-01'],
+    'assemble-chrome/use-browser-chrome-tool-fold.ts': ['U-06', 'U-08'],
+    'assemble-chrome/use-browser-extension-toolbar.ts': ['U-21'],
+    'assemble-chrome/use-browser-page-chrome-focus.ts': internal('focus plumbing of the chrome'),
+    'assemble-chrome/use-browser-page-find-shortcuts.ts': ['U-03', 'U-30'],
 });
 
-const NOT_TOOL_SOURCE = /\.(test|spec)\.tsx$/;
+/** U-rows no Orca source module carries, each with its reason; compared as set equality with the uncovered rows. */
+export const UNSOURCED_ROWS = Object.freeze({});
 
-/** Clause g's derived set from a list of browser-pane entries: { name, dir } at the top and under assemble-chrome. */
+const NOT_TOOL_SOURCE = /\.(test|spec)\.tsx?$|\.d\.ts$/;
+const MODULE = /\.tsx?$/;
+
+/**
+ * Clause g's derived set from a list of browser-pane entries ({ name, dir }), at the top and under assemble-chrome:
+ * every subdirectory (assemble-chrome itself expanded) and every non-test .ts or .tsx module.
+ */
 export function toolSources(top, chrome) {
     const out = [];
     for (const e of top) {
         if (e.dir && e.name !== 'assemble-chrome') out.push(`${e.name}/`);
-        else if (!e.dir && /\.tsx$/.test(e.name) && !NOT_TOOL_SOURCE.test(e.name)) out.push(e.name);
+        else if (!e.dir && MODULE.test(e.name) && !NOT_TOOL_SOURCE.test(e.name)) out.push(e.name);
     }
-    for (const e of chrome) if (!e.dir && /\.tsx$/.test(e.name) && !NOT_TOOL_SOURCE.test(e.name)) out.push(`assemble-chrome/${e.name}`);
+    for (const e of chrome) {
+        if (e.dir) out.push(`assemble-chrome/${e.name}/`);
+        else if (MODULE.test(e.name) && !NOT_TOOL_SOURCE.test(e.name)) out.push(`assemble-chrome/${e.name}`);
+    }
     return out.sort();
 }
 
-/** Clause g's verdict: the derived sources against the classification and the U-rows. */
-export function sourceFailures(derived, classified, rows) {
+/**
+ * Clause g's verdict: the derived sources against the classification and the U-rows, both ways: every source is
+ * classified, every classified source exists, and every U-row is carried by some source or is in `unsourced` with a
+ * reason (set equality), so a row whose last source moved away is red.
+ */
+export function sourceFailures(derived, classified, rows, unsourced = UNSOURCED_ROWS) {
     if (!derived.length) return ['broken instrument: no Orca browser tool source was derived under the pinned browser-pane directory'];
     const fails = [];
     const keys = Object.keys(classified);
@@ -142,6 +214,15 @@ export function sourceFailures(derived, classified, rows) {
             if (!v.length) fails.push(`tool source ${k} names no U-row`);
             for (const id of v) if (!rows.includes(id)) fails.push(`tool source ${k} names ${id}, which is not a U-row of the spike table`);
         } else if (typeof v?.internal !== 'string' || !v.internal.trim()) fails.push(`tool source ${k} is neither U-rows nor internal with a reason`);
+    }
+    const carried = new Set(Object.entries(classified).filter(([k, v]) => Array.isArray(v) && derived.includes(k)).flatMap(([, v]) => v));
+    for (const id of rows) {
+        if (!carried.has(id) && !(id in unsourced)) fails.push(`uncovered U-row: ${id} is carried by no Orca source in ORCA_TOOL_SOURCES and not in UNSOURCED_ROWS`);
+        if (carried.has(id) && id in unsourced) fails.push(`stale unsourced row: ${id} is in UNSOURCED_ROWS but a source carries it`);
+    }
+    for (const [id, why] of Object.entries(unsourced)) {
+        if (!rows.includes(id)) fails.push(`stale unsourced row: ${id} is not a U-row of the spike table`);
+        else if (typeof why !== 'string' || !why.trim()) fails.push(`unsourced row ${id} has no reason`);
     }
     return fails;
 }
@@ -323,7 +404,8 @@ const PLANTS = [
 const FIX_SOURCES = {
     top: [{ name: 'annotate', dir: true }, { name: 'assemble-chrome', dir: true }, { name: 'BrowserPane.tsx', dir: false }, { name: 'BrowserPane.test.tsx', dir: false }, { name: 'helpers.ts', dir: false }],
     chrome: [{ name: 'BrowserFind.tsx', dir: false }, { name: 'BrowserFind.test.tsx', dir: false }],
-    classified: { 'annotate/': ['U-04'], 'BrowserPane.tsx': { internal: 'the container' }, 'assemble-chrome/BrowserFind.tsx': ['U-01'] },
+    classified: { 'annotate/': ['U-04'], 'BrowserPane.tsx': { internal: 'the container' }, 'assemble-chrome/BrowserFind.tsx': ['U-01'], 'helpers.ts': ['U-02'] },
+    unsourced: { 'U-03': 'native in PowerBrowser', 'U-05': 'skip' },
 };
 
 const SOURCE_PLANTS = [
@@ -333,10 +415,15 @@ const SOURCE_PLANTS = [
     ['source-names-unknown-row', (f) => ({ ...f, classified: { ...f.classified, 'annotate/': ['U-99'] } }), 'names U-99, which is not a U-row'],
     ['internal-without-reason', (f) => ({ ...f, classified: { ...f.classified, 'BrowserPane.tsx': { internal: ' ' } } }), 'neither U-rows nor internal with a reason'],
     ['nothing-derived', (f) => ({ ...f, top: [], chrome: [] }), 'broken instrument: no Orca browser tool source'],
+    // Second review: .ts modules and chrome subdirectories are sources; every row is covered or unsourced.
+    ['new-ts-prompt-module', (f) => ({ ...f, top: [...f.top, { name: 'browser-record-prompt.ts', dir: false }] }), 'unclassified Orca browser source: browser-record-prompt.ts'],
+    ['new-chrome-subdirectory', (f) => ({ ...f, chrome: [...f.chrome, { name: 'record-tools', dir: true }] }), 'unclassified Orca browser source: assemble-chrome/record-tools/'],
+    ['row-losing-its-last-source', (f) => ({ ...f, classified: { ...f.classified, 'assemble-chrome/BrowserFind.tsx': ['U-02'] } }), 'uncovered U-row: U-01'],
+    ['unsourced-row-carried', (f) => ({ ...f, unsourced: { ...f.unsourced, 'U-04': 'stale' } }), 'stale unsourced row: U-04'],
 ];
 
 function judgeSources(f) {
-    return sourceFailures(toolSources(f.top, f.chrome), f.classified, parseURows(FIX.readme));
+    return sourceFailures(toolSources(f.top, f.chrome), f.classified, parseURows(FIX.readme), f.unsourced);
 }
 
 function judgeFixture(ts, f) {

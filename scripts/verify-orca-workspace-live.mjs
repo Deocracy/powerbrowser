@@ -7,7 +7,7 @@
 // workspace folder kept in sync with Orca's store.
 //
 // Live, tier full, run on the merged, wired and built tree after orca-pane-css-live. A row started without
-// PB_LIVE_LOCK_HELD=1 takes <git common dir>/pb-live.lock itself (lib/live-lock-reexec.mjs) before it launches
+// PB_LIVE_LOCK_HELD=1 takes <git common dir>/pb-live.lock itself (lib/live-lock.mjs) before it launches
 // anything; every inherited ORCA_* is unset. Exit 77 with one "SKIP -- <reason>" line (SKIP-PROTOCOL.md) when no
 // built PowerBrowser, no built orca/ (orcad and the pane bundle), no built Theia app, or lane p65-01's bundle API is
 // absent; a FAIL when the built app does not carry @powerbrowser/orca-workspace.
@@ -32,6 +32,9 @@
 //     openPane's JSON detail): each diff side's text equals git cat-file blob of its CA-03 spec
 //     (the working file for the unstaged right side), the merge editor's sides equal stages 1, 2
 //     and 3, and deleted_by_them opens the working file in the editor;
+//     (harness-live-panels-12, 65-CR-01) the ids Orca's records carry (merge base, head, commit and its parent) equal what
+//     git computes on the fixture; and an added, a deleted and an untracked file each open with exactly one empty side
+//     (the file's one absent side reads '' in the Theia diff editor, the other side holds its text);
 //  c. positive control first: Orca's Monaco root selector (Monaco's own root class; Orca's editor
 //     imports @monaco-editor/react, checked in the source) matches inside the Theia editor of (a);
 //     then it matches nothing inside any Orca pane root ([data-pb-orca-pane]);
@@ -51,14 +54,14 @@
 //   node scripts/verify-orca-workspace-live.mjs --self-test
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { liveEnv } from './lib/firefox-bidi.mjs';
 import { FIXTURE_GIT_ARGS, fixtureGitEnv } from './lib/orca-pane-harness.mjs';
-import { takeLiveLock } from './lib/live-lock-reexec.mjs';
+import { holdLiveLock, lockWiringFails } from './lib/live-lock.mjs';
 import { registerTeardown } from './lib/live-teardown.mjs';
 import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
@@ -128,18 +131,75 @@ export function worktreePathsIn(value, prefix = 'ws-live') {
 }
 
 /**
- * Removes the worktree directories this row created through Orca (each one's last segment starts with ws-live) and then
- * each now-empty parent (non-recursive: never anything else under Orca's workspace folder). Returns the paths removed.
+ * Removes the worktree directories this row created through Orca, and only those: each path is resolved to its real path
+ * (symlinks and `..` followed) and must be exactly `<home>/orca/workspaces/<repo>/<ws-live...>` under the scratch HOME's real
+ * Orca workspace folder, else it is refused and left alone (a path in the CLI output outside it, an escaping `..`, a
+ * symlink out). No parent directory is ever removed: the row did not create it, and the scratch HOME takes it with it.
+ * Returns { removed, refused: [reason] } (reasons name the last path segment only).
  */
-export function removeCreatedWorktrees(paths) {
+export function removeCreatedWorktrees(paths, home) {
     const removed = [];
+    const refused = [];
+    let allowed = null;
+    try { allowed = realpathSync(join(home, 'orca', 'workspaces')); } catch { /* absent: nothing is inside it */ }
     for (const p of paths) {
-        if (!p || !basename(p).startsWith('ws-live') || !existsSync(p)) continue;
-        rmSync(p, { recursive: true, force: true });
-        removed.push(p);
-        try { rmdirSync(dirname(p)); } catch { /* not empty or absent */ }
+        if (!p || !existsSync(p)) continue;
+        let real;
+        try { real = realpathSync(p); } catch { continue; }
+        const parts = allowed && real.startsWith(allowed + sep) ? real.slice(allowed.length + 1).split(sep) : null;
+        if (!parts || parts.length !== 2 || !parts[1].startsWith('ws-live')) {
+            refused.push(`refused to remove ${basename(p)}: it is not a ws-live worktree directly under a repository folder of the scratch HOME's Orca workspace folder`);
+            continue;
+        }
+        rmSync(real, { recursive: true, force: true });
+        removed.push(real);
     }
-    return removed;
+    return { removed, refused };
+}
+
+/**
+ * b: the ids Orca's record carries against what git computes on the fixture (merge base of HEAD and the compared branch,
+ * HEAD, the commit and its first parent); a wrong merge base Orca chose would otherwise be read back from git at that same
+ * wrong revision. ids: { mergeBase, head, parent }.
+ */
+export function refIdsVerdict(rec, ids) {
+    const fails = [];
+    const check = (what, got, want) => { if (got !== want) fails.push(`diff:${rec.diffSource} ${what} is ${String(got).slice(0, 12)}, git computes ${String(want).slice(0, 12)} on the fixture`); };
+    if (rec.diffSource === 'branch' || rec.diffSource === 'combined-branch') { check('merge base', rec.branch?.mergeBase, ids.mergeBase); check('head', rec.branch?.headOid, ids.head); }
+    if (rec.diffSource === 'commit' || rec.diffSource === 'combined-commit') { check('commit', rec.commit?.commitOid, ids.head); check('parent', rec.commit?.parentOid, ids.parent); }
+    return fails;
+}
+
+/** The files the fixture adds, deletes and leaves untracked, each with the side that must be empty (65-CR-01). */
+export const EMPTY_SIDE_FILES = Object.freeze({ 'added.txt': 'left', 'del.txt': 'right', 'untracked.txt': 'left' });
+
+/**
+ * b: one diff of an added, deleted or untracked file: git has the file on exactly the other side (`absent` names the
+ * sides git has no blob for), and the Theia editor shows '' on the empty side and the text on the other. Red names the file.
+ */
+export function emptySideVerdict(file, { leftText, rightText, leftAbsent, rightAbsent }) {
+    const want = EMPTY_SIDE_FILES[file];
+    const fails = [];
+    const gitEmpty = leftAbsent && !rightAbsent ? 'left' : rightAbsent && !leftAbsent ? 'right' : null;
+    if (gitEmpty !== want) return [`${file}: the fixture does not give git one absent ${want} side (absent: ${leftAbsent ? 'left ' : ''}${rightAbsent ? 'right' : ''}), so the check is blind`];
+    const [emptyText, otherText] = want === 'left' ? [leftText, rightText] : [rightText, leftText];
+    if (emptyText !== '') fails.push(`${file}: the ${want} side should be empty and reads ${JSON.stringify(String(emptyText).slice(0, 20))}`);
+    if (!otherText) fails.push(`${file}: the ${want === 'left' ? 'right' : 'left'} side is empty too; exactly one side must be`);
+    return fails;
+}
+
+/** c: the Monaco scan over every [data-pb-orca-pane] root: roots exist, the opened terminal's is among them, none holds Monaco. */
+export function monacoScanVerdict(roots, selector = MONACO_SELECTOR) {
+    const fails = roots.filter((x) => x.n > 0).map((pane) => `Orca's editor DOM (${selector}) inside an Orca ${pane.kind} pane`);
+    if (roots.length === 0) fails.push("no Orca pane root to scan, so the absence of Orca's editor in pane roots proves nothing");
+    else if (!roots.some((x) => x.kind === 'terminal')) fails.push('the hosted terminal this scan opened is not among the pane roots, so the scan did not cover a pane it created');
+    return fails;
+}
+
+/** The readiness FAIL for a pane entry that no longer exports the two subscriptions this row reads through (it is not a SKIP). */
+export function entryFails(text, rel = ENTRY_REL) {
+    const missing = ['subscribeOpenFiles', 'subscribeWorktrees'].filter((n) => !new RegExp(`\\b${n}\\b`).test(text));
+    return missing.length ? [`source moved: ${rel} no longer exports ${missing.join(' and ')}, which this row reads Orca's open files and worktrees through. Next step: point the row at the module that exports them.`] : [];
 }
 
 /** The 1 s bound of clause (a). */
@@ -185,6 +245,34 @@ async function runSelfTest() {
     expect('timing control', timingVerdict(400), null);
     expect('timing', timingVerdict(1500), 'no Theia editor within 1 s');
 
+    // harness-live-panels-12 and 65-CR-01: ids from git, one empty side, the Monaco scan set, a moved entry file.
+    {
+        const ids = { head: 'a'.repeat(40), mergeBase: 'b'.repeat(40), parent: 'c'.repeat(40) };
+        expect('ids control: Orca ids equal git ids', refIdsVerdict({ diffSource: 'branch', branch: { mergeBase: ids.mergeBase, headOid: ids.head } }, ids), null);
+        expect('ids control: a commit diff', refIdsVerdict({ diffSource: 'commit', commit: { commitOid: ids.head, parentOid: ids.parent } }, ids), null);
+        expect('a merge base Orca chose wrongly (read back from git at that rev it would agree)', refIdsVerdict({ diffSource: 'branch', branch: { mergeBase: 'd'.repeat(40), headOid: ids.head } }, ids), 'merge base is dddddddddddd, git computes bbbbbbbbbbbb');
+        expect('a wrong parent on a commit diff', refIdsVerdict({ diffSource: 'commit', commit: { commitOid: ids.head, parentOid: ids.mergeBase } }, ids), 'parent is bbbbbbbbbbbb');
+        expect('empty side control: an added file, empty left', emptySideVerdict('added.txt', { leftText: '', rightText: 'added\n', leftAbsent: true, rightAbsent: false }), null);
+        expect('empty side control: a deleted file, empty right', emptySideVerdict('del.txt', { leftText: 'del base\n', rightText: '', leftAbsent: false, rightAbsent: true }), null);
+        expect('an added file whose left side shows text (the pre-fix failure)', emptySideVerdict('added.txt', { leftText: 'junk', rightText: 'added\n', leftAbsent: true, rightAbsent: false }), 'the left side should be empty');
+        expect('a deleted file with both sides empty', emptySideVerdict('del.txt', { leftText: '', rightText: '', leftAbsent: false, rightAbsent: true }), 'the left side is empty too');
+        expect('a fixture where git has both sides', emptySideVerdict('untracked.txt', { leftText: 'x', rightText: 'y', leftAbsent: false, rightAbsent: false }), 'the check is blind');
+        expect('scan control: a terminal root without Monaco', monacoScanVerdict([{ kind: 'terminal', n: 0 }, { kind: 'conflict-review', n: 0 }]), null);
+        expect('a hosted editor DOM inside a conflict-review root', monacoScanVerdict([{ kind: 'terminal', n: 0 }, { kind: 'conflict-review', n: 2 }]), 'inside an Orca conflict-review pane');
+        expect('no root at all', monacoScanVerdict([]), 'no Orca pane root to scan');
+        expect('roots without the terminal the scan opened', monacoScanVerdict([{ kind: 'chat', n: 0 }]), 'hosted terminal this scan opened is not among the pane roots');
+        expect('entry control: both subscriptions exported', entryFails('export function subscribeOpenFiles() {}\nexport function subscribeWorktrees() {}'), null);
+        expect('an entry that lost subscribeOpenFiles is a FAIL, not a SKIP', entryFails('export function subscribeWorktrees() {}'), 'no longer exports subscribeOpenFiles');
+        {
+            // The fixture really holds the added, deleted and untracked files the live row opens.
+            const home = mkdtempSync(join(tmpdir(), 'pb-ws-fixture2-'));
+            try {
+                const { git } = buildFixtureRepo(join(home, 'repo'), home);
+                const status = git('status', '--porcelain');
+                expect('the fixture holds an added, a deleted and an untracked file', /^A {2}added\.txt/m.test(status) && /^D {2}del\.txt/m.test(status) && /^\?\? untracked\.txt/m.test(status) ? [] : [`status: ${status}`], null);
+            } finally { rmSync(home, { recursive: true, force: true }); }
+        }
+    }
     // harness-live-panels-10: worktrees stay under the scratch HOME, and the cleanup removes only what the row created.
     expect('worktree under the scratch HOME control', worktreeHomeVerdict('/tmp/pb-home-x/orca/workspaces/repo/ws-live', '/tmp/pb-home-x'), null);
     expect('a worktree under the real home', worktreeHomeVerdict('/home/dev/orca/workspaces/repo/ws-live', '/tmp/pb-home-x'), 'outside the scratch HOME');
@@ -192,19 +280,37 @@ async function runSelfTest() {
     {
         const root = mkdtempSync(join(tmpdir(), 'pb-ws-cleanup-'));
         try {
-            const repoDir = join(root, 'orca', 'workspaces', 'repo');
+            const home = join(root, 'home');
+            const outside = join(root, 'real-home', 'orca', 'workspaces', 'repo');
+            const repoDir = join(home, 'orca', 'workspaces', 'repo');
             const a = join(repoDir, 'ws-live'), b = join(repoDir, 'ws-live-2'), other = join(repoDir, 'keep-me');
-            for (const d of [a, b, other]) { mkdirSync(d, { recursive: true }); writeFileSync(join(d, 'f'), 'x'); }
-            const removed = removeCreatedWorktrees([a, b, other, join(repoDir, 'never-existed')]);
+            const foreign = join(outside, 'ws-live');
+            for (const d of [a, b, other, foreign]) { mkdirSync(d, { recursive: true }); writeFileSync(join(d, 'f'), 'x'); }
+            const first = removeCreatedWorktrees([a, b, other, join(repoDir, 'never-existed')], home);
             const left = readdirSync(repoDir).sort().join();
-            const fails = [...(removed.length === 2 ? [] : [`removed ${removed.length} paths, expected 2`]), ...(left === 'keep-me' ? [] : [`left ${left}`]), ...(existsSync(join(other, 'f')) ? [] : ['an unrelated worktree was removed'])];
-            expect('cleanup removes the created worktrees, keeps everything else', fails, null);
-            const again = removeCreatedWorktrees([other]);
-            expect('cleanup refuses a directory that is not a ws-live worktree', again.length ? ['removed a non-ws-live directory'] : [], null);
-            removeCreatedWorktrees([]);
-            const empty = join(root, 'orca', 'workspaces', 'solo'); mkdirSync(join(empty, 'ws-live'), { recursive: true });
-            removeCreatedWorktrees([join(empty, 'ws-live')]);
-            expect('cleanup removes the parent folder once it is empty', existsSync(empty) ? ['the empty parent stayed'] : [], null);
+            expect('cleanup removes the created worktrees, keeps everything else', [...(first.removed.length === 2 ? [] : [`removed ${first.removed.length} paths, expected 2`]), ...(left === 'keep-me' ? [] : [`left ${left}`])], null);
+            expect('cleanup refuses a directory that is not a ws-live worktree, naming it', first.refused.length === 1 && /keep-me/.test(first.refused[0]) && existsSync(join(other, 'f')) ? [] : [JSON.stringify(first.refused)], null);
+            // A path in the CLI output outside the scratch HOME (the real home): refused, left alone, parent left alone.
+            const out = removeCreatedWorktrees([foreign], home);
+            expect('a ws-live path outside the scratch HOME is refused and nothing is removed', out.removed.length === 0 && out.refused.length === 1 && existsSync(join(foreign, 'f')) ? [] : [JSON.stringify(out)], null);
+            // A path with .. that resolves out of the scratch HOME.
+            const dots = `${repoDir}/ws-live/../../../../../real-home/orca/workspaces/repo/ws-live`;
+            mkdirSync(join(repoDir, 'ws-live'), { recursive: true });
+            const viaDots = removeCreatedWorktrees([dots], home);
+            expect('a path whose .. segments resolve outside the scratch HOME is refused', viaDots.removed.length === 0 && viaDots.refused.length === 1 && existsSync(join(foreign, 'f')) ? [] : [JSON.stringify(viaDots)], null);
+            // A symlink named ws-live inside the scratch HOME that points out of it.
+            rmSync(join(repoDir, 'ws-live'), { recursive: true, force: true });
+            symlinkSync(outside, join(repoDir, 'ws-live'));
+            const viaLink = removeCreatedWorktrees([join(repoDir, 'ws-live')], home);
+            expect('a ws-live symlink that points outside the scratch HOME is refused', viaLink.removed.length === 0 && viaLink.refused.length === 1 && existsSync(join(foreign, 'f')) ? [] : [JSON.stringify(viaLink)], null);
+            rmSync(join(repoDir, 'ws-live'), { force: true });
+            // The folder one level up (a repository folder) is never a worktree and never removed.
+            const tooShallow = removeCreatedWorktrees([join(home, 'orca', 'workspaces', 'ws-live-x')], home);
+            mkdirSync(join(home, 'orca', 'workspaces', 'ws-live-x'), { recursive: true });
+            const shallow = removeCreatedWorktrees([join(home, 'orca', 'workspaces', 'ws-live-x')], home);
+            expect('a ws-live directory directly under the workspace folder (no repository level) is refused', tooShallow.removed.length === 0 && shallow.removed.length === 0 && shallow.refused.length === 1 ? [] : [JSON.stringify(shallow)], null);
+            // No parent is removed: the repository folder stays once its worktrees are gone.
+            expect('cleanup never removes a parent folder', existsSync(repoDir) ? [] : ['the repository folder was removed'], null);
         } finally { rmSync(root, { recursive: true, force: true }); }
     }
     expect('worktree paths found in a CLI result', JSON.stringify(worktreePathsIn({ result: { worktree: { path: '/h/orca/workspaces/repo/ws-live', other: '/h/x' }, list: ['/h/orca/workspaces/repo/ws-live-2'] } })) === JSON.stringify(['/h/orca/workspaces/repo/ws-live', '/h/orca/workspaces/repo/ws-live-2']) ? [] : ['wrong paths'], null);
@@ -228,32 +334,9 @@ async function runSelfTest() {
             expect('teardown runs when SIGTERM ends the process, which then still ends by the signal', count() === 1 && sig.signal === 'SIGTERM' ? [] : [`ran ${count()} times, ended by ${sig.signal ?? `exit ${sig.status}`}`], null);
         } finally { rmSync(home, { recursive: true, force: true }); }
     }
-    if (spawnSync('flock', ['--version']).error) {
-        console.log('  skip the live-lock helper test: flock is not installed');
-    } else {
-        // lib/live-lock-reexec.mjs: a row started without PB_LIVE_LOCK_HELD=1 runs again under flock on the checkout's
-        // pb-live.lock and passes the exit status on; one started with it (by the driver) does not take the lock again.
-        const root = mkdtempSync(join(tmpdir(), 'pb-lock-helper-'));
-        try {
-            const clean = { PATH: process.env.PATH ?? '', HOME: root, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
-            spawnSync('git', ['init', '-q', root], { env: clean });
-            mkdirSync(join(root, 'scripts'));
-            const lib = join(REPO_ROOT, 'scripts', 'lib', 'live-lock-reexec.mjs');
-            const lock = join(realpathSync(root), '.git', 'pb-live.lock');
-            writeFileSync(join(root, 'scripts', 'probe.mjs'), `import { takeLiveLock } from ${JSON.stringify(lib)};
-                import { spawnSync } from 'node:child_process';
-                const held = takeLiveLock(import.meta.url, 'probe');
-                if (held !== null) process.exit(held);
-                const busy = spawnSync('flock', ['-n', ${JSON.stringify(lock)}, 'true']).status === 1;
-                console.log('inner: PB_LIVE_LOCK_HELD=' + process.env.PB_LIVE_LOCK_HELD + ' lockBusy=' + busy);
-                process.exit(busy ? 7 : 8);`);
-            const run = (extra) => { const env = { ...clean }; Object.assign(env, extra); return spawnSync(process.execPath, [join(root, 'scripts', 'probe.mjs')], { env, encoding: 'utf8', timeout: 20000 }); };
-            const started = run({});
-            expect('a row started by hand takes the live lock itself and its exit status comes back', started.status === 7 && /PB_LIVE_LOCK_HELD=1 lockBusy=true/.test(started.stdout) ? [] : [`status ${started.status}: ${started.stdout}${started.stderr}`], null);
-            const driven = run({ PB_LIVE_LOCK_HELD: '1' });
-            expect('a row the driver started (PB_LIVE_LOCK_HELD=1) does not take the lock again', driven.status === 8 && /lockBusy=false/.test(driven.stdout) ? [] : [`status ${driven.status}: ${driven.stdout}${driven.stderr}`], null);
-        } finally { rmSync(root, { recursive: true, force: true }); }
-    }
+    // The live lock is lib/live-lock.mjs (lane H5), proven by scripts/verify-live-harness-libs.mjs; this row only asserts that
+    // its live path still awaits holdLiveLock.
+    expect('the live path awaits holdLiveLock before it launches anything', lockWiringFails(NAME, import.meta.url), null);
     {
         // The fixture repository builds under a user's hostile global git config (commit signing, hooks) without prompting or failing.
         const home = mkdtempSync(join(tmpdir(), 'pb-ws-fixture-'));
@@ -306,8 +389,10 @@ async function readiness() {
     const { prerequisites } = await import('./lib/orca-tabs-live.mjs');
     const pre = prerequisites({ needOrca: true, needPanes: true });
     if (pre.skip || pre.fail) return pre;
+    // The lane that added these exports is merged: a missing name is a moved source, a FAIL, never a SKIP.
     const entry = existsSync(join(REPO_ROOT, ENTRY_REL)) ? readFileSync(join(REPO_ROOT, ENTRY_REL), 'utf8') : '';
-    if (!/\bsubscribeOpenFiles\b/.test(entry) || !/\bsubscribeWorktrees\b/.test(entry)) return { skip: 'lane p65-01 not merged (the pane entry exports no subscribeOpenFiles or subscribeWorktrees)', fail: null };
+    const moved = existsSync(join(REPO_ROOT, ENTRY_REL)) ? entryFails(entry) : [`source moved: ${ENTRY_REL} is absent`];
+    if (moved.length) return { skip: null, fail: moved[0] };
     if (!/@powerbrowser\/orca-workspace\//.test(existsSync(join(REPO_ROOT, SERVER_REL)) ? readFileSync(join(REPO_ROOT, SERVER_REL), 'utf8') : '')) {
         return { skip: null, fail: `orca-workspace not wired into the built app (${SERVER_REL} names no @powerbrowser/orca-workspace module; rebuild the app)` };
     }
@@ -317,7 +402,7 @@ async function readiness() {
     return { skip: null, fail: null };
 }
 
-/** The scratch repository: a base, a feature branch, a commit to compare, a staged and an unstaged change, and a merge left with UU and UD. */
+/** The scratch repository: a base, a feature branch, a commit to compare, a staged and an unstaged change, an added, a deleted and an untracked file, and a merge left with UU and UD. */
 function buildFixtureRepo(repo, home) {
     // The user's global and system git config never apply (a global commit.gpgsign or core.hooksPath would prompt, fail or run).
     const env = fixtureGitEnv(home);
@@ -325,7 +410,7 @@ function buildFixtureRepo(repo, home) {
     mkdirSync(repo, { recursive: true });
     const put = (f, t) => writeFileSync(join(repo, f), t);
     git('init', '-q');
-    put('a.txt', 'a base\n'); put('b.txt', 'b base\n'); put('conflict.txt', 'conflict base\n'); put('gone.txt', 'gone base\n'); put('s.txt', 's base\n');
+    put('a.txt', 'a base\n'); put('b.txt', 'b base\n'); put('conflict.txt', 'conflict base\n'); put('gone.txt', 'gone base\n'); put('s.txt', 's base\n'); put('del.txt', 'del base\n');
     git('add', '.'); git('commit', '-q', '-m', 'base');
     git('checkout', '-q', '-b', 'feature'); put('b.txt', 'b on feature\n'); git('commit', '-q', '-am', 'feature');
     git('checkout', '-q', 'main');
@@ -333,6 +418,10 @@ function buildFixtureRepo(repo, home) {
     git('checkout', '-q', 'main'); put('conflict.txt', 'conflict on main\n'); put('gone.txt', 'gone on main\n'); git('commit', '-q', '-am', 'main');
     try { git('merge', '-q', 'side'); } catch { /* the conflicts are the fixture */ }
     put('s.txt', 's staged\n'); git('add', 's.txt'); put('a.txt', 'a unstaged\n');
+    // 65-CR-01: a staged added file (empty HEAD side), a staged deleted file (empty index side) and an untracked file (empty index side).
+    put('added.txt', 'added\n'); git('add', 'added.txt');
+    git('rm', '-q', 'del.txt');
+    put('untracked.txt', 'untracked\n');
     return { git, mainCommit: git('rev-parse', 'HEAD') };
 }
 
@@ -382,7 +471,7 @@ async function runLive() {
     if (ready.skip) { console.log(skipLine(NAME, ready.skip)); return SKIP_EXIT; }
     if (ready.fail) { console.error(`${NAME}: FAIL -- ${ready.fail}`); return 1; }
     // Nothing is launched before this: a row started by hand takes the live lock itself (harness-live-panels-02).
-    const held = takeLiveLock(import.meta.url, NAME);
+    const held = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
     if (held !== null) return held;
     const lib = await import('./lib/orca-tabs-live.mjs');
     const { installOutputRedaction, ensurePbNode, redact } = await import('./lib/orca-run.mjs');
@@ -402,9 +491,11 @@ async function runLive() {
     // The teardown runs in the finally below, and also at exit and on SIGINT, SIGTERM and SIGHUP; it is synchronous.
     // Whatever the run threw: the orcad and terminal daemon PowerBrowser started are killed, the worktrees Orca
     // created are removed, then the scratch folders (harness-live-panels-10).
+    const orcaHome = liveEnv().HOME;
+    const refusedRemovals = [];
     const teardown = registerTeardown(() => {
         for (const [pid, ticks] of recorded) electron.signalIdentity(pid, ticks, 'SIGKILL');
-        removeCreatedWorktrees([...createdWorktrees]);
+        refusedRemovals.push(...removeCreatedWorktrees([...createdWorktrees], orcaHome).refused);
         rmSync(scratch, { recursive: true, force: true });
         rmSync(stubDir, { recursive: true, force: true });
     });
@@ -418,7 +509,6 @@ async function runLive() {
         const cliHome = savedEnv.HOME ?? process.env.HOME ?? '';
         // The fixture's git runs with the scratch folder as HOME and no global config; the worktrees Orca creates are checked against liveEnv's HOME.
         const gitEnv = fixtureGitEnv(scratch);
-        const orcaHome = liveEnv().HOME;
         const { git } = buildFixtureRepo(repo, scratch);
         mkdirSync(userFolder);
         process.env.PATH = `${stubDir}:${basePath}`;
@@ -494,6 +584,9 @@ async function runLive() {
                 ['diff', JSON.stringify({ source: 'branch', relativePath: 'b.txt', baseRef: 'feature' })],
                 ['diff', JSON.stringify({ source: 'commit', relativePath: 'conflict.txt', commitOid: head })],
                 ['diff', JSON.stringify({ source: 'combined-uncommitted', relativePath: 's.txt' })],
+                ['diff', JSON.stringify({ source: 'staged', relativePath: 'added.txt' })],
+                ['diff', JSON.stringify({ source: 'staged', relativePath: 'del.txt' })],
+                ['diff', JSON.stringify({ source: 'unstaged', relativePath: 'untracked.txt' })],
                 ['conflict-review', JSON.stringify({ relativePath: 'conflict.txt', conflictKind: 'both_modified' })],
                 ['conflict-review', JSON.stringify({ relativePath: 'gone.txt', conflictKind: 'deleted_by_them' })],
             ]) {
@@ -507,8 +600,15 @@ async function runLive() {
             await sleep(3000);
             const records = (await openFiles()) ?? [];
             const view = await p(EDITORS);
-            const blob = (rev, rel) => (rev === '' ? '' : execFileSync('git', ['-C', repo, 'cat-file', 'blob', `${rev}:${rel}`], { env: gitEnv }).toString('utf8'));
+            // A blob that git does not have at that revision is an absent side (an added or deleted file): '' for the comparison,
+            // and recorded as absent so the one-empty-side clause can tell it from a side whose text is empty.
+            const present = (rev, rel) => spawnSync('git', ['-C', repo, 'cat-file', '-e', `${rev}:${rel}`], { env: gitEnv }).status === 0;
+            const blob = (rev, rel) => (rev === '' || !present(rev, rel) ? '' : execFileSync('git', ['-C', repo, 'cat-file', 'blob', `${rev}:${rel}`], { env: gitEnv }).toString('utf8'));
+            const absentSide = (side) => (side.rev === undefined ? !existsSync(join(repo, side.rel)) : side.rev === '' || !present(side.rev, side.rel));
             const textOf = (side) => (side.rev === undefined ? readFileSync(join(repo, side.rel), 'utf8') : blob(side.rev, side.rel));
+            // The ids git computes on the fixture: never read back from Orca's own record (harness-live-panels-12).
+            const ids = { head: git('rev-parse', 'HEAD'), mergeBase: git('merge-base', 'HEAD', 'feature'), parent: git('rev-parse', 'HEAD^') };
+            const emptySeen = new Set();
             const diffSources = new Set();
             for (const rec of records.filter((r) => r.mode === 'diff' && r.worktreePath === repo)) {
                 diffSources.add(rec.diffSource);
@@ -518,7 +618,13 @@ async function runLive() {
                 if (!w) { fails.push(`(b) diff:${rec.diffSource} ${want.rel}: no Theia diff editor with the CA-03 sides`); continue; }
                 fails.push(...blobVerdict(`diff:${rec.diffSource} ${want.rel} left`, w.leftText, textOf(want.left)).map((f) => `(b) ${f}`));
                 fails.push(...blobVerdict(`diff:${rec.diffSource} ${want.rel} right`, w.rightText, textOf(want.right)).map((f) => `(b) ${f}`));
+                fails.push(...refIdsVerdict(rec, ids).map((f) => `(b) ${f}`));
+                if (want.rel in EMPTY_SIDE_FILES) {
+                    emptySeen.add(want.rel);
+                    fails.push(...emptySideVerdict(want.rel, { leftText: w.leftText, rightText: w.rightText, leftAbsent: absentSide(want.left), rightAbsent: absentSide(want.right) }).map((f) => `(b) ${f}`));
+                }
             }
+            for (const f of Object.keys(EMPTY_SIDE_FILES)) if (!emptySeen.has(f)) fails.push(`(b) no Orca diff tab of ${f} was observed, so its empty side was not checked`);
             for (const s of REQUIRED_SOURCES) if (!diffSources.has(s)) fails.push(`(b) no Orca diff tab of source ${s} was observed`);
             const merge = mergeSeen;
             if (!merge) fails.push('(b) both_modified conflict.txt opened no Theia merge editor');
@@ -534,9 +640,10 @@ async function runLive() {
                 // A hosted Orca terminal gives the scan a pane root; a scan over zero roots would prove nothing.
                 await p(`await get('CommandService').executeCommand('powerbrowser.orca.newTerminal'); return await until(() => document.querySelectorAll('[data-pb-orca-pane]').length > 0, 20000);`, 30000);
                 const inPanes = await p(`return [...document.querySelectorAll('[data-pb-orca-pane]')].map(n => ({ kind: n.getAttribute('data-pb-orca-pane'), n: n.querySelectorAll(${JSON.stringify(MONACO_SELECTOR)}).length }));`);
-                for (const pane of inPanes.filter((x) => x.n > 0)) fails.push(`(c) Orca's editor DOM (${MONACO_SELECTOR}) inside an Orca ${pane.kind} pane`);
-                if (inPanes.length === 0) fails.push('(c) no Orca pane root to scan, so the absence of Orca\'s editor in pane roots proves nothing');
-                notes.push(`(c) ${inPanes.length} Orca pane root(s) scanned`);
+                // Every root present is scanned, the diff and conflict tabs of clause (b) included (a hosted editor, diff or
+                // conflict pane would be among them); the terminal this clause opened must be one of them.
+                fails.push(...monacoScanVerdict(inPanes).map((f) => `(c) ${f}`));
+                notes.push(`(c) ${inPanes.length} Orca pane root(s) scanned [${[...new Set(inPanes.map((x) => x.kind))].join(', ')}]`);
             }
 
             // (d) roots against the store, create, delete, clean and dirty close, a user root, a user removal.
@@ -607,6 +714,7 @@ async function runLive() {
         // After a throw too: the orcad and daemon are killed and the worktrees and scratch folders removed (once; it also runs on a signal).
         await sleep(500);
         teardown();
+        for (const r of refusedRemovals) fails.push(`teardown: ${r}`);
         for (const [k, v] of Object.entries(savedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
         restoreOutput();
     }

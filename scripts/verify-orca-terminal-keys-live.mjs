@@ -95,20 +95,18 @@
 // exit 77 when no built PowerBrowser or Theia app exists, and also when stage 2
 // did not run (a partial run) and nothing failed. A FAIL wins over a SKIP.
 //
-// The live lock: started without PB_LIVE_LOCK_HELD=1 (that is, not under
-// scripts/verify-platform.sh) the row takes <git common dir>/pb-live.lock
-// itself, before it launches anything. Do not wrap it in flock on that file.
-// This shell's ORCA_* are removed from the session. It signals only identities
-// it recorded; the Orca CLI gets an environment built from scratch. No pairing
-// value, env value or token is printed; what is printed after the session is
-// redacted with the session's own list.
+// The live lock (scripts/lib/live-lock.mjs; SKIP-PROTOCOL.md, "The live lock"): the row calls holdLiveLock before it launches anything. It goes
+// on without taking the lock only when /proc/locks shows the lock held by the driver's holder (PB_LIVE_LOCK_HOLDER: pid and start ticks) or by an
+// ancestor (flock <git common dir>/pb-live.lock node <row>). An inherited PB_LIVE_LOCK_HELD=1 with neither is a FAIL by name. With nothing set it
+// takes the lock itself and waits, naming the holder. A run with nothing to launch (a prerequisite is absent) prints its SKIP without the lock.
 //
 // Side effects on the desktop it is run on, and what is undone: the run writes
 // 100 KiB of text to the system clipboard and selection and puts sentinels on
 // the selection. Both clipboards are read before the first write and written
 // back at the end when they held text (a headed run is the case that matters);
-// a clipboard that could not be read, or that held something other than text,
-// is named in a note and not restored. The cat -v recorder files under
+// a clipboard that could not be read, or that held no text (empty or something
+// other than text, which cannot be told apart here), is named in a note and left
+// as the run set it: the row never overwrites what it could not read. The cat -v recorder files under
 // .mozbuild/orca-terminal-keys-live are removed when the run ends.
 //
 // Tier: full. --self-test is quick and needs no browser: the pure verdicts over
@@ -119,7 +117,6 @@
 // Usage:
 //   node scripts/verify-orca-terminal-keys-live.mjs
 //   node scripts/verify-orca-terminal-keys-live.mjs --self-test
-//   node scripts/verify-orca-terminal-keys-live.mjs --lock-probe   (prints whether this process holds the live lock; launches nothing)
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -488,8 +485,8 @@ export function clipboardPort(app) {
 
 /**
  * Runs fn with both clipboards read first and written back after (also when fn throws): a headed run must not leave its
- * 100 KiB of test text on the developer's clipboard. A clipboard that cannot be read is named in a note and left; one that held
- * no text is set to empty (the test text must not stay). log(line) takes the notes.
+ * 100 KiB of test text on the developer's clipboard. A clipboard that cannot be read, or held no text, is named in a note and left
+ * (never overwritten with a guess). log(line) takes the notes.
  */
 export async function withClipboardsRestored(port, fn, log = () => {}) {
     const saved = {};
@@ -502,9 +499,9 @@ export async function withClipboardsRestored(port, fn, log = () => {}) {
         for (const which of ['global', 'selection']) {
             const was = saved[which];
             if (!was?.ok) { log(`note -- the ${which} clipboard could not be read before the run (${was?.error ?? 'unreadable'}), so it was not restored`); continue; }
+            if (was.text === null) { log(`note -- the ${which} clipboard held no text before the run (empty or not text), so it was not restored and still holds the run's text`); continue; }
             try {
-                await port.set(which, was.text ?? '');
-                if (was.text === null) log(`note -- the ${which} clipboard held no text before the run; it was emptied of the run's text`);
+                await port.set(which, was.text);
             } catch (err) { log(`note -- the ${which} clipboard could not be written back (${String(err?.message ?? err)})`); }
         }
     }
@@ -1137,8 +1134,9 @@ async function clipboardUnreadableLeftCase() {
 }
 async function clipboardEmptyCase() {
     const port = memoryPort({ global: null, selection: null });
-    await withClipboardsRestored(port, async () => { await port.set('global', 'run text'); });
-    return port.state.global === '' ? [] : [`a clipboard that held no text kept ${JSON.stringify(port.state.global)}`];
+    const notes = [];
+    await withClipboardsRestored(port, async () => { await port.set('global', 'run text'); }, (n) => notes.push(n));
+    return port.state.global === 'run text' && notes.some((n) => /held no text before the run/.test(n)) ? [] : [`a clipboard that held no text was ${port.state.global === 'run text' ? 'left without a note' : `overwritten with ${JSON.stringify(port.state.global)}`}`];
 }
 function recorderCase() {
     const dir = mkdtempSync(join(tmpdir(), 'pb-keys-work-'));
@@ -1148,8 +1146,8 @@ function recorderCase() {
 }
 /** The real main on a tree with no built PowerBrowser: exit 77 and the one SKIP line (no browser is started). */
 function skipRun() {
-    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('ORCA_')));
-    const r = spawnSync(process.execPath, [SELF], { encoding: 'utf8', timeout: 30000, cwd: REPO_ROOT, env: { ...env, PB_LIVE_LOCK_HELD: '1', PB_FIREFOX_BIN: '/nonexistent/pb-self-test/powerbrowser' } });
+    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('ORCA_') && k !== 'PB_LIVE_LOCK_HELD' && k !== 'PB_LIVE_LOCK_HOLDER'));
+    const r = spawnSync(process.execPath, [SELF], { encoding: 'utf8', timeout: 30000, cwd: REPO_ROOT, env: { ...env, PB_FIREFOX_BIN: '/nonexistent/pb-self-test/powerbrowser' } });
     const fails = [];
     if (r.status !== SKIP_EXIT) fails.push(`exit ${r.status}, want ${SKIP_EXIT} (${String(r.stdout).trim().slice(0, 120)} ${String(r.stderr).trim().slice(0, 120)})`);
     if (!new RegExp(`^${NAME}: SKIP -- .+`, 'm').test(r.stdout ?? '')) fails.push('no "<name>: SKIP -- <reason>" line on stdout');
@@ -1177,6 +1175,7 @@ async function runSelfTest() {
         return fails;
     };
     const lib = await import('./lib/orca-tabs-live.mjs');
+    const liveLock = await import('./lib/live-lock.mjs');
     const cases = [
         ['all stages control', null, () => all(fixtureObs())],
         ['passthrough equals the shell keys', null, () => passthroughVerdict(['ctrl+t', 'ctrl+w'], SHELL)],
@@ -1191,14 +1190,15 @@ async function runSelfTest() {
         ['a clipboard restored even when the run throws', null, () => clipboardRestoreThrowCase()],
         ['a clipboard that cannot be read is named and left', 'the global clipboard could not be read before the run (denied)', () => clipboardUnreadableCase()],
         ['an unreadable clipboard is not written by the restore', null, () => clipboardUnreadableLeftCase()],
-        ['a clipboard that held no text is emptied of the run\'s text', null, () => clipboardEmptyCase()],
+        ['a clipboard that held no text is named and left as the run set it, never overwritten', null, () => clipboardEmptyCase()],
         ['the recorder folder is removed', null, () => recorderCase()],
         ['the confirmation judged against a baseline (a dialog that was already open is not the close key\'s)', null, () => (lib.confirmationAppeared(null, ['Stop running command?']) === false && lib.confirmationAppeared({ count: 1, text: 'Stop running command? x' }, ['Stop running command?']) === true ? [] : ['the baseline rule is wrong'])],
         ['another dialog is not Orca\'s close confirmation', 'not the close confirmation', () => (lib.confirmationAppeared({ count: 1, text: 'Delete file?' }, ['Stop running command?']) ? [] : ['not the close confirmation'])],
         ['stage 2 not run is a skip', null, () => (skipsOf({ stage2Skip: 'no built orca/' }).length === 1 && skipsOf({ stage2Skip: null }).length === 0 ? [] : ['skipsOf is wrong'])],
         ['stage 2 not run exits 77 when nothing failed', null, () => (lib.verdictExitQuiet(NAME, [], skipsOf({ stage2Skip: 'no built orca/' })) === SKIP_EXIT ? [] : ['a partial run did not exit 77'])],
         ['a failure wins over the skipped stage 2', null, () => (lib.verdictExitQuiet(NAME, ['control failed'], skipsOf({ stage2Skip: 'no built orca/' })) === 1 ? [] : ['a failure did not win over a skip'])],
-        ['the live lock is taken by a row started outside the driver (harness-live-tabs-14)', null, () => lib.lockProbeVerdict(SELF, NAME)],
+        ['every live path awaits the shared live-lock helper (harness-live-tabs-14)', null, () => liveLock.lockWiringFails(NAME, import.meta.url)],
+        ['a script that no longer awaits holdLiveLock is caught', 'lock wiring', () => lib.lockWiringPlantFails(liveLock.lockWiringFails)],
         ['the real main with no built PowerBrowser exits 77 with the one SKIP line', null, () => skipRun()],
         ['pre-merge run: stage 2 SKIP while orca-panes is absent', null, () => { const o = fixtureObs(); o.orca = null; return overallVerdict({ control: controlVerdict(o), stage2: [], stage2Skip: 'lane p64-02 not merged', panesPresent: false, repeat: repeatVerdict(o) }); }],
         ['derivations over fixture sources', null, derive],
@@ -1284,20 +1284,17 @@ const isEntryPoint = (() => {
 })();
 if (isEntryPoint) {
     const args = process.argv.slice(2);
-    const unknown = args.find((a) => a !== '--self-test' && a !== '--lock-probe');
+    const unknown = args.find((a) => a !== '--self-test');
     if (unknown !== undefined) {
-        console.error(`${NAME}: FAIL -- unknown argument '${unknown}' (usage: node ${SELF_REL} [--self-test | --lock-probe])`);
+        console.error(`${NAME}: FAIL -- unknown argument '${unknown}' (usage: node ${SELF_REL} [--self-test])`);
         process.exit(2);
     }
     if (args.includes('--self-test')) process.exit(await runSelfTest());
-    // A live row started outside the driver takes the live lock itself, before it launches anything.
+    // The live lock before anything launches (scripts/lib/live-lock.mjs). A run with nothing to launch needs none.
     const lib = await import('./lib/orca-tabs-live.mjs');
-    let held;
-    try { held = lib.reexecUnderLiveLock(SELF, args); } catch (err) {
-        console.error(`${NAME}: FAIL -- ${err.message}`);
-        process.exit(1);
-    }
-    if (held !== null) process.exit(held);
-    if (args.includes('--lock-probe')) { console.log(lib.lockProbeLine(NAME)); process.exit(0); }
+    const { holdLiveLock } = await import('./lib/live-lock.mjs');
+    const mayLaunch = (() => { const pre = lib.prerequisites({ needPanes: false }); return !pre.skip && !pre.fail; })();
+    const locked = mayLaunch ? await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT }) : null;
+    if (locked !== null) process.exit(locked);
     process.exit(await main());
 }
