@@ -12412,6 +12412,22 @@ export const PowerBrowserOrcaHosting = Object.freeze({
       return path;
     }
   },
+  // orcad-hosting-03 (lane G2's handover): the kernel's TCP socket tables and this process's uid, so OrcaService can
+  // say whose program holds orcad's busy port. Both tables: a dual-stack listener, the most common holder, appears in
+  // /proc/net/tcp6 only. procfs reports size 0, so IOUtils.read with an explicit maxBytes (readProcessStartTicks).
+  // Resolves { tcp, tcp6, uid }; off Linux or on any failure the text is "" and uid null. Never throws.
+  async readLoopbackSocketTable() {
+    const text = async path => {
+      try {
+        return new TextDecoder().decode(await IOUtils.read(path, { maxBytes: 1 << 20 }));
+      } catch {
+        return "";
+      }
+    };
+    const [tcp, tcp6, status] = await Promise.all([text("/proc/net/tcp"), text("/proc/net/tcp6"), text("/proc/self/status")]);
+    const uid = Number(/^Uid:\s+(\d+)/m.exec(status)?.[1]);
+    return { tcp, tcp6, uid: Number.isInteger(uid) ? uid : null };
+  },
 });
 
 // Phase 67 (INJ-01, P67-22..P67-26): the PowerBrowserOrcaLogo pair, registered from registerGroupActor (the one

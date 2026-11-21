@@ -37,6 +37,8 @@
 //  orcaStatus    [67-WR-04, from lane G3b]  orcaStatus accepts the literal { clientReason: null }, calls
 //                OrcaService.clientRecovered when present and never throws without it; any other unknown value,
 //                and null beside browserHost, is still a validation refusal.
+//  socketTable   [orcad-hosting-03, from lane G2]  readLoopbackSocketTable resolves both TCP tables and the uid with an
+//                explicit maxBytes, and empty tables and uid null on failure, never a throw.
 //
 // Tier: quick (text reads and node:vm). --self-test plants each pre-fix fault in an in-memory copy of the tree and
 // requires the clause to go red naming it.
@@ -609,7 +611,28 @@ async function orcaStatusClause(texts) {
     return failures;
 }
 
-const CLAUSES = [scrollClause, editStateClause, budgetClause, historyClause, servicesClause, cookiesClause, agentFlagClause, stopClause, sideHeaderClause, orcaStatusClause];
+// orcad-hosting-03 (lane G2 handover): readLoopbackSocketTable reads both TCP tables (a dual-stack listener is in
+// /proc/net/tcp6 only) and the uid, with an explicit maxBytes (procfs reports size 0), and never throws.
+async function socketTableClause(texts) {
+    const failures = [];
+    const files = { '/proc/net/tcp': 'v4 table', '/proc/net/tcp6': 'v6 table', '/proc/self/status': 'Name:\tpb\nUid:\t1000\t1000\t1000\t1000\n' };
+    const reads = [];
+    const make = failing => evalDeclarations(texts.api, ['PowerBrowserOrcaHosting'], {
+        TextDecoder,
+        IOUtils: { read: async (path, options) => { reads.push({ path, maxBytes: options?.maxBytes }); if (failing || !(path in files)) throw new Error('NotFoundError'); return new TextEncoder().encode(files[path]); } },
+    }, ['PowerBrowserOrcaHosting']).PowerBrowserOrcaHosting;
+    const hosting = make(false);
+    if (typeof hosting?.readLoopbackSocketTable !== 'function') return ['socketTable: PowerBrowserOrcaHosting.readLoopbackSocketTable is missing (orcad-hosting-03)'];
+    const table = await hosting.readLoopbackSocketTable();
+    if (table.tcp !== 'v4 table' || table.tcp6 !== 'v6 table' || table.uid !== 1000) failures.push(`socketTable: read ${JSON.stringify(table)}; expected both TCP tables (tcp6 holds a dual-stack listener) and uid 1000 (orcad-hosting-03)`);
+    if (reads.some(r => !(r.maxBytes > 0))) failures.push('socketTable: a procfs read without an explicit maxBytes reads nothing (procfs reports size 0)');
+    let failed;
+    try { failed = await make(true).readLoopbackSocketTable(); } catch (err) { failed = { threw: err.message }; }
+    if (failed?.tcp !== '' || failed?.tcp6 !== '' || failed?.uid !== null) failures.push(`socketTable: a failed read resolved ${JSON.stringify(failed)}; expected empty tables and uid null, never a throw`);
+    return failures;
+}
+
+const CLAUSES = [scrollClause, editStateClause, budgetClause, historyClause, servicesClause, cookiesClause, agentFlagClause, stopClause, sideHeaderClause, orcaStatusClause, socketTableClause];
 
 export async function checkTexts(texts) {
     const failures = [];
@@ -637,6 +660,11 @@ function replaceOnce(text, from, to, what) {
 }
 
 const PLANTS = [
+    {
+        name: 'orcad-hosting-03: the IPv6 table is not read',
+        plant: t => ({ ...t, api: replaceOnce(t.api, 'text("/proc/net/tcp6")', 'Promise.resolve("")', 'tcp6') }),
+        expect: 'tcp6 holds a dual-stack listener',
+    },
     {
         name: '59-WR-03: no room kept for what the dispatcher adds to a snapshot',
         plant: t => ({ ...t, api: replaceOnce(t.api, 'data.method === "browser.snapshot" ? agentSnapshotReserve(entry) : 0', '0', 'snapshot reserve') }),
