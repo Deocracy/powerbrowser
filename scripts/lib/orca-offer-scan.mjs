@@ -525,7 +525,8 @@ export const bridgeFolderCollector = Object.freeze({
 /**
  * Non-loopback peer: the decoded endpoint is ws://127.0.0.1:<orca port>, and every LISTEN socket of orcad, the terminal
  * daemon, the Theia backend and every descendant of them (plugin hosts, helpers) is on loopback; control: one orcad
- * LISTEN row. ctx.pids.orcad lists orcad and its terminal daemon.
+ * LISTEN row of orcad's own (ctx.pids.orcad), never the terminal daemon's (ctx.pids.daemon), so the daemon cannot stand in
+ * for an orcad that listens nowhere.
  */
 export const nonLoopbackPeerCollector = Object.freeze({
     sink: 'non-loopback peer',
@@ -533,7 +534,7 @@ export const nonLoopbackPeerCollector = Object.freeze({
     read: (ctx) => {
         const faults = [];
         if (!isLoopbackEndpoint(ctx.endpoint, ctx.orcaPort)) faults.push('non-loopback peer: the decoded endpoint is not ws://127.0.0.1:<orca port>');
-        const scanned = withDescendants([...(ctx.pids?.orcad ?? []), ...(ctx.pids?.theia ?? [])], ctx.procRoot ?? '/proc');
+        const scanned = withDescendants([...(ctx.pids?.orcad ?? []), ...(ctx.pids?.daemon ?? []), ...(ctx.pids?.theia ?? [])], ctx.procRoot ?? '/proc');
         const off = listenSockets(scanned, ctx.procRoot).filter((s) => !s.loopback).length;
         if (off) faults.push(`non-loopback peer: ${off} listening socket(s) off loopback`);
         return { chunks: [], faults };
