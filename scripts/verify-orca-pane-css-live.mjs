@@ -42,9 +42,10 @@
 //     (a planted rule on the dialog must register first), Theia's values and the side mount's values
 //     while it is open. Both probes run after the Theia and pane controls registered.
 //
-// Tier: full (live) under flock /home/chris/coding/Power-Browser/.git/pb-live.lock with every
-// inherited ORCA_* unset; --self-test quick (pure verdicts over fixtures). SKIP named when nothing
-// is built.
+// Tier: full (live). A row started without PB_LIVE_LOCK_HELD=1 takes <git common dir>/pb-live.lock
+// itself (lib/live-lock-reexec.mjs) before anything is launched; every inherited ORCA_* is unset.
+// --self-test quick (pure verdicts over fixtures). Exit 77 with one "SKIP -- <reason>" line when nothing
+// is built (SKIP-PROTOCOL.md).
 //
 // Usage:
 //   node scripts/verify-orca-pane-css-live.mjs
@@ -56,6 +57,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { GET_BY_NAME as harness_GET } from './lib/pb-relaunch.mjs';
+import { takeLiveLock } from './lib/live-lock-reexec.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-pane-css-live';
@@ -68,6 +71,12 @@ const MODULE_KEY = 'powerbrowser.orca-panes.module';
 
 export const PROPS = ['font-family', 'font-size', 'font-weight', 'line-height', 'letter-spacing', 'color', 'background-color', 'margin-top', 'margin-bottom',
     'padding-left', 'border-top-width', 'border-top-style', 'border-top-color', 'border-radius', 'box-sizing', 'text-decoration-line', 'cursor', 'list-style-type'];
+/**
+ * The fewest non-"absent" values the Theia snapshot may hold: the nine targets that always exist (the probe box's html,
+ * body, button, input, a, h1, ul and p, and Theia's own shell element) carry every PROPS entry, and the scrollbar width
+ * is one more. A snapshot that holds only "absent" markers for Theia's own elements measures far fewer.
+ */
+export const MIN_THEIA_KEYS = 9 * PROPS.length + 1;
 // Leak-in control candidates: properties Orca sets on none of the measured elements in any variant.
 const CONTROL_CANDIDATES = [['letter-spacing', '3px'], ['text-decoration-line', 'underline'], ['list-style-type', 'square'], ['cursor', 'wait']];
 
@@ -90,11 +99,21 @@ export function htmlVerdict(h) {
 
 /**
  * One Phase 65 probe (side-panel or Add-project dialog). p: { measured, reason, controlDelta, theiaChanged,
- * paneChanged, portalChanged, compared }. Returns null or the failure naming the probe.
+ * paneChanged, portalChanged, compared, addPresent, portalCompared, portalKinds, portalControlDelta }. Returns null or
+ * the failure naming the probe. Nothing compared is red: opts.tooltip (the side-panel probe) also needs the Add-project
+ * button in both mounts, a tooltip portal ('popper') compared in both documents and a planted portal rule that
+ * registered; opts.dialog needs at least one portal node compared (audit harness-live-panels-07).
  */
-export function probeVerdict(name, p) {
+export function probeVerdict(name, p, { tooltip = false, dialog = false } = {}) {
     if (!p || p.measured === false) return `${name} probe not measured${p?.reason ? `: ${p.reason}` : ''}`;
+    if (!(p.compared >= 1)) return `${name} probe: nothing was compared (${p.compared ?? 0} values)`;
     if (!(p.controlDelta >= 1)) return `${name} probe: its planted control did not register (the detector is blind)`;
+    if (tooltip) {
+        if (p.addPresent !== true) return `${name} probe: the Add-project button was not found in both mounts (its label may have changed), so its tooltip was never compared`;
+        if (!(p.portalCompared >= 1) || !p.portalKinds?.includes('popper')) return `${name} probe: no tooltip portal was compared in both documents (portal ${p.portalCompared ?? 0} of 0, kinds [${(p.portalKinds ?? []).join(', ')}])`;
+        if (!(p.portalControlDelta >= 1)) return `${name} probe: its planted portal rule did not register (the portal detector is blind)`;
+    }
+    if (dialog && !(p.portalCompared >= 1)) return `${name} probe: no portal node was compared in both documents`;
     if (p.theiaChanged.length) return `${name} probe: ${p.theiaChanged.length} Theia value(s) changed, first ${p.theiaChanged[0].key}: ${p.theiaChanged[0].before} -> ${p.theiaChanged[0].after}`;
     if (p.paneChanged.length) return `${name} probe: ${p.paneChanged.length} pane value(s) differ from the standalone page, first ${p.paneChanged[0].key}: ${p.paneChanged[0].before} -> ${p.paneChanged[0].after}`;
     if (p.portalChanged.length) return `${name} probe: ${p.portalChanged.length} portal value(s) differ from the standalone page, first ${p.portalChanged[0].key}`;
@@ -109,6 +128,7 @@ export function cssVerdict(obs) {
     const t = obs.theia, p = obs.pane, q = obs.portal;
     if (!t || t.controlBaseline !== 0) return `Theia control: the baseline is not 0-diff (${t?.controlBaseline})`;
     if (!(t.controlDelta >= 1)) return 'Theia control: a planted Theia-side rule did not register (the detector is blind)';
+    if (!(t.measuredKeys >= MIN_THEIA_KEYS)) return `Theia snapshot blind: ${t.measuredKeys ?? 0} measured values, ${MIN_THEIA_KEYS} needed (Theia's own elements read "absent" in both snapshots, which compare equal)`;
     if (!p || p.measured === false) return `pane values not measured${p?.reason ? `: ${p.reason}` : ''}`;
     if (!(p.controlDelta >= 1)) return 'pane control: a planted host rule on the pane did not register (the detector is blind)';
     if (!q || q.measured === false) return `portal probe not measured${q?.reason ? `: ${q.reason}` : ''}`;
@@ -117,7 +137,25 @@ export function cssVerdict(obs) {
     if (p.changed.length) return `${p.changed.length} pane value(s) differ from the standalone page, first ${p.changed[0].key}: ${p.changed[0].before} -> ${p.changed[0].after}`;
     if (q.changed.length) return `${q.changed.length} portal value(s) differ from the standalone page, first ${q.changed[0].key}`;
     if (q.theiaChanged.length) return `${q.theiaChanged.length} Theia value(s) changed while Orca's portals were open, first ${q.theiaChanged[0].key}`;
-    return probeVerdict('side-panel', obs.side) ?? probeVerdict('Add-project dialog', obs.addProject) ?? htmlVerdict(obs.html);
+    return probeVerdict('side-panel', obs.side, { tooltip: true }) ?? probeVerdict('Add-project dialog', obs.addProject, { dialog: true }) ?? htmlVerdict(obs.html);
+}
+
+/**
+ * The side-panel probe's tooltip half from the collected maps (pure; the self-test feeds it fixtures). inTheia and
+ * reference: __pbSideStyles of the two mounts, where a missing Add-project button records 'side-add|present: absent'.
+ * tips: { theia, standalone, planted } portal style maps of the open tooltip, `planted` being the Theia document with a
+ * planted rule on the portal. Returns { addPresent, portalChanged, portalCompared, portalKinds, portalControlDelta }.
+ */
+export function tooltipObservation({ inTheia, reference, tips }) {
+    const addPresent = !('side-add|present' in (inTheia ?? {})) && !('side-add|present' in (reference ?? {}));
+    const keys = Object.keys(tips.standalone ?? {}).filter(k => k in (tips.theia ?? {}) && !k.endsWith('|present'));
+    const only = m => Object.fromEntries(keys.map(k => [k, m?.[k]]));
+    const portalChanged = diffMaps(only(tips.standalone), only(tips.theia));
+    return {
+        addPresent, portalChanged, portalCompared: keys.length,
+        portalKinds: [...new Set(keys.map(k => k.split('|')[0].replace(/>text$/, '')))],
+        portalControlDelta: tips.planted ? diffMaps(only(tips.standalone), only(tips.planted)).length - portalChanged.length : 0,
+    };
 }
 
 /**
@@ -218,7 +256,8 @@ async function measure(s, mode) {
     await ev(`(() => { const st = document.createElement('style'); st.id = 'pb-css-theia-control'; st.textContent = '[data-pb-css-probe] p { letter-spacing: 3px !important }'; document.head.appendChild(st); return true; })()`);
     const planted = JSON.parse(await ev('JSON.stringify(window.__pbTheiaSnapshot())'));
     await ev(`(() => { document.getElementById('pb-css-theia-control').remove(); return true; })()`);
-    obs.theia = { controlBaseline: diffMaps(base0, base1).length, controlDelta: diffMaps(base0, planted).length, compared: Object.keys(base0).length };
+    obs.theia = { controlBaseline: diffMaps(base0, base1).length, controlDelta: diffMaps(base0, planted).length, compared: Object.keys(base0).length,
+        measuredKeys: Object.keys(base0).filter(k => !k.endsWith('|present')).length };
     const html0 = JSON.parse(await ev('JSON.stringify(window.__pbHtmlState())'));
 
     const pick = await s.mountInTheia();
@@ -374,11 +413,15 @@ async function sideProbes(s, ref, base0) {
             await evx(OPEN_TOOLTIP_ON(`${sel} button[aria-label="Add project"]`));
             try { await lib.pollFor(async () => JSON.parse(await evx(`JSON.stringify(${PORTALS_OPEN})`)).includes('popper'), 5000, `${label} side tooltip`); } catch { /* recorded */ }
             tips[label] = JSON.parse(await evx('JSON.stringify(window.__pbPortalStyles())'));
+            if (label === 'theia') {
+                // Control: a planted rule on the open tooltip's portal must register against the standalone page's values.
+                await evx(`(() => { const st = document.createElement('style'); st.id = 'pb-css-tip-control'; st.textContent = 'body > [data-radix-popper-content-wrapper], body > [data-radix-popper-content-wrapper] * { letter-spacing: 3px !important }'; document.head.appendChild(st); return true; })()`);
+                tips.planted = JSON.parse(await evx('JSON.stringify(window.__pbPortalStyles())'));
+                await evx(`(() => { document.getElementById('pb-css-tip-control').remove(); return true; })()`);
+            }
             await evx(CLOSE_TOOLTIP);
         }
-        const tipKeys = Object.keys(tips.standalone).filter(k => k in tips.theia && !k.endsWith('|present'));
-        side.portalChanged = diffMaps(Object.fromEntries(tipKeys.map(k => [k, tips.standalone[k]])), Object.fromEntries(tipKeys.map(k => [k, tips.theia[k]])));
-        side.portalCompared = tipKeys.length;
+        Object.assign(side, tooltipObservation({ inTheia, reference, tips }));
         await lib.sleep(800);
 
         // Add-project dialog: Orca's own trigger in each sidebar mount. Only portal nodes that appear after the click
@@ -418,7 +461,10 @@ async function sideProbes(s, ref, base0) {
 async function live() {
     const harness = await import('./lib/orca-pane-harness.mjs');
     const skips = harness.skipReasons();
-    if (skips.length) { console.log(`${NAME}: SKIP -- ${skips.join('; ')}`); return 0; }
+    if (skips.length) { console.log(skipLine(NAME, skips.join('; '))); return SKIP_EXIT; }
+    // Nothing is built or launched before this: a row started by hand takes the live lock itself (harness-live-panels-02).
+    const held = takeLiveLock(import.meta.url, NAME);
+    if (held !== null) return held;
     if (!existsSync(join(harness.STANDALONE_DIR, 'pb-panes.js'))) {
         const b = spawnSync('bash', [join(REPO_ROOT, 'scripts', 'build-orca-panes.sh'), '--standalone'], { encoding: 'utf8' });
         if (b.status !== 0) { console.log(`${NAME}: FAIL -- harness: build-orca-panes.sh --standalone: ${(b.stdout ?? '').trim().split('\n').pop()}`); return 1; }
@@ -562,8 +608,9 @@ function selfTest() {
     const ok = (name, cond) => { console.log(`  ${cond ? 'ok ' : 'NOT OK '} ${name}`); if (!cond) failed += 1; };
     const html = (o = {}) => ({ classesAdded: ['light'], propsAdded: ['--background'], readers: { classes: [], props: [] }, unreadable: 0, rules: 900, probe: { classDetected: true, propDetected: true }, ...o });
     const probe = (o = {}) => ({ measured: true, controlDelta: 2, theiaChanged: [], paneChanged: [], portalChanged: [], compared: 25, ...o });
-    const good = (o = {}) => ({ theia: { controlBaseline: 0, controlDelta: 1, changed: [], compared: 200 }, pane: { measured: true, changed: [], compared: 126, control: 'letter-spacing', controlDelta: 2 },
-        portal: { measured: true, changed: [], compared: 72, theiaChanged: [], kinds: ['popper', 'dialog-content'] }, side: probe(), addProject: probe(), html: html(), ...o });
+    const sideProbe = (o = {}) => probe({ addPresent: true, portalCompared: 12, portalKinds: ['popper', 'popper>text'].map(k => k.replace(/>text$/, '')), portalControlDelta: 2, ...o });
+    const good = (o = {}) => ({ theia: { controlBaseline: 0, controlDelta: 1, changed: [], compared: 200, measuredKeys: 200 }, pane: { measured: true, changed: [], compared: 126, control: 'letter-spacing', controlDelta: 2 },
+        portal: { measured: true, changed: [], compared: 72, theiaChanged: [], kinds: ['popper', 'dialog-content'] }, side: sideProbe(), addProject: probe({ portalCompared: 8 }), html: html(), ...o });
     const d = { key: 'button|color', before: 'a', after: 'b' };
     ok('control green', cssVerdict(good()) === null);
     ok('a changed Theia value is red', /1 Theia element property value\(s\) changed, first button\|color/.test(cssVerdict(good({ theia: { ...good().theia, changed: [d] } })) ?? ''));
@@ -583,16 +630,36 @@ function selfTest() {
     ok('a missing tooltip is red', /needs an Orca tooltip and an Orca dialog/.test(cssVerdict(good({ portal: { ...good().portal, kinds: ['slot-dialog-content'] } })) ?? ''));
     ok('the probe sheet not detected is red', /html clause blind/.test(cssVerdict(good({ html: html({ probe: { classDetected: true, propDetected: false } }) })) ?? ''));
     ok('an unreadable Theia sheet is red', /unreadable through CSSOM/.test(cssVerdict(good({ html: html({ unreadable: 1 }) })) ?? ''));
-    ok('side-panel: a changed Theia value is red naming the probe', /^side-panel probe: 1 Theia value/.test(cssVerdict(good({ side: probe({ theiaChanged: [d] }) })) ?? ''));
-    ok('side-panel: a changed pane value is red naming the probe', /^side-panel probe: 1 pane value/.test(cssVerdict(good({ side: probe({ paneChanged: [d] }) })) ?? ''));
-    ok('side-panel: a changed tooltip portal value is red naming the probe', /^side-panel probe: 1 portal value/.test(cssVerdict(good({ side: probe({ portalChanged: [d] }) })) ?? ''));
-    ok('side-panel: a control that did not register is red naming the probe', /^side-panel probe: its planted control did not register/.test(cssVerdict(good({ side: probe({ controlDelta: 0 }) })) ?? ''));
+    ok('side-panel: a changed Theia value is red naming the probe', /^side-panel probe: 1 Theia value/.test(cssVerdict(good({ side: sideProbe({ theiaChanged: [d] }) })) ?? ''));
+    ok('side-panel: a changed pane value is red naming the probe', /^side-panel probe: 1 pane value/.test(cssVerdict(good({ side: sideProbe({ paneChanged: [d] }) })) ?? ''));
+    ok('side-panel: a changed tooltip portal value is red naming the probe', /^side-panel probe: 1 portal value/.test(cssVerdict(good({ side: sideProbe({ portalChanged: [d] }) })) ?? ''));
+    ok('side-panel: a control that did not register is red naming the probe', /^side-panel probe: its planted control did not register/.test(cssVerdict(good({ side: sideProbe({ controlDelta: 0 }) })) ?? ''));
+    // harness-live-panels-07: a probe that compared nothing is red. The Add-project label changing records 'absent' in both
+    // mounts, the tooltip never opens, and the pre-fix verdict printed PASS with 'portal 0 of 0'.
+    ok('side-panel: nothing compared is red', /^side-panel probe: nothing was compared/.test(cssVerdict(good({ side: sideProbe({ compared: 0 }) })) ?? ''));
+    ok('side-panel: the Add-project button missing is red', /^side-panel probe: the Add-project button was not found/.test(cssVerdict(good({ side: sideProbe({ addPresent: false }) })) ?? ''));
+    ok('side-panel: portal 0 of 0 is red', /^side-panel probe: no tooltip portal was compared in both documents \(portal 0 of 0/.test(cssVerdict(good({ side: sideProbe({ portalCompared: 0, portalKinds: [] }) })) ?? ''));
+    ok('side-panel: portal values without a tooltip popper are red', /^side-panel probe: no tooltip portal was compared/.test(cssVerdict(good({ side: sideProbe({ portalKinds: ['slot-dialog-content'] }) })) ?? ''));
+    ok('side-panel: a planted portal rule that did not register is red', /^side-panel probe: its planted portal rule did not register/.test(cssVerdict(good({ side: sideProbe({ portalControlDelta: 0 }) })) ?? ''));
+    ok('Add-project dialog: no portal node compared is red', /^Add-project dialog probe: no portal node was compared/.test(cssVerdict(good({ addProject: probe({ portalCompared: 0 }) })) ?? ''));
+    ok('a Theia snapshot of "absent" markers is blind', /^Theia snapshot blind: 40 measured values/.test(cssVerdict(good({ theia: { ...good().theia, measuredKeys: 40 } })) ?? ''));
+    ok('a Theia snapshot at the minimum is not blind', cssVerdict(good({ theia: { ...good().theia, measuredKeys: MIN_THEIA_KEYS } })) === null);
+    {
+        // The collector's tooltip half over fixtures: a missing button and an unopened tooltip must read as nothing compared.
+        const styles = { 'side-root|color': 'x', 'side-add|color': 'y' };
+        const open = { 'popper|letter-spacing': 'normal', 'popper>text|letter-spacing': 'normal' };
+        const live = tooltipObservation({ inTheia: styles, reference: styles, tips: { theia: open, standalone: open, planted: { 'popper|letter-spacing': '3px', 'popper>text|letter-spacing': '3px' } } });
+        ok('collector: a present button and an opened tooltip read as compared, kinds popper, control registered', live.addPresent && live.portalCompared === 2 && live.portalKinds.join() === 'popper' && live.portalControlDelta === 2);
+        const noButton = tooltipObservation({ inTheia: { ...styles, 'side-add|present': 'absent' }, reference: { ...styles, 'side-add|present': 'absent' }, tips: { theia: {}, standalone: {}, planted: {} } });
+        ok('collector: Add-project absent in both mounts and no tooltip reads as 0 of 0, not present', noButton.addPresent === false && noButton.portalCompared === 0 && noButton.portalKinds.length === 0);
+        ok('collector fixture: that observation goes red through the verdict', /^side-panel probe: the Add-project button was not found/.test(cssVerdict(good({ side: sideProbe(noButton) })) ?? ''));
+    }
     ok('side-panel: not measured is red', /^side-panel probe not measured: no sidebar/.test(cssVerdict(good({ side: { measured: false, reason: 'no sidebar mount in the Theia document' } })) ?? ''));
-    ok('Add-project dialog: a changed portal value is red naming the probe', /^Add-project dialog probe: 1 portal value/.test(cssVerdict(good({ addProject: probe({ portalChanged: [d] }) })) ?? ''));
-    ok('Add-project dialog: a changed Theia value while open is red', /^Add-project dialog probe: 1 Theia value/.test(cssVerdict(good({ addProject: probe({ theiaChanged: [d] }) })) ?? ''));
-    ok('Add-project dialog: a control that did not register is red naming the probe', /^Add-project dialog probe: its planted control did not register/.test(cssVerdict(good({ addProject: probe({ controlDelta: 0 }) })) ?? ''));
+    ok('Add-project dialog: a changed portal value is red naming the probe', /^Add-project dialog probe: 1 portal value/.test(cssVerdict(good({ addProject: probe({ portalCompared: 8, portalChanged: [d] }) })) ?? ''));
+    ok('Add-project dialog: a changed Theia value while open is red', /^Add-project dialog probe: 1 Theia value/.test(cssVerdict(good({ addProject: probe({ portalCompared: 8, theiaChanged: [d] }) })) ?? ''));
+    ok('Add-project dialog: a control that did not register is red naming the probe', /^Add-project dialog probe: its planted control did not register/.test(cssVerdict(good({ addProject: probe({ portalCompared: 8, controlDelta: 0 }) })) ?? ''));
     ok('Add-project dialog: not reached is red', /^Add-project dialog probe not measured/.test(cssVerdict(good({ addProject: undefined })) ?? ''));
-    ok('the probes are judged only after the Theia control registered', /^Theia control/.test(cssVerdict(good({ theia: { ...good().theia, controlDelta: 0 }, side: probe({ paneChanged: [d] }) })) ?? ''));
+    ok('the probes are judged only after the Theia control registered', /^Theia control/.test(cssVerdict(good({ theia: { ...good().theia, controlDelta: 0 }, side: sideProbe({ paneChanged: [d] }) })) ?? ''));
     ok('diffMaps counts additions and removals', diffMaps({ a: '1', b: '2' }, { a: '1', c: '3' }).length === 2);
     const child = spawnSync(process.execPath, ['--input-type=module', '-e', `await import(${J(SELF)})`], { encoding: 'utf8', timeout: 30000 });
     ok('importing the module prints and starts nothing', child.status === 0 && child.stdout === '' && child.stderr === '');
