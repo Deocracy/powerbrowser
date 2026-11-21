@@ -335,7 +335,7 @@ async function runBootstrapTwice(entryText, failing) {
         }
     }
     const source = declarations(sf, [...own]).join('\n');
-    const js = ts.transpileModule(`${source}\nreturn bootstrap;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React } }).outputText;
+    const js = ts.transpileModule(`${source}\nreturn Object.assign(bootstrap, { booted: () => isBooted === true });`, { compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React } }).outputText;
     const counts = {};
     let failedOnce = false;
     const recorder = path => new Proxy(function () {}, {
@@ -356,7 +356,8 @@ async function runBootstrapTwice(entryText, failing) {
     const outcome = async p => { try { await p; return 'resolved'; } catch { return 'rejected'; } };
     const first = await outcome(bootstrap({ pairing: 'x' }));
     const second = await outcome(bootstrap({ pairing: 'x' }));
-    return { counts, first, second };
+    const roots = (counts['ReactDOMClient.createRoot'] ?? 0) - (failing === 'ReactDOMClient.createRoot' ? 1 : 0);
+    return { counts, first, second, booted: bootstrap.booted() === true, roots };
 }
 
 /**
@@ -390,13 +391,15 @@ export function installCalls(entryText) {
  * Clause e (overlay-renderer-03), run, not read: for each install step bootstrap calls after its session-only
  * assertion (derived from the entry), the step is made to throw once; the first bootstrap must reject, a second call
  * must run again and resolve, and every install step outside the failed one's group must have run exactly once in
- * total (nothing wrapped or mounted twice). Zero install steps is red "parser blind".
+ * total (nothing wrapped or mounted twice), and the retried boot must end booted with exactly one services root.
+ * The pairing step is failed the same way. Zero install steps is red "parser blind".
  */
 export async function checkBootstrapRetry(entryText) {
     const steps = installCalls(entryText);
     if (!steps.length) return ['no install step found after the session-only assertion in bootstrap (parser blind)'];
     const fails = [];
-    for (const failing of steps) {
+    // The pairing step (before the assertion) as well as every install step: a boot that failed at pairing must pair on retry.
+    for (const failing of [{ path: 'pairSessionOnly', group: -1 }, ...steps]) {
         const run = await runBootstrapTwice(entryText, failing.path);
         if (!run) return ['bootstrap is absent from the entry (source moved)'];
         if (run.first !== 'rejected') { fails.push(`a throw from ${failing.path} did not reject the first bootstrap`); continue; }
@@ -404,6 +407,7 @@ export async function checkBootstrapRetry(entryText) {
             fails.push(`after ${failing.path} failed once, a second bootstrap did not run again and resolve: the rejected attempt is cached`);
             continue;
         }
+        if (!run.booted || run.roots !== 1) fails.push(`after ${failing.path} failed once, the retried bootstrap ended ${run.booted ? 'booted' : 'not booted'} with ${run.roots} services root(s) (want booted, exactly one)`);
         for (const s of steps) {
             const n = run.counts[s.path] ?? 0;
             const good = s === failing ? n === 2 : s.group === failing.group ? n >= 1 && n <= 2 : n === 1;
@@ -599,6 +603,15 @@ async function selfTest() {
         const twice = entry.replace(/await once\(/g, 'await step(');
         ok('e: the install-twice plant applies', twice !== entry);
         ok('e: a retry that re-runs completed install steps is red, naming it', (await checkBootstrapRetry(twice)).some(f => /installed twice or skipped/.test(f)));
+        // G3b handoff (64-WR-01, pairing-credentials-01, 67-WR-02): a boot that rejects once and then succeeds ends
+        // mounted with exactly one root. A step after the services root fails once; the root must not be made twice.
+        const afterRoot = entry.replace(/\n(\s*)isBooted = true\n/, '\n$1pbPlantedAfterRoot()\n$1isBooted = true\n');
+        ok('e: the after-root plant applies', afterRoot !== entry);
+        ok('e: control: a step failing after the root, with the root installed once, is green', (await checkBootstrapRetry(afterRoot)).length === 0);
+        const secondRoot = afterRoot.replace("await once('services root'", "await step('services root'");
+        ok('e: a retried boot that creates a second services root is red, naming it', secondRoot !== afterRoot && (await checkBootstrapRetry(secondRoot)).some(f => /2 services root\(s\)/.test(f)));
+        const pairingCached = cached;
+        ok('e: a boot that failed at pairing and is not retried (pre-fix) is red, naming it', (await checkBootstrapRetry(pairingCached)).some(f => /after pairSessionOnly failed once, a second bootstrap did not run again/.test(f)));
         ok('e: no install step is red "parser blind"', (await checkBootstrapRetry(entry.replace(/assertSessionOnly\(\)/g, 'assertSessionOnlyX()'))).some(f => /parser blind/.test(f)));
         // f.
         const api = readFileSync(WORKSPACE_API, 'utf8');
