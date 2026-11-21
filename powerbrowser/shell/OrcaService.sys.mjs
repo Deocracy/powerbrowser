@@ -73,6 +73,8 @@ export const OrcaService = {
   _exitTimes: [],
   // Audit fix 67-CR-01: orcad starts that reached ready in this session.
   _generation: 0,
+  // Audit follow-up to orcad-hosting-01: the keeper process, while a kept daemon has no accepted orcad.
+  _keeper: null,
 
   /**
    * Starts orcad once per browser session: resolve paths, reap a previous session, spawn, wait for the
@@ -500,6 +502,15 @@ export const OrcaService = {
       await endOwn();
       return { ok: false, recoverable: false, step: "stopping", rows: [] };
     }
+    // Audit follow-up to orcad-hosting-01: a daemon this session keeps is named to the new orcad's watch at once,
+    // before its ready line is accepted, so a PowerBrowser death in that window ends it too. Not an acceptance.
+    if (await this._sameIdentity(this._daemonPid, this._daemonTicks)) {
+      try {
+        await PowerBrowserAPI.writeStdinLine(proc, OrcaEnv.orcadAdoptedLine({ daemonPid: this._daemonPid, daemonTicks: this._daemonTicks }));
+      } catch (err) {
+        this._pushLog(`The kept terminal daemon was not named to the new orcad: ${messageOf(err)}`);
+      }
+    }
 
     const stderrTail = [];
     // Phase 64 (P64-07): this start's pairing offer, held only until _writeHandOff writes it.
@@ -592,6 +603,8 @@ export const OrcaService = {
     // adopt, and the watch knows which daemon to end if this process dies (OrcaEnv.orcadParentWatchSource).
     try {
       await PowerBrowserAPI.writeStdinLine(proc, OrcaEnv.orcadAcceptedLine({ daemonPid: this._daemonPid, daemonTicks: this._daemonTicks }));
+      // The accepted orcad's watch now holds the daemon; the keeper, if one ran, is let go.
+      void this._releaseKeeper();
     } catch (err) {
       this._pushLog(`orcad's start was not confirmed to it: ${messageOf(err)}; an orcad exit now also ends its terminal daemon.`);
     }
@@ -677,6 +690,8 @@ export const OrcaService = {
     this._pid = null;
     this._pidTicks = null;
     try {
+      // Audit follow-up to orcad-hosting-01: the daemon kept for the next orcad has no orcad watching it now.
+      await this._keepDaemon();
       // Audit fix 62-WR-05: the data root, the offer and the bundle folder named the orcad that just
       // exited; the next ready writes them again.
       await this._removeHandOff();
@@ -789,6 +804,57 @@ export const OrcaService = {
   },
 
   /**
+   * Audit follow-up to orcad-hosting-01: while a daemon this session keeps has no accepted orcad (the backoff
+   * before a respawn, a respawn before its ready line, a failed state with the failure page up), the keeper, a
+   * process of its own reading a stdin pipe from this one, holds it by pid and start ticks and ends its tree
+   * when this process is gone (OrcaEnv.orcadKeeperSource). Started on demand, told the daemon on every call.
+   */
+  async _keepDaemon() {
+    if (!(await this._sameIdentity(this._daemonPid, this._daemonTicks)) || !this._nodePath) {
+      return;
+    }
+    if (!this._keeper || this._keeper.exitCode != null) {
+      try {
+        this._keeper = await PowerBrowserProcesses.spawnProcessExact({
+          command: this._nodePath,
+          args: OrcaEnv.buildOrcadKeeperArgs(),
+          environment: OrcaEnv.buildToolEnv(name => PowerBrowserAPI.getEnv(name)),
+        });
+      } catch (err) {
+        this._keeper = null;
+        this._pushLog(`The terminal daemon keeper did not start: ${messageOf(err)}; a PowerBrowser crash now leaves the daemon running.`);
+        return;
+      }
+    }
+    try {
+      await PowerBrowserAPI.writeStdinLine(this._keeper, OrcaEnv.orcadAdoptedLine({ daemonPid: this._daemonPid, daemonTicks: this._daemonTicks }));
+    } catch (err) {
+      this._pushLog(`The terminal daemon was not named to its keeper: ${messageOf(err)}`);
+    }
+  },
+
+  /** Lets the keeper go without ending anything: an accepted orcad's watch, or the stop itself, now covers the daemon. */
+  async _releaseKeeper() {
+    const keeper = this._keeper;
+    this._keeper = null;
+    if (!keeper || keeper.exitCode != null) {
+      return;
+    }
+    try {
+      await PowerBrowserAPI.writeStdinLine(keeper, OrcaEnv.orcadKeeperReleaseLine());
+    } catch {
+      // It is ended below.
+    }
+    if (!(await PowerBrowserAPI.waitForExit(keeper, 2000))) {
+      try {
+        await PowerBrowserAPI.killProcess(keeper, 1000);
+      } catch {
+        // Already exited.
+      }
+    }
+  },
+
+  /**
    * Audit fix orcad-hosting-03 (diagnostics part): whose program holds orcad's port, as a diagnostics row, so
    * a leftover of this user can be told from another account's listener. The socket table comes from
    * PowerBrowserOrcaHosting.readLoopbackSocketTable (G1a handoff); without it there is no row.
@@ -828,6 +894,8 @@ export const OrcaService = {
     }
     this._proc = null;
     await this._endDaemon(this._daemonPid, this._daemonTicks, tree.filter(row => row.pid !== orcadPid));
+    // The daemon is ended; a keeper still holding it is let go (audit follow-up to orcad-hosting-01).
+    await this._releaseKeeper();
     if (this._stateFilePath) {
       try {
         await PowerBrowserAPI.removeStateFile(this._stateFilePath);
