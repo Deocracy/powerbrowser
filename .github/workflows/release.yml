@@ -987,7 +987,7 @@ jobs:
           set -euo pipefail
           bash powerbrowser/packaging/check-win-sidecar.sh check windows-orca "$PB_WIN_ORCA_SUMS_SHA256"
           node scripts/win-sign-list.mjs --list --pkg "$PKG/$TOP" --manifest upstream/browser/installer/package-manifest.in \
-            --orca-sums windows-orca/SHA256SUMS > "$RUNNER_TEMP/sign-list.txt"
+            --orca-sums windows-orca/SHA256SUMS --orca-dir windows-orca > "$RUNNER_TEMP/sign-list.txt"
           wc -l < "$RUNNER_TEMP/sign-list.txt"
 
       # Directly before the first signature, after every gate above has passed.
