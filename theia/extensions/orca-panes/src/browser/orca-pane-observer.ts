@@ -200,6 +200,18 @@ export class OrcaPaneObserver implements FrontendApplicationContribution {
                 await this.names.record(widget.options.name, widget.options);
             }
         }
+        // 64-WR-03: a terminal tab's leaf-less record became its first leaf's: same widget, same name, new pane key.
+        for (const { from, to, paneKey, widgetId } of plan.rekey) {
+            const widget = this.widgets.get(from) ?? restored.find(w => w.id === widgetId);
+            const record = byKey.get(to);
+            this.known.delete(from);
+            this.widgets.delete(from);
+            if (widget && record && !widget.isDisposed) {
+                widget.rekey(paneKey);
+                this.track(to, widget, record);
+                await this.names.record(widget.options.name, widget.options); // the name follows; nothing is tombstoned
+            }
+        }
         for (const key of plan.dispose) {
             const tracked = this.widgets.get(key);
             const widget = tracked ?? restored.find(w => keyOfOptions(w.options) === key);
@@ -248,7 +260,10 @@ export class OrcaPaneObserver implements FrontendApplicationContribution {
     /**
      * Phase 66 (P66-07, P66-09, D-01): every list's browser records against the browser host's page table, on every
      * list (not only the drained ones), so the reveal tracker sees each activation. No widget is created and no Orca
-     * component is mounted; only the tabs reveal() returns are activated. A page with no web tab logs one line.
+     * component is mounted; only the tabs reveal() returns are brought forward. A page with no web tab logs one line.
+     * Audit fix (theia-pane-hosting-02, D-34): brought forward without focus. The store's active tab cannot tell a
+     * user's selection from an agent's (browser.tabSwitch), and an agent opening or switching a pane must not take
+     * focus (P64-10), so keystrokes never move into an agent-driven page on their own.
      */
     protected revealBrowserTabs(records: OrcaPaneRecord[]): void {
         const browser = records.filter(record => ORCA_PANE_ROUTES[record.kind]?.target === 'pb-web-tab');
@@ -260,7 +275,7 @@ export class OrcaPaneObserver implements FrontendApplicationContribution {
             }
         }
         for (const widget of this.browserPages.reveal(browser)) {
-            this.shell.activateWidget(widget.id);
+            void this.shell.revealWidget(widget.id);
         }
     }
 

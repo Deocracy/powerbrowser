@@ -684,14 +684,14 @@ export class SetupsService implements FrontendApplicationContribution {
     protected async applySnapshot(row: { modeId: string; windows: SetupWindowSnapshot[] }, notify: boolean, openWebTabs = true): Promise<void> {
         this.applyGeometry(row.windows[0]);
         const dropped = await this.placeTabs(row, openWebTabs);
-        const modeId = row.windows[0].modeId ?? row.modeId;
+        const storedModeId = row.windows[0].modeId ?? row.modeId;
         // NG-029: the mode goes through ModeService.activateMode, the path the
         // mode toggle takes (GUI-DEFECTS item 6), so the panel map, the Explorer
         // dock, the Organising slot, the furniture and the mode attribute all
         // apply. A bare switchPerspective applied the perspective and none of
         // those. activateMode resolves an unknown id to Browsing by itself;
         // `known` only chooses the contracted fallback notice below.
-        const shippedKnown = SHIPPED_MODES.some(descriptor => descriptor.id === modeId);
+        const shippedKnown = SHIPPED_MODES.some(descriptor => descriptor.id === storedModeId);
         if (!notify && !shippedKnown) {
             // NG-032 round 1: the launch restore waits (bounded) for the
             // custom-mode load before resolving the session's mode, so a
@@ -700,6 +700,9 @@ export class SetupsService implements FrontendApplicationContribution {
             // path (notify=true) keeps its synchronous check.
             await this.waitForCustomModes();
         }
+        // theia-pane-hosting-04: a custom mode renamed after this snapshot was saved is found under its new id
+        // (resolved after the custom-mode load, which is what fills the rename map).
+        const modeId = shippedKnown ? storedModeId : this.modes.resolveModeId(storedModeId);
         const knownCustom = this.modes.getCustomModes().some(custom => custom.id === modeId);
         const known = shippedKnown || knownCustom;
         try {
@@ -982,7 +985,8 @@ export class SetupsService implements FrontendApplicationContribution {
         if (shipped) {
             return shipped.label;
         }
-        const custom = this.modes.getCustomModes().find(row => row.id === modeId);
+        const resolved = this.modes.resolveModeId(modeId); // theia-pane-hosting-04: a renamed custom mode's old id
+        const custom = this.modes.getCustomModes().find(row => row.id === resolved);
         // The stored id is never shown (14-UI-SPEC.md Copywriting Contract):
         // an unknown id falls back to the shipped Browsing label, mirroring
         // the restore path's Browsing fallback.
@@ -1423,19 +1427,33 @@ export class SetupsService implements FrontendApplicationContribution {
         }
     }
 
-    /** P65-18: the tab URIs setups.json and the session snapshot name; an unreadable part counts as empty, with one log line. */
-    async referencedTabUris(): Promise<Set<string>> {
+    /**
+     * P65-18: the tab URIs setups.json and the session snapshot name. Audit fix (theia-pane-hosting-03): an absent
+     * setups.json names nothing, but one that cannot be read or does not parse (a mid-save race, a partial write)
+     * makes the set unknown, and so does an unreadable session: undefined, with one log line, and the caller keeps
+     * every reservation rather than releasing a name a saved Setup may still hold.
+     */
+    async referencedTabUris(): Promise<Set<string> | undefined> {
         let setups: SetupSnapshot[] = [];
         try {
-            setups = parseSetupStore((await this.fileService.read(this.setupsUri)).value).setups;
+            if (await this.fileService.exists(this.setupsUri)) {
+                const parsed = parseSetupStore((await this.fileService.read(this.setupsUri)).value);
+                if (!parsed.ok) {
+                    console.info('[@powerbrowser/modes] the saved setups did not parse; the referenced tab list is not known');
+                    return undefined;
+                }
+                setups = parsed.setups;
+            }
         } catch {
-            console.info('[@powerbrowser/modes] no saved setups read for the referenced tab list');
+            console.info('[@powerbrowser/modes] no saved setups read; the referenced tab list is not known');
+            return undefined;
         }
         let session: SessionSnapshot | undefined;
         try {
             session = parseSessionSnapshot(await this.profileStorage.getData<unknown>(SESSION_STORAGE_KEY));
         } catch {
-            console.info('[@powerbrowser/modes] no saved session read for the referenced tab list');
+            console.info('[@powerbrowser/modes] no saved session read; the referenced tab list is not known');
+            return undefined;
         }
         return referencedTabUrisOf({ setups }, session);
     }

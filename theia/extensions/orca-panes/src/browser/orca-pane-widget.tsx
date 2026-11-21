@@ -40,6 +40,7 @@ export class OrcaPaneWidget extends ReactWidget {
     protected shown = false;
     protected mounting = false;
     protected unmount: (() => void) | undefined;
+    protected mountGeneration = 0;
 
     @inject(OrcaPaneWidgetOptions)
     readonly options: OrcaPaneOptions;
@@ -139,8 +140,10 @@ export class OrcaPaneWidget extends ReactWidget {
         this.mounting = true;
         const host = this.host;
         const { kind, worktreeId, tabId, paneKey } = this.options;
+        const generation = this.mountGeneration;
         this.bundle.ready().then(api => {
-            if (!this.isDisposed) {
+            // A rekey since this mount began (64-WR-03) mounts with the new pane key instead.
+            if (!this.isDisposed && generation === this.mountGeneration) {
                 this.unmount = api.mountPane(host, { kind, worktreeId, tabId, paneKey }, this.activity);
             }
         }).catch(() => { /* the bundle logged its failed step once */ });
@@ -155,19 +158,42 @@ export class OrcaPaneWidget extends ReactWidget {
         (focusable ?? this.node).focus();
     }
 
-    /** P64-11: ask Orca's own close (with its confirmation); never dispose here. */
+    /**
+     * P64-11: ask Orca's own close (with its confirmation); never dispose here while Orca can receive it.
+     * Audit fix (64-CR-02, theia-pane-hosting-01): until the pane bundle has booted, Orca cannot receive a close (the
+     * boot failed or is still waiting for orcad), so the tab closes here: only the restored record is behind it. An
+     * Orca pane that does exist comes back by key on the first list after the boot (P64-28).
+     */
     protected override onCloseRequest(_msg: Message): void {
         if (this.tabless) {
             this.dispose(); // no Orca tab backs a page tab, so there is no Orca close to ask
             return;
         }
-        const { worktreeId, tabId, paneKey } = this.options;
-        if (this.bundle.failed) {
-            console.info(`${LOG_PREFIX} Orca ${this.options.kind} pane close not sent: the pane bundle did not boot`);
+        if (!this.bundle.isBooted) {
+            console.info(`${LOG_PREFIX} Orca ${this.options.kind} tab closed in PowerBrowser only: the pane bundle has not booted`);
+            this.dispose();
             return;
         }
+        const { worktreeId, tabId, paneKey } = this.options;
         this.bundle.ready().then(api => api.closePane({ worktreeId, tabId, paneKey }))
             .catch(() => { /* the bundle logged its failed step once */ });
+    }
+
+    /**
+     * 64-WR-03: the terminal tab this widget shows now has its first leaf. The widget keeps its id and name, takes the
+     * leaf's pane key and remounts Orca's pane with it (at the next show when it is not shown yet).
+     */
+    rekey(paneKey: string): void {
+        if (this.options.paneKey === paneKey) {
+            return;
+        }
+        this.options.paneKey = paneKey;
+        this.mountGeneration += 1;
+        const unmount = this.unmount;
+        this.unmount = undefined;
+        unmount?.();
+        this.mounting = false;
+        this.mountOnce();
     }
 
     /** The store dropped this pane: dispose for real. */

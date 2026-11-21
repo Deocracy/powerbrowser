@@ -72,6 +72,10 @@ export const ORCA_PAGE_ROUTES: { readonly [view: string]: OrcaPageRoute } = Obje
 export const PAGE_WORDS: { readonly [word: string]: string } = Object.freeze(Object.values(ORCA_PAGE_ROUTES).reduce((words, route) =>
     'word' in route ? { ...words, [route.word]: route.kind } : words, {} as { [word: string]: string }));
 
+/** The page words that open only while an Orca worktree creation is pending, derived from ORCA_PAGE_ROUTES. */
+export const PENDING_CREATION_WORDS: ReadonlySet<string> = new Set(Object.values(ORCA_PAGE_ROUTES).flatMap(route =>
+    'word' in route && route.whilePendingCreation ? [route.word] : []));
+
 export const ORCA_PANE_WIDGET_ID_PREFIX = 'orca-pane:';
 
 /** A widget's Orca key: the pane key for a terminal leaf, the tab id otherwise (C3). */
@@ -126,6 +130,12 @@ export interface PanePlan {
     pending: string[];
     /** P65-35: restored keys kept in place (neither adopted nor disposed) until a list holds their worktree or the bound passes. */
     held: string[];
+    /**
+     * 64-WR-03: a terminal tab first listed with no leaf (key: its tab id, paneKey null) whose first leaf is now
+     * listed (key: the leaf's pane key). The widget moves to the leaf's key under the same name and remounts with
+     * the pane key; nothing is disposed, created or tombstoned.
+     */
+    rekey: Array<{ from: string; to: string; paneKey: string; widgetId: string }>;
 }
 
 /**
@@ -139,10 +149,13 @@ export interface PanePlan {
  * disposed; a restored key missing from it is disposed only once the list holds
  * a record of its worktree or the restore bound has passed (hydrated), and is
  * held otherwise, so an empty first list after a reload renumbers nothing
- * (P65-35). Kinds that are not hosted come back in pending, once each.
+ * (P65-35). Kinds that are not hosted come back in pending, once each. A
+ * terminal tab listed first without a leaf and then with its first leaf keeps
+ * its widget and name through rekey (64-WR-03).
  */
 export function planPanes(state: PlanState, records: OrcaPaneRecord[]): PanePlan {
-    const plan: PanePlan = { create: [], adopt: [], dispose: [], retitle: [], pending: [], held: [] };
+    const plan: PanePlan = { create: [], adopt: [], dispose: [], retitle: [], pending: [], held: [], rekey: [] };
+    const listed = new Set(records.map(record => record.key));
     const restoredByKey = new Map(state.restored.map(options => [keyOfOptions(options), options]));
     const inUse = new Set<string>([...state.restored.map(o => o.name), ...[...state.known.values()].map(k => k.name)]);
     const taken = new Set<string>([...inUse, ...(state.reservedNames ?? [])]);
@@ -174,6 +187,14 @@ export function planPanes(state: PlanState, records: OrcaPaneRecord[]): PanePlan
             }
         } else if (restored) {
             plan.adopt.push({ key: record.key, widgetId: ORCA_PANE_WIDGET_ID_PREFIX + restored.name });
+        } else if (record.paneKey !== null && record.tabId !== record.key && !listed.has(record.tabId) && !seen.has(record.tabId)
+            && (state.known.has(record.tabId) || restoredByKey.get(record.tabId)?.paneKey === null)) {
+            // 64-WR-03: the tab's leaf-less record became its first leaf's record; the first leaf takes the widget over.
+            const from = record.tabId;
+            const widgetId = state.known.get(from)?.widgetId ?? ORCA_PANE_WIDGET_ID_PREFIX + restoredByKey.get(from)!.name;
+            seen.add(from);
+            plan.rekey.push({ from, to: record.key, paneKey: record.paneKey, widgetId });
+            widgetIdByKey.set(record.key, widgetId);
         } else {
             const stored = state.namesByKey?.get(record.key);
             const name = stored && !inUse.has(stored) ? stored : mintName(route.word, taken);
