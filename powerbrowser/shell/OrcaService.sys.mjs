@@ -535,7 +535,8 @@ export const OrcaService = {
       if (code) {
         // A busy port stays busy and a held lock survived the reap: another attempt changes nothing,
         // and adopting whatever answers on the port is never an option.
-        return { ok: false, recoverable: false, step: "starting orcad", rows: [["Orca failure code", code], ...rows] };
+        const holder = code === OrcaEnv.ORCAD_PINNED_PORT_CODE ? await this._portHolderRows() : [];
+        return { ok: false, recoverable: false, step: "starting orcad", rows: [["Orca failure code", code], ...rows, ...holder] };
       }
       return { ok: false, recoverable: true, step: "starting orcad", rows };
     }
