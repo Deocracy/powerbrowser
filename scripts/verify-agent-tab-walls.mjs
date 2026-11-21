@@ -13,6 +13,7 @@
 //                target-state read never asks for the pair there; a "browsers" field row still reaches the pair.
 //  budget        [59-WR-03]  over the stub world: a child row's done result over AGENT_RESULT_MAX_BYTES (read from the
 //                section) answers failed browser_error, measured in UTF-8 bytes; a small one stays done.
+//  history       [chrome-actor-05]  an agent overlay gets disableglobalhistory before append; a user overlay never.
 //
 // Tier: quick (text reads and node:vm). --self-test plants each pre-fix fault in an in-memory copy of the tree and
 // requires the clause to go red naming it.
@@ -188,7 +189,23 @@ async function budgetClause(texts) {
     return failures;
 }
 
-const CLAUSES = [scrollClause, editStateClause, budgetClause];
+// chrome-actor-05: an agent overlay is created with disableglobalhistory before append (Gecko reads it when the
+// browsing context is made); a user overlay never is.
+async function historyClause(texts) {
+    const failures = [];
+    const w = worldOf(texts);
+    w.api.webTabOpen(w.theiaBrowser, w.frontend, 'n1', 'https://example.com/', undefined, undefined, null, true);
+    w.api.webTabOpen(w.theiaBrowser, w.frontend, 'n3', 'https://example.com/', undefined, undefined, null, false);
+    const attr = id => w.rec.attrs.filter(a => a.browser === w.webTabs.get(id)?.browser && a.name === 'disableglobalhistory');
+    if (!w.webTabs.get('n1')?.agent) return ['history: broken instrument: the agent open made no agent entry'];
+    if (!attr('n1').some(a => a.value === 'true' && a.appended === false)) {
+        failures.push(`history: the agent overlay did not get disableglobalhistory "true" before appendChild (${JSON.stringify(attr('n1'))}), so an agent's visits and titles reach the user's history and suggestions (chrome-actor-05)`);
+    }
+    if (attr('n3').length) failures.push('history: a user overlay got disableglobalhistory, so the user\'s own visits would not be recorded');
+    return failures;
+}
+
+const CLAUSES = [scrollClause, editStateClause, budgetClause, historyClause];
 
 export async function checkTexts(texts) {
     const failures = [];
@@ -245,6 +262,11 @@ const PLANTS = [
         name: '59-WR-03: the budget measured in UTF-16 code units',
         plant: t => ({ ...t, api: replaceOnce(t.api, '    if (code < 0x80) {\n      bytes += 1;', '    if (code < 0x10000) {\n      bytes += 1;', 'budget bytes') }),
         expect: 'in UTF-8 bytes only answered done',
+    },
+    {
+        name: 'chrome-actor-05: agent overlays record global history',
+        plant: t => ({ ...t, api: replaceOnce(t.api, ', "disableglobalhistory": "true" }', ' }', 'agent attributes') }),
+        expect: 'did not get disableglobalhistory',
     },
 ];
 

@@ -3637,7 +3637,9 @@ export const PowerBrowserAPI = Object.freeze({
       // the login manager (autofill and capture of saved passwords), the user's WebExtensions tab host and every
       // saved-entry dropdown never attach to a page an agent drives (coordinator finding 3).
       // Quoted keys: the bridge check's attribute rule reads the stock (unquoted) keys above.
-      ...(agent === true ? { "usercontextid": String(userContextId), messagemanagergroup: AGENT_MESSAGE_MANAGER_GROUP, "autocompletepopup": "" } : {}),
+      // chrome-actor-05: disableglobalhistory keeps an agent's visits and page-chosen titles out of Places, which is
+      // not partitioned by container and feeds the user's address-bar suggestions (BrowsingContext.cpp UseGlobalHistory).
+      ...(agent === true ? { "usercontextid": String(userContextId), messagemanagergroup: AGENT_MESSAGE_MANAGER_GROUP, "autocompletepopup": "", "disableglobalhistory": "true" } : {}),
     })) {
       browser.setAttribute(name, value);
     }
