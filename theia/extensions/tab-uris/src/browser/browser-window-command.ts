@@ -215,7 +215,7 @@ export class BrowserWindowCommandContribution implements CommandContribution {
      * a non-web scheme off a channel that would refuse it silently.
      */
     protected requestStockTab(url: string): boolean {
-        if (url && !/^https?:\/\//i.test(url)) {
+        if (url && url !== NEW_TAB_URL && !/^https?:\/\//i.test(url)) {
             return false;
         }
         const request = new CustomEvent(GROUP_REQUEST_EVENT, {

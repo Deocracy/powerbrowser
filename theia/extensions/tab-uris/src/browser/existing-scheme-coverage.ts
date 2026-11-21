@@ -62,11 +62,12 @@ export function webviewUriOf(factoryId: string, options: unknown): URI | undefin
  * parse-then-retarget-scheme path does) -- brittle against any other
  * scheme:path-shaped `output:` URI a caller might construct by hand.
  * Reuses D-39/D-40's lenient-parse rule instead (same as `parseName`
- * above), which tolerates both forms, then undoes `OutputUri.create`'s
- * own `encodeURIComponent`.
+ * above), which tolerates both forms. The parsed path is already
+ * percent-decoded, which undoes `OutputUri.create`'s own
+ * `encodeURIComponent`; a second decode would throw on a name containing `%`.
  */
 function outputChannelNameOf(uri: URI): string {
-    return decodeURIComponent(parseName(uri));
+    return parseName(uri);
 }
 
 function parseWebviewPath(path: string): WebviewWidgetIdentifier {

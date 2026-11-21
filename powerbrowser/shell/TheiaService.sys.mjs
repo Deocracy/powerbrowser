@@ -97,6 +97,8 @@ export const TheiaService = {
   _port: null,
   _pid: null,
   _proc: null,
+  // The handle stop() signalled, kept after stop() clears _proc so stopAndReap can still wait on it.
+  _signalledProc: null,
   _browserElement: null,
   _nodePath: null,
   _backendMain: null,
@@ -153,6 +155,7 @@ export const TheiaService = {
   _errorShown: false,
   _restartInFlight: false,
   _recoveryProbeActive: false,
+  _recoveryProbeGeneration: 0,
 
   // 01-13: the classification of the error state CURRENTLY on screen -- true,
   // false, or null when there is no error state at all. Written and cleared at
@@ -406,6 +409,8 @@ export const TheiaService = {
     }
 
     if (this._proc && this._proc.exitCode == null) {
+      // stopAndReap waits on this handle: on a normal quit it runs after this method, which clears _proc below.
+      this._signalledProc = this._proc;
       const graceMs = PowerBrowserAPI.getIntPref("powerbrowser.sidecar.killGraceMs", 3000);
       try {
         void PowerBrowserAPI.killProcess(this._proc, graceMs).catch(() => {});
@@ -471,16 +476,23 @@ export const TheiaService = {
    * UPD-30 (Phase 54): the reap the quit and restart blocker awaits. stop() is idempotent and already
    * signals the sidecar; this waits on the Subprocess handle stop() signals (the same on every
    * platform, no pid probe), bounded by powerbrowser.sidecar.killGraceMs (the same default as stop())
-   * plus 500 ms. A handle that was never live is not waited on, so a stale pid is never touched. On
+   * plus 500 ms. That handle is the live one when this method is what calls stop() first, and the one
+   * stop() recorded when stop() already ran as the quit-application-granted observer, which is the
+   * order of every normal quit. A handle that was never live is not waited on, so a stale pid is never touched. On
    * timeout it logs the live pid loudly and resolves, and any failure resolves too, so an unkillable
    * child can never hold shutdown open or reject the blocker.
    */
   async stopAndReap() {
-    const proc = this._proc && this._proc.exitCode == null ? this._proc : null;
+    const live = this._proc && this._proc.exitCode == null ? this._proc : null;
     const pid = this._pid;
     const graceMs = PowerBrowserAPI.getIntPref("powerbrowser.sidecar.killGraceMs", 3000);
     try {
       this.stop();
+      // quit-application-granted comes before the quit-application phase this blocker runs in (nsAppStartup.cpp),
+      // so on a normal quit stop() has already signalled the sidecar and cleared _proc. The handle it signalled
+      // is the one to wait on; without it this method returned at once and no quit waited on the reap.
+      const signalled = this._signalledProc;
+      const proc = live || (signalled && signalled.exitCode == null ? signalled : null);
       if (proc === null) {
         return;
       }
@@ -1366,11 +1378,14 @@ export const TheiaService = {
    * squatter exiting, a transient condition resolving) is noticed and the
    * error layer auto-dismisses with no user action.
    */
-  async _recoveryProbeLoop() {
-    while (this._recoveryProbeActive && !this._shuttingDown) {
+  async _recoveryProbeLoop(generation) {
+    // The generation ends a loop that a stop and a later start have replaced. The flag alone cannot: a loop
+    // suspended in sleep or in _restart() across a stop-then-start sees it true again and would run beside the new one.
+    const live = () => this._recoveryProbeActive && this._recoveryProbeGeneration === generation && !this._shuttingDown;
+    while (live()) {
       const intervalMs = PowerBrowserAPI.getIntPref("powerbrowser.sidecar.recoveryProbeIntervalMs", 15000);
       await PowerBrowserAPI.sleep(intervalMs);
-      if (!this._recoveryProbeActive || this._shuttingDown) {
+      if (!live()) {
         return;
       }
       await this._restart();
@@ -1382,10 +1397,11 @@ export const TheiaService = {
       return;
     }
     this._recoveryProbeActive = true;
+    this._recoveryProbeGeneration += 1;
     // Fire-and-forget, same convention as _healthLoop() -- lives for as
     // long as _recoveryProbeActive stays true, checked at every await point --
     // and, 01-10, carrying the same one terminal handler for the same reason.
-    this._recoveryProbeLoop().catch(err => this.reportUnexpectedFailure(err));
+    this._recoveryProbeLoop(this._recoveryProbeGeneration).catch(err => this.reportUnexpectedFailure(err));
   },
 
   _stopRecoveryProbe() {

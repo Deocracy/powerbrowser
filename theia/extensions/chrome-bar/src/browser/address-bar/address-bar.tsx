@@ -1326,7 +1326,7 @@ export class AddressBar {
             this.icons[url] = icons[url];
         }
         this.rows = this.localMode()
-            ? this.rows.map(row => row.url && !row.engineName ? { ...row, icon: this.icons[row.url] ?? null } : row)
+            ? this.rows.map(row => row.url && !row.engineName && !row.icon ? { ...row, icon: this.icons[row.url] ?? null } : row)
             : this.composeVisibleRows();
         this.update();
     }
@@ -1534,8 +1534,8 @@ export class AddressBar {
      * The one http(s) route. With an active web tab, navigates it in place
      * and turns a refused or unacknowledged reply into a throw so the
      * caller's catch surfaces the carried in-bar failure row (no new copy);
-     * without one, the two-step opener resolves to WebTabOpenHandler at
-     * priority 1000 and opens a new web tab.
+     * without one, WebTabOpenHandler opens a new web tab on the URL string
+     * as given (a Theia URI round trip would decode its percent-escapes).
      */
     protected async navigateWebTab(url: string, tab = currentWebTab()): Promise<void> {
         if (tab) {
@@ -1545,9 +1545,7 @@ export class AddressBar {
             }
             return;
         }
-        const uri = new URI(url);
-        const handler = await this.openerService.getOpener(uri);
-        await handler.open(uri);
+        await this.webTabOpener.openUrl(url);
     }
 
     /**
@@ -1733,7 +1731,8 @@ export class AddressBar {
 
     /** BAR-08: opens `url` in a new tab after the current one; a failure's retry opens the same address again. */
     protected async openUrlInNewTab(url: string, foreground: boolean): Promise<void> {
-        const ref = currentWebTab() ?? this.shell.currentWidget;
+        // The main area's widget, never the focus-tracked one: a terminal or side view as ref puts the tab in its panel.
+        const ref = currentWebTab() ?? this.shell.mainPanel.currentTitle?.owner;
         this.inputValue = this.committedAddress;
         this.commitFailed = false;
         this.closeDropdown();
@@ -1836,17 +1835,22 @@ export class AddressBar {
         } catch {
             resolved = undefined;
         }
+        // A failed commit loads nothing, so no push replaces the typed text: the page's address becomes the
+        // committed one again and the text stays an edit (Esc restores it, a tab switch keeps it as a draft).
         if (resolved?.kind === 'no-engine') {
+            this.committedAddress = this.addressOf(this.draftOwner);
             this.showNoSearch(retry);
             return;
         }
         if (!resolved || (resolved.kind !== 'visit' && resolved.kind !== 'search') || !resolved.url || this.refusesSearch(resolved, visitOnly)) {
+            this.committedAddress = this.addressOf(this.draftOwner);
             this.showCommitFailure(retry);
             return;
         }
         try {
             await this.openCommittedUrl(resolved.url);
         } catch {
+            this.committedAddress = this.addressOf(this.draftOwner);
             this.showCommitFailure(retry);
         }
     };
@@ -1867,7 +1871,8 @@ export class AddressBar {
     protected async enterLocalRow(mode: AddressBarMode, newTab: boolean): Promise<void> {
         const value = this.inputValue;
         if (!this.highlightedRow() && this.dropdownArmed) {
-            await this.runLocalQuery(mode);
+            // Joins the pending debounced list (or schedules one): a direct run would be cancelled when that timer fires.
+            await this.debouncedLocalQuery();
         }
         const row = this.highlightedRow();
         if (row && this.inputValue === value) {
@@ -1919,7 +1924,11 @@ export class AddressBar {
             if (!this.dropdownOpen || this.rows.length === 0) {
                 return;
             }
-            this.highlightKey = nextHighlight(this.highlightKeys(), this.highlightKey, e.key === 'ArrowDown' ? 1 : -1);
+            const keys = this.highlightKeys();
+            // No highlight yet (a zero-query list, the "@" list): the first move lands on the first or last row.
+            this.highlightKey = this.highlightKey === undefined && keys.length
+                ? keys[e.key === 'ArrowDown' ? 0 : keys.length - 1]
+                : nextHighlight(keys, this.highlightKey, e.key === 'ArrowDown' ? 1 : -1);
             this.update();
             this.scrollHighlightIntoView();
         } else if (e.key === 'Enter') {
@@ -2135,7 +2144,7 @@ export class AddressBar {
             return;
         }
         // With no tab to open after, a new-tab one-off searches in place.
-        const ref = target !== 'current' ? currentWebTab() ?? this.shell.currentWidget : undefined;
+        const ref = target !== 'current' ? currentWebTab() ?? this.shell.mainPanel.currentTitle?.owner : undefined;
         if (!ref) {
             await this.openSearchUrl(resolved.url);
             return;
@@ -2145,6 +2154,7 @@ export class AddressBar {
             widget = await this.webTabOpener.openInBackground(resolved.url, ref);
         } catch (error) {
             console.error('[@powerbrowser/chrome-bar] opening a background tab failed:', error instanceof Error ? error.name : typeof error);
+            this.showCommitFailure(() => this.runOneOff(name, target, text));
             return;
         }
         await this.joinActiveGroup(widget);

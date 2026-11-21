@@ -167,7 +167,14 @@ export function SitePanel(props: SitePanelProps): React.ReactElement {
                     <span className='pb-site-panel-row-label'>{CHROME_BAR_COPY.clearDataRow}</span>
                 </button>
             </div>}
-            <button type='button' className='pb-site-panel-close' onMouseDown={e => e.preventDefault()} onClick={onClose}>
+            <button
+                type='button'
+                className='pb-site-panel-close'
+                aria-label={CHROME_BAR_COPY.sitePanelClose}
+                title={CHROME_BAR_COPY.sitePanelClose}
+                onMouseDown={e => e.preventDefault()}
+                onClick={onClose}
+            >
                 <span className='codicon codicon-close' aria-hidden='true' />
             </button>
         </div>,

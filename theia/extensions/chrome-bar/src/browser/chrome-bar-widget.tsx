@@ -53,6 +53,7 @@ import {
     setOpenDownloadsPanel,
     setOpenFindBar,
     setOpenStockPage,
+    setRepaintChromeBar,
     setReopenLastClosedTab,
     setToggleBookmarksToolbar,
     setToggleFullScreen,
@@ -520,6 +521,7 @@ export class ChromeBarWidget extends ReactWidget {
         setOpenClearHistory(() => this.openClearHistoryPicker());
         setToggleFullScreen(() => void this.toggleFullScreenRow());
         setOpenStockPage(page => void this.openStockPageRow(page));
+        setRepaintChromeBar(() => this.update());
         this.toDispose.push(this.webTabs.onDidChangeDownloads(rows => {
             this.downloadRows = rows;
             this.update();
@@ -532,10 +534,12 @@ export class ChromeBarWidget extends ReactWidget {
         }));
         // PROMPT-08: chrome pushes a hovered link only for an overlay; a tab this frontend no longer has is ignored.
         this.toDispose.push(this.webTabs.onPush('overLink', detail => {
-            if (typeof detail.tabId !== 'string' || !this.webTabs.widgetOf(detail.tabId)) {
+            const url = typeof detail.url === 'string' ? detail.url : '';
+            // A clear always applies: chrome names the tab whose link it showed, which may be a tab just closed.
+            if (url && (typeof detail.tabId !== 'string' || !this.webTabs.widgetOf(detail.tabId))) {
                 return;
             }
-            this.pageStatus = typeof detail.url === 'string' ? detail.url : '';
+            this.pageStatus = url;
             this.update();
         }));
         // NAV-04: toggling either Home setting updates the bar live, with no reload.
@@ -798,7 +802,8 @@ export class ChromeBarWidget extends ReactWidget {
                 tab.focusPage();
                 return;
             }
-            const ref = tab ?? this.shell.currentWidget;
+            // The main area's current tab, never the focus tracker's widget: a side or bottom widget would take the new tab into its area.
+            const ref = tab ?? this.shell.mainPanel.currentTitle?.owner;
             const widget = ref ? await this.webTabOpener.openInBackground(url, ref) : await this.webTabOpener.openUrl(url);
             await this.addressBar.joinActiveGroup(widget);
             if (target !== 'background') {
@@ -1355,6 +1360,10 @@ export class ChromeBarWidget extends ReactWidget {
         this.stateSubscription = undefined;
         // The find bar belongs to the tab it was opened on; the query stays in that tab.
         this.setFindOpen(false);
+        // The Downloads button and command need a web tab; without one an open panel could not be closed.
+        if (!(widget instanceof WebTabWidget)) {
+            this.downloadsOpen = false;
+        }
         if (widget instanceof WebTabWidget) {
             let wasLoading = widget.loading;
             this.stateSubscription = widget.onDidChangeState(state => {
@@ -2355,6 +2364,9 @@ export class ChromeBarContribution implements FrontendApplicationContribution {
         window.addEventListener('resize', () => this.scheduleDragRegions());
         new MutationObserver(() => this.scheduleDragRegions())
             .observe(this.tabStrip.node, { childList: true, subtree: true, characterData: true, attributes: true });
+        // A control appearing or leaving in the bar moves its gaps, which are drag handles too.
+        new MutationObserver(() => this.scheduleDragRegions())
+            .observe(this.barWidget.node, { childList: true, subtree: true });
         // TAB-04 (34-02): an overflowing row scrolls its tabs under the handles; scroll does not bubble, so capture.
         this.tabStrip.node.addEventListener('scroll', () => this.scheduleDragRegions(), true);
         void this.webTabs.request({ kind: 'windowChrome' }).then(reply => {

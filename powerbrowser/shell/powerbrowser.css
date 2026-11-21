@@ -171,6 +171,7 @@ body {
   margin: 0;
 }
 
+#powerbrowser-diagnostics-copy,
 #powerbrowser-diagnostics-close {
   font-family: sans-serif;
   font-size: 1em;
@@ -182,6 +183,7 @@ body {
   cursor: pointer;
 }
 
+#powerbrowser-diagnostics-copy:hover,
 #powerbrowser-diagnostics-close:hover {
   background: #444;
 }
@@ -207,6 +209,7 @@ body {
  */
 #powerbrowser-error-retry:focus-visible,
 #powerbrowser-error-diagnostics:focus-visible,
+#powerbrowser-diagnostics-copy:focus-visible,
 #powerbrowser-diagnostics-close:focus-visible {
   outline: 2px solid #e8e8e8;
   outline-offset: 2px;
@@ -232,13 +235,17 @@ body {
  * decoration available means the OS keeps its bar and this box is gone.
  * The frontend reads the box's width over the channel and keeps its top row
  * clear of it.
+ *
+ * Above the loading (1), error (2) and diagnostics (3) layers: each is
+ * full-inset and opaque, and with the OS title bar gone these buttons are the
+ * only close, minimize and maximize controls the window has in those states.
  */
 #powerbrowser-window-controls {
   position: fixed;
   top: 0;
   right: 0;
   height: 33px;
-  z-index: 1;
+  z-index: 4;
   display: flex;
   align-items: center;
   padding-inline: 6.5px 10px;

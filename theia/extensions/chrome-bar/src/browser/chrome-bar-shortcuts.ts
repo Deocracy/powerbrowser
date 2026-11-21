@@ -28,6 +28,7 @@ import {
     openFindBarFor,
     reopenLastClosedTab,
     toggleBookmarksToolbar,
+    withBarRepaint,
 } from './chrome-bar-commands';
 import { AddressBar } from './address-bar/address-bar';
 import { TabStripWidget } from './tab-strip-widget';
@@ -209,9 +210,9 @@ export class ChromeBarShortcutRelay implements FrontendApplicationContribution {
         ['zoomOut', tab => tab.zoomOut()],
         ['zoomReset', tab => tab.zoomReset()],
         ['muteToggle', tab => tab.setMuted(!tab.audioMuted)],
-        ['printOpen', tab => tab.print()],
+        ['printOpen', tab => withBarRepaint(tab.print())],
         // PAGE-08 (32-05): the 32-02 focus stub is upgraded; the Theia save dialog picks the destination, chrome writes the copy.
-        ['saveOpen', tab => tab.savePage(chooseSaveDestination)],
+        ['saveOpen', tab => withBarRepaint(tab.savePage(chooseSaveDestination))],
         // PAGE-10 (32-08): the widget method, never a kind; the reader toggle has no key (the button and command only).
         ['viewSource', tab => tab.viewSource()],
         ['devtoolsOpen', tab => tab.openDevtools()],

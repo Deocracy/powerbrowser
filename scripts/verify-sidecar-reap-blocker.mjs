@@ -134,9 +134,9 @@ const hangs = (promise, ms = 400) => Promise.race([promise.then(v => ({ v }), e 
 
 async function reapScenarios(method, fail, graceFromStop) {
     const GRACE = graceFromStop ?? 3000;
-    const run = async ({ proc, waitResult = true, waitThrows = false, stopThrows = false }) => {
+    const run = async ({ proc, signalled = null, waitResult = true, waitThrows = false, stopThrows = false }) => {
         const calls = { stop: 0, waits: [], logs: [], probed: false };
-        const self = { _proc: proc, _pid: 4242, stop() { calls.stop += 1; if (stopThrows) throw new Error('stop failed'); } };
+        const self = { _proc: proc, _signalledProc: signalled, _pid: 4242, stop() { calls.stop += 1; if (stopThrows) throw new Error('stop failed'); } };
         const boundary = {
             getIntPref: (k, d) => d,
             waitForExit: async (p, ms) => { calls.waits.push([p, ms]); if (waitThrows) throw new Error('wait failed'); return waitResult; },
@@ -165,6 +165,9 @@ async function reapScenarios(method, fail, graceFromStop) {
         ['stop throws', { proc: live, stopThrows: true }, () => null],
         ['no handle was held', { proc: null }, r => (r.calls.waits.length === 0 && !r.calls.probed ? null : 'waits or probes although no handle was live')],
         ['handle already exited (stale pid)', { proc: { exitCode: 0 } }, r => (r.calls.waits.length === 0 && !r.calls.probed ? null : 'waits or probes a pid that nothing signalled (stale pid)')],
+        // quit-application-granted runs stop() before the blocker's phase, so on a normal quit _proc is already null here.
+        ['stop() already ran and signalled a live handle', { proc: null, signalled: live }, r => (r.calls.waits.length === 1 && r.calls.waits[0][0] === live && r.calls.waits[0][1] > GRACE && !r.calls.probed ? null : 'does not wait on the handle stop() signalled, so a normal quit never waits on the reap (signalled handle)')],
+        ['stop() already ran and its handle has exited', { proc: null, signalled: { exitCode: 0 } }, r => (r.calls.waits.length === 0 && !r.calls.probed ? null : 'waits or probes a signalled handle that has already exited (stale pid)')],
     ];
     for (const [label, input, extra] of cases) {
         const r = await run(input);
@@ -329,6 +332,8 @@ async function selfTest() {
     };
     const REAP_CALL = 'await PowerBrowserAPI.waitForExit(proc, graceMs + 500)';
     const LIVE_TEST = 'this._proc && this._proc.exitCode == null ? this._proc : null';
+    const SIGNALLED_READ = 'const signalled = this._signalledProc;';
+    const SIGNALLED_TEST = 'signalled && signalled.exitCode == null ? signalled : null';
     const plants = [
         ['registration call missing from start()', { theia: once(theia, `PowerBrowserAPI.${REGISTER_FN}(`, 'PowerBrowserAPI.noopRegistration(', 'registration') }, 'registration', REGISTER_FN],
         ['registration only named in a comment', { theia: once(theia, `PowerBrowserAPI.${REGISTER_FN}(reapBlocker);`, `// PowerBrowserAPI.${REGISTER_FN}(reapBlocker);`, 'comment') }, 'registration', REGISTER_FN],
@@ -337,6 +342,8 @@ async function selfTest() {
         ['reap polls a bare pid instead of waiting on the handle', { theia: once(theia, REAP_CALL, 'PowerBrowserAPI.signalBarePid(pid, 0)', 'poll') }, 'reap', 'signalBarePid'],
         ['reap wait call only in a comment', { theia: once(theia, REAP_CALL, `false /* ${REAP_CALL} */`, 'wait comment') }, 'reap', 'waitForExit'],
         ['reap waits on a stale handle', { theia: once(theia, LIVE_TEST, 'this._proc', 'live test') }, 'reap', 'stale pid'],
+        ['reap ignores the handle stop() signalled', { theia: once(theia, SIGNALLED_READ, 'const signalled = null;', 'signalled read') }, 'reap', 'signalled handle'],
+        ['reap waits on a signalled handle that has exited', { theia: once(theia, SIGNALLED_TEST, 'signalled', 'signalled test') }, 'reap', 'stale pid'],
         ['reap rejects when the wait throws', { theia: regex(theia, /(async stopAndReap\(\)[\s\S]*?)\} catch \(err\) \{[\s\S]*?\n    \}\n  \},/, '$1} finally {\n    }\n  },', 'catch') }, 'reap', 'rejects'],
         ['reap grace default differs from stop()', { theia: regex(theia, /(async stopAndReap\(\)[\s\S]*?"powerbrowser\.sidecar\.killGraceMs", )3000/, '$15000', 'default') }, 'reap', '5000'],
         ['reap deadline equals the kill grace', { theia: once(theia, REAP_CALL, 'await PowerBrowserAPI.waitForExit(proc, graceMs)', 'deadline') }, 'reap', 'does not exceed'],

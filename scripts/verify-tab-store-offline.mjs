@@ -262,7 +262,11 @@ try {
         await api.ensureTabStore();
         const makeWindow = priv => {
             const listeners = {};
-            return { private: priv, listeners, gBrowser: { tabs: [], tabContainer: { addEventListener: (n, f) => { listeners[n] = f; }, removeEventListener() {} } } };
+            // windowListeners holds what the triggers add on the window itself (its unload); `removed` counts the
+            // tab container's removeEventListener calls, which is how the stop function is seen to reach it or not.
+            const win = { private: priv, listeners, windowListeners: {}, removed: 0, addEventListener: (n, f) => { win.windowListeners[n] = f; }, removeEventListener() {} };
+            win.gBrowser = { tabs: [], tabContainer: { addEventListener: (n, f) => { listeners[n] = f; }, removeEventListener: () => { win.removed += 1; } } };
+            return win;
         };
         const makeTab = (win, url) => {
             const tab = { linkedBrowser: { currentURI: { spec: url } }, ownerDocument: { defaultView: win }, label: url, closing: false };
@@ -330,6 +334,17 @@ try {
             await sleep(20);
             expect((await rows()).find(r => r.uri === dupOwn)?.closed_at !== null, 'NG-005: TabClose did not keep the row as closed history');
             expect(api.findStockTabBrowser(k1)?.tab === moved, 'findStockTabBrowser did not find the tab by its key');
+            // A closed stock window's tab container leaves the attach list at its unload, so it is not held until quit:
+            // the stop function reaches the container of the window still open and not the closed one's.
+            const gone = makeWindow(false);
+            const kept = makeWindow(false);
+            env.windows = [gone, kept];
+            const stopBoth = api.startTabStoreTriggers();
+            await sleep(10);
+            expect(typeof gone.windowListeners.unload === 'function', 'the triggers add no unload listener to a stock window, so a closed window stays in the attach list');
+            gone.windowListeners.unload?.();
+            stopBoth();
+            expect(gone.removed === 0 && kept.removed > 0, `a closed stock window's tab container was still held when the triggers stopped (closed window: ${gone.removed} removals, open window: ${kept.removed})`);
             await closeAll();
         } finally {
             for (const stop of stopTabStoreTriggers.splice(0)) {

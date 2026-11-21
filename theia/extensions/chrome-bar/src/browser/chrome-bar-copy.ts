@@ -152,6 +152,7 @@ export const CHROME_BAR_COPY = Object.freeze({
     siteConnectionWarning: (host: string) => `There is a security problem with ${host}`,
     siteConnectionLocal: (host: string) => `Local page on ${host}`,
     siteUnavailable: (subject: string) => `${subject} can't show site information for this page. Try reloading the page.`,
+    sitePanelClose: 'Close site information',
     // Phase 31 plan 02 (SITE-04..06): the panel's permission rows and certificate block.
     permissionsHeading: 'Permissions',
     noPermissions: 'No special permissions set for this site',

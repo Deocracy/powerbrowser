@@ -1675,6 +1675,8 @@ export function isCurrentSessionTabId(id: string): boolean {
 /** NG-008: opener options a Panorama card passes to reopen a web tab on the row it already has. */
 export interface WebTabOpenerOptions extends OpenerOptions {
     rowKey?: string;
+    /** The page URL verbatim: a Theia URI percent-decodes on parse, so uri.toString(true) can differ from it. */
+    url?: string;
 }
 
 /**
@@ -1785,7 +1787,7 @@ export class WebTabOpenHandler implements OpenHandler, FrontendApplicationContri
     }
 
     async open(uri: URI, options?: WebTabOpenerOptions): Promise<WebTabWidget> {
-        return this.openUrl(uri.toString(true), options?.rowKey);
+        return this.openUrl(options?.url ?? uri.toString(true), options?.rowKey);
     }
 
     async openUrl(url: string, rowKey?: string): Promise<WebTabWidget> {
