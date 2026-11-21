@@ -248,8 +248,9 @@ async function clauseC() {
 function declarations(sf, names) {
     const out = [];
     for (const st of sf.statements) {
-        if (ts.isVariableStatement(st) && st.declarationList.declarations.some(d => names.includes(d.name.getText()))) out.push(st.getText());
-        else if (ts.isFunctionDeclaration(st) && names.includes(st.name?.text)) out.push(st.getText());
+        const text = st.getText().replace(/^export\s+/, '');
+        if (ts.isVariableStatement(st) && st.declarationList.declarations.some(d => names.includes(d.name.getText()))) out.push(text);
+        else if (ts.isFunctionDeclaration(st) && names.includes(st.name?.text)) out.push(text);
     }
     return out;
 }
@@ -284,9 +285,132 @@ async function clauseD() {
     return { fails: checkMountErrorsBounded(readFileSync(ENTRY, 'utf8')) };
 }
 
+// ---------------------------------------------------------------- e. a failed bootstrap can be retried
+
+/** A value every property, call and assignment of which succeeds and yields another such value (never a thenable). */
+function anything() {
+    const target = function () {};
+    return new Proxy(target, {
+        get: (_t, key) => (key === 'then' ? undefined : key === Symbol.toPrimitive ? () => 'x' : anything()),
+        set: () => true,
+        apply: () => anything(),
+        construct: () => anything(),
+    });
+}
+
+/**
+ * Runs the entry's bootstrap, with the top-level functions and variables it reads, against stubs: every free
+ * identifier (Orca's functions, document, React) is a counting stub, `failing` throws on its first call. Returns the
+ * call counts and the outcome of a first and a second bootstrap call.
+ */
+async function runBootstrapTwice(entryText, failing) {
+    const sf = parse(entryText, 'pb-pane-mount.tsx');
+    const boot = fn(sf, 'bootstrap');
+    if (!boot) return null;
+    const steps = installCalls(entryText);
+    const stubbed = new Set(steps.map(s => s.path.split('.')[0]));
+    const topFns = sf.statements.filter(ts.isFunctionDeclaration).map(f => f.name?.text).filter(Boolean);
+    const topVars = sf.statements.filter(ts.isVariableStatement).flatMap(st => st.declarationList.declarations.map(d => d.name.getText()));
+    const isJsxTag = n => n.parent && (ts.isJsxOpeningElement(n.parent) || ts.isJsxSelfClosingElement(n.parent) || ts.isJsxClosingElement(n.parent)) && n.parent.tagName === n;
+    // The closure of bootstrap over top-level declarations, less the install steps (stubs stand for them) and JSX tags.
+    const own = new Set(['bootstrap']);
+    for (let changed = true; changed;) {
+        changed = false;
+        for (const name of [...own]) {
+            const node = fn(sf, name) ?? sf.statements.find(st => ts.isVariableStatement(st) && st.declarationList.declarations.some(d => d.name.getText() === name));
+            if (!node) continue;
+            walk(node, n => {
+                if (ts.isIdentifier(n) && !isJsxTag(n) && !own.has(n.text) && !stubbed.has(n.text) && (topFns.includes(n.text) || topVars.includes(n.text))) { own.add(n.text); changed = true; }
+            });
+        }
+    }
+    const source = declarations(sf, [...own]).join('\n');
+    const js = ts.transpileModule(`${source}\nreturn bootstrap;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React } }).outputText;
+    const counts = {};
+    let failedOnce = false;
+    const recorder = path => new Proxy(function () {}, {
+        get: (_f, k) => (k === 'then' ? undefined : typeof k === 'string' ? recorder(`${path}.${k}`) : undefined),
+        set: () => true,
+        apply: () => {
+            counts[path] = (counts[path] ?? 0) + 1;
+            if (path === failing && !failedOnce) { failedOnce = true; throw new Error(`planted ${path}`); }
+            return anything();
+        },
+    });
+    const env = new Proxy({}, {
+        has: (_t, key) => typeof key === 'string' && !(key in globalThis),
+        get: (_t, key) => (typeof key === 'string' ? recorder(key) : undefined),
+    });
+    // The entry is the tree's own source, evaluated only against stubs (no Orca module, no DOM).
+    const bootstrap = new Function('env', `with (env) { ${js} }`)(env);
+    const outcome = async p => { try { await p; return 'resolved'; } catch { return 'rejected'; } };
+    const first = await outcome(bootstrap({ pairing: 'x' }));
+    const second = await outcome(bootstrap({ pairing: 'x' }));
+    return { counts, first, second };
+}
+
+/**
+ * The calls bootstrap makes after its session-only assertion, to a function that is not bootstrap's own local or a
+ * JavaScript global: the steps that install into the document. Each carries its group: the step()/once() call it
+ * runs inside (calls of one group legitimately repeat together when that group is retried).
+ */
+export function installCalls(entryText) {
+    const sf = parse(entryText, 'pb-pane-mount.tsx');
+    const boot = fn(sf, 'bootstrap');
+    if (!boot) return [];
+    const after = boot.getText().indexOf('assertSessionOnly()');
+    if (after < 0) return [];
+    const locals = new Set();
+    walk(boot, n => { if ((ts.isVariableDeclaration(n) || ts.isParameter(n)) && ts.isIdentifier(n.name)) locals.add(n.name.text); });
+    const out = [];
+    for (const c of calls(boot)) {
+        if (c.node.getStart() - boot.getStart() <= after || !/^[A-Za-z_$][\w$]*(\.[\w$]+)*$/.test(c.callee)) continue;
+        const root = c.callee.split('.')[0];
+        if (['step', 'once'].includes(root) || locals.has(root) || root in globalThis || out.some(s => s.path === c.callee)) continue;
+        let group = c.node.getStart();
+        for (let p = c.node.parent; p && p !== boot; p = p.parent) {
+            if (ts.isCallExpression(p) && ts.isIdentifier(p.expression) && ['step', 'once'].includes(p.expression.text)) { group = p.getStart(); break; }
+        }
+        out.push({ path: c.callee, group });
+    }
+    return out;
+}
+
+/**
+ * Clause e (overlay-renderer-03), run, not read: for each install step bootstrap calls after its session-only
+ * assertion (derived from the entry), the step is made to throw once; the first bootstrap must reject, a second call
+ * must run again and resolve, and every install step outside the failed one's group must have run exactly once in
+ * total (nothing wrapped or mounted twice). Zero install steps is red "parser blind".
+ */
+export async function checkBootstrapRetry(entryText) {
+    const steps = installCalls(entryText);
+    if (!steps.length) return ['no install step found after the session-only assertion in bootstrap (parser blind)'];
+    const fails = [];
+    for (const failing of steps) {
+        const run = await runBootstrapTwice(entryText, failing.path);
+        if (!run) return ['bootstrap is absent from the entry (source moved)'];
+        if (run.first !== 'rejected') { fails.push(`a throw from ${failing.path} did not reject the first bootstrap`); continue; }
+        if (run.second !== 'resolved' || (run.counts.pairSessionOnly ?? 0) < 2) {
+            fails.push(`after ${failing.path} failed once, a second bootstrap did not run again and resolve: the rejected attempt is cached`);
+            continue;
+        }
+        for (const s of steps) {
+            const n = run.counts[s.path] ?? 0;
+            const good = s === failing ? n === 2 : s.group === failing.group ? n >= 1 && n <= 2 : n === 1;
+            if (!good) fails.push(`after ${failing.path} failed once, ${s.path} ran ${n} time(s) across the retry: installed twice or skipped`);
+        }
+    }
+    return fails;
+}
+
+async function clauseE() {
+    if (!(await loadTs())) return { skip: 'theia/node_modules/typescript is absent (install Theia)' };
+    return { fails: await checkBootstrapRetry(readFileSync(ENTRY, 'utf8')) };
+}
+
 // ---------------------------------------------------------------- driver
 
-const CLAUSES = [['a', clauseA], ['b', clauseB], ['c', clauseC], ['d', clauseD]];
+const CLAUSES = [['a', clauseA], ['b', clauseB], ['c', clauseC], ['d', clauseD], ['e', clauseE]];
 
 async function main() {
     let failed = 0;
@@ -354,6 +478,17 @@ async function selfTest() {
         ok('d: the unbounded plant applies', unbounded !== entry);
         ok('d: recordError that only pushes (pre-fix) is red, naming it', checkMountErrorsBounded(unbounded).some(f => /grows without bound/.test(f)));
         ok('d: a missing recordError is red "source moved"', checkMountErrorsBounded(entry.replace(/function recordError\(/g, 'function recordFailure(')).some(f => /source moved/.test(f)));
+        // e.
+        const steps = installCalls(entry);
+        ok(`e: install steps derived from bootstrap (${steps.map(s => s.path).join(', ')})`, steps.length >= 4);
+        ok('e: control green on the tree', (await checkBootstrapRetry(entry)).length === 0);
+        const cached = entry.replace(/\}\)\(\)\.catch\(\(error: unknown\) => \{\n\s*booting = null\n\s*throw error\n\s*\}\)/, '})()');
+        ok('e: the cached-rejection plant applies', cached !== entry);
+        ok('e: a rejected bootstrap kept for the document (pre-fix) is red, naming it', (await checkBootstrapRetry(cached)).some(f => /the rejected attempt is cached/.test(f)));
+        const twice = entry.replace(/await once\(/g, 'await step(');
+        ok('e: the install-twice plant applies', twice !== entry);
+        ok('e: a retry that re-runs completed install steps is red, naming it', (await checkBootstrapRetry(twice)).some(f => /installed twice or skipped/.test(f)));
+        ok('e: no install step is red "parser blind"', (await checkBootstrapRetry(entry.replace(/assertSessionOnly\(\)/g, 'assertSessionOnlyX()'))).some(f => /parser blind/.test(f)));
         ok('c: no store listener is red "parser blind"', checkStoreListeners(entry.replace(/useAppStore\.subscribe\(\(state, prior\)/, 'useAppStore.subscribeTo((state, prior)')).some(f => /parser blind/.test(f)));
     }
     console.log(failed ? `${NAME} self-test: FAIL -- ${failed} case(s)` : `${NAME} self-test: PASS -- every planted fault went red naming it`);

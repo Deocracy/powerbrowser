@@ -667,6 +667,17 @@ async function step<T>(name: string, run: () => T | Promise<T>): Promise<T> {
   }
 }
 
+// Audit overlay-renderer-03: the steps that install something into this document (Orca's preload API, the wrappers
+// around it, the store subscription, the services root) run once; a bootstrap retried after a failed attempt skips
+// those that already completed, so nothing is wrapped or mounted twice.
+const installedSteps = new Set<string>()
+
+async function once(name: string, run: () => unknown): Promise<void> {
+  if (installedSteps.has(name)) return
+  await step(name, run)
+  installedSteps.add(name)
+}
+
 /**
  * Once per document: session-only pairing (the offer read from orcad's web-client URL, C64-5), the web preload
  * API, then the hidden services root. Orca's device-key support is preset to session-no-ed25519 immediately
@@ -679,35 +690,45 @@ export function bootstrap(options: {
   /** Records the user's write in PowerBrowser's profile. */
   rememberPrimarySelectionPaste?: (value: boolean) => void
 }): Promise<void> {
+  // A rejected attempt is not kept: a later call (the host's retry or Reconnect) runs bootstrap again.
   booting ??= (async () => {
     presetSessionOnly()
     await initWebDeviceKeySupport().catch(noop)
     await step('pairing', () => pairSessionOnly(options.pairing))
     if (!assertSessionOnly()) throw new Error('session-only pairing unavailable')
-    await step('installWebPreloadApi', () => installWebPreloadApi())
-    staleNavigationEchoes()
+    await once('installWebPreloadApi', () => installWebPreloadApi())
+    await once('navigation echoes', () => staleNavigationEchoes())
     rememberedPrimarySelectionPaste = options.rememberedPrimarySelectionPaste
-    observePrimarySelectionPasteChoice(options.rememberPrimarySelectionPaste)
-    hostedTerminalKeys()
-    await step('services root', () => {
+    // Installed once, with the first attempt's callback (the host passes the same one on every call).
+    await once('selection paste choice', () => observePrimarySelectionPasteChoice(options.rememberPrimarySelectionPaste))
+    await once('terminal keys', () => hostedTerminalKeys())
+    await once('services root', () => {
       const host = document.createElement('div')
       host.hidden = true
       host.setAttribute('data-pb-orca-services', '')
       document.body.appendChild(host)
-      ReactDOMClient.createRoot(host, rootOptions('services')).render(
-        <Providers>
-          <Services />
-          {/* A8: git-status polling and the editor watch (ActiveWorkspaceSyncGate is inside). */}
-          <AppBackgroundServices />
-          <PinnedTabCloseDialog />
-          <RunningTerminalCloseDialog />
-          <ResumeOffer />
-          <RootDialogs />
-        </Providers>
-      )
+      try {
+        ReactDOMClient.createRoot(host, rootOptions('services')).render(
+          <Providers>
+            <Services />
+            {/* A8: git-status polling and the editor watch (ActiveWorkspaceSyncGate is inside). */}
+            <AppBackgroundServices />
+            <PinnedTabCloseDialog />
+            <RunningTerminalCloseDialog />
+            <ResumeOffer />
+            <RootDialogs />
+          </Providers>
+        )
+      } catch (error) {
+        host.remove()
+        throw error
+      }
     })
     isBooted = true
-  })()
+  })().catch((error: unknown) => {
+    booting = null
+    throw error
+  })
   return booting
 }
 
