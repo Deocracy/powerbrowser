@@ -9,7 +9,7 @@
 //   const r = takeLiveLock(import.meta.url);          // null: this process holds the lock, go on
 //   if (r !== null) process.exit(r);                  // a re-run under the lock finished with this status
 //
-// flock -o closes the lock descriptor in the re-run, so an orcad or browser the row leaves behind cannot hold the
+// flock -o closes the lock descriptor in the re-run, so a server or browser the row leaves behind cannot hold the
 // lock after the row ends. The re-run's exit status (0, 1 or 77) is passed on unchanged.
 //
 // No top-level side effects. Node built-ins only.

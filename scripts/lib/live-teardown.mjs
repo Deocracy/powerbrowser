@@ -9,7 +9,7 @@
 //
 // The function must be synchronous (an 'exit' listener cannot wait) and must tolerate being run after a partial setup.
 // A signal handler removes itself and re-raises the signal only when no other listener is left, so firefox-bidi.mjs's
-// scratch-HOME handler and orca-run.mjs's orcad handler, which follow the same rule, still end the process.
+// scratch-HOME handler and the run helper's own process handler, which follow the same rule, still end the process.
 //
 // No top-level side effects. Node built-ins only.
 
