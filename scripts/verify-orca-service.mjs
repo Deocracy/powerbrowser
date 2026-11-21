@@ -975,7 +975,8 @@ function staticClauses(paths, env, skips) {
     if (/^\s*import\s/m.test(service)) fails.push('OrcaService.sys.mjs has a static import');
     if (!service.includes('PowerBrowserProcesses.spawnProcessExact(')) fails.push('OrcaService.sys.mjs does not spawn through PowerBrowserProcesses.spawnProcessExact');
     if (/\.spawnProcess\(/.test(service)) fails.push('OrcaService.sys.mjs calls the inheriting spawnProcess; orcad must get an exact environment');
-    for (const name of [...env.ORCAD_ENV_ALLOWLIST, ...env.ORCAD_FIXED_ENV_NAMES]) {
+    const everyAllowlisted = Object.entries(env).filter(([k, v]) => /^ORCAD_ENV_ALLOWLIST\w*$/.test(k) && Array.isArray(v)).flatMap(([, v]) => v);
+    for (const name of [...everyAllowlisted, ...env.ORCAD_FIXED_ENV_NAMES]) {
         if (new RegExp(`(["'\`])${name}\\1`).test(service)) fails.push(`environment name ${name} is spelled as a literal in OrcaService.sys.mjs, outside OrcaEnv`);
     }
 
@@ -996,12 +997,18 @@ function staticClauses(paths, env, skips) {
         if (/PTY/i.test(name)) fails.push(`OrcaEnv.ORCAD_FIXED_ENV_NAMES carries ${name}: a pty switch reached orcad's environment, which D-31 keeps as Phase 62 left it`);
     }
     if (/pty/i.test(String(env.buildOrcadEnv))) fails.push("OrcaEnv.buildOrcadEnv mentions a PTY endpoint: a pty switch reached orcad's environment, which D-31 keeps as Phase 62 left it");
-    for (const name of env.ORCAD_ENV_ALLOWLIST) {
-        if (isSteeringName(name) && !Object.hasOwn(DELIBERATE_STEERING, name)) fails.push(`OrcaEnv.ORCAD_ENV_ALLOWLIST inherits ${name}, a steering variable`);
+    // Every allowlist orcad inherits from, derived from OrcaEnv's exports (ORCAD_ENV_ALLOWLIST and its per-platform
+    // lists such as ORCAD_ENV_ALLOWLIST_WIN32).
+    const allowlists = Object.entries(env).filter(([k, v]) => /^ORCAD_ENV_ALLOWLIST\w*$/.test(k) && Array.isArray(v));
+    const inherited = new Set(allowlists.flatMap(([, v]) => v));
+    for (const [list, names] of allowlists) {
+        for (const name of names) {
+            if (isSteeringName(name) && !Object.hasOwn(DELIBERATE_STEERING, name)) fails.push(`OrcaEnv.${list} inherits ${name}, a steering variable`);
+        }
     }
     for (const name of Object.keys(DELIBERATE_STEERING)) {
         if (!isSteeringName(name)) fails.push(`DELIBERATE_STEERING names ${name}, which the steering rule does not report: the list is wrong`);
-        if (!env.ORCAD_ENV_ALLOWLIST.includes(name)) fails.push(`DELIBERATE_STEERING names ${name}, which OrcaEnv.ORCAD_ENV_ALLOWLIST no longer holds: remove it from the list`);
+        if (!inherited.has(name)) fails.push(`DELIBERATE_STEERING names ${name}, which no OrcaEnv.ORCAD_ENV_ALLOWLIST* list holds any longer: remove it from the list`);
     }
 
     // 4. The port default.
@@ -1262,7 +1269,12 @@ function selfTestPlants(paths, fixtureCodes) {
         { name: 'bridge files removed after orcad is signalled', naming: 'orcad-data-root at stop call', file: paths.orcaService, edit: then(swap('[OrcaEnv.ORCAD_DATA_ROOT_FILE, OrcaEnv.ORCA_WEB_PAIRING_FILE', '[OrcaEnv.ORCA_WEB_PAIRING_FILE'), swap('    this._state = "stopped";\n    this._pid = null;', '    if (this._bridgeDir) {\n      try {\n        await PowerBrowserAPI.removeStateFile(OrcaEnv.bridgeFileFor(this._bridgeDir, OrcaEnv.ORCAD_DATA_ROOT_FILE, this._bridgePlatform));\n      } catch {\n        // Best-effort.\n      }\n    }\n    this._state = "stopped";\n    this._pid = null;')) },
         { name: 'a null bridge folder fails the start', naming: 'null folder fatal', file: paths.orcaService, edit: swap('    if (!this._bridgeDir) {\n', '    if (!this._bridgeDir) {\n      return this._fail("choosing the Orca bridge folder", []);\n') },
         { name: 'a PTY switch back in the fixed names', naming: 'pty switch', file: paths.orcaEnv, edit: swap('  ORCAD_CLAUDE_AGENT_SDK_DIR_ENV,\n]);', '  ORCAD_CLAUDE_AGENT_SDK_DIR_ENV,\n  "ORCA_EXTERNAL_PTY_ENDPOINT",\n]);') },
-        { name: 'a ptyEndpoint option back in buildOrcadEnv', naming: 'pty switch', file: paths.orcaEnv, edit: swap('export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion, claudeAgentSdkDir } = {}) {', 'export function buildOrcadEnv(getEnv, { dataRoot, orcaVersion, claudeAgentSdkDir, ptyEndpoint } = {}) {') },
+        { name: 'a ptyEndpoint option back in buildOrcadEnv', naming: 'pty switch', file: paths.orcaEnv, edit: (t) => {
+            // Anchored on the signature as the copied OrcaEnv spells it: one more destructured option, ptyEndpoint.
+            const re = /(export function buildOrcadEnv\(getEnv, \{[^}]*?)\s*\} = \{\}\) \{/;
+            if (!re.test(t)) throw new Error('plant target not found: the buildOrcadEnv(getEnv, { ... } = {}) signature');
+            return t.replace(re, '$1, ptyEndpoint } = {}) {');
+        } },
         { name: 'orca-agents backend reads a different key', naming: 'POWERBROWSER_ORCA_BRIDGE_DIR', file: paths.orcaAgentsBackend, edit: swap("'POWERBROWSER_ORCA_BRIDGE_DIR'", "'POWERBROWSER_ORCA_BRIDGE_FOLDER'") },
         { name: 'orca-agents backend module deleted while the extension exists (red, not SKIP)', naming: 'orca-agents-backend-module.ts is missing', file: paths.orcaAgentsBackend, edit: () => null },
         // 67-WR-03: the port key, compared with its reader.
@@ -1277,7 +1289,8 @@ function selfTestPlants(paths, fixtureCodes) {
         // Review follow-up (harness-static-hosting-11): names the first rule missed, and the deliberate list kept honest.
         { name: 'XDG_CONFIG_DIRS in the allowlist', naming: 'inherits XDG_CONFIG_DIRS, a steering variable', file: paths.orcaEnv, edit: swap('  "PATH",\n  "HOME",', '  "PATH",\n  "XDG_CONFIG_DIRS",\n  "HOME",') },
         { name: 'npm_config_script_shell in the allowlist', naming: 'inherits npm_config_script_shell, a steering variable', file: paths.orcaEnv, edit: swap('  "PATH",\n  "HOME",', '  "PATH",\n  "npm_config_script_shell",\n  "HOME",') },
-        { name: 'HOME dropped from the allowlist but kept on the deliberate list', naming: 'DELIBERATE_STEERING names HOME, which OrcaEnv.ORCAD_ENV_ALLOWLIST no longer holds', file: paths.orcaEnv, edit: swap('  "PATH",\n  "HOME",', '  "PATH",') },
+        { name: 'HOME dropped from the allowlist but kept on the deliberate list', naming: 'DELIBERATE_STEERING names HOME, which no OrcaEnv.ORCAD_ENV_ALLOWLIST* list holds any longer', file: paths.orcaEnv, edit: swap('  "PATH",\n  "HOME",', '  "PATH",') },
+        { name: 'a steering name in the per-platform allowlist', naming: 'OrcaEnv.ORCAD_ENV_ALLOWLIST_WIN32 inherits PYTHONPATH, a steering variable', file: paths.orcaEnv, edit: swap('ORCAD_ENV_ALLOWLIST_WIN32 = Object.freeze(["SystemRoot",', 'ORCAD_ENV_ALLOWLIST_WIN32 = Object.freeze(["SystemRoot", "PYTHONPATH",') },
         // Review follow-up (harness-static-hosting-01): tracked inputs missing are red, not SKIP.
         { name: 'the orca-panes extension removed', naming: 'source moved: theia/extensions/orca-panes is missing', dir: paths.orcaPanesDir },
         { name: 'the orca-agents extension removed', naming: 'source moved: theia/extensions/orca-agents is missing', dir: paths.orcaAgentsDir },
