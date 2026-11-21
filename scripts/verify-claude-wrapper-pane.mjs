@@ -40,7 +40,7 @@
 //   node scripts/verify-claude-wrapper-pane.mjs
 //   node scripts/verify-claude-wrapper-pane.mjs --self-test
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import * as nodeFs from 'node:fs';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -48,7 +48,13 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
+
+// --root=<dir> runs the main mode over another tree (the self-test's SKIP control uses it); only as the entry point.
+const ROOT_ARG = process.argv.slice(2).find(a => a.startsWith('--root='));
+const REPO_ROOT = ROOT_ARG && process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+    ? resolve(ROOT_ARG.slice('--root='.length))
+    : resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'claude-wrapper-pane';
 const SELF_REL = 'scripts/verify-claude-wrapper-pane.mjs';
 const TS_DIR = join(REPO_ROOT, 'theia', 'node_modules', 'typescript');
@@ -165,6 +171,7 @@ function loadBackend(text, platform, bridgeDir, wrapperFile) {
 async function check(texts) {
     const fails = [];
     const notes = [];
+    const skips = [];
     const base = realpathSync(mkdtempSync(join(tmpdir(), `${NAME}-`)));
     try {
         const wrapperFile = join(base, 'claude-wrapper.mjs');
@@ -217,7 +224,8 @@ async function check(texts) {
             if (wrapper.hookEndpointPath('/d', 'linux') !== '/d/agent-hooks/endpoint.env') fails.push('W: the endpoint off win32 is not <data root>/agent-hooks/endpoint.env');
             const orcaExe = existsSync(join(REPO_ROOT, REL.orcaCliLauncher)) ? /join\(binDir, '([^']+\.exe)'\)/.exec(readFileSync(join(REPO_ROOT, REL.orcaCliLauncher), 'utf8'))?.[1] : undefined;
             const orcaEp = existsSync(join(REPO_ROOT, REL.orcaEndpoint)) ? /process\.platform === 'win32' \? '([^']+)' : '([^']+)'/.exec(readFileSync(join(REPO_ROOT, REL.orcaEndpoint), 'utf8')) : undefined;
-            if (!existsSync(join(REPO_ROOT, REL.orcaCliLauncher))) notes.push('W SKIP of the Orca comparison (orca/ is not fetched)');
+            // A half not run for an absent input is a skip (SKIP-PROTOCOL.md rule 2).
+            if (!existsSync(join(REPO_ROOT, REL.orcaCliLauncher))) skips.push('W: the comparison with Orca did not run: orca/ is not fetched. Next step: bash scripts/fetch-orca.sh');
             else {
                 if (!orcaExe || !orcaEp) fails.push(`W: source moved: the win32 CLI or endpoint name is no longer derivable from ${REL.orcaCliLauncher} / ${REL.orcaEndpoint}`);
                 else {
@@ -239,13 +247,13 @@ async function check(texts) {
             const win = loadBackend(texts.backend, 'win32', bridge, wrapperFile);
             if (win.written.length || win.path) fails.push('B: on win32 the backend writes the POSIX sh launcher and offers it as the Claude Code process wrapper');
             notes.push('B compared');
-        } else notes.push('B SKIP (theia/node_modules/typescript absent)');
+        } else skips.push('B: the backend clause did not run: theia/node_modules/typescript is absent. Next step: run the audited Theia install (docs/BUILD.md "Theia half")');
     } catch (e) {
         fails.push(`the check could not run: ${e?.stack ?? e}`);
     } finally {
         rmSync(base, { recursive: true, force: true });
     }
-    return { fails, notes };
+    return { fails, notes, skips };
 }
 
 // ---------------------------------------------------------------- self-test
@@ -264,6 +272,26 @@ const PLANTS = [
 async function runSelfTest(texts) {
     const control = await check(texts);
     if (control.fails.length) { console.error(`${NAME} self-test: FAIL -- the control is not green: ${control.fails.join(' | ')}`); return 1; }
+    // The W and B plants need the clauses the control skipped; they cannot run (SKIP-PROTOCOL.md rule 4).
+    if (control.skips.length) { console.log(skipLine(`${NAME} self-test`, `the control did not run every clause, so the plants did not run: ${control.skips.join('; ')}`)); return SKIP_EXIT; }
+    // SKIP control (SKIP-PROTOCOL.md rule 2): the main mode, run as a child with its output captured, over a tree with
+    // the wrapper and backend sources but no orca/ and no typescript. S1 to S6 and W's own names run green; W's Orca
+    // comparison and B do not run, so it must exit 77 with the SKIP line last and no PASS line.
+    {
+        const root = mkdtempSync(join(tmpdir(), `${NAME}-root-`));
+        try {
+            for (const rel of [REL.wrapper, REL.backend]) { mkdirSync(dirname(join(root, rel)), { recursive: true }); writeFileSync(join(root, rel), texts[rel === REL.wrapper ? 'wrapper' : 'backend']); }
+            const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url), `--root=${root}`], { encoding: 'utf8' });
+            const lines = (r.stdout ?? '').split('\n').filter(l => l.trim() !== '');
+            const last = lines[lines.length - 1] ?? '';
+            if (r.status !== SKIP_EXIT || !last.startsWith(`${NAME}: SKIP -- W: the comparison with Orca did not run`) || !last.includes('B: the backend clause did not run')
+                || lines.some(l => l.includes(`${NAME}: PASS`)) || /: SKIP/.test(r.stderr ?? '')) {
+                console.error(`${NAME} self-test: FAIL -- control: a tree without orca/ or typescript did not exit 77 with the SKIP line last and no PASS line (status ${r.status}, last line ${JSON.stringify(last)}, stderr ${JSON.stringify((r.stderr ?? '').slice(0, 300))})`);
+                return 1;
+            }
+            console.log('  ok control: a tree without orca/ or typescript -> exit 77, the SKIP line last, no PASS line');
+        } finally { rmSync(root, { recursive: true, force: true }); }
+    }
     console.log(`${NAME} self-test: control green (${control.notes.join('; ')})`);
     let failures = 0;
     for (const p of PLANTS) {
@@ -287,20 +315,23 @@ const isEntryPoint = (() => {
 })();
 if (isEntryPoint) {
     const args = process.argv.slice(2);
-    if (args.length > 1 || (args.length === 1 && args[0] !== '--self-test')) {
+    if (args.length > 1 || (args.length === 1 && args[0] !== '--self-test' && !args[0].startsWith('--root='))) {
         console.error(`${NAME}: unknown argument ${args[0]} (usage: node ${SELF_REL} [--self-test])`);
         console.error(`Next step: run node ${SELF_REL} for the check or add --self-test for the planted-fault run.`);
         process.exit(2);
     }
-    if (process.platform === 'win32') { console.log(`${NAME}: SKIP -- the wrapper scenarios use POSIX executables`); process.exit(0); }
+    // Nothing runs on win32 and no clause runs without its input: exit 77 with the SKIP line (SKIP-PROTOCOL.md).
+    if (process.platform === 'win32') { console.log(skipLine(args[0] === '--self-test' ? `${NAME} self-test` : NAME, 'the wrapper scenarios use POSIX executables, so nothing ran on win32. Next step: run this check on Linux or macOS')); process.exit(SKIP_EXIT); }
     if (existsSync(TS_DIR) && statSync(TS_DIR).isDirectory()) ts = createRequire(import.meta.url)(TS_DIR);
     const texts = { wrapper: readFileSync(join(REPO_ROOT, REL.wrapper), 'utf8'), backend: readFileSync(join(REPO_ROOT, REL.backend), 'utf8') };
     if (args[0] === '--self-test') {
-        if (!ts) { console.log(`${NAME} self-test: SKIP -- theia/node_modules/typescript is absent; run the audited Theia install (docs/BUILD.md "Theia half")`); process.exit(0); }
+        if (!ts) { console.log(skipLine(`${NAME} self-test`, 'theia/node_modules/typescript is absent. Next step: run the audited Theia install (docs/BUILD.md "Theia half")')); process.exit(SKIP_EXIT); }
         process.exit(await runSelfTest(texts));
     }
     const r = await check(texts);
-    if (r.fails.length) { for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`); process.exit(1); }
+    for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`);
+    const code = verdictExit(NAME, r.fails, r.skips);
+    if (code !== 0) process.exit(code);
     console.log(`${NAME}: PASS -- no pane left behind on a failed lookup, a late create or an early signal; claude starts within ${MAX_START_DELAY_MS} ms on a hung orcad; win32 names match Orca; the backend is inert on win32 (${r.notes.join('; ')})`);
     process.exit(0);
 }
