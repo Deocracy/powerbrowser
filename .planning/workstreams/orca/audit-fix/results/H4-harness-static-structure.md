@@ -60,9 +60,13 @@ Base for this round: 7a266476 (fast-forwarded). Each point was confirmed against
 
 Handoffs, red by design and behaviour changes: unchanged from above, plus: the stricter point-1 rule means a tree with orca-panes, orca-agents or the overlay entry removed is now red on --quick (intended).
 
+## Third round: LICENSE handoff from G5b (packaging-prefs-network-02)
+
+| Item | Status | Commit | Check | Note |
+|---|---|---|---|---|
+| packaging-prefs-network-02 (handoff) | fixed | 3ba162f6 | verify-orca-packaged-tree.mjs --self-test: LICENSE missing (linux, win64, macos), LICENSE altered; controls: orca/ not fetched leaves presence only | `LICENSE` is required in every packaged Orca tree on all targets (not "present in the built tree", which the hosted artifacts lack) and, when orca/LICENSE exists, must be byte-equal to it. Verified on a real stage copy that carries orca/LICENSE. |
+
 ## Quick gate
-Follow-up round, `scripts/verify-platform.sh --quick` inside `nix develop .#theia` on the final tree (log: .mozbuild/h4-quick-2.txt in this worktree): 441 PASS, 5 FAIL, 0 SKIP. Non-PASS rows:
-- scan-brand-residue, scan-brand-residue-self-test: caused by this lane, red by design (see Red by design).
-- orca-failure-classes: not caused by this lane (a product mapping: ORCA_CODE_CLASSES lacks orcad_invalid_bind_address, orcad_data_root_shared, orcad_data_root_unusable and orcad_data_root_wrong_owner; scripts/verify-orca-failure-classes.mjs and OrcaService are outside this lane's files). It is a group-owned product drift on the current fix branch.
-- shell-error-copy-no-internals and its self-test: not caused by this lane (lane H8, as before).
-Every row this lane owns passes, including its self-tests. With orca/ moved aside the owned rows still exit 77 with a SKIP line as the last stdout line and nothing SKIP-shaped on stderr; each self-test prints its own PASS line last.
+Third round, `scripts/verify-platform.sh --quick` inside `nix develop .#theia` on the final tree (log: .mozbuild/h4-quick-3.txt in this worktree): 449 PASS, 6 FAIL, 0 SKIP. The packaged-tree row is full-tier, so the quick gate does not run it; its self-test passes. Non-PASS rows, none caused by this round:
+- scan-brand-residue, scan-brand-residue-self-test: this lane's earlier additions plus other lanes; on the current merge the held-back rows read "Orca" 4177 to 4185 and "orca" 7220 to 7229. Integration re-measures after merging.
+- orca-service-self-test, orca-failure-classes and its self-test, build-windows-shape-self-test: not this lane's files. build-windows-shape-self-test throws "self-test anchor for the rulings guard step is absent from the build-windows job" (release.yml changed by another lane; scripts/verify-build-windows-shape.mjs needs its anchor updated).
