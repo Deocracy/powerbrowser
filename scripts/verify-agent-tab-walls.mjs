@@ -248,7 +248,7 @@ async function budgetClause(texts) {
     const waitCap = await (async () => { const w = worldOf(texts); w.addTab('a1', { agent: true }); return [await w.agent('a1', 'browser.wait', { timeout: 600001 }), await w.agent('a1', 'browser.wait', { timeout: 600000 })]; })();
     if (waitCap[0]?.reason !== 'validation') failures.push(`budget: browser.wait with a timeout over 600000 ms answered ${JSON.stringify(waitCap[0])}; expected a validation refusal (66-CR-04)`);
     if (waitCap[1]?.ok === false) failures.push('budget: broken instrument: browser.wait at exactly 600000 ms was refused');
-    if (!/Math\.min\(params\.timeout, 600000\)/.test(texts.child)) failures.push(`budget: ${FILES.child} browser.wait does not cap its timeout at 600000 ms (66-CR-04)`);
+    if (!/Math\.min\(params\.timeout > 0 \? params\.timeout : \d+, 600000\)/.test(texts.child)) failures.push(`budget: ${FILES.child} browser.wait does not cap its timeout at 600000 ms (66-CR-04)`);
     await run('a browser.exec result over the budget in UTF-8 bytes only', 'browser.exec', { command: 'get html' }, { where: 'done', result: { value: '€'.repeat(Math.ceil(max / 2.5)) } }, 'failed browser_error');
     return failures;
 }
@@ -821,7 +821,7 @@ const PLANTS = [
     { name: 'round 3: SameSite None without Secure', plant: t => ({ ...t, api: replaceOnce(t.api, ' && (sameSite !== 0 || params.secure === true);', ';', 'samesite') }), expect: 'SameSite None without Secure' },
     { name: 'round 3 (59-WR-03): the page-id reserve below 1536', plant: t => ({ ...t, api: replaceOnce(t.api, 'const AGENT_SNAPSHOT_ID_BYTES = 256 * 6;', 'const AGENT_SNAPSHOT_ID_BYTES = 384;', 'id reserve') }), expect: 'bytes for the page id' },
     { name: '66-CR-04: the wait validator has no cap', plant: t => ({ ...t, api: replaceOnce(t.api, ' && v <= AGENT_WAIT_MAX_MS)', ')', 'wait validator') }), expect: 'timeout over 600000 ms answered' },
-    { name: '66-CR-04: the child wait has no cap', plant: t => ({ ...t, child: replaceOnce(t.child, 'Math.min(params.timeout, 600000)', 'params.timeout', 'child wait') }), expect: 'does not cap its timeout' },
+    { name: '66-CR-04: the child wait has no cap', plant: t => ({ ...t, child: replaceOnce(t.child, 'Math.min(params.timeout > 0 ? params.timeout : 30000, 600000)', 'params.timeout > 0 ? params.timeout : 30000', 'child wait') }), expect: 'does not cap its timeout' },
     { name: 'round 3: no truncation flag on the socket table', plant: t => ({ ...t, api: replaceOnce(t.api, '        truncated ||= bytes.length >= cap;\n', '', 'truncated') }), expect: 'was not reported truncated' },
     {
         name: 'review item 6: the disableglobalhistory row removed',
