@@ -9,11 +9,16 @@
 //                  no backtick before it is published, and the stop issue names the stage only by a keyword of the
 //                  STAGES set scripts/rebase-orca.sh defines (release-train.mjs --orca-stage), the rest apart.
 //   artifact-digest (ci-supply-chain-01, ci-supply-chain-04) every artifact of this run that a job holding a
-//                  credential (a secrets. reference, an App-token step, github.token or GITHUB_TOKEN) downloads is
+//                  credential downloads is bound to its producer. A job holds a credential when a step references
+//                  secrets., github.token or GITHUB_TOKEN or mints an App token, or, for the whole job, when its
+//                  effective permissions (the job's, else the workflow's) grant any write scope (id-token: write
+//                  included, and the default token every action can use implicitly) or are unset at both levels
+//                  (the repository default), or when it runs on a self-hosted runner (a persistent host). The
+//                  artifact is
 //                  bound to its producer: the producer (a job of the same file, or the job of a reusable workflow it
 //                  calls) exports a *sha256* output from a step, the consumer takes it through needs into an env
-//                  variable, and a run step after the download and before the next credential step compares the bytes
-//                  with it (check-win-sidecar.sh check, a != "$VAR" test, or a powerbrowser/packaging script whose
+//                  variable, and a run step after the download, before the next credential step and before any other
+//                  step that reads the downloaded directory, compares the bytes with it (check-win-sidecar.sh check, a != "$VAR" test, or a powerbrowser/packaging script whose
 //                  text runs check-win-sidecar.sh check on that variable). The set of consumers and artifacts is
 //                  derived from the files. A download with run-id (another run's artifact) is out of this clause.
 //   mode-carry     (68-CR-03) an artifact keeps no file mode, so every artifact a macOS job uploads is a directory a
@@ -100,6 +105,14 @@ export function check(texts) {
     // artifact-digest (ci-supply-chain-01, ci-supply-chain-04)
     const uploadsOf = j => stepsOf(j).filter(st => /^actions\/upload-artifact@/.test(String(st?.uses ?? '')));
     const holdsCred = st => /\bsecrets\.|\bgithub\.token\b|\bGITHUB_TOKEN\b/.test(JSON.stringify(st)) || /^actions\/create-github-app-token@/.test(String(st?.uses ?? ''));
+    // A credential the whole job holds, with no step naming it.
+    const jobCred = (job, wf) => {
+        if ([job?.['runs-on'] ?? []].flat().map(String).includes('self-hosted')) return true;
+        const perms = job?.permissions ?? wf?.permissions;
+        if (perms === undefined || perms === null) return true;
+        if (typeof perms === 'string') return perms !== 'read-all' && perms !== '{}';
+        return Object.values(perms).some(v => String(v) === 'write');
+    };
     const readPkg = name => { try { return (texts.packaging ?? {})[name] ?? readFileSync(join(REPO_ROOT, 'powerbrowser', 'packaging', name), 'utf8'); } catch { return ''; } };
     for (const f of FILES) {
         const jobs = docs[f]?.jobs ?? {};
@@ -121,7 +134,7 @@ export function check(texts) {
         });
         for (const [cId, c] of Object.entries(jobs)) {
             const steps = stepsOf(c);
-            if (!steps.some(holdsCred) && !holdsCred({ env: c.env })) continue;
+            if (!steps.some(holdsCred) && !holdsCred({ env: c.env }) && !jobCred(c, docs[f])) continue;
             steps.forEach((d, di) => {
                 if (!/^actions\/download-artifact@/.test(String(d?.uses ?? '')) || d.with?.['run-id'] !== undefined) return;
                 const name = d.with?.name;
@@ -136,6 +149,11 @@ export function check(texts) {
                 // The comparison names the downloaded directory, so a digest is checked against the artifact it belongs to.
                 const dir = String(d.with?.path ?? name).replace(/\$\{\{\s*runner\.temp\s*\}\}/g, '$RUNNER_TEMP');
                 const nextCred = steps.findIndex((st, i) => i > di && holdsCred(st));
+                // The first later step that reads the downloaded directory (a download step aside): the comparison must
+                // be that step or come before it, whatever credential the job holds.
+                const dirRe = new RegExp(`(^|[\\s"'=:(])${dir.replace(/[$.*+?^{}()|[\]\\]/g, '\\$&')}(?=[/\\s"')]|$)`, 'm');
+                const reads = st => !/^actions\/download-artifact@/.test(String(st?.uses ?? '')) && (dirRe.test(runOf(st)) || dirRe.test(Object.values(st.env ?? {}).map(x => String(x).replace(/\$\{\{\s*runner\.temp\s*\}\}/g, '$RUNNER_TEMP')).join('\n')) || dirRe.test(Object.values(st.with ?? {}).map(String).join('\n')));
+                const firstReader = steps.findIndex((st, i) => i > di && reads(st));
                 const compares = (st, v) => {
                     const r = runOf(st);
                     const stepEnv = Object.values(st.env ?? {}).map(x => String(x).replace(/\$\{\{\s*runner\.temp\s*\}\}/g, '$RUNNER_TEMP')).join('\n');
@@ -144,7 +162,7 @@ export function check(texts) {
                     if (!new RegExp(`\\b${v}\\b`).test(r)) return false;
                     return [...r.matchAll(/powerbrowser\/packaging\/([\w.-]+\.sh)\b/g)].some(([, n]) => new RegExp(`check-win-sidecar\\.sh"? check [^\\n]*"\\$\\{?${v}\\b`).test(readPkg(n)));
                 };
-                const cmp = steps.findIndex((st, i) => i > di && (nextCred === -1 || i < nextCred) && vars.some(v => compares(st, v)));
+                const cmp = steps.findIndex((st, i) => i > di && (nextCred === -1 || i < nextCred) && (firstReader === -1 || i <= firstReader) && vars.some(v => compares(st, v)));
                 if (cmp === -1) fail(f, cId, 'artifact-digest', `downloads ${name} into ${dir} (step ${di}) and has no run step before its next credential step (step ${nextCred}) that compares ${dir} with ${vars.map(v => '$' + v).join(' or ')} (a digest output of ${pId}). Next step: admit it with check-win-sidecar.sh check, or compare its digest, right after the download.`);
             });
         }
@@ -278,6 +296,15 @@ function selfTest() {
         ['stage published unfiltered', edit('rebase-orca.yml', `          LINE=$(printf '%s' "$LINE" | tr -cd "A-Za-z0-9 _./:@()'*,=<>+-" | cut -c1-300)\n`, ''), 'stage-line', 'without tr -cd'],
         ['stop issue prints the raw stage', edit('release-train.yml', `STAGE=$(printf '%s' "$STAGE_OUT" | tr -cd "A-Za-z0-9 _./:@()'*,=<>+-" | cut -c1-300)`, 'STAGE="$STAGE_OUT"'), 'stage-line', 'without first cutting it'],
         // ci-supply-chain-06 review: the stage file can be rewritten after the script's last word, so the keyword is the control.
+        // Review follow-up: job-level credentials. Each plant appends a job that downloads release-linux and reads it
+        // with no admission; its only credential is the one the plant names.
+        ...[['id-token: write only', '    permissions:\n      contents: read\n      id-token: write\n    runs-on: ubuntu-latest\n'],
+            ['a write-scoped default token used implicitly', '    permissions:\n      contents: write\n    runs-on: ubuntu-latest\n'],
+            ['the self-hosted runner itself', '    permissions:\n      contents: read\n    runs-on: [self-hosted, powerbrowser-release]\n']].map(([what, head]) => [
+            `an unadmitted download in a job whose only credential is ${what}`,
+            { ...real, 'release.yml': `${real['release.yml'].replace(/\n*$/, '\n')}\n  planted-reader:\n    needs: build-linux\n${head}    steps:\n      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n          name: release-linux\n          path: release\n      - run: cat release/release-manifest.json\n` },
+            'artifact-digest', 'job planted-reader [artifact-digest]: downloads release-linux but never takes']),
+        ['a reader of the artifact before its admission', edit('release.yml', '      - name: Admit release-linux by the SHA256SUMS digest build-linux recorded (before anything reads it)\n', '      - name: Read the manifest first\n        run: cat release/release-manifest.json\n\n      - name: Admit release-linux by the SHA256SUMS digest build-linux recorded (before anything reads it)\n'), 'artifact-digest', 'job sign-publish [artifact-digest]: downloads release-linux into release'],
         ['the stop issue prints the stage line as the stage', edit('release-train.yml', '"$TAG" "$KEYWORD" "${DETAIL:-none}" "$RUN_URL"', '"$TAG" "$STAGE" "${DETAIL:-none}" "$RUN_URL"'), 'stage-line', 'without reducing it to a keyword'],
         ['a backtick admitted', edit('release-train.yml', `STAGE=$(printf '%s' "$STAGE_OUT" | tr -cd "A-Za-z0-9 _./:@()'*,=<>+-" | cut -c1-300)`, `STAGE=$(printf '%s' "$STAGE_OUT" | tr -cd "A-Za-z0-9 _./:@()'*,=<>+\`-" | cut -c1-300)`), 'stage-line', 'without first cutting it'],
         // ci-supply-chain-01, the pre-fix sign-publish: no admission of release-linux by build-linux's digest.
