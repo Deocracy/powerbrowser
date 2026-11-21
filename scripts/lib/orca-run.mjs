@@ -168,27 +168,64 @@ export function installOutputRedaction(secrets) {
     return () => { for (const [stream, write] of saved) stream.write = write; };
 }
 
+// Every orcad this module spawned and has not stopped yet: pid -> terminal daemon pid (null until the ready
+// line names it). orcad runs in its own session (detached), so neither the driver's group kill nor the row's exit
+// reaches it; this module stops what it started when its process exits or is signalled (audit harness-driver-04).
+const started = new Map();
+let exitHooked = false;
+
+/** SIGKILLs every orcad (its process group) and terminal daemon still in `started`. Synchronous, for 'exit'. */
+export function stopStartedDaemons() {
+    for (const [pid, daemonPid] of started) {
+        signal(pid, 'SIGKILL', true);
+        if (daemonPid) signal(daemonPid, 'SIGKILL');
+    }
+    started.clear();
+}
+
+function hookExit() {
+    if (exitHooked) return;
+    exitHooked = true;
+    process.on('exit', stopStartedDaemons);
+    // Prepended and one-shot: it stops those processes, removes itself, and re-raises only when no other listener is
+    // left, so firefox-bidi.mjs's liveHome handler (which re-raises when it is the last) still ends the process.
+    for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+        const onSignal = () => {
+            stopStartedDaemons();
+            process.off(sig, onSignal);
+            if (process.listenerCount(sig) === 0) process.kill(process.pid, sig);
+        };
+        process.prependListener(sig, onSignal);
+    }
+}
+
 /**
  * Spawns orcad.js on nodeBin, loopback only, in its own process group. stdout and stderr stay in
  * memory. Resolves { child, ready } once the ready line parses; rejects with a redacted Error on
- * exit or timeout.
+ * exit or timeout, after killing orcad's process group (error.child stays for the caller to stop).
  */
 export function startOrcad({ nodeBin, orcaDir, profileDir, env, timeoutMs = 60000 }) {
     const args = [join(orcaDir, 'out', 'orcad', 'orcad.js'), '--bind', '127.0.0.1', '--port', '0', '--json',
         '--web-client-root', join(orcaDir, 'out', 'web')];
     const child = spawn(nodeBin, args, { cwd: profileDir, env: liveEnv(env), detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    if (child.pid) { started.set(child.pid, null); hookExit(); }
     let out = '';
     let err = '';
     return new Promise((resolveP, rejectP) => {
         let done = false;
         const tail = () => err.trim().split('\n').slice(-6).join(' | ').slice(-600);
         const finish = (fn, v) => { if (!done) { done = true; clearTimeout(timer); fn(v); } };
-        const fail = (msg) => finish(rejectP, Object.assign(new Error(redact(msg)), { child, stderrTail: redact(tail()) }));
+        const fail = (msg) => {
+            if (done) return;
+            if (child.pid) { signal(child.pid, 'SIGKILL', true); started.delete(child.pid); }
+            finish(rejectP, Object.assign(new Error(redact(msg)), { child, stderrTail: redact(tail()) }));
+        };
         const timer = setTimeout(() => fail(`orcad printed no orca_server_ready line within ${timeoutMs} ms; stderr: ${tail()}`), timeoutMs);
         child.stdout.on('data', (d) => {
             out += d;
             try {
                 const ready = parseReady(out);
+                if (ready && !done && started.has(child.pid)) started.set(child.pid, ready.daemonPid);
                 if (ready) finish(resolveP, { child, ready, stderr: () => err });
             } catch (e) { fail(e.message); }
         });
@@ -254,6 +291,7 @@ function signal(pid, sig, group = false) {
 
 /** SIGTERM orcad's process group and the terminal daemon, SIGKILL leftovers after 10 s; returns { survivors }. */
 export async function stopOrcad(child, daemonPid, { graceMs = 10000 } = {}) {
+    if (child?.pid) started.delete(child.pid);
     const pids = [child?.pid, daemonPid].filter((p) => Number.isInteger(p) && p > 0);
     if (child?.pid) signal(child.pid, 'SIGTERM', true);
     if (daemonPid) signal(daemonPid, 'SIGTERM');

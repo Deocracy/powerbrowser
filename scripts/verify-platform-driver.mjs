@@ -19,11 +19,14 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const NAME = 'verify-platform-driver';
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DRIVER = join(REPO_ROOT, 'scripts', 'verify-platform.sh');
+// Every process a daemon-shaped fixture row starts carries this argument, so the self-test can tell whether one
+// is still running (and stop it at the end whatever happened).
+const MARKER = `vpd-fixture-${process.pid}-${Date.now()}`;
 
 const ROWS = {
     pass: `console.log('fx: PASS -- planted control');`,
@@ -38,6 +41,27 @@ const ROWS = {
     closed: `console.error('fx-closed: FAIL -- planted input absent'); process.exit(1);`,
     excusedSkip: `console.log('fx-excused-skip: SKIP -- planted excused precondition'); process.exit(77);`,
 };
+
+// Rows that leave a process behind: in the row's own group, in a session of its own (found only by the row token),
+// and a plain survivor. The daemon-shaped ones end in the entry the leak leg derives from this tree.
+function daemonRows(entry) {
+    const leave = (argv, opts) => `import { spawn } from 'node:child_process'; spawn(process.execPath, ${JSON.stringify(['-e', 'setInterval(() => {}, 1e9)', MARKER, ...argv])}, ${opts}).unref(); console.log('fx: PASS -- left a process behind');`;
+    return {
+        leakGroup: leave([`/fx${entry}`], "{ stdio: 'ignore' }"),
+        leakDetached: leave([`/fx${entry}`], "{ stdio: 'ignore', detached: true }"),
+        survivor: leave(['fx-survivor'], "{ stdio: 'ignore' }"),
+    };
+}
+
+/** Pids of every process still running with MARKER in its arguments. */
+function strays() {
+    const out = [];
+    for (const name of readdirSync('/proc')) {
+        if (!/^\d+$/.test(name)) continue;
+        try { if (readFileSync(`/proc/${name}/cmdline`, 'utf8').split('\0').includes(MARKER)) out.push(Number(name)); } catch { /* exited */ }
+    }
+    return out;
+}
 
 const LEDGER = '# fixture ledger\n\n````json\n' + JSON.stringify([{ id: 1, status: 'open' }, { id: 2, status: 'fixed' }], null, 2) + '\n````\n';
 const EXCLUSIONS = [
@@ -56,6 +80,8 @@ const RUNS = {
     gateExcused: { args: ['--gate'], rows: [['quick', 'fx-pass', 'pass'], ['quick', 'fx-excused-skip', 'excusedSkip'], ['full', 'fx-covered', 'covered']] },
     gateLegacy: { args: ['--gate'], rows: [['quick', 'fx-pass', 'pass'], ['quick', 'fx-legacy', 'legacy']] },
     gateGreen: { args: ['--gate'], rows: [['quick', 'fx-pass', 'pass'], ['full', 'fx-full-only', 'pass']] },
+    leaks: { args: [], rows: [['full', 'fx-leak-group', 'leakGroup'], ['full', 'fx-leak-detached', 'leakDetached'], ['full', 'fx-survivor', 'survivor']] },
+    gateSurvivor: { args: ['--gate'], rows: [['quick', 'fx-pass', 'pass'], ['quick', 'fx-survivor', 'survivor']] },
 };
 
 const has = (r, s) => r.text.includes(s);
@@ -81,6 +107,11 @@ const CASES = {
     '--gate with only excused rows is PASS-WITH-EXCLUSIONS': ['gateExcused', (r) => want(r.status === 0 && has(r, 'FIXTURE --gate PASS-WITH-EXCLUSIONS') && has(r, '2 named known-open exclusion(s)'), `exit ${r.status}, verdict not PASS-WITH-EXCLUSIONS with 2`)],
     '--gate fails a row that prints a SKIP last line and exits 0': ['gateLegacy', (r) => want(r.status === 1 && has(r, 'FAIL (unexcused SKIP): fx-legacy'), `exit ${r.status}; the legacy SKIP row passed the gate`)],
     '--gate with every row green is PASS and runs the full tier': ['gateGreen', (r) => want(r.status === 0 && has(r, 'FIXTURE --gate PASS -- commit') && has(r, '  fx-full-only: PASS\n'), `exit ${r.status}`)],
+    'a row that leaves a daemon in its group is FAIL': ['leaks', (r) => want(has(r, '  fx-leak-group: FAIL\n') && has(r, 'fx-leak-group left '), 'fx-leak-group is not a FAIL naming the process it left')],
+    'a row that leaves a daemon in a session of its own is FAIL (found by the row token)': ['leaks', (r) => want(has(r, '  fx-leak-detached: FAIL\n') && has(r, 'found by its row token'), 'fx-leak-detached is not a FAIL found by the row token')],
+    'a row that leaves another process keeps its verdict and the process is named': ['leaks', (r) => want(has(r, '  fx-survivor: PASS\n') && has(r, 'NOTE -- fx-survivor left pid'), 'fx-survivor is not PASS with a NOTE naming the survivor')],
+    'nothing a row left is still running after the run': ['leaks', () => { const left = strays(); return want(left.length === 0, `pid(s) ${left.join(', ')} still running`); }],
+    '--gate fails a row that leaves a process behind': ['gateSurvivor', (r) => want(has(r, '  fx-survivor: FAIL\n') && has(r, 'under --gate a row must clean up'), 'fx-survivor was not failed under --gate')],
 };
 
 // Each plant removes one decision; the named case must go red on the planted driver.
@@ -91,6 +122,10 @@ const PLANTS = [
     { name: 'the exclusion pattern check removed', from: 'if ! miss="$(row_output "$log" "$label" | exclusion_covers "$excl_mode" "$excl_patterns")"; then', to: 'if false; then', kase: '--gate keeps a different FAIL in an excluded row red' },
     { name: 'mode only ignoring a second FAIL', from: 'if [ "$mode" = "only" ] && [ "$covered" -eq 0 ]', to: 'if false && [ "$covered" -eq 0 ]', kase: '--gate keeps a second FAIL beside the described one red (mode only)' },
     { name: 'the ledger status check removed', from: 'if ! ledger_entry_is_open "$excl_ledger_id"; then', to: 'if false; then', kase: '--gate fails a row whose entry is no longer open' },
+    { name: 'the leak leg neutralised by || true', from: '--label "$label" --sweep || leg_rc=$?', to: '--label "$label" --sweep || true', kase: 'a row that leaves a daemon in its group is FAIL' },
+    { name: 'the leak leg run only on a live process group', from: 'if kill -0 -- "-$CURRENT_CHECK_PID" 2>/dev/null || row_token_alive "$CURRENT_ROW_TOKEN"; then', to: 'if kill -0 -- "-$CURRENT_CHECK_PID" 2>/dev/null; then', kase: 'a row that leaves a daemon in a session of its own is FAIL (found by the row token)' },
+    { name: 'the leak leg run without --sweep', from: '--label "$label" --sweep || leg_rc=$?', to: '--label "$label" || leg_rc=$?', kase: 'nothing a row left is still running after the run' },
+    { name: 'a survivor not red under --gate', from: 'elif [ "$survivors" -eq 1 ] && [ "$GATE" -eq 1 ]; then', to: 'elif false; then', kase: '--gate fails a row that leaves a process behind' },
 ];
 
 function stage(driverText, root) {
@@ -107,10 +142,16 @@ function stage(driverText, root) {
     return { dir, driver };
 }
 
-function fixtures(root) {
+async function fixtures(root, driverText) {
     const fx = join(root, 'fx');
     mkdirSync(fx);
-    for (const [key, body] of Object.entries(ROWS)) writeFileSync(join(fx, `${key}.mjs`), body + '\n');
+    // The leak leg the driver runs, named by the driver itself; its entry is derived from this tree.
+    const leg = /\$REPO_ROOT\/scripts\/(verify-[a-z]+-leak\.mjs)"/.exec(driverText)?.[1];
+    if (!leg) throw new Error('the driver names no leak leg script');
+    const { legEntry } = await import(pathToFileURL(join(REPO_ROOT, 'scripts', leg)).href);
+    const entry = legEntry();
+    if (!entry) throw new Error(`${leg} derives no entry from this tree`);
+    for (const [key, body] of Object.entries({ ...ROWS, ...daemonRows(entry) })) writeFileSync(join(fx, `${key}.mjs`), body + '\n');
     writeFileSync(join(fx, 'WINDOWS.md'), LEDGER);
     writeFileSync(join(fx, 'exclusions.txt'), EXCLUSIONS);
     return fx;
@@ -143,12 +184,12 @@ function judge(tree, fx, caseNames) {
     return out;
 }
 
-function selfTest() {
+async function selfTest() {
     const root = mkdtempSync(join(tmpdir(), 'verify-platform-driver-'));
     let misses = 0;
     try {
-        const fx = fixtures(root);
         const text = readFileSync(DRIVER, 'utf8');
+        const fx = await fixtures(root, text);
         const control = judge(stage(text, root), fx, Object.keys(CASES));
         for (const [name, why] of Object.entries(control)) {
             if (why) misses++;
@@ -166,6 +207,7 @@ function selfTest() {
             console.log(`  ${why ? 'ok ' : 'MISS'} plant ${plant.name} -> ${why ? `red: ${why}` : `"${plant.kase}" stayed green`}`);
         }
     } finally {
+        for (const pid of strays()) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
         rmSync(root, { recursive: true, force: true });
     }
     if (misses) {
@@ -181,4 +223,4 @@ if (args.length !== 1 || args[0] !== '--self-test') {
     console.error(`${NAME}: FAIL -- usage: node scripts/verify-platform-driver.mjs --self-test`);
     process.exit(2);
 }
-process.exit(selfTest());
+process.exit(await selfTest());

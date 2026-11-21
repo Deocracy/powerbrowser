@@ -183,9 +183,16 @@ fi
 # SERVER_PID branch is the one thing it did not carry.
 cleanup() {
   if [ -n "$CURRENT_CHECK_PID" ]; then
+    local interrupted_pid="$CURRENT_CHECK_PID"
     kill -- "-$CURRENT_CHECK_PID" 2>/dev/null || kill "$CURRENT_CHECK_PID" 2>/dev/null || true
     wait "$CURRENT_CHECK_PID" 2>/dev/null || true
     CURRENT_CHECK_PID=""
+    # The group kill cannot reach what the row started in a session of its own (a detached orcad, audit
+    # harness-driver-04); everything still carrying the row's token is stopped too.
+    if [ -n "$CURRENT_ROW_TOKEN" ]; then
+      node "$REPO_ROOT/scripts/verify-orcad-leak.mjs" --session "$interrupted_pid" --token "$CURRENT_ROW_TOKEN" --label "the interrupted row" --sweep || true
+      CURRENT_ROW_TOKEN=""
+    fi
   fi
   # Safety net for a check that started the sidecar via start_backend() and was
   # interrupted before its own stop_backend() -- setsid gives the sidecar its
@@ -4171,8 +4178,11 @@ run_own_checks() {
     "live-scratch-home|node $REPO_ROOT/scripts/verify-live-scratch-home.mjs"
     "live-scratch-home-self-test|node $REPO_ROOT/scripts/verify-live-scratch-home.mjs --self-test"
     # NEW (2026-11-16 gate): the run loop's leak leg (scripts/verify-orcad-leak.mjs) turns a script row red when an orcad
-    # outlives it in the row's own session, and stops it. The self-test derives the orcad entry from OrcaService, reads the
-    # loop for the leg, and plants a detached orcad-shaped process (red, stopped) beside a non-orcad survivor (green, alive).
+    # outlives it in the row's own session, and stops it. The self-test derives the orcad entry from OrcaService, and plants a
+    # detached orcad-shaped process (red, stopped) beside a non-orcad survivor (green, alive). Audit-fix H1: a detached orcad
+    # carrying the row's PB_VERIFY_ROW_TOKEN is a leak too, --sweep stops other survivors, and lib/orca-run.mjs stops the
+    # orcad processes it started on a rejected start, an exit and a signal (each fix planted out of a copy must go red). That the
+    # driver runs the leg and acts on it is verify-platform-driver-self-test's (harness-driver-08).
     # 2026-11-17: a planted row that opts out of withFirefoxPage's stray stop (keepStrays) and leaks must still go red;
     # the same row without the opt-out is green, its teardown having stopped the orcad.
     "orcad-leak-self-test|node $REPO_ROOT/scripts/verify-orcad-leak.mjs --self-test"
@@ -7109,6 +7119,10 @@ run_own_checks() {
 ROW_SEQ=0
 ROW_VERDICT=""
 ROW_REASON=""
+# True when any process still carries row token $1 in its environment (/proc/<pid>/environ, NUL-separated).
+row_token_alive() {
+  [ -n "$1" ] && grep -qsxzF -- "PB_VERIFY_ROW_TOKEN=$1" /proc/[0-9]*/environ
+}
 run_script_row() {
   local label="$1" cmd="$2"
   ROW_SEQ=$((ROW_SEQ + 1))
@@ -7123,13 +7137,20 @@ run_script_row() {
   exec {out_fd}>&- {err_fd}>&-
   local rc=0
   wait "$CURRENT_CHECK_PID" || rc=$?
-  local leaked=0
+  local leaked=0 survivors=0 leg_rc=0
   # Leak leg: when anything of the row's process group outlives it (kill -0, a builtin, so a clean row costs no
-  # fork), an orcad still in the row's session is named, stopped and turns the row red (2026-11-16 gate).
-  if kill -0 -- "-$CURRENT_CHECK_PID" 2>/dev/null \
-    && ! node "$REPO_ROOT/scripts/verify-orcad-leak.mjs" --session "$CURRENT_CHECK_PID" --label "$label"; then
-    leaked=1
+  # fork), or any process still carries the row's token (a detached orcad of scripts/lib/orca-run.mjs, which the
+  # group cannot reach; one grep), an orcad of the row is named, stopped and turns the row red (2026-11-16 gate,
+  # audit harness-driver-04). --sweep then stops every other survivor and names it on a NOTE line; that is red
+  # under --gate (audit harness-driver-07).
+  if kill -0 -- "-$CURRENT_CHECK_PID" 2>/dev/null || row_token_alive "$CURRENT_ROW_TOKEN"; then
+    node "$REPO_ROOT/scripts/verify-orcad-leak.mjs" --session "$CURRENT_CHECK_PID" --token "$CURRENT_ROW_TOKEN" --label "$label" --sweep || leg_rc=$?
   fi
+  case "$leg_rc" in
+    0) ;;
+    3) survivors=1 ;;
+    *) leaked=1 ;;
+  esac
   CURRENT_CHECK_PID=""
   CURRENT_ROW_TOKEN=""
   # The tees end once every writer closed the pipe; a writer that outlived the row is bounded at 5 s.
@@ -7149,6 +7170,9 @@ run_script_row() {
     [[ "$line" =~ [^[:space:]] ]] && last="$line"
   done < <(tail -n 40 -- "$out" 2>/dev/null)
   if [ "$leaked" -eq 1 ]; then
+    ROW_VERDICT=FAIL
+  elif [ "$survivors" -eq 1 ] && [ "$GATE" -eq 1 ]; then
+    echo "verify-platform: FAIL -- $label left processes running after it exited (the NOTE lines above name them); under --gate a row must clean up after itself" >&2
     ROW_VERDICT=FAIL
   elif [ "$rc" -eq 0 ]; then
     if [[ "$last" =~ $SKIP_LINE_RE ]]; then
