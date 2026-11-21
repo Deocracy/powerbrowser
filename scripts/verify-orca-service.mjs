@@ -15,8 +15,11 @@
 //     for as a string literal in it.
 //  3. OrcaEnv rules, by calling the module: port 0 and out-of-range ports
 //     throw, the bind host is loopback, the socket budget plus the socket
-//     suffix fits the smallest socket path limit, the allowlist holds no
-//     variable that steers Node or relocates orcad's data. After D-31 orcad's
+//     suffix fits the smallest socket path limit, and the allowlist's steering
+//     names (isSteeringName: what a child runs, loads or reads its config from,
+//     in families, not a list of known names) equal DELIBERATE_STEERING, the
+//     names orcad is given on purpose, each with what it lets a child do
+//     (harness-static-hosting-11 and its review follow-up). After D-31 orcad's
 //     environment is Phase 62's: no fixed name and no buildOrcadEnv option
 //     spells a PTY (the "pty switch" plant).
 //  4. The powerbrowser.orca.port default in powerbrowser-sidecar.js is an
@@ -158,12 +161,12 @@
 //   node scripts/verify-orca-service.mjs --self-test
 
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { availableParallelism, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads';
-import { verdictExit } from './lib/skip-verdict.mjs';
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-service';
@@ -178,9 +181,41 @@ const SOCKET_SUFFIX_BYTES = 19;
 // every *_OPTIONS and *OPT variable, every search path but PATH itself (*PATH, *PATHS, *LIB), every GIT_* and SSH
 // command variable, every interpreter family (NODE, PYTHON, PERL, RUBY, JAVA, LUA, GEM, BUNDLE, NPM, YARN,
 // ELECTRON, CLAUDE, ORCA), and the shell start-up and command hooks named below.
-const STEERING_EXACT = ['BASH_ENV', 'ENV', 'ZDOTDIR', 'PROMPT_COMMAND', 'IFS', 'CDPATH', 'SHELLOPTS', 'BASHOPTS', 'XDG_DATA_HOME', 'XDG_DATA_DIRS', 'EDITOR', 'VISUAL', 'PAGER', 'BROWSER', 'SSH_ASKPASS', 'SUDO_ASKPASS', 'GCONV_PATH', 'LOCPATH', 'NLSPATH', 'HOSTALIASES', 'RESOLV_CONF'];
-const STEERING_PATTERNS = [/^LD_/, /^DYLD_/, /_OPTIONS$/, /OPTS?$/, /.PATHS?$/, /LIB$/, /^GIT_/, /^SSH_(?!AUTH_SOCK$)/, /^(NODE|PYTHON|PERL|RUBY|JAVA|JDK|LUA|GEM|BUNDLE|NPM|YARN|COREPACK|ELECTRON|CLAUDE|ORCA)/];
-/** True for an environment name that steers what orcad, its shells or its agents' tools load or run. */
+const STEERING_EXACT = [
+    // Shell start-up, hooks and prompts (a prompt expands command substitutions).
+    'BASH_ENV', 'ENV', 'ZDOTDIR', 'PROMPT_COMMAND', 'IFS', 'CDPATH', 'SHELLOPTS', 'BASHOPTS', 'INPUTRC',
+    // Which program runs, and the home and config every tool reads (review follow-up: HOME, SHELL and
+    // XDG_CONFIG_HOME are steering even though orcad is given them; see DELIBERATE_STEERING).
+    'PATH', 'HOME', 'SHELL', 'ComSpec', 'COMSPEC', 'PATHEXT', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'SystemRoot', 'SYSTEMROOT', 'windir',
+    'XDG_CONFIG_HOME', 'XDG_CONFIG_DIRS', 'XDG_DATA_HOME', 'XDG_DATA_DIRS',
+    // Commands other tools run.
+    'BROWSER', 'SSH_ASKPASS', 'SUDO_ASKPASS', 'LESSOPEN', 'LESSCLOSE',
+    // The C library and the loader's data.
+    'GCONV_PATH', 'LOCPATH', 'NLSPATH', 'HOSTALIASES', 'RESOLV_CONF', 'GLIBC_TUNABLES', 'MALLOC_CHECK_',
+    // Build tools agents run.
+    'CC', 'CXX', 'CPP', 'LD', 'AR', 'AS', 'MAKE', 'VIRTUAL_ENV',
+];
+const STEERING_PATTERNS = [
+    /^LD_/, /^DYLD_/, /_OPTIONS$/, /OPTS?$/, /.PATHS?$/, /LIB$/, /FLAGS$/, /MODULES$/, /PAGER$/, /EDITOR$/, /_FILENAMES$/,
+    /^GIT_/, /^SSH_(?!AUTH_SOCK$)/, /^BASH_FUNC_/, /^PS[0-4]$/, /^GO[A-Z]+$/, /^CORE?CLR_/, /^COR_/,
+    // Interpreter, toolchain and library families, in any case (npm reads npm_config_* in lower case).
+    /^(NODE|PYTHON|PERL|RUBY|JAVA|JDK|LUA|GEM|BUNDLE|NPM|YARN|PNPM|COREPACK|ELECTRON|CLAUDE|ORCA|DENO|BUN|PIP|CONDA|POETRY|UV_|DOTNET|PHP|CARGO|RUST|GNUPG|TERMINFO|OPENSSL|VK_|GTK_|GIO_|GDK_|QT_PLUGIN|SYSTEMD_)/i,
+];
+/**
+ * Steering names orcad is given on purpose, each with what it lets a child do (Needs owner in the H2 result record).
+ * The allowlist's steering names must equal this set: a new one is red, and an entry the allowlist dropped is red.
+ */
+const DELIBERATE_STEERING = Object.freeze({
+    PATH: 'selects every program a child runs by name',
+    HOME: "selects the config every shell, git, ssh and npm reads (~/.bashrc, ~/.gitconfig, ~/.ssh/config, ~/.npmrc)",
+    SHELL: 'selects the shell program terminals and agents start',
+    XDG_CONFIG_HOME: 'selects the config directory git and other tools read',
+    ComSpec: 'selects the Windows command interpreter',
+    PATHEXT: 'selects which file extensions Windows runs as programs',
+    USERPROFILE: 'the Windows home: selects the config tools read',
+    LOCALAPPDATA: 'the Windows per-user application data and config directory',
+    SystemRoot: 'the Windows system directory programs and libraries load from',
+});
 export function isSteeringName(name) {
     return STEERING_EXACT.includes(name) || STEERING_PATTERNS.some((re) => re.test(name));
 }
@@ -889,8 +924,9 @@ function handOffClauses(paths, env) {
         if (env[constant] !== want) fails.push(`OrcaEnv.${constant} is ${JSON.stringify(env[constant])}, not '${want}' (interface C5)`);
     }
     let panes = 'SKIP (lane p64-02 not merged)';
+    // Tracked inputs: absent is red, never a SKIP (harness-static-hosting-01 follow-up).
     if (!existsSync(paths.orcaPanesDir)) {
-        skips.push('the orca-panes file-name comparison did not run: theia/extensions/orca-panes is absent (lane p64-02 not merged). Next step: merge it');
+        fails.push('source moved: theia/extensions/orca-panes is missing, so the hand-off file names cannot be compared');
     } else {
         panes = 'compared';
         const protocol = read(paths.orcaPanesProtocol) ?? '';
@@ -903,7 +939,7 @@ function handOffClauses(paths, env) {
     let vite = 'SKIP (lane p64-01 not merged)';
     const config = read(paths.panesViteConfig);
     if (config === null) {
-        skips.push('the bundle-folder comparison did not run: orca-overlay/files/vite.pb-panes.config.ts is absent (lane p64-01 not merged). Next step: merge it');
+        fails.push('source moved: orca-overlay/files/vite.pb-panes.config.ts is missing, so the bundle folder OrcaEnv names cannot be compared');
     } else {
         vite = 'compared';
         const outLine = /\boutDir\s*:([^\n]*)/.exec(config);
@@ -961,7 +997,11 @@ function staticClauses(paths, env, skips) {
     }
     if (/pty/i.test(String(env.buildOrcadEnv))) fails.push("OrcaEnv.buildOrcadEnv mentions a PTY endpoint: a pty switch reached orcad's environment, which D-31 keeps as Phase 62 left it");
     for (const name of env.ORCAD_ENV_ALLOWLIST) {
-        if (isSteeringName(name)) fails.push(`OrcaEnv.ORCAD_ENV_ALLOWLIST inherits ${name}, a steering variable`);
+        if (isSteeringName(name) && !Object.hasOwn(DELIBERATE_STEERING, name)) fails.push(`OrcaEnv.ORCAD_ENV_ALLOWLIST inherits ${name}, a steering variable`);
+    }
+    for (const name of Object.keys(DELIBERATE_STEERING)) {
+        if (!isSteeringName(name)) fails.push(`DELIBERATE_STEERING names ${name}, which the steering rule does not report: the list is wrong`);
+        if (!env.ORCAD_ENV_ALLOWLIST.includes(name)) fails.push(`DELIBERATE_STEERING names ${name}, which OrcaEnv.ORCAD_ENV_ALLOWLIST no longer holds: remove it from the list`);
     }
 
     // 4. The port default.
@@ -1046,16 +1086,17 @@ function bridgeKeyClause(paths) {
     const fails = [];
     const skips = [];
     const theia = read(paths.theiaService) ?? '';
-    const set = [...new Set([...theia.matchAll(/\b(POWERBROWSER_ORCA_[A-Z0-9_]+)\s*:/g)].map((m) => m[1]))].sort();
-    const orcaKeys = (keys) => keys.filter((k) => k.startsWith('POWERBROWSER_ORCA_'));
-    if (set.length !== 2) fails.push(`TheiaService.sys.mjs sets ${set.length ? set.join(', ') : 'no POWERBROWSER_ORCA_* key'}; it must set exactly two, the bridge folder key and orcad's port key`);
+    // Every key of the broader prefix counts (POWERBROWSER_ORCAD_*, POWERBROWSER_ORCA*), quoted or bare.
+    const set = [...new Set([...theia.matchAll(/(?<![\w$])["'`]?(POWERBROWSER_ORCA[A-Z0-9_]*)["'`]?\s*:/g)].map((m) => m[1]))].sort();
+    const orcaKeys = (keys) => keys.filter((k) => k.startsWith('POWERBROWSER_ORCA'));
+    if (set.length !== 2) fails.push(`TheiaService.sys.mjs sets ${set.length ? set.join(', ') : 'no POWERBROWSER_ORCA* key'}; it must set exactly two, the bridge folder key and orcad's port key`);
     for (const fn of ['bridgeDirFor', 'dataRootFor']) {
         if (!theia.includes(`OrcaEnv.${fn}(`)) fails.push(`TheiaService.sys.mjs does not compute the bridge folder through OrcaEnv.${fn}, so chrome and the Theia backend can get two folders`);
     }
     const compared = [];
     let bridgeKey = null;
     if (!existsSync(paths.orcaAgentsDir)) {
-        skips.push('the bridge folder key comparison did not run: theia/extensions/orca-agents is absent (lane p63-03 not merged). Next step: merge it');
+        fails.push('source moved: theia/extensions/orca-agents is missing, so the bridge folder key cannot be compared');
     } else {
         const backend = read(paths.orcaAgentsBackend);
         if (backend === null) fails.push('theia/extensions/orca-agents exists but src/node/orca-agents-backend-module.ts is missing, so the bridge folder key the backend reads cannot be compared');
@@ -1067,7 +1108,7 @@ function bridgeKeyClause(paths) {
         }
     }
     if (!existsSync(paths.orcaPanesDir)) {
-        skips.push('the port key comparison did not run: theia/extensions/orca-panes is absent (lane p64-02 not merged). Next step: merge it');
+        fails.push('source moved: theia/extensions/orca-panes is missing, so the port key cannot be compared');
     } else {
         const backend = read(paths.orcaPanesBackend);
         if (backend === null) fails.push('theia/extensions/orca-panes exists but src/node/orca-panes-backend-module.ts is missing, so the keys it reads cannot be compared');
@@ -1085,9 +1126,35 @@ function bridgeKeyClause(paths) {
                 // Its value is String() of the port TheiaService takes from the one accessor, OrcaService.orcadPort().
                 const value = new RegExp(`\\b${portKey}\\s*:\\s*String\\(\\s*([A-Za-z_$][\\w$]*)\\s*\\)`).exec(theia)?.[1];
                 if (!value) fails.push(`TheiaService sets ${portKey} to something other than String(<port>)`);
-                else if (!new RegExp(`\\b(?:const|let)\\s+${value}\\s*=\\s*this\\._orcaPort\\(\\)`).test(theia)) fails.push(`TheiaService's ${portKey} value ${value} is not this._orcaPort(), the port source powerbrowser.js sets`);
+                else {
+                    // The declaration is the whole statement, and the only assignment (review follow-up).
+                    if (!new RegExp(`^\\s*const\\s+${value}\\s*=\\s*this\\._orcaPort\\(\\);\\s*$`, 'm').test(theia)) fails.push(`TheiaService's ${portKey} value ${value} is not declared as exactly const ${value} = this._orcaPort();, so a fallback can stand beside the port source`);
+                    const assigns = [...theia.matchAll(new RegExp(`(?<![\\w$.])${value}\\s*(?:=(?![=>])|\\+=|-=|\\?\\?=|\\|\\|=|&&=)`, 'g'))].length;
+                    if (assigns !== 1) fails.push(`TheiaService assigns ${value} ${assigns} times; ${portKey} must come from its one declaration`);
+                }
+                // The port function returns the source and nothing else.
+                const fnAt = theia.search(/^\s*_orcaPort\(\)\s*\{/m);
+                const fnBody = fnAt < 0 ? null : (() => {
+                    const open = theia.indexOf('{', fnAt);
+                    let depth = 0;
+                    for (let i = open; i < theia.length; i += 1) {
+                        if (theia[i] === '{') depth += 1;
+                        else if (theia[i] === '}' && (depth -= 1) === 0) return theia.slice(open, i + 1);
+                    }
+                    return null;
+                })();
+                if (!fnBody) fails.push('TheiaService.sys.mjs declares no _orcaPort() this check can read');
+                else {
+                    const code = fnBody.replace(/\/\/.*$/gm, '');
+                    if (!/\bthis\._orcaPortSource\(\)/.test(code)) fails.push(`TheiaService._orcaPort() does not call this._orcaPortSource(), the one port source`);
+                    const other = /getIntPref|getCharPref|getStringPref|Services\.(?:prefs|env)|getEnv\(|OrcaService\.|(?<![\w$])[1-9]\d{3,4}(?![\w$])/.exec(code) ?? /\bthis\.(?!_orcaPortSource\b)\w+\s*\(/.exec(code);
+                    if (other) fails.push(`TheiaService._orcaPort() reads '${other[0]}' beside this._orcaPortSource(), so ${portKey} can name a port the source did not give`);
+                }
+                const sourceSets = [...theia.matchAll(/\bthis\._orcaPortSource\s*=(?!=)/g)].length;
+                if (sourceSets !== 1) fails.push(`TheiaService assigns this._orcaPortSource ${sourceSets} times; only setOrcaPortSource may set it`);
                 const shell = read(paths.shellJs) ?? '';
-                if (!/TheiaService\.setOrcaPortSource\(\s*\(\)\s*=>\s*OrcaService\.orcadPort\(\)\s*\)/.test(shell)) fails.push(`powerbrowser.js does not set TheiaService's port source to OrcaService.orcadPort(), so ${portKey} can name a port orcad was not started on`);
+                const calls = [...shell.matchAll(/TheiaService\.setOrcaPortSource\(/g)].length;
+                if (!/TheiaService\.setOrcaPortSource\(\s*\(\)\s*=>\s*OrcaService\.orcadPort\(\)\s*\)/.test(shell) || calls !== 1) fails.push(`powerbrowser.js does not set TheiaService's port source exactly once, to OrcaService.orcadPort(), so ${portKey} can name a port orcad was not started on`);
                 if (!/\bthis\._port\s*=\s*this\.orcadPort\(\)/.test(read(paths.orcaService) ?? '')) fails.push(`OrcaService does not start orcad on this.orcadPort(), so ${portKey} can name a port orcad was not started on`);
                 compared.push('port key');
             }
@@ -1203,10 +1270,23 @@ function selfTestPlants(paths, fixtureCodes) {
         { name: 'the orca-panes policy renames the port key', naming: 'which neither the orca-agents nor the orca-panes backend reads', file: paths.orcaPanesPolicy, edit: swap("ORCAD_PORT_ENV = 'POWERBROWSER_ORCA_PORT'", "ORCAD_PORT_ENV = 'POWERBROWSER_ORCA_WS_PORT'") },
         { name: 'a third POWERBROWSER_ORCA_* key in the sidecar environment', naming: 'it must set exactly two', file: paths.theiaService, edit: swap('      ...(orcaPort ? { POWERBROWSER_ORCA_PORT: String(orcaPort) } : {}),\n', '      ...(orcaPort ? { POWERBROWSER_ORCA_PORT: String(orcaPort) } : {}),\n      POWERBROWSER_ORCA_TOKEN: "t",\n') },
         { name: 'the port source is not OrcaService.orcadPort()', naming: 'OrcaService.orcadPort()', file: paths.shellJs, edit: swap('TheiaService.setOrcaPortSource(() => OrcaService.orcadPort());', 'TheiaService.setOrcaPortSource(() => 26768);') },
-        { name: 'the port key set from a pref read beside the accessor', naming: 'is not this._orcaPort()', file: paths.theiaService, edit: swap('    const orcaPort = this._orcaPort();\n', '    const orcaPort = Services.prefs.getIntPref("powerbrowser.orca.port", 26768);\n') },
+        { name: 'the port key set from a pref read beside the accessor', naming: 'is not declared as exactly const orcaPort = this._orcaPort();', file: paths.theiaService, edit: swap('    const orcaPort = this._orcaPort();\n', '    const orcaPort = Services.prefs.getIntPref("powerbrowser.orca.port", 26768);\n') },
         // harness-static-hosting-11: steering names outside the old list.
         { name: 'BASH_ENV in the allowlist', naming: 'inherits BASH_ENV, a steering variable', file: paths.orcaEnv, edit: swap('  "PATH",\n  "HOME",', '  "PATH",\n  "BASH_ENV",\n  "HOME",') },
         { name: 'GIT_SSH_COMMAND in the allowlist', naming: 'inherits GIT_SSH_COMMAND, a steering variable', file: paths.orcaEnv, edit: swap('  "PATH",\n  "HOME",', '  "PATH",\n  "GIT_SSH_COMMAND",\n  "HOME",') },
+        // Review follow-up (harness-static-hosting-11): names the first rule missed, and the deliberate list kept honest.
+        { name: 'XDG_CONFIG_DIRS in the allowlist', naming: 'inherits XDG_CONFIG_DIRS, a steering variable', file: paths.orcaEnv, edit: swap('  "PATH",\n  "HOME",', '  "PATH",\n  "XDG_CONFIG_DIRS",\n  "HOME",') },
+        { name: 'npm_config_script_shell in the allowlist', naming: 'inherits npm_config_script_shell, a steering variable', file: paths.orcaEnv, edit: swap('  "PATH",\n  "HOME",', '  "PATH",\n  "npm_config_script_shell",\n  "HOME",') },
+        { name: 'HOME dropped from the allowlist but kept on the deliberate list', naming: 'DELIBERATE_STEERING names HOME, which OrcaEnv.ORCAD_ENV_ALLOWLIST no longer holds', file: paths.orcaEnv, edit: swap('  "PATH",\n  "HOME",', '  "PATH",') },
+        // Review follow-up (harness-static-hosting-01): tracked inputs missing are red, not SKIP.
+        { name: 'the orca-panes extension removed', naming: 'source moved: theia/extensions/orca-panes is missing', dir: paths.orcaPanesDir },
+        { name: 'the orca-agents extension removed', naming: 'source moved: theia/extensions/orca-agents is missing', dir: paths.orcaAgentsDir },
+        { name: 'the pane build config removed', naming: 'source moved: orca-overlay/files/vite.pb-panes.config.ts is missing', file: paths.panesViteConfig, edit: () => null },
+        // Review follow-up (67-WR-03): a fallback beside the source, a reassignment, a direct pref read, a broader-prefix key.
+        { name: 'a fallback pref read after the port declaration', naming: 'is not declared as exactly const orcaPort = this._orcaPort();', file: paths.theiaService, edit: swap('    const orcaPort = this._orcaPort();\n', '    const orcaPort = this._orcaPort() ?? Services.prefs.getIntPref("powerbrowser.orca.port", 26768);\n') },
+        { name: 'the port reassigned after its declaration', naming: 'TheiaService assigns orcaPort 2 times', file: paths.theiaService, edit: swap('    const orcaPort = this._orcaPort();\n', '    let orcaPort = this._orcaPort();\n    orcaPort ||= 26768;\n') },
+        { name: 'the port function reading a pref itself', naming: "TheiaService._orcaPort() reads 'getIntPref'", file: paths.theiaService, edit: swap('      const port = this._orcaPortSource ? this._orcaPortSource() : null;\n', '      const port = this._orcaPortSource ? this._orcaPortSource() : PowerBrowserAPI.getIntPref("powerbrowser.orca.port", 0);\n') },
+        { name: 'a third key outside the exact prefix', naming: 'it must set exactly two', file: paths.theiaService, edit: swap('      ...(orcaPort ? { POWERBROWSER_ORCA_PORT: String(orcaPort) } : {}),\n', '      ...(orcaPort ? { POWERBROWSER_ORCA_PORT: String(orcaPort) } : {}),\n      POWERBROWSER_ORCAD_TOKEN: "t",\n') },
         { name: 'TheiaService builds the folder without bridgeDirFor', naming: 'OrcaEnv.bridgeDirFor', file: paths.theiaService, edit: swap('return await OrcaEnv.bridgeDirFor(dataRoot, name => PowerBrowserAPI.getEnv(name), OrcaEnv.nodePlatform(PowerBrowserProcesses.platform()));', 'return `${PowerBrowserAPI.getEnv("HOME")}/.cache/pb-orca-bridge`;') },
         { name: 'offer copied to pushLog', naming: 'offer in log', file: paths.orcaService, edit: swap('  async _writeHandOff(offer) {\n', '  async _writeHandOff(offer) {\n    this._pushLog(`offer ${offer}`);\n') },
         { name: 'offer written before ready', naming: 'offer before ready', file: paths.orcaService, edit: swap('    let proc;\n', '    await PowerBrowserProcesses.writePrivateFile(this._bridgeDir, OrcaEnv.ORCA_WEB_PAIRING_FILE, "stale\\n");\n    let proc;\n') },
@@ -1241,10 +1321,10 @@ async function runPlants(paths, plants, indexes) {
         const out = (text) => lines.push(['out', text]);
         const err = (text) => lines.push(['err', text]);
         let failed = false;
-        const original = readFileSync(p.file, 'utf8');
+        const original = p.dir ? null : readFileSync(p.file, 'utf8');
         try {
-            const edited = p.edit(original);
-            if (edited === null) rmSync(p.file); else writeFileSync(p.file, edited);
+            if (p.dir) renameSync(p.dir, `${p.dir}.planted-away`);
+            else { const edited = p.edit(original); if (edited === null) rmSync(p.file); else writeFileSync(p.file, edited); }
             const r = await check(paths);
             const text = r.fails.join('\n');
             if (!r.fails.length) { err(`  FAIL ${p.name} -> stayed green`); failed = true; }
@@ -1253,7 +1333,7 @@ async function runPlants(paths, plants, indexes) {
         } catch (err2) {
             err(`  FAIL ${p.name} -> ${err2.message}`); failed = true;
         } finally {
-            writeFileSync(p.file, original);
+            if (p.dir) renameSync(`${p.dir}.planted-away`, p.dir); else writeFileSync(p.file, original);
         }
         const after = await check(paths);
         if (after.fails.length) {
@@ -1295,6 +1375,11 @@ async function selfTestWorker({ tree, indexes }) {
  * check and its clean-up check for real. The output is printed in plant order, exactly as a serial run prints it.
  */
 async function runSelfTest() {
+    // The fixture copies upstream's AsyncShutdown module (scenario N); without the Gecko checkout no plant can run.
+    if (!existsSync(pathsFor(REPO_ROOT).asyncShutdown)) {
+        console.log(skipLine(`${NAME} self-test`, 'upstream/ is not fetched, so the fixture tree cannot be built. Next step: bash scripts/fetch-upstream.sh'));
+        return SKIP_EXIT;
+    }
     const tmp = mkdtempSync(join(tmpdir(), `${NAME}-`));
     try {
         const { paths, fixtureCodes } = buildSelfTestTree(tmp);
@@ -1306,9 +1391,17 @@ async function runSelfTest() {
         }
         console.log(`${NAME} self-test: control green on copies (scenarios ${control.scenarios.join(', ')}, fixture Orca default port 7777, compared ${control.bridgeKeyComparison})`);
         // harness-static-hosting-11: every name the audit lists steers; nothing the allowlist holds does (clause 3 itself).
-        const unsteered = ['BASH_ENV', 'ENV', 'GIT_SSH_COMMAND', 'GIT_CONFIG_GLOBAL', 'PYTHONPATH', 'PERL5LIB', 'LD_AUDIT', 'NODE_OPTIONS', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES', 'RUBYOPT', 'JAVA_TOOL_OPTIONS', 'CLASSPATH', 'SSH_ASKPASS', 'PROMPT_COMMAND'].filter((n) => !isSteeringName(n));
+        const unsteered = [
+            'BASH_ENV', 'ENV', 'GIT_SSH_COMMAND', 'GIT_CONFIG_GLOBAL', 'PYTHONPATH', 'PERL5LIB', 'LD_AUDIT', 'NODE_OPTIONS', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES', 'RUBYOPT', 'JAVA_TOOL_OPTIONS', 'CLASSPATH', 'SSH_ASKPASS', 'PROMPT_COMMAND',
+            // The review's list (follow-up).
+            'BASH_FUNC_ls%%', 'PS0', 'PS1', 'PS4', 'XDG_CONFIG_HOME', 'XDG_CONFIG_DIRS', 'SHELL', 'HOME', 'LESSOPEN', 'LESSCLOSE', 'MANPAGER', 'SUDO_EDITOR', 'SYSTEMD_PAGER',
+            'GLIBC_TUNABLES', 'OPENSSL_CONF', 'OPENSSL_ENGINES', 'OPENSSL_MODULES', 'GTK_MODULES', 'GIO_EXTRA_MODULES', 'VK_ICD_FILENAMES',
+            'RUSTC_WRAPPER', 'RUSTC', 'CARGO_HOME', 'CARGO_BUILD_RUSTC_WRAPPER', 'GOFLAGS', 'GOROOT', 'GOTOOLCHAIN', 'CC', 'CXX', 'CFLAGS', 'LDFLAGS', 'MAKEFLAGS',
+            'DOTNET_STARTUP_HOOKS', 'CORECLR_PROFILER', 'COR_PROFILER', 'PHPRC', 'PHP_INI_SCAN_DIR', 'DENO_DIR', 'BUN_INSTALL', 'PIP_INDEX_URL', 'CONDA_PREFIX', 'VIRTUAL_ENV',
+            'GNUPGHOME', 'INPUTRC', 'TERMINFO', 'npm_config_script_shell', 'npm_config_node_options',
+        ].filter((n) => !isSteeringName(n));
         if (unsteered.length) { console.error(`${NAME} self-test: FAIL -- steering names the rule does not catch: ${unsteered.join(', ')}`); return 1; }
-        console.log('  ok the steering rule catches BASH_ENV, ENV, GIT_*, *PATH, *LIB, LD_*, DYLD_*, *_OPTIONS, *OPT, interpreter families and shell hooks');
+        console.log('  ok the steering rule catches the audit\'s and the review\'s names: shell hooks and prompts, exported functions, HOME, SHELL and the config directories, pagers and editors, loader, TLS and module paths, build tools, interpreter and runtime families in any case');
         // harness-static-hosting-01: a tree without orca/ skips clause 9, and the row is SKIP, not PASS.
         {
             const r = await check({ ...paths, orcaDir: join(tmp, 'no-orca') });
