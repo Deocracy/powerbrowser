@@ -526,7 +526,7 @@ function selfTest() {
     const NEEDS = `    needs: [${SIDECAR.name}, ${ORCA.name}]\n`;
     const EXACT = `not exactly [${SIDECAR.name}, ${ORCA.name}]`;
     const download = p => `      - name: Download the hosted Windows ${p === SIDECAR ? 'sidecar into windows-sidecar/' : 'Orca tree into windows-orca/'} (data, admitted by its digest before staging)\n        if: steps.key_gate.outputs.build == 'true'\n        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n          name: ${p.name}\n          path: ${p.name}\n`;
-    // The rulings guard step, found by what it is (the step of this job that runs the licence-allowlist rulings check, through
+    // The Orca rulings guard step, found by what it is (the step of this job that runs the licence-allowlist rulings check, through
     // run-no-skip.sh or directly), never by a quoted line: a rewording of the step or its call must not break the plants.
     const stepStarts = [...slice.matchAll(/^ {6}- /gm)].map(m => m.index);
     const stepBlocks = stepStarts.map((at, i) => ({ at, end: i + 1 < stepStarts.length ? stepStarts[i + 1] : slice.length }));
