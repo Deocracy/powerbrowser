@@ -41,8 +41,8 @@
 // Every page text read must equal a table value; the expected texts come from orca-failure-copy.ts by type
 // stripping, never spelled here.
 //
-// Takes the live lock itself (scripts/lib/live-lock.mjs: re-runs under flock on pb-live.lock in the common dir unless
-// PB_LIVE_LOCK_HELD=1 and the lock is held), removes every ORCA_* name from its own environment
+// Takes the live lock itself (scripts/lib/live-lock.mjs; the rule is in that file's header), removes every ORCA_*
+// name from its own environment
 // first, sets MOZ_PURGE_CACHES=1, prints through installOutputRedaction, signals only recorded identities, and
 // reads the offer into memory only to find registry rows; the offer is never printed.
 //
@@ -619,7 +619,7 @@ if (isMain) {
     process.exit(2);
   }
   if (args.includes('--self-test')) process.exit(runSelfTest(await importTs(COPY_REL)));
-  const locked = holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
+  const locked = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
   if (locked !== null) process.exit(locked);
   const pre = prerequisite();
   if (pre.fail) {

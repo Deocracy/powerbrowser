@@ -262,7 +262,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const arg = process.argv[2];
     if (arg && arg !== '--self-test') { console.error('usage: node scripts/verify-orca-agent-mark-live.mjs [--self-test]'); process.exit(2); }
     if (arg === '--self-test') process.exit(runSelfTest());
-    const locked = holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
+    const locked = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
     if (locked !== null) process.exit(locked);
     process.exit(await main());
 }

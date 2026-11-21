@@ -499,7 +499,7 @@ if (isEntryPoint) {
         process.exit(2);
     }
     if (!fixturesMode) {
-        const locked = holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT, args });
+        const locked = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT, args });
         if (locked !== null) process.exit(locked);
     }
     let code = 0;

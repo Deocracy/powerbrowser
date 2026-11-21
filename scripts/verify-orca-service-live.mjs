@@ -542,7 +542,7 @@ if (isEntryPoint) {
         process.exit(2);
     }
     if (args.includes('--self-test')) process.exit(runSelfTest());
-    const locked = holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT, args });
+    const locked = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT, args });
     if (locked !== null) process.exit(locked);
     process.exit(await live());
 }

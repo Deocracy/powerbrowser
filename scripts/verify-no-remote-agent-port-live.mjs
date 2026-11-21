@@ -419,7 +419,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     // Both modes may launch the built binary (the self-test's live half is the Remote Agent control), so both take the
     // live lock when a binary is there to launch.
     if (!skipReason()) {
-        const locked = holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
+        const locked = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
         if (locked !== null) process.exit(locked);
     }
     process.exit(process.argv.includes('--self-test') ? await selfTest() : await live());

@@ -3,11 +3,12 @@
 //
 // live-harness-libs (v1.7 audit, lane H5): the shared halves of the live rows, proven without a browser.
 //
-//   lock     scripts/lib/live-lock.mjs (harness-live-security-05). On a scratch lock file with the real flock: a free lock
-//            is 'take' with or without PB_LIVE_LOCK_HELD=1, a held lock with PB_LIVE_LOCK_HELD=1 is 'proceed', and no
-//            lock path is 'fail'. holdLiveLock re-runs a probe under the lock (the probe sees the lock held and
-//            PB_LIVE_LOCK_HELD=1) and passes its exit status through unchanged, 77 included. Plants: the old rule that
-//            trusted PB_LIVE_LOCK_HELD=1 alone, and a holdLiveLock that drops the status.
+//   lock     scripts/lib/live-lock.mjs (harness-live-security-05). The pure rule, then a probe row run with the real
+//            flock on a scratch checkout: with nothing set it takes the free lock and passes 0, 77 and 1 through; under
+//            an outer flock it runs (no deadlock); while a non-ancestor holds the lock (flock -o, as the driver holds
+//            it), PB_LIVE_LOCK_HELD=1 alone, or with a forged PB_LIVE_LOCK_HOLDER, FAILs by name, the true holder lets it
+//            run, and with nothing set the bounded wait FAILs naming the holder; a SIGTERM to the outer pid alone ends
+//            the locked re-run and frees the lock. Plant: the old rule that accepted any holder.
 //   signin   writeBackSignIn in scripts/lib/firefox-bidi.mjs (harness-live-security-13). A write by the owner's own
 //            claude between the harness's read and its rename (an MCP sign-in) survives, and the rotated token lands;
 //            a changed refresh token is never overwritten. Plant: the helper with its re-read removed loses the write.
@@ -27,7 +28,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 
-import { holdLiveLock, lockDecision, lockState } from './lib/live-lock.mjs';
+import { holdLiveLock, lockDecision, lockHolders, parseHolder, startTicks } from './lib/live-lock.mjs';
 
 const NAME = 'live-harness-libs';
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -37,45 +38,91 @@ const sha256 = (s) => createHash('sha256').update(String(s)).digest('hex');
 const results = [];
 const want = (name, ok, detail = '') => results.push({ name, ok, detail });
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const until = async (test, ms) => { const end = Date.now() + ms; while (Date.now() < end) { if (await test()) return true; await sleep(50); } return false; };
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
 async function lockCases(tmp) {
-    // A scratch checkout, so holdLiveLock below resolves <git common dir>/pb-live.lock to this folder's own lock.
+    // The pure rule first (harness-live-security-05 as corrected after review).
+    const H = 4242;
+    const base = { lock: '/x/pb-live.lock', holders: [], ancestors: [100, 1], holder: null, holderTicks: null, envHeld: false };
+    const d = (over) => lockDecision({ ...base, ...over });
+    want('lock rule: a free lock with nothing set is taken', d({}) === 'take');
+    want('lock rule: no lock path is a FAIL', d({ lock: null }) === 'fail');
+    want('lock rule: PB_LIVE_LOCK_HELD=1 with the lock held by a non-ancestor and no named holder is a FAIL', d({ holders: [H], envHeld: true }) === 'fail');
+    want('lock rule: PB_LIVE_LOCK_HELD=1 on a free lock is a FAIL, not a silent take', d({ envHeld: true }) === 'fail');
+    want('lock rule: the named holder with matching start ticks proceeds', d({ holders: [H], envHeld: true, holder: { pid: H, ticks: '77' }, holderTicks: '77' }) === 'proceed');
+    want('lock rule: a named holder with other start ticks (a reused pid) is a FAIL', d({ holders: [H], envHeld: true, holder: { pid: H, ticks: '77' }, holderTicks: '78' }) === 'fail');
+    want('lock rule: a named holder that does not hold the lock is a FAIL', d({ holders: [H], envHeld: true, holder: { pid: 555, ticks: '9' }, holderTicks: '9' }) === 'fail');
+    want('lock rule: an ancestor holding the lock proceeds, with or without the variable', d({ holders: [100] }) === 'proceed' && d({ holders: [100], envHeld: true }) === 'proceed');
+    const oldRule = ({ envHeld, holders }) => (envHeld && holders.length ? 'proceed' : 'take');
+    want('lock plant: the old rule (any holder plus PB_LIVE_LOCK_HELD=1) is caught', oldRule({ holders: [H], envHeld: true }) !== d({ holders: [H], envHeld: true }));
+    want('lock rule: the holder variable parses only <pid>:<ticks>', parseHolder('12:34')?.pid === 12 && parseHolder('12') === null && parseHolder('a:1') === null);
+
+    // End to end with the real flock, on a scratch checkout so the row's lock is <scratch>/.git/pb-live.lock.
     spawnSync('git', ['init', '-q', tmp], { stdio: 'ignore' });
     const lock = join(tmp, '.git', 'pb-live.lock');
     writeFileSync(lock, '');
-    want('lock: a free lock is taken, PB_LIVE_LOCK_HELD unset', lockDecision({ envHeld: false, state: lockState(lock), lock }) === 'take');
-    want('lock: a free lock is taken although PB_LIVE_LOCK_HELD=1', lockDecision({ envHeld: true, state: lockState(lock), lock }) === 'take');
-    want('lock: no lock path is a FAIL, never an unlocked run', lockDecision({ envHeld: true, state: 'held', lock: null }) === 'fail');
-    want('lock: flock that did not run is a FAIL', lockDecision({ envHeld: false, state: 'error', lock }) === 'fail');
-    const holder = spawn('flock', [lock, 'sleep', '30'], { stdio: 'ignore' });
-    try {
-        for (let i = 0; i < 50 && lockState(lock) !== 'held'; i++) await new Promise((r) => setTimeout(r, 100));
-        want('lock: a held lock reads held', lockState(lock) === 'held');
-        want('lock: a held lock with PB_LIVE_LOCK_HELD=1 proceeds', lockDecision({ envHeld: true, state: lockState(lock), lock }) === 'proceed');
-        want('lock: a held lock without PB_LIVE_LOCK_HELD waits for it (take)', lockDecision({ envHeld: false, state: lockState(lock), lock }) === 'take');
-    } finally {
-        holder.kill('SIGKILL');
-    }
-    // The old rule (PB_LIVE_LOCK_HELD=1 alone) must be caught by the case above: a planted decision trusting the variable.
-    const oldRule = ({ envHeld, lock: l }) => (!l ? 'fail' : envHeld ? 'proceed' : 'take');
-    want('lock plant: trusting PB_LIVE_LOCK_HELD=1 on a free lock is caught', oldRule({ envHeld: true, state: 'free', lock }) !== lockDecision({ envHeld: true, state: 'free', lock }));
-
-    // holdLiveLock end to end on a probe: it re-runs the probe under flock and passes 77 through.
-    for (let i = 0; i < 50 && lockState(lock) !== 'free'; i++) await new Promise((r) => setTimeout(r, 100));
-    const probe = join(tmp, 'probe.mjs');
-    writeFileSync(probe, `import { lockState } from ${JSON.stringify(pathToFileURL(join(HERE, 'lib', 'live-lock.mjs')).href)};
-const held = lockState(${JSON.stringify(lock)}) === 'held' && process.env.PB_LIVE_LOCK_HELD === '1';
-process.exit(held ? Number(process.argv[2]) : 3);\n`);
-    const runner = join(tmp, 'runner.mjs');
-    // The runner stands in for a live row: holdLiveLock with a root whose git common dir is the scratch folder.
-    writeFileSync(runner, `import { holdLiveLock } from ${JSON.stringify(pathToFileURL(join(HERE, 'lib', 'live-lock.mjs')).href)};
-process.exit(holdLiveLock({ name: 'probe', scriptUrl: ${JSON.stringify(pathToFileURL(probe).href)}, args: [process.argv[2]], root: ${JSON.stringify(tmp)} }) ?? 0);\n`);
+    const pidFile = join(tmp, 'row.pid');
+    const row = join(tmp, 'row.mjs');
+    writeFileSync(row, `import { writeFileSync } from 'node:fs';
+import { holdLiveLock } from ${JSON.stringify(pathToFileURL(join(HERE, 'lib', 'live-lock.mjs')).href)};
+const locked = await holdLiveLock({ name: 'probe-row', scriptUrl: import.meta.url, root: ${JSON.stringify(tmp)} });
+if (locked !== null) process.exit(locked);
+if (process.argv[2] === 'sleep') { writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1e6); }
+else { console.log('probe-row: ran'); process.exit(Number(process.argv[2])); }\n`);
+    const cleanEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('PB_LIVE_LOCK')));
+    const run = (args, extra = {}, cmd = process.execPath, pre = []) => spawnSync(cmd, [...pre, ...args], { env: { ...cleanEnv, ...extra }, encoding: 'utf8', timeout: 15000 });
     for (const status of [0, 77, 1]) {
-        const r = spawnSync(process.execPath, [runner, String(status)], { env: { ...process.env, PB_LIVE_LOCK_HELD: '' }, encoding: 'utf8' });
-        want(`lock: holdLiveLock ran the row under the lock and passed exit ${status} through`, r.status === status, `exit ${r.status}${r.stderr ? `; ${r.stderr.trim()}` : ''}`);
+        const r = run([row, String(status)]);
+        want(`lock: with nothing set the row takes the free lock and passes exit ${status} through`, r.status === status && r.stdout.includes('probe-row: ran'), `exit ${r.status} ${r.signal ?? ''}`);
     }
-    const free = spawnSync(process.execPath, [runner, '0'], { env: { ...process.env, PB_LIVE_LOCK_HELD: '1' }, encoding: 'utf8' });
-    want('lock: PB_LIVE_LOCK_HELD=1 on a free lock still takes it (the probe saw the lock held)', free.status === 0 && /is free; taking the lock/.test(free.stdout), `exit ${free.status}`);
-    want('lock: holdLiveLock is a FAIL outside a checkout', holdLiveLock({ name: 'probe', scriptUrl: pathToFileURL(probe).href, args: ['0'], root: join(tmp, 'no-such-folder') }) === 1);
+    const outer = run([process.execPath, row, '0'], {}, 'flock', [lock]);
+    want('lock: under an outer `flock <lock> node <row>` without the variable the row runs (an ancestor holds it; no deadlock)', outer.status === 0 && outer.stdout.includes('probe-row: ran'), `exit ${outer.status} ${outer.signal ?? ''}`);
+    const outerHeld = run([process.execPath, row, '0'], { PB_LIVE_LOCK_HELD: '1' }, 'flock', [lock]);
+    want('lock: under an outer flock with PB_LIVE_LOCK_HELD=1 the row runs', outerHeld.status === 0 && outerHeld.stdout.includes('probe-row: ran'), `exit ${outerHeld.status}`);
+
+    // A holder that is not this row's ancestor, held the way the gate driver holds it (flock -o, its own group).
+    const holder = spawn('flock', ['-o', lock, 'sleep', '30'], { stdio: 'ignore', detached: true });
+    try {
+        await until(() => lockHolders(lock).includes(holder.pid), 5000);
+        const ticks = startTicks(holder.pid);
+        want('lock: /proc/locks names the holder', lockHolders(lock).includes(holder.pid) && ticks !== null);
+        const other = run([row, '0'], { PB_LIVE_LOCK_HELD: '1' });
+        want('lock: PB_LIVE_LOCK_HELD=1 while another session holds the lock FAILs by name (not run alongside)', other.status === 1 && !other.stdout.includes('probe-row: ran') && other.stderr.includes(`pid ${holder.pid}`) && /neither the named holder nor an ancestor/.test(other.stderr), `exit ${other.status}`);
+        const named = run([row, '0'], { PB_LIVE_LOCK_HELD: '1', PB_LIVE_LOCK_HOLDER: `${holder.pid}:${ticks}` });
+        want('lock: the named holder with its start ticks lets the row run', named.status === 0 && named.stdout.includes('probe-row: ran'), `exit ${named.status}`);
+        const forged = run([row, '0'], { PB_LIVE_LOCK_HELD: '1', PB_LIVE_LOCK_HOLDER: `${holder.pid}:${Number(ticks) + 1}` });
+        want('lock: a forged holder (the right pid, other start ticks) FAILs', forged.status === 1 && !forged.stdout.includes('probe-row: ran'), `exit ${forged.status}`);
+        const notHolding = run([row, '0'], { PB_LIVE_LOCK_HELD: '1', PB_LIVE_LOCK_HOLDER: `${process.pid}:${startTicks(process.pid)}` });
+        want('lock: a forged holder (a live process that holds nothing) FAILs', notHolding.status === 1 && !notHolding.stdout.includes('probe-row: ran'), `exit ${notHolding.status}`);
+        const t0 = Date.now();
+        const waited = run([row, '0'], { PB_LIVE_LOCK_WAIT_S: '1' });
+        want('lock: with nothing set the row waits a bounded time, names the holder and FAILs', waited.status === 1 && !waited.stdout.includes('probe-row: ran') && waited.stdout.includes(`held by pid ${holder.pid}`) && /still held after 1 s/.test(waited.stderr) && Date.now() - t0 < 8000, `exit ${waited.status}`);
+    } finally {
+        try { process.kill(-holder.pid, 'SIGKILL'); } catch { /* gone */ }
+    }
+    await until(() => lockHolders(lock).length === 0, 5000);
+
+    // harness-live-security-05 (signals): a SIGTERM to the row's outer pid alone reaches the locked re-run.
+    rmSync(pidFile, { force: true });
+    const outerRow = spawn(process.execPath, [row, 'sleep'], { env: cleanEnv, stdio: 'ignore' });
+    const exited = new Promise((r) => outerRow.once('exit', (code, signal) => r({ code, signal })));
+    const started = await until(() => existsSync(pidFile), 8000);
+    const inner = started ? Number(readFileSync(pidFile, 'utf8')) : 0;
+    process.kill(outerRow.pid, 'SIGTERM');
+    const end = await Promise.race([exited, sleep(8000).then(() => null)]);
+    const innerGone = inner ? await until(() => !alive(inner), 5000) : false;
+    const freed = await until(() => lockHolders(lock).length === 0, 5000);
+    if (!end) try { outerRow.kill('SIGKILL'); } catch { /* gone */ }
+    if (inner && alive(inner)) try { process.kill(inner, 'SIGKILL'); } catch { /* gone */ }
+    want('lock: a SIGTERM to the outer pid ends the locked re-run and frees the lock, and the outer exits 143', started && innerGone && freed && end?.code === 143, `started ${started}, inner gone ${innerGone}, lock freed ${freed}, outer ${JSON.stringify(end)}`);
+    const said = [];
+    const ownError = console.error;
+    console.error = (...a) => said.push(a.join(' ')); // the probe's FAIL line is the expected outcome, not this test's
+    let outside;
+    try { outside = await holdLiveLock({ name: 'probe', scriptUrl: pathToFileURL(row).href, args: ['0'], root: join(tmp, 'no-such-folder') }); } finally { console.error = ownError; }
+    want('lock: holdLiveLock is a FAIL outside a checkout, naming it', outside === 1 && said.some((l) => l.includes('git names no common dir')));
 }
 
 async function signinCases(tmp) {

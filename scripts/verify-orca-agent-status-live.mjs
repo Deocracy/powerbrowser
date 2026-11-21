@@ -402,7 +402,7 @@ if (isEntryPoint) {
         console.error(`${NAME}: FAIL -- unknown argument '${args[0]}' (usage: node ${SELF_REL} [--self-test])`);
         process.exit(2);
     }
-    const locked = holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT, args });
+    const locked = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT, args });
     if (locked !== null) process.exit(locked);
     const restore = installOutputRedaction([]);
     let code = 0;

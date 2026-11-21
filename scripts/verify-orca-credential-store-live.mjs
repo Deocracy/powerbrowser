@@ -28,8 +28,10 @@
 // HOME is a per-run scratch folder (owner ruling 2026-11-15, Scratch HOME; lib/firefox-bidi.mjs liveEnv): orcad keeps its credential
 // key in <HOME>/.orca (orcadCredentialRoot), so step 2 writes a key file that is removed when the run exits.
 //
-// Run under flock /home/chris/coding/Power-Browser/.git/pb-live.lock: the script re-execs itself
-// under <git common dir>/pb-live.lock unless PB_LIVE_LOCK_HELD=1. It removes every ORCA_* name from
+// The live lock: run the row plainly (node scripts/verify-orca-credential-store-live.mjs). It takes
+// <git common dir>/pb-live.lock itself through scripts/lib/live-lock.mjs, whose header states the rule: it runs at
+// once only when the gate driver's named holder or an ancestor holds the lock, FAILs when PB_LIVE_LOCK_HELD=1 is set
+// without either, and otherwise waits for the lock (bounded, naming the holder). It removes every ORCA_* name from
 // its own environment first, sets MOZ_PURGE_CACHES=1 so edited chrome JS is what runs, prints through
 // installOutputRedaction, signals only identities it recorded (pid plus start ticks), and never
 // prints a pairing value.
@@ -337,7 +339,7 @@ if (isEntryPoint) {
         process.exit(2);
     }
     if (args.includes('--self-test')) process.exit(runSelfTest());
-    const locked = holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT, args });
+    const locked = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT, args });
     if (locked !== null) process.exit(locked);
     for (const key of Object.keys(process.env)) if (key.startsWith('ORCA_')) delete process.env[key];
     process.exit(await live());
