@@ -60,3 +60,44 @@ None.
 - orca-service, orca-service-self-test: FAIL, not caused by me (H2: TheiaService sets POWERBROWSER_ORCA_PORT, status reply carries `generation`).
 - orca-browser-tab-scope, orca-browser-tab-scope-self-test: FAIL, not caused by me (H3).
 - shell-error-copy-no-internals, shell-error-copy-no-internals-self-test: FAIL, not caused by me (H8, the renamed-mode notice).
+
+## Follow-up round (review of the H6 commits; base 7a266476, final code commit 7d27556a)
+
+Quick gate log: `.mozbuild/h6-quick2.log` in this worktree. Still no live row and no browser. The three quick self-tests: orca-tabs-live 121 cases,
+orca-terminal-keys-live 67, orca-relaunch-restore-live 32. Callers of the five scripts that read an exit status: none besides the driver.
+
+| Review point | Status | Commit | Check | Note |
+|---|---|---|---|---|
+| 1a harness-live-tabs-03 (real offer written to /tmp) | fixed | 5e4cc138 | orca-tabs-live --self-test::the file search control writes only its own synthetic needle; a control handed a real needle is caught by the recorder | `fileSearchControl()` plants `pb-offer-control-...`; the harness never writes a form of the real offer |
+| 1b harness-live-tabs-03 (orcad logs over an empty buffer) | fixed | 5e4cc138 | ::no orcad log file exists; only an unrelated log file exists | the place needs `logs/daemon.log` (Orca's daemon-file-log) under orcad's data root among the files read, else it is blind (red). A live run must therefore show that file; if orcad writes it elsewhere the row goes red naming it, and `ORCAD_KNOWN_LOG` is the one constant to change |
+| 1c harness-live-tabs-03 (sidecar ring at its 500 cap) | fixed | 5e4cc138 | ::a TheiaService ring at its cap is a note, not a blind place; an OrcaService ring at its cap is blind | The TheiaService ring carries the sidecar's stdout, which never carries the offer (it goes to the bridge folder only), so at its cap the retained tail is searched and a note says so. OrcaService's ring (cap 200) logs the hand-off events: it must be non-empty and below its cap, else the place is blind. A live run on a fresh scratch profile must show OrcaService under 200 lines |
+| 1d profile scan | not done, reason recorded | - | - | the whole profile is scanned by orca-offer-scan / orca-pairing-containment with their holder exclusions (the token store legitimately holds the device token, session-only state); a plain byte scan here would report that holder as a leak. This row scans the bridge folder's other files and orcad's `*.log` files |
+| 2 harness-live-tabs-07 | fixed | 5e4cc138 | ::an agent that exited at once with output on screen; died after its widget appeared; missing from the list; a shell that stayed alive but could not find the agent | orcad's terminal list must show the handle with no `exitCause` and `connected` not false, at appearance and 4 s later; the read must be non-empty and carry no shell/OS error text. Not claimed: a marker proving the TUI is Claude's |
+| 3a harness-live-tabs-14 lock trust | fixed | 5e4cc138 | ::the live lock behaves (hand-set flag, ancestor flock, signals) | `PB_LIVE_LOCK_HELD=1` is accepted only when the lock is held (the driver's holder is not an ancestor, so ancestry cannot be required there); a free lock is a thrown error naming it. A flag set by hand while another session holds the lock is indistinguishable from the driver's and is accepted: known limit. `PB_LIVE_LOCK_FILE` counts only with `--lock-probe`; the helper's `lockFile`, `ancestorCheck`, `forward` options exist for the self-test and no row passes them |
+| 3b flock <lock> node <row> | fixed | 5e4cc138 | ::the live lock behaves (a row under flock <lock> runs; the same call without the check hangs) | `lockHeldByAncestor` mirrors `lock_held_by_ancestor` (/proc/locks by inode, then the parent chain) |
+| 3c signals | fixed | 5e4cc138 | ::the live lock behaves (SIGTERM reaches the re-run, its child and frees the lock; the no-forward plant leaves it running) | the re-run is async, in its own process group, with SIGINT/SIGTERM/SIGHUP (and the parent's exit) forwarded; the five rows now `await` it (7d27556a). A SIGKILL of the parent cannot be forwarded |
+| 4 harness-live-tabs-08 | fixed | 5e4cc138 | ::unproven selectors: a partial run ...; make the row exit 77 and a failure still wins | `unprovenSelectorsSkip`: a selector whose detector never matched is listed as a skip reason through the existing halfSkips path (exit 77 when nothing failed) |
+| 5 harness-live-tabs-11 | fixed | 5e4cc138, 7d27556a | ::an unreadable generated frontend is not "not wired" | `appWiresOrcaPanes` returns null for an unreadable index and `listenerCoverage` makes that red; tab-strip-live no longer waits for a boot in that case |
+| 6 harness-live-tabs-10 | fixed | 5e4cc138 | ::close dialog titles are required when the checkout is present / the dialog file is gone; no orca checkout gives no titles | `closeDialogTitles` throws when orca/src exists and no title is read |
+| 7 relaunch ids | fixed | 7d27556a | verify-orca-relaunch-restore-live.mjs --self-test::the save id alone is enough; this row requires all three ids up front | ids are required where used (`needId`) in the shared launch context; the row's own run requires all three at the start. offer-scan and pairing-containment (which only save a Setup) are unaffected by a moved restore or activate id |
+| 8 fixture git and CLI HOME | fixed | 5e4cc138, 7d27556a | ::fixture git (the pane harness's) ignores a developer config...; the same without the hygiene is hit | the session and relaunch-restore use `fixtureGit` from scripts/lib/orca-pane-harness.mjs (loaded dynamically: that file imports this lib); my own copies were removed. Both the tabs session and relaunch-restore pass the scratch HOME to the Orca CLI. The CLI reads its endpoint from ORCA_USER_DATA; it uses homedir() only as a default, in serve-service and bundled-skill install code, none reached by these calls. Not proven live |
+| 9 clipboard header vs code | fixed | 7d27556a | orca-terminal-keys-live --self-test::a clipboard that held no text is named and left as the run set it, never overwritten | code and header agree: unreadable or no-text (empty and non-text cannot be told apart) is left and named; the global clipboard then keeps the run's 100 KiB text, which is what "do not destroy what you could not read" costs |
+
+Extra changes in this round: rows with nothing to launch (a prerequisite absent) print their SKIP without taking the lock (tabs-live, terminal-keys,
+relaunch-restore), so the SKIP self-test control needs no lock; the headers that said "do not wrap it in flock" were corrected (they were wrong once the
+ancestor check existed).
+
+Which lock helper to keep: three exist (`reexecUnderLiveLock` here, `scripts/lib/live-lock.mjs` from H5, `scripts/lib/live-lock-reexec.mjs` from H7).
+H5's checks the lock is held when the flag is set but trusts any holder only through `flock` without an ancestor check (a row under `flock <lock> node <row>`
+without the flag takes the lock again and waits on its own parent) and forwards no signal. H7's trusts the flag blindly, has no ancestor check and no signal
+forwarding. Mine has all three properties and a self-test that plants each. Recommendation: keep mine (move it to a shared `scripts/lib/live-lock.mjs`
+at integration) and point H5's and H7's rows at it; until then H5's and H7's rows keep points 3a to 3c open.
+
+Red by design (updated counts, tree at 7d27556a): scan-brand-residue and its self-test: Orca 3847 -> 3854, orca 6603 -> 6631, ORCA 1489 -> 1492, orcad
+2552 -> 2566, needOrca 13 -> 14, appWiresOrcaPanes 4 -> 5 (inventory expected_count values; the tree before this round was green at those numbers only
+after other lanes' recount, so recount at integration), and scripts/verify-orca-tabs-live.mjs is unclaimed at lines 598 and 605 for the "ORCA" row (add
+it to that row's expected_files).
+
+Quick gate at 7d27556a: 5 rows not PASS, 0 SKIP. scan-brand-residue and -self-test: mine, red by design (above). shell-error-copy-no-internals and -self-test:
+not mine (H8, the renamed-mode notice). orca-failure-classes: not mine (the pinned orcad exit codes orcad_invalid_bind_address, orcad_data_root_* and
+orcad_instance_lock_foreign_identity have no class in ORCA_CODE_CLASSES; owner of powerbrowser/shell/OrcaEnv.sys.mjs).
