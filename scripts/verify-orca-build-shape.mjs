@@ -288,6 +288,11 @@ function runSelfTestBody() {
         writeFileSync(join(overlay, 'seams.json'), `${JSON.stringify({ seams: [{ path: 'package.json', patch: 'patches/010-fixture.patch', upstream_blob: seamBlob, reason: 'fixture', upstream: { class: 'pb-only', pr: null } }] })}\n`);
         mkdirSync(join(overlay, 'files', 'pbx'), { recursive: true });
         writeFileSync(join(overlay, 'files', 'pbx', 'added.ts'), 'export const a = 1\n');
+        // TMPDIR inside a git work tree, for the plant below; the returned function restores it and then runs `then`.
+        const outer = join(tmp, 'outer-work-tree');
+        mkdirSync(join(outer, 'scratch'), { recursive: true });
+        execFileSync('git', [...fixtureGitArgs(), '-C', outer, 'init', '-q'], { env: fixtureGitEnv() });
+        const inWorkTree = (then) => { const saved = process.env.TMPDIR; process.env.TMPDIR = join(outer, 'scratch'); return () => { if (saved === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = saved; then(); }; };
         const applyOverlay = () => { put('package.json', SEAMED); put('pbx/added.ts', 'export const a = 1\n'); put('.pb-overlay-copied', 'pbx/added.ts\n'); };
         const undoOverlay = () => { git('checkout', '--', 'package.json'); rmSync(join(root, 'pbx'), { recursive: true, force: true }); rmSync(join(root, '.pb-overlay-copied'), { force: true }); };
         applyOverlay();
@@ -329,6 +334,8 @@ function runSelfTestBody() {
             { name: 'ignored-stray-js-beside-a-source-file', naming: 'ignored file in orca/ that orca-overlay/files/ does not declare: src/main/x.js', seams: ['package.json'], extra: { overlayDir: overlay }, apply: () => { applyOverlay(); put('src/main/x.ts', 'export {}\n'); put('src/main/x.js', 'export {}\n'); return () => { undoOverlay(); rmSync(join(root, 'src/main'), { recursive: true, force: true }); }; } },
             { name: 'declared-overlay-file-missing', naming: 'declared overlay file pbx/added.ts is missing from orca/', seams: ['package.json'], extra: { overlayDir: overlay }, apply: () => { applyOverlay(); rmSync(join(root, 'pbx/added.ts')); return undoOverlay; } },
             { name: 'declared-overlay-file-edited', naming: 'orca/pbx/added.ts differs from orca-overlay/files/pbx/added.ts', seams: ['package.json'], extra: { overlayDir: overlay }, apply: () => { applyOverlay(); put('pbx/added.ts', 'export const a = 2\n'); return undoOverlay; } },
+            // The seam patch must still be applied when the scratch directory sits inside another work tree.
+            { name: 'seam-reverted-to-the-pin-with-the-scratch-directory-inside-a-work-tree', naming: 'seam package.json holds blob', seams: ['package.json'], extra: { overlayDir: overlay }, apply: () => { applyOverlay(); git('checkout', '--', 'package.json'); put('package.json', '{ "name": "fixture" }\n'); return inWorkTree(undoOverlay); } },
             { name: 'overlay-patch-missing', naming: 'patches/010-fixture.patch of seam package.json is absent', seams: ['package.json'], extra: { overlayDir: overlay }, apply: () => { applyOverlay(); rmSync(join(overlay, 'patches', '010-fixture.patch')); return () => { undoOverlay(); writeFileSync(join(overlay, 'patches', '010-fixture.patch'), patchText); }; } },
         ];
 
