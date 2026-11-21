@@ -62,7 +62,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { fixtureGitArgs, fixtureGitEnv, withHostileGitConfig } from './lib/fixture-git.mjs';
-import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 import { parse } from './lib/toml.cjs';
 import { readRemote } from './verify-orca-mobile-protocol.mjs';
 
