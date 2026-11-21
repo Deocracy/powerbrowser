@@ -172,7 +172,28 @@ interface ParsedModeStore {
     ok: boolean;
     customs: CustomModeSnapshot[];
     badNames: string[];
+    /** Rows whose name a later build gave to a shipped mode, renamed: from the stored name to the name now used. */
+    renamed: Array<{ from: string; to: string }>;
+    /** The store text with only those rows' names changed, to write back once; undefined when nothing was renamed. */
+    migrated?: string;
 }
+
+/**
+ * Audit fix (theia-pane-hosting-04): a custom mode saved under a name a later build gives to a shipped mode
+ * (v1.7 added Orca) keeps its layout under a new name, "<name> (custom)", or "<name> (custom 2)" and so on when
+ * that is taken, instead of being dropped and then erased by the next save.
+ */
+export function renamedCustomModeName(name: string, taken: (candidate: string) => boolean): string {
+    for (let n = 1; ; n++) {
+        const suffix = n === 1 ? ' (custom)' : ` (custom ${n})`;
+        const candidate = name.slice(0, MODE_NAME_MAX - suffix.length).trim() + suffix;
+        if (!taken(candidate)) {
+            return candidate;
+        }
+    }
+}
+
+const isShippedLabel = (name: string): boolean => SHIPPED_MODES.some(descriptor => descriptor.label.toLowerCase() === name.toLowerCase());
 
 /**
  * Total parse of the customs file: never throws, always produces a value.
@@ -181,7 +202,7 @@ interface ParsedModeStore {
  * in badNames only when its name survived (otherwise silent).
  */
 function parseModeStore(raw: string): ParsedModeStore {
-    const empty: ParsedModeStore = { ok: false, customs: [], badNames: [] };
+    const empty: ParsedModeStore = { ok: false, customs: [], badNames: [], renamed: [] };
     let top: unknown;
     try {
         top = JSON.parse(raw);
@@ -197,7 +218,13 @@ function parseModeStore(raw: string): ParsedModeStore {
     }
     const customs: CustomModeSnapshot[] = [];
     const badNames: string[] = [];
+    const renamed: Array<{ from: string; to: string }> = [];
     const seen = new Set<string>();
+    // Every stored name, so that a renamed row never takes the name of a row further down the list.
+    const stored = new Set<string>((record['customs'] as unknown[]).flatMap(entry => {
+        const n = (entry as Record<string, unknown> | null)?.['name'];
+        return typeof n === 'string' ? [customModeIdFor(n.trim().slice(0, MODE_NAME_MAX))] : [];
+    }));
     for (const entry of record['customs']) {
         if (typeof entry !== 'object' || entry === null) {
             continue;
@@ -206,16 +233,24 @@ function parseModeStore(raw: string): ParsedModeStore {
         if (typeof row['name'] !== 'string') {
             continue;
         }
-        const name = row['name'].trim().slice(0, MODE_NAME_MAX);
+        let name = row['name'].trim().slice(0, MODE_NAME_MAX);
         if (!name) {
             continue;
         }
+        // Shipped-colliding NAMES (ids live in the separate `custom-<slug>`
+        // namespace, so comparing the id against SHIPPED_IDS could never
+        // match -- compare the label instead, matching the save path's
+        // `isDuplicateName` discipline) are renamed, not dropped
+        // (theia-pane-hosting-04).
+        if (isShippedLabel(name)) {
+            const to = renamedCustomModeName(name, candidate =>
+                isShippedLabel(candidate) || seen.has(customModeIdFor(candidate)) || stored.has(customModeIdFor(candidate)));
+            renamed.push({ from: name, to });
+            row['name'] = to;
+            name = to;
+        }
         const id = customModeIdFor(name);
-        // Shipped-colliding NAMES are duplicates (ids live in the separate
-        // `custom-<slug>` namespace, so comparing the id against SHIPPED_IDS
-        // could never match -- compare the label instead, matching the save
-        // path's `isDuplicateName` discipline).
-        if (SHIPPED_MODES.some(descriptor => descriptor.label.toLowerCase() === name.toLowerCase()) || seen.has(id)) {
+        if (seen.has(id)) {
             continue;
         }
         seen.add(id);
@@ -239,7 +274,7 @@ function parseModeStore(raw: string): ParsedModeStore {
             views: parseModeViews(row['views']) ?? legacyModeViews(row['leftVisible'] as boolean),
         });
     }
-    return { ok: true, customs, badNames };
+    return { ok: true, customs, badNames, renamed, ...(renamed.length ? { migrated: JSON.stringify(record, undefined, 2) } : {}) };
 }
 
 @injectable()
@@ -274,6 +309,8 @@ export class ModeService implements FrontendApplicationContribution {
     protected lastGoodCustoms: CustomModeSnapshot[] = [];
     protected registeredCustomIds = new Set<string>();
     protected droppedCustomIds = new Set<string>();
+    /** theia-pane-hosting-04: the id a renamed custom mode had -> the id it has now. */
+    protected readonly renamedCustomIds = new Map<string, string>();
     protected customModesLoadedPromise: Promise<void> | undefined;
     protected persistedModeReapplied = false;
     /** Bumped by every activateMode; an earlier call that sees a newer value stops applying its rules. */
@@ -699,6 +736,17 @@ export class ModeService implements FrontendApplicationContribution {
         for (const bad of parsed.badNames) {
             void this.flash(`PowerBrowser couldn't load the "${bad}" mode. Browsing is shown instead.`);
         }
+        // theia-pane-hosting-04: a renamed row is written back once (only its name changes), the persisted active
+        // mode follows it, and the notice names both names.
+        for (const { from, to } of parsed.renamed) {
+            this.renamedCustomIds.set(customModeIdFor(from), customModeIdFor(to));
+            void this.flash(`PowerBrowser now has its own "${from}" mode, so your "${from}" mode is now called "${to}".`);
+        }
+        if (parsed.migrated !== undefined) {
+            this.fileService.write(this.modesUri, parsed.migrated).catch(() => {
+                console.info('[@powerbrowser/modes] a renamed custom mode was not written back; it is renamed again at the next launch');
+            });
+        }
         const active = this.safeActiveId();
         if (active !== undefined && this.droppedCustomIds.has(active)) {
             void this.activateMode('browsing');
@@ -773,6 +821,10 @@ export class ModeService implements FrontendApplicationContribution {
         if (typeof persistedId !== 'string') {
             return;
         }
+        await this.reapplyMode(this.renamedCustomIds.get(persistedId) ?? persistedId);
+    }
+
+    protected async reapplyMode(persistedId: string): Promise<void> {
         if (this.registeredCustomIds.has(persistedId) && !this.droppedCustomIds.has(persistedId)) {
             if (this.safeActiveId() !== persistedId) {
                 await this.activateMode(persistedId);
