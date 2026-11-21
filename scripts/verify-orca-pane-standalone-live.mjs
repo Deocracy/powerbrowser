@@ -191,9 +191,12 @@ export const SCAN_STORES = Object.freeze(['localStorage', 'sessionStorage', 'ind
 export async function runStorageScan(env, needles) {
     const wrap = req => new Promise((resolve, reject) => { req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
     const safe = v => { try { return JSON.stringify(v) ?? ''; } catch (e) { return String(v); } };
-    const has = text => needles.some(n => String(text).includes(n));
     const KEY = 'pb-pairing-scan-control', DB = 'pb-pairing-scan-control';
-    const scan = async () => {
+    // The control plants a random synthetic value, never the pairing offer: localStorage, sessionStorage and IndexedDB are
+    // disk-backed in the profile, so an offer written there would stay on disk if the run were killed before the removal.
+    const synthetic = 'pb-scan-control-' + Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+    const scan = async (look) => {
+        const has = text => look.some(n => String(text).includes(n));
         const out = { localStorage: { scanned: 0, found: false }, sessionStorage: { scanned: 0, found: false }, indexedDB: { scanned: 0, found: false, error: null } };
         for (const name of ['localStorage', 'sessionStorage']) {
             const st = env[name];
@@ -222,7 +225,7 @@ export async function runStorageScan(env, needles) {
         } catch (e) { out.indexedDB.error = String((e && e.message) || e).slice(0, 120); }
         return out;
     };
-    const plant = needles[0] ?? '';
+    const plant = synthetic;
     env.localStorage.setItem(KEY, plant);
     env.sessionStorage.setItem(KEY, plant);
     try {
@@ -230,12 +233,20 @@ export async function runStorageScan(env, needles) {
         open.onupgradeneeded = () => { open.result.createObjectStore('s').put({ v: plant }, 'k'); };
         (await wrap(open)).close();
     } catch (e) { /* the control's scan reports it as undetected */ }
-    const control = await scan();
+    const control = await scan([synthetic]);
     env.localStorage.removeItem(KEY);
     env.sessionStorage.removeItem(KEY);
     try { await wrap(env.indexedDB.deleteDatabase(DB)); } catch (e) { /* the real scan then finds the control copy and is red */ }
-    const found = await scan();
+    const found = await scan(needles);
     return { control, found, needles: needles.length };
+}
+
+/** The values a fake environment saw written (the harness must never write a needle): red names the store. */
+export function writesVerdict(writes, needles) {
+    const fails = [];
+    if (!writes.length) fails.push('the control wrote nothing, so there is nothing to check (blind)');
+    for (const w of writes) if (needles.some(n => String(w.value).includes(n))) fails.push(`the harness wrote the pairing material into ${w.store}`);
+    return fails;
 }
 
 /** The strings that are the pairing material: the offer, its URL-encoded form and its code (all at least 8 characters). */
@@ -754,12 +765,13 @@ async function selfTest() {
     const OFFER = 'orca://pair?code=ZZ9-unit-test-offer-0123456789&host=127.0.0.1';
     const needles = pairingNeedles(OFFER);
     ok('pairing needles: the offer, its encoded form and its code, none shorter than 8', needles.includes(OFFER) && needles.includes(encodeURIComponent(OFFER)) && needles.includes('ZZ9-unit-test-offer-0123456789') && needles.every(n => n.length >= 8));
-    const store = (init = {}) => { const m = new Map(Object.entries(init)); return { get length() { return m.size; }, key: i => [...m.keys()][i] ?? null, getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k) }; };
+    const writes = [];
+    const store = (init = {}, label = 'storage') => { const m = new Map(Object.entries(init)); return { get length() { return m.size; }, key: i => [...m.keys()][i] ?? null, getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { writes.push({ store: label, value: `${k}=${v}` }); m.set(k, String(v)); }, removeItem: k => m.delete(k) }; };
     const fakeEnv = ({ local = {}, session = {}, idb = {}, idbFails = false } = {}) => {
         const dbs = new Map(Object.entries(idb).map(([name, rows]) => [name, new Map([['rows', Object.entries(rows)]])]));
         const later = fn => { const r = {}; queueMicrotask(() => { try { r.result = fn(r); r.onsuccess?.(); } catch (e) { r.error = e; r.onerror?.(); } }); return r; };
         return {
-            localStorage: store(local), sessionStorage: store(session),
+            localStorage: store(local, 'localStorage'), sessionStorage: store(session, 'sessionStorage'),
             indexedDB: {
                 databases: async () => { if (idbFails) throw new Error('SecurityError'); return [...dbs.keys()].map(name => ({ name })); },
                 deleteDatabase: name => later(() => { dbs.delete(name); }),
@@ -769,7 +781,7 @@ async function selfTest() {
                     const stores = dbs.get(name);
                     const db = {
                         get objectStoreNames() { return [...stores.keys()]; },
-                        createObjectStore: n => { stores.set(n, []); return { put: (v, k) => stores.get(n).push([k, v]) }; },
+                        createObjectStore: n => { stores.set(n, []); return { put: (v, k) => { writes.push({ store: 'indexedDB', value: JSON.stringify(v) }); stores.get(n).push([k, v]); } }; },
                         transaction: () => ({ objectStore: n => ({ getAllKeys: () => later(() => stores.get(n).map(e => e[0])), getAll: () => later(() => stores.get(n).map(e => e[1])) }) }),
                         close() {},
                     };
@@ -782,6 +794,10 @@ async function selfTest() {
     };
     const scanOf = env => runStorageScan(env, needles);
     ok('scan control: clean stores read green, every planted copy detected', pairingScanVerdict(await scanOf(fakeEnv({ local: { theme: 'dark' }, idb: { prefs: { a: 'b' } } }))) === null);
+    // review point 4: the control plants a synthetic value; the real offer is never written by the harness.
+    ok('scan: the control wrote to all three stores, and none of what it wrote holds a pairing needle', writes.some(w => w.store === 'localStorage') && writes.some(w => w.store === 'sessionStorage') && writes.some(w => w.store === 'indexedDB') && writesVerdict(writes, needles).length === 0);
+    ok('plant: a control that wrote the offer is red naming the store', /wrote the pairing material into sessionStorage/.test(writesVerdict([{ store: 'sessionStorage', value: `k=${OFFER}` }], needles)[0] ?? ''));
+    ok('plant: a control that wrote nothing is blind', /blind/.test(writesVerdict([], needles)[0] ?? ''));
     ok('scan: the offer persisted under another localStorage key is red naming localStorage', /persisted in the page origin's localStorage/.test(pairingScanVerdict(await scanOf(fakeEnv({ local: { 'orca.other.key': `x${OFFER}y` } }))) ?? ''));
     ok('scan: the offer persisted in sessionStorage is red naming sessionStorage', /persisted in the page origin's sessionStorage/.test(pairingScanVerdict(await scanOf(fakeEnv({ session: { k: encodeURIComponent(OFFER) } }))) ?? ''));
     ok('scan: the offer persisted in IndexedDB is red naming indexedDB', /persisted in the page origin's indexedDB/.test(pairingScanVerdict(await scanOf(fakeEnv({ idb: { orca: { device: { pairing: OFFER } } } }))) ?? ''));
