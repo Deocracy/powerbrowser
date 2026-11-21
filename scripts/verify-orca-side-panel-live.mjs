@@ -130,7 +130,7 @@
 // line, a pairing URL, an offer or a token.
 //
 // Tier: full. A row started without PB_LIVE_LOCK_HELD=1 takes <git common dir>/pb-live.lock itself
-// (lib/live-lock-reexec.mjs) before it launches anything; inherited ORCA_* are unset. Exit 77 with one
+// (lib/live-lock.mjs) before it launches anything; inherited ORCA_* are unset. Exit 77 with one
 // "SKIP -- <reason>" line (SKIP-PROTOCOL.md) while a built PowerBrowser, a built Theia app, orca/out, the pane
 // bundle or typescript is absent (orca-tabs-live.mjs prerequisites). --self-test runs the pure comparators on
 // fixtures and the tab-adding collector against fake pages (hermetic: no browser).
@@ -146,7 +146,8 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { violations } from './lib/endpoint-verdict.mjs';
-import { takeLiveLock } from './lib/live-lock-reexec.mjs';
+import { holdLiveLock, lockWiringFails } from './lib/live-lock.mjs';
+import { FIXTURE_GIT_ARGS, fixtureGitEnv } from './lib/orca-pane-harness.mjs';
 import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -193,6 +194,24 @@ export const ACTION_HOST = 'pb-egress-user-action.invalid';
 export const SETTLED_HOST = 'pb-egress-settled.invalid';
 /** i: the IP-literal control, an address in TEST-NET-1 (RFC 5737): never routable, never explained by a name. */
 export const LITERAL_CONTROL = '192.0.2.1';
+/**
+ * i: the control's port. Gecko refuses a fetch to a port on its banned list (gBadPortList in nsIOService.cpp) before any
+ * socket opens, so port 9 (discard) never produced the "trying address" line the control waits for. 8081 is allowed; the
+ * self-test derives that from the upstream list.
+ */
+export const LITERAL_PORT = 8081;
+export const BANNED_PORTS_REL = 'upstream/netwerk/base/nsIOService.cpp';
+
+/** i: the control port against the banned list; red names it. */
+export function portVerdict(port, banned) {
+    return banned.includes(port) ? [`the control fetches port ${port}, which Gecko bans: the fetch is refused before a socket opens, so the control line never appears`] : [];
+}
+
+/** The ports of gBadPortList in nsIOService.cpp's source text (pure). */
+export function bannedPorts(text) {
+    const body = /gBadPortList\[\]\s*=\s*\{([^}]*)\}/.exec(String(text))?.[1] ?? '';
+    return [...body.matchAll(/^\s*(\d+)\s*,/gm)].map(m => Number(m[1]));
+}
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
 const SRC = {
@@ -643,7 +662,7 @@ async function live() {
     if (pre.fail) { console.error(`${NAME}: FAIL -- ${pre.fail}`); return 1; }
     if (!loadTypeScript()) { console.log(skipLine(NAME, 'theia/node_modules/typescript is absent; run the audited Theia install in theia/')); return SKIP_EXIT; }
     // Nothing is launched before this: a row started by hand takes the live lock itself (harness-live-panels-02).
-    const held = await takeLiveLock(import.meta.url, NAME);
+    const held = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
     if (held !== null) return held;
     const sel = deriveSelectors();
     if (sel.fails.length) { for (const f of sel.fails) console.error(`${NAME}: FAIL -- ${f}`); return 1; }
@@ -669,7 +688,7 @@ async function live() {
             // i (the one user action): only hosts first resolved between these two markers take the user-action verdict.
             // The panels' own rendering after the settled marker, and the whole run after it, is judged unattended.
             // i (IP-literal control): a connection to an address no name resolved to must show up in the socket log.
-            await ctx.probe(`try { await fetch('http://${LITERAL_CONTROL}:9/', { mode: 'no-cors', signal: AbortSignal.timeout(1500) }); } catch (e) { /* unroutable: expected */ } return true;`);
+            await ctx.probe(`try { await fetch('http://${LITERAL_CONTROL}:${LITERAL_PORT}/', { mode: 'no-cors', signal: AbortSignal.timeout(1500) }); } catch (e) { /* unroutable: expected */ } return true;`);
             const marker = (host) => ctx.probe(`try { await fetch('http://${host}/', { mode: 'no-cors' }); } catch (e) { /* NXDOMAIN expected */ } return true;`);
             await marker(ACTION_HOST);
             await ctx.probe(`await get('ModeService').activateMode('orca'); return true;`);
@@ -723,7 +742,8 @@ async function live() {
             ctx.orca('repo', 'add', '--path', ctx.repo);
             const repo2 = join(ctx.scratch, 'repo-two');
             mkdirSync(repo2, { recursive: true });
-            const git = (...a) => execFileSync('git', ['-C', repo2, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', ...a], { stdio: ['ignore', 'pipe', 'pipe'] });
+            // No global or system git config, no hooks, no signing, and the scratch folder as HOME (as the harness's fixtures).
+            const git = (...a) => execFileSync('git', ['-C', repo2, ...FIXTURE_GIT_ARGS, ...a], { env: fixtureGitEnv(ctx.scratch), stdio: ['ignore', 'pipe', 'pipe'] });
             git('init', '-q');
             git('commit', '-q', '--allow-empty', '-m', 'fixture');
             ctx.orca('repo', 'add', '--path', repo2);
@@ -1074,6 +1094,9 @@ const SOCKET_LOG = (addrs) => ['D/nsHostResolver CompleteLookup: api.github.com 
 /** The m verdict for a run whose tab-adding collector ran against `fake`. */
 const tabRun = async (fake) => mRun({ keep: [{ when: `after ${WEB_TABS} web tabs from the "+" button`, before: { left: 320, right: 320 }, after: { left: 320, right: 320 }, tabs: { added: await addWebTabs(fake), expected: WEB_TABS } }] });
 
+/** Self-test cases that could not run because a fetched checkout is absent (the self-test then ends SKIP, 77). */
+const selfTestSkips = [];
+
 async function selfTest() {
     const allow = [{ host: 'api.github.com', disposition: 'allow' }, { host: 'example.org', disposition: 'user-initiated' }];
     const cases = [
@@ -1144,6 +1167,7 @@ async function selfTest() {
         ['no right drag measured', () => mRun({ drag: d => (d.side === 'right' ? null : d) }), 'right: no drag was measured'],
         ['a squeeze to Lumino\'s 100 px', () => mRun({ squeeze: q => (q.side === 'left' ? { ...q, after: 100 } : q) }), 'left panel squeezed to 100px, below Orca\'s minimum 220px'],
         ['a squeeze that never moved the edge', () => mRun({ squeeze: q => (q.side === 'right' ? { ...q, after: q.before } : q) }), 'instrument blind: the squeeze drag did not narrow the right panel'],
+        ['the live path awaits holdLiveLock before it launches anything', () => lockWiringFails(NAME, import.meta.url), null],
         // f (harness-live-panels-06): the shown set is compared with the derived set.
         ['control: every derived entry shown', () => pagesVerdict({ derived: PAGES6, shown: PAGES6.map(p => p.view) }), null],
         ['one of six derived entries shown', () => pagesVerdict({ derived: PAGES6, shown: ['tasks'] }), 'automations: the page entry "Automations" that Orca\'s sidebar source derives is not shown'],
@@ -1153,9 +1177,22 @@ async function selfTest() {
         ['control: the default-hidden views are read from the source text', () => (hiddenByDefaultViews(NAV_FIXTURE, PAGES6.map(p => p.view)).sort().join() === 'artifacts,skills' ? [] : ['wrong set']), null],
         ['the default-hidden views of the real SidebarNav.tsx include the opt-in entries', () => {
             const rel = join(REPO_ROOT, SRC.nav[0]);
-            if (!existsSync(rel)) return [];
+            // The fetched checkout absent is a SKIP (the self-test ends 77); present without this file it is a FAIL, not a pass.
+            if (!existsSync(join(REPO_ROOT, 'orca', 'src'))) { selfTestSkips.push('the orca/ checkout is absent, so the real SidebarNav.tsx case did not run; run scripts/fetch-orca.sh'); return []; }
+            if (!existsSync(rel)) return [`source moved: ${SRC.nav[0]} is absent from the orca/ checkout`];
             const got = hiddenByDefaultViews(readFileSync(rel, 'utf8'), PAGES6.map(p => p.view));
             return got.includes('artifacts') && got.includes('skills') && !got.includes('automations') ? [] : [`got ${got.join()}`];
+        }, null],
+        // i (harness-live-panels-14): the control's port must be one Gecko allows; derived from upstream's own list.
+        ['control: the banned-port parser reads a gBadPortList', () => (bannedPorts('int16_t gBadPortList[] = {\n    1,      // tcpmux\n    9,      // discard\n    0};').join() === '1,9' ? [] : ['wrong ports']), null],
+        ['the old control port 9 against a banned list that holds it', () => portVerdict(9, [1, 7, 9, 11]), 'the control fetches port 9, which Gecko bans'],
+        ['control: port 8081 against that list', () => portVerdict(8081, [1, 7, 9, 11]), null],
+        ['the control port is not on Gecko\'s banned list (upstream/netwerk/base/nsIOService.cpp)', () => {
+            const f = join(REPO_ROOT, BANNED_PORTS_REL);
+            if (!existsSync(f)) { selfTestSkips.push(`${BANNED_PORTS_REL} is absent, so the control port was not checked against Gecko's banned list; run scripts/fetch-upstream.sh`); return []; }
+            const ports = bannedPorts(readFileSync(f, 'utf8'));
+            if (!ports.includes(9) || ports.length < 20) return [`the banned list could not be read from ${BANNED_PORTS_REL} (${ports.length} ports)`];
+            return portVerdict(LITERAL_PORT, ports);
         }, null],
         // i (harness-live-panels-14): an IP-literal or proxied destination is seen through the socket log.
         ['control: the literal control connection seen, loopback and a name-explained address ignored', () => literalVerdict(literalDestinations(SOCKET_LOG(['192.0.2.1', '127.0.0.1', '104.18.1.1', '::1']))), null],
@@ -1187,6 +1224,11 @@ async function selfTest() {
     }
     const plants = cases.filter(c => c[2] !== null).length;
     if (failures) { console.error(`${NAME} self-test: FAIL -- ${failures} case(s) wrong`); return 1; }
+    if (selfTestSkips.length) {
+        console.log(`${NAME} self-test: ${plants} planted faults each went red naming the drift; ${cases.length - plants} controls green; ${selfTestSkips.length} case(s) did not run`);
+        console.log(skipLine(NAME, selfTestSkips.join('; ')));
+        return SKIP_EXIT;
+    }
     console.log(`${NAME} self-test: PASS -- ${plants} planted faults each went red naming the drift; ${cases.length - plants} controls green`);
     return 0;
 }

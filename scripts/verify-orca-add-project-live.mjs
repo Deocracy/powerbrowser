@@ -30,7 +30,7 @@
 // counts only; never a path, the ready line, a pairing URL, an offer or a token.
 //
 // Tier: full. A row started without PB_LIVE_LOCK_HELD=1 takes
-// <git common dir>/pb-live.lock itself (lib/live-lock-reexec.mjs) before it
+// <git common dir>/pb-live.lock itself (lib/live-lock.mjs) before it
 // launches anything; inherited ORCA_* are unset. Exit 77 with one
 // "SKIP -- <reason>" line (SKIP-PROTOCOL.md) while a built PowerBrowser,
 // orca/out, the pane bundle or its standalone variant is absent
@@ -47,7 +47,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { registerTeardown } from './lib/live-teardown.mjs';
-import { takeLiveLock } from './lib/live-lock-reexec.mjs';
+import { holdLiveLock, lockWiringFails } from './lib/live-lock.mjs';
 import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -226,7 +226,7 @@ async function live() {
     // The PB-owned roots half cannot run without orca-workspace: that is a partial run, so the row's verdict is SKIP.
     const partialSkip = ownedHalf ? null : 'the PB-owned roots half did not run (theia/extensions/orca-workspace is absent)';
     // Nothing is launched before this: a row started by hand takes the live lock itself (harness-live-panels-02).
-    const held = await takeLiveLock(import.meta.url, NAME);
+    const held = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
     if (held !== null) return held;
     const { probe, pollFor } = await import('./lib/pb-relaunch.mjs');
     // One scratch folder per run (never a fixed path two runs could share), removed on every way out, signals included.
@@ -329,6 +329,8 @@ function selfTest() {
         } else console.log(`  ok ${name} -> ${naming === null ? 'green' : `red, naming '${naming}'`}`);
         if (text.includes(repo)) { console.error(`  FAIL ${name} -> a verdict printed a path`); failures++; }
     }
+    const wiring = lockWiringFails(NAME, import.meta.url);
+    if (wiring.length) { console.error(`  FAIL ${wiring.join('; ')}`); failures++; } else console.log('  ok the live path awaits holdLiveLock before it launches anything');
     const plants = cases.filter(c => c[2] !== null).length;
     if (failures) { console.error(`${NAME} self-test: FAIL -- ${failures} case(s) wrong`); return 1; }
     console.log(`${NAME} self-test: PASS -- ${plants} planted faults each went red naming the drift; ${cases.length - plants} controls green; no verdict prints a path`);

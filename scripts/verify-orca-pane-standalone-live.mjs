@@ -52,7 +52,7 @@
 // checks that importing this module prints and starts nothing.
 //
 // Tier: full (live). A row started without PB_LIVE_LOCK_HELD=1 takes <git common dir>/pb-live.lock itself
-// (lib/live-lock-reexec.mjs) before it builds or launches anything; every inherited ORCA_* is unset. --self-test is
+// (lib/live-lock.mjs) before it builds or launches anything; every inherited ORCA_* is unset. --self-test is
 // quick and hermetic (it serves on a loopback port and runs git in a scratch folder, nothing else). Exit 77 with one
 // "SKIP -- <reason>" line when no built PowerBrowser, no orca/out/web/assets/pb-panes or no Orca CLI exists.
 //
@@ -68,7 +68,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { NO_CURSOR_MESSAGE, mountCursorExpr, newMountErrorsExpr } from './lib/orca-pane-harness.mjs';
-import { takeLiveLock } from './lib/live-lock-reexec.mjs';
+import { holdLiveLock, lockWiringFails } from './lib/live-lock.mjs';
 import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -191,9 +191,12 @@ export const SCAN_STORES = Object.freeze(['localStorage', 'sessionStorage', 'ind
 export async function runStorageScan(env, needles) {
     const wrap = req => new Promise((resolve, reject) => { req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
     const safe = v => { try { return JSON.stringify(v) ?? ''; } catch (e) { return String(v); } };
-    const has = text => needles.some(n => String(text).includes(n));
     const KEY = 'pb-pairing-scan-control', DB = 'pb-pairing-scan-control';
-    const scan = async () => {
+    // The control plants a random synthetic value, never the pairing offer: localStorage, sessionStorage and IndexedDB are
+    // disk-backed in the profile, so an offer written there would stay on disk if the run were killed before the removal.
+    const synthetic = 'pb-scan-control-' + Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+    const scan = async (look) => {
+        const has = text => look.some(n => String(text).includes(n));
         const out = { localStorage: { scanned: 0, found: false }, sessionStorage: { scanned: 0, found: false }, indexedDB: { scanned: 0, found: false, error: null } };
         for (const name of ['localStorage', 'sessionStorage']) {
             const st = env[name];
@@ -222,7 +225,7 @@ export async function runStorageScan(env, needles) {
         } catch (e) { out.indexedDB.error = String((e && e.message) || e).slice(0, 120); }
         return out;
     };
-    const plant = needles[0] ?? '';
+    const plant = synthetic;
     env.localStorage.setItem(KEY, plant);
     env.sessionStorage.setItem(KEY, plant);
     try {
@@ -230,12 +233,20 @@ export async function runStorageScan(env, needles) {
         open.onupgradeneeded = () => { open.result.createObjectStore('s').put({ v: plant }, 'k'); };
         (await wrap(open)).close();
     } catch (e) { /* the control's scan reports it as undetected */ }
-    const control = await scan();
+    const control = await scan([synthetic]);
     env.localStorage.removeItem(KEY);
     env.sessionStorage.removeItem(KEY);
     try { await wrap(env.indexedDB.deleteDatabase(DB)); } catch (e) { /* the real scan then finds the control copy and is red */ }
-    const found = await scan();
+    const found = await scan(needles);
     return { control, found, needles: needles.length };
+}
+
+/** The values a fake environment saw written (the harness must never write a needle): red names the store. */
+export function writesVerdict(writes, needles) {
+    const fails = [];
+    if (!writes.length) fails.push('the control wrote nothing, so there is nothing to check (blind)');
+    for (const w of writes) if (needles.some(n => String(w.value).includes(n))) fails.push(`the harness wrote the pairing material into ${w.store}`);
+    return fails;
 }
 
 /** The strings that are the pairing material: the offer, its URL-encoded form and its code (all at least 8 characters). */
@@ -283,7 +294,7 @@ export function lateVerdict(ms) {
 }
 
 /** The output lines and exit code for both stages and the late clause (undefined = not reached). */
-export function render({ isolated, isolatedDetail, mounts, kinds, chatSource, harness, late, lateMs, gate, gateDetail, width, widthDetail, api }) {
+export function render({ isolated, isolatedDetail, mounts, kinds, chatSource, harness, late, lateMs, gate, gateDetail, width, widthDetail, api, unverified = [] }) {
     const lines = [];
     if (isolated !== undefined) lines.push(isolated === null ? `${NAME}: isolated per-leaf mount PASS -- ${isolatedDetail}` : `${NAME}: isolated per-leaf mount FAIL -- ${isolated}`);
     if (mounts !== undefined) lines.push(mounts === null ? `${NAME}: mounts PASS -- ${kinds.join(', ')} (agent-session from ${chatSource})` : `${NAME}: mounts FAIL -- ${mounts}`);
@@ -297,6 +308,13 @@ export function render({ isolated, isolatedDetail, mounts, kinds, chatSource, ha
     const ok = !failed.length && !missing && !harness;
     if (harness) lines.push(`${NAME}: FAIL -- harness: ${harness}`);
     else lines.push(ok ? `${NAME}: PASS -- isolated per-leaf mount, ${kinds.length} hosted type(s) mounted, late CLI terminal in ${lateMs} ms${gate === null ? `, mount gate ${gateDetail}` : ''}` : `${NAME}: FAIL -- ${failed[0] ?? 'not reached'}`);
+    // A gate row whose explaining state cannot be read (an empty page:creation mount) is a clause that did not run: with no failure
+    // anywhere the run is a SKIP (exit 77, the SKIP line last), never a PASS; a failure wins (audit harness-live-panels-09).
+    if (ok && unverified.length) {
+        lines[lines.length - 1] = `${NAME}: ran -- every clause that could run passed; ${unverified.length} gate row(s) are empty with no readable state to explain them`;
+        lines.push(skipLine(NAME, `the empty ${[...new Set(unverified.map(r => r.kind))].join(', ')} mount is not explained by Orca's own state, which the bundle's state() does not expose; expose the pending creation in the overlay's state() so the gate can read it`));
+        return { code: SKIP_EXIT, lines };
+    }
     return { code: ok ? 0 : 1, lines };
 }
 
@@ -557,7 +575,7 @@ async function live(opts = {}) {
     const skips = harness.skipReasons();
     if (skips.length) { console.log(skipLine(NAME, skips.join('; '))); return SKIP_EXIT; }
     // Nothing is built or launched before this: a row started by hand takes the live lock itself (harness-live-panels-02).
-    const held = await takeLiveLock(import.meta.url, NAME, process.argv.slice(2));
+    const held = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
     if (held !== null) return held;
     if (!existsSync(join(harness.STANDALONE_DIR, 'pb-panes.js'))) {
         const b = spawnSync('bash', [join(REPO_ROOT, 'scripts', 'build-orca-panes.sh'), '--standalone'], { encoding: 'utf8' });
@@ -645,7 +663,7 @@ async function live(opts = {}) {
         writeFileSync(opts.report, `${J({ ...report, verdict: result.gate ?? null }, null, 2)}\n`);
         console.log(`${NAME}: report -- ${relative(REPO_ROOT, opts.report)}`);
     }
-    const out = render(result);
+    const out = render({ ...result, unverified: report.rows.filter(r => r.unverified) });
     if (result.conflictText) console.log(`${NAME}: note -- hosted conflict review reads: ${result.conflictText.slice(0, 120)}`);
     for (const line of out.lines.slice(result.isolated !== undefined ? 1 : 0)) console.log(line);
     return out.code;
@@ -727,11 +745,19 @@ async function selfTest() {
     ok('late CLI terminal never recorded is red naming the freeze', /within 15 s \(the mirror freeze/.test(lateVerdict(null) ?? ''));
     const r = render({ isolated: null, isolatedDetail: 'd', mounts: 'simulator: x', kinds: STAGE1_KINDS, chatSource: 'createChat', late: null, lateMs: 172 });
     ok('render: isolated line precedes mounts line, last line FAIL', r.code === 1 && /isolated per-leaf mount PASS/.test(r.lines[0]) && /mounts FAIL/.test(r.lines[1]) && /: FAIL -- mounts$/.test(r.lines[3]));
+    // review point 6: an unverified empty row is a SKIP, a failure still wins.
+    const clean = { isolated: null, isolatedDetail: 'd', mounts: null, kinds: STAGE1_KINDS, chatSource: 'createChat', late: null, lateMs: 172, api: null, gate: null, gateDetail: 'g' };
+    const unv = [{ kind: 'page:creation', route: 'standalone', unverified: true }];
+    const sk = render({ ...clean, unverified: unv });
+    ok('render: an unverified empty page:creation row ends SKIP (77) with the SKIP line last, not PASS', sk.code === SKIP_EXIT && /^orca-pane-standalone-live: SKIP -- /.test(sk.lines.at(-1)) && !sk.lines.some(l => /: PASS -- isolated/.test(l)));
+    ok('render: a failing clause wins over an unverified row', render({ ...clean, api: 'x', unverified: unv }).code === 1);
+    ok('render: no unverified row is still a PASS', render({ ...clean, unverified: [] }).code === 0);
     const g = render({ isolated: null, isolatedDetail: 'd', mounts: null, kinds: STAGE1_KINDS, chatSource: 'createChat', late: null, lateMs: 172, api: null });
     ok('render: an API clause never reached is red', render({ isolated: null, isolatedDetail: 'd', mounts: null, kinds: STAGE1_KINDS, chatSource: 'createChat', late: null, lateMs: 172 }).code === 1);
     ok('render: all clauses green gives PASS naming the late time', g.code === 0 && /late CLI terminal in 172 ms$/.test(g.lines.at(-1)));
     const f = render({ isolated: null, isolatedDetail: 'd', mounts: null, kinds: STAGE1_KINDS, chatSource: 'createChat', late: lateVerdict(null), lateMs: null, api: null });
     ok('render: a late CLI terminal miss alone is red', f.code === 1 && /late CLI terminal FAIL/.test(f.lines[2]) && /: FAIL -- late CLI terminal$/.test(f.lines.at(-1)));
+    ok('the live path awaits holdLiveLock before it launches anything', lockWiringFails(NAME, import.meta.url).length === 0);
     // overlay-renderer-04 (G3a): the mount-error cursor is the total, not the length of the 50 kept. The page-side expressions
     // run over a fake bundle that kept 50 of 60 errors: the new-errors expression returns the 50 kept, the length-based
     // slice it replaces returns none (the fault the cursor fixes), and a build without the total is a FAIL.
@@ -753,12 +779,13 @@ async function selfTest() {
     const OFFER = 'orca://pair?code=ZZ9-unit-test-offer-0123456789&host=127.0.0.1';
     const needles = pairingNeedles(OFFER);
     ok('pairing needles: the offer, its encoded form and its code, none shorter than 8', needles.includes(OFFER) && needles.includes(encodeURIComponent(OFFER)) && needles.includes('ZZ9-unit-test-offer-0123456789') && needles.every(n => n.length >= 8));
-    const store = (init = {}) => { const m = new Map(Object.entries(init)); return { get length() { return m.size; }, key: i => [...m.keys()][i] ?? null, getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k) }; };
+    const writes = [];
+    const store = (init = {}, label = 'storage') => { const m = new Map(Object.entries(init)); return { get length() { return m.size; }, key: i => [...m.keys()][i] ?? null, getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { writes.push({ store: label, value: `${k}=${v}` }); m.set(k, String(v)); }, removeItem: k => m.delete(k) }; };
     const fakeEnv = ({ local = {}, session = {}, idb = {}, idbFails = false } = {}) => {
         const dbs = new Map(Object.entries(idb).map(([name, rows]) => [name, new Map([['rows', Object.entries(rows)]])]));
         const later = fn => { const r = {}; queueMicrotask(() => { try { r.result = fn(r); r.onsuccess?.(); } catch (e) { r.error = e; r.onerror?.(); } }); return r; };
         return {
-            localStorage: store(local), sessionStorage: store(session),
+            localStorage: store(local, 'localStorage'), sessionStorage: store(session, 'sessionStorage'),
             indexedDB: {
                 databases: async () => { if (idbFails) throw new Error('SecurityError'); return [...dbs.keys()].map(name => ({ name })); },
                 deleteDatabase: name => later(() => { dbs.delete(name); }),
@@ -768,7 +795,7 @@ async function selfTest() {
                     const stores = dbs.get(name);
                     const db = {
                         get objectStoreNames() { return [...stores.keys()]; },
-                        createObjectStore: n => { stores.set(n, []); return { put: (v, k) => stores.get(n).push([k, v]) }; },
+                        createObjectStore: n => { stores.set(n, []); return { put: (v, k) => { writes.push({ store: 'indexedDB', value: JSON.stringify(v) }); stores.get(n).push([k, v]); } }; },
                         transaction: () => ({ objectStore: n => ({ getAllKeys: () => later(() => stores.get(n).map(e => e[0])), getAll: () => later(() => stores.get(n).map(e => e[1])) }) }),
                         close() {},
                     };
@@ -781,6 +808,10 @@ async function selfTest() {
     };
     const scanOf = env => runStorageScan(env, needles);
     ok('scan control: clean stores read green, every planted copy detected', pairingScanVerdict(await scanOf(fakeEnv({ local: { theme: 'dark' }, idb: { prefs: { a: 'b' } } }))) === null);
+    // review point 4: the control plants a synthetic value; the real offer is never written by the harness.
+    ok('scan: the control wrote to all three stores, and none of what it wrote holds a pairing needle', writes.some(w => w.store === 'localStorage') && writes.some(w => w.store === 'sessionStorage') && writes.some(w => w.store === 'indexedDB') && writesVerdict(writes, needles).length === 0);
+    ok('plant: a control that wrote the offer is red naming the store', /wrote the pairing material into sessionStorage/.test(writesVerdict([{ store: 'sessionStorage', value: `k=${OFFER}` }], needles)[0] ?? ''));
+    ok('plant: a control that wrote nothing is blind', /blind/.test(writesVerdict([], needles)[0] ?? ''));
     ok('scan: the offer persisted under another localStorage key is red naming localStorage', /persisted in the page origin's localStorage/.test(pairingScanVerdict(await scanOf(fakeEnv({ local: { 'orca.other.key': `x${OFFER}y` } }))) ?? ''));
     ok('scan: the offer persisted in sessionStorage is red naming sessionStorage', /persisted in the page origin's sessionStorage/.test(pairingScanVerdict(await scanOf(fakeEnv({ session: { k: encodeURIComponent(OFFER) } }))) ?? ''));
     ok('scan: the offer persisted in IndexedDB is red naming indexedDB', /persisted in the page origin's indexedDB/.test(pairingScanVerdict(await scanOf(fakeEnv({ idb: { orca: { device: { pairing: OFFER } } } }))) ?? ''));

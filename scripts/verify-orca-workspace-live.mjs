@@ -7,7 +7,7 @@
 // workspace folder kept in sync with Orca's store.
 //
 // Live, tier full, run on the merged, wired and built tree after orca-pane-css-live. A row started without
-// PB_LIVE_LOCK_HELD=1 takes <git common dir>/pb-live.lock itself (lib/live-lock-reexec.mjs) before it launches
+// PB_LIVE_LOCK_HELD=1 takes <git common dir>/pb-live.lock itself (lib/live-lock.mjs) before it launches
 // anything; every inherited ORCA_* is unset. Exit 77 with one "SKIP -- <reason>" line (SKIP-PROTOCOL.md) when no
 // built PowerBrowser, no built orca/ (orcad and the pane bundle), no built Theia app, or lane p65-01's bundle API is
 // absent; a FAIL when the built app does not carry @powerbrowser/orca-workspace.
@@ -53,15 +53,15 @@
 //   node scripts/verify-orca-workspace-live.mjs
 //   node scripts/verify-orca-workspace-live.mjs --self-test
 
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { liveEnv } from './lib/firefox-bidi.mjs';
 import { FIXTURE_GIT_ARGS, fixtureGitEnv } from './lib/orca-pane-harness.mjs';
-import { takeLiveLock } from './lib/live-lock-reexec.mjs';
+import { holdLiveLock, lockWiringFails } from './lib/live-lock.mjs';
 import { registerTeardown } from './lib/live-teardown.mjs';
 import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
@@ -131,18 +131,30 @@ export function worktreePathsIn(value, prefix = 'ws-live') {
 }
 
 /**
- * Removes the worktree directories this row created through Orca (each one's last segment starts with ws-live) and then
- * each now-empty parent (non-recursive: never anything else under Orca's workspace folder). Returns the paths removed.
+ * Removes the worktree directories this row created through Orca, and only those: each path is resolved to its real path
+ * (symlinks and `..` followed) and must be exactly `<home>/orca/workspaces/<repo>/<ws-live...>` under the scratch HOME's real
+ * Orca workspace folder, else it is refused and left alone (a path in the CLI output outside it, an escaping `..`, a
+ * symlink out). No parent directory is ever removed: the row did not create it, and the scratch HOME takes it with it.
+ * Returns { removed, refused: [reason] } (reasons name the last path segment only).
  */
-export function removeCreatedWorktrees(paths) {
+export function removeCreatedWorktrees(paths, home) {
     const removed = [];
+    const refused = [];
+    let allowed = null;
+    try { allowed = realpathSync(join(home, 'orca', 'workspaces')); } catch { /* absent: nothing is inside it */ }
     for (const p of paths) {
-        if (!p || !basename(p).startsWith('ws-live') || !existsSync(p)) continue;
-        rmSync(p, { recursive: true, force: true });
-        removed.push(p);
-        try { rmdirSync(dirname(p)); } catch { /* not empty or absent */ }
+        if (!p || !existsSync(p)) continue;
+        let real;
+        try { real = realpathSync(p); } catch { continue; }
+        const parts = allowed && real.startsWith(allowed + sep) ? real.slice(allowed.length + 1).split(sep) : null;
+        if (!parts || parts.length !== 2 || !parts[1].startsWith('ws-live')) {
+            refused.push(`refused to remove ${basename(p)}: it is not a ws-live worktree directly under a repository folder of the scratch HOME's Orca workspace folder`);
+            continue;
+        }
+        rmSync(real, { recursive: true, force: true });
+        removed.push(real);
     }
-    return removed;
+    return { removed, refused };
 }
 
 /**
@@ -268,19 +280,37 @@ async function runSelfTest() {
     {
         const root = mkdtempSync(join(tmpdir(), 'pb-ws-cleanup-'));
         try {
-            const repoDir = join(root, 'orca', 'workspaces', 'repo');
+            const home = join(root, 'home');
+            const outside = join(root, 'real-home', 'orca', 'workspaces', 'repo');
+            const repoDir = join(home, 'orca', 'workspaces', 'repo');
             const a = join(repoDir, 'ws-live'), b = join(repoDir, 'ws-live-2'), other = join(repoDir, 'keep-me');
-            for (const d of [a, b, other]) { mkdirSync(d, { recursive: true }); writeFileSync(join(d, 'f'), 'x'); }
-            const removed = removeCreatedWorktrees([a, b, other, join(repoDir, 'never-existed')]);
+            const foreign = join(outside, 'ws-live');
+            for (const d of [a, b, other, foreign]) { mkdirSync(d, { recursive: true }); writeFileSync(join(d, 'f'), 'x'); }
+            const first = removeCreatedWorktrees([a, b, other, join(repoDir, 'never-existed')], home);
             const left = readdirSync(repoDir).sort().join();
-            const fails = [...(removed.length === 2 ? [] : [`removed ${removed.length} paths, expected 2`]), ...(left === 'keep-me' ? [] : [`left ${left}`]), ...(existsSync(join(other, 'f')) ? [] : ['an unrelated worktree was removed'])];
-            expect('cleanup removes the created worktrees, keeps everything else', fails, null);
-            const again = removeCreatedWorktrees([other]);
-            expect('cleanup refuses a directory that is not a ws-live worktree', again.length ? ['removed a non-ws-live directory'] : [], null);
-            removeCreatedWorktrees([]);
-            const empty = join(root, 'orca', 'workspaces', 'solo'); mkdirSync(join(empty, 'ws-live'), { recursive: true });
-            removeCreatedWorktrees([join(empty, 'ws-live')]);
-            expect('cleanup removes the parent folder once it is empty', existsSync(empty) ? ['the empty parent stayed'] : [], null);
+            expect('cleanup removes the created worktrees, keeps everything else', [...(first.removed.length === 2 ? [] : [`removed ${first.removed.length} paths, expected 2`]), ...(left === 'keep-me' ? [] : [`left ${left}`])], null);
+            expect('cleanup refuses a directory that is not a ws-live worktree, naming it', first.refused.length === 1 && /keep-me/.test(first.refused[0]) && existsSync(join(other, 'f')) ? [] : [JSON.stringify(first.refused)], null);
+            // A path in the CLI output outside the scratch HOME (the real home): refused, left alone, parent left alone.
+            const out = removeCreatedWorktrees([foreign], home);
+            expect('a ws-live path outside the scratch HOME is refused and nothing is removed', out.removed.length === 0 && out.refused.length === 1 && existsSync(join(foreign, 'f')) ? [] : [JSON.stringify(out)], null);
+            // A path with .. that resolves out of the scratch HOME.
+            const dots = `${repoDir}/ws-live/../../../../../real-home/orca/workspaces/repo/ws-live`;
+            mkdirSync(join(repoDir, 'ws-live'), { recursive: true });
+            const viaDots = removeCreatedWorktrees([dots], home);
+            expect('a path whose .. segments resolve outside the scratch HOME is refused', viaDots.removed.length === 0 && viaDots.refused.length === 1 && existsSync(join(foreign, 'f')) ? [] : [JSON.stringify(viaDots)], null);
+            // A symlink named ws-live inside the scratch HOME that points out of it.
+            rmSync(join(repoDir, 'ws-live'), { recursive: true, force: true });
+            symlinkSync(outside, join(repoDir, 'ws-live'));
+            const viaLink = removeCreatedWorktrees([join(repoDir, 'ws-live')], home);
+            expect('a ws-live symlink that points outside the scratch HOME is refused', viaLink.removed.length === 0 && viaLink.refused.length === 1 && existsSync(join(foreign, 'f')) ? [] : [JSON.stringify(viaLink)], null);
+            rmSync(join(repoDir, 'ws-live'), { force: true });
+            // The folder one level up (a repository folder) is never a worktree and never removed.
+            const tooShallow = removeCreatedWorktrees([join(home, 'orca', 'workspaces', 'ws-live-x')], home);
+            mkdirSync(join(home, 'orca', 'workspaces', 'ws-live-x'), { recursive: true });
+            const shallow = removeCreatedWorktrees([join(home, 'orca', 'workspaces', 'ws-live-x')], home);
+            expect('a ws-live directory directly under the workspace folder (no repository level) is refused', tooShallow.removed.length === 0 && shallow.removed.length === 0 && shallow.refused.length === 1 ? [] : [JSON.stringify(shallow)], null);
+            // No parent is removed: the repository folder stays once its worktrees are gone.
+            expect('cleanup never removes a parent folder', existsSync(repoDir) ? [] : ['the repository folder was removed'], null);
         } finally { rmSync(root, { recursive: true, force: true }); }
     }
     expect('worktree paths found in a CLI result', JSON.stringify(worktreePathsIn({ result: { worktree: { path: '/h/orca/workspaces/repo/ws-live', other: '/h/x' }, list: ['/h/orca/workspaces/repo/ws-live-2'] } })) === JSON.stringify(['/h/orca/workspaces/repo/ws-live', '/h/orca/workspaces/repo/ws-live-2']) ? [] : ['wrong paths'], null);
@@ -304,107 +334,9 @@ async function runSelfTest() {
             expect('teardown runs when SIGTERM ends the process, which then still ends by the signal', count() === 1 && sig.signal === 'SIGTERM' ? [] : [`ran ${count()} times, ended by ${sig.signal ?? `exit ${sig.status}`}`], null);
         } finally { rmSync(home, { recursive: true, force: true }); }
     }
-    // lib/live-lock-reexec.mjs (review of the lock helpers): the decision is pure and each fault it fixes is planted.
-    {
-        const { lockDecision, holdersOf, parentOfStat, ancestorsOf, parentAlive } = await import('./lib/live-lock-reexec.mjs');
-        const base = { lock: '/x/pb-live.lock', holders: [], ancestors: [50, 40], envHeld: false, driverRow: false };
-        const dec = (o) => lockDecision({ ...base, ...o });
-        const is = (name, got, want) => expect(name, got === want ? [] : [`${got}, wanted ${want}`], null);
-        is('decision: a free lock is taken', dec({}), 'take');
-        is('decision: a hand-set PB_LIVE_LOCK_HELD=1 on a free lock is not trusted (the lock is taken)', dec({ envHeld: true }), 'take');
-        is('decision: a hand-set PB_LIVE_LOCK_HELD=1 on a lock another session holds is not trusted (it waits)', dec({ envHeld: true, holders: [999] }), 'take');
-        is('decision: a lock held by an ancestor (started under flock <lock> node <row>) proceeds, never waiting on itself', dec({ holders: [40] }), 'proceed');
-        is('decision: the driver\'s row (token, env, lock held by its non-ancestor holder) proceeds', dec({ envHeld: true, driverRow: true, holders: [999] }), 'proceed');
-        is('decision: the driver\'s token with the lock free is not enough', dec({ envHeld: true, driverRow: true }), 'take');
-        is('decision: no lock path is a FAIL', dec({ lock: null }), 'fail');
-        is('decision: an unreadable /proc/locks is a FAIL', dec({ holders: null }), 'fail');
-        // The pre-fix rules, planted: each must differ from the decision above in the case it got wrong.
-        const trustEnv = ({ envHeld, holders }) => (envHeld && holders.length ? 'proceed' : 'take');
-        is('plant: trusting PB_LIVE_LOCK_HELD=1 whenever the lock is held differs on the other session\'s lock', trustEnv({ envHeld: true, holders: [999] }) !== dec({ envHeld: true, holders: [999] }) ? 'differs' : 'same', 'differs');
-        const noAncestor = ({ envHeld, holders }) => (envHeld && holders.length ? 'proceed' : 'take');
-        is('plant: no ancestor check differs on a run started under flock <lock> node <row>', noAncestor({ envHeld: false, holders: [40] }) !== dec({ holders: [40] }) ? 'differs' : 'same', 'differs');
-        is('proc: holders of an inode from /proc/locks text', JSON.stringify(holdersOf('1: FLOCK  ADVISORY  WRITE 321 08:01:777 0 EOF\n2: FLOCK  ADVISORY  WRITE 322 08:01:888 0 EOF\n3: -> FLOCK  ADVISORY  WRITE 323 08:01:777 0 EOF', 777)), '[321]');
-        is('proc: the parent in a stat line whose command holds spaces and parentheses', parentOfStat('77 (node (a b)) S 55 77 77 0 -1 4194560'), 55);
-        const stats = { 100: '100 (n) S 90 1 1 0', 90: '90 (flock) S 80 1 1 0', 80: '80 (bash) S 1 1 1 0' };
-        is('proc: ancestors walk to pid 1', JSON.stringify(ancestorsOf(100, (p) => stats[p] ?? null)), '[90,80]');
-        is('proc: a parent that is gone (no stat) reads dead', parentAlive('4242:99', () => null) ? 'alive' : 'dead', 'dead');
-        is('proc: a parent whose pid was reused (another start time) reads dead', parentAlive('90:5', (p) => `${p} (x) S 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 7 0`) ? 'alive' : 'dead', 'dead');
-    }
-    if (spawnSync('flock', ['--version']).error) {
-        console.log('  skip the live-lock process tests: flock is not installed');
-    } else {
-        // Real processes in a scratch git checkout (its own pb-live.lock): the three behaviours the pure decision cannot show.
-        const root = mkdtempSync(join(tmpdir(), 'pb-lock-helper-'));
-        const holders = [];
-        try {
-            const clean = { PATH: process.env.PATH ?? '', HOME: root, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
-            spawnSync('git', ['init', '-q', root], { env: clean });
-            mkdirSync(join(root, 'scripts'));
-            const lib = join(REPO_ROOT, 'scripts', 'lib', 'live-lock-reexec.mjs');
-            const lock = join(realpathSync(root), '.git', 'pb-live.lock');
-            const pidFile = join(root, 'inner.pid');
-            const probe = join(root, 'scripts', 'probe.mjs');
-            writeFileSync(probe, `import { takeLiveLock } from ${JSON.stringify(lib)};
-                import { spawnSync } from 'node:child_process';
-                import { writeFileSync } from 'node:fs';
-                const held = await takeLiveLock(import.meta.url, 'probe');
-                if (held !== null) process.exit(held);
-                writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
-                const busy = spawnSync('flock', ['-n', ${JSON.stringify(lock)}, 'true']).status === 1;
-                console.log('inner: PB_LIVE_LOCK_HELD=' + process.env.PB_LIVE_LOCK_HELD + ' lockBusy=' + busy + ' rerun=' + Boolean(process.env.PB_LIVE_LOCK_PARENT));
-                if (process.env.PROBE_HANG) setInterval(() => {}, 1000); else process.exit(busy ? 7 : 8);`);
-            const envOf = (extra) => ({ ...clean, ...extra });
-            const run = (extra, { cmd = [process.execPath, probe], timeout = 20000 } = {}) => spawnSync(cmd[0], cmd.slice(1), { env: envOf(extra), encoding: 'utf8', timeout });
-            const holdLock = async () => {
-                const h = spawn('flock', ['-o', lock, 'sleep', '60'], { stdio: 'ignore' });
-                holders.push(h);
-                for (let i = 0; i < 50 && spawnSync('flock', ['-n', lock, 'true']).status === 0; i++) await new Promise((r) => setTimeout(r, 100));
-                return h;
-            };
-            const lockFree = () => spawnSync('flock', ['-n', lock, 'true']).status === 0;
-            const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-            const until = async (f, ms) => { const end = Date.now() + ms; while (Date.now() < end) { if (await f()) return true; await new Promise((r) => setTimeout(r, 100)); } return false; };
-            const res = (name, ok, detail) => expect(name, ok ? [] : [detail], null);
-
-            let r = run({});
-            res('a row started by hand takes the live lock itself and its exit status comes back', r.status === 7 && /PB_LIVE_LOCK_HELD=1 lockBusy=true rerun=true/.test(r.stdout), `status ${r.status}: ${r.stdout}${r.stderr}`);
-            r = run({ PB_LIVE_LOCK_HELD: '1' });
-            res('a hand-set PB_LIVE_LOCK_HELD=1 on a free lock is not trusted: the row takes the lock', r.status === 7 && /rerun=true/.test(r.stdout), `status ${r.status}: ${r.stdout}${r.stderr}`);
-            r = run({}, { cmd: ['flock', lock, process.execPath, probe], timeout: 10000 });
-            res('a row started under flock <lock> node <row> goes on at once (no wait on its own ancestor), in this process', r.status === 7 && /PB_LIVE_LOCK_HELD=undefined lockBusy=true rerun=false/.test(r.stdout), `status ${r.status}${r.error ? ` (${r.error.code})` : ''}: ${r.stdout}${r.stderr}`);
-
-            let h = await holdLock();
-            r = run({ PB_LIVE_LOCK_HELD: '1', PB_VERIFY_ROW_TOKEN: 'row-token' }, { timeout: 10000 });
-            res('the driver\'s row (token and PB_LIVE_LOCK_HELD=1 with the lock held) goes on in this process', r.status === 7 && /PB_LIVE_LOCK_HELD=1 lockBusy=true rerun=false/.test(r.stdout), `status ${r.status}: ${r.stdout}${r.stderr}`);
-            r = run({ PB_LIVE_LOCK_HELD: '1' }, { timeout: 2500 });
-            res('a hand-set PB_LIVE_LOCK_HELD=1 on a lock another session holds waits for it (nothing ran in 2.5 s)', r.error?.code === 'ETIMEDOUT' && !/inner:/.test(r.stdout), `status ${r.status}: ${r.stdout}${r.stderr}`);
-            h.kill('SIGKILL');
-            await until(lockFree, 5000);
-
-            // Termination: the outer run forwards a signal to the re-run, and a re-run whose parent is killed ends itself.
-            const hang = (signal) => new Promise((resolve) => {
-                rmSync(pidFile, { force: true });
-                const outer = spawn(process.execPath, [probe], { env: envOf({ PROBE_HANG: '1' }), stdio: 'ignore' });
-                (async () => {
-                    const up = await until(() => existsSync(pidFile), 10000);
-                    const inner = up ? Number(readFileSync(pidFile, 'utf8')) : 0;
-                    const heldNow = up && !lockFree();
-                    outer.kill(signal);
-                    const gone = up && await until(() => !alive(inner), 8000);
-                    const freed = await until(lockFree, 8000);
-                    if (!gone && inner) { try { process.kill(inner, 'SIGKILL'); } catch { /* gone */ } }
-                    resolve({ up, heldNow, gone, freed });
-                })();
-            });
-            let t = await hang('SIGTERM');
-            res('SIGTERM to the parent is forwarded: the re-run (and its lock) are gone within 8 s', t.up && t.heldNow && t.gone && t.freed, JSON.stringify(t));
-            t = await hang('SIGKILL');
-            res('SIGKILL of the parent cannot be forwarded: the re-run notices and ends itself within 8 s, releasing the lock', t.up && t.heldNow && t.gone && t.freed, JSON.stringify(t));
-        } finally {
-            for (const h of holders) h.kill('SIGKILL');
-            rmSync(root, { recursive: true, force: true });
-        }
-    }
+    // The live lock is lib/live-lock.mjs (lane H5), proven by scripts/verify-live-harness-libs.mjs; this row only asserts that
+    // its live path still awaits holdLiveLock.
+    expect('the live path awaits holdLiveLock before it launches anything', lockWiringFails(NAME, import.meta.url), null);
     {
         // The fixture repository builds under a user's hostile global git config (commit signing, hooks) without prompting or failing.
         const home = mkdtempSync(join(tmpdir(), 'pb-ws-fixture-'));
@@ -539,7 +471,7 @@ async function runLive() {
     if (ready.skip) { console.log(skipLine(NAME, ready.skip)); return SKIP_EXIT; }
     if (ready.fail) { console.error(`${NAME}: FAIL -- ${ready.fail}`); return 1; }
     // Nothing is launched before this: a row started by hand takes the live lock itself (harness-live-panels-02).
-    const held = await takeLiveLock(import.meta.url, NAME);
+    const held = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
     if (held !== null) return held;
     const lib = await import('./lib/orca-tabs-live.mjs');
     const { installOutputRedaction, ensurePbNode, redact } = await import('./lib/orca-run.mjs');
@@ -559,9 +491,11 @@ async function runLive() {
     // The teardown runs in the finally below, and also at exit and on SIGINT, SIGTERM and SIGHUP; it is synchronous.
     // Whatever the run threw: the orcad and terminal daemon PowerBrowser started are killed, the worktrees Orca
     // created are removed, then the scratch folders (harness-live-panels-10).
+    const orcaHome = liveEnv().HOME;
+    const refusedRemovals = [];
     const teardown = registerTeardown(() => {
         for (const [pid, ticks] of recorded) electron.signalIdentity(pid, ticks, 'SIGKILL');
-        removeCreatedWorktrees([...createdWorktrees]);
+        refusedRemovals.push(...removeCreatedWorktrees([...createdWorktrees], orcaHome).refused);
         rmSync(scratch, { recursive: true, force: true });
         rmSync(stubDir, { recursive: true, force: true });
     });
@@ -575,7 +509,6 @@ async function runLive() {
         const cliHome = savedEnv.HOME ?? process.env.HOME ?? '';
         // The fixture's git runs with the scratch folder as HOME and no global config; the worktrees Orca creates are checked against liveEnv's HOME.
         const gitEnv = fixtureGitEnv(scratch);
-        const orcaHome = liveEnv().HOME;
         const { git } = buildFixtureRepo(repo, scratch);
         mkdirSync(userFolder);
         process.env.PATH = `${stubDir}:${basePath}`;
@@ -781,6 +714,7 @@ async function runLive() {
         // After a throw too: the orcad and daemon are killed and the worktrees and scratch folders removed (once; it also runs on a signal).
         await sleep(500);
         teardown();
+        for (const r of refusedRemovals) fails.push(`teardown: ${r}`);
         for (const [k, v] of Object.entries(savedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
         restoreOutput();
     }

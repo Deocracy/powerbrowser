@@ -49,3 +49,31 @@ None.
 - shell-error-copy-no-internals and its self-test row: not mine, owned by lane H8 (red by design on the base).
 - orca-failure-classes: not caused by this lane. It reads OrcaService and the pinned orca/ sources (the pinned Orca has orcad codes `ORCA_CODE_CLASSES` does not map); no file of mine is involved. Owner: the group that owns `powerbrowser/shell/OrcaService.sys.mjs`.
 - scan-brand-residue and its self-test row: held-back counts only (this part added `Orca` and `orca` mentions in the scripts and the record); no unclaimed hit. Integration sets the counts (above).
+
+## Follow-up after the independent review (base f79672d7)
+
+| Point | Item | Status | Commit | Check |
+|---|---|---|---|---|
+| 1 | live lock | fixed: every H7 row awaits `holdLiveLock({ name, scriptUrl, root })` from `lib/live-lock.mjs`; `lib/live-lock-reexec.mjs` deleted | f3d40b87 | each row's self-test asserts `lockWiringFails` (side-panel, css, standalone, workspace, add-project, landing-logo; page-furniture in `--redaction-self-test`); the process tests of the deleted helper are gone |
+| 2 | harness-live-panels-10 | fixed | f70b0256 | workspace-live --self-test::a ws-live path outside the scratch HOME is refused; a path whose .. segments resolve outside; a ws-live symlink pointing outside; a ws-live directory with no repository level; cleanup never removes a parent folder |
+| 3 | harness-live-panels-14 | fixed (port 8081) | 9587f580 | side-panel --self-test::the control port is not on Gecko's banned list (reads upstream/netwerk/base/nsIOService.cpp; SKIP 77 when absent); the old control port 9 against a banned list that holds it |
+| 4 | harness-live-panels-08 | fixed | 52b43fe5 | standalone-live --self-test::the control wrote to all three stores, and none of what it wrote holds a pairing needle; plant: a control that wrote the offer is red naming the store (verified red when the control plants needles[0] again) |
+| 5 | harness-live-panels-07 | fixed | 1483a2ee | css-live --self-test::three Theia targets reading absent in both snapshots is blind, naming them; a portal rule planted on the main portal probe that did not register is red |
+| 6 | harness-live-panels-09 | fixed | c20e30ae | standalone-live --self-test::render: an unverified empty page:creation row ends SKIP (77) with the SKIP line last; a failing clause wins |
+| 7 | side-panel second fixture repo | fixed | 9587f580 | uses FIXTURE_GIT_ARGS and fixtureGitEnv; no-check: the call site is live-only, the helpers are proven by standalone-live's and workspace-live's self-tests |
+| 8 | workspace-live flock-absent partial skip | not-applicable now: the lock process tests were deleted with point 1 (workspace-live self-test no longer needs flock) | f3d40b87 | - |
+| 9 | side-panel real SidebarNav.tsx case | fixed | 9587f580 | SKIP (self-test exit 77) when the orca/ checkout is absent, FAIL when the checkout lacks the file |
+
+Point 2 also: the pane harness teardown (`scripts/lib/orca-pane-harness.mjs`) no longer calls `stopStartedDaemons`; only `signalIdentity` (pid plus start ticks) is used for the recorded PowerBrowser pids.
+
+### Handoffs added
+- H1: `scripts/lib/orca-run.mjs` `stopStartedDaemons` (and its exit/signal hooks) kill orcad and its terminal daemon by bare pid and process group. Record the start ticks with each pid in `started` when the process is spawned and kill only when `/proc/<pid>/stat` field 22 still matches.
+- H5, `scripts/lib/live-lock.mjs`, properties of the deleted helper that H5's self-test (`scripts/verify-live-harness-libs.mjs`) does not cover: (a) `lockHolders` matches `/proc/locks` lines on the inode only; field 6 is `<major>:<minor>:<inode>`, so match the device as well (two filesystems can share an inode number). Case: a locks text with the same inode on another device must not count as a holder. (b) A SIGKILL of the outer process cannot be forwarded; the deleted helper made the re-run poll its parent (pid and start ticks in an environment variable) and end itself within 2 s. Case: spawn the outer, wait for the re-run's pid file, `kill -9` the outer, require the re-run gone and the lock free within 8 s. Also, the forwarded signal goes to the process group that contains `flock` itself; flock dies and releases the lock while the re-run is still tearing down: send the signal to the re-run only (for example `flock ... sh -c 'echo $$ > pidfile; exec node ...'` or a pid file), and keep the group kill as the second step.
+- G3a/G3b: unchanged (page:creation); until done, orca-pane-standalone-live ends SKIP on every run.
+
+### Quick gate
+`nix develop .#theia --command scripts/verify-platform.sh --quick` at c20e30ae, log `.mozbuild/h7p2b-quick.txt` in this worktree: exit 1, 443 PASS, 6 FAIL, 0 SKIP. None is caused by this lane (no file of mine is involved):
+- orca-failure-classes and its self-test row: the pinned Orca's orcad exit codes are unmapped in `ORCA_CODE_CLASSES` (product; owner of OrcaService.sys.mjs).
+- orca-service-self-test: plant "a ptyEndpoint option back in buildOrcadEnv" no longer finds its target text in the current OrcaService source (owner of scripts/verify-orca-service.mjs, lane H2/G2).
+- build-windows-shape-self-test: throws in scripts/verify-build-windows-shape.mjs:522 (owner of that script).
+- scan-brand-residue and its self-test row: held-back counts only (Orca 3964 vs 3962, orca 6780 vs 6766, orcad 2814 vs 2812, Orcad 179 vs 178); integration recounts after the merge.
