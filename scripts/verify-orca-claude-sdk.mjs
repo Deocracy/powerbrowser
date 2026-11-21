@@ -57,7 +57,7 @@
 //
 // Tier: default quick (one SKIP line when orca/ is not fetched, the overlay is
 // not applied, or no esbuild is installed); --built full (SKIP when
-// orca/out/orcad is absent). Exit 0 pass or SKIP, 1 fail, 2 unknown argument.
+// orca/out/orcad is absent). Exit 0 pass, 77 SKIP (one line), 1 fail, 2 unknown argument.
 //
 // Usage:
 //   node scripts/verify-orca-claude-sdk.mjs
@@ -70,6 +70,8 @@ import { createRequire, isBuiltin } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-claude-sdk';
@@ -342,8 +344,8 @@ const FIXTURE_THEIA = '  _resolveConfigDir() {\n    const profileDir = PowerBrow
 async function runSelfTest() {
     const eb = resolveEsbuild([join(REPO_ROOT, 'orca'), join(REPO_ROOT, 'theia')]);
     if (!eb) {
-        console.log(`${NAME} self-test: SKIP -- no esbuild in orca/node_modules or theia/node_modules (build-orca.sh, or yarn install in theia/)`);
-        return 0;
+        console.log(skipLine(`${NAME} self-test`, 'no esbuild in orca/node_modules or theia/node_modules. Next step: build-orca.sh, or yarn install in theia/'));
+        return SKIP_EXIT;
     }
     const patch = read(join(REPO_ROOT, 'orca-overlay', 'patches', '070-claude-agent-sdk-dir.patch'));
     const orcaEnvText = read(join(REPO_ROOT, 'powerbrowser', 'shell', 'OrcaEnv.sys.mjs'));
@@ -446,8 +448,8 @@ if (isEntryPoint) {
     const label = built ? `${NAME}-built` : NAME;
     const r = built ? builtMode(REPO_ROOT) : await defaultMode(REPO_ROOT);
     if (r.skip && (built || !r.fails.length)) {
-        console.log(`${label}: SKIP${built ? '' : ' of the loader scenarios (the OrcaEnv leg passed)'} -- ${r.skip}`);
-        process.exit(0);
+        console.log(skipLine(label, built ? r.skip : `the OrcaEnv leg passed, the loader scenarios did not run: ${r.skip}`));
+        process.exit(SKIP_EXIT);
     }
     if (r.fails.length) {
         for (const f of r.fails) console.error(`${label}: FAIL -- ${f}`);

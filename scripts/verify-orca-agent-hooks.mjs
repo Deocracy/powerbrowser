@@ -88,9 +88,17 @@
 // readAgentStatus and deriveClaudeHookEvents, so an import starts nothing.
 //
 // Tier: full (needs a built orca/ and the orca-agents lib; starts one orcad,
-// no browser, no display). Prints a named SKIP and exits 0 when the build
+// no browser, no display). Prints a named SKIP and exits 77 when the build
 // outputs are absent. --self-test is quick and pure: fixture observations and
-// fixture source copies; each planted fault must go red naming the drift.
+// fixture source copies; each planted fault must go red naming the drift (SKIP,
+// 77, when typescript is absent and the static plants cannot run).
+//
+// harness-static-browser-01: the static env clause follows aliases of
+// process.env (the wrapper reads only through main's baseEnv default), and
+// stage B's launcher inherits decoy ORCA_USER_DATA_PATH, ORCA_USER_DATA,
+// ORCA_PANE_KEY, ORCA_TAB_ID and ORCA_WORKTREE_ID values (a second scratch data
+// root, a fake pane): the pane must appear in PowerBrowser's data root and the
+// stub must carry that pane's identity, never a decoy value.
 //
 // Usage:
 //   node scripts/verify-orca-agent-hooks.mjs
@@ -107,6 +115,7 @@ import * as OrcaEnv from '../powerbrowser/shell/OrcaEnv.sys.mjs';
 import { descendants, ensurePbNode, installOutputRedaction, orcaVersionFromPins } from './lib/orca-run.mjs';
 import { liveEnv } from './lib/firefox-bidi.mjs';
 import { freePort, ppidMap, signalIdentity, startTicks } from './verify-orca-hidden-electron.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-agent-hooks';
@@ -127,6 +136,11 @@ export const HOOK_STATES = ['working', 'waiting', 'done'];
 /** The reverted key spawn-env-keys.ts lists only so older PTYs drop it; a fresh PTY must not carry it. */
 export const DELETION_KEY = 'ORCA_CLAUDE_AGENT_STATUS_SETTINGS';
 export const PLANT_NAME = 'ORCA_PLANT_63';
+/** Stage B's inherited Orca identity (harness-static-browser-01): a second data root and a fake pane the wrapper must ignore. */
+export const DECOYS = Object.freeze({
+    ORCA_USER_DATA_PATH: '/nonexistent/pb-decoy-63/data', ORCA_USER_DATA: '/nonexistent/pb-decoy-63/data',
+    ORCA_PANE_KEY: 'pb-decoy-tab-63:pb-decoy-leaf-63', ORCA_TAB_ID: 'pb-decoy-tab-63', ORCA_WORKTREE_ID: 'pb-decoy-worktree-63',
+});
 export const PANE_TITLE = 'Claude Code';
 export const RELAY_TITLE = 'pb-relay-63';
 export const STUB_EXIT = 7;
@@ -318,6 +332,11 @@ export function wrapperVerdict(obs) {
     const env = obs.stubOrca ?? {};
     if (!obs.wrapperEnvNames?.includes(PLANT_NAME)) fails.push(`stage B: instrument blind: ${PLANT_NAME} is not in the wrapper's own environment, so its absence in the stub would prove nothing`);
     else if (PLANT_NAME in env) fails.push(`stage B: the planted ORCA_ name leaked: ${PLANT_NAME} reached the stub claude`);
+    const decoys = obs.decoys ?? DECOYS;
+    const blind = Object.keys(decoys).filter((n) => !obs.wrapperEnvNames?.includes(n));
+    if (blind.length) fails.push(`stage B: decoy instrument blind: ${blind.join(', ')} not in the wrapper's own environment, so the stub's identity proves nothing about an inherited one`);
+    for (const [n, v] of Object.entries(decoys)) if (env[n] === v) fails.push(`stage B: a decoy reached the stub: ${n} carries the inherited decoy value, not the PowerBrowser pane's`);
+    for (const n of ['ORCA_USER_DATA_PATH', 'ORCA_USER_DATA']) if (n in env) fails.push(`stage B: ${n} reached the stub claude (claude gets the pane identity and the endpoint only)`);
     if (!env.ORCA_PANE_KEY || !env.ORCA_PANE_KEY.includes(obs.pane.leafId)) fails.push(`stage B: ORCA_PANE_KEY missing from the stub or not the pane's (leaf ${obs.pane.leafId})`);
     if (env.ORCA_TAB_ID !== obs.pane.tabId) fails.push('stage B: ORCA_TAB_ID missing from the stub or not the pane\'s tab');
     if (env.ORCA_WORKTREE_ID !== obs.pane.worktreeId) fails.push('stage B: ORCA_WORKTREE_ID missing from the stub or not the pane\'s worktree');
@@ -357,14 +376,53 @@ function typescript(repoRoot) {
 function walk(node, fn) { fn(node); ts.forEachChild(node, (c) => walk(c, fn)); }
 const isProcessEnv = (n) => n && ts.isPropertyAccessExpression(n) && n.name.text === 'env' && ts.isIdentifier(n.expression) && n.expression.text === 'process';
 
-/** Every name read from process.env (property, element or destructuring), excluding delete and assignment targets. */
-function processEnvReads(sf) {
+/**
+ * Every name read from process.env or from an alias of it (property, element or destructuring), excluding delete and
+ * assignment targets (harness-static-browser-01). The source is bound with the TypeScript checker, so an alias is a
+ * symbol, not a spelling: a parameter whose default is an env object (`main(argv, baseEnv = process.env)`), a variable
+ * or assignment bound to one, an object spread of one (`{ ...process.env }`), an Object.assign(...) of one, a `??` or
+ * `||` of one, and a parameter of a function declared in the same file that a call passes one to; closed to a fixpoint.
+ */
+function processEnvReads(file, text) {
+    const host = ts.createCompilerHost({ allowJs: true, noLib: true, noResolve: true });
+    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, file.endsWith('.ts') ? ts.ScriptKind.TS : ts.ScriptKind.JS);
+    const getSourceFile = host.getSourceFile;
+    host.getSourceFile = (name, ...rest) => (name === file ? sf : getSourceFile(name, ...rest));
+    const program = ts.createProgram([file], { allowJs: true, noLib: true, noResolve: true, types: [] }, host);
+    const checker = program.getTypeChecker();
+    const symbolOf = (n) => { const sym = checker.getSymbolAtLocation(n); return sym && sym.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(sym) : sym; };
+    const aliases = new Set();
+    const isEnv = (e) => {
+        if (!e) return false;
+        if (ts.isParenthesizedExpression(e) || ts.isAsExpression?.(e) || ts.isNonNullExpression?.(e)) return isEnv(e.expression);
+        if (isProcessEnv(e)) return true;
+        if (ts.isIdentifier(e)) { const sym = symbolOf(e); return !!sym && aliases.has(sym); }
+        if (ts.isBinaryExpression(e) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(e.operatorToken.kind)) return isEnv(e.left) || isEnv(e.right);
+        if (ts.isConditionalExpression(e)) return isEnv(e.whenTrue) || isEnv(e.whenFalse);
+        if (ts.isObjectLiteralExpression(e)) return e.properties.some((p) => ts.isSpreadAssignment(p) && isEnv(p.expression));
+        if (ts.isCallExpression(e) && e.expression.getText(sf) === 'Object.assign') return e.arguments.some(isEnv);
+        return false;
+    };
+    const taint = (nameNode) => { const sym = nameNode && symbolOf(nameNode); if (sym && !aliases.has(sym)) { aliases.add(sym); return true; } return false; };
+    for (let grew = true; grew;) {
+        grew = false;
+        walk(sf, (n) => {
+            if ((ts.isParameter(n) || ts.isVariableDeclaration(n)) && ts.isIdentifier(n.name) && n.initializer && isEnv(n.initializer)) grew = taint(n.name) || grew;
+            if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isIdentifier(n.left) && isEnv(n.right)) grew = taint(n.left) || grew;
+            if (ts.isCallExpression(n)) {
+                const decl = symbolOf(n.expression)?.valueDeclaration;
+                const fn = decl && (ts.isFunctionDeclaration(decl) || ts.isFunctionExpression(decl) || ts.isArrowFunction(decl) ? decl
+                    : ts.isVariableDeclaration(decl) && decl.initializer && (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer)) ? decl.initializer : null);
+                if (fn) n.arguments.forEach((a, i) => { const param = fn.parameters[i]; if (param && ts.isIdentifier(param.name) && isEnv(a)) grew = taint(param.name) || grew; });
+            }
+        });
+    }
     const out = [];
     walk(sf, (n) => {
         let name = null;
-        if (ts.isPropertyAccessExpression(n) && isProcessEnv(n.expression)) name = n.name.text;
-        else if (ts.isElementAccessExpression(n) && isProcessEnv(n.expression) && ts.isStringLiteralLike(n.argumentExpression)) name = n.argumentExpression.text;
-        else if (ts.isVariableDeclaration(n) && n.initializer && isProcessEnv(n.initializer) && ts.isObjectBindingPattern(n.name)) {
+        if (ts.isPropertyAccessExpression(n) && isEnv(n.expression)) name = n.name.text;
+        else if (ts.isElementAccessExpression(n) && isEnv(n.expression) && ts.isStringLiteralLike(n.argumentExpression)) name = n.argumentExpression.text;
+        else if ((ts.isVariableDeclaration(n) || ts.isParameter(n)) && n.initializer && isEnv(n.initializer) && ts.isObjectBindingPattern(n.name)) {
             for (const el of n.name.elements) out.push((el.propertyName ?? el.name).getText(sf));
             return;
         }
@@ -413,7 +471,7 @@ export function staticVerdict(root, repoRoot = REPO_ROOT) {
     const wrapper = parse(WRAPPER_REL);
     if (!wrapper) fails.push(`static: ${WRAPPER_REL} is missing`);
     else {
-        for (const n of processEnvReads(wrapper)) if (forbidden.has(n)) fails.push(`static: the wrapper source reads ${n} from process.env (the data root and the pane identity come from the bridge directory and the CLI)`);
+        for (const n of processEnvReads(join(root, WRAPPER_REL), wrapper.text)) if (forbidden.has(n)) fails.push(`static: the wrapper source reads ${n} from process.env or an alias of it (the data root and the pane identity come from the bridge directory and the CLI)`);
         let stdoutWrite = false;
         walk(wrapper, (n) => {
             if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'process' && n.name.text === 'stdout') stdoutWrite = true;
@@ -588,7 +646,12 @@ async function stageB(ctx) {
         steps: plan.map((p) => ({ command: p.command, payload: payload(p.event, repo, base) })) });
 
     const before = new Set(listTerminals(dataRoot, env).map((t) => t.handle));
-    const child = spawn(launcher, [stub, '--print', 'hello'], { cwd: repo, env: { PATH: process.env.PATH ?? '', HOME: home, [PLANT_NAME]: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+    // The launcher inherits a decoy Orca identity, as from a shell inside desktop Orca: the pane must still appear in
+    // PowerBrowser's data root, and the stub must get that pane's identity, never a decoy value.
+    const decoyRoot = join(base, 'decoy-data');
+    mkdirSync(decoyRoot, { mode: 0o700 });
+    const decoys = { ...DECOYS, ORCA_USER_DATA_PATH: decoyRoot, ORCA_USER_DATA: decoyRoot };
+    const child = spawn(launcher, [stub, '--print', 'hello'], { cwd: repo, env: { PATH: process.env.PATH ?? '', HOME: home, [PLANT_NAME]: '1', ...decoys }, stdio: ['ignore', 'pipe', 'pipe'] });
     ctx.track(child.pid);
     let stdout = '';
     child.stdout.on('data', (d) => { stdout += d; });
@@ -612,7 +675,7 @@ async function stageB(ctx) {
     await Promise.race([exited, sleep(30000)]);
     const paneClosed = pane ? Boolean(await waitFor(() => !listTerminals(dataRoot, env).some((t) => t.handle === pane.handle), 10000, 250)) : false;
     return {
-        pane, steps, stubOrca: report?.orca ?? {}, endpoint: join(dataRoot, 'agent-hooks', 'endpoint.env'), wrapperEnvNames,
+        pane, steps, stubOrca: report?.orca ?? {}, endpoint: join(dataRoot, 'agent-hooks', 'endpoint.env'), wrapperEnvNames, decoys,
         stdout, marker, exitCode, paneClosed, stubArgv: report?.argv ?? null,
     };
 }
@@ -748,7 +811,7 @@ function controlObservations() {
         b: {
             pane: { handle: 'h2', tabId: 'tab-2', worktreeId: 'wt-1', leafId: 'leaf-2' }, steps: structuredClone(steps),
             stubOrca: { ORCA_PANE_KEY: 'tab-2:leaf-2', ORCA_TAB_ID: 'tab-2', ORCA_WORKTREE_ID: 'wt-1', ORCA_AGENT_HOOK_ENDPOINT: '/d/agent-hooks/endpoint.env' },
-            endpoint: '/d/agent-hooks/endpoint.env', wrapperEnvNames: ['PATH', 'HOME', PLANT_NAME], stdout: 'm\n', marker: 'm', exitCode: STUB_EXIT, paneClosed: true,
+            endpoint: '/d/agent-hooks/endpoint.env', wrapperEnvNames: ['PATH', 'HOME', PLANT_NAME, ...Object.keys(DECOYS)], decoys: { ...DECOYS }, stdout: 'm\n', marker: 'm', exitCode: STUB_EXIT, paneClosed: true,
         },
         d: { stubRan: true, exitCode: STUB_EXIT, logLines: ['2026-11-10T00:00:00.000Z read orcad-data-root failed (ENOENT); running claude without an Orca pane'], newPanes: 0 },
         imp: { status: 0, stdout: '', stderr: '', timedOut: false },
@@ -760,6 +823,9 @@ function allObservationFails(o) {
 }
 
 const OBS_PLANTS = [
+    ['a decoy reached the stub', (o) => { o.b.stubOrca.ORCA_PANE_KEY = DECOYS.ORCA_PANE_KEY; }],
+    ['a decoy reached the stub', (o) => { o.b.stubOrca.ORCA_USER_DATA_PATH = DECOYS.ORCA_USER_DATA_PATH; }],
+    ['decoy instrument blind', (o) => { o.b.wrapperEnvNames = o.b.wrapperEnvNames.filter((n) => n !== 'ORCA_WORKTREE_ID'); }],
     ['status sequence out of order', (o) => { o.b.steps[0].observed = 'idle'; o.b.steps[2].observed = 'working'; }],
     ['status step missing', (o) => { o.a.steps[1].observed = null; }],
     ['pane not closed', (o) => { o.b.paneClosed = false; }],
@@ -779,6 +845,10 @@ const OBS_PLANTS = [
 
 const SOURCE_PLANTS = [
     ['reads ORCA_USER_DATA_PATH from process.env', WRAPPER_REL, (t) => t.replace('export function parseWrapperArgs(argv) {', 'export function parseWrapperArgs(argv) {\n    const planted = process.env.ORCA_USER_DATA_PATH;')],
+    // harness-static-browser-01: the forms the wrapper actually reads env through.
+    ['reads ORCA_USER_DATA_PATH from process.env or an alias of it', WRAPPER_REL, (t) => t.replace('ORCA_USER_DATA: dataRoot, ORCA_USER_DATA_PATH: dataRoot };', 'ORCA_USER_DATA: baseEnv.ORCA_USER_DATA_PATH ?? dataRoot, ORCA_USER_DATA_PATH: dataRoot };')],
+    ['reads ORCA_PANE_KEY from process.env or an alias of it', WRAPPER_REL, (t) => t.replace("    const { bridgeDir, claude, args } = parseWrapperArgs(argv);", "    const { bridgeDir, claude, args } = parseWrapperArgs(argv);\n    const inherited = baseEnv['ORCA_PANE_KEY'];")],
+    ['reads ORCA_TAB_ID from process.env or an alias of it', WRAPPER_REL, (t) => t.replace("export function parseWrapperArgs(argv) {", "export function parseWrapperArgs(argv) {\n    const copy = { ...process.env };\n    const { ORCA_TAB_ID: tab } = copy;")],
     ['a stdout write in the wrapper source', WRAPPER_REL, (t) => t.replace('export function parseWrapperArgs(argv) {', 'export function parseWrapperArgs(argv) {\n    process.stdout.write("planted\\n");')],
     ['registerOverride removed', FRONTEND_REL, (t) => t.replace(/this\.schema\.registerOverride\([^;]*;/, 'undefined;')],
     ['calls a preference setter', FRONTEND_REL, (t) => t.replace('onStop(): void {', 'onStop(): void {\n        (this as any).preferenceService.set(CLAUDE_PROCESS_WRAPPER_PREFERENCE, "x");')],
@@ -802,6 +872,11 @@ export function selfTest(repoRoot = REPO_ROOT) {
     }
     check('control: importing the real module prints nothing and starts nothing', importVerdict(observeImport()), null);
 
+    const skips = [];
+    try { typescript(repoRoot); } catch {
+        skips.push('theia/node_modules/typescript is not installed, so the static-clause plants did not run. Next step: run the audited yarn install in theia/');
+        return { lines, failures, planted: OBS_PLANTS.length, skips };
+    }
     const tmp = mkdtempSync(join(tmpdir(), 'pb-ah-self-'));
     try {
         const copy = () => {
@@ -822,7 +897,7 @@ export function selfTest(repoRoot = REPO_ROOT) {
         rmSync(tmp, { recursive: true, force: true });
     }
     const planted = OBS_PLANTS.length + SOURCE_PLANTS.length;
-    return { lines, failures, planted };
+    return { lines, failures, planted, skips };
 }
 
 // --- entry ---------------------------------------------------------------------------
@@ -833,9 +908,10 @@ const isEntryPoint = (() => {
 if (isEntryPoint) {
     const args = process.argv.slice(2);
     if (args[0] === '--self-test' && args.length === 1) {
-        const { lines, failures, planted } = selfTest();
+        const { lines, failures, planted, skips } = selfTest();
         for (const l of lines) console.log(l);
         if (failures) { console.error(`${NAME} self-test: FAIL -- ${failures} case(s) did not behave`); process.exit(1); }
+        if (skips.length) { console.log(skipLine(`${NAME} self-test`, skips.join('; '))); process.exit(SKIP_EXIT); }
         console.log(`${NAME} self-test: PASS -- ${planted} planted faults each went red naming the drift`);
         process.exit(0);
     }
@@ -849,14 +925,13 @@ if (isEntryPoint) {
     let code = 0;
     try {
         const r = await run({ nodeBin: async () => (await ensurePbNode()).path });
-        if (r.skip) console.log(`${NAME}: SKIP -- ${r.skip}`);
-        else {
+        if (r.skip) { console.log(skipLine(NAME, r.skip)); code = SKIP_EXIT; } else {
             for (const n of r.notes ?? []) console.log(`${NAME}: note -- ${n}`);
             if (r.fails) { for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`); code = 1; }
             else {
                 const { b, plan, pe } = r.pass;
                 const seq = plan.map((p) => `${p.event}->${p.expected}`).join(', ');
-                console.log(`${NAME}: PASS -- stage B (wrapper): the launcher as the backend writes it ran the wrapper with a stub claude; a "${PANE_TITLE}" pane read back ${seq}; the stub got the pane identity and endpoint and not ${PLANT_NAME} (present in the wrapper's own environment); stdout was the stub's marker only; the pane closed and the exit code ${b.exitCode} passed through; stage A (PTY environment): the CLI-created pane's process carries the ${pe.hookNames.length} derived hook names and the pane identity, not ${DELETION_KEY}; stage A (relay): Orca's managed hook script moved the pane through ${seq} in order; degrade stage: without orcad-data-root the stub ran and exited ${STUB_EXIT}, one log line, no pane; static clauses: green`);
+                console.log(`${NAME}: PASS -- stage B (wrapper): the launcher as the backend writes it ran the wrapper with a stub claude; a "${PANE_TITLE}" pane read back ${seq}; the stub got the pane identity and endpoint, not ${PLANT_NAME} and none of the ${Object.keys(DECOYS).length} inherited decoy identity values (all present in the wrapper's own environment); stdout was the stub's marker only; the pane closed and the exit code ${b.exitCode} passed through; stage A (PTY environment): the CLI-created pane's process carries the ${pe.hookNames.length} derived hook names and the pane identity, not ${DELETION_KEY}; stage A (relay): Orca's managed hook script moved the pane through ${seq} in order; degrade stage: without orcad-data-root the stub ran and exited ${STUB_EXIT}, one log line, no pane; static clauses: green`);
             }
         }
     } catch (e) {

@@ -28,17 +28,21 @@
 // Clauses:
 //  1. the graph reaches no page-mounting component;
 //  2. the orca-panes route table's browser row is { target: 'pb-web-tab' };
-//  3. each caller is listed reachable ("arrives as createPage through the client
-//     placement, proven live by orca-browser-agent-live") or dead with its derived
-//     reason (no import path from the entry reaches it; its importers are named);
+//  3. each caller is dead with its derived reason (no import path from the entry
+//     reaches it; its importers are named), or reachable with its creator's derived
+//     reason, else red (harness-static-browser-04): createBrowserTab must call, before
+//     it builds its page, a gate that tests isPairedWebClientWindow and throws (D-34);
+//     createWebRuntimeSessionBrowserTab must ask prepareBrowserClientHostPlacement,
+//     the placement PowerBrowser's link answers ("arrives as createPage, proven live
+//     by orca-browser-agent-live");
 //  4. the component set, each caller set and the TabContentType set are non-empty
 //     ("source moved" otherwise);
 //  5. the served prefix the host bundle is imported from (HOST_PREFIX in
 //     @powerbrowser/orca-browser) equals ORCA_PANES_ROUTE_PREFIX, the prefix the
 //     orca-panes backend route serves (compared on every run).
-// Cross-lane clauses, a named SKIP while lane p66-01's
-// orca-overlay/files/src/renderer/src/pb/browser-host/pb-browser-host-link.ts is
-// absent ("lane p66-01 not merged"), red when it is present and disagrees:
+// Cross-lane clauses over lane p66-01's
+// orca-overlay/files/src/renderer/src/pb/browser-host/pb-browser-host-link.ts; the
+// lane merged long ago, so the link absent is red, never a SKIP:
 //  6. the pane entry imports the link module;
 //  7. the link assigns prepareBrowserClientHostPlacement (A3 a);
 //  8. the export names of pb-browser-host.ts equal HOST_EXPORTS;
@@ -59,11 +63,13 @@
 //  g; pb-browser-host.ts calls addBrowserPage once and removeBrowserPage on closePage and on a user close, through
 //  the key @powerbrowser/orca-panes stores the bundle under (ORCA_PANES_MODULE_KEY).
 //
-// Tier: quick. One named SKIP when orca/src or theia/node_modules/typescript is
-// absent. Every judgment is an exported pure verdict. --self-test builds a
-// hermetic fixture tree in a mkdtemp directory; the control must be green with
-// the cross-lane clauses compared, then each planted fault must go red naming
-// its drift.
+// Tier: quick. SKIP (exit 77, one line) when theia/node_modules/typescript is
+// absent, and when orca/src is absent; then clauses 2, 5, 7, 8 and 9, which read
+// only PowerBrowser files, still run first (harness-static-browser-03). Every
+// judgment is an exported pure verdict. --self-test builds a hermetic fixture tree
+// in a mkdtemp directory; the control must be green with the cross-lane clauses
+// compared, then each planted fault must go red naming its drift, and with the
+// fixture's orca/ removed the PowerBrowser-only plants must still go red.
 //
 // Usage:
 //   node scripts/verify-orca-browser-entry-points.mjs
@@ -74,6 +80,8 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-browser-entry-points';
@@ -98,7 +106,6 @@ export const REL = {
 };
 export const CREATORS = ['createBrowserTab', 'createWebRuntimeSessionBrowserTab'];
 const NOT_SOURCE = /\.(test|test-fixture|spec)\.tsx?$/;
-const REACHABLE = 'arrives as createPage through the client placement, proven live by orca-browser-agent-live';
 
 let ts;
 function loadTypescript() {
@@ -413,21 +420,99 @@ function importersOf(root, resolver, target) {
 
 // ---------------------------------------------------------------- the check
 
+/** The file under the renderer that declares function `name`, and its declaration node; undefined when none does. */
+function declarationOf(root, name) {
+    for (const f of sourceFiles(join(root, REL.renderer))) {
+        const text = readFileSync(f, 'utf8');
+        if (!text.includes(`function ${name}`)) continue;
+        const node = functionNamed(text, f, name);
+        if (node && ts.isFunctionDeclaration(node)) return { file: f, node };
+    }
+    return undefined;
+}
+
+/**
+ * Why a reachable caller of each creator cannot mount a page in the pane client, derived from the pin (clause 3,
+ * harness-static-browser-04); a creator whose reason no longer holds maps to { fail }.
+ *  - createBrowserTab: before it builds its page it calls a gate that tests isPairedWebClientWindow and throws (D-34).
+ *  - createWebRuntimeSessionBrowserTab: it asks prepareBrowserClientHostPlacement, the placement PowerBrowser's link
+ *    answers, so the page arrives as createPage (proven live by orca-browser-agent-live).
+ */
+export function deriveCreatorReasons(root, read) {
+    const rel = (p) => relative(root, p);
+    const reasons = {};
+    const create = functionNamed(read(REL.tabActions), REL.tabActions, CREATORS[0]);
+    let pageAt;
+    if (create) walk(create, (n) => { if (pageAt === undefined && ts.isVariableDeclaration(n) && n.name.getText() === 'page') pageAt = n.getStart(); });
+    let gate;
+    for (const c of create && pageAt !== undefined ? callsUnder(create).filter((x) => x.call.getStart() < pageAt) : []) {
+        const d = declarationOf(root, c.name);
+        if (!d) continue;
+        let throws = false;
+        walk(d.node, (n) => { if (ts.isThrowStatement(n)) throws = true; });
+        if (throws && callsUnder(d.node).some((x) => x.name === 'isPairedWebClientWindow')) { gate = `${c.name} (${rel(d.file)})`; break; }
+    }
+    reasons[CREATORS[0]] = gate
+        ? { why: `refused in a paired web client: createBrowserTab calls ${gate} before it builds a page, a gate that throws in a paired web client without a managed runtime browser (D-34)` }
+        : { fail: 'createBrowserTab calls no gate that tests isPairedWebClientWindow and throws before it builds a page (D-34), so the caller can mount a page in the pane client' };
+    const session = declarationOf(root, CREATORS[1]);
+    reasons[CREATORS[1]] = session && callsUnder(session.node).some((x) => x.name === 'prepareBrowserClientHostPlacement')
+        ? { why: "asks prepareBrowserClientHostPlacement, which PowerBrowser's link answers, so the page arrives as createPage (proven live by orca-browser-agent-live)" }
+        : { fail: `${CREATORS[1]} ${session ? 'no longer asks prepareBrowserClientHostPlacement' : 'is not declared under the renderer'}, so the caller does not arrive as createPage through PowerBrowser's placement` };
+    return reasons;
+}
+
+/** Clauses 2, 5, 7, 8 and 9: they read only PowerBrowser files and the overlay, so they run with or without orca/. */
+function localClauses(read, has, fails, notes) {
+    // clause 2.
+    const row = deriveRouteRow(read(REL.routes), 'ORCA_PANE_ROUTES', 'browser');
+    if (row?.target !== 'pb-web-tab') fails.push(`the orca-panes browser route targets ${row?.target ?? 'nothing'}, not pb-web-tab (${REL.routes})`);
+    // clause 5: the served prefix.
+    const module = read(REL.module);
+    const hostPrefix = constValue(module, REL.module, 'HOST_PREFIX');
+    const routePrefix = constValue(read(REL.protocol), REL.protocol, 'ORCA_PANES_ROUTE_PREFIX');
+    if (!hostPrefix || hostPrefix !== routePrefix) fails.push(`served prefix mismatch: HOST_PREFIX '${hostPrefix}' in ${REL.module}, ORCA_PANES_ROUTE_PREFIX '${routePrefix}' in ${REL.protocol}`);
+    if (!/app\.use\(\s*ORCA_PANES_ROUTE_PREFIX\b/.test(read(REL.backend))) fails.push(`served prefix: ${REL.backend} does not serve ORCA_PANES_ROUTE_PREFIX`);
+    // Clauses 7-9. Lane p66-01 merged long ago, so an absent link is red, never a SKIP.
+    if (!has(REL.link)) { fails.push(`the browser host link ${REL.link} is absent`); return; }
+    notes.crossLane = 'compared';
+    const link = read(REL.link);
+    if (!assignsPlacement(link, REL.link)) fails.push(`the browser host link does not assign prepareBrowserClientHostPlacement (A3 a)`);
+    const hostExports = constValue(module, REL.module, 'HOST_EXPORTS');
+    const exported = has(REL.host) ? deriveNamedExports(read(REL.host), REL.host) : [];
+    const want = new Set(hostExports ?? []);
+    const got = new Set(exported);
+    if (!want.size || [...want].some((n) => !got.has(n)) || [...got].some((n) => !want.has(n))) {
+        fails.push(`host export names [${[...got].sort().join(', ')}] in ${REL.host} differ from HOST_EXPORTS [${[...want].sort().join(', ')}]`);
+    }
+    const literals = new Set();
+    walk(parse(REL.link, link), (n) => { const s = stringOf(n); if (s !== undefined) literals.add(s); });
+    for (const key of ['LINK_KEY', 'LINK_EVENT']) {
+        const v = constValue(module, REL.module, key);
+        if (!v || !literals.has(v)) fails.push(`${key === 'LINK_KEY' ? 'link key' : 'link event'} '${v}' of ${REL.module} is not a literal of ${REL.link}`);
+    }
+}
+
 export function check(root = REPO_ROOT) {
     const fails = [];
     const skips = [];
     const lines = [];
     const notes = {};
-    if (!loadTypescript()) return { fails, skips: ['theia/node_modules/typescript is not installed (yarn install in theia/)'], lines, notes };
-    if (!existsSync(join(root, REL.orca, 'src'))) return { fails, skips: ['no fetched Orca tree (orca/src absent); run scripts/fetch-orca.sh'], lines, notes };
+    if (!loadTypescript()) return { fails, skips: ['theia/node_modules/typescript is not installed. Next step: run the audited yarn install in theia/'], lines, notes };
     const read = (rel) => readFileSync(join(root, rel), 'utf8');
+    const has = (rel) => existsSync(join(root, rel));
     const rel = (p) => relative(root, p);
+    localClauses(read, has, fails, notes);
+    if (!existsSync(join(root, REL.orca, 'src'))) {
+        notes.local = true;
+        return { fails, skips: ['no fetched Orca tree (orca/src absent), so clauses 1, 3, 4, 6 and 10 (the pane entry graph, the creator callers, TabContentType, the link import, the store row) did not run. Next step: bash scripts/fetch-orca.sh'], lines, notes };
+    }
     const resolver = makeResolver(root);
 
     // a, d, clause 1.
     const { mounting } = derivePageMounting(root, resolver);
     if (!mounting.length) fails.push(`source moved: no page-mounting component derived under ${REL.browserPane}/`);
-    if (!existsSync(join(root, REL.entry))) return { fails: [...fails, `the pane entry ${REL.entry} is absent`], skips, lines, notes };
+    if (!has(REL.entry)) return { fails: [...fails, `the pane entry ${REL.entry} is absent`], skips, lines, notes };
     const graph = walkGraph(root, resolver, REL.entry);
     const chain = (f) => { const out = []; for (let p = f; p; p = graph.get(p)) out.unshift(rel(p)); return out.join(' -> '); };
     for (const m of mounting) if (graph.has(m)) fails.push(`the pane entry reaches page-mounting component ${rel(m)} (${chain(m)})`);
@@ -439,19 +524,18 @@ export function check(root = REPO_ROOT) {
     if (!members.length) fails.push(`source moved: TabContentType in ${REL.tabTypes} parsed to zero members`);
     else if (!members.includes('browser')) fails.push(`TabContentType has no browser member (${members.join(', ')})`);
 
-    // clause 2.
-    const row = deriveRouteRow(read(REL.routes), 'ORCA_PANE_ROUTES', 'browser');
-    if (row?.target !== 'pb-web-tab') fails.push(`the orca-panes browser route targets ${row?.target ?? 'nothing'}, not pb-web-tab (${REL.routes})`);
-
-    // b, clause 3.
+    // b, clause 3: a reachable caller carries its creator's derived reason, or is red.
     const callers = deriveCallers(root);
+    const reasons = deriveCreatorReasons(root, read);
     notes.callers = {};
     for (const c of CREATORS) {
         if (!callers[c].length) fails.push(`source moved: no caller of ${c} under ${REL.renderer}/`);
         notes.callers[c] = callers[c].length;
         for (const f of callers[c]) {
-            if (graph.has(f)) lines.push(`${c}: reachable ${rel(f)} -- ${REACHABLE}`);
-            else {
+            if (graph.has(f)) {
+                if (reasons[c].fail) fails.push(`${c}: reachable caller ${rel(f)} (${chain(f)}): ${reasons[c].fail}`);
+                else lines.push(`${c}: reachable ${rel(f)} -- ${reasons[c].why}`);
+            } else {
                 const importers = importersOf(root, resolver, f).map(rel);
                 lines.push(`${c}: dead ${rel(f)} -- no import path from the pane entry reaches it; importers ${importers.length ? importers.slice(0, 3).join(', ') + (importers.length > 3 ? `, +${importers.length - 3}` : '') : 'none'}, none in the graph`);
             }
@@ -460,41 +544,16 @@ export function check(root = REPO_ROOT) {
     notes.reachable = lines.filter((l) => l.includes(': reachable ')).length;
     notes.dead = lines.filter((l) => l.includes(': dead ')).length;
 
-    // clause 5: the served prefix.
-    const module = read(REL.module);
-    const hostPrefix = constValue(module, REL.module, 'HOST_PREFIX');
-    const routePrefix = constValue(read(REL.protocol), REL.protocol, 'ORCA_PANES_ROUTE_PREFIX');
-    if (!hostPrefix || hostPrefix !== routePrefix) fails.push(`served prefix mismatch: HOST_PREFIX '${hostPrefix}' in ${REL.module}, ORCA_PANES_ROUTE_PREFIX '${routePrefix}' in ${REL.protocol}`);
-    if (!/app\.use\(\s*ORCA_PANES_ROUTE_PREFIX\b/.test(read(REL.backend))) fails.push(`served prefix: ${REL.backend} does not serve ORCA_PANES_ROUTE_PREFIX`);
-
     // Clause 10: the entry's store row (D-34).
     const storeRow = deriveStoreRow(read);
     notes.storeRow = storeRow;
-    fails.push(...storeRowFailures(storeRow, read(REL.entry), existsSync(join(root, REL.host)) ? read(REL.host) : '', constValue(read(REL.paneBundle), REL.paneBundle, 'ORCA_PANES_MODULE_KEY')));
+    fails.push(...storeRowFailures(storeRow, read(REL.entry), has(REL.host) ? read(REL.host) : '', constValue(read(REL.paneBundle), REL.paneBundle, 'ORCA_PANES_MODULE_KEY')));
 
-    // Cross-lane clauses 6-9.
-    if (!existsSync(join(root, REL.link))) {
-        notes.crossLane = 'skip';
-    } else {
-        notes.crossLane = 'compared';
+    // Clause 6: the pane entry imports the link (resolved through Orca's tsconfig paths).
+    if (has(REL.link)) {
         const linkInTree = resolver.inTree(join(root, REL.link));
         if (!deriveSpecifiers(read(REL.entry), REL.entry).some((s) => resolver.resolve(s, resolver.inTree(join(root, REL.entry))) === linkInTree)) {
             fails.push(`the pane entry ${REL.entry} does not import the browser host link ${REL.link}`);
-        }
-        const link = read(REL.link);
-        if (!assignsPlacement(link, REL.link)) fails.push(`the browser host link does not assign prepareBrowserClientHostPlacement (A3 a)`);
-        const hostExports = constValue(module, REL.module, 'HOST_EXPORTS');
-        const exported = existsSync(join(root, REL.host)) ? deriveNamedExports(read(REL.host), REL.host) : [];
-        const want = new Set(hostExports ?? []);
-        const got = new Set(exported);
-        if (!want.size || [...want].some((n) => !got.has(n)) || [...got].some((n) => !want.has(n))) {
-            fails.push(`host export names [${[...got].sort().join(', ')}] in ${REL.host} differ from HOST_EXPORTS [${[...want].sort().join(', ')}]`);
-        }
-        const literals = new Set();
-        walk(parse(REL.link, link), (n) => { const s = stringOf(n); if (s !== undefined) literals.add(s); });
-        for (const key of ['LINK_KEY', 'LINK_EVENT']) {
-            const v = constValue(module, REL.module, key);
-            if (!v || !literals.has(v)) fails.push(`${key === 'LINK_KEY' ? 'link key' : 'link event'} '${v}' of ${REL.module} is not a literal of ${REL.link}`);
         }
     }
     return { fails, skips, lines, notes };
@@ -521,6 +580,7 @@ const FIX_STORE_ROW = {
         'export function createBrowserTabActions(set: any, get: any) {',
         '  return {',
         '    createBrowserTab: (worktreeId: string, url: string, options: any) => {',
+        '      assertManagedBrowserMaterializationAllowed(get(), options?.browserRuntimeEnvironmentId)',
         '      const page = buildBrowserPage(worktreeId, url)',
         '      const browserTab = buildWorkspaceFromPage(worktreeId, page)',
         '      set((s: any) => ({ browserTabsByWorktree: { [worktreeId]: [browserTab] }, browserPagesByWorkspace: { [browserTab.id]: [page] }, ...browserTabOpenView(s, worktreeId, browserTab, page, options) }))',
@@ -575,7 +635,8 @@ function buildFixture(tmp) {
     pane('BrowserAddressBar.tsx', 'export function Bar() { return <input /> }\n');
     put(`${REL.renderer}/src/store/browser-tab-actions.ts`, 'export const createBrowserTab = (url: string) => url\n');
     put(`${REL.renderer}/src/components/tab-bar/new-browser-tab.ts`, "import { createBrowserTab } from '@/store/browser-tab-actions'\nexport const plus = () => createBrowserTab('about:blank')\n");
-    put(`${REL.renderer}/src/runtime/web-runtime-browser-creation.ts`, 'export async function createWebRuntimeSessionBrowserTab(url: string) { return url }\n');
+    put(`${REL.renderer}/src/runtime/web-runtime-browser-creation.ts`, 'export async function createWebRuntimeSessionBrowserTab(url: string) {\n  await (window as any).api.runtimeEnvironments.prepareBrowserClientHostPlacement({ selector: url })\n  return url\n}\n');
+    put(`${REL.renderer}/src/lib/client-creation-action-policy.ts`, "export function assertManagedBrowserMaterializationAllowed(state: any, id: string | undefined): void {\n  if (!isPairedWebClientWindow()) {\n    return\n  }\n  if (!id) {\n    throw new Error('local browser unavailable')\n  }\n}\n");
     put(`${REL.renderer}/src/runtime/open-browser.ts`, "import { createWebRuntimeSessionBrowserTab } from './web-runtime-browser-creation'\nexport const openBrowser = () => createWebRuntimeSessionBrowserTab('https://x.test')\n");
     put(REL.entry, `${FIX.entryImports.join('\n')}\nexport const PANE = [openBrowser, Bar]\n${FIX_STORE_ROW.entry}`);
     put(REL.link, "const LINK = Symbol.for('powerbrowser.orca-browser.link')\nexport function link(id: string) {\n  ;(window as any).api.runtimeEnvironments.prepareBrowserClientHostPlacement = () => ({ kind: 'client', browserHostClientId: id })\n  window.dispatchEvent(new Event('powerbrowser-orca-browser-link'))\n  return LINK\n}\n");
@@ -611,10 +672,17 @@ export const PLANTS = [
     { name: 'pinned-handle-action-renamed', naming: "does not call Orca's setRemoteBrowserPageHandleV2", file: REL.staging, edit: (s) => s.replace('getState().setRemoteBrowserPageHandle(', 'getState().setRemoteBrowserPageHandleV2(') },
     { name: 'staging-source-moved', naming: 'source moved: store-row derivation', file: REL.staging, edit: sub('export function stageWebRuntimeBrowserTab(', 'export function stageBrowserTab(') },
     { name: 'link-event-differs', naming: 'link event', file: REL.link, edit: sub("new Event('powerbrowser-orca-browser-link')", "new Event('powerbrowser-orca-browser-planted')") },
+    // harness-static-browser-04: a reachable creator caller whose derived reason no longer holds.
+    { name: 'reachable-create-without-gate', naming: 'createBrowserTab: reachable caller orca/src/renderer/src/components/tab-bar/new-browser-tab.ts', file: REL.entry, edit: (s) => `import { plus } from '@/components/tab-bar/new-browser-tab'\n${s}`, more: [{ file: REL.tabActions, edit: sub('      assertManagedBrowserMaterializationAllowed(get(), options?.browserRuntimeEnvironmentId)\n', '') }] },
+    { name: 'reachable-create-gate-not-refusing', naming: 'calls no gate that tests isPairedWebClientWindow and throws', file: REL.entry, edit: (s) => `import { plus } from '@/components/tab-bar/new-browser-tab'\n${s}`, more: [{ file: `${REL.renderer}/src/lib/client-creation-action-policy.ts`, edit: sub("    throw new Error('local browser unavailable')\n", '    return\n') }] },
+    { name: 'session-creator-without-placement', naming: 'createWebRuntimeSessionBrowserTab: reachable caller orca/src/renderer/src/runtime/open-browser.ts', file: `${REL.renderer}/src/runtime/web-runtime-browser-creation.ts`, edit: sub('  await (window as any).api.runtimeEnvironments.prepareBrowserClientHostPlacement({ selector: url })\n', '') },
+    { name: 'link-absent', naming: 'the browser host link orca-overlay/files/src/renderer/src/pb/browser-host/pb-browser-host-link.ts is absent', file: REL.link, remove: true },
 ];
+// The plants over PowerBrowser files only: each must go red with the fixture's orca/ removed too.
+const LOCAL_PLANTS = ['browser-route-hosted-pane', 'prefix-mismatch', 'link-without-placement', 'host-export-differs', 'link-key-differs', 'link-event-differs', 'link-absent'];
 
 function runSelfTest() {
-    if (!loadTypescript()) { console.log(`${NAME} self-test: SKIP -- theia/node_modules/typescript is not installed`); return 0; }
+    if (!loadTypescript()) { console.log(skipLine(`${NAME} self-test`, 'theia/node_modules/typescript is not installed. Next step: run the audited yarn install in theia/')); return SKIP_EXIT; }
     const tmp = mkdtempSync(join(tmpdir(), `${NAME}-`));
     try {
         buildFixture(tmp);
@@ -627,27 +695,52 @@ function runSelfTest() {
         }
         console.log(`${NAME} self-test: control green -- ${control.notes.mounting.length} page-mounting components, ${control.notes.graph} modules in the entry graph, one dead and one reachable caller, cross-lane clauses compared`);
         let failures = 0;
-        for (const p of PLANTS) {
-            const file = join(tmp, p.file);
-            const original = readFileSync(file, 'utf8');
-            const planted = p.edit(original);
-            if (planted === original) { console.error(`  FAIL ${p.name} -> the plant did not apply (its anchor text moved)`); failures++; continue; }
-            writeFileSync(file, planted);
+        // A reachable createBrowserTab caller behind the derived gate is green, carrying that reason (the detector).
+        const entryText = readFileSync(join(tmp, REL.entry), 'utf8');
+        writeFileSync(join(tmp, REL.entry), `import { plus } from '@/components/tab-bar/new-browser-tab'\n${entryText}`);
+        const gated = check(tmp);
+        writeFileSync(join(tmp, REL.entry), entryText);
+        if (gated.fails.length || !gated.lines.some((l) => l.startsWith('createBrowserTab: reachable') && l.includes('assertManagedBrowserMaterializationAllowed'))) {
+            console.error(`  FAIL gated-create-reachable -> ${[...gated.fails, ...gated.lines].join(' | ')}`); failures++;
+        } else console.log('  ok gated-create-reachable -> green, the reachable createBrowserTab caller names the derived gate');
+        const plant = (p, label = '') => {
+            const edits = [{ file: p.file, edit: p.edit, remove: p.remove }, ...(p.more ?? [])];
+            const saved = [];
+            for (const e of edits) {
+                const file = join(tmp, e.file);
+                const original = readFileSync(file, 'utf8');
+                saved.push([file, original]);
+                if (e.remove) { rmSync(file); continue; }
+                const planted = e.edit(original);
+                if (planted === original) { for (const [f, t] of saved) writeFileSync(f, t); return `the plant did not apply to ${e.file} (its anchor text moved)`; }
+                writeFileSync(file, planted);
+            }
             if (p.extra) { mkdirSync(dirname(join(tmp, p.extra.rel)), { recursive: true }); writeFileSync(join(tmp, p.extra.rel), p.extra.body); }
             const r = check(tmp);
-            writeFileSync(file, original);
+            for (const [f, t] of saved) writeFileSync(f, t);
             if (p.extra) rmSync(join(tmp, p.extra.rel));
             const text = r.fails.join('\n');
-            if (!r.fails.length) { console.error(`  FAIL ${p.name} -> stayed green`); failures++; } else if (!text.includes(p.naming)) {
-                console.error(`  FAIL ${p.name} -> red, but not naming '${p.naming}': ${text}`); failures++;
-            } else console.log(`  ok ${p.name} -> red, naming '${p.naming}'`);
+            if (!r.fails.length) return 'stayed green';
+            if (!text.includes(p.naming)) return `red, but not naming '${p.naming}': ${text}`;
+            console.log(`  ok ${p.name}${label} -> red, naming '${p.naming}'`);
+            return null;
+        };
+        for (const p of PLANTS) {
+            const bad = plant(p);
+            if (bad) { console.error(`  FAIL ${p.name} -> ${bad}`); failures++; }
         }
-        // The link absent is the named SKIP of clauses 6-9 only; with the link present and the entry import gone it is red (plant link-import-missing).
-        rmSync(join(tmp, REL.link));
+        // harness-static-browser-03: without orca/ the PowerBrowser-only clauses still run. The control is a SKIP with no
+        // failure; each local plant must still go red.
+        rmSync(join(tmp, REL.orca), { recursive: true, force: true });
         const skipped = check(tmp);
-        if (skipped.fails.length || skipped.notes.crossLane !== 'skip') { console.error(`  FAIL cross-lane-skip -> ${skipped.fails.join(' | ') || skipped.notes.crossLane}`); failures++; } else console.log("  ok cross-lane-skip -> clauses 6-9 SKIP with lane p66-01's link absent");
+        if (skipped.fails.length || !skipped.skips.some((x) => x.startsWith('no fetched Orca tree'))) { console.error(`  FAIL no-orca-control -> ${[...skipped.fails, ...skipped.skips].join(' | ') || 'no SKIP'}`); failures++; } else console.log('  ok no-orca-control -> SKIP of the orca/ clauses only, no failure');
+        const local = PLANTS.filter((p) => LOCAL_PLANTS.includes(p.name));
+        for (const p of local) {
+            const bad = plant(p, ' without orca/');
+            if (bad) { console.error(`  FAIL ${p.name} without orca/ -> ${bad}`); failures++; }
+        }
         if (failures) { console.error(`${NAME} self-test: FAIL -- ${failures} case(s) did not behave`); return 1; }
-        console.log(`${NAME} self-test: PASS -- ${PLANTS.length} planted faults each went red naming the drift`);
+        console.log(`${NAME} self-test: PASS -- ${PLANTS.length} planted faults each went red naming the drift, ${local.length} of them also without orca/`);
         return 0;
     } finally {
         rmSync(tmp, { recursive: true, force: true });
@@ -656,14 +749,18 @@ function runSelfTest() {
 
 function main() {
     const r = check();
-    if (r.skips.length) { console.log(`${NAME}: SKIP -- ${r.skips.join('; ')}`); return 0; }
-    console.log(`${NAME}: page-mounting components (${r.notes.mounting?.length ?? 0}): ${(r.notes.mounting ?? []).join(', ')}`);
-    r.lines.forEach((l) => console.log(`  ${l}`));
-    if (r.fails.length) { console.error(`${NAME}: FAIL`); r.fails.forEach((f) => console.error(`  ${f}`)); return 1; }
+    if (!r.notes.local && r.notes.mounting) {
+        console.log(`${NAME}: page-mounting components (${r.notes.mounting.length}): ${r.notes.mounting.join(', ')}`);
+        r.lines.forEach((l) => console.log(`  ${l}`));
+    }
+    if (r.fails.length) { console.error(`${NAME}: FAIL`); r.fails.forEach((f) => console.error(`  ${f}`)); }
+    else if (r.notes.local) console.log(`${NAME}: clauses 2, 5, 7, 8 and 9 (PowerBrowser files only) ran green`);
+    const code = verdictExit(NAME, r.fails, r.skips);
+    if (code !== 0) return code;
     const callers = CREATORS.map((c) => `${r.notes.callers[c]} ${c}`).join(', ');
     const row = r.notes.storeRow;
     console.log(`${NAME}: store row (D-34): addBrowserPage runs ${[...row.builders, row.spread, row.unifiedAction, ...row.actions.filter((a) => a !== CREATORS[0])].join(', ')} with ${row.handleKeys.join(', ')}; removeBrowserPage runs ${row.discard}; selectBrowserPage runs ${row.focus} (derived from the pin)`);
-    console.log(`${NAME}: PASS -- the pane entry's graph (${r.notes.graph} modules) reaches none of the ${r.notes.mounting.length} page-mounting components; browser routes to pb-web-tab; callers ${callers}: ${r.notes.reachable} reachable, ${r.notes.dead} dead; served prefix equals the orca-panes route; cross-lane clauses ${r.notes.crossLane === 'compared' ? 'compared' : 'SKIP ("lane p66-01 not merged")'}`);
+    console.log(`${NAME}: PASS -- the pane entry's graph (${r.notes.graph} modules) reaches none of the ${r.notes.mounting.length} page-mounting components; browser routes to pb-web-tab; callers ${callers}: ${r.notes.reachable} reachable, ${r.notes.dead} dead; served prefix equals the orca-panes route; cross-lane clauses compared`);
     return 0;
 }
 

@@ -21,10 +21,11 @@
 //  e. browser.dialogAccept and browser.dialogDismiss are native (A4);
 //  f. SERVED_AUTOMATION_METHODS equals tier-1 automation as a set;
 //  g. chrome's AGENT_METHODS (the array literal in
-//     powerbrowser/shell/PowerBrowserAPI.sys.mjs, comments stripped) equals both.
-//     Clause (g) alone is a named SKIP while scripts/verify-orca-browser-tab-scope.mjs
-//     does not exist (lane p66-03 not merged); with that file present an absent or
-//     empty AGENT_METHODS is red, never a SKIP.
+//     powerbrowser/shell/PowerBrowserAPI.sys.mjs, comments stripped) equals both;
+//     an absent or empty AGENT_METHODS is red, never a SKIP.
+// Clauses (d), (e), the served set against DISPOSITIONS.md's tier-1 rows, and
+// AGENT_METHODS equal to SERVED_AUTOMATION_METHODS read only tracked PowerBrowser
+// files, so they run on every run, orca/ fetched or not (harness-static-browser-03).
 // Trace scenario over the pure dispatcher (orca-browser-dispatch.ts, transpiled
 // into a mkdtemp directory) with fakes: one tab per createPage, a duplicate id
 // opens nothing, a served method reaches agentCall once, an unserved one never,
@@ -35,12 +36,14 @@
 // background row was listed); its own createPage record, an unbound page and a page
 // bound after the change are not.
 //
-// Tier: quick. Named SKIP for everything when theia/node_modules/typescript is
-// absent, and for (a)-(g) when orca/src is absent. Every judgment is an exported
+// Tier: quick. SKIP (exit 77, one line) when theia/node_modules/typescript is
+// absent, and when orca/src is absent: then (a), (c), (f) and the pin half of (g)
+// did not run, while everything else did. Every judgment is an exported
 // pure verdict over its inputs. --self-test builds a hermetic fixture (an Orca
 // tree with synthetic names, DISPOSITIONS text, abilities and API sources) in a
 // mkdtemp directory: the control must be green with clause (g) compared, then each
-// planted fault must go red naming its drift.
+// planted fault must go red naming its drift; then, with the fixture's orca/
+// removed, the PowerBrowser-only clauses must still go red on their plants.
 //
 // Usage:
 //   node scripts/verify-orca-browser-abilities.mjs
@@ -53,6 +56,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { deriveAll, parseDispositions } from './orca-browser-parity.mjs';
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-browser-abilities';
@@ -61,7 +65,6 @@ export const REL = {
     dispatch: 'theia/extensions/orca-browser/src/common/orca-browser-dispatch.ts',
     dispositions: '.planning/spikes/005-orca-browser-parity/DISPOSITIONS.md',
     api: 'powerbrowser/shell/PowerBrowserAPI.sys.mjs',
-    tabScope: 'scripts/verify-orca-browser-tab-scope.mjs',
     orca: 'orca',
 };
 export const MECHANISMS = ['native', 'actor', 'client', 'orcad', 'unavailable'];
@@ -217,19 +220,17 @@ export function parseAgentMethods(apiText) {
 const minus = (a, b) => [...a].filter((x) => !b.has(x)).sort();
 
 /**
- * Clauses (c)-(g), pure. derived: deriveAll()'s result; rows: parseDispositions()'s map; table: the
- * ORCA_BROWSER_ABILITIES rows; served: SERVED_AUTOMATION_METHODS; chrome: { state: 'skip' } or
- * { state: 'compared', methods: string[] | undefined }.
+ * The clauses over tracked PowerBrowser files only, pure: (d), (e), the served set against DISPOSITIONS.md's tier-1
+ * rows, and chrome's AGENT_METHODS equal to SERVED_AUTOMATION_METHODS. rows: parseDispositions()'s map; table: the
+ * ORCA_BROWSER_ABILITIES rows; served: SERVED_AUTOMATION_METHODS; chrome: AGENT_METHODS, or undefined when absent.
  */
-export function abilityFailures({ derived, rows, table, served, chrome }) {
+export function localFailures({ rows, table, served, chrome }) {
     const fails = [];
     const byAbility = new Map();
     for (const row of table) {
         if (byAbility.has(row.ability)) fails.push(`row ${row.ability} appears twice in ${REL.abilities}`);
         byAbility.set(row.ability, row);
     }
-    for (const a of minus(derived.rpc, new Set(byAbility.keys()))) fails.push(`ability ${a} is derived from the pin and has no row in ${REL.abilities}`);
-    for (const a of minus(new Set(byAbility.keys()), derived.rpc)) fails.push(`row ${a} names no derived ability`);
     for (const row of table) {
         const tier = rows.get(row.ability)?.tier;
         if (tier !== undefined && row.tier !== tier) fails.push(`row ${row.ability} has tier ${row.tier}, DISPOSITIONS.md gives ${tier}`);
@@ -243,21 +244,41 @@ export function abilityFailures({ derived, rows, table, served, chrome }) {
         if (!row) fails.push(`dialog row ${a} is missing`);
         else if (row.mechanism !== 'native') fails.push(`dialog row ${a} is ${row.mechanism}, not native (A4)`);
     }
+    const servedSet = new Set(served);
+    if (!servedSet.size) fails.push(`SERVED_AUTOMATION_METHODS is empty in ${REL.abilities}`);
+    for (const m of [...servedSet].sort()) if (!TIER_ONE.test(rows.get(m)?.tier ?? '')) fails.push(`served method ${m} is not tier 1`);
+    if (!chrome?.length) fails.push(`AGENT_METHODS not found or empty in ${REL.api}`);
+    else {
+        const agent = new Set(chrome);
+        for (const m of minus(agent, servedSet)) fails.push(`AGENT_METHODS method ${m} is missing from the served set`);
+        for (const m of minus(servedSet, agent)) fails.push(`served method ${m} is missing from chrome's AGENT_METHODS`);
+    }
+    return fails;
+}
+
+/** The clauses that compare with the pin, pure: (c), (f) and (g) against tier-1 automation. derived: deriveAll()'s result. */
+export function pinFailures({ derived, rows, table, served, chrome }) {
+    const fails = [];
+    const abilities = new Set(table.map((row) => row.ability));
+    for (const a of minus(derived.rpc, abilities)) fails.push(`ability ${a} is derived from the pin and has no row in ${REL.abilities}`);
+    for (const a of minus(abilities, derived.rpc)) fails.push(`row ${a} names no derived ability`);
     const tierOne = new Set([...derived.automation].filter((a) => TIER_ONE.test(rows.get(a)?.tier ?? '')));
     if (tierOne.size === 0) fails.push('tier-1 automation set is empty (no automation method has tier 1 in DISPOSITIONS.md)');
     const servedSet = new Set(served);
     for (const m of minus(servedSet, tierOne)) fails.push(`served method ${m} is not tier 1`);
     for (const m of minus(tierOne, servedSet)) fails.push(`tier-1 method ${m} is missing from the served set`);
-    if (chrome.state === 'compared') {
-        if (!chrome.methods?.length) fails.push(`AGENT_METHODS not found or empty in ${REL.api} while ${REL.tabScope} exists (lane p66-03 merged)`);
-        else {
-            const agent = new Set(chrome.methods);
-            for (const m of minus(tierOne, agent)) fails.push(`tier-1 method ${m} is missing from chrome's AGENT_METHODS`);
-            for (const m of minus(agent, tierOne)) fails.push(`AGENT_METHODS method ${m} is not tier 1`);
-            for (const m of minus(agent, servedSet)) fails.push(`AGENT_METHODS method ${m} is missing from the served set`);
-        }
+    if (chrome?.length) {
+        const agent = new Set(chrome);
+        for (const m of minus(tierOne, agent)) fails.push(`tier-1 method ${m} is missing from chrome's AGENT_METHODS`);
+        for (const m of minus(agent, tierOne)) fails.push(`AGENT_METHODS method ${m} is not tier 1`);
     }
     return { fails, tierOne };
+}
+
+/** Clauses (c)-(g), pure: both halves, each drift named once. */
+export function abilityFailures({ derived, rows, table, served, chrome }) {
+    const pin = pinFailures({ derived, rows, table, served, chrome });
+    return { fails: [...new Set([...localFailures({ rows, table, served, chrome }), ...pin.fails])], tierOne: pin.tierOne };
 }
 
 // ---------------------------------------------------------------- the check
@@ -273,25 +294,27 @@ export async function check(root = REPO_ROOT) {
     const served = [...(mods.abilities.SERVED_AUTOMATION_METHODS ?? [])];
     const table = [...(mods.abilities.ORCA_BROWSER_ABILITIES ?? [])];
     const fails = await traceFailures(mods.dispatch, served);
-    const notes = { trace: true };
-    if (!existsSync(join(root, REL.orca, 'src'))) return { fails, skips: ['abilities: no fetched Orca tree (orca/src absent); run scripts/fetch-orca.sh'], notes };
-    let derived;
+    const notes = { trace: true, rows: table.length, served: served.length };
     let rows;
-    try { derived = deriveAll(join(root, REL.orca)); } catch (err) { fails.push(`derivation: ${err.message}`); }
     try { rows = parseDispositions(read(REL.dispositions)); } catch (err) { fails.push(`dispositions: ${err.message}`); }
+    const chrome = existsSync(join(root, REL.api)) ? parseAgentMethods(read(REL.api)) : undefined;
+    // The PowerBrowser-only clauses run whether or not orca/ is fetched (harness-static-browser-03).
+    if (rows) fails.push(...localFailures({ rows, table, served, chrome }));
+    if (!existsSync(join(root, REL.orca, 'src'))) {
+        notes.local = true;
+        return { fails, skips: ['no fetched Orca tree (orca/src absent), so the derived ability set, tier-1 automation and their comparison with the served set and AGENT_METHODS did not run. Next step: bash scripts/fetch-orca.sh'], notes };
+    }
+    let derived;
+    try { derived = deriveAll(join(root, REL.orca)); } catch (err) { fails.push(`derivation: ${err.message}`); }
     if (!derived || !rows) return { fails, skips: [], notes };
-    const chrome = existsSync(join(root, REL.tabScope))
-        ? { state: 'compared', methods: existsSync(join(root, REL.api)) ? parseAgentMethods(read(REL.api)) : undefined }
-        : { state: 'skip' };
-    const r = abilityFailures({ derived, rows, table, served, chrome });
-    fails.push(...r.fails);
-    Object.assign(notes, { rows: table.length, abilities: derived.rpc.size, tierOne: r.tierOne.size, served: served.length, chrome: chrome.state });
+    const r = pinFailures({ derived, rows, table, served, chrome });
+    for (const f of r.fails) if (!fails.includes(f)) fails.push(f);
+    Object.assign(notes, { abilities: derived.rpc.size, tierOne: r.tierOne.size });
     return { fails, skips: [], notes };
 }
 
 function passLine(n) {
-    const chrome = n.chrome === 'compared' ? 'chrome AGENT_METHODS compared' : 'chrome AGENT_METHODS SKIP ("lane p66-03 not merged")';
-    return `${NAME}: PASS -- trace scenario green; ${n.rows} rows equal the ${n.abilities} derived abilities, tiers equal DISPOSITIONS.md's, no tier-1 row unavailable, no BiDi mechanism, dialogs native; ${n.tierOne} tier-1 automation methods equal the ${n.served}-method served set; ${chrome}`;
+    return `${NAME}: PASS -- trace scenario green; ${n.rows} rows equal the ${n.abilities} derived abilities, tiers equal DISPOSITIONS.md's, no tier-1 row unavailable, no BiDi mechanism, dialogs native; ${n.tierOne} tier-1 automation methods equal the ${n.served}-method served set and chrome's AGENT_METHODS`;
 }
 
 // ---------------------------------------------------------------- self-test
@@ -340,7 +363,6 @@ function buildFixture(tmp) {
     put(REL.abilities, fixtureAbilitiesSource());
     put(REL.dispatch, readFileSync(join(REPO_ROOT, REL.dispatch), 'utf8'));
     put(REL.api, `// fixture boundary\nconst AGENT_METHODS = Object.freeze([\n${FIXTURE_SERVED.map((m) => `  "${m}",`).join('\n')}\n]);\n`);
-    put(REL.tabScope, '// fixture: lane p66-03 present\n');
 }
 
 const sub = (from, to) => (s) => s.replace(from, to);
@@ -355,7 +377,8 @@ export const PLANTS = [
     { name: 'tier-1-row-unavailable', naming: 'tier-1 row browser.fixtureTabList is unavailable', file: REL.abilities, edit: sub("ability: 'browser.fixtureTabList', tier: '1', mechanism: 'orcad'", "ability: 'browser.fixtureTabList', tier: '1', mechanism: 'unavailable'") },
     { name: 'tier-mismatch', naming: 'row browser.fixtureUpload has tier 1, DISPOSITIONS.md gives 2', file: REL.abilities, edit: sub("ability: 'browser.fixtureUpload', tier: '2'", "ability: 'browser.fixtureUpload', tier: '1'") },
     { name: 'empty-derivation', naming: 'is empty', file: `${REL.orca}/${FX.automation}`, edit: () => 'export const BROWSER_CLIENT_AUTOMATION_METHODS = [\n] as const\n' },
-    { name: 'tab-scope-present-agent-methods-absent', naming: 'AGENT_METHODS not found or empty', file: REL.api, edit: () => '// fixture boundary without the agent section\n' },
+    { name: 'agent-methods-absent', naming: 'AGENT_METHODS not found or empty', file: REL.api, edit: () => '// fixture boundary without the agent section\n' },
+    { name: 'served-missing-from-chrome', naming: "served method browser.fixtureClick is missing from chrome's AGENT_METHODS", file: REL.api, edit: sub('  "browser.fixtureClick",\n', '') },
     { name: 'trace-duplicate-opens-second-tab', naming: 'trace duplicate createPage opens nothing', file: REL.dispatch, edit: sub('            if (table.tabOf(pageId) !== undefined) {\n                return failed(\'browser_error\'); // a bound id never gets a second tab\n            }\n', '') },
     { name: 'trace-unserved-reaches-agent', naming: 'trace unserved method never reaches agentCall', file: REL.dispatch, edit: sub('if (!SERVED_AUTOMATION_METHODS.includes(method)) {', 'if (false) {') },
     { name: 'trace-reveal-at-own-createPage', naming: 'trace createPage activation is not a reveal', file: REL.dispatch, edit: sub('            created.add(pageId);\n', '') },
@@ -365,13 +388,13 @@ export const PLANTS = [
 ];
 
 async function runSelfTest() {
-    if (!loadTypescript(REPO_ROOT)) { console.log(`${NAME} self-test: SKIP -- theia/node_modules/typescript is not installed`); return 0; }
+    if (!loadTypescript(REPO_ROOT)) { console.log(skipLine(`${NAME} self-test`, 'theia/node_modules/typescript is not installed. Next step: run the audited yarn install in theia/')); return SKIP_EXIT; }
     const tmp = mkdtempSync(join(tmpdir(), `${NAME}-self-`));
     try {
         buildFixture(tmp);
         const control = await check(tmp);
-        if (control.fails.length || control.skips.length || control.notes.chrome !== 'compared') {
-            console.error(`${NAME} self-test: FAIL -- control is not green with clause (g) compared: ${[...control.fails, ...control.skips].join(' | ') || control.notes.chrome}`);
+        if (control.fails.length || control.skips.length) {
+            console.error(`${NAME} self-test: FAIL -- control is not green with every clause run: ${[...control.fails, ...control.skips].join(' | ')}`);
             return 1;
         }
         console.log(`${NAME} self-test: control green -- fixture Orca tree (${control.notes.abilities} synthetic abilities), ${control.notes.rows} rows, chrome AGENT_METHODS compared`);
@@ -389,12 +412,22 @@ async function runSelfTest() {
                 console.error(`  FAIL ${p.name} -> red, but not naming '${p.naming}': ${text}`); failures++;
             } else console.log(`  ok ${p.name} -> red, naming '${p.naming}'`);
         }
-        // The tab-scope file absent turns clause (g) into its named SKIP, never a failure.
-        rmSync(join(tmp, REL.tabScope));
+        // harness-static-browser-03: without orca/ the PowerBrowser-only clauses still run. The control is a SKIP with no
+        // failure; each local plant must still go red.
+        rmSync(join(tmp, REL.orca), { recursive: true, force: true });
         const skipped = await check(tmp);
-        if (skipped.fails.length || skipped.notes.chrome !== 'skip') { console.error(`  FAIL chrome-clause-skip -> ${skipped.fails.join(' | ') || skipped.notes.chrome}`); failures++; } else console.log("  ok chrome-clause-skip -> clause (g) SKIP with lane p66-03's file absent");
+        if (skipped.fails.length || !skipped.skips.some((x) => x.startsWith('no fetched Orca tree'))) { console.error(`  FAIL no-orca-control -> ${[...skipped.fails, ...skipped.skips].join(' | ') || 'no SKIP'}`); failures++; } else console.log('  ok no-orca-control -> SKIP of the pin clauses only, no failure');
+        const local = PLANTS.filter((p) => ['served-not-tier-1', 'served-missing-from-chrome', 'agent-methods-absent', 'row-marked-bidi', 'dialog-row-actor', 'tier-1-row-unavailable', 'tier-mismatch', 'trace-unserved-reaches-agent'].includes(p.name));
+        for (const p of local) {
+            const file = join(tmp, p.file);
+            const original = readFileSync(file, 'utf8');
+            writeFileSync(file, p.edit(original));
+            const r = await check(tmp);
+            writeFileSync(file, original);
+            if (!r.fails.some((f) => f.includes(p.naming))) { console.error(`  FAIL ${p.name} without orca/ -> ${r.fails.join(' | ') || 'green'}`); failures++; } else console.log(`  ok ${p.name} without orca/ -> red, naming '${p.naming}'`);
+        }
         if (failures) { console.error(`${NAME} self-test: FAIL -- ${failures} case(s) did not behave`); return 1; }
-        console.log(`${NAME} self-test: PASS -- ${PLANTS.length} planted faults each went red naming the drift`);
+        console.log(`${NAME} self-test: PASS -- ${PLANTS.length} planted faults each went red naming the drift, ${local.length} of them also without orca/`);
         return 0;
     } finally {
         rmSync(tmp, { recursive: true, force: true });
@@ -404,11 +437,11 @@ async function runSelfTest() {
 
 async function main() {
     const r = await check();
-    if (r.fails.length) { console.error(`${NAME}: FAIL`); r.fails.forEach((f) => console.error(`  ${f}`)); return 1; }
-    if (r.skips.length && !r.notes.trace) { console.log(`${NAME}: SKIP -- ${r.skips.join('; ')}`); return 0; }
-    if (r.skips.length) { console.log(`${NAME}: PASS -- trace scenario green; SKIP -- ${r.skips.join('; ')}`); return 0; }
-    console.log(passLine(r.notes));
-    return 0;
+    if (r.fails.length) { console.error(`${NAME}: FAIL`); r.fails.forEach((f) => console.error(`  ${f}`)); }
+    if (r.notes.local && !r.fails.length) console.log(`${NAME}: the trace scenario and the PowerBrowser-only clauses ran green (${r.notes.rows} rows, ${r.notes.served} served methods equal chrome's AGENT_METHODS)`);
+    const code = verdictExit(NAME, r.fails, r.skips);
+    if (code === 0) console.log(passLine(r.notes));
+    return code;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

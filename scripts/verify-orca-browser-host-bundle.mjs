@@ -29,10 +29,20 @@
 // { closed: true }, the following closePage is answered completed and acked, and `tab list` no longer lists the
 // page. Every judgment is an exported pure verdict function. Results carry codes and booleans only.
 //
+// Redaction clause (harness-static-browser-05): the static and attach clauses run in a child probe
+// (--attach-probe) whose raw stdout and stderr this row captures from the pipes, so a write that bypasses the probe's
+// redaction (fs.writeSync(1, ...) included) is seen. The probe reports the offer's secrets and the raw ready-line
+// pairing URL on fd 3; the detector must find a secret in that raw URL before a zero count over the captured output
+// means anything.
+//
+// Teardown clause (harness-static-browser-07): orcad and its terminal daemon setsid, so the driver's leak leg cannot
+// see them; every process of orcad's and the daemon's trees is recorded with its start ticks before the stop, and one
+// still alive afterwards is killed by identity and fails the row.
+//
 // Tier: default full (needs the Orca build, the Orca CLI and a free port; run under the live lock:
 //   flock /home/chris/coding/Power-Browser/.git/pb-live.lock scripts/verify-platform.sh --only orca-browser-host-bundle);
 // --self-test quick (hermetic mkdtemp fixtures: a module list, sources, an out/ tree, a porcelain pair; each planted
-// fault must go red naming it). SKIP (exit 0, one named line) when orca/ has no pb-browser-host.js, no built orcad
+// fault must go red naming it). SKIP (exit 77, one named line) when orca/ has no pb-browser-host.js, no built orcad
 // or no built CLI.
 //
 // Usage:
@@ -44,15 +54,18 @@
 
 import { execFile, execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { liveEnv } from './lib/firefox-bidi.mjs';
 
 import {
-    REPO_ROOT as LIB_ROOT, ensurePbNode, installOutputRedaction, orcaVersionFromPins, orcadEnv, redact, startOrcad, stopOrcad,
+    REPO_ROOT as LIB_ROOT, descendants, ensurePbNode, installOutputRedaction, orcaVersionFromPins, orcadEnv, redact, startOrcad, stopOrcad,
 } from './lib/orca-run.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
+import { ppidMap, signalIdentity, startTicks } from './verify-orca-hidden-electron.mjs';
 
 const NAME = 'orca-browser-host-bundle';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -88,7 +101,8 @@ export function offerOf(pairingInput) {
 /** Red reasons for one attach run's observations (codes, counts and booleans only). */
 export function attachVerdict(o) {
     const fails = [];
-    if (o.attach !== 'accepted') return [`attach not accepted: ${o.attach ?? 'no outcome'}`];
+    if (o.survivors) fails.push(`${o.survivors} orcad or terminal-daemon process(es) survived teardown (killed by identity now; the next live row would find them)`);
+    if (o.attach !== 'accepted') return [...fails, `attach not accepted: ${o.attach ?? 'no outcome'}`];
     if (!o.cliTabCreateOk) fails.push('CLI tab create failed or returned no browserPageId');
     if (o.createPageCount !== 1) fails.push(`expected exactly one createPage event, saw ${o.createPageCount}`);
     else if (!(o.createPageAfterCliMs <= 1000)) fails.push(`createPage arrived ${o.createPageAfterCliMs} ms after the CLI exited (limit 1000)`);
@@ -108,6 +122,36 @@ export function redactionMatches(text, secrets) {
     let n = 0;
     for (const s of secrets) if (s && s.length >= 8) n += String(text).split(s).length - 1;
     return n;
+}
+
+/**
+ * The redaction clause over what the probe really wrote: output is its raw stdout and stderr as captured from the pipes;
+ * secrets and control (the raw ready-line pairing URL) come from its fd 3 report. The detector must first find a
+ * secret in control.
+ */
+export function redactionVerdict({ output, secrets, control }) {
+    const list = (secrets ?? []).filter((x) => typeof x === 'string' && x.length >= 8);
+    if (!list.length) return ['broken instrument: the probe reported no offer secret, so a zero count over its output proves nothing'];
+    if (!redactionMatches(control ?? '', list)) return ['broken instrument: the detector found no secret in the raw ready-line pairing URL, so a zero count over the output proves nothing'];
+    const n = redactionMatches(output ?? '', list);
+    return n ? [`redaction: ${n} offer field occurrence(s) in the probe's raw stdout and stderr`] : [];
+}
+
+/** Runs node with `args`, capturing fds 1, 2 and 3 raw; resolves { status, stdout, stderr, report } (report: fd 3's JSON lines). */
+export function captureChild(args, { env = process.env, timeoutMs = 600000 } = {}) {
+    return new Promise((resolveP) => {
+        const child = spawn(process.execPath, args, { env, stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
+        const chunks = { 1: [], 2: [], 3: [] };
+        for (const fd of [1, 2, 3]) child.stdio[fd].on('data', (d) => chunks[fd].push(d));
+        const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
+        child.on('close', (code, signal) => {
+            clearTimeout(timer);
+            const text = (fd) => Buffer.concat(chunks[fd]).toString('utf8');
+            const report = {};
+            for (const line of text(3).split('\n').filter(Boolean)) { try { Object.assign(report, JSON.parse(line)); } catch { /* not a report line */ } }
+            resolveP({ status: signal ? `signal ${signal}` : code, stdout: text(1), stderr: text(2), report });
+        });
+    });
 }
 
 // ---------------------------------------------------------------- static clauses (pure; condition 1, A3, A9)
@@ -276,7 +320,7 @@ export function staticClauses(ctx) {
 
 // ---------------------------------------------------------------- self-test (quick, hermetic)
 
-export function selfTest() {
+export async function selfTest() {
     const dir = mkdtempSync(join(tmpdir(), `${NAME}-self-`));
     const lines = [];
     let failed = 0;
@@ -333,6 +377,7 @@ export function selfTest() {
         // The attach verdict on a recorded green run and one drift each, so its judgments are exercised too.
         const green = { attach: 'accepted', cliTabCreateOk: true, createPageCount: 1, createPageAfterCliMs: 0, createPageAck: true, gotoEventCount: 1, gotoAck: true, cliGotoOk: true, cliGotoTitleMatches: true, userCloseClosed: true, closePageCount: 1, closePageAck: true, tabListOk: true, stillListed: false };
         const attachPlants = [
+            ['orcad-survived-teardown', { survivors: 1 }, 'survived teardown'],
             ['attach-refused', { attach: 'attach_refused:browser_client_host_capability_required' }, 'attach not accepted'],
             ['two-createPage', { createPageCount: 2 }, 'exactly one createPage'],
             ['page-still-listed', { stillListed: true }, 'still lists the page'],
@@ -343,7 +388,27 @@ export function selfTest() {
             if (red.some((f) => f.includes(naming))) lines.push(`  ok ${name} went red naming the drift`);
             else { failed++; lines.push(`  FAIL ${name} did not go red naming "${naming}"`); }
         }
-        const planted = plants.length + attachPlants.length;
+        // The redaction clause, through the same capture the row uses: a child that writes a secret straight to fd 1
+        // (bypassing any stream redaction) is red; the same child writing nothing is green; a blind detector is red.
+        const secret = `pb-host-bundle-secret-${randomUUID()}`;
+        const rawUrl = `http://127.0.0.1:1/web#pairing=${secret}`;
+        const childSrc = (body) => `const fs = require('fs'); fs.writeSync(3, JSON.stringify({ secrets: [${JSON.stringify(secret)}], control: ${JSON.stringify(rawUrl)} }) + '\\n'); ${body}`;
+        const redactionCases = [
+            ['raw-fd-write-of-a-secret', childSrc(`fs.writeSync(1, 'debug ' + ${JSON.stringify(secret)} + '\\n');`), (r) => r, 'redaction: 1 offer field occurrence'],
+            ['secret-on-stderr', childSrc(`process.stderr.write('pairing ' + ${JSON.stringify(secret)} + '\\n');`), (r) => r, 'redaction: 1 offer field occurrence'],
+            ['detector-blind', childSrc(''), (r) => ({ ...r, control: 'http://127.0.0.1:1/web' }), 'broken instrument: the detector found no secret'],
+            ['no-secret-reported', childSrc(''), (r) => ({ ...r, secrets: [] }), 'broken instrument: the probe reported no offer secret'],
+        ];
+        const cleanRun = await captureChild(['-e', childSrc("fs.writeSync(1, 'clean\\n');")]);
+        const clean = redactionVerdict({ output: cleanRun.stdout + cleanRun.stderr, ...cleanRun.report });
+        if (clean.length || !cleanRun.stdout.includes('clean')) { failed++; lines.push(`  FAIL redaction control went red or captured nothing: ${clean.join('; ') || cleanRun.stdout}`); } else lines.push('  ok redaction control green (a captured child that writes no secret)');
+        for (const [name, src, patch, naming] of redactionCases) {
+            const r = await captureChild(['-e', src]);
+            const red = redactionVerdict({ output: r.stdout + r.stderr, ...patch(r.report) });
+            if (red.some((f) => f.includes(naming))) lines.push(`  ok ${name} went red naming the drift`);
+            else { failed++; lines.push(`  FAIL ${name} did not go red naming "${naming}" (got: ${red.join('; ') || 'green'})`); }
+        }
+        const planted = plants.length + attachPlants.length + redactionCases.length;
         lines.push(failed ? `${NAME} self-test: FAIL -- ${failed} expectation(s) unmet` : `${NAME} self-test: PASS -- ${planted} planted faults each went red naming the drift`);
     } finally {
         rmSync(dir, { recursive: true, force: true });
@@ -380,7 +445,7 @@ function scratchDir() {
     return mkdtempSync(join(base, 'pb-hb-'));
 }
 
-async function attachClause(bundlePath, notes) {
+async function attachClause(bundlePath, notes, report = () => {}) {
     const obs = { attach: null };
     let restore = installOutputRedaction([]);
     const work = scratchDir();
@@ -412,6 +477,7 @@ async function attachClause(bundlePath, notes) {
         secrets = [...ready.secrets, offer.deviceToken, offer.publicKeyB64, offer.endpoint, ready.boundEndpoint].filter((s) => typeof s === 'string' && s.length >= 8);
         restore();
         restore = installOutputRedaction(secrets);
+        report({ secrets, control: ready.webClientUrl });
 
         // The bundle reads window (btoa in Orca's web e2ee) and self (tweetnacl's PRNG, self.crypto); Node's globals
         // stand in for both, as the browser document provides them.
@@ -499,8 +565,15 @@ async function attachClause(bundlePath, notes) {
     } finally {
         try { session?.detach(); } catch { /* closed */ }
         if (run) {
+            // orcad and the daemon setsid (outside the row's session), so their trees are recorded by identity first.
+            const roots = [run.child?.pid, run.ready?.daemonPid].filter((x) => Number.isInteger(x) && x > 0);
+            const tree = [...descendants(ppidMap(), roots)].map((pid) => [pid, startTicks(pid)]).filter(([, t]) => t !== null);
             const { survivors } = await stopOrcad(run.child, run.ready?.daemonPid);
-            if (survivors?.length) notes.survivors = survivors.length;
+            await sleep(500);
+            const left = new Set(survivors ?? []);
+            for (const [pid, ticks] of tree) if (startTicks(pid) === ticks) left.add(pid);
+            for (const [pid, ticks] of tree) if (left.has(pid)) signalIdentity(pid, ticks, 'SIGKILL');
+            if (left.size) { obs.survivors = left.size; notes.survivors = left.size; }
         }
         restore();
         obs.secrets = secrets;
@@ -510,27 +583,22 @@ async function attachClause(bundlePath, notes) {
 
 // ---------------------------------------------------------------- main
 
-function newestBuildLog() {
-    const dir = join(REPO_ROOT, '.mozbuild', 'orca-build');
-    let names = [];
-    try { names = readdirSync(dir).filter((n) => /^build-.*\.log$/.test(n)); } catch { return null; }
-    names.sort();
-    return names.length ? join(dir, names[names.length - 1]) : null;
-}
-
-async function main() {
+function inputs() {
     const outRel = existsSync(PANES_CONFIG) ? paneOutDirOf(readFileSync(PANES_CONFIG, 'utf8')) : null;
-    if (!outRel) {
-        console.log(`${NAME}: FAIL -- orca-overlay/files/vite.pb-panes.config.ts has no outDir line (the pane config moved)`);
-        return 1;
-    }
+    if (!outRel) return { fail: 'orca-overlay/files/vite.pb-panes.config.ts has no outDir line (the pane config moved)' };
     const bundle = join(ORCA_DIR, outRel, BUNDLE_NAME);
     for (const [path, what] of [[bundle, `orca/${outRel}/${BUNDLE_NAME}`], [join(ORCA_DIR, 'out', 'orcad', 'orcad.js'), 'orca/out/orcad/orcad.js'], [join(ORCA_DIR, 'out', 'cli', 'index.js'), 'orca/out/cli/index.js']]) {
-        if (!existsSync(path)) {
-            console.log(`${NAME}: SKIP -- ${what} is absent (nix develop .#orca --command bash scripts/build-orca.sh; the CLI as docs/BUILD.md "Browser host bundle" records)`);
-            return 0;
-        }
+        if (!existsSync(path)) return { skip: `${what} is absent. Next step: nix develop .#orca --command bash scripts/build-orca.sh; the CLI as docs/BUILD.md "Browser host bundle" records` };
     }
+    return { outRel, bundle };
+}
+
+/** --attach-probe: the static and attach clauses; their secrets go to fd 3 for the parent's redaction clause. */
+async function probe() {
+    const inp = inputs();
+    if (!inp.bundle) { console.log(`${NAME}: FAIL -- the probe was started without its inputs (${inp.fail ?? inp.skip})`); return 1; }
+    const { outRel, bundle } = inp;
+    const report = (o) => { try { writeSync(3, `${JSON.stringify(o)}\n`); } catch { /* the parent reads fd 3; run alone, nothing listens */ } };
     const bytes = statSync(bundle).size;
     const stat = staticClauses({
         overlayFiles: join(REPO_ROOT, 'orca-overlay', 'files'), bundle, assetsDir: join(ORCA_DIR, 'out', 'web', 'assets'),
@@ -540,7 +608,7 @@ async function main() {
     const notes = {};
     let obs;
     try {
-        obs = await attachClause(bundle, notes);
+        obs = await attachClause(bundle, notes, report);
     } catch (e) {
         console.log(`${NAME}: FAIL -- attach probe: ${redact(String(e?.message ?? e)).slice(0, 200)}`);
         return 1;
@@ -548,19 +616,35 @@ async function main() {
     const fails = [...stat.fails, ...attachVerdict(obs)];
     const lines = fails.map((f) => `${NAME}: FAIL -- ${f}`);
     if (Object.keys(notes).length) lines.unshift(`${NAME}: note -- ${JSON.stringify(notes)}`);
-    const log = newestBuildLog();
-    const matches = redactionMatches(lines.join('\n'), obs.secrets) + (log ? redactionMatches(readFileSync(log, 'utf8'), obs.secrets) : 0);
-    if (matches) lines.push(`${NAME}: FAIL -- redaction: ${matches} offer field occurrence(s) in the output or the newest build log`);
-    if (!lines.some((l) => l.includes(': FAIL -- '))) {
-        lines.push(`${NAME}: PASS -- attach accepted, createPage in ${obs.createPageMs} ms, user close reported, ${bytes} bytes; static clauses green over ${stat.modules} modules and ${stat.assets} Orca assets (redaction 0 matches)`);
-    }
+    if (!fails.length) lines.push(`${NAME}: probe green -- attach accepted, createPage in ${obs.createPageMs} ms, user close reported, no orcad survivor, ${bytes} bytes; static clauses green over ${stat.modules} modules and ${stat.assets} Orca assets`);
     for (const l of lines) console.log(redact(l, obs.secrets));
-    return lines.some((l) => l.includes(': FAIL -- ')) ? 1 : 0;
+    return fails.length ? 1 : 0;
+}
+
+async function main() {
+    const inp = inputs();
+    if (inp.fail) { console.log(`${NAME}: FAIL -- ${inp.fail}`); return 1; }
+    if (inp.skip) { console.log(skipLine(NAME, inp.skip)); return SKIP_EXIT; }
+    const r = await captureChild([fileURLToPath(import.meta.url), '--attach-probe']);
+    const secrets = r.report.secrets ?? [];
+    const red = redactionVerdict({ output: r.stdout + r.stderr, secrets, control: r.report.control });
+    // The probe's output is printed only after the count, and redacted with the secrets it reported.
+    if (r.stdout) process.stdout.write(redact(r.stdout, secrets));
+    if (r.stderr) process.stderr.write(redact(r.stderr, secrets));
+    const probeFailed = r.status !== 0;
+    // A probe that failed before orcad gave it an offer has no secrets; its own FAIL line is the verdict then.
+    if (probeFailed && !secrets.length) { console.log(`${NAME}: FAIL -- the probe exited ${r.status} before it reported the offer`); return 1; }
+    for (const f of red) console.log(`${NAME}: FAIL -- ${f}`);
+    if (probeFailed || red.length) { if (probeFailed) console.log(`${NAME}: FAIL -- the probe exited ${r.status}`); return 1; }
+    const details = /: probe green -- (.*)$/m.exec(r.stdout)?.[1] ?? 'the probe reported green';
+    console.log(`${NAME}: PASS -- ${details}; redaction: 0 offer field occurrences in the probe's raw stdout and stderr (the detector found the secrets in the raw ready line first)`);
+    return 0;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
     const args = process.argv.slice(2);
-    if (args.length === 1 && args[0] === '--self-test') process.exit(selfTest());
+    if (args.length === 1 && args[0] === '--self-test') process.exit(await selfTest());
+    if (args.length === 1 && args[0] === '--attach-probe') process.exit(await probe());
     if (args.length) { console.error(`${NAME}: unknown argument ${args[0]}`); process.exit(2); }
     process.exit(await main());
 }
