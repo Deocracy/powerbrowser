@@ -240,6 +240,25 @@ export const firefoxBin = (root = REPO_ROOT) => process.env.PB_FIREFOX_BIN || jo
 /** The Theia backend this run launches: PB_BACKEND_MAIN, else this tree's. */
 export const backendMain = (root = REPO_ROOT) => process.env.PB_BACKEND_MAIN || join(root, BACKEND_MAIN_REL);
 
+/** Whether the app under test (PB_BACKEND_MAIN, else this tree's) has orca-panes in its generated frontend: its document then holds Orca's listeners once the bundle boots. */
+export function appWiresOrcaPanes(main = backendMain()) {
+    const frontend = join(dirname(main), '..', '..', 'src-gen', 'frontend', 'index.js');
+    return /@powerbrowser\/orca-panes\//.test(read(frontend) ?? '');
+}
+
+/**
+ * What a paste control in the Theia frame may claim about Orca's document listeners (WINDOWS 62), decided from the frontend under
+ * test: wired (the app names orca-panes), bundleBuilt (the pane bundle this tree serves exists), booted (the bundle booted in the
+ * frame). 'covered': booted. 'not-wired': the app has no Orca listeners to cover. 'red': built but never booted (a blind control).
+ * 'skip': wired but the bundle is not built, so Orca's listeners were not in the frame and the control did not cover them.
+ */
+export function listenerCoverage({ wired, bundleBuilt, booted }) {
+    if (!wired) return { verdict: 'not-wired', note: 'the app under test wires no orca-panes module, so no Orca document listeners are in the Theia frame' };
+    if (booted) return { verdict: 'covered' };
+    if (bundleBuilt) return { verdict: 'red', reason: 'NOT SCORED -- the Orca pane bundle is built but did not boot in the Theia frame, so the paste control does not cover its document listeners' };
+    return { verdict: 'skip', reason: `Orca listeners not covered: the app under test wires orca-panes but ${PANES_BUNDLE_REL} is not built, so the paste control ran without Orca's document listeners. Next step: nix develop .#orca --command bash scripts/build-orca.sh` };
+}
+
 /**
  * Phase 65 (C64-7, P65-01): the clause-level prerequisite of orca-tabs-live stage (g)'s merge-editor half. A named
  * SKIP only while lane p65-02's orca-workspace is absent; present but missing from the built app's generated

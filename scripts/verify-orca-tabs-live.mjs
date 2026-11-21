@@ -1232,6 +1232,13 @@ const withTempFiles = (files, fn) => {
         rmSync(dir, { recursive: true, force: true });
     }
 };
+/** A fixture app tree whose generated frontend holds `line`; resolves the backend main.js path inside it. */
+const appFixture = (dir, line) => {
+    mkdirSync(join(dir, 'app', 'lib', 'backend'), { recursive: true });
+    mkdirSync(join(dir, 'app', 'src-gen', 'frontend'), { recursive: true });
+    writeFileSync(join(dir, 'app', 'src-gen', 'frontend', 'index.js'), `${line}\n`);
+    return join(dir, 'app', 'lib', 'backend', 'main.js');
+};
 /** Two calls of the wrapped prompt that both wrote: the budget reads 2 whatever guard sat in front of them. */
 async function countedTwice() {
     const budget = { writes: 0 };
@@ -1418,6 +1425,12 @@ async function runSelfTest() {
         ['fixture git without the hygiene is hit by that config', 'the fixture commit failed under a developer config', () => lib.fixtureGitVerdict((repo, path, home) => (...a) => execFileSync('git', ['-C', repo, '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', ...a], { env: { PATH: path, HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] }))],
         ['the live lock is taken by a row started outside the driver (harness-live-tabs-14)', null, () => lib.lockProbeVerdict(SELF, NAME)],
         ['a row that does not take the live lock is caught', 'did not take the live lock', () => withTempFiles({ 'row.mjs': 'console.log("x: lock-probe: held=0 locked=0");' }, (dir) => lib.lockProbeVerdict(join(dir, 'row.mjs'), 'x'))],
+        ['listener coverage: a booted bundle covers Orca\'s listeners', null, () => (lib.listenerCoverage({ wired: true, bundleBuilt: true, booted: true }).verdict === 'covered' ? [] : ['a booted bundle was not covered'])],
+        ['listener coverage: an app with no orca-panes has none to cover', null, () => (lib.listenerCoverage({ wired: false, bundleBuilt: false, booted: false }).verdict === 'not-wired' ? [] : ['an unwired app was not not-wired'])],
+        ['listener coverage: a built bundle that did not boot is red (harness-live-tabs-11)', 'did not boot in the Theia frame', () => { const c = lib.listenerCoverage({ wired: true, bundleBuilt: true, booted: false }); return c.verdict === 'red' ? [c.reason] : []; }],
+        ['listener coverage: a wired app with no built bundle is a named skip, not a silent pass', 'Orca listeners not covered', () => { const c = lib.listenerCoverage({ wired: true, bundleBuilt: false, booted: false }); return c.verdict === 'skip' ? [c.reason] : []; }],
+        ['an app wiring orca-panes is read from its generated frontend', null, () => withTempFiles({}, (dir) => { const main = appFixture(dir, "import '@powerbrowser/orca-panes/lib/browser/orca-panes-frontend-module';"); return lib.appWiresOrcaPanes(main) ? [] : ['a frontend naming orca-panes read as unwired']; })],
+        ['an app that does not wire orca-panes reads as unwired', null, () => withTempFiles({}, (dir) => { const main = appFixture(dir, "import '@powerbrowser/modes/lib/browser/x';"); return lib.appWiresOrcaPanes(main) ? ['a frontend with no orca-panes read as wired'] : []; })],
         ['a skip alone exits 77', null, () => (lib.verdictExitQuiet(NAME, [], ['stage g half did not run']) === SKIP_EXIT ? [] : ['a skip did not exit 77'])],
         ['a failure wins over a skip', null, () => (lib.verdictExitQuiet(NAME, ['a stage failed'], ['stage g half did not run']) === 1 ? [] : ['a failure did not win'])],
         ['no skip and no failure exits 0', null, () => (lib.verdictExitQuiet(NAME, [], []) === 0 ? [] : ['a clean run did not exit 0'])],
