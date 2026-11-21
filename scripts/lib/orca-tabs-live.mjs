@@ -29,13 +29,7 @@
 // stdout and stderr write goes through orca-run.mjs's redact, which also
 // replaces the offer itself once it has been read.
 //
-// The live lock (reexecUnderLiveLock): a live row takes <git common dir>/pb-live.lock itself,
-// before it launches anything. It goes on in this process when an ancestor holds the lock
-// (flock <lock> node <row>, or this function's own re-exec) or when PB_LIVE_LOCK_HELD=1 is set
-// and the lock is in fact held (the driver's holder); PB_LIVE_LOCK_HELD=1 with a free lock is
-// an error, never trusted. Otherwise it re-runs the row under flock -o in its own process group,
-// forwards SIGINT, SIGTERM and SIGHUP to that group and exits with the re-run's status.
-// The lock file is never overridable by a live run (PB_LIVE_LOCK_FILE counts only with --lock-probe).
+// The live lock is scripts/lib/live-lock.mjs (holdLiveLock); the rows call it before anything launches.
 //
 // Fixture git: the scratch repository's git is the pane harness's fixtureGit (no global or
 // system config, no signing, no hooks, a scratch HOME), and the Orca CLI gets the scratch HOME
@@ -43,11 +37,11 @@
 //
 // Node built-ins and the repo's lib modules only.
 
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { constants as osConstants, tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { liveEnv, seedClaudeLogin } from './firefox-bidi.mjs';
 import { verdictExit } from './skip-verdict.mjs';
 
@@ -75,177 +69,16 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
 
 // ---------------------------------------------------------------------------
-// The live lock.
+// The live lock lives in scripts/lib/live-lock.mjs (holdLiveLock, lockWiringFails); only the self-test's plant is here.
 
-/**
- * The lock file every live run shares: <git common dir>/pb-live.lock. PB_LIVE_LOCK_FILE names another file only for the
- * self-test's --lock-probe (probe true); a live run ignores it, so it cannot point the lock at a file nobody else takes.
- */
-export function liveLockFile(root = REPO_ROOT, env = process.env, probe = false) {
-    if (probe && env.PB_LIVE_LOCK_FILE) return env.PB_LIVE_LOCK_FILE;
-    const common = execFileSync('git', ['-C', root, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim();
-    return join(common, 'pb-live.lock');
-}
-
-/** 'held' when some process holds `lock` (a non-blocking flock cannot take it), 'free' when it can, 'error' when flock did not run. */
-export function lockState(lock) {
-    const r = spawnSync('flock', ['-n', lock, 'true'], { stdio: 'ignore' });
-    if (r.error) return 'error';
-    return r.status === 0 ? 'free' : r.status === 1 ? 'held' : 'error';
-}
-
-/**
- * Whether this process or one of its ancestors holds a flock on `lock` (mirrors lock_held_by_ancestor in scripts/verify-platform.sh):
- * the holders are read from /proc/locks by the lock file's inode, then the parent chain of `pid` is walked.
- */
-export function lockHeldByAncestor(lock, pid = process.pid, procRoot = '/proc') {
-    let ino;
-    try { ino = String(statSync(lock).ino); } catch { return false; }
-    const holders = new Set();
-    for (const line of (read(join(procRoot, 'locks')) ?? '').split('\n')) {
-        const f = line.trim().split(/\s+/);
-        if (f.includes('->') || f[1] !== 'FLOCK') continue;
-        if (String(f[5] ?? '').split(':').pop() === ino) holders.add(f[4]);
-    }
-    if (!holders.size) return false;
-    for (let at = pid; at > 1;) {
-        if (holders.has(String(at))) return true;
-        const stat = read(join(procRoot, String(at), 'stat'));
-        if (stat === null) return false;
-        at = Number(stat.replace(/^.*\) /, '').split(' ')[1]);
-    }
-    return false;
-}
-
-/**
- * Takes the live lock. Resolves null when this process may go on: an ancestor holds the lock, or PB_LIVE_LOCK_HELD=1 is set and the
- * lock is held (the driver's holder is not an ancestor). Throws when PB_LIVE_LOCK_HELD=1 is set and the lock is free (a hand-set flag
- * would run the row with no lock). Otherwise runs `node <self> <args>` under flock -o (the row's children, a detached orcad among
- * them, do not inherit the descriptor and cannot keep the lock after the row ends) in its own process group, forwards termination
- * signals to that group, and resolves with the run's exit status (77 and every other status pass through). The caller exits with it.
- * Options for the self-test only: lockFile, ancestorCheck, forward.
- */
-export async function reexecUnderLiveLock(self, args, { root = REPO_ROOT, env = process.env, lockFile, ancestorCheck = true, forward = true } = {}) {
-    const lock = lockFile ?? liveLockFile(root, env, args.includes('--lock-probe'));
-    if (ancestorCheck && lockHeldByAncestor(lock)) return null;
-    if (env.PB_LIVE_LOCK_HELD === '1') {
-        const state = lockState(lock);
-        if (state === 'held') return null;
-        throw new Error(`PB_LIVE_LOCK_HELD=1 is set but ${state === 'free' ? 'nothing holds' : 'the state could not be read of'} the live lock (${lock}), so this run would be unlocked. Next step: unset PB_LIVE_LOCK_HELD, or run through scripts/verify-platform.sh`);
-    }
-    return new Promise((resolveRun, reject) => {
-        const child = spawn('flock', ['-o', lock, process.execPath, self, ...args], { stdio: 'inherit', detached: true, env: { ...env, PB_LIVE_LOCK_HELD: '1' } });
-        const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
-        const send = (sig) => { try { process.kill(-child.pid, sig); } catch { /* already gone */ } };
-        const handlers = signals.map((sig) => [sig, () => send(sig)]);
-        const onExit = () => send('SIGTERM');
-        if (forward) { for (const [sig, h] of handlers) process.on(sig, h); process.on('exit', onExit); }
-        const done = () => { for (const [sig, h] of handlers) process.off(sig, h); process.off('exit', onExit); };
-        child.on('error', (err) => { done(); reject(new Error(`could not take the live lock with flock (${err.code ?? err.message}); install util-linux or run through scripts/verify-platform.sh`)); });
-        child.on('close', (code, signal) => { done(); resolveRun(code ?? (signal ? 128 + (osConstants.signals[signal] ?? 0) : 1)); });
-    });
-}
-
-/**
- * The self-test's control for a live row's lock (no browser): runs `node <self> --lock-probe` with PB_LIVE_LOCK_HELD
- * unset and its own lock file, and requires the row to report that it holds the lock (the env flag set and a lock that a
- * second flock -n cannot take). Resolves red reasons.
- */
-export function lockProbeVerdict(self, name) {
-    const dir = mkdtempSync(join(tmpdir(), 'pb-lock-probe-'));
+/** lockWiringFails over a script that never calls holdLiveLock: it must be red. Resolves lockWiringFails' reasons (non-empty when it works). */
+export function lockWiringPlantFails(lockWiringFails) {
+    const dir = mkdtempSync(join(tmpdir(), 'pb-lock-wiring-'));
     try {
-        const lockFile = join(dir, 'pb-live.lock');
-        writeFileSync(lockFile, '');
-        const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'PB_LIVE_LOCK_HELD' && !k.startsWith('ORCA_')));
-        const r = spawnSync(process.execPath, [self, '--lock-probe'], { encoding: 'utf8', timeout: 20000, env: { ...env, PB_LIVE_LOCK_FILE: lockFile } });
-        const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
-        const fails = [];
-        if (r.status !== 0) fails.push(`${name} --lock-probe exited ${r.status} (${out.trim().slice(0, 120)})`);
-        if (!/lock-probe: held=1 locked=1\b/.test(out)) fails.push(`${name} started without PB_LIVE_LOCK_HELD did not take the live lock before running (${out.trim().slice(0, 120)})`);
-        return fails;
+        const file = join(dir, 'row.mjs');
+        writeFileSync(file, "console.log('a live row that never takes the lock');\n");
+        return lockWiringFails('x', pathToFileURL(file).href);
     } finally {
-        rmSync(dir, { recursive: true, force: true });
-    }
-}
-
-/** What a row prints for --lock-probe once it is running: whether this process holds the live lock. Never launches anything. */
-export function lockProbeLine(name, env = process.env) {
-    return `${name}: lock-probe: held=${env.PB_LIVE_LOCK_HELD === '1' ? 1 : 0} locked=${lockState(liveLockFile(REPO_ROOT, env, true)) === 'held' ? 1 : 0}`;
-}
-
-/**
- * The lock helper's own plants (no browser, a private lock file, real flock): each case runs a fixture row that calls
- * reexecUnderLiveLock and prints "ran held=<flag>". Resolves red reasons.
- */
-export async function lockBehaviourVerdict() {
-    const dir = mkdtempSync(join(tmpdir(), 'pb-lock-behaviour-'));
-    const fails = [];
-    const stragglers = [];
-    try {
-        const lock = join(dir, 'pb-live.lock');
-        writeFileSync(lock, '');
-        const pids = join(dir, 'pids');
-        const row = join(dir, 'row.mjs');
-        writeFileSync(row, `import { spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
-import { reexecUnderLiveLock } from ${JSON.stringify(import.meta.url)};
-const opts = { lockFile: process.env.FX_LOCK, ancestorCheck: process.env.FX_NO_ANCESTOR !== '1', forward: process.env.FX_NO_FORWARD !== '1' };
-let held;
-try { held = await reexecUnderLiveLock(import.meta.filename, process.argv.slice(2), opts); } catch (e) { console.error(String(e.message)); process.exit(1); }
-if (held !== null) process.exit(held);
-console.log('ran held=' + process.env.PB_LIVE_LOCK_HELD);
-if (process.env.FX_SLEEP === '1') {
-    const child = spawn('sleep', ['60'], { stdio: 'ignore' });
-    writeFileSync(process.env.FX_PIDS, process.pid + ' ' + child.pid);
-    await new Promise((r) => setTimeout(r, 60000));
-}
-`);
-        const base = Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'PB_LIVE_LOCK_HELD' && !k.startsWith('ORCA_')));
-        const run = (cmd, args, extra = {}, timeout = 15000) => spawnSync(cmd, args, { encoding: 'utf8', timeout, env: { ...base, FX_LOCK: lock, ...extra } });
-        // (a) a hand-set flag with the lock free is not trusted.
-        const free = run(process.execPath, [row], { PB_LIVE_LOCK_HELD: '1' });
-        if (free.status === 0 || !/PB_LIVE_LOCK_HELD=1 is set but nothing holds the live lock/.test(free.stderr)) fails.push(`lock: PB_LIVE_LOCK_HELD=1 with the lock free was trusted (exit ${free.status}, ${String(free.stderr).trim().slice(0, 100)})`);
-        // (a, control) the same flag with the lock held by the driver's kind of holder (not an ancestor) is accepted.
-        const holder = spawn('flock', ['-o', lock, 'sleep', '30'], { stdio: 'ignore', detached: true });
-        stragglers.push(-holder.pid);
-        for (let i = 0; i < 50 && lockState(lock) !== 'held'; i++) await sleep(100);
-        const held = run(process.execPath, [row], { PB_LIVE_LOCK_HELD: '1' });
-        if (held.status !== 0 || !/ran held=1/.test(held.stdout)) fails.push(`lock: PB_LIVE_LOCK_HELD=1 with the lock held was refused (exit ${held.status}, ${String(held.stderr).trim().slice(0, 100)})`);
-        try { process.kill(-holder.pid, 'SIGKILL'); } catch { /* gone */ }
-        for (let i = 0; i < 50 && lockState(lock) !== 'free'; i++) await sleep(100);
-        // (b) flock <lock> node <row>: an ancestor holds the lock, the row goes on instead of waiting on it.
-        const wrapped = run('flock', [lock, process.execPath, row], {}, 8000);
-        if (wrapped.status !== 0 || !/ran held=undefined/.test(wrapped.stdout)) fails.push(`lock: a row under flock <lock> did not run (exit ${wrapped.status}${wrapped.error ? `, ${wrapped.error.code}` : ''}): it waited on its own ancestor`);
-        // (b, plant) without the ancestor check the same invocation hangs: the detector can see the deadlock.
-        const hung = spawn('flock', [lock, process.execPath, row], { stdio: 'ignore', detached: true, env: { ...base, FX_LOCK: lock, FX_NO_ANCESTOR: '1' } });
-        stragglers.push(-hung.pid);
-        await sleep(3000);
-        const hungAlive = hung.exitCode === null && hung.signalCode === null;
-        try { process.kill(-hung.pid, 'SIGKILL'); } catch { /* gone */ }
-        await sleep(500);
-        for (let i = 0; i < 50 && lockState(lock) !== 'free'; i++) await sleep(100);
-        if (!hungAlive) fails.push('lock: the ancestor-wait plant did not hang, so the ancestor control proves nothing');
-        // plain run: re-executed under the lock.
-        const plain = run(process.execPath, [row]);
-        if (plain.status !== 0 || !/ran held=1/.test(plain.stdout)) fails.push(`lock: a plain run was not re-run under the lock (exit ${plain.status}, ${String(plain.stderr).trim().slice(0, 100)})`);
-        // (c) a SIGTERM to the row's first process reaches the re-run, its children and releases the lock.
-        for (const forward of [true, false]) {
-            rmSync(pids, { force: true });
-            const parent = spawn(process.execPath, [row], { stdio: 'ignore', env: { ...base, FX_LOCK: lock, FX_SLEEP: '1', FX_PIDS: pids, FX_NO_FORWARD: forward ? '0' : '1' }, detached: true });
-            for (let i = 0; i < 100 && !existsSync(pids); i++) await sleep(100);
-            const [rowPid, kidPid] = (read(pids) ?? '0 0').split(' ').map(Number);
-            if (!(rowPid > 1)) { fails.push('lock: the signal fixture row never started'); stragglers.push(parent.pid); continue; }
-            for (const pid of [rowPid, kidPid]) if (Number.isInteger(pid) && pid > 1) stragglers.push(pid);
-            process.kill(parent.pid, 'SIGTERM');
-            await sleep(2500);
-            const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-            if (forward && (alive(rowPid) || alive(kidPid) || lockState(lock) !== 'free')) fails.push('lock: SIGTERM to the parent left the re-run, its child or the lock behind');
-            if (!forward && !alive(rowPid)) fails.push('lock: the no-forward plant did not leave the re-run running, so the signal control proves nothing');
-            for (const pid of [rowPid, kidPid]) if (Number.isInteger(pid) && pid > 1) try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
-        }
-        return fails;
-    } finally {
-        for (const pid of stragglers) { if (pid === 0 || Math.abs(pid) <= 1) continue; try { process.kill(pid, "SIGKILL"); } catch { /* gone */ } }
         rmSync(dir, { recursive: true, force: true });
     }
 }
