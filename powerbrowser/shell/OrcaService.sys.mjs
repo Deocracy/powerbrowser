@@ -180,6 +180,8 @@ export const OrcaService = {
     this._state = "starting";
     this._failureRows = [];
     this._restarting = false;
+    // Audit fix orcad-hosting-07: a Restart is a fresh count of exits after ready.
+    this._exitTimes = [];
     this._pushLog("Restart requested from the Orca failure page.");
     // Audit fix pairing-credentials-03: no hand-off file outlives the start it was written for.
     this._restartRun = this._removeHandOff()
@@ -651,8 +653,29 @@ export const OrcaService = {
     this._restarting = true;
     this._pid = null;
     this._pidTicks = null;
-    this._pushLog(`orcad exited unexpectedly; restarting (restart ${this._restartCount}).`);
     try {
+      // Audit fix 62-WR-05: the data root, the offer and the bundle folder named the orcad that just
+      // exited; the next ready writes them again.
+      await this._removeHandOff();
+      // Audit fix orcad-hosting-07: exits after ready are counted over a window, not reset by each ready.
+      // The first restarts at once; each further one in the window waits longer, and the giveUpAttempts-th
+      // ends in the failed state with its Restart, keeping the daemon and its agents (D-07).
+      const now = Date.now();
+      const windowMs = PowerBrowserAPI.getIntPref("powerbrowser.orca.crashWindowMs", 300000);
+      this._exitTimes = [...this._exitTimes.filter(at => now - at < windowMs), now];
+      const exits = this._exitTimes.length;
+      if (exits >= PowerBrowserAPI.getIntPref("powerbrowser.orca.giveUpAttempts", 5)) {
+        this._fail("restarting orcad after repeated exits", [["Orca exits after ready", exits], ["Orca exit window", `${windowMs} ms`]]);
+        return;
+      }
+      const backoffMs = exits > 1 ? Math.min(RESTART_BACKOFF_INITIAL_MS * 2 ** (exits - 2), RESTART_BACKOFF_CAP_MS) : 0;
+      this._pushLog(`orcad exited unexpectedly; restarting (restart ${this._restartCount}${backoffMs ? `, after ${backoffMs} ms` : ""}).`);
+      if (backoffMs) {
+        await PowerBrowserAPI.sleep(backoffMs);
+        if (this._shuttingDown) {
+          return;
+        }
+      }
       await this._reapLeftover({ includeDaemon: false });
       await this._launch();
     } catch (err) {

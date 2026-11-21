@@ -440,6 +440,7 @@ export const ORCA_STEP_CLASSES = Object.freeze({
   "checking that orcad is bound to loopback": "could-not-start",
   "checking the Node.js version orcad runs on": "could-not-start",
   "an unexpected error": "could-not-start",
+  "restarting orcad after repeated exits": "could-not-start",
   "checking for a temporary profile folder": "temporary-profile",
   "checking the Orca sign-in storage setting": "plaintext-setting",
 });
