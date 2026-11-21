@@ -6,8 +6,10 @@
  * At frontend start, in every mode, the host waits for the pane bundle's link
  * (LINK_KEY, else the LINK_EVENT window event), takes its connection, imports
  * the host bundle pb-browser-host.js from the pane bundle's served directory,
- * attaches with its own connection and a pb-host-<uuid> id, and hands that id
- * to the link so Orca's renderer places new pages on this host (A3).
+ * and attaches with its own connection and one pb-host-<uuid> id it keeps for
+ * the frontend's life (66-CR-03). The host bundle places new Orca pages on that
+ * id through the connection's placement capability once orcad's lease is ready
+ * (A3, T-66-04).
  *
  * Every page command goes through the pure dispatcher (orca-browser-dispatch):
  * createPage opens one background agent web tab and binds it, automation goes
@@ -35,7 +37,7 @@ import {
     AgentReply, BrowserRecord, CommandEvent, DispatchDeps, DispatchFailure, Outcome, PageTable, createPageTable, createRevealTracker, dispatchCommand
 } from '../common/orca-browser-dispatch';
 import {
-    BoundEvent, PageMetadata, START_STEP_DEADLINE_MS, agentCallTimeoutMs, boundedOutcome, inventoryOf, pageMetadataOf, reboundEvent, withDeadline
+    BoundEvent, PageMetadata, START_STEP_DEADLINE_MS, agentCallTimeoutMs, agentParams, boundedOutcome, inventoryOf, pageMetadataOf, reboundEvent, withDeadline
 } from '../common/orca-browser-host-wire';
 
 /** Host bundle interface and link global (66-01-PLAN interfaces); orca-browser-entry-points compares these with lane p66-01's sources. */
@@ -63,17 +65,23 @@ interface HostConnection {
     endpoint: string;
     hostPublicKeyB64: string;
     credential: unknown;
+    /** T-66-04: this connection's placement capability; the host bundle uses it for this one attach. */
+    placement?: HostPlacement;
+}
+
+interface HostPlacement {
+    attached(browserHostClientId: string): void;
+    detached(): void;
 }
 
 interface HostLink {
     connection(): Promise<HostConnection>;
-    setPlacement(browserHostClientId: string | null): void;
 }
 
 interface HostSession {
     browserHostClientId: string;
     commandResult(event: CommandEvent, outcome: Outcome): unknown;
-    pageMetadata(browserPageId: string, metadata: PageMetadata): unknown;
+    pageMetadata(browserPageId: string, metadata: PageMetadata, page?: { browserHostGeneration: number; pageHostGeneration: number }): unknown;
     userClosedPage(worktreeSelector: string | undefined, browserPageId: string): unknown;
     detach(): unknown;
 }
@@ -87,6 +95,7 @@ interface HostModule {
         inventory(): unknown[];
         onCommand(event: CommandEvent): void;
         onDetached(reason: string): void;
+        placement?: HostPlacement;
     }): Promise<HostSession>;
 }
 
@@ -95,8 +104,10 @@ const worktreeSelector = (worktreeId: string): string => worktreeId.trim().start
 
 /**
  * P66-08 (66-06): the bound pages of this frontend, kept in the Theia document's sessionStorage (it survives a reload
- * of the same window, never a new launch) as browserPageId -> worktree selector. orcad keeps a reloaded frontend's pages
- * as host-absent rows, because the new host attaches with a new client id; the new host closes them after attach.
+ * of the same window, never a new launch) as browserPageId -> worktree selector. A reload makes a new frontend with a new
+ * host id, so orcad keeps the old frontend's pages as host-absent rows; the new host closes them after attach. An entry
+ * whose page this frontend no longer binds is a close still to be sent (66-WR-03); its attempts are counted under
+ * CLOSE_ATTEMPTS_KEY, and it is given up after MAX_CLOSE_ATTEMPTS or on a refusal from orcad.
  */
 const ENDED_PAGES_KEY = 'powerbrowser.orca-browser.bound-pages';
 const readBoundPages = (): Record<string, string | null> => {
@@ -114,6 +125,27 @@ const writeBoundPages = (pages: Record<string, string | null>): void => {
         // storage unavailable: a reload then leaves host-absent rows, as before
     }
 };
+const CLOSE_ATTEMPTS_KEY = 'powerbrowser.orca-browser.close-attempts';
+const MAX_CLOSE_ATTEMPTS = 3;
+/** The host bundle's own failure codes for a call that never reached orcad's answer; anything else is orcad's refusal. */
+const TRANSIENT_CALL_CODES = new Set(['detached', 'call_timeout', 'socket_closed', 'handshake_timeout']);
+const readCloseAttempts = (): Record<string, number> => {
+    try {
+        const value = JSON.parse(window.sessionStorage.getItem(CLOSE_ATTEMPTS_KEY) ?? '{}');
+        return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    } catch {
+        return {};
+    }
+};
+const writeCloseAttempts = (attempts: Record<string, number>): void => {
+    try {
+        window.sessionStorage.setItem(CLOSE_ATTEMPTS_KEY, JSON.stringify(attempts));
+    } catch {
+        // storage unavailable: the close is retried without a count until the window closes
+    }
+};
+/** 66-CR-02 review: one automatic re-attach this long after an unexpected detach, inside orcad's reconnect grace. */
+const AUTO_REATTACH_MS = 1000;
 
 /** Orca's page id -> web tab table, shared by the host and orca-panes' browser route (P66-05, P66-09). */
 @injectable()
@@ -173,6 +205,11 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
     protected readonly browserHostClientId = `pb-host-${crypto.randomUUID()}`;
     protected session: HostSession | undefined;
     protected readonly sentMetadata = new Map<string, string>();
+    /** 66-WR-03 review: pages the user closed in this frontend; a createPage for one opens nothing. */
+    protected readonly userClosed = new Set<string>();
+    /** Bound pages the last inventory left out (66-CR-03 review, Orca's inventory limits). */
+    protected inventoryDropped: string[] = [];
+    protected reattachArmed = false;
     protected prepared: Promise<void> | undefined;
     protected attaching: Promise<boolean> | undefined;
     protected attempts = 0;
@@ -222,6 +259,7 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
     protected async run(): Promise<boolean> {
         let step = 'layout';
         this.hostState = 'attaching';
+        this.reattachArmed = false;
         try {
             await this.prepare();
             // 66-WR-02: the link and its connection each have a deadline, so a pane bundle that never evaluates or never
@@ -248,15 +286,24 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
                 onCommand: event => void sessionReady.then(s => this.serve(s, event)),
                 onDetached: reason => {
                     this.session = undefined;
-                    link.setPlacement(null);
                     console.warn(`${LOG_PREFIX} the browser host detached: ${reason}`);
                     this.setState('failed');
+                    // 66-CR-02 review: one prompt re-attach after a dropped socket, so orcad's reconnect grace keeps the
+                    // lease and every bound page's placement; Reconnect stays the way back if it fails.
+                    if (this.reattachArmed && reason !== 'detached' && !reason.startsWith('revoked')) {
+                        this.reattachArmed = false;
+                        window.setTimeout(() => void this.attach(), AUTO_REATTACH_MS);
+                    }
                 },
+                // T-66-04: the host bundle places pages on this id at the lease's ready, before the session resolves.
+                placement: connection.placement,
             });
             this.session = session;
             attached(session);
-            link.setPlacement(browserHostClientId);
+            this.reattachArmed = true;
+            this.endDroppedPages();
             this.closeEndedPages(session);
+            this.resendMetadata();
             this.setState('attached');
             return true;
         } catch {
@@ -395,12 +442,14 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
     protected async serve(session: HostSession, event: CommandEvent): Promise<void> {
         // 66-WR-04: a completed value over Orca's result budget is answered failed rather than refused unanswered.
         const outcome = boundedOutcome(await dispatchCommand(event, this.deps(event)));
-        const previous = this.bound.get(event.browserPageId);
-        if (outcome.status === 'completed' && previous) {
-            this.bound.set(event.browserPageId, reboundEvent(previous, event as BoundEvent)); // 66-CR-03
-        }
         try {
             await session.commandResult(event, outcome);
+            // 66-CR-03 review: a reclaim or restore moves the page's recorded authority only once orcad has its result,
+            // so a lost result leaves the inventory naming the authority orcad last accepted.
+            const previous = this.bound.get(event.browserPageId);
+            if (outcome.status === 'completed' && previous) {
+                this.bound.set(event.browserPageId, reboundEvent(previous, event as BoundEvent));
+            }
             return;
         } catch {
             // refused or not delivered; an automation result is retried once as a failure, so orcad's command ends
@@ -431,13 +480,16 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
                 return widget.tabId;
             },
             recordBound: tabId => this.recordBound(event, tabId),
+            closedByUser: pageId => this.userClosed.has(pageId) || (pageId in readBoundPages() && this.pages.table.tabOf(pageId) === undefined),
             closeTab: tabId => this.channel.widgetOf(tabId)?.close(),
             // agent-browser-04 / 66-CR-01: Orca's navigate goes through chrome's agent wall as browser.goto, never the
             // user's webTabNavigate, so a stopped tab or a tab that is not an agent tab is never driven, and the mark lights.
             navigate: (tabId, url) => this.agentRequest({ kind: 'webTabAgent', tabId, method: 'browser.goto', params: { url } }),
             agentsStopped: () => (this.widgetManager.getWidgets(WEB_TAB_FACTORY_ID) as WebTabWidget[])
-                .some(widget => widget.agent && !widget.isDisposed && widget.agentControl.stopped),
-            agentCall: (tabId, method, params) => this.agentRequest({ kind: 'webTabAgent', tabId, method, params }),
+                // Chrome's own status (agentControlChanged): a restored agent row's widget carries no local flag, and
+                // Stop is kept per shell window across a reload of this document (G1a round 2).
+                .some(widget => !widget.isDisposed && widget.agentControl.agent && widget.agentControl.stopped),
+            agentCall: (tabId, method, params) => this.agentRequest({ kind: 'webTabAgent', tabId, method, params: agentParams(params) }),
             pageInfo: tabId => {
                 const widget = this.channel.widgetOf(tabId);
                 return { url: widget?.url ?? '', title: widget?.pageTitle ?? '' };
@@ -449,18 +501,18 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
      * 66-WR-05: the records of a page the table has just bound to this tab, written only after the bind, so a losing
      * duplicate createPage tab (closed unbound) never reaches onTabClosed and never touches the winner's records.
      */
-    protected recordBound(event: CommandEvent, tabId: string): void {
+    protected recordBound(event: CommandEvent, tabId: string): boolean {
+        const widget = this.channel.widgetOf(tabId);
+        if (!widget || widget.isDisposed) {
+            return false; // closed between chrome's reply and the bind: createPage fails, and no user close is sent
+        }
         const pageId = event.browserPageId;
         this.bound.set(pageId, event as BoundEvent);
         const workspaceId = event.command.workspaceId;
         writeBoundPages({ ...readBoundPages(), [pageId]: workspaceId ? worktreeSelector(workspaceId) : null });
         this.pages.tracker.noteCreated(pageId);
-        const widget = this.channel.widgetOf(tabId);
-        if (!widget || widget.isDisposed) {
-            this.onTabClosed(pageId, tabId); // closed by the user between chrome's reply and the bind
-            return;
-        }
         widget.disposed.connect(() => this.onTabClosed(pageId, tabId));
+        return true;
     }
 
     /**
@@ -481,18 +533,54 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
         }
         this.pages.table.drop(pageId);
         this.bound.delete(pageId);
+        this.userClosed.add(pageId);
         const session = this.session;
         if (!session) {
             return;
         }
         const workspaceId = event?.command.workspaceId;
-        void Promise.resolve(session.userClosedPage(workspaceId ? worktreeSelector(workspaceId) : undefined, pageId))
-            .then(() => this.forgetBoundPage(pageId), () => console.warn(`${LOG_PREFIX} a user close was not reported`));
+        this.sendClose(session, pageId, workspaceId ? worktreeSelector(workspaceId) : undefined);
+    }
+
+    /**
+     * 66-WR-03: one user close to orcad. Its entry goes when orcad takes it, when orcad refuses it (a code that is not
+     * one of the host's own transport codes), or after MAX_CLOSE_ATTEMPTS; until then the next attach sends it again.
+     */
+    protected sendClose(session: HostSession, pageId: string, selector: string | undefined): void {
+        const attempts = (readCloseAttempts()[pageId] ?? 0) + 1;
+        writeCloseAttempts({ ...readCloseAttempts(), [pageId]: attempts });
+        void Promise.resolve(session.userClosedPage(selector, pageId)).then(() => this.forgetBoundPage(pageId), (error: unknown) => {
+            const transient = error instanceof Error && TRANSIENT_CALL_CODES.has(error.message);
+            if (transient && attempts < MAX_CLOSE_ATTEMPTS) {
+                console.warn(`${LOG_PREFIX} a closed page was not reported; it is sent again after the next attach`);
+                return;
+            }
+            this.forgetBoundPage(pageId);
+            console.warn(`${LOG_PREFIX} a closed page was not reported and is no longer retried`);
+        });
     }
 
     protected forgetBoundPage(pageId: string): void {
         const { [pageId]: _closed, ...stillBound } = readBoundPages();
         writeBoundPages(stillBound);
+        const { [pageId]: _attempts, ...stillCounted } = readCloseAttempts();
+        writeCloseAttempts(stillCounted);
+    }
+
+    /**
+     * 66-CR-03 review: a bound page the last inventory left out (over Orca's page count or byte budget) is unknown to
+     * orcad's reconciliation, so its tab is closed as a user close would be, with one log line.
+     */
+    protected endDroppedPages(): void {
+        const dropped = this.inventoryDropped;
+        this.inventoryDropped = [];
+        if (!dropped.length) {
+            return;
+        }
+        console.warn(`${LOG_PREFIX} ${dropped.length} agent tab(s) did not fit Orca's page inventory and are closed`);
+        for (const pageId of dropped) {
+            this.channel.widgetOf(this.pages.table.tabOf(pageId) ?? '')?.close();
+        }
     }
 
     /**
@@ -502,8 +590,21 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
     protected closeEndedPages(session: HostSession): void {
         const ended = Object.entries(readBoundPages()).filter(([pageId]) => this.pages.table.tabOf(pageId) === undefined);
         for (const [pageId, selector] of ended) {
-            void Promise.resolve(session.userClosedPage(selector ?? undefined, pageId))
-                .then(() => this.forgetBoundPage(pageId), () => console.warn(`${LOG_PREFIX} a closed page was not reported`));
+            this.sendClose(session, pageId, selector ?? undefined);
+        }
+    }
+
+    /** 66-CR-02 review: after an attach, every bound tab's current state is sent again under the page's own generations. */
+    protected resendMetadata(): void {
+        this.sentMetadata.clear();
+        for (const pageId of this.pages.table.pages()) {
+            const widget = this.channel.widgetOf(this.pages.table.tabOf(pageId) ?? '');
+            if (widget && !widget.isDisposed) {
+                this.reportMetadata({
+                    tabId: widget.tabId, url: widget.url, title: widget.pageTitle,
+                    loading: widget.loading, canGoBack: widget.canGoBack, canGoForward: widget.canGoForward,
+                });
+            }
         }
     }
 
@@ -514,13 +615,16 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
     protected reportMetadata(detail: Record<string, unknown>): void {
         const pageId = typeof detail.tabId === 'string' ? this.pages.table.pageOf(detail.tabId) : undefined;
         const metadata = pageMetadataOf(detail);
-        if (!pageId || !this.session || !metadata) {
+        const event = pageId ? this.bound.get(pageId) : undefined;
+        if (!pageId || !this.session || !metadata || !event) {
             return;
         }
         const key = JSON.stringify(metadata);
         if (this.sentMetadata.get(pageId) !== key) {
             this.sentMetadata.set(pageId, key);
-            void Promise.resolve(this.session.pageMetadata(pageId, metadata))
+            // 66-CR-02 review: the page's own generations, from its last accepted command event, not this session's.
+            const page = { browserHostGeneration: Number(event.browserHostGeneration), pageHostGeneration: Number(event.pageHostGeneration) };
+            void Promise.resolve(this.session.pageMetadata(pageId, metadata, page))
                 .catch(() => console.warn(`${LOG_PREFIX} a page metadata update was not taken`));
         }
     }
@@ -536,11 +640,13 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
 
     /** Orca's page inventory entries for the bound pages of the attaching host id (empty at a first attach). */
     protected inventory(browserHostClientId: string): unknown[] {
-        return inventoryOf(this.pages.table.pages().flatMap(pageId => {
+        const { entries, dropped } = inventoryOf(this.pages.table.pages().flatMap(pageId => {
             const event = this.bound.get(pageId);
             const tabId = this.pages.table.tabOf(pageId);
             return event && tabId ? [{ pageId, event, url: this.channel.widgetOf(tabId)?.url }] : [];
         }), browserHostClientId);
+        this.inventoryDropped = dropped;
+        return entries;
     }
 }
 
