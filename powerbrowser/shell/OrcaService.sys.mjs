@@ -162,7 +162,10 @@ export const OrcaService = {
     this._failureRows = [];
     this._restarting = false;
     this._pushLog("Restart requested from the Orca failure page.");
-    this._restartRun = this._startSequence().catch(err => this.reportUnexpectedFailure(err));
+    // Audit fix pairing-credentials-03: no hand-off file outlives the start it was written for.
+    this._restartRun = this._removeHandOff()
+      .then(() => this._startSequence())
+      .catch(err => this.reportUnexpectedFailure(err));
     return true;
   },
 
@@ -502,6 +505,12 @@ export const OrcaService = {
       await this._endFailedStart(proc, endOwn);
       return { ok: false, recoverable: false, step: "checking the Node.js version orcad runs on", rows: [["Orca Node.js version", String(ready.nodeVersion)]] };
     }
+    // Audit fixes 62-WR-03 and orcad-hosting-05: a stop that began while orcad was starting has already
+    // removed the hand-off files; nothing below may write them again or report ready over "stopped".
+    if (this._shuttingDown) {
+      await endOwn();
+      return { ok: false, recoverable: false, step: "stopping", rows: [] };
+    }
 
     this._pid = proc.pid;
     this._pidTicks = await PowerBrowserAPI.readProcessStartTicks(this._pid);
@@ -542,8 +551,14 @@ export const OrcaService = {
         this._pushLog(`Orca data root file not written: ${messageOf(err)}`);
       }
     }
-    await this._writeHandOff(offer);
+    if (!this._shuttingDown) {
+      await this._writeHandOff(offer);
+    }
     offer = null;
+    if (this._shuttingDown) {
+      await endOwn();
+      return { ok: false, recoverable: false, step: "stopping", rows: [] };
+    }
     this._state = "ready";
     this._failureRows = [];
     this._restarting = false;
@@ -570,6 +585,8 @@ export const OrcaService = {
         this._pushLog(`Orca pairing file not written: ${messageOf(err)}`);
       }
     } else {
+      // Audit fix pairing-credentials-03: an earlier start's offer is not this start's.
+      await this._removeBridgeFile(OrcaEnv.ORCA_WEB_PAIRING_FILE);
       this._pushLog("orcad reported no pairing offer; Orca tabs cannot open.");
     }
     const panesDir = `${this._webClientRoot}/${OrcaEnv.ORCA_PANES_DIR_REL}`;
@@ -739,6 +756,8 @@ export const OrcaService = {
         // Best-effort; the next launch's reap verifies identity anyway.
       }
     }
+    // Audit fix 62-WR-03: again, for a ready line that resolved while this stop ran.
+    await this._removeHandOff();
     this._state = "stopped";
     this._pid = null;
     this._daemonPid = null;

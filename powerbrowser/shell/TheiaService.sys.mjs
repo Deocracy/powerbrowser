@@ -326,6 +326,13 @@ export const TheiaService = {
       this._reapLog(`Leftover reap failed: ${err.message} -- best-effort cleanup of a previous launch, continuing to this launch's own spawn.`);
     }
 
+    // Audit fix orcad-hosting-06: Orca's hand-off files left by a previous session that never stopped
+    // (a crash, a kill), removed before this launch's first backend spawn. The frontend boots before
+    // OrcaService runs (powerbrowser.js starts Orca once this start settles), and the backend would hand it
+    // the old pairing offer as this session's. Here is before any orcad of this session exists, so nothing
+    // removed is current.
+    await this._clearStaleOrcaHandOff();
+
     // SQL-01 (12-CODE-REVIEW.md CR-04): start the chrome-side tab-store
     // writer. ensureTabStore opens (migrating), tripwires, and rebuilds from
     // sessionstore when tripped -- resolving ready/rebuilt/degraded, never
@@ -805,6 +812,19 @@ export const TheiaService = {
     } catch (err) {
       this._pushLog(`Orca bridge folder not chosen: ${err && err.message ? err.message : err}`);
       return null;
+    }
+  },
+
+  /** Audit fix orcad-hosting-06: the three hand-off files OrcaService writes after a ready line, removed. Never throws. */
+  async _clearStaleOrcaHandOff() {
+    try {
+      const dir = await this._orcaBridgeDir();
+      const platform = OrcaEnv.nodePlatform(PowerBrowserProcesses.platform());
+      for (const name of dir ? [OrcaEnv.ORCAD_DATA_ROOT_FILE, OrcaEnv.ORCA_WEB_PAIRING_FILE, OrcaEnv.ORCA_PANES_DIR_FILE] : []) {
+        await PowerBrowserAPI.removeStateFile(OrcaEnv.bridgeFileFor(dir, name, platform));
+      }
+    } catch (err) {
+      this._pushLog(`Stale Orca hand-off files not removed: ${err && err.message ? err.message : err}`);
     }
   },
 
