@@ -36,16 +36,22 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 import { TARGETS, resolveConfig } from './generate.mjs';
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const SELF = fileURLToPath(import.meta.url);
+const REPO_ROOT = resolve(dirname(SELF), '..');
 const NAME = 'verify-branding-agreement';
 
 const args = process.argv.slice(2);
 const SELF_TEST = args.includes('--self-test');
+// --root=<dir> runs the main mode over another tree (the self-test's SKIP control uses it).
+const ROOT_ARG = args.find(a => a.startsWith('--root='));
 for (const a of args) {
-    if (a !== '--self-test') {
+    if (a !== '--self-test' && !a.startsWith('--root=')) {
         console.error(`${NAME}: FAIL -- unknown argument '${a}'`);
         process.exit(2);
     }
@@ -359,6 +365,26 @@ function selfTest() {
         rmSync(dir, { recursive: true, force: true });
     }
 
+    // SKIP control (SKIP-PROTOCOL.md): the main mode, run as a child with its output captured, over a tree that was
+    // never generated must exit 77 with the SKIP line last and no PASS line.
+    {
+        const empty = mkdtempSync(join(tmpdir(), 'verify-branding-agreement-root-'));
+        try {
+            const r = spawnSync(process.execPath, [SELF, `--root=${empty}`], { encoding: 'utf8' });
+            const lines = (r.stdout ?? '').split('\n').filter(l => l.trim() !== '');
+            const last = lines[lines.length - 1] ?? '';
+            if (r.status !== SKIP_EXIT || !last.startsWith(`${NAME}: SKIP -- generated/branding/ is not there yet`)
+                || lines.some(l => l.includes(`${NAME}: PASS`)) || /: SKIP/.test(r.stderr ?? '')) {
+                console.error(`${NAME}: --self-test FAIL -- control: a never-generated tree did not exit 77 with the SKIP line last and no PASS line (status ${r.status}, last line ${JSON.stringify(last)})`);
+                ok = false;
+            } else {
+                console.log(`${NAME}: --self-test -- control: a never-generated tree exits 77 with the SKIP line last`);
+            }
+        } finally {
+            rmSync(empty, { recursive: true, force: true });
+        }
+    }
+
     if (!ok) {
         console.error(`${NAME}: --self-test FAIL`);
         process.exit(1);
@@ -369,12 +395,12 @@ function selfTest() {
 
 if (SELF_TEST) selfTest();
 
-const result = runChecks(REPO_ROOT);
+// A tree that was never generated did not run this check: exit 77 with the SKIP line last (SKIP-PROTOCOL.md).
+const result = runChecks(ROOT_ARG ? resolve(ROOT_ARG.slice('--root='.length)) : REPO_ROOT);
 if (result.skipped) {
-    console.log(`${NAME}: SKIP -- generated/branding/ is not there yet, so there is nothing to compare.`);
     console.log('  The generated/ folder is not stored with the project, so a fresh copy of it starts out without one. This is not a mismatch.');
-    console.log('  To generate it, run: node scripts/generate.mjs');
-    process.exit(0);
+    console.log(skipLine(NAME, 'generated/branding/ is not there yet, so there is nothing to compare. Next step: run node scripts/generate.mjs'));
+    process.exit(SKIP_EXIT);
 }
 if (result.failures.length > 0) {
     console.error(`${NAME}: FAIL -- ${result.failures.length} branding agreement problem(s) under generated/branding/`);
