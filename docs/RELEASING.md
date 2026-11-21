@@ -373,7 +373,16 @@ installed at the path below) and GH-07 (the `release` and `descriptor` environme
 
 **Runner user and work directory.** The unit runs as its own system user, `pb-runner`, with
 `autoSubUidGidRange` for rootless podman. Its work directory is `/var/lib/pb-runner`. The path
-holds no space, because the build tooling breaks on one (hard rule 4 in `CLAUDE.md`). The runner
+holds no space, because the build tooling breaks on one (hard rule 4 in `CLAUDE.md`). The
+github-runner module does not create the work directory, sets `HOME` to it and deletes its contents
+on every start, so `systemd/legion-pb.nix` creates it with a tmpfiles rule and keeps the rootless
+podman image store outside it, in `/var/lib/pb-runner-data` (`XDG_DATA_HOME`). The file also relaxes
+the module's default sandbox for this runner only (`serviceOverrides`: user namespaces, the setuid
+`newuidmap` helpers, mount and `capset` system calls), because rootless podman cannot start under
+the defaults; each relaxed setting carries its reason in the file. The runner user is not in the
+`libvirtd` group: management access to `qemu:///system` is root-equivalent, and this user runs the
+release build's third-party build code. The `legion-runner-unit` row checks these rules on the file;
+the first deployment is what proves the unit starts and podman runs. The runner
 user has **no read access** to `~/.config/powerbrowser-release/` (the MAR key store on `legion`)
 or to the registration file. The owner verifies both with `sudo -u pb-runner test -r <path>`, and
 each check must fail.
@@ -418,10 +427,18 @@ These option names were verified on nixos unstable (2026-10-31): under
 (exactly one of `isNormalUser` and `isSystemUser` is set), `users.users.<name>.autoSubUidGidRange`,
 `users.groups`, and `environment.etc.<name>.source` and `.mode` (a mode other than `"symlink"`
 copies the file). Set `tokenType = "registration"` explicitly, and `ephemeral = false`: ephemeral
-with a registration token fails on restart. **Not verified:** how the module behaves with a static
-`user` and a custom `workDir` (state directory ownership, sandbox write paths), and whether rootless
-podman works for `pb-runner`. `pkexec nixos-rebuild dry-build` catches a wrong option name but not
-either of those; the owner checks them at apply.
+with a registration token fails on restart. The module's behaviour with a static `user` and a
+custom `workDir` was read from its source on legion's nixos-26.05 channel
+(`github-runner/service.nix`): it bind-mounts and enters `workDir` without creating it, and its
+default sandbox blocks rootless podman. `systemd/legion-pb.nix` answers both (see "Runner user and
+work directory" above), and `services.github-runners.<name>.serviceOverrides` is the option it uses.
+**Not verified:** that rootless podman then runs every release step for `pb-runner`; the first
+deployment is the proof, and the file names the next settings to relax if a podman step still fails.
+`pkexec nixos-rebuild dry-build` catches a wrong option name but not that.
+
+The block below is the runner core only. Install `systemd/legion-pb.nix` itself (its header lists
+the steps); the file also carries the work-directory and podman-store tmpfiles rules, the
+`XDG_DATA_HOME` line and the `serviceOverrides` that this block omits.
 
 ```nix
 services.github-runners.powerbrowser-release = {
@@ -459,8 +476,9 @@ pkexec bash -c 'export PATH=/run/current-system/sw/bin:/run/wrappers/bin:$PATH; 
 ```
 
 The unit is `github-runner-powerbrowser-release.service`, and `count` defaults to 1. The runner
-keeps its registration and its work directory between jobs. A stuck job is cleared by restarting
-the unit, not by cleaning the work directory while the unit runs.
+keeps its registration and its work directory between jobs, and the module deletes the work
+directory's contents on every start of the unit. A stuck job is cleared by restarting the unit, not
+by cleaning the work directory while the unit runs.
 
 **Runner acceptance drill (mandatory).** The local `env -i` run of the hook tests the script, not
 the runner. It cannot show whether job-controlled environment or a container set-up reaches the hook
@@ -1025,8 +1043,8 @@ Owner steps, at the 54-04 checkpoint (none of them is an agent's):
 `win11` with a 200704-byte stub qcow2 already exists on `legion`; leave it and its
 disk alone. The packaging capability record in `docs/BUILD.md` that says
 `virsh list --all` shows zero defined domains is stale: `win11` is defined and shut
-off on `legion`. Runner-user libvirt access is an owner action in `/etc/nixos`, taken at
-the 54-04 checkpoint. The guest is a test target, never a build host: the Windows build is a
+off on `legion`. The runner user has no libvirt access: the owner runs the matrix from the
+owner's own account, which is in the `libvirtd` group, with `LIBVIRT_DEFAULT_URI=qemu:///system`. The guest is a test target, never a build host: the Windows build is a
 Linux cross-compile. Give the nvram `format='qcow2'` rather than raw, because
 libvirt refuses an internal snapshot for a pflash domain whose nvram is not qcow2,
 and the `clean-baseline` snapshot the matrix reverts to depends on it. The matrix reverts **once** and runs the
@@ -1966,8 +1984,9 @@ owner-dispatched `--rollback-to` flag on the withdraw and descriptor path, which
 The runner is `github-runner-powerbrowser-release.service` on `legion`, maintained
 through `/etc/nixos/configuration.nix` and the `pkexec ... nrs` flow, never by
 editing the unit. It is non-ephemeral: it keeps its registration and its work directory
-`/var/lib/pb-runner` between jobs, so a stuck job is cleared by restarting the unit, and the
-work directory is removed only while the unit is stopped. Keep disk headroom for the objdirs a
+`/var/lib/pb-runner` between jobs, so a stuck job is cleared by restarting the unit. The module
+deletes the work directory's contents on every start, so a restart also drops the checkout and the
+objdirs inside it; the podman image store in `/var/lib/pb-runner-data` survives. Keep disk headroom for the objdirs a
 release build needs: `objdir/` peaks around 14 GB on top of the roughly 5.6 GB
 `upstream/` checkout, and a Windows or macOS target adds its own objdir. `sccache`
 is already configured in `.mozconfig` and in the `.#firefox` shell; stages
@@ -1985,8 +2004,10 @@ objdir, the N-plus-1 objdir used for the update hop, and the Windows and macOS t
 Provision about 62 GB of free disk for them before registering.
 
 1. Restore `/etc/nixos` from its git remote and apply it with the `pkexec ... nrs` flow. The
-   `services.github-runners` block is declarative, so the runner user `pb-runner`, the work
-   directory `/var/lib/pb-runner` and the pre-job hook come back with it.
+   `services.github-runners` block is declarative, so the runner user `pb-runner` and the pre-job
+   hook come back with it, and the tmpfiles rules in `systemd/legion-pb.nix` create the work
+   directory `/var/lib/pb-runner` and the podman store `/var/lib/pb-runner-data` (the module itself
+   creates neither).
 2. Create `/var/lib/secrets/github-runner-registration` from a fresh registration token (see
    "Runner registration through the `/etc/nixos` flow"). Old tokens are expired and a
    rebuilt host is a new registration; remove the stale runner entry from the repository's
