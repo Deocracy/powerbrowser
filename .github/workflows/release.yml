@@ -76,6 +76,9 @@ jobs:
       contents: read
     outputs:
       build: ${{ steps.key_gate.outputs.build }}
+      # The SHA-256 of the SHA256SUMS that release-linux carries (ci-supply-chain-01). A job output is set by this
+      # job alone, so sign-publish can refuse a release-linux that another job of the run replaced after the upload.
+      sums_sha256: ${{ steps.release_sums.outputs.sha256 }}
     env:
       RELEASE_SHA: ${{ inputs.sha }}
     steps:
@@ -213,6 +216,23 @@ jobs:
             nix develop .#theia --command scripts/verify-platform.sh --only "$LABEL"
           done
 
+      # ci-supply-chain-01: the hosted jobs of this run build upstream code, and any of them that obtains the run's
+      # artifact token could replace release-linux after the upload below. SHA256SUMS lists the three uploaded files
+      # (BUILD_ROOT is listed too: check-win-sidecar.sh, the admission sign-publish runs, requires it; it is data,
+      # never an asset), and its SHA-256 leaves as the job output sums_sha256, outside the artifact.
+      - name: Write SHA256SUMS over the release-linux files and record its digest as a job output
+        id: release_sums
+        if: steps.key_gate.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          DIST=objdir-release/dist
+          rm -f "$DIST/SHA256SUMS" "$DIST/BUILD_ROOT"
+          printf '%s\n' "$GITHUB_WORKSPACE" > "$DIST/BUILD_ROOT"
+          (cd "$DIST" && shopt -s nullglob && FILES=(*.tar.xz *.complete.mar release-manifest.json BUILD_ROOT) && [ "${#FILES[@]}" -ge 4 ] && sha256sum "${FILES[@]}" > SHA256SUMS)
+          SUMS="$(sha256sum "$DIST/SHA256SUMS" | cut -d' ' -f1)"
+          echo "sha256=$SUMS" >> "$GITHUB_OUTPUT"
+          echo "release-linux SHA256SUMS sha256 $SUMS"
+
       # Data only: the signer is built on a hosted runner from the pinned source, never taken from here.
       - name: Upload the tarball, the complete MAR and the release manifest
         if: steps.key_gate.outputs.build == 'true'
@@ -223,6 +243,8 @@ jobs:
             objdir-release/dist/*.tar.xz
             objdir-release/dist/*.complete.mar
             objdir-release/dist/release-manifest.json
+            objdir-release/dist/SHA256SUMS
+            objdir-release/dist/BUILD_ROOT
           if-no-files-found: error
           retention-days: 1
           overwrite: true
@@ -506,6 +528,8 @@ jobs:
       contents: read
     outputs:
       build: ${{ steps.key_gate.outputs.build }}
+      # The SHA-256 of the SHA256SUMS release-windows carries (ci-supply-chain-01), set by this job alone.
+      sums_sha256: ${{ steps.release_sums.outputs.sha256 }}
     env:
       RELEASE_SHA: ${{ inputs.sha }}
     steps:
@@ -653,6 +677,22 @@ jobs:
             -e PB_WIN_ORCA_DIR=/src/windows-orca -e PB_WIN_ORCA_SUMS_SHA256 \
             pb-gecko-build bash powerbrowser/packaging/package-windows.sh
 
+      # ci-supply-chain-01, as for release-linux: SHA256SUMS over the uploaded files (BUILD_ROOT listed for the
+      # admission tool), its SHA-256 the job output sums_sha256, so sign-windows and publish-windows sign only the
+      # bytes this job uploaded.
+      - name: Write SHA256SUMS over the release-windows files and record its digest as a job output
+        id: release_sums
+        if: steps.key_gate.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          DIST=objdir-windows-x86_64/dist/release-windows
+          rm -f "$DIST/SHA256SUMS" "$DIST/BUILD_ROOT"
+          printf '%s\n' "$GITHUB_WORKSPACE" > "$DIST/BUILD_ROOT"
+          (cd "$DIST" && shopt -s nullglob && FILES=(*.installer.exe *.complete.mar *.zip setup.exe BUILD_ROOT) && [ "${#FILES[@]}" -ge 5 ] && sha256sum "${FILES[@]}" > SHA256SUMS)
+          SUMS="$(sha256sum "$DIST/SHA256SUMS" | cut -d' ' -f1)"
+          echo "sha256=$SUMS" >> "$GITHUB_OUTPUT"
+          echo "release-windows SHA256SUMS sha256 $SUMS"
+
       # Data only: no later job executes anything here. sign-windows signs the inner PE files of the zip and the
       # setup.exe stub, then repackages the installer and the complete MAR itself (SEC-12 order); the unsigned
       # installer and MAR stay as the unsigned-first (SEC-03) build of the same tree.
@@ -667,6 +707,8 @@ jobs:
             objdir-windows-x86_64/dist/release-windows/*.complete.mar
             objdir-windows-x86_64/dist/release-windows/*.zip
             objdir-windows-x86_64/dist/release-windows/setup.exe
+            objdir-windows-x86_64/dist/release-windows/SHA256SUMS
+            objdir-windows-x86_64/dist/release-windows/BUILD_ROOT
           if-no-files-found: error
           retention-days: 1
           overwrite: true
@@ -807,6 +849,15 @@ jobs:
         with:
           name: release-windows
           path: windows
+
+      # ci-supply-chain-01: only the bytes build-windows uploaded are signed (its SHA256SUMS digest job output).
+      - name: Admit release-windows by the SHA256SUMS digest build-windows recorded (before anything reads it)
+        if: steps.azure_config.outputs.signing == 'true'
+        env:
+          SUMS_SHA256: ${{ needs.build-windows.outputs.sums_sha256 }}
+        run: |
+          set -euo pipefail
+          bash powerbrowser/packaging/check-win-sidecar.sh check windows "$SUMS_SHA256"
 
       # The zip name and its top directory are DERIVED from this tree (scripts/win-sign-list.mjs --expected-base:
       # configuration.toml's app basename and ESR version) and the artifact must match them; nothing the artifact
@@ -1140,6 +1191,16 @@ jobs:
         with:
           name: release-linux
           path: release
+
+      # ci-supply-chain-01: the bytes signed are the bytes build-linux uploaded. SHA256SUMS must hash to the digest
+      # build-linux recorded as its job output, list exactly the files present, and agree with every one of them;
+      # an artifact another job of the run replaced after the upload stops here, before anything reads it.
+      - name: Admit release-linux by the SHA256SUMS digest build-linux recorded (before anything reads it)
+        env:
+          SUMS_SHA256: ${{ needs.build-linux.outputs.sums_sha256 }}
+        run: |
+          set -euo pipefail
+          bash powerbrowser/packaging/check-win-sidecar.sh check release "$SUMS_SHA256"
 
       # The tag and every asset name come from the tree, never from the manifest legion wrote.
       - name: Derive the release key from this tree and require the manifest to agree
@@ -1717,6 +1778,14 @@ jobs:
         with:
           name: release-windows
           path: windows
+
+      # ci-supply-chain-01: only the bytes build-windows uploaded are signed and published (its SHA256SUMS digest).
+      - name: Admit release-windows by the SHA256SUMS digest build-windows recorded (before anything reads it)
+        env:
+          SUMS_SHA256: ${{ needs.build-windows.outputs.sums_sha256 }}
+        run: |
+          set -euo pipefail
+          bash powerbrowser/packaging/check-win-sidecar.sh check windows "$SUMS_SHA256"
 
       # The local base name is DERIVED from this tree (scripts/win-sign-list.mjs --expected-base) and the artifact must
       # hold exactly that installer and MAR; nothing the artifact names reaches GITHUB_OUTPUT.

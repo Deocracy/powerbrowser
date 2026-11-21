@@ -828,6 +828,9 @@ jobs:
       BRANCH: chore/theia-theia
     outputs:
       head: ${{ steps.regen.outputs.head }}
+      # The digest of the two notice files this job uploaded (ci-supply-chain-04). A job output is set by this job
+      # alone, so the publish job can tell its artifact from one another job of the run deleted and re-uploaded.
+      notices-sha256: ${{ steps.regen.outputs.notices-sha256 }}
     steps:
       # The run's own ref (main), full history, so the base of Renovate's branch can be found locally.
       - name: Check out the trusted ref without persisting a token (skipped in dry-run)
@@ -886,6 +889,8 @@ jobs:
           if same THIRD-PARTY-NOTICES.txt && same LICENSING.md; then echo "release-train: NOTE -- the notices on ${BRANCH} are current; nothing to publish"; exit 0; fi
           mkdir -p "$RUNNER_TEMP/notices"
           cp THIRD-PARTY-NOTICES.txt LICENSING.md "$RUNNER_TEMP/notices/"
+          NOTICES_SHA256=$({ sha256sum < "$RUNNER_TEMP/notices/LICENSING.md"; sha256sum < "$RUNNER_TEMP/notices/THIRD-PARTY-NOTICES.txt"; } | sha256sum | cut -d' ' -f1)
+          echo "notices-sha256=${NOTICES_SHA256}" >> "$GITHUB_OUTPUT"
           echo "head=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Upload the regenerated notices (skipped in dry-run)
@@ -918,6 +923,7 @@ jobs:
     permissions: {}
     env:
       BRANCH: chore/theia-theia
+      NOTICES_SHA256: ${{ needs.renovate-licensing.outputs.notices-sha256 }}
       HEAD_SHA: ${{ needs.renovate-licensing.outputs.head }}
     steps:
       - name: Check out the trusted ref without persisting a token (skipped in dry-run)
@@ -946,6 +952,13 @@ jobs:
           T() { GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -c core.attributesFile=/dev/null -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"; }
           if [ "$(cd "$RUNNER_TEMP/notices" && ls -A | sort | tr '\n' ' ')" != "LICENSING.md THIRD-PARTY-NOTICES.txt " ]; then
             echo "release-train: FAIL -- the notices artifact holds more or other than LICENSING.md and THIRD-PARTY-NOTICES.txt. Next step: do not publish; re-run the sweep." >&2
+            exit 1
+          fi
+          # The artifact is this run's, but any job of the run (the Orca replay included) could have replaced it: only bytes
+          # whose digest equals the one renovate-licensing recorded as its job output are published (ci-supply-chain-04).
+          GOT_SHA256=$({ sha256sum < "$RUNNER_TEMP/notices/LICENSING.md"; sha256sum < "$RUNNER_TEMP/notices/THIRD-PARTY-NOTICES.txt"; } | sha256sum | cut -d' ' -f1)
+          if ! [[ $NOTICES_SHA256 =~ ^[0-9a-f]{64}$ ]] || [ "$GOT_SHA256" != "$NOTICES_SHA256" ]; then
+            echo "release-train: FAIL -- the notices artifact hashes to ${GOT_SHA256}, not the ${NOTICES_SHA256:-<no digest>} renovate-licensing recorded; it was replaced after that job. Next step: do not publish; re-run the sweep." >&2
             exit 1
           fi
           T fetch --no-tags origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"

@@ -1908,15 +1908,33 @@ export function statusesOf(body) {
  * of the issue is never the source of the previous statuses: when the stored state is missing or names
  * another issue, every red row is newly red (fail-safe notify). A staying-red re-run posts no comment, and neither
  * does a red that returns after a no-data day (the stored state carries the red through no-data).
+ * The stored state is a run artifact, which any job of its run could replace (ci-supply-chain-04), so it is used
+ * only when it agrees with the pinned issue's body, which the previous sweep wrote with the job token: each row's
+ * stored status equals the body's, or is the red carried through a body no-data. A state that disagrees is
+ * unusable, which only ever adds comments (the fail-safe), so the body still never suppresses one.
  * Returns the plan and the state to store for the next run. Pure.
  */
+export function storedAgreesWithBody(statuses, body) {
+    if (statuses === null || typeof statuses !== 'object') return false;
+    const shown = statusesOf(normBody(body));
+    const names = new Set([...Object.keys(statuses), ...Object.keys(shown)]);
+    for (const n of names) {
+        const st = statuses[n];
+        const b = shown[n];
+        if (st === b) continue;
+        if (b === 'no-data' && st === 'red') continue;
+        return false;
+    }
+    return true;
+}
+
 export function nextMaintenance(issues, rendered, { ownerLogin = null, stored = null } = {}) {
     const pinned = selectPinned(issues, ownerLogin);
     // The owner creates the issue in the web UI (CRLF), and the API may trim the final newline: compare the
     // normalised bytes so the PATCH runs on a real difference only.
     const decision = findExactlyOne(pinned.map(i => ({ ...i, body: normBody(i.body) })), { ...rendered, body: normBody(rendered.body) });
     const usable = pinned.length === 1 && stored !== null && typeof stored === 'object' && stored.number === pinned[0].number
-        && stored.statuses !== null && typeof stored.statuses === 'object';
+        && stored.statuses !== null && typeof stored.statuses === 'object' && storedAgreesWithBody(stored.statuses, pinned[0].body);
     const prior = usable ? stored.statuses : null;
     // A row that reads no-data between two reds is the same unresolved condition, not a recovery: the stored state keeps the
     // last red through a no-data day, so red, no-data, red posts one comment. Only a green day (an observed recovery) resets it.
@@ -2253,6 +2271,19 @@ function maintenanceSelfTest() {
         { name: 'control: an edited body that marks a red row as previously red still notifies on a transition', run: () => {
             const d = nextMaintenance([issueBy(EDIT_WATCHDOG_AND_SYNTH(priorBody))], redRendered, { ownerLogin: OWNER, stored: storedOf(priorBody) });
             return d.newlyRed.join(',') === 'watchdog-age,synthetic events POST' ? [] : [`an edited body suppressed the notice: newlyRed ${JSON.stringify(d.newlyRed)}`];
+        } },
+        { name: 'plant (ci-supply-chain-04): a replaced state that marks rows the body shows green as already red still notifies', run: () => {
+            // The forged artifact: the two rows that turn red now are stored as red, while the pinned body the previous
+            // sweep wrote shows them green. Without the body agreement check this state suppresses the transition comment.
+            const forged = { number: 7, statuses: { ...statusesOf(priorBody), 'watchdog-age': 'red', 'synthetic events POST': 'red' } };
+            const d = nextMaintenance([issueBy(priorBody)], redRendered, { ownerLogin: OWNER, stored: forged });
+            return d.comment !== null && d.newlyRed.join(',') === 'watchdog-age,synthetic events POST' ? [] : [`a forged state suppressed the notice: newlyRed ${JSON.stringify(d.newlyRed)}`];
+        } },
+        { name: 'control: a stored red carried through a no-data body row agrees with the body', run: () => {
+            const noDataBody = renderMaintenance(stateOf(facts({ dependabotAlerts: null }))).body;
+            const carried = { ...statusesOf(noDataBody), 'dependabot-alerts': 'red' };
+            return storedAgreesWithBody(carried, noDataBody) && storedAgreesWithBody(statusesOf(priorBody), priorBody.replace(/\n/g, '\r\n'))
+                ? [] : ['an honest carried state, or a CRLF body, was judged not to agree'];
         } },
         { name: 'control: a missing stored state treats every red row as newly red', run: () => {
             const d = nextMaintenance([issueBy(redBody)], redRendered, { ownerLogin: OWNER, stored: null });
