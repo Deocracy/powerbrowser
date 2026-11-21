@@ -32,7 +32,7 @@ import { basename, dirname, extname, join, normalize, relative, sep } from 'node
 import { createRequire } from 'node:module';
 
 import { ORCA_PANES_MODULE_KEY } from './orca-tabs-live.mjs';
-import { REPO_ROOT, ensurePbNode, installOutputRedaction, orcaVersionFromPins, orcadEnv, redact, startOrcad, stopOrcad, stopStartedDaemons } from './orca-run.mjs';
+import { REPO_ROOT, ensurePbNode, installOutputRedaction, orcaVersionFromPins, orcadEnv, redact, startOrcad, stopOrcad } from './orca-run.mjs';
 import { openWebTab, pollFor, withProbeShell } from './pb-live-probe.mjs';
 import { liveEnv } from './firefox-bidi.mjs';
 import { registerTeardown } from './live-teardown.mjs';
@@ -196,8 +196,10 @@ export async function withOrcaPaneSession({ log = () => {}, pbOrcad = false } = 
     const profileReal = join(work, 'orca-profile');
     const REPO_DIR = join(work, 'repo');
     const alias = profileAlias(work);
+    // Only identity-checked kills here: the pid and start ticks recorded when PowerBrowser's own orcad was seen. The scratch
+    // orcad this session started is stopped by stopOrcad below and, at exit or on a signal, by orca-run.mjs's own hooks (which
+    // record no start time: handoff to lane H1), so this teardown does not signal it by bare pid.
     const teardown = registerTeardown(() => {
-        stopStartedDaemons();
         for (const [pid, ticks] of recorded) electron.signalIdentity(pid, ticks, 'SIGKILL');
         try { if (lstatSync(alias).isSymbolicLink()) rmSync(alias); } catch { /* absent */ }
         rmSync(work, { recursive: true, force: true });

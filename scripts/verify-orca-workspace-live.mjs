@@ -54,7 +54,7 @@
 //   node scripts/verify-orca-workspace-live.mjs --self-test
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
@@ -131,18 +131,30 @@ export function worktreePathsIn(value, prefix = 'ws-live') {
 }
 
 /**
- * Removes the worktree directories this row created through Orca (each one's last segment starts with ws-live) and then
- * each now-empty parent (non-recursive: never anything else under Orca's workspace folder). Returns the paths removed.
+ * Removes the worktree directories this row created through Orca, and only those: each path is resolved to its real path
+ * (symlinks and `..` followed) and must be exactly `<home>/orca/workspaces/<repo>/<ws-live...>` under the scratch HOME's real
+ * Orca workspace folder, else it is refused and left alone (a path in the CLI output outside it, an escaping `..`, a
+ * symlink out). No parent directory is ever removed: the row did not create it, and the scratch HOME takes it with it.
+ * Returns { removed, refused: [reason] } (reasons name the last path segment only).
  */
-export function removeCreatedWorktrees(paths) {
+export function removeCreatedWorktrees(paths, home) {
     const removed = [];
+    const refused = [];
+    let allowed = null;
+    try { allowed = realpathSync(join(home, 'orca', 'workspaces')); } catch { /* absent: nothing is inside it */ }
     for (const p of paths) {
-        if (!p || !basename(p).startsWith('ws-live') || !existsSync(p)) continue;
-        rmSync(p, { recursive: true, force: true });
-        removed.push(p);
-        try { rmdirSync(dirname(p)); } catch { /* not empty or absent */ }
+        if (!p || !existsSync(p)) continue;
+        let real;
+        try { real = realpathSync(p); } catch { continue; }
+        const parts = allowed && real.startsWith(allowed + sep) ? real.slice(allowed.length + 1).split(sep) : null;
+        if (!parts || parts.length !== 2 || !parts[1].startsWith('ws-live')) {
+            refused.push(`refused to remove ${basename(p)}: it is not a ws-live worktree directly under a repository folder of the scratch HOME's Orca workspace folder`);
+            continue;
+        }
+        rmSync(real, { recursive: true, force: true });
+        removed.push(real);
     }
-    return removed;
+    return { removed, refused };
 }
 
 /**
@@ -268,19 +280,37 @@ async function runSelfTest() {
     {
         const root = mkdtempSync(join(tmpdir(), 'pb-ws-cleanup-'));
         try {
-            const repoDir = join(root, 'orca', 'workspaces', 'repo');
+            const home = join(root, 'home');
+            const outside = join(root, 'real-home', 'orca', 'workspaces', 'repo');
+            const repoDir = join(home, 'orca', 'workspaces', 'repo');
             const a = join(repoDir, 'ws-live'), b = join(repoDir, 'ws-live-2'), other = join(repoDir, 'keep-me');
-            for (const d of [a, b, other]) { mkdirSync(d, { recursive: true }); writeFileSync(join(d, 'f'), 'x'); }
-            const removed = removeCreatedWorktrees([a, b, other, join(repoDir, 'never-existed')]);
+            const foreign = join(outside, 'ws-live');
+            for (const d of [a, b, other, foreign]) { mkdirSync(d, { recursive: true }); writeFileSync(join(d, 'f'), 'x'); }
+            const first = removeCreatedWorktrees([a, b, other, join(repoDir, 'never-existed')], home);
             const left = readdirSync(repoDir).sort().join();
-            const fails = [...(removed.length === 2 ? [] : [`removed ${removed.length} paths, expected 2`]), ...(left === 'keep-me' ? [] : [`left ${left}`]), ...(existsSync(join(other, 'f')) ? [] : ['an unrelated worktree was removed'])];
-            expect('cleanup removes the created worktrees, keeps everything else', fails, null);
-            const again = removeCreatedWorktrees([other]);
-            expect('cleanup refuses a directory that is not a ws-live worktree', again.length ? ['removed a non-ws-live directory'] : [], null);
-            removeCreatedWorktrees([]);
-            const empty = join(root, 'orca', 'workspaces', 'solo'); mkdirSync(join(empty, 'ws-live'), { recursive: true });
-            removeCreatedWorktrees([join(empty, 'ws-live')]);
-            expect('cleanup removes the parent folder once it is empty', existsSync(empty) ? ['the empty parent stayed'] : [], null);
+            expect('cleanup removes the created worktrees, keeps everything else', [...(first.removed.length === 2 ? [] : [`removed ${first.removed.length} paths, expected 2`]), ...(left === 'keep-me' ? [] : [`left ${left}`])], null);
+            expect('cleanup refuses a directory that is not a ws-live worktree, naming it', first.refused.length === 1 && /keep-me/.test(first.refused[0]) && existsSync(join(other, 'f')) ? [] : [JSON.stringify(first.refused)], null);
+            // A path in the CLI output outside the scratch HOME (the real home): refused, left alone, parent left alone.
+            const out = removeCreatedWorktrees([foreign], home);
+            expect('a ws-live path outside the scratch HOME is refused and nothing is removed', out.removed.length === 0 && out.refused.length === 1 && existsSync(join(foreign, 'f')) ? [] : [JSON.stringify(out)], null);
+            // A path with .. that resolves out of the scratch HOME.
+            const dots = `${repoDir}/ws-live/../../../../../real-home/orca/workspaces/repo/ws-live`;
+            mkdirSync(join(repoDir, 'ws-live'), { recursive: true });
+            const viaDots = removeCreatedWorktrees([dots], home);
+            expect('a path whose .. segments resolve outside the scratch HOME is refused', viaDots.removed.length === 0 && viaDots.refused.length === 1 && existsSync(join(foreign, 'f')) ? [] : [JSON.stringify(viaDots)], null);
+            // A symlink named ws-live inside the scratch HOME that points out of it.
+            rmSync(join(repoDir, 'ws-live'), { recursive: true, force: true });
+            symlinkSync(outside, join(repoDir, 'ws-live'));
+            const viaLink = removeCreatedWorktrees([join(repoDir, 'ws-live')], home);
+            expect('a ws-live symlink that points outside the scratch HOME is refused', viaLink.removed.length === 0 && viaLink.refused.length === 1 && existsSync(join(foreign, 'f')) ? [] : [JSON.stringify(viaLink)], null);
+            rmSync(join(repoDir, 'ws-live'), { force: true });
+            // The folder one level up (a repository folder) is never a worktree and never removed.
+            const tooShallow = removeCreatedWorktrees([join(home, 'orca', 'workspaces', 'ws-live-x')], home);
+            mkdirSync(join(home, 'orca', 'workspaces', 'ws-live-x'), { recursive: true });
+            const shallow = removeCreatedWorktrees([join(home, 'orca', 'workspaces', 'ws-live-x')], home);
+            expect('a ws-live directory directly under the workspace folder (no repository level) is refused', tooShallow.removed.length === 0 && shallow.removed.length === 0 && shallow.refused.length === 1 ? [] : [JSON.stringify(shallow)], null);
+            // No parent is removed: the repository folder stays once its worktrees are gone.
+            expect('cleanup never removes a parent folder', existsSync(repoDir) ? [] : ['the repository folder was removed'], null);
         } finally { rmSync(root, { recursive: true, force: true }); }
     }
     expect('worktree paths found in a CLI result', JSON.stringify(worktreePathsIn({ result: { worktree: { path: '/h/orca/workspaces/repo/ws-live', other: '/h/x' }, list: ['/h/orca/workspaces/repo/ws-live-2'] } })) === JSON.stringify(['/h/orca/workspaces/repo/ws-live', '/h/orca/workspaces/repo/ws-live-2']) ? [] : ['wrong paths'], null);
@@ -461,9 +491,11 @@ async function runLive() {
     // The teardown runs in the finally below, and also at exit and on SIGINT, SIGTERM and SIGHUP; it is synchronous.
     // Whatever the run threw: the orcad and terminal daemon PowerBrowser started are killed, the worktrees Orca
     // created are removed, then the scratch folders (harness-live-panels-10).
+    const orcaHome = liveEnv().HOME;
+    const refusedRemovals = [];
     const teardown = registerTeardown(() => {
         for (const [pid, ticks] of recorded) electron.signalIdentity(pid, ticks, 'SIGKILL');
-        removeCreatedWorktrees([...createdWorktrees]);
+        refusedRemovals.push(...removeCreatedWorktrees([...createdWorktrees], orcaHome).refused);
         rmSync(scratch, { recursive: true, force: true });
         rmSync(stubDir, { recursive: true, force: true });
     });
@@ -477,7 +509,6 @@ async function runLive() {
         const cliHome = savedEnv.HOME ?? process.env.HOME ?? '';
         // The fixture's git runs with the scratch folder as HOME and no global config; the worktrees Orca creates are checked against liveEnv's HOME.
         const gitEnv = fixtureGitEnv(scratch);
-        const orcaHome = liveEnv().HOME;
         const { git } = buildFixtureRepo(repo, scratch);
         mkdirSync(userFolder);
         process.env.PATH = `${stubDir}:${basePath}`;
@@ -683,6 +714,7 @@ async function runLive() {
         // After a throw too: the orcad and daemon are killed and the worktrees and scratch folders removed (once; it also runs on a signal).
         await sleep(500);
         teardown();
+        for (const r of refusedRemovals) fails.push(`teardown: ${r}`);
         for (const [k, v] of Object.entries(savedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
         restoreOutput();
     }
