@@ -101,3 +101,28 @@ it to that row's expected_files).
 Quick gate at 7d27556a: 5 rows not PASS, 0 SKIP. scan-brand-residue and -self-test: mine, red by design (above). shell-error-copy-no-internals and -self-test:
 not mine (H8, the renamed-mode notice). orca-failure-classes: not mine (the pinned orcad exit codes orcad_invalid_bind_address, orcad_data_root_* and
 orcad_instance_lock_foreign_identity have no class in ORCA_CODE_CLASSES; owner of powerbrowser/shell/OrcaEnv.sys.mjs).
+
+## Third round: one live-lock helper (base f79672d7, code commit a3d82df2)
+
+All five rows now `await holdLiveLock({ name, scriptUrl: import.meta.url, root: REPO_ROOT })` from `scripts/lib/live-lock.mjs` (H5's) before anything
+launches. `reexecUnderLiveLock`, `liveLockFile`, `lockState`, `lockHeldByAncestor`, `lockProbeVerdict`, `lockProbeLine` and `lockBehaviourVerdict` are deleted from
+`scripts/lib/orca-tabs-live.mjs` (which keeps only `lockWiringPlantFails`, the plant for `lockWiringFails`). Each row's self-test asserts the call is still there
+(`lockWiringFails`) and that a script without it is caught; the self-tests still print their own verdict last (orca-tabs-live 121 cases, terminal-keys 68,
+relaunch-restore 33; the mode-switch and tab-strip self-tests boot browsers and were not run). The headers describe the contract.
+
+Comparison of my helper's tested properties with H5's (checked by reading it and by running a row under `flock <lock> node <row>` with it):
+- ancestor case (`flock <lock> node <row>` runs instead of waiting on itself): H5 has it (holder pid in the ancestor chain; the row ran).
+- signal forwarding (SIGINT, SIGTERM, SIGHUP to the re-run's process group): H5 has it.
+- a hand-set PB_LIVE_LOCK_HELD=1: H5 closes the limit my helper had (the holder pid and start ticks must match, or an ancestor holds).
+- nothing to launch prints its SKIP without the lock: a property of each row's entry (the lock call is made only when the prerequisites hold), not of the helper; kept in the rows.
+- `--lock-probe` with a private lock file: removed. The shared helper takes the lock only from `<git common dir>/pb-live.lock` (root) and has no file override, so a probe
+  on top of it would take the real lock. The helper's behaviour is covered by verify-live-harness-libs.mjs (38 cases).
+- One property of mine H5's lacks, minor and with no test of mine: my re-run also forwarded SIGTERM to its group from the parent's `exit` event, so a parent that died of an
+  uncaught error took the re-run with it. H5's forwards signals only. Handoff for H5 (scripts/lib/live-lock.mjs, holdLiveLock): add `process.on('exit', forward('SIGTERM'))`
+  beside the three signal handlers, remove it when the child ends; test: a parent that throws after spawning must leave no running re-run. A SIGKILL of the parent cannot be forwarded by either.
+
+Red by design (tree at a3d82df2): scan-brand-residue and its self-test: this round removed text, so the Orca-token counts fall from the integration's recount: Orca 3962 -> 3961,
+orca 6766 -> 6761, ORCA 1518 -> 1513, orcad 2812 -> 2811; recount at integration.
+
+Quick gate at a3d82df2, log `.mozbuild/h6-quick3.log` in this worktree: 6 rows not PASS, 0 SKIP. scan-brand-residue and its self-test: mine, as above. Not mine: orca-service-self-test
+(1 of 53 plants), orca-failure-classes and its self-test (unmapped orcad exit codes), build-windows-shape-self-test; none reads these scripts.
