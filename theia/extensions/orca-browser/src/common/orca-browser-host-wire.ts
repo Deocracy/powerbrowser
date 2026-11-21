@@ -23,6 +23,19 @@ export interface PageMetadata {
     canGoForward: boolean;
 }
 
+/**
+ * 59-WR-03 (round 3): the url and title the dispatcher adds to a browser.snapshot result, capped at Orca's page metadata
+ * bounds. Chrome measures the snapshot against Orca's result budget with room reserved for exactly these caps
+ * (PowerBrowserAPI.sys.mjs agentSnapshotReserve), so an uncapped tab url or title could push a result chrome passed over
+ * the budget.
+ */
+export function pageInfoOf(url: unknown, title: unknown): { url: string; title: string } {
+    return {
+        url: (typeof url === 'string' ? url : '').slice(0, PAGE_METADATA_URL_MAX),
+        title: (typeof title === 'string' ? title : '').slice(0, PAGE_METADATA_TITLE_MAX),
+    };
+}
+
 /** One web tab state push -> the page snapshot Orca's schema takes; undefined when the push carries no url. */
 export function pageMetadataOf(detail: Record<string, unknown>): PageMetadata | undefined {
     if (typeof detail.url !== 'string') {
