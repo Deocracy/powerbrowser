@@ -103,12 +103,21 @@ if [ "$GATE" -eq 1 ] && { [ "$QUICK" -eq 1 ] || [ -n "$ONLY" ]; }; then
   exit 1
 fi
 
-# Fixture mode: see the header. Refused unless the registry file is under the temp directory, so a real
-# registry can never be swapped out by an inherited variable.
+# Fixture mode: see the header. Honoured only when this file is the self-test's staged copy
+# (<temp>/verify-platform-driver-*/tree-*/scripts/verify-platform.sh) and the registry is under the temp
+# directory. The tracked driver refuses the variable outright: a stray export must never turn --quick into a
+# fixture run whose exit 0 the hooks and CI would read as the real table passing (review point 6).
 FIXTURE_REGISTRY="${PB_VERIFY_FIXTURE_REGISTRY:-}"
 FIXTURE_WORD=""
 WINDOWS_MD="$REPO_ROOT/.planning/WINDOWS.md"
 if [ -n "$FIXTURE_REGISTRY" ]; then
+  case "$REPO_ROOT" in
+    "${TMPDIR:-/tmp}"/verify-platform-driver-*/tree-*) ;;
+    *)
+      echo "verify-platform: FAIL -- PB_VERIFY_FIXTURE_REGISTRY is set ($FIXTURE_REGISTRY), but this driver ($REPO_ROOT/scripts/verify-platform.sh) is not the driver self-test's staged copy; unset it to run the real registry" >&2
+      exit 1
+      ;;
+  esac
   case "$FIXTURE_REGISTRY" in
     "${TMPDIR:-/tmp}"/*) ;;
     *)
@@ -132,6 +141,7 @@ SKIP_LINE_RE='^[[:space:]]*[A-Za-z0-9][A-Za-z0-9 ._/-]*: SKIP( -- (.*))?$'
 
 CURRENT_CHECK_PID=""
 CURRENT_ROW_TOKEN=""
+CURRENT_ROW_SINCE=""
 LIVE_LOCK_STATE=0
 LIVE_LOCK_HOLDER_PID=""
 BACKEND_SPAWN_PID=""
@@ -192,7 +202,7 @@ cleanup() {
     # The group kill cannot reach what the row started in a session of its own (a detached orcad, audit
     # harness-driver-04); everything still carrying the row's token is stopped too.
     if [ -n "$CURRENT_ROW_TOKEN" ]; then
-      node "$REPO_ROOT/scripts/verify-orcad-leak.mjs" --session "$interrupted_pid" --token "$CURRENT_ROW_TOKEN" --label "the interrupted row" --sweep || true
+      node "$REPO_ROOT/scripts/verify-orcad-leak.mjs" --session "$interrupted_pid" --token "$CURRENT_ROW_TOKEN" --since "${CURRENT_ROW_SINCE:-0}" --label "the interrupted row" --sweep || true
       CURRENT_ROW_TOKEN=""
     fi
   fi
@@ -7114,11 +7124,16 @@ run_own_checks() {
   local FAILED=0
   local -a SUMMARY=()
   local -a SKIPPED=()
+  # Each row's wall time in ms, "ms label", for the slowest-rows block (the quick tier must fit the stop hook's
+  # 480 s; review point 10).
+  local -a TIMINGS=()
+  local row_t0
 
   for entry in "${CHECKS[@]}"; do
     local label="${entry%%|*}"
     local cmd="${entry#*|}"
     echo "verify-platform: running $label..."
+    row_t0="${EPOCHREALTIME/[.,]/}"
     if [ -n "${FULL_TIER[$label]:-}" ] && ! acquire_live_lock; then
       SUMMARY+=("$label: FAIL")
       FAILED=1
@@ -7155,6 +7170,7 @@ run_own_checks() {
         ;;
     esac
     SUMMARY+=("$label: $ROW_VERDICT")
+    TIMINGS+=("$(( (${EPOCHREALTIME/[.,]/} - row_t0) / 1000 )) $label")
     case "$ROW_VERDICT" in
       FAIL) FAILED=1 ;;
       SKIP) SKIPPED+=("$label -- $ROW_REASON") ;;
@@ -7172,6 +7188,8 @@ run_own_checks() {
       echo "    $line"
     done
   fi
+  echo "verify-platform: slowest rows (seconds)"
+  printf '%s\n' "${TIMINGS[@]}" | sort -rn | head -n 20 | awk '{ printf "    %7.1f %s\n", $1 / 1000, $2 }'
 
   if [ "$FAILED" -eq 0 ] && [ "${#SKIPPED[@]}" -eq 0 ]; then
     echo "verify-platform: ${FIXTURE_WORD}PASS -- all checks passed"
@@ -7183,6 +7201,12 @@ run_own_checks() {
     echo "verify-platform: ${FIXTURE_WORD}FAIL -- see summary above" >&2
     return 1
   fi
+}
+
+# Fixture-only function row (verify-platform-driver.mjs --self-test): a function row that returns 77.
+check_fixture_function_skip() {
+  echo "fixture function row: SKIP -- planted"
+  return "$SKIP_EXIT"
 }
 
 # One script row: run it in its own session with its output teed to ROW_LOG_DIR, then decide PASS, FAIL or
@@ -7235,22 +7259,53 @@ acquire_live_lock() {
     echo "verify-platform: live lock $lock held by a caller of this run"
     return 0
   fi
-  local ready="$ROW_LOG_DIR/live-lock-held" waited=0
-  setsid flock -o "$lock" bash -c 'echo held > "$1"; exec sleep infinity' _ "$ready" < /dev/null > /dev/null 2>&1 {IDLE_FD}>&- &
+  local ready="$ROW_LOG_DIR/live-lock-held" waited=0 since
+  # The holder lives only as long as this driver (review point 3): once it holds the lock it polls this
+  # driver's pid and start ticks every second and exits when either changes, which releases the lock even
+  # when the driver dies by SIGKILL or the out-of-memory killer and cleanup() never runs.
+  since="$(start_ticks_of $$)"
+  if [ -z "$since" ]; then
+    echo "verify-platform: FAIL -- this driver's start time could not be read from /proc/$$/stat, so a lock holder could not tell when the driver ends; the live lock is not taken" >&2
+    return 1
+  fi
+  setsid flock -o "$lock" bash -c '
+    echo held > "$1"
+    while [ "$(awk "{ sub(/^.*\\) /, \"\"); print \$20 }" "/proc/$2/stat" 2>/dev/null)" = "$3" ]; do sleep 1; done
+  ' _ "$ready" "$$" "$since" < /dev/null > /dev/null 2>&1 {IDLE_FD}>&- &
   LIVE_LOCK_HOLDER_PID=$!
+  # The wait is bounded (PB_LIVE_LOCK_WAIT_S, default 6 h, longer than a full gate run) and names the holder.
+  local limit=$(( ${PB_LIVE_LOCK_WAIT_S:-21600} * 10 ))
   until [ -e "$ready" ]; do
     if ! kill -0 "$LIVE_LOCK_HOLDER_PID" 2>/dev/null; then
       echo "verify-platform: FAIL -- flock on the live lock $lock ended without taking it" >&2
       LIVE_LOCK_HOLDER_PID=""
       return 1
     fi
-    [ "$waited" -eq 10 ] && echo "verify-platform: waiting for the live lock $lock (another live run holds it; if this run's caller holds it, set PB_LIVE_LOCK_HELD=1)..."
+    if [ "$waited" -eq 10 ] || [ "$waited" -ge "$limit" ]; then
+      local holders="" pid
+      for pid in $(awk -v ino="$(stat -c %i -- "$lock" 2>/dev/null)" '$0 !~ /->/ && $2 == "FLOCK" { n = split($6, f, ":"); if (f[n] == ino) print $5 }' /proc/locks 2>/dev/null); do
+        holders+=" pid $pid ($(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | cut -c1-160))"
+      done
+      if [ "$waited" -ge "$limit" ]; then
+        echo "verify-platform: FAIL -- the live lock $lock is still held after ${PB_LIVE_LOCK_WAIT_S:-21600} s by:${holders:- (no holder found in /proc/locks)}. Next step: wait for that run to end, or stop it" >&2
+        kill -- "-$LIVE_LOCK_HOLDER_PID" 2>/dev/null || true
+        wait "$LIVE_LOCK_HOLDER_PID" 2>/dev/null || true
+        LIVE_LOCK_HOLDER_PID=""
+        return 1
+      fi
+      echo "verify-platform: waiting for the live lock $lock, held by:${holders:- (no holder found in /proc/locks)} (if this run's caller holds it, set PB_LIVE_LOCK_HELD=1)..."
+    fi
     idle 0.1
     waited=$((waited + 1))
   done
   export PB_LIVE_LOCK_HELD=1
   LIVE_LOCK_STATE=1
   echo "verify-platform: live lock $lock taken for the full-tier rows"
+}
+
+# The start time of pid $1 in clock ticks since boot (/proc/<pid>/stat field 22); empty when it is gone.
+start_ticks_of() {
+  awk '{ sub(/^.*\) /, ""); print $20 }' "/proc/$1/stat" 2>/dev/null
 }
 
 ROW_SEQ=0
@@ -7271,6 +7326,10 @@ run_script_row() {
   # shellcheck disable=SC2086 # $cmd is a registry command line and is split on purpose.
   PB_VERIFY_ROW_TOKEN="$CURRENT_ROW_TOKEN" setsid $cmd >&"$out_fd" 2>&"$err_fd" {out_fd}>&- {err_fd}>&- {IDLE_FD}>&- &
   CURRENT_CHECK_PID=$!
+  # The row leader's start ticks: the sweep takes no process older than the row (review point 7). Read at once; if
+  # the leader is already gone, this driver's own start (older than any row) is the bound.
+  CURRENT_ROW_SINCE="$(start_ticks_of "$CURRENT_CHECK_PID")"
+  [ -n "$CURRENT_ROW_SINCE" ] || CURRENT_ROW_SINCE="$(start_ticks_of $$)"
   exec {out_fd}>&- {err_fd}>&-
   local rc=0
   wait "$CURRENT_CHECK_PID" || rc=$?
@@ -7281,7 +7340,7 @@ run_script_row() {
   # audit harness-driver-04). --sweep then stops every other survivor and names it on a NOTE line; that is red
   # under --gate (audit harness-driver-07).
   if kill -0 -- "-$CURRENT_CHECK_PID" 2>/dev/null || row_token_alive "$CURRENT_ROW_TOKEN"; then
-    node "$REPO_ROOT/scripts/verify-orcad-leak.mjs" --session "$CURRENT_CHECK_PID" --token "$CURRENT_ROW_TOKEN" --label "$label" --sweep || leg_rc=$?
+    node "$REPO_ROOT/scripts/verify-orcad-leak.mjs" --session "$CURRENT_CHECK_PID" --token "$CURRENT_ROW_TOKEN" --since "$CURRENT_ROW_SINCE" --label "$label" --sweep || leg_rc=$?
   fi
   case "$leg_rc" in
     0) ;;
@@ -7303,7 +7362,8 @@ run_script_row() {
 
   ROW_REASON=""
   local last="" line
-  while IFS= read -r line; do
+  # `|| [ -n "$line" ]`: a last line with no trailing newline is still read (review point 1).
+  while IFS= read -r line || [ -n "$line" ]; do
     [[ "$line" =~ [^[:space:]] ]] && last="$line"
   done < <(tail -n 40 -- "$out" 2>/dev/null)
   if [ "$leaked" -eq 1 ]; then
@@ -7394,9 +7454,15 @@ TALLY_LINE_RE='FAIL -- [0-9]+ [A-Za-z -]*\(s\)|FAIL -- see surface\(s\) above|FA
 
 # Does exclusion <mode> <patterns> cover a row's output (stdin)? Patterns are " ;; "-separated literal
 # substrings. Every mode needs one output line containing a pattern: the failure the ledger entry describes
-# must be the one that happened. Mode "only" also needs every line containing FAIL to contain a pattern or
-# be a tally line, so a second, different red in the same row stays red. Mode "any" is for self-test rows,
-# whose planted faults print FAIL lines of their own. Prints the first uncovered line on a miss.
+# must be the one that happened. Then each mode names the lines that must each contain a pattern (a "judged"
+# line), so a second, different red in the same row stays red:
+#   only  every line containing FAIL that is not a tally line, and every item line under a tally line: the
+#         indented lines after "NAME: FAIL -- 3 failure(s):" up to the next unindented line, which carry the
+#         failures without the word FAIL (an item that starts with "Next step:" is guidance, not a failure).
+#   any   for self-test rows, whose planted faults print FAIL lines of their own: every line naming the
+#         self-test's own verdict (containing both "self-test" and FAIL) that is not a tally line. A control
+#         or plant the self-test itself reports as failed is judged; a planted fault's own red output is not.
+# Prints the first uncovered judged line on a miss.
 exclusion_covers() {
   local mode="$1" patterns="$2"
   local -a pats=()
@@ -7404,14 +7470,26 @@ exclusion_covers() {
   while [ -n "$rest" ]; do
     if [[ "$rest" == *" ;; "* ]]; then pats+=("${rest%% ;; *}"); rest="${rest#* ;; }"; else pats+=("$rest"); rest=""; fi
   done
-  local line pat hit_any=0 uncovered="" covered
-  while IFS= read -r line; do
+  local line pat hit_any=0 uncovered="" covered judged in_items=0
+  while IFS= read -r line || [ -n "$line" ]; do
     covered=0
     for pat in "${pats[@]}"; do
       if [[ "$line" == *"$pat"* ]]; then covered=1; hit_any=1; break; fi
     done
-    if [ "$mode" = "only" ] && [ "$covered" -eq 0 ] && [ -z "$uncovered" ] && [[ "$line" == *FAIL* ]] \
-      && ! [[ "$line" =~ $TALLY_LINE_RE ]]; then
+    judged=0
+    if [[ "$line" =~ $TALLY_LINE_RE ]]; then
+      in_items=1
+    elif [[ "$line" =~ ^[[:space:]] ]] && [ "$in_items" -eq 1 ]; then
+      [ "$mode" = "only" ] && ! [[ "$line" =~ ^[[:space:]]+(-[[:space:]]+)?Next\ step: ]] && judged=1
+    else
+      in_items=0
+      if [[ "$line" == *FAIL* ]]; then
+        if [ "$mode" = "only" ]; then judged=1
+        elif [ "$mode" = "any" ] && [[ "$line" == *self-test* ]]; then judged=1
+        fi
+      fi
+    fi
+    if [ "$judged" -eq 1 ] && [ "$covered" -eq 0 ] && [ -z "$uncovered" ]; then
       uncovered="$line"
     fi
   done
@@ -7433,7 +7511,8 @@ exclusion_covers() {
 #
 # label|ledger_id|verdict|mode|patterns|reason
 #   verdict  FAIL or SKIP: the summary verdict this row excuses.
-#   mode     only: every FAIL line must be covered; any: one covered line is enough (self-test rows).
+#   mode     only: every FAIL line and every item line under a tally must be covered; any (self-test rows):
+#            every line of the self-test's own verdict that names a FAIL must be covered (exclusion_covers).
 #   patterns " ;; "-separated literal substrings of the row's output (exclusion_covers above).
 # The patterns were read off v1.7 gate run 5 (da97a4e9, .mozbuild/gate-run5/gate.log).
 REL_APP_INI="objdir-release/dist/bin/application.ini'"
@@ -7461,19 +7540,19 @@ declare -a GATE_KNOWN_OPEN_EXCLUSIONS=(
   "search-engines-packaged|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
   "mar-update-hop|30|FAIL|only|no MAR-hop proof evidence under .mozbuild/mar-hop: absent|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
   "ng074-ci-green-on-main|31|FAIL|only|no verify.yml run exists for main at ;; has not completed|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
-  "repo-controls|31|FAIL|only|is undeclared and its repository list|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "repo-controls|31|FAIL|only|is undeclared and its repository list ;; could not be read (gh: You must authenticate|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
   "channel-live|31|FAIL|only|found no published Release|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
   "codeberg-mirror-live|31|FAIL|only|the Codeberg mirror slug is not declared|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
   "upptime-sweep-live|31|FAIL|only|the Upptime status repository is not declared|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
   "win-matrix-record|31|FAIL|only|scripts/matrix/win-matrix-record.json is absent|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
   "win-download-copy|31|FAIL|only|scripts/matrix/win-matrix-record.json: is absent|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
   "macos-package-payload|32|FAIL|only|.mozbuild/macos-package is absent|macOS deferred to v1.7 (R4), needs Mac hardware"
-  "macos-install-matrix|32|FAIL|only|FAIL -- 0 problem(s) and|macOS deferred to v1.7 (R4), needs Mac hardware"
+  "macos-install-matrix|32|FAIL|only|FAIL -- 0 problem(s) and ;; [unobserved] |macOS deferred to v1.7 (R4), needs Mac hardware"
   "ng089-uat-sheets|35|FAIL|only|: result pending ;; no recorded React 19 runtime test|49 pending results in the v1.2/v1.3 UAT sheets; the NG-084 live pass was deferred by the owner"
   "address-bar-live-self-test|25|FAIL|any|'ctrl-d-everywhere' stayed green on bookmark-keys|plant ctrl-d-everywhere stays green on bookmark-keys"
   "page-tools-live|28|FAIL|only|a URL sent to a crashed tab did not load it|flaky: crash-navigate red 1 of 3 registry runs (2026-11-06)"
   "extension-actions-live|29|FAIL|only|private access rule not applied|private-access session 2: options page opens in the private stock window, matches stock; deferred to 999.17"
-  "extension-actions-live-self-test|29|FAIL|any|private access rule not applied|private-access session 2: options page opens in the private stock window, matches stock; deferred to 999.17"
+  "extension-actions-live-self-test|29|FAIL|only|private access rule not applied|private-access session 2: options page opens in the private stock window, matches stock; deferred to 999.17"
   # 68-06 (2026-11-10)
   "orca-packaged-tree|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball yet (68-06 Task 2 builds it)"
   "orca-packaged-live|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball yet (68-06 Task 2 builds it)"

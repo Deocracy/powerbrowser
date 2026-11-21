@@ -46,6 +46,19 @@ const ROWS = {
     two: `console.error('fx-two: FAIL -- 2 problem(s)'); console.error('fx-two: FAIL -- planted input absent'); console.error('fx-two: FAIL -- a second planted red'); process.exit(1);`,
     closed: `console.error('fx-closed: FAIL -- planted input absent'); process.exit(1);`,
     excusedSkip: `console.log('fx-excused-skip: SKIP -- planted excused precondition'); process.exit(77);`,
+    // Review point 1: a last line with no trailing newline, both ways.
+    legacyNoNl: `process.stdout.write('fx-legacy-nonl: ran\\nfx-legacy-nonl: SKIP -- planted input absent');`,
+    passNoNl: `process.stdout.write('fx-pass-nonl: SKIP -- a planted note\\nfx-pass-nonl: PASS -- the clauses ran');`,
+    // Review point 2: a tally line whose items do not carry the word FAIL, with a second, undescribed item; and the
+    // same tally whose only other item is guidance.
+    items: `console.error('fx-items: FAIL -- 2 failure(s):'); console.error('  planted input absent'); console.error('  a second planted item'); process.exit(1);`,
+    itemsOk: `console.error('fx-items-ok: FAIL -- 1 failure(s):'); console.error('  planted input absent'); console.error('  Next step: provide the planted input'); process.exit(1);`,
+    // A self-test row (mode any): a planted fault's own red output is not judged, but a control the self-test
+    // reports as failed is.
+    anyOk: `console.log('  search: FAIL -- a planted fault going red as designed'); console.error('fx-any-ok --self-test: FAIL -- planted input absent'); process.exit(1);`,
+    anyTwo: `console.log('  search: FAIL -- a planted fault going red as designed'); console.error('fx-any-two --self-test: FAIL -- planted input absent'); console.error('fx-any-two --self-test: control other FAIL -- an undescribed control red'); process.exit(1);`,
+    // A row that sleeps, for the killed-driver and interrupt runs.
+    sleepRow: `console.log('fx-sleep: started'); setTimeout(() => console.log('fx: PASS -- slept'), 4000);`,
     // The live lock (harness-live-tabs-14): free during a quick-tier row, held (and PB_LIVE_LOCK_HELD=1) during a
     // full-tier one. flock -n on the fixture lock is the probe.
     lockFree: `import { spawnSync } from 'node:child_process'; const r = spawnSync('flock', ['-n', process.env.PB_VERIFY_FIXTURE_LOCK, 'true']); if (r.status === 0) console.log('fx: PASS -- lock free'); else { console.error('fx-lock-free: FAIL -- the live lock is held during a quick-tier row'); process.exit(1); }`,
@@ -60,6 +73,8 @@ function daemonRows(entry) {
         leakGroup: leave([`/fx${entry}`], "{ stdio: 'ignore' }"),
         leakDetached: leave([`/fx${entry}`], "{ stdio: 'ignore', detached: true }"),
         survivor: leave(['fx-survivor'], "{ stdio: 'ignore' }"),
+        // Review point 4: a detached process carrying the row token, then the row sleeps until interrupted.
+        detachThenSleep: `import { spawn } from 'node:child_process'; spawn(process.execPath, ['-e', 'setInterval(() => {}, 1e9)', process.env.VPD_MARKER, 'fx-detached'], { stdio: 'ignore', detached: true }).unref(); setInterval(() => {}, 1e9);`,
     };
 }
 
@@ -83,6 +98,10 @@ const EXCLUSIONS = [
     'fx-two|1|FAIL|only|planted input absent|fixture entry 1',
     'fx-closed|2|FAIL|only|planted input absent|fixture entry 2 (fixed)',
     'fx-excused-skip|1|SKIP|any|SKIP -- planted excused precondition|fixture entry 1',
+    'fx-items|1|FAIL|only|planted input absent|fixture entry 1',
+    'fx-items-ok|1|FAIL|only|planted input absent|fixture entry 1',
+    'fx-any-ok|1|FAIL|any|planted input absent|fixture entry 1',
+    'fx-any-two|1|FAIL|any|planted input absent|fixture entry 1',
 ].join('\n') + '\n';
 
 // The runs. Each names its mode and its rows (tier|label|row key).
@@ -98,6 +117,14 @@ const RUNS = {
     lock: { args: [], rows: [['quick', 'fx-lock-free', 'lockFree'], ['full', 'fx-lock-held', 'lockHeld']] },
     lockWait: { args: [], hold: 1.5, rows: [['full', 'fx-lock-held', 'lockHeld']] },
     lockAncestor: { args: [], wrap: true, rows: [['full', 'fx-lock-held', 'lockHeld']] },
+    quickExtra: { args: ['--quick'], rows: [['quick', 'fx-legacy-nonl', 'legacyNoNl'], ['quick', 'fx-pass-nonl', 'passNoNl'], ['quick', 'fx-fn', 'FN:check_fixture_function_skip']] },
+    gateModes: { args: ['--gate'], rows: [['quick', 'fx-items', 'items'], ['quick', 'fx-items-ok', 'itemsOk'], ['quick', 'fx-any-ok', 'anyOk'], ['quick', 'fx-any-two', 'anyTwo']] },
+    gateNoSummary: { args: ['--gate'], rows: [['quick', 'fx-pass', 'pass'], ['bogus', 'fx-bogus', 'pass']] },
+    lockBound: { args: [], hold: 6, env: { PB_LIVE_LOCK_WAIT_S: '1' }, rows: [['full', 'fx-lock-held', 'lockHeld']] },
+    lockKilled: { args: [], killDriver: true, rows: [['full', 'fx-sleep', 'sleepRow']] },
+    interrupt: { args: [], interrupt: true, rows: [['full', 'fx-detach-sleep', 'detachThenSleep']] },
+    strayTracked: { args: ['--quick'], where: 'tracked', rows: [['quick', 'fx-pass', 'pass']] },
+    strayElsewhere: { args: ['--quick'], where: 'elsewhere', rows: [['quick', 'fx-pass', 'pass']] },
 };
 
 const has = (r, s) => r.text.includes(s);
@@ -132,6 +159,19 @@ const CASES = {
     'a full-tier row runs under the live lock': ['lock', (r) => want(has(r, '  fx-lock-held: PASS\n') && has(r, 'live lock') && has(r, 'taken for the full-tier rows'), 'fx-lock-held did not run under the lock')],
     'the lock is released when the run ends': ['lock', (r) => want(r.lockFreeAfter, 'the fixture lock is still held after the run')],
     'a run waits for another holder of the live lock': ['lockWait', (r) => want(has(r, 'waiting for the live lock') && has(r, '  fx-lock-held: PASS\n'), `exit ${r.status}; no wait message, or the row did not pass after the wait`)],
+    'a SKIP last line with no trailing newline is SKIP': ['quickExtra', (r) => want(has(r, '  fx-legacy-nonl: SKIP\n'), `fx-legacy-nonl is ${/ {2}fx-legacy-nonl: (\w+)/.exec(r.text)?.[1] ?? 'absent'}, want SKIP`)],
+    'a PASS last line with no trailing newline after a SKIP note is PASS': ['quickExtra', (r) => want(has(r, '  fx-pass-nonl: PASS\n'), `fx-pass-nonl is ${/ {2}fx-pass-nonl: (\w+)/.exec(r.text)?.[1] ?? 'absent'}, want PASS`)],
+    'a function row returning 77 is SKIP': ['quickExtra', (r) => want(has(r, '  fx-fn: SKIP\n') && has(r, 'fx-fn -- function row returned 77'), 'fx-fn is not a SKIP')],
+    '--gate keeps an undescribed item under a tally line red (mode only)': ['gateModes', (r) => want(has(r, 'FAIL (exclusion does not apply): fx-items') && has(r, 'does not describe:   a second planted item'), 'fx-items was excused with an undescribed item line')],
+    '--gate excuses a tally whose items are described or guidance (mode only)': ['gateModes', (r) => want(has(r, 'EXCLUDED (known-open): fx-items-ok'), 'fx-items-ok was not excused')],
+    '--gate excuses a self-test row whose own red is described (mode any)': ['gateModes', (r) => want(has(r, 'EXCLUDED (known-open): fx-any-ok'), 'fx-any-ok was not excused')],
+    '--gate keeps a self-test row\'s second, undescribed control red (mode any)': ['gateModes', (r) => want(has(r, 'FAIL (exclusion does not apply): fx-any-two') && has(r, 'control other FAIL'), 'fx-any-two was excused with an undescribed control red')],
+    '--gate fails a run that ends with no summary': ['gateNoSummary', (r) => want(r.status === 1 && has(r, 'FAIL (no summary)'), `exit ${r.status}; a run with no summary passed the gate`)],
+    'a lock wait is bounded and names the holder': ['lockBound', (r) => want(has(r, 'is still held after 1 s by: pid ') && has(r, '  fx-lock-held: FAIL\n'), 'the driver did not stop waiting after PB_LIVE_LOCK_WAIT_S naming the holder pid')],
+    'a driver killed by SIGKILL releases the live lock': ['lockKilled', (r) => want(r.lockFreeAfterKill === true, r.lockFreeAfterKill === null ? 'the lock was never taken, so the kill proves nothing' : 'the live lock was still held 5 s after the driver was killed')],
+    'an interrupted run stops what its row left in a session of its own': ['interrupt', (r) => { const left = strays(r.marker); return want(r.interrupted && left.length === 0, r.interrupted ? `pid(s) ${left.join(', ')} still running after the interrupt` : 'the row never started its detached process'); }],
+    'the tracked driver refuses a stray fixture variable': ['strayTracked', (r) => want(r.status === 1 && has(r, "is not the driver self-test's staged copy") && !has(r, 'fx-pass'), `exit ${r.status}; the tracked driver ran the fixture registry`)],
+    'a driver copy outside the staged path refuses it too': ['strayElsewhere', (r) => want(r.status === 1 && has(r, "is not the driver self-test's staged copy") && !has(r, 'fx-pass'), `exit ${r.status}; a copy outside the staged path ran the fixture registry`)],
     'a run under flock <lock> by its caller does not wait for itself': ['lockAncestor', (r) => want(r.status === 0 && has(r, 'held by a caller of this run'), `exit ${r.status}${r.timedOut ? ' (timed out: the run waited for its own caller)' : ''}`)],
 };
 
@@ -141,7 +181,16 @@ const PLANTS = [
     { name: 'exit 77 read as an ordinary status', from: 'elif [ "$rc" -eq "$SKIP_EXIT" ]; then', to: 'elif false; then', kase: 'exit 77 with a SKIP line is SKIP, with its reason listed' },
     { name: 'the gate reading no SKIP rows', from: 'mapfile -t skipped_labels < <(extract_skipped_labels "$log")', to: 'skipped_labels=()', kase: '--gate fails a row that prints a SKIP last line and exits 0' },
     { name: 'the exclusion pattern check removed', from: 'if ! miss="$(row_output "$log" "$label" | exclusion_covers "$excl_mode" "$excl_patterns")"; then', to: 'if false; then', kase: '--gate keeps a different FAIL in an excluded row red' },
-    { name: 'mode only ignoring a second FAIL', from: 'if [ "$mode" = "only" ] && [ "$covered" -eq 0 ]', to: 'if false && [ "$covered" -eq 0 ]', kase: '--gate keeps a second FAIL beside the described one red (mode only)' },
+    { name: 'mode only ignoring a second FAIL', from: 'if [ "$mode" = "only" ]; then judged=1', to: 'if false; then judged=1', kase: '--gate keeps a second FAIL beside the described one red (mode only)' },
+    { name: 'mode only ignoring item lines under a tally', from: '[ "$mode" = "only" ] && ! [[ "$line" =~ ^[[:space:]]+(-[[:space:]]+)?Next\\ step: ]] && judged=1', to: 'true', kase: '--gate keeps an undescribed item under a tally line red (mode only)' },
+    { name: 'mode any judging no line', from: 'elif [ "$mode" = "any" ] && [[ "$line" == *self-test* ]]; then judged=1', to: 'elif false; then judged=1', kase: '--gate keeps a self-test row\'s second, undescribed control red (mode any)' },
+    { name: 'the row reader dropping an unterminated last line', from: 'while IFS= read -r line || [ -n "$line" ]; do\n    [[ "$line" =~ [^[:space:]] ]] && last="$line"', to: 'while IFS= read -r line; do\n    [[ "$line" =~ [^[:space:]] ]] && last="$line"', kase: 'a SKIP last line with no trailing newline is SKIP' },
+    { name: 'a function row\'s 77 read as FAIL', from: 'elif [ "$fn_rc" -eq "$SKIP_EXIT" ]; then ROW_VERDICT=SKIP', to: 'elif false; then ROW_VERDICT=SKIP', kase: 'a function row returning 77 is SKIP' },
+    { name: 'the gate\'s no-summary guard removed', from: 'if [ "$rc" -ne 0 ] && [ "${#failed_labels[@]}" -eq 0 ]; then', to: 'if false; then', kase: '--gate fails a run that ends with no summary' },
+    { name: 'an unbounded lock wait', from: 'local limit=$(( ${PB_LIVE_LOCK_WAIT_S:-21600} * 10 ))', to: 'local limit=999999999', kase: 'a lock wait is bounded and names the holder' },
+    { name: 'a lock holder that outlives the driver', from: 'do sleep 1; done', to: 'do sleep 1; done; sleep 30', kase: 'a driver killed by SIGKILL releases the live lock' },
+    { name: 'no token sweep in cleanup()', from: '--session "$interrupted_pid" --token', to: '--session 0 --token', kase: 'an interrupted run stops what its row left in a session of its own' },
+    { name: 'fixture mode honoured outside the staged path', from: '    "${TMPDIR:-/tmp}"/verify-platform-driver-*/tree-*) ;;', to: '    *) ;;', kase: 'a driver copy outside the staged path refuses it too' },
     { name: 'the ledger status check removed', from: 'if ! ledger_entry_is_open "$excl_ledger_id"; then', to: 'if false; then', kase: '--gate fails a row whose entry is no longer open' },
     { name: 'the leak leg neutralised by || true', from: '--label "$label" --sweep || leg_rc=$?', to: '--label "$label" --sweep || true', kase: 'a row that leaves a daemon in its group is FAIL' },
     { name: 'the leak leg run only on a live process group', from: 'if kill -0 -- "-$CURRENT_CHECK_PID" 2>/dev/null || row_token_alive "$CURRENT_ROW_TOKEN"; then', to: 'if kill -0 -- "-$CURRENT_CHECK_PID" 2>/dev/null; then', kase: 'a row that leaves a daemon in a session of its own is FAIL (found by the row token)' },
@@ -151,8 +200,8 @@ const PLANTS = [
     { name: 'no check for a caller holding the lock', from: '  if lock_held_by_ancestor "$lock"; then', to: '  if false; then', kase: 'a run under flock <lock> by its caller does not wait for itself' },
 ];
 
-function stage(driverText, root) {
-    const dir = mkdtempSync(join(root, 'tree-'));
+function stage(driverText, root, prefix = 'tree-') {
+    const dir = mkdtempSync(join(root, prefix));
     mkdirSync(join(dir, 'scripts'));
     const driver = join(dir, 'scripts', 'verify-platform.sh');
     writeFileSync(driver, driverText);
@@ -185,13 +234,14 @@ const settle = (ms) => new Promise((r) => setTimeout(r, ms));
 const flockFree = (lock) => spawnSync('flock', ['-n', lock, 'true']).status === 0;
 
 /** One driver run in fixture mode; resolves { status, timedOut, text, marker, lockFreeAfter }. */
-async function runDriver(tree, fx, runName) {
+async function runDriver(trees, fx, runName) {
     const run = RUNS[runName];
+    const tree = run.where === 'tracked' ? { driver: DRIVER } : run.where === 'elsewhere' ? trees.elsewhere() : trees.staged();
     const id = `${runName}-${++runSeq}`;
     const registry = join(fx, `registry-${id}.txt`);
     const lock = join(fx, `lock-${id}`);
     const marker = `${MARKER}-${id}`;
-    writeFileSync(registry, run.rows.map(([tier, label, key]) => `${tier}|${label}|node ${join(fx, `${key}.mjs`)}`).join('\n') + '\n');
+    writeFileSync(registry, run.rows.map(([tier, label, key]) => `${tier}|${label}|${key.startsWith('FN:') ? key.slice(3) : `node ${join(fx, `${key}.mjs`)}`}`).join('\n') + '\n');
     writeFileSync(lock, '');
     const env = { ...process.env };
     for (const k of Object.keys(env)) if (k.startsWith('PB_VERIFY_') || k === 'PB_LIVE_LOCK_HELD') delete env[k];
@@ -201,6 +251,7 @@ async function runDriver(tree, fx, runName) {
         PB_VERIFY_FIXTURE_WINDOWS: join(fx, 'WINDOWS.md'),
         PB_VERIFY_FIXTURE_LOCK: lock,
         VPD_MARKER: marker,
+        ...(run.env ?? {}),
     });
     let holder = null;
     if (run.hold) {
@@ -218,13 +269,33 @@ async function runDriver(tree, fx, runName) {
     c.stderr.on('data', (d) => { err += d; });
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; try { process.kill(-c.pid, 'SIGKILL'); } catch { /* gone */ } }, run.wrap ? 8000 : 180000);
-    const status = await new Promise((r) => c.once('exit', (code) => r(code)));
+    const exited = new Promise((r) => c.once('exit', (code) => r(code)));
+    let lockFreeAfterKill = null;
+    let interrupted = false;
+    if (run.killDriver) {
+        // Review point 3: once the driver holds the lock, SIGKILL the driver alone (no cleanup() runs, its row lives
+        // on); the lock must come free within 5 s.
+        for (let i = 0; i < 300 && flockFree(lock); i++) await settle(30);
+        if (!flockFree(lock)) {
+            process.kill(c.pid, 'SIGKILL');
+            lockFreeAfterKill = false;
+            for (let i = 0; i < 50 && !lockFreeAfterKill; i++) { await settle(100); lockFreeAfterKill = flockFree(lock); }
+        }
+    }
+    if (run.interrupt) {
+        // Review point 4: once the row's detached process runs, SIGTERM the driver (its trap runs cleanup()).
+        for (let i = 0; i < 300 && !strays(marker).length; i++) await settle(30);
+        interrupted = strays(marker).length > 0;
+        process.kill(c.pid, 'SIGTERM');
+    }
+    const status = await exited;
     clearTimeout(timer);
+    if (run.interrupt) await settle(300);
     await settle(50);
     c.stdout.destroy();
     c.stderr.destroy();
     if (holder) holder.kill('SIGKILL');
-    return { status, timedOut, text: `${out}\n${err}`, marker, lockFreeAfter: !timedOut && flockFree(lock) };
+    return { status, timedOut, text: `${out}\n${err}`, marker, lockFreeAfter: !timedOut && flockFree(lock), lockFreeAfterKill, interrupted };
 }
 
 /** Runs fn over items, at most PARALLEL at once; resolves the results in order. */
@@ -236,10 +307,12 @@ async function pool(items, fn) {
     return out;
 }
 
-/** caseNames -> { name: why | null } on `tree`, each run the cases need made once. */
-async function judge(tree, fx, caseNames) {
+/** caseNames -> { name: why | null } for driver text `text`, each run the cases need made once. */
+async function judge(text, root, fx, caseNames) {
+    const lazy = (prefix) => { let t; return () => (t ??= stage(text, root, prefix)); };
+    const trees = { staged: lazy('tree-'), elsewhere: lazy('elsewhere-') };
     const runNames = [...new Set(caseNames.map((n) => CASES[n][0]))];
-    const results = Object.fromEntries((await pool(runNames, (rn) => runDriver(tree, fx, rn))).map((r, i) => [runNames[i], r]));
+    const results = Object.fromEntries((await pool(runNames, (rn) => runDriver(trees, fx, rn))).map((r, i) => [runNames[i], r]));
     return Object.fromEntries(caseNames.map((n) => [n, CASES[n][1](results[CASES[n][0]])]));
 }
 
@@ -249,7 +322,7 @@ async function selfTest() {
     try {
         const text = readFileSync(DRIVER, 'utf8');
         const fx = await fixtures(root, text);
-        const control = await judge(stage(text, root), fx, Object.keys(CASES));
+        const control = await judge(text, root, fx, Object.keys(CASES));
         for (const [name, why] of Object.entries(control)) {
             if (why) misses++;
             console.log(`  ${why ? 'MISS' : 'ok '} control ${name}${why ? ` -> ${why}` : ''}`);
@@ -257,7 +330,7 @@ async function selfTest() {
         const planted = await pool(PLANTS, async (plant) => {
             const hits = text.split(plant.from).length - 1;
             if (hits !== 1) return { plant, moved: hits };
-            return { plant, why: (await judge(stage(text.replace(plant.from, plant.to), root), fx, [plant.kase]))[plant.kase] };
+            return { plant, why: (await judge(text.replace(plant.from, plant.to), root, fx, [plant.kase]))[plant.kase] };
         });
         for (const { plant, moved, why } of planted) {
             if (moved !== undefined) {

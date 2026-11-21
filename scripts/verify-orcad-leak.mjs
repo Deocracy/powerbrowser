@@ -29,7 +29,7 @@
 //
 // Exit: 0 nothing left, 1 an orcad leaked (stopped), 3 only non-orcad survivors (--sweep, stopped), 2 usage.
 //
-//   node scripts/verify-orcad-leak.mjs --session <sid> [--token <row token>] --label <row> [--sweep]
+//   node scripts/verify-orcad-leak.mjs --session <sid> [--token <row token>] [--since <leader start ticks>] --label <row> [--sweep]
 //   node scripts/verify-orcad-leak.mjs --self-test
 
 import { spawn, spawnSync } from 'node:child_process';
@@ -57,14 +57,19 @@ export function legEntry() {
     return orcadEntry(readFileSync(join(REPO_ROOT, SERVICE), 'utf8'));
 }
 
-/** procs: [{ pid, sid, ticks, argv, token }]. True for a process of the row: in session `sid` or carrying `token`. */
-export function ofRow(p, sid, token = null) {
+/**
+ * procs: [{ pid, sid, ticks, argv, token }]. True for a process of the row: in session `sid` or carrying `token`,
+ * and, when `since` (the row leader's start ticks) is given, started no earlier than the row (review point 7: the
+ * leader has exited by now, so a bare session number must not reach a process older than the row).
+ */
+export function ofRow(p, sid, token = null, since = null) {
+    if (since !== null && !(Number(p.ticks) >= since)) return false;
     return p.sid === sid || (token !== null && p.token === token);
 }
 
 /** Those of the row (ofRow) whose arguments name the orcad entry. */
-export function leaksIn(sid, procs, entry, token = null) {
-    return procs.filter((p) => ofRow(p, sid, token) && p.argv.some((a) => a.endsWith(entry)));
+export function leaksIn(sid, procs, entry, token = null, since = null) {
+    return procs.filter((p) => ofRow(p, sid, token, since) && p.argv.some((a) => a.endsWith(entry)));
 }
 
 function rowToken(pid) {
@@ -105,8 +110,8 @@ async function stopAll(found, graceMs) {
 }
 
 /** Names and stops every leaked orcad of the row: SIGTERM, up to 10 s, then SIGKILL. Returns the failure lines. */
-export async function judgeSession(sid, label, entry, procs = processes(), token = null) {
-    const found = leaksIn(sid, procs, entry, token);
+export async function judgeSession(sid, label, entry, procs = processes(), token = null, since = null) {
+    const found = leaksIn(sid, procs, entry, token, since);
     await stopAll(found, 10000);
     return found.map((p) => `${label} left orcad pid ${p.pid} running after it exited (session ${sid}${p.sid === sid ? '' : `, found by its row token in session ${p.sid}`}): ${p.argv.join(' ')}; stopped it`);
 }
@@ -115,8 +120,8 @@ export async function judgeSession(sid, label, entry, procs = processes(), token
  * Every other process of the row still running after a 2 s grace (a child mid-exit is not a survivor), stopped:
  * SIGTERM, up to 5 s, then SIGKILL. Returns the NOTE lines.
  */
-export async function sweepRow(sid, label, token = null, { graceMs = 2000 } = {}) {
-    let found = processes().filter((p) => ofRow(p, sid, token));
+export async function sweepRow(sid, label, token = null, { graceMs = 2000, since = null } = {}) {
+    let found = processes().filter((p) => ofRow(p, sid, token, since));
     const until = Date.now() + graceMs;
     while (found.length && Date.now() < until) {
         await pause(100);
@@ -251,6 +256,9 @@ async function selfTest() {
     check('a detached orcad of another run (another token) is left alone', names(leaksIn(700, [orcad(6, 702, undefined, 'tok-other')], entry, 'tok-row')), null);
     check('a detached orcad carrying the row token', names(leaksIn(700, [orcad(7, 703, undefined, 'tok-row')], entry, 'tok-row')), 'leak 7');
     check('a row token with no token given is not matched', names(leaksIn(700, [orcad(8, 703, undefined, 'tok-row')], entry)), null);
+    // Review point 7: an orcad in the row's session number but started before the row (ticks 1 < since 50).
+    check('a process older than the row is not of the row', names(leaksIn(700, [orcad(9, 700)], entry, null, 50)), null);
+    check('a process started with the row is', names(leaksIn(700, [{ ...orcad(10, 700), ticks: '60' }], entry, null, 50)), 'leak 10');
 
     // Live: planted processes in sessions of their own (detached: setsid), judged through the CLI as the driver runs
     // it. An orcad-shaped one must go red naming the pid and be gone after; a non-orcad survivor must stay green and
@@ -363,14 +371,16 @@ if (isEntryPoint) {
     const sid = Number(opt('--session'));
     const label = opt('--label') ?? 'the row';
     const token = opt('--token') || null;
+    const sinceArg = opt('--since');
+    const since = sinceArg !== undefined && /^\d+$/.test(sinceArg) ? Number(sinceArg) : null;
     const entry = orcadEntry(readFileSync(join(REPO_ROOT, SERVICE), 'utf8'));
     if (!args.includes('--session') || !Number.isInteger(sid) || sid <= 0 || !entry) {
         console.error(`${NAME}: FAIL -- ${entry ? 'usage: --session <sid> [--token <row token>] --label <row> [--sweep], or --self-test' : `no _orcadMain assignment in ${SERVICE}, so the orcad entry cannot be derived`}`);
         process.exit(2);
     }
-    const lines = await judgeSession(sid, label, entry, processes(), token);
+    const lines = await judgeSession(sid, label, entry, processes(), token, since);
     for (const line of lines) console.error(`${NAME}: FAIL -- ${line}`);
-    const notes = args.includes('--sweep') ? await sweepRow(sid, label, token) : [];
+    const notes = args.includes('--sweep') ? await sweepRow(sid, label, token, { since }) : [];
     for (const line of notes) console.error(`${NAME}: NOTE -- ${line}`);
     process.exit(lines.length ? 1 : notes.length ? 3 : 0);
 }
