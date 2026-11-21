@@ -928,6 +928,20 @@ export const OrcaService = {
     return true;
   },
 
+  /**
+   * Audit fix 67-WR-04 (lane G3b handoff): the frontend reconnected and paired. A pairing-failure reason it
+   * reported earlier is over and leaves the class and the diagnostics rows; a held browser-host reason is
+   * not a pairing failure and is cleared only by browserHostAttached(). Returns whether a reason was cleared.
+   */
+  clientRecovered() {
+    if (this._clientReason === null || this._clientReason === OrcaEnv.ORCA_BROWSER_HOST_REASON) {
+      return false;
+    }
+    this._clientReason = null;
+    this._pushLog("Orca client recovered.");
+    return true;
+  },
+
   getRecentLog() {
     return this._log.slice();
   },

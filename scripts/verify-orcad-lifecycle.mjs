@@ -45,6 +45,8 @@
 //                      before Theia starts.
 //   status-generation  (67-CR-01, lane G3b handoff) the status reply carries the count of starts that reached
 //                      ready, and nothing beyond the state, the class and that count.
+//   client-recovered   (67-WR-04, lane G3b handoff) clientRecovered() clears a pairing-failure reason and keeps
+//                      the browser-host reason.
 //
 // --self-test copies powerbrowser/shell into a mkdtemp tree, requires it green (watch-orcad skipped), then
 // plants each pre-fix fault and requires red naming the clause.
@@ -438,6 +440,24 @@ async function theiaClears(paths, env) {
     return fails;
 }
 
+/** 67-WR-04 (lane G3b handoff): a recovered client clears a pairing-failure reason, never the browser-host reason. */
+async function clientRecovered(paths, env) {
+    const fails = [];
+    const b = makeBoundary({ alive: [[5002, '222']], tree: tree3(5001), orcad: () => readyOrcad(5001) });
+    const svc = await loadService(paths, b, env);
+    await svc.start();
+    if (typeof svc.clientRecovered !== 'function') { await svc.stop(); return ['client-recovered: OrcaService has no clientRecovered()']; }
+    const pairingReason = env.ORCA_CLIENT_REASONS.find((r) => r !== env.ORCA_BROWSER_HOST_REASON);
+    svc.reportClientFailure(pairingReason);
+    svc.clientRecovered();
+    if (svc.getDiagnosticRows().some(([l]) => l === 'Orca pairing failure')) fails.push(`client-recovered: after a successful Reconnect the stale pairing failure ${pairingReason} stays in the diagnostics rows`);
+    svc.reportClientFailure(env.ORCA_BROWSER_HOST_REASON);
+    svc.clientRecovered();
+    if (svc.getState().failureClass !== 'browser-not-attached') fails.push(`client-recovered: a Reconnect cleared the held browser-host reason (class now ${svc.getState().failureClass}); only browserHostAttached() may`);
+    await svc.stop();
+    return fails;
+}
+
 /** 67-CR-01 (lane G3b handoff): the status reply counts orcad starts that reached ready, and carries no identifier. */
 async function statusGeneration(paths, env) {
     const fails = [];
@@ -748,7 +768,7 @@ export async function check(paths, { fixture = true } = {}) {
         ['watch-wired', watchWired], ['restart-keeps-daemon', restartKeepsDaemon], ['failed-start', failedStart],
         ['stop-during-ready', stopDuringReady], ['exit-handoff', exitHandOff], ['no-offer', noOffer],
         ['start-after-quit', startAfterQuit], ['crash-loop', crashLoop], ['theia-clears', theiaClears],
-        ['platform-alias', platformAlias], ['port-holder', portHolder], ['sidecar-orca-port', sidecarOrcaPort], ['status-generation', statusGeneration],
+        ['platform-alias', platformAlias], ['port-holder', portHolder], ['sidecar-orca-port', sidecarOrcaPort], ['status-generation', statusGeneration], ['client-recovered', clientRecovered],
     ];
     for (const [label, fn] of clauses) {
         try { fails.push(...(await fn(paths, env))); } catch (err) { fails.push(`${label}: threw ${err && err.stack ? err.stack.split('\n').slice(0, 2).join(' ') : err}`); }
@@ -801,6 +821,8 @@ function plants() {
         { name: 'port source not wired before Theia starts', naming: 'sidecar-orca-port', file: 'powerbrowser.js', edit: swap('      TheiaService.setOrcaPortSource(() => OrcaService.orcadPort());\n', '') },
         { name: 'generation not counted', naming: 'status-generation', file: S, edit: swap('    this._generation += 1;\n', '') },
         { name: 'generation left out of the reply', naming: 'status-generation', file: E, edit: swap(', generation: Number.isInteger(state.generation) && state.generation >= 0 ? state.generation : 0 };', ' };') },
+        { name: 'clientRecovered clears nothing', naming: 'client-recovered', file: S, edit: swap('    this._clientReason = null;\n    this._pushLog("Orca client recovered.");', '    this._pushLog("Orca client recovered.");') },
+        { name: 'clientRecovered clears the browser-host reason', naming: 'client-recovered', file: S, edit: swap('if (this._clientReason === null || this._clientReason === OrcaEnv.ORCA_BROWSER_HOST_REASON) {', 'if (this._clientReason === null) {') },
         { name: 'port holder row dropped', naming: 'port-holder', file: S, edit: swap('...rows, ...holder]', '...rows]') },
     ];
 }
