@@ -1322,16 +1322,24 @@ export function runSelfTest() {
     const planted = [];
     for (const [name, plant, naming] of PLANTS) {
         const r = judgeAll(plant(CONTROL));
-        planted.push(...r.fails);
+        planted.push(r.fails);
         if (!r.fails.some((s) => s.includes(naming))) { console.error(`  FAIL ${name} -> ${r.fails.join(' | ') || 'green'} (expected '${naming}')`); failures++; } else console.log(`  ok ${name} -> red, naming '${naming}'`);
     }
     // The (f) clause with a skipped stock half is a named SKIP, never a PASS of the absence.
     const skipped = judgeAll({ ...CONTROL, f: { skip: 'an installed Orca exists' } });
     if (skipped.fails.length || skipped.skips.length !== 1) { console.error('  FAIL decoy-skip -> the skipped decoy clause was not reported as a SKIP'); failures++; } else console.log('  ok decoy-skip -> (f) reported as a named SKIP');
     // harness-live-security-07: every fail message of every verdict is reached by a plant (derived from their source).
-    const missing = uncoveredMessages([...new Set([...Object.values(VERDICTS), decoyLaunchVerdict])], [...planted, ...DECOY_LAUNCH_PLANTS.flatMap(([, o]) => decoyLaunchVerdict(o))]);
+    const missing = uncoveredMessages([...new Set([...Object.values(VERDICTS), decoyLaunchVerdict])], [...planted, ...DECOY_LAUNCH_PLANTS.map(([, o]) => decoyLaunchVerdict(o))]);
     for (const m of missing) { console.error(`  FAIL coverage -> no plant reaches ${m.fn}: "${m.text}"`); failures++; }
     if (!missing.length) console.log('  ok coverage -> every fail message of every verdict is reached by a plant');
+    // The coverage check itself (review of harness-live-security-07): a deleted plant must show its message uncovered,
+    // even where another message shares its longest words (the inside and outside pixel, the dialog-window count).
+    const coverageFns = [...new Set([...Object.values(VERDICTS), decoyLaunchVerdict])];
+    for (const [removed, skeleton] of [['screenshot-off-by-dpr', 'not the planted red'], ['protocol-dialog-detector-blind', 'dialog window(s), not one']]) {
+        const left = PLANTS.filter(([n]) => n !== removed).map(([, p]) => judgeAll(p(CONTROL)).fails);
+        if (uncoveredMessages(coverageFns, left).some((m) => m.text.includes(skeleton))) console.log(`  ok coverage plant: without ${removed} the message "…${skeleton}" is uncovered`);
+        else { console.error(`  FAIL coverage plant: without ${removed} the message "…${skeleton}" still counts as planted`); failures++; }
+    }
     // harness-live-security-01: the launcher keeps the decoy HOME (red on the old liveEnv, which replaced it).
     const launchControl = decoyLaunchVerdict({ decoyHome: '/tmp/d', launchHome: '/tmp/d', cliHome: '/tmp/d', decoyInLaunchHome: true });
     if (launchControl.length) { console.error(`  FAIL decoy-launch control -> ${launchControl.join(' | ')}`); failures++; }
@@ -1357,7 +1365,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const arg = process.argv[2];
     if (arg && arg !== '--self-test') { console.error('usage: node scripts/verify-orca-browser-agent-live.mjs [--self-test]'); process.exit(2); }
     if (arg === '--self-test') process.exit(runSelfTest());
-    const locked = holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
+    const locked = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
     if (locked !== null) process.exit(locked);
     process.exit(await main());
 }

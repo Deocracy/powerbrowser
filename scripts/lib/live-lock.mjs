@@ -1,27 +1,44 @@
 // scripts/lib/live-lock.mjs
 //
 // The live lock (audit harness-live-security-05): every live row runs under flock on <git common dir>/pb-live.lock,
-// so two sessions never launch PowerBrowser and its services against one checkout at once. The rule for the rows
-// lane H5 owns, and the one the other live lanes can follow:
+// so two sessions never launch PowerBrowser and its services against one checkout at once. This file is the one
+// live-lock helper for every live row.
 //
-//   A live row takes the lock itself. At entry, before anything else runs, it calls holdLiveLock(). That returns null
-//   when this process may go on (PB_LIVE_LOCK_HELD=1 is set AND the lock is in fact held, by the driver's holder or
-//   by a flock ancestor). Otherwise the row re-runs itself under `flock <lock>` with PB_LIVE_LOCK_HELD=1 and exits
-//   with that run's status (77 passes through unchanged). PB_LIVE_LOCK_HELD=1 with the lock free is not trusted: the
-//   row takes the lock. When the lock cannot be taken at all (no git common dir, no flock), the row FAILs, never runs
-//   unlocked, and never SKIPs.
+// Interface (everything else here is exported for the self-test, scripts/verify-live-harness-libs.mjs):
 //
-// Self-test, --self-test modes and quick verdict plants do not take the lock: they launch nothing.
+//   const locked = await holdLiveLock({ name, scriptUrl: import.meta.url, root: REPO_ROOT });
+//   if (locked !== null) process.exit(locked);
 //
-// No top-level side effects.
+// Call it at a live row's entry, before anything launches. `name` prefixes the messages, `root` is the checkout (the
+// lock is <git common dir>/pb-live.lock, never another file), `args` defaults to process.argv.slice(2). It resolves:
+//
+//   null  the row holds the lock and may run now. That is so only when /proc/locks shows the lock file's inode held by
+//         (i) the process PB_LIVE_LOCK_HOLDER names as <pid>:<start ticks>, with matching start ticks (the gate
+//         driver's holder process; the driver exports PB_LIVE_LOCK_HELD=1 with it), or
+//         (ii) an ancestor of this process (`flock <lock> node <row>`, with or without the variable).
+//   1     FAIL, printed by name: PB_LIVE_LOCK_HELD=1 is set but neither (i) nor (ii) holds, so the variable is not
+//         trusted (another session's lock, a stale or forged holder); or the lock could not be taken (no git common
+//         dir, no flock, the bounded wait ran out).
+//   n     with nothing set and no holder of its own, the row takes the lock itself: it re-runs under
+//         `flock -w <PB_LIVE_LOCK_WAIT_S, default 21600> <lock>` in a process group of its own, forwards SIGINT,
+//         SIGTERM and SIGHUP to that group, and resolves the re-run's exit status (77 included; 128 + the signal
+//         number when the re-run ended by a signal). While it waits it names the holder's pid.
+//
+// --self-test modes do not call it unless they launch something. Each row's self-test asserts the call is still there
+// with lockWiringFails(name, import.meta.url). No top-level side effects.
 
-import { execFileSync, spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { readFileSync, statSync } from 'node:fs';
+import { constants } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const LIVE_LOCK_ENV = 'PB_LIVE_LOCK_HELD';
+export const LIVE_LOCK_HOLDER_ENV = 'PB_LIVE_LOCK_HOLDER';
+export const LIVE_LOCK_WAIT_ENV = 'PB_LIVE_LOCK_WAIT_S';
 export const LIVE_LOCK_FILE = 'pb-live.lock';
+const FORWARDED = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+const WAIT_TIMEOUT_EXIT = 75; // flock -E: the bounded wait ran out
 
 /** <git common dir>/pb-live.lock for the checkout at `root`, or null when git cannot name it. */
 export function liveLockPath(root) {
@@ -33,50 +50,114 @@ export function liveLockPath(root) {
     }
 }
 
-/** 'held' when some process holds `lock` (flock -n cannot take it), 'free' when it can, 'error' when flock did not run. */
-export function lockState(lock) {
-    const r = spawnSync('flock', ['-n', lock, 'true'], { stdio: 'ignore' });
-    if (r.error) return 'error';
-    return r.status === 0 ? 'free' : r.status === 1 ? 'held' : 'error';
+/** The start ticks of `pid` (/proc/<pid>/stat field 22), or null when it is not running. */
+export function startTicks(pid) {
+    try {
+        const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+        return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19] ?? null;
+    } catch {
+        return null;
+    }
+}
+
+const parentOf = (pid) => {
+    try { const s = readFileSync(`/proc/${pid}/stat`, 'utf8'); return Number(s.slice(s.lastIndexOf(')') + 2).split(' ')[1]) || 0; } catch { return 0; }
+};
+
+/** The ancestors of `pid`, nearest first, up to init. */
+export function ancestorsOf(pid = process.pid) {
+    const out = [];
+    for (let p = parentOf(pid); p > 1 && out.length < 256; p = parentOf(p)) out.push(p);
+    return out;
+}
+
+/** The pids /proc/locks names as holding a FLOCK on `lock` (by inode; waiters, the "->" lines, excluded). */
+export function lockHolders(lock, locksText = null) {
+    let ino;
+    try { ino = String(statSync(lock).ino); } catch { return []; }
+    let text = locksText;
+    if (text === null) { try { text = readFileSync('/proc/locks', 'utf8'); } catch { return []; } }
+    const out = [];
+    for (const line of text.split('\n')) {
+        if (line.includes('->')) continue;
+        const f = line.trim().split(/\s+/);
+        if (f[1] !== 'FLOCK' || f[5]?.split(':').pop() !== ino) continue;
+        out.push(Number(f[4]));
+    }
+    return [...new Set(out)];
+}
+
+/** { pid, ticks } from PB_LIVE_LOCK_HOLDER's "<pid>:<start ticks>", or null when unset or malformed. */
+export function parseHolder(value) {
+    const m = /^(\d+):(\d+)$/.exec(String(value ?? ''));
+    return m ? { pid: Number(m[1]), ticks: m[2] } : null;
 }
 
 /**
- * The pure decision: 'proceed' (the caller holds the lock), 'take' (re-run under flock), or 'fail' (cannot lock).
- * envHeld: PB_LIVE_LOCK_HELD === '1'; state: lockState(lock); lock: the path or null.
+ * The pure decision over what was observed: 'proceed', 'take' or 'fail'.
+ * holders: lockHolders(lock); ancestors: ancestorsOf(); holder: parseHolder(PB_LIVE_LOCK_HOLDER); holderTicks: the
+ * named pid's start ticks now; envHeld: PB_LIVE_LOCK_HELD === '1'.
  */
-export function lockDecision({ envHeld, state, lock }) {
+export function lockDecision({ lock, holders, ancestors, holder, holderTicks, envHeld }) {
     if (!lock) return 'fail';
-    if (state === 'error') return 'fail';
-    if (envHeld && state === 'held') return 'proceed';
-    return 'take';
+    if (holders.some((p) => ancestors.includes(p))) return 'proceed';
+    if (holder && holders.includes(holder.pid) && holderTicks !== null && String(holderTicks) === holder.ticks) return 'proceed';
+    return envHeld ? 'fail' : 'take';
 }
 
-/**
- * Call first in a live row's entry. Returns null when the row may run now, else the exit status the caller must exit
- * with (the locked re-run's status, or 1 when the lock could not be taken).
- */
-export function holdLiveLock({ name, scriptUrl, args = process.argv.slice(2), root, env = process.env }) {
+const describe = (pid) => {
+    let cmd = '';
+    try { cmd = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean).join(' ').slice(0, 120); } catch { /* gone */ }
+    return `pid ${pid}${cmd ? ` (${cmd})` : ''}`;
+};
+
+/** See the header. Resolves null, or the exit status the caller must exit with. */
+export async function holdLiveLock({ name, scriptUrl, root, args = process.argv.slice(2), env = process.env }) {
     const lock = root ? liveLockPath(root) : null;
+    if (!lock) {
+        console.error(`${name}: FAIL -- the live lock could not be found: git names no common dir for ${root}. Live rows never run unlocked. Next step: run the row inside the checkout`);
+        return 1;
+    }
+    const holders = lockHolders(lock);
+    const holder = parseHolder(env[LIVE_LOCK_HOLDER_ENV]);
     const envHeld = env[LIVE_LOCK_ENV] === '1';
-    const state = lock ? lockState(lock) : 'error';
-    const decision = lockDecision({ envHeld, state, lock });
+    const decision = lockDecision({ lock, holders, ancestors: ancestorsOf(), holder, holderTicks: holder ? startTicks(holder.pid) : null, envHeld });
     if (decision === 'proceed') return null;
     if (decision === 'fail') {
-        console.error(`${name}: FAIL -- the live lock could not be taken (${lock ? `${lock}: flock did not run` : 'git names no common dir for this checkout'}). Live rows never run unlocked. Next step: run inside the checkout with flock on PATH (util-linux).`);
+        const named = env[LIVE_LOCK_HOLDER_ENV] ? `${LIVE_LOCK_HOLDER_ENV}=${env[LIVE_LOCK_HOLDER_ENV]}` : `no ${LIVE_LOCK_HOLDER_ENV}`;
+        console.error(`${name}: FAIL -- ${LIVE_LOCK_ENV}=1 is set (${named}), but ${lock} is held by ${holders.length ? holders.map(describe).join(', ') : 'nobody'}, which is neither the named holder nor an ancestor of this row, so this row would run outside the live lock. Next step: unset ${LIVE_LOCK_ENV} and ${LIVE_LOCK_HOLDER_ENV} and run the row again; it then waits for the lock itself`);
         return 1;
     }
-    if (envHeld) console.log(`${name}: note -- ${LIVE_LOCK_ENV}=1 is set but ${lock} is free; taking the lock`);
-    const r = spawnSync('flock', [lock, process.execPath, fileURLToPath(scriptUrl), ...args], { stdio: 'inherit', env: { ...env, [LIVE_LOCK_ENV]: '1' } });
-    if (r.error) {
-        console.error(`${name}: FAIL -- flock could not run the row under ${lock} (${r.error.code ?? r.error.message})`);
+    const waitS = Number(env[LIVE_LOCK_WAIT_ENV]) > 0 ? Number(env[LIVE_LOCK_WAIT_ENV]) : 21600;
+    if (holders.length) console.log(`${name}: waiting up to ${waitS} s for the live lock ${lock}, held by ${holders.map(describe).join(', ')}`);
+    const childEnv = { ...env, [LIVE_LOCK_ENV]: '1' };
+    delete childEnv[LIVE_LOCK_HOLDER_ENV]; // the re-run proceeds through its flock ancestor
+    let child;
+    try {
+        child = spawn('flock', ['-w', String(waitS), '-E', String(WAIT_TIMEOUT_EXIT), lock, process.execPath, fileURLToPath(scriptUrl), ...args], { stdio: 'inherit', env: childEnv, detached: true });
+    } catch (e) {
+        console.error(`${name}: FAIL -- flock could not run the row under ${lock} (${e.code ?? e.message}). Next step: put flock (util-linux) on PATH`);
         return 1;
     }
-    return r.status ?? 1;
+    const forward = (sig) => () => { try { process.kill(-child.pid, sig); } catch { /* the group is gone */ } };
+    const handlers = FORWARDED.map((sig) => [sig, forward(sig)]);
+    for (const [sig, h] of handlers) process.on(sig, h);
+    const status = await new Promise((resolve) => {
+        child.once('error', (e) => { console.error(`${name}: FAIL -- flock could not run the row under ${lock} (${e.code ?? e.message}). Next step: put flock (util-linux) on PATH`); resolve(1); });
+        child.once('exit', (code, signal) => resolve(signal ? 128 + (constants.signals[signal] ?? 0) : code ?? 1));
+    });
+    for (const [sig, h] of handlers) process.off(sig, h);
+    if (status === WAIT_TIMEOUT_EXIT) {
+        const now = lockHolders(lock);
+        console.error(`${name}: FAIL -- the live lock ${lock} is still held after ${waitS} s by ${now.length ? now.map(describe).join(', ') : 'a process that has since let it go'}. Next step: wait for that run to end, or stop it`);
+        return 1;
+    }
+    return status;
 }
 
 /** Red reasons when the script at `scriptUrl` no longer calls holdLiveLock (each owned live row's self-test asks). */
 export function lockWiringFails(name, scriptUrl) {
     let src = '';
     try { src = readFileSync(fileURLToPath(scriptUrl), 'utf8'); } catch { return [`${name}: lock wiring -- the script source could not be read`]; }
-    return /\bholdLiveLock\(\{/.test(src) ? [] : [`${name}: lock wiring -- the live path no longer calls holdLiveLock, so the row would run outside the live lock`];
+    return /\bawait holdLiveLock\(\{/.test(src) ? [] : [`${name}: lock wiring -- the live path no longer awaits holdLiveLock, so the row would run outside the live lock`];
 }

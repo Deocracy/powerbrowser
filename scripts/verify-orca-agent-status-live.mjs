@@ -375,7 +375,7 @@ function selfTest() {
         const o = control();
         plant(o);
         const f = verdicts(o);
-        planted.push(...f);
+        planted.push(f);
         if (f.some((x) => x.includes(needle))) lines.push(`  ok plant: ${needle}`);
         else { failures++; lines.push(`  FAIL plant: ${needle}: stayed green or did not name it (${f.join(' | ') || 'no fails'})`); }
     }
@@ -402,7 +402,7 @@ if (isEntryPoint) {
         console.error(`${NAME}: FAIL -- unknown argument '${args[0]}' (usage: node ${SELF_REL} [--self-test])`);
         process.exit(2);
     }
-    const locked = holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT, args });
+    const locked = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT, args });
     if (locked !== null) process.exit(locked);
     const restore = installOutputRedaction([]);
     let code = 0;
