@@ -22,9 +22,15 @@
 //   node scripts/verify-mode-store-migration.mjs
 //   node scripts/verify-mode-store-migration.mjs --self-test
 
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 import { REPO_ROOT, flush, loadTs, typescript } from './lib/ts-unit-loader.mjs';
+
+const SELF = fileURLToPath(import.meta.url);
 
 const NAME = 'mode-store-migration';
 const MODES = 'theia/extensions/modes/src/browser';
@@ -285,8 +291,35 @@ function planted(plant) {
     return { sources: { [plant.file]: text } };
 }
 
+/**
+ * SKIP control (SKIP-PROTOCOL.md): the main mode, run as a child with its output captured, from a copy of this script
+ * and its two helpers in a tree with no theia/ (the loader resolves typescript from the tree it sits in), must exit 77
+ * with the SKIP line last and no PASS line. Returns a problem, or null.
+ */
+function skipControl() {
+    const root = mkdtempSync(join(tmpdir(), `${NAME}-root-`));
+    try {
+        mkdirSync(join(root, 'scripts', 'lib'), { recursive: true });
+        copyFileSync(SELF, join(root, 'scripts', 'verify-mode-store-migration.mjs'));
+        for (const lib of ['ts-unit-loader.mjs', 'skip-verdict.mjs']) copyFileSync(join(REPO_ROOT, 'scripts', 'lib', lib), join(root, 'scripts', 'lib', lib));
+        const r = spawnSync(process.execPath, [join(root, 'scripts', 'verify-mode-store-migration.mjs')], { encoding: 'utf8' });
+        const lines = (r.stdout ?? '').split('\n').filter(l => l.trim() !== '');
+        const last = lines[lines.length - 1] ?? '';
+        if (r.status !== SKIP_EXIT || !last.startsWith(`${NAME}: SKIP -- theia/node_modules/typescript is not installed`)
+            || lines.some(l => l.includes(`${NAME}: PASS`)) || /: SKIP/.test(r.stderr ?? '')) {
+            return `control: a tree without typescript did not exit 77 with the SKIP line last and no PASS line (status ${r.status}, last line ${JSON.stringify(last)}, stderr ${JSON.stringify((r.stderr ?? '').slice(0, 300))})`;
+        }
+        console.log(`${NAME}: self-test ok -- control: a tree without typescript exits 77 with the SKIP line last`);
+        return null;
+    } finally {
+        rmSync(root, { recursive: true, force: true });
+    }
+}
+
 async function selfTest() {
     const problems = [];
+    const skipProblem = skipControl();
+    if (skipProblem) problems.push(skipProblem);
     const control = await check();
     if (control.failures.length) {
         problems.push(`control run is red: ${control.failures.map(f => `${f.clause}: ${f.message}`).join('; ')}`);
@@ -312,9 +345,11 @@ async function selfTest() {
 }
 
 async function main() {
+    // No typescript: nothing ran, so exit 77 with the SKIP line (SKIP-PROTOCOL.md); a self-test cannot run its plants.
     if (!typescript()) {
-        console.log(`${NAME}: SKIP -- theia/node_modules/typescript is not installed`);
-        return;
+        const who = process.argv.includes('--self-test') ? `${NAME} self-test` : NAME;
+        console.log(skipLine(who, 'theia/node_modules/typescript is not installed. Next step: run the audited Theia install (docs/BUILD.md "Theia half")'));
+        process.exit(SKIP_EXIT);
     }
     if (process.argv.includes('--self-test')) {
         await selfTest();
