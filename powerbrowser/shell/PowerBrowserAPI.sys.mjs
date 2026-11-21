@@ -10095,8 +10095,10 @@ export class PowerBrowserEditStateParent extends GroupActorBase {}
 // edit-state read and write asks editStateReaches first.
 const EDIT_STATE_GROUPS = Object.freeze(["browsers"]);
 
+// Read from the overlay's entry, not its attribute: an agent overlay is the only one webTabOpen puts outside
+// EDIT_STATE_GROUPS, and the group attribute is named only at the host sites (verify-extension-actions.mjs).
 function editStateReaches(browser) {
-  return EDIT_STATE_GROUPS.includes(browser?.getAttribute("messagemanagergroup"));
+  return webTabs.get(tabIdOfBrowser(browser))?.agent !== true;
 }
 
 function registerEditStateActor() {
@@ -11654,7 +11656,7 @@ function agentLoopbackV4(n) {
 
 function agentLoopbackHost(host) {
   const name = String(host ?? "").toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "");
-  if (name === "localhost" || name.endsWith(".localhost")) {
+  if (/^(?:.+\.)?localhost$/.test(name)) {
     return true;
   }
   const address = agentParseAddress(name);

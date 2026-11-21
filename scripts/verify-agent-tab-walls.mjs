@@ -139,6 +139,8 @@ async function editStateClause(texts) {
     const failures = [];
     const registered = [];
     const calls = [];
+    const webTabs = new Map();
+    const agentGroup = /const AGENT_MESSAGE_MANAGER_GROUP = "([^"]+)";/.exec(texts.api)?.[1];
     const browserIn = group => {
         const actorFor = name => {
             calls.push({ group, name });
@@ -147,14 +149,17 @@ async function editStateClause(texts) {
             }
             return { sendAsyncMessage() {}, sendQuery: () => Promise.resolve({}), doCommand() {} };
         };
-        return { getAttribute: n => (n === 'messagemanagergroup' ? group : null), browsingContext: { currentWindowGlobal: { getActor: actorFor } } };
+        // webTabOpen gives the agent group to agent overlays alone, so the entry's agent flag is the group.
+        const browser = { getAttribute: n => (n === 'messagemanagergroup' ? group : null), browsingContext: { currentWindowGlobal: { getActor: actorFor } } };
+        webTabs.set(`t${webTabs.size}`, { browser, agent: group === agentGroup });
+        return browser;
     };
     const out = evalDeclarations(texts.api,
-        ['EDIT_STATE_ACTOR_NAME', 'EDIT_STATE_GROUPS', 'AGENT_MESSAGE_MANAGER_GROUP', 'editStateReaches', 'registerEditStateActor', 'pageMenuEdit', 'pageEditTargetCommands', 'EDIT_STATE_BUDGET_MS'],
+        ['EDIT_STATE_ACTOR_NAME', 'EDIT_STATE_GROUPS', 'AGENT_MESSAGE_MANAGER_GROUP', 'tabIdOfBrowser', 'editStateReaches', 'registerEditStateActor', 'pageMenuEdit', 'pageEditTargetCommands', 'EDIT_STATE_BUDGET_MS'],
         {
             GROUP_ACTOR_PARENT_MODULE: 'p', GROUP_ACTOR_CHILD_MODULE: 'c', WEB_TAB_EDIT_CMDS: ['cmd_undo'],
             ChromeUtils: { registerWindowActor: (name, options) => { if (name === 'PowerBrowserEditState') registered.push({ groups: options.messageManagerGroups ?? [] }); } },
-            webTabEditContext: browser => browser.browsingContext,
+            webTabEditContext: browser => browser.browsingContext, webTabs,
             PowerBrowserAPI: { sleep: () => new Promise(() => {}) },
         },
         ['AGENT_MESSAGE_MANAGER_GROUP', 'registerEditStateActor', 'pageMenuEdit', 'pageEditTargetCommands']);
