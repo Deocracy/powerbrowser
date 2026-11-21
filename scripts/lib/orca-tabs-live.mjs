@@ -85,12 +85,13 @@ export function liveLockFile(root = REPO_ROOT, env = process.env) {
 /**
  * Takes the live lock for a live row started outside the driver. Returns null when PB_LIVE_LOCK_HELD is "1" (the
  * driver, or a caller that holds the lock, already did: the row goes on in this process). Otherwise runs
- * `node <self> <args>` under flock on the lock file with PB_LIVE_LOCK_HELD=1 and returns that run's exit status (77
+ * `node <self> <args>` under flock -o on the lock file (-o: the row's own children, a detached orcad among them, do not inherit the
+ * lock descriptor and so cannot keep it after the row ends) with PB_LIVE_LOCK_HELD=1 and returns that run's exit status (77
  * and every other status pass through); the caller exits with it and launches nothing itself.
  */
 export function reexecUnderLiveLock(self, args, { root = REPO_ROOT, env = process.env } = {}) {
     if (env.PB_LIVE_LOCK_HELD === '1') return null;
-    const r = spawnSync('flock', [liveLockFile(root, env), process.execPath, self, ...args], { stdio: 'inherit', env: { ...env, PB_LIVE_LOCK_HELD: '1' } });
+    const r = spawnSync('flock', ['-o', liveLockFile(root, env), process.execPath, self, ...args], { stdio: 'inherit', env: { ...env, PB_LIVE_LOCK_HELD: '1' } });
     if (r.error) throw new Error(`could not take the live lock with flock (${r.error.code ?? r.error.message}); install util-linux or run through scripts/verify-platform.sh`);
     return r.status ?? 1;
 }
