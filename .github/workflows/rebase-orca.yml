@@ -7,7 +7,7 @@
 #
 # The stage output names the first FAIL line scripts/rebase-orca.sh printed
 # (pin-move, fetch, seam-apply <patch>, build, typecheck:web <file>:<line>,
-# typecheck:node, typecheck:pb-build <file>:<line>, typecheck coverage, row <label>,
+# typecheck:node, typecheck:pb-build <file>:<line>, typecheck coverage, xpi cache, row <label>,
 # orcad-only start, notices, brand scan), or replayed when it succeeded. The release train's report job
 # turns a FAIL stage into one tracking issue for the tag.
 #
