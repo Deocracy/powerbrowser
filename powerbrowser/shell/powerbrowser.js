@@ -381,6 +381,12 @@ document.addEventListener(
     } catch {
       // Best-effort, as the hooks' own registration is.
     }
+    // Audit fix 67-WR-03: the Theia backend gets orcad's port from OrcaService's one accessor.
+    try {
+      TheiaService.setOrcaPortSource(() => OrcaService.orcadPort());
+    } catch {
+      // Without it the backend refuses Orca's pairing offer; the shell itself still starts.
+    }
     // Announce shell readiness the way Firefox's own chrome does, so WebDriver
     // will create a session against the shell window.
     PowerBrowserAPI.notifyStartupFinished(window);

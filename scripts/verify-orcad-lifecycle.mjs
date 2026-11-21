@@ -40,6 +40,9 @@
 //   platform-alias     (62-WR-06) darwin links with ln -sfn and refuses a real folder; win32 makes no alias;
 //                      the names OrcaEnv itself reads on win32 reach orcad's environment.
 //   port-holder        (orcad-hosting-03) the holder of a busy port is a diagnostics row, from /proc/net/tcp.
+//   sidecar-orca-port  (67-WR-03, lane G3b handoff) TheiaService gives the Theia backend POWERBROWSER_ORCA_PORT
+//                      from OrcaService.orcadPort, the accessor orcad's own start reads, wired in powerbrowser.js
+//                      before Theia starts.
 //
 // --self-test copies powerbrowser/shell into a mkdtemp tree, requires it green (watch-orcad skipped), then
 // plants each pre-fix fault and requires red naming the clause.
@@ -433,6 +436,33 @@ async function theiaClears(paths, env) {
     return fails;
 }
 
+/** 67-WR-03 (from lane G3b): the Theia backend is given the port OrcaService starts orcad on, from the one accessor. */
+async function sidecarOrcaPort(paths, env) {
+    const fails = [];
+    const b = makeBoundary({ prefs: { 'powerbrowser.orca.port': 23456 }, alive: [[5002, '222']], tree: tree3(5001), orcad: () => fakeProc(5001, { stdout: [readyLine(23456)] }) });
+    const svc = await loadService(paths, b, env);
+    if (typeof svc.orcadPort !== 'function') return ['sidecar-orca-port: OrcaService has no orcadPort() accessor'];
+    await svc.start();
+    const spawnArgs = orcadSpawns(b.calls)[0]?.args[0].args ?? [];
+    const spawnedPort = Number(spawnArgs[spawnArgs.indexOf('--port') + 1]);
+    if (svc.orcadPort() !== 23456 || spawnedPort !== 23456) fails.push(`sidecar-orca-port: orcadPort() answers ${svc.orcadPort()} and orcad was started on ${spawnedPort}, with the pref at 23456`);
+    await svc.stop();
+    const theia = read(paths.theiaService) ?? '';
+    const spawnBody = /\n {2}async _spawnAndGate\(beforeFirstSwap\) \{([\s\S]*?)\n {2}\},\n/.exec(theia)?.[1] ?? '';
+    const key = /POWERBROWSER_ORCA_PORT:\s*String\((\w+)\)/.exec(spawnBody);
+    if (!key || !new RegExp(`const ${key[1]} = this\\._orcaPort\\(\\);`).test(spawnBody)) fails.push("sidecar-orca-port: TheiaService's backend environment carries no POWERBROWSER_ORCA_PORT from _orcaPort(), so the backend refuses every pairing offer");
+    const shell = read(paths.shellJs) ?? '';
+    const wireAt = shell.indexOf('TheiaService.setOrcaPortSource(() => OrcaService.orcadPort());');
+    if (wireAt < 0 || wireAt > shell.indexOf(THEIA_START)) fails.push('sidecar-orca-port: powerbrowser.js does not hand OrcaService.orcadPort to TheiaService before the Theia start statement');
+    globalThis.ChromeUtils = {
+        importESModule: (url) => (url === 'chrome://powerbrowser/content/OrcaEnv.sys.mjs' ? env : { PowerBrowserAPI: { log: () => {} }, PowerBrowserProcesses: {} }),
+    };
+    const { TheiaService } = await freshImport(paths.theiaService);
+    TheiaService.setOrcaPortSource?.(() => svc.orcadPort());
+    if (TheiaService._orcaPort?.() !== 23456) fails.push(`sidecar-orca-port: TheiaService._orcaPort() answers ${TheiaService._orcaPort?.()}, not OrcaService's port 23456`);
+    return fails;
+}
+
 async function platformAlias(paths, env) {
     const fails = [];
     const longProfile = `/p/${'x'.repeat(100)}`;
@@ -698,7 +728,7 @@ export async function check(paths, { fixture = true } = {}) {
         ['watch-wired', watchWired], ['restart-keeps-daemon', restartKeepsDaemon], ['failed-start', failedStart],
         ['stop-during-ready', stopDuringReady], ['exit-handoff', exitHandOff], ['no-offer', noOffer],
         ['start-after-quit', startAfterQuit], ['crash-loop', crashLoop], ['theia-clears', theiaClears],
-        ['platform-alias', platformAlias], ['port-holder', portHolder],
+        ['platform-alias', platformAlias], ['port-holder', portHolder], ['sidecar-orca-port', sidecarOrcaPort],
     ];
     for (const [label, fn] of clauses) {
         try { fails.push(...(await fn(paths, env))); } catch (err) { fails.push(`${label}: threw ${err && err.stack ? err.stack.split('\n').slice(0, 2).join(' ') : err}`); }
@@ -746,6 +776,9 @@ function plants() {
         { name: 'darwin ln with -T', naming: 'platform-alias', file: E, edit: swap('platform === "darwin" ? "-sfn" : "-sfnT"', '"-sfnT"') },
         { name: 'alias made on win32', naming: 'platform-alias', file: E, edit: swap('return platform !== "win32" && !socketPathFits(root);', 'return !socketPathFits(root);') },
         { name: 'USERPROFILE not passed to orcad', naming: 'USERPROFILE', file: E, edit: swap('  "USERPROFILE",\n', '') },
+        { name: 'Theia backend not given the orcad port', naming: 'sidecar-orca-port', file: 'TheiaService.sys.mjs', edit: swap('      ...(orcaPort ? { POWERBROWSER_ORCA_PORT: String(orcaPort) } : {}),\n', '') },
+        { name: 'Theia reads its own port default', naming: 'sidecar-orca-port', file: 'TheiaService.sys.mjs', edit: swap('const port = this._orcaPortSource ? this._orcaPortSource() : null;', 'const port = 26768;') },
+        { name: 'port source not wired before Theia starts', naming: 'sidecar-orca-port', file: 'powerbrowser.js', edit: swap('      TheiaService.setOrcaPortSource(() => OrcaService.orcadPort());\n', '') },
         { name: 'port holder row dropped', naming: 'port-holder', file: S, edit: swap('...rows, ...holder]', '...rows]') },
     ];
 }

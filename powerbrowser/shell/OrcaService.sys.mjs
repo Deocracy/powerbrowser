@@ -190,6 +190,17 @@ export const OrcaService = {
     return true;
   },
 
+  /**
+   * The port orcad is started on, read once per start. The one accessor: TheiaService hands the same value
+   * to the Theia backend (POWERBROWSER_ORCA_PORT), which judges the pairing offer's endpoint against it
+   * (audit fix 67-WR-03, from lane G3b), so the two can never disagree. A package carries no
+   * powerbrowser-sidecar.js (a dev-tree prefs file, not in the package manifest), so the fallback is the
+   * default, as for every other Orca and sidecar pref (68-06).
+   */
+  orcadPort() {
+    return PowerBrowserAPI.getIntPref("powerbrowser.orca.port", 26768);
+  },
+
   /** Resolves every path and value a spawn needs. Returns false after recording the failure. */
   async _resolve() {
     const profileDir = PowerBrowserAPI.getProfileDir();
@@ -258,9 +269,7 @@ export const OrcaService = {
     }
     this._orcaVersion = pkg.version;
 
-    // A package carries no powerbrowser-sidecar.js (a dev-tree prefs file, not in the package
-    // manifest), so the fallback is the default, as for every other Orca and sidecar pref (68-06).
-    this._port = PowerBrowserAPI.getIntPref("powerbrowser.orca.port", 26768);
+    this._port = this.orcadPort();
     try {
       OrcaEnv.buildOrcadArgs({ orcadMain: this._orcadMain, port: this._port, webClientRoot: this._webClientRoot });
     } catch (err) {
