@@ -11531,6 +11531,69 @@ async function agentNavigate(entry, tabId, outcome) {
 
 const agentUrl = url => (/^[a-z][a-z0-9+.-]*:/i.test(url) ? url : `https://${url}`);
 
+// agent-browser-06: an agent overlay never reaches PowerBrowser's own loopback services, by navigation, redirect or
+// subresource: the Theia sidecar (the sender port) and orcad (the port pref OrcaService binds, same name and default).
+// Other loopback and LAN hosts stay reachable, because agents test local development servers.
+const AGENT_ORCA_PORT_PREF = "powerbrowser.orca.port";
+const AGENT_ORCA_PORT_DEFAULT = 26768;
+
+function agentOwnServicePorts() {
+  const ports = [];
+  try {
+    if (Number.isInteger(groupSenderPort)) {
+      ports.push(groupSenderPort);
+    }
+  } catch {
+    // no sender port yet: the sidecar has not been wired
+  }
+  try {
+    ports.push(Services.prefs.getIntPref(AGENT_ORCA_PORT_PREF, AGENT_ORCA_PORT_DEFAULT));
+  } catch {
+    ports.push(AGENT_ORCA_PORT_DEFAULT);
+  }
+  return ports;
+}
+
+// Loopback as the socket layer reaches it: localhost and its subdomains, 127/8, ::1, the unspecified addresses (a
+// connect to them lands on loopback) and IPv4-mapped loopback in either spelling.
+function agentLoopbackHost(host) {
+  const h = String(host ?? "").toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  const mapped = h.startsWith("::ffff:") ? h.slice(7) : null;
+  return h === "localhost" || h.endsWith(".localhost") || h === "::1" || h === "::" || h === "0.0.0.0" ||
+    /^127\.\d+\.\d+\.\d+$/.test(h) || (mapped !== null && (/^127\.\d+\.\d+\.\d+$/.test(mapped) || /^7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(mapped)));
+}
+
+function agentServiceRefused(host, port) {
+  return agentLoopbackHost(host) && agentOwnServicePorts().includes(port);
+}
+
+function agentUrlRefused(spec) {
+  try {
+    const url = new URL(spec);
+    const port = url.port ? Number(url.port) : url.protocol === "https:" || url.protocol === "wss:" ? 443 : 80;
+    return agentServiceRefused(url.hostname, port);
+  } catch {
+    return false;
+  }
+}
+
+// The channel half: the URL before the request (a redirect is a new channel and is checked again), and the address
+// the connection reached once a response arrives, which a name resolving to loopback cannot hide.
+function agentChannelRefused(channel, topic) {
+  if (agentUrlRefused(channel.URI?.spec)) {
+    return true;
+  }
+  if (topic !== "http-on-examine-response") {
+    return false;
+  }
+  try {
+    const internal = channel.QueryInterface(Ci.nsIHttpChannelInternal);
+    return agentServiceRefused(internal.remoteAddress, internal.remotePort);
+  } catch {
+    return false;
+  }
+}
+
 // Cookie rows (P66-26): only ever in the agent container, never the user's jar.
 function agentOriginAttributes(entry) {
   return { userContextId: entry.agentUserContextId };
@@ -11619,6 +11682,15 @@ const agentNetworkObserver = {
         }
         return;
       }
+      // agent-browser-06: a request to PowerBrowser's own services ends here, logged once per tab without the URL.
+      if (agentChannelRefused(channel, topic)) {
+        channel.cancel(Cr.NS_ERROR_CONNECTION_REFUSED);
+        if (!entry.agentServiceLogged) {
+          entry.agentServiceLogged = true;
+          PowerBrowserAPI.log("warn", "[orca-agent] refused a request from an agent page to a PowerBrowser service (agent-browser-06)");
+        }
+        return;
+      }
       if (topic === "http-on-modify-request") {
         const row = { url: channel.URI.spec, method: channel.requestMethod, timestamp: Date.now() };
         agentNetworkRows.set(channel, row);
@@ -11688,7 +11760,7 @@ function agentAnswerDialog(entry, accept, text) {
 // Native rows (P66-11, 15): each takes (entry, params, tabId) and answers { where: "done", result } or
 // { where: "failed", code }. The other 25 methods are the PowerBrowserAgent child's run table.
 const AGENT_NATIVE_ROWS = {
-  "browser.goto": (entry, params, tabId) => agentNavigate(entry, tabId, PowerBrowserAPI.webTabNavigate(tabId, agentUrl(params.url))),
+  "browser.goto": (entry, params, tabId) => (agentUrlRefused(agentUrl(params.url)) ? agentFailed("browser_navigation_failed") : agentNavigate(entry, tabId, PowerBrowserAPI.webTabNavigate(tabId, agentUrl(params.url)))),
   "browser.back": (entry, params, tabId) => agentNavigate(entry, tabId, PowerBrowserAPI.webTabBack(tabId)),
   "browser.forward": (entry, params, tabId) => agentNavigate(entry, tabId, PowerBrowserAPI.webTabForward(tabId)),
   "browser.reload": (entry, params, tabId) => agentNavigate(entry, tabId, PowerBrowserAPI.webTabReload(tabId)),
