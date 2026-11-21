@@ -103,13 +103,32 @@ export interface CommandEvent {
     };
 }
 
+/**
+ * 66-WR-06: thrown by a dep to answer the command with this error code, as openAgentTab does when chrome made no
+ * overlay (browser_error) or the user has agents stopped (browser_owner_unavailable).
+ */
+export class DispatchFailure extends Error {
+    constructor(readonly errorCode: string) {
+        super(errorCode);
+    }
+}
+
 export interface DispatchDeps {
     table: PageTable;
-    /** Opens one new background agent web tab for a createPage event; resolves to its tab id. */
+    /**
+     * Opens one new background agent web tab for a createPage event; resolves to its tab id once chrome has made its
+     * overlay, else throws a DispatchFailure (66-WR-06).
+     */
     openAgentTab(event: CommandEvent): Promise<string>;
     closeTab(tabId: string): void;
-    /** The web tab's own navigate (webTabNavigate); its reply decides the outcome. */
+    /**
+     * The bound tab's navigate. agent-browser-04 / 66-CR-01: the host sends it as the agent's browser.goto, so chrome's
+     * agent wall (agent tab, agent container, not stopped) applies and the mark lights; the reply is chrome's
+     * webTabAgent reply. A reply that is only { ok: true } counts as done.
+     */
     navigate(tabId: string, url: string): Promise<unknown>;
+    /** agent-browser-04: true while the user has agents stopped, so createPage opens nothing (chrome refuses it too). */
+    agentsStopped?(): boolean;
     agentCall(tabId: string, method: string, params: Record<string, unknown>): Promise<AgentReply>;
     pageInfo(tabId: string): { url: string; title: string };
 }
@@ -123,6 +142,9 @@ export async function dispatchCommand(event: CommandEvent, deps: DispatchDeps): 
         if (command.type === 'createPage') {
             if (table.tabOf(pageId) !== undefined) {
                 return failed('browser_error'); // a bound id never gets a second tab
+            }
+            if (deps.agentsStopped?.()) {
+                return failed('browser_owner_unavailable'); // agent-browser-04: Stop refuses new pages until Resume
             }
             const tabId = await deps.openAgentTab(event);
             const bound = table.bind(pageId, tabId);
@@ -146,8 +168,9 @@ export async function dispatchCommand(event: CommandEvent, deps: DispatchDeps): 
             return failed('browser_tab_not_found');
         }
         if (command.type === 'navigate') {
-            const reply = await deps.navigate(tabId, command.url ?? '') as AgentReply | undefined;
-            return reply?.ok === true ? completed() : failed('browser_error');
+            const reply = await deps.navigate(tabId, command.url || 'about:blank') as AgentReply | undefined;
+            const outcome = reply?.ok === true && reply.where === undefined ? completed() : outcomeOf(reply);
+            return outcome.status === 'completed' ? completed() : outcome;
         }
         if (command.type === 'reclaimPage' || command.type === 'restorePage') {
             return completed(); // the id is bound to a tab this host created; nothing is adopted
@@ -166,8 +189,8 @@ export async function dispatchCommand(event: CommandEvent, deps: DispatchDeps): 
             return outcome;
         }
         return failed('browser_command_unavailable');
-    } catch {
-        return failed('browser_error');
+    } catch (error) {
+        return failed(error instanceof DispatchFailure ? error.errorCode : 'browser_error');
     }
 }
 

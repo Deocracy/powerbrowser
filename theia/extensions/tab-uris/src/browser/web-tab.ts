@@ -178,8 +178,9 @@ export interface WebTabOptions {
      */
     grant?: string;
     /**
-     * Phase 66 (P66-06, P66-07): an Orca agent's page. Set only by @powerbrowser/orca-browser; the first webTabOpen
-     * carries it, and chrome records it only when it creates the overlay, so no request turns a user's tab into one.
+     * Phase 66 (P66-06, P66-07): an Orca agent's page. Set only by @powerbrowser/orca-browser; every webTabOpen of the
+     * widget carries it (agent-browser-02), and chrome records it only when it creates the overlay, so no request turns
+     * a user's tab into one. Chrome also keeps the tab id as an agent tab's for the session, flag or no flag.
      */
     agent?: boolean;
 }
@@ -407,8 +408,9 @@ export type WebTabMessage =
     // Phase 66 (P66-12): one Orca automation method on an agent tab, sent only by @powerbrowser/orca-browser's dispatcher;
     // method is the Orca name itself (chrome's AGENT_METHODS), params the command's params as orcad sent them.
     | { kind: 'webTabAgent'; tabId: string; method: string; params: Record<string, unknown> }
-    // Phase 66 (P66-21, P66-22): ends agent control of the tab for its lifetime; sent only by WebTabWidget.agentStop().
-    | { kind: 'webTabAgentStop'; tabId: string };
+    // Phase 66 (P66-21, P66-22): ends agent control of every agent tab of this frontend and refuses new ones
+    // (agent-browser-04); `resume` is the mark's Resume on a stopped agent tab. Sent only by WebTabWidget.agentStop().
+    | { kind: 'webTabAgentStop'; tabId: string; resume?: true };
 
 /**
  * Window-frame messages the same channel carries for the custom title bar:
@@ -770,8 +772,12 @@ export class WebTabWidget extends BaseWidget {
     protected grant: string | undefined;
     /** Phase 66 (P66-06): an Orca agent's tab (WebTabOptions.agent); fixed for the widget's life. */
     agent = false;
-    /** Phase 66: the agent flag goes on the first webTabOpen only. */
-    protected agentOpenSent = false;
+    protected resolveOpened: ((reply: WebTabReply) => void) | undefined;
+    /**
+     * 66-WR-06: the first webTabOpen's reply. openAgentTab's caller awaits it, so an Orca createPage fails (and the tab
+     * closes) when chrome made no overlay: no agent container, a refusal, agents stopped, or a timeout.
+     */
+    readonly opened: Promise<WebTabReply> = new Promise<WebTabReply>(resolve => { this.resolveOpened = resolve; });
     url: string;
     pageTitle = '';
     loading = false;
@@ -911,6 +917,7 @@ export class WebTabWidget extends BaseWidget {
         this.channel.register(this.tabId, this);
         this.refreshTitle();
         this.renderState();
+        this.setAgentControl(this.agentControl);
     }
 
     /** The body text state. Fixed literals; the tab counter, empty-page URL, kinds and error text never reach it. */
@@ -953,6 +960,15 @@ export class WebTabWidget extends BaseWidget {
         this.stateNode.classList.add('is-crashed');
     }
 
+    /**
+     * agent-browser-02 (66-CR-01): every webTabOpen of an agent widget carries the flag (the first open, a re-attach,
+     * the crash recreate and the lost-view reopen). Chrome honours it only when it creates the overlay, and it also
+     * remembers agent tab ids itself, so this is the second of two walls, not the only one.
+     */
+    protected agentFlag(): { agent?: true } {
+        return this.agent ? { agent: true as const } : {};
+    }
+
     protected setLostView(lost: boolean): void {
         if (this.lostView === lost) {
             return;
@@ -981,10 +997,12 @@ export class WebTabWidget extends BaseWidget {
         // refusal, a nack or silence (timeout included) marks the view lost.
         const grant = this.grant;
         this.grant = undefined;
-        const agent = this.agent && !this.agentOpenSent;
-        this.agentOpenSent = true;
-        void this.channel.request({ kind: 'webTabOpen', tabId: this.tabId, url: this.url, key: this.rowKey, ...(grant ? { grant } : {}), ...(agent ? { agent: true as const } : {}) })
-            .then(reply => this.setLostView(WebTabWidget.lostReply(reply)));
+        void this.channel.request({ kind: 'webTabOpen', tabId: this.tabId, url: this.url, key: this.rowKey, ...(grant ? { grant } : {}), ...this.agentFlag() })
+            .then(reply => {
+                this.setLostView(WebTabWidget.lostReply(reply));
+                this.resolveOpened?.(reply);
+                this.resolveOpened = undefined;
+            });
         this.publish();
         if (!this.listening) {
             this.listening = true;
@@ -1302,7 +1320,7 @@ export class WebTabWidget extends BaseWidget {
      * otherwise have skipped. Both Reload arms above end here.
      */
     protected async reopen(): Promise<WebTabReply> {
-        const reply = await this.channel.request({ kind: 'webTabOpen', tabId: this.tabId, url: this.url, key: this.rowKey });
+        const reply = await this.channel.request({ kind: 'webTabOpen', tabId: this.tabId, url: this.url, key: this.rowKey, ...this.agentFlag() });
         // One reading of "chrome no longer renders this tab" (G-14.1.1-48):
         // every site that folds an open-or-navigate reply -- onAfterAttach,
         // this reopen, and settle() -- reaches lost-view state through
@@ -1502,19 +1520,23 @@ export class WebTabWidget extends BaseWidget {
             }) as Promise<WebTabSiteInfo>;
     }
 
-    /** Phase 66 (P66-21): stores chrome's agent state and marks the tab's title while an agent controls it. */
+    /**
+     * Phase 66 (P66-21): stores chrome's agent state and marks the tab's title. agent-browser-04: an agent tab is
+     * marked for its whole life, so a background tab an agent opened is identifiable before the agent acts in it.
+     */
     setAgentControl(control: WebTabAgentControl): void {
         this.agentControl = control;
         const classes = this.title.className.split(' ').filter(c => c && c !== AGENT_CONTROLLED_CLASS);
-        this.title.className = (control.active ? [...classes, AGENT_CONTROLLED_CLASS] : classes).join(' ');
+        this.title.className = (this.agent || control.active ? [...classes, AGENT_CONTROLLED_CLASS] : classes).join(' ');
     }
 
     /**
-     * Phase 66 (P66-21, P66-22): ends agent control of this tab for its lifetime. Called only from the chrome bar's
-     * Stop click handler; chrome answers every later webTabAgent call for the tab agent-stopped.
+     * Phase 66 (P66-21, P66-22), agent-browser-04: Stop ends agent control of every agent tab of this frontend, and
+     * chrome refuses new agent tabs, until `resume` (the mark's Resume on a stopped agent tab). Called only from the
+     * chrome bar's agent-mark click handlers.
      */
-    agentStop(): Promise<WebTabReply> {
-        return this.channel.request({ kind: 'webTabAgentStop', tabId: this.tabId });
+    agentStop(resume = false): Promise<WebTabReply> {
+        return this.channel.request({ kind: 'webTabAgentStop', tabId: this.tabId, ...(resume ? { resume: true as const } : {}) });
     }
 
     /**
