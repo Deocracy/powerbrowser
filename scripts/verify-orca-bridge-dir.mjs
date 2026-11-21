@@ -17,7 +17,14 @@
 //     (imported; its main sits behind an entry guard) and the
 //     ORCAD_DATA_ROOT_FILE string literal of src/common/orca-agents-protocol.ts;
 //  c. writePrivateFile's body, cut out of PowerBrowserAPI.sys.mjs by brace
-//     matching.
+//     matching and parsed with theia/node_modules/typescript. The A-11 steps are
+//     read from the statements of the method, not matched over text: each must be a
+//     top-level `await IOUtils.<call>(...)` statement of the body, or one inside an
+//     `if (posix)` block with no else, in the order of A-11, with no unconditional
+//     return before the last step. A step in `if (false)`, behind another condition,
+//     inside a function that is never called, in a comment or in a string does not
+//     count (harness-static-structure-12). Without typescript this clause alone is
+//     not run, and the row exits 77 with the one SKIP line (SKIP-PROTOCOL.md).
 // Red on: nodePlatform not mapping linux, macosx and win to linux, darwin and
 // win32; a linux folder not under XDG_RUNTIME_DIR, else HOME/.cache; a base
 // under /tmp accepted; a darwin folder not under HOME/.cache; a win32 folder
@@ -28,9 +35,9 @@
 // on create, folder 0700 again, stale .tmp removed, .tmp created empty and
 // exclusively, .tmp 0600, content written with overwrite, .tmp moved over the
 // target), and "umask window" when any content write precedes the 0600 call.
-// The data-root join alone prints a SKIP while theia/extensions/orca-agents is
-// absent (lane p63-03 not merged); the directory present with either file or
-// export missing is red, never a SKIP.
+// The data-root join alone is not run while theia/extensions/orca-agents is
+// absent (lane p63-03 not merged), and the row then exits 77 with a SKIP line; the
+// directory present with either file or export missing is red, never a SKIP.
 //
 // Limit: path strings and source order only. The modes on disk and the
 // content are the live row's (orca-agent-status-live, lane p63-03), on Linux.
@@ -45,10 +52,13 @@
 //   node scripts/verify-orca-bridge-dir.mjs --self-test
 
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'orca-bridge-dir';
@@ -59,6 +69,9 @@ const ORCA_AGENTS = join(REPO_ROOT, 'theia', 'extensions', 'orca-agents');
 const DATA_ROOT = '/home/user/.powerbrowser/abcd1234.default/powerbrowser-orca';
 const WIN_DATA_ROOT = 'C:\\Users\\user\\AppData\\Roaming\\PowerBrowser\\Profiles\\abcd1234.default/powerbrowser-orca';
 const SUFFIX = '-bridge';
+const TS_DIR = join(REPO_ROOT, 'theia', 'node_modules', 'typescript');
+let ts = null;
+const loadTypeScript = () => { try { ts ??= createRequire(import.meta.url)(TS_DIR); return true; } catch { return false; } };
 
 const hex12 = (dataRoot) => createHash('sha256').update(dataRoot, 'utf8').digest('hex').slice(0, 12);
 const envOf = (vars) => (name) => vars[name];
@@ -154,38 +167,74 @@ export function extractMember(source, name) {
     return null;
 }
 
-// 67-RESEARCH A-11, in order. Each regex runs over the body with its // comments removed.
+// 67-RESEARCH A-11, in order. Each regex runs over the printed text (comments removed) of one statement's call.
 const STEPS = [
-    ['folder created 0700', /IOUtils\.makeDirectory\(\s*dir\b[^;]*permissions:\s*0o700/],
-    ['folder re-apply 0700', /IOUtils\.setPermissions\(\s*dir\s*,\s*0o700\b/],
-    ['stale .tmp removed', /IOUtils\.remove\(\s*tmp\b/],
-    ['exclusive create of an empty .tmp', /IOUtils\.write\(\s*tmp\s*,\s*new Uint8Array\(0\)\s*,\s*\{\s*mode:\s*["']create["']/],
-    ['.tmp set 0600', /IOUtils\.setPermissions\(\s*tmp\s*,\s*0o600\b/],
-    ['content written with overwrite', /IOUtils\.writeUTF8\(\s*tmp\s*,[^;]*mode:\s*["']overwrite["']/],
-    ['.tmp moved over the target', /IOUtils\.move\(\s*tmp\s*,\s*path\b/],
+    ['folder created 0700', /^IOUtils\.makeDirectory\(\s*dir\b[^;]*permissions:\s*0o700/],
+    ['folder re-apply 0700', /^IOUtils\.setPermissions\(\s*dir\s*,\s*0o700\b/],
+    ['stale .tmp removed', /^IOUtils\.remove\(\s*tmp\b/],
+    ['exclusive create of an empty .tmp', /^IOUtils\.write\(\s*tmp\s*,\s*new Uint8Array\(0\)\s*,\s*\{\s*mode:\s*["']create["']/],
+    ['.tmp set 0600', /^IOUtils\.setPermissions\(\s*tmp\s*,\s*0o600\b/],
+    ['content written with overwrite', /^IOUtils\.writeUTF8\(\s*tmp\s*,[^;]*mode:\s*["']overwrite["']/],
+    ['.tmp moved over the target', /^IOUtils\.move\(\s*tmp\s*,\s*path\b/],
 ];
 
-/** writePrivateFile's call order (P63-36) in a boundary source. */
+/**
+ * The statements of writePrivateFile that run on every call, in order: [{ text, guard }] with guard null for a top-level
+ * statement and 'posix' for one inside `if (posix) { ... }`. Anything else (another condition, a nested function, a loop)
+ * contributes no entry, so a step placed there is not found. Also { returnsAt }: the index of the first unconditional
+ * top-level return, or -1.
+ */
+function runningStatements(body) {
+    const sf = ts.createSourceFile('writePrivateFile.js', `async function f()${body}`, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+    const fn = sf.statements.find((st) => ts.isFunctionDeclaration(st));
+    const printer = ts.createPrinter({ removeComments: true });
+    const out = [];
+    let returnsAt = -1;
+    const record = (st, guard) => {
+        const e = ts.isExpressionStatement(st) ? st.expression : null;
+        if (e && ts.isAwaitExpression(e) && ts.isCallExpression(e.expression)) out.push({ text: printer.printNode(ts.EmitHint.Unspecified, e.expression, sf), guard });
+        else if (ts.isVariableStatement(st)) out.push({ text: printer.printNode(ts.EmitHint.Unspecified, st, sf), guard, declaration: true });
+    };
+    for (const st of fn?.body?.statements ?? []) {
+        if (ts.isReturnStatement(st) && returnsAt < 0) returnsAt = out.length;
+        if (ts.isIfStatement(st) && !st.elseStatement && ts.isIdentifier(st.expression) && st.expression.text === 'posix' && ts.isBlock(st.thenStatement)) {
+            for (const inner of st.thenStatement.statements) record(inner, 'posix');
+        } else record(st, null);
+    }
+    return { running: out, returnsAt };
+}
+
+/** writePrivateFile's call order (P63-36) in a boundary source. Returns { fails, skip }; skip is set when typescript is absent. */
 export function orderVerdict(source) {
     const body = extractMember(source ?? '', 'writePrivateFile');
-    if (body === null) return ['PowerBrowserAPI.sys.mjs has no async writePrivateFile member'];
-    const code = body.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+    if (body === null) return { fails: ['PowerBrowserAPI.sys.mjs has no async writePrivateFile member'], skip: null };
+    if (!loadTypeScript()) return { fails: [], skip: 'the writePrivateFile order clause did not run: theia/node_modules/typescript is absent. Next step: run the audited Theia install' };
+    const { running, returnsAt } = runningStatements(body);
+    const calls = running.filter((r) => !r.declaration);
     const fails = [];
     let last = -1;
     let lastName = 'the start of the method';
     for (const [name, re] of STEPS) {
-        const m = re.exec(code);
-        if (!m) { fails.push(`writePrivateFile has no ${name} step (67-RESEARCH A-11)`); continue; }
-        if (m.index < last) fails.push(`writePrivateFile's ${name} step comes before ${lastName}, out of A-11 order`);
-        last = m.index;
+        const at = calls.findIndex((c) => re.test(c.text));
+        if (at < 0) { fails.push(`writePrivateFile has no ${name} step that runs on every call (a top-level await, or inside if (posix); 67-RESEARCH A-11)`); continue; }
+        if (at < last) fails.push(`writePrivateFile's ${name} step comes before ${lastName}, out of A-11 order`);
+        last = at;
         lastName = `the ${name} step`;
     }
-    const chmod = STEPS[4][1].exec(code)?.index ?? Infinity;
-    const empty = STEPS[3][1].exec(code)?.index ?? -1;
-    for (const m of code.matchAll(/IOUtils\.write(?:UTF8|JSON)?\(/g)) {
-        if (m.index < chmod && m.index !== empty) fails.push('umask window: writePrivateFile writes content before the .tmp is set 0600, so another user can read it while IOUtils leaves it 0666 under the umask');
+    // An unconditional return before the final step makes everything after it dead code.
+    if (returnsAt >= 0) {
+        const moveAt = calls.findIndex((c) => STEPS[6][1].test(c.text));
+        const returnPos = running.slice(0, returnsAt).filter((r) => !r.declaration).length;
+        if (moveAt < 0 || moveAt >= returnPos) fails.push('writePrivateFile returns unconditionally before its last step, so the steps after the return never run');
     }
-    return fails;
+    const chmod = calls.findIndex((c) => STEPS[4][1].test(c.text));
+    const empty = calls.findIndex((c) => STEPS[3][1].test(c.text));
+    calls.forEach((c, i) => {
+        if (/^IOUtils\.write(?:UTF8|JSON)?\(/.test(c.text) && (chmod < 0 || i < chmod) && i !== empty) {
+            fails.push('umask window: writePrivateFile writes content before the .tmp is set 0600, so another user can read it while IOUtils leaves it 0666 under the umask');
+        }
+    });
+    return { fails, skip: null };
 }
 
 /**
@@ -209,14 +258,19 @@ export async function literalJoin(env, extDir) {
     return { fails };
 }
 
-/** Every clause over one OrcaEnv namespace, one orca-agents directory and one boundary file. Resolves { fails, join }. */
+/** Every clause over one OrcaEnv namespace, one orca-agents directory and one boundary file. Resolves { fails, join, skips }. */
 export async function check({ env, extDir, apiFile }) {
     let api = null;
     try { api = readFileSync(apiFile, 'utf8'); } catch { /* reported by orderVerdict */ }
-    const fails = [...platformVerdict(env), ...(await folderVerdict(env)), ...joinVerdict(env), ...orderVerdict(api)];
+    const order = orderVerdict(api);
+    const fails = [...platformVerdict(env), ...(await folderVerdict(env)), ...joinVerdict(env), ...order.fails];
+    const skips = order.skip ? [order.skip] : [];
     const lit = await literalJoin(env, extDir);
-    if (lit.skip) return { fails, join: lit.skip };
-    return { fails: [...fails, ...lit.fails], join: 'compared' };
+    if (lit.skip) {
+        skips.push('the data-root literal join did not run: theia/extensions/orca-agents is absent (lane p63-03 not merged)');
+        return { fails, join: lit.skip, skips };
+    }
+    return { fails: [...fails, ...lit.fails], join: 'compared', skips };
 }
 
 // ---------------------------------------------------------------------------
@@ -246,7 +300,7 @@ async function runSelfTest() {
         copyFileSync(BOUNDARY, apiFile);
         const base = { env: real, extDir, apiFile };
         const control = await check(base);
-        if (control.fails.length || control.join !== 'compared') {
+        if (control.fails.length || control.join !== 'compared' || control.skips.length) {
             console.error(`${NAME} self-test: FAIL -- the control is not green and compared: ${control.join}; ${control.fails.join(' | ')}`);
             return 1;
         }
@@ -260,6 +314,7 @@ async function runSelfTest() {
         const swap = (a, b) => (text) => { if (!text.includes(a)) throw new Error(`plant target not found: ${a.slice(0, 60)}`); return text.replace(a, b); };
         const WRITE = '    await IOUtils.writeUTF8(tmp, String(text), { mode: "overwrite" });\n';
         const CHMOD = '    if (posix) {\n      await IOUtils.setPermissions(tmp, 0o600, false);\n    }\n';
+        const MOVE = '    await IOUtils.move(tmp, path);\n';
         const plants = [
             { name: 'bridgeDirFor accepts a relative LOCALAPPDATA', naming: 'relative LOCALAPPDATA', env: wrap({ bridgeDirFor: async (root, getEnv, p) => (p === 'win32' && getEnv('LOCALAPPDATA') && !/^[A-Za-z]:/.test(getEnv('LOCALAPPDATA')) ? `${getEnv('LOCALAPPDATA')}\\pb-orca-${hex12(root)}-bridge` : real.bridgeDirFor(root, getEnv, p)) }) },
             { name: 'a base under /tmp accepted', naming: '/tmp', env: wrap({ bridgeDirFor: async (root, getEnv, p) => ((getEnv('XDG_RUNTIME_DIR') ?? '').startsWith('/tmp') ? `${getEnv('XDG_RUNTIME_DIR')}/pb-orca-${hex12(root)}-bridge` : real.bridgeDirFor(root, getEnv, p)) }) },
@@ -271,6 +326,14 @@ async function runSelfTest() {
             { name: 'writeUTF8 moved before the 0o600 call', naming: 'umask window', env: real, ...fileEdit(apiFile, (t) => swap(CHMOD + WRITE, WRITE + CHMOD)(t)) },
             { name: 'the folder re-apply removed', naming: 'folder re-apply 0700', env: real, ...fileEdit(apiFile, swap('    if (posix) {\n      await IOUtils.setPermissions(dir, 0o700, false);\n    }\n', '')) },
             { name: 'the exclusive create removed', naming: 'exclusive create', env: real, ...fileEdit(apiFile, swap('    await IOUtils.write(tmp, new Uint8Array(0), { mode: "create" });\n', '')) },
+            // Harness-static-structure-12: text that survives but control flow that does not.
+            { name: 'the 0600 call inside if (false)', naming: '.tmp set 0600 step that runs on every call', env: real, ...fileEdit(apiFile, swap(CHMOD, '    if (false) {\n      await IOUtils.setPermissions(tmp, 0o600, false);\n    }\n')) },
+            { name: 'the 0600 call behind another condition than posix', naming: '.tmp set 0600 step that runs on every call', env: real, ...fileEdit(apiFile, swap(CHMOD, '    if (posix && text !== undefined) {\n      await IOUtils.setPermissions(tmp, 0o600, false);\n    }\n')) },
+            { name: 'the 0600 call in a function that is never called', naming: '.tmp set 0600 step that runs on every call', env: real, ...fileEdit(apiFile, swap(CHMOD, '    const later = async () => {\n      await IOUtils.setPermissions(tmp, 0o600, false);\n    };\n')) },
+            { name: 'the 0600 call reduced to a trailing comment', naming: '.tmp set 0600 step that runs on every call', env: real, ...fileEdit(apiFile, swap(CHMOD, '    await IOUtils.stat(tmp); // IOUtils.setPermissions(tmp, 0o600, false);\n')) },
+            { name: 'the 0600 call reduced to a string literal', naming: '.tmp set 0600 step that runs on every call', env: real, ...fileEdit(apiFile, swap(CHMOD, '    await IOUtils.stat("IOUtils.setPermissions(tmp, 0o600, false)");\n')) },
+            { name: 'an unconditional return before the move', naming: 'returns unconditionally before its last step', env: real, ...fileEdit(apiFile, swap(MOVE, '    return;\n' + MOVE)) },
+            { name: 'the 0600 else branch (posix guard with an else)', naming: '.tmp set 0600 step that runs on every call', env: real, ...fileEdit(apiFile, swap(CHMOD, '    if (posix) {\n      await IOUtils.setPermissions(tmp, 0o600, false);\n    } else {\n      await IOUtils.stat(tmp);\n    }\n')) },
         ];
         let failures = 0;
         for (const p of plants) {
@@ -315,10 +378,13 @@ if (isEntryPoint) {
         process.exit(1);
     }
     const r = await check({ env, extDir: ORCA_AGENTS, apiFile: BOUNDARY });
-    if (r.join.startsWith('SKIP')) console.log(`${NAME}: SKIP of the data-root literal join only -- lane p63-03 not merged (theia/extensions/orca-agents is absent)`);
     if (r.fails.length) {
         for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`);
         process.exit(1);
+    }
+    if (r.skips.length) {
+        console.log(skipLine(NAME, r.skips.join('; ')));
+        process.exit(SKIP_EXIT);
     }
     console.log(`${NAME}: PASS -- linux, darwin, win32: nodePlatform maps each, bridgeDirFor builds each -bridge folder (no /tmp base, no relative LOCALAPPDATA, aliasPathFor's 12 hex), bridgeFileFor joins with each separator; data-root literal ${r.join}; writePrivateFile order ok`);
     process.exit(0);
