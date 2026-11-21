@@ -1694,7 +1694,9 @@ jobs:
           TAG_RE='^v[0-9]+\.[0-9]+\.[0-9]+$'
           [[ $TAG =~ $TAG_RE ]] || { echo "release-train: FAIL -- Orca tag '$TAG' is not vX.Y.Z. Next step: check detect-orca." >&2; exit 1; }
           TITLE="release-train: orca ${TAG} stopped"
-          STAGE="$STAGE_OUT"
+          # The stage comes from the job that ran Orca's code, so it is untrusted text (ci-supply-chain-06): it is
+          # cut to 300 characters of a set with no backtick or newline before it enters the issue's code span.
+          STAGE=$(printf '%s' "$STAGE_OUT" | tr -cd "A-Za-z0-9 _./:@()'*,=<>+-" | cut -c1-300)
           if [ "$REPLAY" = "failure" ] && [ -z "$STAGE" ]; then STAGE="FAIL -- the Orca replay job ended failure with no stage line"; fi
           case "$STAGE" in *"FAIL -- "*) ;; *) echo "release-train: orca ${TAG} stage '${STAGE:-none}'; no stop issue"; exit 0 ;; esac
           printf 'The weekly Orca re-pin to %s stopped. No branch or PR was published and the pin stays.\n\nStage: `%s`\n\nRun: %s\n\nNext step: read the stage in docs/RELEASING.md "Orca re-pin (OVL-02)", fix it, then dispatch the release train with repin-orca=true.\n' "$TAG" "$STAGE" "$RUN_URL" > "$RUNNER_TEMP/orca-stop.md"

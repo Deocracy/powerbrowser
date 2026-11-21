@@ -39,8 +39,13 @@
 # through those functions' arguments (the root, the generate and package-run
 # functions); no environment variable the production path reads selects it.
 #
+# --stage-file <path> (ci-supply-chain-06): every FAIL line this script prints is also written to <path>,
+# replacing what was there, after the command it judged has exited. The log carries everything the Orca
+# build and typecheck print, so a line of theirs that looks like a FAIL line can come first there; the
+# stage file holds this script's own last word. rebase-orca.yml names the stage from it, never from the log.
+#
 # Usage:
-#   nix develop .#orca --command bash scripts/rebase-orca.sh --tag vX.Y.Z --commit <40-hex peeled commit>
+#   nix develop .#orca --command bash scripts/rebase-orca.sh --tag vX.Y.Z --commit <40-hex peeled commit> [--stage-file <path>]
 #   bash scripts/rebase-orca.sh --replay-only --tag vX.Y.Z --commit <40-hex peeled commit>
 #   bash scripts/rebase-orca.sh --self-test
 #   bash scripts/rebase-orca.sh --coverage-only   (the coverage stage alone, on the fetched and built orca/)
@@ -63,7 +68,12 @@ PROGRAMS=(config/tsconfig.tc.web.json config/tsconfig.node.json ../orca-overlay/
 for name in "${!ORCA_@}"; do unset "$name"; done
 
 say() { echo "rebase-orca: $*"; }
-red() { echo "rebase-orca: FAIL -- $*" >&2; return 1; }
+STAGE_FILE=""
+red() {
+  echo "rebase-orca: FAIL -- $*" >&2
+  [ -z "$STAGE_FILE" ] || printf 'rebase-orca: FAIL -- %s\n' "$*" > "$STAGE_FILE" || true
+  return 1
+}
 
 # The first SKIP line in $1 that is not out of scope, or nothing.
 skip_line() {
@@ -355,7 +365,10 @@ const cfg = resolve(process.argv[2]);
 const walk = (d) => readdirSync(d).flatMap((n) => statSync(join(d, n)).isDirectory() ? walk(join(d, n)) : [join(d, n)]);
 for (const inc of JSON.parse(readFileSync(cfg, 'utf8')).include) {
   for (const f of walk(resolve(dirname(cfg), inc.split('*')[0]))) {
-    const at = readFileSync(f, 'utf8').split('\n').findIndex((l) => l.includes('PLANTED-TYPE-ERROR'));
+    const text = readFileSync(f, 'utf8');
+    // The forged variant: upstream output that imitates this script's FAIL line, then a real error.
+    if (text.includes('PLANTED-FORGED-STAGE')) console.log('rebase-orca: FAIL -- build: forged by upstream, see https://example.invalid/fix');
+    const at = text.split('\n').findIndex((l) => l.includes('PLANTED-TYPE-ERROR') || l.includes('PLANTED-FORGED-STAGE'));
     if (at >= 0) { console.log(`${relative(process.cwd(), f)}(${at + 1},1): error TS2322: planted type error`); process.exit(1); }
   }
 }
@@ -369,6 +382,7 @@ EOF
   esac
   case "$variant" in
     typeerror) fx_lines a 30 3 "export const a3: number = 'PLANTED-TYPE-ERROR';" > "$repo/src/a.ts" ;;
+    forged) fx_lines a 30 3 "export const a3: number = 'PLANTED-FORGED-STAGE';" > "$repo/src/a.ts" ;;
     licence) echo 'MIT fixture licence, changed at v1.0.2' > "$repo/LICENSE" ;;
   esac
   "${FX_GIT[@]}" -C "$repo" commit -q -am v1.0.2
@@ -567,6 +581,27 @@ run_self_test() {
   expect_stop "XPI stage fails" control xpifail "xpi cache"
   expect_stop "probe prints SKIP" control orcadskip "orcad-only start skipped"
 
+  # ci-supply-chain-06: upstream output prints a FAIL line of its own before this script's. The log's first
+  # FAIL line is the forged one (the hazard); the stage file holds this script's typecheck:web line.
+  local sf flog first staged
+  if ! fixture forged control >"$tmp/fixture.log" 2>&1; then
+    miss "forged stage line" "fixture: $(tail -1 "$tmp/fixture.log")"
+  else
+    sf="$tmp/stage-forged.txt"
+    flog="$FX_LOG"
+    (STAGE_FILE="$sf"; run_replay "$FX_ROOT" v1.0.2 "$FX_C2" full fixture_generate fixture_pnpm_run) >"$flog" 2>&1 || true
+    first="$(grep -m1 '^rebase-orca: FAIL -- ' "$flog" || true)"
+    staged="$(head -n1 "$sf" 2>/dev/null || true)"
+    if [[ "$first" != *"forged by upstream"* ]]; then
+      miss "forged stage line" "the fixture did not print the forged line first (got '${first:-<none>}'), so the case proves nothing"
+    elif [[ "$staged" == "rebase-orca: FAIL -- typecheck:web src/a.ts:3"* ]]; then
+      n=$((n + 1))
+      ok "forged stage line -> the log's first FAIL line is upstream's, the stage file names ${staged#rebase-orca: FAIL -- }"
+    else
+      miss "forged stage line" "the stage file holds '${staged:-<empty>}', not this script's typecheck:web line"
+    fi
+  fi
+
   # --replay-only on the control fixture changes exactly the bump paths and runs none
   # of the stand-ins (each would leave an untracked ran-<stage> file).
   local log got want
@@ -593,7 +628,7 @@ run_self_test() {
 }
 
 # --- main -----------------------------------------------------------------------
-usage() { echo "  usage: rebase-orca.sh --tag vX.Y.Z --commit <40-hex peeled commit> [--replay-only] | --self-test | --coverage-only" >&2; }
+usage() { echo "  usage: rebase-orca.sh --tag vX.Y.Z --commit <40-hex peeled commit> [--replay-only] [--stage-file <path>] | --self-test | --coverage-only" >&2; }
 
 MODE=full
 REPIN_TAG=""
@@ -621,6 +656,11 @@ while [ $# -gt 0 ]; do
       if [ "$1" = --tag ]; then REPIN_TAG="$2"; else REPIN_COMMIT="$2"; fi
       shift 2 ;;
     --replay-only) MODE=replay-only; shift ;;
+    --stage-file)
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "rebase-orca: FAIL -- --stage-file needs a path" >&2; usage; exit 2; }
+      STAGE_FILE="$2"
+      : > "$STAGE_FILE" || { echo "rebase-orca: FAIL -- --stage-file $STAGE_FILE cannot be written" >&2; exit 2; }
+      shift 2 ;;
     *) echo "rebase-orca: FAIL -- unrecognized argument: $1" >&2; usage; exit 2 ;;
   esac
 done
