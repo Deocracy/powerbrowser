@@ -142,25 +142,38 @@ catalogue_has_row() {
 # literal "..." contract is printed as 'a literal Cc["..."] contract ID' because it has nothing to compare.
 actor_child_unnamed_tokens() {
   local catalogue="$1" base="$2" line_no="$3" text="$4"
-  local cell token escaped
+  local cell token uses literals
   cell="$(grep -E "^\|[^|]*\| \`${base//./\\.}:${line_no}\` \|" "$catalogue" | head -n 1 | cut -d'|' -f2 || true)"
-  local -a tokens=()
+  # Every Cc[ on the line must be a literal Cc["..."] contract: a second, dynamic or template-literal use beside a
+  # catalogued literal is not covered by the row, so the counts must be equal (the escape of any one contract never
+  # waives another use on the line).
+  uses="$(printf '%s\n' "$text" | grep -oF 'Cc[' | wc -l)"
+  literals="$(printf '%s\n' "$text" | grep -oE 'Cc\["[^"]*"\]' | wc -l)"
+  if [ "$uses" -ne "$literals" ]; then
+    echo 'a literal Cc["..."] contract ID for every Cc[ use'
+  fi
   while IFS= read -r token; do
-    [ -n "$token" ] && tokens+=("$token")
-  done < <(printf '%s\n' "$text" | grep -oE 'Cc\["[^"]*"\]|Ci\.[A-Za-z0-9_]+' || true)
-  case "$text" in
-    *'Cc['*)
-      if ! printf '%s\n' "$text" | grep -qE 'Cc\["[^"]*"\]'; then
-        echo 'a literal Cc["..."] contract ID'
-      fi
-      ;;
-  esac
-  for token in "${tokens[@]+"${tokens[@]}"}"; do
-    escaped="$(printf '%s' "$token" | sed 's/[][\.*^$]/\\&/g')"
-    if ! printf '%s\n' "$cell" | grep -Eq "(^|[^A-Za-z0-9_])${escaped}([^A-Za-z0-9_]|\$)"; then
+    [ -n "$token" ] || continue
+    if ! cell_names_token "$cell" "$token"; then
       echo "$token"
     fi
-  done
+  done < <(printf '%s\n' "$text" | grep -oE 'Cc\["[^"]*"\]|Ci\.[A-Za-z0-9_]+' || true)
+}
+
+# True when <cell> holds <token> as a fixed string (no pattern characters are live) with no identifier character directly
+# before or after it, so Ci.nsIPrincipal is not found inside Ci.nsIPrincipalX and a contract with ? + ( ) { } matches itself only.
+cell_names_token() {
+  awk -v cell="$1" -v tok="$2" 'BEGIN {
+    off = 0; rest = cell
+    while ((i = index(rest, tok)) > 0) {
+      at = off + i
+      pre = (at > 1) ? substr(cell, at - 1, 1) : ""
+      post = substr(cell, at + length(tok), 1)
+      if (pre !~ /[A-Za-z0-9_]/ && post !~ /[A-Za-z0-9_]/) exit 0
+      off = at; rest = substr(cell, off + 1)
+    }
+    exit 1
+  }'
 }
 
 # The shell's gBrowser stand-in (powerbrowser.js) is a plain object that
@@ -519,10 +532,14 @@ EOF2
   # harness-other-08: a catalogued line is waived only while its row names the contract ID and the interface the line
   # carries. Each plant keeps the catalogued line number and changes what the line does; a Services. line is refused
   # although it is catalogued, which is the claim the comment on ACTOR_CHILD_PATTERNS makes.
-  local fixture_cat="$tmp/fixture-catalogue.md" contract_line cp_name cp_body cp_want
-  printf '%s\n' '| Pattern | File:Line | Function | Why | Risk |' '|---|---|---|---|---|' \
-    "| \`Cc[\"@mozilla.org/consoleAPI-storage;1\"]\` / \`Ci.nsIConsoleAPIStorage\` | \`$ACTOR_CHILD_BASENAME:2\` | \`actorCreated\` | fixture | fixture |" \
-    "| \`Services.prefs\` | \`$ACTOR_CHILD_BASENAME:3\` | \`actorCreated\` | fixture | fixture |" > "$fixture_cat"
+  local fixture_cat="$tmp/fixture-catalogue.md" contract_line cp_name cp_body cp_want cp_cell
+  local default_cell='`Cc["@mozilla.org/consoleAPI-storage;1"]` / `Ci.nsIConsoleAPIStorage`'
+  write_fixture_cat() {
+    printf '%s\n' '| Pattern | File:Line | Function | Why | Risk |' '|---|---|---|---|---|' \
+      "| $1 | \`$ACTOR_CHILD_BASENAME:2\` | \`actorCreated\` | fixture | fixture |" \
+      "| \`Services.prefs\` | \`$ACTOR_CHILD_BASENAME:3\` | \`actorCreated\` | fixture | fixture |" > "$fixture_cat"
+  }
+  write_fixture_cat "$default_cell"
   contract_line='  this.s = Cc["@mozilla.org/consoleAPI-storage;1"].getService(Ci.nsIConsoleAPIStorage);'
   printf '// control\n%s\n' "$contract_line" > "$tmp/child/$ACTOR_CHILD_BASENAME"
   if CATALOGUE_PATH="$fixture_cat" ACTOR_CHILD_TARGET="$tmp/child/$ACTOR_CHILD_BASENAME" scan_internals_boundary "$tmp/child" >/dev/null 2>"$tmp/self-test-contract.err"; then
@@ -532,12 +549,33 @@ EOF2
     cat "$tmp/self-test-contract.err" >&2
     overall=1
   fi
+  # A contract with pattern characters in it (? + ( ) { }) matches its own row: no false red from an unescaped metacharacter.
+  write_fixture_cat '`Cc["@mozilla.org/x+y(1){2}?;1"]` / `Ci.nsIConsoleAPIStorage`'
+  printf '// control\n  this.s = Cc["@mozilla.org/x+y(1){2}?;1"].getService(Ci.nsIConsoleAPIStorage);\n' > "$tmp/child/$ACTOR_CHILD_BASENAME"
+  if CATALOGUE_PATH="$fixture_cat" ACTOR_CHILD_TARGET="$tmp/child/$ACTOR_CHILD_BASENAME" scan_internals_boundary "$tmp/child" >/dev/null 2>"$tmp/self-test-contract.err"; then
+    echo "check-internals-boundary: --self-test PASS -- control: a contract with pattern characters matches its own row"
+  else
+    echo "check-internals-boundary: --self-test FAIL -- control: a contract with pattern characters was rejected against its own row (a false red)" >&2
+    cat "$tmp/self-test-contract.err" >&2
+    overall=1
+  fi
+  write_fixture_cat "$default_cell"
   for child_plant in \
     'swapped-contract|  this.s = Cc["@mozilla.org/file/local;1"].getService(Ci.nsIConsoleAPIStorage);|Cc["@mozilla.org/file/local;1"]' \
     'swapped-interface|  this.s = Cc["@mozilla.org/consoleAPI-storage;1"].getService(Ci.nsIFile);|Ci.nsIFile' \
     'dynamic-contract|  this.s = Cc[name].getService(Ci.nsIConsoleAPIStorage);|a literal Cc["..."] contract ID' \
-    'extra-interface|  this.s = Cc["@mozilla.org/consoleAPI-storage;1"].getService(Ci.nsIConsoleAPIStorage); Ci.nsIProcess;|Ci.nsIProcess'; do
-    cp_name="${child_plant%%|*}"; cp_body="${child_plant#*|}"; cp_want="${cp_body#*|}"; cp_body="${cp_body%|*}"
+    'extra-interface|  this.s = Cc["@mozilla.org/consoleAPI-storage;1"].getService(Ci.nsIConsoleAPIStorage); Ci.nsIProcess;|Ci.nsIProcess' \
+    'literal-plus-dynamic-use|  this.s = Cc["@mozilla.org/consoleAPI-storage;1"].getService(Ci.nsIConsoleAPIStorage); this.t = Cc[name].getService(Ci.nsIConsoleAPIStorage);|a literal Cc["..."] contract ID for every Cc[ use' \
+    'literal-plus-template-use|  this.s = Cc["@mozilla.org/consoleAPI-storage;1"].getService(Ci.nsIConsoleAPIStorage); this.t = Cc[`@mozilla.org/file/local;1`].createInstance(Ci.nsIConsoleAPIStorage);|a literal Cc["..."] contract ID for every Cc[ use' \
+    'literal-plus-single-quote-use|  this.s = Cc["@mozilla.org/consoleAPI-storage;1"].getService(Ci.nsIConsoleAPIStorage); this.t = Cc['"'"'@mozilla.org/file/local;1'"'"'].createInstance(Ci.nsIConsoleAPIStorage);|a literal Cc["..."] contract ID for every Cc[ use' \
+    'near-miss-spelling|  this.s = Cc["@mozilla.org/x+y;1"].getService(Ci.nsIConsoleAPIStorage);|Cc["@mozilla.org/x+y;1"]|`Cc["@mozilla.org/xxy;1"]` / `Ci.nsIConsoleAPIStorage`'; do
+    cp_name="${child_plant%%|*}"; cp_body="${child_plant#*|}"
+    cp_cell="$default_cell"
+    case "$cp_body" in
+      *'|'*'|'*) cp_cell="${cp_body##*|}"; cp_body="${cp_body%|*}" ;;
+    esac
+    cp_want="${cp_body#*|}"; cp_body="${cp_body%|*}"
+    write_fixture_cat "$cp_cell"
     printf '// planted %s\n%s\n' "$cp_name" "$cp_body" > "$tmp/child/$ACTOR_CHILD_BASENAME"
     if CATALOGUE_PATH="$fixture_cat" ACTOR_CHILD_TARGET="$tmp/child/$ACTOR_CHILD_BASENAME" scan_internals_boundary "$tmp/child" >/dev/null 2>"$tmp/self-test-contract.err"; then
       echo "check-internals-boundary: --self-test FAIL -- a catalogued actor-child line with a $cp_name was NOT rejected" >&2
@@ -559,6 +597,7 @@ EOF2
       overall=1
     fi
   done
+  write_fixture_cat "$default_cell"
   printf '// planted catalogued Services. line\n// (line 2 left empty)\n  const prefs = Services.prefs;\n' > "$tmp/child/$ACTOR_CHILD_BASENAME"
   if CATALOGUE_PATH="$fixture_cat" ACTOR_CHILD_TARGET="$tmp/child/$ACTOR_CHILD_BASENAME" scan_internals_boundary "$tmp/child" >/dev/null 2>"$tmp/self-test-contract.err"; then
     echo "check-internals-boundary: --self-test FAIL -- a catalogued Services. line in the actor child was NOT rejected" >&2
