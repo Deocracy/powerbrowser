@@ -15,7 +15,8 @@
 #   2. checks the shell (node 24, corepack, objdump)
 #   3. scrubs every inherited ORCA_* variable plus ELECTRON_RUN_AS_NODE,
 #      NODE_OPTIONS and NODE_REPL_EXTERNAL_MODULE (this tree is worked on from
-#      inside Orca desktop, whose variables must never reach the build)
+#      inside Orca desktop, whose variables must never reach the build); it runs
+#      before step 1, so no child process of either path inherits them
 #   4. sets only Orca's and corepack's own documented knobs
 #   5. corepack provides the pnpm version named by orca/package.json
 #   6. pnpm install --frozen-lockfile --ignore-scripts (Orca's postinstall and
@@ -68,8 +69,23 @@ run_step() {
   "$@" || fail "step $name exited $?"
 }
 
-# 1. orca/ at the pin.
-run_step fetch-verify bash "$REPO_ROOT/scripts/fetch-orca.sh"
+# 3. Scrub, before any child process that reads them starts (fetch-orca.sh, the node seams.json
+# reader, apply-patches.sh), on both the full and the --panes-only path. ${!ORCA_@} rather than
+# compgen -e: the dev shell's non-interactive bash is built without the completion builtins.
+for name in "${!ORCA_@}"; do unset "$name"; done
+unset ELECTRON_RUN_AS_NODE NODE_OPTIONS NODE_REPL_EXTERNAL_MODULE
+if env | grep -q '^ORCA_'; then fail "scrub: an ORCA_ variable survived the scrub"; fi
+
+# 1. orca/ at the configuration pin. The pin is read once here and reported at the end; an inherited
+# TAG or COMMIT (fetch-orca.sh's re-pin override, generic names a caller's job may export) never
+# reaches the fetch, so the tree verified is the tree reported.
+# shellcheck source=/dev/null
+. "$REPO_ROOT/generated/upstream-pins.env" || fail "generated/upstream-pins.env is missing or unreadable; run node scripts/generate.mjs"
+[ -n "${UPSTREAM_ORCA_TAG:-}" ] && [ -n "${UPSTREAM_ORCA_COMMIT:-}" ] \
+  || fail "generated/upstream-pins.env carries no UPSTREAM_ORCA_TAG/UPSTREAM_ORCA_COMMIT; run node scripts/generate.mjs"
+BUILT_TAG="$UPSTREAM_ORCA_TAG"
+BUILT_COMMIT="$UPSTREAM_ORCA_COMMIT"
+run_step fetch-verify env -u TAG -u COMMIT bash "$REPO_ROOT/scripts/fetch-orca.sh"
 
 # 1b. Overlay (P62-09). run_step calls this under ||, so errexit is off in here:
 # every command that can fail is checked by hand.
@@ -165,11 +181,7 @@ if [ "$node_platform" = "linux" ]; then
   command -v objdump >/dev/null || fail "shell entry: need objdump on Linux; run inside nix develop .#orca"
 fi
 
-# 3. Scrub. ${!ORCA_@} rather than compgen -e: the dev shell's non-interactive
-# bash is built without the completion builtins, so compgen does not exist there.
-for name in "${!ORCA_@}"; do unset "$name"; done
-unset ELECTRON_RUN_AS_NODE NODE_OPTIONS NODE_REPL_EXTERNAL_MODULE
-if env | grep -q '^ORCA_'; then fail "scrub: an ORCA_ variable survived the scrub"; fi
+# 3. The scrub ran before step 1, above.
 
 # 4. Orca's and corepack's own knobs only.
 export ELECTRON_SKIP_BINARY_DOWNLOAD=1
@@ -231,6 +243,4 @@ run_step panes bash "$REPO_ROOT/scripts/build-orca-panes.sh"
 # 10. The thin browser host (Phase 66), into pb-panes/ after the pane step emptied it.
 run_step browser-host bash "$REPO_ROOT/scripts/build-orca-browser-host.sh"
 
-# shellcheck source=/dev/null
-. "$REPO_ROOT/generated/upstream-pins.env"
-echo "build-orca: PASS -- built $UPSTREAM_ORCA_TAG ($UPSTREAM_ORCA_COMMIT) in $(( $(date +%s) - START ))s; log $LOG"
+echo "build-orca: PASS -- built $BUILT_TAG ($BUILT_COMMIT) in $(( $(date +%s) - START ))s; log $LOG"
