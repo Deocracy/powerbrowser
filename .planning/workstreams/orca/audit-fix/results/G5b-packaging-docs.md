@@ -1,6 +1,6 @@
 # Result: G5b-packaging-docs
 
-Branch: worktree-agent-a0ecbd0b36e2506eb   Base: b5c4b182 (follow-up fast-forwarded to e25aac93)   Final: da5cb3bb (last fix commit; this record is committed on top of it)
+Branch: worktree-agent-a0ecbd0b36e2506eb   Base: b5c4b182 (follow-up fast-forwarded to e25aac93, round 3 to fb5fc2b4)   Final: 811ba562 (last fix commit; this record is committed on top of it; round 3 is at the end)
 
 | ID | Status | Commit | Check | Note |
 |---|---|---|---|---|
@@ -104,3 +104,49 @@ Follow-up: `nix develop .#theia --command bash scripts/verify-platform.sh --quic
 First round (at b822713c, base b5c4b182): 445 rows, 437 PASS, 8 FAIL, 0 SKIP: scan-brand-residue x2 (this lane, by design) and orca-service, orca-browser-tab-scope and shell-error-copy-no-internals with their self-tests (red on that base by design).
 
 Checks run alone in the follow-up for the files touched: privacy-hosts, bundled-xpi, theia-endpoints, webextensions, orca-credential-store, website-publish-ready, manifest-literals (each with its self-test), allowlist-schema, ci-release-integrity, build-windows-shape, workflows: PASS. `nix-instantiate --parse` and an evaluation of systemd/legion-pb.nix against legion's nixos-26.05 channel: CapabilityBoundingSet ["CAP_SETUID CAP_SETGID"], DeviceAllow ["", "/dev/fuse rw", "/dev/net/tun rw"], ProtectKernelTunables and ProtectKernelLogs false, SystemCallFilter the module list minus ~@mount, ~capset and ~sethostname, PrivateMounts true and ProtectProc "invisible" (module defaults). legion-runner-unit is red on the first-round unit, naming the bounding set, DeviceAllow, ProtectKernelTunables, ProtectKernelLogs, the filter, and the unneeded PrivateMounts and ProtectProc overrides.
+
+## Round 3 (review of round 2; base fb5fc2b4)
+
+Every point was checked against the code first and held; none is disputed.
+
+| ID | Status | Commit | Check | Note |
+|---|---|---|---|---|
+| 59-CR-02 (point 1, containers) | fixed-pending-deployment | 5c0d3f8e | legion-runner-unit::containers | `virtualisation.containers = { enable = true; registries.search = [ "docker.io" ]; }`. The option is in nixos/modules/virtualisation/containers.nix of legion's nixos-26.05 channel (:21 enable, :63-90 registries, :134-147 environment.etc): it writes /etc/containers/{containers.conf,storage.conf,registries.conf,policy.json}, policy.json being skopeo's default policy; evaluation shows those four etc entries. One search registry lets `FROM debian:bookworm@sha256:...` (Containerfile:27) resolve without podman's short-name prompt. Qualifying the FROM is handed off (below) |
+| 59-CR-02 (point 2, parser) | fixed | 5c0d3f8e | legion-runner-unit::sandbox (unclassified statement; out-of-block assignment) | every serviceOverrides statement must be a bare key with a literal or lib.mkForce <literal>, else red; any `systemd.services."github-runner-*"` assignment outside the block is red. Plants: the reviewer's two forms (mkForce from outside; `lib.mkOverride 50` and a quoted key inside) |
+| 59-CR-02 (point 3, trade text) | fixed | 5c0d3f8e | no-check: documentation | the unit header and docs/RELEASING.md now state the ProtectKernelTunables effect: /proc/sys, /sys and the kernel-variable paths writable, /proc/kallsyms and /proc/kcore visible, and a compromised setuid-root program's euid 0 can write root-owned 0644 sysctls (systemd.exec(5) ProtectKernelTunables on this host) |
+| 59-CR-02 (point 4, hostname and syslog) | fixed-pending-deployment | 5c0d3f8e | legion-runner-unit::sandbox (BLOCKERS ProtectHostname wants "private"; SystemCallFilter wants ~syslog back when ProtectKernelLogs is off) | `man systemd.exec` on this host (systemd 260.5): ProtectHostname= "Takes a boolean argument or "private" ... changing hostname or domainname is allowed but only affects the unit's UTS namespace"; ProtectKernelLogs= "installs a system call filter to block the syslog(2) system call". Now `ProtectHostname = "private"` and "~syslog" in the forced filter; evaluated |
+| packaging-prefs-network-04 (point 5, universe) | fixed | 6dde9968, 5105319b | orca-egress::coverage (hostvar, base, native, const derivations) | new derivations: host-variable template fallbacks; URL strings assigned as a base (ending /); printable strings of every native file under out/orcad (ELF/Mach-O/PE magic, never executed; a packed host's last label is cut to the longest TLD the shipped scripts' URL hosts use); constants named *HOST*/*ORIGIN*/*DOMAIN* in non-test orca/src whose quoted value a shipped bundle carries (*SUFFIX* gives .host, *FAVICON* excluded: those names are parameters to the icon service). 42 rows added, the github.com row names Orca's avatar loads (Avatars.tsx:16), and the privacy page lists every new user-initiated host (70 derived). One plant per derivation |
+| packaging-prefs-network-04 (point 6, cites) | fixed | 6dde9968 | orca-egress::source | a cite in a test, spec, fixture, test-harness or .md file is red; the host must sit in a URL or host string literal on a code line, and that literal must ship: the cited file is under orca/out, or the literal text (cut at any interpolation) appears in a shipped bundle. I chose the literal-in-bundle rule over deriving the bundle's source set (an esbuild metafile pass per run). Plants: the reviewer's test-harness cite, a .md cite, a literal no bundle carries |
+| G5a handoff (point 7) | fixed | 7e984d2d | packaging-staging::no-skip | logical lines (continuations joined) in every powerbrowser/packaging/*.sh including stage-*.sh: any scripts/verify-*.mjs invocation must start the statement with the wrapper and end with `|| fail ...` or nothing under set -e. Plants: `|| true`, `if ...; then`, `!`, `; echo`, `"${ROOT}"`, `"$ROOT"/scripts/...`, `(cd "$ROOT" && node scripts/...)`, a stage-*.sh direct call |
+| EXTRA (release.yml direct calls) | fixed | 811ba562 | no-check: workflow edit, read by release-shape, workflows, ci-release-integrity and the other release.yml checks | release.yml:202 (toolchain-container), :1141, :1326, :1918 (mar-signature) and :2606 (package-target-natives) now run through scripts/run-no-skip.sh. verify-release-shape.mjs and its self-test stay green; every check that reads release.yml has the same verdicts before and after (channel-live and mar-update-hop fail on both for lack of live inputs) |
+
+Hosts added in round 3, with the line that names or requests each (each row's reason carries it):
+- uploads.linear.app: orca/src/shared/linear/inline-media.ts:14, images shown from signed URLs fetched at orca/src/main/linear/linear-description-images.ts:22-36
+- npmmirror.com: orca/src/renderer/src/ssh/node-dist-mirror-recovery.ts:21; support.atlassian.com: orca/src/renderer/src/components/integrations/source-control/bitbucket-integration-card.tsx:19
+- auth.openai.com: orca/src/main/codex-accounts/codex-login-auth-url.ts:4; claude.ai, claude.com: orca/src/main/claude-accounts/claude-sign-in-browser.ts:16; dev.bigmodel.cn: orca/src/main/rate-limits/zcode-usage-credentials.ts:11
+- git hosts gitlab.com, bitbucket.org, ssh.bitbucket.org, ssh.dev.azure.com: orca/src/main/gitea/repository-ref.ts:15; codeberg.org: orca/src/shared/workspace-reference-identity.ts:12; ssh.github.com: orca/src/shared/git-fork-sync.ts:33; github.com avatars: orca/src/renderer/src/components/task-page/github/Avatars.tsx:16
+- agent-browser (orca/out/orcad/agent-browser-linux-x64, strings): registry.npmjs.org (`https://registry.npmjs.org/agent-browser/latest`), googlechromelabs.github.io (Chrome for Testing index), ai-gateway.vercel.sh (`https://ai-gateway.vercel.sh/v3/ai`), api.browserbase.com, api.browser-use.com, production-sfo.browserless.io, api.onkernel.com (cloud browser providers, next to their *_API_KEY names), svgl.app (logo URLs), agent-browser.dev (`open https://agent-browser.dev`)
+- deny (names only): www.github.com, www.gitlab.com, www.bitbucket.org (repo-icon-autodetect.ts:20 skip list); google.com, gmail.com, dequeuniversity.com, docs.rs, lightpanda.io, mozilla.org, nextjs.org, ns.adobe.com, radix-ui.com, ui.perfetto.dev, vercel.com, www.ibm.com (text inside agent-browser); encoding.spec.whatwg.org, gist.github.com, www.pcre.org, zsh.sourceforge.net (ripgrep help); www.xfa.org (pdf.js namespace)
+
+Not established, and written that way: whether agent-browser's npm version check runs on every start; whether the git-host names lead to a contact other than the user's own remote.
+
+### Registry requests
+None (no new script).
+
+### Red by design
+- scan-brand-residue, scan-brand-residue-self-test: held-back "Orca" 4252 -> 4336, "orca" 7394 -> 7527, "orcad" 2966 -> 3006 on fb5fc2b4 plus round 3; no unclaimed file. Integration re-measures (inventory/brand-tokens.json is integration's).
+
+### Handoffs
+- owner of toolchain-baseline.txt with scripts/verify-toolchain-container.mjs: qualify the Containerfile's base as `FROM docker.io/library/debian:bookworm@sha256:854dd8ab...` and the baseline's `# base` line in the same commit. Not made here: verify-toolchain-container.mjs:151-158 requires the baseline's `base` line (toolchain-baseline.txt:14, not a G5b file) to equal the FROM image, so editing the Containerfile alone turns that row red. With registries.search = [ "docker.io" ] the short name resolves without it, so this is the robust half only.
+
+### Behaviour changes
+- 59-CR-02: the runner host now gets /etc/containers/{containers.conf,storage.conf,registries.conf,policy.json} from virtualisation.containers (system-wide, with docker.io as the only unqualified-search registry); ProtectHostname is "private" instead of off; syslog(2) is filtered again. Revert with 5c0d3f8e.
+- packaging-prefs-network-04 (D-08): 42 more allowlist rows (22 user-initiated, 20 deny) and the github.com row's Orca note; the privacy page lists 23 more Orca hosts, including the agent-browser tool's version check and cloud browser providers. Revert with 6dde9968 and 5105319b.
+- EXTRA: five release.yml check steps now fail when their check skips. Revert with 811ba562.
+
+### Needs owner
+- UNSURE (a), first deployment: `sudo -u pb-runner env XDG_DATA_HOME=/var/lib/pb-runner-data podman info --format '{{.Store.GraphDriverName}} {{.Store.GraphOptions}}'`; if no mount_program is reported, drop "/dev/fuse rw" from DeviceAllow (it lets jobs mount FUSE file systems). Also in the unit's comment.
+- UNSURE (b), first deployment: cgroups are not delegated (no Delegate=, ProtectControlGroups stays true, no user session), so podman falls back to cgroupfs; settle with a job step `podman run --rm docker.io/library/debian:bookworm true` on the runner. Also in the unit's comment.
+
+### Quick gate
+`nix develop .#theia --command bash scripts/verify-platform.sh --quick` at 811ba562, log quick-g5b-round3.log in the worktree (untracked): 455 rows, 453 PASS, 2 FAIL, 0 SKIP. The two FAILs are scan-brand-residue and its self-test, red by design above (the self-test's baseline is the real tree). The base fb5fc2b4 is 455 PASS.
