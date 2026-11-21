@@ -141,6 +141,48 @@ The other callers the search found are imports of helpers (for example verify-or
 verify-orca-hidden-electron.mjs's `startTicks`) and do not run the script's main mode. A lane that converts a
 script whose exported function returns an exit status used by an importer must check that importer too.
 
+## The live lock
+
+The contract between the driver (`scripts/verify-platform.sh`, `acquire_live_lock`) and the live rows'
+helper (`scripts/lib/live-lock.mjs`, lane H5). Both are written against these words.
+
+Terms:
+- **The lock** is `flock` on `<git common dir>/pb-live.lock`, one per checkout and shared by all its worktrees.
+- **Holding** it is what `/proc/locks` shows: a `FLOCK` line on that file's inode, whose pid is the holder.
+- **Start ticks** are `/proc/<pid>/stat` field 22, so a reused pid number is told apart from the process it
+  once was.
+
+Rules:
+1. When the driver takes the lock (its holder process, `flock -o`, polling the driver and ending with it), it
+   exports `PB_LIVE_LOCK_HELD=1` and `PB_LIVE_LOCK_HOLDER=<pid>:<start ticks>` of that holder process. When it
+   goes on because an ancestor holds the lock (rule 2b), it exports the same two variables, naming that
+   ancestor.
+2. **No inherited variable is proof.** The driver, and the row helper likewise, goes on without taking the
+   lock only when `/proc/locks` shows the lock's inode held by one of:
+   - a. the process an inherited `PB_LIVE_LOCK_HOLDER` names, with a pid that holds the lock **and** start ticks
+     equal to that process's current start ticks; or
+   - b. the process itself or one of its ancestors (for example `flock <lock> node <row>` or
+     `flock <lock> scripts/verify-platform.sh`).
+3. An inherited `PB_LIVE_LOCK_HELD=1` or `PB_LIVE_LOCK_HOLDER` with neither 2a nor 2b is a **FAIL by name**:
+   - the message names both variables, says the lock is held by neither, and names the actual holders;
+   - its next step is to unset both and run again.
+
+   It never proceeds, and it never takes the lock silently. A run whose environment does not set them takes the
+   lock, and waits for it.
+4. **Waiting** names the holder's pid and command, says the run waits until that run ends (at most
+   `PB_LIVE_LOCK_WAIT_S`, default 21600 s, then FAIL naming the holder), and says how to find that run
+   (`ps -o pid,ppid,etime,args -p <pid>`). It never suggests setting a variable.
+5. Nothing sets `PB_LIVE_LOCK_HELD` or `PB_LIVE_LOCK_HOLDER` by hand. To run a live row alone, use
+   `flock <git common dir>/pb-live.lock node scripts/<row>.mjs` (rule 2b), or the driver's
+   `--only <label>`.
+
+The driver's plants are in `scripts/verify-platform-driver.mjs --self-test`:
+- a forged `PB_LIVE_LOCK_HELD=1` while another process holds the lock is a FAIL;
+- a `PB_LIVE_LOCK_HOLDER` naming the real holder with wrong start ticks is a FAIL;
+- one with the right pid and start ticks proceeds;
+- an ancestor `flock`, even with a forged `PB_LIVE_LOCK_HELD=1`, proceeds;
+- every full-tier row sees a `PB_LIVE_LOCK_HOLDER` that names a live process.
+
 ## Before and after
 
 Before (counted PASS by the driver, and its partial skip invisible):
