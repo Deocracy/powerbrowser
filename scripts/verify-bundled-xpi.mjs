@@ -19,7 +19,7 @@
 //                     derived from the XPI's assets/assets.json, has an allow row in
 //                     powerbrowser/endpoint-allowlist.json; every other list host has a
 //                     user-initiated (or allow) row; a row whose reason names BEXT-02 and whose host
-//                     the asset table no longer names is stale. No cached XPI is one SKIP line.
+//                     the asset table no longer names is stale. No cached XPI is one SKIP line and exit 77.
 //   --packaged (full) The extracted Linux package's distribution/extensions/ holds exactly the
 //                     pinned ids as <id>.xpi, each hashing to its pin.
 //   --live (full)     On the extracted package (PB_FIREFOX_BIN set to its binary), or with --dev
@@ -44,13 +44,14 @@
 // Usage:
 //   node scripts/verify-bundled-xpi.mjs [--packaged | --self-test | --self-test --static]
 //   flock /home/chris/coding/Power-Browser/.git/pb-live.lock node scripts/verify-bundled-xpi.mjs --live [--dev]
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { entryFor } from './lib/endpoint-verdict.mjs';
+import { verdictExit } from './lib/skip-verdict.mjs';
 
 const NAME = 'verify-bundled-xpi';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -558,6 +559,32 @@ function selfTest() {
             if (hit) console.log(`  ok  plant ${name} -> red: ${hit}`);
             else failures.push(`plant ${name} did not go red naming '${expect}' (got: ${got.join(' | ') || 'green'})`);
         }
+        // The verdict of the real entry point (harness-other-05): a copy of this script runs in a fixture repository. A cached XPI
+        // that checks out is exit 0; no cached XPI is exit 77 with the one SKIP line, never a PASS; a failed clause is exit 1
+        // even though the same run skipped another leg.
+        const runMain = (fx) => {
+            const dir = join(fx.root, 'scripts');
+            mkdirSync(join(dir, 'lib'), { recursive: true });
+            copyFileSync(fileURLToPath(import.meta.url), join(dir, 'verify-bundled-xpi.mjs'));
+            for (const lib of ['endpoint-verdict.mjs', 'skip-verdict.mjs']) copyFileSync(join(dirname(fileURLToPath(import.meta.url)), 'lib', lib), join(dir, 'lib', lib));
+            return spawnSync(process.execPath, [join(dir, 'verify-bundled-xpi.mjs')], { encoding: 'utf8' });
+        };
+        const green = runMain(fixtureRoot(base, 'm-green'));
+        if (green.status !== 0) failures.push(`the entry point on a cached, correct fixture exited ${green.status}, not 0: ${green.stdout}${green.stderr}`);
+        else console.log('  ok  entry point: a cached XPI that checks out exits 0');
+        const uncached = fixtureRoot(base, 'm-skip');
+        rmSync(uncached.xpi);
+        const skipRun = runMain(uncached);
+        if (skipRun.status !== 77 || !/^verify-bundled-xpi: SKIP -- fx@fixture\.invalid: no cached .*, so its digest, manifest, signature and endpoint legs were not run/m.test(skipRun.stdout) || /PASS/.test(skipRun.stdout)) {
+            failures.push(`the entry point with no cached XPI exited ${skipRun.status} (want 77 with the SKIP line and no PASS): ${skipRun.stdout}${skipRun.stderr}`);
+        } else console.log('  ok  entry point: no cached XPI -> exit 77, one SKIP line, no PASS');
+        const badSkip = fixtureRoot(base, 'm-fail', { sha256: '0'.repeat(64) });
+        const pins = JSON.parse(readFileSync(join(badSkip.root, PIN_REL), 'utf8'));
+        pins['gone@fixture.invalid'] = { ...pins[badSkip.id], sha256: '1'.repeat(64) };
+        writeFileSync(join(badSkip.root, PIN_REL), JSON.stringify(pins));
+        const failRun = runMain(badSkip);
+        if (failRun.status !== 1) failures.push(`a failed clause next to a skipped leg exited ${failRun.status}, not 1 (a FAIL must win over a SKIP): ${failRun.stdout}${failRun.stderr}`);
+        else console.log('  ok  entry point: a failed clause next to a skipped leg -> exit 1');
         failures.push(...liveAuditSelfTest());
         return failures;
     } finally {
@@ -587,12 +614,14 @@ function liveAuditSelfTest() {
     return failures;
 }
 
+// A failure wins; a leg that did not run (no cached XPI) is a SKIP, exit 77 (SKIP-PROTOCOL.md), never a PASS (harness-other-05).
 function report(label, failures, skips = [], pass = '') {
-    for (const s of skips) console.log(`${label}: SKIP -- ${s}`);
     if (failures.length) {
         console.error(`${label}: FAIL -- ${failures.length} failure(s):\n  ${failures.join('\n  ')}`);
         process.exit(1);
     }
+    const code = verdictExit(label, failures, skips);
+    if (code !== 0) process.exit(code);
     console.log(`${label}: PASS -- ${pass}`);
     process.exit(0);
 }
