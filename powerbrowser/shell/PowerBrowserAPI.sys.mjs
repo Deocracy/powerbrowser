@@ -12323,6 +12323,10 @@ async function handleOrcaShellMessage(data, actorRef) {
             return { ok: false, reason: "validation", message: "handleShellMessage: unknown Orca browser host state" };
           }
           OrcaService.browserHostAttached();
+        } else if (data.clientReason === null) {
+          // 67-WR-04: { clientReason: null } is the clearing form a successful Reconnect sends, so a stale pairing
+          // failure leaves diagnostics. Only the literal null; clientRecovered may be absent until lane G2 merges.
+          OrcaService.clientRecovered?.();
         } else if (data.clientReason !== undefined) {
           if (!OrcaEnv.isClientReason(data.clientReason)) {
             return { ok: false, reason: "validation", message: "handleShellMessage: unknown Orca client reason" };

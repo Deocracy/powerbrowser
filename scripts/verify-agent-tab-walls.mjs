@@ -34,6 +34,9 @@
 //                navigate refusal to their codes; the host sends navigate as browser.goto through webTabAgent and
 //                awaits the first open's reply; the chrome-bar mark shows on every agent tab and offers Resume.
 //  sideHeader    [59-WR-05]  the top-tabs side header builds its scrollbar on X and its icons do not shrink.
+//  orcaStatus    [67-WR-04, from lane G3b]  orcaStatus accepts the literal { clientReason: null }, calls
+//                OrcaService.clientRecovered when present and never throws without it; any other unknown value,
+//                and null beside browserHost, is still a validation refusal.
 //
 // Tier: quick (text reads and node:vm). --self-test plants each pre-fix fault in an in-memory copy of the tree and
 // requires the clause to go red naming it.
@@ -549,7 +552,41 @@ function sideHeaderClause(texts) {
     return failures;
 }
 
-const CLAUSES = [scrollClause, editStateClause, budgetClause, historyClause, servicesClause, cookiesClause, agentFlagClause, stopClause, sideHeaderClause];
+// 67-WR-04 (handed over by lane G3b): orcaStatus accepts { clientReason: null }, the clearing form a successful
+// Reconnect sends, calls OrcaService.clientRecovered when it exists and never throws when it does not; every other
+// value that is not a known reason, and null beside browserHost, stays a validation refusal.
+async function orcaStatusClause(texts) {
+    const failures = [];
+    const run = async (data, { recovered = true } = {}) => {
+        const calls = [];
+        const OrcaService = {
+            browserHostAttached: () => calls.push('attached'),
+            reportClientFailure: reason => calls.push(`failure ${reason}`),
+            getState: () => ({ state: 'ready' }),
+            ...(recovered ? { clientRecovered: () => calls.push('recovered') } : {}),
+        };
+        const OrcaEnv = { isClientReason: v => v === 'pairing-failed', orcaStatusReply: state => ({ status: state.state }) };
+        const out = evalDeclarations(texts.api, ['ORCA_SERVICE_MODULE', 'ORCA_ENV_MODULE', 'handleOrcaShellMessage'],
+            { ChromeUtils: { importESModule: url => (/OrcaEnv/.test(url) ? OrcaEnv : { OrcaService }) } }, ['handleOrcaShellMessage']);
+        if (typeof out.handleOrcaShellMessage !== 'function') throw new Error('handleOrcaShellMessage not found');
+        return { reply: await out.handleOrcaShellMessage({ kind: 'orcaStatus', ...data }, {}), calls };
+    };
+    let got = await run({ clientReason: null });
+    if (got.reply?.ok !== true || got.calls.join() !== 'recovered') failures.push(`orcaStatus: rejected the clearing form { clientReason: null } (reply ${JSON.stringify(got.reply)}, calls [${got.calls}]); expected ok and one clientRecovered (67-WR-04)`);
+    got = await run({ clientReason: null }, { recovered: false });
+    if (got.reply?.ok !== true) failures.push(`orcaStatus: { clientReason: null } threw when OrcaService.clientRecovered is absent (reply ${JSON.stringify(got.reply)}) (67-WR-04)`);
+    got = await run({ clientReason: 'pairing-failed' });
+    if (got.reply?.ok !== true || got.calls.join() !== 'failure pairing-failed') failures.push('orcaStatus: broken instrument: a known client reason was not reported');
+    for (const value of ['bogus', '', 0, false, {}]) {
+        got = await run({ clientReason: value });
+        if (got.reply?.ok !== false || got.calls.length) failures.push(`orcaStatus: accepted clientReason ${JSON.stringify(value)} (reply ${JSON.stringify(got.reply)}, calls [${got.calls}]); only a known reason or the literal null may pass`);
+    }
+    got = await run({ browserHost: 'attached', clientReason: null });
+    if (got.reply?.ok !== false || got.calls.length) failures.push('orcaStatus: accepted clientReason null beside browserHost; that pairing stays a validation refusal');
+    return failures;
+}
+
+const CLAUSES = [scrollClause, editStateClause, budgetClause, historyClause, servicesClause, cookiesClause, agentFlagClause, stopClause, sideHeaderClause, orcaStatusClause];
 
 export async function checkTexts(texts) {
     const failures = [];
@@ -577,6 +614,21 @@ function replaceOnce(text, from, to, what) {
 }
 
 const PLANTS = [
+    {
+        name: '67-WR-04: orcaStatus rejects { clientReason: null }',
+        plant: t => ({ ...t, api: replaceOnce(t.api, '} else if (data.clientReason === null) {', '} else if (false) {', 'null branch') }),
+        expect: 'rejected the clearing form',
+    },
+    {
+        name: '67-WR-04: clientRecovered called unguarded',
+        plant: t => ({ ...t, api: replaceOnce(t.api, 'OrcaService.clientRecovered?.();', 'OrcaService.clientRecovered();', 'guard') }),
+        expect: 'threw when OrcaService.clientRecovered is absent',
+    },
+    {
+        name: '67-WR-04: any falsy clientReason accepted as the clearing form',
+        plant: t => ({ ...t, api: replaceOnce(t.api, '} else if (data.clientReason === null) {', '} else if (!data.clientReason) {', 'loose null') }),
+        expect: 'accepted clientReason ""',
+    },
     {
         name: '59-WR-05: the side header keeps stock suppressScrollX',
         plant: t => ({ ...t, sideTopTabs: replaceOnce(t.sideTopTabs, 'suppressScrollX: false', 'suppressScrollX: true', 'side scroll') }),
