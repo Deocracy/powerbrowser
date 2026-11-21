@@ -90,8 +90,12 @@ import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { withFirefoxPage } from './lib/firefox-bidi.mjs';
+import { SKIP_EXIT, skipLine, verdictExit } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const NAME = 'verify-uri-roundtrip';
+// What supplies the pb-orca rows' inputs, ending every SKIP reason (SKIP-PROTOCOL.md rule 3).
+const PB_ORCA_NEXT = 'Next step: bash scripts/fetch-orca.sh and bash scripts/build-orca.sh, then re-run this check';
 
 const HELP = `Usage: node scripts/verify-uri-roundtrip.mjs [--scheme <scheme>]
 
@@ -464,9 +468,9 @@ function buildPbOrcaExpression() {
 async function main() {
     const results = [];
     if (onlyScheme === 'pb-orca' && pbOrcaSkip()) {
-        // Nothing to drive: no browser is launched for rows that can only SKIP.
-        console.log(`verify-uri-roundtrip: SKIP pb-orca -- ${pbOrcaSkip()}`);
-        process.exit(0);
+        // Nothing to drive: no browser is launched for rows that can only SKIP. Exit 77 (SKIP-PROTOCOL.md).
+        console.log(skipLine(NAME, `the pb-orca rows did not run: ${pbOrcaSkip()}. ${PB_ORCA_NEXT}`));
+        process.exit(SKIP_EXIT);
     }
 
     let runPbOrca = false;
@@ -556,9 +560,10 @@ async function main() {
 
     let passCount = 0;
     let failCount = 0;
-    let skipped = 0;
+    const skips = [];
     for (const r of results) {
-        if (r.skip) { console.log(`verify-uri-roundtrip: SKIP ${r.label} -- ${r.skip}`); skipped++; continue; }
+        // A row not run is reported once, in the SKIP line printed last (SKIP-PROTOCOL.md rule 2).
+        if (r.skip) { console.log(`verify-uri-roundtrip: not run ${r.label} -- ${r.skip}`); skips.push(`the ${r.label} rows did not run: ${r.skip}`); continue; }
         const verdict = r.ok ? 'PASS' : 'FAIL';
         const suffix = r.ok ? '' : ` -- ${r.reason}`;
         console.log(`verify-uri-roundtrip: ${verdict} ${r.label}${suffix}`);
@@ -569,8 +574,11 @@ async function main() {
 
     const total = passCount + failCount;
     console.log(`verify-uri-roundtrip: ${passCount}/${total} rows PASS`);
-    // A run whose only rows were SKIP-named (--scheme pb-orca before the merge) is a SKIP, not a red.
-    process.exit(failCount === 0 && (total > 0 || skipped > 0) ? 0 : 1);
+    // FAIL wins; a run with no row at all is red; a run in which some rows did not run exits 77 with the SKIP
+    // line last; exit 0 means every row ran.
+    if (failCount === 0 && total === 0 && skips.length === 0) process.exit(1);
+    if (skips.length > 0) skips.push(PB_ORCA_NEXT);
+    process.exit(verdictExit(NAME, failCount > 0 ? [`${failCount} row(s) red`] : [], skips));
 }
 
 main().catch(err => {
