@@ -1423,19 +1423,33 @@ export class SetupsService implements FrontendApplicationContribution {
         }
     }
 
-    /** P65-18: the tab URIs setups.json and the session snapshot name; an unreadable part counts as empty, with one log line. */
-    async referencedTabUris(): Promise<Set<string>> {
+    /**
+     * P65-18: the tab URIs setups.json and the session snapshot name. Audit fix (theia-pane-hosting-03): an absent
+     * setups.json names nothing, but one that cannot be read or does not parse (a mid-save race, a partial write)
+     * makes the set unknown, and so does an unreadable session: undefined, with one log line, and the caller keeps
+     * every reservation rather than releasing a name a saved Setup may still hold.
+     */
+    async referencedTabUris(): Promise<Set<string> | undefined> {
         let setups: SetupSnapshot[] = [];
         try {
-            setups = parseSetupStore((await this.fileService.read(this.setupsUri)).value).setups;
+            if (await this.fileService.exists(this.setupsUri)) {
+                const parsed = parseSetupStore((await this.fileService.read(this.setupsUri)).value);
+                if (!parsed.ok) {
+                    console.info('[@powerbrowser/modes] the saved setups did not parse; the referenced tab list is not known');
+                    return undefined;
+                }
+                setups = parsed.setups;
+            }
         } catch {
-            console.info('[@powerbrowser/modes] no saved setups read for the referenced tab list');
+            console.info('[@powerbrowser/modes] no saved setups read; the referenced tab list is not known');
+            return undefined;
         }
         let session: SessionSnapshot | undefined;
         try {
             session = parseSessionSnapshot(await this.profileStorage.getData<unknown>(SESSION_STORAGE_KEY));
         } catch {
-            console.info('[@powerbrowser/modes] no saved session read for the referenced tab list');
+            console.info('[@powerbrowser/modes] no saved session read; the referenced tab list is not known');
+            return undefined;
         }
         return referencedTabUrisOf({ setups }, session);
     }

@@ -146,8 +146,10 @@ export class OrcaPaneNameMapContribution implements FrontendApplicationContribut
     protected readonly setups: SetupsService;
 
     onStart(): void {
+        // theia-pane-hosting-03: an unknown reference set (unreadable or unparsable setups.json) prunes nothing;
+        // a tombstone kept one more launch costs nothing, a released one can be minted for another pane.
         this.setups.referencedTabUris()
-            .then(uris => this.names.prune(uris))
+            .then(uris => (uris ? this.names.prune(uris) : 0))
             .catch(err => console.info(`${LOG_PREFIX} the pb-orca name map was not pruned: ${(err as Error)?.message ?? 'unknown error'}`));
     }
 }
