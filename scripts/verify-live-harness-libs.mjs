@@ -9,6 +9,10 @@
 //            it), PB_LIVE_LOCK_HELD=1 alone, or with a forged PB_LIVE_LOCK_HOLDER, FAILs by name, the true holder lets it
 //            run, and with nothing set the bounded wait FAILs naming the holder; a SIGTERM to the outer pid alone ends
 //            the locked re-run and frees the lock. Plant: the old rule that accepted any holder.
+//            Teardown and device, each against the real helper and a copy with the fix removed, in parallel: a
+//            SIGKILLed outer's re-run ends itself and frees the lock; a SIGTERM reaches the re-run first and the lock
+//            stays held until it exits; an outer that throws leaves no re-run; a same-numbered inode on another device
+//            is not a holder.
 //   signin   writeBackSignIn in scripts/lib/firefox-bidi.mjs (harness-live-security-13). A write by the owner's own
 //            claude between the harness's read and its rename (an MCP sign-in) survives, and the rotated token lands;
 //            a changed refresh token is never overwritten. Plant: the helper with its re-read removed loses the write.
@@ -22,13 +26,13 @@
 //   node scripts/verify-live-harness-libs.mjs --self-test
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 
-import { holdLiveLock, lockDecision, lockHolders, parseHolder, startTicks } from './lib/live-lock.mjs';
+import { holdLiveLock, lockDecision, lockDevice, lockHolders, parseHolder, startTicks } from './lib/live-lock.mjs';
 
 const NAME = 'live-harness-libs';
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -125,6 +129,138 @@ else { console.log('probe-row: ran'); process.exit(Number(process.argv[2])); }\n
     want('lock: holdLiveLock is a FAIL outside a checkout, naming it', outside === 1 && said.some((l) => l.includes('git names no common dir')));
 }
 
+/**
+ * The live lock's teardown and device rules (the round after H6 and H7 moved to this helper): each case runs against
+ * the real helper and against a copy with one fix removed (a plant), on scratch checkouts of their own, all at once,
+ * so the whole block takes a few seconds. Every plant must fail the case its fix exists for.
+ */
+async function teardownCases(tmp) {
+    const helperPath = join(HERE, 'lib', 'live-lock.mjs');
+    const helperSrc = readFileSync(helperPath, 'utf8');
+    const variant = (tag, from, to) => {
+        if (!from) return pathToFileURL(helperPath).href;
+        if (!helperSrc.includes(from)) return null; // the plant no longer applies: the source moved
+        const file = join(tmp, `live-lock-${tag}.mjs`);
+        writeFileSync(file, helperSrc.replace(from, to));
+        return pathToFileURL(file).href;
+    };
+    const PLANTS = {
+        'no parent watch': ['    if (decision === \'proceed\') {\n        watchParent(env);', '    if (decision === \'proceed\') {'],
+        'signal the group': ['try { process.kill(run ?? child.pid, sig); } catch', 'try { process.kill(-child.pid, sig); } catch'],
+        'no exit handler': ["    process.on('exit', onExit);\n", ''],
+    };
+    const cleanEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('PB_LIVE_LOCK')));
+    let n = 0;
+    // A scratch checkout with a row that imports `helperUrl`. Modes: sleep (idle), stubborn (SIGTERM ignored for 2 s,
+    // then a clean exit), throw-sleep (the outer throws 600 ms after spawning; the re-run idles).
+    const checkout = (helperUrl) => {
+        const dir = join(tmp, `co-${n++}`);
+        mkdirSync(dir);
+        spawnSync('git', ['init', '-q', dir], { stdio: 'ignore' });
+        const lock = join(dir, '.git', 'pb-live.lock');
+        writeFileSync(lock, '');
+        const pidFile = join(dir, 'inner.pid');
+        const row = join(dir, 'row.mjs');
+        writeFileSync(row, `import { writeFileSync } from 'node:fs';
+import { holdLiveLock } from ${JSON.stringify(helperUrl)};
+const mode = process.argv[2];
+const pending = holdLiveLock({ name: 'probe-row', scriptUrl: import.meta.url, root: ${JSON.stringify(dir)} });
+if (mode === 'throw-sleep' && process.env.PB_LIVE_LOCK_HELD !== '1') setTimeout(() => { throw new Error('planted throw in the outer process'); }, 600);
+const locked = await pending;
+if (locked !== null) process.exit(locked);
+writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+if (mode === 'stubborn') process.on('SIGTERM', () => setTimeout(() => process.exit(0), 2000));
+setInterval(() => {}, 1e6);\n`);
+        return { dir, lock, pidFile, row };
+    };
+    const start = (co, mode, extraEnv = {}) => {
+        const outer = spawn(process.execPath, [co.row, mode], { env: { ...cleanEnv, ...extraEnv }, stdio: 'ignore' });
+        outer.exited = new Promise((r) => outer.once('exit', (code, signal) => r({ code, signal })));
+        return outer;
+    };
+    const innerPid = async (co) => ((await until(() => existsSync(co.pidFile), 5000)) ? Number(readFileSync(co.pidFile, 'utf8')) : 0);
+    const reap = (pid) => { if (pid && alive(pid)) try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } };
+
+    // 2. A SIGKILLed outer cannot forward anything: the re-run must see its parent gone and end, freeing the lock.
+    const killed = async (helperUrl) => {
+        const co = checkout(helperUrl);
+        const outer = start(co, 'sleep');
+        const inner = await innerPid(co);
+        if (!inner) { outer.kill('SIGKILL'); return { ok: false, detail: 'the re-run never started' }; }
+        process.kill(outer.pid, 'SIGKILL');
+        const gone = await until(() => !alive(inner), 3000);
+        const freed = await until(() => lockHolders(co.lock).length === 0, 1000);
+        reap(inner);
+        return { ok: gone && freed, detail: `re-run gone ${gone}, lock free ${freed}` };
+    };
+    // 3. A SIGTERM to the outer reaches the re-run first. While the re-run tears down, the lock stays held (the kernel
+    // refuses `flock -n`), flock keeps running, and the outer has not returned; all three end with the re-run.
+    const ordered = async (helperUrl) => {
+        const co = checkout(helperUrl);
+        const outer = start(co, 'stubborn');
+        let outerDone = false;
+        outer.exited.then(() => { outerDone = true; });
+        const inner = await innerPid(co);
+        if (!inner) { outer.kill('SIGKILL'); return { ok: false, detail: 'the re-run never started' }; }
+        const flockPid = lockHolders(co.lock)[0];
+        process.kill(outer.pid, 'SIGTERM');
+        await sleep(1000);
+        const kernelHeld = spawnSync('flock', ['-n', co.lock, 'true']).status === 1;
+        const during = { reRunAlive: alive(inner), kernelHeld, flockAlive: !!flockPid && alive(flockPid), outerRunning: !outerDone };
+        const end = await Promise.race([outer.exited, sleep(5000).then(() => null)]);
+        const freed = await until(() => spawnSync('flock', ['-n', co.lock, 'true']).status === 0, 1000);
+        reap(inner);
+        if (!end) outer.kill('SIGKILL');
+        return { ok: Object.values(during).every(Boolean) && !alive(inner) && freed && end?.code === 0, detail: `during the teardown ${JSON.stringify(during)}, then free ${freed}, outer ${JSON.stringify(end)}` };
+    };
+    // 4. An outer that throws after spawning must take its re-run with it (the parent watch is slowed down here, so
+    // only the exit handler can do it in time).
+    const thrown = async (helperUrl) => {
+        const co = checkout(helperUrl);
+        const outer = start(co, 'throw-sleep', { PB_LIVE_LOCK_WATCH_MS: '60000' });
+        const inner = await innerPid(co);
+        const end = await Promise.race([outer.exited, sleep(5000).then(() => null)]);
+        const gone = inner ? await until(() => !alive(inner), 2000) : false;
+        reap(inner);
+        if (!end) outer.kill('SIGKILL');
+        return { ok: !!inner && end?.code === 1 && gone, detail: `outer ${JSON.stringify(end)}, re-run gone ${gone}` };
+    };
+    const cases = [
+        ['a SIGKILLed outer: the re-run ends itself and the lock is free', killed, 'no parent watch'],
+        ['a SIGTERM to the outer: the lock, flock and the outer all outlast the re-run\'s teardown', ordered, 'signal the group'],
+        ['an outer that throws after spawning leaves no re-run behind', thrown, 'no exit handler'],
+    ];
+    const runs = await Promise.all(cases.flatMap(([, fn, plant]) => [fn(variant('real')), (async () => {
+        const url = variant(plant.replace(/\W+/g, '-'), ...PLANTS[plant]);
+        return url ? fn(url) : { ok: true, detail: 'plant did not apply (source moved)', moved: true };
+    })()]));
+    cases.forEach(([name, , plant], i) => {
+        const [real, planted] = [runs[2 * i], runs[2 * i + 1]];
+        want(`lock: ${name}`, real.ok, real.detail);
+        want(`lock plant: with "${plant}" the case goes red`, !planted.moved && !planted.ok, planted.detail);
+    });
+
+    // 1. Device and inode: a lock on a same-numbered inode of another device is not a holder.
+    const co = checkout(variant('real'));
+    const ino = String(statSync(co.lock).ino);
+    const [maj, min] = lockDevice(co.lock);
+    const hex = (v) => v.toString(16).padStart(2, '0');
+    const locks = [`1: FLOCK  ADVISORY  WRITE 111 ${hex(maj)}:${hex(min)}:${ino} 0 EOF`, `2: FLOCK  ADVISORY  WRITE 222 ${hex(maj + 1)}:${hex(min + 7)}:${ino} 0 EOF`].join('\n');
+    const held = lockHolders(co.lock, locks);
+    want('lock: holders match device and inode (the same inode number on another device is not a holder)', held.length === 1 && held[0] === 111, `holders ${held.join(',')}`);
+    const holder = spawn('flock', ['-o', co.lock, 'sleep', '30'], { stdio: 'ignore', detached: true });
+    try {
+        await until(() => lockHolders(co.lock).includes(holder.pid), 3000);
+        want('lock: the device from mountinfo matches what /proc/locks prints for a real lock', lockHolders(co.lock).includes(holder.pid), `device ${maj}:${min}`);
+    } finally {
+        try { process.kill(-holder.pid, 'SIGKILL'); } catch { /* gone */ }
+    }
+    const inodeOnly = "        if (fileIno !== ino || parseInt(maj, 16) !== dev[0] || parseInt(min, 16) !== dev[1]) continue;";
+    const plantedUrl = variant('inode-only', inodeOnly, '        if (fileIno !== ino) continue;');
+    const planted = plantedUrl ? (await import(plantedUrl)).lockHolders(co.lock, locks) : null;
+    want('lock plant: an inode-only match counts the other device\'s lock (the case goes red)', !!planted && planted.includes(222), `holders ${planted?.join(',') ?? 'plant did not apply'}`);
+}
+
 async function signinCases(tmp) {
     const helperSrc = readFileSync(join(HERE, 'lib', 'firefox-bidi.mjs'), 'utf8');
     const { relocateHelper } = await import('./verify-live-scratch-home.mjs');
@@ -209,6 +345,8 @@ async function selfTest() {
     try {
         mkdirSync(join(tmp, 'lock'));
         await lockCases(join(tmp, 'lock'));
+        mkdirSync(join(tmp, 'teardown'));
+        await teardownCases(join(tmp, 'teardown'));
         mkdirSync(join(tmp, 'signin'));
         await signinCases(join(tmp, 'signin'));
         mkdirSync(join(tmp, 'prereq'));

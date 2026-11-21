@@ -1,6 +1,6 @@
 # Result: H5-harness-live-security
 
-Branch: worktree-agent-a25e0025912001381   Base: b5c4b182 (review follow-up on f8d798e4)   Final: 2b0d65e9 (last fix; this record is the commit after it)
+Branch: worktree-agent-a25e0025912001381   Base: b5c4b182 (review follow-up on f8d798e4; round 3 on e25aac93)   Final: 8b507956 (last fix; this record is the commit after it)
 
 No live row was run. Each item was fixed by reading the code, by its `--self-test`, and by plants over the pure functions. The last column of the second table names the live run on the owner's desktop that would prove the item.
 
@@ -9,7 +9,7 @@ No live row was run. Each item was fixed by reading the code, by its `--self-tes
 | harness-live-security-01 | fixed | d1d98071, 3a940456 | verify-orca-browser-agent-live.mjs --self-test::decoy-launch wiring (red on the old liveEnv, checked by a temporary revert), ::decoy-home-replaced, ::decoy-gone | realHomes() is read once at module load, so a decoy HOME is kept; clause (f) requires orcad's /proc environ HOME to be the decoy folder, else detector blind |
 | harness-driver-02 | fixed | d1d98071 | verify-live-harness-libs.mjs --self-test::prereq (11 cases) | absent AGENT_METHODS (any declaration form), orca-browser or orca-panes is FAIL |
 | harness-live-security-02 | fixed | d1d98071, 3a940456, 5ea0af9e | verify-live-harness-libs.mjs::prereq; browser-agent self-test::decoy-skip | Orca build without pane/host bundle is FAIL; only absent binary, Theia build or orcad is SKIP 77; a skipped (f) makes the row SKIP 77, not PASS |
-| harness-live-security-05 | fixed | d1d98071, each script commit; review follow-up 47997f17, 2b0d65e9 | verify-live-harness-libs.mjs::lock (23 cases, real flock: non-ancestor holder refused, ancestor accepted, forged holder refused, bounded wait, SIGTERM forwarded); each self-test::lock wiring | proceeds only for the named holder (pid plus start ticks) or an ancestor; a bare PB_LIVE_LOCK_HELD=1 FAILs; mkdtemp repos in snapshot, status and service rows |
+| harness-live-security-05 | fixed | d1d98071, each script commit; review follow-up 47997f17, 2b0d65e9; round 3 8b507956 | verify-live-harness-libs.mjs::lock (32 cases with real flock, among them a non-ancestor holder refused, an ancestor accepted, a forged holder refused, the bounded wait and SIGTERM forwarding; round 3 runs each new case against the real helper and a copy with the fix removed: device and inode, SIGKILLed outer, signal order, exiting outer); each self-test::lock wiring | proceeds only for the named holder (pid plus start ticks) or an ancestor; a bare PB_LIVE_LOCK_HELD=1 FAILs; holders matched on device and inode; the re-run watches its parent; signals and an exiting outer reach the re-run, not flock; mkdtemp repos in snapshot, status and service rows |
 | harness-live-security-06 | fixed | 3a940456 | browser-agent self-test::cookie-read-failed, close-list-read-failed, close-page-never-listed, reload-list-read-failed, reload-page-never-listed, reload-after-reads-failed | failed tab list / cookie get is null, judged "instrument failed" |
 | harness-live-security-03 | fixed | 31ae0e7f, 0cb3104b, c08b4c93, ae5c6efb, ea068614, 2c760fa6 | each self-test; snapshot self-test::no orca/ in CI | every SKIP path exits 77 via skip-verdict.mjs; tracked inputs (fixtures, copy table) FAIL; orca-snapshot-fixtures FAILs without orca/ in CI |
 | harness-live-security-04 | fixed | c08b4c93, d1d98071 | failure-page self-test::a SIGTERM restores the host bundle / no signal guard; libs::host bundle left aside | signal guard restores before re-raise; stale aside restored at start under the lock; prerequisites FAIL naming the aside |
@@ -47,6 +47,13 @@ Live-lock rule, after the review follow-up. `scripts/lib/live-lock.mjs` is the s
   - it forwards SIGINT, SIGTERM and SIGHUP to that group;
   - it names the holder's pid while it waits, and FAILs naming the holder when the wait runs out;
   - it returns the re-run's status: 77 passes through, and a signal gives 128 + its number.
+- Round 3: four properties that H6 and H7 handed over.
+  - Device and inode: a holder in /proc/locks must match both the major:minor and the inode. The device comes from the mount in /proc/self/mountinfo, because on btrfs (this host) stat's st_dev is a subvolume's own number (0x30) while /proc/locks prints the superblock's (00:22).
+  - A SIGKILLed outer: the re-run gets PB_LIVE_LOCK_PARENT=<pid>:<start ticks> and checks its parent every PB_LIVE_LOCK_WATCH_MS (default 250 ms). When the parent is gone it sends itself SIGINT, the rows' own teardown signal, then SIGTERM after 20 s, and exits after 40 s.
+  - Signal order: SIGINT, SIGTERM and SIGHUP go to the re-run only, never to flock, so flock and the outer end when the re-run ends.
+    - What I found: flock(1) without -o passes its lock descriptor to the re-run, so a group signal did not release the kernel lock by itself.
+    - It did end flock and the outer at once. The re-run's parent watch then cut its teardown short, and the lock was freed before that teardown finished; the case measures exactly that.
+  - An exiting outer: an exit handler beside the signal handlers sends SIGINT to the re-run; it is removed when the re-run ends.
 - No git common dir, or no flock: FAIL.
 - The lock is always `<git common dir>/pb-live.lock`. There is no lock-file override; the self-test uses a scratch checkout of its own.
 - `--self-test` modes do not lock unless they launch something. Each self-test asserts the wiring with `lockWiringFails` (an awaited call).
@@ -76,6 +83,10 @@ Callers: the only caller of each converted script is `scripts/verify-platform.sh
 
 ## Handoffs
 - H1: scripts/verify-platform.sh, export PB_LIVE_LOCK_HOLDER as under Red by design (harness-live-security-05).
+- H1 (round 3): scripts/verify-platform.sh:7262, `awk -v ino="$ino" '$0 !~ /->/ && $2 == "FLOCK" { n = split($6, f, ":"); if (f[n] == ino) print $5 }' /proc/locks`, matches holders on the inode alone. It should also match the device.
+  - Take the device from the mount, not from `stat -c %d`: on btrfs those differ.
+  - Exact change: compute `dev="$(findmnt -no MAJ:MIN -T "$1")"`, split it into major and minor, and in the awk require `strtonum("0x" f[1]) == maj && strtonum("0x" f[2]) == min && f[3] == ino`.
+  - live-lock.mjs's lockDevice/lockHolders is the reference implementation.
 - H6, H7: switch your rows to `await holdLiveLock({ name, scriptUrl: import.meta.url, root })` from scripts/lib/live-lock.mjs and delete your own helpers.
 - H1 / integration (first round, still open): the gate driver's summary misattributed verdicts in my first --quick run.
   - It listed orca-service and orca-service-self-test as PASS, although both printed FAIL lines; `--only orca-service` is FAIL, which is red by design for H2.
@@ -96,6 +107,12 @@ None to the product. Harness behaviour that changed:
 - harness-live-security-13: the sweep in liveHome() still writes a rotated token back for a stale folder. Limiting the write-back to seeding rows would break the live-scratch-home self-test (not my file), which requires it. The owner or H-lane owner of verify-live-scratch-home.mjs decides whether to change it.
 
 ## Quick gate
+Round 3: `--quick` at 8b507956 on e25aac93, logged to .mozbuild/h5-gate/quick-r3.log in this worktree. Result: 451 PASS, 4 FAIL, 0 SKIP. None of the four is caused by this lane, and none reads a file it touched:
+- orca-service-self-test: "a ptyEndpoint option back in buildOrcadEnv -> plant target not found". That self-test's plant text no longer matches powerbrowser/shell/OrcaEnv.sys.mjs.
+- orca-failure-classes and its self-test: unmapped orcad exit codes of the pinned Orca (now also orcad_instance_lock_holder_unverifiable).
+- build-windows-shape-self-test: "self-test anchor for the rulings guard step is absent from the build-windows job" (.github/workflows/release.yml).
+live-harness-libs-self-test PASS, 47 cases in about 6 s; scan-brand-residue PASS.
+
 Review follow-up: `nix develop .#theia --command scripts/verify-platform.sh --quick` at f16ef6be on f8d798e4, logged to .mozbuild/h5-gate/quick.log in this worktree. Result: 444 PASS, 3 FAIL, 0 SKIP.
 - scan-brand-residue and its self-test: caused by two follow-up comments, one `orca` and one `orcad` token each. Reworded in 2b0d65e9; `node scripts/scan-brand-residue.mjs` and its `--self-test` are PASS there.
 - orca-failure-classes: not caused by this lane. It names four orcad exit codes of the pinned Orca that ORCA_CODE_CLASSES does not map (orcad_invalid_bind_address and orcad_data_root_*). That is product or pin state; this lane touches neither file.
