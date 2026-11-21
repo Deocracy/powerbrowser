@@ -88,6 +88,23 @@ export function compareFixtures(results, expected) {
     return expected.filter(([name, , want]) => squash(want) !== results[name]).map(([name]) => name);
 }
 
+// After a scope compound (which ends where the compound ends), the next combinator must be a descendant (whitespace) or
+// a child (>) combinator, or there is none. A sibling combinator (~ or +) right after the scope styles elements that
+// are beside the scope, outside the pane: `[scope] ~ .btn`, `[scope] + *` (harness-static-structure-13).
+function followedByDescendant(selector, from) {
+    let depth = 0;
+    let j = from;
+    for (; j < selector.length; j++) {
+        const c = selector[j];
+        if (c === '\\') { j++; continue; }
+        if (c === '(' || c === '[') depth++;
+        else if (c === ')' || c === ']') depth--;
+        else if (depth === 0 && /[\s>+~]/.test(c)) break;
+    }
+    while (j < selector.length && /\s/.test(selector[j])) j++;
+    return j >= selector.length || (selector[j] !== '+' && selector[j] !== '~');
+}
+
 /**
  * Does the scope constrain this selector? True when, at the top level of the selector (outside every parenthesis and
  * bracket), the pass's own scope appears: pass.SCOPE, :where(<portal roots>) or the bare pane root. The scope as an
@@ -101,7 +118,10 @@ export function scopeConstrains(selector, pass) {
         const c = selector[i];
         if (c === '\\') { i++; continue; } // a CSS escape: the next character is part of an identifier
         if (quote) { if (c === quote) quote = null; continue; }
-        if (depth === 0 && forms.some(f => selector.startsWith(f, i))) return true;
+        if (depth === 0) {
+            const form = forms.find(f => selector.startsWith(f, i));
+            if (form !== undefined && followedByDescendant(selector, i + form.length)) return true;
+        }
         if (c === '"' || c === "'") quote = c;
         else if (c === '(' || c === '[') depth++;
         else if (c === ')' || c === ']') depth--;
@@ -183,11 +203,17 @@ async function selfTest() {
         ['the scope inside :is()', `.leak :is(${scopeArg}, .other)`],
         ['the pane root inside a longer :where() list', `.leak:where(.other, ${pass.PANE_ROOT})`],
         ['the pane root as an attribute value', `.leak[title="${pass.PANE_ROOT}"]`],
+        ['a sibling combinator (~) right after the scope', `${scopeArg} ~ .btn`],
+        ['a sibling combinator (+) right after the scope', `${scopeArg} + *`],
+        ['a spaced sibling combinator after the pane root', `${pass.PANE_ROOT}   ~   .btn`],
     ]) {
         ok(`${what} is red`, checkSheets(pass, postcss, `${selector}{color:red}`, []).fails.some(f => /carry no scope, first: /.test(f)));
     }
     for (const [what, selector] of [
         ['the scope as an ancestor', `${scopeArg} .btn`],
+        ['the scope as a parent (>)', `${scopeArg} > .btn`],
+        ['a sibling combinator after a descendant step', `${scopeArg} .a ~ .b`],
+        ['the scope with an :nth-child(2n+1) tail on its compound', `${scopeArg}:nth-child(2n+1) .btn`],
         ['the portal self variant', `.btn:where(${pass.PORTAL_ROOTS})`],
         ['a qualified root before the scope', `:root.dark ${scopeArg} .btn`],
         ['the portal self variant before a pseudo-element', `.a:where(${pass.PORTAL_ROOTS})::before`],
@@ -207,7 +233,7 @@ async function selfTest() {
     try {
         symlinkSync(dirname(fileURLToPath(import.meta.url)), join(scratch, 'linked'));
         const viaLink = spawnSync(process.execPath, [join(scratch, 'linked', 'verify-orca-pane-css.mjs'), '--bogus'], { encoding: 'utf8' });
-        ok('run through a symlinked directory the entry-point guard still fires (exit 2)', viaLink.status === 2);
+        ok('run through a symlinked directory the entry-point guard still reaches the usage check (exit 2 with the usage text, not the guard\'s mismatch message)', viaLink.status === 2 && viaLink.stderr.includes('usage: node scripts/verify-orca-pane-css.mjs') && !viaLink.stderr.includes('entry-point guard'));
     } finally {
         rmSync(scratch, { recursive: true, force: true });
     }

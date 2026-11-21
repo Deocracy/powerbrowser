@@ -30,8 +30,13 @@
 //     `on:` must be exactly {workflow_dispatch, workflow_call} (set equality: a
 //     pull_request, pull_request_target or push trigger would run third-party code
 //     for whoever opens a pull request), and no `run:` body may interpolate
-//     `${{ inputs.* }}` or `${{ github.event.* }}` (an input reaches a shell only
-//     through env:, never through the script text).
+//     `${{ }}` expression except the allow-list (step outcome and conclusion,
+//     the runner context) (an input reaches a shell only through env:, never
+//     through the script text). Every form is caught, because the rule is the
+//     allow-list and not a pattern for the forbidden ones: env indirection,
+//     format(), toJSON(), inputs['tag'], (inputs.tag), any capitalisation. Every
+//     block-scalar header (`|`, `>`, with an indentation or chomping indicator)
+//     is read, so a `run: |2` body is scanned too.
 //     68-02 (OVL-02): the same rules hold for .github/workflows/rebase-orca.yml,
 //     whose triggers declare tag and commit; neither has a default, neither
 //     workflow carries a schedule: key, rebase-orca.yml carries no Orca tag or
@@ -213,6 +218,8 @@ const NIX_SCRIPTS = Object.freeze([
     // OVL-02 (68-02): the Orca replay builds and typechecks Orca, which needs the Orca shell.
     ['scripts/rebase-orca.sh', NIX_ORCA_PREFIX],
 ]);
+// The only expressions a run: body may hold: a step's outcome or conclusion, and the runner context. Case-insensitive.
+const RUN_EXPRESSION_ALLOWED = /^(?:steps\.[\w-]+\.(?:outcome|conclusion)|runner\.[a-z_]+)$/i;
 const WORKFLOW_TRIGGERS = Object.freeze(['workflow_dispatch', 'workflow_call']);
 // The replay workflows and the inputs each trigger must declare with no default (68-02, P68-10/P68-14).
 const ORCA_WORKFLOW_REL = '.github/workflows/rebase-orca.yml';
@@ -271,7 +278,7 @@ function runCommands(lines) {
         const m = lines[i].match(/^(\s*(?:-\s+)?)run:\s*(.*)$/);
         if (m === null) continue;
         const value = m[2].trim();
-        if (/^[|>][-+]?\s*(#.*)?$/.test(value)) {
+        if (/^[|>](?:[1-9][-+]?|[-+][1-9]?)?\s*(#.*)?$/.test(value)) {
             const keyCol = m[1].length;
             for (let j = i + 1; j < lines.length; j += 1) {
                 if (lines[j].trim() === '') continue;
@@ -323,11 +330,12 @@ function workflowFailures(text, rel = WORKFLOW_REL, inputNames = ['tag']) {
         }
     }
 
-    // (b') no input or event field is interpolated into a run: body; it reaches a shell only through env:.
+    // (b') a run: body holds no ${{ }} expression except the allow-list; an input reaches a shell only through env:.
     for (const { line, cmd } of runCommands(lines)) {
-        const hit = /\$\{\{\s*(inputs\.[\w.-]+|github\.event\.[\w.-]+)/.exec(cmd);
-        if (hit !== null) {
-            failures.push(`${rel}:${line} interpolates \${{ ${hit[1]} }} into a run: command, so a crafted input becomes shell text. Next step: pass it through env: (env: NAME: \${{ ${hit[1]} }}) and read "$NAME" in the command.`);
+        for (const m of cmd.matchAll(/\$\{\{([\s\S]*?)(?:\}\}|$)/g)) {
+            const expr = m[1].trim();
+            if (RUN_EXPRESSION_ALLOWED.test(expr) && cmd.includes('}}', m.index)) continue;
+            failures.push(`${rel}:${line} puts \${{ ${expr} }} into a run: command, so whatever it names (an input, an event field, an env value) becomes shell text. Next step: pass it through env: (env: NAME: \${{ ... }}) and read "$NAME" in the command; only step outcomes and the runner context may appear in a run body.`);
         }
     }
 
@@ -843,17 +851,29 @@ function selfTest() {
             copy.splice(on + 1, 0, `  ${name}:`);
             return copy.join('\n');
         };
-        const interpolated = () => {
+        const interpolated = (expr = 'inputs.tag', block = false) => {
             const i = lines.findIndex(l => l.includes('--command bash scripts/rebase-upstream.sh'));
             if (i === -1) return null;
             const copy = [...lines];
-            copy[i] = `${copy[i]} --tag \${{ inputs.tag }}`;
+            copy[i] = `${copy[i]} --tag \${{ ${expr} }}`;
+            if (block) {
+                const h = copy.slice(0, i).map((l, k) => [l, k]).reverse().find(([l]) => /^\s*(?:-\s+)?run:\s*\|\s*$/.test(l));
+                if (!h) return null;
+                copy[h[1]] = copy[h[1]].replace(/\|\s*$/, '|2');
+            }
             return copy.join('\n');
         };
         const plants = [
             ['pull_request_target trigger added', withTrigger('pull_request_target'), 'declares trigger(s) pull_request_target besides'],
             ['push trigger added', withTrigger('push'), 'declares trigger(s) push besides'],
-            ['an input interpolated into the replay command', interpolated(), 'interpolates ${{ inputs.tag }}'],
+            ['an input interpolated into the replay command', interpolated(), 'puts ${{ inputs.tag }} into a run: command'],
+            ['an env value interpolated into the replay command (env indirection)', interpolated('env.REBASE_TAG'), 'puts ${{ env.REBASE_TAG }} into a run: command'],
+            ['an input wrapped in format()', interpolated("format('{0}', inputs.tag)"), 'into a run: command'],
+            ['an input by bracket access', interpolated("inputs['tag']"), "puts ${{ inputs['tag'] }} into a run: command"],
+            ['an input in parentheses', interpolated('(inputs.tag)'), 'puts ${{ (inputs.tag) }} into a run: command'],
+            ['all inputs through toJSON()', interpolated('toJSON(inputs)'), 'puts ${{ toJSON(inputs) }} into a run: command'],
+            ['a capitalised context name', interpolated('Inputs.tag'), 'puts ${{ Inputs.tag }} into a run: command'],
+            ['an input in a run: |2 block (indentation indicator)', interpolated('inputs.tag', true), 'puts ${{ inputs.tag }} into a run: command'],
             ['default under workflow_call tag', withDefault('workflow_call'), 'workflow_call tag input a default'],
             ['default under workflow_dispatch tag', withDefault('workflow_dispatch'), 'workflow_dispatch tag input a default'],
             ['workflow_call trigger removed', withoutCall(), 'declares no workflow_call trigger'],
@@ -911,18 +931,26 @@ function selfTest() {
             copy.splice(on + 1, 0, `  ${name}:`);
             return copy.join('\n');
         };
-        const interpolated = (input) => {
+        const interpolated = (input, expr = `inputs.${input}`, block = false) => {
             const i = lines.findIndex(l => l.includes('--command bash scripts/rebase-orca.sh'));
             if (i === -1) return null;
             const copy = [...lines];
-            copy[i] = `${copy[i]} --${input} \${{ inputs.${input} }}`;
+            copy[i] = `${copy[i]} --${input} \${{ ${expr} }}`;
+            if (block) {
+                const h = copy.slice(0, i).map((l, k) => [l, k]).reverse().find(([l]) => /^\s*(?:-\s+)?run:\s*\|\s*$/.test(l));
+                if (!h) return null;
+                copy[h[1]] = copy[h[1]].replace(/\|\s*$/, '|2');
+            }
             return copy.join('\n');
         };
         const plants = [
             ['pull_request_target trigger added to the Orca replay', withTrigger('pull_request_target'), 'declares trigger(s) pull_request_target besides'],
             ['push trigger added to the Orca replay', withTrigger('push'), 'declares trigger(s) push besides'],
-            ['the tag input interpolated into the Orca replay command', interpolated('tag'), 'interpolates ${{ inputs.tag }}'],
-            ['the commit input interpolated into the Orca replay command', interpolated('commit'), 'interpolates ${{ inputs.commit }}'],
+            ['the tag input interpolated into the Orca replay command', interpolated('tag'), 'puts ${{ inputs.tag }} into a run: command'],
+            ['the commit input interpolated into the Orca replay command', interpolated('commit'), 'puts ${{ inputs.commit }} into a run: command'],
+            ['the tag through an env indirection in the Orca replay command', interpolated('tag', 'env.REBASE_TAG'), 'puts ${{ env.REBASE_TAG }} into a run: command'],
+            ['the commit wrapped in format() in the Orca replay command', interpolated('commit', "format('{0}', inputs.commit)"), 'into a run: command'],
+            ['the tag in a run: |2 block of the Orca replay', interpolated('tag', 'inputs.tag', true), 'puts ${{ inputs.tag }} into a run: command'],
             ['default under the Orca workflow_call tag', withDefault('workflow_call', 'tag', 'self-test-plant'), 'workflow_call tag input a default'],
             ['literal commit default under the Orca workflow_dispatch commit', withDefault('workflow_dispatch', 'commit', commit), 'workflow_dispatch commit input a default'],
             ['schedule: key on the Orca replay', withSchedule(), 'carries a schedule: key'],

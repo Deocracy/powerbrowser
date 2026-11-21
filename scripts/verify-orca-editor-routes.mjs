@@ -235,7 +235,9 @@ export function check(root) {
         else if (!THEIA_TARGETS.includes(v)) fails.push(`route ${k} is ${v}, not a Theia kind (${THEIA_TARGETS.join(', ')})`);
     }
 
-    // f. TopLevelView against lane p65-04's page rows.
+    // f. TopLevelView against the page rows. The restore directory is a tracked part of orca-panes: absent is a
+    // deletion, red, not a skip (harness-static-structure-01).
+    if (!has(REL.restoreDir)) fails.push(`${REL.restoreDir} is a tracked directory of this repository and is absent from the tree (the lane that added it is merged, so this is a deletion). Next step: restore it from version control.`);
     if (has(REL.restoreDir)) {
         notes.f = 'compared';
         const views = deriveUnion(read(REL.uiChrome), 'TopLevelView');
@@ -285,6 +287,14 @@ function runSelfTest() {
         if (first.fails.length || first.notes.f !== 'compared') { console.error(`${NAME} self-test: FAIL -- control is not green with clause f compared: ${first.fails.join(' | ')}`); return 1; }
         console.log(`${NAME} self-test: control green -- copies of the tree's files and a fixture restore directory${fixtures.length ? `, fixture ${fixtures.join(', ')}` : ''}; clause f compared`);
         let failures = 0;
+        {
+            rmSync(join(tmp, REL.restoreDir), { recursive: true, force: true });
+            const r = check(tmp);
+            mkdirSync(join(tmp, REL.restoreDir), { recursive: true });
+            const want = `${REL.restoreDir} is a tracked directory of this repository and is absent`;
+            if (r.fails.some((f) => f.includes(want))) console.log(`  ok restore directory removed -> red, naming '${want}'`);
+            else { console.error(`  FAIL restore directory removed -> ${r.fails.join(' | ') || 'stayed green'}`); failures++; }
+        }
         for (const p of PLANTS) {
             const file = join(tmp, p.file);
             const original = readFileSync(file, 'utf8');
@@ -489,7 +499,6 @@ if (isEntryPoint) {
     const r = check(REPO_ROOT);
     if (r.fails.length) { for (const f of r.fails) console.error(`${NAME}: FAIL -- ${f}`); process.exit(1); }
     const n = r.notes;
-    if (n.f !== 'compared') { console.log(skipLine(NAME, `clause f (TopLevelView against ORCA_PAGE_ROUTES) did not run: ${REL.restoreDir} is absent`)); process.exit(SKIP_EXIT); }
     console.log(`${NAME}: PASS -- ${n.modes.length} modes (${n.modes.join(', ')}), ${n.sources.length} diff sources and ${n.kinds.length} conflict kinds equal ORCA_EDITOR_ROUTES' keys; editor-type content types ${n.editorTypes.join(', ')} each covered; every value a Theia kind except the named row ${HOSTED_ROW.key}; (f) TopLevelView compared with ORCA_PAGE_ROUTES`);
     process.exit(0);
 }

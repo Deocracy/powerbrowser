@@ -21,7 +21,10 @@
 //     read from the statements of the method, not matched over text: each must be a
 //     top-level `await IOUtils.<call>(...)` statement of the body, or one inside an
 //     `if (posix)` block with no else, in the order of A-11, with no unconditional
-//     return before the last step. A step in `if (false)`, behind another condition,
+//     return or throw before the last step. `posix` must be a const defined before its
+//     first use as the not-Windows comparison (`<AppConstants>.platform !== "win"`) and
+//     never assigned again, or the 0600 call could be switched off on Linux by
+//     redefining it (harness-static-structure-12). A step in `if (false)`, behind another condition,
 //     inside a function that is never called, in a comment or in a string does not
 //     count (harness-static-structure-12). Without typescript this clause alone is
 //     not run, and the row exits 77 with the one SKIP line (SKIP-PROTOCOL.md).
@@ -35,9 +38,10 @@
 // on create, folder 0700 again, stale .tmp removed, .tmp created empty and
 // exclusively, .tmp 0600, content written with overwrite, .tmp moved over the
 // target), and "umask window" when any content write precedes the 0600 call.
-// The data-root join alone is not run while theia/extensions/orca-agents is
-// absent (lane p63-03 not merged), and the row then exits 77 with a SKIP line; the
-// directory present with either file or export missing is red, never a SKIP.
+// theia/extensions/orca-agents is a tracked extension of this repository: an absent
+// directory, or either file or the export missing from it, is red, never a SKIP
+// (harness-static-structure-01; the lane that added it is long merged). Only a missing
+// typescript leaves the writePrivateFile order clause not run, and the row exits 77.
 //
 // Limit: path strings and source order only. The modes on disk and the
 // content are the live row's (orca-agent-status-live, lane p63-03), on Linux.
@@ -190,18 +194,32 @@ function runningStatements(body) {
     const printer = ts.createPrinter({ removeComments: true });
     const out = [];
     let returnsAt = -1;
+    let posixDecl = null;
+    const reassigned = [];
+    const walk = (n) => {
+        if (ts.isBinaryExpression(n) && n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && n.operatorToken.kind <= ts.SyntaxKind.LastAssignment && ts.isIdentifier(n.left) && n.left.text === 'posix') reassigned.push(printer.printNode(ts.EmitHint.Unspecified, n, sf));
+        ts.forEachChild(n, walk);
+    };
+    walk(fn);
     const record = (st, guard) => {
         const e = ts.isExpressionStatement(st) ? st.expression : null;
         if (e && ts.isAwaitExpression(e) && ts.isCallExpression(e.expression)) out.push({ text: printer.printNode(ts.EmitHint.Unspecified, e.expression, sf), guard });
-        else if (ts.isVariableStatement(st)) out.push({ text: printer.printNode(ts.EmitHint.Unspecified, st, sf), guard, declaration: true });
+        else if (ts.isVariableStatement(st)) {
+            out.push({ text: printer.printNode(ts.EmitHint.Unspecified, st, sf), guard, declaration: true });
+            for (const d of st.declarationList.declarations) {
+                if (ts.isIdentifier(d.name) && d.name.text === 'posix' && guard === null) {
+                    posixDecl = { isConst: (st.declarationList.flags & ts.NodeFlags.Const) !== 0, init: d.initializer ? printer.printNode(ts.EmitHint.Unspecified, d.initializer, sf) : '', at: out.length - 1 };
+                }
+            }
+        }
     };
     for (const st of fn?.body?.statements ?? []) {
-        if (ts.isReturnStatement(st) && returnsAt < 0) returnsAt = out.length;
+        if ((ts.isReturnStatement(st) || ts.isThrowStatement(st)) && returnsAt < 0) returnsAt = out.length;
         if (ts.isIfStatement(st) && !st.elseStatement && ts.isIdentifier(st.expression) && st.expression.text === 'posix' && ts.isBlock(st.thenStatement)) {
             for (const inner of st.thenStatement.statements) record(inner, 'posix');
         } else record(st, null);
     }
-    return { running: out, returnsAt };
+    return { running: out, returnsAt, posixDecl, reassigned };
 }
 
 /** writePrivateFile's call order (P63-36) in a boundary source. Returns { fails, skip }; skip is set when typescript is absent. */
@@ -209,9 +227,19 @@ export function orderVerdict(source) {
     const body = extractMember(source ?? '', 'writePrivateFile');
     if (body === null) return { fails: ['PowerBrowserAPI.sys.mjs has no async writePrivateFile member'], skip: null };
     if (!loadTypeScript()) return { fails: [], skip: 'the writePrivateFile order clause did not run: theia/node_modules/typescript is absent. Next step: run the audited Theia install' };
-    const { running, returnsAt } = runningStatements(body);
+    const { running, returnsAt, posixDecl, reassigned } = runningStatements(body);
     const calls = running.filter((r) => !r.declaration);
     const fails = [];
+    const firstGuarded = running.findIndex((r) => r.guard === 'posix');
+    if (firstGuarded >= 0 || running.some((r) => /\bposix\b/.test(r.text))) {
+        if (posixDecl === null) fails.push('writePrivateFile uses posix but does not define it as a top-level const of the method');
+        else {
+            if (!posixDecl.isConst) fails.push('writePrivateFile defines posix with let or var, so it can change before the guarded steps; it must be a const');
+            if (!/^\w+(?:\.\w+)*\.platform\s*!==\s*(["'])win\1$/.test(posixDecl.init)) fails.push(`writePrivateFile's posix is ${posixDecl.init || '(undefined)'}, not the not-Windows comparison (<AppConstants>.platform !== "win"), so the 0700 and 0600 steps would not run on Linux and macOS`);
+            if (firstGuarded >= 0 && posixDecl.at > firstGuarded) fails.push('writePrivateFile defines posix after the first step that is guarded by it');
+        }
+        for (const r of reassigned) fails.push(`writePrivateFile assigns posix again (${r}), so the guard no longer means not-Windows`);
+    }
     let last = -1;
     let lastName = 'the start of the method';
     for (const [name, re] of STEPS) {
@@ -225,7 +253,7 @@ export function orderVerdict(source) {
     if (returnsAt >= 0) {
         const moveAt = calls.findIndex((c) => STEPS[6][1].test(c.text));
         const returnPos = running.slice(0, returnsAt).filter((r) => !r.declaration).length;
-        if (moveAt < 0 || moveAt >= returnPos) fails.push('writePrivateFile returns unconditionally before its last step, so the steps after the return never run');
+        if (moveAt < 0 || moveAt >= returnPos) fails.push('writePrivateFile returns or throws unconditionally before its last step, so the steps after it never run');
     }
     const chmod = calls.findIndex((c) => STEPS[4][1].test(c.text));
     const empty = calls.findIndex((c) => STEPS[3][1].test(c.text));
@@ -242,7 +270,7 @@ export function orderVerdict(source) {
  * { fails } (empty when the three literals agree).
  */
 export async function literalJoin(env, extDir) {
-    if (!existsSync(extDir)) return { skip: 'SKIP (lane p63-03 not merged)' };
+    if (!existsSync(extDir)) return { fails: ['theia/extensions/orca-agents is a tracked extension of this repository and is absent from the tree, so the data-root literal cannot be compared. Next step: restore it from version control.'] };
     const wrapper = join(extDir, 'bin', 'claude-wrapper.mjs');
     const protocol = join(extDir, 'src', 'common', 'orca-agents-protocol.ts');
     const fails = [];
@@ -266,10 +294,6 @@ export async function check({ env, extDir, apiFile }) {
     const fails = [...platformVerdict(env), ...(await folderVerdict(env)), ...joinVerdict(env), ...order.fails];
     const skips = order.skip ? [order.skip] : [];
     const lit = await literalJoin(env, extDir);
-    if (lit.skip) {
-        skips.push('the data-root literal join did not run: theia/extensions/orca-agents is absent (lane p63-03 not merged)');
-        return { fails, join: lit.skip, skips };
-    }
     return { fails: [...fails, ...lit.fails], join: 'compared', skips };
 }
 
@@ -325,6 +349,7 @@ async function runSelfTest() {
             { name: 'the protocol file deleted while the fixture extension directory exists (red, not SKIP)', naming: 'orca-agents-protocol.ts is missing', env: real, ...fileEdit(protocol, () => null) },
             { name: 'writeUTF8 moved before the 0o600 call', naming: 'umask window', env: real, ...fileEdit(apiFile, (t) => swap(CHMOD + WRITE, WRITE + CHMOD)(t)) },
             { name: 'the folder re-apply removed', naming: 'folder re-apply 0700', env: real, ...fileEdit(apiFile, swap('    if (posix) {\n      await IOUtils.setPermissions(dir, 0o700, false);\n    }\n', '')) },
+            { name: 'the orca-agents extension directory absent (red, not SKIP)', naming: 'theia/extensions/orca-agents is a tracked extension of this repository and is absent', env: real, extDir: join(tmp, 'no-such-extension') },
             { name: 'the exclusive create removed', naming: 'exclusive create', env: real, ...fileEdit(apiFile, swap('    await IOUtils.write(tmp, new Uint8Array(0), { mode: "create" });\n', '')) },
             // Harness-static-structure-12: text that survives but control flow that does not.
             { name: 'the 0600 call inside if (false)', naming: '.tmp set 0600 step that runs on every call', env: real, ...fileEdit(apiFile, swap(CHMOD, '    if (false) {\n      await IOUtils.setPermissions(tmp, 0o600, false);\n    }\n')) },
@@ -332,14 +357,19 @@ async function runSelfTest() {
             { name: 'the 0600 call in a function that is never called', naming: '.tmp set 0600 step that runs on every call', env: real, ...fileEdit(apiFile, swap(CHMOD, '    const later = async () => {\n      await IOUtils.setPermissions(tmp, 0o600, false);\n    };\n')) },
             { name: 'the 0600 call reduced to a trailing comment', naming: '.tmp set 0600 step that runs on every call', env: real, ...fileEdit(apiFile, swap(CHMOD, '    await IOUtils.stat(tmp); // IOUtils.setPermissions(tmp, 0o600, false);\n')) },
             { name: 'the 0600 call reduced to a string literal', naming: '.tmp set 0600 step that runs on every call', env: real, ...fileEdit(apiFile, swap(CHMOD, '    await IOUtils.stat("IOUtils.setPermissions(tmp, 0o600, false)");\n')) },
-            { name: 'an unconditional return before the move', naming: 'returns unconditionally before its last step', env: real, ...fileEdit(apiFile, swap(MOVE, '    return;\n' + MOVE)) },
+            { name: 'posix redefined as the Windows comparison', naming: "posix is lazy.AppConstants.platform === \"win\", not the not-Windows comparison", env: real, ...fileEdit(apiFile, swap('const posix = lazy.AppConstants.platform !== "win";', 'const posix = lazy.AppConstants.platform === "win";')) },
+            { name: 'posix defined as a constant true', naming: 'posix is true, not the not-Windows comparison', env: real, ...fileEdit(apiFile, swap('const posix = lazy.AppConstants.platform !== "win";', 'const posix = true;')) },
+            { name: 'posix declared with let and reassigned', naming: 'defines posix with let or var', env: real, ...fileEdit(apiFile, swap('const posix = lazy.AppConstants.platform !== "win";', 'let posix = lazy.AppConstants.platform !== "win";\n    posix = false;')) },
+            { name: 'posix defined after the first step it guards', naming: 'defines posix after the first step that is guarded by it', env: real, ...fileEdit(apiFile, (t) => { const d = '    const posix = lazy.AppConstants.platform !== "win";\n'; if (!t.includes(d)) throw new Error('plant target not found: posix definition'); return t.replace(d, '').replace('    const path = PathUtils.join(dir, name);\n', `    const path = PathUtils.join(dir, name);\n${d}`); }) },
+            { name: 'an unconditional throw before the move', naming: 'returns or throws unconditionally before its last step', env: real, ...fileEdit(apiFile, swap(MOVE, '    throw new Error("early");\n' + MOVE)) },
+            { name: 'an unconditional return before the move', naming: 'returns or throws unconditionally before its last step', env: real, ...fileEdit(apiFile, swap(MOVE, '    return;\n' + MOVE)) },
             { name: 'the 0600 else branch (posix guard with an else)', naming: '.tmp set 0600 step that runs on every call', env: real, ...fileEdit(apiFile, swap(CHMOD, '    if (posix) {\n      await IOUtils.setPermissions(tmp, 0o600, false);\n    } else {\n      await IOUtils.stat(tmp);\n    }\n')) },
         ];
         let failures = 0;
         for (const p of plants) {
             try {
                 p.setup?.();
-                const r = await check({ ...base, env: p.env });
+                const r = await check({ ...base, env: p.env, ...(p.extDir ? { extDir: p.extDir } : {}) });
                 const text = r.fails.join('\n');
                 if (!r.fails.length) { console.error(`  FAIL ${p.name} -> stayed green (join ${r.join})`); failures++; }
                 else if (!text.includes(p.naming)) { console.error(`  FAIL ${p.name} -> red, but not naming '${p.naming}': ${text}`); failures++; }

@@ -46,8 +46,11 @@
 //
 // The overlay itself is required (harness-static-structure-06): an absent orca-overlay/seams.json is red, not
 // zero seams, and every overlay file that the build scripts name (scripts/build-orca*.sh: a vite.pb-*.config.ts,
-// pb-css-scope.mjs or src/renderer/src/pb/ path) must exist under orca-overlay/files/. The list is read from
-// those scripts at check time.
+// pb-css-scope.mjs or src/renderer/src/pb/ path), and every overlay file those entries import (the relative-import
+// graph, followed through overlay files only), must exist under orca-overlay/files/. A relative import that
+// resolves under src/renderer/src/pb/ to a file the overlay does not hold is red. The set is derived at check
+// time from those scripts and the files' own imports. Each seam class of UPSTREAM_CLASSES must have a seam row:
+// an emptied seams.json with its patches deleted is red.
 //
 // Usage:
 //   node scripts/verify-orca-overlay.mjs
@@ -58,7 +61,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { fixtureGitArgs, fixtureGitEnv, withHostileGitConfig } from './lib/fixture-git.mjs';
@@ -169,11 +172,48 @@ export function namedOverlayFiles(repoRoot) {
     return [...out].sort();
 }
 
+// The relative module specifiers of a source text: import/export ... from '<spec>', import('<spec>'), import '<spec>'.
+function relativeSpecifiers(text) {
+    const out = new Set();
+    for (const m of text.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)(["'])(\.{1,2}\/[^"'\n]*)\1/g)) out.add(m[2]);
+    return [...out];
+}
+
+/**
+ * The overlay files the product needs, derived: the files the build scripts name plus, transitively, every overlay file
+ * they import by a relative specifier. { required: sorted paths, dangling: [{ file, spec, wanted }] } where dangling is
+ * a relative import that resolves under src/renderer/src/pb/ to a path the overlay does not hold.
+ */
+export function requiredOverlayFiles(repoRoot, filesDir) {
+    const entries = namedOverlayFiles(repoRoot);
+    const required = new Set(entries);
+    const dangling = [];
+    const have = new Set(listFiles(filesDir));
+    const stack = [...entries];
+    const seen = new Set();
+    while (stack.length) {
+        const rel = stack.pop();
+        if (seen.has(rel)) continue;
+        seen.add(rel);
+        if (!have.has(rel)) continue;
+        let text;
+        try { text = readFileSync(join(filesDir, rel), 'utf8'); } catch { continue; }
+        for (const spec of relativeSpecifiers(text)) {
+            const base = posix.normalize(posix.join(posix.dirname(rel), spec));
+            const candidates = [base, ...['.ts', '.tsx', '.mjs', '.js'].map((e) => base + e), ...['.ts', '.tsx', '.mjs', '.js'].map((e) => `${base}/index${e}`)];
+            const found = candidates.find((c) => have.has(c));
+            if (found) { required.add(found); stack.push(found); }
+            else if (base.startsWith('src/renderer/src/pb/')) dangling.push({ file: rel, spec, wanted: base });
+        }
+    }
+    return { required: [...required].sort(), dangling };
+}
+
 function lastLine(r) {
     return `${r.stdout ?? ''}\n${r.stderr ?? ''}`.split('\n').map((l) => l.trim()).filter(Boolean).find((l) => l.includes('FAIL')) ?? `exit ${r.status}`;
 }
 
-export function check({ repoRoot = REPO_ROOT, overlayDir = join(repoRoot, 'orca-overlay'), orcaDir = join(repoRoot, 'orca'), cap } = {}) {
+export function check({ repoRoot = REPO_ROOT, overlayDir = join(repoRoot, 'orca-overlay'), orcaDir = join(repoRoot, 'orca'), cap, requiredClasses = [] } = {}) {
     const fails = [];
     const notes = [];
     const skips = [];
@@ -273,8 +313,17 @@ export function check({ repoRoot = REPO_ROOT, overlayDir = join(repoRoot, 'orca-
     // f. PB-added files, tracked half: path, kind and marker literal.
     const filesDir = join(overlayDir, 'files');
     const files = listFiles(filesDir);
-    for (const need of namedOverlayFiles(repoRoot)) {
-        if (!files.includes(need)) fails.push(`overlay file ${need} is named by scripts/build-orca*.sh but is not a file of orca-overlay/files/ (the overlay lost it; restore it from git)`);
+    const graph = requiredOverlayFiles(repoRoot, filesDir);
+    const named = new Set(namedOverlayFiles(repoRoot));
+    for (const need of graph.required) {
+        if (files.includes(need)) continue;
+        if (named.has(need)) fails.push(`overlay file ${need} is named by scripts/build-orca*.sh but is not a file of orca-overlay/files/ (the overlay lost it; restore it from git)`);
+    }
+    for (const d of graph.dangling) {
+        fails.push(`overlay file ${d.wanted} is imported by ${d.file} ('${d.spec}') but is not a file of orca-overlay/files/ (the overlay lost it; restore it from git)`);
+    }
+    for (const c of requiredClasses) {
+        if (!rows.some((r) => r.upstream?.class === c)) fails.push(`no seam of class ${c} in seams.json: the overlay's ${c} seam is gone (an emptied seams.json with its patches deleted is not a valid overlay; restore it from git)`);
     }
     const owned = {};
     for (const p of files) {
@@ -471,12 +520,24 @@ function runSelfTestBody() {
             rmSync(join(tmp, 'scripts', 'build-orca-fixture.sh'), { force: true });
             if (spec.buildScript) put(tmp, 'scripts/build-orca-fixture.sh', spec.buildScript);
             put(tmp, MANIFEST_REL, spec.cap === null ? '[other]\nkey = 1\n' : `[orca]\nseam_cap = ${spec.cap}\n`);
-            const r = check({ repoRoot: tmp, overlayDir: overlay, orcaDir, cap: readCap(tmp) });
+            const r = check({ repoRoot: tmp, overlayDir: overlay, orcaDir, cap: readCap(tmp), requiredClasses: spec.requiredClasses ?? [] });
             const b = checkBuilt({ repoRoot: tmp, overlayDir: overlay, orcaDir });
             return { fails: [...r.fails, ...b.fails], notes: r.notes, skips: r.skips, skipBuilt: b.skip };
         };
 
+        // An entry the build script names, importing a helper, which imports another: all must be in the overlay.
+        const GRAPH_ENTRY = 'src/renderer/src/pb/pb-entry.ts';
+        const GRAPH_HELPER = 'src/renderer/src/pb/pb-helper.ts';
+        const GRAPH_DEEP = 'src/renderer/src/pb/deep/pb-deep.ts';
+        const graph = (s) => {
+            s.buildScript = `cp ${GRAPH_ENTRY} x\n`;
+            s.files[GRAPH_ENTRY] = `${src(GRAPH_ENTRY)}import { h } from './pb-helper'\n`;
+            s.files[GRAPH_HELPER] = `${src(GRAPH_HELPER)}export { d } from './deep/pb-deep'\n`;
+            s.files[GRAPH_DEEP] = src(GRAPH_DEEP);
+            s.out['out/web/assets/.fixture-graph.js'] = [GRAPH_ENTRY, GRAPH_HELPER, GRAPH_DEEP].map((f) => `"pb-overlay:${f}"`).join(';');
+        };
         const controls = [
+            ['an entry, a helper and a helper two imports deep, all present, with both required seam classes', (() => { const s = { ...base(), requiredClasses: ['browser-provider', 'pb-only'] }; s.seams.push(structuredClone(rowTiny)); s.patches['020-tiny.patch'] = P.tiny1; graph(s); return s; })()],
             ['zero seams, zero files', { ...base(), seams: [], patches: {}, files: {}, upstream: {}, out: { 'out/web/a.js': '1' } }],
             ['one 3-line seam', { ...base(), files: {} }],
             ['one overlay file, marker compiled into out/web only', { ...base(), seams: [], patches: {}, upstream: {} }],
@@ -535,6 +596,10 @@ function runSelfTestBody() {
             { name: 'overlay-vanished', naming: 'orca-overlay/seams.json is absent', apply: (s) => { s.seams = null; s.patches = {}; s.files = {}; s.upstream = {}; } },
             { name: 'overlay-file-named-by-build-script-lost', naming: 'overlay file vite.pb-lost.config.ts is named by scripts/build-orca*.sh', apply: (s) => { s.buildScript = 'cmp orca-overlay/files/vite.pb-lost.config.ts orca/vite.pb-lost.config.ts\n'; } },
             { name: 'overlay-files-emptied-while-build-scripts-name-them', naming: 'orca-overlay/files/ is empty but scripts/build-orca*.sh name overlay files', apply: (s) => { s.files = {}; s.out = { 'out/web/a.js': '1' }; s.buildScript = 'cp src/renderer/src/pb/pb-gone.tsx x\n'; } },
+            { name: 'seams-emptied-and-patches-deleted', naming: 'no seam of class browser-provider in seams.json', apply: (s) => { s.requiredClasses = ['browser-provider', 'pb-only']; s.seams = []; s.patches = {}; s.upstream = {}; } },
+            { name: 'a required seam class with no row', naming: 'no seam of class pb-only in seams.json', apply: (s) => { s.requiredClasses = ['browser-provider', 'pb-only']; } },
+            { name: 'an imported overlay file deleted', naming: `overlay file ${GRAPH_HELPER.replace(/\.ts$/, '')} is imported by ${GRAPH_ENTRY}`, apply: (s) => { graph(s); delete s.files[GRAPH_HELPER]; } },
+            { name: 'a file two imports deep deleted', naming: `overlay file ${GRAPH_DEEP.replace(/\.ts$/, '')} is imported by ${GRAPH_HELPER}`, apply: (s) => { graph(s); delete s.files[GRAPH_DEEP]; } },
             { name: 'built-marker-only-in-node_modules', naming: `not compiled by build:web or build:orcad: ${ADDED}`, apply: (s) => { s.out = { 'out/web/node_modules/x/index.js': `const a="pb-overlay:${ADDED}";`, 'out/orcad/orcad.js': '1' }; } },
         ];
         let failures = 0;
@@ -603,7 +668,7 @@ if (isEntryPoint) {
     }
     if (args[0] === '--self-test') process.exit(runSelfTest());
     if (args[0] === '--upstream-prs') process.exit(runUpstreamPrs());
-    const { code, lines } = args[0] === '--built' ? renderBuilt(checkBuilt()) : render(check({ cap: readCap(REPO_ROOT) }));
+    const { code, lines } = args[0] === '--built' ? renderBuilt(checkBuilt()) : render(check({ cap: readCap(REPO_ROOT), requiredClasses: UPSTREAM_CLASSES }));
     for (const l of lines) (code && l.includes('FAIL') ? console.error : console.log)(l);
     process.exit(code);
 }

@@ -27,11 +27,17 @@
 //  5. The Node runtime set: realpath(step 1's binary), every node executable in orcad's
 //     process tree and the terminal daemon's (/proc), and every node or node.exe file
 //     under orca/out (verify-orca-build-shape.mjs walk), distinct by sha256. Exactly one.
-//  6. Teardown: orcad's process group and health.terminalDaemon.pid get SIGTERM, then
-//     SIGKILL after 10 s; either pid still in /proc is a FAIL. The process tree is read before
-//     teardown, so a daemon orcad started and then failed before its ready line (no daemon pid
-//     known) is found among the descendants and reaped too; a descendant that outlives the
-//     teardown is a FAIL.
+//  6. Teardown: orcad's process group gets SIGTERM, then SIGKILL after 10 s; the terminal
+//     daemon is signalled the same way; either still in /proc is a FAIL. Every process the
+//     row starts carries PB_SLOTLESS_ROW=<random> in its environment (the daemon is spawned
+//     from process.env, so it inherits it), and a sampler records each marked process as an
+//     identity { pid, start time } while it runs. startOrcad kills orcad's process group
+//     before it rejects on a failed start, which reparents a detached daemon; the marker and
+//     the sampled identities find it anyway, where a walk of the tree after that kill would
+//     not. A process is signalled only after its start time is re-checked, so a pid reused
+//     during the teardown window is never hit. health.terminalDaemon.pid is signalled only
+//     when it is one of those marked processes; a pid orcad reports that is not is a FAIL and
+//     is left alone. A marked process that outlives the teardown is a FAIL and is reaped.
 //  7. The installed-Orca paths orcad probes for a hidden Electron, from the orca-ide
 //     literals in orca/src/main/orcad/orcad-browser-provider.ts.
 //  8. The web-tab half (P59-04): pairing.webClientUrl opened in a PB web tab
@@ -78,7 +84,7 @@
 //   node scripts/verify-orca-slotless-start.mjs --self-test
 
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
@@ -90,10 +96,12 @@ import {
 } from './lib/orca-run.mjs';
 import { NODE_NAMES, walk } from './verify-orca-build-shape.mjs';
 import { FIREFOX_BIN, liveEnv } from './lib/firefox-bidi.mjs';
-import { decodeAddress, isLoopback, listeningTcp, nonLoopback, parseListening, pidAlive, processTree, reapPids } from './lib/proc-tree.mjs';
+import { decodeAddress, isLoopback, listeningTcp, nonLoopback, parseListening, pidAlive, processTree, reapIdentities, sameProcess, scanMarked, signalIdentity, startSampler, startTicks } from './lib/proc-tree.mjs';
 import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const NAME = 'orca-slotless-start';
+// The environment marker every process of this row carries (not ORCA_-prefixed, so assertEnv accepts it).
+const ROW_MARKER = 'PB_SLOTLESS_ROW';
 const SELF_REL = 'scripts/verify-orca-slotless-start.mjs';
 const ORCA_DIR = join(REPO_ROOT, 'orca');
 const MARKER_REL = 'src/renderer/src/components/status-bar/ssh-status-segment-copy.ts';
@@ -218,21 +226,15 @@ async function live({ orcadOnly = false } = {}) {
     }
 
     const profileDir = mkdtempSync(join(tmpdir(), 'pb-orca-probe-'));
-    const env = orcadEnv(process.env, { profileDir, orcaVersion });
+    const rowMark = randomBytes(8).toString('hex');
+    const env = { ...orcadEnv(process.env, { profileDir, orcaVersion }), [ROW_MARKER]: rowMark };
     const fails = [];
     const run = { child: null, ready: null, port: '?', restore: () => {} };
+    const sampler = startSampler(ROW_MARKER, rowMark);
     try {
         await probeOrcad(run, { node, env, profileDir, orcaVersion, marker, fails, orcadOnly });
     } finally {
-        if (run.child) {
-            const daemonPid = run.ready?.daemonPid ?? null;
-            // Read the tree before teardown: a failure before the ready line leaves daemonPid null, and a daemon orcad
-            // started would otherwise be orphaned and invisible.
-            const tree = [...processTree([run.child.pid, daemonPid])].filter((p) => p !== run.child.pid && p !== daemonPid);
-            const { survivors } = await stopOrcad(run.child, daemonPid);
-            fails.push(...checkSurvivors(survivors, { orcadPid: run.child.pid, daemonPid }));
-            fails.push(...await descendantSurvivors(tree));
-        }
+        fails.push(...await finishRow({ child: run.child, daemonPid: run.ready?.daemonPid ?? null, ids: sampler.finish() }));
         rmSync(profileDir, { recursive: true, force: true });
     }
     try {
@@ -249,14 +251,36 @@ async function live({ orcadOnly = false } = {}) {
     }
 }
 
-/** The descendants of orcad that outlive its teardown: given a short time to exit on their own, then reaped and reported. */
-export async function descendantSurvivors(pids, { settleMs = 2000 } = {}) {
+/**
+ * Teardown (step 6). ids: every identity the sampler saw (marked processes and their descendants). orcad's group is stopped by
+ * `stop`; the reported daemon is signalled only when it is one of ids; any other marked process still alive after a short
+ * settle is reaped and reported. Every signal re-checks the start time. Returns the failure lines.
+ */
+export async function finishRow({ child, daemonPid, ids, stop = stopOrcad, daemonGraceMs = 10000, settleMs = 2000 }) {
+    const fails = [];
+    const mine = ids.filter((i) => i.pid !== child?.pid);
+    let daemon = null;
+    if (daemonPid !== null && daemonPid !== undefined) {
+        daemon = mine.find((i) => i.pid === daemonPid) ?? null;
+        if (!daemon) fails.push(`the ready line names terminal daemon ${daemonPid}, which is not a process this row started (it does not carry the row's marker and was never seen in orcad's tree), so it was not signalled. Next step: check what orcad reported as health.terminalDaemon.pid.`);
+    }
+    if (child) {
+        const { survivors } = await stop(child, null);
+        fails.push(...checkSurvivors(survivors, { orcadPid: child.pid, daemonPid: null }));
+    }
+    if (daemon) {
+        const left = await reapIdentities([daemon], { graceMs: daemonGraceMs });
+        fails.push(...checkSurvivors(left.map((i) => i.pid), { orcadPid: child?.pid ?? -1, daemonPid: daemon.pid }));
+    }
+    const others = mine.filter((i) => i !== daemon);
     const until = Date.now() + settleMs;
-    while (Date.now() < until && pids.some(pidAlive)) await new Promise((r) => setTimeout(r, 100));
-    const left = pids.filter(pidAlive);
-    if (!left.length) return [];
-    await reapPids(left);
-    return left.map((pid) => `process ${pid}, a descendant of orcad, survived teardown and was killed by the row. Next step: check which process orcad started and why its teardown did not stop it.`);
+    while (Date.now() < until && others.some(sameProcess)) await new Promise((r) => setTimeout(r, 100));
+    const leaked = others.filter(sameProcess);
+    if (leaked.length) {
+        await reapIdentities(leaked);
+        fails.push(...leaked.map((i) => `process ${i.pid}, started by orcad, survived teardown and was killed by the row. Next step: check which process orcad started and why its teardown did not stop it.`));
+    }
+    return fails;
 }
 
 // Steps 3-5 while orcad runs; every red reason goes to `fails`, teardown is the caller's.
@@ -448,20 +472,69 @@ async function selfTest() {
             }
         }
         red('no listener on the reported port (blind instrument)', checkListeners([], 41000), 'could not be verified independently');
-        // A daemon started by an orcad that failed before its ready line: found in the tree before teardown, reaped, reported.
-        const parent = spawn('bash', ['-c', 'setsid sleep 300 & echo $!; wait'], { stdio: ['ignore', 'pipe', 'ignore'] });
+        // Teardown (harness-static-structure-09): the failed-start case, pid reuse, a foreign daemon pid, the normal path.
+        const mark = randomBytes(8).toString('hex');
+        const markedEnv = { ...process.env, [ROW_MARKER]: mark };
+        const detachedDaemon = `const { spawn } = require('node:child_process'); const d = spawn('sleep', ['300'], { detached: true, stdio: 'ignore' }); d.unref(); console.log(d.pid); setInterval(() => {}, 1000);`;
+        const sampler = startSampler(ROW_MARKER, mark, { intervalMs: 20 });
+        // orcad stand-in: its own session, and a daemon in a session of its own, like the real one.
+        const standIn = spawn(process.execPath, ['-e', detachedDaemon], { detached: true, env: markedEnv, stdio: ['ignore', 'pipe', 'ignore'] });
+        const standInGone = new Promise((r) => standIn.once('exit', r));
         try {
-            const leaked = await new Promise((resolveP) => parent.stdout.once('data', (d) => resolveP(Number(String(d).trim()))));
-            const tree = [...processTree([parent.pid])].filter((p) => p !== parent.pid);
-            parent.kill('SIGKILL');
-            if (!tree.includes(leaked)) miss('descendant capture', `the tree ${tree.join(',')} lacks the leaked pid ${leaked}`);
+            const leaked = await new Promise((resolveP) => standIn.stdout.once('data', (d) => resolveP(Number(String(d).trim()))));
+            await new Promise((r) => setTimeout(r, 150));
+            // What startOrcad's fail() does before it rejects: SIGKILL orcad's process group. The detached daemon survives it.
+            process.kill(-standIn.pid, 'SIGKILL');
+            await standInGone;
+            await new Promise((r) => setTimeout(r, 100));
+            if (!pidAlive(leaked)) miss('failed-start fixture', 'the daemon died with its parent, so the case is not reproduced');
+            else if (processTree([standIn.pid]).has(leaked)) miss('failed-start fixture', 'the tree walk still finds the daemon after the group kill, so the case is not reproduced');
             else {
-                const verdict = await descendantSurvivors(tree, { settleMs: 300 });
-                if (verdict.some((f) => f.includes(`process ${leaked}`)) && !pidAlive(leaked)) ok('a daemon that outlived orcad (no daemon pid known) -> found in the tree, reaped and red');
-                else miss('descendant reap', `${verdict.join(' | ') || 'no failure'}; alive ${pidAlive(leaked)}`);
+                ok('precondition: after the group kill a walk of the tree no longer finds the detached daemon (the old approach read the tree here)');
+                const verdict = await finishRow({ child: standIn, daemonPid: null, ids: sampler.finish(), stop: async () => ({ survivors: [] }), settleMs: 300 });
+                if (verdict.some((f) => f.includes(`process ${leaked}`)) && !pidAlive(leaked)) ok('a failed start (orcad killed, no daemon pid known) leaves a daemon -> found by the marker and sampled identity, reaped and red');
+                else miss('failed-start reap', `${verdict.join(' | ') || 'no failure'}; alive ${pidAlive(leaked)}`);
             }
         } finally {
-            parent.kill('SIGKILL');
+            try { process.kill(-standIn.pid, 'SIGKILL'); } catch { /* gone */ }
+            sampler.finish();
+        }
+        {
+            // pid reuse: an identity with the wrong start time is never signalled.
+            const stranger = spawn('sleep', ['300'], { stdio: 'ignore' });
+            try {
+                const real = { pid: stranger.pid, startTicks: startTicks(stranger.pid) };
+                const wrong = { pid: stranger.pid, startTicks: String(Number(real.startTicks) + 1) };
+                const sentWrong = signalIdentity(wrong, 'SIGKILL');
+                if (!sentWrong && pidAlive(stranger.pid)) ok('an identity whose start time differs (a reused pid) is not signalled');
+                else miss('pid reuse', `a signal was sent to a different process (sent ${sentWrong}, alive ${pidAlive(stranger.pid)})`);
+                const sentReal = signalIdentity(real, 'SIGKILL');
+                await new Promise((r) => stranger.once('exit', r));
+                if (sentReal && !pidAlive(stranger.pid)) ok('the matching identity is signalled');
+                else miss('identity signal', 'the matching identity was not signalled');
+            } finally { stranger.kill('SIGKILL'); }
+        }
+        {
+            // A daemon pid orcad reports that this row did not start is left alone and reported.
+            const foreign = spawn('sleep', ['300'], { stdio: 'ignore' });
+            try {
+                const verdict = await finishRow({ child: null, daemonPid: foreign.pid, ids: [], settleMs: 0 });
+                if (verdict.some((f) => f.includes(`terminal daemon ${foreign.pid}, which is not a process this row started`)) && pidAlive(foreign.pid)) ok('a reported daemon pid that is not a process of the row -> red, and not signalled');
+                else miss('foreign daemon pid', `${verdict.join(' | ') || 'no failure'}; alive ${pidAlive(foreign.pid)}`);
+            } finally { foreign.kill('SIGKILL'); }
+        }
+        {
+            // The normal path: the reported daemon is one of the row's, is reaped, and nothing is red.
+            const daemon = spawn('sleep', ['300'], { env: markedEnv, stdio: 'ignore' });
+            try {
+                const ids = scanMarked(ROW_MARKER, mark);
+                if (!ids.some((i) => i.pid === daemon.pid)) miss('marker scan', 'the marked daemon was not found by its environment marker');
+                else {
+                    const verdict = await finishRow({ child: null, daemonPid: daemon.pid, ids, settleMs: 0, daemonGraceMs: 2000 });
+                    if (!verdict.length && !sameProcess(ids.find((i) => i.pid === daemon.pid))) ok('the reported daemon of the row is found by its marker, signalled and reaped -> green');
+                    else miss('daemon reap', verdict.join(' | ') || 'the daemon is still alive');
+                }
+            } finally { daemon.kill('SIGKILL'); }
         }
         // Step 7 is evaluated against the HOME orcad runs under, not the real one.
         const realHome = homedir();

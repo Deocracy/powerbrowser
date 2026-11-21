@@ -62,9 +62,9 @@
 // cannot, and those are printed as owner items). The remaining active chords are
 // printed as a note for the owner review.
 //
-// SKIP rules: the orca-panes half is not run only while
-// theia/extensions/orca-panes is absent; the Orca half only while orca/ is absent
-// (P62-10). The directory present but a needed file missing is red. A half that
+// SKIP rules: only the Orca half is not run, and only while the fetched orca/ is absent
+// (P62-10). theia/extensions/orca-panes is a tracked extension: absent, or present with a
+// needed file missing, is red (harness-static-structure-01). A half that
 // did not run makes the row exit 77 with the one SKIP line (SKIP-PROTOCOL.md); the
 // self-test, which copies the pinned Orca sources into its fixture, is a SKIP too
 // while orca/ is absent (harness-static-structure-14) and never an ENOENT crash.
@@ -640,8 +640,10 @@ export function check(root) {
     }
 
     // The orca-panes half: the passthrough set is the shell keys, and its rows stay scoped.
-    if (!panesPresent) out.panes = 'SKIP -- theia/extensions/orca-panes is absent';
-    else {
+    if (!panesPresent) {
+        out.panes = 'absent';
+        fails.push(`${REL.panes} is a tracked extension of this repository and is absent from the tree (the lane that added it is merged, so this is a deletion). Next step: restore it from version control.`);
+    } else {
         for (const rel of [REL.protocol, REL.frontend, REL.widget]) if (!has(rel)) fails.push(`${rel} is missing while ${REL.panes} is present`);
         if (!fails.length) panesHalf(root, k, d32, fails);
     }
@@ -878,13 +880,13 @@ function runSelfTest() {
             mkdirSync(dirname(join(tmp, rel)), { recursive: true });
             cpSync(join(REPO_ROOT, rel), join(tmp, rel), { recursive: true, filter: (src) => !/\.(test|spec)\.tsx?$/.test(src) });
         }
-        // The SKIP half first: no orca-panes directory, the rest green with a named SKIP.
-        const skipRun = check(tmp);
-        if (skipRun.fails.length || !skipRun.panes.startsWith('SKIP')) {
-            console.error(`${NAME} self-test: FAIL -- the run without orca-panes is not green with a named SKIP: ${skipRun.fails.join(' | ') || skipRun.panes}`);
+        // No orca-panes directory: red, naming the absent tracked extension, and nothing else red (harness-static-structure-01).
+        const absentRun = check(tmp);
+        if (absentRun.fails.length !== 1 || !absentRun.fails[0].includes(`${REL.panes} is a tracked extension of this repository and is absent`)) {
+            console.error(`${NAME} self-test: FAIL -- the run without orca-panes is not red for exactly that reason: ${absentRun.fails.join(' | ') || 'green'}`);
             return 1;
         }
-        console.log(`${NAME} self-test: control without orca-panes green -- orca-panes ${skipRun.panes}`);
+        console.log(`${NAME} self-test: orca-panes removed -> red, naming '${REL.panes} is a tracked extension of this repository and is absent'`);
         for (const [rel, text] of Object.entries(FIXTURE)) { mkdirSync(dirname(join(tmp, rel)), { recursive: true }); writeFileSync(join(tmp, rel), text); }
         for (const rel of PANES_COPIED) { mkdirSync(dirname(join(tmp, rel)), { recursive: true }); cpSync(join(REPO_ROOT, rel), join(tmp, rel)); }
         const control = check(tmp);
@@ -931,7 +933,6 @@ if (isEntryPoint) {
         for (const o of r.ownerItems) console.log(`${NAME}: note -- owner item: ${o.key} stays ${o.id} (Orca's xterm bypass policy hard-codes it; no in-memory release)`);
     }
     const skips = [];
-    if (r.panes.startsWith('SKIP')) skips.push('the orca-panes half did not run: theia/extensions/orca-panes is absent');
     if (r.orca.startsWith('SKIP')) skips.push('the Orca half did not run: orca/ is absent (P62-10). Next step: bash scripts/fetch-orca.sh');
     if (skips.length) { console.log(skipLine(NAME, skips.join('; '))); process.exit(SKIP_EXIT); }
     console.log(`${NAME}: PASS -- shell keys ${r.d32.shell.join(', ')}; switch keys ${r.d32.switch.join(', ')}; close key ${r.d32.close}; derived from PAGE_KEYS reserved rows; orca-panes rows ${r.panes}; switch and close bindings, twins and collisions compared; Orca terminal-first half and the Linux selection-paste preset ${r.orca}`);

@@ -41,6 +41,10 @@ export function expectedSeamBlob({ orcaDir, overlayDir, row }) {
     try {
         mkdirSync(dirname(join(tmp, row.path)), { recursive: true });
         writeFileSync(join(tmp, row.path), content);
+        // The scratch directory is its own repository. If it sat inside another work tree (a TMPDIR under a checkout),
+        // `git apply` would silently skip every patch path outside its prefix and the "patch result" would be the
+        // pinned content, which a seam reverted to the pin would then equal (harness-static-structure-05).
+        execFileSync('git', ['init', '-q'], { cwd: tmp, env: fixtureGitEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
         const ap = spawnSync('git', ['apply', '--whitespace=nowarn', patch], { cwd: tmp, encoding: 'utf8', env: fixtureGitEnv() });
         if (ap.status !== 0) return { error: `${row.patch} does not apply to the recorded upstream blob ${row.upstream_blob} of ${row.path}: ${(ap.stderr || '').trim().split('\n')[0]}` };
         return { blob: hashFile(row.path, tmp) };

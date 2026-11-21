@@ -30,9 +30,16 @@
 //     upstream_blob gives, derived at check time (scripts/lib/orca-seams.mjs). A
 //     seam rewritten to other content after the overlay applied keeps its status
 //     line and is red here.
-//  f. the untracked, not-ignored files of orca/ (git status --untracked-files=all)
-//     equal the files of orca-overlay/files/ plus .pb-overlay-copied. An addition
-//     the overlay does not declare is red.
+//  f. the untracked AND ignored files of orca/ (git status --untracked-files=all
+//     --ignored, with no global excludes file) equal the files of orca-overlay/files/
+//     plus .pb-overlay-copied, as a set: an addition the overlay does not declare is
+//     red, a declared file missing from orca/ is red, and a declared file whose
+//     bytes differ from the overlay's is red. An ignore rule hides nothing: Orca's own
+//     .gitignore ignores src/**/*.js, and Vite resolves a .js before its .ts, so an
+//     ignored stray beside a source file is the case this clause exists for. Exempt, by
+//     explicit rule and nothing else: out/ (the build output), node_modules/ at any
+//     depth, .cache/, *.tsbuildinfo, src/packages/*/dist/ (the workspace packages' own
+//     tsc output) and *.generated.ts (Orca's generated sources).
 // Red on: a derived marker in out/orcad, out/runtimes present, any node
 // executable under out/, any Electron payload, a modified tracked file that is
 // not a declared seam, a declared seam that is not applied or holds other
@@ -117,6 +124,9 @@ function sha256(path) {
     return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
+// The ignored build outputs clause f exempts, by explicit rule (see the header). Anything else ignored is a stray.
+const BUILD_OUTPUT = [/^out\//, /(^|\/)node_modules\//, /^\.cache\//, /\.tsbuildinfo$/, /^src\/packages\/[^/]+\/dist\//, /\.generated\.ts$/];
+
 // Every regular file under root, as slash-separated relative paths.
 function listAll(root) {
     const out = [];
@@ -181,11 +191,20 @@ export function check(orcaRoot, seamPaths = [], extra = {}) {
         fails.push(...seamContentFails({ orcaDir: orcaRoot, overlayDir: extra.overlayDir }));
         content = (readSeamRows(extra.overlayDir) ?? []).length;
         try {
-            const status = execFileSync('git', ['-C', orcaRoot, 'status', '--porcelain', '--untracked-files=all'], { encoding: 'utf8', env: fixtureGitEnv() });
-            const declared = new Set([...listAll(join(extra.overlayDir, 'files')), '.pb-overlay-copied']);
-            for (const line of status.split('\n').filter((l) => l.startsWith('?? '))) {
+            const status = execFileSync('git', ['-c', 'core.excludesFile=/dev/null', '-C', orcaRoot, 'status', '--porcelain', '--untracked-files=all', '--ignored'], { encoding: 'utf8', env: fixtureGitEnv(), maxBuffer: 256 * 1024 * 1024 });
+            const overlayFiles = listAll(join(extra.overlayDir, 'files'));
+            const declared = new Set([...overlayFiles, '.pb-overlay-copied']);
+            for (const line of status.split('\n').filter((l) => l.startsWith('?? ') || l.startsWith('!! '))) {
                 const path = line.slice(3);
-                if (declared.has(path)) untracked++; else fails.push(`untracked file in orca/ that orca-overlay/files/ does not declare: ${path}`);
+                if (declared.has(path)) untracked++;
+                else if (line.startsWith('!! ') && BUILD_OUTPUT.some((re) => re.test(path))) continue;
+                else fails.push(`${line.startsWith('!! ') ? 'ignored' : 'untracked'} file in orca/ that orca-overlay/files/ does not declare: ${path}`);
+            }
+            // The other direction: every declared file is in orca/, byte-equal to the overlay's.
+            for (const rel of overlayFiles) {
+                const there = join(orcaRoot, rel);
+                if (!existsSync(there)) fails.push(`declared overlay file ${rel} is missing from orca/ (run scripts/build-orca.sh)`);
+                else if (!readFileSync(there).equals(readFileSync(join(extra.overlayDir, 'files', rel)))) fails.push(`orca/${rel} differs from orca-overlay/files/${rel} (run scripts/build-orca.sh)`);
             }
         } catch (err) {
             fails.push(`git -C orca status --untracked-files=all failed: ${err.message.split('\n')[0]}`);
@@ -225,7 +244,7 @@ function runSelfTestBody() {
         git('init', '-q');
         put(ARTIFACTS_REL, `${constants.join('\n')}\n`);
         put('package.json', '{ "name": "fixture" }\n');
-        put('.gitignore', '/out/\n/node_modules/\n');
+        put('.gitignore', '/out/\n/node_modules/\nsrc/**/*.js\nsrc/packages/*/dist/\n*.generated.ts\n');
         git('add', '.');
         git('-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid', 'commit', '-q', '-m', 'fixture');
 
@@ -269,6 +288,11 @@ function runSelfTestBody() {
         writeFileSync(join(overlay, 'seams.json'), `${JSON.stringify({ seams: [{ path: 'package.json', patch: 'patches/010-fixture.patch', upstream_blob: seamBlob, reason: 'fixture', upstream: { class: 'pb-only', pr: null } }] })}\n`);
         mkdirSync(join(overlay, 'files', 'pbx'), { recursive: true });
         writeFileSync(join(overlay, 'files', 'pbx', 'added.ts'), 'export const a = 1\n');
+        // TMPDIR inside a git work tree, for the plant below; the returned function restores it and then runs `then`.
+        const outer = join(tmp, 'outer-work-tree');
+        mkdirSync(join(outer, 'scratch'), { recursive: true });
+        execFileSync('git', [...fixtureGitArgs(), '-C', outer, 'init', '-q'], { env: fixtureGitEnv() });
+        const inWorkTree = (then) => { const saved = process.env.TMPDIR; process.env.TMPDIR = join(outer, 'scratch'); return () => { if (saved === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = saved; then(); }; };
         const applyOverlay = () => { put('package.json', SEAMED); put('pbx/added.ts', 'export const a = 1\n'); put('.pb-overlay-copied', 'pbx/added.ts\n'); };
         const undoOverlay = () => { git('checkout', '--', 'package.json'); rmSync(join(root, 'pbx'), { recursive: true, force: true }); rmSync(join(root, '.pb-overlay-copied'), { force: true }); };
         applyOverlay();
@@ -279,6 +303,16 @@ function runSelfTestBody() {
             return 1;
         }
         console.log(`${NAME} self-test: control overlay-applied green (the seam holds its patch result, the PB-added file and .pb-overlay-copied are declared)`);
+        // Ignored build outputs stay green: a workspace package's dist and a generated source.
+        applyOverlay();
+        put('src/packages/p/dist/y.js', 'export {}\n');
+        put('src/gen.generated.ts', 'export {}\n');
+        const withOutputs = check(root, ['package.json'], { overlayDir: overlay });
+        rmSync(join(root, 'src/packages'), { recursive: true, force: true });
+        rmSync(join(root, 'src/gen.generated.ts'), { force: true });
+        undoOverlay();
+        if (withOutputs.fails.length) { console.error(`${NAME} self-test: FAIL -- ignored build outputs (src/packages/*/dist, *.generated.ts) are not exempt: ${withOutputs.fails.join(' | ')}`); return 1; }
+        console.log(`${NAME} self-test: control ignored build outputs green (src/packages/p/dist, *.generated.ts)`);
 
         const hex = 'a'.repeat(64);
         const plants = [
@@ -296,6 +330,12 @@ function runSelfTestBody() {
             { name: 'seam-rewritten-to-other-content', naming: `seam package.json holds blob`, seams: ['package.json'], extra: { overlayDir: overlay }, apply: () => { applyOverlay(); put('package.json', '{ "name": "rewritten by a postinstall" }\n'); return undoOverlay; } },
             { name: 'seam-rewritten-to-the-pinned-content', naming: 'seam package.json holds blob', seams: ['package.json'], extra: { overlayDir: overlay }, apply: () => { applyOverlay(); git('checkout', '--', 'package.json'); put('package.json', '{ "name": "fixture" }\n'); return undoOverlay; } },
             { name: 'undeclared-untracked-file', naming: 'untracked file in orca/ that orca-overlay/files/ does not declare: pbx/stray.js', seams: ['package.json'], extra: { overlayDir: overlay }, apply: () => { applyOverlay(); put('pbx/stray.js', 'export {}\n'); return undoOverlay; } },
+            // Clause f both ways, and under an ignore rule: the fixture's .gitignore ignores src/**/*.js like Orca's does.
+            { name: 'ignored-stray-js-beside-a-source-file', naming: 'ignored file in orca/ that orca-overlay/files/ does not declare: src/main/x.js', seams: ['package.json'], extra: { overlayDir: overlay }, apply: () => { applyOverlay(); put('src/main/x.ts', 'export {}\n'); put('src/main/x.js', 'export {}\n'); return () => { undoOverlay(); rmSync(join(root, 'src/main'), { recursive: true, force: true }); }; } },
+            { name: 'declared-overlay-file-missing', naming: 'declared overlay file pbx/added.ts is missing from orca/', seams: ['package.json'], extra: { overlayDir: overlay }, apply: () => { applyOverlay(); rmSync(join(root, 'pbx/added.ts')); return undoOverlay; } },
+            { name: 'declared-overlay-file-edited', naming: 'orca/pbx/added.ts differs from orca-overlay/files/pbx/added.ts', seams: ['package.json'], extra: { overlayDir: overlay }, apply: () => { applyOverlay(); put('pbx/added.ts', 'export const a = 2\n'); return undoOverlay; } },
+            // The seam patch must still be applied when the scratch directory sits inside another work tree.
+            { name: 'seam-reverted-to-the-pin-with-the-scratch-directory-inside-a-work-tree', naming: 'seam package.json holds blob', seams: ['package.json'], extra: { overlayDir: overlay }, apply: () => { applyOverlay(); git('checkout', '--', 'package.json'); put('package.json', '{ "name": "fixture" }\n'); return inWorkTree(undoOverlay); } },
             { name: 'overlay-patch-missing', naming: 'patches/010-fixture.patch of seam package.json is absent', seams: ['package.json'], extra: { overlayDir: overlay }, apply: () => { applyOverlay(); rmSync(join(overlay, 'patches', '010-fixture.patch')); return () => { undoOverlay(); writeFileSync(join(overlay, 'patches', '010-fixture.patch'), patchText); }; } },
         ];
 
