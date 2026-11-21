@@ -15,6 +15,10 @@
 //                  with it (check-win-sidecar.sh check, a != "$VAR" test, or a powerbrowser/packaging script whose
 //                  text runs check-win-sidecar.sh check on that variable). The set of consumers and artifacts is
 //                  derived from the files. A download with run-id (another run's artifact) is out of this clause.
+//   mode-carry     (68-CR-03) an artifact keeps no file mode, so every artifact a macOS job uploads is a directory a
+//                  run step of that job writes a tar into (tar -c...f "<dir>/tree.tar"), every job downloading it
+//                  unpacks tree.tar with tar -x...p...f, and powerbrowser/packaging/package-macos.sh unpacks the
+//                  PB_MAC_ORCA_DIR artifact's tree.tar with -p before it stages from it.
 // Every clause derives what it compares from the parsed YAML (job and step lookups by what they run, not by
 // a list kept here), so a renamed step is still found.
 //
@@ -133,6 +137,31 @@ export function check(texts) {
         }
     }
 
+    // mode-carry (68-CR-03)
+    {
+        const jobs = docs['release.yml']?.jobs ?? {};
+        const norm = x => String(x ?? '').replace(/\$\{\{\s*runner\.temp\s*\}\}/g, '$RUNNER_TEMP').replace(/\/$/, '');
+        let seen = 0;
+        for (const [pId, p] of Object.entries(jobs).filter(([, j]) => /^macos/.test(String([j?.['runs-on']].flat()[0] ?? '')))) {
+            const steps = stepsOf(p);
+            for (const up of uploadsOf(p)) {
+                seen++;
+                const dir = norm(up.with?.path);
+                const varOf = steps.map(runOf).join('\n').match(new RegExp(`^\\s*(\\w+)="${dir.replace(/[$.*+?^{}()|[\]\\]/g, '\\$&')}"$`, 'm'))?.[1];
+                const tarred = steps.some(st => new RegExp(`tar -c\\w*f "(?:${dir.replace(/[$.*+?^{}()|[\]\\]/g, '\\$&')}${varOf ? `|\\$${varOf}` : ''})/tree\\.tar"`).test(runOf(st)));
+                if (!tarred) fail('release.yml', pId, 'mode-carry', `uploads ${up.with?.name} from ${dir}, but no run step writes a tar there (tar -cf "<dir>/tree.tar"), so every executable reaches the consumer at 0644. Next step: archive the tree into tree.tar and upload the directory holding it.`);
+                for (const [cId, c] of Object.entries(jobs)) {
+                    if (!stepsOf(c).some(st => /^actions\/download-artifact@/.test(String(st?.uses ?? '')) && st.with?.name === up.with?.name)) continue;
+                    if (!stepsOf(c).some(st => /\btar -x\w*p\w*f\b[^\n]*tree\.tar/.test(runOf(st)))) fail('release.yml', cId, 'mode-carry', `downloads ${up.with?.name} but unpacks no tree.tar with tar -xpf, so the modes the tar carried are dropped. Next step: tar -xpf the admitted tree.tar.`);
+                }
+            }
+        }
+        if (seen === 0) fail('release.yml', '(file)', 'mode-carry', 'no macOS job uploads an artifact, so the clause holds over nothing. Next step: restore the macos-orca jobs or retire the clause.');
+        const pm = texts.packageMacos ?? readFileSync(join(REPO_ROOT, 'powerbrowser', 'packaging', 'package-macos.sh'), 'utf8');
+        if (!/tar -x\w*p\w*f "\$PB_MAC_ORCA_DIR\/tree\.tar"/.test(pm)) fail('powerbrowser/packaging/package-macos.sh', '(script)', 'mode-carry', 'stages the macos-orca artifact without unpacking its tree.tar with tar -xpf, so its executables lose their modes. Next step: tar -xpf "$PB_MAC_ORCA_DIR/tree.tar" into a scratch tree after the admission and stage from it.');
+        if (/cp -a "\$PB_MAC_ORCA_DIR\//.test(pm)) fail('powerbrowser/packaging/package-macos.sh', '(script)', 'mode-carry', 'copies from $PB_MAC_ORCA_DIR directly, not from the unpacked tree. Next step: stage from the tree tar -xpf wrote.');
+    }
+
     return fails;
 }
 
@@ -142,6 +171,7 @@ export function readTexts(root = REPO_ROOT) {
 
 function selfTest() {
     const real = readTexts();
+    const PM = readFileSync(join(REPO_ROOT, 'powerbrowser', 'packaging', 'package-macos.sh'), 'utf8');
     const base = check(real);
     if (base.length) {
         console.error(`${NAME} self-test: FAIL -- the real tree is already red, so the plants below would prove nothing:`);
@@ -178,6 +208,10 @@ function selfTest() {
         ['the notices digest not taken from the generate job', edit('release-train.yml', '      NOTICES_SHA256: ${{ needs.renovate-licensing.outputs.notices-sha256 }}\n', ''), 'artifact-digest', 'never takes a digest output of renovate-licensing'],
         ['bump-pr-orca carries unbound replay notices', edit('release-train.yml', '      NOTICES_SHA256: ${{ needs.rebase-orca.outputs.notices-sha256 }}\n', ''), 'artifact-digest', 'job bump-pr-orca [artifact-digest]: downloads rebase-orca-notices but never takes'],
         ['the reusable replay exports no notices digest', edit('rebase-orca.yml', '      notices-sha256:\n        description: "The SHA-256 of the THIRD-PARTY-NOTICES.txt uploaded as rebase-orca-notices (empty when unchanged)"\n        value: ${{ jobs.rebase.outputs.notices-sha256 }}\n', ''), 'artifact-digest', 'job rebase-orca [artifact-digest]: uploads rebase-orca-notices,'],
+        // 68-CR-03, the pre-fix macOS round trip.
+        ['a thin macOS job uploads the loose tree', edit('release.yml', '          path: ${{ runner.temp }}/macos-orca-arm64-artifact/', '          path: ${{ runner.temp }}/macos-orca-arm64/'), 'mode-carry', 'job macos-orca-arm64 [mode-carry]: uploads macos-orca-arm64 from'],
+        ['the universal job unpacks without -p', edit('release.yml', 'tar -xpf "macos-orca-$A-artifact/tree.tar"', 'tar -xf "macos-orca-$A-artifact/tree.tar"'), 'mode-carry', 'job macos-orca-universal [mode-carry]: downloads macos-orca-arm64'],
+        ['package-macos.sh stages the artifact directly', { ...real, packageMacos: PM.replace('cp -a "$ORCA_TREE/package.json"', 'cp -a "$PB_MAC_ORCA_DIR/package.json"') }, 'mode-carry', 'copies from $PB_MAC_ORCA_DIR directly'],
     ];
     let failed = 0;
     for (const [name, texts, clause, naming] of plants) {
@@ -205,4 +239,4 @@ if (fails.length) {
     for (const f of fails) console.error(`  ${f}`);
     process.exit(1);
 }
-console.log(`${NAME}: PASS -- clauses enforced: stage-line, artifact-digest`);
+console.log(`${NAME}: PASS -- clauses enforced: stage-line, artifact-digest, mode-carry`);
