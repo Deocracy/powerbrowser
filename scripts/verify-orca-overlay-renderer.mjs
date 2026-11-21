@@ -202,9 +202,49 @@ async function clauseB() {
     return { fails: checkLeafClose(readFileSync(ENTRY, 'utf8'), readFileSync(ORCA_CONSTANTS, 'utf8')) };
 }
 
+// ---------------------------------------------------------------- c. no throw into Orca's setState
+
+function insideTry(node, stop) {
+    for (let p = node.parent; p && p !== stop; p = p.parent) {
+        if (ts.isBlock(p) && p.parent && ts.isTryStatement(p.parent) && p.parent.tryBlock === p) return true;
+        // The handler records the failure (recordError); it is the guard itself, not guarded work.
+        if (ts.isCatchClause(p)) return true;
+    }
+    return false;
+}
+
+/**
+ * Clause c (64-WR-04): every call made by a listener the entry hands to Orca's store (useAppStore.subscribe), which
+ * zustand runs synchronously inside Orca's own setState, is inside a try block of that listener, so nothing the
+ * observation does can throw into Orca's update. Zero such listeners is red "parser blind".
+ */
+export function checkStoreListeners(entryText) {
+    const sf = parse(entryText, 'pb-pane-mount.tsx');
+    const fails = [];
+    let listeners = 0;
+    const scope = fn(sf, 'subscribePanes');
+    if (!scope) return ['subscribePanes is absent from the entry'];
+    for (const c of calls(scope)) {
+        if (c.callee !== 'useAppStore.subscribe') continue;
+        const cb = c.node.arguments[0];
+        if (!cb || !(ts.isArrowFunction(cb) || ts.isFunctionExpression(cb))) continue;
+        listeners += 1;
+        for (const inner of calls(cb.body)) {
+            if (!insideTry(inner.node, cb)) fails.push(`subscribePanes' store listener calls ${inner.callee}() outside a try block: a throw stops Orca's own setState`);
+        }
+    }
+    if (!listeners) fails.push('no useAppStore.subscribe listener found in subscribePanes (parser blind)');
+    return fails;
+}
+
+async function clauseC() {
+    if (!(await loadTs())) return { skip: 'theia/node_modules/typescript is absent (install Theia)' };
+    return { fails: checkStoreListeners(readFileSync(ENTRY, 'utf8')) };
+}
+
 // ---------------------------------------------------------------- driver
 
-const CLAUSES = [['a', clauseA], ['b', clauseB]];
+const CLAUSES = [['a', clauseA], ['b', clauseB], ['c', clauseC]];
 
 async function main() {
     let failed = 0;
@@ -261,6 +301,12 @@ async function selfTest() {
         ok('b: a gone leaf falling through to the whole-tab close (64-WR-02) is red, naming it', checkLeafClose(escalates, constants).some(f => /64-WR-02/.test(f)));
         const noLeaf = constants.replace(/(export type CloseTerminalPaneDetail = \{[^}]*?)\n\s*leafId\?: string/, '$1');
         ok('b: Orca\'s leaf close losing leafId is red "source moved"', noLeaf !== constants && checkLeafClose(entry, noLeaf).some(f => /no longer carries leafId/.test(f)));
+        // c.
+        ok('c: control green on the tree', checkStoreListeners(entry).length === 0);
+        const unguarded = entry.replace(/\n(\s*)try \{\n(\s*const next = paneRecords\(state\)[\s\S]*?\n)\s*\} catch \(error\) \{\n\s*recordError\('observation', 'subscribe'\)\(error\)\n\s*\}\n/, '\n$2');
+        ok('c: the unguarded-listener plant applies', unguarded !== entry);
+        ok('c: paneRecords outside a try in the store listener (pre-fix) is red, naming it', checkStoreListeners(unguarded).some(f => /calls paneRecords\(\) outside a try/.test(f)));
+        ok('c: no store listener is red "parser blind"', checkStoreListeners(entry.replace(/useAppStore\.subscribe\(\(state, prior\)/, 'useAppStore.subscribeTo((state, prior)')).some(f => /parser blind/.test(f)));
     }
     console.log(failed ? `${NAME} self-test: FAIL -- ${failed} case(s)` : `${NAME} self-test: PASS -- every planted fault went red naming it`);
     return failed ? 1 : 0;

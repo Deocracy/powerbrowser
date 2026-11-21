@@ -880,12 +880,19 @@ export function subscribePanes(listener: (panes: OrcaPaneRecord[]) => void): () 
     ) {
       return
     }
-    const next = paneRecords(state)
-    const text = JSON.stringify(next)
-    if (text !== lastText) {
-      last = next
-      lastText = text
-      listener(last)
+    // Audit 64-WR-04: this runs inside Orca's setState (zustand calls listeners synchronously); a throw here (makePaneKey
+    // refuses a malformed id by contract, or the host's listener) would stop Orca's own update and skip its later
+    // listeners. The failure is recorded and the last list kept.
+    try {
+      const next = paneRecords(state)
+      const text = JSON.stringify(next)
+      if (text !== lastText) {
+        last = next
+        lastText = text
+        listener(last)
+      }
+    } catch (error) {
+      recordError('observation', 'subscribe')(error)
     }
   })
 }
