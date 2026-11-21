@@ -94,7 +94,10 @@
 // 77, when typescript is absent and the static plants cannot run).
 //
 // harness-static-browser-01: the static env clause follows aliases of
-// process.env (the wrapper reads only through main's baseEnv default), and
+// process.env (the wrapper reads only through main's baseEnv default; also a
+// node:process import, process destructuring, element access, Reflect.get, a
+// local function returning the environment, an object holding it, assignment
+// destructuring), and
 // stage B's launcher inherits decoy ORCA_USER_DATA_PATH, ORCA_USER_DATA,
 // ORCA_PANE_KEY, ORCA_TAB_ID and ORCA_WORKTREE_ID values (a second scratch data
 // root, a fake pane): the pane must appear in PowerBrowser's data root and the
@@ -377,11 +380,15 @@ function walk(node, fn) { fn(node); ts.forEachChild(node, (c) => walk(c, fn)); }
 const isProcessEnv = (n) => n && ts.isPropertyAccessExpression(n) && n.name.text === 'env' && ts.isIdentifier(n.expression) && n.expression.text === 'process';
 
 /**
- * Every name read from process.env or from an alias of it (property, element or destructuring), excluding delete and
- * assignment targets (harness-static-browser-01). The source is bound with the TypeScript checker, so an alias is a
- * symbol, not a spelling: a parameter whose default is an env object (`main(argv, baseEnv = process.env)`), a variable
- * or assignment bound to one, an object spread of one (`{ ...process.env }`), an Object.assign(...) of one, a `??` or
- * `||` of one, and a parameter of a function declared in the same file that a call passes one to; closed to a fixpoint.
+ * Every name read from process.env or from an alias of it, excluding delete and assignment targets
+ * (harness-static-browser-01, second review). The source is bound with the TypeScript checker, so an alias is a symbol,
+ * not a spelling. The process object: `process`, a default or namespace import of 'node:process' or 'process', or a
+ * variable bound to one. The environment: `.env` or `['env']` of the process object; a named `env` import from either
+ * module; `env` destructured from the process object (declaration or assignment); a parameter whose default is the
+ * environment; a variable or assignment bound to it; an object spread or Object.assign of it; a `??`, `||` or
+ * conditional of it; a parameter of a local function a call passes it to; a call of a local function that returns it;
+ * and a property of a local object literal that holds it. Reads: a property, a string element, a destructured key
+ * (declaration, parameter or assignment) and Reflect.get(env, 'NAME'). Closed to a fixpoint.
  */
 function processEnvReads(file, text) {
     const host = ts.createCompilerHost({ allowJs: true, noLib: true, noResolve: true });
@@ -390,30 +397,88 @@ function processEnvReads(file, text) {
     host.getSourceFile = (name, ...rest) => (name === file ? sf : getSourceFile(name, ...rest));
     const program = ts.createProgram([file], { allowJs: true, noLib: true, noResolve: true, types: [] }, host);
     const checker = program.getTypeChecker();
-    const symbolOf = (n) => { const sym = checker.getSymbolAtLocation(n); return sym && sym.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(sym) : sym; };
-    const aliases = new Set();
+    // The local symbol itself, an import binding included: with noResolve an alias cannot be followed, and need not be.
+    const symbolOf = (n) => (n ? checker.getSymbolAtLocation(n) : undefined);
+    const procs = new Set();
+    const envs = new Set();
+    const returnsEnv = new Set();
+    const holders = new Map();
+    const unwrap = (e) => {
+        while (e && (ts.isParenthesizedExpression(e) || ts.isAsExpression?.(e) || ts.isNonNullExpression?.(e))) e = e.expression;
+        return e;
+    };
+    const isProc = (e) => {
+        e = unwrap(e);
+        if (!e || !ts.isIdentifier(e)) return false;
+        if (e.text === 'process' && !checker.getSymbolAtLocation(e)?.declarations?.length) return true;
+        const sym = symbolOf(e);
+        return !!sym && procs.has(sym);
+    };
     const isEnv = (e) => {
+        e = unwrap(e);
         if (!e) return false;
-        if (ts.isParenthesizedExpression(e) || ts.isAsExpression?.(e) || ts.isNonNullExpression?.(e)) return isEnv(e.expression);
-        if (isProcessEnv(e)) return true;
-        if (ts.isIdentifier(e)) { const sym = symbolOf(e); return !!sym && aliases.has(sym); }
+        if (ts.isPropertyAccessExpression(e) && e.name.text === 'env' && isProc(e.expression)) return true;
+        if (ts.isElementAccessExpression(e) && ts.isStringLiteralLike(e.argumentExpression) && e.argumentExpression.text === 'env' && isProc(e.expression)) return true;
+        if (ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression)) { const sym = symbolOf(e.expression); if (sym && holders.get(sym)?.has(e.name.text)) return true; }
+        if (ts.isIdentifier(e)) { const sym = symbolOf(e); return !!sym && envs.has(sym); }
         if (ts.isBinaryExpression(e) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(e.operatorToken.kind)) return isEnv(e.left) || isEnv(e.right);
         if (ts.isConditionalExpression(e)) return isEnv(e.whenTrue) || isEnv(e.whenFalse);
         if (ts.isObjectLiteralExpression(e)) return e.properties.some((p) => ts.isSpreadAssignment(p) && isEnv(p.expression));
-        if (ts.isCallExpression(e) && e.expression.getText(sf) === 'Object.assign') return e.arguments.some(isEnv);
+        if (ts.isCallExpression(e)) {
+            if (e.expression.getText(sf) === 'Object.assign') return e.arguments.some(isEnv);
+            const sym = symbolOf(e.expression);
+            return !!sym && returnsEnv.has(sym);
+        }
         return false;
     };
-    const taint = (nameNode) => { const sym = nameNode && symbolOf(nameNode); if (sym && !aliases.has(sym)) { aliases.add(sym); return true; } return false; };
+    const add = (set, nameNode) => { const sym = nameNode && symbolOf(nameNode); if (sym && !set.has(sym)) { set.add(sym); return true; } return false; };
+    const fnOf = (decl) => decl && (ts.isFunctionDeclaration(decl) || ts.isFunctionExpression(decl) || ts.isArrowFunction(decl) ? decl
+        : ts.isVariableDeclaration(decl) && decl.initializer && (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer)) ? decl.initializer : null);
+    // Imports of the process module.
+    for (const st of sf.statements) {
+        if (!ts.isImportDeclaration(st) || !['node:process', 'process'].includes(st.moduleSpecifier.text)) continue;
+        const c = st.importClause;
+        if (c?.name) add(procs, c.name);
+        if (c?.namedBindings && ts.isNamespaceImport(c.namedBindings)) add(procs, c.namedBindings.name);
+        if (c?.namedBindings && ts.isNamedImports(c.namedBindings)) for (const el of c.namedBindings.elements) if ((el.propertyName ?? el.name).text === 'env') add(envs, el.name);
+    }
     for (let grew = true; grew;) {
         grew = false;
         walk(sf, (n) => {
-            if ((ts.isParameter(n) || ts.isVariableDeclaration(n)) && ts.isIdentifier(n.name) && n.initializer && isEnv(n.initializer)) grew = taint(n.name) || grew;
-            if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isIdentifier(n.left) && isEnv(n.right)) grew = taint(n.left) || grew;
+            if ((ts.isParameter(n) || ts.isVariableDeclaration(n)) && n.initializer) {
+                if (ts.isIdentifier(n.name) && isEnv(n.initializer)) grew = add(envs, n.name) || grew;
+                if (ts.isIdentifier(n.name) && isProc(n.initializer)) grew = add(procs, n.name) || grew;
+                if (ts.isObjectBindingPattern(n.name) && isProc(n.initializer)) for (const el of n.name.elements) if ((el.propertyName ?? el.name).getText(sf) === 'env' && ts.isIdentifier(el.name)) grew = add(envs, el.name) || grew;
+                if (ts.isIdentifier(n.name) && ts.isObjectLiteralExpression(unwrap(n.initializer))) {
+                    const sym = symbolOf(n.name);
+                    for (const p of unwrap(n.initializer).properties) {
+                        const held = ts.isPropertyAssignment(p) ? isEnv(p.initializer) : ts.isShorthandPropertyAssignment(p) ? isEnv(p.name) : false;
+                        if (sym && held) { const key = p.name.getText(sf); if (!holders.has(sym)) holders.set(sym, new Set()); if (!holders.get(sym).has(key)) { holders.get(sym).add(key); grew = true; } }
+                    }
+                }
+            }
+            if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+                if (ts.isIdentifier(n.left) && isEnv(n.right)) grew = add(envs, n.left) || grew;
+                if (ts.isIdentifier(n.left) && isProc(n.right)) grew = add(procs, n.left) || grew;
+                const left = unwrap(n.left);
+                if (ts.isObjectLiteralExpression(left) && isProc(n.right)) {
+                    for (const p of left.properties) {
+                        if (ts.isShorthandPropertyAssignment(p) && p.name.text === 'env') grew = add(envs, p.name) || grew;
+                        if (ts.isPropertyAssignment(p) && p.name.getText(sf) === 'env' && ts.isIdentifier(p.initializer)) grew = add(envs, p.initializer) || grew;
+                    }
+                }
+            }
             if (ts.isCallExpression(n)) {
-                const decl = symbolOf(n.expression)?.valueDeclaration;
-                const fn = decl && (ts.isFunctionDeclaration(decl) || ts.isFunctionExpression(decl) || ts.isArrowFunction(decl) ? decl
-                    : ts.isVariableDeclaration(decl) && decl.initializer && (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer)) ? decl.initializer : null);
-                if (fn) n.arguments.forEach((a, i) => { const param = fn.parameters[i]; if (param && ts.isIdentifier(param.name) && isEnv(a)) grew = taint(param.name) || grew; });
+                const fn = fnOf(symbolOf(n.expression)?.valueDeclaration);
+                if (fn) n.arguments.forEach((a, i) => { const param = fn.parameters[i]; if (param && ts.isIdentifier(param.name) && isEnv(a)) grew = add(envs, param.name) || grew; });
+            }
+            // A local function that returns the environment.
+            const fn = ts.isFunctionDeclaration(n) ? n : ts.isVariableDeclaration(n) ? fnOf(n) : null;
+            if (fn) {
+                const nameNode = ts.isFunctionDeclaration(n) ? n.name : n.name;
+                let returns = fn.body && !ts.isBlock(fn.body) ? isEnv(fn.body) : false;
+                if (fn.body && ts.isBlock(fn.body)) walk(fn.body, (r) => { if (ts.isReturnStatement(r) && isEnv(r.expression)) returns = true; });
+                if (returns && nameNode && ts.isIdentifier(nameNode)) grew = add(returnsEnv, nameNode) || grew;
             }
         });
     }
@@ -422,8 +487,12 @@ function processEnvReads(file, text) {
         let name = null;
         if (ts.isPropertyAccessExpression(n) && isEnv(n.expression)) name = n.name.text;
         else if (ts.isElementAccessExpression(n) && isEnv(n.expression) && ts.isStringLiteralLike(n.argumentExpression)) name = n.argumentExpression.text;
+        else if (ts.isCallExpression(n) && n.expression.getText(sf) === 'Reflect.get' && isEnv(n.arguments[0]) && n.arguments[1] && ts.isStringLiteralLike(n.arguments[1])) { out.push(n.arguments[1].text); return; }
         else if ((ts.isVariableDeclaration(n) || ts.isParameter(n)) && n.initializer && isEnv(n.initializer) && ts.isObjectBindingPattern(n.name)) {
             for (const el of n.name.elements) out.push((el.propertyName ?? el.name).getText(sf));
+            return;
+        } else if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isObjectLiteralExpression(unwrap(n.left)) && isEnv(n.right)) {
+            for (const p of unwrap(n.left).properties) if (ts.isShorthandPropertyAssignment(p) || ts.isPropertyAssignment(p)) out.push(p.name.getText(sf));
             return;
         }
         if (!name) return;
@@ -849,6 +918,15 @@ const SOURCE_PLANTS = [
     ['reads ORCA_USER_DATA_PATH from process.env or an alias of it', WRAPPER_REL, (t) => t.replace('ORCA_USER_DATA: dataRoot, ORCA_USER_DATA_PATH: dataRoot };', 'ORCA_USER_DATA: baseEnv.ORCA_USER_DATA_PATH ?? dataRoot, ORCA_USER_DATA_PATH: dataRoot };')],
     ['reads ORCA_PANE_KEY from process.env or an alias of it', WRAPPER_REL, (t) => t.replace("    const { bridgeDir, claude, args } = parseWrapperArgs(argv);", "    const { bridgeDir, claude, args } = parseWrapperArgs(argv);\n    const inherited = baseEnv['ORCA_PANE_KEY'];")],
     ['reads ORCA_TAB_ID from process.env or an alias of it', WRAPPER_REL, (t) => t.replace("export function parseWrapperArgs(argv) {", "export function parseWrapperArgs(argv) {\n    const copy = { ...process.env };\n    const { ORCA_TAB_ID: tab } = copy;")],
+    // Second review: the other ways a wrapper could reach the environment.
+    ['reads ORCA_PANE_KEY from process.env or an alias of it', WRAPPER_REL, (t) => `import { env as inherited } from 'node:process';\n${t.replace('export function parseWrapperArgs(argv) {', 'export function parseWrapperArgs(argv) {\n    const planted = inherited.ORCA_PANE_KEY;')}`],
+    ['reads ORCA_TAB_ID from process.env or an alias of it', WRAPPER_REL, (t) => `import proc from 'node:process';\n${t.replace('export function parseWrapperArgs(argv) {', 'export function parseWrapperArgs(argv) {\n    const planted = proc.env.ORCA_TAB_ID;')}`],
+    ['reads ORCA_WORKTREE_ID from process.env or an alias of it', WRAPPER_REL, (t) => t.replace('export function parseWrapperArgs(argv) {', 'export function parseWrapperArgs(argv) {\n    const { env: e2 } = process;\n    const planted = e2.ORCA_WORKTREE_ID;')],
+    ['reads ORCA_USER_DATA from process.env or an alias of it', WRAPPER_REL, (t) => t.replace('export function parseWrapperArgs(argv) {', "export function parseWrapperArgs(argv) {\n    const planted = process['env'].ORCA_USER_DATA;")],
+    ['reads ORCA_PANE_KEY from process.env or an alias of it', WRAPPER_REL, (t) => t.replace('export function parseWrapperArgs(argv) {', "export function parseWrapperArgs(argv) {\n    const planted = Reflect.get(process.env, 'ORCA_PANE_KEY');")],
+    ['reads ORCA_TAB_ID from process.env or an alias of it', WRAPPER_REL, (t) => t.replace('export function parseWrapperArgs(argv) {', 'function envOf() {\n    return process.env;\n}\n\nexport function parseWrapperArgs(argv) {\n    const planted = envOf().ORCA_TAB_ID;')],
+    ['reads ORCA_USER_DATA_PATH from process.env or an alias of it', WRAPPER_REL, (t) => t.replace('export function parseWrapperArgs(argv) {', 'export function parseWrapperArgs(argv) {\n    const holder = { env: process.env };\n    const planted = holder.env.ORCA_USER_DATA_PATH;')],
+    ['reads ORCA_PANE_KEY from process.env or an alias of it', WRAPPER_REL, (t) => t.replace('export function parseWrapperArgs(argv) {', 'export function parseWrapperArgs(argv) {\n    let e3;\n    ({ env: e3 } = process);\n    const planted = e3.ORCA_PANE_KEY;')],
     ['a stdout write in the wrapper source', WRAPPER_REL, (t) => t.replace('export function parseWrapperArgs(argv) {', 'export function parseWrapperArgs(argv) {\n    process.stdout.write("planted\\n");')],
     ['registerOverride removed', FRONTEND_REL, (t) => t.replace(/this\.schema\.registerOverride\([^;]*;/, 'undefined;')],
     ['calls a preference setter', FRONTEND_REL, (t) => t.replace('onStop(): void {', 'onStop(): void {\n        (this as any).preferenceService.set(CLAUDE_PROCESS_WRAPPER_PREFERENCE, "x");')],
