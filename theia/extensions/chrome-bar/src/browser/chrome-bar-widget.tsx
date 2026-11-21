@@ -1689,14 +1689,15 @@ export class ChromeBarWidget extends ReactWidget {
 
     /**
      * Phase 66 (P66-21, P66-22, D-19): the agent mark for the current web tab, read only from chrome's agentControlChanged
-     * push. agent-browser-04: shown on every agent tab, not only while an agent drives it, so the user can stop an agent
+     * push. agent-browser-04: shown on every tab chrome reports as an agent tab, not only while an agent drives it and
+     * not by the widget's own flag (a restored agent row carries none), so the user can stop an agent
      * before it acts. Its Stop button and, on a stopped agent tab, its Resume button are the only callers of agentStop();
      * Stop ends agent control of every agent tab and refuses new ones until Resume. No command, keybinding or menu
      * reaches either.
      */
     protected renderAgentControl(): React.ReactNode {
         const tab = currentWebTab();
-        if (!tab?.agent) {
+        if (!tab?.agentControl.agent) {
             return undefined;
         }
         const subject = appSubject();
