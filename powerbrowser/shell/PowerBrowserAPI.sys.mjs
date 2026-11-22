@@ -7601,21 +7601,26 @@ function adoptFallback(pcKey, pending) {
   const live = pending.browser.currentURI?.spec ?? "";
   const url = /^https?:\/\//i.test(live) ? live : pending.url;
   const win = pending.theiaBrowser.ownerDocument.defaultView;
-  // Records kept while it was pending (37-REVIEW WR-01) go with it; none was ever pushed.
-  for (const [token, record] of promptRecords) {
-    if (record.browser === pending.browser) {
-      promptRecords.delete(token);
-    }
-  }
-  hideBars(pending.browser);
-  tabHostDropTab(win, pending.browser);
-  pending.browser.remove();
+  dropPendingOverlay(win, pending.browser);
   if (!win || win.closed) {
     return;
   }
   PowerBrowserAPI.openStockTab(url === "about:blank" ? "" : url).catch(err => {
     PowerBrowserAPI.log("error", `[web-tab] adoptTab fallback failed: ${err && err.message ? err.message : err}`);
   });
+}
+
+// A pending overlay that goes before its ack (the fallback above, or an extension's tabs.remove): the records kept
+// while it was pending (37-REVIEW WR-01) go with it, none of them ever pushed, then its node and the overlay itself.
+function dropPendingOverlay(win, browser) {
+  for (const [token, record] of promptRecords) {
+    if (record.browser === browser) {
+      promptRecords.delete(token);
+    }
+  }
+  hideBars(browser);
+  tabHostDropTab(win, browser);
+  browser.remove();
 }
 
 // 36-REVIEW WR-04: an adopted about:blank runs as its opener's origin (it inherits the principal), so the identity
@@ -10713,15 +10718,7 @@ function tabsBridgeRemove(host, tab) {
   for (const [pcKey, pending] of pendingContent) {
     if (pending.browser === tab.linkedBrowser) {
       pendingContent.delete(pcKey);
-      // As adoptFallback: what was kept for it while it was pending (37-REVIEW WR-01) goes with it.
-      for (const [token, record] of promptRecords) {
-        if (record.browser === pending.browser) {
-          promptRecords.delete(token);
-        }
-      }
-      hideBars(pending.browser);
-      tabHostDropTab(host.win, pending.browser);
-      pending.browser.remove();
+      dropPendingOverlay(host.win, pending.browser);
     }
   }
 }
