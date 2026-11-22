@@ -398,8 +398,14 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
                 }
             }
             await new Promise<void>(resolve => {
-                const timer = window.setTimeout(resolve, 1000);
-                window.addEventListener(LINK_EVENT, () => { window.clearTimeout(timer); resolve(); }, { once: true });
+                // Whichever comes first ends the wait and removes the other, so no listener outlives its iteration.
+                const done = (): void => {
+                    window.clearTimeout(timer);
+                    window.removeEventListener(LINK_EVENT, done);
+                    resolve();
+                };
+                const timer = window.setTimeout(done, 1000);
+                window.addEventListener(LINK_EVENT, done, { once: true });
             });
         }
         throw new Error('deadline');

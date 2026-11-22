@@ -69,8 +69,9 @@ export class OrcaRightSidebarToggleHost implements Disposable {
 
     /** The main-area tab bar at the main area's top right keeps the toggle's width clear; every other bar is left alone. */
     protected keepRoom(): void {
-        const width = Math.ceil(this.host.getBoundingClientRect().width);
-        const bar = this.shown && width > 0 ? this.topRightBar() : undefined;
+        // Hidden, no bar keeps room, so the host's box is not read (layoutModified fires per frame of a split drag).
+        const width = this.shown ? Math.ceil(this.host.getBoundingClientRect().width) : 0;
+        const bar = width > 0 ? this.topRightBar() : undefined;
         if (bar !== this.room) {
             this.release();
             this.room = bar;

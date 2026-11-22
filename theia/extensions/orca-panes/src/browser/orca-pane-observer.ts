@@ -157,10 +157,10 @@ export class OrcaPaneObserver implements FrontendApplicationContribution {
             while (this.latest) {
                 const records = this.latest;
                 this.latest = undefined;
-                await this.apply(records);
+                // A list that fails does not stop a newer one that arrived while it was applied.
+                await this.apply(records).catch(err =>
+                    console.warn(`${LOG_PREFIX} the Orca pane list was not applied: ${(err as Error)?.message ?? 'unknown error'}`));
             }
-        } catch (err) {
-            console.warn(`${LOG_PREFIX} the Orca pane list was not applied: ${(err as Error)?.message ?? 'unknown error'}`);
         } finally {
             this.applying = false;
         }
