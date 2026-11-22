@@ -1354,17 +1354,29 @@ export class TabStripWidget extends ReactWidget {
 
     /** A strip tab's node, by the widget id it is rendered with. */
     protected tabNode(widget: Widget): HTMLElement | undefined {
-        return Array.from(this.node.querySelectorAll<HTMLElement>('.pb-tab[data-pb-tab]'))
-            .find(node => node.dataset.pbTab === widget.id);
+        return this.tabNodes().get(widget.id);
+    }
+
+    /** Every strip tab's node by the widget id it is rendered with, from one query; the first node per id wins. */
+    protected tabNodes(): Map<string, HTMLElement> {
+        const nodes = new Map<string, HTMLElement>();
+        for (const node of Array.from(this.node.querySelectorAll<HTMLElement>('.pb-tab[data-pb-tab]'))) {
+            const id = node.dataset.pbTab!;
+            if (!nodes.has(id)) {
+                nodes.set(id, node);
+            }
+        }
+        return nodes;
     }
 
     /**
      * TAB-02 (D-05): the midpoint rule. The drop lands before the first strip tab whose horizontal midpoint is past
      * `x`; past every midpoint, it lands after the last tab (undefined).
      */
-    protected dropBefore(x: number): Widget | undefined {
-        return this.shownTabs().find(tab => {
-            const box = this.tabNode(tab)?.getBoundingClientRect();
+    protected dropBefore(x: number, tabs: Widget[] = this.shownTabs()): Widget | undefined {
+        const nodes = this.tabNodes();
+        return tabs.find(tab => {
+            const box = nodes.get(tab.id)?.getBoundingClientRect();
             return !!box && box.left + box.width / 2 > x;
         });
     }
@@ -1374,8 +1386,8 @@ export class TabStripWidget extends ReactWidget {
      * strip renders the pinned block first whatever the bar order is, so an unclamped drop would move the TabBar and
      * leave the strip as it was. Idempotent, so the aim, the drop and Move all share it.
      */
-    protected clampDrop(widget: Widget, before: Widget | undefined): Widget | undefined {
-        const firstLoose = this.shownTabs().find(tab => !this.isPinned(tab));
+    protected clampDrop(widget: Widget, before: Widget | undefined, tabs: Widget[] = this.shownTabs()): Widget | undefined {
+        const firstLoose = tabs.find(tab => !this.isPinned(tab));
         if (this.isPinned(widget)) {
             return before && this.isPinned(before) ? before : firstLoose;
         }
@@ -1384,8 +1396,9 @@ export class TabStripWidget extends ReactWidget {
 
     /** TAB-02: aims the in-flight reorder at the pointer and repaints the 2px drop indicator. */
     protected aimReorder(widget: Widget, x: number): void {
-        const before = this.clampDrop(widget, this.dropBefore(x));
+        // One strip read per pointer move (and per edge-scroll frame), shared by the aim, the clamp and the check below.
         const tabs = this.shownTabs();
+        const before = this.clampDrop(widget, this.dropBefore(x, tabs), tabs);
         const at = tabs.indexOf(widget);
         // Before itself or before its right neighbour, or after the last tab when it is the last: nowhere new.
         const moves = before ? before !== widget && tabs[at + 1] !== before : at !== tabs.length - 1;
