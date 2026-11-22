@@ -11110,19 +11110,26 @@ export const PowerBrowserProcesses = Object.freeze({
       if (lazy.AppConstants.platform !== "linux") {
         return roots.map(pid => ({ pid, ppid: null, startTicks: null }));
       }
-      const table = new Map();
-      for (const entry of await IOUtils.getChildren("/proc")) {
-        const pid = Number(entry.slice(entry.lastIndexOf("/") + 1));
-        if (!Number.isInteger(pid) || pid <= 0) {
-          continue;
-        }
+      const pids = (await IOUtils.getChildren("/proc"))
+        .map(entry => Number(entry.slice(entry.lastIndexOf("/") + 1)))
+        .filter(pid => Number.isInteger(pid) && pid > 0);
+      // The reads are independent, so they are issued together; the table keeps the listing's order.
+      const decoder = new TextDecoder();
+      const rows = await Promise.all(pids.map(async pid => {
         try {
           const bytes = await IOUtils.read(`/proc/${pid}/stat`, { maxBytes: 4096 });
-          const text = new TextDecoder().decode(bytes);
+          const text = decoder.decode(bytes);
           const fields = text.slice(text.lastIndexOf(")") + 2).split(" ");
-          table.set(pid, { pid, ppid: Number(fields[1]), startTicks: fields[19] ?? null });
+          return { pid, ppid: Number(fields[1]), startTicks: fields[19] ?? null };
         } catch {
           // The process exited between the listing and the read.
+          return null;
+        }
+      }));
+      const table = new Map();
+      for (const row of rows) {
+        if (row) {
+          table.set(row.pid, row);
         }
       }
       const children = new Map();
