@@ -855,7 +855,7 @@ export class SetupsService implements FrontendApplicationContribution {
             width: window.outerWidth,
             height: window.outerHeight,
             tabs: coreTabs.map(entry => entry.uri),
-            activeTab: coreTabs.some(entry => entry.id === active) ? (coreTabs.find(entry => entry.id === active)?.uri ?? null) : null,
+            activeTab: coreTabs.find(entry => entry.id === active)?.uri ?? null,
             modeId: this.currentModeId(),
             dock: {
                 main: this.dockNodeOf(this.shell.mainPanel.saveLayout().main),
