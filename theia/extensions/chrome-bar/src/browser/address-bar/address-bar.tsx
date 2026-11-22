@@ -263,13 +263,19 @@ export class AddressBar {
         this.host?.update();
     }
 
+    /** Phase 31: the web tab the identity box and site panel describe: the focused widget when it is one, else the current web tab. */
+    protected identityTab(): WebTabWidget | undefined {
+        const focused = this.shell.currentWidget;
+        return focused instanceof WebTabWidget ? focused : currentWebTab();
+    }
+
     /**
      * Phase 31 (SITE-01, D-31-01/D-31-09): this pill's identity, from the
      * current web tab's last pushed state only -- never from pill text, so
      * typing cannot spoof it. A non-web widget (an editor) has no identity.
      */
     protected identityState(): { state: string; displaySpec: string; baseDomain: string | null; permissionIcons: string[]; permissionLabels: string[]; shieldExcepted: boolean } | undefined {
-        const tab = this.shell.currentWidget instanceof WebTabWidget ? this.shell.currentWidget : currentWebTab();
+        const tab = this.identityTab();
         if (!(tab instanceof WebTabWidget) || !tab.hasPage) {
             return undefined;
         }
@@ -421,7 +427,7 @@ export class AddressBar {
      * no answer) opens the panel with the unavailable copy.
      */
     protected async openSitePanel(anchor?: HTMLElement): Promise<void> {
-        const tab = this.shell.currentWidget instanceof WebTabWidget ? this.shell.currentWidget : currentWebTab();
+        const tab = this.identityTab();
         const rect = (anchor ?? this.pillRef)?.getBoundingClientRect();
         this.sitePanelAnchor = { top: Math.round((rect?.bottom ?? 0) + 4), left: Math.round(rect?.left ?? 0) };
         let info: WebTabSiteInfo | null = null;
