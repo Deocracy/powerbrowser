@@ -1,12 +1,12 @@
 # Result: R7-pane-hosting
 
-Branch: worktree-agent-a3d7a3e1637413695   Base: 08e6f64393f5cc8e54319341079da22657e99bd2   Final: 7ffd5247 (this record is committed on top)
+Branch: worktree-agent-a3d7a3e1637413695   Base: 08e6f64393f5cc8e54319341079da22657e99bd2   Final: 0ce5695d (revert of row 3; this record is committed on top)
 
 | # | Type | Commit | Files | What and why it is safe |
 |---|---|---|---|---|
 | 1 | refactor | 028bbd9b | theia/extensions/orca-panes/src/browser/orca-pane-routes.ts | NAME_WORDS removed: exported, never imported or read in theia/, scripts/, orca-overlay/ or .planning; planPanes mints from each route's own word |
 | 2 | perf | ed55e70a | theia/extensions/orca-panes/src/browser/side-panel/orca-right-sidebar-toggle.ts | keepRoom (run on every main-panel layoutModified, per frame of a split drag) reads the host's box only while shown; hidden, the bar was undefined whatever the width |
-| 3 | perf | 645e30fe | theia/extensions/orca-panes/src/browser/failure/orca-hosting-status.ts | checkStuckOffer shared while in flight, as poll() is; before, every 1 s poll after the sixth stuck one started another handOff RPC |
+| 3 | perf (reverted by 0ce5695d) | 645e30fe | theia/extensions/orca-panes/src/browser/failure/orca-hosting-status.ts | Reverted after review; the file is byte-identical to the base again. (1) handOff is a Theia RPC with no timeout, so a probe that never settles would block every later stuck-offer probe for the session, where the base issued a fresh one on the next poll. (2) Probe A starts while the offer is refused, then the file becomes good and the loader boots (counter reset) before A returns `refused`: the offer-* reason stays and pairing-lost shows over a booted host. At the base, probe B on the next poll saw the good file and could clear it through the `clientReason?.startsWith('offer-')` branch |
 | 4 | fix | c8901ae6 | theia/extensions/orca-panes/src/browser/orca-pane-observer.ts | drain() catches each apply() on its own, so a failed list no longer strands a newer one queued during it |
 | 5 | fix | 7a36360b | theia/extensions/orca-browser/src/browser/orca-browser-frontend-module.ts | connectionWhenReady's one-second wait removes its LINK_EVENT listener when the timer wins |
 | 6 | refactor | 7ffd5247 | theia/extensions/orca-agents/bin/claude-wrapper.mjs | createPane's list fallback calls listRows instead of re-spelling its expression |
@@ -34,6 +34,7 @@ None. No Firefox touchpoint was added, removed or moved.
 None.
 
 ## Not done
+- overlapping stuck-offer probes: a guard needs a timeout on the handOff RPC and a re-probe after boot; left as is.
 - orca-overlay/files/: no change. Its only type check without a network install would be Orca's web program run over orca/src/renderer/src/pb/, which needs the edited files copied into the read-only orca/ checkout. Candidates seen there were Orca-store projections (subscribeProjection re-projects and stringifies on every store change; readStoredWebRuntimeEnvironment is read per projection). A reference guard would miss the storage-read input, so none is provable by reading.
 - pb-pane-mount.tsx: every React root, listener, interval and store subscription it adds is released on unmount or is installed once per document (installedSteps); no effect has a dependency list that runs it on every render.
 - CLAUDE_WRAPPER_LOG_FILE (orca-agents-protocol.ts) is unused, but it documents the bridge-folder file contract next to ORCAD_DATA_ROOT_FILE, which a check pins. Left in place.
@@ -41,4 +42,7 @@ None.
 - OrcaBrowserHost.run: when an attach fails before its session resolves, setState('failed') runs twice (once from onDetached, once from the catch). That is idempotent, so it was not changed.
 
 ## Quick gate
+After the revert of row 3 (no full gate re-run, as instructed): orca-panes `tsc -b` passes; orca-pane-hosting and its --self-test, orca-failure-classes and its --self-test, and orca-failure-page-live --self-test pass. The brand-scan counts are unchanged (orca 7560, ORCA 1581).
+
+Before the revert:
 454 PASS, 2 FAIL, 0 SKIP (456 rows). FAIL: scan-brand-residue and scan-brand-residue-self-test, both Red by design (token recount, above). Log: quick-gate-r7.log in the worktree, untracked.
