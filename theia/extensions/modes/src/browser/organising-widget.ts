@@ -722,8 +722,9 @@ export class OrganisingWidget extends Widget {
      * clipping or scrolling them. It is the other half of "never scroll" --
      * without it the grid has to give up somewhere, and giving up meant a
      * scrollbar hiding the tabs the canvas exists to show.
+     *
+     * `boxW` and `boxH` are the host's client size, measured by tileCards before any write.
      */
-    /** `boxW` and `boxH` are the host's client size, measured by tileCards before any write. */
     protected stackCards(host: HTMLElement, cards: HTMLElement[], boxW: number, boxH: number): void {
         host.classList.add('is-stacked');
         const spread = STACK_OFFSET * (Math.min(cards.length, STACK_VISIBLE) - 1);
