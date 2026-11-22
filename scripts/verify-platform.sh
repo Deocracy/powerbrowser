@@ -6223,6 +6223,26 @@ run_own_checks() {
     # patch URL, a verifier script carrying the form inside its selfTest).
     "update-download-host|node $REPO_ROOT/scripts/verify-update-download-host.mjs"
     "update-download-host-self-test|node $REPO_ROOT/scripts/verify-update-download-host.mjs --self-test"
+    # NEW (v1.7 refactor pass, lane R1a): no async result is returned unawaited inside a try with a catch in
+    # PowerBrowserAPI.sys.mjs, where a rejection would skip the catch and reach the reply as raw error text. The async
+    # callees are derived from the file with acorn (theia/node_modules); the self-test plants each pre-fix return.
+    "api-try-return-await|node $REPO_ROOT/scripts/verify-api-try-return-await.mjs"
+    "api-try-return-await-self-test|node $REPO_ROOT/scripts/verify-api-try-return-await.mjs --self-test"
+    # NEW (v1.7 refactor pass, lane R4): no widget class in theia/extensions declares its own toDispose field, which
+    # replaces the collection BaseWidget fills in its constructor so dispose() never fires onDidDispose or unmounts the
+    # React root. Derived from every extension source file; the self-test plants the pre-fix field in the tab strip.
+    "widget-dispose-collection|node $REPO_ROOT/scripts/verify-widget-dispose-collection.mjs"
+    "widget-dispose-collection-self-test|node $REPO_ROOT/scripts/verify-widget-dispose-collection.mjs --self-test"
+    # NEW (v1.7 refactor pass, lane R5): a newer mode or setup notice restarts the removal timer, so an older notice's
+    # timer cannot remove it early. Derived from every flash method that sets a timer and removes the element; the
+    # self-test plants the pre-fix body at each site.
+    "modes-notice-timer|node $REPO_ROOT/scripts/verify-modes-notice-timer.mjs"
+    "modes-notice-timer-self-test|node $REPO_ROOT/scripts/verify-modes-notice-timer.mjs --self-test"
+    # NEW (v1.7 refactor pass, lane R3): in address-bar.tsx every exit of a member that invalidates the query in
+    # flight clears the shimmer row when it starts no query and leaves it when it starts one, so no loading row is
+    # left with nothing pending and none blinks while typing. Derived from the file; the self-test plants four faults.
+    "address-bar-shimmer|node $REPO_ROOT/scripts/verify-address-bar-shimmer.mjs"
+    "address-bar-shimmer-self-test|node $REPO_ROOT/scripts/verify-address-bar-shimmer.mjs --self-test"
   )
   # Every row appended below is full tier: it may launch a browser or a daemon, so it runs under the live lock.
   local quick_rows=${#CHECKS[@]}
