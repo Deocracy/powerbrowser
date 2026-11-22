@@ -944,16 +944,20 @@ export function buildOrcadKeeperArgs() {
   return ["--input-type=module", "--eval", orcadKeeperSource()];
 }
 
-/** The line OrcaService writes to orcad's stdin once it accepts the ready line: the daemon the watch may end. */
-export function orcadAcceptedLine({ daemonPid, daemonTicks } = {}) {
+/** A daemon-naming stdin line of one kind: a pid only when it is a positive integer, its ticks only with a pid. */
+function daemonLine(kind, { daemonPid, daemonTicks } = {}) {
   const pid = Number.isInteger(daemonPid) && daemonPid > 0 ? daemonPid : null;
-  return JSON.stringify({ kind: ORCAD_ACCEPTED_KIND, daemonPid: pid, daemonTicks: pid !== null && daemonTicks != null ? String(daemonTicks) : null });
+  return JSON.stringify({ kind, daemonPid: pid, daemonTicks: pid !== null && daemonTicks != null ? String(daemonTicks) : null });
+}
+
+/** The line OrcaService writes to orcad's stdin once it accepts the ready line: the daemon the watch may end. */
+export function orcadAcceptedLine(daemon) {
+  return daemonLine(ORCAD_ACCEPTED_KIND, daemon);
 }
 
 /** The line naming a daemon this session keeps, to a new orcad before acceptance or to the keeper. */
-export function orcadAdoptedLine({ daemonPid, daemonTicks } = {}) {
-  const pid = Number.isInteger(daemonPid) && daemonPid > 0 ? daemonPid : null;
-  return JSON.stringify({ kind: ORCAD_ADOPTED_KIND, daemonPid: pid, daemonTicks: pid !== null && daemonTicks != null ? String(daemonTicks) : null });
+export function orcadAdoptedLine(daemon) {
+  return daemonLine(ORCAD_ADOPTED_KIND, daemon);
 }
 
 /** The line that releases the keeper. */
