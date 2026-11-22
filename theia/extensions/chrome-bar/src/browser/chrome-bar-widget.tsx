@@ -775,11 +775,12 @@ export class ChromeBarWidget extends ReactWidget {
         if (items === 'failed') {
             return;
         }
-        // placesFavicons takes at most 10 urls per request.
-        const icons: Record<string, string> = {};
+        // placesFavicons takes at most 10 urls per request; the requests are independent, so they run together.
+        const chunks: string[][] = [];
         for (let at = 0; at < items.length; at += 10) {
-            Object.assign(icons, await this.store.placesFavicons(items.slice(at, at + 10).map(row => row.url)).catch(() => ({})));
+            chunks.push(items.slice(at, at + 10).map(row => row.url));
         }
+        const icons: Record<string, string> = Object.assign({}, ...await Promise.all(chunks.map(urls => this.store.placesFavicons(urls).catch(() => ({})))));
         if (seq === this.toolbarSeq) {
             this.toolbarIcons = icons;
             this.update();
