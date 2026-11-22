@@ -705,9 +705,9 @@ export class AddressBar {
         return engineNameOf(this.mode);
     }
 
-    /** Phase 30 (D-26): what the active mode may send to chrome while typing. */
-    protected modeSends(): { resolve: boolean; suggestions: boolean; autofill: boolean; places: boolean } {
-        return MODE_SENDS[modeKindOf(this.mode)] ?? MODE_SENDS['address'];
+    /** Phase 30 (D-26): what `mode` (by default the active mode) may send to chrome while typing. */
+    protected modeSends(mode: ModeId = this.mode): { resolve: boolean; suggestions: boolean; autofill: boolean; places: boolean } {
+        return MODE_SENDS[modeKindOf(mode)] ?? MODE_SENDS['address'];
     }
 
     /** Phase 30 (SMODE-01): the active mode's contribution when it lists its own rows, else undefined. */
@@ -3088,7 +3088,7 @@ export class AddressBar {
         const contributed = this.modeProvider.getContributions();
         const next = nextMode(cycleOrder(engines, id => contributed.some(mode => mode.id === id)), this.mode, step);
         // D-26 (IN-03): leaving Command centre for a mode that resolves keeps the text but sends none of it.
-        const open = this.dropdownOpen && !(this.commandCentre() && (MODE_SENDS[modeKindOf(next)] ?? MODE_SENDS['address']).resolve);
+        const open = this.dropdownOpen && !(this.commandCentre() && this.modeSends(next).resolve);
         this.mode = next;
         this.closeDropdown();
         if (open) {
