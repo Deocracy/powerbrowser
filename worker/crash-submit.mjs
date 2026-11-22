@@ -97,14 +97,14 @@ function empty(status) {
     return { status, body: '' };
 }
 
-/** First index of needle in hay at or after from, or -1. Binary-safe. */
+/** First index of needle (never empty) in hay at or after from, or -1. Binary-safe. Candidates come from the native first-byte scan. */
 function indexOfBytes(hay, needle, from) {
     const n = needle.length;
-    outer: for (let i = from; i <= hay.length - n; i += 1) {
-        for (let j = 0; j < n; j += 1) {
-            if (hay[i + j] !== needle[j]) continue outer;
-        }
-        return i;
+    const last = hay.length - n;
+    for (let i = hay.indexOf(needle[0], from); i !== -1 && i <= last; i = hay.indexOf(needle[0], i + 1)) {
+        let j = 1;
+        while (j < n && hay[i + j] === needle[j]) j += 1;
+        if (j === n) return i;
     }
     return -1;
 }
