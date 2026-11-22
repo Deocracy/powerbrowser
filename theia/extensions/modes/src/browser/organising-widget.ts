@@ -649,7 +649,14 @@ export class OrganisingWidget extends Widget {
      * Panorama does there and it is W8, not this change.
      */
     protected tileCards(): void {
-        for (const host of Array.from(this.canvasRoot.querySelectorAll('.pb-org-box-cards')) as HTMLElement[]) {
+        // Every group is measured before any is written. This runs on every
+        // resize and drag step, and reading the next group's size after the
+        // last one's writes forced a reflow per group per step. Each box has
+        // its own fixed size and its cards are out of flow once tiled, so no
+        // group's writes change another group's size.
+        const measured = (Array.from(this.canvasRoot.querySelectorAll('.pb-org-box-cards')) as HTMLElement[])
+            .map(host => ({ host, width: host.clientWidth, height: host.clientHeight }));
+        for (const { host, width, height } of measured) {
             const cards = Array.from(host.querySelectorAll('.pb-org-card')) as HTMLElement[];
             // A card hovering over this group is already counted in: the grid
             // re-packs to make room and a translucent slot shows where it
@@ -671,10 +678,10 @@ export class OrganisingWidget extends Widget {
             if (!total) {
                 continue;
             }
-            const cell = fitTiles(total, host.clientWidth, host.clientHeight);
+            const cell = fitTiles(total, width, height);
             if (!cell) {
                 slot?.remove();
-                this.stackCards(host, cards);
+                this.stackCards(host, cards, width, height);
                 continue;
             }
             host.classList.remove('is-stacked');
@@ -716,10 +723,9 @@ export class OrganisingWidget extends Widget {
      * without it the grid has to give up somewhere, and giving up meant a
      * scrollbar hiding the tabs the canvas exists to show.
      */
-    protected stackCards(host: HTMLElement, cards: HTMLElement[]): void {
+    /** `boxW` and `boxH` are the host's client size, measured by tileCards before any write. */
+    protected stackCards(host: HTMLElement, cards: HTMLElement[], boxW: number, boxH: number): void {
         host.classList.add('is-stacked');
-        const boxW = host.clientWidth;
-        const boxH = host.clientHeight;
         const spread = STACK_OFFSET * (Math.min(cards.length, STACK_VISIBLE) - 1);
         const w = Math.max(40, Math.min(boxW - spread - 16, Math.floor((boxH - spread - 26) / TILE_ASPECT), 170));
         const h = Math.max(30, Math.round(w * TILE_ASPECT));

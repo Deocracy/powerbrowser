@@ -299,14 +299,15 @@ export class GroupModel implements FrontendApplicationContribution {
      * counts as loose) and the active group's tabs.
      */
     showsInStrip(widget: Widget, current: Widget | undefined): boolean {
+        const key = this.keyOf(widget);
         // PAN-04 (A3): a tab of a group in its undo window is shown nowhere, current or not.
-        if (this.isClosingKey(this.keyOf(widget))) {
+        if (this.isClosingKey(key)) {
             return false;
         }
         if (!this.loaded || this.loadFailed || !this.activeGroupId || widget === current) {
             return true;
         }
-        const groupId = this.locateCard(this.keyOf(widget))?.groupId ?? null;
+        const groupId = this.locateCard(key)?.groupId ?? null;
         return groupId === null || groupId === this.activeGroupId;
     }
 
@@ -381,13 +382,16 @@ export class GroupModel implements FrontendApplicationContribution {
      * NG-005: closing a Theia tab that has a row marks the row closed. Widget
      * disposal is the user's close; a reload or quit disposes nothing, so the
      * row stays and the tab keeps its card.
-     * ponytail: finds the widget by scanning the main area, O(tabs); index by key if it shows up.
+     * A caller watching many tabs at once passes `byKey` (`mainWidgetsByKey`),
+     * so the main area is scanned once rather than once per tab.
      */
-    private watchClose(uri: string): void {
+    private watchClose(uri: string, byKey?: ReadonlyMap<string, Widget>): void {
         if (/^(web|stock):/.test(uri)) {
             return;
         }
-        const widget = [...this.shell.mainPanel.widgets()].find(candidate => this.keyOf(candidate) === uri);
+        const widget = byKey
+            ? byKey.get(uri)
+            : [...this.shell.mainPanel.widgets()].find(candidate => this.keyOf(candidate) === uri);
         if (!widget || this.watched.has(widget)) {
             return;
         }
@@ -396,6 +400,18 @@ export class GroupModel implements FrontendApplicationContribution {
             this.actor.mutate({ kind: 'closeTab', uri })
                 .catch(error => console.error('[@powerbrowser/modes] closing a tab row failed:', error));
         });
+    }
+
+    /** Every main-area widget by its row key, the first one winning as `watchClose`'s scan does. */
+    private mainWidgetsByKey(): Map<string, Widget> {
+        const byKey = new Map<string, Widget>();
+        for (const widget of this.shell.mainPanel.widgets()) {
+            const key = this.keyOf(widget);
+            if (!byKey.has(key)) {
+                byKey.set(key, widget);
+            }
+        }
+        return byKey;
     }
 
     /**
@@ -499,19 +515,18 @@ export class GroupModel implements FrontendApplicationContribution {
             // NG-012 (T3-R1): no per-read catch. A read failing mid-load fails
             // the whole load -- an empty member list would draw an empty box,
             // show its tabs as loose, and have Close Group confirm "0 tabs".
-            for (const group of parsed) {
-                const memberRows = await reader.getGroupTabs(group.id);
-                const tabs = Array.isArray(memberRows) ? memberRows.flatMap(row => {
-                    const tab = this.parseTab(row);
-                    return tab ? [tab] : [];
-                }) : [];
-                nextMembers.set(group.id, tabs);
-            }
-            const looseRows = await reader.listUngroupedTabs();
-            let loose: PanoramaTab[] = Array.isArray(looseRows) ? looseRows.flatMap(row => {
+            // The reads are independent, so they go out together: one round
+            // trip per load instead of one per group.
+            const [memberLists, looseRows] = await Promise.all([
+                Promise.all(parsed.map(group => reader.getGroupTabs(group.id))),
+                reader.listUngroupedTabs(),
+            ]);
+            const parseTabs = (tabRows: unknown): PanoramaTab[] => Array.isArray(tabRows) ? tabRows.flatMap(row => {
                 const tab = this.parseTab(row);
                 return tab ? [tab] : [];
             }) : [];
+            parsed.forEach((group, index) => nextMembers.set(group.id, parseTabs(memberLists[index])));
+            let loose: PanoramaTab[] = parseTabs(looseRows);
             // NG-009: every key the store holds a row for, open or not.
             this.stored.clear();
             for (const tabs of [...nextMembers.values(), loose]) {
@@ -564,9 +579,12 @@ export class GroupModel implements FrontendApplicationContribution {
                     });
                 }
                 loose = rest;
+                // Built on the first Theia tab to watch: web and stock tabs never scan.
+                let byKey: Map<string, Widget> | undefined;
                 for (const tab of live) {
-                    if (claimed.has(tab.uri) || placements.has(tab.uri)) {
-                        this.watchClose(tab.uri);
+                    if ((claimed.has(tab.uri) || placements.has(tab.uri)) && !/^(web|stock):/.test(tab.uri)) {
+                        byKey ??= this.mainWidgetsByKey();
+                        this.watchClose(tab.uri, byKey);
                     }
                 }
             }
