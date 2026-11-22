@@ -334,7 +334,7 @@ export class ExtensionActionsWidget {
         const rect = anchor.getBoundingClientRect();
         const leaf = (id: string, label: string, run: () => unknown): CommandMenu => ({
             id, label, sortString: id, isVisible: () => true, isEnabled: () => true, isToggled: () => false, run: async () => { await run(); },
-        } as CommandMenu);
+        });
         const menu: CompoundMenuNode = {
             id: 'extension-row',
             sortString: '',
