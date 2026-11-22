@@ -642,10 +642,14 @@ export const TheiaService = {
     if (profileDir) {
       return `${profileDir}/powerbrowser-theia`;
     }
+    return this._xdgConfigDir();
+  },
+
+  /** The pre-45 state directory: XDG_CONFIG_HOME, else HOME/.config, then powerbrowser. */
+  _xdgConfigDir() {
     const xdg = PowerBrowserAPI.getEnv("XDG_CONFIG_HOME");
     const home = PowerBrowserAPI.getEnv("HOME");
-    const base = xdg || `${home}/.config`;
-    return `${base}/powerbrowser`;
+    return `${xdg || `${home}/.config`}/powerbrowser`;
   },
 
   /**
@@ -678,9 +682,7 @@ export const TheiaService = {
    * inputs the old `_resolveConfigDir()` used, so it is exact.
    */
   _legacyStateFilePath() {
-    const xdg = PowerBrowserAPI.getEnv("XDG_CONFIG_HOME");
-    const home = PowerBrowserAPI.getEnv("HOME");
-    return `${xdg || `${home}/.config`}/powerbrowser/sidecar-state-${this._profileStateKey()}.json`;
+    return `${this._xdgConfigDir()}/sidecar-state-${this._profileStateKey()}.json`;
   },
 
   /**
