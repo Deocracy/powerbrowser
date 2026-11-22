@@ -1,7 +1,7 @@
 import * as React from '@theia/core/shared/react';
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import { ApplicationShell, ContextMenuRenderer, ReactWidget, Widget } from '@theia/core/lib/browser';
-import { CommandMenu, CommandRegistry, CompoundMenuNode, MenuPath } from '@theia/core/lib/common';
+import { CommandMenu, CommandRegistry, CompoundMenuNode, Disposable, MenuPath } from '@theia/core/lib/common';
 import { Drag } from '@theia/core/shared/@lumino/dragdrop';
 import { MimeData } from '@theia/core/shared/@lumino/coreutils';
 import { Message } from '@theia/core/shared/@lumino/messaging';
@@ -269,14 +269,16 @@ export class TabStripWidget extends ReactWidget {
         // TAB-05: pins come back after the launch restore, and the quit flush writes them with each tab's last URL.
         this.pinRestore = this.setups.sessionRestored.then(() => this.restorePins());
         this.toDispose.push(this.storage.onWillFlush(event => event.waitUntil(this.savePins())));
-        this.shell.mainPanel.onDidChangeCurrent(() => {
+        this.toDispose.push(this.shell.mainPanel.onDidChangeCurrent(() => {
             // TAB-07: a tab switch closes the preview; the switched-to tab takes focus, not the page the card hid.
             this.closePreview(false);
             this.update();
-        });
+        }));
         // A split moves a tab between panes without adding or removing it,
         // and which pane a tab is in is exactly what this strip now shows.
-        this.shell.mainPanel.layoutModified.connect(() => this.update());
+        const relayout = (): void => this.update();
+        this.shell.mainPanel.layoutModified.connect(relayout);
+        this.toDispose.push(Disposable.create(() => this.shell.mainPanel.layoutModified.disconnect(relayout)));
         this.update();
     }
 
