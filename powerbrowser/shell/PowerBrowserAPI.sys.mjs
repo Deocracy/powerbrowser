@@ -3399,7 +3399,7 @@ export const PowerBrowserAPI = Object.freeze({
             if (prev && prev.uri !== uri) {
               PowerBrowserAPI.scheduleSettleCapture(prev.uri, chromeWin);
             }
-            lastSelectedTabByWin.set(chromeWin, { uri, tab });
+            lastSelectedTabByWin.set(chromeWin, { uri });
           } catch {
             // Selection tracking is best-effort; the write below still runs.
           }
