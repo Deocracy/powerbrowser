@@ -1305,15 +1305,20 @@ export class AddressBar {
 
     /** BAR-11: favicons for the rows' addresses from chrome's Places cache, under the same guards as the query. */
     protected async requestIcons(seq: number): Promise<void> {
-        const urls = this.rows
+        const urls = Array.from(new Set(this.rows
             .filter(row => row.url && !row.engineName && this.icons[row.url] === undefined)
-            .map(row => row.url);
+            .map(row => row.url)));
         if (!urls.length) {
             return;
         }
+        // placesFavicons reads at most 10 urls per request; an uncapped list (Tabs mode) lost every row past the tenth.
+        const chunks: string[][] = [];
+        for (let at = 0; at < urls.length; at += 10) {
+            chunks.push(urls.slice(at, at + 10));
+        }
         let icons: Record<string, string>;
         try {
-            icons = await this.store.placesFavicons(urls);
+            icons = Object.assign({}, ...await Promise.all(chunks.map(chunk => this.store.placesFavicons(chunk))));
         } catch {
             return;
         }
