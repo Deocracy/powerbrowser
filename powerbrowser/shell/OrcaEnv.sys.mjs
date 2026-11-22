@@ -216,21 +216,28 @@ export function buildOrcadArgs({ orcadMain, port, webClientRoot } = {}) {
   return [orcadMain, "--bind", ORCAD_BIND_HOST, "--port", String(port), "--json", "--web-client-root", webClientRoot];
 }
 
-/**
- * Parses orcad's ready line out of accumulated stdout text. Returns null until a parsable line is
- * present, then exactly three fields. The pairing fields of the line are never read or returned.
- */
-export function parseReadyLine(text) {
+/** The first ready line in accumulated stdout text, parsed, or null when none is present or it does not parse. */
+function readyRecordOf(text) {
   const line = String(text)
     .split("\n")
     .find(l => l.startsWith("{") && l.includes(READY_MARKER));
   if (!line) {
     return null;
   }
-  let record;
   try {
-    record = JSON.parse(line);
+    return JSON.parse(line);
   } catch {
+    return null;
+  }
+}
+
+/**
+ * Parses orcad's ready line out of accumulated stdout text. Returns null until a parsable line is
+ * present, then exactly three fields. The pairing fields of the line are never read or returned.
+ */
+export function parseReadyLine(text) {
+  const record = readyRecordOf(text);
+  if (!record) {
     return null;
   }
   const nodeVersion = record?.health?.nodeVersion;
@@ -248,15 +255,7 @@ export function parseReadyLine(text) {
  * offer is handed to one writer and kept nowhere else, which is why parseReadyLine never reads it.
  */
 export function readyLineOffer(text) {
-  const line = String(text)
-    .split("\n")
-    .find(l => l.startsWith("{") && l.includes(READY_MARKER));
-  let record = null;
-  try {
-    record = line ? JSON.parse(line) : null;
-  } catch {
-    return null;
-  }
+  const record = readyRecordOf(text);
   const offer = record?.pairing?.webClientUrl;
   return record?.pairing?.available === true && typeof offer === "string" && offer ? offer : null;
 }
@@ -552,15 +551,7 @@ export function isClientReason(value) {
 
 /** The ready line's pairing-unavailable reason when it is a member of the pinned set, else null. */
 export function readyLineOfferUnavailableReason(text) {
-  const line = String(text)
-    .split("\n")
-    .find(l => l.startsWith("{") && l.includes(READY_MARKER));
-  let record = null;
-  try {
-    record = line ? JSON.parse(line) : null;
-  } catch {
-    return null;
-  }
+  const record = readyRecordOf(text);
   const reason = record?.pairing?.reason;
   return record?.pairing?.available === false && ORCA_OFFER_UNAVAILABLE_REASONS.includes(reason) ? reason : null;
 }
