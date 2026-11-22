@@ -7735,7 +7735,6 @@ function installPermissionPromptFurniture(window) {
     browser.popupnotificationanchor = window.document.getElementById(PROMPT_ANCHOR_ID);
     const record = {
       token: `prompt-${++promptTokenCounter}`,
-      window,
       theiaBrowser: host.theiaBrowser,
       browser,
       tabId,
@@ -10240,7 +10239,7 @@ const EXTENSION_TAB_EVENTS = ["TabOpen", "TabSelect", "TabClose", "TabAttrModifi
 const extensionIconData = new Map();
 // Shell window -> { theiaBrowser, last, seq }: the subscribed frame, the last set pushed (JSON) and the newest read.
 const extensionBridges = new WeakMap();
-// Shell window -> { extension, action, popup }: the one extension popup open in it, as in Firefox.
+// Shell window -> { action, popup }: the one extension popup open in it, as in Firefox.
 const extensionPopups = new WeakMap();
 // 38-04 (B5): shell window -> { extensionId, frame }: the one extension sidebar open in it, as in Firefox.
 const extensionSidebars = new WeakMap();
@@ -10551,7 +10550,7 @@ function extensionOpenPopup(win, named, popupUrl, anchorRect) {
       pushExtensionActions(win);
     }
   };
-  extensionPopups.set(win, { extension: named.extension, action: named.action, popup });
+  extensionPopups.set(win, { action: named.action, popup });
   host.strip.addEventListener("TabSelect", close);
   win.document.addEventListener("focus", pageFocus, true);
   pushExtensionActions(win);
