@@ -60,7 +60,8 @@ import {
 } from './chrome-bar-commands';
 import { CHROME_BAR_COPY, appSubject, downloadBytes, historyLabel, notificationBarCopy } from './chrome-bar-copy';
 import { HOME_PAGE_PREFERENCE, SHOW_BOOKMARKS_TOOLBAR_PREFERENCE, SHOW_HOME_BUTTON_PREFERENCE } from './chrome-bar-preferences';
-import { AddressBar, DROPDOWN_MAX_HEIGHT, DropTargetDragEvent, droppedUrlOf } from './address-bar/address-bar';
+import { AddressBar, DropTargetDragEvent, droppedUrlOf, dropdownMaxHeight } from './address-bar/address-bar';
+import { FAVICON_REQUEST_LIMIT } from './address-bar/address-bar-rows';
 import { BUTTON_SHORTCUTS, NavButton, pageKeyLabel, tooltipFor } from './chrome-bar-shortcuts';
 import { MODES_ACTIVATE_COMMAND_ID } from '@powerbrowser/modes/lib/browser/modes-commands';
 import { ModeService } from '@powerbrowser/modes/lib/browser/mode-service';
@@ -140,6 +141,11 @@ const APP_MENU_COMMANDS: Readonly<Record<string, string>> = Object.freeze({
 /** PAGE-09 (33-05): the Edit submenu's commands, each with the frozen edit cmd its command sends and the page reports on. */
 type EditCmd = Parameters<WebTabWidget['edit']>[0];
 const EDIT_MENU_CMDS: readonly EditCmd[] = Object.freeze(['cmd_undo', 'cmd_redo', 'cmd_cut', 'cmd_copy', 'cmd_paste', 'cmd_selectAll'] as EditCmd[]);
+
+/** Per-request menu children in the order given: each one's sortString is its index. */
+function inOrder<T extends CommandMenu | CompoundMenuNode>(children: T[]): T[] {
+    return children.map((child, index) => ({ ...child, sortString: String(index).padStart(2, '0') }));
+}
 
 /** NAV-03: Firefox's click-hold delay before Back/Forward open the history menu. */
 const HISTORY_HOLD_MS = 500;
@@ -228,7 +234,7 @@ function ClearHistoryPicker(props: ClearHistoryPickerProps): React.ReactElement 
             role='dialog'
             aria-label={heading}
             tabIndex={-1}
-            style={{ position: 'fixed', top, right, maxHeight: Math.max(0, Math.min(DROPDOWN_MAX_HEIGHT, window.innerHeight - top - 8)) }}
+            style={{ position: 'fixed', top, right, maxHeight: dropdownMaxHeight(top) }}
             onKeyDown={e => {
                 if (e.key === 'Escape') {
                     e.stopPropagation();
@@ -644,7 +650,7 @@ export class ChromeBarWidget extends ReactWidget {
             this.menuGroup('clear', [this.menuLeaf('clear-history', CHROME_BAR_COPY.clearRecentHistoryRow,
                 () => this.openClearHistoryPicker(this.appMenuButton ?? undefined), true, this.acceleratorOf(CHROME_BAR_CLEAR_HISTORY_COMMAND_ID))]),
         ];
-        return children.map((child, index) => ({ ...child, sortString: String(index).padStart(2, '0') }));
+        return inOrder(children);
     }
 
     /**
@@ -775,11 +781,12 @@ export class ChromeBarWidget extends ReactWidget {
         if (items === 'failed') {
             return;
         }
-        // placesFavicons takes at most 10 urls per request.
-        const icons: Record<string, string> = {};
-        for (let at = 0; at < items.length; at += 10) {
-            Object.assign(icons, await this.store.placesFavicons(items.slice(at, at + 10).map(row => row.url)).catch(() => ({})));
+        // placesFavicons takes at most FAVICON_REQUEST_LIMIT urls per request; the requests are independent, so they run together.
+        const chunks: string[][] = [];
+        for (let at = 0; at < items.length; at += FAVICON_REQUEST_LIMIT) {
+            chunks.push(items.slice(at, at + FAVICON_REQUEST_LIMIT).map(row => row.url));
         }
+        const icons: Record<string, string> = Object.assign({}, ...await Promise.all(chunks.map(urls => this.store.placesFavicons(urls).catch(() => ({})))));
         if (seq === this.toolbarSeq) {
             this.toolbarIcons = icons;
             this.update();
@@ -840,7 +847,7 @@ export class ChromeBarWidget extends ReactWidget {
             sortString: '',
             isVisible: () => true,
             isEmpty: () => children.length === 0,
-            children: children.map((child, index) => ({ ...child, sortString: String(index).padStart(2, '0') })),
+            children: inOrder(children),
         };
     }
 
@@ -1229,7 +1236,7 @@ export class ChromeBarWidget extends ReactWidget {
      */
     protected appSubmenu(menuId: string, bookmarks: PlaceMatch[] | 'failed', editState: Partial<Record<EditCmd, boolean>> = {}): AppMenuSubmenu | undefined {
         const ordered = (children: (CommandMenu | CompoundMenuNode)[]): AppMenuSubmenu => ({
-            children: children.map((child, index) => ({ ...child, sortString: String(index).padStart(2, '0') })) as unknown as AppMenuSubmenu['children'],
+            children: inOrder(children) as unknown as AppMenuSubmenu['children'],
         });
         switch (menuId) {
             case 'bookmarks': {
