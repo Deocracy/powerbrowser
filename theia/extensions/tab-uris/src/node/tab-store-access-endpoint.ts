@@ -324,11 +324,7 @@ export class TabStoreAccessEndpoint implements BackendApplicationContribution {
                         msg[field] = args[field];
                     }
                 }
-                const reply = await this.relay.relay(msg);
-                if (!reply.ok) {
-                    throw new Error(reply.message ?? `${op} failed (${reply.reason ?? 'store'})`);
-                }
-                return reply;
+                return this.chromeReply(msg);
             }
             default:
                 throw new Error(`unknown tool ${name}`);
@@ -346,10 +342,6 @@ export class TabStoreAccessEndpoint implements BackendApplicationContribution {
 
     /** One chrome read through a connected window; the reply field, or null. */
     protected async chrome(msg: StoreMessage, field: string): Promise<unknown> {
-        const reply = await this.relay.relay(msg);
-        if (!reply.ok) {
-            throw new Error(reply.message ?? `${msg.kind} failed (${reply.reason ?? 'store'})`);
-        }
-        return reply[field] ?? null;
+        return (await this.chromeReply(msg))[field] ?? null;
     }
 }
