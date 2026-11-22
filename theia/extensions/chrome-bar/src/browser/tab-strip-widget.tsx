@@ -2,7 +2,6 @@ import * as React from '@theia/core/shared/react';
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import { ApplicationShell, ContextMenuRenderer, ReactWidget, Widget } from '@theia/core/lib/browser';
 import { CommandMenu, CommandRegistry, CompoundMenuNode, MenuPath } from '@theia/core/lib/common';
-import { DisposableCollection } from '@theia/core/lib/common/disposable';
 import { Drag } from '@theia/core/shared/@lumino/dragdrop';
 import { MimeData } from '@theia/core/shared/@lumino/coreutils';
 import { Message } from '@theia/core/shared/@lumino/messaging';
@@ -230,8 +229,6 @@ export class TabStripWidget extends ReactWidget {
     /** TAB-07: the tab id of the page chrome last reported focused (the pageFocus push), for the focus rule. */
     protected focusedPageTabId: string | undefined;
 
-    protected readonly toDispose = new DisposableCollection();
-
     @postConstruct()
     protected init(): void {
         this.id = TabStripWidget.ID;
@@ -285,7 +282,6 @@ export class TabStripWidget extends ReactWidget {
 
     override dispose(): void {
         window.clearTimeout(this.previewTimer);
-        this.toDispose.dispose();
         super.dispose();
     }
 
