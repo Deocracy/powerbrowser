@@ -1382,7 +1382,6 @@ export class AddressBar {
     protected textEdited(value: string, autofillWanted: boolean, composing = false): void {
         // Replies still in flight describe the old text; the debounced query takes a new sequence later.
         this.querySeq += 1;
-        this.shimmer = false;
         this.inputValue = value;
         this.autofill = undefined;
         this.autofillWanted = autofillWanted;
@@ -1403,7 +1402,10 @@ export class AddressBar {
         this.localMessage = undefined;
         // BAR-03: text typed while an IME composition is open is never queried (onCompositionEnd queries it).
         this.compositionOpen = composing;
+        // An exit that starts no query clears the shimmer the invalidated one can no longer clear; an exit that
+        // starts one leaves it, so the row stays up across keystrokes until that query finishes as current.
         if (this.compositionOpen) {
+            this.shimmer = false;
             this.renderNow();
             return;
         }
@@ -1421,6 +1423,7 @@ export class AddressBar {
             // query debounced before it is disarmed so it cannot replace the list.
             this.localQuery?.cancel();
             this.dropdownArmed = false;
+            this.shimmer = false;
             this.rows = aliasRows;
             this.dropdownOpen = true;
             this.renderNow();
