@@ -186,10 +186,7 @@ export class ChromeStoreClient {
 
     /** NG-028: stores a full copy of the tab's page; rejects with chrome's reason. */
     async savePageCopy(uri: string): Promise<SavedPageCopy> {
-        const reply = await this.request({ kind: 'savePageCopy', uri }, SAVE_PAGE_ACK_TIMEOUT_MS);
-        if (!reply.ok) {
-            throw new Error(reply.message ?? `savePageCopy failed (${reply.reason ?? 'store'})`);
-        }
+        const reply = await this.okReply({ kind: 'savePageCopy', uri }, SAVE_PAGE_ACK_TIMEOUT_MS);
         return { dir: String(reply.dir), bytes: Number(reply.bytes) };
     }
 
@@ -208,10 +205,7 @@ export class ChromeStoreClient {
 
     /** Phase 29 (BAR-04): the bar's engines, for the Default Search Engine setting and the placeholder. */
     async listSearchEngines(): Promise<SearchEngineList> {
-        const reply = await this.request({ kind: 'listSearchEngines' });
-        if (!reply.ok) {
-            throw new Error(reply.message ?? `listSearchEngines failed (${reply.reason ?? 'store'})`);
-        }
+        const reply = await this.okReply({ kind: 'listSearchEngines' });
         // An older chrome sends no aliases: an engine without them has none.
         const engines = (reply['engines'] as SearchEngineInfo[]).map(engine => ({ ...engine, aliases: Array.isArray(engine.aliases) ? engine.aliases.map(String) : [] }));
         return { engines, defaultName: String(reply['defaultName'] ?? '') };
@@ -244,11 +238,7 @@ export class ChromeStoreClient {
 
     /** Phase 31 plan 04 (MENU-02, D-31-07): opens one stock page by its enum name; chrome holds the URL. Resolves chrome's outcome word. A store-write, sent only from the app menu's row handler. */
     async openStockPage(page: string): Promise<string> {
-        const reply = await this.request({ kind: 'openStockPage', page });
-        if (!reply.ok) {
-            throw new Error(reply.message ?? `openStockPage failed (${reply.reason ?? 'store'})`);
-        }
-        return String(reply.where);
+        return String(await this.field<unknown>({ kind: 'openStockPage', page }, 'where'));
     }
 
     /**
@@ -312,11 +302,7 @@ export class ChromeStoreClient {
      * chrome's reason. Privileged: only the range picker's confirm handler calls it.
      */
     async clearHistory(range: ClearHistoryRange): Promise<string> {
-        const reply = await this.request({ kind: 'clearHistory', range }, CLEAR_HISTORY_ACK_TIMEOUT_MS);
-        if (!reply.ok) {
-            throw new Error(reply.message ?? `clearHistory failed (${reply.reason ?? 'store'})`);
-        }
-        return String(reply['cleared']);
+        return String(await this.field<unknown>({ kind: 'clearHistory', range }, 'cleared', CLEAR_HISTORY_ACK_TIMEOUT_MS));
     }
 
     /**
@@ -325,11 +311,7 @@ export class ChromeStoreClient {
      * and it is never relayed. Phase 35's fullscreen path replaces the chrome side behind the same command id.
      */
     async fullScreen(): Promise<string> {
-        const reply = await this.request({ kind: 'fullScreen' });
-        if (!reply.ok) {
-            throw new Error(reply.message ?? `fullScreen failed (${reply.reason ?? 'store'})`);
-        }
-        return String(reply.where);
+        return String(await this.field<unknown>({ kind: 'fullScreen' }, 'where'));
     }
 
     /**
@@ -337,10 +319,7 @@ export class ChromeStoreClient {
      * current set, which arrives as a push (WebTabChannel.onDidChangeExtensionActions). A read.
      */
     async extensionActionsSubscribe(): Promise<void> {
-        const reply = await this.request({ kind: 'extensionActionsSubscribe' });
-        if (!reply.ok) {
-            throw new Error(reply.message ?? `extensionActionsSubscribe failed (${reply.reason ?? 'store'})`);
-        }
+        await this.okReply({ kind: 'extensionActionsSubscribe' });
     }
 
     /**
@@ -349,29 +328,17 @@ export class ChromeStoreClient {
      * (38-03) runs the extension's page action instead, for the pill icon.
      */
     async extensionClick(extensionId: string, anchorRect: ExtensionAnchorRect, pageAction = false): Promise<string> {
-        const reply = await this.request({ kind: 'extensionClick', extensionId, anchorRect, ...(pageAction ? { pageAction: true } : {}) });
-        if (!reply.ok) {
-            throw new Error(reply.message ?? `extensionClick failed (${reply.reason ?? 'store'})`);
-        }
-        return String(reply.where);
+        return String(await this.field<unknown>({ kind: 'extensionClick', extensionId, anchorRect, ...(pageAction ? { pageAction: true } : {}) }, 'where'));
     }
 
     /** Phase 38 plan 01 (D-08, D-11): Pin to Toolbar and its undo; resolves 'pinned' or 'unpinned'. Privileged: only the menu row's handler calls it. */
     async extensionPin(extensionId: string, pinned: boolean): Promise<string> {
-        const reply = await this.request({ kind: 'extensionPin', extensionId, pinned });
-        if (!reply.ok) {
-            throw new Error(reply.message ?? `extensionPin failed (${reply.reason ?? 'store'})`);
-        }
-        return String(reply.where);
+        return String(await this.field<unknown>({ kind: 'extensionPin', extensionId, pinned }, 'where'));
     }
 
     /** Phase 38 plan 01 (D-08, D-11): uninstalls an extension; resolves 'removed' or 'refused'. Privileged: only the confirm row's handler calls it. */
     async extensionRemove(extensionId: string): Promise<string> {
-        const reply = await this.request({ kind: 'extensionRemove', extensionId });
-        if (!reply.ok) {
-            throw new Error(reply.message ?? `extensionRemove failed (${reply.reason ?? 'store'})`);
-        }
-        return String(reply.where);
+        return String(await this.field<unknown>({ kind: 'extensionRemove', extensionId }, 'where'));
     }
 
     /**
@@ -380,11 +347,7 @@ export class ChromeStoreClient {
      * network kind: it sends the user off the machine, so it is never relayed.
      */
     async extensionInstallSite(): Promise<string> {
-        const reply = await this.request({ kind: 'extensionInstallSite' });
-        if (!reply.ok) {
-            throw new Error(reply.message ?? `extensionInstallSite failed (${reply.reason ?? 'store'})`);
-        }
-        return String(reply.where);
+        return String(await this.field<unknown>({ kind: 'extensionInstallSite' }, 'where'));
     }
 
     /**
@@ -392,20 +355,12 @@ export class ChromeStoreClient {
      * or 'closed'. Privileged: only the gear row and the sidebar view's close, through the extension buttons widget.
      */
     async extensionSidebar(extensionId: string, open: boolean): Promise<string> {
-        const reply = await this.request({ kind: 'extensionSidebar', extensionId, open });
-        if (!reply.ok) {
-            throw new Error(reply.message ?? `extensionSidebar failed (${reply.reason ?? 'store'})`);
-        }
-        return String(reply.where);
+        return String(await this.field<unknown>({ kind: 'extensionSidebar', extensionId, open }, 'where'));
     }
 
     /** Phase 38 plan 04 (B5): the sidebar view's rect, where chrome paints the sidebar page; resolves 'applied' or 'not-open'. Privileged, as extensionSidebar. */
     async extensionSidebarGeometry(extensionId: string, rect: { x: number; y: number; w: number; h: number; visible: boolean }): Promise<string> {
-        const reply = await this.request({ kind: 'extensionSidebarGeometry', extensionId, ...rect });
-        if (!reply.ok) {
-            throw new Error(reply.message ?? `extensionSidebarGeometry failed (${reply.reason ?? 'store'})`);
-        }
-        return String(reply.where);
+        return String(await this.field<unknown>({ kind: 'extensionSidebarGeometry', extensionId, ...rect }, 'where'));
     }
 
     /** NG-024: tab rows joined to history and bookmarks, highest frecency first. Keeps the row-array shape; the cap flag rides the reply. */
@@ -415,18 +370,20 @@ export class ChromeStoreClient {
 
     /** NG-024 with the scan-cap flag: `{ rows, truncated }` from the same reply. */
     async queryTabsWithPlacesResult(query: TabPlacesQuery = {}): Promise<TabPlacesResult> {
-        const reply = await this.request({ kind: 'queryTabsWithPlaces', ...query });
-        if (!reply.ok) {
-            throw new Error(reply.message ?? `queryTabsWithPlaces failed (${reply.reason ?? 'store'})`);
-        }
+        const reply = await this.okReply({ kind: 'queryTabsWithPlaces', ...query });
         return { rows: reply['rows'] as TabPlacesRow[], truncated: reply['truncated'] === true };
     }
 
     protected async field<T>(msg: StoreMessage, name: string, timeoutMs?: number): Promise<T> {
+        return (await this.okReply(msg, timeoutMs))[name] as T;
+    }
+
+    /** One request whose refusal or timeout rejects with chrome's message, else `<kind> failed (<reason>)`. */
+    protected async okReply(msg: StoreMessage, timeoutMs?: number): Promise<StoreReply> {
         const reply = await this.request(msg, timeoutMs);
         if (!reply.ok) {
             throw new Error(reply.message ?? `${msg.kind} failed (${reply.reason ?? 'store'})`);
         }
-        return reply[name] as T;
+        return reply;
     }
 }
