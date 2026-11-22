@@ -155,7 +155,6 @@ export class OrcaHostingStatus implements FrontendApplicationContribution {
     protected readyPollsBeforeBoot = 0;
     protected seq = 0;
     protected polling: Promise<void> | undefined;
-    protected stuckCheck: Promise<void> | undefined;
     protected reconnecting: Promise<void> | undefined;
     protected readonly logged = new Set<string>();
 
@@ -430,8 +429,7 @@ export class OrcaHostingStatus implements FrontendApplicationContribution {
         this.schedule();
         this.readyPollsBeforeBoot = !this.api && this.bundle.state === 'booting' && next.state === 'ready' ? this.readyPollsBeforeBoot + 1 : 0;
         if (this.readyPollsBeforeBoot >= STUCK_BOOT_POLLS) {
-            // One hand-off probe at a time: a slow backend would otherwise gather one per poll.
-            void (this.stuckCheck ??= this.checkStuckOffer().finally(() => { this.stuckCheck = undefined; }));
+            void this.checkStuckOffer();
         }
     }
 
