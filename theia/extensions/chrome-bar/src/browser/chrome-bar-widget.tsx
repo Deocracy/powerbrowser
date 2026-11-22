@@ -141,6 +141,11 @@ const APP_MENU_COMMANDS: Readonly<Record<string, string>> = Object.freeze({
 type EditCmd = Parameters<WebTabWidget['edit']>[0];
 const EDIT_MENU_CMDS: readonly EditCmd[] = Object.freeze(['cmd_undo', 'cmd_redo', 'cmd_cut', 'cmd_copy', 'cmd_paste', 'cmd_selectAll'] as EditCmd[]);
 
+/** Per-request menu children in the order given: each one's sortString is its index. */
+function inOrder<T extends CommandMenu | CompoundMenuNode>(children: T[]): T[] {
+    return children.map((child, index) => ({ ...child, sortString: String(index).padStart(2, '0') }));
+}
+
 /** NAV-03: Firefox's click-hold delay before Back/Forward open the history menu. */
 const HISTORY_HOLD_MS = 500;
 
@@ -644,7 +649,7 @@ export class ChromeBarWidget extends ReactWidget {
             this.menuGroup('clear', [this.menuLeaf('clear-history', CHROME_BAR_COPY.clearRecentHistoryRow,
                 () => this.openClearHistoryPicker(this.appMenuButton ?? undefined), true, this.acceleratorOf(CHROME_BAR_CLEAR_HISTORY_COMMAND_ID))]),
         ];
-        return children.map((child, index) => ({ ...child, sortString: String(index).padStart(2, '0') }));
+        return inOrder(children);
     }
 
     /**
@@ -841,7 +846,7 @@ export class ChromeBarWidget extends ReactWidget {
             sortString: '',
             isVisible: () => true,
             isEmpty: () => children.length === 0,
-            children: children.map((child, index) => ({ ...child, sortString: String(index).padStart(2, '0') })),
+            children: inOrder(children),
         };
     }
 
@@ -1230,7 +1235,7 @@ export class ChromeBarWidget extends ReactWidget {
      */
     protected appSubmenu(menuId: string, bookmarks: PlaceMatch[] | 'failed', editState: Partial<Record<EditCmd, boolean>> = {}): AppMenuSubmenu | undefined {
         const ordered = (children: (CommandMenu | CompoundMenuNode)[]): AppMenuSubmenu => ({
-            children: children.map((child, index) => ({ ...child, sortString: String(index).padStart(2, '0') })) as unknown as AppMenuSubmenu['children'],
+            children: inOrder(children) as unknown as AppMenuSubmenu['children'],
         });
         switch (menuId) {
             case 'bookmarks': {
