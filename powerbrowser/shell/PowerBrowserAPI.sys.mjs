@@ -7569,21 +7569,26 @@ function adoptFallback(pcKey, pending) {
   const live = pending.browser.currentURI?.spec ?? "";
   const url = /^https?:\/\//i.test(live) ? live : pending.url;
   const win = pending.theiaBrowser.ownerDocument.defaultView;
-  // Records kept while it was pending (37-REVIEW WR-01) go with it; none was ever pushed.
-  for (const [token, record] of promptRecords) {
-    if (record.browser === pending.browser) {
-      promptRecords.delete(token);
-    }
-  }
-  hideBars(pending.browser);
-  tabHostDropTab(win, pending.browser);
-  pending.browser.remove();
+  dropPendingOverlay(win, pending.browser);
   if (!win || win.closed) {
     return;
   }
   PowerBrowserAPI.openStockTab(url === "about:blank" ? "" : url).catch(err => {
     PowerBrowserAPI.log("error", `[web-tab] adoptTab fallback failed: ${err && err.message ? err.message : err}`);
   });
+}
+
+// A pending overlay that goes before its ack (the fallback above, or an extension's tabs.remove): the records kept
+// while it was pending (37-REVIEW WR-01) go with it, none of them ever pushed, then its node and the overlay itself.
+function dropPendingOverlay(win, browser) {
+  for (const [token, record] of promptRecords) {
+    if (record.browser === browser) {
+      promptRecords.delete(token);
+    }
+  }
+  hideBars(browser);
+  tabHostDropTab(win, browser);
+  browser.remove();
 }
 
 // 36-REVIEW WR-04: an adopted about:blank runs as its opener's origin (it inherits the principal), so the identity
@@ -7698,7 +7703,6 @@ function installPermissionPromptFurniture(window) {
     browser.popupnotificationanchor = window.document.getElementById(PROMPT_ANCHOR_ID);
     const record = {
       token: `prompt-${++promptTokenCounter}`,
-      window,
       theiaBrowser: host.theiaBrowser,
       browser,
       tabId,
@@ -10203,7 +10207,7 @@ const EXTENSION_TAB_EVENTS = ["TabOpen", "TabSelect", "TabClose", "TabAttrModifi
 const extensionIconData = new Map();
 // Shell window -> { theiaBrowser, last, seq }: the subscribed frame, the last set pushed (JSON) and the newest read.
 const extensionBridges = new WeakMap();
-// Shell window -> { extension, action, popup }: the one extension popup open in it, as in Firefox.
+// Shell window -> { action, popup }: the one extension popup open in it, as in Firefox.
 const extensionPopups = new WeakMap();
 // 38-04 (B5): shell window -> { extensionId, frame }: the one extension sidebar open in it, as in Firefox.
 const extensionSidebars = new WeakMap();
@@ -10514,7 +10518,7 @@ function extensionOpenPopup(win, named, popupUrl, anchorRect) {
       pushExtensionActions(win);
     }
   };
-  extensionPopups.set(win, { extension: named.extension, action: named.action, popup });
+  extensionPopups.set(win, { action: named.action, popup });
   host.strip.addEventListener("TabSelect", close);
   win.document.addEventListener("focus", pageFocus, true);
   pushExtensionActions(win);
@@ -10681,15 +10685,7 @@ function tabsBridgeRemove(host, tab) {
   for (const [pcKey, pending] of pendingContent) {
     if (pending.browser === tab.linkedBrowser) {
       pendingContent.delete(pcKey);
-      // As adoptFallback: what was kept for it while it was pending (37-REVIEW WR-01) goes with it.
-      for (const [token, record] of promptRecords) {
-        if (record.browser === pending.browser) {
-          promptRecords.delete(token);
-        }
-      }
-      hideBars(pending.browser);
-      tabHostDropTab(host.win, pending.browser);
-      pending.browser.remove();
+      dropPendingOverlay(host.win, pending.browser);
     }
   }
 }
@@ -11078,19 +11074,26 @@ export const PowerBrowserProcesses = Object.freeze({
       if (lazy.AppConstants.platform !== "linux") {
         return roots.map(pid => ({ pid, ppid: null, startTicks: null }));
       }
-      const table = new Map();
-      for (const entry of await IOUtils.getChildren("/proc")) {
-        const pid = Number(entry.slice(entry.lastIndexOf("/") + 1));
-        if (!Number.isInteger(pid) || pid <= 0) {
-          continue;
-        }
+      const pids = (await IOUtils.getChildren("/proc"))
+        .map(entry => Number(entry.slice(entry.lastIndexOf("/") + 1)))
+        .filter(pid => Number.isInteger(pid) && pid > 0);
+      // The reads are independent, so they are issued together; the table keeps the listing's order.
+      const decoder = new TextDecoder();
+      const rows = await Promise.all(pids.map(async pid => {
         try {
           const bytes = await IOUtils.read(`/proc/${pid}/stat`, { maxBytes: 4096 });
-          const text = new TextDecoder().decode(bytes);
+          const text = decoder.decode(bytes);
           const fields = text.slice(text.lastIndexOf(")") + 2).split(" ");
-          table.set(pid, { pid, ppid: Number(fields[1]), startTicks: fields[19] ?? null });
+          return { pid, ppid: Number(fields[1]), startTicks: fields[19] ?? null };
         } catch {
           // The process exited between the listing and the read.
+          return null;
+        }
+      }));
+      const table = new Map();
+      for (const row of rows) {
+        if (row) {
+          table.set(row.pid, row);
         }
       }
       const children = new Map();
