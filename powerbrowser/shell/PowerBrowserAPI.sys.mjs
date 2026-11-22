@@ -161,7 +161,7 @@ const stockTabKeys = new WeakMap();
 
 // NG-001: the only web-tab key chrome accepts from the frontend.
 function webTabKeyIsValid(key) {
-  return typeof key === "string" && /^web:[A-Za-z0-9_-]{1,64}$/.test(key);
+  return typeof key === "string" && WEB_TAB_ROW_KEY_RE.test(key);
 }
 
 // NG-010: a stable short hash for keying a closed tab the store never saw.
@@ -901,7 +901,7 @@ export const PowerBrowserAPI = Object.freeze({
     // entries commit into overlay history (OVERLAY_LOCATION), and refusing them dropped the tab's whole history.
     const entryUrlOk = item => item && typeof item.url === "string" && /^https?:\/\//i.test(webTabPushedSpec(item.url));
     const treeOk = items => Array.isArray(items) && items.every(item => entryUrlOk(item) && (!item.children || treeOk(item.children)));
-    if (!entries.every(item => entryUrlOk(item) && (!item.children || treeOk(item.children)))) {
+    if (!treeOk(entries)) {
       return null;
     }
     return data;
