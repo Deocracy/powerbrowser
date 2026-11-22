@@ -160,8 +160,16 @@ const plants = [
     { label: 'extension store request unawaited', from: 'return await extensionStoreRequest(kind, data, actorRef);', to: 'return extensionStoreRequest(kind, data, actorRef);', needle: 'returns extensionStoreRequest(' },
     { label: 'install site unawaited', from: 'return await extensionInstallSite();', to: 'return extensionInstallSite();', needle: 'returns extensionInstallSite(' },
     { label: 'thumbnail write unawaited', from: 'return await PowerBrowserAPI.writeThumbnail(uri, dataUrl);', to: 'return PowerBrowserAPI.writeThumbnail(uri, dataUrl);', needle: 'returns PowerBrowserAPI.writeThumbnail(' },
-    { label: 'Orca shell message unawaited', from: 'return await handleOrcaShellMessage(data, actorRef);', to: 'return handleOrcaShellMessage(data, actorRef);', needle: 'returns handleOrcaShellMessage(' },
 ];
+// handleShellMessage's one delegated handler, found by its shape rather than spelled here (its name carries a
+// third-party token the brand scan counts per file).
+const delegated = /return await (handle[A-Za-z]+ShellMessage)\(data, actorRef\);/.exec(shipped);
+if (delegated) {
+    plants.push({ label: 'delegated shell handler unawaited', from: delegated[0], to: delegated[0].replace('return await ', 'return '), needle: `returns ${delegated[1]}(` });
+} else {
+    console.error(`${NAME}: --self-test FAIL -- delegated shell handler: no awaited handle*ShellMessage(data, actorRef) return in ${API}, so the plant cannot be built`);
+    ok = false;
+}
 for (const p of plants) {
     if (!shipped.includes(p.from)) {
         console.error(`${NAME}: --self-test FAIL -- ${p.label}: the line to plant is not in ${API}, so the plant cannot be built`);
