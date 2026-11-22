@@ -2394,22 +2394,13 @@ export class AddressBar {
             </div>;
         }
         if (this.noSearch) {
-            return <>
-                <div className='pb-chrome-bar-row is-message'>{CHROME_BAR_COPY.noSearch(appSubject())}</div>
-                <div className='pb-chrome-bar-dropdown-footer'>{CHROME_BAR_COPY.dropdownFooter}</div>
-            </>;
+            return this.messageBody(CHROME_BAR_COPY.noSearch(appSubject()));
         }
         if (this.pasteFailed) {
-            return <>
-                <div className='pb-chrome-bar-row is-message'>{CHROME_BAR_COPY.pasteFailed(appSubject())}</div>
-                <div className='pb-chrome-bar-dropdown-footer'>{CHROME_BAR_COPY.dropdownFooter}</div>
-            </>;
+            return this.messageBody(CHROME_BAR_COPY.pasteFailed(appSubject()));
         }
         if (this.commitFailed) {
-            return <>
-                <div className='pb-chrome-bar-row is-message'>{CHROME_BAR_COPY.commitFailed(appSubject())}</div>
-                <div className='pb-chrome-bar-dropdown-footer'>{CHROME_BAR_COPY.dropdownFooter}</div>
-            </>;
+            return this.messageBody(CHROME_BAR_COPY.commitFailed(appSubject()));
         }
         return <>
             {this.localMessage !== undefined && <div className='pb-chrome-bar-row is-message'>{this.localMessage}</div>}
@@ -2420,6 +2411,14 @@ export class AddressBar {
             {this.shimmer && <div className='pb-chrome-bar-row is-shimmer' aria-hidden='true' />}
             {this.renderOneOffs()}
             <div className='pb-chrome-bar-dropdown-footer'>{this.footerText()}</div>
+        </>;
+    }
+
+    /** A one-message dropdown (no-search, paste or commit failure): the message row, then the default footer. */
+    protected messageBody(message: string): React.ReactNode {
+        return <>
+            <div className='pb-chrome-bar-row is-message'>{message}</div>
+            <div className='pb-chrome-bar-dropdown-footer'>{CHROME_BAR_COPY.dropdownFooter}</div>
         </>;
     }
 
