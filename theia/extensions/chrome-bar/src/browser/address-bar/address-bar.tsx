@@ -1957,8 +1957,7 @@ export class AddressBar {
                     void this.runOneOff(this.highlightKey.slice(ONE_OFF_KEY.length), 'foreground');
                     return;
                 }
-                const row = this.dropdownOpen ? this.rows.find(r => r.key === this.highlightKey) : undefined;
-                void this.openRowInNewTab(row, true);
+                void this.openRowInNewTab(this.highlightedRow(), true);
                 return;
             }
             // BAR-13: with a completion still selected, Ctrl+Enter acts on the typed part, not the autofilled origin.
@@ -1988,7 +1987,7 @@ export class AddressBar {
                 void this.runOneOff(this.highlightKey.slice(ONE_OFF_KEY.length), 'current');
                 return;
             }
-            const highlighted = this.dropdownOpen ? this.rows.find(row => row.key === this.highlightKey) : undefined;
+            const highlighted = this.highlightedRow();
             const centre = this.commandCentre();
             if (!highlighted && centre) {
                 // D-26: Command centre never sends its text to chrome's resolve; with no row chosen, Enter does nothing,
@@ -2039,7 +2038,7 @@ export class AddressBar {
 
     /** BAR-09: the highlighted row when Shift+Delete may remove it, else undefined. */
     protected removableHighlighted(): Row | undefined {
-        const row = this.dropdownOpen ? this.rows.find(r => r.key === this.highlightKey) : undefined;
+        const row = this.highlightedRow();
         return row && this.removableRow(row) ? row : undefined;
     }
 
@@ -2089,7 +2088,6 @@ export class AddressBar {
             return;
         }
         this.placeRows = this.placeRows.filter(r => r.key !== row.key);
-        this.rows = this.composeVisibleRows();
         this.showComposedRows(seq);
     }
 
