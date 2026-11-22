@@ -60,7 +60,7 @@ import {
 } from './chrome-bar-commands';
 import { CHROME_BAR_COPY, appSubject, downloadBytes, historyLabel, notificationBarCopy } from './chrome-bar-copy';
 import { HOME_PAGE_PREFERENCE, SHOW_BOOKMARKS_TOOLBAR_PREFERENCE, SHOW_HOME_BUTTON_PREFERENCE } from './chrome-bar-preferences';
-import { AddressBar, DROPDOWN_MAX_HEIGHT, DropTargetDragEvent, droppedUrlOf } from './address-bar/address-bar';
+import { AddressBar, DropTargetDragEvent, droppedUrlOf, dropdownMaxHeight } from './address-bar/address-bar';
 import { BUTTON_SHORTCUTS, NavButton, pageKeyLabel, tooltipFor } from './chrome-bar-shortcuts';
 import { MODES_ACTIVATE_COMMAND_ID } from '@powerbrowser/modes/lib/browser/modes-commands';
 import { ModeService } from '@powerbrowser/modes/lib/browser/mode-service';
@@ -228,7 +228,7 @@ function ClearHistoryPicker(props: ClearHistoryPickerProps): React.ReactElement 
             role='dialog'
             aria-label={heading}
             tabIndex={-1}
-            style={{ position: 'fixed', top, right, maxHeight: Math.max(0, Math.min(DROPDOWN_MAX_HEIGHT, window.innerHeight - top - 8)) }}
+            style={{ position: 'fixed', top, right, maxHeight: dropdownMaxHeight(top) }}
             onKeyDown={e => {
                 if (e.key === 'Escape') {
                     e.stopPropagation();

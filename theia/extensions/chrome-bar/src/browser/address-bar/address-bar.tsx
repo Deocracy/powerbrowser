@@ -57,6 +57,11 @@ const ONE_OFF_KEY = 'oneoff:';
 /** BAR-11: the dropdown's tallest size (29-UI-SPEC Spacing Scale); a short window caps it at its bottom less 8px. */
 export const DROPDOWN_MAX_HEIGHT = 432;
 
+/** A bar panel's max height when its top is at `top`: the tallest size, capped at the window's bottom less 8px. */
+export function dropdownMaxHeight(top: number): number {
+    return Math.max(0, Math.min(DROPDOWN_MAX_HEIGHT, window.innerHeight - top - 8));
+}
+
 /** SMODE-01: the trailing "Search with {engine}" row's key in Bookmarks, Tabs and History. */
 const SEARCH_ROW_KEY = 'search-row';
 const GOTO_ROW_KEY = 'goto-row';
@@ -2364,7 +2369,7 @@ export class AddressBar {
             left: Math.round(pill.left),
             width: Math.round(pill.width),
             // A short window caps the panel at its bottom less 8px; the panel scrolls inside.
-            maxHeight: Math.max(0, Math.min(DROPDOWN_MAX_HEIGHT, window.innerHeight - top - 8)),
+            maxHeight: dropdownMaxHeight(top),
         } : undefined;
         return createPortal(
             <div className='pb-chrome-bar-dropdown' role='listbox' id='pb-chrome-bar-dropdown' aria-label='Suggestions' style={style}>
@@ -3135,7 +3140,7 @@ export class AddressBar {
             position: 'fixed',
             top,
             left: Math.round(pill.left),
-            maxHeight: Math.max(0, Math.min(DROPDOWN_MAX_HEIGHT, window.innerHeight - top - 8)),
+            maxHeight: dropdownMaxHeight(top),
         } : undefined;
         let index = 0;
         return createPortal(
@@ -3235,7 +3240,7 @@ function BookmarkEditor(props: BookmarkEditorProps): React.ReactElement {
             role='dialog'
             aria-label={heading}
             tabIndex={-1}
-            style={{ position: 'fixed', top, right, maxHeight: Math.max(0, Math.min(DROPDOWN_MAX_HEIGHT, window.innerHeight - top - 8)) }}
+            style={{ position: 'fixed', top, right, maxHeight: dropdownMaxHeight(top) }}
             onKeyDown={e => {
                 if (e.key === 'Escape') {
                     e.stopPropagation();
