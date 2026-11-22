@@ -1088,6 +1088,8 @@ export class AddressBar {
         this.querySeq += 1;
         this.dropdownArmed = false;
         this.dropdownOpen = false;
+        // The invalidated query can no longer clear its own shimmer row.
+        this.shimmer = false;
         this.highlightKey = undefined;
         this.homeFailed = false;
         this.noSearch = false;
@@ -1369,6 +1371,7 @@ export class AddressBar {
     protected textEdited(value: string, autofillWanted: boolean, composing = false): void {
         // Replies still in flight describe the old text; the debounced query takes a new sequence later.
         this.querySeq += 1;
+        this.shimmer = false;
         this.inputValue = value;
         this.autofill = undefined;
         this.autofillWanted = autofillWanted;
