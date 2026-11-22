@@ -222,8 +222,7 @@ export async function createPane(dataRoot, cwd, env, deadline = Date.now() + PAN
         }
         if (!pane.paneKey) {
             const listed = await runCli(dataRoot, ['terminal', 'list'], env, deadline - Date.now());
-            const rows = Array.isArray(listed) ? listed : listed?.terminals ?? [];
-            const row = rows.find((r) => r && r.handle === handle);
+            const row = listRows(listed).find((r) => r && r.handle === handle);
             pane.paneKey = firstString([row], ['paneKey', 'recordedPaneKey']);
             pane.tabId ??= firstString([row], ['tabId']);
             pane.paneKeyFrom = 'list';
