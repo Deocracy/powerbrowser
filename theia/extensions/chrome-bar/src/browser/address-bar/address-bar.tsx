@@ -29,7 +29,7 @@ import { CHROME_BAR_INPUT_CLASS, CHROME_BAR_NEW_TAB_COMMAND_ID, bookmarkablePage
 import { ChromeBarSuggestionService } from '../chrome-bar-suggestion-service';
 import type { SourcedRow } from '../chrome-bar-places-suggestions';
 import {
-    LINK_DRAG_TYPES, PLACE_ROW_LIMIT, Row, autofillSplice, classifyAddress, composeRows, droppedTextOf, iconFor, isCanonizable, nextHighlight, safeIcon,
+    FAVICON_REQUEST_LIMIT, LINK_DRAG_TYPES, PLACE_ROW_LIMIT, Row, autofillSplice, classifyAddress, composeRows, droppedTextOf, iconFor, isCanonizable, nextHighlight, safeIcon,
 } from './address-bar-rows';
 import { LOCAL_MODES, MODE_SENDS, ModeId, cycleOrder, defaultModeFor, engineModeId, engineNameOf, modeKindOf, nextMode, tokenise } from './address-bar-mode-table';
 import { AddressBarMode, AddressBarModeContribution } from './address-bar-modes';
@@ -1317,17 +1317,13 @@ export class AddressBar {
         if (!urls.length) {
             return;
         }
-        // placesFavicons reads at most 10 urls per request; an uncapped list (Tabs mode) lost every row past the tenth.
+        // Chrome reads at most FAVICON_REQUEST_LIMIT urls per request; an uncapped list (Tabs mode) lost every row past the tenth.
         const chunks: string[][] = [];
-        for (let at = 0; at < urls.length; at += 10) {
-            chunks.push(urls.slice(at, at + 10));
+        for (let at = 0; at < urls.length; at += FAVICON_REQUEST_LIMIT) {
+            chunks.push(urls.slice(at, at + FAVICON_REQUEST_LIMIT));
         }
-        let icons: Record<string, string>;
-        try {
-            icons = Object.assign({}, ...await Promise.all(chunks.map(chunk => this.store.placesFavicons(chunk))));
-        } catch {
-            return;
-        }
+        // A refused chunk costs only its own icons.
+        const icons: Record<string, string> = Object.assign({}, ...await Promise.all(chunks.map(chunk => this.store.placesFavicons(chunk).catch(() => ({})))));
         if (!this.dropdownArmed || this.querySeq !== seq) {
             return;
         }

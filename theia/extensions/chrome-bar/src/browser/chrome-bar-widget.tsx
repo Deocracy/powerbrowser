@@ -61,6 +61,7 @@ import {
 import { CHROME_BAR_COPY, appSubject, downloadBytes, historyLabel, notificationBarCopy } from './chrome-bar-copy';
 import { HOME_PAGE_PREFERENCE, SHOW_BOOKMARKS_TOOLBAR_PREFERENCE, SHOW_HOME_BUTTON_PREFERENCE } from './chrome-bar-preferences';
 import { AddressBar, DropTargetDragEvent, droppedUrlOf, dropdownMaxHeight } from './address-bar/address-bar';
+import { FAVICON_REQUEST_LIMIT } from './address-bar/address-bar-rows';
 import { BUTTON_SHORTCUTS, NavButton, pageKeyLabel, tooltipFor } from './chrome-bar-shortcuts';
 import { MODES_ACTIVATE_COMMAND_ID } from '@powerbrowser/modes/lib/browser/modes-commands';
 import { ModeService } from '@powerbrowser/modes/lib/browser/mode-service';
@@ -780,10 +781,10 @@ export class ChromeBarWidget extends ReactWidget {
         if (items === 'failed') {
             return;
         }
-        // placesFavicons takes at most 10 urls per request; the requests are independent, so they run together.
+        // placesFavicons takes at most FAVICON_REQUEST_LIMIT urls per request; the requests are independent, so they run together.
         const chunks: string[][] = [];
-        for (let at = 0; at < items.length; at += 10) {
-            chunks.push(items.slice(at, at + 10).map(row => row.url));
+        for (let at = 0; at < items.length; at += FAVICON_REQUEST_LIMIT) {
+            chunks.push(items.slice(at, at + FAVICON_REQUEST_LIMIT).map(row => row.url));
         }
         const icons: Record<string, string> = Object.assign({}, ...await Promise.all(chunks.map(urls => this.store.placesFavicons(urls).catch(() => ({})))));
         if (seq === this.toolbarSeq) {
