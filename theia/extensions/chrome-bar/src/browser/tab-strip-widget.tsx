@@ -539,10 +539,10 @@ export class TabStripWidget extends ReactWidget {
             // Folded tabs are detached; one with a parent again was dragged out of the folded stack and is free.
             return this.collapsed.widgets.filter(widget => !widget.isDisposed && !widget.parent);
         }
-        const home = this.homeWidgets();
+        const home = new Set(this.homeWidgets());
         return [...this.shell.mainPanel.widgets()]
             .filter(widget => !TabStripWidget.MODE_SURFACES.includes(widget.id))
-            .filter(widget => !home.includes(widget) || this.stacked.has(widget));
+            .filter(widget => !home.has(widget) || this.stacked.has(widget));
     }
 
     protected activateTab(widget: Widget): void {
@@ -1528,11 +1528,11 @@ export class TabStripWidget extends ReactWidget {
         // stacked tabs while the right pane showed none (2026-09-10).
         // Only this strip's two classes are toggled: Theia keeps its own
         // state (theia-mod-dirty, -pinned, -active) in the same string.
-        const home = this.homeWidgets();
+        const home = new Set(this.homeWidgets());
         for (const widget of this.shell.mainPanel.widgets()) {
             const kept = widget.title.className.split(' ')
                 .filter(c => c && c !== STRIP_ONLY_CLASS && c !== GROUP_CLOSING_CLASS);
-            if (home.includes(widget) && !this.stacked.has(widget)) {
+            if (home.has(widget) && !this.stacked.has(widget)) {
                 kept.push(STRIP_ONLY_CLASS);
             }
             if (this.groups.isClosingKey(this.groups.keyOf(widget))) {
