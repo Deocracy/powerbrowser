@@ -351,12 +351,7 @@ export class AddressBar {
             type='button'
             className='pb-identity'
             aria-label={label}
-            onPointerEnter={e => this.hover.requestHover({
-                content: tip,
-                target: e.currentTarget,
-                position: 'bottom',
-                cssClasses: ['pb-chrome-bar-hover'],
-            })}
+            onPointerEnter={this.hoverTip(tip, 'bottom')}
             onMouseDown={e => e.preventDefault()}
             onClick={e => this.openSitePanel(e.currentTarget)}
         >
@@ -381,13 +376,13 @@ export class AddressBar {
         return <span
             className='pb-identity-shield codicon codicon-shield'
             aria-hidden='true'
-            onPointerEnter={e => this.hover.requestHover({
-                content: CHROME_BAR_COPY.shieldExcepted,
-                target: e.currentTarget,
-                position: 'bottom',
-                cssClasses: ['pb-chrome-bar-hover'],
-            })}
+            onPointerEnter={this.hoverTip(CHROME_BAR_COPY.shieldExcepted, 'bottom')}
         />;
+    }
+
+    /** A pointer-enter handler that shows `content` as the bar's tooltip at `position` of the hovered element. */
+    protected hoverTip(content: string, position: 'top' | 'bottom'): (e: React.PointerEvent<HTMLElement>) => void {
+        return e => this.hover.requestHover({ content, target: e.currentTarget, position, cssClasses: ['pb-chrome-bar-hover'] });
     }
 
     /**
@@ -406,12 +401,7 @@ export class AddressBar {
         const tip = CHROME_BAR_COPY.permissionIconsTip(identity.permissionLabels.filter(label => label).join(', '));
         return <span
             className='pb-identity-perms'
-            onPointerEnter={e => this.hover.requestHover({
-                content: tip,
-                target: e.currentTarget,
-                position: 'bottom',
-                cssClasses: ['pb-chrome-bar-hover'],
-            })}
+            onPointerEnter={this.hoverTip(tip, 'bottom')}
         >
             {shown.map(id => <span key={id} className={`pb-identity-perm codicon ${PERMISSION_GLYPH_CLASS[id] ?? ''}`} aria-hidden='true' />)}
             {overflow !== undefined && <span className='pb-identity-overflow'>{overflow}</span>}
@@ -2201,12 +2191,7 @@ export class AddressBar {
                     type='button'
                     className={'pb-chrome-bar-oneoff' + (highlighted ? ' is-highlighted' : '')}
                     aria-label={CHROME_BAR_COPY.searchWith(engine.name)}
-                    onPointerEnter={e => this.hover.requestHover({
-                        content: engine.name,
-                        target: e.currentTarget,
-                        position: 'top',
-                        cssClasses: ['pb-chrome-bar-hover'],
-                    })}
+                    onPointerEnter={this.hoverTip(engine.name, 'top')}
                     onMouseDown={e => e.preventDefault()}
                     onClick={e => void this.runOneOff(engine.name, e.ctrlKey || e.metaKey ? 'background' : 'current')}
                     onAuxClick={e => {
@@ -2675,12 +2660,7 @@ export class AddressBar {
             aria-haspopup='dialog'
             aria-expanded={!!this.bookmarkEditor}
             // Pointer, not mouse, enter: a disabled star keeps its tooltip.
-            onPointerEnter={e => this.hover.requestHover({
-                content: label,
-                target: e.currentTarget,
-                position: 'top',
-                cssClasses: ['pb-chrome-bar-hover'],
-            })}
+            onPointerEnter={this.hoverTip(label, 'top')}
             onClick={() => void this.openBookmarkStar()}
         >
             <span className={'codicon ' + (bookmarked ? 'codicon-star-full' : 'codicon-star-empty')} aria-hidden='true' />
@@ -2872,12 +2852,7 @@ export class AddressBar {
             aria-controls={this.modesOpen ? 'pb-address-modes' : undefined}
             aria-activedescendant={active >= 0 ? this.modeItemId(active) : undefined}
             aria-label={CHROME_BAR_COPY.chooseMode(label)}
-            onPointerEnter={e => this.hover.requestHover({
-                content: CHROME_BAR_COPY.chooseMode(label),
-                target: e.currentTarget,
-                position: 'bottom',
-                cssClasses: ['pb-chrome-bar-hover'],
-            })}
+            onPointerEnter={this.hoverTip(CHROME_BAR_COPY.chooseMode(label), 'bottom')}
             onClick={this.onModeButtonClick}
             onKeyDown={this.onModeButtonKeyDown}
             onBlur={this.onModeButtonBlur}
@@ -2896,12 +2871,7 @@ export class AddressBar {
                 type='button'
                 className='pb-address-mode-reset'
                 aria-label={resetLabel}
-                onPointerEnter={e => this.hover.requestHover({
-                    content: resetLabel,
-                    target: e.currentTarget,
-                    position: 'bottom',
-                    cssClasses: ['pb-chrome-bar-hover'],
-                })}
+                onPointerEnter={this.hoverTip(resetLabel, 'bottom')}
                 // Focus stays in the pill: the x never takes it, so the dropdown it re-opens is not closed by a blur.
                 onMouseDown={e => e.preventDefault()}
                 onClick={() => this.onModeReset()}
