@@ -133,6 +133,20 @@ const TAB_STORE_V6_DDL = /* PB-SQL-V6-DDL-START */ `CREATE TABLE IF NOT EXISTS s
   bytes       INTEGER NOT NULL CHECK(bytes >= 0)
 )` /* PB-SQL-V6-DDL-END */;
 
+// The statements of one marker-delimited DDL block, split from the constant itself.
+function ddlStatements(ddl) {
+  return ddl.split(";").map(s => s.trim()).filter(Boolean);
+}
+
+// The one statement of a split DDL block that matches `pattern`; a missing one throws naming the migration.
+function ddlStatement(statements, pattern, method) {
+  const hit = statements.find(s => pattern.test(s));
+  if (!hit) {
+    throw new Error(`${method}: DDL marker content missing a required statement`);
+  }
+  return hit;
+}
+
 // NG-001: the sessionstore custom tab value a stock tab's row key lives in.
 // Sessionstore saves it with the tab and restores it with the tab, so a
 // restart keeps the key (SessionStore.sys.mjs:6541 restores extData).
@@ -1343,9 +1357,7 @@ export const PowerBrowserAPI = Object.freeze({
    * and stamping the head here would skip the groups shape entirely.
    */
   async migrateTabStoreToV1(conn) {
-    const statements = TABS_STORE_V1_DDL.split(";")
-      .map(s => s.trim())
-      .filter(Boolean);
+    const statements = ddlStatements(TABS_STORE_V1_DDL);
     const createTable = statements.find(s => /^create table\b/i.test(s));
     const createIndex = statements.find(s => /^create index\b/i.test(s));
     if (!createTable || !createIndex) {
@@ -1378,16 +1390,8 @@ export const PowerBrowserAPI = Object.freeze({
    * first, then the tabs columns, then the indexes over them.
    */
   async migrateTabStoreToV2(conn) {
-    const statements = GROUPS_STORE_V2_DDL.split(";")
-      .map(s => s.trim())
-      .filter(Boolean);
-    const findStatement = pattern => {
-      const hit = statements.find(s => pattern.test(s));
-      if (!hit) {
-        throw new Error("migrateTabStoreToV2: DDL marker content missing a required statement");
-      }
-      return hit;
-    };
+    const statements = ddlStatements(GROUPS_STORE_V2_DDL);
+    const findStatement = pattern => ddlStatement(statements, pattern, "migrateTabStoreToV2");
     const createGroups = findStatement(/^create table groups\b/i);
     const groupsActiveIndex = findStatement(/^create index idx_groups_active\b/i);
     const addGroupId = findStatement(/^alter table tabs add column group_id\b/i);
@@ -1439,16 +1443,8 @@ export const PowerBrowserAPI = Object.freeze({
    * seen.
    */
   async migrateTabStoreToV3(conn) {
-    const statements = TAB_POSITION_V3_DDL.split(";")
-      .map(s => s.trim())
-      .filter(Boolean);
-    const findStatement = pattern => {
-      const hit = statements.find(s => pattern.test(s));
-      if (!hit) {
-        throw new Error("migrateTabStoreToV3: DDL marker content missing a required statement");
-      }
-      return hit;
-    };
+    const statements = ddlStatements(TAB_POSITION_V3_DDL);
+    const findStatement = pattern => ddlStatement(statements, pattern, "migrateTabStoreToV3");
     const addX = findStatement(/^alter table tabs add column x\b/i);
     const addY = findStatement(/^alter table tabs add column y\b/i);
     const xDone = await PowerBrowserAPI.tabStoreHasColumn(conn, "tabs", "x");
@@ -1506,7 +1502,7 @@ export const PowerBrowserAPI = Object.freeze({
    * current URI ordering until a group is first arranged by hand.
    */
   async migrateTabStoreToV4(conn) {
-    const statement = TAB_ORDER_V4_DDL.split(";").map(s => s.trim()).filter(Boolean)[0];
+    const statement = ddlStatements(TAB_ORDER_V4_DDL)[0];
     if (!statement || !/^alter table tabs add column ord\b/i.test(statement)) {
       throw new Error("migrateTabStoreToV4: DDL marker content missing the ord column");
     }
@@ -1528,7 +1524,7 @@ export const PowerBrowserAPI = Object.freeze({
    * a store whose work is already done re-runs as a no-op that stamps 5.
    */
   async migrateTabStoreToV5(conn) {
-    const statements = TAB_STORE_V5_DDL.split(";").map(s => s.trim()).filter(Boolean);
+    const statements = ddlStatements(TAB_STORE_V5_DDL);
     if (!statements.some(s => /^update tabs set uri\b/i.test(s))) {
       throw new Error("migrateTabStoreToV5: DDL marker content missing the key rewrite");
     }
@@ -1552,7 +1548,7 @@ export const PowerBrowserAPI = Object.freeze({
    * a no-op that stamps 6.
    */
   async migrateTabStoreToV6(conn) {
-    const statements = TAB_STORE_V6_DDL.split(";").map(s => s.trim()).filter(Boolean);
+    const statements = ddlStatements(TAB_STORE_V6_DDL);
     if (!statements.some(s => /^create table if not exists saved_pages\b/i.test(s))) {
       throw new Error("migrateTabStoreToV6: DDL marker content missing the saved_pages table");
     }
