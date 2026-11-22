@@ -18,12 +18,9 @@
 
 import { interfaces } from '@theia/core/shared/inversify';
 import {
-    createPreferenceProxy,
     PreferenceContribution,
-    PreferenceProxy,
     PreferenceSchema,
     PreferenceSchemaService,
-    PreferenceService,
 } from '@theia/core/lib/common/preferences';
 import { TELEMETRY_LEVELS } from './telemetry-sender';
 
@@ -46,21 +43,9 @@ export const TelemetryPreferenceSchema: PreferenceSchema = {
     },
 };
 
-export interface TelemetryConfiguration {
-    [TELEMETRY_LEVEL_PREFERENCE]: string;
-}
-
 export const TelemetryPreferenceContribution = Symbol('TelemetryPreferenceContribution');
-export const TelemetryPreferences = Symbol('TelemetryPreferences');
-export type TelemetryPreferences = PreferenceProxy<TelemetryConfiguration>;
-
-export function createTelemetryPreferences(preferences: PreferenceService, schema: PreferenceSchema = TelemetryPreferenceSchema): TelemetryPreferences {
-    return createPreferenceProxy(preferences, schema);
-}
 
 export function bindTelemetryPreferences(bind: interfaces.Bind): void {
-    bind(TelemetryPreferences).toDynamicValue(ctx =>
-        createTelemetryPreferences(ctx.container.get<PreferenceService>(PreferenceService))).inSingletonScope();
     const contribution: PreferenceContribution = {
         initSchema: async (service: PreferenceSchemaService) => {
             await Promise.resolve(); // run after every contribution's synchronous addSchema

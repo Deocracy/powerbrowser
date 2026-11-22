@@ -97,11 +97,28 @@ function empty(status) {
     return { status, body: '' };
 }
 
-/** First index of needle in hay at or after from, or -1. Binary-safe. */
+/** Bytes read inline after a non-candidate before the native first-byte scan takes over. */
+const INLINE_SCAN_BYTES = 16;
+
+/**
+ * First index of needle (never empty) in hay at or after from, or -1. Binary-safe. A position holding the first
+ * byte is compared inline, so a body made of that byte costs what a plain loop costs; only a run of other bytes is
+ * skipped with the native indexOf, which is what makes an ordinary body fast.
+ */
 function indexOfBytes(hay, needle, from) {
     const n = needle.length;
-    outer: for (let i = from; i <= hay.length - n; i += 1) {
-        for (let j = 0; j < n; j += 1) {
+    const last = hay.length - n;
+    const first = needle[0];
+    outer: for (let i = from; i <= last; i += 1) {
+        if (hay[i] !== first) {
+            const stop = Math.min(i + INLINE_SCAN_BYTES, last + 1);
+            do i += 1; while (i < stop && hay[i] !== first);
+            if (i === stop) {
+                i = hay.indexOf(first, i);
+                if (i === -1 || i > last) return -1;
+            }
+        }
+        for (let j = 1; j < n; j += 1) {
             if (hay[i + j] !== needle[j]) continue outer;
         }
         return i;

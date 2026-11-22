@@ -15,7 +15,7 @@
  * failure in the same session reuses the status-bar state without
  * re-showing the prompt; a success resets the flag.
  */
-import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
+import { inject, injectable } from '@theia/core/shared/inversify';
 import { Command, CommandContribution, CommandRegistry, CommandService, Disposable, MessageService } from '@theia/core/lib/common';
 import { FrontendApplication, FrontendApplicationContribution } from '@theia/core/lib/browser';
 import { StatusBar, StatusBarAlignment } from '@theia/core/lib/browser';
@@ -267,11 +267,6 @@ export class UpdateClientContribution implements FrontendApplicationContribution
                 // Message channel unavailable: nothing further to report through.
             }
         }
-    }
-
-    @postConstruct()
-    protected initRequestSeq(): void {
-        this.seq = 0;
     }
 
     protected request(msg: { kind: string }): Promise<ShellOutcome> {

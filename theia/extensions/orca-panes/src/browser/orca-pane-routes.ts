@@ -41,12 +41,6 @@ export const ORCA_PANE_ROUTES: { readonly [kind: string]: OrcaPaneRoute } = Obje
     'browser': { target: 'pb-web-tab' },
 });
 
-/** The pb-orca: name word of each hosted kind. */
-export const NAME_WORDS: { readonly [kind: string]: string } = Object.freeze(Object.keys(ORCA_PANE_ROUTES).reduce((words, kind) => {
-    const route = ORCA_PANE_ROUTES[kind];
-    return route.target === 'hosted-pane' ? { ...words, [kind]: route.word } : words;
-}, {} as { [kind: string]: string }));
-
 /**
  * N-2 (P65-10): Orca's top-level views, keyed by every TopLevelView member of the pinned Orca. A page is a
  * singleton tab pb-orca:<word> mounting kind page:<view>; settings reveals the side panel's Settings part;

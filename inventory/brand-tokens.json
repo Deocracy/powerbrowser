@@ -1398,7 +1398,7 @@
       "case_form": "lower",
       "class": "coincidental",
       "target": "orca",
-      "expected_count": 7561,
+      "expected_count": 7560,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-browser-parity.md",
@@ -1838,7 +1838,7 @@
       "case_form": "upper",
       "class": "coincidental",
       "target": "ORCA",
-      "expected_count": 1583,
+      "expected_count": 1581,
       "expected_files": [
         ".claude/skills/spike-findings-Power-Browser/SKILL.md",
         ".claude/skills/spike-findings-Power-Browser/references/orca-client-hosting.md",

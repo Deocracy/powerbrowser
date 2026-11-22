@@ -855,7 +855,7 @@ export class SetupsService implements FrontendApplicationContribution {
             width: window.outerWidth,
             height: window.outerHeight,
             tabs: coreTabs.map(entry => entry.uri),
-            activeTab: coreTabs.some(entry => entry.id === active) ? (coreTabs.find(entry => entry.id === active)?.uri ?? null) : null,
+            activeTab: coreTabs.find(entry => entry.id === active)?.uri ?? null,
             modeId: this.currentModeId(),
             dock: {
                 main: this.dockNodeOf(this.shell.mainPanel.saveLayout().main),
@@ -1327,10 +1327,14 @@ export class SetupsService implements FrontendApplicationContribution {
         } catch {
             return;
         }
-        window.setTimeout(() => {
+        // A newer notice restarts the timer, so an older one cannot remove it early.
+        window.clearTimeout(this.flashTimer);
+        this.flashTimer = window.setTimeout(() => {
             void this.statusBar.removeElement(id).catch(() => undefined);
         }, 4000);
     }
+
+    protected flashTimer = 0;
 
     protected async loadSetups(): Promise<void> {
         let raw: string;

@@ -63,9 +63,8 @@ export const CHROME_BAR_CLEAR_HISTORY_COMMAND_ID = 'powerbrowser.chrome-bar.clea
 // Phase 33 plan 05 (MENU-03, D-12/D-13/D-14): the hamburger rows' commands, each also an Actions row.
 // New Window runs GUI-01's stock-window command (D-12: no second shell window).
 export const CHROME_BAR_NEW_WINDOW_COMMAND_ID = 'powerbrowser.chrome-bar.new-window';
-// Full Screen: the same id before and after Phase 35's fullscreen path lands (D-14); 35-07 runs it by CHROME_BAR_FULL_SCREEN_COMMAND.
+// Full Screen: the same id before and after Phase 35's fullscreen path lands (D-14); 35-07 runs it by this id.
 export const CHROME_BAR_FULL_SCREEN_COMMAND_ID = 'powerbrowser.chrome-bar.full-screen';
-export const CHROME_BAR_FULL_SCREEN_COMMAND = CHROME_BAR_FULL_SCREEN_COMMAND_ID;
 // The Phase 32 page tools had relay rows and widget methods but no command; each id runs that same tab method.
 export const CHROME_BAR_PRINT_COMMAND_ID = 'powerbrowser.chrome-bar.print';
 export const CHROME_BAR_SAVE_PAGE_COMMAND_ID = 'powerbrowser.chrome-bar.save-page';

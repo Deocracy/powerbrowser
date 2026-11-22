@@ -1322,6 +1322,11 @@ export class WebTabWidget extends BaseWidget {
      * otherwise have skipped. Both Reload arms above end here.
      */
     protected async reopen(): Promise<WebTabReply> {
+        // Every caller but a lost-view Reload gets here after an awaited reply, which a user close can outrun:
+        // an open for a closed tab would build an overlay and write its tab row with no widget left to close them.
+        if (this.isDisposed) {
+            return { ok: true, where: UNKNOWN_TAB_OUTCOME };
+        }
         const reply = await this.channel.request({ kind: 'webTabOpen', tabId: this.tabId, url: this.url, key: this.rowKey, ...this.agentFlag() });
         // One reading of "chrome no longer renders this tab" (G-14.1.1-48):
         // every site that folds an open-or-navigate reply -- onAfterAttach,

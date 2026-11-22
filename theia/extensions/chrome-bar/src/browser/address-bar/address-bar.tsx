@@ -29,7 +29,7 @@ import { CHROME_BAR_INPUT_CLASS, CHROME_BAR_NEW_TAB_COMMAND_ID, bookmarkablePage
 import { ChromeBarSuggestionService } from '../chrome-bar-suggestion-service';
 import type { SourcedRow } from '../chrome-bar-places-suggestions';
 import {
-    LINK_DRAG_TYPES, PLACE_ROW_LIMIT, Row, autofillSplice, classifyAddress, composeRows, droppedTextOf, iconFor, isCanonizable, nextHighlight, safeIcon,
+    FAVICON_REQUEST_LIMIT, LINK_DRAG_TYPES, PLACE_ROW_LIMIT, Row, autofillSplice, classifyAddress, composeRows, droppedTextOf, iconFor, isCanonizable, nextHighlight, safeIcon,
 } from './address-bar-rows';
 import { LOCAL_MODES, MODE_SENDS, ModeId, cycleOrder, defaultModeFor, engineModeId, engineNameOf, modeKindOf, nextMode, tokenise } from './address-bar-mode-table';
 import { AddressBarMode, AddressBarModeContribution } from './address-bar-modes';
@@ -56,6 +56,11 @@ const ONE_OFF_KEY = 'oneoff:';
 
 /** BAR-11: the dropdown's tallest size (29-UI-SPEC Spacing Scale); a short window caps it at its bottom less 8px. */
 export const DROPDOWN_MAX_HEIGHT = 432;
+
+/** A bar panel's max height when its top is at `top`: the tallest size, capped at the window's bottom less 8px. */
+export function dropdownMaxHeight(top: number): number {
+    return Math.max(0, Math.min(DROPDOWN_MAX_HEIGHT, window.innerHeight - top - 8));
+}
 
 /** SMODE-01: the trailing "Search with {engine}" row's key in Bookmarks, Tabs and History. */
 const SEARCH_ROW_KEY = 'search-row';
@@ -258,13 +263,19 @@ export class AddressBar {
         this.host?.update();
     }
 
+    /** Phase 31: the web tab the identity box and site panel describe: the focused widget when it is one, else the current web tab. */
+    protected identityTab(): WebTabWidget | undefined {
+        const focused = this.shell.currentWidget;
+        return focused instanceof WebTabWidget ? focused : currentWebTab();
+    }
+
     /**
      * Phase 31 (SITE-01, D-31-01/D-31-09): this pill's identity, from the
      * current web tab's last pushed state only -- never from pill text, so
      * typing cannot spoof it. A non-web widget (an editor) has no identity.
      */
     protected identityState(): { state: string; displaySpec: string; baseDomain: string | null; permissionIcons: string[]; permissionLabels: string[]; shieldExcepted: boolean } | undefined {
-        const tab = this.shell.currentWidget instanceof WebTabWidget ? this.shell.currentWidget : currentWebTab();
+        const tab = this.identityTab();
         if (!(tab instanceof WebTabWidget) || !tab.hasPage) {
             return undefined;
         }
@@ -351,12 +362,7 @@ export class AddressBar {
             type='button'
             className='pb-identity'
             aria-label={label}
-            onPointerEnter={e => this.hover.requestHover({
-                content: tip,
-                target: e.currentTarget,
-                position: 'bottom',
-                cssClasses: ['pb-chrome-bar-hover'],
-            })}
+            onPointerEnter={this.hoverTip(tip, 'bottom')}
             onMouseDown={e => e.preventDefault()}
             onClick={e => this.openSitePanel(e.currentTarget)}
         >
@@ -381,13 +387,13 @@ export class AddressBar {
         return <span
             className='pb-identity-shield codicon codicon-shield'
             aria-hidden='true'
-            onPointerEnter={e => this.hover.requestHover({
-                content: CHROME_BAR_COPY.shieldExcepted,
-                target: e.currentTarget,
-                position: 'bottom',
-                cssClasses: ['pb-chrome-bar-hover'],
-            })}
+            onPointerEnter={this.hoverTip(CHROME_BAR_COPY.shieldExcepted, 'bottom')}
         />;
+    }
+
+    /** A pointer-enter handler that shows `content` as the bar's tooltip at `position` of the hovered element. */
+    protected hoverTip(content: string, position: 'top' | 'bottom'): (e: React.PointerEvent<HTMLElement>) => void {
+        return e => this.hover.requestHover({ content, target: e.currentTarget, position, cssClasses: ['pb-chrome-bar-hover'] });
     }
 
     /**
@@ -406,12 +412,7 @@ export class AddressBar {
         const tip = CHROME_BAR_COPY.permissionIconsTip(identity.permissionLabels.filter(label => label).join(', '));
         return <span
             className='pb-identity-perms'
-            onPointerEnter={e => this.hover.requestHover({
-                content: tip,
-                target: e.currentTarget,
-                position: 'bottom',
-                cssClasses: ['pb-chrome-bar-hover'],
-            })}
+            onPointerEnter={this.hoverTip(tip, 'bottom')}
         >
             {shown.map(id => <span key={id} className={`pb-identity-perm codicon ${PERMISSION_GLYPH_CLASS[id] ?? ''}`} aria-hidden='true' />)}
             {overflow !== undefined && <span className='pb-identity-overflow'>{overflow}</span>}
@@ -426,7 +427,7 @@ export class AddressBar {
      * no answer) opens the panel with the unavailable copy.
      */
     protected async openSitePanel(anchor?: HTMLElement): Promise<void> {
-        const tab = this.shell.currentWidget instanceof WebTabWidget ? this.shell.currentWidget : currentWebTab();
+        const tab = this.identityTab();
         const rect = (anchor ?? this.pillRef)?.getBoundingClientRect();
         this.sitePanelAnchor = { top: Math.round((rect?.bottom ?? 0) + 4), left: Math.round(rect?.left ?? 0) };
         let info: WebTabSiteInfo | null = null;
@@ -710,9 +711,9 @@ export class AddressBar {
         return engineNameOf(this.mode);
     }
 
-    /** Phase 30 (D-26): what the active mode may send to chrome while typing. */
-    protected modeSends(): { resolve: boolean; suggestions: boolean; autofill: boolean; places: boolean } {
-        return MODE_SENDS[modeKindOf(this.mode)] ?? MODE_SENDS['address'];
+    /** Phase 30 (D-26): what `mode` (by default the active mode) may send to chrome while typing. */
+    protected modeSends(mode: ModeId = this.mode): { resolve: boolean; suggestions: boolean; autofill: boolean; places: boolean } {
+        return MODE_SENDS[modeKindOf(mode)] ?? MODE_SENDS['address'];
     }
 
     /** Phase 30 (SMODE-01): the active mode's contribution when it lists its own rows, else undefined. */
@@ -834,9 +835,14 @@ export class AddressBar {
         const engine = this.effectiveEngine() ?? '';
         return {
             key: SEARCH_ROW_KEY, source: 'heuristic', title: text, caption: CHROME_BAR_COPY.searchWith(engine), url: '',
-            engineName: engine, icon: this.engineList?.engines.find(e => e.name === engine)?.icon ?? null,
+            engineName: engine, icon: this.engineIcon(engine),
             run: () => this.runOneOff(this.engineNameForRequest(), 'current', text),
         };
+    }
+
+    /** BAR-04: the icon chrome lists for the engine named `name`, else null. */
+    protected engineIcon(name: string | undefined): string | null {
+        return this.engineList?.engines.find(engine => engine.name === name)?.icon ?? null;
     }
 
     /** BAR-04: the User-scope engine choice when chrome lists it, else '' (chrome's default); an engine mode's engine first. */
@@ -1088,6 +1094,8 @@ export class AddressBar {
         this.querySeq += 1;
         this.dropdownArmed = false;
         this.dropdownOpen = false;
+        // The invalidated query can no longer clear its own shimmer row.
+        this.shimmer = false;
         this.highlightKey = undefined;
         this.homeFailed = false;
         this.noSearch = false;
@@ -1264,7 +1272,7 @@ export class AddressBar {
             row.caption = CHROME_BAR_COPY.searchWith(engine);
             row.url = resolved.url;
             row.engineName = engine;
-            row.icon = this.engineList?.engines.find(e => e.name === engine)?.icon ?? null;
+            row.icon = this.engineIcon(engine);
         } else if (resolved?.kind === 'visit' && resolved.url) {
             row.title = resolved.url;
             row.url = resolved.url;
@@ -1303,18 +1311,19 @@ export class AddressBar {
 
     /** BAR-11: favicons for the rows' addresses from chrome's Places cache, under the same guards as the query. */
     protected async requestIcons(seq: number): Promise<void> {
-        const urls = this.rows
+        const urls = Array.from(new Set(this.rows
             .filter(row => row.url && !row.engineName && this.icons[row.url] === undefined)
-            .map(row => row.url);
+            .map(row => row.url)));
         if (!urls.length) {
             return;
         }
-        let icons: Record<string, string>;
-        try {
-            icons = await this.store.placesFavicons(urls);
-        } catch {
-            return;
+        // Chrome reads at most FAVICON_REQUEST_LIMIT urls per request; an uncapped list (Tabs mode) lost every row past the tenth.
+        const chunks: string[][] = [];
+        for (let at = 0; at < urls.length; at += FAVICON_REQUEST_LIMIT) {
+            chunks.push(urls.slice(at, at + FAVICON_REQUEST_LIMIT));
         }
+        // A refused chunk costs only its own icons.
+        const icons: Record<string, string> = Object.assign({}, ...await Promise.all(chunks.map(chunk => this.store.placesFavicons(chunk).catch(() => ({})))));
         if (!this.dropdownArmed || this.querySeq !== seq) {
             return;
         }
@@ -1389,7 +1398,10 @@ export class AddressBar {
         this.localMessage = undefined;
         // BAR-03: text typed while an IME composition is open is never queried (onCompositionEnd queries it).
         this.compositionOpen = composing;
+        // An exit that starts no query clears the shimmer the invalidated one can no longer clear; an exit that
+        // starts one leaves it, so the row stays up across keystrokes until that query finishes as current.
         if (this.compositionOpen) {
+            this.shimmer = false;
             this.renderNow();
             return;
         }
@@ -1407,6 +1419,7 @@ export class AddressBar {
             // query debounced before it is disarmed so it cannot replace the list.
             this.localQuery?.cancel();
             this.dropdownArmed = false;
+            this.shimmer = false;
             this.rows = aliasRows;
             this.dropdownOpen = true;
             this.renderNow();
@@ -1485,10 +1498,9 @@ export class AddressBar {
         if (this.inputValue !== '@' || this.mode === 'command-centre') {
             return [];
         }
-        const engines = this.engineList ? this.engineList.engines : [];
         return this.engineAliases().map(([alias, name]): Row => ({
             key: `alias:${alias}`, source: 'heuristic', title: alias, caption: name, url: '', engineName: name,
-            icon: engines.find(engine => engine.name === name)?.icon ?? null,
+            icon: this.engineIcon(name),
             stays: true,
             run: () => {
                 this.inputValue = '';
@@ -1949,8 +1961,7 @@ export class AddressBar {
                     void this.runOneOff(this.highlightKey.slice(ONE_OFF_KEY.length), 'foreground');
                     return;
                 }
-                const row = this.dropdownOpen ? this.rows.find(r => r.key === this.highlightKey) : undefined;
-                void this.openRowInNewTab(row, true);
+                void this.openRowInNewTab(this.highlightedRow(), true);
                 return;
             }
             // BAR-13: with a completion still selected, Ctrl+Enter acts on the typed part, not the autofilled origin.
@@ -1980,7 +1991,7 @@ export class AddressBar {
                 void this.runOneOff(this.highlightKey.slice(ONE_OFF_KEY.length), 'current');
                 return;
             }
-            const highlighted = this.dropdownOpen ? this.rows.find(row => row.key === this.highlightKey) : undefined;
+            const highlighted = this.highlightedRow();
             const centre = this.commandCentre();
             if (!highlighted && centre) {
                 // D-26: Command centre never sends its text to chrome's resolve; with no row chosen, Enter does nothing,
@@ -2031,7 +2042,7 @@ export class AddressBar {
 
     /** BAR-09: the highlighted row when Shift+Delete may remove it, else undefined. */
     protected removableHighlighted(): Row | undefined {
-        const row = this.dropdownOpen ? this.rows.find(r => r.key === this.highlightKey) : undefined;
+        const row = this.highlightedRow();
         return row && this.removableRow(row) ? row : undefined;
     }
 
@@ -2081,7 +2092,6 @@ export class AddressBar {
             return;
         }
         this.placeRows = this.placeRows.filter(r => r.key !== row.key);
-        this.rows = this.composeVisibleRows();
         this.showComposedRows(seq);
     }
 
@@ -2191,12 +2201,7 @@ export class AddressBar {
                     type='button'
                     className={'pb-chrome-bar-oneoff' + (highlighted ? ' is-highlighted' : '')}
                     aria-label={CHROME_BAR_COPY.searchWith(engine.name)}
-                    onPointerEnter={e => this.hover.requestHover({
-                        content: engine.name,
-                        target: e.currentTarget,
-                        position: 'top',
-                        cssClasses: ['pb-chrome-bar-hover'],
-                    })}
+                    onPointerEnter={this.hoverTip(engine.name, 'top')}
                     onMouseDown={e => e.preventDefault()}
                     onClick={e => void this.runOneOff(engine.name, e.ctrlKey || e.metaKey ? 'background' : 'current')}
                     onAuxClick={e => {
@@ -2369,7 +2374,7 @@ export class AddressBar {
             left: Math.round(pill.left),
             width: Math.round(pill.width),
             // A short window caps the panel at its bottom less 8px; the panel scrolls inside.
-            maxHeight: Math.max(0, Math.min(DROPDOWN_MAX_HEIGHT, window.innerHeight - top - 8)),
+            maxHeight: dropdownMaxHeight(top),
         } : undefined;
         return createPortal(
             <div className='pb-chrome-bar-dropdown' role='listbox' id='pb-chrome-bar-dropdown' aria-label='Suggestions' style={style}>
@@ -2394,22 +2399,13 @@ export class AddressBar {
             </div>;
         }
         if (this.noSearch) {
-            return <>
-                <div className='pb-chrome-bar-row is-message'>{CHROME_BAR_COPY.noSearch(appSubject())}</div>
-                <div className='pb-chrome-bar-dropdown-footer'>{CHROME_BAR_COPY.dropdownFooter}</div>
-            </>;
+            return this.messageBody(CHROME_BAR_COPY.noSearch(appSubject()));
         }
         if (this.pasteFailed) {
-            return <>
-                <div className='pb-chrome-bar-row is-message'>{CHROME_BAR_COPY.pasteFailed(appSubject())}</div>
-                <div className='pb-chrome-bar-dropdown-footer'>{CHROME_BAR_COPY.dropdownFooter}</div>
-            </>;
+            return this.messageBody(CHROME_BAR_COPY.pasteFailed(appSubject()));
         }
         if (this.commitFailed) {
-            return <>
-                <div className='pb-chrome-bar-row is-message'>{CHROME_BAR_COPY.commitFailed(appSubject())}</div>
-                <div className='pb-chrome-bar-dropdown-footer'>{CHROME_BAR_COPY.dropdownFooter}</div>
-            </>;
+            return this.messageBody(CHROME_BAR_COPY.commitFailed(appSubject()));
         }
         return <>
             {this.localMessage !== undefined && <div className='pb-chrome-bar-row is-message'>{this.localMessage}</div>}
@@ -2420,6 +2416,14 @@ export class AddressBar {
             {this.shimmer && <div className='pb-chrome-bar-row is-shimmer' aria-hidden='true' />}
             {this.renderOneOffs()}
             <div className='pb-chrome-bar-dropdown-footer'>{this.footerText()}</div>
+        </>;
+    }
+
+    /** A one-message dropdown (no-search, paste or commit failure): the message row, then the default footer. */
+    protected messageBody(message: string): React.ReactNode {
+        return <>
+            <div className='pb-chrome-bar-row is-message'>{message}</div>
+            <div className='pb-chrome-bar-dropdown-footer'>{CHROME_BAR_COPY.dropdownFooter}</div>
         </>;
     }
 
@@ -2665,12 +2669,7 @@ export class AddressBar {
             aria-haspopup='dialog'
             aria-expanded={!!this.bookmarkEditor}
             // Pointer, not mouse, enter: a disabled star keeps its tooltip.
-            onPointerEnter={e => this.hover.requestHover({
-                content: label,
-                target: e.currentTarget,
-                position: 'top',
-                cssClasses: ['pb-chrome-bar-hover'],
-            })}
+            onPointerEnter={this.hoverTip(label, 'top')}
             onClick={() => void this.openBookmarkStar()}
         >
             <span className={'codicon ' + (bookmarked ? 'codicon-star-full' : 'codicon-star-empty')} aria-hidden='true' />
@@ -2839,8 +2838,7 @@ export class AddressBar {
             return <span className={`pb-address-mode-icon codicon ${local.iconClass}`} aria-hidden='true' />;
         }
         const name = mode === 'address' ? this.effectiveEngine() : engineNameOf(mode);
-        const engine = this.engineList ? this.engineList.engines.find(entry => entry.name === name) : undefined;
-        const icon = safeIcon(engine ? engine.icon : null);
+        const icon = safeIcon(this.engineIcon(name));
         return icon
             ? <img className='pb-address-mode-icon' src={icon} alt='' />
             : <span className='pb-address-mode-icon codicon codicon-search' aria-hidden='true' />;
@@ -2863,12 +2861,7 @@ export class AddressBar {
             aria-controls={this.modesOpen ? 'pb-address-modes' : undefined}
             aria-activedescendant={active >= 0 ? this.modeItemId(active) : undefined}
             aria-label={CHROME_BAR_COPY.chooseMode(label)}
-            onPointerEnter={e => this.hover.requestHover({
-                content: CHROME_BAR_COPY.chooseMode(label),
-                target: e.currentTarget,
-                position: 'bottom',
-                cssClasses: ['pb-chrome-bar-hover'],
-            })}
+            onPointerEnter={this.hoverTip(CHROME_BAR_COPY.chooseMode(label), 'bottom')}
             onClick={this.onModeButtonClick}
             onKeyDown={this.onModeButtonKeyDown}
             onBlur={this.onModeButtonBlur}
@@ -2887,12 +2880,7 @@ export class AddressBar {
                 type='button'
                 className='pb-address-mode-reset'
                 aria-label={resetLabel}
-                onPointerEnter={e => this.hover.requestHover({
-                    content: resetLabel,
-                    target: e.currentTarget,
-                    position: 'bottom',
-                    cssClasses: ['pb-chrome-bar-hover'],
-                })}
+                onPointerEnter={this.hoverTip(resetLabel, 'bottom')}
                 // Focus stays in the pill: the x never takes it, so the dropdown it re-opens is not closed by a blur.
                 onMouseDown={e => e.preventDefault()}
                 onClick={() => this.onModeReset()}
@@ -3105,7 +3093,7 @@ export class AddressBar {
         const contributed = this.modeProvider.getContributions();
         const next = nextMode(cycleOrder(engines, id => contributed.some(mode => mode.id === id)), this.mode, step);
         // D-26 (IN-03): leaving Command centre for a mode that resolves keeps the text but sends none of it.
-        const open = this.dropdownOpen && !(this.commandCentre() && (MODE_SENDS[modeKindOf(next)] ?? MODE_SENDS['address']).resolve);
+        const open = this.dropdownOpen && !(this.commandCentre() && this.modeSends(next).resolve);
         this.mode = next;
         this.closeDropdown();
         if (open) {
@@ -3156,7 +3144,7 @@ export class AddressBar {
             position: 'fixed',
             top,
             left: Math.round(pill.left),
-            maxHeight: Math.max(0, Math.min(DROPDOWN_MAX_HEIGHT, window.innerHeight - top - 8)),
+            maxHeight: dropdownMaxHeight(top),
         } : undefined;
         let index = 0;
         return createPortal(
@@ -3256,7 +3244,7 @@ function BookmarkEditor(props: BookmarkEditorProps): React.ReactElement {
             role='dialog'
             aria-label={heading}
             tabIndex={-1}
-            style={{ position: 'fixed', top, right, maxHeight: Math.max(0, Math.min(DROPDOWN_MAX_HEIGHT, window.innerHeight - top - 8)) }}
+            style={{ position: 'fixed', top, right, maxHeight: dropdownMaxHeight(top) }}
             onKeyDown={e => {
                 if (e.key === 'Escape') {
                     e.stopPropagation();

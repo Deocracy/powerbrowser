@@ -133,6 +133,20 @@ const TAB_STORE_V6_DDL = /* PB-SQL-V6-DDL-START */ `CREATE TABLE IF NOT EXISTS s
   bytes       INTEGER NOT NULL CHECK(bytes >= 0)
 )` /* PB-SQL-V6-DDL-END */;
 
+// The statements of one marker-delimited DDL block, split from the constant itself.
+function ddlStatements(ddl) {
+  return ddl.split(";").map(s => s.trim()).filter(Boolean);
+}
+
+// The one statement of a split DDL block that matches `pattern`; a missing one throws naming the migration.
+function ddlStatement(statements, pattern, method) {
+  const hit = statements.find(s => pattern.test(s));
+  if (!hit) {
+    throw new Error(`${method}: DDL marker content missing a required statement`);
+  }
+  return hit;
+}
+
 // NG-001: the sessionstore custom tab value a stock tab's row key lives in.
 // Sessionstore saves it with the tab and restores it with the tab, so a
 // restart keeps the key (SessionStore.sys.mjs:6541 restores extData).
@@ -147,7 +161,7 @@ const stockTabKeys = new WeakMap();
 
 // NG-001: the only web-tab key chrome accepts from the frontend.
 function webTabKeyIsValid(key) {
-  return typeof key === "string" && /^web:[A-Za-z0-9_-]{1,64}$/.test(key);
+  return typeof key === "string" && WEB_TAB_ROW_KEY_RE.test(key);
 }
 
 // NG-010: a stable short hash for keying a closed tab the store never saw.
@@ -887,7 +901,7 @@ export const PowerBrowserAPI = Object.freeze({
     // entries commit into overlay history (OVERLAY_LOCATION), and refusing them dropped the tab's whole history.
     const entryUrlOk = item => item && typeof item.url === "string" && /^https?:\/\//i.test(webTabPushedSpec(item.url));
     const treeOk = items => Array.isArray(items) && items.every(item => entryUrlOk(item) && (!item.children || treeOk(item.children)));
-    if (!entries.every(item => entryUrlOk(item) && (!item.children || treeOk(item.children)))) {
+    if (!treeOk(entries)) {
       return null;
     }
     return data;
@@ -1343,9 +1357,7 @@ export const PowerBrowserAPI = Object.freeze({
    * and stamping the head here would skip the groups shape entirely.
    */
   async migrateTabStoreToV1(conn) {
-    const statements = TABS_STORE_V1_DDL.split(";")
-      .map(s => s.trim())
-      .filter(Boolean);
+    const statements = ddlStatements(TABS_STORE_V1_DDL);
     const createTable = statements.find(s => /^create table\b/i.test(s));
     const createIndex = statements.find(s => /^create index\b/i.test(s));
     if (!createTable || !createIndex) {
@@ -1378,16 +1390,8 @@ export const PowerBrowserAPI = Object.freeze({
    * first, then the tabs columns, then the indexes over them.
    */
   async migrateTabStoreToV2(conn) {
-    const statements = GROUPS_STORE_V2_DDL.split(";")
-      .map(s => s.trim())
-      .filter(Boolean);
-    const findStatement = pattern => {
-      const hit = statements.find(s => pattern.test(s));
-      if (!hit) {
-        throw new Error("migrateTabStoreToV2: DDL marker content missing a required statement");
-      }
-      return hit;
-    };
+    const statements = ddlStatements(GROUPS_STORE_V2_DDL);
+    const findStatement = pattern => ddlStatement(statements, pattern, "migrateTabStoreToV2");
     const createGroups = findStatement(/^create table groups\b/i);
     const groupsActiveIndex = findStatement(/^create index idx_groups_active\b/i);
     const addGroupId = findStatement(/^alter table tabs add column group_id\b/i);
@@ -1439,16 +1443,8 @@ export const PowerBrowserAPI = Object.freeze({
    * seen.
    */
   async migrateTabStoreToV3(conn) {
-    const statements = TAB_POSITION_V3_DDL.split(";")
-      .map(s => s.trim())
-      .filter(Boolean);
-    const findStatement = pattern => {
-      const hit = statements.find(s => pattern.test(s));
-      if (!hit) {
-        throw new Error("migrateTabStoreToV3: DDL marker content missing a required statement");
-      }
-      return hit;
-    };
+    const statements = ddlStatements(TAB_POSITION_V3_DDL);
+    const findStatement = pattern => ddlStatement(statements, pattern, "migrateTabStoreToV3");
     const addX = findStatement(/^alter table tabs add column x\b/i);
     const addY = findStatement(/^alter table tabs add column y\b/i);
     const xDone = await PowerBrowserAPI.tabStoreHasColumn(conn, "tabs", "x");
@@ -1506,7 +1502,7 @@ export const PowerBrowserAPI = Object.freeze({
    * current URI ordering until a group is first arranged by hand.
    */
   async migrateTabStoreToV4(conn) {
-    const statement = TAB_ORDER_V4_DDL.split(";").map(s => s.trim()).filter(Boolean)[0];
+    const statement = ddlStatements(TAB_ORDER_V4_DDL)[0];
     if (!statement || !/^alter table tabs add column ord\b/i.test(statement)) {
       throw new Error("migrateTabStoreToV4: DDL marker content missing the ord column");
     }
@@ -1528,7 +1524,7 @@ export const PowerBrowserAPI = Object.freeze({
    * a store whose work is already done re-runs as a no-op that stamps 5.
    */
   async migrateTabStoreToV5(conn) {
-    const statements = TAB_STORE_V5_DDL.split(";").map(s => s.trim()).filter(Boolean);
+    const statements = ddlStatements(TAB_STORE_V5_DDL);
     if (!statements.some(s => /^update tabs set uri\b/i.test(s))) {
       throw new Error("migrateTabStoreToV5: DDL marker content missing the key rewrite");
     }
@@ -1552,7 +1548,7 @@ export const PowerBrowserAPI = Object.freeze({
    * a no-op that stamps 6.
    */
   async migrateTabStoreToV6(conn) {
-    const statements = TAB_STORE_V6_DDL.split(";").map(s => s.trim()).filter(Boolean);
+    const statements = ddlStatements(TAB_STORE_V6_DDL);
     if (!statements.some(s => /^create table if not exists saved_pages\b/i.test(s))) {
       throw new Error("migrateTabStoreToV6: DDL marker content missing the saved_pages table");
     }
@@ -2095,7 +2091,7 @@ export const PowerBrowserAPI = Object.freeze({
         await PowerBrowserAPI.writeThumbnail(uri, null).catch(() => undefined);
         return dataUrl ? "dropped-over-cap" : "capture-failed";
       }
-      return PowerBrowserAPI.writeThumbnail(uri, dataUrl);
+      return await PowerBrowserAPI.writeThumbnail(uri, dataUrl);
     } catch {
       return "capture-failed";
     }
@@ -2331,7 +2327,7 @@ export const PowerBrowserAPI = Object.freeze({
     const path = `${PowerBrowserAPI.getProfileDir()}/${SHELL_STATE_FILE_NAME}`;
     try {
       switch (kind) {
-        case "orcaStatus": case "orcaRestart": case "orcaShowDiagnostics": return handleOrcaShellMessage(data, actorRef);
+        case "orcaStatus": case "orcaRestart": case "orcaShowDiagnostics": return await handleOrcaShellMessage(data, actorRef);
         case "shellStateLoad": {
           let state = "{}";
           try {
@@ -2694,50 +2690,22 @@ export const PowerBrowserAPI = Object.freeze({
           const png = await PowerBrowserAPI.captureShellRegion(theiaBrowser, data.rect);
           return { ok: true, kind, png };
         }
-        case "moveGroup": {
-          const current = await PowerBrowserAPI.readGroupRow(data.id);
-          if (!current) {
-            throw new Error(`handleGroupMutation: unknown group ${data.id}`);
-          }
-          await PowerBrowserAPI.writeGroupRow({
-            id: current.id,
-            title: current.title,
-            x: data.x,
-            y: data.y,
-            w: current.w,
-            h: current.h,
-            isActive: current.is_active,
-          });
-          return { ok: true, kind, id: data.id };
-        }
-        case "resizeGroup": {
-          const current = await PowerBrowserAPI.readGroupRow(data.id);
-          if (!current) {
-            throw new Error(`handleGroupMutation: unknown group ${data.id}`);
-          }
-          await PowerBrowserAPI.writeGroupRow({
-            id: current.id,
-            title: current.title,
-            x: current.x,
-            y: current.y,
-            w: data.w,
-            h: data.h,
-            isActive: current.is_active,
-          });
-          return { ok: true, kind, id: data.id };
-        }
+        case "moveGroup":
+        case "resizeGroup":
         case "renameGroup": {
           const current = await PowerBrowserAPI.readGroupRow(data.id);
           if (!current) {
             throw new Error(`handleGroupMutation: unknown group ${data.id}`);
           }
+          const moved = kind === "moveGroup";
+          const resized = kind === "resizeGroup";
           await PowerBrowserAPI.writeGroupRow({
             id: current.id,
-            title: data.title,
-            x: current.x,
-            y: current.y,
-            w: current.w,
-            h: current.h,
+            title: kind === "renameGroup" ? data.title : current.title,
+            x: moved ? data.x : current.x,
+            y: moved ? data.y : current.y,
+            w: resized ? data.w : current.w,
+            h: resized ? data.h : current.h,
             isActive: current.is_active,
           });
           return { ok: true, kind, id: data.id };
@@ -3431,7 +3399,7 @@ export const PowerBrowserAPI = Object.freeze({
             if (prev && prev.uri !== uri) {
               PowerBrowserAPI.scheduleSettleCapture(prev.uri, chromeWin);
             }
-            lastSelectedTabByWin.set(chromeWin, { uri, tab });
+            lastSelectedTabByWin.set(chromeWin, { uri });
           } catch {
             // Selection tracking is best-effort; the write below still runs.
           }
@@ -4784,7 +4752,7 @@ async function handleStoreRequest(data, actorRef) {
       case "fullScreen": {
         return { ok: true, kind, where: toggleShellFullscreen(actorRef) };
       }
-      case "extensionInstallSite": return extensionInstallSite(); case "extensionActionsSubscribe": case "extensionClick": case "extensionPin": case "extensionRemove": case "extensionSidebar": case "extensionSidebarGeometry": return extensionStoreRequest(kind, data, actorRef); // Phase 38 (EXT-06/07, D-11; 38-04 sidebar); 38-05 install site
+      case "extensionInstallSite": return await extensionInstallSite(); case "extensionActionsSubscribe": case "extensionClick": case "extensionPin": case "extensionRemove": case "extensionSidebar": case "extensionSidebarGeometry": return await extensionStoreRequest(kind, data, actorRef); // Phase 38 (EXT-06/07, D-11; 38-04 sidebar); 38-05 install site
       default: {
         return { ok: false, reason: "validation", message: `handleStoreRequest: unknown kind ${String(kind)}` };
       }
@@ -7601,21 +7569,26 @@ function adoptFallback(pcKey, pending) {
   const live = pending.browser.currentURI?.spec ?? "";
   const url = /^https?:\/\//i.test(live) ? live : pending.url;
   const win = pending.theiaBrowser.ownerDocument.defaultView;
-  // Records kept while it was pending (37-REVIEW WR-01) go with it; none was ever pushed.
-  for (const [token, record] of promptRecords) {
-    if (record.browser === pending.browser) {
-      promptRecords.delete(token);
-    }
-  }
-  hideBars(pending.browser);
-  tabHostDropTab(win, pending.browser);
-  pending.browser.remove();
+  dropPendingOverlay(win, pending.browser);
   if (!win || win.closed) {
     return;
   }
   PowerBrowserAPI.openStockTab(url === "about:blank" ? "" : url).catch(err => {
     PowerBrowserAPI.log("error", `[web-tab] adoptTab fallback failed: ${err && err.message ? err.message : err}`);
   });
+}
+
+// A pending overlay that goes before its ack (the fallback above, or an extension's tabs.remove): the records kept
+// while it was pending (37-REVIEW WR-01) go with it, none of them ever pushed, then its node and the overlay itself.
+function dropPendingOverlay(win, browser) {
+  for (const [token, record] of promptRecords) {
+    if (record.browser === browser) {
+      promptRecords.delete(token);
+    }
+  }
+  hideBars(browser);
+  tabHostDropTab(win, browser);
+  browser.remove();
 }
 
 // 36-REVIEW WR-04: an adopted about:blank runs as its opener's origin (it inherits the principal), so the identity
@@ -7730,7 +7703,6 @@ function installPermissionPromptFurniture(window) {
     browser.popupnotificationanchor = window.document.getElementById(PROMPT_ANCHOR_ID);
     const record = {
       token: `prompt-${++promptTokenCounter}`,
-      window,
       theiaBrowser: host.theiaBrowser,
       browser,
       tabId,
@@ -10235,7 +10207,7 @@ const EXTENSION_TAB_EVENTS = ["TabOpen", "TabSelect", "TabClose", "TabAttrModifi
 const extensionIconData = new Map();
 // Shell window -> { theiaBrowser, last, seq }: the subscribed frame, the last set pushed (JSON) and the newest read.
 const extensionBridges = new WeakMap();
-// Shell window -> { extension, action, popup }: the one extension popup open in it, as in Firefox.
+// Shell window -> { action, popup }: the one extension popup open in it, as in Firefox.
 const extensionPopups = new WeakMap();
 // 38-04 (B5): shell window -> { extensionId, frame }: the one extension sidebar open in it, as in Firefox.
 const extensionSidebars = new WeakMap();
@@ -10546,7 +10518,7 @@ function extensionOpenPopup(win, named, popupUrl, anchorRect) {
       pushExtensionActions(win);
     }
   };
-  extensionPopups.set(win, { extension: named.extension, action: named.action, popup });
+  extensionPopups.set(win, { action: named.action, popup });
   host.strip.addEventListener("TabSelect", close);
   win.document.addEventListener("focus", pageFocus, true);
   pushExtensionActions(win);
@@ -10713,15 +10685,7 @@ function tabsBridgeRemove(host, tab) {
   for (const [pcKey, pending] of pendingContent) {
     if (pending.browser === tab.linkedBrowser) {
       pendingContent.delete(pcKey);
-      // As adoptFallback: what was kept for it while it was pending (37-REVIEW WR-01) goes with it.
-      for (const [token, record] of promptRecords) {
-        if (record.browser === pending.browser) {
-          promptRecords.delete(token);
-        }
-      }
-      hideBars(pending.browser);
-      tabHostDropTab(host.win, pending.browser);
-      pending.browser.remove();
+      dropPendingOverlay(host.win, pending.browser);
     }
   }
 }
@@ -11110,19 +11074,26 @@ export const PowerBrowserProcesses = Object.freeze({
       if (lazy.AppConstants.platform !== "linux") {
         return roots.map(pid => ({ pid, ppid: null, startTicks: null }));
       }
-      const table = new Map();
-      for (const entry of await IOUtils.getChildren("/proc")) {
-        const pid = Number(entry.slice(entry.lastIndexOf("/") + 1));
-        if (!Number.isInteger(pid) || pid <= 0) {
-          continue;
-        }
+      const pids = (await IOUtils.getChildren("/proc"))
+        .map(entry => Number(entry.slice(entry.lastIndexOf("/") + 1)))
+        .filter(pid => Number.isInteger(pid) && pid > 0);
+      // The reads are independent, so they are issued together; the table keeps the listing's order.
+      const decoder = new TextDecoder();
+      const rows = await Promise.all(pids.map(async pid => {
         try {
           const bytes = await IOUtils.read(`/proc/${pid}/stat`, { maxBytes: 4096 });
-          const text = new TextDecoder().decode(bytes);
+          const text = decoder.decode(bytes);
           const fields = text.slice(text.lastIndexOf(")") + 2).split(" ");
-          table.set(pid, { pid, ppid: Number(fields[1]), startTicks: fields[19] ?? null });
+          return { pid, ppid: Number(fields[1]), startTicks: fields[19] ?? null };
         } catch {
           // The process exited between the listing and the read.
+          return null;
+        }
+      }));
+      const table = new Map();
+      for (const row of rows) {
+        if (row) {
+          table.set(row.pid, row);
         }
       }
       const children = new Map();
