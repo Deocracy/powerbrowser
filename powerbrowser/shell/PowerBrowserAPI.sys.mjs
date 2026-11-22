@@ -2694,50 +2694,22 @@ export const PowerBrowserAPI = Object.freeze({
           const png = await PowerBrowserAPI.captureShellRegion(theiaBrowser, data.rect);
           return { ok: true, kind, png };
         }
-        case "moveGroup": {
-          const current = await PowerBrowserAPI.readGroupRow(data.id);
-          if (!current) {
-            throw new Error(`handleGroupMutation: unknown group ${data.id}`);
-          }
-          await PowerBrowserAPI.writeGroupRow({
-            id: current.id,
-            title: current.title,
-            x: data.x,
-            y: data.y,
-            w: current.w,
-            h: current.h,
-            isActive: current.is_active,
-          });
-          return { ok: true, kind, id: data.id };
-        }
-        case "resizeGroup": {
-          const current = await PowerBrowserAPI.readGroupRow(data.id);
-          if (!current) {
-            throw new Error(`handleGroupMutation: unknown group ${data.id}`);
-          }
-          await PowerBrowserAPI.writeGroupRow({
-            id: current.id,
-            title: current.title,
-            x: current.x,
-            y: current.y,
-            w: data.w,
-            h: data.h,
-            isActive: current.is_active,
-          });
-          return { ok: true, kind, id: data.id };
-        }
+        case "moveGroup":
+        case "resizeGroup":
         case "renameGroup": {
           const current = await PowerBrowserAPI.readGroupRow(data.id);
           if (!current) {
             throw new Error(`handleGroupMutation: unknown group ${data.id}`);
           }
+          const moved = kind === "moveGroup";
+          const resized = kind === "resizeGroup";
           await PowerBrowserAPI.writeGroupRow({
             id: current.id,
-            title: data.title,
-            x: current.x,
-            y: current.y,
-            w: current.w,
-            h: current.h,
+            title: kind === "renameGroup" ? data.title : current.title,
+            x: moved ? data.x : current.x,
+            y: moved ? data.y : current.y,
+            w: resized ? data.w : current.w,
+            h: resized ? data.h : current.h,
             isActive: current.is_active,
           });
           return { ok: true, kind, id: data.id };
