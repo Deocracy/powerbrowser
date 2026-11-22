@@ -2095,7 +2095,7 @@ export const PowerBrowserAPI = Object.freeze({
         await PowerBrowserAPI.writeThumbnail(uri, null).catch(() => undefined);
         return dataUrl ? "dropped-over-cap" : "capture-failed";
       }
-      return PowerBrowserAPI.writeThumbnail(uri, dataUrl);
+      return await PowerBrowserAPI.writeThumbnail(uri, dataUrl);
     } catch {
       return "capture-failed";
     }
@@ -2331,7 +2331,7 @@ export const PowerBrowserAPI = Object.freeze({
     const path = `${PowerBrowserAPI.getProfileDir()}/${SHELL_STATE_FILE_NAME}`;
     try {
       switch (kind) {
-        case "orcaStatus": case "orcaRestart": case "orcaShowDiagnostics": return handleOrcaShellMessage(data, actorRef);
+        case "orcaStatus": case "orcaRestart": case "orcaShowDiagnostics": return await handleOrcaShellMessage(data, actorRef);
         case "shellStateLoad": {
           let state = "{}";
           try {
@@ -4784,7 +4784,7 @@ async function handleStoreRequest(data, actorRef) {
       case "fullScreen": {
         return { ok: true, kind, where: toggleShellFullscreen(actorRef) };
       }
-      case "extensionInstallSite": return extensionInstallSite(); case "extensionActionsSubscribe": case "extensionClick": case "extensionPin": case "extensionRemove": case "extensionSidebar": case "extensionSidebarGeometry": return extensionStoreRequest(kind, data, actorRef); // Phase 38 (EXT-06/07, D-11; 38-04 sidebar); 38-05 install site
+      case "extensionInstallSite": return await extensionInstallSite(); case "extensionActionsSubscribe": case "extensionClick": case "extensionPin": case "extensionRemove": case "extensionSidebar": case "extensionSidebarGeometry": return await extensionStoreRequest(kind, data, actorRef); // Phase 38 (EXT-06/07, D-11; 38-04 sidebar); 38-05 install site
       default: {
         return { ok: false, reason: "validation", message: `handleStoreRequest: unknown kind ${String(kind)}` };
       }
