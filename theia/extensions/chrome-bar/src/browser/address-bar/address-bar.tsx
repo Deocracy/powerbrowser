@@ -834,9 +834,14 @@ export class AddressBar {
         const engine = this.effectiveEngine() ?? '';
         return {
             key: SEARCH_ROW_KEY, source: 'heuristic', title: text, caption: CHROME_BAR_COPY.searchWith(engine), url: '',
-            engineName: engine, icon: this.engineList?.engines.find(e => e.name === engine)?.icon ?? null,
+            engineName: engine, icon: this.engineIcon(engine),
             run: () => this.runOneOff(this.engineNameForRequest(), 'current', text),
         };
+    }
+
+    /** BAR-04: the icon chrome lists for the engine named `name`, else null. */
+    protected engineIcon(name: string | undefined): string | null {
+        return this.engineList?.engines.find(engine => engine.name === name)?.icon ?? null;
     }
 
     /** BAR-04: the User-scope engine choice when chrome lists it, else '' (chrome's default); an engine mode's engine first. */
@@ -1266,7 +1271,7 @@ export class AddressBar {
             row.caption = CHROME_BAR_COPY.searchWith(engine);
             row.url = resolved.url;
             row.engineName = engine;
-            row.icon = this.engineList?.engines.find(e => e.name === engine)?.icon ?? null;
+            row.icon = this.engineIcon(engine);
         } else if (resolved?.kind === 'visit' && resolved.url) {
             row.title = resolved.url;
             row.url = resolved.url;
@@ -1493,10 +1498,9 @@ export class AddressBar {
         if (this.inputValue !== '@' || this.mode === 'command-centre') {
             return [];
         }
-        const engines = this.engineList ? this.engineList.engines : [];
         return this.engineAliases().map(([alias, name]): Row => ({
             key: `alias:${alias}`, source: 'heuristic', title: alias, caption: name, url: '', engineName: name,
-            icon: engines.find(engine => engine.name === name)?.icon ?? null,
+            icon: this.engineIcon(name),
             stays: true,
             run: () => {
                 this.inputValue = '';
@@ -2845,8 +2849,7 @@ export class AddressBar {
             return <span className={`pb-address-mode-icon codicon ${local.iconClass}`} aria-hidden='true' />;
         }
         const name = mode === 'address' ? this.effectiveEngine() : engineNameOf(mode);
-        const engine = this.engineList ? this.engineList.engines.find(entry => entry.name === name) : undefined;
-        const icon = safeIcon(engine ? engine.icon : null);
+        const icon = safeIcon(this.engineIcon(name));
         return icon
             ? <img className='pb-address-mode-icon' src={icon} alt='' />
             : <span className='pb-address-mode-icon codicon codicon-search' aria-hidden='true' />;
