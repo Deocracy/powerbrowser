@@ -519,6 +519,13 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
   site-identity-self-test (312 s) and orca-service-self-test (223 s) are made to fit the 480 s limit of the quick
   check the completion hook runs, without dropping a planted fault. (4) Plan 59-06 (the v1.5 human checks) is next.
 
+- **D-61 — v1.7 code-complete (feature freeze).** Chris, 2026-11-23, "APPROVE" to four steps: merge the `p59-owner`
+  log, review the dependency updates, record code-complete, start the build and the full gate. From here v1.7 takes
+  fixes only. It is not finished and not tagged: the ledger gate fails (NG-079 open), plans 59-05, 59-06 and 59-07
+  are not run, and no full gate has run since da97a4e9. Seven Dependabot lockfile updates were applied (hono 4.13.18,
+  @hono/node-server 2.1.8, multer 2.5.0, qs 6.15.4, undici 6.29.1, follow-redirects 1.16.2, fast-uri 3.1.9); each
+  addresses an open advisory. The approval named no ledger row, so no ledger row or lock was changed.
+
 ## Spikes this direction needs
 
 1. Browser parity: what an Orca browser tab can do, and how PB chrome provides it
