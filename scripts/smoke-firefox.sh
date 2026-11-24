@@ -45,6 +45,17 @@ LOG_DIR="$REPO_ROOT/.mozbuild"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/smoke-firefox-build.log"
 
+# The build starts an sccache server that outlives it. One this script's build started ends with the script; one that
+# was already running is left alone.
+SCCACHE_WAS_RUNNING=0
+if pgrep -u "$(id -u)" -x sccache >/dev/null 2>&1; then SCCACHE_WAS_RUNNING=1; fi
+stop_sccache() {
+  if [ "$SCCACHE_WAS_RUNNING" -eq 0 ]; then
+    nix develop "$REPO_ROOT#firefox" --command sccache --stop-server >/dev/null 2>&1 || true
+  fi
+}
+trap stop_sccache EXIT
+
 nix develop "$REPO_ROOT#firefox" --command bash -c "
   set -euo pipefail
   cd '$UPSTREAM_DIR'
