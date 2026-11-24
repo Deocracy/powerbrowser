@@ -1,0 +1,25 @@
+diff --git a/src/renderer/src/lib/agent-catalog.tsx b/src/renderer/src/lib/agent-catalog.tsx
+index fee7a07d89..914bf22c30 100644
+--- a/src/renderer/src/lib/agent-catalog.tsx
++++ b/src/renderer/src/lib/agent-catalog.tsx
+@@ -98,20 +98,6 @@ export function AgentIcon({
+       />
+     )
+   }
+-  if (catalogEntry?.faviconDomain) {
+-    // Use Google’s favicon service only when no SVG or bundled favicon exists, as in the README badges.
+-    return (
+-      <img
+-        src={`https://www.google.com/s2/favicons?domain=${catalogEntry.faviconDomain}&sz=64`}
+-        width={size}
+-        height={size}
+-        className={className}
+-        alt=""
+-        aria-hidden
+-        style={{ borderRadius: 2 }}
+-      />
+-    )
+-  }
+   return (
+     <AgentLetterIcon
+       letter={getAgentLabel(agent).charAt(0).toUpperCase()}

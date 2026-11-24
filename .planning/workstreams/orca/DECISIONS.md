@@ -526,6 +526,12 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
   @hono/node-server 2.1.8, multer 2.5.0, qs 6.15.4, undici 6.29.1, follow-redirects 1.16.2, fast-uri 3.1.9); each
   addresses an open advisory. The approval named no ledger row, so no ledger row or lock was changed.
 
+- **D-62 — Orca icons come from local artwork, never Google's favicon service.** Chris, 2026-11-23, "Replace with
+  local icons": audit decision 5, reopening the D-41 favicon pick. Seams 090, 100 and 110 remove the three places the
+  web client and orcad form a favicon URL. Agents with no bundled icon show a letter, Open-in applications the generic
+  window icon, and a repository's website favicon is no longer offered or accepted. Orca's own control for it stays and
+  answers "Enter a valid website URL."; the phone bundle (mobile-web) is unchanged.
+
 ## Spikes this direction needs
 
 1. Browser parity: what an Orca browser tab can do, and how PB chrome provides it

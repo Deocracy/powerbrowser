@@ -29,6 +29,36 @@
         "pr": null
       },
       "upstream_blob": "d73f842d6358d69267e5dc2704ad12b60d6fc074"
+    },
+    {
+      "patch": "patches/090-agent-local-icon.patch",
+      "path": "src/renderer/src/lib/agent-catalog.tsx",
+      "reason": "D-62 (Chris, 2026-11-23): no request goes to Google's favicon service; an agent with no bundled icon shows its letter icon",
+      "upstream": {
+        "class": "pb-only",
+        "pr": null
+      },
+      "upstream_blob": "fee7a07d89c1638c8bf3416a333647aae48d059e"
+    },
+    {
+      "patch": "patches/100-open-in-app-local-icon.patch",
+      "path": "src/renderer/src/lib/open-in-app-catalog.tsx",
+      "reason": "D-62 (Chris, 2026-11-23): no request goes to Google's favicon service; an Open-in application shows the generic window icon",
+      "upstream": {
+        "class": "pb-only",
+        "pr": null
+      },
+      "upstream_blob": "648d6fba9352ad59c004f47a37bf630c4adcd482"
+    },
+    {
+      "patch": "patches/110-repo-no-favicon.patch",
+      "path": "src/shared/repo-icon.ts",
+      "reason": "D-62 (Chris, 2026-11-23): no request goes to Google's favicon service; no favicon URL is formed or accepted for a repository, so its lucide, emoji, uploaded or file icon shows",
+      "upstream": {
+        "class": "pb-only",
+        "pr": null
+      },
+      "upstream_blob": "f62dba86336fff67db5630cf2e442736c117f571"
     }
   ]
 }
