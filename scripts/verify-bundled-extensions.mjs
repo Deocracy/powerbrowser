@@ -494,12 +494,14 @@ function listExtensions(configDir, builtins) {
         // The backend keeps running after it prints the listing, so it is stopped once the
         // listing (written synchronously after its header) has arrived; the seed record was
         // written before the deployer ran, so nothing is lost.
-        const child = spawn(process.execPath, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+        // Its own process group, so the file-watcher child it forks ends with it.
+        const child = spawn(process.execPath, args, { env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+        const stop = () => { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already gone */ } };
         let out = '', timer = null;
-        const deadline = setTimeout(() => { child.kill('SIGKILL'); fail(new Error(`list-extensions printed no listing in 120 s:\n${out.slice(-2000)}`)); }, 120_000);
+        const deadline = setTimeout(() => { stop(); fail(new Error(`list-extensions printed no listing in 120 s:\n${out.slice(-2000)}`)); }, 120_000);
         child.stdout.on('data', b => {
             out += b;
-            if (!timer && out.includes('installed plugins:\n')) timer = setTimeout(() => child.kill('SIGKILL'), 1500);
+            if (!timer && out.includes('installed plugins:\n')) timer = setTimeout(() => stop(), 1500);
         });
         child.stderr.on('data', () => {});
         child.on('exit', () => {
