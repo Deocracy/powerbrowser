@@ -127,10 +127,11 @@ awk "{for (i = 7; i <= NF; i++) if (\$i == \"-\") { print \$5, \$(i + 1); break 
   mp=$(printf "%b" "$mp")
   case "$keep" in *" $mp "*) continue ;; esac
   [ "$fs" = proc ] && continue
-  case "$mp" in /proc/*) mountpoint -q "$mp" || continue ;; esac   # a mount of the old /proc, hidden under the fresh one (e.g. the binfmt_misc automount): no path reaches it
+  # A mount of the old /proc (e.g. the binfmt_misc automount) stays listed but is hidden under the fresh one: its path is then on the fresh proc itself (same device). An unreadable path does not match and fails closed below.
+  case "$mp" in /proc/*) pd=$(stat -c %d "$mp" 2> /dev/null || true); [ -n "$pd" ] && [ "$pd" = "$(stat -c %d /proc)" ] && continue ;; esac
   [ -c "$mp" ] && continue   # a socket masked by /dev/null: writes go to the null device
   case "$mp" in /tmp/* | /var/tmp/*) [ -e "$mp" ] || continue ;; esac   # hidden under the scratch bind over /tmp or /var/tmp (e.g. the /tmp/.X11-unix tmpfs): no path reaches it; any other missing mount still fails closed below
-  mount -o remount,bind,ro "$mp" || { echo "fixer-isolate: FAIL -- could not make $mp read-only, so the command could write there" >&2; exit 97; }
+  mount -o remount,bind,ro "$mp" || { echo "fixer-isolate: FAIL -- could not make $mp read-only, so the command could write there (type $fs, device $(stat -c %d "$mp" 2> /dev/null || echo unreadable), /proc $(stat -c %d /proc 2> /dev/null || echo unreadable))" >&2; exit 97; }
 done
 unset FIXER_ISOLATE_RO FIXER_ISOLATE_ROOT
 echo "fixer-isolate: NOTE -- node: $(command -v node || echo none), yarn: $(command -v yarn || echo none), makensis: $(command -v makensis || echo none)" >&2

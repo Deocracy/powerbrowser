@@ -83,7 +83,7 @@
           {
             "type": "command",
             "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/ledger-stop-gate.py\"",
-            "timeout": 600
+            "timeout": 1020
           }
         ]
       }

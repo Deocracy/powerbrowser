@@ -3,11 +3,11 @@ gsd_state_version: "1.0"
 milestone: v1.7
 current_phase: 68
 current_phase_name: Three-OS artifacts, weekly re-pin and upstream seams
-status: "Code-complete, feature freeze (D-61); gate run 8 pending; not finished, not tagged"
-stopped_at: "2026-11-24: gate run 7 at faad4d96: 635 PASS, 32 FAIL of which 31 excluded, 1 SKIP excluded; one unexcluded red, orca-failure-page-live, a real reconnect bug, fixed after it; WINDOWS 71 fixed; next: gate run 8"
-last_updated: "2026-11-23T00:00:00.000Z"
-last_activity: 2026-11-23
-last_activity_desc: code-complete recorded (D-61); owner log and dependency updates merged
+status: "Code-complete, feature freeze (D-61); gate run 8 has no product red; waiting on the owner's hands-on checks; not finished, not tagged"
+stopped_at: "2026-11-24: gate run 8 at 23d8d896: 634 PASS, 32 FAIL, 2 SKIP, 33 excluded, one unexcluded refusal (orca-tabs-live, sign-in under 60 minutes), then orca-tabs-live and orca-agent-status-live PASS alone on the same commit; branch pushed; hosted CI 4 of 5 reds fixed, fixer-isolate-self-test still red; next: END-OF-MILESTONE-CHECKLIST section 3"
+last_updated: "2026-11-24T00:00:00.000Z"
+last_activity: 2026-11-24
+last_activity_desc: gate run 8; reconnect bug fixed (WINDOWS 71); branch pushed at 23d8d896
 state_head: a625378d3323a73fe4e1b4cebedafa2ac8140d57
 progress:
   total_phases: 10

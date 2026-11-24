@@ -1,5 +1,5 @@
 {
-  "ledger_version": 428,
+  "ledger_version": 429,
   "frozen_at": "2026-09-27",
   "items": [
     {
@@ -1019,15 +1019,15 @@
     {
       "id": "NG-079",
       "text": "updates.powerbrowser.org serves updates. Evidence: no DNS record.",
-      "status": "open",
+      "status": "deferred-requested",
       "spec_ref": "docs/non-gui/GAPS.md:109",
       "test_ref": "",
       "code_ref": "",
       "evidence": "",
-      "owner": "chris",
-      "phase": "59",
-      "deferred_at": "2026-09-25",
-      "reason": "Chris 2026-11-08 D-14 reopened for v1.7, closes in Phase 59 plan 59-05 with the live updates host"
+      "owner": "Chris",
+      "phase": "999.2",
+      "deferred_at": "2026-11-24",
+      "reason": "First Linux release and plan 59-05 move to the next version (D-63 (1), Chris 2026-11-23)"
     },
     {
       "id": "NG-080",
