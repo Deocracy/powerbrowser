@@ -901,8 +901,10 @@ async function runLive(lib, pre = {}) {
 
         // i. No Orca tab chrome: detector in the second client, then the Theia document.
         const selectors = deriveTabChromeSelectors(tabChromeSources());
+        const plainMatches = second.error ? null : await second.count(selectors);
         const frontedI = second.error ? null : await second.front();
         const detectorMatches = second.error ? { error: `second client: ${second.error}` } : await second.countProvoked(selectors);
+        for (const s of selectors) if (isCount(plainMatches?.[s]) && isCount(detectorMatches[s])) detectorMatches[s] = Math.max(detectorMatches[s], plainMatches[s]);
         if (frontedI?.prev) await ctx.activate(frontedI.prev);
         const theiaMatches = await ctx.probe(`const out = {}; for (const s of ${JSON.stringify(selectors)}) out[s] = document.querySelectorAll(s).length; return out;`);
         const chromeObs = { selectors, detectorMatches, detectorError: second.error ?? null, theiaMatches };
@@ -1237,8 +1239,14 @@ function secondClientControls(ctx, base, evalIn, budget) {
                 read();
                 const tabs = () => [...document.querySelectorAll('[data-tab-id]')].filter(e => e.getClientRects().length > 0);
                 for (const tab of tabs().slice(0, 4)) {
-                    tab.focus(); tab.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse' }));
-                    await wait(900); read(); tab.blur();
+                    // The hover card opens only over a tab whose label is cut off.
+                    const label = tab.querySelector('.tab-label') || tab;
+                    const labelStyle = label.getAttribute('style');
+                    label.style.cssText += ';max-width:8px!important;width:8px;min-width:0;overflow:hidden;white-space:nowrap;display:block;flex:none';
+                    label.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse' }));
+                    await wait(1500); read();
+                    label.dispatchEvent(new PointerEvent('pointerleave', { bubbles: true, pointerType: 'mouse' }));
+                    if (labelStyle === null) label.removeAttribute('style'); else label.setAttribute('style', labelStyle);
                     tab.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, detail: 2 }));
                     await wait(400); read();
                     const input = document.activeElement;
@@ -1247,9 +1255,12 @@ function secondClientControls(ctx, base, evalIn, budget) {
                 }
                 for (const strip of document.querySelectorAll('.terminal-tab-strip')) {
                     const before = strip.getAttribute('style');
-                    strip.style.maxWidth = '90px'; strip.style.flex = '0 0 90px';
-                    window.dispatchEvent(new Event('resize')); await wait(400); read();
-                    for (const left of [0, strip.scrollWidth]) { strip.scrollLeft = left; strip.dispatchEvent(new Event('scroll')); await wait(400); read(); }
+                    const widest = Math.max(0, ...[...strip.children].map(c => c.getBoundingClientRect().width));
+                    for (const width of [0.6, 0.8, 1.2, 1.6, 2.1, 2.6].map(f => Math.round(widest * f))) {
+                        strip.style.maxWidth = width + 'px'; strip.style.flex = '0 0 ' + width + 'px'; strip.style.scrollBehavior = 'auto';
+                        window.dispatchEvent(new Event('resize')); await wait(250); read();
+                        for (const left of [0, strip.scrollWidth]) { strip.scrollLeft = left; strip.dispatchEvent(new Event('scroll')); await wait(250); read(); }
+                    }
                     if (before === null) strip.removeAttribute('style'); else strip.setAttribute('style', before);
                     window.dispatchEvent(new Event('resize'));
                 }
