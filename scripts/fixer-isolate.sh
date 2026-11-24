@@ -134,6 +134,10 @@ awk "{for (i = 7; i <= NF; i++) if (\$i == \"-\") { print \$5, \$(i + 1); break 
   mount -o remount,bind,ro "$mp" || { echo "fixer-isolate: FAIL -- could not make $mp read-only, so the command could write there (type $fs, device $(stat -c %d "$mp" 2> /dev/null || echo unreadable), /proc $(stat -c %d /proc 2> /dev/null || echo unreadable))" >&2; exit 97; }
 done
 unset FIXER_ISOLATE_RO FIXER_ISOLATE_ROOT
+# The scrub of scrub_env again: sudo can put variables back (a hosted image sets RUNNER_* in /etc/environment).
+for k in $(compgen -e); do
+  case "$k" in GITHUB_* | ACTIONS_* | RUNNER_* | *TOKEN* | *SECRET* | *KEY* | *PASSWORD*) unset "$k" ;; esac
+done
 echo "fixer-isolate: NOTE -- node: $(command -v node || echo none), yarn: $(command -v yarn || echo none), makensis: $(command -v makensis || echo none)" >&2
 ip link set lo up 2> /dev/null || echo "fixer-isolate: NOTE -- could not bring the private loopback up (is ip installed?); a row that serves on 127.0.0.1 will fail" >&2
 exec "$@"
