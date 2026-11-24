@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 32
+open_count: 31
 waived_count: 2
-fixed_count: 48
+fixed_count: 49
 total_count: 82
-last_updated: 2026-11-24T07:01:10.393Z
+last_updated: 2026-11-24T12:21:49.992Z
 ---
 
 # Broken Windows Ledger
@@ -85,7 +85,7 @@ last_updated: 2026-11-24T07:01:10.393Z
 | 68 | 64 | unmet-truth | theia/extensions/orca-panes |  | The user's Middle-click Paste from Selection choice did not survive a restart: PowerBrowser's Linux preset (D-55) was held in memory and Orca keeps its own value in the Theia page's browser storage, whose origin is new at every launch (the sidecar listens on a fresh port), so a user who switched it off found it on again after every restart; source: .planning/debug/orca-first-show-focus-and-paste-choice.md (dc57d058); not covered by entries 62 and 63, which are about where Orca's hooks act, not what is remembered | fixed | Fixed in 7d730b00 (OrcaPaneBundle reads powerbrowser.orca.primarySelectionPaste from ProfileStorageService before bootstrap, the settings.set observer writes the user's value there, and the Linux preset is that value, else on; owner ruling "Remember my 'off'", D-58), c05cb098 (orca-relaunch-restore-live paste-choice leg: off set in launch 1 reads off after the relaunch) and dc57d058 (investigation record). The record stores the chosen value, on or off, because Orca's own copy lives in per-launch browser storage. A control bundle that never writes the record is red; the fixed bundle is green 5 of 5. | 2026-11-18T04:48:57.872Z | 2026-11-18T04:48:58.016Z |
 | 69 | 68 | unrun-verify | scripts/verify-platform.sh |  | Two gate rows need the owner's desktop or sign-in and failed unattended in v1.7 gate run 4 at 080814fd (2026-11-17), and again when re-run alone: orca-tabs-live refuses when the Claude sign-in is under 60 minutes from expiry (the CR-02 safeguard, b12906fc; 38 minutes in the gate) and real-input-gate-self-test fails when another window is focused or the screen is locked (its clean control capture wrote no file). orca-agent-status-live has the same sign-in dependency but prints SKIP and is counted PASS when the sign-in is under 60 minutes from expiry (44 minutes in gate run 4, log line about 9968), so TERM-02's real-agent leg did not run in that gate. None of the three is a product red. They are re-run, not excluded, and have no GATE_KNOWN_OPEN_EXCLUSIONS row: run claude once to refresh the sign-in, then scripts/verify-platform.sh --only orca-tabs-live and --only orca-agent-status-live (it must print PASS, not SKIP); run scripts/verify-platform.sh --only real-input-gate-self-test with the desktop unlocked and no other window taking focus; source: v1.7 gate run 4 | open | Re-run alone 2026-11-18 on the owner's refreshed sign-in and unlocked desktop: orca-tabs-live PASS (16 legs), orca-agent-status-live PASS (a real agent, not SKIP), real-input-gate-self-test PASS. In gate run 5 the same day (da97a4e9) orca-tabs-live PASS, orca-agent-status-live SKIP (sign-in 5 min from expiry) and real-input-gate-self-test FAIL (no clean capture); so the gate still exits 1 on real-input-gate-self-test and TERM-02's real-agent leg rests on the alone run | 2026-11-18T04:48:58.016Z |  |
 | 70 | 68 | unrun-verify | scripts/verify-descriptor-monotonic.mjs |  | descriptor-monotonic prints SKIP: no published Release and no candidate descriptor exist, so no offered buildID is compared; it runs with the first release; owner date: next version (D-63, Chris 2026-11-23); source: gate run 6 | open |  | 2026-11-24T07:01:08.941Z |  |
-| 71 | 67 | unrun-verify | scripts/verify-orca-failure-page-live.mjs |  | orca-failure-page-live induction 3 (auth refusal through a revoked device, A-7) cannot be induced: the hosted client pairs session-only on the offer's own token, so the registry holds no separate device row to revoke (rows removed: 0); headless orcad has no way to revoke the offer's row (audit pairing-credentials-04). Every other induction runs; owner date: next version (D-63, Chris 2026-11-23); source: gate run 6 | open |  | 2026-11-24T07:01:09.062Z |  |
+| 71 | 67 | unrun-verify | scripts/verify-orca-failure-page-live.mjs |  | orca-failure-page-live induction 3 (auth refusal through a revoked device, A-7) cannot be induced: the hosted client pairs session-only on the offer's own token, so the registry holds no separate device row to revoke (rows removed: 0); headless orcad has no way to revoke the offer's row (audit pairing-credentials-04). Every other induction runs; owner date: next version (D-63, Chris 2026-11-23); source: gate run 6 | fixed |  | 2026-11-24T07:01:09.062Z | 2026-11-24T12:21:49.992Z |
 | 72 | 59 | deviation | powerbrowser/shell/PowerBrowserAPI.sys.mjs |  | PowerBrowser's main process ended once with SIGSEGV during ng-011-settings-table-read in gate run 6 (2026-11-23 15:15:39, pid 3963875), 49 s after its launch; no core was kept. Not reproduced: 6 of 6 and 50 of 50 runs alone with core dumps on passed. Repro: scripts/verify-platform.sh --only ng-011-settings-table-read; owner date: next version (D-63, Chris 2026-11-23); source: gate run 6 | open |  | 2026-11-24T07:01:09.184Z |  |
 | 73 | 64 | deviation | scripts/verify-orca-tabs-live.mjs |  | Orca drops a check-details and a simulator tab on a Theia reload at the pin: saved-editor-tab-restore.ts never saves a check-details document; the simulator drop was observed in every run and its line is not found. orca-tabs-live no longer requires those two kinds to come back (ORCA_TRANSIENT_KINDS); every other kind must; owner date: next version (D-63, Chris 2026-11-23); source: gate run 6 and five runs alone | open |  | 2026-11-24T07:01:09.306Z |  |
 | 74 | 65 | deviation | orca-overlay/seams.json |  | Orca's 'Use website favicon' control for a repository stays after D-62 but its icon is never loaded, so the fallback icon shows; Orca's phone bundle (out/mobile-web) still forms the favicon address; owner date: next version (D-63, Chris 2026-11-23); source: D-62, D-63 (14) | open |  | 2026-11-24T07:01:09.428Z |  |
@@ -947,10 +947,10 @@ last_updated: 2026-11-24T07:01:10.393Z
     "file": "scripts/verify-orca-failure-page-live.mjs",
     "line": null,
     "description": "orca-failure-page-live induction 3 (auth refusal through a revoked device, A-7) cannot be induced: the hosted client pairs session-only on the offer's own token, so the registry holds no separate device row to revoke (rows removed: 0); headless orcad has no way to revoke the offer's row (audit pairing-credentials-04). Every other induction runs; owner date: next version (D-63, Chris 2026-11-23); source: gate run 6",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-24T07:01:09.062Z",
-    "resolved_at": null
+    "resolved_at": "2026-11-24T12:21:49.992Z"
   },
   {
     "id": 72,

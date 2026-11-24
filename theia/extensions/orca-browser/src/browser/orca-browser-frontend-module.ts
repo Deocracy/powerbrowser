@@ -247,6 +247,14 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
         return this.attaching ??= this.run().finally(() => { this.attaching = undefined; });
     }
 
+    /** Attached, or an attach that starts now: one already running is waited for and repeated if it failed. */
+    async attachAgain(): Promise<boolean> {
+        if (this.attaching && await this.attaching) {
+            return true;
+        }
+        return this.attach();
+    }
+
     /** Once per frontend: the layout and the metadata push. */
     protected prepare(): Promise<void> {
         return this.prepared ??= (async () => {

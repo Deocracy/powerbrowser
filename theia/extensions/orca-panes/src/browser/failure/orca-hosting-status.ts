@@ -242,13 +242,13 @@ export class OrcaHostingStatus implements FrontendApplicationContribution {
         return this.send({ kind: 'orcaShowDiagnostics' }).then(() => undefined);
     }
 
-    /** Reconnect: one attempt at a time. */
-    reconnect(): Promise<void> {
-        return this.reconnecting ??= this.runReconnect().finally(() => { this.reconnecting = undefined; });
+    /** Reconnect: one attempt at a time. `restarted`: orcad is a new one, so the client pairs again whatever page shows. */
+    reconnect(restarted = false): Promise<void> {
+        return this.reconnecting ??= this.runReconnect(restarted).finally(() => { this.reconnecting = undefined; });
     }
 
-    protected async runReconnect(): Promise<void> {
-        if (this.failureClass === 'browser-not-attached') {
+    protected async runReconnect(restarted: boolean): Promise<void> {
+        if (!restarted && this.failureClass === 'browser-not-attached') {
             await this.browserHost.attach(); // its outcome fires onDidChangeState
             return;
         }
@@ -279,9 +279,8 @@ export class OrcaHostingStatus implements FrontendApplicationContribution {
         }
         // Booted: the boot itself paired with this offer, or the re-pair above did.
         this.clearClientReason();
-        if (this.browserHost.state === 'failed') {
-            void this.browserHost.attach();
-        }
+        // An attach begun before the re-pair used the old connection; it is waited for, then tried with the new one.
+        void this.browserHost.attachAgain();
     }
 
     /** One boot attempt of the pane bundle, bounded so that one Reconnect never waits forever. */
@@ -397,7 +396,9 @@ export class OrcaHostingStatus implements FrontendApplicationContribution {
         }
         const wasReady = this.chrome.state === 'ready';
         const down = next.failureClass !== null && REPAIR_AFTER.includes(next.failureClass);
-        const ready = next.state === 'ready' && next.failureClass === null;
+        // browser-not-attached is this client's own host, reported after its socket dropped: orcad is up, and only the
+        // re-pair below gives the host a connection it can attach with, so it must not hold that re-pair back.
+        const ready = next.state === 'ready' && (next.failureClass === null || next.failureClass === 'browser-not-attached');
         // 67-CR-01: a pending restart, not two adjacent samples. Restart Orca goes through 'starting', which has no
         // class, so the page holds restarting until orcad is ready and the client has paired again (P67-07).
         const recovered = (this.restartPending || restarted) && ready;
@@ -415,7 +416,7 @@ export class OrcaHostingStatus implements FrontendApplicationContribution {
         });
         if (recovered) {
             if (this.api) {
-                void this.reconnect().finally(() => this.change(() => { this.held = null; }));
+                void this.reconnect(true).finally(() => this.change(() => { this.held = null; }));
             } else {
                 // Not booted: the loader's own hand-off loop pairs with the new offer, and a failed boot is tried again.
                 this.change(() => { this.held = null; });
