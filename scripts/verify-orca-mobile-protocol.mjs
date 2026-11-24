@@ -437,6 +437,7 @@ async function runSkew({ repoRoot = REPO_ROOT, orcaDir = join(repoRoot, 'orca') 
 // No network: fixture listings and constants text; evaluateCompat and the pin's constants come from the real pinned tree.
 async function runSkewSelfTest({ orcaDir = join(REPO_ROOT, 'orca') } = {}) {
     if (!existsSync(join(orcaDir, COMPAT_REL))) { console.log(skipLine(`${SKEW} self-test`, "orca/ is not fetched, so Orca's own evaluateCompat cannot be imported. Next step: bash scripts/fetch-orca.sh")); return SKIP_EXIT; }
+    if (!existsSync(join(orcaDir, 'node_modules'))) { console.log(skipLine(`${SKEW} self-test`, "orca/node_modules is not installed, so Orca's own evaluateCompat cannot be imported. Next step: nix develop .#orca --command bash scripts/build-orca.sh")); return SKIP_EXIT; }
     const scratch = mkdtempSync(join(tmpdir(), `${SKEW}-self-`));
     const constants = (mobile, minDesktop) => `// fixture\nexport const MOBILE_PROTOCOL_VERSION = ${mobile}\nexport const MIN_COMPATIBLE_DESKTOP_VERSION = ${minDesktop}\n`;
     const listing = ['refs/tags/v1.0.9', 'refs/tags/v1.0.10', 'refs/tags/v1.0.10-rc.1', 'refs/tags/mobile-android-v0.0.9', 'refs/tags/mobile-android-v0.0.10'];

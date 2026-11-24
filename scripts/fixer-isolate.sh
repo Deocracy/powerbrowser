@@ -127,6 +127,7 @@ awk "{for (i = 7; i <= NF; i++) if (\$i == \"-\") { print \$5, \$(i + 1); break 
   mp=$(printf "%b" "$mp")
   case "$keep" in *" $mp "*) continue ;; esac
   [ "$fs" = proc ] && continue
+  case "$mp" in /proc/*) mountpoint -q "$mp" || continue ;; esac   # a mount of the old /proc, hidden under the fresh one (e.g. the binfmt_misc automount): no path reaches it
   [ -c "$mp" ] && continue   # a socket masked by /dev/null: writes go to the null device
   case "$mp" in /tmp/* | /var/tmp/*) [ -e "$mp" ] || continue ;; esac   # hidden under the scratch bind over /tmp or /var/tmp (e.g. the /tmp/.X11-unix tmpfs): no path reaches it; any other missing mount still fails closed below
   mount -o remount,bind,ro "$mp" || { echo "fixer-isolate: FAIL -- could not make $mp read-only, so the command could write there" >&2; exit 97; }

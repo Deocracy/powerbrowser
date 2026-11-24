@@ -482,12 +482,19 @@ export function reloadedVerdict(obs) {
 }
 
 /**
+ * The kinds Orca does not bring back after a reload at the pin (D-63 (7)): saved-editor-tab-restore.ts never saves a
+ * check-details document, and its store drops a simulator tab. Every other kind must come back.
+ */
+const ORCA_TRANSIENT_KINDS = ['simulator', 'check-details'];
+
+/**
  * obs: { before: [names], after: [names], ms, storedEnvKey, identityBefore: { name: key }, identityAfter: { name: key },
  * storeKeysAfter: [key], barsBefore: [[name]], barsAfter: [[name]] } (the last five: P65-35).
  */
 export function reloadVerdict(obs) {
     const fails = [];
-    const missing = obs.before.filter((n) => !obs.after.includes(n));
+    const transient = new Set(obs.transientNames ?? []); // ORCA_TRANSIENT_KINDS: Orca's own store may drop these on a reload
+    const missing = obs.before.filter((n) => !obs.after.includes(n) && !transient.has(n));
     if (missing.length) fails.push(`reload: ${missing.join(', ')} not back after the reload`);
     const dup = obs.after.filter((n, i) => obs.after.indexOf(n) !== i);
     if (dup.length) fails.push(`reload: a reload duplicate (${[...new Set(dup)].join(', ')})`);
@@ -499,7 +506,7 @@ export function reloadVerdict(obs) {
     for (const [name, key] of Object.entries(obs.identityBefore ?? {})) {
         if (!(name in after)) continue; // reported above as not back
         if (after[name] !== key) fails.push(`reload: pb-orca:${name} now addresses another pane`);
-        if (!storeKeys.has(after[name])) fails.push(`reload: pb-orca:${name} addresses no pane in the store`);
+        if (!transient.has(name) && !storeKeys.has(after[name])) fails.push(`reload: pb-orca:${name} addresses no pane in the store`);
     }
     // The before-bars drop the panes Orca's store no longer holds after the reload: a pane Orca itself dropped is gone in
     // Orca too (noted by the caller). The after-bars are not filtered, so a pane PB lost or moved, and a dropped pane
@@ -938,6 +945,7 @@ async function runLive(lib, pre = {}) {
         const barsOf = (list) => Object.values(list.filter((w) => w.area === 'main' && w.tabBar >= 0).reduce((acc, w) => ({ ...acc, [w.tabBar]: [...(acc[w.tabBar] ?? []), nameOf(w.id)] }), {}));
         const peersOf = (list) => { const t = list.find((w) => keyOf(w.options) === tKey); return t && t.tabBar >= 0 ? list.filter((w) => w.area === 'main' && w.tabBar === t.tabBar).map((w) => nameOf(w.id)) : []; };
         const identityBefore = identityOf(hostedNow);
+        const transientNames = hostedNow.filter((w) => ORCA_TRANSIENT_KINDS.includes(w.kind)).map((w) => nameOf(w.id));
         const barsBefore = barsOf(hostedNow);
         cross.peersBefore = peersOf(hostedNow);
         // The document must be proven new: its time origin changes and the add recorder installed on the old one is gone.
@@ -951,7 +959,7 @@ async function runLive(lib, pre = {}) {
         }, 120000, 'the reloaded frontend').catch(() => null);
         const reloadedFails = reloadedVerdict({ before: originBefore, after: reloadedDoc });
         const tReady = Date.now();
-        const backMs = await ctx.pollFor(async () => { const now = (await lib.hostedIds(ctx)).map(nameOf); return names.every((n) => now.includes(n)) ? Date.now() - tReady : null; }, RELOAD_MS + 5000, 'the hosted tabs after reload').catch(() => null);
+        const backMs = await ctx.pollFor(async () => { const now = (await lib.hostedIds(ctx)).map(nameOf); return names.every((n) => now.includes(n) || transientNames.includes(n)) ? Date.now() - tReady : null; }, RELOAD_MS + 5000, 'the hosted tabs after reload').catch(() => null);
         const after = (await lib.hostedIds(ctx)).map(nameOf).sort();
         const storedEnvKey = await ctx.probe(`return Object.keys(localStorage).includes(${JSON.stringify(ENV_STORAGE_KEY)});`);
         // The store lists the worktree again (the observer's hold ends there), then identity, store keys and bars.
@@ -962,7 +970,7 @@ async function runLive(lib, pre = {}) {
         const keptNames = Object.entries(identityBefore).filter(([, key]) => storeKeySet.has(key)).map(([name]) => name);
         const droppedByStore = Object.keys(identityBefore).filter((n) => !keptNames.includes(n));
         if (droppedByStore.length) notes.push(`reload: Orca's store no longer holds ${droppedByStore.map((n) => `pb-orca:${n}`).join(', ')} after the reload, and PowerBrowser closed ${droppedByStore.length === 1 ? 'its tab' : 'their tabs'}`);
-        fail('reload', [...reloadedFails, ...reloadVerdict({ before: names, after, ms: backMs, storedEnvKey, identityBefore, identityAfter: identityOf(hostedAfter), storeKeysAfter: storeAfter.map((r) => r.key), barsBefore, barsAfter: barsOf(hostedAfter), keptNames })]);
+        fail('reload', [...reloadedFails, ...reloadVerdict({ before: names, after, ms: backMs, storedEnvKey, identityBefore, identityAfter: identityOf(hostedAfter), storeKeysAfter: storeAfter.map((r) => r.key), barsBefore, barsAfter: barsOf(hostedAfter), keptNames, transientNames })]);
         if (!cross.error && cross.stripsAfter === cross.stripsBefore + 1) {
             cross.detectedAfterReload = !!(await ctx.pollFor(async () => ((await tRecord())?.neighbours?.some((n) => n.mode === 'split-right') ? true : null), 5000, 'T split-right after the reload').catch(() => false));
             cross.peersAfter = peersOf(await ctx.hostedWidgets());
@@ -1477,6 +1485,8 @@ async function runSelfTest() {
         ['the entry not served with the cookie', 'pb-panes.js answered 404 with the cookie, want 200', () => routeVerdict({ noCookie: 403, traversal: 404, absolute: 404, entry: 404 })],
         ['a route probe that got no answer', 'an encoded parent-directory path answered null', () => routeVerdict({ noCookie: 403, traversal: null, absolute: 404, entry: 200 })],
         ['a reload that lost a hosted name', 'reload: term1 not back after the reload', () => reloadVerdict({ before: ['term1'], after: [], ms: 900, storedEnvKey: false })],
+        ['control: a transient Orca kind not back', null, () => reloadVerdict({ before: ['term1', 'sim1'], after: ['term1'], ms: 900, storedEnvKey: false, transientNames: ['sim1'] })],
+        ['a terminal lost beside a transient kind', 'reload: term1 not back after the reload', () => reloadVerdict({ before: ['term1', 'sim1'], after: [], ms: 900, storedEnvKey: false, transientNames: ['sim1'] })],
         ['a reload that took too long', 'the hosted tabs took 6000 ms (limit 5000 ms)', () => reloadVerdict({ before: ['term1'], after: ['term1'], ms: 6000, storedEnvKey: false })],
         ['a reload that never brought the tabs back', 'took forever', () => reloadVerdict({ before: ['term1'], after: ['term1'], ms: null, storedEnvKey: false })],
         ['a close whose disposal never came', 'disposed the widget never', () => closeVerdict({ dialog: true, afterCancel: { widget: true, storeRow: true }, disposedMs: null })],

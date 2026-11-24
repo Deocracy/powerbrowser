@@ -248,7 +248,11 @@ export function noOrcaOutcome(env = process.env) {
 function runFixtures() {
     if (!existsSync(join(REPO_ROOT, 'orca', 'package.json'))) return noOrcaOutcome();
     const obs = fixturesObs();
-    const fails = fixturesVerdict(obs);
+    // The hosted quick job fetches orca/ but installs none of its packages, so there is no installed version to compare.
+    // Every other fixture clause is still judged, against the recorded version.
+    const uninstalled = !existsSync(join(REPO_ROOT, 'orca', 'node_modules'));
+    const fails = fixturesVerdict(uninstalled ? { ...obs, installed: obs.manifest.agentBrowserVersion } : obs);
+    if (uninstalled && !fails.length) return { skip: "orca/node_modules is not installed, so the installed agent-browser version was not compared (the other clauses passed). Next step: nix develop .#orca --command bash scripts/build-orca.sh" };
     return fails.length ? { fails } : { pass: `the fixtures record agent-browser ${obs.installed}, the installed version, inside ${obs.range}; ${obs.manifest.pages.length} pages each have html and full, interactive and afterChange` };
 }
 

@@ -108,7 +108,11 @@ jobs:
       # scan-brand-residue, theia-branding, theia-endpoints, telemetry,
       # extension-pins, verify-upstream-pins) plus every other honestly
       # --quick check the registry carries.
+      # The hosted job's temp folder is under the runner's home, which the scratch-HOME rule of the live
+      # library treats as the real home; a temp folder outside it keeps the fixture homes usable.
       - name: Run the static verification table
+        env:
+          TMPDIR: /tmp
         run: nix develop .#theia --command scripts/verify-platform.sh --quick
 
       # DELIBERATELY OUT OF THIS WORKFLOW -- runtime-behind-build rows CI

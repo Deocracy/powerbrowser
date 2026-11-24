@@ -739,7 +739,7 @@
     {
       "host": "www.google.com",
       "disposition": "allow",
-      "reason": "D-86 extension: observed resolving in the same 35-second window alongside update.googleapis.com, immediately after it -- media.gmp-manager.chromium-update-url's own query string (`response=redirect`) means a successful Omaha check redirects to a Google-hosted download location; this is that redirect target, part of the same Widevine update-check flow, not an independent concern. packaging-prefs-network-04 (audit-fix G5b, D-08): an Orca browser tab searches here when Google is its search engine (orca/src/shared/browser-url.ts). Orca's icon requests to this host's favicon service are removed by overlay seams 090, 100 and 110 (D-62), and orca-side-panel-live judges the panels' rendering unattended.",
+      "reason": "D-86 extension: observed resolving in the same 35-second window alongside update.googleapis.com, immediately after it -- media.gmp-manager.chromium-update-url's own query string (`response=redirect`) means a successful Omaha check redirects to a Google-hosted download location; this is that redirect target, part of the same Widevine update-check flow, not an independent concern. packaging-prefs-network-04 (audit-fix G5b, D-08): an Orca browser tab searches here when Google is its search engine (orca/src/shared/browser-url.ts). Orca's icon requests to this host's favicon service are removed by overlay seams 090, 100, 110 and 120 (D-62), and orca-side-panel-live judges the panels' rendering unattended.",
       "orca_source": "orca/src/shared/browser-url.ts",
       "orca_shared": true
     },

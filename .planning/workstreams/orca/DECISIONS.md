@@ -527,10 +527,10 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
   addresses an open advisory. The approval named no ledger row, so no ledger row or lock was changed.
 
 - **D-62 — Orca icons come from local artwork, never Google's favicon service.** Chris, 2026-11-23, "Replace with
-  local icons": audit decision 5, reopening the D-41 favicon pick. Seams 090, 100 and 110 remove the three places the
-  web client and orcad form a favicon URL. Agents with no bundled icon show a letter, Open-in applications the generic
-  window icon, and a repository's website favicon is no longer offered or accepted. Orca's own control for it stays and
-  answers "Enter a valid website URL."; the phone bundle (mobile-web) is unchanged.
+  local icons": audit decision 5, reopening the D-41 favicon pick. Seams 090, 100, 110 and 120 remove the places the
+  web client and orcad form or load a favicon URL. Agents with no bundled icon show a letter, Open-in applications the generic
+  window icon, and a repository's website favicon is neither detected nor loaded. Orca's own control for it stays and
+  shows the fallback icon; the phone bundle (mobile-web) is unchanged.
 
 - **D-63 — Closing rulings for v1.7.** Chris, 2026-11-23, in the question box. (1) The first Linux release and plan
   59-05 move to the next version; deferring NG-078, NG-079 and NG-080 is Chris's own command. (2) Only the v1.7

@@ -51,14 +51,24 @@
       "upstream_blob": "648d6fba9352ad59c004f47a37bf630c4adcd482"
     },
     {
-      "patch": "patches/110-repo-no-favicon.patch",
-      "path": "src/shared/repo-icon.ts",
-      "reason": "D-62 (Chris, 2026-11-23): no request goes to Google's favicon service; no favicon URL is formed or accepted for a repository, so its lucide, emoji, uploaded or file icon shows",
+      "patch": "patches/110-repo-icon-no-autodetect-favicon.patch",
+      "path": "src/main/repository-icons/repo-icon-autodetect.ts",
+      "reason": "D-62 (Chris, 2026-11-23): no request goes to Google's favicon service; a repository homepage no longer becomes a favicon address. src/shared/repo-icon.ts is shared with the mobile app and stays untouched (OVL-03)",
       "upstream": {
         "class": "pb-only",
         "pr": null
       },
-      "upstream_blob": "f62dba86336fff67db5630cf2e442736c117f571"
+      "upstream_blob": "8d08dca6247c0576b75a409e78812db75ce62807"
+    },
+    {
+      "patch": "patches/120-repo-icon-no-favicon-load.patch",
+      "path": "src/renderer/src/components/repo/repo-icon.tsx",
+      "reason": "D-62 (Chris, 2026-11-23): no request goes to Google's favicon service; a stored favicon icon renders as the fallback icon. src/shared/repo-icon.ts is shared with the mobile app and stays untouched (OVL-03)",
+      "upstream": {
+        "class": "pb-only",
+        "pr": null
+      },
+      "upstream_blob": "38ca1a42e3b82fce52cc440510fbae42f38a36e5"
     }
   ]
 }

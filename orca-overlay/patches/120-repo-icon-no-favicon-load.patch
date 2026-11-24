@@ -1,0 +1,14 @@
+diff --git a/src/renderer/src/components/repo/repo-icon.tsx b/src/renderer/src/components/repo/repo-icon.tsx
+index 38ca1a42e3..d901063c65 100644
+--- a/src/renderer/src/components/repo/repo-icon.tsx
++++ b/src/renderer/src/components/repo/repo-icon.tsx
+@@ -142,7 +142,8 @@ export function RepoIconGlyph({
+   iconClassName?: string
+   color?: string
+ }): React.JSX.Element {
+-  const imageSrc = repoIcon?.type === 'image' ? repoIcon.src : null
++  // A website favicon is an address at a third-party service, so it is never loaded; the fallback icon shows.
++  const imageSrc = repoIcon?.type === 'image' && repoIcon.source !== 'favicon' ? repoIcon.src : null
+   // Private GHES avatars may require cookies; track failed URLs without hiding later replacement icons.
+   const [failedImageSrc, setFailedImageSrc] = React.useState<string | null>(null)
+ 
