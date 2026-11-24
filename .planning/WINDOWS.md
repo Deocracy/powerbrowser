@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 19
+open_count: 32
 waived_count: 2
 fixed_count: 48
-total_count: 69
-last_updated: 2026-11-19T02:23:11.097Z
+total_count: 82
+last_updated: 2026-11-24T07:01:10.393Z
 ---
 
 # Broken Windows Ledger
@@ -84,6 +84,19 @@ last_updated: 2026-11-19T02:23:11.097Z
 | 67 | 64 | unmet-truth | orca-overlay/seams.json |  | Upstream Orca bug: a stock Orca web client stops applying host tab updates after it opens the worktree, so tabs created later show only after a reload; the TAB-04 check (orca-tabs-live g3) reloads its second client to work around it; source: .planning/workstreams/orca/phases/64-orca-panes-as-powerbrowser-tabs/64-MIRROR-FREEZE.md | open | Re-dated to next version (Phase 59 D-09) | 2026-11-17T22:54:28.973Z |  |
 | 68 | 64 | unmet-truth | theia/extensions/orca-panes |  | The user's Middle-click Paste from Selection choice did not survive a restart: PowerBrowser's Linux preset (D-55) was held in memory and Orca keeps its own value in the Theia page's browser storage, whose origin is new at every launch (the sidecar listens on a fresh port), so a user who switched it off found it on again after every restart; source: .planning/debug/orca-first-show-focus-and-paste-choice.md (dc57d058); not covered by entries 62 and 63, which are about where Orca's hooks act, not what is remembered | fixed | Fixed in 7d730b00 (OrcaPaneBundle reads powerbrowser.orca.primarySelectionPaste from ProfileStorageService before bootstrap, the settings.set observer writes the user's value there, and the Linux preset is that value, else on; owner ruling "Remember my 'off'", D-58), c05cb098 (orca-relaunch-restore-live paste-choice leg: off set in launch 1 reads off after the relaunch) and dc57d058 (investigation record). The record stores the chosen value, on or off, because Orca's own copy lives in per-launch browser storage. A control bundle that never writes the record is red; the fixed bundle is green 5 of 5. | 2026-11-18T04:48:57.872Z | 2026-11-18T04:48:58.016Z |
 | 69 | 68 | unrun-verify | scripts/verify-platform.sh |  | Two gate rows need the owner's desktop or sign-in and failed unattended in v1.7 gate run 4 at 080814fd (2026-11-17), and again when re-run alone: orca-tabs-live refuses when the Claude sign-in is under 60 minutes from expiry (the CR-02 safeguard, b12906fc; 38 minutes in the gate) and real-input-gate-self-test fails when another window is focused or the screen is locked (its clean control capture wrote no file). orca-agent-status-live has the same sign-in dependency but prints SKIP and is counted PASS when the sign-in is under 60 minutes from expiry (44 minutes in gate run 4, log line about 9968), so TERM-02's real-agent leg did not run in that gate. None of the three is a product red. They are re-run, not excluded, and have no GATE_KNOWN_OPEN_EXCLUSIONS row: run claude once to refresh the sign-in, then scripts/verify-platform.sh --only orca-tabs-live and --only orca-agent-status-live (it must print PASS, not SKIP); run scripts/verify-platform.sh --only real-input-gate-self-test with the desktop unlocked and no other window taking focus; source: v1.7 gate run 4 | open | Re-run alone 2026-11-18 on the owner's refreshed sign-in and unlocked desktop: orca-tabs-live PASS (16 legs), orca-agent-status-live PASS (a real agent, not SKIP), real-input-gate-self-test PASS. In gate run 5 the same day (da97a4e9) orca-tabs-live PASS, orca-agent-status-live SKIP (sign-in 5 min from expiry) and real-input-gate-self-test FAIL (no clean capture); so the gate still exits 1 on real-input-gate-self-test and TERM-02's real-agent leg rests on the alone run | 2026-11-18T04:48:58.016Z |  |
+| 70 | 68 | unrun-verify | scripts/verify-descriptor-monotonic.mjs |  | descriptor-monotonic prints SKIP: no published Release and no candidate descriptor exist, so no offered buildID is compared; it runs with the first release; owner date: next version (D-63, Chris 2026-11-23); source: gate run 6 | open |  | 2026-11-24T07:01:08.941Z |  |
+| 71 | 67 | unrun-verify | scripts/verify-orca-failure-page-live.mjs |  | orca-failure-page-live induction 3 (auth refusal through a revoked device, A-7) cannot be induced: the hosted client pairs session-only on the offer's own token, so the registry holds no separate device row to revoke (rows removed: 0); headless orcad has no way to revoke the offer's row (audit pairing-credentials-04). Every other induction runs; owner date: next version (D-63, Chris 2026-11-23); source: gate run 6 | open |  | 2026-11-24T07:01:09.062Z |  |
+| 72 | 59 | deviation | powerbrowser/shell/PowerBrowserAPI.sys.mjs |  | PowerBrowser's main process ended once with SIGSEGV during ng-011-settings-table-read in gate run 6 (2026-11-23 15:15:39, pid 3963875), 49 s after its launch; no core was kept. Not reproduced: 6 of 6 and 50 of 50 runs alone with core dumps on passed. Repro: scripts/verify-platform.sh --only ng-011-settings-table-read; owner date: next version (D-63, Chris 2026-11-23); source: gate run 6 | open |  | 2026-11-24T07:01:09.184Z |  |
+| 73 | 64 | deviation | scripts/verify-orca-tabs-live.mjs |  | Orca drops a check-details and a simulator tab on a Theia reload at the pin: saved-editor-tab-restore.ts never saves a check-details document; the simulator drop was observed in every run and its line is not found. orca-tabs-live no longer requires those two kinds to come back (ORCA_TRANSIENT_KINDS); every other kind must; owner date: next version (D-63, Chris 2026-11-23); source: gate run 6 and five runs alone | open |  | 2026-11-24T07:01:09.306Z |  |
+| 74 | 65 | deviation | orca-overlay/seams.json |  | Orca's 'Use website favicon' control for a repository stays after D-62 but its icon is never loaded, so the fallback icon shows; Orca's phone bundle (out/mobile-web) still forms the favicon address; owner date: next version (D-63, Chris 2026-11-23); source: D-62, D-63 (14) | open |  | 2026-11-24T07:01:09.428Z |  |
+| 75 | 66 | unmet-truth | orca-overlay/seams.json |  | Orca's bundle runs in the Theia document's realm: no separate origin, frame or CSP (audit chrome-actor-03, sidecar-gate-backends-01, T-66-04; agent-browser-04 settles with it); owner date: next version (D-63, Chris 2026-11-23); source: v1.7 audit decision 3 | open |  | 2026-11-24T07:01:09.547Z |  |
+| 76 | 67 | unmet-truth | orca-overlay/seams.json |  | headless orcad cannot revoke or rotate the token row an earlier pairing offer named (audit pairing-credentials-04); owner date: next version (D-63, Chris 2026-11-23); source: v1.7 audit decision 4 | open |  | 2026-11-24T07:01:09.665Z |  |
+| 77 | 66 | unmet-truth | powerbrowser/shell/PowerBrowserAPI.sys.mjs |  | one shared agent container: no per-worktree container, no clearing at launch, no notice that agent sign-ins are kept and shared (audit agent-browser-03, chrome-actor-04); owner date: next version (D-63, Chris 2026-11-23); source: v1.7 audit decision 13 | open |  | 2026-11-24T07:01:09.793Z |  |
+| 78 | 66 | unmet-truth | powerbrowser/shell/PowerBrowserAPI.sys.mjs |  | loopback wall residuals: DNS rebinding between lookup and connect, no user-confirmed LAN allow list, WebRTC and WebTransport unseen (audit agent-browser-06); owner date: next version (D-63, Chris 2026-11-23); source: v1.7 audit decision 14 | open |  | 2026-11-24T07:01:09.912Z |  |
+| 79 | 68 | unmet-truth | powerbrowser/packaging/bundled-xpi.json |  | uBlock Origin gets no automatic updates (audit packaging-prefs-network-06) and the agent-browser binary's statically linked crate notices ship nowhere (packaging-prefs-network-05); owner date: next version (D-63, Chris 2026-11-23); source: v1.7 audit decision 6 | open |  | 2026-11-24T07:01:10.030Z |  |
+| 80 | 62 | unmet-truth | powerbrowser/shell/OrcaService.sys.mjs |  | no fallback port when orcad's fixed port is busy; the diagnostics row naming the holder exists (audit orcad-hosting-03, P62-16); owner date: next version (D-63, Chris 2026-11-23); source: v1.7 audit decision 15 | open |  | 2026-11-24T07:01:10.151Z |  |
+| 81 | 68 | unmet-truth | .github/workflows/release.yml |  | Orca's build and two launching rows run in the self-hosted runner's host shell (audit ci-supply-chain-02); two routes are held on audit-fix-held/ci-supply-chain-02 and -container, decided with the first release; owner date: next version (D-63, Chris 2026-11-23); source: v1.7 audit decision 1 | open |  | 2026-11-24T07:01:10.275Z |  |
+| 82 | 59 | unmet-truth | theia/yarn.lock |  | Dependabot advisories left after the in-range updates: simple-git 3.36.0 and @simple-git/argv-parser (from @theia/ai-ide; fix is a major bump), decompress 4.2.1 (no fix; from @theia/cli, @theia/plugin-ext and @theia/plugin-ext-vscode, which unpack extension archives), dompurify 3.2.7 (exact pin), and others fixable only by a major bump. Whether PowerBrowser reaches the affected code is not established; owner date: next version (D-63, Chris 2026-11-23); source: D-63 (12) | open |  | 2026-11-24T07:01:10.393Z |  |
 
 ````json
 [
@@ -373,8 +386,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "open",
     "reason": "Re-dated to next version (Phase 59 D-09)",
     "recorded_at": "2026-11-01T05:21:09.443Z",
-    "resolved_at": null,
-    "milestone": "v1.6"
+    "resolved_at": null
   },
   {
     "id": 25,
@@ -386,8 +398,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "open",
     "reason": "Re-dated to next version (Phase 59 D-09)",
     "recorded_at": "2026-11-06T21:08:45.534Z",
-    "resolved_at": null,
-    "milestone": "v1.5"
+    "resolved_at": null
   },
   {
     "id": 26,
@@ -399,8 +410,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "open",
     "reason": "Re-dated to next version (Phase 59 D-09)",
     "recorded_at": "2026-11-06T22:32:05.803Z",
-    "resolved_at": null,
-    "milestone": "v1.5"
+    "resolved_at": null
   },
   {
     "id": 27,
@@ -412,8 +422,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "Re-dated to next version (Phase 59 D-09)",
     "recorded_at": "2026-11-07T02:53:12.909Z",
-    "resolved_at": "2026-11-19T02:23:11.097Z",
-    "milestone": "v1.5"
+    "resolved_at": "2026-11-19T02:23:11.097Z"
   },
   {
     "id": 28,
@@ -425,8 +434,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "open",
     "reason": "Re-dated to next version (Phase 59 D-09)",
     "recorded_at": "2026-11-07T04:37:55.475Z",
-    "resolved_at": null,
-    "milestone": "v1.5"
+    "resolved_at": null
   },
   {
     "id": 29,
@@ -438,8 +446,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "open",
     "reason": "Re-dated to next version (Phase 59 D-09)",
     "recorded_at": "2026-11-07T04:50:37.188Z",
-    "resolved_at": null,
-    "milestone": "v1.5"
+    "resolved_at": null
   },
   {
     "id": 30,
@@ -451,8 +458,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "open",
     "reason": "Re-dated to next version (Phase 59 D-09)",
     "recorded_at": "2026-11-07T10:18:30.468Z",
-    "resolved_at": null,
-    "milestone": "v1.6"
+    "resolved_at": null
   },
   {
     "id": 31,
@@ -464,8 +470,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "open",
     "reason": "Re-dated to next version (Phase 59 D-09)",
     "recorded_at": "2026-11-07T10:18:30.720Z",
-    "resolved_at": null,
-    "milestone": "v1.6"
+    "resolved_at": null
   },
   {
     "id": 32,
@@ -477,8 +482,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "open",
     "reason": "Re-dated to next version (Phase 59 D-09); D-40 (2026-11-15): deferred to the next version; v1.7 ships Linux only",
     "recorded_at": "2026-11-07T10:18:30.941Z",
-    "resolved_at": null,
-    "milestone": "v1.7"
+    "resolved_at": null
   },
   {
     "id": 33,
@@ -490,8 +494,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-07T10:18:31.179Z",
-    "resolved_at": "2026-11-09T07:46:10.114Z",
-    "milestone": "v1.5"
+    "resolved_at": "2026-11-09T07:46:10.114Z"
   },
   {
     "id": 34,
@@ -503,8 +506,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-07T10:18:31.417Z",
-    "resolved_at": "2026-11-09T05:38:35.008Z",
-    "milestone": "v1.5"
+    "resolved_at": "2026-11-09T05:38:35.008Z"
   },
   {
     "id": 35,
@@ -516,8 +518,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "open",
     "reason": "Re-dated to next version (Phase 59 D-09)",
     "recorded_at": "2026-11-07T10:18:31.663Z",
-    "resolved_at": null,
-    "milestone": "v1.5"
+    "resolved_at": null
   },
   {
     "id": 36,
@@ -529,8 +530,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-07T10:18:31.926Z",
-    "resolved_at": "2026-11-09T05:38:48.313Z",
-    "milestone": "v1.5"
+    "resolved_at": "2026-11-09T05:38:48.313Z"
   },
   {
     "id": 37,
@@ -542,8 +542,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-07T10:18:32.197Z",
-    "resolved_at": "2026-11-09T05:38:48.419Z",
-    "milestone": "v1.5"
+    "resolved_at": "2026-11-09T05:38:48.419Z"
   },
   {
     "id": 38,
@@ -555,8 +554,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-07T10:18:32.415Z",
-    "resolved_at": "2026-11-09T05:38:48.524Z",
-    "milestone": "v1.5"
+    "resolved_at": "2026-11-09T05:38:48.524Z"
   },
   {
     "id": 39,
@@ -568,8 +566,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-07T10:18:32.637Z",
-    "resolved_at": "2026-11-09T06:25:41.333Z",
-    "milestone": "v1.5"
+    "resolved_at": "2026-11-09T06:25:41.333Z"
   },
   {
     "id": 40,
@@ -581,8 +578,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-07T10:18:32.870Z",
-    "resolved_at": "2026-11-09T05:38:48.629Z",
-    "milestone": "v1.5"
+    "resolved_at": "2026-11-09T05:38:48.629Z"
   },
   {
     "id": 41,
@@ -594,8 +590,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-07T10:18:33.080Z",
-    "resolved_at": "2026-11-09T05:38:48.732Z",
-    "milestone": "v1.5"
+    "resolved_at": "2026-11-09T05:38:48.732Z"
   },
   {
     "id": 42,
@@ -607,8 +602,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-07T10:18:35.742Z",
-    "resolved_at": "2026-11-09T06:25:41.438Z",
-    "milestone": "v1.5"
+    "resolved_at": "2026-11-09T06:25:41.438Z"
   },
   {
     "id": 43,
@@ -620,8 +614,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-07T10:18:36.853Z",
-    "resolved_at": "2026-11-09T17:03:27.646Z",
-    "milestone": "v1.5"
+    "resolved_at": "2026-11-09T17:03:27.646Z"
   },
   {
     "id": 44,
@@ -633,8 +626,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "Fixed by owner rulings 2026-11-15: (1) 68-B approved, allowed_package_spdx_ruling status approved (DECISIONS.md D-42); (2) 68-A terms_check confirmed, Chris \"Confirmed, terms permit it\" (D-43); (3) uBlock Origin GPL-3.0 section 6 reading accepted (D-44); node scripts/verify-licence-allowlist.mjs --rulings exits 0 and the orca-licence-rulings exclusion row is removed",
     "recorded_at": "2026-11-10T22:08:56.684Z",
-    "resolved_at": "2026-11-15T17:06:38.725Z",
-    "milestone": "v1.5"
+    "resolved_at": "2026-11-15T17:06:38.725Z"
   },
   {
     "id": 45,
@@ -646,8 +638,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-11T18:33:38.140Z",
-    "resolved_at": "2026-11-11T20:00:22.319Z",
-    "milestone": "v1.5"
+    "resolved_at": "2026-11-11T20:00:22.319Z"
   },
   {
     "id": 46,
@@ -659,8 +650,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "",
     "recorded_at": "2026-11-11T18:33:38.266Z",
-    "resolved_at": "2026-11-11T20:00:22.426Z",
-    "milestone": "v1.5"
+    "resolved_at": "2026-11-11T20:00:22.426Z"
   },
   {
     "id": 47,
@@ -672,8 +662,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "Closed after the 66-09 merge (2c713811): f42a2cb4 makes the row record performance.timeOrigin before location.reload() and wait for a different value before the page probe. 6 of 6 counted runs green in the gap-66-09 worktree (.mozbuild/p66-09/w47-run1, run3, run4, run5, run6, run7; run2 also PASS but not counted, it overlapped the 68-06 pass cleanup), each logging: 'orca-failure-page-live: PASS -- every hosted view showed the PowerBrowser page for each induced class and recovered; after the restart the client kept its environment id, logged no stranded-environment line and a CLI terminal became a hosted tab'. Merged tree, one more run (.mozbuild/coord-6609/failure-page-live.txt, 172 s): same PASS line.",
     "recorded_at": "2026-11-11T20:18:17.325Z",
-    "resolved_at": "2026-11-11T22:10:08.897Z",
-    "milestone": "v1.5"
+    "resolved_at": "2026-11-11T22:10:08.897Z"
   },
   {
     "id": 48,
@@ -685,8 +674,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "open",
     "reason": "Re-dated to next version (Phase 59 D-09); D-40 (2026-11-15): deferred to the next version; v1.7 ships Linux only",
     "recorded_at": "2026-11-11T21:07:34.010Z",
-    "resolved_at": null,
-    "milestone": "v1.5"
+    "resolved_at": null
   },
   {
     "id": 49,
@@ -698,8 +686,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "open",
     "reason": "Re-dated to next version (Phase 59 D-09); D-40 (2026-11-15): deferred to the next version; v1.7 ships Linux only",
     "recorded_at": "2026-11-11T21:07:34.116Z",
-    "resolved_at": null,
-    "milestone": "v1.5"
+    "resolved_at": null
   },
   {
     "id": 50,
@@ -711,8 +698,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "open",
     "reason": "Re-dated to next version (Phase 59 D-09); D-40 (2026-11-15): deferred to the next version; v1.7 ships Linux only",
     "recorded_at": "2026-11-11T21:07:34.218Z",
-    "resolved_at": null,
-    "milestone": "v1.5"
+    "resolved_at": null
   },
   {
     "id": 51,
@@ -724,8 +710,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "open",
     "reason": "Re-dated to next version (Phase 59 D-09)",
     "recorded_at": "2026-11-11T21:07:34.323Z",
-    "resolved_at": null,
-    "milestone": "v1.5"
+    "resolved_at": null
   },
   {
     "id": 52,
@@ -737,8 +722,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "Fixed by owner ruling 2026-11-15 (DECISIONS.md D-45): the web-entry class is ruled out for v1.7, as D-31 did for the terminal provider; scripts/verify-orca-overlay.mjs drops it from UPSTREAM_CLASSES and PR_CLASSES, so orca-upstream-prs names only browser-provider (WINDOWS 51)",
     "recorded_at": "2026-11-11T21:07:34.430Z",
-    "resolved_at": "2026-11-15T17:06:38.725Z",
-    "milestone": "v1.5"
+    "resolved_at": "2026-11-15T17:06:38.725Z"
   },
   {
     "id": 53,
@@ -750,8 +734,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "open",
     "reason": "Re-dated to next version (Phase 59 D-09); Held 2026-11-13 (owner ruling): a .cmd launcher (branch worktree-agent-a82bf5f2c523276a9, 5b84e185) was not merged: cmd.exe re-parses %* (BatBadBut), and Node refuses to spawn a .cmd without a shell since CVE-2024-27980; needs a launcher that bypasses cmd.exe (e.g. an .exe shim), tested on the first Windows build; D-40 (2026-11-15): deferred to the next version; v1.7 ships Linux only",
     "recorded_at": "2026-11-11T21:07:34.542Z",
-    "resolved_at": null,
-    "milestone": "v1.5"
+    "resolved_at": null
   },
   {
     "id": 54,
@@ -763,8 +746,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "Re-dated to next version (Phase 59 D-09); Fixed in 0ea32a1a (withFirefoxPage stops the orcad a packaged run started, by recorded identity); confirmed live 2026-11-18 on a dev-objdir package rebuilt that day: ng063-packaged-launch and orca-packaged-live both PASS alone and no process naming /tmp/pb-pkg- remained after either. orca-packaged-live had launched the dev objdir binary since 0ea32a1a (a static import of lib/firefox-bidi.mjs fixed the binary before PB_FIREFOX_BIN was set); fixed in dc08c717",
     "recorded_at": "2026-11-11T21:07:34.646Z",
-    "resolved_at": "2026-11-18T23:40:37.135Z",
-    "milestone": "v1.5"
+    "resolved_at": "2026-11-18T23:40:37.135Z"
   },
   {
     "id": 55,
@@ -776,8 +758,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "Fixed in 2ce581f2 and 3ad91d13 (scripts/verify-orca-tabs-live.mjs only). Root cause was the check, not the product. (1) Orca's stock web client at the pin stops applying host tab updates after it opens the worktree (the upstream echo bug in 64-MIRROR-FREEZE.md), so the check now reloads the second client once the tab exists. (2) crossClientVerdict compared tab-bar peers without the dropped-pane filter reloadVerdict already used. Four consecutive live runs green on 2026-11-16; orca-tabs-live-self-test PASS with 57 plants. Residual: a stock Orca web client does not show tabs created after it opened the worktree until it is reloaded; that is the upstream Orca bug, still open.",
     "recorded_at": "2026-11-11T21:37:37.789Z",
-    "resolved_at": "2026-11-16T16:00:00.000Z",
-    "milestone": "v1.5"
+    "resolved_at": "2026-11-16T16:00:00.000Z"
   },
   {
     "id": 56,
@@ -789,8 +770,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "Fixed in 740dcd8f (supersedes the title wait in 417dbe61, which went 1 of 5: a restored background tab is not loaded after the relaunch, so it keeps its URL or 'New Tab' label and never regains 'page l'). Clause (f) now compares the painted data-pb-tab ids with the derived widgets and checks B's tab by its key, so labels no longer matter. 9 of 10 runs green on the fixed tree (4 of 5, then 5 of 5); the one red ended in 6 s, before any clause ran, and its output was not kept.",
     "recorded_at": "2026-11-13T09:30:00.000Z",
-    "resolved_at": "2026-11-14T01:40:00.000Z",
-    "milestone": "v1.5"
+    "resolved_at": "2026-11-14T01:40:00.000Z"
   },
   {
     "id": 57,
@@ -802,8 +782,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "Fixed in 417dbe61. Race in the check, not the product: quarantineAndRebuildTabStore (powerbrowser/shell/PowerBrowserAPI.sys.mjs, the backup to corruptPath before IOUtils.remove and migrateTabStoreToHead) writes .corrupt-1 before it migrates the new store, and the check tore the shell down as soon as .corrupt-1 appeared; a store cut off mid-rebuild is migrated by the next launch (NG-085). The check now waits up to 30 s for the rebuilt store to reach the head before the teardown. 5 of 5 runs green. The check file is ledger-locked; the owner must re-lock its hash.",
     "recorded_at": "2026-11-13T19:30:00.000Z",
-    "resolved_at": "2026-11-14T01:40:00.000Z",
-    "milestone": "v1.5"
+    "resolved_at": "2026-11-14T01:40:00.000Z"
   },
   {
     "id": 58,
@@ -815,8 +794,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "Fixed in 417dbe61 and ad9a1939. Second root cause (red again in the full gate at 1edc97d6, 2026-11-14): the quit blocker was never registered. PowerBrowserAPI.addNamedReapBlocker (and addSidecarReapBlocker) called AsyncShutdown.quitApplicationGranted.addBlocker; the pinned upstream/toolkit/components/asyncshutdown/AsyncShutdown.sys.mjs:1121-1134 defines no such phase, so the call threw inside OrcaService.start()'s try and every launch logged 'Reap blocker not registered: ... AsyncShutdown.quitApplicationGranted is undefined'. Only the quit-application-granted observer started stop(); nothing held the quit, and an instrumented run showed Gecko exiting 230 ms into _endDaemon's wait for the terminal daemon, so a daemon slow on SIGTERM under load, and its agent, outlived the browser. 417dbe61's overrun kill lives in stopAndReap and never ran. Both blockers now register on AsyncShutdown.appShutdownConfirmed (quit-application, raised by quit and eRestart); instrumented, the quit returns only after the daemon step. verify-orca-service scenario N runs the real addNamedReapBlocker against the phases parsed from upstream (plant: the old phase name, self-test 44 of 44); sidecar-reap-blocker derives the same set instead of hand-keeping the name. orca-agent-status-live 15 of 15 green after the fix (5 alone, 10 beside 1 to 4 parallel --quick loops, load average up to 5.5); negative control with the old phase under the same load: 1 of 4 red with the gate's exact two 'survived quit' lines. The 25 s budget is unchanged.",
     "recorded_at": "2026-11-13T19:30:00.000Z",
-    "resolved_at": "2026-11-14T21:45:00.000Z",
-    "milestone": "v1.5"
+    "resolved_at": "2026-11-14T21:45:00.000Z"
   },
   {
     "id": 59,
@@ -828,8 +806,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "Fixed in 0b1ff185 (stockWindowStarted also races the window's delayedStartupPromise, resolved beside the flag, so the select runs before any second call can land) and 3824e0c4 (WR-07 accepts the module sleep inside the race; a new leg requires the race on win.delayedStartupPromise). Product race, 3 of 15 red alone before.",
     "recorded_at": "2026-11-17T22:54:27.933Z",
-    "resolved_at": "2026-11-17T22:54:29.100Z",
-    "milestone": "v1.7"
+    "resolved_at": "2026-11-17T22:54:29.100Z"
   },
   {
     "id": 60,
@@ -841,8 +818,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "Fixed in ed0ecc33 (withFirefoxPage stops the orcad a dev-objdir run leaves behind, matched by its working folder under the run's profile), 9fd3891c (verify-platform leak leg: a script row that leaves orcad running in its own session goes red and the orcad is stopped; scripts/verify-orcad-leak.mjs) and 8d1db795 (keepStrays opt-out for orca-service-live, whose orphan must survive to the product's reap). The SIGTERM behaviour of the product itself is entry 65.",
     "recorded_at": "2026-11-17T22:54:28.056Z",
-    "resolved_at": "2026-11-17T22:54:29.225Z",
-    "milestone": "v1.7"
+    "resolved_at": "2026-11-17T22:54:29.225Z"
   },
   {
     "id": 61,
@@ -854,8 +830,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "Fixed in 41229f23 (the pane bundle emits no modulepreload links). 5 of 5 runs alone were red before.",
     "recorded_at": "2026-11-17T22:54:28.186Z",
-    "resolved_at": "2026-11-17T22:54:29.356Z",
-    "milestone": "v1.7"
+    "resolved_at": "2026-11-17T22:54:29.356Z"
   },
   {
     "id": 62,
@@ -867,8 +842,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "Fixed in e50bd945 (the services root calls useHostedAppShellServices, whose usePanePrimarySelectionPaste acts only on targets inside [data-pb-orca-pane-root]; owner ruling \"Limit the hook to Orca panes\", D-54), with a772ea83 and 57fed2a0 (checks) and e324130a (debug record).",
     "recorded_at": "2026-11-17T22:54:28.325Z",
-    "resolved_at": "2026-11-17T22:54:29.489Z",
-    "milestone": "v1.7"
+    "resolved_at": "2026-11-17T22:54:29.489Z"
   },
   {
     "id": 63,
@@ -880,8 +854,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "Fixed in 8d2530b2 (usePaneLargeTextControlPaste claims a paste over 64 KiB only inside a hosted pane root; useHostedAppSessionPersistence runs Orca's checkpoint at every unload and only reports a failure) with live legs in 45eca9fb and 21cfdc81 and the record in 6729ce22 and 0232b5a7 (D-56). The workspace-activation focus helper was tested and does not take focus from Theia UI.",
     "recorded_at": "2026-11-17T22:54:28.459Z",
-    "resolved_at": "2026-11-17T22:54:29.617Z",
-    "milestone": "v1.7"
+    "resolved_at": "2026-11-17T22:54:29.617Z"
   },
   {
     "id": 64,
@@ -893,8 +866,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "Fixed in f4dd366b (the check finds the stock app's protocol constants at the transport/connection layout as well as the old one). Verdict at v0.0.65 against pin v1.4.248: ok.",
     "recorded_at": "2026-11-17T22:54:28.594Z",
-    "resolved_at": "2026-11-17T22:54:29.746Z",
-    "milestone": "v1.7"
+    "resolved_at": "2026-11-17T22:54:29.746Z"
   },
   {
     "id": 65,
@@ -906,8 +878,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "open",
     "reason": "Re-dated to next version (Phase 59 D-09)",
     "recorded_at": "2026-11-17T22:54:28.720Z",
-    "resolved_at": null,
-    "milestone": "v1.7"
+    "resolved_at": null
   },
   {
     "id": 66,
@@ -919,8 +890,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "Fixed in 7d730b00 (mountPane takes the hosting widget's activity, ApplicationShell's active widget, and the entry passes it as TerminalPane's isActive and NativeChatView's isFocusedGroup, so a hosted Orca terminal or chat takes focus only while its tab is Theia's active widget; owner ruling \"Fix now\", D-57) and c05cb098 (orca-terminal-keys-live 2d: keys typed in a Theia editor stay in the editor while a CLI-created or restored terminal is shown beside it, and a tab click or New Orca Terminal gives the terminal focus). Hosted chats got the same gate. Orca's settings and tasks pages were not checked for first-show focus. A control bundle with the old hard-wired value is red in the new legs; the fixed bundle is green 5 of 5.",
     "recorded_at": "2026-11-17T22:54:28.845Z",
-    "resolved_at": "2026-11-18T04:48:58.016Z",
-    "milestone": "v1.7"
+    "resolved_at": "2026-11-18T04:48:58.016Z"
   },
   {
     "id": 67,
@@ -932,8 +902,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "open",
     "reason": "Re-dated to next version (Phase 59 D-09)",
     "recorded_at": "2026-11-17T22:54:28.973Z",
-    "resolved_at": null,
-    "milestone": "v1.7"
+    "resolved_at": null
   },
   {
     "id": 68,
@@ -945,8 +914,7 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "fixed",
     "reason": "Fixed in 7d730b00 (OrcaPaneBundle reads powerbrowser.orca.primarySelectionPaste from ProfileStorageService before bootstrap, the settings.set observer writes the user's value there, and the Linux preset is that value, else on; owner ruling \"Remember my 'off'\", D-58), c05cb098 (orca-relaunch-restore-live paste-choice leg: off set in launch 1 reads off after the relaunch) and dc57d058 (investigation record). The record stores the chosen value, on or off, because Orca's own copy lives in per-launch browser storage. A control bundle that never writes the record is red; the fixed bundle is green 5 of 5.",
     "recorded_at": "2026-11-18T04:48:57.872Z",
-    "resolved_at": "2026-11-18T04:48:58.016Z",
-    "milestone": "v1.7"
+    "resolved_at": "2026-11-18T04:48:58.016Z"
   },
   {
     "id": 69,
@@ -958,8 +926,163 @@ last_updated: 2026-11-19T02:23:11.097Z
     "status": "open",
     "reason": "Re-run alone 2026-11-18 on the owner's refreshed sign-in and unlocked desktop: orca-tabs-live PASS (16 legs), orca-agent-status-live PASS (a real agent, not SKIP), real-input-gate-self-test PASS. In gate run 5 the same day (da97a4e9) orca-tabs-live PASS, orca-agent-status-live SKIP (sign-in 5 min from expiry) and real-input-gate-self-test FAIL (no clean capture); so the gate still exits 1 on real-input-gate-self-test and TERM-02's real-agent leg rests on the alone run",
     "recorded_at": "2026-11-18T04:48:58.016Z",
-    "resolved_at": null,
-    "milestone": "v1.7"
+    "resolved_at": null
+  },
+  {
+    "id": 70,
+    "kind": "unrun-verify",
+    "phase": "68",
+    "file": "scripts/verify-descriptor-monotonic.mjs",
+    "line": null,
+    "description": "descriptor-monotonic prints SKIP: no published Release and no candidate descriptor exist, so no offered buildID is compared; it runs with the first release; owner date: next version (D-63, Chris 2026-11-23); source: gate run 6",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-24T07:01:08.941Z",
+    "resolved_at": null
+  },
+  {
+    "id": 71,
+    "kind": "unrun-verify",
+    "phase": "67",
+    "file": "scripts/verify-orca-failure-page-live.mjs",
+    "line": null,
+    "description": "orca-failure-page-live induction 3 (auth refusal through a revoked device, A-7) cannot be induced: the hosted client pairs session-only on the offer's own token, so the registry holds no separate device row to revoke (rows removed: 0); headless orcad has no way to revoke the offer's row (audit pairing-credentials-04). Every other induction runs; owner date: next version (D-63, Chris 2026-11-23); source: gate run 6",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-24T07:01:09.062Z",
+    "resolved_at": null
+  },
+  {
+    "id": 72,
+    "kind": "deviation",
+    "phase": "59",
+    "file": "powerbrowser/shell/PowerBrowserAPI.sys.mjs",
+    "line": null,
+    "description": "PowerBrowser's main process ended once with SIGSEGV during ng-011-settings-table-read in gate run 6 (2026-11-23 15:15:39, pid 3963875), 49 s after its launch; no core was kept. Not reproduced: 6 of 6 and 50 of 50 runs alone with core dumps on passed. Repro: scripts/verify-platform.sh --only ng-011-settings-table-read; owner date: next version (D-63, Chris 2026-11-23); source: gate run 6",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-24T07:01:09.184Z",
+    "resolved_at": null
+  },
+  {
+    "id": 73,
+    "kind": "deviation",
+    "phase": "64",
+    "file": "scripts/verify-orca-tabs-live.mjs",
+    "line": null,
+    "description": "Orca drops a check-details and a simulator tab on a Theia reload at the pin: saved-editor-tab-restore.ts never saves a check-details document; the simulator drop was observed in every run and its line is not found. orca-tabs-live no longer requires those two kinds to come back (ORCA_TRANSIENT_KINDS); every other kind must; owner date: next version (D-63, Chris 2026-11-23); source: gate run 6 and five runs alone",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-24T07:01:09.306Z",
+    "resolved_at": null
+  },
+  {
+    "id": 74,
+    "kind": "deviation",
+    "phase": "65",
+    "file": "orca-overlay/seams.json",
+    "line": null,
+    "description": "Orca's 'Use website favicon' control for a repository stays after D-62 but its icon is never loaded, so the fallback icon shows; Orca's phone bundle (out/mobile-web) still forms the favicon address; owner date: next version (D-63, Chris 2026-11-23); source: D-62, D-63 (14)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-24T07:01:09.428Z",
+    "resolved_at": null
+  },
+  {
+    "id": 75,
+    "kind": "unmet-truth",
+    "phase": "66",
+    "file": "orca-overlay/seams.json",
+    "line": null,
+    "description": "Orca's bundle runs in the Theia document's realm: no separate origin, frame or CSP (audit chrome-actor-03, sidecar-gate-backends-01, T-66-04; agent-browser-04 settles with it); owner date: next version (D-63, Chris 2026-11-23); source: v1.7 audit decision 3",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-24T07:01:09.547Z",
+    "resolved_at": null
+  },
+  {
+    "id": 76,
+    "kind": "unmet-truth",
+    "phase": "67",
+    "file": "orca-overlay/seams.json",
+    "line": null,
+    "description": "headless orcad cannot revoke or rotate the token row an earlier pairing offer named (audit pairing-credentials-04); owner date: next version (D-63, Chris 2026-11-23); source: v1.7 audit decision 4",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-24T07:01:09.665Z",
+    "resolved_at": null
+  },
+  {
+    "id": 77,
+    "kind": "unmet-truth",
+    "phase": "66",
+    "file": "powerbrowser/shell/PowerBrowserAPI.sys.mjs",
+    "line": null,
+    "description": "one shared agent container: no per-worktree container, no clearing at launch, no notice that agent sign-ins are kept and shared (audit agent-browser-03, chrome-actor-04); owner date: next version (D-63, Chris 2026-11-23); source: v1.7 audit decision 13",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-24T07:01:09.793Z",
+    "resolved_at": null
+  },
+  {
+    "id": 78,
+    "kind": "unmet-truth",
+    "phase": "66",
+    "file": "powerbrowser/shell/PowerBrowserAPI.sys.mjs",
+    "line": null,
+    "description": "loopback wall residuals: DNS rebinding between lookup and connect, no user-confirmed LAN allow list, WebRTC and WebTransport unseen (audit agent-browser-06); owner date: next version (D-63, Chris 2026-11-23); source: v1.7 audit decision 14",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-24T07:01:09.912Z",
+    "resolved_at": null
+  },
+  {
+    "id": 79,
+    "kind": "unmet-truth",
+    "phase": "68",
+    "file": "powerbrowser/packaging/bundled-xpi.json",
+    "line": null,
+    "description": "uBlock Origin gets no automatic updates (audit packaging-prefs-network-06) and the agent-browser binary's statically linked crate notices ship nowhere (packaging-prefs-network-05); owner date: next version (D-63, Chris 2026-11-23); source: v1.7 audit decision 6",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-24T07:01:10.030Z",
+    "resolved_at": null
+  },
+  {
+    "id": 80,
+    "kind": "unmet-truth",
+    "phase": "62",
+    "file": "powerbrowser/shell/OrcaService.sys.mjs",
+    "line": null,
+    "description": "no fallback port when orcad's fixed port is busy; the diagnostics row naming the holder exists (audit orcad-hosting-03, P62-16); owner date: next version (D-63, Chris 2026-11-23); source: v1.7 audit decision 15",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-24T07:01:10.151Z",
+    "resolved_at": null
+  },
+  {
+    "id": 81,
+    "kind": "unmet-truth",
+    "phase": "68",
+    "file": ".github/workflows/release.yml",
+    "line": null,
+    "description": "Orca's build and two launching rows run in the self-hosted runner's host shell (audit ci-supply-chain-02); two routes are held on audit-fix-held/ci-supply-chain-02 and -container, decided with the first release; owner date: next version (D-63, Chris 2026-11-23); source: v1.7 audit decision 1",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-24T07:01:10.275Z",
+    "resolved_at": null
+  },
+  {
+    "id": 82,
+    "kind": "unmet-truth",
+    "phase": "59",
+    "file": "theia/yarn.lock",
+    "line": null,
+    "description": "Dependabot advisories left after the in-range updates: simple-git 3.36.0 and @simple-git/argv-parser (from @theia/ai-ide; fix is a major bump), decompress 4.2.1 (no fix; from @theia/cli, @theia/plugin-ext and @theia/plugin-ext-vscode, which unpack extension archives), dompurify 3.2.7 (exact pin), and others fixable only by a major bump. Whether PowerBrowser reaches the affected code is not established; owner date: next version (D-63, Chris 2026-11-23); source: D-63 (12)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-24T07:01:10.393Z",
+    "resolved_at": null
   }
 ]
 ````

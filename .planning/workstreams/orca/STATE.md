@@ -3,8 +3,8 @@ gsd_state_version: "1.0"
 milestone: v1.7
 current_phase: 68
 current_phase_name: Three-OS artifacts, weekly re-pin and upstream seams
-status: "Code-complete, feature freeze (2026-11-23, D-61): fixes only; not finished, not tagged; gate run 6 pending"
-stopped_at: "2026-11-23: code-complete recorded (D-61); p59-owner log and seven dependency updates merged; next: Gecko, Theia and Orca builds, then gate run 6"
+status: "Code-complete, feature freeze (D-61); bug pass done, gate run 7 pending; not finished, not tagged"
+stopped_at: "2026-11-23: gate run 6 at 1a9bb2eb red (624 PASS, 41 FAIL of which 28 excluded, 3 SKIP); bug pass and D-63 closing rulings applied, WINDOWS 70-82 open; next: gate run 7"
 last_updated: "2026-11-23T00:00:00.000Z"
 last_activity: 2026-11-23
 last_activity_desc: code-complete recorded (D-61); owner log and dependency updates merged

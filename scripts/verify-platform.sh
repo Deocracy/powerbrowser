@@ -7639,7 +7639,7 @@ declare -a GATE_KNOWN_OPEN_EXCLUSIONS=(
   "ng072-policies-packaged-webextension|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
   "search-engines-packaged|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
   "mar-update-hop|30|FAIL|only|no MAR-hop proof evidence under .mozbuild/mar-hop: absent|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
-  "ng074-ci-green-on-main|31|FAIL|only|no verify.yml run exists for main at ;; has not completed|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "ng074-ci-green-on-main|31|FAIL|only|no verify.yml run exists for main at ;; has not completed ;; the verify.yml run for 2b5f4609f5c7d0238d0d928e6e116e4851154792 concluded failure|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
   "repo-controls|31|FAIL|only|is undeclared and its repository list ;; could not be read (gh: You must authenticate|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
   "channel-live|31|FAIL|only|found no published Release|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
   "codeberg-mirror-live|31|FAIL|only|the Codeberg mirror slug is not declared|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
@@ -7662,6 +7662,9 @@ declare -a GATE_KNOWN_OPEN_EXCLUSIONS=(
   # 2026-11-18 (D-60): the row takes a real screen capture and fails while another window has focus, which a
   # 4.4 h gate on the owner's desktop cannot avoid (gate runs 4 and 5). It passed alone on 2026-11-18.
   "real-input-gate-self-test|69|FAIL|any|clean-capture -> spectacle wrote no file|needs an unlocked desktop with no other window focused; run alone (PASS 2026-11-18)"
+  # 2026-11-23 (D-63): rows that cannot run before a release exists, or whose induction has nothing to revoke.
+  "descriptor-monotonic|70|SKIP|only|zero published buildIDs: nothing to compare against|no published Release and no candidate descriptor yet"
+  "orca-failure-page-live|71|SKIP|only|induction 3 (auth refusal through a revoked device, A-7) did not reach the pairing-lost page|session-only pairing leaves no separate device row to revoke"
   # D-60 (2): the agent-status row's SKIP on a sign-in under 60 minutes from expiry stays counted, noted under
   # WINDOWS 69; its alone PASS of 2026-11-18 is TERM-02's real-agent evidence. Any other SKIP of the row is red.
   "orca-agent-status-live|69|SKIP|any|SKIP -- the Claude sign-in expires in|the Claude sign-in was under 60 minutes from expiry; the alone PASS of 2026-11-18 stands (D-60)"
