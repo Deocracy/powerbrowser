@@ -442,7 +442,8 @@ export function egressVerdict({ resolved, allowlist, duringAction }) {
     if (duringAction !== undefined) {
         for (const marker of [ACTION_HOST, SETTLED_HOST]) if (!resolved.includes(marker)) return [`collector blind: the marker ${marker} is not in the resolver log`];
     }
-    const observed = resolved.filter(h => ![CONTROL_HOST, ACTION_HOST, SETTLED_HOST].includes(h) && !LOOPBACK.has(h));
+    // LITERAL_CONTROL is this check's own connection; Gecko's resolver log names IP literals too, and literalVerdict judges it.
+    const observed = resolved.filter(h => ![CONTROL_HOST, ACTION_HOST, SETTLED_HOST, LITERAL_CONTROL].includes(h) && !LOOPBACK.has(h));
     const during = new Set(duringAction ?? []);
     return [
         ...violations(allowlist, observed.filter(h => !during.has(h)), { userAction: false }).map(h => `unlisted host ${h} resolved outside the Orca mode selection (unattended verdict)`),
@@ -1108,6 +1109,8 @@ async function selfTest() {
         ['an extra sidebar row', () => setVerdict('repositories', ['a', 'b', 'c'], ['a', 'b']), 'extra sidebar row'],
         ['an agents part that stayed', () => agentsVerdict({ presentWhenOn: true, presentWhenOff: true }), 'agents part stayed'],
         ['a container leaked into Coding', () => leakVerdict({ coding: { [LEFT]: 'left', [RIGHT]: null } }), `container ${LEFT} leaked into coding`],
+        ['control: the IP-literal control in the resolver log', () => egressVerdict({ resolved: [CONTROL_HOST, LITERAL_CONTROL, 'api.github.com'], allowlist: allow }), null],
+        ['another IP literal in the resolver log', () => egressVerdict({ resolved: [CONTROL_HOST, '203.0.113.9'], allowlist: allow }), 'unlisted host 203.0.113.9'],
         ['a control host absent', () => egressVerdict({ resolved: ['api.github.com'], allowlist: allow }), 'collector blind'],
         ['an unlisted host', () => egressVerdict({ resolved: [CONTROL_HOST, 'tracker.example.net'], allowlist: allow }), 'unlisted host tracker.example.net'],
         ['a user-initiated host resolved unattended', () => egressVerdict({ resolved: [CONTROL_HOST, 'example.org'], allowlist: allow }), 'unlisted host example.org'],
