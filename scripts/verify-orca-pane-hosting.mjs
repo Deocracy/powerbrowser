@@ -128,7 +128,7 @@ function hostingStatus(sources, { booted, bundleState = booted ? 'booted' : 'boo
     status.bundle = bundle;
     status.service = { handOff: async () => status.handOffResult };
     status.handOffResult = undefined;
-    status.browserHost = { state: 'idle', onDidChangeState: () => ({ dispose() { /* inert */ } }), attach: async () => undefined };
+    status.browserHost = { state: 'idle', onDidChangeState: () => ({ dispose() { /* inert */ } }), attach: async () => undefined, attaches: 0, attachAgain: async () => { status.browserHost.attaches += 1; return true; } };
     status.request = async msg => {
         sent.push(msg);
         if (msg.kind === 'orcaRestart') {
@@ -172,6 +172,37 @@ async function clauseRestartRepair(sources, fail) {
     }
     if (status.failureClass !== null) {
         fail('restart-repair', `after the re-pair the page should clear, got ${status.failureClass}`);
+    }
+}
+
+/** The client's own browser host failed while orcad restarted: chrome reports browser-not-attached over a ready orcad, and the client still pairs again. */
+async function clauseRestartHostFailed(sources, fail) {
+    const { status, api, chrome } = hostingStatus(sources, { booted: true });
+    status.handOffResult = { pairing: 'fixture-offer' };
+    chrome.state = 'ready';
+    status.onStart();
+    await flush();
+    await status.poll();
+    chrome.state = 'failed';
+    chrome.failureClass = 'restarting';
+    await status.poll();
+    await flush();
+    status.browserHost.state = 'failed';
+    chrome.state = 'ready';
+    chrome.failureClass = 'browser-not-attached';
+    await status.poll();
+    await flush();
+    if (api.repairs !== 1) {
+        fail('restart-host-failed', `orcad restarted and this client's browser host failed: the client re-paired ${api.repairs} time(s), want 1 (gate run 7)`);
+    }
+    if (status.browserHost.attaches !== 1) {
+        fail('restart-host-failed', `after the re-pair the browser host was attached again ${status.browserHost.attaches} time(s), want 1 (gate run 7)`);
+    }
+    // A user's Reconnect on that page, with no restart pending, still only attaches the host.
+    const before = api.repairs;
+    await status.reconnect();
+    if (api.repairs !== before) {
+        fail('restart-host-failed', 'Reconnect on the browser-not-attached page paired the client again with no restart');
     }
 }
 
@@ -620,7 +651,7 @@ async function clauseRestore(sources, fail) {
 // ---------------------------------------------------------------- driver
 
 const CLAUSES = [
-    clauseRestartRepair, clauseBootFailedPage, clauseBootFinal, clauseStuckNoOffer, clauseReasonCleared, clauseBootRetry,
+    clauseRestartRepair, clauseRestartHostFailed, clauseBootFailedPage, clauseBootFinal, clauseStuckNoOffer, clauseReasonCleared, clauseBootRetry,
     clauseRetryAssets, clauseCloseUnbooted, clauseTerminalRekey, clauseHandOff, clauseRevealNoFocus, clauseSidePanel, clauseRestore,
 ];
 
@@ -648,6 +679,14 @@ export async function check(sources = {}) {
 
 /** Each plant restores the pre-fix behaviour of one item, in memory; `naming` is the clause it must turn red. */
 export const PLANTS = [
+    {
+        name: 'a reported browser host failure reads as orcad not ready (gate run 7)', naming: 'restart-host-failed', file: REL.status,
+        edits: [["const ready = next.state === 'ready' && (next.failureClass === null || next.failureClass === 'browser-not-attached');", "const ready = next.state === 'ready' && next.failureClass === null;"]],
+    },
+    {
+        name: 'a restart re-pair stops at the browser-not-attached page (gate run 7)', naming: 'restart-host-failed', file: REL.status,
+        edits: [["if (!restarted && this.failureClass === 'browser-not-attached') {", "if (this.failureClass === 'browser-not-attached') {"]],
+    },
     {
         name: 'restart re-pair read from two adjacent samples (pre-fix 67-CR-01)', naming: 'restart-repair', file: REL.status,
         edits: [
