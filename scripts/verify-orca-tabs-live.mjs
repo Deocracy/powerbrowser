@@ -901,7 +901,9 @@ async function runLive(lib, pre = {}) {
 
         // i. No Orca tab chrome: detector in the second client, then the Theia document.
         const selectors = deriveTabChromeSelectors(tabChromeSources());
-        const detectorMatches = second.error ? { error: `second client: ${second.error}` } : await second.count(selectors);
+        const frontedI = second.error ? null : await second.front();
+        const detectorMatches = second.error ? { error: `second client: ${second.error}` } : await second.countProvoked(selectors);
+        if (frontedI?.prev) await ctx.activate(frontedI.prev);
         const theiaMatches = await ctx.probe(`const out = {}; for (const s of ${JSON.stringify(selectors)}) out[s] = document.querySelectorAll(s).length; return out;`);
         const chromeObs = { selectors, detectorMatches, detectorError: second.error ?? null, theiaMatches };
         fail('no-tab-chrome', chromeVerdict(chromeObs));
@@ -1222,6 +1224,38 @@ function secondClientControls(ctx, base, evalIn, budget) {
             return { stripsBefore, stripsAfter: strips() };
         })()`).catch(() => null),
         /** Each selector's match count in the client's document: { selector: count }, or { error } when the page could not answer. */
+        /**
+         * Brings up the tab-strip states whose elements exist only while they last, through Orca's own handlers, and
+         * resolves each selector's largest count over them: a focused tab (its hover card), a double-clicked tab (its
+         * rename input, left with Escape) and a strip too narrow for its tabs, scrolled to each end (the docked active tab).
+         */
+        countProvoked: (selectors) => evalIn(`(async () => {
+            const sels = ${JSON.stringify(selectors)}; const out = {}; for (const s of sels) out[s] = 0;
+            const read = () => { for (const s of sels) out[s] = Math.max(out[s], document.querySelectorAll(s).length); };
+            const wait = (ms) => new Promise(r => setTimeout(r, ms));
+            try {
+                read();
+                const tabs = () => [...document.querySelectorAll('[data-tab-id]')].filter(e => e.getClientRects().length > 0);
+                for (const tab of tabs().slice(0, 4)) {
+                    tab.focus(); tab.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse' }));
+                    await wait(900); read(); tab.blur();
+                    tab.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, detail: 2 }));
+                    await wait(400); read();
+                    const input = document.activeElement;
+                    (input && input.tagName === 'INPUT' ? input : tab).dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+                    await wait(200);
+                }
+                for (const strip of document.querySelectorAll('.terminal-tab-strip')) {
+                    const before = strip.getAttribute('style');
+                    strip.style.maxWidth = '90px'; strip.style.flex = '0 0 90px';
+                    window.dispatchEvent(new Event('resize')); await wait(400); read();
+                    for (const left of [0, strip.scrollWidth]) { strip.scrollLeft = left; strip.dispatchEvent(new Event('scroll')); await wait(400); read(); }
+                    if (before === null) strip.removeAttribute('style'); else strip.setAttribute('style', before);
+                    window.dispatchEvent(new Event('resize'));
+                }
+                return JSON.stringify(out);
+            } catch (e) { return JSON.stringify({ error: String(e) }); }
+        })()`).then(JSON.parse, (e) => ({ error: 'evaluate failed: ' + String(e?.message ?? e).slice(0, 120) })),
         count: async (selectors) => {
             try {
                 return JSON.parse(await evalIn(`(() => { try { const out = {}; for (const s of ${JSON.stringify(selectors)}) out[s] = document.querySelectorAll(s).length; return JSON.stringify(out); } catch (e) { return JSON.stringify({ error: String(e) }); } })()`));
