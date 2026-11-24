@@ -105,6 +105,8 @@ function followRow(event: BrowserClientHostCommandEvent, outcome: BrowserHostOut
 
 const ATTACH_TIMEOUT_MS = 15_000
 const CALL_TIMEOUT_MS = 20_000
+/** browser-host-page-authority.ts: the page's host dropped its socket and is inside its reconnect grace. */
+const LEASE_RECONNECTING = 'browser_host_lease_reconnecting'
 // BrowserClientPageMetadataParams' url and title caps (browser-client-page-metadata-protocol.ts).
 const PAGE_METADATA_URL_MAX = 8192
 const PAGE_METADATA_TITLE_MAX = 4096
@@ -206,7 +208,12 @@ export function attachBrowserHost(options: AttachBrowserHostOptions): Promise<Br
 
     async function call(method: string, params: unknown): Promise<unknown> {
       const frame = await request(method, params)
-      if (!frame.ok) throw new Error(frame.error?.code ?? 'call_failed')
+      if (!frame.ok) {
+        // orcad sends this refusal as a generic code with the name in the message; the caller has to tell it apart,
+        // because it ends by itself with the lease's reconnect grace.
+        const error = frame.error as { code?: string; message?: string } | undefined
+        throw new Error(error?.message === LEASE_RECONNECTING ? LEASE_RECONNECTING : (error?.code ?? 'call_failed'))
+      }
       return frame.result
     }
 

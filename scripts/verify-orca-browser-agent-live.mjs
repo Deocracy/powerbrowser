@@ -1048,7 +1048,9 @@ async function liveRun(log) {
             const reattached = await ctx.pollFor(async () => { try { return (await ctx.hostAttached()) === true || null; } catch { return null; } }, 180000, 'the host to re-attach').catch(() => false);
             let oldListed = oldPages ?? [];
             let afterReads = 0; // tab list reads after the reload that succeeded; a failed one leaves oldListed as it was
-            for (let i = 0; i < 40 && (oldListed.length || !afterReads); i++) {
+            // orcad refuses a close inside the old host's 15 s reconnect grace and the new host re-sends it, so 30 s.
+            const reloadDeadline = Date.now() + 30000;
+            while (Date.now() < reloadDeadline && (oldListed.length || !afterReads)) {
                 await sleep(250);
                 const now = listIds(await ctx.cli('tab', 'list', '--worktree', W));
                 if (now === null) continue;

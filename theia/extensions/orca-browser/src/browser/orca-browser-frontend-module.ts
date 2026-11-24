@@ -137,6 +137,13 @@ const readCloseAttempts = (): Record<string, number> => {
         return {};
     }
 };
+/**
+ * orcad refuses a close while the page's host is inside its reconnect grace (15 s at the pin). After a reload the old
+ * frontend's host always is, and never comes back, so the close is sent again until the grace has ended.
+ */
+const LEASE_RECONNECTING = 'browser_host_lease_reconnecting';
+const RECONNECTING_RETRY_MS = 1000;
+const RECONNECTING_DEADLINE_MS = 30000;
 const writeCloseAttempts = (attempts: Record<string, number>): void => {
     try {
         window.sessionStorage.setItem(CLOSE_ATTEMPTS_KEY, JSON.stringify(attempts));
@@ -553,11 +560,21 @@ export class OrcaBrowserHost implements FrontendApplicationContribution {
      * 66-WR-03: one user close to orcad. Its entry goes when orcad takes it, when orcad refuses it (a code that is not
      * one of the host's own transport codes), or after MAX_CLOSE_ATTEMPTS; until then the next attach sends it again.
      */
-    protected sendClose(session: HostSession, pageId: string, selector: string | undefined): void {
+    protected sendClose(session: HostSession, pageId: string, selector: string | undefined, deadline = Date.now() + RECONNECTING_DEADLINE_MS): void {
         const attempts = (readCloseAttempts()[pageId] ?? 0) + 1;
         writeCloseAttempts({ ...readCloseAttempts(), [pageId]: attempts });
         void Promise.resolve(session.userClosedPage(selector, pageId)).then(() => this.forgetBoundPage(pageId), (error: unknown) => {
-            const transient = error instanceof Error && TRANSIENT_CALL_CODES.has(error.message);
+            if (error instanceof Error && error.message === LEASE_RECONNECTING && Date.now() < deadline) {
+                // Not an attempt: orcad has not judged the close yet. A detach meanwhile leaves the entry to the next attach.
+                writeCloseAttempts({ ...readCloseAttempts(), [pageId]: attempts - 1 });
+                window.setTimeout(() => {
+                    if (this.session === session) {
+                        this.sendClose(session, pageId, selector, deadline);
+                    }
+                }, RECONNECTING_RETRY_MS);
+                return;
+            }
+            const transient = error instanceof Error && (TRANSIENT_CALL_CODES.has(error.message) || error.message === LEASE_RECONNECTING);
             if (transient && attempts < MAX_CLOSE_ATTEMPTS) {
                 console.warn(`${LOG_PREFIX} a closed page was not reported; it is sent again after the next attach`);
                 return;
