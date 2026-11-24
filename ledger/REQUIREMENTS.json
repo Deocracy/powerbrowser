@@ -1,5 +1,5 @@
 {
-  "ledger_version": 429,
+  "ledger_version": 432,
   "frozen_at": "2026-09-27",
   "items": [
     {
@@ -1006,15 +1006,15 @@
     {
       "id": "NG-078",
       "text": "A release pipeline exists, per docs/RELEASING.md and SEED-001. Evidence: RELEASING.md:11-12; SEED-001 dormant; no release.yml.",
-      "status": "done",
+      "status": "deferred-requested",
       "spec_ref": "docs/non-gui/GAPS.md:108",
       "test_ref": "scripts/verify-release-shape.mjs::release-shape",
       "code_ref": "",
       "evidence": "Superseded by DIST-02 (release-shape: release.yml dispatch-only, gated build; passes), DIST-07 (release-asset-set: draft asset set equals 9 derived names; passes) and release-identity (passes). See .planning/CARRY-FORWARD-v1.7.md CF-12. REL-03 has no static registry check in scripts/ or REQUIREMENTS.md.",
-      "owner": "chris",
-      "phase": "59",
-      "deferred_at": "2026-09-25",
-      "reason": "Superseded by DIST-02, DIST-07 (check release-shape, release-asset-set); REL-03 has no static check"
+      "owner": "Chris",
+      "phase": "999.2",
+      "deferred_at": "2026-11-24",
+      "reason": "First Linux release and plan 59-05 move to the next version; closes on live release evidence (D-63 (1), Chris 2026-11-23)"
     },
     {
       "id": "NG-079",
@@ -1032,15 +1032,15 @@
     {
       "id": "NG-080",
       "text": "A production crash-ingest host receives reports. Evidence: collector is loopback only (scripts/crash-collector.mjs:27, 89, 343).",
-      "status": "done",
+      "status": "deferred-requested",
       "spec_ref": "docs/non-gui/GAPS.md:110",
       "test_ref": "scripts/verify-worker-submit.mjs::crash-submit",
       "code_ref": "",
       "evidence": "Superseded by TEL-07 (crash-submit, verify-crash-collector, both pass: receiver Worker speaks the collector contract), TEL-09 (crash-ping-consent passes) and TEL-13 (crash-autosubmit-lock and crash-autosubmit-env pass). See .planning/CARRY-FORWARD-v1.7.md CF-12. Static contract only; no live receiver call was run.",
-      "owner": "chris",
-      "phase": "59",
-      "deferred_at": "2026-09-25",
-      "reason": "Superseded by TEL-07, TEL-09, TEL-13 (check crash-submit, crash-ping-consent, crash-autosubmit-lock); static contract only"
+      "owner": "Chris",
+      "phase": "999.2",
+      "deferred_at": "2026-11-24",
+      "reason": "Crash host switch-on (TEL-13) moves to the next version with plan 59-05; closes on live evidence (D-63 (1), Chris 2026-11-23)"
     },
     {
       "id": "NG-081",
@@ -1165,7 +1165,7 @@
   "mockup_freeze": null,
   "scope_lock": null,
   "check_locks": {
-    "commit": "71d3807af0ddf64dbd89ae89a9247b5482e72254",
+    "commit": "dec10bbe30ae3e6a75784b284a2399158384ced4",
     "files": {
       "scripts/verify-ng-001-one-key-rule.mjs": "642d3d25ab836395e0137652c047e432cfc8e31a37c76191845694bd000242c4",
       "scripts/verify-ng-002-navigation-keeps-row.mjs": "d5fc1ec38c3503606a20716ecd0b12e1696f6ea552a479f3ac12e2cf740e74b4",
@@ -1184,16 +1184,16 @@
       "scripts/verify-ng-015-real-migration-from-every-version.mjs": "0737ca48a5238f3167178c447a77744acdfc9ab45c83d5cc6ee828cda7b6538e",
       "scripts/verify-ng-016-gui08-persistence-at-head.mjs": "93f8da67ebb6037b332921031cec9595a64d5773a58b004c6548101906a37200",
       "scripts/verify-ng-017-sql05-restarts-real-browser.mjs": "3a4b3c21cb3f391303e6c0663ee07999a5b781b2b0369db967c09fc7cb03967d",
-      "scripts/verify-ng-018-scheduled-integrity-check.mjs": "5e1e4b9eb0acea25b0f3765d27b070a488327c0ae72ebf6cf45d03365d3d851f",
+      "scripts/verify-ng-018-scheduled-integrity-check.mjs": "cd9f95b1ad88eef88e237f709c55e0aebdf414b12b72b30994693137add8ee18",
       "scripts/verify-ng-019-tab-store-doc.mjs": "aea3fbdd5a3addd20bdd14e44d793e2d00e9d10b37504ae6ad96d9504ebfb960",
       "scripts/verify-ng-020-absence-wiring-by-call.mjs": "16b5a8d1b630aa41fcd989648f5b168fa6ab5b30118a2bfe9ce77c7d08445ab7",
       "scripts/verify-ng-021-places-reads.mjs": "9a4bbfd29763aab2b2a8fb9aa20db7d73fefd9464858eec92d3d16c19af8bb5b",
       "scripts/verify-ng-022-sessionstore-projection.mjs": "3a35d57ba9a36d3a3f8a2d88a773e8bdf6be6794160729b38b881850c064ac01",
-      "scripts/verify-ng-023-suggestions-places.mjs": "6e93f37365c1813068d4d61308a36d77dea3f0687eb232ea3d35926f2a87a8fd",
+      "scripts/verify-ng-023-suggestions-places.mjs": "ba6c3ecbb5b03331b6ddac92b7b9094f6c6828c34859d9b203b031359be142a3",
       "scripts/verify-ng-024-tabs-places-join.mjs": "328e3adb32645136a0a5059990e064730f91a3a3843bafa7b1d30528058cedf4",
       "scripts/verify-ng-025-store-read-endpoint.mjs": "17c007c615338a6317c5874ab8e74774d35d6e65b9329f0f2b446026c3477ab1",
       "scripts/verify-ng-026-store-write-endpoint.mjs": "000b0b5cdde99c42b65d2109598c9a9a18680df6838ed86d1f4449330f0084d9",
-      "scripts/verify-ng-027-reader-callers.mjs": "d885b0046138a0b2616dd9996dfd79cbe883f1766c54e008a502dd0a4e5b5015",
+      "scripts/verify-ng-027-reader-callers.mjs": "7faf170f48f23ed6c4416ff34b5572c30a21fc92a298ea4a014c7ee9fc461a68",
       "scripts/verify-ng-028-saved-page.mjs": "cfce3d771f49b8d2ffb6fbc0461c861f41d6e57f4dbf56b5d2538b4b3364be69",
       "scripts/verify-ng-029-setup-restore-mode.mjs": "51c850792cd00d64b4dc5f919b55d95068b66833db1daeeef286d2c7096abe0b",
       "scripts/verify-ng-030-setup-restore-dedup.mjs": "65f77b5d8ae4f1813a99e8739f4e616d62addd5bbda4a3b817ce7b53988ae1ad",
@@ -1211,14 +1211,16 @@
       "scripts/verify-ng-064-update-url.mjs": "b0bcbab1025de2f97b25ef04a127480128c7a293be82d20a1d4888ba0104f145",
       "scripts/verify-ng-065-mar-signature.mjs": "48a93501a9749e1b11e7837e89a9b06854a4a79512b5850653f3cb530f792025",
       "scripts/verify-ng-066-nsis-branding.mjs": "6ab2ad1d76d8925e5e18a08a742568672b37a7018a6aae70a05b43c66e0e1ef3",
-      "scripts/verify-ng-067-frontend-errors.mjs": "7fa4c850f2a23fa9fb0f925371bc31344d2ffc6bf241112c1e8b394b22b044fc",
+      "scripts/verify-ng-067-frontend-errors.mjs": "c714f92e044bcab523b8d907314cf81b1c1f9f73c371b2d81e66e2b9c9baf6cd",
       "scripts/verify-ng-068-crash-extra-part.mjs": "c6076b947045b8cd61ab4afa5c24b9b59e308fe4bc9c1060eab5d5b24a33d44a",
       "scripts/verify-ng-069-sidecar-egress.mjs": "333024522b0bb2b0943f4ed2cc95d56ecd516a385e71affcdf81c1bd8ba61cfd",
       "scripts/verify-ng-070-no-spaced-name.mjs": "8a31801637c44028ded18d4a7318f605597e1cd23702ac560439be2fd5ff0238",
       "scripts/verify-ng-071-tarball-extensions.mjs": "09e4e87a599b0568e3def7ac71671109a5545dea4e3029bf6ec40fd52d91be44",
-      "scripts/verify-ng-072-policies-webextension.mjs": "f4f0b662928514eebc1052c85c951b5136b296555e36618b850112e6c160ca14",
+      "scripts/verify-ng-072-policies-webextension.mjs": "a7f6e6e2c0d3b364653cefeda97b13d31b692463dd871ae72072960052431621",
       "scripts/verify-ng-073-declared-extension-loads.mjs": "6512fe2bb9b0b368fa0e2289d9af0507add516c6f5587997d88bdaaa724eabff",
       "scripts/verify-ng-074-ci-main.mjs": "33728a1b2329735876e1872d070d6f90121ef7cee9702c0cac28eeb079808cb4",
+      "scripts/verify-release-shape.mjs": "71acb06d55dce4fd8f86d0c4638f3e2669c06525dd5daad41e19d989c5ec7ffe",
+      "scripts/verify-worker-submit.mjs": "e86556219afe4c7463409e0195026ba57a9850953595fad507e4d2b1854292e7",
       "scripts/verify-ng-085-quit-closes-store.mjs": "bf16b1f1afeeea86b0f4ec8aa29f9f38837dff59d0708e6c343d0a3827d070cc",
       "scripts/verify-ng-086-theia-react-node.mjs": "9e20680687870a8850cf98b6b14c090c476721ddc19b7f3cd576b1d16c7f4646",
       "scripts/verify-ng-087-loose-position-across-restart.mjs": "3d00130947215916d7d0e90086f5b22a26bd9b23713718178944c66a4a12978c",
