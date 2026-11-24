@@ -553,7 +553,7 @@ export class GroupModel implements FrontendApplicationContribution {
                         const open = liveByUri.get(tab.uri);
                         if (open) {
                             claimed.add(tab.uri);
-                            return [{ ...tab, url: open.url || tab.url, title: open.title || tab.title, open: true }];
+                            return [{ ...tab, url: open.url || tab.url, title: open.title || tab.title, thumbnail: thumbnails.get(tab.uri) ?? null, open: true }];
                         }
                         // NG-007/NG-008: a grouped tab that is not open keeps its
                         // card -- its row is open or restorable -- and reopens from

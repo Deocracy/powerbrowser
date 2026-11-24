@@ -22,7 +22,7 @@ milestone_name: Orca integration
 ## Project Reference
 
 See: .planning/PROJECT.md (shared project file; its "Current Milestone" section is v1.5, not this milestone)
-Scope: .planning/workstreams/orca/REQUIREMENTS.md. Owner decisions: .planning/workstreams/orca/DECISIONS.md (D-01..D-62). Roadmap: .planning/workstreams/orca/ROADMAP.md.
+Scope: .planning/workstreams/orca/REQUIREMENTS.md. Owner decisions: .planning/workstreams/orca/DECISIONS.md (D-01..D-63). Roadmap: .planning/workstreams/orca/ROADMAP.md.
 
 **Core value (this milestone):** Theia is the default GUI; Orca's agent workflow runs inside PowerBrowser as real PowerBrowser tabs, with PowerBrowser's own engine and chrome as the agents' browser.
 **Current focus:** gate run 1 at 4a7308ba was red on 3 unexcluded rows; gate run 2 at 2788eb05 was red on 19 (17 from a mid-run ledger change, 2 regressions), all fixed; gate run 3 was stopped to take in D-55 and D-56; gate run 4 at 080814fd has 584 PASS, 33 red, 31 excluded under open WINDOWS entries and 2 unexcluded environmental reds (orca-tabs-live, real-input-gate-self-test; WINDOWS 69). orca-agent-status-live printed SKIP on the same sign-in and was counted among the 584 PASS. Phase 64 re-verified human_needed 11/11 (78353b7f); milestone re-audit at 78353b7f (v1.7-MILESTONE-AUDIT.md). Next: those rows on the owner's sign-in and desktop, then the owner pass in END-OF-MILESTONE-CHECKLIST.md (D-40: Linux only)

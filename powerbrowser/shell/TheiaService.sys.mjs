@@ -1201,6 +1201,11 @@ export const TheiaService = {
       if (this._shuttingDown) {
         break;
       }
+      // D-63: while the error layer is up, recovery belongs to the recovery probe and Retry (D-113).
+      if (this._errorShown) {
+        consecutiveFailures = 0;
+        continue;
+      }
 
       const healthTimeoutMs = PowerBrowserAPI.getIntPref("powerbrowser.sidecar.healthTimeoutMs", 4000);
       const ok = await this._probeHealth(healthTimeoutMs);

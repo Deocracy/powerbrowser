@@ -532,6 +532,21 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
   window icon, and a repository's website favicon is no longer offered or accepted. Orca's own control for it stays and
   answers "Enter a valid website URL."; the phone bundle (mobile-web) is unchanged.
 
+- **D-63 — Closing rulings for v1.7.** Chris, 2026-11-23, in the question box. (1) The first Linux release and plan
+  59-05 move to the next version; deferring NG-078, NG-079 and NG-080 is Chris's own command. (2) Only the v1.7
+  checklist's hands-on section counts for v1.7; plan 59-06's 41 older items move to the next version, NG-089 deferred by
+  Chris. (3) The unbuilt audit items become dated known-open entries; ci-supply-chain-02 is decided with the release,
+  both branches held. (4) The health loop stops restarting while the error screen is up. (5) Grouped tabs show their
+  session preview. (6) SIGTERM (WINDOWS 65) stays next version. (7) orca-tabs-live reload: a PowerBrowser cause is
+  fixed, an Orca cause is recorded. (8) Known-open entries with exact exclusions for repo-controls, ng074,
+  descriptor-monotonic and, if its induction cannot be made to work, orca-failure-page-live. (9) Labels dependencies and
+  javascript are declared. (10) The five changed locked checks are accepted; the lock itself changes only by Chris's
+  command. (11) The stop hook's quick limit goes to 900 s. (12) In-range dependency fixes only; the rest recorded with a
+  reachability note. (13) User-facing wording is approved as written. (14) Orca's website-favicon control stays,
+  known-open. (15) ng-011: a stress run with core dumps, then recorded if it does not recur. (16) Run straight through;
+  no push, tag or merge to main was authorised by this batch ("V1.7 is just a marker not the name", read as: it names
+  the milestone, not the product or a release).
+
 ## Spikes this direction needs
 
 1. Browser parity: what an Orca browser tab can do, and how PB chrome provides it
