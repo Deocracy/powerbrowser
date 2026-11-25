@@ -104,6 +104,8 @@
 //  n  icons        in the Orca mode each side bar shows Orca's own icon and the
 //                  current view's only, fully inside the bar; a revealed Theia view
 //                  shows beside Orca's; Coding shows Theia's icons (the control).
+//  o  gear         the sidebar's Settings gear shows a small tooltip and opens
+//                  one main-area Settings tab (D-64); Back to app closes it.
 //  h  registry     TabUriRegistry resolves both container ids to a view
 //                  contribution, the condition under which tab-uri-registry.ts
 //                  would log its startup error (a positive read, CLAUDE.md
@@ -159,7 +161,7 @@ const SELF_REL = 'scripts/verify-orca-side-panel-live.mjs';
 
 export const LEFT = 'powerbrowser-orca-view-container';
 export const RIGHT = 'powerbrowser-orca-right-view-container';
-export const PARTS = { 'powerbrowser-orca-sidebar-view': 'sidebar', 'powerbrowser-orca-settings-view': 'settings', 'powerbrowser-orca-right-sidebar-view': 'right-sidebar' };
+export const PARTS = { 'powerbrowser-orca-sidebar-view': 'sidebar', 'powerbrowser-orca-right-sidebar-view': 'right-sidebar' };
 export const AGENTS = 'powerbrowser-orca-agents-view';
 /**
  * j: a surface edge may differ from the part body's by sub-pixel rounding only. A broken layout measures whole pixels:
@@ -454,6 +456,20 @@ export function egressVerdict({ resolved, allowlist, duringAction }) {
     ];
 }
 
+/** o: the Settings gear. tipBox is the tooltip's body-level wrapper, size the Settings tab's. */
+export function gearVerdict(o) {
+    if (o.error) return [`collector blind: ${o.error}`];
+    const fails = [];
+    if (!o.tipBox) fails.push('collector blind: no tooltip appeared over the gear');
+    else if (o.tipBox.h > 100 || o.tipBox.bg !== 'rgba(0, 0, 0, 0)') fails.push(`the gear's tooltip wrapper is ${o.tipBox.w}x${o.tipBox.h} with background ${o.tipBox.bg}, want a small transparent box`);
+    if (!o.size) fails.push('the gear opened no Settings tab');
+    else if (o.size.w < 660 || o.size.h < 300) fails.push(`the Settings tab is ${o.size.w}x${o.size.h}, want at least 660x300`);
+    if (o.count !== 1) fails.push(`a second gear click left ${o.count} Settings tabs, want 1`);
+    if (!o.back) fails.push('collector blind: no Back to app button in Orca\'s Settings');
+    else if (!o.closedByBack) fails.push('Back to app left the Settings tab open');
+    return fails;
+}
+
 /** n: each read is { left: [id], right: [id], clipped: [id] } of the visible side icons; orca, revealed (a Theia view shown in the Orca mode) and coding. */
 export function sideIconsVerdict({ orca, revealed, coding }, { left, right, theia }) {
     if (!coding?.left?.some(id => id === theia)) return [`collector blind: ${theia} shows no icon in Coding mode, so its absence in Orca mode proves nothing`];
@@ -733,7 +749,7 @@ async function live() {
             const fill = async (when) => {
                 const boxes = await ctx.probe(`const wm = get('WidgetManager');
                     const box = e => { if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; };
-                    const mounted = await until(() => ${J([...Object.keys(PARTS)].filter(id => PARTS[id] !== 'settings'))}.every(id => { const w = wm.tryGetWidget(id); return w && w.node.querySelector('[data-pb-orca-pane-root] > *'); }), 20000);
+                    const mounted = await until(() => ${J([...Object.keys(PARTS)])}.every(id => { const w = wm.tryGetWidget(id); return w && w.node.querySelector('[data-pb-orca-pane-root] > *'); }), 20000);
                     if (!mounted) return { timedOut: true };
                     await sleep(500);
                     const out = {};
@@ -837,8 +853,10 @@ async function live() {
             const judgeable = !!storageKey && !runtimeBacked;
             const readStored = () => ctx.probe(`try { const v = JSON.parse(localStorage.getItem(${J(storageKey)}) || '{}').experimentalOrchestrationPanel; return typeof v === 'boolean' ? v : null; } catch (e) { return null; }`);
             const pollStored = (want, what) => ctx.pollFor(async () => (await readStored()) === want, 10000, what);
-            const toggle = () => ctx.probe(`const part = get('WidgetManager').tryGetWidget('powerbrowser-orca-settings-view');
-                const c = get('WidgetManager').tryGetWidget(${J(LEFT)}); c && c.activateWidget(part.id);
+            const toggle = () => ctx.probe(`const part = await (async () => { document.querySelector('.pb-orca-side-view button[aria-label="Settings"]').click();
+                const tab = () => get('ApplicationShell').getWidgets('main').find(w => w.id === 'orca-pane:settings'); await until(tab, 10000); return tab(); })();
+                if (!part) return { error: 'tab not opened by the gear' };
+                await get('ApplicationShell').activateWidget(part.id);
                 const find = () => part.node.querySelector('[aria-label=${J(sel.toggleLabel)}]');
                 // Orca's Settings shows one section at a time; the switch is in its Experimental section.
                 if (!find()) { await until(() => [...part.node.querySelectorAll('button, a')].some(e => e.textContent.trim() === 'Experimental'), 10000);
@@ -1024,6 +1042,23 @@ async function live() {
             iconObs.revealed = await icons();
             await ctx.probe(`await get('ApplicationShell').revealWidget(${J(LEFT)}); return true;`);
             clause('n icons', sideIconsVerdict(iconObs, { left: LEFT, right: RIGHT, theia: THEIA_VIEW }), 'only the Orca icon shows on each side in the Orca mode, a revealed Theia view shows beside it, Coding shows Theia\'s icons');
+            // o
+            const gearObs = await ctx.probe(`const gear = document.querySelector('.pb-orca-side-view button[aria-label="Settings"]');
+                if (!gear) return { error: 'no Settings gear in the hosted sidebar' };
+                const shell = get('ApplicationShell'); const tab = () => shell.getWidgets('main').find(w => w.id === 'orca-pane:settings');
+                tab()?.close(); await sleep(800);
+                const r = gear.getBoundingClientRect();
+                gear.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: r.x + 4, clientY: r.y + 4, pointerType: 'mouse' }));
+                const tipOf = () => document.querySelector('body > [data-radix-popper-content-wrapper]'); await until(tipOf, 3000); const tip = tipOf();
+                const tipBox = tip ? { w: tip.offsetWidth, h: tip.offsetHeight, bg: getComputedStyle(tip).backgroundColor } : null;
+                gear.click(); await until(() => tab()?.isVisible, 8000); await sleep(800);
+                const first = tab(); const size = first ? { w: first.node.clientWidth, h: first.node.clientHeight } : null;
+                gear.click(); await sleep(800);
+                const count = shell.getWidgets('main').filter(w => w.id === 'orca-pane:settings').length;
+                const back = first && [...first.node.querySelectorAll('button')].find(b => /Back to app/.test(b.textContent)); if (back) back.click();
+                await until(() => !tab(), 5000);
+                return { tipBox, size, count, back: !!back, closedByBack: !tab() };`);
+            clause('o gear', gearVerdict(gearObs), 'the gear shows a small tooltip, opens one Settings tab wide enough for Orca\'s Settings, and Back to app closes it');
             // h
             const reg = await ctx.probe(`const r = get('TabUriRegistry'); return [${J(LEFT)}, ${J(RIGHT)}].filter(id => !r.getViewContribution(id));`);
             clause('h registry', reg.map(id => `TabUriRegistry has no view contribution for ${id} (its startup error would fire)`), 'both container ids resolve to a view contribution');
@@ -1141,6 +1176,15 @@ async function selfTest() {
         ['control: rows equal', () => setVerdict('worktrees', ['a', 'b'], ['b', 'a']), null],
         ['control: agents follow the setting', () => agentsVerdict({ presentWhenOn: true, presentWhenOff: false }), null],
         ['control: no container in Coding', () => leakVerdict({ coding: { [LEFT]: null, [RIGHT]: null } }), null],
+        ['control: gear', () => gearVerdict({ tipBox: { w: 71, h: 28, bg: 'rgba(0, 0, 0, 0)' }, size: { w: 791, h: 661 }, count: 1, back: true, closedByBack: true, ...{} }), null],
+        ['a viewport-tall tooltip', () => gearVerdict({ tipBox: { w: 71, h: 28, bg: 'rgba(0, 0, 0, 0)' }, size: { w: 791, h: 661 }, count: 1, back: true, closedByBack: true, ...{ tipBox: { w: 71, h: 768, bg: 'rgb(0, 0, 0)' } } }), 'tooltip wrapper is 71x768'],
+        ['no tooltip', () => gearVerdict({ tipBox: { w: 71, h: 28, bg: 'rgba(0, 0, 0, 0)' }, size: { w: 791, h: 661 }, count: 1, back: true, closedByBack: true, ...{ tipBox: null } }), 'no tooltip appeared'],
+        ['no Settings tab', () => gearVerdict({ tipBox: { w: 71, h: 28, bg: 'rgba(0, 0, 0, 0)' }, size: { w: 791, h: 661 }, count: 1, back: true, closedByBack: true, ...{ size: null } }), 'opened no Settings tab'],
+        ['a squeezed Settings', () => gearVerdict({ tipBox: { w: 71, h: 28, bg: 'rgba(0, 0, 0, 0)' }, size: { w: 791, h: 661 }, count: 1, back: true, closedByBack: true, ...{ size: { w: 244, h: 50 } } }), 'the Settings tab is 244x50'],
+        ['two Settings tabs', () => gearVerdict({ tipBox: { w: 71, h: 28, bg: 'rgba(0, 0, 0, 0)' }, size: { w: 791, h: 661 }, count: 1, back: true, closedByBack: true, ...{ count: 2 } }), 'left 2 Settings tabs'],
+        ['Back to app ignored', () => gearVerdict({ tipBox: { w: 71, h: 28, bg: 'rgba(0, 0, 0, 0)' }, size: { w: 791, h: 661 }, count: 1, back: true, closedByBack: true, ...{ closedByBack: false } }), 'Back to app left'],
+        ['no Back to app', () => gearVerdict({ tipBox: { w: 71, h: 28, bg: 'rgba(0, 0, 0, 0)' }, size: { w: 791, h: 661 }, count: 1, back: true, closedByBack: true, ...{ back: false } }), 'no Back to app button'],
+        ['no gear', () => gearVerdict({ tipBox: { w: 71, h: 28, bg: 'rgba(0, 0, 0, 0)' }, size: { w: 791, h: 661 }, count: 1, back: true, closedByBack: true, ...{ error: 'no Settings gear' } }), 'collector blind: no Settings gear'],
         ['control: side icons', () => sideIconsVerdict({ orca: { left: ['L'], right: ['R'], clipped: [] }, revealed: { left: ['T', 'L'], right: ['R'], clipped: [] }, coding: { left: ['T'], right: [], clipped: [] }, ...{} }, { left: 'L', right: 'R', theia: 'T' }), null],
         ['a Theia icon in the Orca mode', () => sideIconsVerdict({ orca: { left: ['L'], right: ['R'], clipped: [] }, revealed: { left: ['T', 'L'], right: ['R'], clipped: [] }, coding: { left: ['T'], right: [], clipped: [] }, ...{ orca: { left: ['T', 'L'], right: ['R'], clipped: [] } } }, { left: 'L', right: 'R', theia: 'T' }), 'the left bar shows T, L'],
         ['a Theia icon on the right', () => sideIconsVerdict({ orca: { left: ['L'], right: ['R'], clipped: [] }, revealed: { left: ['T', 'L'], right: ['R'], clipped: [] }, coding: { left: ['T'], right: [], clipped: [] }, ...{ orca: { left: ['L'], right: ['X', 'R'], clipped: [] } } }, { left: 'L', right: 'R', theia: 'T' }), 'the right bar shows X, R'],

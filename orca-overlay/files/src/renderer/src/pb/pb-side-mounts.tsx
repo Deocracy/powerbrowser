@@ -57,7 +57,8 @@ export const PAGE_VIEWS: Readonly<Record<string, TopLevelView>> = Object.freeze(
   'page:space': 'space',
   'page:skills': 'skills',
   'page:artifacts': 'artifacts',
-  'page:mobile': 'mobile'
+  'page:mobile': 'mobile',
+  'page:settings': 'settings'
 })
 
 const PAGES: Readonly<Record<string, React.ComponentType>> = {
@@ -74,7 +75,6 @@ const PAGES: Readonly<Record<string, React.ComponentType>> = {
 /** The kinds this file mounts (B-1, C3-65). */
 export const SIDE_MOUNT_KINDS: readonly string[] = Object.freeze([
   'sidebar',
-  'settings',
   'orchestration',
   'right-sidebar',
   'right-sidebar-toggle',
@@ -299,7 +299,7 @@ export function SideMountBody({ kind, worktreeId, tabId }: { kind: string; workt
   if (kind === 'orchestration') return <OrchestrationMount />
   if (kind === 'check-details') return <CheckDetailsMount worktreeId={worktreeId} tabId={tabId} />
   if (kind === 'page:creation') return <CreationMount />
-  const view = kind === 'settings' ? 'settings' : PAGE_VIEWS[kind]
+  const view = PAGE_VIEWS[kind]
   const Page = view ? PAGES[view] : undefined
   if (!view || !Page) throw new Error(`orca pane: no side mount for kind ${kind}`)
   return (

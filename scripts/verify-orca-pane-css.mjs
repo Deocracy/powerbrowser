@@ -21,7 +21,7 @@
 //      through var() by any Theia sheet;
 //   c. every other rule of pb-panes.css carries the scope in a position that constrains it
 //      (harness-static-structure-13): the scope pseudo, :where(<pane root>, <portal roots>) or :where(<portal roots>),
-//      or the bare pane root, at the top level of the selector. The scope inside :not(), :is() or
+//      :where(<pane root>) or the bare pane root, at the top level of the selector. The scope inside :not(), :is() or
 //      another :where() argument list, or in a longer :where() list, does not constrain the subject.
 // The row exits 77 with the one SKIP line when the bundle or the Theia frontend is not built.
 //
@@ -63,6 +63,7 @@ export function fixtures(pass) {
     const S = pass.SCOPE, P = pass.PORTAL_ROOTS;
     return [
         ['root', 'html{color:red}', `${S}{color:red}`],
+        ['root box stays off portal roots', 'html,body{height:100dvh;background-color:red;color:red}', `:where(${pass.PANE_ROOT}){height:100dvh;background-color:red}${S},${S}{color:red}`],
         ['qualified root', ':root.dark .x{color:red}', `:root.dark ${S} .x{color:red}`],
         ['theme class', '.dark .btn{color:red}', `.dark ${S} .btn{color:red}`],
         ['universal selector', '*{box-sizing:border-box}', `${S} *,*:where(${P}){box-sizing:border-box}`],
@@ -111,7 +112,7 @@ function followedByDescendant(selector, from) {
  * argument of :not(), :is() or another :where() does not constrain the subject, so it is not found there.
  */
 export function scopeConstrains(selector, pass) {
-    const forms = [pass.SCOPE, `:where(${pass.PORTAL_ROOTS})`, pass.PANE_ROOT];
+    const forms = [pass.SCOPE, `:where(${pass.PORTAL_ROOTS})`, pass.PANE_ROOT, `:where(${pass.PANE_ROOT})`];
     let depth = 0;
     let quote = null;
     for (let i = 0; i < selector.length; i++) {

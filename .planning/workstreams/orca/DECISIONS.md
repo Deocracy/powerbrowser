@@ -547,6 +547,12 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
   no push, tag or merge to main was authorised by this batch ("V1.7 is just a marker not the name", read as: it names
   the milestone, not the product or a release).
 
+- **D-64 — Orca mode shows Orca's own side icons only, and Orca's Settings is a main-area tab.** Chris, 2026-11-24, at
+  the hands-on checks, after looking at each ("it looks fixed", "ok that works"). The Theia icons are hidden on both side
+  bars in the Orca mode; the current view keeps its icon. Settings replaces the side-panel half of the D-41 pick (P65-09):
+  the sidebar's gear opens `pb-orca:settings`, and Back to app closes it. Orca's page-level box (height, background,
+  overflow) no longer reaches its pop-ups, whose tooltip was a window-tall block.
+
 ## Spikes this direction needs
 
 1. Browser parity: what an Orca browser tab can do, and how PB chrome provides it

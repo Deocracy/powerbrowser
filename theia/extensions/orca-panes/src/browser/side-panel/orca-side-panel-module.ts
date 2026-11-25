@@ -22,14 +22,12 @@ export const ORCA_LEFT_CONTAINER_ID = 'powerbrowser-orca-view-container';
 export const ORCA_RIGHT_CONTAINER_ID = 'powerbrowser-orca-right-view-container';
 export const ORCA_SIDEBAR_VIEW_ID = 'powerbrowser-orca-sidebar-view';
 export const ORCA_AGENTS_VIEW_ID = 'powerbrowser-orca-agents-view';
-export const ORCA_SETTINGS_VIEW_ID = 'powerbrowser-orca-settings-view';
 export const ORCA_RIGHT_SIDEBAR_VIEW_ID = 'powerbrowser-orca-right-sidebar-view';
 
 /** Part id to the B-1 mount kind it shows. */
 export const ORCA_SIDE_VIEW_KINDS: ReadonlyArray<readonly [string, string]> = [
     [ORCA_SIDEBAR_VIEW_ID, 'sidebar'],
     [ORCA_AGENTS_VIEW_ID, 'orchestration'],
-    [ORCA_SETTINGS_VIEW_ID, 'settings'],
     [ORCA_RIGHT_SIDEBAR_VIEW_ID, 'right-sidebar'],
 ];
 
@@ -95,7 +93,6 @@ export function bindOrcaSidePanel(bind: interfaces.Bind): void {
     }
     bindContainer(bind, ORCA_LEFT_CONTAINER_ID, codicon('list-tree'), ORCA_SIDEBAR_MIN_WIDTH, [
         [ORCA_SIDEBAR_VIEW_ID, { order: 0, canHide: false }],
-        [ORCA_SETTINGS_VIEW_ID, { order: 2, initiallyCollapsed: true }],
     ]);
     bindContainer(bind, ORCA_RIGHT_CONTAINER_ID, codicon('layout-sidebar-right'), ORCA_RIGHT_SIDEBAR_MIN_WIDTH, [
         [ORCA_RIGHT_SIDEBAR_VIEW_ID, { order: 0, canHide: false }],

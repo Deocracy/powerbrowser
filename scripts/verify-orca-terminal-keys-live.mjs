@@ -538,7 +538,7 @@ async function theiaPaste(ctx, theia, sentinel) {
     return { sentinel, clip, text };
 }
 
-/** Sets Orca's own switch in its hosted Settings (Orca mode's Settings part), as a user does: { before, checked } or { error }; want null only reads it: { checked }. */
+/** Sets Orca's own switch in its hosted Settings (the Settings tab its gear opens), as a user does: { before, checked } or { error }; want null only reads it: { checked }. */
 export async function setPasteSetting(ctx, want) {
     const { label, section } = readPasteSetting(read(join(REPO_ROOT, INPUT_PANE_REL)), read(join(REPO_ROOT, SETTINGS_SECTIONS_REL)));
     if (!label || !section) return { error: `source moved: no switch label in ${INPUT_PANE_REL} or no input section title in ${SETTINGS_SECTIONS_REL}` };
@@ -546,11 +546,12 @@ export async function setPasteSetting(ctx, want) {
         await get('ModeService').activateMode('orca');
         try {
             const wm = get('WidgetManager');
-            const c = wm.tryGetWidget('powerbrowser-orca-view-container');
-            const part = wm.tryGetWidget('powerbrowser-orca-settings-view');
-            if (!c || !part) return { error: 'no hosted Orca Settings part' };
-            for (const p of c.getParts()) p.collapsed = false;
-            c.activateWidget(part.id);
+            const gearOf = () => document.querySelector('.pb-orca-side-view button[aria-label="Settings"]'); await until(gearOf, 10000); const gear = gearOf();
+            if (!gear) return { error: 'no Settings gear in the hosted sidebar' };
+            gear.click();
+            const tabOf = () => get('ApplicationShell').getWidgets('main').find(w => w.id === 'orca-pane:settings'); await until(tabOf, 10000); const part = tabOf();
+            if (!part) return { error: 'the gear opened no Orca Settings tab' };
+            await get('ApplicationShell').activateWidget(part.id);
             const find = () => part.node.querySelector('[aria-label=${JSON.stringify(label)}]');
             if (!find()) {
                 await until(() => [...part.node.querySelectorAll('button, a')].some(e => e.textContent.trim() === ${JSON.stringify(section)}), 15000);

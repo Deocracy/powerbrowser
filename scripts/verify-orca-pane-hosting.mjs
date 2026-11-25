@@ -601,9 +601,17 @@ async function clauseSidePanel(sources, fail) {
     }
     writes.length = 0;
     sync.activeView = 'settings';
-    if (typeof sync.leftPanelChanged === 'function') sync.leftPanelChanged();
+    sync.onActiveWidget({ isDisposed: false, id: 'editor-1' });
     if (!writes.includes('terminal')) {
-        fail('settings-writeback', 'the left panel left Orca while the store\'s view is settings and nothing was written, so the next Settings click is swallowed (65-WR-04)');
+        fail('settings-writeback', 'a main-area editor activated while the store\'s view is settings and nothing was written, so the next Settings click is swallowed (65-WR-04)');
+    }
+    const settingsTab = new OrcaPaneWidget({ name: 'settings', kind: 'page:settings', worktreeId: '', tabId: '', paneKey: null });
+    const left = new OrcaSidePanelSync();
+    left.widgetManager = { getWidgets: () => [settingsTab] };
+    left.activeView = 'settings';
+    left.onActiveView({ view: 'terminal', pendingCreation: false });
+    if (!settingsTab.closed) {
+        fail('settings-back', 'Orca left Settings (Back to app) and the Settings tab stayed open (D-64)');
     }
 
     const creating = new OrcaPaneWidget({ name: 'creating', kind: 'page:creation', worktreeId: '', tabId: '', paneKey: null });
@@ -760,8 +768,12 @@ export const PLANTS = [
         edits: [["} else if (!view && this.api && this.shell.getAreaFor(widget) === 'main'", "} else if (false && !view && this.api && this.shell.getAreaFor(widget) === 'main'"]],
     },
     {
-        name: 'hiding Settings writes nothing back (pre-fix 65-WR-04)', naming: 'settings-writeback', file: REL.sync,
-        edits: [["if (this.api && this.activeView === 'settings') {", 'if (false) {']],
+        name: 'Settings is not a page view, so leaving it writes nothing back (65-WR-04)', naming: 'settings-writeback', file: REL.sync,
+        edits: [["'artifacts', 'mobile', 'settings'];", "'artifacts', 'mobile'];"]],
+    },
+    {
+        name: 'Back to app keeps the Settings tab (D-64)', naming: 'settings-back', file: REL.sync,
+        edits: [["if (previous === 'settings') {", 'if (false) {']],
     },
     {
         name: 'a restored creating tab is kept (pre-fix theia-pane-hosting-05)', naming: 'creating-closed', file: REL.sync,

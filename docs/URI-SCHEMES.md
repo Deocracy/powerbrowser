@@ -208,10 +208,11 @@ tab. No Orca tab backs a page, so closing one closes only the tab.
 | `pb-orca:skills` | Skills |
 | `pb-orca:artifacts` | Artifacts |
 | `pb-orca:mobile` | Mobile |
+| `pb-orca:settings` | Settings |
 | `pb-orca:creating` | the worktree creation surface, open only while an Orca worktree creation is pending |
 
-Orca's Settings page is not a tab: it is the Settings part of the Orca side
-panel.
+Orca's Settings opens as a page tab too, from the sidebar's gear (D-64); Orca's own
+Back to app closes it.
 
 The path is identity only. The Orca tab id, the worktree id and the
 terminal pane key — none of which the user chose — stay in the widget's

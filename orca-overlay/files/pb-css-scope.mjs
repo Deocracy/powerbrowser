@@ -5,6 +5,9 @@
 //
 //   S = :where([data-pb-orca-pane], body > [data-radix-popper-content-wrapper], body > [data-slot])
 //   html, :root, body, :host            -> S                  (the scope roots themselves)
+//   ... except the page's own box (BOX_PROPERTY): height, width, overflow, background, margin and
+//                                         padding go to [data-pb-orca-pane] only, never to a portal
+//                                         root, which would become a viewport-tall opaque block
 //   a qualified root (:root.dark, html[x],
 //     body[data-modal-overlay-open])      -> <that root> S     (Orca's own html/body state stays an
 //                                                              ancestor condition)
@@ -35,6 +38,10 @@ const ROOT_RE = /^(html|:root|body|:host)(?![\w-])/
 const THEME_RE = /^\.(dark|light)(?![\w\\-])/
 // Custom-property namespaces the Theia document owns; Orca never writes them on <html>.
 export const HOST_OWNED_PROPERTY = /^--(vscode|theia)-/
+
+/** What a page root declares about its own box; a portal root (a tooltip's popper wrapper) is no page. */
+export const BOX_PROPERTY = /^(?:(?:min-|max-)?(?:height|width)|overflow(?:-[xy])?|background(?:-[a-z]+)?|margin(?:-[a-z-]+)?|padding(?:-[a-z-]+)?)$/
+const isBareRoot = (selector) => /^(?:html|:root|body|:host)$/.test(selector.trim())
 
 /** Splits a selector at its first top-level combinator (outside parentheses and brackets). */
 function firstCompound(selector) {
@@ -119,6 +126,22 @@ export function scopePlugin() {
         custom.forEach((d) => { d.remove(); kept.append(d) })
         rule.before(kept)
         if (!rule.nodes.length) { rule.remove(); return }
+      }
+      const box = rule.nodes.filter((n) => n.type === 'decl' && BOX_PROPERTY.test(n.prop))
+      if (box.length && rule.selectors.some(isBareRoot) && !rule.nodes.some((n) => n.type === 'rule')) {
+        const paneOnly = rule.clone({ nodes: [], selector: `:where(${PANE_ROOT})` })
+        paneOnly.raws.pbScoped = true
+        box.forEach((d) => paneOnly.append(d.clone()))
+        rule.before(paneOnly)
+        const rest = rule.selectors.filter((s) => !isBareRoot(s))
+        if (rest.length) {
+          const kept = rule.clone({ selectors: rest.flatMap((s) => scopeSelector(s)), nodes: [] })
+          kept.raws.pbScoped = true
+          box.forEach((d) => kept.append(d.clone()))
+          rule.before(kept)
+        }
+        box.forEach((d) => d.remove())
+        if (!rule.nodes.some((n) => n.type !== 'comment')) { rule.remove(); return }
       }
       rule.selectors = rule.selectors.flatMap((s) => scopeSelector(s))
       rule.raws.pbScoped = true

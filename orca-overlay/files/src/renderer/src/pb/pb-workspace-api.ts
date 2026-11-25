@@ -249,7 +249,8 @@ const TITLES: Record<string, () => string> = {
   'page:automations': () => translate('auto.components.sidebar.SidebarNav.f323383e9a', 'Automations'),
   'page:skills': () => translate('auto.components.sidebar.SidebarNav.skills', 'Skills'),
   'page:artifacts': () => translate('auto.components.sidebar.SidebarNav.artifacts', 'Artifacts'),
-  'page:mobile': () => translate('auto.components.sidebar.SidebarNav.1b5c41caee', 'Orca Mobile')
+  'page:mobile': () => translate('auto.components.sidebar.SidebarNav.1b5c41caee', 'Orca Mobile'),
+  'page:settings': () => translate('auto.components.sidebar.SidebarSettingsHelpMenu.a428c25998', 'Settings')
 }
 
 /** B-7: Orca's translated title for a side or page kind; '' when Orca has none (right-sidebar, activity, space, creation). */

@@ -3,9 +3,9 @@
  * interfaces N-1): keeps Orca's store and the Theia shell in step for the side
  * panel.
  *
- * (a) Orca's activeView: each of the seven pages opens or focuses its singleton
- *     pb-orca:<view> tab through OpenerService; settings reveals the Settings
- *     part; terminal opens pb-orca:creating while a creation is pending and
+ * (a) Orca's activeView: each of the eight pages (Settings is one, D-64) opens or focuses its
+ *     singleton pb-orca:<view> tab through OpenerService; Orca leaving Settings closes
+ *     that tab; terminal opens pb-orca:creating while a creation is pending and
  *     closes it when the creation clears.
  * (b) Activating a page tab writes its view back; closing the page tab whose
  *     view is the store's activeView writes 'terminal', so the next sidebar
@@ -34,10 +34,8 @@
  * PB creates no Orca pane and writes no copy; failures are log lines.
  *
  * Audit fixes: (b) also writes 'terminal' when a main-area tab that is not a page
- * activates while the store's view is a page or settings, and when the Settings
- * part collapses or the left panel shows another container or closes, so that a
- * second sidebar click on the same page or on Settings is a change and is acted
- * on (65-WR-04). The creating page exists only while a creation is pending: the
+ * activates while the store's view is a page, so that a second sidebar click on the
+ * same page is a change and is acted on (65-WR-04). The creating page exists only while a creation is pending: the
  * first report with none pending closes a restored one, and pendingCreation is
  * public so that the restore opener refuses it once the store has reported
  * (theia-pane-hosting-05).
@@ -56,13 +54,13 @@ import { OrcaPaneWidget } from '../orca-pane-widget';
 import { OrcaSidePanelBundleApi, sidePanelApi } from './orca-side-view-widget';
 import { OrcaRightSidebarToggleHost } from './orca-right-sidebar-toggle';
 import {
-    ORCA_AGENTS_PART_OPTIONS, ORCA_AGENTS_VIEW_ID, ORCA_LEFT_CONTAINER_ID, ORCA_RIGHT_CONTAINER_ID, ORCA_SETTINGS_VIEW_ID
+    ORCA_AGENTS_PART_OPTIONS, ORCA_AGENTS_VIEW_ID, ORCA_LEFT_CONTAINER_ID, ORCA_RIGHT_CONTAINER_ID
 } from './orca-side-panel-module';
 
 const LOG_PREFIX = '[@powerbrowser/orca-panes]';
 
-/** N-1: the seven page views, each a singleton pb-orca:<view> tab mounting page:<view>. */
-export const ORCA_PAGE_VIEWS: readonly string[] = ['tasks', 'activity', 'automations', 'space', 'skills', 'artifacts', 'mobile'];
+/** N-1: the eight page views, each a singleton pb-orca:<view> tab mounting page:<view>. */
+export const ORCA_PAGE_VIEWS: readonly string[] = ['tasks', 'activity', 'automations', 'space', 'skills', 'artifacts', 'mobile', 'settings'];
 /** N-1, CA-11: the creation surface's tab, mounting page:creation while a creation is pending. */
 export const ORCA_CREATING_NAME = 'creating';
 
@@ -117,7 +115,6 @@ export class OrcaSidePanelSync implements FrontendApplicationContribution {
     protected pendingCreation = false;
     /** Whether the store has reported its view once; until then whether a creation is pending is not known. */
     protected reported = false;
-    protected readonly watchedSettingsParts = new WeakSet<object>();
     protected orchestrationEnabled = false;
     protected readonly worktreePaths = new Map<string, string>();
     /** Main-area widgets, most recently active last. */
@@ -160,28 +157,11 @@ export class OrcaSidePanelSync implements FrontendApplicationContribution {
         }
         this.applyAgents();
         this.startRightSidebar(api);
-        // 65-WR-04: the left panel showing another container, or closing, hides Settings.
-        this.shell.leftPanelHandler.tabBar.currentChanged.connect(() => this.leftPanelChanged());
     }
 
     /** theia-pane-hosting-05: whether an Orca worktree creation is pending; undefined until the store has reported. */
     get creationPending(): boolean | undefined {
         return this.reported ? this.pendingCreation : undefined;
-    }
-
-    /** 65-WR-04: Settings is no longer shown, so the store's view goes back to terminal and the next click acts. */
-    protected settingsHidden(): void {
-        if (this.api && this.activeView === 'settings') {
-            this.activeView = 'terminal';
-            this.api.setActiveView('terminal');
-        }
-    }
-
-    protected leftPanelChanged(): void {
-        const current = this.shell.leftPanelHandler.tabBar.currentTitle;
-        if (current?.owner.id !== ORCA_LEFT_CONTAINER_ID) {
-            this.settingsHidden();
-        }
     }
 
     // (f) Orca's right sidebar and the Theia right panel
@@ -251,7 +231,8 @@ export class OrcaSidePanelSync implements FrontendApplicationContribution {
 
     // (a) store -> shell
     protected onActiveView({ view, pendingCreation }: { view: string; pendingCreation: boolean }): void {
-        const changed = view !== this.activeView;
+        const previous = this.activeView;
+        const changed = view !== previous;
         const creationChanged = pendingCreation !== this.pendingCreation;
         const first = !this.reported;
         this.reported = true;
@@ -269,8 +250,10 @@ export class OrcaSidePanelSync implements FrontendApplicationContribution {
         }
         if (ORCA_PAGE_VIEWS.includes(view)) {
             this.openPage(view);
-        } else if (view === 'settings') {
-            this.revealSettings();
+        }
+        // Orca left Settings itself (its Back to app): the tab goes with it, as Orca's own page does.
+        if (previous === 'settings') {
+            this.pageWidget('settings')?.close();
         }
     }
 
@@ -282,24 +265,6 @@ export class OrcaSidePanelSync implements FrontendApplicationContribution {
     protected pageWidget(name: string): OrcaPaneWidget | undefined {
         return (this.widgetManager.getWidgets(ORCA_PANE_FACTORY_ID) as OrcaPaneWidget[])
             .find(w => w.options.name === name && !w.options.tabId && !w.isDisposed);
-    }
-
-    protected async revealSettings(): Promise<void> {
-        const container = await this.shell.revealWidget(ORCA_LEFT_CONTAINER_ID);
-        if (container instanceof ViewContainer) {
-            container.activateWidget(ORCA_SETTINGS_VIEW_ID);
-            // 65-WR-04: collapsing the Settings part hides Settings.
-            const settings = this.widgetManager.tryGetWidget(ORCA_SETTINGS_VIEW_ID);
-            const part = settings ? container.getPartFor(settings) : undefined;
-            if (part && !this.watchedSettingsParts.has(part)) {
-                this.watchedSettingsParts.add(part);
-                part.onCollapsed(collapsed => {
-                    if (collapsed) {
-                        this.settingsHidden();
-                    }
-                });
-            }
-        }
     }
 
     // (b) shell -> store for page tabs, and (c)'s recency list, and (e)
@@ -315,7 +280,7 @@ export class OrcaSidePanelSync implements FrontendApplicationContribution {
             this.activeView = view;
             this.api.setActiveView(view);
         } else if (!view && this.api && this.shell.getAreaFor(widget) === 'main'
-            && (ORCA_PAGE_VIEWS.includes(this.activeView ?? '') || this.activeView === 'settings')) {
+            && ORCA_PAGE_VIEWS.includes(this.activeView ?? '')) {
             // 65-WR-04: another main-area tab is in front, so the next click on that page (or on Settings) is a change.
             this.activeView = 'terminal';
             this.api.setActiveView('terminal');

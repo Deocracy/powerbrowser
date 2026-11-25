@@ -43,7 +43,7 @@ export const ORCA_PANE_ROUTES: { readonly [kind: string]: OrcaPaneRoute } = Obje
 
 /**
  * N-2 (P65-10): Orca's top-level views, keyed by every TopLevelView member of the pinned Orca. A page is a
- * singleton tab pb-orca:<word> mounting kind page:<view>; settings reveals the side panel's Settings part;
+ * singleton tab pb-orca:<word> mounting kind page:<view>; settings too, so it has the width Orca's Settings needs;
  * terminal stands for the creation surface while an Orca worktree creation is pending.
  */
 export type OrcaPageRoute =
@@ -58,7 +58,7 @@ export const ORCA_PAGE_ROUTES: { readonly [view: string]: OrcaPageRoute } = Obje
     'skills': { word: 'skills', kind: 'page:skills' },
     'artifacts': { word: 'artifacts', kind: 'page:artifacts' },
     'mobile': { word: 'mobile', kind: 'page:mobile' },
-    'settings': { reveal: 'powerbrowser-orca-settings-view' },
+    'settings': { word: 'settings', kind: 'page:settings' },
     'terminal': { word: 'creating', kind: 'page:creation', whilePendingCreation: true },
 });
 
