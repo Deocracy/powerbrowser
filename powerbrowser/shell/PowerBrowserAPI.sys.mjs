@@ -958,7 +958,32 @@ export const PowerBrowserAPI = Object.freeze({
    * and no automated check could drive the shell.
    */
   notifyStartupFinished(win) {
+    PowerBrowserAPI.finishScriptPreloaderStartup();
     Services.obs.notifyObservers(win, "browser-idle-startup-tasks-finished");
+  },
+
+  /**
+   * Tells Gecko's script preloader that startup is over, before the topic that
+   * starts its cache write. Firefox's chrome always sends
+   * `browser-delayed-startup-finished` first (the preloader asserts that
+   * order). Without it the preloader keeps adding scripts on the main thread
+   * while its save thread writes them, and the process crashes.
+   *
+   * The topic is not broadcast: its other observers expect a browser window as
+   * the subject. The preloader is the only observer of all three topics below.
+   * It removes itself from the first one, so a later stock window's real
+   * notification does not reach it twice.
+   */
+  finishScriptPreloaderStartup() {
+    const startupComplete = "browser-delayed-startup-finished";
+    const observersOf = topic => [...Services.obs.enumerateObservers(topic)];
+    const writers = new Set(observersOf("browser-idle-startup-tasks-finished"));
+    const invalidated = new Set(observersOf("startupcache-invalidate"));
+    const found = observersOf(startupComplete).filter(o => writers.has(o) && invalidated.has(o));
+    for (const observer of found) {
+      observer.QueryInterface(Ci.nsIObserver).observe(null, startupComplete, null);
+    }
+    PowerBrowserAPI.log("info", `[finishScriptPreloaderStartup] script preloader observers told: ${found.length}`);
   },
 
   /**

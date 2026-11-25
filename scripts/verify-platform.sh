@@ -6533,6 +6533,8 @@ run_own_checks() {
       # rides full-tier. No logic duplicated -- the registry invokes, the
       # scripts prove.
       "sql-store-soak-live|node $REPO_ROOT/scripts/verify-sql-store-soak.mjs --live"
+      # WINDOWS 72: the script preloader leaves its startup phase before its cache write.
+      "script-preloader-startup-live|node $REPO_ROOT/scripts/verify-script-preloader-startup-live.mjs"
       "sql-store-roundtrip|node $REPO_ROOT/scripts/verify-sql-store-roundtrip.mjs"
       "sql-store-roundtrip-self-test|node $REPO_ROOT/scripts/verify-sql-store-roundtrip.mjs --self-test"
       "sql-store-absence|node $REPO_ROOT/scripts/verify-sql-store-absence.mjs"
