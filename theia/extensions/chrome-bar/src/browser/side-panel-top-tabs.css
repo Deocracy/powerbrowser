@@ -72,3 +72,10 @@
 #theia-right-content-panel.pb-side-top-tabs.theia-mod-collapsed {
     max-width: none;
 }
+
+/* Orca mode shows Orca's own views only: a Theia icon there swapped Orca's panel away, and pushed Orca's icon out of the
+   row. The current view keeps its icon, so a Theia view a command opens is still named and Orca's icon leads back.
+   Only the visible row is matched: the renderer measures its sizes in the bar's hidden copy. */
+body[data-pb-mode="orca"] .pb-side-header .lm-TabBar-content > .lm-TabBar-tab:not(.lm-mod-current):not([id$="powerbrowser-orca-view-container"]):not([id$="powerbrowser-orca-right-view-container"]) {
+    display: none;
+}

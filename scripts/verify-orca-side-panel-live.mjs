@@ -101,6 +101,9 @@
 //                  entries shown is red (blind).
 //  g  modes        after switching to Coding and to Browsing neither container
 //                  is in the left or right area (A5).
+//  n  icons        in the Orca mode each side bar shows Orca's own icon and the
+//                  current view's only, fully inside the bar; a revealed Theia view
+//                  shows beside Orca's; Coding shows Theia's icons (the control).
 //  h  registry     TabUriRegistry resolves both container ids to a view
 //                  contribution, the condition under which tab-uri-registry.ts
 //                  would log its startup error (a positive read, CLAUDE.md
@@ -449,6 +452,18 @@ export function egressVerdict({ resolved, allowlist, duringAction }) {
         ...violations(allowlist, observed.filter(h => !during.has(h)), { userAction: false }).map(h => `unlisted host ${h} resolved outside the Orca mode selection (unattended verdict)`),
         ...violations(allowlist, observed.filter(h => during.has(h)), { userAction: true }).map(h => `unlisted host ${h} resolved while the Orca mode was selected (user-action verdict)`),
     ];
+}
+
+/** n: each read is { left: [id], right: [id], clipped: [id] } of the visible side icons; orca, revealed (a Theia view shown in the Orca mode) and coding. */
+export function sideIconsVerdict({ orca, revealed, coding }, { left, right, theia }) {
+    if (!coding?.left?.some(id => id === theia)) return [`collector blind: ${theia} shows no icon in Coding mode, so its absence in Orca mode proves nothing`];
+    const fails = [];
+    const same = (a, b) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+    if (!same(orca.left, [left])) fails.push(`the left bar shows ${orca.left.join(', ') || 'no icon'} in the Orca mode, want ${left} only`);
+    if (!same(orca.right, [right])) fails.push(`the right bar shows ${orca.right.join(', ') || 'no icon'} in the Orca mode, want ${right} only`);
+    if (orca.clipped.length) fails.push(`an icon is cut off by its bar: ${orca.clipped.join(', ')}`);
+    if (!same(revealed.left, [left, theia])) fails.push(`with ${theia} revealed the left bar shows ${revealed.left.join(', ') || 'no icon'}, want it and ${left}`);
+    return fails;
 }
 
 /** The hosts of a resolver log's text in the order of their first `Resolving host [...]` line. */
@@ -987,6 +1002,28 @@ async function live() {
             clause('m width', widthVerdict(mObs, { min: widthRules.min, drag: DRAG }),
                 `each side kept its width through ${WEB_TABS} web tabs and a Browsing and an Organising round trip; drags from ${mObs.drags.length} points across Orca's grab bands (left ${widthRules.band.left.join('..')}px, right ${widthRules.band.right.join('..')}px from the edge) moved the panel ${DRAG}px; squeezes stopped at Orca's minimum (left ${widthRules.min.left}px, right ${widthRules.min.right}px); BiDi pointer input`);
 
+            // n
+            const THEIA_VIEW = 'explorer-view-container';
+            const icons = () => ctx.probe(`await sleep(700); const out = { clipped: [] };
+                for (const side of ['left', 'right']) {
+                    const bar = document.querySelector('#theia-' + side + '-content-panel .pb-side-header .lm-TabBar');
+                    const box = bar ? bar.getBoundingClientRect() : null;
+                    out[side] = bar ? [...bar.querySelectorAll('.lm-TabBar-content > .lm-TabBar-tab')].filter(t => t.getClientRects().length).map(t => {
+                        const id = t.id.replace(/^shell-tab-/, ''), b = t.getBoundingClientRect();
+                        if (b.left < box.left - 1 || b.right > box.right + 1) out.clipped.push(id);
+                        return id;
+                    }) : [];
+                }
+                return out;`);
+            const iconObs = {};
+            await ctx.probe(`await get('ModeService').activateMode('coding'); await sleep(500); await get('ApplicationShell').revealWidget(${J(THEIA_VIEW)}); return true;`);
+            iconObs.coding = await icons();
+            await ctx.probe(`await get('ModeService').activateMode('orca'); return true;`);
+            iconObs.orca = await icons();
+            await ctx.probe(`await get('ApplicationShell').revealWidget(${J(THEIA_VIEW)}); return true;`);
+            iconObs.revealed = await icons();
+            await ctx.probe(`await get('ApplicationShell').revealWidget(${J(LEFT)}); return true;`);
+            clause('n icons', sideIconsVerdict(iconObs, { left: LEFT, right: RIGHT, theia: THEIA_VIEW }), 'only the Orca icon shows on each side in the Orca mode, a revealed Theia view shows beside it, Coding shows Theia\'s icons');
             // h
             const reg = await ctx.probe(`const r = get('TabUriRegistry'); return [${J(LEFT)}, ${J(RIGHT)}].filter(id => !r.getViewContribution(id));`);
             clause('h registry', reg.map(id => `TabUriRegistry has no view contribution for ${id} (its startup error would fire)`), 'both container ids resolve to a view contribution');
@@ -1104,6 +1141,12 @@ async function selfTest() {
         ['control: rows equal', () => setVerdict('worktrees', ['a', 'b'], ['b', 'a']), null],
         ['control: agents follow the setting', () => agentsVerdict({ presentWhenOn: true, presentWhenOff: false }), null],
         ['control: no container in Coding', () => leakVerdict({ coding: { [LEFT]: null, [RIGHT]: null } }), null],
+        ['control: side icons', () => sideIconsVerdict({ orca: { left: ['L'], right: ['R'], clipped: [] }, revealed: { left: ['T', 'L'], right: ['R'], clipped: [] }, coding: { left: ['T'], right: [], clipped: [] }, ...{} }, { left: 'L', right: 'R', theia: 'T' }), null],
+        ['a Theia icon in the Orca mode', () => sideIconsVerdict({ orca: { left: ['L'], right: ['R'], clipped: [] }, revealed: { left: ['T', 'L'], right: ['R'], clipped: [] }, coding: { left: ['T'], right: [], clipped: [] }, ...{ orca: { left: ['T', 'L'], right: ['R'], clipped: [] } } }, { left: 'L', right: 'R', theia: 'T' }), 'the left bar shows T, L'],
+        ['a Theia icon on the right', () => sideIconsVerdict({ orca: { left: ['L'], right: ['R'], clipped: [] }, revealed: { left: ['T', 'L'], right: ['R'], clipped: [] }, coding: { left: ['T'], right: [], clipped: [] }, ...{ orca: { left: ['L'], right: ['X', 'R'], clipped: [] } } }, { left: 'L', right: 'R', theia: 'T' }), 'the right bar shows X, R'],
+        ['the Orca icon cut off', () => sideIconsVerdict({ orca: { left: ['L'], right: ['R'], clipped: [] }, revealed: { left: ['T', 'L'], right: ['R'], clipped: [] }, coding: { left: ['T'], right: [], clipped: [] }, ...{ orca: { left: ['L'], right: ['R'], clipped: ['L'] } } }, { left: 'L', right: 'R', theia: 'T' }), 'cut off by its bar: L'],
+        ['a revealed view with no icon', () => sideIconsVerdict({ orca: { left: ['L'], right: ['R'], clipped: [] }, revealed: { left: ['T', 'L'], right: ['R'], clipped: [] }, coding: { left: ['T'], right: [], clipped: [] }, ...{ revealed: { left: ['L'], right: ['R'], clipped: [] } } }, { left: 'L', right: 'R', theia: 'T' }), 'with T revealed'],
+        ['no Theia icon in Coding', () => sideIconsVerdict({ orca: { left: ['L'], right: ['R'], clipped: [] }, revealed: { left: ['T', 'L'], right: ['R'], clipped: [] }, coding: { left: ['T'], right: [], clipped: [] }, ...{ coding: { left: [], right: [], clipped: [] } } }, { left: 'L', right: 'R', theia: 'T' }), 'collector blind'],
         ['control: control seen, listed host', () => egressVerdict({ resolved: [CONTROL_HOST, 'api.github.com', 'localhost'], allowlist: allow }), null],
         ['a missing sidebar row', () => setVerdict('worktrees', ['a'], ['a', 'b']), 'missing sidebar row'],
         ['an extra sidebar row', () => setVerdict('repositories', ['a', 'b', 'c'], ['a', 'b']), 'extra sidebar row'],
