@@ -263,6 +263,13 @@ async function measure(s, mode) {
     const ev = expr => app.evaluate(expr);
     const obs = { mode };
     await ev(HELPERS);
+    // D-65: the pane follows Theia's theme here and the system's on the standalone page, so Theia takes the system's first. A
+    // new frame's matchMedia is the browser's own (the pane bundle answers this document's from Theia's theme).
+    const scheme = await ev(`(async () => { ${harness_GET} const f = document.createElement('iframe'); f.style.display = 'none'; document.body.appendChild(f);
+        const t = f.contentWindow.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; f.remove();
+        __getByName(window.theia.container, 'ThemeService').setCurrentTheme(t); await new Promise(r => setTimeout(r, 1500));
+        return document.body.classList.contains('theia-' + t) ? t : null; })()`);
+    if (!scheme) throw new Error('harness: Theia did not take the standalone page\'s colour scheme');
     // Theia control from a 0-diff baseline.
     const base0 = JSON.parse(await ev('JSON.stringify(window.__pbTheiaSnapshot())'));
     const base1 = JSON.parse(await ev('JSON.stringify(window.__pbTheiaSnapshot())'));
