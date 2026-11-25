@@ -20,6 +20,8 @@ export interface OrcaFailurePageProps {
 const PAGE_STYLE: React.CSSProperties = {
     width: '100%', height: '100%', boxSizing: 'border-box', padding: '24px',
     display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '12px',
+    // Theia's own pair: the node around it carries Orca's, whose theme can differ from Theia's.
+    background: 'var(--theia-editor-background)', color: 'var(--theia-foreground)', fontFamily: 'var(--theia-ui-font-family)', fontSize: 'var(--theia-ui-font-size1)',
 };
 const TEXT_STYLE: React.CSSProperties = { maxWidth: '36em', textAlign: 'center' };
 const BUTTONS_STYLE: React.CSSProperties = { display: 'flex', gap: '8px' };

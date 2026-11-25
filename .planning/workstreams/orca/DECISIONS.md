@@ -553,6 +553,12 @@ hosting basics are finished. Nothing ships as "done" with Orca's client in one t
   the sidebar's gear opens `pb-orca:settings`, and Back to app closes it. Orca's page-level box (height, background,
   overflow) no longer reaches its pop-ups, whose tooltip was a window-tall block.
 
+- **D-65 — Orca follows Theia's theme.** Chris, 2026-11-24: "I dont know ... can you test for me" and "run ever test you
+  can with out me"; Claude took the recommended option. While Orca's own theme setting is System, its panels are light or
+  dark as Theia's theme is; Orca's explicit Light or Dark still wins. Found while Claude drove the hands-on checks and
+  fixed with it: the mode buttons showed Coding after a reload in Orca mode, the failure page was unreadable when the two
+  themes differed, and a restored Orca tab had no title until Orca loaded.
+
 ## Spikes this direction needs
 
 1. Browser parity: what an Orca browser tab can do, and how PB chrome provides it

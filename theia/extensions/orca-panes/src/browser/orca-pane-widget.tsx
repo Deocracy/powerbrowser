@@ -33,6 +33,8 @@ const LOG_PREFIX = '[@powerbrowser/orca-panes]';
 
 export const OrcaPaneWidgetOptions = Symbol('OrcaPaneWidgetOptions');
 
+const KIND_LABELS: Readonly<Record<string, string>> = { 'terminal': 'Terminal', 'agent-session': 'Chat', 'page:settings': 'Settings' };
+
 @injectable()
 export class OrcaPaneWidget extends ReactWidget {
 
@@ -73,6 +75,8 @@ export class OrcaPaneWidget extends ReactWidget {
     protected init(): void {
         this.id = ORCA_PANE_WIDGET_ID_PREFIX + this.options.name;
         this.title.closable = true;
+        // Until Orca's own title arrives (a restored tab waits for Orca to load), the kind names the tab.
+        this.title.label = KIND_LABELS[this.options.kind] ?? 'Orca';
         this.node.tabIndex = -1;
         this.node.setAttribute('data-pb-orca-pane', this.options.kind);
         if (this.options.kind === 'terminal') {

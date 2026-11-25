@@ -1482,6 +1482,11 @@ export class ChromeBarWidget extends ReactWidget {
         }
     }
 
+    /** The mode id the toggle shows. */
+    get shownModeId(): string {
+        return this.activeCustomId ?? this.mode.toLowerCase();
+    }
+
     /**
      * Stock perspective changes from anywhere else (commands, palette,
      * layout restore) re-assert the toggle. Unknown ids leave
@@ -2079,7 +2084,16 @@ export class ChromeBarContribution implements FrontendApplicationContribution {
             this.applyStripHome(document.body.getAttribute(MODE_ATTRIBUTE) ?? '');
             this.scheduleDragRegions();
         };
-        new MutationObserver(apply).observe(document.body, { attributeFilter: [MODE_ATTRIBUTE] });
+        // A reload restores the active perspective with no perspective event, so the toggle follows the published mode
+        // too; a mode the toggle already shows is left alone (syncModeFromPerspective resets the pill).
+        const follow = () => {
+            apply();
+            const id = document.body.getAttribute(MODE_ATTRIBUTE);
+            if (id && id !== this.barWidget.shownModeId) {
+                this.barWidget.syncModeFromPerspective(id);
+            }
+        };
+        new MutationObserver(follow).observe(document.body, { attributeFilter: [MODE_ATTRIBUTE] });
         // Re-assert on every shell add and remove, not only on a mode change.
         // The dock creates its tab bars as it needs them, and a bar that
         // appears after the switch has never been told which mode it is in --

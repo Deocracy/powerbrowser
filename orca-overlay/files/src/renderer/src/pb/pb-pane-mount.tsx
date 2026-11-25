@@ -9,6 +9,8 @@
 // (createNewTerminalTab, createWebRuntimeSessionTerminal, anything that issues the session-tabs
 // terminal create method), nothing under components/tab-bar/ and not TabGroupPanel. A
 // terminal is created only through the host RPC terminal.create.
+// First: Orca's modules below read the colour scheme as they load.
+import './pb-system-scheme'
 import '../assets/main.css'
 
 import * as React from 'react'

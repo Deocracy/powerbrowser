@@ -106,6 +106,10 @@
 //                  shows beside Orca's; Coding shows Theia's icons (the control).
 //  o  gear         the sidebar's Settings gear shows a small tooltip and opens
 //                  one main-area Settings tab (D-64); Back to app closes it.
+//  p  theme        Orca follows a light and a dark Theia theme (D-65) and its
+//                  project name contrasts with its sidebar in both.
+//  q  reload       after a frontend reload the mode buttons show the mode the
+//                  shell is in.
 //  h  registry     TabUriRegistry resolves both container ids to a view
 //                  contribution, the condition under which tab-uri-registry.ts
 //                  would log its startup error (a positive read, CLAUDE.md
@@ -454,6 +458,25 @@ export function egressVerdict({ resolved, allowlist, duringAction }) {
         ...violations(allowlist, observed.filter(h => !during.has(h)), { userAction: false }).map(h => `unlisted host ${h} resolved outside the Orca mode selection (unattended verdict)`),
         ...violations(allowlist, observed.filter(h => during.has(h)), { userAction: true }).map(h => `unlisted host ${h} resolved while the Orca mode was selected (user-action verdict)`),
     ];
+}
+
+/** p: each read is { orca, bg, text } under one Theia theme; bg and text are luminances 0..255. */
+export function themeVerdict(o) {
+    const fails = [];
+    for (const t of ['light', 'dark']) {
+        const r = o[t];
+        if (!r || r.bg === null || r.bg === undefined || r.text === null || r.text === undefined) { fails.push(`collector blind: no sidebar colours read under Theia's ${t} theme`); continue; }
+        if (r.orca !== t) fails.push(`Orca is ${r.orca} under Theia's ${t} theme`);
+        if (Math.abs(r.bg - r.text) < 90) fails.push(`the project name is unreadable under Theia's ${t} theme (luminance ${Math.round(r.text)} on ${Math.round(r.bg)})`);
+    }
+    return fails;
+}
+
+/** q: { before, reloaded, after }, each read { attr, shown: [label] }. */
+export function modeReloadVerdict(o) {
+    if (o.before?.attr !== 'orca' || o.before.shown?.join() !== 'Orca') return [`collector blind: before the reload the mode was ${o.before?.attr} and the buttons showed ${o.before?.shown?.join() || 'none'}`];
+    if (!o.reloaded || !o.after) return ['collector blind: the frontend did not reload'];
+    return o.after.attr === 'orca' && o.after.shown.join() === 'Orca' ? [] : [`after a reload the mode is ${o.after.attr} and the buttons show ${o.after.shown.join() || 'none'}`];
 }
 
 /** o: the Settings gear. tipBox is the tooltip's body-level wrapper, size the Settings tab's. */
@@ -1062,6 +1085,22 @@ async function live() {
             // h
             const reg = await ctx.probe(`const r = get('TabUriRegistry'); return [${J(LEFT)}, ${J(RIGHT)}].filter(id => !r.getViewContribution(id));`);
             clause('h registry', reg.map(id => `TabUriRegistry has no view contribution for ${id} (its startup error would fire)`), 'both container ids resolve to a view contribution');
+            // p
+            const themeObs = {};
+            for (const t of ['light', 'dark']) themeObs[t] = await ctx.probe(`get('ThemeService').setCurrentTheme('${t}'); await sleep(1500);
+                const bg = document.querySelector('.pb-orca-side-view .bg-worktree-sidebar'); const name = document.querySelector('.pb-orca-side-view [data-project-group-header-id], .pb-orca-side-view .truncate.font-semibold');
+                const lum = c => { const m = /rgba?\\((\\d+), (\\d+), (\\d+)/.exec(c); return m ? (0.2126 * m[1] + 0.7152 * m[2] + 0.0722 * m[3]) : null; };
+                return { orca: document.documentElement.classList.contains('dark') ? 'dark' : 'light', bg: bg && lum(getComputedStyle(bg).backgroundColor), text: name && lum(getComputedStyle(name).color) };`);
+            clause('p theme', themeVerdict(themeObs), 'Orca follows a light and a dark Theia theme, and its project name contrasts with its sidebar in both');
+            // q
+            const modeRead = () => ctx.probe(`return { attr: document.body.getAttribute('data-pb-mode'), shown: [...document.querySelectorAll('[aria-pressed="true"]')].map(e => e.textContent.trim()).filter(t => ['Coding', 'Browsing', 'Organising', 'Orca'].includes(t)) };`);
+            await ctx.probe(`await get('ModeService').activateMode('orca'); await sleep(800); return true;`);
+            const beforeReload = await modeRead();
+            const origin = await ctx.probe('return performance.timeOrigin;');
+            await ctx.app.evaluate('setTimeout(() => location.reload(), 0), true').catch(() => undefined);
+            const reloaded = await ctx.pollFor(async () => { const o = await ctx.probe(`return get('FrontendApplicationStateService').state === 'ready' ? performance.timeOrigin : null;`, 5000).catch(() => null); return o && o !== origin ? true : null; }, 90000, 'the reloaded frontend').catch(() => false);
+            await ctx.probe('await sleep(2500); return true;').catch(() => undefined);
+            clause('q reload', modeReloadVerdict({ before: beforeReload, reloaded, after: reloaded ? await modeRead() : null }), 'after a reload the mode buttons show the Orca mode the shell is in');
         });
     } catch (err) {
         console.error(`${NAME}: FAIL -- the session did not complete: ${String(err?.message ?? err).split('\n')[0]}`);
@@ -1176,6 +1215,14 @@ async function selfTest() {
         ['control: rows equal', () => setVerdict('worktrees', ['a', 'b'], ['b', 'a']), null],
         ['control: agents follow the setting', () => agentsVerdict({ presentWhenOn: true, presentWhenOff: false }), null],
         ['control: no container in Coding', () => leakVerdict({ coding: { [LEFT]: null, [RIGHT]: null } }), null],
+        ['control: theme', () => themeVerdict({ light: { orca: 'light', bg: 245, text: 10 }, dark: { orca: 'dark', bg: 42, text: 240 }, ...{} }), null],
+        ['Orca light in a dark window', () => themeVerdict({ light: { orca: 'light', bg: 245, text: 10 }, dark: { orca: 'dark', bg: 42, text: 240 }, ...{ dark: { orca: 'light', bg: 245, text: 10 } } }), "Orca is light under Theia's dark theme"],
+        ['an unreadable name', () => themeVerdict({ light: { orca: 'light', bg: 245, text: 10 }, dark: { orca: 'dark', bg: 42, text: 240 }, ...{ dark: { orca: 'dark', bg: 42, text: 60 } } }), 'the project name is unreadable'],
+        ['no colours', () => themeVerdict({ light: { orca: 'light', bg: 245, text: 10 }, dark: { orca: 'dark', bg: 42, text: 240 }, ...{ light: null } }), 'no sidebar colours read'],
+        ['control: reload', () => modeReloadVerdict({ before: { attr: 'orca', shown: ['Orca'] }, reloaded: true, after: { attr: 'orca', shown: ['Orca'] }, ...{} }), null],
+        ['Coding shown after a reload', () => modeReloadVerdict({ before: { attr: 'orca', shown: ['Orca'] }, reloaded: true, after: { attr: 'orca', shown: ['Orca'] }, ...{ after: { attr: 'orca', shown: ['Coding'] } } }), 'the buttons show Coding'],
+        ['no reload', () => modeReloadVerdict({ before: { attr: 'orca', shown: ['Orca'] }, reloaded: true, after: { attr: 'orca', shown: ['Orca'] }, ...{ reloaded: false } }), 'did not reload'],
+        ['not in Orca before', () => modeReloadVerdict({ before: { attr: 'orca', shown: ['Orca'] }, reloaded: true, after: { attr: 'orca', shown: ['Orca'] }, ...{ before: { attr: 'coding', shown: ['Coding'] } } }), 'before the reload the mode was coding'],
         ['control: gear', () => gearVerdict({ tipBox: { w: 71, h: 28, bg: 'rgba(0, 0, 0, 0)' }, size: { w: 791, h: 661 }, count: 1, back: true, closedByBack: true, ...{} }), null],
         ['a viewport-tall tooltip', () => gearVerdict({ tipBox: { w: 71, h: 28, bg: 'rgba(0, 0, 0, 0)' }, size: { w: 791, h: 661 }, count: 1, back: true, closedByBack: true, ...{ tipBox: { w: 71, h: 768, bg: 'rgb(0, 0, 0)' } } }), 'tooltip wrapper is 71x768'],
         ['no tooltip', () => gearVerdict({ tipBox: { w: 71, h: 28, bg: 'rgba(0, 0, 0, 0)' }, size: { w: 791, h: 661 }, count: 1, back: true, closedByBack: true, ...{ tipBox: null } }), 'no tooltip appeared'],
