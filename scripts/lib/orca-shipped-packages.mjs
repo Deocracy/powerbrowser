@@ -19,7 +19,7 @@
 //     gets its own metafile pass so the packages inlined into it count too. Packages
 //     build-orcad.mjs copies files out of (join(ROOT, 'node_modules', ...)) count as well.
 //  3. out/web: a scratch Vite build through Orca's run-vite-web-build.mjs with
-//     --sourcemap --outDir .mozbuild/orca-shipped/web-<key>; the maps' sources name
+//     --sourcemap --outDir .mozbuild/orca-shipped/web-<key>-<pid>; the maps' sources name
 //     every module the client bundles.
 //  4. out/mobile-web: the production closure of orca/mobile (pnpm list --prod). This is
 //     a superset (it includes build tools of the Expo closure), so an overcount is
@@ -196,10 +196,11 @@ function mapFiles(dir) {
 }
 
 function webInputs(repoRoot, orcaDir, key, collector, log) {
-    const scratch = join(repoRoot, '.mozbuild/orca-shipped', `web-${key}`);
+    // One folder per process: two checks can miss the cache at once (the stop hook's quick run beside another).
+    const scratch = join(repoRoot, '.mozbuild/orca-shipped', `web-${key}-${process.pid}`);
     rmSync(scratch, { recursive: true, force: true });
     const cmd = ['config/scripts/run-vite-web-build.mjs', '--sourcemap', '--outDir', scratch, '--emptyOutDir'];
-    log(`building the web client with sourcemaps into .mozbuild/orca-shipped/web-${key} (cache miss)`);
+    log(`building the web client with sourcemaps into .mozbuild/orca-shipped/web-${key}-${process.pid} (cache miss)`);
     const r = spawnSync(process.execPath, cmd, { cwd: orcaDir, env: scrubbedEnv(), encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
     const named = `node ${cmd.join(' ')} (in orca/)`;
     if (r.error || r.status !== 0) {
@@ -291,8 +292,8 @@ export async function orcaShippedPackages({ repoRoot, orcaDir = join(repoRoot, '
     for (const b of BUNDLES) if (!packages.some((p) => p.shippedIn.includes(b))) throw new Error(`the derivation found no package in ${b}, which cannot be right`);
     checkKnownPositive(orcaDir, packages);
     mkdirSync(dirname(cacheFile), { recursive: true });
-    writeFileSync(`${cacheFile}.tmp`, `${JSON.stringify({ key, packages }, null, 1)}\n`);
-    renameSync(`${cacheFile}.tmp`, cacheFile);
+    writeFileSync(`${cacheFile}.${process.pid}.tmp`, `${JSON.stringify({ key, packages }, null, 1)}\n`);
+    renameSync(`${cacheFile}.${process.pid}.tmp`, cacheFile);
     return { packages, key, cacheHit: false };
 }
 
