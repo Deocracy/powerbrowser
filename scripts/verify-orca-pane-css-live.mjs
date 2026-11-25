@@ -359,7 +359,8 @@ async function portalProbe(s, ref, pick, refPick, base0) {
     // Tooltip.
     if (s.showTheiaPane) await s.showTheiaPane();
     for (const [label, evx, scope] of docs) {
-        const opened = await evx(OPEN_TOOLTIP(scope));
+        // The chat may still be mounting: its first tooltip trigger is waited for, not read once.
+        const opened = await lib.pollFor(async () => (await evx(OPEN_TOOLTIP(scope))) || null, 15000, `${label} tooltip trigger`).catch(() => false);
         let portals = [];
         try { portals = await lib.pollFor(async () => { const k = JSON.parse(await evx(`JSON.stringify(${PORTALS_OPEN})`)); return k.includes('popper') ? k : null; }, 5000, `${label} tooltip`); } catch { /* recorded */ }
         out.opened[`${label} tooltip`] = { trigger: opened, portals };
